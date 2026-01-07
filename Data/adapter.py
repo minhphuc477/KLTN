@@ -389,29 +389,41 @@ class IntelligentDataAdapter:
     # ==========================================
     
     def defensive_mapper(self, char_grid: np.ndarray, room_id: int,
-                        graph_attrs: Dict[str, Dict] = None) -> np.ndarray:
+                        graph_attrs: Dict[str, Dict] = None,
+                        node_attrs: Dict[str, Any] = None) -> np.ndarray:
         """
-        Convert character grid to semantic IDs with door logic injection.
+        Convert character grid to semantic IDs with door logic AND graph-guided injection.
         
         The "Defensive Router" ensures:
         1. Doors at invalid positions become walls
         2. Door types are inferred from graph edge attributes
         3. Corner positions are protected from invalid door placement
+        4. START position injected when is_start=True (Graph-Guided Logic)
+        5. TRIFORCE position injected when has_triforce=True
+        6. Items (KEY, BOSS_KEY) injected based on node contents
         
         Args:
             char_grid: 2D numpy array of characters
             room_id: ID of the current room (for graph lookup)
             graph_attrs: Dict of {direction: {'type': edge_type, 'neighbor': neighbor_id}}
+            node_attrs: Dict of node attributes from graph {'is_start', 'has_triforce', 'has_key', etc.}
         
         Returns:
             Semantic ID grid [H, W]
         """
         if graph_attrs is None:
             graph_attrs = {}
+        if node_attrs is None:
+            node_attrs = {}
             
         h, w = char_grid.shape
         semantic_grid = np.zeros((h, w), dtype=np.int64)
         
+        # Track positions for injection
+        floor_positions = []  # Candidate positions for injecting items
+        stair_positions = []  # 'S' positions that might be START or STAIR
+        
+        # First pass: basic character mapping
         for r in range(h):
             for c in range(w):
                 char = char_grid[r, c]
@@ -419,11 +431,66 @@ class IntelligentDataAdapter:
                 # Handle door logic specially
                 if char == 'D':
                     semantic_id = self._route_door(r, c, h, w, graph_attrs)
+                elif char == 'S':
+                    # 'S' is ambiguous: could be STAIR or START
+                    # We'll mark it and resolve after based on node_attrs
+                    stair_positions.append((r, c))
+                    semantic_id = SEMANTIC_PALETTE['STAIR']  # Default to STAIR
                 else:
                     # Standard character mapping
                     semantic_id = CHAR_TO_SEMANTIC.get(char, SEMANTIC_PALETTE['FLOOR'])
                 
                 semantic_grid[r, c] = semantic_id
+                
+                # Track walkable floor positions (for item injection)
+                if semantic_id == SEMANTIC_PALETTE['FLOOR']:
+                    floor_positions.append((r, c))
+        
+        # Second pass: Graph-Guided Logic Injection
+        # If this room is the START room, convert one 'S' to START or inject START
+        if node_attrs.get('is_start', False):
+            if stair_positions:
+                # Convert the first stair to START position
+                sr, sc = stair_positions[0]
+                semantic_grid[sr, sc] = SEMANTIC_PALETTE['START']
+            elif floor_positions:
+                # No 'S' found, inject START at a floor position
+                # Prefer center of room
+                center_r, center_c = h // 2, w // 2
+                best_pos = min(floor_positions, 
+                              key=lambda p: abs(p[0]-center_r) + abs(p[1]-center_c))
+                semantic_grid[best_pos[0], best_pos[1]] = SEMANTIC_PALETTE['START']
+        
+        # If this room has TRIFORCE, inject it
+        if node_attrs.get('has_triforce', False):
+            if floor_positions:
+                # Inject TRIFORCE at a floor position (prefer center-ish)
+                center_r, center_c = h // 2, w // 2
+                # Remove positions already used for START
+                available = [p for p in floor_positions 
+                            if semantic_grid[p[0], p[1]] != SEMANTIC_PALETTE['START']]
+                if available:
+                    best_pos = min(available, 
+                                  key=lambda p: abs(p[0]-center_r) + abs(p[1]-center_c))
+                    semantic_grid[best_pos[0], best_pos[1]] = SEMANTIC_PALETTE['TRIFORCE']
+        
+        # Inject keys based on node contents
+        if node_attrs.get('has_key', False):
+            available = [p for p in floor_positions 
+                        if semantic_grid[p[0], p[1]] == SEMANTIC_PALETTE['FLOOR']]
+            if available:
+                # Place key at a random-ish position (use room_id for determinism)
+                idx = room_id % len(available)
+                kr, kc = available[idx]
+                semantic_grid[kr, kc] = SEMANTIC_PALETTE['KEY_SMALL']
+        
+        if node_attrs.get('has_boss_key', False):
+            available = [p for p in floor_positions 
+                        if semantic_grid[p[0], p[1]] == SEMANTIC_PALETTE['FLOOR']]
+            if available:
+                idx = (room_id + 1) % len(available)
+                kr, kc = available[idx]
+                semantic_grid[kr, kc] = SEMANTIC_PALETTE['KEY_BOSS']
         
         return semantic_grid
     
@@ -749,20 +816,34 @@ class IntelligentDataAdapter:
         Returns:
             DungeonData object with all processed tensors
         """
-        # Parse graph first to get room connectivity
+        # Parse graph first to get room connectivity AND node attributes
         graph = self.parse_dot_graph(graph_file)
         
         # Extract rooms from map
         rooms_data = self.extract_rooms_simple(map_file)
         
-        # Process each room
+        # Process each room with Graph-Guided Logic Injection
         processed_rooms = {}
         for room_id, char_grid in rooms_data:
             # Get graph attributes for this room (for door logic)
             graph_attrs = self._get_room_graph_attrs(graph, room_id)
             
-            # Convert to semantic grid
-            semantic_grid = self.defensive_mapper(char_grid, room_id, graph_attrs)
+            # Get node attributes for this room (for START/TRIFORCE/KEY injection)
+            node_attrs = {}
+            if room_id in graph.nodes:
+                node_data = graph.nodes[room_id]
+                node_attrs = {
+                    'is_start': node_data.get('is_start', False),
+                    'has_triforce': node_data.get('has_triforce', False),
+                    'has_key': node_data.get('has_key', False),
+                    'has_boss_key': node_data.get('has_boss_key', False),
+                    'has_enemy': node_data.get('has_enemy', False),
+                    'has_boss': node_data.get('has_boss', False),
+                    'contents': node_data.get('contents', []),
+                }
+            
+            # Convert to semantic grid WITH node_attrs for Graph-Guided Logic
+            semantic_grid = self.defensive_mapper(char_grid, room_id, graph_attrs, node_attrs)
             
             # Get room contents from graph
             contents = []

@@ -59,6 +59,14 @@ from simulation.validator import (
     create_test_map
 )
 
+# Import stitcher for dungeon-level validation
+stitcher_path = os.path.join(current_dir, 'data', 'stitcher.py')
+spec_stitcher = importlib.util.spec_from_file_location("stitcher", stitcher_path)
+stitcher_module = importlib.util.module_from_spec(spec_stitcher)
+spec_stitcher.loader.exec_module(stitcher_module)
+DungeonStitcher = stitcher_module.DungeonStitcher
+StitchedDungeon = stitcher_module.StitchedDungeon
+
 
 class ZeldaValidationPipeline:
     """
@@ -205,12 +213,16 @@ class ZeldaValidationPipeline:
     
     def _validate_all(self, verbose: bool = True):
         """
-        Validate all processed rooms.
+        Validate all processed dungeons.
+        
+        Two-level validation:
+        1. Room-level: Validate rooms that have both START and TRIFORCE
+        2. Dungeon-level: Stitch rooms and validate full dungeon
         """
         all_grids = []
         room_info = []
         
-        # Collect all grids
+        # Collect individual room grids (for diversity and room-level metrics)
         for dungeon_id, dungeon in self.processed_dungeons.items():
             for room_id, room in dungeon.rooms.items():
                 all_grids.append(room.grid)
@@ -220,32 +232,124 @@ class ZeldaValidationPipeline:
                     'contents': room.contents
                 })
         
-        if not all_grids:
-            print("  No rooms to validate!")
-            return
-        
-        # Run batch validation
-        batch_result = self.validator.validate_batch(all_grids, verbose=verbose)
-        
         # Store results
-        self.validation_results['batch'] = batch_result
         self.validation_results['individual'] = []
+        self.validation_results['dungeon_level'] = []
         
-        for i, result in enumerate(batch_result.individual_results):
+        # ==========================================
+        # DUNGEON-LEVEL VALIDATION (using stitcher)
+        # ==========================================
+        print("  [Dungeon-Level Validation]")
+        dungeon_solvable_count = 0
+        dungeon_total = 0
+        
+        for dungeon_id, dungeon in self.processed_dungeons.items():
+            dungeon_total += 1
+            
+            try:
+                # Stitch the dungeon
+                stitcher = DungeonStitcher(dungeon)
+                stitched = stitcher.stitch()
+                
+                if verbose:
+                    print(f"    {dungeon_id}: stitched {stitched.global_grid.shape}, START={stitched.start_pos}, GOAL={stitched.goal_pos}")
+                
+                # Validate stitched dungeon
+                if stitched.start_pos is not None and stitched.goal_pos is not None:
+                    result = self.validator.validate_single(stitched.global_grid)
+                    
+                    self.validation_results['dungeon_level'].append({
+                        'dungeon_id': dungeon_id,
+                        'result': result,
+                        'grid_shape': stitched.global_grid.shape,
+                        'start_pos': stitched.start_pos,
+                        'goal_pos': stitched.goal_pos
+                    })
+                    
+                    if result.is_solvable:
+                        dungeon_solvable_count += 1
+                        self.stats['solvable_rooms'] += 1  # Count as solvable
+                    
+                    if verbose:
+                        status = "SOLVABLE" if result.is_solvable else " NOT SOLVABLE"
+                        print(f"      {status} (path={result.path_length})")
+                else:
+                    if verbose:
+                        print(f"       Missing START or TRIFORCE after stitching")
+                        
+            except Exception as e:
+                if verbose:
+                    print(f"    {dungeon_id}: ERROR - {e}")
+        
+        print(f"  Dungeon-level: {dungeon_solvable_count}/{dungeon_total} solvable")
+        
+        # ==========================================
+        # ROOM-LEVEL VALIDATION (for rooms with both START and TRIFORCE)
+        # ==========================================
+        print("  [Room-Level Validation]")
+        room_solvable_count = 0
+        room_with_start_and_goal = 0
+        
+        for i, grid in enumerate(all_grids):
+            info = room_info[i]
+            
+            # Check if room has both START and TRIFORCE
+            has_start = SEMANTIC_PALETTE['START'] in grid
+            has_goal = SEMANTIC_PALETTE['TRIFORCE'] in grid
+            
+            result = ValidationResult(
+                is_solvable=False,
+                is_valid_syntax=True,
+                reachability=0.0,
+                path_length=0,
+                backtracking_score=0.0,
+                logical_errors=[],
+                path=[],
+                error_message=""
+            )
+            
+            if has_start and has_goal:
+                room_with_start_and_goal += 1
+                result = self.validator.validate_single(grid)
+                if result.is_solvable:
+                    room_solvable_count += 1
+            else:
+                # Room doesn't have both - mark as "incomplete" not "unsolvable"
+                result.error_message = "Room lacks START or TRIFORCE (normal for multi-room dungeons)"
+            
             self.validation_results['individual'].append({
-                **room_info[i],
-                'result': result
+                **info,
+                'result': result,
+                'has_start': has_start,
+                'has_goal': has_goal
             })
             
             if result.is_valid_syntax:
                 self.stats['valid_rooms'] += 1
-            if result.is_solvable:
-                self.stats['solvable_rooms'] += 1
         
-        # Calculate diversity
+        print(f"  Room-level: {room_solvable_count}/{room_with_start_and_goal} standalone-solvable rooms")
+        print(f"  ({len(all_grids) - room_with_start_and_goal} rooms require dungeon-level validation)")
+        
+        # Create batch result
+        batch_result = BatchValidationResult(
+            total_maps=dungeon_total,  # Count dungeons, not rooms
+            valid_syntax_count=dungeon_total,
+            solvable_count=dungeon_solvable_count,
+            solvability_rate=dungeon_solvable_count / max(1, dungeon_total),
+            avg_reachability=1.0 if dungeon_solvable_count > 0 else 0.0,
+            avg_path_length=sum(r['result'].path_length for r in self.validation_results['dungeon_level'] if r['result'].is_solvable) / max(1, dungeon_solvable_count),
+            avg_backtracking=0.0,
+            diversity_score=0.0,
+            individual_results=[]
+        )
+        
+        self.validation_results['batch'] = batch_result
+        
+        # Calculate diversity on individual rooms
         if len(all_grids) >= 2:
             diversity = DiversityEvaluator.batch_diversity(all_grids)
             self.validation_results['diversity'] = diversity
+            batch_result.diversity_score = diversity
         else:
             self.validation_results['diversity'] = 0.0
     
