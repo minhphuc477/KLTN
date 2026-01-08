@@ -571,8 +571,11 @@ class IntelligentDataAdapter:
             content = f.read()
         
         # Parse nodes: 0 [label="e,k"]
-        node_pattern = r'(\d+)\s*\[label="([^"]*)"\]'
-        for match in re.finditer(node_pattern, content):
+        # FIX: Use line-start anchor to avoid matching edge labels like "7 -> 8 [label=""]"
+        # which would overwrite node attributes.
+        # Node definitions appear at line start (after newline or start of file)
+        node_pattern = r'^(\d+)\s*\[label="([^"]*)"\]'
+        for match in re.finditer(node_pattern, content, re.MULTILINE):
             node_id = int(match.group(1))
             label = match.group(2)
             
@@ -822,8 +825,22 @@ class IntelligentDataAdapter:
         # Extract rooms from map
         rooms_data = self.extract_rooms_simple(map_file)
         
+        # FIX: Find START and TRIFORCE nodes from graph for fallback injection
+        # This handles the case where extracted room_ids don't match graph node_ids
+        start_node = None
+        triforce_node = None
+        for node_id in graph.nodes():
+            node_data = graph.nodes[node_id]
+            if node_data.get('is_start', False):
+                start_node = node_id
+            if node_data.get('has_triforce', False):
+                triforce_node = node_id
+        
         # Process each room with Graph-Guided Logic Injection
         processed_rooms = {}
+        has_start = False  # Track if any room got START injected
+        has_triforce = False  # Track if any room got TRIFORCE injected
+        
         for room_id, char_grid in rooms_data:
             # Get graph attributes for this room (for door logic)
             graph_attrs = self._get_room_graph_attrs(graph, room_id)
@@ -845,6 +862,12 @@ class IntelligentDataAdapter:
             # Convert to semantic grid WITH node_attrs for Graph-Guided Logic
             semantic_grid = self.defensive_mapper(char_grid, room_id, graph_attrs, node_attrs)
             
+            # Track injection status
+            if node_attrs.get('is_start'):
+                has_start = True
+            if node_attrs.get('has_triforce'):
+                has_triforce = True
+            
             # Get room contents from graph
             contents = []
             if room_id in graph.nodes:
@@ -856,6 +879,40 @@ class IntelligentDataAdapter:
                 contents=contents,
                 doors=graph_attrs
             )
+        
+        # FIX: Fallback injection if no room got START or TRIFORCE
+        # This handles the mismatch between extracted room_ids and graph node_ids
+        if not has_start and len(rooms_data) > 0:
+            # Inject START into first room (entrance heuristic)
+            first_room_id = str(rooms_data[0][0])
+            if first_room_id in processed_rooms:
+                grid = processed_rooms[first_room_id].grid
+                # Find a floor position
+                floor_mask = grid == SEMANTIC_PALETTE['FLOOR']
+                if np.any(floor_mask):
+                    positions = np.argwhere(floor_mask)
+                    center = np.array(grid.shape) // 2
+                    distances = np.abs(positions - center).sum(axis=1)
+                    best_idx = np.argmin(distances)
+                    r, c = positions[best_idx]
+                    grid[r, c] = SEMANTIC_PALETTE['START']
+        
+        if not has_triforce and len(rooms_data) > 0:
+            # Inject TRIFORCE into last room (goal heuristic)
+            last_room_id = str(rooms_data[-1][0])
+            if last_room_id in processed_rooms:
+                grid = processed_rooms[last_room_id].grid
+                # Find a floor position
+                floor_mask = grid == SEMANTIC_PALETTE['FLOOR']
+                if np.any(floor_mask):
+                    positions = np.argwhere(floor_mask)
+                    center = np.array(grid.shape) // 2
+                    distances = np.abs(positions - center).sum(axis=1)
+                    best_idx = np.argmin(distances)
+                    r, c = positions[best_idx]
+                    # Avoid overwriting START
+                    if grid[r, c] != SEMANTIC_PALETTE['START']:
+                        grid[r, c] = SEMANTIC_PALETTE['TRIFORCE']
         
         # Compute graph-based features
         tpe_vectors, node_order = self.compute_laplacian_pe(graph)
@@ -932,6 +989,11 @@ class IntelligentDataAdapter:
             
         Returns:
             Dictionary of dungeon_id -> DungeonData
+            
+        Note:
+            - tlozX_1.txt files are Quest 1 dungeons (use LoZ_X.dot)
+            - tlozX_2.txt files are Quest 2 dungeons (use LoZ2_X.dot)
+            - Each quest gets a unique dungeon_id to prevent overwrites
         """
         if processed_dir is None:
             processed_dir = self.data_root / "Processed"
@@ -950,25 +1012,29 @@ class IntelligentDataAdapter:
             if map_file.name == "README.txt":
                 continue
                 
-            # Extract dungeon ID from filename (e.g., tloz1_1.txt -> tloz1)
-            # Pattern: tlozX_Y.txt where X is dungeon, Y is sub-part
-            match = re.match(r'(tloz\d+)_(\d+)\.txt', map_file.name)
+            # Extract dungeon ID from filename (e.g., tloz1_1.txt -> dungeon 1, quest 1)
+            # Pattern: tlozX_Y.txt where X is dungeon number, Y is quest (1 or 2)
+            match = re.match(r'tloz(\d+)_(\d+)\.txt', map_file.name)
             if not match:
                 continue
                 
-            dungeon_base = match.group(1)  # tloz1
-            dungeon_num = int(dungeon_base.replace('tloz', ''))
+            dungeon_num = int(match.group(1))  # Dungeon number (1-9)
+            quest_num = int(match.group(2))     # Quest number (1 or 2)
             
-            # Find corresponding graph file
-            graph_file = graph_dir / f"LoZ_{dungeon_num}.dot"
-            if not graph_file.exists():
+            # Find corresponding graph file based on quest number
+            # Quest 1 uses LoZ_X.dot, Quest 2 uses LoZ2_X.dot
+            if quest_num == 1:
+                graph_file = graph_dir / f"LoZ_{dungeon_num}.dot"
+            else:
                 graph_file = graph_dir / f"LoZ2_{dungeon_num}.dot"
             
             if not graph_file.exists():
-                print(f"Warning: No graph file found for {map_file.name}")
+                print(f"Warning: No graph file found for {map_file.name} (expected {graph_file.name})")
                 continue
             
-            dungeon_id = f"zelda_{dungeon_num}"
+            # Create unique dungeon_id that includes quest number
+            # Format: zelda_<dungeon>_quest<quest>
+            dungeon_id = f"zelda_{dungeon_num}_quest{quest_num}"
             
             try:
                 dungeon_data = self.process_dungeon(

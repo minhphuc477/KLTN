@@ -1,0 +1,918 @@
+{
+  "timestamp": "2026-01-07T23:09:21.311204",
+  "data_source": "C:\\Users\\MPhuc\\Desktop\\KLTN\\Data\\The Legend of Zelda",
+  "statistics": {
+    "total_dungeons": 18,
+    "total_rooms": 131,
+    "processed_rooms": 131,
+    "valid_rooms": 131,
+    "solvable_rooms": 3,
+    "processing_time": 0.30809974670410156,
+    "validation_time": 0.3622317314147949,
+    "graph_solvable": 13
+  },
+  "metrics": {
+    "solvability_rate": 0.16666666666666666,
+    "valid_syntax_rate": 1.0,
+    "avg_reachability": 1.0,
+    "avg_path_length": 2.0,
+    "avg_backtracking": 0.0,
+    "diversity_score": 0.9554415653369017
+  },
+  "dungeons": {
+    "zelda_1_quest1": {
+      "rooms": [
+        {
+          "room_id": "0",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "1",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "2",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "3",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "4",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "5",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "6",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "7",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "8",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "9",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "10",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "11",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        }
+      ],
+      "solvable_count": 0,
+      "total_count": 12
+    },
+    "zelda_1_quest2": {
+      "rooms": [
+        {
+          "room_id": "0",
+          "solvable": true,
+          "path_length": 2,
+          "errors": []
+        }
+      ],
+      "solvable_count": 1,
+      "total_count": 1
+    },
+    "zelda_2_quest1": {
+      "rooms": [
+        {
+          "room_id": "0",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "1",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "2",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "3",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "4",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "5",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "6",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        }
+      ],
+      "solvable_count": 0,
+      "total_count": 7
+    },
+    "zelda_2_quest2": {
+      "rooms": [
+        {
+          "room_id": "0",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "1",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "2",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        }
+      ],
+      "solvable_count": 0,
+      "total_count": 3
+    },
+    "zelda_3_quest1": {
+      "rooms": [
+        {
+          "room_id": "0",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "1",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "2",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "3",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "4",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "5",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "6",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        }
+      ],
+      "solvable_count": 0,
+      "total_count": 7
+    },
+    "zelda_3_quest2": {
+      "rooms": [
+        {
+          "room_id": "0",
+          "solvable": true,
+          "path_length": 2,
+          "errors": []
+        },
+        {
+          "room_id": "1",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        }
+      ],
+      "solvable_count": 1,
+      "total_count": 2
+    },
+    "zelda_4_quest1": {
+      "rooms": [
+        {
+          "room_id": "0",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "1",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "2",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "3",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "4",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "5",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        }
+      ],
+      "solvable_count": 0,
+      "total_count": 6
+    },
+    "zelda_4_quest2": {
+      "rooms": [
+        {
+          "room_id": "0",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "1",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "2",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "3",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "4",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        }
+      ],
+      "solvable_count": 0,
+      "total_count": 5
+    },
+    "zelda_5_quest1": {
+      "rooms": [
+        {
+          "room_id": "0",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "1",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "2",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "3",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "4",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "5",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "6",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        }
+      ],
+      "solvable_count": 0,
+      "total_count": 7
+    },
+    "zelda_5_quest2": {
+      "rooms": [
+        {
+          "room_id": "0",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "1",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "2",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "3",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "4",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "5",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "6",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "7",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        }
+      ],
+      "solvable_count": 0,
+      "total_count": 8
+    },
+    "zelda_6_quest1": {
+      "rooms": [
+        {
+          "room_id": "0",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "1",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "2",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "3",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "4",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "5",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "6",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        }
+      ],
+      "solvable_count": 0,
+      "total_count": 7
+    },
+    "zelda_6_quest2": {
+      "rooms": [
+        {
+          "room_id": "0",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "1",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "2",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "3",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "4",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "5",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        }
+      ],
+      "solvable_count": 0,
+      "total_count": 6
+    },
+    "zelda_7_quest1": {
+      "rooms": [
+        {
+          "room_id": "0",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "1",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "2",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "3",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "4",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "5",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "6",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "7",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "8",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        }
+      ],
+      "solvable_count": 0,
+      "total_count": 9
+    },
+    "zelda_7_quest2": {
+      "rooms": [
+        {
+          "room_id": "0",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "1",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "2",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "3",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "4",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "5",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "6",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "7",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "8",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "9",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "10",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        }
+      ],
+      "solvable_count": 0,
+      "total_count": 11
+    },
+    "zelda_8_quest1": {
+      "rooms": [
+        {
+          "room_id": "0",
+          "solvable": true,
+          "path_length": 2,
+          "errors": []
+        },
+        {
+          "room_id": "1",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "2",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "3",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "4",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "5",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        }
+      ],
+      "solvable_count": 1,
+      "total_count": 6
+    },
+    "zelda_8_quest2": {
+      "rooms": [
+        {
+          "room_id": "0",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "1",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "2",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "3",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "4",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "5",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "6",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        }
+      ],
+      "solvable_count": 0,
+      "total_count": 7
+    },
+    "zelda_9_quest1": {
+      "rooms": [
+        {
+          "room_id": "0",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "1",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "2",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "3",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "4",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "5",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "6",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "7",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "8",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "9",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "10",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "11",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "12",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        }
+      ],
+      "solvable_count": 0,
+      "total_count": 13
+    },
+    "zelda_9_quest2": {
+      "rooms": [
+        {
+          "room_id": "0",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "1",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "2",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "3",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "4",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "5",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "6",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "7",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "8",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "9",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "10",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "11",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "12",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        },
+        {
+          "room_id": "13",
+          "solvable": false,
+          "path_length": 0,
+          "errors": []
+        }
+      ],
+      "solvable_count": 0,
+      "total_count": 14
+    }
+  }
+}

@@ -116,19 +116,43 @@ class DungeonStitcher:
                     continue
                 
                 # Assign position based on direction
-                dr, dc = direction_cycle[dir_idx % 4]
-                new_pos = (curr_pos[0] + dr, curr_pos[1] + dc)
-                
-                # Check for collision and adjust if needed
-                while new_pos in positions.values():
-                    dir_idx += 1
-                    dr, dc = direction_cycle[dir_idx % 4]
+                # FIX: Add loop limit to prevent infinite loop when surrounded
+                placed = False
+                for attempt in range(8):  # Max 8 attempts (2 full cycles)
+                    dr, dc = direction_cycle[(dir_idx + attempt) % 4]
                     new_pos = (curr_pos[0] + dr, curr_pos[1] + dc)
+                    
+                    if new_pos not in positions.values():
+                        positions[neighbor] = new_pos
+                        visited.add(neighbor)
+                        queue.append(neighbor)
+                        dir_idx += attempt + 1
+                        placed = True
+                        break
                 
-                positions[neighbor] = new_pos
-                visited.add(neighbor)
-                queue.append(neighbor)
-                dir_idx += 1
+                if not placed:
+                    # Fallback: expand outward with offset
+                    offset = 1
+                    for outer_attempt in range(20):
+                        for dr, dc in direction_cycle:
+                            new_pos = (curr_pos[0] + dr * offset, curr_pos[1] + dc * offset)
+                            if new_pos not in positions.values():
+                                positions[neighbor] = new_pos
+                                visited.add(neighbor)
+                                queue.append(neighbor)
+                                placed = True
+                                break
+                        if placed:
+                            break
+                        offset += 1
+                    
+                    if not placed:
+                        # Last resort: assign far position
+                        max_row = max((p[0] for p in positions.values()), default=0)
+                        max_col = max((p[1] for p in positions.values()), default=0)
+                        positions[neighbor] = (max_row + 1, max_col + 1)
+                        visited.add(neighbor)
+                        queue.append(neighbor)
         
         # Normalize positions to start from (0, 0)
         if positions:
@@ -141,6 +165,8 @@ class DungeonStitcher:
     def stitch(self, dungeon_data: 'DungeonData' = None) -> StitchedDungeon:
         """
         Stitch rooms into a global dungeon map.
+        
+        FIX: Use actual room dimensions instead of fixed constants to prevent overlap.
         
         Args:
             dungeon_data: DungeonData to stitch (uses self.dungeon_data if not provided)
@@ -168,12 +194,54 @@ class DungeonStitcher:
                 room_bounds={}
             )
         
-        # Calculate global grid dimensions
+        # FIX: Calculate positions using ACTUAL room dimensions
+        # First, find the max room dimensions in each row and column
+        rooms_by_layout = {}
+        for room_id, (layout_row, layout_col) in layout.items():
+            room_key = str(room_id)
+            if room_key in self.dungeon_data.rooms:
+                room = self.dungeon_data.rooms[room_key]
+                rooms_by_layout[(layout_row, layout_col)] = {
+                    'room_id': room_id,
+                    'room_key': room_key,
+                    'grid': room.grid,
+                    'height': room.grid.shape[0],
+                    'width': room.grid.shape[1],
+                }
+        
+        # Calculate max height per row and max width per column
         max_row = max(p[0] for p in layout.values())
         max_col = max(p[1] for p in layout.values())
         
-        grid_height = (max_row + 1) * (self.ROOM_HEIGHT + self.PADDING)
-        grid_width = (max_col + 1) * (self.ROOM_WIDTH + self.PADDING)
+        row_heights = {}
+        col_widths = {}
+        
+        for (layout_row, layout_col), room_info in rooms_by_layout.items():
+            if layout_row not in row_heights or room_info['height'] > row_heights[layout_row]:
+                row_heights[layout_row] = room_info['height']
+            if layout_col not in col_widths or room_info['width'] > col_widths[layout_col]:
+                col_widths[layout_col] = room_info['width']
+        
+        # Fill in missing rows/columns with default sizes
+        for r in range(max_row + 1):
+            if r not in row_heights:
+                row_heights[r] = self.ROOM_HEIGHT
+        for c in range(max_col + 1):
+            if c not in col_widths:
+                col_widths[c] = self.ROOM_WIDTH
+        
+        # Calculate cumulative offsets
+        row_offsets = {0: 0}
+        for r in range(1, max_row + 1):
+            row_offsets[r] = row_offsets[r-1] + row_heights[r-1] + self.PADDING
+        
+        col_offsets = {0: 0}
+        for c in range(1, max_col + 1):
+            col_offsets[c] = col_offsets[c-1] + col_widths[c-1] + self.PADDING
+        
+        # Calculate grid dimensions
+        grid_height = row_offsets[max_row] + row_heights[max_row]
+        grid_width = col_offsets[max_col] + col_widths[max_col]
         
         # Initialize global grid with VOID
         global_grid = np.full((grid_height, grid_width), 
@@ -184,7 +252,7 @@ class DungeonStitcher:
         start_pos = None
         goal_pos = None
         
-        # Place each room
+        # Place each room using calculated offsets
         for room_id, (layout_row, layout_col) in layout.items():
             room_key = str(room_id)
             
@@ -194,9 +262,9 @@ class DungeonStitcher:
             room = self.dungeon_data.rooms[room_key]
             room_grid = room.grid
             
-            # Calculate position in global grid
-            r_offset = layout_row * (self.ROOM_HEIGHT + self.PADDING)
-            c_offset = layout_col * (self.ROOM_WIDTH + self.PADDING)
+            # Use calculated offsets instead of fixed multiplier
+            r_offset = row_offsets[layout_row]
+            c_offset = col_offsets[layout_col]
             
             # Get actual room dimensions
             rh, rw = room_grid.shape
@@ -243,7 +311,12 @@ class DungeonStitcher:
                        layout: Dict[int, Tuple[int, int]],
                        room_bounds: Dict[str, Tuple[int, int, int, int]]):
         """
-        Connect doors between adjacent rooms by adding floor tiles.
+        Connect doors between adjacent rooms by:
+        1. Punching doorways through walls at room boundaries
+        2. Adding floor tiles in gaps between rooms
+        
+        This is necessary because VGLC room data doesn't have explicit
+        door markers at boundaries that connect to adjacent rooms.
         """
         # For each pair of adjacent rooms in layout
         for room_id_a, (row_a, col_a) in layout.items():
@@ -260,66 +333,146 @@ class DungeonStitcher:
                 bounds_a = room_bounds[key_a]
                 bounds_b = room_bounds[key_b]
                 
-                # Check if rooms are adjacent
+                # Check if rooms are adjacent in layout grid
                 if row_a == row_b and abs(col_a - col_b) == 1:
-                    # Horizontally adjacent - connect east/west doors
-                    self._connect_horizontal(global_grid, bounds_a, bounds_b, col_a < col_b)
+                    # Horizontally adjacent - connect east/west
+                    self._punch_horizontal_doorway(global_grid, bounds_a, bounds_b, col_a < col_b)
                 elif col_a == col_b and abs(row_a - row_b) == 1:
-                    # Vertically adjacent - connect north/south doors
-                    self._connect_vertical(global_grid, bounds_a, bounds_b, row_a < row_b)
+                    # Vertically adjacent - connect north/south
+                    self._punch_vertical_doorway(global_grid, bounds_a, bounds_b, row_a < row_b)
+    
+    def _punch_horizontal_doorway(self, global_grid: np.ndarray,
+                                  bounds_a: Tuple[int, int, int, int],
+                                  bounds_b: Tuple[int, int, int, int],
+                                  a_is_left: bool):
+        """
+        Create a doorway between horizontally adjacent rooms.
+        
+        Punches through walls and fills gaps with floor tiles.
+        """
+        r1_a, c1_a, r2_a, c2_a = bounds_a
+        r1_b, c1_b, r2_b, c2_b = bounds_b
+        
+        # Find overlapping row range
+        r_start = max(r1_a, r1_b)
+        r_end = min(r2_a, r2_b)
+        
+        if r_start >= r_end:
+            return
+        
+        # Find middle of overlapping region for doorway
+        door_r = (r_start + r_end) // 2
+        door_width = 3  # Make a 3-tile wide doorway
+        
+        if a_is_left:
+            # Punch through right wall of A and left wall of B
+            # Room A ends at c2_a-1, Room B starts at c1_b
+            for dr in range(-door_width//2, door_width//2 + 1):
+                r = door_r + dr
+                if r < r_start + 1 or r >= r_end - 1:
+                    continue
+                
+                # Clear the wall at A's right edge
+                if c2_a > 0:
+                    global_grid[r, c2_a - 1] = SEMANTIC_PALETTE['FLOOR']
+                
+                # Fill the gap
+                for c in range(c2_a, c1_b + 1):
+                    if 0 <= c < global_grid.shape[1]:
+                        global_grid[r, c] = SEMANTIC_PALETTE['FLOOR']
+                
+                # Clear the wall at B's left edge
+                if c1_b < global_grid.shape[1]:
+                    global_grid[r, c1_b] = SEMANTIC_PALETTE['FLOOR']
+        else:
+            # Punch through left wall of A and right wall of B
+            for dr in range(-door_width//2, door_width//2 + 1):
+                r = door_r + dr
+                if r < r_start + 1 or r >= r_end - 1:
+                    continue
+                
+                if c1_a < global_grid.shape[1]:
+                    global_grid[r, c1_a] = SEMANTIC_PALETTE['FLOOR']
+                
+                for c in range(c2_b, c1_a + 1):
+                    if 0 <= c < global_grid.shape[1]:
+                        global_grid[r, c] = SEMANTIC_PALETTE['FLOOR']
+                
+                if c2_b > 0:
+                    global_grid[r, c2_b - 1] = SEMANTIC_PALETTE['FLOOR']
+    
+    def _punch_vertical_doorway(self, global_grid: np.ndarray,
+                                bounds_a: Tuple[int, int, int, int],
+                                bounds_b: Tuple[int, int, int, int],
+                                a_is_top: bool):
+        """
+        Create a doorway between vertically adjacent rooms.
+        
+        Punches through walls and fills gaps with floor tiles.
+        """
+        r1_a, c1_a, r2_a, c2_a = bounds_a
+        r1_b, c1_b, r2_b, c2_b = bounds_b
+        
+        # Find overlapping column range
+        c_start = max(c1_a, c1_b)
+        c_end = min(c2_a, c2_b)
+        
+        if c_start >= c_end:
+            return
+        
+        # Find middle of overlapping region for doorway
+        door_c = (c_start + c_end) // 2
+        door_width = 3  # Make a 3-tile wide doorway
+        
+        if a_is_top:
+            # Punch through bottom wall of A and top wall of B
+            for dc in range(-door_width//2, door_width//2 + 1):
+                c = door_c + dc
+                if c < c_start + 1 or c >= c_end - 1:
+                    continue
+                
+                # Clear the wall at A's bottom edge
+                if r2_a > 0:
+                    global_grid[r2_a - 1, c] = SEMANTIC_PALETTE['FLOOR']
+                
+                # Fill the gap
+                for r in range(r2_a, r1_b + 1):
+                    if 0 <= r < global_grid.shape[0]:
+                        global_grid[r, c] = SEMANTIC_PALETTE['FLOOR']
+                
+                # Clear the wall at B's top edge
+                if r1_b < global_grid.shape[0]:
+                    global_grid[r1_b, c] = SEMANTIC_PALETTE['FLOOR']
+        else:
+            # Punch through top wall of A and bottom wall of B
+            for dc in range(-door_width//2, door_width//2 + 1):
+                c = door_c + dc
+                if c < c_start + 1 or c >= c_end - 1:
+                    continue
+                
+                if r1_a < global_grid.shape[0]:
+                    global_grid[r1_a, c] = SEMANTIC_PALETTE['FLOOR']
+                
+                for r in range(r2_b, r1_a + 1):
+                    if 0 <= r < global_grid.shape[0]:
+                        global_grid[r, c] = SEMANTIC_PALETTE['FLOOR']
+                
+                if r2_b > 0:
+                    global_grid[r2_b - 1, c] = SEMANTIC_PALETTE['FLOOR']
     
     def _connect_horizontal(self, global_grid: np.ndarray,
                            bounds_a: Tuple[int, int, int, int],
                            bounds_b: Tuple[int, int, int, int],
                            a_is_left: bool):
-        """Connect horizontally adjacent rooms."""
-        r1_a, c1_a, r2_a, c2_a = bounds_a
-        r1_b, c1_b, r2_b, c2_b = bounds_b
-        
-        if a_is_left:
-            # Find doors on right edge of A and left edge of B
-            connect_col_start = c2_a
-            connect_col_end = c1_b
-        else:
-            connect_col_start = c2_b
-            connect_col_end = c1_a
-        
-        # Find the row range to connect
-        connect_r1 = max(r1_a, r1_b)
-        connect_r2 = min(r2_a, r2_b)
-        
-        # Connect with floor tiles
-        if connect_col_start < connect_col_end:
-            for c in range(connect_col_start, connect_col_end):
-                for r in range(connect_r1 + 2, connect_r2 - 2):  # Avoid corners
-                    if global_grid[r, c] == SEMANTIC_PALETTE['VOID']:
-                        global_grid[r, c] = SEMANTIC_PALETTE['FLOOR']
+        """DEPRECATED: Use _punch_horizontal_doorway instead."""
+        self._punch_horizontal_doorway(global_grid, bounds_a, bounds_b, a_is_left)
     
     def _connect_vertical(self, global_grid: np.ndarray,
                          bounds_a: Tuple[int, int, int, int],
                          bounds_b: Tuple[int, int, int, int],
                          a_is_top: bool):
-        """Connect vertically adjacent rooms."""
-        r1_a, c1_a, r2_a, c2_a = bounds_a
-        r1_b, c1_b, r2_b, c2_b = bounds_b
-        
-        if a_is_top:
-            connect_row_start = r2_a
-            connect_row_end = r1_b
-        else:
-            connect_row_start = r2_b
-            connect_row_end = r1_a
-        
-        # Find the col range to connect
-        connect_c1 = max(c1_a, c1_b)
-        connect_c2 = min(c2_a, c2_b)
-        
-        # Connect with floor tiles
-        if connect_row_start < connect_row_end:
-            for r in range(connect_row_start, connect_row_end):
-                for c in range(connect_c1 + 2, connect_c2 - 2):  # Avoid corners
-                    if global_grid[r, c] == SEMANTIC_PALETTE['VOID']:
-                        global_grid[r, c] = SEMANTIC_PALETTE['FLOOR']
+        """DEPRECATED: Use _punch_vertical_doorway instead."""
+        self._punch_vertical_doorway(global_grid, bounds_a, bounds_b, a_is_top)
     
     @staticmethod
     def visualize_stitched(stitched: StitchedDungeon) -> str:

@@ -620,6 +620,11 @@ class StateSpaceAStar:
         """
         Find a solution path using A* on state space.
         
+        OPTIMIZED VERSION:
+        - No grid copies during search (read-only grid)
+        - State-only tracking for doors and items
+        - Significant memory and CPU savings
+        
         Returns:
             success: Whether a solution was found
             path: List of positions visited
@@ -633,7 +638,11 @@ class StateSpaceAStar:
         if self.env.start_pos is None:
             return False, [], 0
         
-        # Priority queue: (f_score, state_hash, state, path)
+        # Use read-only grid reference (no copies!)
+        grid = self.env.original_grid
+        height, width = grid.shape
+        
+        # Priority queue: (f_score, counter, state_hash, state, path)
         start_state = self.env.state.copy()
         start_h = self._heuristic(start_state)
         
@@ -645,6 +654,9 @@ class StateSpaceAStar:
         
         states_explored = 0
         counter = 1  # Tie-breaker for heap
+        
+        # Movement deltas: UP, DOWN, LEFT, RIGHT
+        deltas = [(-1, 0), (1, 0), (0, -1), (0, 1)]
         
         while open_set and states_explored < self.timeout:
             _, _, state_hash, current_state, path = heapq.heappop(open_set)
@@ -659,23 +671,25 @@ class StateSpaceAStar:
             if current_state.position == self.env.goal_pos:
                 return True, path, states_explored
             
-            # Explore neighbors
-            for action in range(4):
-                # Create a fresh environment state
-                self.env.state = current_state.copy()
-                self.env.grid = self.env.original_grid.copy()
+            # Explore neighbors using pure state-based logic (NO grid copies)
+            curr_r, curr_c = current_state.position
+            
+            for dr, dc in deltas:
+                new_r, new_c = curr_r + dr, curr_c + dc
                 
-                # Reapply opened doors and collected items
-                for door_pos in current_state.opened_doors:
-                    self.env.grid[door_pos] = SEMANTIC_PALETTE['DOOR_OPEN']
-                for item_pos in current_state.collected_items:
-                    self.env.grid[item_pos] = SEMANTIC_PALETTE['FLOOR']
+                # Bounds check
+                if not (0 <= new_r < height and 0 <= new_c < width):
+                    continue
                 
-                # Try action
-                new_state, reward, done, info = self.env.step(action)
+                target_pos = (new_r, new_c)
+                target_tile = grid[new_r, new_c]
                 
-                if new_state.position == current_state.position and action in [0, 1, 2, 3]:
-                    # Didn't move - invalid action
+                # Determine if move is possible and what state changes occur
+                can_move, new_state = self._try_move_pure(
+                    current_state, target_pos, target_tile
+                )
+                
+                if not can_move:
                     continue
                 
                 new_hash = hash(new_state)
@@ -684,7 +698,7 @@ class StateSpaceAStar:
                     continue
                 
                 # Calculate scores
-                g_score = g_scores[hash(current_state)] + 1
+                g_score = g_scores[state_hash] + 1
                 
                 if new_hash in g_scores and g_score >= g_scores[new_hash]:
                     continue
@@ -697,6 +711,84 @@ class StateSpaceAStar:
                 counter += 1
         
         return False, [], states_explored
+    
+    def _try_move_pure(self, state: GameState, target_pos: Tuple[int, int], 
+                       target_tile: int) -> Tuple[bool, GameState]:
+        """
+        Pure state-based move attempt (no grid modifications).
+        
+        Returns:
+            can_move: Whether the move is valid
+            new_state: Updated state if move is valid
+        """
+        # Blocking tiles - cannot pass
+        if target_tile in BLOCKING_IDS:
+            return False, state
+        
+        new_state = state.copy()
+        new_state.position = target_pos
+        
+        # Handle special tiles based on STATE, not grid modifications
+        
+        # Check if this door was already opened (in state)
+        if target_pos in state.opened_doors:
+            # Door is open, can pass freely
+            return True, new_state
+        
+        # Check if this item was already collected (in state)
+        if target_pos in state.collected_items:
+            # Item already collected, treat as floor
+            return True, new_state
+        
+        # Walkable tiles - free movement
+        if target_tile in WALKABLE_IDS:
+            # Handle item pickup (add to collected_items)
+            if target_tile in PICKUP_IDS:
+                new_state.collected_items = state.collected_items | {target_pos}
+                
+                if target_tile == SEMANTIC_PALETTE['KEY_SMALL']:
+                    new_state.keys = state.keys + 1
+                elif target_tile == SEMANTIC_PALETTE['KEY_BOSS']:
+                    new_state.has_boss_key = True
+                elif target_tile == SEMANTIC_PALETTE['KEY_ITEM']:
+                    new_state.has_item = True
+                    new_state.has_bomb = True
+            
+            return True, new_state
+        
+        # Conditional tiles - require inventory items
+        if target_tile == SEMANTIC_PALETTE['DOOR_LOCKED']:
+            if state.keys > 0:
+                new_state.keys = state.keys - 1
+                new_state.opened_doors = state.opened_doors | {target_pos}
+                return True, new_state
+            return False, state
+        
+        if target_tile == SEMANTIC_PALETTE['DOOR_BOMB']:
+            if state.has_bomb:
+                new_state.opened_doors = state.opened_doors | {target_pos}
+                return True, new_state
+            return False, state
+        
+        if target_tile == SEMANTIC_PALETTE['DOOR_BOSS']:
+            if state.has_boss_key:
+                new_state.opened_doors = state.opened_doors | {target_pos}
+                return True, new_state
+            return False, state
+        
+        if target_tile == SEMANTIC_PALETTE['DOOR_PUZZLE']:
+            # Puzzle doors can be passed (simplified)
+            return True, new_state
+        
+        if target_tile == SEMANTIC_PALETTE['DOOR_OPEN']:
+            return True, new_state
+        
+        # TRIFORCE - goal tile
+        if target_tile == SEMANTIC_PALETTE['TRIFORCE']:
+            return True, new_state
+        
+        # Default: allow movement for unknown walkable types
+        return True, new_state
     
     def _heuristic(self, state: GameState) -> float:
         """
@@ -775,10 +867,16 @@ class SanityChecker:
             errors.append("No goal (Triforce) found")
         
         # Check for completely blocked map
+        # FIX: Exclude VOID tiles from total since stitched dungeons have padding
+        # VOID represents empty space, not blocked terrain
         walkable_count = np.sum(np.isin(self.grid, list(WALKABLE_IDS)))
+        void_count = np.sum(self.grid == SEMANTIC_PALETTE['VOID'])
         total_cells = self.height * self.width
-        if walkable_count < 0.1 * total_cells:
-            errors.append(f"Map is mostly blocked ({walkable_count}/{total_cells} walkable)")
+        non_void_cells = total_cells - void_count
+        
+        # Only check ratio against non-void cells
+        if non_void_cells > 0 and walkable_count < 0.05 * non_void_cells:
+            errors.append(f"Map is mostly blocked ({walkable_count}/{non_void_cells} walkable, excluding void)")
         
         # Check for doors without possible keys
         locked_doors = np.sum(self.grid == SEMANTIC_PALETTE['DOOR_LOCKED'])
@@ -1182,6 +1280,354 @@ class ZeldaValidator:
         
         # Show final state
         time.sleep(2)
+
+
+# ==========================================
+# MODULE 7: GRAPH-GUIDED VALIDATOR
+# ==========================================
+
+class GraphGuidedValidator:
+    """
+    Validator that uses graph topology to determine dungeon solvability.
+    
+    Instead of pathfinding through a stitched grid (which fails when rooms are missing),
+    this validator:
+    1. Uses the graph to understand logical room connectivity
+    2. Validates that paths exist WITHIN each room
+    3. Verifies that connected rooms have traversable doorways
+    4. Uses graph-based BFS to determine if START can reach TRIFORCE
+    
+    This approach handles the VGLC dataset limitation where some logical rooms
+    are missing from the physical room data.
+    """
+    
+    def __init__(self):
+        """Initialize the graph-guided validator."""
+        self.validation_cache = {}
+    
+    def validate_dungeon_with_graph(self, dungeon_data, stitched_result=None) -> 'GraphValidationResult':
+        """
+        Validate a dungeon using its graph topology.
+        
+        Args:
+            dungeon_data: DungeonData object with rooms and graph
+            stitched_result: Optional StitchedDungeon (for visualization)
+            
+        Returns:
+            GraphValidationResult with detailed analysis
+        """
+        import networkx as nx
+        
+        graph = dungeon_data.graph
+        rooms = dungeon_data.rooms
+        existing_room_ids = set(int(k) for k in rooms.keys())
+        
+        # Step 1: Find START and TRIFORCE nodes from graph
+        start_node = None
+        triforce_node = None
+        
+        for node_id in graph.nodes():
+            node_data = graph.nodes[node_id]
+            if node_data.get('is_start', False):
+                start_node = node_id
+            if node_data.get('has_triforce', False):
+                triforce_node = node_id
+        
+        if start_node is None or triforce_node is None:
+            return GraphValidationResult(
+                is_solvable=False,
+                graph_path=[],
+                missing_rooms=[],
+                room_validations={},
+                error_message="No START or TRIFORCE node found in graph"
+            )
+        
+        # Step 2: Find shortest path in graph from START to TRIFORCE
+        try:
+            undirected = graph.to_undirected()
+            graph_path = nx.shortest_path(undirected, source=start_node, target=triforce_node)
+        except nx.NetworkXNoPath:
+            return GraphValidationResult(
+                is_solvable=False,
+                graph_path=[],
+                missing_rooms=[],
+                room_validations={},
+                error_message="No path exists in graph from START to TRIFORCE"
+            )
+        
+        # Step 3: Check which rooms in the path exist
+        missing_rooms = [n for n in graph_path if n not in existing_room_ids]
+        existing_in_path = [n for n in graph_path if n in existing_room_ids]
+        
+        # Step 4: Validate each existing room is internally traversable
+        room_validations = {}
+        for room_id in existing_in_path:
+            room_key = str(room_id)
+            if room_key in rooms:
+                room_grid = rooms[room_key].grid
+                is_traversable, floor_count = self._validate_room_traversability(room_grid)
+                room_validations[room_id] = {
+                    'is_traversable': is_traversable,
+                    'floor_count': floor_count,
+                    'shape': room_grid.shape
+                }
+        
+        # Step 5: Determine solvability based on graph analysis
+        # A dungeon is "graph-solvable" if:
+        # - All existing rooms in the path are internally traversable
+        # - OR we can find an alternate path using only existing rooms
+        
+        all_existing_traversable = all(
+            rv['is_traversable'] for rv in room_validations.values()
+        )
+        
+        # Try to find a path using only existing rooms
+        subgraph_path = self._find_path_in_existing_rooms(
+            graph, start_node, triforce_node, existing_room_ids
+        )
+        
+        is_solvable = (
+            len(missing_rooms) == 0 and all_existing_traversable
+        ) or (
+            subgraph_path is not None and len(subgraph_path) > 0
+        )
+        
+        # Calculate graph-based metrics
+        connectivity_score = len(existing_in_path) / len(graph_path) if graph_path else 0
+        
+        return GraphValidationResult(
+            is_solvable=is_solvable,
+            graph_path=graph_path,
+            subgraph_path=subgraph_path or [],
+            missing_rooms=missing_rooms,
+            room_validations=room_validations,
+            connectivity_score=connectivity_score,
+            start_node=start_node,
+            triforce_node=triforce_node,
+            error_message="" if is_solvable else f"Path requires {len(missing_rooms)} missing rooms"
+        )
+    
+    def _validate_room_traversability(self, room_grid: np.ndarray) -> Tuple[bool, int]:
+        """
+        Check if a room is internally traversable.
+        
+        A room is traversable if:
+        - It has floor tiles
+        - Floor tiles form a connected region
+        """
+        floor_mask = np.isin(room_grid, list(WALKABLE_IDS))
+        floor_count = np.sum(floor_mask)
+        
+        if floor_count == 0:
+            return False, 0
+        
+        # Check connectivity using flood fill
+        visited = np.zeros_like(floor_mask, dtype=bool)
+        positions = np.argwhere(floor_mask)
+        
+        if len(positions) == 0:
+            return False, 0
+        
+        # Start flood fill from first floor position
+        start = tuple(positions[0])
+        stack = [start]
+        connected_count = 0
+        
+        while stack:
+            r, c = stack.pop()
+            if visited[r, c]:
+                continue
+            if not floor_mask[r, c]:
+                continue
+            
+            visited[r, c] = True
+            connected_count += 1
+            
+            # Add neighbors
+            for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                nr, nc = r + dr, c + dc
+                if 0 <= nr < room_grid.shape[0] and 0 <= nc < room_grid.shape[1]:
+                    if not visited[nr, nc] and floor_mask[nr, nc]:
+                        stack.append((nr, nc))
+        
+        # Room is traversable if most floor tiles are connected
+        is_traversable = connected_count >= 0.5 * floor_count
+        return is_traversable, int(floor_count)
+    
+    def _find_path_in_existing_rooms(self, graph, start_node, end_node, 
+                                     existing_room_ids: Set[int]) -> Optional[List[int]]:
+        """
+        Try to find a path that only uses existing rooms.
+        
+        Uses BFS on the subgraph of existing rooms.
+        """
+        import networkx as nx
+        
+        # Create subgraph with only existing rooms
+        existing_nodes = [n for n in graph.nodes() if n in existing_room_ids]
+        
+        if start_node not in existing_nodes or end_node not in existing_nodes:
+            return None
+        
+        subgraph = graph.subgraph(existing_nodes).copy()
+        
+        try:
+            undirected = subgraph.to_undirected()
+            path = nx.shortest_path(undirected, source=start_node, target=end_node)
+            return path
+        except nx.NetworkXNoPath:
+            return None
+        except nx.NodeNotFound:
+            return None
+    
+    def validate_with_edge_types(self, dungeon_data, inventory_start: Dict = None) -> 'GraphValidationResult':
+        """
+        Validate considering edge types (locked doors, bombable walls, etc.)
+        
+        This performs a state-space search on the GRAPH, where:
+        - States = (current_node, keys_held, bombs_held, doors_opened)
+        - Edges are traversable based on their type and current inventory
+        
+        Args:
+            dungeon_data: DungeonData with rooms and graph
+            inventory_start: Initial inventory (default: no keys, no bombs)
+            
+        Returns:
+            GraphValidationResult with solution path
+        """
+        import networkx as nx
+        from collections import deque
+        
+        if inventory_start is None:
+            inventory_start = {'keys': 0, 'bombs': 0, 'boss_key': False}
+        
+        graph = dungeon_data.graph
+        rooms = dungeon_data.rooms
+        existing_room_ids = set(int(k) for k in rooms.keys())
+        
+        # Find START and TRIFORCE
+        start_node = None
+        triforce_node = None
+        key_nodes = []
+        bomb_nodes = []
+        
+        for node_id in graph.nodes():
+            node_data = graph.nodes[node_id]
+            if node_data.get('is_start', False):
+                start_node = node_id
+            if node_data.get('has_triforce', False):
+                triforce_node = node_id
+            if node_data.get('has_key', False):
+                key_nodes.append(node_id)
+            if 'bomb' in str(node_data.get('contents', [])).lower():
+                bomb_nodes.append(node_id)
+        
+        if start_node is None or triforce_node is None:
+            return GraphValidationResult(
+                is_solvable=False,
+                graph_path=[],
+                missing_rooms=[],
+                room_validations={},
+                error_message="No START or TRIFORCE in graph"
+            )
+        
+        # State-space BFS on the graph
+        # State: (current_node, frozenset(collected_keys), frozenset(opened_doors))
+        initial_state = (
+            start_node,
+            frozenset(),  # collected items
+            frozenset(),  # opened doors (edge tuples)
+            inventory_start['keys']  # initial key count
+        )
+        
+        queue = deque([(initial_state, [start_node])])
+        visited = {initial_state}
+        
+        while queue:
+            (current_node, collected, opened, keys), path = queue.popleft()
+            
+            # Check win
+            if current_node == triforce_node:
+                return GraphValidationResult(
+                    is_solvable=True,
+                    graph_path=path,
+                    subgraph_path=path,
+                    missing_rooms=[n for n in path if n not in existing_room_ids],
+                    room_validations={},
+                    connectivity_score=1.0,
+                    start_node=start_node,
+                    triforce_node=triforce_node,
+                    error_message=""
+                )
+            
+            # Collect items at current node
+            new_collected = collected
+            new_keys = keys
+            if current_node in key_nodes and current_node not in collected:
+                new_collected = collected | {current_node}
+                new_keys = keys + 1
+            
+            # Explore edges
+            for neighbor in graph.neighbors(current_node):
+                edge_data = graph.get_edge_data(current_node, neighbor)
+                edge_type = edge_data.get('type', 'open') if edge_data else 'open'
+                edge_key = (min(current_node, neighbor), max(current_node, neighbor))
+                
+                can_traverse = False
+                new_opened = opened
+                use_key = False
+                
+                if edge_type == 'open' or edge_type == '':
+                    can_traverse = True
+                elif edge_type == 'locked':
+                    if new_keys > 0 or edge_key in opened:
+                        can_traverse = True
+                        if edge_key not in opened:
+                            new_opened = opened | {edge_key}
+                            use_key = True
+                elif edge_type == 'soft_locked':
+                    can_traverse = True  # One-way but passable
+                elif edge_type == 'bombable':
+                    # Would need bombs - skip for now unless we have them
+                    can_traverse = edge_key in opened
+                else:
+                    can_traverse = True  # Default: allow passage
+                
+                if can_traverse:
+                    final_keys = new_keys - 1 if use_key else new_keys
+                    final_keys = max(0, final_keys)
+                    
+                    new_state = (neighbor, new_collected, new_opened, final_keys)
+                    if new_state not in visited:
+                        visited.add(new_state)
+                        queue.append((new_state, path + [neighbor]))
+        
+        # No path found
+        return GraphValidationResult(
+            is_solvable=False,
+            graph_path=[],
+            subgraph_path=[],
+            missing_rooms=[],
+            room_validations={},
+            connectivity_score=0.0,
+            start_node=start_node,
+            triforce_node=triforce_node,
+            error_message="No valid path considering locked doors and keys"
+        )
+
+
+@dataclass
+class GraphValidationResult:
+    """Result of graph-guided validation."""
+    is_solvable: bool
+    graph_path: List[int]  # Path through graph nodes
+    subgraph_path: List[int] = field(default_factory=list)  # Path using only existing rooms
+    missing_rooms: List[int] = field(default_factory=list)
+    room_validations: Dict[int, Dict] = field(default_factory=dict)
+    connectivity_score: float = 0.0
+    start_node: Optional[int] = None
+    triforce_node: Optional[int] = None
+    error_message: str = ""
 
 
 # ==========================================

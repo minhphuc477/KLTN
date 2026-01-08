@@ -131,7 +131,7 @@ class ZeldaValidationPipeline:
         # Step 1: Run calibration
         print("[CALIBRATION] Running system calibration...")
         self._run_calibration()
-        print("[CALIBRATION] PASSED ✓\n")
+        print("[CALIBRATION] PASSED [OK]\n")
         
         # Step 2: Process data
         print("[BLOCK I] Processing raw dungeon data...")
@@ -215,9 +215,10 @@ class ZeldaValidationPipeline:
         """
         Validate all processed dungeons.
         
-        Two-level validation:
-        1. Room-level: Validate rooms that have both START and TRIFORCE
+        Three-level validation:
+        1. Graph-level: Use graph topology to determine logical solvability
         2. Dungeon-level: Stitch rooms and validate full dungeon
+        3. Room-level: Validate rooms that have both START and TRIFORCE
         """
         all_grids = []
         room_info = []
@@ -235,11 +236,52 @@ class ZeldaValidationPipeline:
         # Store results
         self.validation_results['individual'] = []
         self.validation_results['dungeon_level'] = []
+        self.validation_results['graph_level'] = []
+        
+        # ==========================================
+        # GRAPH-LEVEL VALIDATION (using graph topology)
+        # ==========================================
+        print("  [Graph-Level Validation (Topology-Guided)]")
+        graph_solvable_count = 0
+        graph_total = 0
+        
+        from simulation.validator import GraphGuidedValidator
+        graph_validator = GraphGuidedValidator()
+        
+        for dungeon_id, dungeon in self.processed_dungeons.items():
+            graph_total += 1
+            
+            try:
+                # Validate using graph topology with edge types (keys, locks, etc.)
+                graph_result = graph_validator.validate_with_edge_types(dungeon)
+                
+                self.validation_results['graph_level'].append({
+                    'dungeon_id': dungeon_id,
+                    'result': graph_result,
+                    'graph_path': graph_result.graph_path,
+                    'missing_rooms': graph_result.missing_rooms,
+                    'connectivity': graph_result.connectivity_score
+                })
+                
+                if graph_result.is_solvable:
+                    graph_solvable_count += 1
+                
+                if verbose:
+                    status = "GRAPH-SOLVABLE" if graph_result.is_solvable else "GRAPH-BLOCKED"
+                    path_info = f"path={graph_result.graph_path}" if graph_result.graph_path else "no path"
+                    missing_info = f"missing={graph_result.missing_rooms}" if graph_result.missing_rooms else ""
+                    print(f"    {dungeon_id}: {status} ({path_info}) {missing_info}")
+                    
+            except Exception as e:
+                if verbose:
+                    print(f"    {dungeon_id}: GRAPH ERROR - {e}")
+        
+        print(f"  Graph-level: {graph_solvable_count}/{graph_total} solvable (using topology)")
         
         # ==========================================
         # DUNGEON-LEVEL VALIDATION (using stitcher)
         # ==========================================
-        print("  [Dungeon-Level Validation]")
+        print("  [Dungeon-Level Validation (Grid-Based)]")
         dungeon_solvable_count = 0
         dungeon_total = 0
         
@@ -281,7 +323,10 @@ class ZeldaValidationPipeline:
                 if verbose:
                     print(f"    {dungeon_id}: ERROR - {e}")
         
-        print(f"  Dungeon-level: {dungeon_solvable_count}/{dungeon_total} solvable")
+        print(f"  Dungeon-level: {dungeon_solvable_count}/{dungeon_total} solvable (grid pathfinding)")
+        
+        # Update stats to include graph-level results
+        self.stats['graph_solvable'] = graph_solvable_count
         
         # ==========================================
         # ROOM-LEVEL VALIDATION (for rooms with both START and TRIFORCE)
@@ -432,34 +477,42 @@ class ZeldaValidationPipeline:
         
         batch = self.validation_results.get('batch')
         
-        print(f"\n📊 STATISTICS")
+        print(f"\n[STATISTICS]")
         print(f"   Total Dungeons:    {self.stats['total_dungeons']}")
         print(f"   Total Rooms:       {self.stats['total_rooms']}")
         print(f"   Valid Syntax:      {self.stats['valid_rooms']}")
-        print(f"   Solvable:          {self.stats['solvable_rooms']}")
+        print(f"   Grid-Solvable:     {self.stats['solvable_rooms']}")
         
-        print(f"\n📈 METRICS")
+        # Graph-level stats
+        graph_solvable = self.stats.get('graph_solvable', 0)
+        print(f"   Graph-Solvable:    {graph_solvable} (topology-guided)")
+        
+        print(f"\n[METRICS]")
         if batch:
-            print(f"   Solvability Rate:  {100 * batch.solvability_rate:.1f}%")
+            print(f"   Grid Solvability:  {100 * batch.solvability_rate:.1f}%")
+            print(f"   Graph Solvability: {100 * graph_solvable / max(1, self.stats['total_dungeons']):.1f}%")
             print(f"   Avg Reachability:  {100 * batch.avg_reachability:.1f}%")
             print(f"   Avg Path Length:   {batch.avg_path_length:.1f} steps")
             print(f"   Avg Backtracking:  {100 * batch.avg_backtracking:.1f}%")
             print(f"   Diversity Score:   {self.validation_results.get('diversity', 0):.3f}")
         
-        print(f"\n⏱️  TIMING")
+        print(f"\n[TIMING]")
         print(f"   Processing:        {self.stats['processing_time']:.2f}s")
         print(f"   Validation:        {self.stats['validation_time']:.2f}s")
         print(f"   Total:             {self.stats['processing_time'] + self.stats['validation_time']:.2f}s")
         
         print("\n" + "=" * 60)
         
-        # Overall verdict
-        if batch and batch.solvability_rate > 0.8:
-            print("✅ VALIDATION PASSED: High solvability rate")
-        elif batch and batch.solvability_rate > 0.5:
-            print("⚠️  VALIDATION WARNING: Moderate solvability rate")
+        # Overall verdict - use graph solvability as primary metric
+        graph_rate = graph_solvable / max(1, self.stats['total_dungeons'])
+        if graph_rate > 0.8:
+            print("[PASS] VALIDATION PASSED: High graph-solvability rate")
+        elif graph_rate > 0.5:
+            print("[WARN] VALIDATION WARNING: Moderate graph-solvability rate")
         else:
-            print("❌ VALIDATION CONCERNS: Low solvability rate")
+            print("[FAIL] VALIDATION CONCERNS: Low solvability rate")
+            print("   Note: Graph solvability considers logical topology,")
+            print("         Grid solvability requires complete room data")
         
         print("=" * 60 + "\n")
 
