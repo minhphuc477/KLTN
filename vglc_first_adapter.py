@@ -75,6 +75,7 @@ class VGLCFirstAdapter:
     def process_dungeon(self, map_file: str, graph_file: str, dungeon_id: str) -> DungeonData:
         """
         Process dungeon using VGLC positions as ground truth.
+        Creates a ghost TRIFORCE room connected to BOSS if needed.
         """
         # Step 1: Extract VGLC rooms
         vglc_rooms = self._extract_vglc_rooms(map_file)
@@ -86,11 +87,13 @@ class VGLCFirstAdapter:
         # Step 3: Parse the .dot graph for semantic info
         dot_graph = self._parse_dot_graph(graph_file)
         
-        # Step 4: Match graph nodes to VGLC rooms for semantic injection
+        # Step 4: Match semantics (START, BOSS, TRIFORCE)
         semantic_mapping = self._match_semantics(vglc_rooms, dot_graph)
         
         # Step 5: Convert to processed rooms
         processed_rooms: Dict[str, RoomData] = {}
+        
+        boss_room_id = None
         
         for pos, info in vglc_rooms.items():
             room_id = f"{pos[0]}_{pos[1]}"
@@ -99,14 +102,14 @@ class VGLCFirstAdapter:
             # Convert to semantic grid
             semantic_grid = self._char_to_semantic(char_grid)
             
-            # Inject special markers from graph matching
+            # Inject markers from semantic matching
             if pos in semantic_mapping:
                 sem_info = semantic_mapping[pos]
-                if sem_info.get('is_start'):
-                    # Already has STAIR which we treat as START
-                    pass
+                if sem_info.get('is_boss'):
+                    boss_room_id = room_id
+                    # Mark as boss room (inject BOSS marker)
+                    self._inject_boss(semantic_grid)
                 if sem_info.get('has_triforce'):
-                    # Inject TRIFORCE marker (replace center floor)
                     self._inject_triforce(semantic_grid)
             
             room = RoomData(
@@ -117,6 +120,37 @@ class VGLCFirstAdapter:
                 position=pos
             )
             processed_rooms[room_id] = room
+        
+        # Step 6: Create ghost TRIFORCE room connected to BOSS
+        # In original Zelda, TRIFORCE appears after boss is defeated
+        if boss_room_id:
+            # Check if there's already a TRIFORCE room
+            has_triforce = any(SEMANTIC_PALETTE['TRIFORCE'] in r.grid for r in processed_rooms.values())
+            
+            if not has_triforce:
+                # Create ghost triforce room
+                boss_pos = processed_rooms[boss_room_id].position
+                ghost_pos = (boss_pos[0] + 1, boss_pos[1])  # Below boss
+                ghost_id = f"{ghost_pos[0]}_{ghost_pos[1]}_triforce"
+                
+                # Create simple triforce room
+                ghost_grid = self._create_triforce_room()
+                
+                ghost_room = RoomData(
+                    room_id=ghost_id,
+                    grid=ghost_grid,
+                    contents=['triforce'],
+                    doors={'N': True, 'S': False, 'W': False, 'E': False},
+                    position=ghost_pos
+                )
+                processed_rooms[ghost_id] = ghost_room
+                
+                # Add edge in graph
+                vglc_graph.add_node(ghost_id, position=ghost_pos, has_triforce=True)
+                vglc_graph.add_edge(boss_room_id, ghost_id, direction='S')
+                vglc_graph.add_edge(ghost_id, boss_room_id, direction='N')
+                
+                print(f"Created ghost TRIFORCE room {ghost_id} connected to BOSS {boss_room_id}")
         
         # Create dungeon data
         return DungeonData(
@@ -218,39 +252,91 @@ class VGLCFirstAdapter:
         """
         Match semantic info from .dot graph to VGLC rooms.
         
-        Strategy: Use content clues from both sources.
+        Strategy: Use content clues from VGLC layout.
+        - START: Room with STAIR (S character)
+        - BOSS: Dead-end room with many monsters + blocks
+        - TRIFORCE: Dead-end room farthest from start (after boss)
         """
         mapping = {}
         
-        # Find START: VGLC room with STAIR
+        # Find START: VGLC room with STAIR that has at least one door
+        # (isolated stair rooms are secret rooms, not dungeon entrances)
         start_vglc = None
-        for pos, info in vglc_rooms.items():
-            if info['has_stair']:
+        stair_rooms = [(pos, info) for pos, info in vglc_rooms.items() if info['has_stair']]
+        
+        # Prefer rooms with doors
+        for pos, info in stair_rooms:
+            door_count = sum(info['doors'].values())
+            if door_count > 0:
                 start_vglc = pos
                 mapping[pos] = {'is_start': True}
                 break
         
-        # Find TRIFORCE: In Zelda dungeons, typically the room farthest from start
-        # or a room accessible only after boss
-        if start_vglc:
-            # BFS to find farthest room
-            G = self._build_vglc_graph(vglc_rooms)
-            start_id = f"{start_vglc[0]}_{start_vglc[1]}"
+        # Fallback to any stair room if none have doors
+        if not start_vglc and stair_rooms:
+            start_vglc = stair_rooms[0][0]
+            mapping[start_vglc] = {'is_start': True}
+        
+        # If no STAIR room, use the room with most doors as entrance
+        if not start_vglc:
+            max_doors = 0
+            for pos, info in vglc_rooms.items():
+                door_count = sum(info['doors'].values())
+                if door_count > max_doors:
+                    max_doors = door_count
+                    start_vglc = pos
             
-            distances = nx.single_source_shortest_path_length(G, start_id)
-            farthest = max(distances.items(), key=lambda x: x[1])
-            farthest_id = farthest[0]
-            farthest_pos = tuple(map(int, farthest_id.split('_')))
+            if start_vglc:
+                mapping[start_vglc] = {'is_start': True}
+        
+        if not start_vglc:
+            return mapping
+        
+        # Build VGLC graph for distance calculations
+        G = self._build_vglc_graph(vglc_rooms)
+        start_id = f"{start_vglc[0]}_{start_vglc[1]}"
+        distances = nx.single_source_shortest_path_length(G, start_id)
+        
+        # Find BOSS room: Dead-end with many monsters/blocks (combat arena)
+        boss_candidates = []
+        for pos, info in vglc_rooms.items():
+            door_count = sum(info['doors'].values())
+            grid = info['grid']
+            monster_count = np.sum(grid == 'M')
+            block_count = np.sum(grid == 'B')
             
-            # The triforce room is often after the boss room
-            # Look for the second-farthest room as potential boss
-            # and farthest as triforce (if it only has 1 door)
-            farthest_info = vglc_rooms.get(farthest_pos)
-            if farthest_info:
-                door_count = sum(farthest_info['doors'].values())
-                if door_count == 1:  # Dead-end room = likely triforce
-                    mapping[farthest_pos] = mapping.get(farthest_pos, {})
-                    mapping[farthest_pos]['has_triforce'] = True
+            # Boss room criteria: dead-end, monsters, complex block pattern
+            if door_count == 1 and (monster_count >= 4 or block_count >= 20):
+                room_id = f"{pos[0]}_{pos[1]}"
+                dist = distances.get(room_id, 0)
+                boss_candidates.append((pos, dist, monster_count, block_count))
+        
+        boss_pos = None
+        if boss_candidates:
+            # Pick the dead-end with most monsters/blocks at good distance
+            boss_candidates.sort(key=lambda x: (x[2] + x[3], x[1]), reverse=True)
+            boss_pos = boss_candidates[0][0]
+            mapping[boss_pos] = mapping.get(boss_pos, {})
+            mapping[boss_pos]['is_boss'] = True
+        
+        # Find TRIFORCE: Farthest dead-end room (that's not boss)
+        max_dist = -1
+        triforce_pos = None
+        for pos, info in vglc_rooms.items():
+            if pos == boss_pos or pos == start_vglc:
+                continue
+            
+            door_count = sum(info['doors'].values())
+            if door_count == 1:  # Dead-end
+                room_id = f"{pos[0]}_{pos[1]}"
+                dist = distances.get(room_id, 0)
+                if dist > max_dist:
+                    max_dist = dist
+                    triforce_pos = pos
+        
+        if triforce_pos:
+            mapping[triforce_pos] = mapping.get(triforce_pos, {})
+            mapping[triforce_pos]['has_triforce'] = True
         
         return mapping
     
@@ -259,10 +345,25 @@ class VGLCFirstAdapter:
         h, w = char_grid.shape
         semantic = np.zeros((h, w), dtype=np.int64)
         
+        # Check if this is a corridor room (has doors but mostly void interior)
+        has_doors = np.any(char_grid == 'D')
+        void_count = np.sum(char_grid == '-')
+        interior_size = (h - 4) * (w - 4)  # Exclude 2-tile borders
+        is_corridor = has_doors and void_count > interior_size * 0.5
+        
         for r in range(h):
             for c in range(w):
                 char = char_grid[r, c]
-                semantic[r, c] = CHAR_TO_SEMANTIC.get(char, SEMANTIC_PALETTE['VOID'])
+                
+                # Convert void to floor in corridor rooms
+                if char == '-' and is_corridor:
+                    # Only convert interior void to floor
+                    if 2 <= r < h-2 and 2 <= c < w-2:
+                        semantic[r, c] = SEMANTIC_PALETTE['FLOOR']
+                    else:
+                        semantic[r, c] = SEMANTIC_PALETTE['VOID']
+                else:
+                    semantic[r, c] = CHAR_TO_SEMANTIC.get(char, SEMANTIC_PALETTE['VOID'])
         
         return semantic
     
@@ -279,6 +380,39 @@ class VGLCFirstAdapter:
                         if grid[r, c] == SEMANTIC_PALETTE['FLOOR']:
                             grid[r, c] = SEMANTIC_PALETTE['TRIFORCE']
                             return
+    
+    def _inject_boss(self, grid: np.ndarray):
+        """Mark boss room by converting some enemies to BOSS."""
+        # Find enemy tiles and convert one to BOSS
+        enemy_locs = np.where(grid == SEMANTIC_PALETTE['ENEMY'])
+        if len(enemy_locs[0]) > 0:
+            # Convert center enemy to BOSS marker
+            idx = len(enemy_locs[0]) // 2
+            grid[enemy_locs[0][idx], enemy_locs[1][idx]] = SEMANTIC_PALETTE['BOSS']
+    
+    def _create_triforce_room(self) -> np.ndarray:
+        """Create a simple triforce room grid."""
+        # Standard room: 16x11
+        grid = np.full((self.ROOM_HEIGHT, self.ROOM_WIDTH), SEMANTIC_PALETTE['FLOOR'], dtype=np.int64)
+        
+        # Add walls
+        grid[0, :] = SEMANTIC_PALETTE['WALL']
+        grid[-1, :] = SEMANTIC_PALETTE['WALL']
+        grid[:, 0] = SEMANTIC_PALETTE['WALL']
+        grid[:, -1] = SEMANTIC_PALETTE['WALL']
+        grid[1, :] = SEMANTIC_PALETTE['WALL']
+        grid[-2, :] = SEMANTIC_PALETTE['WALL']
+        grid[:, 1] = SEMANTIC_PALETTE['WALL']
+        grid[:, -2] = SEMANTIC_PALETTE['WALL']
+        
+        # Add door at top
+        grid[0, 4:7] = SEMANTIC_PALETTE['DOOR_OPEN']
+        grid[1, 4:7] = SEMANTIC_PALETTE['FLOOR']
+        
+        # Add TRIFORCE in center
+        grid[8, 5] = SEMANTIC_PALETTE['TRIFORCE']
+        
+        return grid
 
 
 # Test
