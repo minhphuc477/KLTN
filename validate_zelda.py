@@ -14,7 +14,7 @@ Usage:
     python validate_zelda.py --gui              # Launch GUI after validation
     python validate_zelda.py --report report.txt  # Save report to file
 
-Author: KLTN Thesis Project
+
 """
 
 import os

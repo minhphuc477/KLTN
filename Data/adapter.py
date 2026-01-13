@@ -18,7 +18,7 @@ import re
 import json
 import numpy as np
 import networkx as nx
-from typing import Dict, List, Tuple, Optional, Any
+from typing import Dict, List, Tuple, Optional, Any, Set
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -78,6 +78,59 @@ CHAR_TO_SEMANTIC = {
     'S': SEMANTIC_PALETTE['STAIR'],     # Stair in room context
     # 'D' is handled specially by Defensive Router
 }
+
+
+class GridBasedRoomExtractor:
+    """Slice VGLC text maps using a strict grid to preserve spatial identity."""
+
+    def __init__(self, room_rows: int = 11, room_cols: int = 16, min_non_void: int = 5):
+        self.target_h = room_rows
+        self.target_w = room_cols
+        self.min_non_void = min_non_void
+
+    def _load_grid(self, filepath: str) -> np.ndarray:
+        with open(filepath, 'r') as f:
+            lines = [line.rstrip('\n') for line in f if line.strip()]
+
+        if not lines:
+            return np.zeros((0, 0), dtype='<U1')
+
+        width = max(len(line) for line in lines)
+        padded = [list(line.ljust(width, '-')) for line in lines]
+        return np.array(padded)
+
+    def extract(self, filepath: str) -> List[Tuple[int, np.ndarray]]:
+        grid = self._load_grid(filepath)
+
+        if grid.size == 0:
+            return []
+
+        map_h, map_w = grid.shape
+        rows = map_h // self.target_h
+        cols = map_w // self.target_w
+
+        rooms: List[Tuple[int, np.ndarray]] = []
+
+        for r in range(rows):
+            for c in range(cols):
+                r_start = r * self.target_h
+                c_start = c * self.target_w
+                r_end = r_start + self.target_h
+                c_end = c_start + self.target_w
+
+                slice_grid = grid[r_start:r_end, c_start:c_end]
+
+                if slice_grid.size == 0:
+                    continue
+
+                non_void = int(np.sum(slice_grid != '-'))
+                if non_void < self.min_non_void:
+                    continue
+
+                spatial_id = (r * 100) + c
+                rooms.append((spatial_id, slice_grid))
+
+        return rooms
 
 # Room dimensions (standard Zelda dungeon room)
 ROOM_HEIGHT = 11  # Interior height (excluding outer walls in some contexts)
@@ -334,6 +387,11 @@ class IntelligentDataAdapter:
                     visited[i, j] = True
         
         return rooms
+
+    def extract_rooms_strict(self, filepath: str) -> List[Tuple[int, np.ndarray]]:
+        """Extract rooms using a fixed grid slicer to maintain spatial layout."""
+        extractor = GridBasedRoomExtractor(room_rows=ROOM_HEIGHT, room_cols=ROOM_WIDTH)
+        return extractor.extract(filepath)
     
     def _extract_single_room(self, full_map: np.ndarray, start_i: int, start_j: int, 
                              visited: np.ndarray) -> Tuple[Optional[np.ndarray], Tuple]:
@@ -819,14 +877,11 @@ class IntelligentDataAdapter:
         Returns:
             DungeonData object with all processed tensors
         """
-        # Parse graph first to get room connectivity AND node attributes
         graph = self.parse_dot_graph(graph_file)
-        
-        # Extract rooms from map
-        rooms_data = self.extract_rooms_simple(map_file)
-        
-        # FIX: Find START and TRIFORCE nodes from graph for fallback injection
-        # This handles the case where extracted room_ids don't match graph node_ids
+
+        rooms_data = self.extract_rooms_strict(map_file)
+        node_ids = sorted(graph.nodes())
+
         start_node = None
         triforce_node = None
         for node_id in graph.nodes():
@@ -835,20 +890,39 @@ class IntelligentDataAdapter:
                 start_node = node_id
             if node_data.get('has_triforce', False):
                 triforce_node = node_id
-        
-        # Process each room with Graph-Guided Logic Injection
-        processed_rooms = {}
-        has_start = False  # Track if any room got START injected
-        has_triforce = False  # Track if any room got TRIFORCE injected
-        
-        for room_id, char_grid in rooms_data:
-            # Get graph attributes for this room (for door logic)
-            graph_attrs = self._get_room_graph_attrs(graph, room_id)
-            
-            # Get node attributes for this room (for START/TRIFORCE/KEY injection)
-            node_attrs = {}
-            if room_id in graph.nodes:
-                node_data = graph.nodes[room_id]
+
+        processed_rooms: Dict[str, RoomData] = {}
+        assigned_nodes: Set[int] = set()
+        layout_positions: Dict[int, Tuple[int, int]] = {}
+        has_start = False
+        has_triforce = False
+
+        for idx, (spatial_id, char_grid) in enumerate(rooms_data):
+            real_node_id = node_ids[idx] if idx < len(node_ids) else (node_ids[-1] if node_ids else spatial_id)
+
+            # Landmark override: if text shows start/triforce, prefer corresponding graph node
+            if start_node is not None and np.any(char_grid == 'S'):
+                real_node_id = start_node
+            if triforce_node is not None and np.any(np.isin(char_grid, ['T', 'G', 't'])):
+                real_node_id = triforce_node
+
+            if real_node_id in assigned_nodes:
+                for candidate in node_ids:
+                    if candidate not in assigned_nodes:
+                        real_node_id = candidate
+                        break
+
+            assigned_nodes.add(real_node_id)
+
+            position = (spatial_id // 100, spatial_id % 100)
+            layout_positions[real_node_id] = position
+
+            # CRITICAL FIX: Pass char_grid for pixel-based direction detection
+            graph_attrs = self._get_room_graph_attrs(graph, real_node_id, layout_positions, char_grid)
+
+            node_attrs: Dict[str, Any] = {}
+            if real_node_id in graph.nodes:
+                node_data = graph.nodes[real_node_id]
                 node_attrs = {
                     'is_start': node_data.get('is_start', False),
                     'has_triforce': node_data.get('has_triforce', False),
@@ -858,71 +932,62 @@ class IntelligentDataAdapter:
                     'has_boss': node_data.get('has_boss', False),
                     'contents': node_data.get('contents', []),
                 }
-            
-            # Convert to semantic grid WITH node_attrs for Graph-Guided Logic
-            semantic_grid = self.defensive_mapper(char_grid, room_id, graph_attrs, node_attrs)
-            
-            # Track injection status
-            if node_attrs.get('is_start'):
-                has_start = True
-            if node_attrs.get('has_triforce'):
-                has_triforce = True
-            
-            # Get room contents from graph
-            contents = []
-            if room_id in graph.nodes:
-                contents = graph.nodes[room_id].get('contents', [])
-            
-            processed_rooms[str(room_id)] = RoomData(
-                room_id=str(room_id),
+
+            semantic_grid = self.defensive_mapper(char_grid, real_node_id, graph_attrs, node_attrs)
+
+            has_start = has_start or node_attrs.get('is_start', False)
+            has_triforce = has_triforce or node_attrs.get('has_triforce', False)
+
+            contents = node_attrs.get('contents', []) if node_attrs else []
+
+            processed_rooms[str(real_node_id)] = RoomData(
+                room_id=str(real_node_id),
                 grid=semantic_grid,
                 contents=contents,
-                doors=graph_attrs
+                doors=graph_attrs,
+                position=position
             )
-        
-        # FIX: Fallback injection if no room got START or TRIFORCE
-        # This handles the mismatch between extracted room_ids and graph node_ids
-        if not has_start and len(rooms_data) > 0:
-            # Inject START into first room (entrance heuristic)
-            first_room_id = str(rooms_data[0][0])
-            if first_room_id in processed_rooms:
-                grid = processed_rooms[first_room_id].grid
-                # Find a floor position
-                floor_mask = grid == SEMANTIC_PALETTE['FLOOR']
-                if np.any(floor_mask):
-                    positions = np.argwhere(floor_mask)
-                    center = np.array(grid.shape) // 2
-                    distances = np.abs(positions - center).sum(axis=1)
-                    best_idx = np.argmin(distances)
-                    r, c = positions[best_idx]
-                    grid[r, c] = SEMANTIC_PALETTE['START']
-        
-        if not has_triforce and len(rooms_data) > 0:
-            # Inject TRIFORCE into last room (goal heuristic)
-            last_room_id = str(rooms_data[-1][0])
-            if last_room_id in processed_rooms:
-                grid = processed_rooms[last_room_id].grid
-                # Find a floor position
-                floor_mask = grid == SEMANTIC_PALETTE['FLOOR']
-                if np.any(floor_mask):
-                    positions = np.argwhere(floor_mask)
-                    center = np.array(grid.shape) // 2
-                    distances = np.abs(positions - center).sum(axis=1)
-                    best_idx = np.argmin(distances)
-                    r, c = positions[best_idx]
-                    # Avoid overwriting START
-                    if grid[r, c] != SEMANTIC_PALETTE['START']:
-                        grid[r, c] = SEMANTIC_PALETTE['TRIFORCE']
-        
-        # Compute graph-based features
+
+        room_ids_in_order = list(processed_rooms.keys())
+
+        if not has_start and room_ids_in_order:
+            first_room_id = room_ids_in_order[0]
+            grid = processed_rooms[first_room_id].grid
+            floor_mask = grid == SEMANTIC_PALETTE['FLOOR']
+            if np.any(floor_mask):
+                positions = np.argwhere(floor_mask)
+                center = np.array(grid.shape) // 2
+                distances = np.abs(positions - center).sum(axis=1)
+                r, c = positions[int(np.argmin(distances))]
+                grid[r, c] = SEMANTIC_PALETTE['START']
+
+        if not has_triforce and room_ids_in_order:
+            last_room_id = room_ids_in_order[-1]
+            grid = processed_rooms[last_room_id].grid
+            floor_mask = grid == SEMANTIC_PALETTE['FLOOR']
+            if np.any(floor_mask):
+                positions = np.argwhere(floor_mask)
+                center = np.array(grid.shape) // 2
+                distances = np.abs(positions - center).sum(axis=1)
+                r, c = positions[int(np.argmin(distances))]
+                if grid[r, c] != SEMANTIC_PALETTE['START']:
+                    grid[r, c] = SEMANTIC_PALETTE['TRIFORCE']
+
         tpe_vectors, node_order = self.compute_laplacian_pe(graph)
         node_features = self.extract_node_features(graph, node_order)
         p_matrix = self.build_p_matrix(graph, node_order)
-        
-        # Create layout (placeholder - actual layout detection is complex)
-        n_rooms = len(processed_rooms)
-        layout = np.arange(n_rooms).reshape(-1, 1)  # Simple linear layout
-        
+
+        if layout_positions:
+            max_r = max(p[0] for p in layout_positions.values())
+            max_c = max(p[1] for p in layout_positions.values())
+            layout = np.full((max_r + 1, max_c + 1), -1, dtype=int)
+            for node_id, (r, c) in layout_positions.items():
+                if 0 <= r < layout.shape[0] and 0 <= c < layout.shape[1]:
+                    layout[r, c] = node_id
+        else:
+            n_rooms = len(processed_rooms)
+            layout = np.arange(n_rooms).reshape(-1, 1) if n_rooms > 0 else np.zeros((0, 0), dtype=int)
+
         return DungeonData(
             dungeon_id=dungeon_id,
             rooms=processed_rooms,
@@ -933,12 +998,24 @@ class IntelligentDataAdapter:
             node_features=node_features
         )
     
-    def _get_room_graph_attrs(self, graph: nx.DiGraph, room_id: int) -> Dict[str, Dict]:
+    def _get_room_graph_attrs(self, graph: nx.DiGraph, room_id: int,
+                              layout_positions: Optional[Dict[int, Tuple[int, int]]] = None,
+                              char_grid: Optional[np.ndarray] = None) -> Dict[str, Dict]:
         """
         Extract edge attributes for a room's connections.
         
-        Note: In actual implementation, this would need layout information
-        to map neighbor IDs to directions (north/south/east/west).
+        Enhanced Version: If char_grid is provided, uses pixel-based direction detection
+        to verify which directions actually have doors. This prevents the spatial-sequential
+        mismatch bug where doors get placed in the wrong locations.
+        
+        Args:
+            graph: NetworkX graph with room connectivity
+            room_id: ID of the current room
+            layout_positions: Optional explicit spatial layout mapping
+            char_grid: Optional character grid to detect actual door positions
+        
+        Returns:
+            Dict mapping direction -> {'type': edge_type, 'neighbor': neighbor_id}
         """
         attrs = {}
         
@@ -946,38 +1023,128 @@ class IntelligentDataAdapter:
             return attrs
         
         # Get all neighbors and their edge types
-        # This is a simplified version - actual implementation needs spatial layout
+        neighbor_edges = {}
         for neighbor in graph.neighbors(room_id):
             edge_data = graph.get_edge_data(room_id, neighbor)
             if edge_data:
-                # Placeholder direction mapping
-                direction = self._infer_direction(room_id, neighbor)
-                attrs[direction] = {
+                direction = self._infer_direction(room_id, neighbor, layout_positions)
+                neighbor_edges[neighbor] = {
+                    'direction': direction,
                     'type': edge_data.get('type', 'open'),
+                    'neighbor': neighbor
+                }
+        
+        # PIXEL-BASED VALIDATION (if char_grid provided)
+        # This ensures we only report doors that PHYSICALLY exist in the grid
+        if char_grid is not None and char_grid.size > 0:
+            actual_directions = self._infer_direction_from_grid(char_grid)
+            
+            # Filter: only keep edges where the direction matches an actual door
+            # This prevents "ghost doors" caused by wrong ID-based direction inference
+            for neighbor, edge_info in neighbor_edges.items():
+                if edge_info['direction'] in actual_directions:
+                    attrs[edge_info['direction']] = {
+                        'type': edge_info['type'],
+                        'neighbor': neighbor
+                    }
+                # If direction doesn't match actual grid, silently skip
+                # (This can happen when graph topology conflicts with text layout)
+        else:
+            # Fallback: use ID-based inference (legacy behavior)
+            for neighbor, edge_info in neighbor_edges.items():
+                attrs[edge_info['direction']] = {
+                    'type': edge_info['type'],
                     'neighbor': neighbor
                 }
         
         return attrs
     
-    def _infer_direction(self, room_id: int, neighbor_id: int) -> str:
+    def _infer_direction_from_grid(self, grid: np.ndarray) -> List[str]:
         """
-        Infer direction to neighbor based on IDs.
+        Determine which directions have door connections by examining the actual grid pixels.
+        This is the CORRECT way - inspect the room borders to see where doors really are.
         
-        This is a simplified heuristic - actual implementation would use
-        spatial layout information.
+        Args:
+            grid: Semantic grid of the room [H, W]
+            
+        Returns:
+            List of directions where doors or openings exist ['north', 'south', 'east', 'west']
         """
-        # Heuristic based on typical dungeon layouts
-        # Higher ID often means further right/down
+        if grid.size == 0:
+            return []
+            
+        h, w = grid.shape
+        directions = []
+        
+        # Define door-like tiles (passable connections)
+        door_tiles = {
+            SEMANTIC_PALETTE['DOOR_OPEN'],
+            SEMANTIC_PALETTE['DOOR_LOCKED'],
+            SEMANTIC_PALETTE['DOOR_BOMB'],
+            SEMANTIC_PALETTE['DOOR_PUZZLE'],
+            SEMANTIC_PALETTE['DOOR_BOSS'],
+            SEMANTIC_PALETTE['DOOR_SOFT'],
+            SEMANTIC_PALETTE['FLOOR'],  # Sometimes doors are just floor at edges
+        }
+        
+        # Check NORTH (top row, excluding corners)
+        if h > 2 and w > 4:
+            north_slice = grid[0, 2:w-2]
+            if np.any(np.isin(north_slice, list(door_tiles))):
+                directions.append('north')
+        
+        # Check SOUTH (bottom row, excluding corners)
+        if h > 2 and w > 4:
+            south_slice = grid[h-1, 2:w-2]
+            if np.any(np.isin(south_slice, list(door_tiles))):
+                directions.append('south')
+        
+        # Check WEST (left column, excluding corners)
+        if h > 4 and w > 2:
+            west_slice = grid[2:h-2, 0]
+            if np.any(np.isin(west_slice, list(door_tiles))):
+                directions.append('west')
+        
+        # Check EAST (right column, excluding corners)
+        if h > 4 and w > 2:
+            east_slice = grid[2:h-2, w-1]
+            if np.any(np.isin(east_slice, list(door_tiles))):
+                directions.append('east')
+        
+        return directions
+    
+    def _infer_direction(self, room_id: int, neighbor_id: int,
+                        layout_positions: Optional[Dict[int, Tuple[int, int]]] = None) -> str:
+        """
+        Infer direction to neighbor based on spatial layout.
+        
+        PRIORITY ORDER:
+        1. Use explicit layout positions if available (most accurate)
+        2. Fallback to ID-based heuristic (legacy compatibility)
+        
+        This method is deprecated in favor of _infer_direction_from_grid for new code.
+        """
+        if layout_positions and room_id in layout_positions and neighbor_id in layout_positions:
+            r0, c0 = layout_positions[room_id]
+            r1, c1 = layout_positions[neighbor_id]
+            if r1 < r0:
+                return 'north'
+            if r1 > r0:
+                return 'south'
+            if c1 < c0:
+                return 'west'
+            if c1 > c0:
+                return 'east'
+
+        # Fallback: ID-based heuristic (naive)
         diff = neighbor_id - room_id
-        
         if diff == 1:
             return 'east'
-        elif diff == -1:
+        if diff == -1:
             return 'west'
-        elif diff > 1:
+        if diff > 1:
             return 'south'
-        else:
-            return 'north'
+        return 'north'
     
     def process_all_dungeons(self, processed_dir: str = None, graph_dir: str = None) -> Dict[str, DungeonData]:
         """

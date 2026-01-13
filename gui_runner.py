@@ -18,7 +18,7 @@ Controls:
 - P: Previous map
 - ESC: Quit
 
-Author: KLTN Thesis Project
+
 """
 
 import sys

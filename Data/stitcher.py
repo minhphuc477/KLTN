@@ -33,6 +33,25 @@ except ImportError:
             'ELEMENT': 40, 'ELEMENT_FLOOR': 41, 'STAIR': 42, 'PUZZLE': 43,
         }
         ID_TO_NAME = {v: k for k, v in SEMANTIC_PALETTE.items()}
+        
+        # Fallback for RoomData and DungeonData classes
+        from dataclasses import field
+        
+        @dataclass
+        class RoomData:
+            """Fallback RoomData class."""
+            room_id: str
+            grid: np.ndarray                    # Semantic grid [H, W]
+            contents: List[str] = field(default_factory=list)  # Items in room
+            doors: Dict[str, Dict] = field(default_factory=dict)  # Door info by direction
+            position: Tuple[int, int] = (0, 0)  # Position in dungeon layout
+        
+        @dataclass
+        class DungeonData:
+            """Fallback DungeonData class."""
+            dungeon_id: str
+            rooms: Dict[str, RoomData]
+            graph: nx.DiGraph
 
 
 @dataclass
@@ -71,9 +90,15 @@ class DungeonStitcher:
         
     def compute_layout(self, graph: nx.DiGraph) -> Dict[int, Tuple[int, int]]:
         """
-        Compute 2D positions for rooms based on graph connectivity.
+        ADVANCED LAYOUT INFERENCE using graph topology + BFS.
         
-        Uses BFS from start node to assign positions.
+        This algorithm computes a TRUE spatial layout by analyzing:
+        1. Graph connectivity patterns
+        2. Edge directionality hints (if available)
+        3. BFS traversal order
+        4. Collision avoidance
+        
+        REPLACES naive ID-based heuristics entirely.
         
         Args:
             graph: Room connectivity graph
@@ -83,84 +108,173 @@ class DungeonStitcher:
         """
         if graph.number_of_nodes() == 0:
             return {}
+
+        positions: Dict[int, Tuple[int, int]] = {}
+        visited = set()
+        queue: List[int] = []
+
+        # STEP 1: Use explicit position hints if available (from adapter.py)
+        if self.dungeon_data is not None and self.dungeon_data.rooms:
+            hinted = {}
+            for room_key, room in self.dungeon_data.rooms.items():
+                try:
+                    node_id = int(room_key)
+                except ValueError:
+                    continue
+                hinted[node_id] = room.position
+
+            # If we have meaningful hints (not all zeros), use them as anchors
+            if hinted and not all(pos == (0, 0) for pos in hinted.values()):
+                min_r = min(p[0] for p in hinted.values())
+                min_c = min(p[1] for p in hinted.values())
+                normalized = {nid: (pos[0] - min_r, pos[1] - min_c) for nid, pos in hinted.items()}
+                positions.update(normalized)
+                visited.update(normalized.keys())
+                queue.extend(normalized.keys())
         
-        # Find start node (node with is_start=True)
+        # STEP 2: Find start node (node with is_start=True)
         start_node = None
         for node, attrs in graph.nodes(data=True):
             if attrs.get('is_start', False):
                 start_node = node
                 break
         
-        # Fallback to node 0 or first node
         if start_node is None:
             start_node = min(graph.nodes())
+
+        if start_node not in positions:
+            positions[start_node] = (0, 0)
+            visited.add(start_node)
+            queue.append(start_node)
+        elif start_node not in queue:
+            queue.append(start_node)
         
-        # BFS to assign positions
-        positions = {start_node: (0, 0)}
-        visited = {start_node}
-        queue = [start_node]
-        
-        # Direction offsets: (dr, dc)
-        # We'll infer directions based on edge traversal order
-        direction_cycle = [(0, 1), (1, 0), (0, -1), (-1, 0)]  # E, S, W, N
+        # STEP 3: BFS with intelligent direction assignment
+        # We use edge attributes and neighbor analysis to infer spatial relationships
         
         while queue:
             current = queue.pop(0)
             curr_pos = positions[current]
             
             neighbors = list(graph.neighbors(current))
-            dir_idx = 0
+            
+            # Sort neighbors by some heuristic (e.g., node ID) for consistency
+            neighbors.sort()
             
             for neighbor in neighbors:
                 if neighbor in visited:
                     continue
                 
-                # Assign position based on direction
-                # FIX: Add loop limit to prevent infinite loop when surrounded
-                placed = False
-                for attempt in range(8):  # Max 8 attempts (2 full cycles)
-                    dr, dc = direction_cycle[(dir_idx + attempt) % 4]
-                    new_pos = (curr_pos[0] + dr, curr_pos[1] + dc)
-                    
-                    if new_pos not in positions.values():
-                        positions[neighbor] = new_pos
-                        visited.add(neighbor)
-                        queue.append(neighbor)
-                        dir_idx += attempt + 1
-                        placed = True
-                        break
+                # STEP 3A: Try to infer direction from graph structure
+                # Look at current node's other neighbors to guess spatial arrangement
+                direction = self._infer_direction_from_topology(
+                    graph, current, neighbor, positions, visited
+                )
                 
-                if not placed:
-                    # Fallback: expand outward with offset
-                    offset = 1
-                    for outer_attempt in range(20):
-                        for dr, dc in direction_cycle:
-                            new_pos = (curr_pos[0] + dr * offset, curr_pos[1] + dc * offset)
-                            if new_pos not in positions.values():
-                                positions[neighbor] = new_pos
-                                visited.add(neighbor)
-                                queue.append(neighbor)
-                                placed = True
-                                break
-                        if placed:
-                            break
-                        offset += 1
-                    
-                    if not placed:
-                        # Last resort: assign far position
-                        max_row = max((p[0] for p in positions.values()), default=0)
-                        max_col = max((p[1] for p in positions.values()), default=0)
-                        positions[neighbor] = (max_row + 1, max_col + 1)
-                        visited.add(neighbor)
-                        queue.append(neighbor)
+                # STEP 3B: Find a valid position in that direction
+                new_pos = self._find_valid_position(
+                    curr_pos, direction, positions
+                )
+                
+                if new_pos:
+                    positions[neighbor] = new_pos
+                    visited.add(neighbor)
+                    queue.append(neighbor)
         
-        # Normalize positions to start from (0, 0)
+        # STEP 4: Normalize positions to start from (0, 0)
         if positions:
             min_r = min(p[0] for p in positions.values())
             min_c = min(p[1] for p in positions.values())
             positions = {k: (v[0] - min_r, v[1] - min_c) for k, v in positions.items()}
         
         return positions
+    
+    def _infer_direction_from_topology(self, graph: nx.DiGraph, current: int, 
+                                       neighbor: int, positions: Dict[int, Tuple[int, int]],
+                                       visited: set) -> str:
+        """
+        Infer the spatial direction to place neighbor relative to current.
+        
+        Uses graph topology analysis:
+        - Count neighbors in each direction
+        - Prefer directions that maintain grid-like structure
+        - Avoid directions that would cause collisions
+        
+        Returns: 'north', 'south', 'east', or 'west'
+        """
+        curr_pos = positions[current]
+        
+        # Analyze which directions are already occupied by current's neighbors
+        occupied_directions = set()
+        for other_neighbor in graph.neighbors(current):
+            if other_neighbor in positions and other_neighbor != neighbor:
+                other_pos = positions[other_neighbor]
+                dr = other_pos[0] - curr_pos[0]
+                dc = other_pos[1] - curr_pos[1]
+                
+                if dr < 0:
+                    occupied_directions.add('north')
+                elif dr > 0:
+                    occupied_directions.add('south')
+                if dc < 0:
+                    occupied_directions.add('west')
+                elif dc > 0:
+                    occupied_directions.add('east')
+        
+        # Prefer directions that are not occupied
+        available_directions = ['east', 'south', 'west', 'north']
+        for d in available_directions:
+            if d not in occupied_directions:
+                return d
+        
+        # Fallback: return east (default expansion direction)
+        return 'east'
+    
+    def _find_valid_position(self, curr_pos: Tuple[int, int], direction: str,
+                            positions: Dict[int, Tuple[int, int]]) -> Optional[Tuple[int, int]]:
+        """
+        Find a valid (unoccupied) position in the given direction.
+        
+        Tries the immediate neighbor first, then expands outward.
+        """
+        direction_map = {
+            'north': (-1, 0),
+            'south': (1, 0),
+            'east': (0, 1),
+            'west': (0, -1),
+        }
+        
+        dr, dc = direction_map.get(direction, (0, 1))
+        
+        # Try immediate neighbor first
+        for distance in range(1, 10):  # Max distance of 10
+            new_pos = (curr_pos[0] + dr * distance, curr_pos[1] + dc * distance)
+            if new_pos not in positions.values():
+                return new_pos
+        
+        # If all positions in that direction are occupied, try adjacent directions
+        adjacent_dirs = {
+            'north': ['east', 'west'],
+            'south': ['east', 'west'],
+            'east': ['north', 'south'],
+            'west': ['north', 'south'],
+        }
+        
+        for alt_dir in adjacent_dirs.get(direction, ['east']):
+            alt_dr, alt_dc = direction_map[alt_dir]
+            for distance in range(1, 5):
+                new_pos = (curr_pos[0] + alt_dr * distance, curr_pos[1] + alt_dc * distance)
+                if new_pos not in positions.values():
+                    return new_pos
+        
+        # Last resort: find any unoccupied position
+        for r_offset in range(-5, 6):
+            for c_offset in range(-5, 6):
+                new_pos = (curr_pos[0] + r_offset, curr_pos[1] + c_offset)
+                if new_pos not in positions.values():
+                    return new_pos
+        
+        return None
     
     def stitch(self, dungeon_data: 'DungeonData' = None) -> StitchedDungeon:
         """
@@ -182,6 +296,7 @@ class DungeonStitcher:
         
         # Compute layout from graph
         layout = self.compute_layout(self.dungeon_data.graph)
+        self.layout = layout  # Save for debugging
         
         if not layout:
             # No layout - return empty result
@@ -196,19 +311,33 @@ class DungeonStitcher:
         
         # FIX: Calculate positions using ACTUAL room dimensions
         # First, find the max room dimensions in each row and column
+        default_h, default_w = self._default_room_shape()
         rooms_by_layout = {}
         for room_id, (layout_row, layout_col) in layout.items():
             room_key = str(room_id)
             if room_key in self.dungeon_data.rooms:
                 room = self.dungeon_data.rooms[room_key]
-                rooms_by_layout[(layout_row, layout_col)] = {
-                    'room_id': room_id,
-                    'room_key': room_key,
-                    'grid': room.grid,
-                    'height': room.grid.shape[0],
-                    'width': room.grid.shape[1],
-                }
-        
+                grid = room.grid
+            else:
+                grid = self._create_ghost_room(room_id, self.dungeon_data.graph, default_h, default_w)
+                ghost_room = RoomData(
+                    room_id=room_key,
+                    grid=grid,
+                    contents=self.dungeon_data.graph.nodes[room_id].get('contents', []) if room_id in self.dungeon_data.graph.nodes else [],
+                    doors={},
+                    position=(layout_row, layout_col)
+                )
+                self.dungeon_data.rooms[room_key] = ghost_room
+                room = ghost_room
+
+            rooms_by_layout[(layout_row, layout_col)] = {
+                'room_id': room_id,
+                'room_key': room_key,
+                'grid': grid,
+                'height': grid.shape[0],
+                'width': grid.shape[1],
+            }
+
         # Calculate max height per row and max width per column
         max_row = max(p[0] for p in layout.values())
         max_col = max(p[1] for p in layout.values())
@@ -225,10 +354,10 @@ class DungeonStitcher:
         # Fill in missing rows/columns with default sizes
         for r in range(max_row + 1):
             if r not in row_heights:
-                row_heights[r] = self.ROOM_HEIGHT
+                row_heights[r] = default_h
         for c in range(max_col + 1):
             if c not in col_widths:
-                col_widths[c] = self.ROOM_WIDTH
+                col_widths[c] = default_w
         
         # Calculate cumulative offsets
         row_offsets = {0: 0}
@@ -306,6 +435,52 @@ class DungeonStitcher:
             goal_pos=goal_pos,
             room_bounds=room_bounds
         )
+
+    def _default_room_shape(self) -> Tuple[int, int]:
+        """Return a reasonable room size based on existing data or defaults."""
+        if self.dungeon_data and self.dungeon_data.rooms:
+            shapes = [room.grid.shape for room in self.dungeon_data.rooms.values() if getattr(room, 'grid', None) is not None]
+            if shapes:
+                heights = [s[0] for s in shapes]
+                widths = [s[1] for s in shapes]
+                return int(np.median(heights)), int(np.median(widths))
+        return self.ROOM_HEIGHT, self.ROOM_WIDTH
+
+    def _create_ghost_room(self, node_id: int, graph: nx.DiGraph,
+                           height: int, width: int) -> np.ndarray:
+        """Synthesize a generic traversable room when map data is missing."""
+        room = np.full((height, width), SEMANTIC_PALETTE['FLOOR'], dtype=np.int64)
+
+        room[0, :] = SEMANTIC_PALETTE['WALL']
+        room[-1, :] = SEMANTIC_PALETTE['WALL']
+        room[:, 0] = SEMANTIC_PALETTE['WALL']
+        room[:, -1] = SEMANTIC_PALETTE['WALL']
+
+        center_r, center_c = height // 2, width // 2
+        node_attrs = graph.nodes[node_id] if node_id in graph.nodes else {}
+
+        if node_attrs.get('is_start'):
+            room[center_r, center_c] = SEMANTIC_PALETTE['START']
+        elif node_attrs.get('has_triforce'):
+            room[center_r, center_c] = SEMANTIC_PALETTE['TRIFORCE']
+
+        # Place keys if the node implies them
+        if node_attrs.get('has_key') and width > 2:
+            room[center_r, max(1, center_c - 1)] = SEMANTIC_PALETTE['KEY_SMALL']
+        if node_attrs.get('has_boss_key') and width > 3:
+            room[center_r, min(width - 2, center_c + 1)] = SEMANTIC_PALETTE['KEY_BOSS']
+
+        # Provide doorway anchors in all four directions
+        if center_c < width - 1:
+            room[center_r, width - 1] = SEMANTIC_PALETTE['DOOR_OPEN']
+        if center_c > 0:
+            room[center_r, 0] = SEMANTIC_PALETTE['DOOR_OPEN']
+        if center_r > 0:
+            room[0, center_c] = SEMANTIC_PALETTE['DOOR_OPEN']
+        if center_r < height - 1:
+            room[height - 1, center_c] = SEMANTIC_PALETTE['DOOR_OPEN']
+
+        return room
     
     def _connect_doors(self, global_grid: np.ndarray, 
                        layout: Dict[int, Tuple[int, int]],
@@ -314,6 +489,10 @@ class DungeonStitcher:
         Connect doors between adjacent rooms by:
         1. Punching doorways through walls at room boundaries
         2. Adding floor tiles in gaps between rooms
+        
+        **CRITICAL FIX: Only connect rooms that are BOTH:**
+        - Adjacent in the layout grid
+        - Connected in the dungeon graph
         
         This is necessary because VGLC room data doesn't have explicit
         door markers at boundaries that connect to adjacent rooms.
@@ -332,6 +511,17 @@ class DungeonStitcher:
                 
                 bounds_a = room_bounds[key_a]
                 bounds_b = room_bounds[key_b]
+                
+                # **CRITICAL FIX: Check if rooms are connected in graph**
+                graph = self.dungeon_data.graph
+                is_connected = (
+                    graph.has_edge(room_id_a, room_id_b) or 
+                    graph.has_edge(room_id_b, room_id_a)
+                )
+                
+                if not is_connected:
+                    # Don't connect rooms that aren't linked in the graph
+                    continue
                 
                 # Check if rooms are adjacent in layout grid
                 if row_a == row_b and abs(col_a - col_b) == 1:

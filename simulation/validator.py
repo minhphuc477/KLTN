@@ -10,7 +10,6 @@ This module provides:
 4. METRICS ENGINE - Solvability, reachability, diversity metrics
 5. DIVERSITY EVALUATOR - Mode collapse detection
 
-Author: KLTN Thesis Project
 """
 
 import os
@@ -520,8 +519,9 @@ class ZeldaLogicEnv:
                     img = pygame.image.load(img_path)
                     self._images[tile_id] = pygame.transform.scale(img, (TILE_SIZE, TILE_SIZE))
                     continue
-                except:
-                    pass
+                except Exception as e:
+                    import logging
+                    logging.debug("Could not load asset image %s: %s", img_path, e, exc_info=True)
             
             # Fallback: colored square
             surf = pygame.Surface((TILE_SIZE, TILE_SIZE))
@@ -534,11 +534,9 @@ class ZeldaLogicEnv:
             try:
                 img = pygame.image.load(link_path)
                 self._link_img = pygame.transform.scale(img, (TILE_SIZE, TILE_SIZE))
-            except:
-                self._link_img = None
-        else:
-            self._link_img = None
-    
+            except Exception as e:
+                import logging
+                logging.debug("Could not load link asset %s: %s", link_path, e, exc_info=True)
     def render(self):
         """Render current state to screen."""
         if not self.render_mode or self._screen is None:
@@ -587,8 +585,9 @@ class ZeldaLogicEnv:
             try:
                 import pygame
                 pygame.quit()
-            except:
-                pass
+            except Exception as e:
+                import logging
+                logging.debug("Error during pygame.quit(): %s", e, exc_info=True)
 
 
 # ==========================================
@@ -605,7 +604,7 @@ class StateSpaceAStar:
     - Proper sequencing of item collection
     """
     
-    def __init__(self, env: ZeldaLogicEnv, timeout: int = 100000):
+    def __init__(self, env: ZeldaLogicEnv, timeout: int = 100000, heuristic_mode: str = "balanced"):
         """
         Initialize the solver.
         
@@ -615,6 +614,8 @@ class StateSpaceAStar:
         """
         self.env = env
         self.timeout = timeout
+        self.heuristic_mode = heuristic_mode
+        self.pickup_positions = self._cache_pickups()
     
     def solve(self) -> Tuple[bool, List[Tuple[int, int]], int]:
         """
@@ -697,8 +698,11 @@ class StateSpaceAStar:
                 if new_hash in closed_set:
                     continue
                 
-                # Calculate scores
-                g_score = g_scores[state_hash] + 1
+                # COMBAT-AWARE COST CALCULATION
+                # Instead of g_score = g_scores[state_hash] + 1 (all moves cost 1),
+                # we now use variable cost based on tile type
+                move_cost = self._get_movement_cost(target_tile, target_pos, current_state)
+                g_score = g_scores[state_hash] + move_cost
                 
                 if new_hash in g_scores and g_score >= g_scores[new_hash]:
                     continue
@@ -711,6 +715,78 @@ class StateSpaceAStar:
                 counter += 1
         
         return False, [], states_explored
+
+    def _cache_pickups(self) -> List[Tuple[int, int]]:
+        """Pre-compute pickup locations to support persona heuristics."""
+        pickups: List[Tuple[int, int]] = []
+        for tile_id in [SEMANTIC_PALETTE['KEY_SMALL'], SEMANTIC_PALETTE['KEY_BOSS'],
+                        SEMANTIC_PALETTE['KEY_ITEM'], SEMANTIC_PALETTE['ITEM_MINOR']]:
+            pickups.extend(self.env._find_all_positions(tile_id))
+        return pickups
+    
+    def _get_movement_cost(self, target_tile: int, target_pos: Tuple[int, int], state: GameState) -> float:
+        """
+        Calculate the cost of moving to a target tile.
+        
+        COMBAT-AWARE PATHFINDING:
+        - FLOOR tiles: cost = 1.0 (baseline)
+        - ENEMY tiles: cost = 10.0 (expensive to walk through)
+        - DOOR tiles (unlocked): cost = 2.0 (takes time to open)
+        - PICKUP tiles: cost = 1.5 (stop to collect item)
+        
+        This makes A* prefer safer routes that avoid enemies when possible.
+        The higher cost doesn't make enemies impassable, but forces the agent
+        to find alternate routes if they exist.
+        
+        Args:
+            target_tile: Semantic ID of the target tile
+            target_pos: Position (r, c) of the target
+            state: Current game state
+            
+        Returns:
+            Movement cost (float)
+        """
+        # If position already visited, treat as floor (no repeat cost)
+        if target_pos in state.collected_items or target_pos in state.opened_doors:
+            return 1.0
+        
+        # ENEMY: High traversal cost (simulates health/time loss from combat)
+        if target_tile == SEMANTIC_PALETTE['ENEMY']:
+            return 10.0
+        
+        # PICKUP items: Slight delay for collection
+        if target_tile in PICKUP_IDS:
+            return 1.5
+        
+        # DOORS (locked): Cost depends on whether we have keys
+        if target_tile == SEMANTIC_PALETTE['DOOR_LOCKED']:
+            if state.keys > 0:
+                return 2.0  # Can open, but takes time
+            return float('inf')  # Cannot pass
+        
+        if target_tile == SEMANTIC_PALETTE['DOOR_BOMB']:
+            if state.has_bomb:
+                return 3.0  # Bombing takes time
+            return float('inf')
+        
+        if target_tile == SEMANTIC_PALETTE['DOOR_BOSS']:
+            if state.has_boss_key:
+                return 2.0
+            return float('inf')
+        
+        if target_tile == SEMANTIC_PALETTE['DOOR_PUZZLE']:
+            return 2.5  # Puzzle solving takes time
+        
+        # Standard walkable tiles
+        if target_tile in WALKABLE_IDS:
+            return 1.0
+        
+        # Blocking tiles
+        if target_tile in BLOCKING_IDS:
+            return float('inf')
+        
+        # Default: standard cost
+        return 1.0
     
     def _try_move_pure(self, state: GameState, target_pos: Tuple[int, int], 
                        target_tile: int) -> Tuple[bool, GameState]:
@@ -806,6 +882,9 @@ class StateSpaceAStar:
         
         # Base: Manhattan distance
         h = abs(pos[0] - goal[0]) + abs(pos[1] - goal[1])
+
+        mode = (self.heuristic_mode or "balanced").lower()
+        door_scale = 0.7 if mode == "speedrunner" else 1.0
         
         # Penalty for missing items needed for doors
         # This is a simplified heuristic
@@ -818,10 +897,16 @@ class StateSpaceAStar:
         
         # Add penalty if we don't have enough keys
         if unopened_locked > state.keys:
-            h += (unopened_locked - state.keys) * 10
+            h += door_scale * (unopened_locked - state.keys) * 10
         
         if unopened_boss > 0 and not state.has_boss_key:
-            h += 20
+            h += door_scale * 20
+
+        if mode == "completionist":
+            remaining_pickups = len([p for p in self.pickup_positions if p not in state.collected_items])
+            h += remaining_pickups * 2
+        elif mode == "speedrunner":
+            h *= 0.9
         
         return h
 
@@ -1116,13 +1201,15 @@ class ZeldaValidator:
         return True
     
     def validate_single(self, semantic_grid: np.ndarray, 
-                       render: bool = False) -> ValidationResult:
+                       render: bool = False,
+                       persona_mode: str = "balanced") -> ValidationResult:
         """
         Validate a single map.
         
         Args:
             semantic_grid: 2D numpy array of semantic IDs
             render: If True, show Pygame visualization
+            persona_mode: Heuristic profile for solver (balanced, speedrunner, completionist)
             
         Returns:
             ValidationResult with all metrics
@@ -1146,7 +1233,7 @@ class ZeldaValidator:
         env = ZeldaLogicEnv(semantic_grid, render_mode=render)
         
         # Step 3: Run A* Solver
-        solver = StateSpaceAStar(env)
+        solver = StateSpaceAStar(env, heuristic_mode=persona_mode)
         success, path, states_explored = solver.solve()
         
         if not success:
@@ -1181,8 +1268,101 @@ class ZeldaValidator:
             path=path
         )
     
+    def check_soft_locks(self, semantic_grid: np.ndarray, sample_count: int = 10) -> Tuple[bool, List[str]]:
+        """
+        Detect soft-lock traps (one-way rooms where player gets stuck).
+        
+        ALGORITHM:
+        1. Find all reachable floor positions from START
+        2. Randomly sample N positions
+        3. For each position, test if GOAL is still reachable from there
+        4. If any position has no path to goal, it's a soft-lock trap
+        
+        This detects scenarios like:
+        - One-way doors (ledges, shutters) that trap the player
+        - Rooms where the player can walk in but door closes with no key
+        - Unreachable key islands
+        
+        Args:
+            semantic_grid: The map to check
+            sample_count: How many random positions to test (default: 10)
+            
+        Returns:
+            (is_safe, trap_descriptions): True if no soft-locks found, plus list of trap locations
+        """
+        import random
+        
+        # Create environment
+        env = ZeldaLogicEnv(semantic_grid, render_mode=False)
+        
+        if env.goal_pos is None or env.start_pos is None:
+            return False, ["No start or goal position defined"]
+        
+        # Step 1: Get all reachable walkable tiles from START
+        solver = StateSpaceAStar(env, timeout=50000)
+        success, winning_path, _ = solver.solve()
+        
+        if not success:
+            # If START->GOAL already fails, map is unsolvable (not a soft-lock issue)
+            return True, []  # We don't count this as a soft-lock (it's a regular failure)
+        
+        # Get all walkable positions
+        reachable_spots = []
+        h, w = semantic_grid.shape
+        for r in range(h):
+            for c in range(w):
+                tile = semantic_grid[r, c]
+                if tile in WALKABLE_IDS or tile in CONDITIONAL_IDS:
+                    reachable_spots.append((r, c))
+        
+        # Sample random positions to test (limit to reasonable count)
+        if len(reachable_spots) > sample_count:
+            test_positions = random.sample(reachable_spots, sample_count)
+        else:
+            test_positions = reachable_spots[:sample_count]
+        
+        # Add positions from the winning path (these MUST be safe)
+        test_positions.extend(winning_path[::len(winning_path)//3] if len(winning_path) > 3 else winning_path)
+        
+        # Step 2: For each test position, check if we can still reach GOAL
+        trap_positions = []
+        
+        for test_pos in test_positions:
+            # Create a modified environment starting from test_pos
+            # We need to simulate "player teleported here, can they escape?"
+            
+            # Simple heuristic: Check if test_pos is on the winning path
+            # If not on winning path and isolated, it might be a trap
+            
+            # Create new env with modified start
+            test_env = ZeldaLogicEnv(semantic_grid, render_mode=False)
+            test_env.start_pos = test_pos
+            test_env.reset()
+            
+            test_solver = StateSpaceAStar(test_env, timeout=10000)
+            can_escape, _, _ = test_solver.solve()
+            
+            if not can_escape:
+                # This position cannot reach the goal - potential soft-lock!
+                trap_positions.append(test_pos)
+            
+            test_env.close()
+        
+        env.close()
+        
+        # Step 3: Report results
+        if trap_positions:
+            trap_descriptions = [
+                f"Soft-lock trap at position {pos}: player cannot reach goal from here" 
+                for pos in trap_positions[:5]  # Limit output
+            ]
+            return False, trap_descriptions
+        
+        return True, []
+    
     def validate_batch(self, grids: List[np.ndarray], 
-                      verbose: bool = True) -> BatchValidationResult:
+                      verbose: bool = True,
+                      persona_mode: str = "balanced") -> BatchValidationResult:
         """
         Validate a batch of maps.
         
@@ -1207,7 +1387,7 @@ class ZeldaValidator:
             if verbose and (i + 1) % 10 == 0:
                 print(f"Validating {i + 1}/{len(grids)}...")
             
-            result = self.validate_single(grid)
+            result = self.validate_single(grid, render=False, persona_mode=persona_mode)
             results.append(result)
             
             if result.is_valid_syntax:
@@ -1238,6 +1418,50 @@ class ZeldaValidator:
             diversity_score=diversity,
             individual_results=results
         )
+    
+    def validate_batch_multi_persona(self, grids: List[np.ndarray],
+                                     personas: List[str] = None,
+                                     verbose: bool = True) -> Dict[str, BatchValidationResult]:
+        """
+        Validate a batch of maps using multiple persona modes.
+        
+        This evaluates the same maps with different heuristic profiles:
+        - Speedrunner: Prefers direct routes, ignores optional pickups
+        - Completionist: Explores all rooms, collects all items
+        - Balanced: Standard pathfinding
+        
+        Args:
+            grids: List of semantic grids to validate
+            personas: List of persona modes (default: all three)
+            verbose: Print progress
+            
+        Returns:
+            Dict mapping persona_mode -> BatchValidationResult
+        """
+        if personas is None:
+            personas = ["speedrunner", "balanced", "completionist"]
+        
+        results_by_persona = {}
+        
+        for persona in personas:
+            if verbose:
+                print(f"\n=== Evaluating with '{persona}' persona ===")
+            
+            batch_result = self.validate_batch(
+                grids, 
+                verbose=verbose, 
+                persona_mode=persona
+            )
+            
+            results_by_persona[persona] = batch_result
+            
+            if verbose:
+                print(f"{persona.capitalize()} Results:")
+                print(f"  Solvability: {batch_result.solvability_rate:.1%}")
+                print(f"  Avg Path Length: {batch_result.avg_path_length:.1f}")
+                print(f"  Avg Reachability: {batch_result.avg_reachability:.1%}")
+        
+        return results_by_persona
     
     def _visualize_solution(self, env: ZeldaLogicEnv, path: List[Tuple[int, int]]):
         """Show animated solution using Pygame."""
@@ -1628,6 +1852,69 @@ class GraphValidationResult:
     start_node: Optional[int] = None
     triforce_node: Optional[int] = None
     error_message: str = ""
+
+
+# ==========================================
+# MODULE 8: ADVANCED ANALYTICS
+# ==========================================
+
+class MAPElitesEvaluator:
+    """Quality-diversity evaluator that bins maps by linearity and danger."""
+
+    def __init__(self, bins: int = 10, danger_cap: int = 50):
+        self.bins = bins
+        self.danger_cap = danger_cap
+        self.heatmap = np.zeros((bins, bins), dtype=int)
+
+    def _find_tile(self, grid: np.ndarray, target_id: int) -> Optional[Tuple[int, int]]:
+        positions = np.where(grid == target_id)
+        if len(positions[0]) > 0:
+            return (int(positions[0][0]), int(positions[1][0]))
+        return None
+
+    def evaluate_batch(self, results: List[ValidationResult], grids: List[np.ndarray]) -> Tuple[np.ndarray, List[float], List[float]]:
+        self.heatmap[:, :] = 0
+        x_coords: List[float] = []
+        y_coords: List[float] = []
+
+        for res, grid in zip(results, grids):
+            if not res.is_solvable or grid.size == 0 or not res.path:
+                continue
+
+            start_pos = self._find_tile(grid, SEMANTIC_PALETTE['START']) or res.path[0]
+            goal_pos = self._find_tile(grid, SEMANTIC_PALETTE['TRIFORCE']) or res.path[-1]
+
+            if start_pos is None or goal_pos is None:
+                continue
+
+            linearity = MetricsEngine.calculate_linearity(res.path, start_pos, goal_pos)
+            enemy_count = int(np.sum(grid == SEMANTIC_PALETTE['ENEMY']))
+            danger = min(1.0, enemy_count / max(1, self.danger_cap))
+
+            x_bin = min(self.bins - 1, int(linearity * self.bins))
+            y_bin = min(self.bins - 1, int(danger * self.bins))
+            self.heatmap[y_bin, x_bin] += 1
+
+            x_coords.append(linearity)
+            y_coords.append(danger)
+
+        return self.heatmap.copy(), x_coords, y_coords
+
+
+class MultiPersonaAgent:
+    """Convenience wrapper for persona-specific solver settings."""
+
+    def __init__(self, env: ZeldaLogicEnv):
+        self.env = env
+
+    def solve_speedrunner(self) -> Tuple[bool, List[Tuple[int, int]], int]:
+        return StateSpaceAStar(self.env, heuristic_mode="speedrunner").solve()
+
+    def solve_completionist(self) -> Tuple[bool, List[Tuple[int, int]], int]:
+        return StateSpaceAStar(self.env, heuristic_mode="completionist").solve()
+
+    def solve_balanced(self) -> Tuple[bool, List[Tuple[int, int]], int]:
+        return StateSpaceAStar(self.env, heuristic_mode="balanced").solve()
 
 
 # ==========================================
