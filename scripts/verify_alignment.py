@@ -52,8 +52,8 @@ class AlignmentVerifier:
         # Try to import adapter for room extraction
         try:
             sys.path.insert(0, str(self.data_root.parent.parent))
-            from Data.adapter import GridBasedRoomExtractor, ROOM_HEIGHT, ROOM_WIDTH
-            self.extractor = GridBasedRoomExtractor(room_rows=ROOM_HEIGHT, room_cols=ROOM_WIDTH)
+            from Data.adapter import GridBasedRoomExtractor
+            self.extractor = GridBasedRoomExtractor()
         except ImportError:
             print("WARNING: Could not import adapter. Using fallback extractor.")
             self.extractor = None

@@ -71,6 +71,44 @@ def debug_dungeon(dungeon_id: str):
         print(f"\nRoom 7 layout: ({r7}, {c7})")
         print(f"Room 8 layout: ({r8}, {c8})")
         print(f"Adjacent? {(r7 == r8 and abs(c7 - c8) == 1) or (c7 == c8 and abs(r7 - r8) == 1)}")
+        
+        # Check if there's a doorway between them
+        if '7' in stitched.room_bounds and '8' in stitched.room_bounds:
+            bounds7 = stitched.room_bounds['7']
+            bounds8 = stitched.room_bounds['8']
+            print(f"\nRoom 7 bounds: {bounds7}")
+            print(f"Room 8 bounds: {bounds8}")
+            
+            # Check if they overlap or touch
+            r1_7, c1_7, r2_7, c2_7 = bounds7
+            r1_8, c1_8, r2_8, c2_8 = bounds8
+            
+            # Check for vertical adjacency (rooms stacked)
+            if c7 == c8 and abs(r7 - r8) == 1:
+                if r7 < r8:
+                    # Room 7 is above Room 8
+                    # Check if r2_7 touches r1_8
+                    print(f"Room 7 bottom edge: row {r2_7-1}")
+                    print(f"Room 8 top edge: row {r1_8}")
+                    print(f"Gap: {r1_8 - r2_7} rows")
+                    
+                    # Check tiles at the boundary
+                    if r2_7 <= r1_8:
+                        overlap_c_start = max(c1_7, c1_8)
+                        overlap_c_end = min(c2_7, c2_8)
+                        print(f"Checking doorway in column range [{overlap_c_start}, {overlap_c_end})")
+                        for c in range(overlap_c_start, overlap_c_end):
+                            if r2_7 < stitched.global_grid.shape[0]:
+                                tile_at_7_bottom = stitched.global_grid[r2_7-1, c]
+                                print(f"  Tile at Room 7 bottom ({r2_7-1}, {c}): {tile_at_7_bottom}")
+                            if r1_8 < stitched.global_grid.shape[0]:
+                                tile_at_8_top = stitched.global_grid[r1_8, c]
+                                print(f"  Tile at Room 8 top ({r1_8}, {c}): {tile_at_8_top}")
+                else:
+                    # Room 8 is above Room 7
+                    print(f"Room 8 bottom edge: row {r2_8-1}")
+                    print(f"Room 7 top edge: row {r1_7}")
+                    print(f"Gap: {r1_7 - r2_8} rows")
     
     # Check tile at START position
     if stitched.start_pos:

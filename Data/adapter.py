@@ -81,62 +81,131 @@ CHAR_TO_SEMANTIC = {
 
 
 class GridBasedRoomExtractor:
-    """Slice VGLC text maps using a strict grid to preserve spatial identity."""
+    """
+    PRECISE Room Extractor for VGLC Zelda Maps (Forensically Verified).
+    
+    VGLC TEXT FORMAT (verified from tloz1_1.txt analysis):
+    ======================================================
+    - Grid is divided into fixed 11-col x 16-row SLOTS
+    - Each slot is either a ROOM or a GAP (all dashes)
+    - Room dimensions: 11 columns x 16 rows (including walls)
+    - Room structure: WW (2 wall) + 7 interior + WW (2 wall) = 11 cols
+    - Gap: 11 dashes in each row
+    
+    Example tloz1_1.txt (66 cols x 96 rows = 6x6 grid):
+      - 6 column slots (0-10, 11-21, 22-32, 33-43, 44-54, 55-65)
+      - 6 row slots (0-15, 16-31, 32-47, 48-63, 64-79, 80-95)
+      - At row 16: slots 0,2,3,5 are ROOMS, slots 1,4 are GAPS
+    
+    Adjacent rooms in VGLC format ARE adjacent in the dungeon map.
+    The stitcher should place them with shared walls.
+    """
 
-    def __init__(self, room_rows: int = 11, room_cols: int = 16, min_non_void: int = 5):
-        self.target_h = room_rows
-        self.target_w = room_cols
-        self.min_non_void = min_non_void
+    # VERIFIED CONSTANTS
+    SLOT_WIDTH = 11   # Characters per column slot
+    SLOT_HEIGHT = 16  # Rows per row slot
+    GAP_MARKER = '-'  # Void/gap character
+    WALL_MARKER = 'W' # Wall character
+    
+    def __init__(self):
+        pass
 
     def _load_grid(self, filepath: str) -> np.ndarray:
+        """Load VGLC text file into numpy character array."""
         with open(filepath, 'r') as f:
-            lines = [line.rstrip('\n') for line in f if line.strip()]
-
+            lines = [line.rstrip('\n') for line in f]
+        
         if not lines:
             return np.zeros((0, 0), dtype='<U1')
 
-        width = max(len(line) for line in lines)
-        padded = [list(line.ljust(width, '-')) for line in lines]
+        width = max(len(line) for line in lines) if lines else 0
+        padded = [list(line.ljust(width, self.GAP_MARKER)) for line in lines]
         return np.array(padded)
 
-    def extract(self, filepath: str) -> List[Tuple[int, np.ndarray]]:
-        grid = self._load_grid(filepath)
+    def _is_room_slot(self, slot_grid: np.ndarray) -> bool:
+        """
+        Check if a slot contains a room (not a gap).
+        
+        A gap has all dashes. A room has walls and floor.
+        """
+        if slot_grid.size == 0:
+            return False
+        
+        # Gap detection: mostly dashes
+        dash_count = np.sum(slot_grid == self.GAP_MARKER)
+        total = slot_grid.size
+        if dash_count > total * 0.7:
+            return False
+        
+        # Room validation: must have walls and floor
+        wall_count = np.sum(slot_grid == self.WALL_MARKER)
+        floor_count = np.sum(slot_grid == 'F')
+        
+        # A valid room has significant walls (perimeter) and floor (interior)
+        return wall_count >= 20 and floor_count >= 5
 
+    def extract(self, filepath: str) -> List[Tuple[Tuple[int, int], np.ndarray]]:
+        """
+        Extract all rooms from VGLC file using fixed slot grid.
+        
+        Returns:
+            List of ((row_idx, col_idx), room_grid) tuples where:
+            - row_idx, col_idx are the room's position in the dungeon grid
+            - room_grid is a 16x11 numpy char array
+        """
+        grid = self._load_grid(filepath)
+        
         if grid.size == 0:
             return []
-
-        map_h, map_w = grid.shape
-        rows = map_h // self.target_h
-        cols = map_w // self.target_w
-
-        rooms: List[Tuple[int, np.ndarray]] = []
-
-        for r in range(rows):
-            for c in range(cols):
-                r_start = r * self.target_h
-                c_start = c * self.target_w
-                r_end = r_start + self.target_h
-                c_end = c_start + self.target_w
-
-                slice_grid = grid[r_start:r_end, c_start:c_end]
-
-                if slice_grid.size == 0:
-                    continue
-
-                non_void = int(np.sum(slice_grid != '-'))
-                if non_void < self.min_non_void:
-                    continue
-
-                spatial_id = (r * 100) + c
-                rooms.append((spatial_id, slice_grid))
-
+        
+        h, w = grid.shape
+        
+        # Calculate number of slots
+        num_row_slots = h // self.SLOT_HEIGHT
+        num_col_slots = w // self.SLOT_WIDTH
+        
+        rooms = []
+        
+        for row_slot in range(num_row_slots):
+            row_start = row_slot * self.SLOT_HEIGHT
+            row_end = row_start + self.SLOT_HEIGHT
+            
+            for col_slot in range(num_col_slots):
+                col_start = col_slot * self.SLOT_WIDTH
+                col_end = col_start + self.SLOT_WIDTH
+                
+                # Extract slot
+                slot_grid = grid[row_start:row_end, col_start:col_end]
+                
+                # Ensure proper size
+                if slot_grid.shape[0] < self.SLOT_HEIGHT:
+                    pad = np.full((self.SLOT_HEIGHT - slot_grid.shape[0], slot_grid.shape[1]), self.GAP_MARKER)
+                    slot_grid = np.vstack([slot_grid, pad])
+                if slot_grid.shape[1] < self.SLOT_WIDTH:
+                    pad = np.full((slot_grid.shape[0], self.SLOT_WIDTH - slot_grid.shape[1]), self.GAP_MARKER)
+                    slot_grid = np.hstack([slot_grid, pad])
+                
+                # Check if this slot contains a room
+                if self._is_room_slot(slot_grid):
+                    rooms.append(((row_slot, col_slot), slot_grid.copy()))
+        
         return rooms
+    
+    def extract_with_ids(self, filepath: str) -> List[Tuple[int, np.ndarray]]:
+        """
+        Extract rooms with integer spatial IDs for backward compatibility.
+        
+        Returns: List of (spatial_id, room_grid) where spatial_id = row*100 + col
+        """
+        raw_rooms = self.extract(filepath)
+        return [(r_idx * 100 + c_idx, grid) for ((r_idx, c_idx), grid) in raw_rooms]
 
-# Room dimensions (standard Zelda dungeon room)
-ROOM_HEIGHT = 11  # Interior height (excluding outer walls in some contexts)
-ROOM_WIDTH = 16   # Interior width
-FULL_ROOM_HEIGHT = 16  # Full room with walls
-FULL_ROOM_WIDTH = 22   # Full room with walls
+# Room dimensions (VGLC Zelda dungeon format)
+# CRITICAL: VGLC uses 11-character wide rooms, NOT 16!
+ROOM_HEIGHT = 16  # Full room height including walls
+ROOM_WIDTH = 11   # Full room width including walls (WW + 7 + WW)
+FULL_ROOM_HEIGHT = 16  # Same as ROOM_HEIGHT for VGLC
+FULL_ROOM_WIDTH = 11   # Same as ROOM_WIDTH for VGLC
 
 # Edge type mapping from graph labels
 EDGE_TYPE_MAP = {
@@ -389,9 +458,9 @@ class IntelligentDataAdapter:
         return rooms
 
     def extract_rooms_strict(self, filepath: str) -> List[Tuple[int, np.ndarray]]:
-        """Extract rooms using a fixed grid slicer to maintain spatial layout."""
-        extractor = GridBasedRoomExtractor(room_rows=ROOM_HEIGHT, room_cols=ROOM_WIDTH)
-        return extractor.extract(filepath)
+        """Extract rooms using the slot-based GridBasedRoomExtractor."""
+        extractor = GridBasedRoomExtractor()
+        return extractor.extract_with_ids(filepath)
     
     def _extract_single_room(self, full_map: np.ndarray, start_i: int, start_j: int, 
                              visited: np.ndarray) -> Tuple[Optional[np.ndarray], Tuple]:
@@ -867,7 +936,20 @@ class IntelligentDataAdapter:
     
     def process_dungeon(self, map_file: str, graph_file: str, dungeon_id: str) -> DungeonData:
         """
-        Process a complete dungeon from raw files.
+        Process a complete dungeon using GRAPH-FIRST BEST PRACTICE approach.
+        
+        The .dot graph is the AUTHORITATIVE source for:
+        - Room connectivity (edges)
+        - Room contents (node labels: s=start, t=triforce, k=key, etc.)
+        - Door types (edge labels: k=key-locked, b=bombable, l=soft-locked, etc.)
+        
+        Algorithm:
+        1. Parse graph to get logical structure
+        2. Extract VGLC rooms with their physical positions
+        3. Build CONTENT-BASED MAPPING using landmarks (START, TRIFORCE, etc.)
+        4. Propagate mapping using GRAPH ADJACENCY + VGLC ADJACENCY consistency
+        5. Create GHOST ROOMS for graph nodes without VGLC matches
+        6. Stitch based on GRAPH CONNECTIVITY (not VGLC positions)
         
         Args:
             map_file: Path to VGLC map .txt file
@@ -877,117 +959,85 @@ class IntelligentDataAdapter:
         Returns:
             DungeonData object with all processed tensors
         """
+        # STEP 1: Parse the authoritative graph structure
         graph = self.parse_dot_graph(graph_file)
-
-        rooms_data = self.extract_rooms_strict(map_file)
-        node_ids = sorted(graph.nodes())
-
-        start_node = None
-        triforce_node = None
+        
+        # STEP 2: Extract VGLC rooms with positions
+        rooms_data = self.extract_rooms_strict(map_file)  # Returns [(spatial_id, char_grid), ...]
+        
+        # Build position -> room data mapping
+        vglc_rooms: Dict[Tuple[int, int], np.ndarray] = {}
+        for spatial_id, char_grid in rooms_data:
+            pos = (spatial_id // 100, spatial_id % 100)
+            vglc_rooms[pos] = char_grid
+        
+        # STEP 3: Content-based landmark mapping
+        node_to_vglc = self._build_graph_to_vglc_mapping(graph, vglc_rooms)
+        
+        # STEP 4: Process each graph node (using mapping or ghost rooms)
+        processed_rooms: Dict[str, RoomData] = {}
+        layout_positions: Dict[int, Tuple[int, int]] = {}
+        
         for node_id in graph.nodes():
             node_data = graph.nodes[node_id]
-            if node_data.get('is_start', False):
-                start_node = node_id
-            if node_data.get('has_triforce', False):
-                triforce_node = node_id
-
-        processed_rooms: Dict[str, RoomData] = {}
-        assigned_nodes: Set[int] = set()
-        layout_positions: Dict[int, Tuple[int, int]] = {}
-        has_start = False
-        has_triforce = False
-
-        for idx, (spatial_id, char_grid) in enumerate(rooms_data):
-            real_node_id = node_ids[idx] if idx < len(node_ids) else (node_ids[-1] if node_ids else spatial_id)
-
-            # Landmark override: if text shows start/triforce, prefer corresponding graph node
-            if start_node is not None and np.any(char_grid == 'S'):
-                real_node_id = start_node
-            if triforce_node is not None and np.any(np.isin(char_grid, ['T', 'G', 't'])):
-                real_node_id = triforce_node
-
-            if real_node_id in assigned_nodes:
-                for candidate in node_ids:
-                    if candidate not in assigned_nodes:
-                        real_node_id = candidate
-                        break
-
-            assigned_nodes.add(real_node_id)
-
-            position = (spatial_id // 100, spatial_id % 100)
-            layout_positions[real_node_id] = position
-
-            # CRITICAL FIX: Pass char_grid for pixel-based direction detection
-            graph_attrs = self._get_room_graph_attrs(graph, real_node_id, layout_positions, char_grid)
-
-            node_attrs: Dict[str, Any] = {}
-            if real_node_id in graph.nodes:
-                node_data = graph.nodes[real_node_id]
-                node_attrs = {
-                    'is_start': node_data.get('is_start', False),
-                    'has_triforce': node_data.get('has_triforce', False),
-                    'has_key': node_data.get('has_key', False),
-                    'has_boss_key': node_data.get('has_boss_key', False),
-                    'has_enemy': node_data.get('has_enemy', False),
-                    'has_boss': node_data.get('has_boss', False),
-                    'contents': node_data.get('contents', []),
-                }
-
-            semantic_grid = self.defensive_mapper(char_grid, real_node_id, graph_attrs, node_attrs)
-
-            has_start = has_start or node_attrs.get('is_start', False)
-            has_triforce = has_triforce or node_attrs.get('has_triforce', False)
-
-            contents = node_attrs.get('contents', []) if node_attrs else []
-
-            processed_rooms[str(real_node_id)] = RoomData(
-                room_id=str(real_node_id),
+            
+            if node_id in node_to_vglc:
+                # Has VGLC room - use it
+                vglc_pos = node_to_vglc[node_id]
+                char_grid = vglc_rooms[vglc_pos]
+                layout_positions[node_id] = vglc_pos
+            else:
+                # No VGLC room - create ghost room from graph data
+                char_grid = self._create_ghost_room_from_graph(node_id, graph)
+                # Assign a position near connected nodes
+                layout_positions[node_id] = self._find_ghost_position(
+                    node_id, graph, layout_positions
+                )
+            
+            # Get edge attributes for this room
+            graph_attrs = self._get_room_graph_attrs(graph, node_id, layout_positions, char_grid)
+            
+            # Get node attributes
+            node_attrs = {
+                'is_start': node_data.get('is_start', False),
+                'has_triforce': node_data.get('has_triforce', False),
+                'has_key': node_data.get('has_key', False),
+                'has_boss_key': node_data.get('has_boss_key', False),
+                'has_enemy': node_data.get('has_enemy', False),
+                'has_boss': node_data.get('has_boss', False),
+                'contents': node_data.get('contents', []),
+            }
+            
+            # Convert to semantic grid
+            semantic_grid = self.defensive_mapper(char_grid, node_id, graph_attrs, node_attrs)
+            
+            processed_rooms[str(node_id)] = RoomData(
+                room_id=str(node_id),
                 grid=semantic_grid,
-                contents=contents,
+                contents=node_attrs.get('contents', []),
                 doors=graph_attrs,
-                position=position
+                position=layout_positions[node_id]
             )
-
-        room_ids_in_order = list(processed_rooms.keys())
-
-        if not has_start and room_ids_in_order:
-            first_room_id = room_ids_in_order[0]
-            grid = processed_rooms[first_room_id].grid
-            floor_mask = grid == SEMANTIC_PALETTE['FLOOR']
-            if np.any(floor_mask):
-                positions = np.argwhere(floor_mask)
-                center = np.array(grid.shape) // 2
-                distances = np.abs(positions - center).sum(axis=1)
-                r, c = positions[int(np.argmin(distances))]
-                grid[r, c] = SEMANTIC_PALETTE['START']
-
-        if not has_triforce and room_ids_in_order:
-            last_room_id = room_ids_in_order[-1]
-            grid = processed_rooms[last_room_id].grid
-            floor_mask = grid == SEMANTIC_PALETTE['FLOOR']
-            if np.any(floor_mask):
-                positions = np.argwhere(floor_mask)
-                center = np.array(grid.shape) // 2
-                distances = np.abs(positions - center).sum(axis=1)
-                r, c = positions[int(np.argmin(distances))]
-                if grid[r, c] != SEMANTIC_PALETTE['START']:
-                    grid[r, c] = SEMANTIC_PALETTE['TRIFORCE']
-
+        
+        # STEP 5: Ensure START and TRIFORCE exist
+        self._ensure_landmarks(processed_rooms, graph)
+        
+        # STEP 6: Compute TPE, node features, P-matrix
         tpe_vectors, node_order = self.compute_laplacian_pe(graph)
         node_features = self.extract_node_features(graph, node_order)
         p_matrix = self.build_p_matrix(graph, node_order)
-
+        
+        # Build layout matrix
         if layout_positions:
-            max_r = max(p[0] for p in layout_positions.values())
-            max_c = max(p[1] for p in layout_positions.values())
-            layout = np.full((max_r + 1, max_c + 1), -1, dtype=int)
+            max_r = max(p[0] for p in layout_positions.values()) + 1
+            max_c = max(p[1] for p in layout_positions.values()) + 1
+            layout = np.full((max_r, max_c), -1, dtype=int)
             for node_id, (r, c) in layout_positions.items():
                 if 0 <= r < layout.shape[0] and 0 <= c < layout.shape[1]:
                     layout[r, c] = node_id
         else:
-            n_rooms = len(processed_rooms)
-            layout = np.arange(n_rooms).reshape(-1, 1) if n_rooms > 0 else np.zeros((0, 0), dtype=int)
-
+            layout = np.zeros((0, 0), dtype=int)
+        
         return DungeonData(
             dungeon_id=dungeon_id,
             rooms=processed_rooms,
@@ -997,6 +1047,308 @@ class IntelligentDataAdapter:
             p_matrix=p_matrix,
             node_features=node_features
         )
+    
+    def _build_graph_to_vglc_mapping(self, graph: nx.DiGraph, 
+                                      vglc_rooms: Dict[Tuple[int, int], np.ndarray]) -> Dict[int, Tuple[int, int]]:
+        """
+        Build a mapping from graph node IDs to VGLC room positions.
+        
+        BEST PRACTICE: Content-based matching with adjacency propagation.
+        
+        Algorithm:
+        1. Find landmark nodes (START, TRIFORCE, BOSS) and match to VGLC rooms
+        2. BFS from landmarks: for each graph edge, find consistent VGLC adjacency
+        3. Handle remaining nodes with content-based scoring
+        
+        Returns:
+            Dict mapping graph node ID -> VGLC (row, col) position
+        """
+        mapping: Dict[int, Tuple[int, int]] = {}
+        used_positions: Set[Tuple[int, int]] = set()
+        
+        # PHASE 1: Landmark matching
+        # Find graph nodes with special content
+        start_node = None
+        triforce_node = None
+        boss_node = None
+        
+        for node_id, attrs in graph.nodes(data=True):
+            if attrs.get('is_start', False):
+                start_node = node_id
+            if attrs.get('has_triforce', False):
+                triforce_node = node_id
+            if attrs.get('has_boss', False):
+                boss_node = node_id
+        
+        # Find VGLC rooms with special tiles
+        start_rooms = []
+        triforce_rooms = []
+        boss_rooms = []  # Rooms with 'B' blocks often near boss (heuristic)
+        
+        for pos, grid in vglc_rooms.items():
+            if np.any(grid == 'S'):
+                start_rooms.append(pos)
+            if np.any(np.isin(grid, ['T', 't', 'G'])):
+                triforce_rooms.append(pos)
+            # Boss rooms often have distinct patterns - use 'B' block count as hint
+            b_count = np.sum(grid == 'B')
+            if b_count >= 4:  # Multiple blocks suggest boss arena
+                boss_rooms.append(pos)
+        
+        # Match landmarks
+        if start_node is not None and start_rooms:
+            mapping[start_node] = start_rooms[0]
+            used_positions.add(start_rooms[0])
+        
+        if triforce_node is not None and triforce_rooms:
+            mapping[triforce_node] = triforce_rooms[0]
+            used_positions.add(triforce_rooms[0])
+        
+        # PHASE 2: BFS propagation from landmarks
+        # For each mapped node, try to map its graph neighbors to adjacent VGLC positions
+        queue = list(mapping.keys())
+        visited = set(mapping.keys())
+        
+        while queue:
+            current_node = queue.pop(0)
+            current_pos = mapping[current_node]
+            
+            # Get all graph neighbors
+            neighbors = set(graph.successors(current_node)) | set(graph.predecessors(current_node))
+            
+            for neighbor in neighbors:
+                if neighbor in visited:
+                    continue
+                
+                # Find adjacent VGLC positions that aren't used
+                adjacent_positions = self._get_adjacent_vglc_positions(current_pos, vglc_rooms, used_positions)
+                
+                if adjacent_positions:
+                    # Score each candidate by content similarity
+                    best_pos = None
+                    best_score = -1
+                    
+                    neighbor_attrs = graph.nodes.get(neighbor, {})
+                    
+                    for pos in adjacent_positions:
+                        grid = vglc_rooms[pos]
+                        score = self._content_match_score(neighbor_attrs, grid)
+                        if score > best_score:
+                            best_score = score
+                            best_pos = pos
+                    
+                    if best_pos:
+                        mapping[neighbor] = best_pos
+                        used_positions.add(best_pos)
+                        visited.add(neighbor)
+                        queue.append(neighbor)
+        
+        # PHASE 3: Handle remaining unmapped nodes
+        # Use content-based scoring for any remaining graph nodes
+        remaining_nodes = set(graph.nodes()) - visited
+        remaining_positions = set(vglc_rooms.keys()) - used_positions
+        
+        for node_id in sorted(remaining_nodes):
+            node_attrs = graph.nodes.get(node_id, {})
+            best_pos = None
+            best_score = -1
+            
+            for pos in remaining_positions:
+                grid = vglc_rooms[pos]
+                score = self._content_match_score(node_attrs, grid)
+                if score > best_score:
+                    best_score = score
+                    best_pos = pos
+            
+            if best_pos is not None:
+                mapping[node_id] = best_pos
+                used_positions.add(best_pos)
+                remaining_positions.discard(best_pos)
+        
+        return mapping
+    
+    def _get_adjacent_vglc_positions(self, pos: Tuple[int, int], 
+                                      vglc_rooms: Dict[Tuple[int, int], np.ndarray],
+                                      used: Set[Tuple[int, int]]) -> List[Tuple[int, int]]:
+        """Get VGLC positions adjacent to 'pos' that exist and aren't used."""
+        r, c = pos
+        candidates = [(r-1, c), (r+1, c), (r, c-1), (r, c+1)]
+        return [p for p in candidates if p in vglc_rooms and p not in used]
+    
+    def _content_match_score(self, node_attrs: Dict, char_grid: np.ndarray) -> float:
+        """
+        Score how well a graph node matches a VGLC room based on content.
+        
+        Higher score = better match.
+        """
+        score = 0.0
+        
+        # Start room match
+        if node_attrs.get('is_start', False):
+            if np.any(char_grid == 'S'):
+                score += 100  # Strong signal
+        
+        # Triforce/Goal match
+        if node_attrs.get('has_triforce', False):
+            if np.any(np.isin(char_grid, ['T', 't', 'G'])):
+                score += 100
+        
+        # Enemy presence (weak signal)
+        if node_attrs.get('has_enemy', False):
+            if np.any(char_grid == 'M'):
+                score += 5
+        
+        # Door count - more doors = more connected room
+        door_count = np.sum(char_grid == 'D')
+        edge_count = len(node_attrs.get('contents', []))
+        score += min(door_count, 10)  # Cap contribution
+        
+        # Baseline score for any valid room
+        if np.sum(char_grid == 'F') > 10:  # Has floor
+            score += 1
+        
+        return score
+    
+    def _create_ghost_room_from_graph(self, node_id: int, graph: nx.DiGraph) -> np.ndarray:
+        """
+        Create a synthetic room for a graph node without VGLC data.
+        
+        Uses graph attributes to determine room contents.
+        """
+        # Standard room template
+        grid = np.full((16, 11), 'W', dtype='<U1')
+        
+        # Interior floor
+        grid[2:-2, 2:-2] = 'F'
+        
+        # Add content based on graph attributes
+        node_attrs = graph.nodes.get(node_id, {})
+        center_r, center_c = 8, 5
+        
+        if node_attrs.get('is_start', False):
+            grid[center_r, center_c] = 'S'
+        elif node_attrs.get('has_triforce', False):
+            grid[center_r, center_c] = 'T'
+        elif node_attrs.get('has_boss', False):
+            grid[center_r, center_c] = 'M'  # Boss as enemy
+        elif node_attrs.get('has_enemy', False):
+            grid[center_r - 1, center_c] = 'M'
+        
+        # Add doors based on graph edges
+        successors = list(graph.successors(node_id))
+        predecessors = list(graph.predecessors(node_id))
+        edge_count = len(set(successors + predecessors))
+        
+        # Place doors on edges (up to 4)
+        door_positions = [
+            (0, 5),    # North
+            (15, 5),   # South  
+            (8, 0),    # West
+            (8, 10),   # East
+        ]
+        
+        for i in range(min(edge_count, 4)):
+            dr, dc = door_positions[i]
+            grid[dr, dc] = 'D'
+            # Also make adjacent tiles doors for 3-wide door
+            if i < 2:  # North/South
+                grid[dr, dc-1] = 'D'
+                grid[dr, dc+1] = 'D'
+            else:  # East/West
+                grid[dr-1, dc] = 'D'
+                grid[dr+1, dc] = 'D'
+        
+        return grid
+    
+    def _find_ghost_position(self, node_id: int, graph: nx.DiGraph,
+                             existing_positions: Dict[int, Tuple[int, int]]) -> Tuple[int, int]:
+        """
+        Find a grid position for a ghost room based on its graph neighbors.
+        """
+        # Get neighbors that already have positions
+        neighbors = set(graph.successors(node_id)) | set(graph.predecessors(node_id))
+        positioned_neighbors = [n for n in neighbors if n in existing_positions]
+        
+        if not positioned_neighbors:
+            # No positioned neighbors - find first free position
+            used = set(existing_positions.values())
+            for r in range(20):
+                for c in range(20):
+                    if (r, c) not in used:
+                        return (r, c)
+            return (0, 0)  # Fallback
+        
+        # Find position adjacent to a positioned neighbor
+        used = set(existing_positions.values())
+        for neighbor in positioned_neighbors:
+            nr, nc = existing_positions[neighbor]
+            for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                pos = (nr + dr, nc + dc)
+                if pos not in used and pos[0] >= 0 and pos[1] >= 0:
+                    return pos
+        
+        # Spiral out from first neighbor
+        nr, nc = existing_positions[positioned_neighbors[0]]
+        for radius in range(1, 10):
+            for dr in range(-radius, radius + 1):
+                for dc in range(-radius, radius + 1):
+                    if abs(dr) == radius or abs(dc) == radius:
+                        pos = (nr + dr, nc + dc)
+                        if pos not in used and pos[0] >= 0 and pos[1] >= 0:
+                            return pos
+        
+        return (0, 0)
+    
+    def _ensure_landmarks(self, processed_rooms: Dict[str, RoomData], graph: nx.DiGraph) -> None:
+        """
+        Ensure START and TRIFORCE tiles exist in the processed rooms.
+        """
+        has_start = False
+        has_triforce = False
+        start_room_id = None
+        triforce_room_id = None
+        
+        # Check graph for landmark nodes
+        for node_id, attrs in graph.nodes(data=True):
+            if attrs.get('is_start', False):
+                start_room_id = str(node_id)
+            if attrs.get('has_triforce', False):
+                triforce_room_id = str(node_id)
+        
+        # Check if landmarks exist in grids
+        for room_id, room in processed_rooms.items():
+            if np.any(room.grid == SEMANTIC_PALETTE['START']):
+                has_start = True
+            if np.any(room.grid == SEMANTIC_PALETTE['TRIFORCE']):
+                has_triforce = True
+        
+        # Inject START if missing
+        if not has_start and start_room_id and start_room_id in processed_rooms:
+            grid = processed_rooms[start_room_id].grid
+            self._inject_landmark(grid, SEMANTIC_PALETTE['START'])
+        elif not has_start and processed_rooms:
+            # Fallback: first room
+            first_room = list(processed_rooms.values())[0]
+            self._inject_landmark(first_room.grid, SEMANTIC_PALETTE['START'])
+        
+        # Inject TRIFORCE if missing
+        if not has_triforce and triforce_room_id and triforce_room_id in processed_rooms:
+            grid = processed_rooms[triforce_room_id].grid
+            self._inject_landmark(grid, SEMANTIC_PALETTE['TRIFORCE'])
+        elif not has_triforce and processed_rooms:
+            # Fallback: last room
+            last_room = list(processed_rooms.values())[-1]
+            self._inject_landmark(last_room.grid, SEMANTIC_PALETTE['TRIFORCE'])
+    
+    def _inject_landmark(self, grid: np.ndarray, landmark_id: int) -> None:
+        """Inject a landmark tile at the center of a room."""
+        floor_mask = grid == SEMANTIC_PALETTE['FLOOR']
+        if np.any(floor_mask):
+            positions = np.argwhere(floor_mask)
+            center = np.array(grid.shape) // 2
+            distances = np.abs(positions - center).sum(axis=1)
+            r, c = positions[int(np.argmin(distances))]
+            grid[r, c] = landmark_id
     
     def _get_room_graph_attrs(self, graph: nx.DiGraph, room_id: int,
                               layout_positions: Optional[Dict[int, Tuple[int, int]]] = None,
