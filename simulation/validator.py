@@ -38,6 +38,14 @@ except ImportError:
     }
     ID_TO_NAME = {v: k for k, v in SEMANTIC_PALETTE.items()}
 
+# Import room dimensions from zelda_core
+try:
+    from Data.zelda_core import ROOM_HEIGHT, ROOM_WIDTH
+except ImportError:
+    # Fallback if zelda_core not available
+    ROOM_HEIGHT = 16  # Rows per room
+    ROOM_WIDTH = 11   # Columns per room
+
 
 # ==========================================
 # CONSTANTS
@@ -213,18 +221,27 @@ class ZeldaLogicEnv:
     This is a "headless" environment - no graphics, just logic.
     """
     
-    def __init__(self, semantic_grid: np.ndarray, render_mode: bool = False):
+    def __init__(self, semantic_grid: np.ndarray, render_mode: bool = False, 
+                 graph=None, room_to_node=None, room_positions=None):
         """
         Initialize the environment.
         
         Args:
             semantic_grid: 2D numpy array of semantic IDs
             render_mode: If True, enables Pygame rendering (optional)
+            graph: Optional NetworkX graph for stair connections
+            room_to_node: Optional mapping of room positions to graph nodes
+            room_positions: Optional mapping of room positions to grid offsets
         """
         self.original_grid = np.array(semantic_grid, dtype=np.int64)
         self.grid = self.original_grid.copy()
         self.height, self.width = self.grid.shape
         self.render_mode = render_mode
+        
+        # Store graph connectivity for handling stairs
+        self.graph = graph
+        self.room_to_node = room_to_node
+        self.room_positions = room_positions
         
         # Find start and goal positions
         self.start_pos = self._find_position(SEMANTIC_PALETTE['START'])
@@ -675,6 +692,10 @@ class StateSpaceAStar:
             # Explore neighbors using pure state-based logic (NO grid copies)
             curr_r, curr_c = current_state.position
             
+            # Get possible neighbors: adjacent tiles + stair destinations
+            neighbors = []
+            
+            # Standard 4-directional movement
             for dr, dc in deltas:
                 new_r, new_c = curr_r + dr, curr_c + dc
                 
@@ -684,6 +705,18 @@ class StateSpaceAStar:
                 
                 target_pos = (new_r, new_c)
                 target_tile = grid[new_r, new_c]
+                neighbors.append((target_pos, target_tile, 1))  # cost=1 for adjacent moves
+            
+            # STAIR HANDLING: Add teleport destinations from graph
+            if grid[curr_r, curr_c] == SEMANTIC_PALETTE['STAIR']:
+                stair_destinations = self._get_stair_destinations(current_state.position)
+                for dest_pos in stair_destinations:
+                    if 0 <= dest_pos[0] < height and 0 <= dest_pos[1] < width:
+                        dest_tile = grid[dest_pos[0], dest_pos[1]]
+                        neighbors.append((dest_pos, dest_tile, 1))  # cost=1 for stair teleport
+            
+            # Process all neighbors
+            for target_pos, target_tile, base_cost in neighbors:
                 
                 # Determine if move is possible and what state changes occur
                 can_move, new_state = self._try_move_pure(
@@ -702,7 +735,7 @@ class StateSpaceAStar:
                 # Instead of g_score = g_scores[state_hash] + 1 (all moves cost 1),
                 # we now use variable cost based on tile type
                 move_cost = self._get_movement_cost(target_tile, target_pos, current_state)
-                g_score = g_scores[state_hash] + move_cost
+                g_score = g_scores[state_hash] + move_cost * base_cost
                 
                 if new_hash in g_scores and g_score >= g_scores[new_hash]:
                     continue
@@ -723,6 +756,81 @@ class StateSpaceAStar:
                         SEMANTIC_PALETTE['KEY_ITEM'], SEMANTIC_PALETTE['ITEM_MINOR']]:
             pickups.extend(self.env._find_all_positions(tile_id))
         return pickups
+    
+    def _get_stair_destinations(self, current_pos: Tuple[int, int]) -> List[Tuple[int, int]]:
+        """
+        Find stair destinations using graph connectivity.
+        
+        When standing on a stair tile, check which room we're in,
+        find connected rooms via graph edges, and return stair positions in those rooms.
+        """
+        if not self.env.graph or not self.env.room_to_node or not self.env.room_positions:
+            return []
+        
+        # Find which room contains current position
+        current_room = None
+        for room_pos, (r_off, c_off) in self.env.room_positions.items():
+            r_end = r_off + ROOM_HEIGHT  # 16 rows
+            c_end = c_off + ROOM_WIDTH   # 11 columns
+            if r_off <= current_pos[0] < r_end and c_off <= current_pos[1] < c_end:
+                current_room = room_pos
+                break
+        
+        if not current_room:
+            return []
+        
+        current_node = self.env.room_to_node.get(current_room)
+        if current_node is None:
+            return []
+        
+        # Find neighbor nodes in graph
+        destinations = []
+        for neighbor_node in self.env.graph.successors(current_node):
+            # Find the room for this neighbor node
+            neighbor_room = None
+            for room_pos, node_id in self.env.room_to_node.items():
+                if node_id == neighbor_node:
+                    neighbor_room = room_pos
+                    break
+            
+            if not neighbor_room:
+                # Node has no physical room - skip it
+                # This happens when graph has more nodes than physical rooms
+                continue
+            
+            if neighbor_room not in self.env.room_positions:
+                # Room not in position map - skip it
+                continue
+            
+            # Find stair position in neighbor room
+            r_off, c_off = self.env.room_positions[neighbor_room]
+            r_end = min(r_off + ROOM_HEIGHT, self.env.height)  # 16 rows
+            c_end = min(c_off + ROOM_WIDTH, self.env.width)    # 11 columns
+            
+            # Look for STAIR tiles in the neighbor room
+            found_stair = False
+            for r in range(r_off, r_end):
+                for c in range(c_off, c_end):
+                    if self.env.grid[r, c] == SEMANTIC_PALETTE['STAIR']:
+                        destinations.append((r, c))
+                        found_stair = True
+                        break
+                if found_stair:
+                    break
+            
+            # If no stair found, add room center as teleport destination
+            # This handles rooms connected by stairs but without stair tiles
+            if not found_stair:
+                center_r = r_off + ROOM_HEIGHT // 2
+                center_c = c_off + ROOM_WIDTH // 2
+                # Make sure it's a walkable tile
+                if (0 <= center_r < self.env.height and 
+                    0 <= center_c < self.env.width):
+                    tile = self.env.grid[center_r, center_c]
+                    if tile not in {SEMANTIC_PALETTE['VOID'], SEMANTIC_PALETTE['WALL'], SEMANTIC_PALETTE['BLOCK']}:
+                        destinations.append((center_r, center_c))
+        
+        return destinations
     
     def _get_movement_cost(self, target_tile: int, target_pos: Tuple[int, int], state: GameState) -> float:
         """
