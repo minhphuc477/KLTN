@@ -20,31 +20,31 @@ from dataclasses import dataclass, field
 from collections import defaultdict
 from enum import IntEnum
 
-# Import semantic palette from adapter
+# Import semantic palette from CANONICAL source: zelda_core.py
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 try:
-    from data.adapter import SEMANTIC_PALETTE, ID_TO_NAME
+    from Data.zelda_core import SEMANTIC_PALETTE, ID_TO_NAME, ROOM_HEIGHT, ROOM_WIDTH
 except ImportError:
-    # Fallback definitions if adapter not available
-    SEMANTIC_PALETTE = {
-        'VOID': 0, 'FLOOR': 1, 'WALL': 2, 'BLOCK': 3,
-        'DOOR_OPEN': 10, 'DOOR_LOCKED': 11, 'DOOR_BOMB': 12,
-        'DOOR_PUZZLE': 13, 'DOOR_BOSS': 14, 'DOOR_SOFT': 15,
-        'ENEMY': 20, 'START': 21, 'TRIFORCE': 22, 'BOSS': 23,
-        'KEY_SMALL': 30, 'KEY_BOSS': 31, 'KEY_ITEM': 32, 'ITEM_MINOR': 33,
-        'ELEMENT': 40, 'ELEMENT_FLOOR': 41, 'STAIR': 42, 'PUZZLE': 43,
-    }
-    ID_TO_NAME = {v: k for k, v in SEMANTIC_PALETTE.items()}
-
-# Import room dimensions from zelda_core
-try:
-    from Data.zelda_core import ROOM_HEIGHT, ROOM_WIDTH
-except ImportError:
-    # Fallback if zelda_core not available
-    ROOM_HEIGHT = 16  # Rows per room
-    ROOM_WIDTH = 11   # Columns per room
+    try:
+        # Fallback to adapter if zelda_core not available
+        from data.adapter import SEMANTIC_PALETTE, ID_TO_NAME
+        ROOM_HEIGHT = 16
+        ROOM_WIDTH = 11
+    except ImportError:
+        # Final fallback definitions
+        SEMANTIC_PALETTE = {
+            'VOID': 0, 'FLOOR': 1, 'WALL': 2, 'BLOCK': 3,
+            'DOOR_OPEN': 10, 'DOOR_LOCKED': 11, 'DOOR_BOMB': 12,
+            'DOOR_PUZZLE': 13, 'DOOR_BOSS': 14, 'DOOR_SOFT': 15,
+            'ENEMY': 20, 'START': 21, 'TRIFORCE': 22, 'BOSS': 23,
+            'KEY_SMALL': 30, 'KEY_BOSS': 31, 'KEY_ITEM': 32, 'ITEM_MINOR': 33,
+            'ELEMENT': 40, 'ELEMENT_FLOOR': 41, 'STAIR': 42, 'PUZZLE': 43,
+        }
+        ID_TO_NAME = {v: k for k, v in SEMANTIC_PALETTE.items()}
+        ROOM_HEIGHT = 16
+        ROOM_WIDTH = 11
 
 
 # ==========================================

@@ -14,7 +14,13 @@ DOT Graph Format:
 - Node labels: s=start, t=triforce, b=boss, e=enemy, k=key, I=item
 - Edge labels: k=key_locked, b=bombable, l=soft_locked, empty=open
 
-Author: KLTN Thesis Project (Cleaned)
+ML Features (from adapter.py integration):
+- Topological Positional Encoding (TPE) via Laplacian eigenvectors
+- Node feature vectors (multi-hot encoding)
+- P-Matrix (dependency graph encoding)
+- Grid-based room extraction
+
+Author: KLTN Thesis Project (Cleaned + Consolidated)
 """
 
 import os
@@ -68,6 +74,279 @@ ID_TO_NAME = {v: k for k, v in SEMANTIC_PALETTE.items()}
 ROOM_HEIGHT = 16
 ROOM_WIDTH = 11
 
+# Edge type mapping from graph labels (for ML features)
+EDGE_TYPE_MAP = {
+    '': 'open',
+    'k': 'locked',      # Small key required
+    'K': 'boss_locked', # Boss key required
+    'b': 'bombable',    # Bomb required
+    'l': 'soft_locked', # One-way (can't return)
+    'S': 'switch',      # Switch/puzzle required
+    'I': 'item_locked', # Key item required
+}
+
+# Node content mapping from graph labels
+NODE_CONTENT_MAP = {
+    'e': 'enemy',
+    's': 'start',
+    't': 'triforce',
+    'b': 'boss',
+    'k': 'key',
+    'K': 'boss_key',
+    'I': 'key_item',
+    'i': 'item',
+    'p': 'puzzle',
+}
+
+
+# ==========================================
+# GRID-BASED ROOM EXTRACTOR (from adapter.py)
+# ==========================================
+class GridBasedRoomExtractor:
+    """
+    PRECISE Room Extractor for VGLC Zelda Maps (Forensically Verified).
+    
+    VGLC TEXT FORMAT (verified from tloz1_1.txt analysis):
+    ======================================================
+    - Grid is divided into fixed 11-col x 16-row SLOTS
+    - Each slot is either a ROOM or a GAP (all dashes)
+    - Room dimensions: 11 columns x 16 rows (including walls)
+    - Room structure: WW (2 wall) + 7 interior + WW (2 wall) = 11 cols
+    - Gap: 11 dashes in each row
+    """
+
+    SLOT_WIDTH = 11   # Characters per column slot
+    SLOT_HEIGHT = 16  # Rows per row slot
+    GAP_MARKER = '-'  # Void/gap character
+    WALL_MARKER = 'W' # Wall character
+    
+    def __init__(self):
+        pass
+
+    def _load_grid(self, filepath: str) -> np.ndarray:
+        """Load VGLC text file into numpy character array."""
+        with open(filepath, 'r') as f:
+            lines = [line.rstrip('\n') for line in f]
+        
+        if not lines:
+            return np.zeros((0, 0), dtype='<U1')
+
+        width = max(len(line) for line in lines) if lines else 0
+        padded = [list(line.ljust(width, self.GAP_MARKER)) for line in lines]
+        return np.array(padded)
+
+    def _is_room_slot(self, slot_grid: np.ndarray) -> bool:
+        """Check if a slot contains a room (not a gap)."""
+        if slot_grid.size == 0:
+            return False
+        
+        dash_count = np.sum(slot_grid == self.GAP_MARKER)
+        total = slot_grid.size
+        if dash_count > total * 0.7:
+            return False
+        
+        wall_count = np.sum(slot_grid == self.WALL_MARKER)
+        floor_count = np.sum(slot_grid == 'F')
+        
+        return wall_count >= 20 and floor_count >= 5
+
+    def extract(self, filepath: str) -> List[Tuple[Tuple[int, int], np.ndarray]]:
+        """
+        Extract all rooms from VGLC file using fixed slot grid.
+        
+        Returns:
+            List of ((row_idx, col_idx), room_grid) tuples
+        """
+        grid = self._load_grid(filepath)
+        
+        if grid.size == 0:
+            return []
+        
+        h, w = grid.shape
+        num_row_slots = h // self.SLOT_HEIGHT
+        num_col_slots = w // self.SLOT_WIDTH
+        
+        rooms = []
+        
+        for row_slot in range(num_row_slots):
+            row_start = row_slot * self.SLOT_HEIGHT
+            row_end = row_start + self.SLOT_HEIGHT
+            
+            for col_slot in range(num_col_slots):
+                col_start = col_slot * self.SLOT_WIDTH
+                col_end = col_start + self.SLOT_WIDTH
+                
+                slot_grid = grid[row_start:row_end, col_start:col_end]
+                
+                if slot_grid.shape[0] < self.SLOT_HEIGHT:
+                    pad = np.full((self.SLOT_HEIGHT - slot_grid.shape[0], slot_grid.shape[1]), self.GAP_MARKER)
+                    slot_grid = np.vstack([slot_grid, pad])
+                if slot_grid.shape[1] < self.SLOT_WIDTH:
+                    pad = np.full((slot_grid.shape[0], self.SLOT_WIDTH - slot_grid.shape[1]), self.GAP_MARKER)
+                    slot_grid = np.hstack([slot_grid, pad])
+                
+                if self._is_room_slot(slot_grid):
+                    rooms.append(((row_slot, col_slot), slot_grid.copy()))
+        
+        return rooms
+    
+    def extract_with_ids(self, filepath: str) -> List[Tuple[int, np.ndarray]]:
+        """
+        Extract rooms with integer spatial IDs for backward compatibility.
+        
+        Returns: List of (spatial_id, room_grid) where spatial_id = row*100 + col
+        """
+        raw_rooms = self.extract(filepath)
+        return [(r_idx * 100 + c_idx, grid) for ((r_idx, c_idx), grid) in raw_rooms]
+
+
+# ==========================================
+# ML FEATURE EXTRACTION (from adapter.py)
+# ==========================================
+class MLFeatureExtractor:
+    """
+    Extract ML features from dungeon graph structure.
+    
+    Features:
+    - Topological Positional Encoding (TPE) using Laplacian eigenvectors
+    - Node feature vectors (multi-hot encoding)
+    - P-Matrix (dependency graph encoding)
+    """
+    
+    @staticmethod
+    def compute_laplacian_pe(G: nx.Graph, k_dim: int = 8) -> Tuple[np.ndarray, Dict[int, int]]:
+        """
+        Compute Positional Encoding using Graph Laplacian eigenvectors.
+        
+        Creates topology-aware position vectors for each node based on
+        the graph's spectral properties.
+        
+        Args:
+            G: NetworkX graph (will be treated as undirected)
+            k_dim: Number of eigenvector dimensions to use
+            
+        Returns:
+            tpe: Topological Positional Encoding array [N, k_dim]
+            node_to_idx: Mapping from node ID to array index
+        """
+        G_undirected = G.to_undirected() if G.is_directed() else G
+        
+        nodes = sorted(G_undirected.nodes())
+        n = len(nodes)
+        node_to_idx = {node: i for i, node in enumerate(nodes)}
+        
+        if n == 0:
+            return np.zeros((0, k_dim)), {}
+        
+        adj = np.zeros((n, n))
+        
+        for u, v, data in G_undirected.edges(data=True):
+            idx_u, idx_v = node_to_idx[u], node_to_idx[v]
+            
+            edge_type = data.get('edge_type', 'open')
+            weight = 0.5 if edge_type in ['locked', 'bombable', 'boss_locked', 'soft_locked'] else 1.0
+            
+            adj[idx_u, idx_v] = weight
+            adj[idx_v, idx_u] = weight
+        
+        degrees = np.sum(adj, axis=1)
+        D = np.diag(degrees)
+        L = D - adj
+        
+        try:
+            eigenvalues, eigenvectors = np.linalg.eigh(L)
+            
+            start_idx = 1
+            end_idx = min(start_idx + k_dim, n)
+            
+            tpe = eigenvectors[:, start_idx:end_idx]
+            
+            if tpe.shape[1] < k_dim:
+                padding = np.zeros((n, k_dim - tpe.shape[1]))
+                tpe = np.hstack([tpe, padding])
+                
+        except np.linalg.LinAlgError:
+            tpe = np.zeros((n, k_dim))
+        
+        return tpe.astype(np.float32), node_to_idx
+    
+    @staticmethod
+    def extract_node_features(G: nx.DiGraph, node_order: Dict[int, int]) -> np.ndarray:
+        """
+        Extract multi-hot feature vectors for each node.
+        
+        Feature vector (5 dimensions):
+        [is_start, has_enemy, has_key, has_boss_key, has_triforce]
+        
+        Args:
+            G: NetworkX graph with node attributes
+            node_order: Mapping from node ID to feature array index
+            
+        Returns:
+            Feature array [N, 5]
+        """
+        n = len(node_order)
+        features = np.zeros((n, 5), dtype=np.float32)
+        
+        for node_id, idx in node_order.items():
+            if node_id not in G.nodes:
+                continue
+                
+            attrs = G.nodes[node_id]
+            
+            features[idx, 0] = 1.0 if attrs.get('is_start', False) else 0.0
+            features[idx, 1] = 1.0 if attrs.get('has_enemy', False) else 0.0
+            features[idx, 2] = 1.0 if attrs.get('has_key', False) else 0.0
+            features[idx, 3] = 1.0 if attrs.get('has_boss_key', False) or attrs.get('has_boss', False) else 0.0
+            features[idx, 4] = 1.0 if attrs.get('has_triforce', False) or attrs.get('is_triforce', False) else 0.0
+        
+        return features
+    
+    @staticmethod
+    def build_p_matrix(G: nx.DiGraph, node_order: Dict[int, int]) -> np.ndarray:
+        """
+        Build the dependency (prerequisite) matrix.
+        
+        P-Matrix shape: [N, N, 3]
+        Channels:
+        - 0: Small key dependency (edge requires key)
+        - 1: Bomb dependency (edge requires bomb)
+        - 2: Boss key dependency (edge requires boss key)
+        
+        Args:
+            G: NetworkX graph
+            node_order: Mapping from node ID to matrix index
+            
+        Returns:
+            P-Matrix array [N, N, 3]
+        """
+        n = len(node_order)
+        p_matrix = np.zeros((n, n, 3), dtype=np.float32)
+        
+        for u, v, data in G.edges(data=True):
+            if u not in node_order or v not in node_order:
+                continue
+                
+            i, j = node_order[u], node_order[v]
+            edge_type = data.get('edge_type', 'open')
+            label = data.get('label', '')
+            
+            # Determine edge type from label if edge_type not set
+            if edge_type == 'open' and label:
+                edge_type = EDGE_TYPE_MAP.get(label, 'open')
+            
+            if edge_type in ('locked', 'key_locked'):
+                p_matrix[i, j, 0] = 1.0
+                p_matrix[j, i, 0] = 1.0
+            elif edge_type == 'bombable':
+                p_matrix[i, j, 1] = 1.0
+                p_matrix[j, i, 1] = 1.0
+            elif edge_type == 'boss_locked':
+                p_matrix[i, j, 2] = 1.0
+                p_matrix[j, i, 2] = 1.0
+        
+        return p_matrix
+
 
 # ==========================================
 # DATA CLASSES
@@ -107,6 +386,37 @@ class StitchedDungeon:
     triforce_global: Optional[Tuple[int, int]]
     graph: Optional[nx.DiGraph] = None  # Store graph for stair connections
     room_to_node: Optional[Dict[Tuple[int, int], int]] = None  # Room position to graph node ID
+
+
+# ==========================================
+# COMPATIBILITY DATACLASSES (from adapter.py)
+# ==========================================
+@dataclass
+class RoomData:
+    """
+    Represents a single room's data after processing.
+    Compatible with adapter.py interface.
+    """
+    room_id: str
+    grid: np.ndarray                    # Semantic grid [H, W]
+    contents: List[str] = field(default_factory=list)  # Items in room
+    doors: Dict[str, Dict] = field(default_factory=dict)  # Door info by direction
+    position: Tuple[int, int] = (0, 0)  # Position in dungeon layout
+
+
+@dataclass  
+class DungeonData:
+    """
+    Represents a complete dungeon's processed data.
+    Compatible with adapter.py interface.
+    """
+    dungeon_id: str
+    rooms: Dict[str, RoomData]          # room_id -> RoomData
+    graph: nx.DiGraph                    # Connectivity graph
+    layout: np.ndarray = field(default_factory=lambda: np.zeros((0, 0), dtype=int))
+    tpe_vectors: np.ndarray = field(default_factory=lambda: np.zeros((0, 8), dtype=np.float32))
+    p_matrix: np.ndarray = field(default_factory=lambda: np.zeros((0, 0, 3), dtype=np.float32))
+    node_features: np.ndarray = field(default_factory=lambda: np.zeros((0, 5), dtype=np.float32))
 
 
 # ==========================================
@@ -1556,6 +1866,113 @@ def test_all_dungeons(data_root: str, include_variants: bool = True) -> Dict[str
     print(f"\nSUMMARY: {solvable_count}/{total} solvable ({100*solvable_count/total:.1f}%)")
     
     return results
+
+
+# ==========================================
+# UTILITY FUNCTIONS
+# ==========================================
+def visualize_semantic_grid(grid: np.ndarray, show_legend: bool = True) -> str:
+    """
+    Create ASCII visualization of semantic grid for debugging.
+    
+    Args:
+        grid: Semantic ID grid
+        show_legend: Whether to include legend in output
+        
+    Returns:
+        ASCII string representation of the grid
+    """
+    symbol_map = {
+        SEMANTIC_PALETTE['VOID']: ' ',
+        SEMANTIC_PALETTE['FLOOR']: '.',
+        SEMANTIC_PALETTE['WALL']: '#',
+        SEMANTIC_PALETTE['BLOCK']: 'B',
+        SEMANTIC_PALETTE['DOOR_OPEN']: 'O',
+        SEMANTIC_PALETTE['DOOR_LOCKED']: 'L',
+        SEMANTIC_PALETTE['DOOR_BOMB']: 'X',
+        SEMANTIC_PALETTE['ENEMY']: 'E',
+        SEMANTIC_PALETTE['START']: 'S',
+        SEMANTIC_PALETTE['TRIFORCE']: 'T',
+        SEMANTIC_PALETTE['KEY']: 'k',
+        SEMANTIC_PALETTE['ITEM']: 'i',
+        SEMANTIC_PALETTE['ELEMENT']: '~',
+        SEMANTIC_PALETTE['STAIR']: '^',
+        SEMANTIC_PALETTE['BOSS']: 'B',
+    }
+    
+    lines = []
+    for row in grid:
+        line = ''.join(symbol_map.get(int(cell), '?') for cell in row)
+        lines.append(line)
+    
+    result = '\n'.join(lines)
+    
+    if show_legend:
+        result += '\n\nLegend: . floor, # wall, O open door, L locked door, X bomb wall'
+        result += '\n        E enemy, S start, T triforce, k key, ~ hazard, ^ stair'
+    
+    return result
+
+
+def convert_room_to_roomdata(room: Room) -> RoomData:
+    """Convert Room dataclass to RoomData for adapter.py compatibility."""
+    doors_dict = {}
+    direction_map = {'N': 'north', 'S': 'south', 'E': 'east', 'W': 'west'}
+    for d, has_door in room.doors.items():
+        if has_door:
+            doors_dict[direction_map.get(d, d)] = {'type': 'open'}
+    
+    contents = []
+    if room.is_start:
+        contents.append('start')
+    if room.has_triforce:
+        contents.append('triforce')
+    if room.has_boss:
+        contents.append('boss')
+    
+    return RoomData(
+        room_id=str(room.graph_node_id) if room.graph_node_id else f"{room.position[0]}_{room.position[1]}",
+        grid=room.semantic_grid,
+        contents=contents,
+        doors=doors_dict,
+        position=room.position
+    )
+
+
+def convert_dungeon_to_dungeondata(dungeon: Dungeon) -> DungeonData:
+    """Convert Dungeon to DungeonData for adapter.py compatibility."""
+    rooms_dict = {}
+    for pos, room in dungeon.rooms.items():
+        room_data = convert_room_to_roomdata(room)
+        rooms_dict[room_data.room_id] = room_data
+    
+    # Compute ML features
+    ml_extractor = MLFeatureExtractor()
+    tpe_vectors, node_order = ml_extractor.compute_laplacian_pe(dungeon.graph)
+    node_features = ml_extractor.extract_node_features(dungeon.graph, node_order)
+    p_matrix = ml_extractor.build_p_matrix(dungeon.graph, node_order)
+    
+    # Build layout matrix
+    positions = [pos for pos in dungeon.rooms.keys()]
+    if positions:
+        max_r = max(p[0] for p in positions) + 1
+        max_c = max(p[1] for p in positions) + 1
+        layout = np.full((max_r, max_c), -1, dtype=int)
+        for pos, room in dungeon.rooms.items():
+            if room.graph_node_id is not None:
+                layout[pos[0], pos[1]] = room.graph_node_id
+    else:
+        layout = np.zeros((0, 0), dtype=int)
+    
+    return DungeonData(
+        dungeon_id=dungeon.dungeon_id,
+        rooms=rooms_dict,
+        graph=dungeon.graph,
+        layout=layout,
+        tpe_vectors=tpe_vectors,
+        p_matrix=p_matrix,
+        node_features=node_features
+    )
 
 
 if __name__ == "__main__":

@@ -2,6 +2,21 @@
 
 ## ⚡ Quick Commands
 
+### NEW: Main Pipeline (Recommended Entry Point)
+```powershell
+# Validate a single dungeon
+python main.py --dungeon 1 --variant 1
+
+# Validate all 18 dungeons
+python main.py --all
+
+# With ASCII visualization
+python main.py --dungeon 1 --ascii
+
+# Export to NPZ
+python main.py --dungeon 1 --export output.npz
+```
+
 ### Extract Visual Assets
 ```powershell
 python scripts/extract_visual_levels.py --templates "path/to/tileset.png" --input "path/to/screenshot.png" --out-dir artifacts --visualize --npz
@@ -19,10 +34,8 @@ pytest tests/test_visual_dataset_regeneration.py -v
 pytest tests/ -v
 ```
 
-### Launch Solvers
+### Launch GUI
 ```powershell
-python graph_solver.py     # Graph-based (DOT topology + inventory)
-python maze_solver.py      # Tile-based (A* pathfinding)
 python gui_runner.py       # Interactive GUI
 ```
 
@@ -33,16 +46,24 @@ python demo_visual_workflow.py
 
 ---
 
-## 📂 Key Files
+## 📂 Key Files (After Refactoring)
 
 | File | Purpose |
 |------|---------|
+| `main.py` | **NEW** Single entry point: Load → Stitch → Validate |
+| `Data/zelda_core.py` | **CANONICAL** All core logic (adapter, stitcher, solver) |
+| `src/core/definitions.py` | **NEW** Semantic constants (PALETTE, IDs) |
+| `simulation/validator.py` | Block VI validation engine |
 | `src/data_processing/visual_extractor.py` | Template matching CV engine |
-| `scripts/extract_visual_levels.py` | CLI for batch extraction |
-| `graph_solver.py` | DOT topology + inventory solver |
-| `maze_solver.py` | Tile-level A* pathfinding |
 | `gui_runner.py` | Interactive visualization |
-| `tests/test_visual_dataset_regeneration.py` | **NEW** regression tests |
+| `tests/test_solver_inventory.py` | State-space solver tests |
+
+### Archived Files (in `/archive/`)
+| File | Reason |
+|------|--------|
+| `adapter_v1.py` | Replaced by zelda_core.py |
+| `stitcher_v1.py` | Replaced by zelda_core.py |
+| `test_sprites.py` | One-off debug script |
 
 ---
 

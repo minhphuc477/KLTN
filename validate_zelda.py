@@ -31,21 +31,30 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 if current_dir not in sys.path:
     sys.path.insert(0, current_dir)
 
-# Import adapter directly from the data folder (renamed to avoid conflict with Data folder)
-# We use importlib to handle the path properly
-import importlib.util
-
-# Load adapter module
-adapter_path = os.path.join(current_dir, 'data', 'adapter.py')
-spec = importlib.util.spec_from_file_location("adapter", adapter_path)
-adapter_module = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(adapter_module)
-
-# Extract what we need from adapter
-IntelligentDataAdapter = adapter_module.IntelligentDataAdapter
-SEMANTIC_PALETTE = adapter_module.SEMANTIC_PALETTE
-visualize_semantic_grid = adapter_module.visualize_semantic_grid
-DungeonData = adapter_module.DungeonData
+# Import from CANONICAL source: zelda_core.py
+# This replaces the old adapter.py imports
+from Data.zelda_core import (
+    # Adapter classes
+    ZeldaDungeonAdapter,
+    DungeonStitcher,
+    DungeonSolver,
+    MLFeatureExtractor,
+    
+    # Data classes  
+    Dungeon,
+    StitchedDungeon,
+    DungeonData,
+    RoomData,
+    
+    # Constants
+    SEMANTIC_PALETTE,
+    ID_TO_NAME,
+    ValidationMode,
+    
+    # Utilities
+    visualize_semantic_grid,
+    convert_dungeon_to_dungeondata,
+)
 
 # Import validator (this should work fine)
 from simulation.validator import (
