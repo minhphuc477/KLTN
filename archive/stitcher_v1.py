@@ -8,7 +8,6 @@ This module:
 2. Connects doors between adjacent rooms
 3. Creates a unified semantic grid for full dungeon validation
 
-Author: KLTN Thesis Project
 """
 
 import numpy as np

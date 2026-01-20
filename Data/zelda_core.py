@@ -20,7 +20,6 @@ ML Features (from adapter.py integration):
 - P-Matrix (dependency graph encoding)
 - Grid-based room extraction
 
-Author: KLTN Thesis Project (Cleaned + Consolidated)
 """
 
 import os
@@ -42,15 +41,23 @@ SEMANTIC_PALETTE = {
     'DOOR_OPEN': 10,
     'DOOR_LOCKED': 11,
     'DOOR_BOMB': 12,
+    'DOOR_PUZZLE': 13,
+    'DOOR_BOSS': 14,
     'DOOR_SOFT': 15,
     'ENEMY': 20,
     'START': 21,
     'TRIFORCE': 22,
     'BOSS': 23,
-    'KEY': 30,
-    'ITEM': 33,
+    'KEY_SMALL': 30,
+    'KEY_BOSS': 31,
+    'KEY_ITEM': 32,
+    'ITEM_MINOR': 33,
+    'KEY': 30,  # Alias for KEY_SMALL
+    'ITEM': 33,  # Alias for ITEM_MINOR
     'ELEMENT': 40,
+    'ELEMENT_FLOOR': 41,
     'STAIR': 42,
+    'PUZZLE': 43,
 }
 
 # Character to semantic ID mapping
@@ -1631,6 +1638,63 @@ class ZeldaDungeonAdapter:
             StitchedDungeon
         """
         return self.stitcher.stitch(dungeon)
+    
+    def process_all_dungeons(self, processed_dir: str = None, graph_dir: str = None) -> Dict[str, Dungeon]:
+        """
+        Process all dungeons in the data folder.
+        
+        Args:
+            processed_dir: Path to Processed/ folder with .txt files
+            graph_dir: Path to Graph Processed/ folder with .dot files
+            
+        Returns:
+            Dictionary of dungeon_id -> Dungeon
+            
+        Note:
+            - tlozX_1.txt files are Quest 1 dungeons (use LoZ_X.dot)
+            - tlozX_2.txt files are Quest 2 dungeons (use LoZ2_X.dot)
+            - Each quest gets a unique dungeon_id to prevent overwrites
+        """
+        import re
+        
+        if processed_dir is None:
+            processed_dir = self.data_root / "Processed"
+        if graph_dir is None:
+            graph_dir = self.data_root / "Graph Processed"
+        
+        processed_dir = Path(processed_dir)
+        graph_dir = Path(graph_dir)
+        
+        results = {}
+        
+        # Find all map files
+        map_files = sorted(processed_dir.glob("*.txt"))
+        
+        for map_file in map_files:
+            if map_file.name == "README.txt":
+                continue
+                
+            # Extract dungeon ID from filename (e.g., tloz1_1.txt -> dungeon 1, quest 1)
+            # Pattern: tlozX_Y.txt where X is dungeon number, Y is quest (1 or 2)
+            match = re.match(r'tloz(\d+)_(\d+)\.txt', map_file.name)
+            if not match:
+                continue
+                
+            dungeon_num = int(match.group(1))  # Dungeon number (1-9)
+            quest_num = int(match.group(2))     # Quest number (1 or 2)
+            
+            # Create unique dungeon_id that includes quest number
+            dungeon_id = f"zelda_{dungeon_num}_quest{quest_num}"
+            
+            try:
+                dungeon = self.load_dungeon(dungeon_num, variant=quest_num)
+                dungeon.dungeon_id = dungeon_id
+                results[dungeon_id] = dungeon
+                print(f"Processed {dungeon_id}: {len(dungeon.rooms)} rooms")
+            except Exception as e:
+                print(f"Error processing {dungeon_id}: {e}")
+        
+        return results
 
 
 # ==========================================
