@@ -550,15 +550,24 @@ class ZeldaGUI:
 
         # Create a small stair sprite (glowing marker) for visual emphasis
         try:
-            sprite_size = max(8, self.TILE_SIZE // 2)
+            # Force stair sprite to full tile size and use a bright, high-contrast overlay
+            sprite_size = self.TILE_SIZE
             self.stair_sprite = pygame.Surface((sprite_size, sprite_size), pygame.SRCALPHA)
-            self.stair_sprite.fill((0,0,0,0))
-            # Draw a glowing triangle pointing up
-            pts = [(sprite_size//2, 2), (2, sprite_size-3), (sprite_size-3, sprite_size-3)]
-            pygame.draw.polygon(self.stair_sprite, (255, 215, 100), pts)
-            pygame.draw.polygon(self.stair_sprite, (255, 255, 200), pts, 2)
-            # Small center sparkle
-            pygame.draw.circle(self.stair_sprite, (255, 255, 220, 180), (sprite_size//2, sprite_size//2 - 2), max(1, sprite_size//8))
+            self.stair_sprite.fill((0, 0, 0, 0))
+
+            # Full-tile translucent fill (warm gold)
+            pygame.draw.rect(self.stair_sprite, (255, 220, 100, 180), (0, 0, sprite_size, sprite_size))
+            # Strong border for clear visibility
+            pygame.draw.rect(self.stair_sprite, (255, 200, 50), (1, 1, sprite_size-2, sprite_size-2), 4)
+
+            # Center triangle to indicate stair direction
+            pts = [(sprite_size//2, sprite_size//6), (sprite_size//6, sprite_size*5//6), (sprite_size*5//6, sprite_size*5//6)]
+            pygame.draw.polygon(self.stair_sprite, (255, 245, 180), pts)
+            pygame.draw.polygon(self.stair_sprite, (255, 200, 50), pts, 2)
+
+            # Slight inner highlight circle
+            pygame.draw.circle(self.stair_sprite, (255, 255, 220, 64), (sprite_size//2, sprite_size//2), max(6, sprite_size//6))
+
             self.stair_anim_phase = 0.0
         except Exception:
             self.stair_sprite = None
@@ -4196,6 +4205,17 @@ class ZeldaGUI:
                     ds_surf = self.small_font.render(ds_text, True, (180, 180, 255))
                     self.screen.blit(ds_surf, (sidebar_x + 15, y_pos))
                     y_pos += 16
+            except Exception:
+                pass
+
+            # Stair debug: count stairs and show sprite status
+            try:
+                stair_positions = list(map(tuple, self.env._find_all_positions(SEMANTIC_PALETTE['STAIR']))) if hasattr(self.env, '_find_all_positions') else []
+                stair_count = len(stair_positions)
+                stair_text = f"Stairs: {stair_count} | Sprite: {'Full' if getattr(self, 'stair_sprite', None) else 'No'}"
+                stair_surf = self.small_font.render(stair_text, True, (200, 200, 150))
+                self.screen.blit(stair_surf, (sidebar_x + 15, y_pos))
+                y_pos += 16
             except Exception:
                 pass
         
