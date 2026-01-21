@@ -23,7 +23,7 @@ def manhattan(a: Tuple[int,int], b: Tuple[int,int]) -> int:
     return abs(a[0]-b[0]) + abs(a[1]-b[1])
 
 
-def run_grid_algorithm(grid_list: List[List[int]], start: Tuple[int,int], goal: Tuple[int,int], alg: int, allow_teleports: bool = True):
+def run_grid_algorithm(grid_list: List[List[int]], start: Tuple[int,int], goal: Tuple[int,int], alg: int, allow_teleports: bool = True, topology: dict = None):
     """Run a grid algorithm on the provided grid. Supports stair teleports and optional room-guided behavior.
     alg: 0=A*, 1=BFS, 2=Dijkstra, 3=Greedy
     Returns: dict with success, path(list), nodes, time_ms
@@ -34,6 +34,25 @@ def run_grid_algorithm(grid_list: List[List[int]], start: Tuple[int,int], goal: 
         for c, val in enumerate(row):
             if val == STAIR:
                 stairs.append((r, c))
+
+    # If topology provided, use it to restrict teleport destinations
+    room_to_stairs = {}
+    adj = {}
+    if topology:
+        room_to_stairs = topology.get('room_to_stairs', {})
+        adj = topology.get('adj', {})
+        # Build stairs list from topology if provided (override automatic)
+        all_stairs = []
+        for sts in room_to_stairs.values():
+            all_stairs.extend(sts)
+        if all_stairs:
+            stairs = list(all_stairs)
+
+    # Helper: get room id for a stair position
+    stair_to_room = {}
+    for room, sts in room_to_stairs.items():
+        for s in sts:
+            stair_to_room[tuple(s)] = room
     grid = np.array(grid_list, dtype=int)
     H, W = grid.shape
     t0 = time.time()
@@ -54,12 +73,22 @@ def run_grid_algorithm(grid_list: List[List[int]], start: Tuple[int,int], goal: 
                 if 0<=ny<H and 0<=nx<W and grid[ny,nx] in WALKABLE and (ny,nx) not in visited:
                     visited.add((ny,nx))
                     q.append(((ny,nx), path + [(ny,nx)]))
-            # Teleportation step: from stair to all other stairs
+            # Teleportation step: from stair to allowed stairs
             if allow_teleports and pos in stairs:
-                for dest in stairs:
-                    if dest not in visited and dest != pos:
-                        visited.add(dest)
-                        q.append((dest, path + [dest]))
+                # If topology available, restrict teleports to neighbor rooms
+                if topology and tuple(pos) in stair_to_room:
+                    room = stair_to_room[tuple(pos)]
+                    neighbors = adj.get(room, [])
+                    dests = []
+                    for nroom in neighbors:
+                        dests.extend(room_to_stairs.get(nroom, []))
+                else:
+                    dests = [d for d in stairs if d != pos]
+                for dest in dests:
+                    dtuple = tuple(dest)
+                    if dtuple not in visited:
+                        visited.add(dtuple)
+                        q.append((dtuple, path + [dtuple]))
         return {'success': False, 'path': [], 'nodes': nodes, 'time_ms': (time.time()-t0)*1000}
     else:
         # Priority-based
@@ -103,12 +132,20 @@ def run_grid_algorithm(grid_list: List[List[int]], start: Tuple[int,int], goal: 
                     best[npos] = new_g
                     heappush(heap, (new_f, new_g, counter, npos, path + [npos]))
                     counter += 1
-            # Teleportation: if on a stair, consider teleporting to other stairs
+            # Teleportation: if on a stair, consider teleporting to allowed stairs
             if allow_teleports and pos in stairs:
-                for dest in stairs:
-                    if dest == pos:
+                if topology and tuple(pos) in stair_to_room:
+                    room = stair_to_room[tuple(pos)]
+                    neighbors = adj.get(room, [])
+                    dests = []
+                    for nroom in neighbors:
+                        dests.extend(room_to_stairs.get(nroom, []))
+                else:
+                    dests = [d for d in stairs if d != pos]
+                for dest in dests:
+                    npos = tuple(dest)
+                    if npos == pos:
                         continue
-                    npos = dest
                     new_g = g + 1  # teleport cost of 1
                     h = manhattan(npos, goal)
                     if alg == 2:
