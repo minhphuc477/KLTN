@@ -2544,8 +2544,12 @@ class ZeldaGUI:
             keys_avail = result.get('keys_available', 0)
             keys_used = result.get('keys_used', 0)
 
+            start_t = time.time()
             success, path, teleports = self._smart_grid_path()
+            elapsed_ms = (time.time() - start_t) * 1000
+            nodes = getattr(self, 'last_search_iterations', 0)
             if success:
+                self._set_message(f"{solver_name} preview found ({nodes} nodes, {elapsed_ms:.0f}ms)")
                 _handle_found_path(path, teleports, solver_result=result)
                 return
 
@@ -2560,8 +2564,12 @@ class ZeldaGUI:
             return
 
         # Otherwise (no graph or user forced grid), run the selected grid algorithm
+        start_t = time.time()
         success, path, teleports = self._smart_grid_path()
+        elapsed_ms = (time.time() - start_t) * 1000
+        nodes = getattr(self, 'last_search_iterations', 0)
         if success:
+            self._set_message(f"{solver_name} found ({nodes} nodes, {elapsed_ms:.0f}ms)")
             _handle_found_path(path, teleports, solver_result=None)
             return
 
@@ -2752,12 +2760,20 @@ class ZeldaGUI:
         # Choose search algorithm based on UI selection
         alg = getattr(self, 'algorithm_idx', 0)
         # 0: A*, 1: BFS, 2: Dijkstra, 3: Greedy, 4: D* Lite (fallback to A*)
+        # Note: D* Lite not yet implemented — selecting it currently uses A* fallback.
+        if alg == 4:
+            logger.info("D* Lite selected but not implemented; using A* fallback")
+            self._set_message("D* Lite selected: using A* fallback (not implemented)", 2.5)
+
         def heuristic(a, b):
             # Manhattan distance heuristic (admissible on 4-neighborhood)
             return abs(a[0] - b[0]) + abs(a[1] - b[1])
 
         max_iterations = 200000
         counter = 0
+        # Track iterations for diagnostics (nodes expanded)
+        iterations = 0
+        self.last_search_iterations = 0
 
         if alg == 1:
             # BFS with stair teleportation (existing behavior)
@@ -2772,6 +2788,7 @@ class ZeldaGUI:
                 if getattr(self, 'show_heatmap', False):
                     self.search_heatmap[pos] = self.search_heatmap.get(pos, 0) + 1
                 if pos == goal:
+                    self.last_search_iterations = iterations
                     return True, path, teleports
                 # 4-directional walking
                 for dy, dx in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
@@ -2787,6 +2804,8 @@ class ZeldaGUI:
                         if dest not in visited:
                             visited.add(dest)
                             queue.append((dest, path + [dest], teleports + 1))
+            # No grid path found within BFS limits
+            self.last_search_iterations = iterations
             return self._graph_guided_path()
         else:
             # Implement priority-search-based algorithms (A*, Dijkstra, Greedy)
@@ -2814,6 +2833,7 @@ class ZeldaGUI:
                 if getattr(self, 'show_heatmap', False):
                     self.search_heatmap[pos] = self.search_heatmap.get(pos, 0) + 1
                 if pos == goal:
+                    self.last_search_iterations = iterations
                     return True, path, teleports
                 key = (pos, stairs)
                 if key in best and g > best[key]:
@@ -2865,9 +2885,9 @@ class ZeldaGUI:
                             continue
                         heapq.heappush(heap, (new_f, new_g, counter, npos, new_stairs, new_teleports, path + [npos]))
                         counter += 1
-            # No path found
-            return self._graph_guided_path()
-    
+            # No path found within priority-search limits
+            self.last_search_iterations = iterations
+            return self._graph_guided_path()    
     def _graph_guided_path(self):
         """Fallback: follow graph path with teleportation when needed."""
         import networkx as nx
