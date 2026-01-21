@@ -547,6 +547,22 @@ class ZeldaGUI:
         
         # Create Link sprite
         self.link_img = self._create_link_sprite()
+
+        # Create a small stair sprite (glowing marker) for visual emphasis
+        try:
+            sprite_size = max(8, self.TILE_SIZE // 2)
+            self.stair_sprite = pygame.Surface((sprite_size, sprite_size), pygame.SRCALPHA)
+            self.stair_sprite.fill((0,0,0,0))
+            # Draw a glowing triangle pointing up
+            pts = [(sprite_size//2, 2), (2, sprite_size-3), (sprite_size-3, sprite_size-3)]
+            pygame.draw.polygon(self.stair_sprite, (255, 215, 100), pts)
+            pygame.draw.polygon(self.stair_sprite, (255, 255, 200), pts, 2)
+            # Small center sparkle
+            pygame.draw.circle(self.stair_sprite, (255, 255, 220, 180), (sprite_size//2, sprite_size//2 - 2), max(1, sprite_size//8))
+            self.stair_anim_phase = 0.0
+        except Exception:
+            self.stair_sprite = None
+            self.stair_anim_phase = 0.0
     
     def _create_link_sprite(self) -> pygame.Surface:
         """Create a detailed Link sprite using pygame drawing."""
@@ -2673,36 +2689,78 @@ class ZeldaGUI:
         # If Parallel Search flag is enabled, run grid algorithms in background and pick best result
         if self.feature_flags.get('parallel_search', False):
             import threading
-            def _parallel_runner():
-                alg_list = [0,1,2,3]  # A*, BFS, Dijkstra, Greedy
+            # Use process-based parallel runner (multiprocessing) to avoid GIL
+            try:
+                import multiprocessing as mp
+                from scripts.parallel_worker import run_grid_algorithm
+
+                # Serialize grid to list for pickling
+                cur = current_dungeon
+                if hasattr(cur, 'global_grid'):
+                    grid = cur.global_grid.tolist()
+                else:
+                    grid = cur.tolist()
+                start = self.env.start_pos
+                goal = self.env.goal_pos
+
+                def worker_call(alg_idx):
+                    return run_grid_algorithm(grid, start, goal, alg_idx)
+
+                with mp.get_context('spawn').Pool(processes=4) as pool:
+                    results = pool.map(worker_call, [0,1,2,3])
+
                 best = None
-                for alg in alg_list:
-                    try:
-                        saved = getattr(self, 'algorithm_idx', 0)
-                        self.algorithm_idx = alg
-                        t0 = time.time()
-                        succ, pth, tel = self._smart_grid_path()
-                        elapsed = (time.time() - t0) * 1000
-                        nodes = getattr(self, 'last_search_iterations', 0)
-                        if succ:
-                            # prefer shortest time, then shorter path
-                            score = (elapsed, len(pth))
-                            if best is None or score < best['score']:
-                                best = {'alg': alg, 'path': pth, 'teleports': tel, 'nodes': nodes, 'time_ms': elapsed, 'score': score}
-                    finally:
-                        self.algorithm_idx = saved
+                for idx, res in enumerate(results):
+                    if res.get('success'):
+                        score = (res['time_ms'], res['path'] and len(res['path']))
+                        if best is None or score < best['score']:
+                            best = {'alg': idx, 'path': res['path'], 'nodes': res['nodes'], 'time_ms': res['time_ms'], 'score': score}
                 if best:
-                    self.parallel_search_result = best
-                    self.parallel_search_done = True
                     self._set_message('Parallel search completed', 2.0)
+                    # show preview using the best path
+                    try:
+                        self.auto_path = best['path']
+                        self.preview_overlay_visible = True
+                        self.path_preview_dialog = PathPreviewDialog(path=self.auto_path, env=self.env, solver_result={}, speed_multiplier=self.speed_multiplier)
+                        self._set_message(f"Parallel best: alg{best['alg']} ({best['nodes']} nodes, {best['time_ms']:.0f}ms)")
+                    except Exception as e:
+                        logger.warning(f"Failed to display parallel search preview: {e}")
                 else:
                     self._set_message('Parallel search failed to find path', 2.0)
-            self.parallel_search_done = False
-            self.parallel_search_result = None
-            self.parallel_search_thread = threading.Thread(target=_parallel_runner, daemon=True)
-            self.parallel_search_thread.start()
-            self._set_message('Parallel search started...', 2.0)
-            return
+                return
+            except Exception as e:
+                # Fallback to single-threaded runner if multiprocessing fails
+                logger.warning(f"Parallel process runner failed, falling back to thread: {e}")
+                import threading
+                def _parallel_runner_thread():
+                    alg_list = [0,1,2,3]
+                    best = None
+                    for alg in alg_list:
+                        try:
+                            saved = getattr(self, 'algorithm_idx', 0)
+                            self.algorithm_idx = alg
+                            t0 = time.time()
+                            succ, pth, tel = self._smart_grid_path()
+                            elapsed = (time.time() - t0) * 1000
+                            nodes = getattr(self, 'last_search_iterations', 0)
+                            if succ:
+                                score = (elapsed, len(pth))
+                                if best is None or score < best['score']:
+                                    best = {'alg': alg, 'path': pth, 'teleports': tel, 'nodes': nodes, 'time_ms': elapsed, 'score': score}
+                        finally:
+                            self.algorithm_idx = saved
+                    if best:
+                        self.parallel_search_result = best
+                        self.parallel_search_done = True
+                        self._set_message('Parallel search completed', 2.0)
+                    else:
+                        self._set_message('Parallel search failed to find path', 2.0)
+                self.parallel_search_done = False
+                self.parallel_search_result = None
+                self.parallel_search_thread = threading.Thread(target=_parallel_runner_thread, daemon=True)
+                self.parallel_search_thread.start()
+                self._set_message('Parallel search started (thread fallback)...', 2.0)
+                return
 
         # Otherwise (no graph or user forced grid), run the selected grid algorithm
         start_t = time.time()
@@ -2907,9 +2965,25 @@ class ZeldaGUI:
             self._set_message("D* Lite selected: using A* fallback (not implemented)", 2.5)
 
         def heuristic(a, b):
-            # Manhattan distance heuristic (admissible on 4-neighborhood)
+            # Use ML heuristic if enabled and model available, else Manhattan
+            if self.feature_flags.get('ml_heuristic', False) and getattr(self, 'ml_model', None):
+                try:
+                    return self._ml_heuristic(a, b)
+                except Exception as e:
+                    logger.warning(f"ML heuristic failed, falling back to Manhattan: {e}")
             return abs(a[0] - b[0]) + abs(a[1] - b[1])
 
+        # Placeholder ML heuristic loader
+        if not hasattr(self, 'ml_model'):
+            self.ml_model = None
+        def _ml_heuristic_stub(a, b):
+            # For now, a simple biased Manhattan (simulates ML model outputs)
+            return 0.9 * (abs(a[0] - b[0]) + abs(a[1] - b[1]))
+        if getattr(self, 'ml_model', None) is None:
+            self._ml_heuristic = _ml_heuristic_stub
+        else:
+            # If you add a real model loader, assign self._ml_heuristic accordingly
+            pass
         max_iterations = 200000
         counter = 0
         # Track iterations for diagnostics (nodes expanded)
@@ -3847,6 +3921,17 @@ class ZeldaGUI:
                     # Use sprite manager (with procedural fallback)
                     tile_surface = self.renderer.sprite_manager.get_tile(tile_id, self.TILE_SIZE)
                     map_surface.blit(tile_surface, (screen_x, screen_y))
+                    # Draw stair sprite overlay if tile is stair
+                    if tile_id == SEMANTIC_PALETTE['STAIR'] and getattr(self, 'stair_sprite', None):
+                        try:
+                            alpha = int(140 + 90 * math.sin(time.time() * 3.0))
+                            s = self.stair_sprite.copy()
+                            s.set_alpha(max(20, alpha))
+                            sx = screen_x + (self.TILE_SIZE - s.get_width()) // 2
+                            sy = screen_y + (self.TILE_SIZE - s.get_height()) // 2
+                            map_surface.blit(s, (sx, sy))
+                        except Exception:
+                            pass
         else:
             # Fallback rendering
             for r in range(start_r, end_r):
@@ -3856,6 +3941,17 @@ class ZeldaGUI:
                     screen_x = c * self.TILE_SIZE - self.view_offset_x
                     screen_y = r * self.TILE_SIZE - self.view_offset_y
                     map_surface.blit(img, (screen_x, screen_y))
+                    # Draw stair sprite overlay for fallback tiles
+                    if tile_id == SEMANTIC_PALETTE['STAIR'] and getattr(self, 'stair_sprite', None):
+                        try:
+                            alpha = int(140 + 90 * math.sin(time.time() * 3.0))
+                            s = self.stair_sprite.copy()
+                            s.set_alpha(max(20, alpha))
+                            sx = screen_x + (self.TILE_SIZE - s.get_width()) // 2
+                            sy = screen_y + (self.TILE_SIZE - s.get_height()) // 2
+                            map_surface.blit(s, (sx, sy))
+                        except Exception:
+                            pass
         
         # Draw heatmap overlay if enabled and we have search data
         if self.show_heatmap and self.search_heatmap:
@@ -4086,6 +4182,22 @@ class ZeldaGUI:
             ready_surf = self.small_font.render(ready_text, True, ready_color)
             self.screen.blit(ready_surf, (sidebar_x + 15, y_pos))
             y_pos += 18
+
+            # D* Lite indicator (show when enabled or active)
+            try:
+                if getattr(self, 'dstar_active', False) and getattr(self, 'dstar_solver', None):
+                    replans = getattr(self.dstar_solver, 'replans_count', 0)
+                    ds_text = f"D* Lite: ACTIVE ({replans} replans)"
+                    ds_surf = self.small_font.render(ds_text, True, (100, 220, 255))
+                    self.screen.blit(ds_surf, (sidebar_x + 15, y_pos))
+                    y_pos += 16
+                elif self.feature_flags.get('dstar_lite', False):
+                    ds_text = "D* Lite: enabled"
+                    ds_surf = self.small_font.render(ds_text, True, (180, 180, 255))
+                    self.screen.blit(ds_surf, (sidebar_x + 15, y_pos))
+                    y_pos += 16
+            except Exception:
+                pass
         
         # Divider
         pygame.draw.line(self.screen, (60, 60, 80), (sidebar_x + 10, y_pos), (self.screen_w - 10, y_pos))
