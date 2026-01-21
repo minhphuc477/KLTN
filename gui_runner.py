@@ -306,6 +306,15 @@ class ZeldaGUI:
         # Presets
         self.presets = ['Debugging', 'Fast Approx', 'Optimal', 'Speedrun']
         self.current_preset_idx = 0
+
+        # D* Lite integration
+        self.dstar_solver = None
+        self.dstar_active = False
+
+        # Parallel search state
+        self.parallel_search_thread = None
+        self.parallel_search_done = False
+        self.parallel_search_result = None
         
         # Smooth agent animation state
         self.agent_visual_pos = None  # Vector2 for smooth movement
@@ -2484,7 +2493,27 @@ class ZeldaGUI:
 
             # Update control panel scroll inertia (momentum)
             self._update_control_panel_scroll()
-            
+
+            # If parallel search ran in background, handle result on main thread
+            if getattr(self, 'parallel_search_done', False) and getattr(self, 'parallel_search_result', None):
+                best = self.parallel_search_result
+                # Convert alg index to name
+                alg_names = ['A*','BFS','Dijkstra','Greedy']
+                name = alg_names[best['alg']] if best['alg'] < len(alg_names) else f"Alg{best['alg']}"
+                self._set_message(f"Parallel best: {name} ({best['nodes']} nodes, {best['time_ms']:.0f}ms)")
+                self.parallel_search_done = False
+                self.parallel_search_result = None
+                # Use found path
+                _handle_found_path = None
+                try:
+                    # Reuse the same handling as in _start_auto_solve: set auto_path and show preview
+                    self.auto_path = best['path']
+                    self.preview_overlay_visible = True
+                    self.path_preview_dialog = PathPreviewDialog(path=self.auto_path, env=self.env, solver_result={}, speed_multiplier=self.speed_multiplier)
+                    self._set_message('Parallel result ready (sidebar preview)')
+                except Exception as e:
+                    logger.warning(f"Failed to display parallel search preview: {e}")
+
             # Render
             self._render()
 
@@ -2585,6 +2614,26 @@ class ZeldaGUI:
                 # Visualization not available: just execute immediately
                 self._execute_auto_solve(path, solver_result or {}, teleports)
 
+        # If D* Lite is explicitly chosen or the flag is on, try D* Lite first for full state-space replanning
+        if (self.feature_flags.get('dstar_lite', False) or getattr(self, 'algorithm_idx', 0) == 4):
+            try:
+                from simulation.dstar_lite import DStarLiteSolver
+                start_state = self.env.get_state() if hasattr(self.env, 'get_state') else GameState(position=self.env.start_pos)
+                ds = DStarLiteSolver(self.env)
+                success, path, nodes = ds.solve(start_state)
+                elapsed = 0.0
+                if success:
+                    self.dstar_solver = ds
+                    self.dstar_active = True
+                    self._set_message(f"D* Lite plan found ({nodes} nodes)")
+                    _handle_found_path(path, 0, solver_result={'dstar_nodes': nodes})
+                    return
+                else:
+                    # Fall through to other planners
+                    self._set_message("D* Lite: no plan found, trying others", 2.0)
+            except Exception as e:
+                logger.warning(f"D* Lite integration failed: {e}")
+
         # If graph exists and the user did not force grid algorithms, prefer the graph solver
         if hasattr(current_dungeon, 'graph') and current_dungeon.graph and not getattr(self, 'force_grid_algorithm', False):
             solver = DungeonSolver()
@@ -2619,6 +2668,40 @@ class ZeldaGUI:
 
             self.auto_mode = False
             self.message = "Graph OK but grid blocked"
+            return
+
+        # If Parallel Search flag is enabled, run grid algorithms in background and pick best result
+        if self.feature_flags.get('parallel_search', False):
+            import threading
+            def _parallel_runner():
+                alg_list = [0,1,2,3]  # A*, BFS, Dijkstra, Greedy
+                best = None
+                for alg in alg_list:
+                    try:
+                        saved = getattr(self, 'algorithm_idx', 0)
+                        self.algorithm_idx = alg
+                        t0 = time.time()
+                        succ, pth, tel = self._smart_grid_path()
+                        elapsed = (time.time() - t0) * 1000
+                        nodes = getattr(self, 'last_search_iterations', 0)
+                        if succ:
+                            # prefer shortest time, then shorter path
+                            score = (elapsed, len(pth))
+                            if best is None or score < best['score']:
+                                best = {'alg': alg, 'path': pth, 'teleports': tel, 'nodes': nodes, 'time_ms': elapsed, 'score': score}
+                    finally:
+                        self.algorithm_idx = saved
+                if best:
+                    self.parallel_search_result = best
+                    self.parallel_search_done = True
+                    self._set_message('Parallel search completed', 2.0)
+                else:
+                    self._set_message('Parallel search failed to find path', 2.0)
+            self.parallel_search_done = False
+            self.parallel_search_result = None
+            self.parallel_search_thread = threading.Thread(target=_parallel_runner, daemon=True)
+            self.parallel_search_thread.start()
+            self._set_message('Parallel search started...', 2.0)
             return
 
         # Otherwise (no graph or user forced grid), run the selected grid algorithm
@@ -3263,6 +3346,26 @@ class ZeldaGUI:
                 self._set_message("Solution complete!")
                 self.status_message = "Completed"
                 return
+
+            # D* Lite replanning check (if active)
+            if self.feature_flags.get('dstar_lite', False) and getattr(self, 'dstar_active', False) and getattr(self, 'dstar_solver', None):
+                try:
+                    current_state = self.env.get_state() if hasattr(self.env, 'get_state') else self.env.state
+                    if self.dstar_solver.needs_replan(current_state):
+                        success, new_path, updated = self.dstar_solver.replan(current_state)
+                        if success and new_path:
+                            # Align auto_step_idx to current position in new path
+                            curpos = self.env.state.position
+                            try:
+                                idx = new_path.index(curpos)
+                            except ValueError:
+                                idx = 0
+                            self.auto_path = new_path
+                            self.auto_step_idx = idx
+                            self._set_message(f"D* Lite replanned ({updated} updates)")
+                except Exception as e:
+                    logger.warning(f"D* Lite replanning failed: {e}")
+
             
             # Validate environment
             if self.env is None:
