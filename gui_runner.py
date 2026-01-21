@@ -293,6 +293,19 @@ class ZeldaGUI:
         self.preview_modal_enabled = False
         # When True the map will show the path overlay and a small sidebar preview box (non-modal)
         self.preview_overlay_visible = False
+
+        # Topology overlay and DOT export
+        self.show_topology = False
+        self.topology_export_path = None
+
+        # Solver metrics and comparison results
+        self.last_solver_metrics = None  # dict: {name,nodes,time_ms,path_len}
+        self.solver_comparison_results = None  # list of dicts
+        self.show_solver_comparison_overlay = False
+
+        # Presets
+        self.presets = ['Debugging', 'Fast Approx', 'Optimal', 'Speedrun']
+        self.current_preset_idx = 0
         
         # Smooth agent animation state
         self.agent_visual_pos = None  # Vector2 for smooth movement
@@ -654,6 +667,7 @@ class ZeldaGUI:
             ('ml_heuristic', 'ML Heuristic'),
             ('dstar_lite', 'D* Lite Replanning'),
             ('show_heatmap', 'Show Heatmap Overlay'),
+            ('show_topology', 'Show Topology Overlay'),
             ('show_minimap', 'Show Minimap'),
             ('diagonal_movement', 'Diagonal Movement'),
             ('speedrun_mode', 'Speedrun Mode'),
@@ -708,6 +722,17 @@ class ZeldaGUI:
         self.widget_manager.add_widget(difficulty_dropdown)
         y_offset += dropdown_spacing
         
+        # Presets
+        presets_dropdown = DropdownWidget(
+            (x_offset, y_offset),
+            "Presets",
+            self.presets,
+            selected=self.current_preset_idx
+        )
+        presets_dropdown.control_name = 'presets'
+        self.widget_manager.add_widget(presets_dropdown)
+        y_offset += dropdown_spacing
+
         # Algorithm
         algorithm_dropdown = DropdownWidget(
             (x_offset, y_offset),
@@ -743,6 +768,8 @@ class ZeldaGUI:
             ("Clear Path", self._clear_path),
             ("Export Route", self._export_route),
             ("Load Route", self._load_route),
+            ("Export Topology", self._export_topology),
+            ("Compare Solvers", self._run_solver_comparison),
         ]
         
         # Render primary buttons in 2x2 grid
@@ -1417,6 +1444,11 @@ class ZeldaGUI:
             'zoom': 'Adjust map zoom level (also use +/- keys)',
             'difficulty': 'Select map difficulty level',
             'algorithm': 'Choose pathfinding algorithm for auto-solve',
+            'ml_heuristic': 'Use experimental ML-style heuristic (may be non-admissible)',
+            'parallel_search': 'Run multiple strategies in parallel and pick fastest result',
+            'solver_comparison': 'Run a comparison of available solvers and report metrics',
+            'dstar_lite': 'Enable D* Lite incremental replanning (if implemented)',
+            'show_topology': 'Draw room nodes & edges from topology graph on the map',
         }
         
         # Check which widget is under mouse
@@ -1570,6 +1602,26 @@ class ZeldaGUI:
                                 if self.auto_path:
                                     self.auto_path = []
                                     self.auto_mode = False
+                        elif widget.control_name == 'presets':
+                            old = self.current_preset_idx
+                            self.current_preset_idx = widget.selected
+                            if old != self.current_preset_idx:
+                                p = self.presets[self.current_preset_idx]
+                                # Apply simple presets
+                                if p == 'Debugging':
+                                    self.feature_flags['show_heatmap'] = True
+                                    self.feature_flags['solver_comparison'] = False
+                                    self.feature_flags['ml_heuristic'] = False
+                                elif p == 'Fast Approx':
+                                    self.feature_flags['ml_heuristic'] = True
+                                    self.feature_flags['parallel_search'] = True
+                                elif p == 'Optimal':
+                                    self.feature_flags['ml_heuristic'] = False
+                                    self.feature_flags['parallel_search'] = False
+                                elif p == 'Speedrun':
+                                    self.feature_flags['speedrun_mode'] = True
+                                    self.feature_flags['ml_heuristic'] = True
+                                self._set_message(f"Preset applied: {p}")
 
             return handled
         elif event_type == 'up':
@@ -1974,6 +2026,12 @@ class ZeldaGUI:
                         self.preview_overlay_visible = True
                         self.message = "Path preview closed; overlay visible in sidebar/map (Enter to start or Esc to dismiss)"
                         continue
+
+                # Dismiss solver comparison overlay with Esc
+                if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE and getattr(self, 'show_solver_comparison_overlay', False):
+                    self.show_solver_comparison_overlay = False
+                    self._set_message('Solver comparison closed', 1.2)
+                    continue
                 
                 # If non-modal overlay visible and clicked in sidebar buttons, handle them
                 if getattr(self, 'preview_overlay_visible', False) and event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
@@ -3367,6 +3425,173 @@ class ZeldaGUI:
         self.message_time = time.time()
         self.message_duration = duration
         self.status_message = "Info"
+
+    # --- Topology helpers ---
+    def _export_topology(self):
+        """Export current map topology to a DOT file (if available)."""
+        current = self.maps[self.current_map_idx]
+        graph = getattr(current, 'graph', None)
+        room_positions = getattr(current, 'room_positions', None)
+        if graph is None:
+            self._set_message('No topology graph available for this map', 3.0)
+            return
+        # Try to use networkx pydot writer
+        try:
+            import networkx as nx
+            try:
+                fname = f"topology_map_{self.current_map_idx+1}.dot"
+                nx.nx_pydot.write_dot(graph, fname)
+                # Add node positions as comments if available
+                if room_positions:
+                    with open(fname, 'a') as f:
+                        f.write('\n// room positions\n')
+                        for room, (ry, rx) in room_positions.items():
+                            f.write(f"// {room}: {ry},{rx}\n")
+                self._set_message(f"Topology exported to {fname}")
+                self.topology_export_path = fname
+            except Exception as e:
+                # Fallback to manual DOT generation
+                fname = f"topology_map_{self.current_map_idx+1}.dot"
+                with open(fname, 'w', encoding='utf-8') as f:
+                    f.write('graph topology {\n')
+                    for n in graph.nodes():
+                        f.write(f'  "{n}";\n')
+                    for u, v in graph.edges():
+                        f.write(f'  "{u}" -- "{v}";\n')
+                    f.write('}\n')
+                self._set_message(f"Topology exported to {fname} (manual)\n{e}")
+                self.topology_export_path = fname
+        except ImportError:
+            self._set_message('NetworkX not available - cannot export DOT automatically', 4.0)
+
+    def _render_topology_overlay(self, surface: pygame.Surface):
+        """Draw room nodes and edges on the map area."""
+        current = self.maps[self.current_map_idx]
+        if not hasattr(current, 'graph') or not current.graph:
+            return
+        graph = current.graph
+        room_positions = getattr(current, 'room_positions', {})
+        # Draw edges
+        for u, v in graph.edges():
+            ru = room_positions.get(u)
+            rv = room_positions.get(v)
+            if not ru or not rv:
+                continue
+            # room centers
+            cu = (ru[1] * self.TILE_SIZE + self.TILE_SIZE * 0.5 - self.view_offset_x,
+                  ru[0] * self.TILE_SIZE + self.TILE_SIZE * 0.5 - self.view_offset_y)
+            cv = (rv[1] * self.TILE_SIZE + self.TILE_SIZE * 0.5 - self.view_offset_x,
+                  rv[0] * self.TILE_SIZE + self.TILE_SIZE * 0.5 - self.view_offset_y)
+            try:
+                pygame.draw.line(surface, (120, 200, 255), cu, cv, 2)
+            except Exception:
+                pass
+        # Draw nodes
+        for room, (ry, rx) in room_positions.items():
+            cx = rx * self.TILE_SIZE + self.TILE_SIZE * 0.5 - self.view_offset_x
+            cy = ry * self.TILE_SIZE + self.TILE_SIZE * 0.5 - self.view_offset_y
+            r = max(4, int(self.TILE_SIZE * 0.25))
+            try:
+                pygame.draw.circle(surface, (255, 200, 100), (int(cx), int(cy)), r)
+                font = pygame.font.SysFont('Arial', max(10, int(self.TILE_SIZE // 6)))
+                txt = font.render(str(room), True, (20, 20, 30))
+                surface.blit(txt, (int(cx) - txt.get_width() // 2, int(cy) - txt.get_height() // 2))
+            except Exception:
+                pass
+
+    # --- Solver comparison helpers ---
+    def _set_last_solver_metrics(self, name, nodes, time_ms, path_len):
+        self.last_solver_metrics = {
+            'name': name,
+            'nodes': nodes,
+            'time_ms': time_ms,
+            'path_len': path_len
+        }
+
+    def _run_solver_comparison(self):
+        """Entry point for Compare Solvers button - runs and displays results."""
+        # Run comparison on main thread (fast maps); if long, we can spawn a worker
+        results = []
+        alg_names = ['A*', 'BFS', 'Dijkstra', 'Greedy', 'D* Lite', 'StateSpace']
+        for idx, name in enumerate(alg_names):
+            start_t = time.time()
+            # D* Lite special-case: use D* Lite implementation
+            if name == 'D* Lite':
+                try:
+                    from simulation.dstar_lite import DStarLiteSolver
+                    start_state = GameState(position=self.env.start_pos, opened_doors=self.env.state.opened_doors.copy() if hasattr(self.env, 'state') else set())
+                    ds = DStarLiteSolver(self.env)
+                    success, path, nodes = ds.solve(start_state)
+                    elapsed = (time.time() - start_t) * 1000
+                    results.append({'name': name, 'success': success, 'path_len': len(path), 'nodes': nodes, 'time_ms': elapsed})
+                    if success:
+                        self._set_last_solver_metrics(name, nodes, elapsed, len(path))
+                    continue
+                except Exception as e:
+                    results.append({'name': name, 'success': False, 'path_len': 0, 'nodes': 0, 'time_ms': 0, 'error': str(e)})
+                    continue
+            if name == 'StateSpace':
+                # Use state-space solver as final baseline
+                try:
+                    start_state = self.env.get_state() if hasattr(self.env, 'get_state') else GameState(position=self.env.start_pos)
+                    success, path = self.solver.solve()
+                    elapsed = (time.time() - start_t) * 1000
+                    nodes = getattr(self.solver, 'last_states_explored', 0)
+                    results.append({'name': name, 'success': success, 'path_len': len(path), 'nodes': nodes, 'time_ms': elapsed})
+                    if success and not self.last_solver_metrics:
+                        self._set_last_solver_metrics(name, nodes, elapsed, len(path))
+                    continue
+                except Exception as e:
+                    results.append({'name': name, 'success': False, 'path_len': 0, 'nodes': 0, 'time_ms': 0, 'error': str(e)})
+                    continue
+            # For other algorithms use existing mechanism (set algorithm_idx temporarily)
+            saved_alg = getattr(self, 'algorithm_idx', 0)
+            saved_preview = self.preview_overlay_visible
+            saved_modal = self.preview_modal_enabled
+            saved_path = list(self.auto_path) if self.auto_path else []
+            try:
+                self.preview_overlay_visible = False
+                self.preview_modal_enabled = False
+                self.algorithm_idx = idx if idx < 5 else 0
+                t0 = time.time()
+                success, path, teleports = self._smart_grid_path()
+                elapsed = (time.time() - t0) * 1000
+                nodes = getattr(self, 'last_search_iterations', 0)
+                results.append({'name': name, 'success': success, 'path_len': len(path), 'nodes': nodes, 'time_ms': elapsed})
+                if success and not self.last_solver_metrics:
+                    self._set_last_solver_metrics(name, nodes, elapsed, len(path))
+            finally:
+                self.algorithm_idx = saved_alg
+                self.preview_overlay_visible = saved_preview
+                self.preview_modal_enabled = saved_modal
+                self.auto_path = saved_path
+        self.solver_comparison_results = results
+        self.show_solver_comparison_overlay = True
+        self._set_message('Solver comparison complete', 3.0)
+
+    def _render_solver_comparison_overlay(self, surface: pygame.Surface):
+        """Render a small sidebar table with solver comparison results."""
+        if not getattr(self, 'solver_comparison_results', None):
+            return
+        sidebar_x = self.screen_w - self.SIDEBAR_WIDTH
+        box_w = self.SIDEBAR_WIDTH - 20
+        box_h = min(220, 24 + 20 * len(self.solver_comparison_results))
+        box_y = 220
+        box_rect = pygame.Rect(sidebar_x + 10, box_y, box_w, box_h)
+        pygame.draw.rect(surface, (38, 38, 55), box_rect)
+        pygame.draw.rect(surface, (100, 150, 255), box_rect, 1)
+        font = pygame.font.SysFont('Arial', 12, bold=True)
+        header = font.render('Solver   Success   Len   Nodes   ms', True, (200, 200, 255))
+        surface.blit(header, (box_rect.x + 6, box_rect.y + 6))
+        y = box_rect.y + 28
+        small = pygame.font.SysFont('Arial', 11)
+        for r in self.solver_comparison_results:
+            text = f"{r['name'][:7]:7}   {str(r.get('success',False))[:5]:5}   {r.get('path_len',0):3}   {r.get('nodes',0):6}   {int(r.get('time_ms',0)):4}"
+            surface.blit(small.render(text, True, (200,200,200)), (box_rect.x + 6, y))
+            y += 18
+        # Dismiss hint
+        hint = small.render('Press Esc to close', True, (150,150,150))
+        surface.blit(hint, (box_rect.x + 6, box_rect.y + box_rect.h - 18))
     
     def _set_message(self, message: str, duration: float = 3.0):
         """Set status message with timestamp for auto-hide."""
@@ -3978,6 +4203,20 @@ class ZeldaGUI:
             # Ensure stale sidebar button rects are cleared
             self.sidebar_start_button_rect = None
             self.sidebar_dismiss_button_rect = None
+
+        # Render topology overlay (if enabled)
+        if getattr(self, 'show_topology', False):
+            try:
+                self._render_topology_overlay(self.screen)
+            except Exception as e:
+                logger.warning(f"Topology overlay failed: {e}")
+
+        # Render solver comparison overlay (if available)
+        if getattr(self, 'show_solver_comparison_overlay', False):
+            try:
+                self._render_solver_comparison_overlay(self.screen)
+            except Exception as e:
+                logger.warning(f"Solver comparison overlay failed: {e}")
         
         # Render control panel
         if self.control_panel_enabled:
