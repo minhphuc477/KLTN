@@ -1005,6 +1005,47 @@ class ZeldaGUI:
                 )
                 button_idx += 1
     
+    def _update_inventory_and_hud(self):
+        """Reconcile counters and update the modern HUD (if present).
+
+        This centralizes synchronization so any pickup/usage path calls the same routine.
+        """
+        try:
+            self._sync_inventory_counters()
+        except Exception:
+            pass
+        # Defensive consistency check
+        try:
+            if getattr(self.env, 'state', None):
+                if getattr(self.env.state, 'keys', 0) < 0:
+                    logger.warning('Inventory inconsistency: env.state.keys < 0')
+        except Exception:
+            pass
+
+        # Update modern HUD if available
+        try:
+            if getattr(self, 'modern_hud', None):
+                self.modern_hud.update_game_state(
+                    keys=getattr(self.env.state, 'keys', 0),
+                    bombs=1 if getattr(self.env.state, 'has_bomb', False) else 0,
+                    has_boss_key=getattr(self.env.state, 'has_boss_key', False),
+                    position=getattr(self.env.state, 'position', (0, 0)),
+                    steps=getattr(self, 'step_count', 0),
+                    message=getattr(self, 'message', '')
+                )
+                # Also mirror counts onto HUD fields if present
+                try:
+                    if hasattr(self.modern_hud, 'keys_collected'):
+                        self.modern_hud.keys_collected = getattr(self, 'keys_collected', 0)
+                    if hasattr(self.modern_hud, 'bombs_collected'):
+                        self.modern_hud.bombs_collected = getattr(self, 'bombs_collected', 0)
+                    if hasattr(self.modern_hud, 'boss_keys_collected'):
+                        self.modern_hud.boss_keys_collected = getattr(self, 'boss_keys_collected', 0)
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.warning(f"Failed to update modern HUD: {e}")
+
     def _track_item_collection(self, old_state, new_state):
         """Detect when items are collected by comparing states."""
         # Check for key collection
@@ -1042,16 +1083,12 @@ class ZeldaGUI:
             except Exception:
                 pass
             try:
-                self._sync_inventory_counters()
-            except Exception:
-                pass
-            try:
-                logger.info(f"Item collected: key at {pos} (keys_collected={self.keys_collected}, env.keys={getattr(self.env.state,'keys',None)})")
                 self.last_pickup_msg = f"Picked up key at {pos}"
             except Exception:
                 pass
+            # Ensure HUD and counters are up to date
             try:
-                self._sync_inventory_counters()
+                self._update_inventory_and_hud()
             except Exception:
                 pass
         
@@ -1087,15 +1124,7 @@ class ZeldaGUI:
             except Exception:
                 pass
             try:
-                self._sync_inventory_counters()
-            except Exception:
-                pass
-            try:
-                logger.info(f"Item collected: bomb at {pos} (bombs_collected={self.bombs_collected}, env.has_bomb={getattr(self.env.state,'has_bomb',None)})")
-            except Exception:
-                pass
-            try:
-                self._sync_inventory_counters()
+                self._update_inventory_and_hud()
             except Exception:
                 pass
         
@@ -1121,6 +1150,10 @@ class ZeldaGUI:
             # Show toast notification
             self._show_toast("Boss Key acquired! Can now face the boss", 
                            duration=3.0, toast_type='success')
+            try:
+                self._update_inventory_and_hud()
+            except Exception:
+                pass
     
     def _track_item_usage(self, old_state, new_state):
         """Detect when items are used (doors opened, walls bombed)."""
@@ -1129,7 +1162,7 @@ class ZeldaGUI:
             keys_used = old_state.keys - new_state.keys
             pos = new_state.position
             timestamp = time.time()
-            
+
             self.used_items.append((pos, 'key', pos, timestamp))
             # Track used counter for visualization
             self.keys_used = getattr(self, 'keys_used', 0) + keys_used
@@ -1139,13 +1172,7 @@ class ZeldaGUI:
             except Exception:
                 pass
             try:
-                self._sync_inventory_counters()
-            except Exception:
-                pass
-            # Also decrement held keys count if consistent
-            try:
-                if getattr(self.env.state, 'keys', 0) >= 0:
-                    pass
+                self._update_inventory_and_hud()
             except Exception:
                 pass
 
@@ -1177,7 +1204,7 @@ class ZeldaGUI:
                 self.usage_effects.append(effect)
             self._show_toast(f"Bomb used! ({self.bombs_used} used)", duration=1.8, toast_type='info')
             try:
-                self._sync_inventory_counters()
+                self._update_inventory_and_hud()
             except Exception:
                 pass
         
@@ -1196,27 +1223,10 @@ class ZeldaGUI:
                 self.effects.add_effect(effect)
                 self.usage_effects.append(effect)
             self._show_toast(f"Boss key used! ({self.boss_keys_used} used)", duration=2.5, toast_type='info')
-            if self.effects:
-                effect = ItemUsageEffect(old_state.position, pos, 'bomb')
-                self.effects.add_effect(effect)
-                self.usage_effects.append(effect)
-            self._show_toast(f"Bomb used! ({self.bombs_used} used)", duration=1.8, toast_type='info')
-        
-        # Check if boss key was used
-        if old_state.has_boss_key and not new_state.has_boss_key:
-            pos = new_state.position
-            timestamp = time.time()
-            
-            self.used_items.append((pos, 'boss_key', pos, timestamp))
-            # Track boss key used
-            self.boss_keys_used = getattr(self, 'boss_keys_used', 0) + 1
-            
-            # Add usage effect
-            if self.effects:
-                effect = ItemUsageEffect(old_state.position, pos, 'boss_key')
-                self.effects.add_effect(effect)
-                self.usage_effects.append(effect)
-            self._show_toast(f"Boss key used! ({self.boss_keys_used} used)", duration=2.5, toast_type='info')
+            try:
+                self._update_inventory_and_hud()
+            except Exception:
+                pass
     
     def _scan_and_mark_items(self):
         """Scan the map for all items and create markers."""
