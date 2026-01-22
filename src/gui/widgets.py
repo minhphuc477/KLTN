@@ -251,7 +251,8 @@ class DropdownWidget(BaseWidget):
             self.hover_option = -1
             if self.dropdown_rect.collidepoint(mouse_pos):
                 rel_y = mouse_pos[1] - self.dropdown_rect.y
-                option_idx = rel_y // 24
+                # Ensure integer index (mouse positions may be floats)
+                option_idx = int(rel_y // 24)
                 if 0 <= option_idx < len(self.options):
                     self.hover_option = option_idx
         else:
@@ -273,9 +274,9 @@ class DropdownWidget(BaseWidget):
             # Check if clicking on an option
             if self.dropdown_rect.collidepoint(pos):
                 rel_y = pos[1] - self.dropdown_rect.y
-                option_idx = rel_y // 24
+                option_idx = int(rel_y // 24)
                 if 0 <= option_idx < len(self.options):
-                    self.selected = option_idx
+                    self.selected = int(option_idx)
                     # Respect keep_open_on_select flag
                     self.is_open = bool(self.keep_open_on_select)
                     return True
@@ -558,6 +559,32 @@ class WidgetManager:
                 if w.is_open:
                     log.debug(f"Closing dropdown {getattr(w,'control_name',None)} (keep {getattr(keep_widget,'control_name',None)})")
                 w.is_open = False
+
+    def snapshot_dropdown_state(self) -> dict:
+        """Return a snapshot of dropdown states keyed by control_name."""
+        state = {}
+        for w in self.widgets:
+            if isinstance(w, DropdownWidget) and getattr(w, 'control_name', None):
+                state[w.control_name] = {
+                    'selected': int(getattr(w, 'selected', 0)),
+                    'is_open': bool(getattr(w, 'is_open', False)),
+                    'keep_open_on_select': bool(getattr(w, 'keep_open_on_select', False))
+                }
+        return state
+
+    def apply_dropdown_state(self, state: dict) -> None:
+        """Apply a previously captured snapshot to current dropdown widgets."""
+        for w in self.widgets:
+            if isinstance(w, DropdownWidget) and getattr(w, 'control_name', None) in state:
+                s = state[w.control_name]
+                try:
+                    w.selected = int(min(max(0, int(s.get('selected', 0))), len(w.options) - 1))
+                except Exception:
+                    w.selected = 0
+                # Restore is_open exactly as snapshot (user intent persists across rebuild)
+                w.is_open = bool(s.get('is_open', False))
+                # Restore keep_open flag if present
+                w.keep_open_on_select = bool(s.get('keep_open_on_select', getattr(w, 'keep_open_on_select', False)))
 
     def handle_mouse_down(self, pos: Tuple[int, int], button: int) -> bool:
         """Handle mouse down for all widgets. Returns True if any handled."""

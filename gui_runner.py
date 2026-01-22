@@ -717,6 +717,8 @@ class ZeldaGUI:
         
         # Clear existing widgets if reinitializing
         if hasattr(self, 'widget_manager') and self.widget_manager:
+            # Preserve existing dropdown state (so rebuilding UI doesn't lose open/selected state)
+            saved_dropdown_state = self.widget_manager.snapshot_dropdown_state()
             self.widget_manager.widgets.clear()
         
         # === CONSISTENT LAYOUT CONSTANTS ===
@@ -855,6 +857,12 @@ class ZeldaGUI:
         
         # Section gap before buttons
         y_offset += section_gap
+
+        # After adding dropdowns, restore any previous dropdown snapshot
+        try:
+            self.widget_manager.apply_dropdown_state(saved_dropdown_state)
+        except Exception:
+            pass
         
         # === BUTTONS SECTION ===
         button_width = 125
