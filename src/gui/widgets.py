@@ -222,6 +222,11 @@ class DropdownWidget(BaseWidget):
         if PYGAME_AVAILABLE:
             self.font = pygame.font.SysFont('Arial', 12)
             self.label_font = pygame.font.SysFont('Arial', 11, bold=True)
+        # Initialize rects via pos setter to ensure full_rect is created
+        try:
+            self.pos = self._pos
+        except Exception:
+            pass
     
     @property
     def pos(self):
@@ -238,6 +243,15 @@ class DropdownWidget(BaseWidget):
             value[0], value[1] + 30,
             180, min(len(self.options) * option_height, 200)
         )
+        # Compute full_rect that includes label area above the control so layout
+        # routines can account for the extra height when computing content size.
+        label_h = 0
+        if getattr(self, 'label_font', None):
+            try:
+                label_h = self.label_font.get_height() + 4
+            except Exception:
+                label_h = 0
+        self.full_rect = pygame.Rect(self.rect.x, self.rect.y - label_h, self.rect.width, self.rect.height + label_h)
     
     def update(self, mouse_pos: Tuple[int, int], dt: float) -> None:
         """Update hover state."""
@@ -313,7 +327,8 @@ class DropdownWidget(BaseWidget):
             try:
                 lbl_font = getattr(self, 'label_font', None) or self.font
                 label_surf = lbl_font.render(str(self.label), True, self.theme.text_normal)
-                label_y = self.rect.y - (lbl_font.get_height() + 4)
+                # Align label inside the full_rect area
+                label_y = self.full_rect.y + 4 if getattr(self, 'full_rect', None) else self.rect.y - (lbl_font.get_height() + 4)
                 surface.blit(label_surf, (self.rect.x + 4, label_y))
             except Exception:
                 # Non-fatal: continue rendering the dropdown even if label paint fails
