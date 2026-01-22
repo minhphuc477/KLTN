@@ -198,13 +198,16 @@ class DropdownWidget(BaseWidget):
     
     def __init__(self, pos: Tuple[int, int], label: str, 
                  options: List[str], selected: int = 0,
-                 theme: Optional[WidgetTheme] = None):
+                 theme: Optional[WidgetTheme] = None,
+                 keep_open_on_select: bool = False):
         super().__init__(pygame.Rect(pos[0], pos[1], 180, 28), theme)
         self.label = label
         self.options = options
         self.selected = selected
         self.is_open = False
         self._pos = pos
+        # If True, keep the dropdown open after selecting an option
+        self.keep_open_on_select = bool(keep_open_on_select)
         
         # Calculate dropdown menu rect
         option_height = 24
@@ -273,7 +276,8 @@ class DropdownWidget(BaseWidget):
                 option_idx = rel_y // 24
                 if 0 <= option_idx < len(self.options):
                     self.selected = option_idx
-                    self.is_open = False
+                    # Respect keep_open_on_select flag
+                    self.is_open = bool(self.keep_open_on_select)
                     return True
             else:
                 # Clicked outside, close dropdown

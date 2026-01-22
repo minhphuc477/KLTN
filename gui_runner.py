@@ -750,6 +750,7 @@ class ZeldaGUI:
             ('priority_tie_break', 'Priority: Tie-Break by Locks'),
             ('priority_key_boost', 'Priority: Key-Pickup Boost'),
             ('enable_ara', 'Enable ARA* (weighted A*)'),
+            ('persist_dropdown_on_select', 'Keep dropdown open after select'),
         ]
         
         for flag_name, label in checkbox_labels:
@@ -771,7 +772,8 @@ class ZeldaGUI:
             (x_offset, y_offset),
             "Floor",
             ["Floor 1", "Floor 2", "Floor 3"],
-            selected=self.current_floor - 1
+            selected=self.current_floor - 1,
+            keep_open_on_select=self.feature_flags.get('persist_dropdown_on_select', False)
         )
         floor_dropdown.control_name = 'floor'
         self.widget_manager.add_widget(floor_dropdown)
@@ -782,7 +784,8 @@ class ZeldaGUI:
             (x_offset, y_offset),
             "Zoom",
             ["25%", "50%", "75%", "100%", "150%", "200%"],
-            selected=self.zoom_level_idx
+            selected=self.zoom_level_idx,
+            keep_open_on_select=self.feature_flags.get('persist_dropdown_on_select', False)
         )
         zoom_dropdown.control_name = 'zoom'
         self.widget_manager.add_widget(zoom_dropdown)
@@ -793,7 +796,8 @@ class ZeldaGUI:
             (x_offset, y_offset),
             "ARA* weight",
             ["1.0", "1.25", "1.5", "2.0"],
-            selected=0
+            selected=0,
+            keep_open_on_select=self.feature_flags.get('persist_dropdown_on_select', False)
         )
         ara_dropdown.control_name = 'ara_weight'
         self.widget_manager.add_widget(ara_dropdown)
@@ -804,7 +808,8 @@ class ZeldaGUI:
             (x_offset, y_offset),
             "Difficulty",
             ["Easy", "Medium", "Hard", "Expert"],
-            selected=self.difficulty_idx
+            selected=self.difficulty_idx,
+            keep_open_on_select=self.feature_flags.get('persist_dropdown_on_select', False)
         )
         difficulty_dropdown.control_name = 'difficulty'
         self.widget_manager.add_widget(difficulty_dropdown)
@@ -815,7 +820,8 @@ class ZeldaGUI:
             (x_offset, y_offset),
             "Presets",
             self.presets,
-            selected=self.current_preset_idx
+            selected=self.current_preset_idx,
+            keep_open_on_select=self.feature_flags.get('persist_dropdown_on_select', False)
         )
         presets_dropdown.control_name = 'presets'
         self.widget_manager.add_widget(presets_dropdown)
@@ -826,7 +832,8 @@ class ZeldaGUI:
             (x_offset, y_offset),
             "Solver",
             ["A*", "BFS", "Dijkstra", "Greedy", "D* Lite"],
-            selected=self.algorithm_idx
+            selected=self.algorithm_idx,
+            keep_open_on_select=self.feature_flags.get('persist_dropdown_on_select', False)
         )
         algorithm_dropdown.control_name = 'algorithm'
         self.widget_manager.add_widget(algorithm_dropdown)
@@ -837,7 +844,8 @@ class ZeldaGUI:
             (x_offset, y_offset),
             "Apply Threshold",
             ["0.70", "0.75", "0.80", "0.85", "0.90"],
-            selected=3
+            selected=3,
+            keep_open_on_select=self.feature_flags.get('persist_dropdown_on_select', False)
         )
         threshold_dropdown.control_name = 'match_threshold'
         self.widget_manager.add_widget(threshold_dropdown)
