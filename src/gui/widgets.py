@@ -308,6 +308,17 @@ class DropdownWidget(BaseWidget):
             bg_color = self.theme.bg_normal
             text_color = self.theme.text_normal
         
+        # Draw label/title above the dropdown if provided
+        if getattr(self, 'label', None):
+            try:
+                lbl_font = getattr(self, 'label_font', None) or self.font
+                label_surf = lbl_font.render(str(self.label), True, self.theme.text_normal)
+                label_y = self.rect.y - (lbl_font.get_height() + 4)
+                surface.blit(label_surf, (self.rect.x + 4, label_y))
+            except Exception:
+                # Non-fatal: continue rendering the dropdown even if label paint fails
+                pass
+
         # Draw main button
         pygame.draw.rect(surface, bg_color, self.rect)
         pygame.draw.rect(surface, self.theme.border, self.rect, 2)
