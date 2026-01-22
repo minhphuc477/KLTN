@@ -53,6 +53,9 @@ from simulation.validator import (
     GameState
 )
 
+# Local matcher for topology repair
+from Data.zelda_core import RoomGraphMatcher
+
 # Try to import Pygame
 try:
     import pygame
@@ -256,7 +259,10 @@ class ZeldaGUI:
             self.renderer = None
             self.effects = None
             self.modern_hud = None
-        
+
+        # State for match/undo stack
+        self.match_undo_stack = []
+
         # Heatmap state for A* visualization
         self.show_heatmap = False
         self.search_heatmap = {}  # position -> visit count
@@ -297,6 +303,30 @@ class ZeldaGUI:
         # Topology overlay and DOT export
         self.show_topology = False
         self.topology_export_path = None
+        # Topology legend & semantics (for overlays/tooltips)
+        self.show_topology_legend = False
+        self.topology_semantics = {
+            "nodes": {
+                "e": ["room", "enemy"],
+                "S": ["room", "switch"],
+                "b": ["room", "boss"],
+                "k": ["room", "key"],
+                "K": ["room", "boss key"],
+                "I": ["room", "key item"],
+                "p": ["room", "puzzle"],
+                "s": ["room", "start"],
+                "t": ["room", "triforce"]
+            },
+            "edges": {
+                "S": ["door", "switch locked"],
+                "b": ["door", "bombable"],
+                "k": ["door", "key locked"],
+                "K": ["door", "boss key locked"],
+                "I": ["door", "key item locked"],
+                "l": ["door", "soft locked"],
+                "s": ["visible", "impassable"]
+            }
+        }
 
         # Solver metrics and comparison results
         self.last_solver_metrics = None  # dict: {name,nodes,time_ms,path_len}
@@ -355,6 +385,7 @@ class ZeldaGUI:
         
         # === NEW: Item tracking for enhanced visualization ===
         self.collected_items = []  # List of (pos, item_type, timestamp)
+        self.item_type_map = {}  # pos -> item_type (key, bomb, boss_key, triforce)
         self.used_items = []       # List of (pos, item_type, target_pos, timestamp)
         self.item_markers = {}     # Dict: position -> ItemMarkerEffect
         self.collection_effects = []  # Active collection effects
@@ -415,11 +446,17 @@ class ZeldaGUI:
             'ml_heuristic': False,
             'dstar_lite': False,
             'show_heatmap': False,
+            'show_topology_legend': False,
             'show_minimap': True,
             'diagonal_movement': False,
             'speedrun_mode': False,
             'dynamic_difficulty': False,
             'force_grid': False,
+            'enable_prechecks': False,
+            'auto_prune_on_precheck': False,
+            'priority_tie_break': False,
+            'priority_key_boost': False,
+            'enable_ara': False,
         }
         # Toggle to force using selected grid algorithm even when graph info exists
         self.force_grid_algorithm = False
@@ -702,11 +739,17 @@ class ZeldaGUI:
             ('dstar_lite', 'D* Lite Replanning'),
             ('show_heatmap', 'Show Heatmap Overlay'),
             ('show_topology', 'Show Topology Overlay'),
+            ('show_topology_legend', 'Topology Legend (details)'),
             ('show_minimap', 'Show Minimap'),
             ('diagonal_movement', 'Diagonal Movement'),
             ('speedrun_mode', 'Speedrun Mode'),
             ('dynamic_difficulty', 'Dynamic Difficulty'),
             ('force_grid', 'Force Grid Solver'),
+            ('enable_prechecks', 'Enable Prechecks (fast checks before solve)'),
+            ('auto_prune_on_precheck', 'Auto-Prune Dead-Ends on Precheck'),
+            ('priority_tie_break', 'Priority: Tie-Break by Locks'),
+            ('priority_key_boost', 'Priority: Key-Pickup Boost'),
+            ('enable_ara', 'Enable ARA* (weighted A*)'),
         ]
         
         for flag_name, label in checkbox_labels:
@@ -744,6 +787,17 @@ class ZeldaGUI:
         zoom_dropdown.control_name = 'zoom'
         self.widget_manager.add_widget(zoom_dropdown)
         y_offset += dropdown_spacing
+
+        # ARA* weight (for weighted A* when enabled)
+        ara_dropdown = DropdownWidget(
+            (x_offset, y_offset),
+            "ARA* weight",
+            ["1.0", "1.25", "1.5", "2.0"],
+            selected=0
+        )
+        ara_dropdown.control_name = 'ara_weight'
+        self.widget_manager.add_widget(ara_dropdown)
+        y_offset += dropdown_spacing
         
         # Difficulty
         difficulty_dropdown = DropdownWidget(
@@ -777,6 +831,19 @@ class ZeldaGUI:
         algorithm_dropdown.control_name = 'algorithm'
         self.widget_manager.add_widget(algorithm_dropdown)
         y_offset += dropdown_spacing
+
+        # Match apply threshold (for tentative proposals)
+        threshold_dropdown = DropdownWidget(
+            (x_offset, y_offset),
+            "Apply Threshold",
+            ["0.70", "0.75", "0.80", "0.85", "0.90"],
+            selected=3
+        )
+        threshold_dropdown.control_name = 'match_threshold'
+        self.widget_manager.add_widget(threshold_dropdown)
+        # Keep a float copy
+        self.match_apply_threshold = float(threshold_dropdown.options[threshold_dropdown.selected])
+        y_offset += dropdown_spacing
         
         # Section gap before buttons
         y_offset += section_gap
@@ -804,6 +871,10 @@ class ZeldaGUI:
             ("Load Route", self._load_route),
             ("Export Topology", self._export_topology),
             ("Compare Solvers", self._run_solver_comparison),
+            ("Match Missing Nodes", self._match_missing_nodes),
+            ("Apply Tentative Matches", self._apply_tentative_matches),
+            ("Undo Last Match", self._undo_last_match),
+            ("Undo Prune", self._undo_prune),
         ]
         
         # Render primary buttons in 2x2 grid
@@ -944,6 +1015,13 @@ class ZeldaGUI:
             
             self.collected_items.append((pos, 'key', timestamp))
             self.keys_collected += keys_collected
+            # Mark pickup time for flashing UI
+            self.item_pickup_times['key'] = timestamp
+            # Ensure item type map contains this pos
+            try:
+                self.item_type_map[pos] = self.item_type_map.get(pos, 'key')
+            except Exception:
+                pass
             
             # Remove marker if exists
             if pos in self.item_markers and self.item_markers[pos].item_type == 'key':
@@ -959,6 +1037,23 @@ class ZeldaGUI:
             # Show toast notification
             self._show_toast(f"Key collected! Now have {self.keys_collected}/{self.total_keys}", 
                            duration=2.5, toast_type='success')
+            try:
+                logger.info(f"Detected key collection at {pos} (keys_collected={self.keys_collected}, env.keys={getattr(self.env.state,'keys',None)})")
+            except Exception:
+                pass
+            try:
+                self._sync_inventory_counters()
+            except Exception:
+                pass
+            try:
+                logger.info(f"Item collected: key at {pos} (keys_collected={self.keys_collected}, env.keys={getattr(self.env.state,'keys',None)})")
+                self.last_pickup_msg = f"Picked up key at {pos}"
+            except Exception:
+                pass
+            try:
+                self._sync_inventory_counters()
+            except Exception:
+                pass
         
         # Check for bomb collection
         if new_state.has_bomb and not old_state.has_bomb:
@@ -967,6 +1062,11 @@ class ZeldaGUI:
             
             self.collected_items.append((pos, 'bomb', timestamp))
             self.bombs_collected += 1
+            self.item_pickup_times['bomb'] = timestamp
+            try:
+                self.item_type_map[pos] = self.item_type_map.get(pos, 'bomb')
+            except Exception:
+                pass
             
             # Remove marker
             if pos in self.item_markers and self.item_markers[pos].item_type == 'bomb':
@@ -982,6 +1082,22 @@ class ZeldaGUI:
             # Show toast notification
             self._show_toast("Bomb acquired! Can now blow up weak walls", 
                            duration=3.0, toast_type='success')
+            try:
+                logger.info(f"Detected bomb collection at {pos} (bombs_collected={self.bombs_collected}, env.has_bomb={getattr(self.env.state,'has_bomb',None)})")
+            except Exception:
+                pass
+            try:
+                self._sync_inventory_counters()
+            except Exception:
+                pass
+            try:
+                logger.info(f"Item collected: bomb at {pos} (bombs_collected={self.bombs_collected}, env.has_bomb={getattr(self.env.state,'has_bomb',None)})")
+            except Exception:
+                pass
+            try:
+                self._sync_inventory_counters()
+            except Exception:
+                pass
         
         # Check for boss key collection
         if new_state.has_boss_key and not old_state.has_boss_key:
@@ -1015,12 +1131,31 @@ class ZeldaGUI:
             timestamp = time.time()
             
             self.used_items.append((pos, 'key', pos, timestamp))
-            
+            # Track used counter for visualization
+            self.keys_used = getattr(self, 'keys_used', 0) + keys_used
+            try:
+                logger.info(f"Key used at {pos} (keys_used={self.keys_used}, env.keys={getattr(self.env.state,'keys',None)})")
+                self.last_use_msg = f"Used key at {pos}"
+            except Exception:
+                pass
+            try:
+                self._sync_inventory_counters()
+            except Exception:
+                pass
+            # Also decrement held keys count if consistent
+            try:
+                if getattr(self.env.state, 'keys', 0) >= 0:
+                    pass
+            except Exception:
+                pass
+
             # Add usage effect
             if self.effects:
                 effect = ItemUsageEffect(old_state.position, pos, 'key')
                 self.effects.add_effect(effect)
                 self.usage_effects.append(effect)
+            # Show toast for visibility in auto-solve
+            self._show_toast(f"Key used! ({self.keys_used} used)", duration=1.8, toast_type='info')
         
         # Check if bomb was used
         if old_state.has_bomb and not new_state.has_bomb:
@@ -1028,12 +1163,23 @@ class ZeldaGUI:
             timestamp = time.time()
             
             self.used_items.append((pos, 'bomb', pos, timestamp))
+            # Track bombs used
+            self.bombs_used = getattr(self, 'bombs_used', 0) + 1
+            try:
+                logger.info(f"Bomb used at {pos} (bombs_used={self.bombs_used}, env.has_bomb={getattr(self.env.state,'has_bomb',None)})")
+            except Exception:
+                pass
             
             # Add explosion effect
             if self.effects:
                 effect = ItemUsageEffect(old_state.position, pos, 'bomb')
                 self.effects.add_effect(effect)
                 self.usage_effects.append(effect)
+            self._show_toast(f"Bomb used! ({self.bombs_used} used)", duration=1.8, toast_type='info')
+            try:
+                self._sync_inventory_counters()
+            except Exception:
+                pass
         
         # Check if boss key was used
         if old_state.has_boss_key and not new_state.has_boss_key:
@@ -1041,19 +1187,143 @@ class ZeldaGUI:
             timestamp = time.time()
             
             self.used_items.append((pos, 'boss_key', pos, timestamp))
+            # Track boss key used
+            self.boss_keys_used = getattr(self, 'boss_keys_used', 0) + 1
             
             # Add usage effect
             if self.effects:
                 effect = ItemUsageEffect(old_state.position, pos, 'boss_key')
                 self.effects.add_effect(effect)
                 self.usage_effects.append(effect)
+            self._show_toast(f"Boss key used! ({self.boss_keys_used} used)", duration=2.5, toast_type='info')
+            if self.effects:
+                effect = ItemUsageEffect(old_state.position, pos, 'bomb')
+                self.effects.add_effect(effect)
+                self.usage_effects.append(effect)
+            self._show_toast(f"Bomb used! ({self.bombs_used} used)", duration=1.8, toast_type='info')
+        
+        # Check if boss key was used
+        if old_state.has_boss_key and not new_state.has_boss_key:
+            pos = new_state.position
+            timestamp = time.time()
+            
+            self.used_items.append((pos, 'boss_key', pos, timestamp))
+            # Track boss key used
+            self.boss_keys_used = getattr(self, 'boss_keys_used', 0) + 1
+            
+            # Add usage effect
+            if self.effects:
+                effect = ItemUsageEffect(old_state.position, pos, 'boss_key')
+                self.effects.add_effect(effect)
+                self.usage_effects.append(effect)
+            self._show_toast(f"Boss key used! ({self.boss_keys_used} used)", duration=2.5, toast_type='info')
     
     def _scan_and_mark_items(self):
         """Scan the map for all items and create markers."""
         self.item_markers.clear()
+        self.item_type_map.clear()
         self.total_keys = 0
         self.total_bombs = 0
         self.total_boss_keys = 0
+
+    def _apply_pickup_at(self, pos: Tuple[int, int]) -> bool:
+        """Apply pickup logic at a position for teleport landings or external mutations.
+
+        This mutates self.env.state to include the collected item and updates
+        visual markers/effects and pickup timers. Returns True if an item was
+        collected at the position.
+        """
+        if not self.env:
+            return False
+        try:
+            r, c = pos
+            if r < 0 or c < 0 or r >= self.env.height or c >= self.env.width:
+                return False
+            if pos in getattr(self.env.state, 'collected_items', set()):
+                return False
+            tile_id = int(self.env.grid[r, c])
+            if tile_id not in (SEMANTIC_PALETTE['KEY_SMALL'], SEMANTIC_PALETTE.get('ITEM_BOMB', -1), SEMANTIC_PALETTE['KEY_BOSS'], SEMANTIC_PALETTE['TRIFORCE']):
+                return False
+
+            # Mutate state to add collected position and update inventories
+            try:
+                collected = set(getattr(self.env.state, 'collected_items', set()) or set())
+                collected = collected | {pos}
+                self.env.state.collected_items = collected
+            except Exception:
+                pass
+
+            if tile_id == SEMANTIC_PALETTE['KEY_SMALL']:
+                try:
+                    self.env.state.keys = getattr(self.env.state, 'keys', 0) + 1
+                except Exception:
+                    pass
+                self.collected_items.append((pos, 'key', time.time()))
+                self.item_pickup_times['key'] = time.time()
+                self.keys_collected = getattr(self, 'keys_collected', 0) + 1
+                # Remove marker if present
+                if pos in self.item_markers and self.item_markers[pos].item_type == 'key':
+                    del self.item_markers[pos]
+                if self.effects:
+                    eff = ItemCollectionEffect(pos, 'key', 'KEY', f'Key collected at ({pos[0]}, {pos[1]})!')
+                    self.effects.add_effect(eff)
+                    self.collection_effects.append(eff)
+                self._show_toast(f"Key collected! Now have {self.keys_collected}/{self.total_keys}", duration=2.5, toast_type='success')
+                self.item_type_map[pos] = 'key'
+                return True
+
+            if tile_id == SEMANTIC_PALETTE.get('ITEM_BOMB', -1):
+                try:
+                    self.env.state.has_bomb = True
+                except Exception:
+                    pass
+                self.collected_items.append((pos, 'bomb', time.time()))
+                self.item_pickup_times['bomb'] = time.time()
+                self.bombs_collected = getattr(self, 'bombs_collected', 0) + 1
+                if pos in self.item_markers and self.item_markers[pos].item_type == 'bomb':
+                    del self.item_markers[pos]
+                if self.effects:
+                    eff = ItemCollectionEffect(pos, 'bomb', 'BOMB', f'Bomb collected at ({pos[0]}, {pos[1]})!')
+                    self.effects.add_effect(eff)
+                    self.collection_effects.append(eff)
+                self._show_toast("Bomb acquired! Can now blow up weak walls", duration=3.0, toast_type='success')
+                self.item_type_map[pos] = 'bomb'
+                return True
+
+            if tile_id == SEMANTIC_PALETTE['KEY_BOSS']:
+                try:
+                    self.env.state.has_boss_key = True
+                except Exception:
+                    pass
+                self.collected_items.append((pos, 'boss_key', time.time()))
+                self.item_pickup_times['boss_key'] = time.time()
+                self.boss_keys_collected = getattr(self, 'boss_keys_collected', 0) + 1
+                if pos in self.item_markers and self.item_markers[pos].item_type == 'boss_key':
+                    del self.item_markers[pos]
+                if self.effects:
+                    eff = ItemCollectionEffect(pos, 'boss_key', 'BOSS KEY', f'Boss Key collected at ({pos[0]}, {pos[1]})!')
+                    self.effects.add_effect(eff)
+                    self.collection_effects.append(eff)
+                self._show_toast("Boss Key acquired! Can now face the boss", duration=3.0, toast_type='success')
+                self.item_type_map[pos] = 'boss_key'
+                return True
+
+            if tile_id == SEMANTIC_PALETTE['TRIFORCE']:
+                # Mark triforce collected as special event but do not increment counts
+                try:
+                    self.env.state.collected_items = getattr(self.env.state, 'collected_items', set()) | {pos}
+                except Exception:
+                    pass
+                if self.effects:
+                    eff = ItemCollectionEffect(pos, 'triforce', 'TRI', f'Triforce at ({pos[0]}, {pos[1]})!')
+                    self.effects.add_effect(eff)
+                self._show_toast("Triforce found!", duration=3.0, toast_type='success')
+                self.item_type_map[pos] = 'triforce'
+                return True
+
+        except Exception as e:
+            logger.warning(f"_apply_pickup_at failed: {e}")
+        return False
         
         if not self.env:
             return
@@ -1074,6 +1344,7 @@ class ZeldaGUI:
                     self.total_keys += 1
                     marker = ItemMarkerEffect(pos, 'key', 'K')
                     self.item_markers[pos] = marker
+                    self.item_type_map[pos] = 'key'
                     if self.effects:
                         self.effects.add_effect(marker)
                 
@@ -1081,6 +1352,7 @@ class ZeldaGUI:
                     self.total_bombs += 1
                     marker = ItemMarkerEffect(pos, 'bomb', 'B')
                     self.item_markers[pos] = marker
+                    self.item_type_map[pos] = 'bomb'
                     if self.effects:
                         self.effects.add_effect(marker)
                 
@@ -1088,12 +1360,14 @@ class ZeldaGUI:
                     self.total_boss_keys += 1
                     marker = ItemMarkerEffect(pos, 'boss_key', 'BK')
                     self.item_markers[pos] = marker
+                    self.item_type_map[pos] = 'boss_key'
                     if self.effects:
                         self.effects.add_effect(marker)
                 
                 elif tile_id == SEMANTIC_PALETTE['TRIFORCE']:
                     marker = ItemMarkerEffect(pos, 'triforce', 'TRI')
                     self.item_markers[pos] = marker
+                    self.item_type_map[pos] = 'triforce'
                     if self.effects:
                         self.effects.add_effect(marker)
     
@@ -1101,7 +1375,10 @@ class ZeldaGUI:
         """Render legend showing item counts."""
         if not self.env:
             return
-        
+        # Sync counters in case changes happened outside _track_* (defensive)
+        self._sync_inventory_counters()
+
+        # Legend drawing (unchanged)
         legend_x = 10
         legend_y = self.screen_h - 60
         
@@ -1115,8 +1392,9 @@ class ZeldaGUI:
         bombs_remaining = self.total_bombs - self.bombs_collected
         
         legend_text = [
-            f"Keys: {keys_remaining} remaining",
-            f"Bombs: {bombs_remaining} remaining",
+            f"Held - Keys: {self.env.state.keys} | Collected: {self.keys_collected} | Used: {getattr(self,'keys_used',0)}",
+            f"Held - Bombs: {1 if self.env.state.has_bomb else 0} | Collected: {self.bombs_collected} | Used: {getattr(self,'bombs_used',0)}",
+            f"Boss Keys: Collected {self.boss_keys_collected} | Used {getattr(self,'boss_keys_used',0)}"
         ]
         
         y_offset = legend_y + 8
@@ -1124,6 +1402,51 @@ class ZeldaGUI:
             text_surf = self.small_font.render(text, True, (255, 255, 200))
             surface.blit(text_surf, (legend_x + 10, y_offset))
             y_offset += 20
+
+    def _sync_inventory_counters(self):
+        """Reconcile counters from collected_items and env.state to ensure UI accuracy.
+
+        This is defensive: if tracking calls missed an event, we recompute from
+        known collected positions and initial item type map.
+        """
+        # Defaults
+        self.keys_collected = getattr(self, 'keys_collected', 0)
+        self.bombs_collected = getattr(self, 'bombs_collected', 0)
+        self.boss_keys_collected = getattr(self, 'boss_keys_collected', 0)
+
+        try:
+            collected_set = set(getattr(self.env.state, 'collected_items', set()) or set())
+        except Exception:
+            collected_set = set()
+
+        # Recompute counts based on initial item type map
+        kc = 0
+        bc = 0
+        bkc = 0
+        for pos in collected_set:
+            it = self.item_type_map.get(pos)
+            if it == 'key':
+                kc += 1
+            elif it == 'bomb':
+                bc += 1
+            elif it == 'boss_key':
+                bkc += 1
+        # Fall back to tracking list if map not available
+        if kc == 0 and self.collected_items:
+            kc = sum(1 for _pos, t, _ts in self.collected_items if t == 'key')
+        if bc == 0 and self.collected_items:
+            bc = sum(1 for _pos, t, _ts in self.collected_items if t == 'bomb')
+        if bkc == 0 and self.collected_items:
+            bkc = sum(1 for _pos, t, _ts in self.collected_items if t == 'boss_key')
+
+        self.keys_collected = kc
+        self.bombs_collected = bc
+        self.boss_keys_collected = bkc
+
+        # Ensure used counters exist
+        self.keys_used = getattr(self, 'keys_used', 0)
+        self.bombs_used = getattr(self, 'bombs_used', 0)
+        self.boss_keys_used = getattr(self, 'boss_keys_used', 0)
     
     def _render_error_banner(self, surface):
         """Render error message banner at top of screen with fade effect."""
@@ -1593,21 +1916,22 @@ class ZeldaGUI:
                         elif widget.flag_name == 'show_minimap':
                             self.show_minimap = widget.checked
                             self._set_message(f"Minimap: {'ON' if widget.checked else 'OFF'}")
-                        elif widget.flag_name == 'force_grid' and old_value != widget.checked:
-                            # Special handling for force-grid toggle
-                            self.force_grid_algorithm = widget.checked
-                            self._set_message(f"Force Grid Solver: {'ON' if widget.checked else 'OFF'}")
-                        elif old_value != widget.checked:
-                            # Generic feedback for other toggles
-                            status = 'enabled' if widget.checked else 'disabled'
-                            self._set_message(f"{widget.label}: {status}")
-                    
-                    # Handle dropdown selections
-                    elif isinstance(widget, DropdownWidget) and hasattr(widget, 'control_name'):
-                        if widget.control_name == 'floor':
-                            self.current_floor = widget.selected + 1
+                        elif widget.flag_name == 'show_topology' and old_value != widget.checked:
+                            # Enable/disable topology overlay
+                            self.show_topology = widget.checked
+                            if widget.checked:
+                                current = self.maps[self.current_map_idx]
+                                if not hasattr(current, 'graph') or not current.graph:
+                                    self._set_message('Topology not available for this map', 3.0)
+                                else:
+                                    self._set_message('Topology overlay: ON', 2.0)
+                            else:
+                                self._set_message('Topology overlay: OFF', 1.2)
                             self.message = f"Floor {self.current_floor} selected"
-                        elif widget.control_name == 'zoom':
+                        elif widget.flag_name == 'show_topology_legend' and old_value != widget.checked:
+                            self.show_topology_legend = widget.checked
+                            self._set_message(f"Topology legend: {'ON' if widget.checked else 'OFF'}", 1.8)
+                        elif hasattr(widget, 'control_name') and widget.control_name == 'zoom':
                             old_zoom_idx = self.zoom_level_idx
                             self.zoom_level_idx = widget.selected
                             if old_zoom_idx != self.zoom_level_idx:
@@ -1622,11 +1946,11 @@ class ZeldaGUI:
                                         self._center_view()
                                         zoom_labels = ["25%", "50%", "75%", "100%", "150%", "200%"]
                                         self.message = f"Zoom: {zoom_labels[self.zoom_level_idx]}"
-                        elif widget.control_name == 'difficulty':
+                        elif hasattr(widget, 'control_name') and widget.control_name == 'difficulty':
                             self.difficulty_idx = widget.selected
                             difficulty_names = ["Easy", "Medium", "Hard", "Expert"]
                             self.message = f"Difficulty: {difficulty_names[self.difficulty_idx]}"
-                        elif widget.control_name == 'algorithm':
+                        elif hasattr(widget, 'control_name') and widget.control_name == 'algorithm':
                             old_algorithm_idx = self.algorithm_idx
                             self.algorithm_idx = widget.selected
                             if old_algorithm_idx != self.algorithm_idx:
@@ -1636,7 +1960,7 @@ class ZeldaGUI:
                                 if self.auto_path:
                                     self.auto_path = []
                                     self.auto_mode = False
-                        elif widget.control_name == 'presets':
+                        elif hasattr(widget, 'control_name') and widget.control_name == 'presets':
                             old = self.current_preset_idx
                             self.current_preset_idx = widget.selected
                             if old != self.current_preset_idx:
@@ -1822,6 +2146,13 @@ class ZeldaGUI:
         self.keys_collected = 0
         self.bombs_collected = 0
         self.boss_keys_collected = 0
+        # Reset usage counters
+        self.keys_used = 0
+        self.bombs_used = 0
+        self.boss_keys_used = 0
+        # Reset collected/used logs
+        self.collected_items = []
+        self.used_items = []
         
         # Clear search heatmap
         self.search_heatmap = {}
@@ -1854,8 +2185,10 @@ class ZeldaGUI:
         map_h = self.env.height * self.TILE_SIZE
         view_w = self.screen_w - self.SIDEBAR_WIDTH
         view_h = self.screen_h - self.HUD_HEIGHT
-        self.view_offset_x = max(0, (map_w - view_w) // 2)
-        self.view_offset_y = max(0, (map_h - view_h) // 2)
+        # Allow centering even when map is smaller than view (negative offset)
+        self.view_offset_x = (map_w - view_w) // 2
+        self.view_offset_y = (map_h - view_h) // 2
+        self._clamp_view_offset()
     
     def _auto_fit_zoom(self):
         """Automatically set zoom level to fit the entire map in view."""
@@ -1895,18 +2228,50 @@ class ZeldaGUI:
                 immediate=True
             )
     
-    def _change_zoom(self, delta: int):
-        """Change zoom level by delta steps."""
+    def _change_zoom(self, delta: int, center: tuple | None = None):
+        """Change zoom level by delta steps.
+
+        If `center` is provided (screen coordinates), the view will be adjusted so
+        that the map tile under the `center` pixel remains under the cursor after
+        the zoom. If `center` is None, the view is centered as before.
+        """
         old_idx = self.zoom_idx
-        self.zoom_idx = max(0, min(len(self.ZOOM_LEVELS) - 1, self.zoom_idx + delta))
-        if self.zoom_idx != old_idx:
-            self.TILE_SIZE = self.ZOOM_LEVELS[self.zoom_idx]
-            self._load_assets()  # Reload assets at new size
-            # Update renderer tile size
-            if self.renderer:
-                self.renderer.set_tile_size(self.TILE_SIZE)
-            self._center_view()
-            self.message = f"Zoom: {self.TILE_SIZE}px"
+        new_idx = max(0, min(len(self.ZOOM_LEVELS) - 1, self.zoom_idx + delta))
+        if new_idx == old_idx:
+            return
+
+        # Compute tile-space coordinates under center (in tile units)
+        if center is None:
+            center_x = (self.screen_w - self.SIDEBAR_WIDTH) // 2
+            center_y = (self.screen_h - self.HUD_HEIGHT) // 2
+        else:
+            center_x, center_y = center
+            # Clamp center to map area
+            center_x = max(0, min(center_x, self.screen_w - self.SIDEBAR_WIDTH))
+            center_y = max(0, min(center_y, self.screen_h - self.HUD_HEIGHT))
+
+        old_tile = self.TILE_SIZE
+        # Tile coordinates (floating) corresponding to center pixel
+        tile_x = (self.view_offset_x + center_x) / float(old_tile) if old_tile else 0.0
+        tile_y = (self.view_offset_y + center_y) / float(old_tile) if old_tile else 0.0
+
+        # Apply new zoom
+        self.zoom_idx = new_idx
+        self.TILE_SIZE = self.ZOOM_LEVELS[self.zoom_idx]
+        self._load_assets()  # Reload assets at new size
+        # Update renderer tile size
+        if self.renderer:
+            self.renderer.set_tile_size(self.TILE_SIZE)
+
+        # Compute new offsets so (tile_x, tile_y) stays under center pixel
+        new_view_offset_x = int(tile_x * self.TILE_SIZE - center_x)
+        new_view_offset_y = int(tile_y * self.TILE_SIZE - center_y)
+        self.view_offset_x = new_view_offset_x
+        self.view_offset_y = new_view_offset_y
+        # Clamp to valid ranges
+        self._clamp_view_offset()
+
+        self.message = f"Zoom: {self.TILE_SIZE}px"
     
     def _toggle_fullscreen(self):
         """Toggle fullscreen mode."""
@@ -2047,6 +2412,23 @@ class ZeldaGUI:
                             continue
                     # Mouse click on sidebar buttons handled further down when button rects exist
 
+                # Quick key: T toggles topology overlay
+                if event.type == pygame.KEYDOWN and event.key == pygame.K_t:
+                    self.show_topology = not getattr(self, 'show_topology', False)
+                    # Reflect the panel checkbox if present
+                    for w in (self.widget_manager.widgets if self.widget_manager else []):
+                        if isinstance(w, CheckboxWidget) and getattr(w, 'flag_name', '') == 'show_topology':
+                            w.checked = self.show_topology
+                    if self.show_topology:
+                        # Notify and warn if no graph
+                        cur = self.maps[self.current_map_idx]
+                        if not hasattr(cur, 'graph') or not cur.graph:
+                            self._set_message('Topology not available for this map', 3.0)
+                        else:
+                            self._set_message('Topology overlay: ON', 2.0)
+                    else:
+                        self._set_message('Topology overlay: OFF', 1.2)
+                    continue
                 if self.path_preview_mode and self.path_preview_dialog:
                     result = self.path_preview_dialog.handle_input(event)
                     if result == 'start':
@@ -2109,7 +2491,13 @@ class ZeldaGUI:
                         self.control_panel_ignore_click_until = time.time() + 0.12
                     else:
                         # Zoom with mouse wheel when not over panel
-                        self._change_zoom(event.y)
+                        # Only perform mouse-centered zoom when the mouse is over the main map area
+                        sidebar_x = self.screen_w - self.SIDEBAR_WIDTH
+                        if mouse_pos[0] < sidebar_x:
+                            self._change_zoom(event.y, center=mouse_pos)
+                        else:
+                            # Falling back to center zoom if wheel over sidebar
+                            self._change_zoom(event.y)
                 
                 elif event.type == pygame.MOUSEBUTTONDOWN:
                     mouse_pos = pygame.mouse.get_pos()
@@ -2552,19 +2940,28 @@ class ZeldaGUI:
         pygame.quit()
     
     def _clamp_view_offset(self):
-        """Clamp view offset to valid range."""
+        """Clamp view offset to valid range.
+
+        When the dungeon/map is smaller than the viewport, allow negative offsets so
+        the user can pan the small map freely inside the window (showing empty
+        margins) while still preventing arbitrary unrestricted panning.
+        """
         if self.env is None:
             return
         map_w = self.env.width * self.TILE_SIZE
         map_h = self.env.height * self.TILE_SIZE
         view_w = self.screen_w - self.SIDEBAR_WIDTH
         view_h = self.screen_h - self.HUD_HEIGHT
-        
+
+        # Allow negative minimum when map is smaller than view so the map can be
+        # shifted inside the viewport. When map is larger, behave as before.
+        min_offset_x = min(0, map_w - view_w)
         max_offset_x = max(0, map_w - view_w)
+        min_offset_y = min(0, map_h - view_h)
         max_offset_y = max(0, map_h - view_h)
-        
-        self.view_offset_x = max(0, min(self.view_offset_x, max_offset_x))
-        self.view_offset_y = max(0, min(self.view_offset_y, max_offset_y))
+
+        self.view_offset_x = min(max(self.view_offset_x, min_offset_x), max_offset_x)
+        self.view_offset_y = min(max(self.view_offset_y, min_offset_y), max_offset_y)
     
     def _center_on_player(self):
         """Center the view on the player position."""
@@ -2638,6 +3035,36 @@ class ZeldaGUI:
             else:
                 # Visualization not available: just execute immediately
                 self._execute_auto_solve(path, solver_result or {}, teleports)
+
+        # Run prechecks and optional pruning if the feature is enabled
+        if self.feature_flags.get('enable_prechecks', False):
+            from Data.zelda_core import ZeldaDungeonAdapter
+            ok, reason = ZeldaDungeonAdapter.precheck_dungeon(current_dungeon)
+            if not ok:
+                self._show_warning(reason)
+                self.message = f"Precheck failed: {reason}"
+                return
+            if self.feature_flags.get('auto_prune_on_precheck', False):
+                # Snapshot current rooms & mapping to allow undo
+                self._precheck_snapshot = {
+                    'rooms': dict(current_dungeon.rooms),
+                    'room_to_node': dict(getattr(current_dungeon, 'room_to_node', {}) or {})
+                }
+                pruned_rooms, removed = ZeldaDungeonAdapter.prune_dead_ends(current_dungeon.rooms, preserve={current_dungeon.start_pos, current_dungeon.triforce_pos})
+                if removed:
+                    # Apply pruned rooms (non-destructive snapshot kept)
+                    current_dungeon.rooms = pruned_rooms
+                    # Re-run matching cautiously (best-effort)
+                    try:
+                        matcher = RoomGraphMatcher()
+                        new_dungeon = matcher.match(pruned_rooms, current_dungeon.graph)
+                        # Update dungeon mapping but keep other metadata
+                        current_dungeon.room_to_node = getattr(new_dungeon, 'room_to_node', {})
+                        for pos, room in current_dungeon.rooms.items():
+                            room.graph_node_id = current_dungeon.room_to_node.get(pos)
+                    except Exception as e:
+                        logger.warning('Prune applied but rematching failed: %s', e)
+                    self._set_message(f"Pruned {len(removed)} dead-end rooms before solving", 4.0)
 
         # If D* Lite is explicitly chosen or the flag is on, try D* Lite first for full state-space replanning
         if (self.feature_flags.get('dstar_lite', False) or getattr(self, 'algorithm_idx', 0) == 4):
@@ -2782,6 +3209,28 @@ class ZeldaGUI:
             return
 
         # As a final fallback, run the state-space A* solver (original fallback behavior)
+        # Reinstantiate solver with user-selected priority options if any
+        priority_options = {
+            'tie_break': self.feature_flags.get('priority_tie_break', False),
+            'key_boost': self.feature_flags.get('priority_key_boost', False),
+            'enable_ara': self.feature_flags.get('enable_ara', False),
+        }
+        # Find ara weight dropdown if present
+        ara_widget = next((w for w in self.widget_manager.widgets if getattr(w, 'control_name', None) == 'ara_weight'), None)
+        try:
+            if ara_widget:
+                priority_options['ara_weight'] = float(ara_widget.options[ara_widget.selected])
+            else:
+                priority_options['ara_weight'] = 1.0
+        except Exception:
+            priority_options['ara_weight'] = 1.0
+
+        # Recreate solver to ensure options take effect
+        try:
+            self.solver = StateSpaceAStar(self.env, priority_options=priority_options)
+        except Exception:
+            self.solver = StateSpaceAStar(self.env)
+
         success2, path2, states = self.solver.solve()
         if success2:
             self.auto_path = path2
@@ -2805,6 +3254,11 @@ class ZeldaGUI:
         self.auto_path = path
         self.auto_step_idx = 0
         self.auto_mode = True
+        # Reset usage counters for visual run
+        self.keys_used = 0
+        self.bombs_used = 0
+        self.boss_keys_used = 0
+        self.used_items = []
         self.env.reset()
         
         # Build informative message
@@ -2823,6 +3277,11 @@ class ZeldaGUI:
         """
         self.auto_step_idx = 0
         self.auto_mode = True
+        # Reset usage counters for visual run
+        self.keys_used = 0
+        self.bombs_used = 0
+        self.boss_keys_used = 0
+        self.used_items = []
         self.env.reset()
         
         # Dismiss preview / overlay
@@ -3483,14 +3942,25 @@ class ZeldaGUI:
                 self.env.state.position = target
                 self._set_message(f"Teleport! {current} -> {target}")
                 self.status_message = "Teleporting..."
-                
+
+                # Apply pickup at teleport destination (some teleports land on items)
+                try:
+                    self._apply_pickup_at(target)
+                except Exception as e:
+                    logger.warning(f"Pickup application failed on teleport: {e}")
+
                 # Track item changes (with error handling)
                 try:
                     self._track_item_collection(old_state, self.env.state)
                     self._track_item_usage(old_state, self.env.state)
+                    # Ensure counters are immediately reconciled for UI
+                    try:
+                        self._sync_inventory_counters()
+                    except Exception:
+                        pass
                 except Exception as e:
                     logger.warning(f"Item tracking failed: {e}")
-                
+
                 # Update visual position (instant for teleport)
                 if self.renderer:
                     try:
@@ -3554,11 +4024,19 @@ class ZeldaGUI:
                     steps=self.step_count,
                     message=self.message
                 )
-                # Also update inventory display with collection counts
+                # Sync counters and update inventory display with collection counts
+                self._sync_inventory_counters()
                 if hasattr(self.modern_hud, 'keys_collected'):
                     self.modern_hud.keys_collected = self.keys_collected
                     self.modern_hud.bombs_collected = self.bombs_collected
                     self.modern_hud.boss_keys_collected = self.boss_keys_collected
+                # Update usage counters for modern HUD if supported
+                if hasattr(self.modern_hud, 'keys_used'):
+                    self.modern_hud.keys_used = getattr(self, 'keys_used', 0)
+                if hasattr(self.modern_hud, 'bombs_used'):
+                    self.modern_hud.bombs_used = getattr(self, 'bombs_used', 0)
+                if hasattr(self.modern_hud, 'boss_keys_used'):
+                    self.modern_hud.boss_keys_used = getattr(self, 'boss_keys_used', 0)
             
             # Update visual position (smooth)
             if self.renderer:
@@ -3651,39 +4129,523 @@ class ZeldaGUI:
             self._set_message('NetworkX not available - cannot export DOT automatically', 4.0)
 
     def _render_topology_overlay(self, surface: pygame.Surface):
-        """Draw room nodes and edges on the map area."""
+        """Draw room nodes and edges on the map area with high-visibility styling.
+
+        Uses `room_to_node` mapping to place graph node ids on the stitched room positions.
+        """
         current = self.maps[self.current_map_idx]
         if not hasattr(current, 'graph') or not current.graph:
             return
         graph = current.graph
         room_positions = getattr(current, 'room_positions', {})
-        # Draw edges
-        for u, v in graph.edges():
-            ru = room_positions.get(u)
-            rv = room_positions.get(v)
-            if not ru or not rv:
+        room_to_node = getattr(current, 'room_to_node', {})
+        node_to_room = {v: k for k, v in room_to_node.items()} if room_to_node else {}
+
+        # Prepare an alpha surface for glow effects
+        try:
+            overlay = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
+        except Exception:
+            overlay = None
+
+        # Precompute pixel positions for nodes (by node id)
+        node_pos = {}
+        unmatched_nodes = 0
+        unmatched_node_ids = []
+        for node in graph.nodes():
+            room_pos = node_to_room.get(node)
+            if room_pos is None:
+                unmatched_nodes += 1
+                unmatched_node_ids.append(node)
                 continue
-            # room centers
-            cu = (ru[1] * self.TILE_SIZE + self.TILE_SIZE * 0.5 - self.view_offset_x,
-                  ru[0] * self.TILE_SIZE + self.TILE_SIZE * 0.5 - self.view_offset_y)
-            cv = (rv[1] * self.TILE_SIZE + self.TILE_SIZE * 0.5 - self.view_offset_x,
-                  rv[0] * self.TILE_SIZE + self.TILE_SIZE * 0.5 - self.view_offset_y)
-            try:
-                pygame.draw.line(surface, (120, 200, 255), cu, cv, 2)
-            except Exception:
-                pass
-        # Draw nodes
-        for room, (ry, rx) in room_positions.items():
+            rp = room_positions.get(room_pos)
+            if not rp:
+                unmatched_nodes += 1
+                unmatched_node_ids.append(node)
+                continue
+            ry, rx = rp
             cx = rx * self.TILE_SIZE + self.TILE_SIZE * 0.5 - self.view_offset_x
             cy = ry * self.TILE_SIZE + self.TILE_SIZE * 0.5 - self.view_offset_y
-            r = max(4, int(self.TILE_SIZE * 0.25))
+            node_pos[node] = (cx, cy)
+
+    def _match_missing_nodes(self):
+        """Attempt to infer and stage mapping proposals for unmatched nodes.
+
+        Uses RoomGraphMatcher.infer_missing_mappings to generate proposals with confidences.
+        High-confidence proposals (>= configured threshold) are applied automatically.
+        Lower confidence proposals are kept as 'tentative' in `current.match_proposals` for manual apply.
+        """
+        current = self.maps[self.current_map_idx]
+        graph = getattr(current, 'graph', None)
+        rooms = getattr(current, 'rooms', None)
+        room_positions = getattr(current, 'room_positions', None)
+        room_to_node = dict(getattr(current, 'room_to_node', {}) or {})
+
+        if graph is None or rooms is None:
+            self._set_message('No topology available for this map', 3.0)
+            return
+
+        matcher = RoomGraphMatcher()
+        proposed_r2n, proposed_n2r, confidences = matcher.infer_missing_mappings(
+            rooms, graph, room_positions=room_positions, room_to_node=room_to_node)
+
+        if not proposed_r2n:
+            self._set_message('No proposals for missing nodes', 3.0)
+            return
+
+        # Save proposals for later apply/preview
+        current.match_proposals = (proposed_r2n, proposed_n2r, confidences)
+
+        # Determine configured threshold
+        threshold_widget = next((w for w in self.widget_manager.widgets if getattr(w, 'control_name', None) == 'match_threshold'), None)
+        try:
+            threshold_val = float(threshold_widget.options[threshold_widget.selected]) if threshold_widget else getattr(self, 'match_apply_threshold', 0.85)
+        except Exception:
+            threshold_val = getattr(self, 'match_apply_threshold', 0.85)
+
+        # Split by confidence
+        confident = {n: r for r, n in proposed_r2n.items() if confidences.get(n, 0) >= threshold_val}
+        tentative = {n: r for r, n in proposed_r2n.items() if confidences.get(n, 0) < threshold_val}
+
+        applied = 0
+        if confident:
+            # Save undo snapshot
+            snapshot = dict(getattr(current, 'room_to_node', {}) or {})
+            applied_nodes = list(confident.items())
+            self.match_undo_stack.append(snapshot)
+
+            # Apply confident matches
+            for room_pos, node_id in confident.items():
+                current.room_to_node[room_pos] = node_id
+                current.rooms[room_pos].graph_node_id = node_id
+                applied += 1
+
+            self._set_message(f'Applied {applied} confident matches. {len(tentative)} tentative remain', 4.0)
+            logger.info('Applied matches: %s', applied_nodes)
+
+        else:
+            self._set_message(f'No matches above threshold ({threshold_val}). {len(proposed_r2n)} proposals available', 5.0)
+            logger.info('Match proposals (none auto-applied):')
+            for node, room in proposed_n2r.items():
+                logger.info('  Node %s -> Room %s (conf=%.2f)', node, room, confidences.get(node, 0.0))
+
+    def _undo_last_match(self):
+        """Undo last applied match snapshot, if any."""
+        current = self.maps[self.current_map_idx]
+        if not self.match_undo_stack:
+            self._set_message('Nothing to undo', 2.0)
+            return
+
+        snapshot = self.match_undo_stack.pop()
+        # Restore room_to_node and room.graph_node_id
+        current.room_to_node = dict(snapshot)
+        for rpos, room in current.rooms.items():
+            room.graph_node_id = current.room_to_node.get(rpos)
+
+        # Clear staged proposals (they may be invalid now)
+        if hasattr(current, 'match_proposals'):
+            del current.match_proposals
+
+        self._set_message('Undo: restored previous mapping', 3.0)
+        logger.info('Undo applied: restored previous mapping')
+
+    def _undo_prune(self):
+        """Undo the last applied prune snapshot, if any."""
+        if not hasattr(self, '_precheck_snapshot') or not self._precheck_snapshot:
+            self._set_message('No prune snapshot to undo', 2.0)
+            return
+        current = self.maps[self.current_map_idx]
+        snap = self._precheck_snapshot
+        current.rooms = dict(snap['rooms'])
+        current.room_to_node = dict(snap.get('room_to_node', {}))
+        for pos, room in current.rooms.items():
+            room.graph_node_id = current.room_to_node.get(pos)
+        # Clear snapshot
+        self._precheck_snapshot = None
+        self._set_message('Undo: restored rooms before pruning', 3.0)
+        logger.info('Undo prune: restored previous rooms and mapping')
+
+    def _apply_tentative_matches(self):
+        """Apply staged tentative matches above the configured threshold."""
+        current = self.maps[self.current_map_idx]
+        if not hasattr(current, 'match_proposals'):
+            self._set_message('No staged proposals to apply', 2.0)
+            return
+
+        proposed_r2n, proposed_n2r, confidences = current.match_proposals
+
+        threshold_widget = next((w for w in self.widget_manager.widgets if getattr(w, 'control_name', None) == 'match_threshold'), None)
+        try:
+            threshold_val = float(threshold_widget.options[threshold_widget.selected]) if threshold_widget else getattr(self, 'match_apply_threshold', 0.85)
+        except Exception:
+            threshold_val = getattr(self, 'match_apply_threshold', 0.85)
+
+        to_apply = {n: r for r, n in proposed_r2n.items() if confidences.get(n, 0) >= threshold_val}
+
+        if not to_apply:
+            self._set_message('No proposals meet threshold', 2.0)
+            return
+
+        # Snapshot and apply
+        snapshot = dict(getattr(current, 'room_to_node', {}) or {})
+        self.match_undo_stack.append(snapshot)
+        applied = 0
+        for room_pos, node_id in to_apply.items():
+            current.room_to_node[room_pos] = node_id
+            current.rooms[room_pos].graph_node_id = node_id
+            applied += 1
+
+        # Remove applied from staged proposals
+        for node_id in list(to_apply.values()):
+            proposed_n2r.pop(node_id, None)
+        for room_pos in list(to_apply.keys()):
+            proposed_r2n.pop(room_pos, None)
+
+        if not proposed_r2n:
+            del current.match_proposals
+
+        self._set_message(f'Applied {applied} tentative matches', 3.0)
+        logger.info('Applied tentative matches: %d', applied)
+
+        # Color maps for inline markers
+        marker_color_map = {
+            's': (80, 220, 80), 'k': (255, 215, 0), 'K': (200, 160, 0),
+            'b': (220, 40, 40), 'e': (200, 60, 60), 'I': (160, 40, 200),
+            'p': (80, 160, 255), 't': (255, 200, 60)
+        }
+        edge_color_map = {'S': (40, 200, 255), 'b': (220, 40, 40), 'k': (255, 180, 60), 'l': (160, 80, 200), 's': (100, 100, 100)}
+
+        # Draw edges (shadow + bright center line) between placed nodes and inline labels
+        for u, v in graph.edges():
+            pu = node_pos.get(u)
+            pv = node_pos.get(v)
+            if not pu or not pv:
+                continue
             try:
-                pygame.draw.circle(surface, (255, 200, 100), (int(cx), int(cy)), r)
-                font = pygame.font.SysFont('Arial', max(10, int(self.TILE_SIZE // 6)))
-                txt = font.render(str(room), True, (20, 20, 30))
-                surface.blit(txt, (int(cx) - txt.get_width() // 2, int(cy) - txt.get_height() // 2))
+                if overlay:
+                    pygame.draw.line(overlay, (20, 40, 60, 220), pu, pv, max(6, int(self.TILE_SIZE * 0.2)))
+                    pygame.draw.line(overlay, (40, 200, 255, 220), pu, pv, max(3, int(self.TILE_SIZE * 0.12)))
+                else:
+                    pygame.draw.line(surface, (20, 40, 60), pu, pv, max(6, int(self.TILE_SIZE * 0.2)))
+                    pygame.draw.line(surface, (40, 200, 255), pu, pv, max(3, int(self.TILE_SIZE * 0.12)))
+
+                # Inline edge label: midpoint marker with letter (if edge has label)
+                try:
+                    ed = graph.get_edge_data(u, v) or {}
+                    label_char = ed.get('label') or ed.get('edge_type', '')
+                    if label_char:
+                        # If label is long (edge_type like 'key_locked'), prefer the first letter key if present
+                        if len(label_char) > 1 and label_char in edge_color_map:
+                            ch = label_char
+                        else:
+                            # Some DOT edges use single-char labels like 'k', 'S', 'l'
+                            ch = label_char if len(label_char) == 1 else None
+                        if ch:
+                            mx = (pu[0] + pv[0]) / 2
+                            my = (pu[1] + pv[1]) / 2
+                            bg = edge_color_map.get(ch, (80, 80, 120))
+                            # Draw a small rectangle with the letter
+                            rect_w = max(12, int(self.TILE_SIZE * 0.6))
+                            rect_h = max(12, int(self.TILE_SIZE * 0.4))
+                            rx = int(mx - rect_w / 2)
+                            ry = int(my - rect_h / 2)
+                            pygame.draw.rect(surface, bg, (rx, ry, rect_w, rect_h))
+                            pygame.draw.rect(surface, (10, 10, 10), (rx, ry, rect_w, rect_h), 1)
+                            tf = pygame.font.SysFont('Arial', max(10, int(rect_h * 0.6)), bold=True)
+                            label_s = tf.render(str(ch), True, (255, 255, 255))
+                            surface.blit(label_s, (rx + rect_w//2 - label_s.get_width()//2, ry + rect_h//2 - label_s.get_height()//2))
+                except Exception:
+                    pass
             except Exception:
                 pass
+
+        # Draw nodes with halo, fill, outline, and labeled badge
+        hovered_node = None
+        hovered_edge = None
+        mouse_pos = pygame.mouse.get_pos() if pygame.get_init() else (0, 0)
+        for node, (cx, cy) in node_pos.items():
+            radius = max(6, int(self.TILE_SIZE * 0.35))
+            try:
+                if overlay:
+                    pygame.draw.circle(overlay, (40, 200, 255, 90), (int(cx), int(cy)), int(radius * 1.6))
+                pygame.draw.circle(surface, (255, 160, 60), (int(cx), int(cy)), radius)
+                pygame.draw.circle(surface, (15, 15, 15), (int(cx), int(cy)), radius, 2)
+
+                # Node label (node id)
+                font = pygame.font.SysFont('Arial', max(12, int(self.TILE_SIZE // 5)), bold=True)
+                label = str(node)
+                txt = font.render(label, True, (255, 255, 255))
+                outline = font.render(label, True, (10, 10, 10))
+                ox = int(cx) - txt.get_width() // 2
+                oy = int(cy) - txt.get_height() // 2
+                surface.blit(outline, (ox - 1, oy))
+                surface.blit(outline, (ox + 1, oy))
+                surface.blit(outline, (ox, oy - 1))
+                surface.blit(outline, (ox, oy + 1))
+                surface.blit(txt, (ox, oy))
+
+                # Semantic inline marker (small colored circle with char)
+                try:
+                    nattr = graph.nodes[node] if hasattr(graph, 'nodes') else {}
+                    label_char = nattr.get('label') if isinstance(nattr, dict) else None
+                    # Prefer single-character label, else derive from flags
+                    if not label_char or len(label_char) != 1:
+                        if nattr.get('is_start'):
+                            label_char = 's'
+                        elif nattr.get('is_triforce'):
+                            label_char = 't'
+                        elif nattr.get('is_boss'):
+                            label_char = 'b'
+                        elif nattr.get('has_key'):
+                            label_char = 'k'
+                        elif nattr.get('has_item'):
+                            label_char = 'I'
+                        elif nattr.get('has_enemy'):
+                            label_char = 'e'
+                        elif nattr.get('has_puzzle'):
+                            label_char = 'p'
+                        else:
+                            label_char = None
+                    if label_char:
+                        mc = marker_color_map.get(label_char, (120, 120, 120))
+                        mx = int(cx - radius - 8)
+                        my = int(cy - radius - 8)
+                        # Draw a distinctive Triforce icon for 't' (three golden triangles)
+                        if label_char == 't':
+                            tri_size = max(10, int(radius * 0.9))
+                            # center of triforce is (mx,my)
+                            cx0, cy0 = mx, my
+                            # top triangle
+                            top = [
+                                (cx0, cy0 - tri_size // 2 - 2),
+                                (cx0 - tri_size // 2, cy0 + tri_size // 2),
+                                (cx0 + tri_size // 2, cy0 + tri_size // 2)
+                            ]
+                            # left triangle (shifted left-bottom)
+                            left = [
+                                (cx0 - tri_size // 2, cy0 + tri_size // 2),
+                                (cx0 - tri_size, cy0 + tri_size // 2 + tri_size // 2),
+                                (cx0, cy0 + tri_size // 2 + tri_size // 2)
+                            ]
+                            # right triangle
+                            right = [
+                                (cx0 + tri_size // 2, cy0 + tri_size // 2),
+                                (cx0, cy0 + tri_size // 2 + tri_size // 2),
+                                (cx0 + tri_size, cy0 + tri_size // 2 + tri_size // 2)
+                            ]
+                            pygame.draw.polygon(surface, (255, 215, 0), top)
+                            pygame.draw.polygon(surface, (255, 215, 0), left)
+                            pygame.draw.polygon(surface, (255, 215, 0), right)
+                            pygame.draw.polygon(surface, (10, 10, 10), top, 1)
+                            pygame.draw.polygon(surface, (10, 10, 10), left, 1)
+                            pygame.draw.polygon(surface, (10, 10, 10), right, 1)
+                        else:
+                            pygame.draw.circle(surface, mc, (mx, my), max(6, int(radius * 0.5)))
+                            tf = pygame.font.SysFont('Arial', max(10, int(radius * 0.6)), bold=True)
+                            chs = tf.render(label_char, True, (255, 255, 255))
+                            surface.blit(chs, (mx - chs.get_width()//2, my - chs.get_height()//2))
+                except Exception:
+                    pass
+
+                # Degree badge
+                try:
+                    degree = graph.degree[node] if hasattr(graph, 'degree') else sum(1 for a, b in graph.edges() if a == node or b == node)
+                except Exception:
+                    degree = 0
+                badge_radius = max(6, int(radius * 0.5))
+                bx = int(cx + radius * 0.7)
+                by = int(cy - radius * 0.7)
+                pygame.draw.circle(surface, (255, 80, 80), (bx, by), badge_radius)
+                pygame.draw.circle(surface, (20, 20, 20), (bx, by), badge_radius, 1)
+                bfont = pygame.font.SysFont('Arial', max(10, int(badge_radius * 1.0)), bold=True)
+                btxt = bfont.render(str(degree), True, (255, 255, 255))
+                surface.blit(btxt, (bx - btxt.get_width() // 2, by - btxt.get_height() // 2))
+
+                # Hover detection (node takes precedence)
+                dx = mouse_pos[0] - cx
+                dy = mouse_pos[1] - cy
+                if dx*dx + dy*dy <= (radius * 1.4) ** 2:
+                    hovered_node = node
+            except Exception:
+                pass
+
+        # Edge hover detection (if no node hovered)
+        if not hovered_node:
+            def point_segment_distance(p, a, b):
+                # p,a,b are (x,y)
+                px, py = p
+                ax, ay = a
+                bx, by = b
+                dx = bx - ax
+                dy = by - ay
+                if dx == 0 and dy == 0:
+                    return ((px-ax)**2 + (py-ay)**2) ** 0.5
+                t = ((px-ax) * dx + (py-ay) * dy) / (dx*dx + dy*dy)
+                t = max(0.0, min(1.0, t))
+                projx = ax + t * dx
+                projy = ay + t * dy
+                return ((px-projx)**2 + (py-projy)**2) ** 0.5
+
+            for u, v in graph.edges():
+                pu = node_pos.get(u)
+                pv = node_pos.get(v)
+                if not pu or not pv:
+                    continue
+                dist = point_segment_distance(mouse_pos, pu, pv)
+                if dist <= max(8, int(self.TILE_SIZE * 0.12)):
+                    hovered_edge = (u, v, graph.get_edge_data(u, v).get('label', ''))
+                    break
+
+        # Blit the overlay after drawing all glow elements
+        if overlay:
+            try:
+                surface.blit(overlay, (0, 0))
+            except Exception:
+                pass
+
+        # Small legend to explain the overlay (non-intrusive)
+        try:
+            # Base legend
+            lines = [
+                "Topology legend:",
+                "Nodes = graph nodes (orange)",
+                "Badge = neighbor count",
+                "Edges = connectivity (cyan)"
+            ]
+            if unmatched_nodes:
+                # Show a short list of node ids for debugging
+                ids_preview = ', '.join(str(n) for n in (unmatched_node_ids[:8] if 'unmatched_node_ids' in locals() else []))
+                lines.append(f"Unplaced nodes: {unmatched_nodes} [{ids_preview}]")
+                # Also log for diagnostics
+                try:
+                    logger.info(f"Topology unplaced nodes: {unmatched_node_ids}")
+                except Exception:
+                    pass
+
+            # If the user toggled the detailed legend, include the JSON-style mapping
+            if getattr(self, 'show_topology_legend', False):
+                lines.append("")
+                lines.append("Node semantics:")
+                for k, v in self.topology_semantics.get('nodes', {}).items():
+                    lines.append(f"{k}: {', '.join(v)}")
+                lines.append("")
+                lines.append("Edge semantics:")
+                for k, v in self.topology_semantics.get('edges', {}).items():
+                    lines.append(f"{k}: {', '.join(v)}")
+
+            lf = pygame.font.SysFont('Arial', 12)
+            lw = 360
+            lh = 6 + 18 * len(lines)
+            # Clamp legend size
+            lw = min(lw, self.screen_w - 20)
+            lh = min(lh, self.screen_h - 20)
+
+            legend_surf = pygame.Surface((lw, lh), pygame.SRCALPHA)
+            legend_surf.fill((10, 10, 10, 200))
+
+            # Color maps for small markers
+            marker_color_map = {
+                's': (80, 220, 80), 'k': (255, 215, 0), 'K': (200, 160, 0),
+                'b': (220, 40, 40), 'e': (200, 60, 60), 'I': (160, 40, 200),
+                'p': (80, 160, 255), 't': (255, 200, 60)
+            }
+            edge_color_map = {'S': (40, 200, 255), 'b': (220, 40, 40), 'k': (255, 180, 60), 'l': (160, 80, 200), 's': (100, 100, 100)}
+
+            y = 6
+            for i, l in enumerate(lines):
+                # If mapping line like 'k: room, key' try to draw a small color marker
+                m = None
+                if ':' in l and len(l) >= 3:
+                    key = l.split(':', 1)[0].strip()
+                    if key in marker_color_map:
+                        m = ('node', key, marker_color_map[key])
+                    elif key in edge_color_map:
+                        m = ('edge', key, edge_color_map[key])
+                if m:
+                    # Draw marker circle or square then text
+                    if m[0] == 'node':
+                        # Draw Triforce icon for 't' in legend, otherwise circle
+                        if m[1] == 't':
+                            cx_l = 8 + 8
+                            cy_l = y + 9
+                            ts = 8
+                            top = [(cx_l, cy_l - ts//2 - 1), (cx_l - ts//2, cy_l + ts//2), (cx_l + ts//2, cy_l + ts//2)]
+                            left = [(cx_l - ts//2, cy_l + ts//2), (cx_l - ts, cy_l + ts//2 + ts//2), (cx_l, cy_l + ts//2 + ts//2)]
+                            right = [(cx_l + ts//2, cy_l + ts//2), (cx_l, cy_l + ts//2 + ts//2), (cx_l + ts, cy_l + ts//2 + ts//2)]
+                            pygame.draw.polygon(legend_surf, (255, 215, 0), top)
+                            pygame.draw.polygon(legend_surf, (255, 215, 0), left)
+                            pygame.draw.polygon(legend_surf, (255, 215, 0), right)
+                            pygame.draw.polygon(legend_surf, (10, 10, 10), top, 1)
+                            pygame.draw.polygon(legend_surf, (10, 10, 10), left, 1)
+                            pygame.draw.polygon(legend_surf, (10, 10, 10), right, 1)
+                        else:
+                            pygame.draw.circle(legend_surf, m[2], (8 + 6, y + 9), 6)
+                    else:
+                        pygame.draw.rect(legend_surf, m[2], (8, y + 3, 12, 12))
+                    txt = lf.render(l, True, (230, 230, 230))
+                    legend_surf.blit(txt, (28, y))
+                else:
+                    txt = lf.render(l, True, (230, 230, 230))
+                    legend_surf.blit(txt, (8, y))
+                y += 18
+
+            surface.blit(legend_surf, (10, 10))
+        except Exception:
+            pass
+
+        # Draw hover tooltip for node/edge if applicable
+        try:
+            if hovered_node is not None or hovered_edge is not None:
+                tip_lines = []
+                if hovered_node is not None:
+                    node = hovered_node
+                    tip_lines.append(f"Node: {node}")
+                    nattr = graph.nodes[node]
+                    # Prefer single-char label if available
+                    label_char = nattr.get('label') or nattr.get('label', '')
+                    # If label is like 's' or 'e' use semantics mapping
+                    if label_char and label_char in self.topology_semantics.get('nodes', {}):
+                        tip_lines.append(f"Type: {', '.join(self.topology_semantics['nodes'][label_char])}")
+                    else:
+                        # Fallback: infer flags set on node
+                        flags = []
+                        for k in ['is_start', 'is_triforce', 'is_boss', 'has_key', 'has_item', 'has_enemy', 'has_puzzle']:
+                            if nattr.get(k):
+                                flags.append(k)
+                        if flags:
+                            tip_lines.append("Flags: " + ", ".join(flags))
+                else:
+                    u, v, label_char = hovered_edge
+                    tip_lines.append(f"Edge: {u} -> {v}")
+                    if label_char and label_char in self.topology_semantics.get('edges', {}):
+                        tip_lines.append(f"Type: {', '.join(self.topology_semantics['edges'][label_char])}")
+                    else:
+                        # Edge attributes fallback
+                        ed = graph.get_edge_data(u, v) or {}
+                        if 'edge_type' in ed:
+                            tip_lines.append(f"Type: {ed['edge_type']}")
+
+                # Render tooltip box near mouse
+                mxx, myy = mouse_pos
+                pad = 6
+                tf = pygame.font.SysFont('Arial', 12)
+                tw = max(tf.render(t, True, (255,255,255)).get_width() for t in tip_lines) + pad * 2
+                th = (len(tip_lines) * 18) + pad * 2
+                tx = mxx + 12
+                ty = myy + 12
+                # Clamp inside screen
+                if tx + tw > self.screen_w - 10:
+                    tx = self.screen_w - tw - 10
+                if ty + th > self.screen_h - 10:
+                    ty = self.screen_h - th - 10
+                tip_surf = pygame.Surface((tw, th), pygame.SRCALPHA)
+                tip_surf.fill((12, 12, 12, 220))
+                pygame.draw.rect(tip_surf, (200,200,200), (0, 0, tw, th), 1)
+                for i, t in enumerate(tip_lines):
+                    t_s = tf.render(t, True, (230, 230, 230))
+                    tip_surf.blit(t_s, (pad, pad + i * 18))
+                surface.blit(tip_surf, (tx, ty))
+        except Exception:
+            pass
 
     # --- Solver comparison helpers ---
     def _set_last_solver_metrics(self, name, nodes, time_ms, path_len):
@@ -3860,6 +4822,13 @@ class ZeldaGUI:
                 steps=self.step_count,
                 message=self.message
             )
+            # Update usage counters for HUD where supported
+            if hasattr(self.modern_hud, 'keys_used'):
+                self.modern_hud.keys_used = getattr(self, 'keys_used', 0)
+            if hasattr(self.modern_hud, 'bombs_used'):
+                self.modern_hud.bombs_used = getattr(self, 'bombs_used', 0)
+            if hasattr(self.modern_hud, 'boss_keys_used'):
+                self.modern_hud.boss_keys_used = getattr(self, 'boss_keys_used', 0)
         
         # Update visual position (smooth animation)
         if self.renderer and new_pos != old_pos:
@@ -3913,6 +4882,17 @@ class ZeldaGUI:
                 steps=self.step_count,
                 message=self.message
             )
+            if hasattr(self.modern_hud, 'keys_collected'):
+                self.modern_hud.keys_collected = self.keys_collected
+                self.modern_hud.bombs_collected = self.bombs_collected
+                self.modern_hud.boss_keys_collected = self.boss_keys_collected
+            # Update usage counters too
+            if hasattr(self.modern_hud, 'keys_used'):
+                self.modern_hud.keys_used = getattr(self, 'keys_used', 0)
+            if hasattr(self.modern_hud, 'bombs_used'):
+                self.modern_hud.bombs_used = getattr(self, 'bombs_used', 0)
+            if hasattr(self.modern_hud, 'boss_keys_used'):
+                self.modern_hud.boss_keys_used = getattr(self, 'boss_keys_used', 0)
         
         # Draw grid (only visible tiles for performance)
         start_c = max(0, self.view_offset_x // self.TILE_SIZE)
@@ -4075,11 +5055,22 @@ class ZeldaGUI:
         bomb_highlight = 'bomb' in self.item_pickup_times and (current_time - self.item_pickup_times['bomb']) < 1.0
         boss_key_highlight = 'boss_key' in self.item_pickup_times and (current_time - self.item_pickup_times['boss_key']) < 1.0
         
+        # Sync counts before rendering to be safe
+        self._sync_inventory_counters()
         # Keys with flash animation and X/Y collected format
         if self.total_keys > 0:
             keys_text = f"Keys: {self.keys_collected}/{self.total_keys} ({self.env.state.keys} held)"
         else:
             keys_text = f"Keys: {self.env.state.keys}"
+        # Small last pickup/use hints
+        if getattr(self, 'last_pickup_msg', None):
+            hint = self.small_font.render(self.last_pickup_msg, True, (200, 200, 200))
+            self.screen.blit(hint, (sidebar_x + 15, y_pos))
+            y_pos += 16
+        if getattr(self, 'last_use_msg', None):
+            hint2 = self.small_font.render(self.last_use_msg, True, (200, 200, 200))
+            self.screen.blit(hint2, (sidebar_x + 15, y_pos))
+            y_pos += 16
         if key_highlight:
             # Flash between yellow and white
             flash_alpha = (math.sin(current_time * 15) + 1) / 2  # 0 to 1

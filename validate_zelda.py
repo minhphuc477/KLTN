@@ -20,16 +20,19 @@ Usage:
 import os
 import sys
 import json
+import logging
 import argparse
 import time
 from pathlib import Path
 from typing import Dict, List, Tuple, Any
 from datetime import datetime
 
-# Add current directory to path for imports
-current_dir = os.path.dirname(os.path.abspath(__file__))
-if current_dir not in sys.path:
-    sys.path.insert(0, current_dir)
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # Import from CANONICAL source: zelda_core.py
 # This replaces the old adapter.py imports
@@ -68,13 +71,7 @@ from simulation.validator import (
     create_test_map
 )
 
-# Import stitcher for dungeon-level validation
-stitcher_path = os.path.join(current_dir, 'data', 'stitcher.py')
-spec_stitcher = importlib.util.spec_from_file_location("stitcher", stitcher_path)
-stitcher_module = importlib.util.module_from_spec(spec_stitcher)
-spec_stitcher.loader.exec_module(stitcher_module)
-DungeonStitcher = stitcher_module.DungeonStitcher
-StitchedDungeon = stitcher_module.StitchedDungeon
+# DungeonStitcher and StitchedDungeon are already imported from zelda_core.py
 
 
 class ZeldaValidationPipeline:
@@ -130,31 +127,31 @@ class ZeldaValidationPipeline:
         Returns:
             Dictionary with all results and metrics
         """
-        print("=" * 60)
-        print("ZELDA VALIDATION PIPELINE")
-        print("=" * 60)
-        print(f"Data Source: {self.data_root}")
-        print(f"Output Directory: {self.output_dir}")
-        print("=" * 60 + "\n")
+        logger.info("=" * 60)
+        logger.info("ZELDA VALIDATION PIPELINE")
+        logger.info("=" * 60)
+        logger.info(f"Data Source: {self.data_root}")
+        logger.info(f"Output Directory: {self.output_dir}")
+        logger.info("=" * 60)
         
         # Step 1: Run calibration
-        print("[CALIBRATION] Running system calibration...")
+        logger.info("[CALIBRATION] Running system calibration...")
         self._run_calibration()
-        print("[CALIBRATION] PASSED [OK]\n")
+        logger.info("[CALIBRATION] PASSED [OK]")
         
         # Step 2: Process data
-        print("[BLOCK I] Processing raw dungeon data...")
+        logger.info("[BLOCK I] Processing raw dungeon data...")
         start_time = time.time()
         self._process_data(verbose)
         self.stats['processing_time'] = time.time() - start_time
-        print(f"[BLOCK I] Complete. Processed {self.stats['processed_rooms']} rooms in {self.stats['processing_time']:.2f}s\n")
+        logger.info(f"[BLOCK I] Complete. Processed {self.stats['processed_rooms']} rooms in {self.stats['processing_time']:.2f}s")
         
         # Step 3: Validate all maps
-        print("[BLOCK VI] Validating processed maps...")
+        logger.info("[BLOCK VI] Validating processed maps...")
         start_time = time.time()
         self._validate_all(verbose)
         self.stats['validation_time'] = time.time() - start_time
-        print(f"[BLOCK VI] Complete. Validation took {self.stats['validation_time']:.2f}s\n")
+        logger.info(f"[BLOCK VI] Complete. Validation took {self.stats['validation_time']:.2f}s")
         
         # Step 4: Generate report
         report = self._generate_report()
@@ -183,24 +180,27 @@ class ZeldaValidationPipeline:
         """
         Process raw VGLC data using Block I adapter.
         """
-        self.adapter = IntelligentDataAdapter(str(self.data_root))
+        self.adapter = ZeldaDungeonAdapter(str(self.data_root))
         
         # Check if data exists
         processed_dir = self.data_root / "Processed"
         graph_dir = self.data_root / "Graph Processed"
         
         if not processed_dir.exists():
-            print(f"  Warning: Processed folder not found at {processed_dir}")
+            logger.warning(f"Processed folder not found at {processed_dir}")
             return
         
         if not graph_dir.exists():
-            print(f"  Warning: Graph Processed folder not found at {graph_dir}")
+            logger.warning(f"Graph Processed folder not found at {graph_dir}")
         
         # Process all dungeons
         try:
             self.processed_dungeons = self.adapter.process_all_dungeons()
+        except FileNotFoundError as e:
+            logger.error(f"Data file not found: {e}")
+            return
         except Exception as e:
-            print(f"  Error during processing: {e}")
+            logger.exception("Error during dungeon processing")
             return
         
         # Update statistics
@@ -210,15 +210,17 @@ class ZeldaValidationPipeline:
             self.stats['processed_rooms'] += len(dungeon.rooms)
             
             if verbose:
-                print(f"  - {dungeon_id}: {len(dungeon.rooms)} rooms")
+                logger.info(f"  - {dungeon_id}: {len(dungeon.rooms)} rooms")
         
         # Save processed data
         output_path = self.output_dir / "processed_data.pkl"
         try:
             self.adapter.save_processed_data(str(output_path))
-            print(f"  Saved processed data to {output_path}")
+            logger.info(f"Saved processed data to {output_path}")
+        except IOError as e:
+            logger.error(f"Could not save processed data: {e}")
         except Exception as e:
-            print(f"  Warning: Could not save processed data: {e}")
+            logger.exception("Unexpected error saving processed data")
     
     def _validate_all(self, verbose: bool = True):
         """
@@ -234,12 +236,23 @@ class ZeldaValidationPipeline:
         
         # Collect individual room grids (for diversity and room-level metrics)
         for dungeon_id, dungeon in self.processed_dungeons.items():
-            for room_id, room in dungeon.rooms.items():
-                all_grids.append(room.grid)
+            for room_pos, room in dungeon.rooms.items():
+                # Room uses .semantic_grid, not .grid
+                all_grids.append(room.semantic_grid)
+                # Build contents from room attributes
+                contents = []
+                if room.has_triforce:
+                    contents.append('triforce')
+                if room.has_boss:
+                    contents.append('boss')
+                if room.is_start:
+                    contents.append('start')
+                if room.has_stair:
+                    contents.append('stair')
                 room_info.append({
                     'dungeon_id': dungeon_id,
-                    'room_id': room_id,
-                    'contents': room.contents
+                    'room_id': room_pos,
+                    'contents': contents
                 })
         
         # Store results
@@ -250,7 +263,7 @@ class ZeldaValidationPipeline:
         # ==========================================
         # GRAPH-LEVEL VALIDATION (using graph topology)
         # ==========================================
-        print("  [Graph-Level Validation (Topology-Guided)]")
+        logger.info("  [Graph-Level Validation (Topology-Guided)]")
         graph_solvable_count = 0
         graph_total = 0
         
@@ -279,18 +292,17 @@ class ZeldaValidationPipeline:
                     status = "GRAPH-SOLVABLE" if graph_result.is_solvable else "GRAPH-BLOCKED"
                     path_info = f"path={graph_result.graph_path}" if graph_result.graph_path else "no path"
                     missing_info = f"missing={graph_result.missing_rooms}" if graph_result.missing_rooms else ""
-                    print(f"    {dungeon_id}: {status} ({path_info}) {missing_info}")
+                    logger.info(f"    {dungeon_id}: {status} ({path_info}) {missing_info}")
                     
             except Exception as e:
-                if verbose:
-                    print(f"    {dungeon_id}: GRAPH ERROR - {e}")
+                logger.exception(f"    {dungeon_id}: Graph validation error")
         
-        print(f"  Graph-level: {graph_solvable_count}/{graph_total} solvable (using topology)")
+        logger.info(f"  Graph-level: {graph_solvable_count}/{graph_total} solvable (using topology)")
         
         # ==========================================
         # DUNGEON-LEVEL VALIDATION (using stitcher)
         # ==========================================
-        print("  [Dungeon-Level Validation (Grid-Based)]")
+        logger.info("  [Dungeon-Level Validation (Grid-Based)]")
         dungeon_solvable_count = 0
         dungeon_total = 0
         
@@ -298,12 +310,12 @@ class ZeldaValidationPipeline:
             dungeon_total += 1
             
             try:
-                # Stitch the dungeon
-                stitcher = DungeonStitcher(dungeon)
-                stitched = stitcher.stitch()
+                # Stitch the dungeon - FIXED API: DungeonStitcher().stitch(dungeon)
+                stitcher = DungeonStitcher()
+                stitched = stitcher.stitch(dungeon)
                 
                 if verbose:
-                    print(f"    {dungeon_id}: stitched {stitched.global_grid.shape}, START={stitched.start_pos}, GOAL={stitched.goal_pos}")
+                    logger.info(f"    {dungeon_id}: stitched {stitched.global_grid.shape}, START={stitched.start_pos}, GOAL={stitched.goal_pos}")
                 
                 # Validate stitched dungeon
                 if stitched.start_pos is not None and stitched.goal_pos is not None:
@@ -323,16 +335,19 @@ class ZeldaValidationPipeline:
                     
                     if verbose:
                         status = "SOLVABLE" if result.is_solvable else " NOT SOLVABLE"
-                        print(f"      {status} (path={result.path_length})")
+                        logger.info(f"      {status} (path={result.path_length})")
                 else:
                     if verbose:
-                        print(f"       Missing START or TRIFORCE after stitching")
+                        logger.warning(f"       Missing START or TRIFORCE after stitching")
                         
+            except ValueError as e:
+                logger.error(f"    {dungeon_id}: Validation error - {e}")
+            except KeyError as e:
+                logger.error(f"    {dungeon_id}: Missing data - {e}")
             except Exception as e:
-                if verbose:
-                    print(f"    {dungeon_id}: ERROR - {e}")
+                logger.exception(f"    {dungeon_id}: Unexpected error during stitching/validation")
         
-        print(f"  Dungeon-level: {dungeon_solvable_count}/{dungeon_total} solvable (grid pathfinding)")
+        logger.info(f"  Dungeon-level: {dungeon_solvable_count}/{dungeon_total} solvable (grid pathfinding)")
         
         # Update stats to include graph-level results
         self.stats['graph_solvable'] = graph_solvable_count
@@ -340,7 +355,7 @@ class ZeldaValidationPipeline:
         # ==========================================
         # ROOM-LEVEL VALIDATION (for rooms with both START and TRIFORCE)
         # ==========================================
-        print("  [Room-Level Validation]")
+        logger.info("  [Room-Level Validation]")
         room_solvable_count = 0
         room_with_start_and_goal = 0
         
@@ -381,8 +396,8 @@ class ZeldaValidationPipeline:
             if result.is_valid_syntax:
                 self.stats['valid_rooms'] += 1
         
-        print(f"  Room-level: {room_solvable_count}/{room_with_start_and_goal} standalone-solvable rooms")
-        print(f"  ({len(all_grids) - room_with_start_and_goal} rooms require dungeon-level validation)")
+        logger.info(f"  Room-level: {room_solvable_count}/{room_with_start_and_goal} standalone-solvable rooms")
+        logger.info(f"  ({len(all_grids) - room_with_start_and_goal} rooms require dungeon-level validation)")
         
         # Create batch result
         batch_result = BatchValidationResult(
@@ -456,9 +471,11 @@ class ZeldaValidationPipeline:
                 # Convert to JSON-serializable format
                 json_report = self._make_json_serializable(report)
                 json.dump(json_report, f, indent=2)
-            print(f"\nReport saved to {report_path}")
+            logger.info(f"Report saved to {report_path}")
+        except IOError as e:
+            logger.error(f"Could not save report: {e}")
         except Exception as e:
-            print(f"Warning: Could not save report: {e}")
+            logger.exception("Unexpected error saving report")
         
         return report
     
@@ -479,7 +496,8 @@ class ZeldaValidationPipeline:
         return obj
     
     def _print_summary(self):
-        """Print validation summary to console."""
+        """Print validation summary to console (user-facing output)."""
+        # Keep print() here - this is intentional user-facing CLI output
         print("\n" + "=" * 60)
         print("VALIDATION SUMMARY")
         print("=" * 60)
@@ -607,24 +625,32 @@ def main():
         
         # Save text report if requested
         if args.report:
-            with open(args.report, 'w') as f:
-                f.write("ZELDA VALIDATION REPORT\n")
-                f.write("=" * 40 + "\n\n")
-                f.write(f"Timestamp: {report['timestamp']}\n")
-                f.write(f"Data Source: {report['data_source']}\n\n")
-                f.write("METRICS:\n")
-                for key, value in report['metrics'].items():
-                    f.write(f"  {key}: {value}\n")
-            print(f"Text report saved to {args.report}")
+            try:
+                with open(args.report, 'w') as f:
+                    f.write("ZELDA VALIDATION REPORT\n")
+                    f.write("=" * 40 + "\n\n")
+                    f.write(f"Timestamp: {report['timestamp']}\n")
+                    f.write(f"Data Source: {report['data_source']}\n\n")
+                    f.write("METRICS:\n")
+                    for key, value in report['metrics'].items():
+                        f.write(f"  {key}: {value}\n")
+                logger.info(f"Text report saved to {args.report}")
+                print(f"Text report saved to {args.report}")  # User-facing output
+            except IOError as e:
+                logger.error(f"Failed to save text report: {e}")
         
         # Launch GUI if requested
         if args.gui:
+            logger.info("Launching GUI...")
             print("\nLaunching GUI...")
             try:
                 from gui_runner import main as gui_main
                 gui_main()
             except ImportError as e:
+                logger.error(f"Could not launch GUI: {e}")
                 print(f"Could not launch GUI: {e}")
+            except Exception as e:
+                logger.exception("GUI error")
         
         # Return success if solvability > 0 or no maps processed
         batch = pipeline.validation_results.get('batch')
@@ -632,7 +658,16 @@ def main():
             return batch.solvable_count > 0
         return True
         
+    except FileNotFoundError as e:
+        logger.error(f"Data file not found: {e}")
+        print(f"Pipeline error: Data file not found - {e}")
+        return False
+    except ValueError as e:
+        logger.error(f"Invalid data or configuration: {e}")
+        print(f"Pipeline error: {e}")
+        return False
     except Exception as e:
+        logger.exception("Unexpected pipeline error")
         print(f"Pipeline error: {e}")
         import traceback
         traceback.print_exc()

@@ -1139,7 +1139,264 @@ class RoomGraphMatcher:
                     unmapped_nodes.remove(best_node)
         
         return room_to_node, node_to_room
-    
+
+    def infer_missing_mappings(self, rooms: Dict[Tuple[int, int], Room],
+                               graph: nx.DiGraph,
+                               room_positions: Optional[Dict[Tuple[int, int], Tuple[int, int]]] = None,
+                               room_to_node: Optional[Dict[Tuple[int, int], int]] = None,
+                               confidence_threshold: float = 0.0
+                               ) -> Tuple[Dict[Tuple[int, int], int], Dict[int, Tuple[int, int]], Dict[int, float]]:
+        """Infer candidate mappings for unmatched graph nodes.
+
+        Returns (proposed_room_to_node, proposed_node_to_room, confidences)
+        - proposed maps only include nodes/rooms that were previously unmapped
+        - confidences: node_id -> confidence (0.0-1.0)
+
+        Improvements implemented:
+        - More robust label parsing (many formats)
+        - Spatial distance based scoring when `room_positions` available
+        - Component-aware scoring using seeded anchors
+        - Global assignment using Hungarian algorithm (scipy) when available; falls back to greedy
+        """
+        import re
+        from math import hypot
+
+        # Prepare mappings
+        existing_room_to_node = dict(room_to_node or {})
+        existing_node_to_room = {v: k for k, v in existing_room_to_node.items()}
+
+        all_nodes = list(graph.nodes())
+        unmatched_nodes = [n for n in all_nodes if n not in existing_node_to_room]
+        unmatched_rooms = [r for r in rooms.keys() if r not in existing_room_to_node]
+
+        proposed_room_to_node: Dict[Tuple[int, int], int] = {}
+        proposed_node_to_room: Dict[int, Tuple[int, int]] = {}
+        confidences: Dict[int, float] = {}
+
+        # Quick exit
+        if not unmatched_nodes or not unmatched_rooms:
+            return proposed_room_to_node, proposed_node_to_room, confidences
+
+        # 1) Try to use strong anchors (start/triforce/boss) even if room_to_node is empty
+        if not existing_room_to_node:
+            # Search graph special nodes
+            start_node = None
+            triforce_node = None
+            boss_node = None
+            for node, attrs in graph.nodes(data=True):
+                if attrs.get('is_start'):
+                    start_node = node
+                if attrs.get('is_triforce'):
+                    triforce_node = node
+                if attrs.get('is_boss'):
+                    boss_node = node
+
+            # Map special nodes to rooms by heuristics (stairs/triforce/boss detection)
+            # Find candidate start room
+            start_room_pos = None
+            stair_rooms_with_doors = []
+            for pos, room in rooms.items():
+                if room.has_stair:
+                    door_count = sum(room.doors.values())
+                    if door_count > 0:
+                        stair_rooms_with_doors.append((pos, door_count))
+            if stair_rooms_with_doors:
+                stair_rooms_with_doors.sort(key=lambda x: x[1], reverse=True)
+                start_room_pos = stair_rooms_with_doors[0][0]
+
+            if start_node is not None and start_room_pos is not None:
+                existing_room_to_node[start_room_pos] = start_node
+                existing_node_to_room[start_node] = start_room_pos
+                proposed_room_to_node[start_room_pos] = start_node
+                proposed_node_to_room[start_node] = start_room_pos
+                confidences[start_node] = 0.98
+
+        # 2) BFS propagation from existing anchors using existing _match_rooms_to_nodes_bfs
+        anchors = list(existing_room_to_node.items())
+        used_nodes = set(existing_node_to_room.keys())
+        used_rooms = set(existing_room_to_node.keys())
+        for room_anchor, node_anchor in anchors:
+            r2n, n2r = self._match_rooms_to_nodes_bfs(rooms, self._build_room_adjacency(rooms), graph, room_anchor, node_anchor)
+            for rpos, nid in r2n.items():
+                if rpos in existing_room_to_node or rpos in proposed_room_to_node:
+                    continue
+                if nid in used_nodes or nid in proposed_node_to_room:
+                    continue
+                proposed_room_to_node[rpos] = nid
+                proposed_node_to_room[nid] = rpos
+                confidences[nid] = 0.9
+                used_nodes.add(nid)
+                used_rooms.add(rpos)
+
+        # Refresh unmatched lists after BFS pass
+        unmatched_nodes = [n for n in unmatched_nodes if n not in proposed_node_to_room]
+        unmatched_rooms = [r for r in unmatched_rooms if r not in proposed_room_to_node]
+
+        # 3) Label-based hints (robust regex)
+        # Accept formats: '3,4', '(3,4)', '3_4', 'r3c4', 'r:3,c:4', '3 4'
+        coord_re = re.compile(r"\(?\s*(\d+)\s*[,_x\\/\s:-]\s*(\d+)\s*\)?")
+        for node in list(unmatched_nodes):
+            attrs = graph.nodes[node]
+            label = attrs.get('label') or attrs.get('name') or ''
+            m = coord_re.search(str(label))
+            if m:
+                r = int(m.group(1)); c = int(m.group(2))
+                if (r, c) in unmatched_rooms and node not in proposed_node_to_room:
+                    proposed_node_to_room[node] = (r, c)
+                    proposed_room_to_node[(r, c)] = node
+                    confidences[node] = 0.98
+                    unmatched_nodes.remove(node)
+                    unmatched_rooms.remove((r, c))
+
+        # 4) Component-aware building (map graph comps -> room comps via known anchors)
+        graph_comp_of = {}
+        for comp in nx.weakly_connected_components(graph):
+            for n in comp:
+                graph_comp_of[n] = id(comp)
+
+        room_adj = self._build_room_adjacency(rooms)
+        room_graph = nx.Graph()
+        room_graph.add_nodes_from(rooms.keys())
+        for k, vs in room_adj.items():
+            for v in vs:
+                room_graph.add_edge(k, v)
+        room_comp_of = {}
+        for comp in nx.connected_components(room_graph):
+            for r in comp:
+                room_comp_of[r] = id(comp)
+
+        # Build a mapping from graph component -> candidate room components based on existing anchors
+        comp_room_candidates: Dict[int, Set[int]] = {}
+        for rpos, nid in dict(existing_room_to_node).items():
+            gc = graph_comp_of.get(nid)
+            rc = room_comp_of.get(rpos)
+            if gc is not None and rc is not None:
+                comp_room_candidates.setdefault(gc, set()).add(rc)
+
+        # Spatial centers (normalized) for rooms using room_positions if available
+        centers = {}
+        if room_positions:
+            xs = [off[1] for off in room_positions.values() if off]
+            ys = [off[0] for off in room_positions.values() if off]
+            if xs and ys:
+                minx, maxx = min(xs), max(xs)
+                miny, maxy = min(ys), max(ys)
+                span = max(maxx - minx, maxy - miny, 1)
+                for r in unmatched_rooms:
+                    off = room_positions.get(r)
+                    if off:
+                        centers[r] = ((off[1] - minx) / span, (off[0] - miny) / span)
+
+        # Optional: use seeded spectral match to propose additional mappings before building score matrix
+        if existing_room_to_node:
+            try:
+                spectral_props, spectral_confs = self.seeded_spectral_match(rooms, graph, room_positions, seeds=existing_room_to_node, k_dim=8)
+                for nid, rpos in spectral_props.items():
+                    if nid in unmatched_nodes and rpos in unmatched_rooms:
+                        proposed_node_to_room[nid] = rpos
+                        proposed_room_to_node[rpos] = nid
+                        confidences[nid] = max(confidences.get(nid, 0.0), spectral_confs.get(nid, 0.1))
+                unmatched_nodes = [n for n in unmatched_nodes if n not in proposed_node_to_room]
+                unmatched_rooms = [r for r in unmatched_rooms if r not in proposed_room_to_node]
+            except Exception:
+                pass
+
+        # 5) Build score matrix for remaining unmatched nodes/rooms
+        deg = {n: (graph.in_degree(n) + graph.out_degree(n)) for n in unmatched_nodes}
+        room_degs = {r: sum(rooms[r].doors.values()) for r in unmatched_rooms}
+        score_matrix: Dict[Tuple[int, Tuple[int, int]], float] = {}
+        max_deg = max(list(deg.values()) + [1])
+        for n in unmatched_nodes:
+            for r in unmatched_rooms:
+                node_deg = deg.get(n, 0)
+                room_deg = room_degs.get(r, 0)
+                # degree similarity (normalized)
+                deg_score = 1.0 - (abs(node_deg - (room_deg * 2)) / float(max_deg + room_deg + 1.0))
+                # spatial score based on normalized distance
+                spat_score = 0.0
+                if r in centers:
+                    # use hypothetical node position inference (no node positions typically)
+                    spat_score = 0.5
+                # component bonus: if node's graph component has known room components prefer those rooms
+                comp_bonus = 0.0
+                gc = graph_comp_of.get(n)
+                rc = room_comp_of.get(r)
+                if gc is not None and gc in comp_room_candidates and rc in comp_room_candidates[gc]:
+                    comp_bonus = 0.2
+                score = 0.7 * deg_score + 0.25 * spat_score + comp_bonus
+                score_matrix[(n, r)] = max(0.0, min(1.0, score))
+
+        # Try to use global assignment (Hungarian) for best overall matching
+        assigned_pairs: List[Tuple[int, Tuple[int, int]]] = []
+        try:
+            from scipy.optimize import linear_sum_assignment
+            # Build matrix (rows=nodes, cols=rooms)
+            nodes_idx = {n: i for i, n in enumerate(unmatched_nodes)}
+            rooms_idx = {r: j for j, r in enumerate(unmatched_rooms)}
+            import numpy as np
+            cost = np.zeros((len(unmatched_nodes), len(unmatched_rooms)), dtype=np.float32)
+            for (n, r), s in score_matrix.items():
+                cost[nodes_idx[n], rooms_idx[r]] = -float(s)  # negative because linear_sum_assignment minimizes
+            row_ind, col_ind = linear_sum_assignment(cost)
+            for i, j in zip(row_ind, col_ind):
+                n = unmatched_nodes[i]
+                r = unmatched_rooms[j]
+                s = score_matrix.get((n, r), 0.0)
+                if s > 0:
+                    assigned_pairs.append((n, r))
+        except Exception:
+            # fallback greedy matching
+            local_scores = dict(score_matrix)
+            remaining_nodes = list(unmatched_nodes)
+            remaining_rooms = list(unmatched_rooms)
+            while local_scores and remaining_nodes and remaining_rooms:
+                best = max(local_scores.items(), key=lambda kv: kv[1])[0]
+                best_score = local_scores[best]
+                n, r = best
+                if best_score <= 0:
+                    break
+                assigned_pairs.append((n, r))
+                remaining_nodes = [x for x in remaining_nodes if x != n]
+                remaining_rooms = [x for x in remaining_rooms if x != r]
+                for key in list(local_scores.keys()):
+                    if key[0] == n or key[1] == r:
+                        del local_scores[key]
+
+        # Apply assigned pairs and set confidences normalized
+        for n, r in assigned_pairs:
+            proposed_node_to_room[n] = r
+            proposed_room_to_node[r] = n
+            confidences[n] = float(max(0.1, score_matrix.get((n, r), 0.1)))
+
+        # Local refinement: try swap moves to improve edge-consistency
+        try:
+            room_adj = self._build_room_adjacency(rooms)
+            refined = self._local_refine_assignments(proposed_node_to_room, graph, room_adj, score_matrix, iterations=200)
+            if refined:
+                # reassign
+                proposed_node_to_room = refined
+                proposed_room_to_node = {r: n for n, r in refined.items()}
+                # update confidences
+                for n, r in refined.items():
+                    confidences[n] = max(confidences.get(n, 0.1), float(score_matrix.get((n, r), 0.1)))
+        except Exception:
+            pass
+
+        # Final safety: filter by confidence_threshold if requested
+        if confidence_threshold > 0:
+            low_conf = [node for node, conf in list(confidences.items()) if conf < confidence_threshold]
+            for node in low_conf:
+                room = proposed_node_to_room.pop(node, None)
+                if room:
+                    proposed_room_to_node.pop(room, None)
+                confidences.pop(node, None)
+
+        # Logging (helpful for diagnostics)
+        if proposed_node_to_room:
+            logger.info('infer_missing_mappings: proposed %d matches; sample confidences: %s', len(proposed_node_to_room), {n: round(c, 2) for n, c in list(confidences.items())[:5]})
+
+        return proposed_room_to_node, proposed_node_to_room, confidences
+
     def _find_room_at_distance(self, rooms: Dict[Tuple[int, int], Room],
                                 room_adjacency: Dict[Tuple[int, int], List[Tuple[int, int]]],
                                 start_pos: Tuple[int, int],
@@ -1260,6 +1517,196 @@ class RoomGraphMatcher:
                     adjacency[pos].append((row, col + 1))
         
         return adjacency
+
+    def _room_signature(self, room: Room) -> Tuple[int, int, int, int]:
+        """Return simple door signature (N,S,E,W) as ints and door count.
+
+        Useful for comparing structural compatibility of rooms.
+        """
+        return (1 if room.doors.get('N') else 0,
+                1 if room.doors.get('S') else 0,
+                1 if room.doors.get('W') else 0,
+                1 if room.doors.get('E') else 0)
+
+    def _edge_consistency_score(self, n2r: Dict[int, Tuple[int, int]], graph: nx.DiGraph, room_adj: Dict[Tuple[int, int], List[Tuple[int, int]]]) -> int:
+        """Compute how many graph edges are consistent with adjacent room pairs.
+
+        Score is number of directed edges (u->v) where assigned rooms r_u and r_v are adjacent in room_adj.
+        """
+        score = 0
+        for u, v in graph.edges():
+            ru = n2r.get(u)
+            rv = n2r.get(v)
+            if ru is None or rv is None:
+                continue
+            if rv in room_adj.get(ru, []):
+                score += 1
+        return score
+
+    def _local_refine_assignments(self, n2r: Dict[int, Tuple[int, int]], graph: nx.DiGraph, room_adj: Dict[Tuple[int, int], List[Tuple[int, int]]], score_matrix: Dict[Tuple[int, Tuple[int, int]], float], iterations: int = 100) -> Optional[Dict[int, Tuple[int, int]]]:
+        """Try local pairwise swaps to increase combined score (assignment score + edge consistency).
+
+        Deterministic improvement pass: consider all pairs and perform swap if it improves total objective. Repeat until no improvement or max iterations.
+        """
+        # Make mutable copy
+        n2r = dict(n2r)
+
+        def objective(mapping: Dict[int, Tuple[int, int]]) -> float:
+            assign_score = sum(float(score_matrix.get((n, r), 0.0)) for n, r in mapping.items())
+            edge_score = self._edge_consistency_score(mapping, graph, room_adj)
+            return assign_score + 0.5 * edge_score  # weight edge consistency
+
+        best_obj = objective(n2r)
+        improved = True
+        it = 0
+        nodes = list(n2r.keys())
+        while improved and it < iterations:
+            improved = False
+            it += 1
+            # Examine all pairs
+            for i in range(len(nodes)):
+                for j in range(i+1, len(nodes)):
+                    a = nodes[i]
+                    b = nodes[j]
+                    ra = n2r[a]
+                    rb = n2r[b]
+                    # Skip identical
+                    if ra == rb:
+                        continue
+                    # Propose swap
+                    n2r[a], n2r[b] = rb, ra
+                    new_obj = objective(n2r)
+                    if new_obj > best_obj + 1e-6:
+                        best_obj = new_obj
+                        improved = True
+                        # keep swap
+                    else:
+                        # revert
+                        n2r[a], n2r[b] = ra, rb
+            if not improved:
+                break
+        return n2r if best_obj > 0 else n2r
+
+    def seeded_spectral_match(self, rooms: Dict[Tuple[int, int], Room], graph: nx.DiGraph, room_positions: Optional[Dict[Tuple[int, int], Tuple[int, int]]] = None, seeds: Optional[Dict[Tuple[int, int], int]] = None, k_dim: int = 8) -> Tuple[Dict[int, Tuple[int, int]], Dict[int, float]]:
+        """Perform seeded spectral matching between graph nodes and rooms.
+
+        Steps:
+        - Compute spectral embeddings for graph and room adjacency
+        - Use seeded correspondences to compute an orthogonal Procrustes alignment
+        - Match remaining nodes by nearest neighbor in embedding space and refine with Hungarian
+
+        Returns: (node_to_room_proposal, confidences)
+        """
+        import numpy as np
+        try:
+            from scipy.linalg import orthogonal_procrustes
+        except Exception:
+            orthogonal_procrustes = None
+
+        # Build room adjacency and small undirected graphs
+        room_adj = self._build_room_adjacency(rooms)
+        RG = nx.Graph()
+        RG.add_nodes_from(rooms.keys())
+        for r, nbrs in room_adj.items():
+            for nb in nbrs:
+                RG.add_edge(r, nb)
+
+        # If graphs are empty, return nothing
+        if len(graph) == 0 or len(RG) == 0:
+            return {}, {}
+
+        # Spectral embedding via Laplacian eigenvectors
+        def laplacian_embedding(G, dim):
+            import numpy as np
+            G_u = G.to_undirected() if G.is_directed() else G
+            nodes = sorted(G_u.nodes())
+            n = len(nodes)
+            node_to_idx = {node: i for i, node in enumerate(nodes)}
+            adj = np.zeros((n, n), dtype=float)
+            for u, v in G_u.edges():
+                i, j = node_to_idx[u], node_to_idx[v]
+                adj[i, j] = 1.0
+                adj[j, i] = 1.0
+            deg = np.sum(adj, axis=1)
+            D = np.diag(deg)
+            L = D - adj
+            try:
+                eigvals, eigvecs = np.linalg.eigh(L)
+                # skip smallest (trivial) eigenvector
+                start = 1
+                end = min(start + dim, n)
+                emb = eigvecs[:, start:end]
+                if emb.shape[1] < dim:
+                    pad = np.zeros((n, dim - emb.shape[1]))
+                    emb = np.hstack([emb, pad])
+            except Exception:
+                emb = np.zeros((n, dim))
+            return nodes, emb
+
+        graph_nodes, g_emb = laplacian_embedding(graph, k_dim)
+        room_nodes, r_emb = laplacian_embedding(RG, k_dim)
+
+        # Build seed matrices
+        seed_pairs = []
+        if seeds:
+            for rpos, nid in seeds.items():
+                if nid in graph_nodes and rpos in room_nodes:
+                    seed_pairs.append((nid, rpos))
+
+        if not seed_pairs:
+            # No seeds -> fallback to empty result
+            return {}, {}
+
+        # Build matrices X (graph) and Y (rooms) with rows corresponding to seeds
+        g_idx = {n: i for i, n in enumerate(graph_nodes)}
+        r_idx = {r: i for i, r in enumerate(room_nodes)}
+        X = np.array([g_emb[g_idx[nid]] for nid, _ in seed_pairs])
+        Y = np.array([r_emb[r_idx[rpos]] for _, rpos in seed_pairs])
+
+        # Compute orthogonal transform R that maps X -> Y
+        if orthogonal_procrustes is not None:
+            try:
+                R, scale = orthogonal_procrustes(X, Y)
+            except Exception:
+                R = None
+        else:
+            # Compute via SVD
+            try:
+                U, s, Vt = np.linalg.svd(X.T.dot(Y))
+                R = U.dot(Vt)
+            except Exception:
+                R = None
+
+        if R is None:
+            return {}, {}
+
+        # Transform full graph embeddings
+        g_emb_aligned = g_emb.dot(R)
+
+        # For each graph node compute nearest room embedding
+        from scipy.optimize import linear_sum_assignment
+        try:
+            import numpy as np
+            cost = np.zeros((len(graph_nodes), len(room_nodes)), dtype=float)
+            for i, nid in enumerate(graph_nodes):
+                for j, rpos in enumerate(room_nodes):
+                    cost[i, j] = np.linalg.norm(g_emb_aligned[i] - r_emb[j])
+            row_ind, col_ind = linear_sum_assignment(cost)
+            proposals = {}
+            confidences = {}
+            for i, j in zip(row_ind, col_ind):
+                nid = graph_nodes[i]
+                rpos = room_nodes[j]
+                proposals[nid] = rpos
+                # Confidence inversely proportional to normalized distance
+                maxd = cost.max() if cost.size else 1.0
+                dist = cost[i, j]
+                confidences[nid] = float(max(0.01, 1.0 - (dist / (maxd + 1e-6))))
+            return proposals, confidences
+        except Exception:
+            return {}, {}
+
+
 
 
 # ==========================================
@@ -1574,6 +2021,130 @@ class ZeldaDungeonAdapter:
         dungeon = adapter.load_dungeon(dungeon_num)
         stitched = adapter.stitch_dungeon(dungeon)
     """
+
+    # --- Precheck & pruning utilities ---
+    @staticmethod
+    def precheck_dungeon(dungeon: Dungeon) -> Tuple[bool, Optional[str]]:
+        """Run lightweight prechecks to determine if solving is worth attempting.
+
+        Returns (ok, message). If ok==False, message explains failure reason.
+        Checks include: start/triforce existence, graph connectivity, simple key vs locked-door lower bound.
+        """
+        if dungeon is None:
+            return False, 'No dungeon data'
+
+        # Check start/triforce presence
+        if dungeon.start_pos is None:
+            return False, 'PRECHECK_FAIL: Missing start position'
+        if dungeon.triforce_pos is None:
+            return False, 'PRECHECK_FAIL: Missing triforce position'
+
+        # Graph connectivity (if graph exists)
+        G = getattr(dungeon, 'graph', None)
+        if G is None or len(G) == 0:
+            return False, 'PRECHECK_FAIL: No topology graph available'
+
+        # Attempt to find start and triforce nodes
+        start_node = None
+        triforce_node = None
+        for n, attrs in G.nodes(data=True):
+            if attrs.get('is_start'):
+                start_node = n
+            if attrs.get('is_triforce'):
+                triforce_node = n
+        # If nodes unknown, try use room_to_node mapping
+        room_to_node = getattr(dungeon, 'room_to_node', {}) or {}
+        if not start_node:
+            start_node = room_to_node.get(dungeon.start_pos)
+        if not triforce_node:
+            triforce_node = room_to_node.get(dungeon.triforce_pos)
+
+        # If either node is still missing, fall back to connectivity on undirected graph
+        if start_node is None or triforce_node is None:
+            # Ensure graph has at least two nodes
+            if len(G.nodes()) < 2:
+                return False, 'PRECHECK_FAIL: Topology too small'
+        else:
+            try:
+                if not nx.has_path(G.to_undirected(), start_node, triforce_node):
+                    return False, 'PRECHECK_FAIL: Start and triforce disconnected in topology'
+            except Exception:
+                # Fallback to optimistic pass
+                pass
+
+        # Locked door minimal key requirement: compute shortest path in terms of locked-door count
+        def locked_cost(u, v, data):
+            label = data.get('label', '')
+            etype = data.get('edge_type') or EDGE_TYPE_MAP.get(label, 'open')
+            return 1 if etype in ('locked', 'key_locked') else 0
+
+        try:
+            import heapq
+            # Modified Dijkstra on G treating locked edges as cost=1
+            def min_locked_between(s, t):
+                dist = {s: 0}
+                pq = [(0, s)]
+                while pq:
+                    d, u = heapq.heappop(pq)
+                    if u == t:
+                        return d
+                    if d != dist.get(u, 1e9):
+                        continue
+                    for v in set(G.successors(u)) | set(G.predecessors(u)):
+                        c = locked_cost(u, v, G.get_edge_data(u, v, {}))
+                        nd = d + c
+                        if nd < dist.get(v, 1e9):
+                            dist[v] = nd
+                            heapq.heappush(pq, (nd, v))
+                return 1e9
+
+            if start_node is not None and triforce_node is not None:
+                min_locked = min_locked_between(start_node, triforce_node)
+                # Count available small keys in rooms
+                key_count = 0
+                for pos, room in dungeon.rooms.items():
+                    # Look for key tiles in semantic grid if available
+                    if getattr(room, 'semantic_grid', None) is not None:
+                        if (room.semantic_grid == SEMANTIC_PALETTE['KEY']).any():
+                            key_count += 1
+                if key_count < min_locked:
+                    return False, f'PRECHECK_FAIL: Insufficient small keys (need {min_locked}, have {key_count})'
+        except Exception:
+            # Prior check best effort; ignore on failure
+            pass
+
+        return True, None
+
+    @staticmethod
+    def prune_dead_ends(rooms: Dict[Tuple[int, int], Room], preserve: Optional[Set[Tuple[int, int]]] = None) -> Tuple[Dict[Tuple[int, int], Room], List[Tuple[int, int]]]:
+        """Iteratively remove leaf rooms (degree==1) that do not contain keys/triforce/start/boss.
+
+        Returns (pruned_rooms, removed_positions)
+        """
+        preserve = set(preserve or [])
+        pruned = dict(rooms)
+        removed = []
+        changed = True
+        while changed:
+            changed = False
+            adj = RoomGraphMatcher()._build_room_adjacency(pruned)
+            leaves = [pos for pos, nbrs in adj.items() if len(nbrs) <= 1 and pos not in preserve]
+            for pos in leaves:
+                room = pruned.get(pos)
+                if room is None:
+                    continue
+                # Preserve if room contains key/triforce/boss/start
+                has_key = False
+                if getattr(room, 'semantic_grid', None) is not None:
+                    has_key = ((room.semantic_grid == SEMANTIC_PALETTE['KEY']).any())
+                if room.has_triforce or room.has_boss or room.is_start or has_key:
+                    continue
+                # Safe to remove
+                pruned.pop(pos, None)
+                removed.append(pos)
+                changed = True
+        return pruned, removed
+
     
     def __init__(self, data_root: str):
         """
