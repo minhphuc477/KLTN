@@ -111,20 +111,23 @@ class ToastNotification:
         return time.time() - self.created_at > self.duration
     
     def get_alpha(self) -> int:
-        """Calculate current alpha for fade in/out animation."""
+        """Calculate current alpha for fade in/out animation and clamp it into valid range."""
         elapsed = time.time() - self.created_at
-        
+        alpha = 240
         # Fade in (0.3s)
         if elapsed < 0.3:
-            return int((elapsed / 0.3) * 240)
-        
+            alpha = int((elapsed / 0.3) * 240)
         # Fade out (last 0.5s)
-        if elapsed > self.duration - 0.5:
+        elif elapsed > self.duration - 0.5:
             remaining = self.duration - elapsed
-            return int((remaining / 0.5) * 240)
-        
-        # Hold (middle)
-        return 240
+            alpha = int((remaining / 0.5) * 240)
+        # Ensure alpha is valid integer in [0,255]
+        try:
+            alpha = int(alpha)
+        except Exception:
+            alpha = 0
+        alpha = max(0, min(255, alpha))
+        return alpha
     
     def render(self, surface: pygame.Surface, center_x: int, y: int):
         """Render toast notification at specified position."""
@@ -138,17 +141,30 @@ class ToastNotification:
         
         toast_surf = pygame.Surface((toast_w, toast_h), pygame.SRCALPHA)
         
-        # Background with border
+        # Background with border (coerce color components to ints; handle alpha issues robustly)
         bg_rect = pygame.Rect(0, 0, toast_w, toast_h)
-        pygame.draw.rect(toast_surf, (50, 60, 80, alpha), bg_rect, border_radius=8)
-        
-        # Colored border by type
-        border_color = (*self.colors[self.toast_type][:3], alpha)
-        pygame.draw.rect(toast_surf, border_color, bg_rect, 2, border_radius=8)
-        
+        try:
+            bg_color = (int(50), int(60), int(80), int(alpha))
+            pygame.draw.rect(toast_surf, bg_color, bg_rect, border_radius=8)
+        except Exception:
+            logger.exception("Failed drawing toast background with color %r; falling back to opaque color. alpha=%r", (50,60,80,alpha), alpha)
+            pygame.draw.rect(toast_surf, (50, 60, 80), bg_rect, border_radius=8)
+
+        # Colored border by type (coerce to ints and fallback)
+        try:
+            col = self.colors.get(self.toast_type, (200, 200, 200))
+            border_color = (int(col[0]), int(col[1]), int(col[2]), int(alpha))
+            pygame.draw.rect(toast_surf, border_color, bg_rect, 2, border_radius=8)
+        except Exception:
+            logger.exception("Failed drawing toast border with color %r; falling back to opaque.", (self.toast_type, col, alpha))
+            pygame.draw.rect(toast_surf, (200, 200, 200), bg_rect, 2, border_radius=8)
+
         # Text with alpha
         text_with_alpha = text_surf.copy()
-        text_with_alpha.set_alpha(alpha)
+        try:
+            text_with_alpha.set_alpha(int(alpha))
+        except Exception:
+            logger.exception("Failed to set text alpha: %r", alpha)
         toast_surf.blit(text_with_alpha, (padding, padding))
         
         # Render centered
@@ -427,6 +443,11 @@ class ZeldaGUI:
         self.control_panel_scroll_dragging = False
         self.control_panel_scroll_drag_offset = 0
         self.control_panel_content_height = 0
+        # Debug toggle to draw layout markers and print metrics
+        self.debug_control_panel = False
+
+        # Inventory refresh flag (used when updates originate from worker threads)
+        self.inventory_needs_refresh = False
 
         # Scroll inertia/momentum
         self.control_panel_scroll_velocity = 0.0  # pixels per second
@@ -725,7 +746,8 @@ class ZeldaGUI:
         margin_left = 12
         margin_top = 48  # Space for collapse button + "FEATURES" title
         checkbox_spacing = 26
-        dropdown_spacing = 36
+        # Increase dropdown spacing to make room for labels
+        dropdown_spacing = 44
         section_gap = 18
         
         # Start position (below "FEATURES" title)
@@ -929,22 +951,56 @@ class ZeldaGUI:
             )
             self.widget_manager.add_widget(button)
         
-        # === POST-BUILD: compute content height and decide if we should scroll ===
-        # Compute bottom-most widget to determine content height
+        # === POST-BUILD: make sure widgets are positioned and compute content height ===
+        # Reposition widgets once so final positions (matching _reposition_widgets) are used
+        try:
+            self._reposition_widgets(panel_x, panel_y)
+        except Exception:
+            pass
+        # Compute top-most and bottom-most widget to determine content height
         max_widget_bottom = 0
+        min_widget_top = 10**9
         for w in self.widget_manager.widgets:
-            bottom = None
-            if hasattr(w, 'full_rect'):
-                bottom = w.full_rect.bottom
-            elif hasattr(w, 'dropdown_rect'):
-                bottom = w.rect.bottom
-            elif hasattr(w, 'rect'):
-                bottom = w.rect.bottom
-            if bottom and bottom > max_widget_bottom:
-                max_widget_bottom = bottom
+            # Determine widget top (prefer full_rect if present)
+            if hasattr(w, 'full_rect') and getattr(w, 'full_rect') is not None:
+                top = int(getattr(w, 'full_rect').top)
+            elif hasattr(w, 'rect') and getattr(w, 'rect') is not None:
+                top = int(getattr(w, 'rect').top)
+            else:
+                top = panel_y
+
+            # Determine widget bottom (consider dropdown_rect if present, as menu may expand)
+            bottoms = []
+            if hasattr(w, 'dropdown_rect') and getattr(w, 'dropdown_rect') is not None:
+                try:
+                    bottoms.append(int(getattr(w, 'dropdown_rect').bottom))
+                except Exception:
+                    pass
+            if hasattr(w, 'full_rect') and getattr(w, 'full_rect') is not None:
+                bottoms.append(int(getattr(w, 'full_rect').bottom))
+            if hasattr(w, 'rect') and getattr(w, 'rect') is not None:
+                bottoms.append(int(getattr(w, 'rect').bottom))
+
+            bottom = max(bottoms) if bottoms else top
+
+            min_widget_top = min(min_widget_top, top)
+            max_widget_bottom = max(max_widget_bottom, bottom)
+            if getattr(self, 'debug_control_panel', False):
+                try:
+                    print(f"[LOOP W] {w.__class__.__name__} label={getattr(w,'label',None)!r} top={top} bottom={bottom} (rect={getattr(w,'rect',None)})")
+                except Exception:
+                    pass
+
         # Desired content height (space required to show everything)
-        content_height = max_widget_bottom - panel_y + 12 if max_widget_bottom > 0 else min_panel_height
+        extra_top = max(0, panel_y - min_widget_top)
+        content_height = max_widget_bottom - panel_y + 12 + extra_top if max_widget_bottom > 0 else min_panel_height
         self.control_panel_content_height = content_height
+        # Diagnostics: when debug is enabled, print computed bounds to help trace mismatches
+        if getattr(self, 'debug_control_panel', False):
+            try:
+                print(f"[UPDATE PANEL] min_top={min_widget_top} max_bottom={max_widget_bottom} extra_top={extra_top} panel_y={panel_y} content_h={content_height}")
+            except Exception:
+                pass
 
         # If content exceeds available height, enable scrolling instead of enlarging
         if content_height > max_available_height:
@@ -953,11 +1009,14 @@ class ZeldaGUI:
             self.control_panel_can_scroll = True
             self.control_panel_scroll = getattr(self, 'control_panel_scroll', 0)
             self.control_panel_scroll = max(0, min(self.control_panel_scroll, content_height - panel_height))
+            # Update scroll max for external usage
+            self.control_panel_scroll_max = max(0, content_height - panel_height)
         else:
             # Grow to fit content when possible
             panel_height = min(max_available_height, max(content_height, min_panel_height))
             self.control_panel_can_scroll = False
             self.control_panel_scroll = 0
+            self.control_panel_scroll_max = 0
 
         # Update control panel rect height and collapse button Y
         self.control_panel_rect.height = panel_height
@@ -976,7 +1035,7 @@ class ZeldaGUI:
         button_size = 28
         button_margin = 6
         margin_top = button_margin + max(button_size, self.font.get_height()) + 8
-        item_spacing = 30  # Vertical spacing between checkboxes
+        item_spacing = 44  # Vertical spacing between checkboxes (increased for label breathing room)
         section_gap = 20  # Gap between sections
         
         # Starting Y position (below "FEATURES" title)
@@ -1005,13 +1064,13 @@ class ZeldaGUI:
                 if checkbox_idx > 0 and dropdown_idx == 0:
                     current_y += checkbox_idx * item_spacing + section_gap
                 
-                widget.pos = (panel_x + margin_left, current_y + dropdown_idx * 38)
+                widget.pos = (panel_x + margin_left, current_y + dropdown_idx * item_spacing)
                 dropdown_idx += 1
                 
             elif isinstance(widget, ButtonWidget):
                 # Position buttons in a grid after dropdowns
                 if dropdown_idx > 0 and button_idx == 0:
-                    current_y += dropdown_idx * 38 + section_gap
+                    current_y += dropdown_idx * item_spacing + section_gap
                 
                 row = button_idx // buttons_per_row
                 col = button_idx % buttons_per_row
@@ -1025,11 +1084,31 @@ class ZeldaGUI:
         """Reconcile counters and update the modern HUD (if present).
 
         This centralizes synchronization so any pickup/usage path calls the same routine.
+        If called from a non-main thread, set a flag so the main thread performs the UI update
+        (pygame surfaces & rendering should be touched only from the main thread).
         """
+        # Instrumentation: log entry and key metrics for debugging real-time update issues
         try:
-            self._sync_inventory_counters()
+            thread_name = None
+            import threading
+            thread_name = threading.current_thread().name
         except Exception:
-            pass
+            thread_name = 'unknown'
+        logger.debug("_update_inventory_and_hud: entry (thread=%s, inventory_needs_refresh=%s)",
+                     thread_name, getattr(self, 'inventory_needs_refresh', False))
+
+        try:
+            # Always recompute counters (safe operation)
+            before_keys = getattr(self, 'keys_collected', None)
+            env_keys = getattr(getattr(self, 'env', None), 'state', None)
+            env_keys_val = getattr(env_keys, 'keys', None) if env_keys is not None else None
+            logger.debug("Counters before sync: env.keys=%s, keys_collected=%s", env_keys_val, before_keys)
+            self._sync_inventory_counters()
+            after_keys = getattr(self, 'keys_collected', None)
+            logger.debug("Counters after sync: keys_collected=%s", after_keys)
+        except Exception:
+            logger.exception("_update_inventory_and_hud: failed while syncing counters")
+
         # Defensive consistency check
         try:
             if getattr(self.env, 'state', None):
@@ -1038,9 +1117,34 @@ class ZeldaGUI:
         except Exception:
             pass
 
-        # Update modern HUD if available
+        # If we're not on the main thread, defer the HUD update to the main loop
         try:
+            import threading
+            if threading.current_thread() is not threading.main_thread():
+                # Mark for refresh; main loop will call _update_inventory_and_hud() again
+                self.inventory_needs_refresh = True
+                logger.debug("_update_inventory_and_hud: deferred to main thread (set inventory_needs_refresh=True)")
+                return
+        except Exception:
+            pass
+
+        # Update modern HUD if available (main-thread only)
+        try:
+            # If we were previously deferring the update, clear the flag now since we're on the main thread
+            if getattr(self, 'inventory_needs_refresh', False):
+                logger.debug("_update_inventory_and_hud: clearing deferred flag (main thread)")
+                try:
+                    self.inventory_needs_refresh = False
+                except Exception:
+                    pass
+
             if getattr(self, 'modern_hud', None):
+                # Record HUD state before update for diagnostics
+                try:
+                    hud_before = getattr(self.modern_hud, 'last', None) if hasattr(self.modern_hud, 'last') else None
+                except Exception:
+                    hud_before = None
+
                 self.modern_hud.update_game_state(
                     keys=getattr(self.env.state, 'keys', 0),
                     bombs=1 if getattr(self.env.state, 'has_bomb', False) else 0,
@@ -1049,7 +1153,7 @@ class ZeldaGUI:
                     steps=getattr(self, 'step_count', 0),
                     message=getattr(self, 'message', '')
                 )
-                # Also mirror counts onto HUD fields if present
+                # Also mirror counts onto HUD fields if present (include usage counters)
                 try:
                     if hasattr(self.modern_hud, 'keys_collected'):
                         self.modern_hud.keys_collected = getattr(self, 'keys_collected', 0)
@@ -1057,8 +1161,36 @@ class ZeldaGUI:
                         self.modern_hud.bombs_collected = getattr(self, 'bombs_collected', 0)
                     if hasattr(self.modern_hud, 'boss_keys_collected'):
                         self.modern_hud.boss_keys_collected = getattr(self, 'boss_keys_collected', 0)
+
+                    # Usage counters (keys_used, bombs_used, boss_keys_used)
+                    if hasattr(self.modern_hud, 'keys_used'):
+                        self.modern_hud.keys_used = getattr(self, 'keys_used', 0)
+                    if hasattr(self.modern_hud, 'bombs_used'):
+                        self.modern_hud.bombs_used = getattr(self, 'bombs_used', 0)
+                    if hasattr(self.modern_hud, 'boss_keys_used'):
+                        self.modern_hud.boss_keys_used = getattr(self, 'boss_keys_used', 0)
+
+                    # If a nested inventory panel exists, mirror values there too
+                    if hasattr(self.modern_hud, 'inventory'):
+                        try:
+                            self.modern_hud.inventory.keys_collected = getattr(self, 'keys_collected', 0)
+                            self.modern_hud.inventory.bombs_collected = getattr(self, 'bombs_collected', 0)
+                            self.modern_hud.inventory.boss_keys_collected = getattr(self, 'boss_keys_collected', 0)
+                            self.modern_hud.inventory.keys_used = getattr(self, 'keys_used', 0)
+                            self.modern_hud.inventory.bombs_used = getattr(self, 'bombs_used', 0)
+                            self.modern_hud.inventory.boss_keys_used = getattr(self, 'boss_keys_used', 0)
+                        except Exception:
+                            logger.exception("Failed setting nested inventory attributes")
                 except Exception:
-                    pass
+                    logger.exception("Failed setting HUD count attributes")
+
+                try:
+                    # Capture HUD state after update
+                    hud_after = getattr(self.modern_hud, 'last', None) if hasattr(self.modern_hud, 'last') else None
+                    logger.debug("HUD updated: before=%r after=%r env.keys=%s keys_collected=%s",
+                                 hud_before, hud_after, getattr(self.env.state, 'keys', None), getattr(self, 'keys_collected', None))
+                except Exception:
+                    logger.exception("Failed to log HUD post-update state")
         except Exception as e:
             logger.warning(f"Failed to update modern HUD: {e}")
 
@@ -1173,13 +1305,22 @@ class ZeldaGUI:
     
     def _track_item_usage(self, old_state, new_state):
         """Detect when items are used (doors opened, walls bombed)."""
+        # Defensive attribute initialization for lightweight runner tests
+        if not hasattr(self, 'used_items'):
+            self.used_items = []
+        if not hasattr(self, 'usage_effects'):
+            self.usage_effects = []
+
         # Check if key was used
         if new_state.keys < old_state.keys:
             keys_used = old_state.keys - new_state.keys
             pos = new_state.position
             timestamp = time.time()
 
-            self.used_items.append((pos, 'key', pos, timestamp))
+            try:
+                self.used_items.append((pos, 'key', pos, timestamp))
+            except Exception:
+                logger.exception("Failed appending to used_items")
             # Track used counter for visualization
             self.keys_used = getattr(self, 'keys_used', 0) + keys_used
             try:
@@ -1676,25 +1817,22 @@ class ZeldaGUI:
         
         for widget, orig_pos in backups:
             try:
-                # Compute widget local position relative to panel and apply scroll offset
+                # Compute widget local position relative to panel and apply scroll offset.
+                # Use the widget's full_rect (includes label area) so labels are not clipped.
                 if orig_pos is None:
                     continue
-                # widget.rect is global; calculate local coords
-                local_x = widget.rect.x - panel_x
-                local_y = widget.rect.y - panel_y - (getattr(self, 'control_panel_scroll', 0) if getattr(self, 'control_panel_can_scroll', False) else 0)
-
-                # Create a temp surface sized to the widget's interactive area
                 full_rect = getattr(widget, 'full_rect', widget.rect)
                 dropdown_rect = getattr(widget, 'dropdown_rect', None)
-                # If this is a dropdown and it is open, avoid rendering the expanded menu into the
-                # panel surface (it may extend beyond panel bounds). Render only the main button
-                # here and draw the expanded menu later on the main surface.
-                if getattr(widget, '__class__', None).__name__ == 'DropdownWidget' and getattr(widget, 'is_open', False):
-                    target_w = min(panel_width - 24, max(full_rect.width, widget.rect.width))
-                    target_h = widget.rect.height
-                else:
-                    target_w = min(panel_width - 24, max(full_rect.width, dropdown_rect.width if dropdown_rect is not None else 0))
-                    target_h = max(widget.rect.height, dropdown_rect.height if dropdown_rect is not None else widget.rect.height)
+                scroll_offset = getattr(self, 'control_panel_scroll', 0) if getattr(self, 'control_panel_can_scroll', False) else 0
+
+                local_x = full_rect.x - panel_x
+                local_y = full_rect.y - panel_y - scroll_offset
+
+                # Create a temp surface sized to include the label area (full_rect) so title is visible.
+                # When dropdown is open, we still render only the main control here; the expanded menu
+                # will be drawn later on the main surface by `render_menu` to avoid panel clipping.
+                target_w = min(panel_width - 24, max(full_rect.width, dropdown_rect.width if dropdown_rect is not None else 0, widget.rect.width))
+                target_h = full_rect.height
 
                 # Skip drawing if widget is outside the visible panel area (vertical clipping)
                 # Ensure widgets do not draw into the header area at the top
@@ -1704,8 +1842,10 @@ class ZeldaGUI:
 
                 temp_surf = pygame.Surface((max(1, target_w), max(1, target_h)), pygame.SRCALPHA)
 
-                # Temporarily set widget.pos to (0,0) so it draws at origin of temp_surf
-                widget.pos = (0, 0)
+                # Temporarily set widget.pos so the main control sits below any label area
+                # Compute label offset: full_rect.height includes label area above the control.
+                label_offset = max(0, full_rect.height - widget.rect.height)
+                widget.pos = (0, int(label_offset))
                 widget.render(temp_surf)
 
                 # Apply per-widget alpha
@@ -1780,7 +1920,33 @@ class ZeldaGUI:
             except Exception:
                 pass
 
-        # Draw collapse button on top of the panel so it's always visible
+        # Optional debug overlay: print metrics and draw per-widget full_rect markers
+        if getattr(self, 'debug_control_panel', False):
+            try:
+                scroll_offset = getattr(self, 'control_panel_scroll', 0) if getattr(self, 'control_panel_can_scroll', False) else 0
+                print(f"[DEBUG PANEL] panel_y={panel_y} panel_h={panel_height} content_h={self.control_panel_content_height} scroll={scroll_offset} scroll_max={getattr(self,'control_panel_scroll_max',0)}")
+                for w in self.widget_manager.widgets:
+                    fr = getattr(w, 'full_rect', w.rect)
+                    # Compute global positions shifted by current scroll (so lines align with what user sees)
+                    top_y = fr.y - scroll_offset
+                    bottom_y = fr.bottom - scroll_offset
+                    # Draw markers regardless of being visible so we can inspect all widgets
+                    pygame.draw.line(surface, (255, 50, 50), (panel_x + 4, top_y), (panel_x + panel_width - 4, top_y), 1)
+                    pygame.draw.line(surface, (50, 255, 50), (panel_x + 4, bottom_y), (panel_x + panel_width - 4, bottom_y), 1)
+
+                    # Gather label/font info for diagnostics
+                    lbl = getattr(w, 'label', None)
+                    has_label = bool(lbl)
+                    lbl_font = getattr(w, 'label_font', None)
+                    lbl_font_h = lbl_font.get_height() if lbl_font is not None else None
+                    main_font = getattr(w, 'font', None)
+                    main_font_h = main_font.get_height() if main_font is not None else None
+
+                    # Print per-widget info for quick inspection
+                    print(f"[WIDGET] name={w.__class__.__name__} label={lbl!r} has_label={has_label} lbl_h={lbl_font_h} main_h={main_font_h} top={fr.y} bottom={fr.bottom} full_h={fr.height}")
+            except Exception as e:
+                logger.warning(f"Debug overlay failed: {e}")
+        # Ensure collapse button colors are always assigned (debug block may be skipped)
         if is_hovering:
             button_color = (80, 120, 180)
             border_color = (150, 200, 255)
@@ -2403,6 +2569,14 @@ class ZeldaGUI:
                     else:
                         self._set_message('Debug overlay OFF')
                     continue
+                # Shift-F12 toggles control-panel layout debug overlay (shows widget bounds & metrics)
+                if event.type == pygame.KEYDOWN and event.key == pygame.K_F12 and (pygame.key.get_mods() & pygame.KMOD_SHIFT):
+                    self.debug_control_panel = not getattr(self, 'debug_control_panel', False)
+                    if self.debug_control_panel:
+                        self._set_message('Control panel debug ON (Shift+F12)')
+                    else:
+                        self._set_message('Control panel debug OFF')
+                    continue
                 # Page Up / Page Down to scroll control panel when visible and hovered
                 if event.type == pygame.KEYDOWN and event.key in (pygame.K_PAGEUP, pygame.K_PAGEDOWN):
                     if self.control_panel_enabled and getattr(self, 'control_panel_can_scroll', False) and getattr(self, 'control_panel_rect', None) and self.control_panel_rect.collidepoint(pygame.mouse.get_pos()) and not self.control_panel_collapsed:
@@ -2812,29 +2986,17 @@ class ZeldaGUI:
                         self.message = "Map Reset"
                     
                     elif event.key == pygame.K_n:
-                        self.current_map_idx = (self.current_map_idx + 1) % len(self.maps)
-                        self._load_current_map()
-                        self._center_view()
-                        # Clear effects and reset step count
-                        if self.effects:
-                            self.effects.clear()
-                        self.step_count = 0
+                        self._next_map()
                     
                     elif event.key == pygame.K_p:
-                        self.current_map_idx = (self.current_map_idx - 1) % len(self.maps)
-                        self._load_current_map()
-                        self._center_view()
-                        # Clear effects and reset step count
-                        if self.effects:
-                            self.effects.clear()
-                        self.step_count = 0
-                    
+                        self._prev_map()
+
                     elif event.key == pygame.K_PLUS or event.key == pygame.K_EQUALS:
                         self._change_zoom(1)
-                    
+
                     elif event.key == pygame.K_MINUS:
                         self._change_zoom(-1)
-                    
+
                     elif event.key == pygame.K_0:
                         # Reset zoom to default
                         self.zoom_idx = self.DEFAULT_ZOOM_IDX
@@ -2842,21 +3004,21 @@ class ZeldaGUI:
                         self._load_assets()
                         self._center_view()
                         self.message = "Zoom reset to default"
-                    
+
                     elif event.key == pygame.K_f:
                         # Auto-fit zoom to show entire map
                         self._auto_fit_zoom()
                         self.message = f"Auto-fit: {self.TILE_SIZE}px"
-                    
+
                     elif event.key == pygame.K_c:
                         # Center view on player
                         self._center_on_player()
-                    
+
                     elif event.key == pygame.K_l:
                         ok = self.load_visual_map(os.path.join(os.getcwd(), 'screenshot.png'))
                         if not ok:
                             self.message = "Failed to load ./screenshot.png"
-                    
+
                     # Track key holds for continuous movement
                     elif event.key in self.keys_held and not self.auto_mode:
                         self.keys_held[event.key] = True
@@ -2866,7 +3028,7 @@ class ZeldaGUI:
                         # Manual movement - check for diagonal combos first
                         keys = pygame.key.get_pressed()
                         action = None
-                        
+
                         # Check diagonal combinations (two arrow keys pressed)
                         if keys[pygame.K_UP] and keys[pygame.K_LEFT]:
                             action = Action.UP_LEFT
@@ -2877,18 +3039,53 @@ class ZeldaGUI:
                         elif keys[pygame.K_DOWN] and keys[pygame.K_RIGHT]:
                             action = Action.DOWN_RIGHT
                         # Cardinal directions (single key)
-                        elif event.key == pygame.K_UP:
+                        elif keys[pygame.K_UP]:
                             action = Action.UP
-                        elif event.key == pygame.K_DOWN:
+                        elif keys[pygame.K_DOWN]:
                             action = Action.DOWN
-                        elif event.key == pygame.K_LEFT:
+                        elif keys[pygame.K_LEFT]:
                             action = Action.LEFT
-                        elif event.key == pygame.K_RIGHT:
+                        elif keys[pygame.K_RIGHT]:
                             action = Action.RIGHT
-                        
+
                         if action is not None:
                             self._manual_step(action)
                             self._center_on_player()
+
+    def _next_map(self):
+        """Move to the next map and stop auto-solve if running."""
+        try:
+            if getattr(self, 'auto_mode', False):
+                self._stop_auto('map change (next)')
+        except Exception:
+            pass
+        try:
+            self.current_map_idx = (self.current_map_idx + 1) % len(self.maps)
+            self._load_current_map()
+            self._center_view()
+            if self.effects:
+                self.effects.clear()
+            self.step_count = 0
+        except Exception:
+            logger.exception("_next_map failed")
+
+    def _prev_map(self):
+        """Move to the previous map and stop auto-solve if running."""
+        try:
+            if getattr(self, 'auto_mode', False):
+                self._stop_auto('map change (prev)')
+        except Exception:
+            pass
+        try:
+            self.current_map_idx = (self.current_map_idx - 1) % len(self.maps)
+            self._load_current_map()
+            self._center_view()
+            if self.effects:
+                self.effects.clear()
+            self.step_count = 0
+        except Exception:
+            logger.exception("_prev_map failed")
+
             
             # Auto-solve stepping
             if self.auto_mode and not self.env.done:
@@ -3897,11 +4094,45 @@ class ZeldaGUI:
         
         return True, full_path
     
+    def _stop_auto(self, reason: str = None):
+        """Stop auto-solve mode with consistent logging and cleanup."""
+        try:
+            logger.debug("_stop_auto called: %s", reason)
+            self.auto_mode = False
+            # Clear auto path to prevent accidental continuation
+            try:
+                self.auto_path = []
+                self.auto_step_idx = 0
+            except Exception:
+                pass
+            # Optional: set a status message
+            try:
+                self._set_message(f"Auto-solve stopped: {reason}")
+            except Exception:
+                pass
+        except Exception:
+            logger.exception("_stop_auto failed: %s", reason)
+
     def _auto_step(self):
         """Execute one step of auto-solve with comprehensive error handling."""
+        # Helper to consistently stop auto-mode with a log (local wrapper)
+        def _stop_auto_local(reason: str = None):
+            try:
+                logger.debug("_stop_auto_local calling _stop_auto: %s", reason)
+                self._stop_auto(reason)
+            except Exception:
+                logger.exception("_stop_auto_local failed: %s", reason)
+
         try:
+            # Entry instrumentation
+            try:
+                logger.debug("_auto_step entry: auto_mode=%s auto_step_idx=%s path_len=%s", getattr(self, 'auto_mode', None), getattr(self, 'auto_step_idx', None), len(getattr(self, 'auto_path', []) if getattr(self, 'auto_path', None) else []))
+            except Exception:
+                logger.debug("_auto_step entry: failed to read entry state")
+
             # Validate auto-mode state
             if not self.auto_mode:
+                logger.debug("_auto_step: auto_mode disabled; returning")
                 return
             
             if not hasattr(self, 'auto_path') or not self.auto_path:
@@ -3910,7 +4141,7 @@ class ZeldaGUI:
                 return
             
             if self.auto_step_idx >= len(self.auto_path) - 1:
-                self.auto_mode = False
+                _stop_auto_local('path complete')
                 self._set_message("Solution complete!")
                 self.status_message = "Completed"
                 return
@@ -3938,24 +4169,32 @@ class ZeldaGUI:
             # Validate environment
             if self.env is None:
                 self._show_error("Environment not initialized")
-                self.auto_mode = False
+                _stop_auto_local('env none')
                 return
             
             if not hasattr(self.env, 'state') or self.env.state is None:
                 self._show_error("Invalid environment state")
-                self.auto_mode = False
+                _stop_auto_local('env.state invalid')
                 return
-            
+
+            # Advance to next step and compute direction
             self.auto_step_idx += 1
             target = self.auto_path[self.auto_step_idx]
             current = self.env.state.position
-            
-            # Check if this is a teleport (non-adjacent move)
             dr = target[0] - current[0]
             dc = target[1] - current[1]
-            
-            if abs(dr) > 1 or abs(dc) > 1 or (abs(dr) == 1 and abs(dc) == 1):
-                # Teleport - directly set position
+
+            # If any background thread requested inventory refresh, handle it now
+            if getattr(self, 'inventory_needs_refresh', False):
+                try:
+                    self._update_inventory_and_hud()
+                except Exception:
+                    pass
+                finally:
+                    self.inventory_needs_refresh = False
+
+            # Teleport - directly set position (non-adjacent move)
+            if abs(dr) > 1 or abs(dc) > 1:
                 old_state = GameState(
                     position=self.env.state.position,
                     keys=self.env.state.keys,
@@ -3964,7 +4203,7 @@ class ZeldaGUI:
                     opened_doors=self.env.state.opened_doors.copy() if hasattr(self.env.state.opened_doors, 'copy') else set(self.env.state.opened_doors),
                     collected_items=self.env.state.collected_items.copy() if hasattr(self.env.state.collected_items, 'copy') else set(self.env.state.collected_items)
                 )
-                
+
                 self.env.state.position = target
                 self._set_message(f"Teleport! {current} -> {target}")
                 self.status_message = "Teleporting..."
@@ -3993,14 +4232,14 @@ class ZeldaGUI:
                         self.renderer.set_agent_position(target[0], target[1], immediate=True)
                     except Exception as e:
                         logger.warning(f"Renderer update failed: {e}")
-                
+
                 if self.effects:
                     try:
                         # Add ripple effect at teleport destination (grid coordinates)
                         self.effects.add_effect(RippleEffect(target, (100, 200, 255)))
                     except Exception as e:
                         logger.warning(f"Effect creation failed: {e}")
-                
+
                 # Check if reached goal
                 if target == self.env.goal_pos:
                     self.env.won = True
@@ -4008,17 +4247,18 @@ class ZeldaGUI:
                     self.auto_mode = False
                     self._set_message("AUTO-SOLVE: Victory!")
                     self.status_message = "Victory!"
-            else:
-                # Normal move - capture old state
-                old_state = GameState(
-                    position=self.env.state.position,
-                    keys=self.env.state.keys,
-                    has_bomb=self.env.state.has_bomb,
-                    has_boss_key=self.env.state.has_boss_key,
-                    opened_doors=self.env.state.opened_doors.copy() if hasattr(self.env.state.opened_doors, 'copy') else set(self.env.state.opened_doors),
-                    collected_items=self.env.state.collected_items.copy() if hasattr(self.env.state.collected_items, 'copy') else set(self.env.state.collected_items)
-                )
-            
+                return
+
+            # Normal move - capture old state
+            old_state = GameState(
+                position=self.env.state.position,
+                keys=self.env.state.keys,
+                has_bomb=self.env.state.has_bomb,
+                has_boss_key=self.env.state.has_boss_key,
+                opened_doors=self.env.state.opened_doors.copy() if hasattr(self.env.state.opened_doors, 'copy') else set(self.env.state.opened_doors),
+                collected_items=self.env.state.collected_items.copy() if hasattr(self.env.state.collected_items, 'copy') else set(self.env.state.collected_items)
+            )
+
             if dr == -1:
                 action = Action.UP
             elif dr == 1:
@@ -4028,7 +4268,9 @@ class ZeldaGUI:
             else:
                 action = Action.RIGHT
             
+            logger.debug("_auto_step: performing env.step action=%r (int=%s) target=%s current=%s", action, int(action), target, current)
             state, reward, done, info = self.env.step(int(action))
+            logger.debug("_auto_step: env.step returned info=%r, new_pos=%s, env.keys=%s", info, getattr(self.env.state, 'position', None), getattr(self.env.state, 'keys', None))
             
             # Get new position immediately after step
             new_pos = self.env.state.position
@@ -4048,7 +4290,7 @@ class ZeldaGUI:
                     has_boss_key=self.env.state.has_boss_key,
                     position=new_pos,
                     steps=self.step_count,
-                    message=self.message
+                    message=getattr(self, 'message', '')
                 )
                 # Sync counters and update inventory display with collection counts
                 self._sync_inventory_counters()
@@ -4087,13 +4329,14 @@ class ZeldaGUI:
         
         except KeyError as e:
             self._show_error(f"State access error: {str(e)}")
-            self.auto_mode = False
+            _stop_auto_local('KeyError')
         except IndexError as e:
             self._show_error(f"Path index error: {str(e)}")
-            self.auto_mode = False
+            _stop_auto_local('IndexError')
         except AttributeError as e:
+            logger.exception("Auto-step AttributeError caught: %s", e)
             self._show_error(f"Invalid state attribute: {str(e)}")
-            self.auto_mode = False
+            _stop_auto_local('AttributeError')
         except Exception as e:
             self._show_error(f"Auto-solve error: {str(e)}")
             self.auto_mode = False
@@ -4837,7 +5080,13 @@ class ZeldaGUI:
                 self.effects.add_effect(FlashEffect(new_pos, (180, 40, 180), 0.5))  # Purple flash
             self.item_pickup_times['boss_key'] = time.time()
             self.message = f"BOSS KEY acquired! ({self.boss_keys_collected}/{self.total_boss_keys})"
-        
+
+        # Detect and track item usage (keys/bombs/boss keys)
+        try:
+            self._track_item_usage(old_state, self.env.state)
+        except Exception:
+            pass
+
         # Update modern HUD with current game state
         if self.modern_hud:
             self.modern_hud.update_game_state(
@@ -4898,6 +5147,16 @@ class ZeldaGUI:
         if self.effects:
             self.effects.update(effective_dt)
         
+        # If a background thread requested an inventory refresh, perform it here (main thread)
+        if getattr(self, 'inventory_needs_refresh', False):
+            try:
+                logger.debug("Processing deferred inventory refresh on main thread")
+                self._update_inventory_and_hud()
+            except Exception:
+                pass
+            finally:
+                self.inventory_needs_refresh = False
+
         # Update modern HUD with current game state every frame (real-time)
         if self.modern_hud and self.env:
             self.modern_hud.update_game_state(
@@ -4908,11 +5167,18 @@ class ZeldaGUI:
                 steps=self.step_count,
                 message=self.message
             )
+            if hasattr(self.modern_hud, 'inventory'):
+                self.modern_hud.inventory.keys_collected = self.keys_collected
+                self.modern_hud.inventory.bombs_collected = self.bombs_collected
+                self.modern_hud.inventory.boss_keys_collected = self.boss_keys_collected
+                self.modern_hud.inventory.keys_used = getattr(self, 'keys_used', 0)
+                self.modern_hud.inventory.bombs_used = getattr(self, 'bombs_used', 0)
+                self.modern_hud.inventory.boss_keys_used = getattr(self, 'boss_keys_used', 0)
+            # Backwards compatibility: also set direct attributes if present
             if hasattr(self.modern_hud, 'keys_collected'):
                 self.modern_hud.keys_collected = self.keys_collected
                 self.modern_hud.bombs_collected = self.bombs_collected
                 self.modern_hud.boss_keys_collected = self.boss_keys_collected
-            # Update usage counters too
             if hasattr(self.modern_hud, 'keys_used'):
                 self.modern_hud.keys_used = getattr(self, 'keys_used', 0)
             if hasattr(self.modern_hud, 'bombs_used'):

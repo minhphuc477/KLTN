@@ -81,6 +81,11 @@ def test_pickup_and_use_key_updates_hud():
     assert env.state.keys == 1
     assert runner.modern_hud.last is not None
     assert runner.modern_hud.last['keys'] == 1
+    # Ensure inventory panel sees collected count (support DummyHUD fallback)
+    if hasattr(runner.modern_hud, 'inventory'):
+        assert runner.modern_hud.inventory.keys_collected == runner.keys_collected
+    elif hasattr(runner.modern_hud, 'keys_collected'):
+        assert runner.modern_hud.keys_collected == runner.keys_collected
 
     # Move to locked door and attempt to open (use key)
     # We simulate movement by modifying state (as env.step would do)

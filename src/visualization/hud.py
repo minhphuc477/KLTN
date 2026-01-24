@@ -332,6 +332,13 @@ class InventoryPanel:
         self.has_boss_key: bool = False
         self.has_map: bool = False
         self.has_compass: bool = False
+        # Collected / used counters for visual feedback
+        self.keys_collected: int = 0
+        self.keys_used: int = 0
+        self.bombs_collected: int = 0
+        self.bombs_used: int = 0
+        self.boss_keys_collected: int = 0
+        self.boss_keys_used: int = 0
     
     def _get_font(self) -> Font:
         """Get or create the title font."""
@@ -374,21 +381,27 @@ class InventoryPanel:
         # Keys
         self.icon_display.render(surface, x + 4, current_y, 'key', self.keys,
                                 highlight=self.keys > 0)
+        # Show collected/used counters inline
+        small_font = pygame.font.SysFont('Arial', self.theme.font_size_small)
+        cu_text = small_font.render(f"Collected: {self.keys_collected}  Used: {self.keys_used}", True, self.theme.text_secondary)
+        surface.blit(cu_text, (x + 90, current_y + 2))
         current_y += self.theme.line_height
-        
+
         # Bombs
         if self.bombs > 0:
             self.icon_display.render(surface, x + 4, current_y, 'bomb', self.bombs)
+            bc_text = small_font.render(f"Collected: {self.bombs_collected}  Used: {self.bombs_used}", True, self.theme.text_secondary)
+            surface.blit(bc_text, (x + 90, current_y + 2))
             current_y += self.theme.line_height
-        
+
         # Boss key
         if self.has_boss_key:
             small_font = pygame.font.SysFont('Arial', self.theme.font_size_small)
             bk_text = small_font.render("Boss Key ✓", True, self.theme.text_success)
             surface.blit(bk_text, (x + 4, current_y))
-            current_y += self.theme.line_height
-        
-        return current_y - y
+            # Show boss key counts
+            bk_counts = small_font.render(f"Collected: {self.boss_keys_collected}  Used: {self.boss_keys_used}", True, self.theme.text_secondary)
+            surface.blit(bk_counts, (x + 90, current_y + 2))
 
 
 # ==========================================

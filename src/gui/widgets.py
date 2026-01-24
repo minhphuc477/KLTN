@@ -245,21 +245,26 @@ class DropdownWidget(BaseWidget):
         )
         # Compute full_rect that includes label area above the control so layout
         # routines can account for the extra height when computing content size.
-        label_h = 0
-        if getattr(self, 'label_font', None):
-            try:
-                label_h = self.label_font.get_height() + 4
-            except Exception:
-                label_h = 0
+        # Be robust: always have a non-zero label height using either label_font or font
+        try:
+            lbl_font = getattr(self, 'label_font', None) or getattr(self, 'font', None)
+            if lbl_font is None:
+                # Last resort: create a small default font (shouldn't normally be necessary)
+                lbl_font = pygame.font.SysFont('Arial', 11, bold=True)
+            # Add a bit more padding above the control so the label sits further away
+            label_h = max(12, lbl_font.get_height() + 8)
+        except Exception:
+            label_h = 14
+        # Store full_rect including label area
         self.full_rect = pygame.Rect(self.rect.x, self.rect.y - label_h, self.rect.width, self.rect.height + label_h)
-    
+
     def update(self, mouse_pos: Tuple[int, int], dt: float) -> None:
         """Update hover state."""
         if not self.enabled:
             self.state = WidgetState.DISABLED
             self.is_open = False
             return
-        
+
         if self.is_open:
             # Check hover over options
             self.hover_option = -1
@@ -272,9 +277,11 @@ class DropdownWidget(BaseWidget):
         else:
             # Check hover over main button
             if self.rect.collidepoint(mouse_pos):
-                self.state = WidgetState.HOVER
+                if self.state != WidgetState.ACTIVE:
+                    self.state = WidgetState.HOVER
             else:
-                self.state = WidgetState.NORMAL
+                if self.state != WidgetState.ACTIVE:
+                    self.state = WidgetState.NORMAL
     
     def handle_mouse_down(self, pos: Tuple[int, int], button: int) -> bool:
         """Handle click to toggle or select option."""
@@ -325,14 +332,25 @@ class DropdownWidget(BaseWidget):
         # Draw label/title above the dropdown if provided
         if getattr(self, 'label', None):
             try:
-                lbl_font = getattr(self, 'label_font', None) or self.font
+                lbl_font = getattr(self, 'label_font', None) or getattr(self, 'font', None)
+                if lbl_font is None:
+                    lbl_font = pygame.font.SysFont('Arial', 11, bold=True)
                 label_surf = lbl_font.render(str(self.label), True, self.theme.text_normal)
-                # Align label inside the full_rect area
-                label_y = self.full_rect.y + 4 if getattr(self, 'full_rect', None) else self.rect.y - (lbl_font.get_height() + 4)
-                surface.blit(label_surf, (self.rect.x + 4, label_y))
+                # Render label at a slightly larger local offset inside full_rect so it feels spaced out
+                # (full_rect is created to include this area)
+                label_y_local = 8
+                # If widget.render was called with the widget's pos set to (0,0) (as when
+                # rendering into a temp surface), this will place the label correctly.
+                surface.blit(label_surf, (6, label_y_local))
             except Exception:
-                # Non-fatal: continue rendering the dropdown even if label paint fails
-                pass
+                # On error, fallback to render with main font at a safe offset
+                try:
+                    fallback = getattr(self, 'font', None) or pygame.font.SysFont('Arial', 12)
+                    label_surf = fallback.render(str(self.label), True, self.theme.text_normal)
+                    surface.blit(label_surf, (4, 4))
+                except Exception:
+                    # Non-fatal: continue rendering the dropdown even if label paint fails
+                    pass
 
         # Draw main button
         pygame.draw.rect(surface, bg_color, self.rect)
