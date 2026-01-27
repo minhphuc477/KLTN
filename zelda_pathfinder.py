@@ -19,10 +19,13 @@ Date: January 19, 2026
 """
 
 import heapq
+import logging
 import numpy as np
 from typing import List, Tuple, Dict, Set, Optional, FrozenSet
 from dataclasses import dataclass, field
 from collections import defaultdict
+
+logger = logging.getLogger(__name__)
 
 from Data.zelda_core import (
     Dungeon, Room, InventoryState,
@@ -91,18 +94,21 @@ class ZeldaPathfinder:
     handle backtracking and key collection strategies.
     """
     
-    def __init__(self, dungeon: Dungeon, mode: str = ValidationMode.FULL):
+    def __init__(self, dungeon: Dungeon, mode: str = ValidationMode.FULL, admissible_heuristic: bool = True):
         """
         Initialize pathfinder.
         
         Args:
             dungeon: Dungeon object with graph and rooms
             mode: ValidationMode (STRICT, REALISTIC, FULL)
+            admissible_heuristic: If True, use strictly admissible heuristic (no key deficit penalty).
         """
         self.dungeon = dungeon
         self.graph = dungeon.graph
         self.rooms = dungeon.rooms
         self.mode = mode
+        # Heuristic mode: keep admissible by default to guarantee optimality
+        self.admissible_heuristic = bool(admissible_heuristic)
         
         # Extract dungeon metadata
         self.start_pos = dungeon.start_pos
@@ -427,7 +433,7 @@ class ZeldaPathfinder:
                     locked_doors_nearby += 1
         
         keys_needed = max(0, locked_doors_nearby - inventory.keys_held)
-        key_penalty = keys_needed * 1.5  # Weight < 2 to stay near-admissible
+        key_penalty = keys_needed * 1.5  # Weight if enabled
         
         # Component 3: Encourage key collection
         uncollected_keys = len(self.key_rooms - inventory.keys_collected)
@@ -436,7 +442,10 @@ class ZeldaPathfinder:
             exploration_bonus = -0.5
         else:
             exploration_bonus = 0
-        
+
+        # If strict admissible heuristic requested, do NOT include the key penalty
+        if self.admissible_heuristic:
+            return spatial_cost + exploration_bonus
         return spatial_cost + key_penalty + exploration_bonus
     
     def _is_between(self, point: Tuple[int, int], 
@@ -642,29 +651,29 @@ class ZeldaPathfinder:
 # UTILITY FUNCTIONS
 # ==========================================
 def print_solution(result: Dict):
-    """Print solution in human-readable format."""
+    """Print solution in human-readable format (uses logging)."""
     if not result['solvable']:
-        print(f"❌ No solution found: {result.get('reason', 'Unknown')}")
+        logger.warning("No solution found: %s", result.get('reason', 'Unknown'))
         if 'stats' in result:
-            print(f"   States explored: {result['stats']['states_explored']}")
-            print(f"   Time: {result['stats']['time_elapsed']:.3f}s")
+            logger.info("States explored: %d", result['stats']['states_explored'])
+            logger.info("Time: %.3fs", result['stats']['time_elapsed'])
         return
     
-    print(f"✅ Solution found!")
-    print(f"   Path length: {result['path_length']} moves")
-    print(f"   Rooms traversed: {result['rooms_traversed']}")
-    print(f"   Keys collected: {result['keys_collected']}")
-    print(f"   Keys used: {result['keys_used']}")
-    print(f"   Time: {result['stats']['time_elapsed']:.4f}s")
-    print(f"   States explored: {result['stats']['states_explored']}")
-    print(f"   States generated: {result['stats']['states_generated']}")
-    print(f"   Max queue size: {result['stats']['max_queue_size']}")
-    print(f"   Avg branching factor: {result['stats']['average_branching_factor']:.2f}")
+    logger.info("Solution found!")
+    logger.info("Path length: %d moves", result['path_length'])
+    logger.info("Rooms traversed: %d", result['rooms_traversed'])
+    logger.info("Keys collected: %s", result['keys_collected'])
+    logger.info("Keys used: %s", result['keys_used'])
+    logger.info("Time: %.4fs", result['stats']['time_elapsed'])
+    logger.info("States explored: %d", result['stats']['states_explored'])
+    logger.info("States generated: %d", result['stats']['states_generated'])
+    logger.info("Max queue size: %d", result['stats']['max_queue_size'])
+    logger.info("Avg branching factor: %.2f", result['stats']['average_branching_factor'])
     
-    print("\n📍 Path:")
+    logger.info("Path:")
     for i, room in enumerate(result['path']):
         action = result['actions'][i] if i < len(result['actions']) else ''
-        print(f"   {i}. {room} - {action}")
+        logger.info("  %d. %s - %s", i, room, action)
 
 
 # ==========================================
@@ -675,25 +684,27 @@ if __name__ == '__main__':
     import sys
     from Data.zelda_core import ZeldaDungeonAdapter
     
-    print("🎮 Zelda A* Pathfinder Test\n")
+    logger.info("Zelda A* Pathfinder Test")
     
     # Load a test dungeon
-    adapter = ZeldaDungeonAdapter()
+    from pathlib import Path
+    data_root = Path(__file__).resolve().parent / 'Data' / 'The Legend of Zelda'
+    adapter = ZeldaDungeonAdapter(data_root)
     
     # Try dungeon 1 (simplest)
     dungeon_name = 'tloz1_1'
-    print(f"Loading dungeon: {dungeon_name}...")
+    logger.info("Loading dungeon: %s", dungeon_name)
     
     try:
         dungeon = adapter.load_dungeon(dungeon_name)
         
-        print(f"✅ Loaded successfully")
-        print(f"   Rooms: {len(dungeon.rooms)}")
-        print(f"   Start: {dungeon.start_pos}")
-        print(f"   Goal: {dungeon.triforce_pos}")
+        logger.info("Loaded successfully")
+        logger.info("Rooms: %d", len(dungeon.rooms))
+        logger.info("Start: %s", dungeon.start_pos)
+        logger.info("Goal: %s", dungeon.triforce_pos)
         
         # Run pathfinder
-        print(f"\n🔍 Running A* pathfinder...")
+        logger.info("Running A* pathfinder...")
         pathfinder = ZeldaPathfinder(dungeon, mode=ValidationMode.FULL)
         result = pathfinder.solve()
         
@@ -701,6 +712,6 @@ if __name__ == '__main__':
         print_solution(result)
         
     except Exception as e:
-        print(f"❌ Error: {e}")
+        logger.exception("Error during sample run: %s", e)
         import traceback
         traceback.print_exc()

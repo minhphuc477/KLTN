@@ -24,11 +24,14 @@ ML Features (from adapter.py integration):
 
 import os
 import re
+import logging
 import numpy as np
 import networkx as nx
 from typing import Dict, List, Tuple, Optional, Set
 from dataclasses import dataclass, field
 from pathlib import Path
+
+logger = logging.getLogger(__name__) 
 
 # ==========================================
 # SEMANTIC PALETTE (CRITICAL CONSTANTS)
@@ -84,13 +87,13 @@ ROOM_WIDTH = 11
 # Edge type mapping from graph labels (for ML features)
 EDGE_TYPE_MAP = {
     '': 'open',
-    'k': 'locked',      # Small key required
-    'K': 'boss_locked', # Boss key required
-    'b': 'bombable',    # Bomb required
-    'l': 'soft_locked', # One-way (can't return)
-    'S': 'switch',      # Switch/puzzle required
-    'I': 'item_locked', # Key item required
-}
+    'k': 'key_locked',      # Small key required (use canonical 'key_locked')
+    'K': 'boss_locked',     # Boss key required
+    'b': 'bombable',        # Bomb required
+    'l': 'soft_locked',     # One-way (can't return)
+    'S': 'switch',          # Switch/puzzle required
+    'I': 'item_locked',     # Key item required
+} 
 
 # Node content mapping from graph labels
 NODE_CONTENT_MAP = {
@@ -153,9 +156,10 @@ class GridBasedRoomExtractor:
             return False
         
         wall_count = np.sum(slot_grid == self.WALL_MARKER)
-        floor_count = np.sum(slot_grid == 'F')
-        
-        return wall_count >= 20 and floor_count >= 5
+        # Accept both 'F' and '.' as floor markers in VGLC
+        floor_count = np.sum((slot_grid == 'F') | (slot_grid == '.'))
+
+        return bool(wall_count >= 20 and floor_count >= 5)
 
     def extract(self, filepath: str) -> List[Tuple[Tuple[int, int], np.ndarray]]:
         """
@@ -522,7 +526,8 @@ class StateSpaceGraphSolver:
                           state: InventoryState) -> Tuple[bool, InventoryState, str]:
         """
         Check if an edge can be traversed with current inventory.
-        
+        Uses canonicalized edge_type when available and falls back to edge label.
+
         Args:
             from_node: Source node ID
             to_node: Destination node ID
@@ -534,74 +539,76 @@ class StateSpaceGraphSolver:
         edge_data = self.graph.get_edge_data(from_node, to_node)
         if not edge_data:
             return False, state, 'none'
-        
+
         edge_label = edge_data.get('label', '')
-        edge_type = edge_data.get('edge_type', 'open')
+        edge_type = edge_data.get('edge_type') if edge_data.get('edge_type') else EDGE_TYPE_MAP.get(edge_label, '')
         edge_id = (from_node, to_node)
-        
+
         new_state = state.copy()
-        
+
         # STRICT mode: only normal doors
         if self.mode == ValidationMode.STRICT:
-            if edge_label != '':
+            if edge_type and edge_type != 'open':
                 return False, state, edge_type
+            if edge_label != '':
+                return False, state, edge_label
             return True, new_state, 'open'
-        
+
         # REALISTIC mode: normal + soft-locked + stairs
         if self.mode == ValidationMode.REALISTIC:
-            if edge_label in ('', 'l', 's'):
-                return True, new_state, edge_type
-            return False, state, edge_type
-        
-        # FULL mode: all edges with inventory tracking
-        if edge_label == '':
+            if edge_type in ('open', 'soft_locked', 'stair') or edge_label in ('', 'l', 's'):
+                return True, new_state, edge_type or edge_label
+            return False, state, edge_type or edge_label
+
+        # FULL mode: prefer edge_type canonical checks (supports backward compatibility via label fallback)
+        et = edge_type or edge_label
+
+        if et in ('', 'open'):
             # Normal door - always passable
             return True, new_state, 'open'
-        
-        elif edge_label == 'k':
+
+        if et in ('key_locked', 'k'):
             # Key-locked door
             if edge_id in state.doors_opened:
                 return True, new_state, 'key_locked'  # Already opened
-            
+
             if state.keys_held > 0:
                 new_state.keys_held -= 1
                 new_state.doors_opened.add(edge_id)
-                # Also add reverse edge as opened (doors stay open)
                 new_state.doors_opened.add((to_node, from_node))
                 return True, new_state, 'key_locked'
-            
+
             return False, state, 'key_locked'
-        
-        elif edge_label == 'b':
+
+        if et in ('bombable', 'b'):
             # Bombable wall - assume infinite bombs for now
             if edge_id in state.doors_opened:
                 return True, new_state, 'bombable'
-            
-            # Bomb it open (permanent)
+
             new_state.doors_opened.add(edge_id)
             new_state.doors_opened.add((to_node, from_node))
             return True, new_state, 'bombable'
-        
-        elif edge_label == 'l':
+
+        if et in ('soft_locked', 'l'):
             # Soft-locked (one-way) - always passable forward
             return True, new_state, 'soft_locked'
-        
-        elif edge_label == 's':
+
+        if et in ('stair', 's'):
             # Stair/warp - bidirectional teleport
             return True, new_state, 'stair'
-        
-        elif edge_label == 'I':
+
+        if et in ('item_locked', 'I'):
             # Item-locked - check if we have the required item
             if 'key_item' in state.items_collected:
                 return True, new_state, 'item_locked'
             return False, state, 'item_locked'
-        
-        elif edge_label in ('S', 'S1'):
+
+        if et in ('switch_locked', 'S', 'S1'):
             # Switch-locked - assume puzzle solved
             return True, new_state, 'switch_locked'
-        
-        # Unknown edge type - allow traversal
-        return True, new_state, edge_label
+
+        # Unknown edge type - allow traversal but return canonical label if available
+        return True, new_state, edge_type or edge_label
     
     def collect_room_items(self, node: int, state: InventoryState) -> InventoryState:
         """
@@ -621,10 +628,11 @@ class StateSpaceGraphSolver:
             new_state.keys_held += 1
             new_state.keys_collected.add(node)
         
-        # Collect item if room has one
-        if node in self.item_rooms and node not in state.keys_collected:
+        # Collect item if room has one and it's not already collected
+        if node in self.item_rooms:
             item_type = self.item_rooms[node]
-            new_state.items_collected.add(item_type)
+            if item_type not in state.items_collected:
+                new_state.items_collected.add(item_type)
         
         return new_state
     
@@ -672,7 +680,8 @@ class StateSpaceGraphSolver:
                     'path_length': len(path) - 1,
                     'rooms_traversed': len(path),
                     'edge_types': edge_types,
-                    'keys_available': len(current_state.keys_collected),
+                    'keys_available': current_state.keys_held,
+                    'keys_collected': len(current_state.keys_collected),
                     'keys_used': keys_used,
                     'final_inventory': current_state
                 }
@@ -878,14 +887,29 @@ class DOTParser:
         
         graph = nx.DiGraph()
         
-        # Parse nodes: 0 [label="e"]
-        node_pattern = r'^(\d+)\s*\[label="([^"]*)"\]'
+        # Parse nodes: handle arbitrary attributes and whitespace; robustly extract label if present
+        node_pattern = r'^\s*(\d+)\s*\[([^\]]*)\]'
         for match in re.finditer(node_pattern, content, re.MULTILINE):
             node_id = int(match.group(1))
-            label = match.group(2).strip()
-            
-            # Parse label contents
-            parts = [p.strip() for p in label.split(',')]
+            attrs = match.group(2)
+            # Robust label extraction: accept quoted or unquoted labels, allow commas inside unquoted label
+            label = ''
+            q = re.search(r'label\s*=\s*"', attrs)
+            if q:
+                start = q.end()
+                end = attrs.find('"', start)
+                label = attrs[start:end] if end != -1 else attrs[start:]
+            else:
+                q2 = re.search(r'label\s*=\s*', attrs)
+                if q2:
+                    start = q2.end()
+                    m2 = re.search(r',\s*\w+\s*=', attrs[start:])
+                    if m2:
+                        end = start + m2.start()
+                    else:
+                        end = len(attrs)
+                    label = attrs[start:end].strip()
+            parts = [p.strip() for p in label.split(',')] if label else []
             
             graph.add_node(node_id, 
                           label=label,
@@ -895,15 +919,34 @@ class DOTParser:
                           has_key='k' in parts,
                           has_item='I' in parts or 'i' in parts,
                           has_enemy='e' in parts,
-                          has_puzzle='p' in parts)
+                          has_puzzle='p' in parts) 
         
-        # Parse edges: 7 -> 8 [label="k"]
-        edge_pattern = r'(\d+)\s*->\s*(\d+)\s*\[label="([^"]*)"\]'
-        for match in re.finditer(edge_pattern, content):
+        # Parse edges: 7 -> 8 [label="k"] or simple edges like '1 -> 2;'
+        # Support labeled and unlabeled edges (unlabeled -> 'open')
+        edge_pattern = r'(\d+)\s*->\s*(\d+)(?:\s*\[([^\]]*)\])?'
+        for match in re.finditer(edge_pattern, content, re.MULTILINE):
             src = int(match.group(1))
             dst = int(match.group(2))
-            label = match.group(3)
-            
+            attrs = match.group(3) or ''
+            lab_m = None  # replaced by robust extraction below
+            # Robust label extraction: accept quoted or unquoted labels, allow commas inside unquoted label
+            label = ''
+            q = re.search(r'label\s*=\s*"', attrs)
+            if q:
+                start = q.end()
+                end = attrs.find('"', start)
+                label = attrs[start:end] if end != -1 else attrs[start:]
+            else:
+                q2 = re.search(r'label\s*=\s*', attrs)
+                if q2:
+                    start = q2.end()
+                    m2 = re.search(r',\s*\w+\s*=', attrs[start:])
+                    if m2:
+                        end = start + m2.start()
+                    else:
+                        end = len(attrs)
+                    label = attrs[start:end].strip()
+
             edge_type = 'open'
             if label == 'k':
                 edge_type = 'key_locked'
@@ -915,7 +958,7 @@ class DOTParser:
                 edge_type = 'item_locked'
             
             graph.add_edge(src, dst, label=label, edge_type=edge_type)
-        
+
         return graph
 
 
@@ -968,7 +1011,7 @@ class RoomGraphMatcher:
         stair_rooms_with_doors = []
         
         for pos, room in rooms.items():
-            if room.has_stair:
+            if getattr(room, 'has_stair', False):
                 door_count = sum(room.doors.values())
                 if door_count > 0:
                     stair_rooms_with_doors.append((pos, door_count))
@@ -992,10 +1035,13 @@ class RoomGraphMatcher:
             rooms[start_room_pos].is_start = True
             dungeon.start_pos = start_room_pos
         
+        # Normalize graph to canonical labels & types
+        self._normalize_graph(graph)
+
         # Build room adjacency and match rooms to graph nodes using BFS
         room_adjacency = self._build_room_adjacency(rooms)
         
-        # Match rooms to graph nodes using parallel BFS
+        # Match rooms to graph nodes using parallel BFS (deterministic assignment)
         room_to_node, node_to_room = self._match_rooms_to_nodes_bfs(
             rooms, room_adjacency, graph, start_room_pos, start_node
         )
@@ -1041,104 +1087,252 @@ class RoomGraphMatcher:
                                    start_node: Optional[int]) -> Tuple[Dict, Dict]:
         """
         Match rooms to graph nodes using parallel BFS from start.
-        
-        Returns:
-            (room_to_node, node_to_room) mappings
+
+        This implementation is deterministic and attempts a local optimal assignment
+        at each BFS wave. When available, it uses the Hungarian algorithm (scipy)
+        for small bipartite assignments; otherwise it falls back to a stable
+        greedy assignment with deterministic tie-breaking.
         """
         room_to_node = {}
         node_to_room = {}
-        
+
         if start_room is None or start_node is None:
             return room_to_node, node_to_room
-        
+
         # Initialize with start
         room_to_node[start_room] = start_node
         node_to_room[start_node] = start_room
-        
+
         # BFS queues for both graph and rooms
         from collections import deque
-        
+
         room_queue = deque([start_room])
         visited_rooms = {start_room}
         visited_nodes = {start_node}
-        
+
         while room_queue:
             current_room = room_queue.popleft()
             current_node = room_to_node.get(current_room)
-            
+
             if current_node is None:
                 continue
-            
-            # Get neighbors in both spaces
+
+            # Get neighbors in both spaces (deterministic order)
             room_neighbors = [r for r in room_adjacency.get(current_room, []) if r not in visited_rooms]
-            graph_neighbors = [n for n in set(graph.successors(current_node)) | set(graph.predecessors(current_node)) 
-                             if n not in visited_nodes]
-            
-            # Match neighbors by door count similarity
-            for room_neighbor in room_neighbors:
-                if not graph_neighbors:
-                    break
-                
-                room_door_count = sum(rooms[room_neighbor].doors.values())
-                
-                # Find best matching graph neighbor
-                best_node = None
-                best_score = -float('inf')
-                
-                for node in graph_neighbors:
-                    node_degree = graph.in_degree(node) + graph.out_degree(node)
-                    # Score: prefer nodes with similar connectivity
-                    score = -abs(room_door_count * 2 - node_degree)  # *2 because edges are bidirectional
-                    if score > best_score:
-                        best_score = score
-                        best_node = node
-                
-                if best_node is not None:
-                    room_to_node[room_neighbor] = best_node
-                    node_to_room[best_node] = room_neighbor
-                    visited_rooms.add(room_neighbor)
-                    visited_nodes.add(best_node)
-                    graph_neighbors.remove(best_node)
-                    room_queue.append(room_neighbor)
-        
-        # FALLBACK: Match remaining unmapped rooms to unmapped nodes
-        # This handles disconnected components
+            graph_neighbors = [n for n in list(graph.successors(current_node)) + list(graph.predecessors(current_node))
+                               if n not in visited_nodes]
+
+            if not room_neighbors or not graph_neighbors:
+                continue
+
+            R = room_neighbors
+            N = graph_neighbors
+
+            # Build cost matrix: lower cost = better match
+            cost_matrix = []
+            for r in R:
+                row = []
+                r_deg = sum(rooms[r].doors.values())
+                r_trif = getattr(rooms[r], 'has_triforce', False)
+                r_boss = getattr(rooms[r], 'has_boss', False)
+                for n in N:
+                    node_data = graph.nodes[n]
+                    n_deg = graph.in_degree(n) + graph.out_degree(n)
+                    base = abs((r_deg * 2) - n_deg)
+                    # Bonus for matching special nodes
+                    if node_data.get('is_triforce') and r_trif:
+                        base -= 100
+                    if node_data.get('is_boss') and r_boss:
+                        base -= 100
+                    # adjacency overlap: prefer assignments where already-mapped neighbor rooms map to neighbors of n
+                    overlap = 0
+                    for rn in room_adjacency.get(r, []):
+                        mapped = room_to_node.get(rn)
+                        if mapped is not None and (graph.has_edge(mapped, n) or graph.has_edge(n, mapped)):
+                            overlap += 1
+                    base -= overlap * 1.0
+                    row.append(float(base))
+                cost_matrix.append(row)
+
+            assigned_pairs: List[Tuple[Tuple[int, int], int]] = []
+            try:
+                # Use Hungarian when sizes are small to get a global optimum for the local wave
+                if len(R) <= 10 and len(N) <= 10:
+                    from scipy.optimize import linear_sum_assignment
+                    import numpy as _np
+                    cm = _np.array(cost_matrix, dtype=float)
+                    row_ind, col_ind = linear_sum_assignment(cm)
+                    for i, j in zip(row_ind, col_ind):
+                        if i < len(R) and j < len(N):
+                            assigned_pairs.append((R[i], N[j]))
+                else:
+                    raise RuntimeError('skip hungarian')
+            except Exception as e:
+                # Deterministic greedy assignment: sort all pairs by (cost, node id) and pick non-conflicting pairs
+                pairs = []
+                for i, r in enumerate(R):
+                    for j, n in enumerate(N):
+                        pairs.append((cost_matrix[i][j], i, n))
+                pairs.sort(key=lambda x: (x[0], self._node_signature(graph, x[2])))  # deterministic tie-break using node signature
+                used_r = set()
+                used_n = set()
+                for cost, i, n in pairs:
+                    if i in used_r or n in used_n:
+                        continue
+                    used_r.add(i)
+                    used_n.add(n)
+                    assigned_pairs.append((R[i], n))
+
+            # Apply assignments
+            for r, n in assigned_pairs:
+                if r in visited_rooms or n in visited_nodes:
+                    continue
+                room_to_node[r] = n
+                node_to_room[n] = r
+                visited_rooms.add(r)
+                visited_nodes.add(n)
+                try:
+                    graph_neighbors.remove(n)
+                except ValueError:
+                    pass
+                room_queue.append(r)
+
+        # FALLBACK: Global assignment for remaining unmapped rooms/nodes (deterministic)
         unmapped_rooms = [pos for pos in rooms.keys() if pos not in room_to_node]
         unmapped_nodes = [n for n in graph.nodes() if n not in node_to_room]
-        
+
         if unmapped_rooms and unmapped_nodes:
-            # Match by similarity (door count vs node degree)
-            for room_pos in unmapped_rooms:
-                if not unmapped_nodes:
-                    break
-                
-                room_door_count = sum(rooms[room_pos].doors.values())
-                
-                # Find best matching unmapped node
-                best_node = None
-                best_score = -float('inf')
-                
-                for node in unmapped_nodes:
-                    node_degree = graph.in_degree(node) + graph.out_degree(node)
-                    score = -abs(room_door_count * 2 - node_degree)
-                    
-                    # Bonus for special node types
-                    node_data = graph.nodes[node]
-                    if node_data.get('is_triforce') and rooms[room_pos].has_triforce:
-                        score += 100
-                    if node_data.get('is_boss') and rooms[room_pos].has_boss:
-                        score += 100
-                    
-                    if score > best_score:
-                        best_score = score
-                        best_node = node
-                
-                if best_node is not None:
-                    room_to_node[room_pos] = best_node
-                    node_to_room[best_node] = room_pos
-                    unmapped_nodes.remove(best_node)
-        
+            R = unmapped_rooms
+            N = unmapped_nodes
+            cm = []
+            for r in R:
+                row = []
+                r_deg = sum(rooms[r].doors.values())
+                r_trif = getattr(rooms[r], 'has_triforce', False)
+                r_boss = getattr(rooms[r], 'has_boss', False)
+                for n in N:
+                    node_data = graph.nodes[n]
+                    n_deg = graph.in_degree(n) + graph.out_degree(n)
+                    score = abs((r_deg * 2) - n_deg)
+                    if node_data.get('is_triforce') and r_trif:
+                        score -= 100
+                    if node_data.get('is_boss') and r_boss:
+                        score -= 100
+                    row.append(float(score))
+                cm.append(row)
+
+            try:
+                from scipy.optimize import linear_sum_assignment
+                import numpy as _np
+                matrix = _np.array(cm, dtype=float)
+                row_ind, col_ind = linear_sum_assignment(matrix)
+                for i, j in zip(row_ind, col_ind):
+                    if i < len(R) and j < len(N):
+                        room_to_node[R[i]] = N[j]
+                        node_to_room[N[j]] = R[i]
+            except Exception:
+                pairs = []
+                for i, r in enumerate(R):
+                    for j, n in enumerate(N):
+                        pairs.append((cm[i][j], r, n))
+                pairs.sort(key=lambda x: (x[0], self._node_signature(graph, x[2])))
+                used_n = set()
+                for cost, r, n in pairs:
+                    if n in used_n:
+                        continue
+                    room_to_node[r] = n
+                    node_to_room[n] = r
+                    used_n.add(n)
+
+        # Local refinement: try pairwise swaps to improve adjacency consistency
+        # This helps fix small symmetric mismatches that greedy assignment may create
+        def _try_improve_swaps(max_iters: int = 100):
+            cur_cons = self._validate_mapping(rooms, room_adjacency, graph, room_to_node)
+            rooms_list = sorted(list(room_to_node.keys()))
+            it = 0
+            improved = True
+            while improved and it < max_iters:
+                improved = False
+                it += 1
+                for i in range(len(rooms_list)):
+                    for j in range(i + 1, len(rooms_list)):
+                        r1 = rooms_list[i]; r2 = rooms_list[j]
+                        n1 = room_to_node[r1]; n2 = room_to_node[r2]
+                        # swap
+                        room_to_node[r1], room_to_node[r2] = n2, n1
+                        node_to_room[n1], node_to_room[n2] = r2, r1
+                        new_cons = self._validate_mapping(rooms, room_adjacency, graph, room_to_node)
+                        if new_cons > cur_cons + 1e-9:
+                            cur_cons = new_cons
+                            improved = True
+                            break
+                        # revert
+                        room_to_node[r1], room_to_node[r2] = n1, n2
+                        node_to_room[n1], node_to_room[n2] = r1, r2
+                    if improved:
+                        break
+            return cur_cons
+
+        try:
+            # attempt local swaps before final validation
+            try:
+                consistency_after = _try_improve_swaps()
+            except Exception:
+                consistency_after = None
+            # Validate mapping quality and log a warning if low consistency
+            consistency = self._validate_mapping(rooms, room_adjacency, graph, room_to_node)
+            if consistency < 0.2:
+                logger.warning('Low room-node mapping consistency: %.2f', consistency)
+        except Exception:
+            logger.debug('Mapping validation failed to run', exc_info=True)
+
         return room_to_node, node_to_room
+
+    def _normalize_graph(self, graph: nx.DiGraph) -> None:
+        """Normalize graph labels and edge types so downstream logic can be deterministic."""
+        for u, v, data in graph.edges(data=True):
+            label = data.get('label', '')
+            # Ensure label is a string
+            data['label'] = '' if label is None else str(label)
+            # Ensure edge_type exists
+            if 'edge_type' not in data or not data.get('edge_type'):
+                data['edge_type'] = EDGE_TYPE_MAP.get(data['label'], 'open') if data['label'] else 'open'
+
+        for n, data in graph.nodes(data=True):
+            label = (data.get('label') or data.get('name') or '')
+            s = str(label).lower()
+            # Canonical flags
+            if 's' == s or 'start' in s or data.get('is_start'):
+                data['is_start'] = True
+            if 't' == s or 'triforce' in s or data.get('is_triforce'):
+                data['is_triforce'] = True
+            if 'b' == s or 'boss' in s or data.get('is_boss'):
+                data['is_boss'] = True
+
+    def _validate_mapping(self, rooms: Dict[Tuple[int, int], Room],
+                          room_adjacency: Dict[Tuple[int, int], List[Tuple[int, int]]],
+                          graph: nx.DiGraph,
+                          room_to_node: Dict[Tuple[int, int], int]) -> float:
+        """Return fraction of room adjacencies that are consistent with graph edges."""
+        consistent = 0
+        total = 0
+        for r, n in room_to_node.items():
+            for rn in room_adjacency.get(r, []):
+                total += 1
+                nn = room_to_node.get(rn)
+                if nn is not None and (graph.has_edge(n, nn) or graph.has_edge(nn, n)):
+                    consistent += 1
+        return 1.0 if total == 0 else (consistent / total)
+
+    def _node_signature(self, graph: nx.DiGraph, n: int):
+        """Return a deterministic, relabel-invariant signature for a node."""
+        data = graph.nodes[n]
+        deg = graph.in_degree(n) + graph.out_degree(n)
+        trif = bool(data.get('is_triforce'))
+        boss = bool(data.get('is_boss'))
+        # Use sorted neighbor degrees as a compact structural signature
+        neigh_degs = sorted([graph.in_degree(nb) + graph.out_degree(nb) for nb in graph.neighbors(n)])
+        return (deg, trif, boss, tuple(neigh_degs))
 
     def infer_missing_mappings(self, rooms: Dict[Tuple[int, int], Room],
                                graph: nx.DiGraph,
@@ -1196,7 +1390,7 @@ class RoomGraphMatcher:
             start_room_pos = None
             stair_rooms_with_doors = []
             for pos, room in rooms.items():
-                if room.has_stair:
+                if getattr(room, 'has_stair', False):
                     door_count = sum(room.doors.values())
                     if door_count > 0:
                         stair_rooms_with_doors.append((pos, door_count))
@@ -1298,8 +1492,8 @@ class RoomGraphMatcher:
                         confidences[nid] = max(confidences.get(nid, 0.0), spectral_confs.get(nid, 0.1))
                 unmatched_nodes = [n for n in unmatched_nodes if n not in proposed_node_to_room]
                 unmatched_rooms = [r for r in unmatched_rooms if r not in proposed_room_to_node]
-            except Exception:
-                pass
+            except Exception as e:
+                logger.exception("seeded_spectral_match failed during infer_missing_mappings: %s", e) 
 
         # 5) Build score matrix for remaining unmatched nodes/rooms
         deg = {n: (graph.in_degree(n) + graph.out_degree(n)) for n in unmatched_nodes}
@@ -1344,7 +1538,8 @@ class RoomGraphMatcher:
                 s = score_matrix.get((n, r), 0.0)
                 if s > 0:
                     assigned_pairs.append((n, r))
-        except Exception:
+        except Exception as e:
+            logger.exception("Hungarian assignment failed; falling back to greedy assignment: %s", e)
             # fallback greedy matching
             local_scores = dict(score_matrix)
             remaining_nodes = list(unmatched_nodes)
@@ -1379,8 +1574,8 @@ class RoomGraphMatcher:
                 # update confidences
                 for n, r in refined.items():
                     confidences[n] = max(confidences.get(n, 0.1), float(score_matrix.get((n, r), 0.1)))
-        except Exception:
-            pass
+        except Exception as e:
+            logger.exception("Local refinement of assignments failed: %s", e) 
 
         # Final safety: filter by confidence_threshold if requested
         if confidence_threshold > 0:
@@ -1600,7 +1795,8 @@ class RoomGraphMatcher:
         import numpy as np
         try:
             from scipy.linalg import orthogonal_procrustes
-        except Exception:
+        except Exception as e:
+            logger.debug("scipy.linalg.orthogonal_procrustes not available: %s", e)
             orthogonal_procrustes = None
 
         # Build room adjacency and small undirected graphs
@@ -1667,14 +1863,16 @@ class RoomGraphMatcher:
         if orthogonal_procrustes is not None:
             try:
                 R, scale = orthogonal_procrustes(X, Y)
-            except Exception:
+            except Exception as e:
+                logger.exception("orthogonal_procrustes failed in seeded_spectral_match: %s", e)
                 R = None
         else:
             # Compute via SVD
             try:
                 U, s, Vt = np.linalg.svd(X.T.dot(Y))
                 R = U.dot(Vt)
-            except Exception:
+            except Exception as e:
+                logger.exception("SVD-based alignment failed in seeded_spectral_match: %s", e)
                 R = None
 
         if R is None:
@@ -1703,7 +1901,8 @@ class RoomGraphMatcher:
                 dist = cost[i, j]
                 confidences[nid] = float(max(0.01, 1.0 - (dist / (maxd + 1e-6))))
             return proposals, confidences
-        except Exception:
+        except Exception as e:
+            logger.exception("Spectral matching assignment failed: %s", e)
             return {}, {}
 
 
@@ -2261,11 +2460,60 @@ class ZeldaDungeonAdapter:
                 dungeon = self.load_dungeon(dungeon_num, variant=quest_num)
                 dungeon.dungeon_id = dungeon_id
                 results[dungeon_id] = dungeon
-                print(f"Processed {dungeon_id}: {len(dungeon.rooms)} rooms")
+                logger.info("Processed %s: %d rooms", dungeon_id, len(dungeon.rooms))
             except Exception as e:
-                print(f"Error processing {dungeon_id}: {e}")
+                logger.exception("Error processing %s", dungeon_id)
         
+        self.processed_dungeons = results
         return results
+
+    def save_processed_data(self, output_path: str = None):
+        """Save processed dungeons to disk (pickle).
+
+        Args:
+            output_path: Optional path to output pickle file. If not provided,
+                         defaults to '<data_root>/processed_data.pkl'.
+        Returns:
+            The path to the saved file as string.
+        """
+        import pickle
+
+        if output_path is None:
+            output_path = self.data_root / "processed_data.pkl"
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        save_data = {}
+        for dungeon_id, dungeon in getattr(self, 'processed_dungeons', {}).items():
+            # Normalize rooms to a serializable dict
+            rooms_out = {}
+            for rid, room in dungeon.rooms.items():
+                # Avoid boolean check on numpy arrays
+                grid = getattr(room, 'grid', None)
+                if grid is None:
+                    grid = getattr(room, 'semantic_grid', None)
+                rooms_out[str(rid)] = {
+                    'grid': grid,
+                    'contents': getattr(room, 'contents', []),
+                    'doors': getattr(room, 'doors', {}),
+                    'position': getattr(room, 'position', None)
+                }
+
+            save_data[dungeon_id] = {
+                'rooms': rooms_out,
+                'graph_edges': list(getattr(dungeon, 'graph', nx.DiGraph()).edges(data=True)),
+                'graph_nodes': dict(getattr(dungeon, 'graph', nx.DiGraph()).nodes(data=True)),
+                'layout': getattr(dungeon, 'layout', None),
+                'tpe_vectors': getattr(dungeon, 'tpe_vectors', None),
+                'p_matrix': getattr(dungeon, 'p_matrix', None),
+                'node_features': getattr(dungeon, 'node_features', None)
+            }
+
+        with open(output_path, 'wb') as f:
+            pickle.dump(save_data, f)
+
+        logger.info("Saved processed data to %s", output_path)
+        return str(output_path)
 
 
 # ==========================================
@@ -2485,20 +2733,20 @@ def test_all_dungeons(data_root: str, include_variants: bool = True) -> Dict[str
                 result = solver.solve(stitched)
                 results[dungeon_key] = result
                 
-                status = "✓ SOLVABLE" if result['solvable'] else "✗ NOT SOLVABLE"
-                print(f"{dungeon_key}: {status}")
+                status = "SOLVABLE" if result['solvable'] else "NOT SOLVABLE"
+                logger.info("%s: %s", dungeon_key, status)
                 if result['solvable']:
-                    print(f"    Path: {result['path_length']} steps, {result['rooms_traversed']} rooms")
+                    logger.debug("%s Path: %d steps, %d rooms", dungeon_key, result['path_length'], result['rooms_traversed'])
                 else:
-                    print(f"    Reason: {result.get('reason', 'Unknown')}")
+                    logger.debug("%s Reason: %s", dungeon_key, result.get('reason', 'Unknown'))
             except Exception as e:
                 results[dungeon_key] = {'solvable': False, 'error': str(e)}
-                print(f"{dungeon_key}: ✗ ERROR - {e}")
+                logger.exception("%s: ERROR during processing", dungeon_key)
     
     # Summary
     solvable_count = sum(1 for r in results.values() if r.get('solvable'))
     total = len(results)
-    print(f"\nSUMMARY: {solvable_count}/{total} solvable ({100*solvable_count/total:.1f}%)")
+    logger.info("SUMMARY: %d/%d solvable (%.1f%%)", solvable_count, total, 100*solvable_count/total)
     
     return results
 
@@ -2611,8 +2859,11 @@ def convert_dungeon_to_dungeondata(dungeon: Dungeon) -> DungeonData:
 
 
 if __name__ == "__main__":
-    # Test with default path - all 18 variants
-    DATA_ROOT = r"C:\Users\MPhuc\Desktop\KLTN\Data\The Legend of Zelda"
-    print("Testing ALL 18 dungeon variants (9 dungeons × 2 variants)...")
-    print("="*60)
-    test_all_dungeons(DATA_ROOT, include_variants=True)
+    import argparse
+    logging.basicConfig(level=logging.INFO)
+    p = argparse.ArgumentParser()
+    p.add_argument("--data-root", default=r"C:\Users\MPhuc\Desktop\KLTN\Data\The Legend of Zelda")
+    p.add_argument("--no-variants", action="store_true", help="Only run variant 1")
+    args = p.parse_args()
+    logger.info("Testing dungeons at %s", args.data_root)
+    test_all_dungeons(args.data_root, include_variants=not args.no_variants)
