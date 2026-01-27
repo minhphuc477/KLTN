@@ -41,6 +41,11 @@ def test_heuristic_admissible_vs_bfs():
     d = Dungeon(dungeon_id='t', rooms=rooms, graph=G)
     d.start_pos = (0,0)
     d.triforce_pos = (0,2)
+    # Mark graph start/goal nodes and assign explicit graph_node_id for each room
+    G.nodes[nid[(0,0)]]['is_start'] = True
+    G.nodes[nid[(0,2)]]['is_triforce'] = True
+    for pos, nidv in nid.items():
+        d.rooms[pos].graph_node_id = nidv
 
     # Baseline: BFS (state-aware) via ZeldaPathfinder but with admissible heuristic True
     zpf = ZeldaPathfinder(d, admissible_heuristic=True)

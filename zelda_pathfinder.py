@@ -595,7 +595,8 @@ class ZeldaPathfinder:
             
             # Get graph neighbors
             graph_neighbors = set(self.graph.successors(node)) | set(self.graph.predecessors(node))
-            unmatched_nodes = [n for n in graph_neighbors if n not in visited_nodes]
+            # Deterministic ordering: sort by degree then node id for stable assignment
+            unmatched_nodes = sorted([n for n in graph_neighbors if n not in visited_nodes], key=lambda x: (self.graph.in_degree(x) + self.graph.out_degree(x), x))
             
             # Get room neighbors
             room_neighbors = []
