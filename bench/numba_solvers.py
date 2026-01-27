@@ -42,6 +42,36 @@ if NUMBA_AVAILABLE:
             res.append(ni)
         return res
 
+    @njit
+    def neighbors_flat_array(idx, h, w, grid_flat, out_buf):
+        """Numba-friendly: write neighbor indices into preallocated out_buf and return count."""
+        r = idx // w
+        c = idx % w
+        cnt = 0
+        # up
+        ni = idx - w
+        if r > 0 and grid_flat[ni] == 0:
+            out_buf[cnt] = ni; cnt += 1
+        # down
+        ni = idx + w
+        if r < h-1 and grid_flat[ni] == 0:
+            out_buf[cnt] = ni; cnt += 1
+        # left
+        ni = idx - 1
+        if c > 0 and grid_flat[ni] == 0:
+            out_buf[cnt] = ni; cnt += 1
+        # right
+        ni = idx + 1
+        if c < w-1 and grid_flat[ni] == 0:
+            out_buf[cnt] = ni; cnt += 1
+        return cnt
+
+    def neighbors_flat_numba(idx, h, w, grid_flat):
+        import numpy as _np
+        out = _np.empty(4, dtype=_np.int64)
+        cnt = neighbors_flat_array(idx, h, w, grid_flat, out)
+        return [int(out[i]) for i in range(cnt)]
+
 else:
     def neighbors_flat(idx, h, w, grid_flat):
         # Python fallback
@@ -57,6 +87,10 @@ else:
         if c < w-1 and grid_flat[idx + 1] == 0:
             res.append(idx + 1)
         return res
+
+    def neighbors_flat_numba(idx, h, w, grid_flat):
+        # Fallback to Python implementation
+        return neighbors_flat(idx, h, w, grid_flat)
 
 
 def smoke_test_neighbors():
