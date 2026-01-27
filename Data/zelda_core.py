@@ -91,7 +91,7 @@ EDGE_TYPE_MAP = {
     'K': 'boss_locked',     # Boss key required
     'b': 'bombable',        # Bomb required
     'l': 'soft_locked',     # One-way (can't return)
-    'S': 'switch',          # Switch/puzzle required
+    'S': 'switch_locked',   # Switch/puzzle required (canonical 'switch_locked' to match traversal semantics)
     'I': 'item_locked',     # Key item required
 } 
 
@@ -1125,8 +1125,9 @@ class RoomGraphMatcher:
             if not room_neighbors or not graph_neighbors:
                 continue
 
-            R = room_neighbors
-            N = graph_neighbors
+            # Deterministic ordering: sort rooms by position, nodes by structural signature
+            R = sorted(room_neighbors)
+            N = sorted(graph_neighbors, key=lambda x: self._node_signature(graph, x))
 
             # Build cost matrix: lower cost = better match
             cost_matrix = []
@@ -1198,8 +1199,8 @@ class RoomGraphMatcher:
                 room_queue.append(r)
 
         # FALLBACK: Global assignment for remaining unmapped rooms/nodes (deterministic)
-        unmapped_rooms = [pos for pos in rooms.keys() if pos not in room_to_node]
-        unmapped_nodes = [n for n in graph.nodes() if n not in node_to_room]
+        unmapped_rooms = sorted([pos for pos in rooms.keys() if pos not in room_to_node])
+        unmapped_nodes = sorted([n for n in graph.nodes() if n not in node_to_room], key=lambda x: self._node_signature(graph, x))
 
         if unmapped_rooms and unmapped_nodes:
             R = unmapped_rooms
@@ -1290,23 +1291,40 @@ class RoomGraphMatcher:
 
     def _normalize_graph(self, graph: nx.DiGraph) -> None:
         """Normalize graph labels and edge types so downstream logic can be deterministic."""
+        def _canonical_edge_type(val: str):
+            if not val:
+                return None
+            v = str(val).strip()
+            # Check exact mapping
+            if v in EDGE_TYPE_MAP:
+                return EDGE_TYPE_MAP[v]
+            # Case-insensitive fallback
+            vl = v.lower()
+            if vl in EDGE_TYPE_MAP:
+                return EDGE_TYPE_MAP[vl]
+            return v
+
         for u, v, data in graph.edges(data=True):
-            label = data.get('label', '')
-            # Ensure label is a string
-            data['label'] = '' if label is None else str(label)
-            # Ensure edge_type exists
-            if 'edge_type' not in data or not data.get('edge_type'):
-                data['edge_type'] = EDGE_TYPE_MAP.get(data['label'], 'open') if data['label'] else 'open'
+            label_raw = data.get('label', '')
+            label = '' if label_raw is None else str(label_raw).strip()
+            data['label'] = label
+
+            # Normalize any existing edge_type or derive from label; prefer explicit edge_type
+            edge_type_raw = data.get('edge_type') or ''
+            edge_type_can = _canonical_edge_type(edge_type_raw) if edge_type_raw else None
+            if not edge_type_can:
+                edge_type_can = _canonical_edge_type(label) or 'open'
+            data['edge_type'] = edge_type_can
 
         for n, data in graph.nodes(data=True):
             label = (data.get('label') or data.get('name') or '')
-            s = str(label).lower()
+            s = str(label).strip().lower()
             # Canonical flags
-            if 's' == s or 'start' in s or data.get('is_start'):
+            if s == 's' or 'start' in s or data.get('is_start'):
                 data['is_start'] = True
-            if 't' == s or 'triforce' in s or data.get('is_triforce'):
+            if s == 't' or 'triforce' in s or data.get('is_triforce'):
                 data['is_triforce'] = True
-            if 'b' == s or 'boss' in s or data.get('is_boss'):
+            if s == 'b' or 'boss' in s or data.get('is_boss'):
                 data['is_boss'] = True
 
     def _validate_mapping(self, rooms: Dict[Tuple[int, int], Room],
