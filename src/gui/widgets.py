@@ -20,6 +20,20 @@ try:
 except ImportError:
     PYGAME_AVAILABLE = False
 
+# Provide a lightweight Rect stub for environments without pygame (tests / headless CI).
+class _StubRect:
+    def __init__(self, x, y, w, h):
+        self.x = x; self.y = y; self.width = w; self.height = h
+        self.left = x; self.top = y; self.right = x + w; self.bottom = y + h
+        self.centerx = x + w // 2
+        self.centery = y + h // 2
+    def collidepoint(self, p):
+        px, py = p
+        return self.x <= px <= self.x + self.width and self.y <= py <= self.y + self.height
+
+# Alias used below so callers can use Rect(...) regardless of pygame availability
+Rect = pygame.Rect if PYGAME_AVAILABLE else _StubRect
+
 
 # ==========================================
 # WIDGET BASE CLASS
@@ -101,16 +115,30 @@ class CheckboxWidget(BaseWidget):
     def __init__(self, pos: Tuple[int, int], label: str, 
                  checked: bool = False, theme: Optional[WidgetTheme] = None):
         box_size = 20
-        super().__init__(pygame.Rect(pos[0], pos[1], box_size, box_size), theme)
+        super().__init__(Rect(pos[0], pos[1], box_size, box_size), theme)
         self.label = label
         self.checked = checked
         self._pos = pos
-        self.label_rect = pygame.Rect(pos[0] + box_size + 8, pos[1] - 2, 200, box_size + 4)
-        self.full_rect = pygame.Rect(pos[0], pos[1], 250, box_size)
+        self.label_rect = Rect(pos[0] + box_size + 8, pos[1] - 2, 200, box_size + 4)
+        self.full_rect = Rect(pos[0], pos[1], 250, box_size)
         
         # Font for label
         if PYGAME_AVAILABLE:
-            self.font = pygame.font.SysFont('Arial', 12)
+            # Ensure the pygame font system is initialized when running in headless test environments
+            if not pygame.font.get_init():
+                try:
+                    pygame.font.init()
+                except Exception:
+                    # If font init fails, fall back to a simple stub to avoid crashing tests
+                    class _StubFont:
+                        def render(self, *_args, **_kwargs):
+                            # Return a blank surface-like object with blit-safe interface
+                            return pygame.Surface((1, 1))
+                    self.font = _StubFont()
+                else:
+                    self.font = pygame.font.SysFont('Arial', 12)
+            else:
+                self.font = pygame.font.SysFont('Arial', 12)
     
     @property
     def pos(self):
@@ -122,9 +150,9 @@ class CheckboxWidget(BaseWidget):
         """Update position and all related rectangles."""
         self._pos = value
         box_size = 20
-        self.rect = pygame.Rect(value[0], value[1], box_size, box_size)
-        self.label_rect = pygame.Rect(value[0] + box_size + 8, value[1] - 2, 200, box_size + 4)
-        self.full_rect = pygame.Rect(value[0], value[1], 250, box_size)
+        self.rect = Rect(value[0], value[1], box_size, box_size)
+        self.label_rect = Rect(value[0] + box_size + 8, value[1] - 2, 200, box_size + 4)
+        self.full_rect = Rect(value[0], value[1], 250, box_size)
     
     def update(self, mouse_pos: Tuple[int, int], dt: float) -> None:
         """Update hover state based on full interactive area."""
@@ -200,7 +228,7 @@ class DropdownWidget(BaseWidget):
                  options: List[str], selected: int = 0,
                  theme: Optional[WidgetTheme] = None,
                  keep_open_on_select: bool = False):
-        super().__init__(pygame.Rect(pos[0], pos[1], 180, 28), theme)
+        super().__init__(Rect(pos[0], pos[1], 180, 28), theme)
         self.label = label
         self.options = options
         self.selected = selected
@@ -211,7 +239,7 @@ class DropdownWidget(BaseWidget):
         
         # Calculate dropdown menu rect
         option_height = 24
-        self.dropdown_rect = pygame.Rect(
+        self.dropdown_rect = Rect(
             pos[0], pos[1] + 30,
             180, min(len(options) * option_height, 200)
         )
@@ -237,9 +265,9 @@ class DropdownWidget(BaseWidget):
     def pos(self, value: Tuple[int, int]):
         """Update position and dropdown rect."""
         self._pos = value
-        self.rect = pygame.Rect(value[0], value[1], 180, 28)
+        self.rect = Rect(value[0], value[1], 180, 28)
         option_height = 24
-        self.dropdown_rect = pygame.Rect(
+        self.dropdown_rect = Rect(
             value[0], value[1] + 30,
             180, min(len(self.options) * option_height, 200)
         )
@@ -256,7 +284,7 @@ class DropdownWidget(BaseWidget):
         except Exception:
             label_h = 14
         # Store full_rect including label area
-        self.full_rect = pygame.Rect(self.rect.x, self.rect.y - label_h, self.rect.width, self.rect.height + label_h)
+        self.full_rect = Rect(self.rect.x, self.rect.y - label_h, self.rect.width, self.rect.height + label_h)
 
     def update(self, mouse_pos: Tuple[int, int], dt: float) -> None:
         """Update hover state."""
@@ -435,12 +463,12 @@ class DropdownWidget(BaseWidget):
         temp = pygame.Surface((w, h), pygame.SRCALPHA)
 
         # Background + border
-        pygame.draw.rect(temp, self.theme.bg_normal, pygame.Rect(0, 0, w, h))
-        pygame.draw.rect(temp, self.theme.border, pygame.Rect(0, 0, w, h), 2)
+        pygame.draw.rect(temp, self.theme.bg_normal, Rect(0, 0, w, h))
+        pygame.draw.rect(temp, self.theme.border, Rect(0, 0, w, h), 2)
 
         # Draw options into temp surface (local coords)
         for i, option in enumerate(self.options):
-            option_rect = pygame.Rect(0, i * 24, w, 24)
+            option_rect = Rect(0, i * 24, w, 24)
             if i == self.hover_option:
                 pygame.draw.rect(temp, self.theme.bg_hover, option_rect)
             elif i == self.selected:
@@ -487,7 +515,7 @@ class ButtonWidget(BaseWidget):
                  callback: Callable[[], None],
                  width: int = 150, height: int = 35,
                  theme: Optional[WidgetTheme] = None):
-        super().__init__(pygame.Rect(pos[0], pos[1], width, height), theme)
+        super().__init__(Rect(pos[0], pos[1], width, height), theme)
         self.label = label
         self.callback = callback
         self.pressed = False
@@ -508,7 +536,7 @@ class ButtonWidget(BaseWidget):
     def pos(self, value: Tuple[int, int]):
         """Update position."""
         self._pos = value
-        self.rect = pygame.Rect(value[0], value[1], self._width, self._height)
+        self.rect = Rect(value[0], value[1], self._width, self._height)
     
     def handle_mouse_down(self, pos: Tuple[int, int], button: int) -> bool:
         """Handle mouse down - mark as pressed."""

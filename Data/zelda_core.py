@@ -1174,7 +1174,7 @@ class RoomGraphMatcher:
                 for i, r in enumerate(R):
                     for j, n in enumerate(N):
                         pairs.append((cost_matrix[i][j], i, n))
-                pairs.sort(key=lambda x: (x[0], self._node_signature(graph, x[2])))  # deterministic tie-break using node signature
+                pairs.sort(key=lambda x: (x[0], self._node_signature(graph, x[2]), x[2]))  # deterministic tie-break using node signature and node id
                 used_r = set()
                 used_n = set()
                 for cost, i, n in pairs:
@@ -1236,7 +1236,7 @@ class RoomGraphMatcher:
                 for i, r in enumerate(R):
                     for j, n in enumerate(N):
                         pairs.append((cm[i][j], r, n))
-                pairs.sort(key=lambda x: (x[0], self._node_signature(graph, x[2])))
+                pairs.sort(key=lambda x: (x[0], self._node_signature(graph, x[2]), x[2]))
                 used_n = set()
                 for cost, r, n in pairs:
                     if n in used_n:
@@ -1295,13 +1295,14 @@ class RoomGraphMatcher:
             if not val:
                 return None
             v = str(val).strip()
-            # Check exact mapping
+            # Exact mapping (prefer exact key match)
             if v in EDGE_TYPE_MAP:
                 return EDGE_TYPE_MAP[v]
-            # Case-insensitive fallback
+            # Case-insensitive mapping: compare lowercased keys to handle inputs like 's' or 'k'
             vl = v.lower()
-            if vl in EDGE_TYPE_MAP:
-                return EDGE_TYPE_MAP[vl]
+            for k, mapped in EDGE_TYPE_MAP.items():
+                if k.lower() == vl:
+                    return mapped
             return v
 
         for u, v, data in graph.edges(data=True):

@@ -1,1 +1,23 @@
 .github
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Pytest cache
+.pytest_cache/
+
+# Generated outputs
+output/
+*.pkl
+validation_report.json
+
+# Editor / OS
+.vscode/
+.DS_Store
+*.swp
+
+# Build / packaging
+dist/
+build/
+*.egg-info/

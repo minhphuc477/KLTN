@@ -46,6 +46,7 @@ This document lists the high-level features, the split into tracked PRs, accepta
 
 ## Cross-PR tests to add (regression protection)
 - deterministic_mapping_test (50 iter), test_jps_vs_astar_randomized_consistency, test_traversal_consistency_core_vs_pathfinder, bench smoke workflow in CI, test_gui_overlay_smoke
+- MAP-Elites: add GUI button to run a post-hoc MAP-Elites occupancy evaluation on currently loaded maps; results saved as heatmap images and optionally shown as a small sidebar overlay (toggle: `Show MAP-Elites Overlay`)
 
 ---
 

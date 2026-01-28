@@ -23,6 +23,7 @@ import json
 import logging
 import argparse
 import time
+import numpy as np
 from pathlib import Path
 from typing import Dict, List, Tuple, Any
 from datetime import datetime
@@ -315,18 +316,18 @@ class ZeldaValidationPipeline:
                 stitched = stitcher.stitch(dungeon)
                 
                 if verbose:
-                    logger.info(f"    {dungeon_id}: stitched {stitched.global_grid.shape}, START={stitched.start_pos}, GOAL={stitched.goal_pos}")
+                    logger.info("    %s: stitched %s, START=%s, GOAL=%s", dungeon_id, stitched.global_grid.shape, stitched.start_global, stitched.triforce_global)
                 
                 # Validate stitched dungeon
-                if stitched.start_pos is not None and stitched.goal_pos is not None:
+                if stitched.start_global is not None and stitched.triforce_global is not None:
                     result = self.validator.validate_single(stitched.global_grid)
                     
                     self.validation_results['dungeon_level'].append({
                         'dungeon_id': dungeon_id,
                         'result': result,
                         'grid_shape': stitched.global_grid.shape,
-                        'start_pos': stitched.start_pos,
-                        'goal_pos': stitched.goal_pos
+                        'start_global': stitched.start_global,
+                        'triforce_global': stitched.triforce_global
                     })
                     
                     if result.is_solvable:
@@ -363,8 +364,8 @@ class ZeldaValidationPipeline:
             info = room_info[i]
             
             # Check if room has both START and TRIFORCE
-            has_start = SEMANTIC_PALETTE['START'] in grid
-            has_goal = SEMANTIC_PALETTE['TRIFORCE'] in grid
+            has_start = np.any(grid == SEMANTIC_PALETTE['START'])
+            has_goal = np.any(grid == SEMANTIC_PALETTE['TRIFORCE'])
             
             result = ValidationResult(
                 is_solvable=False,
