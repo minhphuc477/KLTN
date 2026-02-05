@@ -612,8 +612,13 @@ class ItemCollectionEffect(BaseEffect):
         self.color = self.colors.get(item_type, (255, 255, 255))
         
         # Font for floating text
+        self.font = None
         if PYGAME_AVAILABLE:
-            self.font = pygame.font.SysFont('Arial', 14, bold=True)
+            try:
+                self.font = pygame.font.SysFont('Arial', 14, bold=True)
+            except Exception:
+                # Font initialization can fail on some systems
+                self.font = None
     
     def update(self, dt: float) -> None:
         """Update particles and age."""
@@ -660,20 +665,31 @@ class ItemCollectionEffect(BaseEffect):
             screen_x = int((self.position[1] + 0.5) * tile_size - camera_offset[0])
             screen_y = int((self.position[0] + 0.5) * tile_size - camera_offset[1] + text_y_offset)
             
-            # Render icon
-            icon_surf = self.font.render(self.icon, True, (*self.color, alpha))
-            icon_rect = icon_surf.get_rect(center=(screen_x, screen_y - 20))
+            # FIX: font.render() doesn't support alpha in color tuple.
+            # Render to a temporary surface, then set_alpha or use per-pixel alpha
+            icon_surf = self.font.render(self.icon, True, self.color)
             
-            # Add glow effect
-            glow_surf = pygame.Surface(icon_surf.get_size(), pygame.SRCALPHA)
-            glow_color = (*self.color, alpha // 2)
-            glow_text = self.font.render(self.icon, True, glow_color)
+            # Create an alpha surface and blit the text onto it for proper transparency
+            alpha_surf = pygame.Surface(icon_surf.get_size(), pygame.SRCALPHA)
+            alpha_surf.fill((255, 255, 255, alpha))  # White with target alpha
+            icon_surf.set_colorkey(None)  # Ensure no colorkey interference
+            alpha_surf.blit(icon_surf, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+            
+            icon_rect = alpha_surf.get_rect(center=(screen_x, screen_y - 20))
+            
+            # Add glow effect with proper alpha handling
+            glow_alpha = max(0, alpha // 2)
+            glow_text = self.font.render(self.icon, True, self.color)
+            glow_surf = pygame.Surface(glow_text.get_size(), pygame.SRCALPHA)
+            glow_surf.fill((255, 255, 255, glow_alpha))
+            glow_surf.blit(glow_text, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+            
             for dx in [-1, 0, 1]:
                 for dy in [-1, 0, 1]:
                     if dx != 0 or dy != 0:
-                        surface.blit(glow_text, (icon_rect.x + dx, icon_rect.y + dy))
+                        surface.blit(glow_surf, (icon_rect.x + dx, icon_rect.y + dy))
             
-            surface.blit(icon_surf, icon_rect)
+            surface.blit(alpha_surf, icon_rect)
 
 
 # ==========================================

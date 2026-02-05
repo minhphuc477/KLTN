@@ -259,7 +259,9 @@ def train_one_epoch(
         visual_loss = nn.functional.mse_loss(predicted, real_maps)
         
         # Get estimated clean maps for solvability check
-        estimated_clean = predicted.detach()  # Use generated output
+        # NOTE: Do NOT use .detach() here - we need gradients to flow
+        # from the logic loss back to the generator
+        estimated_clean = predicted  # Keep gradient connection
         
         # Extract start/goal from maps or use defaults
         start_coords = []

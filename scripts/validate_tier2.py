@@ -14,7 +14,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
-from simulation.validator import GameState, ZeldaLogicEnv, SEMANTIC_PALETTE
+from src.simulation import GameState, ZeldaLogicEnv, SEMANTIC_PALETTE
 
 
 def print_status(name: str, success: bool):
@@ -48,7 +48,7 @@ def main():
     # Test 2: D* Lite
     print("Test 2: D* Lite Replanning")
     try:
-        from simulation.dstar_lite import DStarLiteSolver
+        from src.simulation import DStarLiteSolver
         
         grid = np.full((10, 10), SEMANTIC_PALETTE['FLOOR'])
         grid[0, 0] = SEMANTIC_PALETTE['START']
@@ -74,7 +74,7 @@ def main():
     # Test 3: Parallel A*
     print("Test 3: Parallel Search")
     try:
-        from simulation.parallel_astar import ParallelAStarSolver
+        from src.simulation import ParallelAStarSolver
         import multiprocessing as mp
         
         grid = np.full((10, 10), SEMANTIC_PALETTE['FLOOR'])
@@ -97,7 +97,7 @@ def main():
     # Test 4: Multi-Goal
     print("Test 4: Multi-Goal Pathfinding")
     try:
-        from simulation.multi_goal import MultiGoalPathfinder
+        from src.simulation import MultiGoalPathfinder
         
         grid = np.full((10, 10), SEMANTIC_PALETTE['FLOOR'])
         grid[0, 0] = SEMANTIC_PALETTE['START']
@@ -123,7 +123,7 @@ def main():
     # Test 5: Solver Comparison
     print("Test 5: Solver Comparison")
     try:
-        from simulation.solver_comparison import SolverComparison
+        from src.simulation import SolverComparison
         
         grid = np.full((10, 10), SEMANTIC_PALETTE['FLOOR'])
         grid[0, 0] = SEMANTIC_PALETTE['START']

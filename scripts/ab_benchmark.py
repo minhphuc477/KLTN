@@ -5,8 +5,8 @@ Outputs CSV report to artifacts/ab_benchmark_<ts>.csv and prints a markdown summ
 import time
 import csv
 from pathlib import Path
-from Data.zelda_core import ZeldaDungeonAdapter
-from simulation.validator import StateSpaceAStar
+from src.data.zelda_core import ZeldaDungeonAdapter
+from src.simulation import StateSpaceAStar
 
 DATA_ROOT = Path('Data/The Legend of Zelda')
 OUT_DIR = Path('artifacts')

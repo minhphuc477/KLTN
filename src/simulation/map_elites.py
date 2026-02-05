@@ -17,10 +17,12 @@ import math
 import numpy as np
 from typing import Dict, Tuple, Optional, Any, List
 
+# Import from canonical source
+from src.core.definitions import SEMANTIC_PALETTE
+
 try:
-    from Data.zelda_core import SEMANTIC_PALETTE, DungeonSolver
+    from src.data.zelda_core import DungeonSolver
 except Exception:
-    SEMANTIC_PALETTE = None
     DungeonSolver = None
 
 

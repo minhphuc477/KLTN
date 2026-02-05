@@ -44,24 +44,17 @@ TILE_MAPPING = {
     '-': -1,  # Void
 }
 
-# Import semantic palette from zelda_core for VGLC compatibility
-try:
-    from Data.zelda_core import (
-        SEMANTIC_PALETTE,
-        CHAR_TO_SEMANTIC,
-        ROOM_HEIGHT,
-        ROOM_WIDTH,
-        ZeldaDungeonAdapter
-    )
-    VGLC_AVAILABLE = True
-    logger.info("VGLC adapter available via zelda_core")
-except ImportError:
-    VGLC_AVAILABLE = False
-    SEMANTIC_PALETTE = None
-    CHAR_TO_SEMANTIC = None
-    ROOM_HEIGHT = 16
-    ROOM_WIDTH = 11
-    logger.warning("zelda_core not available, using basic tile mapping")
+# Import semantic palette from local zelda_core module
+from .zelda_core import (
+    SEMANTIC_PALETTE,
+    CHAR_TO_SEMANTIC,
+    ROOM_HEIGHT,
+    ROOM_WIDTH,
+    ZeldaDungeonAdapter
+)
+from src.core.definitions import SEMANTIC_PALETTE, CHAR_TO_SEMANTIC
+VGLC_AVAILABLE = True
+logger.info("VGLC adapter available via zelda_core")
 
 
 # =============================================================================

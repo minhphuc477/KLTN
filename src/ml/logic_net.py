@@ -103,6 +103,10 @@ class SoftBellmanFord(nn.Module):
         Returns:
             (B,) tensor of reachability scores in [0, 1]
         """
+        # Defensive assertions for tensor shape
+        assert probability_map.ndim == 4 and probability_map.shape[1] == 1, \
+            f"Expected (B, 1, H, W) tensor, got shape {probability_map.shape}"
+        
         B, C, H, W = probability_map.shape
         device = probability_map.device
         
@@ -211,6 +215,11 @@ class LogicNet(nn.Module):
         Returns:
             (B,) tensor of solvability scores in [0, 1]
         """
+        # Defensive assertion for batch size consistency
+        assert len(start_coords) == probability_map.shape[0] == len(goal_coords), \
+            f"Batch size mismatch: probability_map batch={probability_map.shape[0]}, " \
+            f"start_coords len={len(start_coords)}, goal_coords len={len(goal_coords)}"
+        
         self._call_count += 1
         
         # Handle integer tile IDs if walkability mapping exists

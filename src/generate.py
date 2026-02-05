@@ -40,18 +40,13 @@ logger = logging.getLogger(__name__)
 # IMPORT VALIDATOR (with fallback)
 # =============================================================================
 
-try:
-    from simulation.validator import (
-        ZeldaLogicEnv,
-        StateSpaceAStar,
-        SEMANTIC_PALETTE,
-    )
-    VALIDATOR_AVAILABLE = True
-    logger.info("External validator available")
-except ImportError:
-    VALIDATOR_AVAILABLE = False
-    logger.warning("External validator not available, using LogicNet only")
-    SEMANTIC_PALETTE = None
+from src.simulation import (
+    ZeldaLogicEnv,
+    StateSpaceAStar,
+    SEMANTIC_PALETTE,
+)
+VALIDATOR_AVAILABLE = True
+logger.info("External validator available")
 
 
 # =============================================================================

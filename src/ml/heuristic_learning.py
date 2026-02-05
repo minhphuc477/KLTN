@@ -210,7 +210,7 @@ class HeuristicTrainer:
             features[6] = dist / (self.map_height + self.map_width)
         
         # Door count (simplified - count from grid)
-        from simulation.validator import SEMANTIC_PALETTE
+        from src.core.definitions import SEMANTIC_PALETTE
         locked_doors = np.sum(env.grid == SEMANTIC_PALETTE['DOOR_LOCKED'])
         features[7] = locked_doors / 10.0  # Normalize
         

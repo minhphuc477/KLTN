@@ -354,7 +354,7 @@ class ItemTooltip:
             collected_items: Set of collected item positions
             current_time: Current time (seconds)
         """
-        from simulation.validator import SEMANTIC_PALETTE, ID_TO_NAME
+        from src.core.definitions import SEMANTIC_PALETTE, ID_TO_NAME
         
         # Check if hovering over new tile
         if tile_pos != self.hover_pos:

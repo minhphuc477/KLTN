@@ -11,12 +11,8 @@ Data.zelda_core constants and dataclasses).
 from __future__ import annotations
 from typing import Tuple, Set, Optional
 import numpy as np
-from Data.zelda_core import (
-    SEMANTIC_PALETTE,
-    StitchedDungeon,
-    ROOM_HEIGHT,
-    ROOM_WIDTH,
-)
+from src.core.definitions import SEMANTIC_PALETTE, ROOM_HEIGHT, ROOM_WIDTH
+from src.data.zelda_core import StitchedDungeon
 from src.data_processing.visual_extractor import extract_grid
 
 

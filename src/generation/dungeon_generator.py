@@ -23,7 +23,7 @@ import numpy as np
 from typing import List, Tuple, Optional, Set, Dict
 from dataclasses import dataclass
 from enum import Enum
-from simulation.validator import SEMANTIC_PALETTE
+from src.core.definitions import SEMANTIC_PALETTE
 
 logger = logging.getLogger(__name__)
 
