@@ -12,7 +12,6 @@ This file is the SINGLE SOURCE OF TRUTH for:
 
 Import from here instead of duplicating constants across modules.
 
-Author: KLTN Thesis Project
 """
 
 from typing import Dict, Set

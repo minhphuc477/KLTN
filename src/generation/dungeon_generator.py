@@ -139,11 +139,23 @@ class BSPNode:
             return rooms
         else:
             # Leaf node - create room
-            room_width = random.randint(min_room_size, min(max_room_size, self.width - 2))
-            room_height = random.randint(min_room_size, min(max_room_size, self.height - 2))
+            # Ensure minimum valid ranges for room dimensions
+            max_width = max(min_room_size, min(max_room_size, self.width - 2))
+            max_height = max(min_room_size, min(max_room_size, self.height - 2))
             
-            room_x = self.x + random.randint(1, self.width - room_width - 1)
-            room_y = self.y + random.randint(1, self.height - room_height - 1)
+            # Skip room creation if space is too small
+            if max_width < min_room_size or max_height < min_room_size:
+                return []
+            
+            room_width = random.randint(min_room_size, max_width)
+            room_height = random.randint(min_room_size, max_height)
+            
+            # Ensure valid placement range
+            x_range = max(1, self.width - room_width - 1)
+            y_range = max(1, self.height - room_height - 1)
+            
+            room_x = self.x + random.randint(1, x_range)
+            room_y = self.y + random.randint(1, y_range)
             
             self.room = Room(room_x, room_y, room_width, room_height)
             return [self.room]

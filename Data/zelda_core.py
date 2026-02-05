@@ -987,6 +987,31 @@ class RoomGraphMatcher:
         Returns:
             Dungeon with rooms annotated with graph info
         """
+        # ========================================
+        # VALIDATION: Check graph-room count match
+        # ========================================
+        num_graph_nodes = len(graph.nodes())
+        num_rooms = len(rooms)
+        
+        if num_graph_nodes != num_rooms:
+            logger.warning(
+                "GRAPH-ROOM MISMATCH: Graph has %d nodes but %d physical rooms found. "
+                "This may cause incomplete room-to-node mapping.",
+                num_graph_nodes, num_rooms
+            )
+            if num_graph_nodes > num_rooms:
+                logger.warning(
+                    "  -> %d graph nodes will NOT have physical rooms assigned. "
+                    "Items/doors from those nodes cannot be materialized.",
+                    num_graph_nodes - num_rooms
+                )
+            else:
+                logger.warning(
+                    "  -> %d rooms will NOT have graph node assignments. "
+                    "Those rooms will lack graph-based item/door data.",
+                    num_rooms - num_graph_nodes
+                )
+        
         dungeon = Dungeon(
             dungeon_id="",
             rooms=rooms,
@@ -1995,6 +2020,19 @@ class DungeonStitcher:
         # Connect doors by punching through walls
         self._connect_doors(global_grid, rooms_remapped)
         
+        # Build room_to_node mapping before placing items
+        room_to_node = {pos_remap[old_pos]: room.graph_node_id 
+                        for old_pos, room in dungeon.rooms.items()
+                        if old_pos in pos_remap and room.graph_node_id is not None}
+        
+        # CRITICAL FIX: Place items (keys, items) based on graph node labels
+        # VGLC data does NOT contain item placement - only the graph specifies this
+        self._place_items_from_graph(global_grid, dungeon.graph, room_to_node, room_positions)
+        
+        # CRITICAL FIX: Convert door types based on graph edge labels
+        # VGLC data only has generic 'D' doors - graph specifies k/b/l requirements
+        self._apply_door_types_from_graph(global_grid, dungeon.graph, room_to_node, room_positions)
+        
         # Mark special positions
         start_global = None
         triforce_global = None
@@ -2026,9 +2064,7 @@ class DungeonStitcher:
             start_global=start_global,
             triforce_global=triforce_global,
             graph=dungeon.graph,
-            room_to_node={pos_remap[old_pos]: room.graph_node_id 
-                          for old_pos, room in dungeon.rooms.items()
-                          if old_pos in pos_remap and room.graph_node_id is not None}
+            room_to_node=room_to_node  # Use pre-built mapping
         )
     
     def _compact_rooms(self, rooms: Dict[Tuple[int, int], Room]) -> Tuple[Dict[Tuple[int, int], Room], Dict[Tuple[int, int], Tuple[int, int]]]:
@@ -2225,6 +2261,379 @@ class DungeonStitcher:
         
         # Fallback to center
         return (center_r, center_c)
+    
+    def _place_items_from_graph(self, grid: np.ndarray, graph: nx.DiGraph,
+                                 room_to_node: Dict[Tuple[int, int], int],
+                                 room_positions: Dict[Tuple[int, int], Tuple[int, int]]):
+        """
+        Place items (keys, items) in the grid based on graph node labels.
+        
+        CRITICAL FIX: VGLC text files do NOT contain item placement data.
+        The DOT graph specifies which rooms should have items via node labels:
+        - 'k' = small key (KEY_SMALL)
+        - 'K' = boss key (KEY_BOSS)
+        - 'I' = major item/key item (KEY_ITEM) - enables crossing water, etc.
+        - 'i' = minor item (ITEM_MINOR)
+        
+        Items are placed at a walkable floor position near the room center.
+        If no valid floor exists, tries alternate positions (adjacent tiles, room corners).
+        """
+        if graph is None:
+            return
+        
+        # Build reverse mapping: node_id -> room_pos
+        node_to_room = {node_id: room_pos for room_pos, node_id in room_to_node.items()}
+        
+        # Tiles valid for item placement (walkable floors)
+        WALKABLE_FOR_ITEM = {
+            SEMANTIC_PALETTE['FLOOR'],
+        }
+        
+        # Secondary tiles that can be converted to floor for item placement
+        CONVERTIBLE_FOR_ITEM = {
+            SEMANTIC_PALETTE['VOID'],  # Empty spaces in corridor rooms
+        }
+        
+        item_type_names = {
+            SEMANTIC_PALETTE['KEY_SMALL']: 'KEY_SMALL',
+            SEMANTIC_PALETTE['KEY_BOSS']: 'KEY_BOSS',
+            SEMANTIC_PALETTE['KEY_ITEM']: 'KEY_ITEM',
+            SEMANTIC_PALETTE['ITEM_MINOR']: 'ITEM_MINOR',
+        }
+        
+        for node_id, attrs in graph.nodes(data=True):
+            label = attrs.get('label', '')
+            parts = [p.strip() for p in label.split(',')]
+            
+            # Determine what item to place
+            item_to_place = None
+            if 'k' in parts:
+                item_to_place = SEMANTIC_PALETTE['KEY_SMALL']
+            elif 'K' in parts:
+                item_to_place = SEMANTIC_PALETTE['KEY_BOSS']
+            elif 'I' in parts:  # Capital I = major key item
+                item_to_place = SEMANTIC_PALETTE['KEY_ITEM']
+            elif 'i' in parts:  # Lowercase i = minor item
+                item_to_place = SEMANTIC_PALETTE['ITEM_MINOR']
+            
+            if item_to_place is None:
+                continue
+            
+            # Find room for this node
+            room_pos = node_to_room.get(node_id)
+            if room_pos is None:
+                logger.warning(
+                    "ITEM_PLACEMENT_FAIL: Node %d (label='%s') with item '%s' has no room mapping. "
+                    "Item cannot be materialized in grid.",
+                    node_id, label, item_type_names.get(item_to_place, str(item_to_place))
+                )
+                continue
+                
+            if room_pos not in room_positions:
+                logger.warning(
+                    "ITEM_PLACEMENT_FAIL: Node %d mapped to room %s but room has no grid position. "
+                    "Item '%s' cannot be materialized.",
+                    node_id, room_pos, item_type_names.get(item_to_place, str(item_to_place))
+                )
+                continue
+            
+            r_off, c_off = room_positions[room_pos]
+            
+            # ========================================
+            # STRATEGY 1: Search expanding rings from center
+            # ========================================
+            center_r = r_off + ROOM_HEIGHT // 2
+            center_c = c_off + ROOM_WIDTH // 2
+            
+            placed = False
+            for radius in range(0, 6):
+                if placed:
+                    break
+                for dr in range(-radius, radius + 1):
+                    if placed:
+                        break
+                    for dc in range(-radius, radius + 1):
+                        if abs(dr) != radius and abs(dc) != radius:
+                            continue  # Only check perimeter of ring
+                        r = center_r + dr
+                        c = center_c + dc
+                        # Check bounds within room interior (not walls)
+                        if not (r_off + 2 <= r < r_off + ROOM_HEIGHT - 2 and 
+                                c_off + 2 <= c < c_off + ROOM_WIDTH - 2):
+                            continue
+                        if grid[r, c] in WALKABLE_FOR_ITEM:
+                            grid[r, c] = item_to_place
+                            placed = True
+                            logger.debug(
+                                "Placed item %s at (%d, %d) for node %d in room %s",
+                                item_type_names.get(item_to_place, str(item_to_place)), r, c, node_id, room_pos
+                            )
+                            break
+            
+            # ========================================
+            # STRATEGY 2: Try room corners
+            # ========================================
+            if not placed:
+                corners = [
+                    (r_off + 3, c_off + 3),      # Top-left
+                    (r_off + 3, c_off + ROOM_WIDTH - 4),    # Top-right
+                    (r_off + ROOM_HEIGHT - 4, c_off + 3),   # Bottom-left
+                    (r_off + ROOM_HEIGHT - 4, c_off + ROOM_WIDTH - 4),  # Bottom-right
+                ]
+                for r, c in corners:
+                    if 0 <= r < grid.shape[0] and 0 <= c < grid.shape[1]:
+                        if grid[r, c] in WALKABLE_FOR_ITEM:
+                            grid[r, c] = item_to_place
+                            placed = True
+                            logger.debug(
+                                "Placed item %s at corner (%d, %d) for node %d in room %s",
+                                item_type_names.get(item_to_place, str(item_to_place)), r, c, node_id, room_pos
+                            )
+                            break
+            
+            # ========================================
+            # STRATEGY 3: Convert a void/empty tile near center
+            # ========================================
+            if not placed:
+                for radius in range(0, 6):
+                    if placed:
+                        break
+                    for dr in range(-radius, radius + 1):
+                        if placed:
+                            break
+                        for dc in range(-radius, radius + 1):
+                            if abs(dr) != radius and abs(dc) != radius:
+                                continue
+                            r = center_r + dr
+                            c = center_c + dc
+                            if not (r_off + 2 <= r < r_off + ROOM_HEIGHT - 2 and 
+                                    c_off + 2 <= c < c_off + ROOM_WIDTH - 2):
+                                continue
+                            if grid[r, c] in CONVERTIBLE_FOR_ITEM:
+                                grid[r, c] = item_to_place
+                                placed = True
+                                logger.debug(
+                                    "Placed item %s at converted void (%d, %d) for node %d in room %s",
+                                    item_type_names.get(item_to_place, str(item_to_place)), r, c, node_id, room_pos
+                                )
+                                break
+            
+            # ========================================
+            # STRATEGY 4: Force place at center (last resort)
+            # ========================================
+            if not placed:
+                r, c = center_r, center_c
+                if 0 <= r < grid.shape[0] and 0 <= c < grid.shape[1]:
+                    original_tile = grid[r, c]
+                    grid[r, c] = item_to_place
+                    placed = True
+                    logger.warning(
+                        "ITEM_PLACEMENT_FORCED: Node %d item '%s' force-placed at center (%d, %d) "
+                        "in room %s (overwrote tile %d). No valid floor found.",
+                        node_id, item_type_names.get(item_to_place, str(item_to_place)),
+                        r, c, room_pos, original_tile
+                    )
+            
+            if not placed:
+                logger.error(
+                    "ITEM_PLACEMENT_FAILED: Could not place item '%s' for node %d in room %s. "
+                    "All placement strategies exhausted.",
+                    item_type_names.get(item_to_place, str(item_to_place)), node_id, room_pos
+                )
+
+    def _apply_door_types_from_graph(
+        self, 
+        grid: np.ndarray, 
+        graph: nx.DiGraph, 
+        room_to_node: Dict[Tuple[int, int], int],
+        room_positions: Dict[Tuple[int, int], Tuple[int, int]]
+    ):
+        """
+        Convert generic DOOR_OPEN/FLOOR tiles at room boundaries to specific door types
+        based on graph edge labels.
+        
+        Edge labels:
+        - 'k' = key-locked door (DOOR_LOCKED)
+        - 'b' = bombable wall (DOOR_BOMB)
+        - 'l' = soft/one-way door (DOOR_SOFT)
+        - 'K' = boss key door (DOOR_BOSS)
+        - empty = normal open door (DOOR_OPEN)
+        
+        IMPORTANT: Only the CENTER tile of each door is marked with the special type.
+        This matches Zelda semantics where one key opens the entire door.
+        """
+        if graph is None:
+            return
+        
+        # Build reverse mapping: node -> room_pos
+        node_to_room = {v: k for k, v in room_to_node.items()}
+        
+        # Door type mapping from edge labels
+        door_type_map = {
+            'k': SEMANTIC_PALETTE['DOOR_LOCKED'],
+            'b': SEMANTIC_PALETTE['DOOR_BOMB'],
+            'l': SEMANTIC_PALETTE['DOOR_SOFT'],
+            'K': SEMANTIC_PALETTE['DOOR_BOSS'],
+        }
+        
+        door_type_names = {
+            SEMANTIC_PALETTE['DOOR_LOCKED']: 'DOOR_LOCKED',
+            SEMANTIC_PALETTE['DOOR_BOMB']: 'DOOR_BOMB',
+            SEMANTIC_PALETTE['DOOR_SOFT']: 'DOOR_SOFT',
+            SEMANTIC_PALETTE['DOOR_BOSS']: 'DOOR_BOSS',
+        }
+        
+        # Process each edge in the graph
+        for from_node, to_node, edge_data in graph.edges(data=True):
+            label = edge_data.get('label', '')
+            edge_type = edge_data.get('edge_type', '')
+            
+            # Determine door type from label or edge_type
+            door_type = door_type_map.get(label)
+            if door_type is None and edge_type in ('key_locked', 'locked'):
+                door_type = SEMANTIC_PALETTE['DOOR_LOCKED']
+            elif door_type is None and edge_type == 'bombable':
+                door_type = SEMANTIC_PALETTE['DOOR_BOMB']
+            elif door_type is None and edge_type == 'soft_locked':
+                door_type = SEMANTIC_PALETTE['DOOR_SOFT']
+            elif door_type is None and edge_type == 'boss_locked':
+                door_type = SEMANTIC_PALETTE['DOOR_BOSS']
+            
+            if door_type is None:
+                continue  # No modification needed for open doors
+            
+            # Find the two rooms
+            from_room = node_to_room.get(from_node)
+            to_room = node_to_room.get(to_node)
+            
+            if from_room is None:
+                logger.debug(
+                    "DOOR_TYPE_SKIP: Edge %d->%d has no from_room mapping (node %d unmapped)",
+                    from_node, to_node, from_node
+                )
+                continue
+            if to_room is None:
+                logger.debug(
+                    "DOOR_TYPE_SKIP: Edge %d->%d has no to_room mapping (node %d unmapped)",
+                    from_node, to_node, to_node
+                )
+                continue
+            if from_room not in room_positions:
+                logger.debug(
+                    "DOOR_TYPE_SKIP: from_room %s not in room_positions for edge %d->%d",
+                    from_room, from_node, to_node
+                )
+                continue
+            if to_room not in room_positions:
+                logger.debug(
+                    "DOOR_TYPE_SKIP: to_room %s not in room_positions for edge %d->%d",
+                    to_room, from_node, to_node
+                )
+                continue
+            
+            # Check room adjacency - rooms must be physically adjacent
+            from_r, from_c = from_room
+            to_r, to_c = to_room
+            
+            # Verify rooms are adjacent (differ by exactly 1 in one dimension)
+            row_diff = abs(to_r - from_r)
+            col_diff = abs(to_c - from_c)
+            
+            if not ((row_diff == 1 and col_diff == 0) or (row_diff == 0 and col_diff == 1)):
+                logger.debug(
+                    "DOOR_TYPE_SKIP: Rooms %s and %s for edge %d->%d are not physically adjacent "
+                    "(may be connected via stair/warp)",
+                    from_room, to_room, from_node, to_node
+                )
+                continue
+            
+            # Get grid offsets
+            from_offset = room_positions[from_room]
+            to_offset = room_positions[to_room]
+            
+            # Find door tiles at the boundary between rooms
+            door_positions = self._find_boundary_doors(
+                grid, from_offset, to_offset, from_room, to_room
+            )
+            
+            # ========================================
+            # CRITICAL: Mark ONLY THE CENTER door tile
+            # In Zelda, one key opens the whole door, not each tile
+            # ========================================
+            if door_positions:
+                center_idx = len(door_positions) // 2
+                center_pos = door_positions[center_idx]
+                dr, dc = center_pos
+                
+                # Only convert tiles that are passable (floor or open door)
+                valid_to_convert = {
+                    SEMANTIC_PALETTE['FLOOR'], 
+                    SEMANTIC_PALETTE['DOOR_OPEN']
+                }
+                
+                if grid[dr, dc] in valid_to_convert:
+                    grid[dr, dc] = door_type
+                    logger.debug(
+                        "Set CENTER door at (%d, %d) to %s for edge %d->%d (rooms %s<->%s)",
+                        dr, dc, door_type_names.get(door_type, str(door_type)),
+                        from_node, to_node, from_room, to_room
+                    )
+                else:
+                    logger.debug(
+                        "DOOR_TYPE_SKIP: Center position (%d, %d) has tile %d, not convertible for edge %d->%d",
+                        dr, dc, grid[dr, dc], from_node, to_node
+                    )
+            else:
+                logger.debug(
+                    "DOOR_TYPE_SKIP: No boundary doors found between rooms %s and %s for edge %d->%d",
+                    from_room, to_room, from_node, to_node
+                )
+    
+    def _find_boundary_doors(
+        self,
+        grid: np.ndarray,
+        from_offset: Tuple[int, int],
+        to_offset: Tuple[int, int],
+        from_room: Tuple[int, int],
+        to_room: Tuple[int, int]
+    ) -> List[Tuple[int, int]]:
+        """
+        Find door tiles at the boundary between two adjacent rooms.
+        """
+        from_r, from_c = from_room
+        to_r, to_c = to_room
+        from_off_r, from_off_c = from_offset
+        to_off_r, to_off_c = to_offset
+        
+        door_positions = []
+        
+        # Determine direction of adjacency
+        if to_r == from_r - 1:  # to_room is NORTH of from_room
+            # Door is at top of from_room
+            boundary_r = from_off_r
+            for c in range(from_off_c + 3, from_off_c + 8):
+                if 0 <= c < grid.shape[1]:
+                    door_positions.append((boundary_r, c))
+        elif to_r == from_r + 1:  # to_room is SOUTH of from_room
+            # Door is at bottom of from_room
+            boundary_r = from_off_r + ROOM_HEIGHT - 1
+            for c in range(from_off_c + 3, from_off_c + 8):
+                if 0 <= c < grid.shape[1]:
+                    door_positions.append((boundary_r, c))
+        elif to_c == from_c - 1:  # to_room is WEST of from_room
+            # Door is at left of from_room
+            boundary_c = from_off_c
+            for r in range(from_off_r + 5, from_off_r + 11):
+                if 0 <= r < grid.shape[0]:
+                    door_positions.append((r, boundary_c))
+        elif to_c == from_c + 1:  # to_room is EAST of from_room
+            # Door is at right of from_room
+            boundary_c = from_off_c + ROOM_WIDTH - 1
+            for r in range(from_off_r + 5, from_off_r + 11):
+                if 0 <= r < grid.shape[0]:
+                    door_positions.append((r, boundary_c))
+        
+        return door_positions
 
 
 # ==========================================
@@ -2377,6 +2786,190 @@ class ZeldaDungeonAdapter:
         self.matcher = RoomGraphMatcher()
         self.stitcher = DungeonStitcher()
     
+    def validate_dungeon(self, dungeon: Dungeon, stitched: Optional[StitchedDungeon] = None) -> Dict:
+        """
+        Validate dungeon integrity and return detailed warnings/errors.
+        
+        Checks:
+        - All graph nodes have corresponding rooms
+        - All items from graph are placed in grid (if stitched provided)
+        - Start and goal positions are valid and reachable
+        - Room-to-node mapping completeness
+        
+        Args:
+            dungeon: Dungeon object to validate
+            stitched: Optional StitchedDungeon for grid-level checks
+            
+        Returns:
+            Dict with:
+            - 'valid': bool (True if no errors, warnings may still exist)
+            - 'errors': List[str] (critical issues)
+            - 'warnings': List[str] (non-critical issues)
+            - 'stats': Dict with counts and statistics
+        """
+        errors = []
+        warnings = []
+        stats = {
+            'num_rooms': len(dungeon.rooms),
+            'num_graph_nodes': len(dungeon.graph.nodes()) if dungeon.graph else 0,
+            'num_graph_edges': len(dungeon.graph.edges()) if dungeon.graph else 0,
+            'rooms_with_node_assignment': 0,
+            'graph_nodes_with_room': 0,
+            'items_in_graph': 0,
+            'items_placed_in_grid': 0,
+            'locked_doors_in_graph': 0,
+            'locked_doors_in_grid': 0,
+        }
+        
+        # ========================================
+        # CHECK 1: Graph-Room count match
+        # ========================================
+        if dungeon.graph:
+            num_nodes = len(dungeon.graph.nodes())
+            num_rooms = len(dungeon.rooms)
+            
+            if num_nodes > num_rooms:
+                warnings.append(
+                    f"GRAPH_ROOM_MISMATCH: {num_nodes} graph nodes but only {num_rooms} physical rooms. "
+                    f"{num_nodes - num_rooms} nodes have no room."
+                )
+            elif num_rooms > num_nodes:
+                warnings.append(
+                    f"GRAPH_ROOM_MISMATCH: {num_rooms} physical rooms but only {num_nodes} graph nodes. "
+                    f"{num_rooms - num_nodes} rooms have no graph data."
+                )
+        
+        # ========================================
+        # CHECK 2: Room-to-node assignment completeness
+        # ========================================
+        rooms_with_nodes = []
+        rooms_without_nodes = []
+        
+        for pos, room in dungeon.rooms.items():
+            if room.graph_node_id is not None:
+                rooms_with_nodes.append(pos)
+                stats['rooms_with_node_assignment'] += 1
+            else:
+                rooms_without_nodes.append(pos)
+        
+        if rooms_without_nodes:
+            warnings.append(
+                f"UNMAPPED_ROOMS: {len(rooms_without_nodes)} rooms have no graph node assignment: "
+                f"{rooms_without_nodes[:5]}{'...' if len(rooms_without_nodes) > 5 else ''}"
+            )
+        
+        # Check reverse: nodes without rooms
+        if dungeon.graph:
+            assigned_nodes = {room.graph_node_id for room in dungeon.rooms.values() if room.graph_node_id is not None}
+            all_nodes = set(dungeon.graph.nodes())
+            unassigned_nodes = all_nodes - assigned_nodes
+            stats['graph_nodes_with_room'] = len(assigned_nodes)
+            
+            if unassigned_nodes:
+                warnings.append(
+                    f"UNMAPPED_NODES: {len(unassigned_nodes)} graph nodes have no room: "
+                    f"{list(unassigned_nodes)[:5]}{'...' if len(unassigned_nodes) > 5 else ''}"
+                )
+        
+        # ========================================
+        # CHECK 3: Start position validity
+        # ========================================
+        if dungeon.start_pos is None:
+            errors.append("MISSING_START: No start position defined")
+        elif dungeon.start_pos not in dungeon.rooms:
+            errors.append(f"INVALID_START: Start position {dungeon.start_pos} is not a valid room")
+        else:
+            start_room = dungeon.rooms[dungeon.start_pos]
+            if not start_room.has_stair and not start_room.is_start:
+                warnings.append(
+                    f"UNUSUAL_START: Start room {dungeon.start_pos} has no stair marker"
+                )
+        
+        # ========================================
+        # CHECK 4: Goal/Triforce position validity
+        # ========================================
+        if dungeon.triforce_pos is None:
+            errors.append("MISSING_TRIFORCE: No triforce position defined")
+        elif dungeon.triforce_pos not in dungeon.rooms:
+            errors.append(f"INVALID_TRIFORCE: Triforce position {dungeon.triforce_pos} is not a valid room")
+        
+        # ========================================
+        # CHECK 5: Graph items vs grid items (if stitched provided)
+        # ========================================
+        if dungeon.graph:
+            # Count items in graph
+            for node_id, attrs in dungeon.graph.nodes(data=True):
+                label = attrs.get('label', '')
+                parts = [p.strip() for p in label.split(',')]
+                if any(p in parts for p in ['k', 'K', 'I', 'i']):
+                    stats['items_in_graph'] += 1
+            
+            # Count locked doors in graph
+            for u, v, edata in dungeon.graph.edges(data=True):
+                label = edata.get('label', '')
+                edge_type = edata.get('edge_type', '')
+                if label in ('k', 'b', 'K') or edge_type in ('key_locked', 'bombable', 'boss_locked'):
+                    stats['locked_doors_in_graph'] += 1
+        
+        if stitched is not None:
+            # Count items in grid
+            item_tiles = {
+                SEMANTIC_PALETTE['KEY_SMALL'],
+                SEMANTIC_PALETTE['KEY_BOSS'],
+                SEMANTIC_PALETTE['KEY_ITEM'],
+                SEMANTIC_PALETTE['ITEM_MINOR'],
+                SEMANTIC_PALETTE['KEY'],
+                SEMANTIC_PALETTE['ITEM'],
+            }
+            for tile_id in item_tiles:
+                count = np.sum(stitched.global_grid == tile_id)
+                stats['items_placed_in_grid'] += count
+            
+            # Count locked doors in grid
+            locked_door_tiles = {
+                SEMANTIC_PALETTE['DOOR_LOCKED'],
+                SEMANTIC_PALETTE['DOOR_BOMB'],
+                SEMANTIC_PALETTE['DOOR_BOSS'],
+            }
+            for tile_id in locked_door_tiles:
+                count = np.sum(stitched.global_grid == tile_id)
+                stats['locked_doors_in_grid'] += count
+            
+            # Compare
+            if stats['items_in_graph'] > 0 and stats['items_placed_in_grid'] == 0:
+                errors.append(
+                    f"ITEMS_NOT_MATERIALIZED: Graph specifies {stats['items_in_graph']} items "
+                    f"but 0 items found in grid"
+                )
+            elif stats['items_placed_in_grid'] < stats['items_in_graph']:
+                warnings.append(
+                    f"ITEMS_PARTIALLY_PLACED: Graph specifies {stats['items_in_graph']} items "
+                    f"but only {stats['items_placed_in_grid']} found in grid"
+                )
+            
+            # ========================================
+            # CHECK 6: Start/Triforce reachability (basic BFS)
+            # ========================================
+            if stitched.start_global and stitched.triforce_global:
+                solver = DungeonSolver()
+                result = solver._solve_with_grid(stitched)
+                if not result.get('solvable'):
+                    warnings.append(
+                        f"GRID_UNREACHABLE: No walkable path from start to triforce in grid. "
+                        f"Reason: {result.get('reason', 'unknown')}"
+                    )
+                    stats['grid_reachable'] = False
+                else:
+                    stats['grid_reachable'] = True
+                    stats['grid_path_length'] = result.get('path_length', 0)
+        
+        return {
+            'valid': len(errors) == 0,
+            'errors': errors,
+            'warnings': warnings,
+            'stats': stats
+        }
+
     def load_dungeon(self, dungeon_num: int, variant: int = 1) -> Dungeon:
         """
         Load a dungeon by number.

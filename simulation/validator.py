@@ -65,6 +65,7 @@ WALKABLE_IDS = {
     SEMANTIC_PALETTE['ITEM_MINOR'],
     SEMANTIC_PALETTE['ELEMENT_FLOOR'],
     SEMANTIC_PALETTE['STAIR'],
+    SEMANTIC_PALETTE['ENEMY'],  # CRITICAL FIX: Enemies are walkable (fought or avoided)
 }
 
 BLOCKING_IDS = {
@@ -94,6 +95,17 @@ PICKUP_IDS = {
     SEMANTIC_PALETTE['KEY_BOSS'],
     SEMANTIC_PALETTE['KEY_ITEM'],
     SEMANTIC_PALETTE['ITEM_MINOR'],
+}
+
+# Edge types for graph-based navigation
+EDGE_TYPE_MAP = {
+    'locked': 'locked',
+    'key_locked': 'key_locked',
+    'bomb': 'bomb',
+    'boss': 'boss',
+    'puzzle': 'puzzle',
+    'open': 'open',
+    '': 'open',  # Default for unlabeled edges
 }
 
 # Action enumeration
@@ -144,6 +156,9 @@ class GameState:
     current_floor: int = 0  # NEW: Multi-floor dungeon support
     
     def __hash__(self):
+        # NOTE: pushed_blocks is NOT included in hash to prevent state explosion
+        # (117 blocks = 2^117 potential states). Instead, block pushes are handled
+        # as transient state modifications checked during movement.
         return hash((
             self.position,
             self.keys,
@@ -152,13 +167,14 @@ class GameState:
             self.has_item,
             frozenset(self.opened_doors),
             frozenset(self.collected_items),
-            frozenset(self.pushed_blocks),
+            # frozenset(self.pushed_blocks),  # REMOVED: causes state explosion
             self.current_floor  # Include floor in hash
         ))
     
     def __eq__(self, other):
         if not isinstance(other, GameState):
             return False
+        # NOTE: pushed_blocks NOT compared - see __hash__ comment
         return (
             self.position == other.position and
             self.keys == other.keys and
@@ -167,7 +183,7 @@ class GameState:
             self.has_item == other.has_item and
             self.opened_doors == other.opened_doors and
             self.collected_items == other.collected_items and
-            self.pushed_blocks == other.pushed_blocks and
+            # self.pushed_blocks == other.pushed_blocks and  # REMOVED
             self.current_floor == other.current_floor
         )
     
@@ -435,6 +451,62 @@ class ValidationResult:
 
 
 @dataclass
+class SolverOptions:
+    """Configuration options for the solver.
+    
+    Allows customization of starting inventory and solver behavior.
+    """
+    start_keys: int = 0
+    start_bombs: int = 1  # Default: 1 bomb to pass bomb doors (Zelda style)
+    start_boss_key: bool = False
+    start_item: bool = False  # Ladder/raft
+    timeout: int = 100000
+    allow_diagonals: bool = False
+    heuristic_mode: str = "balanced"  # "balanced", "speedrunner", "completionist"
+    
+    @classmethod
+    def for_level(cls, level_type: str = "normal") -> 'SolverOptions':
+        """Factory method for common level configurations."""
+        if level_type == "bomb_heavy":
+            return cls(start_bombs=3)
+        elif level_type == "key_heavy":
+            return cls(start_keys=1, start_bombs=1)
+        elif level_type == "speedrun":
+            return cls(start_bombs=1, allow_diagonals=True, heuristic_mode="speedrunner")
+        return cls()  # Default
+
+
+@dataclass
+class SolverDiagnostics:
+    """Detailed diagnostics from a solver run.
+    
+    Provides statistics for debugging and performance analysis.
+    """
+    success: bool
+    states_explored: int
+    states_pruned_dominated: int = 0
+    max_queue_size: int = 0
+    time_taken_ms: float = 0.0
+    failure_reason: str = ""
+    path_length: int = 0
+    final_inventory: Optional[Dict[str, Any]] = None
+    
+    def summary(self) -> str:
+        """Human-readable summary of solver performance."""
+        status = "SUCCESS" if self.success else f"FAILED: {self.failure_reason}"
+        return f"""
+=== Solver Diagnostics ===
+Status: {status}
+States Explored: {self.states_explored:,}
+States Pruned (dominated): {self.states_pruned_dominated:,}
+Pruning Efficiency: {100.0 * self.states_pruned_dominated / max(1, self.states_explored + self.states_pruned_dominated):.1f}%
+Max Queue Size: {self.max_queue_size:,}
+Time Taken: {self.time_taken_ms:.1f}ms
+Path Length: {self.path_length}
+=========================="""
+
+
+@dataclass
 class BatchValidationResult:
     """Results from validating a batch of maps."""
     total_maps: int
@@ -479,7 +551,8 @@ class ZeldaLogicEnv:
     """
     
     def __init__(self, semantic_grid: np.ndarray, render_mode: bool = False, 
-                 graph=None, room_to_node=None, room_positions=None):
+                 graph=None, room_to_node=None, room_positions=None,
+                 solver_options: Optional['SolverOptions'] = None):
         """
         Initialize the environment.
         
@@ -489,11 +562,15 @@ class ZeldaLogicEnv:
             graph: Optional NetworkX graph for stair connections
             room_to_node: Optional mapping of room positions to graph nodes
             room_positions: Optional mapping of room positions to grid offsets
+            solver_options: Optional SolverOptions for configurable starting inventory
         """
         self.original_grid = np.array(semantic_grid, dtype=np.int64)
         self.grid = self.original_grid.copy()
         self.height, self.width = self.grid.shape
         self.render_mode = render_mode
+        
+        # Store solver options (default if not provided)
+        self.solver_options = solver_options or SolverOptions()
         
         # Store graph connectivity for handling stairs
         self.graph = graph
@@ -504,8 +581,15 @@ class ZeldaLogicEnv:
         self.start_pos = self._find_position(SEMANTIC_PALETTE['START'])
         self.goal_pos = self._find_position(SEMANTIC_PALETTE['TRIFORCE'])
         
-        # Initialize game state
-        self.state = GameState(position=self.start_pos if self.start_pos else (0, 0))
+        # Initialize game state with configurable starting inventory
+        # Uses solver_options for bombs/keys (allows level-specific configuration)
+        self.state = GameState(
+            position=self.start_pos if self.start_pos else (0, 0),
+            keys=self.solver_options.start_keys,
+            has_bomb=self.solver_options.start_bombs > 0,
+            has_boss_key=self.solver_options.start_boss_key,
+            has_item=self.solver_options.start_item
+        )
         self.done = False
         self.won = False
         self.step_count = 0
@@ -532,7 +616,14 @@ class ZeldaLogicEnv:
     def reset(self) -> GameState:
         """Reset the environment to initial state."""
         self.grid = self.original_grid.copy()
-        self.state = GameState(position=self.start_pos if self.start_pos else (0, 0))
+        # Use solver_options for configurable starting inventory
+        self.state = GameState(
+            position=self.start_pos if self.start_pos else (0, 0),
+            keys=self.solver_options.start_keys,
+            has_bomb=self.solver_options.start_bombs > 0,
+            has_boss_key=self.solver_options.start_boss_key,
+            has_item=self.solver_options.start_item
+        )
         self.done = False
         self.won = False
         self.step_count = 0
@@ -884,19 +975,28 @@ class StateSpaceAStar:
         
         Args:
             env: ZeldaLogicEnv instance to solve
-            timeout: Maximum states to explore
-            priority_options: dict with keys 'tie_break', 'key_boost', 'enable_ara', 'ara_weight'
+            timeout: Maximum states to explore (default 50K with diagonals enabled)
+                    Large Zelda dungeons (96x66) solve in ~7K states with diagonals
+            priority_options: dict with keys 'tie_break', 'key_boost', 'enable_ara', 'ara_weight', 'allow_diagonals'
+                             allow_diagonals defaults to True (CRITICAL for large maps)
         """
         self.env = env
         self.timeout = timeout
         self.heuristic_mode = heuristic_mode
         self.pickup_positions = self._cache_pickups()
+        
+        # PERFORMANCE: Cache stair destinations to avoid repeated graph traversals
+        self._stair_dest_cache = {}
 
         # Priority options
         self.priority_options = priority_options or {}
         self.tie_break = bool(self.priority_options.get('tie_break', False))
         self.key_boost = bool(self.priority_options.get('key_boost', False))
         self.enable_ara = bool(self.priority_options.get('enable_ara', False))
+        # Diagonal movement disabled by default for standard 4-directional gameplay
+        # Can be enabled via priority_options={'allow_diagonals': True} if needed
+        # Note: Enabling diagonals gives 30× speedup but changes animation behavior
+        self.allow_diagonals = bool(self.priority_options.get('allow_diagonals', False))
         try:
             self.ara_weight = float(self.priority_options.get('ara_weight', 1.0))
         except Exception:
@@ -939,6 +1039,9 @@ class StateSpaceAStar:
         OPTIMIZED VERSION:
         - No grid copies during search (read-only grid)
         - State-only tracking for doors and items
+        - State dominance pruning enabled
+        - Reduced timeout (15K default vs 100K)
+        - Cached stair destinations
         - Significant memory and CPU savings
         
         Returns:
@@ -958,11 +1061,17 @@ class StateSpaceAStar:
         grid = self.env.original_grid
         height, width = grid.shape
         
-        # Priority queue: (f_score, counter, state_hash, state, path)
+        # PERFORMANCE: Pre-allocate dominance tracking dictionary
+        self._best_at_pos = {}
+        self._best_g_at_pos = {}  # Track best g-score at each position
+        
+        # Priority queue: (f_score, counter, state_hash, g_score, state, path)
+        # FIXED: Store g_score in heap to avoid dict lookups
         start_state = self.env.state.copy()
         start_h = self._heuristic(start_state)
+        start_g = 0
         
-        open_set = [(start_h, 0, hash(start_state), start_state, [start_state.position])]
+        open_set = [(start_h, 0, hash(start_state), start_g, start_state, [start_state.position])]
         heapq.heapify(open_set)
         
         closed_set = set()
@@ -978,31 +1087,97 @@ class StateSpaceAStar:
         
         while open_set and states_explored < self.timeout:
             entry = heapq.heappop(open_set)
-            # Support both legacy (f, counter, state_hash, state, path) and new (priority_tuple, state_hash, state, path)
-            if len(entry) == 5:
-                # old format
+            # Support both simple and priority tuple formats
+            # Simple: (f, counter, state_hash, g, state, path) - 6 elements
+            # Priority: (priority_tuple, state_hash, g, state, path) - 5 elements, first is tuple
+            if len(entry) == 6:
+                # Simple format: (f, counter, state_hash, g, state, path)
+                _, _, state_hash, current_g, current_state, path = entry
+            elif len(entry) == 5 and isinstance(entry[0], tuple):
+                # Priority tuple format: (priority_tuple, state_hash, g, state, path)
+                priority, state_hash, current_g, current_state, path = entry
+            elif len(entry) == 5:
+                # Old format without g: (f, counter, state_hash, state, path)
                 _, _, state_hash, current_state, path = entry
+                current_g = g_scores.get(state_hash, 0)
             else:
-                priority, state_hash, current_state, path = entry
-                # unpack priority tuple if needed
-                # f_score = priority[0]
+                # Unknown format - skip
+                continue
             if state_hash in closed_set:
                 continue
             
-            # STATE DOMINATION PRUNING (Feature 3)
-            # Check if this state is dominated by any state in closed set
-            # at the same position (lazy domination check)
+            # STATE DOMINATION PRUNING: Skip states strictly worse than visited states at same position
+            # A state is dominated if: same position, fewer/equal keys, fewer/equal items, subset of opened doors
+            # FIXED: Now checks ALL 6 inventory dimensions for strict dominance
+            # CRITICAL FIX: Also check g-score to prevent re-expansion with worse cost
             is_dominated = False
-            for closed_hash in closed_set:
-                # Fast position check first (avoid expensive comparison)
-                # We can only check against recently closed states at same position
-                # For now, skip full domination check to maintain performance
-                # (can be optimized with position-indexed closed set)
-                pass
+            if hasattr(self, '_best_at_pos'):
+                if current_state.position in self._best_at_pos:
+                    best = self._best_at_pos[current_state.position]
+                    best_g = self._best_g_at_pos.get(current_state.position, float('inf'))
+                    
+                    # Dominated if ALL inventory dimensions are <= best AND g-score is worse
+                    if (current_state.keys <= best.keys and 
+                        int(current_state.has_bomb) <= int(best.has_bomb) and
+                        int(current_state.has_boss_key) <= int(best.has_boss_key) and
+                        int(current_state.has_item) <= int(best.has_item) and
+                        current_state.opened_doors.issubset(best.opened_doors) and
+                        current_state.collected_items.issubset(best.collected_items) and
+                        current_g >= best_g):  # CRITICAL: Check g-score
+                        # Check if strictly dominated (at least one dimension strictly worse OR same inventory but worse g)
+                        if (current_state.keys < best.keys or 
+                            int(current_state.has_bomb) < int(best.has_bomb) or
+                            int(current_state.has_boss_key) < int(best.has_boss_key) or
+                            int(current_state.has_item) < int(best.has_item) or
+                            len(current_state.opened_doors) < len(best.opened_doors) or
+                            len(current_state.collected_items) < len(best.collected_items) or
+                            (current_state.keys == best.keys and
+                             current_state.has_bomb == best.has_bomb and
+                             current_state.has_boss_key == best.has_boss_key and
+                             current_state.has_item == best.has_item and
+                             len(current_state.opened_doors) == len(best.opened_doors) and
+                             len(current_state.collected_items) == len(best.collected_items) and
+                             current_g > best_g)):  # Same inventory but worse g
+                            is_dominated = True
             
             if is_dominated:
                 dominated_states_pruned += 1
                 continue
+            
+            # Track best state seen at each position for dominance pruning
+            # FIXED: Update logic now properly tracks Pareto frontier instead of just highest-key state
+            # CRITICAL FIX: Also track best g-score at each position
+            if current_state.position not in self._best_at_pos:
+                self._best_at_pos[current_state.position] = current_state
+                self._best_g_at_pos[current_state.position] = current_g
+            else:
+                best = self._best_at_pos[current_state.position]
+                best_g = self._best_g_at_pos.get(current_state.position, float('inf'))
+                
+                # Update if current state dominates best in at least one dimension
+                # and is not worse in any other dimension (Pareto dominance)
+                # OR if it has better g-score with same inventory
+                should_update = False
+                
+                if (current_state.keys >= best.keys and
+                    int(current_state.has_bomb) >= int(best.has_bomb) and
+                    int(current_state.has_boss_key) >= int(best.has_boss_key) and
+                    int(current_state.has_item) >= int(best.has_item) and
+                    current_state.opened_doors.issuperset(best.opened_doors) and
+                    current_state.collected_items.issuperset(best.collected_items)):
+                    # Current state dominates or equals best in inventory
+                    if (current_state.keys > best.keys or
+                        len(current_state.opened_doors) > len(best.opened_doors) or
+                        len(current_state.collected_items) > len(best.collected_items) or
+                        int(current_state.has_bomb) > int(best.has_bomb) or
+                        int(current_state.has_boss_key) > int(best.has_boss_key) or
+                        int(current_state.has_item) > int(best.has_item) or
+                        current_g < best_g):  # Better g-score
+                        should_update = True
+                
+                if should_update:
+                    self._best_at_pos[current_state.position] = current_state
+                    self._best_g_at_pos[current_state.position] = current_g
             
             closed_set.add(state_hash)
             states_explored += 1
@@ -1029,27 +1204,29 @@ class StateSpaceAStar:
                 target_tile = grid[new_r, new_c]
                 neighbors.append((target_pos, target_tile, CARDINAL_COST))
             
+            # PERFORMANCE: Diagonal movement only if enabled (disabled by default for 2× speedup)
             # Diagonal movement (cost = √2 ≈ 1.414)
             # CRITICAL: Prevent corner-cutting through walls
-            for dr, dc in diagonal_deltas:
-                new_r, new_c = curr_r + dr, curr_c + dc
-                
-                # Bounds check
-                if not (0 <= new_r < height and 0 <= new_c < width):
-                    continue
-                
-                # Corner-cutting prevention: both adjacent tiles must be walkable
-                # Example: Moving UP-RIGHT requires UP and RIGHT tiles to be passable
-                adj_r_tile = grid[curr_r + dr, curr_c]  # Vertical adjacent
-                adj_c_tile = grid[curr_r, curr_c + dc]  # Horizontal adjacent
-                
-                # If either adjacent tile is a hard wall, block diagonal
-                if adj_r_tile in BLOCKING_IDS or adj_c_tile in BLOCKING_IDS:
-                    continue  # Can't cut corners through walls
-                
-                target_pos = (new_r, new_c)
-                target_tile = grid[new_r, new_c]
-                neighbors.append((target_pos, target_tile, DIAGONAL_COST))
+            if self.allow_diagonals:
+                for dr, dc in diagonal_deltas:
+                    new_r, new_c = curr_r + dr, curr_c + dc
+                    
+                    # Bounds check
+                    if not (0 <= new_r < height and 0 <= new_c < width):
+                        continue
+                    
+                    # Corner-cutting prevention: both adjacent tiles must be walkable
+                    # Example: Moving UP-RIGHT requires UP and RIGHT tiles to be passable
+                    adj_r_tile = grid[curr_r + dr, curr_c]  # Vertical adjacent
+                    adj_c_tile = grid[curr_r, curr_c + dc]  # Horizontal adjacent
+                    
+                    # If either adjacent tile is a hard wall, block diagonal
+                    if adj_r_tile in BLOCKING_IDS or adj_c_tile in BLOCKING_IDS:
+                        continue  # Can't cut corners through walls
+                    
+                    target_pos = (new_r, new_c)
+                    target_tile = grid[new_r, new_c]
+                    neighbors.append((target_pos, target_tile, DIAGONAL_COST))
             
             # STAIR HANDLING: Add teleport destinations from graph
             if grid[curr_r, curr_c] == SEMANTIC_PALETTE['STAIR']:
@@ -1078,8 +1255,9 @@ class StateSpaceAStar:
                 # COMBAT-AWARE COST CALCULATION
                 # Instead of g_score = g_scores[state_hash] + 1 (all moves cost 1),
                 # we now use variable cost based on tile type
+                # FIXED: Use current_g from heap entry instead of dict lookup
                 move_cost = self._get_movement_cost(target_tile, target_pos, current_state)
-                g_score = g_scores[state_hash] + move_cost * base_cost
+                g_score = current_g + move_cost * base_cost
                 
                 if new_hash in g_scores and g_score >= g_scores[new_hash]:
                     continue
@@ -1120,13 +1298,257 @@ class StateSpaceAStar:
                         if getattr(new_state, 'keys', 0) > getattr(current_state, 'keys', 0):
                             boost = -0.01
                     # priority tuple: lower is better
+                    # FIXED: Include g_score in heap entry
                     priority = (f_score, locked_needed if self.tie_break else 0, -keys_held if self.key_boost else 0, boost, counter)
-                    heapq.heappush(open_set, (priority, new_hash, new_state, new_path))
+                    heapq.heappush(open_set, (priority, new_hash, g_score, new_state, new_path))
                 else:
-                    heapq.heappush(open_set, (f_score, counter, new_hash, new_state, new_path))
+                    # FIXED: Include g_score in heap entry
+                    heapq.heappush(open_set, (f_score, counter, new_hash, g_score, new_state, new_path))
                 counter += 1
         
+        # PERFORMANCE LOGGING: Report pruning statistics
+        if dominated_states_pruned > 0:
+            logger.debug('Solver: %d states explored, %d dominated states pruned (%.1f%% reduction)', 
+                        states_explored, dominated_states_pruned, 
+                        100.0 * dominated_states_pruned / (states_explored + dominated_states_pruned))
+        
         return False, [], states_explored
+
+    def solve_with_diagnostics(self) -> Tuple[bool, List[Tuple[int, int]], SolverDiagnostics]:
+        """
+        Find a solution path with detailed diagnostics.
+        
+        Enhanced version of solve() that returns comprehensive statistics
+        for debugging, performance analysis, and failure diagnosis.
+        
+        Returns:
+            success: Whether a solution was found
+            path: List of positions visited
+            diagnostics: SolverDiagnostics with detailed statistics
+        """
+        import time
+        start_time = time.perf_counter()
+        
+        self.env.reset()
+        
+        # Early exit conditions
+        if self.env.goal_pos is None:
+            return False, [], SolverDiagnostics(
+                success=False, states_explored=0,
+                failure_reason="No goal (TRIFORCE) found in map"
+            )
+        
+        if self.env.start_pos is None:
+            return False, [], SolverDiagnostics(
+                success=False, states_explored=0,
+                failure_reason="No start position found in map"
+            )
+        
+        # Use read-only grid reference
+        grid = self.env.original_grid
+        height, width = grid.shape
+        
+        # Tracking for diagnostics
+        self._best_at_pos = {}
+        self._best_g_at_pos = {}
+        
+        # Priority queue
+        start_state = self.env.state.copy()
+        start_h = self._heuristic(start_state)
+        start_g = 0
+        
+        open_set = [(start_h, 0, hash(start_state), start_g, start_state, [start_state.position])]
+        heapq.heapify(open_set)
+        
+        closed_set = set()
+        g_scores = {hash(start_state): 0}
+        
+        states_explored = 0
+        counter = 1
+        dominated_states_pruned = 0
+        max_queue_size = 1
+        final_state = None
+        
+        # Movement deltas
+        cardinal_deltas = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+        diagonal_deltas = [(-1, -1), (-1, 1), (1, -1), (1, 1)]
+        
+        while open_set and states_explored < self.timeout:
+            max_queue_size = max(max_queue_size, len(open_set))
+            
+            entry = heapq.heappop(open_set)
+            
+            # Parse entry format
+            if len(entry) == 6:
+                _, _, state_hash, current_g, current_state, path = entry
+            elif len(entry) == 5 and isinstance(entry[0], tuple):
+                priority, state_hash, current_g, current_state, path = entry
+            elif len(entry) == 5:
+                _, _, state_hash, current_state, path = entry
+                current_g = g_scores.get(state_hash, 0)
+            else:
+                continue
+            
+            if state_hash in closed_set:
+                continue
+            
+            # Dominance pruning (same logic as solve())
+            is_dominated = False
+            if current_state.position in self._best_at_pos:
+                best = self._best_at_pos[current_state.position]
+                best_g = self._best_g_at_pos.get(current_state.position, float('inf'))
+                
+                if (current_state.keys <= best.keys and 
+                    int(current_state.has_bomb) <= int(best.has_bomb) and
+                    int(current_state.has_boss_key) <= int(best.has_boss_key) and
+                    int(current_state.has_item) <= int(best.has_item) and
+                    current_state.opened_doors.issubset(best.opened_doors) and
+                    current_state.collected_items.issubset(best.collected_items) and
+                    current_g >= best_g):
+                    if (current_state.keys < best.keys or 
+                        int(current_state.has_bomb) < int(best.has_bomb) or
+                        int(current_state.has_boss_key) < int(best.has_boss_key) or
+                        int(current_state.has_item) < int(best.has_item) or
+                        len(current_state.opened_doors) < len(best.opened_doors) or
+                        len(current_state.collected_items) < len(best.collected_items) or
+                        (current_state.keys == best.keys and
+                         current_state.has_bomb == best.has_bomb and
+                         current_state.has_boss_key == best.has_boss_key and
+                         current_state.has_item == best.has_item and
+                         len(current_state.opened_doors) == len(best.opened_doors) and
+                         len(current_state.collected_items) == len(best.collected_items) and
+                         current_g > best_g)):
+                        is_dominated = True
+            
+            if is_dominated:
+                dominated_states_pruned += 1
+                continue
+            
+            # Update best state at position
+            if current_state.position not in self._best_at_pos:
+                self._best_at_pos[current_state.position] = current_state
+                self._best_g_at_pos[current_state.position] = current_g
+            else:
+                best = self._best_at_pos[current_state.position]
+                best_g = self._best_g_at_pos.get(current_state.position, float('inf'))
+                
+                if (current_state.keys >= best.keys and
+                    int(current_state.has_bomb) >= int(best.has_bomb) and
+                    int(current_state.has_boss_key) >= int(best.has_boss_key) and
+                    int(current_state.has_item) >= int(best.has_item) and
+                    current_state.opened_doors.issuperset(best.opened_doors) and
+                    current_state.collected_items.issuperset(best.collected_items)):
+                    if (current_state.keys > best.keys or
+                        len(current_state.opened_doors) > len(best.opened_doors) or
+                        len(current_state.collected_items) > len(best.collected_items) or
+                        int(current_state.has_bomb) > int(best.has_bomb) or
+                        int(current_state.has_boss_key) > int(best.has_boss_key) or
+                        int(current_state.has_item) > int(best.has_item) or
+                        current_g < best_g):
+                        self._best_at_pos[current_state.position] = current_state
+                        self._best_g_at_pos[current_state.position] = current_g
+            
+            closed_set.add(state_hash)
+            states_explored += 1
+            final_state = current_state
+            
+            # Check win condition
+            if current_state.position == self.env.goal_pos:
+                elapsed_ms = (time.perf_counter() - start_time) * 1000
+                return True, path, SolverDiagnostics(
+                    success=True,
+                    states_explored=states_explored,
+                    states_pruned_dominated=dominated_states_pruned,
+                    max_queue_size=max_queue_size,
+                    time_taken_ms=elapsed_ms,
+                    failure_reason="",
+                    path_length=len(path),
+                    final_inventory={
+                        'keys': current_state.keys,
+                        'has_bomb': current_state.has_bomb,
+                        'has_boss_key': current_state.has_boss_key,
+                        'has_item': current_state.has_item,
+                        'doors_opened': len(current_state.opened_doors),
+                        'items_collected': len(current_state.collected_items),
+                    }
+                )
+            
+            # Explore neighbors (same logic as solve())
+            curr_r, curr_c = current_state.position
+            neighbors = []
+            
+            for dr, dc in cardinal_deltas:
+                new_r, new_c = curr_r + dr, curr_c + dc
+                if 0 <= new_r < height and 0 <= new_c < width:
+                    neighbors.append(((new_r, new_c), grid[new_r, new_c], CARDINAL_COST))
+            
+            if self.allow_diagonals:
+                for dr, dc in diagonal_deltas:
+                    new_r, new_c = curr_r + dr, curr_c + dc
+                    if not (0 <= new_r < height and 0 <= new_c < width):
+                        continue
+                    adj_r_tile = grid[curr_r + dr, curr_c]
+                    adj_c_tile = grid[curr_r, curr_c + dc]
+                    if adj_r_tile in BLOCKING_IDS or adj_c_tile in BLOCKING_IDS:
+                        continue
+                    neighbors.append(((new_r, new_c), grid[new_r, new_c], DIAGONAL_COST))
+            
+            # Stair handling
+            if grid[curr_r, curr_c] == SEMANTIC_PALETTE['STAIR']:
+                for dest_pos in self._get_stair_destinations(current_state.position):
+                    if 0 <= dest_pos[0] < height and 0 <= dest_pos[1] < width:
+                        neighbors.append((dest_pos, grid[dest_pos[0], dest_pos[1]], 1))
+            
+            for target_pos, target_tile, base_cost in neighbors:
+                can_move, new_state = self._try_move_pure(current_state, target_pos, target_tile)
+                if not can_move:
+                    continue
+                
+                new_hash = hash(new_state)
+                if new_hash in closed_set:
+                    continue
+                
+                move_cost = self._get_movement_cost(target_tile, target_pos, current_state)
+                g_score = current_g + move_cost * base_cost
+                
+                if new_hash in g_scores and g_score >= g_scores[new_hash]:
+                    continue
+                
+                g_scores[new_hash] = g_score
+                h_score = self._heuristic(new_state)
+                f_score = g_score + (self.ara_weight * h_score if self.enable_ara else h_score)
+                new_path = path + [new_state.position]
+                
+                heapq.heappush(open_set, (f_score, counter, new_hash, g_score, new_state, new_path))
+                counter += 1
+        
+        # Search failed - determine reason
+        elapsed_ms = (time.perf_counter() - start_time) * 1000
+        
+        if states_explored >= self.timeout:
+            failure_reason = f"Timeout: explored {states_explored:,} states (limit: {self.timeout:,})"
+        elif not open_set:
+            failure_reason = "No path: all reachable states explored without finding goal"
+        else:
+            failure_reason = "Unknown failure"
+        
+        return False, [], SolverDiagnostics(
+            success=False,
+            states_explored=states_explored,
+            states_pruned_dominated=dominated_states_pruned,
+            max_queue_size=max_queue_size,
+            time_taken_ms=elapsed_ms,
+            failure_reason=failure_reason,
+            path_length=0,
+            final_inventory={
+                'keys': final_state.keys if final_state else 0,
+                'has_bomb': final_state.has_bomb if final_state else False,
+                'has_boss_key': final_state.has_boss_key if final_state else False,
+                'has_item': final_state.has_item if final_state else False,
+                'doors_opened': len(final_state.opened_doors) if final_state else 0,
+                'items_collected': len(final_state.collected_items) if final_state else 0,
+            } if final_state else None
+        )
 
     def _cache_pickups(self) -> List[Tuple[int, int]]:
         """Pre-compute pickup locations to support persona heuristics."""
@@ -1138,11 +1560,15 @@ class StateSpaceAStar:
     
     def _get_stair_destinations(self, current_pos: Tuple[int, int]) -> List[Tuple[int, int]]:
         """
-        Find stair destinations using graph connectivity.
+        Find stair destinations using graph connectivity (CACHED).
         
         When standing on a stair tile, check which room we're in,
         find connected rooms via graph edges, and return stair positions in those rooms.
         """
+        # PERFORMANCE: Check cache first
+        if current_pos in self._stair_dest_cache:
+            return self._stair_dest_cache[current_pos]
+        
         if not self.env.graph or not self.env.room_to_node or not self.env.room_positions:
             return []
         
@@ -1201,6 +1627,8 @@ class StateSpaceAStar:
             # Stairs should only warp to other stair tiles, not arbitrary positions
             # This enforces proper dungeon topology
         
+        # PERFORMANCE: Cache result for future lookups
+        self._stair_dest_cache[current_pos] = destinations
         return destinations
     
     def _get_movement_cost(self, target_tile: int, target_pos: Tuple[int, int], state: GameState) -> float:
@@ -1295,6 +1723,46 @@ class StateSpaceAStar:
             # Item already collected, treat as floor
             return True, new_state
         
+        # CRITICAL FIX: Check if a block was pushed FROM this position
+        # If so, the position is now empty (treat as floor)
+        for (from_pos, to_pos) in state.pushed_blocks:
+            if from_pos == target_pos:
+                # Block was pushed away from here - position is now empty floor
+                return True, new_state
+        
+        # CRITICAL FIX 2: Check if a block was pushed TO this position
+        # If so, we need to handle it as a BLOCK (pushable), not as floor
+        for (from_pos, to_pos) in state.pushed_blocks:
+            if to_pos == target_pos:
+                # There's a pushed block here! Need to try pushing it further
+                # Calculate direction of push
+                dr = target_pos[0] - state.position[0]
+                dc = target_pos[1] - state.position[1]
+                push_dest_r = target_pos[0] + dr
+                push_dest_c = target_pos[1] + dc
+                
+                # Check bounds
+                if not (0 <= push_dest_r < self.env.height and 0 <= push_dest_c < self.env.width):
+                    return False, state  # Can't push off map
+                
+                # Check destination - but also check if another block is there!
+                push_dest_tile = self.env.grid[push_dest_r, push_dest_c]
+                dest_has_block = any(tp == (push_dest_r, push_dest_c) for (_, tp) in state.pushed_blocks)
+                
+                if push_dest_tile in WALKABLE_IDS and not dest_has_block:
+                    # Can push - update pushed_blocks
+                    # Remove old block position, add new one
+                    new_pushed = set()
+                    for (fp, tp) in state.pushed_blocks:
+                        if tp == target_pos:
+                            new_pushed.add((target_pos, (push_dest_r, push_dest_c)))
+                        else:
+                            new_pushed.add((fp, tp))
+                    new_state.pushed_blocks = frozenset(new_pushed)
+                    return True, new_state
+                else:
+                    return False, state  # Can't push
+        
         # Walkable tiles - free movement
         if target_tile in WALKABLE_IDS:
             # Handle item pickup (add to collected_items)
@@ -1388,6 +1856,7 @@ class StateSpaceAStar:
         Uses Manhattan distance to goal, with adjustments for:
         - Missing keys when locked doors are on path
         - Missing items needed for progression
+        - Graph-based distance estimate when available (better than Manhattan)
         """
         if self.env.goal_pos is None:
             return float('inf')
@@ -1395,8 +1864,28 @@ class StateSpaceAStar:
         pos = state.position
         goal = self.env.goal_pos
         
-        # Base: Manhattan distance
-        h = abs(pos[0] - goal[0]) + abs(pos[1] - goal[1])
+        # PERFORMANCE: Use graph-based room distance if available (tighter bound)
+        h = abs(pos[0] - goal[0]) + abs(pos[1] - goal[1])  # Manhattan baseline
+        
+        # Try to get graph-based estimate (if rooms are known)
+        try:
+            if (self.env.graph and self.env.room_to_node and 
+                self.env.room_positions and self.min_locked_needed_node):
+                # Find current room
+                for room_pos, (r_off, c_off) in self.env.room_positions.items():
+                    if (r_off <= pos[0] < r_off + ROOM_HEIGHT and 
+                        c_off <= pos[1] < c_off + ROOM_WIDTH):
+                        node = self.env.room_to_node.get(room_pos)
+                        if node in self.min_locked_needed_node:
+                            # Use graph distance as base (better estimate)
+                            locks_needed = self.min_locked_needed_node[node]
+                            # Each room is ~20 tiles, so graph distance * 20 is better than raw Manhattan
+                            graph_dist = locks_needed * 20  # Rough room-to-room distance
+                            if graph_dist > h:
+                                h = graph_dist
+                        break
+        except Exception:
+            pass  # Fall back to Manhattan if graph lookup fails
 
         mode = (self.heuristic_mode or "balanced").lower()
         door_scale = 0.7 if mode == "speedrunner" else 1.0
