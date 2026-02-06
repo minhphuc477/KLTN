@@ -5,6 +5,7 @@ Validation and simulation components for Zelda dungeon analysis.
 
 This module contains:
 - validator: External validation suite (ZeldaValidator, ZeldaLogicEnv, etc.)
+- cognitive_bounded_search: Human-like CBS solver with cognitive limitations
 - dstar_lite: D* Lite incremental replanning
 - multi_goal: Multi-goal pathfinding (TSP-style)
 - parallel_astar: Parallel A* search
@@ -30,6 +31,32 @@ from .validator import (
     WATER_IDS,
 )
 
+# Re-export Cognitive Bounded Search (CBS) components
+from .cognitive_bounded_search import (
+    CognitiveBoundedSearch,
+    CBSMetrics,
+    BeliefMap,
+    VisionSystem,
+    WorkingMemory,
+    MemoryItem,
+    MemoryItemType,
+    TileObservation,
+    TileKnowledge,
+    CognitiveState,
+    AgentPersona,
+    PersonaConfig,
+    # Heuristics
+    DecisionHeuristic,
+    CuriosityHeuristic,
+    RecencyHeuristic,
+    SafetyHeuristic,
+    GoalSeekingHeuristic,
+    ItemSeekingHeuristic,
+    # Convenience functions
+    solve_with_cbs,
+    compare_personas,
+)
+
 # Re-export advanced solvers
 from .dstar_lite import DStarLiteSolver
 from .multi_goal import MultiGoalPathfinder
@@ -53,6 +80,27 @@ __all__ = [
     'WALKABLE_IDS',
     'BLOCKING_IDS',
     'WATER_IDS',
+    # Cognitive Bounded Search (CBS)
+    'CognitiveBoundedSearch',
+    'CBSMetrics',
+    'BeliefMap',
+    'VisionSystem',
+    'WorkingMemory',
+    'MemoryItem',
+    'MemoryItemType',
+    'TileObservation',
+    'TileKnowledge',
+    'CognitiveState',
+    'AgentPersona',
+    'PersonaConfig',
+    'DecisionHeuristic',
+    'CuriosityHeuristic',
+    'RecencyHeuristic',
+    'SafetyHeuristic',
+    'GoalSeekingHeuristic',
+    'ItemSeekingHeuristic',
+    'solve_with_cbs',
+    'compare_personas',
     # Advanced solvers
     'DStarLiteSolver',
     'MultiGoalPathfinder',
