@@ -215,7 +215,8 @@ class WFCRepair:
         """
         # Convert to numpy for manipulation
         if isinstance(dungeon_map, torch.Tensor):
-            grid = dungeon_map.squeeze().numpy().copy()
+            # Ensure tensor is on CPU before converting to numpy
+            grid = dungeon_map.cpu().squeeze().numpy().copy()
         else:
             grid = np.array(dungeon_map, copy=True)
         

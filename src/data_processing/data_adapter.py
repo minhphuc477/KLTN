@@ -205,6 +205,15 @@ class VGLCParser:
         """
         Check if a slot contains a valid room (not a gap).
         
+        A valid room has:
+        1. Wall perimeter (at least 20 wall tiles)
+        2. NOT a pure gap (not >gap_threshold dashes)
+        3. Interior content (any non-wall, non-gap tiles)
+        
+        VGLC uses multiple tile types for interior content:
+        F/. = Floor, O = Element floor, P = Puzzle, D = Door,
+        S = Stair, M = Monster, I = Item, B = Block
+        
         Args:
             slot_grid: Character array for one slot
             
@@ -223,9 +232,12 @@ class VGLCParser:
         
         # Check for structural elements
         wall_count = np.sum(slot_grid == 'W')
-        floor_count = np.sum((slot_grid == 'F') | (slot_grid == '.'))
         
-        return wall_count >= 20 and floor_count >= 5
+        # Count ALL interior tiles (anything that's not wall or gap)
+        # This correctly handles rooms filled with O, P, M, I, B, D, S tiles
+        interior_count = total - wall_count - gap_count
+        
+        return wall_count >= 20 and interior_count >= 5
     
     def extract_rooms(self, filepath: Union[str, Path]) -> List[RoomTensor]:
         """

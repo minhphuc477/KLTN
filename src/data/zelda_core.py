@@ -86,7 +86,23 @@ class GridBasedRoomExtractor:
         return np.array(padded)
 
     def _is_room_slot(self, slot_grid: np.ndarray) -> bool:
-        """Check if a slot contains a room (not a gap)."""
+        """Check if a slot contains a room (not a gap).
+        
+        A valid room has:
+        1. Wall perimeter (at least 20 wall tiles)
+        2. NOT a pure gap (not >70% dashes)
+        3. Interior content (any non-wall, non-gap tiles)
+        
+        VGLC uses multiple tile types for interior content:
+        - F, . = Floor
+        - O = Old man/element floor (walkable)
+        - P = Puzzle element
+        - D = Door
+        - S = Stair
+        - M = Monster (on floor)
+        - I = Item
+        - B = Block (pushable)
+        """
         if slot_grid.size == 0:
             return False
         
@@ -96,10 +112,12 @@ class GridBasedRoomExtractor:
             return False
         
         wall_count = np.sum(slot_grid == self.WALL_MARKER)
-        # Accept both 'F' and '.' as floor markers in VGLC
-        floor_count = np.sum((slot_grid == 'F') | (slot_grid == '.'))
+        
+        # Count ALL interior tiles (anything that's not wall or gap)
+        # This correctly handles rooms filled with O, P, M, I, B, D, S tiles
+        interior_count = total - wall_count - dash_count
 
-        return bool(wall_count >= 20 and floor_count >= 5)
+        return bool(wall_count >= 20 and interior_count >= 5)
 
     def extract(self, filepath: str) -> List[Tuple[Tuple[int, int], np.ndarray]]:
         """
@@ -337,6 +355,7 @@ class StitchedDungeon:
     triforce_global: Optional[Tuple[int, int]]
     graph: Optional[nx.DiGraph] = None  # Store graph for stair connections
     room_to_node: Optional[Dict[Tuple[int, int], int]] = None  # Room position to graph node ID
+    node_to_room: Optional[Dict[int, Tuple[int, int]]] = None  # Graph node ID to room position (includes virtual nodes)
     missing_items: Optional[List[Dict]] = None  # Items that couldn't be placed (node_id, item_type, reason)
 
 
@@ -930,27 +949,27 @@ class RoomGraphMatcher:
         """
         # ========================================
         # VALIDATION: Check graph-room count match
+        # (Single summary warning - not per-node spam)
         # ========================================
         num_graph_nodes = len(graph.nodes())
         num_rooms = len(rooms)
         
         if num_graph_nodes != num_rooms:
-            logger.warning(
-                "GRAPH-ROOM MISMATCH: Graph has %d nodes but %d physical rooms found. "
-                "This may cause incomplete room-to-node mapping.",
-                num_graph_nodes, num_rooms
-            )
+            # Log as INFO (not WARNING) since this is expected for VGLC data
+            # The VGLC DOT graphs often have virtual/sub-room nodes that don't
+            # correspond 1:1 with physical rooms in the text files
+            mismatch_count = abs(num_graph_nodes - num_rooms)
             if num_graph_nodes > num_rooms:
-                logger.warning(
-                    "  -> %d graph nodes will NOT have physical rooms assigned. "
-                    "Items/doors from those nodes cannot be materialized.",
-                    num_graph_nodes - num_rooms
+                logger.info(
+                    "GRAPH-ROOM MISMATCH: Graph has %d nodes but %d physical rooms. "
+                    "%d virtual nodes will use fallback item placement.",
+                    num_graph_nodes, num_rooms, mismatch_count
                 )
             else:
-                logger.warning(
-                    "  -> %d rooms will NOT have graph node assignments. "
-                    "Those rooms will lack graph-based item/door data.",
-                    num_rooms - num_graph_nodes
+                logger.info(
+                    "GRAPH-ROOM MISMATCH: Graph has %d nodes but %d physical rooms. "
+                    "%d rooms will lack graph-based annotations.",
+                    num_graph_nodes, num_rooms, mismatch_count
                 )
         
         dungeon = Dungeon(
@@ -959,7 +978,8 @@ class RoomGraphMatcher:
             graph=graph
         )
         
-        # Find special nodes in graph
+        # Find special nodes in graph (THE SOURCE OF TRUTH for start/triforce/boss)
+        # DOT graph format: label="s" = start, label="t" = triforce, label="b" = boss
         start_node = None
         triforce_node = None
         boss_node = None
@@ -972,65 +992,86 @@ class RoomGraphMatcher:
             if attrs.get('is_boss'):
                 boss_node = node
         
-        # Find START room (has STAIR WITH doors - not isolated secret rooms)
-        start_room_pos = None
-        stair_rooms_with_doors = []
+        # Normalize graph to canonical labels & types (do this first before matching)
+        self._normalize_graph(graph)
+
+        # Build room adjacency for BFS matching
+        room_adjacency = self._build_room_adjacency(rooms)
         
-        for pos, room in rooms.items():
-            if getattr(room, 'has_stair', False):
-                door_count = sum(room.doors.values())
-                if door_count > 0:
-                    stair_rooms_with_doors.append((pos, door_count))
+        # STEP 1: Find the ACTUAL entrance room for BFS seeding
+        # The entrance is the room with a door leading OUTSIDE the dungeon
+        # This is critical for correct graph matching!
+        seed_room_pos = self._find_entrance_room(rooms)
         
-        # Prefer STAIR room with doors (actual entrance)
-        if stair_rooms_with_doors:
-            # Use the one with most doors
-            stair_rooms_with_doors.sort(key=lambda x: x[1], reverse=True)
-            start_room_pos = stair_rooms_with_doors[0][0]
+        # Fallback 1: stair room (may be entrance in some dungeons)
+        if seed_room_pos is None:
+            for pos, room in rooms.items():
+                if getattr(room, 'has_stair', False):
+                    seed_room_pos = pos
+                    break
         
-        # Fallback: use room with most doors as hub (NOT isolated stairs)
-        if start_room_pos is None:
+        # Fallback 2: room with most doors as hub
+        if seed_room_pos is None:
             max_doors = 0
             for pos, room in rooms.items():
                 door_count = sum(room.doors.values())
                 if door_count > max_doors:
                     max_doors = door_count
-                    start_room_pos = pos
+                    seed_room_pos = pos
         
-        if start_room_pos:
-            rooms[start_room_pos].is_start = True
-            dungeon.start_pos = start_room_pos
-        
-        # Normalize graph to canonical labels & types
-        self._normalize_graph(graph)
-
-        # Build room adjacency and match rooms to graph nodes using BFS
-        room_adjacency = self._build_room_adjacency(rooms)
-        
-        # Match rooms to graph nodes using parallel BFS (deterministic assignment)
+        # STEP 2: Match rooms to graph nodes using BFS from seed
         room_to_node, node_to_room = self._match_rooms_to_nodes_bfs(
-            rooms, room_adjacency, graph, start_room_pos, start_node
+            rooms, room_adjacency, graph, seed_room_pos, start_node
         )
         
         # Store mapping in rooms
         for room_pos, node_id in room_to_node.items():
             rooms[room_pos].graph_node_id = node_id
         
-        # Find TRIFORCE room using the mapping or graph distance heuristic
+        # STEP 3: Determine START room FROM GRAPH (not from grid scanning)
+        # The graph's start node (label="s") is the authoritative source
+        start_room_pos = None
+        if start_node is not None:
+            start_room_pos = node_to_room.get(start_node)
+            if start_room_pos:
+                logger.debug(
+                    "START_FROM_GRAPH: Graph node %d (is_start=True) mapped to room %s",
+                    start_node, start_room_pos
+                )
+        
+        # Fallback only if graph-based mapping failed
+        if start_room_pos is None:
+            logger.warning(
+                "START_FALLBACK: Could not find room for graph start_node=%s. "
+                "Using seed room %s as fallback.",
+                start_node, seed_room_pos
+            )
+            start_room_pos = seed_room_pos
+        
+        if start_room_pos:
+            rooms[start_room_pos].is_start = True
+            dungeon.start_pos = start_room_pos
+        
+        # STEP 4: Find TRIFORCE room FROM GRAPH using node mapping
         triforce_room_pos = None
         graph_path_length = 0
         
-        # Calculate expected path length from graph
-        if triforce_node is not None and start_node is not None:
+        # Try to use node mapping first (graph is authoritative)
+        if triforce_node is not None:
+            triforce_room_pos = node_to_room.get(triforce_node)
+            if triforce_room_pos:
+                logger.debug(
+                    "TRIFORCE_FROM_GRAPH: Graph node %d (is_triforce=True) mapped to room %s",
+                    triforce_node, triforce_room_pos
+                )
+        
+        # Fallback: Calculate expected path length from graph for distance-based heuristic
+        if triforce_room_pos is None and triforce_node is not None and start_node is not None:
             try:
                 graph_path = nx.shortest_path(graph.to_undirected(), start_node, triforce_node)
                 graph_path_length = len(graph_path) - 1  # Number of edges
             except nx.NetworkXNoPath:
                 graph_path_length = len(rooms) // 2  # Fallback: estimate as half the dungeon
-        
-        # Try to use node mapping first
-        if triforce_node is not None:
-            triforce_room_pos = node_to_room.get(triforce_node)
         
         # If mapping failed, find room at approximately the graph path distance
         if triforce_room_pos is None and graph_path_length > 0:
@@ -1210,6 +1251,97 @@ class RoomGraphMatcher:
                     room_to_node[r] = n
                     node_to_room[n] = r
                     used_n.add(n)
+
+        # ============================================================
+        # FIX 1: Handle Stair Edges (non-spatial warp connections)
+        # ============================================================
+        # After main BFS, match nodes connected via stair edges ('s' type)
+        # to rooms containing STAIR tiles. Stair edges represent non-adjacent
+        # teleport connections that BFS cannot discover via room adjacency.
+        still_unmapped_nodes = [n for n in graph.nodes() if n not in node_to_room]
+        stair_rooms = sorted([pos for pos in rooms.keys() 
+                              if getattr(rooms[pos], 'has_stair', False)])
+        
+        for unmapped_n in list(still_unmapped_nodes):
+            # Check if this node has a stair edge to any already-mapped node
+            has_stair_edge = False
+            mapped_neighbor = None
+            for neighbor in list(graph.successors(unmapped_n)) + list(graph.predecessors(unmapped_n)):
+                edge_data = graph.get_edge_data(unmapped_n, neighbor) or graph.get_edge_data(neighbor, unmapped_n) or {}
+                edge_type = edge_data.get('edge_type', '') or edge_data.get('label', '')
+                if edge_type in ('stair', 's'):
+                    has_stair_edge = True
+                    if neighbor in node_to_room:
+                        mapped_neighbor = neighbor
+                        break
+            
+            if has_stair_edge and stair_rooms:
+                # Prefer stair room not yet used, or closest to the mapped neighbor's room
+                best_stair_room = None
+                for sr in stair_rooms:
+                    if sr not in room_to_node:
+                        best_stair_room = sr
+                        break
+                
+                # If all stair rooms are already used, use the first one (multi-node per room)
+                if best_stair_room is None and stair_rooms:
+                    best_stair_room = stair_rooms[0]
+                
+                if best_stair_room is not None:
+                    # Only add to room_to_node if not already there (avoid overwrite)
+                    if best_stair_room not in room_to_node:
+                        room_to_node[best_stair_room] = unmapped_n
+                    node_to_room[unmapped_n] = best_stair_room
+                    still_unmapped_nodes.remove(unmapped_n)
+                    logger.debug("STAIR_EDGE_FIX: Matched node %d to stair room %s", unmapped_n, best_stair_room)
+
+        # ============================================================
+        # FIX 2 & 3: Multi-Node Per Room + Virtual Node Propagation
+        # ============================================================
+        # If there are more graph nodes than rooms, remaining unmapped nodes
+        # are "virtual" nodes representing sub-areas within already-mapped rooms.
+        # Propagate room assignments from their closest mapped neighbor.
+        still_unmapped_nodes = [n for n in graph.nodes() if n not in node_to_room]
+        
+        if still_unmapped_nodes:
+            logger.debug("VIRTUAL_NODE_FIX: %d nodes remain unmapped, propagating from neighbors", 
+                        len(still_unmapped_nodes))
+            
+            for unmapped_n in still_unmapped_nodes:
+                # BFS from unmapped_node to find nearest node with a room mapping
+                from collections import deque
+                bfs_queue = deque([unmapped_n])
+                bfs_visited = {unmapped_n}
+                closest_mapped_neighbor = None
+                
+                while bfs_queue and closest_mapped_neighbor is None:
+                    current = bfs_queue.popleft()
+                    neighbors = list(graph.successors(current)) + list(graph.predecessors(current))
+                    for nb in neighbors:
+                        if nb in node_to_room:
+                            closest_mapped_neighbor = nb
+                            break
+                        if nb not in bfs_visited:
+                            bfs_visited.add(nb)
+                            bfs_queue.append(nb)
+                
+                if closest_mapped_neighbor is not None:
+                    # Share the room assignment with the closest mapped neighbor
+                    shared_room = node_to_room[closest_mapped_neighbor]
+                    node_to_room[unmapped_n] = shared_room
+                    # Mark as virtual in node attributes for downstream processing
+                    graph.nodes[unmapped_n]['is_virtual'] = True
+                    graph.nodes[unmapped_n]['virtual_parent'] = closest_mapped_neighbor
+                    logger.debug("VIRTUAL_NODE_FIX: Node %d shares room %s with neighbor %d (virtual)",
+                                unmapped_n, shared_room, closest_mapped_neighbor)
+                else:
+                    # Last resort: assign to any room (preferably one with most doors)
+                    if rooms:
+                        fallback_room = max(rooms.keys(), key=lambda r: sum(rooms[r].doors.values()))
+                        node_to_room[unmapped_n] = fallback_room
+                        graph.nodes[unmapped_n]['is_virtual'] = True
+                        logger.warning("VIRTUAL_NODE_FIX: Node %d orphaned, assigned to fallback room %s",
+                                      unmapped_n, fallback_room)
 
         # Local refinement: try pairwise swaps to improve adjacency consistency
         # This helps fix small symmetric mismatches that greedy assignment may create
@@ -1633,6 +1765,49 @@ class RoomGraphMatcher:
         # A more sophisticated approach would track room-to-node mapping
         return None
     
+    def _find_entrance_room(self, rooms: Dict[Tuple[int, int], Room]) -> Optional[Tuple[int, int]]:
+        """
+        Find the dungeon entrance room.
+        
+        The entrance is the room with a door leading OUTSIDE the dungeon 
+        (i.e., to an empty grid slot). In Zelda dungeons, this is where 
+        Link enters from the overworld.
+        
+        This is CRITICAL for correct graph matching - the entrance room
+        should be matched to the graph's START node.
+        
+        Returns:
+            Position of the entrance room, or None if not found.
+        """
+        for pos, room in rooms.items():
+            row, col = pos
+            
+            for direction, has_door in room.doors.items():
+                if not has_door:
+                    continue
+                
+                # Calculate target position
+                if direction == 'N':
+                    target = (row - 1, col)
+                elif direction == 'S':
+                    target = (row + 1, col)
+                elif direction == 'W':
+                    target = (row, col - 1)
+                elif direction == 'E':
+                    target = (row, col + 1)
+                else:
+                    continue
+                
+                # If the door leads to an empty slot, this is the entrance!
+                if target not in rooms:
+                    logger.debug(
+                        "ENTRANCE_FOUND: Room %s has %s door leading outside (to %s)",
+                        pos, direction, target
+                    )
+                    return pos
+        
+        return None
+    
     def _find_farthest_dead_end(self, rooms: Dict[Tuple[int, int], Room],
                                  start_pos: Tuple[int, int]) -> Optional[Tuple[int, int]]:
         """Find the dead-end room (1 door) farthest from start."""
@@ -1966,17 +2141,33 @@ class DungeonStitcher:
                         for old_pos, room in dungeon.rooms.items()
                         if old_pos in pos_remap and room.graph_node_id is not None}
         
+        # Build node_to_room mapping (includes virtual nodes from graph attributes)
+        node_to_room = {}
+        for room_pos, node_id in room_to_node.items():
+            node_to_room[node_id] = room_pos
+        
+        # Add virtual nodes from graph attributes (nodes mapped to parent's room)
+        if dungeon.graph is not None:
+            for node_id in dungeon.graph.nodes():
+                if node_id not in node_to_room:
+                    node_data = dungeon.graph.nodes[node_id]
+                    if node_data.get('is_virtual'):
+                        parent = node_data.get('virtual_parent')
+                        if parent is not None and parent in node_to_room:
+                            node_to_room[node_id] = node_to_room[parent]
+                            logger.debug("STITCH: Virtual node %d shares room %s with parent %d", 
+                                        node_id, node_to_room[node_id], parent)
+        
         # CRITICAL FIX: Place items (keys, items) based on graph node labels
         # VGLC data does NOT contain item placement - only the graph specifies this
         missing_items = self._place_items_from_graph(global_grid, dungeon.graph, room_to_node, room_positions)
         
-        # Log summary of missing items for awareness
+        # Log summary of missing items for solver awareness (INFO level, not WARNING)
+        # This is expected behavior for VGLC data with graph-room count mismatches
         if missing_items:
-            logger.warning(
-                "GRAPH-ROOM MISMATCH SUMMARY: %d items could not be placed. "
-                "Solver should be aware: %s",
-                len(missing_items), 
-                [f"{m['item_type']} (node {m['node_id']})" for m in missing_items]
+            logger.info(
+                "STITCH_SUMMARY: %d items from graph nodes could not be placed (solver will proceed without them)",
+                len(missing_items)
             )
         
         # CRITICAL FIX: Convert door types based on graph edge labels
@@ -2015,6 +2206,7 @@ class DungeonStitcher:
             triforce_global=triforce_global,
             graph=dungeon.graph,
             room_to_node=room_to_node,  # Use pre-built mapping
+            node_to_room=node_to_room,  # Includes virtual nodes
             missing_items=missing_items if missing_items else None
         )
     
@@ -2180,38 +2372,78 @@ class DungeonStitcher:
     
     def _find_floor_near_door(self, grid: np.ndarray, 
                                r_off: int, c_off: int) -> Tuple[int, int]:
-        """Find a walkable tile in the room for starting position."""
-        # First try to find actual START tile in this room
+        """Find a walkable tile in the room for starting position.
+        
+        IMPORTANT: Prioritizes positions that are actually reachable from doors,
+        not just any walkable tile. This handles rooms where water/elements 
+        surround the center (e.g., D9-2).
+        """
         room_slice = grid[r_off:r_off+ROOM_HEIGHT, c_off:c_off+ROOM_WIDTH]
-        start_positions = np.where(room_slice == SEMANTIC_PALETTE['START'])
         
-        if len(start_positions[0]) > 0:
-            # Return first START tile position
-            return (r_off + start_positions[0][0], c_off + start_positions[1][0])
-        
-        # Otherwise check center first
-        center_r = r_off + ROOM_HEIGHT // 2
-        center_c = c_off + ROOM_WIDTH // 2
-        
-        if grid[center_r, center_c] == SEMANTIC_PALETTE['FLOOR']:
-            return (center_r, center_c)
-        
-        # Search outward from center for any walkable tile
+        # Tiles that are walkable for pathfinding
         WALKABLE = {
             SEMANTIC_PALETTE['FLOOR'],
             SEMANTIC_PALETTE['DOOR_OPEN'],
-            SEMANTIC_PALETTE['STAIR']
+            SEMANTIC_PALETTE['STAIR'],
+            SEMANTIC_PALETTE['START'],
         }
         
+        # STEP 1: Find all door positions in the room (entry points)
+        door_positions = []
+        for r in range(ROOM_HEIGHT):
+            for c in range(ROOM_WIDTH):
+                if room_slice[r, c] == SEMANTIC_PALETTE['DOOR_OPEN']:
+                    door_positions.append((r, c))
+        
+        # STEP 2: BFS from doors to find all reachable walkable tiles
+        from collections import deque
+        reachable = set()
+        
+        for door_r, door_c in door_positions:
+            if (door_r, door_c) in reachable:
+                continue
+            queue = deque([(door_r, door_c)])
+            visited = {(door_r, door_c)}
+            
+            while queue:
+                cr, cc = queue.popleft()
+                if room_slice[cr, cc] in WALKABLE:
+                    reachable.add((cr, cc))
+                    for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                        nr, nc = cr + dr, cc + dc
+                        if 0 <= nr < ROOM_HEIGHT and 0 <= nc < ROOM_WIDTH:
+                            if (nr, nc) not in visited and room_slice[nr, nc] in WALKABLE:
+                                visited.add((nr, nc))
+                                queue.append((nr, nc))
+        
+        # STEP 3: Check if existing START tile is reachable
+        start_positions = np.where(room_slice == SEMANTIC_PALETTE['START'])
+        if len(start_positions[0]) > 0:
+            start_local = (int(start_positions[0][0]), int(start_positions[1][0]))
+            if start_local in reachable:
+                # START tile is reachable from a door - use it
+                return (r_off + start_local[0], c_off + start_local[1])
+            # START tile exists but is trapped - need alternate position
+        
+        # STEP 4: Find best reachable position (prefer near center)
+        center_r = ROOM_HEIGHT // 2
+        center_c = ROOM_WIDTH // 2
+        
+        if reachable:
+            # Sort by distance from center and return closest
+            best_pos = min(reachable, key=lambda p: abs(p[0] - center_r) + abs(p[1] - center_c))
+            return (r_off + best_pos[0], c_off + best_pos[1])
+        
+        # STEP 5: Fallback - search outward from center (no doors found)
         for dr in range(-5, 6):
             for dc in range(-4, 5):
                 r, c = center_r + dr, center_c + dc
-                if 0 <= r < grid.shape[0] and 0 <= c < grid.shape[1]:
-                    if grid[r, c] in WALKABLE:
-                        return (r, c)
+                if 0 <= r < ROOM_HEIGHT and 0 <= c < ROOM_WIDTH:
+                    if room_slice[r, c] in WALKABLE:
+                        return (r_off + r, c_off + c)
         
-        # Fallback to center
-        return (center_r, center_c)
+        # Last resort fallback to center
+        return (r_off + center_r, c_off + center_c)
     
     def _place_items_from_graph(self, grid: np.ndarray, graph: nx.DiGraph,
                                  room_to_node: Dict[Tuple[int, int], int],
@@ -2235,6 +2467,8 @@ class DungeonStitcher:
             List of dicts describing items that couldn't be placed (for solver awareness)
         """
         missing_items: List[Dict] = []
+        # Track fallback placements for summary logging (reduce spam)
+        fallback_placements: List[Tuple[int, str, str]] = []  # (node_id, label, item_type)
         
         if graph is None:
             return missing_items
@@ -2309,13 +2543,16 @@ class DungeonStitcher:
                 if fallback_room is not None:
                     room_pos = fallback_room
                     used_fallback = True
-                    logger.warning(
+                    # Track for summary (reduce log spam)
+                    fallback_placements.append((node_id, label, item_type_names.get(item_to_place, str(item_to_place))))
+                    logger.debug(
                         "ITEM_PLACEMENT_FALLBACK: Node %d (label='%s') with item '%s' has no direct room mapping. "
                         "Using fallback room %s from nearest mapped neighbor.",
                         node_id, label, item_type_names.get(item_to_place, str(item_to_place)), room_pos
                     )
                 else:
-                    logger.warning(
+                    # Only log at DEBUG level - summary logged at end
+                    logger.debug(
                         "ITEM_PLACEMENT_FAIL: Node %d (label='%s') with item '%s' has no room mapping "
                         "and no fallback room found. Item cannot be materialized in grid.",
                         node_id, label, item_type_names.get(item_to_place, str(item_to_place))
@@ -2329,7 +2566,8 @@ class DungeonStitcher:
                     continue
                 
             if room_pos not in room_positions:
-                logger.warning(
+                # Only log at DEBUG level - summary logged at end
+                logger.debug(
                     "ITEM_PLACEMENT_FAIL: Node %d mapped to room %s but room has no grid position. "
                     "Item '%s' cannot be materialized.",
                     node_id, room_pos, item_type_names.get(item_to_place, str(item_to_place))
@@ -2452,6 +2690,15 @@ class DungeonStitcher:
                     'reason': 'placement_failed',
                     'used_fallback': used_fallback
                 })
+        
+        # Log summary of fallbacks and failures (single message to reduce spam)
+        if fallback_placements or missing_items:
+            summary_parts = []
+            if fallback_placements:
+                summary_parts.append(f"{len(fallback_placements)} items placed via fallback")
+            if missing_items:
+                summary_parts.append(f"{len(missing_items)} items could not be placed")
+            logger.info("ITEM_PLACEMENT_SUMMARY: %s", ", ".join(summary_parts))
         
         return missing_items
 

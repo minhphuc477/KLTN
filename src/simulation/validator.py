@@ -46,6 +46,8 @@ WALKABLE_IDS = {
     SEMANTIC_PALETTE['ELEMENT_FLOOR'],
     SEMANTIC_PALETTE['STAIR'],
     SEMANTIC_PALETTE['ENEMY'],  # CRITICAL FIX: Enemies are walkable (fought or avoided)
+    SEMANTIC_PALETTE['BOSS'],   # Boss enemies are walkable (must be fought)
+    SEMANTIC_PALETTE['PUZZLE'], # Puzzle elements are walkable (interact to solve)
 }
 
 BLOCKING_IDS = {
@@ -53,6 +55,14 @@ BLOCKING_IDS = {
     SEMANTIC_PALETTE['WALL'],
     # BLOCK removed - now handled as PUSHABLE
     # ELEMENT removed - now handled as conditional (needs KEY_ITEM/Ladder)
+}
+
+# Transition tiles - tiles where teleportation/warping is allowed
+# Player must be standing on these tiles or at room boundary to use stairs/warps
+TRANSITION_IDS = {
+    SEMANTIC_PALETTE['STAIR'],
+    SEMANTIC_PALETTE['DOOR_OPEN'],
+    SEMANTIC_PALETTE['DOOR_SOFT'],
 }
 
 CONDITIONAL_IDS = {
@@ -441,7 +451,7 @@ class SolverOptions:
     start_bombs: int = 1  # Default: 1 bomb to pass bomb doors (Zelda style)
     start_boss_key: bool = False
     start_item: bool = False  # Ladder/raft
-    timeout: int = 100000
+    timeout: int = 200000  # Increased for complex dungeons with many virtual node paths
     allow_diagonals: bool = False
     heuristic_mode: str = "balanced"  # "balanced", "speedrunner", "completionist"
     
@@ -533,6 +543,7 @@ class ZeldaLogicEnv:
     
     def __init__(self, semantic_grid: np.ndarray, render_mode: bool = False, 
                  graph=None, room_to_node=None, room_positions=None,
+                 node_to_room=None,
                  solver_options: Optional['SolverOptions'] = None):
         """
         Initialize the environment.
@@ -543,6 +554,7 @@ class ZeldaLogicEnv:
             graph: Optional NetworkX graph for stair connections
             room_to_node: Optional mapping of room positions to graph nodes
             room_positions: Optional mapping of room positions to grid offsets
+            node_to_room: Optional mapping of graph nodes to room positions (includes virtual nodes)
             solver_options: Optional SolverOptions for configurable starting inventory
         """
         self.original_grid = np.array(semantic_grid, dtype=np.int64)
@@ -557,6 +569,7 @@ class ZeldaLogicEnv:
         self.graph = graph
         self.room_to_node = room_to_node
         self.room_positions = room_positions
+        self.node_to_room = node_to_room  # Includes virtual node mappings
         
         # Find start and goal positions
         self.start_pos = self._find_position(SEMANTIC_PALETTE['START'])
@@ -770,8 +783,12 @@ class ZeldaLogicEnv:
             return state, 10.0, {'msg': 'Picked up key item', 'item': 'key_item'}
         
         if tile == SEMANTIC_PALETTE['ITEM_MINOR']:
+            # ITEM_MINOR represents bomb pickups in VGLC Zelda dungeons
+            # Without this, dungeons where bombs are behind bombable walls
+            # become unsolvable (KEY_ITEM often inaccessible initially)
+            state.has_bomb = True
             self.grid[pos] = SEMANTIC_PALETTE['FLOOR']
-            return state, 1.0, {'msg': 'Picked up item', 'item': 'minor'}
+            return state, 1.0, {'msg': 'Picked up bomb', 'item': 'bomb'}
         
         return state, 0.0, {}
     
@@ -950,7 +967,7 @@ class StateSpaceAStar:
     - Proper sequencing of item collection
     """
     
-    def __init__(self, env: ZeldaLogicEnv, timeout: int = 100000, heuristic_mode: str = "balanced", priority_options: dict = None):
+    def __init__(self, env: ZeldaLogicEnv, timeout: int = 200000, heuristic_mode: str = "balanced", priority_options: dict = None):
         """
         Initialize the solver.
         
@@ -968,6 +985,11 @@ class StateSpaceAStar:
         
         # PERFORMANCE: Cache stair destinations to avoid repeated graph traversals
         self._stair_dest_cache = {}
+        
+        # VIRTUAL NODE TRAVERSAL: Cache for graph-based room-to-room transitions
+        # This enables traversal through "virtual nodes" (graph nodes without physical rooms)
+        self._virtual_transition_cache = {}
+        self._node_to_room = None  # Lazy-initialized reverse mapping
 
         # Priority options
         self.priority_options = priority_options or {}
@@ -1011,6 +1033,13 @@ class StateSpaceAStar:
                 self.min_locked_needed_node = dist
         except Exception:
             self.min_locked_needed_node = {}
+        
+        # PERFORMANCE FIX: Cache door and element positions at initialization
+        # Avoids O(width × height) scan on every heuristic call
+        self._locked_doors_cache = self.env._find_all_positions(SEMANTIC_PALETTE['DOOR_LOCKED'])
+        self._boss_doors_cache = self.env._find_all_positions(SEMANTIC_PALETTE['DOOR_BOSS'])
+        self._bomb_doors_cache = self.env._find_all_positions(SEMANTIC_PALETTE['DOOR_BOMB'])
+        self._element_tiles_cache = self.env._find_all_positions(SEMANTIC_PALETTE['ELEMENT'])
 
     
     def solve(self) -> Tuple[bool, List[Tuple[int, int]], int]:
@@ -1171,7 +1200,23 @@ class StateSpaceAStar:
             curr_r, curr_c = current_state.position
             
             # Get possible neighbors: adjacent tiles + stair destinations
+            # Each neighbor is (pos, tile, cost, is_teleport)
             neighbors = []
+            
+            # Current tile determines if teleportation is allowed
+            # Allow teleportation from:
+            # 1. STAIR tiles - traditional warp points
+            # 2. DOOR tiles - graph may connect to non-adjacent rooms
+            curr_tile = grid[curr_r, curr_c]
+            is_stair = (curr_tile == SEMANTIC_PALETTE['STAIR'])
+            is_door = (curr_tile in {
+                SEMANTIC_PALETTE['DOOR_OPEN'],
+                SEMANTIC_PALETTE['DOOR_SOFT'],
+                SEMANTIC_PALETTE['DOOR_LOCKED'],
+                SEMANTIC_PALETTE['DOOR_BOMB'],
+                SEMANTIC_PALETTE['DOOR_BOSS'],
+            })
+            can_teleport = is_stair or is_door
             
             # Standard 4-directional movement (cost = 1.0)
             for dr, dc in cardinal_deltas:
@@ -1183,7 +1228,7 @@ class StateSpaceAStar:
                 
                 target_pos = (new_r, new_c)
                 target_tile = grid[new_r, new_c]
-                neighbors.append((target_pos, target_tile, CARDINAL_COST))
+                neighbors.append((target_pos, target_tile, CARDINAL_COST, False))  # is_teleport=False
             
             # PERFORMANCE: Diagonal movement only if enabled (disabled by default for 2× speedup)
             # Diagonal movement (cost = √2 ≈ 1.414)
@@ -1201,24 +1246,67 @@ class StateSpaceAStar:
                     adj_r_tile = grid[curr_r + dr, curr_c]  # Vertical adjacent
                     adj_c_tile = grid[curr_r, curr_c + dc]  # Horizontal adjacent
                     
-                    # If either adjacent tile is a hard wall, block diagonal
+                    # If either adjacent tile is a hard wall or conditional door, block diagonal
                     if adj_r_tile in BLOCKING_IDS or adj_c_tile in BLOCKING_IDS:
                         continue  # Can't cut corners through walls
+                    # Also block diagonal through locked/conditional doors
+                    if adj_r_tile in CONDITIONAL_IDS or adj_c_tile in CONDITIONAL_IDS:
+                        continue  # Can't cut corners through doors
                     
                     target_pos = (new_r, new_c)
                     target_tile = grid[new_r, new_c]
-                    neighbors.append((target_pos, target_tile, DIAGONAL_COST))
+                    neighbors.append((target_pos, target_tile, DIAGONAL_COST, False))  # is_teleport=False
             
             # STAIR HANDLING: Add teleport destinations from graph
-            if grid[curr_r, curr_c] == SEMANTIC_PALETTE['STAIR']:
+            # MUST be standing on STAIR tile to use stairs
+            if curr_tile == SEMANTIC_PALETTE['STAIR']:
                 stair_destinations = self._get_stair_destinations(current_state.position)
                 for dest_pos in stair_destinations:
                     if 0 <= dest_pos[0] < height and 0 <= dest_pos[1] < width:
                         dest_tile = grid[dest_pos[0], dest_pos[1]]
-                        neighbors.append((dest_pos, dest_tile, 1))  # cost=1 for stair teleport
+                        neighbors.append((dest_pos, dest_tile, 1, True))  # is_teleport=True
+            
+            # VIRTUAL NODE TRAVERSAL: CONTROLLED VERSION
+            # The graph encodes hidden passages and bombable walls that aren't in tile data.
+            # We allow traversal ONLY when player is at a transition point (room boundary, stair, or door).
+            # This prevents teleporting from the middle of a room.
+            #
+            # Requirements:
+            # 1. Player must be at room boundary, stair, or door tile
+            # 2. Current room has a virtual node child (e.g., room (3,4) → virtual node 17)
+            # 3. Player has required items (bombs for bombable edges, keys for locked edges)
+            # 4. Destination is a valid physical room with walkable entry point
+            if can_teleport:
+                virtual_destinations = self._get_controlled_virtual_destinations(
+                    current_state.position, current_state
+                )
+                for dest_pos, cost, edge_type in virtual_destinations:
+                    if 0 <= dest_pos[0] < height and 0 <= dest_pos[1] < width:
+                        dest_tile = grid[dest_pos[0], dest_pos[1]]
+                        neighbors.append((dest_pos, dest_tile, cost, True))  # is_teleport=True
+            
+            # GRAPH-BASED ROOM WARPING: Handle non-adjacent room connections
+            # The graph encodes staircase/warp connections between rooms that aren't
+            # physically adjacent. These represent stairs, hidden passages, or warps.
+            # CRITICAL: Player must be at a transition point to use warps.
+            if can_teleport:
+                warp_destinations = self._get_graph_warp_destinations(
+                    current_state.position, current_state
+                )
+                for dest_pos, cost, edge_type in warp_destinations:
+                    if 0 <= dest_pos[0] < height and 0 <= dest_pos[1] < width:
+                        dest_tile = grid[dest_pos[0], dest_pos[1]]
+                        neighbors.append((dest_pos, dest_tile, cost, True))  # is_teleport=True
             
             # Process all neighbors
-            for target_pos, target_tile, base_cost in neighbors:
+            for target_pos, target_tile, base_cost, is_teleport in neighbors:
+                
+                # CRITICAL: Validate adjacency for non-teleport moves
+                if not is_teleport:
+                    dr = abs(target_pos[0] - curr_r)
+                    dc = abs(target_pos[1] - curr_c)
+                    if dr > 1 or dc > 1 or (dr == 0 and dc == 0):
+                        continue  # Not adjacent, skip
                 
                 # Determine if move is possible and what state changes occur
                 can_move, new_state = self._try_move_pure(
@@ -1480,6 +1568,24 @@ class StateSpaceAStar:
                     if 0 <= dest_pos[0] < height and 0 <= dest_pos[1] < width:
                         neighbors.append((dest_pos, grid[dest_pos[0], dest_pos[1]], 1))
             
+            # VIRTUAL NODE TRAVERSAL: CONTROLLED VERSION (same as solve())
+            virtual_destinations = self._get_controlled_virtual_destinations(
+                current_state.position, current_state
+            )
+            for dest_pos, cost, edge_type in virtual_destinations:
+                if 0 <= dest_pos[0] < height and 0 <= dest_pos[1] < width:
+                    dest_tile = grid[dest_pos[0], dest_pos[1]]
+                    neighbors.append((dest_pos, dest_tile, cost))
+            
+            # GRAPH-BASED ROOM WARPING (same as solve())
+            warp_destinations = self._get_graph_warp_destinations(
+                current_state.position, current_state
+            )
+            for dest_pos, cost, edge_type in warp_destinations:
+                if 0 <= dest_pos[0] < height and 0 <= dest_pos[1] < width:
+                    dest_tile = grid[dest_pos[0], dest_pos[1]]
+                    neighbors.append((dest_pos, dest_tile, cost))
+            
             for target_pos, target_tile, base_cost in neighbors:
                 can_move, new_state = self._try_move_pure(current_state, target_pos, target_tile)
                 if not can_move:
@@ -1543,14 +1649,19 @@ class StateSpaceAStar:
         """
         Find stair destinations using graph connectivity (CACHED).
         
-        When standing on a stair tile, check which room we're in,
-        find connected rooms via graph edges, and return stair positions in those rooms.
+        When standing on a stair tile, find the DIRECTLY connected room via
+        the graph edge. In Zelda, stairs connect exactly two rooms.
+        
+        FIXED: Previously this did BFS through the entire graph, allowing
+        teleportation to any room. Now it only returns the direct neighbor
+        connected by a stair edge (edge_type containing 'stair' or 's').
         """
         # PERFORMANCE: Check cache first
         if current_pos in self._stair_dest_cache:
             return self._stair_dest_cache[current_pos]
         
         if not self.env.graph or not self.env.room_to_node or not self.env.room_positions:
+            self._stair_dest_cache[current_pos] = []
             return []
         
         # Find which room contains current position
@@ -1563,55 +1674,636 @@ class StateSpaceAStar:
                 break
         
         if not current_room:
+            self._stair_dest_cache[current_pos] = []
+            return []
+        
+        current_node = self.env.room_to_node.get(current_room)
+        if current_node is None:
+            self._stair_dest_cache[current_pos] = []
+            return []
+        
+        # Build reverse mapping: node -> room
+        node_to_room = {v: k for k, v in self.env.room_to_node.items()}
+        
+        # FIXED: Only look at DIRECT neighbors connected by stair edges
+        # A stair connects to ONE specific room, not all rooms in the dungeon
+        destinations = []
+        
+        # Check successors for stair edges
+        for neighbor_node in self.env.graph.successors(current_node):
+            edge_data = self.env.graph.get_edge_data(current_node, neighbor_node, {}) or {}
+            edge_label = edge_data.get('label', '')
+            edge_type = edge_data.get('edge_type', '')
+            
+            # Only follow stair edges (label='s' or edge_type contains 'stair')
+            is_stair_edge = (edge_label == 's' or 
+                            's' in edge_label.split(',') or 
+                            'stair' in edge_type.lower())
+            
+            if not is_stair_edge:
+                continue
+            
+            # Check if neighbor has a physical room
+            neighbor_room = node_to_room.get(neighbor_node)
+            if not neighbor_room or neighbor_room not in self.env.room_positions:
+                continue
+            
+            # Find stair tile in neighbor room
+            r_off, c_off = self.env.room_positions[neighbor_room]
+            r_end = min(r_off + ROOM_HEIGHT, self.env.height)
+            c_end = min(c_off + ROOM_WIDTH, self.env.width)
+            
+            found_dest = False
+            for r in range(r_off, r_end):
+                for c in range(c_off, c_end):
+                    if self.env.grid[r, c] == SEMANTIC_PALETTE['STAIR']:
+                        destinations.append((r, c))
+                        found_dest = True
+                        break
+                if found_dest:
+                    break
+            
+            # Fallback: any walkable tile if no stair found
+            if not found_dest:
+                for r in range(r_off, r_end):
+                    for c in range(c_off, c_end):
+                        if self.env.grid[r, c] in WALKABLE_IDS:
+                            destinations.append((r, c))
+                            found_dest = True
+                            break
+                    if found_dest:
+                        break
+        
+        # PERFORMANCE: Cache result for future lookups
+        self._stair_dest_cache[current_pos] = destinations
+        return destinations
+    
+    def _get_virtual_node_destinations(self, current_pos: Tuple[int, int], 
+                                        state: GameState) -> List[Tuple[Tuple[int, int], int, str]]:
+        """
+        Find reachable physical rooms via graph edges through virtual nodes.
+        
+        VIRTUAL NODE TRAVERSAL:
+        When the graph path goes through "virtual nodes" (nodes without physical room
+        mappings), this method finds all reachable physical rooms by traversing 
+        through those virtual connections.
+        
+        Example (D7-1):
+        - Path: 11 → 13 → 16 → 22 → 23 → ...
+        - Nodes 16 and 22 have no physical rooms (virtual nodes)
+        - Player in room mapped to node 13 can reach room mapped to node 23
+        
+        This enables the solver to follow graph connectivity even when intermediate
+        nodes don't have physical rooms to walk through.
+        
+        Args:
+            current_pos: Current (row, col) position in the grid
+            state: Current game state (for checking edge requirements)
+            
+        Returns:
+            List of (dest_pos, cost, edge_type) tuples:
+            - dest_pos: Walkable position in the destination room
+            - cost: Traversal cost (number of edges traversed)
+            - edge_type: Type of edge constraint (for locked doors, etc.)
+        """
+        # Quick check: do we have graph connectivity?
+        if not self.env.graph or not self.env.room_to_node or not self.env.room_positions:
+            return []
+        
+        # Check cache first (using position as key)
+        cache_key = current_pos
+        if cache_key in self._virtual_transition_cache:
+            return self._virtual_transition_cache[cache_key]
+        
+        # Use node_to_room from environment if available (includes virtual nodes)
+        # Otherwise, lazy-initialize the reverse mapping (node -> room)
+        if self._node_to_room is None:
+            if hasattr(self.env, 'node_to_room') and self.env.node_to_room:
+                self._node_to_room = self.env.node_to_room
+            else:
+                self._node_to_room = {v: k for k, v in self.env.room_to_node.items()}
+        
+        # Find which room contains current position
+        current_room = None
+        for room_pos, (r_off, c_off) in self.env.room_positions.items():
+            r_end = r_off + ROOM_HEIGHT
+            c_end = c_off + ROOM_WIDTH
+            if r_off <= current_pos[0] < r_end and c_off <= current_pos[1] < c_end:
+                current_room = room_pos
+                break
+        
+        if not current_room:
+            self._virtual_transition_cache[cache_key] = []
+            return []
+        
+        current_node = self.env.room_to_node.get(current_room)
+        if current_node is None:
+            self._virtual_transition_cache[cache_key] = []
+            return []
+        
+        # BFS through graph to find reachable physical rooms via virtual nodes
+        # Track: (node, edges_traversed, accumulated_edge_type, path_through_virtual)
+        destinations = []
+        visited_nodes = {current_node}
+        
+        # Initialize queue with immediate successors
+        # Format: (node, distance, most_restrictive_edge_type, went_through_virtual)
+        node_queue = []
+        for neighbor in self.env.graph.successors(current_node):
+            edge_data = self.env.graph.get_edge_data(current_node, neighbor, {}) or {}
+            edge_label = edge_data.get('label', '')
+            edge_type = edge_data.get('edge_type') or EDGE_TYPE_MAP.get(edge_label, 'open')
+            node_queue.append((neighbor, 1, edge_type, False))
+        
+        while node_queue:
+            neighbor_node, distance, edge_type, went_through_virtual = node_queue.pop(0)
+            
+            if neighbor_node in visited_nodes:
+                continue
+            visited_nodes.add(neighbor_node)
+            
+            # Check if this node has a physical room
+            neighbor_room = self._node_to_room.get(neighbor_node)
+            
+            if neighbor_room and neighbor_room in self.env.room_positions:
+                # Found a physical room - only add as destination if we went through virtual nodes
+                # (Otherwise, normal grid traversal should handle it)
+                if went_through_virtual or distance > 1:
+                    # Find a walkable destination in this room
+                    dest_pos = self._find_room_entry_point(neighbor_room)
+                    if dest_pos:
+                        destinations.append((dest_pos, distance, edge_type))
+                
+                # Still continue BFS through this node to find more destinations
+                for next_node in self.env.graph.successors(neighbor_node):
+                    if next_node not in visited_nodes:
+                        next_edge_data = self.env.graph.get_edge_data(neighbor_node, next_node, {}) or {}
+                        next_label = next_edge_data.get('label', '')
+                        next_edge_type = next_edge_data.get('edge_type') or EDGE_TYPE_MAP.get(next_label, 'open')
+                        # Propagate the most restrictive edge type
+                        combined_type = self._combine_edge_types(edge_type, next_edge_type)
+                        node_queue.append((next_node, distance + 1, combined_type, went_through_virtual))
+            else:
+                # Virtual node (no physical room) - continue BFS through it
+                for next_node in self.env.graph.successors(neighbor_node):
+                    if next_node not in visited_nodes:
+                        next_edge_data = self.env.graph.get_edge_data(neighbor_node, next_node, {}) or {}
+                        next_label = next_edge_data.get('label', '')
+                        next_edge_type = next_edge_data.get('edge_type') or EDGE_TYPE_MAP.get(next_label, 'open')
+                        combined_type = self._combine_edge_types(edge_type, next_edge_type)
+                        # Mark that we went through a virtual node
+                        node_queue.append((next_node, distance + 1, combined_type, True))
+        
+        # Cache the results
+        self._virtual_transition_cache[cache_key] = destinations
+        return destinations
+
+    def _get_controlled_virtual_destinations(self, current_pos: Tuple[int, int], 
+                                              state: GameState) -> List[Tuple[Tuple[int, int], int, str]]:
+        """
+        Find CONTROLLED virtual node destinations from current position.
+        
+        Unlike the old _get_virtual_node_destinations which did full graph BFS,
+        this method ONLY allows transitions to:
+        1. Virtual nodes that are direct children of the current room's node
+        2. Physical rooms reachable via those virtual nodes (with proper item requirements)
+        
+        This prevents the "teleportation everywhere" bug while still allowing
+        legitimate hidden passage traversal.
+        
+        Args:
+            current_pos: Current (row, col) position in the grid
+            state: Current game state (for checking item requirements)
+            
+        Returns:
+            List of (dest_pos, cost, edge_type) tuples for valid virtual transitions
+        """
+        # Quick check: do we have graph connectivity?
+        if not self.env.graph or not self.env.room_to_node or not self.env.room_positions:
+            return []
+        
+        # Find which room contains current position
+        current_room = None
+        for room_pos, (r_off, c_off) in self.env.room_positions.items():
+            r_end = r_off + ROOM_HEIGHT
+            c_end = c_off + ROOM_WIDTH
+            if r_off <= current_pos[0] < r_end and c_off <= current_pos[1] < c_end:
+                current_room = room_pos
+                break
+        
+        if not current_room:
             return []
         
         current_node = self.env.room_to_node.get(current_room)
         if current_node is None:
             return []
         
-        # Find neighbor nodes in graph
-        destinations = []
-        for neighbor_node in self.env.graph.successors(current_node):
-            # Find the room for this neighbor node
-            neighbor_room = None
-            for room_pos, node_id in self.env.room_to_node.items():
-                if node_id == neighbor_node:
-                    neighbor_room = room_pos
-                    break
-            
-            if not neighbor_room:
-                # Node has no physical room - skip it
-                # This happens when graph has more nodes than physical rooms
-                continue
-            
-            if neighbor_room not in self.env.room_positions:
-                # Room not in position map - skip it
-                continue
-            
-            # Find stair position in neighbor room
-            r_off, c_off = self.env.room_positions[neighbor_room]
-            r_end = min(r_off + ROOM_HEIGHT, self.env.height)  # 16 rows
-            c_end = min(c_off + ROOM_WIDTH, self.env.width)    # 11 columns
-            
-            # Look for STAIR tiles in the neighbor room
-            found_stair = False
-            for r in range(r_off, r_end):
-                for c in range(c_off, c_end):
-                    if self.env.grid[r, c] == SEMANTIC_PALETTE['STAIR']:
-                        destinations.append((r, c))
-                        found_stair = True
-                        break
-                if found_stair:
-                    break
-            
-            # REMOVED: Room-center fallback logic
-            # Stairs should only warp to other stair tiles, not arbitrary positions
-            # This enforces proper dungeon topology
+        # Get node_to_room mapping
+        if self._node_to_room is None:
+            if hasattr(self.env, 'node_to_room') and self.env.node_to_room:
+                self._node_to_room = self.env.node_to_room
+            else:
+                self._node_to_room = {v: k for k, v in self.env.room_to_node.items()}
         
-        # PERFORMANCE: Cache result for future lookups
-        self._stair_dest_cache[current_pos] = destinations
+        destinations = []
+        
+        # Check all direct neighbors of current node
+        for neighbor in self.env.graph.successors(current_node):
+            neighbor_data = self.env.graph.nodes.get(neighbor, {})
+            
+            # ONLY process if this is a virtual node (hidden passage)
+            if not neighbor_data.get('is_virtual', False):
+                continue
+            
+            # Check if this virtual node's parent is the current node
+            # This ensures we only access hidden passages from their entrance room
+            virtual_parent = neighbor_data.get('virtual_parent')
+            if virtual_parent != current_node:
+                continue
+            
+            # Get edge requirements to access the virtual node
+            edge_data = self.env.graph.get_edge_data(current_node, neighbor, {}) or {}
+            edge_label = edge_data.get('label', '')
+            edge_type = edge_data.get('edge_type') or EDGE_TYPE_MAP.get(edge_label, 'open')
+            
+            # Check if we can traverse this edge based on game state
+            can_traverse = self._can_traverse_edge(edge_type, state)
+            if not can_traverse:
+                continue
+            
+            # BFS through virtual nodes to find all reachable physical rooms
+            virtual_visited = {neighbor}
+            virtual_queue = [(neighbor, edge_type)]
+            
+            while virtual_queue:
+                v_node, accumulated_type = virtual_queue.pop(0)
+                
+                for exit_node in self.env.graph.successors(v_node):
+                    exit_data = self.env.graph.nodes.get(exit_node, {})
+                    exit_edge_data = self.env.graph.get_edge_data(v_node, exit_node, {}) or {}
+                    exit_type = exit_edge_data.get('edge_type', 'open')
+                    
+                    if exit_data.get('is_virtual', False):
+                        # Another virtual node - continue BFS if not visited
+                        if exit_node not in virtual_visited:
+                            # Check if we can traverse this virtual-to-virtual edge
+                            if self._can_traverse_edge(exit_type, state):
+                                virtual_visited.add(exit_node)
+                                combined_type = self._combine_edge_types(accumulated_type, exit_type)
+                                virtual_queue.append((exit_node, combined_type))
+                    else:
+                        # Physical node - add as destination if we can traverse
+                        exit_room = self._node_to_room.get(exit_node)
+                        if exit_room and exit_room in self.env.room_positions:
+                            # Check if we can traverse this exit edge
+                            # Use _can_traverse_edge to support all edge types (bombable, key_locked, etc.)
+                            if self._can_traverse_edge(exit_type, state):
+                                dest_pos = self._find_room_entry_point(exit_room)
+                                
+                                if dest_pos is None:
+                                    # TRANSITION ROOM: BFS to find next walkable room
+                                    dest_pos, traversal_cost = self._find_next_walkable_room_via_graph(
+                                        exit_node, visited=virtual_visited | {exit_node}, state=state
+                                    )
+                                    if dest_pos:
+                                        destinations.append((dest_pos, traversal_cost, accumulated_type))
+                                else:
+                                    # Normal room with walkable tiles
+                                    destinations.append((dest_pos, 10, accumulated_type))
+        
+        return destinations
+
+    def _can_traverse_edge(self, edge_type: str, state: GameState) -> bool:
+        """Check if the player can traverse an edge based on current game state.
+        
+        Handles all edge types from src.core.definitions.EDGE_TYPE_MAP:
+        - open: Normal passage (always passable)
+        - soft_locked: One-way door (passable in one direction)
+        - key_locked: Requires small key (consumed)
+        - boss_locked: Requires boss key (permanent)
+        - bombable: Requires bomb
+        - stair: Stair/warp connection (always passable)
+        - item_locked: Requires KEY_ITEM (ladder/raft)
+        - switch: Puzzle-activated door (simplified: always passable)
+        """
+        if edge_type in ('open', 'soft_locked', 'stair'):
+            return True
+        elif edge_type == 'bombable':
+            return state.has_bomb
+        elif edge_type == 'key_locked':
+            return state.keys > 0
+        elif edge_type == 'boss_locked':
+            return state.has_boss_key
+        elif edge_type == 'item_locked':
+            return state.has_item  # Requires KEY_ITEM (ladder/raft)
+        elif edge_type == 'switch':
+            # Switch/puzzle doors - simplified: treat as always passable
+            # In real Zelda, would require solving puzzle first
+            return True
+        # Unknown edge type - default to passable to avoid blocking
+        return True
+    
+    def _get_graph_warp_destinations(self, current_pos: Tuple[int, int], 
+                                      state: GameState) -> List[Tuple[Tuple[int, int], int, str]]:
+        """
+        Find non-adjacent room destinations via graph edges (staircases/warps).
+        
+        In Zelda dungeons, the graph encodes connections between rooms that aren't
+        physically adjacent - these represent staircases, hidden passages, or warps
+        that you access by bombing walls or using stairs.
+        
+        This method handles edges between PHYSICAL nodes (not virtual) that connect
+        non-adjacent rooms. These are typically:
+        - Bombable walls that reveal stairs to another room
+        - Key-locked passages to distant rooms
+        - Open staircases connecting different dungeon levels
+        
+        Args:
+            current_pos: Current (row, col) position in the grid
+            state: Current game state (for checking item requirements)
+            
+        Returns:
+            List of (dest_pos, cost, edge_type) tuples for valid warp transitions
+        """
+        if not self.env.graph or not self.env.room_to_node or not self.env.room_positions:
+            return []
+        
+        # Find which room contains current position
+        current_room = None
+        for room_pos, (r_off, c_off) in self.env.room_positions.items():
+            r_end = r_off + ROOM_HEIGHT
+            c_end = c_off + ROOM_WIDTH
+            if r_off <= current_pos[0] < r_end and c_off <= current_pos[1] < c_end:
+                current_room = room_pos
+                break
+        
+        if not current_room:
+            return []
+        
+        current_node = self.env.room_to_node.get(current_room)
+        if current_node is None:
+            return []
+        
+        # Get node_to_room mapping
+        if self._node_to_room is None:
+            if hasattr(self.env, 'node_to_room') and self.env.node_to_room:
+                self._node_to_room = self.env.node_to_room
+            else:
+                self._node_to_room = {v: k for k, v in self.env.room_to_node.items()}
+        
+        destinations = []
+        
+        # Check all neighbors of current node
+        for neighbor in self.env.graph.successors(current_node):
+            neighbor_data = self.env.graph.nodes.get(neighbor, {})
+            
+            # Skip virtual nodes - they're handled by _get_controlled_virtual_destinations
+            if neighbor_data.get('is_virtual', False):
+                continue
+            
+            neighbor_room = self._node_to_room.get(neighbor)
+            if not neighbor_room or neighbor_room not in self.env.room_positions:
+                continue
+            
+            # Check if this is a non-adjacent room connection
+            dr = abs(current_room[0] - neighbor_room[0])
+            dc = abs(current_room[1] - neighbor_room[1])
+            manhattan_dist = dr + dc
+            
+            if manhattan_dist <= 1:
+                # Adjacent rooms - handled by normal grid movement
+                continue
+            
+            # This is a WARP connection to a non-adjacent room!
+            edge_data = self.env.graph.get_edge_data(current_node, neighbor, {}) or {}
+            edge_label = edge_data.get('label', '')
+            edge_type = edge_data.get('edge_type') or EDGE_TYPE_MAP.get(edge_label, 'open')
+            
+            # Check if we can traverse this edge
+            if not self._can_traverse_edge(edge_type, state):
+                continue
+            
+            # Find entry point in destination room
+            dest_pos = self._find_room_entry_point(neighbor_room)
+            
+            if dest_pos is None:
+                # TRANSITION ROOM: This room has no walkable tiles (corridor/staircase placeholder)
+                # BFS through the graph to find the next reachable walkable room
+                dest_pos, traversal_cost = self._find_next_walkable_room_via_graph(
+                    neighbor, visited={current_node, neighbor}, state=state
+                )
+                if dest_pos:
+                    destinations.append((dest_pos, traversal_cost, edge_type))
+            else:
+                # Normal room with walkable tiles
+                destinations.append((dest_pos, 10, edge_type))
+        
         return destinations
     
+    def _find_next_walkable_room_via_graph(self, start_node: int, visited: set, 
+                                            state: 'GameState', max_cost: int = 30
+                                            ) -> Tuple[Optional[Tuple[int, int]], int]:
+        """
+        BFS through graph from a transition node to find the next walkable room.
+        
+        When a graph edge points to a room with no walkable tiles (transition room),
+        this method continues through the graph to find the actual destination.
+        This handles VGLC dungeon patterns where some rooms are corridor/staircase
+        placeholders that players traverse through without actually walking in them.
+        
+        Args:
+            start_node: Graph node ID of the transition room
+            visited: Set of already-visited node IDs to prevent cycles
+            state: Current game state for edge traversal checks
+            max_cost: Maximum accumulated cost before giving up
+            
+        Returns:
+            (dest_pos, cost) tuple, or (None, 0) if no walkable room found
+        """
+        from collections import deque
+        
+        queue = deque([(start_node, 10)])  # (node, accumulated_cost)
+        
+        while queue:
+            node, cost = queue.popleft()
+            
+            for next_node in self.env.graph.successors(node):
+                if next_node in visited:
+                    continue
+                
+                # Check edge traversability
+                edge_data = self.env.graph.get_edge_data(node, next_node, {}) or {}
+                edge_type = edge_data.get('edge_type', 'open')
+                if not self._can_traverse_edge(edge_type, state):
+                    continue
+                
+                visited.add(next_node)
+                next_room = self._node_to_room.get(next_node)
+                
+                if next_room and next_room in self.env.room_positions:
+                    dest_pos = self._find_room_entry_point(next_room)
+                    if dest_pos:
+                        return dest_pos, cost + 5  # Found walkable room
+                
+                # Continue BFS if within cost limit
+                if cost + 5 < max_cost:
+                    queue.append((next_node, cost + 5))
+        
+        return None, 0
+
+    def _get_room_at_position(self, pos: Tuple[int, int]) -> Optional[Tuple[int, int]]:
+        """
+        Get the room that contains the given position.
+        
+        Args:
+            pos: Position (row, col) in grid coordinates
+            
+        Returns:
+            Room position key (room_row, room_col), or None if not in any room
+        """
+        if not self.env.room_positions:
+            return None
+            
+        row, col = pos
+        for room_pos, (r_off, c_off) in self.env.room_positions.items():
+            r_end = min(r_off + ROOM_HEIGHT, self.env.height)
+            c_end = min(c_off + ROOM_WIDTH, self.env.width)
+            
+            if r_off <= row < r_end and c_off <= col < c_end:
+                return room_pos
+        
+        return None
+
+    def _is_at_room_boundary(self, pos: Tuple[int, int]) -> bool:
+        """
+        Check if player is at the boundary of their current room.
+        Room boundaries are valid transition points for warping to connected rooms.
+        
+        A position is at the room boundary if it's within 1 tile of the room edge.
+        
+        Args:
+            pos: Player position (row, col)
+            
+        Returns:
+            True if at room boundary, False otherwise
+        """
+        if not self.env.room_positions:
+            return False
+            
+        current_room = self._get_room_at_position(pos)
+        if current_room is None or current_room not in self.env.room_positions:
+            return False
+        
+        r_off, c_off = self.env.room_positions[current_room]
+        r_end = min(r_off + ROOM_HEIGHT, self.env.height)
+        c_end = min(c_off + ROOM_WIDTH, self.env.width)
+        
+        row, col = pos
+        
+        # Check if within 1 tile of any room edge
+        at_top = row <= r_off + 1
+        at_bottom = row >= r_end - 2
+        at_left = col <= c_off + 1
+        at_right = col >= c_end - 2
+        
+        return at_top or at_bottom or at_left or at_right
+
+    def _find_room_entry_point(self, room_pos: Tuple[int, int]) -> Optional[Tuple[int, int]]:
+        """
+        Find a walkable entry point in a room for virtual node traversal.
+        
+        Prefers: STAIR > DOOR_OPEN > FLOOR > any walkable tile
+        
+        Args:
+            room_pos: Room position key
+            
+        Returns:
+            (row, col) of entry point, or None if room not accessible
+        """
+        if room_pos not in self.env.room_positions:
+            return None
+        
+        r_off, c_off = self.env.room_positions[room_pos]
+        r_end = min(r_off + ROOM_HEIGHT, self.env.height)
+        c_end = min(c_off + ROOM_WIDTH, self.env.width)
+        
+        # Priority 1: Look for STAIR tiles
+        for r in range(r_off, r_end):
+            for c in range(c_off, c_end):
+                if self.env.grid[r, c] == SEMANTIC_PALETTE['STAIR']:
+                    return (r, c)
+        
+        # Priority 2: Look for open doors
+        for r in range(r_off, r_end):
+            for c in range(c_off, c_end):
+                if self.env.grid[r, c] == SEMANTIC_PALETTE['DOOR_OPEN']:
+                    return (r, c)
+        
+        # Priority 3: Find any walkable tile near room center
+        center_r = r_off + ROOM_HEIGHT // 2
+        center_c = c_off + ROOM_WIDTH // 2
+        
+        for radius in range(max(ROOM_HEIGHT, ROOM_WIDTH)):
+            for dr in range(-radius, radius + 1):
+                for dc in range(-radius, radius + 1):
+                    if abs(dr) != radius and abs(dc) != radius:
+                        continue
+                    r, c = center_r + dr, center_c + dc
+                    if r_off <= r < r_end and c_off <= c < c_end:
+                        if self.env.grid[r, c] in WALKABLE_IDS:
+                            return (r, c)
+        
+        return None
+    
+    def _combine_edge_types(self, type1: str, type2: str) -> str:
+        """
+        Combine two edge types, returning the most restrictive one.
+        
+        Restriction order (most to least): boss > bomb > locked > puzzle > open
+        
+        Args:
+            type1: First edge type
+            type2: Second edge type
+            
+        Returns:
+            The more restrictive edge type
+        """
+        priority = {
+            'boss': 5,
+            'bomb': 4,
+            'locked': 3,
+            'key_locked': 3,
+            'puzzle': 2,
+            'open': 1,
+            '': 1,
+        }
+        p1 = priority.get(type1, 1)
+        p2 = priority.get(type2, 1)
+        return type1 if p1 >= p2 else type2
+    
+    def _can_traverse_edge_type(self, edge_type: str, state: GameState) -> bool:
+        """
+        Check if the current state allows traversing an edge of the given type.
+        
+        Args:
+            edge_type: The edge type constraint
+            state: Current game state with inventory
+            
+        Returns:
+            True if the edge can be traversed, False otherwise
+        """
+        if edge_type in ('open', ''):
+            return True
+        if edge_type in ('locked', 'key_locked'):
+            return state.keys > 0
+        if edge_type == 'bomb':
+            return state.has_bomb
+        if edge_type == 'boss':
+            return state.has_boss_key
+        if edge_type == 'puzzle':
+            return True  # Puzzle doors are passable (simplified)
+        return True  # Default: allow
+
     def _get_movement_cost(self, target_tile: int, target_pos: Tuple[int, int], state: GameState) -> float:
         """
         Calculate the cost of moving to a target tile.
@@ -1758,6 +2450,11 @@ class StateSpaceAStar:
                 elif target_tile == SEMANTIC_PALETTE['KEY_ITEM']:
                     new_state.has_item = True
                     new_state.has_bomb = True
+                elif target_tile == SEMANTIC_PALETTE['ITEM_MINOR']:
+                    # ITEM_MINOR represents bomb pickups in VGLC Zelda dungeons
+                    # Without this, dungeons where bombs are behind bombable walls
+                    # become unsolvable (KEY_ITEM often inaccessible initially)
+                    new_state.has_bomb = True
             
             return True, new_state
         
@@ -1788,8 +2485,24 @@ class StateSpaceAStar:
         if target_tile == SEMANTIC_PALETTE['DOOR_OPEN']:
             return True, new_state
         
+        # DOOR_SOFT - One-way/soft-locked door
+        # In Zelda, soft-locked doors close behind you (can only go one direction)
+        # For simplicity, treat as passable (one-way constraint enforced at graph level)
+        if target_tile == SEMANTIC_PALETTE['DOOR_SOFT']:
+            return True, new_state
+        
         # TRIFORCE - goal tile
         if target_tile == SEMANTIC_PALETTE['TRIFORCE']:
+            return True, new_state
+        
+        # BOSS - Boss enemy tile (must fight boss)
+        # Walkable like regular enemies - in Zelda, you enter boss room and fight
+        if target_tile == SEMANTIC_PALETTE['BOSS']:
+            return True, new_state
+        
+        # PUZZLE - Puzzle element tile (interact to solve)
+        # Walkable - player interacts with puzzle to progress
+        if target_tile == SEMANTIC_PALETTE['PUZZLE']:
             return True, new_state
         
         # PUSH BLOCK LOGIC (Zelda mechanic)
@@ -1828,7 +2541,12 @@ class StateSpaceAStar:
                 # Can't cross water without ladder
                 return False, state
         
-        # Default: allow movement for unknown walkable types
+        # Default case: Log warning for unknown tiles and treat as walkable
+        # This prevents silent failures but allows forward progress
+        # Known walkable tiles should be explicitly handled above
+        tile_name = ID_TO_NAME.get(target_tile, f'UNKNOWN_{target_tile}')
+        if target_tile not in WALKABLE_IDS and target_tile not in BLOCKING_IDS:
+            logger.debug(f"Unknown tile type {tile_name} (ID={target_tile}) at {target_pos}, treating as walkable")
         return True, new_state
     
     def _heuristic(self, state: GameState) -> float:
@@ -1837,8 +2555,13 @@ class StateSpaceAStar:
         
         Uses Manhattan distance to goal, with adjustments for:
         - Missing keys when locked doors are on path
-        - Missing items needed for progression
+        - Missing bombs when bomb doors are on path
+        - Missing boss key when boss doors are on path
+        - Missing ladder (KEY_ITEM) when water/element tiles block path
         - Graph-based distance estimate when available (better than Manhattan)
+        
+        PERFORMANCE: Uses cached door positions (set at initialization)
+        instead of scanning grid on every call.
         """
         if self.env.goal_pos is None:
             return float('inf')
@@ -1872,21 +2595,32 @@ class StateSpaceAStar:
         mode = (self.heuristic_mode or "balanced").lower()
         door_scale = 0.7 if mode == "speedrunner" else 1.0
         
-        # Penalty for missing items needed for doors
-        # This is a simplified heuristic
-        locked_doors = self.env._find_all_positions(SEMANTIC_PALETTE['DOOR_LOCKED'])
-        boss_doors = self.env._find_all_positions(SEMANTIC_PALETTE['DOOR_BOSS'])
+        # PERFORMANCE FIX: Use cached door positions instead of grid scan
+        locked_doors = self._locked_doors_cache
+        boss_doors = self._boss_doors_cache
+        bomb_doors = self._bomb_doors_cache
+        element_tiles = self._element_tiles_cache
         
         # Count unvisited locked doors not yet opened
         unopened_locked = sum(1 for d in locked_doors if d not in state.opened_doors)
         unopened_boss = sum(1 for d in boss_doors if d not in state.opened_doors)
+        unopened_bomb = sum(1 for d in bomb_doors if d not in state.opened_doors)
         
         # Add penalty if we don't have enough keys
         if unopened_locked > state.keys:
             h += door_scale * (unopened_locked - state.keys) * 10
         
+        # Penalty for boss doors without boss key
         if unopened_boss > 0 and not state.has_boss_key:
             h += door_scale * 20
+        
+        # MISSING FEATURE FIX: Penalty for bomb doors without bombs
+        if unopened_bomb > 0 and not state.has_bomb:
+            h += door_scale * 15
+        
+        # MISSING FEATURE FIX: Penalty for element/water tiles without ladder (KEY_ITEM)
+        if len(element_tiles) > 0 and not state.has_item:
+            h += door_scale * 15
 
         if mode == "completionist":
             remaining_pickups = len([p for p in self.pickup_positions if p not in state.collected_items])

@@ -65,9 +65,8 @@ if DEBUG_SOLVER_FLOW:
     logger.setLevel(logging.DEBUG)
     logger.warning('DEBUG: KLTN_DEBUG_SOLVER_FLOW=1 - Verbose solver logging enabled')
 
-# Import simulation components
-
-from simulation.validator import (
+# Import simulation components (use new canonical paths)
+from src.simulation.validator import (
     ZeldaLogicEnv, 
     ZeldaValidator, 
     StateSpaceAStar,
@@ -81,8 +80,8 @@ from simulation.validator import (
     WALKABLE_IDS
 )
 
-# Local matcher for topology repair
-from Data.zelda_core import RoomGraphMatcher
+# Local matcher for topology repair (use new canonical path)
+from src.data.zelda_core import RoomGraphMatcher
 
 # Try to import Pygame
 # NOTE: Importing pygame does NOT create a window - windows are only created
@@ -150,7 +149,7 @@ def _convert_diagonal_to_4dir(path, grid=None):
     # Define obstacle tile IDs that intermediate positions should avoid
     # Import here to avoid circular imports
     try:
-        from simulation.validator import SEMANTIC_PALETTE, BLOCKING_IDS, WATER_IDS
+        from src.simulation.validator import SEMANTIC_PALETTE, BLOCKING_IDS, WATER_IDS
         obstacle_ids = BLOCKING_IDS | WATER_IDS
     except ImportError:
         # Fallback: water=40, wall=2, void=0
@@ -204,16 +203,24 @@ def _convert_diagonal_to_4dir(path, grid=None):
     
     return converted
 
-def _solve_in_subprocess(grid, start_pos, goal_pos, algorithm_idx, feature_flags, priority_options):
+def _solve_in_subprocess(grid, start_pos, goal_pos, algorithm_idx, feature_flags, priority_options,
+                         graph=None, room_to_node=None, room_positions=None, node_to_room=None):
     """Compute a path for a grid in a separate process and return a picklable dict.
 
-    Arguments: grid may be an ndarray-like or nested lists. The function re-creates a ZeldaLogicEnv locally
-    inside the child process and runs the same solver logic used on the main thread.
+    Arguments: 
+        grid: may be an ndarray-like or nested lists
+        graph: Optional NetworkX DiGraph for room connectivity (enables stair traversal)
+        room_to_node: Optional mapping of room positions to graph nodes
+        room_positions: Optional mapping of room positions to pixel offsets
+        node_to_room: Optional mapping of graph nodes to room positions (includes virtual nodes)
+    
+    The function re-creates a ZeldaLogicEnv locally inside the child process and runs 
+    the same solver logic used on the main thread.
     """
     try:
         # Re-import heavy modules inside child process
-        from simulation.validator import ZeldaLogicEnv, StateSpaceAStar, SEMANTIC_PALETTE
-        from Data.zelda_core import DungeonSolver, ValidationMode
+        from src.simulation.validator import ZeldaLogicEnv, StateSpaceAStar, SEMANTIC_PALETTE
+        from src.data.zelda_core import DungeonSolver, ValidationMode
         import time
 
         # If a NumPy-like file path was passed earlier, caller will have loaded it; ensure grid is ndarray
@@ -226,7 +233,10 @@ def _solve_in_subprocess(grid, start_pos, goal_pos, algorithm_idx, feature_flags
             # If numpy not available or conversion failed, keep original
             grid_arr = grid
 
-        env = ZeldaLogicEnv(grid_arr, render_mode=False)
+        # CRITICAL: Pass graph connectivity data to enable stair traversal
+        env = ZeldaLogicEnv(grid_arr, render_mode=False, graph=graph, 
+                            room_to_node=room_to_node, room_positions=room_positions,
+                            node_to_room=node_to_room)
 
         result = {
             'success': False,
@@ -260,11 +270,18 @@ def _solve_in_subprocess(grid, start_pos, goal_pos, algorithm_idx, feature_flags
         return {'success': False, 'path': None, 'teleports': 0, 'solver_result': None, 'message': f'Child failed: {e}'}
 
 
-def _run_solver_and_dump(grid_or_path, start_pos, goal_pos, algorithm_idx, feature_flags, priority_options, out_path):
+def _run_solver_and_dump(grid_or_path, start_pos, goal_pos, algorithm_idx, feature_flags, priority_options, out_path,
+                         graph=None, room_to_node=None, room_positions=None, node_to_room=None):
     """Top-level helper to run solver and pickle the result to disk.
 
     This must be module-level so it is picklable by multiprocessing on Windows.
     `grid_or_path` may be a nested list (legacy) or a filesystem path to a .npy file.
+    
+    Args:
+        graph: Optional NetworkX DiGraph for room connectivity
+        room_to_node: Optional mapping of room positions to graph nodes
+        room_positions: Optional mapping of room positions to pixel offsets
+        node_to_room: Optional mapping of graph nodes to room positions (includes virtual nodes)
     """
     import sys
     # Subprocess logging - write to stderr since stdout may not be visible
@@ -301,7 +318,9 @@ def _run_solver_and_dump(grid_or_path, start_pos, goal_pos, algorithm_idx, featu
         grid = grid_or_path
 
     _log('Calling _solve_in_subprocess...')
-    res = _solve_in_subprocess(grid, start_pos, goal_pos, algorithm_idx, feature_flags, priority_options)
+    res = _solve_in_subprocess(grid, start_pos, goal_pos, algorithm_idx, feature_flags, priority_options,
+                               graph=graph, room_to_node=room_to_node, room_positions=room_positions,
+                               node_to_room=node_to_room)
     
     path_len = len(res.get('path', []) or []) if res else 0
     _log(f'Solver returned: success={res.get("success") if res else None}, path_len={path_len}')
@@ -320,7 +339,8 @@ def _run_solver_and_dump(grid_or_path, start_pos, goal_pos, algorithm_idx, featu
             pass
 
 
-def _run_preview_and_dump(grid_or_path, start_pos, goal_pos, algorithm_idx, feature_flags, priority_options, out_path):
+def _run_preview_and_dump(grid_or_path, start_pos, goal_pos, algorithm_idx, feature_flags, priority_options, out_path,
+                          graph=None, room_to_node=None, room_positions=None, node_to_room=None):
     """Lightweight preview runner that writes a short preview result quickly.
 
     Runs in a separate process to avoid blocking the GUI. Attempts a fast StateSpaceAStar
@@ -336,8 +356,11 @@ def _run_preview_and_dump(grid_or_path, start_pos, goal_pos, algorithm_idx, feat
         except Exception:
             pass
 
-        # Use the shared helper
-        res = _solve_in_subprocess(grid, start_pos, goal_pos, algorithm_idx, feature_flags, {**priority_options, 'ara_weight': priority_options.get('ara_weight', 1.0)})
+        # Use the shared helper with graph data for stair traversal
+        res = _solve_in_subprocess(grid, start_pos, goal_pos, algorithm_idx, feature_flags, 
+                                   {**priority_options, 'ara_weight': priority_options.get('ara_weight', 1.0)},
+                                   graph=graph, room_to_node=room_to_node, room_positions=room_positions,
+                                   node_to_room=node_to_room)
         # If result is heavy, we can trim it to only include path and nodes
         out = {'success': res.get('success', False), 'path': res.get('path'), 'solver_result': res.get('solver_result', {}), 'message': res.get('message')}
         try:
@@ -3320,6 +3343,7 @@ class ZeldaGUI:
             graph = current_dungeon.graph
             room_to_node = current_dungeon.room_to_node
             room_positions = current_dungeon.room_positions
+            node_to_room = getattr(current_dungeon, 'node_to_room', None)
             
             # === PLACE ITEMS FROM GRAPH NODE ATTRIBUTES INTO GRID ===
             # Keys are stored in graph nodes (has_key=True) but not in the grid
@@ -3331,9 +3355,11 @@ class ZeldaGUI:
             graph = None
             room_to_node = None
             room_positions = None
+            node_to_room = None
         
         self.env = ZeldaLogicEnv(grid, render_mode=False, graph=graph, 
-                                  room_to_node=room_to_node, room_positions=room_positions)
+                                  room_to_node=room_to_node, room_positions=room_positions,
+                                  node_to_room=node_to_room)
         # Defer heavy solver initialization until actually needed (pressing SPACE)
         self.solver = None
         self.auto_path = []
@@ -4859,7 +4885,9 @@ class ZeldaGUI:
                                 self.preview_overlay_visible = True
                                 logger.debug('Preview result: setting preview_overlay_visible=True (preview has path)')
                                 try:
-                                    self.path_preview_dialog = PathPreviewDialog(path=self.auto_path, env=self.env, solver_result=res.get('solver_result', {}), speed_multiplier=self.speed_multiplier)
+                                    # Use (x or {}) pattern to handle None values
+                                    solver_result_preview = (res.get('solver_result') or {}) if res else {}
+                                    self.path_preview_dialog = PathPreviewDialog(path=self.auto_path, env=self.env, solver_result=solver_result_preview, speed_multiplier=self.speed_multiplier)
                                 except Exception:
                                     self.path_preview_dialog = None
                                 self._set_message('Preview ready (sidebar)')
@@ -4929,10 +4957,13 @@ class ZeldaGUI:
                                 with open(out, 'rb') as f:
                                     res = pickle.load(f)
                                 path_len = len(res.get('path', []) or []) if res else 0
+                                # CRITICAL FIX: Use (x or {}) pattern to handle None values
+                                # res.get('solver_result', {}) returns None if key exists with None value
+                                solver_result_safe = (res.get('solver_result') or {}) if res else {}
                                 logger.info('SOLVER: Result loaded, path_len=%d, success=%s, keys=%s',
                                             path_len,
                                             res.get('success') if res else None,
-                                            res.get('solver_result', {}).get('keys_used', 'N/A') if res else 'N/A')
+                                            solver_result_safe.get('keys_used', 'N/A'))
                             else:
                                 logger.warning('SOLVER: Output file missing or path is None: %s', out)
                         except Exception as e:
@@ -4943,7 +4974,8 @@ class ZeldaGUI:
                             try:
                                 if res.get('success') and res.get('path'):
                                     self.auto_path = res.get('path')
-                                    solver_result = res.get('solver_result', {})
+                                    # Use (x or {}) pattern to handle None values
+                                    solver_result = (res.get('solver_result') or {}) if res else {}
                                     
                                     # CRITICAL: Verify path doesn't go through water
                                     water_violations = []
@@ -5218,7 +5250,7 @@ class ZeldaGUI:
                 # Prefer graph solver when available (fast on small graphs)
                 if hasattr(current_dungeon, 'graph') and current_dungeon.graph and not getattr(self, 'force_grid_algorithm', False):
                     try:
-                        from Data.zelda_core import DungeonSolver, ValidationMode
+                        from src.data.zelda_core import DungeonSolver, ValidationMode
                         solver = DungeonSolver()
                         result = solver.solve(current_dungeon, mode=ValidationMode.FULL)
                         if result.get('solvable', False):
@@ -5265,11 +5297,22 @@ class ZeldaGUI:
         def _spawn_preview_process_async():
             try:
                 import numpy as _np
+                cur = self.maps[self.current_map_idx]
+                grid_data = cur.global_grid if hasattr(cur, 'global_grid') else cur
+                # Extract graph connectivity for stair traversal
+                graph = getattr(cur, 'graph', None)
+                room_to_node = getattr(cur, 'room_to_node', None)
+                room_positions = getattr(cur, 'room_positions', None)
+                
                 fd, grid_file = tempfile.mkstemp(prefix='zave_preview_', suffix='.npy')
                 os.close(fd)
-                _np.save(grid_file, _np.array(self.maps[self.current_map_idx].global_grid if hasattr(self.maps[self.current_map_idx], 'global_grid') else self.maps[self.current_map_idx], dtype=_np.int64))
+                _np.save(grid_file, _np.array(grid_data, dtype=_np.int64))
                 preview_out = os.path.join(tempfile.gettempdir(), f'zave_preview_out_{int(time.time())}_{os.getpid()}.pkl')
-                proc = multiprocessing.Process(target=_run_preview_and_dump, args=(grid_file, tuple(self.env.start_pos), tuple(self.env.goal_pos), getattr(self, 'algorithm_idx', 0), dict(self.feature_flags), {}, preview_out), daemon=True)
+                proc = multiprocessing.Process(
+                    target=_run_preview_and_dump, 
+                    args=(grid_file, tuple(self.env.start_pos), tuple(self.env.goal_pos), getattr(self, 'algorithm_idx', 0), dict(self.feature_flags), {}, preview_out),
+                    kwargs={'graph': graph, 'room_to_node': room_to_node, 'room_positions': room_positions},
+                    daemon=True)
                 logger.debug('Starting preview process for map %s -> outfile=%s gridfile=%s', self.current_map_idx, preview_out, grid_file)
                 proc.start()
                 logger.debug('Preview process started pid=%s alive=%s', getattr(proc,'pid',None), proc.is_alive())
@@ -5456,8 +5499,17 @@ class ZeldaGUI:
         cur = self.maps[self.current_map_idx]
         if hasattr(cur, 'global_grid'):
             grid_arr = cur.global_grid
+            # Extract graph connectivity data for stair traversal
+            graph = getattr(cur, 'graph', None)
+            room_to_node = getattr(cur, 'room_to_node', None)
+            room_positions = getattr(cur, 'room_positions', None)
+            node_to_room = getattr(cur, 'node_to_room', None)
         else:
             grid_arr = cur
+            graph = None
+            room_to_node = None
+            room_positions = None
+            node_to_room = None
         
         if not self.env or not getattr(self.env, 'start_pos', None) or not getattr(self.env, 'goal_pos', None):
             self._set_message('Start/goal not defined for this map')
@@ -5477,8 +5529,10 @@ class ZeldaGUI:
         logger.info('DEBUG_SYNC: Calling _solve_in_subprocess with start=%s, goal=%s', start, goal)
         
         try:
-            # Call solver directly in main thread
-            result = _solve_in_subprocess(grid_arr, start, goal, alg_idx, flags, priority_options)
+            # Call solver directly in main thread with graph data for stair traversal
+            result = _solve_in_subprocess(grid_arr, start, goal, alg_idx, flags, priority_options,
+                                          graph=graph, room_to_node=room_to_node, room_positions=room_positions,
+                                          node_to_room=node_to_room)
             
             logger.info('DEBUG_SYNC: Solver returned: success=%s, path_len=%d',
                         result.get('success'),
@@ -5604,8 +5658,17 @@ class ZeldaGUI:
         cur = self.maps[self.current_map_idx]
         if hasattr(cur, 'global_grid'):
             grid_arr = cur.global_grid
+            # Extract graph connectivity data for stair traversal
+            graph = getattr(cur, 'graph', None)
+            room_to_node = getattr(cur, 'room_to_node', None)
+            room_positions = getattr(cur, 'room_positions', None)
+            node_to_room = getattr(cur, 'node_to_room', None)
         else:
             grid_arr = cur
+            graph = None
+            room_to_node = None
+            room_positions = None
+            node_to_room = None
         # Ensure start/goal defined
         if not self.env or not getattr(self.env, 'start_pos', None) or not getattr(self.env, 'goal_pos', None):
             self._set_message('Start/goal not defined for this map')
@@ -5675,7 +5738,10 @@ class ZeldaGUI:
                 # Prefer passing a grid file path to avoid large pickle overhead
                 grid_arg = grid_file if grid_file else grid_arr
                 logger.info('SOLVER: Creating subprocess with gridfile=%s, outfile=%s', grid_file, out_file)
-                proc = multiprocessing.Process(target=_run_solver_and_dump, args=(grid_arg, start, goal, alg_idx, flags, priority_options, out_file), daemon=True)
+                proc = multiprocessing.Process(target=_run_solver_and_dump, 
+                                               args=(grid_arg, start, goal, alg_idx, flags, priority_options, out_file),
+                                               kwargs={'graph': graph, 'room_to_node': room_to_node, 'room_positions': room_positions, 'node_to_room': node_to_room},
+                                               daemon=True)
                 proc.start()
                 logger.info('SOLVER: Subprocess started pid=%s, is_alive=%s', getattr(proc,'pid',None), proc.is_alive())
                 self.solver_proc = proc
@@ -5696,7 +5762,10 @@ class ZeldaGUI:
                 def _thread_fallback():
                     try:
                         # Use grid_arr (not grid which doesn't exist in this scope)
-                        res = _solve_in_subprocess(grid_arr, start, goal, alg_idx, flags, priority_options)
+                        # Pass graph connectivity for stair traversal
+                        res = _solve_in_subprocess(grid_arr, start, goal, alg_idx, flags, priority_options,
+                                                   graph=graph, room_to_node=room_to_node, room_positions=room_positions,
+                                                   node_to_room=node_to_room)
                         logger.info('SOLVER: Thread fallback completed, success=%s', res.get('success') if res else None)
                         # write fallback output
                         try:
@@ -7396,7 +7465,7 @@ class ZeldaGUI:
                 # D* Lite special-case: use D* Lite implementation
                 if name == 'D* Lite':
                     try:
-                        from simulation.dstar_lite import DStarLiteSolver
+                        from src.simulation.dstar_lite import DStarLiteSolver
                         start_state = GameState(position=self.env.start_pos, opened_doors=self.env.state.opened_doors.copy() if hasattr(self.env, 'state') else set())
                         ds = DStarLiteSolver(self.env)
                         success, path, nodes = ds.solve(start_state)
@@ -7412,7 +7481,7 @@ class ZeldaGUI:
                     try:
                         start_state = self.env.get_state() if hasattr(self.env, 'get_state') else GameState(position=self.env.start_pos)
                         try:
-                            from simulation.validator import StateSpaceAStar
+                            from src.simulation.validator import StateSpaceAStar
                             temp_solver = self.solver if self.solver is not None else StateSpaceAStar(self.env)
                         except Exception:
                             temp_solver = self.solver
@@ -7481,11 +7550,11 @@ class ZeldaGUI:
     def _map_elites_worker(self, maps, n_samples: int, resolution: int):
         """Background worker implementing MAP-Elites on a set of pre-loaded maps.
 
-        This function uses the lightweight `simulation.map_elites` helper and the
+        This function uses the lightweight `src.simulation.map_elites` helper and the
         built-in `DungeonSolver` for validation.
         """
         try:
-            from simulation.map_elites import run_map_elites_on_maps, plot_heatmap
+            from src.simulation.map_elites import run_map_elites_on_maps, plot_heatmap
             evaluator, occ = run_map_elites_on_maps(maps, resolution=resolution)
             # Try to produce a plot if plotting backend available
             try:
@@ -9489,7 +9558,7 @@ class ZeldaGUI:
 def load_maps_from_adapter():
     """Load processed maps from data adapter using new zelda_core - ALL 18 variants."""
     try:
-        from Data.zelda_core import ZeldaDungeonAdapter, DungeonSolver
+        from src.data.zelda_core import ZeldaDungeonAdapter, DungeonSolver
         from pathlib import Path
         
         data_root = Path(__file__).parent / "Data" / "The Legend of Zelda"
