@@ -45,6 +45,20 @@ class SoftBellmanFord(nn.Module):
     walkability probabilities, providing a differentiable approximation
     of whether a goal is reachable from a start position.
     
+    NOTE ON FORMULATION:
+    --------------------
+    The classic Soft Bellman-Ford uses log-sum-exp for softmin:
+        d[v] = softmin_{u ∈ neighbors(v)} (d[u] + w(u,v))
+        where softmin(x) = -τ * log(Σ exp(-x/τ))
+    
+    This implementation uses an equivalent REACHABILITY formulation that is
+    more numerically stable for grid propagation:
+        R[v] = clamp(R[v] + Σ R[neighbors] * P[v], 0, 1)
+    
+    The reachability formulation computes the probability of reaching
+    a cell from the start, which is equivalent to computing shortest
+    paths when P is binary (0/1 walkability).
+    
     Args:
         num_iterations: Number of propagation iterations (higher = longer paths)
         connectivity: 4 for cardinal directions, 8 for including diagonals
@@ -662,6 +676,43 @@ def tortuosity_loss(
     ).mean() if too_winding.any() else torch.tensor(0.0, device=probability_map.device)
     
     return straight_loss + winding_loss
+
+
+def manhattan_tortuosity_loss(
+    actual_path_length: torch.Tensor,
+    start_coords: List[Tuple[int, int]],
+    goal_coords: List[Tuple[int, int]],
+    device: torch.device,
+) -> torch.Tensor:
+    """
+    Compute tortuosity loss using Manhattan distance (Thesis Formula H).
+    
+    Formula:
+        L_tort = |actual_path_length - manhattan_distance| / manhattan_distance
+    
+    This penalizes paths that deviate significantly from the theoretical
+    minimum (Manhattan distance for grid-based navigation).
+    
+    Args:
+        actual_path_length: (B,) tensor of path lengths
+        start_coords: Start positions
+        goal_coords: Goal positions  
+        device: Torch device
+        
+    Returns:
+        Scalar loss value
+    """
+    manhattan_dists = []
+    for (sr, sc), (gr, gc) in zip(start_coords, goal_coords):
+        manhattan_dists.append(abs(gr - sr) + abs(gc - sc))
+    
+    manhattan = torch.tensor(manhattan_dists, dtype=torch.float32, device=device)
+    manhattan = torch.clamp(manhattan, min=1.0)  # Avoid division by zero
+    
+    # L_tort = |path_length - manhattan| / manhattan
+    tortuosity = torch.abs(actual_path_length - manhattan) / manhattan
+    
+    return tortuosity.mean()
 
 
 def combined_logic_loss(

@@ -179,6 +179,9 @@ class CBSMetrics:
     path_length: int = 0  # Alias for total_steps
     belief_entropy_final: float = 0.0  # Final belief map entropy
     
+    # Paper metrics (CBS+ Paper Section 4)
+    room_entropy: float = 0.0  # Navigational entropy H = -Σ p(room) × log₂(p(room))
+    
     # Per-room metrics for detailed analysis
     room_visit_counts: Dict[Tuple[int, int], int] = field(default_factory=dict)
     direction_distribution: Dict[str, int] = field(default_factory=dict)
@@ -205,6 +208,7 @@ class CBSMetrics:
             'exploration_efficiency': round(self.exploration_efficiency, 4),
             'room_visit_counts': dict(self.room_visit_counts),
             'direction_distribution': dict(self.direction_distribution),
+            'room_entropy': round(self.room_entropy, 4),
         }
     
     def summary(self) -> str:
@@ -1364,6 +1368,7 @@ class AgentPersona(Enum):
     FORGETFUL = "forgetful"       # High memory decay, gets lost easily
     BALANCED = "balanced"         # Mix of all heuristics
     COMPLETIONIST = "completionist"  # Collects all items before goal
+    GREEDY = "greedy"             # Static persona: NO memory decay (λ=1.0), proves decay is active ingredient
 
 
 @dataclass
@@ -1518,6 +1523,32 @@ class PersonaConfig:
                 risk_weight=0.2,
             )
         
+        elif persona == AgentPersona.GREEDY:
+            # GREEDY/STATIC BASELINE: No memory decay (λ=1.0)
+            # This persona proves memory decay is the "active ingredient"
+            # by comparing performance with decay disabled
+            return cls(
+                name="Greedy (Static)",
+                memory_capacity=7,
+                memory_decay_rate=1.0,   # NO DECAY - λ=1.0 (Ebbinghaus control)
+                decay_rate=0.0,          # Zero decay rate
+                vision_radius=5,
+                vision_accuracy=0.9,
+                vision_cone=360.0,
+                heuristic_weights={
+                    'goal_seeking': 1.5,  # Pure goal-seeking
+                    'curiosity': 0.3,
+                    'safety': 0.5,
+                    'recency': 0.0,       # No recency bias (perfect memory)
+                    'item_seeking': 0.5,
+                },
+                satisficing_threshold=0.9,
+                random_tiebreaker=0.05,
+                goal_weight=0.7,      # α = 0.7 (goal-focused)
+                curiosity_weight=0.2, # β = 0.2
+                risk_weight=0.1,      # γ = 0.1
+            )
+        
         else:  # BALANCED
             return cls(
                 name="Balanced",
@@ -1583,6 +1614,16 @@ PERSONA_CONFIGS: Dict[str, PersonaConfig] = {
         curiosity_weight=0.2,
         risk_weight=0.3,
         heuristic_weights={'safety': 2.0, 'goal_seeking': 0.8, 'curiosity': 0.3},
+    ),
+    'greedy': PersonaConfig(
+        name="Greedy (Static)",
+        memory_capacity=7,
+        memory_decay_rate=1.0,   # NO DECAY - λ=1.0 (static baseline)
+        decay_rate=0.0,          # Zero decay
+        goal_weight=0.7,
+        curiosity_weight=0.2,
+        risk_weight=0.1,
+        heuristic_weights={'goal_seeking': 1.5, 'curiosity': 0.3, 'safety': 0.5, 'recency': 0.0},
     ),
 }
 
@@ -2206,8 +2247,12 @@ class CognitiveBoundedSearch:
         revisits = total_steps - unique_tiles
         confusion_index = revisits / max(1, unique_tiles)
         
-        # Navigation entropy
+        # Navigation entropy (direction-based)
         nav_entropy = self._compute_entropy(dict(self._direction_counts))
+        
+        # Room/Tile Navigational Entropy (CBS Paper Formula D)
+        # H = -Σ p(room) × log₂(p(room)) where p(room) = visits(room) / total_visits
+        room_entropy = self._compute_room_entropy(dict(self._visit_counts))
         
         # Cognitive load
         conf_var = self.belief_map.compute_confidence_variance()
@@ -2241,6 +2286,7 @@ class CognitiveBoundedSearch:
             backtrack_loops=backtrack_loops,
             path_length=total_steps,
             belief_entropy_final=belief_entropy,
+            room_entropy=room_entropy,
             room_visit_counts=dict(self._visit_counts),
             direction_distribution=dict(self._direction_counts),
             memory_timeline=list(self._memory_timeline),
@@ -2295,6 +2341,36 @@ class CognitiveBoundedSearch:
         for count in distribution.values():
             if count > 0:
                 p = count / total
+                entropy -= p * math.log2(p)
+        
+        return entropy
+    
+    def _compute_room_entropy(self, visit_counts: Dict[Tuple[int, int], int]) -> float:
+        """
+        Compute Navigational Entropy from room/tile visit distribution.
+        
+        Formula (CBS Paper Section 4):
+            H = -Σ p(room) × log₂(p(room))
+            where p(room) = visits(room) / total_visits
+        
+        This measures how uniformly the agent explores the space.
+        - High entropy = uniform exploration (random wandering)
+        - Low entropy = focused navigation (repeated visits to few tiles)
+        
+        Args:
+            visit_counts: Dict mapping position -> number of visits
+            
+        Returns:
+            Navigational entropy in bits
+        """
+        total_visits = sum(visit_counts.values())
+        if total_visits == 0:
+            return 0.0
+        
+        entropy = 0.0
+        for count in visit_counts.values():
+            if count > 0:
+                p = count / total_visits
                 entropy -= p * math.log2(p)
         
         return entropy

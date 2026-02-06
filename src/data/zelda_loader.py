@@ -69,6 +69,7 @@ class ZeldaDungeonDataset(Dataset):
     1. Directory of .txt files (ASCII format)
     2. VGLC format via ZeldaDungeonAdapter
     3. Pre-loaded numpy arrays
+    4. Paired NPZ format with (image, graph) pairs
     
     Args:
         data_dir: Directory containing dungeon files or VGLC data
@@ -76,9 +77,11 @@ class ZeldaDungeonDataset(Dataset):
         use_vglc: Whether to use VGLC format via ZeldaDungeonAdapter
         normalize: Whether to normalize values to [0, 1]
         target_size: Target (height, width) for resizing, None for original
+        load_graphs: Whether to load graph data for dual-stream training
         
     Returns:
         torch.Tensor of shape (1, H, W) representing the dungeon grid
+        OR (image_tensor, graph_dict) if load_graphs=True
     """
     
     def __init__(
@@ -89,6 +92,7 @@ class ZeldaDungeonDataset(Dataset):
         normalize: bool = True,
         target_size: Optional[Tuple[int, int]] = None,
         pad_to_max: bool = True,  # Pad all samples to max size for batching
+        load_graphs: bool = False,  # NEW: Load graph data for dual-stream
     ):
         self.data_dir = Path(data_dir)
         self.transform = transform
@@ -96,10 +100,14 @@ class ZeldaDungeonDataset(Dataset):
         self.target_size = target_size
         self.use_vglc = use_vglc and VGLC_AVAILABLE
         self.pad_to_max = pad_to_max
+        self.load_graphs = load_graphs
         
         # Track max dimensions for padding
         self.max_h = 0
         self.max_w = 0
+        
+        # Graph data storage
+        self.graphs = [] if load_graphs else None
         
         if self.use_vglc:
             self._init_vglc()
@@ -138,6 +146,11 @@ class ZeldaDungeonDataset(Dataset):
                     grid = stitched.global_grid
                     self.samples.append(grid.astype(np.float32))
                     
+                    # Extract graph if load_graphs is enabled
+                    if self.load_graphs:
+                        graph = self._extract_graph(dungeon)
+                        self.graphs.append(graph)
+                    
                     # Track max dimensions
                     h, w = grid.shape
                     self.max_h = max(self.max_h, h)
@@ -149,17 +162,55 @@ class ZeldaDungeonDataset(Dataset):
                     
         logger.info(f"Loaded {len(self.samples)} VGLC dungeons (max size: {self.max_h}x{self.max_w})")
     
+    def _extract_graph(self, dungeon) -> dict:
+        """Extract graph structure from dungeon for GNN training."""
+        nodes = []
+        edges = []
+        room_to_idx = {}
+        
+        # Create node for each room
+        for idx, (coord, room) in enumerate(dungeon.rooms.items()):
+            room_to_idx[coord] = idx
+            
+            # Node features: [has_key, has_boss_key, has_triforce, has_start, has_enemy, door_count]
+            node_features = [
+                float(np.any(room.grid == 30)),  # KEY_SMALL
+                float(np.any(room.grid == 31)),  # KEY_BOSS
+                float(np.any(room.grid == 22)),  # TRIFORCE
+                float(np.any(room.grid == 21)),  # START
+                float(np.any(room.grid == 20)),  # ENEMY
+                float(np.sum((room.grid >= 10) & (room.grid <= 15))),  # door_count
+            ]
+            nodes.append(node_features)
+        
+        # Create edges based on adjacency
+        for coord in dungeon.rooms:
+            src_idx = room_to_idx[coord]
+            for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                neighbor = (coord[0] + dr, coord[1] + dc)
+                if neighbor in room_to_idx:
+                    dst_idx = room_to_idx[neighbor]
+                    edges.append([src_idx, dst_idx])
+        
+        return {
+            'node_features': np.array(nodes, dtype=np.float32),
+            'edge_index': np.array(edges, dtype=np.int64).T if edges else np.zeros((2, 0), dtype=np.int64),
+            'num_nodes': len(nodes),
+            'num_edges': len(edges),
+        }
+    
     def __len__(self) -> int:
         if self.samples is not None:
             return len(self.samples)
         return len(self.files)
     
-    def __getitem__(self, idx: int) -> torch.Tensor:
+    def __getitem__(self, idx: int) -> Union[torch.Tensor, Tuple[torch.Tensor, dict]]:
         """
         Get a single dungeon grid as a tensor.
         
         Returns:
-            torch.Tensor of shape (1, H, W)
+            If load_graphs=False: torch.Tensor of shape (1, H, W)
+            If load_graphs=True: (image_tensor, graph_dict) tuple
         """
         if self.samples is not None:
             grid = self.samples[idx]
@@ -186,6 +237,16 @@ class ZeldaDungeonDataset(Dataset):
         # Apply custom transform
         if self.transform:
             tensor_map = self.transform(tensor_map)
+        
+        # Return with graph if requested
+        if self.load_graphs and self.graphs is not None:
+            graph = self.graphs[idx]
+            return tensor_map, {
+                'node_features': torch.tensor(graph['node_features'], dtype=torch.float32),
+                'edge_index': torch.tensor(graph['edge_index'], dtype=torch.long),
+                'num_nodes': graph['num_nodes'],
+                'num_edges': graph['num_edges'],
+            }
             
         return tensor_map
     
