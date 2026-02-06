@@ -27,7 +27,8 @@ Usage:
 """
 
 import logging
-from typing import List, Tuple, Optional, Union
+import math
+from typing import List, Tuple, Optional, Union, Dict
 
 import torch
 import torch.nn as nn
@@ -428,6 +429,292 @@ def diversity_regularized_solvability_loss(
     diversity_loss = -variance  # Negative because we want to maximize variance
     
     return solvability_weight * solv_loss + diversity_weight * diversity_loss
+
+
+# =============================================================================
+# TORTUOSITY LOSS
+# =============================================================================
+
+class DifferentiableTortuosity(nn.Module):
+    """
+    Differentiable Tortuosity Computation for Dungeon Paths.
+    
+    Tortuosity measures how "winding" a path is:
+        tortuosity = path_length / euclidean_distance
+    
+    A straight path has tortuosity = 1.0
+    A winding path has tortuosity > 1.0
+    
+    For good dungeon design, we want moderate tortuosity:
+    - Too straight (≈1.0): Boring, trivial navigation
+    - Too winding (>3.0): Frustrating, confusing
+    - Ideal range: 1.5 - 2.5 for engaging exploration
+    
+    The loss penalizes paths that are too straight:
+        L_tortuosity = -log(tortuosity) for tortuosity < target
+        L_tortuosity = log(tortuosity / target) for tortuosity > max_target
+    
+    This encourages interesting, non-trivial paths.
+    """
+    
+    def __init__(
+        self,
+        num_iterations: int = 50,
+        target_tortuosity: float = 1.5,
+        max_tortuosity: float = 3.0,
+        epsilon: float = 1e-6,
+    ):
+        super().__init__()
+        self.num_iterations = num_iterations
+        self.target_tortuosity = target_tortuosity
+        self.max_tortuosity = max_tortuosity
+        self.epsilon = epsilon
+        
+        # Cardinal movement kernel for path length estimation
+        cardinal_kernel = torch.tensor([
+            [0.0, 1.0, 0.0],
+            [1.0, 0.0, 1.0],
+            [0.0, 1.0, 0.0]
+        ]).unsqueeze(0).unsqueeze(0)
+        self.register_buffer('kernel', cardinal_kernel / 4.0)
+    
+    def compute_soft_path_length(
+        self,
+        probability_map: torch.Tensor,
+        start_coords: List[Tuple[int, int]],
+        goal_coords: List[Tuple[int, int]],
+    ) -> torch.Tensor:
+        """
+        Compute differentiable approximation of shortest path length.
+        
+        Uses value iteration to estimate the minimum number of steps
+        needed to reach the goal from the start.
+        
+        Args:
+            probability_map: (B, 1, H, W) walkability in [0, 1]
+            start_coords: List of start (row, col)
+            goal_coords: List of goal (row, col)
+            
+        Returns:
+            (B,) estimated path lengths
+        """
+        B, C, H, W = probability_map.shape
+        device = probability_map.device
+        
+        # Initialize distance map with large values
+        # D[i,j] = estimated distance from goal to (i,j)
+        D = torch.ones_like(probability_map) * (H + W)  # Max possible
+        
+        # Set goal distance to 0
+        for i in range(B):
+            gr, gc = goal_coords[i]
+            gr = max(0, min(gr, H - 1))
+            gc = max(0, min(gc, W - 1))
+            D[i, 0, gr, gc] = 0.0
+        
+        # Value iteration (backward from goal)
+        for _ in range(self.num_iterations):
+            # Get neighbor distances (min distance + 1 step)
+            neighbor_dist = F.conv2d(D, self.kernel, padding=1)
+            
+            # Update distance: min of current and (neighbor + 1) * walkability
+            # Non-walkable cells maintain high distance
+            new_dist = neighbor_dist + 1.0
+            
+            # Weight by walkability (low walkability = high effective distance)
+            effective_dist = new_dist / (probability_map + self.epsilon)
+            
+            # Take minimum
+            D = torch.min(D, effective_dist)
+        
+        # Extract distance at start positions
+        path_lengths = []
+        for i in range(B):
+            sr, sc = start_coords[i]
+            sr = max(0, min(sr, H - 1))
+            sc = max(0, min(sc, W - 1))
+            path_lengths.append(D[i, 0, sr, sc])
+        
+        return torch.stack(path_lengths)
+    
+    def compute_euclidean_distance(
+        self,
+        start_coords: List[Tuple[int, int]],
+        goal_coords: List[Tuple[int, int]],
+        device: torch.device,
+    ) -> torch.Tensor:
+        """Compute Euclidean distance between start and goal."""
+        euclidean_dists = []
+        for (sr, sc), (gr, gc) in zip(start_coords, goal_coords):
+            dist = math.sqrt((gr - sr) ** 2 + (gc - sc) ** 2)
+            euclidean_dists.append(dist)
+        return torch.tensor(euclidean_dists, dtype=torch.float32, device=device)
+    
+    def forward(
+        self,
+        probability_map: torch.Tensor,
+        start_coords: List[Tuple[int, int]],
+        goal_coords: List[Tuple[int, int]],
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Compute tortuosity for paths in the dungeon.
+        
+        Args:
+            probability_map: (B, 1, H, W) walkability
+            start_coords: Start positions
+            goal_coords: Goal positions
+            
+        Returns:
+            (tortuosity, is_valid) where:
+                tortuosity: (B,) tortuosity values
+                is_valid: (B,) bool tensor indicating if path exists
+        """
+        device = probability_map.device
+        
+        # Compute path lengths
+        path_lengths = self.compute_soft_path_length(
+            probability_map, start_coords, goal_coords
+        )
+        
+        # Compute Euclidean distances
+        euclidean_dists = self.compute_euclidean_distance(
+            start_coords, goal_coords, device
+        )
+        
+        # Tortuosity = path_length / euclidean_distance
+        # Clamp to avoid division issues
+        euclidean_dists = torch.clamp(euclidean_dists, min=1.0)
+        tortuosity = path_lengths / euclidean_dists
+        
+        # Check validity (finite path length indicates reachable)
+        is_valid = path_lengths < (probability_map.shape[2] + probability_map.shape[3])
+        
+        return tortuosity, is_valid
+
+
+def tortuosity_loss(
+    probability_map: torch.Tensor,
+    start_coords: List[Tuple[int, int]],
+    goal_coords: List[Tuple[int, int]],
+    target_tortuosity: float = 1.5,
+    max_tortuosity: float = 3.0,
+    num_iterations: int = 50,
+) -> torch.Tensor:
+    """
+    Compute tortuosity loss to encourage interesting (non-straight) paths.
+    
+    Formula:
+        For tortuosity τ:
+        - If τ < target: loss = -log(τ / target)  (penalize straight paths)
+        - If τ > max: loss = log(τ / max)  (penalize overly winding paths)
+        - If target ≤ τ ≤ max: loss = 0  (ideal range)
+    
+    This encourages dungeons with moderately winding paths that
+    are engaging to navigate without being frustrating.
+    
+    Args:
+        probability_map: (B, 1, H, W) walkability probabilities
+        start_coords: Start positions
+        goal_coords: Goal positions
+        target_tortuosity: Minimum desired tortuosity (default: 1.5)
+        max_tortuosity: Maximum acceptable tortuosity (default: 3.0)
+        num_iterations: Iterations for path length computation
+        
+    Returns:
+        Scalar loss value
+        
+    Example:
+        >>> prob_map = torch.rand(4, 1, 16, 11)
+        >>> starts = [(2, 2)] * 4
+        >>> goals = [(13, 8)] * 4
+        >>> loss = tortuosity_loss(prob_map, starts, goals)
+        >>> print(f"Tortuosity loss: {loss.item():.4f}")
+    """
+    tort_module = DifferentiableTortuosity(
+        num_iterations=num_iterations,
+        target_tortuosity=target_tortuosity,
+        max_tortuosity=max_tortuosity,
+    )
+    tort_module = tort_module.to(probability_map.device)
+    
+    tortuosity, is_valid = tort_module(probability_map, start_coords, goal_coords)
+    
+    # Compute loss only for valid paths
+    if not is_valid.any():
+        return torch.tensor(1.0, device=probability_map.device, requires_grad=True)
+    
+    # Mask invalid paths
+    valid_tortuosity = tortuosity[is_valid]
+    
+    # Compute loss components
+    eps = 1e-6
+    
+    # Penalize paths that are too straight
+    too_straight = valid_tortuosity < target_tortuosity
+    straight_loss = -torch.log(
+        valid_tortuosity[too_straight] / target_tortuosity + eps
+    ).mean() if too_straight.any() else torch.tensor(0.0, device=probability_map.device)
+    
+    # Penalize paths that are too winding
+    too_winding = valid_tortuosity > max_tortuosity
+    winding_loss = torch.log(
+        valid_tortuosity[too_winding] / max_tortuosity + eps
+    ).mean() if too_winding.any() else torch.tensor(0.0, device=probability_map.device)
+    
+    return straight_loss + winding_loss
+
+
+def combined_logic_loss(
+    probability_map: torch.Tensor,
+    start_coords: List[Tuple[int, int]],
+    goal_coords: List[Tuple[int, int]],
+    solvability_weight: float = 1.0,
+    tortuosity_weight: float = 0.3,
+    target_tortuosity: float = 1.5,
+    logic_net: Optional['LogicNet'] = None,
+) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+    """
+    Combined loss for solvability + path quality.
+    
+    L_combined = α * L_solvability + β * L_tortuosity
+    
+    Args:
+        probability_map: (B, 1, H, W) walkability
+        start_coords: Start positions
+        goal_coords: Goal positions
+        solvability_weight: Weight for solvability term
+        tortuosity_weight: Weight for tortuosity term
+        target_tortuosity: Target minimum tortuosity
+        logic_net: Optional pre-created LogicNet
+        
+    Returns:
+        (total_loss, loss_dict) where loss_dict contains individual terms
+    """
+    # Create LogicNet if not provided
+    if logic_net is None:
+        logic_net = LogicNet(num_iterations=30)
+        logic_net = logic_net.to(probability_map.device)
+    
+    # Solvability
+    solvability_scores = logic_net(probability_map, start_coords, goal_coords)
+    solv_loss = solvability_loss(solvability_scores)
+    
+    # Tortuosity
+    tort_loss = tortuosity_loss(
+        probability_map, start_coords, goal_coords,
+        target_tortuosity=target_tortuosity,
+    )
+    
+    # Combined
+    total_loss = solvability_weight * solv_loss + tortuosity_weight * tort_loss
+    
+    loss_dict = {
+        'solvability_loss': solv_loss,
+        'tortuosity_loss': tort_loss,
+        'mean_solvability': solvability_scores.mean(),
+    }
+    
+    return total_loss, loss_dict
 
 
 # =============================================================================
