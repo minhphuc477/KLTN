@@ -72,7 +72,7 @@ def run_bench(
     # Extended headers for CBS+ metrics
     headers = [
         'map_id', 'solver', 'persona', 'success', 'path_length', 'steps', 
-        'states_explored', 'PER', 'entropy_final', 'replans', 'confusion_events',
+        'states_explored', 'PER', 'entropy_final', 'room_entropy', 'replans', 'confusion_events',
         'backtrack_loops', 'keys_collected', 'doors_opened', 'confusion_index',
         'cognitive_load', 'aha_latency', 'info_gain_total', 'timeout_flag',
         'confusion_ratio'
@@ -128,6 +128,7 @@ def run_bench(
                     'states_explored': states_a,
                     'PER': round(per_a, 3),
                     'entropy_final': 0.0,
+                    'room_entropy': 0.0,  # A* has no room entropy (optimal)
                     'replans': 0,
                     'confusion_events': 0,
                     'backtrack_loops': 0,
@@ -171,6 +172,7 @@ def run_bench(
                         'states_explored': states_c,
                         'PER': round(per_c, 3),
                         'entropy_final': round(metrics.belief_entropy_final, 3),
+                        'room_entropy': round(getattr(metrics, 'room_entropy', 0.0), 3),  # Navigational entropy
                         'replans': metrics.replans,
                         'confusion_events': metrics.confusion_events,
                         'backtrack_loops': metrics.backtrack_loops,

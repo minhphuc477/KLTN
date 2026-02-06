@@ -464,6 +464,17 @@ class CausalWFC:
             # Update game state
             self._update_game_state(cell.row, cell.col, tile_id)
             
+            # Path-guided constraint: verify start→goal connectivity is not blocked
+            # Check periodically (every 50 iterations) to avoid performance hit
+            if iteration > 0 and iteration % 50 == 0:
+                if not self._verify_path_connectivity(start_pos, goal_pos):
+                    logger.warning(f"Path blocked at iteration {iteration}, backtracking")
+                    self.contradictions += 1
+                    if not self._backtrack():
+                        logger.error("Cannot restore connectivity")
+                        break
+                    continue
+            
             # Propagate constraints
             self._propagate(cell.row, cell.col)
         
@@ -516,6 +527,61 @@ class CausalWFC:
             valid.add(tile_id)
         
         return valid
+    
+    def _verify_path_connectivity(
+        self,
+        start_pos: Tuple[int, int],
+        goal_pos: Tuple[int, int]
+    ) -> bool:
+        """
+        Verify that a path exists from start to goal using BFS.
+        
+        Path-guided constraint: ensures critical path is not blocked
+        by wall placements during WFC generation.
+        
+        Args:
+            start_pos: (row, col) start position
+            goal_pos: (row, col) goal position
+            
+        Returns:
+            True if path exists, False if blocked
+        """
+        from collections import deque
+        
+        # Build walkable set from current grid state
+        walkable = set()
+        for r in range(self.height):
+            for c in range(self.width):
+                cell = self.grid[r][c]
+                if not cell.is_collapsed:
+                    # Uncollapsed cells are potentially walkable
+                    walkable.add((r, c))
+                else:
+                    tile = self.tile_set.get_tile(cell.collapsed_tile)
+                    if tile and tile.tile_type not in (TileType.WALL,):
+                        walkable.add((r, c))
+        
+        # BFS from start to goal
+        if start_pos not in walkable and start_pos != goal_pos:
+            return False
+        if goal_pos not in walkable:
+            return False
+        
+        visited = {start_pos}
+        queue = deque([start_pos])
+        
+        while queue:
+            r, c = queue.popleft()
+            if (r, c) == goal_pos:
+                return True
+            
+            for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                nr, nc = r + dr, c + dc
+                if (nr, nc) in walkable and (nr, nc) not in visited:
+                    visited.add((nr, nc))
+                    queue.append((nr, nc))
+        
+        return False
     
     def _weighted_random_choice(self, tile_ids: Set[int]) -> int:
         """Choose a tile weighted by tile weights."""
