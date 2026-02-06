@@ -18,16 +18,22 @@ Usage:
     # Export processed data
     python main.py --dungeon 1 --export output.npz
 
-Author: KLTN Thesis Project
 """
 
 import argparse
 import sys
+import logging
 from pathlib import Path
 
-# Add project root to path
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# Project root path
 PROJECT_ROOT = Path(__file__).parent
-sys.path.insert(0, str(PROJECT_ROOT))
 
 # Import from the canonical source
 from Data.zelda_core import (
@@ -125,31 +131,49 @@ def run_pipeline(dungeon_num: int, variant: int = 1,
         Complete result dict
     """
     if verbose:
+        # User-facing output - keep print() for CLI summary
         print(f"\n{'='*60}")
         print(f"PIPELINE: Dungeon {dungeon_num} (Quest {variant})")
         print(f"{'='*60}")
     
     # Step 1: Load
+    logger.info("[STEP 1] Loading dungeon data...")
+    try:
+        dungeon = load_dungeon(dungeon_num, variant)
+    except FileNotFoundError as e:
+        logger.error(f"Dungeon data not found: {e}")
+        raise
+    except Exception as e:
+        logger.exception("Error loading dungeon")
+        raise
+    
     if verbose:
-        print("\n[STEP 1] Loading dungeon data...")
-    dungeon = load_dungeon(dungeon_num, variant)
-    if verbose:
+        print(f"\n[STEP 1] Loading dungeon data...")
         print(f"  ✓ Loaded {len(dungeon.rooms)} rooms")
         print(f"  ✓ Graph: {dungeon.graph.number_of_nodes()} nodes, {dungeon.graph.number_of_edges()} edges")
     
     # Step 2: Stitch
+    logger.info("[STEP 2] Stitching rooms...")
+    try:
+        stitched = stitch_dungeon(dungeon)
+    except Exception as e:
+        logger.exception("Error stitching dungeon")
+        raise
+        raise
+    
     if verbose:
-        print("\n[STEP 2] Stitching rooms...")
-    stitched = stitch_dungeon(dungeon)
-    if verbose:
+        print(f"\n[STEP 2] Stitching rooms...")
         print(f"  ✓ Global grid: {stitched.global_grid.shape}")
         print(f"  ✓ Start: {stitched.start_global}")
         print(f"  ✓ Triforce: {stitched.triforce_global}")
     
     # Step 3: Validate
-    if verbose:
-        print(f"\n[STEP 3] Validating solvability (mode: {mode})...")
-    result = validate_dungeon(stitched, mode=mode)
+    logger.info(f"[STEP 3] Validating solvability (mode: {mode})...")
+    try:
+        result = validate_dungeon(stitched, mode=mode)
+    except Exception as e:
+        logger.exception("Error validating dungeon")
+        raise
     
     if verbose:
         if result['solvable']:
@@ -199,7 +223,8 @@ def export_dungeon_data(dungeon: Dungeon, output_path: str):
         node_features=dungeon_data.node_features,
         **room_grids
     )
-    print(f"Exported to: {output_path}")
+    logger.info(f"Exported dungeon data to: {output_path}")
+    print(f"Exported to: {output_path}")  # User-facing output
 
 
 def main():
@@ -292,21 +317,54 @@ def main():
     # GUI if requested
     if args.gui:
         try:
-            # Import gui_runner dynamically
-            from gui_runner import ZeldaValidationGUI
-            import pygame
+            # Try new replay engine first
+            from src.visualization.replay_engine import DungeonReplayEngine, ReplayConfig
             
-            pygame.init()
-            gui = ZeldaValidationGUI()
+            stitched = result['stitched']
+            grid = stitched.global_grid
             
-            # Load the dungeon into GUI
-            gui.set_dungeon(result['stitched'], result['validation'])
-            gui.run()
+            # Get solution path from validation result
+            validation = result['validation']
+            solution_path = validation.get('path', [])
+            
+            # If no path from solver, try to solve again
+            if not solution_path and validation.get('solvable'):
+                from simulation.validator import ZeldaLogicEnv, StateSpaceAStar
+                env = ZeldaLogicEnv(grid, render_mode=False)
+                solver = StateSpaceAStar(env)
+                success, solution_path, _ = solver.solve()
+            
+            config = ReplayConfig(
+                window_title=f"ZAVE - Dungeon {args.dungeon} Variant {args.variant}",
+                show_minimap=True,
+                show_path_overlay=True,
+            )
+            
+            engine = DungeonReplayEngine(
+                dungeon_grid=grid,
+                solution_path=solution_path if solution_path else [],
+                config=config,
+                solver_result=validation
+            )
+            
+            engine.run()
             
         except ImportError as e:
-            print(f"\nGUI not available: {e}")
-            print("Make sure pygame is installed: pip install pygame")
+            # Fall back to old GUI
+            logger.warning(f"New visualization not available, using legacy GUI: {e}")
+            try:
+                from gui_runner import ZeldaGUI
+                import pygame
+                
+                pygame.init()
+                gui = ZeldaGUI([result['stitched']], [f"Dungeon {args.dungeon} Variant {args.variant}"])
+                gui.run()
+            except ImportError as e2:
+                logger.error(f"GUI not available - missing dependency: {e2}")
+                print(f"\nGUI not available: {e2}")
+                print("Make sure pygame is installed: pip install pygame")
         except Exception as e:
+            logger.exception("GUI error")
             print(f"\nGUI error: {e}")
 
 

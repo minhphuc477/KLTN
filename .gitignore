@@ -1,1 +1,42 @@
 .github
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*.pyc
+
+# Pytest cache
+.pytest_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Generated outputs
+output/
+*.pkl
+*.pth
+validation_report.json
+checkpoints/
+
+# Artifacts - generated demo outputs
+artifacts/demo/
+artifacts/visual_extracts_demo/
+
+# Editor / OS
+.vscode/
+.DS_Store
+*.swp
+*~
+
+# Build / packaging
+dist/
+build/
+*.egg-info/
+
+# Logs
+*.log
+
+# Jupyter checkpoints
+.ipynb_checkpoints/

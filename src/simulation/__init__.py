@@ -5,23 +5,40 @@ Validation and simulation components for Zelda dungeon analysis.
 
 This module contains:
 - validator: External validation suite (ZeldaValidator, ZeldaLogicEnv, etc.)
+- dstar_lite: D* Lite incremental replanning
+- multi_goal: Multi-goal pathfinding (TSP-style)
+- parallel_astar: Parallel A* search
+- solver_comparison: Solver benchmarking
+- map_elites: Quality-Diversity evaluation
 """
 
-# Re-export from the parent simulation module for convenience
-try:
-    from simulation.validator import (
-        ZeldaValidator,
-        ZeldaLogicEnv,
-        SanityChecker,
-        MetricsEngine,
-        DiversityEvaluator,
-        ValidationResult,
-        BatchValidationResult,
-    )
-except ImportError:
-    pass  # Allow import even if parent module not available
+# Re-export from local validator module
+from .validator import (
+    ZeldaValidator,
+    ZeldaLogicEnv,
+    SanityChecker,
+    MetricsEngine,
+    DiversityEvaluator,
+    ValidationResult,
+    BatchValidationResult,
+    StateSpaceAStar,
+    GameState,
+    ACTION_DELTAS,
+    SEMANTIC_PALETTE,
+    WALKABLE_IDS,
+    BLOCKING_IDS,
+    WATER_IDS,
+)
+
+# Re-export advanced solvers
+from .dstar_lite import DStarLiteSolver
+from .multi_goal import MultiGoalPathfinder
+from .parallel_astar import ParallelAStarSolver
+from .solver_comparison import SolverComparison
+from .map_elites import MAPElitesEvaluator, run_map_elites_on_maps, plot_heatmap
 
 __all__ = [
+    # Core validator components
     'ZeldaValidator',
     'ZeldaLogicEnv',
     'SanityChecker',
@@ -29,4 +46,19 @@ __all__ = [
     'DiversityEvaluator',
     'ValidationResult',
     'BatchValidationResult',
+    'StateSpaceAStar',
+    'GameState',
+    'ACTION_DELTAS',
+    'SEMANTIC_PALETTE',
+    'WALKABLE_IDS',
+    'BLOCKING_IDS',
+    'WATER_IDS',
+    # Advanced solvers
+    'DStarLiteSolver',
+    'MultiGoalPathfinder',
+    'ParallelAStarSolver',
+    'SolverComparison',
+    'MAPElitesEvaluator',
+    'run_map_elites_on_maps',
+    'plot_heatmap',
 ]
