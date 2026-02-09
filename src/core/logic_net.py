@@ -524,6 +524,9 @@ class LogicNet(nn.Module):
         temperature: float = 0.1,
         reach_weight: float = 1.0,
         lock_weight: float = 0.5,
+        # --- Phase 1D: Temperature annealing (Jang et al., 2017) ---
+        initial_temperature: float = 1.0,
+        final_temperature: float = 0.05,
     ):
         super().__init__()
         
@@ -531,6 +534,11 @@ class LogicNet(nn.Module):
         self.num_classes = num_classes
         self.reach_weight = reach_weight
         self.lock_weight = lock_weight
+        
+        # --- Phase 1D: Temperature annealing state ---
+        self.initial_temperature = initial_temperature
+        self.final_temperature = final_temperature
+        self.register_buffer('current_temperature', torch.tensor(initial_temperature))
         
         # Tile classification
         self.tile_classifier = TileClassifier(
@@ -565,6 +573,31 @@ class LogicNet(nn.Module):
             margin=1.0,
             temperature=temperature,
         )
+    
+    def update_temperature(self, progress: float):
+        """
+        Anneal soft-min temperature during training.
+        
+        Uses exponential decay from initial_temperature → final_temperature.
+        High temperature (start): smooth gradients, easy optimization.
+        Low temperature (end): sharp soft-min ≈ true shortest path.
+        
+        Follows Gumbel-Softmax annealing (Jang et al., 2017; Maddison et al., 2017).
+        
+        Args:
+            progress: Training progress in [0, 1] (0=start, 1=end)
+        """
+        progress = max(0.0, min(1.0, progress))
+        tau = self.initial_temperature * (
+            self.final_temperature / self.initial_temperature
+        ) ** progress
+        
+        self.current_temperature.fill_(tau)
+        
+        # Propagate to sub-modules
+        self.graph_pathfinder.temperature = tau
+        self.reachability.temperature = tau
+        self.key_lock.temperature = tau
     
     def forward(
         self,

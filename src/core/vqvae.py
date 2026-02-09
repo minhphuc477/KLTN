@@ -96,6 +96,11 @@ class VectorQuantizer(nn.Module):
         
         # Statistics tracking
         self.register_buffer('codebook_usage', torch.zeros(num_embeddings))
+        
+        # --- Phase 1B: Dead code reset tracking ---
+        self._reset_counter = 0
+        self._reset_interval = 100  # Reset dead codes every N batches
+        self._dead_threshold = 2    # Usage below this = "dead"
     
     def forward(
         self, 
@@ -219,6 +224,42 @@ class VectorQuantizer(nn.Module):
             self.embedding.weight.data = (
                 self.ema_embedding_sum / cluster_size_smoothed.unsqueeze(1)
             )
+            
+            # --- Phase 1B: Periodic dead code reset ---
+            self._reset_counter += 1
+            if self._reset_counter % self._reset_interval == 0:
+                self._reset_dead_codes(z_flat)
+    
+    def _reset_dead_codes(self, z_flat: Tensor):
+        """
+        Reset dead codebook entries to random encoder outputs + noise.
+        
+        Dead codes (rarely or never selected) waste codebook capacity.
+        Resetting them to actual encoder outputs ensures they capture
+        useful patterns. (Dhariwal et al. 2020, Zeghidour et al. 2021)
+        """
+        with torch.no_grad():
+            # Identify dead codes: those with very low EMA cluster size
+            dead_mask = self.ema_cluster_size < self._dead_threshold
+            num_dead = dead_mask.sum().item()
+            
+            if num_dead > 0 and z_flat.shape[0] > 0:
+                # Replace dead codes with random encoder outputs + small noise
+                random_indices = torch.randint(0, z_flat.shape[0], (int(num_dead),),
+                                               device=z_flat.device)
+                new_embeddings = z_flat[random_indices].detach()
+                new_embeddings = new_embeddings + torch.randn_like(new_embeddings) * 0.01
+                
+                self.embedding.weight.data[dead_mask] = new_embeddings
+                
+                # Reset EMA stats for replaced codes
+                self.ema_cluster_size[dead_mask] = 1.0
+                self.ema_embedding_sum[dead_mask] = new_embeddings
+                
+                logger.debug(
+                    f"VQ codebook: reset {num_dead}/{self.num_embeddings} dead codes "
+                    f"(utilization: {(~dead_mask).sum().item()}/{self.num_embeddings})"
+                )
     
     def get_codebook_usage(self) -> Tensor:
         """Get normalized codebook usage statistics."""

@@ -102,6 +102,9 @@ class GridBasedRoomExtractor:
         - M = Monster (on floor)
         - I = Item
         - B = Block (pushable)
+        
+        CRITICAL: Corridor rooms may have very few interior tiles but still
+        have doors (D tiles). Any room with doors is a valid room.
         """
         if slot_grid.size == 0:
             return False
@@ -112,6 +115,14 @@ class GridBasedRoomExtractor:
             return False
         
         wall_count = np.sum(slot_grid == self.WALL_MARKER)
+        
+        # Count door tiles explicitly — corridor rooms may have only doors
+        # as non-wall/non-gap content
+        door_count = int(np.sum(slot_grid == 'D'))
+        
+        # A room with ANY door tiles is always valid (corridor room)
+        if door_count > 0 and wall_count >= 20:
+            return True
         
         # Count ALL interior tiles (anything that's not wall or gap)
         # This correctly handles rooms filled with O, P, M, I, B, D, S tiles
@@ -244,30 +255,35 @@ class MLFeatureExtractor:
         """
         Extract multi-hot feature vectors for each node.
         
-        Feature vector (5 dimensions):
-        [is_start, has_enemy, has_key, has_boss_key, has_triforce]
+        Feature vector (6 dimensions):
+        [has_enemy, has_key, has_item, has_triforce, has_boss, has_puzzle]
+        
+        Matches the _extract_graph() format in zelda_loader.py.
         
         Args:
             G: NetworkX graph with node attributes
             node_order: Mapping from node ID to feature array index
             
         Returns:
-            Feature array [N, 5]
+            Feature array [N, 6]
         """
         n = len(node_order)
-        features = np.zeros((n, 5), dtype=np.float32)
+        features = np.zeros((n, 6), dtype=np.float32)
         
         for node_id, idx in node_order.items():
             if node_id not in G.nodes:
                 continue
                 
             attrs = G.nodes[node_id]
+            label = attrs.get('label', '')
+            parts = [p.strip() for p in label.split(',')]
             
-            features[idx, 0] = 1.0 if attrs.get('is_start', False) else 0.0
-            features[idx, 1] = 1.0 if attrs.get('has_enemy', False) else 0.0
-            features[idx, 2] = 1.0 if attrs.get('has_key', False) else 0.0
-            features[idx, 3] = 1.0 if attrs.get('has_boss_key', False) or attrs.get('has_boss', False) else 0.0
-            features[idx, 4] = 1.0 if attrs.get('has_triforce', False) or attrs.get('is_triforce', False) else 0.0
+            features[idx, 0] = 1.0 if (attrs.get('has_enemy', False) or 'e' in parts) else 0.0
+            features[idx, 1] = 1.0 if (attrs.get('has_key', False) or 'k' in parts) else 0.0
+            features[idx, 2] = 1.0 if (attrs.get('has_item', False) or 'i' in parts or 'I' in parts) else 0.0
+            features[idx, 3] = 1.0 if (attrs.get('has_triforce', False) or attrs.get('is_triforce', False) or 't' in parts) else 0.0
+            features[idx, 4] = 1.0 if (attrs.get('has_boss', False) or attrs.get('is_boss', False) or 'b' in parts) else 0.0
+            features[idx, 5] = 1.0 if (attrs.get('has_puzzle', False) or 'p' in parts) else 0.0
         
         return features
     
@@ -332,6 +348,7 @@ class Room:
     has_boss: bool = False
     is_start: bool = False
     graph_node_id: Optional[int] = None
+    node_label: Optional[str] = None  # Graph node label (e.g. 'e,k')
 
 
 @dataclass 
@@ -343,6 +360,17 @@ class Dungeon:
     start_pos: Optional[Tuple[int, int]] = None
     triforce_pos: Optional[Tuple[int, int]] = None
     boss_pos: Optional[Tuple[int, int]] = None
+
+    @property
+    def edges(self) -> List[Tuple[int, int, Dict]]:
+        """Return list of (src, dst, data) edge tuples from the graph.
+
+        Convenience accessor so callers can use ``len(dungeon.edges)``
+        without reaching into the NetworkX object directly.
+        """
+        if self.graph is None:
+            return []
+        return list(self.graph.edges(data=True))
 
 
 @dataclass
@@ -387,7 +415,7 @@ class DungeonData:
     layout: np.ndarray = field(default_factory=lambda: np.zeros((0, 0), dtype=int))
     tpe_vectors: np.ndarray = field(default_factory=lambda: np.zeros((0, 8), dtype=np.float32))
     p_matrix: np.ndarray = field(default_factory=lambda: np.zeros((0, 0, 3), dtype=np.float32))
-    node_features: np.ndarray = field(default_factory=lambda: np.zeros((0, 5), dtype=np.float32))
+    node_features: np.ndarray = field(default_factory=lambda: np.zeros((0, 6), dtype=np.float32))
 
 
 # ==========================================
@@ -871,9 +899,21 @@ class DOTParser:
                     label = attrs[start:end].strip()
             parts = [p.strip() for p in label.split(',')] if label else []
             
+            # The 's' node is a START POINTER — it indicates which room
+            # the player enters first. It is NOT a physical room.
+            # is_start_pointer=True means this node should NOT be assigned
+            # a room grid in the matching phase.
+            is_start = 's' in parts
+            # Check if this node is ONLY a start pointer (label is exactly 's'
+            # with no other content indicators like 'e', 'k', etc.)
+            is_start_pointer = is_start and all(
+                p in ('s', '') for p in parts
+            )
+            
             graph.add_node(node_id, 
                           label=label,
-                          is_start='s' in parts,
+                          is_start=is_start,
+                          is_start_pointer=is_start_pointer,
                           is_triforce='t' in parts,
                           is_boss='b' in parts,
                           has_key='k' in parts,
@@ -920,6 +960,358 @@ class DOTParser:
             graph.add_edge(src, dst, label=label, edge_type=edge_type)
 
         return graph
+
+
+# ==========================================
+# HYBRID LAYOUT ENGINE (Spectral + SA)
+# ==========================================
+class HybridLayoutEngine:
+    """
+    Graph-to-grid layout using a Spectral + Simulated Annealing hybrid.
+
+    The algorithm places graph nodes onto integer grid cells so that:
+    - Connected nodes are adjacent (Manhattan distance 1)
+    - No two nodes overlap
+    - Boss is far from start
+    - Bounding box is compact
+    - Edge crossings are minimised
+
+    Phases:
+        1. **Spectral initialisation** – Laplacian eigenvectors give a
+           continuous 2-D embedding that respects graph topology.
+        2. **Grid snapping** – Round to integer coords & resolve collisions
+           with a spiral search.
+        3. **Simulated Annealing** – Stochastic refinement with an energy
+           function that penalises overlap, long edges, crossings, and
+           rewards compactness and boss-far-from-start.
+        4. **Collision resolution** – Final pass to guarantee no overlaps
+           remain.
+
+    The ``s`` (start-pointer) node is *excluded* from placement — it is
+    a virtual pointer and should not occupy a grid cell.
+    """
+
+    # --- Energy weights (tune-able) ---
+    W_OVERLAP   = 1000.0   # per overlap — must be very heavy
+    W_EDGE_LEN  = 5.0      # per unit of Manhattan distance for connected pairs
+    W_BOSS_FAR  = 8.0      # bonus per unit of Manhattan dist(boss, start)
+    W_COMPACT   = 2.0      # penalty per unit of bounding-box area
+    W_CROSSING  = 10.0     # per detected edge crossing
+
+    def __init__(self,
+                 sa_iterations: int = 8000,
+                 sa_t0: float = 10.0,
+                 sa_t_min: float = 0.01,
+                 sa_cooling: float = 0.997,
+                 seed: int = 42):
+        self.sa_iterations = sa_iterations
+        self.sa_t0 = sa_t0
+        self.sa_t_min = sa_t_min
+        self.sa_cooling = sa_cooling
+        self.rng = np.random.RandomState(seed)
+
+    # ------------------------------------------------------------------
+    # public API
+    # ------------------------------------------------------------------
+    def layout(self, graph: nx.DiGraph) -> Dict[int, Tuple[int, int]]:
+        """
+        Compute a grid layout for *physical* nodes of *graph*.
+
+        The ``s`` start-pointer node (``is_start_pointer=True``) is
+        excluded — it is a virtual pointer, not a room.
+
+        Returns
+        -------
+        positions : dict[int, (row, col)]
+            Mapping from node ID to integer grid position.
+        """
+        # ---- 0. Filter out virtual/start-pointer nodes ----
+        physical_nodes = [
+            n for n in graph.nodes()
+            if not graph.nodes[n].get('is_start_pointer', False)
+        ]
+        if len(physical_nodes) == 0:
+            return {}
+        if len(physical_nodes) == 1:
+            return {physical_nodes[0]: (0, 0)}
+
+        # Build undirected view (edge weights uniform)
+        G = graph.to_undirected()
+        G = G.subgraph(physical_nodes).copy()
+
+        # ---- 1. Spectral initialisation ----
+        coords = self._spectral_init(G, physical_nodes)
+
+        # ---- 2. Grid snap + collision resolution ----
+        grid_pos = self._snap_to_grid(coords, physical_nodes)
+
+        # ---- 3. Simulated Annealing refinement ----
+        grid_pos = self._simulated_annealing(grid_pos, G, physical_nodes, graph)
+
+        # ---- 4. Final collision resolution ----
+        grid_pos = self._resolve_collisions(grid_pos, physical_nodes)
+
+        # ---- 5. Normalise so min coords are (0,0) ----
+        if grid_pos:
+            min_r = min(p[0] for p in grid_pos.values())
+            min_c = min(p[1] for p in grid_pos.values())
+            grid_pos = {n: (r - min_r, c - min_c)
+                        for n, (r, c) in grid_pos.items()}
+
+        return grid_pos
+
+    # ------------------------------------------------------------------
+    # Phase 1 — Spectral
+    # ------------------------------------------------------------------
+    def _spectral_init(self, G: nx.Graph, nodes: List[int]) -> Dict[int, Tuple[float, float]]:
+        """Return continuous 2-D positions from Laplacian eigenvectors."""
+        n = len(nodes)
+        node_idx = {nd: i for i, nd in enumerate(nodes)}
+        adj = np.zeros((n, n))
+        for u, v in G.edges():
+            if u in node_idx and v in node_idx:
+                adj[node_idx[u], node_idx[v]] = 1.0
+                adj[node_idx[v], node_idx[u]] = 1.0
+        deg = np.sum(adj, axis=1)
+        L = np.diag(deg) - adj
+        try:
+            eigvals, eigvecs = np.linalg.eigh(L)
+            # Use Fiedler vector (index 1) and the next eigenvector (index 2)
+            x = eigvecs[:, 1] if n > 1 else np.zeros(n)
+            y = eigvecs[:, 2] if n > 2 else np.zeros(n)
+        except np.linalg.LinAlgError:
+            x = self.rng.randn(n)
+            y = self.rng.randn(n)
+
+        # Scale so that max extent ~ sqrt(n) to give room for grid snapping
+        scale = max(1.0, np.sqrt(n))
+        x_range = x.max() - x.min() if x.max() != x.min() else 1.0
+        y_range = y.max() - y.min() if y.max() != y.min() else 1.0
+        x = (x - x.min()) / x_range * scale
+        y = (y - y.min()) / y_range * scale
+
+        return {nodes[i]: (float(x[i]), float(y[i])) for i in range(n)}
+
+    # ------------------------------------------------------------------
+    # Phase 2 — Grid snap
+    # ------------------------------------------------------------------
+    def _snap_to_grid(self, coords: Dict[int, Tuple[float, float]],
+                      nodes: List[int]) -> Dict[int, Tuple[int, int]]:
+        """Round continuous coords to nearest free integer cell (spiral)."""
+        occupied: Set[Tuple[int, int]] = set()
+        result: Dict[int, Tuple[int, int]] = {}
+
+        # Sort nodes by distance from origin so central nodes get first picks
+        sorted_nodes = sorted(nodes,
+                              key=lambda n: coords[n][0]**2 + coords[n][1]**2)
+
+        for n in sorted_nodes:
+            rx, ry = int(round(coords[n][0])), int(round(coords[n][1]))
+            pos = self._spiral_find(rx, ry, occupied)
+            occupied.add(pos)
+            result[n] = pos
+        return result
+
+    @staticmethod
+    def _spiral_find(r: int, c: int,
+                     occupied: Set[Tuple[int, int]]) -> Tuple[int, int]:
+        """Find the nearest free grid cell to (r,c) using spiral search."""
+        if (r, c) not in occupied:
+            return (r, c)
+        for radius in range(1, 200):
+            for dr in range(-radius, radius + 1):
+                for dc in range(-radius, radius + 1):
+                    if abs(dr) == radius or abs(dc) == radius:
+                        pos = (r + dr, c + dc)
+                        if pos not in occupied:
+                            return pos
+        # Should never reach here for reasonable graphs
+        return (r + 200, c)
+
+    # ------------------------------------------------------------------
+    # Phase 3 — Simulated Annealing
+    # ------------------------------------------------------------------
+    def _simulated_annealing(self, pos: Dict[int, Tuple[int, int]],
+                              G: nx.Graph, nodes: List[int],
+                              directed_graph: nx.DiGraph) -> Dict[int, Tuple[int, int]]:
+        """Refine layout using SA with a composite energy function."""
+        if len(nodes) <= 2:
+            return pos
+
+        # Identify special nodes
+        start_node = None
+        boss_node = None
+        for n in nodes:
+            nd = directed_graph.nodes.get(n, {})
+            if nd.get('is_start') and not nd.get('is_start_pointer'):
+                start_node = n
+            if nd.get('is_boss'):
+                boss_node = n
+
+        # If start_node not found, try finding neighbor of start pointer
+        if start_node is None:
+            for n in directed_graph.nodes():
+                if directed_graph.nodes[n].get('is_start_pointer'):
+                    for nb in list(directed_graph.successors(n)) + list(directed_graph.predecessors(n)):
+                        if nb in pos:
+                            start_node = nb
+                            break
+                    break
+
+        edges = list(G.edges())
+        best_pos = dict(pos)
+        best_energy = self._energy(best_pos, edges, nodes, start_node, boss_node)
+        current_pos = dict(pos)
+        current_energy = best_energy
+
+        T = self.sa_t0
+        for _ in range(self.sa_iterations):
+            if T < self.sa_t_min:
+                break
+
+            # Random perturbation: pick a random node, move to a random neighbor cell
+            n = nodes[self.rng.randint(len(nodes))]
+            old_pos = current_pos[n]
+            dr, dc = self.rng.choice([-2, -1, 0, 1, 2], size=2)
+            new_cell = (old_pos[0] + dr, old_pos[1] + dc)
+
+            # Check for overlap
+            collision = any(current_pos[m] == new_cell for m in nodes if m != n)
+            if collision:
+                # Allow with heavy penalty still computed by energy
+                pass
+
+            current_pos[n] = new_cell
+            new_energy = self._energy(current_pos, edges, nodes, start_node, boss_node)
+            delta = new_energy - current_energy
+
+            if delta < 0 or self.rng.random() < np.exp(-delta / max(T, 1e-10)):
+                current_energy = new_energy
+                if current_energy < best_energy:
+                    best_energy = current_energy
+                    best_pos = dict(current_pos)
+            else:
+                current_pos[n] = old_pos  # revert
+
+            T *= self.sa_cooling
+
+        return best_pos
+
+    def _energy(self, pos: Dict[int, Tuple[int, int]],
+                edges: List[Tuple[int, int]],
+                nodes: List[int],
+                start_node: Optional[int],
+                boss_node: Optional[int]) -> float:
+        """Composite energy: lower is better."""
+        E = 0.0
+        positions = list(pos.values())
+        n = len(positions)
+
+        # -- Overlap penalty --
+        occupied_set: Set[Tuple[int, int]] = set()
+        for p in positions:
+            if p in occupied_set:
+                E += self.W_OVERLAP
+            occupied_set.add(p)
+
+        # -- Edge length (connected rooms should be Manhattan-adjacent) --
+        for u, v in edges:
+            if u in pos and v in pos:
+                dist = abs(pos[u][0] - pos[v][0]) + abs(pos[u][1] - pos[v][1])
+                E += self.W_EDGE_LEN * max(0, dist - 1)  # penalty for dist > 1
+
+        # -- Boss far from start bonus (negative energy = good) --
+        if start_node is not None and boss_node is not None:
+            if start_node in pos and boss_node in pos:
+                dist_sb = abs(pos[start_node][0] - pos[boss_node][0]) + \
+                          abs(pos[start_node][1] - pos[boss_node][1])
+                E -= self.W_BOSS_FAR * dist_sb
+
+        # -- Compactness (bounding box area) --
+        if n > 0:
+            rows = [p[0] for p in positions]
+            cols = [p[1] for p in positions]
+            bbox_area = (max(rows) - min(rows) + 1) * (max(cols) - min(cols) + 1)
+            E += self.W_COMPACT * bbox_area
+
+        # -- Edge crossings --
+        crossings = self._count_crossings(pos, edges)
+        E += self.W_CROSSING * crossings
+
+        return E
+
+    @staticmethod
+    def _count_crossings(pos: Dict[int, Tuple[int, int]],
+                         edges: List[Tuple[int, int]]) -> int:
+        """Count the number of edge-pair crossings in the layout."""
+        def _segments_cross(p1: Tuple[int, int], p2: Tuple[int, int],
+                            p3: Tuple[int, int], p4: Tuple[int, int]) -> bool:
+            """Check if segment p1-p2 crosses p3-p4 (proper crossing)."""
+            def ccw(A, B, C):
+                return (C[1]-A[1]) * (B[0]-A[0]) > (B[1]-A[1]) * (C[0]-A[0])
+            # Share an endpoint → not a crossing
+            if p1 == p3 or p1 == p4 or p2 == p3 or p2 == p4:
+                return False
+            return (ccw(p1,p3,p4) != ccw(p2,p3,p4)) and (ccw(p1,p2,p3) != ccw(p1,p2,p4))
+
+        valid_edges = [(u, v) for u, v in edges if u in pos and v in pos]
+        count = 0
+        for i in range(len(valid_edges)):
+            for j in range(i + 1, len(valid_edges)):
+                u1, v1 = valid_edges[i]
+                u2, v2 = valid_edges[j]
+                if _segments_cross(pos[u1], pos[v1], pos[u2], pos[v2]):
+                    count += 1
+        return count
+
+    # ------------------------------------------------------------------
+    # Phase 4 — Final collision resolution
+    # ------------------------------------------------------------------
+    def _resolve_collisions(self, pos: Dict[int, Tuple[int, int]],
+                            nodes: List[int]) -> Dict[int, Tuple[int, int]]:
+        """Guarantee no two nodes share the same cell."""
+        occupied: Set[Tuple[int, int]] = set()
+        result: Dict[int, Tuple[int, int]] = {}
+        for n in nodes:
+            p = pos.get(n, (0, 0))
+            if p in occupied:
+                p = self._spiral_find(p[0], p[1], occupied)
+            occupied.add(p)
+            result[n] = p
+        return result
+
+    # ------------------------------------------------------------------
+    # Convenience: layout from graph, returning node_to_room style dict
+    # ------------------------------------------------------------------
+    def layout_to_grid_positions(self, graph: nx.DiGraph) -> Tuple[
+        Dict[int, Tuple[int, int]],  # node_id -> (row, col)
+        Optional[int],               # start pointer node id
+        Optional[int],               # actual first room node id
+    ]:
+        """
+        Compute layout and return metadata about the start pointer.
+
+        Returns
+        -------
+        positions : dict
+            Physical node -> (row, col) grid position.
+        start_pointer_id : int or None
+            The ``s`` node id if it exists.
+        first_room_id : int or None
+            The neighbor of ``s`` that is the actual entry room.
+        """
+        start_pointer_id = None
+        first_room_id = None
+        for n in graph.nodes():
+            if graph.nodes[n].get('is_start_pointer', False):
+                start_pointer_id = n
+                nbs = list(graph.successors(n)) + list(graph.predecessors(n))
+                if nbs:
+                    first_room_id = nbs[0]
+                break
+
+        positions = self.layout(graph)
+        return positions, start_pointer_id, first_room_id
 
 
 # ==========================================
@@ -981,16 +1373,39 @@ class RoomGraphMatcher:
         # Find special nodes in graph (THE SOURCE OF TRUTH for start/triforce/boss)
         # DOT graph format: label="s" = start, label="t" = triforce, label="b" = boss
         start_node = None
+        start_pointer_node = None  # The 's' node that is NOT a room
         triforce_node = None
         boss_node = None
         
         for node, attrs in graph.nodes(data=True):
             if attrs.get('is_start'):
                 start_node = node
+                # Check if this is a pure start pointer (not a physical room)
+                if attrs.get('is_start_pointer', False):
+                    start_pointer_node = node
             if attrs.get('is_triforce'):
                 triforce_node = node
             if attrs.get('is_boss'):
                 boss_node = node
+        
+        # CRITICAL: Handle the 's' start pointer node
+        # The 's' node is NOT a physical room — it's a pointer to the first room.
+        # We must find the actual first room (the neighbor of 's') and use that
+        # as the BFS seed for room-to-node matching.
+        actual_start_node = start_node  # Default: use start_node as seed
+        if start_pointer_node is not None:
+            # Find the neighbor of the start pointer — that's the actual first room
+            neighbors = list(graph.successors(start_pointer_node)) + list(graph.predecessors(start_pointer_node))
+            if neighbors:
+                actual_start_node = neighbors[0]  # First neighbor is the entry room
+                logger.info(
+                    "START_POINTER: Node %d (label='s') is a pointer. "
+                    "Actual first room node: %d",
+                    start_pointer_node, actual_start_node
+                )
+            # Mark the pointer node as virtual (no physical room)
+            graph.nodes[start_pointer_node]['is_virtual'] = True
+            graph.nodes[start_pointer_node]['is_start_pointer'] = True
         
         # Normalize graph to canonical labels & types (do this first before matching)
         self._normalize_graph(graph)
@@ -1020,23 +1435,41 @@ class RoomGraphMatcher:
                     seed_room_pos = pos
         
         # STEP 2: Match rooms to graph nodes using BFS from seed
+        # Use actual_start_node (not the 's' pointer) as the graph seed
         room_to_node, node_to_room = self._match_rooms_to_nodes_bfs(
-            rooms, room_adjacency, graph, seed_room_pos, start_node
+            rooms, room_adjacency, graph, seed_room_pos, actual_start_node
         )
         
-        # Store mapping in rooms
+        # CRITICAL: If 's' is a pointer node, ensure it is NOT assigned to any room.
+        # Instead, map it as virtual to the actual start room.
+        if start_pointer_node is not None and start_pointer_node in node_to_room:
+            # Remove the room assignment for the pointer node
+            pointer_room = node_to_room.pop(start_pointer_node, None)
+            if pointer_room is not None and room_to_node.get(pointer_room) == start_pointer_node:
+                room_to_node.pop(pointer_room, None)
+                logger.info(
+                    "START_POINTER_FIX: Removed room %s assignment from pointer node %d",
+                    pointer_room, start_pointer_node
+                )
+        
+        # Store mapping in rooms (including node_label from graph)
         for room_pos, node_id in room_to_node.items():
             rooms[room_pos].graph_node_id = node_id
+            node_data = graph.nodes.get(node_id, {})
+            rooms[room_pos].node_label = node_data.get('label', '')
         
         # STEP 3: Determine START room FROM GRAPH (not from grid scanning)
-        # The graph's start node (label="s") is the authoritative source
+        # If 's' is a pointer, the actual start room is the neighbor of 's'.
+        # Otherwise, start_node itself is the start room.
         start_room_pos = None
-        if start_node is not None:
-            start_room_pos = node_to_room.get(start_node)
+        effective_start = actual_start_node if actual_start_node is not None else start_node
+        if effective_start is not None:
+            start_room_pos = node_to_room.get(effective_start)
             if start_room_pos:
                 logger.debug(
-                    "START_FROM_GRAPH: Graph node %d (is_start=True) mapped to room %s",
-                    start_node, start_room_pos
+                    "START_FROM_GRAPH: Graph node %d mapped to room %s (pointer=%s)",
+                    effective_start, start_room_pos,
+                    start_pointer_node is not None
                 )
         
         # Fallback only if graph-based mapping failed
@@ -1126,8 +1559,9 @@ class RoomGraphMatcher:
 
             # Get neighbors in both spaces (deterministic order)
             room_neighbors = [r for r in room_adjacency.get(current_room, []) if r not in visited_rooms]
+            # Skip nodes marked as start pointer (they are not physical rooms)
             graph_neighbors = [n for n in list(graph.successors(current_node)) + list(graph.predecessors(current_node))
-                               if n not in visited_nodes]
+                               if n not in visited_nodes and not graph.nodes[n].get('is_start_pointer', False)]
 
             if not room_neighbors or not graph_neighbors:
                 continue
@@ -1207,7 +1641,10 @@ class RoomGraphMatcher:
 
         # FALLBACK: Global assignment for remaining unmapped rooms/nodes (deterministic)
         unmapped_rooms = sorted([pos for pos in rooms.keys() if pos not in room_to_node])
-        unmapped_nodes = sorted([n for n in graph.nodes() if n not in node_to_room], key=lambda x: self._node_signature(graph, x))
+        # Exclude start pointer nodes — they are virtual (not physical rooms)
+        unmapped_nodes = sorted([n for n in graph.nodes() if n not in node_to_room
+                                  and not graph.nodes[n].get('is_start_pointer', False)],
+                                 key=lambda x: self._node_signature(graph, x))
 
         if unmapped_rooms and unmapped_nodes:
             R = unmapped_rooms
@@ -1244,12 +1681,14 @@ class RoomGraphMatcher:
                     for j, n in enumerate(N):
                         pairs.append((cm[i][j], r, n))
                 pairs.sort(key=lambda x: (x[0], self._node_signature(graph, x[2]), x[2]))
+                used_r = set()
                 used_n = set()
                 for cost, r, n in pairs:
-                    if n in used_n:
+                    if n in used_n or r in used_r:
                         continue
                     room_to_node[r] = n
                     node_to_room[n] = r
+                    used_r.add(r)
                     used_n.add(n)
 
         # ============================================================
@@ -1258,7 +1697,8 @@ class RoomGraphMatcher:
         # After main BFS, match nodes connected via stair edges ('s' type)
         # to rooms containing STAIR tiles. Stair edges represent non-adjacent
         # teleport connections that BFS cannot discover via room adjacency.
-        still_unmapped_nodes = [n for n in graph.nodes() if n not in node_to_room]
+        still_unmapped_nodes = [n for n in graph.nodes() if n not in node_to_room
+                                and not graph.nodes[n].get('is_start_pointer', False)]
         stair_rooms = sorted([pos for pos in rooms.keys() 
                               if getattr(rooms[pos], 'has_stair', False)])
         
@@ -1301,8 +1741,58 @@ class RoomGraphMatcher:
         # If there are more graph nodes than rooms, remaining unmapped nodes
         # are "virtual" nodes representing sub-areas within already-mapped rooms.
         # Propagate room assignments from their closest mapped neighbor.
-        still_unmapped_nodes = [n for n in graph.nodes() if n not in node_to_room]
+        still_unmapped_nodes = [n for n in graph.nodes() if n not in node_to_room
+                                and not graph.nodes[n].get('is_start_pointer', False)]
+        still_unmapped_rooms = sorted([pos for pos in rooms.keys() if pos not in room_to_node])
         
+        # FIRST: If there are both unmapped rooms and unmapped non-virtual nodes,
+        # try to assign them 1:1 before treating any node as virtual.
+        # This handles cases where BFS couldn't reach a room (e.g., behind a boss).
+        if still_unmapped_rooms and still_unmapped_nodes:
+            logger.debug(
+                "RESIDUAL_MATCH: %d unmapped rooms %s, %d unmapped nodes %s — attempting 1:1 assignment",
+                len(still_unmapped_rooms), still_unmapped_rooms,
+                len(still_unmapped_nodes), still_unmapped_nodes
+            )
+            # Use neighbor-proximity: prefer assigning an unmapped node to a room
+            # that is spatially adjacent to the room of one of the node's graph neighbors.
+            for unmapped_n in list(still_unmapped_nodes):
+                if not still_unmapped_rooms:
+                    break
+                # Find which rooms are adjacent to the rooms of this node's mapped neighbors
+                best_room = None
+                best_score = -999
+                neighbors_in_graph = list(graph.successors(unmapped_n)) + list(graph.predecessors(unmapped_n))
+                neighbor_rooms = set()
+                for nb in neighbors_in_graph:
+                    if nb in node_to_room:
+                        neighbor_rooms.add(node_to_room[nb])
+                
+                for candidate_room in still_unmapped_rooms:
+                    score = 0
+                    # Prefer rooms adjacent to where this node's neighbors are mapped
+                    for nr in neighbor_rooms:
+                        if candidate_room in room_adjacency.get(nr, []):
+                            score += 10
+                    # Degree matching bonus
+                    r_deg = sum(rooms[candidate_room].doors.values())
+                    n_deg = graph.in_degree(unmapped_n) + graph.out_degree(unmapped_n)
+                    score -= abs(r_deg * 2 - n_deg)
+                    if score > best_score:
+                        best_score = score
+                        best_room = candidate_room
+                
+                if best_room is None:
+                    best_room = still_unmapped_rooms[0]
+                
+                room_to_node[best_room] = unmapped_n
+                node_to_room[unmapped_n] = best_room
+                still_unmapped_rooms.remove(best_room)
+                still_unmapped_nodes.remove(unmapped_n)
+                logger.debug("RESIDUAL_MATCH: Assigned node %d to room %s (score=%d)",
+                            unmapped_n, best_room, best_score)
+        
+        # Now handle any remaining unmapped nodes as virtual (more nodes than rooms)
         if still_unmapped_nodes:
             logger.debug("VIRTUAL_NODE_FIX: %d nodes remain unmapped, propagating from neighbors", 
                         len(still_unmapped_nodes))
@@ -1417,13 +1907,22 @@ class RoomGraphMatcher:
 
         for n, data in graph.nodes(data=True):
             label = (data.get('label') or data.get('name') or '')
-            s = str(label).strip().lower()
-            # Canonical flags
-            if s == 's' or 'start' in s or data.get('is_start'):
+            s = str(label).strip()
+            parts = [p.strip().lower() for p in s.split(',')]
+            # Canonical flags — use parts-based detection to handle
+            # composite labels like "e,k" correctly (avoid matching 
+            # 'b' in 'boss' against the substring)
+            if 's' in parts or 'start' in parts or data.get('is_start'):
                 data['is_start'] = True
-            if s == 't' or 'triforce' in s or data.get('is_triforce'):
+                # Preserve is_start_pointer if already set by DOTParser
+                if data.get('is_start_pointer') is None:
+                    # Check if this is a pure start pointer
+                    data['is_start_pointer'] = all(
+                        p in ('s', 'start', '') for p in parts
+                    )
+            if 't' in parts or 'triforce' in parts or data.get('is_triforce'):
                 data['is_triforce'] = True
-            if s == 'b' or 'boss' in s or data.get('is_boss'):
+            if 'b' in parts or 'boss' in parts or data.get('is_boss'):
                 data['is_boss'] = True
 
     def _validate_mapping(self, rooms: Dict[Tuple[int, int], Room],
@@ -2170,6 +2669,10 @@ class DungeonStitcher:
                 len(missing_items)
             )
         
+        # CRITICAL FIX: Place entities (enemies, boss, triforce) based on graph node labels
+        # VGLC rooms may not have ENEMY/BOSS tiles if the raw text files don't include monsters
+        self._place_entities_from_graph(global_grid, dungeon.graph, room_to_node, room_positions)
+        
         # CRITICAL FIX: Convert door types based on graph edge labels
         # VGLC data only has generic 'D' doors - graph specifies k/b/l requirements
         self._apply_door_types_from_graph(global_grid, dungeon.graph, room_to_node, room_positions)
@@ -2243,7 +2746,8 @@ class DungeonStitcher:
                 has_triforce=room.has_triforce,
                 has_boss=room.has_boss,
                 is_start=room.is_start,
-                graph_node_id=room.graph_node_id
+                graph_node_id=room.graph_node_id,
+                node_label=room.node_label
             )
             remapped_rooms[new_pos] = new_room
             pos_map[pos] = new_pos
@@ -2702,6 +3206,99 @@ class DungeonStitcher:
         
         return missing_items
 
+    def _place_entities_from_graph(
+        self,
+        grid: np.ndarray,
+        graph,
+        room_to_node: Dict[Tuple[int, int], int],
+        room_positions: Dict[Tuple[int, int], Tuple[int, int]]
+    ):
+        """
+        Place entity tiles (ENEMY, BOSS) based on graph node labels.
+        
+        VGLC rooms may not have ENEMY/BOSS tiles if the raw text files don't
+        include monsters. The graph specifies which rooms should have entities:
+        - 'e' = enemy room → at least 1 ENEMY tile
+        - 'b' = boss room → at least 1 BOSS tile
+        
+        Only places entities if the room doesn't already have them.
+        """
+        if graph is None:
+            return
+        
+        # Build reverse mapping: node_id -> room_pos
+        node_to_room = {v: k for k, v in room_to_node.items()}
+        
+        entity_map = {
+            'e': SEMANTIC_PALETTE['ENEMY'],
+            'b': SEMANTIC_PALETTE['BOSS'],
+        }
+        
+        entity_names = {
+            SEMANTIC_PALETTE['ENEMY']: 'ENEMY',
+            SEMANTIC_PALETTE['BOSS']: 'BOSS',
+        }
+        
+        for node_id, attrs in graph.nodes(data=True):
+            label = attrs.get('label', '')
+            parts = [p.strip() for p in label.split(',')]
+            
+            # Determine what entity to place
+            entity_to_place = None
+            for part in parts:
+                if part in entity_map:
+                    entity_to_place = entity_map[part]
+                    break
+            
+            if entity_to_place is None:
+                continue
+            
+            # Find room for this node
+            room_pos = node_to_room.get(node_id)
+            if room_pos is None or room_pos not in room_positions:
+                continue
+            
+            r_off, c_off = room_positions[room_pos]
+            
+            # Check if room already has the entity tile
+            room_slice = grid[r_off:r_off + ROOM_HEIGHT, c_off:c_off + ROOM_WIDTH]
+            if entity_to_place in room_slice:
+                continue  # Entity already present
+            
+            # Place entity near room center on a walkable floor tile
+            center_r = r_off + ROOM_HEIGHT // 2
+            center_c = c_off + ROOM_WIDTH // 2
+            
+            placed = False
+            for radius in range(0, 4):
+                if placed:
+                    break
+                for dr in range(-radius, radius + 1):
+                    if placed:
+                        break
+                    for dc in range(-radius, radius + 1):
+                        if abs(dr) != radius and abs(dc) != radius:
+                            continue
+                        r, c = center_r + dr, center_c + dc
+                        if not (r_off + 2 <= r < r_off + ROOM_HEIGHT - 2 and 
+                                c_off + 2 <= c < c_off + ROOM_WIDTH - 2):
+                            continue
+                        if grid[r, c] == SEMANTIC_PALETTE['FLOOR']:
+                            grid[r, c] = entity_to_place
+                            placed = True
+                            logger.debug(
+                                "Placed %s at (%d, %d) for node %d in room %s",
+                                entity_names.get(entity_to_place, str(entity_to_place)),
+                                r, c, node_id, room_pos
+                            )
+                            break
+            
+            if not placed:
+                logger.debug(
+                    "ENTITY_PLACEMENT_SKIP: Could not place %s for node %d in room %s (no floor tile)",
+                    entity_names.get(entity_to_place, str(entity_to_place)), node_id, room_pos
+                )
+
     def _apply_door_types_from_graph(
         self, 
         grid: np.ndarray, 
@@ -2735,6 +3332,7 @@ class DungeonStitcher:
             'b': SEMANTIC_PALETTE['DOOR_BOMB'],
             'l': SEMANTIC_PALETTE['DOOR_SOFT'],
             'K': SEMANTIC_PALETTE['DOOR_BOSS'],
+            's': SEMANTIC_PALETTE['STAIR'],
         }
         
         door_type_names = {
@@ -2742,6 +3340,7 @@ class DungeonStitcher:
             SEMANTIC_PALETTE['DOOR_BOMB']: 'DOOR_BOMB',
             SEMANTIC_PALETTE['DOOR_SOFT']: 'DOOR_SOFT',
             SEMANTIC_PALETTE['DOOR_BOSS']: 'DOOR_BOSS',
+            SEMANTIC_PALETTE['STAIR']: 'STAIR',
         }
         
         # Process each edge in the graph
@@ -2759,6 +3358,8 @@ class DungeonStitcher:
                 door_type = SEMANTIC_PALETTE['DOOR_SOFT']
             elif door_type is None and edge_type == 'boss_locked':
                 door_type = SEMANTIC_PALETTE['DOOR_BOSS']
+            elif door_type is None and edge_type == 'stair':
+                door_type = SEMANTIC_PALETTE['STAIR']
             
             if door_type is None:
                 continue  # No modification needed for open doors
@@ -3281,6 +3882,27 @@ class ZeldaDungeonAdapter:
             StitchedDungeon
         """
         return self.stitcher.stitch(dungeon)
+
+    def layout_from_graph(self, dungeon_num: int, variant: int = 1,
+                          **sa_kwargs) -> Dict[int, Tuple[int, int]]:
+        """
+        Compute a Spectral + SA grid layout from the DOT graph alone.
+
+        This is useful when no text file is available (procedural graphs)
+        or for evaluating layout quality independently.
+
+        Returns
+        -------
+        positions : dict[int, (row, col)]
+            Physical node -> grid cell.  The ``s`` start-pointer is excluded.
+        """
+        if variant == 2:
+            dot_path = self.data_root / "Graph Processed" / f"LoZ2_{dungeon_num}.dot"
+        else:
+            dot_path = self.data_root / "Graph Processed" / f"LoZ_{dungeon_num}.dot"
+        graph = self.dot_parser.parse(str(dot_path))
+        engine = HybridLayoutEngine(**sa_kwargs)
+        return engine.layout(graph)
     
     def process_all_dungeons(self, processed_dir: str = None, graph_dir: str = None) -> Dict[str, Dungeon]:
         """

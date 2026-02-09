@@ -44,6 +44,15 @@ from src.core.definitions import (
     NODE_CONTENT_MAP,
 )
 
+# H-MOLQD Neural Blocks
+from src.core.vqvae import SemanticVQVAE, create_vqvae
+from src.core.condition_encoder import DualStreamConditionEncoder, create_condition_encoder
+from src.core.latent_diffusion import LatentDiffusionModel, create_latent_diffusion
+from src.core.logic_net import LogicNet
+from src.core.symbolic_refiner import (
+    SymbolicRefiner, create_symbolic_refiner, LearnedTileStatistics
+)
+
 __all__ = [
     # Definitions
     'TileID',
@@ -57,4 +66,15 @@ __all__ = [
     'ROOM_WIDTH',
     'EDGE_TYPE_MAP',
     'NODE_CONTENT_MAP',
+    # H-MOLQD Blocks
+    'SemanticVQVAE',
+    'create_vqvae',
+    'DualStreamConditionEncoder',
+    'create_condition_encoder',
+    'LatentDiffusionModel',
+    'create_latent_diffusion',
+    'LogicNet',
+    'SymbolicRefiner',
+    'create_symbolic_refiner',
+    'LearnedTileStatistics',
 ]

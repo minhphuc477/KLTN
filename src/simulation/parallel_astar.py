@@ -267,7 +267,7 @@ class ParallelAStarSolver:
         elif target_tile == SEMANTIC_PALETTE['KEY_ITEM'] and target_pos not in state.collected_items:
             new_state.collected_items = state.collected_items | {target_pos}
             new_state.has_item = True
-            new_state.has_bomb = True
+            new_state.bomb_count = state.bomb_count + 4  # Consumable bombs
         
         # Handle locked doors
         if target_tile == SEMANTIC_PALETTE['DOOR_LOCKED']:

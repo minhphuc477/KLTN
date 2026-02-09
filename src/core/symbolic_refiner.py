@@ -105,6 +105,7 @@ class FailurePoint:
     failure_type: str               # 'blocked', 'missing_key', 'disconnected'
     required_item: Optional[str]    # Required item to proceed
     blocking_tiles: List[Tuple[int, int]] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)  # Extra info (e.g., room_id)
 
 
 @dataclass
@@ -456,6 +457,160 @@ class EntropyReset:
 
 
 # ============================================================================
+# LEARNED TILE STATISTICS (Phase 3B)
+# ============================================================================
+
+class LearnedTileStatistics:
+    """
+    Data-driven adjacency and weight learning from training rooms.
+    
+    Phase 3B: Instead of relying solely on hand-crafted DEFAULT_ADJACENCY
+    and fixed tile weights, this class accumulates co-occurrence statistics
+    from real VGLC dungeon rooms and derives:
+    
+    1. Adjacency rules: Which tile pairs actually appear next to each other
+       (with configurable frequency threshold to filter noise).
+    2. Tile weights: Relative frequency of each tile type, used as the
+       initial probability distribution in WFC.
+    
+    This lets the WFC generate rooms whose tile distributions and local
+    patterns match the training data, improving visual coherence.
+    
+    Usage:
+        stats = LearnedTileStatistics()
+        
+        # Accumulate from training data
+        for room_grid in training_rooms:
+            stats.observe(room_grid)
+        
+        # Use learned rules
+        adjacency = stats.get_adjacency_rules(threshold=0.01)
+        weights = stats.get_tile_weights()
+        
+        wfc = WaveFunctionCollapse(
+            tile_types=list(weights.keys()),
+            adjacency=adjacency,
+            tile_weights=weights,
+        )
+    """
+    
+    def __init__(self):
+        # Pair counts: (tile_a, tile_b) -> count of adjacencies
+        self._pair_counts: Dict[Tuple[int, int], int] = defaultdict(int)
+        # Tile frequency: tile -> total occurrences
+        self._tile_counts: Dict[int, int] = defaultdict(int)
+        # Total adjacency observations
+        self._total_pairs: int = 0
+        # Total tile observations
+        self._total_tiles: int = 0
+    
+    def observe(self, grid: np.ndarray) -> None:
+        """
+        Accumulate statistics from a room grid.
+        
+        Args:
+            grid: H x W integer tile grid
+        """
+        h, w = grid.shape[:2]
+        
+        for y in range(h):
+            for x in range(w):
+                tile = int(grid[y, x])
+                self._tile_counts[tile] += 1
+                self._total_tiles += 1
+                
+                # Check 4-directional neighbors
+                for dy, dx in [(0, 1), (1, 0), (0, -1), (-1, 0)]:
+                    ny, nx_ = y + dy, x + dx
+                    if 0 <= ny < h and 0 <= nx_ < w:
+                        neighbor = int(grid[ny, nx_])
+                        self._pair_counts[(tile, neighbor)] += 1
+                        self._total_pairs += 1
+    
+    def observe_batch(self, grids: List[np.ndarray]) -> None:
+        """Accumulate statistics from a batch of room grids."""
+        for grid in grids:
+            self.observe(grid)
+    
+    def get_adjacency_rules(
+        self,
+        threshold: float = 0.01,
+    ) -> Dict[int, Set[int]]:
+        """
+        Derive adjacency rules from observed co-occurrences.
+        
+        A tile pair (a, b) is considered compatible if:
+            count(a, b) / count(a, *) >= threshold
+        
+        Args:
+            threshold: Minimum relative frequency to allow adjacency.
+                       Lower = more permissive, higher = stricter.
+        
+        Returns:
+            {tile_id: {compatible_neighbor_ids}}
+        """
+        if self._total_pairs == 0:
+            logger.warning("No observations yet, returning DEFAULT_ADJACENCY")
+            return DEFAULT_ADJACENCY.copy()
+        
+        # Compute per-tile totals
+        tile_totals: Dict[int, int] = defaultdict(int)
+        for (a, _b), count in self._pair_counts.items():
+            tile_totals[a] += count
+        
+        # Build adjacency
+        adjacency: Dict[int, Set[int]] = defaultdict(set)
+        for (a, b), count in self._pair_counts.items():
+            if tile_totals[a] > 0:
+                freq = count / tile_totals[a]
+                if freq >= threshold:
+                    adjacency[a].add(b)
+        
+        # Ensure every observed tile has at least self-adjacency
+        for tile in self._tile_counts:
+            if tile not in adjacency:
+                adjacency[tile] = {tile}
+        
+        return dict(adjacency)
+    
+    def get_tile_weights(self) -> Dict[int, float]:
+        """
+        Derive tile weights (relative frequencies) from observations.
+        
+        Returns:
+            {tile_id: weight} where weights sum to 1.0
+        """
+        if self._total_tiles == 0:
+            logger.warning("No observations yet, returning uniform weights")
+            return {}
+        
+        weights = {}
+        for tile, count in self._tile_counts.items():
+            weights[tile] = count / self._total_tiles
+        
+        return weights
+    
+    def get_statistics_summary(self) -> Dict[str, Any]:
+        """Return summary of accumulated statistics."""
+        return {
+            'total_tiles_observed': self._total_tiles,
+            'total_pairs_observed': self._total_pairs,
+            'unique_tiles': len(self._tile_counts),
+            'unique_pairs': len(self._pair_counts),
+            'tile_distribution': self.get_tile_weights(),
+        }
+    
+    def merge(self, other: 'LearnedTileStatistics') -> None:
+        """Merge statistics from another LearnedTileStatistics instance."""
+        for key, count in other._pair_counts.items():
+            self._pair_counts[key] += count
+        for key, count in other._tile_counts.items():
+            self._tile_counts[key] += count
+        self._total_pairs += other._total_pairs
+        self._total_tiles += other._total_tiles
+
+
+# ============================================================================
 # WAVE FUNCTION COLLAPSE
 # ============================================================================
 
@@ -467,23 +622,38 @@ class WaveFunctionCollapse:
     1. Selecting cell with lowest entropy
     2. Collapsing to a specific tile
     3. Propagating constraints to neighbors
+    
+    Phase 3B: Supports learned tile weights for data-driven initial
+    probability distributions (from LearnedTileStatistics).
     """
     
     def __init__(
         self,
         tile_types: List[int],
         adjacency: Optional[Dict[int, Set[int]]] = None,
+        tile_weights: Optional[Dict[int, float]] = None,
         max_iterations: int = 10000,
     ):
         """
         Args:
             tile_types: List of available tile type IDs
             adjacency: Compatibility rules {tile: {compatible_neighbors}}
+            tile_weights: Per-tile initial weights (Phase 3B). If None, uniform.
             max_iterations: Maximum collapse iterations
         """
         self.tile_types = tile_types
         self.adjacency = adjacency or DEFAULT_ADJACENCY
         self.max_iterations = max_iterations
+        
+        # Phase 3B: Learned tile weights for non-uniform initialization
+        if tile_weights is not None:
+            # Build weight array in tile_types order
+            total = sum(tile_weights.get(t, 1e-6) for t in tile_types)
+            self.initial_probs = np.array([
+                tile_weights.get(t, 1e-6) / total for t in tile_types
+            ])
+        else:
+            self.initial_probs = np.ones(len(tile_types)) / len(tile_types)
     
     def initialize_state(
         self,
@@ -506,8 +676,8 @@ class WaveFunctionCollapse:
         """
         num_tiles = len(self.tile_types)
         
-        # Initialize uniform distribution
-        grid = np.ones((height, width, num_tiles)) / num_tiles
+        # Phase 3B: Use learned tile weights instead of uniform
+        grid = np.tile(self.initial_probs, (height, width, 1))  # [H, W, T]
         collapsed = np.zeros((height, width), dtype=bool)
         
         # Apply initial grid where mask is False
@@ -786,15 +956,21 @@ class SymbolicRefiner:
         self,
         tile_types: Optional[List[int]] = None,
         adjacency: Optional[Dict[int, Set[int]]] = None,
+        tile_weights: Optional[Dict[int, float]] = None,
+        learned_stats: Optional[LearnedTileStatistics] = None,
         max_repair_attempts: int = 5,
         margin: int = 2,
+        adjacency_threshold: float = 0.01,
     ):
         """
         Args:
             tile_types: Available tile types for WFC
-            adjacency: Tile adjacency rules
+            adjacency: Tile adjacency rules (overrides learned)
+            tile_weights: Per-tile WFC weights (overrides learned)
+            learned_stats: LearnedTileStatistics for data-driven rules (Phase 3B)
             max_repair_attempts: Maximum repair iterations
             margin: Extra cells around failures to reset
+            adjacency_threshold: Threshold for learned adjacency rules
         """
         # Default tile types
         if tile_types is None:
@@ -803,15 +979,42 @@ class SymbolicRefiner:
         self.tile_types = tile_types
         self.adjacency = adjacency or DEFAULT_ADJACENCY
         self.max_repair_attempts = max_repair_attempts
+        self.learned_stats = learned_stats
+        
+        # Phase 3B: Override with learned statistics if provided
+        effective_adjacency = adjacency
+        effective_weights = tile_weights
+        
+        if learned_stats is not None and learned_stats._total_tiles > 0:
+            if effective_adjacency is None:
+                effective_adjacency = learned_stats.get_adjacency_rules(
+                    threshold=adjacency_threshold
+                )
+                logger.info(
+                    f"Using learned adjacency rules: "
+                    f"{len(effective_adjacency)} tile types, "
+                    f"from {learned_stats._total_tiles} observations"
+                )
+            if effective_weights is None:
+                effective_weights = learned_stats.get_tile_weights()
+                logger.info(f"Using learned tile weights from training data")
+        
+        if effective_adjacency is None:
+            effective_adjacency = DEFAULT_ADJACENCY
+        
+        self.adjacency = effective_adjacency
         
         # Components
         self.path_analyzer = PathAnalyzer()
         self.entropy_reset = EntropyReset(margin=margin)
         self.wfc = WaveFunctionCollapse(
             tile_types=tile_types,
-            adjacency=adjacency,
+            adjacency=effective_adjacency,
+            tile_weights=effective_weights,
         )
-        self.constraint_propagator = ConstraintPropagator(adjacency=adjacency)
+        self.constraint_propagator = ConstraintPropagator(
+            adjacency=effective_adjacency
+        )
     
     def repair_room(
         self,
@@ -989,6 +1192,7 @@ class SymbolicRefiner:
 def create_symbolic_refiner(
     tile_types: Optional[List[int]] = None,
     max_repair_attempts: int = 5,
+    learned_stats: Optional[LearnedTileStatistics] = None,
 ) -> SymbolicRefiner:
     """
     Create a SymbolicRefiner instance.
@@ -996,6 +1200,7 @@ def create_symbolic_refiner(
     Args:
         tile_types: Available tile types
         max_repair_attempts: Maximum repair iterations
+        learned_stats: LearnedTileStatistics for data-driven WFC (Phase 3B)
         
     Returns:
         SymbolicRefiner instance
@@ -1003,6 +1208,7 @@ def create_symbolic_refiner(
     return SymbolicRefiner(
         tile_types=tile_types,
         max_repair_attempts=max_repair_attempts,
+        learned_stats=learned_stats,
     )
 
 
