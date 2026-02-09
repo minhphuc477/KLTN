@@ -560,8 +560,10 @@ class DifferentiableTortuosity(nn.Module):
         """Compute Euclidean distance between start and goal."""
         euclidean_dists = []
         for (sr, sc), (gr, gc) in zip(start_coords, goal_coords):
-            dist = math.sqrt((gr - sr) ** 2 + (gc - sc) ** 2)
+            dist = float(math.sqrt((gr - sr) ** 2 + (gc - sc) ** 2))
             euclidean_dists.append(dist)
+        # Use a detached constant - this is intentionally not differentiable
+        # (coordinates are fixed inputs, not learned)
         return torch.tensor(euclidean_dists, dtype=torch.float32, device=device)
     
     def forward(
@@ -653,29 +655,30 @@ def tortuosity_loss(
     
     tortuosity, is_valid = tort_module(probability_map, start_coords, goal_coords)
     
-    # Compute loss only for valid paths
+    # Use soft masking to preserve gradient flow (boolean indexing breaks grads)
+    # is_valid is a bool tensor; convert to float mask
+    valid_mask = is_valid.float()
+    num_valid = valid_mask.sum().clamp(min=1.0)
+    
+    # If no valid paths, return a loss connected to prob_map so grads still flow
+    # Add a tiny dependency on prob_map to maintain the computation graph
     if not is_valid.any():
-        return torch.tensor(1.0, device=probability_map.device, requires_grad=True)
+        return (probability_map * 0.0).sum() + 1.0
     
-    # Mask invalid paths
-    valid_tortuosity = tortuosity[is_valid]
-    
-    # Compute loss components
     eps = 1e-6
     
-    # Penalize paths that are too straight
-    too_straight = valid_tortuosity < target_tortuosity
-    straight_loss = -torch.log(
-        valid_tortuosity[too_straight] / target_tortuosity + eps
-    ).mean() if too_straight.any() else torch.tensor(0.0, device=probability_map.device)
+    # Penalize paths that are too straight: soft penalty via ReLU
+    # straight_penalty = max(0, target - tortuosity) for each sample
+    straight_penalty = F.relu(target_tortuosity - tortuosity)
     
-    # Penalize paths that are too winding
-    too_winding = valid_tortuosity > max_tortuosity
-    winding_loss = torch.log(
-        valid_tortuosity[too_winding] / max_tortuosity + eps
-    ).mean() if too_winding.any() else torch.tensor(0.0, device=probability_map.device)
+    # Penalize paths that are too winding: soft penalty via ReLU
+    # winding_penalty = max(0, tortuosity - max_tortuosity) for each sample
+    winding_penalty = F.relu(tortuosity - max_tortuosity)
     
-    return straight_loss + winding_loss
+    # Combine with valid mask (only count valid paths)
+    loss = ((straight_penalty + winding_penalty) * valid_mask).sum() / num_valid
+    
+    return loss
 
 
 def manhattan_tortuosity_loss(

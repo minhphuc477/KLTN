@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 # Try to import torch_geometric for GNN
 try:
     import torch_geometric
-    from torch_geometric.nn import GCNConv, GATConv, MessagePassing
+    from torch_geometric.nn import GCNConv, GATConv, GATv2Conv, MessagePassing
     from torch_geometric.data import Data, Batch
     HAS_TORCH_GEOMETRIC = True
 except ImportError:
@@ -271,7 +271,7 @@ class GlobalStreamEncoder(nn.Module):
     
     def __init__(
         self,
-        node_feature_dim: int = 5,
+        node_feature_dim: int = 6,
         edge_feature_dim: int = 3,
         hidden_dim: int = 256,
         output_dim: int = 256,
@@ -320,19 +320,30 @@ class GlobalStreamEncoder(nn.Module):
         gnn_type: str,
         num_heads: int,
     ):
-        """Build GNN layers using torch_geometric."""
+        """
+        Build GNN layers using torch_geometric.
+        
+        Phase 3A: Uses GATv2Conv with edge features to capture edge types
+        (key_locked, boss_locked, bombable, stair, switch) which are critical
+        for conditioning the dungeon generator.
+        """
         self.node_encoder = nn.Linear(node_feature_dim, hidden_dim)
+        self.edge_encoder = nn.Linear(edge_feature_dim, hidden_dim)  # Phase 3A
         
         self.gnn_layers = nn.ModuleList()
         self.layer_norms = nn.ModuleList()
         
         for i in range(num_layers):
             if gnn_type == 'gat':
-                layer = GATConv(
-                    hidden_dim, 
+                # Phase 3A: GATv2Conv supports edge features natively
+                # Edge types (key_locked, boss_locked, etc.) are critical
+                # for the model to understand dungeon structure
+                layer = GATv2Conv(
+                    hidden_dim,
                     hidden_dim // num_heads,
                     heads=num_heads,
                     concat=True,
+                    edge_dim=hidden_dim,  # Encoded edge features
                 )
             else:  # gcn
                 layer = GCNConv(hidden_dim, hidden_dim)
@@ -346,6 +357,7 @@ class GlobalStreamEncoder(nn.Module):
         self,
         node_features: Tensor,
         edge_index: Tensor,
+        edge_features: Optional[Tensor] = None,
         tpe: Optional[Tensor] = None,
         batch_idx: Optional[Tensor] = None,
         node_idx: Optional[int] = None,
@@ -356,6 +368,7 @@ class GlobalStreamEncoder(nn.Module):
         Args:
             node_features: [N, node_feature_dim] node features
             edge_index: [2, E] edge indices
+            edge_features: [E, edge_feature_dim] edge type features (Phase 3A)
             tpe: [N, 8] topological positional encoding (optional)
             batch_idx: [N] batch assignment for batched graphs
             node_idx: Target node index to return embedding for
@@ -364,7 +377,7 @@ class GlobalStreamEncoder(nn.Module):
             Global conditioning vector [B, output_dim] or [N, output_dim]
         """
         if self.use_torch_geometric:
-            h = self._forward_torch_geometric(node_features, edge_index)
+            h = self._forward_torch_geometric(node_features, edge_index, edge_features)
         else:
             # Build adjacency matrix from edge_index
             N = node_features.shape[0]
@@ -378,7 +391,9 @@ class GlobalStreamEncoder(nn.Module):
             tpe_feat = self.tpe_proj(tpe)
             h = self.output_proj(torch.cat([h, tpe_feat], dim=-1))
         else:
-            h = self.output_proj(torch.cat([h, torch.zeros_like(h[:, :self.hidden_dim])], dim=-1))
+            # Pad with zeros of hidden_dim width to match output_proj input size
+            pad = torch.zeros(h.shape[0], self.hidden_dim, device=h.device, dtype=h.dtype)
+            h = self.output_proj(torch.cat([h, pad], dim=-1))
         
         # Return specific node embedding or all
         if node_idx is not None:
@@ -390,12 +405,26 @@ class GlobalStreamEncoder(nn.Module):
         self,
         node_features: Tensor,
         edge_index: Tensor,
+        edge_features: Optional[Tensor] = None,
     ) -> Tensor:
-        """Forward using torch_geometric layers."""
+        """
+        Forward using torch_geometric layers.
+        
+        Phase 3A: Passes encoded edge features to GATv2Conv so the GNN
+        can distinguish edge types (key_locked, boss_locked, stair, etc.).
+        """
         h = self.node_encoder(node_features)
         
+        # Encode edge features if available
+        edge_attr = None
+        if edge_features is not None and hasattr(self, 'edge_encoder'):
+            edge_attr = self.edge_encoder(edge_features)
+        
         for layer, norm in zip(self.gnn_layers, self.layer_norms):
-            h_new = layer(h, edge_index)
+            if edge_attr is not None and isinstance(layer, GATv2Conv):
+                h_new = layer(h, edge_index, edge_attr=edge_attr)
+            else:
+                h_new = layer(h, edge_index)
             h_new = norm(h_new)
             h = F.relu(h_new) + h  # Residual connection
         
@@ -583,7 +612,7 @@ class DualStreamConditionEncoder(nn.Module):
     def __init__(
         self,
         latent_dim: int = 64,
-        node_feature_dim: int = 5,
+        node_feature_dim: int = 6,
         hidden_dim: int = 256,
         output_dim: int = 256,
         num_gnn_layers: int = 3,
@@ -632,6 +661,7 @@ class DualStreamConditionEncoder(nn.Module):
         position: Tensor,
         node_features: Tensor,
         edge_index: Tensor,
+        edge_features: Optional[Tensor] = None,
         tpe: Optional[Tensor] = None,
         current_node_idx: Optional[int] = None,
     ) -> Tensor:
@@ -644,6 +674,7 @@ class DualStreamConditionEncoder(nn.Module):
             position: [B, 2] room position
             node_features: [N, node_feature_dim] graph node features
             edge_index: [2, E] graph edges
+            edge_features: [E, edge_feature_dim] edge type features (Phase 3A)
             tpe: [N, 8] topological positional encoding
             current_node_idx: Index of current node in graph
             
@@ -661,6 +692,7 @@ class DualStreamConditionEncoder(nn.Module):
         c_global = self.global_encoder(
             node_features,
             edge_index,
+            edge_features=edge_features,
             tpe=tpe,
             node_idx=current_node_idx,
         )
@@ -694,12 +726,14 @@ class DualStreamConditionEncoder(nn.Module):
         self,
         node_features: Tensor,
         edge_index: Tensor,
+        edge_features: Optional[Tensor] = None,
         tpe: Optional[Tensor] = None,
     ) -> Tensor:
         """Encode only global context (all nodes)."""
         return self.global_encoder(
             node_features,
             edge_index,
+            edge_features=edge_features,
             tpe=tpe,
         )
 

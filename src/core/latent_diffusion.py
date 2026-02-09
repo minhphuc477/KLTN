@@ -221,6 +221,14 @@ class CrossAttention(nn.Module):
 class ResBlock(nn.Module):
     """Residual block with timestep conditioning."""
     
+    @staticmethod
+    def _num_groups(channels: int, max_groups: int = 32) -> int:
+        """Find valid num_groups for GroupNorm: largest divisor of channels <= max_groups."""
+        for g in range(min(max_groups, channels), 0, -1):
+            if channels % g == 0:
+                return g
+        return 1
+    
     def __init__(
         self, 
         in_channels: int, 
@@ -230,10 +238,10 @@ class ResBlock(nn.Module):
     ):
         super().__init__()
         
-        self.norm1 = nn.GroupNorm(min(32, in_channels), in_channels)
+        self.norm1 = nn.GroupNorm(self._num_groups(in_channels), in_channels)
         self.conv1 = nn.Conv2d(in_channels, out_channels, 3, padding=1)
         
-        self.norm2 = nn.GroupNorm(min(32, out_channels), out_channels)
+        self.norm2 = nn.GroupNorm(self._num_groups(out_channels), out_channels)
         self.conv2 = nn.Conv2d(out_channels, out_channels, 3, padding=1)
         
         self.time_mlp = nn.Sequential(
@@ -374,7 +382,11 @@ class DownBlock(nn.Module):
 
 
 class UpBlock(nn.Module):
-    """Decoder block: Upsample + ResBlock + Attention."""
+    """Decoder block: Upsample + ResBlock + Attention.
+    
+    Each ResBlock receives a skip connection from the encoder (popped from
+    all_skips in reverse order), following the standard U-Net pattern.
+    """
     
     def __init__(
         self,
@@ -393,11 +405,13 @@ class UpBlock(nn.Module):
         if upsample:
             self.upsample = nn.ConvTranspose2d(in_channels, in_channels, 4, stride=2, padding=1)
         
+        self.num_res_blocks = num_res_blocks
         self.res_blocks = nn.ModuleList()
         self.attn_blocks = nn.ModuleList()
         
         for i in range(num_res_blocks):
-            in_ch = in_channels + skip_channels if i == 0 else out_channels
+            # Every ResBlock receives a skip connection (concat on channel dim)
+            in_ch = (in_channels if i == 0 else out_channels) + skip_channels
             self.res_blocks.append(ResBlock(in_ch, out_channels, time_dim))
             
             if has_attention:
@@ -408,20 +422,20 @@ class UpBlock(nn.Module):
     def forward(
         self, 
         x: Tensor, 
-        skips: List[Tensor], 
+        all_skips: List[Tensor], 
         t_emb: Tensor, 
         context: Tensor,
     ) -> Tensor:
+        """Pop num_res_blocks skip connections from all_skips (from the end)."""
         if self.upsample is not None:
             x = self.upsample(x)
         
-        for i, (res_block, attn_block) in enumerate(zip(self.res_blocks, self.attn_blocks)):
-            if i < len(skips):
-                skip = skips[-(i+1)]
-                # Handle size mismatch
-                if x.shape[-2:] != skip.shape[-2:]:
-                    x = F.interpolate(x, size=skip.shape[-2:], mode='nearest')
-                x = torch.cat([x, skip], dim=1)
+        for res_block, attn_block in zip(self.res_blocks, self.attn_blocks):
+            skip = all_skips.pop()  # consume from end (reverse order)
+            # Handle size mismatch from downsampling rounding
+            if x.shape[-2:] != skip.shape[-2:]:
+                x = F.interpolate(x, size=skip.shape[-2:], mode='nearest')
+            x = torch.cat([x, skip], dim=1)
             
             x = res_block(x, t_emb)
             if not isinstance(attn_block, nn.Identity):
@@ -528,7 +542,7 @@ class UNetDenoiser(nn.Module):
             channels.append(out_ch)
         
         # Output projection
-        self.output_norm = nn.GroupNorm(32, model_channels)
+        self.output_norm = nn.GroupNorm(ResBlock._num_groups(model_channels), model_channels)
         self.output_proj = nn.Conv2d(model_channels, out_channels, 3, padding=1)
     
     def forward(
@@ -625,23 +639,33 @@ class GradientGuidance(nn.Module):
         if self.logic_net is None:
             return torch.zeros_like(x_t)
         
-        # Enable gradient computation for x_t
-        x_t_grad = x_t.detach().requires_grad_(True)
-        
-        # Compute LogicNet loss
-        loss, _ = self.logic_net(x_t_grad, graph_data)
-        
-        # Compute gradient
-        grad = torch.autograd.grad(
-            loss,
-            x_t_grad,
-            create_graph=False,
-            retain_graph=False,
-        )[0]
+        # Use torch.enable_grad() so autograd works even inside @torch.no_grad() sampling
+        with torch.enable_grad():
+            # Enable gradient computation for x_t
+            x_t_grad = x_t.detach().requires_grad_(True)
+            
+            # Compute LogicNet loss
+            loss, _ = self.logic_net(x_t_grad, graph_data)
+            
+            # Compute gradient
+            grad = torch.autograd.grad(
+                loss,
+                x_t_grad,
+                create_graph=False,
+                retain_graph=False,
+            )[0]
         
         # Clamp gradient magnitude
         if self.clamp_magnitude > 0:
-            grad_norm = grad.norm(dim=[1, 2, 3], keepdim=True)
+            # Flatten all dims except batch for norm, handles any tensor shape
+            flat = grad.flatten(1)
+            grad_norm = flat.norm(dim=1, keepdim=True)
+            # Reshape norm back for broadcasting
+            for _ in range(grad.dim() - 1):
+                grad_norm = grad_norm.unsqueeze(-1)
+            # Remove extra dims to match grad shape
+            while grad_norm.dim() > grad.dim():
+                grad_norm = grad_norm.squeeze(-1)
             grad = grad * torch.clamp(self.clamp_magnitude / (grad_norm + 1e-8), max=1.0)
         
         return self.guidance_scale * grad
@@ -712,12 +736,23 @@ class LatentDiffusionModel(nn.Module):
         schedule_type: str = 'cosine',
         logic_net: Optional[nn.Module] = None,
         guidance_scale: float = 1.0,
+        # --- Phase 1A: Classifier-Free Guidance (Ho & Salimans, 2022) ---
+        cfg_dropout_prob: float = 0.1,
+        cfg_scale: float = 3.0,
+        # --- Phase 1C: v-prediction (Salimans & Ho, ICLR 2022) ---
+        prediction_type: str = 'epsilon',  # 'epsilon' or 'v'
+        # --- Phase 4B: Min-SNR-γ weighting (Hang et al., ICCV 2023) ---
+        min_snr_gamma: float = 5.0,
     ):
         super().__init__()
         
         self.latent_dim = latent_dim
         self.context_dim = context_dim
         self.num_timesteps = num_timesteps
+        self.cfg_dropout_prob = cfg_dropout_prob
+        self.cfg_scale = cfg_scale
+        self.prediction_type = prediction_type
+        self.min_snr_gamma = min_snr_gamma
         
         # Denoising U-Net
         self.denoiser = UNetDenoiser(
@@ -772,6 +807,57 @@ class LatentDiffusionModel(nn.Module):
         
         return sqrt_alpha_t * x_0 + sqrt_one_minus_alpha_t * noise
     
+    def _predict_noise_cfg(
+        self,
+        x_t: Tensor,
+        t: Tensor,
+        context: Tensor,
+    ) -> Tensor:
+        """
+        Predict noise with Classifier-Free Guidance (CFG).
+        
+        At inference: ε̃ = ε_uncond + s * (ε_cond - ε_uncond)
+        where s = cfg_scale. When s=1 → standard conditional, s>1 → stronger conditioning.
+        """
+        pred_cond = self.denoiser(x_t, t, context)
+        
+        if self.cfg_scale > 1.0:
+            # Unconditional prediction (zero context)
+            pred_uncond = self.denoiser(x_t, t, torch.zeros_like(context))
+            # CFG interpolation
+            return pred_uncond + self.cfg_scale * (pred_cond - pred_uncond)
+        
+        return pred_cond
+    
+    def _convert_prediction(
+        self,
+        prediction: Tensor,
+        x_t: Tensor,
+        t: Tensor,
+    ) -> Tuple[Tensor, Tensor]:
+        """
+        Convert model prediction to (pred_x0, pred_noise) based on prediction_type.
+        
+        Supports:
+        - 'epsilon': model predicts noise ε (standard DDPM)
+        - 'v': model predicts velocity v = √ᾱ_t·ε − √(1−ᾱ_t)·x_0 (Salimans & Ho, 2022)
+        """
+        sqrt_alpha_t = self.sqrt_alphas_cumprod[t][:, None, None, None]
+        sqrt_one_minus_alpha_t = self.sqrt_one_minus_alphas_cumprod[t][:, None, None, None]
+        
+        if self.prediction_type == 'v':
+            # v-prediction: v = √ᾱ·ε − √(1−ᾱ)·x₀
+            # Solve: x₀ = √ᾱ·x_t − √(1−ᾱ)·v
+            #        ε  = √ᾱ·v + √(1−ᾱ)·x_t  (unused here, kept for reference)
+            pred_x0 = sqrt_alpha_t * x_t - sqrt_one_minus_alpha_t * prediction
+            pred_noise = sqrt_alpha_t * prediction + sqrt_one_minus_alpha_t * x_t
+        else:
+            # ε-prediction (standard)
+            pred_noise = prediction
+            pred_x0 = (x_t - sqrt_one_minus_alpha_t * pred_noise) / (sqrt_alpha_t + 1e-8)
+        
+        return pred_x0, pred_noise
+    
     def p_mean_variance(
         self,
         x_t: Tensor,
@@ -781,16 +867,19 @@ class LatentDiffusionModel(nn.Module):
     ) -> Tuple[Tensor, Tensor, Tensor]:
         """
         Compute p(x_{t-1} | x_t) mean and variance.
+        Now supports CFG and v-prediction.
         """
-        # Predict noise
-        pred_noise = self.denoiser(x_t, t, context)
+        # Predict with CFG
+        prediction = self._predict_noise_cfg(x_t, t, context)
+        
+        # Convert to pred_x0 and pred_noise
+        pred_x0, pred_noise = self._convert_prediction(prediction, x_t, t)
         
         # Compute predicted x_0
         sqrt_recip_alpha_t = self.sqrt_recip_alphas[t][:, None, None, None]
         sqrt_one_minus_alpha_t = self.sqrt_one_minus_alphas_cumprod[t][:, None, None, None]
         
-        pred_x0 = sqrt_recip_alpha_t * (x_t - sqrt_one_minus_alpha_t * pred_noise)
-        
+        # pred_x0 already computed by _convert_prediction above
         if clip_denoised:
             pred_x0 = torch.clamp(pred_x0, -1.0, 1.0)
         
@@ -909,12 +998,11 @@ class LatentDiffusionModel(nn.Module):
         for i, t in enumerate(timesteps):
             t_tensor = torch.full((shape[0],), t, device=device, dtype=torch.long)
             
-            # Predict noise
-            pred_noise = self.denoiser(x_t, t_tensor, context)
+            # Predict with CFG
+            prediction = self._predict_noise_cfg(x_t, t_tensor, context)
             
-            # Compute predicted x_0
-            alpha_t = self.alphas_cumprod[t]
-            pred_x0 = (x_t - torch.sqrt(1 - alpha_t) * pred_noise) / torch.sqrt(alpha_t)
+            # Convert to (pred_x0, pred_noise) supporting v-prediction
+            pred_x0, pred_noise = self._convert_prediction(prediction, x_t, t_tensor)
             pred_x0 = torch.clamp(pred_x0, -1.0, 1.0)
             
             # Get next timestep
@@ -923,6 +1011,9 @@ class LatentDiffusionModel(nn.Module):
                 alpha_prev = self.alphas_cumprod[t_prev]
             else:
                 alpha_prev = torch.tensor(1.0, device=device)
+            
+            # CRITICAL-3 fix: compute alpha_t from current timestep
+            alpha_t = self.alphas_cumprod[t]
             
             # DDIM update
             sigma = eta * torch.sqrt((1 - alpha_prev) / (1 - alpha_t)) * torch.sqrt(1 - alpha_t / alpha_prev)
@@ -946,9 +1037,12 @@ class LatentDiffusionModel(nn.Module):
         noise: Optional[Tensor] = None,
     ) -> Tensor:
         """
-        Compute training loss.
+        Compute training loss with CFG dropout, v-prediction, and Min-SNR weighting.
         
-        L = E_{x_0, ε, t}[||ε - ε_θ(x_t, t, c)||^2]
+        Enhancements over basic DDPM:
+        - CFG dropout: randomly zero conditioning (Ho & Salimans, 2022)
+        - v-prediction: predict velocity instead of noise (Salimans & Ho, 2022)
+        - Min-SNR-γ: reweight loss by clamped SNR (Hang et al., ICCV 2023)
         
         Args:
             x_0: Clean latent codes [B, C, H, W]
@@ -956,7 +1050,7 @@ class LatentDiffusionModel(nn.Module):
             noise: Optional noise tensor
             
         Returns:
-            MSE loss
+            Weighted MSE loss
         """
         B = x_0.shape[0]
         device = x_0.device
@@ -968,14 +1062,39 @@ class LatentDiffusionModel(nn.Module):
         if noise is None:
             noise = torch.randn_like(x_0)
         
+        # --- Phase 1A: CFG dropout during training ---
+        # Randomly zero-out conditioning to train unconditional path
+        if self.training and self.cfg_dropout_prob > 0:
+            cfg_mask = (torch.rand(B, device=device) > self.cfg_dropout_prob).float()
+            context = context * cfg_mask[:, None]  # Zero out entire conditioning
+        
         # Get noisy samples
         x_t = self.q_sample(x_0, t, noise)
         
-        # Predict noise
-        pred_noise = self.denoiser(x_t, t, context)
+        # Predict
+        prediction = self.denoiser(x_t, t, context)
         
-        # MSE loss
-        loss = F.mse_loss(pred_noise, noise)
+        # --- Phase 1C: Build target based on prediction_type ---
+        if self.prediction_type == 'v':
+            # v-target = √ᾱ_t · ε − √(1−ᾱ_t) · x₀
+            sqrt_alpha_t = self.sqrt_alphas_cumprod[t][:, None, None, None]
+            sqrt_one_minus_alpha_t = self.sqrt_one_minus_alphas_cumprod[t][:, None, None, None]
+            target = sqrt_alpha_t * noise - sqrt_one_minus_alpha_t * x_0
+        else:
+            target = noise
+        
+        # Per-sample MSE (not reduced yet)
+        per_sample_loss = F.mse_loss(prediction, target, reduction='none')
+        per_sample_loss = per_sample_loss.mean(dim=[1, 2, 3])  # [B]
+        
+        # --- Phase 4B: Min-SNR-γ weighting ---
+        if self.min_snr_gamma > 0:
+            snr = self.alphas_cumprod[t] / (1.0 - self.alphas_cumprod[t] + 1e-8)
+            # Clamp SNR and compute weight
+            min_snr_weight = torch.clamp(snr, max=self.min_snr_gamma) / (snr + 1e-8)
+            per_sample_loss = per_sample_loss * min_snr_weight
+        
+        loss = per_sample_loss.mean()
         
         return loss
 
@@ -988,6 +1107,10 @@ def create_latent_diffusion(
     latent_dim: int = 64,
     context_dim: int = 256,
     num_timesteps: int = 1000,
+    prediction_type: str = 'epsilon',
+    cfg_dropout_prob: float = 0.1,
+    cfg_scale: float = 3.0,
+    min_snr_gamma: float = 5.0,
     **kwargs,
 ) -> LatentDiffusionModel:
     """
@@ -997,6 +1120,10 @@ def create_latent_diffusion(
         latent_dim: VQ-VAE latent dimension
         context_dim: Conditioning dimension
         num_timesteps: Number of diffusion steps
+        prediction_type: 'epsilon' or 'v' (v-prediction, Salimans & Ho 2022)
+        cfg_dropout_prob: Conditioning dropout probability for CFG training
+        cfg_scale: Classifier-free guidance scale for inference (1.0 = no CFG)
+        min_snr_gamma: Min-SNR-γ clamp value (0 = disabled, 5.0 = recommended)
         **kwargs: Additional arguments
         
     Returns:
@@ -1006,5 +1133,9 @@ def create_latent_diffusion(
         latent_dim=latent_dim,
         context_dim=context_dim,
         num_timesteps=num_timesteps,
+        prediction_type=prediction_type,
+        cfg_dropout_prob=cfg_dropout_prob,
+        cfg_scale=cfg_scale,
+        min_snr_gamma=min_snr_gamma,
         **kwargs,
     )

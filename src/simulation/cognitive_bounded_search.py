@@ -2131,7 +2131,7 @@ class CognitiveBoundedSearch:
         if tile_type == SEMANTIC_PALETTE['DOOR_LOCKED']:
             return game_state.keys > 0 or target_pos in game_state.opened_doors
         if tile_type == SEMANTIC_PALETTE['DOOR_BOMB']:
-            return game_state.has_bomb or target_pos in game_state.opened_doors
+            return game_state.bomb_count > 0 or target_pos in game_state.opened_doors
         if tile_type == SEMANTIC_PALETTE['DOOR_BOSS']:
             return game_state.has_boss_key or target_pos in game_state.opened_doors
         
@@ -2157,7 +2157,8 @@ class CognitiveBoundedSearch:
         
         elif tile_type == SEMANTIC_PALETTE['DOOR_BOMB']:
             if target_pos not in new_state.opened_doors:
-                if new_state.has_bomb:
+                if new_state.bomb_count > 0:
+                    new_state.bomb_count -= 1  # Consume one bomb
                     new_state.opened_doors.add(target_pos)
                 else:
                     return False, game_state
@@ -2179,9 +2180,9 @@ class CognitiveBoundedSearch:
                 new_state.has_boss_key = True
             elif tile_type == SEMANTIC_PALETTE['KEY_ITEM']:
                 new_state.has_item = True
-                new_state.has_bomb = True
+                new_state.bomb_count += 4  # Consumable bombs
             elif tile_type == SEMANTIC_PALETTE['ITEM_MINOR']:
-                new_state.has_bomb = True
+                new_state.bomb_count += 4  # Consumable: add 4 bombs
         
         new_state.position = target_pos
         return True, new_state

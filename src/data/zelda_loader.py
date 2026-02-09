@@ -46,8 +46,6 @@ TILE_MAPPING = {
 
 # Import semantic palette from local zelda_core module
 from .zelda_core import (
-    SEMANTIC_PALETTE,
-    CHAR_TO_SEMANTIC,
     ROOM_HEIGHT,
     ROOM_WIDTH,
     ZeldaDungeonAdapter
@@ -163,27 +161,107 @@ class ZeldaDungeonDataset(Dataset):
         logger.info(f"Loaded {len(self.samples)} VGLC dungeons (max size: {self.max_h}x{self.max_w})")
     
     def _extract_graph(self, dungeon) -> dict:
-        """Extract graph structure from dungeon for GNN training."""
+        """Extract graph structure from dungeon for GNN training.
+        
+        Uses the DOT graph topology (dungeon.graph) as the authoritative
+        source for node features and edge types. The 's' (start pointer)
+        node is NOT included as a room node — instead, its connected room
+        is marked with start_node_id.
+        """
+        graph = getattr(dungeon, 'graph', None)
+        if graph is None or len(graph.nodes()) == 0:
+            # Fallback: spatial adjacency only
+            return self._extract_graph_spatial(dungeon)
+        
+        nodes = []
+        edges = []
+        edge_attrs = []
+        node_id_to_idx = {}
+        start_node_idx = -1
+        
+        # Edge type encoding: open=0, key_locked=1, bombable=2, soft_locked=3, other=4
+        EDGE_TYPE_ENCODING = {
+            'open': 0, '': 0,
+            'key_locked': 1, 'k': 1,
+            'bombable': 2, 'b': 2,
+            'soft_locked': 3, 'l': 3,
+            'boss_locked': 4, 'K': 4,
+            'item_locked': 5, 'I': 5,
+            'stair': 6, 's': 6,
+        }
+        
+        # Create nodes — skip the 's' start pointer node
+        idx = 0
+        for node_id, data in sorted(graph.nodes(data=True)):
+            if data.get('is_start_pointer', False):
+                # Record which room this pointer points to
+                continue
+            
+            node_id_to_idx[node_id] = idx
+            label = data.get('label', '')
+            parts = [p.strip() for p in label.split(',')]
+            
+            # Node features: [has_enemy, has_key, has_item, has_triforce, has_boss, has_puzzle]
+            node_features = [
+                float('e' in parts or data.get('has_enemy', False)),
+                float('k' in parts or data.get('has_key', False)),
+                float('i' in parts or 'I' in parts or data.get('has_item', False)),
+                float('t' in parts or data.get('is_triforce', False)),
+                float('b' in parts or data.get('is_boss', False)),
+                float('p' in parts or data.get('has_puzzle', False)),
+            ]
+            nodes.append(node_features)
+            
+            # Track start node (neighbor of 's' pointer, or node with is_start)
+            if data.get('is_start') and not data.get('is_start_pointer', False):
+                start_node_idx = idx
+            
+            idx += 1
+        
+        # If start not found yet, find the neighbor of the 's' pointer
+        if start_node_idx == -1:
+            for node_id, data in graph.nodes(data=True):
+                if data.get('is_start_pointer', False):
+                    for neighbor in list(graph.successors(node_id)) + list(graph.predecessors(node_id)):
+                        if neighbor in node_id_to_idx:
+                            start_node_idx = node_id_to_idx[neighbor]
+                            break
+        
+        # Create edges from graph topology (skip edges involving pointer node)
+        for u, v, data in graph.edges(data=True):
+            if u not in node_id_to_idx or v not in node_id_to_idx:
+                continue
+            src_idx = node_id_to_idx[u]
+            dst_idx = node_id_to_idx[v]
+            edges.append([src_idx, dst_idx])
+            
+            # Edge type from edge_type or label
+            edge_type = data.get('edge_type', '')
+            if not edge_type:
+                edge_type = data.get('label', '')
+            edge_attrs.append(EDGE_TYPE_ENCODING.get(edge_type, 0))
+        
+        import numpy as np
+        return {
+            'node_features': np.array(nodes, dtype=np.float32) if nodes else np.zeros((0, 6), dtype=np.float32),
+            'edge_index': np.array(edges, dtype=np.int64).T if edges else np.zeros((2, 0), dtype=np.int64),
+            'edge_attr': np.array(edge_attrs, dtype=np.int64) if edge_attrs else np.zeros((0,), dtype=np.int64),
+            'num_nodes': len(nodes),
+            'num_edges': len(edges),
+            'start_node_id': start_node_idx,
+        }
+    
+    def _extract_graph_spatial(self, dungeon) -> dict:
+        """Fallback: extract graph from spatial adjacency when DOT graph unavailable."""
         nodes = []
         edges = []
         room_to_idx = {}
         
-        # Create node for each room
         for idx, (coord, room) in enumerate(dungeon.rooms.items()):
             room_to_idx[coord] = idx
-            
-            # Node features: [has_key, has_boss_key, has_triforce, has_start, has_enemy, door_count]
-            node_features = [
-                float(np.any(room.grid == 30)),  # KEY_SMALL
-                float(np.any(room.grid == 31)),  # KEY_BOSS
-                float(np.any(room.grid == 22)),  # TRIFORCE
-                float(np.any(room.grid == 21)),  # START
-                float(np.any(room.grid == 20)),  # ENEMY
-                float(np.sum((room.grid >= 10) & (room.grid <= 15))),  # door_count
-            ]
+            node_features = [0.0] * 6  # No label info available
             nodes.append(node_features)
         
-        # Create edges based on adjacency
         for coord in dungeon.rooms:
             src_idx = room_to_idx[coord]
             for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
@@ -192,11 +270,14 @@ class ZeldaDungeonDataset(Dataset):
                     dst_idx = room_to_idx[neighbor]
                     edges.append([src_idx, dst_idx])
         
+        import numpy as np
         return {
-            'node_features': np.array(nodes, dtype=np.float32),
+            'node_features': np.array(nodes, dtype=np.float32) if nodes else np.zeros((0, 6), dtype=np.float32),
             'edge_index': np.array(edges, dtype=np.int64).T if edges else np.zeros((2, 0), dtype=np.int64),
+            'edge_attr': np.zeros((len(edges),), dtype=np.int64),
             'num_nodes': len(nodes),
             'num_edges': len(edges),
+            'start_node_id': -1,
         }
     
     def __len__(self) -> int:
@@ -224,11 +305,12 @@ class ZeldaDungeonDataset(Dataset):
         if tensor_map.dim() == 2:
             tensor_map = tensor_map.unsqueeze(0)
         
-        # Normalize to [0, 1] if requested
+        # Normalize to [0, 1] using fixed num_classes divisor
+        # IMPORTANT: Use fixed constant (43 = max tile ID) so that
+        # grids_to_onehot / encode_to_latent can invert with *43 exactly.
         if self.normalize and tensor_map.max() > 1:
-            max_val = tensor_map.max()
-            if max_val > 0:
-                tensor_map = tensor_map / max_val
+            NUM_TILE_IDS = 43  # TileID.PUZZLE = 43, the highest ID
+            tensor_map = tensor_map / NUM_TILE_IDS
         
         # Resize if target size specified
         if self.target_size is not None:
@@ -244,8 +326,10 @@ class ZeldaDungeonDataset(Dataset):
             return tensor_map, {
                 'node_features': torch.tensor(graph['node_features'], dtype=torch.float32),
                 'edge_index': torch.tensor(graph['edge_index'], dtype=torch.long),
+                'edge_attr': torch.tensor(graph.get('edge_attr', np.zeros((0,), dtype=np.int64)), dtype=torch.long),
                 'num_nodes': graph['num_nodes'],
                 'num_edges': graph['num_edges'],
+                'start_node_id': graph.get('start_node_id', -1),
             }
             
         return tensor_map
@@ -335,7 +419,11 @@ class ZeldaRoomDataset(Dataset):
                 try:
                     dungeon = adapter.load_dungeon(dungeon_num, variant)
                     for coord, room in dungeon.rooms.items():
-                        self.rooms.append(room.grid.astype(np.float32))
+                        grid = getattr(room, 'semantic_grid', None)
+                        if grid is None:
+                            grid = getattr(room, 'grid', None)
+                        if grid is not None:
+                            self.rooms.append(grid.astype(np.float32))
                 except Exception as e:
                     logger.debug(f"Skipping dungeon {dungeon_num}v{variant}: {e}")
         
@@ -348,13 +436,54 @@ class ZeldaRoomDataset(Dataset):
         grid = self.rooms[idx]
         tensor = torch.tensor(grid, dtype=torch.float32).unsqueeze(0)
         
+        # Use fixed constant (43 = max tile ID) so grids_to_onehot / encode_to_latent
+        # can invert exactly with *43
         if self.normalize and tensor.max() > 1:
-            tensor = tensor / tensor.max()
+            NUM_TILE_IDS = 43  # TileID.PUZZLE = 43
+            tensor = tensor / NUM_TILE_IDS
         
         if self.transform:
             tensor = self.transform(tensor)
             
         return tensor
+
+
+# =============================================================================
+# GRAPH COLLATION FOR VARIABLE-SIZE GRAPHS
+# =============================================================================
+
+def graph_collate_fn(batch):
+    """
+    Custom collation function for batches containing (image, graph_dict) pairs.
+    
+    Handles variable-size graphs by:
+    1. Stacking image tensors normally (they're already padded to same size)
+    2. Storing graph dicts as a list (since node counts differ per dungeon)
+    
+    For per-sample graph processing during training, we iterate over
+    individual graphs rather than trying to batch them into a single tensor.
+    
+    Args:
+        batch: List of (image_tensor, graph_dict) tuples from __getitem__
+        
+    Returns:
+        (images_batch, graph_list) where:
+            - images_batch: [B, 1, H, W] stacked image tensors
+            - graph_list: List of B graph dicts, each containing:
+                - node_features: [N_i, 6] (variable N_i per graph)
+                - edge_index: [2, E_i] (variable E_i per graph)
+                - edge_attr: [E_i] edge type labels
+                - num_nodes: int
+                - num_edges: int
+                - start_node_id: int
+    """
+    if isinstance(batch[0], (list, tuple)) and len(batch[0]) == 2:
+        images = torch.stack([item[0] for item in batch])
+        graphs = [item[1] for item in batch]
+        return images, graphs
+    else:
+        # No graph data — plain image batch
+        return torch.stack(batch)
 
 
 # =============================================================================
@@ -371,6 +500,7 @@ def create_dataloader(
     target_size: Optional[Tuple[int, int]] = None,
     transform: Optional[Callable] = None,
     room_level: bool = False,
+    load_graphs: bool = False,
 ) -> DataLoader:
     """
     Create a DataLoader for Zelda dungeon training.
@@ -411,6 +541,7 @@ def create_dataloader(
             use_vglc=use_vglc,
             normalize=normalize,
             target_size=target_size,
+            load_graphs=load_graphs,
         )
     
     return DataLoader(
@@ -420,6 +551,7 @@ def create_dataloader(
         num_workers=num_workers,
         pin_memory=torch.cuda.is_available(),
         drop_last=True,  # Ensure consistent batch sizes
+        collate_fn=graph_collate_fn if load_graphs else None,
     )
 
 

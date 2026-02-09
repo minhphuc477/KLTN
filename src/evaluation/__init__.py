@@ -6,6 +6,7 @@ Block VI: External Validator & MAP-Elites
 - Agent simulation for solvability verification
 - MAP-Elites quality diversity archive
 - Expressive range analysis
+- CBS-based fitness for QD optimization
 """
 
 from .validator import (
@@ -23,6 +24,15 @@ from .map_elites import (
     Elite,
     DiversityMetrics,
     ArchiveStats,
+    CVTEliteArchive,
+    CombinedFeatureExtractor,
+    CBSFeatureExtractor,
+    FullFeatureExtractor,
+    create_map_elites,
+)
+from .cbs_fitness import (
+    compute_cbs_fitness,
+    cbs_loss_term,
 )
 
 __all__ = [
@@ -40,4 +50,12 @@ __all__ = [
     'Elite',
     'DiversityMetrics',
     'ArchiveStats',
+    'CVTEliteArchive',
+    'CombinedFeatureExtractor',
+    'CBSFeatureExtractor',
+    'FullFeatureExtractor',
+    'create_map_elites',
+    # CBS Fitness
+    'compute_cbs_fitness',
+    'cbs_loss_term',
 ]

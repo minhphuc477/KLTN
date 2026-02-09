@@ -30,7 +30,12 @@ PROJECT_ROOT = Path(__file__).parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.ml.logic_net import LogicNet
+# Use Block V LogicNet (not legacy ml.logic_net)
+from src.core.logic_net import LogicNet
+from src.core.latent_diffusion import LatentDiffusionModel, create_latent_diffusion
+from src.core.vqvae import SemanticVQVAE, create_vqvae
+from src.core.condition_encoder import DualStreamConditionEncoder, create_condition_encoder
+from src.core.symbolic_refiner import SymbolicRefiner, create_symbolic_refiner
 from src.utils.checkpoint import CheckpointManager
 
 logger = logging.getLogger(__name__)
@@ -40,13 +45,18 @@ logger = logging.getLogger(__name__)
 # IMPORT VALIDATOR (with fallback)
 # =============================================================================
 
-from src.simulation import (
-    ZeldaLogicEnv,
-    StateSpaceAStar,
-    SEMANTIC_PALETTE,
-)
-VALIDATOR_AVAILABLE = True
-logger.info("External validator available")
+try:
+    from src.simulation import (
+        ZeldaLogicEnv,
+        StateSpaceAStar,
+        SEMANTIC_PALETTE,
+    )
+    VALIDATOR_AVAILABLE = True
+    logger.info("External validator available")
+except ImportError:
+    VALIDATOR_AVAILABLE = False
+    SEMANTIC_PALETTE = None
+    logger.warning("External validator not available, using LogicNet approximation only")
 
 
 # =============================================================================
@@ -72,6 +82,7 @@ class DungeonValidator:
         logic_iterations: int = 30,
     ):
         self.use_external = use_external and VALIDATOR_AVAILABLE
+        # Use Block V LogicNet for differentiable solvability
         self.logic_net = LogicNet(num_iterations=logic_iterations)
     
     def check_solvability(
@@ -121,9 +132,7 @@ class DungeonValidator:
         goal: Tuple[int, int],
         threshold: float = 0.5,
     ) -> bool:
-        """Check solvability using LogicNet."""
-        # Ensure tensor is on CPU for LogicNet
-        if dungeon_map.is_cuda:
+        \"\"\"Check solvability using Block V LogicNet.\"\"\"\n        if dungeon_map.is_cuda:
             dungeon_map = dungeon_map.cpu()
         
         if dungeon_map.dim() == 2:
@@ -131,13 +140,13 @@ class DungeonValidator:
         elif dungeon_map.dim() == 3:
             dungeon_map = dungeon_map.unsqueeze(0)
         
-        # Convert to walkability (simple threshold)
-        walkability = (dungeon_map > 0).float()
-        
         with torch.no_grad():
-            score = self.logic_net(walkability, [start], [goal])
+            # Block V LogicNet: forward(z, graph_data) -> (loss, info)
+            loss, info = self.logic_net(dungeon_map)
+            # Lower loss = more solvable
+            solvability = 1.0 - loss.item()
         
-        return score.item() > threshold
+        return solvability > threshold
     
     def _check_with_astar(
         self,
@@ -177,24 +186,21 @@ class DungeonValidator:
 
 
 # =============================================================================
-# WFC REPAIR (Simplified)
+# WFC REPAIR (Uses Block VII SymbolicRefiner)
 # =============================================================================
 
 class WFCRepair:
     """
-    Wave Function Collapse based repair for invalid dungeons.
+    Wrapper around Block VII SymbolicRefiner for dungeon repair.
     
-    Fixes common solvability issues:
-    1. Disconnected regions
-    2. Missing path from start to goal
-    3. Key/door balance issues
-    
-    This is a simplified version - full WFC would use proper
-    constraint propagation.
+    Uses full WFC with constraint propagation, learned tile stats,
+    and A*-based path analysis.
     """
     
     def __init__(self, max_iterations: int = 100):
-        self.max_iterations = max_iterations
+        self.refiner = create_symbolic_refiner(
+            max_repair_attempts=5,
+        )
     
     def repair(
         self,
@@ -203,88 +209,22 @@ class WFCRepair:
         goal: Optional[Tuple[int, int]] = None,
     ) -> torch.Tensor:
         """
-        Attempt to repair an invalid dungeon.
-        
-        Args:
-            dungeon_map: (1, H, W) or (H, W) tensor
-            start: Start position
-            goal: Goal position
-            
-        Returns:
-            Repaired dungeon map
+        Attempt to repair an invalid dungeon using Block VII SymbolicRefiner.
         """
-        # Convert to numpy for manipulation
         if isinstance(dungeon_map, torch.Tensor):
-            # Ensure tensor is on CPU before converting to numpy
-            grid = dungeon_map.cpu().squeeze().numpy().copy()
+            grid = dungeon_map.cpu().squeeze().numpy().copy().astype(int)
         else:
-            grid = np.array(dungeon_map, copy=True)
+            grid = np.array(dungeon_map, copy=True).astype(int)
         
         H, W = grid.shape
-        
-        # Default positions
         if start is None:
             start = (2, 2)
         if goal is None:
             goal = (H - 3, W - 3)
         
-        # Repair strategies
-        grid = self._ensure_border_walls(grid)
-        grid = self._carve_path(grid, start, goal)
-        grid = self._ensure_start_goal(grid, start, goal)
+        repaired_grid, success = self.refiner.repair_room(grid, start, goal)
         
-        return torch.tensor(grid, dtype=torch.float32).unsqueeze(0)
-    
-    def _ensure_border_walls(self, grid: np.ndarray) -> np.ndarray:
-        """Ensure grid has wall borders."""
-        grid[0, :] = 0  # Top
-        grid[-1, :] = 0  # Bottom
-        grid[:, 0] = 0  # Left
-        grid[:, -1] = 0  # Right
-        return grid
-    
-    def _carve_path(
-        self,
-        grid: np.ndarray,
-        start: Tuple[int, int],
-        goal: Tuple[int, int],
-    ) -> np.ndarray:
-        """Carve a simple path from start to goal."""
-        sr, sc = start
-        gr, gc = goal
-        
-        # Simple L-shaped path
-        r, c = sr, sc
-        
-        # Move vertically first
-        while r != gr:
-            grid[r, c] = max(grid[r, c], 0.5)  # Make walkable
-            r += 1 if gr > r else -1
-        
-        # Then horizontally
-        while c != gc:
-            grid[r, c] = max(grid[r, c], 0.5)
-            c += 1 if gc > c else -1
-        
-        # Mark goal
-        grid[gr, gc] = max(grid[gr, gc], 0.5)
-        
-        return grid
-    
-    def _ensure_start_goal(
-        self,
-        grid: np.ndarray,
-        start: Tuple[int, int],
-        goal: Tuple[int, int],
-    ) -> np.ndarray:
-        """Ensure start and goal are walkable."""
-        sr, sc = start
-        gr, gc = goal
-        
-        grid[sr, sc] = 1.0
-        grid[gr, gc] = 1.0
-        
-        return grid
+        return torch.tensor(repaired_grid, dtype=torch.float32).unsqueeze(0)
 
 
 # =============================================================================
@@ -510,17 +450,57 @@ def main():
     logger.info(f"Using device: {device}")
     
     # Load or create model
-    # Import here to avoid circular imports
-    from src.train import SimpleDungeonGenerator
-    
-    model = SimpleDungeonGenerator(latent_dim=64).to(device)
+    # Uses Block IV LatentDiffusionModel + Block II VQ-VAE for generation
+    vqvae = create_vqvae(num_classes=44, latent_dim=64)
+    diffusion = create_latent_diffusion(latent_dim=64, context_dim=256)
+    condition_encoder = create_condition_encoder(latent_dim=64, output_dim=256)
     
     if args.checkpoint and Path(args.checkpoint).exists():
         checkpoint = torch.load(args.checkpoint, map_location=device)
-        model.load_state_dict(checkpoint['model_state_dict'])
-        logger.info(f"Loaded checkpoint from {args.checkpoint}")
+        # Load EMA weights if available (Phase 4A), else regular weights
+        if 'ema_diffusion_state_dict' in checkpoint:
+            diffusion.load_state_dict(checkpoint['ema_diffusion_state_dict'])
+            logger.info(f"Loaded EMA diffusion weights from {args.checkpoint}")
+        elif 'diffusion_state_dict' in checkpoint:
+            diffusion.load_state_dict(checkpoint['diffusion_state_dict'])
+            logger.info(f"Loaded diffusion weights from {args.checkpoint}")
+        if 'condition_encoder_state_dict' in checkpoint:
+            condition_encoder.load_state_dict(checkpoint['condition_encoder_state_dict'])
+        # Load VQ-VAE if saved separately or in same checkpoint
+        if 'vqvae_state_dict' in checkpoint:
+            vqvae.load_state_dict(checkpoint['vqvae_state_dict'])
     else:
         logger.warning("No checkpoint provided, using random initialized model")
+    
+    vqvae = vqvae.to(device).eval()
+    diffusion = diffusion.to(device).eval()
+    condition_encoder = condition_encoder.to(device).eval()
+    
+    # Wrap in a simple model interface for generate_and_evaluate
+    class LatentDiffusionWrapper(nn.Module):
+        """Wraps VQ-VAE + Diffusion + CondEncoder for generation."""
+        def __init__(self, vqvae, diffusion, cond_encoder, latent_shape=(1, 64, 3, 4)):
+            super().__init__()
+            self.vqvae = vqvae
+            self.diffusion = diffusion
+            self.cond_encoder = cond_encoder
+            self.latent_shape = latent_shape
+        
+        def sample(self, num_samples=1, device=None):
+            if device is None:
+                device = next(self.parameters()).device
+            # Random conditioning
+            cond = torch.randn(num_samples, 256, device=device)
+            z = self.diffusion.ddim_sample(
+                context=cond,
+                shape=(num_samples, *self.latent_shape[1:]),
+                num_steps=50,
+            )
+            # Decode through VQ-VAE
+            recon = self.vqvae.decode(z)
+            return recon.argmax(dim=1, keepdim=True).float()
+    
+    model = LatentDiffusionWrapper(vqvae, diffusion, condition_encoder).to(device)
     
     # Generate
     num_samples = 10 if args.quick else args.num_samples

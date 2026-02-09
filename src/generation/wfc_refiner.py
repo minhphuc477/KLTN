@@ -308,16 +308,24 @@ class Cell:
     # Collapsed tile (None if not yet collapsed)
     collapsed_tile: Optional[int] = None
     
-    @property
-    def entropy(self) -> float:
+    def entropy(self, rng: Optional[random.Random] = None) -> float:
         """
         Entropy of the cell.
         
         Lower entropy = fewer possibilities = higher priority for collapse.
+        
+        Args:
+            rng: Optional seeded Random instance for deterministic tie-breaking.
+                 If None, uses deterministic positional hash for tie-breaking.
         """
         if self.collapsed_tile is not None:
             return 0.0
-        return len(self.possibilities) + random.random() * 0.1  # Small noise for tie-breaking
+        if rng is not None:
+            noise = rng.random() * 0.1
+        else:
+            # Deterministic tie-breaking based on cell position
+            noise = ((self.row * 31 + self.col * 17) % 1000) / 10000.0
+        return len(self.possibilities) + noise
     
     @property
     def is_collapsed(self) -> bool:
@@ -489,7 +497,7 @@ class CausalWFC:
         for row in self.grid:
             for cell in row:
                 if not cell.is_collapsed and cell.possibilities:
-                    entropy = cell.entropy
+                    entropy = cell.entropy(self.rng)
                     if entropy < min_entropy:
                         min_entropy = entropy
                         best_cell = cell
@@ -585,11 +593,13 @@ class CausalWFC:
     
     def _weighted_random_choice(self, tile_ids: Set[int]) -> int:
         """Choose a tile weighted by tile weights."""
-        tiles = [(tid, self.tile_set.get_tile(tid)) for tid in tile_ids]
+        # Sort tile_ids for deterministic iteration order
+        sorted_ids = sorted(tile_ids)
+        tiles = [(tid, self.tile_set.get_tile(tid)) for tid in sorted_ids]
         tiles = [(tid, t) for tid, t in tiles if t is not None]
         
         if not tiles:
-            return list(tile_ids)[0]
+            return sorted_ids[0]
         
         weights = [t.weight for _, t in tiles]
         total = sum(weights)

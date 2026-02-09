@@ -1390,6 +1390,7 @@ class ZeldaGUI:
             ("Start Auto-Solve", self._start_auto_solve),
             ("Stop", self._stop_auto_solve),
             ("Generate Dungeon", self._generate_dungeon),
+            ("AI Generate", self._generate_ai_dungeon),
             ("Reset", self._reset_map),
         ]
         
@@ -1674,7 +1675,7 @@ class ZeldaGUI:
 
                 self.modern_hud.update_game_state(
                     keys=getattr(self.env.state, 'keys', 0),
-                    bombs=1 if getattr(self.env.state, 'has_bomb', False) else 0,
+                    bombs=getattr(self.env.state, 'bomb_count', 0),
                     has_boss_key=getattr(self.env.state, 'has_boss_key', False),
                     position=getattr(self.env.state, 'position', (0, 0)),
                     steps=getattr(self, 'step_count', 0),
@@ -2072,7 +2073,7 @@ class ZeldaGUI:
 
             if tile_id == SEMANTIC_PALETTE.get('ITEM_BOMB', -1):
                 try:
-                    self.env.state.has_bomb = True
+                    self.env.state.bomb_count += 4  # Add 4 consumable bombs
                 except Exception:
                     pass
                 # CRITICAL: Modify grid to make item visually disappear
@@ -2174,7 +2175,7 @@ class ZeldaGUI:
         
         legend_text = [
             f"[K] Keys: {self.env.state.keys} held | {self.keys_collected}/{self.total_keys} collected | {getattr(self,'keys_used',0)} used",
-            f"[B] Bombs: {1 if self.env.state.has_bomb else 0} held | {self.bombs_collected}/{self.total_bombs} collected | {getattr(self,'bombs_used',0)} used",
+            f"[B] Bombs: {getattr(self.env.state, 'bomb_count', 0)} held | {self.bombs_collected}/{self.total_bombs} collected | {getattr(self,'bombs_used',0)} used",
             f"[BK] Boss Key: {'Yes' if getattr(self.env.state, 'has_boss_key', False) else 'No'} | {self.boss_keys_collected}/{self.total_boss_keys} collected"
         ]
         
@@ -2827,7 +2828,8 @@ class ZeldaGUI:
                     button_tooltips = {
                         'Start Auto-Solve': 'Begin automatic pathfinding solution (SPACE)',
                         'Stop': 'Stop the current auto-solve operation',
-                        'Generate Dungeon': 'Create a new random dungeon map',
+                        'Generate Dungeon': 'Create a new random dungeon map (BSP)',
+                        'AI Generate': 'Generate dungeon using trained latent diffusion AI model',
                         'Reset': 'Reset current map to initial state (R key)',
                         'Path Preview': 'Preview the complete solution path',
                         'Clear Path': 'Clear the displayed path overlay',
@@ -3154,7 +3156,247 @@ class ZeldaGUI:
         except Exception as e:
             logger.exception(f"Failed to generate dungeon: {e}")
             self._set_message(f"Generation failed: {str(e)}")
-    
+
+    def _generate_ai_dungeon(self):
+        """Generate a comprehensive dungeon using the full H-MOLQD pipeline.
+
+        Pipeline:
+            1. MissionGrammar   → mission graph (rooms + lock/key ordering)
+            2. ConditionEncoder → graph-aware conditioning vector
+            3. LatentDiffusion  → denoised latent (DDIM 50 steps)
+            4. VQ-VAE decode    → tile logits → argmax → semantic grid
+            5. SymbolicRefiner  → WFC repair for structural validity
+        """
+        try:
+            import torch
+            import numpy as np
+            import random as _random
+            from pathlib import Path
+            from src.core.latent_diffusion import create_latent_diffusion
+            from src.core.vqvae import create_vqvae
+            from src.core.condition_encoder import create_condition_encoder
+            from src.core.logic_net import LogicNet as _LogicNet
+            from src.generation.grammar import (
+                MissionGrammar,
+                Difficulty as GrammarDifficulty,
+                graph_to_gnn_input,
+            )
+
+            checkpoint_path = Path(__file__).parent / "checkpoints" / "final_model.pth"
+
+            if not checkpoint_path.exists():
+                self._set_message("No AI checkpoint found – train first!")
+                logger.warning(f"Checkpoint not found: {checkpoint_path}")
+                return
+
+            self._set_message("Generating mission graph…")
+            logger.info(f"AI Generation: Loading checkpoint from {checkpoint_path}")
+
+            device = torch.device("cpu")
+
+            # ======================================================
+            # STEP 1: Generate mission graph via MissionGrammar
+            # ======================================================
+            seed = _random.randint(0, 999999)
+            grammar = MissionGrammar(seed=seed)
+            mission_graph = grammar.generate(
+                difficulty=GrammarDifficulty.MEDIUM,
+                num_rooms=_random.randint(5, 10),
+                max_keys=2,
+            )
+            num_nodes = len(mission_graph.nodes)
+            num_edges = len(mission_graph.edges)
+            logger.info(f"  Mission graph: {num_nodes} nodes, {num_edges} edges, seed={seed}")
+
+            # Convert to GNN tensors for condition encoder
+            gnn_input = graph_to_gnn_input(mission_graph, current_node_idx=0)
+            node_features_raw = gnn_input['node_features']   # [N, D_node]
+            edge_index = gnn_input['edge_index']              # [2, E]
+            tpe = gnn_input['tpe']                            # [N, 8]
+
+            self._set_message("Loading AI model…")
+
+            # ======================================================
+            # STEP 2: Build & load model components
+            # ======================================================
+            vqvae = create_vqvae(num_classes=44, latent_dim=64)
+            diffusion = create_latent_diffusion(latent_dim=64, context_dim=256)
+            cond_encoder = create_condition_encoder(latent_dim=64, output_dim=256)
+
+            # Wire LogicNet so checkpoint keys match
+            diffusion.guidance.logic_net = _LogicNet(latent_dim=64, num_classes=44)
+
+            ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
+
+            if "ema_diffusion_state_dict" in ckpt:
+                diffusion.load_state_dict(ckpt["ema_diffusion_state_dict"])
+            elif "diffusion_state_dict" in ckpt:
+                diffusion.load_state_dict(ckpt["diffusion_state_dict"])
+            if "vqvae_state_dict" in ckpt:
+                vqvae.load_state_dict(ckpt["vqvae_state_dict"])
+                logger.info("  Loaded VQ-VAE from main checkpoint")
+            else:
+                # Fallback: load separately pretrained VQ-VAE
+                vqvae_path = Path("checkpoints/vqvae_pretrained.pth")
+                if vqvae_path.exists():
+                    vqvae_ckpt = torch.load(vqvae_path, map_location=device, weights_only=False)
+                    vqvae.load_state_dict(vqvae_ckpt["model_state_dict"])
+                    logger.info(f"  Loaded VQ-VAE from {vqvae_path}")
+                else:
+                    logger.warning("  ⚠ No VQ-VAE weights found — decode will produce noise!")
+            if "condition_encoder_state_dict" in ckpt:
+                cond_encoder.load_state_dict(ckpt["condition_encoder_state_dict"])
+
+            vqvae.eval()
+            diffusion.eval()
+            cond_encoder.eval()
+
+            self._set_message("Running diffusion sampling…")
+
+            # ======================================================
+            # STEP 3: Encode graph → conditioning vector
+            # ======================================================
+            # The condition encoder's global stream expects node_feature_dim=5.
+            # MissionGrammar produces 12-dim features (8 type + 2 pos + 2 extra).
+            # We project to 5 dims matching training's synthetic graph format:
+            #   [is_start, has_enemy, has_key, has_boss_key, has_triforce]
+            from src.generation.grammar import NodeType
+            node_feat_5 = torch.zeros(num_nodes, 5, device=device)
+            sorted_ids = sorted(mission_graph.nodes.keys())
+            for i, nid in enumerate(sorted_ids):
+                nt = mission_graph.nodes[nid].node_type
+                if nt == NodeType.START:
+                    node_feat_5[i, 0] = 1.0   # is_start
+                elif nt == NodeType.ENEMY:
+                    node_feat_5[i, 1] = 1.0   # has_enemy
+                elif nt == NodeType.KEY:
+                    node_feat_5[i, 2] = 1.0   # has_key
+                elif nt == NodeType.LOCK:
+                    node_feat_5[i, 3] = 1.0   # has_boss_key (lock)
+                elif nt == NodeType.GOAL:
+                    node_feat_5[i, 4] = 1.0   # has_triforce
+
+            with torch.no_grad():
+                # Encode graph topology → [N, 256] node embeddings
+                c_global = cond_encoder.encode_global_only(
+                    node_feat_5, edge_index
+                )
+                # Mean-pool to [1, 256] — same as training does
+                conditioning = c_global.mean(dim=0, keepdim=True)
+
+            # ======================================================
+            # STEP 4: Diffusion sampling → VQ-VAE decode
+            # ======================================================
+            # Training data: stitched dungeons padded to a max size.
+            # VQ-VAE downsamples by ~4×, so ~11×16 room → 3×4 latent.
+            # For a full dungeon we use a larger latent to get a bigger grid.
+            # Scale latent proportional to the graph complexity:
+            #   base ~3×4 for single room, scale up for multi-room graphs
+            scale = max(1, int(num_nodes ** 0.5))
+            lat_h = 3 * scale
+            lat_w = 4 * scale
+            logger.info(f"  Latent shape: (1, 64, {lat_h}, {lat_w}) for {num_nodes}-node graph")
+
+            with torch.no_grad():
+                z = diffusion.ddim_sample(
+                    context=conditioning,
+                    shape=(1, 64, lat_h, lat_w),
+                    num_steps=50,
+                )
+                # Decode through VQ-VAE → [1, 44, H, W] logits
+                # Pass target_size so transposed convolutions output the right dims
+                target_h = lat_h * 4   # VQ-VAE has 4× downsampling
+                target_w = lat_w * 4
+                recon = vqvae.decode(z, target_size=(target_h, target_w))
+                # argmax → tile IDs (H, W)
+                tile_grid = recon.argmax(dim=1).squeeze(0).cpu().numpy().astype(np.int32)
+
+            h, w = tile_grid.shape
+            logger.info(f"  Raw generation: {h}×{w}, unique_tiles={len(np.unique(tile_grid))}")
+
+            # ======================================================
+            # STEP 5: Symbolic refinement (WFC repair)
+            # ======================================================
+            self._set_message("Refining dungeon structure…")
+            try:
+                from src.core.symbolic_refiner import create_symbolic_refiner
+                refiner = create_symbolic_refiner(max_repair_attempts=3)
+                start_pos = (2, 2)
+                goal_pos = (h - 3, w - 3)
+
+                # Find actual start/triforce positions if they exist
+                from src.core.definitions import SEMANTIC_PALETTE as _SP
+                start_positions = np.argwhere(tile_grid == _SP['START'])
+                goal_positions = np.argwhere(tile_grid == _SP['TRIFORCE'])
+                if len(start_positions) > 0:
+                    start_pos = tuple(start_positions[0])
+                if len(goal_positions) > 0:
+                    goal_pos = tuple(goal_positions[0])
+
+                repaired_grid, success = refiner.repair_room(
+                    tile_grid, start_pos, goal_pos
+                )
+                if success:
+                    tile_grid = repaired_grid.astype(np.int32)
+                    logger.info("  Symbolic refinement: SUCCESS")
+                else:
+                    logger.info("  Symbolic refinement: no repair needed or failed")
+            except Exception as e:
+                logger.warning(f"  Symbolic refinement skipped: {e}")
+
+            # ======================================================
+            # STEP 6: Ensure START and TRIFORCE exist
+            # ======================================================
+            from src.core.definitions import SEMANTIC_PALETTE as _SP
+            if not np.any(tile_grid == _SP['START']):
+                # Place START on the first walkable floor tile near top-left
+                floor_positions = np.argwhere(tile_grid == _SP['FLOOR'])
+                if len(floor_positions) > 0:
+                    sp = floor_positions[0]
+                    tile_grid[sp[0], sp[1]] = _SP['START']
+                    logger.info(f"  Placed START at ({sp[0]}, {sp[1]})")
+
+            if not np.any(tile_grid == _SP['TRIFORCE']):
+                # Place TRIFORCE on the last walkable floor tile near bottom-right
+                floor_positions = np.argwhere(tile_grid == _SP['FLOOR'])
+                if len(floor_positions) > 0:
+                    gp = floor_positions[-1]
+                    tile_grid[gp[0], gp[1]] = _SP['TRIFORCE']
+                    logger.info(f"  Placed TRIFORCE at ({gp[0]}, {gp[1]})")
+
+            # ======================================================
+            # STEP 7: Add to GUI map list
+            # ======================================================
+            h, w = tile_grid.shape
+            dungeon_name = f"AI #{seed} ({num_nodes}rm {h}×{w})"
+
+            self.maps.append(tile_grid)
+            self.map_names.append(dungeon_name)
+
+            # Switch to the new map
+            self.current_map_idx = len(self.maps) - 1
+            self._load_current_map()
+            self._center_view()
+
+            # Clear any existing effects and reset state
+            if self.effects:
+                self.effects.clear()
+            self.step_count = 0
+            self.auto_path = []
+            self.auto_mode = False
+
+            self._set_message(
+                f"AI dungeon generated: {num_nodes} rooms, {h}×{w} tiles, seed={seed}"
+            )
+            logger.info(
+                f"AI dungeon complete: seed={seed}, graph={num_nodes}N/{num_edges}E, "
+                f"grid={h}×{w}, unique_tiles={len(np.unique(tile_grid))}"
+            )
+
+        except Exception as e:
+            logger.exception(f"AI generation failed: {e}")
+            self._set_message(f"AI generation failed: {str(e)}")
+
     def _reset_map(self):
         """Reset the current map."""
         self._load_current_map()
@@ -3385,10 +3627,10 @@ class ZeldaGUI:
         
         # Count total items in dungeon for "X/Y collected" display
         self.total_keys = len(self.env._find_all_positions(SEMANTIC_PALETTE['KEY_SMALL']))
-        # Bombs are boolean in this game (has_bomb state), not collectible items
-        # Check if dungeon requires bombs by looking for bomb doors
-        bomb_doors = self.env._find_all_positions(SEMANTIC_PALETTE['DOOR_BOMB'])
-        self.total_bombs = 1 if len(bomb_doors) > 0 else 0
+        # Count total bomb items in dungeon for consumable tracking
+        bomb_items = self.env._find_all_positions(SEMANTIC_PALETTE['ITEM_MINOR'])
+        key_items = self.env._find_all_positions(SEMANTIC_PALETTE['KEY_ITEM'])
+        self.total_bombs = len(bomb_items) + len(key_items)  # Each gives 4 bombs
         self.total_boss_keys = len(self.env._find_all_positions(SEMANTIC_PALETTE['KEY_BOSS']))
         self.keys_collected = 0
         self.bombs_collected = 0
@@ -6658,7 +6900,7 @@ class ZeldaGUI:
                 old_state = GameState(
                     position=self.env.state.position,
                     keys=self.env.state.keys,
-                    has_bomb=self.env.state.has_bomb,
+                    bomb_count=self.env.state.bomb_count,
                     has_boss_key=self.env.state.has_boss_key,
                     opened_doors=self.env.state.opened_doors.copy() if hasattr(self.env.state.opened_doors, 'copy') else set(self.env.state.opened_doors),
                     collected_items=self.env.state.collected_items.copy() if hasattr(self.env.state.collected_items, 'copy') else set(self.env.state.collected_items)
@@ -6713,7 +6955,7 @@ class ZeldaGUI:
             old_state = GameState(
                 position=self.env.state.position,
                 keys=self.env.state.keys,
-                has_bomb=self.env.state.has_bomb,
+                bomb_count=self.env.state.bomb_count,
                 has_boss_key=self.env.state.has_boss_key,
                 opened_doors=self.env.state.opened_doors.copy() if hasattr(self.env.state.opened_doors, 'copy') else set(self.env.state.opened_doors),
                 collected_items=self.env.state.collected_items.copy() if hasattr(self.env.state.collected_items, 'copy') else set(self.env.state.collected_items)
@@ -6752,7 +6994,7 @@ class ZeldaGUI:
             if self.modern_hud:
                 self.modern_hud.update_game_state(
                     keys=self.env.state.keys,
-                    bombs=1 if self.env.state.has_bomb else 0,
+                    bombs=self.env.state.bomb_count,
                     has_boss_key=self.env.state.has_boss_key,
                     position=new_pos,
                     steps=self.step_count,
@@ -7796,7 +8038,7 @@ class ZeldaGUI:
         
         old_pos = self.env.state.position
         old_keys = self.env.state.keys
-        old_bombs = self.env.state.has_bomb
+        old_bombs = self.env.state.bomb_count
         old_boss_key = self.env.state.has_boss_key
         
         # Calculate target position for block push check
@@ -7823,13 +8065,13 @@ class ZeldaGUI:
             self.item_pickup_times['key'] = time.time()
             self.message = f"Key collected! ({self.keys_collected}/{self.total_keys}, {self.env.state.keys} held)"
         
-        if self.env.state.has_bomb and not old_bombs:
+        if self.env.state.bomb_count > old_bombs:
             # Bomb acquired!
             self.bombs_collected += 1
             if self.effects:
                 self.effects.add_effect(PopEffect(new_pos, (200, 80, 80)))  # Red flash
             self.item_pickup_times['bomb'] = time.time()
-            self.message = f"Bomb acquired! ({self.bombs_collected}/{self.total_bombs})"
+            self.message = f"Bombs acquired! ({self.env.state.bomb_count} held)"
         
         if self.env.state.has_boss_key and not old_boss_key:
             # Boss key found!

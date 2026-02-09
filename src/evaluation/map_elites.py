@@ -688,6 +688,238 @@ class MAPElites:
 
 
 # ============================================================================
+# PHASE 3: CVT-MAP-ELITES (Vassiliades et al., IEEE TEVC 2018)
+# ============================================================================
+
+class CVTEliteArchive:
+    """
+    Centroidal Voronoi Tessellation (CVT) based archive.
+    
+    Instead of a uniform grid, uses k-means centroids to adaptively
+    partition the feature space. This is the standard in modern QD
+    optimization and handles high-dimensional feature spaces efficiently.
+    
+    Reference: Vassiliades et al., "Using Centroidal Voronoi Tessellations
+    to Scale Up the MAP-Elites Algorithm", IEEE TEVC 2018.
+    
+    Args:
+        num_cells: Number of Voronoi cells (niches)
+        feature_dims: Number of feature dimensions
+        feature_ranges: (min, max) range per dimension
+        num_cvt_samples: Number of uniform samples for k-means initialization
+    """
+    
+    def __init__(
+        self,
+        num_cells: int = 100,
+        feature_dims: int = 2,
+        feature_ranges: Optional[List[Tuple[float, float]]] = None,
+        num_cvt_samples: int = 10000,
+    ):
+        self.num_cells = num_cells
+        self.feature_dims = feature_dims
+        self.feature_ranges = feature_ranges or [(0.0, 1.0)] * feature_dims
+        
+        # Compute CVT centroids via k-means
+        self.centroids = self._compute_cvt_centroids(num_cvt_samples)
+        
+        # Archive storage: cell_id → Elite
+        self.archive: Dict[int, Elite] = {}
+        
+        # Statistics
+        self.total_evaluations = 0
+        self.total_additions = 0
+        self.total_replacements = 0
+    
+    def _compute_cvt_centroids(self, num_samples: int) -> np.ndarray:
+        """
+        Compute CVT centroids via k-means on uniform feature samples.
+        
+        Falls back to uniform grid centroids if scipy is unavailable.
+        """
+        # Generate uniform samples in feature space
+        low = np.array([r[0] for r in self.feature_ranges])
+        high = np.array([r[1] for r in self.feature_ranges])
+        samples = np.random.uniform(low=low, high=high, size=(num_samples, self.feature_dims))
+        
+        try:
+            from scipy.cluster.vq import kmeans
+            centroids, _ = kmeans(samples, self.num_cells)
+            logger.info(f"CVT: computed {len(centroids)} centroids via k-means")
+        except ImportError:
+            # Fallback: uniform grid centroids
+            logger.warning("scipy unavailable, using uniform grid centroids")
+            cells_per_dim = max(2, int(self.num_cells ** (1.0 / self.feature_dims)))
+            grids = [np.linspace(r[0], r[1], cells_per_dim) for r in self.feature_ranges]
+            mesh = np.meshgrid(*grids)
+            centroids = np.column_stack([m.flatten() for m in mesh])[:self.num_cells]
+        
+        return centroids
+    
+    def _find_cell(self, features: Tuple[float, ...]) -> int:
+        """Find nearest centroid (Voronoi cell) for given features."""
+        query = np.array(features)
+        distances = np.linalg.norm(self.centroids - query, axis=1)
+        return int(np.argmin(distances))
+    
+    def add(
+        self,
+        solution: Any,
+        fitness: float,
+        features: Tuple[float, ...],
+        metadata: Optional[Dict] = None,
+    ) -> bool:
+        """Attempt to add a solution to the CVT archive."""
+        self.total_evaluations += 1
+        cell = self._find_cell(features)
+        
+        elite = Elite(
+            solution=solution,
+            fitness=fitness,
+            features=features,
+            cell=(cell,),
+            metadata=metadata or {},
+        )
+        
+        if cell not in self.archive:
+            self.archive[cell] = elite
+            self.total_additions += 1
+            return True
+        elif fitness > self.archive[cell].fitness:
+            self.archive[cell] = elite
+            self.total_replacements += 1
+            return True
+        
+        return False
+    
+    def get(self, cell: int) -> Optional[Elite]:
+        return self.archive.get(cell)
+    
+    def get_random_elite(self) -> Optional[Elite]:
+        if not self.archive:
+            return None
+        return random.choice(list(self.archive.values()))
+    
+    def get_all_elites(self) -> List[Elite]:
+        return list(self.archive.values())
+    
+    def get_stats(self) -> ArchiveStats:
+        if not self.archive:
+            return ArchiveStats(0.0, 0.0, 0.0, 0.0, 0.0, 0, 0.0)
+        
+        fitnesses = [e.fitness for e in self.archive.values()]
+        features = np.array([e.features for e in self.archive.values()])
+        
+        return ArchiveStats(
+            coverage=len(self.archive) / self.num_cells,
+            total_fitness=sum(fitnesses),
+            mean_fitness=float(np.mean(fitnesses)),
+            max_fitness=max(fitnesses),
+            min_fitness=min(fitnesses),
+            num_elites=len(self.archive),
+            feature_diversity=float(np.var(features).mean()) if len(features) > 1 else 0.0,
+        )
+    
+    def clear(self):
+        self.archive.clear()
+        self.total_evaluations = 0
+        self.total_additions = 0
+        self.total_replacements = 0
+
+
+# ============================================================================
+# PHASE 3: COMBINED FEATURE EXTRACTORS (Multi-Dimensional)
+# ============================================================================
+
+class CombinedFeatureExtractor(FeatureExtractor):
+    """
+    4D feature extractor combining linearity, leniency, density, difficulty.
+    
+    Provides richer behavioral characterization for MAP-Elites archives,
+    enabling more meaningful diversity analysis for conference papers.
+    """
+    
+    def __init__(self):
+        self.ll_extractor = LinearityLeniencyExtractor()
+        self.dd_extractor = DensityDifficultyExtractor()
+    
+    def extract(self, graph: nx.DiGraph) -> Tuple[float, ...]:
+        """Extract 4D features: (linearity, leniency, density, difficulty)."""
+        linearity, leniency = self.ll_extractor.extract(graph)
+        density, difficulty = self.dd_extractor.extract(graph)
+        return (linearity, leniency, density, difficulty)
+
+
+class CBSFeatureExtractor(FeatureExtractor):
+    """
+    CBS-derived feature extractor for MAP-Elites.
+    
+    Uses Cognitive Bounded Search confusion ratio and room entropy
+    as behavior descriptors. This is the paper's key novelty —
+    dungeons are characterized by how humans would perceive them,
+    not just structural properties.
+    
+    Integrating CBS features into MAP-Elites transforms the contribution
+    from 'we have a CBS metric' to 'we optimize for human-centric
+    dungeon diversity using CBS as a behavior descriptor.'
+    """
+    
+    def __init__(self, persona: str = 'balanced'):
+        self.persona = persona
+        self._cache: Dict[int, Tuple[float, ...]] = {}
+    
+    def extract(self, graph: nx.DiGraph) -> Tuple[float, ...]:
+        """
+        Extract CBS-derived features: (confusion_ratio, room_entropy).
+        
+        Uses caching since CBS evaluation can be expensive.
+        """
+        # Simple cache key from graph structure
+        cache_key = hash(str(sorted(graph.edges())))
+        
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+        
+        try:
+            from src.evaluation.cbs_fitness import compute_cbs_fitness
+            metrics = compute_cbs_fitness(graph, persona=self.persona)
+            
+            cr = min(1.0, metrics.get('confusion_ratio', 0.0) / 5.0)
+            entropy = min(1.0, metrics.get('room_entropy', 0.5))
+            features = (cr, entropy)
+        except Exception:
+            # Fallback if CBS fails
+            features = (0.5, 0.5)
+        
+        self._cache[cache_key] = features
+        return features
+
+
+class FullFeatureExtractor(FeatureExtractor):
+    """
+    Complete 6D feature extractor: structural + human-centric features.
+    
+    Dimensions:
+    1. Linearity: fraction of nodes on main path
+    2. Leniency: key surplus ratio
+    3. Density: graph connectivity
+    4. Difficulty: estimated challenge level
+    5. CBS confusion ratio: human-perceived navigation difficulty
+    6. Symmetry score: room layout regularity
+    """
+    
+    def __init__(self, persona: str = 'balanced'):
+        self.combined = CombinedFeatureExtractor()
+        self.cbs = CBSFeatureExtractor(persona)
+    
+    def extract(self, graph: nx.DiGraph) -> Tuple[float, ...]:
+        """Extract 6D features."""
+        lin, len_, dens, diff = self.combined.extract(graph)
+        cr, entropy = self.cbs.extract(graph)
+        return (lin, len_, dens, diff, cr, entropy)
+
+
+# ============================================================================
 # CONVENIENCE FUNCTIONS
 # ============================================================================
 
@@ -695,23 +927,44 @@ def create_map_elites(
     feature_type: str = 'linearity_leniency',
     fitness_fn: Optional[Callable] = None,
     cells_per_dim: int = 10,
+    archive_type: str = 'grid',
+    num_cells: int = 100,
 ) -> MAPElites:
     """
     Create a MAP-Elites instance.
     
     Args:
-        feature_type: Type of features ('linearity_leniency' or 'density_difficulty')
+        feature_type: Type of features:
+            'linearity_leniency' - 2D (default)
+            'density_difficulty' - 2D
+            'combined' - 4D (linearity, leniency, density, difficulty)
+            'cbs' - 2D (confusion_ratio, room_entropy)
+            'full' - 6D (all above combined)
         fitness_fn: Fitness function (defaults to solvability)
-        cells_per_dim: Archive resolution
+        cells_per_dim: Archive resolution (for grid archive)
+        archive_type: 'grid' (default) or 'cvt' (centroidal Voronoi)
+        num_cells: Number of CVT cells (for cvt archive)
         
     Returns:
         MAPElites instance
     """
     # Select feature extractor
+    feature_dims = 2
     if feature_type == 'linearity_leniency':
         extractor = LinearityLeniencyExtractor()
+        feature_dims = 2
     elif feature_type == 'density_difficulty':
         extractor = DensityDifficultyExtractor()
+        feature_dims = 2
+    elif feature_type == 'combined':
+        extractor = CombinedFeatureExtractor()
+        feature_dims = 4
+    elif feature_type == 'cbs':
+        extractor = CBSFeatureExtractor()
+        feature_dims = 2
+    elif feature_type == 'full':
+        extractor = FullFeatureExtractor()
+        feature_dims = 6
     else:
         raise ValueError(f"Unknown feature type: {feature_type}")
     
@@ -721,8 +974,20 @@ def create_map_elites(
         validator = ExternalValidator()
         fitness_fn = lambda g: float(validator.validate(g).is_solvable)
     
-    return MAPElites(
+    # Create MAPElites with chosen archive type
+    map_elites = MAPElites(
         feature_extractor=extractor,
         fitness_fn=fitness_fn,
         cells_per_dim=cells_per_dim,
+        feature_dims=feature_dims,
     )
+    
+    # Replace archive with CVT if requested
+    if archive_type == 'cvt':
+        map_elites.archive = CVTEliteArchive(
+            num_cells=num_cells,
+            feature_dims=feature_dims,
+        )
+        map_elites.diversity_metrics = DiversityMetrics(map_elites.archive)
+    
+    return map_elites
