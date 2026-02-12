@@ -59,6 +59,8 @@ from .cognitive_bounded_search import (
 
 # Re-export advanced solvers
 from .dstar_lite import DStarLiteSolver
+from .state_space_dfs import StateSpaceDFS
+from .bidirectional_astar import BidirectionalAStar
 from .multi_goal import MultiGoalPathfinder
 from .parallel_astar import ParallelAStarSolver
 from .solver_comparison import SolverComparison
@@ -103,6 +105,8 @@ __all__ = [
     'compare_personas',
     # Advanced solvers
     'DStarLiteSolver',
+    'StateSpaceDFS',
+    'BidirectionalAStar',
     'MultiGoalPathfinder',
     'ParallelAStarSolver',
     'SolverComparison',
