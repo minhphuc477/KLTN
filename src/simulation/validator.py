@@ -992,9 +992,15 @@ class StateSpaceAStar:
     - Picking up keys before opening doors
     - Getting bombs before bombing walls
     - Proper sequencing of item collection
+    
+    Supports multiple search modes:
+    - 'astar': f = g + h (default, optimal)
+    - 'bfs': f = depth (breadth-first, explores more)
+    - 'dijkstra': f = g (uniform cost, no heuristic)
+    - 'greedy': f = h (heuristic only, fast but suboptimal)
     """
     
-    def __init__(self, env: ZeldaLogicEnv, timeout: int = 10000000, heuristic_mode: str = "balanced", priority_options: dict = None):
+    def __init__(self, env: ZeldaLogicEnv, timeout: int = 10000000, heuristic_mode: str = "balanced", priority_options: dict = None, search_mode: str = "astar"):
         """
         Initialize the solver.
         
@@ -1004,10 +1010,12 @@ class StateSpaceAStar:
                     Large Zelda dungeons (96x66) solve in ~7K states with diagonals
             priority_options: dict with keys 'tie_break', 'key_boost', 'enable_ara', 'ara_weight', 'allow_diagonals'
                              allow_diagonals defaults to True (CRITICAL for large maps)
+            search_mode: Search strategy - 'astar', 'bfs', 'dijkstra', or 'greedy'
         """
         self.env = env
         self.timeout = timeout
         self.heuristic_mode = heuristic_mode
+        self.search_mode = search_mode.lower() if search_mode else 'astar'
         self.pickup_positions = self._cache_pickups()
         
         # PERFORMANCE: Cache stair destinations to avoid repeated graph traversals
@@ -2097,7 +2105,17 @@ class StateSpaceAStar:
         start_h = self._heuristic(start_state)
         start_g = 0
         
-        open_set = [(start_h, 0, hash(start_state), start_g, start_state, [start_state.position])]
+        # Compute initial f-score based on search mode
+        if self.search_mode == 'bfs':
+            start_f = 0  # BFS: f = depth (starts at 0)
+        elif self.search_mode == 'dijkstra':
+            start_f = start_g  # Dijkstra: f = g only
+        elif self.search_mode == 'greedy':
+            start_f = start_h  # Greedy: f = h only
+        else:
+            start_f = start_g + start_h  # A*: f = g + h
+        
+        open_set = [(start_f, 0, hash(start_state), start_g, start_state, [start_state.position])]
         heapq.heapify(open_set)
         
         closed_set = set()
@@ -2373,11 +2391,17 @@ class StateSpaceAStar:
                 
                 g_scores[new_hash] = g_score
                 h_score = self._heuristic(new_state)
-                # Compute f according to ARA* option
-                if self.enable_ara:
+                # Compute f based on search mode
+                if self.search_mode == 'bfs':
+                    f_score = len(path)  # BFS: f = depth (path length)
+                elif self.search_mode == 'dijkstra':
+                    f_score = g_score  # Dijkstra: f = g only (no heuristic)
+                elif self.search_mode == 'greedy':
+                    f_score = h_score  # Greedy: f = h only (no cost)
+                elif self.enable_ara:
                     f_score = g_score + self.ara_weight * h_score
                 else:
-                    f_score = g_score + h_score
+                    f_score = g_score + h_score  # A*: f = g + h
 
                 new_path = path + [new_state.position]
 

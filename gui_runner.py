@@ -219,7 +219,7 @@ def _solve_in_subprocess(grid, start_pos, goal_pos, algorithm_idx, feature_flags
     """
     try:
         # Re-import heavy modules inside child process
-        from src.simulation.validator import ZeldaLogicEnv, StateSpaceAStar, SEMANTIC_PALETTE
+        from src.simulation.validator import ZeldaLogicEnv, StateSpaceAStar, SEMANTIC_PALETTE, GameState
         from src.data.zelda_core import DungeonSolver, ValidationMode
         import time
 
@@ -246,25 +246,261 @@ def _solve_in_subprocess(grid, start_pos, goal_pos, algorithm_idx, feature_flags
             'message': None,
         }
 
-        # Single solver attempt (no duplicate work)
+        # Algorithm names for debug logging
+        algorithm_names = ["A*", "BFS", "Dijkstra", "Greedy", "D* Lite",
+                          "DFS/IDDFS", "Bidirectional A*",
+                          "CBS (Balanced)", "CBS (Explorer)", "CBS (Cautious)",
+                          "CBS (Forgetful)", "CBS (Speedrunner)", "CBS (Greedy)"]
+        alg_name = algorithm_names[algorithm_idx] if algorithm_idx < len(algorithm_names) else f"Unknown({algorithm_idx})"
+        
+        # CRITICAL DEBUG: Log which algorithm is being used
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info('═══════════════════════════════════════════════════')
+        logger.info(f'🔍 SOLVER DISPATCH: algorithm_idx={algorithm_idx} → {alg_name}')
+        logger.info(f'   Start: {start_pos}, Goal: {goal_pos}')
+        logger.info('═══════════════════════════════════════════════════')
+
+        # Determine if CBS solver is selected (indices 7-12)
+        cbs_personas = {
+            7: 'balanced',
+            8: 'explorer',
+            9: 'cautious',
+            10: 'forgetful',
+            11: 'speedrunner',
+            12: 'greedy'
+        }
+        
+        # Single solver attempt - PROPER DISPATCH TO DIFFERENT ALGORITHMS
         try:
-            ssa = StateSpaceAStar(env, priority_options=priority_options)  # Pass priority_options
-            ok, path, nodes = ssa.solve()
-            if ok:
-                # Convert diagonal path to 4-directional for standard animation display
-                # CRITICAL: Pass grid to avoid routing through water/obstacles
-                display_path = _convert_diagonal_to_4dir(path, grid=grid_arr) if path else path
-                result.update({
-                    'success': True, 
-                    'path': display_path,  # Use converted path for animation
-                    'teleports': 0, 
-                    'solver_result': {'nodes': nodes, 'original_path_len': len(path) if path else 0}
-                })
+            if algorithm_idx in cbs_personas:
+                # Use CBS solver with selected persona
+                from src.simulation.cognitive_bounded_search import CognitiveBoundedSearch
+                
+                persona = cbs_personas[algorithm_idx]
+                logger.info(f'✓ Using CBS with persona={persona}')
+                cbs = CognitiveBoundedSearch(env, persona=persona, timeout=100000)
+                ok, path, states, metrics = cbs.solve()
+                
+                if ok:
+                    # Convert diagonal path to 4-directional for standard animation display
+                    display_path = _convert_diagonal_to_4dir(path, grid=grid_arr) if path else path
+                    
+                    # Extract CBS metrics for display
+                    cbs_metrics = {
+                        'confusion_index': round(metrics.confusion_index, 3),
+                        'navigation_entropy': round(metrics.navigation_entropy, 3),
+                        'cognitive_load': round(metrics.cognitive_load, 3),
+                        'aha_latency': metrics.aha_latency,
+                        'unique_tiles': metrics.unique_tiles_visited,
+                        'total_steps': metrics.total_steps,
+                        'peak_memory': metrics.peak_memory_usage,
+                        'replans': metrics.replans,
+                        'confusion_events': metrics.confusion_events
+                    }
+                    
+                    logger.info(f'✓ CBS succeeded: path_len={len(display_path)}, states={states}')
+                    result.update({
+                        'success': True, 
+                        'path': display_path,
+                        'teleports': 0, 
+                        'solver_result': {
+                            'nodes': states, 
+                            'original_path_len': len(path) if path else 0,
+                            'cbs_metrics': cbs_metrics,
+                            'persona': persona
+                        }
+                    })
+                else:
+                    logger.warning(f'✗ CBS failed: explored {states} states')
+                    result['message'] = f'CBS ({persona}) found no solution (explored {states} states)'
+            
+            elif algorithm_idx == 0:
+                # A* - Use StateSpaceAStar (existing implementation)
+                logger.info('✓ Using A* (StateSpaceAStar)')
+                ssa = StateSpaceAStar(env, priority_options=priority_options)
+                ok, path, nodes = ssa.solve()
+                if ok:
+                    display_path = _convert_diagonal_to_4dir(path, grid=grid_arr) if path else path
+                    logger.info(f'✓ A* succeeded: path_len={len(display_path)}, nodes={nodes}')
+                    result.update({
+                        'success': True, 
+                        'path': display_path,
+                        'teleports': 0, 
+                        'solver_result': {'nodes': nodes, 'original_path_len': len(path) if path else 0, 'algorithm': 'A*'}
+                    })
+                else:
+                    logger.warning(f'✗ A* failed: explored {nodes} states')
+                    result['message'] = f'A* found no solution (explored {nodes} states)'
+            
+            elif algorithm_idx == 1:
+                # BFS - Use StateSpaceAStar with BFS search mode (game-state-aware)
+                logger.info('✓ Using BFS (Breadth-First Search via StateSpaceAStar)')
+                ssa = StateSpaceAStar(env, priority_options=priority_options, search_mode='bfs')
+                ok, path, nodes = ssa.solve()
+                if ok:
+                    display_path = _convert_diagonal_to_4dir(path, grid=grid_arr) if path else path
+                    logger.info(f'✓ BFS succeeded: path_len={len(display_path)}, nodes={nodes}')
+                    result.update({
+                        'success': True,
+                        'path': display_path,
+                        'teleports': 0,
+                        'solver_result': {'nodes': nodes, 'original_path_len': len(path) if path else 0, 'algorithm': 'BFS'}
+                    })
+                else:
+                    logger.warning(f'✗ BFS failed: explored {nodes} states')
+                    result['message'] = f'BFS found no solution (explored {nodes} states)'
+            
+            elif algorithm_idx == 2:
+                # Dijkstra - Use StateSpaceAStar with Dijkstra search mode (no heuristic)
+                logger.info('✓ Using Dijkstra (Uniform Cost Search via StateSpaceAStar)')
+                ssa = StateSpaceAStar(env, priority_options=priority_options, search_mode='dijkstra')
+                ok, path, nodes = ssa.solve()
+                if ok:
+                    display_path = _convert_diagonal_to_4dir(path, grid=grid_arr) if path else path
+                    logger.info(f'✓ Dijkstra succeeded: path_len={len(display_path)}, nodes={nodes}')
+                    result.update({
+                        'success': True,
+                        'path': display_path,
+                        'teleports': 0,
+                        'solver_result': {'nodes': nodes, 'original_path_len': len(path) if path else 0, 'algorithm': 'Dijkstra'}
+                    })
+                else:
+                    logger.warning(f'✗ Dijkstra failed: explored {nodes} states')
+                    result['message'] = f'Dijkstra found no solution (explored {nodes} states)'
+            
+            elif algorithm_idx == 3:
+                # Greedy Best-First - Use StateSpaceAStar with Greedy search mode (heuristic only)
+                logger.info('✓ Using Greedy Best-First Search (via StateSpaceAStar)')
+                ssa = StateSpaceAStar(env, priority_options=priority_options, search_mode='greedy')
+                ok, path, nodes = ssa.solve()
+                if ok:
+                    display_path = _convert_diagonal_to_4dir(path, grid=grid_arr) if path else path
+                    logger.info(f'✓ Greedy succeeded: path_len={len(display_path)}, nodes={nodes}')
+                    result.update({
+                        'success': True,
+                        'path': display_path,
+                        'teleports': 0,
+                        'solver_result': {'nodes': nodes, 'original_path_len': len(path) if path else 0, 'algorithm': 'Greedy'}
+                    })
+                else:
+                    logger.warning(f'✗ Greedy failed: explored {nodes} states')
+                    result['message'] = f'Greedy found no solution (explored {nodes} states)'
+            
+            elif algorithm_idx == 4:
+                # D* Lite - Use incremental replanning search
+                logger.info('✓ Using D* Lite (incremental replanning)')
+                from src.simulation.dstar_lite import DStarLiteSolver
+                
+                dstar = DStarLiteSolver(env, heuristic_mode="balanced")
+                # Create initial state
+                start_state = env.state.copy()
+                ok, path, nodes = dstar.solve(start_state)
+                
+                if ok:
+                    display_path = _convert_diagonal_to_4dir(path, grid=grid_arr) if path else path
+                    logger.info(f'✓ D* Lite succeeded: path_len={len(display_path)}, nodes={nodes}')
+                    result.update({
+                        'success': True,
+                        'path': display_path,
+                        'teleports': 0,
+                        'solver_result': {
+                            'nodes': nodes,
+                            'original_path_len': len(path) if path else 0,
+                            'algorithm': 'D* Lite',
+                            'replans': dstar.replans_count
+                        }
+                    })
+                else:
+                    logger.warning(f'✗ D* Lite failed: explored {nodes} states')
+                    result['message'] = f'D* Lite found no solution (explored {nodes} states)'
+            
+            elif algorithm_idx == 5:
+                # DFS/IDDFS - Depth-first search with iterative deepening
+                logger.info('✓ Using DFS/IDDFS (iterative deepening depth-first search)')
+                from src.simulation.state_space_dfs import StateSpaceDFS
+                
+                dfs = StateSpaceDFS(
+                    env,
+                    timeout=100000,
+                    max_depth=500,
+                    allow_diagonals=priority_options.get('allow_diagonals', False),
+                    use_iddfs=True  # Use IDDFS for better completeness
+                )
+                ok, path, nodes = dfs.solve()
+                
+                if ok:
+                    display_path = _convert_diagonal_to_4dir(path, grid=grid_arr) if path else path
+                    logger.info(f'✓ DFS/IDDFS succeeded: path_len={len(display_path)}, nodes={nodes}')
+                    result.update({
+                        'success': True,
+                        'path': display_path,
+                        'teleports': 0,
+                        'solver_result': {
+                            'nodes': nodes,
+                            'original_path_len': len(path) if path else 0,
+                            'algorithm': 'DFS/IDDFS',
+                            'max_depth': dfs.metrics.max_depth_reached,
+                            'backtracks': dfs.metrics.backtrack_count
+                        }
+                    })
+                else:
+                    logger.warning(f'✗ DFS/IDDFS failed: explored {nodes} states')
+                    result['message'] = f'DFS/IDDFS found no solution (explored {nodes} states)'
+            
+            elif algorithm_idx == 6:
+                # Bidirectional A* - Meet-in-the-middle search
+                logger.info('✓ Using Bidirectional A* (meet-in-the-middle search)')
+                from src.simulation.bidirectional_astar import BidirectionalAStar
+                
+                bidir = BidirectionalAStar(
+                    env,
+                    timeout=100000,
+                    allow_diagonals=priority_options.get('allow_diagonals', False),
+                    heuristic_mode="balanced"
+                )
+                ok, path, nodes = bidir.solve()
+                
+                if ok:
+                    display_path = _convert_diagonal_to_4dir(path, grid=grid_arr) if path else path
+                    logger.info(f'✓ Bidirectional A* succeeded: path_len={len(display_path)}, nodes={nodes}')
+                    result.update({
+                        'success': True,
+                        'path': display_path,
+                        'teleports': 0,
+                        'solver_result': {
+                            'nodes': nodes,
+                            'original_path_len': len(path) if path else 0,
+                            'algorithm': 'Bidirectional A*',
+                            'meeting_point': bidir.meeting_point,
+                            'collision_checks': bidir.collision_checks
+                        }
+                    })
+                else:
+                    logger.warning(f'✗ Bidirectional A* failed: explored {nodes} states')
+                    result['message'] = f'Bidirectional A* found no solution (explored {nodes} states)'
+            
             else:
-                result['message'] = f'No solution found (explored {nodes} states)'
+                # Unknown algorithm - fallback to A*
+                logger.warning(f'⚠ Unknown algorithm_idx={algorithm_idx}, falling back to A*')
+                ssa = StateSpaceAStar(env, priority_options=priority_options)
+                ok, path, nodes = ssa.solve()
+                if ok:
+                    display_path = _convert_diagonal_to_4dir(path, grid=grid_arr) if path else path
+                    result.update({
+                        'success': True, 
+                        'path': display_path,
+                        'teleports': 0, 
+                        'solver_result': {'nodes': nodes, 'original_path_len': len(path) if path else 0, 'algorithm': 'A* (fallback)'}
+                    })
+                else:
+                    result['message'] = f'Fallback A* found no solution (explored {nodes} states)'
+                    
         except Exception as e:
+            logger.exception(f'✗ Solver exception: {e}')
             result['message'] = f'Solver error: {e}'
 
+        logger.info(f'🔍 SOLVER RESULT: success={result["success"]}, path_len={len(result["path"]) if result["path"] else 0}')
         return result
     except Exception as e:
         return {'success': False, 'path': None, 'teleports': 0, 'solver_result': None, 'message': f'Child failed: {e}'}
@@ -781,6 +1017,7 @@ class ZeldaGUI:
         self.solver_done = True          # True when no solver pending (initially done)
         self.solver_outfile = None       # Temp file for solver pickle output
         self.solver_gridfile = None      # Temp file for grid numpy array
+        self._pending_solver_trigger = False  # Flag to trigger solver on next frame (for algorithm changes)
         
         # Preview subprocess state (separate from main solver)
         self.preview_proc = None         # multiprocessing.Process handle for preview
@@ -1347,7 +1584,10 @@ class ZeldaGUI:
         algorithm_dropdown = DropdownWidget(
             (x_offset, y_offset),
             "Solver",
-            ["A*", "BFS", "Dijkstra", "Greedy", "D* Lite"],
+            ["A*", "BFS", "Dijkstra", "Greedy", "D* Lite",
+             "DFS/IDDFS", "Bidirectional A*",
+             "CBS (Balanced)", "CBS (Explorer)", "CBS (Cautious)", 
+             "CBS (Forgetful)", "CBS (Speedrunner)", "CBS (Greedy)"],
             selected=self.algorithm_idx,
             keep_open_on_select=self.feature_flags.get('persist_dropdown_on_select', False)
         )
@@ -2457,6 +2697,47 @@ class ZeldaGUI:
             else:
                 self.error_message = None
     
+    def _render_solver_status_banner(self, surface):
+        """Render solver status banner showing current algorithm and progress."""
+        # Only show when solver is running
+        if not getattr(self, 'solver_running', False):
+            return
+        
+        algorithm_names = ["A*", "BFS", "Dijkstra", "Greedy", "D* Lite",
+                         "CBS (Balanced)", "CBS (Explorer)", "CBS (Cautious)",
+                         "CBS (Forgetful)", "CBS (Speedrunner)", "CBS (Greedy)"]
+        
+        # CRITICAL FIX: Use solver_algorithm_idx (saved when solver started) instead of algorithm_idx
+        # This ensures banner shows the algorithm the CURRENTLY RUNNING solver is using,
+        # even if user changes the dropdown while solver is running
+        alg_idx = getattr(self, 'solver_algorithm_idx', getattr(self, 'algorithm_idx', 0))
+        alg_name = algorithm_names[alg_idx] if alg_idx < len(algorithm_names) else f"Algorithm {alg_idx}"
+        
+        # DEBUG: Log banner rendering to diagnose CBS→A* display bug
+        logger.debug('BANNER: Rendering solver banner with solver_algorithm_idx=%d, alg_name=%s', alg_idx, alg_name)
+        
+        # Draw yellow banner below error banner area
+        banner_height = 50
+        banner_y = 50  # Below error banner
+        banner_rect = pygame.Rect(0, banner_y, self.screen_w, banner_height)
+        banner_surface = pygame.Surface((self.screen_w, banner_height), pygame.SRCALPHA)
+        
+        # Animated pulse effect
+        pulse = (math.sin(time.time() * 3) + 1) / 2  # 0 to 1
+        alpha = int(180 + 75 * pulse)
+        banner_surface.fill((200, 150, 0, alpha))
+        surface.blit(banner_surface, (0, banner_y))
+        
+        # Draw status text
+        font = pygame.font.Font(None, 32)
+        text = f"🔍 Computing path with {alg_name}..."
+        text_surf = font.render(text, True, (255, 255, 255))
+        text_rect = text_surf.get_rect(center=(self.screen_w // 2, banner_y + banner_height // 2))
+        surface.blit(text_surf, text_rect)
+        
+        # Draw border
+        pygame.draw.rect(surface, (255, 200, 0), banner_rect, 2)
+    
     def _render_status_bar(self, surface):
         """Render status bar at bottom of screen."""
         bar_height = 30
@@ -2476,11 +2757,24 @@ class ZeldaGUI:
         status_surf = font.render(status_text, True, (180, 220, 255))
         surface.blit(status_surf, (10, bar_y + 7))
         
-        # Center: Current action/message
+        # Center: Current action/message + ALGORITHM INDICATOR
+        algorithm_names = ["A*", "BFS", "Dijkstra", "Greedy", "D* Lite",
+                         "CBS (Balanced)", "CBS (Explorer)", "CBS (Cautious)",
+                         "CBS (Forgetful)", "CBS (Speedrunner)", "CBS (Greedy)"]
+        alg_idx = getattr(self, 'algorithm_idx', 0)
+        alg_name = algorithm_names[alg_idx] if alg_idx < len(algorithm_names) else f"Alg{alg_idx}"
+        
+        # Algorithm indicator (ALWAYS SHOW THIS)
+        alg_indicator = f"[{alg_name}]"
+        alg_color = (255, 215, 0) if self.auto_mode else (150, 180, 255)  # Gold when running, blue when idle
+        alg_surf = font.render(alg_indicator, True, alg_color)
+        alg_rect = alg_surf.get_rect(center=(self.screen_w // 2, bar_y + bar_height // 2))
+        surface.blit(alg_surf, alg_rect)
+        
         if self.auto_mode:
             progress = f"Step {self.auto_step_idx + 1}/{len(self.auto_path)}"
             progress_surf = font.render(progress, True, (100, 255, 100))
-            progress_rect = progress_surf.get_rect(center=(self.screen_w // 2, bar_y + bar_height // 2))
+            progress_rect = progress_surf.get_rect(centerx=alg_rect.right + 60, centery=bar_y + bar_height // 2)
             surface.blit(progress_surf, progress_rect)
             
             # Show path items if available (right of progress)
@@ -3064,12 +3358,60 @@ class ZeldaGUI:
                             old_algorithm_idx = self.algorithm_idx
                             self.algorithm_idx = widget.selected
                             if old_algorithm_idx != self.algorithm_idx:
-                                algorithm_names = ["A*", "BFS", "Dijkstra", "Greedy", "D* Lite"]
+                                algorithm_names = ["A*", "BFS", "Dijkstra", "Greedy", "D* Lite",
+                                                 "CBS (Balanced)", "CBS (Explorer)", "CBS (Cautious)",
+                                                 "CBS (Forgetful)", "CBS (Speedrunner)", "CBS (Greedy)"]
                                 self.message = f"Solver: {algorithm_names[self.algorithm_idx]}"
-                                # Clear any existing path when algorithm changes
-                                if self.auto_path:
+                                # DEBUG: Log dropdown selection to diagnose CBS→A* display bug
+                                logger.info('DROPDOWN: Algorithm changed from %d(%s) to %d(%s)',
+                                           old_algorithm_idx, algorithm_names[old_algorithm_idx] if old_algorithm_idx < len(algorithm_names) else 'Unknown',
+                                           self.algorithm_idx, algorithm_names[self.algorithm_idx])
+                                
+                                # CRITICAL FIX: If solver is currently running with old algorithm, stop it
+                                # This prevents the banner from showing the wrong algorithm name
+                                if getattr(self, 'solver_running', False):
+                                    logger.info('DROPDOWN: Stopping solver running with old algorithm %s', 
+                                               algorithm_names[old_algorithm_idx] if old_algorithm_idx < len(algorithm_names) else 'Unknown')
+                                    # Terminate the solver process if it exists
+                                    if hasattr(self, 'solver_proc') and self.solver_proc:
+                                        try:
+                                            self.solver_proc.terminate()
+                                            logger.info('DROPDOWN: Terminated solver process')
+                                        except Exception as e:
+                                            logger.warning('DROPDOWN: Failed to terminate solver process: %s', e)
+                                    # Clear preview workers
+                                    if hasattr(self, 'preview_thread') and self.preview_thread:
+                                        self.preview_thread = None
+                                    if hasattr(self, 'preview_proc') and self.preview_proc:
+                                        try:
+                                            self.preview_proc.terminate()
+                                        except Exception:
+                                            pass
+                                        self.preview_proc = None
+                                    # Clear all solver state using centralized helper
+                                    self._clear_solver_state(reason=f"algorithm changed to {algorithm_names[self.algorithm_idx]}")
+                                    self._set_message(f"🔄 Switched to {algorithm_names[self.algorithm_idx]} (press SPACE to solve)", 2.5)
+                                    # Don't auto-restart solver here - let user press SPACE when ready
+                                    continue  # Skip the existing path recompute logic below
+                                
+                                # CRITICAL FIX: If a path was already computed, automatically recompute with new algorithm
+                                # This ensures changing the solver dropdown immediately shows the new algorithm's path
+                                had_existing_path = bool(self.auto_path)
+                                if had_existing_path:
+                                    logger.info('═══════════════════════════════════════════════════')
+                                    logger.info('🔄 ALGORITHM CHANGED: %s → %s',
+                                               algorithm_names[old_algorithm_idx], algorithm_names[self.algorithm_idx])
+                                    logger.info('   Triggering automatic resolve to show new path')
+                                    logger.info('═══════════════════════════════════════════════════')
+                                    # Clear old path first
                                     self.auto_path = []
                                     self.auto_mode = False
+                                    # Trigger new solve with updated algorithm_idx
+                                    # Use a short delay to ensure the UI updates before solver starts
+                                    self._set_message(f"🔄 Recomputing with {algorithm_names[self.algorithm_idx]}...", 2.0)
+                                    # Start solver on next frame to avoid blocking the UI event handler
+                                    # We'll use a simple flag that the main loop checks
+                                    self._pending_solver_trigger = True
                         elif hasattr(widget, 'control_name') and widget.control_name == 'presets':
                             old = self.current_preset_idx
                             self.current_preset_idx = widget.selected
@@ -5060,6 +5402,16 @@ class ZeldaGUI:
             except Exception:
                 pass
 
+            # Check if algorithm change triggered a pending solver (deferred to avoid blocking event handler)
+            if getattr(self, '_pending_solver_trigger', False):
+                self._pending_solver_trigger = False
+                algorithm_names = ["A*", "BFS", "Dijkstra", "Greedy", "D* Lite",
+                                 "CBS (Balanced)", "CBS (Explorer)", "CBS (Cautious)",
+                                 "CBS (Forgetful)", "CBS (Speedrunner)", "CBS (Greedy)"]
+                alg_name = algorithm_names[self.algorithm_idx] if self.algorithm_idx < len(algorithm_names) else f"Algorithm {self.algorithm_idx}"
+                logger.info('🔄 Processing pending solver trigger: Starting %s solver...', alg_name)
+                self._start_auto_solve()
+
             # Update animated control panel state (if active)
             self._update_control_panel_animation()
 
@@ -5304,13 +5656,8 @@ class ZeldaGUI:
                         except Exception as e:
                             logger.exception('SOLVER: Failed to remove grid file: %s', e)
                         
-                        # CRITICAL: Clear all solver state atomically
-                        self.solver_proc = None
-                        self.solver_outfile = None
-                        self.solver_gridfile = None
-                        self.solver_done = True
-                        self.solver_running = False
-                        logger.info('SOLVER: Cleanup complete, solver_running=False, solver_done=True, ready for new solve')
+                        # CRITICAL: Clear all solver state atomically using centralized helper
+                        self._clear_solver_state(reason="solver completed/failed")
 
             # Render
             self._render()
@@ -5463,7 +5810,9 @@ class ZeldaGUI:
             logger.exception('Item scanning failed')
 
         # Update status and render once to reflect initial state
-        algorithm_names = ["A*", "BFS", "Dijkstra", "Greedy", "D* Lite"]
+        algorithm_names = ["A*", "BFS", "Dijkstra", "Greedy", "D* Lite",
+                          "CBS (Balanced)", "CBS (Explorer)", "CBS (Cautious)",
+                          "CBS (Forgetful)", "CBS (Speedrunner)", "CBS (Greedy)"]
         solver_name = algorithm_names[self.algorithm_idx] if hasattr(self, 'algorithm_idx') else 'A*'
         self.message = f"Solving ({solver_name})..."
         try:
@@ -5577,6 +5926,25 @@ class ZeldaGUI:
         th = threading.Thread(target=_spawn_preview_process_async, daemon=True)
         th.start()
 
+    def _clear_solver_state(self, reason="cleanup"):
+        """Helper to centralize solver state cleanup and ensure consistency.
+        
+        Args:
+            reason: Description of why solver is being cleared (for logging)
+        """
+        logger.info('SOLVER_CLEANUP: Clearing solver state (%s)', reason)
+        self.solver_running = False
+        self.solver_done = True
+        self.solver_proc = None
+        self.solver_outfile = None
+        self.solver_gridfile = None
+        self.solver_start_time = None
+        self.solver_starting = False
+        # CRITICAL: Clear the saved algorithm so banner doesn't show stale info
+        if hasattr(self, 'solver_algorithm_idx'):
+            delattr(self, 'solver_algorithm_idx')
+        logger.debug('SOLVER_CLEANUP: State cleared')
+
     def _start_auto_solve(self):
         """Start auto-solve mode using state-space solver with inventory tracking.
 
@@ -5584,11 +5952,20 @@ class ZeldaGUI:
         the existing `_schedule_solver()` helper. Non-blocking and safe to call
         from the main loop or event handlers.
         """
+        algorithm_names = ["A*", "BFS", "Dijkstra", "Greedy", "D* Lite",
+                         "CBS (Balanced)", "CBS (Explorer)", "CBS (Cautious)",
+                         "CBS (Forgetful)", "CBS (Speedrunner)", "CBS (Greedy)"]
+        alg_idx = getattr(self, 'algorithm_idx', 0)
+        alg_name = algorithm_names[alg_idx] if alg_idx < len(algorithm_names) else f"Algorithm {alg_idx}"
+        
+        logger.info('═══════════════════════════════════════════════════')
         logger.info('DEBUG_SOLVER: _start_auto_solve() called')
+        logger.info(f'  Algorithm: {alg_name} (idx={alg_idx})')
         logger.info('DEBUG_SOLVER: solver_running=%s, auto_mode=%s, auto_start_solver=%s',
                     getattr(self, 'solver_running', None),
                     getattr(self, 'auto_mode', None),
                     getattr(self, 'auto_start_solver', None))
+        logger.info('═══════════════════════════════════════════════════')
         
         if getattr(self, 'solver_running', False):
             self._set_message('Solver already running', 1.5)
@@ -5660,6 +6037,9 @@ class ZeldaGUI:
                 self.solver_gridfile = None
                 self.solver_start_time = None
                 self.solver_starting = False
+                # Clear solver_algorithm_idx to avoid stale banner display
+                if hasattr(self, 'solver_algorithm_idx'):
+                    delattr(self, 'solver_algorithm_idx')
                 self._set_message(f'Recovered: {recovery_reason[:40]}')
                 logger.info('DEBUG_SOLVER: Recovery complete - retrying solver start')
                 # Don't return - allow immediate retry after recovery
@@ -5893,7 +6273,15 @@ class ZeldaGUI:
         self.solver_done = False
         self.solver_start_time = time.time()  # Track start time for timeout detection
         self.solver_starting = True
-        logger.info('SOLVER: Acquired solver lock, solver_running=True, solver_done=False, start_time=%.3f', self.solver_start_time)
+        
+        # DEBUG: Log algorithm_idx when solver starts to diagnose CBS→A* display bug
+        current_alg_idx = getattr(self, 'algorithm_idx', None)
+        logger.info('SOLVER: Acquired solver lock, solver_running=True, solver_done=False, start_time=%.3f, algorithm_idx=%s', 
+                   self.solver_start_time, current_alg_idx)
+        
+        # CRITICAL FIX: Save the algorithm_idx that THIS solver is using
+        # This ensures the banner shows the correct algorithm even if user changes dropdown mid-solve
+        self.solver_algorithm_idx = current_alg_idx if current_alg_idx is not None else 0
         
         self._auto_recenter_done = False
 
@@ -5915,13 +6303,7 @@ class ZeldaGUI:
         if not self.env or not getattr(self.env, 'start_pos', None) or not getattr(self.env, 'goal_pos', None):
             self._set_message('Start/goal not defined for this map')
             # CRITICAL: Clear solver_running immediately on early exit
-            self.solver_running = False
-            self.solver_done = True
-            self.solver_proc = None
-            self.solver_outfile = None
-            self.solver_gridfile = None
-            self.solver_start_time = None
-            self.solver_starting = False
+            self._clear_solver_state(reason="missing start/goal")
             logger.warning('SOLVER: Missing start/goal - cleared solver state')
             return
         start = tuple(self.env.start_pos)
@@ -6025,6 +6407,9 @@ class ZeldaGUI:
                         self.solver_running = False
                         self.solver_start_time = None
                         self.solver_starting = False
+                        # Clear solver_algorithm_idx to avoid stale banner display
+                        if hasattr(self, 'solver_algorithm_idx'):
+                            delattr(self, 'solver_algorithm_idx')
                         logger.info('SOLVER: Thread fallback finished, solver_running=False (main loop will poll results)')
                 # Store outfile so run loop can read it
                 self.solver_outfile = out_file
@@ -6040,6 +6425,9 @@ class ZeldaGUI:
                     self.solver_running = False
                     self.solver_proc = None
                     self.solver_outfile = None
+                    # Clear solver_algorithm_idx to avoid stale banner display
+                    if hasattr(self, 'solver_algorithm_idx'):
+                        delattr(self, 'solver_algorithm_idx')
                     self.solver_gridfile = None
                     self.solver_start_time = None
                     self.solver_starting = False
@@ -6058,7 +6446,7 @@ class ZeldaGUI:
         
         Args:
             path: Planned path
-            solver_result: Solver metadata
+            solver_result: Solver metadata (may include CBS metrics)
             teleports: Number of teleport/warp moves
         """
         # Validate path before starting animation
@@ -6092,6 +6480,15 @@ class ZeldaGUI:
         self.item_pickup_times = {}  # Reset pickup flash timers
         self.env.reset()
         
+        # Store CBS metrics if available
+        if solver_result and 'cbs_metrics' in solver_result:
+            self.last_solver_metrics = {
+                'name': f"CBS ({solver_result.get('persona', 'unknown')})",
+                'nodes': solver_result.get('nodes', 0),
+                'path_len': len(path),
+                'cbs': solver_result['cbs_metrics']
+            }
+        
         # === SCAN ITEMS ALONG PATH for visualization ===
         try:
             self._scan_items_along_path(path)
@@ -6111,14 +6508,25 @@ class ZeldaGUI:
                     self.auto_path[-1] if self.auto_path else None)
         
         # Build informative message with path items preview
-        keys_used = solver_result.get('keys_used', 0)
-        keys_avail = solver_result.get('keys_available', 0)
+        keys_used = solver_result.get('keys_used', 0) if solver_result else 0
+        keys_avail = solver_result.get('keys_available', 0) if solver_result else 0
         key_info = f"Keys: {keys_avail}->{keys_avail - keys_used}" if keys_used > 0 else ""
         
         # Include items along path in message
         items_display = self._get_path_items_display_text()
         
-        if teleports > 0:
+        # Check if CBS metrics are available
+        if solver_result and 'cbs_metrics' in solver_result:
+            cbs = solver_result['cbs_metrics']
+            persona = solver_result.get('persona', 'unknown')
+            base_msg = f"CBS ({persona.title()}): {len(path)} steps"
+            metrics_msg = f"Confusion: {cbs['confusion_index']:.2f} | Cognitive Load: {cbs['cognitive_load']:.2f}"
+            self.message = f"{base_msg} | {metrics_msg}"
+            
+            # Show detailed toast notification for CBS completion
+            toast_msg = f"CBS ({persona.title()}) completed | Confusion: {cbs['confusion_index']:.2f} | Entropy: {cbs['navigation_entropy']:.2f}"
+            self._show_toast(toast_msg, duration=4.0, toast_type='success')
+        elif teleports > 0:
             self.message = f"Path: {len(path)} ({teleports} warps) {key_info}"
         else:
             base_msg = f"Path: {len(path)} steps"
@@ -6307,7 +6715,22 @@ class ZeldaGUI:
         # Choose search algorithm based on UI selection
         alg = getattr(self, 'algorithm_idx', 0)
         # 0: A*, 1: BFS, 2: Dijkstra, 3: Greedy, 4: D* Lite (fallback to A*)
+        # 5-10: CBS variants (use subprocess solver, not quick grid path)
         # Note: D* Lite not yet implemented — selecting it currently uses A* fallback.
+        
+        # CRITICAL FIX: CBS algorithms (5-10) require the full subprocess solver
+        # They cannot be implemented as simple grid search, so skip quick path
+        # and return to trigger the heavy solver immediately
+        cbs_algorithms = {5, 6, 7, 8, 9, 10}
+        if alg in cbs_algorithms:
+            algorithm_names = ["A*", "BFS", "Dijkstra", "Greedy", "D* Lite",
+                             "CBS (Balanced)", "CBS (Explorer)", "CBS (Cautious)",
+                             "CBS (Forgetful)", "CBS (Speedrunner)", "CBS (Greedy)"]
+            alg_name = algorithm_names[alg] if alg < len(algorithm_names) else f"Algorithm {alg}"
+            logger.info(f"CBS algorithm selected ({alg_name}): Skipping quick grid path, will use full solver")
+            # Return failure to trigger fallback to full subprocess solver with CBS support
+            return False, [], 0
+        
         if alg == 4:
             logger.info("D* Lite selected but not implemented; using A* fallback")
             self._set_message("D* Lite selected: using A* fallback (not implemented)", 2.5)
@@ -7701,7 +8124,8 @@ class ZeldaGUI:
 
         def _worker():
             results = []
-            alg_names = ['A*', 'BFS', 'Dijkstra', 'Greedy', 'D* Lite', 'StateSpace']
+            alg_names = ['A*', 'BFS', 'Dijkstra', 'Greedy', 'D* Lite', 'StateSpace',
+                        'CBS (Balanced)', 'CBS (Explorer)', 'CBS (Cautious)']
             for idx, name in enumerate(alg_names):
                 start_t = time.time()
                 # D* Lite special-case: use D* Lite implementation
@@ -7739,6 +8163,49 @@ class ZeldaGUI:
                     except Exception as e:
                         results.append({'name': name, 'success': False, 'path_len': 0, 'nodes': 0, 'time_ms': 0, 'error': str(e)})
                         continue
+                # CBS special-case: use CognitiveBoundedSearch implementation
+                if 'CBS' in name:
+                    try:
+                        from src.simulation.cognitive_bounded_search import CognitiveBoundedSearch
+                        # Extract persona from name like "CBS (Balanced)"
+                        persona_map = {
+                            'CBS (Balanced)': 'balanced',
+                            'CBS (Explorer)': 'explorer',
+                            'CBS (Cautious)': 'cautious',
+                            'CBS (Forgetful)': 'forgetful',
+                            'CBS (Speedrunner)': 'speedrunner',
+                            'CBS (Greedy)': 'greedy'
+                        }
+                        persona = persona_map.get(name, 'balanced')
+                        cbs = CognitiveBoundedSearch(self.env, persona=persona, timeout=100000)
+                        ok, path, states, metrics = cbs.solve()
+                        elapsed = (time.time() - start_t) * 1000
+                        if ok:
+                            results.append({
+                                'name': name,
+                                'success': True,
+                                'path_len': len(path),
+                                'nodes': states,
+                                'time_ms': elapsed,
+                                'confusion': round(metrics.confusion_index, 3),
+                                'cog_load': round(metrics.cognitive_load, 3)
+                            })
+                            if not self.last_solver_metrics:
+                                self._set_last_solver_metrics(name, states, elapsed, len(path))
+                        else:
+                            results.append({
+                                'name': name,
+                                'success': False,
+                                'path_len': 0,
+                                'nodes': states,
+                                'time_ms': elapsed,
+                                'confusion': 0,
+                                'cog_load': 0
+                            })
+                        continue
+                    except Exception as e:
+                        results.append({'name': name, 'success': False, 'path_len': 0, 'nodes': 0, 'time_ms': 0, 'error': str(e), 'confusion': 0, 'cog_load': 0})
+                        continue
                 # For other algorithms use existing mechanism (set algorithm_idx temporarily)
                 saved_alg = getattr(self, 'algorithm_idx', 0)
                 saved_preview = self.preview_overlay_visible
@@ -7747,7 +8214,7 @@ class ZeldaGUI:
                 try:
                     self.preview_overlay_visible = False
                     self.preview_modal_enabled = False
-                    self.algorithm_idx = idx if idx < 5 else 0
+                    self.algorithm_idx = idx  # FIXED: No longer force CBS indices to 0
                     t0 = time.time()
                     success, path, teleports = self._smart_grid_path()
                     elapsed = (time.time() - t0) * 1000
@@ -7823,20 +8290,37 @@ class ZeldaGUI:
             return
         sidebar_x = self.screen_w - self.SIDEBAR_WIDTH
         box_w = self.SIDEBAR_WIDTH - 20
-        box_h = min(220, 24 + 20 * len(self.solver_comparison_results))
+        # Check if any CBS results exist to adjust layout
+        has_cbs = any('CBS' in r['name'] for r in self.solver_comparison_results)
+        row_height = 22 if has_cbs else 18
+        box_h = min(300, 24 + row_height * len(self.solver_comparison_results) + 20)
         box_y = 220
         box_rect = pygame.Rect(sidebar_x + 10, box_y, box_w, box_h)
         pygame.draw.rect(surface, (38, 38, 55), box_rect)
         pygame.draw.rect(surface, (100, 150, 255), box_rect, 1)
-        font = pygame.font.SysFont('Arial', 12, bold=True)
-        header = font.render('Solver   Success   Len   Nodes   ms', True, (200, 200, 255))
+        font = pygame.font.SysFont('Arial', 11, bold=True)
+        if has_cbs:
+            header = font.render('Solver Comparison', True, (200, 200, 255))
+        else:
+            header = font.render('Solver   Success   Len   Nodes   ms', True, (200, 200, 255))
         surface.blit(header, (box_rect.x + 6, box_rect.y + 6))
         y = box_rect.y + 28
-        small = pygame.font.SysFont('Arial', 11)
+        small = pygame.font.SysFont('Arial', 10)
         for r in self.solver_comparison_results:
-            text = f"{r['name'][:7]:7}   {str(r.get('success',False))[:5]:5}   {r.get('path_len',0):3}   {r.get('nodes',0):6}   {int(r.get('time_ms',0)):4}"
-            surface.blit(small.render(text, True, (200,200,200)), (box_rect.x + 6, y))
-            y += 18
+            if 'CBS' in r['name'] and 'confusion' in r:
+                # CBS result with metrics (2-line display)
+                line1 = f"{r['name'][:15]:15} {str(r.get('success',False))[:5]:5} Len:{r.get('path_len',0):<4}"
+                line2 = f"  Confusion:{r.get('confusion',0):.2f} Load:{r.get('cog_load',0):.2f} {int(r.get('time_ms',0))}ms"
+                color = (200, 255, 200) if r.get('success') else (255, 150, 150)
+                surface.blit(small.render(line1, True, color), (box_rect.x + 6, y))
+                surface.blit(small.render(line2, True, (180, 180, 255)), (box_rect.x + 6, y + 11))
+                y += row_height
+            else:
+                # Standard result (1-line display)
+                text = f"{r['name'][:7]:7}   {str(r.get('success',False))[:5]:5}   {r.get('path_len',0):3}   {r.get('nodes',0):6}   {int(r.get('time_ms',0)):4}"
+                color = (200, 200, 200)
+                surface.blit(small.render(text, True, color), (box_rect.x + 6, y))
+                y += row_height
         # Dismiss hint
         hint = small.render('Press Esc to close', True, (150,150,150))
         surface.blit(hint, (box_rect.x + 6, box_rect.y + box_rect.h - 18))
@@ -7851,6 +8335,20 @@ class ZeldaGUI:
         """Show a floating toast notification."""
         if hasattr(self, 'toast_notifications'):
             self.toast_notifications.append(ToastNotification(message, duration, toast_type))
+    
+    def _format_cbs_metrics_tooltip(self, cbs_metrics: dict) -> str:
+        """Format CBS metrics for detailed tooltip display."""
+        lines = [
+            f"Confusion Index: {cbs_metrics['confusion_index']:.3f}",
+            f"Navigation Entropy: {cbs_metrics['navigation_entropy']:.3f}",
+            f"Cognitive Load: {cbs_metrics['cognitive_load']:.3f}",
+            f"Aha Latency: {cbs_metrics['aha_latency']} steps",
+            f"Unique Tiles: {cbs_metrics['unique_tiles']}",
+            f"Peak Memory: {cbs_metrics['peak_memory']} items",
+            f"Replans: {cbs_metrics['replans']}",
+            f"Confusion Events: {cbs_metrics['confusion_events']}"
+        ]
+        return "\n".join(lines)
     
     def _update_toasts(self):
         """Update and remove expired toasts."""
@@ -9224,6 +9722,9 @@ class ZeldaGUI:
         
         # Render error banner (on top of everything)
         self._render_error_banner(self.screen)
+        
+        # Render solver status banner (shows algorithm being used)
+        self._render_solver_status_banner(self.screen)
         
         # Render toast notifications (on top of everything)
         self._render_toasts(self.screen)
