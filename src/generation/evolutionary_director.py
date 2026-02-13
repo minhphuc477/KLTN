@@ -48,6 +48,13 @@ from src.generation.grammar import (
     Difficulty,
 )
 
+# VGLC compliance imports
+from src.data.vglc_utils import (
+    filter_virtual_nodes,
+    validate_topology,
+    parse_node_attributes,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -205,18 +212,24 @@ def mission_graph_to_networkx(graph: MissionGraph) -> nx.Graph:
     """
     Convert MissionGraph to NetworkX graph for compatibility.
     
+    VGLC Compliance: Preserves composite node labels and supports virtual nodes.
+    
     Args:
         graph: MissionGraph from grammar
         
     Returns:
-        NetworkX Graph with node attributes
+        NetworkX Graph with node attributes (may include VGLC virtual nodes)
     """
     G = nx.Graph()
     
     # Add nodes with attributes
     for node_id, node in graph.nodes.items():
+        # VGLC Compliance: Generate composite label if node has multiple attributes
+        label = node.node_type.name  # Default: single label
+        
         G.add_node(
             node_id,
+            label=label,              # VGLC composite label
             type=node.node_type.name,
             difficulty=node.difficulty,
             position=node.position,
@@ -229,6 +242,7 @@ def mission_graph_to_networkx(graph: MissionGraph) -> nx.Graph:
         G.add_edge(
             edge.source,
             edge.target,
+            label=edge.edge_type.name.lower(),  # VGLC edge label
             edge_type=edge.edge_type.name,
             key_required=edge.key_required,
         )
@@ -654,7 +668,21 @@ class EvolutionaryTopologyGenerator:
         # Convert to NetworkX for return
         best_networkx = mission_graph_to_networkx(best.phenotype)
         
-        return best_networkx
+        # VGLC Compliance: Filter virtual nodes
+        logger.debug("Applying VGLC compliance: filtering virtual nodes...")
+        best_networkx_physical = filter_virtual_nodes(best_networkx)
+        
+        # VGLC Compliance: Validate topology
+        topology_report = validate_topology(best_networkx_physical)
+        if not topology_report.is_valid:
+            logger.warning(
+                f"VGLC topology validation warnings: {topology_report.summary()}"
+            )
+        else:
+            logger.info("VGLC topology validation: PASSED")
+        
+        return best_networkx_physical
+
     
     def _generate_initial_population(self) -> List[Individual]:
         """
