@@ -381,7 +381,9 @@ class TensionCurveEvaluator:
         """
         Calculate fitness score for a graph.
         
-        Fitness = 1.0 - normalized_MSE if solvable, else 0.0
+        Fitness = weighted combination of:
+        - Tension curve matching (1.0 - MSE)
+        - Backtracking complexity (unique_nodes / total_steps)
         
         Args:
             graph: MissionGraph to evaluate
@@ -400,9 +402,15 @@ class TensionCurveEvaluator:
         mse = np.mean((extracted - self.target_curve) ** 2)
         
         # Normalize MSE (assuming max possible MSE is 1.0)
-        fitness = 1.0 - min(mse, 1.0)
+        curve_fitness = 1.0 - min(mse, 1.0)
         
-        # Bonus for having reasonable graph complexity
+        # Calculate backtracking fitness (Thesis Upgrade #4)
+        backtracking_score = self._calculate_backtracking_score(graph)
+        
+        # Weighted combination: 70% curve matching, 30% backtracking complexity
+        fitness = (0.7 * curve_fitness) + (0.3 * backtracking_score)
+        
+        # Bonus/penalty for graph complexity
         node_count = len(graph.nodes)
         if node_count < 3:
             fitness *= 0.5  # Penalize too-simple graphs
@@ -410,6 +418,56 @@ class TensionCurveEvaluator:
             fitness *= 0.8  # Penalize overly complex graphs
         
         return max(0.0, min(1.0, fitness))
+    
+    def _calculate_backtracking_score(self, graph: MissionGraph) -> float:
+        """
+        Calculate backtracking complexity metric (Thesis Upgrade #4).
+        
+        Measures how much the player revisits nodes during optimal traversal.
+        Higher score favors dungeons with cyclic structures and shortcuts.
+        
+        Formula: unique_nodes_visited / total_steps_in_path
+        - Linear path: score = 1.0 (each node visited once)
+        - Backtracking: score < 1.0 (nodes revisited)
+        - Ideal for complex dungeons: 0.6-0.85
+        
+        Args:
+            graph: MissionGraph to evaluate
+            
+        Returns:
+            Backtracking score (0.0-1.0)
+        """
+        start = graph.get_start_node()
+        goal = graph.get_goal_node()
+        
+        if not start or not goal:
+            return 0.0
+        
+        # Find optimal path using BFS
+        path = self._find_path(graph, start.id, goal.id)
+        if not path or len(path) < 2:
+            return 0.0
+        
+        # Calculate backtracking ratio
+        total_steps = len(path)
+        unique_nodes = len(set(path))
+        
+        # Backtracking score: lower is better for complex dungeons
+        backtracking_ratio = unique_nodes / total_steps
+        
+        # Reward moderate backtracking (0.6-0.85 range)
+        # Too linear (>0.9) = boring, too complex (<0.5) = frustrating
+        if backtracking_ratio > 0.9:
+            # Penalize overly linear dungeons
+            score = 0.5 * backtracking_ratio
+        elif backtracking_ratio < 0.5:
+            # Penalize excessive backtracking
+            score = backtracking_ratio * 2.0
+        else:
+            # Ideal range: reward complexity
+            score = backtracking_ratio
+        
+        return max(0.0, min(1.0, score))
     
     def _is_solvable(self, graph: MissionGraph) -> bool:
         """

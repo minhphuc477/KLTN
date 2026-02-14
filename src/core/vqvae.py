@@ -173,7 +173,7 @@ class VectorQuantizer(nn.Module):
         z_q = z_e + (z_q - z_e).detach()
         
         # Compute perplexity (measure of codebook usage)
-        encodings = F.one_hot(indices, self.num_embeddings).float()
+        encodings = torch.one_hot(indices, self.num_embeddings).float()
         avg_probs = torch.mean(encodings, dim=0)
         perplexity = torch.exp(-torch.sum(avg_probs * torch.log(avg_probs + 1e-10)))
         losses['perplexity'] = perplexity
@@ -197,7 +197,7 @@ class VectorQuantizer(nn.Module):
     def _ema_update(self, z_flat: Tensor, indices: Tensor):
         """Update codebook using exponential moving average."""
         with torch.no_grad():
-            encodings = F.one_hot(indices, self.num_embeddings).float()
+            encodings = torch.one_hot(indices, self.num_embeddings).float()
             
             # Update cluster sizes
             cluster_size = torch.sum(encodings, dim=0)

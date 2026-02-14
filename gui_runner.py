@@ -2704,6 +2704,7 @@ class ZeldaGUI:
             return
         
         algorithm_names = ["A*", "BFS", "Dijkstra", "Greedy", "D* Lite",
+                         "DFS/IDDFS", "Bidirectional A*",
                          "CBS (Balanced)", "CBS (Explorer)", "CBS (Cautious)",
                          "CBS (Forgetful)", "CBS (Speedrunner)", "CBS (Greedy)"]
         
@@ -2759,6 +2760,7 @@ class ZeldaGUI:
         
         # Center: Current action/message + ALGORITHM INDICATOR
         algorithm_names = ["A*", "BFS", "Dijkstra", "Greedy", "D* Lite",
+                         "DFS/IDDFS", "Bidirectional A*",
                          "CBS (Balanced)", "CBS (Explorer)", "CBS (Cautious)",
                          "CBS (Forgetful)", "CBS (Speedrunner)", "CBS (Greedy)"]
         alg_idx = getattr(self, 'algorithm_idx', 0)
@@ -3285,7 +3287,9 @@ class ZeldaGUI:
                                     nearest_dist = dist
                         if nearest is not None:
                             prev_scroll = getattr(self, 'control_panel_scroll', 0)
-                            target_scroll = max(0, min(getattr(self, 'control_panel_scroll_max', 0), nearest.full_rect.y - panel_rect.y - header_height))
+                            # Use full_rect if available, otherwise fall back to rect
+                            widget_rect = getattr(nearest, 'full_rect', nearest.rect)
+                            target_scroll = max(0, min(getattr(self, 'control_panel_scroll_max', 0), widget_rect.y - panel_rect.y - header_height))
                             if abs(target_scroll - prev_scroll) > 1:
                                 self.control_panel_scroll = target_scroll
                                 self.control_panel_ignore_click_until = time.time() + 0.12
@@ -3359,6 +3363,7 @@ class ZeldaGUI:
                             self.algorithm_idx = widget.selected
                             if old_algorithm_idx != self.algorithm_idx:
                                 algorithm_names = ["A*", "BFS", "Dijkstra", "Greedy", "D* Lite",
+                                                 "DFS/IDDFS", "Bidirectional A*",
                                                  "CBS (Balanced)", "CBS (Explorer)", "CBS (Cautious)",
                                                  "CBS (Forgetful)", "CBS (Speedrunner)", "CBS (Greedy)"]
                                 self.message = f"Solver: {algorithm_names[self.algorithm_idx]}"
@@ -5406,6 +5411,7 @@ class ZeldaGUI:
             if getattr(self, '_pending_solver_trigger', False):
                 self._pending_solver_trigger = False
                 algorithm_names = ["A*", "BFS", "Dijkstra", "Greedy", "D* Lite",
+                                 "DFS/IDDFS", "Bidirectional A*",
                                  "CBS (Balanced)", "CBS (Explorer)", "CBS (Cautious)",
                                  "CBS (Forgetful)", "CBS (Speedrunner)", "CBS (Greedy)"]
                 alg_name = algorithm_names[self.algorithm_idx] if self.algorithm_idx < len(algorithm_names) else f"Algorithm {self.algorithm_idx}"
@@ -5811,6 +5817,7 @@ class ZeldaGUI:
 
         # Update status and render once to reflect initial state
         algorithm_names = ["A*", "BFS", "Dijkstra", "Greedy", "D* Lite",
+                          "DFS/IDDFS", "Bidirectional A*",
                           "CBS (Balanced)", "CBS (Explorer)", "CBS (Cautious)",
                           "CBS (Forgetful)", "CBS (Speedrunner)", "CBS (Greedy)"]
         solver_name = algorithm_names[self.algorithm_idx] if hasattr(self, 'algorithm_idx') else 'A*'
@@ -5953,9 +5960,26 @@ class ZeldaGUI:
         from the main loop or event handlers.
         """
         algorithm_names = ["A*", "BFS", "Dijkstra", "Greedy", "D* Lite",
+                         "DFS/IDDFS", "Bidirectional A*",
                          "CBS (Balanced)", "CBS (Explorer)", "CBS (Cautious)",
                          "CBS (Forgetful)", "CBS (Speedrunner)", "CBS (Greedy)"]
-        alg_idx = getattr(self, 'algorithm_idx', 0)
+        
+        # CRITICAL FIX: Read algorithm_idx directly from dropdown widget at solve-time
+        # This is the DEFINITIVE source of truth for which algorithm the user selected
+        alg_idx = None  # Will be set by widget lookup
+        if hasattr(self, 'widget_manager') and self.widget_manager:
+            for widget in self.widget_manager.widgets:
+                if hasattr(widget, 'control_name') and widget.control_name == 'algorithm':
+                    alg_idx = widget.selected
+                    logger.info('SOLVER_FIX: Read algorithm_idx=%d (%s) directly from dropdown widget.selected',
+                               alg_idx, algorithm_names[alg_idx] if alg_idx < len(algorithm_names) else 'Unknown')
+                    break
+        
+        # Fallback to self.algorithm_idx if widget not found (shouldn't happen in normal operation)
+        if alg_idx is None:
+            alg_idx = getattr(self, 'algorithm_idx', 0)
+            logger.warning('SOLVER_FIX: Widget lookup failed, falling back to self.algorithm_idx=%d', alg_idx)
+        
         alg_name = algorithm_names[alg_idx] if alg_idx < len(algorithm_names) else f"Algorithm {alg_idx}"
         
         logger.info('═══════════════════════════════════════════════════')
@@ -6101,7 +6125,8 @@ class ZeldaGUI:
         
         # Indicate starting
         self._set_message('Starting solver in background...', 2.0)
-        try:
+        try:# CRITICAL FIX: Pass algorithm_idx explicitly to _schedule_solver() to eliminate race conditions
+            self._schedule_solver(algorithm_idx=alg_idx)
             self._schedule_solver()
             logger.info('DEBUG_SOLVER: _schedule_solver() completed without exception')
         except Exception:
@@ -6260,8 +6285,12 @@ class ZeldaGUI:
         
 
     
-    def _schedule_solver(self):
-        """Start solver in background worker process/thread."""
+    def _schedule_solver(self, algorithm_idx=None):
+        """Start solver in background worker process/thread.
+        
+        Args:
+            algorithm_idx: Algorithm index to use (if None, read from self.algorithm_idx)
+        """
         if getattr(self, 'solver_running', False):
             self._set_message('Solver already running...')
             logger.warning('SOLVER: _schedule_solver blocked - solver_running already True')
@@ -6274,8 +6303,18 @@ class ZeldaGUI:
         self.solver_start_time = time.time()  # Track start time for timeout detection
         self.solver_starting = True
         
+        # CRITICAL FIX: Use explicit algorithm_idx parameter if provided
+        # This eliminates race conditions between dropdown widget state and self.algorithm_idx
+        if algorithm_idx is not None:
+            current_alg_idx = algorithm_idx
+            # Also sync self.algorithm_idx for consistency with other parts of the code
+            self.algorithm_idx = algorithm_idx
+            logger.info('SOLVER_FIX: Using explicit algorithm_idx=%d passed to _schedule_solver()', algorithm_idx)
+        else:
+            current_alg_idx = getattr(self, 'algorithm_idx', None)
+            logger.info('SOLVER: Using self.algorithm_idx=%s (no explicit arg provided)', current_alg_idx)
+        
         # DEBUG: Log algorithm_idx when solver starts to diagnose CBS→A* display bug
-        current_alg_idx = getattr(self, 'algorithm_idx', None)
         logger.info('SOLVER: Acquired solver lock, solver_running=True, solver_done=False, start_time=%.3f, algorithm_idx=%s', 
                    self.solver_start_time, current_alg_idx)
         
@@ -6724,6 +6763,7 @@ class ZeldaGUI:
         cbs_algorithms = {5, 6, 7, 8, 9, 10}
         if alg in cbs_algorithms:
             algorithm_names = ["A*", "BFS", "Dijkstra", "Greedy", "D* Lite",
+                             "DFS/IDDFS", "Bidirectional A*",
                              "CBS (Balanced)", "CBS (Explorer)", "CBS (Cautious)",
                              "CBS (Forgetful)", "CBS (Speedrunner)", "CBS (Greedy)"]
             alg_name = algorithm_names[alg] if alg < len(algorithm_names) else f"Algorithm {alg}"

@@ -237,9 +237,11 @@ class DropdownWidget(BaseWidget):
         
         # Calculate dropdown menu rect
         option_height = 24
+        # Increase max height to 360 to accommodate up to 15 options (13 algorithms + room for future additions)
+        max_dropdown_height = 360
         self.dropdown_rect = pygame.Rect(
             pos[0], pos[1] + 30,
-            180, min(len(options) * option_height, 200)
+            180, min(len(options) * option_height, max_dropdown_height)
         )
         
         self.hover_option = -1
@@ -265,9 +267,10 @@ class DropdownWidget(BaseWidget):
         self._pos = value
         self.rect = pygame.Rect(value[0], value[1], 180, 28)
         option_height = 24
+        max_dropdown_height = 360  # Match increased max from __init__
         self.dropdown_rect = pygame.Rect(
             value[0], value[1] + 30,
-            180, min(len(self.options) * option_height, 200)
+            180, min(len(self.options) * option_height, max_dropdown_height)
         )
         # Compute full_rect that includes label area above the control so layout
         # routines can account for the extra height when computing content size.
@@ -324,12 +327,17 @@ class DropdownWidget(BaseWidget):
                 option_idx = int(rel_y // 24)
                 if 0 <= option_idx < len(self.options):
                     self.selected = int(option_idx)
+                    # CRITICAL FIX (BUG #2): Clear hover highlight after selection
+                    # This prevents the blue hover highlight from sticking after click
+                    self.hover_option = -1
                     # Respect keep_open_on_select flag
                     self.is_open = bool(self.keep_open_on_select)
                     return True
             else:
                 # Clicked outside, close dropdown
                 self.is_open = False
+                # Also clear hover when closing dropdown by clicking outside
+                self.hover_option = -1
                 return True
         else:
             # Check if clicking main button
@@ -535,6 +543,8 @@ class ButtonWidget(BaseWidget):
         """Update position."""
         self._pos = value
         self.rect = pygame.Rect(value[0], value[1], self._width, self._height)
+        # Set full_rect to match rect for ButtonWidget (no label area above like DropdownWidget)
+        self.full_rect = self.rect.copy()
     
     def handle_mouse_down(self, pos: Tuple[int, int], button: int) -> bool:
         """Handle mouse down - mark as pressed."""
@@ -554,13 +564,13 @@ class ButtonWidget(BaseWidget):
         
         if button == 1 and self.pressed:
             self.pressed = False
+            # Always clear hover/active state after click to prevent persistent blue highlight
+            self.state = WidgetState.NORMAL
             if self.rect.collidepoint(pos):
                 # Execute callback
                 if self.callback:
                     self.callback()
                 return True
-            else:
-                self.state = WidgetState.NORMAL
         return False
     
     def render(self, surface: pygame.Surface) -> None:

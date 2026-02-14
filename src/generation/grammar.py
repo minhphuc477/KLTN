@@ -84,6 +84,9 @@ class NodeType(Enum):
     PUZZLE = auto()
     ITEM = auto()
     EMPTY = auto()  # Connector room
+    SWITCH = auto()  # State-changing switch (Thesis Upgrade #2)
+    BIG_KEY = auto()  # Boss key (Thesis Upgrade #3)
+    BOSS_DOOR = auto()  # Final barrier before goal (Thesis Upgrade #3)
 
 
 class EdgeType(Enum):
@@ -92,6 +95,9 @@ class EdgeType(Enum):
     LOCKED = auto()     # Requires key
     ONE_WAY = auto()    # One-directional
     HIDDEN = auto()     # Secret passage
+    SHORTCUT = auto()   # Shortcut/loop (Thesis Upgrade #1)
+    ON_OFF_GATE = auto()  # Switch-controlled (Thesis Upgrade #2)
+    BOSS_LOCKED = auto()  # Boss door requiring big key (Thesis Upgrade #3)
 
 
 # ============================================================================
@@ -709,6 +715,27 @@ class MissionGrammar:
             logger.warning("Generated graph failed lock-key validation, fixing...")
             graph = self._fix_lock_key_ordering(graph)
         
+        # THESIS UPGRADE: Apply advanced rules for cyclic generation
+        # Add shortcuts (30% chance)
+        if self.rng.random() < 0.3 and len(graph.nodes) >= 4:
+            merge_rule = MergeRule()
+            if merge_rule.can_apply(graph, context):
+                graph = merge_rule.apply(graph, context)
+                logger.info("Applied MergeRule for cyclic topology")
+        
+        # Add switches (25% chance)
+        if self.rng.random() < 0.25 and len(graph.nodes) >= 4:
+            switch_rule = InsertSwitchRule()
+            if switch_rule.can_apply(graph, context):
+                graph = switch_rule.apply(graph, context)
+                logger.info("Applied InsertSwitchRule for dynamic state")
+        
+        # Add boss gauntlet (guaranteed if goal exists)
+        boss_rule = AddBossGauntlet()
+        if boss_rule.can_apply(graph, context):
+            graph = boss_rule.apply(graph, context)
+            logger.info("Applied AddBossGauntlet for big key hierarchy")
+        
         # Update positions for layout
         graph = self._layout_graph(graph)
         
@@ -869,6 +896,281 @@ def graph_to_gnn_input(
         'current_node': current_node_idx or 0,
         'adjacency': graph.to_adjacency_matrix(),
     }
+
+
+# ============================================================================
+# TEST
+# ============================================================================
+
+if __name__ == '__main__':
+    logging.basicConfig(level=logging.INFO)
+    
+    print("Testing Mission Grammar...")
+    
+    # Create grammar
+    grammar = MissionGrammar(seed=42)
+    
+    # Generate mission graph
+    graph = grammar.generate(
+        difficulty=Difficulty.MEDIUM,
+        num_rooms=8,
+        max_keys=2,
+    )
+    
+    print(f"\nGenerated graph with {len(graph.nodes)} nodes and {len(graph.edges)} edges")
+    
+    # Print nodes
+    print("\nNodes:")
+    for node in sorted(graph.nodes.values(), key=lambda n: n.id):
+        key_info = f" (key_id={node.key_id})" if node.key_id else ""
+        print(f"  {node.id}: {node.node_type.name} at {node.position}{key_info}")
+    
+    # Print edges
+    print("\nEdges:")
+    for edge in graph.edges:
+        key_req = f" [requires key {edge.key_required}]" if edge.key_required else ""
+        print(f"  {edge.source} → {edge.target} ({edge.edge_type.name}){key_req}")
+    
+    # Validate
+    valid = grammar.validate_lock_key_ordering(graph)
+    print(f"\nLock-key ordering valid: {valid}")
+    
+    # Convert to tensors
+    gnn_input = graph_to_gnn_input(graph, current_node_idx=0)
+    print(f"\nGNN Input:")
+
+
+# ============================================================================
+# THESIS UPGRADES: Advanced Production Rules
+# ============================================================================
+
+class MergeRule(ProductionRule):
+    """
+    THESIS UPGRADE #1: Create shortcuts by merging two separate branches.
+    
+    Finds two non-adjacent nodes and connects them with a shortcut edge,
+    creating cycles in the dungeon topology (loops for backtracking).
+    
+    Research: Dormans (2011) - Cyclic dungeon graphs improve player agency.
+    """
+    
+    def __init__(self):
+        super().__init__("MergeShortcut", weight=0.5)
+    
+    def can_apply(self, graph: MissionGraph, context: Dict[str, Any]) -> bool:
+        """Check if we can find two nodes to merge."""
+        # Need at least 4 nodes to make meaningful shortcuts
+        if len(graph.nodes) < 4:
+            return False
+        
+        # Check if any valid pairs exist
+        nodes = list(graph.nodes.keys())
+        for i, node1 in enumerate(nodes):
+            for node2 in nodes[i+1:]:
+                # Check not already adjacent
+                if node2 not in graph._adjacency.get(node1, []):
+                    # Check both have degree < 3 (room for another connection)
+                    if (len(graph._adjacency.get(node1, [])) < 3 and 
+                        len(graph._adjacency.get(node2, [])) < 3):
+                        return True
+        return False
+    
+    def apply(self, graph: MissionGraph, context: Dict[str, Any]) -> MissionGraph:
+        """Add shortcut edge between two separate branches."""
+        rng = context.get('rng', random)
+        candidates = []
+        nodes = list(graph.nodes.keys())
+        
+        for i, node1 in enumerate(nodes):
+            for node2 in nodes[i+1:]:
+                if node2 not in graph._adjacency.get(node1, []):
+                    if (len(graph._adjacency.get(node1, [])) < 3 and 
+                        len(graph._adjacency.get(node2, [])) < 3):
+                        # Calculate graph distance (prefer longer paths for better shortcuts)
+                        dist = self._graph_distance(graph, node1, node2)
+                        if dist >= 2:  # At least 2 hops to make it worthwhile
+                            candidates.append((node1, node2, dist))
+        
+        if not candidates:
+            return graph
+        
+        # Prefer longer paths for more interesting shortcuts
+        candidates.sort(key=lambda x: x[2], reverse=True)
+        node1, node2, _ = candidates[0]
+        
+        # Add shortcut edge (bidirectional)
+        graph.add_edge(node1, node2, EdgeType.SHORTCUT)
+        logger.info(f"MergeRule: Added shortcut {node1} ↔ {node2}")
+        return graph
+    
+    def _graph_distance(self, graph: MissionGraph, start: int, end: int) -> int:
+        """BFS to find shortest path distance."""
+        if start == end:
+            return 0
+        
+        visited = {start}
+        queue = [(start, 0)]
+        
+        while queue:
+            current, dist = queue.pop(0)
+            for neighbor in graph._adjacency.get(current, []):
+                if neighbor == end:
+                    return dist + 1
+                if neighbor not in visited:
+                    visited.add(neighbor)
+                    queue.append((neighbor, dist + 1))
+        
+        return 999  # Not connected
+
+
+class InsertSwitchRule(ProductionRule):
+    """
+    THESIS UPGRADE #2: Add switch nodes that control ON/OFF gates.
+    
+    Creates dynamic topology where paths open after activating switches.
+    Implements global state changes in dungeon progression.
+    
+    Research: Smith & Mateas (2011) - State-dependent level design.
+    """
+    
+    def __init__(self):
+        super().__init__("InsertSwitch", weight=0.4)
+    
+    def can_apply(self, graph: MissionGraph, context: Dict[str, Any]) -> bool:
+        """Check if we have edges that could become gated."""
+        # Need at least 4 nodes and some normal edges
+        if len(graph.nodes) < 4:
+            return False
+        normal_edges = [e for e in graph.edges if e.edge_type == EdgeType.PATH]
+        return len(normal_edges) > 0
+    
+    def apply(self, graph: MissionGraph, context: Dict[str, Any]) -> MissionGraph:
+        """Insert switch + gated edge."""
+        rng = context.get('rng', random)
+        
+        # Find suitable edge to gate
+        normal_edges = [(i, e) for i, e in enumerate(graph.edges) 
+                       if e.edge_type == EdgeType.PATH]
+        if not normal_edges:
+            return graph
+        
+        edge_idx, edge = rng.choice(normal_edges)
+        
+        # Change edge to ON_OFF_GATE
+        graph.edges[edge_idx].edge_type = EdgeType.ON_OFF_GATE
+        
+        # Add switch node in a separate branch
+        switch_id = max(graph.nodes.keys()) + 1
+        switch_node = MissionNode(
+            id=switch_id,
+            node_type=NodeType.SWITCH,
+            position=(rng.randint(0, 5), rng.randint(0, 5)),
+            difficulty=context.get('difficulty', 0.5) * 0.6,
+        )
+        graph.add_node(switch_node)
+        
+        # Connect switch to graph (not near the gated edge)
+        other_nodes = [n for n in graph.nodes.keys() 
+                      if n not in [edge.source, edge.target, switch_id]]
+        if other_nodes:
+            anchor = rng.choice(other_nodes)
+            graph.add_edge(anchor, switch_id, EdgeType.PATH)
+        
+        logger.info(f"InsertSwitchRule: Switch {switch_id} controls edge {edge.source}→{edge.target}")
+        return graph
+
+
+class AddBossGauntlet(ProductionRule):
+    """
+    THESIS UPGRADE #3: Enforce Big Key → Boss Door → Goal hierarchy.
+    
+    Ensures the final challenge requires backtracking for the Big Key,
+    enforcing the classic Zelda dungeon structure.
+    
+    Research: Treanor et al. (2015) - Lock-and-key design patterns.
+    """
+    
+    def __init__(self):
+        super().__init__("AddBossGauntlet", weight=1.0)
+    
+    def can_apply(self, graph: MissionGraph, context: Dict[str, Any]) -> bool:
+        """Check if we have a goal node to protect."""
+        return any(n.node_type == NodeType.GOAL for n in graph.nodes.values())
+    
+    def apply(self, graph: MissionGraph, context: Dict[str, Any]) -> MissionGraph:
+        """Insert Boss Door before Goal, spawn Big Key far away."""
+        rng = context.get('rng', random)
+        
+        # Find goal node
+        goal_nodes = [n for n in graph.nodes.values() if n.node_type == NodeType.GOAL]
+        if not goal_nodes:
+            return graph
+        
+        goal = goal_nodes[0]
+        
+        # Find predecessor of goal
+        preds = [src for src, tgt in [(e.source, e.target) for e in graph.edges] 
+                if tgt == goal.id]
+        if not preds:
+            return graph
+        
+        pred = preds[0]
+        
+        # Create Boss Door
+        boss_door_id = max(graph.nodes.keys()) + 1
+        boss_door = MissionNode(
+            id=boss_door_id,
+            node_type=NodeType.BOSS_DOOR,
+            position=(goal.position[0] - 1, goal.position[1]),
+            difficulty=0.9,
+            key_id=boss_door_id,  # Requires big key
+        )
+        graph.add_node(boss_door)
+        
+        # Rewire: pred → boss_door → goal
+        edge_to_remove = next((i for i, e in enumerate(graph.edges) 
+                              if e.source == pred and e.target == goal.id), None)
+        if edge_to_remove is not None:
+            graph.edges.pop(edge_to_remove)
+        
+        graph.add_edge(pred, boss_door_id, EdgeType.BOSS_LOCKED, key_required=boss_door_id)
+        graph.add_edge(boss_door_id, goal.id, EdgeType.PATH)
+        
+        # Spawn Big Key in distant branch
+        # Find node farthest from goal
+        distances = {}
+        queue = [(goal.id, 0)]
+        visited = {goal.id}
+        
+        while queue:
+            current, dist = queue.pop(0)
+            distances[current] = dist
+            for neighbor in graph._adjacency.get(current, []):
+                if neighbor not in visited:
+                    visited.add(neighbor)
+                    queue.append((neighbor, dist + 1))
+        
+        if distances:
+            farthest_node = max(distances.items(), key=lambda x: x[1])[0]
+            
+            big_key_id = max(graph.nodes.keys()) + 1
+            big_key = MissionNode(
+                id=big_key_id,
+                node_type=NodeType.BIG_KEY,
+                position=(graph.nodes[farthest_node].position[0], 
+                         graph.nodes[farthest_node].position[1] + 1),
+                difficulty=0.7,
+                key_id=boss_door_id,  # Opens boss door
+            )
+            graph.add_node(big_key)
+            graph.add_edge(farthest_node, big_key_id, EdgeType.PATH)
+            
+            # Register key-lock mapping
+            graph._key_to_lock[boss_door_id] = boss_door_id
+            
+            logger.info(f"AddBossGauntlet: Boss Door {boss_door_id}, Big Key {big_key_id} (dist={distances[farthest_node]})")
+        
+        return graph
 
 
 # ============================================================================

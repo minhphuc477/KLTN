@@ -124,7 +124,7 @@ class TestBeliefMap:
         
         belief.observe((5, 5), SEMANTIC_PALETTE['FLOOR'], current_step=0, is_visit=True)
         
-        tile_type, confidence = belief.get_tile((5, 5))
+        tile_type, confidence = belief.get_tile_with_confidence((5, 5))
         assert tile_type == SEMANTIC_PALETTE['FLOOR']
         assert confidence == 1.0  # Visit = full confidence
         assert belief.get_knowledge_state((5, 5)) == TileKnowledge.EXPLORED
@@ -133,7 +133,7 @@ class TestBeliefMap:
         """Test querying unknown tile returns default assumption."""
         belief = BeliefMap(grid_shape=(10, 10))
         
-        tile_type, confidence = belief.get_tile((5, 5))
+        tile_type, confidence = belief.get_tile_with_confidence((5, 5))
         assert tile_type == SEMANTIC_PALETTE['WALL']  # Default assumption
         assert confidence == 0.0
         assert belief.get_knowledge_state((5, 5)) == TileKnowledge.UNKNOWN

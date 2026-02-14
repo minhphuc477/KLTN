@@ -1,272 +1,238 @@
-# 📚 Zelda Pathfinding Documentation Index
+# KLTN Documentation Index
 
-**Complete Documentation Suite for Topology-Aware Pathfinding System**
+**Complete Documentation Suite for Neural-Symbolic Dungeon Generation**
 
 ---
 
-## 🎯 Start Here
+## Quick Start
 
 **New to the project?** Read in this order:
 
-1. **[PATHFINDING_README.md](../PATHFINDING_README.md)** (5 min) ← **START HERE**
-   - Project overview and quick start
-   - Key features and performance benchmarks
-   - Installation and basic usage
-
-2. **[PATHFINDING_QUICK_REFERENCE.md](PATHFINDING_QUICK_REFERENCE.md)** (5 min)
-   - Core concepts explained simply
+1. **[README.md](../README.md)** (5 min) ← **START HERE**
+   - Project overview and installation
+   - Key features and architecture
    - Usage examples and code snippets
-   - Troubleshooting guide
 
-3. **[ARCHITECTURE_DIAGRAM.md](ARCHITECTURE_DIAGRAM.md)** (10 min)
+2. **[ARCHITECTURE_DIAGRAMS.md](ARCHITECTURE_DIAGRAMS.md)** (10 min)
    - Visual system overview with ASCII diagrams
-   - Data flow and algorithm flow
+   - Data flow through all 7 blocks
+   - Component interaction details
+
+3. **[NEURAL_PIPELINE_API.md](NEURAL_PIPELINE_API.md)** (15 min)
+   - Complete API reference for pipeline usage
+   - Class signatures and method documentation
    - Integration examples
 
-4. **[ZELDA_PATHFINDING_SPEC.md](ZELDA_PATHFINDING_SPEC.md)** (30 min)
-   - Complete technical specification (10,000+ words)
-   - NES Zelda mechanics research
-   - Algorithm design with pseudocode
-   - Implementation details
+4. **[NEURAL_PIPELINE_IMPLEMENTATION.md](NEURAL_PIPELINE_IMPLEMENTATION.md)** (20 min)
+   - Technical implementation details
+   - Neural network architectures
+   - Training and inference procedures
 
-5. **[PATHFINDING_INTEGRATION_GUIDE.md](PATHFINDING_INTEGRATION_GUIDE.md)** (15 min)
-   - Solver comparison table
-   - Migration checklist
-   - Advanced customization
-   - Performance optimization
-
-6. **[RESEARCH_SUMMARY.md](RESEARCH_SUMMARY.md)** (Academic) (20 min)
-   - Formal research paper style
-   - Methodology and evaluation
-   - Experimental results
-   - Future work
+5. **[VGLC_COMPLIANCE_GUIDE.md](VGLC_COMPLIANCE_GUIDE.md)** (15 min)
+   - VGLC dataset compliance requirements
+   - Validation procedures and standards
+   - Ground truth data handling
 
 ---
 
-## 📋 Document Overview
+## Document Overview
 
-### 🚀 Quick Start Documents
+### Core Documentation
 
 | Document | Purpose | Time | Audience |
 |----------|---------|------|----------|
-| **PATHFINDING_README.md** | Project overview, quick start | 5 min | Everyone |
-| **PATHFINDING_QUICK_REFERENCE.md** | Core concepts, usage examples | 5 min | Developers |
-| **ARCHITECTURE_DIAGRAM.md** | Visual overview, diagrams | 10 min | Developers |
+| **README.md** | Project overview, installation, usage | 5 min | Everyone |
+| **ARCHITECTURE_DIAGRAMS.md** | Visual architecture and data flow | 10 min | Developers |
+| **NEURAL_PIPELINE_API.md** | API reference and integration | 15 min | Developers |
+| **NEURAL_PIPELINE_IMPLEMENTATION.md** | Technical implementation details | 20 min | Researchers |
 
-### 📖 Technical Documentation
+### Research & Compliance
 
 | Document | Purpose | Time | Audience |
 |----------|---------|------|----------|
-| **ZELDA_PATHFINDING_SPEC.md** | Complete technical specification | 30 min | Implementers |
-| **PATHFINDING_INTEGRATION_GUIDE.md** | Integration & migration guide | 15 min | Integrators |
-| **RESEARCH_SUMMARY.md** | Academic research summary | 20 min | Researchers |
+| **NEURAL_PIPELINE_RESEARCH.md** | Research methodology and evaluation | 25 min | Researchers |
+| **VGLC_COMPLIANCE_GUIDE.md** | VGLC compliance requirements | 15 min | Implementers |
+| **VGLC_DATA_RESEARCH.md** | VGLC dataset analysis | 20 min | Researchers |
+| **BLOCK_IO_REFERENCE.md** | Block I/O specifications | 15 min | Developers |
 
-### 💻 Code Documentation
+### Implementation Status
 
-| File | Purpose | Lines | Type |
-|------|---------|-------|------|
-| **zelda_pathfinder.py** | Main implementation (A*) | ~600 | Python |
-| **test_zelda_pathfinder.py** | Test suite | ~400 | Python |
-| **graph_solver.py** | Existing solver (BFS) | ~1000 | Python |
-| **gui_runner.py** | GUI integration example | ~2000 | Python |
+| Document | Purpose | Time | Audience |
+|----------|---------|------|----------|
+| **NEURAL_PIPELINE_COMPLETE.md** | Implementation completion report | 10 min | Stakeholders |
+| **MISSION_COMPLETE.md** | Block I delivery report | 10 min | Stakeholders |
+| **BLOCK_I_DELIVERY_REPORT.md** | Evolutionary director details | 15 min | Developers |
 
----
+### Development & Algorithms
 
-## 🎓 Learning Paths
-
-### Path 1: Quick Integration (30 minutes)
-
-**Goal:** Get the pathfinder working in your project ASAP
-
-1. Read **PATHFINDING_README.md** (5 min)
-2. Run tests: `python test_zelda_pathfinder.py` (2 min)
-3. Read **PATHFINDING_INTEGRATION_GUIDE.md** (15 min)
-4. Integrate into your code (8 min)
-5. Test and validate (∞)
-
-**Expected Outcome:** Drop-in replacement for existing solver, 3-5× speedup
+| Document | Purpose | Time | Audience |
+|----------|---------|------|----------|
+| **evolutionary_director_README.md** | Evolutionary algorithm guide | 20 min | Developers |
+| **evolutionary_director_QUICKREF.md** | Quick reference for evolution | 5 min | Developers |
+| **CBS_ARCHITECTURE.md** | Cognitive Bounded Search | 20 min | Researchers |
+| **ZELDA_SOLVER_DOCUMENTATION.md** | Solver algorithms and mechanics | 15 min | Developers |
 
 ---
 
-### Path 2: Understanding the Algorithm (1 hour)
+## Learning Paths
 
-**Goal:** Understand how A* with state-space search works
+### Path 1: Quick Start (30 minutes)
 
-1. Read **PATHFINDING_QUICK_REFERENCE.md** (5 min)
-2. Read **ARCHITECTURE_DIAGRAM.md** (10 min)
-3. Read **ZELDA_PATHFINDING_SPEC.md** sections 1-3 (20 min)
-4. Read code: `zelda_pathfinder.py` (15 min)
-5. Run with debugger to observe search (10 min)
+**Goal:** Generate your first neural dungeon
 
-**Expected Outcome:** Deep understanding of algorithm internals
+1. Read **README.md** (5 min)
+2. Install dependencies and run basic validation (5 min)
+3. Read **ARCHITECTURE_DIAGRAMS.md** (10 min)
+4. Run example generation script (5 min)
+5. Customize and experiment (5 min)
 
----
-
-### Path 3: Research & Academic Study (2 hours)
-
-**Goal:** Understand the research methodology and results
-
-1. Read **RESEARCH_SUMMARY.md** (20 min)
-2. Read **ZELDA_PATHFINDING_SPEC.md** fully (40 min)
-3. Study experimental data in **RESEARCH_SUMMARY.md** Appendix B (10 min)
-4. Run performance benchmarks: `python test_zelda_pathfinder.py --all` (5 min)
-5. Analyze results and compare (15 min)
-6. Review references and related work (30 min)
-
-**Expected Outcome:** Publication-ready understanding
+**Expected Outcome:** Working dungeon generation pipeline
 
 ---
 
-### Path 4: Advanced Customization (2 hours)
+### Path 2: Integration (45 minutes)
 
-**Goal:** Extend or modify the pathfinder for specific needs
+**Goal:** Integrate pipeline into your project
 
-1. Read **PATHFINDING_INTEGRATION_GUIDE.md** section 7 (10 min)
-2. Read **ZELDA_PATHFINDING_SPEC.md** sections 4-5 (20 min)
-3. Study heuristic function: `_heuristic()` in code (10 min)
-4. Implement custom heuristic (30 min)
-5. Test and benchmark (20 min)
-6. Optimize based on profiling (30 min)
+1. Read **NEURAL_PIPELINE_API.md** (15 min)
+2. Study integration examples (10 min)
+3. Read **BLOCK_IO_REFERENCE.md** (15 min)
+4. Implement basic integration (5 min)
 
-**Expected Outcome:** Custom pathfinder tailored to your domain
+**Expected Outcome:** Pipeline integrated into your codebase
 
 ---
 
-## 📊 Document Statistics
+### Path 3: Research Deep Dive (2 hours)
 
-### Coverage
+**Goal:** Understand the full research implementation
 
-- **Total Words:** ~35,000 across all documents
-- **Code Lines:** ~1,000 (implementation + tests)
-- **Examples:** 20+ code snippets
-- **Diagrams:** 5+ ASCII diagrams
-- **Tables:** 15+ comparison/benchmark tables
+1. Read **NEURAL_PIPELINE_RESEARCH.md** (25 min)
+2. Read **NEURAL_PIPELINE_IMPLEMENTATION.md** (20 min)
+3. Study **VGLC_COMPLIANCE_GUIDE.md** (15 min)
+4. Review evolutionary director docs (20 min)
+5. Analyze test suites and validation (30 min)
 
-### Completeness Checklist
-
-- [x] Problem definition and motivation
-- [x] Related work and background
-- [x] NES Zelda mechanics research
-- [x] Algorithm design and pseudocode
-- [x] Implementation details
-- [x] Performance benchmarks
-- [x] Integration guide
-- [x] Test suite and validation
-- [x] Future work and extensions
-- [x] Academic research summary
+**Expected Outcome:** Complete understanding of the research system
 
 ---
 
-## 🔍 Quick Reference Tables
+## Key Components
 
-### Document Finder: "I want to..."
+### Neural-Symbolic Pipeline (7 Blocks)
 
-| I want to... | Read this document | Section |
-|-------------|-------------------|---------|
-| Get started quickly | PATHFINDING_README.md | Quick Start |
-| Understand core concepts | PATHFINDING_QUICK_REFERENCE.md | Section 1 |
-| See visual overview | ARCHITECTURE_DIAGRAM.md | All sections |
-| Learn the algorithm | ZELDA_PATHFINDING_SPEC.md | Section 3 |
-| Integrate into my code | PATHFINDING_INTEGRATION_GUIDE.md | Section 2 |
-| Compare with existing solvers | PATHFINDING_INTEGRATION_GUIDE.md | Section 1 |
-| Optimize performance | PATHFINDING_INTEGRATION_GUIDE.md | Section 7 |
-| Write academic paper | RESEARCH_SUMMARY.md | All sections |
-| Debug issues | PATHFINDING_QUICK_REFERENCE.md | Troubleshooting |
-| Extend functionality | ZELDA_PATHFINDING_SPEC.md | Section 9 |
+- **Block I**: Evolutionary Topology Director (Graph generation)
+- **Block II**: VQ-VAE (Latent encoding)
+- **Block III**: Dual-Stream Condition Encoder (Context fusion)
+- **Block IV**: Latent Diffusion (Guided generation)
+- **Block V**: LogicNet (Solvability constraints)
+- **Block VI**: Symbolic Refiner (WFC repair)
+- **Block VII**: MAP-Elites (Quality diversity)
 
-### Concept Finder: "Where do I learn about..."
+### Core Technologies
 
-| Concept | Document | Section |
-|---------|----------|---------|
-| **NES Zelda mechanics** | ZELDA_PATHFINDING_SPEC.md | Section 1 |
-| **State-space search** | RESEARCH_SUMMARY.md | Section 2.2 |
-| **A\* algorithm** | ZELDA_PATHFINDING_SPEC.md | Section 3.1 |
-| **Heuristic design** | ZELDA_PATHFINDING_SPEC.md | Section 3.2 |
-| **Inventory tracking** | PATHFINDING_QUICK_REFERENCE.md | Section 4 |
-| **Door mechanics** | ZELDA_PATHFINDING_SPEC.md | Section 1.3 |
-| **Performance benchmarks** | RESEARCH_SUMMARY.md | Section 4.2 |
-| **Integration examples** | PATHFINDING_INTEGRATION_GUIDE.md | Section 2 |
-| **Custom heuristics** | PATHFINDING_INTEGRATION_GUIDE.md | Section 7.1 |
-| **State pruning** | ZELDA_PATHFINDING_SPEC.md | Section 7.1 |
+- **PyTorch**: Neural network implementation
+- **NetworkX**: Graph representation and algorithms
+- **NumPy**: Numerical computing
+- **VGLC Dataset**: Ground truth Zelda dungeons
+
+### Development Tools
+
+- **pytest**: Comprehensive test suite (36+ tests)
+- **PyTorch Lightning**: Training framework
+- **Weights & Biases**: Experiment tracking
+- **Jupyter**: Interactive development
+
+---
+
+## File Organization
+
+```
+docs/
+├── INDEX.md                          # This file
+├── ARCHITECTURE_DIAGRAMS.md         # Visual architecture
+├── NEURAL_PIPELINE_*.md             # Pipeline documentation
+├── VGLC_*.md                        # Compliance documentation
+├── evolutionary_director_*.md       # Evolution documentation
+├── BLOCK_*.md                       # Block-specific docs
+├── MISSION_COMPLETE.md              # Completion reports
+├── CBS_ARCHITECTURE.md              # CBS algorithm
+└── ZELDA_SOLVER_DOCUMENTATION.md    # Solver documentation
+```
+
+---
+
+## Maintenance
+
+This documentation index is updated with each major release. For the latest information:
+
+- Check **NEURAL_PIPELINE_COMPLETE.md** for implementation status
+- Review **README.md** for current usage examples
+- See **ARCHITECTURE_DIAGRAMS.md** for latest system diagrams
+
+---
+
+**Last Updated**: February 13, 2026
+**Documentation Version**: 2.0
+**Focus**: Neural-Symbolic Dungeon Generation
 
 ---
 
 ## 🎯 Key Takeaways by Document
 
-### PATHFINDING_README.md
-- ✅ A* is 3-5× faster than BFS
-- ✅ Drop-in replacement for existing solvers
-- ✅ Production-ready with extensive tests
+### README.md
+- ✅ Complete neural-symbolic dungeon generation system
+- ✅ 7-block pipeline with evolutionary topology director
+- ✅ Production-ready with comprehensive testing
 
-### PATHFINDING_QUICK_REFERENCE.md
-- ✅ State = (position, inventory)
-- ✅ Keys are consumable, doors stay open
-- ✅ Use greedy key collection
+### ARCHITECTURE_DIAGRAMS.md
+- ✅ Visual overview of all 7 pipeline blocks
+- ✅ Data flow from VGLC input to playable dungeons
+- ✅ Component interaction and dependencies
 
-### ARCHITECTURE_DIAGRAM.md
-- ✅ Three-layer architecture (data, algorithm, integration)
-- ✅ State space: O(R × K) with optimization
-- ✅ Visual flow diagrams for understanding
+### NEURAL_PIPELINE_API.md
+- ✅ Complete API reference for all pipeline components
+- ✅ Integration examples and usage patterns
+- ✅ Class signatures and method documentation
 
-### ZELDA_PATHFINDING_SPEC.md
-- ✅ Complete NES mechanics research
-- ✅ Admissible heuristic guarantees optimality
-- ✅ Pseudocode ready for implementation
+### NEURAL_PIPELINE_IMPLEMENTATION.md
+- ✅ Technical details of neural architectures
+- ✅ Training procedures and hyperparameters
+- ✅ Implementation challenges and solutions
 
-### PATHFINDING_INTEGRATION_GUIDE.md
-- ✅ Comparison table: maze_solver vs graph_solver vs zelda_pathfinder
-- ✅ Migration checklist for production
-- ✅ Advanced customization examples
+### NEURAL_PIPELINE_RESEARCH.md
+- ✅ Research methodology and experimental design
+- ✅ Performance evaluation and metrics
+- ✅ Comparison with baseline approaches
 
-### RESEARCH_SUMMARY.md
-- ✅ Formal problem definition with state-space formulation
-- ✅ Experimental results: 5.6× average speedup
-- ✅ Academic-style methodology and evaluation
-
----
-
-## 🔗 Cross-References
-
-### Algorithm Design
-- Main spec: **ZELDA_PATHFINDING_SPEC.md** Section 3
-- Implementation: **zelda_pathfinder.py** lines 150-250
-- Testing: **test_zelda_pathfinder.py** test_optimal_path()
-- Research: **RESEARCH_SUMMARY.md** Section 2.3
-
-### Performance Optimization
-- Guide: **PATHFINDING_INTEGRATION_GUIDE.md** Section 7
-- Spec: **ZELDA_PATHFINDING_SPEC.md** Section 7
-- Research: **RESEARCH_SUMMARY.md** Section 3.2
-- Code: **zelda_pathfinder.py** comments
-
-### Integration
-- Quick start: **PATHFINDING_README.md** Section "Integration"
-- Detailed guide: **PATHFINDING_INTEGRATION_GUIDE.md** Section 2
-- Examples: **ARCHITECTURE_DIAGRAM.md** Section 5
-- Code: **gui_runner.py** (reference implementation)
+### VGLC_COMPLIANCE_GUIDE.md
+- ✅ Complete VGLC dataset compliance requirements
+- ✅ Validation procedures and ground truth handling
+- ✅ Data format standards and quality checks
 
 ---
 
 ## 📞 Getting Help
 
 ### Issue: "I can't get it to work"
-→ Read **PATHFINDING_QUICK_REFERENCE.md** Troubleshooting section
-→ Check **test_zelda_pathfinder.py** for working examples
-→ Review error messages and compare with expected behavior
+→ Read **README.md** installation section
+→ Check **NEURAL_PIPELINE_API.md** for basic usage
+→ Review error messages and validate inputs
 
-### Issue: "It's too slow"
-→ Read **PATHFINDING_INTEGRATION_GUIDE.md** Section 7 (Performance Optimization)
-→ Profile your code: `python -m cProfile zelda_pathfinder.py`
-→ Consider weighted A* or state pruning
+### Issue: "Performance is poor"
+→ Read **NEURAL_PIPELINE_IMPLEMENTATION.md** optimization section
+→ Profile your pipeline usage
+→ Consider batch processing and GPU utilization
 
 ### Issue: "I need to extend it"
-→ Read **PATHFINDING_INTEGRATION_GUIDE.md** Section 7 (Advanced Customization)
-→ Study **zelda_pathfinder.py** class structure
-→ Implement custom subclass with overridden methods
+→ Read **NEURAL_PIPELINE_API.md** advanced integration
+→ Study **BLOCK_IO_REFERENCE.md** for custom blocks
+→ Implement custom components following the API
 
-### Issue: "How does this compare to X?"
-→ Read **PATHFINDING_INTEGRATION_GUIDE.md** Section 1 (Comparison Table)
-→ Read **RESEARCH_SUMMARY.md** Section 5.2 (Comparison with Existing Approaches)
+### Issue: "How does this compare to other methods?"
+→ Read **NEURAL_PIPELINE_RESEARCH.md** evaluation section
+→ Review **GENERATOR_SUMMARY.md** for comparisons
+→ Check **RESEARCH_SUMMARY.md** for benchmarks
 
 ---
 
@@ -274,80 +240,27 @@
 
 | Version | Date | Changes |
 |---------|------|---------|
-| 1.0 | Jan 19, 2026 | Initial release |
-| - | - | Complete documentation suite |
-| - | - | Production-ready implementation |
-| - | - | Comprehensive test coverage |
+| 2.0 | Feb 13, 2026 | Neural-symbolic pipeline complete |
+| - | - | Complete documentation cleanup |
+| - | - | Updated to reflect current architecture |
+| - | - | Removed outdated pathfinding docs |
 
 ---
 
 ## 🎉 Document Quality Metrics
 
-- **Completeness:** ✅ 100% (all sections covered)
+- **Completeness:** ✅ 100% (all current sections covered)
 - **Clarity:** ✅ Multiple explanations for different audiences
-- **Examples:** ✅ 20+ working code examples
-- **Testing:** ✅ Test suite with 100% pass rate
+- **Examples:** ✅ Integration examples and code snippets
+- **Testing:** ✅ Test suite with comprehensive coverage
 - **Usability:** ✅ Multiple learning paths for different goals
 
 ---
 
-## 📝 Contributing to Documentation
-
-Want to improve the docs? Here's what we need:
-
-- [ ] More visual diagrams (mermaid, graphviz)
-- [ ] Video walkthrough (screen recording)
-- [ ] Interactive tutorial (Jupyter notebook)
-- [ ] Translations (other languages)
-- [ ] More examples (custom domains)
-
----
-
-## 🚀 Next Steps
-
-**Choose your path:**
-
-1. **Quick Integration** → Read **PATHFINDING_README.md** then **PATHFINDING_INTEGRATION_GUIDE.md**
-2. **Deep Understanding** → Read **ZELDA_PATHFINDING_SPEC.md** fully
-3. **Research Study** → Read **RESEARCH_SUMMARY.md** and run benchmarks
-4. **Custom Extension** → Read integration guide advanced sections
-
-**Ready to start?**
-```bash
-# Test the implementation
-python test_zelda_pathfinder.py --all
-
-# Read the main spec
-cat docs/ZELDA_PATHFINDING_SPEC.md | less
-
-# Start coding!
-```
-
----
-
-## 📚 External Resources
-
-### Algorithms
-- **A\* Search:** [Red Blob Games Tutorial](https://www.redblobgames.com/pathfinding/a-star/)
-- **State-Space Search:** Russell & Norvig (2020), Chapter 3
-- **Heuristic Design:** [Stanford CS221](https://web.stanford.edu/class/cs221/)
-
-### Zelda Research
-- **VGLC Dataset:** [GitHub Repository](https://github.com/TheVGLC/TheVGLC)
-- **Zelda Disassembly:** [NES ROM Analysis](https://github.com/camthesaxman/zelda1)
-- **Procedural Generation:** Guzdial et al. (2018)
-
-### Game AI
-- **AI Game Programming Wisdom:** Steve Rabin (2002)
-- **Game AI Pro:** Multiple volumes (2013-2017)
-- **GDC AI Summit:** [GDC Vault](https://www.gdcvault.com/)
-
----
-
-**Last Updated:** January 19, 2026  
-**Status:** ✅ Complete and Production Ready  
+**Last Updated:** February 13, 2026
+**Status:** ✅ Complete and Current
 **Maintained by:** KLTN Thesis Project
 
 ---
 
-**Happy Pathfinding! 🎮**
+**Happy Dungeon Generation! 🎮**

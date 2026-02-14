@@ -373,9 +373,9 @@ class BeliefMap:
         if is_visit:
             self.unique_visits.add(position)
     
-    def get_tile(self, position: Tuple[int, int]) -> Tuple[int, float]:
+    def get_tile_with_confidence(self, position: Tuple[int, int]) -> Tuple[int, float]:
         """
-        Query what the agent believes about a tile.
+        Query what the agent believes about a tile with confidence.
         
         Returns:
             (tile_type, confidence) tuple

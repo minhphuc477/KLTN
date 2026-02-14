@@ -1,4 +1,0 @@
-map_id,solver,persona,success,path_length,steps,states_explored,PER,entropy_final,room_entropy,replans,confusion_events,backtrack_loops,keys_collected,doors_opened,confusion_index,cognitive_load,aha_latency,info_gain_total,timeout_flag,confusion_ratio
-D1_v1,A*,optimal,1,104,104,6464,1.465,0.0,0.0,0,0,0,0,0,0.0,0.0,0,0.0,0,1.0
-D1_v1,CBS+,balanced,1,508,508,507,7.155,243.831,7.565,236,36,162,0,0,0.789,0.153,5,0.559,0,4.885
-D1_v1,CBS+,greedy,0,50001,50001,50000,704.239,7.04,1.09,49995,3,49398,0,0,4544.545,1.001,0,0.0,1,480.779
