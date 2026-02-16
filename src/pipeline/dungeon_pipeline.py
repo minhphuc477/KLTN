@@ -61,12 +61,16 @@ from src.core import (
 from src.simulation.map_elites import MAPElitesEvaluator
 from src.data.zelda_core import DungeonStitcher
 
+# Block I: Evolutionary Topology Director
+from src.generation.evolutionary_director import EvolutionaryTopologyGenerator
+
 # VGLC compliance imports
 from src.data.vglc_utils import (
     filter_virtual_nodes,
     validate_room_dimensions,
     get_physical_start_node,
 )
+from src.utils.graph_utils import validate_graph_topology
 
 logger = logging.getLogger(__name__)
 
@@ -426,27 +430,48 @@ class NeuralSymbolicDungeonPipeline:
     @torch.no_grad()
     def generate_dungeon(
         self,
-        mission_graph: nx.Graph,
+        mission_graph: Optional[nx.Graph] = None,
         guidance_scale: float = 7.5,
         logic_guidance_scale: float = 1.0,
         num_diffusion_steps: int = 50,
         apply_repair: bool = True,
         seed: Optional[int] = None,
         enable_map_elites: bool = True,
+        # Block I: Evolutionary generation parameters
+        generate_topology: bool = False,
+        target_curve: Optional[List[float]] = None,
+        num_rooms: int = 8,
+        population_size: int = 50,
+        generations: int = 100,
     ) -> DungeonGenerationResult:
         """
         Generate a complete multi-room dungeon using graph-guided generation.
+        
+        This integrates all 7 blocks of the H-MOLQD pipeline:
+        - Block I: Evolutionary Topology Director (optional, if generate_topology=True)
+        - Block II: VQ-VAE latent encoding/decoding
+        - Block III: Dual-stream condition encoding
+        - Block IV: Latent diffusion with guidance
+        - Block V: LogicNet differentiable solvability
+        - Block VI: Symbolic WaveFunctionCollapse repair
+        - Block VII: MAP-Elites quality-diversity evaluation
         
         VGLC Compliance: Filters virtual nodes before generation.
         
         Args:
             mission_graph: NetworkX graph with room nodes and door edges
+                          If None and generate_topology=True, will generate automatically
             guidance_scale: Classifier-free guidance scale
             logic_guidance_scale: LogicNet gradient guidance scale
             num_diffusion_steps: Number of diffusion steps per room
             apply_repair: Apply symbolic repair to each room
             seed: Random seed for reproducibility
             enable_map_elites: Compute MAP-Elites metrics
+            generate_topology: Use Block I to evolve mission graph (if mission_graph=None)
+            target_curve: Difficulty curve for evolutionary search [0.0-1.0]
+            num_rooms: Number of rooms for generated topology
+            population_size: Evolution population size
+            generations: Number of evolutionary generations
             
         Returns:
             DungeonGenerationResult with complete dungeon and metrics
@@ -457,6 +482,44 @@ class NeuralSymbolicDungeonPipeline:
         if seed is not None:
             torch.manual_seed(seed)
             np.random.seed(seed)
+        
+        # Block I: Evolutionary Topology Generation (if needed)
+        if mission_graph is None:
+            if not generate_topology:
+                raise ValueError(
+                    "mission_graph is None but generate_topology=False. "
+                    "Either provide a mission_graph or set generate_topology=True"
+                )
+            
+            logger.info("Block I: Generating dungeon topology via evolutionary search")
+            if target_curve is None:
+                # Default tension curve: gradual increase
+                target_curve = [0.2, 0.4, 0.6, 0.8, 1.0]
+            
+            # Calculate genome_length to target desired room count
+            # Empirical relationship: genome_length ≈ num_rooms * 0.7 (rules don't always apply)
+            target_genome_length = max(10, int(num_rooms * 0.7))
+            
+            topology_generator = EvolutionaryTopologyGenerator(
+                target_curve=target_curve,
+                population_size=population_size,
+                generations=generations,
+                genome_length=target_genome_length,
+                max_nodes=num_rooms,  # Direct room count constraint
+                seed=seed,
+            )
+            
+            mission_graph = topology_generator.evolve()
+            logger.info(f"Block I: Generated topology with {mission_graph.number_of_nodes()} rooms")
+            
+            # Validate generated topology
+            is_valid, errors = validate_graph_topology(mission_graph)
+            if not is_valid:
+                logger.warning(f"Block I: Generated topology has validation errors: {errors}")
+        
+        # Continue with existing pipeline (Blocks II-VII)
+        if mission_graph is None:
+            raise ValueError("mission_graph is still None after topology generation attempt")
         
         # VGLC Compliance: Filter virtual nodes before processing
         logger.debug("Applying VGLC compliance: filtering virtual nodes from mission graph")

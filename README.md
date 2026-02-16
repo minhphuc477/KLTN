@@ -9,18 +9,19 @@ KLTN implements a complete research pipeline for generating Legend of Zelda-like
 ## Key Features
 
 - **Evolutionary Topology Generation**: Search-based procedural content generation using genetic algorithms to evolve dungeon graphs that match tension curves
-- **Neural-Symbolic Pipeline**: 7-block H-MOLQD architecture integrating VQ-VAE, latent diffusion, LogicNet guidance, and symbolic repair
-- **VGLC Compliance**: Full compliance with Video Game Level Corpus standards for Zelda dungeon structure validation
-- **Interactive GUI**: Real-time visualization and validation environment for dungeon exploration
-- **Comprehensive Testing**: 36+ test cases covering all major components and compliance requirements
+- **Neural-Symbolic Pipeline**: Complete 7-block H-MOLQD architecture integrating VQ-VAE, latent diffusion, LogicNet guidance, and symbolic repair - with full Block I integration for automatic topology generation
+- **VGLC Compliance**: Full compliance with Video Game Level Corpus standards for Zelda dungeon structure validation, including composite node labels, Boss-Goal subgraph validation, and centralized graph utilities
+- **Interactive GUI**: Real-time visualization and validation environment for dungeon exploration with route export/loading and multi-algorithm pathfinding
+- **Comprehensive Testing**: 250+ test functions covering all major components and VGLC compliance requirements
 
 ## Architecture
 
-### Block I: Evolutionary Topology Director
+### Block I: Evolutionary Topology Director (Fully Integrated)
 - Implements evolutionary search over graph grammars
 - Generates dungeon topologies matching target difficulty curves
 - Uses (μ+λ)-ES with tournament selection and biased mutation
 - Produces NetworkX graphs with VGLC-compliant node and edge attributes
+- **Now integrated into main pipeline**: Call `generate_dungeon(generate_topology=True)` to automatically evolve topology
 
 ### Block II-VII: Neural-Symbolic Pipeline (H-MOLQD)
 - **Block II**: Semantic VQ-VAE for discrete latent representation
@@ -29,6 +30,8 @@ KLTN implements a complete research pipeline for generating Legend of Zelda-like
 - **Block V**: LogicNet for differentiable solvability constraints
 - **Block VI**: Symbolic WaveFunctionCollapse repair for broken paths
 - **Block VII**: MAP-Elites quality-diversity evaluation
+
+All 7 blocks are now fully integrated and work seamlessly together.
 
 See [ARCHITECTURE_DIAGRAMS.md](ARCHITECTURE_DIAGRAMS.md) for detailed ASCII diagrams of the system flow.
 
@@ -92,12 +95,19 @@ import networkx as nx
 # Initialize pipeline
 pipeline = create_pipeline(checkpoint_dir="./checkpoints")
 
-# Create mission graph
+# Option 1: Generate with automatic topology evolution (all 7 blocks)
+result = pipeline.generate_dungeon(
+    generate_topology=True,
+    target_curve=[0.2, 0.5, 0.8, 1.0],
+    num_rooms=8,
+    seed=42
+)
+print(f"Generated {len(result.rooms)} rooms in {result.generation_time:.2f}s")
+
+# Option 2: Provide pre-made mission graph (Blocks II-VII only)
 G = nx.DiGraph()
 G.add_nodes_from([0, 1, 2, 3])
 G.add_edges_from([(0, 1), (1, 2), (2, 3)])
-
-# Generate dungeon
 result = pipeline.generate_dungeon(G, seed=42)
 print(f"Generated {len(result.rooms)} rooms in {result.generation_time:.2f}s")
 ```

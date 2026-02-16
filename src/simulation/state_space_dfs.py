@@ -28,7 +28,7 @@ from collections import deque
 from .validator import (
     GameState, ZeldaLogicEnv, SolverOptions, SolverDiagnostics,
     SEMANTIC_PALETTE, ACTION_DELTAS, CARDINAL_COST, DIAGONAL_COST,
-    WALKABLE_IDS, BLOCKING_IDS, PICKUP_IDS
+    WALKABLE_IDS, BLOCKING_IDS, PICKUP_IDS, PUSHABLE_IDS, WATER_IDS
 )
 
 logger = logging.getLogger(__name__)
@@ -349,8 +349,8 @@ class StateSpaceDFS:
         """
         Attempt to move to target position (pure state-based).
         
-        This is a simplified version of validator._try_move_pure
-        that focuses on core movement logic for DFS.
+        COMPLETE IMPLEMENTATION matching StateSpaceAStar._try_move_pure.
+        Handles ALL game mechanics: keys, doors, blocks, items, bombs, water/element tiles.
         
         Args:
             state: Current game state
@@ -360,20 +360,67 @@ class StateSpaceDFS:
         Returns:
             (can_move, new_state) tuple
         """
-        # Blocking tiles
+        # Blocking tiles - cannot pass
         if target_tile in BLOCKING_IDS:
             return False, state
         
         new_state = state.copy()
         new_state.position = target_pos
         
-        # Already opened doors or collected items
-        if target_pos in state.opened_doors or target_pos in state.collected_items:
+        # Check if this door was already opened (in state)
+        if target_pos in state.opened_doors:
+            # Door is open, can pass freely
             return True, new_state
         
-        # Walkable tiles
+        # Check if this item was already collected (in state)
+        if target_pos in state.collected_items:
+            # Item already collected, treat as floor
+            return True, new_state
+        
+        # CRITICAL FIX: Check if a block was pushed FROM this position
+        # If so, the position is now empty (treat as floor)
+        for (from_pos, to_pos) in state.pushed_blocks:
+            if from_pos == target_pos:
+                # Block was pushed away from here - position is now empty floor
+                return True, new_state
+        
+        # CRITICAL FIX 2: Check if a block was pushed TO this position
+        # If so, we need to handle it as a BLOCK (pushable), not as floor
+        for (from_pos, to_pos) in state.pushed_blocks:
+            if to_pos == target_pos:
+                # There's a pushed block here! Need to try pushing it further
+                # Calculate direction of push
+                dr = target_pos[0] - state.position[0]
+                dc = target_pos[1] - state.position[1]
+                push_dest_r = target_pos[0] + dr
+                push_dest_c = target_pos[1] + dc
+                
+                # Check bounds
+                if not (0 <= push_dest_r < self.height and 0 <= push_dest_c < self.width):
+                    return False, state  # Can't push off map
+                
+                # Check destination - but also check if another block is there!
+                push_dest_tile = self.grid[push_dest_r, push_dest_c]
+                dest_has_block = any(tp == (push_dest_r, push_dest_c) for (_, tp) in state.pushed_blocks)
+                
+                if push_dest_tile in WALKABLE_IDS and not dest_has_block:
+                    # Can push - update pushed_blocks
+                    # CRITICAL: Preserve ORIGINAL from_pos to keep track of empty positions!
+                    new_pushed = set()
+                    for (fp, tp) in state.pushed_blocks:
+                        if tp == target_pos:
+                            # Keep original from_pos, update destination to new position
+                            new_pushed.add((from_pos, (push_dest_r, push_dest_c)))
+                        else:
+                            new_pushed.add((fp, tp))
+                    new_state.pushed_blocks = new_pushed
+                    return True, new_state
+                else:
+                    return False, state  # Can't push
+        
+        # Walkable tiles - free movement
         if target_tile in WALKABLE_IDS:
-            # Handle item pickup
+            # Handle item pickup (add to collected_items)
             if target_tile in PICKUP_IDS:
                 new_state.collected_items = state.collected_items | {target_pos}
                 
@@ -383,13 +430,14 @@ class StateSpaceDFS:
                     new_state.has_boss_key = True
                 elif target_tile == SEMANTIC_PALETTE['KEY_ITEM']:
                     new_state.has_item = True
-                    new_state.bomb_count = state.bomb_count + 4
+                    new_state.bomb_count = state.bomb_count + 4  # Consumable bombs
                 elif target_tile == SEMANTIC_PALETTE['ITEM_MINOR']:
-                    new_state.bomb_count = state.bomb_count + 4
+                    # ITEM_MINOR represents bomb pickups in VGLC Zelda dungeons
+                    new_state.bomb_count = state.bomb_count + 4  # Consumable: add 4 bombs
             
             return True, new_state
         
-        # Locked doors
+        # Conditional tiles - require inventory items
         if target_tile == SEMANTIC_PALETTE['DOOR_LOCKED']:
             if state.keys > 0:
                 new_state.keys = state.keys - 1
@@ -397,28 +445,84 @@ class StateSpaceDFS:
                 return True, new_state
             return False, state
         
-        # Bomb doors
         if target_tile == SEMANTIC_PALETTE['DOOR_BOMB']:
             if state.bomb_count > 0:
-                new_state.bomb_count = state.bomb_count - 1
+                new_state.bomb_count = state.bomb_count - 1  # Consume one bomb
                 new_state.opened_doors = state.opened_doors | {target_pos}
                 return True, new_state
             return False, state
         
-        # Boss doors
         if target_tile == SEMANTIC_PALETTE['DOOR_BOSS']:
             if state.has_boss_key:
                 new_state.opened_doors = state.opened_doors | {target_pos}
                 return True, new_state
             return False, state
         
-        # Other door types (open, soft, puzzle)
-        if target_tile in {SEMANTIC_PALETTE['DOOR_OPEN'], 
-                          SEMANTIC_PALETTE['DOOR_SOFT'],
-                          SEMANTIC_PALETTE['DOOR_PUZZLE']}:
+        if target_tile == SEMANTIC_PALETTE['DOOR_PUZZLE']:
+            # Puzzle doors can be passed (simplified)
             return True, new_state
         
-        # Default: allow movement
+        if target_tile == SEMANTIC_PALETTE['DOOR_OPEN']:
+            return True, new_state
+        
+        # DOOR_SOFT - One-way/soft-locked door
+        if target_tile == SEMANTIC_PALETTE['DOOR_SOFT']:
+            return True, new_state
+        
+        # TRIFORCE - goal tile
+        if target_tile == SEMANTIC_PALETTE['TRIFORCE']:
+            return True, new_state
+        
+        # BOSS - Boss enemy tile (must fight boss)
+        # Walkable like regular enemies
+        if target_tile == SEMANTIC_PALETTE['BOSS']:
+            return True, new_state
+        
+        # PUZZLE - Puzzle element tile (interact to solve)
+        # Walkable - player interacts with puzzle to progress
+        if target_tile == SEMANTIC_PALETTE['PUZZLE']:
+            return True, new_state
+        
+        # PUSH BLOCK LOGIC (Zelda mechanic)
+        # Agent can push blocks if there's empty space behind the block
+        if target_tile in PUSHABLE_IDS:
+            # Calculate direction of push (from agent's current position to target)
+            dr = target_pos[0] - state.position[0]
+            dc = target_pos[1] - state.position[1]
+            
+            # Determine where block would land if pushed
+            push_dest_r = target_pos[0] + dr
+            push_dest_c = target_pos[1] + dc
+            
+            # Check if push destination is in bounds
+            if not (0 <= push_dest_r < self.height and 0 <= push_dest_c < self.width):
+                return False, state  # Can't push block off map
+            
+            # Check if push destination is empty
+            # CRITICAL FIX: Also check if another pushed block occupies the destination
+            push_dest_tile = self.grid[push_dest_r, push_dest_c]
+            dest_has_block = any(tp == (push_dest_r, push_dest_c) for (_, tp) in state.pushed_blocks)
+            
+            if push_dest_tile in WALKABLE_IDS and not dest_has_block:
+                # Block can be pushed - agent moves onto block's original position
+                # Track pushed block state
+                new_state.pushed_blocks = state.pushed_blocks | {(target_pos, (push_dest_r, push_dest_c))}
+                return True, new_state
+            else:
+                # Can't push block (destination is blocked or has another pushed block)
+                return False, state
+        
+        # WATER/LADDER LOGIC (Zelda mechanic)
+        # ELEMENT tiles (water/lava) require KEY_ITEM (Ladder) to cross
+        if target_tile in WATER_IDS:
+            if state.has_item:  # has_item represents KEY_ITEM (Ladder)
+                # Can cross water with ladder
+                return True, new_state
+            else:
+                # Can't cross water without ladder
+                return False, state
+        
+        # Default case: treat unknown tiles as walkable
         return True, new_state
     
     def solve_with_diagnostics(self) -> Tuple[bool, List[Tuple[int, int]], SolverDiagnostics]:

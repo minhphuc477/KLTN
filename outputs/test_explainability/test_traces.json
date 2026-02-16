@@ -1,0 +1,45 @@
+{
+  "traces": {
+    "test_decision_1": {
+      "decision_id": "test_decision_1",
+      "source": "grammar_rule",
+      "timestamp": "2026-02-15T20:30:35.660896",
+      "description": "Test grammar rule application",
+      "confidence": 0.9,
+      "parent_decision": null,
+      "affected_elements": {
+        "nodes": [
+          0,
+          1
+        ],
+        "edges": [
+          [
+            0,
+            1
+          ]
+        ]
+      },
+      "metadata": {
+        "rule_name": "InsertChallenge"
+      },
+      "fitness_contribution": null
+    },
+    "test_decision_2": {
+      "decision_id": "test_decision_2",
+      "source": "diffusion_model",
+      "timestamp": "2026-02-15T20:30:35.660961",
+      "description": "Test diffusion generation",
+      "confidence": 0.85,
+      "parent_decision": "test_decision_1",
+      "affected_elements": {
+        "room": [
+          0
+        ]
+      },
+      "metadata": {},
+      "fitness_contribution": 0.15
+    }
+  },
+  "genealogy": {},
+  "fitness_attributions": {}
+}

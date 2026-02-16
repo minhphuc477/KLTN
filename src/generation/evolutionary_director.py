@@ -119,6 +119,7 @@ class GraphGrammarExecutor:
         genome: List[int],
         difficulty: float = 0.5,
         max_nodes: int = 20,
+        allow_override: bool = False,
     ) -> MissionGraph:
         """
         Execute genome to produce a graph phenotype.
@@ -605,6 +606,7 @@ class EvolutionaryTopologyGenerator:
         mutation_rate: float = 0.15,
         crossover_rate: float = 0.7,
         genome_length: int = 18,
+        max_nodes: int = 20,
         seed: Optional[int] = None,
     ):
         """
@@ -618,6 +620,7 @@ class EvolutionaryTopologyGenerator:
             mutation_rate: Probability of mutating each gene
             crossover_rate: Probability of crossover vs. cloning
             genome_length: Length of genome (number of rules)
+            max_nodes: Maximum nodes in generated graph (room count upper bound)
             seed: Random seed for reproducibility
         """
         self.target_curve = target_curve
@@ -627,6 +630,7 @@ class EvolutionaryTopologyGenerator:
         self.mutation_rate = mutation_rate
         self.crossover_rate = crossover_rate
         self.genome_length = genome_length
+        self.max_nodes = max_nodes
         self.seed = seed
         
         # Initialize RNG
@@ -636,6 +640,11 @@ class EvolutionaryTopologyGenerator:
         # Initialize components
         self.executor = GraphGrammarExecutor(seed=seed)
         self.evaluator = TensionCurveEvaluator(target_curve)
+        
+        # Validate parameters
+        if max_nodes < 5:
+            logger.warning(f"max_nodes={max_nodes} is very low, setting to minimum of 5")
+            self.max_nodes = 5
         
         # Statistics tracking
         self.best_fitness_history: List[float] = []
@@ -656,7 +665,8 @@ class EvolutionaryTopologyGenerator:
             f"target_curve_length={len(target_curve)}, "
             f"pop_size={population_size}, "
             f"generations={generations}, "
-            f"genome_length={genome_length}"
+            f"genome_length={genome_length}, "
+            f"max_nodes={self.max_nodes}"
         )
     
     def evolve(self) -> nx.Graph:
@@ -800,6 +810,7 @@ class EvolutionaryTopologyGenerator:
                 individual.phenotype = self.executor.execute(
                     individual.genome,
                     difficulty=0.5,
+                    max_nodes=self.max_nodes,
                 )
                 
                 # Calculate fitness

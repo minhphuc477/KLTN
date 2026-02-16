@@ -618,11 +618,14 @@ class DualStreamConditionEncoder(nn.Module):
         num_gnn_layers: int = 3,
         num_attention_heads: int = 8,
         dropout: float = 0.1,
+        num_style_tokens: int = 6,
+        style_dim: int = 128,
     ):
         super().__init__()
         
         self.latent_dim = latent_dim
         self.output_dim = output_dim
+        self.style_dim = style_dim
         
         # Stream A: Local context
         self.local_encoder = LocalStreamEncoder(
@@ -639,7 +642,25 @@ class DualStreamConditionEncoder(nn.Module):
             num_layers=num_gnn_layers,
         )
         
-        # Cross-attention fusion
+        # GLOBAL STYLE TOKEN (Theme Consistency)
+        # Embeds dungeon-wide aesthetic: ruins, lava, cult, tech, water, forest
+        # Injected into cross-attention to anchor all room generations to a
+        # consistent visual style, preventing "telephone game" drift.
+        self.style_embedding = nn.Embedding(
+            num_embeddings=num_style_tokens,
+            embedding_dim=style_dim
+        )
+        # Initialize with small values
+        nn.init.normal_(self.style_embedding.weight, mean=0.0, std=0.02)
+        
+        # Style projection to match output_dim for fusion
+        self.style_proj = nn.Sequential(
+            nn.Linear(style_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, output_dim),
+        )
+        
+        # Cross-attention fusion (now receives style-augmented global context)
         self.fusion = CrossAttentionFusion(
             local_dim=output_dim,
             global_dim=output_dim,
@@ -648,9 +669,9 @@ class DualStreamConditionEncoder(nn.Module):
             dropout=dropout,
         )
         
-        # Final projection
+        # Final projection (fuses local + global + style)
         self.output_proj = nn.Sequential(
-            nn.Linear(output_dim, output_dim),
+            nn.Linear(output_dim * 2, output_dim),  # Concatenate c_fused + style
             nn.LayerNorm(output_dim),
         )
     
@@ -664,9 +685,10 @@ class DualStreamConditionEncoder(nn.Module):
         edge_features: Optional[Tensor] = None,
         tpe: Optional[Tensor] = None,
         current_node_idx: Optional[int] = None,
+        style_id: Optional[Tensor] = None,
     ) -> Tensor:
         """
-        Compute conditioning vector from local and global context.
+        Compute conditioning vector from local, global, and style context.
         
         Args:
             neighbor_latents: Dict of neighboring room latents
@@ -677,10 +699,15 @@ class DualStreamConditionEncoder(nn.Module):
             edge_features: [E, edge_feature_dim] edge type features (Phase 3A)
             tpe: [N, 8] topological positional encoding
             current_node_idx: Index of current node in graph
+            style_id: [B] or scalar - Global style token ID for dungeon theme
+                     (0=ruins, 1=lava, 2=cult, 3=tech, 4=water, 5=forest)
             
         Returns:
             Conditioning vector [B, output_dim]
         """
+        batch_size = boundary_constraints.shape[0]
+        device = boundary_constraints.device
+        
         # Stream A: Local context
         c_local = self.local_encoder(
             neighbor_latents,
@@ -701,11 +728,33 @@ class DualStreamConditionEncoder(nn.Module):
         if c_global.dim() == 2:
             c_global = c_global.unsqueeze(0).expand(c_local.shape[0], -1, -1)
         
-        # Cross-attention fusion
+        # GLOBAL STYLE TOKEN: Inject theme consistency
+        if style_id is not None:
+            # Convert to tensor if scalar
+            if not isinstance(style_id, torch.Tensor):
+                style_id = torch.tensor([style_id], dtype=torch.long, device=device)
+            
+            # Expand to batch size if needed
+            if style_id.dim() == 0:
+                style_id = style_id.unsqueeze(0).expand(batch_size)
+            elif style_id.shape[0] == 1 and batch_size > 1:
+                style_id = style_id.expand(batch_size)
+            
+            # Embed style token (fixed for entire dungeon)
+            style_token = self.style_embedding(style_id)  # [B, style_dim]
+            style_feat = self.style_proj(style_token)      # [B, output_dim]
+        else:
+            # No style specified: use zero vector
+            style_feat = torch.zeros(batch_size, self.output_dim, 
+                                    device=device, dtype=c_local.dtype)
+        
+        # Cross-attention fusion (local queries global with style-augmented keys)
         c_fused = self.fusion(c_local, c_global)
         
-        # Final projection
-        c = self.output_proj(c_fused)
+        # Final projection: Concatenate fused context + style token
+        # This ensures style influences every room while respecting local geometry
+        c_combined = torch.cat([c_fused, style_feat], dim=-1)
+        c = self.output_proj(c_combined)
         
         return c
     

@@ -161,3 +161,155 @@ def plot_heatmap(occ_grid: np.ndarray, output_path: Optional[str] = None) -> Opt
     img = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8).reshape(h, w, 3)
     plt.close(fig)
     return img
+
+
+# ===== DIVERSITY METRICS FOR THESIS DEFENSE =====
+# Addresses the concern: "How do you prove your system doesn't suffer from mode collapse?"
+
+def calculate_diversity_score(evaluator: MAPElitesEvaluator) -> float:
+    """
+    Compute diversity score across archived solutions.
+    
+    Method: Average pairwise difference in behavioral descriptors (linearity, leniency).
+    
+    Target: >35% average difference indicates healthy diversity.
+    
+    Args:
+        evaluator: MAPElitesEvaluator instance with populated archive
+    
+    Returns:
+        Diversity score in [0, 1] where higher = more diverse
+    """
+    if len(evaluator.grid) < 2:
+        return 0.0
+    
+    # Extract behavioral descriptors (linearity, leniency)
+    descriptors = []
+    for entry in evaluator.grid.values():
+        lin = entry.metrics.get('linearity', 0.0)
+        len_score = entry.metrics.get('leniency', 0.0)
+        descriptors.append([lin, len_score])
+    
+    descriptors = np.array(descriptors)
+    
+    # Calculate pairwise Euclidean distances in behavior space
+    distances = []
+    n = len(descriptors)
+    
+    for i in range(n):
+        for j in range(i + 1, n):
+            dist = np.linalg.norm(descriptors[i] - descriptors[j])
+            # Normalize by max possible distance (sqrt(2) for unit square)
+            normalized_dist = dist / np.sqrt(2.0)
+            distances.append(normalized_dist)
+    
+    # Average pairwise diversity
+    diversity_score = float(np.mean(distances)) if distances else 0.0
+    return diversity_score
+
+
+def calculate_feature_coverage(evaluator: MAPElitesEvaluator) -> float:
+    """
+    Calculate percentage of feature space covered by archive.
+    
+    Args:
+        evaluator: MAPElitesEvaluator instance
+    
+    Returns:
+        Coverage percentage [0, 1]
+    """
+    resolution = evaluator.resolution
+    total_bins = resolution * resolution
+    filled_bins = len(evaluator.grid)
+    return filled_bins / total_bins
+
+
+def generate_diversity_report(
+    evaluator: MAPElitesEvaluator, 
+    output_path: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Generate comprehensive diversity analysis report.
+    
+    This addresses thesis defense questions about generalization and mode collapse.
+    
+    Args:
+        evaluator: MAPElitesEvaluator with archived solutions
+        output_path: Optional path to save JSON report
+    
+    Returns:
+        Dictionary with diversity metrics
+    """
+    diversity_score = calculate_diversity_score(evaluator)
+    feature_coverage = calculate_feature_coverage(evaluator)
+    
+    # Additional metrics
+    num_solutions = len(evaluator.grid)
+    
+    # Performance spread (variance in scores)
+    scores = [entry.score for entry in evaluator.grid.values()]
+    score_std = float(np.std(scores)) if scores else 0.0
+    score_range = (float(np.min(scores)), float(np.max(scores))) if scores else (0.0, 0.0)
+    
+    # Behavioral descriptor ranges
+    linearities = [e.metrics.get('linearity', 0.0) for e in evaluator.grid.values()]
+    leniencies = [e.metrics.get('leniency', 0.0) for e in evaluator.grid.values()]
+    
+    linearity_range = (float(np.min(linearities)), float(np.max(linearities))) if linearities else (0.0, 0.0)
+    leniency_range = (float(np.min(leniencies)), float(np.max(leniencies))) if leniencies else (0.0, 0.0)
+    
+    report = {
+        'diversity_score': float(diversity_score),
+        'feature_coverage': float(feature_coverage),
+        'num_solutions': int(num_solutions),
+        'score_std': score_std,
+        'score_range': score_range,
+        'linearity_range': linearity_range,
+        'leniency_range': leniency_range,
+        'diversity_classification': _classify_diversity(diversity_score),
+        'coverage_classification': _classify_coverage(feature_coverage)
+    }
+    
+    # Print report
+    print("\n" + "="*60)
+    print("MAP-ELITES DIVERSITY REPORT")
+    print("="*60)
+    print(f"Diversity Score:        {diversity_score:.3f} (target: >0.35)")
+    print(f"Feature Coverage:       {feature_coverage*100:.1f}%")
+    print(f"Solutions in Archive:   {num_solutions}")
+    print(f"Score Std Dev:          {score_std:.3f}")
+    print(f"Score Range:            [{score_range[0]:.1f}, {score_range[1]:.1f}]")
+    print(f"Linearity Range:        [{linearity_range[0]:.3f}, {linearity_range[1]:.3f}]")
+    print(f"Leniency Range:         [{leniency_range[0]:.3f}, {leniency_range[1]:.3f}]")
+    print(f"Diversity Class:        {report['diversity_classification']}")
+    print(f"Coverage Class:         {report['coverage_classification']}")
+    print("="*60)
+    
+    # Save to file
+    if output_path:
+        import json
+        with open(output_path, 'w') as f:
+            json.dump(report, f, indent=2)
+        print(f"\nSaved diversity report to {output_path}")
+    
+    return report
+
+
+def _classify_diversity(score: float) -> str:
+    """Classify diversity level."""
+    if score >= 0.35:
+        return "HEALTHY DIVERSITY ✓"
+    elif score >= 0.20:
+        return "MODERATE DIVERSITY"
+    else:
+        return "LOW DIVERSITY (Mode Collapse Risk) ✗"
+
+
+def _classify_coverage(coverage: float) -> str:
+    """Classify feature space coverage."""
+    if coverage >= 0.15:
+        return "GOOD COVERAGE ✓"
+    elif coverage >= 0.05:
+        return "MODERATE COVERAGE"
+    else:
+        return "LOW COVERAGE ✗"

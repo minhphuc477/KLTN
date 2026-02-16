@@ -407,6 +407,8 @@ class BidirectionalAStar:
         Approximate collision: same position, inventory compatible
         (forward inventory subset of backward inventory).
         
+        CRITICAL FIX: Also check opened_doors and collected_items compatibility!
+        
         Args:
             node: Current node
             other_closed: Opposite frontier's closed set
@@ -423,17 +425,41 @@ class BidirectionalAStar:
             # Check inventory compatibility
             if is_forward:
                 # Forward node should have <= inventory of backward node
-                if (node.state.keys <= other_node.state.keys and
+                inventory_compatible = (
+                    node.state.keys <= other_node.state.keys and
                     node.state.bomb_count <= other_node.state.bomb_count and
                     (other_node.state.has_boss_key or not node.state.has_boss_key) and
-                    (other_node.state.has_item or not node.state.has_item)):
+                    (other_node.state.has_item or not node.state.has_item)
+                )
+                
+                # CRITICAL: Check state sets compatibility
+                # Forward opened_doors must be a subset of backward opened_doors
+                # Forward collected_items must be a subset of backward collected_items
+                state_sets_compatible = (
+                    node.state.opened_doors.issubset(other_node.state.opened_doors) and
+                    node.state.collected_items.issubset(other_node.state.collected_items)
+                )
+                
+                if inventory_compatible and state_sets_compatible:
                     return other_node
             else:
                 # Backward node should have >= inventory of forward node
-                if (node.state.keys >= other_node.state.keys and
+                inventory_compatible = (
+                    node.state.keys >= other_node.state.keys and
                     node.state.bomb_count >= other_node.state.bomb_count and
                     (node.state.has_boss_key or not other_node.state.has_boss_key) and
-                    (node.state.has_item or not other_node.has_item)):
+                    (node.state.has_item or not other_node.has_item)
+                )
+                
+                # CRITICAL: Check state sets compatibility (reversed)
+                # Backward opened_doors must be a superset of forward opened_doors
+                # Backward collected_items must be a superset of forward collected_items
+                state_sets_compatible = (
+                    node.state.opened_doors.issuperset(other_node.state.opened_doors) and
+                    node.state.collected_items.issuperset(other_node.state.collected_items)
+                )
+                
+                if inventory_compatible and state_sets_compatible:
                     return other_node
         
         return None

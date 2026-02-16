@@ -121,7 +121,8 @@ class DStarLiteSolver:
             # Compute rhs(s) = min over predecessors: g(s') + c(s', s)
             min_rhs = float('inf')
             
-            # Get all predecessor states (neighbors that can reach this state)
+            # CRITICAL FIX: Get proper predecessor states using environment's movement logic
+            # We need to find all states that can reach this state in ONE move
             for action, (dr, dc) in ACTION_DELTAS.items():
                 pred_r = state.position[0] - dr
                 pred_c = state.position[1] - dc
@@ -129,11 +130,21 @@ class DStarLiteSolver:
                 if not (0 <= pred_r < self.env.height and 0 <= pred_c < self.env.width):
                     continue
                 
-                # Create predecessor state (simplified - assume same inventory)
+                # Create a hypothetical predecessor state at pred_pos
+                # CRITICAL: We need to check if moving from pred_pos to state.position is valid
+                # Create predecessor with same inventory as current state (assumption)
                 pred_state = state.copy()
                 pred_state.position = (pred_r, pred_c)
-                pred_hash = hash(pred_state)
                 
+                # Check if this predecessor can actually reach current state
+                # by attempting the forward move
+                target_tile = self.env.grid[state.position[0], state.position[1]]
+                can_reach, _ = self.env._try_move_pure(pred_state, state.position, target_tile)
+                
+                if not can_reach:
+                    continue
+                
+                pred_hash = hash(pred_state)
                 pred_g = self.g_scores.get(pred_hash, float('inf'))
                 if pred_g < float('inf'):
                     cost = self._get_edge_cost(pred_state, state)
@@ -348,7 +359,7 @@ class DStarLiteSolver:
         return path
     
     def _get_successors(self, state: GameState) -> List[GameState]:
-        """Get all valid successor states."""
+        """Get all valid successor states using proper state transition logic."""
         successors = []
         
         for action, (dr, dc) in ACTION_DELTAS.items():
@@ -358,12 +369,13 @@ class DStarLiteSolver:
             if not (0 <= new_r < self.env.height and 0 <= new_c < self.env.width):
                 continue
             
+            # Get the tile at the target position
             target_tile = self.env.grid[new_r, new_c]
             
-            # Simplified movement check (full logic in validator.py)
-            if target_tile not in [SEMANTIC_PALETTE['WALL'], SEMANTIC_PALETTE['VOID']]:
-                new_state = state.copy()
-                new_state.position = (new_r, new_c)
+            # Use the environment's proper movement logic
+            success, new_state = self.env._try_move_pure(state, (new_r, new_c), target_tile)
+            
+            if success:
                 successors.append(new_state)
         
         return successors
@@ -378,3 +390,23 @@ class DStarLiteSolver:
             return 1.414
         else:  # Cardinal
             return 1.0
+    
+    def _can_reach(self, from_state: GameState, to_state: GameState, target_tile: int) -> bool:
+        """
+        Check if moving from from_state to to_state is valid.
+        
+        Uses the complete game logic from env._try_move_pure to ensure
+        D* Lite predecessor validation matches StateSpaceAStar behavior.
+        
+        Args:
+            from_state: Source state
+            to_state: Target state
+            target_tile: Tile at target position
+            
+        Returns:
+            True if transition is possible
+        """
+        # Use the canonical game logic from ZeldaLogicEnv
+        # This ensures D* Lite uses the SAME state transition logic as StateSpaceAStar
+        success, _ = self.env._try_move_pure(from_state, to_state.position, target_tile)
+        return success

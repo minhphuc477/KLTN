@@ -3764,12 +3764,88 @@ class ZeldaGUI:
         self.message = "Path cleared"
     
     def _export_route(self):
-        """Export the current route (placeholder)."""
-        self.message = "Route export not implemented yet"
+        """Export the current route to JSON file."""
+        if not hasattr(self, 'solution_path') or not self.solution_path:
+            self.message = "No route to export (solve first)"
+            return
+        
+        try:
+            import json
+            from datetime import datetime
+            
+            # Prepare export data
+            export_data = {
+                'version': '1.0',
+                'timestamp': datetime.now().isoformat(),
+                'start': self.start_pos,
+                'goal': self.goal_pos,
+                'path': self.solution_path,
+                'path_length': len(self.solution_path),
+                'algorithm': getattr(self, 'last_algorithm', 'unknown'),
+                'solve_time_ms': getattr(self, 'last_solve_time', 0) * 1000,
+                'nodes_explored': getattr(self, 'last_nodes_explored', 0),
+            }
+            
+            # Generate filename
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = f"route_{timestamp}.json"
+            
+            # Save to file
+            with open(filename, 'w') as f:
+                json.dump(export_data, f, indent=2)
+            
+            self.message = f"Route exported to {filename}"
+            logger.info(f"Route exported to {filename}")
+            
+        except Exception as e:
+            self.message = f"Route export failed: {e}"
+            logger.error(f"Route export error: {e}")
     
     def _load_route(self):
-        """Load a saved route (placeholder)."""
-        self.message = "Route loading not implemented yet"
+        """Load a saved route from JSON file."""
+        try:
+            import json
+            import os
+            
+            # Find most recent route file
+            route_files = [f for f in os.listdir('.') if f.startswith('route_') and f.endswith('.json')]
+            if not route_files:
+                self.message = "No saved routes found"
+                return
+            
+            # Load most recent
+            route_files.sort(reverse=True)
+            filename = route_files[0]
+            
+            with open(filename, 'r') as f:
+                route_data = json.load(f)
+            
+            # Validate data
+            if 'path' not in route_data or 'start' not in route_data or 'goal' not in route_data:
+                self.message = f"Invalid route file: {filename}"
+                return
+            
+            # Apply loaded route
+            self.start_pos = tuple(route_data['start'])
+            self.goal_pos = tuple(route_data['goal'])
+            self.solution_path = [tuple(p) for p in route_data['path']]
+            self.current_step = 0
+            self.animating = False
+            
+            # Update metadata
+            if 'algorithm' in route_data:
+                self.last_algorithm = route_data['algorithm']
+            if 'solve_time_ms' in route_data:
+                self.last_solve_time = route_data['solve_time_ms'] / 1000.0
+            if 'nodes_explored' in route_data:
+                self.last_nodes_explored = route_data['nodes_explored']
+            
+            self.message = f"Route loaded from {filename} ({len(self.solution_path)} steps)"
+            logger.info(f"Route loaded from {filename}")
+            
+        except Exception as e:
+            self.message = f"Route loading failed: {e}"
+            logger.error(f"Route loading error: {e}")
 
     def load_visual_assets(self, templates_dir: str = None, link_sprite_path: str = None):
         """Optional: override GUI assets with extracted visual tiles/sprites.
@@ -6772,8 +6848,23 @@ class ZeldaGUI:
             return False, [], 0
         
         if alg == 4:
-            logger.info("D* Lite selected but not implemented; using A* fallback")
-            self._set_message("D* Lite selected: using A* fallback (not implemented)", 2.5)
+            # D* Lite implementation - use the actual D* Lite solver
+            logger.info("D* Lite selected - using incremental replanning")
+            try:
+                from src.simulation.dstar_lite import DStarLiteSolver
+                env = ZeldaLogicEnv(current_grid.copy(), self.start_pos, self.goal_pos)
+                solver = DStarLiteSolver(env)
+                success, path, nodes_explored = solver.solve()
+                
+                if success and path:
+                    logger.info(f"D* Lite succeeded: path_len={len(path)}, nodes={nodes_explored}")
+                    return True, path, nodes_explored
+                else:
+                    logger.warning("D* Lite failed, falling back to A*")
+                    # Fall through to A* below
+            except Exception as e:
+                logger.error(f"D* Lite error: {e}, falling back to A*")
+                # Fall through to A* below
 
         def heuristic(a, b):
             # Use ML heuristic if enabled and model available, else Manhattan (or octile for diagonal)
