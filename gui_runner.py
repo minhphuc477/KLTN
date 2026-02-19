@@ -32,7 +32,7 @@ import math
 import logging
 import threading
 import numpy as np
-from typing import Tuple, List, Optional
+from typing import Tuple, List, Optional, Any
 
 # Configure logging
 logging.basicConfig(
@@ -91,6 +91,7 @@ try:
     import pygame
     PYGAME_AVAILABLE = True
 except ImportError:
+    pygame = None  # type: ignore[assignment]
     PYGAME_AVAILABLE = False
     logger.warning("Pygame not installed. Run 'pip install pygame' for GUI support.")
 
@@ -106,7 +107,92 @@ try:
     VISUALIZATION_AVAILABLE = True
 except ImportError:
     VISUALIZATION_AVAILABLE = False
-    logger.warning("New visualization system not available, using fallback rendering.")
+
+    # --- Minimal no-op implementations used when the optional visualization
+    # package is not installed. These implement the small surface of methods
+    # the GUI expects so the rest of the code can run in headless/test envs.
+    class _NoOpSpriteManager:
+        def get_tile(self, _tile_id, size):
+            if PYGAME_AVAILABLE:
+                surf = pygame.Surface((size, size))
+                surf.fill((80, 80, 80))
+                return surf
+            return None
+
+    class _NoOpRenderer:
+        def __init__(self, tile_size: int):
+            self.tile_size = tile_size
+            self.sprite_manager = _NoOpSpriteManager()
+            self.agent_visual_pos = None
+            self.show_heatmap = False
+
+        def set_agent_position(self, *_, **__):
+            return None
+        def set_tile_size(self, *_, **__):
+            return None
+        def update(self, *_, **__):
+            return None
+        def render(self, *_, **__):
+            return None
+
+    class _NoOpEffectManager:
+        def add_effect(self, *_, **__):
+            return None
+        def clear(self):
+            return None
+        def update(self, *_, **__):
+            return None
+        def render(self, *_, **__):
+            return None
+
+    class _NoOpHUDInventory:
+        def __init__(self):
+            self.keys_collected = 0
+            self.bombs_collected = 0
+            self.boss_keys_collected = 0
+            self.keys_used = 0
+            self.bombs_used = 0
+            self.boss_keys_used = 0
+
+    class _NoOpModernHUD:
+        def __init__(self):
+            self.inventory = _NoOpHUDInventory()
+            self.keys_collected = 0
+            self.bombs_collected = 0
+            self.boss_keys_collected = 0
+            self.keys_used = 0
+            self.bombs_used = 0
+            self.boss_keys_used = 0
+
+        def update_game_state(self, *_, **__):
+            return None
+
+    class _NoOpPathPreviewDialog:
+        def __init__(self, *_, **__):
+            pass
+        def render(self, *_, **__):
+            return None
+        def render_path_overlay(self, *_, **__):
+            return None
+        def handle_input(self, *_, **__):
+            return None
+
+    # Expose names expected by the rest of the module
+    ZeldaRenderer = _NoOpRenderer
+    ThemeConfig = None
+    Vector2 = None
+    EffectManager = _NoOpEffectManager
+    PopEffect = lambda *a, **k: None
+    FlashEffect = lambda *a, **k: None
+    RippleEffect = lambda *a, **k: None
+    ItemCollectionEffect = lambda *a, **k: None
+    ItemUsageEffect = lambda *a, **k: None
+    ItemMarkerEffect = lambda *a, **k: None
+    ModernHUD = _NoOpModernHUD
+    HUDTheme = None
+    PathPreviewDialog = _NoOpPathPreviewDialog
+
+    logger.warning("New visualization system not available; using no-op fallbacks for GUI components.")
 
 # Try to import GUI widgets
 try:
@@ -117,7 +203,47 @@ try:
     WIDGETS_AVAILABLE = True
 except ImportError:
     WIDGETS_AVAILABLE = False
-    logger.warning("GUI widgets not available, using keyboard controls only.")
+
+    # Minimal no-op widget implementations so GUI code can run when the
+    # optional widget package is absent (headless/test-friendly).
+    class _NoOpWidget:
+        def __init__(self, *_, **__):
+            self.control_name = None
+            self.is_open = False
+            self.state = None
+            self.rect = None
+            self.checked = False
+
+        def handle_mouse_down(self, *_, **__):
+            return False
+        def handle_mouse_up(self, *_, **__):
+            return False
+
+    class _NoOpWidgetManager:
+        def __init__(self):
+            self.widgets = []
+        def add_widget(self, w):
+            self.widgets.append(w)
+        def snapshot_dropdown_state(self):
+            return {}
+        def apply_dropdown_state(self, _state):
+            return None
+        def update(self, *_, **__):
+            return None
+        def handle_mouse_down(self, *_, **__):
+            return False
+        def handle_mouse_up(self, *_, **__):
+            return False
+        def handle_mouse_motion(self, *_, **__):
+            return False
+
+    CheckboxWidget = _NoOpWidget
+    DropdownWidget = _NoOpWidget
+    ButtonWidget = _NoOpWidget
+    WidgetManager = _NoOpWidgetManager
+    WidgetTheme = None
+
+    logger.warning("GUI widgets not available — using no-op widget manager.")
 
 # --- Subprocess-based solver helper ---
 # This helper runs inside a separate process to avoid blocking the main thread
@@ -125,6 +251,26 @@ except ImportError:
 import pickle
 import tempfile
 import multiprocessing
+
+
+def _safe_unpickle(path: str) -> dict:
+    """Safely load a pickle produced by our own processes and validate shape.
+
+    Returns a dict with at least a 'success' key. Any error returns a failure dict.
+    """
+    try:
+        if not path or not os.path.exists(path):
+            return {'success': False, 'message': 'output file missing'}
+        with open(path, 'rb') as f:
+            obj = pickle.load(f)
+        if not isinstance(obj, dict):
+            logger.warning('safe_unpickle: unexpected payload type %s for %s', type(obj), path)
+            return {'success': False, 'message': 'invalid output format'}
+        return obj
+    except Exception as e:
+        logger.exception('safe_unpickle failed for %s: %s', path, e)
+        return {'success': False, 'message': 'unpickle error'}
+
 
 def _convert_diagonal_to_4dir(path, grid=None):
     """Convert a path with diagonal moves to 4-directional movement.
@@ -605,13 +751,13 @@ def _run_preview_and_dump(grid_or_path, start_pos, goal_pos, algorithm_idx, feat
         except Exception:
             try:
                 with open(out_path, 'wb') as f:
-                    pickle.dump({'success': False, 'message': 'failed to write preview output'})
+                    pickle.dump({'success': False, 'message': 'failed to write preview output'}, f)
             except Exception:
                 pass
     except Exception as e:
         try:
             with open(out_path, 'wb') as f:
-                pickle.dump({'success': False, 'message': str(e)})
+                pickle.dump({'success': False, 'message': str(e)}, f)
         except Exception:
             pass
 
@@ -656,10 +802,11 @@ class ToastNotification:
         alpha = max(0, min(255, alpha))
         return alpha
     
-    def render(self, surface: pygame.Surface, center_x: int, y: int):
+    def render(self, surface: "pygame.Surface", center_x: int, y: int):
         """Render toast notification at specified position."""
+        assert pygame is not None
         alpha = self.get_alpha()
-        font = pygame.font.Font(None, 20)
+        font = pygame.font.SysFont('Arial', 20)
         text_surf = font.render(self.message, True, (255, 255, 255))
         
         padding = 15
@@ -678,8 +825,8 @@ class ToastNotification:
             pygame.draw.rect(toast_surf, (50, 60, 80), bg_rect, border_radius=8)
 
         # Colored border by type (coerce to ints and fallback)
+        col = self.colors.get(self.toast_type, (200, 200, 200))
         try:
-            col = self.colors.get(self.toast_type, (200, 200, 200))
             border_color = (int(col[0]), int(col[1]), int(col[2]), int(alpha))
             pygame.draw.rect(toast_surf, border_color, bg_rect, 2, border_radius=8)
         except Exception:
@@ -729,8 +876,10 @@ class ZeldaGUI:
         """
         if not PYGAME_AVAILABLE:
             raise ImportError("Pygame is required for GUI. Install with: pip install pygame")
+        # Type-narrowing for static analysis: ensure `pygame` is available below
+        assert pygame is not None
         
-        self.maps = maps if maps else [create_test_map()]
+        self.maps: List[Any] = maps if maps else [create_test_map()]
         self.map_names = map_names if map_names else [f"Map {i+1}" for i in range(len(self.maps))]
         self.current_map_idx = 0
         
@@ -790,8 +939,11 @@ class ZeldaGUI:
         
         # Calculate initial window size (fit largest map)
         # Handle both raw grids and StitchedDungeon objects
-        max_map_h = max(m.global_grid.shape[0] if hasattr(m, 'global_grid') else m.shape[0] for m in self.maps)
-        max_map_w = max(m.global_grid.shape[1] if hasattr(m, 'global_grid') else m.shape[1] for m in self.maps)
+        def _grid_shape(m: Any):
+            g = getattr(m, 'global_grid', m)
+            return getattr(g, 'shape')[0], getattr(g, 'shape')[1]
+        max_map_h = max(_grid_shape(m)[0] for m in self.maps)
+        max_map_w = max(_grid_shape(m)[1] for m in self.maps)
         
         # Smart sizing: fit map with some padding, but don't exceed screen
         ideal_w = max_map_w * self.TILE_SIZE + self.SIDEBAR_WIDTH
@@ -889,6 +1041,8 @@ class ZeldaGUI:
             self._watchdog_last_dump = 0.0
             self._watchdog_dump_limit = int(os.environ.get('KLTN_WATCHDOG_DUMP_LIMIT', '3'))
             self._watchdog_dumps = 0
+            # Watchdog thread handle (declared up-front for type-checkers)
+            self._watchdog_thread: Optional[threading.Thread] = None
             # Path requested by watchdog for the main thread to save a screenshot (thread-safe)
             self._watchdog_request_screenshot = None
             if self._watchdog_enabled:
@@ -918,9 +1072,11 @@ class ZeldaGUI:
             self.effects = EffectManager()
             self.modern_hud = ModernHUD()
         else:
-            self.renderer = None
-            self.effects = None
-            self.modern_hud = None
+            # Instantiate no-op fallbacks so attribute access is safe and
+            # downstream code does not need to guard every call.
+            self.renderer = ZeldaRenderer(self.TILE_SIZE)
+            self.effects = EffectManager()
+            self.modern_hud = ModernHUD()
 
         # State for match/undo stack
         self.match_undo_stack = []
@@ -1018,6 +1174,8 @@ class ZeldaGUI:
         self.solver_outfile = None       # Temp file for solver pickle output
         self.solver_gridfile = None      # Temp file for grid numpy array
         self._pending_solver_trigger = False  # Flag to trigger solver on next frame (for algorithm changes)
+        # Lock to make solver scheduling atomic and thread-safe
+        self._solver_lock = threading.Lock()
         
         # Preview subprocess state (separate from main solver)
         self.preview_proc = None         # multiprocessing.Process handle for preview
@@ -1344,7 +1502,7 @@ class ZeldaGUI:
             self.stair_sprite = None
             self.stair_anim_phase = 0.0
     
-    def _create_link_sprite(self) -> pygame.Surface:
+    def _create_link_sprite(self) -> "pygame.Surface":
         """Create a detailed Link sprite using pygame drawing."""
         link_img = pygame.Surface((self.TILE_SIZE - 4, self.TILE_SIZE - 4), pygame.SRCALPHA)
         
@@ -1512,7 +1670,7 @@ class ZeldaGUI:
                 label,
                 checked=self.feature_flags.get(flag_name, False)
             )
-            checkbox.flag_name = flag_name
+            setattr(checkbox, 'flag_name', flag_name)
             self.widget_manager.add_widget(checkbox)
             y_offset += checkbox_spacing
         
@@ -1528,7 +1686,7 @@ class ZeldaGUI:
             selected=self.current_floor - 1,
             keep_open_on_select=self.feature_flags.get('persist_dropdown_on_select', False)
         )
-        floor_dropdown.control_name = 'floor'
+        setattr(floor_dropdown, 'control_name', 'floor')
         self.widget_manager.add_widget(floor_dropdown)
         y_offset += dropdown_spacing
         
@@ -1540,7 +1698,7 @@ class ZeldaGUI:
             selected=self.zoom_level_idx,
             keep_open_on_select=self.feature_flags.get('persist_dropdown_on_select', False)
         )
-        zoom_dropdown.control_name = 'zoom'
+        setattr(zoom_dropdown, 'control_name', 'zoom')
         self.widget_manager.add_widget(zoom_dropdown)
         y_offset += dropdown_spacing
 
@@ -1552,7 +1710,7 @@ class ZeldaGUI:
             selected=0,
             keep_open_on_select=self.feature_flags.get('persist_dropdown_on_select', False)
         )
-        ara_dropdown.control_name = 'ara_weight'
+        setattr(ara_dropdown, 'control_name', 'ara_weight')
         self.widget_manager.add_widget(ara_dropdown)
         y_offset += dropdown_spacing
         
@@ -1564,7 +1722,7 @@ class ZeldaGUI:
             selected=self.difficulty_idx,
             keep_open_on_select=self.feature_flags.get('persist_dropdown_on_select', False)
         )
-        difficulty_dropdown.control_name = 'difficulty'
+        setattr(difficulty_dropdown, 'control_name', 'difficulty')
         self.widget_manager.add_widget(difficulty_dropdown)
         y_offset += dropdown_spacing
         
@@ -1576,7 +1734,7 @@ class ZeldaGUI:
             selected=self.current_preset_idx,
             keep_open_on_select=self.feature_flags.get('persist_dropdown_on_select', False)
         )
-        presets_dropdown.control_name = 'presets'
+        setattr(presets_dropdown, 'control_name', 'presets')
         self.widget_manager.add_widget(presets_dropdown)
         y_offset += dropdown_spacing
 
@@ -1591,7 +1749,7 @@ class ZeldaGUI:
             selected=self.algorithm_idx,
             keep_open_on_select=self.feature_flags.get('persist_dropdown_on_select', False)
         )
-        algorithm_dropdown.control_name = 'algorithm'
+        setattr(algorithm_dropdown, 'control_name', 'algorithm')
         self.widget_manager.add_widget(algorithm_dropdown)
         y_offset += dropdown_spacing
 
@@ -1603,7 +1761,7 @@ class ZeldaGUI:
             selected=3,
             keep_open_on_select=self.feature_flags.get('persist_dropdown_on_select', False)
         )
-        threshold_dropdown.control_name = 'match_threshold'
+        setattr(threshold_dropdown, 'control_name', 'match_threshold')
         self.widget_manager.add_widget(threshold_dropdown)
         # Keep a float copy
         self.match_apply_threshold = float(threshold_dropdown.options[threshold_dropdown.selected])
@@ -1614,7 +1772,8 @@ class ZeldaGUI:
 
         # After adding dropdowns, restore any previous dropdown snapshot
         try:
-            self.widget_manager.apply_dropdown_state(saved_dropdown_state)
+            if saved_dropdown_state is not None:
+                self.widget_manager.apply_dropdown_state(saved_dropdown_state)
         except Exception:
             pass
         
@@ -1779,7 +1938,7 @@ class ZeldaGUI:
         for widget in self.widget_manager.widgets:
             if isinstance(widget, CheckboxWidget):
                 # Position checkboxes in a vertical list
-                widget.pos = (panel_x + margin_left, current_y + checkbox_idx * item_spacing)
+                setattr(widget, 'pos', (panel_x + margin_left, current_y + checkbox_idx * item_spacing))
                 checkbox_idx += 1
 
             elif isinstance(widget, DropdownWidget):
@@ -1787,7 +1946,7 @@ class ZeldaGUI:
                 if checkbox_idx > 0 and dropdown_idx == 0:
                     current_y += checkbox_idx * item_spacing + section_gap
 
-                widget.pos = (panel_x + margin_left, current_y + dropdown_idx * item_spacing)
+                setattr(widget, 'pos', (panel_x + margin_left, current_y + dropdown_idx * item_spacing))
                 dropdown_idx += 1
 
             elif isinstance(widget, ButtonWidget):
@@ -1797,10 +1956,10 @@ class ZeldaGUI:
 
                 row = button_idx // buttons_per_row
                 col = button_idx % buttons_per_row
-                widget.pos = (
+                setattr(widget, 'pos', (
                     panel_x + margin_left + col * (button_width + button_h_spacing),
                     current_y + row * (button_height + button_v_spacing)
-                )
+                ))
                 button_idx += 1
 
     def _dump_control_panel_widget_state(self, mouse_pos: tuple):
@@ -2685,7 +2844,7 @@ class ZeldaGUI:
                 surface.blit(banner_surface, (0, 0))
                 
                 # Draw error icon and text
-                font = pygame.font.Font(None, 28)
+                font = pygame.font.SysFont('Arial', 28)
                 text = f"[!] {self.error_message}"
                 text_surf = font.render(text, True, (255, 255, 255))
                 text_surf.set_alpha(int(255 * alpha))
@@ -2730,7 +2889,7 @@ class ZeldaGUI:
         surface.blit(banner_surface, (0, banner_y))
         
         # Draw status text
-        font = pygame.font.Font(None, 32)
+        font = pygame.font.SysFont('Arial', 32)
         text = f"🔍 Computing path with {alg_name}..."
         text_surf = font.render(text, True, (255, 255, 255))
         text_rect = text_surf.get_rect(center=(self.screen_w // 2, banner_y + banner_height // 2))
@@ -2751,7 +2910,7 @@ class ZeldaGUI:
         surface.blit(bar_surface, (0, bar_y))
         
         # Status text
-        font = pygame.font.Font(None, 20)
+        font = pygame.font.SysFont('Arial', 20)
         
         # Left: Status
         status_text = f"Status: {self.status_message}"
@@ -3140,7 +3299,7 @@ class ZeldaGUI:
     
     def _draw_tooltip(self, surface, pos, text):
         """Draw a tooltip box at the specified position."""
-        font = pygame.font.Font(None, 18)
+        font = pygame.font.SysFont('Arial', 18)
         padding = 8
         
         # Render text
@@ -3505,14 +3664,26 @@ class ZeldaGUI:
             self._set_message(f"Generation failed: {str(e)}")
 
     def _generate_ai_dungeon(self):
-        """Generate a comprehensive dungeon using the full H-MOLQD pipeline.
+        """Non-blocking wrapper — spawn background worker and return immediately."""
+        # If a worker is already running, avoid starting another
+        if getattr(self, 'ai_gen_thread', None) and getattr(self.ai_gen_thread, 'is_alive', lambda: False)():
+            self._set_message('AI generation already running', 1.5)
+            return
 
-        Pipeline:
-            1. MissionGrammar   → mission graph (rooms + lock/key ordering)
-            2. ConditionEncoder → graph-aware conditioning vector
-            3. LatentDiffusion  → denoised latent (DDIM 50 steps)
-            4. VQ-VAE decode    → tile logits → argmax → semantic grid
-            5. SymbolicRefiner  → WFC repair for structural validity
+        # Reset worker state and spawn background thread
+        self.ai_gen_result = None
+        self.ai_gen_done = False
+        th = threading.Thread(target=self._generate_ai_dungeon_worker, daemon=True)
+        self.ai_gen_thread = th
+        th.start()
+        self._set_message('AI generation started (background)')
+
+
+    def _generate_ai_dungeon_worker(self):
+        """Worker that performs the heavy AI generation pipeline off the main thread.
+
+        This worker MUST NOT call Pygame/display functions or perform UI updates.
+        It stores the final grid in `self.ai_gen_result` and sets `self.ai_gen_done`.
         """
         try:
             import torch
@@ -5528,9 +5699,8 @@ class ZeldaGUI:
                     out = getattr(self, 'preview_outfile', None)
                     res = None
                     try:
-                        if out and os.path.exists(out):
-                            with open(out, 'rb') as f:
-                                res = pickle.load(f)
+                        if out:
+                            res = _safe_unpickle(out)
                     except Exception as e:
                         logger.exception('Failed to read preview output: %s', e)
                     finally:
@@ -5629,12 +5799,9 @@ class ZeldaGUI:
                         logger.info('SOLVER: Reading result from %s, exists=%s', out, os.path.exists(out) if out else 'N/A')
                         res = None
                         try:
-                            if out and os.path.exists(out):
-                                with open(out, 'rb') as f:
-                                    res = pickle.load(f)
+                            if out:
+                                res = _safe_unpickle(out)
                                 path_len = len(res.get('path', []) or []) if res else 0
-                                # CRITICAL FIX: Use (x or {}) pattern to handle None values
-                                # res.get('solver_result', {}) returns None if key exists with None value
                                 solver_result_safe = (res.get('solver_result') or {}) if res else {}
                                 logger.info('SOLVER: Result loaded, path_len=%d, success=%s, keys=%s',
                                             path_len,
@@ -5740,6 +5907,21 @@ class ZeldaGUI:
                         
                         # CRITICAL: Clear all solver state atomically using centralized helper
                         self._clear_solver_state(reason="solver completed/failed")
+
+            # If AI generation worker finished, apply result on main thread
+            if getattr(self, 'ai_gen_done', False):
+                res = getattr(self, 'ai_gen_result', None)
+                self.ai_gen_done = False
+                self.ai_gen_result = None
+                if res and res.get('success') and res.get('grid') is not None:
+                    self.maps.append(res['grid'])
+                    self.map_names.append(res.get('name', 'AI Generated'))
+                    self.current_map_idx = len(self.maps) - 1
+                    self._load_current_map()
+                    self._center_view()
+                    self._set_message('AI generation complete', 3.0)
+                else:
+                    self._set_message('AI generation failed', 3.0)
 
             # Render
             self._render()
@@ -6201,9 +6383,9 @@ class ZeldaGUI:
         
         # Indicate starting
         self._set_message('Starting solver in background...', 2.0)
-        try:# CRITICAL FIX: Pass algorithm_idx explicitly to _schedule_solver() to eliminate race conditions
+        try:
+            # Pass explicit algorithm_idx to eliminate race conditions and call scheduler exactly once.
             self._schedule_solver(algorithm_idx=alg_idx)
-            self._schedule_solver()
             logger.info('DEBUG_SOLVER: _schedule_solver() completed without exception')
         except Exception:
             logger.exception('Failed to schedule solver')
@@ -6367,17 +6549,19 @@ class ZeldaGUI:
         Args:
             algorithm_idx: Algorithm index to use (if None, read from self.algorithm_idx)
         """
-        if getattr(self, 'solver_running', False):
-            self._set_message('Solver already running...')
-            logger.warning('SOLVER: _schedule_solver blocked - solver_running already True')
-            return
-        
-        # CRITICAL: Set solver_running=True IMMEDIATELY to prevent race condition
-        # This must happen BEFORE spawning any thread
-        self.solver_running = True
-        self.solver_done = False
-        self.solver_start_time = time.time()  # Track start time for timeout detection
-        self.solver_starting = True
+        # Make scheduling atomic to avoid races when multiple callers attempt to
+        # start the solver concurrently. Acquire a short-lived lock, check the
+        # guard and reserve the solver slot while holding the lock.
+        with self._solver_lock:
+            if self.solver_running:
+                self._set_message('Solver already running...')
+                logger.warning('SOLVER: _schedule_solver blocked - solver_running already True')
+                return False
+            # Reserve the solver slot immediately (prevents TOCTOU)
+            self.solver_running = True
+            self.solver_done = False
+            self.solver_start_time = time.time()
+            self.solver_starting = True
         
         # CRITICAL FIX: Use explicit algorithm_idx parameter if provided
         # This eliminates race conditions between dropdown widget state and self.algorithm_idx
@@ -6420,7 +6604,7 @@ class ZeldaGUI:
             # CRITICAL: Clear solver_running immediately on early exit
             self._clear_solver_state(reason="missing start/goal")
             logger.warning('SOLVER: Missing start/goal - cleared solver state')
-            return
+            return False
         start = tuple(self.env.start_pos)
         goal = tuple(self.env.goal_pos)
         alg_idx = getattr(self, 'algorithm_idx', 0)
@@ -6554,6 +6738,9 @@ class ZeldaGUI:
             t.start()
         except Exception:
             _start_proc()
+
+        # Indicate scheduling succeeded
+        return True
 
     def _execute_auto_solve(self, path, solver_result, teleports=0):
         """
@@ -7658,7 +7845,7 @@ class ZeldaGUI:
         except ImportError:
             self._set_message('NetworkX not available - cannot export DOT automatically', 4.0)
 
-    def _render_topology_overlay(self, surface: pygame.Surface):
+    def _render_topology_overlay(self, surface: "pygame.Surface"):
         """Draw room nodes and edges on the map area with high-visibility styling.
 
         Uses `room_to_node` mapping to place graph node ids on the stitched room positions.
@@ -8415,7 +8602,7 @@ class ZeldaGUI:
             logger.exception('MAP-Elites worker failed: %s', e)
             self._show_toast(f'MAP-Elites failed: {e}', 4.0, 'error')
 
-    def _render_solver_comparison_overlay(self, surface: pygame.Surface):
+    def _render_solver_comparison_overlay(self, surface: "pygame.Surface"):
         """Render a small sidebar table with solver comparison results."""
         if not getattr(self, 'solver_comparison_results', None):
             return
@@ -8486,7 +8673,7 @@ class ZeldaGUI:
         if hasattr(self, 'toast_notifications'):
             self.toast_notifications = [t for t in self.toast_notifications if not t.is_expired()]
     
-    def _render_toasts(self, surface: pygame.Surface):
+    def _render_toasts(self, surface: "pygame.Surface"):
         """Render all active toast notifications."""
         if not hasattr(self, 'toast_notifications'):
             return
@@ -8555,7 +8742,7 @@ class ZeldaGUI:
         
         self.block_push_animations = still_active
     
-    def _render_block_push_animations(self, surface: pygame.Surface):
+    def _render_block_push_animations(self, surface: "pygame.Surface"):
         """Render blocks that are currently being pushed with smooth interpolation.
         
         Args:
@@ -9863,7 +10050,7 @@ class ZeldaGUI:
         # NOTE: pygame.display.flip() is called by the main run() loop after _render()
         # Do NOT call flip() here to avoid double-buffer swap issues
 
-    def _render_debug_overlay(self, surface: pygame.Surface):
+    def _render_debug_overlay(self, surface: "pygame.Surface"):
         """Render debug overlay with mouse coords, widget rects, and recent clicks.
         Toggle with F12. Shift-F11 clears click log.
         """
@@ -10001,7 +10188,7 @@ class ZeldaGUI:
             msg_surf = self.small_font.render(self.message, True, msg_color)
             self.screen.blit(msg_surf, (x, y))
     
-    def _render_progress_bar(self, surface: pygame.Surface, x: int, y: int, width: int, height: int, 
+    def _render_progress_bar(self, surface: "pygame.Surface", x: int, y: int, width: int, height: int, 
                              filled: int, total: int, color_filled: tuple, color_empty: tuple):
         """Render a segmented progress bar with filled/empty indicators."""
         if total == 0:
