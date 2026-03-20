@@ -5,10 +5,10 @@ Parallel A* Search using Multiprocessing
 Research: "Hash Distributed A*" (HDA*) - Kishimoto et al. (2009)
 
 Strategy:
-1. Partition state space by hash function: hash(state) % N_WORKERS
-2. Each worker maintains its own priority queue
-3. Shared closed set with process-safe dict
-4. First worker to find goal signals termination
+1. Spawn multiple worker processes that run the same A* frontier expansion
+2. Use a process-safe shared closed set to suppress duplicate expansions
+3. First worker to find goal signals termination
+4. Return the best successful worker result
 
 Performance:
 - Theoretical: N× speedup with N cores
@@ -26,7 +26,16 @@ import heapq
 import logging
 from typing import Dict, List, Tuple, Optional, Set
 from dataclasses import dataclass
-from .validator import GameState, ACTION_DELTAS, SEMANTIC_PALETTE, ZeldaLogicEnv
+from .validator import (
+    GameState,
+    SEMANTIC_PALETTE,
+    ZeldaLogicEnv,
+    BLOCKING_IDS,
+    WALKABLE_IDS,
+    PICKUP_IDS,
+    PUSHABLE_IDS,
+    WATER_IDS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -41,14 +50,250 @@ class WorkerResult:
     time_taken: float
 
 
+def _heuristic_local(state: GameState, goal_pos: Optional[Tuple[int, int]]) -> float:
+    """Manhattan heuristic for worker-local search."""
+    if goal_pos is None:
+        return float('inf')
+    pos = state.position
+    return abs(pos[0] - goal_pos[0]) + abs(pos[1] - goal_pos[1])
+
+
+def _try_move_local(
+    state: GameState,
+    target_pos: Tuple[int, int],
+    target_tile: int,
+    grid,
+    height: int,
+    width: int,
+) -> Tuple[bool, GameState]:
+    """
+    Pure state transition logic used inside worker subprocesses.
+
+    This mirrors ZeldaLogicEnv._try_move_pure so parallel workers evaluate
+    the same full game mechanics as sequential solvers.
+    """
+    if target_tile in BLOCKING_IDS:
+        return False, state
+
+    new_state = state.copy()
+    new_state.position = target_pos
+
+    if target_pos in state.opened_doors:
+        return True, new_state
+
+    if target_pos in state.collected_items:
+        return True, new_state
+
+    for from_pos, to_pos in state.pushed_blocks:
+        if from_pos == target_pos:
+            return True, new_state
+
+    for from_pos, to_pos in state.pushed_blocks:
+        if to_pos == target_pos:
+            if int(grid[target_pos[0], target_pos[1]]) == SEMANTIC_PALETTE['TRIFORCE']:
+                return True, new_state
+
+            dr = target_pos[0] - state.position[0]
+            dc = target_pos[1] - state.position[1]
+            push_dest_r = target_pos[0] + dr
+            push_dest_c = target_pos[1] + dc
+
+            if not (0 <= push_dest_r < height and 0 <= push_dest_c < width):
+                return False, state
+
+            push_dest_tile = int(grid[push_dest_r, push_dest_c])
+            dest_has_block = any(tp == (push_dest_r, push_dest_c) for (_, tp) in state.pushed_blocks)
+            if push_dest_tile in WALKABLE_IDS and not dest_has_block:
+                new_pushed = set()
+                for fp, tp in state.pushed_blocks:
+                    if tp == target_pos:
+                        new_pushed.add((from_pos, (push_dest_r, push_dest_c)))
+                    else:
+                        new_pushed.add((fp, tp))
+                new_state.pushed_blocks = new_pushed
+                return True, new_state
+            return False, state
+
+    if target_tile in WALKABLE_IDS:
+        if target_tile in PICKUP_IDS:
+            new_state.collected_items = state.collected_items | {target_pos}
+            if target_tile == SEMANTIC_PALETTE['KEY_SMALL']:
+                new_state.keys = state.keys + 1
+            elif target_tile == SEMANTIC_PALETTE['KEY_BOSS']:
+                new_state.has_boss_key = True
+            elif target_tile == SEMANTIC_PALETTE['KEY_ITEM']:
+                new_state.has_item = True
+                new_state.bomb_count = state.bomb_count + 4
+            elif target_tile == SEMANTIC_PALETTE['ITEM_MINOR']:
+                new_state.bomb_count = state.bomb_count + 4
+        return True, new_state
+
+    if target_tile == SEMANTIC_PALETTE['DOOR_LOCKED']:
+        if state.keys > 0:
+            new_state.keys = state.keys - 1
+            new_state.opened_doors = state.opened_doors | {target_pos}
+            return True, new_state
+        return False, state
+
+    if target_tile == SEMANTIC_PALETTE['DOOR_BOMB']:
+        if state.bomb_count > 0:
+            new_state.bomb_count = state.bomb_count - 1
+            new_state.opened_doors = state.opened_doors | {target_pos}
+            return True, new_state
+        return False, state
+
+    if target_tile == SEMANTIC_PALETTE['DOOR_BOSS']:
+        if state.has_boss_key:
+            new_state.opened_doors = state.opened_doors | {target_pos}
+            return True, new_state
+        return False, state
+
+    if target_tile == SEMANTIC_PALETTE['DOOR_PUZZLE']:
+        return True, new_state
+
+    if target_tile in PUSHABLE_IDS:
+        dr = target_pos[0] - state.position[0]
+        dc = target_pos[1] - state.position[1]
+        push_dest_r = target_pos[0] + dr
+        push_dest_c = target_pos[1] + dc
+
+        if not (0 <= push_dest_r < height and 0 <= push_dest_c < width):
+            return False, state
+
+        push_dest_tile = int(grid[push_dest_r, push_dest_c])
+        dest_has_block = any(tp == (push_dest_r, push_dest_c) for (_, tp) in state.pushed_blocks)
+        if push_dest_tile in WALKABLE_IDS and not dest_has_block:
+            new_state.pushed_blocks = state.pushed_blocks | {(target_pos, (push_dest_r, push_dest_c))}
+            return True, new_state
+        return False, state
+
+    if target_tile in WATER_IDS:
+        if state.has_item:
+            return True, new_state
+        return False, state
+
+    return True, new_state
+
+
+def _parallel_astar_worker(
+    worker_id: int,
+    goal_pos: Optional[Tuple[int, int]],
+    height: int,
+    width: int,
+    grid,
+    start_state: GameState,
+    shared_closed,
+    result_queue,
+    termination_flag,
+) -> None:
+    """
+    Worker process for parallel A*.
+
+    Notes:
+    - Must be top-level (not bound method) to avoid pickling class instances on Windows spawn.
+    - Uses a shared closed-set for duplicate suppression across workers.
+    """
+    import time
+
+    start_time = time.time()
+    states_explored = 0
+    try:
+        open_set = []
+        counter = 0
+        g_scores = {}
+
+        # Start from the same initial frontier in each worker.
+        start_hash = hash(start_state)
+        g_scores[start_hash] = 0
+        f_score = _heuristic_local(start_state, goal_pos)
+        heapq.heappush(open_set, (f_score, counter, start_hash, start_state, [start_state.position]))
+        counter += 1
+
+        while open_set and not termination_flag.is_set():
+            _, _, state_hash, current_state, path = heapq.heappop(open_set)
+
+            # Skip if already globally explored.
+            if state_hash in shared_closed:
+                continue
+
+            # Claim this state globally.
+            shared_closed[state_hash] = True
+            states_explored += 1
+
+            # Goal check.
+            if current_state.position == goal_pos:
+                elapsed = time.time() - start_time
+                result_queue.put(
+                    WorkerResult(
+                        worker_id=worker_id,
+                        success=True,
+                        path=path,
+                        states_explored=states_explored,
+                        time_taken=elapsed,
+                    )
+                )
+                return
+
+            # Expand cardinal neighbors only for stable grid-consistent behavior.
+            for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                new_r = current_state.position[0] + dr
+                new_c = current_state.position[1] + dc
+
+                if not (0 <= new_r < height and 0 <= new_c < width):
+                    continue
+
+                target_pos = (new_r, new_c)
+                target_tile = int(grid[new_r, new_c])
+                can_move, new_state = _try_move_local(
+                    current_state,
+                    target_pos,
+                    target_tile,
+                    grid,
+                    height,
+                    width,
+                )
+                if not can_move:
+                    continue
+
+                new_hash = hash(new_state)
+                if new_hash in shared_closed:
+                    continue
+
+                g_score = g_scores.get(state_hash, 0) + 1
+                if new_hash in g_scores and g_score >= g_scores[new_hash]:
+                    continue
+
+                g_scores[new_hash] = g_score
+                f_score = g_score + _heuristic_local(new_state, goal_pos)
+                heapq.heappush(open_set, (f_score, counter, new_hash, new_state, path + [new_state.position]))
+                counter += 1
+    except Exception:
+        # Worker crashed before producing a result; report failure so parent does not block.
+        pass
+
+    elapsed = time.time() - start_time
+    try:
+        result_queue.put(
+            WorkerResult(
+                worker_id=worker_id,
+                success=False,
+                path=[],
+                states_explored=states_explored,
+                time_taken=elapsed,
+            )
+        )
+    except Exception:
+        return
+
+
 class ParallelAStarSolver:
     """
-    Parallel A* search using hash-based state space partitioning.
+    Parallel A* search using multiprocessing and a shared closed set.
     
     Features:
     - Divides work across N CPU cores
-    - Each worker explores states matching hash(state) % N == worker_id
-    - Shared closed set prevents duplicate work
+    - Workers race on the same frontier with duplicate suppression
+    - Shared closed set reduces redundant expansions
     - First-to-goal termination
     
     Performance:
@@ -96,30 +341,55 @@ class ParallelAStarSolver:
         
         # Create worker processes
         processes = []
+        # Capture immutable worker inputs once.
+        grid = self.env.original_grid
+        goal_pos = self.env.goal_pos
+        height = self.env.height
+        width = self.env.width
         for worker_id in range(self.n_workers):
             p = mp.Process(
-                target=self._worker,
-                args=(worker_id, start_state)
+                target=_parallel_astar_worker,
+                args=(
+                    worker_id,
+                    goal_pos,
+                    height,
+                    width,
+                    grid,
+                    start_state,
+                    self.shared_closed,
+                    self.result_queue,
+                    self.termination_flag,
+                ),
             )
             p.start()
             processes.append(p)
         
-        # Wait for first result or all workers to finish
+        # Wait for first result or worker completion, without long blocking waits.
+        import time
+
         best_result = None
         results = []
-        
-        for _ in range(self.n_workers):
-            try:
-                result = self.result_queue.get(timeout=300)  # 5 min timeout
-                results.append(result)
-                
-                if result.success and (best_result is None or 
-                                       len(result.path) < len(best_result.path)):
-                    best_result = result
-                    # Signal other workers to terminate
-                    self.termination_flag.set()
-            except:
+        deadline = time.time() + 60.0
+        while time.time() < deadline:
+            # Drain ready results quickly.
+            drained = False
+            while True:
+                try:
+                    result = self.result_queue.get_nowait()
+                    drained = True
+                    results.append(result)
+                    if result.success and (best_result is None or len(result.path) < len(best_result.path)):
+                        best_result = result
+                        self.termination_flag.set()
+                except Exception:
+                    break
+
+            all_dead = all((not p.is_alive()) for p in processes)
+            if best_result and all_dead:
                 break
+            if all_dead and not drained:
+                break
+            time.sleep(0.05)
         
         # Terminate all processes
         for p in processes:
@@ -136,108 +406,9 @@ class ParallelAStarSolver:
         logger.warning(f"ParallelAStar: No solution found. Total states: {total_states}")
         return False, [], total_states
     
-    def _worker(self, worker_id: int, start_state: GameState):
-        """
-        Worker process that explores assigned partition of state space.
-        
-        Args:
-            worker_id: ID of this worker (0 to N-1)
-            start_state: Initial game state
-        """
-        import time
-        start_time = time.time()
-        
-        # Local priority queue
-        open_set = []
-        counter = 0
-        
-        # Local g_scores
-        g_scores = {}
-        
-        # Initialize with start state if it belongs to this worker
-        start_hash = hash(start_state)
-        if start_hash % self.n_workers == worker_id:
-            g_scores[start_hash] = 0
-            f_score = self._heuristic(start_state)
-            heapq.heappush(open_set, (f_score, counter, start_hash, start_state, [start_state.position]))
-            counter += 1
-        
-        states_explored = 0
-        
-        while open_set and not self.termination_flag.is_set():
-            # Pop best state
-            f, _, state_hash, current_state, path = heapq.heappop(open_set)
-            
-            # Skip if already in shared closed set
-            if state_hash in self.shared_closed:
-                continue
-            
-            # Add to shared closed set
-            self.shared_closed[state_hash] = True
-            states_explored += 1
-            
-            # Check goal
-            if current_state.position == self.env.goal_pos:
-                elapsed = time.time() - start_time
-                result = WorkerResult(
-                    worker_id=worker_id,
-                    success=True,
-                    path=path,
-                    states_explored=states_explored,
-                    time_taken=elapsed
-                )
-                self.result_queue.put(result)
-                return
-            
-            # Expand neighbors
-            for action, (dr, dc) in ACTION_DELTAS.items():
-                new_r = current_state.position[0] + dr
-                new_c = current_state.position[1] + dc
-                
-                if not (0 <= new_r < self.env.height and 0 <= new_c < self.env.width):
-                    continue
-                
-                target_pos = (new_r, new_c)
-                target_tile = self.env.grid[new_r, new_c]
-                
-                # Simple movement check
-                can_move, new_state = self._try_move(current_state, target_pos, target_tile)
-                
-                if not can_move:
-                    continue
-                
-                new_hash = hash(new_state)
-                
-                # Only process if this state belongs to this worker
-                if new_hash % self.n_workers != worker_id:
-                    continue
-                
-                if new_hash in self.shared_closed:
-                    continue
-                
-                g_score = g_scores.get(state_hash, 0) + 1
-                
-                if new_hash in g_scores and g_score >= g_scores[new_hash]:
-                    continue
-                
-                g_scores[new_hash] = g_score
-                f_score = g_score + self._heuristic(new_state)
-                
-                new_path = path + [new_state.position]
-                heapq.heappush(open_set, (f_score, counter, new_hash, new_state, new_path))
-                counter += 1
-        
-        # No solution found by this worker
-        elapsed = time.time() - start_time
-        result = WorkerResult(
-            worker_id=worker_id,
-            success=False,
-            path=[],
-            states_explored=states_explored,
-            time_taken=elapsed
-        )
-        self.result_queue.put(result)
-    
+    # NOTE: Worker logic is implemented in module-level `_parallel_astar_worker`
+    # to remain Windows-spawn friendly.
+
     def _heuristic(self, state: GameState) -> float:
         """Manhattan distance heuristic."""
         if self.env.goal_pos is None:
@@ -249,47 +420,8 @@ class ParallelAStarSolver:
     
     def _try_move(self, state: GameState, target_pos: Tuple[int, int], 
                   target_tile: int) -> Tuple[bool, GameState]:
-        """Simplified movement check."""
-        # Blocking tiles
-        if target_tile in [SEMANTIC_PALETTE['WALL'], SEMANTIC_PALETTE['VOID']]:
-            return False, state
-        
-        new_state = state.copy()
-        new_state.position = target_pos
-        
-        # Handle item pickups
-        if target_tile == SEMANTIC_PALETTE['KEY_SMALL'] and target_pos not in state.collected_items:
-            new_state.collected_items = state.collected_items | {target_pos}
-            new_state.keys = state.keys + 1
-        elif target_tile == SEMANTIC_PALETTE['KEY_BOSS'] and target_pos not in state.collected_items:
-            new_state.collected_items = state.collected_items | {target_pos}
-            new_state.has_boss_key = True
-        elif target_tile == SEMANTIC_PALETTE['KEY_ITEM'] and target_pos not in state.collected_items:
-            new_state.collected_items = state.collected_items | {target_pos}
-            new_state.has_item = True
-            new_state.bomb_count = state.bomb_count + 4  # Consumable bombs
-        
-        # Handle locked doors
-        if target_tile == SEMANTIC_PALETTE['DOOR_LOCKED']:
-            if target_pos in state.opened_doors:
-                return True, new_state
-            elif state.keys > 0:
-                new_state.keys = state.keys - 1
-                new_state.opened_doors = state.opened_doors | {target_pos}
-                return True, new_state
-            else:
-                return False, state
-        
-        if target_tile == SEMANTIC_PALETTE['DOOR_BOSS']:
-            if target_pos in state.opened_doors:
-                return True, new_state
-            elif state.has_boss_key:
-                new_state.opened_doors = state.opened_doors | {target_pos}
-                return True, new_state
-            else:
-                return False, state
-        
-        return True, new_state
+        """Canonical movement check shared with sequential solvers."""
+        return self.env._try_move_pure(state, target_pos, target_tile)
 
 
 # ==========================================

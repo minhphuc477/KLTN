@@ -14,7 +14,7 @@ Import from here instead of duplicating constants across modules.
 
 """
 
-from typing import Dict, Set
+from typing import Dict, Set, Iterable, List
 from enum import IntEnum
 
 # ==========================================
@@ -105,22 +105,31 @@ ID_TO_NAME: Dict[int, str] = {v: k for k, v in SEMANTIC_PALETTE.items()}
 CHAR_TO_SEMANTIC: Dict[str, int] = {
     '-': TileID.VOID,
     'F': TileID.FLOOR,
+    'f': TileID.FLOOR,
     '.': TileID.FLOOR,
     'W': TileID.WALL,
+    'w': TileID.WALL,
     'B': TileID.BLOCK,
+    'b': TileID.BLOCK,
     'M': TileID.ENEMY,
+    'm': TileID.ENEMY,
     'P': TileID.ELEMENT,
+    'p': TileID.ELEMENT,
     'O': TileID.ELEMENT_FLOOR,  # Element+Floor (walkable)
+    'o': TileID.ELEMENT_FLOOR,
     'I': TileID.ELEMENT,        # Element+Block (not walkable)
+    'i': TileID.ELEMENT,
     'S': TileID.STAIR,
+    's': TileID.STAIR,
     'D': TileID.DOOR_OPEN,      # Default door (type determined by graph)
+    'd': TileID.DOOR_OPEN,
 }
 
 # Characters that represent walkable tiles
-WALKABLE_CHARS: Set[str] = {'F', '.', 'O', 'D', 'S'}
+WALKABLE_CHARS: Set[str] = {'F', 'f', '.', 'O', 'o', 'D', 'd', 'S', 's'}
 
 # Characters that represent walls/obstacles
-WALL_CHARS: Set[str] = {'W', 'B', 'I', 'P'}
+WALL_CHARS: Set[str] = {'W', 'w', 'B', 'b', 'I', 'i', 'P', 'p'}
 
 # ==========================================
 # ROOM DIMENSIONS (VGLC Zelda Standard)
@@ -178,6 +187,203 @@ NODE_CONTENT_MAP: Dict[str, str] = {
     'i': 'item',
     'p': 'puzzle',
 }
+
+# Known node label tokens observed in VGLC graphs.
+KNOWN_NODE_LABEL_TOKENS: Set[str] = {
+    's', 'S', 't', 'b', 'e', 'k', 'K', 'I', 'i', 'p', 'm', 'S1',
+}
+
+# Aliases and compact forms found in corpus variants or generated graphs.
+NODE_LABEL_ALIASES: Dict[str, List[str]] = {
+    'start': ['S'],
+    'triforce': ['t'],
+    'goal': ['t'],
+    'boss': ['b'],
+    'enemy': ['e'],
+    'key': ['k'],
+    'small_key': ['k'],
+    'boss_key': ['K'],
+    'item': ['i'],
+    'minor_item': ['i'],
+    'macro_item': ['I'],
+    'key_item': ['I'],
+    'puzzle': ['p'],
+    'miniboss': ['m'],
+    'mini_boss': ['m'],
+    # Compact labels observed in VGLC files.
+    'ei': ['e', 'i'],
+    'ep': ['e', 'p'],
+}
+
+# Known edge label tokens observed in VGLC graphs.
+KNOWN_EDGE_LABEL_TOKENS: Set[str] = {'', 'k', 'K', 'b', 'l', 's', 'S', 'S1', 'I'}
+
+# Aliases for edge labels / canonical edge type names.
+EDGE_LABEL_ALIASES: Dict[str, List[str]] = {
+    'open': ['open'],
+    'locked': ['key_locked'],
+    'key_locked': ['key_locked'],
+    'boss_locked': ['boss_locked'],
+    'bombable': ['bombable'],
+    'soft_locked': ['soft_locked'],
+    'switch_locked': ['switch'],
+    'switch': ['switch'],
+    'stairs_warp': ['stair'],
+    'stair': ['stair'],
+    'warp': ['stair'],
+    'item_locked': ['item_locked'],
+    's1': ['switch'],
+}
+
+# Higher priority means stricter traversal requirement.
+EDGE_TYPE_PRIORITY: Dict[str, int] = {
+    'boss_locked': 60,
+    'key_locked': 50,
+    'item_locked': 45,
+    'bombable': 40,
+    'switch': 30,
+    'soft_locked': 20,
+    'stair': 10,
+    'open': 0,
+}
+
+
+def _dedupe_preserve_order(tokens: Iterable[str]) -> List[str]:
+    """Deduplicate while preserving first-seen order."""
+    out: List[str] = []
+    seen: Set[str] = set()
+    for tok in tokens:
+        t = str(tok).strip()
+        if not t or t in seen:
+            continue
+        seen.add(t)
+        out.append(t)
+    return out
+
+
+def _expand_node_fragment(fragment: str) -> List[str]:
+    """
+    Expand one node label fragment into canonical tokens.
+
+    Handles:
+    - direct codes: e, k, p, ...
+    - aliases: enemy -> e
+    - compact forms: ei -> e,i
+    """
+    frag = str(fragment or '').strip()
+    if not frag:
+        return []
+    if frag in KNOWN_NODE_LABEL_TOKENS:
+        return [frag]
+    if frag in NODE_LABEL_ALIASES:
+        return NODE_LABEL_ALIASES[frag]
+
+    low = frag.lower()
+    if low in NODE_LABEL_ALIASES:
+        return NODE_LABEL_ALIASES[low]
+
+    # Greedy decomposition for compact forms (e.g., "ei", "ep", "eip").
+    ordered = sorted(KNOWN_NODE_LABEL_TOKENS, key=len, reverse=True)
+    remaining = frag
+    pieces: List[str] = []
+    while remaining:
+        matched = False
+        for tok in ordered:
+            if remaining.startswith(tok):
+                pieces.append(tok)
+                remaining = remaining[len(tok):]
+                matched = True
+                break
+        if not matched:
+            # Not decomposable into known codes; keep raw fragment.
+            return [frag]
+    return pieces
+
+
+def parse_node_label_tokens(label: str) -> List[str]:
+    """Parse a node label string into canonical token codes."""
+    raw = str(label or '').replace('\n', ',').strip()
+    if not raw:
+        return []
+    fragments = [f.strip() for f in raw.split(',') if f.strip()]
+    expanded: List[str] = []
+    for frag in fragments:
+        expanded.extend(_expand_node_fragment(frag))
+    return _dedupe_preserve_order(expanded)
+
+
+def normalize_node_label(label: str) -> str:
+    """Normalize node label to canonical comma-separated token form."""
+    return ",".join(parse_node_label_tokens(label))
+
+
+def _expand_edge_fragment(fragment: str) -> List[str]:
+    """Expand one edge label fragment into canonical edge types."""
+    frag = str(fragment or '').strip()
+    if frag == '':
+        return ['open']
+    if frag in EDGE_TYPE_MAP:
+        return [EDGE_TYPE_MAP[frag]]
+    if frag in EDGE_TYPE_MAP.values():
+        return [frag]
+    if frag in EDGE_LABEL_ALIASES:
+        return EDGE_LABEL_ALIASES[frag]
+
+    low = frag.lower()
+    if low in EDGE_TYPE_MAP:
+        return [EDGE_TYPE_MAP[low]]
+    up = frag.upper()
+    if up in EDGE_TYPE_MAP:
+        return [EDGE_TYPE_MAP[up]]
+    if low in EDGE_LABEL_ALIASES:
+        return EDGE_LABEL_ALIASES[low]
+
+    # Unknown fragment: keep raw so callers can log/analyze it.
+    return [frag]
+
+
+def parse_edge_type_tokens(label: str = '', edge_type: str = '') -> List[str]:
+    """
+    Parse edge label/type fields into canonical edge types.
+
+    Supports composite labels such as "I,S1" by returning multiple constraints.
+    """
+    raw_tokens: List[str] = []
+    for raw in (label, edge_type):
+        txt = str(raw or '').replace('\n', ',').strip()
+        if txt == '':
+            # Treat absent token as open only if nothing else is provided.
+            continue
+        raw_tokens.extend([frag.strip() for frag in txt.split(',') if frag.strip()])
+
+    if not raw_tokens:
+        return ['open']
+
+    expanded: List[str] = []
+    for frag in raw_tokens:
+        expanded.extend(_expand_edge_fragment(frag))
+
+    out = _dedupe_preserve_order(expanded)
+    return out or ['open']
+
+
+def select_primary_edge_type(edge_types: Iterable[str]) -> str:
+    """
+    Pick one representative edge type from a (possibly composite) constraint set.
+
+    Used by legacy code paths that expect a single `edge_type` string.
+    """
+    choices = [str(t).strip() for t in edge_types if str(t).strip()]
+    if not choices:
+        return 'open'
+    best = choices[0]
+    best_priority = EDGE_TYPE_PRIORITY.get(best, -1)
+    for et in choices[1:]:
+        pr = EDGE_TYPE_PRIORITY.get(et, -1)
+        if pr > best_priority:
+            best = et
+            best_priority = pr
+    return best
 
 # ==========================================
 # DOOR POSITIONS IN ROOM
@@ -263,6 +469,15 @@ __all__ = [
     # Graph mappings
     'EDGE_TYPE_MAP',
     'NODE_CONTENT_MAP',
+    'KNOWN_NODE_LABEL_TOKENS',
+    'NODE_LABEL_ALIASES',
+    'KNOWN_EDGE_LABEL_TOKENS',
+    'EDGE_LABEL_ALIASES',
+    'EDGE_TYPE_PRIORITY',
+    'parse_node_label_tokens',
+    'normalize_node_label',
+    'parse_edge_type_tokens',
+    'select_primary_edge_type',
     'RESOURCE_EDGES',
     'ONEWAY_EDGES',
     'WARP_EDGES',

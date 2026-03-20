@@ -27,7 +27,7 @@ import re
 import logging
 import numpy as np
 import networkx as nx
-from typing import Dict, List, Tuple, Optional, Set
+from typing import Dict, List, Tuple, Optional, Set, Any
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -46,6 +46,10 @@ from src.core.definitions import (
     ROOM_WIDTH,
     EDGE_TYPE_MAP,
     NODE_CONTENT_MAP,
+    parse_node_label_tokens,
+    normalize_node_label,
+    parse_edge_type_tokens,
+    select_primary_edge_type,
 )
 
 
@@ -276,11 +280,11 @@ class MLFeatureExtractor:
                 
             attrs = G.nodes[node_id]
             label = attrs.get('label', '')
-            parts = [p.strip() for p in label.split(',')]
+            parts = parse_node_label_tokens(label)
             
             features[idx, 0] = 1.0 if (attrs.get('has_enemy', False) or 'e' in parts) else 0.0
             features[idx, 1] = 1.0 if (attrs.get('has_key', False) or 'k' in parts) else 0.0
-            features[idx, 2] = 1.0 if (attrs.get('has_item', False) or 'i' in parts or 'I' in parts) else 0.0
+            features[idx, 2] = 1.0 if (attrs.get('has_item', False) or 'i' in parts or 'I' in parts or 'K' in parts) else 0.0
             features[idx, 3] = 1.0 if (attrs.get('has_triforce', False) or attrs.get('is_triforce', False) or 't' in parts) else 0.0
             features[idx, 4] = 1.0 if (attrs.get('has_boss', False) or attrs.get('is_boss', False) or 'b' in parts) else 0.0
             features[idx, 5] = 1.0 if (attrs.get('has_puzzle', False) or 'p' in parts) else 0.0
@@ -313,20 +317,18 @@ class MLFeatureExtractor:
                 continue
                 
             i, j = node_order[u], node_order[v]
-            edge_type = data.get('edge_type', 'open')
-            label = data.get('label', '')
-            
-            # Determine edge type from label if edge_type not set
-            if edge_type == 'open' and label:
-                edge_type = EDGE_TYPE_MAP.get(label, 'open')
-            
-            if edge_type in ('locked', 'key_locked'):
+            edge_types = parse_edge_type_tokens(
+                label=data.get('label', ''),
+                edge_type=data.get('edge_type', 'open'),
+            )
+
+            if any(et in ('locked', 'key_locked') for et in edge_types):
                 p_matrix[i, j, 0] = 1.0
                 p_matrix[j, i, 0] = 1.0
-            elif edge_type == 'bombable':
+            elif 'bombable' in edge_types:
                 p_matrix[i, j, 1] = 1.0
                 p_matrix[j, i, 1] = 1.0
-            elif edge_type == 'boss_locked':
+            elif 'boss_locked' in edge_types:
                 p_matrix[i, j, 2] = 1.0
                 p_matrix[j, i, 2] = 1.0
         
@@ -385,6 +387,11 @@ class StitchedDungeon:
     room_to_node: Optional[Dict[Tuple[int, int], int]] = None  # Room position to graph node ID
     node_to_room: Optional[Dict[int, Tuple[int, int]]] = None  # Graph node ID to room position (includes virtual nodes)
     missing_items: Optional[List[Dict]] = None  # Items that couldn't be placed (node_id, item_type, reason)
+    # Optional room-level metadata (used by GUI topology tooling, precheck prune, and undo).
+    rooms: Optional[Dict[Tuple[int, int], Room]] = None
+    # Room coordinates (not global pixel coordinates) after compaction/remap.
+    start_pos: Optional[Tuple[int, int]] = None
+    triforce_pos: Optional[Tuple[int, int]] = None
 
 
 # ==========================================
@@ -501,13 +508,16 @@ class StateSpaceGraphSolver:
         
         for node_id, data in graph.nodes(data=True):
             label = data.get('label', '')
-            parts = [p.strip() for p in label.split(',')]
+            parts = parse_node_label_tokens(label)
             
             if 'k' in parts:
                 self.key_rooms.add(node_id)
-            if 'I' in parts:
+            # Priority: boss_key > key_item > minor_item for single-slot storage.
+            if 'K' in parts:
+                self.item_rooms[node_id] = 'boss_key'
+            elif 'I' in parts:
                 self.item_rooms[node_id] = 'key_item'
-            if 'i' in parts:
+            elif 'i' in parts:
                 self.item_rooms[node_id] = 'minor_item'
     
     def can_traverse_edge(self, from_node: int, to_node: int, 
@@ -528,75 +538,67 @@ class StateSpaceGraphSolver:
         if not edge_data:
             return False, state, 'none'
 
-        edge_label = edge_data.get('label', '')
-        edge_type = edge_data.get('edge_type') if edge_data.get('edge_type') else EDGE_TYPE_MAP.get(edge_label, '')
+        edge_label = str(edge_data.get('label', '') or '')
+        edge_type_raw = str(edge_data.get('edge_type', '') or '')
+        edge_constraints = edge_data.get('edge_constraints')
+        if isinstance(edge_constraints, (list, tuple, set)):
+            constraints = [str(c).strip() for c in edge_constraints if str(c).strip()]
+        else:
+            constraints = parse_edge_type_tokens(label=edge_label, edge_type=edge_type_raw)
+        edge_type = select_primary_edge_type(constraints)
         edge_id = (from_node, to_node)
 
         new_state = state.copy()
 
         # STRICT mode: only normal doors
         if self.mode == ValidationMode.STRICT:
-            if edge_type and edge_type != 'open':
-                return False, state, edge_type
-            if edge_label != '':
-                return False, state, edge_label
-            return True, new_state, 'open'
+            if all(et == 'open' for et in constraints):
+                return True, new_state, 'open'
+            return False, state, edge_type
 
         # REALISTIC mode: normal + soft-locked + stairs
         if self.mode == ValidationMode.REALISTIC:
-            if edge_type in ('open', 'soft_locked', 'stair') or edge_label in ('', 'l', 's'):
-                return True, new_state, edge_type or edge_label
-            return False, state, edge_type or edge_label
+            allowed = {'open', 'soft_locked', 'stair', 'switch'}
+            if all(et in allowed for et in constraints):
+                return True, new_state, edge_type
+            return False, state, edge_type
 
-        # FULL mode: prefer edge_type canonical checks (supports backward compatibility via label fallback)
-        et = edge_type or edge_label
+        # FULL mode: all constraints on the edge must be satisfied.
+        for et in constraints:
+            if et in ('', 'open', 'soft_locked', 'stair', 'switch'):
+                continue
 
-        if et in ('', 'open'):
-            # Normal door - always passable
-            return True, new_state, 'open'
-
-        if et in ('key_locked', 'k'):
-            # Key-locked door
-            if edge_id in state.doors_opened:
-                return True, new_state, 'key_locked'  # Already opened
-
-            if state.keys_held > 0:
+            if et == 'key_locked':
+                if edge_id in new_state.doors_opened:
+                    continue
+                if new_state.keys_held <= 0:
+                    return False, state, edge_type
                 new_state.keys_held -= 1
                 new_state.doors_opened.add(edge_id)
                 new_state.doors_opened.add((to_node, from_node))
-                return True, new_state, 'key_locked'
+                continue
 
-            return False, state, 'key_locked'
+            if et == 'bombable':
+                if edge_id in new_state.doors_opened:
+                    continue
+                new_state.doors_opened.add(edge_id)
+                new_state.doors_opened.add((to_node, from_node))
+                continue
 
-        if et in ('bombable', 'b'):
-            # Bombable wall - assume infinite bombs for now
-            if edge_id in state.doors_opened:
-                return True, new_state, 'bombable'
+            if et == 'boss_locked':
+                if not new_state.items_collected or 'boss_key' not in new_state.items_collected:
+                    return False, state, edge_type
+                continue
 
-            new_state.doors_opened.add(edge_id)
-            new_state.doors_opened.add((to_node, from_node))
-            return True, new_state, 'bombable'
+            if et == 'item_locked':
+                if 'key_item' not in new_state.items_collected:
+                    return False, state, edge_type
+                continue
 
-        if et in ('soft_locked', 'l'):
-            # Soft-locked (one-way) - always passable forward
-            return True, new_state, 'soft_locked'
+            # Unknown constraint: keep previous permissive behavior.
+            continue
 
-        if et in ('stair', 's'):
-            # Stair/warp - bidirectional teleport
-            return True, new_state, 'stair'
-
-        if et in ('item_locked', 'I'):
-            # Item-locked - check if we have the required item
-            if 'key_item' in state.items_collected:
-                return True, new_state, 'item_locked'
-            return False, state, 'item_locked'
-
-        if et in ('switch_locked', 'S', 'S1'):
-            # Switch-locked - assume puzzle solved
-            return True, new_state, 'switch_locked'
-
-        # Unknown edge type - allow traversal but return canonical label if available
-        return True, new_state, edge_type or edge_label
+        return True, new_state, edge_type
     
     def collect_room_items(self, node: int, state: InventoryState) -> InventoryState:
         """
@@ -897,13 +899,14 @@ class DOTParser:
                     else:
                         end = len(attrs)
                     label = attrs[start:end].strip()
-            parts = [p.strip() for p in label.split(',')] if label else []
+            parts = parse_node_label_tokens(label)
+            label_norm = normalize_node_label(label)
             
             # The 's' node is a START POINTER — it indicates which room
             # the player enters first. It is NOT a physical room.
             # is_start_pointer=True means this node should NOT be assigned
             # a room grid in the matching phase.
-            is_start = 's' in parts
+            is_start = ('s' in parts) or ('S' in parts)
             # Check if this node is ONLY a start pointer (label is exactly 's'
             # with no other content indicators like 'e', 'k', etc.)
             is_start_pointer = is_start and all(
@@ -911,13 +914,13 @@ class DOTParser:
             )
             
             graph.add_node(node_id, 
-                          label=label,
+                          label=label_norm,
                           is_start=is_start,
                           is_start_pointer=is_start_pointer,
                           is_triforce='t' in parts,
                           is_boss='b' in parts,
                           has_key='k' in parts,
-                          has_item='I' in parts or 'i' in parts,
+                          has_item='I' in parts or 'i' in parts or 'K' in parts,
                           has_enemy='e' in parts,
                           has_puzzle='p' in parts) 
         
@@ -947,17 +950,20 @@ class DOTParser:
                         end = len(attrs)
                     label = attrs[start:end].strip()
 
-            edge_type = 'open'
-            if label == 'k':
-                edge_type = 'key_locked'
-            elif label == 'b':
-                edge_type = 'bombable'
-            elif label == 'l':
-                edge_type = 'soft_locked'
-            elif label == 'I':
-                edge_type = 'item_locked'
-            
-            graph.add_edge(src, dst, label=label, edge_type=edge_type)
+            # Normalize edge labels and derive canonical constraints.
+            label_clean = str(label or '').replace('\n', ',').strip()
+            if label_clean:
+                label_clean = ",".join([p.strip() for p in label_clean.split(',') if p.strip()])
+            edge_constraints = parse_edge_type_tokens(label=label_clean)
+            edge_type = select_primary_edge_type(edge_constraints)
+
+            graph.add_edge(
+                src,
+                dst,
+                label=label_clean,
+                edge_type=edge_type,
+                edge_constraints=edge_constraints,
+            )
 
         return graph
 
@@ -1879,50 +1885,43 @@ class RoomGraphMatcher:
 
     def _normalize_graph(self, graph: nx.DiGraph) -> None:
         """Normalize graph labels and edge types so downstream logic can be deterministic."""
-        def _canonical_edge_type(val: str):
-            if not val:
-                return None
-            v = str(val).strip()
-            # Exact mapping (prefer exact key match)
-            if v in EDGE_TYPE_MAP:
-                return EDGE_TYPE_MAP[v]
-            # Case-insensitive mapping: compare lowercased keys to handle inputs like 's' or 'k'
-            vl = v.lower()
-            for k, mapped in EDGE_TYPE_MAP.items():
-                if k.lower() == vl:
-                    return mapped
-            return v
-
         for u, v, data in graph.edges(data=True):
             label_raw = data.get('label', '')
-            label = '' if label_raw is None else str(label_raw).strip()
+            label = '' if label_raw is None else str(label_raw).replace('\n', ',').strip()
+            if label:
+                label = ",".join([p.strip() for p in label.split(',') if p.strip()])
             data['label'] = label
 
-            # Normalize any existing edge_type or derive from label; prefer explicit edge_type
+            # Normalize to composite constraints + representative edge_type.
             edge_type_raw = data.get('edge_type') or ''
-            edge_type_can = _canonical_edge_type(edge_type_raw) if edge_type_raw else None
-            if not edge_type_can:
-                edge_type_can = _canonical_edge_type(label) or 'open'
-            data['edge_type'] = edge_type_can
+            constraints = parse_edge_type_tokens(label=label, edge_type=edge_type_raw)
+            data['edge_constraints'] = constraints
+            data['edge_type'] = select_primary_edge_type(constraints)
 
         for n, data in graph.nodes(data=True):
             label = (data.get('label') or data.get('name') or '')
-            s = str(label).strip()
-            parts = [p.strip().lower() for p in s.split(',')]
+            s = normalize_node_label(str(label))
+            data['label'] = s
+            parts = parse_node_label_tokens(s)
+            parts_l = {p.lower() for p in parts}
             # Canonical flags — use parts-based detection to handle
             # composite labels like "e,k" correctly (avoid matching 
             # 'b' in 'boss' against the substring)
-            if 's' in parts or 'start' in parts or data.get('is_start'):
+            has_start_pointer_token = 's' in parts
+            has_start_room_token = ('S' in parts) or ('start' in parts_l)
+            if has_start_pointer_token or has_start_room_token or data.get('is_start'):
                 data['is_start'] = True
                 # Preserve is_start_pointer if already set by DOTParser
                 if data.get('is_start_pointer') is None:
                     # Check if this is a pure start pointer
                     data['is_start_pointer'] = all(
-                        p in ('s', 'start', '') for p in parts
+                        p in ('s', '') for p in parts
                     )
-            if 't' in parts or 'triforce' in parts or data.get('is_triforce'):
+                elif has_start_room_token:
+                    data['is_start_pointer'] = False
+            if 't' in parts or 'triforce' in parts_l or data.get('is_triforce'):
                 data['is_triforce'] = True
-            if 'b' in parts or 'boss' in parts or data.get('is_boss'):
+            if 'b' in parts or 'boss' in parts_l or data.get('is_boss'):
                 data['is_boss'] = True
 
     def _validate_mapping(self, rooms: Dict[Tuple[int, int], Room],
@@ -2597,7 +2596,11 @@ class DungeonStitcher:
                 start_global=None,
                 triforce_global=None,
                 graph=dungeon.graph,
-                room_to_node={}
+                room_to_node={},
+                node_to_room={},
+                rooms={},
+                start_pos=None,
+                triforce_pos=None,
             )
         
         # For compact mode: remap positions to eliminate gaps
@@ -2700,17 +2703,40 @@ class DungeonStitcher:
             center_c = c_off + ROOM_WIDTH // 2
             global_grid[center_r, center_c] = SEMANTIC_PALETTE['TRIFORCE']
             triforce_global = (center_r, center_c)
+
+        # Expose mapping metadata in ORIGINAL dungeon room coordinates.
+        # Internal stitching uses compacted coordinates, but downstream
+        # validators compare against `dungeon.rooms` keys.
+        inv_pos_remap = {new_pos: old_pos for old_pos, new_pos in pos_remap.items()}
+        room_positions_out = {
+            inv_pos_remap.get(new_pos, new_pos): offset
+            for new_pos, offset in room_positions.items()
+        }
+        room_to_node_out = {
+            inv_pos_remap.get(new_pos, new_pos): node_id
+            for new_pos, node_id in room_to_node.items()
+        }
+        node_to_room_out = {
+            node_id: inv_pos_remap.get(new_pos, new_pos)
+            for node_id, new_pos in node_to_room.items()
+        }
+
+        start_pos_out = dungeon.start_pos if dungeon.start_pos is not None else start_pos_remapped
+        triforce_pos_out = dungeon.triforce_pos if dungeon.triforce_pos is not None else triforce_pos_remapped
         
         return StitchedDungeon(
             dungeon_id=dungeon.dungeon_id,
             global_grid=global_grid,
-            room_positions=room_positions,
+            room_positions=room_positions_out,
             start_global=start_global,
             triforce_global=triforce_global,
             graph=dungeon.graph,
-            room_to_node=room_to_node,  # Use pre-built mapping
-            node_to_room=node_to_room,  # Includes virtual nodes
-            missing_items=missing_items if missing_items else None
+            room_to_node=room_to_node_out,
+            node_to_room=node_to_room_out,
+            missing_items=missing_items if missing_items else None,
+            rooms=dungeon.rooms,
+            start_pos=start_pos_out,
+            triforce_pos=triforce_pos_out,
         )
     
     def _compact_rooms(self, rooms: Dict[Tuple[int, int], Room]) -> Tuple[Dict[Tuple[int, int], Room], Dict[Tuple[int, int], Tuple[int, int]]]:
@@ -3021,7 +3047,7 @@ class DungeonStitcher:
         
         for node_id, attrs in graph.nodes(data=True):
             label = attrs.get('label', '')
-            parts = [p.strip() for p in label.split(',')]
+            parts = parse_node_label_tokens(label)
             
             # Determine what item to place
             item_to_place = None
@@ -3241,7 +3267,7 @@ class DungeonStitcher:
         
         for node_id, attrs in graph.nodes(data=True):
             label = attrs.get('label', '')
-            parts = [p.strip() for p in label.split(',')]
+            parts = parse_node_label_tokens(label)
             
             # Determine what entity to place
             entity_to_place = None
@@ -3543,9 +3569,9 @@ class ZeldaDungeonAdapter:
                 triforce_node = n
         # If nodes unknown, try use room_to_node mapping
         room_to_node = getattr(dungeon, 'room_to_node', {}) or {}
-        if not start_node:
+        if start_node is None:
             start_node = room_to_node.get(dungeon.start_pos)
-        if not triforce_node:
+        if triforce_node is None:
             triforce_node = room_to_node.get(dungeon.triforce_pos)
 
         # If either node is still missing, fall back to connectivity on undirected graph
@@ -3557,18 +3583,47 @@ class ZeldaDungeonAdapter:
             try:
                 if not nx.has_path(G.to_undirected(), start_node, triforce_node):
                     return False, 'PRECHECK_FAIL: Start and triforce disconnected in topology'
-            except Exception:
-                # Fallback to optimistic pass
-                pass
+            except Exception as e:
+                # Keep optimistic pass to avoid false negatives, but expose the failure.
+                logger.warning(
+                    "precheck_dungeon: topology path check failed, continuing best-effort: %s",
+                    e,
+                    exc_info=True,
+                )
 
         # Locked door minimal key requirement: compute shortest path in terms of locked-door count
-        def locked_cost(u, v, data):
+        def _locked_cost_from_payload(data: Any) -> int:
+            if not isinstance(data, dict):
+                return 0
+            # MultiGraph payload shape: {edge_key: edge_attr_dict, ...}
+            values = list(data.values())
+            if values and all(isinstance(v, dict) for v in values):
+                # Conservative: if any parallel edge is unlocked, choose unlocked traversal.
+                return min(_locked_cost_from_payload(v) for v in values)
             label = data.get('label', '')
-            etype = data.get('edge_type') or EDGE_TYPE_MAP.get(label, 'open')
-            return 1 if etype in ('locked', 'key_locked') else 0
+            edge_types = parse_edge_type_tokens(
+                label=label,
+                edge_type=data.get('edge_type', ''),
+            )
+            return 1 if any(et in ('locked', 'key_locked') for et in edge_types) else 0
 
         try:
             import heapq
+            is_directed_graph = bool(getattr(G, "is_directed", lambda: False)())
+
+            def _neighbors(node_id: Any) -> Set[Any]:
+                if is_directed_graph and hasattr(G, "successors") and hasattr(G, "predecessors"):
+                    return set(G.successors(node_id)) | set(G.predecessors(node_id))
+                if hasattr(G, "neighbors"):
+                    return set(G.neighbors(node_id))
+                return set()
+
+            def _edge_payload(u: Any, v: Any) -> Dict[str, Any]:
+                payload = G.get_edge_data(u, v, {})
+                if not payload and is_directed_graph:
+                    payload = G.get_edge_data(v, u, {})
+                return payload if isinstance(payload, dict) else {}
+
             # Modified Dijkstra on G treating locked edges as cost=1
             def min_locked_between(s, t):
                 dist = {s: 0}
@@ -3579,8 +3634,8 @@ class ZeldaDungeonAdapter:
                         return d
                     if d != dist.get(u, 1e9):
                         continue
-                    for v in set(G.successors(u)) | set(G.predecessors(u)):
-                        c = locked_cost(u, v, G.get_edge_data(u, v, {}))
+                    for v in _neighbors(u):
+                        c = _locked_cost_from_payload(_edge_payload(u, v))
                         nd = d + c
                         if nd < dist.get(v, 1e9):
                             dist[v] = nd
@@ -3589,18 +3644,46 @@ class ZeldaDungeonAdapter:
 
             if start_node is not None and triforce_node is not None:
                 min_locked = min_locked_between(start_node, triforce_node)
-                # Count available small keys in rooms
-                key_count = 0
-                for pos, room in dungeon.rooms.items():
-                    # Look for key tiles in semantic grid if available
-                    if getattr(room, 'semantic_grid', None) is not None:
-                        if (room.semantic_grid == SEMANTIC_PALETTE['KEY']).any():
-                            key_count += 1
+
+                def _has_small_key_node(attrs: Dict[str, Any]) -> bool:
+                    # Explicit attrs take priority.
+                    if bool(attrs.get('is_boss_key') or attrs.get('has_boss_key')):
+                        return False
+                    if bool(attrs.get('is_key') or attrs.get('has_key')):
+                        return True
+
+                    # Label fallback: lowercase 'k' is small key, uppercase 'K' is boss key.
+                    label = str(attrs.get('label', ''))
+                    tokens = parse_node_label_tokens(label)
+                    for tok in tokens:
+                        if tok == 'k' or tok.lower() == 'key':
+                            return True
+                    return False
+
+                # Count keys from semantic tiles (if present in rooms).
+                tile_key_count = 0
+                for room in dungeon.rooms.values():
+                    sg = getattr(room, 'semantic_grid', None)
+                    if sg is not None:
+                        tile_key_count += int((sg == SEMANTIC_PALETTE['KEY']).sum())
+
+                # Count keys from graph node metadata/labels (VGLC source of truth).
+                graph_key_count = 0
+                for _, attrs in G.nodes(data=True):
+                    if _has_small_key_node(attrs):
+                        graph_key_count += 1
+
+                # Precheck must avoid false negatives; use best available lower-bound estimate.
+                key_count = max(tile_key_count, graph_key_count)
                 if key_count < min_locked:
                     return False, f'PRECHECK_FAIL: Insufficient small keys (need {min_locked}, have {key_count})'
-        except Exception:
-            # Prior check best effort; ignore on failure
-            pass
+        except Exception as e:
+            # Keep precheck best-effort, but expose diagnostics instead of swallowing.
+            logger.warning(
+                "precheck_dungeon: locked-door lower-bound check failed, continuing best-effort: %s",
+                e,
+                exc_info=True,
+            )
 
         return True, None
 
@@ -3610,6 +3693,17 @@ class ZeldaDungeonAdapter:
 
         Returns (pruned_rooms, removed_positions)
         """
+        def _room_has_critical_label(room: Room) -> bool:
+            label = str(getattr(room, 'node_label', '') or '')
+            if not label:
+                return False
+            tokens = set(parse_node_label_tokens(label))
+            critical_tokens = {
+                's', 't', 'b', 'k', 'K', 'I',
+                'start', 'triforce', 'boss', 'key', 'boss_key', 'item',
+            }
+            return len(tokens.intersection(critical_tokens)) > 0
+
         preserve = set(preserve or [])
         pruned = dict(rooms)
         removed = []
@@ -3622,11 +3716,19 @@ class ZeldaDungeonAdapter:
                 room = pruned.get(pos)
                 if room is None:
                     continue
-                # Preserve if room contains key/triforce/boss/start
-                has_key = False
+                # Preserve if room contains critical progression content.
+                has_critical_item = False
                 if getattr(room, 'semantic_grid', None) is not None:
-                    has_key = ((room.semantic_grid == SEMANTIC_PALETTE['KEY']).any())
-                if room.has_triforce or room.has_boss or room.is_start or has_key:
+                    has_critical_item = bool(
+                        (room.semantic_grid == SEMANTIC_PALETTE['KEY']).any() or
+                        (room.semantic_grid == SEMANTIC_PALETTE['KEY_BOSS']).any() or
+                        (room.semantic_grid == SEMANTIC_PALETTE['KEY_ITEM']).any()
+                    )
+
+                if (
+                    room.has_triforce or room.has_boss or room.is_start or
+                    has_critical_item or _room_has_critical_label(room)
+                ):
                     continue
                 # Safe to remove
                 pruned.pop(pos, None)
@@ -3762,7 +3864,7 @@ class ZeldaDungeonAdapter:
             # Count items in graph
             for node_id, attrs in dungeon.graph.nodes(data=True):
                 label = attrs.get('label', '')
-                parts = [p.strip() for p in label.split(',')]
+                parts = parse_node_label_tokens(label)
                 if any(p in parts for p in ['k', 'K', 'I', 'i']):
                     stats['items_in_graph'] += 1
             

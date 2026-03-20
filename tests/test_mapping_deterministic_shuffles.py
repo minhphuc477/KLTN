@@ -1,6 +1,6 @@
 import random
 import networkx as nx
-from Data.zelda_core import RoomGraphMatcher, Room
+from src.data.zelda_core import RoomGraphMatcher, Room
 import numpy as np
 
 

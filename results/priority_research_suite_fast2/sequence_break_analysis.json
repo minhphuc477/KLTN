@@ -1,0 +1,32 @@
+{
+  "num_samples": 2,
+  "seed_start": 42,
+  "population_size": 8,
+  "generations": 6,
+  "genome_length": 12,
+  "max_nodes": 16,
+  "mean_break_rate": 0.0,
+  "aggregate_break_rate": 0.0,
+  "total_sequence_breaks": 0,
+  "total_checked_gates": 3,
+  "per_sample": [
+    {
+      "valid_for_analysis": true,
+      "sequence_break_count": 0,
+      "checked_gate_count": 2,
+      "break_rate": 0.0,
+      "details": [],
+      "seed": 42,
+      "fitness": 0.46069453845876446
+    },
+    {
+      "valid_for_analysis": true,
+      "sequence_break_count": 0,
+      "checked_gate_count": 1,
+      "break_rate": 0.0,
+      "details": [],
+      "seed": 43,
+      "fitness": 0.5202640757298117
+    }
+  ]
+}

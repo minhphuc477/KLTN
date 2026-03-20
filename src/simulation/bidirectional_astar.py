@@ -102,6 +102,9 @@ class BidirectionalAStar:
         
         self.forward_closed: Dict[int, SearchNode] = {}  # hash -> node
         self.backward_closed: Dict[int, SearchNode] = {}  # hash -> node
+        # Position indexes to avoid O(|closed|) scans during collision checks.
+        self.forward_closed_by_pos: Dict[Tuple[int, int], List[SearchNode]] = {}
+        self.backward_closed_by_pos: Dict[Tuple[int, int], List[SearchNode]] = {}
         
         self.forward_g_scores: Dict[int, float] = {}
         self.backward_g_scores: Dict[int, float] = {}
@@ -110,6 +113,7 @@ class BidirectionalAStar:
         self.states_explored = 0
         self.collision_checks = 0
         self.meeting_point: Optional[Tuple[int, int]] = None
+        self.used_fallback = False
     
     def solve(self) -> Tuple[bool, List[Tuple[int, int]], int]:
         """
@@ -126,6 +130,18 @@ class BidirectionalAStar:
             return False, [], 0
         
         logger.debug('BidirectionalAStar: Starting search')
+        self.used_fallback = False
+        self.forward_closed.clear()
+        self.backward_closed.clear()
+        self.forward_closed_by_pos.clear()
+        self.backward_closed_by_pos.clear()
+        self.forward_open.clear()
+        self.backward_open.clear()
+        self.forward_g_scores.clear()
+        self.backward_g_scores.clear()
+        self.states_explored = 0
+        self.collision_checks = 0
+        self.meeting_point = None
         
         # Initialize forward search from start
         start_state = self.env.state.copy()
@@ -156,12 +172,21 @@ class BidirectionalAStar:
         
         # Alternating expansion
         counter = 1
+        iterations = 0
+        max_iterations = max(10_000, int(self.timeout) * 20)
         best_meeting_cost = float('inf')
         best_forward_node = None
         best_backward_node = None
         
         while (self.forward_open or self.backward_open) and \
               self.states_explored < self.timeout:
+            iterations += 1
+            if iterations > max_iterations:
+                logger.warning(
+                    "BidirectionalAStar: iteration budget reached (%d), aborting",
+                    max_iterations,
+                )
+                break
             
             # Alternate between forward and backward expansion
             if len(self.forward_open) <= len(self.backward_open) and self.forward_open:
@@ -210,9 +235,28 @@ class BidirectionalAStar:
             logger.debug(f'Bidirectional A* found suboptimal path: '
                         f'path_len={len(path)}, states={self.states_explored}')
             return True, path, self.states_explored
-        
-        logger.debug(f'Bidirectional A* exhausted: states={self.states_explored}')
-        return False, [], self.states_explored
+
+        logger.warning(
+            'Bidirectional A* exhausted/aborted without meet point (states=%d); '
+            'falling back to StateSpaceAStar for correctness',
+            self.states_explored,
+        )
+        return self._fallback_to_astar()
+
+    def _fallback_to_astar(self) -> Tuple[bool, List[Tuple[int, int]], int]:
+        """Fallback to canonical A* when bidirectional search cannot complete reliably."""
+        from .validator import StateSpaceAStar
+
+        self.used_fallback = True
+        fallback = StateSpaceAStar(
+            self.env,
+            timeout=max(self.timeout, 50_000),
+            heuristic_mode=self.heuristic_mode,
+            priority_options={'allow_diagonals': self.allow_diagonals},
+            search_mode='astar',
+        )
+        success, path, states = fallback.solve()
+        return success, path, max(self.states_explored, states)
     
     def _create_goal_state(self) -> GameState:
         """
@@ -274,12 +318,16 @@ class BidirectionalAStar:
         if not self.forward_open:
             return False, None, None
         
-        _, _, state_hash, current_node = heapq.heappop(self.forward_open)
-        
-        if state_hash in self.forward_closed:
+        # Drain duplicate queued entries for already-closed states.
+        while self.forward_open:
+            _, _, state_hash, current_node = heapq.heappop(self.forward_open)
+            if state_hash not in self.forward_closed:
+                break
+        else:
             return False, None, None
         
         self.forward_closed[state_hash] = current_node
+        self.forward_closed_by_pos.setdefault(current_node.state.position, []).append(current_node)
         self.states_explored += 1
         
         # Check for collision with backward frontier
@@ -292,7 +340,7 @@ class BidirectionalAStar:
         
         # Check approximate collision (same position, compatible inventory)
         collision_node = self._check_approximate_collision(
-            current_node, self.backward_closed, is_forward=True
+            current_node, self.backward_closed_by_pos.get(current_node.state.position, []), is_forward=True
         )
         if collision_node:
             self.collision_checks += 1
@@ -343,12 +391,16 @@ class BidirectionalAStar:
         if not self.backward_open:
             return False, None, None
         
-        _, _, state_hash, current_node = heapq.heappop(self.backward_open)
-        
-        if state_hash in self.backward_closed:
+        # Drain duplicate queued entries for already-closed states.
+        while self.backward_open:
+            _, _, state_hash, current_node = heapq.heappop(self.backward_open)
+            if state_hash not in self.backward_closed:
+                break
+        else:
             return False, None, None
         
         self.backward_closed[state_hash] = current_node
+        self.backward_closed_by_pos.setdefault(current_node.state.position, []).append(current_node)
         self.states_explored += 1
         
         # Check for collision with forward frontier
@@ -361,7 +413,7 @@ class BidirectionalAStar:
         
         # Check approximate collision
         collision_node = self._check_approximate_collision(
-            current_node, self.forward_closed, is_forward=False
+            current_node, self.forward_closed_by_pos.get(current_node.state.position, []), is_forward=False
         )
         if collision_node:
             self.collision_checks += 1
@@ -399,7 +451,7 @@ class BidirectionalAStar:
         return False, None, None
     
     def _check_approximate_collision(self, node: SearchNode, 
-                                    other_closed: Dict[int, SearchNode],
+                                    other_at_position: List[SearchNode],
                                     is_forward: bool) -> Optional[SearchNode]:
         """
         Check if this node approximately collides with opposite frontier.
@@ -411,16 +463,13 @@ class BidirectionalAStar:
         
         Args:
             node: Current node
-            other_closed: Opposite frontier's closed set
+            other_at_position: Opposite frontier nodes at the same position
             is_forward: True if checking forward node against backward frontier
             
         Returns:
             Matching node from opposite frontier, or None
         """
-        # Look for same position in opposite frontier
-        for other_hash, other_node in other_closed.items():
-            if node.state.position != other_node.state.position:
-                continue
+        for other_node in other_at_position:
             
             # Check inventory compatibility
             if is_forward:
@@ -448,7 +497,7 @@ class BidirectionalAStar:
                     node.state.keys >= other_node.state.keys and
                     node.state.bomb_count >= other_node.state.bomb_count and
                     (node.state.has_boss_key or not other_node.state.has_boss_key) and
-                    (node.state.has_item or not other_node.has_item)
+                    (node.state.has_item or not other_node.state.has_item)
                 )
                 
                 # CRITICAL: Check state sets compatibility (reversed)
@@ -571,71 +620,9 @@ class BidirectionalAStar:
     def _try_move_forward(self, state: GameState, target_pos: Tuple[int, int],
                          target_tile: int) -> Tuple[bool, GameState]:
         """
-        Forward move (same as DFS._try_move).
-        
-        Args:
-            state: Current state
-            target_pos: Target position
-            target_tile: Tile at target
-            
-        Returns:
-            (can_move, new_state)
+        Forward move using canonical environment transition logic.
         """
-        if target_tile in BLOCKING_IDS:
-            return False, state
-        
-        new_state = state.copy()
-        new_state.position = target_pos
-        
-        # Already opened/collected
-        if target_pos in state.opened_doors or target_pos in state.collected_items:
-            return True, new_state
-        
-        # Walkable tiles
-        if target_tile in WALKABLE_IDS:
-            # Pickup
-            if target_tile in PICKUP_IDS:
-                new_state.collected_items = state.collected_items | {target_pos}
-                
-                if target_tile == SEMANTIC_PALETTE['KEY_SMALL']:
-                    new_state.keys = state.keys + 1
-                elif target_tile == SEMANTIC_PALETTE['KEY_BOSS']:
-                    new_state.has_boss_key = True
-                elif target_tile == SEMANTIC_PALETTE['KEY_ITEM']:
-                    new_state.has_item = True
-                    new_state.bomb_count = state.bomb_count + 4
-                elif target_tile == SEMANTIC_PALETTE['ITEM_MINOR']:
-                    new_state.bomb_count = state.bomb_count + 4
-            
-            return True, new_state
-        
-        # Doors
-        if target_tile == SEMANTIC_PALETTE['DOOR_LOCKED']:
-            if state.keys > 0:
-                new_state.keys = state.keys - 1
-                new_state.opened_doors = state.opened_doors | {target_pos}
-                return True, new_state
-            return False, state
-        
-        if target_tile == SEMANTIC_PALETTE['DOOR_BOMB']:
-            if state.bomb_count > 0:
-                new_state.bomb_count = state.bomb_count - 1
-                new_state.opened_doors = state.opened_doors | {target_pos}
-                return True, new_state
-            return False, state
-        
-        if target_tile == SEMANTIC_PALETTE['DOOR_BOSS']:
-            if state.has_boss_key:
-                new_state.opened_doors = state.opened_doors | {target_pos}
-                return True, new_state
-            return False, state
-        
-        if target_tile in {SEMANTIC_PALETTE['DOOR_OPEN'],
-                          SEMANTIC_PALETTE['DOOR_SOFT'],
-                          SEMANTIC_PALETTE['DOOR_PUZZLE']}:
-            return True, new_state
-        
-        return True, new_state
+        return self.env._try_move_pure(state, target_pos, target_tile)
     
     def _try_move_backward(self, state: GameState, prev_pos: Tuple[int, int],
                           prev_tile: int) -> Tuple[bool, GameState]:

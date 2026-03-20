@@ -38,6 +38,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
+from src.core.definitions import ROOM_HEIGHT, ROOM_WIDTH
+
 logger = logging.getLogger(__name__)
 
 
@@ -173,7 +175,7 @@ class VectorQuantizer(nn.Module):
         z_q = z_e + (z_q - z_e).detach()
         
         # Compute perplexity (measure of codebook usage)
-        encodings = torch.one_hot(indices, self.num_embeddings).float()
+        encodings = F.one_hot(indices, self.num_embeddings).float()
         avg_probs = torch.mean(encodings, dim=0)
         perplexity = torch.exp(-torch.sum(avg_probs * torch.log(avg_probs + 1e-10)))
         losses['perplexity'] = perplexity
@@ -197,7 +199,7 @@ class VectorQuantizer(nn.Module):
     def _ema_update(self, z_flat: Tensor, indices: Tensor):
         """Update codebook using exponential moving average."""
         with torch.no_grad():
-            encodings = torch.one_hot(indices, self.num_embeddings).float()
+            encodings = F.one_hot(indices, self.num_embeddings).float()
             
             # Update cluster sizes
             cluster_size = torch.sum(encodings, dim=0)
@@ -631,6 +633,9 @@ class SemanticVQVAE(nn.Module):
         Returns:
             Output logits [B, C, H, W]
         """
+        if target_size is None:
+            # Zelda rooms have canonical non-square dimensions (16x11).
+            target_size = (ROOM_HEIGHT, ROOM_WIDTH)
         return self.decoder(z_q, target_size)
     
     def decode_indices(

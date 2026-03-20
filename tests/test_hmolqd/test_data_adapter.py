@@ -140,6 +140,64 @@ class TestPhaseAligner:
         except ImportError:
             pytest.skip("NetworkX not available")
 
+    def test_shift_grid_improves_vertical_boundary_walls(self):
+        """Vertical alignment correction should improve wall-sealed boundaries."""
+        from src.data_processing.data_adapter import PhaseAligner
+        from src.core.definitions import TileID
+
+        aligner = PhaseAligner(tolerance=2)
+
+        wall = int(TileID.WALL)
+        floor = int(TileID.FLOOR)
+
+        base = np.full((7, 11), wall, dtype=np.int32)
+        base[1:-1, 1:-1] = floor
+
+        # Shift one row down with floor-filled top to simulate extraction offset.
+        misaligned = np.full_like(base, floor)
+        misaligned[1:, :] = base[:-1, :]
+
+        corrected = aligner._shift_grid(misaligned, direction='vertical')
+
+        def boundary_wall_hits(grid):
+            return int(
+                np.sum(grid[0, :] == wall) +
+                np.sum(grid[-1, :] == wall) +
+                np.sum(grid[:, 0] == wall) +
+                np.sum(grid[:, -1] == wall)
+            )
+
+        assert boundary_wall_hits(corrected) >= boundary_wall_hits(misaligned)
+
+    def test_shift_grid_improves_horizontal_boundary_walls(self):
+        """Horizontal alignment correction should improve wall-sealed boundaries."""
+        from src.data_processing.data_adapter import PhaseAligner
+        from src.core.definitions import TileID
+
+        aligner = PhaseAligner(tolerance=2)
+
+        wall = int(TileID.WALL)
+        floor = int(TileID.FLOOR)
+
+        base = np.full((7, 11), wall, dtype=np.int32)
+        base[1:-1, 1:-1] = floor
+
+        # Shift one column right with floor-filled left edge.
+        misaligned = np.full_like(base, floor)
+        misaligned[:, 1:] = base[:, :-1]
+
+        corrected = aligner._shift_grid(misaligned, direction='horizontal')
+
+        def boundary_wall_hits(grid):
+            return int(
+                np.sum(grid[0, :] == wall) +
+                np.sum(grid[-1, :] == wall) +
+                np.sum(grid[:, 0] == wall) +
+                np.sum(grid[:, -1] == wall)
+            )
+
+        assert boundary_wall_hits(corrected) >= boundary_wall_hits(misaligned)
+
 
 class TestMLFeatureExtractor:
     """Tests for ML feature extraction."""

@@ -1,5 +1,5 @@
 import networkx as nx
-from Data.zelda_core import RoomGraphMatcher
+from src.data.zelda_core import RoomGraphMatcher
 
 
 def test_edge_type_canonicalization():
@@ -20,7 +20,7 @@ def test_edge_type_canonicalization():
     assert G.edges[1,2]['edge_type'] == 'key_locked'
     assert G.edges[2,3]['edge_type'] == 'boss_locked'
     assert G.edges[3,4]['edge_type'] == 'bombable'
-    # 'S' should map to 'switch_locked'
-    assert G.edges[4,1]['edge_type'] == 'switch_locked'
+    # 'S' should map to canonical switch edge type.
+    assert G.edges[4,1]['edge_type'] == 'switch'
     assert G.edges[1,3]['edge_type'] == 'key_locked'
     assert G.edges[2,4]['edge_type'] == 'bombable'

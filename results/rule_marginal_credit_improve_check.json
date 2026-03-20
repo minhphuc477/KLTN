@@ -1,0 +1,114 @@
+{
+  "seed": 42,
+  "population_size": 24,
+  "generations": 18,
+  "genome_length": 24,
+  "max_nodes": 30,
+  "best_fitness": 0.7607720216005291,
+  "best_genome": [
+    4,
+    6,
+    9,
+    20,
+    2,
+    29,
+    19,
+    5,
+    5,
+    20,
+    11,
+    5,
+    30,
+    21,
+    2,
+    28,
+    12,
+    21,
+    15,
+    29,
+    16,
+    28,
+    4,
+    22
+  ],
+  "rule_trace_available": false,
+  "marginal_delta_by_index": {
+    "0": 0.058955236904570496,
+    "3": 0.22114319801153093,
+    "4": 0.4815398289281529,
+    "7": 0.02783810337824244,
+    "13": 0.18043766216502755,
+    "16": 0.40452041215679735,
+    "17": 0.41971190491198723,
+    "19": 0.19945718847386718
+  },
+  "marginal_delta_by_rule": {
+    "Branch": 0.058955236904570496,
+    "AddSector": 0.22114319801153093,
+    "InsertChallenge_PUZZLE": 0.4815398289281529,
+    "MergeShortcut": 0.02783810337824244,
+    "AddEntangledBranches": 0.30007478353850736,
+    "AddTeleport": 0.40452041215679735,
+    "AddItemShortcut": 0.19945718847386718
+  },
+  "top_helpful_rules": [
+    {
+      "rule": "InsertChallenge_PUZZLE",
+      "avg_delta": 0.4815398289281529
+    },
+    {
+      "rule": "AddTeleport",
+      "avg_delta": 0.40452041215679735
+    },
+    {
+      "rule": "AddEntangledBranches",
+      "avg_delta": 0.30007478353850736
+    },
+    {
+      "rule": "AddSector",
+      "avg_delta": 0.22114319801153093
+    },
+    {
+      "rule": "AddItemShortcut",
+      "avg_delta": 0.19945718847386718
+    },
+    {
+      "rule": "Branch",
+      "avg_delta": 0.058955236904570496
+    },
+    {
+      "rule": "MergeShortcut",
+      "avg_delta": 0.02783810337824244
+    }
+  ],
+  "top_harmful_rules": [
+    {
+      "rule": "MergeShortcut",
+      "avg_delta": 0.02783810337824244
+    },
+    {
+      "rule": "Branch",
+      "avg_delta": 0.058955236904570496
+    },
+    {
+      "rule": "AddItemShortcut",
+      "avg_delta": 0.19945718847386718
+    },
+    {
+      "rule": "AddSector",
+      "avg_delta": 0.22114319801153093
+    },
+    {
+      "rule": "AddEntangledBranches",
+      "avg_delta": 0.30007478353850736
+    },
+    {
+      "rule": "AddTeleport",
+      "avg_delta": 0.40452041215679735
+    },
+    {
+      "rule": "InsertChallenge_PUZZLE",
+      "avg_delta": 0.4815398289281529
+    }
+  ]
+}

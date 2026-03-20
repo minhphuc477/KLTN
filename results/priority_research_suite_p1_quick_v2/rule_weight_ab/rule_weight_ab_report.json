@@ -1,0 +1,257 @@
+{
+  "control_name": "CONTROL",
+  "treatment_name": "TREATMENT",
+  "seeds": [
+    42,
+    43,
+    44,
+    45
+  ],
+  "descriptor_targets": {
+    "linearity": 0.43243322417458485,
+    "leniency": 0.4746762496762497,
+    "progression_complexity": 0.5056329747493025,
+    "topology_complexity": 0.3938431288135679,
+    "path_length": 9.944444444444445,
+    "num_nodes": 28.5
+  },
+  "control_weights": {},
+  "treatment_weights": {},
+  "calibration": {
+    "enabled": false,
+    "history": []
+  },
+  "summary": [
+    {
+      "arm": "CONTROL",
+      "n": 4,
+      "overall_completeness": 1.0,
+      "constraint_valid": 1.0,
+      "path_exists": 1.0,
+      "linearity": 0.27827287654873856,
+      "leniency": 1.0,
+      "progression_complexity": 0.40993281728751285,
+      "topology_complexity": 0.35243777625752976,
+      "cycle_density": 0.2777056277056277,
+      "shortcut_density": 0.0,
+      "gate_depth_ratio": 0.2678571428571428,
+      "path_depth_ratio": 0.2504675241744207,
+      "directionality_gap": 0.0,
+      "repair_rate": 0.0,
+      "total_repairs": 0.0,
+      "generation_constraint_rejections": 0.0,
+      "generation_time_sec": 37.30797624588013,
+      "descriptor_gap": 0.17995148210347045
+    },
+    {
+      "arm": "TREATMENT",
+      "n": 4,
+      "overall_completeness": 1.0,
+      "constraint_valid": 1.0,
+      "path_exists": 1.0,
+      "linearity": 0.27827287654873856,
+      "leniency": 1.0,
+      "progression_complexity": 0.40993281728751285,
+      "topology_complexity": 0.35243777625752976,
+      "cycle_density": 0.2777056277056277,
+      "shortcut_density": 0.0,
+      "gate_depth_ratio": 0.2678571428571428,
+      "path_depth_ratio": 0.2504675241744207,
+      "directionality_gap": 0.0,
+      "repair_rate": 0.0,
+      "total_repairs": 0.0,
+      "generation_constraint_rejections": 0.0,
+      "generation_time_sec": 36.362278521060944,
+      "descriptor_gap": 0.17995148210347045
+    }
+  ],
+  "significance": [
+    {
+      "metric": "overall_completeness",
+      "n_pairs": 4,
+      "delta_mean_treatment_minus_control": 0.0,
+      "delta_ci_low": 0.0,
+      "delta_ci_high": 0.0,
+      "p_value": 1.0,
+      "effect_size_d": 0.0,
+      "p_value_bh_fdr": 1.0,
+      "significant_fdr_0_05": false
+    },
+    {
+      "metric": "constraint_valid",
+      "n_pairs": 4,
+      "delta_mean_treatment_minus_control": 0.0,
+      "delta_ci_low": 0.0,
+      "delta_ci_high": 0.0,
+      "p_value": 1.0,
+      "effect_size_d": 0.0,
+      "p_value_bh_fdr": 1.0,
+      "significant_fdr_0_05": false
+    },
+    {
+      "metric": "path_exists",
+      "n_pairs": 4,
+      "delta_mean_treatment_minus_control": 0.0,
+      "delta_ci_low": 0.0,
+      "delta_ci_high": 0.0,
+      "p_value": 1.0,
+      "effect_size_d": 0.0,
+      "p_value_bh_fdr": 1.0,
+      "significant_fdr_0_05": false
+    },
+    {
+      "metric": "linearity",
+      "n_pairs": 4,
+      "delta_mean_treatment_minus_control": 0.0,
+      "delta_ci_low": 0.0,
+      "delta_ci_high": 0.0,
+      "p_value": 1.0,
+      "effect_size_d": 0.0,
+      "p_value_bh_fdr": 1.0,
+      "significant_fdr_0_05": false
+    },
+    {
+      "metric": "leniency",
+      "n_pairs": 4,
+      "delta_mean_treatment_minus_control": 0.0,
+      "delta_ci_low": 0.0,
+      "delta_ci_high": 0.0,
+      "p_value": 1.0,
+      "effect_size_d": 0.0,
+      "p_value_bh_fdr": 1.0,
+      "significant_fdr_0_05": false
+    },
+    {
+      "metric": "progression_complexity",
+      "n_pairs": 4,
+      "delta_mean_treatment_minus_control": 0.0,
+      "delta_ci_low": 0.0,
+      "delta_ci_high": 0.0,
+      "p_value": 1.0,
+      "effect_size_d": 0.0,
+      "p_value_bh_fdr": 1.0,
+      "significant_fdr_0_05": false
+    },
+    {
+      "metric": "topology_complexity",
+      "n_pairs": 4,
+      "delta_mean_treatment_minus_control": 0.0,
+      "delta_ci_low": 0.0,
+      "delta_ci_high": 0.0,
+      "p_value": 1.0,
+      "effect_size_d": 0.0,
+      "p_value_bh_fdr": 1.0,
+      "significant_fdr_0_05": false
+    },
+    {
+      "metric": "cycle_density",
+      "n_pairs": 4,
+      "delta_mean_treatment_minus_control": 0.0,
+      "delta_ci_low": 0.0,
+      "delta_ci_high": 0.0,
+      "p_value": 1.0,
+      "effect_size_d": 0.0,
+      "p_value_bh_fdr": 1.0,
+      "significant_fdr_0_05": false
+    },
+    {
+      "metric": "shortcut_density",
+      "n_pairs": 4,
+      "delta_mean_treatment_minus_control": 0.0,
+      "delta_ci_low": 0.0,
+      "delta_ci_high": 0.0,
+      "p_value": 1.0,
+      "effect_size_d": 0.0,
+      "p_value_bh_fdr": 1.0,
+      "significant_fdr_0_05": false
+    },
+    {
+      "metric": "gate_depth_ratio",
+      "n_pairs": 4,
+      "delta_mean_treatment_minus_control": 0.0,
+      "delta_ci_low": 0.0,
+      "delta_ci_high": 0.0,
+      "p_value": 1.0,
+      "effect_size_d": 0.0,
+      "p_value_bh_fdr": 1.0,
+      "significant_fdr_0_05": false
+    },
+    {
+      "metric": "path_depth_ratio",
+      "n_pairs": 4,
+      "delta_mean_treatment_minus_control": 0.0,
+      "delta_ci_low": 0.0,
+      "delta_ci_high": 0.0,
+      "p_value": 1.0,
+      "effect_size_d": 0.0,
+      "p_value_bh_fdr": 1.0,
+      "significant_fdr_0_05": false
+    },
+    {
+      "metric": "directionality_gap",
+      "n_pairs": 4,
+      "delta_mean_treatment_minus_control": 0.0,
+      "delta_ci_low": 0.0,
+      "delta_ci_high": 0.0,
+      "p_value": 1.0,
+      "effect_size_d": 0.0,
+      "p_value_bh_fdr": 1.0,
+      "significant_fdr_0_05": false
+    },
+    {
+      "metric": "repair_rate",
+      "n_pairs": 4,
+      "delta_mean_treatment_minus_control": 0.0,
+      "delta_ci_low": 0.0,
+      "delta_ci_high": 0.0,
+      "p_value": 1.0,
+      "effect_size_d": 0.0,
+      "p_value_bh_fdr": 1.0,
+      "significant_fdr_0_05": false
+    },
+    {
+      "metric": "total_repairs",
+      "n_pairs": 4,
+      "delta_mean_treatment_minus_control": 0.0,
+      "delta_ci_low": 0.0,
+      "delta_ci_high": 0.0,
+      "p_value": 1.0,
+      "effect_size_d": 0.0,
+      "p_value_bh_fdr": 1.0,
+      "significant_fdr_0_05": false
+    },
+    {
+      "metric": "generation_constraint_rejections",
+      "n_pairs": 4,
+      "delta_mean_treatment_minus_control": 0.0,
+      "delta_ci_low": 0.0,
+      "delta_ci_high": 0.0,
+      "p_value": 1.0,
+      "effect_size_d": 0.0,
+      "p_value_bh_fdr": 1.0,
+      "significant_fdr_0_05": false
+    },
+    {
+      "metric": "generation_time_sec",
+      "n_pairs": 4,
+      "delta_mean_treatment_minus_control": -0.9456977248191833,
+      "delta_ci_low": -2.309258997440338,
+      "delta_ci_high": 0.18098866939544678,
+      "p_value": 0.4966258435391152,
+      "effect_size_d": -0.7046051077090266,
+      "p_value_bh_fdr": 1.0,
+      "significant_fdr_0_05": false
+    },
+    {
+      "metric": "descriptor_gap",
+      "n_pairs": 4,
+      "delta_mean_treatment_minus_control": 0.0,
+      "delta_ci_low": 0.0,
+      "delta_ci_high": 0.0,
+      "p_value": 1.0,
+      "effect_size_d": 0.0,
+      "p_value_bh_fdr": 1.0,
+      "significant_fdr_0_05": false
+    }
+  ]
+}

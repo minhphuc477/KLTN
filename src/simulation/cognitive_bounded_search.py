@@ -65,7 +65,6 @@ INTEGRATION:
     print(metrics.cognitive_load)       # Mental effort estimate
     print(metrics.aha_latency)          # Discovery-to-completion time
 
-AUTHORS: KLTN Team
 VERSION: 1.0.0
 """
 
@@ -446,22 +445,48 @@ class BeliefMap:
             if is_visit:
                 self.unique_visits.add(position)
 
-    def expected_info_gain(self, position: Tuple[int, int], vision: 'VisionSystem') -> float:
+    def expected_info_gain(
+        self,
+        position: Tuple[int, int],
+        vision: 'VisionSystem',
+        grid: Optional[np.ndarray] = None,
+        direction: Tuple[int, int] = (0, 1),
+    ) -> float:
         """
-        Approximate expected information gain (fraction of unknown tiles)
-        visible from `position` under given `vision`.
+        Approximate expected information gain from moving to a position.
+
+        We model gain as mean uncertainty (binary entropy) over tiles that would
+        be visible from `position`. Unknown tiles are treated as prior p=0.5.
+
+        Args:
+            position: Candidate location to evaluate.
+            vision: Vision model controlling FoV and occlusion.
+            grid: Optional occupancy grid for occlusion checks. If omitted,
+                uses the current belief grid (conservative fallback).
+            direction: Candidate facing direction at `position`.
         """
-        # Count unknown or low-confidence tiles in view
-        # For simplicity, use binary unknown (<0.3 confidence) vs known
-        visible = vision.get_360_visible_tiles(position, np.zeros(self.grid_shape, dtype=int))
-        unknown = 0
-        total = 0
+        if grid is None:
+            grid = self.to_grid()
+
+        visible = vision.get_visible_tiles(position, direction, grid)
+        if not visible:
+            return 0.0
+
+        total_uncertainty = 0.0
+        eps = 1e-6
+
         for pos in visible:
-            total += 1
-            conf = self.get_confidence(pos)
-            if conf < 0.3:
-                unknown += 1
-        return unknown / max(1, total)
+            obs = self.known_tiles.get(pos)
+            if obs is None or obs.knowledge == TileKnowledge.UNKNOWN:
+                # Unknown tile prior -> maximum binary uncertainty.
+                total_uncertainty += 1.0
+                continue
+
+            conf = float(min(1.0 - eps, max(eps, obs.confidence)))
+            uncertainty = -conf * math.log2(conf) - (1.0 - conf) * math.log2(1.0 - conf)
+            total_uncertainty += uncertainty
+
+        return total_uncertainty / len(visible)
     
     def get_knowledge_state(self, position: Tuple[int, int]) -> TileKnowledge:
         """Get the knowledge state of a tile."""
@@ -602,15 +627,21 @@ class BeliefMap:
         Formula: H = -p*log2(p) - (1-p)*log2(1-p)
         where p is the confidence.
         """
-        conf = self.get_confidence((row, col))
-        
-        # Handle edge cases
-        if conf <= 0.0 or conf >= 1.0:
-            return 0.0
-        
+        pos = (row, col)
+        obs = self.known_tiles.get(pos)
+
+        # Unknown tiles should carry high uncertainty, not zero.
+        if obs is None or obs.knowledge == TileKnowledge.UNKNOWN:
+            conf = 0.5
+        else:
+            conf = float(obs.confidence)
+
+        eps = 1e-6
+        conf = min(1.0 - eps, max(eps, conf))
+
         # Binary entropy: H(p) = -p*log2(p) - (1-p)*log2(1-p)
         entropy = -conf * math.log2(conf) - (1 - conf) * math.log2(1 - conf)
-        return entropy
+        return float(entropy)
     
     def compute_total_entropy(self) -> float:
         """Compute total entropy across all tiles."""
@@ -1715,11 +1746,8 @@ class CognitiveBoundedSearch:
         self.env = env
         self.timeout = timeout
         self.seed = seed
-        
-        # Set up random generator
-        if seed is not None:
-            random.seed(seed)
-            np.random.seed(seed)
+        # Instance-local RNG for deterministic tie-breaking without mutating globals.
+        self.rng = random.Random(seed)
         
         # Parse persona
         if isinstance(persona, str):
@@ -1845,7 +1873,16 @@ class CognitiveBoundedSearch:
             scored = []
             for target_pos, target_tile in candidates:
                 # Compute approximate expected information gain for moving to target
-                info_gain = self.belief_map.expected_info_gain(target_pos, self.vision)
+                facing = (
+                    target_pos[0] - current_pos[0],
+                    target_pos[1] - current_pos[1],
+                )
+                info_gain = self.belief_map.expected_info_gain(
+                    target_pos,
+                    self.vision,
+                    grid=grid,
+                    direction=facing,
+                )
                 score = self._score_move(cog_state, target_pos, target_tile, info_gain=info_gain)
                 scored.append((score, target_pos, target_tile))
             
@@ -1862,8 +1899,8 @@ class CognitiveBoundedSearch:
                 
                 if self.config.random_tiebreaker > 0 and len(acceptable) > 1:
                     # Random selection among acceptable choices
-                    if random.random() < self.config.random_tiebreaker:
-                        chosen = random.choice(acceptable)
+                    if self.rng.random() < self.config.random_tiebreaker:
+                        chosen = self.rng.choice(acceptable)
                         best_score, best_pos, best_tile = chosen
             
             # Track decision quality
@@ -2217,11 +2254,55 @@ class CognitiveBoundedSearch:
         
         base = (total_score / total_weight) if total_weight > 0 else 0.0
 
-        # Information gain term (curiosity-driven). Weighted by persona curiosity weight.
-        curiosity_w = float(self.config.heuristic_weights.get('curiosity', 1.0))
-        info_term = info_gain * curiosity_w
+        # Explicit bounded-rational utility:
+        # U = α·goal_progress + β·info_gain - γ·risk
+        goal_progress = 0.0
+        if self.env.goal_pos is not None:
+            curr = cog_state.game_state.position
+            current_dist = abs(curr[0] - self.env.goal_pos[0]) + abs(curr[1] - self.env.goal_pos[1])
+            target_dist = abs(target_pos[0] - self.env.goal_pos[0]) + abs(target_pos[1] - self.env.goal_pos[1])
+            if current_dist > 0:
+                goal_progress = (current_dist - target_dist) / current_dist
+            elif target_dist == 0:
+                goal_progress = 1.0
 
-        return base + info_term
+        risk = self._estimate_risk(cog_state, target_pos, target_tile)
+
+        alpha = float(getattr(self.config, 'goal_weight', 0.6))
+        beta = float(getattr(self.config, 'curiosity_weight', 0.3))
+        gamma = float(getattr(self.config, 'risk_weight', 0.1))
+        utility = alpha * goal_progress + beta * info_gain - gamma * risk
+
+        return base + utility
+
+    def _estimate_risk(
+        self,
+        cog_state: CognitiveState,
+        target_pos: Tuple[int, int],
+        target_tile: int,
+    ) -> float:
+        """Estimate movement risk from tile hazards and remembered nearby threats."""
+        risk = 0.0
+
+        # Immediate tile risk
+        if target_tile in {
+            SEMANTIC_PALETTE['ENEMY'],
+            SEMANTIC_PALETTE['BOSS'],
+            SEMANTIC_PALETTE['ELEMENT'],
+        }:
+            risk = max(risk, 1.0)
+
+        # Memory-based nearby threat risk
+        for threat in self.memory.recall(MemoryItemType.THREAT, cog_state.current_step):
+            d = abs(threat.position[0] - target_pos[0]) + abs(threat.position[1] - target_pos[1])
+            if d == 0:
+                risk = max(risk, 1.0)
+            elif d == 1:
+                risk = max(risk, 0.7 * float(threat.salience))
+            elif d == 2:
+                risk = max(risk, 0.4 * float(threat.salience))
+
+        return float(min(1.5, risk))
     
     def _direction_name(self, direction: Tuple[int, int]) -> str:
         """Convert direction tuple to name."""

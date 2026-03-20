@@ -1,0 +1,40 @@
+{
+  "num_samples": 100,
+  "mean_generation_time_sec": 3.1870074033737184,
+  "constraint_valid_rate": 1.0,
+  "repair_rate": 0.0,
+  "feature_presence_rate": {
+    "switch": 0.21,
+    "stair": 0.36,
+    "shortcut": 0.0,
+    "cycle": 1.0
+  },
+  "descriptor_means": {
+    "linearity": 0.5041467421467422,
+    "leniency": 0.9141666666666666,
+    "progression_complexity": 0.4423901255498874,
+    "topology_complexity": 0.31414686876307024,
+    "cycle_density": 0.31155952380952373,
+    "shortcut_density": 0.0,
+    "gate_depth_ratio": 0.1697857142857143,
+    "path_depth_ratio": 0.46297571872571874,
+    "directionality_gap": 0.0
+  },
+  "descriptor_targets": {
+    "linearity": 0.43243322417458485,
+    "leniency": 0.4746762496762497,
+    "progression_complexity": 0.5056329747493025,
+    "topology_complexity": 0.3938431288135679,
+    "path_length": 9.944444444444445,
+    "num_nodes": 28.5,
+    "cycle_density": 0.3025030389000977,
+    "shortcut_density": 0.0,
+    "gate_depth_ratio": 0.14705888247554916,
+    "path_depth_ratio": 0.4087086801128953
+  },
+  "calibration": {
+    "enabled": false,
+    "history": []
+  },
+  "tuned_rule_weights": {}
+}

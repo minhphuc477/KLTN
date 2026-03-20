@@ -8,8 +8,10 @@ torchvision>=0.15.0
 
 # Graph Neural Networks
 torch-geometric>=2.3.0
-torch-scatter>=2.1.0
-torch-sparse>=0.6.0
+# Optional PyG accelerators (install separately when wheels are available
+# for your Python/Torch/CUDA combo):
+# torch-scatter>=2.1.0
+# torch-sparse>=0.6.0
 
 # Graph Processing
 networkx>=3.0

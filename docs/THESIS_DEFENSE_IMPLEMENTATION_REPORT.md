@@ -2,8 +2,13 @@
 
 **Project**: KLTN Neural-Symbolic Dungeon Generation  
 **Objective**: Implement critical improvements for PhD thesis defense  
-**Date**: December 2024  
-**Status**: Phase 1 & 2 Complete (6/13 features implemented)
+**Date**: March 2026  
+**Status**: Historical implementation report (maintained)
+
+> Historical snapshot note: This report records implementation-phase defense work.
+> For current architecture and benchmark ground truth, prefer `docs/INDEX.md`,
+> `docs/BLOCK_BY_BLOCK_ARCHITECTURE_AND_IMPLEMENTATION_AUDIT.md`, and
+> `docs/SOTA_COMPARISON_AND_BENCHMARKS.md`.
 
 ---
 
@@ -25,7 +30,7 @@ Successfully implemented **6 critical thesis defense improvements** addressing t
 ## IMPLEMENTED FEATURES (COMPLETE)
 
 ### 1. Graph Constraint Enforcer ✓
-**File**: `f:\KLTN\src\generation\graph_constraint_enforcer.py` (390 lines)
+**File**: `src/generation/graph_constraint_enforcer.py` (390 lines)
 
 **Problem**: Diffusion model generates layouts that don't match mission graph topology (phantom corridors, missing connections).
 
@@ -59,7 +64,7 @@ constrained_grid = enforce_all_rooms(
 ---
 
 ### 2. Robust Pipeline with Retry Logic ✓
-**File**: `f:\KLTN\src\pipeline\robust_pipeline.py` (380 lines)
+**File**: `src/pipeline/robust_pipeline.py` (380 lines)
 
 **Problem**: Pipeline fragility - single component failure crashes entire demo.
 
@@ -108,7 +113,7 @@ print(pipeline.get_performance_report(diagnostics))
 ---
 
 ### 3. Entity Spawner ✓
-**File**: `f:\KLTN\src\generation\entity_spawner.py` (565 lines)
+**File**: `src/generation/entity_spawner.py` (565 lines)
 
 **Problem**: Generated dungeons are visual-only, missing gameplay entities (enemies, keys, chests).
 
@@ -175,7 +180,7 @@ export_entities_to_json(entities, 'dungeon_entities.json')
 ---
 
 ### 4. Ablation Study Infrastructure ✓
-**File**: `f:\KLTN\scripts\run_ablation_study.py` (520 lines)
+**File**: `scripts/run_ablation_study.py` (520 lines)
 
 **Problem**: No empirical evidence that each pipeline component is necessary.
 
@@ -221,7 +226,7 @@ results/ablation/
 ---
 
 ### 5. Controllability Test ✓
-**File**: `f:\KLTN\scripts\test_controllability.py` (445 lines)
+**File**: `scripts/test_controllability.py` (445 lines)
 
 **Problem**: No quantitative proof that user-specified tension curves actually control output.
 
@@ -272,7 +277,7 @@ Mean Correlation r = 0.73
 ---
 
 ### 6. Diversity Metrics (MAP-Elites Enhancement) ✓
-**File**: `f:\KLTN\src\simulation\map_elites.py` (+140 lines)
+**File**: `src/simulation/map_elites.py` (+140 lines)
 
 **Problem**: No quantitative evidence that system doesn't suffer from mode collapse.
 
@@ -325,7 +330,7 @@ print(f"Classification: {report['diversity_classification']}")
 
 ## COMPREHENSIVE THESIS DEFENSE DOCUMENTATION ✓
 
-**File**: `f:\KLTN\docs\THESIS_DEFENSE_VALIDATION.md` (830 lines)
+**File**: `docs/THESIS_DEFENSE_VALIDATION.md` (830 lines)
 
 **Purpose**: Complete defense preparation guide mapping every committee concern to evidence.
 
@@ -426,7 +431,7 @@ report = generate_diversity_report(evaluator, output_path="results/diversity_rep
 5. **Review Defense Documentation**:
 ```bash
 # Open in Markdown viewer or VS Code
-code f:\KLTN\docs\THESIS_DEFENSE_VALIDATION.md
+code docs/THESIS_DEFENSE_VALIDATION.md
 ```
 
 ---
@@ -660,7 +665,7 @@ The 6 implemented features address the most critical thesis committee concerns:
 
 ---
 
-**Report Generated**: December 2024  
+**Report Generated**: 2026-03-20 (metadata refresh)  
 **Implementation Time**: 6 hours (AI-assisted)  
 **Lines of Code**: 3,200+ across 6 modules  
 **Documentation**: 830 lines  

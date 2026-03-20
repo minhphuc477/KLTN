@@ -45,11 +45,11 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ValidationState:
     """State for validation pathfinding."""
-    position: Tuple[int, int]       # Current room position
+    position: int                   # Current graph node
     keys_held: int = 0              # Number of keys in inventory
     keys_collected: Set[int] = field(default_factory=set)  # Node IDs where keys collected
     doors_opened: Set[Tuple[int, int]] = field(default_factory=set)  # Opened door edges
-    path: List[Tuple[int, int]] = field(default_factory=list)  # Path taken
+    path: List[int] = field(default_factory=list)  # Path taken
     
     def copy(self) -> 'ValidationState':
         return ValidationState(
@@ -81,13 +81,26 @@ class ValidationState:
 class ValidationResult:
     """Result of dungeon validation."""
     is_solvable: bool
-    solution_path: Optional[List[Tuple[int, int]]] = None
+    solution_path: Optional[List[int]] = None
     key_collection_order: Optional[List[int]] = None
     doors_opened: Optional[List[Tuple[int, int]]] = None
     path_length: int = 0
     states_explored: int = 0
     failure_reason: Optional[str] = None
     metrics: Dict[str, float] = field(default_factory=dict)
+
+    @property
+    def path(self) -> Optional[List[int]]:
+        """Backward-compatible alias for solution_path."""
+        return self.solution_path
+
+    def __iter__(self):
+        """
+        Backward-compatible tuple unpacking:
+            is_solvable, path = result
+        """
+        yield self.is_solvable
+        yield self.solution_path
 
 
 # ============================================================================
@@ -114,32 +127,43 @@ class AgentSimulator:
     
     def __init__(
         self,
-        graph: nx.DiGraph,
+        graph: Optional[nx.DiGraph] = None,
         room_data: Optional[Dict[int, np.ndarray]] = None,
         strict_mode: bool = False,
     ):
-        self.graph = graph
         self.room_data = room_data
         self.strict_mode = strict_mode
-        
-        # Extract key and item locations from graph
+        self.graph: nx.DiGraph = nx.DiGraph()
+
+        # Derived per-graph state
         self.key_nodes: Set[int] = set()
         self.item_nodes: Dict[int, str] = {}
         self.start_node: Optional[int] = None
         self.goal_node: Optional[int] = None
-        
+
+        self._bind_graph(graph if graph is not None else nx.DiGraph())
+
+    def _bind_graph(self, graph: nx.DiGraph) -> None:
+        """Attach graph and refresh extracted semantic node sets."""
+        self.graph = graph
+        self.key_nodes.clear()
+        self.item_nodes.clear()
+        self.start_node = None
+        self.goal_node = None
+
         for node_id, data in graph.nodes(data=True):
             label = data.get('label', '')
-            
-            if 'k' in label.split(','):
+            label_parts = [p.strip() for p in label.split(',')] if label else []
+
+            if 'k' in label_parts or data.get('has_key', False):
                 self.key_nodes.add(node_id)
-            if 'K' in label.split(','):
+            if 'K' in label_parts or data.get('has_boss_key', False):
                 self.item_nodes[node_id] = 'boss_key'
-            if 'I' in label.split(','):
+            if 'I' in label_parts or data.get('has_item', False):
                 self.item_nodes[node_id] = 'key_item'
-            if 's' in label.split(','):
+            if 's' in label_parts or data.get('is_start', False):
                 self.start_node = node_id
-            if 't' in label.split(','):
+            if 't' in label_parts or data.get('has_triforce', False):
                 self.goal_node = node_id
     
     def can_traverse(
@@ -330,6 +354,22 @@ class AgentSimulator:
             failure_reason="No path found (exhausted search or max states reached)"
         )
 
+    def simulate(
+        self,
+        graph: Optional[nx.DiGraph] = None,
+        start_node: Optional[int] = None,
+        goal_node: Optional[int] = None,
+        max_states: int = 100000,
+    ) -> ValidationResult:
+        """
+        Convenience wrapper for simulation-style usage.
+
+        If ``graph`` is provided, simulator state is rebound to that graph.
+        """
+        if graph is not None:
+            self._bind_graph(graph)
+        return self.find_path(start_node=start_node, goal_node=goal_node, max_states=max_states)
+
 
 # ============================================================================
 # SOLVABILITY CHECKER
@@ -383,6 +423,17 @@ class SolvabilityChecker:
         )
         
         return simulator.find_path(start_node, goal_node)
+
+    def check_tuple(
+        self,
+        graph: nx.DiGraph,
+        room_data: Optional[Dict[int, np.ndarray]] = None,
+        start_node: Optional[int] = None,
+        goal_node: Optional[int] = None,
+    ) -> Tuple[bool, Optional[List[int]]]:
+        """Compatibility wrapper returning (is_solvable, solution_path)."""
+        result = self.check(graph, room_data, start_node, goal_node)
+        return result.is_solvable, result.solution_path
     
     def check_all_rooms_reachable(
         self,
@@ -448,7 +499,7 @@ class PathVerifier:
             (is_valid, error_message, final_state)
         """
         if not path:
-            return False, "Empty path", ValidationState(position=(-1, -1))
+            return False, "Empty path", ValidationState(position=-1)
         
         state = start_state or ValidationState(position=path[0])
         state = self.simulator.collect_items(path[0], state)

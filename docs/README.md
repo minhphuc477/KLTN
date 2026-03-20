@@ -1,0 +1,26 @@
+# KLTN Docs Landing
+
+Use this page as the quick entrypoint for documentation when browsing the docs folder directly.
+
+## Start Here
+
+1. [INDEX.md](INDEX.md) - canonical documentation map
+2. [../README.md](../README.md) - project overview, setup, and usage
+3. [../ARCHITECTURE_DIAGRAMS.md](../ARCHITECTURE_DIAGRAMS.md) - visual architecture map
+
+## Core Technical Docs
+
+- [BLOCK_BY_BLOCK_ARCHITECTURE_AND_IMPLEMENTATION_AUDIT.md](BLOCK_BY_BLOCK_ARCHITECTURE_AND_IMPLEMENTATION_AUDIT.md)
+- [SOTA_COMPARISON_AND_BENCHMARKS.md](SOTA_COMPARISON_AND_BENCHMARKS.md)
+- [VGLC_COMPLIANCE_GUIDE.md](VGLC_COMPLIANCE_GUIDE.md)
+- [GRAMMAR_REFERENCE.md](GRAMMAR_REFERENCE.md)
+
+## Publication-Oriented Blueprint
+
+- [IEEE_TOG_BLUEPRINT_AND_ROOM_GENERATION.md](IEEE_TOG_BLUEPRINT_AND_ROOM_GENERATION.md)
+
+## Historical Thesis Snapshots
+
+- [THESIS_DEFENSE_VALIDATION.md](THESIS_DEFENSE_VALIDATION.md)
+- [THESIS_DEFENSE_IMPLEMENTATION_REPORT.md](THESIS_DEFENSE_IMPLEMENTATION_REPORT.md)
+- [THESIS_DEFENSE_MATH_QUESTIONS.md](THESIS_DEFENSE_MATH_QUESTIONS.md)

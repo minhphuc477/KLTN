@@ -126,6 +126,61 @@ class TestExternalValidator:
         assert result.is_solvable == True
 
 
+class TestFunMetrics:
+    """Tests for fun metrics evaluator (including pacing analyzer)."""
+
+    def test_pacing_changes_with_tension_profile(self):
+        """Late-peak profile should produce later peak placement than flat profile."""
+        from src.evaluation.fun_metrics import FunMetricsEvaluator
+
+        evaluator = FunMetricsEvaluator()
+
+        graph = nx.DiGraph()
+        for i in range(5):
+            label = "s" if i == 0 else ("t" if i == 4 else "")
+            graph.add_node(i, label=label)
+            if i > 0:
+                graph.add_edge(i - 1, i, edge_type="open")
+
+        solution_path = [0, 1, 2, 3, 4]
+        critical_path = set(solution_path)
+
+        late_peak_contents = {
+            0: {"safe_room": True, "enemies": 0},
+            1: {"enemies": 1, "puzzles": 1},
+            2: {"enemies": 2, "puzzles": 1, "health_pickups": 1},
+            3: {"enemies": 4, "boss": True},
+            4: {"enemies": 1, "goal": True},
+        }
+        flat_contents = {room: {"enemies": 1} for room in solution_path}
+
+        late_metrics = evaluator.evaluate(graph, solution_path, late_peak_contents, critical_path)
+        flat_metrics = evaluator.evaluate(graph, solution_path, flat_contents, critical_path)
+
+        assert 0.0 <= late_metrics.pacing.pacing_score <= 1.0
+        assert 0.0 <= late_metrics.pacing.peak_placement <= 1.0
+        assert late_metrics.pacing.rest_areas >= 0
+        assert late_metrics.pacing.peak_placement > flat_metrics.pacing.peak_placement
+
+    def test_pacing_handles_empty_path(self):
+        """Empty path should return safe fallback pacing metrics."""
+        from src.evaluation.fun_metrics import FunMetricsEvaluator
+
+        evaluator = FunMetricsEvaluator()
+        graph = nx.DiGraph()
+
+        metrics = evaluator.evaluate(
+            mission_graph=graph,
+            solution_path=[],
+            room_contents={},
+            critical_path=set(),
+        )
+
+        assert metrics.pacing.tension_variance == 0.0
+        assert metrics.pacing.rest_areas == 0
+        assert 0.0 <= metrics.pacing.pacing_score <= 1.0
+
+
 class TestEliteArchive:
     """Tests for Elite Archive."""
     

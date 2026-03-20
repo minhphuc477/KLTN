@@ -317,16 +317,13 @@ class DiffusionTrainer:
         edge_features = None
         if edge_attr is not None and edge_attr.numel() > 0:
             edge_attr = edge_attr.to(self.device)
-            # 7 edge types: open, key_locked, bombable, soft_locked, boss_locked, item_locked, stair
-            num_edge_types = 7
+            # 8 edge types: open, key_locked, bombable, soft_locked,
+            # boss_locked, item_locked, stair, switch
+            num_edge_types = 8
             edge_attr_clamped = edge_attr.clamp(0, num_edge_types - 1)
             edge_features = torch.nn.functional.one_hot(
                 edge_attr_clamped, num_classes=num_edge_types
             ).float()
-            # Project to edge_feature_dim=3 expected by GNN
-            # Use first 3 dims: key_locked, bombable, soft_locked (most important)
-            if edge_features.shape[1] > 3:
-                edge_features = edge_features[:, 1:4]  # skip 'open', take key/bomb/soft
         
         # Encode through global stream
         c_global = self.condition_encoder.encode_global_only(

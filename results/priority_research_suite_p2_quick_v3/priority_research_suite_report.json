@@ -1,0 +1,281 @@
+{
+  "seed": 42,
+  "num_samples": 8,
+  "eval_budget": 256,
+  "output_dir": "results\\priority_research_suite_p2_quick_v3",
+  "all_steps_passed": true,
+  "steps": [
+    {
+      "name": "sequence_break_analysis",
+      "command": [
+        "F:\\KLTN\\.venv\\Scripts\\python.exe",
+        "scripts/analyze_sequence_breaks.py",
+        "--num-samples",
+        "4",
+        "--seed",
+        "42",
+        "--output",
+        "results\\priority_research_suite_p2_quick_v3\\sequence_break_analysis.json"
+      ],
+      "exit_code": 0,
+      "duration_sec": 17.843881130218506,
+      "output_path": "results\\priority_research_suite_p2_quick_v3\\sequence_break_analysis.json",
+      "stdout_tail": "{\n  \"mean_break_rate\": 0.0,\n  \"aggregate_break_rate\": 0.0,\n  \"total_checked_gates\": 5,\n  \"output\": \"results\\\\priority_research_suite_p2_quick_v3\\\\sequence_break_analysis.json\"\n}\n",
+      "stderr_tail": "MultiLockRule: No viable lock edge keeps all switches reachable; skipping lock conversion\nLock 3 references non-existent key 3\nNo key provider for edge 2->3 (key_required=3)\nAddMultiLockRule: No viable lock edge keeps all switches reachable; skipping lock conversion\nNo provider key for lock 6 is reachable before lock (key_id=5)\nKey for locked edge 6->2 is not reachable pre-gate\nNo provider key for lock 4 is reachable before lock (key_id=3)\nKey for locked edge 4->2 is not reachable pre-gate\nItem FIRE_ROD not reachable before ITEM_GATE 4->3\nPruneDeadEndRule: Would disconnect graph, skipping node 5\nItem FIRE_ROD not reachable before ITEM_GATE 4->3\nPruneDeadEndRule: Would disconnect graph, skipping node 3\nMULTI_LOCK 4->7 requires 3 tokens but only 2 are reachable pre-gate\nPruneDeadEndRule: Would disconnect graph, skipping node 2\nNo provider key for lock 4 is reachable before lock (key_id=3)\nKey for locked edge 4->2 is not reachable pre-gate\nPruneDeadEndRule: Would disconnect graph, skipping node 5\nMULTI_LOCK 5->2 requires 3 tokens but only 2 are reachable pre-gate\nLock 2 references non-existent key 2\nNo key provider for edge 0->2 (key_required=2)\nPruneDeadEndRule: Would disconnect graph, skipping node 5\nLock 5 references non-existent key 5\nNo key provider for edge 2->5 (key_required=5)\nItem BOW not reachable before ITEM_GATE 7->6\nNo provider key for lock 7 is reachable before lock (key_id=6)\nKey for locked edge 7->2 is not reachable pre-gate\nLock 2 references non-existent key 2\nNo key provider for edge 0->2 (key_required=2)\nNo item provider for ITEM_GATE 8->6 (item_required=BOW)\nPruneDeadEndRule: Would disconnect graph, skipping node 3\nLock 9 references non-existent key 8\nNo key provider for edge 9->1 (key_required=8)\nNo provider key for lock 5 is reachable before lock (key_id=4)\nKey for locked edge 5->2 is not reachable pre-gate\nLock 7 references non-existent key 7\nNo key provider for edge 2->7 (key_required=7)\nPruneDeadEndRule: Would disconnect graph, skipping node 3\n"
+    },
+    {
+      "name": "rule_marginal_credit",
+      "command": [
+        "F:\\KLTN\\.venv\\Scripts\\python.exe",
+        "scripts/analyze_rule_marginal_credit.py",
+        "--seed",
+        "42",
+        "--output",
+        "results\\priority_research_suite_p2_quick_v3\\rule_marginal_credit.json"
+      ],
+      "exit_code": 0,
+      "duration_sec": 13.036632537841797,
+      "output_path": "results\\priority_research_suite_p2_quick_v3\\rule_marginal_credit.json",
+      "stdout_tail": "{\n  \"best_fitness\": 0.7607720216005291,\n  \"num_rule_deltas\": 9,\n  \"output\": \"results\\\\priority_research_suite_p2_quick_v3\\\\rule_marginal_credit.json\"\n}\n",
+      "stderr_tail": "pping node 3\nAddMultiLockRule: No viable lock edge keeps all switches reachable; skipping lock conversion\nAddMultiLockRule: No viable lock edge keeps all switches reachable; skipping lock conversion\nAddMultiLockRule: No viable lock edge keeps all switches reachable; skipping lock conversion\nItem BOMB not reachable before ITEM_GATE 9->8\nPruneDeadEndRule: Would disconnect graph, skipping node 4\nAddMultiLockRule: No viable lock edge keeps all switches reachable; skipping lock conversion\nAddMultiLockRule: No viable lock edge keeps all switches reachable; skipping lock conversion\nLock 9 references non-existent key 8\nNo key provider for edge 9->5 (key_required=8)\nAddMultiLockRule: No viable lock edge keeps all switches reachable; skipping lock conversion\nMULTI_LOCK 16->8 requires 3 tokens but only 2 are reachable pre-gate\nAddMultiLockRule: No viable lock edge keeps all switches reachable; skipping lock conversion\nAddMultiLockRule: No viable lock edge keeps all switches reachable; skipping lock conversion\nAddMultiLockRule: No viable lock edge keeps all switches reachable; skipping lock conversion\nAddMultiLockRule: No viable lock edge keeps all switches reachable; skipping lock conversion\nAddMultiLockRule: No viable lock edge keeps all switches reachable; skipping lock conversion\nNo provider key for lock 4 is reachable before lock (key_id=3)\nKey for locked edge 4->2 is not reachable pre-gate\nLock 15 references non-existent key 14\nNo key provider for edge 15->12 (key_required=14)\nMULTI_LOCK 10->5 requires 3 tokens but only 2 are reachable pre-gate\nSTATE_BLOCK 1->12 has unreachable switches before gate: [15]\nLock 9 references non-existent key 8\nNo key provider for edge 9->7 (key_required=8)\nSTATE_BLOCK 3->4 has unreachable switches before gate: [20]\nMULTI_LOCK 3->8 requires 3 tokens but only 2 are reachable pre-gate\nItem ICE_ROD not reachable before ITEM_GATE 4->3\nMULTI_LOCK 2->4 requires 3 tokens but only 2 are reachable pre-gate\nItem BOW not reachable before ITEM_GATE 4->3\n"
+    },
+    {
+      "name": "feature_distribution",
+      "command": [
+        "F:\\KLTN\\.venv\\Scripts\\python.exe",
+        "scripts/analyze_block_i_feature_distribution.py",
+        "--num-samples",
+        "6",
+        "--population-size",
+        "16",
+        "--generations",
+        "16",
+        "--seed",
+        "42",
+        "--output",
+        "results\\priority_research_suite_p2_quick_v3\\feature_distribution"
+      ],
+      "exit_code": 0,
+      "duration_sec": 42.90523862838745,
+      "output_path": "results\\priority_research_suite_p2_quick_v3\\feature_distribution\\feature_distribution_summary.json",
+      "stdout_tail": "",
+      "stderr_tail": "2026-03-08 20:37:46,920 - __main__ - INFO - Saved feature-distribution outputs to results\\priority_research_suite_p2_quick_v3\\feature_distribution\n"
+    }
+  ],
+  "artifacts": {
+    "sequence_break_analysis": {
+      "num_samples": 4,
+      "seed_start": 42,
+      "population_size": 16,
+      "generations": 14,
+      "genome_length": 20,
+      "max_nodes": 26,
+      "mean_break_rate": 0.0,
+      "aggregate_break_rate": 0.0,
+      "total_sequence_breaks": 0,
+      "total_checked_gates": 5,
+      "per_sample": [
+        {
+          "valid_for_analysis": true,
+          "sequence_break_count": 0,
+          "checked_gate_count": 1,
+          "break_rate": 0.0,
+          "details": [],
+          "seed": 42,
+          "fitness": 0.6334742628427229
+        },
+        {
+          "valid_for_analysis": true,
+          "sequence_break_count": 0,
+          "checked_gate_count": 1,
+          "break_rate": 0.0,
+          "details": [],
+          "seed": 43,
+          "fitness": 0.69777556772231
+        },
+        {
+          "valid_for_analysis": true,
+          "sequence_break_count": 0,
+          "checked_gate_count": 2,
+          "break_rate": 0.0,
+          "details": [],
+          "seed": 44,
+          "fitness": 0.5908415325852513
+        },
+        {
+          "valid_for_analysis": true,
+          "sequence_break_count": 0,
+          "checked_gate_count": 1,
+          "break_rate": 0.0,
+          "details": [],
+          "seed": 45,
+          "fitness": 0.6756888244319292
+        }
+      ]
+    },
+    "rule_marginal_credit": {
+      "seed": 42,
+      "population_size": 24,
+      "generations": 18,
+      "genome_length": 24,
+      "max_nodes": 30,
+      "best_fitness": 0.7607720216005291,
+      "best_genome": [
+        4,
+        6,
+        9,
+        20,
+        2,
+        29,
+        19,
+        5,
+        5,
+        20,
+        11,
+        5,
+        30,
+        21,
+        2,
+        28,
+        12,
+        21,
+        15,
+        29,
+        16,
+        28,
+        4,
+        22
+      ],
+      "rule_trace_available": false,
+      "marginal_delta_by_index": {
+        "0": -0.004698240488684613,
+        "3": 0.05425699641588588,
+        "4": 0.4768415884394683,
+        "7": 0.19154880029081023,
+        "13": 0.023139862889557827,
+        "16": 0.40084715666396575,
+        "17": 0.2880183698050014,
+        "19": 0.2708909386322663
+      },
+      "marginal_delta_by_rule": {
+        "Branch": 0.0697033220466726,
+        "AddSector": -0.09399323282017796,
+        "MergeShortcut": -0.1434238718128874,
+        "AddSecret": 0.3951163025414958,
+        "PruneDeadEnd": -0.20038305923311084,
+        "AddEntangledBranches": -0.040899710638726466,
+        "InsertChallenge_PUZZLE": 0.2965689604285392,
+        "AddMultiLock": 0.003565296044655719,
+        "AddValve": -0.20163212412342923
+      },
+      "top_helpful_rules": [
+        {
+          "rule": "AddSecret",
+          "avg_delta": 0.3951163025414958
+        },
+        {
+          "rule": "InsertChallenge_PUZZLE",
+          "avg_delta": 0.2965689604285392
+        },
+        {
+          "rule": "Branch",
+          "avg_delta": 0.0697033220466726
+        },
+        {
+          "rule": "AddMultiLock",
+          "avg_delta": 0.003565296044655719
+        },
+        {
+          "rule": "AddEntangledBranches",
+          "avg_delta": -0.040899710638726466
+        },
+        {
+          "rule": "AddSector",
+          "avg_delta": -0.09399323282017796
+        },
+        {
+          "rule": "MergeShortcut",
+          "avg_delta": -0.1434238718128874
+        },
+        {
+          "rule": "PruneDeadEnd",
+          "avg_delta": -0.20038305923311084
+        }
+      ],
+      "top_harmful_rules": [
+        {
+          "rule": "AddValve",
+          "avg_delta": -0.20163212412342923
+        },
+        {
+          "rule": "PruneDeadEnd",
+          "avg_delta": -0.20038305923311084
+        },
+        {
+          "rule": "MergeShortcut",
+          "avg_delta": -0.1434238718128874
+        },
+        {
+          "rule": "AddSector",
+          "avg_delta": -0.09399323282017796
+        },
+        {
+          "rule": "AddEntangledBranches",
+          "avg_delta": -0.040899710638726466
+        },
+        {
+          "rule": "AddMultiLock",
+          "avg_delta": 0.003565296044655719
+        },
+        {
+          "rule": "Branch",
+          "avg_delta": 0.0697033220466726
+        },
+        {
+          "rule": "InsertChallenge_PUZZLE",
+          "avg_delta": 0.2965689604285392
+        }
+      ]
+    },
+    "feature_distribution": {
+      "num_samples": 6,
+      "mean_generation_time_sec": 5.982637325922648,
+      "constraint_valid_rate": 1.0,
+      "repair_rate": 0.0,
+      "feature_presence_rate": {
+        "switch": 0.5,
+        "stair": 0.8333333333333334,
+        "shortcut": 0.0,
+        "cycle": 1.0
+      },
+      "descriptor_means": {
+        "linearity": 0.3919365091082076,
+        "leniency": 0.9722222222222222,
+        "progression_complexity": 0.40785051025893987,
+        "topology_complexity": 0.3475464774396631,
+        "cycle_density": 0.32449494949494945,
+        "shortcut_density": 0.0,
+        "gate_depth_ratio": 0.14550264550264547,
+        "path_depth_ratio": 0.3644177280046845,
+        "directionality_gap": 0.0
+      },
+      "descriptor_targets": {
+        "linearity": 0.43243322417458485,
+        "leniency": 0.4746762496762497,
+        "progression_complexity": 0.5056329747493025,
+        "topology_complexity": 0.3938431288135679,
+        "path_length": 9.944444444444445,
+        "num_nodes": 28.5,
+        "cycle_density": 0.3025030389000977,
+        "shortcut_density": 0.0,
+        "gate_depth_ratio": 0.14705888247554916,
+        "path_depth_ratio": 0.4087086801128953
+      },
+      "calibration": {
+        "enabled": false,
+        "history": []
+      },
+      "tuned_rule_weights": {}
+    }
+  }
+}

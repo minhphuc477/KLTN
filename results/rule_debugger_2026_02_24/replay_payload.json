@@ -1,0 +1,43 @@
+{
+  "seed": 42,
+  "difficulty": 0.5,
+  "max_nodes": 16,
+  "allow_override": false,
+  "use_full_rule_space": true,
+  "max_lock_key_rules": 3,
+  "enforce_generation_constraints": true,
+  "allow_candidate_repairs": false,
+  "rule_weight_overrides": {},
+  "genome": [
+    13,
+    24,
+    7,
+    16,
+    27,
+    9,
+    17,
+    17,
+    22,
+    1,
+    2,
+    30,
+    18,
+    4
+  ],
+  "rule_names": [
+    "PruneGraph",
+    "AddSkillChain",
+    "AddBossGauntlet",
+    "AddValve",
+    "AddGatekeeper",
+    "CreateHub",
+    "AddForeshadowing",
+    "AddForeshadowing",
+    "AddHazardGate",
+    "InsertChallenge_ENEMY",
+    "InsertChallenge_PUZZLE",
+    "PruneDeadEnd",
+    "AddCollectionChallenge",
+    "Branch"
+  ]
+}

@@ -1,0 +1,124 @@
+{
+  "seed": 42,
+  "population_size": 24,
+  "generations": 18,
+  "genome_length": 24,
+  "max_nodes": 30,
+  "best_fitness": 0.7607720216005291,
+  "best_genome": [
+    4,
+    6,
+    9,
+    20,
+    2,
+    29,
+    19,
+    5,
+    5,
+    20,
+    11,
+    5,
+    30,
+    21,
+    2,
+    28,
+    12,
+    21,
+    15,
+    29,
+    16,
+    28,
+    4,
+    22
+  ],
+  "rule_trace_available": false,
+  "marginal_delta_by_index": {
+    "0": -0.004698240488684613,
+    "3": 0.05425699641588588,
+    "4": 0.4768415884394683,
+    "7": 0.19154880029081023,
+    "13": 0.023139862889557827,
+    "16": 0.40084715666396575,
+    "17": 0.2880183698050014,
+    "19": 0.2708909386322663
+  },
+  "marginal_delta_by_rule": {
+    "Branch": 0.0697033220466726,
+    "AddSector": -0.09399323282017796,
+    "MergeShortcut": -0.1434238718128874,
+    "AddSecret": 0.3951163025414958,
+    "PruneDeadEnd": -0.20038305923311084,
+    "AddEntangledBranches": -0.040899710638726466,
+    "InsertChallenge_PUZZLE": 0.2965689604285392,
+    "AddMultiLock": 0.003565296044655719,
+    "AddValve": -0.20163212412342923
+  },
+  "top_helpful_rules": [
+    {
+      "rule": "AddSecret",
+      "avg_delta": 0.3951163025414958
+    },
+    {
+      "rule": "InsertChallenge_PUZZLE",
+      "avg_delta": 0.2965689604285392
+    },
+    {
+      "rule": "Branch",
+      "avg_delta": 0.0697033220466726
+    },
+    {
+      "rule": "AddMultiLock",
+      "avg_delta": 0.003565296044655719
+    },
+    {
+      "rule": "AddEntangledBranches",
+      "avg_delta": -0.040899710638726466
+    },
+    {
+      "rule": "AddSector",
+      "avg_delta": -0.09399323282017796
+    },
+    {
+      "rule": "MergeShortcut",
+      "avg_delta": -0.1434238718128874
+    },
+    {
+      "rule": "PruneDeadEnd",
+      "avg_delta": -0.20038305923311084
+    }
+  ],
+  "top_harmful_rules": [
+    {
+      "rule": "AddValve",
+      "avg_delta": -0.20163212412342923
+    },
+    {
+      "rule": "PruneDeadEnd",
+      "avg_delta": -0.20038305923311084
+    },
+    {
+      "rule": "MergeShortcut",
+      "avg_delta": -0.1434238718128874
+    },
+    {
+      "rule": "AddSector",
+      "avg_delta": -0.09399323282017796
+    },
+    {
+      "rule": "AddEntangledBranches",
+      "avg_delta": -0.040899710638726466
+    },
+    {
+      "rule": "AddMultiLock",
+      "avg_delta": 0.003565296044655719
+    },
+    {
+      "rule": "Branch",
+      "avg_delta": 0.0697033220466726
+    },
+    {
+      "rule": "InsertChallenge_PUZZLE",
+      "avg_delta": 0.2965689604285392
+    }
+  ]
+}

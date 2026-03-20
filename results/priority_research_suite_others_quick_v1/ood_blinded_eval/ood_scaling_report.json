@@ -1,0 +1,26 @@
+{
+  "output": "results\\priority_research_suite_others_quick_v1\\ood_blinded_eval",
+  "methods": [
+    "FULL_GA",
+    "FULL_CVT"
+  ],
+  "regimes": {
+    "in_dist": {
+      "min_rooms": 18,
+      "max_rooms": 33
+    },
+    "ood_small": {
+      "min_rooms": 10,
+      "max_rooms": 16
+    },
+    "ood_large": {
+      "min_rooms": 35,
+      "max_rooms": 42
+    }
+  },
+  "summary_csv": "results\\priority_research_suite_others_quick_v1\\ood_blinded_eval\\ood_scaling_summary.csv",
+  "blinded_manifest_csv": "results\\priority_research_suite_others_quick_v1\\ood_blinded_eval\\blinded\\blinded_manifest.csv",
+  "blinded_key_csv": "results\\priority_research_suite_others_quick_v1\\ood_blinded_eval\\blinded\\blinded_key.csv",
+  "rating_sheet_csv": "results\\priority_research_suite_others_quick_v1\\ood_blinded_eval\\blinded\\rating_sheet.csv",
+  "payload_json": "results\\priority_research_suite_others_quick_v1\\ood_blinded_eval\\ood_scaling_payload.json"
+}

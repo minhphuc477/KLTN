@@ -39,6 +39,11 @@ from src.constants.vglc_constants import (
     PHYSICAL_NODE_TYPES,
     LEAF_NODE_TYPES,
 )
+from src.core.definitions import (
+    parse_node_label_tokens,
+    parse_edge_type_tokens,
+    select_primary_edge_type,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -240,9 +245,7 @@ class VGLCGraphParser:
         Returns:
             Set of individual label components
         """
-        if not label or label == "":
-            return set()
-        return set(part.strip() for part in label.split(",") if part.strip())
+        return set(parse_node_label_tokens(label))
     
     @staticmethod
     def parse_node_attributes(graph: nx.Graph, node_id: int) -> NodeAttributes:
@@ -298,33 +301,24 @@ class VGLCGraphParser:
                                        graph.edges.get((target, source), {}))
         
         label = edge_data.get('label', '')
-        
-        # Determine edge type
-        if label == '':
-            edge_type = 'open'
-        elif label == 'k':
-            edge_type = 'key_locked'
-        elif label == 'b':
-            edge_type = 'bombable'
-        elif label == 'l':
-            edge_type = 'soft_locked'
-        elif label == 's':
-            edge_type = 'stairs_warp'
-        else:
-            edge_type = label  # Unknown type, keep as-is
+        constraints = parse_edge_type_tokens(
+            label=label,
+            edge_type=edge_data.get('edge_type', ''),
+        )
+        edge_type = select_primary_edge_type(constraints)
         
         return EdgeAttributes(
             source=source,
             target=target,
             edge_type=edge_type,
             label=label,
-            is_open=label == '',
-            is_key_locked=label == 'k',
-            is_bombable=label == 'b',
-            is_soft_locked=label == 'l',
-            is_warp=label == 's',
-            consumes_resource=label in ['k', 'b'],
-            is_oneway=label == 'l',
+            is_open='open' in constraints,
+            is_key_locked='key_locked' in constraints,
+            is_bombable='bombable' in constraints,
+            is_soft_locked='soft_locked' in constraints,
+            is_warp='stair' in constraints,
+            consumes_resource=any(c in {'key_locked', 'bombable', 'boss_locked', 'item_locked'} for c in constraints),
+            is_oneway='soft_locked' in constraints,
         )
     
     @staticmethod
@@ -471,7 +465,10 @@ class VGLCTopologyValidator:
         for node in graph.nodes():
             attrs = VGLCGraphParser.parse_node_attributes(graph, node)
             if attrs.is_start_pointer:
-                successors = list(graph.successors(node))
+                if graph.is_directed():
+                    successors = list(graph.successors(node))
+                else:
+                    successors = list(graph.neighbors(node))
                 if successors:
                     logger.info(f"Found start pointer {node} → physical start {successors[0]}")
                     return successors[0]
@@ -485,7 +482,8 @@ class VGLCTopologyValidator:
         # Find node with label containing 'start'
         for node in graph.nodes():
             label = graph.nodes[node].get('label', '')
-            if 'start' in label.lower():
+            tokens = VGLCGraphParser.parse_node_label(label)
+            if 'S' in tokens or 'start' in label.lower():
                 logger.info(f"Found node with 'start' label: {node}")
                 return node
         

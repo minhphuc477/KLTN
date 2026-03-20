@@ -1,6 +1,5 @@
 # Cognitive Bounded Search (CBS) — Architecture Design Document
 
-**Author**: KLTN Team  
 **Version**: 1.0.0  
 **Date**: 2026-02-06  
 **Status**: Implementation Complete

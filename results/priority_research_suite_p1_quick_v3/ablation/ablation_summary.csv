@@ -1,0 +1,3 @@
+config,n,success_rate,solvability_rate,confusion_ratio,confusion_index,path_optimal,tile_prior_kl,graph_edit_distance,generation_time_sec,novelty,reconstruction_error,constraint_valid_rate,room_repair_rate,tiles_repaired,diversity
+FULL,2,1.0,0.5,1.0,0.0,0.5,4.998085028178837,0.35046345811051693,8.781110644340515,0.09885984926538205,0.75,0.0,0.0,0.0,0.2579036019523849
+NO_EVOLUTION,1,1.0,0.0,,181.9329268292683,0.0,3.4885498222292757,0.27850267379679144,292.3866238594055,0.1306418289102245,0.7556818181818182,1.0,0.125,147.0,0.0

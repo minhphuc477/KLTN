@@ -22,6 +22,11 @@ from .graph_utils import (
     validate_goal_subgraph,
     validate_graph_topology,
 )
+from .playtest_telemetry import (
+    PlaytestEvent,
+    PlaytestSession,
+    PlaytestTelemetryCollector,
+)
 
 __all__ = [
     # Checkpointing/training
@@ -37,4 +42,8 @@ __all__ = [
     'get_edge_type',
     'validate_goal_subgraph',
     'validate_graph_topology',
+    # Playtest telemetry
+    'PlaytestEvent',
+    'PlaytestSession',
+    'PlaytestTelemetryCollector',
 ]

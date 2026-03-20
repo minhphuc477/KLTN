@@ -1,0 +1,51 @@
+{
+  "seed": 42,
+  "population_size": 4,
+  "generations": 2,
+  "genome_length": 6,
+  "max_nodes": 10,
+  "best_fitness": 0.29472097889607657,
+  "best_genome": [
+    5,
+    7,
+    9,
+    3,
+    2,
+    21
+  ],
+  "rule_trace_available": false,
+  "max_samples_requested": 2,
+  "num_positions_sampled": 2,
+  "sampled_positions": [
+    3,
+    4
+  ],
+  "marginal_delta_by_index": {
+    "3": 0.019955119575230107,
+    "4": 0.0015707999511478943
+  },
+  "marginal_delta_by_rule": {
+    "InsertLockKey": 0.019955119575230107,
+    "InsertChallenge_PUZZLE": 0.0015707999511478943
+  },
+  "top_helpful_rules": [
+    {
+      "rule": "InsertLockKey",
+      "avg_delta": 0.019955119575230107
+    },
+    {
+      "rule": "InsertChallenge_PUZZLE",
+      "avg_delta": 0.0015707999511478943
+    }
+  ],
+  "top_harmful_rules": [
+    {
+      "rule": "InsertChallenge_PUZZLE",
+      "avg_delta": 0.0015707999511478943
+    },
+    {
+      "rule": "InsertLockKey",
+      "avg_delta": 0.019955119575230107
+    }
+  ]
+}

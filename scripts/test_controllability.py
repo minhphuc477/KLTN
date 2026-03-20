@@ -334,24 +334,74 @@ class ControllabilityTest:
         
         This is a placeholder that should be replaced with actual pipeline call.
         """
-        # TODO: Replace with actual pipeline integration
+        # Attempt to use the repository pipeline if available, otherwise fall back to mock
+        try:
+            from src.pipeline.dungeon_pipeline import NeuralSymbolicDungeonPipeline
+            logger.info("Using NeuralSymbolicDungeonPipeline for generation")
+
+            # Try to instantiate pipeline with default checkpoint locations (may be None)
+            try:
+                pipeline = NeuralSymbolicDungeonPipeline(
+                    vqvae_checkpoint=None,
+                    diffusion_checkpoint=None,
+                    logic_net_checkpoint=None,
+                    device='auto',
+                    enable_logging=False,
+                )
+            except Exception:
+                # If full pipeline fails to initialize, fall back to robust wrapper if available
+                pipeline = None
+
+            if pipeline is not None:
+                # Use evolutionary topology generation guided by target tension curve
+                res = pipeline.generate_dungeon(
+                    mission_graph=None,
+                    generate_topology=True,
+                    target_curve=params.get('tension_curve'),
+                    num_rooms=int(params.get('num_rooms', 8)),
+                    seed=int(params.get('seed', 0)),
+                    guidance_scale=7.5,
+                    logic_guidance_scale=1.0,
+                    num_diffusion_steps=25,
+                    apply_repair=True,
+                )
+
+                # Convert DungeonGenerationResult to a simple dict structure
+                out = {
+                    'visual_grid': getattr(res, 'dungeon_grid', np.zeros((64, 64), dtype=int)),
+                    'mission_graph': {},
+                    'rooms': [],
+                    'tension_curve': params.get('tension_curve')
+                }
+
+                try:
+                    G = res.mission_graph
+                    out['mission_graph'] = {'nodes': dict(G.nodes(data=True)), 'edges': list(G.edges())}
+                    for rid, room in res.rooms.items():
+                        out['rooms'].append({'id': rid, 'tension': room.metrics.get('room_tension', 0.0)})
+                except Exception:
+                    # Best-effort; fall back to basic fields
+                    logger.debug('Could not fully unpack pipeline result', exc_info=True)
+
+                return out
+
+        except Exception:
+            logger.debug("Pipeline unavailable or failed — falling back to mock", exc_info=True)
+
+        # Fallback mock generation that responds to tension curve
         logger.warning("Using mock dungeon generation - replace with actual pipeline")
-        
-        # Mock generation that responds to tension curve
-        tension_curve = params['tension_curve']
-        num_rooms = params['num_rooms']
-        seed = params['seed']
-        
+        tension_curve = params.get('tension_curve', [0.5] * params.get('num_rooms', 8))
+        num_rooms = int(params.get('num_rooms', len(tension_curve)))
+        seed = int(params.get('seed', 0))
+
         np.random.seed(seed)
-        
-        # Generate actual curve similar to target with some noise
         actual_curve = np.array(tension_curve) + np.random.normal(0, 0.1, num_rooms)
         actual_curve = np.clip(actual_curve, 0.0, 1.0)
-        
+
         return {
             'visual_grid': np.zeros((64, 64), dtype=int),
             'mission_graph': {'nodes': {i: {} for i in range(num_rooms)}, 'edges': []},
-            'rooms': [{'id': i, 'tension': actual_curve[i]} for i in range(num_rooms)],
+            'rooms': [{'id': i, 'tension': float(actual_curve[i])} for i in range(num_rooms)],
             'tension_curve': actual_curve.tolist()
         }
     

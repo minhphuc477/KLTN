@@ -1,0 +1,2 @@
+config,seed,success,solvable,confusion_ratio,confusion_index,path_optimal,tile_prior_kl,graph_edit_distance,generation_time_sec,novelty,reconstruction_error,constraint_valid,room_repair_rate,tiles_repaired,error
+FULL,42,True,True,,1999.0666666666666,0.0,2.5834460006192934,0.34850267379679145,295.94394993782043,0.0972676941816761,0.9602272727272727,0.0,0.375,446.0,

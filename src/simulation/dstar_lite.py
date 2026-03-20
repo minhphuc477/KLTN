@@ -73,6 +73,7 @@ class DStarLiteSolver:
         # Statistics
         self.replans_count = 0
         self.states_updated = 0
+        self.used_fallback = False
         
         # Current path
         self.current_path: List[Tuple[int, int]] = []
@@ -250,6 +251,7 @@ class DStarLiteSolver:
         self.rhs_scores.clear()
         self.open_set.clear()
         self.open_set_hashes.clear()
+        self.used_fallback = False
         
         # Initialize start
         start_hash = hash(start_state)
@@ -260,7 +262,35 @@ class DStarLiteSolver:
         success = self.compute_shortest_path()
         
         if not success:
-            return False, [], len(self.g_scores)
+            # Fallback for correctness on rich Zelda mechanics (keys/doors/blocks):
+            # reuse canonical state-space A* transition logic when incremental
+            # planning fails to converge.
+            try:
+                from .validator import StateSpaceAStar
+                logger.warning("D* Lite primary search failed; falling back to StateSpaceAStar")
+                self.used_fallback = True
+                fallback = StateSpaceAStar(self.env, heuristic_mode=self.heuristic_mode)
+                fallback_success, fallback_path, fallback_nodes = fallback.solve()
+
+                # If locked doors exist but the fallback path ignores them, attempt a
+                # progression-aware fallback that explicitly routes through a locked door.
+                if fallback_success and fallback_path:
+                    if self._has_locked_door() and not self._path_contains_locked_door(fallback_path):
+                        guided = self._plan_via_locked_door(start_state)
+                        if guided is not None:
+                            guided_success, guided_path, guided_nodes = guided
+                            if guided_success and guided_path and len(guided_path) <= len(fallback_path):
+                                logger.info(
+                                    "D* Lite fallback selected door-aware path "
+                                    "(len=%d vs %d)",
+                                    len(guided_path), len(fallback_path)
+                                )
+                                return True, guided_path, max(fallback_nodes, guided_nodes)
+
+                return fallback_success, fallback_path, fallback_nodes
+            except Exception:
+                logger.exception("D* Lite fallback failed")
+                return False, [], len(self.g_scores)
         
         # Extract path
         path = self._extract_path(start_state)
@@ -357,6 +387,128 @@ class DStarLiteSolver:
             path.append(current.position)
         
         return path
+
+    def _has_locked_door(self) -> bool:
+        """Check whether the current map contains any locked door tiles."""
+        locked_id = int(SEMANTIC_PALETTE['DOOR_LOCKED'])
+        for r in range(self.env.height):
+            for c in range(self.env.width):
+                if int(self.env.grid[r, c]) == locked_id:
+                    return True
+        return False
+
+    def _path_contains_locked_door(self, path: List[Tuple[int, int]]) -> bool:
+        """Return True if any position in path is a locked door tile."""
+        locked_id = int(SEMANTIC_PALETTE['DOOR_LOCKED'])
+        for r, c in path:
+            if 0 <= r < self.env.height and 0 <= c < self.env.width:
+                if int(self.env.grid[r, c]) == locked_id:
+                    return True
+        return False
+
+    def _plan_via_locked_door(
+        self,
+        start_state: GameState,
+    ) -> Optional[Tuple[bool, List[Tuple[int, int]], int]]:
+        """
+        Attempt a progression-aware fallback route:
+        start -> locked door -> goal.
+
+        Reaching a locked door requires collecting a key first, so this path
+        exercises key/door state transitions when such routes are not longer
+        than plain shortest paths.
+        """
+        locked_id = int(SEMANTIC_PALETTE['DOOR_LOCKED'])
+        locked_positions: List[Tuple[int, int]] = []
+        for r in range(self.env.height):
+            for c in range(self.env.width):
+                if int(self.env.grid[r, c]) == locked_id:
+                    locked_positions.append((r, c))
+
+        if not locked_positions or self.env.goal_pos is None:
+            return None
+
+        best_path: Optional[List[Tuple[int, int]]] = None
+        best_nodes = 0
+
+        for door_pos in locked_positions:
+            to_door = self._a_star_to_target(start_state, door_pos)
+            if to_door is None:
+                continue
+            path_to_door, state_at_door, nodes_to_door = to_door
+
+            to_goal = self._a_star_to_target(state_at_door, self.env.goal_pos)
+            if to_goal is None:
+                continue
+            path_to_goal, _state_at_goal, nodes_to_goal = to_goal
+
+            combined = path_to_door + path_to_goal[1:]
+            total_nodes = nodes_to_door + nodes_to_goal
+
+            if best_path is None or len(combined) < len(best_path):
+                best_path = combined
+                best_nodes = total_nodes
+
+        if best_path is None:
+            return None
+        return True, best_path, best_nodes
+
+    def _a_star_to_target(
+        self,
+        start_state: GameState,
+        target_pos: Tuple[int, int],
+        max_expansions: int = 200000,
+    ) -> Optional[Tuple[List[Tuple[int, int]], GameState, int]]:
+        """A* helper over full game states to reach a specific position."""
+        if start_state.position == target_pos:
+            return [start_state.position], start_state, 0
+
+        def h(pos: Tuple[int, int]) -> int:
+            return abs(pos[0] - target_pos[0]) + abs(pos[1] - target_pos[1])
+
+        open_heap: List[Tuple[float, float, int, GameState, List[Tuple[int, int]]]] = []
+        counter = 0
+        start_hash = hash(start_state)
+        best_g: Dict[int, float] = {start_hash: 0.0}
+        heapq.heappush(
+            open_heap,
+            (float(h(start_state.position)), 0.0, counter, start_state, [start_state.position]),
+        )
+
+        expansions = 0
+        while open_heap and expansions < max_expansions:
+            _f, g, _cnt, current, path = heapq.heappop(open_heap)
+            current_hash = hash(current)
+            if g > best_g.get(current_hash, float('inf')):
+                continue
+
+            if current.position == target_pos:
+                return path, current, expansions
+
+            expansions += 1
+            # Cardinal actions only for stable fallback behavior.
+            for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                nr = current.position[0] + dr
+                nc = current.position[1] + dc
+                if not (0 <= nr < self.env.height and 0 <= nc < self.env.width):
+                    continue
+
+                target_tile = self.env.grid[nr, nc]
+                can_move, nxt = self.env._try_move_pure(current, (nr, nc), target_tile)
+                if not can_move:
+                    continue
+
+                nxt_hash = hash(nxt)
+                g2 = g + 1.0
+                if g2 >= best_g.get(nxt_hash, float('inf')):
+                    continue
+
+                best_g[nxt_hash] = g2
+                counter += 1
+                f2 = g2 + float(h(nxt.position))
+                heapq.heappush(open_heap, (f2, g2, counter, nxt, path + [nxt.position]))
+
+        return None
     
     def _get_successors(self, state: GameState) -> List[GameState]:
         """Get all valid successor states using proper state transition logic."""

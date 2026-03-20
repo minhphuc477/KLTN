@@ -261,8 +261,8 @@ class GlobalStreamEncoder(nn.Module):
     Uses either torch_geometric GNN or fallback implementation.
     
     Args:
-        node_feature_dim: Dimension of node features (default: 5)
-        edge_feature_dim: Dimension of edge features (default: 3)
+        node_feature_dim: Dimension of node features (default: 6)
+        edge_feature_dim: Dimension of edge features (default: 8)
         hidden_dim: GNN hidden dimension
         output_dim: Output conditioning dimension
         num_layers: Number of GNN layers
@@ -272,7 +272,7 @@ class GlobalStreamEncoder(nn.Module):
     def __init__(
         self,
         node_feature_dim: int = 6,
-        edge_feature_dim: int = 3,
+        edge_feature_dim: int = 8,
         hidden_dim: int = 256,
         output_dim: int = 256,
         num_layers: int = 3,
@@ -282,9 +282,11 @@ class GlobalStreamEncoder(nn.Module):
         super().__init__()
         
         self.node_feature_dim = node_feature_dim
+        self.edge_feature_dim = edge_feature_dim
         self.hidden_dim = hidden_dim
         self.output_dim = output_dim
         self.use_torch_geometric = HAS_TORCH_GEOMETRIC
+        self._warned_shape_mismatches = set()
         
         if HAS_TORCH_GEOMETRIC:
             self._build_torch_geometric_gnn(
@@ -352,6 +354,128 @@ class GlobalStreamEncoder(nn.Module):
             self.layer_norms.append(nn.LayerNorm(hidden_dim))
         
         self.node_output = nn.Linear(hidden_dim, output_dim)
+
+    def _warn_once(self, key: str, message: str) -> None:
+        """Log noisy tensor-shape warnings only once per mismatch signature."""
+        if key in self._warned_shape_mismatches:
+            return
+        self._warned_shape_mismatches.add(key)
+        logger.warning(message)
+
+    def _align_feature_dim(
+        self,
+        features: Tensor,
+        expected_dim: int,
+        feature_name: str,
+    ) -> Tensor:
+        """
+        Align feature width to model expectation using truncate/pad.
+
+        This keeps older datasets (e.g., 5-D node features) and newer schemas
+        (e.g., 6-D) compatible with a single checkpoint/API surface.
+        """
+        if features.dim() != 2:
+            raise ValueError(
+                f"{feature_name} must be 2D [N, D], got shape {tuple(features.shape)}"
+            )
+
+        current_dim = features.shape[1]
+        if current_dim == expected_dim:
+            return features
+
+        self._warn_once(
+            f"{feature_name}:{current_dim}->{expected_dim}",
+            (
+                f"{feature_name} feature dim mismatch: got {current_dim}, "
+                f"expected {expected_dim}. Applying automatic pad/truncate."
+            ),
+        )
+
+        if current_dim > expected_dim:
+            return features[:, :expected_dim]
+
+        pad = torch.zeros(
+            features.shape[0],
+            expected_dim - current_dim,
+            device=features.device,
+            dtype=features.dtype,
+        )
+        return torch.cat([features, pad], dim=-1)
+
+    def _prepare_node_features(self, node_features: Tensor) -> Tensor:
+        """Normalize node features to float [N, node_feature_dim]."""
+        if node_features.dim() == 1:
+            node_features = node_features.unsqueeze(-1)
+        if not torch.is_floating_point(node_features):
+            node_features = node_features.float()
+        return self._align_feature_dim(
+            node_features,
+            expected_dim=self.node_feature_dim,
+            feature_name="node_features",
+        )
+
+    def _prepare_edge_features(
+        self,
+        edge_features: Optional[Tensor],
+        edge_index: Tensor,
+    ) -> Optional[Tensor]:
+        """Normalize edge features to float [E, edge_feature_dim]."""
+        if edge_features is None:
+            return None
+
+        if edge_features.dim() == 1:
+            # Integer labels -> one-hot (preferred), scalar values -> column vector.
+            if edge_features.dtype in (
+                torch.uint8,
+                torch.int8,
+                torch.int16,
+                torch.int32,
+                torch.int64,
+            ):
+                num_classes = max(
+                    self.edge_feature_dim,
+                    int(edge_features.max().item()) + 1 if edge_features.numel() > 0 else 1,
+                )
+                edge_features = F.one_hot(
+                    edge_features.long().clamp(min=0, max=num_classes - 1),
+                    num_classes=num_classes,
+                ).float()
+            else:
+                edge_features = edge_features.unsqueeze(-1)
+        elif edge_features.dim() != 2:
+            raise ValueError(
+                f"edge_features must be 1D labels or 2D [E, D], got {tuple(edge_features.shape)}"
+            )
+
+        if not torch.is_floating_point(edge_features):
+            edge_features = edge_features.float()
+
+        if edge_index.dim() == 2 and edge_index.shape[0] == 2:
+            num_edges = int(edge_index.shape[1])
+            if edge_features.shape[0] != num_edges:
+                self._warn_once(
+                    f"edge_rows:{edge_features.shape[0]}->{num_edges}",
+                    (
+                        f"edge_features edge count mismatch: got {edge_features.shape[0]}, "
+                        f"expected {num_edges}. Applying automatic row align."
+                    ),
+                )
+                if edge_features.shape[0] > num_edges:
+                    edge_features = edge_features[:num_edges]
+                else:
+                    row_pad = torch.zeros(
+                        num_edges - edge_features.shape[0],
+                        edge_features.shape[1],
+                        device=edge_features.device,
+                        dtype=edge_features.dtype,
+                    )
+                    edge_features = torch.cat([edge_features, row_pad], dim=0)
+
+        return self._align_feature_dim(
+            edge_features,
+            expected_dim=self.edge_feature_dim,
+            feature_name="edge_features",
+        )
     
     def forward(
         self,
@@ -376,6 +500,9 @@ class GlobalStreamEncoder(nn.Module):
         Returns:
             Global conditioning vector [B, output_dim] or [N, output_dim]
         """
+        node_features = self._prepare_node_features(node_features)
+        edge_features = self._prepare_edge_features(edge_features, edge_index)
+
         if self.use_torch_geometric:
             h = self._forward_torch_geometric(node_features, edge_index, edge_features)
         else:
@@ -583,6 +710,7 @@ class DualStreamConditionEncoder(nn.Module):
     Args:
         latent_dim: VQ-VAE latent dimension
         node_feature_dim: Graph node feature dimension
+        edge_feature_dim: Graph edge feature dimension
         hidden_dim: Hidden layer dimension
         output_dim: Final conditioning dimension
         num_gnn_layers: Number of GNN layers
@@ -597,7 +725,7 @@ class DualStreamConditionEncoder(nn.Module):
         position = torch.tensor([[2, 3]])  # [B, 2]
         
         # Graph data
-        node_features = ...  # [N, 5]
+        node_features = ...  # [N, D]
         edge_index = ...     # [2, E]
         tpe = ...            # [N, 8]
         current_node = 5
@@ -613,6 +741,7 @@ class DualStreamConditionEncoder(nn.Module):
         self,
         latent_dim: int = 64,
         node_feature_dim: int = 6,
+        edge_feature_dim: int = 8,
         hidden_dim: int = 256,
         output_dim: int = 256,
         num_gnn_layers: int = 3,
@@ -637,6 +766,7 @@ class DualStreamConditionEncoder(nn.Module):
         # Stream B: Global context
         self.global_encoder = GlobalStreamEncoder(
             node_feature_dim=node_feature_dim,
+            edge_feature_dim=edge_feature_dim,
             hidden_dim=hidden_dim,
             output_dim=output_dim,
             num_layers=num_gnn_layers,

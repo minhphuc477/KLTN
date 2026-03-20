@@ -1,0 +1,311 @@
+{
+  "seed": 42,
+  "num_samples": 8,
+  "eval_budget": 256,
+  "output_dir": "results\\priority_research_suite_p1_quick_v2",
+  "all_steps_passed": false,
+  "steps": [
+    {
+      "name": "ablation_fixed_seed",
+      "command": [
+        "F:\\KLTN\\.venv\\Scripts\\python.exe",
+        "scripts/run_ablation_study.py",
+        "--num-samples",
+        "4",
+        "--evolution-population",
+        "12",
+        "--evolution-generations",
+        "12",
+        "--diffusion-steps",
+        "8",
+        "--seed",
+        "42",
+        "--output",
+        "results\\priority_research_suite_p1_quick_v2\\ablation",
+        "--core-only"
+      ],
+      "exit_code": 124,
+      "duration_sec": 600.1109654903412,
+      "output_path": "results\\priority_research_suite_p1_quick_v2\\ablation\\ablation_report.json",
+      "stdout_tail": "",
+      "stderr_tail": "0 - src.generation.grammar - INFO - All validation checks passed\n2026-03-08 20:12:20,141 - src.generation.grammar - INFO - All validation checks passed\n2026-03-08 20:12:20,145 - src.generation.grammar - INFO - AddBossGauntlet: Boss Door 3, Big Key 4 anchored at 2 (return_dist=0)\n2026-03-08 20:12:20,146 - src.generation.grammar - INFO - All validation checks passed\n2026-03-08 20:12:20,146 - src.generation.grammar - INFO - All validation checks passed\n2026-03-08 20:12:20,150 - src.generation.grammar - INFO - AddBossGauntlet: Boss Door 3, Big Key 4 anchored at 2 (return_dist=0)\n2026-03-08 20:12:20,150 - src.generation.grammar - INFO - All validation checks passed\n2026-03-08 20:12:20,151 - src.generation.grammar - INFO - All validation checks passed\n2026-03-08 20:12:20,155 - src.generation.grammar - INFO - AddBossGauntlet: Boss Door 3, Big Key 4 anchored at 2 (return_dist=0)\n2026-03-08 20:12:20,156 - src.generation.grammar - INFO - All validation checks passed\n2026-03-08 20:12:20,156 - src.generation.grammar - INFO - All validation checks passed\n2026-03-08 20:12:20,159 - src.generation.grammar - INFO - AddBossGauntlet: Boss Door 3, Big Key 4 anchored at 2 (return_dist=0)\n2026-03-08 20:12:20,160 - src.generation.grammar - INFO - All validation checks passed\n2026-03-08 20:12:20,160 - src.generation.grammar - INFO - All validation checks passed\n2026-03-08 20:12:20,164 - src.generation.grammar - INFO - AddBossGauntlet: Boss Door 3, Big Key 4 anchored at 2 (return_dist=0)\n2026-03-08 20:12:20,165 - src.generation.grammar - INFO - All validation checks passed\n2026-03-08 20:12:20,165 - src.generation.grammar - INFO - All validation checks passed\n2026-03-08 20:12:20,170 - src.generation.grammar - INFO - AddBossGauntlet: Boss Door 3, Big Key 4 anchored at 2 (return_dist=0)\n2026-03-08 20:12:20,170 - src.generation.grammar - INFO - All validation checks passed\n2026-03-08 20:12:20,170 - src.generation.grammar - INFO - All validation checks passed\n\n[timeout] step exceeded timeout_sec"
+    },
+    {
+      "name": "rule_weight_ab_test",
+      "command": [
+        "F:\\KLTN\\.venv\\Scripts\\python.exe",
+        "scripts/run_rule_weight_ab_test.py",
+        "--num-samples",
+        "4",
+        "--seed",
+        "42",
+        "--output",
+        "results\\priority_research_suite_p1_quick_v2\\rule_weight_ab"
+      ],
+      "exit_code": 0,
+      "duration_sec": 303.26970863342285,
+      "output_path": "results\\priority_research_suite_p1_quick_v2\\rule_weight_ab\\rule_weight_ab_report.json",
+      "stdout_tail": "",
+      "stderr_tail": "2026-03-08 20:12:27,742 - __main__ - INFO - Seed 42\n2026-03-08 20:13:48,849 - __main__ - INFO - Seed 43\n2026-03-08 20:15:03,026 - __main__ - INFO - Seed 44\n2026-03-08 20:16:08,404 - __main__ - INFO - Seed 45\n2026-03-08 20:17:22,551 - __main__ - INFO - Saved A/B outputs to results\\priority_research_suite_p1_quick_v2\\rule_weight_ab\n"
+    }
+  ],
+  "artifacts": {
+    "rule_weight_ab_test": {
+      "control_name": "CONTROL",
+      "treatment_name": "TREATMENT",
+      "seeds": [
+        42,
+        43,
+        44,
+        45
+      ],
+      "descriptor_targets": {
+        "linearity": 0.43243322417458485,
+        "leniency": 0.4746762496762497,
+        "progression_complexity": 0.5056329747493025,
+        "topology_complexity": 0.3938431288135679,
+        "path_length": 9.944444444444445,
+        "num_nodes": 28.5
+      },
+      "control_weights": {},
+      "treatment_weights": {},
+      "calibration": {
+        "enabled": false,
+        "history": []
+      },
+      "summary": [
+        {
+          "arm": "CONTROL",
+          "n": 4,
+          "overall_completeness": 1.0,
+          "constraint_valid": 1.0,
+          "path_exists": 1.0,
+          "linearity": 0.27827287654873856,
+          "leniency": 1.0,
+          "progression_complexity": 0.40993281728751285,
+          "topology_complexity": 0.35243777625752976,
+          "cycle_density": 0.2777056277056277,
+          "shortcut_density": 0.0,
+          "gate_depth_ratio": 0.2678571428571428,
+          "path_depth_ratio": 0.2504675241744207,
+          "directionality_gap": 0.0,
+          "repair_rate": 0.0,
+          "total_repairs": 0.0,
+          "generation_constraint_rejections": 0.0,
+          "generation_time_sec": 37.30797624588013,
+          "descriptor_gap": 0.17995148210347045
+        },
+        {
+          "arm": "TREATMENT",
+          "n": 4,
+          "overall_completeness": 1.0,
+          "constraint_valid": 1.0,
+          "path_exists": 1.0,
+          "linearity": 0.27827287654873856,
+          "leniency": 1.0,
+          "progression_complexity": 0.40993281728751285,
+          "topology_complexity": 0.35243777625752976,
+          "cycle_density": 0.2777056277056277,
+          "shortcut_density": 0.0,
+          "gate_depth_ratio": 0.2678571428571428,
+          "path_depth_ratio": 0.2504675241744207,
+          "directionality_gap": 0.0,
+          "repair_rate": 0.0,
+          "total_repairs": 0.0,
+          "generation_constraint_rejections": 0.0,
+          "generation_time_sec": 36.362278521060944,
+          "descriptor_gap": 0.17995148210347045
+        }
+      ],
+      "significance": [
+        {
+          "metric": "overall_completeness",
+          "n_pairs": 4,
+          "delta_mean_treatment_minus_control": 0.0,
+          "delta_ci_low": 0.0,
+          "delta_ci_high": 0.0,
+          "p_value": 1.0,
+          "effect_size_d": 0.0,
+          "p_value_bh_fdr": 1.0,
+          "significant_fdr_0_05": false
+        },
+        {
+          "metric": "constraint_valid",
+          "n_pairs": 4,
+          "delta_mean_treatment_minus_control": 0.0,
+          "delta_ci_low": 0.0,
+          "delta_ci_high": 0.0,
+          "p_value": 1.0,
+          "effect_size_d": 0.0,
+          "p_value_bh_fdr": 1.0,
+          "significant_fdr_0_05": false
+        },
+        {
+          "metric": "path_exists",
+          "n_pairs": 4,
+          "delta_mean_treatment_minus_control": 0.0,
+          "delta_ci_low": 0.0,
+          "delta_ci_high": 0.0,
+          "p_value": 1.0,
+          "effect_size_d": 0.0,
+          "p_value_bh_fdr": 1.0,
+          "significant_fdr_0_05": false
+        },
+        {
+          "metric": "linearity",
+          "n_pairs": 4,
+          "delta_mean_treatment_minus_control": 0.0,
+          "delta_ci_low": 0.0,
+          "delta_ci_high": 0.0,
+          "p_value": 1.0,
+          "effect_size_d": 0.0,
+          "p_value_bh_fdr": 1.0,
+          "significant_fdr_0_05": false
+        },
+        {
+          "metric": "leniency",
+          "n_pairs": 4,
+          "delta_mean_treatment_minus_control": 0.0,
+          "delta_ci_low": 0.0,
+          "delta_ci_high": 0.0,
+          "p_value": 1.0,
+          "effect_size_d": 0.0,
+          "p_value_bh_fdr": 1.0,
+          "significant_fdr_0_05": false
+        },
+        {
+          "metric": "progression_complexity",
+          "n_pairs": 4,
+          "delta_mean_treatment_minus_control": 0.0,
+          "delta_ci_low": 0.0,
+          "delta_ci_high": 0.0,
+          "p_value": 1.0,
+          "effect_size_d": 0.0,
+          "p_value_bh_fdr": 1.0,
+          "significant_fdr_0_05": false
+        },
+        {
+          "metric": "topology_complexity",
+          "n_pairs": 4,
+          "delta_mean_treatment_minus_control": 0.0,
+          "delta_ci_low": 0.0,
+          "delta_ci_high": 0.0,
+          "p_value": 1.0,
+          "effect_size_d": 0.0,
+          "p_value_bh_fdr": 1.0,
+          "significant_fdr_0_05": false
+        },
+        {
+          "metric": "cycle_density",
+          "n_pairs": 4,
+          "delta_mean_treatment_minus_control": 0.0,
+          "delta_ci_low": 0.0,
+          "delta_ci_high": 0.0,
+          "p_value": 1.0,
+          "effect_size_d": 0.0,
+          "p_value_bh_fdr": 1.0,
+          "significant_fdr_0_05": false
+        },
+        {
+          "metric": "shortcut_density",
+          "n_pairs": 4,
+          "delta_mean_treatment_minus_control": 0.0,
+          "delta_ci_low": 0.0,
+          "delta_ci_high": 0.0,
+          "p_value": 1.0,
+          "effect_size_d": 0.0,
+          "p_value_bh_fdr": 1.0,
+          "significant_fdr_0_05": false
+        },
+        {
+          "metric": "gate_depth_ratio",
+          "n_pairs": 4,
+          "delta_mean_treatment_minus_control": 0.0,
+          "delta_ci_low": 0.0,
+          "delta_ci_high": 0.0,
+          "p_value": 1.0,
+          "effect_size_d": 0.0,
+          "p_value_bh_fdr": 1.0,
+          "significant_fdr_0_05": false
+        },
+        {
+          "metric": "path_depth_ratio",
+          "n_pairs": 4,
+          "delta_mean_treatment_minus_control": 0.0,
+          "delta_ci_low": 0.0,
+          "delta_ci_high": 0.0,
+          "p_value": 1.0,
+          "effect_size_d": 0.0,
+          "p_value_bh_fdr": 1.0,
+          "significant_fdr_0_05": false
+        },
+        {
+          "metric": "directionality_gap",
+          "n_pairs": 4,
+          "delta_mean_treatment_minus_control": 0.0,
+          "delta_ci_low": 0.0,
+          "delta_ci_high": 0.0,
+          "p_value": 1.0,
+          "effect_size_d": 0.0,
+          "p_value_bh_fdr": 1.0,
+          "significant_fdr_0_05": false
+        },
+        {
+          "metric": "repair_rate",
+          "n_pairs": 4,
+          "delta_mean_treatment_minus_control": 0.0,
+          "delta_ci_low": 0.0,
+          "delta_ci_high": 0.0,
+          "p_value": 1.0,
+          "effect_size_d": 0.0,
+          "p_value_bh_fdr": 1.0,
+          "significant_fdr_0_05": false
+        },
+        {
+          "metric": "total_repairs",
+          "n_pairs": 4,
+          "delta_mean_treatment_minus_control": 0.0,
+          "delta_ci_low": 0.0,
+          "delta_ci_high": 0.0,
+          "p_value": 1.0,
+          "effect_size_d": 0.0,
+          "p_value_bh_fdr": 1.0,
+          "significant_fdr_0_05": false
+        },
+        {
+          "metric": "generation_constraint_rejections",
+          "n_pairs": 4,
+          "delta_mean_treatment_minus_control": 0.0,
+          "delta_ci_low": 0.0,
+          "delta_ci_high": 0.0,
+          "p_value": 1.0,
+          "effect_size_d": 0.0,
+          "p_value_bh_fdr": 1.0,
+          "significant_fdr_0_05": false
+        },
+        {
+          "metric": "generation_time_sec",
+          "n_pairs": 4,
+          "delta_mean_treatment_minus_control": -0.9456977248191833,
+          "delta_ci_low": -2.309258997440338,
+          "delta_ci_high": 0.18098866939544678,
+          "p_value": 0.4966258435391152,
+          "effect_size_d": -0.7046051077090266,
+          "p_value_bh_fdr": 1.0,
+          "significant_fdr_0_05": false
+        },
+        {
+          "metric": "descriptor_gap",
+          "n_pairs": 4,
+          "delta_mean_treatment_minus_control": 0.0,
+          "delta_ci_low": 0.0,
+          "delta_ci_high": 0.0,
+          "p_value": 1.0,
+          "effect_size_d": 0.0,
+          "p_value_bh_fdr": 1.0,
+          "significant_fdr_0_05": false
+        }
+      ]
+    }
+  }
+}

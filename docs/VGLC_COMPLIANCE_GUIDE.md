@@ -1,9 +1,5 @@
 # VGLC Compliance Guide
 
-**Version**: 1.0  
-**Date**: February 13, 2026  
-**Status**: Complete  
-
 ---
 
 ## Table of Contents
@@ -98,7 +94,7 @@ print(f"Room valid: {valid}")
 ### 2.3 Running the Demo
 
 ```bash
-cd c:\\Users\\MPhuc\\Desktop\\KLTN
+cd /path/to/KLTN
 python examples/vglc_compliance_demo.py
 ```
 
@@ -542,7 +538,8 @@ G.add_edge(4, 5)          # Connect!
 - **Constants**: [src/constants/vglc_constants.py](../src/constants/vglc_constants.py)
 - **Tests**: [tests/test_vglc_compliance.py](../tests/test_vglc_compliance.py)
 - **Demo**: [examples/vglc_compliance_demo.py](../examples/vglc_compliance_demo.py)
-- **Research**: [VGLC_DATA_RESEARCH.md](./VGLC_DATA_RESEARCH.md)
+- **Documentation Index**: [INDEX.md](./INDEX.md)
+- **Architecture & Benchmarks**: [SOTA_COMPARISON_AND_BENCHMARKS.md](./SOTA_COMPARISON_AND_BENCHMARKS.md)
 
 ---
 

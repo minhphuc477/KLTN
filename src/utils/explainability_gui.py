@@ -301,9 +301,17 @@ class ExplainabilityDebugOverlay:
         
         Tiles with low confidence are highlighted in red.
         """
-        # This would render tile-level confidence from LogicNet
-        # Implementation depends on tile rendering system
-        pass
+        # Tile confidence traces do not include room->screen mapping in this
+        # overlay module, so render an explicit status banner instead of
+        # silently doing nothing.
+        font = pygame.font.Font(None, 16)
+        msg = "Confidence overlay: awaiting room/tile screen mapping."
+        text_surf = font.render(msg, True, (255, 220, 120))
+        panel = pygame.Surface((text_surf.get_width() + 12, text_surf.get_height() + 8))
+        panel.fill((25, 25, 25))
+        panel.set_alpha(int(255 * min(max(self.config.overlay_alpha, 0.25), 0.95)))
+        panel.blit(text_surf, (6, 4))
+        screen.blit(panel, (8, max(8, screen.get_height() - panel.get_height() - 8)))
     
     def handle_click(self, mouse_pos: Tuple[int, int], graph_layout: Dict[int, Tuple[int, int]]):
         """Handle click event to select genome."""

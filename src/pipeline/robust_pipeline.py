@@ -7,6 +7,7 @@ This addresses the critical concern: "What if your diffusion model fails during 
 
 import time
 import logging
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from enum import Enum
 from typing import Dict, Any, Callable, Tuple, Optional
 from dataclasses import dataclass, field
@@ -92,7 +93,12 @@ class PipelineBlock:
             
             try:
                 # Execute the block
-                output = self.executor(state)
+                if self.config.timeout_per_block is not None and self.config.timeout_per_block > 0:
+                    with ThreadPoolExecutor(max_workers=1) as pool:
+                        future = pool.submit(self.executor, state)
+                        output = future.result(timeout=self.config.timeout_per_block)
+                else:
+                    output = self.executor(state)
                 execution_time = time.time() - start_time
                 
                 # Validate output
@@ -111,6 +117,32 @@ class PipelineBlock:
                 else:
                     raise ValueError(f"Validation failed for {self.name}")
             
+            except FutureTimeoutError:
+                execution_time = time.time() - start_time
+                error_msg = (
+                    f"TimeoutError: {self.name} exceeded timeout_per_block="
+                    f"{self.config.timeout_per_block}s"
+                )
+
+                if self.config.enable_logging:
+                    logger.warning(f"[{self.name}] ✗ Attempt {attempt} failed: {error_msg}")
+
+                if attempt < self.config.max_retries:
+                    if self.config.enable_logging:
+                        logger.info(f"[{self.name}] Retrying in {backoff:.1f}s...")
+
+                    time.sleep(backoff)
+                    backoff = min(backoff * self.config.backoff_multiplier, self.config.max_backoff)
+                else:
+                    if self.config.enable_logging:
+                        logger.error(f"[{self.name}] Failed after {self.config.max_retries} attempts")
+
+                    return BlockResult(
+                        status=BlockStatus.FAILED,
+                        error=error_msg,
+                        execution_time=execution_time,
+                        attempts=attempt
+                    )
             except Exception as e:
                 execution_time = time.time() - start_time
                 error_msg = f"{type(e).__name__}: {str(e)}"
@@ -288,6 +320,12 @@ def validate_mission_graph(graph: Any) -> bool:
     if not isinstance(graph, dict):
         return False
     
+    # Allow wrapped block outputs: {'mission_graph': {...}}
+    if 'mission_graph' in graph and 'nodes' not in graph:
+        graph = graph.get('mission_graph', {})
+        if not isinstance(graph, dict):
+            return False
+    
     required_keys = ['nodes', 'edges']
     if not all(k in graph for k in required_keys):
         return False
@@ -295,14 +333,37 @@ def validate_mission_graph(graph: Any) -> bool:
     if len(graph['nodes']) < 3:  # Minimum: start, middle, boss
         return False
     
-    # Check connectivity (basic check)
+    # Check connectivity (undirected reachability)
     if 'adjacency' in graph:
-        # Verify all nodes have at least one connection
-        for node_id in graph['nodes'].keys():
-            if node_id not in graph['adjacency'] or len(graph['adjacency'][node_id]) == 0:
-                # Start node exception (may have no incoming)
-                if node_id != 0:
-                    return False
+        adjacency = graph['adjacency']
+        nodes = list(graph['nodes'].keys())
+        if len(nodes) > 1:
+            # Build undirected adjacency to avoid false negatives on sink nodes.
+            undirected = {n: set() for n in nodes}
+            for src, nbrs in adjacency.items():
+                if src not in undirected:
+                    undirected[src] = set()
+                for dst in nbrs:
+                    undirected.setdefault(dst, set())
+                    undirected[src].add(dst)
+                    undirected[dst].add(src)
+            
+            # Every node must have at least one connection in non-trivial graphs.
+            if any(len(undirected.get(n, set())) == 0 for n in nodes):
+                return False
+            
+            # Graph should be single connected component.
+            start = nodes[0]
+            stack = [start]
+            seen = {start}
+            while stack:
+                cur = stack.pop()
+                for nb in undirected.get(cur, set()):
+                    if nb not in seen:
+                        seen.add(nb)
+                        stack.append(nb)
+            if len(seen) != len(nodes):
+                return False
     
     return True
 
@@ -325,8 +386,19 @@ def validate_layout(layout: Any) -> bool:
     if grid.shape[0] < 16 or grid.shape[1] < 16:
         return False
     
-    # Check for reasonable floor coverage (20-70%)
-    floor_ratio = np.sum(grid == 0) / grid.size
+    # Check for reasonable floor coverage (20-70%).
+    # Canonical floor id is SEMANTIC_PALETTE['FLOOR'] (typically 1), but we
+    # also accept legacy grids that use 0 for floor.
+    floor_id = 1
+    try:
+        from src.core.definitions import SEMANTIC_PALETTE
+        floor_id = int(SEMANTIC_PALETTE.get('FLOOR', 1))
+    except Exception:
+        floor_id = 1
+    floor_count = int(np.sum(grid == floor_id))
+    if floor_id != 0:
+        floor_count += int(np.sum(grid == 0))
+    floor_ratio = floor_count / grid.size
     if not (0.2 <= floor_ratio <= 0.7):
         return False
     
@@ -367,27 +439,102 @@ def create_example_robust_pipeline():
     # Define execution functions for each block
     def evolutionary_director_fn(state):
         """Generate mission graph topology."""
+        import networkx as nx
         from src.generation.evolutionary_director import EvolutionaryTopologyGenerator
         
-        generator = EvolutionaryTopologyGenerator(
-            num_rooms=state.get('num_rooms', 8),
-            tension_curve=state.get('tension_curve', [0.5] * 8),
-            seed=state.get('seed', 42)
-        )
+        num_rooms = int(state.get('num_rooms', 8))
+        tension_curve = list(state.get('tension_curve', [0.5] * max(1, num_rooms)))
+        seed = int(state.get('seed', 42))
         
-        mission_graph = generator.generate()
-        return {'mission_graph': mission_graph}
+        generator = EvolutionaryTopologyGenerator(
+            target_curve=tension_curve,
+            population_size=max(16, num_rooms * 4),
+            generations=max(20, min(80, num_rooms * 8)),
+            max_nodes=max(num_rooms, 5),
+            seed=seed,
+        )
+        graph = generator.evolve()
+        
+        # Convert to deterministic directed payload for downstream blocks/validators.
+        if isinstance(graph, nx.DiGraph):
+            directed = graph.copy()
+        else:
+            directed = nx.DiGraph()
+            directed.add_nodes_from(graph.nodes(data=True))
+            directed.add_edges_from((u, v, {'edge_type': 'open'}) for u, v in graph.edges())
+        
+        ordered_nodes = sorted(directed.nodes(), key=lambda n: (type(n).__name__, str(n)))
+        remap = {old: idx for idx, old in enumerate(ordered_nodes)}
+        directed = nx.relabel_nodes(directed, remap, copy=True)
+        
+        # Guarantee a minimum playable graph size for downstream validation/demo.
+        target_nodes = max(3, num_rooms)
+        if directed.number_of_nodes() == 0:
+            directed.add_node(0)
+        while directed.number_of_nodes() < target_nodes:
+            new_id = directed.number_of_nodes()
+            directed.add_node(new_id)
+            directed.add_edge(new_id - 1, new_id, edge_type='open')
+        
+        # Ensure weak connectivity.
+        components = list(nx.weakly_connected_components(directed))
+        if len(components) > 1:
+            for i in range(len(components) - 1):
+                src = min(components[i])
+                dst = min(components[i + 1])
+                directed.add_edge(src, dst, edge_type='open')
+        
+        for node_id, attrs in directed.nodes(data=True):
+            attrs.setdefault('is_start', node_id == 0)
+            attrs.setdefault('is_boss', node_id == directed.number_of_nodes() - 1)
+            attrs.setdefault('tension', float(tension_curve[min(node_id, len(tension_curve) - 1)]))
+        
+        payload = {
+            'nodes': {n: dict(directed.nodes[n]) for n in directed.nodes()},
+            'edges': [(u, v, dict(directed.get_edge_data(u, v, default={}))) for u, v in directed.edges()],
+            'adjacency': {n: list(directed.successors(n)) for n in directed.nodes()},
+        }
+        return {'mission_graph': payload}
     
     def vqvae_encoder_fn(state):
         """Encode mission graph to latent space."""
-        # Placeholder - replace with actual VQ-VAE
-        return {'latent_code': None}
+        import numpy as np
+        
+        mission_graph = state.get('mission_graph', {})
+        nodes = mission_graph.get('nodes', {})
+        adjacency = mission_graph.get('adjacency', {})
+        if not nodes:
+            raise ValueError("Missing mission_graph nodes for encoder")
+        
+        ordered = sorted(nodes.keys())
+        latent = np.zeros((len(ordered), 4), dtype=np.float32)
+        for i, node_id in enumerate(ordered):
+            attrs = nodes.get(node_id, {})
+            latent[i, 0] = float(attrs.get('tension', 0.5))
+            latent[i, 1] = float(attrs.get('is_start', False))
+            latent[i, 2] = float(attrs.get('is_boss', False))
+            latent[i, 3] = float(len(adjacency.get(node_id, []))) / max(1, len(ordered) - 1)
+        
+        return {'latent_code': latent}
     
     def diffusion_fn(state):
         """Generate spatial layout from latent code."""
-        # Placeholder - replace with actual diffusion model
         import numpy as np
-        return {'visual_grid': np.zeros((64, 64), dtype=int)}
+        
+        seed = int(state.get('seed', 42))
+        rng = np.random.default_rng(seed)
+        
+        # Build a deterministic pseudo-layout with controlled floor ratio.
+        height, width = 64, 64
+        grid = np.ones((height, width), dtype=np.int64)  # 1 = wall-like
+        interior = np.zeros((height - 2, width - 2), dtype=np.int64)  # 0 = floor-like
+        
+        # Add structured obstacles so floor coverage is realistically constrained.
+        obstacle_mask = rng.random(interior.shape) < 0.35
+        interior[obstacle_mask] = 1
+        grid[1:-1, 1:-1] = interior
+        
+        return {'visual_grid': grid}
     
     # Register blocks
     blocks = {

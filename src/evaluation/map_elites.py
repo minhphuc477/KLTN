@@ -36,6 +36,8 @@ import random
 import numpy as np
 import networkx as nx
 
+from src.core.definitions import parse_edge_type_tokens, parse_node_label_tokens
+
 logger = logging.getLogger(__name__)
 
 
@@ -85,6 +87,29 @@ class FeatureExtractor:
         raise NotImplementedError
 
 
+def _node_tokens(data: Dict[str, Any]) -> set:
+    """Normalize node descriptors across labels and explicit attrs."""
+    tokens = set(parse_node_label_tokens(str(data.get('label', '') or '')))
+    node_type = str(data.get('type', '') or '').strip().lower()
+    if node_type:
+        tokens.add(node_type)
+    if data.get('is_start'):
+        tokens.update({'s', 'start'})
+    if data.get('is_triforce') or data.get('is_goal'):
+        tokens.update({'t', 'goal', 'triforce'})
+    if data.get('is_boss'):
+        tokens.update({'b', 'boss'})
+    return tokens
+
+
+def _edge_tokens(data: Dict[str, Any]) -> List[str]:
+    """Normalize edge constraints from compact and canonical forms."""
+    return parse_edge_type_tokens(
+        label=str(data.get('label', '') or ''),
+        edge_type=str(data.get('edge_type', data.get('type', '')) or ''),
+    )
+
+
 class LinearityLeniencyExtractor(FeatureExtractor):
     """
     Extract Linearity and Leniency features.
@@ -123,10 +148,10 @@ class LinearityLeniencyExtractor(FeatureExtractor):
         start = None
         goal = None
         for node, data in graph.nodes(data=True):
-            label = data.get('label', '')
-            if 's' in label.split(','):
+            tokens = _node_tokens(data)
+            if 's' in tokens or 'start' in tokens:
                 start = node
-            if 't' in label.split(','):
+            if 't' in tokens or 'goal' in tokens or 'triforce' in tokens:
                 goal = node
         
         if start is None or goal is None:
@@ -164,13 +189,14 @@ class LinearityLeniencyExtractor(FeatureExtractor):
         num_locks = 0
         
         for node, data in graph.nodes(data=True):
-            label = data.get('label', '')
-            if 'k' in label.split(','):
+            tokens = _node_tokens(data)
+            # Count only small keys toward lock leniency.
+            if 'k' in tokens or ('key' in tokens and 'boss_key' not in tokens):
                 num_keys += 1
         
-        for u, v, data in graph.edges(data=True):
-            edge_type = data.get('edge_type', data.get('label', ''))
-            if edge_type in ('key_locked', 'k'):
+        for _, _, data in graph.edges(data=True):
+            constraints = set(_edge_tokens(data))
+            if 'key_locked' in constraints or 'locked' in constraints:
                 num_locks += 1
         
         # Leniency: keys available vs keys needed
@@ -225,7 +251,10 @@ class DensityDifficultyExtractor(FeatureExtractor):
         # Lock count factor
         num_locks = sum(
             1 for _, _, d in graph.edges(data=True)
-            if d.get('edge_type', d.get('label', '')) in ('key_locked', 'k', 'boss_locked', 'K')
+            if any(
+                t in {'key_locked', 'locked', 'boss_locked'}
+                for t in _edge_tokens(d)
+            )
         )
         lock_factor = min(1.0, num_locks / 5.0)
         factors.append(lock_factor)
@@ -233,7 +262,7 @@ class DensityDifficultyExtractor(FeatureExtractor):
         # Enemy count factor
         num_enemies = sum(
             1 for _, d in graph.nodes(data=True)
-            if 'e' in d.get('label', '').split(',')
+            if ('e' in _node_tokens(d) or 'enemy' in _node_tokens(d) or 'boss' in _node_tokens(d))
         )
         enemy_factor = min(1.0, num_enemies / 10.0)
         factors.append(enemy_factor)
@@ -289,10 +318,15 @@ class EliteArchive:
         cell = []
         for i, f in enumerate(features):
             f_min, f_max = self.feature_ranges[i]
-            # Normalize to [0, 1]
-            normalized = (f - f_min) / (f_max - f_min + 1e-8)
-            # Discretize to [0, cells_per_dim - 1]
-            cell_idx = int(np.clip(normalized * self.cells_per_dim, 0, self.cells_per_dim - 1))
+            span = float(f_max - f_min)
+            if span <= 0.0:
+                normalized = 0.0
+            else:
+                normalized = (float(f) - float(f_min)) / span
+            normalized = float(np.clip(normalized, 0.0, 1.0))
+
+            # Map [0,1] into integer bins [0, cells_per_dim-1] deterministically.
+            cell_idx = min(int(normalized * self.cells_per_dim), self.cells_per_dim - 1)
             cell.append(cell_idx)
         return tuple(cell)
     
@@ -715,10 +749,12 @@ class CVTEliteArchive:
         feature_dims: int = 2,
         feature_ranges: Optional[List[Tuple[float, float]]] = None,
         num_cvt_samples: int = 10000,
+        seed: Optional[int] = None,
     ):
         self.num_cells = num_cells
         self.feature_dims = feature_dims
         self.feature_ranges = feature_ranges or [(0.0, 1.0)] * feature_dims
+        self.rng = np.random.default_rng(seed)
         
         # Compute CVT centroids via k-means
         self.centroids = self._compute_cvt_centroids(num_cvt_samples)
@@ -740,7 +776,7 @@ class CVTEliteArchive:
         # Generate uniform samples in feature space
         low = np.array([r[0] for r in self.feature_ranges])
         high = np.array([r[1] for r in self.feature_ranges])
-        samples = np.random.uniform(low=low, high=high, size=(num_samples, self.feature_dims))
+        samples = self.rng.uniform(low=low, high=high, size=(num_samples, self.feature_dims))
         
         try:
             from scipy.cluster.vq import kmeans

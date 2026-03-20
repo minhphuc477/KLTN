@@ -1,0 +1,84 @@
+{
+  "seed": 42,
+  "population_size": 10,
+  "generations": 6,
+  "genome_length": 12,
+  "max_nodes": 16,
+  "best_fitness": 0.6907117024989222,
+  "best_genome": [
+    12,
+    9,
+    11,
+    3,
+    4,
+    4,
+    25,
+    22,
+    4,
+    12,
+    22,
+    2
+  ],
+  "rule_trace_available": false,
+  "marginal_delta_by_index": {
+    "0": 0.3266540639961791,
+    "2": 0.3830358886549139,
+    "3": 0.5993222240325513,
+    "4": 0.38455970840880077,
+    "5": 0.381931751241727,
+    "9": 0.32574954465909434,
+    "10": 0.1495452359818915,
+    "11": 0.15828037695834063
+  },
+  "marginal_delta_by_rule": {
+    "AddTeleport": 0.08636536016966212,
+    "CreateHub": 0.2774367142135517,
+    "Branch": 0.30630522385574566,
+    "AddHazardGate": 0.43311331335752423,
+    "InsertChallenge_PUZZLE": 0.11229401238388514
+  },
+  "top_helpful_rules": [
+    {
+      "rule": "AddHazardGate",
+      "avg_delta": 0.43311331335752423
+    },
+    {
+      "rule": "Branch",
+      "avg_delta": 0.30630522385574566
+    },
+    {
+      "rule": "CreateHub",
+      "avg_delta": 0.2774367142135517
+    },
+    {
+      "rule": "InsertChallenge_PUZZLE",
+      "avg_delta": 0.11229401238388514
+    },
+    {
+      "rule": "AddTeleport",
+      "avg_delta": 0.08636536016966212
+    }
+  ],
+  "top_harmful_rules": [
+    {
+      "rule": "AddTeleport",
+      "avg_delta": 0.08636536016966212
+    },
+    {
+      "rule": "InsertChallenge_PUZZLE",
+      "avg_delta": 0.11229401238388514
+    },
+    {
+      "rule": "CreateHub",
+      "avg_delta": 0.2774367142135517
+    },
+    {
+      "rule": "Branch",
+      "avg_delta": 0.30630522385574566
+    },
+    {
+      "rule": "AddHazardGate",
+      "avg_delta": 0.43311331335752423
+    }
+  ]
+}

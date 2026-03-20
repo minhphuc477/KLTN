@@ -5,7 +5,7 @@ Can be used by main GUI process to run grid algorithms in separate processes.
 import time
 import numpy as np
 from typing import Tuple, List
-from simulation.validator import SEMANTIC_PALETTE
+from src.simulation.validator import SEMANTIC_PALETTE
 from heapq import heappush, heappop
 
 FLOOR = SEMANTIC_PALETTE['FLOOR']
@@ -109,7 +109,7 @@ def run_grid_algorithm(grid_list: List[List[int]], start: Tuple[int,int], goal: 
         iters = 0
         while heap and iters < max_iter:
             iters += 1
-            f, g, _c, pos, path = heappop(heap)
+            _priority, g, _c, pos, path = heappop(heap)
             nodes += 1
             if pos == goal:
                 return {'success': True, 'path': path, 'nodes': nodes, 'time_ms': (time.time()-t0)*1000}
@@ -164,7 +164,8 @@ def run_grid_algorithm(grid_list: List[List[int]], start: Tuple[int,int], goal: 
 
 # CLI support for subprocess invocation
 if __name__ == '__main__':
-    import argparse, json, sys
+    import argparse
+    import json
     parser = argparse.ArgumentParser()
     parser.add_argument('--grid-file', help='JSON file with grid as list of lists')
     parser.add_argument('--alg', type=int, default=0)
@@ -172,10 +173,12 @@ if __name__ == '__main__':
     parser.add_argument('--goal', help='r,c')
     parser.add_argument('--out', help='output JSON file', required=False)
     args = parser.parse_args()
-    grid = json.load(open(args.grid_file, 'r'))
-    start = tuple(map(int, args.start.split(',')))
-    goal = tuple(map(int, args.goal.split(',')))
-    res = run_grid_algorithm(grid, start, goal, args.alg)
+    with open(args.grid_file, 'r', encoding='utf-8') as handle:
+        grid_data = json.load(handle)
+    start_pos = tuple(map(int, args.start.split(',')))
+    goal_pos = tuple(map(int, args.goal.split(',')))
+    res = run_grid_algorithm(grid_data, start_pos, goal_pos, args.alg)
     out = args.out or 'parallel_result.json'
-    json.dump(res, open(out, 'w'))
+    with open(out, 'w', encoding='utf-8') as handle:
+        json.dump(res, handle)
     print(out)

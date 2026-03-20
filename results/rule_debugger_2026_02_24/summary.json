@@ -1,0 +1,28 @@
+{
+  "seed": 42,
+  "rule_space": "full",
+  "genome": [
+    13,
+    24,
+    7,
+    16,
+    27,
+    9,
+    17,
+    17,
+    22,
+    1,
+    2,
+    30,
+    18,
+    4
+  ],
+  "trace_steps": 14,
+  "final_nodes": 15,
+  "final_edges": 14,
+  "replay_nodes": 15,
+  "replay_edges": 14,
+  "signature_original": "46861d6bac244a4009578d9a334386f25a4ee862",
+  "signature_replay": "46861d6bac244a4009578d9a334386f25a4ee862",
+  "deterministic_replay_match": true
+}

@@ -1,0 +1,3 @@
+arm,n,overall_completeness,constraint_valid,path_exists,linearity,leniency,progression_complexity,topology_complexity,cycle_density,shortcut_density,gate_depth_ratio,path_depth_ratio,directionality_gap,repair_rate,total_repairs,generation_constraint_rejections,generation_time_sec,descriptor_gap
+CONTROL,4,1.0,1.0,1.0,0.5694444444444444,0.5625,0.45119780844155843,0.3220801767676768,0.2583333333333333,0.0,0.13392857142857142,0.5202020202020201,0.0,0.0,0.0,0.75,6.59419721364975,0.134547848000993
+TREATMENT,4,1.0,1.0,1.0,0.5694444444444444,0.5625,0.45119780844155843,0.3220801767676768,0.2583333333333333,0.0,0.13392857142857142,0.5202020202020201,0.0,0.0,0.0,0.75,5.660069584846497,0.134547848000993

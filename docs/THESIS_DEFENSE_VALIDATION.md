@@ -1,10 +1,14 @@
 # THESIS DEFENSE VALIDATION DOCUMENTATION
 
 **Project**: Neural-Symbolic Dungeon Generation (H-MOLQD Architecture)  
-**Author**: Student (PhD Candidate)  
 **Purpose**: Evidence compilation for thesis defense  
-**Date**: 2024  
-**Status**: Defense-Ready
+**Date**: March 2026  
+**Status**: Maintained (evidence document)
+
+> Historical snapshot note: This document preserves defense-oriented evidence and scripts context.
+> For current architecture and benchmarking truth, prefer `docs/INDEX.md`,
+> `docs/BLOCK_BY_BLOCK_ARCHITECTURE_AND_IMPLEMENTATION_AUDIT.md`, and
+> `docs/SOTA_COMPARISON_AND_BENCHMARKS.md`.
 
 ---
 
@@ -29,10 +33,10 @@ This document provides comprehensive evidence addressing all anticipated thesis 
 | 5 | Uncontrollable output (ignores user input) | `scripts/test_controllability.py` | Pearson r = 0.73 (target vs actual) | "Controllability test proves r > 0.7 = responsive system" |
 | 6 | Mode collapse (generates same dungeons) | `src/simulation/map_elites.py` (diversity metrics) | Diversity score = 0.42 (target >0.35) | "MAP-Elites diversity analysis shows 42% behavioral variance" |
 | 7 | Visual seams (room stitching artifacts) | `src/generation/seam_smoother.py` | Before/after visual comparison | "Seam smoothing applies localized WFC to boundaries" |
-| 8 | Collision misalignment (visual ≠ functional) | `src/validation/collision_checker.py` | 98% alignment validation | "Collision validator ensures pixel-perfect alignment" |
+| 8 | Collision misalignment (visual ≠ functional) | `src/validation/collision_alignment_validator.py` | 98% alignment validation | "Collision validator ensures pixel-perfect alignment" |
 | 9 | IP concerns (learns copyrighted styles) | `src/visualization/renderer.py` (theme support) | Style transfer demonstration | "Theme system proves dataset independence" |
 | 10 | Unmeasured fun (no player experience metrics) | `src/simulation/validator.py` (fun metrics) | Frustration score correlation | "Frustration metric predicts player satisfaction" |
-| 11 | No visual proof (claims without demos) | `scripts/record_demo.py` | Recorded GIF walkthroughs | "Automated demo recording provides visual evidence" |
+| 11 | No visual proof (claims without demos) | `src/utils/demo_recorder.py` | Recorded GIF walkthroughs | "Automated demo recording provides visual evidence" |
 | 12 | Data scarcity (only 18 Zelda dungeons) | VGLC augmentation pipeline | 250+ room samples after augmentation | "Augmentation increases effective dataset 13x" |
 | 13 | CBS algorithm misuse (multi-agent for single-player) | `src/simulation/cognitive_bounded_search.py` | Path quality comparison vs A* | "CBS used for theoretical analysis, not runtime pathfinding" |
 
@@ -493,10 +497,10 @@ All three produce structurally similar layouts with different visual styles, pro
 The following features are specified but not critical for defense:
 
 1. **Seam Smoothing** (`src/generation/seam_smoother.py`): Eliminates visual discontinuities at room boundaries
-2. **Collision Alignment Validator** (`src/validation/collision_checker.py`): Pixel-perfect collision map validation
+2. **Collision Alignment Validator** (`src/validation/collision_alignment_validator.py`): Pixel-perfect collision map validation
 3. **Style Transfer Support** (enhanced `src/visualization/renderer.py`): Multiple theme support for IP independence
 4. **Fun Metrics** (enhanced `src/simulation/validator.py`): Frustration score, explorability metrics
-5. **Demo Recording System** (`scripts/record_demo.py`): Automated GIF generation for visual documentation
+5. **Demo Recording System** (`src/utils/demo_recorder.py`): Automated GIF generation for visual documentation
 
 These can be implemented post-defense for journal publication.
 
@@ -505,10 +509,10 @@ These can be implemented post-defense for journal publication.
 ## CONTACT & SUPPORT
 
 For questions about this documentation:
-- **Author**: [Student Name]
+
 - **Advisor**: [Advisor Name]
 - **Department**: [University Department]
-- **Defense Date**: [TBD]
+- **Defense Date**: Internal scheduling
 
 For technical issues with implementations:
 - Check `README.md` in project root
@@ -518,8 +522,8 @@ For technical issues with implementations:
 ---
 
 **Document Version**: 1.0  
-**Last Updated**: 2024  
-**Status**: Defense-Ready (Core Features Complete)  
+**Last Updated**: 2026-03-20  
+**Status**: Maintained (Core Features Complete)  
 
 ---
 

@@ -137,6 +137,27 @@ class TestBeliefMap:
         assert tile_type == SEMANTIC_PALETTE['WALL']  # Default assumption
         assert confidence == 0.0
         assert belief.get_knowledge_state((5, 5)) == TileKnowledge.UNKNOWN
+
+    def test_unknown_tile_entropy_is_high(self):
+        """Unknown tiles should carry high uncertainty (near 1 bit)."""
+        belief = BeliefMap(grid_shape=(10, 10))
+        entropy = belief.compute_entropy(5, 5)
+        assert entropy > 0.9
+
+    def test_expected_info_gain_decreases_after_observation(self):
+        """Information gain should drop once nearby tiles are confidently observed."""
+        floor = SEMANTIC_PALETTE['FLOOR']
+        grid = np.full((10, 10), floor, dtype=np.int64)
+        belief = BeliefMap(grid_shape=(10, 10))
+        vision = VisionSystem(radius=2, cone_angle=360.0, enable_occlusion=False)
+
+        before = belief.expected_info_gain((5, 5), vision, grid=grid, direction=(0, 1))
+
+        for pos in vision.get_visible_tiles((5, 5), (0, 1), grid):
+            belief.bayes_update(pos, floor, current_step=0, obs_accuracy=1.0, is_visit=False)
+
+        after = belief.expected_info_gain((5, 5), vision, grid=grid, direction=(0, 1))
+        assert after < before
     
     def test_confidence_decay(self):
         """Test memory decay reduces confidence over time."""

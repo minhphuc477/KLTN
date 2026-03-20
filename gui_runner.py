@@ -29,9 +29,11 @@ import sys
 import os
 import time
 import math
+import copy
 import logging
 import threading
 import numpy as np
+from pathlib import Path
 from typing import Tuple, List, Optional, Any
 
 # Configure logging
@@ -80,8 +82,8 @@ from src.simulation.validator import (
     WALKABLE_IDS
 )
 
-# Local matcher for topology repair (use new canonical path)
-from src.data.zelda_core import RoomGraphMatcher
+# Local matcher/adapters for topology repair and precheck pruning (use canonical path)
+from src.data.zelda_core import RoomGraphMatcher, ZeldaDungeonAdapter
 
 # Try to import Pygame
 # NOTE: Importing pygame does NOT create a window - windows are only created
@@ -311,6 +313,41 @@ def _convert_diagonal_to_4dir(path, grid=None):
         tile_id = int(grid[r, c])
         return tile_id not in obstacle_ids
     
+    def find_short_orth_path(start_pos, end_pos):
+        """Find a short 4-dir path between two adjacent diagonal points."""
+        from collections import deque
+        if start_pos == end_pos:
+            return [start_pos]
+        if grid is None:
+            return None
+        
+        # Restrict search to a small local window for performance/stability.
+        min_r = max(0, min(start_pos[0], end_pos[0]) - 1)
+        max_r = min(grid.shape[0] - 1, max(start_pos[0], end_pos[0]) + 1)
+        min_c = max(0, min(start_pos[1], end_pos[1]) - 1)
+        max_c = min(grid.shape[1] - 1, max(start_pos[1], end_pos[1]) + 1)
+        
+        q = deque([(start_pos, [start_pos])])
+        visited = {start_pos}
+        while q:
+            pos, p = q.popleft()
+            if len(p) > 6:
+                continue
+            if pos == end_pos:
+                return p
+            for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                nr, nc = pos[0] + dr, pos[1] + dc
+                npos = (nr, nc)
+                if not (min_r <= nr <= max_r and min_c <= nc <= max_c):
+                    continue
+                if npos in visited:
+                    continue
+                if not is_walkable(npos):
+                    continue
+                visited.add(npos)
+                q.append((npos, p + [npos]))
+        return None
+    
     converted = [path[0]]  # Start position
     
     for i in range(len(path) - 1):
@@ -333,13 +370,18 @@ def _convert_diagonal_to_4dir(path, grid=None):
             elif is_walkable(horz_first):
                 intermediate = horz_first
             else:
-                # Both blocked - this shouldn't happen if solver is correct
-                # Fall back to vertical-first and log warning
-                intermediate = vert_first
-                logger.warning(
-                    'Diagonal conversion: both intermediates blocked at %s->%s (vert=%s, horz=%s)',
-                    curr, next_pos, vert_first, horz_first
-                )
+                # Try a tiny local 4-dir detour before giving up.
+                detour = find_short_orth_path(curr, next_pos)
+                if detour and len(detour) >= 2:
+                    converted.extend(detour[1:])
+                else:
+                    # Keep progress without forcing an invalid blocked intermediate.
+                    converted.append(next_pos)
+                    logger.warning(
+                        'Diagonal conversion: no safe orth split at %s->%s (vert=%s, horz=%s); keeping direct step',
+                        curr, next_pos, vert_first, horz_first
+                    )
+                continue
             
             converted.append(intermediate)
             converted.append(next_pos)
@@ -365,8 +407,7 @@ def _solve_in_subprocess(grid, start_pos, goal_pos, algorithm_idx, feature_flags
     """
     try:
         # Re-import heavy modules inside child process
-        from src.simulation.validator import ZeldaLogicEnv, StateSpaceAStar, SEMANTIC_PALETTE, GameState
-        from src.data.zelda_core import DungeonSolver, ValidationMode
+        from src.simulation.validator import ZeldaLogicEnv, StateSpaceAStar, SolverOptions
         import time
 
         # If a NumPy-like file path was passed earlier, caller will have loaded it; ensure grid is ndarray
@@ -379,10 +420,23 @@ def _solve_in_subprocess(grid, start_pos, goal_pos, algorithm_idx, feature_flags
             # If numpy not available or conversion failed, keep original
             grid_arr = grid
 
+        # Normalize gameplay rules profile.
+        priority_options = dict(priority_options or {})
+        strict_original_mode = bool(feature_flags.get('strict_original_mode', False))
+        raw_profile = str(priority_options.get('rules_profile', '') or '').strip().lower()
+        if raw_profile in {'strict_original', 'original', 'nes'}:
+            strict_original_mode = True
+        priority_options['rules_profile'] = 'strict_original' if strict_original_mode else 'extended'
+        if strict_original_mode:
+            priority_options['allow_diagonals'] = False
+
+        solver_options = SolverOptions(rules_profile=priority_options['rules_profile'])
+
         # CRITICAL: Pass graph connectivity data to enable stair traversal
         env = ZeldaLogicEnv(grid_arr, render_mode=False, graph=graph, 
                             room_to_node=room_to_node, room_positions=room_positions,
-                            node_to_room=node_to_room)
+                            node_to_room=node_to_room,
+                            solver_options=solver_options)
 
         result = {
             'success': False,
@@ -461,78 +515,57 @@ def _solve_in_subprocess(grid, start_pos, goal_pos, algorithm_idx, feature_flags
                     logger.warning(f'✗ CBS failed: explored {states} states')
                     result['message'] = f'CBS ({persona}) found no solution (explored {states} states)'
             
-            elif algorithm_idx == 0:
-                # A* - Use StateSpaceAStar (existing implementation)
-                logger.info('✓ Using A* (StateSpaceAStar)')
-                ssa = StateSpaceAStar(env, priority_options=priority_options)
-                ok, path, nodes = ssa.solve()
+            elif algorithm_idx in {0, 1, 2, 3}:
+                from src.simulation import (
+                    GameStateSearchConfig,
+                    SearchRepresentation,
+                    run_game_state_solver,
+                )
+
+                logger.info("[OK] Using game-state search factory for %s", alg_name)
+                try:
+                    rep_mode = SearchRepresentation.parse(
+                        priority_options.get('representation', 'hybrid')
+                    )
+                    config = GameStateSearchConfig(
+                        timeout=int(priority_options.get('timeout', 100000)),
+                        tie_break=bool(priority_options.get('tie_break', False)),
+                        key_boost=bool(priority_options.get('key_boost', False)),
+                        enable_ara=bool(priority_options.get('enable_ara', False)),
+                        ara_weight=float(priority_options.get('ara_weight', 1.0)),
+                        allow_diagonals=bool(priority_options.get('allow_diagonals', False)),
+                        rules_profile=str(priority_options.get('rules_profile', 'extended')),
+                        representation=rep_mode,
+                    )
+                except Exception:
+                    config = GameStateSearchConfig()
+
+                search_result = run_game_state_solver(env, algorithm_idx, config)
+                ok = bool(search_result.success)
+                path = list(search_result.path or [])
+                nodes = int(search_result.states_explored or 0)
+                algo_label = search_result.algorithm
+
                 if ok:
                     display_path = _convert_diagonal_to_4dir(path, grid=grid_arr) if path else path
-                    logger.info(f'✓ A* succeeded: path_len={len(display_path)}, nodes={nodes}')
-                    result.update({
-                        'success': True, 
-                        'path': display_path,
-                        'teleports': 0, 
-                        'solver_result': {'nodes': nodes, 'original_path_len': len(path) if path else 0, 'algorithm': 'A*'}
-                    })
-                else:
-                    logger.warning(f'✗ A* failed: explored {nodes} states')
-                    result['message'] = f'A* found no solution (explored {nodes} states)'
-            
-            elif algorithm_idx == 1:
-                # BFS - Use StateSpaceAStar with BFS search mode (game-state-aware)
-                logger.info('✓ Using BFS (Breadth-First Search via StateSpaceAStar)')
-                ssa = StateSpaceAStar(env, priority_options=priority_options, search_mode='bfs')
-                ok, path, nodes = ssa.solve()
-                if ok:
-                    display_path = _convert_diagonal_to_4dir(path, grid=grid_arr) if path else path
-                    logger.info(f'✓ BFS succeeded: path_len={len(display_path)}, nodes={nodes}')
-                    result.update({
-                        'success': True,
-                        'path': display_path,
-                        'teleports': 0,
-                        'solver_result': {'nodes': nodes, 'original_path_len': len(path) if path else 0, 'algorithm': 'BFS'}
-                    })
-                else:
-                    logger.warning(f'✗ BFS failed: explored {nodes} states')
-                    result['message'] = f'BFS found no solution (explored {nodes} states)'
-            
-            elif algorithm_idx == 2:
-                # Dijkstra - Use StateSpaceAStar with Dijkstra search mode (no heuristic)
-                logger.info('✓ Using Dijkstra (Uniform Cost Search via StateSpaceAStar)')
-                ssa = StateSpaceAStar(env, priority_options=priority_options, search_mode='dijkstra')
-                ok, path, nodes = ssa.solve()
-                if ok:
-                    display_path = _convert_diagonal_to_4dir(path, grid=grid_arr) if path else path
-                    logger.info(f'✓ Dijkstra succeeded: path_len={len(display_path)}, nodes={nodes}')
+                    logger.info("[OK] %s succeeded: path_len=%d, nodes=%d", algo_label, len(display_path), nodes)
                     result.update({
                         'success': True,
                         'path': display_path,
                         'teleports': 0,
-                        'solver_result': {'nodes': nodes, 'original_path_len': len(path) if path else 0, 'algorithm': 'Dijkstra'}
+                        'solver_result': {
+                            'nodes': nodes,
+                            'states_explored': nodes,
+                            'original_path_len': len(path) if path else 0,
+                            'algorithm': algo_label,
+                            'representation': config.representation.value,
+                            'rules_profile': str(config.rules_profile),
+                        },
                     })
                 else:
-                    logger.warning(f'✗ Dijkstra failed: explored {nodes} states')
-                    result['message'] = f'Dijkstra found no solution (explored {nodes} states)'
-            
-            elif algorithm_idx == 3:
-                # Greedy Best-First - Use StateSpaceAStar with Greedy search mode (heuristic only)
-                logger.info('✓ Using Greedy Best-First Search (via StateSpaceAStar)')
-                ssa = StateSpaceAStar(env, priority_options=priority_options, search_mode='greedy')
-                ok, path, nodes = ssa.solve()
-                if ok:
-                    display_path = _convert_diagonal_to_4dir(path, grid=grid_arr) if path else path
-                    logger.info(f'✓ Greedy succeeded: path_len={len(display_path)}, nodes={nodes}')
-                    result.update({
-                        'success': True,
-                        'path': display_path,
-                        'teleports': 0,
-                        'solver_result': {'nodes': nodes, 'original_path_len': len(path) if path else 0, 'algorithm': 'Greedy'}
-                    })
-                else:
-                    logger.warning(f'✗ Greedy failed: explored {nodes} states')
-                    result['message'] = f'Greedy found no solution (explored {nodes} states)'
-            
+                    logger.warning("[FAIL] %s failed: explored %d states", algo_label, nodes)
+                    result['message'] = f'{algo_label} found no solution (explored {nodes} states)'
+
             elif algorithm_idx == 4:
                 # D* Lite - Use incremental replanning search
                 logger.info('✓ Using D* Lite (incremental replanning)')
@@ -545,7 +578,8 @@ def _solve_in_subprocess(grid, start_pos, goal_pos, algorithm_idx, feature_flags
                 
                 if ok:
                     display_path = _convert_diagonal_to_4dir(path, grid=grid_arr) if path else path
-                    logger.info(f'✓ D* Lite succeeded: path_len={len(display_path)}, nodes={nodes}')
+                    algo_label = 'D* Lite (fallback: A*)' if getattr(dstar, 'used_fallback', False) else 'D* Lite'
+                    logger.info(f'✓ {algo_label} succeeded: path_len={len(display_path)}, nodes={nodes}')
                     result.update({
                         'success': True,
                         'path': display_path,
@@ -553,7 +587,7 @@ def _solve_in_subprocess(grid, start_pos, goal_pos, algorithm_idx, feature_flags
                         'solver_result': {
                             'nodes': nodes,
                             'original_path_len': len(path) if path else 0,
-                            'algorithm': 'D* Lite',
+                            'algorithm': algo_label,
                             'replans': dstar.replans_count
                         }
                     })
@@ -609,7 +643,12 @@ def _solve_in_subprocess(grid, start_pos, goal_pos, algorithm_idx, feature_flags
                 
                 if ok:
                     display_path = _convert_diagonal_to_4dir(path, grid=grid_arr) if path else path
-                    logger.info(f'✓ Bidirectional A* succeeded: path_len={len(display_path)}, nodes={nodes}')
+                    algo_label = (
+                        'Bidirectional A* (fallback: A*)'
+                        if getattr(bidir, 'used_fallback', False)
+                        else 'Bidirectional A*'
+                    )
+                    logger.info(f'✓ {algo_label} succeeded: path_len={len(display_path)}, nodes={nodes}')
                     result.update({
                         'success': True,
                         'path': display_path,
@@ -617,7 +656,7 @@ def _solve_in_subprocess(grid, start_pos, goal_pos, algorithm_idx, feature_flags
                         'solver_result': {
                             'nodes': nodes,
                             'original_path_len': len(path) if path else 0,
-                            'algorithm': 'Bidirectional A*',
+                            'algorithm': algo_label,
                             'meeting_point': bidir.meeting_point,
                             'collision_checks': bidir.collision_checks
                         }
@@ -882,6 +921,19 @@ class ZeldaGUI:
         self.maps: List[Any] = maps if maps else [create_test_map()]
         self.map_names = map_names if map_names else [f"Map {i+1}" for i in range(len(self.maps))]
         self.current_map_idx = 0
+
+        # Repository-local export directories (avoid writing outside the repo due to cwd changes).
+        self.repo_root = Path(__file__).resolve().parent
+        self.exports_root = self.repo_root / 'exports'
+        self.route_export_dir = self.exports_root / 'routes'
+        self.topology_export_dir = self.exports_root / 'topology'
+        self.artifacts_dir = str(self.exports_root / 'artifacts')
+        try:
+            self.route_export_dir.mkdir(parents=True, exist_ok=True)
+            self.topology_export_dir.mkdir(parents=True, exist_ok=True)
+            Path(self.artifacts_dir).mkdir(parents=True, exist_ok=True)
+        except Exception:
+            logger.exception('Failed to create export directories under repo root')
         
         # Attempt to enable Windows DPI awareness *before* initializing Pygame so mouse coords match pixels
         try:
@@ -1131,6 +1183,8 @@ class ZeldaGUI:
         # Default: True for immediate animation on SPACE press
         # Set KLTN_AUTO_START_SOLVER=0 to require confirmation
         self.auto_start_solver = os.environ.get('KLTN_AUTO_START_SOLVER', '1') != '0'
+        # One-shot flag: when True, next solver result must show preview (never auto-start).
+        self.preview_on_next_solver_result = False
 
         # Topology overlay and DOT export
         self.show_topology = False
@@ -1173,6 +1227,7 @@ class ZeldaGUI:
         self.solver_done = True          # True when no solver pending (initially done)
         self.solver_outfile = None       # Temp file for solver pickle output
         self.solver_gridfile = None      # Temp file for grid numpy array
+        self.solver_thread = None        # Thread fallback handle when process spawn fails
         self._pending_solver_trigger = False  # Flag to trigger solver on next frame (for algorithm changes)
         # Lock to make solver scheduling atomic and thread-safe
         self._solver_lock = threading.Lock()
@@ -1197,6 +1252,9 @@ class ZeldaGUI:
         self.parallel_search_thread = None
         self.parallel_search_done = False
         self.parallel_search_result = None
+
+        # Precheck/prune undo snapshot (single-level undo for auto-prune).
+        self._precheck_snapshot = None
         
         # Smooth agent animation state
         self.agent_visual_pos = None  # Vector2 for smooth movement
@@ -1320,6 +1378,7 @@ class ZeldaGUI:
             'show_topology': False,  # Show topology graph overlay
             'diagonal_movement': False,
             'speedrun_mode': False,
+            'strict_original_mode': False,
             'dynamic_difficulty': False,
             'force_grid': False,
             'enable_prechecks': False,
@@ -1341,6 +1400,8 @@ class ZeldaGUI:
         self.zoom_level_idx = 3  # 100%
         self.difficulty_idx = 1  # Medium
         self.algorithm_idx = 0   # A*
+        self.search_representation = 'hybrid'  # hybrid | tile | graph
+        self.ara_weight = 1.0
         
         self._load_current_map()
         self._center_view()  # Center the map in view
@@ -1654,6 +1715,7 @@ class ZeldaGUI:
             ('use_jps', 'Use Jump Point Search (JPS)'),
             ('show_jps_overlay', 'Show JPS Overlay'),
             ('speedrun_mode', 'Speedrun Mode'),
+            ('strict_original_mode', 'Strict Original LoZ Rules'),
             ('dynamic_difficulty', 'Dynamic Difficulty'),
             ('force_grid', 'Force Grid Solver'),
             ('enable_prechecks', 'Enable Prechecks (fast checks before solve)'),
@@ -1703,11 +1765,20 @@ class ZeldaGUI:
         y_offset += dropdown_spacing
 
         # ARA* weight (for weighted A* when enabled)
+        ara_options = ["1.0", "1.25", "1.5", "2.0"]
+        try:
+            ara_value = float(getattr(self, 'ara_weight', 1.0))
+            ara_selected = min(
+                range(len(ara_options)),
+                key=lambda idx: abs(float(ara_options[idx]) - ara_value),
+            )
+        except Exception:
+            ara_selected = 0
         ara_dropdown = DropdownWidget(
             (x_offset, y_offset),
             "ARA* weight",
-            ["1.0", "1.25", "1.5", "2.0"],
-            selected=0,
+            ara_options,
+            selected=ara_selected,
             keep_open_on_select=self.feature_flags.get('persist_dropdown_on_select', False)
         )
         setattr(ara_dropdown, 'control_name', 'ara_weight')
@@ -1751,6 +1822,21 @@ class ZeldaGUI:
         )
         setattr(algorithm_dropdown, 'control_name', 'algorithm')
         self.widget_manager.add_widget(algorithm_dropdown)
+        y_offset += dropdown_spacing
+
+        # Search representation mode
+        rep_options = ["Hybrid (Graph+Tile)", "Tile Only", "Graph Only"]
+        rep_to_idx = {'hybrid': 0, 'tile': 1, 'graph': 2}
+        rep_selected = rep_to_idx.get(str(getattr(self, 'search_representation', 'hybrid')).lower(), 0)
+        representation_dropdown = DropdownWidget(
+            (x_offset, y_offset),
+            "Search Space",
+            rep_options,
+            selected=rep_selected,
+            keep_open_on_select=self.feature_flags.get('persist_dropdown_on_select', False)
+        )
+        setattr(representation_dropdown, 'control_name', 'representation')
+        self.widget_manager.add_widget(representation_dropdown)
         y_offset += dropdown_spacing
 
         # Match apply threshold (for tentative proposals)
@@ -3576,6 +3662,19 @@ class ZeldaGUI:
                                     # Start solver on next frame to avoid blocking the UI event handler
                                     # We'll use a simple flag that the main loop checks
                                     self._pending_solver_trigger = True
+                        elif hasattr(widget, 'control_name') and widget.control_name == 'representation':
+                            rep_map = {0: 'hybrid', 1: 'tile', 2: 'graph'}
+                            old_rep = getattr(self, 'search_representation', 'hybrid')
+                            self.search_representation = rep_map.get(widget.selected, 'hybrid')
+                            if old_rep != self.search_representation:
+                                self._set_message(f"Search space: {self.search_representation}")
+                        elif hasattr(widget, 'control_name') and widget.control_name == 'ara_weight':
+                            try:
+                                selected_val = widget.options[widget.selected]
+                                self.ara_weight = float(selected_val)
+                                self._set_message(f"ARA* weight: {self.ara_weight:g}", 1.2)
+                            except Exception:
+                                self.ara_weight = 1.0
                         elif hasattr(widget, 'control_name') and widget.control_name == 'presets':
                             old = self.current_preset_idx
                             self.current_preset_idx = widget.selected
@@ -3922,21 +4021,78 @@ class ZeldaGUI:
         if self.effects:
             self.effects.clear()
         self.step_count = 0
+        self.path_preview_mode = False
+        self.preview_overlay_visible = False
+        self.path_preview_dialog = None
+        self.preview_on_next_solver_result = False
         self.message = "Map Reset"
     
     def _show_path_preview(self):
-        """Show path preview dialog (placeholder)."""
-        self.message = "Path preview not available"
+        """
+        Show path preview for the currently available route.
+
+        Behavior:
+        - If a path already exists, open preview immediately.
+        - If solver is running, request preview on completion.
+        - If no path exists and solver is idle, start solver and force preview when it finishes.
+        """
+        path = list(getattr(self, 'auto_path', []) or [])
+        if not path:
+            path = list(getattr(self, 'solution_path', []) or [])
+
+        if path:
+            self.auto_path = [tuple(p) for p in path]
+            self.auto_mode = False
+            self.auto_step_idx = 0
+            self.preview_on_next_solver_result = False
+
+            try:
+                self.path_preview_dialog = PathPreviewDialog(
+                    path=self.auto_path,
+                    env=self.env,
+                    solver_result=(getattr(self, 'solver_result', None) or {}),
+                    speed_multiplier=getattr(self, 'speed_multiplier', 1.0),
+                )
+                if getattr(self, 'preview_modal_enabled', False):
+                    self.path_preview_mode = True
+                    self.preview_overlay_visible = False
+                    self.message = "Path preview opened (modal)"
+                else:
+                    self.path_preview_mode = False
+                    self.preview_overlay_visible = True
+                    self.message = "Path preview ready (Enter to start, Esc to dismiss)"
+            except Exception as e:
+                logger.exception("Failed to create path preview dialog")
+                self.path_preview_dialog = None
+                self.path_preview_mode = False
+                self.preview_overlay_visible = False
+                self.message = f"Path preview failed: {e}"
+            return
+
+        self.preview_on_next_solver_result = True
+        if getattr(self, 'solver_running', False):
+            self.message = "Solver running, preview will open when done"
+            return
+
+        self.message = "No path yet, solving for preview..."
+        self._start_auto_solve()
     
     def _clear_path(self):
         """Clear the current path."""
         self.auto_path = []
+        self.solution_path = []
         self.auto_mode = False
+        self.auto_step_idx = 0
+        self.path_preview_mode = False
+        self.preview_overlay_visible = False
+        self.path_preview_dialog = None
+        self.preview_on_next_solver_result = False
         self.message = "Path cleared"
     
     def _export_route(self):
         """Export the current route to JSON file."""
-        if not hasattr(self, 'solution_path') or not self.solution_path:
+        path = list(getattr(self, 'auto_path', []) or getattr(self, 'solution_path', []) or [])
+        if not path:
             self.message = "No route to export (solve first)"
             return
         
@@ -3950,8 +4106,8 @@ class ZeldaGUI:
                 'timestamp': datetime.now().isoformat(),
                 'start': self.start_pos,
                 'goal': self.goal_pos,
-                'path': self.solution_path,
-                'path_length': len(self.solution_path),
+                'path': path,
+                'path_length': len(path),
                 'algorithm': getattr(self, 'last_algorithm', 'unknown'),
                 'solve_time_ms': getattr(self, 'last_solve_time', 0) * 1000,
                 'nodes_explored': getattr(self, 'last_nodes_explored', 0),
@@ -3960,13 +4116,20 @@ class ZeldaGUI:
             # Generate filename
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             filename = f"route_{timestamp}.json"
+            route_dir = Path(getattr(self, 'route_export_dir', Path.cwd()))
+            route_dir.mkdir(parents=True, exist_ok=True)
+            filepath = route_dir / filename
             
             # Save to file
-            with open(filename, 'w') as f:
+            with open(filepath, 'w', encoding='utf-8') as f:
                 json.dump(export_data, f, indent=2)
             
-            self.message = f"Route exported to {filename}"
-            logger.info(f"Route exported to {filename}")
+            try:
+                display_path = filepath.relative_to(getattr(self, 'repo_root', Path.cwd()))
+            except Exception:
+                display_path = filepath
+            self.message = f"Route exported to {display_path}"
+            logger.info("Route exported to %s", filepath)
             
         except Exception as e:
             self.message = f"Route export failed: {e}"
@@ -3976,19 +4139,18 @@ class ZeldaGUI:
         """Load a saved route from JSON file."""
         try:
             import json
-            import os
             
-            # Find most recent route file
-            route_files = [f for f in os.listdir('.') if f.startswith('route_') and f.endswith('.json')]
+            # Find most recent route file from repository-local export dir.
+            route_dir = Path(getattr(self, 'route_export_dir', Path.cwd()))
+            route_files = sorted(route_dir.glob('route_*.json'), reverse=True)
             if not route_files:
                 self.message = "No saved routes found"
                 return
             
             # Load most recent
-            route_files.sort(reverse=True)
             filename = route_files[0]
             
-            with open(filename, 'r') as f:
+            with open(filename, 'r', encoding='utf-8') as f:
                 route_data = json.load(f)
             
             # Validate data
@@ -4000,8 +4162,9 @@ class ZeldaGUI:
             self.start_pos = tuple(route_data['start'])
             self.goal_pos = tuple(route_data['goal'])
             self.solution_path = [tuple(p) for p in route_data['path']]
-            self.current_step = 0
-            self.animating = False
+            self.auto_path = list(self.solution_path)
+            self.auto_step_idx = 0
+            self.auto_mode = False
             
             # Update metadata
             if 'algorithm' in route_data:
@@ -4011,8 +4174,12 @@ class ZeldaGUI:
             if 'nodes_explored' in route_data:
                 self.last_nodes_explored = route_data['nodes_explored']
             
-            self.message = f"Route loaded from {filename} ({len(self.solution_path)} steps)"
-            logger.info(f"Route loaded from {filename}")
+            try:
+                display_path = filename.relative_to(getattr(self, 'repo_root', Path.cwd()))
+            except Exception:
+                display_path = filename
+            self.message = f"Route loaded from {display_path} ({len(self.solution_path)} steps)"
+            logger.info("Route loaded from %s", filename)
             
         except Exception as e:
             self.message = f"Route loading failed: {e}"
@@ -5184,6 +5351,13 @@ class ZeldaGUI:
                     except Exception:
                         self._last_mouse_event = None
 
+                    # Record click to debug log even when the window lacks focus.
+                    if getattr(self, 'debug_click_log', None) is not None:
+                        self.debug_click_log.insert(0, (mouse_pos, time.time()))
+                        # Keep bounded history
+                        if len(self.debug_click_log) > 50:
+                            self.debug_click_log.pop()
+
                     # If window not focused, attempt to force focus (Windows)
                     if not focused:
                         logger.info('Window does not have input focus; attempting to force focus')
@@ -5192,13 +5366,6 @@ class ZeldaGUI:
                         except Exception:
                             logger.exception('Force focus attempt failed')
                         continue
-
-                    # Record click to debug log
-                    if getattr(self, 'debug_click_log', None) is not None:
-                        self.debug_click_log.insert(0, (mouse_pos, time.time()))
-                        # Keep bounded history
-                        if len(self.debug_click_log) > 50:
-                            self.debug_click_log.pop()
                     
                     # Handle collapse button click first (animated)
                     if self.control_panel_enabled and self.collapse_button_rect and self.collapse_button_rect.collidepoint(mouse_pos):
@@ -5754,20 +5921,53 @@ class ZeldaGUI:
             # If a solver subprocess (or thread fallback) finished, read its output and apply result on the main thread
             if not getattr(self, 'solver_done', False):
                 proc = getattr(self, 'solver_proc', None)
+                solver_thread = getattr(self, 'solver_thread', None)
                 proc_alive = False
+                thread_alive = False
                 solver_starting = getattr(self, 'solver_starting', False)
                 
                 # CRITICAL: Check for solver timeout (30 second default for complex maps)
-                solver_timeout = float(os.environ.get('KLTN_SOLVER_TIMEOUT', '30.0'))
+                # Longer defaults for heavier game-state algorithms (DFS/Bidirectional/CBS).
+                active_alg = int(getattr(self, 'solver_algorithm_idx', getattr(self, 'algorithm_idx', 0)))
+                # Algorithm-specific timeout defaults:
+                # - A*: usually fastest in full game-state space
+                # - BFS/Dijkstra: can expand much larger frontiers
+                # - DFS/Bidirectional/CBS: heavy by design
+                if active_alg == 0:
+                    default_timeout = 60.0
+                elif active_alg in (1, 2):
+                    default_timeout = 180.0
+                elif active_alg == 3:
+                    default_timeout = 90.0
+                elif active_alg == 4:
+                    default_timeout = 120.0
+                else:
+                    default_timeout = 240.0
+
+                # Scale timeout with map size to reduce false kills on large stitched dungeons.
+                try:
+                    current_map = self.maps[self.current_map_idx]
+                    grid_ref = current_map.global_grid if hasattr(current_map, 'global_grid') else current_map
+                    grid_cells = int(np.asarray(grid_ref).size)
+                    baseline_cells = 16 * 11 * 8  # ~8-room baseline
+                    scale = float(np.clip(grid_cells / max(1, baseline_cells), 1.0, 3.0))
+                    default_timeout *= scale
+                except Exception:
+                    pass
+                solver_timeout = float(os.environ.get('KLTN_SOLVER_TIMEOUT', str(default_timeout)))
                 solver_start_time = getattr(self, 'solver_start_time', None)
                 timed_out = False
-                if solver_start_time and (time.time() - solver_start_time) > solver_timeout:
+                # Timeout handling is only meaningful for process mode.
+                if proc and solver_start_time and (time.time() - solver_start_time) > solver_timeout:
                     timed_out = True
                     logger.error('SOLVER: TIMEOUT after %.1fs - forcefully terminating', solver_timeout)
                     if proc:
                         try:
-                            proc.terminate()
-                            proc.join(timeout=0.5)
+                            # Give subprocess a brief chance to finish normal shutdown/write output.
+                            proc.join(timeout=0.2)
+                            if proc.is_alive():
+                                proc.terminate()
+                                proc.join(timeout=0.5)
                         except Exception as e:
                             logger.exception('SOLVER: Failed to terminate timed-out process: %s', e)
                     proc_alive = False
@@ -5778,18 +5978,27 @@ class ZeldaGUI:
                     except Exception as e:
                         logger.exception('SOLVER: proc.is_alive() raised exception: %s', e)
                         proc_alive = False
+                    try:
+                        thread_alive = solver_thread.is_alive() if solver_thread else False
+                    except Exception as e:
+                        logger.exception('SOLVER: solver_thread.is_alive() raised exception: %s', e)
+                        thread_alive = False
 
                 # Startup grace: avoid treating proc None as completion while spawn thread is still starting
                 startup_grace = float(os.environ.get('KLTN_SOLVER_STARTUP_GRACE', '1.5'))
                 solver_age = (time.time() - solver_start_time) if solver_start_time else 0.0
                 out = getattr(self, 'solver_outfile', None)
                 out_exists = os.path.exists(out) if out else False
-                if solver_starting and proc is None and not out_exists and not timed_out and solver_age < startup_grace:
+                if solver_starting and proc is None and not thread_alive and not out_exists and not timed_out and solver_age < startup_grace:
                     logger.debug('SOLVER: Waiting for process start (age=%.2fs < %.2fs grace)', solver_age, startup_grace)
+                elif thread_alive:
+                    logger.debug('SOLVER: Waiting for thread fallback completion (age=%.2fs)', solver_age)
                 elif proc is None or not proc_alive:
                     # CRITICAL: Wrap ENTIRE completion block in try/finally to guarantee solver_running cleanup
                     try:
+                        proc_exitcode = None
                         if proc is not None:
+                            proc_exitcode = getattr(proc, 'exitcode', None)
                             logger.info('SOLVER: Subprocess done, proc.is_alive()=False, exitcode=%s', proc.exitcode)
                         else:
                             logger.info('SOLVER: No subprocess handle (thread fallback or spawn failure)')
@@ -5855,8 +6064,9 @@ class ZeldaGUI:
                                                 self.auto_path[0] if self.auto_path else None,
                                                 self.auto_path[-1] if self.auto_path else None)
                                     
-                                    # Auto-start mode: skip preview and start animation immediately
-                                    if getattr(self, 'auto_start_solver', False):
+                                    # Auto-start mode unless caller explicitly requested preview.
+                                    force_preview = bool(getattr(self, 'preview_on_next_solver_result', False))
+                                    if getattr(self, 'auto_start_solver', False) and not force_preview:
                                         logger.info('SOLVER: auto_start_solver=True, starting animation immediately')
                                         self._execute_auto_solve(self.auto_path, solver_result, teleports=0)
                                         self._set_message(f'Auto-solve started! Path: {len(self.auto_path)} steps')
@@ -5864,25 +6074,56 @@ class ZeldaGUI:
                                                     getattr(self, 'auto_mode', None),
                                                     getattr(self, 'auto_step_idx', None))
                                     else:
-                                        # Show preview for user confirmation
-                                        logger.info('SOLVER: auto_start_solver=False, showing preview dialog')
-                                        self.preview_overlay_visible = True
-                                        self.path_preview_dialog = PathPreviewDialog(path=self.auto_path, env=self.env, solver_result=solver_result, speed_multiplier=self.speed_multiplier)
+                                        # Show preview for user confirmation.
+                                        logger.info(
+                                            'SOLVER: showing preview dialog (auto_start_solver=%s, force_preview=%s)',
+                                            getattr(self, 'auto_start_solver', False),
+                                            force_preview,
+                                        )
+                                        self.path_preview_dialog = PathPreviewDialog(
+                                            path=self.auto_path,
+                                            env=self.env,
+                                            solver_result=solver_result,
+                                            speed_multiplier=self.speed_multiplier,
+                                        )
+                                        if getattr(self, 'preview_modal_enabled', False):
+                                            self.path_preview_mode = True
+                                            self.preview_overlay_visible = False
+                                        else:
+                                            self.path_preview_mode = False
+                                            self.preview_overlay_visible = True
                                         self._set_message('Solver finished (press ENTER to start or ESC to dismiss)')
+                                    self.preview_on_next_solver_result = False
                                 else:
                                     msg = res.get('message') or 'Solver finished with no path'
-                                    logger.warning('SOLVER: No valid path in result: %s', msg)
+                                    if timed_out:
+                                        msg = f'Solver timed out after {int(solver_timeout)}s'
+                                        logger.info('SOLVER: %s', msg)
+                                    elif msg == 'output file missing' and proc_exitcode is not None and proc_exitcode < 0:
+                                        msg = f'Solver terminated (exitcode={proc_exitcode}) before writing output'
+                                        logger.info('SOLVER: %s', msg)
+                                    else:
+                                        logger.warning('SOLVER: No valid path in result: %s', msg)
                                     self._set_message(msg)
+                                    self.preview_on_next_solver_result = False
                             except Exception as e:
                                 logger.exception('SOLVER: Failed to apply result on main thread: %s', e)
                                 self._set_message('Solver error (see logs)')
+                                self.preview_on_next_solver_result = False
                         else:
                             if timed_out:
                                 logger.error('SOLVER: No result - subprocess timed out')
                                 self._set_message(f'Solver timed out after {int(solver_timeout)}s')
+                            elif proc_exitcode is not None and proc_exitcode < 0:
+                                logger.info(
+                                    'SOLVER: Subprocess terminated before output (exitcode=%s)',
+                                    proc_exitcode,
+                                )
+                                self._set_message(f'Solver terminated (exitcode={proc_exitcode})')
                             else:
                                 logger.warning('SOLVER: No result loaded (res is None), subprocess may have crashed')
                                 self._set_message('Solver finished (no output)')
+                            self.preview_on_next_solver_result = False
                     finally:
                         # CRITICAL: ALWAYS clean up process and files in finally block
                         # This MUST run even if result loading/application crashes
@@ -6056,6 +6297,8 @@ class ZeldaGUI:
         - Kick off a lightweight preview search (process preferred, fallback to thread)
         - Ensure rendering/screenshot work happens on the main thread (no pygame calls from watcher)
         """
+        self._sync_solver_dropdown_settings()
+
         # If env is finished state for some reason, reload to ensure consistent setup
         if getattr(self, 'env', None) and getattr(self.env, 'done', False):
             try:
@@ -6159,15 +6402,38 @@ class ZeldaGUI:
                 graph = getattr(cur, 'graph', None)
                 room_to_node = getattr(cur, 'room_to_node', None)
                 room_positions = getattr(cur, 'room_positions', None)
+                node_to_room = getattr(cur, 'node_to_room', None)
                 
                 fd, grid_file = tempfile.mkstemp(prefix='zave_preview_', suffix='.npy')
                 os.close(fd)
                 _np.save(grid_file, _np.array(grid_data, dtype=_np.int64))
-                preview_out = os.path.join(tempfile.gettempdir(), f'zave_preview_out_{int(time.time())}_{os.getpid()}.pkl')
+                fd_out, preview_out = tempfile.mkstemp(prefix='zave_preview_out_', suffix='.pkl')
+                os.close(fd_out)
+                # Child process writes the preview payload; remove placeholder first.
+                try:
+                    os.remove(preview_out)
+                except Exception:
+                    pass
+                start_pos = getattr(getattr(self, 'env', None), 'start_pos', None)
+                goal_pos = getattr(getattr(self, 'env', None), 'goal_pos', None)
+                if start_pos is None or goal_pos is None:
+                    logger.warning('Preview process skipped: missing start/goal positions')
+                    self.preview_result = None
+                    self.preview_done = True
+                    self._set_message('Preview unavailable (missing start/goal)', 2.0)
+                    return
+                preview_priority_options = {
+                    'tie_break': self.feature_flags.get('priority_tie_break', False),
+                    'key_boost': self.feature_flags.get('priority_key_boost', False),
+                    'enable_ara': self.feature_flags.get('enable_ara', False),
+                    'ara_weight': float(getattr(self, 'ara_weight', 1.0)),
+                    'representation': str(getattr(self, 'search_representation', 'hybrid')),
+                    'allow_diagonals': True,
+                }
                 proc = multiprocessing.Process(
                     target=_run_preview_and_dump, 
-                    args=(grid_file, tuple(self.env.start_pos), tuple(self.env.goal_pos), getattr(self, 'algorithm_idx', 0), dict(self.feature_flags), {}, preview_out),
-                    kwargs={'graph': graph, 'room_to_node': room_to_node, 'room_positions': room_positions},
+                    args=(grid_file, tuple(start_pos), tuple(goal_pos), getattr(self, 'algorithm_idx', 0), dict(self.feature_flags), preview_priority_options, preview_out),
+                    kwargs={'graph': graph, 'room_to_node': room_to_node, 'room_positions': room_positions, 'node_to_room': node_to_room},
                     daemon=True)
                 logger.debug('Starting preview process for map %s -> outfile=%s gridfile=%s', self.current_map_idx, preview_out, grid_file)
                 proc.start()
@@ -6201,6 +6467,7 @@ class ZeldaGUI:
         self.solver_running = False
         self.solver_done = True
         self.solver_proc = None
+        self.solver_thread = None
         self.solver_outfile = None
         self.solver_gridfile = None
         self.solver_start_time = None
@@ -6209,6 +6476,39 @@ class ZeldaGUI:
         if hasattr(self, 'solver_algorithm_idx'):
             delattr(self, 'solver_algorithm_idx')
         logger.debug('SOLVER_CLEANUP: State cleared')
+
+    def _sync_solver_dropdown_settings(self):
+        """Refresh algorithm/representation/ARA values from dropdown widgets."""
+        alg_idx = int(getattr(self, 'algorithm_idx', 0) or 0)
+        rep_mode = str(getattr(self, 'search_representation', 'hybrid') or 'hybrid').lower()
+        ara_weight = float(getattr(self, 'ara_weight', 1.0) or 1.0)
+
+        rep_map = {0: 'hybrid', 1: 'tile', 2: 'graph'}
+        if hasattr(self, 'widget_manager') and self.widget_manager:
+            for widget in self.widget_manager.widgets:
+                control_name = getattr(widget, 'control_name', None)
+                if control_name == 'algorithm':
+                    try:
+                        alg_idx = int(widget.selected)
+                    except Exception:
+                        pass
+                elif control_name == 'representation':
+                    rep_mode = rep_map.get(getattr(widget, 'selected', 0), rep_mode)
+                elif control_name == 'ara_weight':
+                    try:
+                        ara_weight = float(widget.options[widget.selected])
+                    except Exception:
+                        pass
+
+        if rep_mode not in {'tile', 'graph', 'hybrid'}:
+            rep_mode = 'hybrid'
+        if not isinstance(ara_weight, (int, float)) or ara_weight <= 0:
+            ara_weight = 1.0
+
+        self.algorithm_idx = alg_idx
+        self.search_representation = rep_mode
+        self.ara_weight = float(ara_weight)
+        return alg_idx, rep_mode, float(ara_weight)
 
     def _start_auto_solve(self):
         """Start auto-solve mode using state-space solver with inventory tracking.
@@ -6224,25 +6524,20 @@ class ZeldaGUI:
         
         # CRITICAL FIX: Read algorithm_idx directly from dropdown widget at solve-time
         # This is the DEFINITIVE source of truth for which algorithm the user selected
-        alg_idx = None  # Will be set by widget lookup
-        if hasattr(self, 'widget_manager') and self.widget_manager:
-            for widget in self.widget_manager.widgets:
-                if hasattr(widget, 'control_name') and widget.control_name == 'algorithm':
-                    alg_idx = widget.selected
-                    logger.info('SOLVER_FIX: Read algorithm_idx=%d (%s) directly from dropdown widget.selected',
-                               alg_idx, algorithm_names[alg_idx] if alg_idx < len(algorithm_names) else 'Unknown')
-                    break
-        
-        # Fallback to self.algorithm_idx if widget not found (shouldn't happen in normal operation)
-        if alg_idx is None:
-            alg_idx = getattr(self, 'algorithm_idx', 0)
-            logger.warning('SOLVER_FIX: Widget lookup failed, falling back to self.algorithm_idx=%d', alg_idx)
-        
+        alg_idx, rep_mode, ara_weight = self._sync_solver_dropdown_settings()
+        logger.info(
+            'SOLVER_FIX: Synced settings from dropdowns -> alg_idx=%d, representation=%s, ara_weight=%.2f',
+            alg_idx,
+            rep_mode,
+            ara_weight,
+        )
+
         alg_name = algorithm_names[alg_idx] if alg_idx < len(algorithm_names) else f"Algorithm {alg_idx}"
         
         logger.info('═══════════════════════════════════════════════════')
         logger.info('DEBUG_SOLVER: _start_auto_solve() called')
         logger.info(f'  Algorithm: {alg_name} (idx={alg_idx})')
+        logger.info('  Search representation: %s, ara_weight=%.2f', self.search_representation, self.ara_weight)
         logger.info('DEBUG_SOLVER: solver_running=%s, auto_mode=%s, auto_start_solver=%s',
                     getattr(self, 'solver_running', None),
                     getattr(self, 'auto_mode', None),
@@ -6275,9 +6570,30 @@ class ZeldaGUI:
             except Exception:
                 proc_alive = False
             
-            # Calculate age and check timeout (default 30s, configurable via env var)
+            # Calculate age and check timeout (algorithm-aware defaults, configurable via env var)
             solver_age = (time.time() - start_time) if start_time else 0
-            solver_timeout = float(os.environ.get('KLTN_SOLVER_TIMEOUT', '30'))
+            active_alg = int(getattr(self, 'solver_algorithm_idx', getattr(self, 'algorithm_idx', 0)))
+            if active_alg == 0:
+                default_timeout = 60.0
+            elif active_alg in (1, 2):
+                default_timeout = 180.0
+            elif active_alg == 3:
+                default_timeout = 90.0
+            elif active_alg == 4:
+                default_timeout = 120.0
+            else:
+                default_timeout = 240.0
+
+            try:
+                current_map = self.maps[self.current_map_idx]
+                grid_ref = current_map.global_grid if hasattr(current_map, 'global_grid') else current_map
+                grid_cells = int(np.asarray(grid_ref).size)
+                baseline_cells = 16 * 11 * 8
+                scale = float(np.clip(grid_cells / max(1, baseline_cells), 1.0, 3.0))
+                default_timeout *= scale
+            except Exception:
+                pass
+            solver_timeout = float(os.environ.get('KLTN_SOLVER_TIMEOUT', str(default_timeout)))
             
             # FORCE CLEANUP if:
             # 1. Process dead but not marked done, OR
@@ -6315,6 +6631,7 @@ class ZeldaGUI:
                 # We want the main loop to poll and clean up properly, not skip polling entirely.
                 # self.solver_done = True  # ← BUG: This prevents retry from working!
                 self.solver_proc = None
+                self.solver_thread = None
                 self.solver_outfile = None
                 self.solver_gridfile = None
                 self.solver_start_time = None
@@ -6329,6 +6646,16 @@ class ZeldaGUI:
                 # Still running legitimately - don't allow retry
                 logger.warning('DEBUG_SOLVER: Solver legitimately running (age=%.1fs < %.1fs timeout)', solver_age, solver_timeout)
                 return
+
+        # Optional fast prechecks + auto-prune before launching heavy solver.
+        precheck_ok, precheck_msg = self._run_prechecks_and_optional_prune()
+        if not precheck_ok:
+            self._set_message(precheck_msg or 'Precheck failed', 4.0)
+            logger.warning('PRECHECK: Solve blocked: %s', precheck_msg)
+            return
+        if precheck_msg:
+            logger.info('PRECHECK: %s', precheck_msg)
+
         # Stop any running preview process to avoid orphaned workers and stale output
         try:
             p = getattr(self, 'preview_proc', None)
@@ -6363,6 +6690,7 @@ class ZeldaGUI:
         self.preview_gridfile = None
         # Reset solver_done so we can detect when it completes
         self.solver_done = False
+        self.solver_thread = None
         # CRITICAL: Clear previous path so old path doesn't show while new solver runs
         self.auto_path = []
         self.auto_mode = False
@@ -6378,7 +6706,7 @@ class ZeldaGUI:
         # DEBUG: Synchronous solver for debugging multiprocessing issues
         if DEBUG_SYNC_SOLVER:
             logger.warning('DEBUG_SOLVER: Running solver SYNCHRONOUSLY (blocking)')
-            self._run_solver_sync()
+            self._run_solver_sync(algorithm_idx=alg_idx)
             return
         
         # Indicate starting
@@ -6390,8 +6718,9 @@ class ZeldaGUI:
         except Exception:
             logger.exception('Failed to schedule solver')
             self._set_message('Failed to start solver', 3.0)
+            self.preview_on_next_solver_result = False
 
-    def _run_solver_sync(self):
+    def _run_solver_sync(self, algorithm_idx=None):
         """DEBUG: Run solver synchronously in main thread to bypass multiprocessing issues.
         
         This blocks the UI but helps diagnose whether the issue is in multiprocessing
@@ -6399,6 +6728,7 @@ class ZeldaGUI:
         """
         logger.warning('DEBUG_SYNC: Starting synchronous solver (UI will freeze)')
         self._set_message('Running solver synchronously (debug)...', 5.0)
+        self._sync_solver_dropdown_settings()
         
         # Get grid and positions
         cur = self.maps[self.current_map_idx]
@@ -6423,12 +6753,15 @@ class ZeldaGUI:
         
         start = tuple(self.env.start_pos)
         goal = tuple(self.env.goal_pos)
-        alg_idx = getattr(self, 'algorithm_idx', 0)
+        alg_idx = algorithm_idx if algorithm_idx is not None else getattr(self, 'algorithm_idx', 0)
         flags = dict(self.feature_flags)
         priority_options = {
             'tie_break': self.feature_flags.get('priority_tie_break', False),
             'key_boost': self.feature_flags.get('priority_key_boost', False),
             'enable_ara': self.feature_flags.get('enable_ara', False),
+            'ara_weight': float(getattr(self, 'ara_weight', 1.0)),
+            'representation': str(getattr(self, 'search_representation', 'hybrid')),
+            'allow_diagonals': True,
         }
         
         logger.info('DEBUG_SYNC: Calling _solve_in_subprocess with start=%s, goal=%s', start, goal)
@@ -6562,6 +6895,7 @@ class ZeldaGUI:
             self.solver_done = False
             self.solver_start_time = time.time()
             self.solver_starting = True
+        self._sync_solver_dropdown_settings()
         
         # CRITICAL FIX: Use explicit algorithm_idx parameter if provided
         # This eliminates race conditions between dropdown widget state and self.algorithm_idx
@@ -6607,18 +6941,25 @@ class ZeldaGUI:
             return False
         start = tuple(self.env.start_pos)
         goal = tuple(self.env.goal_pos)
-        alg_idx = getattr(self, 'algorithm_idx', 0)
+        alg_idx = current_alg_idx if current_alg_idx is not None else 0
         flags = dict(self.feature_flags)
         priority_options = {
             'tie_break': self.feature_flags.get('priority_tie_break', False),
             'key_boost': self.feature_flags.get('priority_key_boost', False),
             'enable_ara': self.feature_flags.get('enable_ara', False),
+            'ara_weight': float(getattr(self, 'ara_weight', 1.0)),
+            'representation': str(getattr(self, 'search_representation', 'hybrid')),
             'allow_diagonals': True,  # Enable for fast pathfinding (30× speedup), converted to 4-dir for display
         }
 
-        # Create temp file path for child to write result with pickle
-        temp_dir = tempfile.gettempdir()
-        out_file = os.path.join(temp_dir, f'zave_solver_out_{int(time.time())}_{os.getpid()}.pkl')
+        # Create unique temp file path for child to write result with pickle.
+        # Use mkstemp instead of timestamp names to avoid collisions across rapid restarts.
+        fd_out, out_file = tempfile.mkstemp(prefix='zave_solver_out_', suffix='.pkl')
+        os.close(fd_out)
+        try:
+            os.remove(out_file)
+        except Exception:
+            pass
         logger.info('SOLVER: Starting subprocess, pickle_path=%s', out_file)
         logger.info('SOLVER: start=%s, goal=%s, algorithm_idx=%s', start, goal, alg_idx)
 
@@ -6653,6 +6994,7 @@ class ZeldaGUI:
                     proc = multiprocessing.Process(target=_time.sleep, args=(2,), daemon=True)
                     proc.start()
                     self.solver_proc = proc
+                    self.solver_thread = None
                     self.solver_starting = False
                     # Note: solver_outfile and solver_gridfile already set before _start_proc
                     self._set_message('Test solver process started (sleep)')
@@ -6668,6 +7010,7 @@ class ZeldaGUI:
                 proc.start()
                 logger.info('SOLVER: Subprocess started pid=%s, is_alive=%s', getattr(proc,'pid',None), proc.is_alive())
                 self.solver_proc = proc
+                self.solver_thread = None
                 self.solver_starting = False
                 # Note: solver_outfile and solver_gridfile already set before _start_proc
                 self._set_message('Solver started in background')
@@ -6706,15 +7049,14 @@ class ZeldaGUI:
                         self.solver_running = False
                         self.solver_start_time = None
                         self.solver_starting = False
-                        # Clear solver_algorithm_idx to avoid stale banner display
-                        if hasattr(self, 'solver_algorithm_idx'):
-                            delattr(self, 'solver_algorithm_idx')
+                        self.solver_thread = None
                         logger.info('SOLVER: Thread fallback finished, solver_running=False (main loop will poll results)')
                 # Store outfile so run loop can read it
                 self.solver_outfile = out_file
                 self.solver_gridfile = grid_file
                 try:
                     th = threading.Thread(target=_thread_fallback, daemon=True)
+                    self.solver_thread = th
                     th.start()
                     self._set_message('Solver started in background (thread fallback)')
                 except Exception as thread_err:
@@ -6723,6 +7065,7 @@ class ZeldaGUI:
                     # Setting solver_done=True would prevent the completion block from cleaning up temp files.
                     self.solver_running = False
                     self.solver_proc = None
+                    self.solver_thread = None
                     self.solver_outfile = None
                     # Clear solver_algorithm_idx to avoid stale banner display
                     if hasattr(self, 'solver_algorithm_idx'):
@@ -6762,10 +7105,12 @@ class ZeldaGUI:
                     getattr(self, 'auto_mode', None),
                     getattr(self, 'auto_step_idx', None))
         
-        self.auto_path = path
+        self.auto_path = [tuple(p) for p in path]
         self.auto_step_idx = 0
         self.auto_mode = True
         self.auto_step_timer = 0.0  # Reset animation timer
+        self._auto_stuck_retries = 0
+        self.preview_on_next_solver_result = False
         # Reset usage counters for visual run
         self.keys_used = 0
         self.bombs_used = 0
@@ -6780,6 +7125,11 @@ class ZeldaGUI:
         self.boss_keys_collected = 0
         self.item_type_map = {}  # Reset item type mapping
         self.item_pickup_times = {}  # Reset pickup flash timers
+        if self.env is None:
+            logger.error('EXECUTE: environment is not initialized')
+            self.auto_mode = False
+            self._show_error('Environment not initialized')
+            return
         self.env.reset()
         
         # Store CBS metrics if available
@@ -6843,9 +7193,17 @@ class ZeldaGUI:
         """
         Start auto-solve after user confirms path preview.
         """
+        if not getattr(self, 'auto_path', None):
+            self.auto_mode = False
+            self._show_error('No preview path available')
+            return
+        self.auto_path = [tuple(p) for p in self.auto_path]
+
         self.auto_step_idx = 0
         self.auto_mode = True
         self.auto_step_timer = 0.0  # Reset animation timer
+        self._auto_stuck_retries = 0
+        self.preview_on_next_solver_result = False
         # Reset usage counters for visual run
         self.keys_used = 0
         self.bombs_used = 0
@@ -6860,6 +7218,10 @@ class ZeldaGUI:
         self.boss_keys_collected = 0
         self.item_type_map = {}  # Reset item type mapping
         self.item_pickup_times = {}  # Reset pickup flash timers
+        if self.env is None:
+            self.auto_mode = False
+            self._show_error('Environment not initialized')
+            return
         self.env.reset()
         
         # === SCAN ITEMS ALONG PATH for visualization ===
@@ -6875,6 +7237,10 @@ class ZeldaGUI:
         preview_dialog = self.path_preview_dialog
         self.path_preview_dialog = None
         self.preview_overlay_visible = False
+
+        # Keep solver metadata available for HUD/route export.
+        if preview_dialog and getattr(preview_dialog, 'solver_result', None):
+            self.solver_result = preview_dialog.solver_result
         
         # Use stored path and show message with items preview
         if preview_dialog:
@@ -7002,7 +7368,7 @@ class ZeldaGUI:
             # Check graph neighbors
             for neighbor_node in graph.neighbors(current_node):
                 neighbor_room = node_to_room.get(neighbor_node)
-                if neighbor_room and neighbor_room in current_dungeon.room_positions:
+                if neighbor_room and neighbor_room in room_positions:
                     # Find stairs in neighbor room, or entry point
                     neighbor_stairs = get_stairs_in_room(neighbor_room)
                     if neighbor_stairs:
@@ -7016,22 +7382,21 @@ class ZeldaGUI:
         
         # Choose search algorithm based on UI selection
         alg = getattr(self, 'algorithm_idx', 0)
-        # 0: A*, 1: BFS, 2: Dijkstra, 3: Greedy, 4: D* Lite (fallback to A*)
-        # 5-10: CBS variants (use subprocess solver, not quick grid path)
-        # Note: D* Lite not yet implemented — selecting it currently uses A* fallback.
+        # 0: A*, 1: BFS, 2: Dijkstra, 3: Greedy, 4: D* Lite
+        # 5: DFS/IDDFS, 6: Bidirectional A*, 7-12: CBS variants
         
-        # CRITICAL FIX: CBS algorithms (5-10) require the full subprocess solver
+        # DFS/Bidirectional/CBS algorithms require the full subprocess solver
         # They cannot be implemented as simple grid search, so skip quick path
         # and return to trigger the heavy solver immediately
-        cbs_algorithms = {5, 6, 7, 8, 9, 10}
-        if alg in cbs_algorithms:
+        full_solver_algorithms = {5, 6, 7, 8, 9, 10, 11, 12}
+        if alg in full_solver_algorithms:
             algorithm_names = ["A*", "BFS", "Dijkstra", "Greedy", "D* Lite",
                              "DFS/IDDFS", "Bidirectional A*",
                              "CBS (Balanced)", "CBS (Explorer)", "CBS (Cautious)",
                              "CBS (Forgetful)", "CBS (Speedrunner)", "CBS (Greedy)"]
             alg_name = algorithm_names[alg] if alg < len(algorithm_names) else f"Algorithm {alg}"
-            logger.info(f"CBS algorithm selected ({alg_name}): Skipping quick grid path, will use full solver")
-            # Return failure to trigger fallback to full subprocess solver with CBS support
+            logger.info(f"{alg_name} selected: skipping quick grid path, using full solver")
+            # Return failure to trigger fallback to full subprocess solver.
             return False, [], 0
         
         if alg == 4:
@@ -7039,13 +7404,15 @@ class ZeldaGUI:
             logger.info("D* Lite selected - using incremental replanning")
             try:
                 from src.simulation.dstar_lite import DStarLiteSolver
-                env = ZeldaLogicEnv(current_grid.copy(), self.start_pos, self.goal_pos)
-                solver = DStarLiteSolver(env)
-                success, path, nodes_explored = solver.solve()
+                start_state = self.env.state.copy()
+                solver = DStarLiteSolver(self.env, heuristic_mode="balanced")
+                success, path, nodes_explored = solver.solve(start_state)
                 
                 if success and path:
-                    logger.info(f"D* Lite succeeded: path_len={len(path)}, nodes={nodes_explored}")
-                    return True, path, nodes_explored
+                    display_path = _convert_diagonal_to_4dir(path, grid=grid)
+                    algo_label = "D* Lite (fallback: A*)" if getattr(solver, 'used_fallback', False) else "D* Lite"
+                    logger.info(f"{algo_label} succeeded: path_len={len(display_path)}, nodes={nodes_explored}")
+                    return True, display_path, 0
                 else:
                     logger.warning("D* Lite failed, falling back to A*")
                     # Fall through to A* below
@@ -7055,7 +7422,7 @@ class ZeldaGUI:
 
         def heuristic(a, b):
             # Use ML heuristic if enabled and model available, else Manhattan (or octile for diagonal)
-            if self.feature_flags.get('ml_heuristic', False) and getattr(self, 'ml_model', None):
+            if self.feature_flags.get('ml_heuristic', False) and getattr(self, '_ml_heuristic', None):
                 try:
                     return self._ml_heuristic(a, b)
                 except Exception as e:
@@ -7065,17 +7432,83 @@ class ZeldaGUI:
                 return math.hypot(a[0]-b[0], a[1]-b[1])
             return abs(a[0] - b[0]) + abs(a[1] - b[1])
 
-        # Placeholder ML heuristic loader
-        if not hasattr(self, 'ml_model'):
+        # Lazy ML heuristic initialization (one-time).
+        if not getattr(self, '_ml_heuristic_ready', False):
+            self._ml_heuristic_ready = True
             self.ml_model = None
-        def _ml_heuristic_stub(a, b):
-            # For now, a simple biased Manhattan (simulates ML model outputs)
-            return 0.9 * (abs(a[0] - b[0]) + abs(a[1] - b[1]))
-        if getattr(self, 'ml_model', None) is None:
-            self._ml_heuristic = _ml_heuristic_stub
-        else:
-            # If you add a real model loader, assign self._ml_heuristic accordingly
-            pass
+
+            model_paths = []
+            base_root = Path(getattr(self, 'repo_root', Path.cwd()))
+            env_path = os.environ.get('KLTN_ML_HEURISTIC_MODEL', '').strip()
+            if env_path:
+                model_paths.append(Path(env_path))
+            model_paths.extend([
+                base_root / "checkpoints" / "heuristic_net.pth",
+                base_root / "models" / "heuristic_net.pth",
+            ])
+
+            try:
+                from src.ml.heuristic_learning import HeuristicTrainer
+
+                for model_path in model_paths:
+                    if not model_path or not model_path.exists():
+                        continue
+                    try:
+                        self.ml_model = HeuristicTrainer.load_model(str(model_path))
+                        logger.info(f"Loaded ML heuristic model: {model_path}")
+                        break
+                    except Exception as model_err:
+                        logger.warning(f"Failed loading ML heuristic model {model_path}: {model_err}")
+            except Exception as import_err:
+                logger.debug(f"ML heuristic module unavailable: {import_err}")
+
+            if self.ml_model is None and self.feature_flags.get('ml_heuristic', False):
+                logger.info("ML heuristic enabled but no trained model found; using Manhattan fallback.")
+
+            def _ml_heuristic_runtime(a, b):
+                base = float(abs(a[0] - b[0]) + abs(a[1] - b[1]))
+                model = getattr(self, 'ml_model', None)
+                if model is None:
+                    return base
+                try:
+                    state = getattr(self, 'game_state', None)
+                    if state is None and getattr(self, 'env', None) is not None:
+                        state = getattr(self.env, 'state', None)
+
+                    keys = float(getattr(state, 'keys', 0)) if state is not None else 0.0
+                    bomb_count = float(getattr(state, 'bomb_count', 0)) if state is not None else 0.0
+                    has_bomb = 1.0 if bomb_count > 0 else 0.0
+                    has_boss_key = float(getattr(state, 'has_boss_key', False)) if state is not None else 0.0
+                    has_item = float(getattr(state, 'has_item', False)) if state is not None else 0.0
+
+                    total_cells = max(1, H * W)
+                    locked_ratio = float(np.sum(grid == SEMANTIC_PALETTE['DOOR_LOCKED'])) / total_cells
+                    exploration_progress = 1.0 - (base / max(1.0, float(H + W)))
+
+                    features = np.array([
+                        float(a[1]) / max(1.0, float(W - 1)),
+                        float(a[0]) / max(1.0, float(H - 1)),
+                        min(keys / 5.0, 1.0),
+                        has_bomb,
+                        has_boss_key,
+                        has_item,
+                        base / max(1.0, float(H + W)),
+                        locked_ratio,
+                        min(keys / 10.0, 1.0),
+                        max(0.0, min(1.0, exploration_progress)),
+                    ], dtype=np.float32)
+
+                    pred = float(model.predict_cost(features))
+                    if not np.isfinite(pred):
+                        return base
+
+                    # Preserve A* admissibility when ML heuristic is used.
+                    return max(0.0, min(pred, base))
+                except Exception as runtime_err:
+                    logger.debug(f"ML heuristic runtime fallback: {runtime_err}")
+                    return base
+
+            self._ml_heuristic = _ml_heuristic_runtime
         max_iterations = 200000
         counter = 0
         # Track iterations for diagnostics (nodes expanded)
@@ -7096,7 +7529,7 @@ class ZeldaGUI:
                     self.search_heatmap[pos] = self.search_heatmap.get(pos, 0) + 1
                 if pos == goal:
                     self.last_search_iterations = iterations
-                    return True, path, teleports
+                    return True, _convert_diagonal_to_4dir(path, grid=grid), teleports
                 # 4-directional walking
                 for dy, dx in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
                     ny, nx = y + dy, x + dx
@@ -7117,6 +7550,8 @@ class ZeldaGUI:
         else:
             # Implement priority-search-based algorithms (A*, Dijkstra, Greedy)
             import heapq
+            def euclidean(a, b):
+                return math.hypot(a[0] - b[0], a[1] - b[1])
             # Node state: (pos, visited_stairs_frozenset)
             start_state = (start, frozenset())
             # Priority queue entries: (priority, g_cost, counter, pos, visited_stairs, teleports, path)
@@ -7263,18 +7698,20 @@ class ZeldaGUI:
         
         start = self.env.start_pos
         goal = self.env.goal_pos
+        if start is None or goal is None:
+            return False, [], 0
         
         def get_room(pos):
             y, x = pos
-            for room_pos, (ry, rx) in current_dungeon.room_positions.items():
+            for room_pos, (ry, rx) in room_positions.items():
                 if ry <= y < ry + ROOM_HEIGHT and rx <= x < rx + ROOM_WIDTH:
                     return room_pos
             return None
         
         def find_entry(room_pos):
-            if room_pos not in current_dungeon.room_positions:
+            if room_pos not in room_positions:
                 return None
-            ry, rx = current_dungeon.room_positions[room_pos]
+            ry, rx = room_positions[room_pos]
             for dy in range(ROOM_HEIGHT):
                 for dx in range(ROOM_WIDTH):
                     y, x = ry + dy, rx + dx
@@ -7307,10 +7744,15 @@ class ZeldaGUI:
                             queue.append(((ny, nx), path + [(ny, nx)]))
             return None
         
+        # If topology metadata is unavailable, fall back to direct grid BFS.
+        if not room_positions or graph is None:
+            direct = local_bfs(start, goal, max_steps=50000)
+            if direct:
+                return True, direct, 0
+            return False, [], 0
+
         # Get graph path
-        room_to_node = getattr(current_dungeon, 'room_to_node', {})
         node_to_room = {v: k for k, v in room_to_node.items()}
-        graph = current_dungeon.graph
         
         start_room = get_room(start)
         goal_room = get_room(goal)
@@ -7329,7 +7771,7 @@ class ZeldaGUI:
         room_sequence = []
         for node in graph_path:
             room = node_to_room.get(node)
-            if room and room in current_dungeon.room_positions:
+            if room and room in room_positions:
                 room_sequence.append(room)
         
         # Build path with teleportation
@@ -7374,7 +7816,16 @@ class ZeldaGUI:
         from collections import deque
         
         current_dungeon = self.maps[self.current_map_idx]
-        grid = current_dungeon.global_grid
+        if hasattr(current_dungeon, 'global_grid'):
+            grid = current_dungeon.global_grid
+            room_positions = getattr(current_dungeon, 'room_positions', {})
+            room_to_node = getattr(current_dungeon, 'room_to_node', {})
+            graph = getattr(current_dungeon, 'graph', None)
+        else:
+            grid = current_dungeon
+            room_positions = {}
+            room_to_node = {}
+            graph = None
         H, W = grid.shape
         
         # Constants
@@ -7396,22 +7847,22 @@ class ZeldaGUI:
         start = self.env.start_pos
         goal = self.env.goal_pos
         
-        if not start or not goal:
-            return False, []
+        if start is None or goal is None:
+            return False, [], 0
         
         # Helper: find room containing position
         def get_room(pos):
             y, x = pos
-            for room_pos, (ry, rx) in current_dungeon.room_positions.items():
+            for room_pos, (ry, rx) in room_positions.items():
                 if ry <= y < ry + ROOM_HEIGHT and rx <= x < rx + ROOM_WIDTH:
                     return room_pos
             return None
         
         # Helper: find passable position in room (prefer stairs, then center)
         def find_entry_point(room_pos):
-            if room_pos not in current_dungeon.room_positions:
+            if room_pos not in room_positions:
                 return None
-            ry, rx = current_dungeon.room_positions[room_pos]
+            ry, rx = room_positions[room_pos]
             
             # First try to find a stair
             for dy in range(ROOM_HEIGHT):
@@ -7457,13 +7908,16 @@ class ZeldaGUI:
             return None
         
         # Step 1: Get graph path from start room to goal room
+        if not room_positions or graph is None:
+            direct = local_bfs(start, goal, max_steps=50000)
+            return (True, direct, 0) if direct else (False, [], 0)
+
         start_room = get_room(start)
         goal_room = get_room(goal)
         
         if not start_room or not goal_room:
-            return False, []
+            return False, [], 0
         
-        room_to_node = getattr(current_dungeon, 'room_to_node', {})
         node_to_room = {v: k for k, v in room_to_node.items()}
         
         start_node = room_to_node.get(start_room)
@@ -7472,28 +7926,28 @@ class ZeldaGUI:
         if start_node is None or goal_node is None:
             # Fallback to direct BFS
             path = local_bfs(start, goal, max_steps=50000)
-            return (True, path) if path else (False, [])
+            return (True, path, 0) if path else (False, [], 0)
         
         # Get graph path
-        graph = current_dungeon.graph
         try:
             graph_path = nx.shortest_path(graph, start_node, goal_node)
         except nx.NetworkXNoPath:
-            return False, []
+            return False, [], 0
         
         # Step 2: Build room sequence (skip unmapped nodes)
         room_sequence = []
         for node in graph_path:
             room = node_to_room.get(node)
-            if room and room in current_dungeon.room_positions:
+            if room and room in room_positions:
                 room_sequence.append(room)
         
         if not room_sequence:
-            return False, []
+            return False, [], 0
         
         # Step 3: Build full path by connecting rooms
         full_path = [start]
         current_pos = start
+        teleports = 0
         
         for target_room in room_sequence:
             target_pos = find_entry_point(target_room)
@@ -7515,6 +7969,7 @@ class ZeldaGUI:
                 # Not connected physically - teleport!
                 full_path.append(target_pos)
                 current_pos = target_pos
+                teleports += 1
         
         # Final segment to goal
         if current_pos != goal:
@@ -7524,18 +7979,20 @@ class ZeldaGUI:
             else:
                 # Teleport to goal as last resort
                 full_path.append(goal)
+                teleports += 1
         
         # Validate path ends at goal
         if full_path[-1] != goal:
             full_path.append(goal)
         
-        return True, full_path
+        return True, full_path, teleports
     
     def _stop_auto(self, reason: str = None):
         """Stop auto-solve mode with consistent logging and cleanup."""
         try:
             logger.debug("_stop_auto called: %s", reason)
             self.auto_mode = False
+            self._auto_stuck_retries = 0
             # Keep path visible for 'path complete' (victory) but clear for other reasons
             if reason != 'path complete':
                 try:
@@ -7723,6 +8180,39 @@ class ZeldaGUI:
             
             # Get new position immediately after step
             new_pos = self.env.state.position
+
+            # Guard against path desync: if the environment did not reach the expected
+            # target, do not advance the path cursor blindly.
+            if not done and new_pos != target:
+                retries = int(getattr(self, '_auto_stuck_retries', 0)) + 1
+                self._auto_stuck_retries = retries
+                logger.warning(
+                    "_auto_step: blocked or desynced move (expected=%s, actual=%s, retry=%d)",
+                    target, new_pos, retries
+                )
+
+                # Roll back one step so the next frame retries the same planned move.
+                self.auto_step_idx = max(0, self.auto_step_idx - 1)
+
+                # If state moved unexpectedly, attempt to realign to the new position.
+                if new_pos != current:
+                    try:
+                        realign_idx = self.auto_path.index(new_pos, self.auto_step_idx)
+                        self.auto_step_idx = realign_idx
+                        self._auto_stuck_retries = 0
+                        logger.info("_auto_step: path realigned to index=%d at pos=%s", realign_idx, new_pos)
+                    except ValueError:
+                        logger.debug("_auto_step: could not realign path for pos=%s", new_pos)
+
+                if retries >= 3:
+                    self._show_error("Auto-solve path blocked; stopping")
+                    _stop_auto_local('path blocked')
+                    self.status_message = "Blocked"
+                else:
+                    self.status_message = "Retrying move..."
+                return
+
+            self._auto_stuck_retries = 0
             
             # Increment step counter
             self.step_count += 1
@@ -7820,19 +8310,27 @@ class ZeldaGUI:
         try:
             import networkx as nx
             try:
-                fname = f"topology_map_{self.current_map_idx+1}.dot"
-                nx.nx_pydot.write_dot(graph, fname)
+                export_dir = Path(getattr(self, 'topology_export_dir', Path.cwd()))
+                export_dir.mkdir(parents=True, exist_ok=True)
+                fname = export_dir / f"topology_map_{self.current_map_idx+1}.dot"
+                nx.nx_pydot.write_dot(graph, str(fname))
                 # Add node positions as comments if available
                 if room_positions:
-                    with open(fname, 'a') as f:
+                    with open(fname, 'a', encoding='utf-8') as f:
                         f.write('\n// room positions\n')
                         for room, (ry, rx) in room_positions.items():
                             f.write(f"// {room}: {ry},{rx}\n")
-                self._set_message(f"Topology exported to {fname}")
-                self.topology_export_path = fname
+                try:
+                    display_path = fname.relative_to(getattr(self, 'repo_root', Path.cwd()))
+                except Exception:
+                    display_path = fname
+                self._set_message(f"Topology exported to {display_path}")
+                self.topology_export_path = str(fname)
             except Exception as e:
                 # Fallback to manual DOT generation
-                fname = f"topology_map_{self.current_map_idx+1}.dot"
+                export_dir = Path(getattr(self, 'topology_export_dir', Path.cwd()))
+                export_dir.mkdir(parents=True, exist_ok=True)
+                fname = export_dir / f"topology_map_{self.current_map_idx+1}.dot"
                 with open(fname, 'w', encoding='utf-8') as f:
                     f.write('graph topology {\n')
                     for n in graph.nodes():
@@ -7840,8 +8338,12 @@ class ZeldaGUI:
                     for u, v in graph.edges():
                         f.write(f'  "{u}" -- "{v}";\n')
                     f.write('}\n')
-                self._set_message(f"Topology exported to {fname} (manual)\n{e}")
-                self.topology_export_path = fname
+                try:
+                    display_path = fname.relative_to(getattr(self, 'repo_root', Path.cwd()))
+                except Exception:
+                    display_path = fname
+                self._set_message(f"Topology exported to {display_path} (manual)\n{e}")
+                self.topology_export_path = str(fname)
         except ImportError:
             self._set_message('NetworkX not available - cannot export DOT automatically', 4.0)
 
@@ -8025,6 +8527,332 @@ class ZeldaGUI:
         self._set_message('Undo: restored previous mapping', 3.0)
         logger.info('Undo applied: restored previous mapping')
 
+    def _room_for_global_position(self, pos: Optional[Tuple[int, int]], room_positions: dict) -> Optional[Tuple[int, int]]:
+        """Map a global tile coordinate to a room-grid coordinate."""
+        if pos is None or not room_positions:
+            return None
+        pr, pc = int(pos[0]), int(pos[1])
+        room_h, room_w = 16, 11  # VGLC Zelda room size
+        for room_pos, offsets in room_positions.items():
+            if not offsets:
+                continue
+            r_off, c_off = offsets
+            if r_off <= pr < r_off + room_h and c_off <= pc < c_off + room_w:
+                return room_pos
+        return None
+
+    @staticmethod
+    def _node_has_small_key(attrs: dict) -> bool:
+        """Best-effort small-key detection from graph node attributes/labels."""
+        if not isinstance(attrs, dict):
+            return False
+        if bool(attrs.get('is_boss_key') or attrs.get('has_boss_key')):
+            return False
+        if bool(attrs.get('is_key') or attrs.get('has_key')):
+            return True
+        label = str(attrs.get('label', ''))
+        tokens = [tok.strip() for tok in label.replace('\n', ',').split(',') if tok.strip()]
+        for tok in tokens:
+            if tok == 'k' or tok.lower() == 'key':
+                return True
+        return False
+
+    def _node_has_critical_content(self, graph, node_id: Any) -> bool:
+        """Whether a node should be preserved during dead-end pruning."""
+        try:
+            attrs = graph.nodes[node_id] if graph is not None and node_id in graph else {}
+        except Exception:
+            attrs = {}
+        if not isinstance(attrs, dict):
+            return False
+
+        if attrs.get('is_start') or attrs.get('is_triforce') or attrs.get('is_boss'):
+            return True
+        if attrs.get('has_item') or attrs.get('is_boss_key') or attrs.get('has_boss_key'):
+            return True
+        if self._node_has_small_key(attrs):
+            return True
+
+        label = str(attrs.get('label', ''))
+        tokens = {tok.strip() for tok in label.replace('\n', ',').split(',') if tok.strip()}
+        critical_tokens = {
+            's', 't', 'b', 'k', 'K', 'I',
+            'start', 'triforce', 'boss', 'key', 'boss_key', 'item',
+        }
+        return len(tokens.intersection(critical_tokens)) > 0
+
+    def _capture_precheck_snapshot(self, current: Any, reason: str = "") -> None:
+        """Capture current topology state so Undo Prune can restore it."""
+        room_to_node = dict(getattr(current, 'room_to_node', {}) or {})
+        node_to_room = dict(getattr(current, 'node_to_room', {}) or {v: k for k, v in room_to_node.items()})
+        snapshot = {
+            'timestamp': time.time(),
+            'reason': reason,
+            'room_to_node': room_to_node,
+            'node_to_room': node_to_room,
+            'rooms': None,
+            'graph': None,
+        }
+        rooms = getattr(current, 'rooms', None)
+        if isinstance(rooms, dict):
+            try:
+                # Use a deep copy so later room-object mutations do not leak into undo state.
+                snapshot['rooms'] = copy.deepcopy(rooms)
+            except Exception:
+                snapshot['rooms'] = dict(rooms)
+        graph = getattr(current, 'graph', None)
+        if graph is not None:
+            try:
+                # networkx Graph.copy() is shallow for nested attrs; deepcopy gives safer undo isolation.
+                snapshot['graph'] = copy.deepcopy(graph)
+            except Exception:
+                if hasattr(graph, 'copy'):
+                    try:
+                        snapshot['graph'] = graph.copy()
+                    except Exception:
+                        snapshot['graph'] = graph
+                else:
+                    snapshot['graph'] = graph
+        self._precheck_snapshot = snapshot
+
+    def _update_env_topology_view(self, current: Any) -> None:
+        """Synchronize current map topology attributes into the active env object."""
+        if getattr(self, 'env', None) is None:
+            return
+        try:
+            self.env.graph = getattr(current, 'graph', None)
+            self.env.room_to_node = getattr(current, 'room_to_node', None)
+            self.env.room_positions = getattr(current, 'room_positions', None)
+            self.env.node_to_room = getattr(current, 'node_to_room', None)
+        except Exception:
+            logger.debug('Failed to mirror topology attributes into env', exc_info=True)
+
+    def _build_room_adjacency_from_graph(self, graph: Any, room_to_node: dict, node_to_room: dict) -> dict:
+        """Build undirected room adjacency from graph edges via node-room mapping."""
+        adjacency = {room_pos: set() for room_pos in room_to_node.keys()}
+        if graph is None:
+            return adjacency
+        try:
+            for u, v in graph.edges():
+                room_u = node_to_room.get(u)
+                room_v = node_to_room.get(v)
+                if room_u in adjacency and room_v in adjacency and room_u != room_v:
+                    adjacency[room_u].add(room_v)
+                    adjacency[room_v].add(room_u)
+        except Exception:
+            logger.debug('Failed building room adjacency from graph', exc_info=True)
+        return adjacency
+
+    def _prune_dead_end_topology(self, current: Any, preserve_rooms: set) -> List[Tuple[int, int]]:
+        """Prune dead-end rooms from topology mapping when room objects are unavailable."""
+        graph = getattr(current, 'graph', None)
+        room_to_node = dict(getattr(current, 'room_to_node', {}) or {})
+        if graph is None or not room_to_node:
+            return []
+
+        node_to_room = dict(getattr(current, 'node_to_room', {}) or {v: k for k, v in room_to_node.items()})
+        original_room_to_node = dict(room_to_node)
+        removed_rooms: List[Tuple[int, int]] = []
+
+        changed = True
+        while changed:
+            changed = False
+            adjacency = self._build_room_adjacency_from_graph(graph, room_to_node, node_to_room)
+            leaves = [
+                room_pos for room_pos in list(room_to_node.keys())
+                if len(adjacency.get(room_pos, set())) <= 1 and room_pos not in preserve_rooms
+            ]
+            if not leaves:
+                break
+
+            prunable = []
+            for room_pos in leaves:
+                node_id = room_to_node.get(room_pos)
+                if node_id is None:
+                    prunable.append(room_pos)
+                    continue
+                if not self._node_has_critical_content(graph, node_id):
+                    prunable.append(room_pos)
+
+            if not prunable:
+                break
+
+            for room_pos in prunable:
+                room_to_node.pop(room_pos, None)
+                removed_rooms.append(room_pos)
+                changed = True
+
+            kept_rooms = set(room_to_node.keys())
+            node_to_room = {node_id: room_pos for node_id, room_pos in node_to_room.items() if room_pos in kept_rooms}
+
+        if not removed_rooms:
+            return []
+
+        removed_nodes = [original_room_to_node[r] for r in removed_rooms if r in original_room_to_node]
+        new_graph = graph
+        try:
+            if removed_nodes and hasattr(graph, 'copy'):
+                new_graph = graph.copy()
+                new_graph.remove_nodes_from([n for n in set(removed_nodes) if n in new_graph])
+        except Exception:
+            logger.debug('Failed to remove pruned nodes from graph; keeping original graph', exc_info=True)
+            new_graph = graph
+
+        current.graph = new_graph
+        current.room_to_node = room_to_node
+        current.node_to_room = node_to_room
+        return removed_rooms
+
+    def _run_prechecks_and_optional_prune(self) -> Tuple[bool, Optional[str]]:
+        """Run lightweight prechecks and optional dead-end pruning before solve."""
+        if not self.feature_flags.get('enable_prechecks', False):
+            return True, None
+
+        current = self.maps[self.current_map_idx]
+        if not getattr(self, 'env', None):
+            return False, 'PRECHECK_FAIL: Environment not initialized'
+
+        start = getattr(self.env, 'start_pos', None)
+        goal = getattr(self.env, 'goal_pos', None)
+        if start is None or goal is None:
+            return False, 'PRECHECK_FAIL: Missing start/goal position'
+
+        graph = getattr(current, 'graph', None)
+        room_positions = dict(getattr(current, 'room_positions', {}) or {})
+        room_to_node = dict(getattr(current, 'room_to_node', {}) or {})
+        node_to_room = dict(getattr(current, 'node_to_room', {}) or {v: k for k, v in room_to_node.items()})
+        start_room = self._room_for_global_position(start, room_positions)
+        goal_room = self._room_for_global_position(goal, room_positions)
+
+        # Topology precheck when graph metadata is available.
+        if graph is not None and room_positions and room_to_node:
+            start_node = room_to_node.get(start_room) if start_room is not None else None
+            goal_node = room_to_node.get(goal_room) if goal_room is not None else None
+            if start_node is not None and goal_node is not None:
+                try:
+                    import networkx as nx
+                    if not nx.has_path(graph.to_undirected(), start_node, goal_node):
+                        return False, 'PRECHECK_FAIL: Start and goal are disconnected in topology'
+                except Exception:
+                    logger.debug('Topology connectivity precheck failed open', exc_info=True)
+
+                # Minimal locked-door requirement vs available small keys.
+                try:
+                    import heapq
+
+                    def edge_locked_cost(u, v) -> int:
+                        data = graph.get_edge_data(u, v) or graph.get_edge_data(v, u) or {}
+                        label = str(data.get('label', '')).strip()
+                        etype = str(data.get('edge_type', '')).strip().lower()
+                        if etype in {'locked', 'key_locked'}:
+                            return 1
+                        if label == 'k':
+                            return 1
+                        return 0
+
+                    def min_locked_between(s, t) -> float:
+                        dist = {s: 0}
+                        pq = [(0, s)]
+                        while pq:
+                            d, u = heapq.heappop(pq)
+                            if u == t:
+                                return d
+                            if d != dist.get(u, 10**9):
+                                continue
+                            neighbors = set(graph.successors(u)) | set(graph.predecessors(u))
+                            for v in neighbors:
+                                nd = d + edge_locked_cost(u, v)
+                                if nd < dist.get(v, 10**9):
+                                    dist[v] = nd
+                                    heapq.heappush(pq, (nd, v))
+                        return float('inf')
+
+                    min_locked = min_locked_between(start_node, goal_node)
+                    if min_locked != float('inf'):
+                        tile_key_count = int((self.env.grid == SEMANTIC_PALETTE['KEY_SMALL']).sum())
+                        graph_key_count = 0
+                        for _, attrs in graph.nodes(data=True):
+                            if self._node_has_small_key(attrs):
+                                graph_key_count += 1
+                        key_count = max(tile_key_count, graph_key_count)
+                        if key_count < int(min_locked):
+                            return False, f'PRECHECK_FAIL: Insufficient small keys (need {int(min_locked)}, have {key_count})'
+                except Exception:
+                    logger.debug('Locked-door key-count precheck failed open', exc_info=True)
+        else:
+            # Fallback coarse check for plain grid maps: wall/void connectivity only.
+            from collections import deque
+            grid = getattr(self.env, 'grid', None)
+            if isinstance(grid, np.ndarray):
+                h, w = grid.shape
+                blocked = {SEMANTIC_PALETTE['WALL'], SEMANTIC_PALETTE['VOID']}
+                q = deque([start])
+                seen = {start}
+                reachable = False
+                while q:
+                    r, c = q.popleft()
+                    if (r, c) == goal:
+                        reachable = True
+                        break
+                    for dr, dc in ACTION_DELTAS.values():
+                        nr, nc = r + dr, c + dc
+                        if not (0 <= nr < h and 0 <= nc < w):
+                            continue
+                        if (nr, nc) in seen:
+                            continue
+                        if int(grid[nr, nc]) in blocked:
+                            continue
+                        seen.add((nr, nc))
+                        q.append((nr, nc))
+                if not reachable:
+                    return False, 'PRECHECK_FAIL: Start and goal disconnected on walkable grid'
+
+        if not self.feature_flags.get('auto_prune_on_precheck', False):
+            return True, 'Precheck passed'
+
+        # Optional pruning pass.
+        preserve_rooms = {rp for rp in (start_room, goal_room) if rp is not None}
+        if not preserve_rooms:
+            return True, 'Precheck passed (prune skipped: start/goal room unknown)'
+        removed_rooms: List[Tuple[int, int]] = []
+
+        rooms = getattr(current, 'rooms', None)
+        if isinstance(rooms, dict) and rooms:
+            pruned_rooms, removed_rooms = ZeldaDungeonAdapter.prune_dead_ends(dict(rooms), preserve=preserve_rooms)
+            if removed_rooms:
+                self._capture_precheck_snapshot(current, reason='auto_prune_on_precheck')
+                original_room_to_node = dict(getattr(current, 'room_to_node', {}) or {})
+                original_node_to_room = dict(getattr(current, 'node_to_room', {}) or {v: k for k, v in original_room_to_node.items()})
+
+                current.rooms = pruned_rooms
+                current.room_to_node = {room_pos: node_id for room_pos, node_id in original_room_to_node.items() if room_pos in pruned_rooms}
+
+                removed_nodes = [original_room_to_node[rp] for rp in removed_rooms if rp in original_room_to_node]
+                try:
+                    if graph is not None and hasattr(graph, 'copy'):
+                        current.graph = graph.copy()
+                        current.graph.remove_nodes_from([n for n in set(removed_nodes) if n in current.graph])
+                except Exception:
+                    logger.debug('Failed to prune nodes from graph in room-based prune', exc_info=True)
+
+                current.node_to_room = {
+                    node_id: room_pos for node_id, room_pos in original_node_to_room.items()
+                    if room_pos in current.room_to_node
+                }
+                for room_pos, room in current.rooms.items():
+                    room.graph_node_id = current.room_to_node.get(room_pos)
+        else:
+            self._capture_precheck_snapshot(current, reason='auto_prune_on_precheck_topology')
+            removed_rooms = self._prune_dead_end_topology(current, preserve_rooms=preserve_rooms)
+            if not removed_rooms:
+                # Keep undo stack clean when no mutation happened.
+                self._precheck_snapshot = None
+
+        if removed_rooms:
+            self._update_env_topology_view(current)
+            return True, f'Precheck passed; pruned {len(removed_rooms)} dead-end room(s)'
+        return True, 'Precheck passed (no dead-end rooms pruned)'
+
     def _undo_prune(self):
         """Undo the last applied prune snapshot, if any."""
         if not hasattr(self, '_precheck_snapshot') or not self._precheck_snapshot:
@@ -8032,14 +8860,24 @@ class ZeldaGUI:
             return
         current = self.maps[self.current_map_idx]
         snap = self._precheck_snapshot
-        current.rooms = dict(snap['rooms'])
-        current.room_to_node = dict(snap.get('room_to_node', {}))
-        for pos, room in current.rooms.items():
-            room.graph_node_id = current.room_to_node.get(pos)
+        rooms_snapshot = snap.get('rooms')
+        if isinstance(rooms_snapshot, dict):
+            current.rooms = dict(rooms_snapshot)
+        if 'room_to_node' in snap:
+            current.room_to_node = dict(snap.get('room_to_node', {}))
+        if 'node_to_room' in snap:
+            current.node_to_room = dict(snap.get('node_to_room', {}))
+        if 'graph' in snap and snap.get('graph') is not None:
+            current.graph = snap.get('graph')
+
+        if isinstance(getattr(current, 'rooms', None), dict):
+            for pos, room in current.rooms.items():
+                room.graph_node_id = (getattr(current, 'room_to_node', {}) or {}).get(pos)
         # Clear snapshot
         self._precheck_snapshot = None
-        self._set_message('Undo: restored rooms before pruning', 3.0)
-        logger.info('Undo prune: restored previous rooms and mapping')
+        self._update_env_topology_view(current)
+        self._set_message('Undo: restored topology before pruning', 3.0)
+        logger.info('Undo prune: restored previous topology snapshot')
 
     def _apply_tentative_matches(self):
         """Apply staged tentative matches above the configured threshold."""
@@ -8439,6 +9277,7 @@ class ZeldaGUI:
         if getattr(self, 'solver_comparison_thread', None) and self.solver_comparison_thread.is_alive():
             self._show_toast('Solver comparison already running', 2.5, 'warning')
             return
+        self._sync_solver_dropdown_settings()
 
         def _worker():
             results = []
@@ -8524,27 +9363,70 @@ class ZeldaGUI:
                     except Exception as e:
                         results.append({'name': name, 'success': False, 'path_len': 0, 'nodes': 0, 'time_ms': 0, 'error': str(e), 'confusion': 0, 'cog_load': 0})
                         continue
-                # For other algorithms use existing mechanism (set algorithm_idx temporarily)
-                saved_alg = getattr(self, 'algorithm_idx', 0)
-                saved_preview = self.preview_overlay_visible
-                saved_modal = self.preview_modal_enabled
-                saved_path = list(self.auto_path) if self.auto_path else []
-                try:
-                    self.preview_overlay_visible = False
-                    self.preview_modal_enabled = False
-                    self.algorithm_idx = idx  # FIXED: No longer force CBS indices to 0
-                    t0 = time.time()
-                    success, path, teleports = self._smart_grid_path()
-                    elapsed = (time.time() - t0) * 1000
-                    nodes = getattr(self, 'last_search_iterations', 0)
-                    results.append({'name': name, 'success': success, 'path_len': len(path), 'nodes': nodes, 'time_ms': elapsed})
-                    if success and not self.last_solver_metrics:
-                        self._set_last_solver_metrics(name, nodes, elapsed, len(path))
-                finally:
-                    self.algorithm_idx = saved_alg
-                    self.preview_overlay_visible = saved_preview
-                    self.preview_modal_enabled = saved_modal
-                    self.auto_path = saved_path
+                # A*/BFS/Dijkstra/Greedy: run full game-state solver dispatch (same as main solve path).
+                if name in {'A*', 'BFS', 'Dijkstra', 'Greedy'}:
+                    try:
+                        cur = self.maps[self.current_map_idx]
+                        if hasattr(cur, 'global_grid'):
+                            grid_arr = cur.global_grid
+                            graph = getattr(cur, 'graph', None)
+                            room_to_node = getattr(cur, 'room_to_node', None)
+                            room_positions = getattr(cur, 'room_positions', None)
+                            node_to_room = getattr(cur, 'node_to_room', None)
+                        else:
+                            grid_arr = cur
+                            graph = None
+                            room_to_node = None
+                            room_positions = None
+                            node_to_room = None
+
+                        if not self.env or not getattr(self.env, 'start_pos', None) or not getattr(self.env, 'goal_pos', None):
+                            raise RuntimeError('Start/goal not defined')
+
+                        start = tuple(self.env.start_pos)
+                        goal = tuple(self.env.goal_pos)
+                        alg_dispatch = {'A*': 0, 'BFS': 1, 'Dijkstra': 2, 'Greedy': 3}
+                        alg_idx = alg_dispatch[name]
+                        flags = dict(self.feature_flags)
+                        priority_options = {
+                            'tie_break': self.feature_flags.get('priority_tie_break', False),
+                            'key_boost': self.feature_flags.get('priority_key_boost', False),
+                            'enable_ara': self.feature_flags.get('enable_ara', False),
+                            'ara_weight': float(getattr(self, 'ara_weight', 1.0)),
+                            'representation': str(getattr(self, 'search_representation', 'hybrid')),
+                            'allow_diagonals': True,
+                        }
+
+                        res = _solve_in_subprocess(
+                            grid_arr,
+                            start,
+                            goal,
+                            alg_idx,
+                            flags,
+                            priority_options,
+                            graph=graph,
+                            room_to_node=room_to_node,
+                            room_positions=room_positions,
+                            node_to_room=node_to_room,
+                        )
+                        elapsed = (time.time() - start_t) * 1000
+                        success = bool(res and res.get('success'))
+                        path = (res.get('path') or []) if res else []
+                        solver_meta = (res.get('solver_result') or {}) if res else {}
+                        nodes = int(solver_meta.get('nodes', 0) or solver_meta.get('states_explored', 0) or 0)
+
+                        results.append({
+                            'name': name,
+                            'success': success,
+                            'path_len': len(path),
+                            'nodes': nodes,
+                            'time_ms': elapsed,
+                        })
+                        if success and not self.last_solver_metrics:
+                            self._set_last_solver_metrics(name, nodes, elapsed, len(path))
+                    except Exception as e:
+                        results.append({'name': name, 'success': False, 'path_len': 0, 'nodes': 0, 'time_ms': 0, 'error': str(e)})
+                    continue
             # Store results and notify main thread (non-blocking)
             self.solver_comparison_results = results
             self.show_solver_comparison_overlay = True
@@ -10706,3 +11588,4 @@ if __name__ == "__main__":
     # Required for multiprocessing on Windows (freeze_support)
     multiprocessing.freeze_support()
     main()
+

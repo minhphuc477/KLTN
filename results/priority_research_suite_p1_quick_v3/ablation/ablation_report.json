@@ -1,0 +1,198 @@
+{
+  "configs": [
+    {
+      "name": "FULL",
+      "use_evolution": true,
+      "use_wfc": true,
+      "logic_guidance_scale": 1.0,
+      "latent_sampler": "diffusion",
+      "categorical_codebook_size": null,
+      "use_tpe": true
+    },
+    {
+      "name": "NO_EVOLUTION",
+      "use_evolution": false,
+      "use_wfc": true,
+      "logic_guidance_scale": 1.0,
+      "latent_sampler": "diffusion",
+      "categorical_codebook_size": null,
+      "use_tpe": true
+    }
+  ],
+  "seeds": [
+    42,
+    43
+  ],
+  "summary": [
+    {
+      "config": "FULL",
+      "n": 2,
+      "success_rate": 1.0,
+      "solvability_rate": 0.5,
+      "confusion_ratio": 1.0,
+      "confusion_index": 0.0,
+      "path_optimal": 0.5,
+      "tile_prior_kl": 4.998085028178837,
+      "graph_edit_distance": 0.35046345811051693,
+      "generation_time_sec": 8.781110644340515,
+      "novelty": 0.09885984926538205,
+      "reconstruction_error": 0.75,
+      "constraint_valid_rate": 0.0,
+      "room_repair_rate": 0.0,
+      "tiles_repaired": 0.0,
+      "diversity": 0.2579036019523849
+    },
+    {
+      "config": "NO_EVOLUTION",
+      "n": 1,
+      "success_rate": 1.0,
+      "solvability_rate": 0.0,
+      "confusion_ratio": NaN,
+      "confusion_index": 181.9329268292683,
+      "path_optimal": 0.0,
+      "tile_prior_kl": 3.4885498222292757,
+      "graph_edit_distance": 0.27850267379679144,
+      "generation_time_sec": 292.3866238594055,
+      "novelty": 0.1306418289102245,
+      "reconstruction_error": 0.7556818181818182,
+      "constraint_valid_rate": 1.0,
+      "room_repair_rate": 0.125,
+      "tiles_repaired": 147.0,
+      "diversity": 0.0
+    }
+  ],
+  "significance": [
+    {
+      "config": "NO_EVOLUTION",
+      "metric": "solvable",
+      "n_pairs": 1,
+      "delta_mean_cfg_minus_full": -1.0,
+      "delta_ci_low": -1.0,
+      "delta_ci_high": -1.0,
+      "p_value": 1.0,
+      "effect_size_d": 0.0,
+      "p_value_bh_fdr": 1.0,
+      "significant_fdr_0_05": false
+    },
+    {
+      "config": "NO_EVOLUTION",
+      "metric": "confusion_index",
+      "n_pairs": 1,
+      "delta_mean_cfg_minus_full": 181.9329268292683,
+      "delta_ci_low": 181.9329268292683,
+      "delta_ci_high": 181.9329268292683,
+      "p_value": 1.0,
+      "effect_size_d": 0.0,
+      "p_value_bh_fdr": 1.0,
+      "significant_fdr_0_05": false
+    },
+    {
+      "config": "NO_EVOLUTION",
+      "metric": "path_optimal",
+      "n_pairs": 1,
+      "delta_mean_cfg_minus_full": -1.0,
+      "delta_ci_low": -1.0,
+      "delta_ci_high": -1.0,
+      "p_value": 1.0,
+      "effect_size_d": 0.0,
+      "p_value_bh_fdr": 1.0,
+      "significant_fdr_0_05": false
+    },
+    {
+      "config": "NO_EVOLUTION",
+      "metric": "tile_prior_kl",
+      "n_pairs": 1,
+      "delta_mean_cfg_minus_full": -1.3954107819879153,
+      "delta_ci_low": -1.3954107819879153,
+      "delta_ci_high": -1.3954107819879153,
+      "p_value": 1.0,
+      "effect_size_d": 0.0,
+      "p_value_bh_fdr": 1.0,
+      "significant_fdr_0_05": false
+    },
+    {
+      "config": "NO_EVOLUTION",
+      "metric": "graph_edit_distance",
+      "n_pairs": 1,
+      "delta_mean_cfg_minus_full": -0.07,
+      "delta_ci_low": -0.07,
+      "delta_ci_high": -0.07,
+      "p_value": 1.0,
+      "effect_size_d": 0.0,
+      "p_value_bh_fdr": 1.0,
+      "significant_fdr_0_05": false
+    },
+    {
+      "config": "NO_EVOLUTION",
+      "metric": "generation_time_sec",
+      "n_pairs": 1,
+      "delta_mean_cfg_minus_full": 282.44206500053406,
+      "delta_ci_low": 282.44206500053406,
+      "delta_ci_high": 282.44206500053406,
+      "p_value": 1.0,
+      "effect_size_d": 0.0,
+      "p_value_bh_fdr": 1.0,
+      "significant_fdr_0_05": false
+    },
+    {
+      "config": "NO_EVOLUTION",
+      "metric": "novelty",
+      "n_pairs": 1,
+      "delta_mean_cfg_minus_full": 0.03337413472854839,
+      "delta_ci_low": 0.03337413472854839,
+      "delta_ci_high": 0.03337413472854839,
+      "p_value": 1.0,
+      "effect_size_d": 0.0,
+      "p_value_bh_fdr": 1.0,
+      "significant_fdr_0_05": false
+    },
+    {
+      "config": "NO_EVOLUTION",
+      "metric": "reconstruction_error",
+      "n_pairs": 1,
+      "delta_mean_cfg_minus_full": 0.03409090909090917,
+      "delta_ci_low": 0.03409090909090917,
+      "delta_ci_high": 0.03409090909090917,
+      "p_value": 1.0,
+      "effect_size_d": 0.0,
+      "p_value_bh_fdr": 1.0,
+      "significant_fdr_0_05": false
+    },
+    {
+      "config": "NO_EVOLUTION",
+      "metric": "constraint_valid",
+      "n_pairs": 1,
+      "delta_mean_cfg_minus_full": 1.0,
+      "delta_ci_low": 1.0,
+      "delta_ci_high": 1.0,
+      "p_value": 1.0,
+      "effect_size_d": 0.0,
+      "p_value_bh_fdr": 1.0,
+      "significant_fdr_0_05": false
+    },
+    {
+      "config": "NO_EVOLUTION",
+      "metric": "room_repair_rate",
+      "n_pairs": 1,
+      "delta_mean_cfg_minus_full": 0.125,
+      "delta_ci_low": 0.125,
+      "delta_ci_high": 0.125,
+      "p_value": 1.0,
+      "effect_size_d": 0.0,
+      "p_value_bh_fdr": 1.0,
+      "significant_fdr_0_05": false
+    },
+    {
+      "config": "NO_EVOLUTION",
+      "metric": "tiles_repaired",
+      "n_pairs": 1,
+      "delta_mean_cfg_minus_full": 147.0,
+      "delta_ci_low": 147.0,
+      "delta_ci_high": 147.0,
+      "p_value": 1.0,
+      "effect_size_d": 0.0,
+      "p_value_bh_fdr": 1.0,
+      "significant_fdr_0_05": false
+    }
+  ]
+}

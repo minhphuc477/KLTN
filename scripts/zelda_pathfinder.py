@@ -14,8 +14,6 @@ Algorithm: A* with state-space search
 State: (room_position, inventory_state)
 Heuristic: Manhattan distance + key deficit penalty
 
-Author: KLTN Thesis Project
-Date: January 19, 2026
 """
 
 import heapq
@@ -27,7 +25,7 @@ from collections import defaultdict
 
 logger = logging.getLogger(__name__)
 
-from Data.zelda_core import (
+from src.data.zelda_core import (
     Dungeon, Room, InventoryState,
     SEMANTIC_PALETTE, ValidationMode
 )
@@ -683,7 +681,7 @@ def print_solution(result: Dict):
 if __name__ == '__main__':
     """Test the pathfinder on sample dungeons."""
     import sys
-    from Data.zelda_core import ZeldaDungeonAdapter
+    from src.data.zelda_core import ZeldaDungeonAdapter
     
     logger.info("Zelda A* Pathfinder Test")
     

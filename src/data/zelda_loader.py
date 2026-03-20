@@ -50,7 +50,13 @@ from .zelda_core import (
     ROOM_WIDTH,
     ZeldaDungeonAdapter
 )
-from src.core.definitions import SEMANTIC_PALETTE, CHAR_TO_SEMANTIC
+from src.core.definitions import (
+    SEMANTIC_PALETTE,
+    CHAR_TO_SEMANTIC,
+    parse_node_label_tokens,
+    parse_edge_type_tokens,
+    select_primary_edge_type,
+)
 VGLC_AVAILABLE = True
 logger.info("VGLC adapter available via zelda_core")
 
@@ -199,13 +205,13 @@ class ZeldaDungeonDataset(Dataset):
             
             node_id_to_idx[node_id] = idx
             label = data.get('label', '')
-            parts = [p.strip() for p in label.split(',')]
+            parts = parse_node_label_tokens(label)
             
             # Node features: [has_enemy, has_key, has_item, has_triforce, has_boss, has_puzzle]
             node_features = [
                 float('e' in parts or data.get('has_enemy', False)),
                 float('k' in parts or data.get('has_key', False)),
-                float('i' in parts or 'I' in parts or data.get('has_item', False)),
+                float('i' in parts or 'I' in parts or 'K' in parts or data.get('has_item', False)),
                 float('t' in parts or data.get('is_triforce', False)),
                 float('b' in parts or data.get('is_boss', False)),
                 float('p' in parts or data.get('has_puzzle', False)),
@@ -235,10 +241,12 @@ class ZeldaDungeonDataset(Dataset):
             dst_idx = node_id_to_idx[v]
             edges.append([src_idx, dst_idx])
             
-            # Edge type from edge_type or label
-            edge_type = data.get('edge_type', '')
-            if not edge_type:
-                edge_type = data.get('label', '')
+            # Edge type from canonical constraints (supports composite labels like "I,S1")
+            constraints = parse_edge_type_tokens(
+                label=data.get('label', ''),
+                edge_type=data.get('edge_type', ''),
+            )
+            edge_type = select_primary_edge_type(constraints)
             edge_attrs.append(EDGE_TYPE_ENCODING.get(edge_type, 0))
         
         import numpy as np

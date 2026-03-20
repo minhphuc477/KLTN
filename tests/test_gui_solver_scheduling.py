@@ -1,5 +1,7 @@
 import numpy as np
 import gui_runner
+import json
+from pathlib import Path
 
 
 def test_start_auto_solve_calls_schedule_once(monkeypatch):
@@ -85,4 +87,57 @@ def test_schedule_solver_is_thread_safe(monkeypatch):
     while time.time() < deadline and len(starts) < 1:
         time.sleep(0.01)
     assert len(starts) == 1
+
+
+def test_export_route_writes_to_repo_local_route_dir(tmp_path: Path):
+    """Route export should write under route_export_dir (repo-local by default)."""
+    gui = gui_runner.ZeldaGUI(maps=[gui_runner.create_test_map()])
+    gui.repo_root = tmp_path
+    gui.route_export_dir = tmp_path / "exports" / "routes"
+
+    gui.start_pos = (0, 0)
+    gui.goal_pos = (0, 1)
+    gui.auto_path = [(0, 0), (0, 1), (1, 1)]
+
+    gui._export_route()
+
+    route_files = sorted(gui.route_export_dir.glob("route_*.json"))
+    assert len(route_files) == 1
+
+    payload = json.loads(route_files[0].read_text(encoding="utf-8"))
+    assert payload["path"] == [[0, 0], [0, 1], [1, 1]]
+    assert payload["path_length"] == 3
+
+
+def test_load_route_reads_from_repo_local_route_dir(tmp_path: Path):
+    """Route load should read the latest route from route_export_dir."""
+    gui = gui_runner.ZeldaGUI(maps=[gui_runner.create_test_map()])
+    gui.repo_root = tmp_path
+    gui.route_export_dir = tmp_path / "exports" / "routes"
+    gui.route_export_dir.mkdir(parents=True, exist_ok=True)
+
+    route_file = gui.route_export_dir / "route_99999999_235959.json"
+    route_file.write_text(
+        json.dumps(
+            {
+                "version": "1.0",
+                "timestamp": "2099-01-01T00:00:00",
+                "start": [2, 2],
+                "goal": [3, 3],
+                "path": [[2, 2], [2, 3], [3, 3]],
+                "path_length": 3,
+                "algorithm": "A*",
+                "solve_time_ms": 12.0,
+                "nodes_explored": 5,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    gui._load_route()
+
+    assert gui.start_pos == (2, 2)
+    assert gui.goal_pos == (3, 3)
+    assert gui.auto_path == [(2, 2), (2, 3), (3, 3)]
+    assert gui.solution_path == [(2, 2), (2, 3), (3, 3)]
 

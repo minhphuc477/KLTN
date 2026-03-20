@@ -82,7 +82,7 @@ class BSPNode:
         self.right: Optional['BSPNode'] = None
         self.room: Optional[Room] = None
     
-    def split(self, min_room_size: int = 5) -> bool:
+    def split(self, min_room_size: int = 5, rng: Optional[random.Random] = None) -> bool:
         """
         Recursively split this node into left/right children.
         
@@ -96,8 +96,10 @@ class BSPNode:
         if self.left or self.right:
             return False
         
+        rng_obj = rng if rng is not None else random
+
         # Determine split direction (prefer larger dimension)
-        split_horizontal = random.random() > 0.5
+        split_horizontal = rng_obj.random() > 0.5
         if self.width > self.height and self.width / self.height >= 1.25:
             split_horizontal = False
         elif self.height > self.width and self.height / self.width >= 1.25:
@@ -110,7 +112,7 @@ class BSPNode:
             return False  # Too small to split
         
         # Choose split position
-        split_pos = random.randint(min_room_size, max_size)
+        split_pos = rng_obj.randint(min_room_size, max_size)
         
         # Create child nodes
         if split_horizontal:
@@ -122,7 +124,12 @@ class BSPNode:
         
         return True
     
-    def create_rooms(self, min_room_size: int = 4, max_room_size: int = 10) -> List[Room]:
+    def create_rooms(
+        self,
+        min_room_size: int = 4,
+        max_room_size: int = 10,
+        rng: Optional[random.Random] = None,
+    ) -> List[Room]:
         """
         Create rooms in leaf nodes.
         
@@ -133,11 +140,12 @@ class BSPNode:
             # Not a leaf - recurse
             rooms = []
             if self.left:
-                rooms.extend(self.left.create_rooms(min_room_size, max_room_size))
+                rooms.extend(self.left.create_rooms(min_room_size, max_room_size, rng=rng))
             if self.right:
-                rooms.extend(self.right.create_rooms(min_room_size, max_room_size))
+                rooms.extend(self.right.create_rooms(min_room_size, max_room_size, rng=rng))
             return rooms
         else:
+            rng_obj = rng if rng is not None else random
             # Leaf node - create room
             # Ensure minimum valid ranges for room dimensions
             max_width = max(min_room_size, min(max_room_size, self.width - 2))
@@ -147,15 +155,15 @@ class BSPNode:
             if max_width < min_room_size or max_height < min_room_size:
                 return []
             
-            room_width = random.randint(min_room_size, max_width)
-            room_height = random.randint(min_room_size, max_height)
+            room_width = rng_obj.randint(min_room_size, max_width)
+            room_height = rng_obj.randint(min_room_size, max_height)
             
             # Ensure valid placement range
             x_range = max(1, self.width - room_width - 1)
             y_range = max(1, self.height - room_height - 1)
             
-            room_x = self.x + random.randint(1, x_range)
-            room_y = self.y + random.randint(1, y_range)
+            room_x = self.x + rng_obj.randint(1, x_range)
+            room_y = self.y + rng_obj.randint(1, y_range)
             
             self.room = Room(room_x, room_y, room_width, room_height)
             return [self.room]
@@ -204,10 +212,9 @@ class DungeonGenerator:
         self.width = width
         self.height = height
         self.difficulty = difficulty
-        
-        if seed is not None:
-            random.seed(seed)
-            np.random.seed(seed)
+        self.seed = seed
+        # Keep RNG local to this generator instance.
+        self.rng = random.Random(seed)
         
         # Grid (will be filled with semantic IDs)
         self.grid = np.full((height, width), SEMANTIC_PALETTE['VOID'], dtype=np.int32)
@@ -273,14 +280,14 @@ class DungeonGenerator:
             
             node = split_queue.pop(0)
             
-            if node.split():
+            if node.split(rng=self.rng):
                 if node.left:
                     split_queue.append(node.left)
                 if node.right:
                     split_queue.append(node.right)
         
         # Create rooms in leaf nodes
-        self.rooms = root.create_rooms()
+        self.rooms = root.create_rooms(rng=self.rng)
         
         # Fill rooms with floor tiles
         for room in self.rooms:
@@ -351,8 +358,8 @@ class DungeonGenerator:
             
             # Find empty floor tile
             for attempt in range(20):
-                r = random.randint(room.y, room.y + room.height - 1)
-                c = random.randint(room.x, room.x + room.width - 1)
+                r = self.rng.randint(room.y, room.y + room.height - 1)
+                c = self.rng.randint(room.x, room.x + room.width - 1)
                 
                 if self.grid[r, c] == SEMANTIC_PALETTE['FLOOR']:
                     self.grid[r, c] = SEMANTIC_PALETTE['KEY_SMALL']
@@ -393,13 +400,13 @@ class DungeonGenerator:
                 break
             
             # Place 1-2 enemies per room
-            for _ in range(random.randint(0, 2)):
+            for _ in range(self.rng.randint(0, 2)):
                 if placed >= num_enemies:
                     break
                 
                 for attempt in range(10):
-                    r = random.randint(room.y, room.y + room.height - 1)
-                    c = random.randint(room.x, room.x + room.width - 1)
+                    r = self.rng.randint(room.y, room.y + room.height - 1)
+                    c = self.rng.randint(room.x, room.x + room.width - 1)
                     
                     if self.grid[r, c] == SEMANTIC_PALETTE['FLOOR']:
                         self.grid[r, c] = SEMANTIC_PALETTE['ENEMY']
@@ -416,11 +423,11 @@ class DungeonGenerator:
         }[self.difficulty]
         
         for _ in range(num_blocks):
-            room = random.choice(self.rooms)
+            room = self.rng.choice(self.rooms)
             
             for attempt in range(10):
-                r = random.randint(room.y, room.y + room.height - 1)
-                c = random.randint(room.x, room.x + room.width - 1)
+                r = self.rng.randint(room.y, room.y + room.height - 1)
+                c = self.rng.randint(room.x, room.x + room.width - 1)
                 
                 if self.grid[r, c] == SEMANTIC_PALETTE['FLOOR']:
                     self.grid[r, c] = SEMANTIC_PALETTE['BLOCK']

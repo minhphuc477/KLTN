@@ -19,7 +19,6 @@ algorithm correctness rather than asset pipeline issues.
 
 Reference: Zelda VGLC Semantic Palette (zelda_core.py)
 
-Author: KLTN Visualization Module
 """
 
 from __future__ import annotations

@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).parent
 
 # Import from the canonical source
-from Data.zelda_core import (
+from src.data.zelda_core import (
     # Main classes
     ZeldaDungeonAdapter,
     DungeonStitcher,
@@ -329,7 +329,7 @@ def main():
             
             # If no path from solver, try to solve again
             if not solution_path and validation.get('solvable'):
-                from simulation.validator import ZeldaLogicEnv, StateSpaceAStar
+                from src.simulation.validator import ZeldaLogicEnv, StateSpaceAStar
                 env = ZeldaLogicEnv(grid, render_mode=False)
                 solver = StateSpaceAStar(env)
                 success, solution_path, _ = solver.solve()

@@ -1,0 +1,50 @@
+{
+  "num_samples": 4,
+  "seed_start": 42,
+  "population_size": 16,
+  "generations": 14,
+  "genome_length": 20,
+  "max_nodes": 26,
+  "mean_break_rate": 0.0,
+  "aggregate_break_rate": 0.0,
+  "total_sequence_breaks": 0,
+  "total_checked_gates": 5,
+  "per_sample": [
+    {
+      "valid_for_analysis": true,
+      "sequence_break_count": 0,
+      "checked_gate_count": 1,
+      "break_rate": 0.0,
+      "details": [],
+      "seed": 42,
+      "fitness": 0.6334742628427229
+    },
+    {
+      "valid_for_analysis": true,
+      "sequence_break_count": 0,
+      "checked_gate_count": 1,
+      "break_rate": 0.0,
+      "details": [],
+      "seed": 43,
+      "fitness": 0.69777556772231
+    },
+    {
+      "valid_for_analysis": true,
+      "sequence_break_count": 0,
+      "checked_gate_count": 2,
+      "break_rate": 0.0,
+      "details": [],
+      "seed": 44,
+      "fitness": 0.5908415325852513
+    },
+    {
+      "valid_for_analysis": true,
+      "sequence_break_count": 0,
+      "checked_gate_count": 1,
+      "break_rate": 0.0,
+      "details": [],
+      "seed": 45,
+      "fitness": 0.6756888244319292
+    }
+  ]
+}

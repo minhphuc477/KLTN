@@ -1,0 +1,183 @@
+{
+  "seed": 42,
+  "num_samples": 8,
+  "eval_budget": 256,
+  "output_dir": "results\\priority_research_suite_others_quick_v1",
+  "all_steps_passed": true,
+  "steps": [
+    {
+      "name": "ood_blinded_eval",
+      "command": [
+        "F:\\KLTN\\.venv\\Scripts\\python.exe",
+        "scripts/run_ood_scaling_and_blinded_eval.py",
+        "--num-samples",
+        "4",
+        "--seed",
+        "42",
+        "--output",
+        "results\\priority_research_suite_others_quick_v1\\ood_blinded_eval"
+      ],
+      "exit_code": 0,
+      "duration_sec": 305.4667513370514,
+      "output_path": "results\\priority_research_suite_others_quick_v1\\ood_blinded_eval\\ood_scaling_report.json",
+      "stdout_tail": "{\n  \"output\": \"results\\\\priority_research_suite_others_quick_v1\\\\ood_blinded_eval\",\n  \"methods\": [\n    \"FULL_GA\",\n    \"FULL_CVT\"\n  ],\n  \"regimes\": {\n    \"in_dist\": {\n      \"min_rooms\": 18,\n      \"max_rooms\": 33\n    },\n    \"ood_small\": {\n      \"min_rooms\": 10,\n      \"max_rooms\": 16\n    },\n    \"ood_large\": {\n      \"min_rooms\": 35,\n      \"max_rooms\": 42\n    }\n  },\n  \"summary_csv\": \"results\\\\priority_research_suite_others_quick_v1\\\\ood_blinded_eval\\\\ood_scaling_summary.csv\",\n  \"blinded_manifest_csv\": \"results\\\\priority_research_suite_others_quick_v1\\\\ood_blinded_eval\\\\blinded\\\\blinded_manifest.csv\",\n  \"blinded_key_csv\": \"results\\\\priority_research_suite_others_quick_v1\\\\ood_blinded_eval\\\\blinded\\\\blinded_key.csv\",\n  \"rating_sheet_csv\": \"results\\\\priority_research_suite_others_quick_v1\\\\ood_blinded_eval\\\\blinded\\\\rating_sheet.csv\",\n  \"payload_json\": \"results\\\\priority_research_suite_others_quick_v1\\\\ood_blinded_eval\\\\ood_scaling_payload.json\"\n}\n",
+      "stderr_tail": ""
+    },
+    {
+      "name": "topology_rubric",
+      "command": [
+        "F:\\KLTN\\.venv\\Scripts\\python.exe",
+        "scripts/score_topology_stack_rubric.py",
+        "--output-dir",
+        "results\\priority_research_suite_others_quick_v1\\topology_rubric"
+      ],
+      "exit_code": 0,
+      "duration_sec": 20.61546015739441,
+      "output_path": "results\\priority_research_suite_others_quick_v1\\topology_rubric\\topology_stack_rubric_report.json",
+      "stdout_tail": "Wrote: F:\\KLTN\\results\\priority_research_suite_others_quick_v1\\topology_rubric\\topology_stack_rubric_report.json\nWrote: F:\\KLTN\\results\\priority_research_suite_others_quick_v1\\topology_rubric\\topology_stack_rubric_report.md\nScore: 38/40 (95.0%)\n",
+      "stderr_tail": ""
+    }
+  ],
+  "artifacts": {
+    "ood_blinded_eval": {
+      "output": "results\\priority_research_suite_others_quick_v1\\ood_blinded_eval",
+      "methods": [
+        "FULL_GA",
+        "FULL_CVT"
+      ],
+      "regimes": {
+        "in_dist": {
+          "min_rooms": 18,
+          "max_rooms": 33
+        },
+        "ood_small": {
+          "min_rooms": 10,
+          "max_rooms": 16
+        },
+        "ood_large": {
+          "min_rooms": 35,
+          "max_rooms": 42
+        }
+      },
+      "summary_csv": "results\\priority_research_suite_others_quick_v1\\ood_blinded_eval\\ood_scaling_summary.csv",
+      "blinded_manifest_csv": "results\\priority_research_suite_others_quick_v1\\ood_blinded_eval\\blinded\\blinded_manifest.csv",
+      "blinded_key_csv": "results\\priority_research_suite_others_quick_v1\\ood_blinded_eval\\blinded\\blinded_key.csv",
+      "rating_sheet_csv": "results\\priority_research_suite_others_quick_v1\\ood_blinded_eval\\blinded\\rating_sheet.csv",
+      "payload_json": "results\\priority_research_suite_others_quick_v1\\ood_blinded_eval\\ood_scaling_payload.json"
+    },
+    "topology_rubric": {
+      "generated_at": "2026-03-08 20:35:14",
+      "workspace_root": "F:\\KLTN",
+      "total_score": 38,
+      "total_max": 40,
+      "percent": 95.0,
+      "criteria": [
+        {
+          "id": "C1",
+          "name": "Topology Pipeline Integration",
+          "score": 5,
+          "max_score": 5,
+          "passed": true,
+          "rationale": "Pipeline includes generation, topology validation, and virtual-node filtering path.",
+          "evidence": [
+            "src/pipeline/dungeon_pipeline.py"
+          ]
+        },
+        {
+          "id": "C2",
+          "name": "Constraint Completeness in Graph Grammar",
+          "score": 5,
+          "max_score": 5,
+          "passed": true,
+          "rationale": "Grammar contains comprehensive constraints and repair hooks.",
+          "evidence": [
+            "src/generation/grammar.py"
+          ]
+        },
+        {
+          "id": "C3",
+          "name": "Evolutionary Search Correctness",
+          "score": 5,
+          "max_score": 5,
+          "passed": true,
+          "rationale": "Evolution loop and survivor pressure anchors are present.",
+          "evidence": [
+            "src/generation/evolutionary_director.py"
+          ]
+        },
+        {
+          "id": "C4",
+          "name": "Descriptor/Realism Pressure Mechanisms",
+          "score": 4,
+          "max_score": 5,
+          "passed": true,
+          "rationale": "Adaptive and target-aware realism pressure mechanisms are implemented.",
+          "evidence": [
+            "src/generation/evolutionary_director.py"
+          ]
+        },
+        {
+          "id": "C5",
+          "name": "Topology Validation Redundancy",
+          "score": 5,
+          "max_score": 5,
+          "passed": true,
+          "rationale": "Two complementary validator layers are present.",
+          "evidence": [
+            "src/utils/graph_utils.py",
+            "src/data/vglc_utils.py"
+          ]
+        },
+        {
+          "id": "C6",
+          "name": "Regression Test Coverage for Topology Fixes",
+          "score": 5,
+          "max_score": 5,
+          "passed": true,
+          "rationale": "Topology-fix regression suite passed (12 passed).",
+          "evidence": [
+            "tests/test_topology_generation_fixes.py"
+          ]
+        },
+        {
+          "id": "C7",
+          "name": "VGLC Compliance Test Coverage",
+          "score": 5,
+          "max_score": 5,
+          "passed": true,
+          "rationale": "VGLC compliance suite passed (36 passed).",
+          "evidence": [
+            "tests/test_vglc_compliance.py"
+          ]
+        },
+        {
+          "id": "C8",
+          "name": "Reproducibility Instrumentation",
+          "score": 4,
+          "max_score": 5,
+          "passed": true,
+          "rationale": "Robustness probe + mask instrumentation are implemented in benchmark suite.",
+          "evidence": [
+            "src/evaluation/benchmark_suite.py"
+          ]
+        }
+      ],
+      "commands": {
+        "topology_fixes_pytest": {
+          "command": "F:\\KLTN\\.venv\\Scripts\\python.exe -m pytest tests/test_topology_generation_fixes.py -q",
+          "exit_code": 0,
+          "duration_sec": 12.930524349212646,
+          "stdout": "............                                                             [100%]\n============================== warnings summary ===============================\n.venv\\Lib\\site-packages\\torch_geometric\\llm\\utils\\backend_utils.py:26\n  F:\\KLTN\\.venv\\Lib\\site-packages\\torch_geometric\\llm\\utils\\backend_utils.py:26: DeprecationWarning: `torch_geometric.distributed` has been deprecated since 2.7.0 and will no longer be maintained. For distributed training, refer to our tutorials on distributed training at https://pytorch-geometric.readthedocs.io/en/latest/tutorial/distributed.html or cuGraph examples at https://github.com/rapidsai/cugraph-gnn/tree/main/python/cugraph-pyg/cugraph_pyg/examples\n    from torch_geometric.distributed import (\n\n.venv\\Lib\\site-packages\\torch\\jit\\_script.py:1480\n.venv\\Lib\\site-packages\\torch\\jit\\_script.py:1480\n  F:\\KLTN\\.venv\\Lib\\site-packages\\torch\\jit\\_script.py:1480: DeprecationWarning: `torch.jit.script` is deprecated. Please switch to `torch.compile` or `torch.export`.\n    warnings.warn(\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n12 passed, 3 warnings in 10.85s\n",
+          "stderr": ""
+        },
+        "vglc_compliance_pytest": {
+          "command": "F:\\KLTN\\.venv\\Scripts\\python.exe -m pytest tests/test_vglc_compliance.py -q",
+          "exit_code": 0,
+          "duration_sec": 7.429731607437134,
+          "stdout": "....................................                                     [100%]\n============================== warnings summary ===============================\n.venv\\Lib\\site-packages\\torch_geometric\\llm\\utils\\backend_utils.py:26\n  F:\\KLTN\\.venv\\Lib\\site-packages\\torch_geometric\\llm\\utils\\backend_utils.py:26: DeprecationWarning: `torch_geometric.distributed` has been deprecated since 2.7.0 and will no longer be maintained. For distributed training, refer to our tutorials on distributed training at https://pytorch-geometric.readthedocs.io/en/latest/tutorial/distributed.html or cuGraph examples at https://github.com/rapidsai/cugraph-gnn/tree/main/python/cugraph-pyg/cugraph_pyg/examples\n    from torch_geometric.distributed import (\n\n.venv\\Lib\\site-packages\\torch\\jit\\_script.py:1480\n.venv\\Lib\\site-packages\\torch\\jit\\_script.py:1480\n  F:\\KLTN\\.venv\\Lib\\site-packages\\torch\\jit\\_script.py:1480: DeprecationWarning: `torch.jit.script` is deprecated. Please switch to `torch.compile` or `torch.export`.\n    warnings.warn(\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n36 passed, 3 warnings in 5.58s\n",
+          "stderr": ""
+        }
+      }
+    }
+  }
+}

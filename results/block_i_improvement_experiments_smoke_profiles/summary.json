@@ -1,0 +1,1788 @@
+{
+  "best": {
+    "name": "baseline",
+    "realism_tuning": {},
+    "summary": {
+      "num_generated": 2,
+      "num_reference": 18,
+      "mean_generation_time_sec": 1.7003793716430664,
+      "completeness": {
+        "start_goal_rate": 1.0,
+        "connected_rate": 1.0,
+        "path_exists_rate": 1.0,
+        "directed_path_exists_rate": 1.0,
+        "weak_path_exists_rate": 1.0,
+        "path_directionality_gap_mean": 0.0,
+        "constraint_valid_rate": 1.0,
+        "overall_completeness": 1.0
+      },
+      "robustness": {
+        "repair_rate": 0.0,
+        "mean_total_repairs": 0.0,
+        "mean_lock_key_repairs": 0.0,
+        "mean_progression_repairs": 0.0,
+        "mean_wave3_repairs": 0.0,
+        "mean_repair_rounds": 0.0,
+        "mean_generation_constraint_rejections": 0.0,
+        "mean_candidate_repairs_applied": 0.0,
+        "mean_rule_applications": 25.5,
+        "mean_rule_applied": 22.0,
+        "mean_rule_skipped": 3.5,
+        "wfc_probe_count": 0.0,
+        "wfc_contradiction_rate": 0.0,
+        "wfc_restart_rate": 0.0,
+        "wfc_fallback_rate": 0.0,
+        "wfc_mean_contradictions": 0.0,
+        "wfc_mean_backtracks": 0.0,
+        "wfc_mean_restarts": 0.0,
+        "wfc_mean_zero_prob_resets": 0.0,
+        "wfc_mean_fallback_fills": 0.0,
+        "wfc_mean_kl_divergence": 0.0,
+        "wfc_distribution_preserved_rate": 0.0,
+        "wfc_mean_mask_ratio": 0.0,
+        "wfc_mean_masked_tiles": 0.0,
+        "wfc_probe_count_severity_low": 0.0,
+        "wfc_probe_count_severity_mid": 0.0,
+        "wfc_probe_count_severity_high": 0.0,
+        "wfc_restart_rate_severity_low": 0.0,
+        "wfc_restart_rate_severity_mid": 0.0,
+        "wfc_restart_rate_severity_high": 0.0,
+        "wfc_fallback_rate_severity_low": 0.0,
+        "wfc_fallback_rate_severity_mid": 0.0,
+        "wfc_fallback_rate_severity_high": 0.0,
+        "wfc_distribution_preserved_rate_severity_low": 0.0,
+        "wfc_distribution_preserved_rate_severity_mid": 0.0,
+        "wfc_distribution_preserved_rate_severity_high": 0.0,
+        "wfc_mean_kl_divergence_severity_low": 0.0,
+        "wfc_mean_kl_divergence_severity_mid": 0.0,
+        "wfc_mean_kl_divergence_severity_high": 0.0
+      },
+      "expressive_range": {
+        "coverage_linearity_leniency": 0.005,
+        "coverage_progression_topology": 0.005,
+        "descriptor_diversity": 0.1015519518405199
+      },
+      "reference_comparison": {
+        "novelty_vs_reference": 0.05992148242360204,
+        "fidelity_js_divergence": 0.4139240077239885,
+        "expressive_overlap_reference": 0.05555555555555555
+      },
+      "generated_descriptor_means": {
+        "linearity": 0.2558651026392962,
+        "leniency": 0.75,
+        "progression_complexity": 0.42592657860081906,
+        "topology_complexity": 0.2971344810634477,
+        "path_length": 5.5,
+        "directed_path_length": 5.5,
+        "weak_path_length": 5.5,
+        "directionality_gap": 0.0,
+        "directed_path_exists_rate": 1.0,
+        "weak_path_exists_rate": 1.0,
+        "branching_factor": 0.6048387096774194,
+        "cycle_density": 0.26969696969696966,
+        "shortcut_density": 0.0,
+        "gating_density": 0.05450581395348837,
+        "gate_depth_ratio": 0.26666666666666666,
+        "path_depth_ratio": 0.22619047619047616,
+        "num_nodes": 26.5,
+        "num_edges": 53.5,
+        "enemy_count": 6.5,
+        "key_count": 2.5,
+        "puzzle_count": 4.5,
+        "item_count": 3.0,
+        "bombable_count": 0.0,
+        "softlock_count": 1.5,
+        "item_gate_count": 0.5,
+        "switch_count": 1.0,
+        "stair_count": 1.0,
+        "gate_variety": 0.4,
+        "repair_rate": 0.0,
+        "total_repairs": 0.0,
+        "lock_key_repairs": 0.0,
+        "progression_repairs": 0.0,
+        "wave3_repairs": 0.0,
+        "repair_rounds": 0.0,
+        "generation_constraint_rejections": 0.0,
+        "candidate_repairs_applied": 0.0,
+        "rule_applications": 25.5,
+        "rule_applied": 22.0,
+        "rule_skipped": 3.5
+      },
+      "reference_descriptor_means": {
+        "linearity": 0.43243322417458485,
+        "leniency": 0.4746762496762497,
+        "progression_complexity": 0.5056329747493025,
+        "topology_complexity": 0.3938431288135679,
+        "path_length": 9.944444444444445,
+        "directed_path_length": 9.944444444444445,
+        "weak_path_length": 9.944444444444445,
+        "directionality_gap": 0.0,
+        "directed_path_exists_rate": 1.0,
+        "weak_path_exists_rate": 1.0,
+        "branching_factor": 0.8007563941112603,
+        "cycle_density": 0.3025030389000977,
+        "shortcut_density": 0.0,
+        "gating_density": 0.18167332474798803,
+        "gate_depth_ratio": 0.14705888247554916,
+        "path_depth_ratio": 0.4087086801128953,
+        "num_nodes": 28.5,
+        "num_edges": 62.833333333333336,
+        "enemy_count": 19.27777777777778,
+        "key_count": 3.8333333333333335,
+        "puzzle_count": 11.944444444444445,
+        "item_count": 7.666666666666667,
+        "bombable_count": 9.277777777777779,
+        "softlock_count": 12.222222222222221,
+        "item_gate_count": 1.8888888888888888,
+        "switch_count": 0.3333333333333333,
+        "stair_count": 1.3333333333333333,
+        "gate_variety": 0.5111111111111111,
+        "repair_rate": 0.0,
+        "total_repairs": 0.0,
+        "lock_key_repairs": 0.0,
+        "progression_repairs": 0.0,
+        "wave3_repairs": 0.0,
+        "repair_rounds": 0.0,
+        "generation_constraint_rejections": 0.0,
+        "candidate_repairs_applied": 0.0,
+        "rule_applications": 0.0,
+        "rule_applied": 0.0,
+        "rule_skipped": 0.0
+      },
+      "generated_descriptor_stds": {
+        "linearity": 0.062316715542521994,
+        "leniency": 0.25,
+        "progression_complexity": 0.03910756118412717,
+        "topology_complexity": 0.054783529689240495,
+        "path_length": 0.5,
+        "directed_path_length": 0.5,
+        "weak_path_length": 0.5,
+        "directionality_gap": 0.0,
+        "directed_path_exists_rate": 0.0,
+        "weak_path_exists_rate": 0.0,
+        "branching_factor": 0.10483870967741937,
+        "cycle_density": 0.003030303030303022,
+        "shortcut_density": 0.0,
+        "gating_density": 0.007994186046511628,
+        "gate_depth_ratio": 0.06666666666666665,
+        "path_depth_ratio": 0.05952380952380952,
+        "num_nodes": 4.5,
+        "num_edges": 10.5,
+        "enemy_count": 3.5,
+        "key_count": 0.5,
+        "puzzle_count": 0.5,
+        "item_count": 2.0,
+        "bombable_count": 0.0,
+        "softlock_count": 1.5,
+        "item_gate_count": 0.5,
+        "switch_count": 1.0,
+        "stair_count": 1.0,
+        "gate_variety": 0.19999999999999998,
+        "repair_rate": 0.0,
+        "total_repairs": 0.0,
+        "lock_key_repairs": 0.0,
+        "progression_repairs": 0.0,
+        "wave3_repairs": 0.0,
+        "repair_rounds": 0.0,
+        "generation_constraint_rejections": 0.0,
+        "candidate_repairs_applied": 0.0,
+        "rule_applications": 0.5,
+        "rule_applied": 1.0,
+        "rule_skipped": 1.5
+      },
+      "reference_descriptor_stds": {
+        "linearity": 0.13274184093420327,
+        "leniency": 0.27641126799999804,
+        "progression_complexity": 0.0175409470013203,
+        "topology_complexity": 0.07832228221937328,
+        "path_length": 3.0271406057389507,
+        "directed_path_length": 3.0271406057389507,
+        "weak_path_length": 3.0271406057389507,
+        "directionality_gap": 0.0,
+        "directed_path_exists_rate": 0.0,
+        "weak_path_exists_rate": 0.0,
+        "branching_factor": 0.05485997045769457,
+        "cycle_density": 0.19786007542213724,
+        "shortcut_density": 0.0,
+        "gating_density": 0.09843325377103221,
+        "gate_depth_ratio": 0.09897417233358473,
+        "path_depth_ratio": 0.13105343367257669,
+        "num_nodes": 13.933373205684576,
+        "num_edges": 34.453269478784996,
+        "enemy_count": 9.212344107262673,
+        "key_count": 1.707825127659933,
+        "puzzle_count": 10.819078941194693,
+        "item_count": 3.415650255319866,
+        "bombable_count": 8.792708820099852,
+        "softlock_count": 7.397864222985469,
+        "item_gate_count": 4.829180847133496,
+        "switch_count": 0.9999999999999999,
+        "stair_count": 2.403700850309326,
+        "gate_variety": 0.21314806770278755,
+        "repair_rate": 0.0,
+        "total_repairs": 0.0,
+        "lock_key_repairs": 0.0,
+        "progression_repairs": 0.0,
+        "wave3_repairs": 0.0,
+        "repair_rounds": 0.0,
+        "generation_constraint_rejections": 0.0,
+        "candidate_repairs_applied": 0.0,
+        "rule_applications": 0.0,
+        "rule_applied": 0.0,
+        "rule_skipped": 0.0
+      },
+      "confidence_intervals": {
+        "start_goal_rate": {
+          "mean": 1.0,
+          "low": 1.0,
+          "high": 1.0
+        },
+        "connected_rate": {
+          "mean": 1.0,
+          "low": 1.0,
+          "high": 1.0
+        },
+        "path_exists_rate": {
+          "mean": 1.0,
+          "low": 1.0,
+          "high": 1.0
+        },
+        "directed_path_exists_rate": {
+          "mean": 1.0,
+          "low": 1.0,
+          "high": 1.0
+        },
+        "weak_path_exists_rate": {
+          "mean": 1.0,
+          "low": 1.0,
+          "high": 1.0
+        },
+        "path_directionality_gap_mean": {
+          "mean": 0.0,
+          "low": 0.0,
+          "high": 0.0
+        },
+        "constraint_valid_rate": {
+          "mean": 1.0,
+          "low": 1.0,
+          "high": 1.0
+        },
+        "overall_completeness": {
+          "mean": 1.0,
+          "low": 1.0,
+          "high": 1.0
+        },
+        "repair_rate": {
+          "mean": 0.0,
+          "low": 0.0,
+          "high": 0.0
+        },
+        "mean_total_repairs": {
+          "mean": 0.0,
+          "low": 0.0,
+          "high": 0.0
+        },
+        "mean_generation_constraint_rejections": {
+          "mean": 0.0,
+          "low": 0.0,
+          "high": 0.0
+        },
+        "mean_candidate_repairs_applied": {
+          "mean": 0.0,
+          "low": 0.0,
+          "high": 0.0
+        },
+        "generated_linearity_mean": {
+          "mean": 0.2558651026392962,
+          "low": 0.1935483870967742,
+          "high": 0.3181818181818182
+        },
+        "reference_linearity_mean": {
+          "mean": 0.43243322417458485,
+          "low": 0.364695947497177,
+          "high": 0.4750818462481517
+        },
+        "generated_leniency_mean": {
+          "mean": 0.75,
+          "low": 0.5,
+          "high": 1.0
+        },
+        "reference_leniency_mean": {
+          "mean": 0.4746762496762497,
+          "low": 0.3492672720797721,
+          "high": 0.556872167184667
+        },
+        "generated_progression_complexity_mean": {
+          "mean": 0.42592657860081906,
+          "low": 0.3868190174166919,
+          "high": 0.46503413978494623
+        },
+        "reference_progression_complexity_mean": {
+          "mean": 0.5056329747493025,
+          "low": 0.49859079824281755,
+          "high": 0.5112677010608482
+        },
+        "generated_topology_complexity_mean": {
+          "mean": 0.2971344810634477,
+          "low": 0.2423509513742072,
+          "high": 0.3519180107526882
+        },
+        "reference_topology_complexity_mean": {
+          "mean": 0.3938431288135679,
+          "low": 0.34967516796527126,
+          "high": 0.42772035667438985
+        },
+        "generated_cycle_density_mean": {
+          "mean": 0.26969696969696966,
+          "low": 0.26666666666666666,
+          "high": 0.2727272727272727
+        },
+        "reference_cycle_density_mean": {
+          "mean": 0.3025030389000977,
+          "low": 0.23134674240066394,
+          "high": 0.38662108724608724
+        },
+        "generated_shortcut_density_mean": {
+          "mean": 0.0,
+          "low": 0.0,
+          "high": 0.0
+        },
+        "reference_shortcut_density_mean": {
+          "mean": 0.0,
+          "low": 0.0,
+          "high": 0.0
+        },
+        "generated_gate_depth_ratio_mean": {
+          "mean": 0.26666666666666666,
+          "low": 0.2,
+          "high": 0.3333333333333333
+        },
+        "reference_gate_depth_ratio_mean": {
+          "mean": 0.14705888247554916,
+          "low": 0.10456394300144299,
+          "high": 0.18481108205066535
+        },
+        "generated_path_depth_ratio_mean": {
+          "mean": 0.22619047619047616,
+          "low": 0.16666666666666666,
+          "high": 0.2857142857142857
+        },
+        "reference_path_depth_ratio_mean": {
+          "mean": 0.4087086801128953,
+          "low": 0.34442355104666433,
+          "high": 0.465796290674396
+        },
+        "generated_path_length_mean": {
+          "mean": 5.5,
+          "low": 5.0,
+          "high": 6.0
+        },
+        "reference_path_length_mean": {
+          "mean": 9.944444444444445,
+          "low": 8.498611111111112,
+          "high": 10.666666666666666
+        },
+        "generated_num_nodes_mean": {
+          "mean": 26.5,
+          "low": 22.0,
+          "high": 31.0
+        },
+        "reference_num_nodes_mean": {
+          "mean": 28.5,
+          "low": 21.85,
+          "high": 34.74583333333333
+        }
+      },
+      "calibration": {
+        "enabled": false,
+        "rule_weight_overrides": {},
+        "target_descriptor_means": {
+          "linearity": 0.43243322417458485,
+          "leniency": 0.4746762496762497,
+          "progression_complexity": 0.5056329747493025,
+          "topology_complexity": 0.3938431288135679,
+          "path_length": 9.944444444444445,
+          "num_nodes": 28.5,
+          "num_edges": 62.833333333333336,
+          "cycle_density": 0.3025030389000977,
+          "shortcut_density": 0.0,
+          "gate_depth_ratio": 0.14705888247554916,
+          "path_depth_ratio": 0.4087086801128953,
+          "gating_density": 0.18167332474798803,
+          "puzzle_density": 0.419103313840156,
+          "item_density": 0.26900584795321636,
+          "gate_variety": 0.5111111111111111,
+          "bombable_ratio": 0.14765694076038904,
+          "soft_lock_ratio": 0.19451812555260828,
+          "switch_ratio": 0.005305039787798408,
+          "stair_ratio": 0.021220159151193633
+        },
+        "history": [],
+        "best_gap": 0.0,
+        "effective_room_budget": {
+          "min_rooms": 18,
+          "max_rooms": 33,
+          "aligned_to_reference": true,
+          "room_budget_cap": 42,
+          "room_count_bias": 0.45,
+          "search_strategy": "ga",
+          "qd_archive_cells": 128,
+          "qd_init_random_fraction": 0.35,
+          "qd_emitter_mutation_rate": 0.18,
+          "realism_tuning": {}
+        }
+      },
+      "data_audit": {}
+    },
+    "objective_score": 2.008240885650234
+  },
+  "results": [
+    {
+      "name": "baseline",
+      "realism_tuning": {},
+      "summary": {
+        "num_generated": 2,
+        "num_reference": 18,
+        "mean_generation_time_sec": 1.7003793716430664,
+        "completeness": {
+          "start_goal_rate": 1.0,
+          "connected_rate": 1.0,
+          "path_exists_rate": 1.0,
+          "directed_path_exists_rate": 1.0,
+          "weak_path_exists_rate": 1.0,
+          "path_directionality_gap_mean": 0.0,
+          "constraint_valid_rate": 1.0,
+          "overall_completeness": 1.0
+        },
+        "robustness": {
+          "repair_rate": 0.0,
+          "mean_total_repairs": 0.0,
+          "mean_lock_key_repairs": 0.0,
+          "mean_progression_repairs": 0.0,
+          "mean_wave3_repairs": 0.0,
+          "mean_repair_rounds": 0.0,
+          "mean_generation_constraint_rejections": 0.0,
+          "mean_candidate_repairs_applied": 0.0,
+          "mean_rule_applications": 25.5,
+          "mean_rule_applied": 22.0,
+          "mean_rule_skipped": 3.5,
+          "wfc_probe_count": 0.0,
+          "wfc_contradiction_rate": 0.0,
+          "wfc_restart_rate": 0.0,
+          "wfc_fallback_rate": 0.0,
+          "wfc_mean_contradictions": 0.0,
+          "wfc_mean_backtracks": 0.0,
+          "wfc_mean_restarts": 0.0,
+          "wfc_mean_zero_prob_resets": 0.0,
+          "wfc_mean_fallback_fills": 0.0,
+          "wfc_mean_kl_divergence": 0.0,
+          "wfc_distribution_preserved_rate": 0.0,
+          "wfc_mean_mask_ratio": 0.0,
+          "wfc_mean_masked_tiles": 0.0,
+          "wfc_probe_count_severity_low": 0.0,
+          "wfc_probe_count_severity_mid": 0.0,
+          "wfc_probe_count_severity_high": 0.0,
+          "wfc_restart_rate_severity_low": 0.0,
+          "wfc_restart_rate_severity_mid": 0.0,
+          "wfc_restart_rate_severity_high": 0.0,
+          "wfc_fallback_rate_severity_low": 0.0,
+          "wfc_fallback_rate_severity_mid": 0.0,
+          "wfc_fallback_rate_severity_high": 0.0,
+          "wfc_distribution_preserved_rate_severity_low": 0.0,
+          "wfc_distribution_preserved_rate_severity_mid": 0.0,
+          "wfc_distribution_preserved_rate_severity_high": 0.0,
+          "wfc_mean_kl_divergence_severity_low": 0.0,
+          "wfc_mean_kl_divergence_severity_mid": 0.0,
+          "wfc_mean_kl_divergence_severity_high": 0.0
+        },
+        "expressive_range": {
+          "coverage_linearity_leniency": 0.005,
+          "coverage_progression_topology": 0.005,
+          "descriptor_diversity": 0.1015519518405199
+        },
+        "reference_comparison": {
+          "novelty_vs_reference": 0.05992148242360204,
+          "fidelity_js_divergence": 0.4139240077239885,
+          "expressive_overlap_reference": 0.05555555555555555
+        },
+        "generated_descriptor_means": {
+          "linearity": 0.2558651026392962,
+          "leniency": 0.75,
+          "progression_complexity": 0.42592657860081906,
+          "topology_complexity": 0.2971344810634477,
+          "path_length": 5.5,
+          "directed_path_length": 5.5,
+          "weak_path_length": 5.5,
+          "directionality_gap": 0.0,
+          "directed_path_exists_rate": 1.0,
+          "weak_path_exists_rate": 1.0,
+          "branching_factor": 0.6048387096774194,
+          "cycle_density": 0.26969696969696966,
+          "shortcut_density": 0.0,
+          "gating_density": 0.05450581395348837,
+          "gate_depth_ratio": 0.26666666666666666,
+          "path_depth_ratio": 0.22619047619047616,
+          "num_nodes": 26.5,
+          "num_edges": 53.5,
+          "enemy_count": 6.5,
+          "key_count": 2.5,
+          "puzzle_count": 4.5,
+          "item_count": 3.0,
+          "bombable_count": 0.0,
+          "softlock_count": 1.5,
+          "item_gate_count": 0.5,
+          "switch_count": 1.0,
+          "stair_count": 1.0,
+          "gate_variety": 0.4,
+          "repair_rate": 0.0,
+          "total_repairs": 0.0,
+          "lock_key_repairs": 0.0,
+          "progression_repairs": 0.0,
+          "wave3_repairs": 0.0,
+          "repair_rounds": 0.0,
+          "generation_constraint_rejections": 0.0,
+          "candidate_repairs_applied": 0.0,
+          "rule_applications": 25.5,
+          "rule_applied": 22.0,
+          "rule_skipped": 3.5
+        },
+        "reference_descriptor_means": {
+          "linearity": 0.43243322417458485,
+          "leniency": 0.4746762496762497,
+          "progression_complexity": 0.5056329747493025,
+          "topology_complexity": 0.3938431288135679,
+          "path_length": 9.944444444444445,
+          "directed_path_length": 9.944444444444445,
+          "weak_path_length": 9.944444444444445,
+          "directionality_gap": 0.0,
+          "directed_path_exists_rate": 1.0,
+          "weak_path_exists_rate": 1.0,
+          "branching_factor": 0.8007563941112603,
+          "cycle_density": 0.3025030389000977,
+          "shortcut_density": 0.0,
+          "gating_density": 0.18167332474798803,
+          "gate_depth_ratio": 0.14705888247554916,
+          "path_depth_ratio": 0.4087086801128953,
+          "num_nodes": 28.5,
+          "num_edges": 62.833333333333336,
+          "enemy_count": 19.27777777777778,
+          "key_count": 3.8333333333333335,
+          "puzzle_count": 11.944444444444445,
+          "item_count": 7.666666666666667,
+          "bombable_count": 9.277777777777779,
+          "softlock_count": 12.222222222222221,
+          "item_gate_count": 1.8888888888888888,
+          "switch_count": 0.3333333333333333,
+          "stair_count": 1.3333333333333333,
+          "gate_variety": 0.5111111111111111,
+          "repair_rate": 0.0,
+          "total_repairs": 0.0,
+          "lock_key_repairs": 0.0,
+          "progression_repairs": 0.0,
+          "wave3_repairs": 0.0,
+          "repair_rounds": 0.0,
+          "generation_constraint_rejections": 0.0,
+          "candidate_repairs_applied": 0.0,
+          "rule_applications": 0.0,
+          "rule_applied": 0.0,
+          "rule_skipped": 0.0
+        },
+        "generated_descriptor_stds": {
+          "linearity": 0.062316715542521994,
+          "leniency": 0.25,
+          "progression_complexity": 0.03910756118412717,
+          "topology_complexity": 0.054783529689240495,
+          "path_length": 0.5,
+          "directed_path_length": 0.5,
+          "weak_path_length": 0.5,
+          "directionality_gap": 0.0,
+          "directed_path_exists_rate": 0.0,
+          "weak_path_exists_rate": 0.0,
+          "branching_factor": 0.10483870967741937,
+          "cycle_density": 0.003030303030303022,
+          "shortcut_density": 0.0,
+          "gating_density": 0.007994186046511628,
+          "gate_depth_ratio": 0.06666666666666665,
+          "path_depth_ratio": 0.05952380952380952,
+          "num_nodes": 4.5,
+          "num_edges": 10.5,
+          "enemy_count": 3.5,
+          "key_count": 0.5,
+          "puzzle_count": 0.5,
+          "item_count": 2.0,
+          "bombable_count": 0.0,
+          "softlock_count": 1.5,
+          "item_gate_count": 0.5,
+          "switch_count": 1.0,
+          "stair_count": 1.0,
+          "gate_variety": 0.19999999999999998,
+          "repair_rate": 0.0,
+          "total_repairs": 0.0,
+          "lock_key_repairs": 0.0,
+          "progression_repairs": 0.0,
+          "wave3_repairs": 0.0,
+          "repair_rounds": 0.0,
+          "generation_constraint_rejections": 0.0,
+          "candidate_repairs_applied": 0.0,
+          "rule_applications": 0.5,
+          "rule_applied": 1.0,
+          "rule_skipped": 1.5
+        },
+        "reference_descriptor_stds": {
+          "linearity": 0.13274184093420327,
+          "leniency": 0.27641126799999804,
+          "progression_complexity": 0.0175409470013203,
+          "topology_complexity": 0.07832228221937328,
+          "path_length": 3.0271406057389507,
+          "directed_path_length": 3.0271406057389507,
+          "weak_path_length": 3.0271406057389507,
+          "directionality_gap": 0.0,
+          "directed_path_exists_rate": 0.0,
+          "weak_path_exists_rate": 0.0,
+          "branching_factor": 0.05485997045769457,
+          "cycle_density": 0.19786007542213724,
+          "shortcut_density": 0.0,
+          "gating_density": 0.09843325377103221,
+          "gate_depth_ratio": 0.09897417233358473,
+          "path_depth_ratio": 0.13105343367257669,
+          "num_nodes": 13.933373205684576,
+          "num_edges": 34.453269478784996,
+          "enemy_count": 9.212344107262673,
+          "key_count": 1.707825127659933,
+          "puzzle_count": 10.819078941194693,
+          "item_count": 3.415650255319866,
+          "bombable_count": 8.792708820099852,
+          "softlock_count": 7.397864222985469,
+          "item_gate_count": 4.829180847133496,
+          "switch_count": 0.9999999999999999,
+          "stair_count": 2.403700850309326,
+          "gate_variety": 0.21314806770278755,
+          "repair_rate": 0.0,
+          "total_repairs": 0.0,
+          "lock_key_repairs": 0.0,
+          "progression_repairs": 0.0,
+          "wave3_repairs": 0.0,
+          "repair_rounds": 0.0,
+          "generation_constraint_rejections": 0.0,
+          "candidate_repairs_applied": 0.0,
+          "rule_applications": 0.0,
+          "rule_applied": 0.0,
+          "rule_skipped": 0.0
+        },
+        "confidence_intervals": {
+          "start_goal_rate": {
+            "mean": 1.0,
+            "low": 1.0,
+            "high": 1.0
+          },
+          "connected_rate": {
+            "mean": 1.0,
+            "low": 1.0,
+            "high": 1.0
+          },
+          "path_exists_rate": {
+            "mean": 1.0,
+            "low": 1.0,
+            "high": 1.0
+          },
+          "directed_path_exists_rate": {
+            "mean": 1.0,
+            "low": 1.0,
+            "high": 1.0
+          },
+          "weak_path_exists_rate": {
+            "mean": 1.0,
+            "low": 1.0,
+            "high": 1.0
+          },
+          "path_directionality_gap_mean": {
+            "mean": 0.0,
+            "low": 0.0,
+            "high": 0.0
+          },
+          "constraint_valid_rate": {
+            "mean": 1.0,
+            "low": 1.0,
+            "high": 1.0
+          },
+          "overall_completeness": {
+            "mean": 1.0,
+            "low": 1.0,
+            "high": 1.0
+          },
+          "repair_rate": {
+            "mean": 0.0,
+            "low": 0.0,
+            "high": 0.0
+          },
+          "mean_total_repairs": {
+            "mean": 0.0,
+            "low": 0.0,
+            "high": 0.0
+          },
+          "mean_generation_constraint_rejections": {
+            "mean": 0.0,
+            "low": 0.0,
+            "high": 0.0
+          },
+          "mean_candidate_repairs_applied": {
+            "mean": 0.0,
+            "low": 0.0,
+            "high": 0.0
+          },
+          "generated_linearity_mean": {
+            "mean": 0.2558651026392962,
+            "low": 0.1935483870967742,
+            "high": 0.3181818181818182
+          },
+          "reference_linearity_mean": {
+            "mean": 0.43243322417458485,
+            "low": 0.364695947497177,
+            "high": 0.4750818462481517
+          },
+          "generated_leniency_mean": {
+            "mean": 0.75,
+            "low": 0.5,
+            "high": 1.0
+          },
+          "reference_leniency_mean": {
+            "mean": 0.4746762496762497,
+            "low": 0.3492672720797721,
+            "high": 0.556872167184667
+          },
+          "generated_progression_complexity_mean": {
+            "mean": 0.42592657860081906,
+            "low": 0.3868190174166919,
+            "high": 0.46503413978494623
+          },
+          "reference_progression_complexity_mean": {
+            "mean": 0.5056329747493025,
+            "low": 0.49859079824281755,
+            "high": 0.5112677010608482
+          },
+          "generated_topology_complexity_mean": {
+            "mean": 0.2971344810634477,
+            "low": 0.2423509513742072,
+            "high": 0.3519180107526882
+          },
+          "reference_topology_complexity_mean": {
+            "mean": 0.3938431288135679,
+            "low": 0.34967516796527126,
+            "high": 0.42772035667438985
+          },
+          "generated_cycle_density_mean": {
+            "mean": 0.26969696969696966,
+            "low": 0.26666666666666666,
+            "high": 0.2727272727272727
+          },
+          "reference_cycle_density_mean": {
+            "mean": 0.3025030389000977,
+            "low": 0.23134674240066394,
+            "high": 0.38662108724608724
+          },
+          "generated_shortcut_density_mean": {
+            "mean": 0.0,
+            "low": 0.0,
+            "high": 0.0
+          },
+          "reference_shortcut_density_mean": {
+            "mean": 0.0,
+            "low": 0.0,
+            "high": 0.0
+          },
+          "generated_gate_depth_ratio_mean": {
+            "mean": 0.26666666666666666,
+            "low": 0.2,
+            "high": 0.3333333333333333
+          },
+          "reference_gate_depth_ratio_mean": {
+            "mean": 0.14705888247554916,
+            "low": 0.10456394300144299,
+            "high": 0.18481108205066535
+          },
+          "generated_path_depth_ratio_mean": {
+            "mean": 0.22619047619047616,
+            "low": 0.16666666666666666,
+            "high": 0.2857142857142857
+          },
+          "reference_path_depth_ratio_mean": {
+            "mean": 0.4087086801128953,
+            "low": 0.34442355104666433,
+            "high": 0.465796290674396
+          },
+          "generated_path_length_mean": {
+            "mean": 5.5,
+            "low": 5.0,
+            "high": 6.0
+          },
+          "reference_path_length_mean": {
+            "mean": 9.944444444444445,
+            "low": 8.498611111111112,
+            "high": 10.666666666666666
+          },
+          "generated_num_nodes_mean": {
+            "mean": 26.5,
+            "low": 22.0,
+            "high": 31.0
+          },
+          "reference_num_nodes_mean": {
+            "mean": 28.5,
+            "low": 21.85,
+            "high": 34.74583333333333
+          }
+        },
+        "calibration": {
+          "enabled": false,
+          "rule_weight_overrides": {},
+          "target_descriptor_means": {
+            "linearity": 0.43243322417458485,
+            "leniency": 0.4746762496762497,
+            "progression_complexity": 0.5056329747493025,
+            "topology_complexity": 0.3938431288135679,
+            "path_length": 9.944444444444445,
+            "num_nodes": 28.5,
+            "num_edges": 62.833333333333336,
+            "cycle_density": 0.3025030389000977,
+            "shortcut_density": 0.0,
+            "gate_depth_ratio": 0.14705888247554916,
+            "path_depth_ratio": 0.4087086801128953,
+            "gating_density": 0.18167332474798803,
+            "puzzle_density": 0.419103313840156,
+            "item_density": 0.26900584795321636,
+            "gate_variety": 0.5111111111111111,
+            "bombable_ratio": 0.14765694076038904,
+            "soft_lock_ratio": 0.19451812555260828,
+            "switch_ratio": 0.005305039787798408,
+            "stair_ratio": 0.021220159151193633
+          },
+          "history": [],
+          "best_gap": 0.0,
+          "effective_room_budget": {
+            "min_rooms": 18,
+            "max_rooms": 33,
+            "aligned_to_reference": true,
+            "room_budget_cap": 42,
+            "room_count_bias": 0.45,
+            "search_strategy": "ga",
+            "qd_archive_cells": 128,
+            "qd_init_random_fraction": 0.35,
+            "qd_emitter_mutation_rate": 0.18,
+            "realism_tuning": {}
+          }
+        },
+        "data_audit": {}
+      },
+      "objective_score": 2.008240885650234
+    },
+    {
+      "name": "gate_quality_heavy",
+      "realism_tuning": {
+        "adapt_node_gain": 0.46,
+        "adapt_edge_density_gain": 0.7,
+        "adapt_edge_budget_gain": 0.52,
+        "prior_node_boost_gain": 0.34,
+        "prior_edge_boost_gain": 0.56,
+        "node_cap_floor_ratio": 0.98,
+        "node_cap_expand_ratio": 1.18,
+        "node_cap_hard_cap_ratio": 1.45
+      },
+      "summary": {
+        "num_generated": 2,
+        "num_reference": 18,
+        "mean_generation_time_sec": 1.4190139770507812,
+        "completeness": {
+          "start_goal_rate": 1.0,
+          "connected_rate": 1.0,
+          "path_exists_rate": 1.0,
+          "directed_path_exists_rate": 1.0,
+          "weak_path_exists_rate": 1.0,
+          "path_directionality_gap_mean": 0.0,
+          "constraint_valid_rate": 1.0,
+          "overall_completeness": 1.0
+        },
+        "robustness": {
+          "repair_rate": 0.0,
+          "mean_total_repairs": 0.0,
+          "mean_lock_key_repairs": 0.0,
+          "mean_progression_repairs": 0.0,
+          "mean_wave3_repairs": 0.0,
+          "mean_repair_rounds": 0.0,
+          "mean_generation_constraint_rejections": 0.0,
+          "mean_candidate_repairs_applied": 0.0,
+          "mean_rule_applications": 26.0,
+          "mean_rule_applied": 22.0,
+          "mean_rule_skipped": 4.0,
+          "wfc_probe_count": 0.0,
+          "wfc_contradiction_rate": 0.0,
+          "wfc_restart_rate": 0.0,
+          "wfc_fallback_rate": 0.0,
+          "wfc_mean_contradictions": 0.0,
+          "wfc_mean_backtracks": 0.0,
+          "wfc_mean_restarts": 0.0,
+          "wfc_mean_zero_prob_resets": 0.0,
+          "wfc_mean_fallback_fills": 0.0,
+          "wfc_mean_kl_divergence": 0.0,
+          "wfc_distribution_preserved_rate": 0.0,
+          "wfc_mean_mask_ratio": 0.0,
+          "wfc_mean_masked_tiles": 0.0,
+          "wfc_probe_count_severity_low": 0.0,
+          "wfc_probe_count_severity_mid": 0.0,
+          "wfc_probe_count_severity_high": 0.0,
+          "wfc_restart_rate_severity_low": 0.0,
+          "wfc_restart_rate_severity_mid": 0.0,
+          "wfc_restart_rate_severity_high": 0.0,
+          "wfc_fallback_rate_severity_low": 0.0,
+          "wfc_fallback_rate_severity_mid": 0.0,
+          "wfc_fallback_rate_severity_high": 0.0,
+          "wfc_distribution_preserved_rate_severity_low": 0.0,
+          "wfc_distribution_preserved_rate_severity_mid": 0.0,
+          "wfc_distribution_preserved_rate_severity_high": 0.0,
+          "wfc_mean_kl_divergence_severity_low": 0.0,
+          "wfc_mean_kl_divergence_severity_mid": 0.0,
+          "wfc_mean_kl_divergence_severity_high": 0.0
+        },
+        "expressive_range": {
+          "coverage_linearity_leniency": 0.005,
+          "coverage_progression_topology": 0.005,
+          "descriptor_diversity": 0.07605370134115219
+        },
+        "reference_comparison": {
+          "novelty_vs_reference": 0.04243729489061802,
+          "fidelity_js_divergence": 0.352665928223975,
+          "expressive_overlap_reference": 0.05555555555555555
+        },
+        "generated_descriptor_means": {
+          "linearity": 0.33653846153846156,
+          "leniency": 0.8,
+          "progression_complexity": 0.4757783444816054,
+          "topology_complexity": 0.3009940170940172,
+          "path_length": 7.5,
+          "directed_path_length": 7.5,
+          "weak_path_length": 7.5,
+          "directionality_gap": 0.0,
+          "directed_path_exists_rate": 1.0,
+          "weak_path_exists_rate": 1.0,
+          "branching_factor": 0.7019230769230769,
+          "cycle_density": 0.16346153846153846,
+          "shortcut_density": 0.0,
+          "gating_density": 0.07555555555555556,
+          "gate_depth_ratio": 0.2,
+          "path_depth_ratio": 0.30869565217391304,
+          "num_nodes": 25.0,
+          "num_edges": 47.5,
+          "enemy_count": 4.0,
+          "key_count": 2.5,
+          "puzzle_count": 7.0,
+          "item_count": 4.0,
+          "bombable_count": 0.0,
+          "softlock_count": 0.5,
+          "item_gate_count": 1.0,
+          "switch_count": 1.0,
+          "stair_count": 2.0,
+          "gate_variety": 0.4,
+          "repair_rate": 0.0,
+          "total_repairs": 0.0,
+          "lock_key_repairs": 0.0,
+          "progression_repairs": 0.0,
+          "wave3_repairs": 0.0,
+          "repair_rounds": 0.0,
+          "generation_constraint_rejections": 0.0,
+          "candidate_repairs_applied": 0.0,
+          "rule_applications": 26.0,
+          "rule_applied": 22.0,
+          "rule_skipped": 4.0
+        },
+        "reference_descriptor_means": {
+          "linearity": 0.43243322417458485,
+          "leniency": 0.4746762496762497,
+          "progression_complexity": 0.5056329747493025,
+          "topology_complexity": 0.3938431288135679,
+          "path_length": 9.944444444444445,
+          "directed_path_length": 9.944444444444445,
+          "weak_path_length": 9.944444444444445,
+          "directionality_gap": 0.0,
+          "directed_path_exists_rate": 1.0,
+          "weak_path_exists_rate": 1.0,
+          "branching_factor": 0.8007563941112603,
+          "cycle_density": 0.3025030389000977,
+          "shortcut_density": 0.0,
+          "gating_density": 0.18167332474798803,
+          "gate_depth_ratio": 0.14705888247554916,
+          "path_depth_ratio": 0.4087086801128953,
+          "num_nodes": 28.5,
+          "num_edges": 62.833333333333336,
+          "enemy_count": 19.27777777777778,
+          "key_count": 3.8333333333333335,
+          "puzzle_count": 11.944444444444445,
+          "item_count": 7.666666666666667,
+          "bombable_count": 9.277777777777779,
+          "softlock_count": 12.222222222222221,
+          "item_gate_count": 1.8888888888888888,
+          "switch_count": 0.3333333333333333,
+          "stair_count": 1.3333333333333333,
+          "gate_variety": 0.5111111111111111,
+          "repair_rate": 0.0,
+          "total_repairs": 0.0,
+          "lock_key_repairs": 0.0,
+          "progression_repairs": 0.0,
+          "wave3_repairs": 0.0,
+          "repair_rounds": 0.0,
+          "generation_constraint_rejections": 0.0,
+          "candidate_repairs_applied": 0.0,
+          "rule_applications": 0.0,
+          "rule_applied": 0.0,
+          "rule_skipped": 0.0
+        },
+        "generated_descriptor_stds": {
+          "linearity": 0.08653846153846154,
+          "leniency": 0.2,
+          "progression_complexity": 0.010870373467112587,
+          "topology_complexity": 0.006805982905982916,
+          "path_length": 2.5,
+          "directed_path_length": 2.5,
+          "weak_path_length": 2.5,
+          "directionality_gap": 0.0,
+          "directed_path_exists_rate": 0.0,
+          "weak_path_exists_rate": 0.0,
+          "branching_factor": 0.04807692307692307,
+          "cycle_density": 0.08653846153846154,
+          "shortcut_density": 0.0,
+          "gating_density": 0.035555555555555556,
+          "gate_depth_ratio": 0.0,
+          "path_depth_ratio": 0.09130434782608697,
+          "num_nodes": 1.0,
+          "num_edges": 2.5,
+          "enemy_count": 1.0,
+          "key_count": 0.5,
+          "puzzle_count": 0.0,
+          "item_count": 1.0,
+          "bombable_count": 0.0,
+          "softlock_count": 0.5,
+          "item_gate_count": 1.0,
+          "switch_count": 1.0,
+          "stair_count": 2.0,
+          "gate_variety": 0.19999999999999998,
+          "repair_rate": 0.0,
+          "total_repairs": 0.0,
+          "lock_key_repairs": 0.0,
+          "progression_repairs": 0.0,
+          "wave3_repairs": 0.0,
+          "repair_rounds": 0.0,
+          "generation_constraint_rejections": 0.0,
+          "candidate_repairs_applied": 0.0,
+          "rule_applications": 0.0,
+          "rule_applied": 1.0,
+          "rule_skipped": 1.0
+        },
+        "reference_descriptor_stds": {
+          "linearity": 0.13274184093420327,
+          "leniency": 0.27641126799999804,
+          "progression_complexity": 0.0175409470013203,
+          "topology_complexity": 0.07832228221937328,
+          "path_length": 3.0271406057389507,
+          "directed_path_length": 3.0271406057389507,
+          "weak_path_length": 3.0271406057389507,
+          "directionality_gap": 0.0,
+          "directed_path_exists_rate": 0.0,
+          "weak_path_exists_rate": 0.0,
+          "branching_factor": 0.05485997045769457,
+          "cycle_density": 0.19786007542213724,
+          "shortcut_density": 0.0,
+          "gating_density": 0.09843325377103221,
+          "gate_depth_ratio": 0.09897417233358473,
+          "path_depth_ratio": 0.13105343367257669,
+          "num_nodes": 13.933373205684576,
+          "num_edges": 34.453269478784996,
+          "enemy_count": 9.212344107262673,
+          "key_count": 1.707825127659933,
+          "puzzle_count": 10.819078941194693,
+          "item_count": 3.415650255319866,
+          "bombable_count": 8.792708820099852,
+          "softlock_count": 7.397864222985469,
+          "item_gate_count": 4.829180847133496,
+          "switch_count": 0.9999999999999999,
+          "stair_count": 2.403700850309326,
+          "gate_variety": 0.21314806770278755,
+          "repair_rate": 0.0,
+          "total_repairs": 0.0,
+          "lock_key_repairs": 0.0,
+          "progression_repairs": 0.0,
+          "wave3_repairs": 0.0,
+          "repair_rounds": 0.0,
+          "generation_constraint_rejections": 0.0,
+          "candidate_repairs_applied": 0.0,
+          "rule_applications": 0.0,
+          "rule_applied": 0.0,
+          "rule_skipped": 0.0
+        },
+        "confidence_intervals": {
+          "start_goal_rate": {
+            "mean": 1.0,
+            "low": 1.0,
+            "high": 1.0
+          },
+          "connected_rate": {
+            "mean": 1.0,
+            "low": 1.0,
+            "high": 1.0
+          },
+          "path_exists_rate": {
+            "mean": 1.0,
+            "low": 1.0,
+            "high": 1.0
+          },
+          "directed_path_exists_rate": {
+            "mean": 1.0,
+            "low": 1.0,
+            "high": 1.0
+          },
+          "weak_path_exists_rate": {
+            "mean": 1.0,
+            "low": 1.0,
+            "high": 1.0
+          },
+          "path_directionality_gap_mean": {
+            "mean": 0.0,
+            "low": 0.0,
+            "high": 0.0
+          },
+          "constraint_valid_rate": {
+            "mean": 1.0,
+            "low": 1.0,
+            "high": 1.0
+          },
+          "overall_completeness": {
+            "mean": 1.0,
+            "low": 1.0,
+            "high": 1.0
+          },
+          "repair_rate": {
+            "mean": 0.0,
+            "low": 0.0,
+            "high": 0.0
+          },
+          "mean_total_repairs": {
+            "mean": 0.0,
+            "low": 0.0,
+            "high": 0.0
+          },
+          "mean_generation_constraint_rejections": {
+            "mean": 0.0,
+            "low": 0.0,
+            "high": 0.0
+          },
+          "mean_candidate_repairs_applied": {
+            "mean": 0.0,
+            "low": 0.0,
+            "high": 0.0
+          },
+          "generated_linearity_mean": {
+            "mean": 0.33653846153846156,
+            "low": 0.25,
+            "high": 0.4230769230769231
+          },
+          "reference_linearity_mean": {
+            "mean": 0.43243322417458485,
+            "low": 0.364695947497177,
+            "high": 0.4750818462481517
+          },
+          "generated_leniency_mean": {
+            "mean": 0.8,
+            "low": 0.6,
+            "high": 1.0
+          },
+          "reference_leniency_mean": {
+            "mean": 0.4746762496762497,
+            "low": 0.3492672720797721,
+            "high": 0.556872167184667
+          },
+          "generated_progression_complexity_mean": {
+            "mean": 0.4757783444816054,
+            "low": 0.4649079710144928,
+            "high": 0.486648717948718
+          },
+          "reference_progression_complexity_mean": {
+            "mean": 0.5056329747493025,
+            "low": 0.49859079824281755,
+            "high": 0.5112677010608482
+          },
+          "generated_topology_complexity_mean": {
+            "mean": 0.3009940170940172,
+            "low": 0.29418803418803424,
+            "high": 0.3078000000000001
+          },
+          "reference_topology_complexity_mean": {
+            "mean": 0.3938431288135679,
+            "low": 0.34967516796527126,
+            "high": 0.42772035667438985
+          },
+          "generated_cycle_density_mean": {
+            "mean": 0.16346153846153846,
+            "low": 0.07692307692307693,
+            "high": 0.25
+          },
+          "reference_cycle_density_mean": {
+            "mean": 0.3025030389000977,
+            "low": 0.23134674240066394,
+            "high": 0.38662108724608724
+          },
+          "generated_shortcut_density_mean": {
+            "mean": 0.0,
+            "low": 0.0,
+            "high": 0.0
+          },
+          "reference_shortcut_density_mean": {
+            "mean": 0.0,
+            "low": 0.0,
+            "high": 0.0
+          },
+          "generated_gate_depth_ratio_mean": {
+            "mean": 0.2,
+            "low": 0.2,
+            "high": 0.2
+          },
+          "reference_gate_depth_ratio_mean": {
+            "mean": 0.14705888247554916,
+            "low": 0.10456394300144299,
+            "high": 0.18481108205066535
+          },
+          "generated_path_depth_ratio_mean": {
+            "mean": 0.30869565217391304,
+            "low": 0.21739130434782608,
+            "high": 0.4
+          },
+          "reference_path_depth_ratio_mean": {
+            "mean": 0.4087086801128953,
+            "low": 0.34442355104666433,
+            "high": 0.465796290674396
+          },
+          "generated_path_length_mean": {
+            "mean": 7.5,
+            "low": 5.0,
+            "high": 10.0
+          },
+          "reference_path_length_mean": {
+            "mean": 9.944444444444445,
+            "low": 8.498611111111112,
+            "high": 10.666666666666666
+          },
+          "generated_num_nodes_mean": {
+            "mean": 25.0,
+            "low": 24.0,
+            "high": 26.0
+          },
+          "reference_num_nodes_mean": {
+            "mean": 28.5,
+            "low": 21.85,
+            "high": 34.74583333333333
+          }
+        },
+        "calibration": {
+          "enabled": false,
+          "rule_weight_overrides": {},
+          "target_descriptor_means": {
+            "linearity": 0.43243322417458485,
+            "leniency": 0.4746762496762497,
+            "progression_complexity": 0.5056329747493025,
+            "topology_complexity": 0.3938431288135679,
+            "path_length": 9.944444444444445,
+            "num_nodes": 28.5,
+            "num_edges": 62.833333333333336,
+            "cycle_density": 0.3025030389000977,
+            "shortcut_density": 0.0,
+            "gate_depth_ratio": 0.14705888247554916,
+            "path_depth_ratio": 0.4087086801128953,
+            "gating_density": 0.18167332474798803,
+            "puzzle_density": 0.419103313840156,
+            "item_density": 0.26900584795321636,
+            "gate_variety": 0.5111111111111111,
+            "bombable_ratio": 0.14765694076038904,
+            "soft_lock_ratio": 0.19451812555260828,
+            "switch_ratio": 0.005305039787798408,
+            "stair_ratio": 0.021220159151193633
+          },
+          "history": [],
+          "best_gap": 0.0,
+          "effective_room_budget": {
+            "min_rooms": 18,
+            "max_rooms": 33,
+            "aligned_to_reference": true,
+            "room_budget_cap": 42,
+            "room_count_bias": 0.45,
+            "search_strategy": "ga",
+            "qd_archive_cells": 128,
+            "qd_init_random_fraction": 0.35,
+            "qd_emitter_mutation_rate": 0.18,
+            "realism_tuning": {
+              "adapt_node_gain": 0.46,
+              "adapt_edge_density_gain": 0.7,
+              "adapt_edge_budget_gain": 0.52,
+              "prior_node_boost_gain": 0.34,
+              "prior_edge_boost_gain": 0.56,
+              "node_cap_floor_ratio": 0.98,
+              "node_cap_expand_ratio": 1.18,
+              "node_cap_hard_cap_ratio": 1.45
+            }
+          }
+        },
+        "data_audit": {}
+      },
+      "objective_score": 2.2754109025198686
+    },
+    {
+      "name": "scale_heavy",
+      "realism_tuning": {
+        "adapt_node_gain": 0.5,
+        "adapt_edge_density_gain": 0.78,
+        "adapt_edge_budget_gain": 0.58,
+        "prior_node_boost_gain": 0.4,
+        "prior_edge_boost_gain": 0.64,
+        "node_cap_floor_ratio": 1.0,
+        "node_cap_expand_ratio": 1.22,
+        "node_cap_hard_cap_ratio": 1.55
+      },
+      "summary": {
+        "num_generated": 2,
+        "num_reference": 18,
+        "mean_generation_time_sec": 1.148237705230713,
+        "completeness": {
+          "start_goal_rate": 1.0,
+          "connected_rate": 1.0,
+          "path_exists_rate": 1.0,
+          "directed_path_exists_rate": 1.0,
+          "weak_path_exists_rate": 1.0,
+          "path_directionality_gap_mean": 0.0,
+          "constraint_valid_rate": 1.0,
+          "overall_completeness": 1.0
+        },
+        "robustness": {
+          "repair_rate": 0.0,
+          "mean_total_repairs": 0.0,
+          "mean_lock_key_repairs": 0.0,
+          "mean_progression_repairs": 0.0,
+          "mean_wave3_repairs": 0.0,
+          "mean_repair_rounds": 0.0,
+          "mean_generation_constraint_rejections": 0.0,
+          "mean_candidate_repairs_applied": 0.0,
+          "mean_rule_applications": 22.5,
+          "mean_rule_applied": 20.0,
+          "mean_rule_skipped": 2.5,
+          "wfc_probe_count": 0.0,
+          "wfc_contradiction_rate": 0.0,
+          "wfc_restart_rate": 0.0,
+          "wfc_fallback_rate": 0.0,
+          "wfc_mean_contradictions": 0.0,
+          "wfc_mean_backtracks": 0.0,
+          "wfc_mean_restarts": 0.0,
+          "wfc_mean_zero_prob_resets": 0.0,
+          "wfc_mean_fallback_fills": 0.0,
+          "wfc_mean_kl_divergence": 0.0,
+          "wfc_distribution_preserved_rate": 0.0,
+          "wfc_mean_mask_ratio": 0.0,
+          "wfc_mean_masked_tiles": 0.0,
+          "wfc_probe_count_severity_low": 0.0,
+          "wfc_probe_count_severity_mid": 0.0,
+          "wfc_probe_count_severity_high": 0.0,
+          "wfc_restart_rate_severity_low": 0.0,
+          "wfc_restart_rate_severity_mid": 0.0,
+          "wfc_restart_rate_severity_high": 0.0,
+          "wfc_fallback_rate_severity_low": 0.0,
+          "wfc_fallback_rate_severity_mid": 0.0,
+          "wfc_fallback_rate_severity_high": 0.0,
+          "wfc_distribution_preserved_rate_severity_low": 0.0,
+          "wfc_distribution_preserved_rate_severity_mid": 0.0,
+          "wfc_distribution_preserved_rate_severity_high": 0.0,
+          "wfc_mean_kl_divergence_severity_low": 0.0,
+          "wfc_mean_kl_divergence_severity_mid": 0.0,
+          "wfc_mean_kl_divergence_severity_high": 0.0
+        },
+        "expressive_range": {
+          "coverage_linearity_leniency": 0.005,
+          "coverage_progression_topology": 0.005,
+          "descriptor_diversity": 0.026986021548509598
+        },
+        "reference_comparison": {
+          "novelty_vs_reference": 0.04895538774299521,
+          "fidelity_js_divergence": 0.47442903571209644,
+          "expressive_overlap_reference": 0.05555555555555555
+        },
+        "generated_descriptor_means": {
+          "linearity": 0.3385714285714286,
+          "leniency": 1.0,
+          "progression_complexity": 0.41493591523134077,
+          "topology_complexity": 0.27474468085106385,
+          "path_length": 8.0,
+          "directed_path_length": 8.0,
+          "weak_path_length": 8.0,
+          "directionality_gap": 0.0,
+          "directed_path_exists_rate": 1.0,
+          "weak_path_exists_rate": 1.0,
+          "branching_factor": 0.7035714285714285,
+          "cycle_density": 0.125,
+          "shortcut_density": 0.0,
+          "gating_density": 0.05191489361702127,
+          "gate_depth_ratio": 0.18253968253968253,
+          "path_depth_ratio": 0.3125,
+          "num_nodes": 26.5,
+          "num_edges": 48.5,
+          "enemy_count": 6.0,
+          "key_count": 3.0,
+          "puzzle_count": 3.5,
+          "item_count": 3.5,
+          "bombable_count": 0.0,
+          "softlock_count": 1.0,
+          "item_gate_count": 0.0,
+          "switch_count": 1.5,
+          "stair_count": 0.0,
+          "gate_variety": 0.30000000000000004,
+          "repair_rate": 0.0,
+          "total_repairs": 0.0,
+          "lock_key_repairs": 0.0,
+          "progression_repairs": 0.0,
+          "wave3_repairs": 0.0,
+          "repair_rounds": 0.0,
+          "generation_constraint_rejections": 0.0,
+          "candidate_repairs_applied": 0.0,
+          "rule_applications": 22.5,
+          "rule_applied": 20.0,
+          "rule_skipped": 2.5
+        },
+        "reference_descriptor_means": {
+          "linearity": 0.43243322417458485,
+          "leniency": 0.4746762496762497,
+          "progression_complexity": 0.5056329747493025,
+          "topology_complexity": 0.3938431288135679,
+          "path_length": 9.944444444444445,
+          "directed_path_length": 9.944444444444445,
+          "weak_path_length": 9.944444444444445,
+          "directionality_gap": 0.0,
+          "directed_path_exists_rate": 1.0,
+          "weak_path_exists_rate": 1.0,
+          "branching_factor": 0.8007563941112603,
+          "cycle_density": 0.3025030389000977,
+          "shortcut_density": 0.0,
+          "gating_density": 0.18167332474798803,
+          "gate_depth_ratio": 0.14705888247554916,
+          "path_depth_ratio": 0.4087086801128953,
+          "num_nodes": 28.5,
+          "num_edges": 62.833333333333336,
+          "enemy_count": 19.27777777777778,
+          "key_count": 3.8333333333333335,
+          "puzzle_count": 11.944444444444445,
+          "item_count": 7.666666666666667,
+          "bombable_count": 9.277777777777779,
+          "softlock_count": 12.222222222222221,
+          "item_gate_count": 1.8888888888888888,
+          "switch_count": 0.3333333333333333,
+          "stair_count": 1.3333333333333333,
+          "gate_variety": 0.5111111111111111,
+          "repair_rate": 0.0,
+          "total_repairs": 0.0,
+          "lock_key_repairs": 0.0,
+          "progression_repairs": 0.0,
+          "wave3_repairs": 0.0,
+          "repair_rounds": 0.0,
+          "generation_constraint_rejections": 0.0,
+          "candidate_repairs_applied": 0.0,
+          "rule_applications": 0.0,
+          "rule_applied": 0.0,
+          "rule_skipped": 0.0
+        },
+        "generated_descriptor_stds": {
+          "linearity": 0.018571428571428572,
+          "leniency": 0.0,
+          "progression_complexity": 0.04411734380276933,
+          "topology_complexity": 0.045255319148936185,
+          "path_length": 1.0,
+          "directed_path_length": 1.0,
+          "weak_path_length": 1.0,
+          "directionality_gap": 0.0,
+          "directed_path_exists_rate": 0.0,
+          "weak_path_exists_rate": 0.0,
+          "branching_factor": 0.09642857142857147,
+          "cycle_density": 0.125,
+          "shortcut_density": 0.0,
+          "gating_density": 0.011914893617021274,
+          "gate_depth_ratio": 0.03968253968253968,
+          "path_depth_ratio": 0.020833333333333315,
+          "num_nodes": 1.5,
+          "num_edges": 1.5,
+          "enemy_count": 0.0,
+          "key_count": 0.0,
+          "puzzle_count": 1.5,
+          "item_count": 0.5,
+          "bombable_count": 0.0,
+          "softlock_count": 1.0,
+          "item_gate_count": 0.0,
+          "switch_count": 0.5,
+          "stair_count": 0.0,
+          "gate_variety": 0.1,
+          "repair_rate": 0.0,
+          "total_repairs": 0.0,
+          "lock_key_repairs": 0.0,
+          "progression_repairs": 0.0,
+          "wave3_repairs": 0.0,
+          "repair_rounds": 0.0,
+          "generation_constraint_rejections": 0.0,
+          "candidate_repairs_applied": 0.0,
+          "rule_applications": 3.5,
+          "rule_applied": 2.0,
+          "rule_skipped": 1.5
+        },
+        "reference_descriptor_stds": {
+          "linearity": 0.13274184093420327,
+          "leniency": 0.27641126799999804,
+          "progression_complexity": 0.0175409470013203,
+          "topology_complexity": 0.07832228221937328,
+          "path_length": 3.0271406057389507,
+          "directed_path_length": 3.0271406057389507,
+          "weak_path_length": 3.0271406057389507,
+          "directionality_gap": 0.0,
+          "directed_path_exists_rate": 0.0,
+          "weak_path_exists_rate": 0.0,
+          "branching_factor": 0.05485997045769457,
+          "cycle_density": 0.19786007542213724,
+          "shortcut_density": 0.0,
+          "gating_density": 0.09843325377103221,
+          "gate_depth_ratio": 0.09897417233358473,
+          "path_depth_ratio": 0.13105343367257669,
+          "num_nodes": 13.933373205684576,
+          "num_edges": 34.453269478784996,
+          "enemy_count": 9.212344107262673,
+          "key_count": 1.707825127659933,
+          "puzzle_count": 10.819078941194693,
+          "item_count": 3.415650255319866,
+          "bombable_count": 8.792708820099852,
+          "softlock_count": 7.397864222985469,
+          "item_gate_count": 4.829180847133496,
+          "switch_count": 0.9999999999999999,
+          "stair_count": 2.403700850309326,
+          "gate_variety": 0.21314806770278755,
+          "repair_rate": 0.0,
+          "total_repairs": 0.0,
+          "lock_key_repairs": 0.0,
+          "progression_repairs": 0.0,
+          "wave3_repairs": 0.0,
+          "repair_rounds": 0.0,
+          "generation_constraint_rejections": 0.0,
+          "candidate_repairs_applied": 0.0,
+          "rule_applications": 0.0,
+          "rule_applied": 0.0,
+          "rule_skipped": 0.0
+        },
+        "confidence_intervals": {
+          "start_goal_rate": {
+            "mean": 1.0,
+            "low": 1.0,
+            "high": 1.0
+          },
+          "connected_rate": {
+            "mean": 1.0,
+            "low": 1.0,
+            "high": 1.0
+          },
+          "path_exists_rate": {
+            "mean": 1.0,
+            "low": 1.0,
+            "high": 1.0
+          },
+          "directed_path_exists_rate": {
+            "mean": 1.0,
+            "low": 1.0,
+            "high": 1.0
+          },
+          "weak_path_exists_rate": {
+            "mean": 1.0,
+            "low": 1.0,
+            "high": 1.0
+          },
+          "path_directionality_gap_mean": {
+            "mean": 0.0,
+            "low": 0.0,
+            "high": 0.0
+          },
+          "constraint_valid_rate": {
+            "mean": 1.0,
+            "low": 1.0,
+            "high": 1.0
+          },
+          "overall_completeness": {
+            "mean": 1.0,
+            "low": 1.0,
+            "high": 1.0
+          },
+          "repair_rate": {
+            "mean": 0.0,
+            "low": 0.0,
+            "high": 0.0
+          },
+          "mean_total_repairs": {
+            "mean": 0.0,
+            "low": 0.0,
+            "high": 0.0
+          },
+          "mean_generation_constraint_rejections": {
+            "mean": 0.0,
+            "low": 0.0,
+            "high": 0.0
+          },
+          "mean_candidate_repairs_applied": {
+            "mean": 0.0,
+            "low": 0.0,
+            "high": 0.0
+          },
+          "generated_linearity_mean": {
+            "mean": 0.3385714285714286,
+            "low": 0.32,
+            "high": 0.35714285714285715
+          },
+          "reference_linearity_mean": {
+            "mean": 0.43243322417458485,
+            "low": 0.364695947497177,
+            "high": 0.4750818462481517
+          },
+          "generated_leniency_mean": {
+            "mean": 1.0,
+            "low": 1.0,
+            "high": 1.0
+          },
+          "reference_leniency_mean": {
+            "mean": 0.4746762496762497,
+            "low": 0.3492672720797721,
+            "high": 0.556872167184667
+          },
+          "generated_progression_complexity_mean": {
+            "mean": 0.41493591523134077,
+            "low": 0.37081857142857144,
+            "high": 0.4590532590341101
+          },
+          "reference_progression_complexity_mean": {
+            "mean": 0.5056329747493025,
+            "low": 0.49859079824281755,
+            "high": 0.5112677010608482
+          },
+          "generated_topology_complexity_mean": {
+            "mean": 0.27474468085106385,
+            "low": 0.2294893617021277,
+            "high": 0.32000000000000006
+          },
+          "reference_topology_complexity_mean": {
+            "mean": 0.3938431288135679,
+            "low": 0.34967516796527126,
+            "high": 0.42772035667438985
+          },
+          "generated_cycle_density_mean": {
+            "mean": 0.125,
+            "low": 0.0,
+            "high": 0.25
+          },
+          "reference_cycle_density_mean": {
+            "mean": 0.3025030389000977,
+            "low": 0.23134674240066394,
+            "high": 0.38662108724608724
+          },
+          "generated_shortcut_density_mean": {
+            "mean": 0.0,
+            "low": 0.0,
+            "high": 0.0
+          },
+          "reference_shortcut_density_mean": {
+            "mean": 0.0,
+            "low": 0.0,
+            "high": 0.0
+          },
+          "generated_gate_depth_ratio_mean": {
+            "mean": 0.18253968253968253,
+            "low": 0.14285714285714285,
+            "high": 0.2222222222222222
+          },
+          "reference_gate_depth_ratio_mean": {
+            "mean": 0.14705888247554916,
+            "low": 0.10456394300144299,
+            "high": 0.18481108205066535
+          },
+          "generated_path_depth_ratio_mean": {
+            "mean": 0.3125,
+            "low": 0.2916666666666667,
+            "high": 0.3333333333333333
+          },
+          "reference_path_depth_ratio_mean": {
+            "mean": 0.4087086801128953,
+            "low": 0.34442355104666433,
+            "high": 0.465796290674396
+          },
+          "generated_path_length_mean": {
+            "mean": 8.0,
+            "low": 7.0,
+            "high": 9.0
+          },
+          "reference_path_length_mean": {
+            "mean": 9.944444444444445,
+            "low": 8.498611111111112,
+            "high": 10.666666666666666
+          },
+          "generated_num_nodes_mean": {
+            "mean": 26.5,
+            "low": 25.0,
+            "high": 28.0
+          },
+          "reference_num_nodes_mean": {
+            "mean": 28.5,
+            "low": 21.85,
+            "high": 34.74583333333333
+          }
+        },
+        "calibration": {
+          "enabled": false,
+          "rule_weight_overrides": {},
+          "target_descriptor_means": {
+            "linearity": 0.43243322417458485,
+            "leniency": 0.4746762496762497,
+            "progression_complexity": 0.5056329747493025,
+            "topology_complexity": 0.3938431288135679,
+            "path_length": 9.944444444444445,
+            "num_nodes": 28.5,
+            "num_edges": 62.833333333333336,
+            "cycle_density": 0.3025030389000977,
+            "shortcut_density": 0.0,
+            "gate_depth_ratio": 0.14705888247554916,
+            "path_depth_ratio": 0.4087086801128953,
+            "gating_density": 0.18167332474798803,
+            "puzzle_density": 0.419103313840156,
+            "item_density": 0.26900584795321636,
+            "gate_variety": 0.5111111111111111,
+            "bombable_ratio": 0.14765694076038904,
+            "soft_lock_ratio": 0.19451812555260828,
+            "switch_ratio": 0.005305039787798408,
+            "stair_ratio": 0.021220159151193633
+          },
+          "history": [],
+          "best_gap": 0.0,
+          "effective_room_budget": {
+            "min_rooms": 18,
+            "max_rooms": 33,
+            "aligned_to_reference": true,
+            "room_budget_cap": 42,
+            "room_count_bias": 0.45,
+            "search_strategy": "ga",
+            "qd_archive_cells": 128,
+            "qd_init_random_fraction": 0.35,
+            "qd_emitter_mutation_rate": 0.18,
+            "realism_tuning": {
+              "adapt_node_gain": 0.5,
+              "adapt_edge_density_gain": 0.78,
+              "adapt_edge_budget_gain": 0.58,
+              "prior_node_boost_gain": 0.4,
+              "prior_edge_boost_gain": 0.64,
+              "node_cap_floor_ratio": 1.0,
+              "node_cap_expand_ratio": 1.22,
+              "node_cap_hard_cap_ratio": 1.55
+            }
+          }
+        },
+        "data_audit": {}
+      },
+      "objective_score": 2.590105990696317
+    }
+  ]
+}

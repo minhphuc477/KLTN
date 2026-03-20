@@ -242,16 +242,62 @@ class StyleTransferEngine:
         self.config = config or StyleTransferConfig()
         self.device = torch.device(self.config.device if torch.cuda.is_available() else 'cpu')
         
-        # Load style transfer model (placeholder - would be ControlNet or similar)
+        # Model is optional; deterministic theme mapping remains available.
         self.style_model = None
+        self._fallback_theme_manager = ThemeManager()
         if model_path:
             self._load_model(model_path)
     
     def _load_model(self, model_path: str):
         """Load pre-trained style transfer model."""
-        # Placeholder - in production, load ControlNet or custom model
-        logger.info(f"Loading style transfer model from {model_path}")
-        # self.style_model = torch.load(model_path).to(self.device)
+        model_file = Path(model_path)
+        if not model_file.exists():
+            logger.warning("Style model path not found: %s", model_file)
+            return
+
+        logger.info("Loading style transfer model from %s", model_file)
+
+        # 1) Try TorchScript artifact first for architecture-free loading.
+        try:
+            self.style_model = torch.jit.load(str(model_file), map_location=self.device)
+            self.style_model.eval()
+            logger.info("Loaded TorchScript style model")
+            return
+        except Exception as e:
+            logger.debug("TorchScript load failed, trying checkpoint fallback: %s", e)
+
+        # 2) Fallback: try regular torch checkpoint/module.
+        try:
+            checkpoint = torch.load(model_file, map_location=self.device)
+        except Exception as e:
+            logger.warning("Failed to load style model checkpoint: %s", e)
+            return
+
+        if isinstance(checkpoint, nn.Module):
+            self.style_model = checkpoint.to(self.device)
+            self.style_model.eval()
+            logger.info("Loaded nn.Module style model")
+            return
+
+        if isinstance(checkpoint, dict):
+            candidate = checkpoint.get('model', None)
+            if isinstance(candidate, nn.Module):
+                self.style_model = candidate.to(self.device)
+                self.style_model.eval()
+                logger.info("Loaded style model from checkpoint['model']")
+                return
+
+            logger.warning(
+                "Style checkpoint lacks a loadable module (contains keys: %s). "
+                "Using deterministic fallback style mapping.",
+                list(checkpoint.keys())[:8]
+            )
+            return
+
+        logger.warning(
+            "Unsupported style checkpoint type: %s. Using deterministic fallback.",
+            type(checkpoint).__name__
+        )
     
     def apply_theme(
         self,
@@ -281,8 +327,19 @@ class StyleTransferEngine:
                 
                 if semantic_id in theme_config.tile_mappings:
                     mapping = theme_config.tile_mappings[semantic_id]
-                    # Use first palette color for this tile
-                    palette_idx = mapping.palette_indices[0]
+                    palette_candidates = list(mapping.palette_indices or [0])
+                    # Prefer non-void palette entries for non-void semantic tiles.
+                    if semantic_id != 0:
+                        non_void_candidates = [idx for idx in palette_candidates if idx != 0]
+                        if non_void_candidates:
+                            palette_idx = non_void_candidates[0]
+                        else:
+                            palette_idx = palette_candidates[0]
+                            if palette_idx == 0 and len(theme_config.color_palette) > 1:
+                                palette_idx = max(1, semantic_id % len(theme_config.color_palette))
+                    else:
+                        palette_idx = palette_candidates[0]
+
                     if palette_idx < len(theme_config.color_palette):
                         color = theme_config.color_palette[palette_idx]
                         visual_grid[r, c] = color
@@ -310,8 +367,9 @@ class StyleTransferEngine:
             (H, W, 3) RGB styled image
         """
         if self.style_model is None:
-            logger.warning("Style transfer model not loaded, using simple mapping")
-            return np.zeros((semantic_grid.shape[0], semantic_grid.shape[1], 3))
+            logger.warning("Style model unavailable; using theme-mapped fallback rendering")
+            theme_config = self._fallback_theme_manager.get_current_theme()
+            return self.apply_theme(semantic_grid, theme_config)
         
         # Convert to tensor
         semantic_tensor = torch.from_numpy(semantic_grid).long().unsqueeze(0).to(self.device)

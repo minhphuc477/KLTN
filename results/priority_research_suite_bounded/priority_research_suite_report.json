@@ -1,0 +1,28 @@
+{
+  "seed": 42,
+  "num_samples": 4,
+  "eval_budget": 128,
+  "output_dir": "results\\priority_research_suite_bounded",
+  "all_steps_passed": false,
+  "steps": [
+    {
+      "name": "ablation_fixed_seed",
+      "command": [
+        "F:\\KLTN\\.venv\\Scripts\\python.exe",
+        "scripts/run_ablation_study.py",
+        "--num-samples",
+        "4",
+        "--seed",
+        "42",
+        "--output",
+        "results\\priority_research_suite_bounded\\ablation"
+      ],
+      "exit_code": 124,
+      "duration_sec": 240.02765011787415,
+      "output_path": "results\\priority_research_suite_bounded\\ablation\\ablation_report.json",
+      "stdout_tail": "",
+      "stderr_tail": "\n[timeout] step exceeded timeout_sec"
+    }
+  ],
+  "artifacts": {}
+}

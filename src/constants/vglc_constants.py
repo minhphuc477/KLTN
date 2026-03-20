@@ -18,6 +18,11 @@ Sources:
 
 from typing import Dict, Set, Tuple
 from enum import IntEnum
+from src.core.definitions import (
+    parse_node_label_tokens,
+    parse_edge_type_tokens,
+    select_primary_edge_type,
+)
 
 # ==========================================
 # ROOM DIMENSIONS (CRITICAL: NON-SQUARE!)
@@ -60,11 +65,14 @@ NODE_TYPE_MAP: Dict[str, str] = {
     'S': 'start',              # Physical start room (explicit start marker)
     't': 'triforce',          # Goal node (must be leaf in graph)
     'b': 'boss',              # Boss encounter room
+    'm': 'mini_boss',         # Mini-boss encounter room
     'e': 'enemy',             # Enemy/combat room
     'k': 'key',               # Small key pickup
+    'K': 'boss_key',          # Boss key pickup
     'I': 'macro_item',        # Key item (bow, raft, ladder, etc.)
     'i': 'minor_item',        # Consumable/compass/map
     'p': 'puzzle',            # Puzzle room
+    'S1': 'switch',           # Switch-room marker (seen in LoZ2 variants)
 }
 
 # Virtual nodes that should NOT be placed on the physical grid
@@ -72,7 +80,7 @@ NODE_TYPE_MAP: Dict[str, str] = {
 VIRTUAL_NODE_TYPES: Set[str] = {'s'}  # Start pointer
 
 # Physical node types that can be placed
-PHYSICAL_NODE_TYPES: Set[str] = {'S', 't', 'b', 'e', 'k', 'I', 'i', 'p'}
+PHYSICAL_NODE_TYPES: Set[str] = {'S', 't', 'b', 'm', 'e', 'k', 'K', 'I', 'i', 'p', 'S1'}
 
 # Leaf node types (should have degree 1 in graph)
 LEAF_NODE_TYPES: Set[str] = {'t'}  # Triforce must be leaf
@@ -87,13 +95,17 @@ LEAF_NODE_TYPES: Set[str] = {'t'}  # Triforce must be leaf
 EDGE_TYPE_MAP: Dict[str, str] = {
     '': 'open',               # Open passage (no lock, visible)
     'k': 'key_locked',        # Small key required (consumes key)
+    'K': 'boss_locked',       # Boss key required
     'b': 'bombable',          # Bombable wall (secret passage, looks like wall)
     'l': 'soft_lock',         # Soft-locked (shutters, usually one-way after event)
     's': 'stairs_warp',       # Stairs/warp (NOT physically adjacent in grid)
+    'I': 'item_locked',       # Key-item gate
+    'S': 'switch_lock',       # Switch/puzzle gate
+    'S1': 'switch_lock',      # Switch variant
 }
 
 # Edge types that consume items
-RESOURCE_EDGE_TYPES: Set[str] = {'key_locked', 'bombable'}
+RESOURCE_EDGE_TYPES: Set[str] = {'key_locked', 'boss_locked', 'bombable'}
 
 # Edge types that are one-way
 ONEWAY_EDGE_TYPES: Set[str] = {'soft_lock'}
@@ -183,14 +195,8 @@ def parse_composite_node_label(label: str) -> Set[str]:
         >>> parse_composite_node_label("")
         set()
     """
-    if not label:
-        return set()
-    
-    # Split on delimiter and strip whitespace
-    label_parts = [code.strip() for code in label.split(NODE_LABEL_DELIMITER)]
-    
     result = set()
-    for code in label_parts:
+    for code in parse_node_label_tokens(label):
         if not code:
             continue
         # Check if it's a VGLC code
@@ -223,7 +229,15 @@ def parse_edge_label(label: str) -> str:
         >>> parse_edge_label("")
         'open'
     """
-    return EDGE_TYPE_MAP.get(label.strip() if label else '', 'open')
+    edge_types = parse_edge_type_tokens(label=label, edge_type='')
+    primary = select_primary_edge_type(edge_types)
+    # Keep this module's legacy naming for backward compatibility.
+    legacy_alias = {
+        'soft_locked': 'soft_lock',
+        'stair': 'stairs_warp',
+        'switch': 'switch_lock',
+    }
+    return legacy_alias.get(primary, primary)
 
 
 # ==========================================

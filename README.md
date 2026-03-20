@@ -149,26 +149,6 @@ KLTN/
 └── results/                 # Experiment outputs and analysis
 ```
 
-## Research Components
-
-### Evolutionary Search
-- **Algorithm**: (μ+λ)-Evolution Strategy with tournament selection
-- **Representation**: Grammar rule sequences (genotype) → NetworkX graphs (phenotype)
-- **Fitness**: Tension curve matching + solvability constraints
-- **Mutation**: Biased operators following Zelda design patterns
-
-### Neural Architecture
-- **VQ-VAE**: Semantic latent space for 16×11 room layouts
-- **Diffusion**: Guided latent diffusion with LogicNet constraints
-- **LogicNet**: Differentiable pathfinding for solvability optimization
-- **Symbolic Repair**: WaveFunctionCollapse for constraint satisfaction
-
-### VGLC Compliance
-- **Dimensions**: Strict 11×16 room layouts (non-square)
-- **Topology**: Boss-Goal subgraph patterns with virtual node filtering
-- **Labels**: Composite node types (e.g., "enemy,key,puzzle")
-- **Validation**: 36 comprehensive compliance tests
-
 ## Testing
 
 ```bash
@@ -179,16 +159,74 @@ pytest tests/ -v
 pytest tests/test_vglc_compliance.py -v
 pytest tests/test_neural_pipeline.py -v
 
-# Quick validation
-python scripts/quick_validation_test.py --verbose
+# Focused validation
+python -m pytest tests/test_topology_generation_fixes.py -q
+python -m pytest tests/test_vglc_compliance.py -q
+```
+
+## Training (staged)
+
+```bash
+# Full staged training (VQ-VAE then diffusion)
+python -m src.train --stage all --data-dir "Data/The Legend of Zelda"
+
+# Only VQ-VAE pretraining
+python -m src.train --stage vqvae --epochs-vqvae 300
+
+# Only diffusion (with pretrained VQ-VAE)
+python -m src.train --stage diffusion --vqvae-checkpoint checkpoints/vqvae_pretrained.pth
+```
+
+## Topology tuning workflow
+
+```bash
+# Sweep realism coefficients and export ranked results
+python scripts/sweep_block_i_realism_tuning.py --num-generated 12 --seed 42
+
+# Benchmark defaults to the recommended gate_quality_heavy realism profile
+python -m src.evaluation.benchmark_suite --num-generated 12
+
+# Run benchmark with an explicit override profile
+python -m src.evaluation.benchmark_suite --num-generated 12 --realism-tuning-json '{"adapt_edge_density_gain":0.62,"adapt_edge_budget_gain":0.44}'
+
+# Run benchmark with named profile (recommended)
+python -m src.evaluation.benchmark_suite --num-generated 12 --realism-profile gate_quality_heavy
+
+# Run weighted side-by-side profile recommendation (writes ranked summary)
+python scripts/recommend_realism_profile.py --num-generated 16 --output-dir results/profile_recommendation
+
+# Windows-safe alternative: put overrides in a JSON file
+python -m src.evaluation.benchmark_suite --num-generated 12 --realism-tuning-file results/genome_len_override_moderate.json
+
+# Sequence-break analysis (critical-path gate bypass diagnostics)
+python scripts/analyze_sequence_breaks.py --num-samples 8 --output results/sequence_break_analysis.json
+
+# Per-rule marginal fitness credit (leave-one-out ablation on best genome)
+python scripts/analyze_rule_marginal_credit.py --output results/rule_marginal_credit.json
+
+# One-command P0/P1/P2(+others) consolidated suite
+python scripts/run_priority_research_suite.py --output-dir results/priority_research_suite
+
+# Quick preview without execution (safe for checking selected steps)
+python scripts/run_priority_research_suite.py --steps sequence_break_analysis,rule_marginal_credit --dry-run
+
+# Run only one priority bucket (p0 | p1 | p2 | others), bounded quick profile
+python scripts/run_priority_research_suite.py --priority p2 --quick --step-timeout-sec 300 --output-dir results/priority_research_suite_p2_quick
+
+# Heavier research profile (includes 100-sample feature distribution when selected)
+python scripts/run_priority_research_suite.py --priority p2 --full-research --output-dir results/priority_research_suite_p2_full
 ```
 
 ## Documentation
 
-- **API Reference**: `docs/NEURAL_PIPELINE_API.md`
-- **Research Report**: `docs/NEURAL_PIPELINE_RESEARCH.md`
-- **Implementation**: `docs/NEURAL_PIPELINE_IMPLEMENTATION.md`
-- **VGLC Analysis**: `VGLC_DATA_ANALYSIS_REPORT.md`
+- **Start Here (single docs entrypoint)**: `docs/INDEX.md`
+- **Docs Folder Landing**: `docs/README.md`
+- **Architecture & Benchmarks**: `docs/SOTA_COMPARISON_AND_BENCHMARKS.md`
+- **Block-by-Block Audit**: `docs/BLOCK_BY_BLOCK_ARCHITECTURE_AND_IMPLEMENTATION_AUDIT.md`
+- **Paper Blueprint + Room Block**: `docs/IEEE_TOG_BLUEPRINT_AND_ROOM_GENERATION.md`
+- **Topology Rubric**: `docs/TOPOLOGY_STACK_EVALUATION_RUBRIC_2026_03_08.md`
+- **Solver + GUI Reference**: `docs/SOLVERS_AND_GUI_REFERENCE.md`
+- **VGLC Compliance Guide**: `docs/VGLC_COMPLIANCE_GUIDE.md`
 
 ## Citation
 
@@ -197,7 +235,6 @@ If you use this code in your research, please cite:
 ```bibtex
 @misc{kltn2026neural,
   title={Neural-Symbolic Dungeon Generation with H-MOLQD},
-  author={Le Tran Minh Phuc},
   year={2026},
   howpublished={\url{https://github.com/minhphuc477/KLTN}}
 }

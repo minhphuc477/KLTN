@@ -162,30 +162,37 @@ class GreedyPlayer:
         Returns:
             Next node ID, or None if no valid move
         """
-        # BFS to find shortest path from current to goal
-        queue = deque([(state.current_node, [state.current_node])])
-        visited = {state.current_node}
+        # BFS over (node, inventory) state to correctly model key acquisition.
+        start_state = state.copy()
+        queue = deque([(start_state, [state.current_node])])
+        visited: Set[Tuple[int, FrozenSet[str]]] = {
+            (state.current_node, frozenset(state.inventory))
+        }
         
         while queue:
-            node, path = queue.popleft()
+            curr_state, path = queue.popleft()
+            node = curr_state.current_node
             
             if node == goal_node:
-                # Found path - return next step
                 if len(path) > 1:
                     return path[1]
-                else:
-                    return goal_node
+                return goal_node
             
-            # Explore neighbors
             for neighbor in self.graph.neighbors(node):
-                if neighbor in visited:
+                edge_data = self.graph.get_edge_data(node, neighbor, {})
+                if not self._can_traverse_edge(curr_state, edge_data):
                     continue
                 
-                # Check if edge is accessible
-                edge_data = self.graph.get_edge_data(node, neighbor, {})
-                if self._can_traverse_edge(state, edge_data):
-                    visited.add(neighbor)
-                    queue.append((neighbor, path + [neighbor]))
+                next_state = curr_state.copy()
+                next_state.current_node = neighbor
+                self._collect_items_at_node(next_state, neighbor)
+                
+                sig = (neighbor, frozenset(next_state.inventory))
+                if sig in visited:
+                    continue
+                
+                visited.add(sig)
+                queue.append((next_state, path + [neighbor]))
         
         return None  # No path to goal
     
@@ -247,20 +254,31 @@ class AdversarialPlayer:
         
         self._collect_items_at_node(state, start_node)
         
-        # Adversarial DFS: explore optional branches first
-        while state.current_node != goal_node:
-            next_node = self._find_next_adversarial_move(state, goal_node)
+        # Best-practice safety: allow revisits (backtracking) with loop guard.
+        # This avoids false soft-locks on legitimate tree/branch topologies.
+        max_steps = max(50, self.graph.number_of_nodes() * max(3, self.graph.number_of_edges() + 1))
+        seen_state_counts: Dict[Tuple[int, FrozenSet[str]], int] = defaultdict(int)
+        
+        steps = 0
+        while state.current_node != goal_node and steps < max_steps:
+            signature = (state.current_node, frozenset(state.inventory))
+            seen_state_counts[signature] += 1
+            if seen_state_counts[signature] > self.graph.number_of_nodes() * 2:
+                return (False, state)  # Degenerate loop under worst-case behavior
             
+            next_node = self._find_next_adversarial_move(state, goal_node)
             if next_node is None:
-                # Cannot proceed - soft-lock
                 return (False, state)
             
-            # Move to next node
+            # Move to next node (revisits allowed).
             state.current_node = next_node
             state.visited_nodes.add(next_node)
             state.path_taken.append(next_node)
-            
             self._collect_items_at_node(state, next_node)
+            steps += 1
+        
+        if state.current_node != goal_node:
+            return (False, state)
         
         return (True, state)
     
@@ -280,23 +298,40 @@ class AdversarialPlayer:
         accessible_neighbors = []
         
         for neighbor in self.graph.neighbors(state.current_node):
-            if neighbor in state.visited_nodes:
+            edge_data = self.graph.get_edge_data(state.current_node, neighbor, {})
+            if not self._can_traverse_edge(state, edge_data):
                 continue
             
-            edge_data = self.graph.get_edge_data(state.current_node, neighbor, {})
-            if self._can_traverse_edge(state, edge_data):
-                is_critical = neighbor in self.critical_path
-                # Prefer non-critical nodes
-                priority = 0 if not is_critical else 1
-                accessible_neighbors.append((priority, neighbor))
+            is_critical = neighbor in self.critical_path
+            unvisited = neighbor not in state.visited_nodes
+            
+            # Priority schedule (lower is more adversarial):
+            # 0: unvisited optional, 1: unvisited critical,
+            # 2: revisited optional (backtrack), 3: revisited critical.
+            if unvisited and not is_critical:
+                priority = 0
+            elif unvisited and is_critical:
+                priority = 1
+            elif (not unvisited) and (not is_critical):
+                priority = 2
+            else:
+                priority = 3
+            
+            # Prefer nodes farther from goal to maximize suboptimality.
+            try:
+                dist_to_goal = nx.shortest_path_length(self.graph.to_undirected(), neighbor, goal_node)
+            except nx.NetworkXNoPath:
+                dist_to_goal = 10**6
+            
+            branching = self.graph.out_degree(neighbor)
+            score = (priority, -dist_to_goal, -branching, type(neighbor).__name__, str(neighbor), neighbor)
+            accessible_neighbors.append(score)
         
         if not accessible_neighbors:
             return None
         
-        # Sort by priority (optional nodes first)
         accessible_neighbors.sort()
-        
-        return accessible_neighbors[0][1]
+        return accessible_neighbors[0][-1]
     
     def _can_traverse_edge(self, state: PlayerState, edge_data: Dict) -> bool:
         """Check if player can traverse edge."""
@@ -415,13 +450,40 @@ class MissionGraphAnalyzer:
     
     def _count_keys_before_node(self, node_id: int, key_id: str) -> int:
         """Count how many of key_id are available before reaching node."""
-        # Find all nodes reachable before this node
-        # (This is a simplification - full implementation would use topological sort)
+        # Best practice: only count keys that are both
+        # 1) reachable from a start node, and
+        # 2) on some predecessor path to the target node.
+        starts = [n for n in self.graph.nodes() if self.graph.in_degree(n) == 0]
+        if not starts:
+            starts = [node_id]
+        
+        reachable_from_start: Set[int] = set()
+        for s in starts:
+            try:
+                reachable_from_start.add(s)
+                reachable_from_start.update(nx.descendants(self.graph, s))
+            except Exception:
+                reachable_from_start.add(s)
+        
+        try:
+            predecessor_region = set(nx.ancestors(self.graph, node_id))
+        except Exception:
+            predecessor_region = set()
+        predecessor_region.add(node_id)
+        
+        valid_region = reachable_from_start & predecessor_region
+        
         count = 0
-        for n in self.graph.nodes():
+        for n in valid_region:
             node_data = self.graph.nodes[n]
             if node_data.get('key_id') == key_id:
                 count += 1
+            
+            # Also support keys stored in an item list.
+            for item in node_data.get('items', []) or []:
+                if item == key_id:
+                    count += 1
+        
         return count
 
 
@@ -512,39 +574,45 @@ class KeyEconomyValidator:
 # INTEGRATION INTO FITNESS FUNCTION
 # ============================================================================
 
-def integrate_into_evolutionary_algorithm():
+def integrate_into_evolutionary_algorithm(
+    base_fitness_fn=None,
+):
     """
-    Integration example for evolutionary director.
-    
-    In src/generation/evolutionary_director.py:
-    
-        def compute_fitness(genome):
-            mission_graph = genome.to_mission_graph()
-            
-            # Validate key economy
-            validator = KeyEconomyValidator(mission_graph)
-            result = validator.validate()
-            
-            if not result.is_valid:
-                # Heavily penalize soft-locks
-                if not result.adversarial_solvable:
-                    return 0.0  # Completely invalid - soft-lock exists
-                elif result.key_surplus and any(s < 0 for s in result.key_surplus.values()):
-                    return 0.5  # Partially invalid - key economy broken
-            
-            # ... rest of fitness computation ...
-            
-            # Bonus for supporting all topologies
-            topology_bonus = {
-                GraphTopology.LINEAR: 0.0,    # Easy to validate
-                GraphTopology.TREE: 0.1,      # Moderate complexity
-                GraphTopology.DIAMOND: 0.15,  # High complexity
-                GraphTopology.CYCLE: 0.2,     # Maximum complexity
-            }[result.topology_type]
-            
-            return base_fitness + topology_bonus
+    Build a fitness wrapper that includes key-economy validation.
+
+    Args:
+        base_fitness_fn: Optional callable(mission_graph) -> float.
+            If omitted, a neutral base fitness of 1.0 is used.
+
+    Returns:
+        Callable that scores a mission graph with soft-lock penalties and
+        topology-aware bonuses.
     """
-    pass
+    def _score(mission_graph: nx.DiGraph) -> float:
+        validator = KeyEconomyValidator(mission_graph)
+        result = validator.validate()
+        
+        base_fitness = float(base_fitness_fn(mission_graph)) if callable(base_fitness_fn) else 1.0
+        
+        # Hard fail for adversarial unsolvability.
+        if not result.adversarial_solvable:
+            return 0.0
+        
+        # Penalize key-deficit locks.
+        negative_surplus = [s for s in result.key_surplus.values() if s < 0]
+        deficit_penalty = float(sum(abs(s) for s in negative_surplus)) * 0.15
+        
+        topology_bonus = {
+            GraphTopology.LINEAR: 0.00,
+            GraphTopology.TREE: 0.05,
+            GraphTopology.DIAMOND: 0.10,
+            GraphTopology.CYCLE: 0.12,
+        }.get(result.topology_type, 0.0)
+        
+        score = base_fitness + topology_bonus - deficit_penalty
+        return float(max(0.0, score))
+    
+    return _score
 
 
 if __name__ == "__main__":

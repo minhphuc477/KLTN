@@ -1,0 +1,27 @@
+{
+  "num_graphs": 18,
+  "num_nodes": 531,
+  "num_edges": 1167,
+  "node_token_counts": {
+    "e": 329,
+    "p": 215,
+    "k": 69,
+    "<empty>": 51,
+    "I": 24,
+    "s": 18,
+    "i": 79,
+    "b": 18,
+    "t": 19,
+    "m": 40,
+    "S1": 2
+  },
+  "edge_constraint_counts": {
+    "bombable": 167,
+    "open": 569,
+    "soft_locked": 220,
+    "key_locked": 151,
+    "stair": 24,
+    "item_locked": 34,
+    "switch": 6
+  }
+}

@@ -30,13 +30,14 @@ Architecture:
 import torch
 import numpy as np
 import networkx as nx
-from typing import Dict, List, Tuple, Optional, Any
+from typing import Dict, List, Tuple, Optional, Any, Set
 from dataclasses import dataclass, field
 from pathlib import Path
 from datetime import datetime
 import logging
 import time
 import json
+from collections import deque
 
 # Core pipeline
 from src.pipeline.robust_pipeline import RobustPipeline, PipelineBlock, BlockResult
@@ -191,7 +192,10 @@ class AdvancedNeuralSymbolicPipeline:
         
         # Evaluation
         self.fun_evaluator = FunMetricsEvaluator() if config.calculate_fun_metrics else None
-        self.map_elites = MAPElitesEvaluator() if config.enable_diversity_analysis else None
+        self.map_elites = (
+            MAPElitesEvaluator(tie_breaker='quality_score', descriptor_mode='hybrid')
+            if config.enable_diversity_analysis else None
+        )
         
         # Optimization
         self.lcm_diffusion = None  # Will be set when diffusion model is available
@@ -203,6 +207,182 @@ class AdvancedNeuralSymbolicPipeline:
         self.explainability_mgr = ExplainabilityManager() if config.enable_explainability else None
         
         logger.info("Advanced pipeline initialized successfully")
+
+    def _estimate_boundary_discontinuity(
+        self,
+        grid: np.ndarray,
+        mission_graph: nx.DiGraph,
+        room_layout: Dict[int, Tuple[int, int, int, int]],
+    ) -> float:
+        """
+        Estimate seam discontinuity as mismatch ratio on graph-connected room boundaries.
+        """
+        if grid.size == 0 or not room_layout:
+            return 0.0
+
+        mismatches = 0
+        comparisons = 0
+
+        for u, v in mission_graph.edges():
+            if u not in room_layout or v not in room_layout:
+                continue
+
+            x1_min, y1_min, x1_max, y1_max = room_layout[u]
+            x2_min, y2_min, x2_max, y2_max = room_layout[v]
+
+            # Vertical adjacency (rooms side-by-side)
+            if x1_max + 1 == x2_min or x2_max + 1 == x1_min:
+                left_x = x1_max if x1_max < x2_min else x2_max
+                right_x = left_x + 1
+                y_start = max(y1_min, y2_min)
+                y_end = min(y1_max, y2_max)
+                if y_start <= y_end and 0 <= left_x < grid.shape[1] and 0 <= right_x < grid.shape[1]:
+                    for y in range(y_start, y_end + 1):
+                        if not (0 <= y < grid.shape[0]):
+                            continue
+                        comparisons += 1
+                        if int(grid[y, left_x]) != int(grid[y, right_x]):
+                            mismatches += 1
+                continue
+
+            # Horizontal adjacency (rooms stacked)
+            if y1_max + 1 == y2_min or y2_max + 1 == y1_min:
+                top_y = y1_max if y1_max < y2_min else y2_max
+                bottom_y = top_y + 1
+                x_start = max(x1_min, x2_min)
+                x_end = min(x1_max, x2_max)
+                if x_start <= x_end and 0 <= top_y < grid.shape[0] and 0 <= bottom_y < grid.shape[0]:
+                    for x in range(x_start, x_end + 1):
+                        if not (0 <= x < grid.shape[1]):
+                            continue
+                        comparisons += 1
+                        if int(grid[top_y, x]) != int(grid[bottom_y, x]):
+                            mismatches += 1
+
+        if comparisons == 0:
+            return 0.0
+        return float(mismatches / comparisons)
+
+    def _estimate_room_solver_result(self, room_grid: np.ndarray) -> Dict[str, Any]:
+        """
+        Estimate per-room solvability/path-length from tile connectivity.
+
+        MAP-Elites expects a `solver_result` dict with `solvable` and `path_length`.
+        For single rooms without explicit start/goal, we approximate path length as
+        the exact graph-diameter of the largest traversable component.
+        """
+        from src.core.definitions import SEMANTIC_PALETTE
+
+        if room_grid.size == 0:
+            return {'solvable': False, 'path_length': 0, 'quality_score': 0.0}
+
+        blocked_ids = {
+            int(SEMANTIC_PALETTE['VOID']),
+            int(SEMANTIC_PALETTE['WALL']),
+            int(SEMANTIC_PALETTE['BLOCK']),
+            int(SEMANTIC_PALETTE['ELEMENT']),
+        }
+
+        walkable_mask = ~np.isin(room_grid, list(blocked_ids))
+        walkable_positions = np.argwhere(walkable_mask)
+        if walkable_positions.size == 0:
+            return {'solvable': False, 'path_length': 0, 'quality_score': 0.0}
+
+        h, w = room_grid.shape
+
+        def neighbors(pos: Tuple[int, int]):
+            r, c = pos
+            for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                nr, nc = r + dr, c + dc
+                if 0 <= nr < h and 0 <= nc < w and walkable_mask[nr, nc]:
+                    yield (nr, nc)
+
+        # Connected components over traversable tiles.
+        seen: Set[Tuple[int, int]] = set()
+        components: List[List[Tuple[int, int]]] = []
+
+        for r, c in walkable_positions:
+            start = (int(r), int(c))
+            if start in seen:
+                continue
+            comp: List[Tuple[int, int]] = []
+            queue = deque([start])
+            seen.add(start)
+            while queue:
+                cur = queue.popleft()
+                comp.append(cur)
+                for nxt in neighbors(cur):
+                    if nxt in seen:
+                        continue
+                    seen.add(nxt)
+                    queue.append(nxt)
+            components.append(comp)
+
+        if not components:
+            return {'solvable': False, 'path_length': 0, 'quality_score': 0.0}
+
+        largest_component = max(components, key=len)
+        if len(largest_component) == 1:
+            path_length = 1
+            playable_area = int(walkable_mask.sum())
+            leniency = float(self.map_elites.calculate_leniency(room_grid)) if self.map_elites else 1.0
+            linearity = float(self.map_elites.calculate_linearity(path_length, playable_area)) if self.map_elites else 1.0
+            quality_score = float(np.clip((0.6 * linearity) + (0.4 * leniency), 0.0, 1.0))
+            return {
+                'solvable': True,
+                'path_length': path_length,
+                'linearity': linearity,
+                'leniency': leniency,
+                'quality_score': quality_score,
+            }
+
+        # Exact diameter on the largest connected component (room is small, so O(n*(n+e)) is fine).
+        component_set = set(largest_component)
+        diameter = 1
+        for src in largest_component:
+            dist = {src: 0}
+            queue = deque([src])
+            while queue:
+                cur = queue.popleft()
+                for nxt in neighbors(cur):
+                    if nxt not in component_set or nxt in dist:
+                        continue
+                    dist[nxt] = dist[cur] + 1
+                    queue.append(nxt)
+            if dist:
+                diameter = max(diameter, max(dist.values()) + 1)
+
+        path_length = int(diameter)
+        playable_area = int(walkable_mask.sum())
+        leniency = float(self.map_elites.calculate_leniency(room_grid)) if self.map_elites else 0.5
+        linearity = float(self.map_elites.calculate_linearity(path_length, playable_area)) if self.map_elites else 0.5
+
+        enemy_id = int(SEMANTIC_PALETTE.get('ENEMY', 7))
+        key_id = int(SEMANTIC_PALETTE.get('KEY_SMALL', SEMANTIC_PALETTE.get('KEY', 8)))
+        lock_id = int(SEMANTIC_PALETTE.get('DOOR_LOCKED', 11))
+        enemy_count = int((room_grid == enemy_id).sum())
+        key_count = int((room_grid == key_id).sum())
+        lock_count = int((room_grid == lock_id).sum())
+        lock_pressure = min(1.0, lock_count / max(1.0, float(max(1, key_count))))
+        local_complexity = float(np.clip((0.5 * lock_pressure) + (0.5 * (1.0 - leniency)), 0.0, 1.0))
+        quality_score = float(np.clip(
+            (0.40 * linearity) + (0.35 * leniency) + (0.25 * (1.0 - local_complexity)),
+            0.0,
+            1.0,
+        ))
+
+        return {
+            'solvable': True,
+            'path_length': path_length,
+            'linearity': linearity,
+            'leniency': leniency,
+            'progression_complexity': local_complexity,
+            'topology_complexity': float(np.clip(0.5 * linearity + 0.5 * local_complexity, 0.0, 1.0)),
+            'quality_score': quality_score,
+            'key_count': key_count,
+            'lock_count': lock_count,
+            'enemy_count': enemy_count,
+        }
     
     def generate_dungeon(
         self,
@@ -287,20 +467,44 @@ class AdvancedNeuralSymbolicPipeline:
         dungeon_grid, room_layout = self._stitch_rooms(rooms, mission_graph)
         
         if self.demo_recorder:
-            self.demo_recorder.capture_frame(dungeon_grid, "After stitching (before seam smoothing)")
+            self.demo_recorder.capture_frame(
+                frame=dungeon_grid,
+                block="Dungeon Stitch",
+                description="After stitching (before seam smoothing)",
+            )
         
         # Step 7: Seam smoothing (eliminate visual discontinuities)
         if self.seam_smoother:
+            discontinuity_before = self._estimate_boundary_discontinuity(
+                dungeon_grid,
+                mission_graph,
+                room_layout,
+            )
             smoothed_grid = self.seam_smoother.smooth_dungeon_seams(
                 dungeon_grid, mission_graph, room_layout
             )
-            # Calculate discontinuity reduction (placeholder logic)
-            discontinuity_reduction = 87.0  # Default from paper
+            discontinuity_after = self._estimate_boundary_discontinuity(
+                smoothed_grid,
+                mission_graph,
+                room_layout,
+            )
+            if discontinuity_before > 0.0:
+                discontinuity_reduction = (
+                    (discontinuity_before - discontinuity_after) / discontinuity_before
+                ) * 100.0
+                discontinuity_reduction = float(max(0.0, min(100.0, discontinuity_reduction)))
+            else:
+                discontinuity_reduction = 0.0
             dungeon_grid = smoothed_grid
             logger.info(f"Seam smoothing: {discontinuity_reduction:.1f}% discontinuity reduction")
             
             if self.demo_recorder:
-                self.demo_recorder.capture_frame(dungeon_grid, "After seam smoothing")
+                self.demo_recorder.capture_frame(
+                    frame=dungeon_grid,
+                    block="Seam Smoothing",
+                    description="After seam smoothing",
+                    metrics={"discontinuity_reduction_pct": float(discontinuity_reduction)},
+                )
         else:
             discontinuity_reduction = 0.0
         # Step 8: Style transfer
@@ -318,7 +522,11 @@ class AdvancedNeuralSymbolicPipeline:
             visual_grid = dungeon_grid.copy()
         
         if self.demo_recorder:
-            self.demo_recorder.capture_frame(visual_grid, f"After style transfer: {(theme or self.config.theme).value}")
+            self.demo_recorder.capture_frame(
+                frame=visual_grid,
+                block="Style Transfer",
+                description=f"After style transfer: {(theme or self.config.theme).value}",
+            )
         
         # Step 9: Collision validation
         val_start = time.time()
@@ -367,7 +575,11 @@ class AdvancedNeuralSymbolicPipeline:
         )
         
         if self.demo_recorder:
-            self.demo_recorder.capture_frame(dungeon_grid, "After graph constraint enforcement")
+            self.demo_recorder.capture_frame(
+                frame=dungeon_grid,
+                block="Constraint Enforcer",
+                description="After graph constraint enforcement",
+            )
         
         # Step 11: Entity spawning (make playable)
         entities = spawn_all_entities(
@@ -405,7 +617,25 @@ class AdvancedNeuralSymbolicPipeline:
         eval_time = time.time() - eval_start
         
         # Diversity analysis (MAP-Elites)
-        diversity_score = 0.0  # Placeholder for MAP-Elites
+        diversity_score = 0.0
+        if self.map_elites and room_layout:
+            try:
+                from src.simulation.map_elites import calculate_diversity_score
+
+                if hasattr(self.map_elites, "clear"):
+                    self.map_elites.clear()
+                else:
+                    self.map_elites.grid.clear()
+
+                for _, bbox in room_layout.items():
+                    x_min, y_min, x_max, y_max = bbox
+                    room_grid = dungeon_grid[y_min:y_max + 1, x_min:x_max + 1]
+                    solver_result = self._estimate_room_solver_result(room_grid)
+                    self.map_elites.add_dungeon(room_grid, room_grid, solver_result)
+
+                diversity_score = float(calculate_diversity_score(self.map_elites))
+            except Exception as e:
+                logger.warning(f"Diversity analysis failed: {e}")
         
         # Step 13: Explainability report
         if self.explainability_mgr:
@@ -479,14 +709,180 @@ class AdvancedNeuralSymbolicPipeline:
         room_count: int,
         user_constraints: Optional[Dict[str, Any]]
     ) -> nx.DiGraph:
-        """Generate mission graph with evolutionary director."""
-        # Placeholder: integrate with actual evolutionary director
+        """Generate mission graph with evolutionary search and robust fallbacks."""
+        constraints = user_constraints or {}
+        seed = int(constraints.get('seed', 42))
+        effective_curve = list(tension_curve) if tension_curve else [0.5] * max(1, room_count)
+        
+        try:
+            from src.generation.evolutionary_director import EvolutionaryTopologyGenerator
+            population_size = int(constraints.get('population_size', max(24, min(96, room_count * 8))))
+            generations = int(constraints.get('generations', max(30, min(120, room_count * 10))))
+            max_nodes = int(constraints.get('max_nodes', max(room_count, 5)))
+            rule_space = str(constraints.get('rule_space', 'full')).strip().lower()
+            
+            generator = EvolutionaryTopologyGenerator(
+                target_curve=effective_curve,
+                population_size=population_size,
+                generations=generations,
+                max_nodes=max_nodes,
+                rule_space=rule_space,
+                seed=seed,
+            )
+            raw_graph = generator.evolve()
+            return self._normalize_mission_graph(raw_graph, effective_curve, room_count)
+        except Exception as e:
+            logger.warning(f"Evolutionary director unavailable/failure ({e}); using deterministic linear fallback")
+            return self._build_linear_mission_graph(effective_curve, room_count)
+
+    @staticmethod
+    def _node_sort_key(node_id: Any) -> Tuple[str, str]:
+        """Deterministic sort key for arbitrary node ID types."""
+        return (type(node_id).__name__, str(node_id))
+
+    def _build_linear_mission_graph(
+        self,
+        tension_curve: List[float],
+        room_count: int,
+    ) -> nx.DiGraph:
+        """Build a minimal guaranteed-connected fallback mission graph."""
         G = nx.DiGraph()
-        for i in range(room_count):
-            G.add_node(i, tension=tension_curve[i] if i < len(tension_curve) else 0.5)
-        for i in range(room_count - 1):
-            G.add_edge(i, i + 1)
+        n_rooms = max(1, int(room_count))
+        for i in range(n_rooms):
+            curve_idx = int(round((i / max(1, n_rooms - 1)) * (len(tension_curve) - 1)))
+            tension = float(tension_curve[curve_idx]) if tension_curve else 0.5
+            G.add_node(
+                i,
+                tension=tension,
+                is_start=(i == 0),
+                is_boss=(i == n_rooms - 1),
+                is_triforce=(i == n_rooms - 1),
+                is_treasure=(i == n_rooms - 1),
+                label='s' if i == 0 else ('b,t' if i == n_rooms - 1 else ''),
+            )
+            if i > 0:
+                G.add_edge(i - 1, i, edge_type='open')
         return G
+
+    def _normalize_mission_graph(
+        self,
+        raw_graph: nx.Graph,
+        tension_curve: List[float],
+        room_count: int,
+    ) -> nx.DiGraph:
+        """
+        Normalize graph output into a directed, connected mission graph with
+        contiguous integer node IDs and consistent gameplay metadata.
+        """
+        if raw_graph is None or raw_graph.number_of_nodes() == 0:
+            return self._build_linear_mission_graph(tension_curve, room_count)
+        
+        if isinstance(raw_graph, nx.DiGraph):
+            directed = raw_graph.copy()
+            undirected = raw_graph.to_undirected()
+        else:
+            undirected = raw_graph.to_undirected()
+            directed = nx.DiGraph()
+            directed.add_nodes_from(undirected.nodes(data=True))
+            
+            nodes_sorted = sorted(undirected.nodes(), key=self._node_sort_key)
+            start_candidates = [
+                n for n, d in undirected.nodes(data=True)
+                if d.get('is_start') or str(d.get('label', '')).lower().startswith('s')
+            ]
+            root = start_candidates[0] if start_candidates else nodes_sorted[0]
+            
+            depth: Dict[Any, int] = {}
+            bfs_queue: deque = deque([root])
+            depth[root] = 0
+            
+            while bfs_queue:
+                u = bfs_queue.popleft()
+                neighbors = sorted(undirected.neighbors(u), key=self._node_sort_key)
+                for v in neighbors:
+                    edge_attrs = dict(undirected.get_edge_data(u, v, default={}) or {})
+                    edge_attrs.setdefault('edge_type', edge_attrs.get('label', 'open') or 'open')
+                    if v not in depth:
+                        depth[v] = depth[u] + 1
+                        bfs_queue.append(v)
+                        directed.add_edge(u, v, **edge_attrs)
+                    else:
+                        du = depth[u]
+                        dv = depth[v]
+                        if du < dv and not directed.has_edge(u, v):
+                            directed.add_edge(u, v, **edge_attrs)
+                        elif dv < du and not directed.has_edge(v, u):
+                            directed.add_edge(v, u, **edge_attrs)
+                        elif du == dv:
+                            a, b = sorted((u, v), key=self._node_sort_key)
+                            if not directed.has_edge(a, b):
+                                directed.add_edge(a, b, **edge_attrs)
+            
+            # Ensure disconnected components are still represented.
+            for node in nodes_sorted:
+                if node in depth:
+                    continue
+                depth[node] = max(depth.values(), default=0) + 1
+                directed.add_node(node, **undirected.nodes[node])
+        
+        # Keep/trim to requested room_count using BFS/topological priority.
+        working_nodes = list(directed.nodes())
+        if not working_nodes:
+            return self._build_linear_mission_graph(tension_curve, room_count)
+        
+        if nx.is_directed_acyclic_graph(directed):
+            ordered_nodes = list(nx.topological_sort(directed))
+        else:
+            ordered_nodes = sorted(working_nodes, key=self._node_sort_key)
+        
+        target_rooms = max(1, int(room_count))
+        if len(ordered_nodes) > target_rooms:
+            keep = set(ordered_nodes[:target_rooms])
+            directed = directed.subgraph(keep).copy()
+            ordered_nodes = [n for n in ordered_nodes if n in keep]
+        
+        # If too small, append linear extension nodes.
+        while len(ordered_nodes) < target_rooms:
+            new_node = f"extra_{len(ordered_nodes)}"
+            directed.add_node(new_node)
+            directed.add_edge(ordered_nodes[-1], new_node, edge_type='open')
+            ordered_nodes.append(new_node)
+        
+        # Remap to compact integer IDs for downstream tensor indexing.
+        mapping = {old: idx for idx, old in enumerate(ordered_nodes)}
+        normalized = nx.relabel_nodes(directed, mapping, copy=True)
+        
+        # Ensure weak connectivity by linking any disconnected islands.
+        components = list(nx.weakly_connected_components(normalized))
+        if len(components) > 1:
+            for i in range(len(components) - 1):
+                src = min(components[i])
+                dst = min(components[i + 1])
+                normalized.add_edge(src, dst, edge_type='open')
+        
+        n_nodes = normalized.number_of_nodes()
+        for node_id, attrs in normalized.nodes(data=True):
+            curve_idx = int(round((node_id / max(1, n_nodes - 1)) * (len(tension_curve) - 1))) if tension_curve else 0
+            attrs['tension'] = float(tension_curve[curve_idx]) if tension_curve else float(attrs.get('tension', 0.5))
+            attrs['is_start'] = bool(node_id == 0)
+            attrs['is_boss'] = bool(node_id == n_nodes - 1)
+            attrs['is_triforce'] = bool(node_id == n_nodes - 1)
+            attrs['is_treasure'] = bool(node_id == n_nodes - 1)
+            
+            tokens = [t.strip() for t in str(attrs.get('label', '')).split(',') if t.strip()]
+            if node_id == 0 and 's' not in tokens:
+                tokens.insert(0, 's')
+            if node_id == n_nodes - 1:
+                if 'b' not in tokens:
+                    tokens.append('b')
+                if 't' not in tokens:
+                    tokens.append('t')
+            attrs['label'] = ','.join(tokens)
+        
+        for _, _, eattrs in normalized.edges(data=True):
+            eattrs.setdefault('edge_type', 'open')
+        
+        return normalized
     
     def _identify_big_rooms(self, mission_graph: nx.DiGraph) -> Dict[int, Tuple[int, int]]:
         """Identify which rooms need large sizes (bosses, treasure rooms)."""
@@ -501,12 +897,53 @@ class AdvancedNeuralSymbolicPipeline:
         return big_rooms
     
     def _setup_global_state(self, mission_graph: nx.DiGraph) -> Dict[str, Any]:
-        """Setup global state variables (water level, switches)."""
-        # Placeholder: configure water level affecting first N rooms
+        """Setup global state variables and deterministic room dependencies."""
+        if self.global_state_mgr is None or mission_graph.number_of_nodes() == 0:
+            return {}
+        
+        self.global_state_mgr.reset_state()
+        self.global_state_mgr.add_state_variable(
+            name='water_level',
+            state_type=GlobalStateType.WATER_LEVEL,
+            initial_value='high',
+        )
+        
+        start_node = None
+        for n, data in mission_graph.nodes(data=True):
+            if data.get('is_start'):
+                start_node = n
+                break
+        if start_node is None:
+            start_node = min(mission_graph.nodes(), key=self._node_sort_key)
+        
+        traversal_order = list(nx.bfs_tree(mission_graph.to_undirected(), start_node).nodes())
+        affected_count = min(self.config.water_level_rooms, len(traversal_order))
+        affected_rooms: Set[int] = set(traversal_order[:affected_count])
+        if start_node in affected_rooms and len(affected_rooms) > 1:
+            affected_rooms.remove(start_node)
+        
+        trigger_room = traversal_order[min(len(traversal_order) - 1, max(1, len(traversal_order) // 2))]
+        if affected_rooms:
+            self.global_state_mgr.add_transition(
+                from_room=int(trigger_room),
+                trigger_condition='switch_pulled',
+                state_changes={'water_level': 'low'},
+                affected_rooms=set(int(r) for r in affected_rooms),
+            )
+            for room_id in affected_rooms:
+                self.global_state_mgr.set_room_dependency(
+                    room_id=int(room_id),
+                    required_states={'water_level': 'high'},
+                    optional_states={'water_level': ['high', 'low']},
+                )
+        
         return {
-            "water_level": {
-                "type": GlobalStateType.WATER_LEVEL,
-                "affected_rooms": list(range(min(self.config.water_level_rooms, mission_graph.number_of_nodes())))
+            'water_level': {
+                'type': GlobalStateType.WATER_LEVEL,
+                'initial_value': 'high',
+                'transition_value': 'low',
+                'trigger_room': int(trigger_room),
+                'affected_rooms': sorted(int(r) for r in affected_rooms),
             }
         }
     
@@ -525,8 +962,31 @@ class AdvancedNeuralSymbolicPipeline:
         
         # Prepare graph context once (shared across all rooms)
         graph_context = self._prepare_graph_context(mission_graph)
+        base_global_state = self.global_state_mgr.get_state() if self.global_state_mgr else {}
+        node_to_idx = graph_context.get('node_to_idx', {})
+        if mission_graph.is_directed():
+            try:
+                generation_order = list(nx.topological_sort(mission_graph))
+            except nx.NetworkXUnfeasible:
+                generation_order = sorted(mission_graph.nodes(), key=self._node_sort_key)
+        else:
+            generation_order = sorted(mission_graph.nodes(), key=self._node_sort_key)
         
-        for node_id in mission_graph.nodes():
+        for node_id in generation_order:
+            room_graph_context = dict(graph_context)
+            room_graph_context['current_node_idx'] = int(node_to_idx.get(node_id, 0))
+            if base_global_state:
+                room_state = self.global_state_mgr.get_room_state(int(node_id)) if self.global_state_mgr else {}
+                if not room_state:
+                    room_state = dict(base_global_state)
+                room_graph_context['global_state'] = room_state
+                # Compact scalar channel usable by encoders that accept auxiliary context.
+                room_graph_context['global_state_vector'] = torch.tensor(
+                    [1.0 if room_state.get('water_level') == 'high' else 0.0],
+                    dtype=torch.float32,
+                    device=self.neural_pipeline.device,
+                )
+
             # Get room size
             if node_id in big_rooms:
                 room_size = big_rooms[node_id]
@@ -542,7 +1002,7 @@ class AdvancedNeuralSymbolicPipeline:
                     room = self._generate_single_room_with_ml(
                         node_id=node_id,
                         mission_graph=mission_graph,
-                        graph_context=graph_context,
+                        graph_context=room_graph_context,
                         neighbor_latents=neighbor_latents,
                         theme=theme
                     )
@@ -551,7 +1011,7 @@ class AdvancedNeuralSymbolicPipeline:
                 room = self._generate_single_room_with_ml(
                     node_id=node_id,
                     mission_graph=mission_graph,
-                    graph_context=graph_context,
+                    graph_context=room_graph_context,
                     neighbor_latents=neighbor_latents,
                     theme=theme
                 )
@@ -562,9 +1022,12 @@ class AdvancedNeuralSymbolicPipeline:
             if hasattr(self.neural_pipeline, 'vqvae') and self.neural_pipeline.vqvae is not None:
                 try:
                     with torch.no_grad():
+                        # VQ-VAE expects one-hot [B, C, H, W], not integer [B, H, W].
                         room_tensor = torch.from_numpy(room).long().unsqueeze(0).to(self.neural_pipeline.device)
-                        latent = self.neural_pipeline.vqvae.encode(room_tensor)
-                        neighbor_latents[node_id] = latent
+                        room_tensor = room_tensor.clamp(min=0, max=43)
+                        room_onehot = torch.nn.functional.one_hot(room_tensor, num_classes=44).permute(0, 3, 1, 2).float()
+                        z_q, _ = self.neural_pipeline.vqvae.encode(room_onehot)
+                        neighbor_latents[node_id] = z_q.detach()
                 except Exception as e:
                     logger.warning(f"Failed to cache latent for room {node_id}: {e}")
         
@@ -655,11 +1118,12 @@ class AdvancedNeuralSymbolicPipeline:
     def _prepare_graph_context(self, mission_graph: nx.DiGraph) -> Dict[str, Any]:
         """Prepare graph context for neural pipeline."""
         # Convert mission graph to tensor format
-        num_nodes = mission_graph.number_of_nodes()
+        node_order = list(mission_graph.nodes())
+        node_to_idx = {node_id: idx for idx, node_id in enumerate(node_order)}
         
         # Node features: [tension, is_boss, is_treasure, connectivity, depth, width]
         node_features = []
-        for node_id in mission_graph.nodes():
+        for node_id in node_order:
             node_data = mission_graph.nodes[node_id]
             features = [
                 node_data.get('tension', 0.5),
@@ -671,20 +1135,29 @@ class AdvancedNeuralSymbolicPipeline:
             ]
             node_features.append(features)
         
-        node_features_tensor = torch.tensor(node_features, dtype=torch.float32)
+        node_features_tensor = torch.tensor(
+            node_features,
+            dtype=torch.float32,
+            device=self.neural_pipeline.device,
+        )
         
         # Edge index
-        edge_list = list(mission_graph.edges())
+        edge_list = [
+            (node_to_idx[u], node_to_idx[v])
+            for u, v in mission_graph.edges()
+            if u in node_to_idx and v in node_to_idx
+        ]
         if edge_list:
-            edge_index = torch.tensor(edge_list, dtype=torch.long).t()
+            edge_index = torch.tensor(edge_list, dtype=torch.long, device=self.neural_pipeline.device).t().contiguous()
         else:
-            edge_index = torch.zeros((2, 0), dtype=torch.long)
+            edge_index = torch.zeros((2, 0), dtype=torch.long, device=self.neural_pipeline.device)
         
         return {
             'node_features': node_features_tensor,
             'edge_index': edge_index,
             'tpe': None,  # Topological positional encoding (optional)
-            'current_node_idx': 0  # Will be updated per room
+            'current_node_idx': 0,  # Will be updated per room
+            'node_to_idx': node_to_idx,
         }
     
     def _extract_wfc_priors_from_vqvae(self) -> Optional[Dict[int, Any]]:
@@ -721,28 +1194,166 @@ class AdvancedNeuralSymbolicPipeline:
             logger.error(f"Failed to extract WFC priors: {e}")
             return None
     
+    def _compute_room_slot_positions(
+        self,
+        mission_graph: nx.DiGraph,
+        room_ids: List[int],
+    ) -> Dict[int, Tuple[int, int]]:
+        """
+        Assign each room a coarse grid slot, keeping graph neighbors spatially close.
+        """
+        room_set = set(room_ids)
+        if not room_set:
+            return {}
+        
+        graph = mission_graph.to_undirected()
+        nodes = [n for n in graph.nodes() if n in room_set]
+        if not nodes:
+            return {}
+        
+        nodes_sorted = sorted(nodes, key=self._node_sort_key)
+        start = None
+        for n in nodes_sorted:
+            if mission_graph.nodes[n].get('is_start'):
+                start = n
+                break
+        if start is None:
+            start = nodes_sorted[0]
+        
+        positions: Dict[int, Tuple[int, int]] = {start: (0, 0)}
+        occupied: Set[Tuple[int, int]] = {(0, 0)}
+        bfs_queue: deque = deque([start])
+        offsets = [(0, 1), (1, 0), (0, -1), (-1, 0)]
+
+        def nearest_free(anchor: Tuple[int, int]) -> Tuple[int, int]:
+            ar, ac = anchor
+            for radius in range(1, max(4, len(nodes) * 2)):
+                candidates = []
+                for dr in range(-radius, radius + 1):
+                    for dc in range(-radius, radius + 1):
+                        if abs(dr) + abs(dc) != radius:
+                            continue
+                        pos = (ar + dr, ac + dc)
+                        if pos in occupied:
+                            continue
+                        candidates.append(pos)
+                if candidates:
+                    candidates.sort(key=lambda p: (abs(p[0]) + abs(p[1]), p[0], p[1]))
+                    return candidates[0]
+            # Last-resort deterministic fallback.
+            probe = (ar, ac + len(occupied) + 1)
+            while probe in occupied:
+                probe = (probe[0], probe[1] + 1)
+            return probe
+
+        while bfs_queue:
+            u = bfs_queue.popleft()
+            ur, uc = positions[u]
+            for v in sorted(graph.neighbors(u), key=self._node_sort_key):
+                if v not in room_set or v in positions:
+                    continue
+                
+                candidates = []
+                for dr, dc in offsets:
+                    pos = (ur + dr, uc + dc)
+                    if pos in occupied:
+                        continue
+                    adjacency_bonus = 0
+                    for nb in graph.neighbors(v):
+                        if nb in positions:
+                            pr, pc = positions[nb]
+                            if abs(pr - pos[0]) + abs(pc - pos[1]) == 1:
+                                adjacency_bonus += 1
+                    candidates.append((-adjacency_bonus, abs(pos[0]) + abs(pos[1]), pos[0], pos[1], pos))
+                
+                if candidates:
+                    candidates.sort()
+                    chosen = candidates[0][-1]
+                else:
+                    chosen = nearest_free((ur, uc))
+                
+                positions[v] = chosen
+                occupied.add(chosen)
+                bfs_queue.append(v)
+        
+        # Handle disconnected components.
+        for node in nodes_sorted:
+            if node in positions:
+                continue
+            fallback = nearest_free((0, 0))
+            positions[node] = fallback
+            occupied.add(fallback)
+        
+        # Normalize so smallest coordinate starts at (0,0).
+        min_r = min(r for r, _ in positions.values())
+        min_c = min(c for _, c in positions.values())
+        return {n: (r - min_r, c - min_c) for n, (r, c) in positions.items()}
+
     def _stitch_rooms(
         self,
         rooms: Dict[int, np.ndarray],
         mission_graph: nx.DiGraph
     ) -> Tuple[np.ndarray, Dict[int, Tuple[int, int, int, int]]]:
-        """Stitch rooms into full dungeon layout."""
-        # Placeholder: simple horizontal stitching
-        max_height = max(room.shape[0] for room in rooms.values())
-        total_width = sum(room.shape[1] for room in rooms.values())
+        """
+        Stitch rooms using a graph-aware slot layout instead of naive horizontal concat.
+        """
+        if not rooms:
+            return np.zeros((0, 0), dtype=int), {}
         
-        dungeon_grid = np.zeros((max_height, total_width), dtype=int)
-        room_layout = {}
+        from src.core.definitions import SEMANTIC_PALETTE
+        void_id = int(SEMANTIC_PALETTE.get('VOID', 0))
         
-        x_offset = 0
-        for room_id in sorted(rooms.keys()):
+        slot_positions = self._compute_room_slot_positions(mission_graph, list(rooms.keys()))
+        
+        # Ensure every room gets a slot (including any room not present in graph).
+        missing = [rid for rid in sorted(rooms.keys(), key=self._node_sort_key) if rid not in slot_positions]
+        if missing:
+            used = set(slot_positions.values())
+            next_col = (max((c for _, c in used), default=-1) + 1)
+            for rid in missing:
+                pos = (0, next_col)
+                while pos in used:
+                    next_col += 1
+                    pos = (0, next_col)
+                slot_positions[rid] = pos
+                used.add(pos)
+                next_col += 1
+        
+        rows = sorted({rc[0] for rc in slot_positions.values()})
+        cols = sorted({rc[1] for rc in slot_positions.values()})
+        row_to_idx = {r: i for i, r in enumerate(rows)}
+        col_to_idx = {c: i for i, c in enumerate(cols)}
+        
+        row_heights = [0] * len(rows)
+        col_widths = [0] * len(cols)
+        for room_id, (slot_r, slot_c) in slot_positions.items():
             room = rooms[room_id]
-            h, w = room.shape
-            
-            dungeon_grid[0:h, x_offset:x_offset+w] = room
-            room_layout[room_id] = (x_offset, 0, x_offset + w - 1, h - 1)
-            
-            x_offset += w
+            r_idx = row_to_idx[slot_r]
+            c_idx = col_to_idx[slot_c]
+            row_heights[r_idx] = max(row_heights[r_idx], int(room.shape[0]))
+            col_widths[c_idx] = max(col_widths[c_idx], int(room.shape[1]))
+        
+        y_offsets = [0] * len(rows)
+        x_offsets = [0] * len(cols)
+        for i in range(1, len(rows)):
+            y_offsets[i] = y_offsets[i - 1] + row_heights[i - 1]
+        for i in range(1, len(cols)):
+            x_offsets[i] = x_offsets[i - 1] + col_widths[i - 1]
+        
+        total_height = int(sum(row_heights))
+        total_width = int(sum(col_widths))
+        dungeon_grid = np.full((total_height, total_width), fill_value=void_id, dtype=int)
+        room_layout: Dict[int, Tuple[int, int, int, int]] = {}
+        
+        for room_id, room in rooms.items():
+            slot_r, slot_c = slot_positions[room_id]
+            r_idx = row_to_idx[slot_r]
+            c_idx = col_to_idx[slot_c]
+            y0 = y_offsets[r_idx]
+            x0 = x_offsets[c_idx]
+            h, w = int(room.shape[0]), int(room.shape[1])
+            dungeon_grid[y0:y0 + h, x0:x0 + w] = room
+            room_layout[room_id] = (x0, y0, x0 + w - 1, y0 + h - 1)
         
         return dungeon_grid, room_layout
 

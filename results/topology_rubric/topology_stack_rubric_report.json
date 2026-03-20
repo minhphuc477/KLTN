@@ -1,0 +1,114 @@
+{
+  "generated_at": "2026-03-08 05:25:51",
+  "workspace_root": "F:\\KLTN",
+  "total_score": 38,
+  "total_max": 40,
+  "percent": 95.0,
+  "criteria": [
+    {
+      "id": "C1",
+      "name": "Topology Pipeline Integration",
+      "score": 5,
+      "max_score": 5,
+      "passed": true,
+      "rationale": "Pipeline includes generation, topology validation, and virtual-node filtering path.",
+      "evidence": [
+        "src/pipeline/dungeon_pipeline.py"
+      ]
+    },
+    {
+      "id": "C2",
+      "name": "Constraint Completeness in Graph Grammar",
+      "score": 5,
+      "max_score": 5,
+      "passed": true,
+      "rationale": "Grammar contains comprehensive constraints and repair hooks.",
+      "evidence": [
+        "src/generation/grammar.py"
+      ]
+    },
+    {
+      "id": "C3",
+      "name": "Evolutionary Search Correctness",
+      "score": 5,
+      "max_score": 5,
+      "passed": true,
+      "rationale": "Evolution loop and survivor pressure anchors are present.",
+      "evidence": [
+        "src/generation/evolutionary_director.py"
+      ]
+    },
+    {
+      "id": "C4",
+      "name": "Descriptor/Realism Pressure Mechanisms",
+      "score": 4,
+      "max_score": 5,
+      "passed": true,
+      "rationale": "Adaptive and target-aware realism pressure mechanisms are implemented.",
+      "evidence": [
+        "src/generation/evolutionary_director.py"
+      ]
+    },
+    {
+      "id": "C5",
+      "name": "Topology Validation Redundancy",
+      "score": 5,
+      "max_score": 5,
+      "passed": true,
+      "rationale": "Two complementary validator layers are present.",
+      "evidence": [
+        "src/utils/graph_utils.py",
+        "src/data/vglc_utils.py"
+      ]
+    },
+    {
+      "id": "C6",
+      "name": "Regression Test Coverage for Topology Fixes",
+      "score": 5,
+      "max_score": 5,
+      "passed": true,
+      "rationale": "Topology-fix regression suite passed (12 passed).",
+      "evidence": [
+        "tests/test_topology_generation_fixes.py"
+      ]
+    },
+    {
+      "id": "C7",
+      "name": "VGLC Compliance Test Coverage",
+      "score": 5,
+      "max_score": 5,
+      "passed": true,
+      "rationale": "VGLC compliance suite passed (36 passed).",
+      "evidence": [
+        "tests/test_vglc_compliance.py"
+      ]
+    },
+    {
+      "id": "C8",
+      "name": "Reproducibility Instrumentation",
+      "score": 4,
+      "max_score": 5,
+      "passed": true,
+      "rationale": "Robustness probe + mask instrumentation are implemented in benchmark suite.",
+      "evidence": [
+        "src/evaluation/benchmark_suite.py"
+      ]
+    }
+  ],
+  "commands": {
+    "topology_fixes_pytest": {
+      "command": "F:\\KLTN\\.venv\\Scripts\\python.exe -m pytest tests/test_topology_generation_fixes.py -q",
+      "exit_code": 0,
+      "duration_sec": 10.238030910491943,
+      "stdout": "............                                                             [100%]\n12 passed in 8.43s\n",
+      "stderr": ""
+    },
+    "vglc_compliance_pytest": {
+      "command": "F:\\KLTN\\.venv\\Scripts\\python.exe -m pytest tests/test_vglc_compliance.py -q",
+      "exit_code": 0,
+      "duration_sec": 4.760528326034546,
+      "stdout": "....................................                                     [100%]\n36 passed in 3.39s\n",
+      "stderr": ""
+    }
+  }
+}

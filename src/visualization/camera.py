@@ -22,7 +22,6 @@ Reference:
 - VGLC room dimensions: 16 rows × 11 columns
 - Typical dungeon: 6×6 room grid = 96×66 tiles
 
-Author: KLTN Visualization Module
 """
 
 from __future__ import annotations

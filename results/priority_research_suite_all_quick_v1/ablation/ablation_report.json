@@ -1,0 +1,65 @@
+{
+  "configs": [
+    {
+      "name": "FULL",
+      "use_evolution": true,
+      "use_wfc": true,
+      "logic_guidance_scale": 1.0,
+      "latent_sampler": "diffusion",
+      "categorical_codebook_size": null,
+      "use_tpe": true
+    },
+    {
+      "name": "NO_EVOLUTION",
+      "use_evolution": false,
+      "use_wfc": true,
+      "logic_guidance_scale": 1.0,
+      "latent_sampler": "diffusion",
+      "categorical_codebook_size": null,
+      "use_tpe": true
+    }
+  ],
+  "seeds": [
+    42,
+    43
+  ],
+  "summary": [
+    {
+      "config": "FULL",
+      "n": 1,
+      "success_rate": 1.0,
+      "solvability_rate": 1.0,
+      "confusion_ratio": NaN,
+      "confusion_index": 1999.0666666666666,
+      "path_optimal": 0.0,
+      "tile_prior_kl": 2.5834460006192934,
+      "graph_edit_distance": 0.34850267379679145,
+      "generation_time_sec": 295.94394993782043,
+      "novelty": 0.0972676941816761,
+      "reconstruction_error": 0.9602272727272727,
+      "constraint_valid_rate": 0.0,
+      "room_repair_rate": 0.375,
+      "tiles_repaired": 446.0,
+      "diversity": 0.0
+    },
+    {
+      "config": "NO_EVOLUTION",
+      "n": 0,
+      "success_rate": 0.0,
+      "solvability_rate": 0.0,
+      "confusion_ratio": NaN,
+      "confusion_index": NaN,
+      "path_optimal": 0.0,
+      "tile_prior_kl": NaN,
+      "graph_edit_distance": NaN,
+      "generation_time_sec": NaN,
+      "novelty": NaN,
+      "reconstruction_error": NaN,
+      "constraint_valid_rate": NaN,
+      "room_repair_rate": NaN,
+      "tiles_repaired": NaN,
+      "diversity": 0.0
+    }
+  ],
+  "significance": []
+}

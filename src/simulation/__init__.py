@@ -65,6 +65,8 @@ from .multi_goal import MultiGoalPathfinder
 from .parallel_astar import ParallelAStarSolver
 from .solver_comparison import SolverComparison
 from .map_elites import MAPElitesEvaluator, run_map_elites_on_maps, plot_heatmap
+from .search_base import SearchRepresentation, GameStateSearchConfig, GameStateSearchResult
+from .search_factory import run_game_state_solver
 
 __all__ = [
     # Core validator components
@@ -113,4 +115,8 @@ __all__ = [
     'MAPElitesEvaluator',
     'run_map_elites_on_maps',
     'plot_heatmap',
+    'SearchRepresentation',
+    'GameStateSearchConfig',
+    'GameStateSearchResult',
+    'run_game_state_solver',
 ]

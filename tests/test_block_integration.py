@@ -50,6 +50,7 @@ def test_block_iii_condition_encoder():
     from src.core.condition_encoder import DualStreamConditionEncoder, create_condition_encoder
 
     encoder = create_condition_encoder(latent_dim=32, output_dim=128)
+    assert encoder.global_encoder.edge_feature_dim == 8
 
     # Test encode_global_only (most common path)
     node_features = torch.randn(5, 5)

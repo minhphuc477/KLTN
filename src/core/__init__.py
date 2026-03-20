@@ -14,7 +14,7 @@ H-MOLQD Architecture Blocks (NEW):
 - Block III:  condition_encoder.py - Dual-stream contextual encoding
 - Block IV:   latent_diffusion.py - Latent diffusion with gradient guidance
 - Block V:    logic_net.py - Differentiable pathfinding for solvability
-- Block VII:  symbolic_refiner.py - Path-guided WFC repair
+- Block VI:   symbolic_refiner.py - Path-guided WFC repair
 
 Usage:
     # Original components

@@ -1,0 +1,272 @@
+{
+  "seed": 42,
+  "num_generated": 12,
+  "num_reference_loaded": 18,
+  "descriptor_targets": {
+    "linearity": 0.43243322417458485,
+    "leniency": 0.4746762496762497,
+    "progression_complexity": 0.5056329747493025,
+    "topology_complexity": 0.3938431288135679,
+    "path_length": 9.944444444444445,
+    "num_nodes": 28.5
+  },
+  "scatter_means": {
+    "generated_linearity_mean": 0.5404483248233248,
+    "generated_leniency_mean": 0.9027777777777777,
+    "generated_progression_complexity_mean": 0.4637079231048035,
+    "generated_topology_complexity_mean": 0.33628148646976025,
+    "reference_linearity_mean": 0.43243322417458485,
+    "reference_leniency_mean": 0.4746762496762497,
+    "reference_progression_complexity_mean": 0.5056329747493025,
+    "reference_topology_complexity_mean": 0.3938431288135679
+  },
+  "files": {
+    "generated_gallery": "results\\topology_viz_round18_gate_dirgap_2026_02_24\\generated_gallery.png",
+    "reference_gallery": "results\\topology_viz_round18_gate_dirgap_2026_02_24\\reference_gallery.png",
+    "descriptor_scatter": "results\\topology_viz_round18_gate_dirgap_2026_02_24\\descriptor_scatter.png"
+  },
+  "generated_gallery_metrics": [
+    {
+      "index": 0,
+      "num_nodes": 12,
+      "num_edges": 24,
+      "path_length": 6,
+      "linearity": 0.5833333333333334,
+      "leniency": 1.0,
+      "progression_complexity": 0.407819696969697,
+      "topology_complexity": 0.339
+    },
+    {
+      "index": 1,
+      "num_nodes": 9,
+      "num_edges": 16,
+      "path_length": 4,
+      "linearity": 0.5555555555555556,
+      "leniency": 1.0,
+      "progression_complexity": 0.4598388888888889,
+      "topology_complexity": 0.3464027777777778
+    },
+    {
+      "index": 2,
+      "num_nodes": 13,
+      "num_edges": 25,
+      "path_length": 3,
+      "linearity": 0.3076923076923077,
+      "leniency": 0.5,
+      "progression_complexity": 0.48349743589743593,
+      "topology_complexity": 0.354574358974359
+    },
+    {
+      "index": 3,
+      "num_nodes": 14,
+      "num_edges": 29,
+      "path_length": 4,
+      "linearity": 0.35714285714285715,
+      "leniency": 1.0,
+      "progression_complexity": 0.4725725274725275,
+      "topology_complexity": 0.3079408866995074
+    },
+    {
+      "index": 4,
+      "num_nodes": 11,
+      "num_edges": 19,
+      "path_length": 6,
+      "linearity": 0.6363636363636364,
+      "leniency": 1.0,
+      "progression_complexity": 0.3312909090909091,
+      "topology_complexity": 0.2403062200956938
+    },
+    {
+      "index": 5,
+      "num_nodes": 16,
+      "num_edges": 31,
+      "path_length": 6,
+      "linearity": 0.4375,
+      "leniency": 0.6666666666666666,
+      "progression_complexity": 0.4913001344086021,
+      "topology_complexity": 0.3617903225806452
+    },
+    {
+      "index": 6,
+      "num_nodes": 12,
+      "num_edges": 23,
+      "path_length": 6,
+      "linearity": 0.5833333333333334,
+      "leniency": 0.6666666666666666,
+      "progression_complexity": 0.5099704216073782,
+      "topology_complexity": 0.34481159420289853
+    },
+    {
+      "index": 7,
+      "num_nodes": 14,
+      "num_edges": 27,
+      "path_length": 7,
+      "linearity": 0.5714285714285714,
+      "leniency": 1.0,
+      "progression_complexity": 0.4906769230769231,
+      "topology_complexity": 0.3427301587301588
+    },
+    {
+      "index": 8,
+      "num_nodes": 10,
+      "num_edges": 17,
+      "path_length": 6,
+      "linearity": 0.7,
+      "leniency": 1.0,
+      "progression_complexity": 0.5065588235294118,
+      "topology_complexity": 0.31835294117647056
+    },
+    {
+      "index": 9,
+      "num_nodes": 12,
+      "num_edges": 24,
+      "path_length": 6,
+      "linearity": 0.5833333333333334,
+      "leniency": 1.0,
+      "progression_complexity": 0.49091969696969695,
+      "topology_complexity": 0.38633333333333336
+    },
+    {
+      "index": 10,
+      "num_nodes": 11,
+      "num_edges": 20,
+      "path_length": 6,
+      "linearity": 0.6363636363636364,
+      "leniency": 1.0,
+      "progression_complexity": 0.49632121212121216,
+      "topology_complexity": 0.32409090909090915
+    },
+    {
+      "index": 11,
+      "num_nodes": 15,
+      "num_edges": 29,
+      "path_length": 7,
+      "linearity": 0.5333333333333333,
+      "leniency": 1.0,
+      "progression_complexity": 0.4237284072249589,
+      "topology_complexity": 0.3690443349753695
+    }
+  ],
+  "reference_gallery_metrics": [
+    {
+      "index": 0,
+      "num_nodes": 15,
+      "num_edges": 30,
+      "path_length": 6,
+      "linearity": 0.4666666666666667,
+      "leniency": 0.5,
+      "progression_complexity": 0.49521904761904767,
+      "topology_complexity": 0.3118095238095238
+    },
+    {
+      "index": 1,
+      "num_nodes": 22,
+      "num_edges": 49,
+      "path_length": 9,
+      "linearity": 0.45454545454545453,
+      "leniency": 1.0,
+      "progression_complexity": 0.5046352916924346,
+      "topology_complexity": 0.4229833024118739
+    },
+    {
+      "index": 2,
+      "num_nodes": 11,
+      "num_edges": 20,
+      "path_length": 5,
+      "linearity": 0.5454545454545454,
+      "leniency": 0.6666666666666666,
+      "progression_complexity": 0.4953,
+      "topology_complexity": 0.2756363636363637
+    },
+    {
+      "index": 3,
+      "num_nodes": 34,
+      "num_edges": 80,
+      "path_length": 7,
+      "linearity": 0.23529411764705882,
+      "leniency": 0.5,
+      "progression_complexity": 0.4982379742806214,
+      "topology_complexity": 0.46447058823529414
+    },
+    {
+      "index": 4,
+      "num_nodes": 18,
+      "num_edges": 34,
+      "path_length": 12,
+      "linearity": 0.7222222222222222,
+      "leniency": 0.75,
+      "progression_complexity": 0.497413725490196,
+      "topology_complexity": 0.2606013071895425
+    },
+    {
+      "index": 5,
+      "num_nodes": 29,
+      "num_edges": 64,
+      "path_length": 12,
+      "linearity": 0.4482758620689655,
+      "leniency": 0.11538461538461539,
+      "progression_complexity": 0.5524826252052544,
+      "topology_complexity": 0.4430098522167488
+    },
+    {
+      "index": 6,
+      "num_nodes": 30,
+      "num_edges": 59,
+      "path_length": 11,
+      "linearity": 0.4,
+      "leniency": 0.5,
+      "progression_complexity": 0.5070627525990472,
+      "topology_complexity": 0.328180790960452
+    },
+    {
+      "index": 7,
+      "num_nodes": 36,
+      "num_edges": 73,
+      "path_length": 10,
+      "linearity": 0.3055555555555556,
+      "leniency": 0.3,
+      "progression_complexity": 0.5232951185040228,
+      "topology_complexity": 0.4343835616438357
+    },
+    {
+      "index": 8,
+      "num_nodes": 65,
+      "num_edges": 158,
+      "path_length": 9,
+      "linearity": 0.15384615384615385,
+      "leniency": 0.0,
+      "progression_complexity": 0.5132534688412853,
+      "topology_complexity": 0.557092259006816
+    },
+    {
+      "index": 9,
+      "num_nodes": 18,
+      "num_edges": 38,
+      "path_length": 7,
+      "linearity": 0.4444444444444444,
+      "leniency": 0.5454545454545454,
+      "progression_complexity": 0.49117960587743875,
+      "topology_complexity": 0.3543157894736842
+    },
+    {
+      "index": 10,
+      "num_nodes": 18,
+      "num_edges": 46,
+      "path_length": 9,
+      "linearity": 0.5555555555555556,
+      "leniency": 0.6666666666666666,
+      "progression_complexity": 0.5128717817561808,
+      "topology_complexity": 0.49109178743961357
+    },
+    {
+      "index": 11,
+      "num_nodes": 19,
+      "num_edges": 42,
+      "path_length": 7,
+      "linearity": 0.42105263157894735,
+      "leniency": 0.625,
+      "progression_complexity": 0.47977577276524647,
+      "topology_complexity": 0.411624060150376
+    }
+  ]
+}

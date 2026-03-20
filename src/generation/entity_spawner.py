@@ -14,6 +14,8 @@ from enum import Enum
 import json
 import logging
 
+from src.core.definitions import SEMANTIC_PALETTE, parse_node_label_tokens
+
 logger = logging.getLogger(__name__)
 
 
@@ -61,6 +63,8 @@ class RoomSemantics:
     has_treasure: bool = False
     is_critical_path: bool = False
     tension_value: float = 0.5
+    enemy_count_hint: int = 0
+    key_count_hint: int = 0
 
 
 class EntitySpawner:
@@ -93,10 +97,24 @@ class EntitySpawner:
         self.enemy_density = self.config.get('enemy_density', 0.15)
         self.min_enemy_distance = self.config.get('min_enemy_distance', 3)
         self.min_entity_spacing = self.config.get('min_entity_spacing', 2)
+        # Instance-local RNG; callers can override deterministically per spawn call.
+        self._rng = random.Random()
+        self._active_rng = self._rng
         
-        self.FLOOR_ID = self.config.get('floor_tile_id', 0)
-        self.WALL_ID = self.config.get('wall_tile_id', 1)
-        self.DOOR_IDS = self.config.get('door_tile_ids', [2, 3, 4])
+        # Align defaults with canonical semantic palette.
+        self.FLOOR_ID = self.config.get('floor_tile_id', int(SEMANTIC_PALETTE['FLOOR']))
+        self.WALL_ID = self.config.get('wall_tile_id', int(SEMANTIC_PALETTE['WALL']))
+        self.DOOR_IDS = self.config.get(
+            'door_tile_ids',
+            [
+                int(SEMANTIC_PALETTE['DOOR_OPEN']),
+                int(SEMANTIC_PALETTE['DOOR_LOCKED']),
+                int(SEMANTIC_PALETTE['DOOR_BOMB']),
+                int(SEMANTIC_PALETTE['DOOR_PUZZLE']),
+                int(SEMANTIC_PALETTE['DOOR_BOSS']),
+                int(SEMANTIC_PALETTE['DOOR_SOFT']),
+            ],
+        )
     
     def spawn_entities(
         self,
@@ -118,8 +136,9 @@ class EntitySpawner:
             List of Entity instances with world positions
         """
         if seed is not None:
-            random.seed(seed)
-            np.random.seed(seed)
+            self._active_rng = random.Random(seed)
+        else:
+            self._active_rng = self._rng
         
         entities = []
         
@@ -169,13 +188,22 @@ class EntitySpawner:
                 spawn_candidates, room_semantics, room_bounds
             ))
         
-        # Step 3: Spawn key if room has one
-        if room_semantics.has_key and len(spawn_candidates) > 0:
+        # Step 3: Spawn key(s) using explicit hint when provided.
+        key_spawn_count = int(max(0, room_semantics.key_count_hint))
+        if key_spawn_count <= 0 and room_semantics.has_key:
+            key_spawn_count = 1
+        for key_idx in range(key_spawn_count):
             key_entity = self._spawn_key(
-                spawn_candidates, entities, room_semantics, room_bounds
+                spawn_candidates,
+                entities,
+                room_semantics,
+                room_bounds,
+                key_index=key_idx,
+                total_keys=key_spawn_count,
             )
-            if key_entity:
-                entities.append(key_entity)
+            if key_entity is None:
+                break
+            entities.append(key_entity)
         
         logger.info(f"Room {room_semantics.node_id}: Spawned {len(entities)} entities")
         
@@ -224,8 +252,8 @@ class EntitySpawner:
         entities = []
         
         # 30% chance for starting health potion
-        if random.random() < 0.3 and candidates:
-            pos = random.choice(candidates)
+        if self._active_rng.random() < 0.3 and candidates:
+            pos = self._active_rng.choice(candidates)
             entities.append(Entity(
                 EntityType.HEALTH_POTION,
                 pos[0] + bounds[0],
@@ -243,9 +271,13 @@ class EntitySpawner:
     ) -> List[Entity]:
         """Spawn enemies for combat room."""
         entities = []
-        
+
         num_enemies = self._calculate_enemy_count(len(candidates), semantics.difficulty)
-        
+        if int(max(0, semantics.enemy_count_hint)) > 0:
+            spatial_cap = max(0, min(len(candidates), len(candidates) // 4))
+            hard_cap = max(spatial_cap, 8)
+            num_enemies = int(max(1, min(int(semantics.enemy_count_hint), hard_cap)))
+
         enemy_positions = self._select_spaced_positions(
             candidates, num_enemies
         )
@@ -267,10 +299,10 @@ class EntitySpawner:
             ))
         
         # Maybe add a health potion (10% chance)
-        if random.random() < 0.1 and len(enemy_positions) < len(candidates):
+        if self._active_rng.random() < 0.1 and len(enemy_positions) < len(candidates):
             remaining = [c for c in candidates if c not in enemy_positions]
             if remaining:
-                pos = random.choice(remaining)
+                pos = self._active_rng.choice(remaining)
                 entities.append(Entity(
                     EntityType.HEALTH_POTION,
                     pos[0] + bounds[0],
@@ -316,23 +348,23 @@ class EntitySpawner:
         entities = []
         
         # Chest (guaranteed)
-        chest_pos = random.choice(candidates)
+        chest_pos = self._active_rng.choice(candidates)
         entities.append(Entity(
             EntityType.CHEST,
             chest_pos[0] + bounds[0],
             chest_pos[1] + bounds[1],
             semantics.node_id,
             {
-                'loot': 'gold' if random.random() < 0.7 else 'rare_item',
-                'amount': random.randint(50, 150)
+                'loot': 'gold' if self._active_rng.random() < 0.7 else 'rare_item',
+                'amount': self._active_rng.randint(50, 150)
             }
         ))
         
         # Weak guard (50% chance)
-        if random.random() < 0.5:
+        if self._active_rng.random() < 0.5:
             remaining = [c for c in candidates if c != chest_pos]
             if remaining:
-                guard_pos = random.choice(remaining)
+                guard_pos = self._active_rng.choice(remaining)
                 entities.append(Entity(
                     EntityType.ENEMY_WEAK,
                     guard_pos[0] + bounds[0],
@@ -352,8 +384,8 @@ class EntitySpawner:
         entities = []
         
         # 40% chance for NPC
-        if random.random() < 0.4 and candidates:
-            pos = random.choice(candidates)
+        if self._active_rng.random() < 0.4 and candidates:
+            pos = self._active_rng.choice(candidates)
             entities.append(Entity(
                 EntityType.NPC,
                 pos[0] + bounds[0],
@@ -376,8 +408,8 @@ class EntitySpawner:
         entities = []
         
         # Health potion (70% chance)
-        if random.random() < 0.7 and candidates:
-            pos = random.choice(candidates)
+        if self._active_rng.random() < 0.7 and candidates:
+            pos = self._active_rng.choice(candidates)
             entities.append(Entity(
                 EntityType.HEALTH_POTION,
                 pos[0] + bounds[0],
@@ -387,9 +419,9 @@ class EntitySpawner:
             ))
         
         # Mana potion (50% chance)
-        if random.random() < 0.5 and len(candidates) > 1:
+        if self._active_rng.random() < 0.5 and len(candidates) > 1:
             remaining = [c for c in candidates]
-            pos = random.choice(remaining)
+            pos = self._active_rng.choice(remaining)
             entities.append(Entity(
                 EntityType.MANA_POTION,
                 pos[0] + bounds[0],
@@ -404,7 +436,9 @@ class EntitySpawner:
         self, candidates: List[Tuple[int, int]],
         existing_entities: List[Entity],
         semantics: RoomSemantics,
-        bounds: Tuple[int, int, int, int]
+        bounds: Tuple[int, int, int, int],
+        key_index: int = 0,
+        total_keys: int = 1,
     ) -> Optional[Entity]:
         """Spawn key in visible protected location."""
         # Exclude positions already occupied
@@ -414,15 +448,17 @@ class EntitySpawner:
         if not available:
             return None
         
-        key_pos = random.choice(available)
+        key_pos = self._active_rng.choice(available)
         return Entity(
             EntityType.KEY,
             key_pos[0] + bounds[0],
             key_pos[1] + bounds[1],
             semantics.node_id,
             {
-                'key_id': semantics.node_id,
-                'unlocks': 'door' if random.random() < 0.8 else 'chest'
+                'key_id': f"{semantics.node_id}:{int(key_index)}" if total_keys > 1 else semantics.node_id,
+                'key_index': int(key_index),
+                'total_keys': int(max(1, total_keys)),
+                'unlocks': 'door' if self._active_rng.random() < 0.8 else 'chest'
             }
         )
     
@@ -453,12 +489,12 @@ class EntitySpawner:
         if difficulty < 0.4:
             return EntityType.ENEMY_WEAK
         elif difficulty < 0.8:
-            return EntityType.ENEMY_STRONG if random.random() < 0.6 else EntityType.ENEMY_WEAK
+            return EntityType.ENEMY_STRONG if self._active_rng.random() < 0.6 else EntityType.ENEMY_WEAK
         else:
             # High difficulty: mostly strong enemies
             choices = [EntityType.ENEMY_STRONG, EntityType.ENEMY_WEAK]
             weights = [0.7, 0.3]
-            return random.choices(choices, weights=weights)[0]
+            return self._active_rng.choices(choices, weights=weights)[0]
     
     def _get_enemy_hp(self, enemy_type: EntityType, difficulty: float) -> int:
         """Calculate enemy HP based on type and difficulty."""
@@ -480,7 +516,7 @@ class EntitySpawner:
         
         selected = []
         available = candidates.copy()
-        random.shuffle(available)
+        self._active_rng.shuffle(available)
         
         for pos in available:
             if len(selected) >= num_positions:
@@ -534,29 +570,78 @@ def create_room_semantics_from_graph(
         RoomSemantics instance
     """
     node_data = mission_graph['nodes'].get(node_id, {})
-    
-    # Infer room type from node attributes
-    room_type = node_data.get('type', 'combat')
-    if node_id == 0:
-        room_type = 'start'
-    elif node_data.get('is_boss', False):
-        room_type = 'boss'
-    elif node_data.get('has_treasure', False):
-        room_type = 'treasure'
+
+    def _as_nonneg_int(value: object, default: int = 0) -> int:
+        try:
+            return int(max(0, int(value)))  # type: ignore[arg-type]
+        except Exception:
+            return int(default)
+
+    def _normalize_room_type(attrs: Dict, nid: int) -> str:
+        raw_type = str(attrs.get('type', '') or '').strip().lower()
+        label_tokens = set(parse_node_label_tokens(str(attrs.get('label', '') or '')))
+
+        is_start = bool(attrs.get('is_start')) or ('s' in label_tokens) or ('start' in label_tokens) or nid == 0
+        if is_start:
+            return 'start'
+
+        is_goal = bool(attrs.get('is_goal') or attrs.get('is_triforce')) or ('t' in label_tokens) or ('triforce' in label_tokens)
+        if is_goal:
+            return 'safe'
+
+        is_boss = bool(attrs.get('is_boss')) or (raw_type == 'boss') or ('b' in label_tokens) or ('boss' in label_tokens)
+        if is_boss:
+            return 'boss'
+
+        if raw_type in {'enemy', 'arena', 'mini_boss', 'miniboss'} or 'e' in label_tokens or 'enemy' in label_tokens:
+            return 'combat'
+
+        if raw_type in {'puzzle', 'switch', 'tutorial_puzzle', 'combat_puzzle', 'complex_puzzle'} or 'p' in label_tokens:
+            return 'puzzle'
+
+        if raw_type in {'item', 'treasure', 'key', 'big_key', 'boss_key'} or bool(attrs.get('has_treasure')):
+            return 'treasure'
+
+        if raw_type in {'safe', 'empty', 'start', 'goal'}:
+            return 'safe'
+
+        # Conservative fallback: treat unknown rooms as combat so they still get gameplay content.
+        return 'combat'
+
+    room_type = _normalize_room_type(node_data, node_id)
     
     # Get difficulty
     difficulty = node_data.get('difficulty', 0.5)
     if tension_curve and node_id < len(tension_curve):
         difficulty = tension_curve[node_id]
     
+    label_tokens = set(parse_node_label_tokens(str(node_data.get('label', '') or '')))
+    has_key = bool(node_data.get('has_key', False))
+    if ('k' in label_tokens) or ('key' in label_tokens) or (str(node_data.get('type', '') or '').strip().lower() in {'key', 'big_key', 'boss_key'}):
+        has_key = True
+    key_count_hint = _as_nonneg_int(
+        node_data.get('key_count_hint', node_data.get('key_count', 0)),
+        default=0,
+    )
+    enemy_count_hint = _as_nonneg_int(
+        node_data.get('enemy_count_hint', node_data.get('enemy_count', 0)),
+        default=0,
+    )
+    if key_count_hint <= 0 and has_key:
+        key_count_hint = 1
+    if enemy_count_hint <= 0 and room_type in {'combat', 'boss'}:
+        enemy_count_hint = 1
+
     return RoomSemantics(
         node_id=node_id,
         room_type=room_type,
         difficulty=difficulty,
-        has_key=node_data.get('has_key', False),
+        has_key=bool(has_key or key_count_hint > 0),
         has_treasure=node_data.get('has_treasure', False),
         is_critical_path=node_data.get('is_critical_path', False),
-        tension_value=difficulty
+        tension_value=difficulty,
+        enemy_count_hint=int(enemy_count_hint),
+        key_count_hint=int(key_count_hint),
     )
 
 

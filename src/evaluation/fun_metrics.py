@@ -508,6 +508,168 @@ class FlowAnalyzer:
 
 
 # ============================================================================
+# PACING ANALYZER
+# ============================================================================
+
+class PacingAnalyzer:
+    """
+    Estimates pacing quality from a tension curve over the solution path.
+
+    The analyzer favors:
+    - A noticeable build-up toward late-game climax
+    - Some low-tension recovery beats (rest areas)
+    - Non-flat but not chaotic tension fluctuations
+    """
+
+    def __init__(self, target_peak_position: float = 0.75):
+        # Late-game peak is a common dungeon pacing target.
+        self.target_peak_position = float(np.clip(target_peak_position, 0.0, 1.0))
+
+    def analyze(
+        self,
+        mission_graph: nx.Graph,
+        solution_path: List[int],
+        room_contents: Dict[int, Dict],
+    ) -> PacingMetrics:
+        """Compute pacing metrics from the path-level tension signal."""
+        del mission_graph  # Reserved for future graph-level pacing features.
+
+        tension_curve = self._compute_tension_curve(solution_path, room_contents)
+        if tension_curve.size == 0:
+            return PacingMetrics(
+                tension_variance=0.0,
+                peak_placement=self.target_peak_position,
+                rest_areas=0,
+                pacing_score=0.5,
+            )
+
+        if tension_curve.size == 1:
+            return PacingMetrics(
+                tension_variance=0.0,
+                peak_placement=1.0,
+                rest_areas=int(tension_curve[0] < 0.35),
+                pacing_score=float(0.6 + 0.4 * tension_curve[0]),
+            )
+
+        # Variance of the first derivative captures pacing swings.
+        first_diff = np.diff(tension_curve)
+        tension_variance = float(np.var(first_diff))
+
+        # Peak should usually appear in later sections of dungeon flow.
+        peak_idx = int(np.argmax(tension_curve))
+        peak_placement = float(peak_idx / max(1, tension_curve.size - 1))
+
+        rest_areas = int(self._count_rest_areas(tension_curve))
+
+        # Target curve: gradual rise, mild mid-run dip, late climax.
+        target_curve = self._target_curve(tension_curve.size)
+        rmse = float(np.sqrt(np.mean((tension_curve - target_curve) ** 2)))
+        curve_alignment_score = float(np.clip(1.0 - rmse, 0.0, 1.0))
+
+        peak_score = float(np.clip(1.0 - abs(peak_placement - self.target_peak_position), 0.0, 1.0))
+
+        # Encourage moderate variation (not flat, not overly noisy).
+        target_variance = 0.02
+        variance_score = float(np.exp(-((tension_variance - target_variance) ** 2) / (2.0 * target_variance**2)))
+
+        rest_ratio = rest_areas / max(1, tension_curve.size)
+        if rest_ratio < 0.1:
+            rest_score = rest_ratio / 0.1
+        elif rest_ratio <= 0.35:
+            rest_score = 1.0
+        else:
+            rest_score = max(0.0, 1.0 - (rest_ratio - 0.35) / 0.35)
+
+        pacing_score = (
+            0.45 * curve_alignment_score +
+            0.25 * peak_score +
+            0.15 * variance_score +
+            0.15 * rest_score
+        )
+        pacing_score = float(np.clip(pacing_score, 0.0, 1.0))
+
+        return PacingMetrics(
+            tension_variance=tension_variance,
+            peak_placement=peak_placement,
+            rest_areas=rest_areas,
+            pacing_score=pacing_score,
+        )
+
+    def _compute_tension_curve(
+        self,
+        solution_path: List[int],
+        room_contents: Dict[int, Dict],
+    ) -> np.ndarray:
+        """Build and smooth a normalized tension curve from room content."""
+        if not solution_path:
+            return np.array([], dtype=np.float32)
+
+        tensions: List[float] = []
+        for room_id in solution_path:
+            content = room_contents.get(room_id, {})
+
+            # Challenge contributors
+            challenge = (
+                0.45 * float(content.get('enemies', 0)) +
+                0.35 * float(content.get('puzzles', 0)) +
+                0.40 * float(content.get('locks', 0)) +
+                (1.50 if content.get('boss', False) else 0.0)
+            )
+
+            # Recovery contributors
+            recovery = (
+                0.30 * float(content.get('health_pickups', 0)) +
+                0.20 * float(content.get('keys', 0)) +
+                0.20 * float(content.get('items', 0)) +
+                0.15 * float(content.get('treasures', 0)) +
+                (0.50 if content.get('safe_room', False) else 0.0)
+            )
+
+            tension_value = max(0.0, challenge - 0.6 * recovery)
+            tensions.append(tension_value)
+
+        curve = np.asarray(tensions, dtype=np.float32)
+        if curve.max() > 0:
+            curve = curve / curve.max()
+
+        if curve.size >= 3:
+            # Light smoothing to reduce single-room spikes.
+            kernel = np.array([0.25, 0.5, 0.25], dtype=np.float32)
+            curve = np.convolve(curve, kernel, mode='same')
+            curve = np.clip(curve, 0.0, 1.0)
+
+        return curve
+
+    def _count_rest_areas(self, curve: np.ndarray) -> int:
+        """Count low-tension local minima as recovery beats."""
+        if curve.size == 0:
+            return 0
+
+        rest_threshold = min(0.35, float(np.quantile(curve, 0.35)))
+        rest_areas = 0
+
+        for i, value in enumerate(curve):
+            prev_v = curve[i - 1] if i > 0 else value
+            next_v = curve[i + 1] if i < curve.size - 1 else value
+            if value <= rest_threshold and value <= prev_v and value <= next_v:
+                rest_areas += 1
+
+        return rest_areas
+
+    def _target_curve(self, length: int) -> np.ndarray:
+        """Construct a canonical dungeon pacing template."""
+        if length <= 0:
+            return np.array([], dtype=np.float32)
+
+        x = np.linspace(0.0, 1.0, length, dtype=np.float32)
+        base_rise = 0.15 + 0.70 * x
+        mid_dip = 0.18 * np.exp(-((x - 0.55) ** 2) / (2.0 * 0.08**2))
+        late_peak = 0.22 * np.exp(-((x - self.target_peak_position) ** 2) / (2.0 * 0.06**2))
+        target = np.clip(base_rise - mid_dip + late_peak, 0.0, 1.0)
+        return target.astype(np.float32)
+
+
+# ============================================================================
 # MASTER FUN EVALUATOR
 # ============================================================================
 
@@ -531,6 +693,7 @@ class FunMetricsEvaluator:
         self.frustration_analyzer = FrustrationAnalyzer()
         self.explorability_analyzer = ExplorabilityAnalyzer()
         self.flow_analyzer = FlowAnalyzer()
+        self.pacing_analyzer = PacingAnalyzer()
     
     def evaluate(
         self,
@@ -558,12 +721,8 @@ class FunMetricsEvaluator:
             mission_graph, solution_path, room_contents
         )
         
-        # Pacing (placeholder - would integrate with tension curve)
-        pacing = PacingMetrics(
-            tension_variance=0.5,
-            peak_placement=0.8,
-            rest_areas=2,
-            pacing_score=0.7
+        pacing = self.pacing_analyzer.analyze(
+            mission_graph, solution_path, room_contents
         )
         
         # Overall fun score

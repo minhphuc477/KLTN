@@ -95,7 +95,7 @@ class RoomTensor:
         return one_hot
 
 
-@dataclass
+@dataclass(init=False)
 class DungeonTensor:
     """
     Complete dungeon representation as structured tensors.
@@ -120,6 +120,69 @@ class DungeonTensor:
     p_matrix: np.ndarray = field(default_factory=lambda: np.zeros((0, 0, 3), dtype=np.float32))
     node_features: np.ndarray = field(default_factory=lambda: np.zeros((0, 5), dtype=np.float32))
     node_to_room: Dict[int, Tuple[int, int]] = field(default_factory=dict)
+
+    def __init__(
+        self,
+        dungeon_id: str = "",
+        rooms: Optional[Dict[Tuple[int, int], RoomTensor]] = None,
+        graph: Optional[nx.DiGraph] = None,
+        layout_grid: Optional[np.ndarray] = None,
+        global_semantic: Optional[np.ndarray] = None,
+        tpe_vectors: Optional[np.ndarray] = None,
+        p_matrix: Optional[np.ndarray] = None,
+        node_features: Optional[np.ndarray] = None,
+        node_to_room: Optional[Dict[int, Tuple[int, int]]] = None,
+        # Backward-compatible constructor inputs
+        room_grids: Optional[List[np.ndarray]] = None,
+        topology: Optional[nx.DiGraph] = None,
+        num_rooms: Optional[int] = None,
+    ):
+        """
+        Create DungeonTensor from either:
+        1) Structured room dictionary (current API), or
+        2) Legacy room_grids + topology inputs.
+        """
+        if room_grids is not None and rooms is None:
+            rooms = {}
+            for idx, grid in enumerate(room_grids):
+                np_grid = np.asarray(grid, dtype=np.int32)
+                pos = (idx, 0)
+                rooms[pos] = RoomTensor(
+                    room_id=idx,
+                    position=pos,
+                    semantic_grid=np_grid,
+                    char_grid=np.full(np_grid.shape, '-', dtype='<U1'),
+                )
+            if topology is not None:
+                graph = topology
+            elif graph is None:
+                graph = nx.DiGraph()
+                graph.add_nodes_from(range(len(room_grids)))
+
+            if num_rooms is not None and num_rooms != len(room_grids):
+                logger.debug(
+                    "DungeonTensor legacy ctor: num_rooms=%d differs from room_grids=%d",
+                    num_rooms,
+                    len(room_grids),
+                )
+
+        self.dungeon_id = dungeon_id
+        self.rooms = rooms or {}
+        self.graph = graph if graph is not None else nx.DiGraph()
+        self.layout_grid = layout_grid if layout_grid is not None else np.zeros((0, 0), dtype=int)
+        self.global_semantic = global_semantic
+        self.tpe_vectors = tpe_vectors if tpe_vectors is not None else np.zeros((0, 8), dtype=np.float32)
+        self.p_matrix = p_matrix if p_matrix is not None else np.zeros((0, 0, 3), dtype=np.float32)
+        self.node_features = node_features if node_features is not None else np.zeros((0, 5), dtype=np.float32)
+        self.node_to_room = node_to_room or {}
+
+        if self.layout_grid.size == 0 and self.rooms:
+            max_r = max(pos[0] for pos in self.rooms.keys())
+            max_c = max(pos[1] for pos in self.rooms.keys())
+            layout = np.full((max_r + 1, max_c + 1), -1, dtype=int)
+            for pos, room in self.rooms.items():
+                layout[pos[0], pos[1]] = room.room_id
+            self.layout_grid = layout
     
     @property
     def num_rooms(self) -> int:
@@ -128,6 +191,18 @@ class DungeonTensor:
     @property
     def num_nodes(self) -> int:
         return self.graph.number_of_nodes()
+
+    @property
+    def room_grids(self) -> List[np.ndarray]:
+        """Backward-compatible list-style access to room semantic grids."""
+        if not self.rooms:
+            return []
+        return [self.rooms[pos].semantic_grid for pos in sorted(self.rooms.keys())]
+
+    @property
+    def topology(self) -> nx.DiGraph:
+        """Backward-compatible alias for graph."""
+        return self.graph
     
     def get_room_tensors(self, num_classes: int = 44) -> np.ndarray:
         """
@@ -231,7 +306,7 @@ class VGLCParser:
             return False
         
         # Check for structural elements
-        wall_count = np.sum(slot_grid == 'W')
+        wall_count = np.sum((slot_grid == 'W') | (slot_grid == 'w'))
         
         # Count ALL interior tiles (anything that's not wall or gap)
         # This correctly handles rooms filled with O, P, M, I, B, D, S tiles
@@ -312,7 +387,13 @@ class VGLCParser:
         for i in range(char_grid.shape[0]):
             for j in range(char_grid.shape[1]):
                 char = char_grid[i, j]
-                semantic[i, j] = CHAR_TO_SEMANTIC.get(char, TileID.VOID)
+                tile_id = CHAR_TO_SEMANTIC.get(char)
+                if tile_id is None:
+                    # Be robust to datasets that use lowercase variants.
+                    tile_id = CHAR_TO_SEMANTIC.get(str(char).upper())
+                if tile_id is None:
+                    tile_id = CHAR_TO_SEMANTIC.get(str(char).lower())
+                semantic[i, j] = int(tile_id if tile_id is not None else TileID.VOID)
         
         return semantic
     
@@ -322,13 +403,13 @@ class VGLCParser:
         
         unique_chars = set(char_grid.flatten())
         
-        if 'M' in unique_chars:
+        if 'M' in unique_chars or 'm' in unique_chars:
             contents.append('enemy')
-        if 'S' in unique_chars:
+        if 'S' in unique_chars or 's' in unique_chars:
             contents.append('stair')
-        if 'P' in unique_chars:
+        if 'P' in unique_chars or 'p' in unique_chars:
             contents.append('element')
-        if 'B' in unique_chars:
+        if 'B' in unique_chars or 'b' in unique_chars:
             contents.append('block')
         
         return contents
@@ -347,22 +428,22 @@ class VGLCParser:
         
         # North door
         north_cells = char_grid[0, 4:7]
-        if 'D' in north_cells or 'F' in north_cells or '.' in north_cells:
+        if 'D' in north_cells or 'd' in north_cells or 'F' in north_cells or 'f' in north_cells or '.' in north_cells:
             doors['N'] = 'open'
         
         # South door
         south_cells = char_grid[15, 4:7] if char_grid.shape[0] > 15 else []
-        if len(south_cells) > 0 and ('D' in south_cells or 'F' in south_cells or '.' in south_cells):
+        if len(south_cells) > 0 and ('D' in south_cells or 'd' in south_cells or 'F' in south_cells or 'f' in south_cells or '.' in south_cells):
             doors['S'] = 'open'
         
         # East door
         east_cells = char_grid[7:9, 10] if char_grid.shape[1] > 10 else []
-        if len(east_cells) > 0 and ('D' in east_cells or 'F' in east_cells or '.' in east_cells):
+        if len(east_cells) > 0 and ('D' in east_cells or 'd' in east_cells or 'F' in east_cells or 'f' in east_cells or '.' in east_cells):
             doors['E'] = 'open'
         
         # West door
         west_cells = char_grid[7:9, 0]
-        if 'D' in west_cells or 'F' in west_cells or '.' in west_cells:
+        if 'D' in west_cells or 'd' in west_cells or 'F' in west_cells or 'f' in west_cells or '.' in west_cells:
             doors['W'] = 'open'
         
         return doors
@@ -408,34 +489,42 @@ class GraphvizParser:
         
         with open(filepath, 'r', encoding='utf-8') as f:
             content = f.read()
-        
+        return self.parse_string(content, source=str(filepath))
+
+    def parse_string(self, dot_content: str, source: str = "<memory>") -> nx.DiGraph:
+        """Parse DOT content from an in-memory string."""
         G = nx.DiGraph()
-        
+
         # Parse nodes
-        for match in self.node_pattern.finditer(content):
+        for match in self.node_pattern.finditer(dot_content):
             node_id = int(match.group(1))
             attrs_str = match.group(2)
-            
+
             attrs = self._parse_node_attrs(attrs_str)
             G.add_node(node_id, **attrs)
-        
+
         # Parse edges
-        for match in self.edge_pattern.finditer(content):
+        for match in self.edge_pattern.finditer(dot_content):
             from_node = int(match.group(1))
             to_node = int(match.group(2))
             attrs_str = match.group(3) or ''
-            
+
             attrs = self._parse_edge_attrs(attrs_str)
             G.add_edge(from_node, to_node, **attrs)
-        
+
         # Ensure all edge endpoints exist as nodes
         for u, v in list(G.edges()):
             if u not in G.nodes:
                 G.add_node(u, label='')
             if v not in G.nodes:
                 G.add_node(v, label='')
-        
-        logger.info(f"Parsed graph with {G.number_of_nodes()} nodes, {G.number_of_edges()} edges from {filepath}")
+
+        logger.info(
+            "Parsed graph with %d nodes, %d edges from %s",
+            G.number_of_nodes(),
+            G.number_of_edges(),
+            source,
+        )
         return G
     
     def _parse_node_attrs(self, attrs_str: str) -> Dict[str, Any]:
@@ -462,8 +551,14 @@ class GraphvizParser:
             parts = [p.strip() for p in label.split(',')]
             
             for part in parts:
-                if part in NODE_CONTENT_MAP:
-                    content = NODE_CONTENT_MAP[part]
+                lookup_key = part
+                if lookup_key not in NODE_CONTENT_MAP:
+                    if lookup_key.lower() in NODE_CONTENT_MAP:
+                        lookup_key = lookup_key.lower()
+                    elif lookup_key.upper() in NODE_CONTENT_MAP:
+                        lookup_key = lookup_key.upper()
+                if lookup_key in NODE_CONTENT_MAP:
+                    content = NODE_CONTENT_MAP[lookup_key]
                     attrs['contents'].append(content)
                     
                     if content == 'start':
@@ -494,7 +589,7 @@ class GraphvizParser:
         if label_match:
             label = label_match.group(1)
             attrs['label'] = label
-            attrs['edge_type'] = EDGE_TYPE_MAP.get(label, 'open')
+            attrs['edge_type'] = EDGE_TYPE_MAP.get(label, EDGE_TYPE_MAP.get(label.lower(), 'open'))
         
         return attrs
 
@@ -566,6 +661,96 @@ class PhaseAligner:
                 })
         
         return stats
+
+    def align(
+        self,
+        rooms: List[Any],
+        graph: nx.DiGraph,
+    ) -> Tuple[Dict[int, Tuple[int, int]], float]:
+        """
+        Align graph nodes to rooms and return a confidence score.
+
+        This provides a lightweight compatibility interface for callers that
+        expect phase alignment to include node-room matching.
+        """
+        if not rooms or graph is None or graph.number_of_nodes() == 0:
+            return {}, 0.0
+
+        node_to_room: Dict[int, Tuple[int, int]] = {}
+
+        # Preferred path: use full graph fingerprinter when room metadata exists.
+        has_positions = all(hasattr(r, 'position') for r in rooms)
+        if has_positions:
+            try:
+                fingerprinter = GraphFingerprinter(strict_mode=False)
+                node_to_room, _ = fingerprinter.align(rooms, graph)
+            except Exception as e:
+                logger.debug("PhaseAligner.align fallback due to fingerprinter error: %s", e)
+
+        # Fallback path: deterministic index-based matching.
+        if not node_to_room:
+            sorted_nodes = sorted(graph.nodes())
+            for idx, node_id in enumerate(sorted_nodes):
+                if idx >= len(rooms):
+                    break
+                room = rooms[idx]
+                if hasattr(room, 'position'):
+                    pos = room.position
+                else:
+                    pos = (idx, 0)
+                node_to_room[node_id] = (int(pos[0]), int(pos[1]))
+
+        score = self._compute_alignment_confidence(node_to_room, rooms, graph)
+        return node_to_room, score
+
+    def _compute_alignment_confidence(
+        self,
+        node_to_room: Dict[int, Tuple[int, int]],
+        rooms: List[Any],
+        graph: nx.DiGraph,
+    ) -> float:
+        """Estimate confidence in [0,1] for a node-room mapping."""
+        max_matches = max(1, min(len(rooms), graph.number_of_nodes()))
+        coverage = len(node_to_room) / max_matches
+
+        # Optional semantic consistency bonus when key counts are available.
+        consistency_checks = 0
+        consistency_hits = 0
+
+        room_by_pos = {}
+        for room in rooms:
+            if hasattr(room, 'position'):
+                room_by_pos[tuple(room.position)] = room
+
+        for node_id, room_pos in node_to_room.items():
+            room = room_by_pos.get(tuple(room_pos))
+            if room is None:
+                continue
+
+            node_data = graph.nodes.get(node_id, {})
+            label_parts = [p.strip() for p in str(node_data.get('label', '')).split(',') if p]
+
+            if hasattr(room, 'num_keys'):
+                consistency_checks += 1
+                has_key_node = ('k' in label_parts) or bool(node_data.get('has_key', False))
+                if bool(getattr(room, 'num_keys', 0) > 0) == has_key_node:
+                    consistency_hits += 1
+
+            if hasattr(room, 'num_doors'):
+                consistency_checks += 1
+                # Approximate: graph degree should correlate with room doors.
+                degree_like = graph.degree(node_id)
+                expected_doors = int(getattr(room, 'num_doors', 0))
+                if abs(int(degree_like) - expected_doors) <= 1:
+                    consistency_hits += 1
+
+        if consistency_checks > 0:
+            consistency = consistency_hits / consistency_checks
+            score = 0.7 * coverage + 0.3 * consistency
+        else:
+            score = coverage
+
+        return float(np.clip(score, 0.0, 1.0))
     
     def correct_boundaries(self, rooms: List[RoomTensor]) -> List[RoomTensor]:
         """
@@ -613,10 +798,107 @@ class PhaseAligner:
         return corrected
     
     def _shift_grid(self, grid: np.ndarray, direction: str) -> np.ndarray:
-        """Attempt to shift grid to fix alignment."""
-        # This is a placeholder for more sophisticated alignment
-        # In practice, would use cross-correlation or template matching
-        return grid
+        """
+        Attempt to shift grid to fix alignment.
+
+        Uses a bounded translation search and keeps the candidate with the
+        highest boundary-wall alignment score.
+        """
+        if grid.ndim != 2 or grid.size == 0:
+            return grid
+
+        if direction not in ('vertical', 'horizontal'):
+            logger.debug("Unknown shift direction '%s'; returning original grid", direction)
+            return grid
+
+        axis_vertical = direction == 'vertical'
+        wall_id = int(TileID.WALL)
+        best_grid = grid
+        best_score = self._boundary_alignment_score(grid)
+        best_offset = 0
+
+        for offset in range(-self.tolerance, self.tolerance + 1):
+            if offset == 0:
+                continue
+
+            row_shift = offset if axis_vertical else 0
+            col_shift = 0 if axis_vertical else offset
+            candidate = self._translate_with_fill(
+                grid,
+                row_shift=row_shift,
+                col_shift=col_shift,
+                fill_value=wall_id,
+            )
+            score = self._boundary_alignment_score(candidate)
+
+            if (score > best_score) or (score == best_score and abs(offset) < abs(best_offset)):
+                best_grid = candidate
+                best_score = score
+                best_offset = offset
+
+        if best_offset != 0:
+            logger.debug(
+                "Boundary alignment corrected via %s shift offset=%d (score %.1f -> %.1f)",
+                direction,
+                best_offset,
+                self._boundary_alignment_score(grid),
+                best_score,
+            )
+        return best_grid
+
+    def _boundary_alignment_score(self, grid: np.ndarray) -> float:
+        """Score how well room boundaries are sealed by walls."""
+        wall_id = int(TileID.WALL)
+        floor_id = int(TileID.FLOOR)
+
+        top = grid[0, :]
+        bottom = grid[-1, :]
+        left = grid[:, 0]
+        right = grid[:, -1]
+
+        wall_hits = (
+            np.sum(top == wall_id) +
+            np.sum(bottom == wall_id) +
+            np.sum(left == wall_id) +
+            np.sum(right == wall_id)
+        )
+        floor_penalty = (
+            np.sum(top == floor_id) +
+            np.sum(bottom == floor_id) +
+            np.sum(left == floor_id) +
+            np.sum(right == floor_id)
+        )
+
+        return float(wall_hits - 0.5 * floor_penalty)
+
+    def _translate_with_fill(
+        self,
+        grid: np.ndarray,
+        row_shift: int,
+        col_shift: int,
+        fill_value: int,
+    ) -> np.ndarray:
+        """
+        Translate a 2D grid without wrap-around; uncovered cells are filled.
+        """
+        out = np.full_like(grid, fill_value)
+        rows, cols = grid.shape
+
+        src_r0 = max(0, -row_shift)
+        src_r1 = rows - max(0, row_shift)
+        src_c0 = max(0, -col_shift)
+        src_c1 = cols - max(0, col_shift)
+
+        if src_r0 >= src_r1 or src_c0 >= src_c1:
+            return out
+
+        dst_r0 = max(0, row_shift)
+        dst_r1 = dst_r0 + (src_r1 - src_r0)
+        dst_c0 = max(0, col_shift)
+        dst_c1 = dst_c0 + (src_c1 - src_c0)
+
+        out[dst_r0:dst_r1, dst_c0:dst_c1] = grid[src_r0:src_r1, src_c0:src_c1]
+        return out
 
 
 # ============================================================================
@@ -851,6 +1133,124 @@ class MLFeatureExtractor:
     - Node feature vectors (multi-hot encoding)
     - P-Matrix (dependency graph encoding)
     """
+
+    def extract(self, data: Any) -> Dict[str, float]:
+        """
+        Extract lightweight summary features from either grid or graph input.
+
+        - ``np.ndarray`` -> room/grid morphology features
+        - ``nx.Graph`` -> topology summary features
+        """
+        if isinstance(data, np.ndarray):
+            return self._extract_grid_features(data)
+        if isinstance(data, (nx.Graph, nx.DiGraph)):
+            return self._extract_graph_features(data)
+        raise TypeError(f"Unsupported data type for MLFeatureExtractor.extract: {type(data).__name__}")
+
+    def _extract_grid_features(self, grid: np.ndarray) -> Dict[str, float]:
+        """Compute basic structural features from a semantic room grid."""
+        if grid.ndim != 2 or grid.size == 0:
+            return {
+                'floor_ratio': 0.0,
+                'wall_ratio': 0.0,
+                'enemy_ratio': 0.0,
+                'traversable_ratio': 0.0,
+                'open_region_ratio': 0.0,
+            }
+
+        g = np.asarray(grid)
+        total = float(g.size)
+
+        floor_ratio = float(np.sum(g == int(TileID.FLOOR)) / total)
+        wall_ratio = float(np.sum(g == int(TileID.WALL)) / total)
+        enemy_ratio = float(np.sum(g == int(TileID.ENEMY)) / total)
+
+        traversable_mask = np.isin(
+            g,
+            np.array([
+                int(TileID.FLOOR),
+                int(TileID.DOOR_OPEN),
+                int(TileID.STAIR),
+                int(TileID.KEY_SMALL),
+                int(TileID.KEY_BOSS),
+                int(TileID.KEY_ITEM),
+                int(TileID.ITEM_MINOR),
+                int(TileID.TRIFORCE),
+            ], dtype=g.dtype),
+        )
+        traversable_ratio = float(np.sum(traversable_mask) / total)
+        open_region_ratio = float(self._largest_component_ratio(traversable_mask))
+
+        return {
+            'floor_ratio': floor_ratio,
+            'wall_ratio': wall_ratio,
+            'enemy_ratio': enemy_ratio,
+            'traversable_ratio': traversable_ratio,
+            'open_region_ratio': open_region_ratio,
+        }
+
+    def _largest_component_ratio(self, mask: np.ndarray) -> float:
+        """Return largest 4-connected component size / total mask size."""
+        h, w = mask.shape
+        visited = np.zeros((h, w), dtype=bool)
+        largest = 0
+        total_true = int(np.sum(mask))
+        if total_true == 0:
+            return 0.0
+
+        for r in range(h):
+            for c in range(w):
+                if not mask[r, c] or visited[r, c]:
+                    continue
+
+                stack = [(r, c)]
+                visited[r, c] = True
+                size = 0
+                while stack:
+                    cr, cc = stack.pop()
+                    size += 1
+                    for nr, nc in ((cr - 1, cc), (cr + 1, cc), (cr, cc - 1), (cr, cc + 1)):
+                        if 0 <= nr < h and 0 <= nc < w and mask[nr, nc] and not visited[nr, nc]:
+                            visited[nr, nc] = True
+                            stack.append((nr, nc))
+                largest = max(largest, size)
+
+        return largest / max(1, total_true)
+
+    def _extract_graph_features(self, graph: nx.Graph) -> Dict[str, float]:
+        """Compute simple topology descriptors for model features."""
+        n = graph.number_of_nodes()
+        e = graph.number_of_edges()
+        if n == 0:
+            return {
+                'num_nodes': 0.0,
+                'num_edges': 0.0,
+                'density': 0.0,
+                'avg_degree': 0.0,
+                'key_node_ratio': 0.0,
+                'locked_edge_ratio': 0.0,
+            }
+
+        key_nodes = 0
+        for _, data in graph.nodes(data=True):
+            label = str(data.get('label', ''))
+            if ('k' in [p.strip() for p in label.split(',') if p]) or data.get('has_key', False):
+                key_nodes += 1
+
+        locked_edges = 0
+        for _, _, data in graph.edges(data=True):
+            edge_type = data.get('edge_type', data.get('label', ''))
+            if edge_type in ('key_locked', 'boss_locked', 'k', 'K'):
+                locked_edges += 1
+
+        return {
+            'num_nodes': float(n),
+            'num_edges': float(e),
+            'density': float(nx.density(graph)),
+            'avg_degree': float(sum(dict(graph.degree()).values()) / max(1, n)),
+            'key_node_ratio': float(key_nodes / max(1, n)),
+            'locked_edge_ratio': float(locked_edges / max(1, e)),
+        }
     
     @staticmethod
     def compute_tpe(

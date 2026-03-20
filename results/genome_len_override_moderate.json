@@ -1,0 +1,5 @@
+{
+  "genome_len_floor_ratio": 0.74,
+  "genome_len_expand_ratio": 0.90,
+  "genome_len_hard_cap_ratio": 1.20
+}

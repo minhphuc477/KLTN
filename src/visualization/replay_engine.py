@@ -37,14 +37,11 @@ Usage:
     engine = DungeonReplayEngine(dungeon_grid, solution_path)
     engine.run()  # Blocking - opens Pygame window
 
-Author: KLTN Visualization Module
 """
 
 from __future__ import annotations
 
-import sys
 import time
-import math
 import logging
 from typing import List, Tuple, Optional, Dict, Any
 from dataclasses import dataclass
@@ -63,8 +60,14 @@ except ImportError:
     logger.error("Pygame not available - install with: pip install pygame")
 
 # Local imports
-from src.visualization.asset_manager import AssetManager, SEMANTIC_COLORS, SEMANTIC_NAMES
-from src.visualization.camera import Camera, create_camera_for_map
+from src.core.definitions import SEMANTIC_PALETTE
+from src.visualization.asset_manager import AssetManager, SEMANTIC_COLORS
+from src.visualization.camera import create_camera_for_map
+
+try:
+    from src.utils.playtest_telemetry import PlaytestTelemetryCollector
+except Exception:
+    PlaytestTelemetryCollector = None  # type: ignore[assignment]
 
 
 # ==========================================
@@ -82,6 +85,9 @@ class ReplayConfig:
     
     # Tile rendering
     tile_size: int = 32
+    min_tile_size: int = 16
+    max_tile_size: int = 64
+    zoom_step: int = 2
     
     # Animation
     agent_speed: float = 8.0  # Lerp speed for smooth movement
@@ -139,7 +145,9 @@ class DungeonReplayEngine:
         dungeon_grid: np.ndarray,
         solution_path: Optional[List[Tuple[int, int]]] = None,
         config: Optional[ReplayConfig] = None,
-        solver_result: Optional[Dict[str, Any]] = None
+        solver_result: Optional[Dict[str, Any]] = None,
+        telemetry_collector: Optional["PlaytestTelemetryCollector"] = None,
+        telemetry_session_id: Optional[str] = None,
     ):
         """
         Initialize the replay engine.
@@ -154,12 +162,14 @@ class DungeonReplayEngine:
             raise RuntimeError("Pygame is required. Install with: pip install pygame")
         
         self.grid = dungeon_grid
-        self.path = solution_path or []
         self.config = config or ReplayConfig()
         self.solver_result = solver_result or {}
+        self.telemetry_collector = telemetry_collector
+        self.telemetry_session_id = telemetry_session_id or f"replay_{int(time.time())}"
         
         # Grid dimensions
         self.grid_rows, self.grid_cols = dungeon_grid.shape
+        self.path = self._sanitize_path(solution_path or [])
         
         # Initialize Pygame
         pygame.init()
@@ -212,7 +222,8 @@ class DungeonReplayEngine:
             self._agent_target_x = self._agent_x
         else:
             # Find START tile
-            start_pos = self._find_tile(21)  # START ID
+            start_tile_id = int(SEMANTIC_PALETTE.get('START', 21))
+            start_pos = self._find_tile(start_tile_id)
             if start_pos:
                 self._agent_y = float(start_pos[0])
                 self._agent_x = float(start_pos[1])
@@ -226,16 +237,89 @@ class DungeonReplayEngine:
         self.has_bomb = False
         self.has_boss_key = False
         self.steps_taken = 0
+        # Track opened locked doors to avoid double-consuming keys on revisits.
+        self._opened_locked_tiles: set = set()
         
         # Visited tiles (for fog of war)
         self.visited: set = set()
-        if self.path:
-            self.visited.add(self.path[0])
+        self._recompute_progress_state()
         
         # Performance tracking
         self.fps_history: List[float] = []
+        # Help overlay toggle
+        self.show_help: bool = False
         
         logger.info(f"ReplayEngine initialized: {self.grid_rows}x{self.grid_cols} map, {len(self.path)} step path")
+        self._start_playtest_telemetry()
+
+    def _start_playtest_telemetry(self) -> None:
+        collector = self.telemetry_collector
+        if collector is None:
+            return
+        context = {
+            "grid_rows": int(self.grid_rows),
+            "grid_cols": int(self.grid_cols),
+            "path_length": int(len(self.path)),
+            "solver_result_keys": sorted(str(k) for k in self.solver_result.keys()),
+        }
+        try:
+            if getattr(collector, "current_session", None) is None:
+                collector.start_session(self.telemetry_session_id, context=context)
+            collector.log_event(
+                "replay_initialized",
+                step_index=int(self.current_step),
+                position=self.path[self.current_step] if self.path else None,
+                inventory=self._inventory_snapshot(),
+                payload={"state": self.state.name},
+            )
+        except Exception as e:
+            logger.debug("Playtest telemetry start failed: %s", e)
+
+    def _inventory_snapshot(self) -> Dict[str, Any]:
+        return {
+            "keys_held": int(self.keys_held),
+            "keys_collected": int(self.keys_collected),
+            "keys_used": int(self.keys_used),
+            "has_bomb": bool(self.has_bomb),
+            "has_boss_key": bool(self.has_boss_key),
+        }
+
+    def _log_playtest_event(
+        self,
+        event_type: str,
+        *,
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        collector = self.telemetry_collector
+        if collector is None:
+            return
+        pos = self.path[self.current_step] if self.path else None
+        try:
+            collector.log_event(
+                event_type,
+                step_index=int(self.current_step),
+                position=pos,
+                inventory=self._inventory_snapshot(),
+                payload=payload or {},
+            )
+        except Exception as e:
+            logger.debug("Playtest telemetry event failed: %s", e)
+
+    def _finish_playtest_telemetry(self, status: str = "completed") -> None:
+        collector = self.telemetry_collector
+        if collector is None:
+            return
+        summary = {
+            "status": str(status),
+            "steps_taken": int(self.steps_taken),
+            "path_length": int(len(self.path)),
+            "finished": bool(self.state == ReplayState.FINISHED),
+            "mean_fps": float(np.mean(self.fps_history)) if self.fps_history else 0.0,
+        }
+        try:
+            collector.finish_session(status=status, summary=summary)
+        except Exception as e:
+            logger.debug("Playtest telemetry finish failed: %s", e)
     
     def _find_tile(self, tile_id: int) -> Optional[Tuple[int, int]]:
         """Find the first occurrence of a tile ID."""
@@ -243,6 +327,112 @@ class DungeonReplayEngine:
         if len(positions[0]) > 0:
             return (int(positions[0][0]), int(positions[1][0]))
         return None
+
+    def _sanitize_path(self, raw_path: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
+        """Drop malformed/out-of-bounds path steps so rendering never crashes."""
+        sanitized: List[Tuple[int, int]] = []
+        dropped = 0
+        for step in raw_path:
+            if not isinstance(step, (tuple, list)) or len(step) != 2:
+                dropped += 1
+                continue
+            row, col = int(step[0]), int(step[1])
+            if 0 <= row < self.grid_rows and 0 <= col < self.grid_cols:
+                sanitized.append((row, col))
+            else:
+                dropped += 1
+
+        if dropped:
+            logger.warning("Replay path sanitized: dropped %d invalid step(s)", dropped)
+
+        return sanitized
+
+    def _set_tile_size(self, tile_size: int) -> None:
+        """Apply a new tile size and keep camera centered on the agent."""
+        clamped_size = max(self.config.min_tile_size, min(self.config.max_tile_size, int(tile_size)))
+        if clamped_size == self.config.tile_size:
+            return
+
+        self.config.tile_size = clamped_size
+        self.assets.set_tile_size(clamped_size)
+        self.camera.tile_size = clamped_size
+        self.camera.set_world_size(
+            self.grid_cols * clamped_size,
+            self.grid_rows * clamped_size,
+        )
+        self.camera.set_target(
+            self._agent_x * clamped_size + clamped_size / 2,
+            self._agent_y * clamped_size + clamped_size / 2,
+            immediate=True,
+        )
+        self.camera.update(0.0)
+        logger.info("Replay zoom changed: tile_size=%d", clamped_size)
+
+    def _apply_tile_effects(self, tile_id: int, pos: Optional[Tuple[int, int]] = None) -> None:
+        """Apply inventory-side effects from entering a tile."""
+        key_small_id = int(SEMANTIC_PALETTE.get('KEY_SMALL', 30))
+        key_boss_id = int(SEMANTIC_PALETTE.get('KEY_BOSS', 31))
+        key_item_id = int(SEMANTIC_PALETTE.get('KEY_ITEM', 32))
+        door_locked_id = int(SEMANTIC_PALETTE.get('DOOR_LOCKED', 11))
+
+        if tile_id == key_small_id:
+            self.keys_held += 1
+            self.keys_collected += 1
+        elif tile_id == key_boss_id:
+            self.has_boss_key = True
+        elif tile_id == key_item_id:
+            self.has_bomb = True
+
+        # Simplified door unlocking: consume one key when first entering a locked door tile.
+        if (
+            tile_id == door_locked_id
+            and self.keys_held > 0
+            and pos is not None
+            and pos not in self._opened_locked_tiles
+        ):
+            self._opened_locked_tiles.add(pos)
+            self.keys_held -= 1
+            self.keys_used += 1
+
+    def _recompute_progress_state(self) -> None:
+        """Recompute inventory/visited state from path prefix [0..current_step]."""
+        self.keys_held = 0
+        self.keys_collected = 0
+        self.keys_used = 0
+        self.has_bomb = False
+        self.has_boss_key = False
+        self._opened_locked_tiles.clear()
+        self.visited.clear()
+
+        if not self.path:
+            self.current_step = 0
+            self.steps_taken = 0
+            return
+
+        self.current_step = max(0, min(self.current_step, len(self.path) - 1))
+        self.steps_taken = self.current_step
+        self.visited.add(self.path[0])
+
+        for idx in range(1, self.current_step + 1):
+            row, col = self.path[idx]
+            pos = (row, col)
+            self.visited.add(pos)
+            self._apply_tile_effects(int(self.grid[row, col]), pos=pos)
+
+    def _jump_to_step(self, step_index: int) -> None:
+        """Snap replay and derived state to a specific step index."""
+        if not self.path:
+            self.current_step = 0
+            self._recompute_progress_state()
+            return
+
+        self.current_step = max(0, min(step_index, len(self.path) - 1))
+        row, col = self.path[self.current_step]
+        self._agent_y = float(row)
+        self._agent_x = float(col)
+        self._agent_target_y = self._agent_y
+        self._agent_target_x = self._agent_x
+        self._recompute_progress_state()
     
     def run(self) -> None:
         """
@@ -253,50 +443,56 @@ class DungeonReplayEngine:
         """
         running = True
         last_time = time.time()
-        
-        while running:
-            # Delta time
-            current_time = time.time()
-            dt = current_time - last_time
-            last_time = current_time
-            
-            # Handle events
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    running = False
+        quit_reason = "completed"
+
+        try:
+            while running:
+                # Delta time
+                current_time = time.time()
+                dt = current_time - last_time
+                last_time = current_time
                 
-                elif event.type == pygame.VIDEORESIZE:
-                    self._handle_resize(event.w, event.h)
+                # Handle events
+                for event in pygame.event.get():
+                    if event.type == pygame.QUIT:
+                        quit_reason = "window_closed"
+                        running = False
+                    
+                    elif event.type == pygame.VIDEORESIZE:
+                        self._handle_resize(event.w, event.h)
+                    
+                    elif event.type == pygame.KEYDOWN:
+                        running = self._handle_key(event.key)
+                        if not running:
+                            quit_reason = "user_exit"
+                    
+                    elif event.type == pygame.MOUSEWHEEL:
+                        self._handle_scroll(event.y)
                 
-                elif event.type == pygame.KEYDOWN:
-                    running = self._handle_key(event.key)
+                # Update
+                self._update(dt)
                 
-                elif event.type == pygame.MOUSEWHEEL:
-                    self._handle_scroll(event.y)
-            
-            # Update
-            self._update(dt)
-            
-            # Render
-            self._render()
-            
-            # Cap framerate
-            self.clock.tick(60)
-            
-            # Track FPS
-            fps = self.clock.get_fps()
-            self.fps_history.append(fps)
-            if len(self.fps_history) > 60:
-                self.fps_history.pop(0)
-        
-        pygame.quit()
+                # Render
+                self._render()
+                
+                # Cap framerate
+                self.clock.tick(60)
+                
+                # Track FPS
+                fps = self.clock.get_fps()
+                self.fps_history.append(fps)
+                if len(self.fps_history) > 60:
+                    self.fps_history.pop(0)
+        finally:
+            self._finish_playtest_telemetry(status=quit_reason)
+            pygame.quit()
     
     def _handle_resize(self, width: int, height: int) -> None:
         """Handle window resize."""
         self.screen = pygame.display.set_mode((width, height), pygame.RESIZABLE)
         self.camera.set_viewport_size(
-            width - self.config.hud_width,
-            height - self.config.hud_height
+            max(1, width - (self.config.hud_width if self.config.show_hud else 0)),
+            max(1, height - self.config.hud_height)
         )
     
     def _handle_key(self, key: int) -> bool:
@@ -313,16 +509,20 @@ class DungeonReplayEngine:
             # Toggle play/pause
             if self.state == ReplayState.IDLE or self.state == ReplayState.PAUSED:
                 self.state = ReplayState.PLAYING
+                self._log_playtest_event("replay_play")
             elif self.state == ReplayState.PLAYING:
                 self.state = ReplayState.PAUSED
+                self._log_playtest_event("replay_pause")
             elif self.state == ReplayState.FINISHED:
                 # Restart
                 self._reset_replay()
                 self.state = ReplayState.PLAYING
+                self._log_playtest_event("replay_restart")
         
         elif key == pygame.K_r:
             # Reset
             self._reset_replay()
+            self._log_playtest_event("replay_reset")
         
         elif key == pygame.K_RIGHT:
             # Step forward
@@ -332,12 +532,7 @@ class DungeonReplayEngine:
         elif key == pygame.K_LEFT:
             # Step backward
             if self.current_step > 0:
-                self.current_step -= 1
-                pos = self.path[self.current_step]
-                self._agent_y = float(pos[0])
-                self._agent_x = float(pos[1])
-                self._agent_target_y = self._agent_y
-                self._agent_target_x = self._agent_x
+                self._jump_to_step(self.current_step - 1)
         
         elif key in (pygame.K_PLUS, pygame.K_EQUALS):
             # Increase speed
@@ -354,6 +549,10 @@ class DungeonReplayEngine:
         elif key == pygame.K_h:
             # Toggle HUD
             self.config.show_hud = not self.config.show_hud
+            self.camera.set_viewport_size(
+                max(1, self.screen.get_width() - (self.config.hud_width if self.config.show_hud else 0)),
+                max(1, self.screen.get_height() - self.config.hud_height),
+            )
         
         elif key == pygame.K_p:
             # Toggle path overlay
@@ -372,39 +571,27 @@ class DungeonReplayEngine:
             self.config.fog_of_war = not self.config.fog_of_war
         
         elif key == pygame.K_F1:
-            # Show help (TODO: implement help overlay)
-            pass
+            # Toggle help overlay
+            self.show_help = not getattr(self, 'show_help', False)
+            logger.debug(f"Help overlay toggled: {self.show_help}")
         
         return True
     
     def _handle_scroll(self, direction: int) -> None:
         """Handle mouse scroll for zoom."""
-        # For now, just log - could implement zoom here
-        pass
+        if direction == 0:
+            return
+        delta = self.config.zoom_step if direction > 0 else -self.config.zoom_step
+        self._set_tile_size(self.config.tile_size + delta)
     
     def _reset_replay(self) -> None:
         """Reset replay to beginning."""
-        self.current_step = 0
         self.step_timer = 0.0
         self.state = ReplayState.IDLE
-        
-        # Reset inventory
-        self.keys_held = 0
-        self.keys_collected = 0
-        self.keys_used = 0
-        self.has_bomb = False
-        self.has_boss_key = False
-        self.steps_taken = 0
-        
-        # Reset visited
-        self.visited.clear()
         if self.path:
-            self.visited.add(self.path[0])
-            start = self.path[0]
-            self._agent_y = float(start[0])
-            self._agent_x = float(start[1])
-            self._agent_target_y = self._agent_y
-            self._agent_target_x = self._agent_x
+            self._jump_to_step(0)
+        else:
+            self._recompute_progress_state()
     
     def _update(self, dt: float) -> None:
         """Update game state."""
@@ -446,6 +633,7 @@ class DungeonReplayEngine:
                     self._advance_step()
                 else:
                     self.state = ReplayState.FINISHED
+                    self._log_playtest_event("replay_finished")
     
     def _advance_step(self) -> None:
         """Advance to the next step in the path."""
@@ -453,7 +641,7 @@ class DungeonReplayEngine:
             return
         
         self.current_step += 1
-        self.steps_taken += 1
+        self.steps_taken = self.current_step
         
         pos = self.path[self.current_step]
         self._agent_target_y = float(pos[0])
@@ -461,22 +649,8 @@ class DungeonReplayEngine:
         
         # Track visited
         self.visited.add(pos)
-        
-        # Check for item pickups
-        tile = self.grid[pos[0], pos[1]]
-        if tile == 30:  # KEY_SMALL
-            self.keys_held += 1
-            self.keys_collected += 1
-        elif tile == 31:  # KEY_BOSS
-            self.has_boss_key = True
-        elif tile == 32:  # KEY_ITEM (gives bomb ability)
-            self.has_bomb = True
-        
-        # Check for door unlocking (simplified)
-        if tile == 11:  # DOOR_LOCKED
-            if self.keys_held > 0:
-                self.keys_held -= 1
-                self.keys_used += 1
+        self._apply_tile_effects(int(self.grid[pos[0], pos[1]]), pos=pos)
+        self._log_playtest_event("replay_step")
     
     def _render(self) -> None:
         """Render the current frame."""
@@ -484,8 +658,8 @@ class DungeonReplayEngine:
         self.screen.fill((25, 27, 35))
         
         # Calculate viewport area
-        viewport_w = self.screen.get_width() - (self.config.hud_width if self.config.show_hud else 0)
-        viewport_h = self.screen.get_height() - self.config.hud_height
+        viewport_w = max(1, self.screen.get_width() - (self.config.hud_width if self.config.show_hud else 0))
+        viewport_h = max(1, self.screen.get_height() - self.config.hud_height)
         
         # Create map surface
         map_surface = Surface((viewport_w, viewport_h))
@@ -542,6 +716,10 @@ class DungeonReplayEngine:
         # Render minimap
         if self.config.show_minimap:
             self._render_minimap()
+        
+        # Render help overlay if requested
+        if getattr(self, 'show_help', False):
+            self._render_help_overlay()
         
         pygame.display.flip()
     
@@ -673,7 +851,8 @@ class DungeonReplayEngine:
         y += 22
         
         # Step counter
-        step_text = f"Step: {self.current_step + 1}/{len(self.path)}"
+        current_step_display = self.current_step + 1 if self.path else 0
+        step_text = f"Step: {current_step_display}/{len(self.path)}"
         step_surf = self.font_small.render(step_text, True, (200, 205, 215))
         hud_surface.blit(step_surf, (15, y))
         y += 18
@@ -707,6 +886,7 @@ class DungeonReplayEngine:
             "← →    Step",
             "R      Reset",
             "+/-    Speed",
+            "Wheel  Zoom",
             "H      Toggle HUD",
             "P      Toggle Path",
             "M      Minimap",
@@ -724,9 +904,9 @@ class DungeonReplayEngine:
     
     def _render_status_bar(self) -> None:
         """Render the bottom status bar."""
-        bar_height = self.config.hud_height
+        bar_height = max(1, self.config.hud_height)
         bar_y = self.screen.get_height() - bar_height
-        bar_width = self.screen.get_width() - (self.config.hud_width if self.config.show_hud else 0)
+        bar_width = max(1, self.screen.get_width() - (self.config.hud_width if self.config.show_hud else 0))
         
         # Background
         bar_surface = Surface((bar_width, bar_height), pygame.SRCALPHA)
@@ -819,6 +999,49 @@ class DungeonReplayEngine:
         pygame.draw.rect(mm_surface, (70, 75, 90), mm_surface.get_rect(), 2, border_radius=8)
         
         self.screen.blit(mm_surface, (mm_x, mm_y))
+        
+    def _render_help_overlay(self) -> None:
+        """Render a full-screen help overlay (shown with F1)."""
+        try:
+            width, height = self.screen.get_size()
+            overlay = Surface((width, height), pygame.SRCALPHA)
+            # Semi-transparent dark background
+            overlay.fill((10, 12, 16, 200))
+
+            # Title
+            title = self.font_large.render("Help — Controls & Info", True, (200, 230, 255))
+            overlay.blit(title, (30, 30))
+
+            lines = [
+                "SPACE — Play / Pause",
+                "← / → — Step backward / forward",
+                "R — Reset replay",
+                "+ / - — Increase / decrease speed",
+                "H — Toggle HUD sidebar",
+                "P — Toggle path overlay",
+                "M — Toggle minimap",
+                "G — Toggle grid overlay",
+                "F — Toggle fog of war",
+                "F1 — Toggle this help",
+                "ESC — Quit",
+            ]
+
+            y = 70
+            for line in lines:
+                txt = self.font_medium.render(line, True, (180, 200, 220))
+                overlay.blit(txt, (40, y))
+                y += 22
+
+            # Footer: short status
+            status = f"Map: {self.grid_cols}×{self.grid_rows}    Steps: {len(self.path)}    Speed: {self.speed_multiplier}x"
+            footer = self.font_small.render(status, True, (160, 170, 180))
+            overlay.blit(footer, (40, height - 40))
+
+            # Blit overlay on screen
+            self.screen.blit(overlay, (0, 0))
+        except Exception:
+            # Never crash the renderer for the help overlay
+            logger.exception("Failed to render help overlay")
 
 
 # ==========================================
@@ -828,7 +1051,9 @@ class DungeonReplayEngine:
 def replay_solution(
     dungeon_grid: np.ndarray,
     solution_path: List[Tuple[int, int]],
-    config: Optional[ReplayConfig] = None
+    config: Optional[ReplayConfig] = None,
+    telemetry_collector: Optional["PlaytestTelemetryCollector"] = None,
+    telemetry_session_id: Optional[str] = None,
 ) -> None:
     """
     Convenience function to replay a solution.
@@ -837,6 +1062,14 @@ def replay_solution(
         dungeon_grid: 2D numpy array of semantic tile IDs
         solution_path: List of (row, col) positions
         config: Optional configuration
+        telemetry_collector: Optional playtest telemetry collector
+        telemetry_session_id: Optional explicit telemetry session id
     """
-    engine = DungeonReplayEngine(dungeon_grid, solution_path, config)
+    engine = DungeonReplayEngine(
+        dungeon_grid,
+        solution_path,
+        config,
+        telemetry_collector=telemetry_collector,
+        telemetry_session_id=telemetry_session_id,
+    )
     engine.run()

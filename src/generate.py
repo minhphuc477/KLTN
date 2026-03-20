@@ -132,17 +132,28 @@ class DungeonValidator:
         goal: Tuple[int, int],
         threshold: float = 0.5,
     ) -> bool:
-        \"\"\"Check solvability using Block V LogicNet.\"\"\"\n        if dungeon_map.is_cuda:
+        """Check solvability using Block V LogicNet."""
+        # Accept tensor-like inputs for robustness in caller code paths.
+        if not isinstance(dungeon_map, torch.Tensor):
+            dungeon_map = torch.as_tensor(dungeon_map, dtype=torch.float32)
+
+        if dungeon_map.is_cuda:
             dungeon_map = dungeon_map.cpu()
-        
+
         if dungeon_map.dim() == 2:
             dungeon_map = dungeon_map.unsqueeze(0).unsqueeze(0)
         elif dungeon_map.dim() == 3:
             dungeon_map = dungeon_map.unsqueeze(0)
+        elif dungeon_map.dim() != 4:
+            raise ValueError(
+                f"Expected dungeon_map to have 2, 3, or 4 dimensions, got {dungeon_map.dim()}"
+            )
+
+        dungeon_map = dungeon_map.float()
         
         with torch.no_grad():
             # Block V LogicNet: forward(z, graph_data) -> (loss, info)
-            loss, info = self.logic_net(dungeon_map)
+            loss, _ = self.logic_net(dungeon_map)
             # Lower loss = more solvable
             solvability = 1.0 - loss.item()
         
