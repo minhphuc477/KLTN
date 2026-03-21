@@ -103,6 +103,7 @@ from src.gui.app.entrypoint_orchestration import (
     load_maps_from_adapter as _load_maps_from_adapter_orchestration_helper,
     run_main_entry as _run_main_entry_orchestration_helper,
 )
+from src.gui.app.runtime_loop_orchestration import run as _run_orchestration_helper
 
 # Configure logging
 logging.basicConfig(
@@ -1586,10 +1587,12 @@ class ZeldaGUI:
         default max_frames is used to avoid infinite loops. Callers can override
         with the optional max_frames parameter.
         """
-        max_frames = resolve_test_mode_max_frames(max_frames, os.environ)
-        _run_main_loop_helper(
+        _run_orchestration_helper(
             gui=self,
             max_frames=max_frames,
+            env=os.environ,
+            resolve_test_mode_max_frames_fn=resolve_test_mode_max_frames,
+            run_main_loop_helper=_run_main_loop_helper,
             pygame=pygame,
             os_module=os,
             logger=logger,
