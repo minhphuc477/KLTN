@@ -164,6 +164,22 @@ from src.gui.control_panel.interactions import (
 from src.gui.control_panel.click_dispatch import (
     handle_control_panel_click as _handle_control_panel_click_dispatch_helper,
 )
+from src.gui.control_panel.click_render_orchestration import (
+    apply_algorithm_dropdown_update as _apply_algorithm_dropdown_update_orchestration_helper,
+    apply_checkbox_widget_update as _apply_checkbox_widget_update_orchestration_helper,
+    apply_control_panel_widget_updates as _apply_control_panel_widget_updates_orchestration_helper,
+    apply_dropdown_widget_update as _apply_dropdown_widget_update_orchestration_helper,
+    control_panel_hit_rect as _control_panel_hit_rect_orchestration_helper,
+    draw_tooltip as _draw_tooltip_orchestration_helper,
+    handle_control_panel_click as _handle_control_panel_click_orchestration_helper,
+    handle_outside_control_panel_click as _handle_outside_control_panel_click_orchestration_helper,
+    refresh_control_panel_layout_if_needed as _refresh_control_panel_layout_if_needed_orchestration_helper,
+    render_control_panel as _render_control_panel_orchestration_helper,
+    render_tooltips as _render_tooltips_orchestration_helper,
+    retry_control_panel_click_after_auto_scroll as _retry_control_panel_click_after_auto_scroll_orchestration_helper,
+    should_swallow_control_panel_click as _should_swallow_control_panel_click_orchestration_helper,
+    translate_control_panel_click as _translate_control_panel_click_orchestration_helper,
+)
 from src.gui.control_panel.updates import (
     apply_algorithm_dropdown_update as _apply_algorithm_dropdown_update_helper,
     apply_checkbox_widget_update as _apply_checkbox_widget_update_helper,
@@ -241,10 +257,21 @@ from src.gui.runtime.route_io import (
     export_route as _export_route_helper,
     load_route as _load_route_helper,
 )
+from src.gui.runtime.route_orchestration import (
+    export_route as _export_route_orchestration_helper,
+    load_route as _load_route_orchestration_helper,
+)
 from src.gui.gameplay.path_controls import (
     reset_map as _reset_map_helper,
     show_path_preview as _show_path_preview_helper,
     clear_path as _clear_path_helper,
+)
+from src.gui.gameplay.control_actions_orchestration import (
+    clear_path as _clear_path_orchestration_helper,
+    reset_map as _reset_map_orchestration_helper,
+    run_ai_dungeon_generation_worker as _run_ai_dungeon_generation_worker_orchestration_helper,
+    show_path_preview as _show_path_preview_orchestration_helper,
+    start_ai_dungeon_generation as _start_ai_dungeon_generation_orchestration_helper,
 )
 from src.gui.gameplay.dungeon_generation_controls import (
     generate_dungeon as _generate_dungeon_flow_helper,
@@ -556,6 +583,11 @@ from src.gui.map.loading import (
     load_visual_assets as _load_visual_assets_helper,
     load_visual_map as _load_visual_map_helper,
     place_items_from_graph as _place_items_from_graph_helper,
+)
+from src.gui.map.asset_orchestration import (
+    load_visual_assets as _load_visual_assets_orchestration_helper,
+    load_visual_map as _load_visual_map_orchestration_helper,
+    place_items_from_graph as _place_items_from_graph_orchestration_helper,
 )
 from src.gui.runtime.temp_file_tools import (
     delete_files as _delete_files_helper,
@@ -1074,113 +1106,136 @@ class ZeldaGUI:
     
     def _render_control_panel(self, surface):
         """Render the control panel with all GUI widgets and metrics."""
-        _render_control_panel_helper(
-            self,
-            surface,
+        _render_control_panel_orchestration_helper(
+            gui=self,
+            surface=surface,
             pygame=pygame,
             logger=logger,
             dropdown_widget_cls=DropdownWidget,
+            render_control_panel_helper=_render_control_panel_helper,
         )
+
     def _render_tooltips(self, surface, mouse_pos):
         """Render tooltips for widgets under mouse cursor."""
-        _render_tooltips_helper(self, surface, mouse_pos, ButtonWidget, pygame)
+        _render_tooltips_orchestration_helper(
+            gui=self,
+            surface=surface,
+            mouse_pos=mouse_pos,
+            button_widget_cls=ButtonWidget,
+            pygame=pygame,
+            render_tooltips_helper=_render_tooltips_helper,
+        )
     
     def _draw_tooltip(self, surface, pos, text):
         """Draw a tooltip box at the specified position."""
-        _draw_tooltip_helper(self, surface, pos, text, pygame)
+        _draw_tooltip_orchestration_helper(
+            gui=self,
+            surface=surface,
+            pos=pos,
+            text=text,
+            pygame=pygame,
+            draw_tooltip_helper=_draw_tooltip_helper,
+        )
     
     def _handle_control_panel_click(self, pos, button, event_type='down'):
         """Handle mouse clicks on control panel widgets."""
-        return _handle_control_panel_click_dispatch_helper(
+        return _handle_control_panel_click_orchestration_helper(
             gui=self,
             pos=pos,
             button=button,
             event_type=event_type,
             logger=logger,
             debug_input_active=DEBUG_INPUT_ACTIVE,
+            dispatch_helper=_handle_control_panel_click_dispatch_helper,
         )
 
     def _control_panel_hit_rect(self):
-        return _control_panel_hit_rect_helper(
-            panel_rect=getattr(self, 'control_panel_rect', None),
-            debug_control_panel=getattr(self, 'debug_control_panel', False),
-            debug_panel_click_padding=getattr(self, 'debug_panel_click_padding', 0),
-            rect_factory=pygame.Rect,
+        return _control_panel_hit_rect_orchestration_helper(
+            gui=self,
+            pygame=pygame,
+            control_panel_hit_rect_helper=_control_panel_hit_rect_helper,
         )
 
     def _should_swallow_control_panel_click(self, panel_hit_rect, pos) -> bool:
-        return _should_swallow_control_panel_click_helper(
-            dragging=getattr(self, 'control_panel_scroll_dragging', False),
-            ignore_click_until=getattr(self, 'control_panel_ignore_click_until', 0.0),
+        return _should_swallow_control_panel_click_orchestration_helper(
+            gui=self,
             panel_hit_rect=panel_hit_rect,
             pos=pos,
             logger=logger,
+            should_swallow_control_panel_click_helper=_should_swallow_control_panel_click_helper,
         )
 
     def _translate_control_panel_click(self, pos, panel_hit_rect):
-        return _translate_control_panel_click_helper(
+        return _translate_control_panel_click_orchestration_helper(
+            gui=self,
             pos=pos,
             panel_hit_rect=panel_hit_rect,
-            panel_rect=getattr(self, 'control_panel_rect', None),
-            can_scroll=getattr(self, 'control_panel_can_scroll', False),
-            control_panel_scroll=getattr(self, 'control_panel_scroll', 0),
+            translate_control_panel_click_helper=_translate_control_panel_click_helper,
         )
 
     def _handle_outside_control_panel_click(self, panel_hit_rect, pos, button):
-        return _handle_outside_control_panel_click_helper(
+        return _handle_outside_control_panel_click_orchestration_helper(
+            gui=self,
             panel_hit_rect=panel_hit_rect,
             pos=pos,
             button=button,
-            widget_manager=self.widget_manager,
-            dropdown_type=DropdownWidget,
+            dropdown_widget_cls=DropdownWidget,
             logger=logger,
+            handle_outside_control_panel_click_helper=_handle_outside_control_panel_click_helper,
         )
 
     def _refresh_control_panel_layout_if_needed(self, sc_pos) -> bool:
-        return _refresh_control_panel_layout_if_needed_helper(
-            widget_manager=self.widget_manager,
+        return _refresh_control_panel_layout_if_needed_orchestration_helper(
+            gui=self,
             sc_pos=sc_pos,
             debug_input_active=DEBUG_INPUT_ACTIVE,
-            panel_rect=getattr(self, 'control_panel_rect', None),
-            reposition_widgets=self._reposition_widgets,
             logger=logger,
+            refresh_control_panel_layout_if_needed_helper=_refresh_control_panel_layout_if_needed_helper,
         )
 
     def _retry_control_panel_click_after_auto_scroll(self, pos, sc_pos, button, handled):
-        handled, new_scroll, ignore_until = _retry_control_panel_click_after_auto_scroll_helper(
+        return _retry_control_panel_click_after_auto_scroll_orchestration_helper(
+            gui=self,
             pos=pos,
             sc_pos=sc_pos,
             button=button,
             handled=handled,
-            panel_rect=getattr(self, 'control_panel_rect', None),
-            widget_manager=self.widget_manager,
-            can_scroll=getattr(self, 'control_panel_can_scroll', False),
-            control_panel_scroll=getattr(self, 'control_panel_scroll', 0),
-            control_panel_scroll_max=getattr(self, 'control_panel_scroll_max', 0),
             logger=logger,
+            retry_control_panel_click_after_auto_scroll_helper=_retry_control_panel_click_after_auto_scroll_helper,
         )
-        self.control_panel_scroll = new_scroll
-        if ignore_until:
-            self.control_panel_ignore_click_until = ignore_until
-        return handled
 
     def _apply_control_panel_widget_updates(self):
         """Apply checkbox and dropdown state after a handled control-panel click."""
-        _apply_control_panel_widget_updates_helper(
+        _apply_control_panel_widget_updates_orchestration_helper(
             gui=self,
-            widget_manager=self.widget_manager,
-            checkbox_type=CheckboxWidget,
+            checkbox_widget_cls=CheckboxWidget,
             logger=logger,
+            apply_control_panel_widget_updates_helper=_apply_control_panel_widget_updates_helper,
         )
 
     def _apply_checkbox_widget_update(self, widget):
-        _apply_checkbox_widget_update_helper(gui=self, widget=widget, logger=logger)
+        _apply_checkbox_widget_update_orchestration_helper(
+            gui=self,
+            widget=widget,
+            logger=logger,
+            apply_checkbox_widget_update_helper=_apply_checkbox_widget_update_helper,
+        )
 
     def _apply_dropdown_widget_update(self, widget):
-        _apply_dropdown_widget_update_helper(gui=self, widget=widget, logger=logger)
+        _apply_dropdown_widget_update_orchestration_helper(
+            gui=self,
+            widget=widget,
+            logger=logger,
+            apply_dropdown_widget_update_helper=_apply_dropdown_widget_update_helper,
+        )
 
     def _apply_algorithm_dropdown_update(self, widget):
-        _apply_algorithm_dropdown_update_helper(gui=self, widget=widget, logger=logger)
+        _apply_algorithm_dropdown_update_orchestration_helper(
+            gui=self,
+            widget=widget,
+            logger=logger,
+            apply_algorithm_dropdown_update_helper=_apply_algorithm_dropdown_update_helper,
+        )
     
     # Button callbacks
     def _stop_auto_solve(self):
@@ -1193,16 +1248,24 @@ class ZeldaGUI:
 
     def _generate_ai_dungeon(self):
         """Non-blocking wrapper to spawn background worker and return immediately."""
-        _start_ai_dungeon_generation_helper(self, threading)
+        _start_ai_dungeon_generation_orchestration_helper(
+            gui=self,
+            threading_module=threading,
+            start_ai_dungeon_generation_helper=_start_ai_dungeon_generation_helper,
+        )
 
 
     def _generate_ai_dungeon_worker(self):
         """Background worker entry point for AI generation pipeline."""
-        _run_ai_generation_worker_helper(self, logger)
+        _run_ai_dungeon_generation_worker_orchestration_helper(
+            gui=self,
+            logger=logger,
+            run_ai_generation_worker_helper=_run_ai_generation_worker_helper,
+        )
 
     def _reset_map(self):
         """Reset the current map."""
-        _reset_map_helper(self)
+        _reset_map_orchestration_helper(gui=self, reset_map_helper=_reset_map_helper)
     
     def _show_path_preview(self):
         """
@@ -1213,11 +1276,16 @@ class ZeldaGUI:
         - If solver is running, request preview on completion.
         - If no path exists and solver is idle, start solver and force preview when it finishes.
         """
-        _show_path_preview_helper(self, PathPreviewDialog, logger)
+        _show_path_preview_orchestration_helper(
+            gui=self,
+            path_preview_dialog_cls=PathPreviewDialog,
+            logger=logger,
+            show_path_preview_helper=_show_path_preview_helper,
+        )
     
     def _clear_path(self):
         """Clear the current path."""
-        _clear_path_helper(self)
+        _clear_path_orchestration_helper(gui=self, clear_path_helper=_clear_path_helper)
 
     def _open_temp_folder(self):
         """Open OS temp folder where solver/preview artifacts are stored."""
@@ -1245,11 +1313,11 @@ class ZeldaGUI:
     
     def _export_route(self):
         """Export the current route to JSON file."""
-        _export_route_helper(self)
+        _export_route_orchestration_helper(gui=self, export_route_helper=_export_route_helper)
     
     def _load_route(self):
         """Load a saved route from JSON file."""
-        _load_route_helper(self)
+        _load_route_orchestration_helper(gui=self, load_route_helper=_load_route_helper)
 
     def load_visual_assets(self, templates_dir: str = None, link_sprite_path: str = None):
         """Optional: override GUI assets with extracted visual tiles/sprites.
@@ -1263,14 +1331,15 @@ class ZeldaGUI:
           and assign to `self.images` keyed by semantic id (best-effort).
         - If `link_sprite_path` is provided, attempt to cut a Link sprite and replace `self.link_img`.
         """
-        return _load_visual_assets_helper(
-            self,
+        return _load_visual_assets_orchestration_helper(
+            gui=self,
             templates_dir=templates_dir,
             link_sprite_path=link_sprite_path,
             pygame=pygame,
             os_module=os,
             logger=logger,
             semantic_palette=SEMANTIC_PALETTE,
+            load_visual_assets_helper=_load_visual_assets_helper,
         )
 
     def load_visual_map(self, image_path: str, templates_dir: str | None = None):
@@ -1282,10 +1351,11 @@ class ZeldaGUI:
         This method is intentionally permissive and returns a bool for success
         so automated tests can call it without a file dialog.
         """
-        return _load_visual_map_helper(
-            self,
+        return _load_visual_map_orchestration_helper(
+            gui=self,
             image_path=image_path,
             templates_dir=templates_dir,
+            load_visual_map_helper=_load_visual_map_helper,
         )
 
     def _place_items_from_graph(self, grid: np.ndarray, graph, room_positions: dict, room_to_node: dict):
@@ -1301,14 +1371,15 @@ class ZeldaGUI:
             room_positions: Dict mapping room position -> (row_offset, col_offset) in global grid
             room_to_node: Dict mapping room position -> graph node ID
         """
-        _place_items_from_graph_helper(
-            self,
+        _place_items_from_graph_orchestration_helper(
+            gui=self,
             grid=grid,
             graph=graph,
             room_positions=room_positions,
             room_to_node=room_to_node,
             logger=logger,
             semantic_palette=SEMANTIC_PALETTE,
+            place_items_from_graph_helper=_place_items_from_graph_helper,
         )
 
     def _load_current_map(self):
