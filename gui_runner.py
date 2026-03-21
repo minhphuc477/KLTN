@@ -214,6 +214,14 @@ from src.gui.solver.request_orchestration import (
     build_solver_request as _build_solver_request_orchestration_helper,
     get_solver_map_context as _get_solver_map_context_orchestration_helper,
 )
+from src.gui.solver.launch_orchestration import (
+    launch_solver_process as _launch_solver_process_orchestration_helper,
+    launch_solver_worker as _launch_solver_worker_orchestration_helper,
+    schedule_solver as _schedule_solver_orchestration_helper,
+    solver_thread_fallback_worker as _solver_thread_fallback_worker_orchestration_helper,
+    start_preview_for_current_map as _start_preview_for_current_map_orchestration_helper,
+    start_solver_thread_fallback as _start_solver_thread_fallback_orchestration_helper,
+)
 from src.gui.runtime.watchdog_monitor import watchdog_loop as _watchdog_loop_helper
 from src.gui.runtime.route_io import (
     export_route as _export_route_helper,
@@ -326,6 +334,16 @@ from src.gui.runtime.display_diagnostics import (
 from src.gui.runtime.window_focus import (
     force_focus as _force_focus_helper,
     toggle_fullscreen as _toggle_fullscreen_helper,
+)
+from src.gui.runtime.display_orchestration import (
+    attempt_display_reinit as _attempt_display_reinit_orchestration_helper,
+    ensure_display_alive as _ensure_display_alive_orchestration_helper,
+    force_focus as _force_focus_orchestration_helper,
+    handle_watchdog_screenshot as _handle_watchdog_screenshot_orchestration_helper,
+    report_ui_state as _report_ui_state_orchestration_helper,
+    safe_set_mode as _safe_set_mode_orchestration_helper,
+    toggle_fullscreen as _toggle_fullscreen_orchestration_helper,
+    watchdog_loop as _watchdog_loop_orchestration_helper,
 )
 from src.gui.control_panel.animation import (
     start_toggle_panel_animation as _start_toggle_panel_animation_helper,
@@ -1166,11 +1184,23 @@ class ZeldaGUI:
         application with a null/zero-sized display.
         Returns the created screen surface (or None on fatal failure).
         """
-        return _safe_set_mode_helper(size, pygame, logger, flags=flags, allow_fallback=allow_fallback)
+        return _safe_set_mode_orchestration_helper(
+            size=size,
+            pygame=pygame,
+            logger=logger,
+            safe_set_mode_helper=_safe_set_mode_helper,
+            flags=flags,
+            allow_fallback=allow_fallback,
+        )
 
     def _attempt_display_reinit(self):
         """Attempt to fully reinitialize the SDL display and restore mode."""
-        return _attempt_display_reinit_helper(self, pygame, logger)
+        return _attempt_display_reinit_orchestration_helper(
+            gui=self,
+            pygame=pygame,
+            logger=logger,
+            attempt_display_reinit_helper=_attempt_display_reinit_helper,
+        )
 
     def _handle_watchdog_screenshot(self) -> bool:
         """Save the requested watchdog screenshot on the main thread and clear the request.
@@ -1178,11 +1208,21 @@ class ZeldaGUI:
         Returns True if a screenshot was saved, False otherwise. Always clears the
         request to avoid repeated attempts.
         """
-        return _handle_watchdog_screenshot_helper(self, pygame, logger, os)
+        return _handle_watchdog_screenshot_orchestration_helper(
+            gui=self,
+            pygame=pygame,
+            logger=logger,
+            os_module=os,
+            handle_watchdog_screenshot_helper=_handle_watchdog_screenshot_helper,
+        )
 
     def report_ui_state(self) -> dict:
         """Return diagnostic information about GUI state for troubleshooting (callable from REPL)."""
-        return _report_ui_state_helper(self, logger)
+        return _report_ui_state_orchestration_helper(
+            gui=self,
+            logger=logger,
+            report_ui_state_helper=_report_ui_state_helper,
+        )
 
     def _ensure_display_alive(self, force=False):
         """Check display health and attempt recovery if needed.
@@ -1191,7 +1231,13 @@ class ZeldaGUI:
         This method is intentionally conservative and returns False only when
         no recovery was possible.
         """
-        return _ensure_display_alive_helper(self, pygame, logger, force=force)
+        return _ensure_display_alive_orchestration_helper(
+            gui=self,
+            pygame=pygame,
+            logger=logger,
+            ensure_display_alive_helper=_ensure_display_alive_helper,
+            force=force,
+        )
 
     def _force_focus(self) -> bool:
         """Try to force the window to the foreground on Windows.
@@ -1200,7 +1246,7 @@ class ZeldaGUI:
         work around Windows' foreground activation blocking. Returns True on success.
         No-op on non-Windows platforms.
         """
-        return _force_focus_helper(self, pygame, logger, os)
+        return _force_focus_orchestration_helper(gui=self, force_focus_helper=_force_focus_helper)
 
     def _toggle_fullscreen(self):
         """Toggle fullscreen mode with robust handling.
@@ -1209,7 +1255,14 @@ class ZeldaGUI:
         preserves the previous windowed size for restore. Ensures event pump
         and asset/layout reinitialization to avoid dark screens or unresponsiveness.
         """
-        return _toggle_fullscreen_helper(self, pygame, logger, os, __import__('platform'))
+        return _toggle_fullscreen_orchestration_helper(
+            gui=self,
+            pygame=pygame,
+            logger=logger,
+            os_module=os,
+            platform_module=__import__('platform'),
+            toggle_fullscreen_helper=_toggle_fullscreen_helper,
+        )
 
     # ------------------ Control Panel Animation ------------------
     def _start_toggle_panel_animation(self, target_collapsed: bool):
@@ -1300,7 +1353,7 @@ class ZeldaGUI:
         _center_on_player_helper(self)
     
     def _start_preview_for_current_map(self):
-        _start_preview_for_current_map_helper(
+        _start_preview_for_current_map_orchestration_helper(
             gui=self,
             logger=logger,
             pygame_module=pygame,
@@ -1308,6 +1361,7 @@ class ZeldaGUI:
             threading_module=threading,
             time_module=time,
             run_preview_and_dump=_run_preview_and_dump,
+            start_preview_for_current_map_helper=_start_preview_for_current_map_helper,
         )
 
     def _clear_solver_state(self, reason="cleanup"):
@@ -1414,14 +1468,14 @@ class ZeldaGUI:
         - KLTN_WATCHDOG_DUMP_LIMIT (how many dumps to write, default 3)
         - KLTN_WATCHDOG_TERMINATE_SOLVER (if '1' will terminate solver proc when dumping)
         """
-        _watchdog_loop_helper(
+        _watchdog_loop_orchestration_helper(
             gui=self,
             logger=logger,
             os_module=os,
             time_module=time,
             tempfile_module=tempfile,
+            watchdog_loop_helper=_watchdog_loop_helper,
         )
-        return
         
 
     
@@ -1431,12 +1485,13 @@ class ZeldaGUI:
         Args:
             algorithm_idx: Algorithm index to use (if None, read from self.algorithm_idx)
         """
-        return _schedule_solver_helper(
+        return _schedule_solver_orchestration_helper(
             gui=self,
             algorithm_idx=algorithm_idx,
             logger=logger,
             time_module=time,
             threading_module=threading,
+            schedule_solver_helper=_schedule_solver_helper,
         )
 
     def _create_solver_temp_files(self, grid_arr):
@@ -1445,39 +1500,43 @@ class ZeldaGUI:
 
     def _launch_solver_worker(self, **kwargs):
         """Launch solver process, with thread-based fallback on process failure."""
-        _launch_solver_worker_helper(
+        _launch_solver_worker_orchestration_helper(
             gui=self,
             kwargs=kwargs,
             logger=logger,
             launch_solver_process=self._launch_solver_process,
             start_solver_thread_fallback=self._start_solver_thread_fallback,
             multiprocessing_module=multiprocessing,
+            launch_solver_worker_helper=_launch_solver_worker_helper,
         )
 
     def _launch_solver_process(self, **kwargs):
-        _launch_solver_process_helper(
+        _launch_solver_process_orchestration_helper(
             gui=self,
             launch_kwargs=kwargs,
             run_solver_and_dump=_run_solver_and_dump,
             multiprocessing_module=multiprocessing,
             logger=logger,
+            launch_solver_process_helper=_launch_solver_process_helper,
         )
 
     def _solver_thread_fallback_worker(self, **kwargs):
-        _solver_thread_fallback_worker_helper(
+        _solver_thread_fallback_worker_orchestration_helper(
             gui=self,
             launch_kwargs=kwargs,
             solve_in_subprocess=_solve_in_subprocess,
             logger=logger,
+            solver_thread_fallback_worker_helper=_solver_thread_fallback_worker_helper,
         )
 
     def _start_solver_thread_fallback(self, **kwargs):
-        _start_solver_thread_fallback_helper(
+        _start_solver_thread_fallback_orchestration_helper(
             gui=self,
             launch_kwargs=kwargs,
             threading_module=threading,
             worker_target=self._solver_thread_fallback_worker,
             logger=logger,
+            start_solver_thread_fallback_helper=_start_solver_thread_fallback_helper,
         )
 
     def _execute_auto_solve(self, path, solver_result, teleports=0):
