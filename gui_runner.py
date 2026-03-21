@@ -278,6 +278,14 @@ from src.gui.topology.precheck import (
     run_prechecks_and_optional_prune as _run_prechecks_and_optional_prune_flow_helper,
     undo_prune as _undo_prune_flow_helper,
 )
+from src.gui.topology.orchestration import (
+    capture_precheck_snapshot as _capture_precheck_snapshot_orchestration_helper,
+    prune_dead_end_topology as _prune_dead_end_topology_orchestration_helper,
+    render_topology_overlay as _render_topology_overlay_orchestration_helper,
+    run_prechecks_and_optional_prune as _run_prechecks_and_optional_prune_orchestration_helper,
+    undo_prune as _undo_prune_orchestration_helper,
+    update_env_topology_view as _update_env_topology_view_orchestration_helper,
+)
 from src.gui.rendering.status_display import (
     render_error_banner as _render_error_banner_helper,
     render_solver_status_banner as _render_solver_status_banner_helper,
@@ -415,6 +423,13 @@ from src.gui.topology.match_controls import (
 from src.gui.solver.comparison_runner import (
     run_solver_comparison as _run_solver_comparison_helper,
     set_last_solver_metrics as _set_last_solver_metrics_helper,
+)
+from src.gui.solver.comparison_orchestration import (
+    map_elites_worker as _map_elites_worker_orchestration_helper,
+    render_solver_comparison_overlay as _render_solver_comparison_overlay_orchestration_helper,
+    run_solver_comparison as _run_solver_comparison_orchestration_helper,
+    set_last_solver_metrics as _set_last_solver_metrics_orchestration_helper,
+    start_map_elites as _start_map_elites_orchestration_helper,
 )
 from src.gui.solver.utils import (
     safe_unpickle as _safe_unpickle_helper,
@@ -1548,14 +1563,11 @@ class ZeldaGUI:
 
     def _render_topology_overlay(self, surface):
         """Draw room nodes and edges on the map area with high-visibility styling."""
-        current = self.maps[self.current_map_idx]
-        _render_topology_overlay_helper(
+        _render_topology_overlay_orchestration_helper(
+            gui=self,
             surface=surface,
-            current=current,
-            tile_size=self.TILE_SIZE,
-            view_offset_x=self.view_offset_x,
-            view_offset_y=self.view_offset_y,
             pygame=pygame,
+            render_topology_overlay_helper=_render_topology_overlay_helper,
         )
 
     def _match_missing_nodes(self):
@@ -1586,11 +1598,20 @@ class ZeldaGUI:
 
     def _capture_precheck_snapshot(self, current: Any, reason: str = "") -> None:
         """Capture current topology state so Undo Prune can restore it."""
-        self._precheck_snapshot = _capture_precheck_snapshot_helper(current, reason=reason)
+        _capture_precheck_snapshot_orchestration_helper(
+            gui=self,
+            current=current,
+            reason=reason,
+            capture_precheck_snapshot_helper=_capture_precheck_snapshot_helper,
+        )
 
     def _update_env_topology_view(self, current: Any) -> None:
         """Synchronize current map topology attributes into the active env object."""
-        _update_env_topology_view_helper(getattr(self, 'env', None), current)
+        _update_env_topology_view_orchestration_helper(
+            gui=self,
+            current=current,
+            update_env_topology_view_helper=_update_env_topology_view_helper,
+        )
 
     def _build_room_adjacency_from_graph(self, graph: Any, room_to_node: dict, node_to_room: dict) -> dict:
         """Build undirected room adjacency from graph edges via node-room mapping."""
@@ -1598,21 +1619,20 @@ class ZeldaGUI:
 
     def _prune_dead_end_topology(self, current: Any, preserve_rooms: set) -> List[Tuple[int, int]]:
         """Prune dead-end rooms from topology mapping when room objects are unavailable."""
-        return _prune_dead_end_topology_flow_helper(
+        return _prune_dead_end_topology_orchestration_helper(
             gui=self,
             current=current,
             preserve_rooms=preserve_rooms,
             logger=logger,
+            prune_dead_end_topology_flow_helper=_prune_dead_end_topology_flow_helper,
             build_room_adjacency_fn=self._build_room_adjacency_from_graph,
             node_has_critical_content_fn=self._node_has_critical_content,
         )
 
     def _run_prechecks_and_optional_prune(self) -> Tuple[bool, Optional[str]]:
         """Run lightweight prechecks and optional dead-end pruning before solve."""
-        current = self.maps[self.current_map_idx]
-        return _run_prechecks_and_optional_prune_flow_helper(
+        return _run_prechecks_and_optional_prune_orchestration_helper(
             gui=self,
-            current=current,
             logger=logger,
             np_module=np,
             semantic_palette=SEMANTIC_PALETTE,
@@ -1626,16 +1646,16 @@ class ZeldaGUI:
             capture_snapshot_fn=self._capture_precheck_snapshot,
             update_env_topology_view_fn=self._update_env_topology_view,
             prune_dead_end_topology_fn=self._prune_dead_end_topology,
+            run_prechecks_and_optional_prune_flow_helper=_run_prechecks_and_optional_prune_flow_helper,
         )
 
     def _undo_prune(self):
         """Undo the last applied prune snapshot, if any."""
-        current = self.maps[self.current_map_idx]
-        return _undo_prune_flow_helper(
+        return _undo_prune_orchestration_helper(
             gui=self,
-            current=current,
             logger=logger,
             update_env_topology_view_fn=self._update_env_topology_view,
+            undo_prune_flow_helper=_undo_prune_flow_helper,
         )
 
     def _apply_tentative_matches(self):
@@ -1644,23 +1664,25 @@ class ZeldaGUI:
 
     # --- Solver comparison helpers ---
     def _set_last_solver_metrics(self, name, nodes, time_ms, path_len):
-        return _set_last_solver_metrics_helper(
+        return _set_last_solver_metrics_orchestration_helper(
             gui=self,
             name=name,
             nodes=nodes,
             time_ms=time_ms,
             path_len=path_len,
+            set_last_solver_metrics_helper=_set_last_solver_metrics_helper,
         )
 
     def _run_solver_comparison(self):
         """Start an asynchronous solver comparison worker to avoid blocking the GUI."""
-        return _run_solver_comparison_helper(
+        return _run_solver_comparison_orchestration_helper(
             gui=self,
             logger=logger,
             time_module=time,
             game_state_cls=GameState,
             solve_in_subprocess=_solve_in_subprocess,
             threading_module=threading,
+            run_solver_comparison_helper=_run_solver_comparison_helper,
         )
 
     def _start_map_elites(self, n_samples: int = 200, resolution: int = 20):
@@ -1669,11 +1691,12 @@ class ZeldaGUI:
         Runs on a background thread so the GUI stays responsive. Results are stored
         in `self.map_elites_result` and a toast is shown when complete.
         """
-        return _start_map_elites_flow_helper(
+        return _start_map_elites_orchestration_helper(
             gui=self,
             n_samples=n_samples,
             resolution=resolution,
             threading_module=threading,
+            start_map_elites_flow_helper=_start_map_elites_flow_helper,
         )
 
     def _map_elites_worker(self, maps, n_samples: int, resolution: int):
@@ -1682,23 +1705,23 @@ class ZeldaGUI:
         This function uses the lightweight `src.simulation.map_elites` helper and the
         built-in `DungeonSolver` for validation.
         """
-        return _map_elites_worker_flow_helper(
+        return _map_elites_worker_orchestration_helper(
             gui=self,
             maps=maps,
             n_samples=n_samples,
             resolution=resolution,
             logger=logger,
             os_module=os,
+            map_elites_worker_flow_helper=_map_elites_worker_flow_helper,
         )
 
     def _render_solver_comparison_overlay(self, surface):
         """Render a small sidebar table with solver comparison results."""
-        _render_solver_comparison_overlay_helper(
+        _render_solver_comparison_overlay_orchestration_helper(
+            gui=self,
             surface=surface,
-            results=getattr(self, 'solver_comparison_results', None),
-            screen_w=self.screen_w,
-            sidebar_width=self.SIDEBAR_WIDTH,
             pygame=pygame,
+            render_solver_comparison_overlay_helper=_render_solver_comparison_overlay_helper,
         )
     
     def _set_message(self, message: str, duration: float = 3.0):
