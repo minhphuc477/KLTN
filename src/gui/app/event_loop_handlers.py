@@ -254,3 +254,119 @@ def handle_preview_overlay_events(gui, event, pygame_module):
             return True
 
     return False
+
+
+def handle_mouse_button_down_preamble(
+    gui,
+    event,
+    pygame_module,
+    time_module,
+    logger,
+    debug_input_active=False,
+):
+    """Run MOUSEBUTTONDOWN diagnostics and focus recovery. Returns (mouse_pos, consumed)."""
+    mouse_pos = getattr(event, "pos", pygame_module.mouse.get_pos())
+
+    try:
+        focused = pygame_module.mouse.get_focused()
+        grabbed = pygame_module.event.get_grab()
+        pressed = pygame_module.mouse.get_pressed()
+    except Exception:
+        focused = False
+        grabbed = False
+        pressed = None
+
+    logger.debug(
+        "MOUSEBUTTONDOWN at %s (button=%s) fullscreen=%s focused=%s grabbed=%s pressed=%s",
+        mouse_pos,
+        getattr(event, "button", None),
+        gui.fullscreen,
+        focused,
+        grabbed,
+        pressed,
+    )
+
+    try:
+        in_sidebar = mouse_pos[0] >= (gui.screen_w - gui.SIDEBAR_WIDTH)
+        in_control_panel = bool(
+            getattr(gui, "control_panel_rect", None) and gui.control_panel_rect.collidepoint(mouse_pos)
+        )
+        sidebar_x = gui.screen_w - gui.SIDEBAR_WIDTH
+        diag = {
+            "preview_overlay_visible": getattr(gui, "preview_overlay_visible", False),
+            "preview_modal_enabled": getattr(gui, "preview_modal_enabled", False),
+            "show_solver_comparison_overlay": getattr(gui, "show_solver_comparison_overlay", False),
+            "control_panel_active": getattr(gui, "control_panel_enabled", False),
+            "in_sidebar": in_sidebar,
+            "in_control_panel": in_control_panel,
+            "control_panel_ignore_until": getattr(gui, "control_panel_ignore_click_until", 0.0),
+            "control_panel_rect": (
+                None
+                if getattr(gui, "control_panel_rect", None) is None
+                else tuple(gui.control_panel_rect)
+            ),
+            "control_panel_collapsed": getattr(gui, "control_panel_collapsed", False),
+            "sidebar_x": sidebar_x,
+            "mouse_pos": mouse_pos,
+        }
+        if debug_input_active:
+            logger.info("INPUT_DIAG: %s", diag)
+        else:
+            logger.debug("INPUT_DIAG: %s", diag)
+
+        if debug_input_active:
+            logger.info("INPUT_DIAG: KLTN_DEBUG_INPUT active - clearing overlays and ignore flags for this click")
+            try:
+                gui.preview_overlay_visible = False
+                gui.show_solver_comparison_overlay = False
+                gui.path_preview_dialog = None
+                gui.control_panel_ignore_click_until = 0.0
+                gui.control_panel_scroll_dragging = False
+                gui._show_toast("Debug: overlays/ignore cleared", 1.2, "info")
+            except Exception:
+                logger.exception("INPUT_DIAG: failed to clear debug state")
+    except Exception:
+        logger.exception("INPUT_DIAG: failure while computing diagnostics")
+
+    try:
+        sidebar_x = gui.screen_w - gui.SIDEBAR_WIDTH
+        if (
+            getattr(gui, "preview_overlay_visible", False)
+            and not getattr(gui, "preview_modal_enabled", False)
+            and mouse_pos[0] < sidebar_x
+        ):
+            logger.info("Click on map detected while non-modal preview overlay active: dismissing overlay")
+            try:
+                gui.preview_overlay_visible = False
+                gui.path_preview_dialog = None
+                gui._show_toast("Preview dismissed (click)", 1.5, "info")
+                gui._set_message("Preview dismissed", 1.5)
+            except Exception:
+                pass
+    except Exception:
+        logger.exception("Error while checking/dismissing non-modal preview overlay")
+
+    try:
+        gui._last_mouse_event = {
+            "type": "down",
+            "pos": mouse_pos,
+            "button": getattr(event, "button", None),
+            "time": time_module.time(),
+        }
+    except Exception:
+        gui._last_mouse_event = None
+
+    if getattr(gui, "debug_click_log", None) is not None:
+        gui.debug_click_log.insert(0, (mouse_pos, time_module.time()))
+        if len(gui.debug_click_log) > 50:
+            gui.debug_click_log.pop()
+
+    if not focused:
+        logger.info("Window does not have input focus; attempting to force focus")
+        try:
+            gui._force_focus()
+        except Exception:
+            logger.exception("Force focus attempt failed")
+        return mouse_pos, True
+
+    return mouse_pos, False

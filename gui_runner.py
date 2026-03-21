@@ -48,6 +48,7 @@ from src.gui.app.main_loop_utils import (
 from src.gui.app.event_loop_handlers import (
     clear_stale_preview_overlay,
     handle_global_keydown_shortcuts,
+    handle_mouse_button_down_preamble,
     handle_preview_overlay_events,
     handle_window_focus_event,
     poll_pygame_events,
@@ -1941,94 +1942,15 @@ class ZeldaGUI:
                             self._change_zoom(event.y)
                 
                 elif event.type == pygame.MOUSEBUTTONDOWN:
-                    mouse_pos = getattr(event, 'pos', pygame.mouse.get_pos())
-                    # Diagnostic: include focus/grab/buttons to help when clicks are ignored
-                    try:
-                        focused = pygame.mouse.get_focused()
-                        grabbed = pygame.event.get_grab()
-                        pressed = pygame.mouse.get_pressed()
-                    except Exception:
-                        focused = False
-                        grabbed = False
-                        pressed = None
-                    logger.debug('MOUSEBUTTONDOWN at %s (button=%s) fullscreen=%s focused=%s grabbed=%s pressed=%s', mouse_pos, getattr(event,'button',None), self.fullscreen, focused, grabbed, pressed)
-
-                    # Input diagnostic: record overlay/panel state and where click occurred
-                    try:
-                        in_sidebar = mouse_pos[0] >= (self.screen_w - self.SIDEBAR_WIDTH)
-                        in_control_panel = bool(getattr(self, 'control_panel_rect', None) and self.control_panel_rect.collidepoint(mouse_pos))
-                        sidebar_x = self.screen_w - self.SIDEBAR_WIDTH
-                        diag = {
-                            'preview_overlay_visible': getattr(self, 'preview_overlay_visible', False),
-                            'preview_modal_enabled': getattr(self, 'preview_modal_enabled', False),
-                            'show_solver_comparison_overlay': getattr(self, 'show_solver_comparison_overlay', False),
-                            'control_panel_active': getattr(self, 'control_panel_enabled', False),
-                            'in_sidebar': in_sidebar,
-                            'in_control_panel': in_control_panel,
-                            'control_panel_ignore_until': getattr(self, 'control_panel_ignore_click_until', 0.0),
-                            # Extra diagnostics to detect accidental panel cover / mis-positioning
-                            'control_panel_rect': (None if getattr(self, 'control_panel_rect', None) is None else tuple(self.control_panel_rect)),
-                            'control_panel_collapsed': getattr(self, 'control_panel_collapsed', False),
-                            'sidebar_x': sidebar_x,
-                            'mouse_pos': mouse_pos,
-                        }
-                        if DEBUG_INPUT_ACTIVE:
-                            logger.info('INPUT_DIAG: %s', diag)
-                        else:
-                            logger.debug('INPUT_DIAG: %s', diag)
-
-                        # If debug injection enabled, forcibly clear overlays/ignore flags so click can pass through (useful for repro)
-                        if DEBUG_INPUT_ACTIVE:
-                            logger.info('INPUT_DIAG: KLTN_DEBUG_INPUT active - clearing overlays and ignore flags for this click')
-                            try:
-                                self.preview_overlay_visible = False
-                                self.show_solver_comparison_overlay = False
-                                self.path_preview_dialog = None
-                                self.control_panel_ignore_click_until = 0.0
-                                self.control_panel_scroll_dragging = False
-                                self._show_toast('Debug: overlays/ignore cleared', 1.2, 'info')
-                            except Exception:
-                                logger.exception('INPUT_DIAG: failed to clear debug state')
-                    except Exception:
-                        logger.exception('INPUT_DIAG: failure while computing diagnostics')
-
-                    # If preview overlay is visible but not modal, allow clicking the main map area to dismiss it
-                    try:
-                        sidebar_x = self.screen_w - self.SIDEBAR_WIDTH
-                        if getattr(self, 'preview_overlay_visible', False) and not getattr(self, 'preview_modal_enabled', False) and mouse_pos[0] < sidebar_x:
-                            logger.info('Click on map detected while non-modal preview overlay active: dismissing overlay')
-                            try:
-                                self.preview_overlay_visible = False
-                                self.path_preview_dialog = None
-                                self._show_toast('Preview dismissed (click)', 1.5, 'info')
-                                self._set_message('Preview dismissed', 1.5)
-                            except Exception:
-                                pass
-                            # Do not consume this event; allow subsequent checks to process the click
-                        
-                    except Exception:
-                        logger.exception('Error while checking/dismissing non-modal preview overlay')
-
-                    # Track last mouse event for overlay/debug
-                    try:
-                        self._last_mouse_event = {'type': 'down', 'pos': mouse_pos, 'button': getattr(event,'button',None), 'time': time.time()}
-                    except Exception:
-                        self._last_mouse_event = None
-
-                    # Record click to debug log even when the window lacks focus.
-                    if getattr(self, 'debug_click_log', None) is not None:
-                        self.debug_click_log.insert(0, (mouse_pos, time.time()))
-                        # Keep bounded history
-                        if len(self.debug_click_log) > 50:
-                            self.debug_click_log.pop()
-
-                    # If window not focused, attempt to force focus (Windows)
-                    if not focused:
-                        logger.info('Window does not have input focus; attempting to force focus')
-                        try:
-                            self._force_focus()
-                        except Exception:
-                            logger.exception('Force focus attempt failed')
+                    mouse_pos, consumed = handle_mouse_button_down_preamble(
+                        self,
+                        event,
+                        pygame,
+                        time,
+                        logger,
+                        DEBUG_INPUT_ACTIVE,
+                    )
+                    if consumed:
                         continue
                     
                     # Handle collapse button click first (animated)
