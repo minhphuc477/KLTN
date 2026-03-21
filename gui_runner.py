@@ -47,6 +47,8 @@ from src.gui.app.main_loop_utils import (
 )
 from src.gui.app.event_loop_handlers import (
     clear_stale_preview_overlay,
+    handle_global_keydown_shortcuts,
+    handle_preview_overlay_events,
     handle_window_focus_event,
     poll_pygame_events,
     run_input_focus_fallback,
@@ -1862,145 +1864,18 @@ class ZeldaGUI:
                 if handle_window_focus_event(self, event, pygame, logger):
                     continue
 
-                # Global KEYDOWN diagnostics
-                if event.type == pygame.KEYDOWN:
-                    try:
-                        # Track last key event for debug overlay
-                        self._last_key_event = {'key': event.key, 'mods': pygame.key.get_mods(), 'time': time.time()}
-                    except Exception:
-                        pass
-                    logger.debug('KEYDOWN key=%s mods=%s', event.key, pygame.key.get_mods())
-                    # Ctrl+O to force hide any overlays (debug quick-fix when overlay blocks interaction)
-                    if event.key == pygame.K_o and (pygame.key.get_mods() & pygame.KMOD_CTRL):
-                        try:
-                            if getattr(self, 'preview_overlay_visible', False) or getattr(self, 'show_solver_comparison_overlay', False):
-                                self.preview_overlay_visible = False
-                                self.show_solver_comparison_overlay = False
-                                self.path_preview_dialog = None
-                                self._show_toast('Overlays hidden (Ctrl+O)', 2.0, 'success')
-                                self._set_message('Overlays hidden', 2.0)
-                            else:
-                                self._show_toast('No overlays active', 1.5, 'info')
-                        except Exception:
-                            logger.exception('Failed to toggle overlays')
-                        continue
-
-                # Developer debug overlay toggle
-                if event.type == pygame.KEYDOWN and event.key == pygame.K_F12:
-                    self.debug_overlay_enabled = not getattr(self, 'debug_overlay_enabled', False)
-                    if self.debug_overlay_enabled:
-                        self._set_message('Debug overlay ON (F12 to toggle)')
-                    else:
-                        self._set_message('Debug overlay OFF')
+                if handle_global_keydown_shortcuts(
+                    self,
+                    event,
+                    pygame,
+                    time,
+                    logger,
+                    CheckboxWidget,
+                ):
                     continue
 
-                # Debug key: F forces clearing input grab / shows cursor (helpful when clicks are ignored)
-                if event.type == pygame.KEYDOWN and event.key == pygame.K_f:
-                    try:
-                        pygame.event.set_grab(False)
-                    except Exception:
-                        logger.debug('Failed to clear event grab via F key')
-                    try:
-                        pygame.mouse.set_visible(True)
-                    except Exception:
-                        logger.debug('Failed to set mouse visible via F key')
-                    try:
-                        self._show_toast('Forced focus/ungrab (F)', 2.0, 'info')
-                        self._set_message('Forced focus/ungrab (F)')
-                    except Exception:
-                        pass
+                if handle_preview_overlay_events(self, event, pygame):
                     continue
-                # Shift-F12 toggles control-panel layout debug overlay (shows widget bounds & metrics)
-                if event.type == pygame.KEYDOWN and event.key == pygame.K_F12 and (pygame.key.get_mods() & pygame.KMOD_SHIFT):
-                    self.debug_control_panel = not getattr(self, 'debug_control_panel', False)
-                    if self.debug_control_panel:
-                        self._set_message('Control panel debug ON (Shift+F12)')
-                    else:
-                        self._set_message('Control panel debug OFF')
-                    continue
-                # Page Up / Page Down to scroll control panel when visible and hovered
-                if event.type == pygame.KEYDOWN and event.key in (pygame.K_PAGEUP, pygame.K_PAGEDOWN):
-                    if self.control_panel_enabled and getattr(self, 'control_panel_can_scroll', False) and getattr(self, 'control_panel_rect', None) and self.control_panel_rect.collidepoint(pygame.mouse.get_pos()) and not self.control_panel_collapsed:
-                        # Page amount: visible content height (excluding header area)
-                        page_amount = max(1, self.control_panel_rect.height - 32)
-                        if event.key == pygame.K_PAGEUP:
-                            self.control_panel_scroll = max(0, int(self.control_panel_scroll - page_amount))
-                        else:
-                            self.control_panel_scroll = min(getattr(self, 'control_panel_scroll_max', 0), int(self.control_panel_scroll + page_amount))
-                        # Stop any momentum when keyboard-driven
-                        self.control_panel_scroll_velocity = 0.0
-                        self.control_panel_ignore_click_until = time.time() + 0.12
-                        continue
-                if event.type == pygame.KEYDOWN and event.key == pygame.K_F11 and (pygame.key.get_mods() & pygame.KMOD_SHIFT):
-                    # Shift-F11 clears debug click log
-                    self.debug_click_log = []
-                    self._set_message('Debug log cleared')
-                    continue
-                # Handle path preview dialog input first (if active)
-                # If a non-modal overlay is active, handle its quick interactions (start/dismiss)
-                if getattr(self, 'preview_overlay_visible', False) and (self.path_preview_dialog or getattr(self, 'auto_path', None)):
-                    # Keyboard shortcuts for non-modal overlay
-                    if event.type == pygame.KEYDOWN:
-                        if event.key == pygame.K_ESCAPE:
-                            # Dismiss overlay (keep planned path stored but hide overlay)
-                            self.preview_overlay_visible = False
-                            self.path_preview_dialog = None
-                            self.message = "Path preview dismissed"
-                            continue
-                        if event.key == pygame.K_RETURN or event.key == pygame.K_SPACE:
-                            # Start auto-solve from overlay
-                            self._execute_auto_solve_from_preview()
-                            continue
-                    # Mouse click on sidebar buttons handled further down when button rects exist
-
-                # Quick key: T toggles topology overlay
-                if event.type == pygame.KEYDOWN and event.key == pygame.K_t:
-                    self.show_topology = not getattr(self, 'show_topology', False)
-                    # Reflect the panel checkbox if present
-                    for w in (self.widget_manager.widgets if self.widget_manager else []):
-                        if isinstance(w, CheckboxWidget) and getattr(w, 'flag_name', '') == 'show_topology':
-                            w.checked = self.show_topology
-                    if self.show_topology:
-                        # Notify and warn if no graph
-                        cur = self.maps[self.current_map_idx]
-                        if not hasattr(cur, 'graph') or not cur.graph:
-                            self._set_message('Topology not available for this map', 3.0)
-                        else:
-                            self._set_message('Topology overlay: ON', 2.0)
-                    else:
-                        self._set_message('Topology overlay: OFF', 1.2)
-                    continue
-                if self.path_preview_mode and self.path_preview_dialog:
-                    result = self.path_preview_dialog.handle_input(event)
-                    if result == 'start':
-                        # User confirmed - start auto-solve
-                        self._execute_auto_solve_from_preview()
-                        continue
-                    elif result == 'cancel':
-                        # User cancelled - switch to non-modal overlay (keep planned path visible)
-                        self.path_preview_mode = False
-                        # Keep the dialog instance for overlay rendering if available
-                        self.preview_overlay_visible = True
-                        self.message = "Path preview closed; overlay visible in sidebar/map (Enter to start or Esc to dismiss)"
-                        continue
-
-                # Dismiss solver comparison overlay with Esc
-                if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE and getattr(self, 'show_solver_comparison_overlay', False):
-                    self.show_solver_comparison_overlay = False
-                    self._set_message('Solver comparison closed', 1.2)
-                    continue
-                
-                # If non-modal overlay visible and clicked in sidebar buttons, handle them
-                if getattr(self, 'preview_overlay_visible', False) and event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                    mouse_pos = event.pos
-                    if getattr(self, 'sidebar_start_button_rect', None) and self.sidebar_start_button_rect.collidepoint(mouse_pos):
-                        self._execute_auto_solve_from_preview()
-                        continue
-                    if getattr(self, 'sidebar_dismiss_button_rect', None) and self.sidebar_dismiss_button_rect.collidepoint(mouse_pos):
-                        self.preview_overlay_visible = False
-                        self.path_preview_dialog = None
-                        self.message = "Path preview dismissed"
-                        continue
 
                 if event.type == pygame.QUIT:
                     running = False

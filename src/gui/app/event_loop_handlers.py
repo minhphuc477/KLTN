@@ -89,3 +89,168 @@ def handle_window_focus_event(gui, event, pygame_module, logger):
         return True
 
     return False
+
+
+def handle_global_keydown_shortcuts(
+    gui,
+    event,
+    pygame_module,
+    time_module,
+    logger,
+    checkbox_widget_cls,
+):
+    """Handle global KEYDOWN diagnostics and shortcuts; returns True when consumed."""
+    if event.type != pygame_module.KEYDOWN:
+        return False
+
+    try:
+        gui._last_key_event = {
+            "key": event.key,
+            "mods": pygame_module.key.get_mods(),
+            "time": time_module.time(),
+        }
+    except Exception:
+        pass
+
+    logger.debug("KEYDOWN key=%s mods=%s", event.key, pygame_module.key.get_mods())
+
+    if event.key == pygame_module.K_o and (pygame_module.key.get_mods() & pygame_module.KMOD_CTRL):
+        try:
+            if getattr(gui, "preview_overlay_visible", False) or getattr(gui, "show_solver_comparison_overlay", False):
+                gui.preview_overlay_visible = False
+                gui.show_solver_comparison_overlay = False
+                gui.path_preview_dialog = None
+                gui._show_toast("Overlays hidden (Ctrl+O)", 2.0, "success")
+                gui._set_message("Overlays hidden", 2.0)
+            else:
+                gui._show_toast("No overlays active", 1.5, "info")
+        except Exception:
+            logger.exception("Failed to toggle overlays")
+        return True
+
+    if event.key == pygame_module.K_F12:
+        gui.debug_overlay_enabled = not getattr(gui, "debug_overlay_enabled", False)
+        if gui.debug_overlay_enabled:
+            gui._set_message("Debug overlay ON (F12 to toggle)")
+        else:
+            gui._set_message("Debug overlay OFF")
+        return True
+
+    if event.key == pygame_module.K_f:
+        try:
+            pygame_module.event.set_grab(False)
+        except Exception:
+            logger.debug("Failed to clear event grab via F key")
+        try:
+            pygame_module.mouse.set_visible(True)
+        except Exception:
+            logger.debug("Failed to set mouse visible via F key")
+        try:
+            gui._show_toast("Forced focus/ungrab (F)", 2.0, "info")
+            gui._set_message("Forced focus/ungrab (F)")
+        except Exception:
+            pass
+        return True
+
+    if event.key == pygame_module.K_F12 and (pygame_module.key.get_mods() & pygame_module.KMOD_SHIFT):
+        gui.debug_control_panel = not getattr(gui, "debug_control_panel", False)
+        if gui.debug_control_panel:
+            gui._set_message("Control panel debug ON (Shift+F12)")
+        else:
+            gui._set_message("Control panel debug OFF")
+        return True
+
+    if event.key in (pygame_module.K_PAGEUP, pygame_module.K_PAGEDOWN):
+        if (
+            gui.control_panel_enabled
+            and getattr(gui, "control_panel_can_scroll", False)
+            and getattr(gui, "control_panel_rect", None)
+            and gui.control_panel_rect.collidepoint(pygame_module.mouse.get_pos())
+            and not gui.control_panel_collapsed
+        ):
+            page_amount = max(1, gui.control_panel_rect.height - 32)
+            if event.key == pygame_module.K_PAGEUP:
+                gui.control_panel_scroll = max(0, int(gui.control_panel_scroll - page_amount))
+            else:
+                gui.control_panel_scroll = min(
+                    getattr(gui, "control_panel_scroll_max", 0),
+                    int(gui.control_panel_scroll + page_amount),
+                )
+            gui.control_panel_scroll_velocity = 0.0
+            gui.control_panel_ignore_click_until = time_module.time() + 0.12
+            return True
+
+    if event.key == pygame_module.K_F11 and (pygame_module.key.get_mods() & pygame_module.KMOD_SHIFT):
+        gui.debug_click_log = []
+        gui._set_message("Debug log cleared")
+        return True
+
+    if event.key == pygame_module.K_t:
+        gui.show_topology = not getattr(gui, "show_topology", False)
+        for w in (gui.widget_manager.widgets if gui.widget_manager else []):
+            if isinstance(w, checkbox_widget_cls) and getattr(w, "flag_name", "") == "show_topology":
+                w.checked = gui.show_topology
+        if gui.show_topology:
+            cur = gui.maps[gui.current_map_idx]
+            if not hasattr(cur, "graph") or not cur.graph:
+                gui._set_message("Topology not available for this map", 3.0)
+            else:
+                gui._set_message("Topology overlay: ON", 2.0)
+        else:
+            gui._set_message("Topology overlay: OFF", 1.2)
+        return True
+
+    return False
+
+
+def handle_preview_overlay_events(gui, event, pygame_module):
+    """Handle preview overlay and path preview dialog interactions; returns True when consumed."""
+    if getattr(gui, "preview_overlay_visible", False) and (
+        gui.path_preview_dialog or getattr(gui, "auto_path", None)
+    ):
+        if event.type == pygame_module.KEYDOWN:
+            if event.key == pygame_module.K_ESCAPE:
+                gui.preview_overlay_visible = False
+                gui.path_preview_dialog = None
+                gui.message = "Path preview dismissed"
+                return True
+            if event.key == pygame_module.K_RETURN or event.key == pygame_module.K_SPACE:
+                gui._execute_auto_solve_from_preview()
+                return True
+
+    if getattr(gui, "path_preview_mode", False) and getattr(gui, "path_preview_dialog", None):
+        result = gui.path_preview_dialog.handle_input(event)
+        if result == "start":
+            gui._execute_auto_solve_from_preview()
+            return True
+        if result == "cancel":
+            gui.path_preview_mode = False
+            gui.preview_overlay_visible = True
+            gui.message = "Path preview closed; overlay visible in sidebar/map (Enter to start or Esc to dismiss)"
+            return True
+
+    if (
+        event.type == pygame_module.KEYDOWN
+        and event.key == pygame_module.K_ESCAPE
+        and getattr(gui, "show_solver_comparison_overlay", False)
+    ):
+        gui.show_solver_comparison_overlay = False
+        gui._set_message("Solver comparison closed", 1.2)
+        return True
+
+    if (
+        getattr(gui, "preview_overlay_visible", False)
+        and event.type == pygame_module.MOUSEBUTTONDOWN
+        and event.button == 1
+    ):
+        mouse_pos = event.pos
+        if getattr(gui, "sidebar_start_button_rect", None) and gui.sidebar_start_button_rect.collidepoint(mouse_pos):
+            gui._execute_auto_solve_from_preview()
+            return True
+        if getattr(gui, "sidebar_dismiss_button_rect", None) and gui.sidebar_dismiss_button_rect.collidepoint(mouse_pos):
+            gui.preview_overlay_visible = False
+            gui.path_preview_dialog = None
+            gui.message = "Path preview dismissed"
+            return True
+
+    return False
