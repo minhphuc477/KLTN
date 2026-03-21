@@ -305,6 +305,17 @@ from src.gui.gameplay.block_push_controls import (
     check_and_start_block_push as _check_and_start_block_push_helper,
 )
 from src.gui.rendering.help_overlay import render_help_overlay as _render_help_overlay_helper
+from src.gui.rendering.panel_overlay_orchestration import (
+    render_controls_section as _render_controls_section_orchestration_helper,
+    render_debug_overlay as _render_debug_overlay_orchestration_helper,
+    render_help_overlay as _render_help_overlay_orchestration_helper,
+    render_inventory_section as _render_inventory_section_orchestration_helper,
+    render_message_section as _render_message_section_orchestration_helper,
+    render_metrics_section as _render_metrics_section_orchestration_helper,
+    render_progress_bar as _render_progress_bar_orchestration_helper,
+    render_status_section as _render_status_section_orchestration_helper,
+    render_unified_bottom_panel as _render_unified_bottom_panel_orchestration_helper,
+)
 from src.gui.rendering.helpers import (
     render_topology_overlay as _render_topology_overlay_helper,
     render_solver_comparison_overlay as _render_solver_comparison_overlay_helper,
@@ -387,6 +398,11 @@ from src.gui.runtime.display_orchestration import (
 from src.gui.control_panel.animation import (
     start_toggle_panel_animation as _start_toggle_panel_animation_helper,
     update_control_panel_animation as _update_control_panel_animation_helper,
+)
+from src.gui.control_panel.animation_orchestration import (
+    start_toggle_panel_animation as _start_toggle_panel_animation_orchestration_helper,
+    update_control_panel_animation as _update_control_panel_animation_orchestration_helper,
+    update_control_panel_scroll as _update_control_panel_scroll_orchestration_helper,
 )
 from src.gui.control_panel.scroll import update_control_panel_scroll as _update_control_panel_scroll_helper
 from src.gui.control_panel.view import (
@@ -503,6 +519,11 @@ from src.gui.topology.match_controls import (
     match_missing_nodes as _match_missing_nodes_helper,
     undo_last_match as _undo_last_match_helper,
     apply_tentative_matches as _apply_tentative_matches_helper,
+)
+from src.gui.topology.match_orchestration import (
+    apply_tentative_matches as _apply_tentative_matches_orchestration_helper,
+    match_missing_nodes as _match_missing_nodes_orchestration_helper,
+    undo_last_match as _undo_last_match_orchestration_helper,
 )
 from src.gui.solver.comparison_runner import (
     run_solver_comparison as _run_solver_comparison_helper,
@@ -1416,15 +1437,28 @@ class ZeldaGUI:
     # ------------------ Control Panel Animation ------------------
     def _start_toggle_panel_animation(self, target_collapsed: bool):
         """Begin animated transition to collapsed or expanded state."""
-        _start_toggle_panel_animation_helper(self, target_collapsed, time)
+        _start_toggle_panel_animation_orchestration_helper(
+            gui=self,
+            target_collapsed=target_collapsed,
+            time_module=time,
+            start_toggle_panel_animation_helper=_start_toggle_panel_animation_helper,
+        )
 
     def _update_control_panel_animation(self):
         """Update animation state; should be called each frame."""
-        _update_control_panel_animation_helper(self, time)
+        _update_control_panel_animation_orchestration_helper(
+            gui=self,
+            time_module=time,
+            update_control_panel_animation_helper=_update_control_panel_animation_helper,
+        )
 
     def _update_control_panel_scroll(self):
         """Per-frame update that applies inertia (momentum) and clamps scroll."""
-        _update_control_panel_scroll_helper(self, time)
+        _update_control_panel_scroll_orchestration_helper(
+            gui=self,
+            time_module=time,
+            update_control_panel_scroll_helper=_update_control_panel_scroll_helper,
+        )
 
     def run(self, max_frames: Optional[int] = None):
         """Main game loop with delta-time support.
@@ -1859,11 +1893,20 @@ class ZeldaGUI:
         High-confidence proposals (>= configured threshold) are applied automatically.
         Lower confidence proposals are kept as 'tentative' in `current.match_proposals` for manual apply.
         """
-        return _match_missing_nodes_helper(gui=self, matcher_cls=RoomGraphMatcher, logger=logger)
+        return _match_missing_nodes_orchestration_helper(
+            gui=self,
+            matcher_cls=RoomGraphMatcher,
+            logger=logger,
+            match_missing_nodes_helper=_match_missing_nodes_helper,
+        )
 
     def _undo_last_match(self):
         """Undo last applied match snapshot, if any."""
-        return _undo_last_match_helper(gui=self, logger=logger)
+        return _undo_last_match_orchestration_helper(
+            gui=self,
+            logger=logger,
+            undo_last_match_helper=_undo_last_match_helper,
+        )
 
     def _room_for_global_position(self, pos: Optional[Tuple[int, int]], room_positions: dict) -> Optional[Tuple[int, int]]:
         """Map a global tile coordinate to a room-grid coordinate."""
@@ -1942,7 +1985,11 @@ class ZeldaGUI:
 
     def _apply_tentative_matches(self):
         """Apply staged tentative matches above the configured threshold."""
-        return _apply_tentative_matches_helper(gui=self, logger=logger)
+        return _apply_tentative_matches_orchestration_helper(
+            gui=self,
+            logger=logger,
+            apply_tentative_matches_helper=_apply_tentative_matches_helper,
+        )
 
     # --- Solver comparison helpers ---
     def _set_last_solver_metrics(self, name, nodes, time_ms, path_len):
@@ -2195,47 +2242,96 @@ class ZeldaGUI:
         """Render debug overlay with mouse coords, widget rects, and recent clicks.
         Toggle with F12. Shift-F11 clears click log.
         """
-        _render_debug_overlay_helper(self, surface, pygame, time)
+        _render_debug_overlay_orchestration_helper(
+            gui=self,
+            surface=surface,
+            pygame=pygame,
+            time_module=time,
+            render_debug_overlay_helper=_render_debug_overlay_helper,
+        )
 
     def _render_unified_bottom_panel(self):
         """Render unified bottom HUD panel - STATUS and MESSAGE only (inventory moved to sidebar)."""
-        _render_unified_bottom_panel_helper(self, pygame)
+        _render_unified_bottom_panel_orchestration_helper(
+            gui=self,
+            pygame=pygame,
+            render_unified_bottom_panel_helper=_render_unified_bottom_panel_helper,
+        )
     
     def _render_message_section(self, x: int, y: int, width: int, height: int):
         """Render message/status section in bottom panel."""
-        _render_message_section_helper(self, x, y, width, height)
+        _render_message_section_orchestration_helper(
+            gui=self,
+            x=x,
+            y=y,
+            width=width,
+            height=height,
+            render_message_section_helper=_render_message_section_helper,
+        )
     
     def _render_progress_bar(self, surface, x: int, y: int, width: int, height: int, 
                              filled: int, total: int, color_filled: tuple, color_empty: tuple):
         """Render a segmented progress bar with filled/empty indicators."""
-        _render_progress_bar_helper(
-            surface,
-            x,
-            y,
-            width,
-            height,
-            filled,
-            total,
-            color_filled,
-            color_empty,
-            pygame,
+        _render_progress_bar_orchestration_helper(
+            surface=surface,
+            x=x,
+            y=y,
+            width=width,
+            height=height,
+            filled=filled,
+            total=total,
+            color_filled=color_filled,
+            color_empty=color_empty,
+            pygame=pygame,
+            render_progress_bar_helper=_render_progress_bar_helper,
         )
     
     def _render_inventory_section(self, x: int, y: int, width: int, height: int):
         """Render inventory section with progress bars and icons."""
-        _render_inventory_section_helper(self, x, y, width, height, pygame, time, logger)
+        _render_inventory_section_orchestration_helper(
+            gui=self,
+            x=x,
+            y=y,
+            width=width,
+            height=height,
+            pygame=pygame,
+            time_module=time,
+            logger=logger,
+            render_inventory_section_helper=_render_inventory_section_helper,
+        )
     
     def _render_metrics_section(self, x: int, y: int, width: int, height: int):
         """Render metrics section (steps, speed, zoom, env)."""
-        _render_metrics_section_helper(self, x, y, width, height)
+        _render_metrics_section_orchestration_helper(
+            gui=self,
+            x=x,
+            y=y,
+            width=width,
+            height=height,
+            render_metrics_section_helper=_render_metrics_section_helper,
+        )
     
     def _render_controls_section(self, x: int, y: int, width: int, height: int):
         """Render controls section in two-column layout."""
-        _render_controls_section_helper(self, x, y, width, height)
+        _render_controls_section_orchestration_helper(
+            gui=self,
+            x=x,
+            y=y,
+            width=width,
+            height=height,
+            render_controls_section_helper=_render_controls_section_helper,
+        )
     
     def _render_status_section(self, x: int, y: int, width: int, height: int):
         """Render status section with game state information."""
-        _render_status_section_helper(self, x, y, width, height)
+        _render_status_section_orchestration_helper(
+            gui=self,
+            x=x,
+            y=y,
+            width=width,
+            height=height,
+            render_status_section_helper=_render_status_section_helper,
+        )
     
     def _render_minimap(self):
         """Render small dungeon overview map in bottom-right corner."""
@@ -2255,7 +2351,11 @@ class ZeldaGUI:
     
     def _render_help_overlay(self):
         """Render help overlay."""
-        _render_help_overlay_helper(self, pygame)
+        _render_help_overlay_orchestration_helper(
+            gui=self,
+            pygame=pygame,
+            render_help_overlay_helper=_render_help_overlay_helper,
+        )
 
 
 def load_maps_from_adapter():
