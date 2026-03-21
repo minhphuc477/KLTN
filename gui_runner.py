@@ -51,6 +51,15 @@ from src.gui.app.run_completion_handlers import (
     handle_preview_process_completion,
     handle_solver_process_completion,
 )
+from src.gui.app.frame_loop_handlers import (
+    advance_frame_and_check_limit,
+    handle_pending_solver_trigger,
+    handle_watchdog_screenshot_request,
+    render_and_present_frame,
+    run_periodic_display_health_check,
+    tick_frame_clock,
+    update_heartbeat,
+)
 from src.gui.app.event_loop_handlers import (
     clear_stale_preview_overlay,
     handle_global_keydown_shortcuts,
@@ -1952,21 +1961,10 @@ class ZeldaGUI:
             # Update toast notifications
             self._update_toasts()
 
-            # Periodic heartbeat to confirm main loop alive
-            try:
-                now = time.time()
-                if now - heartbeat_last > heartbeat_interval:
-                    heartbeat_last = now
-                    logger.debug("GUI heartbeat - frame=%d auto_mode=%s solver_running=%s", frame_count, getattr(self,'auto_mode',False), getattr(self,'solver_running',False))
-            except Exception:
-                pass
+            self.frame_count = frame_count
+            heartbeat_last = update_heartbeat(self, logger, time, heartbeat_last, heartbeat_interval)
 
-            # Check if algorithm change triggered a pending solver (deferred to avoid blocking event handler)
-            if getattr(self, '_pending_solver_trigger', False):
-                self._pending_solver_trigger = False
-                alg_name = self._algorithm_name(self.algorithm_idx)
-                logger.info('â‰¡Æ’Ã¶Ã¤ Processing pending solver trigger: Starting %s solver...', alg_name)
-                self._start_auto_solve()
+            handle_pending_solver_trigger(self, logger)
 
             # Update animated control panel state (if active)
             self._update_control_panel_animation()
@@ -1998,56 +1996,17 @@ class ZeldaGUI:
 
             handle_ai_generation_completion(self)
 
-            # Render
-            self._render()
+            render_and_present_frame(self, pygame, logger)
 
-            # Present frame to the display (ensure visual updates after resize/fullscreen changes)
-            try:
-                pygame.display.flip()
-            except Exception:
-                logger.exception('pygame.display.flip() failed; attempting pygame.display.update() and fallback')
-                try:
-                    pygame.display.update()
-                except Exception:
-                    logger.exception('pygame.display.update() also failed')
-                    # Try a reinit if flip/update both fail and display seems unhealthy
-                    try:
-                        if not self._ensure_display_alive():
-                            logger.warning('Display not healthy after flip/update; attempted recovery')
-                    except Exception:
-                        logger.exception('Attempted display recovery after flip/update failures')
+            handle_watchdog_screenshot_request(self, logger)
 
-            # If watchdog requested a screenshot, perform it on the main thread (thread-safe)
-            try:
-                # Let a dedicated helper perform the watchdog screenshot save and clear the request
-                try:
-                    self._handle_watchdog_screenshot()
-                except Exception:
-                    logger.exception('Error during watchdog screenshot handling')
-            except Exception:
-                # Be defensive: avoid crashing the main loop due to watchdog handling
-                logger.exception('Error handling watchdog screenshot request')
+            run_periodic_display_health_check(self, time, logger)
 
-            # Periodic display health check (throttled)
-            try:
-                now = time.time()
-                if now - getattr(self, '_display_check_last', 0.0) >= getattr(self, '_display_check_interval', 1.0):
-                    self._display_check_last = now
-                    ok = self._ensure_display_alive()
-                    if not ok:
-                        # If recovery failed, show a persistent message to the user
-                        self._set_message('Display recovery attempted; see logs', 6.0)
-            except Exception:
-                logger.exception('Error during display health check')
-
-            # Increment frame counter and check test-mode limit
-            frame_count += 1
-            if max_frames is not None and frame_count >= max_frames:
-                logger.debug("Exiting run loop due to max_frames=%r", max_frames)
+            frame_count, keep_running = advance_frame_and_check_limit(frame_count, max_frames, logger)
+            if not keep_running:
                 running = False
 
-            # Cap framerate - use higher FPS during auto_mode for smoother animations
-            self.clock.tick(60 if self.auto_mode else 30)
+            tick_frame_clock(self)
         
         pygame.quit()
 
