@@ -376,6 +376,12 @@ from src.gui.rendering.post_map_ui_pipeline import (
     render_sidebar_content as _render_sidebar_content_helper,
     render_top_ui_layers as _render_top_ui_layers_helper,
 )
+from src.gui.rendering.tile_asset_builder import (
+    build_stair_marker_sprite as _build_stair_marker_sprite_helper,
+    build_tile_images as _build_tile_images_helper,
+    default_tile_color_map as _default_tile_color_map_helper,
+)
+from src.gui.rendering.link_sprite_builder import build_link_sprite as _build_link_sprite_helper
 from src.gui.gameplay.map_elites_controls import (
     start_map_elites as _start_map_elites_flow_helper,
     map_elites_worker as _map_elites_worker_flow_helper,
@@ -685,145 +691,23 @@ class ZeldaGUI:
     
     def _load_assets(self):
         """Load tile images - using colored squares for reliability."""
-        self.images = {}
-        
-        # Color definitions for tile rendering
-        color_map = {
-            SEMANTIC_PALETTE['VOID']: (20, 20, 20),
-            SEMANTIC_PALETTE['FLOOR']: (200, 180, 140),
-            SEMANTIC_PALETTE['WALL']: (60, 60, 140),
-            SEMANTIC_PALETTE['BLOCK']: (139, 90, 43),
-            SEMANTIC_PALETTE['DOOR_OPEN']: (100, 80, 60),
-            SEMANTIC_PALETTE['DOOR_LOCKED']: (139, 69, 19),
-            SEMANTIC_PALETTE['DOOR_BOMB']: (80, 80, 80),
-            SEMANTIC_PALETTE['DOOR_BOSS']: (180, 40, 40),
-            SEMANTIC_PALETTE['DOOR_PUZZLE']: (140, 80, 180),
-            SEMANTIC_PALETTE['DOOR_SOFT']: (100, 100, 60),
-            SEMANTIC_PALETTE['ENEMY']: (200, 50, 50),
-            SEMANTIC_PALETTE['START']: (80, 180, 80),
-            SEMANTIC_PALETTE['TRIFORCE']: (255, 215, 0),
-            SEMANTIC_PALETTE['BOSS']: (150, 20, 20),
-            SEMANTIC_PALETTE['KEY_SMALL']: (255, 200, 50),
-            SEMANTIC_PALETTE['KEY_BOSS']: (200, 100, 50),
-            SEMANTIC_PALETTE['KEY_ITEM']: (100, 200, 255),
-            SEMANTIC_PALETTE['ITEM_MINOR']: (200, 200, 200),
-            SEMANTIC_PALETTE['ELEMENT']: (50, 80, 180),
-            SEMANTIC_PALETTE['ELEMENT_FLOOR']: (80, 100, 160),
-            SEMANTIC_PALETTE['STAIR']: (120, 100, 80),
-            SEMANTIC_PALETTE['PUZZLE']: (180, 100, 180),
-        }
-        
-        # Create colored square tiles for each semantic ID
-        for tile_id, color in color_map.items():
-            surf = pygame.Surface((self.TILE_SIZE, self.TILE_SIZE))
-            surf.fill(color)
-            
-            # Add visual indicators for special tiles
-            if tile_id == SEMANTIC_PALETTE['DOOR_LOCKED']:
-                # Draw keyhole indicator
-                pygame.draw.circle(surf, (255, 200, 50), 
-                                 (self.TILE_SIZE//2, self.TILE_SIZE//2 - 4), 4)
-                pygame.draw.rect(surf, (255, 200, 50),
-                               (self.TILE_SIZE//2 - 2, self.TILE_SIZE//2, 4, 8))
-            elif tile_id == SEMANTIC_PALETTE['DOOR_BOMB']:
-                # Draw crack pattern
-                pygame.draw.line(surf, (40, 40, 40), (8, 8), (24, 24), 2)
-                pygame.draw.line(surf, (40, 40, 40), (24, 8), (8, 24), 2)
-            elif tile_id == SEMANTIC_PALETTE['KEY_SMALL']:
-                # Draw key with glow effect for better visibility
-                # Outer glow (yellow)
-                pygame.draw.circle(surf, (255, 255, 100), (16, 10), 9)
-                # Key head (circle)
-                pygame.draw.circle(surf, (255, 215, 0), (16, 10), 6)
-                # Key shaft
-                pygame.draw.rect(surf, (255, 215, 0), (14, 10, 4, 16))
-                # Key teeth
-                pygame.draw.rect(surf, (255, 215, 0), (14, 22, 2, 3))
-                pygame.draw.rect(surf, (255, 215, 0), (16, 24, 2, 2))
-                # Inner shine
-                pygame.draw.circle(surf, (255, 255, 200), (17, 9), 2)
-                pygame.draw.circle(surf, (255, 255, 100, 150), (16, 10), 9)
-                # Key head (circle)
-                pygame.draw.circle(surf, (255, 215, 0), (16, 10), 6)
-                # Key shaft
-                pygame.draw.rect(surf, (255, 215, 0), (14, 10, 4, 16))
-                # Key teeth
-                pygame.draw.rect(surf, (255, 215, 0), (14, 22, 2, 3))
-                pygame.draw.rect(surf, (255, 215, 0), (16, 24, 2, 2))
-                # Inner shine
-                pygame.draw.circle(surf, (255, 255, 200), (17, 9), 2)
-            elif tile_id == SEMANTIC_PALETTE['TRIFORCE']:
-                # Draw golden triangle
-                points = [(16, 4), (4, 28), (28, 28)]
-                pygame.draw.polygon(surf, (255, 255, 200), points)
-                pygame.draw.polygon(surf, (200, 180, 0), points, 2)
-            elif tile_id == SEMANTIC_PALETTE['ENEMY']:
-                # Draw enemy indicator (red circle with eyes)
-                pygame.draw.circle(surf, (255, 100, 100), (16, 16), 10)
-                pygame.draw.circle(surf, (0, 0, 0), (12, 12), 3)
-                pygame.draw.circle(surf, (0, 0, 0), (20, 12), 3)
-            elif tile_id == SEMANTIC_PALETTE['START']:
-                # Draw stair pattern
-                pygame.draw.rect(surf, (60, 140, 60), (4, 4, 24, 24))
-                for i in range(4):
-                    pygame.draw.line(surf, (40, 100, 40), (8, 8+i*6), (24, 8+i*6), 2)
-            elif tile_id == SEMANTIC_PALETTE['STAIR']:
-                # Draw stair steps
-                for i in range(4):
-                    pygame.draw.rect(surf, (100, 80, 60), (4+i*4, 20-i*4, 20-i*4, 4))
-            elif tile_id == SEMANTIC_PALETTE['WALL']:
-                # Add brick pattern to walls
-                pygame.draw.rect(surf, (50, 50, 120), (2, 2, 28, 28), 2)
-                pygame.draw.line(surf, (70, 70, 150), (0, 16), (32, 16), 1)
-                pygame.draw.line(surf, (70, 70, 150), (16, 0), (16, 32), 1)
-            elif tile_id == SEMANTIC_PALETTE['BLOCK']:
-                # Add block texture
-                pygame.draw.rect(surf, (100, 60, 30), (2, 2, 28, 28), 2)
-            elif tile_id == SEMANTIC_PALETTE['DOOR_OPEN']:
-                # Draw open doorway
-                pygame.draw.rect(surf, (40, 30, 20), (8, 0, 16, 32))
-            elif tile_id == SEMANTIC_PALETTE['ELEMENT']:
-                # Water/lava pattern
-                for i in range(4):
-                    pygame.draw.arc(surf, (80, 120, 200), (i*8, 8, 16, 16), 0, 3.14, 2)
-                    pygame.draw.arc(surf, (80, 120, 200), (i*8, 16, 16, 16), 3.14, 6.28, 2)
-            
-            # Convert surface to display format with alpha for robust blitting
-            try:
-                self.images[tile_id] = surf.convert_alpha()
-            except Exception:
-                # Fallback to raw surface if convert_alpha fails
-                self.images[tile_id] = surf
+        color_map = _default_tile_color_map_helper(semantic_palette=SEMANTIC_PALETTE)
+        self.images = _build_tile_images_helper(
+            tile_size=self.TILE_SIZE,
+            color_map=color_map,
+            semantic_palette=SEMANTIC_PALETTE,
+            pygame=pygame,
+        )
         
         # Create Link sprite
         self.link_img = self._create_link_sprite()
 
         # Create a small stair sprite (glowing marker) for visual emphasis
         try:
-            # Force stair sprite to full tile size and use a bright, high-contrast overlay
-            sprite_size = self.TILE_SIZE
-            self.stair_sprite = pygame.Surface((sprite_size, sprite_size), pygame.SRCALPHA)
-            self.stair_sprite.fill((0, 0, 0, 0))
-
-            # Full-tile translucent fill (warm gold)
-            pygame.draw.rect(self.stair_sprite, (255, 220, 100, 180), (0, 0, sprite_size, sprite_size))
-            # Strong border for clear visibility
-            pygame.draw.rect(self.stair_sprite, (255, 200, 50), (1, 1, sprite_size-2, sprite_size-2), 4)
-
-            # Center triangle to indicate stair direction
-            pts = [(sprite_size//2, sprite_size//6), (sprite_size//6, sprite_size*5//6), (sprite_size*5//6, sprite_size*5//6)]
-            pygame.draw.polygon(self.stair_sprite, (255, 245, 180), pts)
-            pygame.draw.polygon(self.stair_sprite, (255, 200, 50), pts, 2)
-
-            # Slight inner highlight circle
-            pygame.draw.circle(self.stair_sprite, (255, 255, 220, 64), (sprite_size//2, sprite_size//2), max(6, sprite_size//6))
-
-            # Convert stair sprite for robust blitting
-            try:
-                self.stair_sprite = self.stair_sprite.convert_alpha()
-            except Exception:
-                pass
-            self.stair_anim_phase = 0.0
+            self.stair_sprite, self.stair_anim_phase = _build_stair_marker_sprite_helper(
+                tile_size=self.TILE_SIZE,
+                pygame=pygame,
+            )
         except Exception:
             self.stair_sprite = None
             self.stair_anim_phase = 0.0
@@ -831,44 +715,7 @@ class ZeldaGUI:
 
     def _create_link_sprite(self):
         """Create a detailed Link sprite using pygame drawing."""
-        link_img = pygame.Surface((self.TILE_SIZE - 4, self.TILE_SIZE - 4), pygame.SRCALPHA)
-        
-        # Transparent background
-        link_img.fill((0, 0, 0, 0))
-        
-        # Body colors
-        green = (0, 168, 0)
-        skin = (252, 216, 168)
-        brown = (136, 112, 0)
-        dark_green = (0, 120, 0)
-        
-        # Draw Link's body (green tunic)
-        pygame.draw.rect(link_img, green, (8, 12, 12, 12))  # Torso
-        pygame.draw.rect(link_img, dark_green, (6, 18, 4, 8))  # Left arm
-        pygame.draw.rect(link_img, dark_green, (18, 18, 4, 8))  # Right arm
-        
-        # Draw head
-        pygame.draw.rect(link_img, skin, (8, 2, 12, 10))  # Face
-        pygame.draw.circle(link_img, (0, 0, 0), (11, 6), 2)  # Left eye
-        pygame.draw.circle(link_img, (0, 0, 0), (17, 6), 2)  # Right eye
-        
-        # Draw hair/cap (brown)
-        pygame.draw.rect(link_img, brown, (6, 0, 16, 4))  # Hair top
-        pygame.draw.rect(link_img, brown, (4, 2, 4, 6))  # Hair left
-        pygame.draw.rect(link_img, brown, (20, 2, 4, 6))  # Hair right
-        
-        # Draw shield (brown rectangle on left side)
-        pygame.draw.rect(link_img, brown, (2, 14, 6, 10))
-        pygame.draw.rect(link_img, (200, 150, 50), (3, 15, 4, 8))  # Shield front
-        
-        # Draw sword (on right side)
-        pygame.draw.rect(link_img, (180, 180, 180), (22, 12, 4, 14))  # Blade
-        pygame.draw.rect(link_img, brown, (22, 10, 4, 4))  # Hilt
-        
-        try:
-            return link_img.convert_alpha()
-        except Exception:
-            return link_img
+        return _build_link_sprite_helper(tile_size=self.TILE_SIZE, pygame=pygame)
     
     def _init_control_panel(self):
         """Initialize the GUI control panel with widgets."""
