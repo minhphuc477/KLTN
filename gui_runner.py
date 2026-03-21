@@ -248,6 +248,19 @@ from src.gui.runtime.toast_messages import (
     update_toasts as _update_toasts_helper,
     render_toasts as _render_toasts_helper,
 )
+from src.gui.rendering.status_toast_orchestration import (
+    format_cbs_metrics_tooltip as _format_cbs_metrics_tooltip_orchestration_helper,
+    render_error_banner as _render_error_banner_orchestration_helper,
+    render_solver_status_banner as _render_solver_status_banner_orchestration_helper,
+    render_status_bar as _render_status_bar_orchestration_helper,
+    render_toasts as _render_toasts_orchestration_helper,
+    set_message as _set_message_orchestration_helper,
+    show_error as _show_error_orchestration_helper,
+    show_message as _show_message_orchestration_helper,
+    show_toast as _show_toast_orchestration_helper,
+    show_warning as _show_warning_orchestration_helper,
+    update_toasts as _update_toasts_orchestration_helper,
+)
 from src.gui.map.minimap import (
     render_minimap as _render_minimap_helper,
     handle_minimap_click as _handle_minimap_click_helper,
@@ -257,6 +270,18 @@ from src.gui.map.navigation import (
     prev_map as _prev_map_helper,
     clamp_view_offset as _clamp_view_offset_helper,
     center_on_player as _center_on_player_helper,
+)
+from src.gui.map.navigation_orchestration import (
+    auto_fit_zoom as _auto_fit_zoom_orchestration_helper,
+    center_on_player as _center_on_player_orchestration_helper,
+    center_view as _center_view_orchestration_helper,
+    change_zoom as _change_zoom_orchestration_helper,
+    clamp_view_offset as _clamp_view_offset_orchestration_helper,
+    handle_minimap_click as _handle_minimap_click_orchestration_helper,
+    load_current_map as _load_current_map_orchestration_helper,
+    next_map as _next_map_orchestration_helper,
+    prev_map as _prev_map_orchestration_helper,
+    render_minimap as _render_minimap_orchestration_helper,
 )
 from src.gui.gameplay.block_push_controls import (
     start_block_push_animation as _start_block_push_animation_helper,
@@ -362,6 +387,18 @@ from src.gui.gameplay.inventory_manager import (
     track_item_collection as _track_item_collection_helper,
     track_item_usage as _track_item_usage_helper,
     sync_inventory_counters as _sync_inventory_counters_helper,
+)
+from src.gui.gameplay.inventory_orchestration import (
+    apply_pickup_at as _apply_pickup_at_orchestration_helper,
+    get_path_items_display_text as _get_path_items_display_text_orchestration_helper,
+    remove_from_path_items as _remove_from_path_items_orchestration_helper,
+    render_item_legend as _render_item_legend_orchestration_helper,
+    scan_and_mark_items as _scan_and_mark_items_orchestration_helper,
+    scan_items_along_path as _scan_items_along_path_orchestration_helper,
+    sync_inventory_counters as _sync_inventory_counters_orchestration_helper,
+    track_item_collection as _track_item_collection_orchestration_helper,
+    track_item_usage as _track_item_usage_orchestration_helper,
+    update_inventory_and_hud as _update_inventory_and_hud_orchestration_helper,
 )
 from src.gui.gameplay.path_analysis import scan_items_along_path as _scan_items_along_path_helper
 from src.gui.rendering.inventory_display import (
@@ -816,7 +853,11 @@ class ZeldaGUI:
         If called from a non-main thread, set a flag so the main thread performs the UI update
         (pygame surfaces & rendering should be touched only from the main thread).
         """
-        _update_inventory_and_hud_helper(self, logger)
+        _update_inventory_and_hud_orchestration_helper(
+            gui=self,
+            logger=logger,
+            update_inventory_and_hud_helper=_update_inventory_and_hud_helper,
+        )
 
     def _remove_from_path_items(self, pos, item_type):
         """Remove a collected item from path_item_positions and update summary.
@@ -825,15 +866,38 @@ class ZeldaGUI:
             pos: (row, col) position of collected item
             item_type: 'keys', 'boss_keys', 'ladders', 'bombs', etc.
         """
-        _remove_from_path_items_helper(self, pos, item_type, logger)
+        _remove_from_path_items_orchestration_helper(
+            gui=self,
+            pos=pos,
+            item_type=item_type,
+            logger=logger,
+            remove_from_path_items_helper=_remove_from_path_items_helper,
+        )
 
     def _track_item_collection(self, old_state, new_state):
         """Detect when items are collected by comparing states."""
-        _track_item_collection_helper(self, old_state, new_state, time, logger, PopEffect, ItemCollectionEffect)
+        _track_item_collection_orchestration_helper(
+            gui=self,
+            old_state=old_state,
+            new_state=new_state,
+            time_module=time,
+            logger=logger,
+            pop_effect_cls=PopEffect,
+            item_collection_effect_cls=ItemCollectionEffect,
+            track_item_collection_helper=_track_item_collection_helper,
+        )
     
     def _track_item_usage(self, old_state, new_state):
         """Detect when items are used (doors opened, walls bombed)."""
-        _track_item_usage_helper(self, old_state, new_state, time, logger, ItemUsageEffect)
+        _track_item_usage_orchestration_helper(
+            gui=self,
+            old_state=old_state,
+            new_state=new_state,
+            time_module=time,
+            logger=logger,
+            item_usage_effect_cls=ItemUsageEffect,
+            track_item_usage_helper=_track_item_usage_helper,
+        )
     
     def _scan_and_mark_items(self):
         """Scan the map for all items and create markers.
@@ -841,7 +905,13 @@ class ZeldaGUI:
         This populates item_type_map with all item positions so that
         _sync_inventory_counters() can correctly count collected items.
         """
-        _scan_and_mark_items_helper(self, SEMANTIC_PALETTE, logger, ItemMarkerEffect)
+        _scan_and_mark_items_orchestration_helper(
+            gui=self,
+            semantic_palette=SEMANTIC_PALETTE,
+            logger=logger,
+            item_marker_effect_cls=ItemMarkerEffect,
+            scan_and_mark_items_helper=_scan_and_mark_items_helper,
+        )
 
     def _apply_pickup_at(self, pos: Tuple[int, int]) -> bool:
         """Apply pickup logic at a position for teleport landings or external mutations.
@@ -850,11 +920,24 @@ class ZeldaGUI:
         visual markers/effects and pickup timers. Returns True if an item was
         collected at the position.
         """
-        return _apply_pickup_at_helper(self, pos, SEMANTIC_PALETTE, logger, time, ItemCollectionEffect)
+        return _apply_pickup_at_orchestration_helper(
+            gui=self,
+            pos=pos,
+            semantic_palette=SEMANTIC_PALETTE,
+            logger=logger,
+            time_module=time,
+            item_collection_effect_cls=ItemCollectionEffect,
+            apply_pickup_at_helper=_apply_pickup_at_helper,
+        )
     
     def _render_item_legend(self, surface):
         """Render legend showing item counts and path items preview."""
-        _render_item_legend_helper(self, surface, pygame)
+        _render_item_legend_orchestration_helper(
+            gui=self,
+            surface=surface,
+            pygame=pygame,
+            render_item_legend_helper=_render_item_legend_helper,
+        )
 
     def _sync_inventory_counters(self):
         """Reconcile counters from collected_items and env.state to ensure UI accuracy.
@@ -865,7 +948,10 @@ class ZeldaGUI:
         
         This ensures real-time updates work correctly during auto-solve.
         """
-        _sync_inventory_counters_helper(self)
+        _sync_inventory_counters_orchestration_helper(
+            gui=self,
+            sync_inventory_counters_helper=_sync_inventory_counters_helper,
+        )
 
     def _scan_items_along_path(self, path=None):
         """Scan a path and identify all collectible items along it.
@@ -886,7 +972,13 @@ class ZeldaGUI:
         Returns:
             dict: Summary of items found along path
         """
-        return _scan_items_along_path_helper(self, SEMANTIC_PALETTE, logger, path=path)
+        return _scan_items_along_path_orchestration_helper(
+            gui=self,
+            semantic_palette=SEMANTIC_PALETTE,
+            logger=logger,
+            path=path,
+            scan_items_along_path_helper=_scan_items_along_path_helper,
+        )
 
     def _get_path_items_display_text(self):
         """Generate a display string summarizing items along the path.
@@ -894,19 +986,41 @@ class ZeldaGUI:
         Returns:
             str: Human-readable summary like "Path: 3 keys, 2 doors, 1 boss key"
         """
-        return _get_path_items_display_text_helper(self)
+        return _get_path_items_display_text_orchestration_helper(
+            gui=self,
+            get_path_items_display_text_helper=_get_path_items_display_text_helper,
+        )
     
     def _render_error_banner(self, surface):
         """Render error message banner at top of screen with fade effect."""
-        _render_error_banner_helper(self, surface, pygame, time)
+        _render_error_banner_orchestration_helper(
+            gui=self,
+            surface=surface,
+            pygame=pygame,
+            time_module=time,
+            render_error_banner_helper=_render_error_banner_helper,
+        )
     
     def _render_solver_status_banner(self, surface):
         """Render solver status banner showing current algorithm and progress."""
-        _render_solver_status_banner_helper(self, surface, pygame, math, time, logger)
+        _render_solver_status_banner_orchestration_helper(
+            gui=self,
+            surface=surface,
+            pygame=pygame,
+            math_module=math,
+            time_module=time,
+            logger=logger,
+            render_solver_status_banner_helper=_render_solver_status_banner_helper,
+        )
     
     def _render_status_bar(self, surface):
         """Render status bar at bottom of screen."""
-        _render_status_bar_helper(self, surface, pygame)
+        _render_status_bar_orchestration_helper(
+            gui=self,
+            surface=surface,
+            pygame=pygame,
+            render_status_bar_helper=_render_status_bar_helper,
+        )
     
     def _render_control_panel(self, surface):
         """Render the control panel with all GUI widgets and metrics."""
@@ -1149,22 +1263,23 @@ class ZeldaGUI:
 
     def _load_current_map(self):
         """Load and initialize the current map."""
-        _load_current_map_helper(
-            self,
+        _load_current_map_orchestration_helper(
+            gui=self,
             os_module=os,
             logger=logger,
             zelda_logic_env_cls=ZeldaLogicEnv,
             sanity_checker_cls=SanityChecker,
             semantic_palette=SEMANTIC_PALETTE,
+            load_current_map_helper=_load_current_map_helper,
         )
     
     def _center_view(self):
         """Center the current map in the view."""
-        _center_view_helper(self)
+        _center_view_orchestration_helper(gui=self, center_view_helper=_center_view_helper)
     
     def _auto_fit_zoom(self):
         """Automatically set zoom level to fit the entire map in view."""
-        _auto_fit_zoom_helper(self)
+        _auto_fit_zoom_orchestration_helper(gui=self, auto_fit_zoom_helper=_auto_fit_zoom_helper)
     
     def _change_zoom(self, delta: int, center: tuple | None = None):
         """Change zoom level by delta steps.
@@ -1173,7 +1288,12 @@ class ZeldaGUI:
         that the map tile under the `center` pixel remains under the cursor after
         the zoom. If `center` is None, the view is centered as before.
         """
-        _change_zoom_helper(self, delta, center)
+        _change_zoom_orchestration_helper(
+            gui=self,
+            delta=delta,
+            center=center,
+            change_zoom_helper=_change_zoom_helper,
+        )
     
     def _safe_set_mode(self, size, flags=0, allow_fallback=True):
         """Robust wrapper around pygame.display.set_mode.
@@ -1333,11 +1453,11 @@ class ZeldaGUI:
 
     def _next_map(self):
         """Move to the next map and stop auto-solve if running."""
-        _next_map_helper(self, logger)
+        _next_map_orchestration_helper(gui=self, logger=logger, next_map_helper=_next_map_helper)
 
     def _prev_map(self):
         """Move to the previous map and stop auto-solve if running."""
-        _prev_map_helper(self, logger)
+        _prev_map_orchestration_helper(gui=self, logger=logger, prev_map_helper=_prev_map_helper)
     
     def _clamp_view_offset(self):
         """Clamp view offset to valid range.
@@ -1346,11 +1466,11 @@ class ZeldaGUI:
         the user can pan the small map freely inside the window (showing empty
         margins) while still preventing arbitrary unrestricted panning.
         """
-        _clamp_view_offset_helper(self)
+        _clamp_view_offset_orchestration_helper(gui=self, clamp_view_offset_helper=_clamp_view_offset_helper)
     
     def _center_on_player(self):
         """Center the view on the player position."""
-        _center_on_player_helper(self)
+        _center_on_player_orchestration_helper(gui=self, center_on_player_helper=_center_on_player_helper)
     
     def _start_preview_for_current_map(self):
         _start_preview_for_current_map_orchestration_helper(
@@ -1608,11 +1728,24 @@ class ZeldaGUI:
     
     def _show_error(self, message: str):
         """Display error message to user with visual feedback."""
-        return _show_error_helper(self, message, logger, time)
+        return _show_error_orchestration_helper(
+            gui=self,
+            message=message,
+            logger=logger,
+            time_module=time,
+            show_error_helper=_show_error_helper,
+        )
     
     def _show_message(self, message: str, duration: float = 3.0):
         """Display informational message to user."""
-        return _show_message_helper(self, message, duration, logger, time)
+        return _show_message_orchestration_helper(
+            gui=self,
+            message=message,
+            duration=duration,
+            logger=logger,
+            time_module=time,
+            show_message_helper=_show_message_helper,
+        )
 
     # --- Topology helpers ---
     def _export_topology(self):
@@ -1785,23 +1918,43 @@ class ZeldaGUI:
     
     def _set_message(self, message: str, duration: float = 3.0):
         """Set status message with timestamp for auto-hide."""
-        _set_message_helper(self, message, duration, time)
+        _set_message_orchestration_helper(
+            gui=self,
+            message=message,
+            duration=duration,
+            time_module=time,
+            set_message_helper=_set_message_helper,
+        )
     
     def _show_toast(self, message: str, duration: float = 3.0, toast_type: str = 'info'):
         """Show a floating toast notification."""
-        _show_toast_helper(self, message, duration, toast_type, ToastNotification)
+        _show_toast_orchestration_helper(
+            gui=self,
+            message=message,
+            duration=duration,
+            toast_type=toast_type,
+            toast_cls=ToastNotification,
+            show_toast_helper=_show_toast_helper,
+        )
     
     def _format_cbs_metrics_tooltip(self, cbs_metrics: dict) -> str:
         """Format CBS metrics for detailed tooltip display."""
-        return _format_cbs_metrics_tooltip_helper(cbs_metrics)
+        return _format_cbs_metrics_tooltip_orchestration_helper(
+            cbs_metrics=cbs_metrics,
+            format_cbs_metrics_tooltip_helper=_format_cbs_metrics_tooltip_helper,
+        )
     
     def _update_toasts(self):
         """Update and remove expired toasts."""
-        _update_toasts_helper(self)
+        _update_toasts_orchestration_helper(gui=self, update_toasts_helper=_update_toasts_helper)
     
     def _render_toasts(self, surface):
         """Render all active toast notifications."""
-        _render_toasts_helper(self, surface)
+        _render_toasts_orchestration_helper(
+            gui=self,
+            surface=surface,
+            render_toasts_helper=_render_toasts_helper,
+        )
     
     # ========================================
     # BLOCK PUSH ANIMATION SYSTEM
@@ -1849,7 +2002,12 @@ class ZeldaGUI:
 
     def _show_warning(self, message: str):
         """Display warning message to user."""
-        _show_warning_helper(self, message, logger)
+        _show_warning_orchestration_helper(
+            gui=self,
+            message=message,
+            logger=logger,
+            show_warning_helper=_show_warning_helper,
+        )
     
     def _manual_step(self, action: Action):
         """Execute manual step."""
@@ -1960,11 +2118,19 @@ class ZeldaGUI:
     
     def _render_minimap(self):
         """Render small dungeon overview map in bottom-right corner."""
-        _render_minimap_helper(self, pygame)
+        _render_minimap_orchestration_helper(
+            gui=self,
+            pygame=pygame,
+            render_minimap_helper=_render_minimap_helper,
+        )
     
     def _handle_minimap_click(self, mouse_pos: Tuple[int, int]) -> bool:
         """Handle mouse click on minimap to jump to that location."""
-        return _handle_minimap_click_helper(self, mouse_pos)
+        return _handle_minimap_click_orchestration_helper(
+            gui=self,
+            mouse_pos=mouse_pos,
+            handle_minimap_click_helper=_handle_minimap_click_helper,
+        )
     
     def _render_help_overlay(self):
         """Render help overlay."""
