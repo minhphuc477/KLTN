@@ -84,6 +84,8 @@ from src.gui.app.init_bootstrap import (
 )
 from src.gui.app.init_display_setup import initialize_display_window
 from src.gui.app.init_runtime_watchdog import initialize_runtime_timing_state
+from src.gui.app.init_solver_state import initialize_solver_execution_state
+from src.gui.app.init_ui_state import initialize_ui_control_state
 
 # Configure logging
 logging.basicConfig(
@@ -662,21 +664,11 @@ class ZeldaGUI:
             self.renderer = ZeldaRenderer(self.TILE_SIZE)
             self.effects = EffectManager()
             self.modern_hud = ModernHUD()
-
-        # State for match/undo stack
-        self.match_undo_stack = []
-
-        # Heatmap state for A* visualization
-        self.show_heatmap = False
-        self.search_heatmap = {}  # position -> visit count
-        
         # Load assets (fallback for when new system unavailable)
         self._load_assets()
-        
-        # Initialize environment
-        self.env = None
-        self.solver = None
-        self.auto_path = []
+
+        initialize_solver_execution_state(gui=self, threading_module=threading)
+
         # ===== DEBUG TEST PATH =====
         # Set KLTN_DEBUG_TEST_PATH=1 to enable red debug path overlay
         if os.environ.get('KLTN_DEBUG_TEST_PATH') == '1':
@@ -685,256 +677,14 @@ class ZeldaGUI:
         else:
             self._test_path = None
         # ===========================
-        self.auto_step_idx = 0
-        self.auto_mode = False
-        self.auto_step_timer = 0.0  # Timer for controlling animation speed
-        self.auto_step_interval = 0.15  # Base interval between steps (seconds)
-        self.message = "Press SPACE to auto-solve, Arrow keys to move"
-        self.message_time = time.time()  # Track when message was set
-        self.message_duration = 3.0  # How long to show messages (seconds)
-        self.error_message = None
-        self.error_time = 0
-        self.status_message = "Ready"
-        self.show_help = False  # Toggle help overlay
-        
-        # State-space solver tracking (inventory/edge info)
-        self.solver_result = None  # Stores keys_available, keys_used, edge_types etc.
-        self.current_keys_held = 0  # Keys currently held during auto-solve
-        self.current_keys_used = 0  # Keys used so far during auto-solve
-        self.current_edge_types = []  # Edge types traversed so far
-        self.door_unlock_times = {}  # Track when doors are unlocked for visual feedback
-        
-        # Path preview dialog (Feature 5)
-        self.path_preview_dialog = None  # PathPreviewDialog instance when showing preview
-        self.path_preview_mode = False  # True when showing path preview
-        # If True, show a blocking modal dialog. If False, show non-modal overlay + sidebar summary.
-        # Default: False to avoid blocking the map view (user prefers sidebar preview).
-        self.preview_modal_enabled = False
-        # When True the map will show the path overlay and a small sidebar preview box (non-modal)
-        self.preview_overlay_visible = False
-        # If True, automatically start animation after solver completes (skip preview confirmation)
-        # Default: True for immediate animation on SPACE press
-        # Set KLTN_AUTO_START_SOLVER=0 to require confirmation
-        self.auto_start_solver = os.environ.get('KLTN_AUTO_START_SOLVER', '1') != '0'
-        # One-shot flag: when True, next solver result must show preview (never auto-start).
-        self.preview_on_next_solver_result = False
 
-        # Topology overlay and DOT export
-        self.show_topology = False
-        self.topology_export_path = None
-        # Topology legend & semantics (for overlays/tooltips)
-        self.show_topology_legend = False
-        self.topology_semantics = {
-            "nodes": {
-                "e": ["room", "enemy"],
-                "S": ["room", "switch"],
-                "b": ["room", "boss"],
-                "k": ["room", "key"],
-                "K": ["room", "boss key"],
-                "I": ["room", "key item"],
-                "p": ["room", "puzzle"],
-                "s": ["room", "start"],
-                "t": ["room", "triforce"]
-            },
-            "edges": {
-                "S": ["door", "switch locked"],
-                "b": ["door", "bombable"],
-                "k": ["door", "key locked"],
-                "K": ["door", "boss key locked"],
-                "I": ["door", "key item locked"],
-                "l": ["door", "soft locked"],
-                "s": ["visible", "impassable"]
-            }
-        }
-
-        # Solver metrics and comparison results
-        self.last_solver_metrics = None  # dict: {name,nodes,time_ms,path_len}
-        self.solver_comparison_results = None  # list of dicts
-        self.show_solver_comparison_overlay = False
-
-        # === CRITICAL: Solver subprocess state (must be initialized!) ===
-        # These variables track the background solver process and must exist before
-        # any solver-related code runs (including _schedule_solver, _start_auto_solve)
-        self.solver_running = False      # True while solver subprocess is active
-        self.solver_proc = None          # multiprocessing.Process handle
-        self.solver_done = True          # True when no solver pending (initially done)
-        self.solver_outfile = None       # Temp file for solver pickle output
-        self.solver_gridfile = None      # Temp file for grid numpy array
-        self.solver_thread = None        # Thread fallback handle when process spawn fails
-        self._pending_solver_trigger = False  # Flag to trigger solver on next frame (for algorithm changes)
-        # Lock to make solver scheduling atomic and thread-safe
-        self._solver_lock = threading.Lock()
-        
-        # Preview subprocess state (separate from main solver)
-        self.preview_proc = None         # multiprocessing.Process handle for preview
-        self.preview_outfile = None      # Temp file for preview pickle output
-        self.preview_gridfile = None     # Temp file for preview grid
-        self.preview_done = True         # True when no preview pending
-        self.preview_result = None       # Cached result from preview worker
-        self.preview_thread = None       # Threading fallback for preview
-
-        # Presets
-        self.presets = ['Debugging', 'Fast Approx', 'Optimal', 'Speedrun']
-        self.current_preset_idx = 0
-
-        # D* Lite integration
-        self.dstar_solver = None
-        self.dstar_active = False
-
-        # Parallel search state
-        self.parallel_search_thread = None
-        self.parallel_search_done = False
-        self.parallel_search_result = None
-
-        # Precheck/prune undo snapshot (single-level undo for auto-prune).
-        self._precheck_snapshot = None
-        
-        # Smooth agent animation state
-        self.agent_visual_pos = None  # Vector2 for smooth movement
-        self.agent_target_pos = None  # Grid position target
-        
-        # === BLOCK PUSH ANIMATION SYSTEM ===
-        # List of active block push animations
-        # Each entry: {'from_pos': (r,c), 'to_pos': (r,c), 'start_time': float, 'duration': int}
-        self.block_push_animations = []
-        self.block_push_duration = 200  # milliseconds for block slide animation
-        
-        # Speed control system
-        self.speed_levels = [0.25, 0.5, 1.0, 2.0, 5.0, 10.0]
-        self.speed_index = 2  # Start at 1.0x
-        self.speed_multiplier = self.speed_levels[self.speed_index]
-        
-        # Game metrics
-        self.step_count = 0  # Total steps taken
-        self.item_pickup_times = {}  # Track when items were picked up for animation
-        
-        # Item totals for "X/Y collected" display
-        self.total_keys = 0  # Total keys in dungeon
-        self.total_bombs = 0  # Total bomb items
-        self.total_boss_keys = 0  # Total boss keys
-        self.keys_collected = 0  # Keys collected so far
-        self.bombs_collected = 0  # Bombs collected
-        self.boss_keys_collected = 0  # Boss keys collected
-        
-        # Toast notification system
-        self.toast_notifications = []  # List of ToastNotification objects
-        # Debug overlay & logging
-        self.debug_overlay_enabled = False
-        self.debug_click_log = []  # List of (pos, time, handled_widget_name)
-        
-        # Continuous movement (hold key to move)
-        self.keys_held = {pygame.K_UP: False, pygame.K_DOWN: False, pygame.K_LEFT: False, pygame.K_RIGHT: False}
-        self.move_timer = 0.0  # Timer for continuous movement
-        self.move_delay = 0.15  # Delay between moves (seconds)
-        
-        # Minimap settings
-        self.show_minimap = True  # Toggle minimap display
-        self.minimap_size = 150  # Pixel size of minimap
-        self.minimap_clickable = True  # Allow clicking minimap to navigate
-        
-        # === NEW: Item tracking for enhanced visualization ===
-        self.collected_items = []  # List of (pos, item_type, timestamp)
-        self.collected_positions = set()  # Set of (row, col) for O(1) lookup during rendering
-        self.item_type_map = {}  # pos -> item_type (key, bomb, boss_key, triforce)
-        self.used_items = []       # List of (pos, item_type, target_pos, timestamp)
-        self.item_markers = {}     # Dict: position -> ItemMarkerEffect
-        self.collection_effects = []  # Active collection effects
-        self.usage_effects = []    # Active usage effects
-        
-        # === PATH ITEMS PREVIEW - Track items along auto-solve path ===
-        self.path_items_summary = {}  # {item_type: count} - items along path
-        self.path_item_positions = {}  # {item_type: [(row, col), ...]} - positions of items on path
-        
-        # === Toast Notification System ===
-        self.toast_notifications = []  # List of ToastNotification objects
-        
-        # === NEW: GUI Control Panel ===
-        self.control_panel_enabled = WIDGETS_AVAILABLE
-        self.widget_manager = None
-        self.control_panel_width = 360  # Logical expanded width (increased)
-        self.control_panel_width_current = float(self.control_panel_width)  # Animated visual width
-        self.control_panel_collapsed = False  # Track collapsed state
-        self.control_panel_rect = None
-        self.collapse_button_rect = None  # Rectangle for collapse button
-
-        # Animation state for smooth collapse/expand
-        self.control_panel_animating = False
-        self.control_panel_anim_start = 0.0
-        self.control_panel_anim_from = float(self.control_panel_width)
-        self.control_panel_anim_to = float(self.control_panel_width)
-        self.control_panel_anim_duration = 0.22
-        self.control_panel_target_collapsed = False
-        self.control_panel_x = None  # Custom X position (None = default right side)
-        self.control_panel_y = None  # Custom Y position (None = default below minimap)
-        self.dragging_panel = False
-        self.drag_panel_offset = (0, 0)
-        self.resizing_panel = False
-        self.resize_edge = None  # 'left', 'right', 'top', 'bottom'
-
-        # Control panel scroll state (for small screens)
-        self.control_panel_scroll = 0
-        self.control_panel_scroll_step = 20
-        self.control_panel_can_scroll = False
-        self.control_panel_scroll_max = 0
-        self.control_panel_scroll_track_rect = None
-        self.control_panel_scroll_thumb_rect = None
-        self.control_panel_scroll_dragging = False
-        self.control_panel_scroll_drag_offset = 0
-        self.control_panel_content_height = 0
-        # Debug toggle to draw layout markers and print metrics
-        self.debug_control_panel = False
-
-        # Inventory refresh flag (used when updates originate from worker threads)
-        self.inventory_needs_refresh = False
-
-        # Scroll inertia/momentum
-        self.control_panel_scroll_velocity = 0.0  # pixels per second
-        self.control_panel_scroll_damping = 6.0   # damping factor (higher = faster stop)
-        # Ignore clicks during active scroll or shortly after to avoid accidental toggles
-        self.control_panel_ignore_click_until = 0.0
-
-        self.min_panel_width = 250
-        self.max_panel_width = 500
-        self.min_panel_height = 300
-        
-        # Feature toggles (controlled by checkboxes)
-        self.feature_flags = {
-            'solver_comparison': False,
-            'parallel_search': False,
-            'multi_goal': False,
-            'ml_heuristic': False,
-            'dstar_lite': False,
-            'show_heatmap': False,
-            'show_topology_legend': False,
-            'show_minimap': True,
-            'show_path': True,  # Show solver path overlay (always visible when path exists)
-            'show_topology': False,  # Show topology graph overlay
-            'diagonal_movement': False,
-            'speedrun_mode': False,
-            'strict_original_mode': False,
-            'dynamic_difficulty': False,
-            'force_grid': False,
-            'enable_prechecks': False,
-            'auto_prune_on_precheck': False,
-            'priority_tie_break': False,
-            'priority_key_boost': False,
-            'enable_ara': False,
-            'use_jps': False,
-            'show_jps_overlay': False,
-            # MAP-Elites visualization toggle - when enabled the last MAP-Elites
-            # heatmap generated by the evaluator will be rendered as an overlay
-            'show_map_elites': False,
-        }
-        # Toggle to force using selected grid algorithm even when graph info exists
-        self.force_grid_algorithm = False
-        
-        # Dropdown selections
-        self.current_floor = 1
-        self.zoom_level_idx = 3  # 100%
-        self.difficulty_idx = 1  # Medium
-        self.algorithm_idx = 0   # A*
-        self.search_representation = 'hybrid'  # hybrid | tile | graph
-        self.ara_weight = 1.0
+        initialize_ui_control_state(
+            gui=self,
+            pygame=pygame,
+            widgets_available=WIDGETS_AVAILABLE,
+            os_module=os,
+            time_module=time,
+        )
         
         self._load_current_map()
         self._center_view()  # Center the map in view
