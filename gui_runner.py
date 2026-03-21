@@ -91,6 +91,8 @@ from src.gui.app.init_visualization import (
     initialize_visualization_components,
 )
 from src.gui.app.init_final_boot import finalize_initial_map_boot
+from src.gui.app.gui_startup import run_gui_main as _run_gui_main_helper
+from src.gui.app.map_adapter_loader import load_maps_from_adapter as _load_maps_from_adapter_helper
 from src.gui.app.run_loop_pipeline import run_main_loop as _run_main_loop_helper
 
 # Configure logging
@@ -384,6 +386,7 @@ from src.gui.rendering.post_map_ui_pipeline import (
     render_sidebar_content as _render_sidebar_content_helper,
     render_top_ui_layers as _render_top_ui_layers_helper,
 )
+from src.gui.rendering.render_frame_pipeline import render_frame as _render_frame_helper
 from src.gui.rendering.tile_asset_builder import (
     build_stair_marker_sprite as _build_stair_marker_sprite_helper,
     build_tile_images as _build_tile_images_helper,
@@ -1795,162 +1798,37 @@ class ZeldaGUI:
 
     def _render(self):
         """Render the current state using new visualization system or fallback."""
-        self.screen.fill((25, 25, 35))
-
-        map_h, map_w = self.env.height, self.env.width
-        map_surface, view_w, view_h = _create_map_surface_helper(gui=self, pygame=pygame)
-
-        _update_frame_render_state_helper(gui=self, logger=logger)
-
-        start_r, end_r, start_c, end_c = _compute_visible_bounds_helper(
+        _render_frame_helper(
             gui=self,
-            view_w=view_w,
-            view_h=view_h,
-            map_h=map_h,
-            map_w=map_w,
-        )
-
-        _log_draw_ranges_overlay_helper(
-            gui=self,
-            start_r=start_r,
-            end_r=end_r,
-            start_c=start_c,
-            end_c=end_c,
-            h=map_h,
-            w=map_w,
-            time_module=time,
-            logger=logger,
-        )
-        _render_empty_range_warning_overlay_helper(
-            gui=self,
-            start_r=start_r,
-            end_r=end_r,
-            start_c=start_c,
-            end_c=end_c,
-            pygame=pygame,
-        )
-
-        collected_items, collectible_tile_ids = _collect_item_render_state_helper(
-            gui=self,
-            semantic_palette=SEMANTIC_PALETTE,
-        )
-        animating_block_positions = self._get_animating_block_positions()
-        tiles_drawn = _render_visible_tiles_helper(
-            gui=self,
-            map_surface=map_surface,
-            start_r=start_r,
-            end_r=end_r,
-            start_c=start_c,
-            end_c=end_c,
-            collected_items=collected_items,
-            collectible_tile_ids=collectible_tile_ids,
-            animating_block_positions=animating_block_positions,
-            semantic_palette=SEMANTIC_PALETTE,
-            math_module=math,
-            time_module=time,
-        )
-        
-        # === RENDER ANIMATED BLOCKS ===
-        # Draw blocks that are currently being pushed with smooth interpolation
-        try:
-            self._render_block_push_animations(map_surface)
-        except Exception as e:
-            logger.warning('Failed to render block push animations: %s', e)
-        
-        _render_heatmap_overlay_helper(
-            gui=self,
-            map_surface=map_surface,
-            start_r=start_r,
-            end_r=end_r,
-            start_c=start_c,
-            end_c=end_c,
-            pygame=pygame,
-        )
-
-        _render_jps_overlay_helper(
-            gui=self,
-            map_surface=map_surface,
-            start_r=start_r,
-            end_r=end_r,
-            start_c=start_c,
-            end_c=end_c,
-            pygame=pygame,
-        )
-        _render_map_elites_overlay_helper(
-            gui=self,
-            map_surface=map_surface,
-            pygame=pygame,
-        )
-        
-        _render_planned_path_overlay_helper(
-            gui=self,
-            map_surface=map_surface,
-            pygame=pygame,
-            math_module=math,
-            time_module=time,
-            logger=logger,
-        )
-        
-        # === GUARANTEED PATH RENDERING ===
-        # This ensures the path is ALWAYS visible when auto_path has data,
-        # regardless of auto_mode, preview state, or feature flags.
-        try:
-            self._render_path_GUARANTEED(map_surface)
-        except Exception as e:
-            logger.warning('_render_path_GUARANTEED failed: %s', e)
-        
-        _render_player_and_effects_helper(gui=self, map_surface=map_surface)
-        
-        _handle_empty_frame_recovery_helper(
-            gui=self,
-            map_surface=map_surface,
-            view_w=view_w,
-            view_h=view_h,
-            tiles_drawn=tiles_drawn,
             pygame=pygame,
             logger=logger,
-        )
-
-        # Blit map surface to screen
-        self.screen.blit(map_surface, (0, 0))
-
-        # Debug overlay removed - was causing yellow/magenta square in corner
-
-        _render_translucent_event_overlays_helper(
-            gui=self,
-            view_w=view_w,
-            view_h=view_h,
-            pygame=pygame,
-            logger=logger,
-        )
-        
-        pr, pc = self.env.state.position
-        sidebar_x = _draw_sidebar_shell_helper(gui=self, pygame=pygame)
-        _render_sidebar_content_helper(
-            gui=self,
-            sidebar_x=sidebar_x,
-            map_w=map_w,
-            map_h=map_h,
-            player_row=pr,
-            player_col=pc,
-            pygame=pygame,
             time_module=time,
             math_module=math,
             semantic_palette=SEMANTIC_PALETTE,
-            logger=logger,
+            create_map_surface_fn=_create_map_surface_helper,
+            update_frame_render_state_fn=_update_frame_render_state_helper,
+            compute_visible_bounds_fn=_compute_visible_bounds_helper,
+            log_draw_ranges_fn=_log_draw_ranges_overlay_helper,
+            render_empty_range_warning_fn=_render_empty_range_warning_overlay_helper,
+            collect_item_render_state_fn=_collect_item_render_state_helper,
+            render_visible_tiles_fn=_render_visible_tiles_helper,
+            render_block_push_animations_fn=self._render_block_push_animations,
+            render_heatmap_overlay_fn=_render_heatmap_overlay_helper,
+            render_jps_overlay_fn=_render_jps_overlay_helper,
+            render_map_elites_overlay_fn=_render_map_elites_overlay_helper,
+            render_planned_path_overlay_fn=_render_planned_path_overlay_helper,
+            render_path_guaranteed_fn=self._render_path_GUARANTEED,
+            render_player_and_effects_fn=_render_player_and_effects_helper,
+            handle_empty_frame_recovery_fn=_handle_empty_frame_recovery_helper,
+            render_translucent_event_overlays_fn=_render_translucent_event_overlays_helper,
+            draw_sidebar_shell_fn=_draw_sidebar_shell_helper,
+            render_sidebar_content_fn=_render_sidebar_content_helper,
+            render_post_map_layers_fn=_render_post_map_layers_helper,
+            render_top_ui_layers_fn=_render_top_ui_layers_helper,
             render_sidebar_header_fn=_render_sidebar_header_inventory_solver_helper,
             render_sidebar_status_fn=_render_sidebar_status_message_metrics_controls_helper,
-        )
-        _render_post_map_layers_helper(
-            gui=self,
-            pygame=pygame,
-            logger=logger,
             render_preview_layer_fn=_render_preview_layer_helper,
         )
-        _render_top_ui_layers_helper(gui=self, logger=logger)
-        
-        # NOTE: pygame.display.flip() is called by the main run() loop after _render()
-        # Do NOT call flip() here to avoid double-buffer swap issues
 
     def _render_debug_overlay(self, surface):
         """Render debug overlay with mouse coords, widget rects, and recent clicks.
@@ -2013,88 +1891,18 @@ class ZeldaGUI:
 
 def load_maps_from_adapter():
     """Load processed maps from data adapter using new zelda_core - ALL 18 variants."""
-    try:
-        from src.data.zelda_core import ZeldaDungeonAdapter, DungeonSolver
-        from pathlib import Path
-        
-        data_root = Path(__file__).parent / "Data" / "The Legend of Zelda"
-        
-        if not data_root.exists():
-            print(f"Data folder not found: {data_root}")
-            return None, None
-        
-        adapter = ZeldaDungeonAdapter(str(data_root))
-        solver = DungeonSolver()
-        
-        maps = []  # Store full StitchedDungeon objects
-        map_names = []  # Track dungeon names
-        print("Loading all 18 dungeon variants (9 dungeons x 2 variants)...")
-        
-        for dungeon_num in range(1, 10):
-            for variant in [1, 2]:
-                try:
-                    dungeon = adapter.load_dungeon(dungeon_num, variant=variant)
-                    stitched = adapter.stitch_dungeon(dungeon)
-
-                    # Store the full stitched dungeon (includes graph and room mappings)
-                    maps.append(stitched)
-
-                    # Store name
-                    quest_name = "Quest 1" if variant == 1 else "Quest 2"
-                    map_names.append(f"Dungeon {dungeon_num} ({quest_name})")
-
-                    # Fast startup: do not block on expensive solvability checks here.
-                    print(f"  D{dungeon_num}-{variant}: Loaded - {stitched.global_grid.shape}")
-                except Exception as e:
-                    print(f"  D{dungeon_num}-{variant}: Error - {e}")
-
-        # If requested, perform precalculation asynchronously so startup is not blocked
-        if os.environ.get('KLTN_PRECALC_SOLVES', '0') == '1':
-            try:
-                import threading
-                def _precalc_worker():
-                    print('Starting background precalc solves for loaded maps...')
-                    for idx, m in enumerate(maps):
-                        try:
-                            r = solver.solve(m)
-                            status = '[OK]' if r.get('solvable') else '[X]'
-                            print(f"  [precalc] Map {idx+1}: {status}")
-                        except Exception as e:
-                            print(f"  [precalc] Map {idx+1}: Error - {e}")
-                threading.Thread(target=_precalc_worker, daemon=True).start()
-            except Exception:
-                print('Precalc worker failed to start')
-        
-        return maps if maps else None, map_names if map_names else None
-        
-    except Exception as e:
-        print(f"Error loading maps: {e}")
-        import traceback
-        traceback.print_exc()
-        return None, None
+    return _load_maps_from_adapter_helper(os_module=os, file_path=__file__, print_fn=print)
 
 
 def main():
     """Main entry point."""
-    print("=== ZAVE GUI Runner ===\n")
-    
-    if not PYGAME_AVAILABLE:
-        print("Pygame is not installed. Please run: pip install pygame")
-        return
-    
-    # Try to load processed maps
-    maps, map_names = load_maps_from_adapter()
-    
-    if maps:
-        print(f"Loaded {len(maps)} maps from data adapter")
-    else:
-        print("Using test map")
-        maps = [create_test_map()]
-        map_names = ["Test Map"]
-    
-    # Start GUI
-    gui = ZeldaGUI(maps, map_names)
-    gui.run()
+    _run_gui_main_helper(
+        pygame_available=PYGAME_AVAILABLE,
+        load_maps_fn=load_maps_from_adapter,
+        create_test_map_fn=create_test_map,
+        gui_cls=ZeldaGUI,
+        print_fn=print,
+    )
 
 
 if __name__ == "__main__":
