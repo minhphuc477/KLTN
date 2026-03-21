@@ -45,6 +45,12 @@ from src.gui.app.main_loop_utils import (
     run_continuous_movement_tick,
     should_attempt_focus_fallback,
 )
+from src.gui.app.event_loop_handlers import (
+    clear_stale_preview_overlay,
+    handle_window_focus_event,
+    poll_pygame_events,
+    run_input_focus_fallback,
+)
 
 # Configure logging
 logging.basicConfig(
@@ -1840,77 +1846,20 @@ class ZeldaGUI:
             self.delta_time = current_time - self.last_frame_time
             self.last_frame_time = current_time
             
-            # Handle events (measure event.get duration to catch blocking behavior)
-            try:
-                _evt_start = time.time()
-                _events = pygame.event.get()
-                _evt_dur = time.time() - _evt_start
-                if _evt_dur > 0.05:
-                    logger.debug('Slow event.get() detected: %.3fs', _evt_dur)
-            except Exception:
-                logger.exception('pygame.event.get() raised')
-                _events = []
+            _events = poll_pygame_events(pygame, time, logger)
 
-            # Periodic fallback: if window is not focused, try to clear grab/ensure cursor visible
-            try:
-                # Only for windowed mode; in fullscreen platforms we may intentionally grab
-                focused = pygame.mouse.get_focused()
-                now_ts = time.time()
-                if should_attempt_focus_fallback(
-                    self.fullscreen,
-                    focused,
-                    now_ts,
-                    getattr(self, '_last_ungrab_attempt', 0.0),
-                    cooldown_sec=2.0,
-                ):
-                    logger.debug('Window lacks input focus; attempting to clear event grab and show cursor')
-                    try:
-                        pygame.event.set_grab(False)
-                    except Exception:
-                        logger.debug('Failed to clear event grab during fallback')
-                    try:
-                        pygame.mouse.set_visible(True)
-                    except Exception:
-                        logger.debug('Failed to set mouse visible during fallback')
-                    self._last_ungrab_attempt = now_ts
-            except Exception:
-                logger.exception('Error during input focus fallback')
+            run_input_focus_fallback(
+                self,
+                pygame,
+                time,
+                logger,
+                should_attempt_focus_fallback,
+            )
             for event in _events:
-                # Sanity-fix: if preview overlay is active but we have no dialog or planned path, it can block input forever; clear it.
-                if getattr(self, 'preview_overlay_visible', False) and not (getattr(self, 'path_preview_dialog', None) or getattr(self, 'auto_path', None)):
-                    try:
-                        logger.warning('Clearing stale preview_overlay_visible (no dialog/path present) to restore input')
-                        self.preview_overlay_visible = False
-                        self.path_preview_dialog = None
-                        try:
-                            self._set_message('Cleared stale preview overlay', 1.5)
-                        except Exception:
-                            pass
-                    except Exception:
-                        logger.exception('Failed to clear stale preview overlay')
+                clear_stale_preview_overlay(self, logger)
 
                 # Handle window focus events (improves input responsiveness on Windows)
-                if event.type == getattr(pygame, 'WINDOWFOCUSGAINED', None):
-                    logger.debug('WINDOWFOCUSGAINED: clearing event grab and showing mouse cursor')
-                    try:
-                        pygame.event.set_grab(False)
-                    except Exception:
-                        logger.debug('Could not clear event grab on focus gained')
-                    try:
-                        pygame.mouse.set_visible(True)
-                    except Exception:
-                        logger.debug('Could not set mouse visible on focus gained')
-                    try:
-                        self._set_message('Window focused', 1.5)
-                    except Exception:
-                        pass
-                    continue
-                if event.type == getattr(pygame, 'WINDOWFOCUSLOST', None):
-                    logger.debug('WINDOWFOCUSLOST: pausing input interactions')
-                    try:
-                        self._set_message('Window lost focus', 1.5)
-                    except Exception:
-                        pass
+                if handle_window_focus_event(self, event, pygame, logger):
                     continue
 
                 # Global KEYDOWN diagnostics
