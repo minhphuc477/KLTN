@@ -51,9 +51,13 @@ from src.gui.app.event_loop_handlers import (
     handle_keydown_event,
     handle_keyup_event,
     handle_mouse_button_down_preamble,
+    handle_mouse_button_down_event,
     handle_mouse_button_up_event,
     handle_mouse_motion_diagnostics,
+    handle_mouse_motion_event,
+    handle_mousewheel_event,
     handle_preview_overlay_events,
+    handle_videoresize_event,
     handle_window_focus_event,
     poll_pygame_events,
     run_input_focus_fallback,
@@ -1886,64 +1890,10 @@ class ZeldaGUI:
                     running = False
                 
                 elif event.type == pygame.VIDEORESIZE:
-                    # Handle window resize
-                    self.screen_w = max(event.w, self.MIN_WIDTH)
-                    self.screen_h = max(event.h, self.MIN_HEIGHT)
-                    if not self.fullscreen:
-                        # Use safe wrapper to avoid producing a zero-sized or invalid surface
-                        screen = self._safe_set_mode((self.screen_w, self.screen_h), pygame.RESIZABLE)
-                        if not screen:
-                            logger.warning('VIDEORESIZE: _safe_set_mode failed; attempting display reinit')
-                            # Attempt a display reinit when set_mode fails
-                            try:
-                                self._attempt_display_reinit()
-                            except Exception:
-                                logger.exception('VIDEORESIZE: display reinit failed')
-                        else:
-                            self.screen = screen
-                            try:
-                                self.screen_w, self.screen_h = self.screen.get_size()
-                            except Exception:
-                                pass
-                        # Refresh assets/layout and force an immediate present
-                        try:
-                            self._load_assets()
-                            self._render()
-                            try:
-                                pygame.display.flip()
-                            except Exception:
-                                logger.exception('Flip failed after VIDEORESIZE')
-                        except Exception:
-                            logger.exception('Failed to refresh UI after VIDEORESIZE')
-                    # Update control panel widget positions
-                    if self.control_panel_enabled:
-                        self._update_control_panel_positions()
+                    handle_videoresize_event(self, event, pygame, logger)
                 
                 elif event.type == pygame.MOUSEWHEEL:
-                    mouse_pos = pygame.mouse.get_pos()
-                    # If mouse is over control panel and scrolling is enabled, apply momentum to panel
-                    panel_rect = getattr(self, 'control_panel_rect', None)
-                    padding = getattr(self, 'debug_panel_click_padding', 0) if getattr(self, 'debug_control_panel', False) else 0
-                    panel_hit_rect = (pygame.Rect(panel_rect.x - padding, panel_rect.y, panel_rect.width + padding, panel_rect.height) if panel_rect and padding else panel_rect)
-                    if self.control_panel_enabled and getattr(self, 'control_panel_can_scroll', False) and panel_hit_rect and panel_hit_rect.collidepoint(mouse_pos) and not self.control_panel_collapsed:
-                        # Use wheel to add velocity (pixels per second)
-                        wheel_power = getattr(self, 'control_panel_scroll_step', 20) * 12
-                        # Negative event.y means scroll down? We want positive y to scroll up (decrease coord)
-                        self.control_panel_scroll_velocity += -event.y * wheel_power
-                        # Clamp velocity to reasonable bounds
-                        max_v = 2000
-                        self.control_panel_scroll_velocity = max(-max_v, min(max_v, self.control_panel_scroll_velocity))
-                        # Ignore immediate clicks while momentum is active
-                        self.control_panel_ignore_click_until = time.time() + 0.12
-                    else:
-                        # Zoom with mouse wheel when not over panel
-                        # Only perform mouse-centered zoom when the mouse is over the main map area
-                        sidebar_x = self.screen_w - self.SIDEBAR_WIDTH
-                        if mouse_pos[0] < sidebar_x:
-                            self._change_zoom(event.y, center=mouse_pos)
-                        else:
-                            # Falling back to center zoom if wheel over sidebar
-                            self._change_zoom(event.y)
+                    handle_mousewheel_event(self, event, pygame, time)
                 
                 elif event.type == pygame.MOUSEBUTTONDOWN:
                     mouse_pos, consumed = handle_mouse_button_down_preamble(
@@ -1956,79 +1906,8 @@ class ZeldaGUI:
                     )
                     if consumed:
                         continue
-                    
-                    # Handle collapse button click first (animated)
-                    if self.control_panel_enabled and self.collapse_button_rect and self.collapse_button_rect.collidepoint(mouse_pos):
-                        # Ignore input if animation already running
-                        if not getattr(self, 'control_panel_animating', False):
-                            target_collapsed = not self.control_panel_collapsed
-                            self._start_toggle_panel_animation(target_collapsed)
+                    if handle_mouse_button_down_event(self, event, mouse_pos, pygame):
                         continue
-                    
-                    # Check if starting to drag panel (click on title bar area)
-                    if self.control_panel_enabled and self.control_panel_rect and not self.control_panel_collapsed:
-                        # Check if clicking on scrollbar thumb to start drag
-                        if event.button == 1 and getattr(self, 'control_panel_scroll_thumb_rect', None) and self.control_panel_scroll_thumb_rect.collidepoint(mouse_pos):
-                            self.control_panel_scroll_dragging = True
-                            self.control_panel_scroll_drag_offset = mouse_pos[1] - self.control_panel_scroll_thumb_rect.y
-                            continue
-                        # Clicking on track -> page to that location
-                        if event.button == 1 and getattr(self, 'control_panel_scroll_track_rect', None) and self.control_panel_scroll_track_rect.collidepoint(mouse_pos):
-                            tr = self.control_panel_scroll_track_rect
-                            rel = mouse_pos[1] - tr.y
-                            max_move = tr.height - getattr(self, 'control_panel_scroll_thumb_rect', pygame.Rect(0,0,0,20)).height
-                            ratio = max(0.0, min(1.0, rel / tr.height))
-                            self.control_panel_scroll = int(ratio * getattr(self, 'control_panel_scroll_max', 0))
-                            continue
-
-                        title_bar_height = 45
-                        title_bar_rect = pygame.Rect(
-                            self.control_panel_rect.x,
-                            self.control_panel_rect.y,
-                            self.control_panel_rect.width,
-                            title_bar_height
-                        )
-                        if title_bar_rect.collidepoint(mouse_pos) and not self.collapse_button_rect.collidepoint(mouse_pos):
-                            self.dragging_panel = True
-                            self.drag_panel_offset = (mouse_pos[0] - self.control_panel_rect.x, mouse_pos[1] - self.control_panel_rect.y)
-                            continue
-                        
-                        # Check if starting to resize panel (near edges)
-                        edge_threshold = 8
-                        mx, my = mouse_pos
-                        rect = self.control_panel_rect
-                        
-                        if abs(mx - rect.left) < edge_threshold and rect.top <= my <= rect.bottom:
-                            self.resizing_panel = True
-                            self.resize_edge = 'left'
-                            continue
-                        elif abs(mx - rect.right) < edge_threshold and rect.top <= my <= rect.bottom:
-                            self.resizing_panel = True
-                            self.resize_edge = 'right'
-                            continue
-                        elif abs(my - rect.bottom) < edge_threshold and rect.left <= mx <= rect.right:
-                            self.resizing_panel = True
-                            self.resize_edge = 'bottom'
-                            continue
-                    
-                    # Handle control panel clicks
-                    if self.control_panel_enabled and self._handle_control_panel_click(mouse_pos, event.button, 'down'):
-                        continue  # Control panel handled the click
-                    
-                    if event.button == 1:  # Left click - check minimap and start map drag if on map
-                        if self._handle_minimap_click(mouse_pos):
-                            pass  # Minimap click handled
-                        else:
-                            # Start map drag with left button when clicking on the main map area (not on sidebar or panel)
-                            sidebar_x = self.screen_w - self.SIDEBAR_WIDTH
-                            if mouse_pos[0] < sidebar_x and not (self.control_panel_enabled and getattr(self, 'control_panel_rect', None) and self.control_panel_rect.collidepoint(mouse_pos)):
-                                self.dragging = True
-                                self.dragging_button = 1
-                                self.drag_start = event.pos
-                    elif event.button == 2:  # Middle mouse
-                        self.dragging = True
-                        self.dragging_button = 2
-                        self.drag_start = event.pos
                 
                 elif event.type == pygame.MOUSEBUTTONUP:
                     if handle_mouse_button_up_event(self, event, pygame, time, logger):
@@ -2036,73 +1915,7 @@ class ZeldaGUI:
                 
                 elif event.type == pygame.MOUSEMOTION:
                     mouse_pos = handle_mouse_motion_diagnostics(self, event, pygame, time, logger)
-                    
-                    # Handle panel dragging
-                    if self.dragging_panel:
-                        self.control_panel_x = mouse_pos[0] - self.drag_panel_offset[0]
-                        self.control_panel_y = mouse_pos[1] - self.drag_panel_offset[1]
-                        # Clamp to screen bounds
-                        self.control_panel_x = max(0, min(self.control_panel_x, self.screen_w - self.control_panel_width))
-                        self.control_panel_y = max(0, min(self.control_panel_y, self.screen_h - 100))
-                        # Update widget positions to follow panel
-                        self._reposition_widgets(self.control_panel_x, self.control_panel_y)
-                    
-                    # Handle panel resizing
-                    elif self.resizing_panel and self.control_panel_rect:
-                        if self.resize_edge == 'left':
-                            old_right = self.control_panel_rect.right
-                            new_x = mouse_pos[0]
-                            new_width = old_right - new_x
-                            if self.min_panel_width <= new_width <= self.max_panel_width:
-                                self.control_panel_width = new_width
-                                self.control_panel_x = new_x
-                        elif self.resize_edge == 'right':
-                            new_width = mouse_pos[0] - self.control_panel_rect.x
-                            if self.min_panel_width <= new_width <= self.max_panel_width:
-                                self.control_panel_width = new_width
-                        elif self.resize_edge == 'bottom':
-                            new_height = mouse_pos[1] - self.control_panel_rect.y
-                            if self.min_panel_height <= new_height <= self.screen_h - self.control_panel_rect.y - 20:
-                                pass  # Height is auto-calculated, just update visual feedback
-                    
-                    # Handle scrollbar thumb dragging
-                    elif getattr(self, 'control_panel_scroll_dragging', False) and getattr(self, 'control_panel_can_scroll', False) and getattr(self, 'control_panel_scroll_track_rect', None):
-                        track_rect = self.control_panel_scroll_track_rect
-                        thumb_rect = getattr(self, 'control_panel_scroll_thumb_rect', None)
-                        if thumb_rect is None:
-                            continue
-                        # Compute local mouse position inside track
-                        rel_y = mouse_pos[1] - track_rect.y
-                        max_move = track_rect.height - thumb_rect.height
-                        new_thumb_top = max(0, min(rel_y - getattr(self, 'control_panel_scroll_drag_offset', 0), max_move))
-                        if max_move > 0:
-                            ratio = new_thumb_top / max_move
-                            self.control_panel_scroll = int(ratio * getattr(self, 'control_panel_scroll_max', 0))
-                            # Clamp
-                            self.control_panel_scroll = max(0, min(self.control_panel_scroll, getattr(self, 'control_panel_scroll_max', 0)))
-                    
-                    # Handle map dragging
-                    elif self.dragging:
-                        dx = self.drag_start[0] - event.pos[0]
-                        dy = self.drag_start[1] - event.pos[1]
-                        self.view_offset_x += dx
-                        self.view_offset_y += dy
-                        self.drag_start = event.pos
-                        self._clamp_view_offset()
-                    # Update cursor for resize edges (when not dragging)
-                    elif self.control_panel_enabled and self.control_panel_rect and not self.control_panel_collapsed:
-                        edge_threshold = 8
-                        mx, my = mouse_pos
-                        rect = self.control_panel_rect
-                        
-                        if abs(mx - rect.left) < edge_threshold and rect.top <= my <= rect.bottom:
-                            pygame.mouse.set_cursor(pygame.SYSTEM_CURSOR_SIZEWE)
-                        elif abs(mx - rect.right) < edge_threshold and rect.top <= my <= rect.bottom:
-                            pygame.mouse.set_cursor(pygame.SYSTEM_CURSOR_SIZEWE)
-                        elif abs(my - rect.bottom) < edge_threshold and rect.left <= mx <= rect.right:
-                            pygame.mouse.set_cursor(pygame.SYSTEM_CURSOR_SIZENS)
-                        else:
-                            pygame.mouse.set_cursor(pygame.SYSTEM_CURSOR_ARROW)
+                    handle_mouse_motion_event(self, event, mouse_pos, pygame)
 
                 elif event.type == pygame.KEYUP:
                     handle_keyup_event(self, event, logger)
