@@ -48,6 +48,8 @@ from src.gui.app.main_loop_utils import (
 from src.gui.app.event_loop_handlers import (
     clear_stale_preview_overlay,
     handle_global_keydown_shortcuts,
+    handle_keydown_event,
+    handle_keyup_event,
     handle_mouse_button_down_preamble,
     handle_mouse_button_up_event,
     handle_mouse_motion_diagnostics,
@@ -2103,172 +2105,19 @@ class ZeldaGUI:
                             pygame.mouse.set_cursor(pygame.SYSTEM_CURSOR_ARROW)
 
                 elif event.type == pygame.KEYUP:
-                    # Ensure we stop continuous movement when keys are released
-                    try:
-                        if event.key in getattr(self, 'keys_held', {}):
-                            self.keys_held[event.key] = False
-                    except Exception:
-                        logger.debug('Failed to handle KEYUP for %r', getattr(event, 'key', None))
+                    handle_keyup_event(self, event, logger)
 
                 elif event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_ESCAPE:
-                        if self.fullscreen:
-                            self._toggle_fullscreen()
-                        else:
-                            running = False
-                    
-                    elif event.key == pygame.K_F11:
-                        self._toggle_fullscreen()
-                    
-                    elif event.key == pygame.K_h:
-                        # Toggle heatmap overlay (H key)
-                        if not self.show_help:  # Don't toggle if help shown
-                            self.show_heatmap = not self.show_heatmap
-                            self.feature_flags['show_heatmap'] = self.show_heatmap
-                            if self.renderer:
-                                self.renderer.show_heatmap = self.show_heatmap
-                            # Update checkbox widget if available
-                            if self.widget_manager:
-                                for widget in self.widget_manager.widgets:
-                                    if isinstance(widget, CheckboxWidget) and hasattr(widget, 'flag_name') and widget.flag_name == 'show_heatmap':
-                                        widget.checked = self.show_heatmap
-                            self.message = f"Heatmap: {'ON' if self.show_heatmap else 'OFF'}"
-                    
-                    elif event.key == pygame.K_F1:
-                        self.show_help = not self.show_help
-                    
-                    elif event.key == pygame.K_TAB:
-                        # Toggle control panel with Tab key
-                        if self.control_panel_enabled:
-                            # Animate toggle for Tab key as well
-                            if not getattr(self, 'control_panel_animating', False):
-                                target_collapsed = not self.control_panel_collapsed
-                                self._start_toggle_panel_animation(target_collapsed)
-
-                    elif event.key == pygame.K_F7:
-                        # Diagnostic hotkey: dump widget hit-test state at current mouse
-                        try:
-                            pos = pygame.mouse.get_pos()
-                            logger.info('DIAG DUMP (F7): mouse_pos=%s control_panel_rect=%s scroll=%s', pos, getattr(self,'control_panel_rect',None), getattr(self,'control_panel_scroll',0))
-                            try:
-                                self._dump_control_panel_widget_state(pos)
-                            except Exception:
-                                logger.exception('F7: _dump_control_panel_widget_state failed')
-                        except Exception:
-                            logger.exception('F7 diagnostic failed')
-
-                    elif event.key == pygame.K_F8:
-                        # Toggle debug overlay for control panel and hit-padding
-                        try:
-                            self.debug_control_panel = not getattr(self, 'debug_control_panel', False)
-                            self.debug_panel_click_padding = int(os.environ.get('KLTN_DEBUG_PANEL_PADDING', '40')) if self.debug_control_panel else 0
-                            self._show_toast(f"Debug control panel {'ON' if self.debug_control_panel else 'OFF'}", 1.6, 'info')
-                            logger.info('Toggled debug_control_panel=%s padding=%s', self.debug_control_panel, self.debug_panel_click_padding)
-                        except Exception:
-                            logger.exception('Failed to toggle debug control panel')
-                    
-                    elif event.key == pygame.K_m:
-                        # Toggle minimap
-                        self.show_minimap = not self.show_minimap
-                        self.feature_flags['show_minimap'] = self.show_minimap
-                        # Update checkbox widget if available
-                        if self.widget_manager:
-                            for widget in self.widget_manager.widgets:
-                                if isinstance(widget, CheckboxWidget) and hasattr(widget, 'flag_name') and widget.flag_name == 'show_minimap':
-                                    widget.checked = self.show_minimap
-                        self.message = f"Minimap: {'ON' if self.show_minimap else 'OFF'}"
-                    
-                    elif event.key == pygame.K_RIGHTBRACKET or event.key == pygame.K_PERIOD:
-                        # Increase speed
-                        self.speed_index = min(len(self.speed_levels) - 1, self.speed_index + 1)
-                        self.speed_multiplier = self.speed_levels[self.speed_index]
-                        self.message = f"Speed: {self.speed_multiplier}x"
-                    
-                    elif event.key == pygame.K_LEFTBRACKET or event.key == pygame.K_COMMA:
-                        # Decrease speed
-                        self.speed_index = max(0, self.speed_index - 1)
-                        self.speed_multiplier = self.speed_levels[self.speed_index]
-                        self.message = f"Speed: {self.speed_multiplier}x"
-                    
-                    elif event.key == pygame.K_SPACE:
-                        self._start_auto_solve()
-                    
-                    elif event.key == pygame.K_r:
-                        self._load_current_map()
-                        self._center_view()
-                        # Clear effects
-                        if self.effects:
-                            self.effects.clear()
-                        # Reset step count
-                        self.step_count = 0
-                        self.message = "Map Reset"
-                    
-                    elif event.key == pygame.K_n:
-                        self._next_map()
-                    
-                    elif event.key == pygame.K_p:
-                        self._prev_map()
-
-                    elif event.key == pygame.K_PLUS or event.key == pygame.K_EQUALS:
-                        self._change_zoom(1)
-
-                    elif event.key == pygame.K_MINUS:
-                        self._change_zoom(-1)
-
-                    elif event.key == pygame.K_0:
-                        # Reset zoom to default
-                        self.zoom_idx = self.DEFAULT_ZOOM_IDX
-                        self.TILE_SIZE = self.ZOOM_LEVELS[self.zoom_idx]
-                        self._load_assets()
-                        self._center_view()
-                        self.message = "Zoom reset to default"
-
-                    elif event.key == pygame.K_f:
-                        # Auto-fit zoom to show entire map
-                        self._auto_fit_zoom()
-                        self.message = f"Auto-fit: {self.TILE_SIZE}px"
-
-                    elif event.key == pygame.K_c:
-                        # Center view on player
-                        self._center_on_player()
-
-                    elif event.key == pygame.K_l:
-                        ok = self.load_visual_map(os.path.join(os.getcwd(), 'screenshot.png'))
-                        if not ok:
-                            self.message = "Failed to load ./screenshot.png"
-
-                    # Track key holds for continuous movement
-                    elif event.key in self.keys_held and not self.auto_mode:
-                        self.keys_held[event.key] = True
-                        self.move_timer = 0.0  # Reset timer for immediate first move
-                        
-                    elif not self.auto_mode:
-                        # Manual movement - check for diagonal combos first
-                        keys = pygame.key.get_pressed()
-                        action = None
-
-                        # Check diagonal combinations (two arrow keys pressed)
-                        if keys[pygame.K_UP] and keys[pygame.K_LEFT]:
-                            action = Action.UP_LEFT
-                        elif keys[pygame.K_UP] and keys[pygame.K_RIGHT]:
-                            action = Action.UP_RIGHT
-                        elif keys[pygame.K_DOWN] and keys[pygame.K_LEFT]:
-                            action = Action.DOWN_LEFT
-                        elif keys[pygame.K_DOWN] and keys[pygame.K_RIGHT]:
-                            action = Action.DOWN_RIGHT
-                        # Cardinal directions (single key)
-                        elif keys[pygame.K_UP]:
-                            action = Action.UP
-                        elif keys[pygame.K_DOWN]:
-                            action = Action.DOWN
-                        elif keys[pygame.K_LEFT]:
-                            action = Action.LEFT
-                        elif keys[pygame.K_RIGHT]:
-                            action = Action.RIGHT
-
-                        if action is not None:
-                            self._manual_step(action)
-                            self._center_on_player()
+                    running = handle_keydown_event(
+                        self,
+                        event,
+                        pygame,
+                        os,
+                        logger,
+                        CheckboxWidget,
+                        Action,
+                        running,
+                    )
 
             # Auto-solve stepping with timer-based animation.
             run_auto_step_tick(self, logger, frame_count)
