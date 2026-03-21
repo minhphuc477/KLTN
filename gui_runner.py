@@ -1,4 +1,4 @@
-"""
+﻿"""
 GUI Runner for ZAVE (Zelda AI Validation Environment)
 ====================================================
 
@@ -36,33 +36,40 @@ import numpy as np
 from pathlib import Path
 from typing import Tuple, List, Optional, Any
 
+from src.gui.runtime.flags import load_runtime_flags
+from src.gui.app.main_loop_utils import (
+    resolve_test_mode_max_frames,
+    should_attempt_focus_fallback,
+)
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+runtime_flags = load_runtime_flags()
 # Allow debug mode via env var KLTN_LOG_LEVEL=DEBUG for interactive troubleshooting
-if os.environ.get('KLTN_LOG_LEVEL', '').upper() == 'DEBUG':
+if runtime_flags.log_level == 'DEBUG':
     logger.setLevel(logging.DEBUG)
     logging.getLogger().setLevel(logging.DEBUG)
 
 # Allow targeted input diagnostics via env var KLTN_DEBUG_INPUT=1
-DEBUG_INPUT_ACTIVE = os.environ.get('KLTN_DEBUG_INPUT', '') == '1'
+DEBUG_INPUT_ACTIVE = runtime_flags.debug_input_active
 if DEBUG_INPUT_ACTIVE:
     logger.info('INPUT_DIAG: KLTN_DEBUG_INPUT is active (diagnostic input dumps enabled)')
 
 # DEBUG: Synchronous solver mode to bypass multiprocessing issues
 # Set KLTN_SYNC_SOLVER=1 only for debugging (will block UI during solving)
 # ASYNC mode by default for responsive UI during long solves
-DEBUG_SYNC_SOLVER = os.environ.get('KLTN_SYNC_SOLVER', '0') == '1'
+DEBUG_SYNC_SOLVER = runtime_flags.debug_sync_solver
 if DEBUG_SYNC_SOLVER:
     logger.info('Solver running in SYNC mode - UI will freeze during solving (direct execution, no pickle files)')
 else:
     logger.info('Solver running in ASYNC mode - animated solving enabled')
 
 # DEBUG: Verbose solver flow logging
-DEBUG_SOLVER_FLOW = os.environ.get('KLTN_DEBUG_SOLVER_FLOW', '0') == '1'
+DEBUG_SOLVER_FLOW = runtime_flags.debug_solver_flow
 if DEBUG_SOLVER_FLOW:
     logger.setLevel(logging.DEBUG)
     logger.warning('DEBUG: KLTN_DEBUG_SOLVER_FLOW=1 - Verbose solver logging enabled')
@@ -84,6 +91,266 @@ from src.simulation.validator import (
 
 # Local matcher/adapters for topology repair and precheck pruning (use canonical path)
 from src.data.zelda_core import RoomGraphMatcher, ZeldaDungeonAdapter
+from src.gui.components.constants import (
+    GUI_ALGORITHM_NAMES,
+    GUI_DIFFICULTY_NAMES,
+    GUI_PRESETS,
+    GUI_ZOOM_LABELS,
+)
+from src.gui.control_panel.logic import (
+    algorithm_label,
+)
+from src.gui.control_panel.interactions import (
+    control_panel_hit_rect as _control_panel_hit_rect_helper,
+    handle_outside_control_panel_click as _handle_outside_control_panel_click_helper,
+    refresh_control_panel_layout_if_needed as _refresh_control_panel_layout_if_needed_helper,
+    retry_control_panel_click_after_auto_scroll as _retry_control_panel_click_after_auto_scroll_helper,
+    should_swallow_control_panel_click as _should_swallow_control_panel_click_helper,
+    translate_control_panel_click as _translate_control_panel_click_helper,
+)
+from src.gui.control_panel.updates import (
+    apply_algorithm_dropdown_update as _apply_algorithm_dropdown_update_helper,
+    apply_checkbox_widget_update as _apply_checkbox_widget_update_helper,
+    apply_control_panel_widget_updates as _apply_control_panel_widget_updates_helper,
+    apply_dropdown_widget_update as _apply_dropdown_widget_update_helper,
+)
+from src.gui.solver.start_logic import (
+    default_solver_timeout_for_algorithm,
+    evaluate_solver_recovery_state,
+    scale_timeout_by_grid_size,
+    sync_solver_dropdown_settings,
+)
+from src.gui.solver.request_helpers import (
+    build_solver_request as _build_solver_request_helper,
+    get_solver_map_context as _get_solver_map_context_helper,
+)
+from src.gui.solver.launching import (
+    create_solver_temp_files as _create_solver_temp_files_helper,
+    launch_solver_process as _launch_solver_process_helper,
+    solver_thread_fallback_worker as _solver_thread_fallback_worker_helper,
+    start_solver_thread_fallback as _start_solver_thread_fallback_helper,
+)
+from src.gui.solver.scheduling import schedule_solver as _schedule_solver_helper
+from src.gui.gameplay.preview_startup import start_preview_for_current_map as _start_preview_for_current_map_helper
+from src.gui.gameplay.auto_solve_execution import (
+    execute_auto_solve as _execute_auto_solve_helper,
+    execute_auto_solve_from_preview as _execute_auto_solve_from_preview_helper,
+)
+from src.gui.solver.recovery import (
+    compute_solver_timeout_seconds as _compute_solver_timeout_seconds_helper,
+    force_solver_recovery_state as _force_solver_recovery_state_helper,
+    log_active_solver_state as _log_active_solver_state_helper,
+    prepare_active_solver_for_new_start as _prepare_active_solver_for_new_start_helper,
+    terminate_hung_solver_process as _terminate_hung_solver_process_helper,
+)
+from src.gui.solver.prestart_cleanup import (
+    cleanup_preview_before_solver_start as _cleanup_preview_before_solver_start_helper,
+    reset_solver_visual_state_before_start as _reset_solver_visual_state_before_start_helper,
+)
+from src.gui.solver.core_state import (
+    clear_solver_state as _clear_solver_state_helper,
+    sync_solver_dropdown_settings as _sync_solver_dropdown_settings_helper,
+)
+from src.gui.solver.worker_bootstrap import launch_solver_worker as _launch_solver_worker_helper
+from src.gui.solver.start_flow import start_auto_solve as _start_auto_solve_helper
+from src.gui.solver.sync_execution import run_solver_sync as _run_solver_sync_helper
+from src.gui.solver.request_orchestration import (
+    build_solver_request as _build_solver_request_orchestration_helper,
+    get_solver_map_context as _get_solver_map_context_orchestration_helper,
+)
+from src.gui.runtime.watchdog_monitor import watchdog_loop as _watchdog_loop_helper
+from src.gui.runtime.route_io import (
+    export_route as _export_route_helper,
+    load_route as _load_route_helper,
+)
+from src.gui.gameplay.path_controls import (
+    reset_map as _reset_map_helper,
+    show_path_preview as _show_path_preview_helper,
+    clear_path as _clear_path_helper,
+)
+from src.gui.runtime.temp_file_management import (
+    open_temp_folder as _open_temp_folder_orchestration_helper,
+    collect_temp_file_candidates as _collect_temp_file_candidates_orchestration_helper,
+    delete_temp_files as _delete_temp_files_orchestration_helper,
+)
+from src.gui.topology.export import export_topology as _export_topology_helper
+from src.gui.runtime.toast_messages import (
+    set_message as _set_message_helper,
+    show_toast as _show_toast_helper,
+    update_toasts as _update_toasts_helper,
+    render_toasts as _render_toasts_helper,
+)
+from src.gui.map.minimap import (
+    render_minimap as _render_minimap_helper,
+    handle_minimap_click as _handle_minimap_click_helper,
+)
+from src.gui.map.navigation import (
+    next_map as _next_map_helper,
+    prev_map as _prev_map_helper,
+    clamp_view_offset as _clamp_view_offset_helper,
+    center_on_player as _center_on_player_helper,
+)
+from src.gui.gameplay.block_push_controls import (
+    start_block_push_animation as _start_block_push_animation_helper,
+    update_block_push_animations as _update_block_push_animations_helper,
+    render_block_push_animations as _render_block_push_animations_helper,
+    get_animating_block_positions as _get_animating_block_positions_helper,
+    check_and_start_block_push as _check_and_start_block_push_helper,
+)
+from src.gui.rendering.help_overlay import render_help_overlay as _render_help_overlay_helper
+from src.gui.rendering.helpers import (
+    render_topology_overlay as _render_topology_overlay_helper,
+    render_solver_comparison_overlay as _render_solver_comparison_overlay_helper,
+)
+from src.gui.topology.helpers import (
+    room_for_global_position as _room_for_global_position_helper,
+    node_has_small_key as _node_has_small_key_helper,
+    node_has_critical_content as _node_has_critical_content_helper,
+    capture_precheck_snapshot as _capture_precheck_snapshot_helper,
+    update_env_topology_view as _update_env_topology_view_helper,
+    build_room_adjacency_from_graph as _build_room_adjacency_from_graph_helper,
+    topology_has_path as _topology_has_path_helper,
+    min_locked_between as _min_locked_between_helper,
+    walkable_grid_reachable as _walkable_grid_reachable_helper,
+)
+from src.gui.topology.precheck import (
+    prune_dead_end_topology as _prune_dead_end_topology_flow_helper,
+    run_prechecks_and_optional_prune as _run_prechecks_and_optional_prune_flow_helper,
+    undo_prune as _undo_prune_flow_helper,
+)
+from src.gui.rendering.status_display import (
+    render_error_banner as _render_error_banner_helper,
+    render_solver_status_banner as _render_solver_status_banner_helper,
+    render_status_bar as _render_status_bar_helper,
+    show_error as _show_error_helper,
+    show_message as _show_message_helper,
+    show_warning as _show_warning_helper,
+)
+from src.gui.rendering.bottom_panel import (
+    render_unified_bottom_panel as _render_unified_bottom_panel_helper,
+    render_message_section as _render_message_section_helper,
+    render_progress_bar as _render_progress_bar_helper,
+    render_inventory_section as _render_inventory_section_helper,
+    render_metrics_section as _render_metrics_section_helper,
+    render_controls_section as _render_controls_section_helper,
+    render_status_section as _render_status_section_helper,
+)
+from src.gui.rendering.debug_overlay import render_debug_overlay as _render_debug_overlay_helper
+from src.gui.rendering.widget_tooltips import (
+    render_tooltips as _render_tooltips_helper,
+    draw_tooltip as _draw_tooltip_helper,
+)
+from src.gui.solver.metrics_tooltips import format_cbs_metrics_tooltip as _format_cbs_metrics_tooltip_helper
+from src.gui.map.viewport import (
+    center_view as _center_view_helper,
+    auto_fit_zoom as _auto_fit_zoom_helper,
+    change_zoom as _change_zoom_helper,
+)
+from src.gui.runtime.display_lifecycle import (
+    safe_set_mode as _safe_set_mode_helper,
+    attempt_display_reinit as _attempt_display_reinit_helper,
+    ensure_display_alive as _ensure_display_alive_helper,
+)
+from src.gui.runtime.display_diagnostics import (
+    handle_watchdog_screenshot as _handle_watchdog_screenshot_helper,
+    report_ui_state as _report_ui_state_helper,
+)
+from src.gui.runtime.window_focus import (
+    force_focus as _force_focus_helper,
+    toggle_fullscreen as _toggle_fullscreen_helper,
+)
+from src.gui.control_panel.animation import (
+    start_toggle_panel_animation as _start_toggle_panel_animation_helper,
+    update_control_panel_animation as _update_control_panel_animation_helper,
+)
+from src.gui.control_panel.scroll import update_control_panel_scroll as _update_control_panel_scroll_helper
+from src.gui.control_panel.view import (
+    dump_control_panel_widget_state as _dump_control_panel_widget_state_helper,
+    render_control_panel as _render_control_panel_helper,
+    reposition_widgets as _reposition_widgets_helper,
+    update_control_panel_positions as _update_control_panel_positions_helper,
+)
+from src.gui.gameplay.inventory_manager import (
+    update_inventory_and_hud as _update_inventory_and_hud_helper,
+    remove_from_path_items as _remove_from_path_items_helper,
+    track_item_collection as _track_item_collection_helper,
+    track_item_usage as _track_item_usage_helper,
+    sync_inventory_counters as _sync_inventory_counters_helper,
+)
+from src.gui.gameplay.path_analysis import scan_items_along_path as _scan_items_along_path_helper
+from src.gui.rendering.inventory_display import (
+    get_path_items_display_text as _get_path_items_display_text_helper,
+    render_item_legend as _render_item_legend_helper,
+)
+from src.gui.gameplay.item_markers import (
+    scan_and_mark_items as _scan_and_mark_items_helper,
+    apply_pickup_at as _apply_pickup_at_helper,
+)
+from src.gui.gameplay.path_strategies import (
+    smart_grid_path as _smart_grid_path_helper,
+    graph_guided_path as _graph_guided_path_helper,
+    hybrid_graph_grid_path as _hybrid_graph_grid_path_helper,
+)
+from src.gui.gameplay.auto_step_controller import (
+    stop_auto as _stop_auto_helper,
+    auto_step as _auto_step_helper,
+)
+from src.gui.gameplay.manual_step_controller import manual_step as _manual_step_flow_helper
+from src.gui.rendering.path_guaranteed_renderer import (
+    render_path_guaranteed as _render_path_guaranteed_flow_helper,
+)
+from src.gui.gameplay.map_elites_controls import (
+    start_map_elites as _start_map_elites_flow_helper,
+    map_elites_worker as _map_elites_worker_flow_helper,
+)
+from src.gui.rendering.map_overlays import (
+    log_draw_ranges as _log_draw_ranges_overlay_helper,
+    render_empty_range_warning as _render_empty_range_warning_overlay_helper,
+    render_jps_overlay as _render_jps_overlay_helper,
+    render_map_elites_overlay as _render_map_elites_overlay_helper,
+)
+from src.gui.rendering.sidebar_sections import (
+    render_sidebar_header_inventory_solver as _render_sidebar_header_inventory_solver_helper,
+    render_sidebar_status_message_metrics_controls as _render_sidebar_status_message_metrics_controls_helper,
+)
+from src.gui.topology.match_controls import (
+    match_missing_nodes as _match_missing_nodes_helper,
+    undo_last_match as _undo_last_match_helper,
+    apply_tentative_matches as _apply_tentative_matches_helper,
+)
+from src.gui.solver.comparison_runner import (
+    run_solver_comparison as _run_solver_comparison_helper,
+    set_last_solver_metrics as _set_last_solver_metrics_helper,
+)
+from src.gui.solver.utils import (
+    safe_unpickle as _safe_unpickle_helper,
+    convert_diagonal_to_4dir as _convert_diagonal_to_4dir_helper,
+)
+from src.gui.solver.process_worker import (
+    _solve_in_subprocess as _solve_in_subprocess_helper,
+    _run_solver_and_dump as _run_solver_and_dump_helper,
+    _run_preview_and_dump as _run_preview_and_dump_helper,
+)
+from src.gui.ai.generation_controls import (
+    start_ai_dungeon_generation as _start_ai_dungeon_generation_helper,
+)
+from src.gui.ai.generation_worker import (
+    run_ai_generation_worker as _run_ai_generation_worker_helper,
+)
+from src.gui.map.loading import (
+    load_current_map as _load_current_map_helper,
+    load_visual_assets as _load_visual_assets_helper,
+    load_visual_map as _load_visual_map_helper,
+    place_items_from_graph as _place_items_from_graph_helper,
+)
+from src.gui.runtime.temp_file_tools import (
+    delete_files as _delete_files_helper,
+    find_temp_files as _find_temp_files_helper,
+    list_existing_paths as _list_existing_paths_helper,
+    open_folder as _open_folder_helper,
+)
+from src.gui.components.fallbacks import get_visualization_fallbacks, get_widget_fallbacks
+from src.gui.runtime.toast_notification import ToastNotification
 
 # Try to import Pygame
 # NOTE: Importing pygame does NOT create a window - windows are only created
@@ -110,95 +377,29 @@ try:
 except ImportError:
     VISUALIZATION_AVAILABLE = False
 
-    # --- Minimal no-op implementations used when the optional visualization
-    # package is not installed. These implement the small surface of methods
-    # the GUI expects so the rest of the code can run in headless/test envs.
-    class _NoOpSpriteManager:
-        def get_tile(self, _tile_id, size):
-            if PYGAME_AVAILABLE:
-                surf = pygame.Surface((size, size))
-                surf.fill((80, 80, 80))
-                return surf
-            return None
-
-    class _NoOpRenderer:
-        def __init__(self, tile_size: int):
-            self.tile_size = tile_size
-            self.sprite_manager = _NoOpSpriteManager()
-            self.agent_visual_pos = None
-            self.show_heatmap = False
-
-        def set_agent_position(self, *_, **__):
-            return None
-        def set_tile_size(self, *_, **__):
-            return None
-        def update(self, *_, **__):
-            return None
-        def render(self, *_, **__):
-            return None
-
-    class _NoOpEffectManager:
-        def add_effect(self, *_, **__):
-            return None
-        def clear(self):
-            return None
-        def update(self, *_, **__):
-            return None
-        def render(self, *_, **__):
-            return None
-
-    class _NoOpHUDInventory:
-        def __init__(self):
-            self.keys_collected = 0
-            self.bombs_collected = 0
-            self.boss_keys_collected = 0
-            self.keys_used = 0
-            self.bombs_used = 0
-            self.boss_keys_used = 0
-
-    class _NoOpModernHUD:
-        def __init__(self):
-            self.inventory = _NoOpHUDInventory()
-            self.keys_collected = 0
-            self.bombs_collected = 0
-            self.boss_keys_collected = 0
-            self.keys_used = 0
-            self.bombs_used = 0
-            self.boss_keys_used = 0
-
-        def update_game_state(self, *_, **__):
-            return None
-
-    class _NoOpPathPreviewDialog:
-        def __init__(self, *_, **__):
-            pass
-        def render(self, *_, **__):
-            return None
-        def render_path_overlay(self, *_, **__):
-            return None
-        def handle_input(self, *_, **__):
-            return None
-
-    # Expose names expected by the rest of the module
-    ZeldaRenderer = _NoOpRenderer
-    ThemeConfig = None
-    Vector2 = None
-    EffectManager = _NoOpEffectManager
-    PopEffect = lambda *a, **k: None
-    FlashEffect = lambda *a, **k: None
-    RippleEffect = lambda *a, **k: None
-    ItemCollectionEffect = lambda *a, **k: None
-    ItemUsageEffect = lambda *a, **k: None
-    ItemMarkerEffect = lambda *a, **k: None
-    ModernHUD = _NoOpModernHUD
-    HUDTheme = None
-    PathPreviewDialog = _NoOpPathPreviewDialog
+    _visual_fallbacks = get_visualization_fallbacks(
+        pygame_available=PYGAME_AVAILABLE,
+        pygame_module=pygame,
+    )
+    ZeldaRenderer = _visual_fallbacks["ZeldaRenderer"]
+    ThemeConfig = _visual_fallbacks["ThemeConfig"]
+    Vector2 = _visual_fallbacks["Vector2"]
+    EffectManager = _visual_fallbacks["EffectManager"]
+    PopEffect = _visual_fallbacks["PopEffect"]
+    FlashEffect = _visual_fallbacks["FlashEffect"]
+    RippleEffect = _visual_fallbacks["RippleEffect"]
+    ItemCollectionEffect = _visual_fallbacks["ItemCollectionEffect"]
+    ItemUsageEffect = _visual_fallbacks["ItemUsageEffect"]
+    ItemMarkerEffect = _visual_fallbacks["ItemMarkerEffect"]
+    ModernHUD = _visual_fallbacks["ModernHUD"]
+    HUDTheme = _visual_fallbacks["HUDTheme"]
+    PathPreviewDialog = _visual_fallbacks["PathPreviewDialog"]
 
     logger.warning("New visualization system not available; using no-op fallbacks for GUI components.")
 
 # Try to import GUI widgets
 try:
-    from src.gui.widgets import (
+    from src.gui.components.widgets import (
         CheckboxWidget, DropdownWidget, ButtonWidget,
         WidgetManager, WidgetTheme
     )
@@ -206,46 +407,14 @@ try:
 except ImportError:
     WIDGETS_AVAILABLE = False
 
-    # Minimal no-op widget implementations so GUI code can run when the
-    # optional widget package is absent (headless/test-friendly).
-    class _NoOpWidget:
-        def __init__(self, *_, **__):
-            self.control_name = None
-            self.is_open = False
-            self.state = None
-            self.rect = None
-            self.checked = False
+    _widget_fallbacks = get_widget_fallbacks()
+    CheckboxWidget = _widget_fallbacks["CheckboxWidget"]
+    DropdownWidget = _widget_fallbacks["DropdownWidget"]
+    ButtonWidget = _widget_fallbacks["ButtonWidget"]
+    WidgetManager = _widget_fallbacks["WidgetManager"]
+    WidgetTheme = _widget_fallbacks["WidgetTheme"]
 
-        def handle_mouse_down(self, *_, **__):
-            return False
-        def handle_mouse_up(self, *_, **__):
-            return False
-
-    class _NoOpWidgetManager:
-        def __init__(self):
-            self.widgets = []
-        def add_widget(self, w):
-            self.widgets.append(w)
-        def snapshot_dropdown_state(self):
-            return {}
-        def apply_dropdown_state(self, _state):
-            return None
-        def update(self, *_, **__):
-            return None
-        def handle_mouse_down(self, *_, **__):
-            return False
-        def handle_mouse_up(self, *_, **__):
-            return False
-        def handle_mouse_motion(self, *_, **__):
-            return False
-
-    CheckboxWidget = _NoOpWidget
-    DropdownWidget = _NoOpWidget
-    ButtonWidget = _NoOpWidget
-    WidgetManager = _NoOpWidgetManager
-    WidgetTheme = None
-
-    logger.warning("GUI widgets not available — using no-op widget manager.")
+    logger.warning("GUI widgets not available Î“Ã‡Ã¶ using no-op widget manager.")
 
 # --- Subprocess-based solver helper ---
 # This helper runs inside a separate process to avoid blocking the main thread
@@ -260,18 +429,7 @@ def _safe_unpickle(path: str) -> dict:
 
     Returns a dict with at least a 'success' key. Any error returns a failure dict.
     """
-    try:
-        if not path or not os.path.exists(path):
-            return {'success': False, 'message': 'output file missing'}
-        with open(path, 'rb') as f:
-            obj = pickle.load(f)
-        if not isinstance(obj, dict):
-            logger.warning('safe_unpickle: unexpected payload type %s for %s', type(obj), path)
-            return {'success': False, 'message': 'invalid output format'}
-        return obj
-    except Exception as e:
-        logger.exception('safe_unpickle failed for %s: %s', path, e)
-        return {'success': False, 'message': 'unpickle error'}
+    return _safe_unpickle_helper(path)
 
 
 def _convert_diagonal_to_4dir(path, grid=None):
@@ -291,105 +449,7 @@ def _convert_diagonal_to_4dir(path, grid=None):
     Returns:
         List of (row, col) tuples with only orthogonal (4-dir) moves
     """
-    if not path or len(path) < 2:
-        return path
-    
-    # Define obstacle tile IDs that intermediate positions should avoid
-    # Import here to avoid circular imports
-    try:
-        from src.simulation.validator import SEMANTIC_PALETTE, BLOCKING_IDS, WATER_IDS
-        obstacle_ids = BLOCKING_IDS | WATER_IDS
-    except ImportError:
-        # Fallback: water=40, wall=2, void=0
-        obstacle_ids = {0, 2, 40}
-    
-    def is_walkable(pos):
-        """Check if a position is walkable (not an obstacle)."""
-        if grid is None:
-            return True  # No grid provided, assume walkable
-        r, c = pos
-        if r < 0 or r >= grid.shape[0] or c < 0 or c >= grid.shape[1]:
-            return False
-        tile_id = int(grid[r, c])
-        return tile_id not in obstacle_ids
-    
-    def find_short_orth_path(start_pos, end_pos):
-        """Find a short 4-dir path between two adjacent diagonal points."""
-        from collections import deque
-        if start_pos == end_pos:
-            return [start_pos]
-        if grid is None:
-            return None
-        
-        # Restrict search to a small local window for performance/stability.
-        min_r = max(0, min(start_pos[0], end_pos[0]) - 1)
-        max_r = min(grid.shape[0] - 1, max(start_pos[0], end_pos[0]) + 1)
-        min_c = max(0, min(start_pos[1], end_pos[1]) - 1)
-        max_c = min(grid.shape[1] - 1, max(start_pos[1], end_pos[1]) + 1)
-        
-        q = deque([(start_pos, [start_pos])])
-        visited = {start_pos}
-        while q:
-            pos, p = q.popleft()
-            if len(p) > 6:
-                continue
-            if pos == end_pos:
-                return p
-            for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
-                nr, nc = pos[0] + dr, pos[1] + dc
-                npos = (nr, nc)
-                if not (min_r <= nr <= max_r and min_c <= nc <= max_c):
-                    continue
-                if npos in visited:
-                    continue
-                if not is_walkable(npos):
-                    continue
-                visited.add(npos)
-                q.append((npos, p + [npos]))
-        return None
-    
-    converted = [path[0]]  # Start position
-    
-    for i in range(len(path) - 1):
-        curr = path[i]
-        next_pos = path[i + 1]
-        dr = next_pos[0] - curr[0]
-        dc = next_pos[1] - curr[1]
-        
-        # If diagonal (both dr and dc non-zero), split into two moves
-        if dr != 0 and dc != 0:
-            # Try both intermediate options and pick the walkable one
-            # Option 1: Move vertically first (change row, keep col)
-            vert_first = (curr[0] + dr, curr[1])
-            # Option 2: Move horizontally first (keep row, change col)
-            horz_first = (curr[0], curr[1] + dc)
-            
-            # Pick the intermediate that avoids obstacles
-            if is_walkable(vert_first):
-                intermediate = vert_first
-            elif is_walkable(horz_first):
-                intermediate = horz_first
-            else:
-                # Try a tiny local 4-dir detour before giving up.
-                detour = find_short_orth_path(curr, next_pos)
-                if detour and len(detour) >= 2:
-                    converted.extend(detour[1:])
-                else:
-                    # Keep progress without forcing an invalid blocked intermediate.
-                    converted.append(next_pos)
-                    logger.warning(
-                        'Diagonal conversion: no safe orth split at %s->%s (vert=%s, horz=%s); keeping direct step',
-                        curr, next_pos, vert_first, horz_first
-                    )
-                continue
-            
-            converted.append(intermediate)
-            converted.append(next_pos)
-        else:
-            # Orthogonal move - keep as is
-            converted.append(next_pos)
-    
-    return converted
+    return _convert_diagonal_to_4dir_helper(path, grid=grid)
 
 def _solve_in_subprocess(grid, start_pos, goal_pos, algorithm_idx, feature_flags, priority_options,
                          graph=None, room_to_node=None, room_positions=None, node_to_room=None):
@@ -405,290 +465,18 @@ def _solve_in_subprocess(grid, start_pos, goal_pos, algorithm_idx, feature_flags
     The function re-creates a ZeldaLogicEnv locally inside the child process and runs 
     the same solver logic used on the main thread.
     """
-    try:
-        # Re-import heavy modules inside child process
-        from src.simulation.validator import ZeldaLogicEnv, StateSpaceAStar, SolverOptions
-        import time
-
-        # If a NumPy-like file path was passed earlier, caller will have loaded it; ensure grid is ndarray
-        grid_arr = grid
-        try:
-            import numpy as _np
-            if not isinstance(grid_arr, _np.ndarray):
-                grid_arr = _np.array(grid, dtype=_np.int64)
-        except Exception:
-            # If numpy not available or conversion failed, keep original
-            grid_arr = grid
-
-        # Normalize gameplay rules profile.
-        priority_options = dict(priority_options or {})
-        strict_original_mode = bool(feature_flags.get('strict_original_mode', False))
-        raw_profile = str(priority_options.get('rules_profile', '') or '').strip().lower()
-        if raw_profile in {'strict_original', 'original', 'nes'}:
-            strict_original_mode = True
-        priority_options['rules_profile'] = 'strict_original' if strict_original_mode else 'extended'
-        if strict_original_mode:
-            priority_options['allow_diagonals'] = False
-
-        solver_options = SolverOptions(rules_profile=priority_options['rules_profile'])
-
-        # CRITICAL: Pass graph connectivity data to enable stair traversal
-        env = ZeldaLogicEnv(grid_arr, render_mode=False, graph=graph, 
-                            room_to_node=room_to_node, room_positions=room_positions,
-                            node_to_room=node_to_room,
-                            solver_options=solver_options)
-
-        result = {
-            'success': False,
-            'path': None,
-            'teleports': 0,
-            'solver_result': None,
-            'message': None,
-        }
-
-        # Algorithm names for debug logging
-        algorithm_names = ["A*", "BFS", "Dijkstra", "Greedy", "D* Lite",
-                          "DFS/IDDFS", "Bidirectional A*",
-                          "CBS (Balanced)", "CBS (Explorer)", "CBS (Cautious)",
-                          "CBS (Forgetful)", "CBS (Speedrunner)", "CBS (Greedy)"]
-        alg_name = algorithm_names[algorithm_idx] if algorithm_idx < len(algorithm_names) else f"Unknown({algorithm_idx})"
-        
-        # CRITICAL DEBUG: Log which algorithm is being used
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.info('═══════════════════════════════════════════════════')
-        logger.info(f'🔍 SOLVER DISPATCH: algorithm_idx={algorithm_idx} → {alg_name}')
-        logger.info(f'   Start: {start_pos}, Goal: {goal_pos}')
-        logger.info('═══════════════════════════════════════════════════')
-
-        # Determine if CBS solver is selected (indices 7-12)
-        cbs_personas = {
-            7: 'balanced',
-            8: 'explorer',
-            9: 'cautious',
-            10: 'forgetful',
-            11: 'speedrunner',
-            12: 'greedy'
-        }
-        
-        # Single solver attempt - PROPER DISPATCH TO DIFFERENT ALGORITHMS
-        try:
-            if algorithm_idx in cbs_personas:
-                # Use CBS solver with selected persona
-                from src.simulation.cognitive_bounded_search import CognitiveBoundedSearch
-                
-                persona = cbs_personas[algorithm_idx]
-                logger.info(f'✓ Using CBS with persona={persona}')
-                cbs = CognitiveBoundedSearch(env, persona=persona, timeout=100000)
-                ok, path, states, metrics = cbs.solve()
-                
-                if ok:
-                    # Convert diagonal path to 4-directional for standard animation display
-                    display_path = _convert_diagonal_to_4dir(path, grid=grid_arr) if path else path
-                    
-                    # Extract CBS metrics for display
-                    cbs_metrics = {
-                        'confusion_index': round(metrics.confusion_index, 3),
-                        'navigation_entropy': round(metrics.navigation_entropy, 3),
-                        'cognitive_load': round(metrics.cognitive_load, 3),
-                        'aha_latency': metrics.aha_latency,
-                        'unique_tiles': metrics.unique_tiles_visited,
-                        'total_steps': metrics.total_steps,
-                        'peak_memory': metrics.peak_memory_usage,
-                        'replans': metrics.replans,
-                        'confusion_events': metrics.confusion_events
-                    }
-                    
-                    logger.info(f'✓ CBS succeeded: path_len={len(display_path)}, states={states}')
-                    result.update({
-                        'success': True, 
-                        'path': display_path,
-                        'teleports': 0, 
-                        'solver_result': {
-                            'nodes': states, 
-                            'original_path_len': len(path) if path else 0,
-                            'cbs_metrics': cbs_metrics,
-                            'persona': persona
-                        }
-                    })
-                else:
-                    logger.warning(f'✗ CBS failed: explored {states} states')
-                    result['message'] = f'CBS ({persona}) found no solution (explored {states} states)'
-            
-            elif algorithm_idx in {0, 1, 2, 3}:
-                from src.simulation import (
-                    GameStateSearchConfig,
-                    SearchRepresentation,
-                    run_game_state_solver,
-                )
-
-                logger.info("[OK] Using game-state search factory for %s", alg_name)
-                try:
-                    rep_mode = SearchRepresentation.parse(
-                        priority_options.get('representation', 'hybrid')
-                    )
-                    config = GameStateSearchConfig(
-                        timeout=int(priority_options.get('timeout', 100000)),
-                        tie_break=bool(priority_options.get('tie_break', False)),
-                        key_boost=bool(priority_options.get('key_boost', False)),
-                        enable_ara=bool(priority_options.get('enable_ara', False)),
-                        ara_weight=float(priority_options.get('ara_weight', 1.0)),
-                        allow_diagonals=bool(priority_options.get('allow_diagonals', False)),
-                        rules_profile=str(priority_options.get('rules_profile', 'extended')),
-                        representation=rep_mode,
-                    )
-                except Exception:
-                    config = GameStateSearchConfig()
-
-                search_result = run_game_state_solver(env, algorithm_idx, config)
-                ok = bool(search_result.success)
-                path = list(search_result.path or [])
-                nodes = int(search_result.states_explored or 0)
-                algo_label = search_result.algorithm
-
-                if ok:
-                    display_path = _convert_diagonal_to_4dir(path, grid=grid_arr) if path else path
-                    logger.info("[OK] %s succeeded: path_len=%d, nodes=%d", algo_label, len(display_path), nodes)
-                    result.update({
-                        'success': True,
-                        'path': display_path,
-                        'teleports': 0,
-                        'solver_result': {
-                            'nodes': nodes,
-                            'states_explored': nodes,
-                            'original_path_len': len(path) if path else 0,
-                            'algorithm': algo_label,
-                            'representation': config.representation.value,
-                            'rules_profile': str(config.rules_profile),
-                        },
-                    })
-                else:
-                    logger.warning("[FAIL] %s failed: explored %d states", algo_label, nodes)
-                    result['message'] = f'{algo_label} found no solution (explored {nodes} states)'
-
-            elif algorithm_idx == 4:
-                # D* Lite - Use incremental replanning search
-                logger.info('✓ Using D* Lite (incremental replanning)')
-                from src.simulation.dstar_lite import DStarLiteSolver
-                
-                dstar = DStarLiteSolver(env, heuristic_mode="balanced")
-                # Create initial state
-                start_state = env.state.copy()
-                ok, path, nodes = dstar.solve(start_state)
-                
-                if ok:
-                    display_path = _convert_diagonal_to_4dir(path, grid=grid_arr) if path else path
-                    algo_label = 'D* Lite (fallback: A*)' if getattr(dstar, 'used_fallback', False) else 'D* Lite'
-                    logger.info(f'✓ {algo_label} succeeded: path_len={len(display_path)}, nodes={nodes}')
-                    result.update({
-                        'success': True,
-                        'path': display_path,
-                        'teleports': 0,
-                        'solver_result': {
-                            'nodes': nodes,
-                            'original_path_len': len(path) if path else 0,
-                            'algorithm': algo_label,
-                            'replans': dstar.replans_count
-                        }
-                    })
-                else:
-                    logger.warning(f'✗ D* Lite failed: explored {nodes} states')
-                    result['message'] = f'D* Lite found no solution (explored {nodes} states)'
-            
-            elif algorithm_idx == 5:
-                # DFS/IDDFS - Depth-first search with iterative deepening
-                logger.info('✓ Using DFS/IDDFS (iterative deepening depth-first search)')
-                from src.simulation.state_space_dfs import StateSpaceDFS
-                
-                dfs = StateSpaceDFS(
-                    env,
-                    timeout=100000,
-                    max_depth=500,
-                    allow_diagonals=priority_options.get('allow_diagonals', False),
-                    use_iddfs=True  # Use IDDFS for better completeness
-                )
-                ok, path, nodes = dfs.solve()
-                
-                if ok:
-                    display_path = _convert_diagonal_to_4dir(path, grid=grid_arr) if path else path
-                    logger.info(f'✓ DFS/IDDFS succeeded: path_len={len(display_path)}, nodes={nodes}')
-                    result.update({
-                        'success': True,
-                        'path': display_path,
-                        'teleports': 0,
-                        'solver_result': {
-                            'nodes': nodes,
-                            'original_path_len': len(path) if path else 0,
-                            'algorithm': 'DFS/IDDFS',
-                            'max_depth': dfs.metrics.max_depth_reached,
-                            'backtracks': dfs.metrics.backtrack_count
-                        }
-                    })
-                else:
-                    logger.warning(f'✗ DFS/IDDFS failed: explored {nodes} states')
-                    result['message'] = f'DFS/IDDFS found no solution (explored {nodes} states)'
-            
-            elif algorithm_idx == 6:
-                # Bidirectional A* - Meet-in-the-middle search
-                logger.info('✓ Using Bidirectional A* (meet-in-the-middle search)')
-                from src.simulation.bidirectional_astar import BidirectionalAStar
-                
-                bidir = BidirectionalAStar(
-                    env,
-                    timeout=100000,
-                    allow_diagonals=priority_options.get('allow_diagonals', False),
-                    heuristic_mode="balanced"
-                )
-                ok, path, nodes = bidir.solve()
-                
-                if ok:
-                    display_path = _convert_diagonal_to_4dir(path, grid=grid_arr) if path else path
-                    algo_label = (
-                        'Bidirectional A* (fallback: A*)'
-                        if getattr(bidir, 'used_fallback', False)
-                        else 'Bidirectional A*'
-                    )
-                    logger.info(f'✓ {algo_label} succeeded: path_len={len(display_path)}, nodes={nodes}')
-                    result.update({
-                        'success': True,
-                        'path': display_path,
-                        'teleports': 0,
-                        'solver_result': {
-                            'nodes': nodes,
-                            'original_path_len': len(path) if path else 0,
-                            'algorithm': algo_label,
-                            'meeting_point': bidir.meeting_point,
-                            'collision_checks': bidir.collision_checks
-                        }
-                    })
-                else:
-                    logger.warning(f'✗ Bidirectional A* failed: explored {nodes} states')
-                    result['message'] = f'Bidirectional A* found no solution (explored {nodes} states)'
-            
-            else:
-                # Unknown algorithm - fallback to A*
-                logger.warning(f'⚠ Unknown algorithm_idx={algorithm_idx}, falling back to A*')
-                ssa = StateSpaceAStar(env, priority_options=priority_options)
-                ok, path, nodes = ssa.solve()
-                if ok:
-                    display_path = _convert_diagonal_to_4dir(path, grid=grid_arr) if path else path
-                    result.update({
-                        'success': True, 
-                        'path': display_path,
-                        'teleports': 0, 
-                        'solver_result': {'nodes': nodes, 'original_path_len': len(path) if path else 0, 'algorithm': 'A* (fallback)'}
-                    })
-                else:
-                    result['message'] = f'Fallback A* found no solution (explored {nodes} states)'
-                    
-        except Exception as e:
-            logger.exception(f'✗ Solver exception: {e}')
-            result['message'] = f'Solver error: {e}'
-
-        logger.info(f'🔍 SOLVER RESULT: success={result["success"]}, path_len={len(result["path"]) if result["path"] else 0}')
-        return result
-    except Exception as e:
-        return {'success': False, 'path': None, 'teleports': 0, 'solver_result': None, 'message': f'Child failed: {e}'}
+    return _solve_in_subprocess_helper(
+        grid,
+        start_pos,
+        goal_pos,
+        algorithm_idx,
+        feature_flags,
+        priority_options,
+        graph=graph,
+        room_to_node=room_to_node,
+        room_positions=room_positions,
+        node_to_room=node_to_room,
+    )
 
 
 def _run_solver_and_dump(grid_or_path, start_pos, goal_pos, algorithm_idx, feature_flags, priority_options, out_path,
@@ -704,60 +492,19 @@ def _run_solver_and_dump(grid_or_path, start_pos, goal_pos, algorithm_idx, featu
         room_positions: Optional mapping of room positions to pixel offsets
         node_to_room: Optional mapping of graph nodes to room positions (includes virtual nodes)
     """
-    import sys
-    # Subprocess logging - write to stderr since stdout may not be visible
-    def _log(msg):
-        try:
-            sys.stderr.write(f'[SOLVER_SUBPROCESS] {msg}\n')
-            sys.stderr.flush()
-        except Exception:
-            pass
-    
-    _log(f'Started: start={start_pos}, goal={goal_pos}, alg={algorithm_idx}, out={out_path}')
-    
-    # Load grid from file if a path was provided (avoids expensive pickling of large arrays)
-    grid = grid_or_path
-    try:
-        if isinstance(grid_or_path, str) and os.path.exists(grid_or_path):
-            _log(f'Loading grid from file: {grid_or_path}')
-            try:
-                import numpy as _np
-                grid = _np.load(grid_or_path, allow_pickle=False)
-                _log(f'Grid loaded: shape={grid.shape}')
-            except Exception as e:
-                _log(f'numpy load failed: {e}, trying pickle')
-                try:
-                    # Last effort: use pickle
-                    with open(grid_or_path, 'rb') as gf:
-                        grid = pickle.load(gf)
-                    _log('Grid loaded via pickle')
-                except Exception as e2:
-                    _log(f'pickle load failed: {e2}')
-                    grid = grid_or_path
-    except Exception as e:
-        _log(f'Grid load exception: {e}')
-        grid = grid_or_path
-
-    _log('Calling _solve_in_subprocess...')
-    res = _solve_in_subprocess(grid, start_pos, goal_pos, algorithm_idx, feature_flags, priority_options,
-                               graph=graph, room_to_node=room_to_node, room_positions=room_positions,
-                               node_to_room=node_to_room)
-    
-    path_len = len(res.get('path', []) or []) if res else 0
-    _log(f'Solver returned: success={res.get("success") if res else None}, path_len={path_len}')
-    
-    try:
-        with open(out_path, 'wb') as f:
-            pickle.dump(res, f)
-        _log(f'Result written to {out_path}')
-    except Exception as e:
-        _log(f'Failed to write result: {e}')
-        # Best-effort logging - child process may not have same stdout; write minimal failure to file
-        try:
-            with open(out_path, 'wb') as f:
-                pickle.dump({'success': False, 'message': f'failed to write output: {e}'}, f)
-        except Exception:
-            pass
+    return _run_solver_and_dump_helper(
+        grid_or_path,
+        start_pos,
+        goal_pos,
+        algorithm_idx,
+        feature_flags,
+        priority_options,
+        out_path,
+        graph=graph,
+        room_to_node=room_to_node,
+        room_positions=room_positions,
+        node_to_room=node_to_room,
+    )
 
 
 def _run_preview_and_dump(grid_or_path, start_pos, goal_pos, algorithm_idx, feature_flags, priority_options, out_path,
@@ -767,121 +514,20 @@ def _run_preview_and_dump(grid_or_path, start_pos, goal_pos, algorithm_idx, feat
     Runs in a separate process to avoid blocking the GUI. Attempts a fast StateSpaceAStar
     with a small timeout or returns failure quickly.
     """
-    try:
-        # Try to reuse the same solver machinery but with aggressive timeout to ensure quick return
-        grid = grid_or_path
-        try:
-            if isinstance(grid_or_path, str) and os.path.exists(grid_or_path):
-                import numpy as _np
-                grid = _np.load(grid_or_path, allow_pickle=False)
-        except Exception:
-            pass
+    return _run_preview_and_dump_helper(
+        grid_or_path,
+        start_pos,
+        goal_pos,
+        algorithm_idx,
+        feature_flags,
+        priority_options,
+        out_path,
+        graph=graph,
+        room_to_node=room_to_node,
+        room_positions=room_positions,
+        node_to_room=node_to_room,
+    )
 
-        # Use the shared helper with graph data for stair traversal
-        res = _solve_in_subprocess(grid, start_pos, goal_pos, algorithm_idx, feature_flags, 
-                                   {**priority_options, 'ara_weight': priority_options.get('ara_weight', 1.0)},
-                                   graph=graph, room_to_node=room_to_node, room_positions=room_positions,
-                                   node_to_room=node_to_room)
-        # If result is heavy, we can trim it to only include path and nodes
-        out = {'success': res.get('success', False), 'path': res.get('path'), 'solver_result': res.get('solver_result', {}), 'message': res.get('message')}
-        try:
-            with open(out_path, 'wb') as f:
-                pickle.dump(out, f)
-        except Exception:
-            try:
-                with open(out_path, 'wb') as f:
-                    pickle.dump({'success': False, 'message': 'failed to write preview output'}, f)
-            except Exception:
-                pass
-    except Exception as e:
-        try:
-            with open(out_path, 'wb') as f:
-                pickle.dump({'success': False, 'message': str(e)}, f)
-        except Exception:
-            pass
-
-
-
-class ToastNotification:
-    """Floating toast message with auto-dismiss and fade animations."""
-    def __init__(self, message: str, duration: float = 3.0, toast_type: str = 'info'):
-        self.message = message
-        self.duration = duration
-        self.toast_type = toast_type  # 'info', 'success', 'error', 'warning'
-        self.created_at = time.time()
-        
-        # Colors by type
-        self.colors = {
-            'info': (100, 200, 255),
-            'success': (100, 255, 150),
-            'error': (255, 100, 100),
-            'warning': (255, 200, 100)
-        }
-    
-    def is_expired(self) -> bool:
-        """Check if toast should be removed."""
-        return time.time() - self.created_at > self.duration
-    
-    def get_alpha(self) -> int:
-        """Calculate current alpha for fade in/out animation and clamp it into valid range."""
-        elapsed = time.time() - self.created_at
-        alpha = 240
-        # Fade in (0.3s)
-        if elapsed < 0.3:
-            alpha = int((elapsed / 0.3) * 240)
-        # Fade out (last 0.5s)
-        elif elapsed > self.duration - 0.5:
-            remaining = self.duration - elapsed
-            alpha = int((remaining / 0.5) * 240)
-        # Ensure alpha is valid integer in [0,255]
-        try:
-            alpha = int(alpha)
-        except Exception:
-            alpha = 0
-        alpha = max(0, min(255, alpha))
-        return alpha
-    
-    def render(self, surface: "pygame.Surface", center_x: int, y: int):
-        """Render toast notification at specified position."""
-        assert pygame is not None
-        alpha = self.get_alpha()
-        font = pygame.font.SysFont('Arial', 20)
-        text_surf = font.render(self.message, True, (255, 255, 255))
-        
-        padding = 15
-        toast_w = text_surf.get_width() + padding * 2
-        toast_h = text_surf.get_height() + padding * 2
-        
-        toast_surf = pygame.Surface((toast_w, toast_h), pygame.SRCALPHA)
-        
-        # Background with border (coerce color components to ints; handle alpha issues robustly)
-        bg_rect = pygame.Rect(0, 0, toast_w, toast_h)
-        try:
-            bg_color = (int(50), int(60), int(80), int(alpha))
-            pygame.draw.rect(toast_surf, bg_color, bg_rect, border_radius=8)
-        except Exception:
-            logger.exception("Failed drawing toast background with color %r; falling back to opaque color. alpha=%r", (50,60,80,alpha), alpha)
-            pygame.draw.rect(toast_surf, (50, 60, 80), bg_rect, border_radius=8)
-
-        # Colored border by type (coerce to ints and fallback)
-        col = self.colors.get(self.toast_type, (200, 200, 200))
-        try:
-            border_color = (int(col[0]), int(col[1]), int(col[2]), int(alpha))
-            pygame.draw.rect(toast_surf, border_color, bg_rect, 2, border_radius=8)
-        except Exception:
-            logger.exception("Failed drawing toast border with color %r; falling back to opaque.", (self.toast_type, col, alpha))
-            pygame.draw.rect(toast_surf, (200, 200, 200), bg_rect, 2, border_radius=8)
-
-        # Text with alpha
-        text_with_alpha = text_surf.copy()
-        try:
-            text_with_alpha.set_alpha(int(alpha))
-        except Exception:
-            logger.exception("Failed to set text alpha: %r", alpha)
-        toast_surf.blit(text_with_alpha, (padding, padding))
-        
-        # Render centered
-        surface.blit(toast_surf, (center_x - toast_w // 2, y))
 
 
 class ZeldaGUI:
@@ -961,7 +607,7 @@ class ZeldaGUI:
         # Initialize Pygame
         try:
             pygame.init()
-        except Exception as e:
+        except Exception:
             logger.exception("Failed to initialize Pygame")
             raise
 
@@ -1563,7 +1209,8 @@ class ZeldaGUI:
             self.stair_sprite = None
             self.stair_anim_phase = 0.0
     
-    def _create_link_sprite(self) -> "pygame.Surface":
+
+    def _create_link_sprite(self):
         """Create a detailed Link sprite using pygame drawing."""
         link_img = pygame.Surface((self.TILE_SIZE - 4, self.TILE_SIZE - 4), pygame.SRCALPHA)
         
@@ -1614,439 +1261,29 @@ class ZeldaGUI:
     
     def _update_control_panel_positions(self):
         """Update control panel and widget positions (called on resize)."""
-        if not WIDGETS_AVAILABLE or not self.widget_manager:
-            return
-        
-        # Control panel position
-        # Use custom position if set, otherwise default to right side
-        collapsed_width = 40
-        # Clamp panel width so it does not extend past the sidebar area and cover the map
-        # Allow a wider panel but keep a safe cap based on screen and sidebar so it doesn't overlap map badly
-        max_allowed_panel_width = max(collapsed_width, min(self.control_panel_width_current, self.max_panel_width, max(120, min(self.SIDEBAR_WIDTH * 2, max(120, self.screen_w - self.SIDEBAR_WIDTH - 40)))))
-        panel_width = int(max_allowed_panel_width)
-        # Debug: log when we had to clamp panel width to avoid map overlap
-        try:
-            original_width = int(max(collapsed_width, min(self.control_panel_width_current, self.max_panel_width)))
-            if panel_width != original_width:
-                logger.debug('Control panel width clamped from %d to %d due to SIDEBAR_WIDTH=%d', original_width, panel_width, self.SIDEBAR_WIDTH)
-        except Exception:
-            pass
-
-        # Compute default dock position and allow custom drag; then clamp to sidebar area
-        sidebar_x = self.screen_w - self.SIDEBAR_WIDTH
-        if self.control_panel_x is not None and self.control_panel_y is not None:
-            # Use custom dragged position
-            panel_x = self.control_panel_x
-            panel_y = self.control_panel_y
-        else:
-            # Default position (docked to right side, left of the sidebar)
-            panel_x = sidebar_x - panel_width - 10
-            panel_y = self.minimap_size + 20 if self.show_minimap else 10
-
-        # Clamp panel inside usable area (keep it left of the sidebar)
-        min_x = 10
-        max_x = max(min_x, sidebar_x - panel_width - 10)
-        panel_x = max(min_x, min(panel_x, max_x))
-
-        # Calculate panel height (align with _render_control_panel logic)
-        max_available_height = self.screen_h - panel_y - self.HUD_HEIGHT - 20
-        min_panel_height = 120
-        if max_available_height < min_panel_height:
-            panel_height = min_panel_height
-        else:
-            panel_height = min(max_available_height, 700)
-
-        self.control_panel_rect = pygame.Rect(
-            panel_x, panel_y,
-            panel_width,
-            panel_height
+        _update_control_panel_positions_helper(
+            self,
+            pygame,
+            logger,
+            widgets_available=WIDGETS_AVAILABLE,
+            checkbox_widget_cls=CheckboxWidget,
+            dropdown_widget_cls=DropdownWidget,
+            button_widget_cls=ButtonWidget,
+            zoom_labels=GUI_ZOOM_LABELS,
+            difficulty_names=GUI_DIFFICULTY_NAMES,
+            algorithm_names=GUI_ALGORITHM_NAMES,
         )
-
-        # Collapse/Expand button (always visible) - top-right
-        button_size = 32
-        self.collapse_button_rect = pygame.Rect(
-            panel_x + panel_width - 34, panel_y + 4,
-            button_size, button_size
-        )
-        
-        # Don't update widgets if effectively collapsed (small width)
-        if panel_width <= collapsed_width + 8:
-            return
-        
-        # Only rebuild widgets if none exist yet
-        widgets_exist = hasattr(self, 'widget_manager') and self.widget_manager and len(self.widget_manager.widgets) > 0
-        if widgets_exist:
-            # Just update widget positions instead of rebuilding
-            self._reposition_widgets(panel_x, panel_y)
-            return
-        
-        # Clear existing widgets if reinitializing
-        if hasattr(self, 'widget_manager') and self.widget_manager:
-            # Preserve existing dropdown state (so rebuilding UI doesn't lose open/selected state)
-            saved_dropdown_state = self.widget_manager.snapshot_dropdown_state()
-            self.widget_manager.widgets.clear()
-        
-        # === CONSISTENT LAYOUT CONSTANTS ===
-        margin_left = 12
-        margin_top = 48  # Space for collapse button + "FEATURES" title
-        checkbox_spacing = 26
-        # Increase dropdown spacing to make room for labels
-        dropdown_spacing = 44
-        section_gap = 18
-        
-        # Start position (below "FEATURES" title)
-        y_offset = panel_y + margin_top
-        x_offset = panel_x + margin_left
-        
-        # === CHECKBOXES SECTION ===
-        checkbox_labels = [
-            ('solver_comparison', 'Solver Comparison'),
-            ('parallel_search', 'Parallel Search'),
-            ('multi_goal', 'Multi-Goal Pathfinding'),
-            ('ml_heuristic', 'ML Heuristic'),
-            ('dstar_lite', 'D* Lite Replanning'),
-            ('show_heatmap', 'Show Heatmap Overlay'),
-            ('show_path', 'Show Path Overlay'),  # Path visualization toggle
-            ('show_map_elites', 'Show MAP-Elites Overlay'),
-            ('show_topology', 'Show Topology Overlay'),
-            ('show_topology_legend', 'Topology Legend (details)'),
-            ('show_minimap', 'Show Minimap'),
-            ('diagonal_movement', 'Diagonal Movement'),
-            ('use_jps', 'Use Jump Point Search (JPS)'),
-            ('show_jps_overlay', 'Show JPS Overlay'),
-            ('speedrun_mode', 'Speedrun Mode'),
-            ('strict_original_mode', 'Strict Original LoZ Rules'),
-            ('dynamic_difficulty', 'Dynamic Difficulty'),
-            ('force_grid', 'Force Grid Solver'),
-            ('enable_prechecks', 'Enable Prechecks (fast checks before solve)'),
-            ('auto_prune_on_precheck', 'Auto-Prune Dead-Ends on Precheck'),
-            ('priority_tie_break', 'Priority: Tie-Break by Locks'),
-            ('priority_key_boost', 'Priority: Key-Pickup Boost'),
-            ('enable_ara', 'Enable ARA* (weighted A*)'),
-            ('persist_dropdown_on_select', 'Keep dropdown open after select'),
-        ]
-        
-        for flag_name, label in checkbox_labels:
-            checkbox = CheckboxWidget(
-                (x_offset, y_offset),
-                label,
-                checked=self.feature_flags.get(flag_name, False)
-            )
-            setattr(checkbox, 'flag_name', flag_name)
-            self.widget_manager.add_widget(checkbox)
-            y_offset += checkbox_spacing
-        
-        # Section gap before dropdowns
-        y_offset += section_gap
-        
-        # === DROPDOWNS SECTION ===
-        # Floor selector
-        floor_dropdown = DropdownWidget(
-            (x_offset, y_offset),
-            "Floor",
-            ["Floor 1", "Floor 2", "Floor 3"],
-            selected=self.current_floor - 1,
-            keep_open_on_select=self.feature_flags.get('persist_dropdown_on_select', False)
-        )
-        setattr(floor_dropdown, 'control_name', 'floor')
-        self.widget_manager.add_widget(floor_dropdown)
-        y_offset += dropdown_spacing
-        
-        # Zoom level
-        zoom_dropdown = DropdownWidget(
-            (x_offset, y_offset),
-            "Zoom",
-            ["25%", "50%", "75%", "100%", "150%", "200%"],
-            selected=self.zoom_level_idx,
-            keep_open_on_select=self.feature_flags.get('persist_dropdown_on_select', False)
-        )
-        setattr(zoom_dropdown, 'control_name', 'zoom')
-        self.widget_manager.add_widget(zoom_dropdown)
-        y_offset += dropdown_spacing
-
-        # ARA* weight (for weighted A* when enabled)
-        ara_options = ["1.0", "1.25", "1.5", "2.0"]
-        try:
-            ara_value = float(getattr(self, 'ara_weight', 1.0))
-            ara_selected = min(
-                range(len(ara_options)),
-                key=lambda idx: abs(float(ara_options[idx]) - ara_value),
-            )
-        except Exception:
-            ara_selected = 0
-        ara_dropdown = DropdownWidget(
-            (x_offset, y_offset),
-            "ARA* weight",
-            ara_options,
-            selected=ara_selected,
-            keep_open_on_select=self.feature_flags.get('persist_dropdown_on_select', False)
-        )
-        setattr(ara_dropdown, 'control_name', 'ara_weight')
-        self.widget_manager.add_widget(ara_dropdown)
-        y_offset += dropdown_spacing
-        
-        # Difficulty
-        difficulty_dropdown = DropdownWidget(
-            (x_offset, y_offset),
-            "Difficulty",
-            ["Easy", "Medium", "Hard", "Expert"],
-            selected=self.difficulty_idx,
-            keep_open_on_select=self.feature_flags.get('persist_dropdown_on_select', False)
-        )
-        setattr(difficulty_dropdown, 'control_name', 'difficulty')
-        self.widget_manager.add_widget(difficulty_dropdown)
-        y_offset += dropdown_spacing
-        
-        # Presets
-        presets_dropdown = DropdownWidget(
-            (x_offset, y_offset),
-            "Presets",
-            self.presets,
-            selected=self.current_preset_idx,
-            keep_open_on_select=self.feature_flags.get('persist_dropdown_on_select', False)
-        )
-        setattr(presets_dropdown, 'control_name', 'presets')
-        self.widget_manager.add_widget(presets_dropdown)
-        y_offset += dropdown_spacing
-
-        # Algorithm
-        algorithm_dropdown = DropdownWidget(
-            (x_offset, y_offset),
-            "Solver",
-            ["A*", "BFS", "Dijkstra", "Greedy", "D* Lite",
-             "DFS/IDDFS", "Bidirectional A*",
-             "CBS (Balanced)", "CBS (Explorer)", "CBS (Cautious)", 
-             "CBS (Forgetful)", "CBS (Speedrunner)", "CBS (Greedy)"],
-            selected=self.algorithm_idx,
-            keep_open_on_select=self.feature_flags.get('persist_dropdown_on_select', False)
-        )
-        setattr(algorithm_dropdown, 'control_name', 'algorithm')
-        self.widget_manager.add_widget(algorithm_dropdown)
-        y_offset += dropdown_spacing
-
-        # Search representation mode
-        rep_options = ["Hybrid (Graph+Tile)", "Tile Only", "Graph Only"]
-        rep_to_idx = {'hybrid': 0, 'tile': 1, 'graph': 2}
-        rep_selected = rep_to_idx.get(str(getattr(self, 'search_representation', 'hybrid')).lower(), 0)
-        representation_dropdown = DropdownWidget(
-            (x_offset, y_offset),
-            "Search Space",
-            rep_options,
-            selected=rep_selected,
-            keep_open_on_select=self.feature_flags.get('persist_dropdown_on_select', False)
-        )
-        setattr(representation_dropdown, 'control_name', 'representation')
-        self.widget_manager.add_widget(representation_dropdown)
-        y_offset += dropdown_spacing
-
-        # Match apply threshold (for tentative proposals)
-        threshold_dropdown = DropdownWidget(
-            (x_offset, y_offset),
-            "Apply Threshold",
-            ["0.70", "0.75", "0.80", "0.85", "0.90"],
-            selected=3,
-            keep_open_on_select=self.feature_flags.get('persist_dropdown_on_select', False)
-        )
-        setattr(threshold_dropdown, 'control_name', 'match_threshold')
-        self.widget_manager.add_widget(threshold_dropdown)
-        # Keep a float copy
-        self.match_apply_threshold = float(threshold_dropdown.options[threshold_dropdown.selected])
-        y_offset += dropdown_spacing
-        
-        # Section gap before buttons
-        y_offset += section_gap
-
-        # After adding dropdowns, restore any previous dropdown snapshot
-        try:
-            if saved_dropdown_state is not None:
-                self.widget_manager.apply_dropdown_state(saved_dropdown_state)
-        except Exception:
-            pass
-        
-        # === BUTTONS SECTION ===
-        button_width = 125
-        button_height = 30
-        buttons_per_row = 2
-        button_h_spacing = 8
-        button_v_spacing = 8
-        
-        # Primary action buttons
-        primary_buttons = [
-            ("Start Auto-Solve", self._start_auto_solve),
-            ("Stop", self._stop_auto_solve),
-            ("Generate Dungeon", self._generate_dungeon),
-            ("AI Generate", self._generate_ai_dungeon),
-            ("Reset", self._reset_map),
-        ]
-        
-        # Secondary action buttons
-        secondary_buttons = [
-            ("Path Preview", self._show_path_preview),
-            ("Clear Path", self._clear_path),
-            ("Export Route", self._export_route),
-            ("Load Route", self._load_route),
-            ("Export Topology", self._export_topology),
-            ("Compare Solvers", self._run_solver_comparison),
-            ("Match Missing Nodes", self._match_missing_nodes),
-            ("Apply Tentative Matches", self._apply_tentative_matches),
-            ("Undo Last Match", self._undo_last_match),
-            ("Undo Prune", self._undo_prune),
-            ("Run MAP-Elites", self._start_map_elites),
-        ]
-        
-        # Render primary buttons in 2x2 grid
-        button_start_y = y_offset
-        for i, (label, callback) in enumerate(primary_buttons):
-            row = i // buttons_per_row
-            col = i % buttons_per_row
-            button_x = x_offset + col * (button_width + button_h_spacing)
-            button_y = button_start_y + row * (button_height + button_v_spacing)
-            
-            button = ButtonWidget(
-                (button_x, button_y),
-                label,
-                callback,
-                width=button_width,
-                height=button_height
-            )
-            self.widget_manager.add_widget(button)
-        
-        # Update y_offset for secondary buttons
-        y_offset = button_start_y + (len(primary_buttons) // buttons_per_row) * (button_height + button_v_spacing) + 12
-        
-        # Render secondary buttons in 2x2 grid
-        for i, (label, callback) in enumerate(secondary_buttons):
-            row = i // buttons_per_row
-            col = i % buttons_per_row
-            button_x = x_offset + col * (button_width + button_h_spacing)
-            button_y = y_offset + row * (button_height + button_v_spacing)
-            
-            button = ButtonWidget(
-                (button_x, button_y),
-                label,
-                callback,
-                width=button_width,
-                height=button_height
-            )
-            self.widget_manager.add_widget(button)
-        
-        # === POST-BUILD: make sure widgets are positioned and compute content height ===
-        # Reposition widgets once so final positions (matching _reposition_widgets) are used
-        try:
-            self._reposition_widgets(panel_x, panel_y)
-        except Exception:
-            pass
-        # Compute top-most and bottom-most widget to determine content height
-        max_widget_bottom = 0
-        min_widget_top = 10**9
-        for w in self.widget_manager.widgets:
-            # Determine widget top (prefer full_rect if present)
-            if hasattr(w, 'full_rect') and getattr(w, 'full_rect') is not None:
-                top = int(getattr(w, 'full_rect').top)
-            elif hasattr(w, 'rect') and getattr(w, 'rect') is not None:
-                top = int(getattr(w, 'rect').top)
-            else:
-                top = panel_y
-
-            # Determine widget bottom (consider dropdown_rect if present, as menu may expand)
-            bottoms = []
-            if hasattr(w, 'dropdown_rect') and getattr(w, 'dropdown_rect') is not None:
-                try:
-                    bottoms.append(int(getattr(w, 'dropdown_rect').bottom))
-                except Exception:
-                    pass
-            if hasattr(w, 'full_rect') and getattr(w, 'full_rect') is not None:
-                bottoms.append(int(getattr(w, 'full_rect').bottom))
-            if hasattr(w, 'rect') and getattr(w, 'rect') is not None:
-                bottoms.append(int(getattr(w, 'rect').bottom))
-
-            bottom = max(bottoms) if bottoms else top
-
-            min_widget_top = min(min_widget_top, top)
-            max_widget_bottom = max(max_widget_bottom, bottom)
-
-        # Desired content height (space required to show everything)
-        extra_top = max(0, panel_y - min_widget_top)
-        content_height = max_widget_bottom - panel_y + 12 + extra_top if max_widget_bottom > 0 else min_panel_height
-        self.control_panel_content_height = content_height
-
-        # If content exceeds available height, enable scrolling instead of enlarging
-        if content_height > max_available_height:
-            # Keep panel_height limited and enable scrolling
-            panel_height = min(max_available_height, 700)
-            self.control_panel_can_scroll = True
-            self.control_panel_scroll = getattr(self, 'control_panel_scroll', 0)
-            self.control_panel_scroll = max(0, min(self.control_panel_scroll, content_height - panel_height))
-            # Update scroll max for external usage
-            self.control_panel_scroll_max = max(0, content_height - panel_height)
-        else:
-            # Grow to fit content when possible
-            panel_height = min(max_available_height, max(content_height, min_panel_height))
-            self.control_panel_can_scroll = False
-            self.control_panel_scroll = 0
-            self.control_panel_scroll_max = 0
-
-        # Update control panel rect height and collapse button Y
-        self.control_panel_rect.height = panel_height
-        self.collapse_button_rect.y = panel_y + 4
-        # Reposition widgets in case layout changed
-        self._reposition_widgets(panel_x, panel_y)
     
     def _reposition_widgets(self, panel_x: int, panel_y: int):
         """Reposition existing widgets when panel is dragged (without rebuilding)."""
-        if not self.widget_manager or not self.widget_manager.widgets:
-            return
-
-        # Define consistent spacing
-        margin_left = 12
-        # Compute dynamic top margin from collapse button size to align items under header
-        button_size = 28
-        button_margin = 6
-        margin_top = button_margin + max(button_size, self.font.get_height()) + 8
-        item_spacing = 44  # Vertical spacing between checkboxes (increased for label breathing room)
-        section_gap = 20  # Gap between sections
-
-        # Starting Y position (below "FEATURES" title)
-        current_y = panel_y + margin_top
-
-        # Counters for different widget types
-        checkbox_idx = 0
-        dropdown_idx = 0
-        button_idx = 0
-
-        # Button layout configuration
-        button_width = 125
-        button_height = 30
-        buttons_per_row = 2
-        button_h_spacing = 8
-        button_v_spacing = 8
-
-        for widget in self.widget_manager.widgets:
-            if isinstance(widget, CheckboxWidget):
-                # Position checkboxes in a vertical list
-                setattr(widget, 'pos', (panel_x + margin_left, current_y + checkbox_idx * item_spacing))
-                checkbox_idx += 1
-
-            elif isinstance(widget, DropdownWidget):
-                # Position dropdowns after checkboxes with section gap
-                if checkbox_idx > 0 and dropdown_idx == 0:
-                    current_y += checkbox_idx * item_spacing + section_gap
-
-                setattr(widget, 'pos', (panel_x + margin_left, current_y + dropdown_idx * item_spacing))
-                dropdown_idx += 1
-
-            elif isinstance(widget, ButtonWidget):
-                # Position buttons in a grid after dropdowns
-                if dropdown_idx > 0 and button_idx == 0:
-                    current_y += dropdown_idx * item_spacing + section_gap
-
-                row = button_idx // buttons_per_row
-                col = button_idx % buttons_per_row
-                setattr(widget, 'pos', (
-                    panel_x + margin_left + col * (button_width + button_h_spacing),
-                    current_y + row * (button_height + button_v_spacing)
-                ))
-                button_idx += 1
+        _reposition_widgets_helper(
+            self,
+            panel_x,
+            panel_y,
+            checkbox_widget_cls=CheckboxWidget,
+            dropdown_widget_cls=DropdownWidget,
+            button_widget_cls=ButtonWidget,
+        )
 
     def _dump_control_panel_widget_state(self, mouse_pos: tuple):
         """Debug helper: log each widget rects and whether mouse/sc_pos hit them.
@@ -2054,43 +1291,12 @@ class ZeldaGUI:
         This is defensive and avoids using any variables that may not be available in
         other layout helper contexts.
         """
-        try:
-            scroll_offset = getattr(self, 'control_panel_scroll', 0) if getattr(self, 'control_panel_can_scroll', False) else 0
-            panel_rect = getattr(self, 'control_panel_rect', None)
-            panel_top = panel_rect.y if panel_rect is not None else None
-            header_height = self.font.get_height() + 12
-            sc_pos = (mouse_pos[0], mouse_pos[1] + scroll_offset)
-            if DEBUG_INPUT_ACTIVE:
-                logger.info('DUMP_WIDGETS: mouse_pos=%s sc_pos=%s scroll=%s panel_top=%s header_h=%s', mouse_pos, sc_pos, scroll_offset, panel_top, header_height)
-            else:
-                logger.debug('DUMP_WIDGETS: mouse_pos=%s sc_pos=%s scroll=%s panel_top=%s header_h=%s', mouse_pos, sc_pos, scroll_offset, panel_top, header_height)
-            for w in self.widget_manager.widgets:
-                fr = getattr(w, 'full_rect', getattr(w, 'rect', None))
-                rr = getattr(w, 'rect', None)
-                dropdown_r = getattr(w, 'dropdown_rect', None)
-                try:
-                    fr_tuple = (fr.x, fr.y, fr.width, fr.height) if fr is not None else None
-                except Exception:
-                    fr_tuple = None
-                try:
-                    r_tuple = (rr.x, rr.y, rr.width, rr.height) if rr is not None else None
-                except Exception:
-                    r_tuple = None
-                try:
-                    dr_tuple = (dropdown_r.x, dropdown_r.y, dropdown_r.width, dropdown_r.height) if dropdown_r is not None else None
-                except Exception:
-                    dr_tuple = None
-                contains_mouse = bool(fr and fr.collidepoint(mouse_pos))
-                contains_sc = bool(fr and fr.collidepoint(sc_pos))
-                rect_contains_mouse = bool(rr and rr.collidepoint(mouse_pos))
-                rect_contains_sc = bool(rr and rr.collidepoint(sc_pos))
-                label = getattr(w, 'label', getattr(w, 'control_name', None) or w.__class__.__name__)
-                if DEBUG_INPUT_ACTIVE:
-                    logger.info('WIDGET: name=%r full_rect=%s rect=%s dropdown=%s contains_mouse=%s contains_sc=%s rect_contains_mouse=%s rect_contains_sc=%s type=%s', label, fr_tuple, r_tuple, dr_tuple, contains_mouse, contains_sc, rect_contains_mouse, rect_contains_sc, w.__class__.__name__)
-                else:
-                    logger.debug('WIDGET: name=%r full_rect=%s rect=%s dropdown=%s contains_mouse=%s contains_sc=%s rect_contains_mouse=%s rect_contains_sc=%s type=%s', label, fr_tuple, r_tuple, dr_tuple, contains_mouse, contains_sc, rect_contains_mouse, rect_contains_sc, w.__class__.__name__)
-        except Exception:
-            logger.exception('Failed to dump control panel widget state')
+        _dump_control_panel_widget_state_helper(
+            self,
+            mouse_pos,
+            logger=logger,
+            debug_input_active=DEBUG_INPUT_ACTIVE,
+        )
         
     
     def _update_inventory_and_hud(self):
@@ -2100,112 +1306,7 @@ class ZeldaGUI:
         If called from a non-main thread, set a flag so the main thread performs the UI update
         (pygame surfaces & rendering should be touched only from the main thread).
         """
-        # Instrumentation: log entry and key metrics for debugging real-time update issues
-        try:
-            thread_name = None
-            import threading
-            thread_name = threading.current_thread().name
-        except Exception:
-            thread_name = 'unknown'
-        logger.debug("_update_inventory_and_hud: entry (thread=%s, inventory_needs_refresh=%s)",
-                     thread_name, getattr(self, 'inventory_needs_refresh', False))
-
-        try:
-            # Always recompute counters (safe operation)
-            before_keys = getattr(self, 'keys_collected', None)
-            env_keys = getattr(getattr(self, 'env', None), 'state', None)
-            env_keys_val = getattr(env_keys, 'keys', None) if env_keys is not None else None
-            logger.debug("Counters before sync: env.keys=%s, keys_collected=%s", env_keys_val, before_keys)
-            self._sync_inventory_counters()
-            after_keys = getattr(self, 'keys_collected', None)
-            logger.debug("Counters after sync: keys_collected=%s", after_keys)
-        except Exception:
-            logger.exception("_update_inventory_and_hud: failed while syncing counters")
-
-        # Defensive consistency check
-        try:
-            if getattr(self.env, 'state', None):
-                if getattr(self.env.state, 'keys', 0) < 0:
-                    logger.warning('Inventory inconsistency: env.state.keys < 0')
-        except Exception:
-            pass
-
-        # If we're not on the main thread, defer the HUD update to the main loop
-        try:
-            import threading
-            if threading.current_thread() is not threading.main_thread():
-                # Mark for refresh; main loop will call _update_inventory_and_hud() again
-                self.inventory_needs_refresh = True
-                logger.debug("_update_inventory_and_hud: deferred to main thread (set inventory_needs_refresh=True)")
-                return
-        except Exception:
-            pass
-
-        # Update modern HUD if available (main-thread only)
-        try:
-            # If we were previously deferring the update, clear the flag now since we're on the main thread
-            if getattr(self, 'inventory_needs_refresh', False):
-                logger.debug("_update_inventory_and_hud: clearing deferred flag (main thread)")
-                try:
-                    self.inventory_needs_refresh = False
-                except Exception:
-                    pass
-
-            if getattr(self, 'modern_hud', None):
-                # Record HUD state before update for diagnostics
-                try:
-                    hud_before = getattr(self.modern_hud, 'last', None) if hasattr(self.modern_hud, 'last') else None
-                except Exception:
-                    hud_before = None
-
-                self.modern_hud.update_game_state(
-                    keys=getattr(self.env.state, 'keys', 0),
-                    bombs=getattr(self.env.state, 'bomb_count', 0),
-                    has_boss_key=getattr(self.env.state, 'has_boss_key', False),
-                    position=getattr(self.env.state, 'position', (0, 0)),
-                    steps=getattr(self, 'step_count', 0),
-                    message=getattr(self, 'message', '')
-                )
-                # Also mirror counts onto HUD fields if present (include usage counters)
-                try:
-                    if hasattr(self.modern_hud, 'keys_collected'):
-                        self.modern_hud.keys_collected = getattr(self, 'keys_collected', 0)
-                    if hasattr(self.modern_hud, 'bombs_collected'):
-                        self.modern_hud.bombs_collected = getattr(self, 'bombs_collected', 0)
-                    if hasattr(self.modern_hud, 'boss_keys_collected'):
-                        self.modern_hud.boss_keys_collected = getattr(self, 'boss_keys_collected', 0)
-
-                    # Usage counters (keys_used, bombs_used, boss_keys_used)
-                    if hasattr(self.modern_hud, 'keys_used'):
-                        self.modern_hud.keys_used = getattr(self, 'keys_used', 0)
-                    if hasattr(self.modern_hud, 'bombs_used'):
-                        self.modern_hud.bombs_used = getattr(self, 'bombs_used', 0)
-                    if hasattr(self.modern_hud, 'boss_keys_used'):
-                        self.modern_hud.boss_keys_used = getattr(self, 'boss_keys_used', 0)
-
-                    # If a nested inventory panel exists, mirror values there too
-                    if hasattr(self.modern_hud, 'inventory'):
-                        try:
-                            self.modern_hud.inventory.keys_collected = getattr(self, 'keys_collected', 0)
-                            self.modern_hud.inventory.bombs_collected = getattr(self, 'bombs_collected', 0)
-                            self.modern_hud.inventory.boss_keys_collected = getattr(self, 'boss_keys_collected', 0)
-                            self.modern_hud.inventory.keys_used = getattr(self, 'keys_used', 0)
-                            self.modern_hud.inventory.bombs_used = getattr(self, 'bombs_used', 0)
-                            self.modern_hud.inventory.boss_keys_used = getattr(self, 'boss_keys_used', 0)
-                        except Exception:
-                            logger.exception("Failed setting nested inventory attributes")
-                except Exception:
-                    logger.exception("Failed setting HUD count attributes")
-
-                try:
-                    # Capture HUD state after update
-                    hud_after = getattr(self.modern_hud, 'last', None) if hasattr(self.modern_hud, 'last') else None
-                    logger.debug("HUD updated: before=%r after=%r env.keys=%s keys_collected=%s",
-                                 hud_before, hud_after, getattr(self.env.state, 'keys', None), getattr(self, 'keys_collected', None))
-                except Exception:
-                    logger.exception("Failed to log HUD post-update state")
-        except Exception as e:
-            logger.warning(f"Failed to update modern HUD: {e}")
+        _update_inventory_and_hud_helper(self, logger)
 
     def _remove_from_path_items(self, pos, item_type):
         """Remove a collected item from path_item_positions and update summary.
@@ -2214,234 +1315,15 @@ class ZeldaGUI:
             pos: (row, col) position of collected item
             item_type: 'keys', 'boss_keys', 'ladders', 'bombs', etc.
         """
-        try:
-            path_positions = getattr(self, 'path_item_positions', {})
-            path_summary = getattr(self, 'path_items_summary', {})
-            
-            if item_type in path_positions and pos in path_positions[item_type]:
-                path_positions[item_type].remove(pos)
-                if item_type in path_summary and path_summary[item_type] > 0:
-                    path_summary[item_type] -= 1
-                logger.debug('Removed %s at %s from path items preview', item_type, pos)
-        except Exception as e:
-            logger.warning('Failed to remove %s at %s from path items: %s', item_type, pos, e)
+        _remove_from_path_items_helper(self, pos, item_type, logger)
 
     def _track_item_collection(self, old_state, new_state):
         """Detect when items are collected by comparing states."""
-        # DEBUG: Log state comparison
-        logger.debug("TRACK_COLLECTION: old_keys=%d, new_keys=%d, old_bomb=%s, new_bomb=%s, old_boss=%s, new_boss=%s",
-                     old_state.keys, new_state.keys,
-                     old_state.has_bomb, new_state.has_bomb,
-                     getattr(old_state, 'has_boss_key', False), getattr(new_state, 'has_boss_key', False))
-        
-        # Check for key collection
-        if new_state.keys > old_state.keys:
-            keys_collected = new_state.keys - old_state.keys
-            pos = new_state.position
-            timestamp = time.time()
-            
-            logger.info("KEY_COLLECTED: pos=%s, count=%d, total_collected_now=%d", pos, keys_collected, self.keys_collected + keys_collected)
-            
-            self.collected_items.append((pos, 'key', timestamp))
-            self.collected_positions.add(pos)  # Track position for rendering
-            self.keys_collected += keys_collected
-            # Mark pickup time for flashing UI
-            self.item_pickup_times['key'] = timestamp
-            # Ensure item type map contains this pos
-            try:
-                self.item_type_map[pos] = self.item_type_map.get(pos, 'key')
-            except Exception:
-                pass
-            
-            # Remove marker if exists
-            if pos in self.item_markers and self.item_markers[pos].item_type == 'key':
-                del self.item_markers[pos]
-            
-            # === REMOVE FROM PATH ITEMS PREVIEW ===
-            self._remove_from_path_items(pos, 'keys')
-            
-            # Add collection effect
-            if self.effects:
-                effect = ItemCollectionEffect(pos, 'key', 'KEY', 
-                                             f'Key collected at ({pos[0]}, {pos[1]})!')
-                self.effects.add_effect(effect)
-                self.collection_effects.append(effect)
-                # Add pop effect for immediate visual feedback
-                self.effects.add_effect(PopEffect(pos, (255, 215, 0)))  # Gold pop for key
-            
-            # Show toast notification
-            self._show_toast(f"Key collected! Now have {self.keys_collected}/{self.total_keys}", 
-                           duration=2.5, toast_type='success')
-            try:
-                logger.info(f"Detected key collection at {pos} (keys_collected={self.keys_collected}, env.keys={getattr(self.env.state,'keys',None)})")
-            except Exception:
-                pass
-            try:
-                self.last_pickup_msg = f"Picked up key at {pos}"
-            except Exception:
-                pass
-            # Ensure HUD and counters are up to date
-            try:
-                self._update_inventory_and_hud()
-            except Exception:
-                pass
-        
-        # Check for bomb collection
-        if new_state.has_bomb and not old_state.has_bomb:
-            pos = new_state.position
-            timestamp = time.time()
-            
-            self.collected_items.append((pos, 'bomb', timestamp))
-            self.collected_positions.add(pos)  # Track position for rendering
-            self.bombs_collected += 1
-            self.item_pickup_times['bomb'] = timestamp
-            try:
-                self.item_type_map[pos] = self.item_type_map.get(pos, 'bomb')
-            except Exception:
-                pass
-            
-            # === REMOVE FROM PATH ITEMS PREVIEW ===
-            self._remove_from_path_items(pos, 'bombs')
-            
-            # Remove marker
-            if pos in self.item_markers and self.item_markers[pos].item_type == 'bomb':
-                del self.item_markers[pos]
-            
-            # Add collection effect
-            if self.effects:
-                effect = ItemCollectionEffect(pos, 'bomb', 'BOMB',
-                                             f'Bomb collected at ({pos[0]}, {pos[1]})!')
-                self.effects.add_effect(effect)
-                self.collection_effects.append(effect)
-                # Add pop effect for immediate visual feedback
-                self.effects.add_effect(PopEffect(pos, (255, 107, 53)))  # Orange pop for bomb
-            
-            # Show toast notification
-            self._show_toast("Bomb acquired! Can now blow up weak walls", 
-                           duration=3.0, toast_type='success')
-            try:
-                logger.info(f"Detected bomb collection at {pos} (bombs_collected={self.bombs_collected}, env.has_bomb={getattr(self.env.state,'has_bomb',None)})")
-            except Exception:
-                pass
-            try:
-                self._update_inventory_and_hud()
-            except Exception:
-                pass
-        
-        # Check for boss key collection
-        if new_state.has_boss_key and not old_state.has_boss_key:
-            pos = new_state.position
-            timestamp = time.time()
-            
-            self.collected_items.append((pos, 'boss_key', timestamp))
-            self.collected_positions.add(pos)  # Track position for rendering
-            self.boss_keys_collected += 1
-            
-            # Remove marker
-            if pos in self.item_markers and self.item_markers[pos].item_type == 'boss_key':
-                del self.item_markers[pos]
-            
-            # === REMOVE FROM PATH ITEMS PREVIEW ===
-            self._remove_from_path_items(pos, 'boss_keys')
-            
-            # Add collection effect
-            if self.effects:
-                effect = ItemCollectionEffect(pos, 'boss_key', 'BOSS KEY',
-                                             f'Boss Key collected at ({pos[0]}, {pos[1]})!')
-                self.effects.add_effect(effect)
-                self.collection_effects.append(effect)
-                # Add pop effect for immediate visual feedback
-                self.effects.add_effect(PopEffect(pos, (176, 66, 255)))  # Purple pop for boss key
-            
-            # Show toast notification
-            self._show_toast("Boss Key acquired! Can now face the boss", 
-                           duration=3.0, toast_type='success')
-            try:
-                self._update_inventory_and_hud()
-            except Exception:
-                pass
+        _track_item_collection_helper(self, old_state, new_state, time, logger, PopEffect, ItemCollectionEffect)
     
     def _track_item_usage(self, old_state, new_state):
         """Detect when items are used (doors opened, walls bombed)."""
-        # Defensive attribute initialization for lightweight runner tests
-        if not hasattr(self, 'used_items'):
-            self.used_items = []
-        if not hasattr(self, 'usage_effects'):
-            self.usage_effects = []
-
-        # Check if key was used
-        if new_state.keys < old_state.keys:
-            keys_used = old_state.keys - new_state.keys
-            pos = new_state.position
-            timestamp = time.time()
-
-            try:
-                self.used_items.append((pos, 'key', pos, timestamp))
-            except Exception:
-                logger.exception("Failed appending to used_items")
-            # Track used counter for visualization
-            self.keys_used = getattr(self, 'keys_used', 0) + keys_used
-            try:
-                logger.info(f"Key used at {pos} (keys_used={self.keys_used}, env.keys={getattr(self.env.state,'keys',None)})")
-                self.last_use_msg = f"Used key at {pos}"
-            except Exception:
-                pass
-            try:
-                self._update_inventory_and_hud()
-            except Exception:
-                pass
-
-            # Add usage effect
-            if self.effects:
-                effect = ItemUsageEffect(old_state.position, pos, 'key')
-                self.effects.add_effect(effect)
-                self.usage_effects.append(effect)
-            # Show toast for visibility in auto-solve
-            self._show_toast(f"Key used! ({self.keys_used} used)", duration=1.8, toast_type='info')
-        
-        # Check if bomb was used
-        if old_state.has_bomb and not new_state.has_bomb:
-            pos = new_state.position
-            timestamp = time.time()
-            
-            self.used_items.append((pos, 'bomb', pos, timestamp))
-            # Track bombs used
-            self.bombs_used = getattr(self, 'bombs_used', 0) + 1
-            try:
-                logger.info(f"Bomb used at {pos} (bombs_used={self.bombs_used}, env.has_bomb={getattr(self.env.state,'has_bomb',None)})")
-            except Exception:
-                pass
-            
-            # Add explosion effect
-            if self.effects:
-                effect = ItemUsageEffect(old_state.position, pos, 'bomb')
-                self.effects.add_effect(effect)
-                self.usage_effects.append(effect)
-            self._show_toast(f"Bomb used! ({self.bombs_used} used)", duration=1.8, toast_type='info')
-            try:
-                self._update_inventory_and_hud()
-            except Exception:
-                pass
-        
-        # Check if boss key was used
-        if old_state.has_boss_key and not new_state.has_boss_key:
-            pos = new_state.position
-            timestamp = time.time()
-            
-            self.used_items.append((pos, 'boss_key', pos, timestamp))
-            # Track boss key used
-            self.boss_keys_used = getattr(self, 'boss_keys_used', 0) + 1
-            
-            # Add usage effect
-            if self.effects:
-                effect = ItemUsageEffect(old_state.position, pos, 'boss_key')
-                self.effects.add_effect(effect)
-                self.usage_effects.append(effect)
-            self._show_toast(f"Boss key used! ({self.boss_keys_used} used)", duration=2.5, toast_type='info')
-            try:
-                self._update_inventory_and_hud()
-            except Exception:
-                pass
+        _track_item_usage_helper(self, old_state, new_state, time, logger, ItemUsageEffect)
     
     def _scan_and_mark_items(self):
         """Scan the map for all items and create markers.
@@ -2449,60 +1331,7 @@ class ZeldaGUI:
         This populates item_type_map with all item positions so that
         _sync_inventory_counters() can correctly count collected items.
         """
-        self.item_markers.clear()
-        self.item_type_map.clear()
-        self.total_keys = 0
-        self.total_bombs = 0
-        self.total_boss_keys = 0
-
-        if not self.env:
-            return
-        
-        h, w = self.env.height, self.env.width
-        
-        for r in range(h):
-            for c in range(w):
-                tile_id = self.env.grid[r, c]
-                pos = (r, c)
-                
-                # Check if already collected
-                if pos in getattr(self.env.state, 'collected_items', set()):
-                    continue
-                
-                # Create marker for items and populate item_type_map
-                if tile_id == SEMANTIC_PALETTE['KEY_SMALL']:
-                    self.total_keys += 1
-                    marker = ItemMarkerEffect(pos, 'key', 'K')
-                    self.item_markers[pos] = marker
-                    self.item_type_map[pos] = 'key'
-                    if self.effects:
-                        self.effects.add_effect(marker)
-                
-                elif tile_id == SEMANTIC_PALETTE.get('ITEM_BOMB', -1) or tile_id == SEMANTIC_PALETTE.get('ITEM_MINOR', -1):
-                    self.total_bombs += 1
-                    marker = ItemMarkerEffect(pos, 'bomb', 'B')
-                    self.item_markers[pos] = marker
-                    self.item_type_map[pos] = 'bomb'
-                    if self.effects:
-                        self.effects.add_effect(marker)
-                
-                elif tile_id == SEMANTIC_PALETTE['KEY_BOSS']:
-                    self.total_boss_keys += 1
-                    marker = ItemMarkerEffect(pos, 'boss_key', 'BK')
-                    self.item_markers[pos] = marker
-                    self.item_type_map[pos] = 'boss_key'
-                    if self.effects:
-                        self.effects.add_effect(marker)
-                
-                elif tile_id == SEMANTIC_PALETTE['TRIFORCE']:
-                    marker = ItemMarkerEffect(pos, 'triforce', 'TRI')
-                    self.item_markers[pos] = marker
-                    self.item_type_map[pos] = 'triforce'
-                    if self.effects:
-                        self.effects.add_effect(marker)
-        
-        logger.debug("_scan_and_mark_items: found %d keys, %d bombs, %d boss_keys, item_type_map has %d entries",
-                     self.total_keys, self.total_bombs, self.total_boss_keys, len(self.item_type_map))
+        _scan_and_mark_items_helper(self, SEMANTIC_PALETTE, logger, ItemMarkerEffect)
 
     def _apply_pickup_at(self, pos: Tuple[int, int]) -> bool:
         """Apply pickup logic at a position for teleport landings or external mutations.
@@ -2511,190 +1340,11 @@ class ZeldaGUI:
         visual markers/effects and pickup timers. Returns True if an item was
         collected at the position.
         """
-        if not self.env:
-            return False
-        try:
-            r, c = pos
-            if r < 0 or c < 0 or r >= self.env.height or c >= self.env.width:
-                return False
-            if pos in getattr(self.env.state, 'collected_items', set()):
-                return False
-            tile_id = int(self.env.grid[r, c])
-            if tile_id not in (SEMANTIC_PALETTE['KEY_SMALL'], SEMANTIC_PALETTE.get('ITEM_BOMB', -1), SEMANTIC_PALETTE['KEY_BOSS'], SEMANTIC_PALETTE['TRIFORCE']):
-                return False
-
-            # Mutate state to add collected position and update inventories
-            try:
-                collected = set(getattr(self.env.state, 'collected_items', set()) or set())
-                collected = collected | {pos}
-                self.env.state.collected_items = collected
-            except Exception:
-                pass
-
-            if tile_id == SEMANTIC_PALETTE['KEY_SMALL']:
-                try:
-                    self.env.state.keys = getattr(self.env.state, 'keys', 0) + 1
-                except Exception:
-                    pass
-                # CRITICAL: Modify grid to make item visually disappear
-                try:
-                    self.env.grid[r, c] = SEMANTIC_PALETTE['FLOOR']
-                except Exception:
-                    logger.warning("Failed to update grid for collected key")
-                self.collected_items.append((pos, 'key', time.time()))
-                self.collected_positions.add(pos)  # Track position for rendering
-                self.item_pickup_times['key'] = time.time()
-                self.keys_collected = getattr(self, 'keys_collected', 0) + 1
-                # Remove marker if present
-                if pos in self.item_markers and self.item_markers[pos].item_type == 'key':
-                    del self.item_markers[pos]
-                if self.effects:
-                    eff = ItemCollectionEffect(pos, 'key', 'KEY', f'Key collected at ({pos[0]}, {pos[1]})!')
-                    self.effects.add_effect(eff)
-                    self.collection_effects.append(eff)
-                self._show_toast(f"Key collected! Now have {self.keys_collected}/{self.total_keys}", duration=2.5, toast_type='success')
-                self.item_type_map[pos] = 'key'
-                return True
-
-            if tile_id == SEMANTIC_PALETTE.get('ITEM_BOMB', -1):
-                try:
-                    self.env.state.bomb_count += 4  # Add 4 consumable bombs
-                except Exception:
-                    pass
-                # CRITICAL: Modify grid to make item visually disappear
-                try:
-                    self.env.grid[r, c] = SEMANTIC_PALETTE['FLOOR']
-                except Exception:
-                    logger.warning("Failed to update grid for collected bomb")
-                self.collected_items.append((pos, 'bomb', time.time()))
-                self.collected_positions.add(pos)  # Track position for rendering
-                self.item_pickup_times['bomb'] = time.time()
-                self.bombs_collected = getattr(self, 'bombs_collected', 0) + 1
-                if pos in self.item_markers and self.item_markers[pos].item_type == 'bomb':
-                    del self.item_markers[pos]
-                if self.effects:
-                    eff = ItemCollectionEffect(pos, 'bomb', 'BOMB', f'Bomb collected at ({pos[0]}, {pos[1]})!')
-                    self.effects.add_effect(eff)
-                    self.collection_effects.append(eff)
-                self._show_toast("Bomb acquired! Can now blow up weak walls", duration=3.0, toast_type='success')
-                self.item_type_map[pos] = 'bomb'
-                return True
-
-            if tile_id == SEMANTIC_PALETTE['KEY_BOSS']:
-                try:
-                    self.env.state.has_boss_key = True
-                except Exception:
-                    pass
-                # CRITICAL: Modify grid to make item visually disappear
-                try:
-                    self.env.grid[r, c] = SEMANTIC_PALETTE['FLOOR']
-                except Exception:
-                    logger.warning("Failed to update grid for collected boss key")
-                self.collected_items.append((pos, 'boss_key', time.time()))
-                self.collected_positions.add(pos)  # Track position for rendering
-                self.item_pickup_times['boss_key'] = time.time()
-                self.boss_keys_collected = getattr(self, 'boss_keys_collected', 0) + 1
-                if pos in self.item_markers and self.item_markers[pos].item_type == 'boss_key':
-                    del self.item_markers[pos]
-                if self.effects:
-                    eff = ItemCollectionEffect(pos, 'boss_key', 'BOSS KEY', f'Boss Key collected at ({pos[0]}, {pos[1]})!')
-                    self.effects.add_effect(eff)
-                    self.collection_effects.append(eff)
-                self._show_toast("Boss Key acquired! Can now face the boss", duration=3.0, toast_type='success')
-                self.item_type_map[pos] = 'boss_key'
-                return True
-
-            if tile_id == SEMANTIC_PALETTE['TRIFORCE']:
-                # Mark triforce collected as special event but do not increment counts
-                try:
-                    self.env.state.collected_items = getattr(self.env.state, 'collected_items', set()) | {pos}
-                except Exception:
-                    pass
-                # NOTE: Triforce usually stays visible (goal marker), but mark collected in state
-                if self.effects:
-                    eff = ItemCollectionEffect(pos, 'triforce', 'TRI', f'Triforce at ({pos[0]}, {pos[1]})!')
-                    self.effects.add_effect(eff)
-                self._show_toast("Triforce found!", duration=3.0, toast_type='success')
-                self.item_type_map[pos] = 'triforce'
-                return True
-
-        except Exception as e:
-            logger.warning(f"_apply_pickup_at failed: {e}")
-        return False
+        return _apply_pickup_at_helper(self, pos, SEMANTIC_PALETTE, logger, time, ItemCollectionEffect)
     
     def _render_item_legend(self, surface):
         """Render legend showing item counts and path items preview."""
-        if not self.env:
-            return
-        # Sync counters in case changes happened outside _track_* (defensive)
-        self._sync_inventory_counters()
-
-        # Get path items summary for preview
-        path_summary = getattr(self, 'path_items_summary', {})
-        has_path_items = any(v > 0 for v in path_summary.values()) if path_summary else False
-        
-        # Calculate legend height based on content
-        base_lines = 3  # Keys, Bombs, Boss Keys
-        path_item_lines = 1 if has_path_items else 0  # Path items preview line
-        total_lines = base_lines + path_item_lines
-        
-        legend_x = 10
-        legend_height = 20 + (total_lines * 20)
-        legend_y = self.screen_h - legend_height - 40
-        
-        # Background
-        legend_bg = pygame.Surface((350, legend_height), pygame.SRCALPHA)
-        legend_bg.fill((30, 30, 40, 220))
-        surface.blit(legend_bg, (legend_x, legend_y))
-        
-        # Border
-        pygame.draw.rect(surface, (70, 70, 100), (legend_x, legend_y, 350, legend_height), 2)
-        
-        # Title
-        title_text = "Inventory"
-        title_surf = self.small_font.render(title_text, True, (100, 200, 255))
-        surface.blit(title_surf, (legend_x + 10, legend_y + 4))
-        
-        # Inventory text
-        y_offset = legend_y + 24
-        
-        legend_text = [
-            f"[K] Keys: {self.env.state.keys} held | {self.keys_collected}/{self.total_keys} collected | {getattr(self,'keys_used',0)} used",
-            f"[B] Bombs: {getattr(self.env.state, 'bomb_count', 0)} held | {self.bombs_collected}/{self.total_bombs} collected | {getattr(self,'bombs_used',0)} used",
-            f"[BK] Boss Key: {'Yes' if getattr(self.env.state, 'has_boss_key', False) else 'No'} | {self.boss_keys_collected}/{self.total_boss_keys} collected"
-        ]
-        
-        for text in legend_text:
-            text_surf = self.small_font.render(text, True, (255, 255, 200))
-            surface.blit(text_surf, (legend_x + 10, y_offset))
-            y_offset += 18
-        
-        # Path items preview (items ahead on path)
-        if has_path_items:
-            y_offset += 4  # Small gap
-            
-            # Build path items preview text
-            path_parts = []
-            if path_summary.get('keys', 0) > 0:
-                remaining = path_summary['keys']
-                path_parts.append(f"{remaining}[K]")
-            if path_summary.get('boss_keys', 0) > 0:
-                remaining = path_summary['boss_keys']
-                path_parts.append(f"{remaining}[BK]")
-            if path_summary.get('ladders', 0) > 0:
-                remaining = path_summary['ladders']
-                path_parts.append(f"{remaining}[L]")
-            if path_summary.get('doors_locked', 0) > 0:
-                path_parts.append(f"{path_summary['doors_locked']}[D]")
-            if path_summary.get('doors_bomb', 0) > 0:
-                path_parts.append(f"{path_summary['doors_bomb']}[Bx]")
-            if path_summary.get('doors_boss', 0) > 0:
-                path_parts.append(f"{path_summary['doors_boss']}[BD]")
-            
-            if path_parts:
-                path_text = f"▶ Path ahead: {' '.join(path_parts)}"
-                path_surf = self.small_font.render(path_text, True, (100, 255, 150))
-                surface.blit(path_surf, (legend_x + 10, y_offset))
+        _render_item_legend_helper(self, surface, pygame)
 
     def _sync_inventory_counters(self):
         """Reconcile counters from collected_items and env.state to ensure UI accuracy.
@@ -2705,50 +1355,7 @@ class ZeldaGUI:
         
         This ensures real-time updates work correctly during auto-solve.
         """
-        # Initialize defaults
-        self.keys_collected = getattr(self, 'keys_collected', 0)
-        self.bombs_collected = getattr(self, 'bombs_collected', 0)
-        self.boss_keys_collected = getattr(self, 'boss_keys_collected', 0)
-
-        # PRIMARY: Count from self.collected_items list (actively maintained during auto-solve)
-        kc_list = 0
-        bc_list = 0
-        bkc_list = 0
-        if self.collected_items:
-            for _pos, item_type, _ts in self.collected_items:
-                if item_type == 'key':
-                    kc_list += 1
-                elif item_type == 'bomb':
-                    bc_list += 1
-                elif item_type == 'boss_key':
-                    bkc_list += 1
-
-        # BACKUP: Count from env.state.collected_items using item_type_map
-        kc_map = 0
-        bc_map = 0
-        bkc_map = 0
-        try:
-            collected_set = set(getattr(self.env.state, 'collected_items', set()) or set())
-            for pos in collected_set:
-                it = self.item_type_map.get(pos)
-                if it == 'key':
-                    kc_map += 1
-                elif it == 'bomb':
-                    bc_map += 1
-                elif it == 'boss_key':
-                    bkc_map += 1
-        except Exception:
-            pass
-
-        # Use the maximum of both sources (handles edge cases where one source might miss items)
-        self.keys_collected = max(kc_list, kc_map)
-        self.bombs_collected = max(bc_list, bc_map)
-        self.boss_keys_collected = max(bkc_list, bkc_map)
-
-        # Ensure used counters exist
-        self.keys_used = getattr(self, 'keys_used', 0)
-        self.bombs_used = getattr(self, 'bombs_used', 0)
-        self.boss_keys_used = getattr(self, 'boss_keys_used', 0)
+        _sync_inventory_counters_helper(self)
 
     def _scan_items_along_path(self, path=None):
         """Scan a path and identify all collectible items along it.
@@ -2769,120 +1376,7 @@ class ZeldaGUI:
         Returns:
             dict: Summary of items found along path
         """
-        if path is None:
-            path = getattr(self, 'auto_path', [])
-        
-        if not path or len(path) == 0:
-            self.path_items_summary = {}
-            self.path_item_positions = {}
-            return {}
-        
-        # Tile IDs for items and doors
-        KEY_SMALL = SEMANTIC_PALETTE.get('KEY_SMALL', 30)
-        KEY_BOSS = SEMANTIC_PALETTE.get('KEY_BOSS', 31)
-        KEY_ITEM = SEMANTIC_PALETTE.get('KEY_ITEM', 32)
-        ITEM_MINOR = SEMANTIC_PALETTE.get('ITEM_MINOR', 33)
-        DOOR_LOCKED = SEMANTIC_PALETTE.get('DOOR_LOCKED', 11)
-        DOOR_BOMB = SEMANTIC_PALETTE.get('DOOR_BOMB', 12)
-        DOOR_BOSS = SEMANTIC_PALETTE.get('DOOR_BOSS', 14)
-        TRIFORCE = SEMANTIC_PALETTE.get('TRIFORCE', 22)
-        
-        # Initialize tracking
-        summary = {
-            'keys': 0,
-            'boss_keys': 0,
-            'ladders': 0,
-            'bombs': 0,
-            'doors_locked': 0,
-            'doors_bomb': 0,
-            'doors_boss': 0,
-            'triforce': 0
-        }
-        positions = {
-            'keys': [],
-            'boss_keys': [],
-            'ladders': [],
-            'bombs': [],
-            'doors_locked': [],
-            'doors_bomb': [],
-            'doors_boss': [],
-            'triforce': []
-        }
-        
-        # Get grid from environment
-        if not self.env or not hasattr(self.env, 'grid'):
-            self.path_items_summary = summary
-            self.path_item_positions = positions
-            return summary
-        
-        grid = self.env.grid
-        already_collected = getattr(self, 'collected_positions', set())
-        
-        # Scan each position in path
-        for pos in path:
-            r, c = pos
-            if r < 0 or r >= grid.shape[0] or c < 0 or c >= grid.shape[1]:
-                continue
-            
-            tile_id = int(grid[r, c])
-            
-            # Skip already collected items
-            if pos in already_collected:
-                continue
-            
-            if tile_id == KEY_SMALL:
-                summary['keys'] += 1
-                positions['keys'].append(pos)
-            elif tile_id == KEY_BOSS:
-                summary['boss_keys'] += 1
-                positions['boss_keys'].append(pos)
-            elif tile_id == KEY_ITEM:
-                summary['ladders'] += 1
-                positions['ladders'].append(pos)
-            elif tile_id == ITEM_MINOR:
-                summary['bombs'] += 1
-                positions['bombs'].append(pos)
-            elif tile_id == DOOR_LOCKED:
-                summary['doors_locked'] += 1
-                positions['doors_locked'].append(pos)
-            elif tile_id == DOOR_BOMB:
-                summary['doors_bomb'] += 1
-                positions['doors_bomb'].append(pos)
-            elif tile_id == DOOR_BOSS:
-                summary['doors_boss'] += 1
-                positions['doors_boss'].append(pos)
-            elif tile_id == TRIFORCE:
-                summary['triforce'] += 1
-                positions['triforce'].append(pos)
-        
-        self.path_items_summary = summary
-        self.path_item_positions = positions
-        
-        # Log summary for debugging
-        items_found = []
-        if summary['keys'] > 0:
-            items_found.append(f"{summary['keys']} key(s)")
-        if summary['boss_keys'] > 0:
-            items_found.append(f"{summary['boss_keys']} boss key(s)")
-        if summary['ladders'] > 0:
-            items_found.append(f"{summary['ladders']} ladder(s)")
-        if summary['bombs'] > 0:
-            items_found.append(f"{summary['bombs']} bomb(s)")
-        if summary['doors_locked'] > 0:
-            items_found.append(f"{summary['doors_locked']} locked door(s)")
-        if summary['doors_bomb'] > 0:
-            items_found.append(f"{summary['doors_bomb']} bomb door(s)")
-        if summary['doors_boss'] > 0:
-            items_found.append(f"{summary['doors_boss']} boss door(s)")
-        if summary['triforce'] > 0:
-            items_found.append(f"{summary['triforce']} triforce")
-        
-        if items_found:
-            logger.info('PATH ITEMS: %s', ', '.join(items_found))
-        else:
-            logger.info('PATH ITEMS: No collectible items along path')
-        
-        return summary
+        return _scan_items_along_path_helper(self, SEMANTIC_PALETTE, logger, path=path)
 
     def _get_path_items_display_text(self):
         """Generate a display string summarizing items along the path.
@@ -2890,534 +1384,36 @@ class ZeldaGUI:
         Returns:
             str: Human-readable summary like "Path: 3 keys, 2 doors, 1 boss key"
         """
-        summary = getattr(self, 'path_items_summary', {})
-        if not summary:
-            return ""
-        
-        parts = []
-        if summary.get('keys', 0) > 0:
-            parts.append(f"{summary['keys']}[K]")
-        if summary.get('boss_keys', 0) > 0:
-            parts.append(f"{summary['boss_keys']}[BK]")
-        if summary.get('ladders', 0) > 0:
-            parts.append(f"{summary['ladders']}[L]")
-        if summary.get('bombs', 0) > 0:
-            parts.append(f"{summary['bombs']}[B]")
-        if summary.get('doors_locked', 0) > 0:
-            parts.append(f"{summary['doors_locked']}[D]")
-        if summary.get('doors_bomb', 0) > 0:
-            parts.append(f"{summary['doors_bomb']}[Bx]")
-        if summary.get('doors_boss', 0) > 0:
-            parts.append(f"{summary['doors_boss']}[BD]")
-        if summary.get('triforce', 0) > 0:
-            parts.append(f"{summary['triforce']}[T]")
-        
-        return " ".join(parts) if parts else ""
+        return _get_path_items_display_text_helper(self)
     
     def _render_error_banner(self, surface):
         """Render error message banner at top of screen with fade effect."""
-        if hasattr(self, 'error_message') and self.error_message:
-            elapsed = time.time() - self.error_time
-            if elapsed < 5.0:  # Show for 5 seconds
-                # Calculate fade (0.0 to 1.0)
-                alpha = 1.0 if elapsed < 4.0 else (5.0 - elapsed)
-                
-                # Draw red banner at top
-                banner_height = 45
-                banner_rect = pygame.Rect(0, 0, self.screen_w, banner_height)
-                banner_surface = pygame.Surface((self.screen_w, banner_height), pygame.SRCALPHA)
-                banner_surface.fill((200, 0, 0, int(220 * alpha)))
-                surface.blit(banner_surface, (0, 0))
-                
-                # Draw error icon and text
-                font = pygame.font.SysFont('Arial', 28)
-                text = f"[!] {self.error_message}"
-                text_surf = font.render(text, True, (255, 255, 255))
-                text_surf.set_alpha(int(255 * alpha))
-                text_rect = text_surf.get_rect(center=(self.screen_w // 2, banner_height // 2))
-                surface.blit(text_surf, text_rect)
-                
-                # Draw border
-                pygame.draw.rect(surface, (150, 0, 0), banner_rect, 2)
-            else:
-                self.error_message = None
+        _render_error_banner_helper(self, surface, pygame, time)
     
     def _render_solver_status_banner(self, surface):
         """Render solver status banner showing current algorithm and progress."""
-        # Only show when solver is running
-        if not getattr(self, 'solver_running', False):
-            return
-        
-        algorithm_names = ["A*", "BFS", "Dijkstra", "Greedy", "D* Lite",
-                         "DFS/IDDFS", "Bidirectional A*",
-                         "CBS (Balanced)", "CBS (Explorer)", "CBS (Cautious)",
-                         "CBS (Forgetful)", "CBS (Speedrunner)", "CBS (Greedy)"]
-        
-        # CRITICAL FIX: Use solver_algorithm_idx (saved when solver started) instead of algorithm_idx
-        # This ensures banner shows the algorithm the CURRENTLY RUNNING solver is using,
-        # even if user changes the dropdown while solver is running
-        alg_idx = getattr(self, 'solver_algorithm_idx', getattr(self, 'algorithm_idx', 0))
-        alg_name = algorithm_names[alg_idx] if alg_idx < len(algorithm_names) else f"Algorithm {alg_idx}"
-        
-        # DEBUG: Log banner rendering to diagnose CBS→A* display bug
-        logger.debug('BANNER: Rendering solver banner with solver_algorithm_idx=%d, alg_name=%s', alg_idx, alg_name)
-        
-        # Draw yellow banner below error banner area
-        banner_height = 50
-        banner_y = 50  # Below error banner
-        banner_rect = pygame.Rect(0, banner_y, self.screen_w, banner_height)
-        banner_surface = pygame.Surface((self.screen_w, banner_height), pygame.SRCALPHA)
-        
-        # Animated pulse effect
-        pulse = (math.sin(time.time() * 3) + 1) / 2  # 0 to 1
-        alpha = int(180 + 75 * pulse)
-        banner_surface.fill((200, 150, 0, alpha))
-        surface.blit(banner_surface, (0, banner_y))
-        
-        # Draw status text
-        font = pygame.font.SysFont('Arial', 32)
-        text = f"🔍 Computing path with {alg_name}..."
-        text_surf = font.render(text, True, (255, 255, 255))
-        text_rect = text_surf.get_rect(center=(self.screen_w // 2, banner_y + banner_height // 2))
-        surface.blit(text_surf, text_rect)
-        
-        # Draw border
-        pygame.draw.rect(surface, (255, 200, 0), banner_rect, 2)
+        _render_solver_status_banner_helper(self, surface, pygame, math, time, logger)
     
     def _render_status_bar(self, surface):
         """Render status bar at bottom of screen."""
-        bar_height = 30
-        bar_y = self.screen_h - bar_height
-        bar_rect = pygame.Rect(0, bar_y, self.screen_w, bar_height)
-        
-        # Background
-        bar_surface = pygame.Surface((self.screen_w, bar_height), pygame.SRCALPHA)
-        bar_surface.fill((40, 40, 50, 200))
-        surface.blit(bar_surface, (0, bar_y))
-        
-        # Status text
-        font = pygame.font.SysFont('Arial', 20)
-        
-        # Left: Status
-        status_text = f"Status: {self.status_message}"
-        status_surf = font.render(status_text, True, (180, 220, 255))
-        surface.blit(status_surf, (10, bar_y + 7))
-        
-        # Center: Current action/message + ALGORITHM INDICATOR
-        algorithm_names = ["A*", "BFS", "Dijkstra", "Greedy", "D* Lite",
-                         "DFS/IDDFS", "Bidirectional A*",
-                         "CBS (Balanced)", "CBS (Explorer)", "CBS (Cautious)",
-                         "CBS (Forgetful)", "CBS (Speedrunner)", "CBS (Greedy)"]
-        alg_idx = getattr(self, 'algorithm_idx', 0)
-        alg_name = algorithm_names[alg_idx] if alg_idx < len(algorithm_names) else f"Alg{alg_idx}"
-        
-        # Algorithm indicator (ALWAYS SHOW THIS)
-        alg_indicator = f"[{alg_name}]"
-        alg_color = (255, 215, 0) if self.auto_mode else (150, 180, 255)  # Gold when running, blue when idle
-        alg_surf = font.render(alg_indicator, True, alg_color)
-        alg_rect = alg_surf.get_rect(center=(self.screen_w // 2, bar_y + bar_height // 2))
-        surface.blit(alg_surf, alg_rect)
-        
-        if self.auto_mode:
-            progress = f"Step {self.auto_step_idx + 1}/{len(self.auto_path)}"
-            progress_surf = font.render(progress, True, (100, 255, 100))
-            progress_rect = progress_surf.get_rect(centerx=alg_rect.right + 60, centery=bar_y + bar_height // 2)
-            surface.blit(progress_surf, progress_rect)
-            
-            # Show path items if available (right of progress)
-            items_text = self._get_path_items_display_text()
-            if items_text:
-                items_surf = font.render(items_text, True, (255, 220, 100))
-                surface.blit(items_surf, (progress_rect.right + 20, bar_y + 7))
-        elif getattr(self, 'auto_path', None) and len(self.auto_path) > 0:
-            # Show path preview info when path exists but not animating
-            items_text = self._get_path_items_display_text()
-            if items_text:
-                preview_text = f"Path ready ({len(self.auto_path)} steps) | {items_text}"
-            else:
-                preview_text = f"Path ready ({len(self.auto_path)} steps) - Press ENTER to start"
-            preview_surf = font.render(preview_text, True, (100, 200, 255))
-            preview_rect = preview_surf.get_rect(center=(self.screen_w // 2, bar_y + bar_height // 2))
-            surface.blit(preview_surf, preview_rect)
-        
-        # Right: FPS
-        fps_text = f"FPS: {int(self.clock.get_fps())}"
-        fps_surf = font.render(fps_text, True, (255, 255, 180))
-        fps_rect = fps_surf.get_rect(right=self.screen_w - 10, centery=bar_y + bar_height // 2)
-        surface.blit(fps_surf, fps_rect)
-        
-        # Border
-        pygame.draw.rect(surface, (60, 60, 80), bar_rect, 1)
+        _render_status_bar_helper(self, surface, pygame)
     
     def _render_control_panel(self, surface):
         """Render the control panel with all GUI widgets and metrics."""
-        if not self.control_panel_enabled or not self.widget_manager:
-            return
-        logger.debug(f"_render_control_panel: width_current={self.control_panel_width_current}, collapsed={self.control_panel_collapsed}, animating={getattr(self, 'control_panel_animating', False)}")
-
-        # Collapsed threshold (always defined so later checks won't fail)
-        collapsed_width = 40
-
-        # Ensure control panel rects/positions are up-to-date (keeps animation offsets consistent)
-        try:
-            self._update_control_panel_positions()
-        except Exception:
-            pass
-
-        # If update set a rect, use its coordinates for rendering; otherwise fallback to local computation
-        if getattr(self, 'control_panel_rect', None):
-            panel_rect = self.control_panel_rect
-            panel_x, panel_y, panel_width, panel_height = panel_rect.x, panel_rect.y, panel_rect.width, panel_rect.height
-        else:
-            # Use animated width for current visual state
-            panel_width = int(max(collapsed_width, min(self.control_panel_width_current, self.max_panel_width)))
-            panel_width = max(collapsed_width, min(panel_width, self.max_panel_width))
-
-            # Compute default dock position and allow custom drag
-            sidebar_x = self.screen_w - self.SIDEBAR_WIDTH
-            if self.control_panel_x is not None and self.control_panel_y is not None:
-                panel_x = self.control_panel_x
-                panel_y = self.control_panel_y
-            else:
-                panel_x = sidebar_x - panel_width - 10
-                panel_y = 10
-
-            min_x = 10
-            max_x = max(min_x, sidebar_x - panel_width - 10)
-            panel_x = max(min_x, min(panel_x, max_x))
-            panel_y = max(10, min(panel_y, self.screen_h - 150))
-
-            max_available_height = self.screen_h - panel_y - self.HUD_HEIGHT - 20
-            min_panel_height = 120
-            if max_available_height < min_panel_height:
-                panel_height = min_panel_height
-            else:
-                panel_height = min(max_available_height, 700)
-
-            if panel_width <= 0 or panel_height <= 0:
-                return
-            panel_rect = pygame.Rect(panel_x, panel_y, panel_width, panel_height)
-            self.control_panel_rect = panel_rect
-
-
-        # Create panel surface (use SRCALPHA so we can fade during animation)
-        panel_surf = pygame.Surface((panel_width, panel_height), pygame.SRCALPHA)
-        # Draw background onto panel surface
-        bg_rect = pygame.Rect(0, 0, panel_width, panel_height)
-        pygame.draw.rect(panel_surf, (40, 45, 60, 255), bg_rect, border_radius=8)
-        pygame.draw.rect(panel_surf, (60, 60, 80, 255), bg_rect, 2, border_radius=8)
-
-        # If animating, compute alpha for fade-in/out based on visual progress
-        alpha = 255
-        if getattr(self, 'control_panel_animating', False):
-            a_from = self.control_panel_anim_from
-            a_to = self.control_panel_anim_to
-            denom = (a_to - a_from) if abs(a_to - a_from) > 1e-6 else 1.0
-            progress = max(0.0, min(1.0, (self.control_panel_width_current - a_from) / denom))
-            ease = progress * progress * (3 - 2 * progress)
-            # If we're expanding, fade from 0->255; if collapsing, fade out
-            alpha = int(255 * ease)
-
-        # Blit background (we will blit widgets separately with alpha applied to whole panel)
-        # Panel surface will be blitted at the end after widget rendering to ensure alpha applies to entire block
-        
-
-        # Update rect for mouse interaction (ensure using shifted coordinates from _update_control_panel_positions)
-        # Note: _update_control_panel_positions has already computed self.control_panel_rect
-        # and self.collapse_button_rect with any slide offset applied.
-        # If they haven't been computed yet, fallback to unshifted rects.
-        if not getattr(self, 'control_panel_rect', None):
-            self.control_panel_rect = pygame.Rect(panel_x, panel_y, panel_width, panel_height)
-        if not getattr(self, 'collapse_button_rect', None):
-            self.collapse_button_rect = pygame.Rect(
-                panel_x + panel_width - 28 - 6,
-                panel_y + 6,
-                28,
-                28
-            )
-        
-        # Button will be drawn after panel surface is blitted so it remains on top
-        # Track mouse hover for collapse button appearance
-        mouse_pos = pygame.mouse.get_pos()
-        is_hovering = self.collapse_button_rect.collidepoint(mouse_pos)
-        
-        # If visual width is small (collapsed visual), only show the collapse button (it will be drawn later)
-        if panel_width <= collapsed_width + 8:
-            # Draw only collapse button on main surface
-            if is_hovering:
-                button_color = (80, 120, 180)
-                border_color = (150, 200, 255)
-            else:
-                button_color = (60, 80, 120)
-                border_color = (100, 150, 200)
-            pygame.draw.rect(surface, button_color, self.collapse_button_rect, border_radius=4)
-            pygame.draw.rect(surface, border_color, self.collapse_button_rect, 2, border_radius=4)
-            if getattr(self, 'control_panel_animating', False):
-                button_text = ">" if self.control_panel_target_collapsed else "<"
-            else:
-                button_text = "<" if not self.control_panel_collapsed else ">"
-            button_surf = self.font.render(button_text, True, (200, 220, 255))
-            button_rect = button_surf.get_rect(center=self.collapse_button_rect.center)
-            surface.blit(button_surf, button_rect)
-            return
-        
-        # Update widget positions to match panel location (including any slide offset computed previously)
-        # This sets widgets to their correct absolute screen coordinates for click detection
-        self._reposition_widgets(panel_x, panel_y)
-        
-        # Backup widget positions AFTER repositioning so we restore to correct coords
-        # (not stale positions from before the reposition)
-        backups = [(w, getattr(w, 'pos', None)) for w in self.widget_manager.widgets]
-        
-        # Render widgets individually into the panel surface with per-widget alpha
-        # We'll draw the header on top later so scrolling content never overlaps it
-
-        content_alpha = 255
-        if getattr(self, 'control_panel_animating', False):
-            # Use the same progress/ease as alpha computed earlier
-            a_from = self.control_panel_anim_from
-            a_to = self.control_panel_anim_to
-            denom = (a_to - a_from) if abs(a_to - a_from) > 1e-6 else 1.0
-            progress = max(0.0, min(1.0, (self.control_panel_width_current - a_from) / denom))
-            ease = progress * progress * (3 - 2 * progress)
-            # Snap alpha near the end to avoid near-invisible final frames
-            if ease >= 0.98:
-                content_alpha = 255
-            elif ease <= 0.02:
-                content_alpha = 0
-            else:
-                content_alpha = int(255 * ease)
-        
-        for widget, orig_pos in backups:
-            try:
-                # Compute widget local position relative to panel and apply scroll offset.
-                # Use the widget's full_rect (includes label area) so labels are not clipped.
-                if orig_pos is None:
-                    continue
-                full_rect = getattr(widget, 'full_rect', widget.rect)
-                dropdown_rect = getattr(widget, 'dropdown_rect', None)
-                scroll_offset = getattr(self, 'control_panel_scroll', 0) if getattr(self, 'control_panel_can_scroll', False) else 0
-
-                local_x = full_rect.x - panel_x
-                local_y = full_rect.y - panel_y - scroll_offset
-
-                # Create a temp surface sized to include the label area (full_rect) so title is visible.
-                # When dropdown is open, we still render only the main control here; the expanded menu
-                # will be drawn later on the main surface by `render_menu` to avoid panel clipping.
-                target_w = min(panel_width - 24, max(full_rect.width, dropdown_rect.width if dropdown_rect is not None else 0, widget.rect.width))
-                target_h = full_rect.height
-
-                # Skip drawing if widget is outside the visible panel area (vertical clipping)
-                # Ensure widgets do not draw into the header area at the top
-                header_height = self.font.get_height() + 12
-                if local_y + target_h < header_height or local_y > panel_height:
-                    continue
-
-                temp_surf = pygame.Surface((max(1, target_w), max(1, target_h)), pygame.SRCALPHA)
-
-                # Temporarily set widget.pos so the main control sits below any label area
-                # Compute label offset: full_rect.height includes label area above the control.
-                label_offset = max(0, full_rect.height - widget.rect.height)
-                widget.pos = (0, int(label_offset))
-                widget.render(temp_surf)
-
-                # Apply per-widget alpha
-                if content_alpha < 255:
-                    temp_surf.set_alpha(content_alpha)
-
-                # Blit into panel surface
-                blit_x = local_x
-                blit_y = local_y
-                panel_surf.blit(temp_surf, (blit_x, blit_y))
-
-            except Exception as e:
-                logger.warning(f"Per-widget render failed: {e}")
-
-        # Draw scrollbar if content exceeds visible area
-        if getattr(self, 'control_panel_can_scroll', False):
-            track_w = 10
-            track_margin = 8
-            track_local_x = panel_width - track_w - track_margin
-            track_local_y = 16
-            track_h = panel_height - 32
-            track_rect = pygame.Rect(track_local_x, track_local_y, track_w, track_h)
-            # Visuals: subtle track + thumb
-            pygame.draw.rect(panel_surf, (60, 65, 80, 200), track_rect, border_radius=6)
-            # Compute visible content height excluding header
-            header_height = self.font.get_height() + 12
-            visible_h = max(10, panel_height - header_height - 16)
-            content_h = getattr(self, 'control_panel_content_height', visible_h)
-            max_scroll = max(content_h - visible_h, 0)
-            thumb_h = max(int((visible_h / content_h) * track_h) if content_h > 0 else track_h, 20)
-            if max_scroll > 0:
-                thumb_y_local = track_local_y + int((getattr(self, 'control_panel_scroll', 0) / max_scroll) * (track_h - thumb_h))
-            else:
-                thumb_y_local = track_local_y
-            thumb_rect = pygame.Rect(track_local_x + 1, thumb_y_local, track_w - 2, thumb_h)
-            pygame.draw.rect(panel_surf, (100, 130, 180, 220), thumb_rect, border_radius=6)
-            # Store global rects for mouse interaction handling
-            self.control_panel_scroll_track_rect = pygame.Rect(panel_x + track_rect.x, panel_y + track_rect.y, track_rect.width, track_rect.height)
-            self.control_panel_scroll_thumb_rect = pygame.Rect(panel_x + thumb_rect.x, panel_y + thumb_rect.y, thumb_rect.width, thumb_rect.height)
-            self.control_panel_scroll_max = max_scroll
-        else:
-            # Clear any previous scroll rects
-            self.control_panel_scroll_track_rect = None
-            self.control_panel_scroll_thumb_rect = None
-            self.control_panel_scroll_max = 0
-
-        # Draw header (fixed) on top of scrolled content so it never overlaps
-        header_height = self.font.get_height() + 12
-        header_rect = pygame.Rect(0, 0, panel_width, header_height)
-        header_surf = pygame.Surface((panel_width, header_height), pygame.SRCALPHA)
-        # Slightly darker strip to separate header from scroll area
-        pygame.draw.rect(header_surf, (35, 40, 55, 230), pygame.Rect(0, 0, panel_width, header_height), border_radius=0)
-        # Draw FEATURES title centered vertically in the header
-        features_title = self.font.render("FEATURES", True, (100, 200, 100))
-        header_surf.blit(features_title, (12, (header_height - self.font.get_height()) // 2))
-        panel_surf.blit(header_surf, (0, 0))
-
-        # Apply overall panel alpha (for expand/collapse animation)
-        if alpha < 255:
-            panel_surf.set_alpha(alpha)
-        # Blit panel surface onto main surface (panel bg + widgets)
-        surface.blit(panel_surf, (panel_x, panel_y))
-        # Restore panel surface alpha to full (avoid side-effects)
-        if alpha < 255:
-            panel_surf.set_alpha(255)
-
-        # Restore widget global positions
-        for widget, orig_pos in backups:
-            try:
-                if orig_pos is not None:
-                    widget.pos = orig_pos
-            except Exception:
-                pass
-
-        # Ensure collapse button colors are always assigned
-        if is_hovering:
-            button_color = (80, 120, 180)
-            border_color = (150, 200, 255)
-        else:
-            button_color = (60, 80, 120)
-            border_color = (100, 150, 200)
-        pygame.draw.rect(surface, button_color, self.collapse_button_rect, border_radius=4)
-        pygame.draw.rect(surface, border_color, self.collapse_button_rect, 2, border_radius=4)
-        if getattr(self, 'control_panel_animating', False):
-            button_text = ">" if self.control_panel_target_collapsed else "<"
-        else:
-            button_text = "<" if not self.control_panel_collapsed else ">"
-        button_surf = self.font.render(button_text, True, (200, 220, 255))
-        button_rect = button_surf.get_rect(center=self.collapse_button_rect.center)
-        surface.blit(button_surf, button_rect)
-
-        # Render dropdown menus on top of everything so they do not get clipped by the panel
-        try:
-            for widget in self.widget_manager.widgets:
-                if getattr(widget, '__class__', None).__name__ == 'DropdownWidget' and getattr(widget, 'is_open', False):
-                    try:
-                        # Use the same content alpha used for widget fading during animation
-                        scroll_offset = self.control_panel_scroll if getattr(self, 'control_panel_can_scroll', False) else 0
-                        widget.render_menu(surface, alpha=content_alpha, scroll_offset=scroll_offset, panel_rect=self.control_panel_rect)
-                    except Exception as e:
-                        logger.warning(f"Dropdown menu render failed: {e}")
-        except Exception:
-            pass
-
-        # Render tooltips if mouse over a widget
-        self._render_tooltips(surface, mouse_pos)    
+        _render_control_panel_helper(
+            self,
+            surface,
+            pygame=pygame,
+            logger=logger,
+            dropdown_widget_cls=DropdownWidget,
+        )
     def _render_tooltips(self, surface, mouse_pos):
         """Render tooltips for widgets under mouse cursor."""
-        if not self.widget_manager:
-            return
-        
-        # Tooltip definitions for each control
-        tooltips = {
-            'show_heatmap': 'Toggle A* search heatmap visualization',
-            'show_minimap': 'Toggle minimap display in top-right corner',
-            'show_path': 'Show/hide the solution path preview',
-            'smooth_camera': 'Enable smooth camera transitions',
-            'show_grid': 'Toggle grid overlay on map',
-            'zoom': 'Adjust map zoom level (also use +/- keys)',
-            'difficulty': 'Select map difficulty level',
-            'algorithm': 'Choose pathfinding algorithm for auto-solve',
-            'ml_heuristic': 'Use experimental ML-style heuristic (may be non-admissible)',
-            'parallel_search': 'Run multiple strategies in parallel and pick fastest result',
-            'solver_comparison': 'Run a comparison of available solvers and report metrics',
-            'dstar_lite': 'Enable D* Lite incremental replanning (if implemented)',
-            'show_topology': 'Draw room nodes & edges from topology graph on the map',
-        }
-        
-        # Check which widget is under mouse
-        for widget in self.widget_manager.widgets:
-            # When panel is scrolled, translate mouse into scrolled coords for hit tests
-            test_pos = mouse_pos
-            header_height = self.font.get_height() + 12
-            if getattr(self, 'control_panel_can_scroll', False) and getattr(self, 'control_panel_rect', None) and self.control_panel_rect.collidepoint(mouse_pos):
-                # Only translate if mouse is below the fixed header area
-                panel_top = self.control_panel_rect.y
-                if mouse_pos[1] > panel_top + header_height:
-                    test_pos = (mouse_pos[0], mouse_pos[1] + getattr(self, 'control_panel_scroll', 0))
-            if hasattr(widget, 'rect') and widget.rect.collidepoint(test_pos) and widget.rect.y >= self.control_panel_rect.y + header_height:
-                # Get tooltip text
-                tooltip_text = None
-                if hasattr(widget, 'flag_name') and widget.flag_name in tooltips:
-                    tooltip_text = tooltips[widget.flag_name]
-                elif hasattr(widget, 'control_name') and widget.control_name in tooltips:
-                    tooltip_text = tooltips[widget.control_name]
-                elif isinstance(widget, ButtonWidget) and hasattr(widget, 'label'):
-                    # Button tooltips
-                    button_tooltips = {
-                        'Start Auto-Solve': 'Begin automatic pathfinding solution (SPACE)',
-                        'Stop': 'Stop the current auto-solve operation',
-                        'Generate Dungeon': 'Create a new random dungeon map (BSP)',
-                        'AI Generate': 'Generate dungeon using trained latent diffusion AI model',
-                        'Reset': 'Reset current map to initial state (R key)',
-                        'Path Preview': 'Preview the complete solution path',
-                        'Clear Path': 'Clear the displayed path overlay',
-                        'Export Route': 'Save current path to file',
-                        'Load Route': 'Load path from file',
-                    }
-                    tooltip_text = button_tooltips.get(widget.label)
-                
-                if tooltip_text:
-                    self._draw_tooltip(surface, mouse_pos, tooltip_text)
-                break
+        _render_tooltips_helper(self, surface, mouse_pos, ButtonWidget, pygame)
     
     def _draw_tooltip(self, surface, pos, text):
         """Draw a tooltip box at the specified position."""
-        font = pygame.font.SysFont('Arial', 18)
-        padding = 8
-        
-        # Render text
-        text_surf = font.render(text, True, (255, 255, 255))
-        text_rect = text_surf.get_rect()
-        
-        # Calculate tooltip position (offset from mouse)
-        tooltip_x = pos[0] + 15
-        tooltip_y = pos[1] + 15
-        
-        # Keep tooltip on screen
-        if tooltip_x + text_rect.width + padding * 2 > self.screen_w:
-            tooltip_x = pos[0] - text_rect.width - padding * 2 - 15
-        if tooltip_y + text_rect.height + padding * 2 > self.screen_h:
-            tooltip_y = pos[1] - text_rect.height - padding * 2 - 15
-        
-        # Draw background
-        bg_rect = pygame.Rect(
-            tooltip_x - padding,
-            tooltip_y - padding,
-            text_rect.width + padding * 2,
-            text_rect.height + padding * 2
-        )
-        bg_surface = pygame.Surface((bg_rect.width, bg_rect.height), pygame.SRCALPHA)
-        bg_surface.fill((50, 50, 60, 240))
-        surface.blit(bg_surface, bg_rect.topleft)
-        
-        # Draw border
-        pygame.draw.rect(surface, (100, 150, 200), bg_rect, 2)
-        
-        # Draw text
-        surface.blit(text_surf, (tooltip_x, tooltip_y))
+        _draw_tooltip_helper(self, surface, pos, text, pygame)
     
     def _handle_control_panel_click(self, pos, button, event_type='down'):
         """Handle mouse clicks on control panel widgets."""
@@ -3425,276 +1421,35 @@ class ZeldaGUI:
             return False
         
         if event_type == 'down':
-            # Compute padded hit rect if debug padding is active
-            panel_rect = getattr(self, 'control_panel_rect', None)
-            padding = getattr(self, 'debug_panel_click_padding', 0) if getattr(self, 'debug_control_panel', False) else 0
-            panel_hit_rect = (pygame.Rect(panel_rect.x - padding, panel_rect.y, panel_rect.width + padding, panel_rect.height) if panel_rect and padding else panel_rect)
+            panel_hit_rect = self._control_panel_hit_rect()
+            if self._should_swallow_control_panel_click(panel_hit_rect, pos):
+                return True
+            sc_pos = self._translate_control_panel_click(pos, panel_hit_rect)
 
-            # If the panel is currently being scrolled (dragging or inertia), don't forward clicks to widgets
-            # Only swallow clicks that occur within the panel bounds; otherwise allow clicks to fall through
-            if (getattr(self, 'control_panel_scroll_dragging', False) or time.time() < getattr(self, 'control_panel_ignore_click_until', 0.0)):
-                if panel_hit_rect and panel_hit_rect.collidepoint(pos):
-                    logger.debug('Ignored click on control panel due to active scroll/ignore window (dragging=%s ignore_until=%s) and pos inside panel_hit_rect', getattr(self,'control_panel_scroll_dragging',False), getattr(self,'control_panel_ignore_click_until',0.0))
-                    return True
-            # Translate mouse pos into scrolled widget coordinates when panel is scrolled
-            if getattr(self, 'control_panel_can_scroll', False) and panel_hit_rect and panel_hit_rect.collidepoint(pos):
-                header_height = 45
-                panel_top = panel_rect.y if panel_rect is not None else 0
-                # Only translate clicks that occur below the fixed header area
-                if pos[1] > panel_top + header_height:
-                    sc_pos = (pos[0], pos[1] + getattr(self, 'control_panel_scroll', 0))
-                else:
-                    sc_pos = pos
-            else:
-                sc_pos = pos
-
-            # If click is outside the panel bounds, avoid doing heavy layout checks and widget dumps.
-            # However, if any dropdowns are open we should still dispatch to the widget manager so they
-            # can be closed by an outside click. Otherwise, return False so clicks fall through quickly.
-            try:
-                if not (panel_hit_rect and panel_hit_rect.collidepoint(pos)):
-                    # Close any open dropdowns if present by dispatching the click; this will also
-                    # return True if a dropdown consumed the event (closing or interacting).
-                    if any(isinstance(w, DropdownWidget) and getattr(w, 'is_open', False) for w in self.widget_manager.widgets):
-                        return self.widget_manager.handle_mouse_down(pos, button)
-                    return False
-            except Exception:
-                # If something unexpected happens, do not block clicks; let caller handle as usual
-                logger.exception('Error while checking outside-panel click handling')
+            outside_result = self._handle_outside_control_panel_click(panel_hit_rect, pos, button)
+            if outside_result is not None:
+                return outside_result
 
 
             # Debug: log transformation and scroll state
             logger.debug('Control panel click: pos=%s sc_pos=%s scroll=%s header_h=%s', pos, sc_pos, getattr(self, 'control_panel_scroll', 0), 45)
 
-            # Check whether any widget's rect/full_rect currently contains the sc_pos. If none do,
-            # we may have stale widget positions (layout drift); attempt a reposition and re-evaluate once.
-            try:
-                any_contains = False
-                for w in self.widget_manager.widgets:
-                    fr = getattr(w, 'full_rect', getattr(w, 'rect', None))
-                    rr = getattr(w, 'rect', None)
-                    if (fr and fr.collidepoint(sc_pos)) or (rr and rr.collidepoint(sc_pos)):
-                        any_contains = True
-                        break
-                if not any_contains:
-                    if DEBUG_INPUT_ACTIVE:
-                        logger.info('No widget claims sc_pos=%s: attempting _reposition_widgets to refresh layout', sc_pos)
-                    else:
-                        logger.debug('No widget claims sc_pos=%s: attempting _reposition_widgets to refresh layout', sc_pos)
-                    try:
-                        # Use current panel coords to reposition
-                        panel_rect = getattr(self, 'control_panel_rect', None)
-                        if panel_rect:
-                            self._reposition_widgets(panel_rect.x, panel_rect.y)
-                            # Recompute any_contains after reposition
-                            for w in self.widget_manager.widgets:
-                                fr = getattr(w, 'full_rect', getattr(w, 'rect', None))
-                                rr = getattr(w, 'rect', None)
-                                if (fr and fr.collidepoint(sc_pos)) or (rr and rr.collidepoint(sc_pos)):
-                                    any_contains = True
-                                    break
-                    except Exception:
-                        logger.exception('Reposition attempt failed')
-            except Exception:
-                logger.exception('Failure while checking widget rects before dispatch')
+            any_contains = self._refresh_control_panel_layout_if_needed(sc_pos)
 
             handled = self.widget_manager.handle_mouse_down(sc_pos, button)
 
             logger.debug('Control panel click handled=%s at pos=%s sc_pos=%s any_contains=%s', handled, pos, sc_pos, any_contains)
             if not handled:
-                # Dump per-widget hit info to help debug click routing (only when debug input diagnostics enabled)
                 if DEBUG_INPUT_ACTIVE:
                     try:
                         self._dump_control_panel_widget_state(pos)
                     except Exception:
                         logger.exception('Failed to dump widget hit tests after unhandled click')
-
-                # If unhandled and the panel is scrollable, attempt to auto-scroll the panel to bring
-                # the nearest off-screen widget into view and retry the click once.
-                try:
-                    panel_rect = getattr(self, 'control_panel_rect', None)
-                    if panel_rect and self.widget_manager and getattr(self, 'control_panel_can_scroll', False):
-                        header_height = 45
-                        click_y_local = sc_pos[1] - panel_rect.y - header_height
-                        nearest = None
-                        nearest_dist = None
-                        for w in self.widget_manager.widgets:
-                            fr = getattr(w, 'full_rect', getattr(w, 'rect', None))
-                            if fr is None:
-                                continue
-                            widget_top_rel = fr.y - panel_rect.y
-                            widget_bottom_rel = fr.bottom - panel_rect.y
-                            if widget_top_rel < header_height or widget_bottom_rel > panel_rect.height:
-                                center = (widget_top_rel + widget_bottom_rel) / 2.0
-                                dist = abs(center - click_y_local)
-                                if nearest is None or dist < nearest_dist:
-                                    nearest = w
-                                    nearest_dist = dist
-                        if nearest is not None:
-                            prev_scroll = getattr(self, 'control_panel_scroll', 0)
-                            # Use full_rect if available, otherwise fall back to rect
-                            widget_rect = getattr(nearest, 'full_rect', nearest.rect)
-                            target_scroll = max(0, min(getattr(self, 'control_panel_scroll_max', 0), widget_rect.y - panel_rect.y - header_height))
-                            if abs(target_scroll - prev_scroll) > 1:
-                                self.control_panel_scroll = target_scroll
-                                self.control_panel_ignore_click_until = time.time() + 0.12
-                                logger.info('Control panel auto-scrolled to reveal widget (scroll=%s)', self.control_panel_scroll)
-                                # Re-dispatch the original click against the widgets using the new scroll
-                                new_sc_pos = (pos[0], pos[1] + self.control_panel_scroll)
-                                try:
-                                    handled = self.widget_manager.handle_mouse_down(new_sc_pos, button)
-                                    logger.debug('After auto-scroll, re-dispatch handled=%s', handled)
-                                except Exception:
-                                    logger.exception('Re-dispatch after auto-scroll failed')
-                except Exception:
-                    logger.exception('Auto-scroll retry failed')
+                handled = self._retry_control_panel_click_after_auto_scroll(pos, sc_pos, button, handled)
 
             if handled:
                 logger.debug('Control panel click handled by widget manager at pos=%r (button=%r)', pos, button)
-                # Update feature flags from checkboxes
-                for widget in self.widget_manager.widgets:
-                    if isinstance(widget, CheckboxWidget) and hasattr(widget, 'flag_name'):
-                        old_value = self.feature_flags.get(widget.flag_name, False)
-                        self.feature_flags[widget.flag_name] = widget.checked
-                        logger.info('Feature flag set: %s=%s', widget.flag_name, widget.checked)
-                        
-                        # Apply flags immediately with visual feedback
-                        if widget.flag_name == 'show_heatmap' and old_value != widget.checked:
-                            self.show_heatmap = widget.checked
-                            if self.renderer:
-                                self.renderer.show_heatmap = widget.checked
-                            self._set_message(f"Heatmap: {'ON' if widget.checked else 'OFF'}")
-                        elif widget.flag_name == 'show_path' and old_value != widget.checked:
-                            # Path overlay toggle
-                            self._set_message(f"Path overlay: {'ON' if widget.checked else 'OFF'}", 1.5)
-                        elif widget.flag_name == 'show_minimap':
-                            self.show_minimap = widget.checked
-                            self._set_message(f"Minimap: {'ON' if widget.checked else 'OFF'}")
-                        elif widget.flag_name == 'show_topology' and old_value != widget.checked:
-                            # Enable/disable topology overlay
-                            self.show_topology = widget.checked
-                            if widget.checked:
-                                current = self.maps[self.current_map_idx]
-                                if not hasattr(current, 'graph') or not current.graph:
-                                    self._set_message('Topology not available for this map', 3.0)
-                                else:
-                                    self._set_message('Topology overlay: ON', 2.0)
-                            else:
-                                self._set_message('Topology overlay: OFF', 1.2)
-                        elif widget.flag_name == 'show_topology_legend' and old_value != widget.checked:
-                            self.show_topology_legend = widget.checked
-                            self._set_message(f"Topology legend: {'ON' if widget.checked else 'OFF'}", 1.8)
-                        elif hasattr(widget, 'control_name') and widget.control_name == 'zoom':
-                            old_zoom_idx = self.zoom_level_idx
-                            self.zoom_level_idx = widget.selected
-                            if old_zoom_idx != self.zoom_level_idx:
-                                # Map zoom_level_idx to actual zoom: [25%, 50%, 75%, 100%, 150%, 200%]
-                                zoom_map = {0: 0, 1: 1, 2: 1, 3: 2, 4: 3, 5: 4}  # Map to ZOOM_LEVELS indices
-                                if self.zoom_level_idx < len(zoom_map):
-                                    new_zoom_idx = zoom_map.get(self.zoom_level_idx, 2)
-                                    if new_zoom_idx != self.zoom_idx:
-                                        self.zoom_idx = new_zoom_idx
-                                        self.TILE_SIZE = self.ZOOM_LEVELS[self.zoom_idx]
-                                        self._load_assets()
-                                        self._center_view()
-                                        zoom_labels = ["25%", "50%", "75%", "100%", "150%", "200%"]
-                                        self.message = f"Zoom: {zoom_labels[self.zoom_level_idx]}"
-                        elif hasattr(widget, 'control_name') and widget.control_name == 'difficulty':
-                            self.difficulty_idx = widget.selected
-                            difficulty_names = ["Easy", "Medium", "Hard", "Expert"]
-                            self.message = f"Difficulty: {difficulty_names[self.difficulty_idx]}"
-                        elif hasattr(widget, 'control_name') and widget.control_name == 'algorithm':
-                            old_algorithm_idx = self.algorithm_idx
-                            self.algorithm_idx = widget.selected
-                            if old_algorithm_idx != self.algorithm_idx:
-                                algorithm_names = ["A*", "BFS", "Dijkstra", "Greedy", "D* Lite",
-                                                 "DFS/IDDFS", "Bidirectional A*",
-                                                 "CBS (Balanced)", "CBS (Explorer)", "CBS (Cautious)",
-                                                 "CBS (Forgetful)", "CBS (Speedrunner)", "CBS (Greedy)"]
-                                self.message = f"Solver: {algorithm_names[self.algorithm_idx]}"
-                                # DEBUG: Log dropdown selection to diagnose CBS→A* display bug
-                                logger.info('DROPDOWN: Algorithm changed from %d(%s) to %d(%s)',
-                                           old_algorithm_idx, algorithm_names[old_algorithm_idx] if old_algorithm_idx < len(algorithm_names) else 'Unknown',
-                                           self.algorithm_idx, algorithm_names[self.algorithm_idx])
-                                
-                                # CRITICAL FIX: If solver is currently running with old algorithm, stop it
-                                # This prevents the banner from showing the wrong algorithm name
-                                if getattr(self, 'solver_running', False):
-                                    logger.info('DROPDOWN: Stopping solver running with old algorithm %s', 
-                                               algorithm_names[old_algorithm_idx] if old_algorithm_idx < len(algorithm_names) else 'Unknown')
-                                    # Terminate the solver process if it exists
-                                    if hasattr(self, 'solver_proc') and self.solver_proc:
-                                        try:
-                                            self.solver_proc.terminate()
-                                            logger.info('DROPDOWN: Terminated solver process')
-                                        except Exception as e:
-                                            logger.warning('DROPDOWN: Failed to terminate solver process: %s', e)
-                                    # Clear preview workers
-                                    if hasattr(self, 'preview_thread') and self.preview_thread:
-                                        self.preview_thread = None
-                                    if hasattr(self, 'preview_proc') and self.preview_proc:
-                                        try:
-                                            self.preview_proc.terminate()
-                                        except Exception:
-                                            pass
-                                        self.preview_proc = None
-                                    # Clear all solver state using centralized helper
-                                    self._clear_solver_state(reason=f"algorithm changed to {algorithm_names[self.algorithm_idx]}")
-                                    self._set_message(f"🔄 Switched to {algorithm_names[self.algorithm_idx]} (press SPACE to solve)", 2.5)
-                                    # Don't auto-restart solver here - let user press SPACE when ready
-                                    continue  # Skip the existing path recompute logic below
-                                
-                                # CRITICAL FIX: If a path was already computed, automatically recompute with new algorithm
-                                # This ensures changing the solver dropdown immediately shows the new algorithm's path
-                                had_existing_path = bool(self.auto_path)
-                                if had_existing_path:
-                                    logger.info('═══════════════════════════════════════════════════')
-                                    logger.info('🔄 ALGORITHM CHANGED: %s → %s',
-                                               algorithm_names[old_algorithm_idx], algorithm_names[self.algorithm_idx])
-                                    logger.info('   Triggering automatic resolve to show new path')
-                                    logger.info('═══════════════════════════════════════════════════')
-                                    # Clear old path first
-                                    self.auto_path = []
-                                    self.auto_mode = False
-                                    # Trigger new solve with updated algorithm_idx
-                                    # Use a short delay to ensure the UI updates before solver starts
-                                    self._set_message(f"🔄 Recomputing with {algorithm_names[self.algorithm_idx]}...", 2.0)
-                                    # Start solver on next frame to avoid blocking the UI event handler
-                                    # We'll use a simple flag that the main loop checks
-                                    self._pending_solver_trigger = True
-                        elif hasattr(widget, 'control_name') and widget.control_name == 'representation':
-                            rep_map = {0: 'hybrid', 1: 'tile', 2: 'graph'}
-                            old_rep = getattr(self, 'search_representation', 'hybrid')
-                            self.search_representation = rep_map.get(widget.selected, 'hybrid')
-                            if old_rep != self.search_representation:
-                                self._set_message(f"Search space: {self.search_representation}")
-                        elif hasattr(widget, 'control_name') and widget.control_name == 'ara_weight':
-                            try:
-                                selected_val = widget.options[widget.selected]
-                                self.ara_weight = float(selected_val)
-                                self._set_message(f"ARA* weight: {self.ara_weight:g}", 1.2)
-                            except Exception:
-                                self.ara_weight = 1.0
-                        elif hasattr(widget, 'control_name') and widget.control_name == 'presets':
-                            old = self.current_preset_idx
-                            self.current_preset_idx = widget.selected
-                            if old != self.current_preset_idx:
-                                p = self.presets[self.current_preset_idx]
-                                # Apply simple presets
-                                if p == 'Debugging':
-                                    self.feature_flags['show_heatmap'] = True
-                                    self.feature_flags['solver_comparison'] = False
-                                    self.feature_flags['ml_heuristic'] = False
-                                elif p == 'Fast Approx':
-                                    self.feature_flags['ml_heuristic'] = True
-                                    self.feature_flags['parallel_search'] = True
-                                elif p == 'Optimal':
-                                    self.feature_flags['ml_heuristic'] = False
-                                    self.feature_flags['parallel_search'] = False
-                                elif p == 'Speedrun':
-                                    self.feature_flags['speedrun_mode'] = True
-                                    self.feature_flags['ml_heuristic'] = True
-                                self._set_message(f"Preset applied: {p}")
+                self._apply_control_panel_widget_updates()
 
             return handled
         elif event_type == 'up':
@@ -3705,6 +1460,88 @@ class ZeldaGUI:
                 sc_pos = pos
             return self.widget_manager.handle_mouse_up(sc_pos, button)
         return False
+
+    def _control_panel_hit_rect(self):
+        return _control_panel_hit_rect_helper(
+            panel_rect=getattr(self, 'control_panel_rect', None),
+            debug_control_panel=getattr(self, 'debug_control_panel', False),
+            debug_panel_click_padding=getattr(self, 'debug_panel_click_padding', 0),
+            rect_factory=pygame.Rect,
+        )
+
+    def _should_swallow_control_panel_click(self, panel_hit_rect, pos) -> bool:
+        return _should_swallow_control_panel_click_helper(
+            dragging=getattr(self, 'control_panel_scroll_dragging', False),
+            ignore_click_until=getattr(self, 'control_panel_ignore_click_until', 0.0),
+            panel_hit_rect=panel_hit_rect,
+            pos=pos,
+            logger=logger,
+        )
+
+    def _translate_control_panel_click(self, pos, panel_hit_rect):
+        return _translate_control_panel_click_helper(
+            pos=pos,
+            panel_hit_rect=panel_hit_rect,
+            panel_rect=getattr(self, 'control_panel_rect', None),
+            can_scroll=getattr(self, 'control_panel_can_scroll', False),
+            control_panel_scroll=getattr(self, 'control_panel_scroll', 0),
+        )
+
+    def _handle_outside_control_panel_click(self, panel_hit_rect, pos, button):
+        return _handle_outside_control_panel_click_helper(
+            panel_hit_rect=panel_hit_rect,
+            pos=pos,
+            button=button,
+            widget_manager=self.widget_manager,
+            dropdown_type=DropdownWidget,
+            logger=logger,
+        )
+
+    def _refresh_control_panel_layout_if_needed(self, sc_pos) -> bool:
+        return _refresh_control_panel_layout_if_needed_helper(
+            widget_manager=self.widget_manager,
+            sc_pos=sc_pos,
+            debug_input_active=DEBUG_INPUT_ACTIVE,
+            panel_rect=getattr(self, 'control_panel_rect', None),
+            reposition_widgets=self._reposition_widgets,
+            logger=logger,
+        )
+
+    def _retry_control_panel_click_after_auto_scroll(self, pos, sc_pos, button, handled):
+        handled, new_scroll, ignore_until = _retry_control_panel_click_after_auto_scroll_helper(
+            pos=pos,
+            sc_pos=sc_pos,
+            button=button,
+            handled=handled,
+            panel_rect=getattr(self, 'control_panel_rect', None),
+            widget_manager=self.widget_manager,
+            can_scroll=getattr(self, 'control_panel_can_scroll', False),
+            control_panel_scroll=getattr(self, 'control_panel_scroll', 0),
+            control_panel_scroll_max=getattr(self, 'control_panel_scroll_max', 0),
+            logger=logger,
+        )
+        self.control_panel_scroll = new_scroll
+        if ignore_until:
+            self.control_panel_ignore_click_until = ignore_until
+        return handled
+
+    def _apply_control_panel_widget_updates(self):
+        """Apply checkbox and dropdown state after a handled control-panel click."""
+        _apply_control_panel_widget_updates_helper(
+            gui=self,
+            widget_manager=self.widget_manager,
+            checkbox_type=CheckboxWidget,
+            logger=logger,
+        )
+
+    def _apply_checkbox_widget_update(self, widget):
+        _apply_checkbox_widget_update_helper(gui=self, widget=widget, logger=logger)
+
+    def _apply_dropdown_widget_update(self, widget):
+        _apply_dropdown_widget_update_helper(gui=self, widget=widget, logger=logger)
+
+    def _apply_algorithm_dropdown_update(self, widget):
+        _apply_algorithm_dropdown_update_helper(gui=self, widget=widget, logger=logger)
     
     # Button callbacks
     def _stop_auto_solve(self):
@@ -3763,269 +1600,17 @@ class ZeldaGUI:
             self._set_message(f"Generation failed: {str(e)}")
 
     def _generate_ai_dungeon(self):
-        """Non-blocking wrapper — spawn background worker and return immediately."""
-        # If a worker is already running, avoid starting another
-        if getattr(self, 'ai_gen_thread', None) and getattr(self.ai_gen_thread, 'is_alive', lambda: False)():
-            self._set_message('AI generation already running', 1.5)
-            return
-
-        # Reset worker state and spawn background thread
-        self.ai_gen_result = None
-        self.ai_gen_done = False
-        th = threading.Thread(target=self._generate_ai_dungeon_worker, daemon=True)
-        self.ai_gen_thread = th
-        th.start()
-        self._set_message('AI generation started (background)')
+        """Non-blocking wrapper to spawn background worker and return immediately."""
+        _start_ai_dungeon_generation_helper(self, threading)
 
 
     def _generate_ai_dungeon_worker(self):
-        """Worker that performs the heavy AI generation pipeline off the main thread.
-
-        This worker MUST NOT call Pygame/display functions or perform UI updates.
-        It stores the final grid in `self.ai_gen_result` and sets `self.ai_gen_done`.
-        """
-        try:
-            import torch
-            import numpy as np
-            import random as _random
-            from pathlib import Path
-            from src.core.latent_diffusion import create_latent_diffusion
-            from src.core.vqvae import create_vqvae
-            from src.core.condition_encoder import create_condition_encoder
-            from src.core.logic_net import LogicNet as _LogicNet
-            from src.generation.grammar import (
-                MissionGrammar,
-                Difficulty as GrammarDifficulty,
-                graph_to_gnn_input,
-            )
-
-            checkpoint_path = Path(__file__).parent / "checkpoints" / "final_model.pth"
-
-            if not checkpoint_path.exists():
-                self._set_message("No AI checkpoint found – train first!")
-                logger.warning(f"Checkpoint not found: {checkpoint_path}")
-                return
-
-            self._set_message("Generating mission graph…")
-            logger.info(f"AI Generation: Loading checkpoint from {checkpoint_path}")
-
-            device = torch.device("cpu")
-
-            # ======================================================
-            # STEP 1: Generate mission graph via MissionGrammar
-            # ======================================================
-            seed = _random.randint(0, 999999)
-            grammar = MissionGrammar(seed=seed)
-            mission_graph = grammar.generate(
-                difficulty=GrammarDifficulty.MEDIUM,
-                num_rooms=_random.randint(5, 10),
-                max_keys=2,
-            )
-            num_nodes = len(mission_graph.nodes)
-            num_edges = len(mission_graph.edges)
-            logger.info(f"  Mission graph: {num_nodes} nodes, {num_edges} edges, seed={seed}")
-
-            # Convert to GNN tensors for condition encoder
-            gnn_input = graph_to_gnn_input(mission_graph, current_node_idx=0)
-            node_features_raw = gnn_input['node_features']   # [N, D_node]
-            edge_index = gnn_input['edge_index']              # [2, E]
-            tpe = gnn_input['tpe']                            # [N, 8]
-
-            self._set_message("Loading AI model…")
-
-            # ======================================================
-            # STEP 2: Build & load model components
-            # ======================================================
-            vqvae = create_vqvae(num_classes=44, latent_dim=64)
-            diffusion = create_latent_diffusion(latent_dim=64, context_dim=256)
-            cond_encoder = create_condition_encoder(latent_dim=64, output_dim=256)
-
-            # Wire LogicNet so checkpoint keys match
-            diffusion.guidance.logic_net = _LogicNet(latent_dim=64, num_classes=44)
-
-            ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
-
-            if "ema_diffusion_state_dict" in ckpt:
-                diffusion.load_state_dict(ckpt["ema_diffusion_state_dict"])
-            elif "diffusion_state_dict" in ckpt:
-                diffusion.load_state_dict(ckpt["diffusion_state_dict"])
-            if "vqvae_state_dict" in ckpt:
-                vqvae.load_state_dict(ckpt["vqvae_state_dict"])
-                logger.info("  Loaded VQ-VAE from main checkpoint")
-            else:
-                # Fallback: load separately pretrained VQ-VAE
-                vqvae_path = Path("checkpoints/vqvae_pretrained.pth")
-                if vqvae_path.exists():
-                    vqvae_ckpt = torch.load(vqvae_path, map_location=device, weights_only=False)
-                    vqvae.load_state_dict(vqvae_ckpt["model_state_dict"])
-                    logger.info(f"  Loaded VQ-VAE from {vqvae_path}")
-                else:
-                    logger.warning("  ⚠ No VQ-VAE weights found — decode will produce noise!")
-            if "condition_encoder_state_dict" in ckpt:
-                cond_encoder.load_state_dict(ckpt["condition_encoder_state_dict"])
-
-            vqvae.eval()
-            diffusion.eval()
-            cond_encoder.eval()
-
-            self._set_message("Running diffusion sampling…")
-
-            # ======================================================
-            # STEP 3: Encode graph → conditioning vector
-            # ======================================================
-            # The condition encoder's global stream expects node_feature_dim=5.
-            # MissionGrammar produces 12-dim features (8 type + 2 pos + 2 extra).
-            # We project to 5 dims matching training's synthetic graph format:
-            #   [is_start, has_enemy, has_key, has_boss_key, has_triforce]
-            from src.generation.grammar import NodeType
-            node_feat_5 = torch.zeros(num_nodes, 5, device=device)
-            sorted_ids = sorted(mission_graph.nodes.keys())
-            for i, nid in enumerate(sorted_ids):
-                nt = mission_graph.nodes[nid].node_type
-                if nt == NodeType.START:
-                    node_feat_5[i, 0] = 1.0   # is_start
-                elif nt == NodeType.ENEMY:
-                    node_feat_5[i, 1] = 1.0   # has_enemy
-                elif nt == NodeType.KEY:
-                    node_feat_5[i, 2] = 1.0   # has_key
-                elif nt == NodeType.LOCK:
-                    node_feat_5[i, 3] = 1.0   # has_boss_key (lock)
-                elif nt == NodeType.GOAL:
-                    node_feat_5[i, 4] = 1.0   # has_triforce
-
-            with torch.no_grad():
-                # Encode graph topology → [N, 256] node embeddings
-                c_global = cond_encoder.encode_global_only(
-                    node_feat_5, edge_index
-                )
-                # Mean-pool to [1, 256] — same as training does
-                conditioning = c_global.mean(dim=0, keepdim=True)
-
-            # ======================================================
-            # STEP 4: Diffusion sampling → VQ-VAE decode
-            # ======================================================
-            # Training data: stitched dungeons padded to a max size.
-            # VQ-VAE downsamples by ~4×, so ~11×16 room → 3×4 latent.
-            # For a full dungeon we use a larger latent to get a bigger grid.
-            # Scale latent proportional to the graph complexity:
-            #   base ~3×4 for single room, scale up for multi-room graphs
-            scale = max(1, int(num_nodes ** 0.5))
-            lat_h = 3 * scale
-            lat_w = 4 * scale
-            logger.info(f"  Latent shape: (1, 64, {lat_h}, {lat_w}) for {num_nodes}-node graph")
-
-            with torch.no_grad():
-                z = diffusion.ddim_sample(
-                    context=conditioning,
-                    shape=(1, 64, lat_h, lat_w),
-                    num_steps=50,
-                )
-                # Decode through VQ-VAE → [1, 44, H, W] logits
-                # Pass target_size so transposed convolutions output the right dims
-                target_h = lat_h * 4   # VQ-VAE has 4× downsampling
-                target_w = lat_w * 4
-                recon = vqvae.decode(z, target_size=(target_h, target_w))
-                # argmax → tile IDs (H, W)
-                tile_grid = recon.argmax(dim=1).squeeze(0).cpu().numpy().astype(np.int32)
-
-            h, w = tile_grid.shape
-            logger.info(f"  Raw generation: {h}×{w}, unique_tiles={len(np.unique(tile_grid))}")
-
-            # ======================================================
-            # STEP 5: Symbolic refinement (WFC repair)
-            # ======================================================
-            self._set_message("Refining dungeon structure…")
-            try:
-                from src.core.symbolic_refiner import create_symbolic_refiner
-                refiner = create_symbolic_refiner(max_repair_attempts=3)
-                start_pos = (2, 2)
-                goal_pos = (h - 3, w - 3)
-
-                # Find actual start/triforce positions if they exist
-                from src.core.definitions import SEMANTIC_PALETTE as _SP
-                start_positions = np.argwhere(tile_grid == _SP['START'])
-                goal_positions = np.argwhere(tile_grid == _SP['TRIFORCE'])
-                if len(start_positions) > 0:
-                    start_pos = tuple(start_positions[0])
-                if len(goal_positions) > 0:
-                    goal_pos = tuple(goal_positions[0])
-
-                repaired_grid, success = refiner.repair_room(
-                    tile_grid, start_pos, goal_pos
-                )
-                if success:
-                    tile_grid = repaired_grid.astype(np.int32)
-                    logger.info("  Symbolic refinement: SUCCESS")
-                else:
-                    logger.info("  Symbolic refinement: no repair needed or failed")
-            except Exception as e:
-                logger.warning(f"  Symbolic refinement skipped: {e}")
-
-            # ======================================================
-            # STEP 6: Ensure START and TRIFORCE exist
-            # ======================================================
-            from src.core.definitions import SEMANTIC_PALETTE as _SP
-            if not np.any(tile_grid == _SP['START']):
-                # Place START on the first walkable floor tile near top-left
-                floor_positions = np.argwhere(tile_grid == _SP['FLOOR'])
-                if len(floor_positions) > 0:
-                    sp = floor_positions[0]
-                    tile_grid[sp[0], sp[1]] = _SP['START']
-                    logger.info(f"  Placed START at ({sp[0]}, {sp[1]})")
-
-            if not np.any(tile_grid == _SP['TRIFORCE']):
-                # Place TRIFORCE on the last walkable floor tile near bottom-right
-                floor_positions = np.argwhere(tile_grid == _SP['FLOOR'])
-                if len(floor_positions) > 0:
-                    gp = floor_positions[-1]
-                    tile_grid[gp[0], gp[1]] = _SP['TRIFORCE']
-                    logger.info(f"  Placed TRIFORCE at ({gp[0]}, {gp[1]})")
-
-            # ======================================================
-            # STEP 7: Add to GUI map list
-            # ======================================================
-            h, w = tile_grid.shape
-            dungeon_name = f"AI #{seed} ({num_nodes}rm {h}×{w})"
-
-            self.maps.append(tile_grid)
-            self.map_names.append(dungeon_name)
-
-            # Switch to the new map
-            self.current_map_idx = len(self.maps) - 1
-            self._load_current_map()
-            self._center_view()
-
-            # Clear any existing effects and reset state
-            if self.effects:
-                self.effects.clear()
-            self.step_count = 0
-            self.auto_path = []
-            self.auto_mode = False
-
-            self._set_message(
-                f"AI dungeon generated: {num_nodes} rooms, {h}×{w} tiles, seed={seed}"
-            )
-            logger.info(
-                f"AI dungeon complete: seed={seed}, graph={num_nodes}N/{num_edges}E, "
-                f"grid={h}×{w}, unique_tiles={len(np.unique(tile_grid))}"
-            )
-
-        except Exception as e:
-            logger.exception(f"AI generation failed: {e}")
-            self._set_message(f"AI generation failed: {str(e)}")
+        """Background worker entry point for AI generation pipeline."""
+        _run_ai_generation_worker_helper(self, logger)
 
     def _reset_map(self):
         """Reset the current map."""
-        self._load_current_map()
-        self._center_view()
-        if self.effects:
-            self.effects.clear()
-        self.step_count = 0
-        self.path_preview_mode = False
-        self.preview_overlay_visible = False
-        self.path_preview_dialog = None
-        self.preview_on_next_solver_result = False
-        self.message = "Map Reset"
+        _reset_map_helper(self)
     
     def _show_path_preview(self):
         """
@@ -4036,154 +1621,43 @@ class ZeldaGUI:
         - If solver is running, request preview on completion.
         - If no path exists and solver is idle, start solver and force preview when it finishes.
         """
-        path = list(getattr(self, 'auto_path', []) or [])
-        if not path:
-            path = list(getattr(self, 'solution_path', []) or [])
-
-        if path:
-            self.auto_path = [tuple(p) for p in path]
-            self.auto_mode = False
-            self.auto_step_idx = 0
-            self.preview_on_next_solver_result = False
-
-            try:
-                self.path_preview_dialog = PathPreviewDialog(
-                    path=self.auto_path,
-                    env=self.env,
-                    solver_result=(getattr(self, 'solver_result', None) or {}),
-                    speed_multiplier=getattr(self, 'speed_multiplier', 1.0),
-                )
-                if getattr(self, 'preview_modal_enabled', False):
-                    self.path_preview_mode = True
-                    self.preview_overlay_visible = False
-                    self.message = "Path preview opened (modal)"
-                else:
-                    self.path_preview_mode = False
-                    self.preview_overlay_visible = True
-                    self.message = "Path preview ready (Enter to start, Esc to dismiss)"
-            except Exception as e:
-                logger.exception("Failed to create path preview dialog")
-                self.path_preview_dialog = None
-                self.path_preview_mode = False
-                self.preview_overlay_visible = False
-                self.message = f"Path preview failed: {e}"
-            return
-
-        self.preview_on_next_solver_result = True
-        if getattr(self, 'solver_running', False):
-            self.message = "Solver running, preview will open when done"
-            return
-
-        self.message = "No path yet, solving for preview..."
-        self._start_auto_solve()
+        _show_path_preview_helper(self, PathPreviewDialog, logger)
     
     def _clear_path(self):
         """Clear the current path."""
-        self.auto_path = []
-        self.solution_path = []
-        self.auto_mode = False
-        self.auto_step_idx = 0
-        self.path_preview_mode = False
-        self.preview_overlay_visible = False
-        self.path_preview_dialog = None
-        self.preview_on_next_solver_result = False
-        self.message = "Path cleared"
+        _clear_path_helper(self)
+
+    def _open_temp_folder(self):
+        """Open OS temp folder where solver/preview artifacts are stored."""
+        _open_temp_folder_orchestration_helper(self, tempfile, _open_folder_helper)
+
+    def _collect_temp_file_candidates(self):
+        """Collect active and stale GUI temp files used by solver/preview flows."""
+        return _collect_temp_file_candidates_orchestration_helper(
+            self,
+            tempfile,
+            _list_existing_paths_helper,
+            _find_temp_files_helper,
+        )
+
+    def _delete_temp_files(self):
+        """Delete stale temp files and optionally active tracked files when safe."""
+        _delete_temp_files_orchestration_helper(
+            self,
+            os,
+            logger,
+            self._collect_temp_file_candidates,
+            _list_existing_paths_helper,
+            _delete_files_helper,
+        )
     
     def _export_route(self):
         """Export the current route to JSON file."""
-        path = list(getattr(self, 'auto_path', []) or getattr(self, 'solution_path', []) or [])
-        if not path:
-            self.message = "No route to export (solve first)"
-            return
-        
-        try:
-            import json
-            from datetime import datetime
-            
-            # Prepare export data
-            export_data = {
-                'version': '1.0',
-                'timestamp': datetime.now().isoformat(),
-                'start': self.start_pos,
-                'goal': self.goal_pos,
-                'path': path,
-                'path_length': len(path),
-                'algorithm': getattr(self, 'last_algorithm', 'unknown'),
-                'solve_time_ms': getattr(self, 'last_solve_time', 0) * 1000,
-                'nodes_explored': getattr(self, 'last_nodes_explored', 0),
-            }
-            
-            # Generate filename
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            filename = f"route_{timestamp}.json"
-            route_dir = Path(getattr(self, 'route_export_dir', Path.cwd()))
-            route_dir.mkdir(parents=True, exist_ok=True)
-            filepath = route_dir / filename
-            
-            # Save to file
-            with open(filepath, 'w', encoding='utf-8') as f:
-                json.dump(export_data, f, indent=2)
-            
-            try:
-                display_path = filepath.relative_to(getattr(self, 'repo_root', Path.cwd()))
-            except Exception:
-                display_path = filepath
-            self.message = f"Route exported to {display_path}"
-            logger.info("Route exported to %s", filepath)
-            
-        except Exception as e:
-            self.message = f"Route export failed: {e}"
-            logger.error(f"Route export error: {e}")
+        _export_route_helper(self)
     
     def _load_route(self):
         """Load a saved route from JSON file."""
-        try:
-            import json
-            
-            # Find most recent route file from repository-local export dir.
-            route_dir = Path(getattr(self, 'route_export_dir', Path.cwd()))
-            route_files = sorted(route_dir.glob('route_*.json'), reverse=True)
-            if not route_files:
-                self.message = "No saved routes found"
-                return
-            
-            # Load most recent
-            filename = route_files[0]
-            
-            with open(filename, 'r', encoding='utf-8') as f:
-                route_data = json.load(f)
-            
-            # Validate data
-            if 'path' not in route_data or 'start' not in route_data or 'goal' not in route_data:
-                self.message = f"Invalid route file: {filename}"
-                return
-            
-            # Apply loaded route
-            self.start_pos = tuple(route_data['start'])
-            self.goal_pos = tuple(route_data['goal'])
-            self.solution_path = [tuple(p) for p in route_data['path']]
-            self.auto_path = list(self.solution_path)
-            self.auto_step_idx = 0
-            self.auto_mode = False
-            
-            # Update metadata
-            if 'algorithm' in route_data:
-                self.last_algorithm = route_data['algorithm']
-            if 'solve_time_ms' in route_data:
-                self.last_solve_time = route_data['solve_time_ms'] / 1000.0
-            if 'nodes_explored' in route_data:
-                self.last_nodes_explored = route_data['nodes_explored']
-            
-            try:
-                display_path = filename.relative_to(getattr(self, 'repo_root', Path.cwd()))
-            except Exception:
-                display_path = filename
-            self.message = f"Route loaded from {display_path} ({len(self.solution_path)} steps)"
-            logger.info("Route loaded from %s", filename)
-            
-        except Exception as e:
-            self.message = f"Route loading failed: {e}"
-            logger.error(f"Route loading error: {e}")
+        _load_route_helper(self)
 
     def load_visual_assets(self, templates_dir: str = None, link_sprite_path: str = None):
         """Optional: override GUI assets with extracted visual tiles/sprites.
@@ -4197,44 +1671,15 @@ class ZeldaGUI:
           and assign to `self.images` keyed by semantic id (best-effort).
         - If `link_sprite_path` is provided, attempt to cut a Link sprite and replace `self.link_img`.
         """
-        try:
-            from src.data_processing.visual_extractor import extract_grid
-            from PIL import Image
-        except Exception:
-            return
-
-        if templates_dir and os.path.isdir(templates_dir):
-            # load any PNGs found and map into fallback image slots
-            for fn in sorted(os.listdir(templates_dir)):
-                if not fn.lower().endswith('.png'):
-                    continue
-                name = os.path.splitext(fn)[0]
-                try:
-                    im = Image.open(os.path.join(templates_dir, fn)).convert('RGBA')
-                    surf = pygame.image.fromstring(im.tobytes(), im.size, im.mode)
-                    # best-effort: if filename contains 'floor','wall','door','key' map to semantic ids
-                    ln = name.lower()
-                    if 'floor' in ln or 'f' == ln:
-                        self.images[SEMANTIC_PALETTE['FLOOR']] = pygame.transform.scale(surf, (self.TILE_SIZE, self.TILE_SIZE))
-                    if 'wall' in ln:
-                        self.images[SEMANTIC_PALETTE['WALL']] = pygame.transform.scale(surf, (self.TILE_SIZE, self.TILE_SIZE))
-                    if 'door' in ln:
-                        self.images[SEMANTIC_PALETTE['DOOR_OPEN']] = pygame.transform.scale(surf, (self.TILE_SIZE, self.TILE_SIZE))
-                    if 'key' in ln:
-                        self.images[SEMANTIC_PALETTE['KEY']] = pygame.transform.scale(surf, (self.TILE_SIZE, self.TILE_SIZE))
-                except Exception:
-                    continue
-
-        if link_sprite_path and os.path.exists(link_sprite_path):
-            try:
-                im = Image.open(link_sprite_path).convert('RGBA')
-                im = im.resize((self.TILE_SIZE - 4, self.TILE_SIZE - 4), Image.NEAREST)
-                self.link_img = pygame.image.fromstring(im.tobytes(), im.size, im.mode)
-            except Exception as e:
-                logger.warning(f"Failed to load link sprite from {link_sprite_path}: {e}")
-        
-        logger.info(f"Loaded {len([k for k in self.images if k in (1,2,10,12)])} visual assets")
-        return True
+        return _load_visual_assets_helper(
+            self,
+            templates_dir=templates_dir,
+            link_sprite_path=link_sprite_path,
+            pygame=pygame,
+            os_module=os,
+            logger=logger,
+            semantic_palette=SEMANTIC_PALETTE,
+        )
 
     def load_visual_map(self, image_path: str, templates_dir: str | None = None):
         """Public API: create a GUI map from a screenshot and switch to it.
@@ -4245,23 +1690,11 @@ class ZeldaGUI:
         This method is intentionally permissive and returns a bool for success
         so automated tests can call it without a file dialog.
         """
-        try:
-            from src.data_processing.visual_integration import visual_extract_to_room, make_stitched_for_single_room, infer_inventory_from_room
-        except Exception:
-            return False
-
-        try:
-            ids, conf = visual_extract_to_room(image_path, templates_dir or '')
-            # convert single-room semantic -> environment grid expected by GUI
-            stitched = make_stitched_for_single_room(ids)
-            self.maps = [stitched.global_grid]
-            self.current_map_idx = 0
-            self._load_current_map()
-            self.message = f"Loaded visual map: {image_path}"
-            return True
-        except Exception as e:
-            self.message = f"Visual load failed: {e}"
-            return False
+        return _load_visual_map_helper(
+            self,
+            image_path=image_path,
+            templates_dir=templates_dir,
+        )
 
     def _place_items_from_graph(self, grid: np.ndarray, graph, room_positions: dict, room_to_node: dict):
         """Place items (keys, boss keys, etc.) from graph node attributes into the grid.
@@ -4276,235 +1709,34 @@ class ZeldaGUI:
             room_positions: Dict mapping room position -> (row_offset, col_offset) in global grid
             room_to_node: Dict mapping room position -> graph node ID
         """
-        if not graph or not room_positions or not room_to_node:
-            return
-        
-        # Reverse mapping: node_id -> room_position
-        node_to_room = {v: k for k, v in room_to_node.items()}
-        
-        # Room dimensions (standard VGLC Zelda)
-        ROOM_HEIGHT = 16
-        ROOM_WIDTH = 11
-        
-        items_placed = 0
-        
-        for node_id in graph.nodes():
-            attrs = graph.nodes[node_id]
-            room_pos = node_to_room.get(node_id)
-            if room_pos is None or room_pos not in room_positions:
-                continue
-            
-            r_off, c_off = room_positions[room_pos]
-            
-            # Find a valid floor position in the room interior (avoid walls)
-            # We'll search for a FLOOR tile in the interior region
-            def find_floor_position(offset_r: int = 0, offset_c: int = 0):
-                """Find a floor tile position in the room, offset from center."""
-                # Room interior is roughly rows 2-13 (avoid top/bottom walls)
-                # and columns 2-8 (avoid left/right walls)
-                center_r = r_off + ROOM_HEIGHT // 2 + offset_r
-                center_c = c_off + ROOM_WIDTH // 2 + offset_c
-                
-                # Search in expanding rectangles from center
-                for dr in range(-5, 6):
-                    for dc in range(-3, 4):
-                        r = center_r + dr
-                        c = center_c + dc
-                        if 0 <= r < grid.shape[0] and 0 <= c < grid.shape[1]:
-                            if grid[r, c] == SEMANTIC_PALETTE['FLOOR']:
-                                return (r, c)
-                return None
-            
-            # Place key if room has_key
-            if attrs.get('has_key', False):
-                pos = find_floor_position(offset_r=-2, offset_c=0)
-                if pos:
-                    grid[pos[0], pos[1]] = SEMANTIC_PALETTE['KEY_SMALL']
-                    items_placed += 1
-                    logger.debug("Placed KEY at %s (room %s, node %d)", pos, room_pos, node_id)
-            
-            # Place boss key if room has boss (boss key is usually near boss)
-            # Note: has_boss_key isn't in standard graph format, boss key might need different handling
-            if attrs.get('has_item', False):
-                # KEY_ITEM could be ladder or other special item
-                pos = find_floor_position(offset_r=0, offset_c=-2)
-                if pos:
-                    grid[pos[0], pos[1]] = SEMANTIC_PALETTE['KEY_ITEM']
-                    items_placed += 1
-                    logger.debug("Placed KEY_ITEM at %s (room %s, node %d)", pos, room_pos, node_id)
-        
-        if items_placed > 0:
-            logger.info("_place_items_from_graph: placed %d items into grid", items_placed)
+        _place_items_from_graph_helper(
+            self,
+            grid=grid,
+            graph=graph,
+            room_positions=room_positions,
+            room_to_node=room_to_node,
+            logger=logger,
+            semantic_palette=SEMANTIC_PALETTE,
+        )
 
     def _load_current_map(self):
         """Load and initialize the current map."""
-        current_dungeon = self.maps[self.current_map_idx]
-        # Extract grid and graph info from StitchedDungeon
-        if hasattr(current_dungeon, 'global_grid'):
-            # It's a StitchedDungeon object
-            grid = current_dungeon.global_grid.copy()  # Copy so we can modify it
-            graph = current_dungeon.graph
-            room_to_node = current_dungeon.room_to_node
-            room_positions = current_dungeon.room_positions
-            node_to_room = getattr(current_dungeon, 'node_to_room', None)
-            
-            # === PLACE ITEMS FROM GRAPH NODE ATTRIBUTES INTO GRID ===
-            # Keys are stored in graph nodes (has_key=True) but not in the grid
-            if graph and room_positions and room_to_node:
-                self._place_items_from_graph(grid, graph, room_positions, room_to_node)
-        else:
-            # Legacy: just a grid array
-            grid = current_dungeon
-            graph = None
-            room_to_node = None
-            room_positions = None
-            node_to_room = None
-        
-        self.env = ZeldaLogicEnv(grid, render_mode=False, graph=graph, 
-                                  room_to_node=room_to_node, room_positions=room_positions,
-                                  node_to_room=node_to_room)
-        # Defer heavy solver initialization until actually needed (pressing SPACE)
-        self.solver = None
-        self.auto_path = []
-        self.auto_step_idx = 0
-        self.auto_mode = False
-        
-        # Clear any active block push animations
-        self.block_push_animations = []
-        
-        # DEBUG: Add test path to verify rendering works (will be overwritten by solver)
-        # Set KLTN_DEBUG_TEST_PATH=1 environment variable to enable
-        if os.environ.get('KLTN_DEBUG_TEST_PATH') == '1':
-            self._test_path = [(5, 5), (5, 6), (5, 7), (5, 8), (6, 8), (7, 8), (8, 8), (8, 9), (8, 10)]
-            print(f"[LOAD_MAP] _test_path ENABLED: {len(self._test_path)} points at {self._test_path[0]} to {self._test_path[-1]}")
-        else:
-            self._test_path = None
-        
-        # Clear solver result when loading new map
-        self.solver_result = None
-        self.current_keys_held = 0
-        self.current_keys_used = 0
-        self.current_edge_types = []
-        
-        # Count total items in dungeon for "X/Y collected" display
-        self.total_keys = len(self.env._find_all_positions(SEMANTIC_PALETTE['KEY_SMALL']))
-        # Count total bomb items in dungeon for consumable tracking
-        bomb_items = self.env._find_all_positions(SEMANTIC_PALETTE['ITEM_MINOR'])
-        key_items = self.env._find_all_positions(SEMANTIC_PALETTE['KEY_ITEM'])
-        self.total_bombs = len(bomb_items) + len(key_items)  # Each gives 4 bombs
-        self.total_boss_keys = len(self.env._find_all_positions(SEMANTIC_PALETTE['KEY_BOSS']))
-        self.keys_collected = 0
-        self.bombs_collected = 0
-        self.boss_keys_collected = 0
-        # Reset usage counters
-        self.keys_used = 0
-        self.bombs_used = 0
-        self.boss_keys_used = 0
-        # Reset collected/used logs
-        self.collected_items = []
-        self.collected_positions = set()  # Reset collected positions for new map
-        self.used_items = []
-        
-        # Reset path items preview (new feature)
-        self.path_items_summary = {}
-        self.path_item_positions = {}
-        
-        # Clear search heatmap
-        self.search_heatmap = {}
-        
-        # Initialize renderer agent position
-        if self.renderer and self.env.start_pos:
-            self.renderer.set_agent_position(
-                self.env.start_pos[0],
-                self.env.start_pos[1],
-                immediate=True
-            )
-        
-        # Run sanity check
-        checker = SanityChecker(grid)
-        is_valid, errors = checker.check_all()
-        
-        if not is_valid:
-            self.message = f"Map Error: {errors[0]}"
-        else:
-            self.message = f"Map {self.current_map_idx + 1}/{len(self.maps)} - Press SPACE to solve"
-        
-        # Auto-fit zoom to show entire map
-        self._auto_fit_zoom()
-        # Re-center view after zoom changes to avoid large offsets that place the
-        # viewport outside of the map (fixes black/empty window on start)
-        try:
-            self._center_view()
-        except Exception:
-            pass
-        # Log map + view state to help debug black/empty screen issues
-        try:
-            logger.info("Map loaded: %dx%d, TILE_SIZE=%d, view_offset=(%d,%d), images=%d",
-                        self.env.width if self.env else 0,
-                        self.env.height if self.env else 0,
-                        self.TILE_SIZE,
-                        getattr(self, 'view_offset_x', 0),
-                        getattr(self, 'view_offset_y', 0),
-                        len(getattr(self, 'images', {})))
-        except Exception:
-            pass
-
-        # Kick off optional preview/scan work on main thread (must not run in watchdog)
-        try:
-            self._start_preview_for_current_map()
-        except Exception:
-            logger.exception('Failed to start preview for current map')
+        _load_current_map_helper(
+            self,
+            os_module=os,
+            logger=logger,
+            zelda_logic_env_cls=ZeldaLogicEnv,
+            sanity_checker_cls=SanityChecker,
+            semantic_palette=SEMANTIC_PALETTE,
+        )
     
     def _center_view(self):
         """Center the current map in the view."""
-        if self.env is None:
-            return
-        map_w = self.env.width * self.TILE_SIZE
-        map_h = self.env.height * self.TILE_SIZE
-        view_w = self.screen_w - self.SIDEBAR_WIDTH
-        view_h = self.screen_h - self.HUD_HEIGHT
-        # Allow centering even when map is smaller than view (negative offset)
-        self.view_offset_x = (map_w - view_w) // 2
-        self.view_offset_y = (map_h - view_h) // 2
-        self._clamp_view_offset()
+        _center_view_helper(self)
     
     def _auto_fit_zoom(self):
         """Automatically set zoom level to fit the entire map in view."""
-        if self.env is None:
-            return
-        
-        view_w = self.screen_w - self.SIDEBAR_WIDTH - 20  # padding
-        view_h = self.screen_h - self.HUD_HEIGHT - 20
-        
-        map_h = self.env.height
-        map_w = self.env.width
-        
-        # Find the largest zoom level that fits
-        best_zoom_idx = 0
-        for idx, tile_size in enumerate(self.ZOOM_LEVELS):
-            if map_w * tile_size <= view_w and map_h * tile_size <= view_h:
-                best_zoom_idx = idx
-            else:
-                break
-        
-        # Apply the zoom
-        if best_zoom_idx != self.zoom_idx:
-            self.zoom_idx = best_zoom_idx
-            self.TILE_SIZE = self.ZOOM_LEVELS[self.zoom_idx]
-            self._load_assets()
-            # Update renderer tile size
-            if self.renderer:
-                self.renderer.set_tile_size(self.TILE_SIZE)
-        
-        self._center_view()
-        
-        # Initialize agent position in renderer
-        if self.renderer and self.env and self.env.start_pos:
-            self.renderer.set_agent_position(
-                self.env.start_pos[0], 
-                self.env.start_pos[1], 
-                immediate=True
-            )
+        _auto_fit_zoom_helper(self)
     
     def _change_zoom(self, delta: int, center: tuple | None = None):
         """Change zoom level by delta steps.
@@ -4513,43 +1745,7 @@ class ZeldaGUI:
         that the map tile under the `center` pixel remains under the cursor after
         the zoom. If `center` is None, the view is centered as before.
         """
-        old_idx = self.zoom_idx
-        new_idx = max(0, min(len(self.ZOOM_LEVELS) - 1, self.zoom_idx + delta))
-        if new_idx == old_idx:
-            return
-
-        # Compute tile-space coordinates under center (in tile units)
-        if center is None:
-            center_x = (self.screen_w - self.SIDEBAR_WIDTH) // 2
-            center_y = (self.screen_h - self.HUD_HEIGHT) // 2
-        else:
-            center_x, center_y = center
-            # Clamp center to map area
-            center_x = max(0, min(center_x, self.screen_w - self.SIDEBAR_WIDTH))
-            center_y = max(0, min(center_y, self.screen_h - self.HUD_HEIGHT))
-
-        old_tile = self.TILE_SIZE
-        # Tile coordinates (floating) corresponding to center pixel
-        tile_x = (self.view_offset_x + center_x) / float(old_tile) if old_tile else 0.0
-        tile_y = (self.view_offset_y + center_y) / float(old_tile) if old_tile else 0.0
-
-        # Apply new zoom
-        self.zoom_idx = new_idx
-        self.TILE_SIZE = self.ZOOM_LEVELS[self.zoom_idx]
-        self._load_assets()  # Reload assets at new size
-        # Update renderer tile size
-        if self.renderer:
-            self.renderer.set_tile_size(self.TILE_SIZE)
-
-        # Compute new offsets so (tile_x, tile_y) stays under center pixel
-        new_view_offset_x = int(tile_x * self.TILE_SIZE - center_x)
-        new_view_offset_y = int(tile_y * self.TILE_SIZE - center_y)
-        self.view_offset_x = new_view_offset_x
-        self.view_offset_y = new_view_offset_y
-        # Clamp to valid ranges
-        self._clamp_view_offset()
-
-        self.message = f"Zoom: {self.TILE_SIZE}px"
+        _change_zoom_helper(self, delta, center)
     
     def _safe_set_mode(self, size, flags=0, allow_fallback=True):
         """Robust wrapper around pygame.display.set_mode.
@@ -4560,71 +1756,11 @@ class ZeldaGUI:
         application with a null/zero-sized display.
         Returns the created screen surface (or None on fatal failure).
         """
-        try:
-            screen = pygame.display.set_mode(size, flags)
-        except Exception:
-            logger.exception('set_mode(%s, flags=%s) failed; attempting display reinit', size, flags)
-            try:
-                pygame.display.quit()
-                pygame.display.init()
-                screen = pygame.display.set_mode(size, flags)
-            except Exception:
-                logger.exception('Reinit + set_mode failed')
-                screen = None
-
-        # Validate surface
-        try:
-            if screen is None:
-                raise RuntimeError('No screen')
-            w, h = screen.get_size()
-            if w == 0 or h == 0:
-                raise RuntimeError(f'Invalid screen size {w}x{h}')
-            return screen
-        except Exception:
-            logger.exception('Created screen is invalid')
-            if not allow_fallback:
-                return None
-            try:
-                # Final fallback to a safe windowed mode
-                logger.warning('Falling back to windowed 800x600')
-                screen = pygame.display.set_mode((800, 600), pygame.RESIZABLE)
-                return screen
-            except Exception:
-                logger.exception('Fallback windowed mode failed')
-                return None
+        return _safe_set_mode_helper(size, pygame, logger, flags=flags, allow_fallback=allow_fallback)
 
     def _attempt_display_reinit(self):
         """Attempt to fully reinitialize the SDL display and restore mode."""
-        try:
-            pygame.display.quit()
-            pygame.display.init()
-            # Recreate the preferred mode based on current fullscreen state
-            if getattr(self, 'fullscreen', False):
-                try:
-                    disp = pygame.display.Info()
-                    new_size = (int(disp.current_w), int(disp.current_h))
-                except Exception:
-                    new_size = (800, 600)
-                flags = pygame.FULLSCREEN | getattr(pygame, 'HWSURFACE', 0) | getattr(pygame, 'DOUBLEBUF', 0)
-                screen = self._safe_set_mode(new_size, flags)
-            else:
-                prev = getattr(self, '_prev_window_size', (800, 600))
-                screen = self._safe_set_mode(prev, pygame.RESIZABLE)
-            if screen:
-                self.screen = screen
-                try:
-                    self.screen_w, self.screen_h = self.screen.get_size()
-                except Exception:
-                    self.screen_w, self.screen_h = (800, 600)
-                # Reload assets as surfaces may need recreation
-                try:
-                    self._load_assets()
-                except Exception:
-                    logger.exception('Failed to reload assets after display reinit')
-                return True
-        except Exception:
-            logger.exception('Display reinit failed')
-        return False
+        return _attempt_display_reinit_helper(self, pygame, logger)
 
     def _handle_watchdog_screenshot(self) -> bool:
         """Save the requested watchdog screenshot on the main thread and clear the request.
@@ -4632,53 +1768,11 @@ class ZeldaGUI:
         Returns True if a screenshot was saved, False otherwise. Always clears the
         request to avoid repeated attempts.
         """
-        shot = getattr(self, '_watchdog_request_screenshot', None)
-        if not shot:
-            return False
-        try:
-            surf = pygame.display.get_surface()
-            if not surf:
-                logger.warning('Watchdog requested screenshot but no display surface available')
-                try:
-                    self._watchdog_request_screenshot = None
-                except Exception:
-                    pass
-                return False
-            try:
-                pygame.image.save(surf, shot)
-                logger.warning('Watchdog screenshot saved by main thread: %s', shot)
-                self._show_toast(f'Watchdog screenshot: {os.path.basename(shot)}', 3.0, 'info')
-                return True
-            except Exception:
-                logger.exception('Failed to save watchdog screenshot on main thread')
-                return False
-        finally:
-            try:
-                self._watchdog_request_screenshot = None
-            except Exception:
-                pass
+        return _handle_watchdog_screenshot_helper(self, pygame, logger, os)
 
     def report_ui_state(self) -> dict:
         """Return diagnostic information about GUI state for troubleshooting (callable from REPL)."""
-        try:
-            info = {
-                'fullscreen': self.fullscreen,
-                'screen_w': getattr(self, 'screen_w', None),
-                'screen_h': getattr(self, 'screen_h', None),
-                'preview_overlay_visible': getattr(self, 'preview_overlay_visible', False),
-                'preview_modal_enabled': getattr(self, 'preview_modal_enabled', False),
-                'control_panel_enabled': getattr(self, 'control_panel_enabled', False),
-                'control_panel_rect': getattr(self, 'control_panel_rect', None),
-                'control_panel_collapsed': getattr(self, 'control_panel_collapsed', False),
-                'solver_running': getattr(self, 'solver_running', False),
-                'solver_proc_alive': getattr(getattr(self, 'solver_proc', None), 'is_alive', lambda : False)(),
-                'solver_comparison_thread_alive': getattr(getattr(self, 'solver_comparison_thread', None), 'is_alive', lambda : False)(),
-                'debug_click_log_len': len(getattr(self, 'debug_click_log', [])),
-            }
-        except Exception:
-            logger.exception('Failed to build UI state report')
-            return {}
-        return info
+        return _report_ui_state_helper(self, logger)
 
     def _ensure_display_alive(self, force=False):
         """Check display health and attempt recovery if needed.
@@ -4687,39 +1781,7 @@ class ZeldaGUI:
         This method is intentionally conservative and returns False only when
         no recovery was possible.
         """
-        try:
-            surf = pygame.display.get_surface()
-            if surf is None:
-                logger.warning('Display surface is None; attempting recovery')
-                recovered = self._attempt_display_reinit()
-                if recovered:
-                    self._show_toast('Recovered display', 3.0, 'warning')
-                    logger.info('Display recovered successfully')
-                    # reset attempt counter
-                    self._display_recovery_attempts = 0
-                    return True
-                else:
-                    self._show_toast('Display unavailable; fallback failed', 5.0, 'error')
-                    return False
-
-            w, h = surf.get_size()
-            if w == 0 or h == 0:
-                logger.warning('Display surface has invalid size %sx%s; attempting recovery', w, h)
-                recovered = self._attempt_display_reinit()
-                if recovered:
-                    self._show_toast('Recovered display', 3.0, 'warning')
-                    self._display_recovery_attempts = 0
-                    return True
-                else:
-                    self._show_toast('Display invalid; returning to windowed mode', 5.0, 'error')
-                    return False
-            # Healthy
-            # Reset attempt counter when healthy
-            self._display_recovery_attempts = 0
-            return True
-        except Exception:
-            logger.exception('Error while checking display health')
-            return False
+        return _ensure_display_alive_helper(self, pygame, logger, force=force)
 
     def _force_focus(self) -> bool:
         """Try to force the window to the foreground on Windows.
@@ -4728,61 +1790,7 @@ class ZeldaGUI:
         work around Windows' foreground activation blocking. Returns True on success.
         No-op on non-Windows platforms.
         """
-        if os.name != 'nt':
-            return False
-        try:
-            import ctypes
-            from ctypes import wintypes
-            user32 = ctypes.windll.user32
-            kernel32 = ctypes.windll.kernel32
-            hwnd = pygame.display.get_wm_info().get('window')
-            if not hwnd:
-                logger.debug('No hwnd available for focus')
-                return False
-            # Get foreground window and thread ids
-            fg = user32.GetForegroundWindow()
-            pid = wintypes.DWORD()
-            fg_tid = user32.GetWindowThreadProcessId(fg, ctypes.byref(pid))
-            cur_tid = kernel32.GetCurrentThreadId()
-            # Attach input so we can set foreground
-            attached = False
-            try:
-                attached = bool(user32.AttachThreadInput(fg_tid, cur_tid, True))
-            except Exception:
-                attached = False
-            # Bring window to front and set foreground
-            SW_SHOW = 5
-            user32.ShowWindow(hwnd, SW_SHOW)
-            try:
-                user32.SetForegroundWindow(hwnd)
-            except Exception:
-                logger.debug('SetForegroundWindow failed; continuing')
-            try:
-                user32.BringWindowToTop(hwnd)
-            except Exception:
-                pass
-            # Temporary topmost toggle to help in edge cases
-            try:
-                SWP_NOSIZE = 0x0001
-                SWP_NOMOVE = 0x0002
-                HWND_TOPMOST = -1
-                HWND_NOTOPMOST = -2
-                user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE)
-                user32.SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE)
-            except Exception:
-                pass
-            # Detach thread input if we attached
-            try:
-                if attached:
-                    user32.AttachThreadInput(fg_tid, cur_tid, False)
-            except Exception:
-                pass
-            pygame.event.pump()
-            logger.debug('Attempted Win32 force-focus sequence')
-            return True
-        except Exception:
-            logger.exception('Win32 focus helper failed')
-            return False
+        return _force_focus_helper(self, pygame, logger, os)
 
     def _toggle_fullscreen(self):
         """Toggle fullscreen mode with robust handling.
@@ -4791,193 +1799,20 @@ class ZeldaGUI:
         preserves the previous windowed size for restore. Ensures event pump
         and asset/layout reinitialization to avoid dark screens or unresponsiveness.
         """
-        self.fullscreen = not self.fullscreen
-        try:
-            if self.fullscreen:
-                # Save current window size so we can restore it later
-                try:
-                    self._prev_window_size = (self.screen_w, self.screen_h)
-                except Exception:
-                    self._prev_window_size = getattr(self, '_prev_window_size', (800, 600))
-
-                # Use display info to pick a safe fullscreen size and use double buffered HW surface if available
-                try:
-                    disp = pygame.display.Info()
-                    new_size = (int(disp.current_w), int(disp.current_h))
-                except Exception:
-                    new_size = (0, 0)
-
-                flags = pygame.FULLSCREEN | getattr(pygame, 'HWSURFACE', 0) | getattr(pygame, 'DOUBLEBUF', 0)
-                screen = self._safe_set_mode(new_size, flags)
-                if not screen:
-                    # If we couldn't set fullscreen, revert and notify user
-                    self.fullscreen = False
-                    self._set_message('Failed to enter fullscreen; reverted to windowed', 4.0)
-                    self._show_toast('Fullscreen failed; using windowed mode', 4.0, 'warning')
-                else:
-                    self.screen = screen
-                    try:
-                        self.screen_w, self.screen_h = self.screen.get_size()
-                    except Exception:
-                        try:
-                            self.screen_w, self.screen_h = new_size
-                        except Exception:
-                            self.screen_w, self.screen_h = (800, 600)
-# Ensure event pump, grab input, and immediate redraw
-                    try:
-                        try:
-                            default_grab = '0' if __import__('platform').system().lower().startswith('win') else '1'
-                            if os.environ.get('KLTN_FULLSCREEN_GRAB', default_grab) == '1':
-                                pygame.event.set_grab(True)
-                            else:
-                                logger.debug('KLTN_FULLSCREEN_GRAB=0 or platform indicates no grab; skipping event grab')
-                        except Exception:
-                            logger.debug('Could not set event grab for fullscreen')
-                        pygame.event.pump()
-                        self._load_assets()
-                        self._render()
-                        pygame.display.flip()
-                        self._show_toast('Entered fullscreen', 2.5, 'success')
-                    except Exception:
-                        logger.exception('Post-fullscreen redraw failed')
-
-            else:
-                # Restore previous window size (if known) when exiting fullscreen
-                prev = getattr(self, '_prev_window_size', (800, 600))
-                screen = self._safe_set_mode(prev, pygame.RESIZABLE)
-                if not screen:
-                    logger.exception('Failed to restore windowed mode; falling back to 800x600')
-                    self.screen = pygame.display.set_mode((800, 600), pygame.RESIZABLE)
-                    self.screen_w, self.screen_h = self.screen.get_size()
-                    self._show_toast('Restored to windowed (fallback)', 3.0, 'warning')
-                else:
-                    self.screen = screen
-                    self.screen_w, self.screen_h = self.screen.get_size()
-                    try:
-                        try:
-                            pygame.event.set_grab(False)
-                        except Exception:
-                            logger.debug('Could not clear event grab on exiting fullscreen')
-                        pygame.event.pump()
-                        self._load_assets()
-                        self._render()
-                        pygame.display.flip()
-                        self._show_toast('Exited fullscreen', 2.0, 'info')
-                    except Exception:
-                        logger.exception('Post-windowed redraw failed')
-        except Exception:
-            logger.exception('Unhandled exception in _toggle_fullscreen')
-            # Best-effort revert
-            try:
-                prev = getattr(self, '_prev_window_size', (800, 600))
-                self.screen = pygame.display.set_mode(prev, pygame.RESIZABLE)
-                self.screen_w, self.screen_h = self.screen.get_size()
-            except Exception:
-                logger.exception('Failed to revert to previous window mode after fullscreen error')
-                try:
-                    self.screen = pygame.display.set_mode((800, 600), pygame.RESIZABLE)
-                    self.screen_w, self.screen_h = self.screen.get_size()
-                except Exception:
-                    self.screen_w, self.screen_h = (800, 600)
-
-            # Give SDL a chance to process pending events and stabilize the display
-            try:
-                pygame.event.pump()
-            except Exception:
-                pass
-
-            # Recalculate view and reload any assets that depend on display format
-            try:
-                # Convert surfaces to match new display format and re-layout widgets
-                self._load_assets()
-            except Exception:
-                logger.exception('Failed to reload assets after fullscreen toggle')
-            try:
-                if self.control_panel_enabled:
-                    self._update_control_panel_positions()
-            except Exception:
-                pass
-
-            # Center view and render one immediate frame to avoid a dark or stale display
-            try:
-                self._center_view()
-                self._render()
-                pygame.display.flip()
-            except Exception:
-                logger.exception('Failed to render after fullscreen toggle')
-
-            self._set_message(f'Fullscreen: {"ON" if self.fullscreen else "OFF"}', 1.5)
+        return _toggle_fullscreen_helper(self, pygame, logger, os, __import__('platform'))
 
     # ------------------ Control Panel Animation ------------------
     def _start_toggle_panel_animation(self, target_collapsed: bool):
         """Begin animated transition to collapsed or expanded state."""
-        collapsed_width = 40
-        # Compute target width
-        target_width = float(collapsed_width) if target_collapsed else float(self.control_panel_width)
-        # Initialize animation state
-        self.control_panel_anim_from = float(self.control_panel_width_current)
-        self.control_panel_anim_to = float(target_width)
-        self.control_panel_anim_start = time.time()
-        self.control_panel_anim_duration = 0.22
-        self.control_panel_target_collapsed = target_collapsed
-        self.control_panel_animating = True
+        _start_toggle_panel_animation_helper(self, target_collapsed, time)
 
     def _update_control_panel_animation(self):
         """Update animation state; should be called each frame."""
-        if not getattr(self, 'control_panel_animating', False):
-            return
-        # Keep widget positions up to date during animation to maintain correct hitboxes
-        try:
-            self._update_control_panel_positions()
-        except Exception:
-            pass
-        elapsed = time.time() - self.control_panel_anim_start
-        t = min(1.0, elapsed / max(1e-6, self.control_panel_anim_duration))
-        # Smoothstep easing
-        ease = t * t * (3 - 2 * t)
-        self.control_panel_width_current = self.control_panel_anim_from + (self.control_panel_anim_to - self.control_panel_anim_from) * ease
-        # If finished
-        if t >= 1.0:
-            self.control_panel_animating = False
-            self.control_panel_width_current = self.control_panel_anim_to
-            # Apply final collapsed flag
-            self.control_panel_collapsed = bool(self.control_panel_target_collapsed)
-            # Ensure widgets are (re)initialized / repositioned after animation completes
-            try:
-                if not self.control_panel_collapsed:
-                    self._update_control_panel_positions()
-                self._set_message(f"Panel: {'collapsed' if self.control_panel_collapsed else 'expanded'}")
-            except Exception:
-                # Avoid raising during animation cleanup
-                pass
+        _update_control_panel_animation_helper(self, time)
 
     def _update_control_panel_scroll(self):
         """Per-frame update that applies inertia (momentum) and clamps scroll."""
-        if not getattr(self, 'control_panel_can_scroll', False):
-            return
-        # If user is actively dragging the thumb, don't apply inertia
-        if getattr(self, 'control_panel_scroll_dragging', False):
-            return
-        vel = getattr(self, 'control_panel_scroll_velocity', 0.0)
-        # Nothing to do if no velocity
-        if abs(vel) < 1.0:
-            self.control_panel_scroll_velocity = 0.0
-            return
-        # Advance scroll by velocity (pixels per second) scaled by delta_time
-        prev = self.control_panel_scroll
-        self.control_panel_scroll = max(0, min(getattr(self, 'control_panel_scroll_max', 0), self.control_panel_scroll + vel * max(1e-6, self.delta_time)))
-        # If hit bounds, zero velocity
-        if self.control_panel_scroll <= 0 or self.control_panel_scroll >= getattr(self, 'control_panel_scroll_max', 0):
-            self.control_panel_scroll_velocity = 0.0
-        else:
-            # Apply simple linear damping per second
-            damping = getattr(self, 'control_panel_scroll_damping', 6.0)
-            self.control_panel_scroll_velocity *= max(0.0, 1.0 - damping * self.delta_time)
-            if abs(self.control_panel_scroll_velocity) < 1.0:
-                self.control_panel_scroll_velocity = 0.0
-        # Set a short ignore window to avoid accidental toggles while momentum is active
-        if abs(self.control_panel_scroll - prev) > 0.5:
-            self.control_panel_ignore_click_until = time.time() + 0.12
+        _update_control_panel_scroll_helper(self, time)
 
     def run(self, max_frames: Optional[int] = None):
         """Main game loop with delta-time support.
@@ -4986,12 +1821,7 @@ class ZeldaGUI:
         default max_frames is used to avoid infinite loops. Callers can override
         with the optional max_frames parameter.
         """
-        # If running in test mode and no explicit max_frames provided, set a small limit
-        if max_frames is None and (os.environ.get('KLTN_TEST_MODE') or os.environ.get('PYTEST_CURRENT_TEST') or os.environ.get('CI')):
-            try:
-                max_frames = int(os.environ.get('KLTN_RUN_MAX_FRAMES', '10'))
-            except Exception:
-                max_frames = 10
+        max_frames = resolve_test_mode_max_frames(max_frames, os.environ)
 
         # Heartbeat logging variables for responsiveness debugging
         heartbeat_last = time.time()
@@ -5020,19 +1850,25 @@ class ZeldaGUI:
             # Periodic fallback: if window is not focused, try to clear grab/ensure cursor visible
             try:
                 # Only for windowed mode; in fullscreen platforms we may intentionally grab
-                if not self.fullscreen:
-                    focused = pygame.mouse.get_focused()
-                    if not focused and time.time() - getattr(self, '_last_ungrab_attempt', 0.0) > 2.0:
-                        logger.debug('Window lacks input focus; attempting to clear event grab and show cursor')
-                        try:
-                            pygame.event.set_grab(False)
-                        except Exception:
-                            logger.debug('Failed to clear event grab during fallback')
-                        try:
-                            pygame.mouse.set_visible(True)
-                        except Exception:
-                            logger.debug('Failed to set mouse visible during fallback')
-                        self._last_ungrab_attempt = time.time()
+                focused = pygame.mouse.get_focused()
+                now_ts = time.time()
+                if should_attempt_focus_fallback(
+                    self.fullscreen,
+                    focused,
+                    now_ts,
+                    getattr(self, '_last_ungrab_attempt', 0.0),
+                    cooldown_sec=2.0,
+                ):
+                    logger.debug('Window lacks input focus; attempting to clear event grab and show cursor')
+                    try:
+                        pygame.event.set_grab(False)
+                    except Exception:
+                        logger.debug('Failed to clear event grab during fallback')
+                    try:
+                        pygame.mouse.set_visible(True)
+                    except Exception:
+                        logger.debug('Failed to set mouse visible during fallback')
+                    self._last_ungrab_attempt = now_ts
             except Exception:
                 logger.exception('Error during input focus fallback')
             for event in _events:
@@ -5824,12 +2660,8 @@ class ZeldaGUI:
             # Check if algorithm change triggered a pending solver (deferred to avoid blocking event handler)
             if getattr(self, '_pending_solver_trigger', False):
                 self._pending_solver_trigger = False
-                algorithm_names = ["A*", "BFS", "Dijkstra", "Greedy", "D* Lite",
-                                 "DFS/IDDFS", "Bidirectional A*",
-                                 "CBS (Balanced)", "CBS (Explorer)", "CBS (Cautious)",
-                                 "CBS (Forgetful)", "CBS (Speedrunner)", "CBS (Greedy)"]
-                alg_name = algorithm_names[self.algorithm_idx] if self.algorithm_idx < len(algorithm_names) else f"Algorithm {self.algorithm_idx}"
-                logger.info('🔄 Processing pending solver trigger: Starting %s solver...', alg_name)
+                alg_name = self._algorithm_name(self.algorithm_idx)
+                logger.info('â‰¡Æ’Ã¶Ã¤ Processing pending solver trigger: Starting %s solver...', alg_name)
                 self._start_auto_solve()
 
             # Update animated control panel state (if active)
@@ -6219,37 +3051,11 @@ class ZeldaGUI:
 
     def _next_map(self):
         """Move to the next map and stop auto-solve if running."""
-        try:
-            if getattr(self, 'auto_mode', False):
-                self._stop_auto('map change (next)')
-        except Exception:
-            pass
-        try:
-            self.current_map_idx = (self.current_map_idx + 1) % len(self.maps)
-            self._load_current_map()
-            self._center_view()
-            if self.effects:
-                self.effects.clear()
-            self.step_count = 0
-        except Exception:
-            logger.exception("_next_map failed")
+        _next_map_helper(self, logger)
 
     def _prev_map(self):
         """Move to the previous map and stop auto-solve if running."""
-        try:
-            if getattr(self, 'auto_mode', False):
-                self._stop_auto('map change (prev)')
-        except Exception:
-            pass
-        try:
-            self.current_map_idx = (self.current_map_idx - 1) % len(self.maps)
-            self._load_current_map()
-            self._center_view()
-            if self.effects:
-                self.effects.clear()
-            self.step_count = 0
-        except Exception:
-            logger.exception("_prev_map failed")
+        _prev_map_helper(self, logger)
     
     def _clamp_view_offset(self):
         """Clamp view offset to valid range.
@@ -6258,204 +3064,22 @@ class ZeldaGUI:
         the user can pan the small map freely inside the window (showing empty
         margins) while still preventing arbitrary unrestricted panning.
         """
-        if self.env is None:
-            return
-        map_w = self.env.width * self.TILE_SIZE
-        map_h = self.env.height * self.TILE_SIZE
-        view_w = self.screen_w - self.SIDEBAR_WIDTH
-        view_h = self.screen_h - self.HUD_HEIGHT
-
-        # Allow negative minimum when map is smaller than view so the map can be
-        # shifted inside the viewport. When map is larger, behave as before.
-        min_offset_x = min(0, map_w - view_w)
-        max_offset_x = max(0, map_w - view_w)
-        min_offset_y = min(0, map_h - view_h)
-        max_offset_y = max(0, map_h - view_h)
-
-        self.view_offset_x = min(max(self.view_offset_x, min_offset_x), max_offset_x)
-        self.view_offset_y = min(max(self.view_offset_y, min_offset_y), max_offset_y)
+        _clamp_view_offset_helper(self)
     
     def _center_on_player(self):
         """Center the view on the player position."""
-        if self.env is None:
-            return
-        r, c = self.env.state.position
-        player_x = c * self.TILE_SIZE
-        player_y = r * self.TILE_SIZE
-        
-        view_w = self.screen_w - self.SIDEBAR_WIDTH
-        view_h = self.screen_h - self.HUD_HEIGHT
-        
-        self.view_offset_x = player_x - view_w // 2
-        self.view_offset_y = player_y - view_h // 2
-        self._clamp_view_offset()
+        _center_on_player_helper(self)
     
     def _start_preview_for_current_map(self):
-        """Perform light-weight post-map-load work on main thread:
-
-        - Scan/map annotation (fast)
-        - Kick off a lightweight preview search (process preferred, fallback to thread)
-        - Ensure rendering/screenshot work happens on the main thread (no pygame calls from watcher)
-        """
-        self._sync_solver_dropdown_settings()
-
-        # If env is finished state for some reason, reload to ensure consistent setup
-        if getattr(self, 'env', None) and getattr(self.env, 'done', False):
-            try:
-                self._load_current_map()
-            except Exception:
-                logger.exception('Failed to reload current map during preview startup')
-
-        # Scan and mark items (measure duration, should be fast)
-        try:
-            _scan_start = time.time()
-            self._scan_and_mark_items()
-            _scan_dur = time.time() - _scan_start
-            if _scan_dur > 0.05:
-                logger.debug('Item scan took %.3fs', _scan_dur)
-        except Exception:
-            logger.exception('Item scanning failed')
-
-        # Update status and render once to reflect initial state
-        algorithm_names = ["A*", "BFS", "Dijkstra", "Greedy", "D* Lite",
-                          "DFS/IDDFS", "Bidirectional A*",
-                          "CBS (Balanced)", "CBS (Explorer)", "CBS (Cautious)",
-                          "CBS (Forgetful)", "CBS (Speedrunner)", "CBS (Greedy)"]
-        solver_name = algorithm_names[self.algorithm_idx] if hasattr(self, 'algorithm_idx') else 'A*'
-        self.message = f"Solving ({solver_name})..."
-        try:
-            self._render()
-            pygame.display.flip()
-        except Exception:
-            # Rendering should only be attempted on main thread; swallow errors here
-            logger.debug('Render/flip failed during preview startup (may be uninitialized yet)')
-
-        logger.info('Starting solver: algorithm=%s, solver_running=%s', solver_name, getattr(self,'solver_running',False))
-
-        # Allow disabling automatic preview startup for debugging
-        if os.environ.get('KLTN_DISABLE_PREVIEW') == '1':
-            logger.info('Automatic preview startup disabled via KLTN_DISABLE_PREVIEW=1')
-            return
-
-        # Start a non-blocking preview worker to avoid freezing the UI.
-        if getattr(self, 'preview_thread', None) and getattr(self, 'preview_thread').is_alive():
-            self._set_message('Preview already running...')
-            return
-
-        def _preview_worker():
-            """Runs quick solvers off the main thread and stores a preview result for main thread to apply."""
-            try:
-                current_dungeon = self.maps[self.current_map_idx]
-                # Prefer graph solver when available (fast on small graphs)
-                if hasattr(current_dungeon, 'graph') and current_dungeon.graph and not getattr(self, 'force_grid_algorithm', False):
-                    try:
-                        from src.data.zelda_core import DungeonSolver, ValidationMode
-                        solver = DungeonSolver()
-                        result = solver.solve(current_dungeon, mode=ValidationMode.FULL)
-                        if result.get('solvable', False):
-                            # Try lightweight grid path derived from graph
-                            self.solver_result = result
-                            success, path, teleports = self._smart_grid_path()
-                            if success:
-                                self.preview_result = {'path': path, 'solver_result': result, 'teleports': teleports}
-                                return
-
-                            # Try graph-guided teleport path
-                            success2, path2, teleports2 = self._graph_guided_path()
-                            if success2:
-                                self.preview_result = {'path': path2, 'solver_result': result, 'teleports': teleports2}
-                                return
-                    except Exception:
-                        # Log but do not raise - worker should not crash main thread
-                        logger.debug('Graph-based quick solve failed in worker', exc_info=True)
-
-                # Otherwise try fast grid-based solver directly
-                try:
-                    success, path, teleports = self._smart_grid_path()
-                    if success:
-                        self.preview_result = {'path': path, 'solver_result': {}, 'teleports': teleports}
-                        return
-                except Exception:
-                    logger.debug('Grid quick solve failed in worker', exc_info=True)
-            finally:
-                # indicate worker finished even if no preview found
-                self.preview_thread = None
-
-            # No quick preview found; schedule heavy solver if allowed
-            if os.environ.get('KLTN_ALLOW_HEAVY', '1') == '1':
-                try:
-                    # Launch heavy solver asynchronously
-                    self._schedule_solver()
-                except Exception:
-                    logger.exception('Failed to schedule heavy solver from preview worker')
-            else:
-                self._set_message('No preview found; heavy solver disabled', 3.0)
-
-        # Start preview using a separate process to avoid GIL starvation on heavy maps.
-        # Create the grid file and spawn preview process *asynchronously* to avoid blocking the main thread
-        def _spawn_preview_process_async():
-            try:
-                import numpy as _np
-                cur = self.maps[self.current_map_idx]
-                grid_data = cur.global_grid if hasattr(cur, 'global_grid') else cur
-                # Extract graph connectivity for stair traversal
-                graph = getattr(cur, 'graph', None)
-                room_to_node = getattr(cur, 'room_to_node', None)
-                room_positions = getattr(cur, 'room_positions', None)
-                node_to_room = getattr(cur, 'node_to_room', None)
-                
-                fd, grid_file = tempfile.mkstemp(prefix='zave_preview_', suffix='.npy')
-                os.close(fd)
-                _np.save(grid_file, _np.array(grid_data, dtype=_np.int64))
-                fd_out, preview_out = tempfile.mkstemp(prefix='zave_preview_out_', suffix='.pkl')
-                os.close(fd_out)
-                # Child process writes the preview payload; remove placeholder first.
-                try:
-                    os.remove(preview_out)
-                except Exception:
-                    pass
-                start_pos = getattr(getattr(self, 'env', None), 'start_pos', None)
-                goal_pos = getattr(getattr(self, 'env', None), 'goal_pos', None)
-                if start_pos is None or goal_pos is None:
-                    logger.warning('Preview process skipped: missing start/goal positions')
-                    self.preview_result = None
-                    self.preview_done = True
-                    self._set_message('Preview unavailable (missing start/goal)', 2.0)
-                    return
-                preview_priority_options = {
-                    'tie_break': self.feature_flags.get('priority_tie_break', False),
-                    'key_boost': self.feature_flags.get('priority_key_boost', False),
-                    'enable_ara': self.feature_flags.get('enable_ara', False),
-                    'ara_weight': float(getattr(self, 'ara_weight', 1.0)),
-                    'representation': str(getattr(self, 'search_representation', 'hybrid')),
-                    'allow_diagonals': True,
-                }
-                proc = multiprocessing.Process(
-                    target=_run_preview_and_dump, 
-                    args=(grid_file, tuple(start_pos), tuple(goal_pos), getattr(self, 'algorithm_idx', 0), dict(self.feature_flags), preview_priority_options, preview_out),
-                    kwargs={'graph': graph, 'room_to_node': room_to_node, 'room_positions': room_positions, 'node_to_room': node_to_room},
-                    daemon=True)
-                logger.debug('Starting preview process for map %s -> outfile=%s gridfile=%s', self.current_map_idx, preview_out, grid_file)
-                proc.start()
-                logger.debug('Preview process started pid=%s alive=%s', getattr(proc,'pid',None), proc.is_alive())
-                self.preview_proc = proc
-                self.preview_outfile = preview_out
-                self.preview_gridfile = grid_file
-                self.preview_result = None
-                self.preview_done = False
-                self._set_message('Preview search started (background)')
-            except Exception:
-                logger.exception('Failed to spawn preview process; falling back to threaded worker')
-                # Fallback to threaded worker (less ideal) if process spawn fails
-                self.preview_result = None
-                self.preview_thread = threading.Thread(target=_preview_worker, daemon=True)
-                self.preview_thread.start()
-                self._set_message('Preview search started (thread)')
-
-        # Spawn the preview starting sequence on a short-lived background thread so the main
-        # UI thread never blocks on file IO or process creation (can be slow on Windows).
-        th = threading.Thread(target=_spawn_preview_process_async, daemon=True)
-        th.start()
+        _start_preview_for_current_map_helper(
+            gui=self,
+            logger=logger,
+            pygame_module=pygame,
+            multiprocessing_module=multiprocessing,
+            threading_module=threading,
+            time_module=time,
+            run_preview_and_dump=_run_preview_and_dump,
+        )
 
     def _clear_solver_state(self, reason="cleanup"):
         """Helper to centralize solver state cleanup and ensure consistency.
@@ -6463,52 +3087,15 @@ class ZeldaGUI:
         Args:
             reason: Description of why solver is being cleared (for logging)
         """
-        logger.info('SOLVER_CLEANUP: Clearing solver state (%s)', reason)
-        self.solver_running = False
-        self.solver_done = True
-        self.solver_proc = None
-        self.solver_thread = None
-        self.solver_outfile = None
-        self.solver_gridfile = None
-        self.solver_start_time = None
-        self.solver_starting = False
-        # CRITICAL: Clear the saved algorithm so banner doesn't show stale info
-        if hasattr(self, 'solver_algorithm_idx'):
-            delattr(self, 'solver_algorithm_idx')
-        logger.debug('SOLVER_CLEANUP: State cleared')
+        _clear_solver_state_helper(gui=self, reason=reason, logger=logger)
 
     def _sync_solver_dropdown_settings(self):
         """Refresh algorithm/representation/ARA values from dropdown widgets."""
-        alg_idx = int(getattr(self, 'algorithm_idx', 0) or 0)
-        rep_mode = str(getattr(self, 'search_representation', 'hybrid') or 'hybrid').lower()
-        ara_weight = float(getattr(self, 'ara_weight', 1.0) or 1.0)
+        return _sync_solver_dropdown_settings_helper(gui=self, sync_fn=sync_solver_dropdown_settings)
 
-        rep_map = {0: 'hybrid', 1: 'tile', 2: 'graph'}
-        if hasattr(self, 'widget_manager') and self.widget_manager:
-            for widget in self.widget_manager.widgets:
-                control_name = getattr(widget, 'control_name', None)
-                if control_name == 'algorithm':
-                    try:
-                        alg_idx = int(widget.selected)
-                    except Exception:
-                        pass
-                elif control_name == 'representation':
-                    rep_mode = rep_map.get(getattr(widget, 'selected', 0), rep_mode)
-                elif control_name == 'ara_weight':
-                    try:
-                        ara_weight = float(widget.options[widget.selected])
-                    except Exception:
-                        pass
-
-        if rep_mode not in {'tile', 'graph', 'hybrid'}:
-            rep_mode = 'hybrid'
-        if not isinstance(ara_weight, (int, float)) or ara_weight <= 0:
-            ara_weight = 1.0
-
-        self.algorithm_idx = alg_idx
-        self.search_representation = rep_mode
-        self.ara_weight = float(ara_weight)
-        return alg_idx, rep_mode, float(ara_weight)
+    def _algorithm_name(self, algorithm_idx):
+        """Return canonical display label for a solver index."""
+        return algorithm_label(algorithm_idx)
 
     def _start_auto_solve(self):
         """Start auto-solve mode using state-space solver with inventory tracking.
@@ -6517,208 +3104,64 @@ class ZeldaGUI:
         the existing `_schedule_solver()` helper. Non-blocking and safe to call
         from the main loop or event handlers.
         """
-        algorithm_names = ["A*", "BFS", "Dijkstra", "Greedy", "D* Lite",
-                         "DFS/IDDFS", "Bidirectional A*",
-                         "CBS (Balanced)", "CBS (Explorer)", "CBS (Cautious)",
-                         "CBS (Forgetful)", "CBS (Speedrunner)", "CBS (Greedy)"]
         
-        # CRITICAL FIX: Read algorithm_idx directly from dropdown widget at solve-time
-        # This is the DEFINITIVE source of truth for which algorithm the user selected
-        alg_idx, rep_mode, ara_weight = self._sync_solver_dropdown_settings()
-        logger.info(
-            'SOLVER_FIX: Synced settings from dropdowns -> alg_idx=%d, representation=%s, ara_weight=%.2f',
-            alg_idx,
-            rep_mode,
-            ara_weight,
+        _start_auto_solve_helper(gui=self, logger=logger, debug_sync_solver=DEBUG_SYNC_SOLVER)
+
+    def _prepare_active_solver_for_new_start(self) -> bool:
+        """Return True when a new solver run may proceed, False to block startup."""
+        return _prepare_active_solver_for_new_start_helper(
+            gui=self,
+            logger=logger,
+            time_module=time,
+            evaluate_solver_recovery_state=evaluate_solver_recovery_state,
+            compute_timeout_seconds=self._compute_solver_timeout_seconds,
+            terminate_hung_process=self._terminate_hung_solver_process,
+            force_recovery_state=self._force_solver_recovery_state,
+            log_active_state=self._log_active_solver_state,
         )
 
-        alg_name = algorithm_names[alg_idx] if alg_idx < len(algorithm_names) else f"Algorithm {alg_idx}"
-        
-        logger.info('═══════════════════════════════════════════════════')
-        logger.info('DEBUG_SOLVER: _start_auto_solve() called')
-        logger.info(f'  Algorithm: {alg_name} (idx={alg_idx})')
-        logger.info('  Search representation: %s, ara_weight=%.2f', self.search_representation, self.ara_weight)
-        logger.info('DEBUG_SOLVER: solver_running=%s, auto_mode=%s, auto_start_solver=%s',
-                    getattr(self, 'solver_running', None),
-                    getattr(self, 'auto_mode', None),
-                    getattr(self, 'auto_start_solver', None))
-        logger.info('═══════════════════════════════════════════════════')
-        
-        if getattr(self, 'solver_running', False):
-            self._set_message('Solver already running', 1.5)
-            logger.warning('DEBUG_SOLVER: Solver already running - returning early')
-            # CRITICAL DIAGNOSTIC: Log full solver state to help diagnose stuck state
-            logger.warning('DEBUG_SOLVER: Solver state dump:')
-            logger.warning('  solver_running=%s', getattr(self, 'solver_running', None))
-            logger.warning('  solver_done=%s', getattr(self, 'solver_done', None))
-            logger.warning('  solver_proc=%s (alive=%s)', 
-                          getattr(self, 'solver_proc', None),
-                          getattr(getattr(self, 'solver_proc', None), 'is_alive', lambda: 'N/A')())
-            logger.warning('  solver_outfile=%s (exists=%s)', 
-                          getattr(self, 'solver_outfile', None),
-                          os.path.exists(getattr(self, 'solver_outfile', '') or ''))
-            logger.warning('  solver_start_time=%s (age=%.1fs)', 
-                          getattr(self, 'solver_start_time', None),
-                          (time.time() - getattr(self, 'solver_start_time', time.time())))
-            
-            # RECOVERY: If solver_running=True but proc is dead and done, force cleanup
-            proc = getattr(self, 'solver_proc', None)
-            done = getattr(self, 'solver_done', False)
-            start_time = getattr(self, 'solver_start_time', None)
-            try:
-                proc_alive = proc.is_alive() if proc else False
-            except Exception:
-                proc_alive = False
-            
-            # Calculate age and check timeout (algorithm-aware defaults, configurable via env var)
-            solver_age = (time.time() - start_time) if start_time else 0
-            active_alg = int(getattr(self, 'solver_algorithm_idx', getattr(self, 'algorithm_idx', 0)))
-            if active_alg == 0:
-                default_timeout = 60.0
-            elif active_alg in (1, 2):
-                default_timeout = 180.0
-            elif active_alg == 3:
-                default_timeout = 90.0
-            elif active_alg == 4:
-                default_timeout = 120.0
-            else:
-                default_timeout = 240.0
+    def _log_active_solver_state(self):
+        _log_active_solver_state_helper(gui=self, logger=logger, os_module=os, time_module=time)
 
-            try:
-                current_map = self.maps[self.current_map_idx]
-                grid_ref = current_map.global_grid if hasattr(current_map, 'global_grid') else current_map
-                grid_cells = int(np.asarray(grid_ref).size)
-                baseline_cells = 16 * 11 * 8
-                scale = float(np.clip(grid_cells / max(1, baseline_cells), 1.0, 3.0))
-                default_timeout *= scale
-            except Exception:
-                pass
-            solver_timeout = float(os.environ.get('KLTN_SOLVER_TIMEOUT', str(default_timeout)))
-            
-            # FORCE CLEANUP if:
-            # 1. Process dead but not marked done, OR
-            # 2. Process alive but timed out (hung), OR
-            # 3. No process handle at all (spawn failed)
-            needs_recovery = False
-            recovery_reason = None
-            
-            if not proc:
-                needs_recovery = True
-                recovery_reason = 'No process handle (spawn failed or already cleaned)'
-            elif not proc_alive and not done:
-                needs_recovery = True
-                recovery_reason = f'Process dead (exitcode={getattr(proc, "exitcode", "N/A")}) but not marked done'
-            elif proc_alive and solver_age > solver_timeout:
-                needs_recovery = True
-                recovery_reason = f'Process alive but timed out ({solver_age:.1f}s > {solver_timeout}s)'
-                # Terminate hung process
-                try:
-                    logger.warning('DEBUG_SOLVER: Terminating hung process pid=%s', getattr(proc, 'pid', 'N/A'))
-                    proc.terminate()
-                    proc.join(timeout=1.0)
-                    if proc.is_alive():
-                        logger.error('DEBUG_SOLVER: Process still alive after terminate, trying kill')
-                        proc.kill()
-                        proc.join(timeout=0.5)
-                except Exception as e:
-                    logger.exception('DEBUG_SOLVER: Failed to terminate hung process: %s', e)
-            
-            if needs_recovery:
-                logger.error('DEBUG_SOLVER: RECOVERY TRIGGERED - %s', recovery_reason)
-                logger.error('DEBUG_SOLVER: Force-cleaning stuck solver state')
-                self.solver_running = False
-                # CRITICAL FIX: DO NOT set solver_done=True during recovery!
-                # We want the main loop to poll and clean up properly, not skip polling entirely.
-                # self.solver_done = True  # ← BUG: This prevents retry from working!
-                self.solver_proc = None
-                self.solver_thread = None
-                self.solver_outfile = None
-                self.solver_gridfile = None
-                self.solver_start_time = None
-                self.solver_starting = False
-                # Clear solver_algorithm_idx to avoid stale banner display
-                if hasattr(self, 'solver_algorithm_idx'):
-                    delattr(self, 'solver_algorithm_idx')
-                self._set_message(f'Recovered: {recovery_reason[:40]}')
-                logger.info('DEBUG_SOLVER: Recovery complete - retrying solver start')
-                # Don't return - allow immediate retry after recovery
-            else:
-                # Still running legitimately - don't allow retry
-                logger.warning('DEBUG_SOLVER: Solver legitimately running (age=%.1fs < %.1fs timeout)', solver_age, solver_timeout)
-                return
+    def _compute_solver_timeout_seconds(self, active_alg: int) -> float:
+        return _compute_solver_timeout_seconds_helper(
+            gui=self,
+            active_alg=active_alg,
+            default_solver_timeout_for_algorithm=default_solver_timeout_for_algorithm,
+            scale_timeout_by_grid_size=scale_timeout_by_grid_size,
+            np_module=np,
+            os_module=os,
+        )
 
-        # Optional fast prechecks + auto-prune before launching heavy solver.
-        precheck_ok, precheck_msg = self._run_prechecks_and_optional_prune()
-        if not precheck_ok:
-            self._set_message(precheck_msg or 'Precheck failed', 4.0)
-            logger.warning('PRECHECK: Solve blocked: %s', precheck_msg)
-            return
-        if precheck_msg:
-            logger.info('PRECHECK: %s', precheck_msg)
+    def _terminate_hung_solver_process(self, proc):
+        _terminate_hung_solver_process_helper(proc=proc, logger=logger)
 
-        # Stop any running preview process to avoid orphaned workers and stale output
-        try:
-            p = getattr(self, 'preview_proc', None)
-            if p and p.is_alive():
-                logger.info('DEBUG_SOLVER: Terminating existing preview process pid=%s', getattr(p, 'pid', None))
-                try:
-                    p.terminate()
-                except Exception:
-                    logger.exception('DEBUG_SOLVER: Failed to terminate preview process')
-                try:
-                    p.join(timeout=0.2)
-                except Exception:
-                    pass
-        except Exception:
-            logger.exception('DEBUG_SOLVER: Error while stopping preview process')
-        try:
-            out = getattr(self, 'preview_outfile', None)
-            if out and os.path.exists(out):
-                os.remove(out)
-        except Exception:
-            pass
-        try:
-            gf = getattr(self, 'preview_gridfile', None)
-            if gf and os.path.exists(gf):
-                os.remove(gf)
-        except Exception:
-            pass
-        # Clear any previous preview state
-        self.preview_done = False
-        self.preview_proc = None
-        self.preview_outfile = None
-        self.preview_gridfile = None
-        # Reset solver_done so we can detect when it completes
-        self.solver_done = False
-        self.solver_thread = None
-        # CRITICAL: Clear previous path so old path doesn't show while new solver runs
-        self.auto_path = []
-        self.auto_mode = False
-        self.auto_step_idx = 0
-        # Clear visual state from previous solve
-        self.block_push_animations = []  # Clear any pending block animations
-        self.door_unlock_times = {}  # Clear door unlock visual state
-        # Clear collected items state (will be reset again in _execute_auto_solve)
-        self.collected_items = []
-        self.collected_positions = set()
-        logger.info('DEBUG_SOLVER: Cleared previous state, solver_done=False')
-        
-        # DEBUG: Synchronous solver for debugging multiprocessing issues
-        if DEBUG_SYNC_SOLVER:
-            logger.warning('DEBUG_SOLVER: Running solver SYNCHRONOUSLY (blocking)')
-            self._run_solver_sync(algorithm_idx=alg_idx)
-            return
-        
-        # Indicate starting
-        self._set_message('Starting solver in background...', 2.0)
-        try:
-            # Pass explicit algorithm_idx to eliminate race conditions and call scheduler exactly once.
-            self._schedule_solver(algorithm_idx=alg_idx)
-            logger.info('DEBUG_SOLVER: _schedule_solver() completed without exception')
-        except Exception:
-            logger.exception('Failed to schedule solver')
-            self._set_message('Failed to start solver', 3.0)
-            self.preview_on_next_solver_result = False
+    def _force_solver_recovery_state(self, recovery_reason: str):
+        _force_solver_recovery_state_helper(gui=self, recovery_reason=recovery_reason, logger=logger)
+
+    def _cleanup_preview_before_solver_start(self):
+        """Stop preview workers/files so new solve starts from a clean state."""
+        _cleanup_preview_before_solver_start_helper(gui=self, logger=logger, os_module=os)
+
+    def _reset_solver_visual_state_before_start(self):
+        """Clear solver/visual state from previous runs before scheduling a new solve."""
+        _reset_solver_visual_state_before_start_helper(gui=self)
+
+    def _get_solver_map_context(self):
+        """Return current grid and optional topology context needed by solver backends."""
+        return _get_solver_map_context_orchestration_helper(
+            gui=self,
+            get_solver_map_context_helper=_get_solver_map_context_helper,
+        )
+
+    def _build_solver_request(self, algorithm_idx=None, on_missing_message='Start/goal not defined for this map'):
+        """Build a canonical solver request payload from current GUI state."""
+        return _build_solver_request_orchestration_helper(
+            gui=self,
+            build_solver_request_helper=_build_solver_request_helper,
+            algorithm_idx=algorithm_idx,
+            on_missing_message=on_missing_message,
+        )
 
     def _run_solver_sync(self, algorithm_idx=None):
         """DEBUG: Run solver synchronously in main thread to bypass multiprocessing issues.
@@ -6726,79 +3169,12 @@ class ZeldaGUI:
         This blocks the UI but helps diagnose whether the issue is in multiprocessing
         or in the solver/animation logic itself.
         """
-        logger.warning('DEBUG_SYNC: Starting synchronous solver (UI will freeze)')
-        self._set_message('Running solver synchronously (debug)...', 5.0)
-        self._sync_solver_dropdown_settings()
-        
-        # Get grid and positions
-        cur = self.maps[self.current_map_idx]
-        if hasattr(cur, 'global_grid'):
-            grid_arr = cur.global_grid
-            # Extract graph connectivity data for stair traversal
-            graph = getattr(cur, 'graph', None)
-            room_to_node = getattr(cur, 'room_to_node', None)
-            room_positions = getattr(cur, 'room_positions', None)
-            node_to_room = getattr(cur, 'node_to_room', None)
-        else:
-            grid_arr = cur
-            graph = None
-            room_to_node = None
-            room_positions = None
-            node_to_room = None
-        
-        if not self.env or not getattr(self.env, 'start_pos', None) or not getattr(self.env, 'goal_pos', None):
-            self._set_message('Start/goal not defined for this map')
-            logger.error('DEBUG_SYNC: No start/goal defined')
-            return
-        
-        start = tuple(self.env.start_pos)
-        goal = tuple(self.env.goal_pos)
-        alg_idx = algorithm_idx if algorithm_idx is not None else getattr(self, 'algorithm_idx', 0)
-        flags = dict(self.feature_flags)
-        priority_options = {
-            'tie_break': self.feature_flags.get('priority_tie_break', False),
-            'key_boost': self.feature_flags.get('priority_key_boost', False),
-            'enable_ara': self.feature_flags.get('enable_ara', False),
-            'ara_weight': float(getattr(self, 'ara_weight', 1.0)),
-            'representation': str(getattr(self, 'search_representation', 'hybrid')),
-            'allow_diagonals': True,
-        }
-        
-        logger.info('DEBUG_SYNC: Calling _solve_in_subprocess with start=%s, goal=%s', start, goal)
-        
-        try:
-            # Call solver directly in main thread with graph data for stair traversal
-            result = _solve_in_subprocess(grid_arr, start, goal, alg_idx, flags, priority_options,
-                                          graph=graph, room_to_node=room_to_node, room_positions=room_positions,
-                                          node_to_room=node_to_room)
-            
-            logger.info('DEBUG_SYNC: Solver returned: success=%s, path_len=%d',
-                        result.get('success'),
-                        len(result.get('path', []) or []))
-            
-            if result.get('success') and result.get('path'):
-                self.auto_path = result['path']
-                solver_result = result.get('solver_result', {})
-                
-                logger.info('DEBUG_SYNC: Path loaded successfully, first=%s, last=%s',
-                            self.auto_path[0] if self.auto_path else None,
-                            self.auto_path[-1] if self.auto_path else None)
-                
-                # Always execute auto-solve in sync mode (we want to test animation)
-                logger.info('DEBUG_SYNC: Calling _execute_auto_solve()')
-                self._execute_auto_solve(self.auto_path, solver_result, teleports=0)
-                self._set_message(f'DEBUG: Solver done! Path: {len(self.auto_path)} steps. auto_mode={self.auto_mode}')
-                
-                logger.info('DEBUG_SYNC: After execute: auto_mode=%s, auto_step_idx=%s',
-                            self.auto_mode, self.auto_step_idx)
-            else:
-                msg = result.get('message') or 'No path found'
-                logger.warning('DEBUG_SYNC: Solver failed: %s', msg)
-                self._set_message(f'DEBUG: No path - {msg}')
-                
-        except Exception as e:
-            logger.exception('DEBUG_SYNC: Solver exception')
-            self._set_message(f'DEBUG: Solver error - {e}')
+        _run_solver_sync_helper(
+            gui=self,
+            logger=logger,
+            solve_in_subprocess=_solve_in_subprocess,
+            algorithm_idx=algorithm_idx,
+        )
 
     def _watchdog_loop(self):
         """Background watchdog that writes stack traces and a screenshot when the main loop stalls.
@@ -6809,69 +3185,13 @@ class ZeldaGUI:
         - KLTN_WATCHDOG_DUMP_LIMIT (how many dumps to write, default 3)
         - KLTN_WATCHDOG_TERMINATE_SOLVER (if '1' will terminate solver proc when dumping)
         """
-        try:
-            import faulthandler
-        except Exception:
-            logger.debug('faulthandler not available; watchdog disabled')
-            return
-
-        while getattr(self, '_watchdog_enabled', False):
-            try:
-                time.sleep(0.5)
-                last = getattr(self, 'last_frame_time', 0)
-                now = time.time()
-                if now - last > getattr(self, '_watchdog_threshold', 1.25):
-                    # Avoid spamming dumps
-                    if self._watchdog_dumps >= getattr(self, '_watchdog_dump_limit', 3):
-                        continue
-                    self._watchdog_dumps += 1
-                    self._watchdog_last_dump = now
-
-                    ts = int(now)
-                    pid = os.getpid()
-                    tmpdir = tempfile.gettempdir()
-                    trace_path = os.path.join(tmpdir, f'zave_watchdog_trace_{pid}_{ts}.txt')
-                    try:
-                        with open(trace_path, 'w') as f:
-                            f.write(f'Watchdog dump: time={now} last_frame={last}\n')
-                            faulthandler.dump_traceback(file=f)
-                        logger.warning('Watchdog detected stall; stack dump written: %s', trace_path)
-                    except Exception:
-                        logger.exception('Failed writing watchdog stack dump')
-
-                    # Request main thread to save a screenshot (pygame display calls must be done on the main thread)
-                    try:
-                        shot_path = os.path.join(tmpdir, f'zave_watchdog_shot_{pid}_{ts}.png')
-                        # Signal main thread to save the screenshot instead of calling pygame from this thread
-                        try:
-                            self._watchdog_request_screenshot = shot_path
-                            logger.warning('Watchdog requested screenshot: %s', shot_path)
-                        except Exception:
-                            logger.exception('Failed to set watchdog screenshot request')
-                    except Exception:
-                        logger.exception('Watchdog screenshot request failed')
-
-                    # Optionally terminate solver process if configured (to recover UI)
-                    try:
-                        if os.environ.get('KLTN_WATCHDOG_TERMINATE_SOLVER') == '1':
-                            proc = getattr(self, 'solver_proc', None)
-                            if proc and proc.is_alive():
-                                logger.warning('Watchdog terminating solver process pid=%s', getattr(proc,'pid',None))
-                                try:
-                                    proc.terminate()
-                                except Exception:
-                                    logger.exception('Failed to terminate solver process')
-                    except Exception:
-                        logger.exception('Watchdog failed to check/terminate solver process')
-
-                    # Set a user-visible message
-                    try:
-                        self._set_message(f'Watchdog: dumped trace ({os.path.basename(trace_path)})', 5.0)
-                    except Exception:
-                        pass
-            except Exception:
-                logger.exception('Uncaught exception in watchdog loop')
-        logger.debug('Watchdog loop exiting')
+        _watchdog_loop_helper(
+            gui=self,
+            logger=logger,
+            os_module=os,
+            time_module=time,
+            tempfile_module=tempfile,
+        )
         return
         
 
@@ -6882,208 +3202,54 @@ class ZeldaGUI:
         Args:
             algorithm_idx: Algorithm index to use (if None, read from self.algorithm_idx)
         """
-        # Make scheduling atomic to avoid races when multiple callers attempt to
-        # start the solver concurrently. Acquire a short-lived lock, check the
-        # guard and reserve the solver slot while holding the lock.
-        with self._solver_lock:
-            if self.solver_running:
-                self._set_message('Solver already running...')
-                logger.warning('SOLVER: _schedule_solver blocked - solver_running already True')
-                return False
-            # Reserve the solver slot immediately (prevents TOCTOU)
-            self.solver_running = True
-            self.solver_done = False
-            self.solver_start_time = time.time()
-            self.solver_starting = True
-        self._sync_solver_dropdown_settings()
-        
-        # CRITICAL FIX: Use explicit algorithm_idx parameter if provided
-        # This eliminates race conditions between dropdown widget state and self.algorithm_idx
-        if algorithm_idx is not None:
-            current_alg_idx = algorithm_idx
-            # Also sync self.algorithm_idx for consistency with other parts of the code
-            self.algorithm_idx = algorithm_idx
-            logger.info('SOLVER_FIX: Using explicit algorithm_idx=%d passed to _schedule_solver()', algorithm_idx)
-        else:
-            current_alg_idx = getattr(self, 'algorithm_idx', None)
-            logger.info('SOLVER: Using self.algorithm_idx=%s (no explicit arg provided)', current_alg_idx)
-        
-        # DEBUG: Log algorithm_idx when solver starts to diagnose CBS→A* display bug
-        logger.info('SOLVER: Acquired solver lock, solver_running=True, solver_done=False, start_time=%.3f, algorithm_idx=%s', 
-                   self.solver_start_time, current_alg_idx)
-        
-        # CRITICAL FIX: Save the algorithm_idx that THIS solver is using
-        # This ensures the banner shows the correct algorithm even if user changes dropdown mid-solve
-        self.solver_algorithm_idx = current_alg_idx if current_alg_idx is not None else 0
-        
-        self._auto_recenter_done = False
+        return _schedule_solver_helper(
+            gui=self,
+            algorithm_idx=algorithm_idx,
+            logger=logger,
+            time_module=time,
+            threading_module=threading,
+        )
 
-        cur = self.maps[self.current_map_idx]
-        if hasattr(cur, 'global_grid'):
-            grid_arr = cur.global_grid
-            # Extract graph connectivity data for stair traversal
-            graph = getattr(cur, 'graph', None)
-            room_to_node = getattr(cur, 'room_to_node', None)
-            room_positions = getattr(cur, 'room_positions', None)
-            node_to_room = getattr(cur, 'node_to_room', None)
-        else:
-            grid_arr = cur
-            graph = None
-            room_to_node = None
-            room_positions = None
-            node_to_room = None
-        # Ensure start/goal defined
-        if not self.env or not getattr(self.env, 'start_pos', None) or not getattr(self.env, 'goal_pos', None):
-            self._set_message('Start/goal not defined for this map')
-            # CRITICAL: Clear solver_running immediately on early exit
-            self._clear_solver_state(reason="missing start/goal")
-            logger.warning('SOLVER: Missing start/goal - cleared solver state')
-            return False
-        start = tuple(self.env.start_pos)
-        goal = tuple(self.env.goal_pos)
-        alg_idx = current_alg_idx if current_alg_idx is not None else 0
-        flags = dict(self.feature_flags)
-        priority_options = {
-            'tie_break': self.feature_flags.get('priority_tie_break', False),
-            'key_boost': self.feature_flags.get('priority_key_boost', False),
-            'enable_ara': self.feature_flags.get('enable_ara', False),
-            'ara_weight': float(getattr(self, 'ara_weight', 1.0)),
-            'representation': str(getattr(self, 'search_representation', 'hybrid')),
-            'allow_diagonals': True,  # Enable for fast pathfinding (30× speedup), converted to 4-dir for display
-        }
+    def _create_solver_temp_files(self, grid_arr):
+        """Create output and optional grid temp files for solver worker launch."""
+        return _create_solver_temp_files_helper(grid_arr)
 
-        # Create unique temp file path for child to write result with pickle.
-        # Use mkstemp instead of timestamp names to avoid collisions across rapid restarts.
-        fd_out, out_file = tempfile.mkstemp(prefix='zave_solver_out_', suffix='.pkl')
-        os.close(fd_out)
-        try:
-            os.remove(out_file)
-        except Exception:
-            pass
-        logger.info('SOLVER: Starting subprocess, pickle_path=%s', out_file)
-        logger.info('SOLVER: start=%s, goal=%s, algorithm_idx=%s', start, goal, alg_idx)
+    def _launch_solver_worker(self, **kwargs):
+        """Launch solver process, with thread-based fallback on process failure."""
+        _launch_solver_worker_helper(
+            gui=self,
+            kwargs=kwargs,
+            logger=logger,
+            launch_solver_process=self._launch_solver_process,
+            start_solver_thread_fallback=self._start_solver_thread_fallback,
+            multiprocessing_module=multiprocessing,
+        )
 
-        # Save grid to .npy to avoid costly pickling in Process spawn
-        grid_file = None
-        try:
-            import numpy as _np
-            fd, grid_file = tempfile.mkstemp(prefix='zave_grid_', suffix='.npy')
-            os.close(fd)
-            _np.save(grid_file, _np.array(grid_arr, dtype=_np.int64))
-        except Exception:
-            # Fallback: try pickling to file (last resort)
-            try:
-                fd, grid_file = tempfile.mkstemp(prefix='zave_grid_', suffix='.pkl')
-                os.close(fd)
-                with open(grid_file, 'wb') as gf:
-                    pickle.dump(grid_arr, gf)
-            except Exception:
-                grid_file = None
-        
-        # CRITICAL: Set outfile/gridfile IMMEDIATELY so run loop can find them
-        # This must happen BEFORE spawning the thread
-        self.solver_outfile = out_file
-        self.solver_gridfile = grid_file
-        logger.info('SOLVER: File handles stored: outfile=%s, gridfile=%s', out_file, grid_file)
-        
-        def _start_proc():
-            try:
-                # Test mode: start a lightweight sleep target instead of full solver to validate process spawn
-                if os.environ.get('KLTN_SOLVER_TEST') == '1':
-                    import time as _time
-                    proc = multiprocessing.Process(target=_time.sleep, args=(2,), daemon=True)
-                    proc.start()
-                    self.solver_proc = proc
-                    self.solver_thread = None
-                    self.solver_starting = False
-                    # Note: solver_outfile and solver_gridfile already set before _start_proc
-                    self._set_message('Test solver process started (sleep)')
-                    return
+    def _launch_solver_process(self, **kwargs):
+        _launch_solver_process_helper(
+            gui=self,
+            launch_kwargs=kwargs,
+            run_solver_and_dump=_run_solver_and_dump,
+            multiprocessing_module=multiprocessing,
+            logger=logger,
+        )
 
-                # Prefer passing a grid file path to avoid large pickle overhead
-                grid_arg = grid_file if grid_file else grid_arr
-                logger.info('SOLVER: Creating subprocess with gridfile=%s, outfile=%s', grid_file, out_file)
-                proc = multiprocessing.Process(target=_run_solver_and_dump, 
-                                               args=(grid_arg, start, goal, alg_idx, flags, priority_options, out_file),
-                                               kwargs={'graph': graph, 'room_to_node': room_to_node, 'room_positions': room_positions, 'node_to_room': node_to_room},
-                                               daemon=True)
-                proc.start()
-                logger.info('SOLVER: Subprocess started pid=%s, is_alive=%s', getattr(proc,'pid',None), proc.is_alive())
-                self.solver_proc = proc
-                self.solver_thread = None
-                self.solver_starting = False
-                # Note: solver_outfile and solver_gridfile already set before _start_proc
-                self._set_message('Solver started in background')
-                logger.info('SOLVER: Process handle stored, waiting for completion in run loop')
-            except Exception as e:
-                logger.exception('SOLVER: Failed to start solver process: %s', e)
-                # Fallback to thread-based run (less ideal)
-                # Note: solver_running already True, keep it True during fallback
-                logger.info('SOLVER: Falling back to thread-based solver')
-                
-                # CRITICAL FIX: Clear solver_starting IMMEDIATELY so main loop knows thread has started
-                # If we don't do this, main loop will wait in startup grace period and miss the result
-                self.solver_starting = False
-                
-                def _thread_fallback():
-                    try:
-                        # Use grid_arr (not grid which doesn't exist in this scope)
-                        # Pass graph connectivity for stair traversal
-                        res = _solve_in_subprocess(grid_arr, start, goal, alg_idx, flags, priority_options,
-                                                   graph=graph, room_to_node=room_to_node, room_positions=room_positions,
-                                                   node_to_room=node_to_room)
-                        logger.info('SOLVER: Thread fallback completed, success=%s', res.get('success') if res else None)
-                        # write fallback output
-                        try:
-                            with open(out_file, 'wb') as f:
-                                pickle.dump(res, f)
-                            logger.info('SOLVER: Thread fallback wrote result to %s', out_file)
-                        except Exception as write_err:
-                            logger.exception('SOLVER: Thread fallback failed to write output: %s', write_err)
-                    except Exception as solve_err:
-                        logger.exception('SOLVER: Thread fallback solver exception: %s', solve_err)
-                    finally:
-                        # CRITICAL FIX: Only clear solver_running, NOT solver_done!
-                        # Main loop needs solver_done=False to detect completion and read results.
-                        # Setting solver_done=True here would skip result polling entirely.
-                        self.solver_running = False
-                        self.solver_start_time = None
-                        self.solver_starting = False
-                        self.solver_thread = None
-                        logger.info('SOLVER: Thread fallback finished, solver_running=False (main loop will poll results)')
-                # Store outfile so run loop can read it
-                self.solver_outfile = out_file
-                self.solver_gridfile = grid_file
-                try:
-                    th = threading.Thread(target=_thread_fallback, daemon=True)
-                    self.solver_thread = th
-                    th.start()
-                    self._set_message('Solver started in background (thread fallback)')
-                except Exception as thread_err:
-                    logger.exception('SOLVER: Failed to start thread fallback: %s', thread_err)
-                    # CRITICAL: If thread spawn fails, clear solver state BUT NOT solver_done!
-                    # Setting solver_done=True would prevent the completion block from cleaning up temp files.
-                    self.solver_running = False
-                    self.solver_proc = None
-                    self.solver_thread = None
-                    self.solver_outfile = None
-                    # Clear solver_algorithm_idx to avoid stale banner display
-                    if hasattr(self, 'solver_algorithm_idx'):
-                        delattr(self, 'solver_algorithm_idx')
-                    self.solver_gridfile = None
-                    self.solver_start_time = None
-                    self.solver_starting = False
-                    self._set_message('Failed to start solver')
-                    logger.error('SOLVER: Complete failure - all solver mechanisms exhausted')
-        # Start the process on a worker thread to avoid blocking the caller
-        try:
-            t = threading.Thread(target=_start_proc, daemon=True)
-            t.start()
-        except Exception:
-            _start_proc()
+    def _solver_thread_fallback_worker(self, **kwargs):
+        _solver_thread_fallback_worker_helper(
+            gui=self,
+            launch_kwargs=kwargs,
+            solve_in_subprocess=_solve_in_subprocess,
+            logger=logger,
+        )
 
-        # Indicate scheduling succeeded
-        return True
+    def _start_solver_thread_fallback(self, **kwargs):
+        _start_solver_thread_fallback_helper(
+            gui=self,
+            launch_kwargs=kwargs,
+            threading_module=threading,
+            worker_target=self._solver_thread_fallback_worker,
+            logger=logger,
+        )
 
     def _execute_auto_solve(self, path, solver_result, teleports=0):
         """
@@ -7094,1357 +3260,89 @@ class ZeldaGUI:
             solver_result: Solver metadata (may include CBS metrics)
             teleports: Number of teleport/warp moves
         """
-        # Validate path before starting animation
-        if not path or len(path) == 0:
-            logger.error('EXECUTE: Refusing to start animation with empty path')
-            self._show_error('No valid path to animate')
-            return
-        
-        logger.info('EXECUTE: path=%d steps, setting auto_mode=True', len(path) if path else 0)
-        logger.info('EXECUTE: Before state: auto_mode=%s, auto_step_idx=%s',
-                    getattr(self, 'auto_mode', None),
-                    getattr(self, 'auto_step_idx', None))
-        
-        self.auto_path = [tuple(p) for p in path]
-        self.auto_step_idx = 0
-        self.auto_mode = True
-        self.auto_step_timer = 0.0  # Reset animation timer
-        self._auto_stuck_retries = 0
-        self.preview_on_next_solver_result = False
-        # Reset usage counters for visual run
-        self.keys_used = 0
-        self.bombs_used = 0
-        self.boss_keys_used = 0
-        self.used_items = []
-        # CRITICAL FIX: Reset collected items tracking when starting new auto-solve
-        # This ensures items show as uncollected at start of animation
-        self.collected_items = []
-        self.collected_positions = set()
-        self.keys_collected = 0
-        self.bombs_collected = 0
-        self.boss_keys_collected = 0
-        self.item_type_map = {}  # Reset item type mapping
-        self.item_pickup_times = {}  # Reset pickup flash timers
-        if self.env is None:
-            logger.error('EXECUTE: environment is not initialized')
-            self.auto_mode = False
-            self._show_error('Environment not initialized')
-            return
-        self.env.reset()
-        
-        # Store CBS metrics if available
-        if solver_result and 'cbs_metrics' in solver_result:
-            self.last_solver_metrics = {
-                'name': f"CBS ({solver_result.get('persona', 'unknown')})",
-                'nodes': solver_result.get('nodes', 0),
-                'path_len': len(path),
-                'cbs': solver_result['cbs_metrics']
-            }
-        
-        # === SCAN ITEMS ALONG PATH for visualization ===
-        try:
-            self._scan_items_along_path(path)
-            items_text = self._get_path_items_display_text()
-            if items_text:
-                logger.info('EXECUTE: Path items preview: %s', items_text)
-        except Exception as e:
-            logger.warning('EXECUTE: Failed to scan path items: %s', e)
-            items_text = ""
-        
-        logger.info('EXECUTE: After state: auto_mode=%s, auto_step_idx=%s, auto_path_len=%d',
-                    self.auto_mode,
-                    self.auto_step_idx,
-                    len(self.auto_path) if self.auto_path else 0)
-        logger.info('EXECUTE: Animation ready, first_step=%s, last_step=%s',
-                    self.auto_path[0] if self.auto_path else None,
-                    self.auto_path[-1] if self.auto_path else None)
-        
-        # Build informative message with path items preview
-        keys_used = solver_result.get('keys_used', 0) if solver_result else 0
-        keys_avail = solver_result.get('keys_available', 0) if solver_result else 0
-        key_info = f"Keys: {keys_avail}->{keys_avail - keys_used}" if keys_used > 0 else ""
-        
-        # Include items along path in message
-        items_display = self._get_path_items_display_text()
-        
-        # Check if CBS metrics are available
-        if solver_result and 'cbs_metrics' in solver_result:
-            cbs = solver_result['cbs_metrics']
-            persona = solver_result.get('persona', 'unknown')
-            base_msg = f"CBS ({persona.title()}): {len(path)} steps"
-            metrics_msg = f"Confusion: {cbs['confusion_index']:.2f} | Cognitive Load: {cbs['cognitive_load']:.2f}"
-            self.message = f"{base_msg} | {metrics_msg}"
-            
-            # Show detailed toast notification for CBS completion
-            toast_msg = f"CBS ({persona.title()}) completed | Confusion: {cbs['confusion_index']:.2f} | Entropy: {cbs['navigation_entropy']:.2f}"
-            self._show_toast(toast_msg, duration=4.0, toast_type='success')
-        elif teleports > 0:
-            self.message = f"Path: {len(path)} ({teleports} warps) {key_info}"
-        else:
-            base_msg = f"Path: {len(path)} steps"
-            if items_display:
-                self.message = f"{base_msg} | Items: {items_display}"
-            elif key_info:
-                self.message = f"{base_msg} {key_info}"
-            else:
-                self.message = base_msg
+        _execute_auto_solve_helper(
+            gui=self,
+            path=path,
+            solver_result=solver_result,
+            teleports=teleports,
+            logger=logger,
+        )
     
     def _execute_auto_solve_from_preview(self):
         """
         Start auto-solve after user confirms path preview.
         """
-        if not getattr(self, 'auto_path', None):
-            self.auto_mode = False
-            self._show_error('No preview path available')
-            return
-        self.auto_path = [tuple(p) for p in self.auto_path]
-
-        self.auto_step_idx = 0
-        self.auto_mode = True
-        self.auto_step_timer = 0.0  # Reset animation timer
-        self._auto_stuck_retries = 0
-        self.preview_on_next_solver_result = False
-        # Reset usage counters for visual run
-        self.keys_used = 0
-        self.bombs_used = 0
-        self.boss_keys_used = 0
-        self.used_items = []
-        # CRITICAL FIX: Reset collected items tracking when starting from preview
-        # This ensures items show as uncollected at start of animation
-        self.collected_items = []
-        self.collected_positions = set()
-        self.keys_collected = 0
-        self.bombs_collected = 0
-        self.boss_keys_collected = 0
-        self.item_type_map = {}  # Reset item type mapping
-        self.item_pickup_times = {}  # Reset pickup flash timers
-        if self.env is None:
-            self.auto_mode = False
-            self._show_error('Environment not initialized')
-            return
-        self.env.reset()
-        
-        # === SCAN ITEMS ALONG PATH for visualization ===
-        try:
-            self._scan_items_along_path(self.auto_path)
-            items_text = self._get_path_items_display_text()
-        except Exception as e:
-            logger.warning('EXECUTE_PREVIEW: Failed to scan path items: %s', e)
-            items_text = ""
-        
-        # Dismiss preview / overlay
-        self.path_preview_mode = False
-        preview_dialog = self.path_preview_dialog
-        self.path_preview_dialog = None
-        self.preview_overlay_visible = False
-
-        # Keep solver metadata available for HUD/route export.
-        if preview_dialog and getattr(preview_dialog, 'solver_result', None):
-            self.solver_result = preview_dialog.solver_result
-        
-        # Use stored path and show message with items preview
-        if preview_dialog:
-            base_msg = f"Auto-solve started! Path: {len(self.auto_path)} steps"
-            if items_text:
-                self.message = f"{base_msg} | Items: {items_text}"
-            else:
-                self.message = base_msg
-        else:
-            self.message = "Auto-solve started!"
+        _execute_auto_solve_from_preview_helper(gui=self, logger=logger)
     
     def _smart_grid_path(self):
         """
         Smart pathfinding that prioritizes walking and only warps via STAIRs.
         Returns (success, path, teleport_count).
         """
-        from collections import deque
-        import networkx as nx
-        
-        current_dungeon = self.maps[self.current_map_idx]
-        # Support both StitchedDungeon objects (with .global_grid) and raw numpy grids
-        if hasattr(current_dungeon, 'global_grid'):
-            grid = current_dungeon.global_grid
-            room_positions = getattr(current_dungeon, 'room_positions', {})
-            room_to_node = getattr(current_dungeon, 'room_to_node', {})
-            graph = getattr(current_dungeon, 'graph', None)
-        else:
-            grid = current_dungeon
-            room_positions = {}
-            room_to_node = {}
-            graph = None
-        H, W = grid.shape
-        
-        # Constants
-        ROOM_HEIGHT = 16
-        ROOM_WIDTH = 11
-        FLOOR = 1
-        WALL = 2
-        BLOCK = 3
-        VOID = 0
-        DOOR_OPEN = 10
-        DOOR_LOCKED = 11
-        START = 21
-        TRIFORCE = 22
-        KEY = 30
-        STAIR = 42
-        
-        WALKABLE = {FLOOR, DOOR_OPEN, KEY, START, TRIFORCE, STAIR, DOOR_LOCKED}
-        
-        start = self.env.start_pos
-        goal = self.env.goal_pos
-        
-        # Guard: if start or goal missing (tests may simulate missing), bail out gracefully
-        if start is None or goal is None:
-            return False, [], 0
+        return _smart_grid_path_helper(
+            gui=self,
+            logger=logger,
+            convert_diagonal_to_4dir=_convert_diagonal_to_4dir,
+            semantic_palette=SEMANTIC_PALETTE,
+            np_module=np,
+            path_cls=Path,
+            os_module=os,
+        )
 
-        # Reset and optionally collect search heatmap data
-        if getattr(self, 'show_heatmap', False):
-            self.search_heatmap = {}
-
-        # Helper: get room for a position
-        def get_room(pos):
-            y, x = pos
-            for room_pos, (ry, rx) in room_positions.items():
-                if ry <= y < ry + ROOM_HEIGHT and rx <= x < rx + ROOM_WIDTH:
-                    return room_pos
-            return None
-
-        # Helper: find all STAIR tiles in a room
-        def get_stairs_in_room(room_pos):
-            if room_pos not in room_positions:
-                return []
-            ry, rx = room_positions[room_pos]
-            stairs = []
-            for dy in range(ROOM_HEIGHT):
-                for dx in range(ROOM_WIDTH):
-                    y, x = ry + dy, rx + dx
-                    if 0 <= y < H and 0 <= x < W and grid[y, x] == STAIR:
-                        stairs.append((y, x))
-            return stairs
-
-        # Helper: find entry point in room
-        def find_entry(room_pos):
-            if room_pos not in room_positions:
-                return None
-            ry, rx = room_positions[room_pos]
-            # Prefer stair, then center, then any walkable
-            for dy in range(ROOM_HEIGHT):
-                for dx in range(ROOM_WIDTH):
-                    y, x = ry + dy, rx + dx
-                    if 0 <= y < H and 0 <= x < W and grid[y, x] == STAIR:
-                        return (y, x)
-            cy, cx = ry + ROOM_HEIGHT // 2, rx + ROOM_WIDTH // 2
-            if 0 <= cy < H and 0 <= cx < W and grid[cy, cx] in WALKABLE:
-                return (cy, cx)
-            for dy in range(ROOM_HEIGHT):
-                for dx in range(ROOM_WIDTH):
-                    y, x = ry + dy, rx + dx
-                    if 0 <= y < H and 0 <= x < W and grid[y, x] in WALKABLE:
-                        return (y, x)
-            return None
-        
-        # Get graph info for stair connections (if available)
-        node_to_room = {v: k for k, v in room_to_node.items()}
-        # 'graph' variable already set earlier based on current_dungeon
-        
-        # Find stair destinations based on graph connectivity
-        def get_stair_destinations(pos):
-            """Find where stairs lead to based on graph."""
-            if grid[pos[0], pos[1]] != STAIR:
-                return []
-            
-            if not graph:
-                return []
-            
-            current_room = get_room(pos)
-            if not current_room:
-                return []
-            
-            current_node = room_to_node.get(current_room)
-            if current_node is None:
-                return []
-            
-            destinations = []
-            # Check graph neighbors
-            for neighbor_node in graph.neighbors(current_node):
-                neighbor_room = node_to_room.get(neighbor_node)
-                if neighbor_room and neighbor_room in room_positions:
-                    # Find stairs in neighbor room, or entry point
-                    neighbor_stairs = get_stairs_in_room(neighbor_room)
-                    if neighbor_stairs:
-                        destinations.extend(neighbor_stairs)
-                    else:
-                        entry = find_entry(neighbor_room)
-                        if entry:
-                            destinations.append(entry)
-            
-            return destinations
-        
-        # Choose search algorithm based on UI selection
-        alg = getattr(self, 'algorithm_idx', 0)
-        # 0: A*, 1: BFS, 2: Dijkstra, 3: Greedy, 4: D* Lite
-        # 5: DFS/IDDFS, 6: Bidirectional A*, 7-12: CBS variants
-        
-        # DFS/Bidirectional/CBS algorithms require the full subprocess solver
-        # They cannot be implemented as simple grid search, so skip quick path
-        # and return to trigger the heavy solver immediately
-        full_solver_algorithms = {5, 6, 7, 8, 9, 10, 11, 12}
-        if alg in full_solver_algorithms:
-            algorithm_names = ["A*", "BFS", "Dijkstra", "Greedy", "D* Lite",
-                             "DFS/IDDFS", "Bidirectional A*",
-                             "CBS (Balanced)", "CBS (Explorer)", "CBS (Cautious)",
-                             "CBS (Forgetful)", "CBS (Speedrunner)", "CBS (Greedy)"]
-            alg_name = algorithm_names[alg] if alg < len(algorithm_names) else f"Algorithm {alg}"
-            logger.info(f"{alg_name} selected: skipping quick grid path, using full solver")
-            # Return failure to trigger fallback to full subprocess solver.
-            return False, [], 0
-        
-        if alg == 4:
-            # D* Lite implementation - use the actual D* Lite solver
-            logger.info("D* Lite selected - using incremental replanning")
-            try:
-                from src.simulation.dstar_lite import DStarLiteSolver
-                start_state = self.env.state.copy()
-                solver = DStarLiteSolver(self.env, heuristic_mode="balanced")
-                success, path, nodes_explored = solver.solve(start_state)
-                
-                if success and path:
-                    display_path = _convert_diagonal_to_4dir(path, grid=grid)
-                    algo_label = "D* Lite (fallback: A*)" if getattr(solver, 'used_fallback', False) else "D* Lite"
-                    logger.info(f"{algo_label} succeeded: path_len={len(display_path)}, nodes={nodes_explored}")
-                    return True, display_path, 0
-                else:
-                    logger.warning("D* Lite failed, falling back to A*")
-                    # Fall through to A* below
-            except Exception as e:
-                logger.error(f"D* Lite error: {e}, falling back to A*")
-                # Fall through to A* below
-
-        def heuristic(a, b):
-            # Use ML heuristic if enabled and model available, else Manhattan (or octile for diagonal)
-            if self.feature_flags.get('ml_heuristic', False) and getattr(self, '_ml_heuristic', None):
-                try:
-                    return self._ml_heuristic(a, b)
-                except Exception as e:
-                    logger.warning(f"ML heuristic failed, falling back to Manhattan/Octile: {e}")
-            if self.feature_flags.get('diagonal_movement', False):
-                # Use octile distance when diagonal moves are allowed
-                return math.hypot(a[0]-b[0], a[1]-b[1])
-            return abs(a[0] - b[0]) + abs(a[1] - b[1])
-
-        # Lazy ML heuristic initialization (one-time).
-        if not getattr(self, '_ml_heuristic_ready', False):
-            self._ml_heuristic_ready = True
-            self.ml_model = None
-
-            model_paths = []
-            base_root = Path(getattr(self, 'repo_root', Path.cwd()))
-            env_path = os.environ.get('KLTN_ML_HEURISTIC_MODEL', '').strip()
-            if env_path:
-                model_paths.append(Path(env_path))
-            model_paths.extend([
-                base_root / "checkpoints" / "heuristic_net.pth",
-                base_root / "models" / "heuristic_net.pth",
-            ])
-
-            try:
-                from src.ml.heuristic_learning import HeuristicTrainer
-
-                for model_path in model_paths:
-                    if not model_path or not model_path.exists():
-                        continue
-                    try:
-                        self.ml_model = HeuristicTrainer.load_model(str(model_path))
-                        logger.info(f"Loaded ML heuristic model: {model_path}")
-                        break
-                    except Exception as model_err:
-                        logger.warning(f"Failed loading ML heuristic model {model_path}: {model_err}")
-            except Exception as import_err:
-                logger.debug(f"ML heuristic module unavailable: {import_err}")
-
-            if self.ml_model is None and self.feature_flags.get('ml_heuristic', False):
-                logger.info("ML heuristic enabled but no trained model found; using Manhattan fallback.")
-
-            def _ml_heuristic_runtime(a, b):
-                base = float(abs(a[0] - b[0]) + abs(a[1] - b[1]))
-                model = getattr(self, 'ml_model', None)
-                if model is None:
-                    return base
-                try:
-                    state = getattr(self, 'game_state', None)
-                    if state is None and getattr(self, 'env', None) is not None:
-                        state = getattr(self.env, 'state', None)
-
-                    keys = float(getattr(state, 'keys', 0)) if state is not None else 0.0
-                    bomb_count = float(getattr(state, 'bomb_count', 0)) if state is not None else 0.0
-                    has_bomb = 1.0 if bomb_count > 0 else 0.0
-                    has_boss_key = float(getattr(state, 'has_boss_key', False)) if state is not None else 0.0
-                    has_item = float(getattr(state, 'has_item', False)) if state is not None else 0.0
-
-                    total_cells = max(1, H * W)
-                    locked_ratio = float(np.sum(grid == SEMANTIC_PALETTE['DOOR_LOCKED'])) / total_cells
-                    exploration_progress = 1.0 - (base / max(1.0, float(H + W)))
-
-                    features = np.array([
-                        float(a[1]) / max(1.0, float(W - 1)),
-                        float(a[0]) / max(1.0, float(H - 1)),
-                        min(keys / 5.0, 1.0),
-                        has_bomb,
-                        has_boss_key,
-                        has_item,
-                        base / max(1.0, float(H + W)),
-                        locked_ratio,
-                        min(keys / 10.0, 1.0),
-                        max(0.0, min(1.0, exploration_progress)),
-                    ], dtype=np.float32)
-
-                    pred = float(model.predict_cost(features))
-                    if not np.isfinite(pred):
-                        return base
-
-                    # Preserve A* admissibility when ML heuristic is used.
-                    return max(0.0, min(pred, base))
-                except Exception as runtime_err:
-                    logger.debug(f"ML heuristic runtime fallback: {runtime_err}")
-                    return base
-
-            self._ml_heuristic = _ml_heuristic_runtime
-        max_iterations = 200000
-        counter = 0
-        # Track iterations for diagnostics (nodes expanded)
-        iterations = 0
-        self.last_search_iterations = 0
-
-        if alg == 1:
-            # BFS with stair teleportation (existing behavior)
-            initial = (start, frozenset())
-            visited = {start}
-            queue = deque([(start, [start], 0)])  # pos, path, teleport_count
-            iterations = 0
-            while queue and iterations < max_iterations:
-                iterations += 1
-                pos, path, teleports = queue.popleft()
-                y, x = pos
-                if getattr(self, 'show_heatmap', False):
-                    self.search_heatmap[pos] = self.search_heatmap.get(pos, 0) + 1
-                if pos == goal:
-                    self.last_search_iterations = iterations
-                    return True, _convert_diagonal_to_4dir(path, grid=grid), teleports
-                # 4-directional walking
-                for dy, dx in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
-                    ny, nx = y + dy, x + dx
-                    if 0 <= ny < H and 0 <= nx < W and grid[ny, nx] in WALKABLE:
-                        npos = (ny, nx)
-                        if npos not in visited:
-                            visited.add(npos)
-                            queue.append((npos, path + [npos], teleports))
-                # Stair teleportation
-                if grid[y, x] == STAIR:
-                    for dest in get_stair_destinations(pos):
-                        if dest not in visited:
-                            visited.add(dest)
-                            queue.append((dest, path + [dest], teleports + 1))
-            # No grid path found within BFS limits
-            self.last_search_iterations = iterations
-            return self._graph_guided_path()
-        else:
-            # Implement priority-search-based algorithms (A*, Dijkstra, Greedy)
-            import heapq
-            def euclidean(a, b):
-                return math.hypot(a[0] - b[0], a[1] - b[1])
-            # Node state: (pos, visited_stairs_frozenset)
-            start_state = (start, frozenset())
-            # Priority queue entries: (priority, g_cost, counter, pos, visited_stairs, teleports, path)
-            start_h = heuristic(start, goal)
-            if alg == 0 or alg == 4:
-                start_f = start_h
-            elif alg == 2:
-                start_f = 0
-            elif alg == 3:
-                start_f = start_h
-            else:
-                start_f = start_h
-            heap = []
-            heapq.heappush(heap, (start_f, 0, counter, start, frozenset(), 0, [start]))
-            counter += 1
-            best = {}  # (pos, stairs) -> best_g
-            iterations = 0
-            # Read GUI flags for diagonal movement and JPS
-            allow_diag = self.feature_flags.get('diagonal_movement', False)
-            use_jps = self.feature_flags.get('use_jps', False)
-            while heap and iterations < max_iterations:
-                iterations += 1
-                f, g, _cnt, pos, stairs, teleports, path = heapq.heappop(heap)
-                if getattr(self, 'show_heatmap', False):
-                    self.search_heatmap[pos] = self.search_heatmap.get(pos, 0) + 1
-                if pos == goal:
-                    self.last_search_iterations = iterations
-                    return True, path, teleports
-                key = (pos, stairs)
-                if key in best and g > best[key]:
-                    continue
-                best[key] = g
-
-                y, x = pos
-                # Determine neighbor generator based on diagonal option
-                if allow_diag:
-                    deltas = [(-1, 0), (1, 0), (0, -1), (0, 1), (-1,-1), (-1,1), (1,-1), (1,1)]
-                else:
-                    deltas = [(-1, 0), (1, 0), (0, -1), (0, 1)]
-
-                for dy, dx in deltas:
-                    ny, nx = y + dy, x + dx
-                    if 0 <= ny < H and 0 <= nx < W and grid[ny, nx] in WALKABLE:
-                        npos = (ny, nx)
-                        step_cost = math.hypot(dy, dx)
-                        new_g = g + step_cost
-                        new_stairs = stairs
-                        new_teleports = teleports
-                        # compute priority
-                        h = heuristic(npos, goal)
-                        if alg == 2:
-                            new_f = new_g
-                        elif alg == 3:
-                            new_f = h
-                        else:
-                            new_f = new_g + h
-                        nkey = (npos, new_stairs)
-                        if nkey in best and new_g >= best[nkey]:
-                            continue
-                        heapq.heappush(heap, (new_f, new_g, counter, npos, new_stairs, new_teleports, path + [npos]))
-                        counter += 1
-                # Stair teleportation
-                if grid[y, x] == STAIR:
-                    for dest in get_stair_destinations(pos):
-                        npos = dest
-                        if npos in stairs:
-                            continue
-                        new_stairs = set(stairs)
-                        new_stairs.add(npos)
-                        new_stairs = frozenset(new_stairs)
-                        new_g = g + 1
-                        new_teleports = teleports + 1
-                        h = heuristic(npos, goal)
-                        if alg == 2:
-                            new_f = new_g
-                        elif alg == 3:
-                            new_f = h
-                        else:
-                            new_f = new_g + h
-                        nkey = (npos, new_stairs)
-                        if nkey in best and new_g >= best[nkey]:
-                            continue
-                        heapq.heappush(heap, (new_f, new_g, counter, npos, new_stairs, new_teleports, path + [npos]))
-                        counter += 1
-                # Optional JPS path expansion: attempt to use JPS local planner between node and neighbors
-                if use_jps:
-                    try:
-                        from bench.grid_solvers import jps as _jps
-                        # Try to link current pos to goal or neighbors via JPS and capture trace
-                        if allow_diag:
-                            _res = _jps(grid.tolist() if hasattr(grid, 'tolist') else grid, pos, goal, allow_diagonal=True, trace=True)
-                        else:
-                            _res = _jps(grid.tolist() if hasattr(grid, 'tolist') else grid, pos, goal, allow_diagonal=False, trace=True)
-                        if _res:
-                            if len(_res) == 3:
-                                jp_path, jp_nodes, jp_trace = _res
-                            else:
-                                jp_path, jp_nodes = _res
-                                jp_trace = None
-                            # Store latest trace for overlay
-                            self.last_jps_trace = jp_trace
-                            if jp_path and len(jp_path) > 1:
-                                # Use the last jump target from the returned path
-                                target = jp_path[-1]
-                                new_g = g + euclidean(pos, target)
-                                h = heuristic(target, goal)
-                                heapq.heappush(heap, (new_g + h, new_g, counter, target, stairs, teleports, path + [target]))
-                                counter += 1
-                    except Exception:
-                        self.last_jps_trace = None
-                        pass
-            # No path found within priority-search limits
-            self.last_search_iterations = iterations
-            return self._graph_guided_path()    
     def _graph_guided_path(self):
         """Fallback: follow graph path with teleportation when needed."""
-        import networkx as nx
-        from collections import deque
-        
-        current_dungeon = self.maps[self.current_map_idx]
-        # Support both StitchedDungeon objects (with .global_grid) and raw numpy grids
-        if hasattr(current_dungeon, 'global_grid'):
-            grid = current_dungeon.global_grid
-            room_positions = getattr(current_dungeon, 'room_positions', {})
-            room_to_node = getattr(current_dungeon, 'room_to_node', {})
-            graph = getattr(current_dungeon, 'graph', None)
-        else:
-            grid = current_dungeon
-            room_positions = {}
-            room_to_node = {}
-            graph = None
-        H, W = grid.shape
-        
-        ROOM_HEIGHT = 16
-        ROOM_WIDTH = 11
-        FLOOR = 1
-        DOOR_OPEN = 10
-        DOOR_LOCKED = 11
-        START = 21
-        TRIFORCE = 22
-        KEY = 30
-        STAIR = 42
-        WALKABLE = {FLOOR, DOOR_OPEN, KEY, START, TRIFORCE, STAIR, DOOR_LOCKED}
-        
-        start = self.env.start_pos
-        goal = self.env.goal_pos
-        if start is None or goal is None:
-            return False, [], 0
-        
-        def get_room(pos):
-            y, x = pos
-            for room_pos, (ry, rx) in room_positions.items():
-                if ry <= y < ry + ROOM_HEIGHT and rx <= x < rx + ROOM_WIDTH:
-                    return room_pos
-            return None
-        
-        def find_entry(room_pos):
-            if room_pos not in room_positions:
-                return None
-            ry, rx = room_positions[room_pos]
-            for dy in range(ROOM_HEIGHT):
-                for dx in range(ROOM_WIDTH):
-                    y, x = ry + dy, rx + dx
-                    if 0 <= y < H and 0 <= x < W and grid[y, x] == STAIR:
-                        return (y, x)
-            cy, cx = ry + ROOM_HEIGHT // 2, rx + ROOM_WIDTH // 2
-            if 0 <= cy < H and 0 <= cx < W and grid[cy, cx] in WALKABLE:
-                return (cy, cx)
-            for dy in range(ROOM_HEIGHT):
-                for dx in range(ROOM_WIDTH):
-                    y, x = ry + dy, rx + dx
-                    if 0 <= y < H and 0 <= x < W and grid[y, x] in WALKABLE:
-                        return (y, x)
-            return None
-        
-        def local_bfs(from_pos, to_pos, max_steps=5000):
-            if from_pos == to_pos:
-                return [from_pos]
-            visited = {from_pos}
-            queue = deque([(from_pos, [from_pos])])
-            while queue and len(visited) < max_steps:
-                pos, path = queue.popleft()
-                for dy, dx in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
-                    ny, nx = pos[0] + dy, pos[1] + dx
-                    if 0 <= ny < H and 0 <= nx < W and (ny, nx) not in visited:
-                        if grid[ny, nx] in WALKABLE:
-                            if (ny, nx) == to_pos:
-                                return path + [(ny, nx)]
-                            visited.add((ny, nx))
-                            queue.append(((ny, nx), path + [(ny, nx)]))
-            return None
-        
-        # If topology metadata is unavailable, fall back to direct grid BFS.
-        if not room_positions or graph is None:
-            direct = local_bfs(start, goal, max_steps=50000)
-            if direct:
-                return True, direct, 0
-            return False, [], 0
-
-        # Get graph path
-        node_to_room = {v: k for k, v in room_to_node.items()}
-        
-        start_room = get_room(start)
-        goal_room = get_room(goal)
-        start_node = room_to_node.get(start_room)
-        goal_node = room_to_node.get(goal_room)
-        
-        if start_node is None or goal_node is None:
-            return False, [], 0
-        
-        try:
-            graph_path = nx.shortest_path(graph, start_node, goal_node)
-        except nx.NetworkXNoPath:
-            return False, [], 0
-        
-        # Build room sequence
-        room_sequence = []
-        for node in graph_path:
-            room = node_to_room.get(node)
-            if room and room in room_positions:
-                room_sequence.append(room)
-        
-        # Build path with teleportation
-        full_path = [start]
-        current_pos = start
-        teleports = 0
-        
-        for target_room in room_sequence:
-            target_pos = find_entry(target_room)
-            if not target_pos or current_pos == target_pos:
-                continue
-            
-            segment = local_bfs(current_pos, target_pos)
-            if segment:
-                full_path.extend(segment[1:])
-                current_pos = segment[-1]
-            else:
-                full_path.append(target_pos)
-                current_pos = target_pos
-                teleports += 1
-        
-        # Final to goal
-        if current_pos != goal:
-            segment = local_bfs(current_pos, goal)
-            if segment:
-                full_path.extend(segment[1:])
-            else:
-                full_path.append(goal)
-                teleports += 1
-        
-        if full_path[-1] != goal:
-            full_path.append(goal)
-        
-        return True, full_path, teleports
+        return _graph_guided_path_helper(gui=self)
 
     def _hybrid_graph_grid_path(self):
         """
         Hybrid pathfinding: use graph to find room sequence, 
         then BFS within each room and teleport between disconnected clusters.
         """
-        import networkx as nx
-        from collections import deque
-        
-        current_dungeon = self.maps[self.current_map_idx]
-        if hasattr(current_dungeon, 'global_grid'):
-            grid = current_dungeon.global_grid
-            room_positions = getattr(current_dungeon, 'room_positions', {})
-            room_to_node = getattr(current_dungeon, 'room_to_node', {})
-            graph = getattr(current_dungeon, 'graph', None)
-        else:
-            grid = current_dungeon
-            room_positions = {}
-            room_to_node = {}
-            graph = None
-        H, W = grid.shape
-        
-        # Constants
-        ROOM_HEIGHT = 16
-        ROOM_WIDTH = 11
-        FLOOR = 1
-        WALL = 2
-        BLOCK = 3
-        VOID = 0
-        DOOR_OPEN = 10
-        DOOR_LOCKED = 11
-        START = 21
-        TRIFORCE = 22
-        KEY = 30
-        STAIR = 42
-        
-        WALKABLE = {FLOOR, DOOR_OPEN, KEY, START, TRIFORCE, STAIR, DOOR_LOCKED}
-        
-        start = self.env.start_pos
-        goal = self.env.goal_pos
-        
-        if start is None or goal is None:
-            return False, [], 0
-        
-        # Helper: find room containing position
-        def get_room(pos):
-            y, x = pos
-            for room_pos, (ry, rx) in room_positions.items():
-                if ry <= y < ry + ROOM_HEIGHT and rx <= x < rx + ROOM_WIDTH:
-                    return room_pos
-            return None
-        
-        # Helper: find passable position in room (prefer stairs, then center)
-        def find_entry_point(room_pos):
-            if room_pos not in room_positions:
-                return None
-            ry, rx = room_positions[room_pos]
-            
-            # First try to find a stair
-            for dy in range(ROOM_HEIGHT):
-                for dx in range(ROOM_WIDTH):
-                    y, x = ry + dy, rx + dx
-                    if 0 <= y < H and 0 <= x < W and grid[y, x] == STAIR:
-                        return (y, x)
-            
-            # Then try center
-            cy, cx = ry + ROOM_HEIGHT // 2, rx + ROOM_WIDTH // 2
-            if 0 <= cy < H and 0 <= cx < W and grid[cy, cx] in WALKABLE:
-                return (cy, cx)
-            
-            # Then any walkable tile
-            for dy in range(ROOM_HEIGHT):
-                for dx in range(ROOM_WIDTH):
-                    y, x = ry + dy, rx + dx
-                    if 0 <= y < H and 0 <= x < W and grid[y, x] in WALKABLE:
-                        return (y, x)
-            return None
-        
-        # Helper: BFS within connected tiles (allows room-to-room through doors)
-        def local_bfs(from_pos, to_pos, max_steps=5000):
-            if from_pos == to_pos:
-                return [from_pos]
-            
-            visited = {from_pos}
-            queue = deque([(from_pos, [from_pos])])
-            
-            while queue and len(visited) < max_steps:
-                pos, path = queue.popleft()
-                y, x = pos
-                
-                for dy, dx in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
-                    ny, nx = y + dy, x + dx
-                    if 0 <= ny < H and 0 <= nx < W and (ny, nx) not in visited:
-                        tile = grid[ny, nx]
-                        if tile in WALKABLE:
-                            if (ny, nx) == to_pos:
-                                return path + [(ny, nx)]
-                            visited.add((ny, nx))
-                            queue.append(((ny, nx), path + [(ny, nx)]))
-            return None
-        
-        # Step 1: Get graph path from start room to goal room
-        if not room_positions or graph is None:
-            direct = local_bfs(start, goal, max_steps=50000)
-            return (True, direct, 0) if direct else (False, [], 0)
+        return _hybrid_graph_grid_path_helper(gui=self)
 
-        start_room = get_room(start)
-        goal_room = get_room(goal)
-        
-        if not start_room or not goal_room:
-            return False, [], 0
-        
-        node_to_room = {v: k for k, v in room_to_node.items()}
-        
-        start_node = room_to_node.get(start_room)
-        goal_node = room_to_node.get(goal_room)
-        
-        if start_node is None or goal_node is None:
-            # Fallback to direct BFS
-            path = local_bfs(start, goal, max_steps=50000)
-            return (True, path, 0) if path else (False, [], 0)
-        
-        # Get graph path
-        try:
-            graph_path = nx.shortest_path(graph, start_node, goal_node)
-        except nx.NetworkXNoPath:
-            return False, [], 0
-        
-        # Step 2: Build room sequence (skip unmapped nodes)
-        room_sequence = []
-        for node in graph_path:
-            room = node_to_room.get(node)
-            if room and room in room_positions:
-                room_sequence.append(room)
-        
-        if not room_sequence:
-            return False, [], 0
-        
-        # Step 3: Build full path by connecting rooms
-        full_path = [start]
-        current_pos = start
-        teleports = 0
-        
-        for target_room in room_sequence:
-            target_pos = find_entry_point(target_room)
-            if not target_pos:
-                continue
-            
-            # Skip if we're already at this target
-            if current_pos == target_pos:
-                continue
-            
-            # Try BFS to target
-            path_segment = local_bfs(current_pos, target_pos)
-            
-            if path_segment:
-                # Connected physically - add path
-                full_path.extend(path_segment[1:])
-                current_pos = path_segment[-1]
-            else:
-                # Not connected physically - teleport!
-                full_path.append(target_pos)
-                current_pos = target_pos
-                teleports += 1
-        
-        # Final segment to goal
-        if current_pos != goal:
-            final_segment = local_bfs(current_pos, goal)
-            if final_segment:
-                full_path.extend(final_segment[1:])
-            else:
-                # Teleport to goal as last resort
-                full_path.append(goal)
-                teleports += 1
-        
-        # Validate path ends at goal
-        if full_path[-1] != goal:
-            full_path.append(goal)
-        
-        return True, full_path, teleports
-    
     def _stop_auto(self, reason: str = None):
         """Stop auto-solve mode with consistent logging and cleanup."""
-        try:
-            logger.debug("_stop_auto called: %s", reason)
-            self.auto_mode = False
-            self._auto_stuck_retries = 0
-            # Keep path visible for 'path complete' (victory) but clear for other reasons
-            if reason != 'path complete':
-                try:
-                    self.auto_path = []
-                    self.auto_step_idx = 0
-                except Exception:
-                    pass
-            # Optional: set a status message
-            try:
-                if reason == 'path complete':
-                    self._set_message("Solution complete! Victory!")
-                else:
-                    self._set_message(f"Auto-solve stopped: {reason}")
-            except Exception:
-                pass
-        except Exception:
-            logger.exception("_stop_auto failed: %s", reason)
+        return _stop_auto_helper(gui=self, reason=reason, logger=logger)
 
     def _auto_step(self):
         """Execute one step of auto-solve with comprehensive error handling."""
-        # Helper to consistently stop auto-mode with a log (local wrapper)
-        def _stop_auto_local(reason: str = None):
-            try:
-                logger.debug("_stop_auto_local calling _stop_auto: %s", reason)
-                self._stop_auto(reason)
-            except Exception:
-                logger.exception("_stop_auto_local failed: %s", reason)
+        import traceback
 
-        try:
-            # Entry instrumentation
-            try:
-                logger.debug("_auto_step entry: auto_mode=%s auto_step_idx=%s path_len=%s", getattr(self, 'auto_mode', None), getattr(self, 'auto_step_idx', None), len(getattr(self, 'auto_path', []) if getattr(self, 'auto_path', None) else []))
-            except Exception:
-                logger.debug("_auto_step entry: failed to read entry state")
-
-            # Validate auto-mode state
-            if not self.auto_mode:
-                logger.debug("_auto_step: auto_mode disabled; returning")
-                return
-            
-            if not hasattr(self, 'auto_path') or not self.auto_path:
-                logger.warning("_auto_step: No solution path available (path empty or missing)")
-                self._show_error("No solution path available")
-                self.auto_mode = False
-                return
-            
-            if self.auto_step_idx >= len(self.auto_path) - 1:
-                logger.info(f"_auto_step: Path complete at index {self.auto_step_idx}/{len(self.auto_path)-1}")
-                _stop_auto_local('path complete')
-                self._set_message("Solution complete!")
-                self.status_message = "Completed"
-                return
-
-            # D* Lite replanning check (if active)
-            if self.feature_flags.get('dstar_lite', False) and getattr(self, 'dstar_active', False) and getattr(self, 'dstar_solver', None):
-                try:
-                    current_state = self.env.get_state() if hasattr(self.env, 'get_state') else self.env.state
-                    if self.dstar_solver.needs_replan(current_state):
-                        success, new_path, updated = self.dstar_solver.replan(current_state)
-                        if success and new_path:
-                            # Align auto_step_idx to current position in new path
-                            curpos = self.env.state.position
-                            try:
-                                idx = new_path.index(curpos)
-                            except ValueError:
-                                idx = 0
-                            self.auto_path = new_path
-                            self.auto_step_idx = idx
-                            self._set_message(f"D* Lite replanned ({updated} updates)")
-                except Exception as e:
-                    logger.warning(f"D* Lite replanning failed: {e}")
-
-            
-            # Validate environment
-            if self.env is None:
-                self._show_error("Environment not initialized")
-                _stop_auto_local('env none')
-                return
-            
-            if not hasattr(self.env, 'state') or self.env.state is None:
-                self._show_error("Invalid environment state")
-                _stop_auto_local('env.state invalid')
-                return
-
-            # Advance to next step and compute direction
-            self.auto_step_idx += 1
-            target = self.auto_path[self.auto_step_idx]
-            current = self.env.state.position
-            dr = target[0] - current[0]
-            dc = target[1] - current[1]
-
-            # If any background thread requested inventory refresh, handle it now
-            if getattr(self, 'inventory_needs_refresh', False):
-                try:
-                    self._update_inventory_and_hud()
-                except Exception:
-                    pass
-                finally:
-                    self.inventory_needs_refresh = False
-
-            # Teleport - directly set position (non-adjacent move)
-            if abs(dr) > 1 or abs(dc) > 1:
-                old_state = GameState(
-                    position=self.env.state.position,
-                    keys=self.env.state.keys,
-                    bomb_count=self.env.state.bomb_count,
-                    has_boss_key=self.env.state.has_boss_key,
-                    opened_doors=self.env.state.opened_doors.copy() if hasattr(self.env.state.opened_doors, 'copy') else set(self.env.state.opened_doors),
-                    collected_items=self.env.state.collected_items.copy() if hasattr(self.env.state.collected_items, 'copy') else set(self.env.state.collected_items)
-                )
-
-                self.env.state.position = target
-                self._set_message(f"Teleport! {current} -> {target}")
-                self.status_message = "Teleporting..."
-
-                # Apply pickup at teleport destination (some teleports land on items)
-                try:
-                    self._apply_pickup_at(target)
-                except Exception as e:
-                    logger.warning(f"Pickup application failed on teleport: {e}")
-
-                # Track item changes (with error handling)
-                try:
-                    self._track_item_collection(old_state, self.env.state)
-                    self._track_item_usage(old_state, self.env.state)
-                    # Ensure counters are immediately reconciled for UI
-                    try:
-                        self._sync_inventory_counters()
-                    except Exception:
-                        pass
-                except Exception as e:
-                    logger.warning(f"Item tracking failed: {e}")
-
-                # Update visual position (instant for teleport)
-                if self.renderer:
-                    try:
-                        self.renderer.set_agent_position(target[0], target[1], immediate=True)
-                    except Exception as e:
-                        logger.warning(f"Renderer update failed: {e}")
-
-                if self.effects:
-                    try:
-                        # Add ripple effect at teleport destination (grid coordinates)
-                        self.effects.add_effect(RippleEffect(target, (100, 200, 255)))
-                    except Exception as e:
-                        logger.warning(f"Effect creation failed: {e}")
-
-                # Check if reached goal
-                if target == self.env.goal_pos:
-                    self.env.won = True
-                    self.env.done = True
-                    self.auto_mode = False
-                    self._set_message("AUTO-SOLVE: Victory!")
-                    self.status_message = "Victory!"
-                return
-
-            # Normal move - capture old state
-            old_state = GameState(
-                position=self.env.state.position,
-                keys=self.env.state.keys,
-                bomb_count=self.env.state.bomb_count,
-                has_boss_key=self.env.state.has_boss_key,
-                opened_doors=self.env.state.opened_doors.copy() if hasattr(self.env.state.opened_doors, 'copy') else set(self.env.state.opened_doors),
-                collected_items=self.env.state.collected_items.copy() if hasattr(self.env.state.collected_items, 'copy') else set(self.env.state.collected_items)
-            )
-
-            if dr == -1:
-                action = Action.UP
-            elif dr == 1:
-                action = Action.DOWN
-            elif dc == -1:
-                action = Action.LEFT
-            else:
-                action = Action.RIGHT
-            
-            # Check for block push BEFORE env.step (for animation purposes)
-            try:
-                self._check_and_start_block_push(current, target, action)
-            except Exception as e:
-                logger.warning("Block push check failed: %s", e)
-            
-            logger.debug("_auto_step: performing env.step action=%r (int=%s) target=%s current=%s", action, int(action), target, current)
-            state, reward, done, info = self.env.step(int(action))
-            logger.debug("_auto_step: env.step returned info=%r, new_pos=%s, env.keys=%s", info, getattr(self.env.state, 'position', None), getattr(self.env.state, 'keys', None))
-            
-            # Get new position immediately after step
-            new_pos = self.env.state.position
-
-            # Guard against path desync: if the environment did not reach the expected
-            # target, do not advance the path cursor blindly.
-            if not done and new_pos != target:
-                retries = int(getattr(self, '_auto_stuck_retries', 0)) + 1
-                self._auto_stuck_retries = retries
-                logger.warning(
-                    "_auto_step: blocked or desynced move (expected=%s, actual=%s, retry=%d)",
-                    target, new_pos, retries
-                )
-
-                # Roll back one step so the next frame retries the same planned move.
-                self.auto_step_idx = max(0, self.auto_step_idx - 1)
-
-                # If state moved unexpectedly, attempt to realign to the new position.
-                if new_pos != current:
-                    try:
-                        realign_idx = self.auto_path.index(new_pos, self.auto_step_idx)
-                        self.auto_step_idx = realign_idx
-                        self._auto_stuck_retries = 0
-                        logger.info("_auto_step: path realigned to index=%d at pos=%s", realign_idx, new_pos)
-                    except ValueError:
-                        logger.debug("_auto_step: could not realign path for pos=%s", new_pos)
-
-                if retries >= 3:
-                    self._show_error("Auto-solve path blocked; stopping")
-                    _stop_auto_local('path blocked')
-                    self.status_message = "Blocked"
-                else:
-                    self.status_message = "Retrying move..."
-                return
-
-            self._auto_stuck_retries = 0
-            
-            # Increment step counter
-            self.step_count += 1
-            
-            # Track item collection and usage (single call, not duplicated)
-            self._track_item_collection(old_state, self.env.state)
-            self._track_item_usage(old_state, self.env.state)
-            
-            # Update modern HUD during auto-solve with collected counts
-            if self.modern_hud:
-                self.modern_hud.update_game_state(
-                    keys=self.env.state.keys,
-                    bombs=self.env.state.bomb_count,
-                    has_boss_key=self.env.state.has_boss_key,
-                    position=new_pos,
-                    steps=self.step_count,
-                    message=getattr(self, 'message', '')
-                )
-                # Sync counters and update inventory display with collection counts
-                self._sync_inventory_counters()
-                if hasattr(self.modern_hud, 'keys_collected'):
-                    self.modern_hud.keys_collected = self.keys_collected
-                    self.modern_hud.bombs_collected = self.bombs_collected
-                    self.modern_hud.boss_keys_collected = self.boss_keys_collected
-                # Update usage counters for modern HUD if supported
-                if hasattr(self.modern_hud, 'keys_used'):
-                    self.modern_hud.keys_used = getattr(self, 'keys_used', 0)
-                if hasattr(self.modern_hud, 'bombs_used'):
-                    self.modern_hud.bombs_used = getattr(self, 'bombs_used', 0)
-                if hasattr(self.modern_hud, 'boss_keys_used'):
-                    self.modern_hud.boss_keys_used = getattr(self, 'boss_keys_used', 0)
-            
-            # Update visual position (smooth)
-            if self.renderer:
-                self.renderer.set_agent_position(new_pos[0], new_pos[1], immediate=False)
-            
-            # Check if done (NOT indented under renderer)
-            if done:
-                self.auto_mode = False
-                if self.env.won:
-                    self._set_message("AUTO-SOLVE: Victory!")
-                    self.status_message = "Victory!"
-                    if self.effects:
-                        try:
-                            # Victory flash effect at goal position
-                            goal_pos = self.env.goal_pos
-                            self.effects.add_effect(FlashEffect(goal_pos, (255, 215, 0), 0.5))
-                        except Exception as e:
-                            logger.warning(f"Victory effect failed: {e}")
-                else:
-                    self._set_message(f"AUTO-SOLVE: Failed - {info.get('msg', '')}")
-                    self.status_message = "Failed"
-        
-        except KeyError as e:
-            self._show_error(f"State access error: {str(e)}")
-            _stop_auto_local('KeyError')
-        except IndexError as e:
-            self._show_error(f"Path index error: {str(e)}")
-            _stop_auto_local('IndexError')
-        except AttributeError as e:
-            logger.exception("Auto-step AttributeError caught: %s", e)
-            self._show_error(f"Invalid state attribute: {str(e)}")
-            _stop_auto_local('AttributeError')
-        except Exception as e:
-            self._show_error(f"Auto-solve error: {str(e)}")
-            self.auto_mode = False
-            import traceback
-            traceback.print_exc()
+        return _auto_step_helper(
+            gui=self,
+            logger=logger,
+            game_state_cls=GameState,
+            action_enum=Action,
+            ripple_effect_cls=RippleEffect,
+            flash_effect_cls=FlashEffect,
+            traceback_module=traceback,
+        )
     
     def _show_error(self, message: str):
         """Display error message to user with visual feedback."""
-        logger.error(message)
-        self.error_message = message
-        self.error_time = time.time()
-        self.status_message = "Error"
+        return _show_error_helper(self, message, logger, time)
     
     def _show_message(self, message: str, duration: float = 3.0):
         """Display informational message to user."""
-        logger.info(message)
-        self.message = message
-        self.message_time = time.time()
-        self.message_duration = duration
-        self.status_message = "Info"
+        return _show_message_helper(self, message, duration, logger, time)
 
     # --- Topology helpers ---
     def _export_topology(self):
         """Export current map topology to a DOT file (if available)."""
+        return _export_topology_helper(self)
+
+
+    def _render_topology_overlay(self, surface):
+        """Draw room nodes and edges on the map area with high-visibility styling."""
         current = self.maps[self.current_map_idx]
-        graph = getattr(current, 'graph', None)
-        room_positions = getattr(current, 'room_positions', None)
-        if graph is None:
-            self._set_message('No topology graph available for this map', 3.0)
-            return
-        # Try to use networkx pydot writer
-        try:
-            import networkx as nx
-            try:
-                export_dir = Path(getattr(self, 'topology_export_dir', Path.cwd()))
-                export_dir.mkdir(parents=True, exist_ok=True)
-                fname = export_dir / f"topology_map_{self.current_map_idx+1}.dot"
-                nx.nx_pydot.write_dot(graph, str(fname))
-                # Add node positions as comments if available
-                if room_positions:
-                    with open(fname, 'a', encoding='utf-8') as f:
-                        f.write('\n// room positions\n')
-                        for room, (ry, rx) in room_positions.items():
-                            f.write(f"// {room}: {ry},{rx}\n")
-                try:
-                    display_path = fname.relative_to(getattr(self, 'repo_root', Path.cwd()))
-                except Exception:
-                    display_path = fname
-                self._set_message(f"Topology exported to {display_path}")
-                self.topology_export_path = str(fname)
-            except Exception as e:
-                # Fallback to manual DOT generation
-                export_dir = Path(getattr(self, 'topology_export_dir', Path.cwd()))
-                export_dir.mkdir(parents=True, exist_ok=True)
-                fname = export_dir / f"topology_map_{self.current_map_idx+1}.dot"
-                with open(fname, 'w', encoding='utf-8') as f:
-                    f.write('graph topology {\n')
-                    for n in graph.nodes():
-                        f.write(f'  "{n}";\n')
-                    for u, v in graph.edges():
-                        f.write(f'  "{u}" -- "{v}";\n')
-                    f.write('}\n')
-                try:
-                    display_path = fname.relative_to(getattr(self, 'repo_root', Path.cwd()))
-                except Exception:
-                    display_path = fname
-                self._set_message(f"Topology exported to {display_path} (manual)\n{e}")
-                self.topology_export_path = str(fname)
-        except ImportError:
-            self._set_message('NetworkX not available - cannot export DOT automatically', 4.0)
-
-    def _render_topology_overlay(self, surface: "pygame.Surface"):
-        """Draw room nodes and edges on the map area with high-visibility styling.
-
-        Uses `room_to_node` mapping to place graph node ids on the stitched room positions.
-        """
-        current = self.maps[self.current_map_idx]
-        if not hasattr(current, 'graph') or not current.graph:
-            return
-        graph = current.graph
-        room_positions = getattr(current, 'room_positions', {})
-        room_to_node = getattr(current, 'room_to_node', {})
-        node_to_room = {v: k for k, v in room_to_node.items()} if room_to_node else {}
-
-        # Prepare an alpha surface for glow effects
-        try:
-            overlay = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
-        except Exception:
-            overlay = None
-
-        # Precompute pixel positions for nodes (by node id)
-        node_pos = {}
-        unmatched_nodes = 0
-        unmatched_node_ids = []
-        for node in graph.nodes():
-            room_pos = node_to_room.get(node)
-            if room_pos is None:
-                unmatched_nodes += 1
-                unmatched_node_ids.append(node)
-                continue
-            rp = room_positions.get(room_pos)
-            if not rp:
-                unmatched_nodes += 1
-                unmatched_node_ids.append(node)
-                continue
-            ry, rx = rp
-            cx = rx * self.TILE_SIZE + self.TILE_SIZE * 0.5 - self.view_offset_x
-            cy = ry * self.TILE_SIZE + self.TILE_SIZE * 0.5 - self.view_offset_y
-            node_pos[node] = (cx, cy)
-
-        # --- DRAW EDGES ---
-        # Edge colors based on type (if edge has 'type' attribute)
-        edge_colors = {
-            'open': (100, 255, 100, 180),        # Green - normal passage
-            'key_locked': (255, 220, 100, 200),  # Yellow - key door
-            'bombable': (255, 150, 50, 200),     # Orange - bomb wall
-            'soft_locked': (180, 100, 255, 180), # Purple - one-way
-            'stair': (100, 200, 255, 200),       # Cyan - teleport/stair
-        }
-        default_edge_color = (150, 150, 200, 150)
-
-        target_surface = overlay if overlay else surface
-        for u, v, data in graph.edges(data=True):
-            if u not in node_pos or v not in node_pos:
-                continue
-            x1, y1 = node_pos[u]
-            x2, y2 = node_pos[v]
-            # Get edge type for coloring
-            edge_type = data.get('type', 'open') if data else 'open'
-            color = edge_colors.get(edge_type, default_edge_color)
-            # Draw edge line
-            try:
-                pygame.draw.line(target_surface, color[:3], (int(x1), int(y1)), (int(x2), int(y2)), 3)
-            except Exception:
-                pygame.draw.line(surface, color[:3], (int(x1), int(y1)), (int(x2), int(y2)), 3)
-
-        # --- DRAW NODES ---
-        node_radius = max(8, self.TILE_SIZE // 3)
-        font = pygame.font.SysFont('Arial', 12, bold=True)
-        for node, (cx, cy) in node_pos.items():
-            # Draw glow/outline
-            try:
-                pygame.draw.circle(target_surface, (255, 255, 255, 100), (int(cx), int(cy)), node_radius + 3)
-            except Exception:
-                pass
-            # Draw filled circle
-            pygame.draw.circle(target_surface, (80, 120, 200), (int(cx), int(cy)), node_radius)
-            pygame.draw.circle(target_surface, (150, 200, 255), (int(cx), int(cy)), node_radius, 2)
-            # Draw node label
-            try:
-                label = font.render(str(node), True, (255, 255, 255))
-                lx = int(cx - label.get_width() / 2)
-                ly = int(cy - label.get_height() / 2)
-                target_surface.blit(label, (lx, ly))
-            except Exception:
-                pass
-
-        # Blit overlay if we used one
-        if overlay:
-            surface.blit(overlay, (0, 0))
-
-        # Show unmatched node warning if any
-        if unmatched_nodes > 0:
-            try:
-                warn_font = pygame.font.SysFont('Arial', 14, bold=True)
-                warn_text = warn_font.render(f'{unmatched_nodes} unmatched nodes', True, (255, 150, 100))
-                surface.blit(warn_text, (10, 10))
-            except Exception:
-                pass
+        _render_topology_overlay_helper(
+            surface=surface,
+            current=current,
+            tile_size=self.TILE_SIZE,
+            view_offset_x=self.view_offset_x,
+            view_offset_y=self.view_offset_y,
+            pygame=pygame,
+        )
 
     def _match_missing_nodes(self):
         """Attempt to infer and stage mapping proposals for unmatched nodes.
@@ -8453,990 +3351,103 @@ class ZeldaGUI:
         High-confidence proposals (>= configured threshold) are applied automatically.
         Lower confidence proposals are kept as 'tentative' in `current.match_proposals` for manual apply.
         """
-        current = self.maps[self.current_map_idx]
-        graph = getattr(current, 'graph', None)
-        rooms = getattr(current, 'rooms', None)
-        room_positions = getattr(current, 'room_positions', None)
-        room_to_node = dict(getattr(current, 'room_to_node', {}) or {})
-
-        if graph is None or rooms is None:
-            self._set_message('No topology available for this map', 3.0)
-            return
-
-        matcher = RoomGraphMatcher()
-        proposed_r2n, proposed_n2r, confidences = matcher.infer_missing_mappings(
-            rooms, graph, room_positions=room_positions, room_to_node=room_to_node)
-
-        if not proposed_r2n:
-            self._set_message('No proposals for missing nodes', 3.0)
-            return
-
-        # Save proposals for later apply/preview
-        current.match_proposals = (proposed_r2n, proposed_n2r, confidences)
-
-        # Determine configured threshold
-        threshold_widget = next((w for w in self.widget_manager.widgets if getattr(w, 'control_name', None) == 'match_threshold'), None)
-        try:
-            threshold_val = float(threshold_widget.options[threshold_widget.selected]) if threshold_widget else getattr(self, 'match_apply_threshold', 0.85)
-        except Exception:
-            threshold_val = getattr(self, 'match_apply_threshold', 0.85)
-
-        # Split by confidence
-        confident = {n: r for r, n in proposed_r2n.items() if confidences.get(n, 0) >= threshold_val}
-        tentative = {n: r for r, n in proposed_r2n.items() if confidences.get(n, 0) < threshold_val}
-
-        applied = 0
-        if confident:
-            # Save undo snapshot
-            snapshot = dict(getattr(current, 'room_to_node', {}) or {})
-            applied_nodes = list(confident.items())
-            self.match_undo_stack.append(snapshot)
-
-            # Apply confident matches
-            for room_pos, node_id in confident.items():
-                current.room_to_node[room_pos] = node_id
-                current.rooms[room_pos].graph_node_id = node_id
-                applied += 1
-
-            self._set_message(f'Applied {applied} confident matches. {len(tentative)} tentative remain', 4.0)
-            logger.info('Applied matches: %s', applied_nodes)
-
-        else:
-            self._set_message(f'No matches above threshold ({threshold_val}). {len(proposed_r2n)} proposals available', 5.0)
-            logger.info('Match proposals (none auto-applied):')
-            for node, room in proposed_n2r.items():
-                logger.info('  Node %s -> Room %s (conf=%.2f)', node, room, confidences.get(node, 0.0))
+        return _match_missing_nodes_helper(gui=self, matcher_cls=RoomGraphMatcher, logger=logger)
 
     def _undo_last_match(self):
         """Undo last applied match snapshot, if any."""
-        current = self.maps[self.current_map_idx]
-        if not self.match_undo_stack:
-            self._set_message('Nothing to undo', 2.0)
-            return
-
-        snapshot = self.match_undo_stack.pop()
-        # Restore room_to_node and room.graph_node_id
-        current.room_to_node = dict(snapshot)
-        for rpos, room in current.rooms.items():
-            room.graph_node_id = current.room_to_node.get(rpos)
-
-        # Clear staged proposals (they may be invalid now)
-        if hasattr(current, 'match_proposals'):
-            del current.match_proposals
-
-        self._set_message('Undo: restored previous mapping', 3.0)
-        logger.info('Undo applied: restored previous mapping')
+        return _undo_last_match_helper(gui=self, logger=logger)
 
     def _room_for_global_position(self, pos: Optional[Tuple[int, int]], room_positions: dict) -> Optional[Tuple[int, int]]:
         """Map a global tile coordinate to a room-grid coordinate."""
-        if pos is None or not room_positions:
-            return None
-        pr, pc = int(pos[0]), int(pos[1])
-        room_h, room_w = 16, 11  # VGLC Zelda room size
-        for room_pos, offsets in room_positions.items():
-            if not offsets:
-                continue
-            r_off, c_off = offsets
-            if r_off <= pr < r_off + room_h and c_off <= pc < c_off + room_w:
-                return room_pos
-        return None
+        return _room_for_global_position_helper(pos, room_positions)
 
     @staticmethod
     def _node_has_small_key(attrs: dict) -> bool:
         """Best-effort small-key detection from graph node attributes/labels."""
-        if not isinstance(attrs, dict):
-            return False
-        if bool(attrs.get('is_boss_key') or attrs.get('has_boss_key')):
-            return False
-        if bool(attrs.get('is_key') or attrs.get('has_key')):
-            return True
-        label = str(attrs.get('label', ''))
-        tokens = [tok.strip() for tok in label.replace('\n', ',').split(',') if tok.strip()]
-        for tok in tokens:
-            if tok == 'k' or tok.lower() == 'key':
-                return True
-        return False
+        return _node_has_small_key_helper(attrs)
 
     def _node_has_critical_content(self, graph, node_id: Any) -> bool:
         """Whether a node should be preserved during dead-end pruning."""
-        try:
-            attrs = graph.nodes[node_id] if graph is not None and node_id in graph else {}
-        except Exception:
-            attrs = {}
-        if not isinstance(attrs, dict):
-            return False
-
-        if attrs.get('is_start') or attrs.get('is_triforce') or attrs.get('is_boss'):
-            return True
-        if attrs.get('has_item') or attrs.get('is_boss_key') or attrs.get('has_boss_key'):
-            return True
-        if self._node_has_small_key(attrs):
-            return True
-
-        label = str(attrs.get('label', ''))
-        tokens = {tok.strip() for tok in label.replace('\n', ',').split(',') if tok.strip()}
-        critical_tokens = {
-            's', 't', 'b', 'k', 'K', 'I',
-            'start', 'triforce', 'boss', 'key', 'boss_key', 'item',
-        }
-        return len(tokens.intersection(critical_tokens)) > 0
+        return _node_has_critical_content_helper(graph, node_id)
 
     def _capture_precheck_snapshot(self, current: Any, reason: str = "") -> None:
         """Capture current topology state so Undo Prune can restore it."""
-        room_to_node = dict(getattr(current, 'room_to_node', {}) or {})
-        node_to_room = dict(getattr(current, 'node_to_room', {}) or {v: k for k, v in room_to_node.items()})
-        snapshot = {
-            'timestamp': time.time(),
-            'reason': reason,
-            'room_to_node': room_to_node,
-            'node_to_room': node_to_room,
-            'rooms': None,
-            'graph': None,
-        }
-        rooms = getattr(current, 'rooms', None)
-        if isinstance(rooms, dict):
-            try:
-                # Use a deep copy so later room-object mutations do not leak into undo state.
-                snapshot['rooms'] = copy.deepcopy(rooms)
-            except Exception:
-                snapshot['rooms'] = dict(rooms)
-        graph = getattr(current, 'graph', None)
-        if graph is not None:
-            try:
-                # networkx Graph.copy() is shallow for nested attrs; deepcopy gives safer undo isolation.
-                snapshot['graph'] = copy.deepcopy(graph)
-            except Exception:
-                if hasattr(graph, 'copy'):
-                    try:
-                        snapshot['graph'] = graph.copy()
-                    except Exception:
-                        snapshot['graph'] = graph
-                else:
-                    snapshot['graph'] = graph
-        self._precheck_snapshot = snapshot
+        self._precheck_snapshot = _capture_precheck_snapshot_helper(current, reason=reason)
 
     def _update_env_topology_view(self, current: Any) -> None:
         """Synchronize current map topology attributes into the active env object."""
-        if getattr(self, 'env', None) is None:
-            return
-        try:
-            self.env.graph = getattr(current, 'graph', None)
-            self.env.room_to_node = getattr(current, 'room_to_node', None)
-            self.env.room_positions = getattr(current, 'room_positions', None)
-            self.env.node_to_room = getattr(current, 'node_to_room', None)
-        except Exception:
-            logger.debug('Failed to mirror topology attributes into env', exc_info=True)
+        _update_env_topology_view_helper(getattr(self, 'env', None), current)
 
     def _build_room_adjacency_from_graph(self, graph: Any, room_to_node: dict, node_to_room: dict) -> dict:
         """Build undirected room adjacency from graph edges via node-room mapping."""
-        adjacency = {room_pos: set() for room_pos in room_to_node.keys()}
-        if graph is None:
-            return adjacency
-        try:
-            for u, v in graph.edges():
-                room_u = node_to_room.get(u)
-                room_v = node_to_room.get(v)
-                if room_u in adjacency and room_v in adjacency and room_u != room_v:
-                    adjacency[room_u].add(room_v)
-                    adjacency[room_v].add(room_u)
-        except Exception:
-            logger.debug('Failed building room adjacency from graph', exc_info=True)
-        return adjacency
+        return _build_room_adjacency_from_graph_helper(graph, room_to_node, node_to_room)
 
     def _prune_dead_end_topology(self, current: Any, preserve_rooms: set) -> List[Tuple[int, int]]:
         """Prune dead-end rooms from topology mapping when room objects are unavailable."""
-        graph = getattr(current, 'graph', None)
-        room_to_node = dict(getattr(current, 'room_to_node', {}) or {})
-        if graph is None or not room_to_node:
-            return []
-
-        node_to_room = dict(getattr(current, 'node_to_room', {}) or {v: k for k, v in room_to_node.items()})
-        original_room_to_node = dict(room_to_node)
-        removed_rooms: List[Tuple[int, int]] = []
-
-        changed = True
-        while changed:
-            changed = False
-            adjacency = self._build_room_adjacency_from_graph(graph, room_to_node, node_to_room)
-            leaves = [
-                room_pos for room_pos in list(room_to_node.keys())
-                if len(adjacency.get(room_pos, set())) <= 1 and room_pos not in preserve_rooms
-            ]
-            if not leaves:
-                break
-
-            prunable = []
-            for room_pos in leaves:
-                node_id = room_to_node.get(room_pos)
-                if node_id is None:
-                    prunable.append(room_pos)
-                    continue
-                if not self._node_has_critical_content(graph, node_id):
-                    prunable.append(room_pos)
-
-            if not prunable:
-                break
-
-            for room_pos in prunable:
-                room_to_node.pop(room_pos, None)
-                removed_rooms.append(room_pos)
-                changed = True
-
-            kept_rooms = set(room_to_node.keys())
-            node_to_room = {node_id: room_pos for node_id, room_pos in node_to_room.items() if room_pos in kept_rooms}
-
-        if not removed_rooms:
-            return []
-
-        removed_nodes = [original_room_to_node[r] for r in removed_rooms if r in original_room_to_node]
-        new_graph = graph
-        try:
-            if removed_nodes and hasattr(graph, 'copy'):
-                new_graph = graph.copy()
-                new_graph.remove_nodes_from([n for n in set(removed_nodes) if n in new_graph])
-        except Exception:
-            logger.debug('Failed to remove pruned nodes from graph; keeping original graph', exc_info=True)
-            new_graph = graph
-
-        current.graph = new_graph
-        current.room_to_node = room_to_node
-        current.node_to_room = node_to_room
-        return removed_rooms
+        return _prune_dead_end_topology_flow_helper(
+            gui=self,
+            current=current,
+            preserve_rooms=preserve_rooms,
+            logger=logger,
+            build_room_adjacency_fn=self._build_room_adjacency_from_graph,
+            node_has_critical_content_fn=self._node_has_critical_content,
+        )
 
     def _run_prechecks_and_optional_prune(self) -> Tuple[bool, Optional[str]]:
         """Run lightweight prechecks and optional dead-end pruning before solve."""
-        if not self.feature_flags.get('enable_prechecks', False):
-            return True, None
-
         current = self.maps[self.current_map_idx]
-        if not getattr(self, 'env', None):
-            return False, 'PRECHECK_FAIL: Environment not initialized'
-
-        start = getattr(self.env, 'start_pos', None)
-        goal = getattr(self.env, 'goal_pos', None)
-        if start is None or goal is None:
-            return False, 'PRECHECK_FAIL: Missing start/goal position'
-
-        graph = getattr(current, 'graph', None)
-        room_positions = dict(getattr(current, 'room_positions', {}) or {})
-        room_to_node = dict(getattr(current, 'room_to_node', {}) or {})
-        node_to_room = dict(getattr(current, 'node_to_room', {}) or {v: k for k, v in room_to_node.items()})
-        start_room = self._room_for_global_position(start, room_positions)
-        goal_room = self._room_for_global_position(goal, room_positions)
-
-        # Topology precheck when graph metadata is available.
-        if graph is not None and room_positions and room_to_node:
-            start_node = room_to_node.get(start_room) if start_room is not None else None
-            goal_node = room_to_node.get(goal_room) if goal_room is not None else None
-            if start_node is not None and goal_node is not None:
-                try:
-                    import networkx as nx
-                    if not nx.has_path(graph.to_undirected(), start_node, goal_node):
-                        return False, 'PRECHECK_FAIL: Start and goal are disconnected in topology'
-                except Exception:
-                    logger.debug('Topology connectivity precheck failed open', exc_info=True)
-
-                # Minimal locked-door requirement vs available small keys.
-                try:
-                    import heapq
-
-                    def edge_locked_cost(u, v) -> int:
-                        data = graph.get_edge_data(u, v) or graph.get_edge_data(v, u) or {}
-                        label = str(data.get('label', '')).strip()
-                        etype = str(data.get('edge_type', '')).strip().lower()
-                        if etype in {'locked', 'key_locked'}:
-                            return 1
-                        if label == 'k':
-                            return 1
-                        return 0
-
-                    def min_locked_between(s, t) -> float:
-                        dist = {s: 0}
-                        pq = [(0, s)]
-                        while pq:
-                            d, u = heapq.heappop(pq)
-                            if u == t:
-                                return d
-                            if d != dist.get(u, 10**9):
-                                continue
-                            neighbors = set(graph.successors(u)) | set(graph.predecessors(u))
-                            for v in neighbors:
-                                nd = d + edge_locked_cost(u, v)
-                                if nd < dist.get(v, 10**9):
-                                    dist[v] = nd
-                                    heapq.heappush(pq, (nd, v))
-                        return float('inf')
-
-                    min_locked = min_locked_between(start_node, goal_node)
-                    if min_locked != float('inf'):
-                        tile_key_count = int((self.env.grid == SEMANTIC_PALETTE['KEY_SMALL']).sum())
-                        graph_key_count = 0
-                        for _, attrs in graph.nodes(data=True):
-                            if self._node_has_small_key(attrs):
-                                graph_key_count += 1
-                        key_count = max(tile_key_count, graph_key_count)
-                        if key_count < int(min_locked):
-                            return False, f'PRECHECK_FAIL: Insufficient small keys (need {int(min_locked)}, have {key_count})'
-                except Exception:
-                    logger.debug('Locked-door key-count precheck failed open', exc_info=True)
-        else:
-            # Fallback coarse check for plain grid maps: wall/void connectivity only.
-            from collections import deque
-            grid = getattr(self.env, 'grid', None)
-            if isinstance(grid, np.ndarray):
-                h, w = grid.shape
-                blocked = {SEMANTIC_PALETTE['WALL'], SEMANTIC_PALETTE['VOID']}
-                q = deque([start])
-                seen = {start}
-                reachable = False
-                while q:
-                    r, c = q.popleft()
-                    if (r, c) == goal:
-                        reachable = True
-                        break
-                    for dr, dc in ACTION_DELTAS.values():
-                        nr, nc = r + dr, c + dc
-                        if not (0 <= nr < h and 0 <= nc < w):
-                            continue
-                        if (nr, nc) in seen:
-                            continue
-                        if int(grid[nr, nc]) in blocked:
-                            continue
-                        seen.add((nr, nc))
-                        q.append((nr, nc))
-                if not reachable:
-                    return False, 'PRECHECK_FAIL: Start and goal disconnected on walkable grid'
-
-        if not self.feature_flags.get('auto_prune_on_precheck', False):
-            return True, 'Precheck passed'
-
-        # Optional pruning pass.
-        preserve_rooms = {rp for rp in (start_room, goal_room) if rp is not None}
-        if not preserve_rooms:
-            return True, 'Precheck passed (prune skipped: start/goal room unknown)'
-        removed_rooms: List[Tuple[int, int]] = []
-
-        rooms = getattr(current, 'rooms', None)
-        if isinstance(rooms, dict) and rooms:
-            pruned_rooms, removed_rooms = ZeldaDungeonAdapter.prune_dead_ends(dict(rooms), preserve=preserve_rooms)
-            if removed_rooms:
-                self._capture_precheck_snapshot(current, reason='auto_prune_on_precheck')
-                original_room_to_node = dict(getattr(current, 'room_to_node', {}) or {})
-                original_node_to_room = dict(getattr(current, 'node_to_room', {}) or {v: k for k, v in original_room_to_node.items()})
-
-                current.rooms = pruned_rooms
-                current.room_to_node = {room_pos: node_id for room_pos, node_id in original_room_to_node.items() if room_pos in pruned_rooms}
-
-                removed_nodes = [original_room_to_node[rp] for rp in removed_rooms if rp in original_room_to_node]
-                try:
-                    if graph is not None and hasattr(graph, 'copy'):
-                        current.graph = graph.copy()
-                        current.graph.remove_nodes_from([n for n in set(removed_nodes) if n in current.graph])
-                except Exception:
-                    logger.debug('Failed to prune nodes from graph in room-based prune', exc_info=True)
-
-                current.node_to_room = {
-                    node_id: room_pos for node_id, room_pos in original_node_to_room.items()
-                    if room_pos in current.room_to_node
-                }
-                for room_pos, room in current.rooms.items():
-                    room.graph_node_id = current.room_to_node.get(room_pos)
-        else:
-            self._capture_precheck_snapshot(current, reason='auto_prune_on_precheck_topology')
-            removed_rooms = self._prune_dead_end_topology(current, preserve_rooms=preserve_rooms)
-            if not removed_rooms:
-                # Keep undo stack clean when no mutation happened.
-                self._precheck_snapshot = None
-
-        if removed_rooms:
-            self._update_env_topology_view(current)
-            return True, f'Precheck passed; pruned {len(removed_rooms)} dead-end room(s)'
-        return True, 'Precheck passed (no dead-end rooms pruned)'
+        return _run_prechecks_and_optional_prune_flow_helper(
+            gui=self,
+            current=current,
+            logger=logger,
+            np_module=np,
+            semantic_palette=SEMANTIC_PALETTE,
+            action_deltas=ACTION_DELTAS,
+            topology_has_path_fn=_topology_has_path_helper,
+            min_locked_between_fn=_min_locked_between_helper,
+            walkable_grid_reachable_fn=_walkable_grid_reachable_helper,
+            node_has_small_key_fn=self._node_has_small_key,
+            room_for_global_position_fn=self._room_for_global_position,
+            zelda_dungeon_adapter=ZeldaDungeonAdapter,
+            capture_snapshot_fn=self._capture_precheck_snapshot,
+            update_env_topology_view_fn=self._update_env_topology_view,
+            prune_dead_end_topology_fn=self._prune_dead_end_topology,
+        )
 
     def _undo_prune(self):
         """Undo the last applied prune snapshot, if any."""
-        if not hasattr(self, '_precheck_snapshot') or not self._precheck_snapshot:
-            self._set_message('No prune snapshot to undo', 2.0)
-            return
         current = self.maps[self.current_map_idx]
-        snap = self._precheck_snapshot
-        rooms_snapshot = snap.get('rooms')
-        if isinstance(rooms_snapshot, dict):
-            current.rooms = dict(rooms_snapshot)
-        if 'room_to_node' in snap:
-            current.room_to_node = dict(snap.get('room_to_node', {}))
-        if 'node_to_room' in snap:
-            current.node_to_room = dict(snap.get('node_to_room', {}))
-        if 'graph' in snap and snap.get('graph') is not None:
-            current.graph = snap.get('graph')
-
-        if isinstance(getattr(current, 'rooms', None), dict):
-            for pos, room in current.rooms.items():
-                room.graph_node_id = (getattr(current, 'room_to_node', {}) or {}).get(pos)
-        # Clear snapshot
-        self._precheck_snapshot = None
-        self._update_env_topology_view(current)
-        self._set_message('Undo: restored topology before pruning', 3.0)
-        logger.info('Undo prune: restored previous topology snapshot')
+        return _undo_prune_flow_helper(
+            gui=self,
+            current=current,
+            logger=logger,
+            update_env_topology_view_fn=self._update_env_topology_view,
+        )
 
     def _apply_tentative_matches(self):
         """Apply staged tentative matches above the configured threshold."""
-        current = self.maps[self.current_map_idx]
-        if not hasattr(current, 'match_proposals'):
-            self._set_message('No staged proposals to apply', 2.0)
-            return
-
-        proposed_r2n, proposed_n2r, confidences = current.match_proposals
-
-        threshold_widget = next((w for w in self.widget_manager.widgets if getattr(w, 'control_name', None) == 'match_threshold'), None)
-        try:
-            threshold_val = float(threshold_widget.options[threshold_widget.selected]) if threshold_widget else getattr(self, 'match_apply_threshold', 0.85)
-        except Exception:
-            threshold_val = getattr(self, 'match_apply_threshold', 0.85)
-
-        to_apply = {n: r for r, n in proposed_r2n.items() if confidences.get(n, 0) >= threshold_val}
-
-        if not to_apply:
-            self._set_message('No proposals meet threshold', 2.0)
-            return
-
-        # Snapshot and apply
-        snapshot = dict(getattr(current, 'room_to_node', {}) or {})
-        self.match_undo_stack.append(snapshot)
-        applied = 0
-        for room_pos, node_id in to_apply.items():
-            current.room_to_node[room_pos] = node_id
-            current.rooms[room_pos].graph_node_id = node_id
-            applied += 1
-
-        # Remove applied from staged proposals
-        for node_id in list(to_apply.values()):
-            proposed_n2r.pop(node_id, None)
-        for room_pos in list(to_apply.keys()):
-            proposed_r2n.pop(room_pos, None)
-
-        if not proposed_r2n:
-            del current.match_proposals
-
-        self._set_message(f'Applied {applied} tentative matches', 3.0)
-        logger.info('Applied tentative matches: %d', applied)
-
-        # Color maps for inline markers
-        marker_color_map = {
-            's': (80, 220, 80), 'k': (255, 215, 0), 'K': (200, 160, 0),
-            'b': (220, 40, 40), 'e': (200, 60, 60), 'I': (160, 40, 200),
-            'p': (80, 160, 255), 't': (255, 200, 60)
-        }
-        edge_color_map = {'S': (40, 200, 255), 'b': (220, 40, 40), 'k': (255, 180, 60), 'l': (160, 80, 200), 's': (100, 100, 100)}
-
-        # Draw edges (shadow + bright center line) between placed nodes and inline labels
-        for u, v in graph.edges():
-            pu = node_pos.get(u)
-            pv = node_pos.get(v)
-            if not pu or not pv:
-                continue
-            try:
-                if overlay:
-                    pygame.draw.line(overlay, (20, 40, 60, 220), pu, pv, max(6, int(self.TILE_SIZE * 0.2)))
-                    pygame.draw.line(overlay, (40, 200, 255, 220), pu, pv, max(3, int(self.TILE_SIZE * 0.12)))
-                else:
-                    pygame.draw.line(surface, (20, 40, 60), pu, pv, max(6, int(self.TILE_SIZE * 0.2)))
-                    pygame.draw.line(surface, (40, 200, 255), pu, pv, max(3, int(self.TILE_SIZE * 0.12)))
-
-                # Inline edge label: midpoint marker with letter (if edge has label)
-                try:
-                    ed = graph.get_edge_data(u, v) or {}
-                    label_char = ed.get('label') or ed.get('edge_type', '')
-                    if label_char:
-                        # If label is long (edge_type like 'key_locked'), prefer the first letter key if present
-                        if len(label_char) > 1 and label_char in edge_color_map:
-                            ch = label_char
-                        else:
-                            # Some DOT edges use single-char labels like 'k', 'S', 'l'
-                            ch = label_char if len(label_char) == 1 else None
-                        if ch:
-                            mx = (pu[0] + pv[0]) / 2
-                            my = (pu[1] + pv[1]) / 2
-                            bg = edge_color_map.get(ch, (80, 80, 120))
-                            # Draw a small rectangle with the letter
-                            rect_w = max(12, int(self.TILE_SIZE * 0.6))
-                            rect_h = max(12, int(self.TILE_SIZE * 0.4))
-                            rx = int(mx - rect_w / 2)
-                            ry = int(my - rect_h / 2)
-                            pygame.draw.rect(surface, bg, (rx, ry, rect_w, rect_h))
-                            pygame.draw.rect(surface, (10, 10, 10), (rx, ry, rect_w, rect_h), 1)
-                            tf = pygame.font.SysFont('Arial', max(10, int(rect_h * 0.6)), bold=True)
-                            label_s = tf.render(str(ch), True, (255, 255, 255))
-                            surface.blit(label_s, (rx + rect_w//2 - label_s.get_width()//2, ry + rect_h//2 - label_s.get_height()//2))
-                except Exception:
-                    pass
-            except Exception:
-                pass
-
-        # Draw nodes with halo, fill, outline, and labeled badge
-        hovered_node = None
-        hovered_edge = None
-        mouse_pos = pygame.mouse.get_pos() if pygame.get_init() else (0, 0)
-        for node, (cx, cy) in node_pos.items():
-            radius = max(6, int(self.TILE_SIZE * 0.35))
-            try:
-                if overlay:
-                    pygame.draw.circle(overlay, (40, 200, 255, 90), (int(cx), int(cy)), int(radius * 1.6))
-                pygame.draw.circle(surface, (255, 160, 60), (int(cx), int(cy)), radius)
-                pygame.draw.circle(surface, (15, 15, 15), (int(cx), int(cy)), radius, 2)
-
-                # Node label (node id)
-                font = pygame.font.SysFont('Arial', max(12, int(self.TILE_SIZE // 5)), bold=True)
-                label = str(node)
-                txt = font.render(label, True, (255, 255, 255))
-                outline = font.render(label, True, (10, 10, 10))
-                ox = int(cx) - txt.get_width() // 2
-                oy = int(cy) - txt.get_height() // 2
-                surface.blit(outline, (ox - 1, oy))
-                surface.blit(outline, (ox + 1, oy))
-                surface.blit(outline, (ox, oy - 1))
-                surface.blit(outline, (ox, oy + 1))
-                surface.blit(txt, (ox, oy))
-
-                # Semantic inline marker (small colored circle with char)
-                try:
-                    nattr = graph.nodes[node] if hasattr(graph, 'nodes') else {}
-                    label_char = nattr.get('label') if isinstance(nattr, dict) else None
-                    # Prefer single-character label, else derive from flags
-                    if not label_char or len(label_char) != 1:
-                        if nattr.get('is_start'):
-                            label_char = 's'
-                        elif nattr.get('is_triforce'):
-                            label_char = 't'
-                        elif nattr.get('is_boss'):
-                            label_char = 'b'
-                        elif nattr.get('has_key'):
-                            label_char = 'k'
-                        elif nattr.get('has_item'):
-                            label_char = 'I'
-                        elif nattr.get('has_enemy'):
-                            label_char = 'e'
-                        elif nattr.get('has_puzzle'):
-                            label_char = 'p'
-                        else:
-                            label_char = None
-                    if label_char:
-                        mc = marker_color_map.get(label_char, (120, 120, 120))
-                        mx = int(cx - radius - 8)
-                        my = int(cy - radius - 8)
-                        # Draw a distinctive Triforce icon for 't' (three golden triangles)
-                        if label_char == 't':
-                            tri_size = max(10, int(radius * 0.9))
-                            # center of triforce is (mx,my)
-                            cx0, cy0 = mx, my
-                            # top triangle
-                            top = [
-                                (cx0, cy0 - tri_size // 2 - 2),
-                                (cx0 - tri_size // 2, cy0 + tri_size // 2),
-                                (cx0 + tri_size // 2, cy0 + tri_size // 2)
-                            ]
-                            # left triangle (shifted left-bottom)
-                            left = [
-                                (cx0 - tri_size // 2, cy0 + tri_size // 2),
-                                (cx0 - tri_size, cy0 + tri_size // 2 + tri_size // 2),
-                                (cx0, cy0 + tri_size // 2 + tri_size // 2)
-                            ]
-                            # right triangle
-                            right = [
-                                (cx0 + tri_size // 2, cy0 + tri_size // 2),
-                                (cx0, cy0 + tri_size // 2 + tri_size // 2),
-                                (cx0 + tri_size, cy0 + tri_size // 2 + tri_size // 2)
-                            ]
-                            pygame.draw.polygon(surface, (255, 215, 0), top)
-                            pygame.draw.polygon(surface, (255, 215, 0), left)
-                            pygame.draw.polygon(surface, (255, 215, 0), right)
-                            pygame.draw.polygon(surface, (10, 10, 10), top, 1)
-                            pygame.draw.polygon(surface, (10, 10, 10), left, 1)
-                            pygame.draw.polygon(surface, (10, 10, 10), right, 1)
-                        else:
-                            pygame.draw.circle(surface, mc, (mx, my), max(6, int(radius * 0.5)))
-                            tf = pygame.font.SysFont('Arial', max(10, int(radius * 0.6)), bold=True)
-                            chs = tf.render(label_char, True, (255, 255, 255))
-                            surface.blit(chs, (mx - chs.get_width()//2, my - chs.get_height()//2))
-                except Exception:
-                    pass
-
-                # Degree badge
-                try:
-                    degree = graph.degree[node] if hasattr(graph, 'degree') else sum(1 for a, b in graph.edges() if a == node or b == node)
-                except Exception:
-                    degree = 0
-                badge_radius = max(6, int(radius * 0.5))
-                bx = int(cx + radius * 0.7)
-                by = int(cy - radius * 0.7)
-                pygame.draw.circle(surface, (255, 80, 80), (bx, by), badge_radius)
-                pygame.draw.circle(surface, (20, 20, 20), (bx, by), badge_radius, 1)
-                bfont = pygame.font.SysFont('Arial', max(10, int(badge_radius * 1.0)), bold=True)
-                btxt = bfont.render(str(degree), True, (255, 255, 255))
-                surface.blit(btxt, (bx - btxt.get_width() // 2, by - btxt.get_height() // 2))
-
-                # Hover detection (node takes precedence)
-                dx = mouse_pos[0] - cx
-                dy = mouse_pos[1] - cy
-                if dx*dx + dy*dy <= (radius * 1.4) ** 2:
-                    hovered_node = node
-            except Exception:
-                pass
-
-        # Edge hover detection (if no node hovered)
-        if not hovered_node:
-            def point_segment_distance(p, a, b):
-                # p,a,b are (x,y)
-                px, py = p
-                ax, ay = a
-                bx, by = b
-                dx = bx - ax
-                dy = by - ay
-                if dx == 0 and dy == 0:
-                    return ((px-ax)**2 + (py-ay)**2) ** 0.5
-                t = ((px-ax) * dx + (py-ay) * dy) / (dx*dx + dy*dy)
-                t = max(0.0, min(1.0, t))
-                projx = ax + t * dx
-                projy = ay + t * dy
-                return ((px-projx)**2 + (py-projy)**2) ** 0.5
-
-            for u, v in graph.edges():
-                pu = node_pos.get(u)
-                pv = node_pos.get(v)
-                if not pu or not pv:
-                    continue
-                dist = point_segment_distance(mouse_pos, pu, pv)
-                if dist <= max(8, int(self.TILE_SIZE * 0.12)):
-                    hovered_edge = (u, v, graph.get_edge_data(u, v).get('label', ''))
-                    break
-
-        # Blit the overlay after drawing all glow elements
-        if overlay:
-            try:
-                surface.blit(overlay, (0, 0))
-            except Exception:
-                pass
-
-        # Small legend to explain the overlay (non-intrusive)
-        try:
-            # Base legend
-            lines = [
-                "Topology legend:",
-                "Nodes = graph nodes (orange)",
-                "Badge = neighbor count",
-                "Edges = connectivity (cyan)"
-            ]
-            if unmatched_nodes:
-                # Show a short list of node ids for debugging
-                ids_preview = ', '.join(str(n) for n in (unmatched_node_ids[:8] if 'unmatched_node_ids' in locals() else []))
-                lines.append(f"Unplaced nodes: {unmatched_nodes} [{ids_preview}]")
-                # Also log for diagnostics
-                try:
-                    logger.info(f"Topology unplaced nodes: {unmatched_node_ids}")
-                except Exception:
-                    pass
-
-            # If the user toggled the detailed legend, include the JSON-style mapping
-            if getattr(self, 'show_topology_legend', False):
-                lines.append("")
-                lines.append("Node semantics:")
-                for k, v in self.topology_semantics.get('nodes', {}).items():
-                    lines.append(f"{k}: {', '.join(v)}")
-                lines.append("")
-                lines.append("Edge semantics:")
-                for k, v in self.topology_semantics.get('edges', {}).items():
-                    lines.append(f"{k}: {', '.join(v)}")
-
-            lf = pygame.font.SysFont('Arial', 12)
-            lw = 360
-            lh = 6 + 18 * len(lines)
-            # Clamp legend size
-            lw = min(lw, self.screen_w - 20)
-            lh = min(lh, self.screen_h - 20)
-
-            legend_surf = pygame.Surface((lw, lh), pygame.SRCALPHA)
-            legend_surf.fill((10, 10, 10, 200))
-
-            # Color maps for small markers
-            marker_color_map = {
-                's': (80, 220, 80), 'k': (255, 215, 0), 'K': (200, 160, 0),
-                'b': (220, 40, 40), 'e': (200, 60, 60), 'I': (160, 40, 200),
-                'p': (80, 160, 255), 't': (255, 200, 60)
-            }
-            edge_color_map = {'S': (40, 200, 255), 'b': (220, 40, 40), 'k': (255, 180, 60), 'l': (160, 80, 200), 's': (100, 100, 100)}
-
-            y = 6
-            for i, l in enumerate(lines):
-                # If mapping line like 'k: room, key' try to draw a small color marker
-                m = None
-                if ':' in l and len(l) >= 3:
-                    key = l.split(':', 1)[0].strip()
-                    if key in marker_color_map:
-                        m = ('node', key, marker_color_map[key])
-                    elif key in edge_color_map:
-                        m = ('edge', key, edge_color_map[key])
-                if m:
-                    # Draw marker circle or square then text
-                    if m[0] == 'node':
-                        # Draw Triforce icon for 't' in legend, otherwise circle
-                        if m[1] == 't':
-                            cx_l = 8 + 8
-                            cy_l = y + 9
-                            ts = 8
-                            top = [(cx_l, cy_l - ts//2 - 1), (cx_l - ts//2, cy_l + ts//2), (cx_l + ts//2, cy_l + ts//2)]
-                            left = [(cx_l - ts//2, cy_l + ts//2), (cx_l - ts, cy_l + ts//2 + ts//2), (cx_l, cy_l + ts//2 + ts//2)]
-                            right = [(cx_l + ts//2, cy_l + ts//2), (cx_l, cy_l + ts//2 + ts//2), (cx_l + ts, cy_l + ts//2 + ts//2)]
-                            pygame.draw.polygon(legend_surf, (255, 215, 0), top)
-                            pygame.draw.polygon(legend_surf, (255, 215, 0), left)
-                            pygame.draw.polygon(legend_surf, (255, 215, 0), right)
-                            pygame.draw.polygon(legend_surf, (10, 10, 10), top, 1)
-                            pygame.draw.polygon(legend_surf, (10, 10, 10), left, 1)
-                            pygame.draw.polygon(legend_surf, (10, 10, 10), right, 1)
-                        else:
-                            pygame.draw.circle(legend_surf, m[2], (8 + 6, y + 9), 6)
-                    else:
-                        pygame.draw.rect(legend_surf, m[2], (8, y + 3, 12, 12))
-                    txt = lf.render(l, True, (230, 230, 230))
-                    legend_surf.blit(txt, (28, y))
-                else:
-                    txt = lf.render(l, True, (230, 230, 230))
-                    legend_surf.blit(txt, (8, y))
-                y += 18
-
-            surface.blit(legend_surf, (10, 10))
-        except Exception:
-            pass
-
-        # Draw hover tooltip for node/edge if applicable
-        try:
-            if hovered_node is not None or hovered_edge is not None:
-                tip_lines = []
-                if hovered_node is not None:
-                    node = hovered_node
-                    tip_lines.append(f"Node: {node}")
-                    nattr = graph.nodes[node]
-                    # Prefer single-char label if available
-                    label_char = nattr.get('label') or nattr.get('label', '')
-                    # If label is like 's' or 'e' use semantics mapping
-                    if label_char and label_char in self.topology_semantics.get('nodes', {}):
-                        tip_lines.append(f"Type: {', '.join(self.topology_semantics['nodes'][label_char])}")
-                    else:
-                        # Fallback: infer flags set on node
-                        flags = []
-                        for k in ['is_start', 'is_triforce', 'is_boss', 'has_key', 'has_item', 'has_enemy', 'has_puzzle']:
-                            if nattr.get(k):
-                                flags.append(k)
-                        if flags:
-                            tip_lines.append("Flags: " + ", ".join(flags))
-                else:
-                    u, v, label_char = hovered_edge
-                    tip_lines.append(f"Edge: {u} -> {v}")
-                    if label_char and label_char in self.topology_semantics.get('edges', {}):
-                        tip_lines.append(f"Type: {', '.join(self.topology_semantics['edges'][label_char])}")
-                    else:
-                        # Edge attributes fallback
-                        ed = graph.get_edge_data(u, v) or {}
-                        if 'edge_type' in ed:
-                            tip_lines.append(f"Type: {ed['edge_type']}")
-
-                # Render tooltip box near mouse
-                mxx, myy = mouse_pos
-                pad = 6
-                tf = pygame.font.SysFont('Arial', 12)
-                tw = max(tf.render(t, True, (255,255,255)).get_width() for t in tip_lines) + pad * 2
-                th = (len(tip_lines) * 18) + pad * 2
-                tx = mxx + 12
-                ty = myy + 12
-                # Clamp inside screen
-                if tx + tw > self.screen_w - 10:
-                    tx = self.screen_w - tw - 10
-                if ty + th > self.screen_h - 10:
-                    ty = self.screen_h - th - 10
-                tip_surf = pygame.Surface((tw, th), pygame.SRCALPHA)
-                tip_surf.fill((12, 12, 12, 220))
-                pygame.draw.rect(tip_surf, (200,200,200), (0, 0, tw, th), 1)
-                for i, t in enumerate(tip_lines):
-                    t_s = tf.render(t, True, (230, 230, 230))
-                    tip_surf.blit(t_s, (pad, pad + i * 18))
-                surface.blit(tip_surf, (tx, ty))
-        except Exception:
-            pass
+        return _apply_tentative_matches_helper(gui=self, logger=logger)
 
     # --- Solver comparison helpers ---
     def _set_last_solver_metrics(self, name, nodes, time_ms, path_len):
-        self.last_solver_metrics = {
-            'name': name,
-            'nodes': nodes,
-            'time_ms': time_ms,
-            'path_len': path_len
-        }
+        return _set_last_solver_metrics_helper(
+            gui=self,
+            name=name,
+            nodes=nodes,
+            time_ms=time_ms,
+            path_len=path_len,
+        )
 
     def _run_solver_comparison(self):
         """Start an asynchronous solver comparison worker to avoid blocking the GUI."""
-        # If a comparison is already running, notify user
-        if getattr(self, 'solver_comparison_thread', None) and self.solver_comparison_thread.is_alive():
-            self._show_toast('Solver comparison already running', 2.5, 'warning')
-            return
-        self._sync_solver_dropdown_settings()
-
-        def _worker():
-            results = []
-            alg_names = ['A*', 'BFS', 'Dijkstra', 'Greedy', 'D* Lite', 'StateSpace',
-                        'CBS (Balanced)', 'CBS (Explorer)', 'CBS (Cautious)']
-            for idx, name in enumerate(alg_names):
-                start_t = time.time()
-                # D* Lite special-case: use D* Lite implementation
-                if name == 'D* Lite':
-                    try:
-                        from src.simulation.dstar_lite import DStarLiteSolver
-                        start_state = GameState(position=self.env.start_pos, opened_doors=self.env.state.opened_doors.copy() if hasattr(self.env, 'state') else set())
-                        ds = DStarLiteSolver(self.env)
-                        success, path, nodes = ds.solve(start_state)
-                        elapsed = (time.time() - start_t) * 1000
-                        results.append({'name': name, 'success': success, 'path_len': len(path), 'nodes': nodes, 'time_ms': elapsed})
-                        if success:
-                            self._set_last_solver_metrics(name, nodes, elapsed, len(path))
-                        continue
-                    except Exception as e:
-                        results.append({'name': name, 'success': False, 'path_len': 0, 'nodes': 0, 'time_ms': 0, 'error': str(e)})
-                        continue
-                if name == 'StateSpace':
-                    try:
-                        start_state = self.env.get_state() if hasattr(self.env, 'get_state') else GameState(position=self.env.start_pos)
-                        try:
-                            from src.simulation.validator import StateSpaceAStar
-                            temp_solver = self.solver if self.solver is not None else StateSpaceAStar(self.env)
-                        except Exception:
-                            temp_solver = self.solver
-                        if temp_solver is None:
-                            raise RuntimeError('State-space solver unavailable')
-                        success, path, states = temp_solver.solve()
-                        elapsed = (time.time() - start_t) * 1000
-                        nodes = getattr(temp_solver, 'last_states_explored', getattr(temp_solver, 'last_states', 0))
-                        results.append({'name': name, 'success': success, 'path_len': len(path), 'nodes': nodes, 'time_ms': elapsed})
-                        if success and not self.last_solver_metrics:
-                            self._set_last_solver_metrics(name, nodes, elapsed, len(path))
-                        continue
-                    except Exception as e:
-                        results.append({'name': name, 'success': False, 'path_len': 0, 'nodes': 0, 'time_ms': 0, 'error': str(e)})
-                        continue
-                # CBS special-case: use CognitiveBoundedSearch implementation
-                if 'CBS' in name:
-                    try:
-                        from src.simulation.cognitive_bounded_search import CognitiveBoundedSearch
-                        # Extract persona from name like "CBS (Balanced)"
-                        persona_map = {
-                            'CBS (Balanced)': 'balanced',
-                            'CBS (Explorer)': 'explorer',
-                            'CBS (Cautious)': 'cautious',
-                            'CBS (Forgetful)': 'forgetful',
-                            'CBS (Speedrunner)': 'speedrunner',
-                            'CBS (Greedy)': 'greedy'
-                        }
-                        persona = persona_map.get(name, 'balanced')
-                        cbs = CognitiveBoundedSearch(self.env, persona=persona, timeout=100000)
-                        ok, path, states, metrics = cbs.solve()
-                        elapsed = (time.time() - start_t) * 1000
-                        if ok:
-                            results.append({
-                                'name': name,
-                                'success': True,
-                                'path_len': len(path),
-                                'nodes': states,
-                                'time_ms': elapsed,
-                                'confusion': round(metrics.confusion_index, 3),
-                                'cog_load': round(metrics.cognitive_load, 3)
-                            })
-                            if not self.last_solver_metrics:
-                                self._set_last_solver_metrics(name, states, elapsed, len(path))
-                        else:
-                            results.append({
-                                'name': name,
-                                'success': False,
-                                'path_len': 0,
-                                'nodes': states,
-                                'time_ms': elapsed,
-                                'confusion': 0,
-                                'cog_load': 0
-                            })
-                        continue
-                    except Exception as e:
-                        results.append({'name': name, 'success': False, 'path_len': 0, 'nodes': 0, 'time_ms': 0, 'error': str(e), 'confusion': 0, 'cog_load': 0})
-                        continue
-                # A*/BFS/Dijkstra/Greedy: run full game-state solver dispatch (same as main solve path).
-                if name in {'A*', 'BFS', 'Dijkstra', 'Greedy'}:
-                    try:
-                        cur = self.maps[self.current_map_idx]
-                        if hasattr(cur, 'global_grid'):
-                            grid_arr = cur.global_grid
-                            graph = getattr(cur, 'graph', None)
-                            room_to_node = getattr(cur, 'room_to_node', None)
-                            room_positions = getattr(cur, 'room_positions', None)
-                            node_to_room = getattr(cur, 'node_to_room', None)
-                        else:
-                            grid_arr = cur
-                            graph = None
-                            room_to_node = None
-                            room_positions = None
-                            node_to_room = None
-
-                        if not self.env or not getattr(self.env, 'start_pos', None) or not getattr(self.env, 'goal_pos', None):
-                            raise RuntimeError('Start/goal not defined')
-
-                        start = tuple(self.env.start_pos)
-                        goal = tuple(self.env.goal_pos)
-                        alg_dispatch = {'A*': 0, 'BFS': 1, 'Dijkstra': 2, 'Greedy': 3}
-                        alg_idx = alg_dispatch[name]
-                        flags = dict(self.feature_flags)
-                        priority_options = {
-                            'tie_break': self.feature_flags.get('priority_tie_break', False),
-                            'key_boost': self.feature_flags.get('priority_key_boost', False),
-                            'enable_ara': self.feature_flags.get('enable_ara', False),
-                            'ara_weight': float(getattr(self, 'ara_weight', 1.0)),
-                            'representation': str(getattr(self, 'search_representation', 'hybrid')),
-                            'allow_diagonals': True,
-                        }
-
-                        res = _solve_in_subprocess(
-                            grid_arr,
-                            start,
-                            goal,
-                            alg_idx,
-                            flags,
-                            priority_options,
-                            graph=graph,
-                            room_to_node=room_to_node,
-                            room_positions=room_positions,
-                            node_to_room=node_to_room,
-                        )
-                        elapsed = (time.time() - start_t) * 1000
-                        success = bool(res and res.get('success'))
-                        path = (res.get('path') or []) if res else []
-                        solver_meta = (res.get('solver_result') or {}) if res else {}
-                        nodes = int(solver_meta.get('nodes', 0) or solver_meta.get('states_explored', 0) or 0)
-
-                        results.append({
-                            'name': name,
-                            'success': success,
-                            'path_len': len(path),
-                            'nodes': nodes,
-                            'time_ms': elapsed,
-                        })
-                        if success and not self.last_solver_metrics:
-                            self._set_last_solver_metrics(name, nodes, elapsed, len(path))
-                    except Exception as e:
-                        results.append({'name': name, 'success': False, 'path_len': 0, 'nodes': 0, 'time_ms': 0, 'error': str(e)})
-                    continue
-            # Store results and notify main thread (non-blocking)
-            self.solver_comparison_results = results
-            self.show_solver_comparison_overlay = True
-            self._set_message('Solver comparison complete', 3.0)
-            self._show_toast('Solver comparison finished', 3.0, 'success')
-
-        import threading
-        self.solver_comparison_thread = threading.Thread(target=_worker, daemon=True)
-        self.solver_comparison_thread.start()
-        self._show_toast('Solver comparison started (background)', 2.0, 'info')
+        return _run_solver_comparison_helper(
+            gui=self,
+            logger=logger,
+            time_module=time,
+            game_state_cls=GameState,
+            solve_in_subprocess=_solve_in_subprocess,
+            threading_module=threading,
+        )
 
     def _start_map_elites(self, n_samples: int = 200, resolution: int = 20):
         """Start a background MAP-Elites evaluation on the currently loaded maps.
@@ -9444,17 +3455,12 @@ class ZeldaGUI:
         Runs on a background thread so the GUI stays responsive. Results are stored
         in `self.map_elites_result` and a toast is shown when complete.
         """
-        import threading
-        if getattr(self, 'map_elites_thread', None) and self.map_elites_thread.is_alive():
-            self._show_toast('MAP-Elites already running', 3.0, 'warning')
-            return
-        maps_copy = list(getattr(self, 'maps', []) or [])
-        if not maps_copy:
-            self._show_toast('No maps available for MAP-Elites', 3.0, 'warning')
-            return
-        self._show_toast(f'Starting MAP-Elites ({n_samples} samples, res={resolution})', 3.0)
-        self.map_elites_thread = threading.Thread(target=self._map_elites_worker, args=(maps_copy, n_samples, resolution), daemon=True)
-        self.map_elites_thread.start()
+        return _start_map_elites_flow_helper(
+            gui=self,
+            n_samples=n_samples,
+            resolution=resolution,
+            threading_module=threading,
+        )
 
     def _map_elites_worker(self, maps, n_samples: int, resolution: int):
         """Background worker implementing MAP-Elites on a set of pre-loaded maps.
@@ -9462,106 +3468,44 @@ class ZeldaGUI:
         This function uses the lightweight `src.simulation.map_elites` helper and the
         built-in `DungeonSolver` for validation.
         """
-        try:
-            from src.simulation.map_elites import run_map_elites_on_maps, plot_heatmap
-            evaluator, occ = run_map_elites_on_maps(maps, resolution=resolution)
-            # Try to produce a plot if plotting backend available
-            try:
-                import os
-                out_dir = getattr(self, 'artifacts_dir', '.') or '.'
-                os.makedirs(out_dir, exist_ok=True)
-                out_path = os.path.join(out_dir, f'map_elites_heatmap_res{resolution}.png')
-                if plot_heatmap is not None:
-                    plot_heatmap(occ, out_path)
-                    self.map_elites_heatmap_path = out_path
-                else:
-                    self.map_elites_heatmap_path = None
-            except Exception:
-                self.map_elites_heatmap_path = None
-            self.map_elites_result = evaluator
-            self._show_toast('MAP-Elites completed', 4.0, 'success')
-        except Exception as e:
-            logger.exception('MAP-Elites worker failed: %s', e)
-            self._show_toast(f'MAP-Elites failed: {e}', 4.0, 'error')
+        return _map_elites_worker_flow_helper(
+            gui=self,
+            maps=maps,
+            n_samples=n_samples,
+            resolution=resolution,
+            logger=logger,
+            os_module=os,
+        )
 
-    def _render_solver_comparison_overlay(self, surface: "pygame.Surface"):
+    def _render_solver_comparison_overlay(self, surface):
         """Render a small sidebar table with solver comparison results."""
-        if not getattr(self, 'solver_comparison_results', None):
-            return
-        sidebar_x = self.screen_w - self.SIDEBAR_WIDTH
-        box_w = self.SIDEBAR_WIDTH - 20
-        # Check if any CBS results exist to adjust layout
-        has_cbs = any('CBS' in r['name'] for r in self.solver_comparison_results)
-        row_height = 22 if has_cbs else 18
-        box_h = min(300, 24 + row_height * len(self.solver_comparison_results) + 20)
-        box_y = 220
-        box_rect = pygame.Rect(sidebar_x + 10, box_y, box_w, box_h)
-        pygame.draw.rect(surface, (38, 38, 55), box_rect)
-        pygame.draw.rect(surface, (100, 150, 255), box_rect, 1)
-        font = pygame.font.SysFont('Arial', 11, bold=True)
-        if has_cbs:
-            header = font.render('Solver Comparison', True, (200, 200, 255))
-        else:
-            header = font.render('Solver   Success   Len   Nodes   ms', True, (200, 200, 255))
-        surface.blit(header, (box_rect.x + 6, box_rect.y + 6))
-        y = box_rect.y + 28
-        small = pygame.font.SysFont('Arial', 10)
-        for r in self.solver_comparison_results:
-            if 'CBS' in r['name'] and 'confusion' in r:
-                # CBS result with metrics (2-line display)
-                line1 = f"{r['name'][:15]:15} {str(r.get('success',False))[:5]:5} Len:{r.get('path_len',0):<4}"
-                line2 = f"  Confusion:{r.get('confusion',0):.2f} Load:{r.get('cog_load',0):.2f} {int(r.get('time_ms',0))}ms"
-                color = (200, 255, 200) if r.get('success') else (255, 150, 150)
-                surface.blit(small.render(line1, True, color), (box_rect.x + 6, y))
-                surface.blit(small.render(line2, True, (180, 180, 255)), (box_rect.x + 6, y + 11))
-                y += row_height
-            else:
-                # Standard result (1-line display)
-                text = f"{r['name'][:7]:7}   {str(r.get('success',False))[:5]:5}   {r.get('path_len',0):3}   {r.get('nodes',0):6}   {int(r.get('time_ms',0)):4}"
-                color = (200, 200, 200)
-                surface.blit(small.render(text, True, color), (box_rect.x + 6, y))
-                y += row_height
-        # Dismiss hint
-        hint = small.render('Press Esc to close', True, (150,150,150))
-        surface.blit(hint, (box_rect.x + 6, box_rect.y + box_rect.h - 18))
+        _render_solver_comparison_overlay_helper(
+            surface=surface,
+            results=getattr(self, 'solver_comparison_results', None),
+            screen_w=self.screen_w,
+            sidebar_width=self.SIDEBAR_WIDTH,
+            pygame=pygame,
+        )
     
     def _set_message(self, message: str, duration: float = 3.0):
         """Set status message with timestamp for auto-hide."""
-        self.message = message
-        self.message_time = time.time()
-        self.message_duration = duration
+        _set_message_helper(self, message, duration, time)
     
     def _show_toast(self, message: str, duration: float = 3.0, toast_type: str = 'info'):
         """Show a floating toast notification."""
-        if hasattr(self, 'toast_notifications'):
-            self.toast_notifications.append(ToastNotification(message, duration, toast_type))
+        _show_toast_helper(self, message, duration, toast_type, ToastNotification)
     
     def _format_cbs_metrics_tooltip(self, cbs_metrics: dict) -> str:
         """Format CBS metrics for detailed tooltip display."""
-        lines = [
-            f"Confusion Index: {cbs_metrics['confusion_index']:.3f}",
-            f"Navigation Entropy: {cbs_metrics['navigation_entropy']:.3f}",
-            f"Cognitive Load: {cbs_metrics['cognitive_load']:.3f}",
-            f"Aha Latency: {cbs_metrics['aha_latency']} steps",
-            f"Unique Tiles: {cbs_metrics['unique_tiles']}",
-            f"Peak Memory: {cbs_metrics['peak_memory']} items",
-            f"Replans: {cbs_metrics['replans']}",
-            f"Confusion Events: {cbs_metrics['confusion_events']}"
-        ]
-        return "\n".join(lines)
+        return _format_cbs_metrics_tooltip_helper(cbs_metrics)
     
     def _update_toasts(self):
         """Update and remove expired toasts."""
-        if hasattr(self, 'toast_notifications'):
-            self.toast_notifications = [t for t in self.toast_notifications if not t.is_expired()]
+        _update_toasts_helper(self)
     
-    def _render_toasts(self, surface: "pygame.Surface"):
+    def _render_toasts(self, surface):
         """Render all active toast notifications."""
-        if not hasattr(self, 'toast_notifications'):
-            return
-        base_y = self.screen_h - 140  # Above bottom panel
-        for i, toast in enumerate(self.toast_notifications):
-            toast.render(surface, self.screen_w // 2, base_y - i * 70)
+        _render_toasts_helper(self, surface)
     
     # ========================================
     # BLOCK PUSH ANIMATION SYSTEM
@@ -9574,110 +3518,23 @@ class ZeldaGUI:
             block_from: Original block position (row, col)
             block_to: Destination position (row, col)
         """
-        self.block_push_animations.append({
-            'from_pos': block_from,
-            'to_pos': block_to,
-            'start_time': pygame.time.get_ticks(),
-            'duration': self.block_push_duration,
-            'progress': 0.0
-        })
-        logger.debug('BLOCK_PUSH: Started animation from %s to %s', block_from, block_to)
+        _start_block_push_animation_helper(self, block_from, block_to, pygame, logger)
     
     def _update_block_push_animations(self):
         """Update all active block push animations and complete finished ones."""
-        if not hasattr(self, 'block_push_animations') or not self.block_push_animations:
-            return
-        
-        current_time = pygame.time.get_ticks()
-        still_active = []
-        
-        for anim in self.block_push_animations:
-            elapsed = current_time - anim['start_time']
-            progress = min(1.0, elapsed / anim['duration'])
-            anim['progress'] = progress
-            
-            if progress < 1.0:
-                # Animation still in progress
-                still_active.append(anim)
-            else:
-                # Animation complete - update the grid
-                from_pos = anim['from_pos']
-                to_pos = anim['to_pos']
-                
-                # Move block in grid: clear original position, place block at destination
-                try:
-                    # Get the BLOCK tile ID
-                    block_id = SEMANTIC_PALETTE['BLOCK']
-                    floor_id = SEMANTIC_PALETTE['FLOOR']
-                    
-                    # Update grid state
-                    self.env.grid[from_pos[0], from_pos[1]] = floor_id
-                    self.env.grid[to_pos[0], to_pos[1]] = block_id
-                    
-                    logger.debug('BLOCK_PUSH: Animation complete, grid updated: %s->%s', from_pos, to_pos)
-                    
-                    # Add visual effect at destination
-                    if self.effects:
-                        self.effects.add_effect(PopEffect(to_pos, (139, 90, 43)))  # Brown pop
-                except Exception as e:
-                    logger.warning('BLOCK_PUSH: Failed to update grid after animation: %s', e)
-        
-        self.block_push_animations = still_active
+        _update_block_push_animations_helper(self, pygame, SEMANTIC_PALETTE, PopEffect, logger)
     
-    def _render_block_push_animations(self, surface: "pygame.Surface"):
+    def _render_block_push_animations(self, surface):
         """Render blocks that are currently being pushed with smooth interpolation.
         
         Args:
             surface: The pygame surface to draw on (map_surface)
         """
-        if not hasattr(self, 'block_push_animations') or not self.block_push_animations:
-            return
-        
-        for anim in self.block_push_animations:
-            progress = anim.get('progress', 0.0)
-            
-            # Ease-out function for smooth deceleration: 1 - (1 - t)^2
-            eased = 1.0 - (1.0 - progress) ** 2
-            
-            from_r, from_c = anim['from_pos']
-            to_r, to_c = anim['to_pos']
-            
-            # Interpolate grid position
-            cur_r = from_r + (to_r - from_r) * eased
-            cur_c = from_c + (to_c - from_c) * eased
-            
-            # Convert to screen coordinates
-            screen_x = int(cur_c * self.TILE_SIZE - self.view_offset_x)
-            screen_y = int(cur_r * self.TILE_SIZE - self.view_offset_y)
-            
-            # Get block tile surface
-            block_id = SEMANTIC_PALETTE['BLOCK']
-            if self.renderer and hasattr(self.renderer, 'sprite_manager'):
-                block_surf = self.renderer.sprite_manager.get_tile(block_id, self.TILE_SIZE)
-            else:
-                # Fallback: use images dict
-                block_surf = self.images.get(block_id)
-            
-            if block_surf:
-                surface.blit(block_surf, (screen_x, screen_y))
-                
-                # Add subtle shadow/highlight during animation for depth effect
-                if progress < 1.0:
-                    highlight = pygame.Surface((self.TILE_SIZE, self.TILE_SIZE), pygame.SRCALPHA)
-                    alpha = int(60 * (1.0 - progress))  # Fade out as animation completes
-                    highlight.fill((255, 255, 200, alpha))
-                    surface.blit(highlight, (screen_x, screen_y))
+        _render_block_push_animations_helper(self, surface, pygame, SEMANTIC_PALETTE)
     
     def _get_animating_block_positions(self) -> set:
         """Get set of block positions currently being animated (to skip normal rendering)."""
-        if not hasattr(self, 'block_push_animations') or not self.block_push_animations:
-            return set()
-        
-        positions = set()
-        for anim in self.block_push_animations:
-            positions.add(anim['from_pos'])
-            # Don't add to_pos - we want to show empty floor there during animation
-        return positions
+        return _get_animating_block_positions_helper(self)
     
     def _check_and_start_block_push(self, player_pos: Tuple[int, int], target_pos: Tuple[int, int], 
                                      action: Action) -> bool:
@@ -9691,137 +3548,23 @@ class ZeldaGUI:
         Returns:
             True if a block push was initiated, False otherwise
         """
-        if not hasattr(self, 'env') or self.env is None:
-            return False
-        
-        # Check if target is a pushable block
-        target_tile = self.env.grid[target_pos[0], target_pos[1]]
-        if target_tile not in PUSHABLE_IDS:
-            return False
-        
-        # Calculate push direction (same as movement direction)
-        dr = target_pos[0] - player_pos[0]
-        dc = target_pos[1] - player_pos[1]
-        
-        # Calculate where block would be pushed to
-        push_dest_r = target_pos[0] + dr
-        push_dest_c = target_pos[1] + dc
-        
-        # Check bounds
-        if not (0 <= push_dest_r < self.env.height and 0 <= push_dest_c < self.env.width):
-            return False
-        
-        # Check if destination is walkable (can receive the block)
-        dest_tile = self.env.grid[push_dest_r, push_dest_c]
-        if dest_tile not in WALKABLE_IDS:
-            return False
-        
-        # Valid block push! Start animation
-        self._start_block_push_animation(target_pos, (push_dest_r, push_dest_c))
-        
-        # Show toast notification
-        self._show_toast(f'Block pushed!', 1.5, 'info')
-        
-        return True
+        _ = action
+        return _check_and_start_block_push_helper(self, player_pos, target_pos, WALKABLE_IDS, PUSHABLE_IDS)
 
     def _show_warning(self, message: str):
         """Display warning message to user."""
-        logger.warning(message)
-        self.message = f"[!] {message}"
+        _show_warning_helper(self, message, logger)
     
     def _manual_step(self, action: Action):
         """Execute manual step."""
-        if self.env.done:
-            return
-        
-        old_pos = self.env.state.position
-        old_keys = self.env.state.keys
-        old_bombs = self.env.state.bomb_count
-        old_boss_key = self.env.state.has_boss_key
-        
-        # Calculate target position for block push check
-        dr, dc = ACTION_DELTAS.get(action, (0, 0))
-        target_pos = (old_pos[0] + dr, old_pos[1] + dc)
-        
-        # Check if this move will push a block (before env.step modifies state)
-        if (0 <= target_pos[0] < self.env.height and 0 <= target_pos[1] < self.env.width):
-            self._check_and_start_block_push(old_pos, target_pos, action)
-        
-        state, reward, done, info = self.env.step(int(action))
-        new_pos = self.env.state.position
-        
-        # Increment step counter
-        self.step_count += 1
-        
-        # Check for item pickups and add visual feedback
-        if self.env.state.keys > old_keys:
-            # Key picked up!
-            keys_gained = self.env.state.keys - old_keys
-            self.keys_collected += keys_gained
-            if self.effects:
-                self.effects.add_effect(PopEffect(new_pos, (255, 215, 0)))  # Gold flash
-            self.item_pickup_times['key'] = time.time()
-            self.message = f"Key collected! ({self.keys_collected}/{self.total_keys}, {self.env.state.keys} held)"
-        
-        if self.env.state.bomb_count > old_bombs:
-            # Bomb acquired!
-            self.bombs_collected += 1
-            if self.effects:
-                self.effects.add_effect(PopEffect(new_pos, (200, 80, 80)))  # Red flash
-            self.item_pickup_times['bomb'] = time.time()
-            self.message = f"Bombs acquired! ({self.env.state.bomb_count} held)"
-        
-        if self.env.state.has_boss_key and not old_boss_key:
-            # Boss key found!
-            self.boss_keys_collected += 1
-            if self.effects:
-                self.effects.add_effect(FlashEffect(new_pos, (180, 40, 180), 0.5))  # Purple flash
-            self.item_pickup_times['boss_key'] = time.time()
-            self.message = f"BOSS KEY acquired! ({self.boss_keys_collected}/{self.total_boss_keys})"
-
-        # Detect and track item usage (keys/bombs/boss keys)
-        try:
-            self._track_item_usage(old_state, self.env.state)
-        except Exception:
-            pass
-
-        # Update modern HUD with current game state
-        if self.modern_hud:
-            self.modern_hud.update_game_state(
-                keys=self.env.state.keys,
-                bombs=1 if self.env.state.has_bomb else 0,
-                has_boss_key=self.env.state.has_boss_key,
-                position=new_pos,
-                steps=self.step_count,
-                message=self.message
-            )
-            # Update usage counters for HUD where supported
-            if hasattr(self.modern_hud, 'keys_used'):
-                self.modern_hud.keys_used = getattr(self, 'keys_used', 0)
-            if hasattr(self.modern_hud, 'bombs_used'):
-                self.modern_hud.bombs_used = getattr(self, 'bombs_used', 0)
-            if hasattr(self.modern_hud, 'boss_keys_used'):
-                self.modern_hud.boss_keys_used = getattr(self, 'boss_keys_used', 0)
-        
-        # Update visual position (smooth animation)
-        if self.renderer and new_pos != old_pos:
-            self.renderer.set_agent_position(new_pos[0], new_pos[1], immediate=False)
-            # Add pop effect at new position (grid coordinates)
-            if self.effects:
-                self.effects.add_effect(PopEffect(new_pos, (100, 255, 100)))
-        
-        if done:
-            if self.env.won:
-                self.message = "YOU WIN!"
-                if self.effects:
-                    goal_pos = self.env.goal_pos
-                    self.effects.add_effect(FlashEffect(goal_pos, (255, 215, 0), 0.5))
-            else:
-                self.message = f"Game Over: {info.get('msg', '')}"
-        else:
-            msg = info.get('msg', '')
-            if msg:
-                self.message = msg
+        return _manual_step_flow_helper(
+            gui=self,
+            action=action,
+            action_deltas=ACTION_DELTAS,
+            pop_effect_cls=PopEffect,
+            flash_effect_cls=FlashEffect,
+            time_module=time,
+        )
     
     def _render_path_GUARANTEED(self, surface):
         """GUARANTEED path rendering - draws path no matter what.
@@ -9830,149 +3573,14 @@ class ZeldaGUI:
         regardless of auto_mode, preview state, or feature flags.
         Call this AFTER tiles are drawn but BEFORE HUD elements.
         """
-        # Get auto_path safely
-        path = getattr(self, 'auto_path', None)
-        test_path = getattr(self, '_test_path', None)
-        
-        if not path or len(path) < 1:
-            # Also try test path for debugging (only if KLTN_DEBUG_TEST_PATH=1)
-            path = test_path
-            if not path or len(path) < 1:
-                return
-            is_test = True
-        else:
-            is_test = False
-        
-        # Validate path structure: ensure all entries are valid (row, col) tuples
-        try:
-            for i, point in enumerate(path):
-                if not isinstance(point, (tuple, list)) or len(point) != 2:
-                    logger.warning(f"Invalid path point at index {i}: {point}")
-                    return
-                if not all(isinstance(coord, (int, float)) for coord in point):
-                    logger.warning(f"Invalid path coordinates at index {i}: {point}")
-                    return
-        except Exception as e:
-            logger.warning(f"Path validation failed: {e}")
-            return
-        
-        path_len = len(path)
-        TILE_SIZE = self.TILE_SIZE
-        vx = self.view_offset_x
-        vy = self.view_offset_y
-        
-        # Colors for path rendering
-        if is_test:
-            line_color = (255, 0, 0)  # RED for test path
-            outline_color = (128, 0, 0)
-            start_color = (255, 100, 100)
-            end_color = (255, 50, 50)
-        else:
-            line_color = (0, 255, 255)  # CYAN for real path
-            outline_color = (0, 0, 0)
-            start_color = (0, 255, 0)  # GREEN start
-            end_color = (255, 215, 0)  # GOLD end
-        
-        # Draw THICK BRIGHT lines for each segment
-        if path_len > 1:
-            for i in range(path_len - 1):
-                # Path uses (row, col) format where row=y, col=x
-                r1, c1 = path[i]
-                r2, c2 = path[i + 1]
-                
-                # Convert to screen coordinates (center of each tile)
-                sx1 = int(c1 * TILE_SIZE - vx + TILE_SIZE // 2)
-                sy1 = int(r1 * TILE_SIZE - vy + TILE_SIZE // 2)
-                sx2 = int(c2 * TILE_SIZE - vx + TILE_SIZE // 2)
-                sy2 = int(r2 * TILE_SIZE - vy + TILE_SIZE // 2)
-                
-                # Draw BLACK outline for visibility (thick)
-                pygame.draw.line(surface, outline_color, (sx1, sy1), (sx2, sy2), 7)
-                # Draw BRIGHT path line
-                pygame.draw.line(surface, line_color, (sx1, sy1), (sx2, sy2), 5)
-        
-        # Draw start circle (GREEN/RED)
-        sr, sc = path[0]
-        cx = int(sc * TILE_SIZE - vx + TILE_SIZE // 2)
-        cy = int(sr * TILE_SIZE - vy + TILE_SIZE // 2)
-        pygame.draw.circle(surface, (0, 0, 0), (cx, cy), 10)  # Black outline
-        pygame.draw.circle(surface, start_color, (cx, cy), 8)
-        
-        # Draw end circle (GOLD/RED)
-        er, ec = path[-1]
-        ecx = int(ec * TILE_SIZE - vx + TILE_SIZE // 2)
-        ecy = int(er * TILE_SIZE - vy + TILE_SIZE // 2)
-        pygame.draw.circle(surface, (0, 0, 0), (ecx, ecy), 10)  # Black outline
-        pygame.draw.circle(surface, end_color, (ecx, ecy), 8)
-        
-        # === DRAW ITEM MARKERS ALONG PATH ===
-        # This highlights items that will be collected during auto-solve
-        path_item_positions = getattr(self, 'path_item_positions', {})
-        collected_positions = getattr(self, 'collected_positions', set())
-        current_step = getattr(self, 'auto_step_idx', 0)
-        
-        # Item marker colors and symbols
-        item_colors = {
-            'keys': (255, 215, 0),      # Gold
-            'boss_keys': (255, 100, 50), # Orange-red
-            'ladders': (100, 200, 255),  # Light blue
-            'bombs': (150, 150, 150),    # Gray
-            'doors_locked': (139, 69, 19),  # Brown
-            'doors_bomb': (80, 80, 80),     # Dark gray
-            'doors_boss': (180, 40, 40),    # Dark red
-            'triforce': (255, 255, 100)  # Bright yellow
-        }
-        
-        # Pulsing animation for items
-        pulse = (math.sin(time.time() * 4) + 1) / 2  # 0-1 oscillation
-        
-        for item_type, positions in path_item_positions.items():
-            if not positions:
-                continue
-            
-            color = item_colors.get(item_type, (255, 255, 255))
-            
-            for pos in positions:
-                # Skip already collected items
-                if pos in collected_positions:
-                    continue
-                
-                # Check if this item is ahead of current position in path
-                try:
-                    item_path_idx = path.index(pos) if pos in path else -1
-                except ValueError:
-                    item_path_idx = -1
-                
-                # Only highlight items not yet reached
-                if item_path_idx >= 0 and item_path_idx <= current_step:
-                    continue
-                
-                r, c = pos
-                ix = int(c * TILE_SIZE - vx + TILE_SIZE // 2)
-                iy = int(r * TILE_SIZE - vy + TILE_SIZE // 2)
-                
-                # Draw pulsing marker ring
-                ring_size = int(12 + 4 * pulse)
-                ring_alpha = int(180 + 75 * pulse)
-                
-                # Draw outer ring (black outline)
-                pygame.draw.circle(surface, (0, 0, 0), (ix, iy), ring_size + 2, 3)
-                # Draw colored ring
-                pygame.draw.circle(surface, color, (ix, iy), ring_size, 3)
-                
-                # Draw item type indicator (small inner circle or icon)
-                inner_color = (255, 255, 255)  # White inner
-                pygame.draw.circle(surface, inner_color, (ix, iy), 4)
-        
-        # Debug: Log rendering info every 2 seconds
-        if not hasattr(self, '_guaranteed_path_log_time'):
-            self._guaranteed_path_log_time = 0
-        now = time.time()
-        if now - self._guaranteed_path_log_time > 2.0:
-            self._guaranteed_path_log_time = now
-            items_count = sum(len(v) for v in path_item_positions.values()) if path_item_positions else 0
-            logger.debug('GUARANTEED_PATH: Rendered %d segments, %d item markers, start=(%d,%d)->screen(%d,%d), end=(%d,%d)->screen(%d,%d), is_test=%s',
-                        path_len - 1, items_count, path[0][0], path[0][1], cx, cy, path[-1][0], path[-1][1], ecx, ecy, is_test)
+        return _render_path_guaranteed_flow_helper(
+            gui=self,
+            surface=surface,
+            pygame=pygame,
+            math_module=math,
+            time_module=time,
+            logger=logger,
+        )
 
     def _render(self):
         """Render the current state using new visualization system or fallback."""
@@ -10052,32 +3660,25 @@ class ZeldaGUI:
         start_r = max(0, int(self.view_offset_y) // self.TILE_SIZE)
         end_c = min(w, start_c + (view_w // self.TILE_SIZE) + 2)
         end_r = min(h, start_r + (view_h // self.TILE_SIZE) + 2)
-        # Diagnostic logging to help explain why nothing is drawn (throttled to once per second)
-        if not hasattr(self, '_last_render_log_time'):
-            self._last_render_log_time = 0.0
-        
-        current_time = time.time()
-        if current_time - self._last_render_log_time >= 1.0:  # Log max once per second
-            self._last_render_log_time = current_time
-            try:
-                logger.debug("Draw ranges r=%d..%d c=%d..%d (map h=%d w=%d)", start_r, end_r, start_c, end_c, h, w)
-                if start_r < h and start_c < w:
-                    sample_tile = int(self.env.grid[start_r, start_c])
-                    logger.debug("Render sample tile: tile=%r, images_contains=%r", 
-                                sample_tile, sample_tile in getattr(self, 'images', {}))
-            except Exception:
-                logger.exception("Failed to log draw ranges")
-        
-        # Quick visible fallback directly on `self.screen` if drawing would be empty
-        if (end_r <= start_r) or (end_c <= start_c):
-            try:
-                # Draw large visible red box on screen with a label so user can see tests
-                pygame.draw.rect(self.screen, (200, 0, 0), (self.screen_w//2 - 120, self.screen_h//2 - 40, 240, 80))
-                f = self.big_font if hasattr(self, 'big_font') else pygame.font.SysFont('Arial', 20, True)
-                txt = f.render('RENDER RANGE EMPTY - CHECK OFFSETS', True, (255, 255, 255))
-                self.screen.blit(txt, (self.screen_w//2 - txt.get_width()//2, self.screen_h//2 - txt.get_height()//2))
-            except Exception:
-                pass
+        _log_draw_ranges_overlay_helper(
+            gui=self,
+            start_r=start_r,
+            end_r=end_r,
+            start_c=start_c,
+            end_c=end_c,
+            h=h,
+            w=w,
+            time_module=time,
+            logger=logger,
+        )
+        _render_empty_range_warning_overlay_helper(
+            gui=self,
+            start_r=start_r,
+            end_r=end_r,
+            start_c=start_c,
+            end_c=end_c,
+            pygame=pygame,
+        )
         
         # Pre-fetch collected items for efficient lookup during rendering
         # Combine env state collected_items with GUI's collected_positions for robustness
@@ -10185,67 +3786,20 @@ class ZeldaGUI:
                     screen_y = r * self.TILE_SIZE - self.view_offset_y
                     map_surface.blit(heat_surf, (screen_x, screen_y))
 
-        # Draw JPS overlay (jump points & segments) for debugging/teaching
-        if self.feature_flags.get('show_jps_overlay', False) and getattr(self, 'last_jps_trace', None):
-            trace = self.last_jps_trace
-            jumps = trace.get('jumps', []) if trace else []
-            segments = trace.get('segments', []) if trace else []
-            # Draw segments (semi-transparent lines)
-            for a, b in segments:
-                ar, ac = a; br, bc = b
-                if start_r <= ar < end_r and start_c <= ac < end_c and start_r <= br < end_r and start_c <= bc < end_c:
-                    ax = ac * self.TILE_SIZE + self.TILE_SIZE // 2 - self.view_offset_x
-                    ay = ar * self.TILE_SIZE + self.TILE_SIZE // 2 - self.view_offset_y
-                    bx = bc * self.TILE_SIZE + self.TILE_SIZE // 2 - self.view_offset_x
-                    by = br * self.TILE_SIZE + self.TILE_SIZE // 2 - self.view_offset_y
-                    pygame.draw.line(map_surface, (255, 200, 80, 150), (ax, ay), (bx, by), 2)
-
-        # Small MAP-Elites overlay (draw 20x20 occupancy mini-grid in sidebar) if available
-        if self.feature_flags.get('show_map_elites', False) and getattr(self, 'map_elites_result', None):
-            try:
-                occ = self.map_elites_result.occupancy_grid()
-                res = occ.shape[0]
-                mini_w = 120
-                mini_h = 120
-                cell_w = max(2, mini_w // res)
-                cell_h = max(2, mini_h // res)
-                mini_surf = pygame.Surface((cell_w * res, cell_h * res))
-                mini_surf.fill((30, 30, 40))
-                for yy in range(res):
-                    for xx in range(res):
-                        if occ[yy, xx]:
-                            pygame.draw.rect(mini_surf, (100, 200, 255), (xx * cell_w, (res - 1 - yy) * cell_h, cell_w, cell_h))
-                # Blit to top-right sidebar area
-                sidebar_x = self.screen_w - self.SIDEBAR_WIDTH + 10
-                blit_x = sidebar_x + 8
-                blit_y = 120
-                map_surface.blit(mini_surf, (blit_x - self.view_offset_x, blit_y - self.view_offset_y))
-            except Exception:
-                pass
-            trace = self.last_jps_trace
-            jumps = trace.get('jumps', []) if trace else []
-            segments = trace.get('segments', []) if trace else []
-            # Draw segments (semi-transparent lines)
-            for a, b in segments:
-                ar, ac = a; br, bc = b
-                if start_r <= ar < end_r and start_c <= ac < end_c and start_r <= br < end_r and start_c <= bc < end_c:
-                    ax = ac * self.TILE_SIZE + self.TILE_SIZE // 2 - self.view_offset_x
-                    ay = ar * self.TILE_SIZE + self.TILE_SIZE // 2 - self.view_offset_y
-                    bx = bc * self.TILE_SIZE + self.TILE_SIZE // 2 - self.view_offset_x
-                    by = br * self.TILE_SIZE + self.TILE_SIZE // 2 - self.view_offset_y
-                    try:
-                        pygame.draw.line(map_surface, (255, 180, 0, 180), (ax, ay), (bx, by), 2)
-                    except Exception:
-                        # Pygame may not handle alpha in draw.line on some setups; fallback
-                        pygame.draw.line(map_surface, (255, 180, 0), (ax, ay), (bx, by), 2)
-            # Draw jump points
-            for jr, jc in jumps:
-                if start_r <= jr < end_r and start_c <= jc < end_c:
-                    sx = jc * self.TILE_SIZE - self.view_offset_x
-                    sy = jr * self.TILE_SIZE - self.view_offset_y
-                    dot = pygame.Surface((8, 8), pygame.SRCALPHA)
-                    dot.fill((255, 100, 0, 200))
-                    map_surface.blit(dot, (sx + self.TILE_SIZE//2 - 4, sy + self.TILE_SIZE//2 - 4))
+        _render_jps_overlay_helper(
+            gui=self,
+            map_surface=map_surface,
+            start_r=start_r,
+            end_r=end_r,
+            start_c=start_c,
+            end_c=end_c,
+            pygame=pygame,
+        )
+        _render_map_elites_overlay_helper(
+            gui=self,
+            map_surface=map_surface,
+            pygame=pygame,
+        )
         
         # Draw solution path whenever a path exists
         show_path = self.auto_path and len(self.auto_path) > 0
@@ -10359,7 +3913,7 @@ class ZeldaGUI:
             try:
                 # Try auto-fit + center once to recover from bad offsets
                 if not getattr(self, '_auto_recenter_done', False):
-                    logger.info('No tiles drawn — attempting auto-fit zoom + center')
+                    logger.info('No tiles drawn Î“Ã‡Ã¶ attempting auto-fit zoom + center')
                     try:
                         self._auto_fit_zoom()
                         self._center_view()
@@ -10395,7 +3949,7 @@ class ZeldaGUI:
             try:
                 self._consecutive_empty_frames = getattr(self, '_consecutive_empty_frames', 0) + 1
                 if self._consecutive_empty_frames >= getattr(self, '_empty_frame_recovery_threshold', 8):
-                    logger.warning('Detected %d consecutive empty frames — attempting display reinit', self._consecutive_empty_frames)
+                    logger.warning('Detected %d consecutive empty frames Î“Ã‡Ã¶ attempting display reinit', self._consecutive_empty_frames)
                     try:
                         recovered = self._attempt_display_reinit()
                         if recovered:
@@ -10458,348 +4012,31 @@ class ZeldaGUI:
         
         # Sidebar content
         y_pos = 10
-        
-        # Title
-        title = self.big_font.render("ZAVE", True, (100, 200, 255))
-        self.screen.blit(title, (sidebar_x + 10, y_pos))
-        y_pos += 28
-        
-        # Dungeon name
-        if self.current_map_idx < len(self.map_names):
-            name = self.map_names[self.current_map_idx]
-        else:
-            name = f"Map {self.current_map_idx + 1}"
-        name_surf = self.font.render(name, True, (255, 220, 100))
-        self.screen.blit(name_surf, (sidebar_x + 10, y_pos))
-        y_pos += 20
-        
-        # Map number
-        map_num = f"({self.current_map_idx + 1}/{len(self.maps)})"
-        num_surf = self.small_font.render(map_num, True, (150, 150, 150))
-        self.screen.blit(num_surf, (sidebar_x + 10, y_pos))
-        y_pos += 18
-        
-        size_info = f"Size: {w}x{h}"
-        size_surf = self.small_font.render(size_info, True, (150, 150, 150))
-        self.screen.blit(size_surf, (sidebar_x + 10, y_pos))
-        y_pos += 20
-        
-        # Divider
-        pygame.draw.line(self.screen, (60, 60, 80), (sidebar_x + 10, y_pos), (self.screen_w - 10, y_pos))
-        y_pos += 10
-        
-        # Inventory section
-        inv_title = self.font.render("Inventory", True, (255, 200, 100))
-        self.screen.blit(inv_title, (sidebar_x + 10, y_pos))
-        y_pos += 22
-        
-        # Check if items were recently picked up (within last 1 second) for highlight effect
-        current_time = time.time()
-        key_highlight = 'key' in self.item_pickup_times and (current_time - self.item_pickup_times['key']) < 1.0
-        bomb_highlight = 'bomb' in self.item_pickup_times and (current_time - self.item_pickup_times['bomb']) < 1.0
-        boss_key_highlight = 'boss_key' in self.item_pickup_times and (current_time - self.item_pickup_times['boss_key']) < 1.0
-        
-        # Sync counts before rendering to be safe
-        self._sync_inventory_counters()
-        
-        # DEBUG: Log inventory values being rendered (every 60 frames to avoid spam)
-        if hasattr(self, '_inv_render_frame_count'):
-            self._inv_render_frame_count = getattr(self, '_inv_render_frame_count', 0) + 1
-        else:
-            self._inv_render_frame_count = 0
-        if self._inv_render_frame_count % 60 == 0:
-            logger.debug("INVENTORY_RENDER: keys_collected=%d, total_keys=%d, env.state.keys=%d, bombs_collected=%d, has_bomb=%s, boss_keys_collected=%d, has_boss_key=%s, collected_items_len=%d",
-                         self.keys_collected, self.total_keys, self.env.state.keys,
-                         self.bombs_collected, self.env.state.has_bomb,
-                         self.boss_keys_collected, getattr(self.env.state, 'has_boss_key', False),
-                         len(self.collected_items))
-        
-        # Keys with flash animation and X/Y collected format
-        if self.total_keys > 0:
-            keys_text = f"Keys: {self.keys_collected}/{self.total_keys} ({self.env.state.keys} held)"
-        else:
-            keys_text = f"Keys: {self.env.state.keys}"
-        # Small last pickup/use hints
-        if getattr(self, 'last_pickup_msg', None):
-            hint = self.small_font.render(self.last_pickup_msg, True, (200, 200, 200))
-            self.screen.blit(hint, (sidebar_x + 15, y_pos))
-            y_pos += 16
-        if getattr(self, 'last_use_msg', None):
-            hint2 = self.small_font.render(self.last_use_msg, True, (200, 200, 200))
-            self.screen.blit(hint2, (sidebar_x + 15, y_pos))
-            y_pos += 16
-        if key_highlight:
-            # Flash between yellow and white
-            flash_alpha = (math.sin(current_time * 15) + 1) / 2  # 0 to 1
-            keys_color = (255, int(220 + 35 * flash_alpha), int(100 + 155 * flash_alpha))
-        else:
-            keys_color = (255, 220, 100)
-        keys_surf = self.small_font.render(keys_text, True, keys_color)
-        self.screen.blit(keys_surf, (sidebar_x + 15, y_pos))
-        y_pos += 18
-        
-        # Bombs with highlight and collected count
-        if self.total_bombs > 0:
-            bomb_text = f"Bombs: {self.bombs_collected}/{self.total_bombs} {'[Y]' if self.env.state.has_bomb else '[N]'}"
-        else:
-            bomb_text = f"Bomb: {'[Y]' if self.env.state.has_bomb else '[N]'}"
-        if bomb_highlight:
-            flash_alpha = (math.sin(current_time * 15) + 1) / 2
-            bomb_color = (int(200 + 55 * flash_alpha), int(80 + 175 * flash_alpha), int(80 + 175 * flash_alpha))
-        else:
-            bomb_color = (100, 255, 100) if self.env.state.has_bomb else (150, 150, 150)
-        bomb_surf = self.small_font.render(bomb_text, True, bomb_color)
-        self.screen.blit(bomb_surf, (sidebar_x + 15, y_pos))
-        y_pos += 18
-        
-        # Boss key with highlight and collected status
-        if self.total_boss_keys > 0:
-            boss_key_text = f"Boss Key: {self.boss_keys_collected}/{self.total_boss_keys} {'[Y]' if self.env.state.has_boss_key else '[N]'}"
-        else:
-            boss_key_text = f"Boss Key: {'[Y]' if self.env.state.has_boss_key else '[N]'}"
-        if boss_key_highlight:
-            flash_alpha = (math.sin(current_time * 15) + 1) / 2
-            boss_color = (int(180 + 75 * flash_alpha), int(40 + 215 * flash_alpha), int(180 + 75 * flash_alpha))
-        else:
-            boss_color = (255, 150, 100) if self.env.state.has_boss_key else (150, 150, 150)
-        boss_surf = self.small_font.render(boss_key_text, True, boss_color)
-        self.screen.blit(boss_surf, (sidebar_x + 15, y_pos))
-        y_pos += 18
-        
-        # State-space solver info (if available)
-        if self.solver_result:
-            y_pos += 5
-            pygame.draw.line(self.screen, (60, 60, 80), (sidebar_x + 10, y_pos), (self.screen_w - 10, y_pos))
-            y_pos += 8
-            
-            solver_title = self.font.render("Path Analysis", True, (100, 200, 255))
-            self.screen.blit(solver_title, (sidebar_x + 10, y_pos))
-            y_pos += 20
-            
-            # Keys info from solver
-            keys_avail = self.solver_result.get('keys_available', 0)
-            keys_used = self.solver_result.get('keys_used', 0)
-            key_info = f"Keys: {keys_avail} found, {keys_used} used"
-            key_color = (255, 220, 100) if keys_used > 0 else (150, 200, 150)
-            key_surf = self.small_font.render(key_info, True, key_color)
-            self.screen.blit(key_surf, (sidebar_x + 15, y_pos))
-            y_pos += 16
-            
-            # Edge types breakdown
-            edge_types = self.solver_result.get('edge_types', [])
-            if edge_types:
-                type_counts = {}
-                for et in edge_types:
-                    type_counts[et] = type_counts.get(et, 0) + 1
-                
-                # Display each edge type with color
-                edge_colors = {
-                    'open': (100, 255, 100),       # Green - normal door
-                    'key_locked': (255, 220, 100), # Yellow - key door
-                    'bombable': (255, 150, 50),    # Orange - bomb wall
-                    'soft_locked': (180, 100, 255),# Purple - one-way
-                    'stair': (100, 200, 255),      # Cyan - teleport
-                }
-                
-                for etype, count in type_counts.items():
-                    color = edge_colors.get(etype, (150, 150, 150))
-                    type_name = etype.replace('_', ' ').title()
-                    et_text = f"  {type_name}: {count}"
-                    et_surf = self.small_font.render(et_text, True, color)
-                    self.screen.blit(et_surf, (sidebar_x + 15, y_pos))
-                    y_pos += 14
-        y_pos += 7
-        
-        # Divider
-        pygame.draw.line(self.screen, (60, 60, 80), (sidebar_x + 10, y_pos), (self.screen_w - 10, y_pos))
-        y_pos += 10
-        
-        # === STATUS SECTION ===
-        status_title = self.font.render("STATUS", True, (180, 220, 255))
-        self.screen.blit(status_title, (sidebar_x + 10, y_pos))
-        y_pos += 22
-        
-        # Map name and position
-        if self.env:
-            map_name = self.map_names[self.current_map_idx] if self.current_map_idx < len(self.map_names) else f"Map {self.current_map_idx + 1}"
-            pos = self.env.state.position
-            status_text = f"{map_name}"
-            status_surf = self.small_font.render(status_text, True, (200, 220, 255))
-            self.screen.blit(status_surf, (sidebar_x + 15, y_pos))
-            y_pos += 16
-            
-            pos_text = f"Pos: ({pos[0]}, {pos[1]})"
-            pos_surf = self.small_font.render(pos_text, True, (150, 150, 150))
-            self.screen.blit(pos_surf, (sidebar_x + 15, y_pos))
-            y_pos += 16
-            
-            # Status message
-            ready_text = "Auto-solving" if self.auto_mode else "Ready"
-            ready_color = (100, 255, 100) if self.auto_mode else (200, 200, 200)
-            ready_surf = self.small_font.render(ready_text, True, ready_color)
-            self.screen.blit(ready_surf, (sidebar_x + 15, y_pos))
-            y_pos += 18
+        y_pos = _render_sidebar_header_inventory_solver_helper(
+            gui=self,
+            screen=self.screen,
+            sidebar_x=sidebar_x,
+            y_pos=y_pos,
+            map_w=w,
+            map_h=h,
+            time_module=time,
+            math_module=math,
+            pygame=pygame,
+            logger=logger,
+        )
 
-            # D* Lite indicator (show when enabled or active)
-            try:
-                if getattr(self, 'dstar_active', False) and getattr(self, 'dstar_solver', None):
-                    replans = getattr(self.dstar_solver, 'replans_count', 0)
-                    ds_text = f"D* Lite: ACTIVE ({replans} replans)"
-                    ds_surf = self.small_font.render(ds_text, True, (100, 220, 255))
-                    self.screen.blit(ds_surf, (sidebar_x + 15, y_pos))
-                    y_pos += 16
-                elif self.feature_flags.get('dstar_lite', False):
-                    ds_text = "D* Lite: enabled"
-                    ds_surf = self.small_font.render(ds_text, True, (180, 180, 255))
-                    self.screen.blit(ds_surf, (sidebar_x + 15, y_pos))
-                    y_pos += 16
-            except Exception:
-                pass
-
-            # Stair debug: count stairs and show sprite status
-            try:
-                stair_positions = list(map(tuple, self.env._find_all_positions(SEMANTIC_PALETTE['STAIR']))) if hasattr(self.env, '_find_all_positions') else []
-                stair_count = len(stair_positions)
-                stair_text = f"Stairs: {stair_count} | Sprite: {'Full' if getattr(self, 'stair_sprite', None) else 'No'}"
-                stair_surf = self.small_font.render(stair_text, True, (200, 200, 150))
-                self.screen.blit(stair_surf, (sidebar_x + 15, y_pos))
-                y_pos += 16
-            except Exception:
-                pass
-        
-        # Divider
-        pygame.draw.line(self.screen, (60, 60, 80), (sidebar_x + 10, y_pos), (self.screen_w - 10, y_pos))
-        y_pos += 10
-        
-        # === MESSAGE SECTION ===
-        message_title = self.font.render("MESSAGE", True, (100, 255, 150))
-        self.screen.blit(message_title, (sidebar_x + 10, y_pos))
-        y_pos += 22
-        
-        # Show current message with fade effect
-        if self.message and (time.time() - self.message_time) < self.message_duration:
-            elapsed = time.time() - self.message_time
-            remaining = self.message_duration - elapsed
-            alpha = min(1.0, remaining / 0.5) if remaining < 0.5 else 1.0
-            
-            # Word wrap message to fit sidebar
-            max_chars = 28
-            words = self.message.split()
-            lines = []
-            current_line = ""
-            
-            for word in words:
-                test_line = f"{current_line} {word}".strip()
-                if len(test_line) <= max_chars:
-                    current_line = test_line
-                else:
-                    if current_line:
-                        lines.append(current_line)
-                    current_line = word
-            if current_line:
-                lines.append(current_line)
-            
-            # Render each line
-            for line in lines[:3]:  # Max 3 lines
-                msg_color = tuple(int(c * alpha) for c in (150, 255, 200))
-                msg_surf = self.small_font.render(line, True, msg_color)
-                self.screen.blit(msg_surf, (sidebar_x + 15, y_pos))
-                y_pos += 16
-        else:
-            # Show default message
-            default_msg = "Press SPACE to solve"
-            msg_surf = self.small_font.render(default_msg, True, (120, 120, 120))
-            self.screen.blit(msg_surf, (sidebar_x + 15, y_pos))
-            y_pos += 16
-        
-        y_pos += 8
-        
-        # Divider
-        pygame.draw.line(self.screen, (60, 60, 80), (sidebar_x + 10, y_pos), (self.screen_w - 10, y_pos))
-        y_pos += 10
-        
-        # === METRICS SECTION ===
-        metrics_title = self.font.render("Metrics", True, (150, 200, 255))
-        self.screen.blit(metrics_title, (sidebar_x + 10, y_pos))
-        y_pos += 22
-        
-        # Steps
-        steps_text = f"Steps: {self.step_count}"
-        steps_surf = self.small_font.render(steps_text, True, (200, 200, 200))
-        self.screen.blit(steps_surf, (sidebar_x + 15, y_pos))
-        y_pos += 16
-        
-        # Speed
-        speed_color = (100, 255, 100) if self.speed_multiplier == 1.0 else (255, 200, 100)
-        speed_text = f"Speed: {self.speed_multiplier}x"
-        speed_surf = self.small_font.render(speed_text, True, speed_color)
-        self.screen.blit(speed_surf, (sidebar_x + 15, y_pos))
-        y_pos += 16
-        
-        # Zoom
-        zoom_text = f"Zoom: {self.TILE_SIZE}px"
-        zoom_surf = self.small_font.render(zoom_text, True, (150, 150, 150))
-        self.screen.blit(zoom_surf, (sidebar_x + 15, y_pos))
-        y_pos += 16
-        
-        # FPS
-        fps = int(self.clock.get_fps())
-        fps_color = (100, 255, 100) if fps >= 25 else (255, 150, 150)
-        fps_text = f"FPS: {fps}"
-        fps_surf = self.small_font.render(fps_text, True, fps_color)
-        self.screen.blit(fps_surf, (sidebar_x + 15, y_pos))
-        y_pos += 18
-        
-        # Divider
-        pygame.draw.line(self.screen, (60, 60, 80), (sidebar_x + 10, y_pos), (self.screen_w - 10, y_pos))
-        y_pos += 10
-        
-        # Controls section
-        ctrl_title = self.font.render("Controls", True, (100, 200, 100))
-        self.screen.blit(ctrl_title, (sidebar_x + 10, y_pos))
-        y_pos += 20
-        
-        controls = [
-            "Arrows Move",
-            "SPACE Auto-solve",
-            "R     Reset map",
-            "N/P   Next/Prev",
-            "+/-   Zoom",
-            "0     Reset zoom",
-            "C     Center view",
-            "M     Minimap",
-            "[/]   Speed+/-",
-            "F11   Fullscreen",
-            "F1    Help",
-            "H     Heatmap",
-            "ESC   Quit",
-        ]
-        
-        for ctrl in controls:
-            ctrl_surf = self.small_font.render(ctrl, True, (120, 120, 120))
-            self.screen.blit(ctrl_surf, (sidebar_x + 15, y_pos))
-            y_pos += 15
-        
-        # Draw HUD at bottom
-        hud_y = self.screen_h - self.HUD_HEIGHT
-        pygame.draw.rect(self.screen, (30, 30, 45), (0, hud_y, self.screen_w - self.SIDEBAR_WIDTH, self.HUD_HEIGHT))
-        pygame.draw.line(self.screen, (60, 60, 80), (0, hud_y), (self.screen_w - self.SIDEBAR_WIDTH, hud_y), 2)
-        
-        # Status message
-        msg_color = (255, 255, 100) if self.env.won else (200, 200, 200)
-        msg_surf = self.font.render(self.message, True, msg_color)
-        self.screen.blit(msg_surf, (10, hud_y + 10))
-        
-        # Position info
-        pos_text = f"Position: ({pr}, {pc})"
-        pos_surf = self.small_font.render(pos_text, True, (150, 150, 150))
-        self.screen.blit(pos_surf, (10, hud_y + 35))
-        
-        # Win state
-        if self.env.won:
-            win_text = "*** VICTORY! ***"
-            win_surf = self.big_font.render(win_text, True, (255, 215, 0))
-            self.screen.blit(win_surf, (10, hud_y + 55))
+        y_pos = _render_sidebar_status_message_metrics_controls_helper(
+            gui=self,
+            screen=self.screen,
+            sidebar_x=sidebar_x,
+            y_pos=y_pos,
+            player_row=pr,
+            player_col=pc,
+            pygame=pygame,
+            time_module=time,
+            math_module=math,
+            semantic_palette=SEMANTIC_PALETTE,
+        )
         
         # Render minimap if enabled
         if self.show_minimap:
@@ -10932,570 +4169,63 @@ class ZeldaGUI:
         # NOTE: pygame.display.flip() is called by the main run() loop after _render()
         # Do NOT call flip() here to avoid double-buffer swap issues
 
-    def _render_debug_overlay(self, surface: "pygame.Surface"):
+    def _render_debug_overlay(self, surface):
         """Render debug overlay with mouse coords, widget rects, and recent clicks.
         Toggle with F12. Shift-F11 clears click log.
         """
-        try:
-            font = pygame.font.SysFont('Arial', 12)
-        except Exception:
-            return
-
-        # Background box
-        box_w = 380
-        box_h = 24 + 16 * min(10, len(self.widget_manager.widgets) if self.widget_manager else 0)
-        box_surf = pygame.Surface((box_w, box_h), pygame.SRCALPHA)
-        box_surf.fill((20, 20, 30, 220))
-        surface.blit(box_surf, (10, 10))
-
-        x = 14
-        y = 14
-        mouse_pos = pygame.mouse.get_pos()
-        surface.blit(font.render(f"Mouse: {mouse_pos}", True, (220, 220, 220)), (x, y))
-        y += 16
-        panel_rect = getattr(self, 'control_panel_rect', None)
-        surface.blit(font.render(f"Panel rect: {panel_rect}", True, (220, 220, 220)), (x, y))
-        y += 16
-        surface.blit(font.render(f"Collapse btn: {getattr(self,'collapse_button_rect',None)}", True, (220, 220, 220)), (x, y))
-        y += 18
-
-        # Focus & last-event diagnostics
-        focused = pygame.mouse.get_focused()
-        grabbed = pygame.event.get_grab()
-        now = time.time()
-        surface.blit(font.render(f"Focused: {focused}   Grabbed: {grabbed}", True, (200, 240, 200)), (x, y))
-        y += 16
-        last = getattr(self, '_last_mouse_event', None)
-        if last:
-            age = int((now - last.get('time', now)) * 1000)
-            ltxt = f"Last mouse: {last.get('type')} pos={last.get('pos')} btn={last.get('button', '')} age={age}ms"
-            surface.blit(font.render(ltxt, True, (200, 240, 200)), (x, y))
-            y += 16
-        lastk = getattr(self, '_last_key_event', None)
-        if lastk:
-            k_age = int((now - lastk.get('time', now)) * 1000)
-            try:
-                kname = pygame.key.name(lastk.get('key'))
-            except Exception:
-                kname = str(lastk.get('key'))
-            surface.blit(font.render(f"Last key: {kname} age={k_age}ms mods={lastk.get('mods')}", True, (200, 240, 200)), (x, y))
-            y += 16
-
-        # List first few widgets
-        if self.widget_manager:
-            for w in self.widget_manager.widgets[:8]:
-                info = f"{getattr(w,'control_name',w.__class__.__name__)} rect={w.rect} open={getattr(w,'is_open',False)} state={w.state}"
-                surface.blit(font.render(info, True, (200, 200, 255)), (x, y))
-                y += 14
-
-        # Draw outlines for panel, collapse button, and open dropdown menus
-        if panel_rect:
-            try:
-                pygame.draw.rect(surface, (200, 80, 80), panel_rect, 2)
-            except Exception:
-                pass
-        if getattr(self, 'collapse_button_rect', None):
-            try:
-                pygame.draw.rect(surface, (80, 200, 120), self.collapse_button_rect, 2)
-            except Exception:
-                pass
-
-        # Recent clicks
-        cx = 14
-        cy = box_h + 30
-        surface.blit(font.render("Recent clicks (latest first):", True, (200, 200, 180)), (cx, cy))
-        cy += 14
-        for pos, ts in (self.debug_click_log[:8] if getattr(self,'debug_click_log',None) else []):
-            surface.blit(font.render(f"{pos} @ {int(ts)}", True, (220, 220, 180)), (cx, cy))
-            cy += 12
+        _render_debug_overlay_helper(self, surface, pygame, time)
 
     def _render_unified_bottom_panel(self):
         """Render unified bottom HUD panel - STATUS and MESSAGE only (inventory moved to sidebar)."""
-        # Panel dimensions - reduced height since no inventory
-        panel_height = 80
-        panel_y = self.screen_h - panel_height - 5
-        panel_x = 5
-        panel_width = self.screen_w - self.SIDEBAR_WIDTH - 15
-        
-        # Create rounded background
-        panel_surf = pygame.Surface((panel_width, panel_height), pygame.SRCALPHA)
-        panel_bg = pygame.Rect(0, 0, panel_width, panel_height)
-        pygame.draw.rect(panel_surf, (35, 35, 50, 230), panel_bg, border_radius=8)
-        pygame.draw.rect(panel_surf, (60, 60, 80), panel_bg, 2, border_radius=8)
-        
-        self.screen.blit(panel_surf, (panel_x, panel_y))
-        
-        # Calculate section widths (only status and message)
-        padding = 15
-        total_inner_width = panel_width - (padding * 2)
-        
-        status_width = int(total_inner_width * 0.50)  # 50% for status
-        message_width = total_inner_width - status_width  # 50% for message
-        
-        # Section X positions
-        status_x = panel_x + padding
-        message_x = status_x + status_width + 20
-        
-        content_y = panel_y + 10
-        section_height = panel_height - 20
-        
-        # Draw vertical divider
-        divider_color = (60, 60, 80)
-        pygame.draw.line(self.screen, divider_color,
-                        (message_x - 10, content_y),
-                        (message_x - 10, content_y + section_height), 2)
-        
-        # Render sections
-        self._render_status_section(status_x, content_y, status_width, section_height)
-        self._render_message_section(message_x, content_y, message_width, section_height)
+        _render_unified_bottom_panel_helper(self, pygame)
     
     def _render_message_section(self, x: int, y: int, width: int, height: int):
         """Render message/status section in bottom panel."""
-        # Title
-        title_surf = self.font.render("MESSAGE", True, (100, 255, 150))
-        self.screen.blit(title_surf, (x, y))
-        y += 22
-        
-        # Current message with appropriate color
-        msg_color = (255, 255, 100) if (self.env and self.env.won) else (200, 200, 200)
-        
-        # Wrap long messages
-        if len(self.message) > 35:
-            msg_lines = [self.message[i:i+35] for i in range(0, len(self.message), 35)]
-            for line in msg_lines[:2]:  # Max 2 lines
-                msg_surf = self.small_font.render(line, True, msg_color)
-                self.screen.blit(msg_surf, (x, y))
-                y += 16
-        else:
-            msg_surf = self.small_font.render(self.message, True, msg_color)
-            self.screen.blit(msg_surf, (x, y))
+        _render_message_section_helper(self, x, y, width, height)
     
-    def _render_progress_bar(self, surface: "pygame.Surface", x: int, y: int, width: int, height: int, 
+    def _render_progress_bar(self, surface, x: int, y: int, width: int, height: int, 
                              filled: int, total: int, color_filled: tuple, color_empty: tuple):
         """Render a segmented progress bar with filled/empty indicators."""
-        if total == 0:
-            return
-        
-        segments = min(total, 10)  # Max 10 segments for visual clarity
-        segment_width = width // max(1, segments)
-        items_per_segment = total / segments
-        
-        for i in range(segments):
-            segment_x = x + i * segment_width
-            segment_rect = pygame.Rect(segment_x + 1, y, segment_width - 2, height)
-            
-            # Determine if this segment should be filled
-            segment_threshold = (i + 1) * items_per_segment
-            is_filled = filled >= segment_threshold
-            
-            if is_filled:
-                # Filled segment with gradient effect
-                pygame.draw.rect(surface, color_filled, segment_rect, border_radius=2)
-                # Lighter border
-                highlight = tuple(min(c + 40, 255) for c in color_filled[:3])
-                pygame.draw.rect(surface, highlight, segment_rect, 1, border_radius=2)
-            else:
-                # Empty segment
-                pygame.draw.rect(surface, color_empty, segment_rect, border_radius=2)
-                pygame.draw.rect(surface, (60, 60, 80), segment_rect, 1, border_radius=2)
+        _render_progress_bar_helper(
+            surface,
+            x,
+            y,
+            width,
+            height,
+            filled,
+            total,
+            color_filled,
+            color_empty,
+            pygame,
+        )
     
     def _render_inventory_section(self, x: int, y: int, width: int, height: int):
         """Render inventory section with progress bars and icons."""
-        # CRITICAL: Sync inventory counters before rendering to ensure real-time display
-        try:
-            self._sync_inventory_counters()
-        except Exception:
-            pass
-        
-        # DEBUG: Log inventory values every frame for diagnostics
-        logger.debug("INVENTORY_RENDER: keys_collected=%d, total_keys=%d, env.state.keys=%d, "
-                    "bombs_collected=%d, has_bomb=%s, boss_keys_collected=%d, has_boss_key=%s, "
-                    "collected_items_len=%d",
-                    self.keys_collected, self.total_keys,
-                    getattr(self.env.state, 'keys', 0) if self.env and self.env.state else 0,
-                    self.bombs_collected, 
-                    getattr(self.env.state, 'has_bomb', False) if self.env and self.env.state else False,
-                    self.boss_keys_collected,
-                    getattr(self.env.state, 'has_boss_key', False) if self.env and self.env.state else False,
-                    len(self.collected_items) if hasattr(self, 'collected_items') else 0)
-        
-        # Title
-        title_surf = self.font.render("INVENTORY", True, (100, 200, 255))
-        self.screen.blit(title_surf, (x, y))
-        self.screen.blit(title_surf, (x, y))
-        
-        y_offset = y + 25
-        line_height = 24
-        bar_width = width - 10
-        bar_height = 8
-        
-        if not self.env:
-            return
-        
-        # Keys with progress bar
-        held_keys = self.env.state.keys if hasattr(self.env.state, 'keys') else 0
-        keys_color = (255, 215, 0)  # Gold
-        
-        # Flash animation if recently picked up
-        current_time = time.time()
-        for pos, pickup_time in list(self.item_pickup_times.items()):
-            if current_time - pickup_time < 0.5:
-                keys_color = (255, 255, 150)
-                break
-        
-        # Text: "K: 4/7 (3 held)"
-        keys_text = f"K: {self.keys_collected}/{self.total_keys}"
-        if held_keys > 0:
-            keys_text += f" ({held_keys} held)"
-        keys_surf = self.small_font.render(keys_text, True, keys_color)
-        self.screen.blit(keys_surf, (x, y_offset))
-        
-        # Progress bar
-        if self.total_keys > 0:
-            self._render_progress_bar(self.screen, x, y_offset + 16, bar_width, bar_height,
-                                     self.keys_collected, self.total_keys,
-                                     keys_color, (40, 40, 50))
-        y_offset += line_height + 10
-        
-        # Bombs
-        has_bomb = hasattr(self.env.state, 'has_bomb') and self.env.state.has_bomb
-        bombs_color = (255, 107, 53) if has_bomb else (100, 100, 100)  # Orange
-        bombs_status = "[YES]" if has_bomb else "[NO]"
-        
-        if self.total_bombs > 0:
-            bombs_text = f"B: {bombs_status} Bomb"
-            bombs_surf = self.small_font.render(bombs_text, True, bombs_color)
-            self.screen.blit(bombs_surf, (x, y_offset))
-            y_offset += line_height
-        
-        # Boss Key with progress bar
-        has_boss_key = hasattr(self.env.state, 'has_boss_key') and self.env.state.has_boss_key
-        boss_key_color = (176, 66, 255) if has_boss_key else (100, 100, 100)  # Purple
-        
-        if self.total_boss_keys > 0:
-            boss_key_text = f"Boss Key: {self.boss_keys_collected}/{self.total_boss_keys}"
-            if has_boss_key:
-                boss_key_text += " [Y]"
-            boss_key_surf = self.small_font.render(boss_key_text, True, boss_key_color)
-            self.screen.blit(boss_key_surf, (x, y_offset))
-            
-            # Progress bar
-            self._render_progress_bar(self.screen, x, y_offset + 16, bar_width, bar_height,
-                                     self.boss_keys_collected, self.total_boss_keys,
-                                     boss_key_color, (40, 40, 50))
+        _render_inventory_section_helper(self, x, y, width, height, pygame, time, logger)
     
     def _render_metrics_section(self, x: int, y: int, width: int, height: int):
         """Render metrics section (steps, speed, zoom, env)."""
-        # Title
-        title_surf = self.font.render("METRICS", True, (150, 200, 255))
-        self.screen.blit(title_surf, (x, y))
-        
-        y_offset = y + 25
-        line_height = 20
-        
-        # Steps
-        steps_surf = self.small_font.render(f"Steps: {self.step_count}", True, (200, 200, 200))
-        self.screen.blit(steps_surf, (x, y_offset))
-        y_offset += line_height
-        
-        # Speed
-        speed_color = (100, 255, 100) if self.speed_multiplier == 1.0 else (255, 200, 100)
-        speed_surf = self.small_font.render(f"Speed: {self.speed_multiplier}x", True, speed_color)
-        self.screen.blit(speed_surf, (x, y_offset))
-        y_offset += line_height
-        
-        # Zoom
-        zoom_surf = self.small_font.render(f"Zoom: {self.TILE_SIZE}px", True, (150, 150, 150))
-        self.screen.blit(zoom_surf, (x, y_offset))
-        y_offset += line_height
-        
-        # Env Steps
-        env_steps = self.env.step_count if self.env and hasattr(self.env, 'step_count') else 0
-        env_surf = self.small_font.render(f"Env: {env_steps}", True, (150, 150, 150))
-        self.screen.blit(env_surf, (x, y_offset))
+        _render_metrics_section_helper(self, x, y, width, height)
     
     def _render_controls_section(self, x: int, y: int, width: int, height: int):
         """Render controls section in two-column layout."""
-        # Title
-        title_surf = self.font.render("CONTROLS", True, (100, 200, 100))
-        self.screen.blit(title_surf, (x, y))
-        
-        y_offset = y + 25
-        line_height = 16
-        col_width = width // 2
-        
-        # Two-column layout
-        controls_left = [
-            ("ARROWS", "Move"),
-            ("SPACE", "Solve"),
-            ("R", "Reset"),
-            ("N/P", "Maps"),
-            ("[/]", "Speed"),
-        ]
-        
-        controls_right = [
-            ("M", "Minimap"),
-            ("H", "Heatmap"),
-            ("+/-", "Zoom"),
-            ("F11", "Full"),
-            ("ESC", "Quit"),
-        ]
-        
-        text_color = (120, 120, 120)
-        
-        # Left column
-        for key, desc in controls_left:
-            control_surf = self.small_font.render(f"{key:4s} {desc}", True, text_color)
-            self.screen.blit(control_surf, (x, y_offset))
-            y_offset += line_height
-        
-        # Right column
-        y_offset = y + 25
-        for key, desc in controls_right:
-            control_surf = self.small_font.render(f"{key:4s} {desc}", True, text_color)
-            self.screen.blit(control_surf, (x + col_width, y_offset))
-            y_offset += line_height
+        _render_controls_section_helper(self, x, y, width, height)
     
     def _render_status_section(self, x: int, y: int, width: int, height: int):
         """Render status section with game state information."""
-        # Title
-        title_surf = self.font.render("STATUS", True, (180, 220, 255))
-        self.screen.blit(title_surf, (x, y))
-        
-        y_offset = y + 25
-        line_height = 18
-        
-        # Victory or current status
-        if self.env and self.env.won:
-            status_text = "*** VICTORY! ***"
-            status_color = (255, 215, 0)
-            status_surf = self.big_font.render(status_text, True, status_color)
-            self.screen.blit(status_surf, (x, y_offset))
-        else:
-            # Current map/dungeon
-            if self.current_map_idx < len(self.map_names):
-                map_name = self.map_names[self.current_map_idx]
-                map_text = f"Map: {map_name[:15]}"
-                map_surf = self.small_font.render(map_text, True, (150, 200, 255))
-                self.screen.blit(map_surf, (x, y_offset))
-                y_offset += line_height
-            
-            # Position
-            if self.env and hasattr(self.env.state, 'position'):
-                pos = self.env.state.position
-                pos_text = f"Pos: ({pos[0]}, {pos[1]})"
-                pos_surf = self.small_font.render(pos_text, True, (150, 150, 150))
-                self.screen.blit(pos_surf, (x, y_offset))
-                y_offset += line_height
-            
-            # Auto-solve progress
-            if self.auto_mode and self.auto_path:
-                progress_text = f"Auto: {self.auto_step_idx}/{len(self.auto_path)}"
-                progress_surf = self.small_font.render(progress_text, True, (100, 255, 150))
-                self.screen.blit(progress_surf, (x, y_offset))
-                y_offset += line_height
-            
-            # Status message
-            if self.status_message:
-                status_surf = self.small_font.render(self.status_message[:20], True, (180, 220, 255))
-                self.screen.blit(status_surf, (x, y_offset))
+        _render_status_section_helper(self, x, y, width, height)
     
     def _render_minimap(self):
         """Render small dungeon overview map in bottom-right corner."""
-        if not self.env:
-            return
-        
-        # Minimap positioning (bottom-right, above HUD)
-        minimap_margin = 20
-        minimap_x = self.screen_w - self.SIDEBAR_WIDTH - self.minimap_size - minimap_margin
-        minimap_y = self.screen_h - self.HUD_HEIGHT - self.minimap_size - minimap_margin
-        
-        # Create semi-transparent minimap surface
-        minimap = pygame.Surface((self.minimap_size, self.minimap_size), pygame.SRCALPHA)
-        pygame.draw.rect(minimap, (40, 40, 60, 220), minimap.get_rect(), border_radius=8)
-        
-        # Draw title
-        title_font = pygame.font.SysFont('Arial', 10, bold=True)
-        title_surf = title_font.render("Dungeon Map", True, (180, 180, 200))
-        minimap.blit(title_surf, (5, 3))
-        
-        # Calculate scaling factor to fit dungeon in minimap
-        map_h, map_w = self.env.height, self.env.width
-        content_area = self.minimap_size - 30  # Leave room for title and padding
-        scale_x = content_area / map_w
-        scale_y = content_area / map_h
-        scale = min(scale_x, scale_y)
-        
-        # Calculate offset to center the minimap content
-        scaled_w = int(map_w * scale)
-        scaled_h = int(map_h * scale)
-        offset_x = (self.minimap_size - scaled_w) // 2
-        offset_y = 18 + (self.minimap_size - 18 - scaled_h) // 2
-        
-        # Draw simplified dungeon layout
-        # Use different colors for different tile types
-        for r in range(map_h):
-            for c in range(map_w):
-                tile_id = self.env.grid[r, c]
-                
-                # Determine tile color based on semantic type
-                if tile_id == SEMANTIC_PALETTE['VOID']:
-                    continue  # Skip void tiles (transparent)
-                elif tile_id == SEMANTIC_PALETTE['WALL'] or tile_id == SEMANTIC_PALETTE['BLOCK']:
-                    color = (60, 60, 80)  # Dark gray for walls
-                elif tile_id == SEMANTIC_PALETTE['START']:
-                    color = (80, 180, 80)  # Green for start
-                elif tile_id == SEMANTIC_PALETTE['TRIFORCE']:
-                    color = (255, 215, 0)  # Gold for goal
-                elif tile_id in [SEMANTIC_PALETTE['KEY_SMALL'], SEMANTIC_PALETTE['KEY_BOSS']]:
-                    color = (255, 200, 50)  # Yellow for keys
-                elif tile_id in [SEMANTIC_PALETTE['DOOR_LOCKED'], SEMANTIC_PALETTE['DOOR_BOMB'], SEMANTIC_PALETTE['DOOR_BOSS']]:
-                    color = (180, 100, 50)  # Brown for locked doors
-                elif tile_id == SEMANTIC_PALETTE['STAIR']:
-                    color = (100, 150, 255)  # Blue for stairs
-                elif tile_id == SEMANTIC_PALETTE['ENEMY']:
-                    color = (200, 50, 50)  # Red for enemies
-                else:
-                    color = (100, 120, 140)  # Light gray for floors
-                
-                # Draw mini-tile
-                mini_x = offset_x + int(c * scale)
-                mini_y = offset_y + int(r * scale)
-                mini_w = max(1, int(scale))
-                mini_h = max(1, int(scale))
-                pygame.draw.rect(minimap, color, (mini_x, mini_y, mini_w, mini_h))
-        
-        # Draw current player position (bright dot)
-        pr, pc = self.env.state.position
-        player_x = offset_x + int(pc * scale)
-        player_y = offset_y + int(pr * scale)
-        player_size = max(2, int(scale * 1.5))
-        pygame.draw.circle(minimap, (255, 100, 100), (player_x, player_y), player_size)
-        # Add white outline for visibility
-        pygame.draw.circle(minimap, (255, 255, 255), (player_x, player_y), player_size + 1, 1)
-        
-        # Highlight uncollected items with pulsing effect
-        current_time = time.time()
-        pulse = (math.sin(current_time * 3) + 1) / 2  # 0 to 1
-        
-        # Draw uncollected keys (yellow pulsing dots)
-        for pos in self.env._find_all_positions(SEMANTIC_PALETTE['KEY_SMALL']):
-            if pos not in self.env.state.collected_items:
-                r, c = pos
-                mini_x = offset_x + int(c * scale)
-                mini_y = offset_y + int(r * scale)
-                size = int(2 + pulse * 2)
-                pygame.draw.circle(minimap, (255, 255, 0), (mini_x, mini_y), size)
-        
-        # Draw uncollected boss keys (orange pulsing dots)
-        for pos in self.env._find_all_positions(SEMANTIC_PALETTE['KEY_BOSS']):
-            if pos not in self.env.state.collected_items:
-                r, c = pos
-                mini_x = offset_x + int(c * scale)
-                mini_y = offset_y + int(r * scale)
-                size = int(2 + pulse * 2)
-                pygame.draw.circle(minimap, (255, 150, 0), (mini_x, mini_y), size)
-        
-        # Draw border
-        pygame.draw.rect(minimap, (70, 70, 100), minimap.get_rect(), 2, border_radius=8)
-        
-        # Blit minimap to screen
-        self.screen.blit(minimap, (minimap_x, minimap_y))
+        _render_minimap_helper(self, pygame)
     
     def _handle_minimap_click(self, mouse_pos: Tuple[int, int]) -> bool:
         """Handle mouse click on minimap to jump to that location."""
-        if not self.show_minimap or not self.env:
-            return False
-        
-        # Calculate minimap position
-        minimap_margin = 20
-        minimap_x = self.screen_w - self.SIDEBAR_WIDTH - self.minimap_size - minimap_margin
-        minimap_y = self.screen_h - self.HUD_HEIGHT - self.minimap_size - minimap_margin
-        
-        # Check if click is within minimap bounds
-        mx, my = mouse_pos
-        if not (minimap_x <= mx <= minimap_x + self.minimap_size and
-                minimap_y <= my <= minimap_y + self.minimap_size):
-            return False
-        
-        # Convert mouse position to map coordinates
-        map_h, map_w = self.env.height, self.env.width
-        content_area = self.minimap_size - 30
-        scale_x = content_area / map_w
-        scale_y = content_area / map_h
-        scale = min(scale_x, scale_y)
-        
-        scaled_w = int(map_w * scale)
-        scaled_h = int(map_h * scale)
-        offset_x = (self.minimap_size - scaled_w) // 2
-        offset_y = 18 + (self.minimap_size - 18 - scaled_h) // 2
-        
-        # Calculate clicked tile
-        local_x = mx - minimap_x - offset_x
-        local_y = my - minimap_y - offset_y
-        
-        if local_x < 0 or local_y < 0:
-            return True
-        
-        tile_c = int(local_x / scale)
-        tile_r = int(local_y / scale)
-        
-        if 0 <= tile_r < map_h and 0 <= tile_c < map_w:
-            # Center view on clicked tile
-            self.view_offset_x = int(tile_c * self.TILE_SIZE - (self.screen_w - self.SIDEBAR_WIDTH) / 2)
-            self.view_offset_y = int(tile_r * self.TILE_SIZE - (self.screen_h - self.HUD_HEIGHT) / 2)
-            self._clamp_view_offset()
-            self.message = f"Jumped to ({tile_r}, {tile_c})"
-        
-        return True
+        return _handle_minimap_click_helper(self, mouse_pos)
     
     def _render_help_overlay(self):
         """Render help overlay."""
-        overlay = pygame.Surface((self.screen_w, self.screen_h), pygame.SRCALPHA)
-        overlay.fill((0, 0, 0, 200))
-        self.screen.blit(overlay, (0, 0))
-        
-        help_lines = [
-            "ZAVE - Zelda AI Validation Environment",
-            "",
-            "Movement:",
-            "  Arrow Keys - Move Link",
-            "  Mouse Wheel - Zoom in/out",
-            "  Middle Mouse Drag - Pan view",
-            "",
-            "Actions:",
-            "  SPACE - Run A* auto-solver",
-            "  R - Reset current map",
-            "  N - Next map",
-            "  P - Previous map",
-            "",
-            "View:",
-            "  +/- or Wheel - Zoom in/out",
-            "  0 - Reset zoom to default",
-            "  C - Center view on player",
-            "  M - Toggle minimap",
-            "  H - Toggle A* heatmap",
-            "  TAB - Toggle control panel",
-            "  F11 - Toggle fullscreen",
-            "",
-            "Speed Control:",
-            "  [ or , - Decrease speed",
-            "  ] or . - Increase speed",
-            "  (Speeds: 0.25x, 0.5x, 1x, 2x, 5x, 10x)",
-            "",
-            "Press F1 or ESC to close this help",
-        ]
-        
-        y = 50
-        for line in help_lines:
-            if line.startswith("ZAVE"):
-                surf = self.big_font.render(line, True, (100, 200, 255))
-            elif line.endswith(":") and not line.startswith(" "):
-                surf = self.font.render(line, True, (255, 200, 100))
-            else:
-                surf = self.small_font.render(line, True, (200, 200, 200))
-            self.screen.blit(surf, (50, y))
-            y += 22 if line else 10
+        _render_help_overlay_helper(self, pygame)
 
 
 def load_maps_from_adapter():
@@ -11588,4 +4318,6 @@ if __name__ == "__main__":
     # Required for multiprocessing on Windows (freeze_support)
     multiprocessing.freeze_support()
     main()
+
+
 

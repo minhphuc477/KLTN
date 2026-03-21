@@ -13,12 +13,16 @@ All widgets support mouse interaction and visual feedback.
 from typing import Tuple, List, Callable, Optional
 from dataclasses import dataclass
 from enum import Enum
+import logging
 
 try:
     import pygame
     PYGAME_AVAILABLE = True
 except ImportError:
     PYGAME_AVAILABLE = False
+
+
+logger = logging.getLogger(__name__)
 
 
 # ==========================================
@@ -253,8 +257,14 @@ class DropdownWidget(BaseWidget):
         # Initialize rects via pos setter to ensure full_rect is created
         try:
             self.pos = self._pos
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("DropdownWidget position initialization failed; using constructor fallback: %s", exc)
+            self.rect = pygame.Rect(self._pos[0], self._pos[1], 180, 28)
+            self.dropdown_rect = pygame.Rect(
+                self._pos[0], self._pos[1] + 30,
+                180, min(len(self.options) * 24, 360)
+            )
+            self.full_rect = pygame.Rect(self.rect.x, self.rect.y - 14, self.rect.width, self.rect.height + 14)
     
     @property
     def pos(self):
@@ -382,9 +392,9 @@ class DropdownWidget(BaseWidget):
                     fallback = getattr(self, 'font', None) or pygame.font.SysFont('Arial', 12)
                     label_surf = fallback.render(str(self.label), True, self.theme.text_normal)
                     surface.blit(label_surf, (4, 4))
-                except Exception:
+                except Exception as exc:
                     # Non-fatal: continue rendering the dropdown even if label paint fails
-                    pass
+                    logger.debug("DropdownWidget label render fallback failed: %s", exc)
 
         # Draw main button
         pygame.draw.rect(surface, bg_color, self.rect)
