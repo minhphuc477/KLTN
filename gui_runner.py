@@ -91,6 +91,7 @@ from src.gui.app.init_visualization import (
     initialize_visualization_components,
 )
 from src.gui.app.init_final_boot import finalize_initial_map_boot
+from src.gui.app.run_loop_pipeline import run_main_loop as _run_main_loop_helper
 
 # Configure logging
 logging.basicConfig(
@@ -158,6 +159,9 @@ from src.gui.control_panel.interactions import (
     should_swallow_control_panel_click as _should_swallow_control_panel_click_helper,
     translate_control_panel_click as _translate_control_panel_click_helper,
 )
+from src.gui.control_panel.click_dispatch import (
+    handle_control_panel_click as _handle_control_panel_click_dispatch_helper,
+)
 from src.gui.control_panel.updates import (
     apply_algorithm_dropdown_update as _apply_algorithm_dropdown_update_helper,
     apply_checkbox_widget_update as _apply_checkbox_widget_update_helper,
@@ -217,6 +221,10 @@ from src.gui.gameplay.path_controls import (
     reset_map as _reset_map_helper,
     show_path_preview as _show_path_preview_helper,
     clear_path as _clear_path_helper,
+)
+from src.gui.gameplay.dungeon_generation_controls import (
+    generate_dungeon as _generate_dungeon_flow_helper,
+    stop_auto_solve as _stop_auto_solve_flow_helper,
 )
 from src.gui.runtime.temp_file_management import (
     open_temp_folder as _open_temp_folder_orchestration_helper,
@@ -883,49 +891,14 @@ class ZeldaGUI:
     
     def _handle_control_panel_click(self, pos, button, event_type='down'):
         """Handle mouse clicks on control panel widgets."""
-        if not self.control_panel_enabled or not self.widget_manager:
-            return False
-        
-        if event_type == 'down':
-            panel_hit_rect = self._control_panel_hit_rect()
-            if self._should_swallow_control_panel_click(panel_hit_rect, pos):
-                return True
-            sc_pos = self._translate_control_panel_click(pos, panel_hit_rect)
-
-            outside_result = self._handle_outside_control_panel_click(panel_hit_rect, pos, button)
-            if outside_result is not None:
-                return outside_result
-
-
-            # Debug: log transformation and scroll state
-            logger.debug('Control panel click: pos=%s sc_pos=%s scroll=%s header_h=%s', pos, sc_pos, getattr(self, 'control_panel_scroll', 0), 45)
-
-            any_contains = self._refresh_control_panel_layout_if_needed(sc_pos)
-
-            handled = self.widget_manager.handle_mouse_down(sc_pos, button)
-
-            logger.debug('Control panel click handled=%s at pos=%s sc_pos=%s any_contains=%s', handled, pos, sc_pos, any_contains)
-            if not handled:
-                if DEBUG_INPUT_ACTIVE:
-                    try:
-                        self._dump_control_panel_widget_state(pos)
-                    except Exception:
-                        logger.exception('Failed to dump widget hit tests after unhandled click')
-                handled = self._retry_control_panel_click_after_auto_scroll(pos, sc_pos, button, handled)
-
-            if handled:
-                logger.debug('Control panel click handled by widget manager at pos=%r (button=%r)', pos, button)
-                self._apply_control_panel_widget_updates()
-
-            return handled
-        elif event_type == 'up':
-            # Translate pos like we do for mouse-down when scrolled
-            if getattr(self, 'control_panel_can_scroll', False) and getattr(self, 'control_panel_rect', None) and self.control_panel_rect.collidepoint(pos):
-                sc_pos = (pos[0], pos[1] + getattr(self, 'control_panel_scroll', 0))
-            else:
-                sc_pos = pos
-            return self.widget_manager.handle_mouse_up(sc_pos, button)
-        return False
+        return _handle_control_panel_click_dispatch_helper(
+            gui=self,
+            pos=pos,
+            button=button,
+            event_type=event_type,
+            logger=logger,
+            debug_input_active=DEBUG_INPUT_ACTIVE,
+        )
 
     def _control_panel_hit_rect(self):
         return _control_panel_hit_rect_helper(
@@ -1012,58 +985,11 @@ class ZeldaGUI:
     # Button callbacks
     def _stop_auto_solve(self):
         """Stop auto-solve and clear visual state."""
-        self.auto_mode = False
-        self.auto_path = []  # Clear path display
-        self.auto_step_idx = 0
-        self.block_push_animations = []  # Clear block push animations
-        self.message = "Auto-solve stopped"
+        _stop_auto_solve_flow_helper(self)
     
     def _generate_dungeon(self):
         """Generate a new random dungeon using the procedural generator."""
-        try:
-            from src.generation.dungeon_generator import DungeonGenerator, Difficulty
-            import random
-            
-            # Generate random seed for reproducibility display
-            seed = random.randint(0, 999999)
-            
-            # Create generator with medium difficulty, reasonable size
-            generator = DungeonGenerator(
-                width=40,
-                height=40,
-                difficulty=Difficulty.MEDIUM,
-                seed=seed
-            )
-            
-            # Generate the dungeon grid
-            grid = generator.generate()
-            
-            # Add the generated dungeon to the map list
-            dungeon_name = f"Generated #{seed}"
-            self.maps.append(grid)
-            self.map_names.append(dungeon_name)
-            
-            # Switch to the new map
-            self.current_map_idx = len(self.maps) - 1
-            self._load_current_map()
-            self._center_view()
-            
-            # Clear any existing effects and reset state
-            if self.effects:
-                self.effects.clear()
-            self.step_count = 0
-            self.auto_path = []
-            self.auto_mode = False
-            
-            self._set_message(f"Generated dungeon (seed: {seed}, {len(generator.rooms)} rooms)")
-            logger.info(f"Generated dungeon: seed={seed}, rooms={len(generator.rooms)}, keys={len(generator.key_positions)}")
-            
-        except ImportError as e:
-            logger.warning(f"Dungeon generator not available: {e}")
-            self._set_message("Dungeon generator module not found")
-        except Exception as e:
-            logger.exception(f"Failed to generate dungeon: {e}")
-            self._set_message(f"Generation failed: {str(e)}")
+        _generate_dungeon_flow_helper(self, logger)
 
     def _generate_ai_dungeon(self):
         """Non-blocking wrapper to spawn background worker and return immediately."""
@@ -1288,157 +1214,51 @@ class ZeldaGUI:
         with the optional max_frames parameter.
         """
         max_frames = resolve_test_mode_max_frames(max_frames, os.environ)
-
-        # Heartbeat logging variables for responsiveness debugging
-        heartbeat_last = time.time()
-        heartbeat_interval = 0.5  # seconds (more frequent for debugging)
-
-        running = True
-        frame_count = 0
-        
-        while running:
-            # Calculate delta time for smooth animations
-            current_time = time.time()
-            self.delta_time = current_time - self.last_frame_time
-            self.last_frame_time = current_time
-            
-            _events = poll_pygame_events(pygame, time, logger)
-
-            run_input_focus_fallback(
-                self,
-                pygame,
-                time,
-                logger,
-                should_attempt_focus_fallback,
-            )
-            for event in _events:
-                clear_stale_preview_overlay(self, logger)
-
-                # Handle window focus events (improves input responsiveness on Windows)
-                if handle_window_focus_event(self, event, pygame, logger):
-                    continue
-
-                if handle_global_keydown_shortcuts(
-                    self,
-                    event,
-                    pygame,
-                    time,
-                    logger,
-                    CheckboxWidget,
-                ):
-                    continue
-
-                if handle_preview_overlay_events(self, event, pygame):
-                    continue
-
-                if event.type == pygame.QUIT:
-                    running = False
-                
-                elif event.type == pygame.VIDEORESIZE:
-                    handle_videoresize_event(self, event, pygame, logger)
-                
-                elif event.type == pygame.MOUSEWHEEL:
-                    handle_mousewheel_event(self, event, pygame, time)
-                
-                elif event.type == pygame.MOUSEBUTTONDOWN:
-                    mouse_pos, consumed = handle_mouse_button_down_preamble(
-                        self,
-                        event,
-                        pygame,
-                        time,
-                        logger,
-                        DEBUG_INPUT_ACTIVE,
-                    )
-                    if consumed:
-                        continue
-                    if handle_mouse_button_down_event(self, event, mouse_pos, pygame):
-                        continue
-                
-                elif event.type == pygame.MOUSEBUTTONUP:
-                    if handle_mouse_button_up_event(self, event, pygame, time, logger):
-                        continue
-                
-                elif event.type == pygame.MOUSEMOTION:
-                    mouse_pos = handle_mouse_motion_diagnostics(self, event, pygame, time, logger)
-                    handle_mouse_motion_event(self, event, mouse_pos, pygame)
-
-                elif event.type == pygame.KEYUP:
-                    handle_keyup_event(self, event, logger)
-
-                elif event.type == pygame.KEYDOWN:
-                    running = handle_keydown_event(
-                        self,
-                        event,
-                        pygame,
-                        os,
-                        logger,
-                        CheckboxWidget,
-                        Action,
-                        running,
-                    )
-
-            # Auto-solve stepping with timer-based animation.
-            run_auto_step_tick(self, logger, frame_count)
-            
-            # Update widget manager with mouse position
-            if self.widget_manager:
-                mouse_pos = pygame.mouse.get_pos()
-                self.widget_manager.update(mouse_pos, self.delta_time)
-            
-            # Handle continuous movement (hold key to move) with diagonal support.
-            run_continuous_movement_tick(self, pygame, Action)
-            
-            # Update toast notifications
-            self._update_toasts()
-
-            self.frame_count = frame_count
-            heartbeat_last = update_heartbeat(self, logger, time, heartbeat_last, heartbeat_interval)
-
-            handle_pending_solver_trigger(self, logger)
-
-            # Update animated control panel state (if active)
-            self._update_control_panel_animation()
-
-            # Update control panel scroll inertia (momentum)
-            self._update_control_panel_scroll()
-
-            handle_parallel_search_completion(self, logger, PathPreviewDialog)
-
-            handle_preview_process_completion(
-                self,
-                os,
-                logger,
-                _safe_unpickle,
-                PathPreviewDialog,
-            )
-
-            handle_solver_process_completion(
-                self,
-                os,
-                time,
-                np,
-                logger,
-                compute_solver_timeout_seconds,
-                _safe_unpickle,
-                find_path_tile_violations,
-                PathPreviewDialog,
-            )
-
-            handle_ai_generation_completion(self)
-
-            render_and_present_frame(self, pygame, logger)
-
-            handle_watchdog_screenshot_request(self, logger)
-
-            run_periodic_display_health_check(self, time, logger)
-
-            frame_count, keep_running = advance_frame_and_check_limit(frame_count, max_frames, logger)
-            if not keep_running:
-                running = False
-
-            tick_frame_clock(self)
-        
-        pygame.quit()
+        _run_main_loop_helper(
+            gui=self,
+            max_frames=max_frames,
+            pygame=pygame,
+            os_module=os,
+            logger=logger,
+            time_module=time,
+            np_module=np,
+            action_enum=Action,
+            checkbox_widget_cls=CheckboxWidget,
+            path_preview_dialog_cls=PathPreviewDialog,
+            safe_unpickle_fn=_safe_unpickle,
+            should_attempt_focus_fallback_fn=should_attempt_focus_fallback,
+            poll_pygame_events_fn=poll_pygame_events,
+            run_input_focus_fallback_fn=run_input_focus_fallback,
+            clear_stale_preview_overlay_fn=clear_stale_preview_overlay,
+            handle_window_focus_event_fn=handle_window_focus_event,
+            handle_global_keydown_shortcuts_fn=handle_global_keydown_shortcuts,
+            handle_preview_overlay_events_fn=handle_preview_overlay_events,
+            handle_videoresize_event_fn=handle_videoresize_event,
+            handle_mousewheel_event_fn=handle_mousewheel_event,
+            handle_mouse_button_down_preamble_fn=handle_mouse_button_down_preamble,
+            handle_mouse_button_down_event_fn=handle_mouse_button_down_event,
+            handle_mouse_button_up_event_fn=handle_mouse_button_up_event,
+            handle_mouse_motion_diagnostics_fn=handle_mouse_motion_diagnostics,
+            handle_mouse_motion_event_fn=handle_mouse_motion_event,
+            handle_keyup_event_fn=handle_keyup_event,
+            handle_keydown_event_fn=handle_keydown_event,
+            run_auto_step_tick_fn=run_auto_step_tick,
+            run_continuous_movement_tick_fn=run_continuous_movement_tick,
+            update_heartbeat_fn=update_heartbeat,
+            handle_pending_solver_trigger_fn=handle_pending_solver_trigger,
+            handle_parallel_search_completion_fn=handle_parallel_search_completion,
+            handle_preview_process_completion_fn=handle_preview_process_completion,
+            handle_solver_process_completion_fn=handle_solver_process_completion,
+            handle_ai_generation_completion_fn=handle_ai_generation_completion,
+            render_and_present_frame_fn=render_and_present_frame,
+            handle_watchdog_screenshot_request_fn=handle_watchdog_screenshot_request,
+            run_periodic_display_health_check_fn=run_periodic_display_health_check,
+            advance_frame_and_check_limit_fn=advance_frame_and_check_limit,
+            tick_frame_clock_fn=tick_frame_clock,
+            compute_solver_timeout_seconds_fn=compute_solver_timeout_seconds,
+            find_path_tile_violations_fn=find_path_tile_violations,
+            debug_input_active=DEBUG_INPUT_ACTIVE,
+        )
 
     def _next_map(self):
         """Move to the next map and stop auto-solve if running."""
