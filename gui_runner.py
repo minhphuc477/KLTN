@@ -38,6 +38,8 @@ from typing import Tuple, List, Optional, Any
 
 from src.gui.runtime.flags import load_runtime_flags
 from src.gui.app.main_loop_utils import (
+    compute_solver_timeout_seconds,
+    find_path_tile_violations,
     resolve_test_mode_max_frames,
     should_attempt_focus_fallback,
 )
@@ -2758,35 +2760,20 @@ class ZeldaGUI:
                 thread_alive = False
                 solver_starting = getattr(self, 'solver_starting', False)
                 
-                # CRITICAL: Check for solver timeout (30 second default for complex maps)
-                # Longer defaults for heavier game-state algorithms (DFS/Bidirectional/CBS).
+                # CRITICAL: Check for solver timeout (scaled by algorithm and map size).
                 active_alg = int(getattr(self, 'solver_algorithm_idx', getattr(self, 'algorithm_idx', 0)))
-                # Algorithm-specific timeout defaults:
-                # - A*: usually fastest in full game-state space
-                # - BFS/Dijkstra: can expand much larger frontiers
-                # - DFS/Bidirectional/CBS: heavy by design
-                if active_alg == 0:
-                    default_timeout = 60.0
-                elif active_alg in (1, 2):
-                    default_timeout = 180.0
-                elif active_alg == 3:
-                    default_timeout = 90.0
-                elif active_alg == 4:
-                    default_timeout = 120.0
-                else:
-                    default_timeout = 240.0
-
-                # Scale timeout with map size to reduce false kills on large stitched dungeons.
+                grid_cells = None
                 try:
                     current_map = self.maps[self.current_map_idx]
                     grid_ref = current_map.global_grid if hasattr(current_map, 'global_grid') else current_map
                     grid_cells = int(np.asarray(grid_ref).size)
-                    baseline_cells = 16 * 11 * 8  # ~8-room baseline
-                    scale = float(np.clip(grid_cells / max(1, baseline_cells), 1.0, 3.0))
-                    default_timeout *= scale
                 except Exception:
                     pass
-                solver_timeout = float(os.environ.get('KLTN_SOLVER_TIMEOUT', str(default_timeout)))
+                solver_timeout = compute_solver_timeout_seconds(
+                    active_alg,
+                    grid_cell_count=grid_cells,
+                    env_getter=os.environ.get,
+                )
                 solver_start_time = getattr(self, 'solver_start_time', None)
                 timed_out = False
                 # Timeout handling is only meaningful for process mode.
@@ -2862,13 +2849,11 @@ class ZeldaGUI:
                                     solver_result = (res.get('solver_result') or {}) if res else {}
                                     
                                     # CRITICAL: Verify path doesn't go through water
-                                    water_violations = []
-                                    if self.auto_path and len(self.auto_path) > 0:
-                                        grid = self.env.grid
-                                        for i, (r, c) in enumerate(self.auto_path):
-                                            tile_id = int(grid[r, c])
-                                            if tile_id == 40:  # ELEMENT (water)
-                                                water_violations.append((i, r, c, tile_id))
+                                    water_violations = find_path_tile_violations(
+                                        self.auto_path,
+                                        self.env.grid,
+                                        blocked_tile_ids={40},  # ELEMENT (water)
+                                    )
                                     
                                     if water_violations:
                                         print(f"\n{'='*60}")
