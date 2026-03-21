@@ -91,6 +91,11 @@ from src.gui.app.init_visualization import (
     initialize_visualization_components,
 )
 from src.gui.app.init_final_boot import finalize_initial_map_boot
+from src.gui.app.asset_boot_orchestration import (
+    create_link_sprite as _create_link_sprite_orchestration_helper,
+    init_control_panel as _init_control_panel_orchestration_helper,
+    load_assets as _load_assets_orchestration_helper,
+)
 from src.gui.app.gui_startup import run_gui_main as _run_gui_main_helper
 from src.gui.app.map_adapter_loader import load_maps_from_adapter as _load_maps_from_adapter_helper
 from src.gui.app.run_loop_pipeline import run_main_loop as _run_main_loop_helper
@@ -358,6 +363,13 @@ from src.gui.topology.helpers import (
     min_locked_between as _min_locked_between_helper,
     walkable_grid_reachable as _walkable_grid_reachable_helper,
 )
+from src.gui.topology.helper_orchestration import (
+    build_room_adjacency_from_graph as _build_room_adjacency_from_graph_orchestration_helper,
+    export_topology as _export_topology_orchestration_helper,
+    node_has_critical_content as _node_has_critical_content_orchestration_helper,
+    node_has_small_key as _node_has_small_key_orchestration_helper,
+    room_for_global_position as _room_for_global_position_orchestration_helper,
+)
 from src.gui.topology.precheck import (
     prune_dead_end_topology as _prune_dead_end_topology_flow_helper,
     run_prechecks_and_optional_prune as _run_prechecks_and_optional_prune_flow_helper,
@@ -437,6 +449,11 @@ from src.gui.control_panel.view import (
     render_control_panel as _render_control_panel_helper,
     reposition_widgets as _reposition_widgets_helper,
     update_control_panel_positions as _update_control_panel_positions_helper,
+)
+from src.gui.control_panel.layout_orchestration import (
+    dump_control_panel_widget_state as _dump_control_panel_widget_state_orchestration_helper,
+    reposition_widgets as _reposition_widgets_orchestration_helper,
+    update_control_panel_positions as _update_control_panel_positions_orchestration_helper,
 )
 from src.gui.gameplay.inventory_manager import (
     update_inventory_and_hud as _update_inventory_and_hud_helper,
@@ -854,46 +871,38 @@ class ZeldaGUI:
     
     def _load_assets(self):
         """Load tile images - using colored squares for reliability."""
-        color_map = _default_tile_color_map_helper(semantic_palette=SEMANTIC_PALETTE)
-        self.images = _build_tile_images_helper(
-            tile_size=self.TILE_SIZE,
-            color_map=color_map,
+        _load_assets_orchestration_helper(
+            gui=self,
             semantic_palette=SEMANTIC_PALETTE,
             pygame=pygame,
+            default_tile_color_map_helper=_default_tile_color_map_helper,
+            build_tile_images_helper=_build_tile_images_helper,
+            build_stair_marker_sprite_helper=_build_stair_marker_sprite_helper,
         )
-        
-        # Create Link sprite
-        self.link_img = self._create_link_sprite()
-
-        # Create a small stair sprite (glowing marker) for visual emphasis
-        try:
-            self.stair_sprite, self.stair_anim_phase = _build_stair_marker_sprite_helper(
-                tile_size=self.TILE_SIZE,
-                pygame=pygame,
-            )
-        except Exception:
-            self.stair_sprite = None
-            self.stair_anim_phase = 0.0
     
 
     def _create_link_sprite(self):
         """Create a detailed Link sprite using pygame drawing."""
-        return _build_link_sprite_helper(tile_size=self.TILE_SIZE, pygame=pygame)
+        return _create_link_sprite_orchestration_helper(
+            tile_size=self.TILE_SIZE,
+            pygame=pygame,
+            build_link_sprite_helper=_build_link_sprite_helper,
+        )
     
     def _init_control_panel(self):
         """Initialize the GUI control panel with widgets."""
-        if not WIDGETS_AVAILABLE:
-            return
-        
-        self.widget_manager = WidgetManager()
-        self._update_control_panel_positions()
+        _init_control_panel_orchestration_helper(
+            gui=self,
+            widgets_available=WIDGETS_AVAILABLE,
+            widget_manager_cls=WidgetManager,
+        )
     
     def _update_control_panel_positions(self):
         """Update control panel and widget positions (called on resize)."""
-        _update_control_panel_positions_helper(
-            self,
-            pygame,
-            logger,
+        _update_control_panel_positions_orchestration_helper(
+            gui=self,
+            pygame=pygame,
+            logger=logger,
             widgets_available=WIDGETS_AVAILABLE,
             checkbox_widget_cls=CheckboxWidget,
             dropdown_widget_cls=DropdownWidget,
@@ -901,17 +910,19 @@ class ZeldaGUI:
             zoom_labels=GUI_ZOOM_LABELS,
             difficulty_names=GUI_DIFFICULTY_NAMES,
             algorithm_names=GUI_ALGORITHM_NAMES,
+            update_control_panel_positions_helper=_update_control_panel_positions_helper,
         )
-    
+
     def _reposition_widgets(self, panel_x: int, panel_y: int):
         """Reposition existing widgets when panel is dragged (without rebuilding)."""
-        _reposition_widgets_helper(
-            self,
-            panel_x,
-            panel_y,
+        _reposition_widgets_orchestration_helper(
+            gui=self,
+            panel_x=panel_x,
+            panel_y=panel_y,
             checkbox_widget_cls=CheckboxWidget,
             dropdown_widget_cls=DropdownWidget,
             button_widget_cls=ButtonWidget,
+            reposition_widgets_helper=_reposition_widgets_helper,
         )
 
     def _dump_control_panel_widget_state(self, mouse_pos: tuple):
@@ -920,11 +931,12 @@ class ZeldaGUI:
         This is defensive and avoids using any variables that may not be available in
         other layout helper contexts.
         """
-        _dump_control_panel_widget_state_helper(
-            self,
-            mouse_pos,
+        _dump_control_panel_widget_state_orchestration_helper(
+            gui=self,
+            mouse_pos=mouse_pos,
             logger=logger,
             debug_input_active=DEBUG_INPUT_ACTIVE,
+            dump_control_panel_widget_state_helper=_dump_control_panel_widget_state_helper,
         )
         
     
@@ -1945,7 +1957,10 @@ class ZeldaGUI:
     # --- Topology helpers ---
     def _export_topology(self):
         """Export current map topology to a DOT file (if available)."""
-        return _export_topology_helper(self)
+        return _export_topology_orchestration_helper(
+            gui=self,
+            export_topology_helper=_export_topology_helper,
+        )
 
 
     def _render_topology_overlay(self, surface):
@@ -1981,16 +1996,27 @@ class ZeldaGUI:
 
     def _room_for_global_position(self, pos: Optional[Tuple[int, int]], room_positions: dict) -> Optional[Tuple[int, int]]:
         """Map a global tile coordinate to a room-grid coordinate."""
-        return _room_for_global_position_helper(pos, room_positions)
+        return _room_for_global_position_orchestration_helper(
+            pos=pos,
+            room_positions=room_positions,
+            room_for_global_position_helper=_room_for_global_position_helper,
+        )
 
     @staticmethod
     def _node_has_small_key(attrs: dict) -> bool:
         """Best-effort small-key detection from graph node attributes/labels."""
-        return _node_has_small_key_helper(attrs)
+        return _node_has_small_key_orchestration_helper(
+            attrs=attrs,
+            node_has_small_key_helper=_node_has_small_key_helper,
+        )
 
     def _node_has_critical_content(self, graph, node_id: Any) -> bool:
         """Whether a node should be preserved during dead-end pruning."""
-        return _node_has_critical_content_helper(graph, node_id)
+        return _node_has_critical_content_orchestration_helper(
+            graph=graph,
+            node_id=node_id,
+            node_has_critical_content_helper=_node_has_critical_content_helper,
+        )
 
     def _capture_precheck_snapshot(self, current: Any, reason: str = "") -> None:
         """Capture current topology state so Undo Prune can restore it."""
@@ -2011,7 +2037,12 @@ class ZeldaGUI:
 
     def _build_room_adjacency_from_graph(self, graph: Any, room_to_node: dict, node_to_room: dict) -> dict:
         """Build undirected room adjacency from graph edges via node-room mapping."""
-        return _build_room_adjacency_from_graph_helper(graph, room_to_node, node_to_room)
+        return _build_room_adjacency_from_graph_orchestration_helper(
+            graph=graph,
+            room_to_node=room_to_node,
+            node_to_room=node_to_room,
+            build_room_adjacency_from_graph_helper=_build_room_adjacency_from_graph_helper,
+        )
 
     def _prune_dead_end_topology(self, current: Any, preserve_rooms: set) -> List[Tuple[int, int]]:
         """Prune dead-end rooms from topology mapping when room objects are unavailable."""
