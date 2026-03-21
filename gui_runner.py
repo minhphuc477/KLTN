@@ -86,6 +86,11 @@ from src.gui.app.init_display_setup import initialize_display_window
 from src.gui.app.init_runtime_watchdog import initialize_runtime_timing_state
 from src.gui.app.init_solver_state import initialize_solver_execution_state
 from src.gui.app.init_ui_state import initialize_ui_control_state
+from src.gui.app.init_visualization import (
+    initialize_debug_test_path,
+    initialize_visualization_components,
+)
+from src.gui.app.init_final_boot import finalize_initial_map_boot
 
 # Configure logging
 logging.basicConfig(
@@ -653,30 +658,19 @@ class ZeldaGUI:
             logger=logger,
         )
         
-        # New visualization system
-        if VISUALIZATION_AVAILABLE:
-            self.renderer = ZeldaRenderer(self.TILE_SIZE)
-            self.effects = EffectManager()
-            self.modern_hud = ModernHUD()
-        else:
-            # Instantiate no-op fallbacks so attribute access is safe and
-            # downstream code does not need to guard every call.
-            self.renderer = ZeldaRenderer(self.TILE_SIZE)
-            self.effects = EffectManager()
-            self.modern_hud = ModernHUD()
+        initialize_visualization_components(
+            gui=self,
+            visualization_available=VISUALIZATION_AVAILABLE,
+            renderer_cls=ZeldaRenderer,
+            effects_cls=EffectManager,
+            hud_cls=ModernHUD,
+        )
         # Load assets (fallback for when new system unavailable)
         self._load_assets()
 
         initialize_solver_execution_state(gui=self, threading_module=threading)
 
-        # ===== DEBUG TEST PATH =====
-        # Set KLTN_DEBUG_TEST_PATH=1 to enable red debug path overlay
-        if os.environ.get('KLTN_DEBUG_TEST_PATH') == '1':
-            self._test_path = [(5, 5), (5, 6), (5, 7), (5, 8), (6, 8), (7, 8), (8, 8), (8, 9), (8, 10)]
-            print(f"[DEBUG_INIT] _test_path ENABLED with {len(self._test_path)} points for visual testing")
-        else:
-            self._test_path = None
-        # ===========================
+        initialize_debug_test_path(gui=self, os_module=os)
 
         initialize_ui_control_state(
             gui=self,
@@ -686,19 +680,7 @@ class ZeldaGUI:
             time_module=time,
         )
         
-        self._load_current_map()
-        self._center_view()  # Center the map in view
-        
-        # Initialize control panel after map loaded
-        if self.control_panel_enabled:
-            self._init_control_panel()
-
-        # Draw an initial frame to ensure window contents are painted promptly
-        try:
-            self._render()
-            pygame.display.flip()
-        except Exception:
-            pass
+        finalize_initial_map_boot(gui=self, pygame=pygame, logger=logger)
 
     
     def _load_assets(self):
