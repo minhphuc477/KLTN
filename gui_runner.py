@@ -214,6 +214,20 @@ from src.gui.solver.request_orchestration import (
     build_solver_request as _build_solver_request_orchestration_helper,
     get_solver_map_context as _get_solver_map_context_orchestration_helper,
 )
+from src.gui.solver.session_orchestration import (
+    cleanup_preview_before_solver_start as _cleanup_preview_before_solver_start_orchestration_helper,
+    clear_solver_state as _clear_solver_state_orchestration_helper,
+    compute_solver_timeout_seconds as _compute_solver_timeout_seconds_orchestration_helper,
+    create_solver_temp_files as _create_solver_temp_files_orchestration_helper,
+    force_solver_recovery_state as _force_solver_recovery_state_orchestration_helper,
+    log_active_solver_state as _log_active_solver_state_orchestration_helper,
+    prepare_active_solver_for_new_start as _prepare_active_solver_for_new_start_orchestration_helper,
+    reset_solver_visual_state_before_start as _reset_solver_visual_state_before_start_orchestration_helper,
+    run_solver_sync as _run_solver_sync_orchestration_helper,
+    start_auto_solve as _start_auto_solve_orchestration_helper,
+    sync_solver_dropdown_settings as _sync_solver_dropdown_settings_orchestration_helper,
+    terminate_hung_solver_process as _terminate_hung_solver_process_orchestration_helper,
+)
 from src.gui.solver.launch_orchestration import (
     launch_solver_process as _launch_solver_process_orchestration_helper,
     launch_solver_worker as _launch_solver_worker_orchestration_helper,
@@ -417,6 +431,21 @@ from src.gui.gameplay.path_strategies import (
 from src.gui.gameplay.auto_step_controller import (
     stop_auto as _stop_auto_helper,
     auto_step as _auto_step_helper,
+)
+from src.gui.gameplay.action_orchestration import (
+    auto_step as _auto_step_orchestration_helper,
+    check_and_start_block_push as _check_and_start_block_push_orchestration_helper,
+    execute_auto_solve as _execute_auto_solve_orchestration_helper,
+    execute_auto_solve_from_preview as _execute_auto_solve_from_preview_orchestration_helper,
+    get_animating_block_positions as _get_animating_block_positions_orchestration_helper,
+    graph_guided_path as _graph_guided_path_orchestration_helper,
+    hybrid_graph_grid_path as _hybrid_graph_grid_path_orchestration_helper,
+    manual_step as _manual_step_orchestration_helper,
+    render_block_push_animations as _render_block_push_animations_orchestration_helper,
+    smart_grid_path as _smart_grid_path_orchestration_helper,
+    start_block_push_animation as _start_block_push_animation_orchestration_helper,
+    stop_auto as _stop_auto_orchestration_helper,
+    update_block_push_animations as _update_block_push_animations_orchestration_helper,
 )
 from src.gui.gameplay.manual_step_controller import manual_step as _manual_step_flow_helper
 from src.gui.rendering.path_guaranteed_renderer import (
@@ -1490,11 +1519,20 @@ class ZeldaGUI:
         Args:
             reason: Description of why solver is being cleared (for logging)
         """
-        _clear_solver_state_helper(gui=self, reason=reason, logger=logger)
+        _clear_solver_state_orchestration_helper(
+            gui=self,
+            reason=reason,
+            logger=logger,
+            clear_solver_state_helper=_clear_solver_state_helper,
+        )
 
     def _sync_solver_dropdown_settings(self):
         """Refresh algorithm/representation/ARA values from dropdown widgets."""
-        return _sync_solver_dropdown_settings_helper(gui=self, sync_fn=sync_solver_dropdown_settings)
+        return _sync_solver_dropdown_settings_orchestration_helper(
+            gui=self,
+            sync_fn=sync_solver_dropdown_settings,
+            sync_solver_dropdown_settings_helper=_sync_solver_dropdown_settings_helper,
+        )
 
     def _algorithm_name(self, algorithm_idx):
         """Return canonical display label for a solver index."""
@@ -1508,11 +1546,16 @@ class ZeldaGUI:
         from the main loop or event handlers.
         """
         
-        _start_auto_solve_helper(gui=self, logger=logger, debug_sync_solver=DEBUG_SYNC_SOLVER)
+        _start_auto_solve_orchestration_helper(
+            gui=self,
+            logger=logger,
+            debug_sync_solver=DEBUG_SYNC_SOLVER,
+            start_auto_solve_helper=_start_auto_solve_helper,
+        )
 
     def _prepare_active_solver_for_new_start(self) -> bool:
         """Return True when a new solver run may proceed, False to block startup."""
-        return _prepare_active_solver_for_new_start_helper(
+        return _prepare_active_solver_for_new_start_orchestration_helper(
             gui=self,
             logger=logger,
             time_module=time,
@@ -1521,34 +1564,59 @@ class ZeldaGUI:
             terminate_hung_process=self._terminate_hung_solver_process,
             force_recovery_state=self._force_solver_recovery_state,
             log_active_state=self._log_active_solver_state,
+            prepare_active_solver_for_new_start_helper=_prepare_active_solver_for_new_start_helper,
         )
 
     def _log_active_solver_state(self):
-        _log_active_solver_state_helper(gui=self, logger=logger, os_module=os, time_module=time)
+        _log_active_solver_state_orchestration_helper(
+            gui=self,
+            logger=logger,
+            os_module=os,
+            time_module=time,
+            log_active_solver_state_helper=_log_active_solver_state_helper,
+        )
 
     def _compute_solver_timeout_seconds(self, active_alg: int) -> float:
-        return _compute_solver_timeout_seconds_helper(
+        return _compute_solver_timeout_seconds_orchestration_helper(
             gui=self,
             active_alg=active_alg,
             default_solver_timeout_for_algorithm=default_solver_timeout_for_algorithm,
             scale_timeout_by_grid_size=scale_timeout_by_grid_size,
             np_module=np,
             os_module=os,
+            compute_solver_timeout_seconds_helper=_compute_solver_timeout_seconds_helper,
         )
 
     def _terminate_hung_solver_process(self, proc):
-        _terminate_hung_solver_process_helper(proc=proc, logger=logger)
+        _terminate_hung_solver_process_orchestration_helper(
+            proc=proc,
+            logger=logger,
+            terminate_hung_solver_process_helper=_terminate_hung_solver_process_helper,
+        )
 
     def _force_solver_recovery_state(self, recovery_reason: str):
-        _force_solver_recovery_state_helper(gui=self, recovery_reason=recovery_reason, logger=logger)
+        _force_solver_recovery_state_orchestration_helper(
+            gui=self,
+            recovery_reason=recovery_reason,
+            logger=logger,
+            force_solver_recovery_state_helper=_force_solver_recovery_state_helper,
+        )
 
     def _cleanup_preview_before_solver_start(self):
         """Stop preview workers/files so new solve starts from a clean state."""
-        _cleanup_preview_before_solver_start_helper(gui=self, logger=logger, os_module=os)
+        _cleanup_preview_before_solver_start_orchestration_helper(
+            gui=self,
+            logger=logger,
+            os_module=os,
+            cleanup_preview_before_solver_start_helper=_cleanup_preview_before_solver_start_helper,
+        )
 
     def _reset_solver_visual_state_before_start(self):
         """Clear solver/visual state from previous runs before scheduling a new solve."""
-        _reset_solver_visual_state_before_start_helper(gui=self)
+        _reset_solver_visual_state_before_start_orchestration_helper(
+            gui=self,
+            reset_solver_visual_state_before_start_helper=_reset_solver_visual_state_before_start_helper,
+        )
 
     def _get_solver_map_context(self):
         """Return current grid and optional topology context needed by solver backends."""
@@ -1572,11 +1640,12 @@ class ZeldaGUI:
         This blocks the UI but helps diagnose whether the issue is in multiprocessing
         or in the solver/animation logic itself.
         """
-        _run_solver_sync_helper(
+        _run_solver_sync_orchestration_helper(
             gui=self,
             logger=logger,
             solve_in_subprocess=_solve_in_subprocess,
             algorithm_idx=algorithm_idx,
+            run_solver_sync_helper=_run_solver_sync_helper,
         )
 
     def _watchdog_loop(self):
@@ -1616,7 +1685,10 @@ class ZeldaGUI:
 
     def _create_solver_temp_files(self, grid_arr):
         """Create output and optional grid temp files for solver worker launch."""
-        return _create_solver_temp_files_helper(grid_arr)
+        return _create_solver_temp_files_orchestration_helper(
+            grid_arr=grid_arr,
+            create_solver_temp_files_helper=_create_solver_temp_files_helper,
+        )
 
     def _launch_solver_worker(self, **kwargs):
         """Launch solver process, with thread-based fallback on process failure."""
@@ -1668,26 +1740,31 @@ class ZeldaGUI:
             solver_result: Solver metadata (may include CBS metrics)
             teleports: Number of teleport/warp moves
         """
-        _execute_auto_solve_helper(
+        _execute_auto_solve_orchestration_helper(
             gui=self,
             path=path,
             solver_result=solver_result,
             teleports=teleports,
             logger=logger,
+            execute_auto_solve_helper=_execute_auto_solve_helper,
         )
     
     def _execute_auto_solve_from_preview(self):
         """
         Start auto-solve after user confirms path preview.
         """
-        _execute_auto_solve_from_preview_helper(gui=self, logger=logger)
+        _execute_auto_solve_from_preview_orchestration_helper(
+            gui=self,
+            logger=logger,
+            execute_auto_solve_from_preview_helper=_execute_auto_solve_from_preview_helper,
+        )
     
     def _smart_grid_path(self):
         """
         Smart pathfinding that prioritizes walking and only warps via STAIRs.
         Returns (success, path, teleport_count).
         """
-        return _smart_grid_path_helper(
+        return _smart_grid_path_orchestration_helper(
             gui=self,
             logger=logger,
             convert_diagonal_to_4dir=_convert_diagonal_to_4dir,
@@ -1695,28 +1772,40 @@ class ZeldaGUI:
             np_module=np,
             path_cls=Path,
             os_module=os,
+            smart_grid_path_helper=_smart_grid_path_helper,
         )
 
     def _graph_guided_path(self):
         """Fallback: follow graph path with teleportation when needed."""
-        return _graph_guided_path_helper(gui=self)
+        return _graph_guided_path_orchestration_helper(
+            gui=self,
+            graph_guided_path_helper=_graph_guided_path_helper,
+        )
 
     def _hybrid_graph_grid_path(self):
         """
         Hybrid pathfinding: use graph to find room sequence, 
         then BFS within each room and teleport between disconnected clusters.
         """
-        return _hybrid_graph_grid_path_helper(gui=self)
+        return _hybrid_graph_grid_path_orchestration_helper(
+            gui=self,
+            hybrid_graph_grid_path_helper=_hybrid_graph_grid_path_helper,
+        )
 
     def _stop_auto(self, reason: str = None):
         """Stop auto-solve mode with consistent logging and cleanup."""
-        return _stop_auto_helper(gui=self, reason=reason, logger=logger)
+        return _stop_auto_orchestration_helper(
+            gui=self,
+            reason=reason,
+            logger=logger,
+            stop_auto_helper=_stop_auto_helper,
+        )
 
     def _auto_step(self):
         """Execute one step of auto-solve with comprehensive error handling."""
         import traceback
 
-        return _auto_step_helper(
+        return _auto_step_orchestration_helper(
             gui=self,
             logger=logger,
             game_state_cls=GameState,
@@ -1724,6 +1813,7 @@ class ZeldaGUI:
             ripple_effect_cls=RippleEffect,
             flash_effect_cls=FlashEffect,
             traceback_module=traceback,
+            auto_step_helper=_auto_step_helper,
         )
     
     def _show_error(self, message: str):
@@ -1967,11 +2057,25 @@ class ZeldaGUI:
             block_from: Original block position (row, col)
             block_to: Destination position (row, col)
         """
-        _start_block_push_animation_helper(self, block_from, block_to, pygame, logger)
+        _start_block_push_animation_orchestration_helper(
+            gui=self,
+            block_from=block_from,
+            block_to=block_to,
+            pygame=pygame,
+            logger=logger,
+            start_block_push_animation_helper=_start_block_push_animation_helper,
+        )
     
     def _update_block_push_animations(self):
         """Update all active block push animations and complete finished ones."""
-        _update_block_push_animations_helper(self, pygame, SEMANTIC_PALETTE, PopEffect, logger)
+        _update_block_push_animations_orchestration_helper(
+            gui=self,
+            pygame=pygame,
+            semantic_palette=SEMANTIC_PALETTE,
+            pop_effect_cls=PopEffect,
+            logger=logger,
+            update_block_push_animations_helper=_update_block_push_animations_helper,
+        )
     
     def _render_block_push_animations(self, surface):
         """Render blocks that are currently being pushed with smooth interpolation.
@@ -1979,11 +2083,20 @@ class ZeldaGUI:
         Args:
             surface: The pygame surface to draw on (map_surface)
         """
-        _render_block_push_animations_helper(self, surface, pygame, SEMANTIC_PALETTE)
+        _render_block_push_animations_orchestration_helper(
+            gui=self,
+            surface=surface,
+            pygame=pygame,
+            semantic_palette=SEMANTIC_PALETTE,
+            render_block_push_animations_helper=_render_block_push_animations_helper,
+        )
     
     def _get_animating_block_positions(self) -> set:
         """Get set of block positions currently being animated (to skip normal rendering)."""
-        return _get_animating_block_positions_helper(self)
+        return _get_animating_block_positions_orchestration_helper(
+            gui=self,
+            get_animating_block_positions_helper=_get_animating_block_positions_helper,
+        )
     
     def _check_and_start_block_push(self, player_pos: Tuple[int, int], target_pos: Tuple[int, int], 
                                      action: Action) -> bool:
@@ -1998,7 +2111,14 @@ class ZeldaGUI:
             True if a block push was initiated, False otherwise
         """
         _ = action
-        return _check_and_start_block_push_helper(self, player_pos, target_pos, WALKABLE_IDS, PUSHABLE_IDS)
+        return _check_and_start_block_push_orchestration_helper(
+            gui=self,
+            player_pos=player_pos,
+            target_pos=target_pos,
+            walkable_ids=WALKABLE_IDS,
+            pushable_ids=PUSHABLE_IDS,
+            check_and_start_block_push_helper=_check_and_start_block_push_helper,
+        )
 
     def _show_warning(self, message: str):
         """Display warning message to user."""
@@ -2011,13 +2131,14 @@ class ZeldaGUI:
     
     def _manual_step(self, action: Action):
         """Execute manual step."""
-        return _manual_step_flow_helper(
+        return _manual_step_orchestration_helper(
             gui=self,
             action=action,
             action_deltas=ACTION_DELTAS,
             pop_effect_cls=PopEffect,
             flash_effect_cls=FlashEffect,
             time_module=time,
+            manual_step_helper=_manual_step_flow_helper,
         )
     
     def _render_path_GUARANTEED(self, surface):
