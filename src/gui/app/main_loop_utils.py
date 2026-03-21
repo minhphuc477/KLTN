@@ -72,3 +72,76 @@ def find_path_tile_violations(path, grid, blocked_tile_ids):
         if tile_id in blocked:
             violations.append((idx, int(r), int(c), tile_id))
     return violations
+
+
+def run_auto_step_tick(gui, logger, frame_count):
+    """Advance auto-solve timer and execute one step when the threshold is met."""
+    if frame_count % 60 == 0:
+        logger.debug(
+            "DEBUG_ANIM: frame=%d auto_mode=%s env.done=%s auto_path_len=%d auto_step_idx=%s",
+            frame_count,
+            getattr(gui, "auto_mode", None),
+            getattr(gui.env, "done", None) if gui.env else None,
+            len(getattr(gui, "auto_path", []) or []),
+            getattr(gui, "auto_step_idx", None),
+        )
+
+    if not (getattr(gui, "auto_mode", False) and not getattr(gui.env, "done", False)):
+        return
+
+    gui.auto_step_timer += gui.delta_time
+    effective_interval = gui.auto_step_interval / max(0.1, gui.speed_multiplier)
+
+    if frame_count % 30 == 0:
+        logger.debug(
+            "TIMER_DIAG: frame=%d timer=%.3f threshold=%.3f delta=%.3f step=%d/%d",
+            frame_count,
+            gui.auto_step_timer,
+            effective_interval,
+            gui.delta_time,
+            gui.auto_step_idx,
+            len(gui.auto_path) if gui.auto_path else 0,
+        )
+
+    if gui.auto_step_timer < effective_interval:
+        return
+
+    gui.auto_step_timer = 0.0
+    logger.debug(
+        "DEBUG_ANIM: Calling _auto_step() at frame=%d, step_idx=%d/%d",
+        frame_count,
+        gui.auto_step_idx,
+        len(gui.auto_path) if gui.auto_path else 0,
+    )
+    gui._auto_step()
+    gui._center_on_player()
+
+
+def run_continuous_movement_tick(gui, pygame_module, action_enum):
+    """Handle hold-to-move input including diagonal movement combinations."""
+    if getattr(gui, "auto_mode", False):
+        return
+    if not any(gui.keys_held.values()):
+        return
+
+    gui.move_timer += gui.delta_time
+    if gui.move_timer < gui.move_delay:
+        return
+
+    gui.move_timer = 0.0
+    if gui.keys_held[pygame_module.K_UP] and gui.keys_held[pygame_module.K_LEFT]:
+        gui._manual_step(action_enum.UP_LEFT)
+    elif gui.keys_held[pygame_module.K_UP] and gui.keys_held[pygame_module.K_RIGHT]:
+        gui._manual_step(action_enum.UP_RIGHT)
+    elif gui.keys_held[pygame_module.K_DOWN] and gui.keys_held[pygame_module.K_LEFT]:
+        gui._manual_step(action_enum.DOWN_LEFT)
+    elif gui.keys_held[pygame_module.K_DOWN] and gui.keys_held[pygame_module.K_RIGHT]:
+        gui._manual_step(action_enum.DOWN_RIGHT)
+    elif gui.keys_held[pygame_module.K_UP]:
+        gui._manual_step(action_enum.UP)
+    elif gui.keys_held[pygame_module.K_DOWN]:
+        gui._manual_step(action_enum.DOWN)
+    elif gui.keys_held[pygame_module.K_LEFT]:
+        gui._manual_step(action_enum.LEFT)
+    elif gui.keys_held[pygame_module.K_RIGHT]:
+        gui._manual_step(action_enum.RIGHT)

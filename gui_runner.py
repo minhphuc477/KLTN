@@ -41,6 +41,8 @@ from src.gui.app.main_loop_utils import (
     compute_solver_timeout_seconds,
     find_path_tile_violations,
     resolve_test_mode_max_frames,
+    run_auto_step_tick,
+    run_continuous_movement_tick,
     should_attempt_focus_fallback,
 )
 
@@ -2584,68 +2586,16 @@ class ZeldaGUI:
                             self._manual_step(action)
                             self._center_on_player()
 
-            # Auto-solve stepping with timer-based animation
-            # DEBUG: Log auto_mode status periodically (every 60 frames)
-            if frame_count % 60 == 0:
-                logger.debug('DEBUG_ANIM: frame=%d auto_mode=%s env.done=%s auto_path_len=%d auto_step_idx=%s',
-                             frame_count,
-                             getattr(self, 'auto_mode', None),
-                             getattr(self.env, 'done', None) if self.env else None,
-                             len(getattr(self, 'auto_path', []) or []),
-                             getattr(self, 'auto_step_idx', None))
-            
-            # BUGFIX: The hotfix below was causing animation failure by resetting env mid-animation
-            # The env.reset() call in _execute_auto_solve() already handles initial reset correctly
-            # This hotfix was resetting player position back to start, breaking the animation
-            # REMOVED: Hotfix that called env.reset() when auto_mode=True and env.done=True
-            
-            if self.auto_mode and not self.env.done:
-                # Accumulate time and step when interval reached
-                self.auto_step_timer += self.delta_time
-                # Calculate effective interval (faster with higher speed multiplier)
-                effective_interval = self.auto_step_interval / max(0.1, self.speed_multiplier)
-                
-                # Timer diagnostics every 30 frames
-                if frame_count % 30 == 0:
-                    logger.debug('TIMER_DIAG: frame=%d timer=%.3f threshold=%.3f delta=%.3f step=%d/%d',
-                                frame_count, self.auto_step_timer, effective_interval, 
-                                self.delta_time, self.auto_step_idx, len(self.auto_path) if self.auto_path else 0)
-                
-                if self.auto_step_timer >= effective_interval:
-                    self.auto_step_timer = 0.0
-                    logger.debug('DEBUG_ANIM: Calling _auto_step() at frame=%d, step_idx=%d/%d',
-                                 frame_count, self.auto_step_idx, len(self.auto_path) if self.auto_path else 0)
-                    self._auto_step()
-                    self._center_on_player()
+            # Auto-solve stepping with timer-based animation.
+            run_auto_step_tick(self, logger, frame_count)
             
             # Update widget manager with mouse position
             if self.widget_manager:
                 mouse_pos = pygame.mouse.get_pos()
                 self.widget_manager.update(mouse_pos, self.delta_time)
             
-            # Handle continuous movement (hold key to move) with diagonal support
-            if not self.auto_mode and any(self.keys_held.values()):
-                self.move_timer += self.delta_time
-                if self.move_timer >= self.move_delay:
-                    self.move_timer = 0.0
-                    # Check for diagonal combinations FIRST (two keys held)
-                    if self.keys_held[pygame.K_UP] and self.keys_held[pygame.K_LEFT]:
-                        self._manual_step(Action.UP_LEFT)
-                    elif self.keys_held[pygame.K_UP] and self.keys_held[pygame.K_RIGHT]:
-                        self._manual_step(Action.UP_RIGHT)
-                    elif self.keys_held[pygame.K_DOWN] and self.keys_held[pygame.K_LEFT]:
-                        self._manual_step(Action.DOWN_LEFT)
-                    elif self.keys_held[pygame.K_DOWN] and self.keys_held[pygame.K_RIGHT]:
-                        self._manual_step(Action.DOWN_RIGHT)
-                    # Cardinal directions (single key)
-                    elif self.keys_held[pygame.K_UP]:
-                        self._manual_step(Action.UP)
-                    elif self.keys_held[pygame.K_DOWN]:
-                        self._manual_step(Action.DOWN)
-                    elif self.keys_held[pygame.K_LEFT]:
-                        self._manual_step(Action.LEFT)
-                    elif self.keys_held[pygame.K_RIGHT]:
-                        self._manual_step(Action.RIGHT)
+            # Handle continuous movement (hold key to move) with diagonal support.
+            run_continuous_movement_tick(self, pygame, Action)
             
             # Update toast notifications
             self._update_toasts()
