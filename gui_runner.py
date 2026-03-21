@@ -77,6 +77,13 @@ from src.gui.app.event_loop_handlers import (
     poll_pygame_events,
     run_input_focus_fallback,
 )
+from src.gui.app.init_bootstrap import (
+    configure_windows_dpi_awareness,
+    ensure_repo_export_dirs,
+    initialize_pygame_runtime,
+)
+from src.gui.app.init_display_setup import initialize_display_window
+from src.gui.app.init_runtime_watchdog import initialize_runtime_timing_state
 
 # Configure logging
 logging.basicConfig(
@@ -631,201 +638,18 @@ class ZeldaGUI:
         self.map_names = map_names if map_names else [f"Map {i+1}" for i in range(len(self.maps))]
         self.current_map_idx = 0
 
-        # Repository-local export directories (avoid writing outside the repo due to cwd changes).
-        self.repo_root = Path(__file__).resolve().parent
-        self.exports_root = self.repo_root / 'exports'
-        self.route_export_dir = self.exports_root / 'routes'
-        self.topology_export_dir = self.exports_root / 'topology'
-        self.artifacts_dir = str(self.exports_root / 'artifacts')
-        try:
-            self.route_export_dir.mkdir(parents=True, exist_ok=True)
-            self.topology_export_dir.mkdir(parents=True, exist_ok=True)
-            Path(self.artifacts_dir).mkdir(parents=True, exist_ok=True)
-        except Exception:
-            logger.exception('Failed to create export directories under repo root')
-        
-        # Attempt to enable Windows DPI awareness *before* initializing Pygame so mouse coords match pixels
-        try:
-            import ctypes
-            # Prefer the per-monitor v2 context if available (Windows 10+)
-            try:
-                DPI_AWARE_CONTEXT_PER_MONITOR_AWARE_V2 = -4
-                ctypes.windll.user32.SetProcessDpiAwarenessContext(DPI_AWARE_CONTEXT_PER_MONITOR_AWARE_V2)
-                logger.debug('SetProcessDpiAwarenessContext(PER_MONITOR_AWARE_V2) succeeded')
-            except Exception:
-                try:
-                    # Try SetProcessDpiAwareness (Windows 8.1+ via shcore)
-                    ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PROCESS_PER_MONITOR_DPI_AWARE
-                    logger.debug('SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE) succeeded')
-                except Exception:
-                    try:
-                        # Fallback to legacy API
-                        ctypes.windll.user32.SetProcessDPIAware()
-                        logger.debug('SetProcessDPIAware() succeeded')
-                    except Exception:
-                        logger.debug('Could not set process DPI awareness')
-        except Exception:
-            logger.debug('DPI awareness calls not supported on this platform')
-
-        # Initialize Pygame
-        try:
-            pygame.init()
-        except Exception:
-            logger.exception("Failed to initialize Pygame")
-            raise
-
-        # Wrap pygame.mouse.set_cursor to be tolerant on platforms where system cursors are unsupported
-        try:
-            _orig_set_cursor = pygame.mouse.set_cursor
-            def _wrapped_set_cursor(cursor):
-                try:
-                    _orig_set_cursor(cursor)
-                except Exception:
-                    logger.debug('set_cursor failed or unsupported in this environment', exc_info=True)
-            pygame.mouse.set_cursor = _wrapped_set_cursor
-        except Exception:
-            # If we can't patch, just ignore - cursor changes may still work
-            logger.debug('Could not wrap pygame.mouse.set_cursor; continuing')
-        
-        # Display settings
-        self.zoom_idx = self.DEFAULT_ZOOM_IDX
-        self.TILE_SIZE = self.ZOOM_LEVELS[self.zoom_idx]
-        self.HUD_HEIGHT = 10  # Minimal bottom margin (status/message moved to sidebar)
-        self.SIDEBAR_WIDTH = 220  # Wider for dungeon names
-        
-        # Get screen info for smart sizing
-        display_info = pygame.display.Info()
-        max_screen_w = display_info.current_w - 100
-        max_screen_h = display_info.current_h - 100
-        
-        # Calculate initial window size (fit largest map)
-        # Handle both raw grids and StitchedDungeon objects
-        def _grid_shape(m: Any):
-            g = getattr(m, 'global_grid', m)
-            return getattr(g, 'shape')[0], getattr(g, 'shape')[1]
-        max_map_h = max(_grid_shape(m)[0] for m in self.maps)
-        max_map_w = max(_grid_shape(m)[1] for m in self.maps)
-        
-        # Smart sizing: fit map with some padding, but don't exceed screen
-        ideal_w = max_map_w * self.TILE_SIZE + self.SIDEBAR_WIDTH
-        ideal_h = max_map_h * self.TILE_SIZE + self.HUD_HEIGHT
-        
-        self.screen_w = min(ideal_w, max_screen_w)
-        self.screen_h = min(ideal_h, max_screen_h)
-        
-        # Ensure minimum size
-        self.screen_w = max(self.screen_w, self.MIN_WIDTH)
-        self.screen_h = max(self.screen_h, self.MIN_HEIGHT)
-        
-        # Create resizable window
-        self.screen = pygame.display.set_mode(
-            (self.screen_w, self.screen_h), 
-            pygame.RESIZABLE
+        ensure_repo_export_dirs(gui=self, path_cls=Path, logger=logger)
+        configure_windows_dpi_awareness(logger=logger)
+        initialize_pygame_runtime(pygame=pygame, logger=logger)
+        initialize_display_window(gui=self, pygame=pygame, os_module=os, logger=logger)
+        initialize_runtime_timing_state(
+            gui=self,
+            pygame=pygame,
+            os_module=os,
+            time_module=time,
+            threading_module=threading,
+            logger=logger,
         )
-        pygame.display.set_caption("ZAVE: Zelda AI Validation Environment")
-        # Remember previous window size so we can restore it after exiting fullscreen
-        self._prev_window_size = (self.screen_w, self.screen_h)
-
-        # Ensure mouse events are not grabbed and cursor is visible on startup
-        try:
-            pygame.event.set_grab(False)
-        except Exception:
-            logger.debug('Could not clear event grab at startup')
-        try:
-            pygame.mouse.set_visible(True)
-        except Exception:
-            logger.debug('Could not ensure mouse cursor visible at startup')
-
-        # Try to raise and focus the window on Windows so clicks are accepted
-        try:
-            if os.name == 'nt':
-                try:
-                    # Prefer ctypes to avoid adding pywin32 dependency
-                    import ctypes
-                    user32 = ctypes.windll.user32
-                    hwnd = pygame.display.get_wm_info().get('window')
-                    if hwnd:
-                        logger.debug('Attempting to bring window to foreground (hwnd=%s)', hwnd)
-                        SW_SHOW = 5
-                        user32.ShowWindow(hwnd, SW_SHOW)
-                        user32.SetForegroundWindow(hwnd)
-                        pygame.event.pump()
-                        pygame.mouse.set_visible(True)
-                        pygame.event.set_grab(False)
-                        logger.debug('Set focus to window via Win32 API')
-                except Exception:
-                    logger.debug('Windows focus helper failed', exc_info=True)
-        except Exception:
-            logger.debug('Focus bring-to-front helper encountered an error', exc_info=True)
-
-        # Track last ungrab attempt to avoid spamming
-        self._last_ungrab_attempt = 0.0
-        
-        # Display health & recovery settings
-        self._display_check_interval = float(os.environ.get('KLTN_DISPLAY_CHECK_INTERVAL', '1.0'))
-        self._display_check_last = time.time()
-        self._display_recovery_attempts = 0
-        self._display_recovery_attempts_limit = int(os.environ.get('KLTN_DISPLAY_RECOVER_LIMIT', '3'))
-
-        # View offset for panning
-        self.view_offset_x = 0
-        self.view_offset_y = 0
-        self.dragging = False
-        self.drag_start = (0, 0)
-        
-        # Fullscreen state
-        self.fullscreen = False
-        
-        self.clock = pygame.time.Clock()
-        self.font = pygame.font.SysFont('Arial', 14, bold=True)
-        self.big_font = pygame.font.SysFont('Arial', 20, bold=True)
-        self.small_font = pygame.font.SysFont('Arial', 12)
-        
-        # Debug helpers for control panel visualisation and hit-padding
-        # Can be enabled via env KLTN_DEBUG_CONTROL_PANEL=1 or toggled at runtime (F8)
-        self.debug_control_panel = os.environ.get('KLTN_DEBUG_CONTROL_PANEL', '0') == '1'
-        self.debug_panel_click_padding = int(os.environ.get('KLTN_DEBUG_PANEL_PADDING', '40')) if self.debug_control_panel else 0
-
-        # Delta-time tracking for smooth animations
-        self.last_frame_time = time.time()
-        self.delta_time = 0.0
-        # Display health check timing (throttled to avoid per-frame work)
-        self._display_check_last = 0.0
-        self._display_check_interval = float(os.environ.get('KLTN_DISPLAY_CHECK_INTERVAL', '1.0'))
-
-        # Start a watchdog thread to detect UI freezes and dump stack/screenshot for debugging
-        # Disabled by default - enable via KLTN_ENABLE_WATCHDOG=1 for troubleshooting
-        try:
-            import faulthandler
-            self._watchdog_enabled = os.environ.get('KLTN_ENABLE_WATCHDOG', '0') == '1'
-            self._watchdog_threshold = float(os.environ.get('KLTN_WATCHDOG_THRESHOLD', '1.25'))
-            self._watchdog_last_dump = 0.0
-            self._watchdog_dump_limit = int(os.environ.get('KLTN_WATCHDOG_DUMP_LIMIT', '3'))
-            self._watchdog_dumps = 0
-            # Watchdog thread handle (declared up-front for type-checkers)
-            self._watchdog_thread: Optional[threading.Thread] = None
-            # Path requested by watchdog for the main thread to save a screenshot (thread-safe)
-            self._watchdog_request_screenshot = None
-            if self._watchdog_enabled:
-                def _watchdog_start():
-                    try:
-                        t = threading.Thread(target=self._watchdog_loop, daemon=True)
-                        t.start()
-                        self._watchdog_thread = t
-                        logger.debug('Watchdog thread started (threshold=%s s)', self._watchdog_threshold)
-                    except Exception:
-                        logger.exception('Failed to start watchdog thread')
-                _watchdog_start()
-        except Exception:
-            # If faulthandler or threading not available, skip watchdog
-            self._watchdog_enabled = False
-
-        # Track consecutive empty render frames and threshold beyond which we force a display reinit
-        self._consecutive_empty_frames = 0
-        try:
-            self._empty_frame_recovery_threshold = int(os.environ.get('KLTN_EMPTY_FRAME_RECOVERY', '8'))
-        except Exception:
-            self._empty_frame_recovery_threshold = 8
         
         # New visualization system
         if VISUALIZATION_AVAILABLE:
