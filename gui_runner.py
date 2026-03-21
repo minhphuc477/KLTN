@@ -335,6 +335,23 @@ from src.gui.gameplay.manual_step_controller import manual_step as _manual_step_
 from src.gui.rendering.path_guaranteed_renderer import (
     render_path_guaranteed as _render_path_guaranteed_flow_helper,
 )
+from src.gui.rendering.map_render_pipeline import (
+    collect_item_render_state as _collect_item_render_state_helper,
+    compute_visible_bounds as _compute_visible_bounds_helper,
+    create_map_surface as _create_map_surface_helper,
+    render_heatmap_overlay as _render_heatmap_overlay_helper,
+    render_visible_tiles as _render_visible_tiles_helper,
+)
+from src.gui.rendering.path_overlay_pipeline import (
+    render_planned_path_overlay as _render_planned_path_overlay_helper,
+)
+from src.gui.rendering.overlay_ui_pipeline import (
+    render_preview_layer as _render_preview_layer_helper,
+    render_translucent_event_overlays as _render_translucent_event_overlays_helper,
+)
+from src.gui.rendering.render_diagnostics_pipeline import (
+    handle_empty_frame_recovery as _handle_empty_frame_recovery_helper,
+)
 from src.gui.gameplay.map_elites_controls import (
     start_map_elites as _start_map_elites_flow_helper,
     map_elites_worker as _map_elites_worker_flow_helper,
@@ -2545,49 +2562,28 @@ class ZeldaGUI:
 
     def _render(self):
         """Render the current state using new visualization system or fallback."""
-        # Clear screen
         self.screen.fill((25, 25, 35))
-        
-        h, w = self.env.height, self.env.width
-        # Compute view area and ensure valid integer sizes (avoid zero/negative surfaces)
-        view_w = max(1, int(self.screen_w - self.SIDEBAR_WIDTH))
-        view_h = max(1, int(self.screen_h - self.HUD_HEIGHT))
-        
-        # Create map surface for the main view area (use convert for faster blits)
-        try:
-            map_surface = pygame.Surface((view_w, view_h)).convert()
-        except Exception:
-            # Fallback to plain surface if convert is unsupported
-            map_surface = pygame.Surface((view_w, view_h))
-        map_surface.fill((20, 20, 30))
 
+        map_h, map_w = self.env.height, self.env.width
+        map_surface, view_w, view_h = _create_map_surface_helper(gui=self, pygame=pygame)
 
-        
-        tiles_drawn = 0
-        
-        # Apply speed multiplier to animation updates
         effective_dt = self.delta_time * self.speed_multiplier
-        
-        # Update new renderer if available
         if self.renderer:
             self.renderer.update(effective_dt)
         if self.effects:
             self.effects.update(effective_dt)
-        
-        # Update block push animations
+
         self._update_block_push_animations()
-        
-        # If a background thread requested an inventory refresh, perform it here (main thread)
+
         if getattr(self, 'inventory_needs_refresh', False):
             try:
-                logger.debug("Processing deferred inventory refresh on main thread")
+                logger.debug('Processing deferred inventory refresh on main thread')
                 self._update_inventory_and_hud()
             except Exception:
                 pass
             finally:
                 self.inventory_needs_refresh = False
 
-        # Update modern HUD with current game state every frame (real-time)
         if self.modern_hud and self.env:
             self.modern_hud.update_game_state(
                 keys=self.env.state.keys,
@@ -2595,7 +2591,7 @@ class ZeldaGUI:
                 has_boss_key=self.env.state.has_boss_key,
                 position=self.env.state.position,
                 steps=self.step_count,
-                message=self.message
+                message=self.message,
             )
             if hasattr(self.modern_hud, 'inventory'):
                 self.modern_hud.inventory.keys_collected = self.keys_collected
@@ -2604,7 +2600,6 @@ class ZeldaGUI:
                 self.modern_hud.inventory.keys_used = getattr(self, 'keys_used', 0)
                 self.modern_hud.inventory.bombs_used = getattr(self, 'bombs_used', 0)
                 self.modern_hud.inventory.boss_keys_used = getattr(self, 'boss_keys_used', 0)
-            # Backwards compatibility: also set direct attributes if present
             if hasattr(self.modern_hud, 'keys_collected'):
                 self.modern_hud.keys_collected = self.keys_collected
                 self.modern_hud.bombs_collected = self.bombs_collected
@@ -2615,20 +2610,23 @@ class ZeldaGUI:
                 self.modern_hud.bombs_used = getattr(self, 'bombs_used', 0)
             if hasattr(self.modern_hud, 'boss_keys_used'):
                 self.modern_hud.boss_keys_used = getattr(self, 'boss_keys_used', 0)
-        
-        # Draw grid (only visible tiles for performance)
-        start_c = max(0, int(self.view_offset_x) // self.TILE_SIZE)
-        start_r = max(0, int(self.view_offset_y) // self.TILE_SIZE)
-        end_c = min(w, start_c + (view_w // self.TILE_SIZE) + 2)
-        end_r = min(h, start_r + (view_h // self.TILE_SIZE) + 2)
+
+        start_r, end_r, start_c, end_c = _compute_visible_bounds_helper(
+            gui=self,
+            view_w=view_w,
+            view_h=view_h,
+            map_h=map_h,
+            map_w=map_w,
+        )
+
         _log_draw_ranges_overlay_helper(
             gui=self,
             start_r=start_r,
             end_r=end_r,
             start_c=start_c,
             end_c=end_c,
-            h=h,
-            w=w,
+            h=map_h,
+            w=map_w,
             time_module=time,
             logger=logger,
         )
@@ -2640,87 +2638,26 @@ class ZeldaGUI:
             end_c=end_c,
             pygame=pygame,
         )
-        
-        # Pre-fetch collected items for efficient lookup during rendering
-        # Combine env state collected_items with GUI's collected_positions for robustness
-        env_collected = getattr(self.env.state, 'collected_items', set()) or set()
-        gui_collected = getattr(self, 'collected_positions', set()) or set()
-        collected_items = env_collected | gui_collected  # Union of both sets
-        # Define collectible tile IDs that should be hidden if in collected_items
-        COLLECTIBLE_TILE_IDS = (
-            SEMANTIC_PALETTE.get('KEY_SMALL', -1),
-            SEMANTIC_PALETTE.get('KEY_BOSS', -1),
-            SEMANTIC_PALETTE.get('ITEM_BOMB', -1),
-            SEMANTIC_PALETTE.get('KEY_ITEM', -1),
-            SEMANTIC_PALETTE.get('ITEM_MINOR', -1),
+
+        collected_items, collectible_tile_ids = _collect_item_render_state_helper(
+            gui=self,
+            semantic_palette=SEMANTIC_PALETTE,
         )
-        
-        # Get positions of blocks currently being animated (to skip their normal rendering)
         animating_block_positions = self._get_animating_block_positions()
-        
-        # Use new renderer for map tiles if available
-        if self.renderer:
-            for r in range(start_r, end_r):
-                for c in range(start_c, end_c):
-                    tile_id = self.env.grid[r, c]
-                    screen_x = c * self.TILE_SIZE - self.view_offset_x
-                    screen_y = r * self.TILE_SIZE - self.view_offset_y
-                    
-                    # FALLBACK: If position is in collected_items and it's a collectible tile,
-                    # render as FLOOR instead (defensive in case grid wasn't updated)
-                    if (r, c) in collected_items and tile_id in COLLECTIBLE_TILE_IDS:
-                        tile_id = SEMANTIC_PALETTE['FLOOR']
-                    
-                    # Skip blocks being animated - render FLOOR underneath instead
-                    if (r, c) in animating_block_positions and tile_id == SEMANTIC_PALETTE['BLOCK']:
-                        tile_id = SEMANTIC_PALETTE['FLOOR']
-                    
-                    # Use sprite manager (with procedural fallback)
-                    tile_surface = self.renderer.sprite_manager.get_tile(tile_id, self.TILE_SIZE)
-                    map_surface.blit(tile_surface, (screen_x, screen_y))
-                    tiles_drawn += 1
-                    # Draw stair sprite overlay if tile is stair
-                    if tile_id == SEMANTIC_PALETTE['STAIR'] and getattr(self, 'stair_sprite', None):
-                        try:
-                            alpha = int(140 + 90 * math.sin(time.time() * 3.0))
-                            s = self.stair_sprite.copy()
-                            s.set_alpha(max(20, alpha))
-                            sx = screen_x + (self.TILE_SIZE - s.get_width()) // 2
-                            sy = screen_y + (self.TILE_SIZE - s.get_height()) // 2
-                            map_surface.blit(s, (sx, sy))
-                        except Exception:
-                            pass
-        else:
-            # Fallback rendering
-            for r in range(start_r, end_r):
-                for c in range(start_c, end_c):
-                    tile_id = self.env.grid[r, c]
-                    
-                    # FALLBACK: If position is in collected_items and it's a collectible tile,
-                    # render as FLOOR instead (defensive in case grid wasn't updated)
-                    if (r, c) in collected_items and tile_id in COLLECTIBLE_TILE_IDS:
-                        tile_id = SEMANTIC_PALETTE['FLOOR']
-                    
-                    # Skip blocks being animated - render FLOOR underneath instead
-                    if (r, c) in animating_block_positions and tile_id == SEMANTIC_PALETTE['BLOCK']:
-                        tile_id = SEMANTIC_PALETTE['FLOOR']
-                    
-                    img = self.images.get(tile_id, self.images.get(SEMANTIC_PALETTE['FLOOR']))
-                    screen_x = c * self.TILE_SIZE - self.view_offset_x
-                    screen_y = r * self.TILE_SIZE - self.view_offset_y
-                    map_surface.blit(img, (screen_x, screen_y))
-                    tiles_drawn += 1
-                    # Draw stair sprite overlay for fallback tiles
-                    if tile_id == SEMANTIC_PALETTE['STAIR'] and getattr(self, 'stair_sprite', None):
-                        try:
-                            alpha = int(140 + 90 * math.sin(time.time() * 3.0))
-                            s = self.stair_sprite.copy()
-                            s.set_alpha(max(20, alpha))
-                            sx = screen_x + (self.TILE_SIZE - s.get_width()) // 2
-                            sy = screen_y + (self.TILE_SIZE - s.get_height()) // 2
-                            map_surface.blit(s, (sx, sy))
-                        except Exception:
-                            pass
+        tiles_drawn = _render_visible_tiles_helper(
+            gui=self,
+            map_surface=map_surface,
+            start_r=start_r,
+            end_r=end_r,
+            start_c=start_c,
+            end_c=end_c,
+            collected_items=collected_items,
+            collectible_tile_ids=collectible_tile_ids,
+            animating_block_positions=animating_block_positions,
+            semantic_palette=SEMANTIC_PALETTE,
+            math_module=math,
+            time_module=time,
+        )
         
         # === RENDER ANIMATED BLOCKS ===
         # Draw blocks that are currently being pushed with smooth interpolation
@@ -2729,23 +2666,15 @@ class ZeldaGUI:
         except Exception as e:
             logger.warning('Failed to render block push animations: %s', e)
         
-        # Draw heatmap overlay if enabled and we have search data
-        if self.show_heatmap and self.search_heatmap:
-            max_visits = max(self.search_heatmap.values()) if self.search_heatmap else 1
-            for (r, c), visits in self.search_heatmap.items():
-                if start_r <= r < end_r and start_c <= c < end_c:
-                    # Normalize intensity 0.0 - 1.0
-                    intensity = visits / max_visits
-                    # Blue (cold) to Red (hot) gradient
-                    red = int(255 * intensity)
-                    blue = int(255 * (1 - intensity))
-                    heat_color = (red, 0, blue, 100)
-                    
-                    heat_surf = pygame.Surface((self.TILE_SIZE, self.TILE_SIZE), pygame.SRCALPHA)
-                    heat_surf.fill(heat_color)
-                    screen_x = c * self.TILE_SIZE - self.view_offset_x
-                    screen_y = r * self.TILE_SIZE - self.view_offset_y
-                    map_surface.blit(heat_surf, (screen_x, screen_y))
+        _render_heatmap_overlay_helper(
+            gui=self,
+            map_surface=map_surface,
+            start_r=start_r,
+            end_r=end_r,
+            start_c=start_c,
+            end_c=end_c,
+            pygame=pygame,
+        )
 
         _render_jps_overlay_helper(
             gui=self,
@@ -2762,87 +2691,14 @@ class ZeldaGUI:
             pygame=pygame,
         )
         
-        # Draw solution path whenever a path exists
-        show_path = self.auto_path and len(self.auto_path) > 0
-        # DEBUG: Log path rendering decision (throttled to avoid spam)
-        if not hasattr(self, '_path_render_log_counter'):
-            self._path_render_log_counter = 0
-        self._path_render_log_counter += 1
-        if self._path_render_log_counter % 120 == 1:  # Log every 120 frames (~2 seconds at 60fps)
-            logger.debug('DEBUG_RENDER: show_path=%s, auto_path=%s, len=%d, auto_mode=%s, preview_visible=%s',
-                         show_path,
-                         bool(self.auto_path),
-                         len(self.auto_path) if self.auto_path else 0,
-                         self.auto_mode,
-                         getattr(self, 'preview_overlay_visible', False))
-            if self.auto_path and len(self.auto_path) > 0:
-                logger.debug('DEBUG_RENDER: Path first=%s, last=%s, step_idx=%d, view_offset=(%d,%d)',
-                             self.auto_path[0], self.auto_path[-1],
-                             getattr(self, 'auto_step_idx', 0),
-                             getattr(self, 'view_offset_x', 0),
-                             getattr(self, 'view_offset_y', 0))
-        if show_path:
-            logger.debug(f"Drawing path overlay: {len(self.auto_path)} points, auto_mode={self.auto_mode}, step_idx={self.auto_step_idx}")
-            # FIRST: Draw the FULL planned path as a line (cyan/light blue, behind visited tiles)
-            if len(self.auto_path) > 1:
-                for i in range(len(self.auto_path) - 1):
-                    r1, c1 = self.auto_path[i]
-                    r2, c2 = self.auto_path[i + 1]
-                    # Convert to screen coordinates (center of each tile)
-                    # Note: positions are (row, col) where row=y, col=x
-                    x1 = int(c1 * self.TILE_SIZE - self.view_offset_x + self.TILE_SIZE // 2)
-                    y1 = int(r1 * self.TILE_SIZE - self.view_offset_y + self.TILE_SIZE // 2)
-                    x2 = int(c2 * self.TILE_SIZE - self.view_offset_x + self.TILE_SIZE // 2)
-                    y2 = int(r2 * self.TILE_SIZE - self.view_offset_y + self.TILE_SIZE // 2)
-                    # Draw future path (cyan) vs visited path (green)
-                    if i >= self.auto_step_idx:
-                        # Future path - bright cyan with outline for visibility
-                        pygame.draw.line(map_surface, (0, 0, 0), (x1, y1), (x2, y2), 5)  # Black outline
-                        pygame.draw.line(map_surface, (0, 255, 255), (x1, y1), (x2, y2), 3)  # Cyan fill
-                    else:
-                        # Visited path - bright green with outline
-                        pygame.draw.line(map_surface, (0, 0, 0), (x1, y1), (x2, y2), 6)  # Black outline
-                        pygame.draw.line(map_surface, (0, 255, 0), (x1, y1), (x2, y2), 4)  # Green fill
-            
-            # THIRD: Draw start and end markers for clear visibility
-            if len(self.auto_path) >= 1:
-                # Start marker (green circle)
-                start_r, start_c = self.auto_path[0]
-                start_x = int(start_c * self.TILE_SIZE - self.view_offset_x + self.TILE_SIZE // 2)
-                start_y = int(start_r * self.TILE_SIZE - self.view_offset_y + self.TILE_SIZE // 2)
-                pygame.draw.circle(map_surface, (0, 0, 0), (start_x, start_y), 10)  # Black outline
-                pygame.draw.circle(map_surface, (0, 255, 100), (start_x, start_y), 8)  # Green fill
-                
-                # End/goal marker (red/gold circle)
-                end_r, end_c = self.auto_path[-1]
-                end_x = int(end_c * self.TILE_SIZE - self.view_offset_x + self.TILE_SIZE // 2)
-                end_y = int(end_r * self.TILE_SIZE - self.view_offset_y + self.TILE_SIZE // 2)
-                pygame.draw.circle(map_surface, (0, 0, 0), (end_x, end_y), 10)  # Black outline
-                pygame.draw.circle(map_surface, (255, 215, 0), (end_x, end_y), 8)  # Gold fill
-            
-            # FOURTH: Draw tile highlights for visited positions (when animating)
-            if self.auto_mode and self.auto_step_idx > 0:
-                for i, pos in enumerate(self.auto_path[:self.auto_step_idx + 1]):
-                    pr, pc = pos
-                    path_surf = pygame.Surface((self.TILE_SIZE, self.TILE_SIZE), pygame.SRCALPHA)
-                    
-                    # Check if this position is a recently unlocked door
-                    current_time = time.time()
-                    is_recent_unlock = pos in self.door_unlock_times and (current_time - self.door_unlock_times[pos]) < 2.0
-                    
-                    if is_recent_unlock:
-                        # Flash effect for recently unlocked doors (yellow/gold)
-                        flash_alpha = (math.sin(current_time * 8) + 1) / 2  # 0 to 1
-                        alpha = int(150 + 105 * flash_alpha)
-                        path_surf.fill((255, 215, 0, alpha))  # Gold
-                    else:
-                        # Use green with slight gradient based on progress
-                        alpha = 40 + int(20 * (i / max(1, len(self.auto_path))))
-                        path_surf.fill((0, 255, 0, alpha))
-                    
-                    screen_x = pc * self.TILE_SIZE - self.view_offset_x
-                    screen_y = pr * self.TILE_SIZE - self.view_offset_y
-                    map_surface.blit(path_surf, (screen_x, screen_y))
+        _render_planned_path_overlay_helper(
+            gui=self,
+            map_surface=map_surface,
+            pygame=pygame,
+            math_module=math,
+            time_module=time,
+            logger=logger,
+        )
         
         # === GUARANTEED PATH RENDERING ===
         # This ensures the path is ALWAYS visible when auto_path has data,
@@ -2869,99 +2725,28 @@ class ZeldaGUI:
         if self.effects:
             self.effects.render(map_surface, self.TILE_SIZE, (self.view_offset_x, self.view_offset_y))
         
-        # If nothing was drawn (e.g., view region outside map or sizes miscalculated), attempt an auto-fix and show diagnostics
-        if tiles_drawn == 0:
-            try:
-                # Try auto-fit + center once to recover from bad offsets
-                if not getattr(self, '_auto_recenter_done', False):
-                    logger.info('No tiles drawn Î“Ã‡Ã¶ attempting auto-fit zoom + center')
-                    try:
-                        self._auto_fit_zoom()
-                        self._center_view()
-                    except Exception:
-                        pass
-                    self._auto_recenter_done = True
-
-                diag_font = pygame.font.SysFont('Arial', 18, bold=True)
-                diag_text = diag_font.render('No map tiles visible - check zoom/offset', True, (255, 100, 100))
-                tx = max(10, (view_w - diag_text.get_width()) // 2)
-                ty = max(10, (view_h - diag_text.get_height()) // 2)
-                # Draw a semi-opaque box behind message for visibility
-                box = pygame.Surface((diag_text.get_width() + 20, diag_text.get_height() + 18), pygame.SRCALPHA)
-                box.fill((30, 10, 10, 200))
-                map_surface.blit(box, (tx - 10, ty - 9))
-                map_surface.blit(diag_text, (tx, ty))
-
-                # Additional diagnostic lines useful for debugging
-                small = pygame.font.SysFont('Arial', 12)
-                try:
-                    map_w = self.env.width if self.env is not None else 0
-                    map_h = self.env.height if self.env is not None else 0
-                except Exception:
-                    map_w = map_h = 0
-                diag2 = small.render(f'Tile: {self.TILE_SIZE}px  ViewOffset: ({self.view_offset_x},{self.view_offset_y})', True, (220, 220, 220))
-                diag3 = small.render(f'Map: {map_w}x{map_h}  View: {view_w}x{view_h}', True, (200, 200, 200))
-                map_surface.blit(diag2, (10, ty + diag_text.get_height() + 8))
-                map_surface.blit(diag3, (10, ty + diag_text.get_height() + 24))
-            except Exception:
-                pass
-
-            # Track consecutive empty frames and try to recover display if persistent
-            try:
-                self._consecutive_empty_frames = getattr(self, '_consecutive_empty_frames', 0) + 1
-                if self._consecutive_empty_frames >= getattr(self, '_empty_frame_recovery_threshold', 8):
-                    logger.warning('Detected %d consecutive empty frames Î“Ã‡Ã¶ attempting display reinit', self._consecutive_empty_frames)
-                    try:
-                        recovered = self._attempt_display_reinit()
-                        if recovered:
-                            self._show_toast('Recovered display after blank frames', 3.0, 'success')
-                            logger.info('Recovered display after empty-frame sequence')
-                        else:
-                            self._show_toast('Display recovery failed', 4.0, 'error')
-                    except Exception:
-                        logger.exception('Error during forced display reinit')
-                    finally:
-                        self._consecutive_empty_frames = 0
-            except Exception:
-                logger.exception('Failed handling consecutive empty frames counter')
-        else:
-            # Reset counter when frames are healthy
-            try:
-                self._consecutive_empty_frames = 0
-            except Exception:
-                pass
+        _handle_empty_frame_recovery_helper(
+            gui=self,
+            map_surface=map_surface,
+            view_w=view_w,
+            view_h=view_h,
+            tiles_drawn=tiles_drawn,
+            pygame=pygame,
+            logger=logger,
+        )
 
         # Blit map surface to screen
         self.screen.blit(map_surface, (0, 0))
 
         # Debug overlay removed - was causing yellow/magenta square in corner
 
-        # Draw translucent overlays that may capture clicks so users can see what's on top
-        try:
-            # Preview overlay (non-modal) indicator
-            if getattr(self, 'preview_overlay_visible', False):
-                try:
-                    logger.debug('Rendering preview overlay (will capture clicks)')
-                    ov = pygame.Surface((view_w, view_h), pygame.SRCALPHA)
-                    ov.fill((40, 30, 40, 130))
-                    self.screen.blit(ov, (0, 0))
-                    label = self.big_font.render('PATH PREVIEW (overlay) - captures clicks', True, (255, 220, 120))
-                    self.screen.blit(label, (20, view_h//2 - 20))
-                except Exception:
-                    pass
-            # Solver comparison modal
-            if getattr(self, 'show_solver_comparison_overlay', False):
-                try:
-                    logger.debug('Rendering solver comparison modal (captures clicks)')
-                    ov2 = pygame.Surface((view_w, view_h), pygame.SRCALPHA)
-                    ov2.fill((20, 20, 20, 180))
-                    self.screen.blit(ov2, (0, 0))
-                    label2 = self.big_font.render('SOLVER COMPARISON - modal', True, (200, 200, 255))
-                    self.screen.blit(label2, (20, view_h//2 - 20))
-                except Exception:
-                    pass
-        except Exception:
-            pass
+        _render_translucent_event_overlays_helper(
+            gui=self,
+            view_w=view_w,
+            view_h=view_h,
+            pygame=pygame,
+            logger=logger,
+        )
         
         # Get current position for display (use actual grid position)
         pr, pc = self.env.state.position
@@ -2978,8 +2763,8 @@ class ZeldaGUI:
             screen=self.screen,
             sidebar_x=sidebar_x,
             y_pos=y_pos,
-            map_w=w,
-            map_h=h,
+            map_w=map_w,
+            map_h=map_h,
             time_module=time,
             math_module=math,
             pygame=pygame,
@@ -3007,83 +2792,7 @@ class ZeldaGUI:
         if self.show_help:
             self._render_help_overlay()
         
-        # Path preview dialog (Feature 5) - render on top of everything
-        if self.path_preview_mode and self.path_preview_dialog:
-            # Render path overlay on map
-            try:
-                self.path_preview_dialog.render_path_overlay(
-                    self.screen,
-                    self.TILE_SIZE,
-                    self.view_offset_x,
-                    self.view_offset_y,
-                    self.SIDEBAR_WIDTH,
-                    self.HUD_HEIGHT
-                )
-            except Exception as e:
-                logger.warning(f"Failed to render path overlay: {e}")
-            
-            # Render dialog box
-            try:
-                self.path_preview_dialog.render(self.screen)
-            except Exception as e:
-                logger.warning(f"Failed to render path preview dialog: {e}")
-        elif getattr(self, 'preview_overlay_visible', False) and getattr(self, 'path_preview_dialog', None):
-            # Non-modal overlay: render only the path overlay (no blocking dialog)
-            try:
-                self.path_preview_dialog.render_path_overlay(
-                    self.screen,
-                    self.TILE_SIZE,
-                    self.view_offset_x,
-                    self.view_offset_y,
-                    self.SIDEBAR_WIDTH,
-                    self.HUD_HEIGHT
-                )
-            except Exception as e:
-                logger.warning(f"Failed to render path overlay (non-modal): {e}")
-
-            # Minimal sidebar preview box with start/dismiss buttons
-            try:
-                sidebar_x = self.screen_w - self.SIDEBAR_WIDTH
-                box_h = 80
-                box_y = 120  # fixed area near top of sidebar (below header area)
-                box_rect = pygame.Rect(sidebar_x + 10, box_y, self.SIDEBAR_WIDTH - 20, box_h)
-                pygame.draw.rect(self.screen, (40, 40, 60), box_rect)
-                pygame.draw.rect(self.screen, (100, 150, 255), box_rect, 2)
-
-                # Text details
-                font = pygame.font.SysFont('Arial', 14, bold=True)
-                small = pygame.font.SysFont('Arial', 12)
-                path_len = len(self.auto_path) if getattr(self, 'auto_path', None) else 0
-                text1 = font.render(f"Preview: {path_len} steps", True, (200, 200, 255))
-                self.screen.blit(text1, (box_rect.x + 8, box_rect.y + 8))
-
-                # Keys info (if available)
-                keys_used = getattr(self, 'solver_result', {}).get('keys_used', 0) if getattr(self, 'solver_result', None) else 0
-                keys_avail = getattr(self, 'solver_result', {}).get('keys_available', 0) if getattr(self, 'solver_result', None) else 0
-                keys_text = f"Keys: {keys_used} / {keys_avail}" if keys_avail > 0 else "Keys: None"
-                self.screen.blit(small.render(keys_text, True, (200, 200, 200)), (box_rect.x + 8, box_rect.y + 34))
-
-                # Start & Dismiss buttons
-                start_rect = pygame.Rect(box_rect.x + 8, box_rect.y + 48, 140, 24)
-                dismiss_rect = pygame.Rect(box_rect.x + 156, box_rect.y + 48, 60, 24)
-                pygame.draw.rect(self.screen, (40, 140, 40), start_rect)
-                pygame.draw.rect(self.screen, (140, 40, 40), dismiss_rect)
-                pygame.draw.rect(self.screen, (100, 255, 100), start_rect, 1)
-                pygame.draw.rect(self.screen, (255, 100, 100), dismiss_rect, 1)
-                self.sidebar_start_button_rect = start_rect
-                self.sidebar_dismiss_button_rect = dismiss_rect
-
-                start_text = small.render("Start Auto-Solve", True, (255, 255, 255))
-                dismiss_text = small.render("Dismiss", True, (255, 255, 255))
-                self.screen.blit(start_text, (start_rect.x + 8, start_rect.y + 4))
-                self.screen.blit(dismiss_text, (dismiss_rect.x + 6, dismiss_rect.y + 4))
-
-            except Exception as e:
-                logger.warning(f"Failed to render sidebar preview box: {e}")
-        else:
-            # Ensure stale sidebar button rects are cleared
-            self.sidebar_start_button_rect = None
-            self.sidebar_dismiss_button_rect = None
+        _render_preview_layer_helper(gui=self, pygame=pygame, logger=logger)
 
         # Render topology overlay (if enabled via checkbox or feature_flags)
         # Sync feature_flags to instance variable
