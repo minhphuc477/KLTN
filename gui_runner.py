@@ -49,6 +49,8 @@ from src.gui.app.event_loop_handlers import (
     clear_stale_preview_overlay,
     handle_global_keydown_shortcuts,
     handle_mouse_button_down_preamble,
+    handle_mouse_button_up_event,
+    handle_mouse_motion_diagnostics,
     handle_preview_overlay_events,
     handle_window_focus_event,
     poll_pygame_events,
@@ -2027,75 +2029,11 @@ class ZeldaGUI:
                         self.drag_start = event.pos
                 
                 elif event.type == pygame.MOUSEBUTTONUP:
-                    mouse_pos = getattr(event, 'pos', pygame.mouse.get_pos())
-                    try:
-                        focused = pygame.mouse.get_focused()
-                        grabbed = pygame.event.get_grab()
-                        pressed = pygame.mouse.get_pressed()
-                    except Exception:
-                        focused = False
-                        grabbed = False
-                        pressed = None
-                    logger.debug('MOUSEBUTTONUP at %s (button=%s) focused=%s grabbed=%s pressed=%s', mouse_pos, getattr(event,'button',None), focused, grabbed, pressed)
-
-                    # Track last mouse event
-                    try:
-                        self._last_mouse_event = {'type': 'up', 'pos': mouse_pos, 'button': getattr(event,'button',None), 'time': time.time()}
-                    except Exception:
-                        pass
-
-                    # Stop dragging/resizing panel
-                    if self.dragging_panel:
-                        self.dragging_panel = False
-                    if self.resizing_panel:
-                        self.resizing_panel = False
-                        self.resize_edge = None
-                    # Stop scrollbar drag if active
-                    if getattr(self, 'control_panel_scroll_dragging', False):
-                        self.control_panel_scroll_dragging = False
-                    # Handle control panel clicks
-                    if self.control_panel_enabled and self._handle_control_panel_click(mouse_pos, event.button, 'up'):
+                    if handle_mouse_button_up_event(self, event, pygame, time, logger):
                         continue
-                    
-                    if event.button == 2 or (hasattr(self, 'dragging_button') and event.button == getattr(self, 'dragging_button')):
-                        self.dragging = False
-                        self.dragging_button = None
                 
                 elif event.type == pygame.MOUSEMOTION:
-                    mouse_pos = event.pos
-                    try:
-                        focused = pygame.mouse.get_focused()
-                        grabbed = pygame.event.get_grab()
-                        buttons = pygame.mouse.get_pressed()
-                    except Exception:
-                        focused = False
-                        grabbed = False
-                        buttons = None
-                    # Throttle very high-frequency mouse motion logging and summarize suppressed events
-                    now = time.time()
-                    last_log = getattr(self, '_last_mouse_log_time', 0.0)
-                    suppressed = getattr(self, '_mouse_motion_suppressed', 0)
-                    throttle = 0.05  # seconds
-                    if (now - last_log) > throttle:
-                        # Log current event and report how many events were suppressed since last log
-                        logger.debug('MOUSEMOTION at %s rel=%s buttons=%s focused=%s grabbed=%s suppressed=%d', mouse_pos, getattr(event,'rel',None), buttons, focused, grabbed, suppressed)
-                        self._last_mouse_log_time = now
-                        self._mouse_motion_suppressed = 0
-                        self._last_mouse_summary_time = getattr(self, '_last_mouse_summary_time', 0.0)
-                    else:
-                        # Increment suppressed counter; do not call logger to avoid flooding
-                        self._mouse_motion_suppressed = suppressed + 1
-                        # Occasionally emit a short summary to indicate continued motion (once per second)
-                        last_summary = getattr(self, '_last_mouse_summary_time', 0.0)
-                        if (now - last_summary) > 1.0 and self._mouse_motion_suppressed % 20 == 0:
-                            logger.debug('MOUSEMOTION: still receiving motion events; suppressed=%d so far', self._mouse_motion_suppressed)
-                            self._last_mouse_summary_time = now
-
-                    # Track last mouse motion event (kept regardless of logging)
-                    try:
-                        self._last_mouse_event = {'type': 'motion', 'pos': mouse_pos, 'rel': getattr(event,'rel',None), 'time': time.time()}
-                    except Exception:
-                        pass
+                    mouse_pos = handle_mouse_motion_diagnostics(self, event, pygame, time, logger)
                     
                     # Handle panel dragging
                     if self.dragging_panel:

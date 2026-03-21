@@ -370,3 +370,106 @@ def handle_mouse_button_down_preamble(
         return mouse_pos, True
 
     return mouse_pos, False
+
+
+def handle_mouse_button_up_event(gui, event, pygame_module, time_module, logger):
+    """Handle MOUSEBUTTONUP bookkeeping and panel/click release logic."""
+    mouse_pos = getattr(event, "pos", pygame_module.mouse.get_pos())
+    try:
+        focused = pygame_module.mouse.get_focused()
+        grabbed = pygame_module.event.get_grab()
+        pressed = pygame_module.mouse.get_pressed()
+    except Exception:
+        focused = False
+        grabbed = False
+        pressed = None
+
+    logger.debug(
+        "MOUSEBUTTONUP at %s (button=%s) focused=%s grabbed=%s pressed=%s",
+        mouse_pos,
+        getattr(event, "button", None),
+        focused,
+        grabbed,
+        pressed,
+    )
+
+    try:
+        gui._last_mouse_event = {
+            "type": "up",
+            "pos": mouse_pos,
+            "button": getattr(event, "button", None),
+            "time": time_module.time(),
+        }
+    except Exception:
+        pass
+
+    if gui.dragging_panel:
+        gui.dragging_panel = False
+    if gui.resizing_panel:
+        gui.resizing_panel = False
+        gui.resize_edge = None
+    if getattr(gui, "control_panel_scroll_dragging", False):
+        gui.control_panel_scroll_dragging = False
+
+    if gui.control_panel_enabled and gui._handle_control_panel_click(mouse_pos, event.button, "up"):
+        return True
+
+    if event.button == 2 or (
+        hasattr(gui, "dragging_button") and event.button == getattr(gui, "dragging_button")
+    ):
+        gui.dragging = False
+        gui.dragging_button = None
+
+    return False
+
+
+def handle_mouse_motion_diagnostics(gui, event, pygame_module, time_module, logger):
+    """Process throttled MOUSEMOTION diagnostics and track last motion event."""
+    mouse_pos = event.pos
+    try:
+        focused = pygame_module.mouse.get_focused()
+        grabbed = pygame_module.event.get_grab()
+        buttons = pygame_module.mouse.get_pressed()
+    except Exception:
+        focused = False
+        grabbed = False
+        buttons = None
+
+    now = time_module.time()
+    last_log = getattr(gui, "_last_mouse_log_time", 0.0)
+    suppressed = getattr(gui, "_mouse_motion_suppressed", 0)
+    throttle = 0.05
+    if (now - last_log) > throttle:
+        logger.debug(
+            "MOUSEMOTION at %s rel=%s buttons=%s focused=%s grabbed=%s suppressed=%d",
+            mouse_pos,
+            getattr(event, "rel", None),
+            buttons,
+            focused,
+            grabbed,
+            suppressed,
+        )
+        gui._last_mouse_log_time = now
+        gui._mouse_motion_suppressed = 0
+        gui._last_mouse_summary_time = getattr(gui, "_last_mouse_summary_time", 0.0)
+    else:
+        gui._mouse_motion_suppressed = suppressed + 1
+        last_summary = getattr(gui, "_last_mouse_summary_time", 0.0)
+        if (now - last_summary) > 1.0 and gui._mouse_motion_suppressed % 20 == 0:
+            logger.debug(
+                "MOUSEMOTION: still receiving motion events; suppressed=%d so far",
+                gui._mouse_motion_suppressed,
+            )
+            gui._last_mouse_summary_time = now
+
+    try:
+        gui._last_mouse_event = {
+            "type": "motion",
+            "pos": mouse_pos,
+            "rel": getattr(event, "rel", None),
+            "time": time_module.time(),
+        }
+    except Exception:
+        pass
+
+    return mouse_pos
