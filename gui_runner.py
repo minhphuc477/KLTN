@@ -352,6 +352,16 @@ from src.gui.rendering.overlay_ui_pipeline import (
 from src.gui.rendering.render_diagnostics_pipeline import (
     handle_empty_frame_recovery as _handle_empty_frame_recovery_helper,
 )
+from src.gui.rendering.frame_state_pipeline import (
+    render_player_and_effects as _render_player_and_effects_helper,
+    update_frame_render_state as _update_frame_render_state_helper,
+)
+from src.gui.rendering.post_map_ui_pipeline import (
+    draw_sidebar_shell as _draw_sidebar_shell_helper,
+    render_post_map_layers as _render_post_map_layers_helper,
+    render_sidebar_content as _render_sidebar_content_helper,
+    render_top_ui_layers as _render_top_ui_layers_helper,
+)
 from src.gui.gameplay.map_elites_controls import (
     start_map_elites as _start_map_elites_flow_helper,
     map_elites_worker as _map_elites_worker_flow_helper,
@@ -2567,49 +2577,7 @@ class ZeldaGUI:
         map_h, map_w = self.env.height, self.env.width
         map_surface, view_w, view_h = _create_map_surface_helper(gui=self, pygame=pygame)
 
-        effective_dt = self.delta_time * self.speed_multiplier
-        if self.renderer:
-            self.renderer.update(effective_dt)
-        if self.effects:
-            self.effects.update(effective_dt)
-
-        self._update_block_push_animations()
-
-        if getattr(self, 'inventory_needs_refresh', False):
-            try:
-                logger.debug('Processing deferred inventory refresh on main thread')
-                self._update_inventory_and_hud()
-            except Exception:
-                pass
-            finally:
-                self.inventory_needs_refresh = False
-
-        if self.modern_hud and self.env:
-            self.modern_hud.update_game_state(
-                keys=self.env.state.keys,
-                bombs=1 if self.env.state.has_bomb else 0,
-                has_boss_key=self.env.state.has_boss_key,
-                position=self.env.state.position,
-                steps=self.step_count,
-                message=self.message,
-            )
-            if hasattr(self.modern_hud, 'inventory'):
-                self.modern_hud.inventory.keys_collected = self.keys_collected
-                self.modern_hud.inventory.bombs_collected = self.bombs_collected
-                self.modern_hud.inventory.boss_keys_collected = self.boss_keys_collected
-                self.modern_hud.inventory.keys_used = getattr(self, 'keys_used', 0)
-                self.modern_hud.inventory.bombs_used = getattr(self, 'bombs_used', 0)
-                self.modern_hud.inventory.boss_keys_used = getattr(self, 'boss_keys_used', 0)
-            if hasattr(self.modern_hud, 'keys_collected'):
-                self.modern_hud.keys_collected = self.keys_collected
-                self.modern_hud.bombs_collected = self.bombs_collected
-                self.modern_hud.boss_keys_collected = self.boss_keys_collected
-            if hasattr(self.modern_hud, 'keys_used'):
-                self.modern_hud.keys_used = getattr(self, 'keys_used', 0)
-            if hasattr(self.modern_hud, 'bombs_used'):
-                self.modern_hud.bombs_used = getattr(self, 'bombs_used', 0)
-            if hasattr(self.modern_hud, 'boss_keys_used'):
-                self.modern_hud.boss_keys_used = getattr(self, 'boss_keys_used', 0)
+        _update_frame_render_state_helper(gui=self, logger=logger)
 
         start_r, end_r, start_c, end_c = _compute_visible_bounds_helper(
             gui=self,
@@ -2708,22 +2676,7 @@ class ZeldaGUI:
         except Exception as e:
             logger.warning('_render_path_GUARANTEED failed: %s', e)
         
-        # Draw Link (use smooth animation if renderer available)
-        if self.renderer and self.renderer.agent_visual_pos:
-            # Smooth animated position
-            visual_pos = self.renderer.agent_visual_pos
-            link_x = int(visual_pos.x * self.TILE_SIZE - self.view_offset_x + 2)
-            link_y = int(visual_pos.y * self.TILE_SIZE - self.view_offset_y + 2)
-        else:
-            # Direct grid position
-            pr, pc = self.env.state.position
-            link_x = pc * self.TILE_SIZE - self.view_offset_x + 2
-            link_y = pr * self.TILE_SIZE - self.view_offset_y + 2
-        map_surface.blit(self.link_img, (link_x, link_y))
-        
-        # Render visual effects on map surface
-        if self.effects:
-            self.effects.render(map_surface, self.TILE_SIZE, (self.view_offset_x, self.view_offset_y))
+        _render_player_and_effects_helper(gui=self, map_surface=map_surface)
         
         _handle_empty_frame_recovery_helper(
             gui=self,
@@ -2748,93 +2701,30 @@ class ZeldaGUI:
             logger=logger,
         )
         
-        # Get current position for display (use actual grid position)
         pr, pc = self.env.state.position
-        
-        # Draw sidebar background
-        sidebar_x = self.screen_w - self.SIDEBAR_WIDTH
-        pygame.draw.rect(self.screen, (35, 35, 50), (sidebar_x, 0, self.SIDEBAR_WIDTH, self.screen_h))
-        pygame.draw.line(self.screen, (60, 60, 80), (sidebar_x, 0), (sidebar_x, self.screen_h), 2)
-        
-        # Sidebar content
-        y_pos = 10
-        y_pos = _render_sidebar_header_inventory_solver_helper(
+        sidebar_x = _draw_sidebar_shell_helper(gui=self, pygame=pygame)
+        _render_sidebar_content_helper(
             gui=self,
-            screen=self.screen,
             sidebar_x=sidebar_x,
-            y_pos=y_pos,
             map_w=map_w,
             map_h=map_h,
-            time_module=time,
-            math_module=math,
-            pygame=pygame,
-            logger=logger,
-        )
-
-        y_pos = _render_sidebar_status_message_metrics_controls_helper(
-            gui=self,
-            screen=self.screen,
-            sidebar_x=sidebar_x,
-            y_pos=y_pos,
             player_row=pr,
             player_col=pc,
             pygame=pygame,
             time_module=time,
             math_module=math,
             semantic_palette=SEMANTIC_PALETTE,
+            logger=logger,
+            render_sidebar_header_fn=_render_sidebar_header_inventory_solver_helper,
+            render_sidebar_status_fn=_render_sidebar_status_message_metrics_controls_helper,
         )
-        
-        # Render minimap if enabled
-        if self.show_minimap:
-            self._render_minimap()
-        
-        # Help overlay
-        if self.show_help:
-            self._render_help_overlay()
-        
-        _render_preview_layer_helper(gui=self, pygame=pygame, logger=logger)
-
-        # Render topology overlay (if enabled via checkbox or feature_flags)
-        # Sync feature_flags to instance variable
-        if self.feature_flags.get('show_topology', False):
-            self.show_topology = True
-        if getattr(self, 'show_topology', False):
-            try:
-                logger.debug("Rendering topology overlay")
-                self._render_topology_overlay(self.screen)
-            except Exception as e:
-                logger.warning(f"Topology overlay failed: {e}")
-
-        # Render solver comparison overlay (if available)
-        if getattr(self, 'show_solver_comparison_overlay', False):
-            try:
-                self._render_solver_comparison_overlay(self.screen)
-            except Exception as e:
-                logger.warning(f"Solver comparison overlay failed: {e}")
-        
-        # Render control panel
-        if self.control_panel_enabled:
-            self._render_control_panel(self.screen)
-
-        # Render developer debug overlay (toggle with F12)
-        if getattr(self, 'debug_overlay_enabled', False):
-            try:
-                self._render_debug_overlay(self.screen)
-            except Exception as e:
-                logger.warning(f"Debug overlay render failed: {e}")
-        
-        # Render item legend
-        if self.auto_mode:
-            self._render_item_legend(self.screen)
-        
-        # Render error banner (on top of everything)
-        self._render_error_banner(self.screen)
-        
-        # Render solver status banner (shows algorithm being used)
-        self._render_solver_status_banner(self.screen)
-        
-        # Render toast notifications (on top of everything)
-        self._render_toasts(self.screen)
+        _render_post_map_layers_helper(
+            gui=self,
+            pygame=pygame,
+            logger=logger,
+            render_preview_layer_fn=_render_preview_layer_helper,
+        )
+        _render_top_ui_layers_helper(gui=self, logger=logger)
         
         # NOTE: pygame.display.flip() is called by the main run() loop after _render()
         # Do NOT call flip() here to avoid double-buffer swap issues
