@@ -45,6 +45,12 @@ from src.gui.app.main_loop_utils import (
     run_continuous_movement_tick,
     should_attempt_focus_fallback,
 )
+from src.gui.app.run_completion_handlers import (
+    handle_ai_generation_completion,
+    handle_parallel_search_completion,
+    handle_preview_process_completion,
+    handle_solver_process_completion,
+)
 from src.gui.app.event_loop_handlers import (
     clear_stale_preview_overlay,
     handle_global_keydown_shortcuts,
@@ -1968,314 +1974,29 @@ class ZeldaGUI:
             # Update control panel scroll inertia (momentum)
             self._update_control_panel_scroll()
 
-            # If parallel search ran in background, handle result on main thread
-            if getattr(self, 'parallel_search_done', False) and getattr(self, 'parallel_search_result', None):
-                best = self.parallel_search_result
-                # Convert alg index to name
-                alg_names = ['A*','BFS','Dijkstra','Greedy']
-                name = alg_names[best['alg']] if best['alg'] < len(alg_names) else f"Alg{best['alg']}"
-                self._set_message(f"Parallel best: {name} ({best['nodes']} nodes, {best['time_ms']:.0f}ms)")
-                self.parallel_search_done = False
-                self.parallel_search_result = None
-                # Use found path
-                _handle_found_path = None
-                try:
-                    # Reuse the same handling as in _start_auto_solve: set auto_path and show preview
-                    self.auto_path = best['path']
-                    self.preview_overlay_visible = True
-                    logger.debug('Parallel search: setting preview_overlay_visible=True (parallel best path)')
-                    self.path_preview_dialog = PathPreviewDialog(path=self.auto_path, env=self.env, solver_result={}, speed_multiplier=self.speed_multiplier)
-                    self._set_message('Parallel result ready (sidebar preview)')
-                except Exception as e:
-                    logger.warning(f"Failed to display parallel search preview: {e}")
+            handle_parallel_search_completion(self, logger, PathPreviewDialog)
 
-            # If a preview process finished, read its output and apply it
-            if getattr(self, 'preview_proc', None) and not getattr(self, 'preview_done', False):
-                p = getattr(self, 'preview_proc')
-                if not p.is_alive():
-                    out = getattr(self, 'preview_outfile', None)
-                    res = None
-                    try:
-                        if out:
-                            res = _safe_unpickle(out)
-                    except Exception as e:
-                        logger.exception('Failed to read preview output: %s', e)
-                    finally:
-                        try:
-                            p.join(timeout=0.1)
-                        except Exception:
-                            pass
-                        try:
-                            if out and os.path.exists(out):
-                                os.remove(out)
-                        except Exception:
-                            pass
-                        try:
-                            gf = getattr(self, 'preview_gridfile', None)
-                            if gf and os.path.exists(gf):
-                                os.remove(gf)
-                        except Exception:
-                            pass
-                        self.preview_proc = None
-                        self.preview_outfile = None
-                        self.preview_gridfile = None
-                        self.preview_done = True
+            handle_preview_process_completion(
+                self,
+                os,
+                logger,
+                _safe_unpickle,
+                PathPreviewDialog,
+            )
 
-                    if res:
-                        try:
-                            if res.get('success') and res.get('path'):
-                                self.auto_path = res.get('path')
-                                self.preview_overlay_visible = True
-                                logger.debug('Preview result: setting preview_overlay_visible=True (preview has path)')
-                                try:
-                                    # Use (x or {}) pattern to handle None values
-                                    solver_result_preview = (res.get('solver_result') or {}) if res else {}
-                                    self.path_preview_dialog = PathPreviewDialog(path=self.auto_path, env=self.env, solver_result=solver_result_preview, speed_multiplier=self.speed_multiplier)
-                                except Exception:
-                                    self.path_preview_dialog = None
-                                self._set_message('Preview ready (sidebar)')
-                            else:
-                                msg = res.get('message') or 'Preview finished with no path'
-                                self._set_message(msg)
-                        except Exception as e:
-                            logger.exception('Failed to apply preview output on main thread: %s', e)
-                    else:
-                        self._set_message('Preview finished (no output)')
-                    self.preview_done = True
-                if getattr(self, 'solver_running', False):
-                    # small ping in status message to reassure user
-                    self.status_message = 'Solving...'
-                else:
-                    self.status_message = 'Ready'
+            handle_solver_process_completion(
+                self,
+                os,
+                time,
+                np,
+                logger,
+                compute_solver_timeout_seconds,
+                _safe_unpickle,
+                find_path_tile_violations,
+                PathPreviewDialog,
+            )
 
-            # If a solver subprocess (or thread fallback) finished, read its output and apply result on the main thread
-            if not getattr(self, 'solver_done', False):
-                proc = getattr(self, 'solver_proc', None)
-                solver_thread = getattr(self, 'solver_thread', None)
-                proc_alive = False
-                thread_alive = False
-                solver_starting = getattr(self, 'solver_starting', False)
-                
-                # CRITICAL: Check for solver timeout (scaled by algorithm and map size).
-                active_alg = int(getattr(self, 'solver_algorithm_idx', getattr(self, 'algorithm_idx', 0)))
-                grid_cells = None
-                try:
-                    current_map = self.maps[self.current_map_idx]
-                    grid_ref = current_map.global_grid if hasattr(current_map, 'global_grid') else current_map
-                    grid_cells = int(np.asarray(grid_ref).size)
-                except Exception:
-                    pass
-                solver_timeout = compute_solver_timeout_seconds(
-                    active_alg,
-                    grid_cell_count=grid_cells,
-                    env_getter=os.environ.get,
-                )
-                solver_start_time = getattr(self, 'solver_start_time', None)
-                timed_out = False
-                # Timeout handling is only meaningful for process mode.
-                if proc and solver_start_time and (time.time() - solver_start_time) > solver_timeout:
-                    timed_out = True
-                    logger.error('SOLVER: TIMEOUT after %.1fs - forcefully terminating', solver_timeout)
-                    if proc:
-                        try:
-                            # Give subprocess a brief chance to finish normal shutdown/write output.
-                            proc.join(timeout=0.2)
-                            if proc.is_alive():
-                                proc.terminate()
-                                proc.join(timeout=0.5)
-                        except Exception as e:
-                            logger.exception('SOLVER: Failed to terminate timed-out process: %s', e)
-                    proc_alive = False
-                
-                if not timed_out:
-                    try:
-                        proc_alive = proc.is_alive() if proc else False
-                    except Exception as e:
-                        logger.exception('SOLVER: proc.is_alive() raised exception: %s', e)
-                        proc_alive = False
-                    try:
-                        thread_alive = solver_thread.is_alive() if solver_thread else False
-                    except Exception as e:
-                        logger.exception('SOLVER: solver_thread.is_alive() raised exception: %s', e)
-                        thread_alive = False
-
-                # Startup grace: avoid treating proc None as completion while spawn thread is still starting
-                startup_grace = float(os.environ.get('KLTN_SOLVER_STARTUP_GRACE', '1.5'))
-                solver_age = (time.time() - solver_start_time) if solver_start_time else 0.0
-                out = getattr(self, 'solver_outfile', None)
-                out_exists = os.path.exists(out) if out else False
-                if solver_starting and proc is None and not thread_alive and not out_exists and not timed_out and solver_age < startup_grace:
-                    logger.debug('SOLVER: Waiting for process start (age=%.2fs < %.2fs grace)', solver_age, startup_grace)
-                elif thread_alive:
-                    logger.debug('SOLVER: Waiting for thread fallback completion (age=%.2fs)', solver_age)
-                elif proc is None or not proc_alive:
-                    # CRITICAL: Wrap ENTIRE completion block in try/finally to guarantee solver_running cleanup
-                    try:
-                        proc_exitcode = None
-                        if proc is not None:
-                            proc_exitcode = getattr(proc, 'exitcode', None)
-                            logger.info('SOLVER: Subprocess done, proc.is_alive()=False, exitcode=%s', proc.exitcode)
-                        else:
-                            logger.info('SOLVER: No subprocess handle (thread fallback or spawn failure)')
-
-                        # Try to load the outfile
-                        out = getattr(self, 'solver_outfile', None)
-                        logger.info('SOLVER: Reading result from %s, exists=%s', out, os.path.exists(out) if out else 'N/A')
-                        res = None
-                        try:
-                            if out:
-                                res = _safe_unpickle(out)
-                                path_len = len(res.get('path', []) or []) if res else 0
-                                solver_result_safe = (res.get('solver_result') or {}) if res else {}
-                                logger.info('SOLVER: Result loaded, path_len=%d, success=%s, keys=%s',
-                                            path_len,
-                                            res.get('success') if res else None,
-                                            solver_result_safe.get('keys_used', 'N/A'))
-                            else:
-                                logger.warning('SOLVER: Output file missing or path is None: %s', out)
-                        except Exception as e:
-                            logger.exception('SOLVER: Failed to read solver output: %s', e)
-
-                        # Apply results on main thread
-                        if res:
-                            try:
-                                if res.get('success') and res.get('path'):
-                                    self.auto_path = res.get('path')
-                                    # Use (x or {}) pattern to handle None values
-                                    solver_result = (res.get('solver_result') or {}) if res else {}
-                                    
-                                    # CRITICAL: Verify path doesn't go through water
-                                    water_violations = find_path_tile_violations(
-                                        self.auto_path,
-                                        self.env.grid,
-                                        blocked_tile_ids={40},  # ELEMENT (water)
-                                    )
-                                    
-                                    if water_violations:
-                                        print(f"\n{'='*60}")
-                                        print(f"ERROR: PATH GOES THROUGH WATER!")
-                                        print(f"Found {len(water_violations)} water tiles in path:")
-                                        for step, r, c, tid in water_violations[:5]:
-                                            print(f"  Step {step}: position ({r}, {c}) = tile ID {tid} (WATER)")
-                                        print(f"{'='*60}\n")
-                                        logger.error(f"PATH ERROR: {len(water_violations)} water tiles in path!")
-                                    else:
-                                        print(f"\n{'='*60}")
-                                        print(f"PATH VERIFIED: No water tiles")
-                                        print(f"Path length: {len(self.auto_path)} steps")
-                                        print(f"{'='*60}\n")
-                                    
-                                    # Print path sample to verify water avoidance
-                                    print(f"\n{'='*60}")
-                                    print(f"PATH LOADED: {len(self.auto_path)} steps")
-                                    if len(self.auto_path) > 10:
-                                        print(f"First 10 steps: {self.auto_path[:10]}")
-                                    print(f"{'='*60}\n")
-                                    
-                                    logger.info('SOLVER: Path applied! auto_path len=%d, first=%s, last=%s',
-                                                len(self.auto_path),
-                                                self.auto_path[0] if self.auto_path else None,
-                                                self.auto_path[-1] if self.auto_path else None)
-                                    
-                                    # Auto-start mode unless caller explicitly requested preview.
-                                    force_preview = bool(getattr(self, 'preview_on_next_solver_result', False))
-                                    if getattr(self, 'auto_start_solver', False) and not force_preview:
-                                        logger.info('SOLVER: auto_start_solver=True, starting animation immediately')
-                                        self._execute_auto_solve(self.auto_path, solver_result, teleports=0)
-                                        self._set_message(f'Auto-solve started! Path: {len(self.auto_path)} steps')
-                                        logger.info('SOLVER: Animation started, auto_mode=%s, auto_step_idx=%s',
-                                                    getattr(self, 'auto_mode', None),
-                                                    getattr(self, 'auto_step_idx', None))
-                                    else:
-                                        # Show preview for user confirmation.
-                                        logger.info(
-                                            'SOLVER: showing preview dialog (auto_start_solver=%s, force_preview=%s)',
-                                            getattr(self, 'auto_start_solver', False),
-                                            force_preview,
-                                        )
-                                        self.path_preview_dialog = PathPreviewDialog(
-                                            path=self.auto_path,
-                                            env=self.env,
-                                            solver_result=solver_result,
-                                            speed_multiplier=self.speed_multiplier,
-                                        )
-                                        if getattr(self, 'preview_modal_enabled', False):
-                                            self.path_preview_mode = True
-                                            self.preview_overlay_visible = False
-                                        else:
-                                            self.path_preview_mode = False
-                                            self.preview_overlay_visible = True
-                                        self._set_message('Solver finished (press ENTER to start or ESC to dismiss)')
-                                    self.preview_on_next_solver_result = False
-                                else:
-                                    msg = res.get('message') or 'Solver finished with no path'
-                                    if timed_out:
-                                        msg = f'Solver timed out after {int(solver_timeout)}s'
-                                        logger.info('SOLVER: %s', msg)
-                                    elif msg == 'output file missing' and proc_exitcode is not None and proc_exitcode < 0:
-                                        msg = f'Solver terminated (exitcode={proc_exitcode}) before writing output'
-                                        logger.info('SOLVER: %s', msg)
-                                    else:
-                                        logger.warning('SOLVER: No valid path in result: %s', msg)
-                                    self._set_message(msg)
-                                    self.preview_on_next_solver_result = False
-                            except Exception as e:
-                                logger.exception('SOLVER: Failed to apply result on main thread: %s', e)
-                                self._set_message('Solver error (see logs)')
-                                self.preview_on_next_solver_result = False
-                        else:
-                            if timed_out:
-                                logger.error('SOLVER: No result - subprocess timed out')
-                                self._set_message(f'Solver timed out after {int(solver_timeout)}s')
-                            elif proc_exitcode is not None and proc_exitcode < 0:
-                                logger.info(
-                                    'SOLVER: Subprocess terminated before output (exitcode=%s)',
-                                    proc_exitcode,
-                                )
-                                self._set_message(f'Solver terminated (exitcode={proc_exitcode})')
-                            else:
-                                logger.warning('SOLVER: No result loaded (res is None), subprocess may have crashed')
-                                self._set_message('Solver finished (no output)')
-                            self.preview_on_next_solver_result = False
-                    finally:
-                        # CRITICAL: ALWAYS clean up process and files in finally block
-                        # This MUST run even if result loading/application crashes
-                        logger.info('SOLVER: Entering cleanup finally block')
-                        try:
-                            if proc:
-                                proc.join(timeout=0.1)
-                        except Exception as e:
-                            logger.exception('SOLVER: proc.join() failed: %s', e)
-                        try:
-                            out = getattr(self, 'solver_outfile', None)
-                            if out and os.path.exists(out):
-                                os.remove(out)
-                        except Exception as e:
-                            logger.exception('SOLVER: Failed to remove output file: %s', e)
-                        try:
-                            gf = getattr(self, 'solver_gridfile', None)
-                            if gf and os.path.exists(gf):
-                                os.remove(gf)
-                        except Exception as e:
-                            logger.exception('SOLVER: Failed to remove grid file: %s', e)
-                        
-                        # CRITICAL: Clear all solver state atomically using centralized helper
-                        self._clear_solver_state(reason="solver completed/failed")
-
-            # If AI generation worker finished, apply result on main thread
-            if getattr(self, 'ai_gen_done', False):
-                res = getattr(self, 'ai_gen_result', None)
-                self.ai_gen_done = False
-                self.ai_gen_result = None
-                if res and res.get('success') and res.get('grid') is not None:
-                    self.maps.append(res['grid'])
-                    self.map_names.append(res.get('name', 'AI Generated'))
-                    self.current_map_idx = len(self.maps) - 1
-                    self._load_current_map()
-                    self._center_view()
-                    self._set_message('AI generation complete', 3.0)
-                else:
-                    self._set_message('AI generation failed', 3.0)
+            handle_ai_generation_completion(self)
 
             # Render
             self._render()
