@@ -99,6 +99,10 @@ from src.gui.app.asset_boot_orchestration import (
 from src.gui.app.gui_startup import run_gui_main as _run_gui_main_helper
 from src.gui.app.map_adapter_loader import load_maps_from_adapter as _load_maps_from_adapter_helper
 from src.gui.app.run_loop_pipeline import run_main_loop as _run_main_loop_helper
+from src.gui.app.entrypoint_orchestration import (
+    load_maps_from_adapter as _load_maps_from_adapter_orchestration_helper,
+    run_main_entry as _run_main_entry_orchestration_helper,
+)
 
 # Configure logging
 logging.basicConfig(
@@ -281,6 +285,10 @@ from src.gui.gameplay.control_actions_orchestration import (
 from src.gui.gameplay.dungeon_generation_controls import (
     generate_dungeon as _generate_dungeon_flow_helper,
     stop_auto_solve as _stop_auto_solve_flow_helper,
+)
+from src.gui.gameplay.dungeon_generation_orchestration import (
+    generate_dungeon as _generate_dungeon_orchestration_helper,
+    stop_auto_solve as _stop_auto_solve_orchestration_helper,
 )
 from src.gui.runtime.temp_file_management import (
     open_temp_folder as _open_temp_folder_orchestration_helper,
@@ -539,6 +547,10 @@ from src.gui.rendering.post_map_ui_pipeline import (
     render_top_ui_layers as _render_top_ui_layers_helper,
 )
 from src.gui.rendering.render_frame_pipeline import render_frame as _render_frame_helper
+from src.gui.rendering.frame_orchestration import (
+    render_frame as _render_frame_orchestration_helper,
+    render_path_guaranteed as _render_path_guaranteed_orchestration_helper,
+)
 from src.gui.rendering.tile_asset_builder import (
     build_stair_marker_sprite as _build_stair_marker_sprite_helper,
     build_tile_images as _build_tile_images_helper,
@@ -588,6 +600,13 @@ from src.gui.solver.process_worker import (
     _solve_in_subprocess as _solve_in_subprocess_helper,
     _run_solver_and_dump as _run_solver_and_dump_helper,
     _run_preview_and_dump as _run_preview_and_dump_helper,
+)
+from src.gui.solver.process_api_orchestration import (
+    convert_diagonal_to_4dir as _convert_diagonal_to_4dir_orchestration_helper,
+    run_preview_and_dump as _run_preview_and_dump_orchestration_helper,
+    run_solver_and_dump as _run_solver_and_dump_orchestration_helper,
+    safe_unpickle as _safe_unpickle_orchestration_helper,
+    solve_in_subprocess as _solve_in_subprocess_orchestration_helper,
 )
 from src.gui.ai.generation_controls import (
     start_ai_dungeon_generation as _start_ai_dungeon_generation_helper,
@@ -692,7 +711,10 @@ def _safe_unpickle(path: str) -> dict:
 
     Returns a dict with at least a 'success' key. Any error returns a failure dict.
     """
-    return _safe_unpickle_helper(path)
+    return _safe_unpickle_orchestration_helper(
+        path=path,
+        safe_unpickle_helper=_safe_unpickle_helper,
+    )
 
 
 def _convert_diagonal_to_4dir(path, grid=None):
@@ -712,7 +734,11 @@ def _convert_diagonal_to_4dir(path, grid=None):
     Returns:
         List of (row, col) tuples with only orthogonal (4-dir) moves
     """
-    return _convert_diagonal_to_4dir_helper(path, grid=grid)
+    return _convert_diagonal_to_4dir_orchestration_helper(
+        path=path,
+        grid=grid,
+        convert_diagonal_to_4dir_helper=_convert_diagonal_to_4dir_helper,
+    )
 
 def _solve_in_subprocess(grid, start_pos, goal_pos, algorithm_idx, feature_flags, priority_options,
                          graph=None, room_to_node=None, room_positions=None, node_to_room=None):
@@ -728,17 +754,18 @@ def _solve_in_subprocess(grid, start_pos, goal_pos, algorithm_idx, feature_flags
     The function re-creates a ZeldaLogicEnv locally inside the child process and runs 
     the same solver logic used on the main thread.
     """
-    return _solve_in_subprocess_helper(
-        grid,
-        start_pos,
-        goal_pos,
-        algorithm_idx,
-        feature_flags,
-        priority_options,
+    return _solve_in_subprocess_orchestration_helper(
+        grid=grid,
+        start_pos=start_pos,
+        goal_pos=goal_pos,
+        algorithm_idx=algorithm_idx,
+        feature_flags=feature_flags,
+        priority_options=priority_options,
         graph=graph,
         room_to_node=room_to_node,
         room_positions=room_positions,
         node_to_room=node_to_room,
+        solve_in_subprocess_helper=_solve_in_subprocess_helper,
     )
 
 
@@ -755,18 +782,19 @@ def _run_solver_and_dump(grid_or_path, start_pos, goal_pos, algorithm_idx, featu
         room_positions: Optional mapping of room positions to pixel offsets
         node_to_room: Optional mapping of graph nodes to room positions (includes virtual nodes)
     """
-    return _run_solver_and_dump_helper(
-        grid_or_path,
-        start_pos,
-        goal_pos,
-        algorithm_idx,
-        feature_flags,
-        priority_options,
-        out_path,
+    return _run_solver_and_dump_orchestration_helper(
+        grid_or_path=grid_or_path,
+        start_pos=start_pos,
+        goal_pos=goal_pos,
+        algorithm_idx=algorithm_idx,
+        feature_flags=feature_flags,
+        priority_options=priority_options,
+        out_path=out_path,
         graph=graph,
         room_to_node=room_to_node,
         room_positions=room_positions,
         node_to_room=node_to_room,
+        run_solver_and_dump_helper=_run_solver_and_dump_helper,
     )
 
 
@@ -777,18 +805,19 @@ def _run_preview_and_dump(grid_or_path, start_pos, goal_pos, algorithm_idx, feat
     Runs in a separate process to avoid blocking the GUI. Attempts a fast StateSpaceAStar
     with a small timeout or returns failure quickly.
     """
-    return _run_preview_and_dump_helper(
-        grid_or_path,
-        start_pos,
-        goal_pos,
-        algorithm_idx,
-        feature_flags,
-        priority_options,
-        out_path,
+    return _run_preview_and_dump_orchestration_helper(
+        grid_or_path=grid_or_path,
+        start_pos=start_pos,
+        goal_pos=goal_pos,
+        algorithm_idx=algorithm_idx,
+        feature_flags=feature_flags,
+        priority_options=priority_options,
+        out_path=out_path,
         graph=graph,
         room_to_node=room_to_node,
         room_positions=room_positions,
         node_to_room=node_to_room,
+        run_preview_and_dump_helper=_run_preview_and_dump_helper,
     )
 
 
@@ -1252,11 +1281,18 @@ class ZeldaGUI:
     # Button callbacks
     def _stop_auto_solve(self):
         """Stop auto-solve and clear visual state."""
-        _stop_auto_solve_flow_helper(self)
+        _stop_auto_solve_orchestration_helper(
+            gui=self,
+            stop_auto_solve_flow_helper=_stop_auto_solve_flow_helper,
+        )
     
     def _generate_dungeon(self):
         """Generate a new random dungeon using the procedural generator."""
-        _generate_dungeon_flow_helper(self, logger)
+        _generate_dungeon_orchestration_helper(
+            gui=self,
+            logger=logger,
+            generate_dungeon_flow_helper=_generate_dungeon_flow_helper,
+        )
 
     def _generate_ai_dungeon(self):
         """Non-blocking wrapper to spawn background worker and return immediately."""
@@ -2297,18 +2333,19 @@ class ZeldaGUI:
         regardless of auto_mode, preview state, or feature flags.
         Call this AFTER tiles are drawn but BEFORE HUD elements.
         """
-        return _render_path_guaranteed_flow_helper(
+        return _render_path_guaranteed_orchestration_helper(
             gui=self,
             surface=surface,
             pygame=pygame,
             math_module=math,
             time_module=time,
             logger=logger,
+            render_path_guaranteed_flow_helper=_render_path_guaranteed_flow_helper,
         )
 
     def _render(self):
         """Render the current state using new visualization system or fallback."""
-        _render_frame_helper(
+        _render_frame_orchestration_helper(
             gui=self,
             pygame=pygame,
             logger=logger,
@@ -2338,6 +2375,7 @@ class ZeldaGUI:
             render_sidebar_header_fn=_render_sidebar_header_inventory_solver_helper,
             render_sidebar_status_fn=_render_sidebar_status_message_metrics_controls_helper,
             render_preview_layer_fn=_render_preview_layer_helper,
+            render_frame_helper=_render_frame_helper,
         )
 
     def _render_debug_overlay(self, surface):
@@ -2462,17 +2500,23 @@ class ZeldaGUI:
 
 def load_maps_from_adapter():
     """Load processed maps from data adapter using new zelda_core - ALL 18 variants."""
-    return _load_maps_from_adapter_helper(os_module=os, file_path=__file__, print_fn=print)
+    return _load_maps_from_adapter_orchestration_helper(
+        os_module=os,
+        file_path=__file__,
+        print_fn=print,
+        load_maps_from_adapter_helper=_load_maps_from_adapter_helper,
+    )
 
 
 def main():
     """Main entry point."""
-    _run_gui_main_helper(
+    _run_main_entry_orchestration_helper(
         pygame_available=PYGAME_AVAILABLE,
         load_maps_fn=load_maps_from_adapter,
         create_test_map_fn=create_test_map,
         gui_cls=ZeldaGUI,
         print_fn=print,
+        run_gui_main_helper=_run_gui_main_helper,
     )
 
 
