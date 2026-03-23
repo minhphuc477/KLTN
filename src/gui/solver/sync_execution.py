@@ -1,4 +1,4 @@
-"""Helpers for synchronous solver execution in debug mode."""
+﻿"""Helpers for synchronous solver execution in debug mode."""
 
 from typing import Any, Callable, Optional
 
@@ -67,6 +67,6 @@ def run_solver_sync(gui: Any, logger: Any, solve_in_subprocess: Callable[..., di
             logger.warning("DEBUG_SYNC: Solver failed: %s", msg)
             gui._set_message(f"DEBUG: No path - {msg}")
 
-    except Exception as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         logger.exception("DEBUG_SYNC: Solver exception")
         gui._set_message(f"DEBUG: Solver error - {exc}")

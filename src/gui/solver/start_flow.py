@@ -52,7 +52,7 @@ def start_auto_solve(gui: Any, logger: Any, debug_sync_solver: bool) -> None:
     try:
         gui._schedule_solver(algorithm_idx=alg_idx)
         logger.info("DEBUG_SOLVER: _schedule_solver() completed without exception")
-    except Exception as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         logger.exception("Failed to schedule solver")
         gui._set_message("Failed to start solver", 3.0)
         gui.preview_on_next_solver_result = False

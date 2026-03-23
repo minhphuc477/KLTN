@@ -129,7 +129,7 @@ class CheckboxWidget(BaseWidget):
             if not pygame.font.get_init():
                 try:
                     pygame.font.init()
-                except Exception as exc:
+                except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                     # If font init fails, fall back to a simple stub to avoid crashing tests
                     class _StubFont:
                         def render(self, *_args, **_kwargs):
@@ -257,7 +257,7 @@ class DropdownWidget(BaseWidget):
         # Initialize rects via pos setter to ensure full_rect is created
         try:
             self.pos = self._pos
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             logger.debug("DropdownWidget position initialization failed; using constructor fallback: %s", exc)
             self.rect = pygame.Rect(self._pos[0], self._pos[1], 180, 28)
             self.dropdown_rect = pygame.Rect(
@@ -292,7 +292,7 @@ class DropdownWidget(BaseWidget):
                 lbl_font = pygame.font.SysFont('Arial', 11, bold=True)
             # Add a bit more padding above the control so the label sits further away
             label_h = max(12, lbl_font.get_height() + 8)
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             label_h = 14
         # Store full_rect including label area
         self.full_rect = pygame.Rect(self.rect.x, self.rect.y - label_h, self.rect.width, self.rect.height + label_h)
@@ -386,13 +386,13 @@ class DropdownWidget(BaseWidget):
                 # If widget.render was called with the widget's pos set to (0,0) (as when
                 # rendering into a temp surface), this will place the label correctly.
                 surface.blit(label_surf, (6, label_y_local))
-            except Exception as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                 # On error, fallback to render with main font at a safe offset
                 try:
                     fallback = getattr(self, 'font', None) or pygame.font.SysFont('Arial', 12)
                     label_surf = fallback.render(str(self.label), True, self.theme.text_normal)
                     surface.blit(label_surf, (4, 4))
-                except Exception as exc:
+                except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                     # Non-fatal: continue rendering the dropdown even if label paint fails
                     logger.debug("DropdownWidget label render fallback failed: %s", exc)
 
@@ -669,7 +669,7 @@ class WidgetManager:
                 s = state[w.control_name]
                 try:
                     w.selected = int(min(max(0, int(s.get('selected', 0))), len(w.options) - 1))
-                except Exception as exc:
+                except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                     w.selected = 0
                 # Restore is_open exactly as snapshot (user intent persists across rebuild)
                 w.is_open = bool(s.get('is_open', False))

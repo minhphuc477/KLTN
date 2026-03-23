@@ -1,4 +1,4 @@
-"""Post-map UI composition helpers for gui_runner._render."""
+﻿"""Post-map UI composition helpers for gui_runner._render."""
 
 from __future__ import annotations
 
@@ -78,13 +78,13 @@ def render_top_ui_layers(*, gui: Any, logger: Any) -> None:
         try:
             logger.debug("Rendering topology overlay")
             gui._render_topology_overlay(gui.screen)
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             logger.warning("Topology overlay failed: %s", exc)
 
     if getattr(gui, "show_solver_comparison_overlay", False):
         try:
             gui._render_solver_comparison_overlay(gui.screen)
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             logger.warning("Solver comparison overlay failed: %s", exc)
 
     if gui.control_panel_enabled:
@@ -93,7 +93,7 @@ def render_top_ui_layers(*, gui: Any, logger: Any) -> None:
     if getattr(gui, "debug_overlay_enabled", False):
         try:
             gui._render_debug_overlay(gui.screen)
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             logger.warning("Debug overlay render failed: %s", exc)
 
     if gui.auto_mode:

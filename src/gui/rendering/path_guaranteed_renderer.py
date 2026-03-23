@@ -1,4 +1,4 @@
-"""Guaranteed path overlay renderer extracted from gui_runner."""
+﻿"""Guaranteed path overlay renderer extracted from gui_runner."""
 
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ def render_path_guaranteed(
             if not all(isinstance(coord, (int, float)) for coord in point):
                 logger.warning("Invalid path coordinates at index %d: %s", i, point)
                 return
-    except Exception as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         logger.warning("Path validation failed: %s", exc)
         return
 

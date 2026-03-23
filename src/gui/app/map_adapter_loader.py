@@ -34,7 +34,7 @@ def load_maps_from_adapter(*, os_module, file_path, print_fn=print):
                     map_names.append(f"Dungeon {dungeon_num} ({quest_name})")
 
                     print_fn(f"  D{dungeon_num}-{variant}: Loaded - {stitched.global_grid.shape}")
-                except Exception as exc:
+                except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                     print_fn(f"  D{dungeon_num}-{variant}: Error - {exc}")
 
         if os_module.environ.get("KLTN_PRECALC_SOLVES", "0") == "1":
@@ -48,16 +48,16 @@ def load_maps_from_adapter(*, os_module, file_path, print_fn=print):
                             result = solver.solve(dungeon_map)
                             status = "[OK]" if result.get("solvable") else "[X]"
                             print_fn(f"  [precalc] Map {idx + 1}: {status}")
-                        except Exception as exc:
+                        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                             print_fn(f"  [precalc] Map {idx + 1}: Error - {exc}")
 
                 threading.Thread(target=_precalc_worker, daemon=True).start()
-            except Exception as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                 print_fn("Precalc worker failed to start")
 
         return maps if maps else None, map_names if map_names else None
 
-    except Exception as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         print_fn(f"Error loading maps: {exc}")
         import traceback
 

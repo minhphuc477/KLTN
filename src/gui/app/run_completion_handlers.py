@@ -31,7 +31,7 @@ def handle_parallel_search_completion(gui, logger, path_preview_dialog_cls):
             speed_multiplier=gui.speed_multiplier,
         )
         gui._set_message("Parallel result ready (sidebar preview)")
-    except Exception as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         logger.warning(f"Failed to display parallel search preview: {exc}")
 
 
@@ -44,7 +44,7 @@ def handle_preview_process_completion(gui, os_module, logger, safe_unpickle_fn, 
     proc_alive = False
     try:
         proc_alive = proc.is_alive()
-    except Exception as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         proc_alive = False
 
     if not proc_alive:
@@ -53,23 +53,23 @@ def handle_preview_process_completion(gui, os_module, logger, safe_unpickle_fn, 
         try:
             if out:
                 res = safe_unpickle_fn(out)
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             logger.exception("Failed to read preview output: %s", exc)
         finally:
             try:
                 proc.join(timeout=0.1)
-            except Exception as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                 pass
             try:
                 if out and os_module.path.exists(out):
                     os_module.remove(out)
-            except Exception as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                 pass
             try:
                 grid_file = getattr(gui, "preview_gridfile", None)
                 if grid_file and os_module.path.exists(grid_file):
                     os_module.remove(grid_file)
-            except Exception as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                 pass
             gui.preview_proc = None
             gui.preview_outfile = None
@@ -90,13 +90,13 @@ def handle_preview_process_completion(gui, os_module, logger, safe_unpickle_fn, 
                             solver_result=solver_result_preview,
                             speed_multiplier=gui.speed_multiplier,
                         )
-                    except Exception as exc:
+                    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                         gui.path_preview_dialog = None
                     gui._set_message("Preview ready (sidebar)")
                 else:
                     msg = res.get("message") or "Preview finished with no path"
                     gui._set_message(msg)
-            except Exception as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                 logger.exception("Failed to apply preview output on main thread: %s", exc)
         else:
             gui._set_message("Preview finished (no output)")
@@ -135,7 +135,7 @@ def handle_solver_process_completion(
         current_map = gui.maps[gui.current_map_idx]
         grid_ref = current_map.global_grid if hasattr(current_map, "global_grid") else current_map
         grid_cells = int(np_module.asarray(grid_ref).size)
-    except Exception as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         pass
 
     solver_timeout = compute_solver_timeout_seconds_fn(
@@ -155,19 +155,19 @@ def handle_solver_process_completion(
                 if proc.is_alive():
                     proc.terminate()
                     proc.join(timeout=0.5)
-            except Exception as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                 logger.exception("SOLVER: Failed to terminate timed-out process: %s", exc)
         proc_alive = False
 
     if not timed_out:
         try:
             proc_alive = proc.is_alive() if proc else False
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             logger.exception("SOLVER: proc.is_alive() raised exception: %s", exc)
             proc_alive = False
         try:
             thread_alive = solver_thread.is_alive() if solver_thread else False
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             logger.exception("SOLVER: solver_thread.is_alive() raised exception: %s", exc)
             thread_alive = False
 
@@ -221,7 +221,7 @@ def handle_solver_process_completion(
                 )
             else:
                 logger.warning("SOLVER: Output file missing or path is None: %s", out)
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             logger.exception("SOLVER: Failed to read solver output: %s", exc)
 
         if res:
@@ -305,7 +305,7 @@ def handle_solver_process_completion(
                         logger.warning("SOLVER: No valid path in result: %s", msg)
                     gui._set_message(msg)
                     gui.preview_on_next_solver_result = False
-            except Exception as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                 logger.exception("SOLVER: Failed to apply result on main thread: %s", exc)
                 gui._set_message("Solver error (see logs)")
                 gui.preview_on_next_solver_result = False
@@ -328,19 +328,19 @@ def handle_solver_process_completion(
         try:
             if proc:
                 proc.join(timeout=0.1)
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             logger.exception("SOLVER: proc.join() failed: %s", exc)
         try:
             out = getattr(gui, "solver_outfile", None)
             if out and os_module.path.exists(out):
                 os_module.remove(out)
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             logger.exception("SOLVER: Failed to remove output file: %s", exc)
         try:
             grid_file = getattr(gui, "solver_gridfile", None)
             if grid_file and os_module.path.exists(grid_file):
                 os_module.remove(grid_file)
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             logger.exception("SOLVER: Failed to remove grid file: %s", exc)
 
         gui._clear_solver_state(reason="solver completed/failed")

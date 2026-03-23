@@ -1,4 +1,4 @@
-"""Core AI-generation pipeline helpers extracted from gui_runner."""
+﻿"""Core AI-generation pipeline helpers extracted from gui_runner."""
 
 from pathlib import Path
 
@@ -144,7 +144,7 @@ def refine_and_fix_terminals(tile_grid, np_module, logger):
             logger.info("  Symbolic refinement: SUCCESS")
         else:
             logger.info("  Symbolic refinement: no repair needed or failed")
-    except Exception as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         logger.warning("  Symbolic refinement skipped: %s", exc)
 
     if not np_module.any(tile_grid == _SP["START"]):

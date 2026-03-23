@@ -1,4 +1,4 @@
-"""Asset and control-panel boot orchestration bridges for ZeldaGUI."""
+﻿"""Asset and control-panel boot orchestration bridges for ZeldaGUI."""
 
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ def load_assets(*, gui, semantic_palette, pygame):
             tile_size=gui.TILE_SIZE,
             pygame=pygame,
         )
-    except Exception:
+    except Exception as exc:
         gui.stair_sprite = None
         gui.stair_anim_phase = 0.0
 

@@ -1,4 +1,4 @@
-"""Utility helpers shared by GUI solver orchestration code."""
+﻿"""Utility helpers shared by GUI solver orchestration code."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ def safe_unpickle(path: str) -> dict:
             logger.warning("safe_unpickle: unexpected payload type %s for %s", type(obj), path)
             return {"success": False, "message": "invalid output format"}
         return obj
-    except Exception as e:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as e:
         logger.exception("safe_unpickle failed for %s: %s", path, e)
         return {"success": False, "message": "unpickle error"}
 

@@ -1,4 +1,4 @@
-"""Top-level frame rendering orchestration for ZeldaGUI."""
+﻿"""Top-level frame rendering orchestration for ZeldaGUI."""
 
 from __future__ import annotations
 
@@ -97,7 +97,7 @@ def render_frame(
 
     try:
         render_block_push_animations_fn(map_surface)
-    except Exception as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         logger.warning("Failed to render block push animations: %s", exc)
 
     render_heatmap_overlay_fn(
@@ -136,7 +136,7 @@ def render_frame(
 
     try:
         render_path_guaranteed_fn(map_surface)
-    except Exception as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         logger.warning("_render_path_GUARANTEED failed: %s", exc)
 
     render_player_and_effects_fn(gui=gui, map_surface=map_surface)

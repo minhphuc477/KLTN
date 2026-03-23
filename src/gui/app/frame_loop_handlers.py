@@ -15,7 +15,7 @@ def update_heartbeat(gui, logger, time_module, heartbeat_last, heartbeat_interva
                 getattr(gui, "auto_mode", False),
                 getattr(gui, "solver_running", False),
             )
-    except Exception as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         pass
     return heartbeat_last
 
@@ -45,16 +45,16 @@ def render_and_present_frame(gui, pygame_module, logger):
 
     try:
         pygame_module.display.flip()
-    except Exception as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         logger.exception("pygame.display.flip() failed; attempting pygame.display.update() and fallback")
         try:
             pygame_module.display.update()
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             logger.exception("pygame.display.update() also failed")
             try:
                 if not gui._ensure_display_alive():
                     logger.warning("Display not healthy after flip/update; attempted recovery")
-            except Exception as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                 logger.exception("Attempted display recovery after flip/update failures")
 
 
@@ -63,9 +63,9 @@ def handle_watchdog_screenshot_request(gui, logger):
     try:
         try:
             gui._handle_watchdog_screenshot()
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             logger.exception("Error during watchdog screenshot handling")
-    except Exception as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         logger.exception("Error handling watchdog screenshot request")
 
 
@@ -78,7 +78,7 @@ def run_periodic_display_health_check(gui, time_module, logger):
             ok = gui._ensure_display_alive()
             if not ok:
                 gui._set_message("Display recovery attempted; see logs", 6.0)
-    except Exception as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         logger.exception("Error during display health check")
 
 

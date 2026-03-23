@@ -1,4 +1,4 @@
-"""Helpers to bootstrap solver worker launch with test mode and fallback."""
+﻿"""Helpers to bootstrap solver worker launch with test mode and fallback."""
 
 import os
 from typing import Any, Callable
@@ -26,7 +26,7 @@ def launch_solver_worker(
             return
 
         launch_solver_process(**kwargs)
-    except Exception as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         logger.exception("SOLVER: Failed to start solver process: %s", exc)
         logger.info("SOLVER: Falling back to thread-based solver")
         gui.solver_starting = False
