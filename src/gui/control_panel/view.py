@@ -42,7 +42,7 @@ def update_control_panel_positions(
                 panel_width,
                 gui.SIDEBAR_WIDTH,
             )
-    except Exception as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         pass
 
     sidebar_x = gui.screen_w - gui.SIDEBAR_WIDTH
@@ -164,7 +164,7 @@ def update_control_panel_positions(
             range(len(ara_options)),
             key=lambda idx: abs(float(ara_options[idx]) - ara_value),
         )
-    except Exception as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         ara_selected = 0
     ara_dropdown = dropdown_widget_cls(
         (x_offset, y_offset),
@@ -241,7 +241,7 @@ def update_control_panel_positions(
     try:
         if saved_dropdown_state is not None:
             gui.widget_manager.apply_dropdown_state(saved_dropdown_state)
-    except Exception as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         pass
 
     button_width = 125
@@ -309,7 +309,7 @@ def update_control_panel_positions(
 
     try:
         gui._reposition_widgets(panel_x, panel_y)
-    except Exception as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         pass
 
     max_widget_bottom = 0
@@ -326,7 +326,7 @@ def update_control_panel_positions(
         if hasattr(w, "dropdown_rect") and getattr(w, "dropdown_rect") is not None:
             try:
                 bottoms.append(int(getattr(w, "dropdown_rect").bottom))
-            except Exception as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                 pass
         if hasattr(w, "full_rect") and getattr(w, "full_rect") is not None:
             bottoms.append(int(getattr(w, "full_rect").bottom))
@@ -456,15 +456,15 @@ def dump_control_panel_widget_state(
             dropdown_r = getattr(w, "dropdown_rect", None)
             try:
                 fr_tuple = (fr.x, fr.y, fr.width, fr.height) if fr is not None else None
-            except Exception as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                 fr_tuple = None
             try:
                 r_tuple = (rr.x, rr.y, rr.width, rr.height) if rr is not None else None
-            except Exception as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                 r_tuple = None
             try:
                 dr_tuple = (dropdown_r.x, dropdown_r.y, dropdown_r.width, dropdown_r.height) if dropdown_r is not None else None
-            except Exception as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                 dr_tuple = None
 
             contains_mouse = bool(fr and fr.collidepoint(mouse_pos))
@@ -499,7 +499,7 @@ def dump_control_panel_widget_state(
                     rect_contains_sc,
                     w.__class__.__name__,
                 )
-    except Exception as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         logger.exception("Failed to dump control panel widget state")
 
 
@@ -526,7 +526,7 @@ def render_control_panel(
 
     try:
         gui._update_control_panel_positions()
-    except Exception as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         pass
 
     if getattr(gui, "control_panel_rect", None):
@@ -650,7 +650,7 @@ def render_control_panel(
 
             panel_surf.blit(temp_surf, (local_x, local_y))
 
-        except Exception as e:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as e:
             logger.warning("Per-widget render failed: %s", e)
 
     if getattr(gui, "control_panel_can_scroll", False):
@@ -699,7 +699,7 @@ def render_control_panel(
         try:
             if orig_pos is not None:
                 widget.pos = orig_pos
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             pass
 
     if is_hovering:
@@ -729,9 +729,9 @@ def render_control_panel(
                         scroll_offset=scroll_offset,
                         panel_rect=gui.control_panel_rect,
                     )
-                except Exception as e:
+                except (AttributeError, RuntimeError, ValueError, TypeError) as e:
                     logger.warning("Dropdown menu render failed: %s", e)
-    except Exception as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         pass
 
     gui._render_tooltips(surface, mouse_pos)

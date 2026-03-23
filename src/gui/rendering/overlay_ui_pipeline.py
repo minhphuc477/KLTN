@@ -23,7 +23,7 @@ def render_translucent_event_overlays(
                 gui.screen.blit(ov, (0, 0))
                 label = gui.big_font.render("PATH PREVIEW (overlay) - captures clicks", True, (255, 220, 120))
                 gui.screen.blit(label, (20, view_h // 2 - 20))
-            except Exception as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                 pass
 
         if getattr(gui, "show_solver_comparison_overlay", False):
@@ -34,9 +34,9 @@ def render_translucent_event_overlays(
                 gui.screen.blit(ov2, (0, 0))
                 label2 = gui.big_font.render("SOLVER COMPARISON - modal", True, (200, 200, 255))
                 gui.screen.blit(label2, (20, view_h // 2 - 20))
-            except Exception as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                 pass
-    except Exception as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         pass
 
 
@@ -57,12 +57,12 @@ def render_preview_layer(
                 gui.SIDEBAR_WIDTH,
                 gui.HUD_HEIGHT,
             )
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             logger.warning("Failed to render path overlay: %s", exc)
 
         try:
             gui.path_preview_dialog.render(gui.screen)
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             logger.warning("Failed to render path preview dialog: %s", exc)
         return
 
@@ -76,7 +76,7 @@ def render_preview_layer(
                 gui.SIDEBAR_WIDTH,
                 gui.HUD_HEIGHT,
             )
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             logger.warning("Failed to render path overlay (non-modal): %s", exc)
 
         try:
@@ -111,7 +111,7 @@ def render_preview_layer(
             dismiss_text = small.render("Dismiss", True, (255, 255, 255))
             gui.screen.blit(start_text, (start_rect.x + 8, start_rect.y + 4))
             gui.screen.blit(dismiss_text, (dismiss_rect.x + 6, dismiss_rect.y + 4))
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             logger.warning("Failed to render sidebar preview box: %s", exc)
         return
 

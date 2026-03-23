@@ -63,16 +63,16 @@ def initialize_runtime_timing_state(*, gui: Any, pygame: Any, os_module: Any, ti
                     thread.start()
                     gui._watchdog_thread = thread
                     logger.debug("Watchdog thread started (threshold=%s s)", gui._watchdog_threshold)
-                except Exception as exc:
+                except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                     logger.exception("Failed to start watchdog thread")
 
             watchdog_start()
-    except Exception as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         gui._watchdog_enabled = False
 
     gui._consecutive_empty_frames = 0
     try:
         gui._empty_frame_recovery_threshold = _safe_int_env("KLTN_EMPTY_FRAME_RECOVERY", 8)
-    except Exception as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         gui._empty_frame_recovery_threshold = 8
 

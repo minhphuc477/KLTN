@@ -56,7 +56,7 @@ def run_solver_comparison(
 
                         # Always construct a fresh baseline solver for comparison.
                         temp_solver = StateSpaceAStar(gui.env)
-                    except Exception as exc:
+                    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                         temp_solver = None
                     if temp_solver is None:
                         raise RuntimeError("State-space solver unavailable")
@@ -76,7 +76,7 @@ def run_solver_comparison(
                     if success and not gui.last_solver_metrics:
                         gui._set_last_solver_metrics(name, nodes, elapsed, len(path))
                     continue
-                except Exception as e:
+                except (AttributeError, RuntimeError, ValueError, TypeError) as e:
                     results.append(
                         {
                             "name": name,
@@ -134,7 +134,7 @@ def run_solver_comparison(
                             }
                         )
                     continue
-                except Exception as e:
+                except (AttributeError, RuntimeError, ValueError, TypeError) as e:
                     results.append(
                         {
                             "name": name,
@@ -212,7 +212,7 @@ def run_solver_comparison(
                     )
                     if success and not gui.last_solver_metrics:
                         gui._set_last_solver_metrics(name, nodes, elapsed, len(path))
-                except Exception as e:
+                except (AttributeError, RuntimeError, ValueError, TypeError) as e:
                     results.append(
                         {
                             "name": name,

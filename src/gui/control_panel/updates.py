@@ -82,7 +82,7 @@ def apply_dropdown_widget_update(gui: Any, widget: Any, logger: Any) -> None:
             selected_val = widget.options[widget.selected]
             gui.ara_weight = float(selected_val)
             gui._set_message(f"ARA* weight: {gui.ara_weight:g}", 1.2)
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             gui.ara_weight = 1.0
     elif widget.control_name == "presets":
         old = gui.current_preset_idx
@@ -117,14 +117,14 @@ def apply_algorithm_dropdown_update(gui: Any, widget: Any, logger: Any) -> None:
             try:
                 gui.solver_proc.terminate()
                 logger.info("DROPDOWN: Terminated solver process")
-            except Exception as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                 logger.warning("DROPDOWN: Failed to terminate solver process: %s", exc)
         if hasattr(gui, "preview_thread") and gui.preview_thread:
             gui.preview_thread = None
         if hasattr(gui, "preview_proc") and gui.preview_proc:
             try:
                 gui.preview_proc.terminate()
-            except Exception as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                 pass
             gui.preview_proc = None
         gui._clear_solver_state(reason=f"algorithm changed to {new_algorithm_name}")

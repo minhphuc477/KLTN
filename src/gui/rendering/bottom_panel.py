@@ -98,7 +98,7 @@ def render_inventory_section(gui: Any, x: int, y: int, width: int, height: int, 
     _ = height
     try:
         gui._sync_inventory_counters()
-    except Exception as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         pass
 
     logger.debug(

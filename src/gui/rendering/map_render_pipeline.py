@@ -12,7 +12,7 @@ def create_map_surface(*, gui: Any, pygame: Any) -> Tuple[Any, int, int]:
 
     try:
         map_surface = pygame.Surface((view_w, view_h)).convert()
-    except Exception as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         map_surface = pygame.Surface((view_w, view_h))
     map_surface.fill((20, 20, 30))
     return map_surface, view_w, view_h
@@ -86,7 +86,7 @@ def render_visible_tiles(
                         sx = screen_x + (gui.TILE_SIZE - stair_sprite.get_width()) // 2
                         sy = screen_y + (gui.TILE_SIZE - stair_sprite.get_height()) // 2
                         map_surface.blit(stair_sprite, (sx, sy))
-                    except Exception as exc:
+                    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                         pass
         return tiles_drawn
 
@@ -114,7 +114,7 @@ def render_visible_tiles(
                     sx = screen_x + (gui.TILE_SIZE - stair_sprite.get_width()) // 2
                     sy = screen_y + (gui.TILE_SIZE - stair_sprite.get_height()) // 2
                     map_surface.blit(stair_sprite, (sx, sy))
-                except Exception as exc:
+                except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                     pass
 
     return tiles_drawn

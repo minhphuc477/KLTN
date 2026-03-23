@@ -16,6 +16,6 @@ def finalize_initial_map_boot(*, gui: Any, pygame: Any, logger: Any) -> None:
     try:
         gui._render()
         pygame.display.flip()
-    except Exception as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         logger.debug("Initial frame paint failed during constructor bootstrap", exc_info=True)
 

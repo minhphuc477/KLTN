@@ -30,11 +30,11 @@ def export_topology(gui: Any) -> None:
 
             try:
                 display_path = fname.relative_to(getattr(gui, "repo_root", Path.cwd()))
-            except Exception as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                 display_path = fname
             gui._set_message(f"Topology exported to {display_path}")
             gui.topology_export_path = str(fname)
-        except Exception as e:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as e:
             export_dir = Path(getattr(gui, "topology_export_dir", Path.cwd()))
             export_dir.mkdir(parents=True, exist_ok=True)
             fname = export_dir / f"topology_map_{gui.current_map_idx + 1}.dot"
@@ -47,7 +47,7 @@ def export_topology(gui: Any) -> None:
                 f.write("}\n")
             try:
                 display_path = fname.relative_to(getattr(gui, "repo_root", Path.cwd()))
-            except Exception as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                 display_path = fname
             gui._set_message(f"Topology exported to {display_path} (manual)\n{e}")
             gui.topology_export_path = str(fname)

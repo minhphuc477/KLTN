@@ -7,7 +7,7 @@ def render_debug_overlay(gui: Any, surface: Any, pygame: Any, time_module: Any) 
     """Render debug overlay with mouse/widget diagnostics and recent clicks."""
     try:
         font = pygame.font.SysFont("Arial", 12)
-    except Exception as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         return
 
     widget_count = len(gui.widget_manager.widgets) if gui.widget_manager else 0
@@ -47,7 +47,7 @@ def render_debug_overlay(gui: Any, surface: Any, pygame: Any, time_module: Any) 
         k_age = int((now - lastk.get("time", now)) * 1000)
         try:
             kname = pygame.key.name(lastk.get("key"))
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             kname = str(lastk.get("key"))
         ktxt = f"Last key: {kname} age={k_age}ms mods={lastk.get('mods')}"
         surface.blit(font.render(ktxt, True, (200, 240, 200)), (x, y))
@@ -65,13 +65,13 @@ def render_debug_overlay(gui: Any, surface: Any, pygame: Any, time_module: Any) 
     if panel_rect:
         try:
             pygame.draw.rect(surface, (200, 80, 80), panel_rect, 2)
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             pass
 
     if collapse_rect:
         try:
             pygame.draw.rect(surface, (80, 200, 120), collapse_rect, 2)
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             pass
 
     cx = 14

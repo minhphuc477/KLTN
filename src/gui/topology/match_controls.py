@@ -39,7 +39,7 @@ def match_missing_nodes(gui: Any, matcher_cls: Any, logger: Any) -> None:
             if threshold_widget
             else getattr(gui, "match_apply_threshold", 0.85)
         )
-    except Exception as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         threshold_val = getattr(gui, "match_apply_threshold", 0.85)
 
     confident = {
@@ -114,7 +114,7 @@ def apply_tentative_matches(gui: Any, logger: Any) -> None:
             if threshold_widget
             else getattr(gui, "match_apply_threshold", 0.85)
         )
-    except Exception as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         threshold_val = getattr(gui, "match_apply_threshold", 0.85)
 
     to_apply = {

@@ -21,7 +21,7 @@ def _solve_in_subprocess(grid, start_pos, goal_pos, algorithm_idx, feature_flags
             import numpy as _np
             if not isinstance(grid_arr, _np.ndarray):
                 grid_arr = _np.array(grid, dtype=_np.int64)
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             grid_arr = grid
 
         priority_options = dict(priority_options or {})
@@ -130,7 +130,7 @@ def _solve_in_subprocess(grid, start_pos, goal_pos, algorithm_idx, feature_flags
                         rules_profile=str(priority_options.get('rules_profile', 'vglc_strict')),
                         representation=rep_mode,
                     )
-                except Exception as exc:
+                except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                     config = GameStateSearchConfig()
 
                 search_result = run_game_state_solver(env, algorithm_idx, config)
@@ -256,13 +256,13 @@ def _solve_in_subprocess(grid, start_pos, goal_pos, algorithm_idx, feature_flags
                     })
                 else:
                     result['message'] = f'Fallback A* found no solution (explored {nodes} states)'
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             logger.exception('Solver exception: %s', exc)
             result['message'] = f'Solver error: {exc}'
 
         logger.info('SOLVER RESULT: success=%s, path_len=%d', result['success'], len(result['path']) if result['path'] else 0)
         return result
-    except Exception as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         return {'success': False, 'path': None, 'teleports': 0, 'solver_result': None, 'message': f'Child failed: {exc}'}
 
 
@@ -275,7 +275,7 @@ def _run_solver_and_dump(grid_or_path, start_pos, goal_pos, algorithm_idx, featu
         try:
             sys.stderr.write(f'[SOLVER_SUBPROCESS] {msg}\n')
             sys.stderr.flush()
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             pass
 
     _log(f'Started: start={start_pos}, goal={goal_pos}, alg={algorithm_idx}, out={out_path}')
@@ -288,16 +288,16 @@ def _run_solver_and_dump(grid_or_path, start_pos, goal_pos, algorithm_idx, featu
                 import numpy as _np
                 grid = _np.load(grid_or_path, allow_pickle=False)
                 _log(f'Grid loaded: shape={grid.shape}')
-            except Exception as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                 _log(f'numpy load failed: {exc}, trying pickle')
                 try:
                     with open(grid_or_path, 'rb') as gf:
                         grid = pickle.load(gf)
                     _log('Grid loaded via pickle')
-                except Exception as exc2:
+                except (AttributeError, RuntimeError, ValueError, TypeError) as exc2:
                     _log(f'pickle load failed: {exc2}')
                     grid = grid_or_path
-    except Exception as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         _log(f'Grid load exception: {exc}')
         grid = grid_or_path
 
@@ -322,12 +322,12 @@ def _run_solver_and_dump(grid_or_path, start_pos, goal_pos, algorithm_idx, featu
         with open(out_path, 'wb') as f:
             pickle.dump(res, f)
         _log(f'Result written to {out_path}')
-    except Exception as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         _log(f'Failed to write result: {exc}')
         try:
             with open(out_path, 'wb') as f:
                 pickle.dump({'success': False, 'message': f'failed to write output: {exc}'}, f)
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             pass
 
 
@@ -340,7 +340,7 @@ def _run_preview_and_dump(grid_or_path, start_pos, goal_pos, algorithm_idx, feat
             if isinstance(grid_or_path, str) and os.path.exists(grid_or_path):
                 import numpy as _np
                 grid = _np.load(grid_or_path, allow_pickle=False)
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             pass
 
         res = _solve_in_subprocess(
@@ -364,16 +364,16 @@ def _run_preview_and_dump(grid_or_path, start_pos, goal_pos, algorithm_idx, feat
         try:
             with open(out_path, 'wb') as f:
                 pickle.dump(out, f)
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             try:
                 with open(out_path, 'wb') as f:
                     pickle.dump({'success': False, 'message': 'failed to write preview output'}, f)
-            except Exception as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                 pass
-    except Exception as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         try:
             with open(out_path, 'wb') as f:
                 pickle.dump({'success': False, 'message': str(exc)}, f)
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             pass
 

@@ -55,7 +55,7 @@ def render_topology_overlay(
 
     try:
         overlay = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
-    except Exception as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         overlay = None
 
     node_pos = {}
@@ -93,7 +93,7 @@ def render_topology_overlay(
         color = edge_colors.get(edge_type, default_edge_color)
         try:
             pygame.draw.line(target_surface, color[:3], (int(x1), int(y1)), (int(x2), int(y2)), 3)
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             pygame.draw.line(surface, color[:3], (int(x1), int(y1)), (int(x2), int(y2)), 3)
 
     node_radius = max(8, tile_size // 3)
@@ -101,7 +101,7 @@ def render_topology_overlay(
     for node, (cx, cy) in node_pos.items():
         try:
             pygame.draw.circle(target_surface, (255, 255, 255, 100), (int(cx), int(cy)), node_radius + 3)
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             logger.debug("Topology overlay halo draw failed for node %s: %s", node, exc)
         pygame.draw.circle(target_surface, (80, 120, 200), (int(cx), int(cy)), node_radius)
         pygame.draw.circle(target_surface, (150, 200, 255), (int(cx), int(cy)), node_radius, 2)
@@ -110,7 +110,7 @@ def render_topology_overlay(
             lx = int(cx - label.get_width() / 2)
             ly = int(cy - label.get_height() / 2)
             target_surface.blit(label, (lx, ly))
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             logger.debug("Topology overlay label draw failed for node %s: %s", node, exc)
 
     if overlay:
@@ -121,7 +121,7 @@ def render_topology_overlay(
             warn_font = pygame.font.SysFont("Arial", 14, bold=True)
             warn_text = warn_font.render(f"{unmatched_nodes} unmatched nodes", True, (255, 150, 100))
             surface.blit(warn_text, (10, 10))
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             logger.debug("Topology overlay warning draw failed: %s", exc)
 
 

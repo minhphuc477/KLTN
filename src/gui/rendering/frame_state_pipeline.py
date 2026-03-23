@@ -19,7 +19,7 @@ def update_frame_render_state(*, gui: Any, logger: Any) -> None:
         try:
             logger.debug("Processing deferred inventory refresh on main thread")
             gui._update_inventory_and_hud()
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             pass
         finally:
             gui.inventory_needs_refresh = False

@@ -67,7 +67,7 @@ def prune_dead_end_topology(
         if removed_nodes and hasattr(graph, "copy"):
             new_graph = graph.copy()
             new_graph.remove_nodes_from([n for n in set(removed_nodes) if n in new_graph])
-    except Exception as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         logger.debug("Failed to remove pruned nodes from graph; keeping original graph", exc_info=True)
         new_graph = graph
 
@@ -120,7 +120,7 @@ def run_prechecks_and_optional_prune(
             try:
                 if not topology_has_path_fn(graph, start_node, goal_node):
                     return False, "PRECHECK_FAIL: Start and goal are disconnected in topology"
-            except Exception as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                 logger.debug("Topology connectivity precheck failed open", exc_info=True)
 
             try:
@@ -137,7 +137,7 @@ def run_prechecks_and_optional_prune(
                             False,
                             f"PRECHECK_FAIL: Insufficient small keys (need {int(min_locked)}, have {key_count})",
                         )
-            except Exception as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                 logger.debug("Locked-door key-count precheck failed open", exc_info=True)
     else:
         grid = getattr(gui.env, "grid", None)
@@ -176,7 +176,7 @@ def run_prechecks_and_optional_prune(
                 if graph is not None and hasattr(graph, "copy"):
                     current.graph = graph.copy()
                     current.graph.remove_nodes_from([n for n in set(removed_nodes) if n in current.graph])
-            except Exception as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                 logger.debug("Failed to prune nodes from graph in room-based prune", exc_info=True)
 
             current.node_to_room = {
