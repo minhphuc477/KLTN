@@ -1,4 +1,4 @@
-"""Bottom panel rendering helpers extracted from gui_runner."""
+﻿"""Bottom panel rendering helpers extracted from gui_runner."""
 
 from typing import Any
 
@@ -98,7 +98,7 @@ def render_inventory_section(gui: Any, x: int, y: int, width: int, height: int, 
     _ = height
     try:
         gui._sync_inventory_counters()
-    except Exception:
+    except Exception as exc:
         pass
 
     logger.debug(
@@ -294,3 +294,4 @@ def render_status_section(gui: Any, x: int, y: int, width: int, height: int) -> 
     if gui.status_message:
         status_surf = gui.small_font.render(gui.status_message[:20], True, (180, 220, 255))
         gui.screen.blit(status_surf, (x, y_offset))
+

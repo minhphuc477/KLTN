@@ -1,4 +1,4 @@
-"""Helpers for topology precheck, dead-end pruning, and prune undo flow."""
+﻿"""Helpers for topology precheck, dead-end pruning, and prune undo flow."""
 
 from __future__ import annotations
 
@@ -67,7 +67,7 @@ def prune_dead_end_topology(
         if removed_nodes and hasattr(graph, "copy"):
             new_graph = graph.copy()
             new_graph.remove_nodes_from([n for n in set(removed_nodes) if n in new_graph])
-    except Exception:
+    except Exception as exc:
         logger.debug("Failed to remove pruned nodes from graph; keeping original graph", exc_info=True)
         new_graph = graph
 
@@ -120,7 +120,7 @@ def run_prechecks_and_optional_prune(
             try:
                 if not topology_has_path_fn(graph, start_node, goal_node):
                     return False, "PRECHECK_FAIL: Start and goal are disconnected in topology"
-            except Exception:
+            except Exception as exc:
                 logger.debug("Topology connectivity precheck failed open", exc_info=True)
 
             try:
@@ -137,7 +137,7 @@ def run_prechecks_and_optional_prune(
                             False,
                             f"PRECHECK_FAIL: Insufficient small keys (need {int(min_locked)}, have {key_count})",
                         )
-            except Exception:
+            except Exception as exc:
                 logger.debug("Locked-door key-count precheck failed open", exc_info=True)
     else:
         grid = getattr(gui.env, "grid", None)
@@ -176,7 +176,7 @@ def run_prechecks_and_optional_prune(
                 if graph is not None and hasattr(graph, "copy"):
                     current.graph = graph.copy()
                     current.graph.remove_nodes_from([n for n in set(removed_nodes) if n in current.graph])
-            except Exception:
+            except Exception as exc:
                 logger.debug("Failed to prune nodes from graph in room-based prune", exc_info=True)
 
             current.node_to_room = {
@@ -223,3 +223,4 @@ def undo_prune(*, gui: Any, current: Any, logger: Any, update_env_topology_view_
     update_env_topology_view_fn(current)
     gui._set_message("Undo: restored topology before pruning", 3.0)
     logger.info("Undo prune: restored previous topology snapshot")
+

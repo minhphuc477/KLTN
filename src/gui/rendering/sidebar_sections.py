@@ -1,4 +1,4 @@
-"""Sidebar rendering section helpers extracted from gui_runner._render."""
+﻿"""Sidebar rendering section helpers extracted from gui_runner._render."""
 
 from __future__ import annotations
 
@@ -220,7 +220,7 @@ def render_sidebar_status_message_metrics_controls(
                 ds_surf = gui.small_font.render(ds_text, True, (180, 180, 255))
                 screen.blit(ds_surf, (sidebar_x + 15, y_pos))
                 y_pos += 16
-        except Exception:
+        except Exception as exc:
             pass
 
         try:
@@ -233,7 +233,7 @@ def render_sidebar_status_message_metrics_controls(
             stair_surf = gui.small_font.render(stair_text, True, (200, 200, 150))
             screen.blit(stair_surf, (sidebar_x + 15, y_pos))
             y_pos += 16
-        except Exception:
+        except Exception as exc:
             pass
 
     pygame.draw.line(screen, (60, 60, 80), (sidebar_x + 10, y_pos), (gui.screen_w - 10, y_pos))
@@ -353,3 +353,4 @@ def render_sidebar_status_message_metrics_controls(
         screen.blit(win_surf, (10, hud_y + 55))
 
     return y_pos
+

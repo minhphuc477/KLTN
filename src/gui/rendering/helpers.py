@@ -1,4 +1,4 @@
-"""Reusable GUI overlay render helpers extracted from gui_runner monolith."""
+﻿"""Reusable GUI overlay render helpers extracted from gui_runner monolith."""
 
 from __future__ import annotations
 
@@ -55,7 +55,7 @@ def render_topology_overlay(
 
     try:
         overlay = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
-    except Exception:
+    except Exception as exc:
         overlay = None
 
     node_pos = {}
@@ -93,7 +93,7 @@ def render_topology_overlay(
         color = edge_colors.get(edge_type, default_edge_color)
         try:
             pygame.draw.line(target_surface, color[:3], (int(x1), int(y1)), (int(x2), int(y2)), 3)
-        except Exception:
+        except Exception as exc:
             pygame.draw.line(surface, color[:3], (int(x1), int(y1)), (int(x2), int(y2)), 3)
 
     node_radius = max(8, tile_size // 3)
@@ -179,3 +179,4 @@ def render_solver_comparison_overlay(
 
     hint = small.render("Press Esc to close", True, (150, 150, 150))
     surface.blit(hint, (box_rect.x + 6, box_rect.y + box_rect.h - 18))
+

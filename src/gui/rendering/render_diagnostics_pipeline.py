@@ -1,4 +1,4 @@
-"""Render diagnostics and recovery helpers extracted from gui_runner._render."""
+﻿"""Render diagnostics and recovery helpers extracted from gui_runner._render."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ def handle_empty_frame_recovery(
                 try:
                     gui._auto_fit_zoom()
                     gui._center_view()
-                except Exception:
+                except Exception as exc:
                     pass
                 gui._auto_recenter_done = True
 
@@ -41,7 +41,7 @@ def handle_empty_frame_recovery(
             try:
                 map_w = gui.env.width if gui.env is not None else 0
                 map_h = gui.env.height if gui.env is not None else 0
-            except Exception:
+            except Exception as exc:
                 map_w = map_h = 0
             diag2 = small.render(
                 f"Tile: {gui.TILE_SIZE}px  ViewOffset: ({gui.view_offset_x},{gui.view_offset_y})",
@@ -51,7 +51,7 @@ def handle_empty_frame_recovery(
             diag3 = small.render(f"Map: {map_w}x{map_h}  View: {view_w}x{view_h}", True, (200, 200, 200))
             map_surface.blit(diag2, (10, ty + diag_text.get_height() + 8))
             map_surface.blit(diag3, (10, ty + diag_text.get_height() + 24))
-        except Exception:
+        except Exception as exc:
             pass
 
         try:
@@ -68,15 +68,16 @@ def handle_empty_frame_recovery(
                         logger.info("Recovered display after empty-frame sequence")
                     else:
                         gui._show_toast("Display recovery failed", 4.0, "error")
-                except Exception:
+                except Exception as exc:
                     logger.exception("Error during forced display reinit")
                 finally:
                     gui._consecutive_empty_frames = 0
-        except Exception:
+        except Exception as exc:
             logger.exception("Failed handling consecutive empty frames counter")
         return
 
     try:
         gui._consecutive_empty_frames = 0
-    except Exception:
+    except Exception as exc:
         pass
+

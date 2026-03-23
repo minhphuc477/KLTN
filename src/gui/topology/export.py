@@ -1,4 +1,4 @@
-"""Helpers for exporting current topology graph to DOT."""
+﻿"""Helpers for exporting current topology graph to DOT."""
 
 from pathlib import Path
 from typing import Any
@@ -30,7 +30,7 @@ def export_topology(gui: Any) -> None:
 
             try:
                 display_path = fname.relative_to(getattr(gui, "repo_root", Path.cwd()))
-            except Exception:
+            except Exception as exc:
                 display_path = fname
             gui._set_message(f"Topology exported to {display_path}")
             gui.topology_export_path = str(fname)
@@ -47,9 +47,10 @@ def export_topology(gui: Any) -> None:
                 f.write("}\n")
             try:
                 display_path = fname.relative_to(getattr(gui, "repo_root", Path.cwd()))
-            except Exception:
+            except Exception as exc:
                 display_path = fname
             gui._set_message(f"Topology exported to {display_path} (manual)\n{e}")
             gui.topology_export_path = str(fname)
     except ImportError:
         gui._set_message("NetworkX not available - cannot export DOT automatically", 4.0)
+

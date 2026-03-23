@@ -1,4 +1,4 @@
-"""Render diagnostics and map-overlay helpers extracted from gui_runner."""
+﻿"""Render diagnostics and map-overlay helpers extracted from gui_runner."""
 
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ def log_draw_ranges(
                 sample_tile,
                 sample_tile in getattr(gui, "images", {}),
             )
-    except Exception:
+    except Exception as exc:
         logger.exception("Failed to log draw ranges")
 
 
@@ -57,7 +57,7 @@ def render_empty_range_warning(
         font = gui.big_font if hasattr(gui, "big_font") else pygame.font.SysFont("Arial", 20, True)
         txt = font.render("RENDER RANGE EMPTY - CHECK OFFSETS", True, (255, 255, 255))
         gui.screen.blit(txt, (gui.screen_w // 2 - txt.get_width() // 2, gui.screen_h // 2 - txt.get_height() // 2))
-    except Exception:
+    except Exception as exc:
         pass
 
 
@@ -92,7 +92,7 @@ def render_jps_overlay(
         by = br * gui.TILE_SIZE + gui.TILE_SIZE // 2 - gui.view_offset_y
         try:
             pygame.draw.line(map_surface, (255, 180, 0, 180), (ax, ay), (bx, by), 2)
-        except Exception:
+        except Exception as exc:
             pygame.draw.line(map_surface, (255, 180, 0), (ax, ay), (bx, by), 2)
 
     for jr, jc in jumps:
@@ -135,5 +135,6 @@ def render_map_elites_overlay(
         blit_x = sidebar_x + 8
         blit_y = 120
         map_surface.blit(mini_surf, (blit_x - gui.view_offset_x, blit_y - gui.view_offset_y))
-    except Exception:
+    except Exception as exc:
         pass
+

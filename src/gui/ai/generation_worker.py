@@ -1,4 +1,4 @@
-"""Worker orchestration for AI dungeon generation."""
+﻿"""Worker orchestration for AI dungeon generation."""
 
 from src.gui.ai.generation_pipeline import (
     apply_generated_dungeon,
@@ -87,6 +87,7 @@ def run_ai_generation_worker(gui, logger):
             applied["width"],
             applied["unique_tiles"],
         )
-    except Exception as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError, ImportError, OSError) as exc:
         logger.exception("AI generation failed: %s", exc)
         gui._set_message(f"AI generation failed: {exc}")
+

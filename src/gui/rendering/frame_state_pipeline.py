@@ -1,4 +1,4 @@
-"""Per-frame state update and map-layer actor rendering helpers."""
+﻿"""Per-frame state update and map-layer actor rendering helpers."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ def update_frame_render_state(*, gui: Any, logger: Any) -> None:
         try:
             logger.debug("Processing deferred inventory refresh on main thread")
             gui._update_inventory_and_hud()
-        except Exception:
+        except Exception as exc:
             pass
         finally:
             gui.inventory_needs_refresh = False
@@ -71,3 +71,4 @@ def render_player_and_effects(*, gui: Any, map_surface: Any) -> None:
 
     if gui.effects:
         gui.effects.render(map_surface, gui.TILE_SIZE, (gui.view_offset_x, gui.view_offset_y))
+

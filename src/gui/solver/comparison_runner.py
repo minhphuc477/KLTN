@@ -1,4 +1,4 @@
-"""Helpers for background solver-comparison execution in GUI."""
+﻿"""Helpers for background solver-comparison execution in GUI."""
 
 from typing import Any
 
@@ -56,7 +56,7 @@ def run_solver_comparison(
 
                         # Always construct a fresh baseline solver for comparison.
                         temp_solver = StateSpaceAStar(gui.env)
-                    except Exception:
+                    except Exception as exc:
                         temp_solver = None
                     if temp_solver is None:
                         raise RuntimeError("State-space solver unavailable")

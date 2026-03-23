@@ -1,4 +1,4 @@
-"""Tile and marker sprite builders extracted from gui_runner."""
+﻿"""Tile and marker sprite builders extracted from gui_runner."""
 
 from __future__ import annotations
 
@@ -92,7 +92,7 @@ def build_tile_images(*, tile_size: int, color_map: Dict[int, Tuple[int, int, in
         )
         try:
             images[tile_id] = surface.convert_alpha()
-        except Exception:
+        except Exception as exc:
             images[tile_id] = surface
     return images
 
@@ -116,6 +116,7 @@ def build_stair_marker_sprite(*, tile_size: int, pygame: Any) -> tuple[Any, floa
 
     try:
         sprite = sprite.convert_alpha()
-    except Exception:
+    except Exception as exc:
         pass
     return sprite, 0.0
+
