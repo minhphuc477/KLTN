@@ -24,7 +24,7 @@ Python Implementation Notes:
 import multiprocessing as mp
 import heapq
 import logging
-from typing import Dict, List, Tuple, Optional, Set
+from typing import Any, Dict, List, Tuple, Optional, Set
 from dataclasses import dataclass
 from .validator import (
     GameState,
@@ -48,6 +48,7 @@ class WorkerResult:
     path: List[Tuple[int, int]]
     states_explored: int
     time_taken: float
+    error_message: str = ""
 
 
 def _heuristic_local(state: GameState, goal_pos: Optional[Tuple[int, int]]) -> float:
@@ -267,9 +268,25 @@ def _parallel_astar_worker(
                 f_score = g_score + _heuristic_local(new_state, goal_pos)
                 heapq.heappush(open_set, (f_score, counter, new_hash, new_state, path + [new_state.position]))
                 counter += 1
-    except Exception:
-        # Worker crashed before producing a result; report failure so parent does not block.
-        pass
+    except Exception as exc:
+        # Worker crashed before producing a result; include reason for diagnosis.
+        elapsed = time.time() - start_time
+        err = f"Worker {worker_id} crashed: {exc.__class__.__name__}: {exc}"
+        logger.exception(err)
+        try:
+            result_queue.put(
+                WorkerResult(
+                    worker_id=worker_id,
+                    success=False,
+                    path=[],
+                    states_explored=states_explored,
+                    time_taken=elapsed,
+                    error_message=err,
+                )
+            )
+        except Exception:
+            return
+        return
 
     elapsed = time.time() - start_time
     try:
@@ -403,6 +420,13 @@ class ParallelAStarSolver:
             return True, best_result.path, total_states
         
         total_states = sum(r.states_explored for r in results)
+        error_messages = [r.error_message for r in results if r.error_message]
+        if error_messages:
+            logger.warning(
+                "ParallelAStar: %d worker errors detected. First error: %s",
+                len(error_messages),
+                error_messages[0],
+            )
         logger.warning(f"ParallelAStar: No solution found. Total states: {total_states}")
         return False, [], total_states
     
@@ -428,7 +452,7 @@ class ParallelAStarSolver:
 # BENCHMARKING UTILITIES
 # ==========================================
 
-def benchmark_parallel_vs_sequential(env: ZeldaLogicEnv, start_state: GameState) -> Dict[str, any]:
+def benchmark_parallel_vs_sequential(env: ZeldaLogicEnv, start_state: GameState) -> Dict[str, Any]:
     """
     Compare parallel vs sequential A* performance.
     
@@ -441,7 +465,7 @@ def benchmark_parallel_vs_sequential(env: ZeldaLogicEnv, start_state: GameState)
     # Sequential A*
     sequential_solver = StateSpaceAStar(env)
     start = time.time()
-    seq_success, seq_path, seq_states = sequential_solver.solve()
+    _seq_success, _seq_path, seq_states = sequential_solver.solve()
     seq_time = time.time() - start
     
     # Parallel A*

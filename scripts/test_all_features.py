@@ -64,6 +64,31 @@ class FeatureTester:
     def __init__(self, quick_mode: bool = False):
         self.quick_mode = quick_mode
         self.results = {}
+
+    def _select_tests_for_mode(self):
+        """Return ordered test callables according to execution mode."""
+        all_tests = [
+            self.test_feature_1_seam_smoothing,
+            self.test_feature_2_collision_validator,
+            self.test_feature_3_style_transfer,
+            self.test_feature_4_fun_metrics,
+            self.test_feature_5_demo_recorder,
+            self.test_feature_6_global_state,
+            self.test_feature_7_big_rooms,
+            self.test_feature_8_lcm_lora,
+            self.test_feature_9_explainability,
+        ]
+
+        # Quick mode runs a representative subset for fast smoke checks.
+        if self.quick_mode:
+            return [
+                self.test_feature_1_seam_smoothing,
+                self.test_feature_2_collision_validator,
+                self.test_feature_6_global_state,
+                self.test_feature_9_explainability,
+            ]
+
+        return all_tests
     
     def test_feature_1_seam_smoothing(self):
         """Test seam smoothing functionality."""
@@ -225,9 +250,6 @@ class FeatureTester:
         print("\n=== Testing Feature 4: Fun Metrics ===")
         
         try:
-            # Create mock dungeon
-            dungeon_grid = np.ones((44, 44), dtype=int)
-            
             # Create mock mission graph
             mission_graph = nx.Graph()
             mission_graph.add_nodes_from([0, 1, 2, 3, 4])
@@ -353,18 +375,12 @@ class FeatureTester:
                 initial_value="high"
             )
             
-            # Add state transition
-            transition = StateTransition(
-                from_room=3,
-                trigger_condition="switch_pulled",
-                state_changes={"water_level": "low"},
-                affected_rooms={4, 5, 6}
-            )
+            affected_rooms = {4, 5, 6}
             manager.add_transition(
                 from_room=3,
                 trigger_condition="switch_pulled",
                 state_changes={"water_level": "low"},
-                affected_rooms={4, 5, 6}
+                affected_rooms=affected_rooms
             )
             
             # Apply transition
@@ -378,7 +394,7 @@ class FeatureTester:
             
             print(f"  ✓ Global state works ({elapsed:.3f}s)")
             print(f"  ✓ State change: {initial_state['water_level']} → {new_state['water_level']}")
-            print(f"  ✓ Affected rooms: {transition.affected_rooms}")
+            print(f"  ✓ Affected rooms: {sorted(affected_rooms)}")
             
             self.results['global_state'] = {
                 'status': 'PASS',
@@ -555,17 +571,10 @@ class FeatureTester:
         print("KLTN 9 Advanced Features - Comprehensive Test Suite")
         print("="*60)
         
-        tests = [
-            self.test_feature_1_seam_smoothing,
-            self.test_feature_2_collision_validator,
-            self.test_feature_3_style_transfer,
-            self.test_feature_4_fun_metrics,
-            self.test_feature_5_demo_recorder,
-            self.test_feature_6_global_state,
-            self.test_feature_7_big_rooms,
-            self.test_feature_8_lcm_lora,
-            self.test_feature_9_explainability,
-        ]
+        tests = self._select_tests_for_mode()
+
+        mode_name = "QUICK" if self.quick_mode else "FULL"
+        print(f"Mode: {mode_name} ({len(tests)} feature checks)")
         
         passed = 0
         failed = 0
@@ -604,7 +613,12 @@ if __name__ == "__main__":
     parser.add_argument("--quick", action="store_true", help="Run quick smoke tests")
     parser.add_argument("--thorough", action="store_true", help="Run thorough validation")
     args = parser.parse_args()
+
+    if args.quick and args.thorough:
+        print("Both --quick and --thorough specified; using --thorough (full suite).")
+
+    quick_mode = bool(args.quick and not args.thorough)
     
-    tester = FeatureTester(quick_mode=args.quick)
+    tester = FeatureTester(quick_mode=quick_mode)
     exit_code = tester.run_all_tests()
     sys.exit(exit_code)

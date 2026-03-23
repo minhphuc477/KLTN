@@ -1,10 +1,21 @@
 """Helpers for GUI temp-folder operations and cleanup orchestration."""
 
+import os
+import tempfile
 from typing import Any, Tuple
 
+from src.gui.runtime.temp_file_tools import (
+    delete_files as _delete_files_helper,
+    find_temp_files as _find_temp_files_helper,
+    list_existing_paths as _list_existing_paths_helper,
+    open_folder as _open_folder_helper,
+)
 
-def open_temp_folder(gui: Any, tempfile_module: Any, open_folder_helper: Any) -> None:
+
+def open_temp_folder(gui: Any, tempfile_module: Any = None, open_folder_helper: Any = None) -> None:
     """Open OS temp folder and set user-facing message."""
+    tempfile_module = tempfile_module or tempfile
+    open_folder_helper = open_folder_helper or _open_folder_helper
     temp_dir = tempfile_module.gettempdir()
     ok, err = open_folder_helper(temp_dir)
     if ok:
@@ -15,11 +26,15 @@ def open_temp_folder(gui: Any, tempfile_module: Any, open_folder_helper: Any) ->
 
 def collect_temp_file_candidates(
     gui: Any,
-    tempfile_module: Any,
-    list_existing_paths_helper: Any,
-    find_temp_files_helper: Any,
+    tempfile_module: Any = None,
+    list_existing_paths_helper: Any = None,
+    find_temp_files_helper: Any = None,
 ) -> Tuple[list, list]:
     """Collect tracked and stale temp files used by solver/preview/watchdog flows."""
+    tempfile_module = tempfile_module or tempfile
+    list_existing_paths_helper = list_existing_paths_helper or _list_existing_paths_helper
+    find_temp_files_helper = find_temp_files_helper or _find_temp_files_helper
+
     tracked = list_existing_paths_helper(
         [
             getattr(gui, "solver_outfile", None),
@@ -46,13 +61,18 @@ def collect_temp_file_candidates(
 
 def delete_temp_files(
     gui: Any,
-    os_module: Any,
-    logger: Any,
-    collect_candidates_fn: Any,
-    list_existing_paths_helper: Any,
-    delete_files_helper: Any,
+    os_module: Any = None,
+    logger: Any = None,
+    collect_candidates_fn: Any = None,
+    list_existing_paths_helper: Any = None,
+    delete_files_helper: Any = None,
 ) -> None:
     """Delete stale temp files while preserving active solver/preview artifacts."""
+    os_module = os_module or os
+    list_existing_paths_helper = list_existing_paths_helper or _list_existing_paths_helper
+    delete_files_helper = delete_files_helper or _delete_files_helper
+    collect_candidates_fn = collect_candidates_fn or (lambda: collect_temp_file_candidates(gui))
+
     tracked, stale = collect_candidates_fn()
     active_tracked = set()
     if getattr(gui, "solver_running", False):
@@ -100,5 +120,6 @@ def delete_temp_files(
         msg += f", skipped {skipped} active"
     if failures:
         msg += f", {len(failures)} failed"
-        logger.warning("Temp cleanup failures: %s", failures[:3])
+        if logger is not None:
+            logger.warning("Temp cleanup failures: %s", failures[:3])
     gui._set_message(msg, 3.0)

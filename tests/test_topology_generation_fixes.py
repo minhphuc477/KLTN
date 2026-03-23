@@ -1,4 +1,4 @@
-"""
+﻿"""
 Test Suite for Topology Generation Bug Fixes
 ===========================================
 
@@ -319,7 +319,7 @@ class TestIntegrationPipeline:
     
     def test_topology_validation(self):
         """Test that generated topologies are valid."""
-        from src.data.vglc_utils import validate_topology, filter_virtual_nodes
+        from src.zelda_data.vglc_utils import validate_topology, filter_virtual_nodes
         
         target_curve = [0.3, 0.5, 0.7, 0.9]
         
@@ -353,3 +353,4 @@ if __name__ == "__main__":
     
     # Run tests with pytest
     pytest.main([__file__, "-v", "-s"])
+

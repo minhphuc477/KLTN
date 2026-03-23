@@ -326,7 +326,7 @@ class AgentSimulator:
             
             # Explore neighbors
             for neighbor in self.graph.neighbors(current.position):
-                can_go, new_state, edge_type = self.can_traverse(
+                can_go, new_state, _edge_type = self.can_traverse(
                     current.position, neighbor, current
                 )
                 

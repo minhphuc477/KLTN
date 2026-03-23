@@ -965,7 +965,6 @@ class GraphFingerprinter:
         # Step 2: Use spatial layout heuristics
         # Graph traversal order often matches spatial layout
         unmatched_nodes = [n for n in graph.nodes() if n not in node_to_room]
-        unmatched_rooms = [r for r in rooms if r.position not in room_to_node]
         
         # BFS from start to assign remaining
         if node_to_room:
@@ -1302,7 +1301,7 @@ class MLFeatureExtractor:
         
         # Compute eigenvectors
         try:
-            eigenvalues, eigenvectors = np.linalg.eigh(L)
+            _eigenvalues, eigenvectors = np.linalg.eigh(L)
             
             # Skip first eigenvector (constant), take next k_dim
             tpe = eigenvectors[:, 1:1+k_dim]

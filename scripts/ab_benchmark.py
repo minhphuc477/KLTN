@@ -1,11 +1,11 @@
-"""A/B benchmark for StateSpaceAStar priority modes using VGLC dungeons.
+﻿"""A/B benchmark for StateSpaceAStar priority modes using VGLC dungeons.
 
 Outputs CSV report to artifacts/ab_benchmark_<ts>.csv and prints a markdown summary.
 """
 import time
 import csv
 from pathlib import Path
-from src.data.zelda_core import ZeldaDungeonAdapter
+from src.zelda_data.zelda_core import ZeldaDungeonAdapter
 from src.simulation import StateSpaceAStar
 
 DATA_ROOT = Path('Data/The Legend of Zelda')
@@ -56,3 +56,4 @@ for d in sorted(set(r['dungeon'] for r in runs)):
         print(f"- {r['mode']}: success={r['success']}, states={r['states']}, time={r['time_s']:.2f}s, path_len={r['path_len']}")
 
 print(f"\nCSV results: {fname}")
+

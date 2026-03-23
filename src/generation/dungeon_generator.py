@@ -357,7 +357,7 @@ class DungeonGenerator:
             room = self.rooms[i]
             
             # Find empty floor tile
-            for attempt in range(20):
+            for _attempt in range(20):
                 r = self.rng.randint(room.y, room.y + room.height - 1)
                 c = self.rng.randint(room.x, room.x + room.width - 1)
                 
@@ -404,7 +404,7 @@ class DungeonGenerator:
                 if placed >= num_enemies:
                     break
                 
-                for attempt in range(10):
+                for _attempt in range(10):
                     r = self.rng.randint(room.y, room.y + room.height - 1)
                     c = self.rng.randint(room.x, room.x + room.width - 1)
                     
@@ -425,7 +425,7 @@ class DungeonGenerator:
         for _ in range(num_blocks):
             room = self.rng.choice(self.rooms)
             
-            for attempt in range(10):
+            for _attempt in range(10):
                 r = self.rng.randint(room.y, room.y + room.height - 1)
                 c = self.rng.randint(room.x, room.x + room.width - 1)
                 

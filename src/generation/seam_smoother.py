@@ -250,9 +250,6 @@ class SeamSmoother:
         # Simple bilateral approximation using domain + range Gaussians
         # For full bilateral, use OpenCV's cv2.bilateralFilter
         
-        # Domain filter (spatial smoothing)
-        spatial_filtered = gaussian_filter(region, sigma=self.config.sigma_spatial)
-        
         # Range filter (value-based smoothing)
         # Only smooth similar values together
         result = region.copy()

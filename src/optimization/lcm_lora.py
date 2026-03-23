@@ -345,7 +345,7 @@ class LCMLoRAFastSampler:
         condition = condition.to(device=device, dtype=dtype)
         
         # LCM sampling loop (few steps)
-        for i, t in enumerate(self.scheduler.timesteps):
+        for t in self.scheduler.timesteps:
             # Expand timestep
             t_tensor = torch.tensor([t], device=device, dtype=torch.long)
             

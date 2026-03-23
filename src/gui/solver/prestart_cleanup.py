@@ -7,7 +7,13 @@ def cleanup_preview_before_solver_start(gui: Any, logger: Any, os_module: Any) -
     """Stop preview workers/files so new solve starts from a clean state."""
     try:
         preview_proc = getattr(gui, "preview_proc", None)
-        if preview_proc and preview_proc.is_alive():
+        preview_alive = False
+        try:
+            preview_alive = bool(preview_proc and preview_proc.is_alive())
+        except Exception:
+            preview_alive = False
+
+        if preview_alive:
             logger.info(
                 "DEBUG_SOLVER: Terminating existing preview process pid=%s",
                 getattr(preview_proc, "pid", None),

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 Build Paired Dataset (Graph + Image) for Dual-Stream Training
 ==============================================================
@@ -32,7 +32,7 @@ import numpy as np
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.data.zelda_core import ZeldaDungeonAdapter
+from src.zelda_data.zelda_core import ZeldaDungeonAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -279,7 +279,7 @@ def main():
         verbose=not args.quiet,
     )
     
-    print(f"\n✓ Dataset built successfully!")
+    print(f"\nâœ“ Dataset built successfully!")
     print(f"  Dungeons: {stats['dungeons_processed']}")
     print(f"  Rooms: {stats['rooms_saved']}")
     print(f"  Graph nodes: {stats['total_nodes']}")
@@ -289,3 +289,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+

@@ -1,4 +1,4 @@
-"""
+﻿"""
 ZELDA VALIDATION PIPELINE
 =========================
 Main orchestration script for validating original Zelda dungeon data.
@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 # Import from CANONICAL source: zelda_core.py
 # This replaces the old adapter.py imports
-from src.data.zelda_core import (
+from src.zelda_data.zelda_core import (
     ZeldaDungeonAdapter,
     DungeonStitcher,
     SEMANTIC_PALETTE,
@@ -659,3 +659,4 @@ def main():
 if __name__ == "__main__":
     success = main()
     sys.exit(0 if success else 1)
+

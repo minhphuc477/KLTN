@@ -132,7 +132,7 @@ class ThemeManager:
         from src.core.definitions import SEMANTIC_PALETTE
         
         tile_mappings = {}
-        for name, semantic_id in SEMANTIC_PALETTE.items():
+        for _name, semantic_id in SEMANTIC_PALETTE.items():
             tile_mappings[semantic_id] = TileThemeMapping(
                 semantic_id=semantic_id,
                 sprite_id=semantic_id,  # 1:1 mapping for default

@@ -146,7 +146,7 @@ class DungeonReplayEngine:
         solution_path: Optional[List[Tuple[int, int]]] = None,
         config: Optional[ReplayConfig] = None,
         solver_result: Optional[Dict[str, Any]] = None,
-        telemetry_collector: Optional["PlaytestTelemetryCollector"] = None,
+        telemetry_collector=None,
         telemetry_session_id: Optional[str] = None,
     ):
         """
@@ -791,7 +791,6 @@ class DungeonReplayEngine:
     def _render_hud(self) -> None:
         """Render the HUD sidebar."""
         hud_x = self.screen.get_width() - self.config.hud_width
-        hud_rect = pygame.Rect(hud_x, 0, self.config.hud_width, self.screen.get_height())
         
         # Background
         hud_surface = Surface((self.config.hud_width, self.screen.get_height()), pygame.SRCALPHA)
@@ -1052,7 +1051,7 @@ def replay_solution(
     dungeon_grid: np.ndarray,
     solution_path: List[Tuple[int, int]],
     config: Optional[ReplayConfig] = None,
-    telemetry_collector: Optional["PlaytestTelemetryCollector"] = None,
+    telemetry_collector=None,
     telemetry_session_id: Optional[str] = None,
 ) -> None:
     """

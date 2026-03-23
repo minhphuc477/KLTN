@@ -1,4 +1,4 @@
-"""
+﻿"""
 VGLC Compliance Demonstration
 ==============================
 
@@ -16,7 +16,7 @@ import networkx as nx
 import numpy as np
 from pathlib import Path
 
-from src.data.vglc_utils import (
+from src.zelda_data.vglc_utils import (
     # Parsing
     parse_node_label,
     parse_node_attributes,
@@ -56,7 +56,7 @@ def demo_basic_compliance():
     G.add_node(3, label="b")       # Boss
     G.add_node(4, label="t")       # Triforce (goal)
     
-    G.add_edge(0, 1, label="")     # Virtual → Physical start (open)
+    G.add_edge(0, 1, label="")     # Virtual â†’ Physical start (open)
     G.add_edge(1, 2, label="")     # Open door
     G.add_edge(2, 3, label="k")    # Key-locked door
     G.add_edge(3, 4, label="l")    # Soft-locked (shutters after boss)
@@ -94,21 +94,21 @@ def demo_goal_validation():
     print("DEMO 2: Goal Subgraph Validation")
     print("=" * 70)
     
-    # Valid goal subgraph (Boss → Triforce)
-    print("\n✅ Valid Pattern: Boss → Triforce")
+    # Valid goal subgraph (Boss â†’ Triforce)
+    print("\nâœ… Valid Pattern: Boss â†’ Triforce")
     G_valid = nx.DiGraph()
     G_valid.add_node(1, label="e")
     G_valid.add_node(2, label="b")    # Boss
     G_valid.add_node(3, label="t")    # Triforce (leaf)
     G_valid.add_edge(1, 2, label="k") # Key-locked boss door
-    G_valid.add_edge(2, 3, label="")  # Open boss → triforce
+    G_valid.add_edge(2, 3, label="")  # Open boss â†’ triforce
     
     valid, msg = validate_goal_subgraph(G_valid)
     print(f"   Result: {valid}")
     print(f"   Message: {msg}")
     
     # Invalid: no boss
-    print("\n❌ Invalid Pattern: Missing Boss")
+    print("\nâŒ Invalid Pattern: Missing Boss")
     G_invalid = nx.DiGraph()
     G_invalid.add_node(1, label="e")
     G_invalid.add_node(2, label="t")  # Triforce without boss
@@ -119,7 +119,7 @@ def demo_goal_validation():
     print(f"   Message: {msg}")
     
     # Invalid: triforce not leaf (has outgoing edge)
-    print("\n❌ Invalid Pattern: Triforce Not Leaf")
+    print("\nâŒ Invalid Pattern: Triforce Not Leaf")
     G_invalid2 = nx.DiGraph()
     G_invalid2.add_node(1, label="b")
     G_invalid2.add_node(2, label="t")
@@ -144,32 +144,32 @@ def demo_dimension_validation():
     print(f"  Shape (numpy): {ROOM_SHAPE}")
     print(f"  Aspect Ratio: {ROOM_WIDTH_TILES}:{ROOM_HEIGHT_TILES}")
     
-    # Valid room (11×16)
-    print("\n✅ Valid Room (11×16):")
+    # Valid room (11Ã—16)
+    print("\nâœ… Valid Room (11Ã—16):")
     room_valid = np.zeros(ROOM_SHAPE, dtype=int)
     valid, msg = validate_room_dimensions(room_valid)
     print(f"   Shape: {room_valid.shape}")
     print(f"   Valid: {valid}")
     print(f"   Message: {msg}")
     
-    # Invalid room (square 16×16)
-    print("\n❌ Invalid Room (16×16 - SQUARE):")
+    # Invalid room (square 16Ã—16)
+    print("\nâŒ Invalid Room (16Ã—16 - SQUARE):")
     room_invalid = np.zeros((16, 16), dtype=int)
     valid, msg = validate_room_dimensions(room_invalid)
     print(f"   Shape: {room_invalid.shape}")
     print(f"   Valid: {valid}")
     print(f"   Message: {msg}")
     
-    # Valid pixel image (176×256)
-    print("\n✅ Valid Pixel Image (176×256):")
+    # Valid pixel image (176Ã—256)
+    print("\nâœ… Valid Pixel Image (176Ã—256):")
     image_valid = np.zeros((ROOM_HEIGHT_PX, ROOM_WIDTH_PX, 3), dtype=np.uint8)
     valid, msg = validate_pixel_dimensions(image_valid)
     print(f"   Shape: {image_valid.shape}")
     print(f"   Valid: {valid}")
     print(f"   Message: {msg}")
     
-    # Invalid pixel image (square 256×256)
-    print("\n❌ Invalid Pixel Image (256×256 - SQUARE):")
+    # Invalid pixel image (square 256Ã—256)
+    print("\nâŒ Invalid Pixel Image (256Ã—256 - SQUARE):")
     image_invalid = np.zeros((256, 256, 3), dtype=np.uint8)
     valid, msg = validate_pixel_dimensions(image_invalid)
     print(f"   Shape: {image_invalid.shape}")
@@ -233,7 +233,7 @@ def demo_realistic_dungeon():
     G.add_node(8, label="t")        # Triforce piece
     
     # Connections (realistic edge types)
-    G.add_edge(0, 1, label="")      # Virtual → Entry
+    G.add_edge(0, 1, label="")      # Virtual â†’ Entry
     G.add_edge(1, 2, label="")      # Open
     G.add_edge(2, 3, label="")      # Open
     G.add_edge(3, 4, label="b")     # Bombable (secret)
@@ -242,7 +242,7 @@ def demo_realistic_dungeon():
     G.add_edge(6, 7, label="k")     # Boss key door
     G.add_edge(7, 8, label="l")     # Soft-lock (shutters after boss)
     
-    print("\n📊 Dungeon Statistics:")
+    print("\nðŸ“Š Dungeon Statistics:")
     print(f"   Total Nodes: {G.number_of_nodes()}")
     print(f"   Edges: {G.number_of_edges()}")
     
@@ -251,11 +251,11 @@ def demo_realistic_dungeon():
     print(f"   Physical Start: Node {start}")
     
     # Convert to physical graph
-    G_physical, start_node = convert_to_physical_graph(G, validate=True)
+    G_physical, _start_node = convert_to_physical_graph(G, validate=True)
     print(f"   Physical Nodes: {G_physical.number_of_nodes()}")
     
     # Validate
-    print("\n📋 Validation Report:")
+    print("\nðŸ“‹ Validation Report:")
     report = validate_topology(G)
     print(f"   Valid: {report.is_valid}")
     print(f"   Boss: {report.num_boss}")
@@ -278,21 +278,21 @@ def demo_real_vglc_data():
     level1_graph = Path("Data/The Legend of Zelda/Graph Processed/LoZ_1.dot")
     
     if level1_text.exists():
-        print("\n✅ Found VGLC Level 1 text data")
+        print("\nâœ… Found VGLC Level 1 text data")
         with open(level1_text, 'r') as f:
             lines = f.readlines()
         print(f"   Text file: {len(lines)} lines")
         print(f"   File size: {level1_text.stat().st_size} bytes")
     else:
-        print("\n⚠️  VGLC text data not found")
+        print("\nâš ï¸  VGLC text data not found")
     
     if level1_graph.exists():
-        print("\n✅ Found VGLC Level 1 graph data")
+        print("\nâœ… Found VGLC Level 1 graph data")
         try:
             import pydot
             G = nx.DiGraph(nx.drawing.nx_pydot.read_dot(str(level1_graph)))
             
-            print(f"\n📊 Level 1 Graph Statistics:")
+            print(f"\nðŸ“Š Level 1 Graph Statistics:")
             print(f"   Nodes: {G.number_of_nodes()}")
             print(f"   Edges: {G.number_of_edges()}")
             
@@ -308,7 +308,7 @@ def demo_real_vglc_data():
         except ImportError:
             print("   (pydot not available - install with: pip install pydot)")
     else:
-        print("\n⚠️  VGLC graph data not found")
+        print("\nâš ï¸  VGLC graph data not found")
 
 
 def main():
@@ -328,7 +328,7 @@ def main():
     demo_real_vglc_data()
     
     print("\n" + "=" * 70)
-    print("✅ VGLC Compliance Demo Complete!")
+    print("âœ… VGLC Compliance Demo Complete!")
     print("=" * 70)
     print("\nFor more information, see:")
     print("  - docs/VGLC_DATA_RESEARCH.md")
@@ -340,3 +340,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

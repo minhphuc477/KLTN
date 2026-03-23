@@ -31,7 +31,7 @@ def compute_cbs_fitness(
     
     env_c = ZeldaLogicEnv(semantic_grid=grid.copy())
     cbs = CognitiveBoundedSearch(env_c, persona=persona, timeout=cbs_timeout, seed=seed)
-    success_c, path_c, states_c, metrics = cbs.solve()
+    success_c, path_c, _states_c, metrics = cbs.solve()
     
     # Confusion Ratio
     astar_steps = len(path_a) if success_a and len(path_a) > 0 else float('inf')

@@ -172,7 +172,7 @@ def demo_style_token():
     print(f"\n🔥 Generating dungeon with style: {STYLE_DESCRIPTIONS[style_id]}")
     
     batch_size = 4  # Simulate 4 rooms
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    _device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
     # Dummy inputs
     neighbor_latents = {

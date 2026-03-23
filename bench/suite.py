@@ -74,7 +74,7 @@ def run_suite(out_csv='bench/results.csv'):
                 else:
                     res = jps(grid, (0,0), (len(grid)-1,len(grid)-1), allow_diagonal=allow_diag)
                     if len(res) == 3:
-                        path, nodes, trace = res
+                        path, nodes, _trace = res
                     else:
                         path, nodes = res
                 dt = time.time() - t0

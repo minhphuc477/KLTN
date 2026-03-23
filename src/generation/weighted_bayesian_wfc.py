@@ -72,7 +72,7 @@ class TilePrior:
         key = (neighbor_id, direction)
         if key in self.adjacency_counts:
             # CORRECTED: Normalize only over counts for this specific direction
-            total = sum(v for (nid, d), v in self.adjacency_counts.items() if d == direction)
+            total = sum(v for (_nid, d), v in self.adjacency_counts.items() if d == direction)
             return self.adjacency_counts[key] / total if total > 0 else 0.0
         return 0.0
 
@@ -435,8 +435,6 @@ class WeightedBayesianWFC:
             
             # Update neighbor probabilities based on adjacency
             for i, neighbor_tile_id in enumerate(self.tile_ids):
-                neighbor_prior = self.tile_priors[neighbor_tile_id]
-                
                 # Adjacency compatibility
                 adjacency_prob = prior.get_adjacency_probability(neighbor_tile_id, direction)
                 

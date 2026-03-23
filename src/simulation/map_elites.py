@@ -1,4 +1,4 @@
-"""MAP-Elites evaluator for Zelda dungeons.
+﻿"""MAP-Elites evaluator for Zelda dungeons.
 
 Provides a minimal MAP-Elites evaluator that can operate on a list of
 stitched dungeons (or dungeon-like objects exposing a 2D semantic grid).
@@ -24,7 +24,7 @@ import networkx as nx
 from src.core.definitions import SEMANTIC_PALETTE, parse_edge_type_tokens
 
 try:
-    from src.data.zelda_core import DungeonSolver
+    from src.zelda_data.zelda_core import DungeonSolver
 except Exception:
     DungeonSolver = None
 
@@ -589,18 +589,19 @@ def generate_diversity_report(
 def _classify_diversity(score: float) -> str:
     """Classify diversity level."""
     if score >= 0.35:
-        return "HEALTHY DIVERSITY ✓"
+        return "HEALTHY DIVERSITY âœ“"
     elif score >= 0.20:
         return "MODERATE DIVERSITY"
     else:
-        return "LOW DIVERSITY (Mode Collapse Risk) ✗"
+        return "LOW DIVERSITY (Mode Collapse Risk) âœ—"
 
 
 def _classify_coverage(coverage: float) -> str:
     """Classify feature space coverage."""
     if coverage >= 0.15:
-        return "GOOD COVERAGE ✓"
+        return "GOOD COVERAGE âœ“"
     elif coverage >= 0.05:
         return "MODERATE COVERAGE"
     else:
-        return "LOW COVERAGE ✗"
+        return "LOW COVERAGE âœ—"
+

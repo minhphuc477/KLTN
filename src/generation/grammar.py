@@ -56,6 +56,8 @@ Usage:
     edge_index, node_features = graph.to_tensor()
 """
 
+# pylint: disable=redefined-outer-name,protected-access,logging-fstring-interpolation,unused-argument
+
 import random
 import logging
 from typing import ClassVar, Dict, List, Tuple, Optional, Set, Any
@@ -66,6 +68,11 @@ import math
 
 import torch
 from torch import Tensor
+from src.generation.grammar_validators import (
+    validate_skill_chains,
+    validate_battery_reachability,
+    validate_resource_loops,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -514,7 +521,7 @@ class MissionGraph:
         # Compute BFS distances from goal (reverse)
         dist_to_goal = self._bfs_distances(goal_id)
         
-        max_dist = max(max(dist_from_start.values(), default=1), 1)
+        max_dist = max([*dist_from_start.values(), 1])
         
         for nid in node_ids:
             idx = id_to_idx[nid]
@@ -1375,7 +1382,7 @@ class MissionGrammar:
             AddArenaRule(),  # Pacing: Combat shutters
             AddSectorRule(),  # Structure: Thematic zones
             AddEntangledBranchesRule(),  # Design: Cross-branch dependencies
-            AddHazardGateRule(),  # Design: Risky paths with protection
+            AddHazardGateRule(),  # Design: Risky paths with protection (soft gate)
             SplitRoomRule(),  # Geometry: Virtual room layers
             
             # ========================================================
@@ -2413,7 +2420,6 @@ class MergeRule(ProductionRule):
     
     def apply(self, graph: MissionGraph, context: Dict[str, Any]) -> MissionGraph:
         """Add a loop-closure edge between two separate branches."""
-        rng = context.get('rng') or random
         start = graph.get_start_node()
         goal = graph.get_goal_node()
         protected_ids = {
@@ -2566,7 +2572,6 @@ class AddBossGauntlet(ProductionRule):
     
     def apply(self, graph: MissionGraph, context: Dict[str, Any]) -> MissionGraph:
         """Insert Boss Door before Goal, spawn Big Key far away."""
-        rng = context.get('rng') or random
         graph.sanitize()
         
         # Find goal node
@@ -3100,7 +3105,7 @@ class AddTeleportRule(ProductionRule):
         
         # Check if any nodes are topologically distant
         nodes = list(graph.nodes.keys())
-        for i, node1 in enumerate(nodes[:len(nodes)//2]):
+        for node1 in nodes[:len(nodes)//2]:
             for node2 in nodes[len(nodes)//2:]:
                 dist = graph.get_shortest_path_length(node1, node2)
                 if dist >= 4:  # Far enough to warrant teleport
@@ -3109,7 +3114,6 @@ class AddTeleportRule(ProductionRule):
     
     def apply(self, graph: MissionGraph, context: Dict[str, Any]) -> MissionGraph:
         """Add teleport/warp between distant nodes."""
-        rng = context.get('rng') or random
         
         # Find two nodes that are topologically far but could use a shortcut
         nodes = list(graph.nodes.keys())
@@ -3171,7 +3175,6 @@ class PruneGraphRule(ProductionRule):
     
     def apply(self, graph: MissionGraph, context: Dict[str, Any]) -> MissionGraph:
         """Simplify the graph by pruning empty chains."""
-        rng = context.get('rng') or random
         
         empty_chains = self._find_empty_chains(graph)
         if not empty_chains:
@@ -4147,6 +4150,19 @@ class AddHazardGateRule(ProductionRule):
         return graph
 
 
+class SoftGateRule(AddHazardGateRule):
+    """
+    Compatibility alias for reviewer terminology: "soft gate".
+
+    Behavior is identical to AddHazardGateRule and models optional
+    risk-reward traversal with a mitigation item path.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.name = "SoftGate"
+
+
 class SplitRoomRule(ProductionRule):
     """
     ADVANCED RULE #10: Virtual Room Layering (Balconies/Basements)
@@ -4351,7 +4367,6 @@ class AddPacingBreakerRule(ProductionRule):
     
     def apply(self, graph: MissionGraph, context: Dict[str, Any]) -> MissionGraph:
         """Insert sanctuary room after tension chain."""
-        rng = context.get('rng') or random
         
         chains = graph.detect_high_tension_chains(min_length=3)
         if not chains:
@@ -4621,7 +4636,7 @@ class AddMultiLockRule(ProductionRule):
         selected_branches = rng.sample(branches, min(num_switches, len(branches)))
         switch_ids = []
         
-        for i, branch in enumerate(selected_branches):
+        for branch in selected_branches:
             if not branch:
                 continue
             
@@ -4746,7 +4761,7 @@ class AddItemShortcutRule(ProductionRule):
         
         # Prefer furthest item
         candidates.sort(key=lambda x: x[1], reverse=True)
-        item_node, original_dist = candidates[0]
+        item_node, _original_dist = candidates[0]
         
         # Find node in start area (within 2 hops of start)
         start_neighbors = graph.get_successors(start.id, depth=2)
@@ -4855,94 +4870,7 @@ class PruneDeadEndRule(ProductionRule):
 # VALIDATION METHODS FOR WAVE 3 RULES
 # ============================================================================
 
-def validate_skill_chains(graph: MissionGraph) -> bool:
-    """
-    Ensure tutorial sequences are properly ordered.
-    
-    Returns:
-        True if all skill chains have proper difficulty progression
-    """
-    graph.sanitize()
-    tutorial_nodes = [n for n in graph.nodes.values() if n.is_tutorial]
-    pedagogical_types = {NodeType.COMBAT_PUZZLE, NodeType.COMPLEX_PUZZLE}
-    
-    for tutorial in tutorial_nodes:
-        # Check nearest pedagogical successors only.
-        successors = [
-            n for n in graph.get_successors(tutorial.id, depth=3)
-            if n.node_type in pedagogical_types
-        ]
-        if len(successors) < 2:
-            continue
-
-        successors.sort(key=lambda n: graph.get_shortest_path_length(tutorial.id, n.id))
-        first, second = successors[0], successors[1]
-        if first.difficulty > second.difficulty:
-            logger.warning(f"Skill chain from {tutorial.id} has improper difficulty progression")
-            return False
-    
-    return True
-
-
-def validate_battery_reachability(graph: MissionGraph) -> bool:
-    """
-    Ensure all switches in battery are reachable before locked door.
-    
-    Returns:
-        True if all battery patterns are valid
-    """
-    graph.sanitize()
-    start = graph.get_start_node()
-    if not start:
-        return True
-    
-    # Find battery-locked edges
-    battery_edges = [e for e in graph.edges if e.battery_id is not None]
-    
-    for edge in battery_edges:
-        required_switches = edge.switches_required
-        
-        for switch_id in required_switches:
-            # Check if switch is reachable before the locked edge
-            reachable = graph.get_reachable_nodes(start.id, excluded_edges={(edge.source, edge.target)})
-            if switch_id not in reachable:
-                logger.warning(f"Battery switch {switch_id} not reachable before lock {edge.source}->{edge.target}")
-                return False
-    
-    return True
-
-
-def validate_resource_loops(graph: MissionGraph) -> bool:
-    """
-    Ensure resource farms are reachable before their gates.
-    
-    Returns:
-        True if all resource farms are properly placed
-    """
-    graph.sanitize()
-    start = graph.get_start_node()
-    if not start:
-        return True
-    
-    # Find resource farms
-    farms = [n for n in graph.nodes.values() if n.node_type == NodeType.RESOURCE_FARM]
-    
-    for farm in farms:
-        resource = farm.drops_resource
-        if not resource:
-            continue
-        
-        # Find gates requiring this resource
-        gates = [e for e in graph.edges if e.item_required == resource]
-        
-        for gate in gates:
-            # Verify farm is reachable before gate
-            reachable = graph.get_reachable_nodes(start.id, excluded_edges={(gate.source, gate.target)})
-            if farm.id not in reachable:
-                logger.warning(f"Resource farm {farm.id} ({resource}) not reachable before gate {gate.source}->{gate.target}")
-                return False
-    
-    return True
+# Implementations extracted to src.generation.grammar_validators.
 
 
 # ============================================================================

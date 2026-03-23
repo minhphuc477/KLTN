@@ -36,6 +36,10 @@ def render_frame(
     render_preview_layer_fn,
 ):
     """Render one GUI frame preserving legacy draw order and diagnostics behavior."""
+    if getattr(gui, "env", None) is None:
+        logger.debug("render_frame skipped: gui.env is not initialized")
+        return
+
     gui.screen.fill((25, 25, 35))
 
     map_h, map_w = gui.env.height, gui.env.width

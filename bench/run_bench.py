@@ -1,5 +1,15 @@
 """Simple benchmark runner for grid solvers. Produces CSV-like stdout for later import into plots."""
 import time
+from pathlib import Path
+import sys
+
+
+# Allow running as `python bench/run_bench.py` from repo root.
+_THIS_DIR = Path(__file__).resolve().parent
+_REPO_ROOT = _THIS_DIR.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
 from bench.grid_solvers import astar, jps
 
 
@@ -26,14 +36,10 @@ def run_simple_bench():
     print(f"solver,grid_size,ob_ratio,time_sec,nodes_expanded,path_len")
     print(f"astar,{len(grid)},{0.12},{dt:.4f},{nodes},{len(path) if path else -1}")
 
-    # JPS placeholder try/except
-    try:
-        t0 = time.time()
-        path, nodes = jps(grid, start, goal)
-        dt = time.time() - t0
-        print(f"jps,{len(grid)},{0.12},{dt:.4f},{nodes},{len(path) if path else -1}")
-    except NotImplementedError:
-        print("jps,not_implemented")
+    t0 = time.time()
+    path, nodes = jps(grid, start, goal)
+    dt = time.time() - t0
+    print(f"jps,{len(grid)},{0.12},{dt:.4f},{nodes},{len(path) if path else -1}")
 
 
 if __name__ == '__main__':

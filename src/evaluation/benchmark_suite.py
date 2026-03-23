@@ -1,4 +1,4 @@
-"""
+﻿"""
 Research-Oriented Benchmark Suite for Zelda Dungeon Generation.
 
 This module provides a reproducible protocol to compare generated mission graphs
@@ -43,8 +43,8 @@ from src.core.definitions import (
     parse_edge_type_tokens,
     parse_node_label_tokens,
 )
-from src.data.zelda_core import DOTParser
-from src.data.vglc_utils import filter_virtual_nodes, get_physical_start_node
+from src.zelda_data.zelda_core import DOTParser
+from src.zelda_data.vglc_utils import filter_virtual_nodes, get_physical_start_node
 from src.generation.evolutionary_director import (
     EvolutionaryTopologyGenerator,
     networkx_to_mission_graph,
@@ -2298,3 +2298,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

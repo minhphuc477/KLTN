@@ -1,0 +1,63 @@
+"""Edge-type and traversal helpers extracted from validator monolith."""
+
+from __future__ import annotations
+
+from typing import Any, Callable, Dict, List, Optional
+
+from src.core.definitions import parse_edge_type_tokens, select_primary_edge_type
+
+
+def edge_constraints_from_data(edge_data: Optional[Dict[str, Any]]) -> List[str]:
+    """Return canonical edge constraints from edge attributes."""
+    if not edge_data:
+        return ["open"]
+    return parse_edge_type_tokens(
+        label=edge_data.get("label", ""),
+        edge_type=edge_data.get("edge_type", ""),
+    )
+
+
+def edge_type_from_data(edge_data: Optional[Dict[str, Any]]) -> str:
+    """Return primary canonical edge type from edge attributes."""
+    return select_primary_edge_type(edge_constraints_from_data(edge_data))
+
+
+def combine_edge_types(type1: str, type2: str) -> str:
+    """Combine two edge types and keep the more restrictive one."""
+    priority = {
+        "boss": 5,
+        "bomb": 4,
+        "locked": 3,
+        "key_locked": 3,
+        "puzzle": 2,
+        "open": 1,
+        "": 1,
+    }
+    p1 = priority.get(type1, 1)
+    p2 = priority.get(type2, 1)
+    return type1 if p1 >= p2 else type2
+
+
+def can_traverse_edge_type(
+    edge_type: str,
+    state: Any,
+    *,
+    strict_original_mode: bool,
+    get_room_for_position: Callable[[Any], Any],
+    is_room_cleared: Callable[[Any, Any], bool],
+) -> bool:
+    """Check whether current state can traverse a graph edge type."""
+    if edge_type in ("open", ""):
+        return True
+    if edge_type in ("locked", "key_locked"):
+        return state.keys > 0
+    if edge_type == "bomb":
+        return state.bomb_count > 0
+    if edge_type == "boss":
+        return state.has_boss_key
+    if edge_type == "puzzle":
+        if strict_original_mode:
+            current_room = get_room_for_position(state.position)
+            return is_room_cleared(current_room, state)
+        return True
+    return True

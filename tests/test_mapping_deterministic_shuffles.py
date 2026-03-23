@@ -1,6 +1,6 @@
-import random
+﻿import random
 import networkx as nx
-from src.data.zelda_core import RoomGraphMatcher, Room
+from src.zelda_data.zelda_core import RoomGraphMatcher, Room
 import numpy as np
 
 
@@ -63,3 +63,4 @@ def test_mapping_deterministic_longrun():
             canonical = normalized
         else:
             assert normalized == canonical, f'Mapping varies on seed {seed}'
+

@@ -16,6 +16,7 @@ Components:
 - gameplay/: Canonical path/inventory/auto-manual gameplay helpers
 - ai/: Canonical AI generation control/pipeline/worker modules
 - topology/: Canonical topology export/helper/precheck/matching modules
+- orchestration/: Canonical cross-domain orchestration entrypoints
 
 Legacy top-level modules are kept as backward-compatible shims during incremental refactors.
 """
@@ -29,6 +30,7 @@ from .components.widgets import (
     ButtonWidget,
     WidgetManager,
 )
+from .ai import ai_generation_worker
 
 __all__ = [
     'WidgetState',
@@ -38,4 +40,5 @@ __all__ = [
     'DropdownWidget',
     'ButtonWidget',
     'WidgetManager',
+    'ai_generation_worker',
 ]

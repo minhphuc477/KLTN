@@ -102,7 +102,7 @@ class KeyEconomyResult:
     topology_type: GraphTopology
     key_surplus: Dict[str, int]  # {lock_id: surplus_keys}
     soft_lock_nodes: List[int]  # Nodes where soft-lock can occur
-    validation_details: Dict[str, any] = field(default_factory=dict)
+    validation_details: Dict[str, object] = field(default_factory=dict)
 
 
 class GreedyPlayer:

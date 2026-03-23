@@ -1,4 +1,4 @@
-"""
+﻿"""
 Run CBS+ and A* benchmarks on Zelda dungeons (levels 1-9).
 
 This script:
@@ -25,7 +25,7 @@ import numpy as np
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.data.zelda_core import ZeldaDungeonAdapter
+from src.zelda_data.zelda_core import ZeldaDungeonAdapter
 from src.simulation.validator import StateSpaceAStar, ZeldaLogicEnv
 from src.simulation.cognitive_bounded_search import (
     CognitiveBoundedSearch, AgentPersona, CBSMetrics
@@ -328,3 +328,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+

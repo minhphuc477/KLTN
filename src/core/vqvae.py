@@ -105,9 +105,10 @@ class VectorQuantizer(nn.Module):
         self._dead_threshold = 2    # Usage below this = "dead"
     
     def forward(
-        self, 
+        self,
         z_e: Tensor,
-    ) -> Tuple[Tensor, Tensor, Dict[str, Tensor]]:
+        return_info: bool = False,
+    ) -> Tuple[Tensor, Tensor, Tensor] | Tuple[Tensor, Tensor, Dict[str, Tensor]]:
         """
         Quantize continuous latents to discrete codebook entries.
         
@@ -115,9 +116,14 @@ class VectorQuantizer(nn.Module):
             z_e: Encoder output [B, D, H, W] or [B, H, W, D]
             
         Returns:
-            z_q: Quantized latents (same shape as input)
-            indices: Codebook indices [B, H, W]
-            losses: Dict with 'vq_loss', 'commitment_loss', 'perplexity'
+            If return_info=False (default):
+                z_q: Quantized latents (same shape as input)
+                vq_loss: Scalar quantization loss
+                indices: Codebook indices [B, H, W]
+            If return_info=True:
+                z_q: Quantized latents (same shape as input)
+                indices: Codebook indices [B, H, W]
+                losses: Dict with 'vq_loss', 'commitment_loss', 'perplexity'
         """
         # Handle both channel-first and channel-last
         if z_e.dim() == 4 and z_e.shape[1] == self.embedding_dim:
@@ -194,7 +200,9 @@ class VectorQuantizer(nn.Module):
         if channel_first:
             z_q = z_q.permute(0, 3, 1, 2).contiguous()
         
-        return z_q, indices, losses
+        if return_info:
+            return z_q, indices, losses
+        return z_q, losses['vq_loss'], indices
     
     def _ema_update(self, z_flat: Tensor, indices: Tensor):
         """Update codebook using exponential moving average."""
@@ -350,25 +358,35 @@ class Encoder(nn.Module):
         in_channels: int = 44,
         hidden_channels: int = 128,
         latent_channels: int = 64,
+        hidden_dims: Optional[List[int]] = None,
+        latent_dim: Optional[int] = None,
         num_res_blocks: int = 2,
         channel_mult: Tuple[int, ...] = (1, 2, 4),
         downsample_factor: int = 2,
     ):
         super().__init__()
+
+        if latent_dim is not None:
+            latent_channels = int(latent_dim)
+
+        if hidden_dims is not None and len(hidden_dims) > 0:
+            block_channels = [int(max(1, c)) for c in hidden_dims]
+            hidden_channels = int(block_channels[0])
+        else:
+            block_channels = [int(hidden_channels * mult) for mult in channel_mult]
         
         self.in_channels = in_channels
         self.hidden_channels = hidden_channels
         self.latent_channels = latent_channels
         
         # Initial projection
-        self.conv_in = nn.Conv2d(in_channels, hidden_channels, 3, padding=1)
+        self.conv_in = nn.Conv2d(in_channels, block_channels[0], 3, padding=1)
         
         # Build encoder blocks
         self.down_blocks = nn.ModuleList()
         
-        ch = hidden_channels
-        for i, mult in enumerate(channel_mult):
-            out_ch = hidden_channels * mult
+        ch = block_channels[0]
+        for i, out_ch in enumerate(block_channels):
             
             block = nn.ModuleList()
             
@@ -378,7 +396,7 @@ class Encoder(nn.Module):
                 ch = out_ch
             
             # Downsample (except last level)
-            if i < len(channel_mult) - 1:
+            if i < len(block_channels) - 1:
                 block.append(
                     nn.Conv2d(ch, ch, 3, stride=downsample_factor, padding=1)
                 )
@@ -404,7 +422,7 @@ class Encoder(nn.Module):
         h = self.conv_in(x)
         
         for block in self.down_blocks:
-            for layer in block:
+            for layer in block.children():
                 h = layer(h)
         
         h = self.norm_out(h)
@@ -431,24 +449,34 @@ class Decoder(nn.Module):
         out_channels: int = 44,
         hidden_channels: int = 128,
         latent_channels: int = 64,
+        hidden_dims: Optional[List[int]] = None,
+        latent_dim: Optional[int] = None,
         num_res_blocks: int = 2,
         channel_mult: Tuple[int, ...] = (4, 2, 1),
         upsample_factor: int = 2,
     ):
         super().__init__()
+
+        if latent_dim is not None:
+            latent_channels = int(latent_dim)
+
+        if hidden_dims is not None and len(hidden_dims) > 0:
+            block_channels = [int(max(1, c)) for c in hidden_dims]
+            hidden_channels = int(block_channels[-1])
+        else:
+            block_channels = [int(hidden_channels * mult) for mult in channel_mult]
         
         self.out_channels = out_channels
         self.hidden_channels = hidden_channels
         
         # Initial projection
-        ch = hidden_channels * channel_mult[0]
+        ch = block_channels[0]
         self.conv_in = nn.Conv2d(latent_channels, ch, 3, padding=1)
         
         # Build decoder blocks
         self.up_blocks = nn.ModuleList()
         
-        for i, mult in enumerate(channel_mult):
-            out_ch = hidden_channels * mult
+        for i, out_ch in enumerate(block_channels):
             
             block = nn.ModuleList()
             
@@ -458,7 +486,7 @@ class Decoder(nn.Module):
                 ch = out_ch
             
             # Upsample (except last level)
-            if i < len(channel_mult) - 1:
+            if i < len(block_channels) - 1:
                 block.append(
                     nn.ConvTranspose2d(
                         ch, ch, 4, stride=upsample_factor, padding=1
@@ -487,7 +515,7 @@ class Decoder(nn.Module):
         h = self.conv_in(z)
         
         for block in self.up_blocks:
-            for layer in block:
+            for layer in block.children():
                 h = layer(h)
         
         h = self.norm_out(h)
@@ -548,15 +576,23 @@ class SemanticVQVAE(nn.Module):
     def __init__(
         self,
         num_classes: int = 44,
+        num_tile_classes: Optional[int] = None,
         codebook_size: int = 512,
+        num_embeddings: Optional[int] = None,
         latent_dim: int = 64,
         hidden_dim: int = 128,
+        hidden_dims: Optional[List[int]] = None,
         num_res_blocks: int = 2,
         commitment_cost: float = 0.25,
         rare_tile_weight: float = 5.0,
         use_ema: bool = True,
     ):
         super().__init__()
+
+        if num_tile_classes is not None:
+            num_classes = int(num_tile_classes)
+        if num_embeddings is not None:
+            codebook_size = int(num_embeddings)
         
         self.num_classes = num_classes
         self.codebook_size = codebook_size
@@ -568,6 +604,8 @@ class SemanticVQVAE(nn.Module):
             in_channels=num_classes,
             hidden_channels=hidden_dim,
             latent_channels=latent_dim,
+            hidden_dims=hidden_dims,
+            latent_dim=latent_dim,
             num_res_blocks=num_res_blocks,
             channel_mult=(1, 2, 4),
         )
@@ -585,6 +623,8 @@ class SemanticVQVAE(nn.Module):
             out_channels=num_classes,
             hidden_channels=hidden_dim,
             latent_channels=latent_dim,
+            hidden_dims=hidden_dims,
+            latent_dim=latent_dim,
             num_res_blocks=num_res_blocks,
             channel_mult=(4, 2, 1),
         )
@@ -615,8 +655,14 @@ class SemanticVQVAE(nn.Module):
             indices: Codebook indices [B, H', W']
         """
         z_e = self.encoder(x)
-        z_q, indices, _ = self.quantizer(z_e)
+        z_q, _, indices = self.quantizer(z_e)
         return z_q, indices
+
+    def quantize(self, z_e: Tensor | Tuple[Tensor, Any]) -> Tuple[Tensor, Tensor, Tensor]:
+        """Backward-compatible quantize helper returning (z_q, vq_loss, indices)."""
+        if isinstance(z_e, (tuple, list)):
+            z_e = z_e[0]
+        return self.quantizer(z_e)
     
     def decode(
         self, 
@@ -657,8 +703,8 @@ class SemanticVQVAE(nn.Module):
         z_q = z_q.permute(0, 3, 1, 2).contiguous()   # [B, D, H', W']
         return self.decode(z_q, target_size)
     
-    def forward(
-        self, 
+    def forward_with_losses(
+        self,
         x: Tensor,
     ) -> Tuple[Tensor, Tensor, Dict[str, Tensor]]:
         """
@@ -678,7 +724,7 @@ class SemanticVQVAE(nn.Module):
         z_e = self.encoder(x)
         
         # Quantize
-        z_q, indices, vq_losses = self.quantizer(z_e)
+        z_q, indices, vq_losses = self.quantizer(z_e, return_info=True)
         
         # Decode
         recon = self.decoder(z_q, target_size=input_size)
@@ -694,6 +740,18 @@ class SemanticVQVAE(nn.Module):
         losses['total_loss'] = recon_loss + losses['vq_loss']
         
         return recon, indices, losses
+
+    def forward(self, x: Tensor) -> Tuple[Tensor, Tensor, Dict[str, Tensor]]:
+        """Backward-compatible forward returning (recon, vq_loss, losses)."""
+        recon, indices, losses = self.forward_with_losses(x)
+        losses = dict(losses)
+        losses['indices'] = indices
+        return recon, losses['vq_loss'], losses
+
+    def compute_loss(self, x: Tensor) -> Dict[str, Tensor]:
+        """Return detailed loss dictionary for training/evaluation code."""
+        _, _, losses = self.forward_with_losses(x)
+        return losses
     
     def _weighted_reconstruction_loss(
         self, 
@@ -764,8 +822,11 @@ class VQVAETrainer:
         self,
         model: SemanticVQVAE,
         lr: float = 1e-4,
+        learning_rate: Optional[float] = None,
         weight_decay: float = 1e-5,
     ):
+        if learning_rate is not None:
+            lr = float(learning_rate)
         self.model = model
         self.optimizer = torch.optim.AdamW(
             model.parameters(),
@@ -776,7 +837,8 @@ class VQVAETrainer:
     def train_step(
         self, 
         batch: Tensor,
-    ) -> Tuple[Tensor, Dict[str, float]]:
+        return_metrics: bool = False,
+    ) -> float | Tuple[float, Dict[str, float]]:
         """
         Single training step.
         
@@ -791,7 +853,7 @@ class VQVAETrainer:
         self.optimizer.zero_grad()
         
         # Forward
-        recon, indices, losses = self.model(batch)
+        losses = self.model.compute_loss(batch)
         
         # Backward
         loss = losses['total_loss']
@@ -810,14 +872,18 @@ class VQVAETrainer:
             'perplexity': losses['perplexity'].item(),
         }
         
-        return loss, metrics
+        loss_value = float(loss.item())
+        if return_metrics:
+            return loss_value, metrics
+        return loss_value
     
     @torch.no_grad()
     def eval_step(self, batch: Tensor) -> Dict[str, float]:
         """Evaluation step."""
         self.model.eval()
         
-        recon, indices, losses = self.model(batch)
+        recon, _, _ = self.model(batch)
+        losses = self.model.compute_loss(batch)
         
         # Compute accuracy
         pred = recon.argmax(dim=1)

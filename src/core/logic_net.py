@@ -29,7 +29,6 @@ Output:
 
 """
 
-import math
 import logging
 from typing import Dict, List, Tuple, Optional, Any
 
@@ -45,7 +44,7 @@ logger = logging.getLogger(__name__)
 # DIFFERENTIABLE OPERATIONS
 # ============================================================================
 
-def soft_min(x: Tensor, dim: int, temperature: float = 1.0) -> Tensor:
+def soft_min(x: Tensor, dim: Optional[int] = None, temperature: float = 1.0) -> Tensor:
     """
     Differentiable soft-min operation.
     
@@ -61,16 +60,18 @@ def soft_min(x: Tensor, dim: int, temperature: float = 1.0) -> Tensor:
     Returns:
         Soft minimum values
     """
-    return -temperature * torch.logsumexp(-x / temperature, dim=dim)
+    reduce_dim = int(dim) if dim is not None else -1
+    return -temperature * torch.logsumexp(-x / temperature, dim=reduce_dim)
 
 
-def soft_max(x: Tensor, dim: int, temperature: float = 1.0) -> Tensor:
+def soft_max(x: Tensor, dim: Optional[int] = None, temperature: float = 1.0) -> Tensor:
     """
     Differentiable soft-max operation (max, not softmax).
     
     soft_max(x) = τ * log(Σ exp(x/τ))
     """
-    return temperature * torch.logsumexp(x / temperature, dim=dim)
+    reduce_dim = int(dim) if dim is not None else -1
+    return temperature * torch.logsumexp(x / temperature, dim=reduce_dim)
 
 
 def soft_threshold(x: Tensor, threshold: float, temperature: float = 1.0) -> Tensor:
@@ -105,11 +106,15 @@ class DifferentiablePathfinder(nn.Module):
     def __init__(
         self,
         num_iterations: int = 20,
+        iterations: Optional[int] = None,
         temperature: float = 0.1,
         inf_distance: float = 100.0,
     ):
         super().__init__()
-        
+
+        if iterations is not None:
+            num_iterations = int(iterations)
+
         self.num_iterations = num_iterations
         self.temperature = temperature
         self.inf_distance = inf_distance
@@ -131,6 +136,34 @@ class DifferentiablePathfinder(nn.Module):
         Returns:
             distances: [N] soft distances from nearest source
         """
+        # Backward-compatible grid mode:
+        #   adjacency -> walkability [B, H, W]
+        #   edge_weights -> start mask [B, H, W]
+        #   source_mask -> goal mask [B, H, W] (accepted but not required for distance field)
+        if adjacency.ndim == 3 and edge_weights.ndim == 3 and source_mask.ndim == 3:
+            walkability = adjacency.float().clamp(0.0, 1.0)
+            start = edge_weights.float().clamp(0.0, 1.0)
+            B, H, W = walkability.shape
+            device = walkability.device
+
+            dist = torch.full((B, H, W), float(self.inf_distance), device=device)
+            dist = torch.where(start > 0.5, torch.zeros_like(dist), dist)
+
+            # Soft Bellman-style relaxation over 4-neighborhood.
+            for _ in range(self.num_iterations):
+                up = torch.roll(dist, shifts=1, dims=1)
+                down = torch.roll(dist, shifts=-1, dims=1)
+                left = torch.roll(dist, shifts=1, dims=2)
+                right = torch.roll(dist, shifts=-1, dims=2)
+                candidates = torch.stack([dist, up + 1.0, down + 1.0, left + 1.0, right + 1.0], dim=0)
+                relaxed = soft_min(candidates, dim=0, temperature=max(self.temperature, 1e-4))
+                # Penalize non-walkable cells while preserving gradients through walkability.
+                dist = relaxed + (1.0 - walkability) * float(self.inf_distance)
+                # Keep start cells fixed at zero distance.
+                dist = dist * (1.0 - start) + torch.zeros_like(dist) * start
+
+            return dist
+
         N = adjacency.shape[0]
         device = adjacency.device
         
@@ -277,7 +310,8 @@ class ReachabilityScorer(nn.Module):
         self,
         distances: Tensor,
         target_mask: Optional[Tensor] = None,
-    ) -> Tuple[Tensor, Tensor]:
+        return_loss: bool = False,
+    ) -> Any:
         """
         Compute reachability scores.
         
@@ -296,17 +330,31 @@ class ReachabilityScorer(nn.Module):
         
         # Compute loss
         if target_mask is not None:
-            # Focus on target nodes
-            target_scores = scores * target_mask
-            num_targets = target_mask.sum() + 1e-6
-            mean_reachability = target_scores.sum() / num_targets
+            # If mask shape matches distances shape and includes batch dimensions,
+            # compute per-batch target-reachability scores for compatibility.
+            if distances.ndim >= 2 and target_mask.shape == distances.shape:
+                reduce_dims = tuple(range(1, distances.ndim))
+                target_scores = scores * target_mask
+                num_targets = target_mask.sum(dim=reduce_dims).clamp_min(1e-6)
+                per_batch = target_scores.sum(dim=reduce_dims) / num_targets
+                mean_reachability = per_batch.mean()
+                scores_out = per_batch
+            else:
+                # Focus on target nodes
+                target_scores = scores * target_mask
+                num_targets = target_mask.sum() + 1e-6
+                mean_reachability = target_scores.sum() / num_targets
+                scores_out = scores
         else:
             mean_reachability = scores.mean()
+            scores_out = scores
         
         # Loss: want high reachability
         loss = 1.0 - mean_reachability
         
-        return scores, loss
+        if return_loss:
+            return scores_out, loss
+        return scores_out
 
 
 # ============================================================================
@@ -344,9 +392,9 @@ class KeyLockChecker(nn.Module):
         self,
         distances: Tensor,
         key_nodes: Tensor,
-        lock_nodes: Tensor,
-        key_lock_pairs: List[Tuple[int, int]],
-    ) -> Tuple[Tensor, Dict[str, Tensor]]:
+        lock_nodes: Optional[Tensor] = None,
+        key_lock_pairs: Optional[List[Tuple[int, int]]] = None,
+    ) -> Any:
         """
         Check key-lock dependencies.
         
@@ -360,6 +408,18 @@ class KeyLockChecker(nn.Module):
             loss: Scalar dependency violation loss
             info: Dict with per-pair violation info
         """
+        # Backward-compatible simple mode:
+        # checker(key_probs, lock_probs) -> scalar score in [0, 1]
+        if lock_nodes is None and key_lock_pairs is None and distances.ndim == 1 and key_nodes.ndim == 1:
+            key_mean = distances.mean() if distances.numel() > 0 else torch.tensor(0.0, device=distances.device)
+            lock_mean = key_nodes.mean() if key_nodes.numel() > 0 else torch.tensor(0.0, device=distances.device)
+            return torch.sigmoid(key_mean - lock_mean)
+
+        if lock_nodes is None:
+            lock_nodes = torch.zeros_like(key_nodes)
+        if key_lock_pairs is None:
+            key_lock_pairs = []
+
         violations = []
         
         for key_idx, lock_idx in key_lock_pairs:
@@ -403,10 +463,16 @@ class TileClassifier(nn.Module):
     def __init__(
         self,
         latent_dim: int = 64,
+        in_channels: Optional[int] = None,
         num_classes: int = 44,
         hidden_dim: int = 128,
+        output_mode: str = "probs",
     ):
         super().__init__()
+
+        if in_channels is not None:
+            latent_dim = int(in_channels)
+        self.output_mode = str(output_mode).strip().lower()
         
         self.classifier = nn.Sequential(
             nn.Conv2d(latent_dim, hidden_dim, 3, padding=1),
@@ -428,7 +494,10 @@ class TileClassifier(nn.Module):
         Returns:
             Tile logits [B, num_classes, H, W]
         """
-        return self.classifier(z)
+        logits = self.classifier(z)
+        if self.output_mode == "logits":
+            return logits
+        return F.softmax(logits, dim=1)
 
 
 class WalkabilityPredictor(nn.Module):
@@ -442,8 +511,12 @@ class WalkabilityPredictor(nn.Module):
     # Walkable tile IDs (from definitions.py)
     WALKABLE_IDS = [1, 10, 11, 12, 13, 14, 15, 42]  # FLOOR, DOORs, STAIR
     
-    def __init__(self, num_classes: int = 44):
+    def __init__(self, num_classes: int = 44, num_tile_classes: Optional[int] = None, keep_channel_dim: bool = False):
         super().__init__()
+
+        if num_tile_classes is not None:
+            num_classes = int(num_tile_classes)
+        self.keep_channel_dim = bool(keep_channel_dim)
         
         # Create walkability weight vector
         walkability = torch.zeros(num_classes)
@@ -463,16 +536,30 @@ class WalkabilityPredictor(nn.Module):
         Returns:
             walkability: [B, 1, H, W] soft walkability mask
         """
-        # Soft assignment via softmax
-        probs = F.softmax(tile_logits, dim=1)
+        # If caller already provides a normalized categorical distribution,
+        # use it directly; otherwise convert logits with softmax.
+        if (
+            torch.all(tile_logits >= 0)
+            and torch.all(tile_logits <= 1)
+            and torch.allclose(
+                tile_logits.sum(dim=1),
+                torch.ones_like(tile_logits[:, :1, :, :]).squeeze(1),
+                atol=1e-4,
+            )
+        ):
+            probs = tile_logits
+        else:
+            probs = F.softmax(tile_logits, dim=1)
         
         # Weighted sum with walkability
         walkability = torch.einsum(
             'bchw,c->bhw',
             probs,
             self.walkability_weights,
-        ).unsqueeze(1)
-        
+        )
+
+        if self.keep_channel_dim:
+            return walkability.unsqueeze(1)
         return walkability
 
 
@@ -519,6 +606,8 @@ class LogicNet(nn.Module):
     def __init__(
         self,
         latent_dim: int = 64,
+        hidden_dim: int = 128,
+        num_tile_classes: Optional[int] = None,
         num_classes: int = 44,
         num_iterations: int = 20,
         temperature: float = 0.1,
@@ -531,6 +620,8 @@ class LogicNet(nn.Module):
         super().__init__()
         
         self.latent_dim = latent_dim
+        if num_tile_classes is not None:
+            num_classes = int(num_tile_classes)
         self.num_classes = num_classes
         self.reach_weight = reach_weight
         self.lock_weight = lock_weight
@@ -544,10 +635,12 @@ class LogicNet(nn.Module):
         self.tile_classifier = TileClassifier(
             latent_dim=latent_dim,
             num_classes=num_classes,
+            hidden_dim=hidden_dim,
+            output_mode="logits",
         )
         
         # Walkability prediction
-        self.walkability = WalkabilityPredictor(num_classes)
+        self.walkability = WalkabilityPredictor(num_classes=num_classes, keep_channel_dim=True)
         
         # Grid-level pathfinder
         self.grid_pathfinder = ConvolutionalPathfinder(
@@ -602,8 +695,9 @@ class LogicNet(nn.Module):
     def forward(
         self,
         z: Tensor,
-        graph_data: Optional[Dict[str, Tensor]] = None,
-    ) -> Tuple[Tensor, Dict[str, Any]]:
+        graph_data: Optional[Any] = None,
+        goal_mask: Optional[Tensor] = None,
+    ) -> Any:
         """
         Compute solvability loss for latent codes.
         
@@ -620,6 +714,23 @@ class LogicNet(nn.Module):
             loss: Scalar solvability loss
             info: Dict with detailed metrics
         """
+        # Backward-compatible inference mode:
+        #   logic_net(tile_probs, start_mask, goal_mask) -> solvability scores [B]
+        if isinstance(graph_data, torch.Tensor) and isinstance(goal_mask, torch.Tensor):
+            start_mask = graph_data.float()
+            goal = goal_mask.float()
+
+            # Accept either logits/probabilities as input and derive walkability.
+            walkability = self.walkability(z).squeeze(1)
+            distances = self.graph_pathfinder(walkability, start_mask, goal)
+            reach_scores = self.reachability(distances, goal)
+
+            # Add a direct goal-region walkability term to keep gradients informative
+            # in compatibility mode where inputs are already categorical probabilities.
+            goal_mass = goal.sum(dim=(1, 2)).clamp_min(1e-6)
+            goal_walkability = (walkability * goal).sum(dim=(1, 2)) / goal_mass
+            return (reach_scores + goal_walkability) * 0.5
+
         B = z.shape[0]
         device = z.device
         
@@ -648,6 +759,7 @@ class LogicNet(nn.Module):
         grid_reach_scores, grid_reach_loss = self.reachability(
             grid_distances.view(B, -1),
             (walkability > 0.5).view(B, -1).float(),
+            return_loss=True,
         )
         info['grid_reachability'] = grid_reach_scores.mean()
         
@@ -684,6 +796,7 @@ class LogicNet(nn.Module):
                     _, graph_reach_loss = self.reachability(
                         graph_distances,
                         target_mask,
+                        return_loss=True,
                     )
                 
                 # Key-lock dependencies

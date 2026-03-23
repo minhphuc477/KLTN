@@ -1,4 +1,4 @@
-"""Matched-budget Block-I topology benchmark."""
+﻿"""Matched-budget Block-I topology benchmark."""
 from __future__ import annotations
 
 import argparse
@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.data.vglc_utils import filter_virtual_nodes, validate_topology
+from src.zelda_data.vglc_utils import filter_virtual_nodes, validate_topology
 from src.evaluation.benchmark_suite import (
     calibrate_rule_weights_to_vglc,
     extract_graph_descriptor,
@@ -425,7 +425,7 @@ def main() -> int:
         # Grammar internals emit many expected repair warnings during search.
         # Keep console output focused on benchmark progress.
         logging.getLogger("src.generation.grammar").setLevel(logging.ERROR)
-        logging.getLogger("src.data.vglc_utils").setLevel(logging.WARNING)
+        logging.getLogger("src.zelda_data.vglc_utils").setLevel(logging.WARNING)
 
     if args.quick:
         args.num_samples = min(int(args.num_samples), 3)
@@ -753,3 +753,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

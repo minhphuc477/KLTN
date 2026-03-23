@@ -2129,8 +2129,8 @@ class CognitiveBoundedSearch:
                         candidates.append(best)
                         if len(candidates) >= num:
                             break
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("MissionGrammar-assisted subgoal generation unavailable; using belief-map fallback: %s", exc)
 
         # 4) Frontier (observed but unvisited)
         for pos in list(self.belief_map.get_frontier()):

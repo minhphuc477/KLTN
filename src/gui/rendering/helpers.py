@@ -166,12 +166,16 @@ def render_solver_comparison_overlay(
             surface.blit(small.render(line2, True, (180, 180, 255)), (box_rect.x + 6, y + 11))
             y += row_height
         else:
+            fallback_mark = "FB" if row.get("fallback_used") else "  "
             text = (
                 f"{row['name'][:7]:7}   {str(row.get('success', False))[:5]:5}   "
-                f"{row.get('path_len', 0):3}   {row.get('nodes', 0):6}   {int(row.get('time_ms', 0)):4}"
+                f"{row.get('path_len', 0):3}   {row.get('nodes', 0):6}   {int(row.get('time_ms', 0)):4} {fallback_mark}"
             )
             surface.blit(small.render(text, True, (200, 200, 200)), (box_rect.x + 6, y))
             y += row_height
+
+    legend = small.render("FB = fallback used", True, (150, 150, 150))
+    surface.blit(legend, (box_rect.x + 6, box_rect.y + box_rect.h - 30))
 
     hint = small.render("Press Esc to close", True, (150, 150, 150))
     surface.blit(hint, (box_rect.x + 6, box_rect.y + box_rect.h - 18))

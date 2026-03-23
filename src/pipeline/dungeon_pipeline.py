@@ -1,4 +1,4 @@
-"""
+﻿"""
 H-MOLQD Master Pipeline - Neural-Symbolic Dungeon Generation
 ==============================================================
 
@@ -40,11 +40,10 @@ Usage:
 
 import logging
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional, Any, Callable
+from typing import Dict, List, Tuple, Optional, Any
 from dataclasses import dataclass, field
 
 import torch
-import torch.nn as nn
 import numpy as np
 import networkx as nx
 
@@ -59,20 +58,42 @@ from src.core import (
     ROOM_HEIGHT,
     ROOM_WIDTH,
 )
-from src.core.definitions import parse_edge_type_tokens, parse_node_label_tokens
 from src.simulation.map_elites import MAPElitesEvaluator
-from src.data.zelda_core import DungeonStitcher
+from src.zelda_data.zelda_core import DungeonStitcher
 
 # Block I: Evolutionary Topology Director
 from src.generation.evolutionary_director import EvolutionaryTopologyGenerator
 
 # VGLC compliance imports
-from src.data.vglc_utils import (
+from src.zelda_data.vglc_utils import (
     filter_virtual_nodes,
     validate_room_dimensions,
     get_physical_start_node,
 )
 from src.utils.graph_utils import validate_graph_topology
+from src.pipeline.repair_feedback import (
+    build_latent_edit_mask,
+    wfc_guided_inpaint_room,
+)
+from src.pipeline.spatial_utils import (
+    carve_room_connection,
+    clamp_room_coord,
+    coerce_bool,
+    coerce_difficulty,
+    first_free_position,
+    fit_room_grid,
+    get_node_grid_position,
+    infer_direction,
+    parse_label_tokens,
+    parse_room_coord,
+)
+from src.pipeline.graph_features import (
+    compute_tpe_features,
+    condition_feature_dims,
+    encode_edge_feature_vector,
+    extract_node_feature_vector,
+    fit_feature_vector,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -289,21 +310,12 @@ class NeuralSymbolicDungeonPipeline:
 
     def _condition_feature_dims(self) -> Tuple[int, int]:
         """Get active (node_dim, edge_dim) expected by the condition encoder."""
-        node_dim = 6
-        edge_dim = 8
-        global_encoder = getattr(self.condition_encoder, "global_encoder", None)
-        if global_encoder is not None:
-            node_dim = int(getattr(global_encoder, "node_feature_dim", node_dim))
-            edge_dim = int(getattr(global_encoder, "edge_feature_dim", edge_dim))
-        return max(1, node_dim), max(1, edge_dim)
+        return condition_feature_dims(self.condition_encoder)
 
     @staticmethod
     def _fit_feature_vector(values: List[float], target_dim: int) -> List[float]:
         """Pad/truncate feature list to target dimension."""
-        dim = max(1, int(target_dim))
-        if len(values) >= dim:
-            return [float(v) for v in values[:dim]]
-        return [float(v) for v in values] + ([0.0] * (dim - len(values)))
+        return fit_feature_vector(values, target_dim)
     
     def _load_diffusion(self, checkpoint_path: Optional[str]) -> LatentDiffusionModel:
         """Load or create latent diffusion model."""
@@ -358,6 +370,44 @@ class NeuralSymbolicDungeonPipeline:
         
         logger.info(f"Created SymbolicRefiner (learned_rules={use_learned_rules})")
         return refiner
+
+    def _build_latent_edit_mask(
+        self,
+        room_mask: np.ndarray,
+        latent_h: int,
+        latent_w: int,
+    ) -> torch.Tensor:
+        """Compatibility wrapper around extracted feedback helper."""
+        return build_latent_edit_mask(
+            room_mask,
+            latent_h=latent_h,
+            latent_w=latent_w,
+            device=self.device,
+        )
+
+    @torch.no_grad()
+    def _wfc_guided_inpaint_room(
+        self,
+        current_grid: np.ndarray,
+        dead_end_mask: np.ndarray,
+        condition: torch.Tensor,
+        graph_data: Optional[Dict[str, Any]],
+        num_diffusion_steps: int,
+        seed: Optional[int] = None,
+    ) -> np.ndarray:
+        """Compatibility wrapper around extracted feedback helper."""
+        return wfc_guided_inpaint_room(
+            current_grid=current_grid,
+            dead_end_mask=dead_end_mask,
+            condition=condition,
+            graph_data=graph_data,
+            num_diffusion_steps=num_diffusion_steps,
+            seed=seed,
+            device=self.device,
+            vqvae=self.vqvae,
+            diffusion=self.diffusion,
+            num_classes=44,
+        )
     
     @torch.no_grad()
     def generate_room(
@@ -509,6 +559,7 @@ class NeuralSymbolicDungeonPipeline:
         was_repaired = False
         repair_mask = None
         final_grid = neural_grid.copy()
+        repair_diag: Dict[str, Any] = {}
         
         if apply_repair and start_goal_coords is not None:
             start_rc, goal_rc = start_goal_coords
@@ -522,10 +573,28 @@ class NeuralSymbolicDungeonPipeline:
                 max(0, min(ROOM_HEIGHT - 1, int(goal_rc[0]))),
             )
             try:
-                repaired_grid, success = self.refiner.repair_room(
+                def _feedback_callback(
+                    current_grid_cb: np.ndarray,
+                    dead_end_mask_cb: np.ndarray,
+                    _start_cb: Tuple[int, int],
+                    _goal_cb: Tuple[int, int],
+                    attempt_idx: int,
+                ) -> np.ndarray:
+                    return self._wfc_guided_inpaint_room(
+                        current_grid=current_grid_cb,
+                        dead_end_mask=dead_end_mask_cb,
+                        condition=condition,
+                        graph_data=graph_data,
+                        num_diffusion_steps=max(12, int(num_diffusion_steps) // 2),
+                        seed=(None if seed is None else int(seed) + 1000 + int(attempt_idx)),
+                    )
+
+                repaired_grid, success, repair_diag = self.refiner.repair_room_with_feedback(
                     grid=neural_grid,
                     start=start,
                     goal=goal,
+                    feedback_callback=_feedback_callback,
+                    max_feedback_rounds=2,
                 )
                 
                 if success:
@@ -535,6 +604,7 @@ class NeuralSymbolicDungeonPipeline:
                     logger.debug(f"Room {room_id}: Repair successful ({np.sum(repair_mask)} tiles changed)")
                 else:
                     logger.warning(f"Room {room_id}: Repair failed, using neural output")
+                self._bump_diagnostic("wfc_feedback_attempts")
             except Exception as e:
                 self._bump_diagnostic("room_repair_exception")
                 logger.error(f"Room {room_id}: Repair error: {e}")
@@ -554,6 +624,8 @@ class NeuralSymbolicDungeonPipeline:
             'was_repaired': was_repaired,
             'tiles_changed': int(np.sum(repair_mask)) if repair_mask is not None else 0,
             'vglc_compliant': valid_dims,
+            'wfc_feedback_rounds': float(repair_diag.get('feedback_rounds', 0)),
+            'wfc_failures': float(repair_diag.get('wfc_failures', 0)),
         }
         
         return RoomGenerationResult(
@@ -641,7 +713,7 @@ class NeuralSymbolicDungeonPipeline:
                 target_curve = [0.2, 0.4, 0.6, 0.8, 1.0]
             
             # Calculate genome_length to target desired room count
-            # Empirical relationship: genome_length ≈ num_rooms * 0.7 (rules don't always apply)
+            # Empirical relationship: genome_length â‰ˆ num_rooms * 0.7 (rules don't always apply)
             target_genome_length = max(10, int(num_rooms * 0.7))
             
             topology_generator = EvolutionaryTopologyGenerator(
@@ -1109,178 +1181,19 @@ class NeuralSymbolicDungeonPipeline:
             }
 
     def _extract_node_feature_vector(self, attrs: Dict[str, Any]) -> torch.Tensor:
-        """
-        Extract node feature vector for the active conditioning schema.
-
-        Base dimensions (first 6) remain stable for checkpoint compatibility:
-        [enemy, key, item, triforce(goal), boss, puzzle]
-        """
         node_dim, _ = self._condition_feature_dims()
-        tokens = self._parse_label_tokens(attrs.get('label'))
-
-        def _as_nonneg_int(value: Any) -> int:
-            try:
-                return int(max(0, int(value)))
-            except Exception:
-                return 0
-
-        enemy_hint = _as_nonneg_int(attrs.get('enemy_count_hint', attrs.get('enemy_count', 0)))
-        key_hint = _as_nonneg_int(attrs.get('key_count_hint', attrs.get('key_count', 0)))
-        puzzle_hint = _as_nonneg_int(attrs.get('puzzle_count_hint', attrs.get('puzzle_count', 0)))
-        item_hint = _as_nonneg_int(attrs.get('item_count_hint', attrs.get('item_count', 0)))
-
-        has_enemy = (
-            self._coerce_bool(attrs.get('has_enemy'))
-            or (enemy_hint > 0)
-            or 'e' in tokens
-            or 'enemy' in tokens
-            or 'b' in tokens
-            or 'boss' in tokens
+        return extract_node_feature_vector(
+            attrs,
+            node_dim=node_dim,
+            device=self.device,
+            parse_label_tokens=self._parse_label_tokens,
+            coerce_bool=self._coerce_bool,
+            coerce_difficulty=self._coerce_difficulty,
         )
-        has_key = (
-            self._coerce_bool(attrs.get('has_key'))
-            or (key_hint > 0)
-            or 'k' in tokens
-            or 'key' in tokens
-            or 'small_key' in tokens
-            or 'key_small' in tokens
-        )
-        has_item = (
-            self._coerce_bool(attrs.get('has_item'))
-            or self._coerce_bool(attrs.get('has_macro_item'))
-            or self._coerce_bool(attrs.get('has_minor_item'))
-            or (item_hint > 0)
-            or 'i' in tokens
-            or 'item' in tokens
-            or 'macro_item' in tokens
-            or 'minor_item' in tokens
-            or 'key_item' in tokens
-            or 'm' in tokens
-            or 'treasure' in tokens
-        )
-        has_triforce = (
-            self._coerce_bool(attrs.get('has_triforce'))
-            or self._coerce_bool(attrs.get('is_triforce'))
-            or self._coerce_bool(attrs.get('is_goal'))
-            or 't' in tokens
-            or 'triforce' in tokens
-            or 'goal' in tokens
-        )
-        has_boss = (
-            self._coerce_bool(attrs.get('has_boss'))
-            or self._coerce_bool(attrs.get('is_boss'))
-            or 'b' in tokens
-            or 'boss' in tokens
-        )
-        has_puzzle = (
-            self._coerce_bool(attrs.get('has_puzzle'))
-            or (puzzle_hint > 0)
-            or 'p' in tokens
-            or 'puzzle' in tokens
-        )
-        is_start = (
-            self._coerce_bool(attrs.get('is_start'))
-            or self._coerce_bool(attrs.get('is_entry'))
-            or 's' in tokens
-            or 'start' in tokens
-        )
-        has_gate_hint = (
-            self._coerce_bool(attrs.get('is_lock'))
-            or self._coerce_bool(attrs.get('requires_key'))
-            or self._coerce_bool(attrs.get('has_gate'))
-            or 'l' in tokens
-            or 'lock' in tokens
-            or 'locked' in tokens
-        )
-        difficulty = self._coerce_difficulty(attrs.get('difficulty', attrs.get('difficulty_rating', 0.5)))
-
-        enemy_signal = float(np.clip(max(float(has_enemy), enemy_hint / 3.0), 0.0, 1.0))
-        key_signal = float(np.clip(max(float(has_key), key_hint / 2.0), 0.0, 1.0))
-        item_signal = float(np.clip(max(float(has_item), item_hint / 2.0), 0.0, 1.0))
-        puzzle_signal = float(np.clip(max(float(has_puzzle), puzzle_hint / 2.0), 0.0, 1.0))
-
-        base_features: List[float] = [
-            enemy_signal,
-            key_signal,
-            item_signal,
-            float(has_triforce),
-            float(has_boss),
-            puzzle_signal,
-        ]
-        extended_features: List[float] = [
-            float(np.clip(enemy_hint / 4.0, 0.0, 1.0)),
-            float(np.clip(key_hint / 3.0, 0.0, 1.0)),
-            float(np.clip(item_hint / 3.0, 0.0, 1.0)),
-            float(np.clip(puzzle_hint / 3.0, 0.0, 1.0)),
-            float(difficulty),
-            float(is_start),
-            float(has_gate_hint),
-            float(self._coerce_bool(attrs.get('is_safe'))),
-        ]
-        values = self._fit_feature_vector(base_features + extended_features, node_dim)
-
-        return torch.tensor(values, device=self.device, dtype=torch.float32)
 
     def _encode_edge_feature_vector(self, edge_data: Dict[str, Any]) -> List[float]:
-        """
-        Encode edge attributes for the active conditioning schema.
-
-        Base dimensions (first 8) are stable:
-        [open/path, key_locked, bombable, soft_locked, boss_locked, item_locked, stair, switch]
-        Additional dims (if enabled) encode richer gate semantics.
-        """
         _, edge_dim = self._condition_feature_dims()
-        raw_type = edge_data.get('edge_type', edge_data.get('type', ''))
-        label = edge_data.get('label', '')
-        constraints = set(parse_edge_type_tokens(label=str(label or ''), edge_type=str(raw_type or '')))
-        metadata = edge_data.get('metadata', {}) if isinstance(edge_data.get('metadata', {}), dict) else {}
-        vglc_constraints = metadata.get('vglc_constraints', edge_data.get('vglc_constraints'))
-        if isinstance(vglc_constraints, (list, tuple, set)):
-            constraints.update(str(t).strip().lower() for t in vglc_constraints if str(t).strip())
-        elif isinstance(vglc_constraints, str) and vglc_constraints.strip():
-            constraints.update(parse_edge_type_tokens(label=vglc_constraints, edge_type=''))
-
-        def _has_any(*names: str) -> bool:
-            return any(n in constraints for n in names)
-
-        key_strength = float(np.clip(float(edge_data.get('requires_key_count', 1 if _has_any('key_locked', 'locked') else 0)) / 3.0, 0.0, 1.0))
-        token_strength = float(np.clip(float(edge_data.get('token_count', 1 if _has_any('multi_lock') else 0)) / 3.0, 0.0, 1.0))
-
-        key_locked = _has_any('key_locked', 'locked', 'multi_lock')
-        bombable = _has_any('bombable')
-        soft_locked = _has_any('soft_locked', 'one_way', 'shutter')
-        boss_locked = _has_any('boss_locked')
-        item_locked = _has_any('item_locked', 'item_gate')
-        stair = _has_any('stair', 'stairs', 'warp')
-        switch = _has_any('switch', 'switch_locked', 'state_block', 'on_off_gate')
-        hazard = _has_any('hazard')
-        hidden = _has_any('hidden', 'secret')
-        shutter = _has_any('shutter')
-        state_block = _has_any('state_block')
-
-        # Multi-hot base features (not single one-hot) preserve compound constraints.
-        base_vec: List[float] = [
-            1.0 if (not constraints or _has_any('open', 'path')) else 0.0,
-            max(float(key_locked), key_strength),
-            float(bombable),
-            float(soft_locked),
-            float(boss_locked),
-            float(item_locked),
-            float(stair),
-            float(switch),
-        ]
-        if sum(base_vec[1:]) > 0.0:
-            base_vec[0] = max(base_vec[0], 0.25)
-
-        extended_vec: List[float] = [
-            float(hazard),
-            float(shutter),
-            max(float(_has_any('multi_lock')), token_strength),
-            float(state_block),
-            float(hidden),
-            key_strength,
-        ]
-        return self._fit_feature_vector(base_vec + extended_vec, edge_dim)
+        return encode_edge_feature_vector(edge_data, edge_dim=edge_dim)
 
     def _compute_tpe_features(
         self,
@@ -1289,168 +1202,41 @@ class NeuralSymbolicDungeonPipeline:
         node_to_idx: Dict[int, int],
         node_features: torch.Tensor,
     ) -> torch.Tensor:
-        """Compute lightweight topological positional encodings [N, 8]."""
-        num_nodes = len(node_order)
-        tpe = torch.zeros(num_nodes, 8, device=self.device, dtype=torch.float32)
-        if num_nodes == 0:
-            return tpe
-
-        start_id = next(
-            (
-                nid for nid in node_order
-                if self._coerce_bool(graph.nodes[nid].get('is_start'))
-                or self._coerce_bool(graph.nodes[nid].get('is_entry'))
-            ),
-            node_order[0],
+        return compute_tpe_features(
+            graph,
+            node_order,
+            node_to_idx,
+            node_features,
+            device=self.device,
+            parse_label_tokens=self._parse_label_tokens,
+            coerce_bool=self._coerce_bool,
+            coerce_difficulty=self._coerce_difficulty,
+            on_shortest_path_fallback=lambda: self._bump_diagnostic("tpe_shortest_path_fallback"),
         )
-        goal_id = next(
-            (
-                nid for nid in node_order
-                if self._coerce_bool(graph.nodes[nid].get('has_triforce'))
-                or self._coerce_bool(graph.nodes[nid].get('is_triforce'))
-                or self._coerce_bool(graph.nodes[nid].get('is_goal'))
-            ),
-            node_order[-1],
-        )
-
-        try:
-            if graph.is_directed():
-                dist_from_start = dict(nx.single_source_shortest_path_length(graph, start_id))
-                dist_to_goal = dict(nx.single_source_shortest_path_length(graph.reverse(copy=False), goal_id))
-                shortest_path_len = nx.shortest_path_length(graph, start_id, goal_id)
-            else:
-                dist_from_start = dict(nx.single_source_shortest_path_length(graph, start_id))
-                dist_to_goal = dict(nx.single_source_shortest_path_length(graph, goal_id))
-                shortest_path_len = nx.shortest_path_length(graph, start_id, goal_id)
-        except Exception:
-            self._bump_diagnostic("tpe_shortest_path_fallback")
-            logger.debug(
-                "Falling back to minimal TPE distances (start=%s goal=%s)",
-                start_id,
-                goal_id,
-                exc_info=True,
-            )
-            dist_from_start = {start_id: 0}
-            dist_to_goal = {goal_id: 0}
-            shortest_path_len = None
-
-        max_start = max(dist_from_start.values(), default=1)
-        max_goal = max(dist_to_goal.values(), default=1)
-
-        for node_id in node_order:
-            idx = node_to_idx[node_id]
-            attrs = graph.nodes[node_id]
-            label_tokens = self._parse_label_tokens(attrs.get('label'))
-
-            d_start = dist_from_start.get(node_id, max_start + 1)
-            d_goal = dist_to_goal.get(node_id, max_goal + 1)
-
-            tpe[idx, 0] = float(d_start / max(1, max_start))
-            tpe[idx, 1] = float(d_goal / max(1, max_goal))
-
-            if graph.is_directed():
-                degree = graph.in_degree(node_id) + graph.out_degree(node_id)
-            else:
-                degree = graph.degree(node_id)
-            tpe[idx, 2] = min(float(degree) / 4.0, 1.0)
-
-            if shortest_path_len is not None:
-                on_main = int((d_start + d_goal) == shortest_path_len)
-                tpe[idx, 3] = float(on_main)
-
-            tpe[idx, 4] = float(node_features[idx, 1].item() > 0.0)  # key-node indicator
-
-            has_lock = (
-                self._coerce_bool(attrs.get('is_lock'))
-                or self._coerce_bool(attrs.get('requires_key'))
-                or 'lock' in label_tokens
-                or 'l' in label_tokens
-            )
-            tpe[idx, 5] = float(has_lock)
-
-            tpe[idx, 6] = self._coerce_difficulty(attrs.get('difficulty', attrs.get('difficulty_rating', 0.5)))
-            tpe[idx, 7] = float(attrs.get('key_id') is not None or self._coerce_bool(attrs.get('requires_key')))
-
-        return tpe
 
     def _parse_label_tokens(self, label: Any) -> set:
-        """Split node labels like 'e,k' into normalized tokens."""
-        if label is None:
-            return set()
-        return set(str(t).strip().lower() for t in parse_node_label_tokens(str(label)) if str(t).strip())
+        """Compatibility wrapper around extracted parsing helper."""
+        return parse_label_tokens(label)
 
     def _coerce_bool(self, value: Any) -> bool:
-        """Robust bool parser for graph attributes."""
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, (int, np.integer)):
-            return value != 0
-        if isinstance(value, str):
-            v = value.strip().lower()
-            if v in {'true', '1', 'yes', 'y', 'on'}:
-                return True
-            if v in {'false', '0', 'no', 'n', 'off', ''}:
-                return False
-        return bool(value)
+        """Compatibility wrapper around extracted parsing helper."""
+        return coerce_bool(value)
 
     def _coerce_difficulty(self, value: Any) -> float:
-        """Convert numeric/string difficulty values into [0, 1]."""
-        if isinstance(value, (int, float, np.floating, np.integer)):
-            return float(max(0.0, min(1.0, float(value))))
-        if isinstance(value, str):
-            key = value.strip().upper()
-            mapping = {
-                'SAFE': 0.2,
-                'EASY': 0.3,
-                'MODERATE': 0.5,
-                'MEDIUM': 0.5,
-                'HARD': 0.8,
-                'EXTREME': 1.0,
-            }
-            return mapping.get(key, 0.5)
-        return 0.5
+        """Compatibility wrapper around extracted parsing helper."""
+        return coerce_difficulty(value)
 
     def _parse_room_coord(self, value: Any) -> Optional[Tuple[int, int]]:
-        """Parse room-local coordinates from tuple/list/dict/string."""
-        if value is None:
-            return None
-        if isinstance(value, dict):
-            row = value.get('row', value.get('r'))
-            col = value.get('col', value.get('c'))
-            if isinstance(row, (int, np.integer, float)) and isinstance(col, (int, np.integer, float)):
-                return int(row), int(col)
-            return None
-        if isinstance(value, (tuple, list, np.ndarray)) and len(value) >= 2:
-            row, col = value[0], value[1]
-            if isinstance(row, (int, np.integer, float)) and isinstance(col, (int, np.integer, float)):
-                return int(row), int(col)
-            return None
-        if isinstance(value, str):
-            parts = value.replace('(', '').replace(')', '').split(',')
-            if len(parts) >= 2:
-                try:
-                    return int(float(parts[0].strip())), int(float(parts[1].strip()))
-                except ValueError:
-                    return None
-        return None
+        """Compatibility wrapper around extracted parsing helper."""
+        return parse_room_coord(value)
 
     def _clamp_room_coord(self, coord: Tuple[int, int]) -> Tuple[int, int]:
-        """Clamp local coordinates into room bounds."""
-        r, c = coord
-        r = max(0, min(ROOM_HEIGHT - 1, int(r)))
-        c = max(0, min(ROOM_WIDTH - 1, int(c)))
-        return (r, c)
+        """Compatibility wrapper around extracted parsing helper."""
+        return clamp_room_coord(coord)
 
     def _get_node_grid_position(self, graph: nx.Graph, node_id: int) -> Optional[Tuple[int, int]]:
-        """Extract room-grid position for a node from graph metadata."""
-        if node_id not in graph:
-            return None
-        attrs = graph.nodes[node_id]
-        for key in ('position', 'pos', 'grid_pos', 'coord', 'coords'):
-            pos = self._parse_room_coord(attrs.get(key))
-            if pos is not None:
-                return pos
-        return None
+        """Compatibility wrapper around extracted parsing helper."""
+        return get_node_grid_position(graph, node_id)
 
     def _infer_direction(
         self,
@@ -1458,47 +1244,20 @@ class NeuralSymbolicDungeonPipeline:
         source_node: int,
         target_node: int,
     ) -> Optional[str]:
-        """Infer cardinal direction of source_node relative to target_node."""
-        source_pos = self._get_node_grid_position(graph, source_node)
-        target_pos = self._get_node_grid_position(graph, target_node)
-        if source_pos is None or target_pos is None:
-            return None
-
-        dr = source_pos[0] - target_pos[0]
-        dc = source_pos[1] - target_pos[1]
-        if abs(dr) + abs(dc) != 1:
-            return None
-        if dr == -1:
-            return 'N'
-        if dr == 1:
-            return 'S'
-        if dc == -1:
-            return 'W'
-        if dc == 1:
-            return 'E'
-        return None
+        """Compatibility wrapper around extracted parsing helper."""
+        return infer_direction(graph, source_node, target_node)
 
     def _first_free_position(
         self,
         start_pos: Tuple[int, int],
         occupied: set,
     ) -> Tuple[int, int]:
-        """Resolve position collisions by scanning downward in the same column."""
-        row, col = start_pos
-        while (row, col) in occupied:
-            row += 1
-        return (row, col)
+        """Compatibility wrapper around extracted spatial helper."""
+        return first_free_position(start_pos, occupied)
 
     def _fit_room_grid(self, room_grid: np.ndarray) -> np.ndarray:
-        """Ensure room grid has exact ROOM_HEIGHT x ROOM_WIDTH shape."""
-        if room_grid.shape == (ROOM_HEIGHT, ROOM_WIDTH):
-            return room_grid.astype(np.int32, copy=False)
-
-        fitted = np.zeros((ROOM_HEIGHT, ROOM_WIDTH), dtype=np.int32)
-        h = min(ROOM_HEIGHT, room_grid.shape[0])
-        w = min(ROOM_WIDTH, room_grid.shape[1])
-        fitted[:h, :w] = room_grid[:h, :w].astype(np.int32, copy=False)
-        return fitted
+        """Compatibility wrapper around extracted spatial helper."""
+        return fit_room_grid(room_grid)
 
     def _carve_room_connection(
         self,
@@ -1506,33 +1265,8 @@ class NeuralSymbolicDungeonPipeline:
         src_pos: Tuple[int, int],
         dst_pos: Tuple[int, int],
     ) -> None:
-        """Carve floor tiles at shared boundaries for adjacent rooms."""
-        dr = dst_pos[0] - src_pos[0]
-        dc = dst_pos[1] - src_pos[1]
-        if abs(dr) + abs(dc) != 1:
-            return
-
-        floor_id = int(SEMANTIC_PALETTE.get('FLOOR', 1))
-
-        if dr != 0:
-            src_row = (src_pos[0] + (1 if dr > 0 else 0)) * ROOM_HEIGHT - (1 if dr > 0 else 0)
-            dst_row = src_row + (1 if dr > 0 else -1)
-            center_c = src_pos[1] * ROOM_WIDTH + ROOM_WIDTH // 2
-            for col in range(center_c - 2, center_c + 3):
-                if 0 <= src_row < global_grid.shape[0] and 0 <= col < global_grid.shape[1]:
-                    global_grid[src_row, col] = floor_id
-                if 0 <= dst_row < global_grid.shape[0] and 0 <= col < global_grid.shape[1]:
-                    global_grid[dst_row, col] = floor_id
-            return
-
-        src_col = (src_pos[1] + (1 if dc > 0 else 0)) * ROOM_WIDTH - (1 if dc > 0 else 0)
-        dst_col = src_col + (1 if dc > 0 else -1)
-        center_r = src_pos[0] * ROOM_HEIGHT + ROOM_HEIGHT // 2
-        for row in range(center_r - 2, center_r + 3):
-            if 0 <= row < global_grid.shape[0] and 0 <= src_col < global_grid.shape[1]:
-                global_grid[row, src_col] = floor_id
-            if 0 <= row < global_grid.shape[0] and 0 <= dst_col < global_grid.shape[1]:
-                global_grid[row, dst_col] = floor_id
+        """Compatibility wrapper around extracted spatial helper."""
+        carve_room_connection(global_grid, src_pos, dst_pos)
 
 
 # =============================================================================
@@ -1573,3 +1307,4 @@ __all__ = [
     'DungeonGenerationResult',
     'create_pipeline',
 ]
+

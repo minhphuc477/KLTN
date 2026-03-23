@@ -1,4 +1,4 @@
-"""
+﻿"""
 KLTN ZELDA DUNGEON PIPELINE - Main Entry Point
 ===============================================
 The Golden Pipeline: Load -> Stitch -> Validate
@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).parent
 
 # Import from the canonical source
-from src.data.zelda_core import (
+from src.zelda_data.zelda_core import (
     # Main classes
     ZeldaDungeonAdapter,
     DungeonStitcher,
@@ -149,8 +149,8 @@ def run_pipeline(dungeon_num: int, variant: int = 1,
     
     if verbose:
         print(f"\n[STEP 1] Loading dungeon data...")
-        print(f"  ✓ Loaded {len(dungeon.rooms)} rooms")
-        print(f"  ✓ Graph: {dungeon.graph.number_of_nodes()} nodes, {dungeon.graph.number_of_edges()} edges")
+        print(f"  âœ“ Loaded {len(dungeon.rooms)} rooms")
+        print(f"  âœ“ Graph: {dungeon.graph.number_of_nodes()} nodes, {dungeon.graph.number_of_edges()} edges")
     
     # Step 2: Stitch
     logger.info("[STEP 2] Stitching rooms...")
@@ -163,9 +163,9 @@ def run_pipeline(dungeon_num: int, variant: int = 1,
     
     if verbose:
         print(f"\n[STEP 2] Stitching rooms...")
-        print(f"  ✓ Global grid: {stitched.global_grid.shape}")
-        print(f"  ✓ Start: {stitched.start_global}")
-        print(f"  ✓ Triforce: {stitched.triforce_global}")
+        print(f"  âœ“ Global grid: {stitched.global_grid.shape}")
+        print(f"  âœ“ Start: {stitched.start_global}")
+        print(f"  âœ“ Triforce: {stitched.triforce_global}")
     
     # Step 3: Validate
     logger.info(f"[STEP 3] Validating solvability (mode: {mode})...")
@@ -177,15 +177,15 @@ def run_pipeline(dungeon_num: int, variant: int = 1,
     
     if verbose:
         if result['solvable']:
-            print(f"  ✓ SOLVABLE!")
-            print(f"  ✓ Path length: {result.get('path_length', 'N/A')} steps")
-            print(f"  ✓ Rooms traversed: {result.get('rooms_traversed', 'N/A')}")
+            print(f"  âœ“ SOLVABLE!")
+            print(f"  âœ“ Path length: {result.get('path_length', 'N/A')} steps")
+            print(f"  âœ“ Rooms traversed: {result.get('rooms_traversed', 'N/A')}")
             if 'keys_available' in result:
-                print(f"  ✓ Keys available: {result['keys_available']}")
-                print(f"  ✓ Keys used: {result['keys_used']}")
+                print(f"  âœ“ Keys available: {result['keys_available']}")
+                print(f"  âœ“ Keys used: {result['keys_used']}")
         else:
-            print(f"  ✗ NOT SOLVABLE")
-            print(f"  ✗ Reason: {result.get('reason', 'Unknown')}")
+            print(f"  âœ— NOT SOLVABLE")
+            print(f"  âœ— Reason: {result.get('reason', 'Unknown')}")
     
     # Return complete result
     return {
@@ -332,7 +332,7 @@ def main():
                 from src.simulation.validator import ZeldaLogicEnv, StateSpaceAStar
                 env = ZeldaLogicEnv(grid, render_mode=False)
                 solver = StateSpaceAStar(env)
-                success, solution_path, _ = solver.solve()
+                _success, solution_path, _ = solver.solve()
             
             config = ReplayConfig(
                 window_title=f"ZAVE - Dungeon {args.dungeon} Variant {args.variant}",
@@ -370,3 +370,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

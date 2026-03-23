@@ -22,8 +22,18 @@ def update_heartbeat(gui, logger, time_module, heartbeat_last, heartbeat_interva
 
 def handle_pending_solver_trigger(gui, logger):
     """Start solver when deferred trigger flag is set."""
-    if getattr(gui, "_pending_solver_trigger", False):
+    should_start = False
+    solver_lock = getattr(gui, "_solver_lock", None)
+    if solver_lock is not None:
+        with solver_lock:
+            if getattr(gui, "_pending_solver_trigger", False):
+                gui._pending_solver_trigger = False
+                should_start = True
+    elif getattr(gui, "_pending_solver_trigger", False):
         gui._pending_solver_trigger = False
+        should_start = True
+
+    if should_start:
         alg_name = gui._algorithm_name(gui.algorithm_idx)
         logger.info("â‰¡Æ’Ã¶Ã¤ Processing pending solver trigger: Starting %s solver...", alg_name)
         gui._start_auto_solve()

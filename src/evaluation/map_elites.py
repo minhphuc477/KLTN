@@ -163,7 +163,7 @@ class LinearityLeniencyExtractor(FeatureExtractor):
         # Compute shortest path length
         try:
             undirected = graph.to_undirected()
-            shortest_path = nx.shortest_path_length(undirected, start, goal)
+            _ = nx.shortest_path_length(undirected, start, goal)
         except (nx.NetworkXNoPath, nx.NodeNotFound):
             return 0.0
         
@@ -188,7 +188,7 @@ class LinearityLeniencyExtractor(FeatureExtractor):
         num_keys = 0
         num_locks = 0
         
-        for node, data in graph.nodes(data=True):
+        for _node, data in graph.nodes(data=True):
             tokens = _node_tokens(data)
             # Count only small keys toward lock leniency.
             if 'k' in tokens or ('key' in tokens and 'boss_key' not in tokens):

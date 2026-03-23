@@ -588,7 +588,7 @@ else:
 ### With Stitched Dungeon
 
 ```python
-from src.data.zelda_core import ZeldaDungeonAdapter
+from src.zelda_data.zelda_core import ZeldaDungeonAdapter
 
 adapter = ZeldaDungeonAdapter("Data/The Legend of Zelda")
 dungeon = adapter.load_dungeon(1, variant=1)

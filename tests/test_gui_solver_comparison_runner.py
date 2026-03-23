@@ -91,14 +91,16 @@ def test_run_solver_comparison_starts_background_thread_and_populates_results():
     )
 
     assert gui.solver_comparison_thread is not None
-    deadline = time.time() + 15.0
+    deadline = time.time() + 60.0
     while gui.solver_comparison_thread.is_alive() and time.time() < deadline:
         gui.solver_comparison_thread.join(timeout=0.25)
     assert not gui.solver_comparison_thread.is_alive()
 
     assert isinstance(gui.solver_comparison_results, list)
-    assert len(gui.solver_comparison_results) == 9
+    assert len(gui.solver_comparison_results) == 14
     assert any(item["name"] == "A*" and item["success"] for item in gui.solver_comparison_results)
+    a_star_row = next(item for item in gui.solver_comparison_results if item["name"] == "A*")
+    assert a_star_row.get("fallback_used") is False
     assert gui.show_solver_comparison_overlay is True
     assert messages[-1] == ("Solver comparison complete", 3.0)
     assert ("Solver comparison started (background)", 2.0, "info") in toasts

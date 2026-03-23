@@ -1,4 +1,8 @@
-"""Categorized index of GUI modules for navigation and maintenance."""
+"""Categorized index of GUI modules for navigation and maintenance.
+
+Canonical orchestration modules live under ``orchestration/*``.
+Legacy ``<domain>/*_orchestration.py`` modules are backward-compatible shims.
+"""
 
 GUI_MODULE_CATEGORIES = {
     # Public categorized facades introduced to reduce monolithic imports.
@@ -167,6 +171,33 @@ GUI_MODULE_CATEGORIES = {
         "topology/orchestration",
         "topology/precheck",
         "topology/match_controls",
+    ],
+    "domain_orchestration": [
+        "orchestration/app/asset_boot_orchestration",
+        "orchestration/app/entrypoint_orchestration",
+        "orchestration/app/runtime_loop_orchestration",
+        "orchestration/control_panel/animation_orchestration",
+        "orchestration/control_panel/click_render_orchestration",
+        "orchestration/control_panel/layout_orchestration",
+        "orchestration/gameplay/action_orchestration",
+        "orchestration/gameplay/control_actions_orchestration",
+        "orchestration/gameplay/dungeon_generation_orchestration",
+        "orchestration/gameplay/inventory_orchestration",
+        "orchestration/map/asset_orchestration",
+        "orchestration/map/navigation_orchestration",
+        "orchestration/rendering/frame_orchestration",
+        "orchestration/rendering/panel_overlay_orchestration",
+        "orchestration/rendering/status_toast_orchestration",
+        "orchestration/runtime/display_orchestration",
+        "orchestration/runtime/route_orchestration",
+        "orchestration/solver/comparison_orchestration",
+        "orchestration/solver/launch_orchestration",
+        "orchestration/solver/process_api_orchestration",
+        "orchestration/solver/request_orchestration",
+        "orchestration/solver/session_orchestration",
+        "orchestration/topology/helper_orchestration",
+        "orchestration/topology/match_orchestration",
+        "orchestration/topology/orchestration",
     ],
     "domain_components": [
         "components/constants",

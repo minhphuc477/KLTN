@@ -1,4 +1,4 @@
-"""
+﻿"""
 Test data integrity for Zelda dungeon datasets.
 
 This test suite verifies that dungeon data is consistent:
@@ -18,7 +18,7 @@ from collections import defaultdict
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.data.zelda_core import (
+from src.zelda_data.zelda_core import (
     ZeldaDungeonAdapter, 
     SEMANTIC_PALETTE,
     ROOM_WIDTH,
@@ -386,3 +386,4 @@ if __name__ == '__main__':
             print("  [OK] All checks passed")
     
     print(stats.summary())
+

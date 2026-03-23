@@ -454,17 +454,23 @@ class DemoRecorder:
     
     def _save_frame(self, frame: np.ndarray, frame_index: int):
         """Save individual frame to disk."""
+        frame_root = Path(self.config.output_dir) / self.current_recording.recording_id
+        frame_root.mkdir(parents=True, exist_ok=True)
+
         try:
             from PIL import Image
-            
-            frame_path = Path(self.config.output_dir) / self.current_recording.recording_id / f"frame_{frame_index:04d}.png"
-            frame_path.parent.mkdir(parents=True, exist_ok=True)
-            
+
+            frame_path = frame_root / f"frame_{frame_index:04d}.png"
             img = Image.fromarray(frame)
             img.save(str(frame_path))
-        
+
         except ImportError:
-            pass
+            # Fallback: keep raw frame data so recordings still persist without PIL.
+            frame_path = frame_root / f"frame_{frame_index:04d}.npy"
+            np.save(str(frame_path), frame)
+            logger.warning("PIL not available; saved raw frame array to %s", frame_path)
+        except Exception as exc:
+            logger.exception("Failed to save frame %s: %s", frame_index, exc)
 
 
 # ============================================================================

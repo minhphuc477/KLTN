@@ -34,7 +34,7 @@ class GameStateSearchConfig:
     enable_ara: bool = False
     ara_weight: float = 1.0
     allow_diagonals: bool = True
-    rules_profile: str = "extended"  # extended | strict_original
+    rules_profile: str = "vglc_strict"  # vglc_strict | extended | strict_original
     representation: SearchRepresentation = SearchRepresentation.HYBRID
 
     def to_priority_options(self) -> Dict[str, Any]:
@@ -44,7 +44,7 @@ class GameStateSearchConfig:
             "enable_ara": self.enable_ara,
             "ara_weight": self.ara_weight,
             "allow_diagonals": self.allow_diagonals,
-            "rules_profile": str(self.rules_profile or "extended"),
+            "rules_profile": str(self.rules_profile or "vglc_strict"),
             # Representation is consumed by StateSpaceAStar.
             "representation": self.representation.value,
         }

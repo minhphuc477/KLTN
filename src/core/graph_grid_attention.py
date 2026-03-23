@@ -121,7 +121,7 @@ class SinusoidalPositionEncoding2D(nn.Module):
         Returns:
             [B, C, H, W] with positional encoding added
         """
-        B, C, H, W = x.shape
+        _B, C, H, W = x.shape
         
         # Get relevant portion of encoding
         pe = self.pe[:H, :W, :C]  # [H, W, C]

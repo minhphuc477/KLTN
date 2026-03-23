@@ -3,6 +3,7 @@ Thesis-grade ablation runner with fixed-seed paired comparisons.
 
 Implements:
 1) Core ablations: FULL vs NO_EVOLUTION / NO_WFC / NO_LOGIC
+    + RANDOM_TOPOLOGY / PURE_WFC
 2) Requested sweeps:
    - VQ codebook size (128/512/2048) via categorical codebook cap
    - latent diffusion vs categorical
@@ -22,6 +23,7 @@ import sys
 import time
 from dataclasses import dataclass, asdict
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import networkx as nx
@@ -41,8 +43,16 @@ from src.evaluation.benchmark_suite import (
 )
 from src.generation.evolutionary_director import mission_graph_to_networkx
 from src.generation.evolutionary_director import networkx_to_mission_graph
+from src.generation.evolutionary_director import EvolutionaryTopologyGenerator
 from src.generation.grammar import Difficulty, MissionGrammar
 from src.pipeline.dungeon_pipeline import NeuralSymbolicDungeonPipeline
+from src.pipeline.dungeon_pipeline import RoomGenerationResult
+from src.generation.weighted_bayesian_wfc import (
+    WeightedBayesianWFC,
+    WeightedBayesianWFCConfig,
+    extract_tile_priors_from_vqvae,
+)
+from src.core.definitions import ROOM_HEIGHT, ROOM_WIDTH
 from src.simulation.cognitive_bounded_search import solve_with_cbs
 from src.simulation.validator import StateSpaceAStar, ZeldaLogicEnv
 
@@ -53,7 +63,9 @@ logger = logging.getLogger(__name__)
 class ExperimentConfig:
     name: str
     use_evolution: bool = True
+    random_topology: bool = False
     use_wfc: bool = True
+    pure_wfc: bool = False
     logic_guidance_scale: float = 1.0
     latent_sampler: str = "diffusion"  # diffusion | categorical
     categorical_codebook_size: Optional[int] = None
@@ -230,6 +242,7 @@ class AblationStudy:
 
         self.reference_graphs = load_vglc_reference_graphs(self.data_root, limit=64)
         ref_rooms = load_vglc_reference_rooms(self.data_root, max_rooms=256)
+        self.reference_rooms = list(ref_rooms)
         self.reference_tile_dist = _tile_distribution(ref_rooms)
         self.reference_vectors = (
             np.stack([_descriptor_vector(g) for g in self.reference_graphs], axis=0)
@@ -239,6 +252,7 @@ class AblationStudy:
 
         self._pipeline: Optional[NeuralSymbolicDungeonPipeline] = None
         self._constraint_grammar = MissionGrammar(seed=2026)
+        self._wfc_tile_priors: Optional[Dict[int, Any]] = None
 
     def _get_pipeline(self) -> NeuralSymbolicDungeonPipeline:
         if self._pipeline is None:
@@ -261,6 +275,131 @@ class AblationStudy:
             validate_all=True,
         )
         return mission_graph_to_networkx(graph)
+
+    def _build_evolution_graph(self, seed: int) -> nx.Graph:
+        generator = EvolutionaryTopologyGenerator(
+            target_curve=self.target_curve,
+            population_size=self.evolution_population,
+            generations=self.evolution_generations,
+            max_nodes=self.num_rooms,
+            seed=seed,
+        )
+        return generator.evolve(directed_output=True)
+
+    def _build_random_topology_graph(self, seed: int) -> nx.DiGraph:
+        rng = np.random.default_rng(seed)
+        n = int(max(3, self.num_rooms))
+        graph = nx.DiGraph()
+
+        for node_id in range(n):
+            if node_id == 0:
+                graph.add_node(
+                    node_id,
+                    label="S",
+                    type="start",
+                    is_start=True,
+                    is_entry=True,
+                )
+            elif node_id == n - 1:
+                graph.add_node(
+                    node_id,
+                    label="T",
+                    type="goal",
+                    is_goal=True,
+                    is_triforce=True,
+                )
+            else:
+                node_type = str(rng.choice(["enemy", "puzzle", "item", "empty"]))
+                graph.add_node(node_id, label=node_type.upper(), type=node_type)
+
+        # Backbone chain ensures at least one directed start->goal path.
+        for u in range(n - 1):
+            graph.add_edge(u, u + 1, label="open", edge_type="open")
+
+        # Add random forward edges for branching without introducing directed cycles.
+        p_extra = float(np.clip(2.5 / max(1, n), 0.08, 0.45))
+        for u in range(n - 2):
+            for v in range(u + 2, n):
+                if float(rng.random()) < p_extra:
+                    graph.add_edge(u, v, label="open", edge_type="open")
+
+        return graph
+
+    def _build_mission_graph(self, cfg: ExperimentConfig, seed: int) -> nx.Graph:
+        if bool(cfg.random_topology):
+            return self._build_random_topology_graph(seed=seed)
+        if bool(cfg.use_evolution):
+            return self._build_evolution_graph(seed=seed)
+        return self._build_non_evolution_graph(seed=seed)
+
+    def _get_wfc_tile_priors(self) -> Dict[int, Any]:
+        if self._wfc_tile_priors is None:
+            training_rooms = self.reference_rooms if self.reference_rooms else [
+                np.zeros((ROOM_HEIGHT, ROOM_WIDTH), dtype=np.int32)
+            ]
+            self._wfc_tile_priors = extract_tile_priors_from_vqvae(
+                vqvae_codebook=np.zeros((1, 1), dtype=np.float32),
+                training_grids=training_rooms,
+            )
+        return self._wfc_tile_priors
+
+    def _generate_dungeon_pure_wfc(
+        self,
+        *,
+        graph: nx.Graph,
+        seed: int,
+        pipeline: NeuralSymbolicDungeonPipeline,
+    ) -> Any:
+        tile_priors = self._get_wfc_tile_priors()
+        wfc_cfg = WeightedBayesianWFCConfig(
+            use_vqvae_priors=True,
+            enable_backtracking=True,
+            max_backtracks=192,
+            max_restarts=2,
+        )
+
+        rooms: Dict[int, RoomGenerationResult] = {}
+        latent_h = max(1, ROOM_HEIGHT // 4)
+        latent_w = max(1, (ROOM_WIDTH + 3) // 4)
+
+        for room_id in sorted(list(graph.nodes()), key=lambda x: str(x)):
+            room_seed = int(seed + (int(room_id) if isinstance(room_id, int) else abs(hash(str(room_id))) % 100000))
+            wfc = WeightedBayesianWFC(
+                width=ROOM_WIDTH,
+                height=ROOM_HEIGHT,
+                tile_priors=tile_priors,
+                config=wfc_cfg,
+                seed=room_seed,
+            )
+            room_grid = wfc.generate(seed=room_seed)
+            latent = torch.zeros((1, 64, latent_h, latent_w), dtype=torch.float32)
+            rooms[int(room_id) if isinstance(room_id, int) else room_id] = RoomGenerationResult(
+                room_id=int(room_id) if isinstance(room_id, int) else 0,
+                room_grid=np.asarray(room_grid, dtype=np.int32),
+                latent=latent,
+                neural_grid=np.asarray(room_grid, dtype=np.int32),
+                was_repaired=False,
+                repair_mask=None,
+                metrics={"wfc_only": 1.0},
+            )
+
+        dungeon_grid = pipeline._stitch_rooms(rooms, graph)
+        metrics = {
+            "num_rooms": len(rooms),
+            "total_tiles_repaired": 0.0,
+            "repair_rate": 0.0,
+            "dungeon_shape": dungeon_grid.shape,
+            "generation_time_sec": float("nan"),
+            "wfc_only": 1.0,
+        }
+        return SimpleNamespace(
+            dungeon_grid=dungeon_grid,
+            rooms=rooms,
+            mission_graph=graph,
+            metrics=metrics,
+            map_elites_score=None,
+            generation_time=float("nan"),
+        )
 
     def _optimal_and_cbs_metrics(self, grid: np.ndarray, seed: int) -> Tuple[bool, float, float, float]:
         optimal_success = False
@@ -342,28 +481,32 @@ class AblationStudy:
 
         try:
             pipeline = self._get_pipeline()
-            mission_graph = None
-            generate_topology = bool(cfg.use_evolution)
-            if not cfg.use_evolution:
-                mission_graph = self._build_non_evolution_graph(seed=seed)
+            mission_graph = self._build_mission_graph(cfg, seed=seed)
 
-            result = pipeline.generate_dungeon(
-                mission_graph=mission_graph,
-                generate_topology=generate_topology,
-                target_curve=self.target_curve,
-                num_rooms=self.num_rooms,
-                population_size=self.evolution_population,
-                generations=self.evolution_generations,
-                guidance_scale=7.5,
-                logic_guidance_scale=float(cfg.logic_guidance_scale),
-                num_diffusion_steps=self.diffusion_steps,
-                latent_sampler=cfg.latent_sampler,
-                categorical_codebook_size=cfg.categorical_codebook_size,
-                use_topological_positional_encoding=bool(cfg.use_tpe),
-                apply_repair=bool(cfg.use_wfc),
-                enable_map_elites=False,
-                seed=seed,
-            )
+            if bool(cfg.pure_wfc):
+                result = self._generate_dungeon_pure_wfc(
+                    graph=mission_graph,
+                    seed=seed,
+                    pipeline=pipeline,
+                )
+            else:
+                result = pipeline.generate_dungeon(
+                    mission_graph=mission_graph,
+                    generate_topology=False,
+                    target_curve=self.target_curve,
+                    num_rooms=self.num_rooms,
+                    population_size=self.evolution_population,
+                    generations=self.evolution_generations,
+                    guidance_scale=7.5,
+                    logic_guidance_scale=float(cfg.logic_guidance_scale),
+                    num_diffusion_steps=self.diffusion_steps,
+                    latent_sampler=cfg.latent_sampler,
+                    categorical_codebook_size=cfg.categorical_codebook_size,
+                    use_topological_positional_encoding=bool(cfg.use_tpe),
+                    apply_repair=bool(cfg.use_wfc),
+                    enable_map_elites=False,
+                    seed=seed,
+                )
 
             grid = np.asarray(result.dungeon_grid, dtype=np.int32)
             graph = result.mission_graph
@@ -611,8 +754,10 @@ def build_experiment_set(include_extended: bool = True) -> List[ExperimentConfig
     core = [
         ExperimentConfig(name="FULL"),
         ExperimentConfig(name="NO_EVOLUTION", use_evolution=False),
+        ExperimentConfig(name="RANDOM_TOPOLOGY", use_evolution=False, random_topology=True),
         ExperimentConfig(name="NO_WFC", use_wfc=False),
         ExperimentConfig(name="NO_LOGIC", logic_guidance_scale=0.0),
+        ExperimentConfig(name="PURE_WFC", use_evolution=True, pure_wfc=True, use_wfc=False, logic_guidance_scale=0.0),
     ]
     if not include_extended:
         return core

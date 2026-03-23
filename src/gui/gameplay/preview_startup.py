@@ -1,4 +1,4 @@
-"""Helpers for non-blocking preview startup after map load."""
+﻿"""Helpers for non-blocking preview startup after map load."""
 
 import os
 import tempfile
@@ -50,7 +50,8 @@ def start_preview_for_current_map(
         logger.info("Automatic preview startup disabled via KLTN_DISABLE_PREVIEW=1")
         return
 
-    if getattr(gui, "preview_thread", None) and getattr(gui, "preview_thread").is_alive():
+    preview_thread = getattr(gui, "preview_thread", None)
+    if preview_thread and preview_thread.is_alive():
         gui._set_message("Preview already running...")
         return
 
@@ -59,7 +60,7 @@ def start_preview_for_current_map(
             current_dungeon = gui.maps[gui.current_map_idx]
             if hasattr(current_dungeon, "graph") and current_dungeon.graph and not getattr(gui, "force_grid_algorithm", False):
                 try:
-                    from src.data.zelda_core import DungeonSolver, ValidationMode
+                    from src.zelda_data.zelda_core import DungeonSolver, ValidationMode
 
                     solver = DungeonSolver()
                     result = solver.solve(current_dungeon, mode=ValidationMode.FULL)
@@ -177,3 +178,4 @@ def start_preview_for_current_map(
 
     startup_thread = threading_module.Thread(target=_spawn_preview_process_async, daemon=True)
     startup_thread.start()
+

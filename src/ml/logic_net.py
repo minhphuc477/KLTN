@@ -122,8 +122,7 @@ class SoftBellmanFord(nn.Module):
         assert probability_map.ndim == 4 and probability_map.shape[1] == 1, \
             f"Expected (B, 1, H, W) tensor, got shape {probability_map.shape}"
         
-        B, C, H, W = probability_map.shape
-        device = probability_map.device
+        B, _C, H, W = probability_map.shape
         
         # Initialize reachability map with 1.0 at start positions
         R = torch.zeros_like(probability_map)
@@ -269,8 +268,7 @@ class LogicNet(nn.Module):
         Returns:
             (B, 1, H, W) reachability values
         """
-        B, C, H, W = probability_map.shape
-        device = probability_map.device
+        B, _C, H, W = probability_map.shape
         
         R = torch.zeros_like(probability_map)
         for i in range(B):
@@ -346,7 +344,7 @@ class InventoryAwareLogicNet(nn.Module):
         Returns:
             (B,) solvability scores
         """
-        B, C, H, W = floor_prob.shape
+        B, _C, H, W = floor_prob.shape
         device = floor_prob.device
         
         # Initialize
@@ -358,7 +356,7 @@ class InventoryAwareLogicNet(nn.Module):
             R[i, 0, sr, sc] = 1.0
         
         # Multi-stage propagation
-        for stage in range(self.num_key_stages):
+        for _stage in range(self.num_key_stages):
             # Current walkability (locked doors reduced by keys needed)
             door_passability = torch.sigmoid(
                 self.key_gate * (keys_collected.view(B, 1, 1, 1) - 1)
@@ -512,8 +510,7 @@ class DifferentiableTortuosity(nn.Module):
         Returns:
             (B,) estimated path lengths
         """
-        B, C, H, W = probability_map.shape
-        device = probability_map.device
+        B, _C, H, W = probability_map.shape
         
         # Initialize distance map with large values
         # D[i,j] = estimated distance from goal to (i,j)
@@ -664,8 +661,6 @@ def tortuosity_loss(
     # Add a tiny dependency on prob_map to maintain the computation graph
     if not is_valid.any():
         return (probability_map * 0.0).sum() + 1.0
-    
-    eps = 1e-6
     
     # Penalize paths that are too straight: soft penalty via ReLU
     # straight_penalty = max(0, target - tortuosity) for each sample

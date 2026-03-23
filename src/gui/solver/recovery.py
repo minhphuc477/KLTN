@@ -5,13 +5,19 @@ from typing import Any, Callable
 
 def log_active_solver_state(gui: Any, logger: Any, os_module: Any, time_module: Any) -> None:
     """Emit detailed state diagnostics for the active solver."""
+    proc = getattr(gui, "solver_proc", None)
+    try:
+        proc_alive = proc.is_alive() if proc else "N/A"
+    except Exception:
+        proc_alive = "N/A"
+
     logger.warning("DEBUG_SOLVER: Solver state dump:")
     logger.warning("  solver_running=%s", getattr(gui, "solver_running", None))
     logger.warning("  solver_done=%s", getattr(gui, "solver_done", None))
     logger.warning(
         "  solver_proc=%s (alive=%s)",
-        getattr(gui, "solver_proc", None),
-        getattr(getattr(gui, "solver_proc", None), "is_alive", lambda: "N/A")(),
+        proc,
+        proc_alive,
     )
     logger.warning(
         "  solver_outfile=%s (exists=%s)",
@@ -42,7 +48,10 @@ def compute_solver_timeout_seconds(
         default_timeout = scale_timeout_by_grid_size(default_timeout, grid_cells)
     except Exception:
         pass
-    return float(os_module.environ.get("KLTN_SOLVER_TIMEOUT", str(default_timeout)))
+    try:
+        return float(os_module.environ.get("KLTN_SOLVER_TIMEOUT", str(default_timeout)))
+    except (TypeError, ValueError):
+        return float(default_timeout)
 
 
 def terminate_hung_solver_process(proc: Any, logger: Any) -> None:

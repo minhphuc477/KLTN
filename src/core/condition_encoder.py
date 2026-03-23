@@ -153,7 +153,6 @@ class LocalStreamEncoder(nn.Module):
             Local conditioning vector [B, output_dim]
         """
         batch_size = position.shape[0]
-        device = position.device
         
         # Encode each neighbor
         neighbor_features = []
@@ -335,7 +334,7 @@ class GlobalStreamEncoder(nn.Module):
         self.gnn_layers = nn.ModuleList()
         self.layer_norms = nn.ModuleList()
         
-        for i in range(num_layers):
+        for _i in range(num_layers):
             if gnn_type == 'gat':
                 # Phase 3A: GATv2Conv supports edge features natively
                 # Edge types (key_locked, boss_locked, etc.) are critical

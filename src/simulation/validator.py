@@ -16,6 +16,7 @@ import os
 import heapq
 import logging
 import numpy as np
+import networkx as nx
 from typing import Dict, List, Tuple, Optional, Set, Any, FrozenSet
 from dataclasses import dataclass, field
 from collections import defaultdict, deque
@@ -31,7 +32,17 @@ from src.core.definitions import (
     ROOM_HEIGHT,
     ROOM_WIDTH,
     parse_edge_type_tokens,
-    select_primary_edge_type,
+)
+from src.simulation.edge_logic import (
+    edge_constraints_from_data,
+    edge_type_from_data,
+    combine_edge_types,
+    can_traverse_edge_type,
+)
+from src.simulation.validation_helpers import (
+    SanityChecker,
+    MetricsEngine,
+    DiversityEvaluator,
 )
 
 
@@ -514,7 +525,7 @@ class SolverOptions:
     timeout: int = 200000  # Increased for complex dungeons with many virtual node paths
     allow_diagonals: bool = False
     heuristic_mode: str = "balanced"  # "balanced", "speedrunner", "completionist"
-    rules_profile: str = "extended"  # extended | strict_original
+    rules_profile: str = "vglc_strict"  # vglc_strict | extended | strict_original
     
     @classmethod
     def for_level(cls, level_type: str = "normal") -> 'SolverOptions':
@@ -625,8 +636,9 @@ class ZeldaLogicEnv:
         
         # Store solver options (default if not provided)
         self.solver_options = solver_options or SolverOptions()
-        self.rules_profile = str(getattr(self.solver_options, 'rules_profile', 'extended') or 'extended').strip().lower()
+        self.rules_profile = str(getattr(self.solver_options, 'rules_profile', 'vglc_strict') or 'vglc_strict').strip().lower()
         self.strict_original_mode = self.rules_profile in {'strict_original', 'original', 'nes'}
+        self.vglc_strict_mode = self.rules_profile in {'vglc_strict', 'vglc', 'dataset'}
         
         # Store graph connectivity for handling stairs
         self.graph = graph
@@ -660,9 +672,24 @@ class ZeldaLogicEnv:
         
         # Initialize rendering if needed
         self._screen = None
+        self._font = None
+        self._link_img = None
         self._images = {}
         if render_mode:
             self._init_render()
+
+    # Public wrappers used by solver helpers (keeps internals encapsulated for linting)
+    def find_all_positions(self, target_id: int) -> List[Tuple[int, int]]:
+        return self._find_all_positions(target_id)
+
+    def get_room_for_position(self, pos: Tuple[int, int]) -> Optional[Tuple[int, int]]:
+        return self._get_room_for_position(pos)
+
+    def is_room_cleared(self, room_pos: Optional[Tuple[int, int]], state: GameState) -> bool:
+        return self._is_room_cleared(room_pos, state)
+
+    def try_move_pure(self, state: GameState, target_pos: Tuple[int, int], target_tile: int) -> Tuple[bool, GameState]:
+        return self._try_move_pure(state, target_pos, target_tile)
     
     def _find_position(self, target_id: int) -> Optional[Tuple[int, int]]:
         """Find the first occurrence of a tile ID."""
@@ -1153,7 +1180,7 @@ class ZeldaLogicEnv:
         """Initialize Pygame rendering."""
         try:
             import pygame
-            pygame.init()
+            pygame.init()  # pylint: disable=no-member
             
             self.TILE_SIZE = 32
             screen_w = self.width * self.TILE_SIZE
@@ -1206,9 +1233,8 @@ class ZeldaLogicEnv:
                     img = pygame.image.load(img_path)
                     self._images[tile_id] = pygame.transform.scale(img, (TILE_SIZE, TILE_SIZE))
                     continue
-                except Exception as e:
-                    import logging
-                    logging.debug("Could not load asset image %s: %s", img_path, e, exc_info=True)
+                except (pygame.error, OSError, ValueError, TypeError) as e:
+                    logger.debug("Could not load asset image %s: %s", img_path, e, exc_info=True)
             
             # Fallback: colored square
             surf = pygame.Surface((TILE_SIZE, TILE_SIZE))
@@ -1221,9 +1247,8 @@ class ZeldaLogicEnv:
             try:
                 img = pygame.image.load(link_path)
                 self._link_img = pygame.transform.scale(img, (TILE_SIZE, TILE_SIZE))
-            except Exception as e:
-                import logging
-                logging.debug("Could not load link asset %s: %s", link_path, e, exc_info=True)
+            except (pygame.error, OSError, ValueError, TypeError) as e:
+                logger.debug("Could not load link asset %s: %s", link_path, e, exc_info=True)
     def render(self):
         """Render current state to screen."""
         if not self.render_mode or self._screen is None:
@@ -1271,10 +1296,9 @@ class ZeldaLogicEnv:
         if self.render_mode:
             try:
                 import pygame
-                pygame.quit()
-            except Exception as e:
-                import logging
-                logging.debug("Error during pygame.quit(): %s", e, exc_info=True)
+                pygame.quit()  # pylint: disable=no-member
+            except (ImportError, RuntimeError, OSError) as e:
+                logger.debug("Error during pygame.quit(): %s", e, exc_info=True)
 
 
 # ==========================================
@@ -1322,16 +1346,29 @@ class StateSpaceAStar:
         # This enables traversal through "virtual nodes" (graph nodes without physical rooms)
         self._virtual_transition_cache = {}
         self._node_to_room = None  # Lazy-initialized reverse mapping
+        self._best_at_pos = {}
+        self._best_g_at_pos = {}
 
         # Priority options
         self.priority_options = priority_options or {}
-        env_profile = 'strict_original' if bool(getattr(self.env, 'strict_original_mode', False)) else 'extended'
+        if bool(getattr(self.env, 'strict_original_mode', False)):
+            env_profile = 'strict_original'
+        elif bool(getattr(self.env, 'vglc_strict_mode', False)):
+            env_profile = 'vglc_strict'
+        else:
+            env_profile = 'extended'
         self.rules_profile = str(self.priority_options.get('rules_profile', env_profile) or env_profile).strip().lower()
         self.strict_original_mode = self.rules_profile in {'strict_original', 'original', 'nes'}
+        self.vglc_strict_mode = self.rules_profile in {'vglc_strict', 'vglc', 'dataset'}
         if self.strict_original_mode:
             # Keep environment and solver semantics aligned.
             self.env.rules_profile = 'strict_original'
             self.env.strict_original_mode = True
+            self.env.vglc_strict_mode = False
+        elif self.vglc_strict_mode:
+            self.env.rules_profile = 'vglc_strict'
+            self.env.vglc_strict_mode = True
+            self.env.strict_original_mode = False
 
         rep_raw = str(self.priority_options.get('representation', 'hybrid')).strip().lower()
         if rep_raw not in {'tile', 'graph', 'hybrid'}:
@@ -1361,7 +1398,7 @@ class StateSpaceAStar:
             self.graph_only = False
         try:
             self.ara_weight = float(self.priority_options.get('ara_weight', 1.0))
-        except Exception:
+        except (TypeError, ValueError):
             self.ara_weight = 1.0
 
         # Precompute minimal locked-door counts from each graph node to goal
@@ -1389,7 +1426,6 @@ class StateSpaceAStar:
                 goal_node = None
             if goal_node is not None:
                 # Dijkstra-like on locked edge counts
-                import heapq
                 dist = {goal_node: 0}
                 pq = [(0, goal_node)]
                 while pq:
@@ -1398,7 +1434,6 @@ class StateSpaceAStar:
                         continue
                     for v in set(G.successors(u)) | set(G.predecessors(u)):
                         edata = G.get_edge_data(u, v, {}) or {}
-                        label = edata.get('label', '')
                         etype = self._edge_type_from_data(edata)
                         cost = 1 if etype in ('locked', 'key_locked') else 0
                         nd = d + cost
@@ -1406,7 +1441,7 @@ class StateSpaceAStar:
                             dist[v] = nd
                             heapq.heappush(pq, (nd, v))
                 self.min_locked_needed_node = dist
-        except Exception:
+        except (AttributeError, TypeError, ValueError, KeyError):
             self.min_locked_needed_node = {}
         
         # PERFORMANCE FIX: Cache door and element positions at initialization
@@ -1487,7 +1522,7 @@ class StateSpaceAStar:
                     # This avoids false negatives on VGLC maps where keys are encoded in graph labels.
                     try:
                         node_attrs = G.nodes.get(nd, {}) if G is not None else {}
-                    except Exception:
+                    except (AttributeError, TypeError, KeyError):
                         node_attrs = {}
                     raw_label = str(node_attrs.get('label', ''))
                     raw_tokens = [tok.strip() for tok in raw_label.replace('\n', ',').split(',') if tok.strip()]
@@ -1525,8 +1560,8 @@ class StateSpaceAStar:
                     self._room_node_to_pos[nd] = rep_pos
                     self._node_items[nd] = items_in_room
                     self._node_walkable_count[nd] = wcount
-        except Exception:
-            pass
+        except (AttributeError, TypeError, ValueError, KeyError) as exc:
+            logger.debug("Failed to precompute node item hints; continuing without hints: %s", exc)
 
         # ── PLAN-GUIDED HEURISTIC STATE (Upgrade 3) ──
         # Populated lazily in solve() after room-level A* runs.
@@ -1539,16 +1574,11 @@ class StateSpaceAStar:
 
     def _edge_constraints_from_data(self, edge_data: Optional[Dict[str, Any]]) -> List[str]:
         """Return canonical edge constraints from edge attributes."""
-        if not edge_data:
-            return ['open']
-        return parse_edge_type_tokens(
-            label=edge_data.get('label', ''),
-            edge_type=edge_data.get('edge_type', ''),
-        )
+        return edge_constraints_from_data(edge_data)
 
     def _edge_type_from_data(self, edge_data: Optional[Dict[str, Any]]) -> str:
         """Return primary canonical edge type from edge attributes."""
-        return select_primary_edge_type(self._edge_constraints_from_data(edge_data))
+        return edge_type_from_data(edge_data)
 
     # ------------------------------------------------------------------
     # UPGRADE 1: DETERMINISTIC SOFT-LOCK DETECTION (Reverse Reachability)
@@ -1583,7 +1613,7 @@ class StateSpaceAStar:
             'forward_grid'  : int – count of forward-reachable tiles
             'backward_grid' : int – count of backward-reachable tiles
         """
-        result: Dict[str, Any] = {
+        trap_report: Dict[str, Any] = {
             'graph_traps': set(),
             'grid_traps': set(),
             'forward_graph': set(),
@@ -1663,9 +1693,9 @@ class StateSpaceAStar:
                         bwd.add(v)
                         q.append(v)
 
-                result['forward_graph'] = fwd
-                result['backward_graph'] = bwd
-                result['graph_traps'] = fwd - bwd
+                trap_report['forward_graph'] = fwd
+                trap_report['backward_graph'] = bwd
+                trap_report['graph_traps'] = fwd - bwd
                 logger.debug('Graph reachability: fwd=%d bwd=%d traps=%d',
                              len(fwd), len(bwd), len(fwd - bwd))
 
@@ -1715,13 +1745,13 @@ class StateSpaceAStar:
                             bwd_grid.add((nr, nc))
                             q3.append((nr, nc))
 
-            result['forward_grid'] = len(fwd_grid)
-            result['backward_grid'] = len(bwd_grid)
-            result['grid_traps'] = fwd_grid - bwd_grid
+            trap_report['forward_grid'] = len(fwd_grid)
+            trap_report['backward_grid'] = len(bwd_grid)
+            trap_report['grid_traps'] = fwd_grid - bwd_grid
             logger.debug('Grid reachability: fwd=%d bwd=%d traps=%d',
                          len(fwd_grid), len(bwd_grid), len(fwd_grid - bwd_grid))
 
-        return result
+        return trap_report
 
     # ------------------------------------------------------------------
     # UPGRADE 2: MACRO-ACTION A* (Jump Optimization)
@@ -1764,7 +1794,7 @@ class StateSpaceAStar:
             SEMANTIC_PALETTE['TRIFORCE']: 'goal',
         }
 
-        result: Dict[Any, List[Tuple[str, Tuple[int, int]]]] = {}
+        poi_by_node: Dict[Any, List[Tuple[str, Tuple[int, int]]]] = {}
         for rp, (ro, co) in rpos.items():
             nd = r2n.get(rp)
             if nd is None:
@@ -1777,8 +1807,8 @@ class StateSpaceAStar:
                     t = grid[r, c]
                     if t in poi_ids:
                         pois.append((poi_ids[t], (r, c)))
-            result[nd] = pois
-        return result
+            poi_by_node[nd] = pois
+        return poi_by_node
 
     def _intra_room_bfs(self, room_node: Any,
                         pois: List[Tuple[str, Tuple[int, int]]]
@@ -1872,13 +1902,11 @@ class StateSpaceAStar:
 
         # Build position → room-node lookup
         pos_to_node: Dict[Tuple[int, int], Any] = {}
-        for rp, (ro, co) in rpos.items():
+        for rp, (_ro, _co) in rpos.items():
             nd = r2n.get(rp)
             if nd is None:
                 continue
-            re = min(ro + ROOM_HEIGHT, self.env.height)
-            ce = min(co + ROOM_WIDTH, self.env.width)
-            for ptype, ppos in all_pois.get(nd, []):
+            for _, ppos in all_pois.get(nd, []):
                 pos_to_node[ppos] = nd
 
         # Collect all POI positions as a set for quick membership
@@ -1894,12 +1922,6 @@ class StateSpaceAStar:
         # Build cross-room edges between door POIs of adjacent rooms
         # Two POIs in different rooms are connected if their rooms share a graph edge
         cross_edges: List[Tuple[Tuple[int, int], Tuple[int, int], int, str]] = []
-        n2r: Dict[Any, Tuple[int, int]] = {}
-        if hasattr(self.env, 'node_to_room') and self.env.node_to_room:
-            n2r = self.env.node_to_room
-        else:
-            n2r = {v: k for k, v in r2n.items()}
-
         for nd in G.nodes():
             for nb in set(G.successors(nd)) | set(G.predecessors(nd)):
                 ed = G.get_edge_data(nd, nb, {}) or {}
@@ -1919,7 +1941,6 @@ class StateSpaceAStar:
         init_bombs = opts.start_bombs
         init_bk = opts.start_boss_key
         init_item = opts.start_item
-        init_collected: FrozenSet[Tuple[int, int]] = frozenset()
         init_opened: FrozenSet[Tuple[int, int]] = frozenset()
 
         # Auto-collect items at start position
@@ -1964,7 +1985,7 @@ class StateSpaceAStar:
         macro_timeout = min(self.timeout, 500000)
 
         while open_set and states_explored < macro_timeout:
-            f, _, g, state, path = heapq.heappop(open_set)
+            _, _, g, state, path = heapq.heappop(open_set)
             pos, keys, bombs, bk, has_item, collected, opened = state
 
             # Simple visited check (exact state)
@@ -2130,7 +2151,6 @@ class StateSpaceAStar:
 
         # State tuple: (node, keys, bombs, has_boss_key, has_item, collected_fs, opened_fs)
         opts = self.env.solver_options or SolverOptions()
-        init_collected: FrozenSet[Tuple[int, int]] = frozenset()
         init_opened: FrozenSet[Tuple[int, int]] = frozenset()
 
         # Collect items from the starting room automatically
@@ -2225,7 +2245,7 @@ class StateSpaceAStar:
         room_timeout = min(self.timeout, 2000000)
 
         while open_set and states_explored < room_timeout:
-            f, _, g, state, path = heapq.heappop(open_set)
+            _, _, g, state, path = heapq.heappop(open_set)
             node, keys, bombs, bk, has_item_flag, collected, opened = state
 
             inv = _inv(state, g)
@@ -2245,7 +2265,6 @@ class StateSpaceAStar:
                 edata = G.get_edge_data(node, neighbor, {}) or {}
                 if not edata:
                     edata = G.get_edge_data(neighbor, node, {}) or {}
-                label = edata.get('label', '')
                 etype = self._edge_type_from_data(edata)
 
                 # Check traversability and compute new inventory
@@ -2253,9 +2272,6 @@ class StateSpaceAStar:
                 new_bombs = bombs
                 new_bk = bk
                 new_item = has_item_flag
-                new_opened = opened
-                new_collected = collected
-
                 if etype in ('open', 'stair', 'switch'):
                     pass  # Free
                 elif etype == 'soft_locked':
@@ -2264,7 +2280,6 @@ class StateSpaceAStar:
                     if not G.has_edge(node, neighbor):
                         continue
                     ed = G.get_edge_data(node, neighbor, {}) or {}
-                    el = ed.get('label', '')
                     et = self._edge_type_from_data(ed)
                     if et == 'soft_locked':
                         pass  # Can traverse in this direction
@@ -2298,14 +2313,13 @@ class StateSpaceAStar:
                     v_visited = {node, neighbor}
                     v_queue = deque([(neighbor, etype, new_keys, new_bombs, new_bk, new_item)])
                     while v_queue:
-                        vn, v_etype, vk, vb, vbk, vi = v_queue.popleft()
+                        vn, _, vk, vb, vbk, vi = v_queue.popleft()
                         for vn2 in set(G.successors(vn)) | set(G.predecessors(vn)):
                             if vn2 in v_visited:
                                 continue
                             ved = G.get_edge_data(vn, vn2, {}) or {}
                             if not ved:
                                 ved = G.get_edge_data(vn2, vn, {}) or {}
-                            vl = ved.get('label', '')
                             vet = self._edge_type_from_data(ved)
                             # Check traversability
                             tk, tb, tbk, ti = vk, vb, vbk, vi
@@ -2325,7 +2339,6 @@ class StateSpaceAStar:
                                     can = False
                                 else:
                                     edd = G.get_edge_data(vn, vn2, {}) or {}
-                                    ell = edd.get('label', '')
                                     ett = self._edge_type_from_data(edd)
                                     if ett != 'soft_locked':
                                         can = False
@@ -2490,7 +2503,7 @@ class StateSpaceAStar:
                                 'falling back to macro-action', h_states)
                     # Even on failure, try to extract partial plan for heuristic
                     self._populate_abstract_plan(h_path)
-            except Exception as e:
+            except (RuntimeError, ValueError, KeyError, TypeError) as e:
                 logger.debug('Hierarchical solver error: %s, falling back', e)
 
         # ── STRATEGY 1.5: Macro-Action A* (POI-to-POI) ──
@@ -2510,7 +2523,7 @@ class StateSpaceAStar:
                 else:
                     logger.debug('Macro-action solver failed with %d states, '
                                 'falling back to tile-level', m_states)
-            except Exception as e:
+            except (RuntimeError, ValueError, KeyError, TypeError) as e:
                 logger.debug('Macro-action solver error: %s, falling back', e)
 
         # ── STRATEGY 2: Tile-level A* (original, with improvements) ──
@@ -2559,7 +2572,7 @@ class StateSpaceAStar:
         diagonal_deltas = [(-1, -1), (-1, 1), (1, -1), (1, 1)]
         
         while open_set and states_explored < self.timeout:
-            entry = heapq.heappop(open_set)
+            entry: Any = heapq.heappop(open_set)
             # Support both simple and priority tuple formats
             # Simple: (f, counter, state_hash, g, state, path) - 6 elements
             # Priority: (priority_tuple, state_hash, g, state, path) - 5 elements, first is tuple
@@ -2568,7 +2581,7 @@ class StateSpaceAStar:
                 _, _, state_hash, current_g, current_state, path = entry
             elif len(entry) == 5 and isinstance(entry[0], tuple):
                 # Priority tuple format: (priority_tuple, state_hash, g, state, path)
-                priority, state_hash, current_g, current_state, path = entry
+                _priority, state_hash, current_g, current_state, path = entry
             elif len(entry) == 5:
                 # Old format without g: (f, counter, state_hash, state, path)
                 _, _, state_hash, current_state, path = entry
@@ -2689,11 +2702,8 @@ class StateSpaceAStar:
                 SEMANTIC_PALETTE['DOOR_BOSS'],
             })
             
-            # Check if player is at room boundary (within 1 tile of room edge)
-            # TIGHTENED: Was 3 tiles, now 1 tile. This prevents spurious graph
-            # transitions from the interior of rooms, which was causing massive
-            # state explosion in D2 and D9. Only the outermost walkable row/col
-            # of each room should trigger graph-based transitions.
+            # Check if player is at room boundary (within 1 tile of room edge).
+            # NOTE: This is only used by extended profile.
             is_at_boundary = False
             if self.env.room_positions:
                 for room_pos, (r_off, c_off) in self.env.room_positions.items():
@@ -2708,7 +2718,14 @@ class StateSpaceAStar:
                             is_at_boundary = True
                         break
             
-            can_teleport = is_stair or is_door or is_at_boundary
+            # Profile-specific teleport eligibility:
+            # - strict_original: stair-only (NES-like shutter semantics)
+            # - vglc_strict: explicit transition tiles only (stairs/doors)
+            # - extended: includes room-boundary heuristic
+            if self.vglc_strict_mode:
+                can_teleport = is_stair or is_door
+            else:
+                can_teleport = is_stair or is_door or is_at_boundary
             if self.strict_original_mode:
                 can_teleport = is_stair
             
@@ -2774,7 +2791,7 @@ class StateSpaceAStar:
                 virtual_destinations = self._get_controlled_virtual_destinations(
                     current_state.position, current_state
                 )
-                for dest_pos, cost, edge_type in virtual_destinations:
+                for dest_pos, cost, _edge_type in virtual_destinations:
                     if 0 <= dest_pos[0] < height and 0 <= dest_pos[1] < width:
                         dest_tile = grid[dest_pos[0], dest_pos[1]]
                         neighbors.append((dest_pos, dest_tile, cost, True))  # is_teleport=True
@@ -2787,7 +2804,7 @@ class StateSpaceAStar:
                 warp_destinations = self._get_graph_warp_destinations(
                     current_state.position, current_state
                 )
-                for dest_pos, cost, edge_type in warp_destinations:
+                for dest_pos, cost, _edge_type in warp_destinations:
                     if 0 <= dest_pos[0] < height and 0 <= dest_pos[1] < width:
                         dest_tile = grid[dest_pos[0], dest_pos[1]]
                         neighbors.append((dest_pos, dest_tile, cost, True))  # is_teleport=True
@@ -2950,13 +2967,13 @@ class StateSpaceAStar:
         while open_set and states_explored < self.timeout:
             max_queue_size = max(max_queue_size, len(open_set))
             
-            entry = heapq.heappop(open_set)
+            entry: Any = heapq.heappop(open_set)
             
             # Parse entry format
             if len(entry) == 6:
                 _, _, state_hash, current_g, current_state, path = entry
             elif len(entry) == 5 and isinstance(entry[0], tuple):
-                priority, state_hash, current_g, current_state, path = entry
+                _priority, state_hash, current_g, current_state, path = entry
             elif len(entry) == 5:
                 _, _, state_hash, current_state, path = entry
                 current_g = g_scores.get(state_hash, 0)
@@ -3070,17 +3087,22 @@ class StateSpaceAStar:
             })
             is_at_boundary = False
             if self.env.room_positions:
-                for room_pos, (r_off, c_off) in self.env.room_positions.items():
+                for _room_pos, (r_off, c_off) in self.env.room_positions.items():
                     r_end = r_off + ROOM_HEIGHT
                     c_end = c_off + ROOM_WIDTH
                     if r_off <= curr_r < r_end and c_off <= curr_c < c_end:
                         local_r = curr_r - r_off
                         local_c = curr_c - c_off
-                        if (local_r <= 2 or local_r >= ROOM_HEIGHT - 3 or
-                            local_c <= 2 or local_c >= ROOM_WIDTH - 3):
+                        if (local_r <= 1 or local_r >= ROOM_HEIGHT - 2 or
+                            local_c <= 1 or local_c >= ROOM_WIDTH - 2):
                             is_at_boundary = True
                         break
-            can_teleport = is_stair or is_door or is_at_boundary
+            if self.vglc_strict_mode:
+                can_teleport = is_stair or is_door
+            else:
+                can_teleport = is_stair or is_door or is_at_boundary
+            if self.strict_original_mode:
+                can_teleport = is_stair
             
             for dr, dc in cardinal_deltas:
                 new_r, new_c = curr_r + dr, curr_c + dc
@@ -3096,6 +3118,8 @@ class StateSpaceAStar:
                     adj_c_tile = grid[curr_r, curr_c + dc]
                     if adj_r_tile in BLOCKING_IDS or adj_c_tile in BLOCKING_IDS:
                         continue
+                    if adj_r_tile in CONDITIONAL_IDS or adj_c_tile in CONDITIONAL_IDS:
+                        continue
                     neighbors.append(((new_r, new_c), grid[new_r, new_c], DIAGONAL_COST))
             
             # Stair handling
@@ -3109,7 +3133,7 @@ class StateSpaceAStar:
                 virtual_destinations = self._get_controlled_virtual_destinations(
                     current_state.position, current_state
                 )
-                for dest_pos, cost, edge_type in virtual_destinations:
+                for dest_pos, cost, _edge_type in virtual_destinations:
                     if 0 <= dest_pos[0] < height and 0 <= dest_pos[1] < width:
                         dest_tile = grid[dest_pos[0], dest_pos[1]]
                         neighbors.append((dest_pos, dest_tile, cost))
@@ -3119,7 +3143,7 @@ class StateSpaceAStar:
                 warp_destinations = self._get_graph_warp_destinations(
                     current_state.position, current_state
                 )
-                for dest_pos, cost, edge_type in warp_destinations:
+                for dest_pos, cost, _edge_type in warp_destinations:
                     if 0 <= dest_pos[0] < height and 0 <= dest_pos[1] < width:
                         dest_tile = grid[dest_pos[0], dest_pos[1]]
                         neighbors.append((dest_pos, dest_tile, cost))
@@ -3181,7 +3205,7 @@ class StateSpaceAStar:
         pickups: List[Tuple[int, int]] = []
         for tile_id in [SEMANTIC_PALETTE['KEY_SMALL'], SEMANTIC_PALETTE['KEY_BOSS'],
                         SEMANTIC_PALETTE['KEY_ITEM'], SEMANTIC_PALETTE['ITEM_MINOR']]:
-            pickups.extend(self.env._find_all_positions(tile_id))
+            pickups.extend(self.env.find_all_positions(tile_id))
         return pickups
     
     def _get_stair_destinations(self, current_pos: Tuple[int, int]) -> List[Tuple[int, int]]:
@@ -3277,7 +3301,7 @@ class StateSpaceAStar:
         return destinations
     
     def _get_virtual_node_destinations(self, current_pos: Tuple[int, int], 
-                                        state: GameState) -> List[Tuple[Tuple[int, int], int, str]]:
+                                        _state: GameState) -> List[Tuple[Tuple[int, int], int, str]]:
         """
         Find reachable physical rooms via graph edges through virtual nodes.
         
@@ -3349,7 +3373,6 @@ class StateSpaceAStar:
         node_queue = []
         for neighbor in self.env.graph.successors(current_node):
             edge_data = self.env.graph.get_edge_data(current_node, neighbor, {}) or {}
-            edge_label = edge_data.get('label', '')
             edge_type = self._edge_type_from_data(edge_data)
             node_queue.append((neighbor, 1, edge_type, False))
         
@@ -3376,7 +3399,6 @@ class StateSpaceAStar:
                 for next_node in self.env.graph.successors(neighbor_node):
                     if next_node not in visited_nodes:
                         next_edge_data = self.env.graph.get_edge_data(neighbor_node, next_node, {}) or {}
-                        next_label = next_edge_data.get('label', '')
                         next_edge_type = self._edge_type_from_data(next_edge_data)
                         # Propagate the most restrictive edge type
                         combined_type = self._combine_edge_types(edge_type, next_edge_type)
@@ -3386,7 +3408,6 @@ class StateSpaceAStar:
                 for next_node in self.env.graph.successors(neighbor_node):
                     if next_node not in visited_nodes:
                         next_edge_data = self.env.graph.get_edge_data(neighbor_node, next_node, {}) or {}
-                        next_label = next_edge_data.get('label', '')
                         next_edge_type = self._edge_type_from_data(next_edge_data)
                         combined_type = self._combine_edge_types(edge_type, next_edge_type)
                         # Mark that we went through a virtual node
@@ -3466,7 +3487,6 @@ class StateSpaceAStar:
             
             # Get edge requirements to access the virtual node
             edge_data = self.env.graph.get_edge_data(current_node, neighbor, {}) or {}
-            edge_label = edge_data.get('label', '')
             edge_type = self._edge_type_from_data(edge_data)
             
             # Check if we can traverse this edge based on game state
@@ -3488,7 +3508,6 @@ class StateSpaceAStar:
                     
                     exit_data = self.env.graph.nodes.get(exit_node, {})
                     exit_edge_data = self.env.graph.get_edge_data(v_node, exit_node, {}) or {}
-                    exit_label = exit_edge_data.get('label', '')
                     exit_type = self._edge_type_from_data(exit_edge_data)
                     
                     if exit_data.get('is_virtual', False):
@@ -3535,8 +3554,8 @@ class StateSpaceAStar:
         """
         if edge_type == 'soft_locked':
             if self.strict_original_mode:
-                current_room = self.env._get_room_for_position(state.position)
-                return self.env._is_room_cleared(current_room, state)
+                current_room = self.env.get_room_for_position(state.position)
+                return self.env.is_room_cleared(current_room, state)
             return True
         if edge_type in ('open', 'stair'):
             return True
@@ -3551,10 +3570,12 @@ class StateSpaceAStar:
         elif edge_type == 'switch':
             # Strict-original mode: model switch/puzzle gates as room-clear shutters.
             if self.strict_original_mode:
-                current_room = self.env._get_room_for_position(state.position)
-                return self.env._is_room_cleared(current_room, state)
+                current_room = self.env.get_room_for_position(state.position)
+                return self.env.is_room_cleared(current_room, state)
             return True
-        # Unknown edge type - default to passable to avoid blocking
+        # Unknown edge type handling: fail-closed in strict VGLC profile.
+        if self.vglc_strict_mode:
+            return False
         return True
     
     def _get_graph_warp_destinations(self, current_pos: Tuple[int, int], 
@@ -3628,10 +3649,14 @@ class StateSpaceAStar:
                 # Adjacent rooms - handled by normal grid movement
                 continue
             
-            # This is a WARP connection to a non-adjacent room!
+            # This is a non-adjacent graph connection.
             edge_data = self.env.graph.get_edge_data(current_node, neighbor, {}) or {}
-            edge_label = edge_data.get('label', '')
             edge_type = self._edge_type_from_data(edge_data)
+
+            # Dataset-faithful mode: only explicit stair/warp edges may teleport
+            # across non-adjacent rooms.
+            if self.vglc_strict_mode and edge_type != 'stair':
+                continue
             
             # Check if we can traverse this edge
             if not self._can_traverse_edge(edge_type, state):
@@ -3674,8 +3699,6 @@ class StateSpaceAStar:
         Returns:
             (dest_pos, cost) tuple, or (None, 0) if no walkable room found
         """
-        from collections import deque
-        
         queue = deque([(start_node, 10)])  # (node, accumulated_cost)
         
         while queue:
@@ -3822,18 +3845,7 @@ class StateSpaceAStar:
         Returns:
             The more restrictive edge type
         """
-        priority = {
-            'boss': 5,
-            'bomb': 4,
-            'locked': 3,
-            'key_locked': 3,
-            'puzzle': 2,
-            'open': 1,
-            '': 1,
-        }
-        p1 = priority.get(type1, 1)
-        p2 = priority.get(type2, 1)
-        return type1 if p1 >= p2 else type2
+        return combine_edge_types(type1, type2)
     
     def _can_traverse_edge_type(self, edge_type: str, state: GameState) -> bool:
         """
@@ -3846,20 +3858,13 @@ class StateSpaceAStar:
         Returns:
             True if the edge can be traversed, False otherwise
         """
-        if edge_type in ('open', ''):
-            return True
-        if edge_type in ('locked', 'key_locked'):
-            return state.keys > 0
-        if edge_type == 'bomb':
-            return state.bomb_count > 0
-        if edge_type == 'boss':
-            return state.has_boss_key
-        if edge_type == 'puzzle':
-            if self.strict_original_mode:
-                current_room = self.env._get_room_for_position(state.position)
-                return self.env._is_room_cleared(current_room, state)
-            return True
-        return True  # Default: allow
+        return can_traverse_edge_type(
+            edge_type,
+            state,
+            strict_original_mode=self.strict_original_mode,
+            get_room_for_position=self.env.get_room_for_position,
+            is_room_cleared=self.env.is_room_cleared,
+        )
 
     def _get_movement_cost(self, target_tile: int, target_pos: Tuple[int, int], state: GameState) -> float:
         """
@@ -3933,7 +3938,7 @@ class StateSpaceAStar:
         This delegates to ``ZeldaLogicEnv._try_move_pure`` so all solvers share
         one canonical transition function.
         """
-        return self.env._try_move_pure(state, target_pos, target_tile)
+        return self.env.try_move_pure(state, target_pos, target_tile)
     
     def _heuristic(self, state: GameState) -> float:
         """
@@ -3981,8 +3986,8 @@ class StateSpaceAStar:
                                 # Lower bound on number of locked transitions that must be crossed.
                                 locked_edges_lb = float(self.min_locked_needed_node[node])
                         break
-        except Exception:
-            pass  # Fall back to positional estimate on lookup failure.
+        except (AttributeError, TypeError, KeyError, ValueError) as exc:
+            logger.debug("Graph heuristic metadata lookup failed; using positional fallback: %s", exc)
 
         # Strict mode for canonical A* (w=1): keep heuristic conservative to preserve algorithm behavior.
         # In topology-aware maps with teleports/warps, Manhattan can overestimate; rely on graph lower bounds.
@@ -4067,249 +4072,6 @@ class StateSpaceAStar:
 
 
 # ==========================================
-# MODULE 3: SANITY CHECKER
-# ==========================================
-
-class SanityChecker:
-    """
-    Pre-validation checks for map structural validity.
-    
-    Catches obvious errors before running expensive A* search:
-    - Missing start position
-    - Missing goal (Triforce)
-    - Unreachable items (basic check)
-    """
-    
-    def __init__(self, semantic_grid: np.ndarray):
-        self.grid = semantic_grid
-        self.height, self.width = self.grid.shape
-    
-    def check_all(self) -> Tuple[bool, List[str]]:
-        """
-        Run all sanity checks.
-        
-        Returns:
-            is_valid: Whether map passes all checks
-            errors: List of error messages
-        """
-        errors = []
-        
-        # Check for start position
-        starts = np.where(self.grid == SEMANTIC_PALETTE['START'])
-        if len(starts[0]) == 0:
-            errors.append("No start position (S) found")
-        elif len(starts[0]) > 1:
-            errors.append(f"Multiple start positions found: {len(starts[0])}")
-        
-        # Check for goal (Triforce)
-        goals = np.where(self.grid == SEMANTIC_PALETTE['TRIFORCE'])
-        if len(goals[0]) == 0:
-            errors.append("No goal (Triforce) found")
-        
-        # Check for completely blocked map
-        # FIX: Exclude VOID tiles from total since stitched dungeons have padding
-        # VOID represents empty space, not blocked terrain
-        walkable_count = np.sum(np.isin(self.grid, list(WALKABLE_IDS)))
-        void_count = np.sum(self.grid == SEMANTIC_PALETTE['VOID'])
-        total_cells = self.height * self.width
-        non_void_cells = total_cells - void_count
-        
-        # Only check ratio against non-void cells
-        if non_void_cells > 0 and walkable_count < 0.05 * non_void_cells:
-            errors.append(f"Map is mostly blocked ({walkable_count}/{non_void_cells} walkable, excluding void)")
-        
-        # Check for doors without possible keys
-        locked_doors = np.sum(self.grid == SEMANTIC_PALETTE['DOOR_LOCKED'])
-        keys = np.sum(self.grid == SEMANTIC_PALETTE['KEY_SMALL'])
-        if locked_doors > 0 and keys == 0:
-            errors.append(f"Locked doors ({locked_doors}) but no keys")
-        
-        boss_doors = np.sum(self.grid == SEMANTIC_PALETTE['DOOR_BOSS'])
-        boss_keys = np.sum(self.grid == SEMANTIC_PALETTE['KEY_BOSS'])
-        if boss_doors > 0 and boss_keys == 0:
-            errors.append(f"Boss door present but no boss key")
-        
-        return len(errors) == 0, errors
-    
-    def count_elements(self) -> Dict[str, int]:
-        """Count occurrences of each semantic element."""
-        counts = {}
-        for name, id_val in SEMANTIC_PALETTE.items():
-            count = int(np.sum(self.grid == id_val))
-            if count > 0:
-                counts[name] = count
-        return counts
-
-
-# ==========================================
-# MODULE 4: METRICS ENGINE
-# ==========================================
-
-class MetricsEngine:
-    """
-    Calculate validation metrics for a solved map.
-    """
-    
-    @staticmethod
-    def calculate_reachability(env: ZeldaLogicEnv, path: List[Tuple[int, int]]) -> float:
-        """
-        Calculate what fraction of walkable tiles were visited.
-        """
-        visited = set(path)
-        
-        # Count total walkable tiles
-        walkable = 0
-        for r in range(env.height):
-            for c in range(env.width):
-                if env.original_grid[r, c] in WALKABLE_IDS:
-                    walkable += 1
-        
-        if walkable == 0:
-            return 0.0
-        
-        return len(visited) / walkable
-    
-    @staticmethod
-    def calculate_backtracking(path: List[Tuple[int, int]]) -> float:
-        """
-        Calculate backtracking score.
-        
-        Higher score = more revisiting of positions.
-        0 = no backtracking (each tile visited once)
-        """
-        if len(path) <= 1:
-            return 0.0
-        
-        unique_positions = len(set(path))
-        total_steps = len(path)
-        
-        # Backtracking ratio: how many extra steps over unique positions
-        return (total_steps - unique_positions) / total_steps
-    
-    @staticmethod
-    def calculate_linearity(path: List[Tuple[int, int]], start: Tuple[int, int], 
-                           goal: Tuple[int, int]) -> float:
-        """
-        Calculate linearity score.
-        
-        1.0 = perfectly linear (Manhattan distance = path length)
-        0.0 = highly non-linear (lots of detours)
-        """
-        if len(path) <= 1:
-            return 1.0
-        
-        manhattan = abs(start[0] - goal[0]) + abs(start[1] - goal[1])
-        if manhattan == 0:
-            return 1.0
-        
-        return min(1.0, manhattan / len(path))
-    
-    @staticmethod
-    def find_logical_errors(env: ZeldaLogicEnv, path: List[Tuple[int, int]]) -> List[str]:
-        """
-        Find logical consistency errors.
-        
-        - Keys behind locked doors (impossible without other routes)
-        - Unreachable items
-        """
-        errors = []
-        visited = set(path)
-        
-        # Check for unvisited keys
-        key_positions = env._find_all_positions(SEMANTIC_PALETTE['KEY_SMALL'])
-        for kp in key_positions:
-            if kp not in visited and kp not in env.state.collected_items:
-                errors.append(f"Unreachable key at {kp}")
-        
-        # Check for unvisited boss key
-        boss_key_positions = env._find_all_positions(SEMANTIC_PALETTE['KEY_BOSS'])
-        for bp in boss_key_positions:
-            if bp not in visited and not env.state.has_boss_key:
-                errors.append(f"Unreachable boss key at {bp}")
-        
-        return errors
-
-
-# ==========================================
-# MODULE 5: DIVERSITY EVALUATOR
-# ==========================================
-
-class DiversityEvaluator:
-    """
-    Evaluate diversity across a batch of generated maps.
-    
-    Detects mode collapse where generator produces nearly identical outputs.
-    """
-    
-    @staticmethod
-    def hamming_distance(grid1: np.ndarray, grid2: np.ndarray) -> float:
-        """
-        Calculate normalized Hamming distance between two grids.
-        
-        Returns value in [0, 1] where 0 = identical, 1 = completely different.
-        """
-        if grid1.shape != grid2.shape:
-            return 1.0
-        
-        total_cells = grid1.size
-        different_cells = np.sum(grid1 != grid2)
-        
-        return different_cells / total_cells
-    
-    @staticmethod
-    def batch_diversity(grids: List[np.ndarray]) -> float:
-        """
-        Calculate average pairwise Hamming distance for a batch.
-        
-        Higher score = more diverse outputs.
-        """
-        n = len(grids)
-        if n < 2:
-            return 0.0
-        
-        total_dist = 0.0
-        pairs = 0
-        
-        for i in range(n):
-            for j in range(i + 1, n):
-                total_dist += DiversityEvaluator.hamming_distance(grids[i], grids[j])
-                pairs += 1
-        
-        return total_dist / pairs if pairs > 0 else 0.0
-    
-    @staticmethod
-    def structural_diversity(paths: List[List[Tuple[int, int]]]) -> float:
-        """
-        Calculate diversity based on solution paths.
-        
-        Different paths suggest different level structures.
-        """
-        if len(paths) < 2:
-            return 0.0
-        
-        # Convert paths to sets of visited positions
-        path_sets = [set(p) for p in paths if p]
-        
-        if len(path_sets) < 2:
-            return 0.0
-        
-        # Calculate Jaccard distance between paths
-        total_dist = 0.0
-        pairs = 0
-        
-        for i in range(len(path_sets)):
-            for j in range(i + 1, len(path_sets)):
-                intersection = len(path_sets[i] & path_sets[j])
-                union = len(path_sets[i] | path_sets[j])
-                if union > 0:
-                    jaccard = intersection / union
-                    total_dist += (1 - jaccard)  # Distance = 1 - similarity
-                    pairs += 1
-        
-        return total_dist / pairs if pairs > 0 else 0.0
-
-
-# ==========================================
 # MODULE 6: MAIN VALIDATOR
 # ==========================================
 
@@ -4343,15 +4105,15 @@ class ZeldaValidator:
             return True
         
         print("Running calibration test...")
-        result = self.validate_single(self.calibration_map)
+        calib_result = self.validate_single(self.calibration_map)
         
-        if not result.is_solvable:
+        if not calib_result.is_solvable:
             raise RuntimeError(
                 f"CALIBRATION FAILED: Known-solvable map was not solved! "
-                f"Error: {result.error_message}"
+                f"Error: {calib_result.error_message}"
             )
         
-        print(f"Calibration passed. Path length: {result.path_length}")
+        print(f"Calibration passed. Path length: {calib_result.path_length}")
         self.is_calibrated = True
         return True
     
@@ -4593,18 +4355,18 @@ class ZeldaValidator:
             if verbose and (i + 1) % 10 == 0:
                 print(f"Validating {i + 1}/{len(grids)}...")
             
-            result = self.validate_single(grid, render=False, persona_mode=persona_mode)
-            results.append(result)
+            single_result = self.validate_single(grid, render=False, persona_mode=persona_mode)
+            results.append(single_result)
             
-            if result.is_valid_syntax:
+            if single_result.is_valid_syntax:
                 valid_count += 1
             
-            if result.is_solvable:
+            if single_result.is_solvable:
                 solvable_count += 1
-                total_reachability += result.reachability
-                total_path_length += result.path_length
-                total_backtracking += result.backtracking_score
-                paths.append(result.path)
+                total_reachability += single_result.reachability
+                total_path_length += single_result.path_length
+                total_backtracking += single_result.backtracking_score
+                paths.append(single_result.path)
         
         # Calculate averages
         n = len(grids)
@@ -4703,7 +4465,7 @@ class ZeldaValidator:
             
             # Handle events
             for event in pygame.event.get():
-                if event.type == pygame.QUIT:
+                if event.type == pygame.QUIT:  # pylint: disable=no-member
                     return
             
             time.sleep(0.1)
@@ -4757,7 +4519,7 @@ class GraphGuidedValidator:
                     # For tuple keys, we need a unique integer ID
                     # Use hash or create a simple mapping
                     room_id = hash(key) % 1000000  # Simple int mapping
-                    logger.debug(f"Normalized tuple key {key} to {room_id}")
+                    logger.debug("Normalized tuple key %s to %s", key, room_id)
                 # Handle string keys (e.g., from DungeonData)
                 elif isinstance(key, str):
                     room_id = int(key)
@@ -4765,12 +4527,12 @@ class GraphGuidedValidator:
                 elif isinstance(key, int):
                     room_id = key
                 else:
-                    logger.warning(f"Unknown room key type: {type(key)}, key={key}")
+                    logger.warning("Unknown room key type: %s, key=%s", type(key), key)
                     continue
                     
                 normalized[room_id] = room_data
             except (ValueError, TypeError) as e:
-                logger.error(f"Failed to normalize room key {key}: {e}")
+                logger.error("Failed to normalize room key %s: %s", key, e)
                 continue
         
         return normalized
@@ -4786,7 +4548,7 @@ class GraphGuidedValidator:
         Returns:
             GraphValidationResult with detailed analysis
         """
-        import networkx as nx
+        del stitched_result
         
         graph = dungeon_data.graph
         rooms = dungeon_data.rooms
@@ -4795,7 +4557,7 @@ class GraphGuidedValidator:
         normalized_rooms = self._normalize_rooms(rooms)
         existing_room_ids = set(normalized_rooms.keys())
         
-        logger.debug(f"Normalized {len(rooms)} rooms to {len(existing_room_ids)} integer IDs")
+        logger.debug("Normalized %d rooms to %d integer IDs", len(rooms), len(existing_room_ids))
         
         # Step 1: Find START and TRIFORCE nodes from graph
         start_node = None
@@ -4936,8 +4698,6 @@ class GraphGuidedValidator:
         
         Uses BFS on the subgraph of existing rooms.
         """
-        import networkx as nx
-        
         # Create subgraph with only existing rooms
         existing_nodes = [n for n in graph.nodes() if n in existing_room_ids]
         
@@ -4970,9 +4730,6 @@ class GraphGuidedValidator:
         Returns:
             GraphValidationResult with solution path
         """
-        import networkx as nx
-        from collections import deque
-        
         if inventory_start is None:
             inventory_start = {'keys': 0, 'bombs': 0, 'boss_key': False}
         
@@ -4983,7 +4740,7 @@ class GraphGuidedValidator:
         normalized_rooms = self._normalize_rooms(rooms)
         existing_room_ids = set(normalized_rooms.keys())
         
-        logger.debug(f"Edge-type validation: normalized {len(rooms)} rooms to {len(existing_room_ids)} IDs")
+        logger.debug("Edge-type validation: normalized %d rooms to %d IDs", len(rooms), len(existing_room_ids))
         
         # Find START and TRIFORCE
         start_node = None
@@ -5223,16 +4980,16 @@ if __name__ == "__main__":
     print("=== ZAVE: Zelda AI Validation Environment ===\n")
     
     # Create test map
-    test_map = create_test_map()
+    demo_map = create_test_map()
     print("Created test map (11x16)")
-    print(f"Start: {np.where(test_map == SEMANTIC_PALETTE['START'])}")
-    print(f"Goal: {np.where(test_map == SEMANTIC_PALETTE['TRIFORCE'])}")
+    print(f"Start: {np.where(demo_map == SEMANTIC_PALETTE['START'])}")
+    print(f"Goal: {np.where(demo_map == SEMANTIC_PALETTE['TRIFORCE'])}")
     
     # Run validation
     validator = ZeldaValidator()
     
     print("\n--- Validating Test Map ---")
-    result = validator.validate_single(test_map, render=False)
+    result = validator.validate_single(demo_map, render=False)
     
     print(f"Solvable: {result.is_solvable}")
     print(f"Valid Syntax: {result.is_valid_syntax}")

@@ -1,4 +1,4 @@
-"""Adapter-backed map loading orchestration for GUI startup."""
+﻿"""Adapter-backed map loading orchestration for GUI startup."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from __future__ import annotations
 def load_maps_from_adapter(*, os_module, file_path, print_fn=print):
     """Load all Zelda dungeon variants and optionally schedule async precalc."""
     try:
-        from src.data.zelda_core import ZeldaDungeonAdapter, DungeonSolver
+        from src.zelda_data.zelda_core import ZeldaDungeonAdapter, DungeonSolver
         from pathlib import Path
 
         data_root = Path(file_path).parent / "Data" / "The Legend of Zelda"
@@ -63,3 +63,4 @@ def load_maps_from_adapter(*, os_module, file_path, print_fn=print):
 
         traceback.print_exc()
         return None, None
+

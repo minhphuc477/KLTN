@@ -1,4 +1,4 @@
-"""
+﻿"""
 Training Pipeline for Latent Diffusion Model
 =============================================
 
@@ -27,7 +27,7 @@ PROJECT_ROOT = Path(__file__).parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.data.zelda_loader import create_dataloader, extract_start_goal
+from src.zelda_data.zelda_loader import create_dataloader, extract_start_goal
 from src.core.latent_diffusion import LatentDiffusionModel, create_latent_diffusion
 from src.core.vqvae import SemanticVQVAE as VQVAE, create_vqvae
 from src.core.condition_encoder import DualStreamConditionEncoder, create_condition_encoder
@@ -163,7 +163,7 @@ class DiffusionTrainer:
         
         # --- Wire LogicNet into diffusion model's GradientGuidance ---
         # This enables gradient guidance during sampling: at each denoising
-        # step, ∇_{x_t}L_logic nudges the sample toward solvable configs.
+        # step, âˆ‡_{x_t}L_logic nudges the sample toward solvable configs.
         self.diffusion.guidance.logic_net = self.logic_net
         self.diffusion.guidance.guidance_scale = config.guidance_scale
         
@@ -245,7 +245,7 @@ class DiffusionTrainer:
         - Data loader returns [B, 1, H, W] normalized tile IDs in [0, 1]
         - VQ-VAE expects [B, C=44, H, W] one-hot encoded tiles
         
-        Conversion: denormalize → integer tile IDs → one-hot → VQ-VAE encode
+        Conversion: denormalize â†’ integer tile IDs â†’ one-hot â†’ VQ-VAE encode
         """
         import torch.nn.functional as F
         
@@ -258,7 +258,7 @@ class DiffusionTrainer:
                 tile_ids = (x.squeeze(1) * (num_classes - 1)).round().long()
                 tile_ids = tile_ids.clamp(0, num_classes - 1)
                 
-                # Step 2: One-hot encode → [B, H, W, C] → permute to [B, C, H, W]
+                # Step 2: One-hot encode â†’ [B, H, W, C] â†’ permute to [B, C, H, W]
                 x_onehot = F.one_hot(tile_ids, num_classes=num_classes)
                 x_onehot = x_onehot.permute(0, 3, 1, 2).float()
             elif x.shape[1] == num_classes:
@@ -270,7 +270,7 @@ class DiffusionTrainer:
                     f"Expected 1 (normalized tile IDs) or {num_classes} (one-hot)."
                 )
             
-            # encode() returns (z_q, indices) — 2 values, not 3
+            # encode() returns (z_q, indices) â€” 2 values, not 3
             z_q, _indices = self.vqvae.encode(x_onehot)
         return z_q
     
@@ -330,7 +330,7 @@ class DiffusionTrainer:
             node_features, edge_index,
             edge_features=edge_features,
         )
-        # Pool node embeddings → single conditioning vector [1, context_dim]
+        # Pool node embeddings â†’ single conditioning vector [1, context_dim]
         c = c_global.mean(dim=0, keepdim=True)
         return c
     
@@ -446,10 +446,10 @@ class DiffusionTrainer:
         Single training step.
         
         Training strategy:
-        1. Diffusion loss: standard ε-prediction on real encoded latents
+        1. Diffusion loss: standard Îµ-prediction on real encoded latents
         2. LogicNet loss: computed on REAL z_0 with graph_data from .dot files,
            enabling both grid-level AND graph-level pathfinding/key-lock checking.
-        3. GradientGuidance (wired in __init__): applies ∇_{x_t}L_logic
+        3. GradientGuidance (wired in __init__): applies âˆ‡_{x_t}L_logic
            during sampling/validation to steer generation toward solvable maps.
         
         Args:
@@ -484,7 +484,7 @@ class DiffusionTrainer:
             # Detach z_0 from VQ-VAE graph but enable gradients for LogicNet
             z_for_logic = z_0.detach().requires_grad_(True)
             # Pass real graph_data to LogicNet for graph-level pathfinding
-            logic_loss, logic_info = self.logic_net(z_for_logic, graph_data=logic_graph_data)
+            logic_loss, _logic_info = self.logic_net(z_for_logic, graph_data=logic_graph_data)
             solvability_score = 1.0 - logic_loss.detach()
         
         # Combined loss
@@ -625,14 +625,20 @@ class DiffusionTrainer:
             # Build conditioning from real graphs if available
             conditioning = None
             if graph_list is not None:
-                try:
-                    cond_vectors = []
-                    for graph_dict in graph_list:
+                cond_vectors = []
+                for idx, graph_dict in enumerate(graph_list):
+                    try:
                         c_i = self._encode_graph_conditioning(graph_dict)
-                        cond_vectors.append(c_i)
+                    except Exception as exc:
+                        logger.debug(
+                            "Graph conditioning encode failed for sample %d; using dummy conditioning: %s",
+                            idx,
+                            exc,
+                        )
+                        c_i = self.get_dummy_conditioning(1)
+                    cond_vectors.append(c_i)
+                if cond_vectors:
                     conditioning = torch.cat(cond_vectors, dim=0)
-                except Exception:
-                    conditioning = None
             
             if conditioning is None:
                 conditioning = self.get_dummy_conditioning(batch_size)
@@ -646,13 +652,22 @@ class DiffusionTrainer:
             # Build LogicNet graph data if available
             logic_graph_data = None
             if graph_list is not None:
-                try:
-                    logic_graph_data = self._build_logic_graph_data(graph_list[0])
-                except Exception:
-                    pass
+                build_failures = 0
+                for graph_dict in graph_list:
+                    try:
+                        logic_graph_data = self._build_logic_graph_data(graph_dict)
+                        break
+                    except Exception as exc:
+                        build_failures += 1
+                        logger.debug("LogicNet graph-data build failed for one sample: %s", exc)
+                if logic_graph_data is None and build_failures > 0:
+                    logger.debug(
+                        "LogicNet graph-data unavailable for this validation batch (%d failures); proceeding without graph_data",
+                        build_failures,
+                    )
             
             # LogicNet: evaluate with graph topology
-            logic_loss, logic_info = self.logic_net(z_gen, graph_data=logic_graph_data)
+            logic_loss, _logic_info = self.logic_net(z_gen, graph_data=logic_graph_data)
             solvability = 1.0 - logic_loss.item()
             total_solvability += solvability * batch_size
             num_samples_eval += batch_size
@@ -840,7 +855,7 @@ def main():
     )
     
     try:
-        trainer = train_diffusion(config)
+        _trainer = train_diffusion(config)
         logger.info("Training complete!")
     except KeyboardInterrupt:
         logger.info("Training interrupted")
@@ -851,3 +866,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+

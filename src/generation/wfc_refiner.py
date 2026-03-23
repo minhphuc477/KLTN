@@ -50,286 +50,26 @@ Usage:
 import random
 import logging
 import numpy as np
-from typing import Dict, List, Tuple, Optional, Set, Any, FrozenSet
-from dataclasses import dataclass, field
-from enum import Enum, auto
-from collections import defaultdict
-import heapq
+from typing import Dict, List, Tuple, Optional, Set, Any, Callable
+
+from src.generation.wfc_types import (
+    SEMANTIC_PALETTE,
+    Cell,
+    GameState,
+    TileSet,
+    TileType,
+    ZeldaTileSet,
+)
 
 logger = logging.getLogger(__name__)
 
-# Import semantic palette if available
-try:
-    from src.core.definitions import SEMANTIC_PALETTE
-except ImportError:
-    # Fallback palette
-    SEMANTIC_PALETTE = {
-        'VOID': 0, 'FLOOR': 1, 'WALL': 2, 'BLOCK': 3,
-        'DOOR_OPEN': 10, 'DOOR_LOCKED': 11,
-        'ENEMY': 20, 'START': 21, 'TRIFORCE': 22,
-        'KEY_SMALL': 30, 'KEY_BIG': 31,
-    }
+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+
+# TILE / STATE MODELS ARE PROVIDED BY src.generation.wfc_types
+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+
 
-
-# ============================================================================
-# TILE DEFINITIONS
-# ============================================================================
-
-class TileType(Enum):
-    """Tile types with game state implications."""
-    FLOOR = auto()
-    WALL = auto()
-    BLOCK = auto()
-    DOOR_OPEN = auto()
-    DOOR_LOCKED = auto()
-    KEY_SMALL = auto()
-    KEY_BIG = auto()
-    ENEMY = auto()
-    START = auto()
-    GOAL = auto()
-    ITEM = auto()
-    WATER = auto()
-    BRIDGE = auto()
-
-
-@dataclass
-class TileConstraint:
-    """Constraints on when a tile can be placed."""
-    required_keys: int = 0           # Minimum keys needed
-    required_items: Set[str] = field(default_factory=set)  # Required items
-    provides_key: bool = False       # This tile provides a key
-    provides_item: Optional[str] = None  # Item this tile provides
-    is_blocking: bool = False        # Blocks path until condition met
-    key_id: Optional[int] = None     # Specific key ID for lock-key matching
-
-
-@dataclass
-class Tile:
-    """Tile with adjacency rules and game constraints."""
-    id: int
-    tile_type: TileType
-    semantic_id: int  # SEMANTIC_PALETTE value
-    
-    # Adjacency rules: which tiles can be adjacent in each direction
-    # Format: {direction: set of allowed tile IDs}
-    adjacency: Dict[str, Set[int]] = field(default_factory=dict)
-    
-    # Weight for random selection (higher = more common)
-    weight: float = 1.0
-    
-    # Game state constraints
-    constraint: TileConstraint = field(default_factory=TileConstraint)
-
-
-class TileSet:
-    """Collection of tiles with adjacency rules."""
-    
-    def __init__(self):
-        self.tiles: Dict[int, Tile] = {}
-        self._build_tiles()
-    
-    def _build_tiles(self):
-        """Build tile definitions. Override in subclass."""
-        pass
-    
-    def get_tile(self, tile_id: int) -> Optional[Tile]:
-        return self.tiles.get(tile_id)
-    
-    def get_all_tile_ids(self) -> Set[int]:
-        return set(self.tiles.keys())
-    
-    def get_tiles_by_type(self, tile_type: TileType) -> List[Tile]:
-        return [t for t in self.tiles.values() if t.tile_type == tile_type]
-
-
-class ZeldaTileSet(TileSet):
-    """Zelda-specific tile set with adjacency rules."""
-    
-    def _build_tiles(self):
-        """Build Zelda tile definitions."""
-        # Define tiles
-        self.tiles = {
-            # Floor tiles
-            0: Tile(
-                id=0, 
-                tile_type=TileType.FLOOR,
-                semantic_id=SEMANTIC_PALETTE.get('FLOOR', 1),
-                weight=10.0,
-            ),
-            # Wall
-            1: Tile(
-                id=1,
-                tile_type=TileType.WALL,
-                semantic_id=SEMANTIC_PALETTE.get('WALL', 2),
-                weight=3.0,
-            ),
-            # Block (pushable)
-            2: Tile(
-                id=2,
-                tile_type=TileType.BLOCK,
-                semantic_id=SEMANTIC_PALETTE.get('BLOCK', 3),
-                weight=1.0,
-            ),
-            # Open door
-            3: Tile(
-                id=3,
-                tile_type=TileType.DOOR_OPEN,
-                semantic_id=SEMANTIC_PALETTE.get('DOOR_OPEN', 10),
-                weight=0.5,
-            ),
-            # Locked door (requires key)
-            4: Tile(
-                id=4,
-                tile_type=TileType.DOOR_LOCKED,
-                semantic_id=SEMANTIC_PALETTE.get('DOOR_LOCKED', 11),
-                weight=0.3,
-                constraint=TileConstraint(required_keys=1, is_blocking=True),
-            ),
-            # Small key
-            5: Tile(
-                id=5,
-                tile_type=TileType.KEY_SMALL,
-                semantic_id=SEMANTIC_PALETTE.get('KEY_SMALL', 30),
-                weight=0.5,
-                constraint=TileConstraint(provides_key=True),
-            ),
-            # Enemy
-            6: Tile(
-                id=6,
-                tile_type=TileType.ENEMY,
-                semantic_id=SEMANTIC_PALETTE.get('ENEMY', 20),
-                weight=1.5,
-            ),
-            # Start
-            7: Tile(
-                id=7,
-                tile_type=TileType.START,
-                semantic_id=SEMANTIC_PALETTE.get('START', 21),
-                weight=0.0,  # Placed manually
-            ),
-            # Goal (Triforce)
-            8: Tile(
-                id=8,
-                tile_type=TileType.GOAL,
-                semantic_id=SEMANTIC_PALETTE.get('TRIFORCE', 22),
-                weight=0.0,  # Placed manually
-            ),
-        }
-        
-        # Build adjacency rules
-        self._build_adjacency_rules()
-    
-    def _build_adjacency_rules(self):
-        """Build adjacency constraints between tiles."""
-        floor_ids = {0, 3, 4, 5, 6, 7, 8}  # Tiles that act like floor
-        wall_ids = {1, 2}
-        
-        for tile_id, tile in self.tiles.items():
-            # All directions
-            directions = ['N', 'S', 'E', 'W']
-            
-            if tile.tile_type in [TileType.FLOOR, TileType.DOOR_OPEN, 
-                                   TileType.KEY_SMALL, TileType.ENEMY,
-                                   TileType.START, TileType.GOAL]:
-                # Floor-like tiles can be adjacent to most tiles
-                for d in directions:
-                    tile.adjacency[d] = floor_ids | wall_ids
-            
-            elif tile.tile_type == TileType.WALL:
-                # Walls can be adjacent to anything
-                for d in directions:
-                    tile.adjacency[d] = floor_ids | wall_ids
-            
-            elif tile.tile_type == TileType.BLOCK:
-                # Blocks need floor around them (to push)
-                for d in directions:
-                    tile.adjacency[d] = floor_ids | wall_ids
-            
-            elif tile.tile_type == TileType.DOOR_LOCKED:
-                # Locked doors need floor on both sides
-                for d in directions:
-                    tile.adjacency[d] = floor_ids
-
-
-# ============================================================================
-# GAME STATE
-# ============================================================================
-
-@dataclass
-class GameState:
-    """Tracks game state during WFC collapse."""
-    keys_collected: int = 0
-    items_collected: Set[str] = field(default_factory=set)
-    
-    # Track positions of placed items for causal validation
-    key_positions: List[Tuple[int, int]] = field(default_factory=list)
-    lock_positions: List[Tuple[int, int]] = field(default_factory=list)
-    
-    # Order of placement for causality
-    placement_order: List[Tuple[int, int, int]] = field(default_factory=list)  # (r, c, tile_id)
-    
-    def copy(self) -> 'GameState':
-        """Create a copy of the game state."""
-        return GameState(
-            keys_collected=self.keys_collected,
-            items_collected=set(self.items_collected),
-            key_positions=list(self.key_positions),
-            lock_positions=list(self.lock_positions),
-            placement_order=list(self.placement_order),
-        )
-    
-    def can_unlock(self, required_keys: int = 1) -> bool:
-        """Check if we have enough keys to unlock."""
-        return self.keys_collected >= required_keys
-    
-    def collect_key(self, position: Tuple[int, int]) -> None:
-        """Collect a key at the given position."""
-        self.keys_collected += 1
-        self.key_positions.append(position)
-    
-    def place_lock(self, position: Tuple[int, int]) -> None:
-        """Place a lock at the given position."""
-        self.lock_positions.append(position)
-
-
-# ============================================================================
-# CAUSAL WFC
-# ============================================================================
-
-@dataclass
-class Cell:
-    """Single cell in the WFC grid."""
-    row: int
-    col: int
-    
-    # Possible tiles (starts with all, gets constrained)
-    possibilities: Set[int] = field(default_factory=set)
-    
-    # Collapsed tile (None if not yet collapsed)
-    collapsed_tile: Optional[int] = None
-    
-    def entropy(self, rng: Optional[random.Random] = None) -> float:
-        """
-        Entropy of the cell.
-        
-        Lower entropy = fewer possibilities = higher priority for collapse.
-        
-        Args:
-            rng: Optional seeded Random instance for deterministic tie-breaking.
-                 If None, uses deterministic positional hash for tie-breaking.
-        """
-        if self.collapsed_tile is not None:
-            return 0.0
-        if rng is not None:
-            noise = rng.random() * 0.1
-        else:
-            # Deterministic tie-breaking based on cell position
-            noise = ((self.row * 31 + self.col * 17) % 1000) / 10000.0
-        return len(self.possibilities) + noise
-    
-    @property
-    def is_collapsed(self) -> bool:
-        return self.collapsed_tile is not None
+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+
+# Causal WFC core algorithm
+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+
 
 
 class CausalWFC:
@@ -348,12 +88,18 @@ class CausalWFC:
         width: int = 11,
         height: int = 16,
         seed: Optional[int] = None,
+        max_backtracks: int = 50,
+        dead_end_radius: int = 2,
+        dead_end_callback: Optional[Callable[[np.ndarray, np.ndarray, Tuple[int, int]], np.ndarray]] = None,
     ):
         self.tile_set = tile_set
         self.width = width
         self.height = height
         self.seed = seed
         self.rng = random.Random(seed)
+        self.max_backtracks = int(max(1, max_backtracks))
+        self.dead_end_radius = int(max(1, dead_end_radius))
+        self.dead_end_callback = dead_end_callback
         
         # Grid of cells
         self.grid: List[List[Cell]] = []
@@ -367,6 +113,8 @@ class CausalWFC:
         # Statistics
         self.contradictions = 0
         self.backtracks = 0
+        self.last_contradiction: Optional[Tuple[int, int]] = None
+        self.last_dead_end_mask: Optional[np.ndarray] = None
     
     def initialize(
         self,
@@ -402,6 +150,8 @@ class CausalWFC:
         self.collapse_order = []
         self.contradictions = 0
         self.backtracks = 0
+        self.last_contradiction = None
+        self.last_dead_end_mask = None
         
         # Place fixed tiles
         fixed_tiles = fixed_tiles or {}
@@ -459,9 +209,11 @@ class CausalWFC:
                 # Contradiction - try to backtrack
                 logger.warning(f"Contradiction at ({cell.row}, {cell.col})")
                 self.contradictions += 1
+                self.last_contradiction = (int(cell.row), int(cell.col))
                 
                 if not self._backtrack():
                     logger.error("Cannot resolve contradiction")
+                    self._handle_dead_end_feedback()
                     break
                 continue
             
@@ -478,8 +230,10 @@ class CausalWFC:
                 if not self._verify_path_connectivity(start_pos, goal_pos):
                     logger.warning(f"Path blocked at iteration {iteration}, backtracking")
                     self.contradictions += 1
+                    self.last_contradiction = (int(cell.row), int(cell.col))
                     if not self._backtrack():
                         logger.error("Cannot restore connectivity")
+                        self._handle_dead_end_feedback()
                         break
                     continue
             
@@ -676,7 +430,7 @@ class CausalWFC:
                 (r, c + 1, 'E', 'W'),  # East
             ]
             
-            for nr, nc, direction, reverse_dir in neighbors:
+            for nr, nc, direction, _reverse_dir in neighbors:
                 if not (0 <= nr < self.height and 0 <= nc < self.width):
                     continue
                 
@@ -697,6 +451,9 @@ class CausalWFC:
     
     def _backtrack(self) -> bool:
         """Attempt to backtrack on contradiction."""
+        if self.backtracks >= self.max_backtracks:
+            logger.warning("Backtrack limit reached (%d)", self.max_backtracks)
+            return False
         if not self.collapse_order:
             return False
         
@@ -723,6 +480,34 @@ class CausalWFC:
         cell.possibilities = set(all_tiles)
         
         return True
+
+    def _build_dead_end_mask(self, center_rc: Tuple[int, int]) -> np.ndarray:
+        """Build local contradiction mask around a dead-end center cell."""
+        mask = np.zeros((self.height, self.width), dtype=bool)
+        cy, cx = int(center_rc[0]), int(center_rc[1])
+        for y in range(max(0, cy - self.dead_end_radius), min(self.height, cy + self.dead_end_radius + 1)):
+            for x in range(max(0, cx - self.dead_end_radius), min(self.width, cx + self.dead_end_radius + 1)):
+                mask[y, x] = True
+        return mask
+
+    def _handle_dead_end_feedback(self) -> None:
+        """Invoke optional feedback callback with dead-end mask and current grid."""
+        if self.last_contradiction is None:
+            return
+        mask = self._build_dead_end_mask(self.last_contradiction)
+        self.last_dead_end_mask = mask
+        if self.dead_end_callback is None:
+            return
+        try:
+            patched = self.dead_end_callback(self._to_numpy(), mask.copy(), self.last_contradiction)
+            if isinstance(patched, np.ndarray) and patched.shape == (self.height, self.width):
+                # Re-initialize from patched state so generation can continue externally.
+                self.initialize(fixed_tiles=None)
+                for r in range(self.height):
+                    for c in range(self.width):
+                        self._collapse_cell(r, c, int(patched[r, c]))
+        except Exception as e:
+            logger.warning("Dead-end callback failed: %s", e)
     
     def _to_numpy(self) -> np.ndarray:
         """Convert grid to numpy array of semantic IDs."""

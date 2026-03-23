@@ -195,7 +195,7 @@ def main():
     cutter = TilesetCutter(tile_size=16, margin=1, padding=1)
     
     try:
-        tile_count = cutter.cut(input_path, str(output_dir), filter_empty=True)
+        _tile_count = cutter.cut(input_path, str(output_dir), filter_empty=True)
         
         print("\n" + "="*60)
         print("NEXT STEPS:")

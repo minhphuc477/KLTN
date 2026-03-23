@@ -35,6 +35,8 @@ from src.evaluation.benchmark_suite import (
     load_vglc_reference_graphs,
 )
 
+logger = logging.getLogger(__name__)
+
 
 # Consistent visual language across exports.
 NODE_STYLE: Dict[str, Dict[str, Any]] = {
@@ -195,8 +197,8 @@ def _progression_layout(G: nx.Graph, seed: int = 42) -> Dict[Any, np.ndarray]:
         return {}
     try:
         return nx.nx_pydot.graphviz_layout(G, prog="dot")
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("graphviz_layout unavailable; falling back to non-graphviz layout: %s", exc)
 
     start = _find_start_node(G)
     U = G.to_undirected()

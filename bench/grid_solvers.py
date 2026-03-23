@@ -1,4 +1,4 @@
-"""Simple grid solvers (baseline A*); JPS placeholder for later benchmarking."""
+"""Simple grid solvers for benchmarking (A* and JPS variants)."""
 import heapq
 from typing import List, Tuple, Optional
 
@@ -66,7 +66,7 @@ def astar(grid: Grid, start: Tuple[int,int], goal: Tuple[int,int], allow_diagona
     nodes_expanded = 0
 
     while open_heap:
-        f, g, node, path = heapq.heappop(open_heap)
+        _f, g, node, path = heapq.heappop(open_heap)
         if node in closed:
             continue
         nodes_expanded += 1
@@ -263,8 +263,9 @@ def jps(grid: Grid, start: Tuple[int,int], goal: Tuple[int,int], allow_diagonal:
                 if is_free(orth2) and jump((r, c), 0, dy, goal) is not None:
                     if orth2 not in succ:
                         succ.append(orth2)
-            except Exception:
-                # conservative fallback: do nothing
+            except (RecursionError, TypeError, ValueError):
+                # Conservative fallback for malformed states/depth edge-cases.
+                # Keep baseline successors and continue search safely.
                 pass
         else:
             # orthogonal forced neighbors heuristic
@@ -292,7 +293,7 @@ def jps(grid: Grid, start: Tuple[int,int], goal: Tuple[int,int], allow_diagonal:
     trace_segments = []
 
     while open_heap:
-        f, g, node, path = heapq.heappop(open_heap)
+        _f, g, node, path = heapq.heappop(open_heap)
         if node in closed:
             continue
         nodes_expanded += 1

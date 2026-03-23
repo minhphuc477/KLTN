@@ -88,7 +88,6 @@ def _match_templates(img: np.ndarray, templates: Dict[str, np.ndarray],
     h_crop = (h // tile_px) * tile_px
     w_crop = (w // tile_px) * tile_px
     imgc = img[:h_crop, :w_crop, :3]
-    gray = cv2.cvtColor(imgc, cv2.COLOR_RGB2GRAY)
 
     tpl_names = list(templates.keys())
     tpl_arrs = [cv2.cvtColor(templates[n][..., :3], cv2.COLOR_RGBA2RGB) if templates[n].shape[2] == 4 else templates[n][..., :3]

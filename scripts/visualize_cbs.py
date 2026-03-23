@@ -1,4 +1,4 @@
-"""
+﻿"""
 Visualize CBS+ Results for Paper Figures.
 
 Generates three types of figures:
@@ -45,7 +45,7 @@ except ImportError:
     print("Warning: matplotlib not available. Install with: pip install matplotlib")
 
 from src.core.definitions import SEMANTIC_PALETTE, ID_TO_NAME
-from src.data.zelda_core import ZeldaDungeonAdapter
+from src.zelda_data.zelda_core import ZeldaDungeonAdapter
 from src.simulation.validator import StateSpaceAStar, ZeldaLogicEnv
 from src.simulation.cognitive_bounded_search import (
     CognitiveBoundedSearch, BeliefMap, CBSMetrics, AgentPersona
@@ -134,14 +134,14 @@ def run_cbs_for_visualization(
     env_astar.start_pos = start
     env_astar.goal_pos = goal
     solver_a = StateSpaceAStar(env_astar, timeout=200000)
-    success_a, astar_path, _ = solver_a.solve()
+    _success_a, astar_path, _ = solver_a.solve()
     
     # Run CBS+
     env_cbs = ZeldaLogicEnv(semantic_grid=grid)
     env_cbs.start_pos = start
     env_cbs.goal_pos = goal
     cbs = CognitiveBoundedSearch(env_cbs, persona=persona, timeout=max_steps, seed=seed)
-    success_c, cbs_path, states_c, metrics = cbs.solve()
+    _success_c, cbs_path, _states_c, metrics = cbs.solve()
     
     return grid, cbs.belief_map, cbs_path, metrics, astar_path
 
@@ -222,7 +222,7 @@ def figure2_frustration_heatmap(
         print("Skipping figure generation - matplotlib not available")
         return
     
-    fig, ax = plt.subplots(figsize=(12, 10))
+    _fig, ax = plt.subplots(figsize=(12, 10))
     
     # Draw base map
     truth_rgba = grid_to_rgba(ground_truth)
@@ -377,7 +377,7 @@ def figure3_complexity_spectrum(
     confusion_ratios = [cbs_data[m][first_persona]['confusion_ratio'] for m in common_maps]
     
     # Create figure with 2 subplots
-    fig, axes = plt.subplots(2, 1, figsize=(14, 10), sharex=True)
+    _fig, axes = plt.subplots(2, 1, figsize=(14, 10), sharex=True)
     
     # Plot 1: Path lengths
     ax1 = axes[0]
@@ -388,8 +388,8 @@ def figure3_complexity_spectrum(
     ax1_twin = ax1.twinx()
     # Filter out inf values for plotting
     valid_ratios = [r if r != float('inf') and not np.isnan(r) else 0 for r in confusion_ratios]
-    line = ax1_twin.plot(x, valid_ratios, 'r-o', linewidth=2, markersize=6, 
-                         label='Confusion Ratio', alpha=0.8)
+    _line = ax1_twin.plot(x, valid_ratios, 'r-o', linewidth=2, markersize=6, 
+                          label='Confusion Ratio', alpha=0.8)
     ax1_twin.set_ylabel('Confusion Ratio (CBS/A*)', color='red', fontsize=12)
     ax1_twin.tick_params(axis='y', labelcolor='red')
     max_ratio = max(valid_ratios) if valid_ratios and max(valid_ratios) > 0 else 5.0
@@ -411,8 +411,8 @@ def figure3_complexity_spectrum(
     
     # Plot 2: States explored
     ax2 = axes[1]
-    bars3 = ax2.bar(x - width/2, astar_states, width, label='A* States', color='#2ecc71', alpha=0.8)
-    bars4 = ax2.bar(x + width/2, cbs_states, width, label='CBS+ States', color='#3498db', alpha=0.8)
+    _bars3 = ax2.bar(x - width/2, astar_states, width, label='A* States', color='#2ecc71', alpha=0.8)
+    _bars4 = ax2.bar(x + width/2, cbs_states, width, label='CBS+ States', color='#3498db', alpha=0.8)
     
     ax2.set_ylabel('States Explored', fontsize=12)
     ax2.set_xlabel('Dungeon', fontsize=12)
@@ -524,3 +524,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+

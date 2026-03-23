@@ -6,6 +6,7 @@ import logging
 import os
 import pickle
 
+from src.gui.components.constants import GUI_ALGORITHM_NAMES
 from src.gui.solver.utils import convert_diagonal_to_4dir as _convert_diagonal_to_4dir
 
 
@@ -28,7 +29,12 @@ def _solve_in_subprocess(grid, start_pos, goal_pos, algorithm_idx, feature_flags
         raw_profile = str(priority_options.get('rules_profile', '') or '').strip().lower()
         if raw_profile in {'strict_original', 'original', 'nes'}:
             strict_original_mode = True
-        priority_options['rules_profile'] = 'strict_original' if strict_original_mode else 'extended'
+        if strict_original_mode:
+            priority_options['rules_profile'] = 'strict_original'
+        elif raw_profile in {'extended'}:
+            priority_options['rules_profile'] = 'extended'
+        else:
+            priority_options['rules_profile'] = 'vglc_strict'
         if strict_original_mode:
             priority_options['allow_diagonals'] = False
 
@@ -52,13 +58,11 @@ def _solve_in_subprocess(grid, start_pos, goal_pos, algorithm_idx, feature_flags
             'message': None,
         }
 
-        algorithm_names = [
-            'A*', 'BFS', 'Dijkstra', 'Greedy', 'D* Lite',
-            'DFS/IDDFS', 'Bidirectional A*',
-            'CBS (Balanced)', 'CBS (Explorer)', 'CBS (Cautious)',
-            'CBS (Forgetful)', 'CBS (Speedrunner)', 'CBS (Greedy)'
-        ]
-        alg_name = algorithm_names[algorithm_idx] if algorithm_idx < len(algorithm_names) else f'Unknown({algorithm_idx})'
+        alg_name = (
+            GUI_ALGORITHM_NAMES[algorithm_idx]
+            if isinstance(algorithm_idx, int) and 0 <= algorithm_idx < len(GUI_ALGORITHM_NAMES)
+            else f'Unknown({algorithm_idx})'
+        )
 
         logger = logging.getLogger(__name__)
         logger.info('═══════════════════════════════════════════════════')
@@ -123,7 +127,7 @@ def _solve_in_subprocess(grid, start_pos, goal_pos, algorithm_idx, feature_flags
                         enable_ara=bool(priority_options.get('enable_ara', False)),
                         ara_weight=float(priority_options.get('ara_weight', 1.0)),
                         allow_diagonals=bool(priority_options.get('allow_diagonals', False)),
-                        rules_profile=str(priority_options.get('rules_profile', 'extended')),
+                        rules_profile=str(priority_options.get('rules_profile', 'vglc_strict')),
                         representation=rep_mode,
                     )
                 except Exception:

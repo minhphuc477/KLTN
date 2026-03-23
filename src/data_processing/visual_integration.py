@@ -1,4 +1,4 @@
-"""Small integration layer between `visual_extractor` and the solver stack.
+﻿"""Small integration layer between `visual_extractor` and the solver stack.
 
 Purpose (minimal, testable):
 - convert a single-room screenshot -> semantic room grid + confidence
@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import Tuple, Set, Optional
 import numpy as np
 from src.core.definitions import SEMANTIC_PALETTE, ROOM_HEIGHT, ROOM_WIDTH
-from src.data.zelda_core import StitchedDungeon
+from src.zelda_data.zelda_core import StitchedDungeon
 from src.data_processing.visual_extractor import extract_grid
 
 
@@ -31,7 +31,7 @@ def visual_extract_to_room(image_path: str, templates_dir: str, tile_px: int = 1
 
     # Heuristic mapping: if a template index corresponds to a known semantic
     # id (not available from extractor), caller can post-process. Return raw ids
-    # for now alongside confidence — higher layers will convert using template
+    # for now alongside confidence â€” higher layers will convert using template
     # metadata if available.
     return ids, conf
 
@@ -77,3 +77,4 @@ def make_stitched_for_single_room(room_grid: np.ndarray, room_pos: Tuple[int, in
                             room_positions=room_positions,
                             start_global=start_global,
                             triforce_global=trif_global)
+

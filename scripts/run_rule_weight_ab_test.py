@@ -328,7 +328,7 @@ def main() -> int:
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
     if not args.verbose:
-        logging.getLogger("src.data.vglc_utils").setLevel(logging.ERROR)
+        logging.getLogger("src.zelda_data.vglc_utils").setLevel(logging.ERROR)
         logging.getLogger("src.generation.grammar").setLevel(logging.ERROR)
         logging.getLogger("src.generation.evolutionary_director").setLevel(logging.ERROR)
     out_dir = Path(args.output)

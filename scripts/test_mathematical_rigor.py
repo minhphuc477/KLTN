@@ -37,6 +37,8 @@ import networkx as nx
 from typing import Dict, List
 import argparse
 
+logger = logging.getLogger(__name__)
+
 # Import components to test
 from src.generation.weighted_bayesian_wfc import (
     WeightedBayesianWFC,
@@ -56,9 +58,6 @@ from src.simulation.key_economy_validator import (
     GreedyPlayer,
     AdversarialPlayer
 )
-
-logger = logging.getLogger(__name__)
-
 
 # ============================================================================
 # TEST 1: WEIGHTED BAYESIAN WFC - DISTRIBUTION PRESERVATION
@@ -162,24 +161,24 @@ def test_difficulty_metrics_separation(verbose: bool = False):
     Test that difficulty metrics properly separate cognitive vs tedious.
     
     Validation:
-    - High cognitive, low tedious → High fun
-    - Low cognitive, high tedious → Low fun
+    - Distinct scenarios produce measurably different component scores.
+    - Enemy-spam scenario should increase combat/resource pressure.
+    - Puzzle/navigation scenario should retain stronger navigation signal.
     """
     print("\n" + "="*80)
     print("TEST 2: Weighted Difficulty Metrics - Cognitive vs Tedious")
     print("="*80)
     
     if DifficultyCalculator is None:
-        print("⚠️  SKIP: DifficultyCalculator not available (using existing implementation)")
-        print("✅ PASS: (Skipped - existing implementation structure different)")
-        return True
+        print("⚠️  SKIP: DifficultyCalculator not available")
+        return None
     
     calc = DifficultyCalculator()  # Use default weights
     
     # Test Case 1: High Cognitive (puzzle-heavy dungeon)
     print("\nTest Case 1: Puzzle-Heavy Dungeon (High Cognitive)")
     
-    # Use existing DifficultyCalculator API (simplified test)
+    # Use existing DifficultyCalculator API and validate component separation.
     try:
         metrics_1 = calc.compute(
             enemy_count=5,
@@ -197,8 +196,8 @@ def test_difficulty_metrics_separation(verbose: bool = False):
     except Exception as e:
         if verbose:
             print(f"  Difficulty calculation: {e}")
-        print("✅ PASS: (Simplified - existing implementation verified)")
-        return True
+        print("⚠️  SKIP: Difficulty calculator compute() unavailable for this API shape")
+        return None
     
     # Test Case 2: High Tedious (enemy spam dungeon)
     print("\nTest Case 2: Enemy Spam Dungeon (High Tedious)")
@@ -215,18 +214,37 @@ def test_difficulty_metrics_separation(verbose: bool = False):
         if verbose:
             print(f"  Combat: {metrics_2.combat_score:.3f}")
             print(f"  Navigation: {metrics_2.navigation_complexity:.3f}")
+            print(f"  Resource: {metrics_2.resource_scarcity:.3f}")
             print(f"  Overall: {metrics_2.overall_difficulty:.3f}")
     except Exception as e:
         if verbose:
             print(f"  Difficulty calculation: {e}")
+        print("⚠️  SKIP: Difficulty calculator failed on comparison scenario")
+        return None
     
-    # Simplified validation
+    # Real validation: component-level separation checks.
+    scenario_delta = abs(metrics_2.overall_difficulty - metrics_1.overall_difficulty)
+
+    navigation_delta = abs(metrics_1.navigation_complexity - metrics_2.navigation_complexity)
+
+    checks = {
+        "combat_increases_with_enemy_spam": metrics_2.combat_score >= metrics_1.combat_score,
+        "resource_pressure_increases_with_enemy_spam": metrics_2.resource_scarcity >= metrics_1.resource_scarcity,
+        "navigation_signal_differs_between_scenarios": navigation_delta >= 0.02,
+        "overall_not_identical": scenario_delta >= 0.05,
+    }
+
     print("\nValidation:")
-    print("  ✓ Difficulty calculator functional")
-    print("  ✓ Metrics computed for different scenarios")
-    
-    print("✅ PASS: Difficulty metrics framework validated")
-    return True
+    for name, ok in checks.items():
+        status = "✓" if ok else "✗"
+        print(f"  {status} {name}")
+
+    if all(checks.values()):
+        print("✅ PASS: Difficulty metrics show expected component separation")
+        return True
+
+    print("❌ FAIL: Difficulty metrics did not separate scenarios as expected")
+    return False
 
 
 # ============================================================================
@@ -304,8 +322,7 @@ def test_key_economy_all_topologies(verbose: bool = False):
         print(f"  Greedy solvable: {result_tree.greedy_solvable}")
         print(f"  Adversarial solvable: {result_tree.adversarial_solvable}")
     
-    print(f"  Tree topology: {'✅ PASS' if result_tree.is_valid else '✅ PASS (adversarial may explore optional branch)'}")
-    results['tree'] = True  # Tree with optional branches is expected to pass even if adversarial explores
+    print(f"  Tree topology: {'✅ PASS' if result_tree.is_valid else '❌ FAIL'}")
     
     # Test 3.3: Diamond topology (converging paths)
     print("\nTest 3.3: Diamond Topology")
@@ -409,17 +426,26 @@ def run_all_tests(verbose: bool = False, quick: bool = False):
     print("=" * 80)
     
     for test_name, passed in results.items():
-        status = "✅ PASS" if passed else "❌ FAIL"
+        if passed is True:
+            status = "✅ PASS"
+        elif passed is False:
+            status = "❌ FAIL"
+        else:
+            status = "⚠️  SKIP"
         print(f"{status}  {test_name.replace('_', ' ').title()}")
     
-    all_passed = all(results.values())
+    failed_count = sum(1 for p in results.values() if p is False)
+    passed_count = sum(1 for p in results.values() if p is True)
+    skipped_count = sum(1 for p in results.values() if p is None)
+    all_passed = failed_count == 0 and passed_count > 0
     
     if all_passed:
         print("\n✅ ALL TESTS PASSED - Mathematical rigor validated!")
         return 0
     else:
-        failed_count = sum(1 for p in results.values() if not p)
         print(f"\n❌ {failed_count}/{len(results)} TESTS FAILED")
+        if skipped_count > 0:
+            print(f"⚠️  {skipped_count}/{len(results)} TESTS SKIPPED")
         return 1
 
 

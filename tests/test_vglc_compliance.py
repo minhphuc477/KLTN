@@ -1,11 +1,11 @@
-"""
+﻿"""
 VGLC Compliance Tests
 =====================
 
 Tests to verify VGLC (Video Game Level Corpus) dataset compliance.
 
 These tests ensure that:
-1. Room dimensions are correct (11×16 non-square)
+1. Room dimensions are correct (11Ã—16 non-square)
 2. Virtual nodes are filtered correctly
 3. Composite node labels are parsed correctly
 4. Boss-Goal subgraph validation works
@@ -32,7 +32,7 @@ from src.constants.vglc_constants import (
     VIRTUAL_NODE_TYPES,
 )
 
-from src.data.vglc_utils import (
+from src.zelda_data.vglc_utils import (
     # Parsing
     parse_node_label,
     parse_node_attributes,
@@ -142,7 +142,7 @@ class TestRoomDimensions:
     """Test that room dimensions match VGLC specification (NON-SQUARE)."""
     
     def test_room_dimensions_correct(self):
-        """Verify correct 11×16 dimensions."""
+        """Verify correct 11Ã—16 dimensions."""
         assert ROOM_WIDTH_TILES == 11, "Room width should be 11 tiles"
         assert ROOM_HEIGHT_TILES == 16, "Room height should be 16 tiles"
     
@@ -379,7 +379,7 @@ class TestBossGoalValidation:
     """Test Boss-Goal subgraph pattern validation."""
     
     def test_valid_boss_goal_pattern(self):
-        """Test valid Boss → Goal pattern."""
+        """Test valid Boss â†’ Goal pattern."""
         G = nx.DiGraph()
         G.add_node(1, label='b')  # Boss
         G.add_node(2, label='t')  # Goal (triforce)
@@ -514,7 +514,7 @@ class TestVGLCIntegration:
     """Integration tests combining multiple VGLC features."""
     
     def test_full_workflow_with_virtual_node(self):
-        """Test complete workflow: parse → filter → validate."""
+        """Test complete workflow: parse â†’ filter â†’ validate."""
         # Create graph with virtual start pointer (typical VGLC pattern)
         G = nx.DiGraph()
         G.add_node(0, label='s')        # Virtual start pointer
@@ -522,7 +522,7 @@ class TestVGLCIntegration:
         G.add_node(2, label='p')        # Puzzle room
         G.add_node(3, label='b')        # Boss
         G.add_node(4, label='t')        # Goal
-        G.add_edge(0, 1)                # Virtual → Physical start
+        G.add_edge(0, 1)                # Virtual â†’ Physical start
         G.add_edge(1, 2, label='')      # Open door
         G.add_edge(2, 3, label='k')     # Key-locked door
         G.add_edge(3, 4, label='l')     # Soft-lock after boss
@@ -583,3 +583,4 @@ class TestVGLCIntegration:
 
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
+

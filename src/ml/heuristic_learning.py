@@ -53,64 +53,68 @@ class TrainingExample:
     remaining_cost: float  # Ground truth label
 
 
-class HeuristicNetwork(nn.Module if TORCH_AVAILABLE else object):
-    """
-    Neural network for predicting remaining cost to goal.
-    
-    Architecture:
-        Input (10) → FC(128) → ReLU → FC(64) → ReLU → FC(32) → ReLU → FC(1)
-    
-    Input Features:
-    - position_x, position_y (normalized)
-    - keys (count)
-    - has_bomb, has_boss_key, has_item (binary)
-    - manhattan_distance_to_goal
-    - num_locked_doors_ahead
-    - num_items_collected
-    - exploration_progress (0-1)
-    """
-    
-    def __init__(self, map_height: int, map_width: int):
-        if not TORCH_AVAILABLE:
-            logger.error("PyTorch not available!")
-            return
-        
-        super(HeuristicNetwork, self).__init__()
-        
-        self.map_height = map_height
-        self.map_width = map_width
-        
-        # Network layers
-        self.fc1 = nn.Linear(10, 128)
-        self.fc2 = nn.Linear(128, 64)
-        self.fc3 = nn.Linear(64, 32)
-        self.fc4 = nn.Linear(32, 1)
-        
-        self.relu = nn.ReLU()
-    
-    def forward(self, x):
-        """Forward pass."""
-        x = self.relu(self.fc1(x))
-        x = self.relu(self.fc2(x))
-        x = self.relu(self.fc3(x))
-        x = self.fc4(x)  # Linear output (cost can be any positive value)
-        return x
-    
-    def predict_cost(self, state_features: np.ndarray) -> float:
+if TORCH_AVAILABLE:
+    class HeuristicNetwork(nn.Module):
         """
-        Predict remaining cost for a single state.
+        Neural network for predicting remaining cost to goal.
         
-        Args:
-            state_features: Numpy array of shape (10,)
+        Architecture:
+            Input (10) -> FC(128) -> ReLU -> FC(64) -> ReLU -> FC(32) -> ReLU -> FC(1)
+        
+        Input Features:
+        - position_x, position_y (normalized)
+        - keys (count)
+        - has_bomb, has_boss_key, has_item (binary)
+        - manhattan_distance_to_goal
+        - num_locked_doors_ahead
+        - num_items_collected
+        - exploration_progress (0-1)
+        """
+        
+        def __init__(self, map_height: int, map_width: int):
+            super().__init__()
             
-        Returns:
-            Predicted cost (float)
-        """
-        self.eval()
-        with torch.no_grad():
-            x = torch.FloatTensor(state_features).unsqueeze(0)
-            pred = self.forward(x)
-            return max(0.0, pred.item())  # Ensure non-negative
+            self.map_height = map_height
+            self.map_width = map_width
+            
+            # Network layers
+            self.fc1 = nn.Linear(10, 128)
+            self.fc2 = nn.Linear(128, 64)
+            self.fc3 = nn.Linear(64, 32)
+            self.fc4 = nn.Linear(32, 1)
+            
+            self.relu = nn.ReLU()
+        
+        def forward(self, x):
+            """Forward pass."""
+            x = self.relu(self.fc1(x))
+            x = self.relu(self.fc2(x))
+            x = self.relu(self.fc3(x))
+            x = self.fc4(x)  # Linear output (cost can be any positive value)
+            return x
+        
+        def predict_cost(self, state_features: np.ndarray) -> float:
+            """
+            Predict remaining cost for a single state.
+            
+            Args:
+                state_features: Numpy array of shape (10,)
+                
+            Returns:
+                Predicted cost (float)
+            """
+            self.eval()
+            with torch.no_grad():
+                x = torch.FloatTensor(state_features).unsqueeze(0)
+                pred = self.forward(x)
+                return max(0.0, pred.item())  # Ensure non-negative
+else:
+    class HeuristicNetwork(object):
+        """Fallback stub when PyTorch is unavailable."""
+        
+        def __init__(self, map_height: int, map_width: int):
+            _ = map_height, map_width
+            raise ImportError("PyTorch required for HeuristicNetwork")
 
 
 class HeuristicTrainer:

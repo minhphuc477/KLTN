@@ -35,7 +35,7 @@ Convergence:
 """
 
 import logging
-from typing import Dict, List, Tuple, Optional, Set, Any
+from typing import Dict, List, Tuple, Optional, Set, Any, Callable
 from dataclasses import dataclass, field
 from enum import Enum
 import heapq
@@ -674,8 +674,6 @@ class WaveFunctionCollapse:
         Returns:
             Initial WFC state
         """
-        num_tiles = len(self.tile_types)
-        
         # Phase 3B: Use learned tile weights instead of uniform
         grid = np.tile(self.initial_probs, (height, width, 1))  # [H, W, T]
         collapsed = np.zeros((height, width), dtype=bool)
@@ -712,7 +710,7 @@ class WaveFunctionCollapse:
         """
         h, w = state.collapsed.shape
         
-        for iteration in range(self.max_iterations):
+        for _iteration in range(self.max_iterations):
             # Find cell with lowest entropy (that isn't collapsed)
             min_entropy = float('inf')
             min_cell = None
@@ -846,7 +844,7 @@ class ConstraintPropagator:
         
         Creates a path if none exists.
         """
-        h, w = grid.shape
+        _h, _w = grid.shape
         
         # Check existing path
         path = self._find_path(grid, start, goal, walkable)
@@ -1015,6 +1013,103 @@ class SymbolicRefiner:
         self.constraint_propagator = ConstraintPropagator(
             adjacency=effective_adjacency
         )
+        self.last_repair_diagnostics: Dict[str, Any] = {}
+
+    def repair_room_with_feedback(
+        self,
+        grid: np.ndarray,
+        start: Tuple[int, int],
+        goal: Tuple[int, int],
+        feedback_callback: Optional[Callable[[np.ndarray, np.ndarray, Tuple[int, int], Tuple[int, int], int], np.ndarray]] = None,
+        max_feedback_rounds: int = 2,
+    ) -> Tuple[np.ndarray, bool, Dict[str, Any]]:
+        """
+        Repair a room and optionally call a neural feedback callback on WFC dead-ends.
+
+        The callback receives (current_grid, dead_end_mask, start, goal, attempt)
+        and must return a patched room grid of identical shape.
+        """
+        current_grid = grid.copy()
+        feedback_used = 0
+        diagnostics: Dict[str, Any] = {
+            "attempts": 0,
+            "wfc_failures": 0,
+            "feedback_rounds": 0,
+            "feedback_applied": 0,
+            "last_dead_end_mask_pixels": 0,
+            "final_failure_count": 0,
+        }
+
+        for attempt in range(self.max_repair_attempts):
+            diagnostics["attempts"] = int(attempt + 1)
+
+            # Analyze failures
+            failures = self.path_analyzer.analyze_grid(current_grid, start, goal)
+
+            if not failures:
+                logger.info(f"Room repaired successfully in {attempt + 1} attempts")
+                diagnostics["final_failure_count"] = 0
+                self.last_repair_diagnostics = diagnostics
+                return current_grid, True, diagnostics
+
+            logger.debug(f"Repair attempt {attempt + 1}: {len(failures)} failure points")
+
+            # Create localized reset mask around failure points.
+            mask = self.entropy_reset.create_mask(grid.shape[:2], failures)
+            mask = self.entropy_reset.expand_mask(mask, iterations=1)
+
+            # Run local WFC repair for masked region.
+            state = self.wfc.initialize_state(
+                height=grid.shape[0],
+                width=grid.shape[1],
+                initial_grid=current_grid,
+                mask=mask,
+            )
+            current_grid, wfc_success = self.wfc.collapse(state)
+
+            if not wfc_success:
+                diagnostics["wfc_failures"] = int(diagnostics["wfc_failures"] + 1)
+                logger.warning(f"WFC failed on attempt {attempt + 1}")
+
+                # WFC-guided feedback loop: ask upstream neural module to inpaint
+                # only the contradiction region, then continue repair iterations.
+                if feedback_callback is not None and feedback_used < int(max(0, max_feedback_rounds)):
+                    try:
+                        feedback_grid = feedback_callback(
+                            current_grid.copy(),
+                            mask.copy(),
+                            start,
+                            goal,
+                            int(attempt),
+                        )
+                        if isinstance(feedback_grid, np.ndarray) and feedback_grid.shape == current_grid.shape:
+                            current_grid = feedback_grid.astype(current_grid.dtype, copy=False)
+                            feedback_used += 1
+                            diagnostics["feedback_rounds"] = int(feedback_used)
+                            diagnostics["feedback_applied"] = int(diagnostics["feedback_applied"] + 1)
+                            diagnostics["last_dead_end_mask_pixels"] = int(np.sum(mask))
+                            continue
+                    except Exception as e:
+                        logger.warning("Feedback callback failed: %s", e)
+                continue
+
+            walkable = {
+                TileType.FLOOR.value,
+                TileType.KEY.value,
+                TileType.CHEST.value,
+            }
+            current_grid = self.constraint_propagator.enforce_connectivity(
+                current_grid,
+                start,
+                goal,
+                walkable,
+            )
+
+        # Final check.
+        failures = self.path_analyzer.analyze_grid(current_grid, start, goal)
+        diagnostics["final_failure_count"] = int(len(failures))
+        self.last_repair_diagnostics = diagnostics
+        return current_grid, len(failures) == 0, diagnostics
     
     def repair_room(
         self,
@@ -1033,57 +1128,15 @@ class SymbolicRefiner:
         Returns:
             (repaired_grid, success)
         """
-        current_grid = grid.copy()
-        
-        for attempt in range(self.max_repair_attempts):
-            # Analyze failures
-            failures = self.path_analyzer.analyze_grid(
-                current_grid, start, goal
-            )
-            
-            if not failures:
-                # No failures = solvable
-                logger.info(f"Room repaired successfully in {attempt + 1} attempts")
-                return current_grid, True
-            
-            logger.debug(f"Repair attempt {attempt + 1}: {len(failures)} failure points")
-            
-            # Create mask
-            mask = self.entropy_reset.create_mask(
-                grid.shape[:2], failures
-            )
-            
-            # Expand mask slightly
-            mask = self.entropy_reset.expand_mask(mask, iterations=1)
-            
-            # Initialize WFC state
-            state = self.wfc.initialize_state(
-                height=grid.shape[0],
-                width=grid.shape[1],
-                initial_grid=current_grid,
-                mask=mask,
-            )
-            
-            # Run WFC
-            current_grid, wfc_success = self.wfc.collapse(state)
-            
-            if not wfc_success:
-                logger.warning(f"WFC failed on attempt {attempt + 1}")
-                continue
-            
-            # Enforce connectivity constraint
-            walkable = {
-                TileType.FLOOR.value,
-                TileType.KEY.value,
-                TileType.CHEST.value,
-            }
-            current_grid = self.constraint_propagator.enforce_connectivity(
-                current_grid, start, goal, walkable
-            )
-        
-        # Final check
-        failures = self.path_analyzer.analyze_grid(current_grid, start, goal)
-        return current_grid, len(failures) == 0
+        repaired, success, diagnostics = self.repair_room_with_feedback(
+            grid=grid,
+            start=start,
+            goal=goal,
+            feedback_callback=None,
+            max_feedback_rounds=0,
+        )
+        self.last_repair_diagnostics = diagnostics
+        return repaired, success
     
     def repair_dungeon(
         self,
@@ -1116,7 +1169,7 @@ class SymbolicRefiner:
         
         # Try to repair each unsolvable room
         if hasattr(dungeon, 'rooms'):
-            for room_id, room in enumerate(dungeon.rooms):
+            for _room_id, room in enumerate(dungeon.rooms):
                 if hasattr(room, 'grid'):
                     # Find start/goal for this room
                     h, w = room.grid.shape[:2]

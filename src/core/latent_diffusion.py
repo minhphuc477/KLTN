@@ -873,12 +873,9 @@ class LatentDiffusionModel(nn.Module):
         prediction = self._predict_noise_cfg(x_t, t, context)
         
         # Convert to pred_x0 and pred_noise
-        pred_x0, pred_noise = self._convert_prediction(prediction, x_t, t)
+        pred_x0, _pred_noise = self._convert_prediction(prediction, x_t, t)
         
         # Compute predicted x_0
-        sqrt_recip_alpha_t = self.sqrt_recip_alphas[t][:, None, None, None]
-        sqrt_one_minus_alpha_t = self.sqrt_one_minus_alphas_cumprod[t][:, None, None, None]
-        
         # pred_x0 already computed by _convert_prediction above
         if clip_denoised:
             pred_x0 = torch.clamp(pred_x0, -1.0, 1.0)
@@ -946,7 +943,7 @@ class LatentDiffusionModel(nn.Module):
             Generated latent codes
         """
         device = context.device
-        B = context.shape[0]
+        _B = context.shape[0]
         
         # Start from noise
         x_t = torch.randn(shape, device=device)
@@ -1028,6 +1025,56 @@ class LatentDiffusionModel(nn.Module):
                 guidance_grad = self.guidance.compute_guidance(x_t, graph_data)
                 x_t = x_t - guidance_grad
         
+        return x_t
+
+    @torch.no_grad()
+    def inpaint(
+        self,
+        x_0: Tensor,
+        mask: Tensor,
+        context: Tensor,
+        graph_data: Optional[Dict[str, Tensor]] = None,
+        num_steps: int = 30,
+    ) -> Tensor:
+        """
+        Masked latent inpainting using reverse diffusion with hard constraint injection.
+
+        Args:
+            x_0: Reference latent to preserve on unmasked regions [B, C, H, W]
+            mask: Binary editable mask [B, 1|C, H, W], 1=editable, 0=preserve
+            context: Conditioning [B, context_dim]
+            graph_data: Optional graph data for logic guidance
+            num_steps: Number of reverse diffusion steps
+
+        Returns:
+            Inpainted latent tensor [B, C, H, W]
+        """
+        if num_steps <= 0:
+            return x_0
+
+        device = x_0.device
+        B = int(x_0.shape[0])
+
+        edit_mask = mask.to(device=device, dtype=x_0.dtype)
+        if edit_mask.dim() == 3:
+            edit_mask = edit_mask.unsqueeze(1)
+        if edit_mask.shape[1] == 1 and x_0.shape[1] > 1:
+            edit_mask = edit_mask.expand(-1, x_0.shape[1], -1, -1)
+        edit_mask = torch.clamp(edit_mask, 0.0, 1.0)
+
+        preserve_mask = 1.0 - edit_mask
+
+        # Start from noisy version of x_0 so preserved context remains coherent.
+        start_t = max(1, min(self.num_timesteps - 1, int(num_steps) - 1))
+        t_start = torch.full((B,), start_t, device=device, dtype=torch.long)
+        x_t = self.q_sample(x_0, t_start)
+
+        for t in reversed(range(start_t + 1)):
+            x_t = self.p_sample(x_t, t, context, graph_data)
+            t_tensor = torch.full((B,), t, device=device, dtype=torch.long)
+            known_t = self.q_sample(x_0, t_tensor)
+            x_t = edit_mask * x_t + preserve_mask * known_t
+
         return x_t
     
     def training_loss(

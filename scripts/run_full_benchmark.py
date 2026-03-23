@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 Full CBS+ Benchmark Suite
 =========================
@@ -40,7 +40,7 @@ from src.simulation.validator import ZeldaLogicEnv, StateSpaceAStar
 from src.simulation.cognitive_bounded_search import (
     CognitiveBoundedSearch, CBSMetrics, PERSONA_CONFIGS
 )
-from src.data.zelda_core import ZeldaDungeonAdapter
+from src.zelda_data.zelda_core import ZeldaDungeonAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -525,7 +525,7 @@ def analyze_greedy_vs_balanced(df: pd.DataFrame) -> Dict[str, Any]:
     """
     Statistical comparison of GREEDY vs BALANCED personas.
     
-    Proves that memory decay (λ < 1.0) is the active ingredient.
+    Proves that memory decay (Î» < 1.0) is the active ingredient.
     """
     greedy = df[(df['solver'] == 'cbs') & (df['persona'] == 'greedy')]
     balanced = df[(df['solver'] == 'cbs') & (df['persona'] == 'balanced')]
@@ -592,7 +592,7 @@ def generate_figure3(df: pd.DataFrame, output_path: str):
     grouped = cbs_data.groupby(['dataset_type', 'persona'])['confusion_ratio'].agg(['mean', 'std']).reset_index()
     
     # Create figure
-    fig, ax = plt.subplots(figsize=(10, 6))
+    _fig, ax = plt.subplots(figsize=(10, 6))
     
     dataset_types = grouped['dataset_type'].unique()
     x = np.arange(len(dataset_types))
@@ -614,9 +614,9 @@ def generate_figure3(df: pd.DataFrame, output_path: str):
     greedy_stds = [0 if np.isnan(v) else v for v in greedy_stds]
     
     bars1 = ax.bar(x - width/2, balanced_means, width, yerr=balanced_stds, 
-                   label='BALANCED (λ=0.95)', color='steelblue', capsize=3)
+                   label='BALANCED (Î»=0.95)', color='steelblue', capsize=3)
     bars2 = ax.bar(x + width/2, greedy_means, width, yerr=greedy_stds,
-                   label='GREEDY (λ=1.0, no decay)', color='coral', capsize=3)
+                   label='GREEDY (Î»=1.0, no decay)', color='coral', capsize=3)
     
     ax.set_xlabel('Dataset Type', fontsize=12)
     ax.set_ylabel('Confusion Ratio (steps/unique_tiles)', fontsize=12)
@@ -792,8 +792,8 @@ def main():
     print("\n" + "=" * 60)
     print("GREEDY vs BALANCED Comparison (Memory Decay Proof)")
     print("=" * 60)
-    print(f"GREEDY (λ=1.0, no decay) samples: {analysis['greedy_n']}")
-    print(f"BALANCED (λ=0.95) samples: {analysis['balanced_n']}")
+    print(f"GREEDY (Î»=1.0, no decay) samples: {analysis['greedy_n']}")
+    print(f"BALANCED (Î»=0.95) samples: {analysis['balanced_n']}")
     print()
     print(f"Success Rate:")
     print(f"  BALANCED: {analysis['balanced_success_rate']:.2%}")
@@ -816,7 +816,7 @@ def main():
         print(f"  t-statistic: {analysis['confusion_ttest_statistic']:.3f}")
         print(f"  p-value:     {analysis['confusion_ttest_pvalue']:.4f}")
         if analysis['confusion_ttest_pvalue'] < 0.05:
-            print("  → Statistically significant difference (p < 0.05)")
+            print("  â†’ Statistically significant difference (p < 0.05)")
     
     # ==========================================================================
     # Generate Figure 3
@@ -842,7 +842,7 @@ def main():
         if len(cbs_dt) > 0:
             mean_cr = cbs_dt['confusion_ratio'].mean()
             std_cr = cbs_dt['confusion_ratio'].std()
-            print(f"  {dt:10s}: {mean_cr:.2f} ± {std_cr:.2f}")
+            print(f"  {dt:10s}: {mean_cr:.2f} Â± {std_cr:.2f}")
     
     print("\n" + "=" * 60)
     print("Benchmark complete!")
@@ -856,3 +856,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+

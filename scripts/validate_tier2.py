@@ -1,4 +1,4 @@
-"""
+﻿"""
 Quick Validation Script for TIER 2 & 3 Features
 ===============================================
 
@@ -19,7 +19,7 @@ from src.simulation import GameState, ZeldaLogicEnv, SEMANTIC_PALETTE
 
 def print_status(name: str, success: bool):
     """Print colorful status message."""
-    status = "✅ PASS" if success else "❌ FAIL"
+    status = "âœ… PASS" if success else "âŒ FAIL"
     print(f"{status} - {name}")
 
 
@@ -58,7 +58,7 @@ def main():
         solver = DStarLiteSolver(env)
         
         start_state = GameState(position=(0, 0))
-        success, path, states = solver.solve(start_state)
+        success, path, _states = solver.solve(start_state)
         
         assert success, "D* Lite should find solution"
         assert len(path) > 0
@@ -192,7 +192,7 @@ def main():
     # Test 8: GUI Components
     print("Test 8: GUI Components")
     try:
-        from src.gui.tier2_components import FloorSelector, MinimapZoom, ItemTooltip
+        from src.gui.common.tier2_components import FloorSelector, MinimapZoom, ItemTooltip
         import pygame
         
         selector = FloorSelector(screen_width=800, num_floors=2)
@@ -229,11 +229,11 @@ def main():
     print()
     
     if failed == 0:
-        print("🎉 ALL TESTS PASSED! 🎉")
+        print("ðŸŽ‰ ALL TESTS PASSED! ðŸŽ‰")
         print("All TIER 2 & 3 features are working correctly.")
         return 0
     else:
-        print("⚠️  SOME TESTS FAILED")
+        print("âš ï¸  SOME TESTS FAILED")
         print("Check error messages above for details.")
         return 1
 
@@ -241,3 +241,4 @@ def main():
 if __name__ == "__main__":
     exit_code = main()
     sys.exit(exit_code)
+

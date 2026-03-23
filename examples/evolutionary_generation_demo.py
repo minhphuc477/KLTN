@@ -320,10 +320,10 @@ def main():
     print("="*70)
     
     # Run examples
-    gen1, graph1 = example_linear_progression()
-    gen2, graph2 = example_wave_pattern()
-    gen3, graph3 = example_metroidvania()
-    variants = example_quick_prototype()
+    _gen1, graph1 = example_linear_progression()
+    _gen2, graph2 = example_wave_pattern()
+    _gen3, graph3 = example_metroidvania()
+    _variants = example_quick_prototype()
     
     # Summary
     print("\n" + "="*70)

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from src.gui.components.constants import GUI_ALGORITHM_NAMES
+
 
 def handle_parallel_search_completion(gui, logger, path_preview_dialog_cls):
     """Apply finished parallel-search result on the main thread."""
@@ -9,8 +11,11 @@ def handle_parallel_search_completion(gui, logger, path_preview_dialog_cls):
         return
 
     best = gui.parallel_search_result
-    alg_names = ["A*", "BFS", "Dijkstra", "Greedy"]
-    name = alg_names[best["alg"]] if best["alg"] < len(alg_names) else f"Alg{best['alg']}"
+    name = (
+        GUI_ALGORITHM_NAMES[best["alg"]]
+        if 0 <= best["alg"] < min(4, len(GUI_ALGORITHM_NAMES))
+        else f"Alg{best['alg']}"
+    )
     gui._set_message(f"Parallel best: {name} ({best['nodes']} nodes, {best['time_ms']:.0f}ms)")
     gui.parallel_search_done = False
     gui.parallel_search_result = None
@@ -32,11 +37,17 @@ def handle_parallel_search_completion(gui, logger, path_preview_dialog_cls):
 
 def handle_preview_process_completion(gui, os_module, logger, safe_unpickle_fn, path_preview_dialog_cls):
     """Apply finished preview-process result on the main thread."""
-    if not (getattr(gui, "preview_proc", None) and not getattr(gui, "preview_done", False)):
+    proc = getattr(gui, "preview_proc", None)
+    if not (proc and not getattr(gui, "preview_done", False)):
         return
 
-    proc = getattr(gui, "preview_proc")
-    if not proc.is_alive():
+    proc_alive = False
+    try:
+        proc_alive = proc.is_alive()
+    except Exception:
+        proc_alive = False
+
+    if not proc_alive:
         out = getattr(gui, "preview_outfile", None)
         res = None
         try:
@@ -160,7 +171,10 @@ def handle_solver_process_completion(
             logger.exception("SOLVER: solver_thread.is_alive() raised exception: %s", exc)
             thread_alive = False
 
-    startup_grace = float(os_module.environ.get("KLTN_SOLVER_STARTUP_GRACE", "1.5"))
+    try:
+        startup_grace = float(os_module.environ.get("KLTN_SOLVER_STARTUP_GRACE", "1.5"))
+    except (TypeError, ValueError):
+        startup_grace = 1.5
     solver_age = (time_module.time() - solver_start_time) if solver_start_time else 0.0
     out = getattr(gui, "solver_outfile", None)
     out_exists = os_module.path.exists(out) if out else False

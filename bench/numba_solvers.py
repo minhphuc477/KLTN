@@ -5,7 +5,7 @@ on flattened grid arrays. Full numba-accelerated A*/JPS implementations are
 left as next steps, but these helpers demonstrate the pattern to follow.
 """
 try:
-    from numba import njit
+    from numba import njit  # type: ignore[import-not-found]
     NUMBA_AVAILABLE = True
 except Exception:
     NUMBA_AVAILABLE = False

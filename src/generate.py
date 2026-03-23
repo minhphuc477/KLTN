@@ -233,7 +233,7 @@ class WFCRepair:
         if goal is None:
             goal = (H - 3, W - 3)
         
-        repaired_grid, success = self.refiner.repair_room(grid, start, goal)
+        repaired_grid, _success = self.refiner.repair_room(grid, start, goal)
         
         return torch.tensor(repaired_grid, dtype=torch.float32).unsqueeze(0)
 

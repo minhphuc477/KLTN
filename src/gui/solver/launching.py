@@ -106,10 +106,18 @@ def solver_thread_fallback_worker(
     except Exception as solve_err:
         logger.exception("SOLVER: Thread fallback solver exception: %s", solve_err)
     finally:
-        gui.solver_running = False
-        gui.solver_start_time = None
-        gui.solver_starting = False
-        gui.solver_thread = None
+        solver_lock = getattr(gui, "_solver_lock", None)
+        if solver_lock is not None:
+            with solver_lock:
+                gui.solver_running = False
+                gui.solver_start_time = None
+                gui.solver_starting = False
+                gui.solver_thread = None
+        else:
+            gui.solver_running = False
+            gui.solver_start_time = None
+            gui.solver_starting = False
+            gui.solver_thread = None
         logger.info("SOLVER: Thread fallback finished, solver_running=False (main loop will poll results)")
 
 

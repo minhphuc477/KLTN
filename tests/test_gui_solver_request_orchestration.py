@@ -1,4 +1,4 @@
-﻿from src.gui.services.solver_request_orchestration import (
+﻿from src.gui.orchestration.solver.request_orchestration import (
     build_solver_request,
     get_solver_map_context,
 )

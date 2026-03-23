@@ -1,4 +1,4 @@
-"""
+﻿"""
 Evolutionary Topology Director: Search-Based Procedural Content Generation
 ==========================================================================
 
@@ -20,7 +20,7 @@ Architecture:
 - Genotype: List[int] - sequence of grammar rule IDs
 - Phenotype: MissionGraph/NetworkX - the actual dungeon topology
 - Fitness: Float 0.0-1.0 based on curve matching and solvability
-- Evolution: (μ+λ)-ES with tournament selection
+- Evolution: (Î¼+Î»)-ES with tournament selection
 
 """
 
@@ -53,9 +53,17 @@ from src.core.definitions import (
 )
 
 # VGLC compliance imports
-from src.data.vglc_utils import (
+from src.zelda_data.vglc_utils import (
     filter_virtual_nodes,
     validate_topology,
+)
+from src.evaluation.structural_metrics import (
+    compute_branching_factor,
+    compute_cyclomatic_complexity,
+)
+from src.generation.pareto_objectives import (
+    apply_pareto_metrics,
+    compute_pareto_objectives,
 )
 
 try:
@@ -974,7 +982,7 @@ class TensionCurveEvaluator:
     """
     Evaluates how well a graph's tension curve matches a target curve.
     
-    Tension is extracted from the critical path (START → GOAL) by
+    Tension is extracted from the critical path (START â†’ GOAL) by
     assigning difficulty values to each node type and interpolating.
     """
     
@@ -1453,6 +1461,19 @@ class TensionCurveEvaluator:
             components = max(1, nx.number_connected_components(U))
         cycle_rank = max(0, u_edge_count - node_count + components) if node_count > 0 else 0
         cycle_density = self._clip01(float(cycle_rank) / float(max(1, node_count // 2)))
+        cyclomatic_complexity = float(cycle_rank)
+
+        # Raw branching factor for Pareto constraints (not normalized 0..1).
+        U_branch = nx.DiGraph()
+        U_branch.add_nodes_from(graph.nodes.keys())
+        U_branch.add_edges_from([(int(e.source), int(e.target)) for e in graph.edges])
+        branching_factor_raw = float(compute_branching_factor(U_branch))
+
+        # Raw loop complexity for hard loop constraints.
+        U_loops = nx.Graph()
+        U_loops.add_nodes_from(graph.nodes.keys())
+        U_loops.add_edges_from(list(undirected_edges))
+        cyclomatic_complexity = float(compute_cyclomatic_complexity(U_loops))
 
         gating_density = self._clip01(float(lock_count) / float(max(1, edge_count)))
         path_pressure = self._clip01(float(path_len) / float(max(1, node_count)))
@@ -1573,7 +1594,9 @@ class TensionCurveEvaluator:
             "item_density": float(item_density),
             "feature_complexity": float(feature_complexity),
             "branching_factor": float(branching_factor),
+            "branching_factor_raw": float(branching_factor_raw),
             "cycle_density": float(cycle_density),
+            "cyclomatic_complexity": float(cyclomatic_complexity),
             "shortcut_density": float(shortcut_density),
             "gating_density": float(gating_density),
             "gate_depth_ratio": float(gate_depth_ratio),
@@ -1885,6 +1908,14 @@ class TensionCurveEvaluator:
         topology_realism_error = self._topology_realism_error(descriptor_metrics)
         descriptor_metrics["topology_realism_error"] = float(topology_realism_error)
 
+        pareto_result = compute_pareto_objectives(
+            descriptor_metrics,
+            curve_alignment_score=curve_alignment_score,
+            required_loops=2.0,
+            required_branching=1.5,
+        )
+        apply_pareto_metrics(descriptor_metrics, pareto_result)
+
         if self.legacy_baseline_mode:
             fitness = float(np.clip(
                 (0.64 * curve_fitness)
@@ -1935,6 +1966,9 @@ class TensionCurveEvaluator:
                 * realism_distribution_multiplier
                 * generation_efficiency_multiplier
             )
+
+        # Blend scalar fitness with Pareto objective quality.
+        fitness *= float(np.clip(0.65 + (0.35 * pareto_result.pareto_score), 0.1, 1.0))
         descriptor_metrics["realism_multiplier"] = float(realism_multiplier)
         descriptor_metrics["realism_distribution_multiplier"] = float(realism_distribution_multiplier)
         descriptor_metrics["generation_efficiency_multiplier"] = float(generation_efficiency_multiplier)
@@ -1993,6 +2027,16 @@ class TensionCurveEvaluator:
                     + (0.34 * curve_alignment_violation)
                     + (0.18 * curve_trend_violation)
                     + (0.16 * narrative_violation),
+                    0.0,
+                    3.0,
+                )
+            )
+        if not pareto_result.pareto_feasible:
+            violation = float(
+                np.clip(
+                    violation
+                    + (0.80 * pareto_result.loops_violation)
+                    + (0.70 * pareto_result.branching_violation),
                     0.0,
                     3.0,
                 )
@@ -2130,7 +2174,7 @@ class TensionCurveEvaluator:
     
     def _is_solvable(self, graph: MissionGraph) -> bool:
         """
-        Check if graph is solvable (path exists START → GOAL).
+        Check if graph is solvable (path exists START â†’ GOAL).
         
         A graph is solvable if:
         1. It has both START and GOAL nodes
@@ -2294,7 +2338,7 @@ class EvolutionaryTopologyGenerator:
     The genome is a list of grammar rule IDs. The phenotype is the MissionGraph
     produced by executing those rules sequentially.
     
-    This implements a (μ+λ) evolutionary strategy with:
+    This implements a (Î¼+Î») evolutionary strategy with:
     - Tournament selection
     - One-point crossover
     - Weighted mutation using Zelda transition probabilities
@@ -2328,7 +2372,7 @@ class EvolutionaryTopologyGenerator:
         Args:
             target_curve: Desired difficulty/tension progression (normalized 0-1)
             zelda_transition_matrix: P(RuleB | RuleA) for biased mutation
-            population_size: Number of individuals per generation (μ)
+            population_size: Number of individuals per generation (Î¼)
             generations: Number of evolutionary iterations
             mutation_rate: Probability of mutating each gene
             crossover_rate: Probability of crossover vs. cloning
@@ -2359,7 +2403,7 @@ class EvolutionaryTopologyGenerator:
         self.genome_length = genome_length
         self.max_nodes = max_nodes
         self.rule_weight_overrides = rule_weight_overrides or {}
-        self.descriptor_targets = descriptor_targets or {}
+        self.descriptor_targets = copy.deepcopy(descriptor_targets) if descriptor_targets is not None else None
         self.transition_mix = float(np.clip(float(transition_mix), 0.0, 1.0))
         parsed_strategy = str(search_strategy).strip().lower() if search_strategy is not None else "ga"
         if parsed_strategy in {"map_elites", "cvt", "cvt_map_elites"}:
@@ -2714,7 +2758,7 @@ class EvolutionaryTopologyGenerator:
             # the search degenerates into selecting only previous parents.
             offspring = self._evaluate_population(offspring, gen)
             
-            # Combine and select survivors (μ+λ)
+            # Combine and select survivors (Î¼+Î»)
             population = self._select_survivors(population + offspring)
         
         # Get best individual
@@ -3889,7 +3933,7 @@ class EvolutionaryTopologyGenerator:
         combined: List[Individual]
     ) -> List[Individual]:
         """
-        Select survivors for next generation using (μ+λ) strategy.
+        Select survivors for next generation using (Î¼+Î») strategy.
         
         Keeps the best population_size individuals from combined
         parent and offspring population.
@@ -3939,7 +3983,7 @@ class EvolutionaryTopologyGenerator:
         total_distance = 0.0
         comparisons = 0
         
-        # Sample pairs to avoid O(n²) for large populations
+        # Sample pairs to avoid O(nÂ²) for large populations
         sample_size = min(100, len(population))
         sample = self.rng.sample(population, sample_size)
         
@@ -4044,7 +4088,7 @@ def print_graph_summary(G: nx.Graph) -> None:
         
         if start_nodes and goal_nodes:
             path_length = nx.shortest_path_length(G, start_nodes[0], goal_nodes[0])
-            print("  Shortest path (START → GOAL): {} nodes".format(path_length))
+            print("  Shortest path (START â†’ GOAL): {} nodes".format(path_length))
     else:
         print("\nConnectivity: DISCONNECTED")
     
@@ -4072,7 +4116,7 @@ if __name__ == "__main__":
     print("=" * 60)
     
     # Example: Generate dungeon with rising tension curve
-    print("\n[TEST 1] Rising Tension Curve (Easy → Hard)")
+    print("\n[TEST 1] Rising Tension Curve (Easy â†’ Hard)")
     print("-" * 60)
     
     target_curve_rising = [0.1, 0.2, 0.4, 0.6, 0.8, 1.0]
@@ -4094,7 +4138,7 @@ if __name__ == "__main__":
     print_graph_summary(best_graph)
     
     # Example: Generate dungeon with wave pattern
-    print("\n\n[TEST 2] Wave Pattern (Easy → Hard → Easy → Hard)")
+    print("\n\n[TEST 2] Wave Pattern (Easy â†’ Hard â†’ Easy â†’ Hard)")
     print("-" * 60)
     
     target_curve_wave = [0.2, 0.6, 0.3, 0.7, 0.4, 0.9]
@@ -4139,13 +4183,14 @@ if __name__ == "__main__":
     print("ALL TESTS COMPLETED SUCCESSFULLY")
     print("=" * 60)
     print("\nVerification Checklist:")
-    print("  ✓ Genome is List[int] (rule IDs)")
-    print("  ✓ Phenotype building uses grammar rules sequentially")
-    print("  ✓ Invalid rules are skipped (not rejected)")
-    print("  ✓ Fitness function checks solvability first")
-    print("  ✓ Tension curve extraction uses critical path")
-    print("  ✓ Mutation uses weighted probabilities (Zelda matrix)")
-    print("  ✓ Output is networkx.Graph with node attributes")
-    print("  ✓ NO 2D grid generation in this module")
-    print("  ✓ Tests run successfully and produce valid graphs")
-    print("\n🎮 Evolutionary Topology Director is ready for use!")
+    print("  âœ“ Genome is List[int] (rule IDs)")
+    print("  âœ“ Phenotype building uses grammar rules sequentially")
+    print("  âœ“ Invalid rules are skipped (not rejected)")
+    print("  âœ“ Fitness function checks solvability first")
+    print("  âœ“ Tension curve extraction uses critical path")
+    print("  âœ“ Mutation uses weighted probabilities (Zelda matrix)")
+    print("  âœ“ Output is networkx.Graph with node attributes")
+    print("  âœ“ NO 2D grid generation in this module")
+    print("  âœ“ Tests run successfully and produce valid graphs")
+    print("\nðŸŽ® Evolutionary Topology Director is ready for use!")
+

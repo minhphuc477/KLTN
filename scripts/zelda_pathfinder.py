@@ -1,4 +1,4 @@
-"""
+﻿"""
 Zelda A* Pathfinder - Topology-Aware State-Space Search
 ========================================================
 
@@ -25,7 +25,7 @@ from collections import defaultdict
 
 logger = logging.getLogger(__name__)
 
-from src.data.zelda_core import (
+from src.zelda_data.zelda_core import (
     Dungeon, Room, InventoryState,
     SEMANTIC_PALETTE, ValidationMode
 )
@@ -681,7 +681,7 @@ def print_solution(result: Dict):
 if __name__ == '__main__':
     """Test the pathfinder on sample dungeons."""
     import sys
-    from src.data.zelda_core import ZeldaDungeonAdapter
+    from src.zelda_data.zelda_core import ZeldaDungeonAdapter
     
     logger.info("Zelda A* Pathfinder Test")
     
@@ -714,3 +714,4 @@ if __name__ == '__main__':
         logger.exception("Error during sample run: %s", e)
         import traceback
         traceback.print_exc()
+

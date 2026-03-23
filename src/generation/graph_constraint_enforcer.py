@@ -175,7 +175,6 @@ class GraphConstraintEnforcer:
                 continue
             
             neighbor_bounds = layout_map[neighbor_id]
-            nx_min, ny_min, nx_max, ny_max = neighbor_bounds
             
             # Determine relative position and create door
             door_pos = self._find_door_position(

@@ -217,6 +217,30 @@ python scripts/run_priority_research_suite.py --priority p2 --quick --step-timeo
 python scripts/run_priority_research_suite.py --priority p2 --full-research --output-dir results/priority_research_suite_p2_full
 ```
 
+## Defense Evidence Workflow
+
+Use this checklist to pre-empt common reviewer attacks with reproducible artifacts.
+
+```bash
+# Attack 1 (Topology realism): verify cycle and soft-gate rules exist
+python scripts/test_grammar_rules.py
+
+# Attack 2 (Evidence): run fixed-seed ablations and benchmark outputs
+python scripts/run_ablation_study.py --num-samples 50 --output results/ablation
+python -m src.evaluation.benchmark_suite --num-generated 100
+
+# Attack 2 (Expressive range): export distribution summaries/plots
+python scripts/analyze_block_i_feature_distribution.py --num-generated 1000 --output-dir results/feature_distribution
+
+# Attack 3 (Renderable/exportable output): GUI exports route JSON and topology DOT
+python gui_runner.py
+```
+
+Expected evidence artifacts:
+- `results/ablation/` (component necessity and significance)
+- `results/feature_distribution/` (expressive range CSV/plots)
+- `exports/routes/*.json` and `exports/topology/*.dot` (presentation-ready exports)
+
 ## Documentation
 
 - **Start Here (single docs entrypoint)**: `docs/INDEX.md`

@@ -25,11 +25,9 @@ Controls:
 
 """
 
-import sys
 import os
 import time
 import math
-import copy
 import logging
 import threading
 import numpy as np
@@ -91,19 +89,17 @@ from src.gui.app.init_visualization import (
     initialize_visualization_components,
 )
 from src.gui.app.init_final_boot import finalize_initial_map_boot
-from src.gui.app.asset_boot_orchestration import (
+from src.gui.orchestration.app.asset_boot_orchestration import (
     create_link_sprite as _create_link_sprite_orchestration_helper,
     init_control_panel as _init_control_panel_orchestration_helper,
     load_assets as _load_assets_orchestration_helper,
 )
-from src.gui.app.gui_startup import run_gui_main as _run_gui_main_helper
-from src.gui.app.map_adapter_loader import load_maps_from_adapter as _load_maps_from_adapter_helper
 from src.gui.app.run_loop_pipeline import run_main_loop as _run_main_loop_helper
-from src.gui.app.entrypoint_orchestration import (
+from src.gui.orchestration.app.entrypoint_orchestration import (
     load_maps_from_adapter as _load_maps_from_adapter_orchestration_helper,
     run_main_entry as _run_main_entry_orchestration_helper,
 )
-from src.gui.app.runtime_loop_orchestration import run as _run_orchestration_helper
+from src.gui.orchestration.app.runtime_loop_orchestration import run as _run_orchestration_helper
 
 # Configure logging
 logging.basicConfig(
@@ -140,8 +136,6 @@ if DEBUG_SOLVER_FLOW:
 # Import simulation components (use new canonical paths)
 from src.simulation.validator import (
     ZeldaLogicEnv, 
-    ZeldaValidator, 
-    StateSpaceAStar,
     SanityChecker,
     create_test_map,
     SEMANTIC_PALETTE,
@@ -153,28 +147,16 @@ from src.simulation.validator import (
 )
 
 # Local matcher/adapters for topology repair and precheck pruning (use canonical path)
-from src.data.zelda_core import RoomGraphMatcher, ZeldaDungeonAdapter
+from src.zelda_data.zelda_core import RoomGraphMatcher, ZeldaDungeonAdapter
 from src.gui.components.constants import (
     GUI_ALGORITHM_NAMES,
     GUI_DIFFICULTY_NAMES,
-    GUI_PRESETS,
     GUI_ZOOM_LABELS,
 )
 from src.gui.control_panel.logic import (
     algorithm_label,
 )
-from src.gui.control_panel.interactions import (
-    control_panel_hit_rect as _control_panel_hit_rect_helper,
-    handle_outside_control_panel_click as _handle_outside_control_panel_click_helper,
-    refresh_control_panel_layout_if_needed as _refresh_control_panel_layout_if_needed_helper,
-    retry_control_panel_click_after_auto_scroll as _retry_control_panel_click_after_auto_scroll_helper,
-    should_swallow_control_panel_click as _should_swallow_control_panel_click_helper,
-    translate_control_panel_click as _translate_control_panel_click_helper,
-)
-from src.gui.control_panel.click_dispatch import (
-    handle_control_panel_click as _handle_control_panel_click_dispatch_helper,
-)
-from src.gui.control_panel.click_render_orchestration import (
+from src.gui.orchestration.control_panel.click_render_orchestration import (
     apply_algorithm_dropdown_update as _apply_algorithm_dropdown_update_orchestration_helper,
     apply_checkbox_widget_update as _apply_checkbox_widget_update_orchestration_helper,
     apply_control_panel_widget_updates as _apply_control_panel_widget_updates_orchestration_helper,
@@ -190,57 +172,17 @@ from src.gui.control_panel.click_render_orchestration import (
     should_swallow_control_panel_click as _should_swallow_control_panel_click_orchestration_helper,
     translate_control_panel_click as _translate_control_panel_click_orchestration_helper,
 )
-from src.gui.control_panel.updates import (
-    apply_algorithm_dropdown_update as _apply_algorithm_dropdown_update_helper,
-    apply_checkbox_widget_update as _apply_checkbox_widget_update_helper,
-    apply_control_panel_widget_updates as _apply_control_panel_widget_updates_helper,
-    apply_dropdown_widget_update as _apply_dropdown_widget_update_helper,
-)
 from src.gui.solver.start_logic import (
     default_solver_timeout_for_algorithm,
     evaluate_solver_recovery_state,
     scale_timeout_by_grid_size,
     sync_solver_dropdown_settings,
 )
-from src.gui.solver.request_helpers import (
-    build_solver_request as _build_solver_request_helper,
-    get_solver_map_context as _get_solver_map_context_helper,
-)
-from src.gui.solver.launching import (
-    create_solver_temp_files as _create_solver_temp_files_helper,
-    launch_solver_process as _launch_solver_process_helper,
-    solver_thread_fallback_worker as _solver_thread_fallback_worker_helper,
-    start_solver_thread_fallback as _start_solver_thread_fallback_helper,
-)
-from src.gui.solver.scheduling import schedule_solver as _schedule_solver_helper
-from src.gui.gameplay.preview_startup import start_preview_for_current_map as _start_preview_for_current_map_helper
-from src.gui.gameplay.auto_solve_execution import (
-    execute_auto_solve as _execute_auto_solve_helper,
-    execute_auto_solve_from_preview as _execute_auto_solve_from_preview_helper,
-)
-from src.gui.solver.recovery import (
-    compute_solver_timeout_seconds as _compute_solver_timeout_seconds_helper,
-    force_solver_recovery_state as _force_solver_recovery_state_helper,
-    log_active_solver_state as _log_active_solver_state_helper,
-    prepare_active_solver_for_new_start as _prepare_active_solver_for_new_start_helper,
-    terminate_hung_solver_process as _terminate_hung_solver_process_helper,
-)
-from src.gui.solver.prestart_cleanup import (
-    cleanup_preview_before_solver_start as _cleanup_preview_before_solver_start_helper,
-    reset_solver_visual_state_before_start as _reset_solver_visual_state_before_start_helper,
-)
-from src.gui.solver.core_state import (
-    clear_solver_state as _clear_solver_state_helper,
-    sync_solver_dropdown_settings as _sync_solver_dropdown_settings_helper,
-)
-from src.gui.solver.worker_bootstrap import launch_solver_worker as _launch_solver_worker_helper
-from src.gui.solver.start_flow import start_auto_solve as _start_auto_solve_helper
-from src.gui.solver.sync_execution import run_solver_sync as _run_solver_sync_helper
-from src.gui.solver.request_orchestration import (
+from src.gui.orchestration.solver.request_orchestration import (
     build_solver_request as _build_solver_request_orchestration_helper,
     get_solver_map_context as _get_solver_map_context_orchestration_helper,
 )
-from src.gui.solver.session_orchestration import (
+from src.gui.orchestration.solver.session_orchestration import (
     cleanup_preview_before_solver_start as _cleanup_preview_before_solver_start_orchestration_helper,
     clear_solver_state as _clear_solver_state_orchestration_helper,
     compute_solver_timeout_seconds as _compute_solver_timeout_seconds_orchestration_helper,
@@ -254,7 +196,7 @@ from src.gui.solver.session_orchestration import (
     sync_solver_dropdown_settings as _sync_solver_dropdown_settings_orchestration_helper,
     terminate_hung_solver_process as _terminate_hung_solver_process_orchestration_helper,
 )
-from src.gui.solver.launch_orchestration import (
+from src.gui.orchestration.solver.launch_orchestration import (
     launch_solver_process as _launch_solver_process_orchestration_helper,
     launch_solver_worker as _launch_solver_worker_orchestration_helper,
     schedule_solver as _schedule_solver_orchestration_helper,
@@ -262,32 +204,18 @@ from src.gui.solver.launch_orchestration import (
     start_preview_for_current_map as _start_preview_for_current_map_orchestration_helper,
     start_solver_thread_fallback as _start_solver_thread_fallback_orchestration_helper,
 )
-from src.gui.runtime.watchdog_monitor import watchdog_loop as _watchdog_loop_helper
-from src.gui.runtime.route_io import (
-    export_route as _export_route_helper,
-    load_route as _load_route_helper,
-)
-from src.gui.runtime.route_orchestration import (
+from src.gui.orchestration.runtime.route_orchestration import (
     export_route as _export_route_orchestration_helper,
     load_route as _load_route_orchestration_helper,
 )
-from src.gui.gameplay.path_controls import (
-    reset_map as _reset_map_helper,
-    show_path_preview as _show_path_preview_helper,
-    clear_path as _clear_path_helper,
-)
-from src.gui.gameplay.control_actions_orchestration import (
+from src.gui.orchestration.gameplay.control_actions_orchestration import (
     clear_path as _clear_path_orchestration_helper,
     reset_map as _reset_map_orchestration_helper,
     run_ai_dungeon_generation_worker as _run_ai_dungeon_generation_worker_orchestration_helper,
     show_path_preview as _show_path_preview_orchestration_helper,
     start_ai_dungeon_generation as _start_ai_dungeon_generation_orchestration_helper,
 )
-from src.gui.gameplay.dungeon_generation_controls import (
-    generate_dungeon as _generate_dungeon_flow_helper,
-    stop_auto_solve as _stop_auto_solve_flow_helper,
-)
-from src.gui.gameplay.dungeon_generation_orchestration import (
+from src.gui.orchestration.gameplay.dungeon_generation_orchestration import (
     generate_dungeon as _generate_dungeon_orchestration_helper,
     stop_auto_solve as _stop_auto_solve_orchestration_helper,
 )
@@ -296,14 +224,7 @@ from src.gui.runtime.temp_file_management import (
     collect_temp_file_candidates as _collect_temp_file_candidates_orchestration_helper,
     delete_temp_files as _delete_temp_files_orchestration_helper,
 )
-from src.gui.topology.export import export_topology as _export_topology_helper
-from src.gui.runtime.toast_messages import (
-    set_message as _set_message_helper,
-    show_toast as _show_toast_helper,
-    update_toasts as _update_toasts_helper,
-    render_toasts as _render_toasts_helper,
-)
-from src.gui.rendering.status_toast_orchestration import (
+from src.gui.orchestration.rendering.status_toast_orchestration import (
     format_cbs_metrics_tooltip as _format_cbs_metrics_tooltip_orchestration_helper,
     render_error_banner as _render_error_banner_orchestration_helper,
     render_solver_status_banner as _render_solver_status_banner_orchestration_helper,
@@ -316,17 +237,7 @@ from src.gui.rendering.status_toast_orchestration import (
     show_warning as _show_warning_orchestration_helper,
     update_toasts as _update_toasts_orchestration_helper,
 )
-from src.gui.map.minimap import (
-    render_minimap as _render_minimap_helper,
-    handle_minimap_click as _handle_minimap_click_helper,
-)
-from src.gui.map.navigation import (
-    next_map as _next_map_helper,
-    prev_map as _prev_map_helper,
-    clamp_view_offset as _clamp_view_offset_helper,
-    center_on_player as _center_on_player_helper,
-)
-from src.gui.map.navigation_orchestration import (
+from src.gui.orchestration.map.navigation_orchestration import (
     auto_fit_zoom as _auto_fit_zoom_orchestration_helper,
     center_on_player as _center_on_player_orchestration_helper,
     center_view as _center_view_orchestration_helper,
@@ -345,8 +256,7 @@ from src.gui.gameplay.block_push_controls import (
     get_animating_block_positions as _get_animating_block_positions_helper,
     check_and_start_block_push as _check_and_start_block_push_helper,
 )
-from src.gui.rendering.help_overlay import render_help_overlay as _render_help_overlay_helper
-from src.gui.rendering.panel_overlay_orchestration import (
+from src.gui.orchestration.rendering.panel_overlay_orchestration import (
     render_controls_section as _render_controls_section_orchestration_helper,
     render_debug_overlay as _render_debug_overlay_orchestration_helper,
     render_help_overlay as _render_help_overlay_orchestration_helper,
@@ -359,20 +269,15 @@ from src.gui.rendering.panel_overlay_orchestration import (
 )
 from src.gui.rendering.helpers import (
     render_topology_overlay as _render_topology_overlay_helper,
-    render_solver_comparison_overlay as _render_solver_comparison_overlay_helper,
 )
 from src.gui.topology.helpers import (
-    room_for_global_position as _room_for_global_position_helper,
-    node_has_small_key as _node_has_small_key_helper,
-    node_has_critical_content as _node_has_critical_content_helper,
     capture_precheck_snapshot as _capture_precheck_snapshot_helper,
     update_env_topology_view as _update_env_topology_view_helper,
-    build_room_adjacency_from_graph as _build_room_adjacency_from_graph_helper,
     topology_has_path as _topology_has_path_helper,
     min_locked_between as _min_locked_between_helper,
     walkable_grid_reachable as _walkable_grid_reachable_helper,
 )
-from src.gui.topology.helper_orchestration import (
+from src.gui.orchestration.topology.helper_orchestration import (
     build_room_adjacency_from_graph as _build_room_adjacency_from_graph_orchestration_helper,
     export_topology as _export_topology_orchestration_helper,
     node_has_critical_content as _node_has_critical_content_orchestration_helper,
@@ -384,7 +289,7 @@ from src.gui.topology.precheck import (
     run_prechecks_and_optional_prune as _run_prechecks_and_optional_prune_flow_helper,
     undo_prune as _undo_prune_flow_helper,
 )
-from src.gui.topology.orchestration import (
+from src.gui.orchestration.topology.orchestration import (
     capture_precheck_snapshot as _capture_precheck_snapshot_orchestration_helper,
     prune_dead_end_topology as _prune_dead_end_topology_orchestration_helper,
     render_topology_overlay as _render_topology_overlay_orchestration_helper,
@@ -392,48 +297,7 @@ from src.gui.topology.orchestration import (
     undo_prune as _undo_prune_orchestration_helper,
     update_env_topology_view as _update_env_topology_view_orchestration_helper,
 )
-from src.gui.rendering.status_display import (
-    render_error_banner as _render_error_banner_helper,
-    render_solver_status_banner as _render_solver_status_banner_helper,
-    render_status_bar as _render_status_bar_helper,
-    show_error as _show_error_helper,
-    show_message as _show_message_helper,
-    show_warning as _show_warning_helper,
-)
-from src.gui.rendering.bottom_panel import (
-    render_unified_bottom_panel as _render_unified_bottom_panel_helper,
-    render_message_section as _render_message_section_helper,
-    render_progress_bar as _render_progress_bar_helper,
-    render_inventory_section as _render_inventory_section_helper,
-    render_metrics_section as _render_metrics_section_helper,
-    render_controls_section as _render_controls_section_helper,
-    render_status_section as _render_status_section_helper,
-)
-from src.gui.rendering.debug_overlay import render_debug_overlay as _render_debug_overlay_helper
-from src.gui.rendering.widget_tooltips import (
-    render_tooltips as _render_tooltips_helper,
-    draw_tooltip as _draw_tooltip_helper,
-)
-from src.gui.solver.metrics_tooltips import format_cbs_metrics_tooltip as _format_cbs_metrics_tooltip_helper
-from src.gui.map.viewport import (
-    center_view as _center_view_helper,
-    auto_fit_zoom as _auto_fit_zoom_helper,
-    change_zoom as _change_zoom_helper,
-)
-from src.gui.runtime.display_lifecycle import (
-    safe_set_mode as _safe_set_mode_helper,
-    attempt_display_reinit as _attempt_display_reinit_helper,
-    ensure_display_alive as _ensure_display_alive_helper,
-)
-from src.gui.runtime.display_diagnostics import (
-    handle_watchdog_screenshot as _handle_watchdog_screenshot_helper,
-    report_ui_state as _report_ui_state_helper,
-)
-from src.gui.runtime.window_focus import (
-    force_focus as _force_focus_helper,
-    toggle_fullscreen as _toggle_fullscreen_helper,
-)
-from src.gui.runtime.display_orchestration import (
+from src.gui.orchestration.runtime.display_orchestration import (
     attempt_display_reinit as _attempt_display_reinit_orchestration_helper,
     ensure_display_alive as _ensure_display_alive_orchestration_helper,
     force_focus as _force_focus_orchestration_helper,
@@ -443,35 +307,23 @@ from src.gui.runtime.display_orchestration import (
     toggle_fullscreen as _toggle_fullscreen_orchestration_helper,
     watchdog_loop as _watchdog_loop_orchestration_helper,
 )
-from src.gui.control_panel.animation import (
-    start_toggle_panel_animation as _start_toggle_panel_animation_helper,
-    update_control_panel_animation as _update_control_panel_animation_helper,
-)
-from src.gui.control_panel.animation_orchestration import (
+from src.gui.orchestration.control_panel.animation_orchestration import (
     start_toggle_panel_animation as _start_toggle_panel_animation_orchestration_helper,
     update_control_panel_animation as _update_control_panel_animation_orchestration_helper,
     update_control_panel_scroll as _update_control_panel_scroll_orchestration_helper,
 )
-from src.gui.control_panel.scroll import update_control_panel_scroll as _update_control_panel_scroll_helper
-from src.gui.control_panel.view import (
-    dump_control_panel_widget_state as _dump_control_panel_widget_state_helper,
-    render_control_panel as _render_control_panel_helper,
-    reposition_widgets as _reposition_widgets_helper,
-    update_control_panel_positions as _update_control_panel_positions_helper,
-)
-from src.gui.control_panel.layout_orchestration import (
+from src.gui.orchestration.control_panel.layout_orchestration import (
     dump_control_panel_widget_state as _dump_control_panel_widget_state_orchestration_helper,
     reposition_widgets as _reposition_widgets_orchestration_helper,
     update_control_panel_positions as _update_control_panel_positions_orchestration_helper,
 )
 from src.gui.gameplay.inventory_manager import (
-    update_inventory_and_hud as _update_inventory_and_hud_helper,
     remove_from_path_items as _remove_from_path_items_helper,
     track_item_collection as _track_item_collection_helper,
     track_item_usage as _track_item_usage_helper,
     sync_inventory_counters as _sync_inventory_counters_helper,
 )
-from src.gui.gameplay.inventory_orchestration import (
+from src.gui.orchestration.gameplay.inventory_orchestration import (
     apply_pickup_at as _apply_pickup_at_orchestration_helper,
     get_path_items_display_text as _get_path_items_display_text_orchestration_helper,
     remove_from_path_items as _remove_from_path_items_orchestration_helper,
@@ -501,7 +353,7 @@ from src.gui.gameplay.auto_step_controller import (
     stop_auto as _stop_auto_helper,
     auto_step as _auto_step_helper,
 )
-from src.gui.gameplay.action_orchestration import (
+from src.gui.orchestration.gameplay.action_orchestration import (
     auto_step as _auto_step_orchestration_helper,
     check_and_start_block_push as _check_and_start_block_push_orchestration_helper,
     execute_auto_solve as _execute_auto_solve_orchestration_helper,
@@ -515,10 +367,6 @@ from src.gui.gameplay.action_orchestration import (
     start_block_push_animation as _start_block_push_animation_orchestration_helper,
     stop_auto as _stop_auto_orchestration_helper,
     update_block_push_animations as _update_block_push_animations_orchestration_helper,
-)
-from src.gui.gameplay.manual_step_controller import manual_step as _manual_step_flow_helper
-from src.gui.rendering.path_guaranteed_renderer import (
-    render_path_guaranteed as _render_path_guaranteed_flow_helper,
 )
 from src.gui.rendering.map_render_pipeline import (
     collect_item_render_state as _collect_item_render_state_helper,
@@ -547,20 +395,9 @@ from src.gui.rendering.post_map_ui_pipeline import (
     render_sidebar_content as _render_sidebar_content_helper,
     render_top_ui_layers as _render_top_ui_layers_helper,
 )
-from src.gui.rendering.render_frame_pipeline import render_frame as _render_frame_helper
-from src.gui.rendering.frame_orchestration import (
+from src.gui.orchestration.rendering.frame_orchestration import (
     render_frame as _render_frame_orchestration_helper,
     render_path_guaranteed as _render_path_guaranteed_orchestration_helper,
-)
-from src.gui.rendering.tile_asset_builder import (
-    build_stair_marker_sprite as _build_stair_marker_sprite_helper,
-    build_tile_images as _build_tile_images_helper,
-    default_tile_color_map as _default_tile_color_map_helper,
-)
-from src.gui.rendering.link_sprite_builder import build_link_sprite as _build_link_sprite_helper
-from src.gui.gameplay.map_elites_controls import (
-    start_map_elites as _start_map_elites_flow_helper,
-    map_elites_worker as _map_elites_worker_flow_helper,
 )
 from src.gui.rendering.map_overlays import (
     log_draw_ranges as _log_draw_ranges_overlay_helper,
@@ -572,65 +409,32 @@ from src.gui.rendering.sidebar_sections import (
     render_sidebar_header_inventory_solver as _render_sidebar_header_inventory_solver_helper,
     render_sidebar_status_message_metrics_controls as _render_sidebar_status_message_metrics_controls_helper,
 )
-from src.gui.topology.match_controls import (
-    match_missing_nodes as _match_missing_nodes_helper,
-    undo_last_match as _undo_last_match_helper,
-    apply_tentative_matches as _apply_tentative_matches_helper,
-)
-from src.gui.topology.match_orchestration import (
+from src.gui.orchestration.topology.match_orchestration import (
     apply_tentative_matches as _apply_tentative_matches_orchestration_helper,
     match_missing_nodes as _match_missing_nodes_orchestration_helper,
     undo_last_match as _undo_last_match_orchestration_helper,
 )
-from src.gui.solver.comparison_runner import (
-    run_solver_comparison as _run_solver_comparison_helper,
-    set_last_solver_metrics as _set_last_solver_metrics_helper,
-)
-from src.gui.solver.comparison_orchestration import (
+from src.gui.orchestration.solver.comparison_orchestration import (
     map_elites_worker as _map_elites_worker_orchestration_helper,
     render_solver_comparison_overlay as _render_solver_comparison_overlay_orchestration_helper,
     run_solver_comparison as _run_solver_comparison_orchestration_helper,
     set_last_solver_metrics as _set_last_solver_metrics_orchestration_helper,
     start_map_elites as _start_map_elites_orchestration_helper,
 )
-from src.gui.solver.utils import (
-    safe_unpickle as _safe_unpickle_helper,
-    convert_diagonal_to_4dir as _convert_diagonal_to_4dir_helper,
-)
-from src.gui.solver.process_worker import (
-    _solve_in_subprocess as _solve_in_subprocess_helper,
-    _run_solver_and_dump as _run_solver_and_dump_helper,
-    _run_preview_and_dump as _run_preview_and_dump_helper,
-)
-from src.gui.solver.process_api_orchestration import (
+from src.gui.orchestration.solver.process_api_orchestration import (
     convert_diagonal_to_4dir as _convert_diagonal_to_4dir_orchestration_helper,
     run_preview_and_dump as _run_preview_and_dump_orchestration_helper,
     run_solver_and_dump as _run_solver_and_dump_orchestration_helper,
     safe_unpickle as _safe_unpickle_orchestration_helper,
     solve_in_subprocess as _solve_in_subprocess_orchestration_helper,
 )
-from src.gui.ai.generation_controls import (
-    start_ai_dungeon_generation as _start_ai_dungeon_generation_helper,
-)
-from src.gui.ai.generation_worker import (
-    run_ai_generation_worker as _run_ai_generation_worker_helper,
-)
 from src.gui.map.loading import (
     load_current_map as _load_current_map_helper,
-    load_visual_assets as _load_visual_assets_helper,
-    load_visual_map as _load_visual_map_helper,
-    place_items_from_graph as _place_items_from_graph_helper,
 )
-from src.gui.map.asset_orchestration import (
+from src.gui.orchestration.map.asset_orchestration import (
     load_visual_assets as _load_visual_assets_orchestration_helper,
     load_visual_map as _load_visual_map_orchestration_helper,
     place_items_from_graph as _place_items_from_graph_orchestration_helper,
-)
-from src.gui.runtime.temp_file_tools import (
-    delete_files as _delete_files_helper,
-    find_temp_files as _find_temp_files_helper,
-    list_existing_paths as _list_existing_paths_helper,
-    open_folder as _open_folder_helper,
 )
 from src.gui.components.fallbacks import get_visualization_fallbacks, get_widget_fallbacks
 from src.gui.runtime.toast_notification import ToastNotification
@@ -662,7 +466,6 @@ except ImportError:
 
     _visual_fallbacks = get_visualization_fallbacks(
         pygame_available=PYGAME_AVAILABLE,
-        pygame_module=pygame,
     )
     ZeldaRenderer = _visual_fallbacks["ZeldaRenderer"]
     ThemeConfig = _visual_fallbacks["ThemeConfig"]
@@ -702,7 +505,6 @@ except ImportError:
 # --- Subprocess-based solver helper ---
 # This helper runs inside a separate process to avoid blocking the main thread
 # with heavy CPU-bound pathfinding work (which would starve the GUI due to the GIL).
-import pickle
 import tempfile
 import multiprocessing
 
@@ -714,7 +516,6 @@ def _safe_unpickle(path: str) -> dict:
     """
     return _safe_unpickle_orchestration_helper(
         path=path,
-        safe_unpickle_helper=_safe_unpickle_helper,
     )
 
 
@@ -738,7 +539,6 @@ def _convert_diagonal_to_4dir(path, grid=None):
     return _convert_diagonal_to_4dir_orchestration_helper(
         path=path,
         grid=grid,
-        convert_diagonal_to_4dir_helper=_convert_diagonal_to_4dir_helper,
     )
 
 def _solve_in_subprocess(grid, start_pos, goal_pos, algorithm_idx, feature_flags, priority_options,
@@ -766,7 +566,6 @@ def _solve_in_subprocess(grid, start_pos, goal_pos, algorithm_idx, feature_flags
         room_to_node=room_to_node,
         room_positions=room_positions,
         node_to_room=node_to_room,
-        solve_in_subprocess_helper=_solve_in_subprocess_helper,
     )
 
 
@@ -795,7 +594,6 @@ def _run_solver_and_dump(grid_or_path, start_pos, goal_pos, algorithm_idx, featu
         room_to_node=room_to_node,
         room_positions=room_positions,
         node_to_room=node_to_room,
-        run_solver_and_dump_helper=_run_solver_and_dump_helper,
     )
 
 
@@ -818,7 +616,6 @@ def _run_preview_and_dump(grid_or_path, start_pos, goal_pos, algorithm_idx, feat
         room_to_node=room_to_node,
         room_positions=room_positions,
         node_to_room=node_to_room,
-        run_preview_and_dump_helper=_run_preview_and_dump_helper,
     )
 
 
@@ -905,9 +702,6 @@ class ZeldaGUI:
             gui=self,
             semantic_palette=SEMANTIC_PALETTE,
             pygame=pygame,
-            default_tile_color_map_helper=_default_tile_color_map_helper,
-            build_tile_images_helper=_build_tile_images_helper,
-            build_stair_marker_sprite_helper=_build_stair_marker_sprite_helper,
         )
     
 
@@ -916,7 +710,6 @@ class ZeldaGUI:
         return _create_link_sprite_orchestration_helper(
             tile_size=self.TILE_SIZE,
             pygame=pygame,
-            build_link_sprite_helper=_build_link_sprite_helper,
         )
     
     def _init_control_panel(self):
@@ -940,7 +733,6 @@ class ZeldaGUI:
             zoom_labels=GUI_ZOOM_LABELS,
             difficulty_names=GUI_DIFFICULTY_NAMES,
             algorithm_names=GUI_ALGORITHM_NAMES,
-            update_control_panel_positions_helper=_update_control_panel_positions_helper,
         )
 
     def _reposition_widgets(self, panel_x: int, panel_y: int):
@@ -952,7 +744,6 @@ class ZeldaGUI:
             checkbox_widget_cls=CheckboxWidget,
             dropdown_widget_cls=DropdownWidget,
             button_widget_cls=ButtonWidget,
-            reposition_widgets_helper=_reposition_widgets_helper,
         )
 
     def _dump_control_panel_widget_state(self, mouse_pos: tuple):
@@ -966,7 +757,6 @@ class ZeldaGUI:
             mouse_pos=mouse_pos,
             logger=logger,
             debug_input_active=DEBUG_INPUT_ACTIVE,
-            dump_control_panel_widget_state_helper=_dump_control_panel_widget_state_helper,
         )
         
     
@@ -980,7 +770,6 @@ class ZeldaGUI:
         _update_inventory_and_hud_orchestration_helper(
             gui=self,
             logger=logger,
-            update_inventory_and_hud_helper=_update_inventory_and_hud_helper,
         )
 
     def _remove_from_path_items(self, pos, item_type):
@@ -995,7 +784,6 @@ class ZeldaGUI:
             pos=pos,
             item_type=item_type,
             logger=logger,
-            remove_from_path_items_helper=_remove_from_path_items_helper,
         )
 
     def _track_item_collection(self, old_state, new_state):
@@ -1004,11 +792,9 @@ class ZeldaGUI:
             gui=self,
             old_state=old_state,
             new_state=new_state,
-            time_module=time,
             logger=logger,
             pop_effect_cls=PopEffect,
             item_collection_effect_cls=ItemCollectionEffect,
-            track_item_collection_helper=_track_item_collection_helper,
         )
     
     def _track_item_usage(self, old_state, new_state):
@@ -1017,10 +803,8 @@ class ZeldaGUI:
             gui=self,
             old_state=old_state,
             new_state=new_state,
-            time_module=time,
             logger=logger,
             item_usage_effect_cls=ItemUsageEffect,
-            track_item_usage_helper=_track_item_usage_helper,
         )
     
     def _scan_and_mark_items(self):
@@ -1034,7 +818,6 @@ class ZeldaGUI:
             semantic_palette=SEMANTIC_PALETTE,
             logger=logger,
             item_marker_effect_cls=ItemMarkerEffect,
-            scan_and_mark_items_helper=_scan_and_mark_items_helper,
         )
 
     def _apply_pickup_at(self, pos: Tuple[int, int]) -> bool:
@@ -1049,9 +832,7 @@ class ZeldaGUI:
             pos=pos,
             semantic_palette=SEMANTIC_PALETTE,
             logger=logger,
-            time_module=time,
             item_collection_effect_cls=ItemCollectionEffect,
-            apply_pickup_at_helper=_apply_pickup_at_helper,
         )
     
     def _render_item_legend(self, surface):
@@ -1060,7 +841,6 @@ class ZeldaGUI:
             gui=self,
             surface=surface,
             pygame=pygame,
-            render_item_legend_helper=_render_item_legend_helper,
         )
 
     def _sync_inventory_counters(self):
@@ -1074,7 +854,6 @@ class ZeldaGUI:
         """
         _sync_inventory_counters_orchestration_helper(
             gui=self,
-            sync_inventory_counters_helper=_sync_inventory_counters_helper,
         )
 
     def _scan_items_along_path(self, path=None):
@@ -1101,7 +880,6 @@ class ZeldaGUI:
             semantic_palette=SEMANTIC_PALETTE,
             logger=logger,
             path=path,
-            scan_items_along_path_helper=_scan_items_along_path_helper,
         )
 
     def _get_path_items_display_text(self):
@@ -1112,7 +890,6 @@ class ZeldaGUI:
         """
         return _get_path_items_display_text_orchestration_helper(
             gui=self,
-            get_path_items_display_text_helper=_get_path_items_display_text_helper,
         )
     
     def _render_error_banner(self, surface):
@@ -1122,7 +899,6 @@ class ZeldaGUI:
             surface=surface,
             pygame=pygame,
             time_module=time,
-            render_error_banner_helper=_render_error_banner_helper,
         )
     
     def _render_solver_status_banner(self, surface):
@@ -1134,7 +910,6 @@ class ZeldaGUI:
             math_module=math,
             time_module=time,
             logger=logger,
-            render_solver_status_banner_helper=_render_solver_status_banner_helper,
         )
     
     def _render_status_bar(self, surface):
@@ -1143,7 +918,6 @@ class ZeldaGUI:
             gui=self,
             surface=surface,
             pygame=pygame,
-            render_status_bar_helper=_render_status_bar_helper,
         )
     
     def _render_control_panel(self, surface):
@@ -1154,7 +928,6 @@ class ZeldaGUI:
             pygame=pygame,
             logger=logger,
             dropdown_widget_cls=DropdownWidget,
-            render_control_panel_helper=_render_control_panel_helper,
         )
 
     def _render_tooltips(self, surface, mouse_pos):
@@ -1165,7 +938,6 @@ class ZeldaGUI:
             mouse_pos=mouse_pos,
             button_widget_cls=ButtonWidget,
             pygame=pygame,
-            render_tooltips_helper=_render_tooltips_helper,
         )
     
     def _draw_tooltip(self, surface, pos, text):
@@ -1176,7 +948,6 @@ class ZeldaGUI:
             pos=pos,
             text=text,
             pygame=pygame,
-            draw_tooltip_helper=_draw_tooltip_helper,
         )
     
     def _handle_control_panel_click(self, pos, button, event_type='down'):
@@ -1188,14 +959,12 @@ class ZeldaGUI:
             event_type=event_type,
             logger=logger,
             debug_input_active=DEBUG_INPUT_ACTIVE,
-            dispatch_helper=_handle_control_panel_click_dispatch_helper,
         )
 
     def _control_panel_hit_rect(self):
         return _control_panel_hit_rect_orchestration_helper(
             gui=self,
             pygame=pygame,
-            control_panel_hit_rect_helper=_control_panel_hit_rect_helper,
         )
 
     def _should_swallow_control_panel_click(self, panel_hit_rect, pos) -> bool:
@@ -1204,7 +973,6 @@ class ZeldaGUI:
             panel_hit_rect=panel_hit_rect,
             pos=pos,
             logger=logger,
-            should_swallow_control_panel_click_helper=_should_swallow_control_panel_click_helper,
         )
 
     def _translate_control_panel_click(self, pos, panel_hit_rect):
@@ -1212,7 +980,6 @@ class ZeldaGUI:
             gui=self,
             pos=pos,
             panel_hit_rect=panel_hit_rect,
-            translate_control_panel_click_helper=_translate_control_panel_click_helper,
         )
 
     def _handle_outside_control_panel_click(self, panel_hit_rect, pos, button):
@@ -1223,7 +990,6 @@ class ZeldaGUI:
             button=button,
             dropdown_widget_cls=DropdownWidget,
             logger=logger,
-            handle_outside_control_panel_click_helper=_handle_outside_control_panel_click_helper,
         )
 
     def _refresh_control_panel_layout_if_needed(self, sc_pos) -> bool:
@@ -1232,7 +998,6 @@ class ZeldaGUI:
             sc_pos=sc_pos,
             debug_input_active=DEBUG_INPUT_ACTIVE,
             logger=logger,
-            refresh_control_panel_layout_if_needed_helper=_refresh_control_panel_layout_if_needed_helper,
         )
 
     def _retry_control_panel_click_after_auto_scroll(self, pos, sc_pos, button, handled):
@@ -1243,7 +1008,6 @@ class ZeldaGUI:
             button=button,
             handled=handled,
             logger=logger,
-            retry_control_panel_click_after_auto_scroll_helper=_retry_control_panel_click_after_auto_scroll_helper,
         )
 
     def _apply_control_panel_widget_updates(self):
@@ -1252,7 +1016,6 @@ class ZeldaGUI:
             gui=self,
             checkbox_widget_cls=CheckboxWidget,
             logger=logger,
-            apply_control_panel_widget_updates_helper=_apply_control_panel_widget_updates_helper,
         )
 
     def _apply_checkbox_widget_update(self, widget):
@@ -1260,7 +1023,6 @@ class ZeldaGUI:
             gui=self,
             widget=widget,
             logger=logger,
-            apply_checkbox_widget_update_helper=_apply_checkbox_widget_update_helper,
         )
 
     def _apply_dropdown_widget_update(self, widget):
@@ -1268,7 +1030,6 @@ class ZeldaGUI:
             gui=self,
             widget=widget,
             logger=logger,
-            apply_dropdown_widget_update_helper=_apply_dropdown_widget_update_helper,
         )
 
     def _apply_algorithm_dropdown_update(self, widget):
@@ -1276,7 +1037,6 @@ class ZeldaGUI:
             gui=self,
             widget=widget,
             logger=logger,
-            apply_algorithm_dropdown_update_helper=_apply_algorithm_dropdown_update_helper,
         )
     
     # Button callbacks
@@ -1284,7 +1044,6 @@ class ZeldaGUI:
         """Stop auto-solve and clear visual state."""
         _stop_auto_solve_orchestration_helper(
             gui=self,
-            stop_auto_solve_flow_helper=_stop_auto_solve_flow_helper,
         )
     
     def _generate_dungeon(self):
@@ -1292,15 +1051,12 @@ class ZeldaGUI:
         _generate_dungeon_orchestration_helper(
             gui=self,
             logger=logger,
-            generate_dungeon_flow_helper=_generate_dungeon_flow_helper,
         )
 
     def _generate_ai_dungeon(self):
         """Non-blocking wrapper to spawn background worker and return immediately."""
         _start_ai_dungeon_generation_orchestration_helper(
             gui=self,
-            threading_module=threading,
-            start_ai_dungeon_generation_helper=_start_ai_dungeon_generation_helper,
         )
 
 
@@ -1309,12 +1065,11 @@ class ZeldaGUI:
         _run_ai_dungeon_generation_worker_orchestration_helper(
             gui=self,
             logger=logger,
-            run_ai_generation_worker_helper=_run_ai_generation_worker_helper,
         )
 
     def _reset_map(self):
         """Reset the current map."""
-        _reset_map_orchestration_helper(gui=self, reset_map_helper=_reset_map_helper)
+        _reset_map_orchestration_helper(gui=self)
     
     def _show_path_preview(self):
         """
@@ -1329,44 +1084,34 @@ class ZeldaGUI:
             gui=self,
             path_preview_dialog_cls=PathPreviewDialog,
             logger=logger,
-            show_path_preview_helper=_show_path_preview_helper,
         )
     
     def _clear_path(self):
         """Clear the current path."""
-        _clear_path_orchestration_helper(gui=self, clear_path_helper=_clear_path_helper)
+        _clear_path_orchestration_helper(gui=self)
 
     def _open_temp_folder(self):
         """Open OS temp folder where solver/preview artifacts are stored."""
-        _open_temp_folder_orchestration_helper(self, tempfile, _open_folder_helper)
+        _open_temp_folder_orchestration_helper(self)
 
     def _collect_temp_file_candidates(self):
         """Collect active and stale GUI temp files used by solver/preview flows."""
-        return _collect_temp_file_candidates_orchestration_helper(
-            self,
-            tempfile,
-            _list_existing_paths_helper,
-            _find_temp_files_helper,
-        )
+        return _collect_temp_file_candidates_orchestration_helper(self)
 
     def _delete_temp_files(self):
         """Delete stale temp files and optionally active tracked files when safe."""
         _delete_temp_files_orchestration_helper(
             self,
-            os,
             logger,
-            self._collect_temp_file_candidates,
-            _list_existing_paths_helper,
-            _delete_files_helper,
         )
     
     def _export_route(self):
         """Export the current route to JSON file."""
-        _export_route_orchestration_helper(gui=self, export_route_helper=_export_route_helper)
+        _export_route_orchestration_helper(gui=self)
     
     def _load_route(self):
         """Load a saved route from JSON file."""
-        _load_route_orchestration_helper(gui=self, load_route_helper=_load_route_helper)
+        _load_route_orchestration_helper(gui=self)
 
     def load_visual_assets(self, templates_dir: str = None, link_sprite_path: str = None):
         """Optional: override GUI assets with extracted visual tiles/sprites.
@@ -1385,10 +1130,8 @@ class ZeldaGUI:
             templates_dir=templates_dir,
             link_sprite_path=link_sprite_path,
             pygame=pygame,
-            os_module=os,
             logger=logger,
             semantic_palette=SEMANTIC_PALETTE,
-            load_visual_assets_helper=_load_visual_assets_helper,
         )
 
     def load_visual_map(self, image_path: str, templates_dir: str | None = None):
@@ -1404,7 +1147,6 @@ class ZeldaGUI:
             gui=self,
             image_path=image_path,
             templates_dir=templates_dir,
-            load_visual_map_helper=_load_visual_map_helper,
         )
 
     def _place_items_from_graph(self, grid: np.ndarray, graph, room_positions: dict, room_to_node: dict):
@@ -1428,14 +1170,12 @@ class ZeldaGUI:
             room_to_node=room_to_node,
             logger=logger,
             semantic_palette=SEMANTIC_PALETTE,
-            place_items_from_graph_helper=_place_items_from_graph_helper,
         )
 
     def _load_current_map(self):
         """Load and initialize the current map."""
         _load_current_map_orchestration_helper(
             gui=self,
-            os_module=os,
             logger=logger,
             zelda_logic_env_cls=ZeldaLogicEnv,
             sanity_checker_cls=SanityChecker,
@@ -1445,11 +1185,11 @@ class ZeldaGUI:
     
     def _center_view(self):
         """Center the current map in the view."""
-        _center_view_orchestration_helper(gui=self, center_view_helper=_center_view_helper)
+        _center_view_orchestration_helper(gui=self)
     
     def _auto_fit_zoom(self):
         """Automatically set zoom level to fit the entire map in view."""
-        _auto_fit_zoom_orchestration_helper(gui=self, auto_fit_zoom_helper=_auto_fit_zoom_helper)
+        _auto_fit_zoom_orchestration_helper(gui=self)
     
     def _change_zoom(self, delta: int, center: tuple | None = None):
         """Change zoom level by delta steps.
@@ -1462,7 +1202,6 @@ class ZeldaGUI:
             gui=self,
             delta=delta,
             center=center,
-            change_zoom_helper=_change_zoom_helper,
         )
     
     def _safe_set_mode(self, size, flags=0, allow_fallback=True):
@@ -1478,7 +1217,6 @@ class ZeldaGUI:
             size=size,
             pygame=pygame,
             logger=logger,
-            safe_set_mode_helper=_safe_set_mode_helper,
             flags=flags,
             allow_fallback=allow_fallback,
         )
@@ -1489,7 +1227,6 @@ class ZeldaGUI:
             gui=self,
             pygame=pygame,
             logger=logger,
-            attempt_display_reinit_helper=_attempt_display_reinit_helper,
         )
 
     def _handle_watchdog_screenshot(self) -> bool:
@@ -1502,8 +1239,6 @@ class ZeldaGUI:
             gui=self,
             pygame=pygame,
             logger=logger,
-            os_module=os,
-            handle_watchdog_screenshot_helper=_handle_watchdog_screenshot_helper,
         )
 
     def report_ui_state(self) -> dict:
@@ -1511,7 +1246,6 @@ class ZeldaGUI:
         return _report_ui_state_orchestration_helper(
             gui=self,
             logger=logger,
-            report_ui_state_helper=_report_ui_state_helper,
         )
 
     def _ensure_display_alive(self, force=False):
@@ -1525,7 +1259,6 @@ class ZeldaGUI:
             gui=self,
             pygame=pygame,
             logger=logger,
-            ensure_display_alive_helper=_ensure_display_alive_helper,
             force=force,
         )
 
@@ -1536,7 +1269,11 @@ class ZeldaGUI:
         work around Windows' foreground activation blocking. Returns True on success.
         No-op on non-Windows platforms.
         """
-        return _force_focus_orchestration_helper(gui=self, force_focus_helper=_force_focus_helper)
+        return _force_focus_orchestration_helper(
+            gui=self,
+            pygame=pygame,
+            logger=logger,
+        )
 
     def _toggle_fullscreen(self):
         """Toggle fullscreen mode with robust handling.
@@ -1549,9 +1286,7 @@ class ZeldaGUI:
             gui=self,
             pygame=pygame,
             logger=logger,
-            os_module=os,
             platform_module=__import__('platform'),
-            toggle_fullscreen_helper=_toggle_fullscreen_helper,
         )
 
     # ------------------ Control Panel Animation ------------------
@@ -1561,7 +1296,6 @@ class ZeldaGUI:
             gui=self,
             target_collapsed=target_collapsed,
             time_module=time,
-            start_toggle_panel_animation_helper=_start_toggle_panel_animation_helper,
         )
 
     def _update_control_panel_animation(self):
@@ -1569,7 +1303,6 @@ class ZeldaGUI:
         _update_control_panel_animation_orchestration_helper(
             gui=self,
             time_module=time,
-            update_control_panel_animation_helper=_update_control_panel_animation_helper,
         )
 
     def _update_control_panel_scroll(self):
@@ -1577,7 +1310,6 @@ class ZeldaGUI:
         _update_control_panel_scroll_orchestration_helper(
             gui=self,
             time_module=time,
-            update_control_panel_scroll_helper=_update_control_panel_scroll_helper,
         )
 
     def run(self, max_frames: Optional[int] = None):
@@ -1638,11 +1370,11 @@ class ZeldaGUI:
 
     def _next_map(self):
         """Move to the next map and stop auto-solve if running."""
-        _next_map_orchestration_helper(gui=self, logger=logger, next_map_helper=_next_map_helper)
+        _next_map_orchestration_helper(gui=self, logger=logger)
 
     def _prev_map(self):
         """Move to the previous map and stop auto-solve if running."""
-        _prev_map_orchestration_helper(gui=self, logger=logger, prev_map_helper=_prev_map_helper)
+        _prev_map_orchestration_helper(gui=self, logger=logger)
     
     def _clamp_view_offset(self):
         """Clamp view offset to valid range.
@@ -1651,22 +1383,17 @@ class ZeldaGUI:
         the user can pan the small map freely inside the window (showing empty
         margins) while still preventing arbitrary unrestricted panning.
         """
-        _clamp_view_offset_orchestration_helper(gui=self, clamp_view_offset_helper=_clamp_view_offset_helper)
+        _clamp_view_offset_orchestration_helper(gui=self)
     
     def _center_on_player(self):
         """Center the view on the player position."""
-        _center_on_player_orchestration_helper(gui=self, center_on_player_helper=_center_on_player_helper)
+        _center_on_player_orchestration_helper(gui=self)
     
     def _start_preview_for_current_map(self):
         _start_preview_for_current_map_orchestration_helper(
             gui=self,
             logger=logger,
-            pygame_module=pygame,
-            multiprocessing_module=multiprocessing,
-            threading_module=threading,
-            time_module=time,
             run_preview_and_dump=_run_preview_and_dump,
-            start_preview_for_current_map_helper=_start_preview_for_current_map_helper,
         )
 
     def _clear_solver_state(self, reason="cleanup"):
@@ -1679,7 +1406,6 @@ class ZeldaGUI:
             gui=self,
             reason=reason,
             logger=logger,
-            clear_solver_state_helper=_clear_solver_state_helper,
         )
 
     def _sync_solver_dropdown_settings(self):
@@ -1687,7 +1413,6 @@ class ZeldaGUI:
         return _sync_solver_dropdown_settings_orchestration_helper(
             gui=self,
             sync_fn=sync_solver_dropdown_settings,
-            sync_solver_dropdown_settings_helper=_sync_solver_dropdown_settings_helper,
         )
 
     def _algorithm_name(self, algorithm_idx):
@@ -1706,7 +1431,6 @@ class ZeldaGUI:
             gui=self,
             logger=logger,
             debug_sync_solver=DEBUG_SYNC_SOLVER,
-            start_auto_solve_helper=_start_auto_solve_helper,
         )
 
     def _prepare_active_solver_for_new_start(self) -> bool:
@@ -1714,22 +1438,16 @@ class ZeldaGUI:
         return _prepare_active_solver_for_new_start_orchestration_helper(
             gui=self,
             logger=logger,
-            time_module=time,
-            evaluate_solver_recovery_state=evaluate_solver_recovery_state,
             compute_timeout_seconds=self._compute_solver_timeout_seconds,
             terminate_hung_process=self._terminate_hung_solver_process,
             force_recovery_state=self._force_solver_recovery_state,
             log_active_state=self._log_active_solver_state,
-            prepare_active_solver_for_new_start_helper=_prepare_active_solver_for_new_start_helper,
         )
 
     def _log_active_solver_state(self):
         _log_active_solver_state_orchestration_helper(
             gui=self,
             logger=logger,
-            os_module=os,
-            time_module=time,
-            log_active_solver_state_helper=_log_active_solver_state_helper,
         )
 
     def _compute_solver_timeout_seconds(self, active_alg: int) -> float:
@@ -1738,16 +1456,12 @@ class ZeldaGUI:
             active_alg=active_alg,
             default_solver_timeout_for_algorithm=default_solver_timeout_for_algorithm,
             scale_timeout_by_grid_size=scale_timeout_by_grid_size,
-            np_module=np,
-            os_module=os,
-            compute_solver_timeout_seconds_helper=_compute_solver_timeout_seconds_helper,
         )
 
     def _terminate_hung_solver_process(self, proc):
         _terminate_hung_solver_process_orchestration_helper(
             proc=proc,
             logger=logger,
-            terminate_hung_solver_process_helper=_terminate_hung_solver_process_helper,
         )
 
     def _force_solver_recovery_state(self, recovery_reason: str):
@@ -1755,7 +1469,6 @@ class ZeldaGUI:
             gui=self,
             recovery_reason=recovery_reason,
             logger=logger,
-            force_solver_recovery_state_helper=_force_solver_recovery_state_helper,
         )
 
     def _cleanup_preview_before_solver_start(self):
@@ -1763,29 +1476,24 @@ class ZeldaGUI:
         _cleanup_preview_before_solver_start_orchestration_helper(
             gui=self,
             logger=logger,
-            os_module=os,
-            cleanup_preview_before_solver_start_helper=_cleanup_preview_before_solver_start_helper,
         )
 
     def _reset_solver_visual_state_before_start(self):
         """Clear solver/visual state from previous runs before scheduling a new solve."""
         _reset_solver_visual_state_before_start_orchestration_helper(
             gui=self,
-            reset_solver_visual_state_before_start_helper=_reset_solver_visual_state_before_start_helper,
         )
 
     def _get_solver_map_context(self):
         """Return current grid and optional topology context needed by solver backends."""
         return _get_solver_map_context_orchestration_helper(
             gui=self,
-            get_solver_map_context_helper=_get_solver_map_context_helper,
         )
 
     def _build_solver_request(self, algorithm_idx=None, on_missing_message='Start/goal not defined for this map'):
         """Build a canonical solver request payload from current GUI state."""
         return _build_solver_request_orchestration_helper(
             gui=self,
-            build_solver_request_helper=_build_solver_request_helper,
             algorithm_idx=algorithm_idx,
             on_missing_message=on_missing_message,
         )
@@ -1801,7 +1509,6 @@ class ZeldaGUI:
             logger=logger,
             solve_in_subprocess=_solve_in_subprocess,
             algorithm_idx=algorithm_idx,
-            run_solver_sync_helper=_run_solver_sync_helper,
         )
 
     def _watchdog_loop(self):
@@ -1816,10 +1523,6 @@ class ZeldaGUI:
         _watchdog_loop_orchestration_helper(
             gui=self,
             logger=logger,
-            os_module=os,
-            time_module=time,
-            tempfile_module=tempfile,
-            watchdog_loop_helper=_watchdog_loop_helper,
         )
         
 
@@ -1834,16 +1537,12 @@ class ZeldaGUI:
             gui=self,
             algorithm_idx=algorithm_idx,
             logger=logger,
-            time_module=time,
-            threading_module=threading,
-            schedule_solver_helper=_schedule_solver_helper,
         )
 
     def _create_solver_temp_files(self, grid_arr):
         """Create output and optional grid temp files for solver worker launch."""
         return _create_solver_temp_files_orchestration_helper(
             grid_arr=grid_arr,
-            create_solver_temp_files_helper=_create_solver_temp_files_helper,
         )
 
     def _launch_solver_worker(self, **kwargs):
@@ -1854,8 +1553,6 @@ class ZeldaGUI:
             logger=logger,
             launch_solver_process=self._launch_solver_process,
             start_solver_thread_fallback=self._start_solver_thread_fallback,
-            multiprocessing_module=multiprocessing,
-            launch_solver_worker_helper=_launch_solver_worker_helper,
         )
 
     def _launch_solver_process(self, **kwargs):
@@ -1863,9 +1560,7 @@ class ZeldaGUI:
             gui=self,
             launch_kwargs=kwargs,
             run_solver_and_dump=_run_solver_and_dump,
-            multiprocessing_module=multiprocessing,
             logger=logger,
-            launch_solver_process_helper=_launch_solver_process_helper,
         )
 
     def _solver_thread_fallback_worker(self, **kwargs):
@@ -1874,17 +1569,14 @@ class ZeldaGUI:
             launch_kwargs=kwargs,
             solve_in_subprocess=_solve_in_subprocess,
             logger=logger,
-            solver_thread_fallback_worker_helper=_solver_thread_fallback_worker_helper,
         )
 
     def _start_solver_thread_fallback(self, **kwargs):
         _start_solver_thread_fallback_orchestration_helper(
             gui=self,
             launch_kwargs=kwargs,
-            threading_module=threading,
             worker_target=self._solver_thread_fallback_worker,
             logger=logger,
-            start_solver_thread_fallback_helper=_start_solver_thread_fallback_helper,
         )
 
     def _execute_auto_solve(self, path, solver_result, teleports=0):
@@ -1902,7 +1594,6 @@ class ZeldaGUI:
             solver_result=solver_result,
             teleports=teleports,
             logger=logger,
-            execute_auto_solve_helper=_execute_auto_solve_helper,
         )
     
     def _execute_auto_solve_from_preview(self):
@@ -1912,7 +1603,6 @@ class ZeldaGUI:
         _execute_auto_solve_from_preview_orchestration_helper(
             gui=self,
             logger=logger,
-            execute_auto_solve_from_preview_helper=_execute_auto_solve_from_preview_helper,
         )
     
     def _smart_grid_path(self):
@@ -1925,17 +1615,13 @@ class ZeldaGUI:
             logger=logger,
             convert_diagonal_to_4dir=_convert_diagonal_to_4dir,
             semantic_palette=SEMANTIC_PALETTE,
-            np_module=np,
             path_cls=Path,
-            os_module=os,
-            smart_grid_path_helper=_smart_grid_path_helper,
         )
 
     def _graph_guided_path(self):
         """Fallback: follow graph path with teleportation when needed."""
         return _graph_guided_path_orchestration_helper(
             gui=self,
-            graph_guided_path_helper=_graph_guided_path_helper,
         )
 
     def _hybrid_graph_grid_path(self):
@@ -1945,7 +1631,6 @@ class ZeldaGUI:
         """
         return _hybrid_graph_grid_path_orchestration_helper(
             gui=self,
-            hybrid_graph_grid_path_helper=_hybrid_graph_grid_path_helper,
         )
 
     def _stop_auto(self, reason: str = None):
@@ -1954,7 +1639,6 @@ class ZeldaGUI:
             gui=self,
             reason=reason,
             logger=logger,
-            stop_auto_helper=_stop_auto_helper,
         )
 
     def _auto_step(self):
@@ -1969,7 +1653,6 @@ class ZeldaGUI:
             ripple_effect_cls=RippleEffect,
             flash_effect_cls=FlashEffect,
             traceback_module=traceback,
-            auto_step_helper=_auto_step_helper,
         )
     
     def _show_error(self, message: str):
@@ -1979,7 +1662,6 @@ class ZeldaGUI:
             message=message,
             logger=logger,
             time_module=time,
-            show_error_helper=_show_error_helper,
         )
     
     def _show_message(self, message: str, duration: float = 3.0):
@@ -1990,7 +1672,6 @@ class ZeldaGUI:
             duration=duration,
             logger=logger,
             time_module=time,
-            show_message_helper=_show_message_helper,
         )
 
     # --- Topology helpers ---
@@ -1998,7 +1679,6 @@ class ZeldaGUI:
         """Export current map topology to a DOT file (if available)."""
         return _export_topology_orchestration_helper(
             gui=self,
-            export_topology_helper=_export_topology_helper,
         )
 
 
@@ -2022,7 +1702,6 @@ class ZeldaGUI:
             gui=self,
             matcher_cls=RoomGraphMatcher,
             logger=logger,
-            match_missing_nodes_helper=_match_missing_nodes_helper,
         )
 
     def _undo_last_match(self):
@@ -2030,7 +1709,6 @@ class ZeldaGUI:
         return _undo_last_match_orchestration_helper(
             gui=self,
             logger=logger,
-            undo_last_match_helper=_undo_last_match_helper,
         )
 
     def _room_for_global_position(self, pos: Optional[Tuple[int, int]], room_positions: dict) -> Optional[Tuple[int, int]]:
@@ -2038,7 +1716,6 @@ class ZeldaGUI:
         return _room_for_global_position_orchestration_helper(
             pos=pos,
             room_positions=room_positions,
-            room_for_global_position_helper=_room_for_global_position_helper,
         )
 
     @staticmethod
@@ -2046,7 +1723,6 @@ class ZeldaGUI:
         """Best-effort small-key detection from graph node attributes/labels."""
         return _node_has_small_key_orchestration_helper(
             attrs=attrs,
-            node_has_small_key_helper=_node_has_small_key_helper,
         )
 
     def _node_has_critical_content(self, graph, node_id: Any) -> bool:
@@ -2054,7 +1730,6 @@ class ZeldaGUI:
         return _node_has_critical_content_orchestration_helper(
             graph=graph,
             node_id=node_id,
-            node_has_critical_content_helper=_node_has_critical_content_helper,
         )
 
     def _capture_precheck_snapshot(self, current: Any, reason: str = "") -> None:
@@ -2080,7 +1755,6 @@ class ZeldaGUI:
             graph=graph,
             room_to_node=room_to_node,
             node_to_room=node_to_room,
-            build_room_adjacency_from_graph_helper=_build_room_adjacency_from_graph_helper,
         )
 
     def _prune_dead_end_topology(self, current: Any, preserve_rooms: set) -> List[Tuple[int, int]]:
@@ -2129,7 +1803,6 @@ class ZeldaGUI:
         return _apply_tentative_matches_orchestration_helper(
             gui=self,
             logger=logger,
-            apply_tentative_matches_helper=_apply_tentative_matches_helper,
         )
 
     # --- Solver comparison helpers ---
@@ -2140,7 +1813,6 @@ class ZeldaGUI:
             nodes=nodes,
             time_ms=time_ms,
             path_len=path_len,
-            set_last_solver_metrics_helper=_set_last_solver_metrics_helper,
         )
 
     def _run_solver_comparison(self):
@@ -2152,7 +1824,6 @@ class ZeldaGUI:
             game_state_cls=GameState,
             solve_in_subprocess=_solve_in_subprocess,
             threading_module=threading,
-            run_solver_comparison_helper=_run_solver_comparison_helper,
         )
 
     def _start_map_elites(self, n_samples: int = 200, resolution: int = 20):
@@ -2166,7 +1837,6 @@ class ZeldaGUI:
             n_samples=n_samples,
             resolution=resolution,
             threading_module=threading,
-            start_map_elites_flow_helper=_start_map_elites_flow_helper,
         )
 
     def _map_elites_worker(self, maps, n_samples: int, resolution: int):
@@ -2182,7 +1852,6 @@ class ZeldaGUI:
             resolution=resolution,
             logger=logger,
             os_module=os,
-            map_elites_worker_flow_helper=_map_elites_worker_flow_helper,
         )
 
     def _render_solver_comparison_overlay(self, surface):
@@ -2191,7 +1860,6 @@ class ZeldaGUI:
             gui=self,
             surface=surface,
             pygame=pygame,
-            render_solver_comparison_overlay_helper=_render_solver_comparison_overlay_helper,
         )
     
     def _set_message(self, message: str, duration: float = 3.0):
@@ -2201,7 +1869,6 @@ class ZeldaGUI:
             message=message,
             duration=duration,
             time_module=time,
-            set_message_helper=_set_message_helper,
         )
     
     def _show_toast(self, message: str, duration: float = 3.0, toast_type: str = 'info'):
@@ -2212,26 +1879,23 @@ class ZeldaGUI:
             duration=duration,
             toast_type=toast_type,
             toast_cls=ToastNotification,
-            show_toast_helper=_show_toast_helper,
         )
     
     def _format_cbs_metrics_tooltip(self, cbs_metrics: dict) -> str:
         """Format CBS metrics for detailed tooltip display."""
         return _format_cbs_metrics_tooltip_orchestration_helper(
             cbs_metrics=cbs_metrics,
-            format_cbs_metrics_tooltip_helper=_format_cbs_metrics_tooltip_helper,
         )
     
     def _update_toasts(self):
         """Update and remove expired toasts."""
-        _update_toasts_orchestration_helper(gui=self, update_toasts_helper=_update_toasts_helper)
+        _update_toasts_orchestration_helper(gui=self)
     
     def _render_toasts(self, surface):
         """Render all active toast notifications."""
         _render_toasts_orchestration_helper(
             gui=self,
             surface=surface,
-            render_toasts_helper=_render_toasts_helper,
         )
     
     # ========================================
@@ -2251,7 +1915,6 @@ class ZeldaGUI:
             block_to=block_to,
             pygame=pygame,
             logger=logger,
-            start_block_push_animation_helper=_start_block_push_animation_helper,
         )
     
     def _update_block_push_animations(self):
@@ -2262,7 +1925,6 @@ class ZeldaGUI:
             semantic_palette=SEMANTIC_PALETTE,
             pop_effect_cls=PopEffect,
             logger=logger,
-            update_block_push_animations_helper=_update_block_push_animations_helper,
         )
     
     def _render_block_push_animations(self, surface):
@@ -2276,14 +1938,12 @@ class ZeldaGUI:
             surface=surface,
             pygame=pygame,
             semantic_palette=SEMANTIC_PALETTE,
-            render_block_push_animations_helper=_render_block_push_animations_helper,
         )
     
     def _get_animating_block_positions(self) -> set:
         """Get set of block positions currently being animated (to skip normal rendering)."""
         return _get_animating_block_positions_orchestration_helper(
             gui=self,
-            get_animating_block_positions_helper=_get_animating_block_positions_helper,
         )
     
     def _check_and_start_block_push(self, player_pos: Tuple[int, int], target_pos: Tuple[int, int], 
@@ -2305,7 +1965,6 @@ class ZeldaGUI:
             target_pos=target_pos,
             walkable_ids=WALKABLE_IDS,
             pushable_ids=PUSHABLE_IDS,
-            check_and_start_block_push_helper=_check_and_start_block_push_helper,
         )
 
     def _show_warning(self, message: str):
@@ -2314,7 +1973,6 @@ class ZeldaGUI:
             gui=self,
             message=message,
             logger=logger,
-            show_warning_helper=_show_warning_helper,
         )
     
     def _manual_step(self, action: Action):
@@ -2325,8 +1983,6 @@ class ZeldaGUI:
             action_deltas=ACTION_DELTAS,
             pop_effect_cls=PopEffect,
             flash_effect_cls=FlashEffect,
-            time_module=time,
-            manual_step_helper=_manual_step_flow_helper,
         )
     
     def _render_path_GUARANTEED(self, surface):
@@ -2343,7 +1999,6 @@ class ZeldaGUI:
             math_module=math,
             time_module=time,
             logger=logger,
-            render_path_guaranteed_flow_helper=_render_path_guaranteed_flow_helper,
         )
 
     def _render(self):
@@ -2352,8 +2007,8 @@ class ZeldaGUI:
             gui=self,
             pygame=pygame,
             logger=logger,
-            time_module=time,
             math_module=math,
+            time_module=time,
             semantic_palette=SEMANTIC_PALETTE,
             create_map_surface_fn=_create_map_surface_helper,
             update_frame_render_state_fn=_update_frame_render_state_helper,
@@ -2378,7 +2033,6 @@ class ZeldaGUI:
             render_sidebar_header_fn=_render_sidebar_header_inventory_solver_helper,
             render_sidebar_status_fn=_render_sidebar_status_message_metrics_controls_helper,
             render_preview_layer_fn=_render_preview_layer_helper,
-            render_frame_helper=_render_frame_helper,
         )
 
     def _render_debug_overlay(self, surface):
@@ -2390,7 +2044,6 @@ class ZeldaGUI:
             surface=surface,
             pygame=pygame,
             time_module=time,
-            render_debug_overlay_helper=_render_debug_overlay_helper,
         )
 
     def _render_unified_bottom_panel(self):
@@ -2398,7 +2051,6 @@ class ZeldaGUI:
         _render_unified_bottom_panel_orchestration_helper(
             gui=self,
             pygame=pygame,
-            render_unified_bottom_panel_helper=_render_unified_bottom_panel_helper,
         )
     
     def _render_message_section(self, x: int, y: int, width: int, height: int):
@@ -2409,7 +2061,6 @@ class ZeldaGUI:
             y=y,
             width=width,
             height=height,
-            render_message_section_helper=_render_message_section_helper,
         )
     
     def _render_progress_bar(self, surface, x: int, y: int, width: int, height: int, 
@@ -2426,7 +2077,6 @@ class ZeldaGUI:
             color_filled=color_filled,
             color_empty=color_empty,
             pygame=pygame,
-            render_progress_bar_helper=_render_progress_bar_helper,
         )
     
     def _render_inventory_section(self, x: int, y: int, width: int, height: int):
@@ -2440,7 +2090,6 @@ class ZeldaGUI:
             pygame=pygame,
             time_module=time,
             logger=logger,
-            render_inventory_section_helper=_render_inventory_section_helper,
         )
     
     def _render_metrics_section(self, x: int, y: int, width: int, height: int):
@@ -2451,7 +2100,6 @@ class ZeldaGUI:
             y=y,
             width=width,
             height=height,
-            render_metrics_section_helper=_render_metrics_section_helper,
         )
     
     def _render_controls_section(self, x: int, y: int, width: int, height: int):
@@ -2462,7 +2110,6 @@ class ZeldaGUI:
             y=y,
             width=width,
             height=height,
-            render_controls_section_helper=_render_controls_section_helper,
         )
     
     def _render_status_section(self, x: int, y: int, width: int, height: int):
@@ -2473,15 +2120,12 @@ class ZeldaGUI:
             y=y,
             width=width,
             height=height,
-            render_status_section_helper=_render_status_section_helper,
         )
     
     def _render_minimap(self):
         """Render small dungeon overview map in bottom-right corner."""
         _render_minimap_orchestration_helper(
             gui=self,
-            pygame=pygame,
-            render_minimap_helper=_render_minimap_helper,
         )
     
     def _handle_minimap_click(self, mouse_pos: Tuple[int, int]) -> bool:
@@ -2489,7 +2133,6 @@ class ZeldaGUI:
         return _handle_minimap_click_orchestration_helper(
             gui=self,
             mouse_pos=mouse_pos,
-            handle_minimap_click_helper=_handle_minimap_click_helper,
         )
     
     def _render_help_overlay(self):
@@ -2497,17 +2140,14 @@ class ZeldaGUI:
         _render_help_overlay_orchestration_helper(
             gui=self,
             pygame=pygame,
-            render_help_overlay_helper=_render_help_overlay_helper,
         )
 
 
 def load_maps_from_adapter():
     """Load processed maps from data adapter using new zelda_core - ALL 18 variants."""
     return _load_maps_from_adapter_orchestration_helper(
-        os_module=os,
         file_path=__file__,
         print_fn=print,
-        load_maps_from_adapter_helper=_load_maps_from_adapter_helper,
     )
 
 
@@ -2519,7 +2159,6 @@ def main():
         create_test_map_fn=create_test_map,
         gui_cls=ZeldaGUI,
         print_fn=print,
-        run_gui_main_helper=_run_gui_main_helper,
     )
 
 
@@ -2527,6 +2166,8 @@ if __name__ == "__main__":
     # Required for multiprocessing on Windows (freeze_support)
     multiprocessing.freeze_support()
     main()
+
+
 
 
 

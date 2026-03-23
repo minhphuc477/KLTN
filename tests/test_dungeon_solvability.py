@@ -1,4 +1,4 @@
-"""
+﻿"""
 Test dungeon solvability for all Zelda dungeons.
 
 This test suite verifies that the solver can find valid paths through
@@ -15,7 +15,7 @@ import time
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.data.zelda_core import ZeldaDungeonAdapter, DungeonSolver, ValidationMode
+from src.zelda_data.zelda_core import ZeldaDungeonAdapter, DungeonSolver, ValidationMode
 
 
 # Test configuration
@@ -261,3 +261,4 @@ if __name__ == '__main__':
             print(f"[X] FAILED: {reason}")
     
     print(stats.summary())
+

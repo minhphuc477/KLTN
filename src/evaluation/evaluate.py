@@ -33,6 +33,7 @@ import networkx as nx
 import numpy as np
 
 from src.evaluation.validator import ExternalValidator
+from src.evaluation.validation_result_adapter import normalize_validation_result
 from src.evaluation.map_elites import (
     LinearityLeniencyExtractor,
     EliteArchive,
@@ -85,13 +86,11 @@ def evaluate_solvability(graphs: List[nx.DiGraph]) -> Dict[str, Any]:
     path_lengths: List[int] = []
 
     for g in graphs:
-        result = validator.validate(g)
-        if getattr(result, 'is_solvable', False):
+        canonical = normalize_validation_result(validator.validate(g))
+        if canonical.is_solvable:
             solvable += 1
-            if getattr(result, 'path_length', 0):
-                path_lengths.append(int(result.path_length))
-            elif getattr(result, 'solution_path', None):
-                path_lengths.append(len(result.solution_path))
+            if canonical.path_length > 0:
+                path_lengths.append(canonical.path_length)
 
     stats = {
         'total': total,

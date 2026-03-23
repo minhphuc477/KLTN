@@ -52,7 +52,7 @@ No additional installation required if you have the base project dependencies.
 
 **Required imports**:
 ```python
-from src.data.vglc_utils import (
+from src.zelda_data.vglc_utils import (
     parse_node_label,
     filter_virtual_nodes,
     validate_topology,
@@ -208,7 +208,7 @@ if not valid:
 
 ### 4.1 Graph Parsing Functions
 
-All functions are in `src.data.vglc_utils`.
+All functions are in `src.zelda_data.vglc_utils`.
 
 #### `parse_node_label(label: str) -> Set[str]`
 

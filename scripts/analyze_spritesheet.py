@@ -37,7 +37,7 @@ def analyze(path: Path):
                     nonempty += 1
                 hsh = hashlib.sha1(data).hexdigest()
                 hashes.setdefault(hsh, []).append((r, c))
-        unique = sum(1 for k, v in hashes.items() if any(True for _ in v))
+        unique = sum(1 for _k, v in hashes.items() if any(True for _ in v))
         dup_counts = [len(v) for v in hashes.values() if len(v) > 1]
         print(f'  nonempty={nonempty}, empty={empties}, unique_tiles={unique}, duplicates_count={sum(dup_counts)}')
         # Show top duplicate groups

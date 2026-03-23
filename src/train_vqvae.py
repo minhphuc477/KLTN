@@ -1,4 +1,4 @@
-"""
+﻿"""
 H-MOLQD Stage 1: VQ-VAE Pre-training
 =====================================
 
@@ -30,7 +30,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.core.vqvae import SemanticVQVAE, create_vqvae, VQVAETrainer
-from src.data.zelda_loader import create_dataloader, ZeldaDungeonDataset
+from src.zelda_data.zelda_loader import create_dataloader, ZeldaDungeonDataset
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +42,7 @@ def grids_to_onehot(batch: torch.Tensor, num_classes: int = 44) -> torch.Tensor:
     Data loader returns [B, 1, H, W] with values in [0, 1].
     The normalisation divides by a fixed constant (43 = TileID.PUZZLE, the
     highest tile ID).  To recover integer IDs we multiply by 43, round, and
-    clamp — this gives an exact round-trip for all dungeons.
+    clamp â€” this gives an exact round-trip for all dungeons.
 
     Returns [B, C, H, W] float32 one-hot.
     """
@@ -68,13 +68,13 @@ def train_vqvae(args):
     logger.info(f"Device: {device}")
 
     # ------------------------------------------------------------------
-    # Dataset — use VGLC mode, same as diffusion training
+    # Dataset â€” use VGLC mode, same as diffusion training
     # ------------------------------------------------------------------
     base_loader = create_dataloader(
         data_dir=args.data_dir,
         batch_size=args.batch_size,
         shuffle=True,
-        use_vglc=True,       # ← CRITICAL: must match diffusion training
+        use_vglc=True,       # â† CRITICAL: must match diffusion training
         normalize=True,
         load_graphs=False,
     )
@@ -85,7 +85,7 @@ def train_vqvae(args):
         logger.error("No dungeon samples found! Check --data-dir path.")
         sys.exit(1)
 
-    # Small dataset → duplicate to fill an epoch with more gradient steps
+    # Small dataset â†’ duplicate to fill an epoch with more gradient steps
     effective_size = max(len(dataset), args.min_samples_per_epoch)
     sampler = torch.utils.data.RandomSampler(
         dataset, replacement=True, num_samples=effective_size
@@ -149,7 +149,7 @@ def train_vqvae(args):
             x_onehot = grids_to_onehot(batch, num_classes=44)
 
             # Forward / backward
-            _loss, metrics = trainer.train_step(x_onehot)
+            _loss, metrics = trainer.train_step(x_onehot, return_metrics=True)
 
             for k in epoch_metrics:
                 epoch_metrics[k] += metrics.get(k, 0.0)
@@ -206,7 +206,7 @@ def train_vqvae(args):
                 "accuracy": eval_acc,
                 "perplexity": epoch_metrics["perplexity"],
             }, save_path)
-            logger.info(f"  ★ Saved best model → {save_path} (loss={best_loss:.4f})")
+            logger.info(f"  â˜… Saved best model â†’ {save_path} (loss={best_loss:.4f})")
 
         # Periodic checkpoint
         if (epoch + 1) % args.save_every == 0:
@@ -257,3 +257,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

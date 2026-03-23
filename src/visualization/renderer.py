@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import os
 import math
+import logging
 from typing import Dict, List, Tuple, Optional, Any, TYPE_CHECKING
 from dataclasses import dataclass, field
 from enum import Enum
@@ -31,6 +32,9 @@ except ImportError:
 
 if TYPE_CHECKING:
     import numpy as np
+
+
+logger = logging.getLogger(__name__)
 
 
 # ==========================================
@@ -459,6 +463,7 @@ class SpriteManager:
             return
         
         if not os.path.exists(self.assets_dir):
+            logger.warning("Sprite assets directory does not exist: %s", self.assets_dir)
             return
         
         # Try to load tileset
@@ -468,8 +473,8 @@ class SpriteManager:
             try:
                 self._sprites['tileset'] = pygame.image.load(tileset_path).convert_alpha()
                 self._loaded = True
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Failed to load dungeon tileset '%s': %s", tileset_path, exc)
         
         # Try to load Link sprite
         link_path = os.path.join(self.assets_dir,
@@ -477,8 +482,8 @@ class SpriteManager:
         if os.path.exists(link_path):
             try:
                 self._link_sprites['sheet'] = pygame.image.load(link_path).convert_alpha()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Failed to load Link sprite sheet '%s': %s", link_path, exc)
     
     def get_tile(self, tile_id: int, tile_size: int) -> Surface:
         """
