@@ -1,4 +1,4 @@
-"""
+﻿"""
 ASSET CUTTER UTILITY
 ====================
 Slices the Zelda dungeon tileset image into individual 16x16 tile images
@@ -215,7 +215,7 @@ def main():
         print("   Example: tile_r03_c05.png -> floor.png")
         print("="*60)
         
-    except Exception as e:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as e:
         print(f"\nERROR: {e}")
         sys.exit(1)
 

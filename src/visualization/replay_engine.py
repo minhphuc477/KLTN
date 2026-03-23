@@ -1,4 +1,4 @@
-"""
+﻿"""
 Dungeon Replay Engine - Scientific Visualization System
 =======================================================
 
@@ -11,7 +11,7 @@ This engine takes PRE-COMPUTED solutions (from the validator/solver) and
 visualizes them. It does NOT run A* during rendering (which would cause
 frame drops). The workflow is:
 
-    1. Solver computes path → List[Tuple[int, int]]
+    1. Solver computes path â†’ List[Tuple[int, int]]
     2. ReplayEngine receives path
     3. ReplayEngine animates agent following path at configurable speed
 
@@ -272,7 +272,7 @@ class DungeonReplayEngine:
                 inventory=self._inventory_snapshot(),
                 payload={"state": self.state.name},
             )
-        except Exception as e:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as e:
             logger.debug("Playtest telemetry start failed: %s", e)
 
     def _inventory_snapshot(self) -> Dict[str, Any]:
@@ -302,7 +302,7 @@ class DungeonReplayEngine:
                 inventory=self._inventory_snapshot(),
                 payload=payload or {},
             )
-        except Exception as e:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as e:
             logger.debug("Playtest telemetry event failed: %s", e)
 
     def _finish_playtest_telemetry(self, status: str = "completed") -> None:
@@ -318,7 +318,7 @@ class DungeonReplayEngine:
         }
         try:
             collector.finish_session(status=status, summary=summary)
-        except Exception as e:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as e:
             logger.debug("Playtest telemetry finish failed: %s", e)
     
     def _find_tile(self, tile_id: int) -> Optional[Tuple[int, int]]:
@@ -827,14 +827,14 @@ class DungeonReplayEngine:
         y += 18
         
         # Boss Key
-        boss_text = f"Boss Key: {'✓' if self.has_boss_key else '✗'}"
+        boss_text = f"Boss Key: {'âœ“' if self.has_boss_key else 'âœ—'}"
         boss_color = (100, 255, 100) if self.has_boss_key else (150, 155, 165)
         boss_surf = self.font_small.render(boss_text, True, boss_color)
         hud_surface.blit(boss_surf, (15, y))
         y += 18
         
         # Bomb
-        bomb_text = f"Bomb: {'✓' if self.has_bomb else '✗'}"
+        bomb_text = f"Bomb: {'âœ“' if self.has_bomb else 'âœ—'}"
         bomb_color = (100, 255, 100) if self.has_bomb else (150, 155, 165)
         bomb_surf = self.font_small.render(bomb_text, True, bomb_color)
         hud_surface.blit(bomb_surf, (15, y))
@@ -882,7 +882,7 @@ class DungeonReplayEngine:
         
         controls = [
             "SPACE  Play/Pause",
-            "← →    Step",
+            "â† â†’    Step",
             "R      Reset",
             "+/-    Speed",
             "Wheel  Zoom",
@@ -917,7 +917,7 @@ class DungeonReplayEngine:
             ReplayState.IDLE: "Ready - Press SPACE to play",
             ReplayState.PLAYING: "Playing...",
             ReplayState.PAUSED: "Paused",
-            ReplayState.FINISHED: "★ Complete! Press R to restart ★",
+            ReplayState.FINISHED: "â˜… Complete! Press R to restart â˜…",
         }
         state_color = {
             ReplayState.IDLE: (200, 205, 215),
@@ -943,7 +943,7 @@ class DungeonReplayEngine:
         bar_surface.blit(fps_surf, (bar_width - 80, 35))
         
         # Map size
-        size_text = f"Map: {self.grid_cols}×{self.grid_rows}"
+        size_text = f"Map: {self.grid_cols}Ã—{self.grid_rows}"
         size_surf = self.font_small.render(size_text, True, (150, 155, 165))
         bar_surface.blit(size_surf, (bar_width - 80, 55))
         
@@ -1008,21 +1008,21 @@ class DungeonReplayEngine:
             overlay.fill((10, 12, 16, 200))
 
             # Title
-            title = self.font_large.render("Help — Controls & Info", True, (200, 230, 255))
+            title = self.font_large.render("Help â€” Controls & Info", True, (200, 230, 255))
             overlay.blit(title, (30, 30))
 
             lines = [
-                "SPACE — Play / Pause",
-                "← / → — Step backward / forward",
-                "R — Reset replay",
-                "+ / - — Increase / decrease speed",
-                "H — Toggle HUD sidebar",
-                "P — Toggle path overlay",
-                "M — Toggle minimap",
-                "G — Toggle grid overlay",
-                "F — Toggle fog of war",
-                "F1 — Toggle this help",
-                "ESC — Quit",
+                "SPACE â€” Play / Pause",
+                "â† / â†’ â€” Step backward / forward",
+                "R â€” Reset replay",
+                "+ / - â€” Increase / decrease speed",
+                "H â€” Toggle HUD sidebar",
+                "P â€” Toggle path overlay",
+                "M â€” Toggle minimap",
+                "G â€” Toggle grid overlay",
+                "F â€” Toggle fog of war",
+                "F1 â€” Toggle this help",
+                "ESC â€” Quit",
             ]
 
             y = 70
@@ -1032,7 +1032,7 @@ class DungeonReplayEngine:
                 y += 22
 
             # Footer: short status
-            status = f"Map: {self.grid_cols}×{self.grid_rows}    Steps: {len(self.path)}    Speed: {self.speed_multiplier}x"
+            status = f"Map: {self.grid_cols}Ã—{self.grid_rows}    Steps: {len(self.path)}    Speed: {self.speed_multiplier}x"
             footer = self.font_small.render(status, True, (160, 170, 180))
             overlay.blit(footer, (40, height - 40))
 

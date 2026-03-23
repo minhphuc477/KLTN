@@ -1,4 +1,4 @@
-"""
+﻿"""
 Controllability Test
 Measures system responsiveness to user-specified tension curves.
 
@@ -193,7 +193,7 @@ class ControllabilityTest:
                     
                     print(f"OK (r={correlation:.3f}, r^2={r_squared:.3f})")
                     
-                except Exception as e:
+                except (AttributeError, RuntimeError, ValueError, TypeError) as e:
                     print(f"ERROR: {e}")
                     logger.exception(f"Error in sample {seed}")
         
@@ -311,7 +311,7 @@ class ControllabilityTest:
         # Calculate overall correlation
         overall_r, _ = self._safe_pearson(all_targets, all_actuals)
         overall_r2 = overall_r ** 2 if not math.isnan(overall_r) else float('nan')
-        ax.text(0.05, 0.95, f'Overall r = {overall_r:.3f}\nr² = {overall_r2:.3f}', 
+        ax.text(0.05, 0.95, f'Overall r = {overall_r:.3f}\nrÂ² = {overall_r2:.3f}', 
                 transform=ax.transAxes, verticalalignment='top',
                 bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
         

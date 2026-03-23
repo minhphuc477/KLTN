@@ -1,4 +1,4 @@
-"""
+﻿"""
 Zelda Dungeon Dataset Loader
 ============================
 
@@ -12,7 +12,7 @@ Supports:
 
 References:
 - VGLC: Video Game Level Corpus (https://github.com/TheVGLC/TheVGLC)
-- Zelda dungeon format: 16 rows × 11 columns per room
+- Zelda dungeon format: 16 rows Ã— 11 columns per room
 """
 
 import os
@@ -161,7 +161,7 @@ class ZeldaDungeonDataset(Dataset):
                     self.max_w = max(self.max_w, w)
                     
                     logger.debug(f"Loaded dungeon {dungeon_num} variant {variant}: {h}x{w}")
-                except Exception as e:
+                except (AttributeError, RuntimeError, ValueError, TypeError) as e:
                     logger.warning(f"Failed to load dungeon {dungeon_num}v{variant}: {e}")
                     
         logger.info(f"Loaded {len(self.samples)} VGLC dungeons (max size: {self.max_h}x{self.max_w})")
@@ -171,7 +171,7 @@ class ZeldaDungeonDataset(Dataset):
         
         Uses the DOT graph topology (dungeon.graph) as the authoritative
         source for node features and edge types. The 's' (start pointer)
-        node is NOT included as a room node — instead, its connected room
+        node is NOT included as a room node â€” instead, its connected room
         is marked with start_node_id.
         """
         graph = getattr(dungeon, 'graph', None)
@@ -196,7 +196,7 @@ class ZeldaDungeonDataset(Dataset):
             'stair': 6, 's': 6,
         }
         
-        # Create nodes — skip the 's' start pointer node
+        # Create nodes â€” skip the 's' start pointer node
         idx = 0
         for node_id, data in sorted(graph.nodes(data=True)):
             if data.get('is_start_pointer', False):
@@ -432,7 +432,7 @@ class ZeldaRoomDataset(Dataset):
                             grid = getattr(room, 'grid', None)
                         if grid is not None:
                             self.rooms.append(grid.astype(np.float32))
-                except Exception as e:
+                except (AttributeError, RuntimeError, ValueError, TypeError) as e:
                     logger.debug(f"Skipping dungeon {dungeon_num}v{variant}: {e}")
         
         logger.info(f"Loaded {len(self.rooms)} individual rooms")
@@ -490,7 +490,7 @@ def graph_collate_fn(batch):
         graphs = [item[1] for item in batch]
         return images, graphs
     else:
-        # No graph data — plain image batch
+        # No graph data â€” plain image batch
         return torch.stack(batch)
 
 

@@ -1,4 +1,4 @@
-"""
+﻿"""
 Parallel A* Search using Multiprocessing
 ========================================
 
@@ -11,8 +11,8 @@ Strategy:
 4. Return the best successful worker result
 
 Performance:
-- Theoretical: N× speedup with N cores
-- Practical: 2-3× speedup due to synchronization overhead
+- Theoretical: NÃ— speedup with N cores
+- Practical: 2-3Ã— speedup due to synchronization overhead
 - Best for large state spaces (>10000 states)
 
 Python Implementation Notes:
@@ -268,7 +268,7 @@ def _parallel_astar_worker(
                 f_score = g_score + _heuristic_local(new_state, goal_pos)
                 heapq.heappush(open_set, (f_score, counter, new_hash, new_state, path + [new_state.position]))
                 counter += 1
-    except Exception as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         # Worker crashed before producing a result; include reason for diagnosis.
         elapsed = time.time() - start_time
         err = f"Worker {worker_id} crashed: {exc.__class__.__name__}: {exc}"
@@ -314,9 +314,9 @@ class ParallelAStarSolver:
     - First-to-goal termination
     
     Performance:
-    - Small dungeons (<1000 states): ~1.2× speedup (overhead dominates)
-    - Medium dungeons (1000-5000 states): ~2× speedup
-    - Large dungeons (>5000 states): ~2.5-3× speedup
+    - Small dungeons (<1000 states): ~1.2Ã— speedup (overhead dominates)
+    - Medium dungeons (1000-5000 states): ~2Ã— speedup
+    - Large dungeons (>5000 states): ~2.5-3Ã— speedup
     """
     
     def __init__(self, env: ZeldaLogicEnv, n_workers: Optional[int] = None):

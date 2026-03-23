@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Cut a spritesheet into tiles and optionally build a compact tileset atlas.
 
 Usage:
@@ -12,7 +12,7 @@ from pathlib import Path
 
 try:
     from PIL import Image
-except Exception as e:
+except (AttributeError, RuntimeError, ValueError, TypeError) as e:
     raise SystemExit("Pillow is required: pip install pillow")
 
 

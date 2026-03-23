@@ -1,4 +1,4 @@
-"""
+﻿"""
 Checkpoint Management for KLTN Training
 =======================================
 
@@ -401,7 +401,7 @@ class MetricsLogger:
         """Save metrics incrementally."""
         try:
             self.save()
-        except Exception as e:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as e:
             logger.warning(f"Failed to save metrics: {e}")
     
     def summary(self) -> str:

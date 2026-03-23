@@ -190,7 +190,7 @@ def run_bench(
                         print(f'{map_id} CBS+ ({persona_name}): success={success_c} path={path_len_c} '
                               f'states={states_c} confusion_ratio={confusion_ratio:.2f}')
 
-            except Exception as e:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as e:
                 if verbose:
                     print(f'{map_id}: ERROR {e}')
                 import traceback

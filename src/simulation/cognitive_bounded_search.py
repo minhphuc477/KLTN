@@ -1,5 +1,5 @@
-"""
-COGNITIVE BOUNDED SEARCH (CBS) — Human-Like Dungeon Navigation
+﻿"""
+COGNITIVE BOUNDED SEARCH (CBS) â€” Human-Like Dungeon Navigation
 ================================================================
 
 This module implements cognitively-realistic agents for validating dungeon
@@ -8,48 +8,48 @@ bounded rationality and memory limitations.
 
 SCIENTIFIC FOUNDATION:
 ----------------------
-- Miller's Law (1956): Working memory capacity ~7±2 items
+- Miller's Law (1956): Working memory capacity ~7Â±2 items
 - Kahneman (2011): System 1/System 2 decision-making
 - Simon (1955): Bounded rationality and satisficing
-- Newell & Simon (1972): Human Problem Solving — search space constraints
+- Newell & Simon (1972): Human Problem Solving â€” search space constraints
 
 ARCHITECTURE OVERVIEW:
 ----------------------
 
-    ┌─────────────────────────────────────────────────────────────────────┐
-    │                     COGNITIVE BOUNDED SEARCH (CBS)                   │
-    │                                                                      │
-    │  ┌────────────────┐  ┌──────────────┐  ┌────────────────────────┐   │
-    │  │ VISION SYSTEM  │  │ BELIEF MAP   │  │ WORKING MEMORY         │   │
-    │  │ • FOV cone     │──│ • Known tiles│──│ • Capacity=7 (Miller)  │   │
-    │  │ • Radius=5     │  │ • Confidence │  │ • Decay rate=0.95      │   │
-    │  │ • Occlusion    │  │ • Last seen  │  │ • Salience weighting   │   │
-    │  └───────┬────────┘  └──────┬───────┘  └───────────┬────────────┘   │
-    │          │                  │                      │                 │
-    │          └──────────────────┼──────────────────────┘                 │
-    │                             │                                        │
-    │                    ┌────────▼────────┐                               │
-    │                    │ DECISION ENGINE │                               │
-    │                    │ • Heuristic mix │                               │
-    │                    │ • Satisficing   │                               │
-    │                    │ • Persona-based │                               │
-    │                    └────────┬────────┘                               │
-    │                             │                                        │
-    │  ┌──────────────────────────▼──────────────────────────────────┐    │
-    │  │                    AGENT PERSONAS                            │    │
-    │  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────────┐ │    │
-    │  │  │SPEEDRUNER│  │ EXPLORER │  │ CAUTIOUS │  │ FORGETFUL    │ │    │
-    │  │  │ A* base  │  │ Curious  │  │ Safe     │  │ High decay   │ │    │
-    │  │  │ Min path │  │ All rooms│  │ Avoids M │  │ Gets lost    │ │    │
-    │  │  └──────────┘  └──────────┘  └──────────┘  └──────────────┘ │    │
-    │  └──────────────────────────────────────────────────────────────┘    │
-    │                                                                      │
-    │  OUTPUT: (success, path, states, CBSMetrics)                         │
-    │  • Confusion Index = revisits / unique_visits                        │
-    │  • Navigation Entropy = -Σ p(dir) log p(dir)                         │
-    │  • Cognitive Load = memory_size × confidence_variance                │
-    │  • Aha Latency = time_see_goal - time_reach_goal                     │
-    └─────────────────────────────────────────────────────────────────────┘
+    â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+    â”‚                     COGNITIVE BOUNDED SEARCH (CBS)                   â”‚
+    â”‚                                                                      â”‚
+    â”‚  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”   â”‚
+    â”‚  â”‚ VISION SYSTEM  â”‚  â”‚ BELIEF MAP   â”‚  â”‚ WORKING MEMORY         â”‚   â”‚
+    â”‚  â”‚ â€¢ FOV cone     â”‚â”€â”€â”‚ â€¢ Known tilesâ”‚â”€â”€â”‚ â€¢ Capacity=7 (Miller)  â”‚   â”‚
+    â”‚  â”‚ â€¢ Radius=5     â”‚  â”‚ â€¢ Confidence â”‚  â”‚ â€¢ Decay rate=0.95      â”‚   â”‚
+    â”‚  â”‚ â€¢ Occlusion    â”‚  â”‚ â€¢ Last seen  â”‚  â”‚ â€¢ Salience weighting   â”‚   â”‚
+    â”‚  â””â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”˜  â””â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”˜  â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜   â”‚
+    â”‚          â”‚                  â”‚                      â”‚                 â”‚
+    â”‚          â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¼â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜                 â”‚
+    â”‚                             â”‚                                        â”‚
+    â”‚                    â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â–¼â”€â”€â”€â”€â”€â”€â”€â”€â”                               â”‚
+    â”‚                    â”‚ DECISION ENGINE â”‚                               â”‚
+    â”‚                    â”‚ â€¢ Heuristic mix â”‚                               â”‚
+    â”‚                    â”‚ â€¢ Satisficing   â”‚                               â”‚
+    â”‚                    â”‚ â€¢ Persona-based â”‚                               â”‚
+    â”‚                    â””â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”˜                               â”‚
+    â”‚                             â”‚                                        â”‚
+    â”‚  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â–¼â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”    â”‚
+    â”‚  â”‚                    AGENT PERSONAS                            â”‚    â”‚
+    â”‚  â”‚  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â” â”‚    â”‚
+    â”‚  â”‚  â”‚SPEEDRUNERâ”‚  â”‚ EXPLORER â”‚  â”‚ CAUTIOUS â”‚  â”‚ FORGETFUL    â”‚ â”‚    â”‚
+    â”‚  â”‚  â”‚ A* base  â”‚  â”‚ Curious  â”‚  â”‚ Safe     â”‚  â”‚ High decay   â”‚ â”‚    â”‚
+    â”‚  â”‚  â”‚ Min path â”‚  â”‚ All roomsâ”‚  â”‚ Avoids M â”‚  â”‚ Gets lost    â”‚ â”‚    â”‚
+    â”‚  â”‚  â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜  â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜  â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜  â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜ â”‚    â”‚
+    â”‚  â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜    â”‚
+    â”‚                                                                      â”‚
+    â”‚  OUTPUT: (success, path, states, CBSMetrics)                         â”‚
+    â”‚  â€¢ Confusion Index = revisits / unique_visits                        â”‚
+    â”‚  â€¢ Navigation Entropy = -Î£ p(dir) log p(dir)                         â”‚
+    â”‚  â€¢ Cognitive Load = memory_size Ã— confidence_variance                â”‚
+    â”‚  â€¢ Aha Latency = time_see_goal - time_reach_goal                     â”‚
+    â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
 
 INTEGRATION:
 -----------
@@ -120,18 +120,18 @@ class CBSMetrics:
         confusion_index: Ratio of tile revisits to unique tile visits.
                         High values indicate the agent got lost or backtracked.
                         Formula: revisits / unique_visits
-                        Range: [0, ∞), optimal ≈ 0, confused > 2.0
+                        Range: [0, âˆž), optimal â‰ˆ 0, confused > 2.0
                         
         navigation_entropy: Shannon entropy of direction choices.
                            High = random wandering, Low = directed movement.
-                           Formula: -Σ p(dir) log₂ p(dir)
+                           Formula: -Î£ p(dir) logâ‚‚ p(dir)
                            Range: [0, 2] for 4 directions, [0, 3] for 8
                            
         cognitive_load: Estimated mental effort based on memory usage and
                        belief uncertainty. Combines Miller's capacity with
                        confidence variance.
-                       Formula: (memory_items / capacity) × (1 + σ²_confidence)
-                       Range: [0, ∞), typical [0.1, 2.0]
+                       Formula: (memory_items / capacity) Ã— (1 + ÏƒÂ²_confidence)
+                       Range: [0, âˆž), typical [0.1, 2.0]
                        
         aha_latency: Steps between first seeing the goal and reaching it.
                     Low = efficient path exploitation
@@ -179,7 +179,7 @@ class CBSMetrics:
     belief_entropy_final: float = 0.0  # Final belief map entropy
     
     # Paper metrics (CBS+ Paper Section 4)
-    room_entropy: float = 0.0  # Navigational entropy H = -Σ p(room) × log₂(p(room))
+    room_entropy: float = 0.0  # Navigational entropy H = -Î£ p(room) Ã— logâ‚‚(p(room))
     
     # Per-room metrics for detailed analysis
     room_visit_counts: Dict[Tuple[int, int], int] = field(default_factory=dict)
@@ -213,18 +213,18 @@ class CBSMetrics:
     def summary(self) -> str:
         """Human-readable summary."""
         return f"""
-╔══════════════════════════════════════════════════════════════════════╗
-║                     CBS COGNITIVE METRICS                            ║
-╠══════════════════════════════════════════════════════════════════════╣
-║ Confusion Index:     {self.confusion_index:>8.3f}  (revisits/unique, low=good)     ║
-║ Navigation Entropy:  {self.navigation_entropy:>8.3f}  (bits, 0=linear, 2=random)   ║
-║ Cognitive Load:      {self.cognitive_load:>8.3f}  (memory×uncertainty)            ║
-║ Aha Latency:         {self.aha_latency:>8d}  steps (see→reach goal)             ║
-╠══════════════════════════════════════════════════════════════════════╣
-║ Unique Tiles:        {self.unique_tiles_visited:>8d}  │ Total Steps: {self.total_steps:>8d}          ║
-║ Exploration Eff:     {self.exploration_efficiency:>8.3f}  │ Peak Memory: {self.peak_memory_usage:>8d}          ║
-║ Decisions Made:      {self.decisions_made:>8d}  │ Suboptimal:  {self.suboptimal_decisions:>8d}          ║
-╚══════════════════════════════════════════════════════════════════════╝
+â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—
+â•‘                     CBS COGNITIVE METRICS                            â•‘
+â• â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•£
+â•‘ Confusion Index:     {self.confusion_index:>8.3f}  (revisits/unique, low=good)     â•‘
+â•‘ Navigation Entropy:  {self.navigation_entropy:>8.3f}  (bits, 0=linear, 2=random)   â•‘
+â•‘ Cognitive Load:      {self.cognitive_load:>8.3f}  (memoryÃ—uncertainty)            â•‘
+â•‘ Aha Latency:         {self.aha_latency:>8d}  steps (seeâ†’reach goal)             â•‘
+â• â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•£
+â•‘ Unique Tiles:        {self.unique_tiles_visited:>8d}  â”‚ Total Steps: {self.total_steps:>8d}          â•‘
+â•‘ Exploration Eff:     {self.exploration_efficiency:>8.3f}  â”‚ Peak Memory: {self.peak_memory_usage:>8d}          â•‘
+â•‘ Decisions Made:      {self.decisions_made:>8d}  â”‚ Suboptimal:  {self.suboptimal_decisions:>8d}          â•‘
+â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 """
 
 
@@ -697,7 +697,7 @@ class VisionSystem:
     
     Attributes:
         radius: Maximum visibility distance (default 5 tiles)
-        cone_angle: Field of view in degrees (default 120°, forward-facing)
+        cone_angle: Field of view in degrees (default 120Â°, forward-facing)
         enable_occlusion: Whether walls block line of sight
     """
     
@@ -754,7 +754,7 @@ class VisionSystem:
         visible = {position}  # Always see current tile
         height, width = grid.shape
         
-        # Handle 360° vision (no cone restriction)
+        # Handle 360Â° vision (no cone restriction)
         if self.cone_angle >= 360:
             angle_check = lambda dr, dc: True
         else:
@@ -835,9 +835,9 @@ class VisionSystem:
         grid: np.ndarray
     ) -> Set[Tuple[int, int]]:
         """
-        Get all tiles visible with 360° vision (useful for comparison).
+        Get all tiles visible with 360Â° vision (useful for comparison).
         """
-        return self.get_visible_tiles(position, (0, 1), grid)  # Direction ignored with 360°
+        return self.get_visible_tiles(position, (0, 1), grid)  # Direction ignored with 360Â°
 
 
 # ==============================================================================
@@ -893,7 +893,7 @@ class WorkingMemory:
     
     Scientific basis:
     - Miller (1956): "The magical number seven, plus or minus two"
-    - Cowan (2001): Modern estimate is 4±1 chunks
+    - Cowan (2001): Modern estimate is 4Â±1 chunks
     - Baddeley (2000): Working memory model with central executive
     
     When at capacity, lowest-salience items are forgotten first.
@@ -1399,7 +1399,7 @@ class AgentPersona(Enum):
     FORGETFUL = "forgetful"       # High memory decay, gets lost easily
     BALANCED = "balanced"         # Mix of all heuristics
     COMPLETIONIST = "completionist"  # Collects all items before goal
-    GREEDY = "greedy"             # Static persona: NO memory decay (λ=1.0), proves decay is active ingredient
+    GREEDY = "greedy"             # Static persona: NO memory decay (Î»=1.0), proves decay is active ingredient
 
 
 @dataclass
@@ -1407,23 +1407,23 @@ class PersonaConfig:
     """
     Configuration for an agent persona.
     
-    Utility function: U(a) = α·goal_progress + β·info_gain - γ·risk
+    Utility function: U(a) = Î±Â·goal_progress + Î²Â·info_gain - Î³Â·risk
     
     Where:
-        α (goal_weight): Weight for goal-seeking behavior
-        β (curiosity_weight): Weight for exploration/information gain
-        γ (risk_weight): Weight for risk avoidance
+        Î± (goal_weight): Weight for goal-seeking behavior
+        Î² (curiosity_weight): Weight for exploration/information gain
+        Î³ (risk_weight): Weight for risk avoidance
         
     Predefined personas:
-        - Balanced: α=0.6, β=0.3, γ=0.1 (general-purpose)
-        - Forgetful: α=0.4, β=0.3, γ=0.3 (high memory decay)
-        - Explorer: α=0.3, β=0.6, γ=0.1 (curiosity-driven)
-        - Cautious: α=0.5, β=0.2, γ=0.3 (risk-averse)
+        - Balanced: Î±=0.6, Î²=0.3, Î³=0.1 (general-purpose)
+        - Forgetful: Î±=0.4, Î²=0.3, Î³=0.3 (high memory decay)
+        - Explorer: Î±=0.3, Î²=0.6, Î³=0.1 (curiosity-driven)
+        - Cautious: Î±=0.5, Î²=0.2, Î³=0.3 (risk-averse)
     """
     name: str
     memory_capacity: int = 7
     memory_decay_rate: float = 0.95
-    decay_rate: float = 0.01  # Exponential decay rate λ for memory
+    decay_rate: float = 0.01  # Exponential decay rate Î» for memory
     vision_radius: int = 5
     vision_accuracy: float = 0.9
     vision_cone: float = 360.0
@@ -1431,10 +1431,10 @@ class PersonaConfig:
     satisficing_threshold: float = 0.8  # Accept "good enough" solutions
     random_tiebreaker: float = 0.1      # Randomness in equal-score decisions
     
-    # Utility function weights (α, β, γ)
-    goal_weight: float = 0.6        # α: goal progress weight
-    curiosity_weight: float = 0.3   # β: information gain weight  
-    risk_weight: float = 0.1        # γ: risk avoidance weight
+    # Utility function weights (Î±, Î², Î³)
+    goal_weight: float = 0.6        # Î±: goal progress weight
+    curiosity_weight: float = 0.3   # Î²: information gain weight  
+    risk_weight: float = 0.1        # Î³: risk avoidance weight
     
     @classmethod
     def get_persona(cls, persona: AgentPersona) -> 'PersonaConfig':
@@ -1480,9 +1480,9 @@ class PersonaConfig:
                 },
                 satisficing_threshold=0.7,
                 random_tiebreaker=0.2,    # Some randomness
-                goal_weight=0.3,      # α = 0.3
-                curiosity_weight=0.6, # β = 0.6
-                risk_weight=0.1,      # γ = 0.1
+                goal_weight=0.3,      # Î± = 0.3
+                curiosity_weight=0.6, # Î² = 0.6
+                risk_weight=0.1,      # Î³ = 0.1
             )
         
         elif persona == AgentPersona.CAUTIOUS:
@@ -1503,9 +1503,9 @@ class PersonaConfig:
                 },
                 satisficing_threshold=0.9,
                 random_tiebreaker=0.05,
-                goal_weight=0.5,      # α = 0.5
-                curiosity_weight=0.2, # β = 0.2
-                risk_weight=0.3,      # γ = 0.3
+                goal_weight=0.5,      # Î± = 0.5
+                curiosity_weight=0.2, # Î² = 0.2
+                risk_weight=0.3,      # Î³ = 0.3
             )
         
         elif persona == AgentPersona.FORGETFUL:
@@ -1513,7 +1513,7 @@ class PersonaConfig:
                 name="Forgetful",
                 memory_capacity=4,        # Cowan's number
                 memory_decay_rate=0.80,   # Fast decay!
-                decay_rate=0.03,          # λ = 0.03 (faster forgetting)
+                decay_rate=0.03,          # Î» = 0.03 (faster forgetting)
                 vision_radius=4,          # Poor awareness
                 vision_cone=120.0,
                 vision_accuracy=0.85,
@@ -1526,9 +1526,9 @@ class PersonaConfig:
                 },
                 satisficing_threshold=0.6,
                 random_tiebreaker=0.3,    # More random (confused)
-                goal_weight=0.4,      # α = 0.4
-                curiosity_weight=0.3, # β = 0.3
-                risk_weight=0.3,      # γ = 0.3
+                goal_weight=0.4,      # Î± = 0.4
+                curiosity_weight=0.3, # Î² = 0.3
+                risk_weight=0.3,      # Î³ = 0.3
             )
         
         elif persona == AgentPersona.COMPLETIONIST:
@@ -1555,13 +1555,13 @@ class PersonaConfig:
             )
         
         elif persona == AgentPersona.GREEDY:
-            # GREEDY/STATIC BASELINE: No memory decay (λ=1.0)
+            # GREEDY/STATIC BASELINE: No memory decay (Î»=1.0)
             # This persona proves memory decay is the "active ingredient"
             # by comparing performance with decay disabled
             return cls(
                 name="Greedy (Static)",
                 memory_capacity=7,
-                memory_decay_rate=1.0,   # NO DECAY - λ=1.0 (Ebbinghaus control)
+                memory_decay_rate=1.0,   # NO DECAY - Î»=1.0 (Ebbinghaus control)
                 decay_rate=0.0,          # Zero decay rate
                 vision_radius=5,
                 vision_accuracy=0.9,
@@ -1575,9 +1575,9 @@ class PersonaConfig:
                 },
                 satisficing_threshold=0.9,
                 random_tiebreaker=0.05,
-                goal_weight=0.7,      # α = 0.7 (goal-focused)
-                curiosity_weight=0.2, # β = 0.2
-                risk_weight=0.1,      # γ = 0.1
+                goal_weight=0.7,      # Î± = 0.7 (goal-focused)
+                curiosity_weight=0.2, # Î² = 0.2
+                risk_weight=0.1,      # Î³ = 0.1
             )
         
         else:  # BALANCED
@@ -1598,9 +1598,9 @@ class PersonaConfig:
                 },
                 satisficing_threshold=0.8,
                 random_tiebreaker=0.15,
-                goal_weight=0.6,      # α = 0.6
-                curiosity_weight=0.3, # β = 0.3
-                risk_weight=0.1,      # γ = 0.1
+                goal_weight=0.6,      # Î± = 0.6
+                curiosity_weight=0.3, # Î² = 0.3
+                risk_weight=0.1,      # Î³ = 0.1
             )
 
 
@@ -1649,7 +1649,7 @@ PERSONA_CONFIGS: Dict[str, PersonaConfig] = {
     'greedy': PersonaConfig(
         name="Greedy (Static)",
         memory_capacity=7,
-        memory_decay_rate=1.0,   # NO DECAY - λ=1.0 (static baseline)
+        memory_decay_rate=1.0,   # NO DECAY - Î»=1.0 (static baseline)
         decay_rate=0.0,          # Zero decay
         goal_weight=0.7,
         curiosity_weight=0.2,
@@ -1715,7 +1715,7 @@ class CognitiveBoundedSearch:
     realistic player behavior with:
     - Limited vision (field of view)
     - Decaying memory (forgetting)
-    - Bounded working memory (7±2 items)
+    - Bounded working memory (7Â±2 items)
     - Satisficing (accepting "good enough" choices)
     - Multiple decision heuristics
     
@@ -2129,7 +2129,7 @@ class CognitiveBoundedSearch:
                         candidates.append(best)
                         if len(candidates) >= num:
                             break
-            except Exception as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                 logger.debug("MissionGrammar-assisted subgoal generation unavailable; using belief-map fallback: %s", exc)
 
         # 4) Frontier (observed but unvisited)
@@ -2255,7 +2255,7 @@ class CognitiveBoundedSearch:
         base = (total_score / total_weight) if total_weight > 0 else 0.0
 
         # Explicit bounded-rational utility:
-        # U = α·goal_progress + β·info_gain - γ·risk
+        # U = Î±Â·goal_progress + Î²Â·info_gain - Î³Â·risk
         goal_progress = 0.0
         if self.env.goal_pos is not None:
             curr = cog_state.game_state.position
@@ -2333,7 +2333,7 @@ class CognitiveBoundedSearch:
         nav_entropy = self._compute_entropy(dict(self._direction_counts))
         
         # Room/Tile Navigational Entropy (CBS Paper Formula D)
-        # H = -Σ p(room) × log₂(p(room)) where p(room) = visits(room) / total_visits
+        # H = -Î£ p(room) Ã— logâ‚‚(p(room)) where p(room) = visits(room) / total_visits
         room_entropy = self._compute_room_entropy(dict(self._visit_counts))
         
         # Cognitive load
@@ -2432,7 +2432,7 @@ class CognitiveBoundedSearch:
         Compute Navigational Entropy from room/tile visit distribution.
         
         Formula (CBS Paper Section 4):
-            H = -Σ p(room) × log₂(p(room))
+            H = -Î£ p(room) Ã— logâ‚‚(p(room))
             where p(room) = visits(room) / total_visits
         
         This measures how uniformly the agent explores the space.

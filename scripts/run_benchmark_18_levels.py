@@ -153,7 +153,7 @@ def run_full_18(
                         print(f'  {map_id} CBS+/{persona_name}: ok={success_c}  path={pl_c}  '
                               f'CR={cr:.2f}  CI={metrics.confusion_index:.3f}  {dt_c:.1f}s')
 
-            except Exception as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                 if verbose:
                     print(f'  {map_id}: ERROR â€” {exc}')
                 import traceback; traceback.print_exc()

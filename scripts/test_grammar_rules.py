@@ -1,4 +1,4 @@
-"""
+﻿"""
 Test script to validate all mission grammar production rules.
 
 Tests each rule individually and verifies they can be applied correctly.
@@ -30,7 +30,7 @@ def test_basic_generation():
         max_keys=2,
     )
     
-    print(f"✓ Generated graph with {len(graph.nodes)} nodes and {len(graph.edges)} edges")
+    print(f"âœ“ Generated graph with {len(graph.nodes)} nodes and {len(graph.edges)} edges")
     
     # Check for required nodes
     start = graph.get_start_node()
@@ -38,11 +38,11 @@ def test_basic_generation():
     
     assert start is not None, "START node missing"
     assert goal is not None, "GOAL node missing"
-    print(f"✓ START and GOAL nodes present")
+    print(f"âœ“ START and GOAL nodes present")
     
     # Validate lock-key ordering
     valid = grammar.validate_lock_key_ordering(graph)
-    print(f"✓ Lock-key ordering valid: {valid}")
+    print(f"âœ“ Lock-key ordering valid: {valid}")
     
     return graph
 
@@ -79,9 +79,9 @@ def test_individual_rules():
         # Try to apply rule
         if rule.can_apply(graph, context):
             graph = rule.apply(graph, context)
-            print(f"✓ {rule_name:20s} - Applied successfully (nodes: {initial_nodes}→{len(graph.nodes)}, edges: {initial_edges}→{len(graph.edges)})")
+            print(f"âœ“ {rule_name:20s} - Applied successfully (nodes: {initial_nodes}â†’{len(graph.nodes)}, edges: {initial_edges}â†’{len(graph.edges)})")
         else:
-            print(f"⊘ {rule_name:20s} - Cannot apply (preconditions not met)")
+            print(f"âŠ˜ {rule_name:20s} - Cannot apply (preconditions not met)")
 
 
 def test_node_types():
@@ -104,7 +104,7 @@ def test_node_types():
         for node in graph.nodes.values():
             all_node_types.add(node.node_type)
     
-    print(f"✓ Found {len(all_node_types)} unique node types across 10 generations:")
+    print(f"âœ“ Found {len(all_node_types)} unique node types across 10 generations:")
     for node_type in sorted(all_node_types, key=lambda x: x.value):
         print(f"  - {node_type.name}")
 
@@ -128,7 +128,7 @@ def test_edge_types():
         for edge in graph.edges:
             all_edge_types.add(edge.edge_type)
     
-    print(f"✓ Found {len(all_edge_types)} unique edge types across 10 generations:")
+    print(f"âœ“ Found {len(all_edge_types)} unique edge types across 10 generations:")
     for edge_type in sorted(all_edge_types, key=lambda x: x.value):
         print(f"  - {edge_type.name}")
 
@@ -147,27 +147,27 @@ def test_helper_methods():
     goal = graph.get_goal_node()
     if start and goal:
         path_len = graph.get_shortest_path_length(start.id, goal.id)
-        print(f"✓ get_shortest_path_length: START→GOAL = {path_len} hops")
+        print(f"âœ“ get_shortest_path_length: STARTâ†’GOAL = {path_len} hops")
     
     # Test get_node_degree
     for node_id in list(graph.nodes.keys())[:3]:
         degree = graph.get_node_degree(node_id)
-        print(f"✓ get_node_degree: Node {node_id} has degree {degree}")
+        print(f"âœ“ get_node_degree: Node {node_id} has degree {degree}")
     
     # Test get_manhattan_distance
     nodes = list(graph.nodes.keys())
     if len(nodes) >= 2:
         dist = graph.get_manhattan_distance(nodes[0], nodes[1])
-        print(f"✓ get_manhattan_distance: {nodes[0]}↔{nodes[1]} = {dist} units")
+        print(f"âœ“ get_manhattan_distance: {nodes[0]}â†”{nodes[1]} = {dist} units")
     
     # Test get_reachable_nodes
     if start:
         reachable = graph.get_reachable_nodes(start.id)
-        print(f"✓ get_reachable_nodes: {len(reachable)} nodes reachable from START")
+        print(f"âœ“ get_reachable_nodes: {len(reachable)} nodes reachable from START")
     
     # Test get_nodes_with_degree_less_than
     low_degree = graph.get_nodes_with_degree_less_than(3)
-    print(f"✓ get_nodes_with_degree_less_than: {len(low_degree)} nodes with degree < 3")
+    print(f"âœ“ get_nodes_with_degree_less_than: {len(low_degree)} nodes with degree < 3")
 
 
 def test_3d_positions():
@@ -185,12 +185,12 @@ def test_3d_positions():
         if len(node.position) == 3:
             has_3d = True
             if node.position[2] > 0:
-                print(f"✓ Found node {node.id} ({node.node_type.name}) on floor {node.position[2]}")
+                print(f"âœ“ Found node {node.id} ({node.node_type.name}) on floor {node.position[2]}")
     
     if has_3d:
-        print(f"✓ 3D positions supported")
+        print(f"âœ“ 3D positions supported")
     else:
-        print(f"⚠ No nodes on non-zero floors (may be random)")
+        print(f"âš  No nodes on non-zero floors (may be random)")
 
 
 def print_detailed_graph(graph):
@@ -227,7 +227,7 @@ def print_detailed_graph(graph):
             extras.append(f"switch={edge.switch_id}")
         
         extra_str = f" [{', '.join(extras)}]" if extras else ""
-        print(f"  {edge.source:2d} → {edge.target:2d}  ({edge.edge_type.name:15s}){extra_str}")
+        print(f"  {edge.source:2d} â†’ {edge.target:2d}  ({edge.edge_type.name:15s}){extra_str}")
 
 
 if __name__ == '__main__':
@@ -248,11 +248,11 @@ if __name__ == '__main__':
         print_detailed_graph(graph)
         
         print("\n" + "=" * 60)
-        print("✓ ALL TESTS PASSED")
+        print("âœ“ ALL TESTS PASSED")
         print("=" * 60)
         
-    except Exception as e:
-        print(f"\n✗ TEST FAILED: {e}")
+    except (AttributeError, RuntimeError, ValueError, TypeError) as e:
+        print(f"\nâœ— TEST FAILED: {e}")
         import traceback
         traceback.print_exc()
         sys.exit(1)

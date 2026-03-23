@@ -475,7 +475,7 @@ class NeuralSymbolicDungeonPipeline:
                 tpe=graph_context.get('tpe'),
                 current_node_idx=graph_context.get('current_node_idx'),
             )
-        except Exception as e:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as e:
             self._bump_diagnostic("condition_encoder_fallback")
             logger.warning(f"Condition encoding failed: {e}, using zero condition")
             condition = torch.zeros(1, 256, device=self.device)
@@ -519,7 +519,7 @@ class NeuralSymbolicDungeonPipeline:
                         usage_np = np.asarray(usage_np[:active_codebook_size], dtype=np.float64)
                         if float(np.sum(usage_np)) > 0.0:
                             probs = usage_np
-            except Exception as e:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as e:
                 self._bump_diagnostic("categorical_prior_fallback")
                 logger.debug("Falling back to uniform categorical priors (codebook usage unavailable): %s", e)
             probs = np.asarray(probs, dtype=np.float64)
@@ -605,7 +605,7 @@ class NeuralSymbolicDungeonPipeline:
                 else:
                     logger.warning(f"Room {room_id}: Repair failed, using neural output")
                 self._bump_diagnostic("wfc_feedback_attempts")
-            except Exception as e:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as e:
                 self._bump_diagnostic("room_repair_exception")
                 logger.error(f"Room {room_id}: Repair error: {e}")
         
@@ -836,7 +836,7 @@ class NeuralSymbolicDungeonPipeline:
                         advanced_stats = self.map_elites.advanced_archive_stats()
                         if advanced_stats is not None:
                             map_elites_score['advanced_archive'] = advanced_stats
-            except Exception as e:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as e:
                 logger.warning(f"MAP-Elites evaluation failed: {e}")
         
         # Compute overall metrics
@@ -1160,7 +1160,7 @@ class NeuralSymbolicDungeonPipeline:
                 'is_valid_syntax': bool(result.is_valid_syntax),
                 'error_message': str(result.error_message) if result.error_message else "",
             }
-        except Exception as e:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as e:
             self._bump_diagnostic("dungeon_validation_fallback")
             logger.warning(f"Dungeon validation failed: {e}")
             return {

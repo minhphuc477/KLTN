@@ -1,4 +1,4 @@
-"""
+﻿"""
 ZELDA DUNGEON CORE - Clean Implementation
 =========================================
 Core logic for VGLC room extraction, graph alignment, and dungeon stitching.
@@ -6,7 +6,7 @@ Core logic for VGLC room extraction, graph alignment, and dungeon stitching.
 This is the SINGLE SOURCE OF TRUTH for all dungeon processing.
 
 VGLC Format (Zelda Dungeons):
-- Each room is 16 rows × 11 columns
+- Each room is 16 rows x 11 columns
 - Rooms are arranged in a grid with possible gaps (void regions)
 - Characters: F=floor, W=wall, D=door, S=stair, B=block, M=monster, P=element
 
@@ -118,7 +118,7 @@ class GridBasedRoomExtractor:
         
         wall_count = np.sum(slot_grid == self.WALL_MARKER)
         
-        # Count door tiles explicitly — corridor rooms may have only doors
+        # Count door tiles explicitly - corridor rooms may have only doors
         # as non-wall/non-gap content
         door_count = int(np.sum(slot_grid == 'D'))
         
@@ -340,8 +340,8 @@ class MLFeatureExtractor:
 class Room:
     """A single dungeon room."""
     position: Tuple[int, int]  # (row, col) in VGLC grid
-    char_grid: np.ndarray      # Raw character grid (16×11)
-    semantic_grid: np.ndarray  # Semantic ID grid (16×11)
+    char_grid: np.ndarray      # Raw character grid (16x11)
+    semantic_grid: np.ndarray  # Semantic ID grid (16x11)
     doors: Dict[str, bool]     # {N, S, E, W} -> has_door
     has_stair: bool
     has_triforce: bool = False
@@ -895,7 +895,7 @@ class DOTParser:
             parts = parse_node_label_tokens(label)
             label_norm = normalize_node_label(label)
             
-            # The 's' node is a START POINTER — it indicates which room
+            # The 's' node is a START POINTER - it indicates which room
             # the player enters first. It is NOT a physical room.
             # is_start_pointer=True means this node should NOT be assigned
             # a room grid in the matching phase.
@@ -975,22 +975,22 @@ class HybridLayoutEngine:
     - Edge crossings are minimised
 
     Phases:
-        1. **Spectral initialisation** – Laplacian eigenvectors give a
+        1. **Spectral initialisation** - Laplacian eigenvectors give a
            continuous 2-D embedding that respects graph topology.
-        2. **Grid snapping** – Round to integer coords & resolve collisions
+        2. **Grid snapping** - Round to integer coords & resolve collisions
            with a spiral search.
-        3. **Simulated Annealing** – Stochastic refinement with an energy
+        3. **Simulated Annealing** - Stochastic refinement with an energy
            function that penalises overlap, long edges, crossings, and
            rewards compactness and boss-far-from-start.
-        4. **Collision resolution** – Final pass to guarantee no overlaps
+        4. **Collision resolution** - Final pass to guarantee no overlaps
            remain.
 
-    The ``s`` (start-pointer) node is *excluded* from placement — it is
+    The ``s`` (start-pointer) node is *excluded* from placement - it is
     a virtual pointer and should not occupy a grid cell.
     """
 
     # --- Energy weights (tune-able) ---
-    W_OVERLAP   = 1000.0   # per overlap — must be very heavy
+    W_OVERLAP   = 1000.0   # per overlap - must be very heavy
     W_EDGE_LEN  = 5.0      # per unit of Manhattan distance for connected pairs
     W_BOSS_FAR  = 8.0      # bonus per unit of Manhattan dist(boss, start)
     W_COMPACT   = 2.0      # penalty per unit of bounding-box area
@@ -1016,7 +1016,7 @@ class HybridLayoutEngine:
         Compute a grid layout for *physical* nodes of *graph*.
 
         The ``s`` start-pointer node (``is_start_pointer=True``) is
-        excluded — it is a virtual pointer, not a room.
+        excluded - it is a virtual pointer, not a room.
 
         Returns
         -------
@@ -1059,7 +1059,7 @@ class HybridLayoutEngine:
         return grid_pos
 
     # ------------------------------------------------------------------
-    # Phase 1 — Spectral
+    # Phase 1 - Spectral
     # ------------------------------------------------------------------
     def _spectral_init(self, G: nx.Graph, nodes: List[int]) -> Dict[int, Tuple[float, float]]:
         """Return continuous 2-D positions from Laplacian eigenvectors."""
@@ -1091,7 +1091,7 @@ class HybridLayoutEngine:
         return {nodes[i]: (float(x[i]), float(y[i])) for i in range(n)}
 
     # ------------------------------------------------------------------
-    # Phase 2 — Grid snap
+    # Phase 2 - Grid snap
     # ------------------------------------------------------------------
     def _snap_to_grid(self, coords: Dict[int, Tuple[float, float]],
                       nodes: List[int]) -> Dict[int, Tuple[int, int]]:
@@ -1127,7 +1127,7 @@ class HybridLayoutEngine:
         return (r + 200, c)
 
     # ------------------------------------------------------------------
-    # Phase 3 — Simulated Annealing
+    # Phase 3 - Simulated Annealing
     # ------------------------------------------------------------------
     def _simulated_annealing(self, pos: Dict[int, Tuple[int, int]],
                               G: nx.Graph, nodes: List[int],
@@ -1247,7 +1247,7 @@ class HybridLayoutEngine:
             """Check if segment p1-p2 crosses p3-p4 (proper crossing)."""
             def ccw(A, B, C):
                 return (C[1]-A[1]) * (B[0]-A[0]) > (B[1]-A[1]) * (C[0]-A[0])
-            # Share an endpoint → not a crossing
+            # Share an endpoint -> not a crossing
             if p1 == p3 or p1 == p4 or p2 == p3 or p2 == p4:
                 return False
             return (ccw(p1,p3,p4) != ccw(p2,p3,p4)) and (ccw(p1,p2,p3) != ccw(p1,p2,p4))
@@ -1263,7 +1263,7 @@ class HybridLayoutEngine:
         return count
 
     # ------------------------------------------------------------------
-    # Phase 4 — Final collision resolution
+    # Phase 4 - Final collision resolution
     # ------------------------------------------------------------------
     def _resolve_collisions(self, pos: Dict[int, Tuple[int, int]],
                             nodes: List[int]) -> Dict[int, Tuple[int, int]]:
@@ -1387,12 +1387,12 @@ class RoomGraphMatcher:
                 _boss_node = node
         
         # CRITICAL: Handle the 's' start pointer node
-        # The 's' node is NOT a physical room — it's a pointer to the first room.
+        # The 's' node is NOT a physical room - it's a pointer to the first room.
         # We must find the actual first room (the neighbor of 's') and use that
         # as the BFS seed for room-to-node matching.
         actual_start_node = start_node  # Default: use start_node as seed
         if start_pointer_node is not None:
-            # Find the neighbor of the start pointer — that's the actual first room
+            # Find the neighbor of the start pointer - that's the actual first room
             neighbors = list(graph.successors(start_pointer_node)) + list(graph.predecessors(start_pointer_node))
             if neighbors:
                 actual_start_node = neighbors[0]  # First neighbor is the entry room
@@ -1622,7 +1622,7 @@ class RoomGraphMatcher:
                     used_r.add(i)
                     used_n.add(n)
                     assigned_pairs.append((R[i], n))
-            except Exception as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                 logger.debug("Local Hungarian assignment failed; using deterministic greedy fallback: %s", exc)
                 pairs = []
                 for i, r in enumerate(R):
@@ -1652,7 +1652,7 @@ class RoomGraphMatcher:
 
         # FALLBACK: Global assignment for remaining unmapped rooms/nodes (deterministic)
         unmapped_rooms = sorted([pos for pos in rooms.keys() if pos not in room_to_node])
-        # Exclude start pointer nodes — they are virtual (not physical rooms)
+        # Exclude start pointer nodes - they are virtual (not physical rooms)
         unmapped_nodes = sorted([n for n in graph.nodes() if n not in node_to_room
                                   and not graph.nodes[n].get('is_start_pointer', False)],
                                  key=lambda x: self._node_signature(graph, x))
@@ -1701,7 +1701,7 @@ class RoomGraphMatcher:
                     node_to_room[n] = r
                     used_r.add(r)
                     used_n.add(n)
-            except Exception as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                 logger.debug("Global Hungarian assignment failed; using deterministic greedy fallback: %s", exc)
                 pairs = []
                 for i, r in enumerate(R):
@@ -1777,7 +1777,7 @@ class RoomGraphMatcher:
         # This handles cases where BFS couldn't reach a room (e.g., behind a boss).
         if still_unmapped_rooms and still_unmapped_nodes:
             logger.debug(
-                "RESIDUAL_MATCH: %d unmapped rooms %s, %d unmapped nodes %s — attempting 1:1 assignment",
+                "RESIDUAL_MATCH: %d unmapped rooms %s, %d unmapped nodes %s - attempting 1:1 assignment",
                 len(still_unmapped_rooms), still_unmapped_rooms,
                 len(still_unmapped_nodes), still_unmapped_nodes
             )
@@ -1928,7 +1928,7 @@ class RoomGraphMatcher:
             data['label'] = s
             parts = parse_node_label_tokens(s)
             parts_l = {p.lower() for p in parts}
-            # Canonical flags — use parts-based detection to handle
+            # Canonical flags - use parts-based detection to handle
             # composite labels like "e,k" correctly (avoid matching 
             # 'b' in 'boss' against the substring)
             has_start_pointer_token = 's' in parts
@@ -2131,7 +2131,7 @@ class RoomGraphMatcher:
                         confidences[nid] = max(confidences.get(nid, 0.0), spectral_confs.get(nid, 0.1))
                 unmatched_nodes = [n for n in unmatched_nodes if n not in proposed_node_to_room]
                 unmatched_rooms = [r for r in unmatched_rooms if r not in proposed_room_to_node]
-            except Exception as e:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as e:
                 logger.exception("seeded_spectral_match failed during infer_missing_mappings: %s", e) 
 
         # 5) Build score matrix for remaining unmatched nodes/rooms
@@ -2177,7 +2177,7 @@ class RoomGraphMatcher:
                 s = score_matrix.get((n, r), 0.0)
                 if s > 0:
                     assigned_pairs.append((n, r))
-        except Exception as e:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as e:
             logger.exception("Hungarian assignment failed; falling back to greedy assignment: %s", e)
             # fallback greedy matching
             local_scores = dict(score_matrix)
@@ -2213,7 +2213,7 @@ class RoomGraphMatcher:
                 # update confidences
                 for n, r in refined.items():
                     confidences[n] = max(confidences.get(n, 0.1), float(score_matrix.get((n, r), 0.1)))
-        except Exception as e:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as e:
             logger.exception("Local refinement of assignments failed: %s", e) 
 
         # Final safety: filter by confidence_threshold if requested
@@ -2477,7 +2477,7 @@ class RoomGraphMatcher:
         import numpy as np
         try:
             from scipy.linalg import orthogonal_procrustes
-        except Exception as e:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as e:
             logger.debug("scipy.linalg.orthogonal_procrustes not available: %s", e)
             orthogonal_procrustes = None
 
@@ -2545,7 +2545,7 @@ class RoomGraphMatcher:
         if orthogonal_procrustes is not None:
             try:
                 R, _scale = orthogonal_procrustes(X, Y)
-            except Exception as e:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as e:
                 logger.exception("orthogonal_procrustes failed in seeded_spectral_match: %s", e)
                 R = None
         else:
@@ -2553,7 +2553,7 @@ class RoomGraphMatcher:
             try:
                 U, _s, Vt = np.linalg.svd(X.T.dot(Y))
                 R = U.dot(Vt)
-            except Exception as e:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as e:
                 logger.exception("SVD-based alignment failed in seeded_spectral_match: %s", e)
                 R = None
 
@@ -2583,7 +2583,7 @@ class RoomGraphMatcher:
                 dist = cost[i, j]
                 confidences[nid] = float(max(0.01, 1.0 - (dist / (maxd + 1e-6))))
             return proposals, confidences
-        except Exception as e:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as e:
             logger.exception("Spectral matching assignment failed: %s", e)
             return {}, {}
 
@@ -3268,8 +3268,8 @@ class DungeonStitcher:
         
         VGLC rooms may not have ENEMY/BOSS tiles if the raw text files don't
         include monsters. The graph specifies which rooms should have entities:
-        - 'e' = enemy room → at least 1 ENEMY tile
-        - 'b' = boss room → at least 1 BOSS tile
+        - 'e' = enemy room -> at least 1 ENEMY tile
+        - 'b' = boss room -> at least 1 BOSS tile
         
         Only places entities if the room doesn't already have them.
         """
@@ -3607,7 +3607,7 @@ class ZeldaDungeonAdapter:
             try:
                 if not nx.has_path(G.to_undirected(), start_node, triforce_node):
                     return False, 'PRECHECK_FAIL: Start and triforce disconnected in topology'
-            except Exception as e:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as e:
                 # Keep optimistic pass to avoid false negatives, but expose the failure.
                 logger.warning(
                     "precheck_dungeon: topology path check failed, continuing best-effort: %s",
@@ -3701,7 +3701,7 @@ class ZeldaDungeonAdapter:
                 key_count = max(tile_key_count, graph_key_count)
                 if key_count < min_locked:
                     return False, f'PRECHECK_FAIL: Insufficient small keys (need {min_locked}, have {key_count})'
-        except Exception as e:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as e:
             # Keep precheck best-effort, but expose diagnostics instead of swallowing.
             logger.warning(
                 "precheck_dungeon: locked-door lower-bound check failed, continuing best-effort: %s",
@@ -4365,7 +4365,7 @@ def test_all_dungeons(data_root: str, include_variants: bool = True) -> Dict[str
                     logger.debug("%s Path: %d steps, %d rooms", dungeon_key, result['path_length'], result['rooms_traversed'])
                 else:
                     logger.debug("%s Reason: %s", dungeon_key, result.get('reason', 'Unknown'))
-            except Exception as e:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as e:
                 results[dungeon_key] = {'solvable': False, 'error': str(e)}
                 logger.exception("%s: ERROR during processing", dungeon_key)
     

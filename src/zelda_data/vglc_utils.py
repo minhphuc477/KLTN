@@ -1,4 +1,4 @@
-"""
+﻿"""
 VGLC Compliance Utilities
 ==========================
 
@@ -126,7 +126,7 @@ class EdgeAttributes:
             flags.append("oneway")
         
         flag_str = f" [{', '.join(flags)}]" if flags else ""
-        return f"Edge({self.source}→{self.target}, {type_name}{flag_str})"
+        return f"Edge({self.source}â†’{self.target}, {type_name}{flag_str})"
 
 
 @dataclass
@@ -170,7 +170,7 @@ class TopologyReport:
         lines.append("=" * 60)
         
         # Overall status
-        status = "✅ VALID" if self.is_valid else "❌ INVALID"
+        status = "âœ… VALID" if self.is_valid else "âŒ INVALID"
         lines.append(f"\nStatus: {status}")
         
         # Metrics
@@ -189,20 +189,20 @@ class TopologyReport:
         
         # Connectivity
         lines.append(f"\nConnectivity:")
-        lines.append(f"  Connected: {'✅' if self.is_connected else '❌'}")
+        lines.append(f"  Connected: {'âœ…' if self.is_connected else 'âŒ'}")
         lines.append(f"  Components: {self.num_components}")
         if self.isolated_nodes:
             lines.append(f"  Isolated Nodes: {self.isolated_nodes}")
         
         # Goal subgraph
         lines.append(f"\nGoal Subgraph:")
-        lines.append(f"  Exists: {'✅' if self.has_goal_subgraph else '❌'}")
-        lines.append(f"  Valid: {'✅' if self.goal_subgraph_valid else '❌'}")
+        lines.append(f"  Exists: {'âœ…' if self.has_goal_subgraph else 'âŒ'}")
+        lines.append(f"  Valid: {'âœ…' if self.goal_subgraph_valid else 'âŒ'}")
         lines.append(f"  Message: {self.goal_subgraph_message}")
         
         # Start node
         lines.append(f"\nStart Node:")
-        lines.append(f"  Found: {'✅' if self.has_start else '❌'}")
+        lines.append(f"  Found: {'âœ…' if self.has_start else 'âŒ'}")
         if self.start_node is not None:
             lines.append(f"  Node ID: {self.start_node}")
         
@@ -210,13 +210,13 @@ class TopologyReport:
         if self.warnings:
             lines.append(f"\nWarnings ({len(self.warnings)}):")
             for warning in self.warnings:
-                lines.append(f"  ⚠️  {warning}")
+                lines.append(f"  âš ï¸  {warning}")
         
         # Errors
         if self.errors:
             lines.append(f"\nErrors ({len(self.errors)}):")
             for error in self.errors:
-                lines.append(f"  ❌ {error}")
+                lines.append(f"  âŒ {error}")
         
         lines.append("=" * 60)
         return "\n".join(lines)
@@ -235,10 +235,10 @@ class VGLCGraphParser:
         Parse composite node labels.
         
         Examples:
-            "e,k,p" → {"e", "k", "p"}
-            "b" → {"b"}
-            "s" → {"s"}
-            "" → set()
+            "e,k,p" â†’ {"e", "k", "p"}
+            "b" â†’ {"b"}
+            "s" â†’ {"s"}
+            "" â†’ set()
         
         Args:
             label: Raw label string from graph node
@@ -415,8 +415,8 @@ class VGLCTopologyValidator:
         removes them and marks their successors as entry points.
         
         Example:
-            Before: s (virtual) → 8 (physical) → 9
-            After:  8 (entry=True) → 9
+            Before: s (virtual) â†’ 8 (physical) â†’ 9
+            After:  8 (entry=True) â†’ 9
         
         Args:
             graph: NetworkX graph (may contain virtual nodes)
@@ -432,7 +432,7 @@ class VGLCTopologyValidator:
         for vnode in virtual_nodes:
             # Get successors (physical nodes)
             successors = list(graph.successors(vnode))
-            logger.debug(f"Virtual node {vnode} → successors {successors}")
+            logger.debug(f"Virtual node {vnode} â†’ successors {successors}")
             
             # Remove virtual node
             filtered.remove_node(vnode)
@@ -471,7 +471,7 @@ class VGLCTopologyValidator:
                 else:
                     successors = list(graph.neighbors(node))
                 if successors:
-                    logger.info(f"Found start pointer {node} → physical start {successors[0]}")
+                    logger.info(f"Found start pointer {node} â†’ physical start {successors[0]}")
                     return successors[0]
         
         # Find node marked as entry
@@ -668,8 +668,8 @@ class VGLCDimensionValidator:
         height, width = room_array.shape
         
         if height != ROOM_HEIGHT_TILES or width != ROOM_WIDTH_TILES:
-            return False, (f"Wrong dimensions: {height}×{width} "
-                          f"(expected {ROOM_HEIGHT_TILES}×{ROOM_WIDTH_TILES})")
+            return False, (f"Wrong dimensions: {height}Ã—{width} "
+                          f"(expected {ROOM_HEIGHT_TILES}Ã—{ROOM_WIDTH_TILES})")
         
         return True, "Valid dimensions"
     
@@ -699,8 +699,8 @@ class VGLCDimensionValidator:
         height, width = image_array.shape[:2]
         
         if height != expected_height or width != expected_width:
-            return False, (f"Wrong pixel dimensions: {height}×{width} "
-                          f"(expected {expected_height}×{expected_width})")
+            return False, (f"Wrong pixel dimensions: {height}Ã—{width} "
+                          f"(expected {expected_height}Ã—{expected_width})")
         
         return True, "Valid pixel dimensions"
     
@@ -710,7 +710,7 @@ class VGLCDimensionValidator:
         Validate room has standard VGLC shape.
         
         Checks:
-        - Correct dimensions (16×11)
+        - Correct dimensions (16Ã—11)
         - Wall perimeter present
         - Interior region exists
         
@@ -775,7 +775,7 @@ def load_vglc_graph(dot_path: Path) -> nx.DiGraph:
                    f"{graph.number_of_nodes()} nodes, "
                    f"{graph.number_of_edges()} edges")
         return graph
-    except Exception as e:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as e:
         logger.error(f"Failed to load graph from {dot_path}: {e}")
         raise
 

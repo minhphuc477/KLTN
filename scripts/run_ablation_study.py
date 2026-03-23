@@ -1,4 +1,4 @@
-"""
+﻿"""
 Thesis-grade ablation runner with fixed-seed paired comparisons.
 
 Implements:
@@ -556,7 +556,7 @@ class AblationStudy:
                     "_descriptor_vec": desc_vec.tolist(),
                 }
             )
-        except Exception as e:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as e:
             row["generation_time_sec"] = float(time.time() - started)
             row["error"] = f"{type(e).__name__}: {e}"
         return row

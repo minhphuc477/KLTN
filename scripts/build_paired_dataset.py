@@ -222,7 +222,7 @@ def build_paired_dataset(
                         
                         stats['rooms_saved'] += 1
                 
-            except Exception as e:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as e:
                 if verbose:
                     logger.warning(f"Failed to process dungeon {dungeon_num}v{variant}: {e}")
     

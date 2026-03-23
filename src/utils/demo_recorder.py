@@ -1,4 +1,4 @@
-"""
+﻿"""
 Feature 5: Demo Recording System
 =================================
 Automated GIF/video generation for thesis presentations and publications.
@@ -469,7 +469,7 @@ class DemoRecorder:
             frame_path = frame_root / f"frame_{frame_index:04d}.npy"
             np.save(str(frame_path), frame)
             logger.warning("PIL not available; saved raw frame array to %s", frame_path)
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             logger.exception("Failed to save frame %s: %s", frame_index, exc)
 
 

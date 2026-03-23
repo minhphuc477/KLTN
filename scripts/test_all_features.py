@@ -1,4 +1,4 @@
-"""
+﻿"""
 Test All 9 Advanced Features
 ==============================
 Validates that all 9 advanced features are correctly integrated and functional.
@@ -52,9 +52,9 @@ try:
     from src.utils.explainability import ExplainabilityManager, DecisionTrace, DecisionSource
     from src.utils.explainability_gui import ExplainabilityDebugOverlay
     
-    print("✓ All feature imports successful")
+    print("âœ“ All feature imports successful")
 except ImportError as e:
-    print(f"✗ Import failed: {e}")
+    print(f"âœ— Import failed: {e}")
     sys.exit(1)
 
 
@@ -126,8 +126,8 @@ class FeatureTester:
             assert smoothed.shape == dungeon_grid.shape
             assert not np.array_equal(smoothed, dungeon_grid)  # Should have changed
             
-            print(f"  ✓ Seam smoothing works ({elapsed:.3f}s)")
-            print(f"  ✓ Grid shape preserved: {smoothed.shape}")
+            print(f"  âœ“ Seam smoothing works ({elapsed:.3f}s)")
+            print(f"  âœ“ Grid shape preserved: {smoothed.shape}")
             
             self.results['seam_smoothing'] = {
                 'status': 'PASS',
@@ -137,8 +137,8 @@ class FeatureTester:
             
             return True
             
-        except Exception as e:
-            print(f"  ✗ Seam smoothing failed: {e}")
+        except (AttributeError, RuntimeError, ValueError, TypeError) as e:
+            print(f"  âœ— Seam smoothing failed: {e}")
             self.results['seam_smoothing'] = {'status': 'FAIL', 'error': str(e)}
             return False
     
@@ -173,9 +173,9 @@ class FeatureTester:
             assert hasattr(result, 'alignment_score')
             assert 0.0 <= result.alignment_score <= 1.0
             
-            print(f"  ✓ Collision validation works ({elapsed:.3f}s)")
-            print(f"  ✓ Alignment score: {result.alignment_score:.3f}")
-            print(f"  ✓ Valid: {result.is_valid}")
+            print(f"  âœ“ Collision validation works ({elapsed:.3f}s)")
+            print(f"  âœ“ Alignment score: {result.alignment_score:.3f}")
+            print(f"  âœ“ Valid: {result.is_valid}")
             
             self.results['collision_validator'] = {
                 'status': 'PASS',
@@ -185,8 +185,8 @@ class FeatureTester:
             
             return True
             
-        except Exception as e:
-            print(f"  ✗ Collision validator failed: {e}")
+        except (AttributeError, RuntimeError, ValueError, TypeError) as e:
+            print(f"  âœ— Collision validator failed: {e}")
             self.results['collision_validator'] = {'status': 'FAIL', 'error': str(e)}
             return False
     
@@ -228,9 +228,9 @@ class FeatureTester:
             assert visual_grid is not None
             assert visual_grid.shape == (semantic_grid.shape[0], semantic_grid.shape[1], 3)  # RGB
             
-            print(f"  ✓ Style transfer works ({elapsed:.3f}s)")
-            print(f"  ✓ Theme loaded: {zelda_theme.theme_name}")
-            print(f"  ✓ Grid transformed: {semantic_grid.shape} → {visual_grid.shape}")
+            print(f"  âœ“ Style transfer works ({elapsed:.3f}s)")
+            print(f"  âœ“ Theme loaded: {zelda_theme.theme_name}")
+            print(f"  âœ“ Grid transformed: {semantic_grid.shape} â†’ {visual_grid.shape}")
             
             self.results['style_transfer'] = {
                 'status': 'PASS',
@@ -240,8 +240,8 @@ class FeatureTester:
             
             return True
             
-        except Exception as e:
-            print(f"  ✗ Style transfer failed: {e}")
+        except (AttributeError, RuntimeError, ValueError, TypeError) as e:
+            print(f"  âœ— Style transfer failed: {e}")
             self.results['style_transfer'] = {'status': 'FAIL', 'error': str(e)}
             return False
     
@@ -291,10 +291,10 @@ class FeatureTester:
             assert hasattr(metrics, 'flow')
             assert hasattr(metrics, 'pacing')
             
-            print(f"  ✓ Fun metrics work ({elapsed:.3f}s)")
-            print(f"  ✓ Overall fun score: {metrics.overall_fun_score:.2f}/1.0")
-            print(f"  ✓ Frustration: {metrics.frustration.total_frustration:.2f}")
-            print(f"  ✓ Explorability: {metrics.explorability.discovery_potential:.2f}")
+            print(f"  âœ“ Fun metrics work ({elapsed:.3f}s)")
+            print(f"  âœ“ Overall fun score: {metrics.overall_fun_score:.2f}/1.0")
+            print(f"  âœ“ Frustration: {metrics.frustration.total_frustration:.2f}")
+            print(f"  âœ“ Explorability: {metrics.explorability.discovery_potential:.2f}")
             
             self.results['fun_metrics'] = {
                 'status': 'PASS',
@@ -304,8 +304,8 @@ class FeatureTester:
             
             return True
             
-        except Exception as e:
-            print(f"  ✗ Fun metrics failed: {e}")
+        except (AttributeError, RuntimeError, ValueError, TypeError) as e:
+            print(f"  âœ— Fun metrics failed: {e}")
             self.results['fun_metrics'] = {'status': 'FAIL', 'error': str(e)}
             return False
     
@@ -343,8 +343,8 @@ class FeatureTester:
             assert recorder.current_recording is not None
             assert len(recorder.current_recording.frames) == 5
             
-            print(f"  ✓ Demo recorder works ({elapsed:.3f}s)")
-            print(f"  ✓ Captured {len(recorder.current_recording.frames)} frames")
+            print(f"  âœ“ Demo recorder works ({elapsed:.3f}s)")
+            print(f"  âœ“ Captured {len(recorder.current_recording.frames)} frames")
             
             self.results['demo_recorder'] = {
                 'status': 'PASS',
@@ -354,8 +354,8 @@ class FeatureTester:
             
             return True
             
-        except Exception as e:
-            print(f"  ✗ Demo recorder failed: {e}")
+        except (AttributeError, RuntimeError, ValueError, TypeError) as e:
+            print(f"  âœ— Demo recorder failed: {e}")
             self.results['demo_recorder'] = {'status': 'FAIL', 'error': str(e)}
             return False
     
@@ -392,9 +392,9 @@ class FeatureTester:
             assert initial_state["water_level"] == "high"
             assert new_state["water_level"] == "low"
             
-            print(f"  ✓ Global state works ({elapsed:.3f}s)")
-            print(f"  ✓ State change: {initial_state['water_level']} → {new_state['water_level']}")
-            print(f"  ✓ Affected rooms: {sorted(affected_rooms)}")
+            print(f"  âœ“ Global state works ({elapsed:.3f}s)")
+            print(f"  âœ“ State change: {initial_state['water_level']} â†’ {new_state['water_level']}")
+            print(f"  âœ“ Affected rooms: {sorted(affected_rooms)}")
             
             self.results['global_state'] = {
                 'status': 'PASS',
@@ -404,8 +404,8 @@ class FeatureTester:
             
             return True
             
-        except Exception as e:
-            print(f"  ✗ Global state failed: {e}")
+        except (AttributeError, RuntimeError, ValueError, TypeError) as e:
+            print(f"  âœ— Global state failed: {e}")
             self.results['global_state'] = {'status': 'FAIL', 'error': str(e)}
             return False
     
@@ -431,20 +431,20 @@ class FeatureTester:
             assert boss_dims.height == 32
             assert boss_dims.width == 22
             
-            print(f"  ✓ Big room support works ({elapsed:.3f}s)")
-            print(f"  ✓ Standard room: {standard_dims.height}×{standard_dims.width}")
-            print(f"  ✓ Boss room: {boss_dims.height}×{boss_dims.width}")
+            print(f"  âœ“ Big room support works ({elapsed:.3f}s)")
+            print(f"  âœ“ Standard room: {standard_dims.height}Ã—{standard_dims.width}")
+            print(f"  âœ“ Boss room: {boss_dims.height}Ã—{boss_dims.width}")
             
             self.results['big_rooms'] = {
                 'status': 'PASS',
                 'time': elapsed,
-                'max_size': f"{boss_dims.height}×{boss_dims.width}"
+                'max_size': f"{boss_dims.height}Ã—{boss_dims.width}"
             }
             
             return True
             
-        except Exception as e:
-            print(f"  ✗ Big room support failed: {e}")
+        except (AttributeError, RuntimeError, ValueError, TypeError) as e:
+            print(f"  âœ— Big room support failed: {e}")
             self.results['big_rooms'] = {'status': 'FAIL', 'error': str(e)}
             return False
     
@@ -481,9 +481,9 @@ class FeatureTester:
             full_params = 768 * 768
             reduction = full_params / lora_params
             
-            print(f"  ✓ LCM-LoRA works ({elapsed:.3f}s)")
-            print(f"  ✓ LoRA params: {lora_params:,} (vs {full_params:,} full)")
-            print(f"  ✓ Parameter reduction: {reduction:.1f}×")
+            print(f"  âœ“ LCM-LoRA works ({elapsed:.3f}s)")
+            print(f"  âœ“ LoRA params: {lora_params:,} (vs {full_params:,} full)")
+            print(f"  âœ“ Parameter reduction: {reduction:.1f}Ã—")
             
             self.results['lcm_lora'] = {
                 'status': 'PASS',
@@ -493,8 +493,8 @@ class FeatureTester:
             
             return True
             
-        except Exception as e:
-            print(f"  ✗ LCM-LoRA failed: {e}")
+        except (AttributeError, RuntimeError, ValueError, TypeError) as e:
+            print(f"  âœ— LCM-LoRA failed: {e}")
             self.results['lcm_lora'] = {'status': 'FAIL', 'error': str(e)}
             return False
     
@@ -547,10 +547,10 @@ class FeatureTester:
             # Test export
             manager.export_json("outputs/test_explainability/test_traces.json")
             
-            print(f"  ✓ Explainability works ({elapsed:.3f}s)")
-            print(f"  ✓ Traces stored: {len(manager.traces)}")
-            print(f"  ✓ Query successful: found {len(traces_for_node)} traces for node 0")
-            print(f"  ✓ JSON export successful")
+            print(f"  âœ“ Explainability works ({elapsed:.3f}s)")
+            print(f"  âœ“ Traces stored: {len(manager.traces)}")
+            print(f"  âœ“ Query successful: found {len(traces_for_node)} traces for node 0")
+            print(f"  âœ“ JSON export successful")
             
             self.results['explainability'] = {
                 'status': 'PASS',
@@ -560,8 +560,8 @@ class FeatureTester:
             
             return True
             
-        except Exception as e:
-            print(f"  ✗ Explainability failed: {e}")
+        except (AttributeError, RuntimeError, ValueError, TypeError) as e:
+            print(f"  âœ— Explainability failed: {e}")
             self.results['explainability'] = {'status': 'FAIL', 'error': str(e)}
             return False
     
@@ -591,7 +591,7 @@ class FeatureTester:
         print("="*60)
         
         for feature, result in self.results.items():
-            status_icon = "✓" if result['status'] == 'PASS' else "✗"
+            status_icon = "âœ“" if result['status'] == 'PASS' else "âœ—"
             print(f"{status_icon} {feature.replace('_', ' ').title()}: {result['status']}")
             if result['status'] == 'PASS' and 'time' in result:
                 print(f"   Time: {result['time']:.3f}s")
@@ -599,10 +599,10 @@ class FeatureTester:
         print(f"\nTotal: {passed}/{passed + failed} tests passed")
         
         if failed == 0:
-            print("\n🎉 ALL FEATURES WORKING! Ready for thesis defense! 🎉")
+            print("\nðŸŽ‰ ALL FEATURES WORKING! Ready for thesis defense! ðŸŽ‰")
             return 0
         else:
-            print(f"\n⚠ {failed} feature(s) need attention")
+            print(f"\nâš  {failed} feature(s) need attention")
             return 1
 
 

@@ -305,9 +305,9 @@ def load_nintendo_levels(data_dir: str = None) -> List[Tuple[str, np.ndarray]]:
                     map_id = f"tloz{dungeon_num}_{variant}"
                     levels.append((map_id, grid))
                     logger.info(f"Loaded {map_id}: {grid.shape}")
-                except Exception as e:
+                except (AttributeError, RuntimeError, ValueError, TypeError) as e:
                     logger.warning(f"Failed to load dungeon {dungeon_num}_{variant}: {e}")
-    except Exception as e:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as e:
         logger.error(f"Failed to initialize ZeldaDungeonAdapter: {e}")
         # Fallback: load from processed text files
         processed_dir = Path(data_dir) / "Processed"
@@ -317,7 +317,7 @@ def load_nintendo_levels(data_dir: str = None) -> List[Tuple[str, np.ndarray]]:
                     grid = load_text_level(txt_file)
                     map_id = txt_file.stem
                     levels.append((map_id, grid))
-                except Exception as e:
+                except (AttributeError, RuntimeError, ValueError, TypeError) as e:
                     logger.warning(f"Failed to load {txt_file}: {e}")
     
     return levels
@@ -439,7 +439,7 @@ def run_solver(
         
         result['time'] = time.time() - start_time
         
-    except Exception as e:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as e:
         logger.error(f"Solver error: {e}")
         result['error'] = str(e)
     

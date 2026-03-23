@@ -81,7 +81,7 @@ class MAPElitesEvaluator:
                     num_cvt_samples=min(4000, num_cells * 40),
                     seed=seed,
                 )
-            except Exception as e:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as e:
                 logger.warning("Advanced CVT archive unavailable, using legacy grid archive only: %s", e)
                 self._advanced_archive = None
 
@@ -301,7 +301,7 @@ class MAPElitesEvaluator:
                     features=features,
                     metadata=descriptor_metrics,
                 )
-            except Exception as e:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as e:
                 logger.debug("Advanced archive add failed: %s", e)
 
     def occupancy_grid(self) -> np.ndarray:
@@ -400,7 +400,7 @@ def run_map_elites_on_maps(maps: List[Any], resolution: int = 20, tie_breaker: s
             # Case 3: Coarse deterministic fallback.
             else:
                 solver_result = _quick_solver_result_from_grid(np.asarray(grid))
-        except Exception as e:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as e:
             logger.debug("Solver failed in run_map_elites_on_maps, using fallback: %s", e)
             solver_result = _quick_solver_result_from_grid(np.asarray(grid))
 

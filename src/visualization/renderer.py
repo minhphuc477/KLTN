@@ -1,4 +1,4 @@
-"""
+﻿"""
 KLTN Visualization - Core Renderer
 ===================================
 
@@ -473,7 +473,7 @@ class SpriteManager:
             try:
                 self._sprites['tileset'] = pygame.image.load(tileset_path).convert_alpha()
                 self._loaded = True
-            except Exception as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                 logger.warning("Failed to load dungeon tileset '%s': %s", tileset_path, exc)
         
         # Try to load Link sprite
@@ -482,7 +482,7 @@ class SpriteManager:
         if os.path.exists(link_path):
             try:
                 self._link_sprites['sheet'] = pygame.image.load(link_path).convert_alpha()
-            except Exception as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                 logger.warning("Failed to load Link sprite sheet '%s': %s", link_path, exc)
     
     def get_tile(self, tile_id: int, tile_size: int) -> Surface:
