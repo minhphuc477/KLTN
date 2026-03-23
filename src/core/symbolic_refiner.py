@@ -1,4 +1,4 @@
-"""
+﻿"""
 H-MOLQD Block VII: Symbolic Refiner with Wave Function Collapse
 ===============================================================
 
@@ -26,7 +26,7 @@ Collapse Step:
 
 Propagation Step:
     For neighbors n of collapsed cell:
-    P(n = t) ∝ P(n = t) × Σ_{t'} A(t, t') × P(c = t')
+    P(n = t) âˆ P(n = t) Ã— Î£_{t'} A(t, t') Ã— P(c = t')
     where A(t, t') = adjacency compatibility
 
 Convergence:
@@ -1089,7 +1089,7 @@ class SymbolicRefiner:
                             diagnostics["feedback_applied"] = int(diagnostics["feedback_applied"] + 1)
                             diagnostics["last_dead_end_mask_pixels"] = int(np.sum(mask))
                             continue
-                    except Exception as e:
+                    except (AttributeError, RuntimeError, ValueError, TypeError) as e:
                         logger.warning("Feedback callback failed: %s", e)
                 continue
 

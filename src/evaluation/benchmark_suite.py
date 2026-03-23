@@ -935,7 +935,7 @@ def load_vglc_reference_graphs(
                     G.nodes[physical_start]["is_start"] = True
                     G.nodes[physical_start]["is_entry"] = True
             graphs.append(G)
-        except Exception as e:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as e:
             logger.debug("Skipping unreadable DOT file %s: %s", dot_path, e)
 
     return graphs
@@ -1003,7 +1003,7 @@ def load_vglc_reference_rooms(
                     rooms.append(semantic)
                     if len(rooms) >= max(1, int(max_rooms)):
                         return rooms
-        except Exception as e:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as e:
             logger.debug("Skipping unreadable VGLC txt file %s: %s", txt_path, e)
     return rooms
 
@@ -1165,7 +1165,7 @@ def run_wfc_robustness_probe(
             diag["masked_tiles"] = int(masked_count)
             diag["known_tiles"] = int(known_count)
             out.append(diag)
-        except Exception as e:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as e:
             logger.debug("WFC probe failed on sample %d: %s", i, e)
             out.append(
                 {
@@ -2240,7 +2240,7 @@ def main() -> None:
                 realism_tuning.update(json_tuning)
             else:
                 logger.warning("Ignoring --realism-tuning-json because payload is not an object")
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             logger.warning("Ignoring invalid --realism-tuning-json payload: %s", exc)
     if args.realism_tuning_file is not None:
         try:
@@ -2252,7 +2252,7 @@ def main() -> None:
                 realism_tuning.update(file_tuning)
             else:
                 logger.warning("Ignoring --realism-tuning-file because payload is not an object: %s", args.realism_tuning_file)
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             logger.warning("Ignoring invalid --realism-tuning-file payload '%s': %s", args.realism_tuning_file, exc)
     summary = run_block_i_benchmark_from_scratch(
         num_generated=args.num_generated,

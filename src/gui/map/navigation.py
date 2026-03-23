@@ -8,7 +8,7 @@ def next_map(gui: Any, logger: Any) -> None:
     try:
         if getattr(gui, "auto_mode", False):
             gui._stop_auto("map change (next)")
-    except Exception as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         pass
     try:
         gui.current_map_idx = (gui.current_map_idx + 1) % len(gui.maps)
@@ -17,7 +17,7 @@ def next_map(gui: Any, logger: Any) -> None:
         if getattr(gui, "effects", None):
             gui.effects.clear()
         gui.step_count = 0
-    except Exception as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         logger.exception("_next_map failed")
 
 
@@ -26,7 +26,7 @@ def prev_map(gui: Any, logger: Any) -> None:
     try:
         if getattr(gui, "auto_mode", False):
             gui._stop_auto("map change (prev)")
-    except Exception as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         pass
     try:
         gui.current_map_idx = (gui.current_map_idx - 1) % len(gui.maps)
@@ -35,7 +35,7 @@ def prev_map(gui: Any, logger: Any) -> None:
         if getattr(gui, "effects", None):
             gui.effects.clear()
         gui.step_count = 0
-    except Exception as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         logger.exception("_prev_map failed")
 
 

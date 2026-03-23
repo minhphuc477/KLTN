@@ -1,4 +1,4 @@
-"""
+﻿"""
 Feature 3: Style Transfer Support
 ==================================
 Enable multiple visual themes while preserving gameplay mechanics.
@@ -88,7 +88,7 @@ class ThemeManager:
     Design:
     - Semantic layer: Abstract tile IDs (FLOOR=1, WALL=2, etc.)
     - Visual layer: Theme-specific sprites and colors
-    - Mapping layer: ThemeConfig defines semantic → visual
+    - Mapping layer: ThemeConfig defines semantic â†’ visual
     
     This allows:
     - Swapping themes without changing gameplay
@@ -120,7 +120,7 @@ class ThemeManager:
                     theme_config = self._parse_theme_config(theme_data)
                     self.themes[theme_config.theme_name] = theme_config
                     logger.info(f"Loaded theme: {theme_config.theme_name}")
-            except Exception as e:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as e:
                 logger.error(f"Failed to load theme {theme_file}: {e}")
         
         # Set default theme
@@ -263,13 +263,13 @@ class StyleTransferEngine:
             self.style_model.eval()
             logger.info("Loaded TorchScript style model")
             return
-        except Exception as e:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as e:
             logger.debug("TorchScript load failed, trying checkpoint fallback: %s", e)
 
         # 2) Fallback: try regular torch checkpoint/module.
         try:
             checkpoint = torch.load(model_file, map_location=self.device)
-        except Exception as e:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as e:
             logger.warning("Failed to load style model checkpoint: %s", e)
             return
 

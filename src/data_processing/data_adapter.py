@@ -1,4 +1,4 @@
-"""
+﻿"""
 H-MOLQD Block I: Intelligent Data Adapter
 ==========================================
 
@@ -15,8 +15,8 @@ Mathematical Formulation:
 Given raw text T and graph G = (V, E):
 1. Extract rooms R = {r_1, ..., r_n} from T via slot-based parsing
 2. Parse G to obtain node attributes and edge types
-3. Align R ↔ V via spatial heuristics and content matching
-4. Output DungeonTensor D ∈ ℝ^{N×H×W×C} and aligned NetworkX graph
+3. Align R â†” V via spatial heuristics and content matching
+4. Output DungeonTensor D âˆˆ â„^{NÃ—HÃ—WÃ—C} and aligned NetworkX graph
 
 """
 
@@ -232,7 +232,7 @@ class VGLCParser:
     Parser for Video Game Level Corpus (VGLC) text files.
     
     VGLC Zelda Format:
-    - Grid divided into 11-col × 16-row slots
+    - Grid divided into 11-col Ã— 16-row slots
     - Each slot is either a room or a gap (all dashes)
     - Characters: F=floor, W=wall, D=door, S=stair, B=block, M=monster
     """
@@ -418,7 +418,7 @@ class VGLCParser:
         """
         Detect doors on room boundaries.
         
-        Door positions in 16×11 room:
+        Door positions in 16Ã—11 room:
         - North: row 0, cols 4-6
         - South: row 15, cols 4-6
         - East: col 10, rows 7-8
@@ -684,7 +684,7 @@ class PhaseAligner:
             try:
                 fingerprinter = GraphFingerprinter(strict_mode=False)
                 node_to_room, _ = fingerprinter.align(rooms, graph)
-            except Exception as e:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as e:
                 logger.debug("PhaseAligner.align fallback due to fingerprinter error: %s", e)
 
         # Fallback path: deterministic index-based matching.
@@ -1532,7 +1532,7 @@ class IntelligentDataAdapter:
                 try:
                     dungeon = self.load_dungeon(dungeon_id)
                     dungeons.append(dungeon)
-                except Exception as e:
+                except (AttributeError, RuntimeError, ValueError, TypeError) as e:
                     logger.warning(f"Failed to load {dungeon_id}: {e}")
         
         return dungeons

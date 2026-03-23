@@ -19,7 +19,7 @@ def load_visual_assets(
     try:
         from src.data_processing.visual_extractor import extract_grid  # noqa: F401
         from PIL import Image
-    except Exception as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         return False
 
     if templates_dir and os_module.path.isdir(templates_dir):
@@ -39,7 +39,7 @@ def load_visual_assets(
                     gui.images[semantic_palette["DOOR_OPEN"]] = pygame.transform.scale(surf, (gui.TILE_SIZE, gui.TILE_SIZE))
                 if "key" in ln:
                     gui.images[semantic_palette["KEY"]] = pygame.transform.scale(surf, (gui.TILE_SIZE, gui.TILE_SIZE))
-            except Exception as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                 continue
 
     if link_sprite_path and os_module.path.exists(link_sprite_path):
@@ -49,7 +49,7 @@ def load_visual_assets(
             im = Image.open(link_sprite_path).convert("RGBA")
             im = im.resize((gui.TILE_SIZE - 4, gui.TILE_SIZE - 4), Image.NEAREST)
             gui.link_img = pygame.image.fromstring(im.tobytes(), im.size, im.mode)
-        except Exception as e:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as e:
             logger.warning("Failed to load link sprite from %s: %s", link_sprite_path, e)
 
     logger.info("Loaded %d visual assets", len([k for k in gui.images if k in (1, 2, 10, 12)]))
@@ -69,7 +69,7 @@ def load_visual_map(
             make_stitched_for_single_room,
             infer_inventory_from_room,  # noqa: F401
         )
-    except Exception as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         return False
 
     try:
@@ -80,7 +80,7 @@ def load_visual_map(
         gui._load_current_map()
         gui.message = f"Loaded visual map: {image_path}"
         return True
-    except Exception as e:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as e:
         gui.message = f"Visual load failed: {e}"
         return False
 
@@ -229,7 +229,7 @@ def load_current_map(
     gui._auto_fit_zoom()
     try:
         gui._center_view()
-    except Exception as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         pass
 
     try:
@@ -242,10 +242,10 @@ def load_current_map(
             getattr(gui, "view_offset_y", 0),
             len(getattr(gui, "images", {})),
         )
-    except Exception as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         pass
 
     try:
         gui._start_preview_for_current_map()
-    except Exception as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         logger.exception("Failed to start preview for current map")

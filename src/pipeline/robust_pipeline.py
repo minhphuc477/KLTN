@@ -1,4 +1,4 @@
-"""
+﻿"""
 Robust Pipeline with Retry Logic
 Prevents cascade failures and provides graceful degradation during thesis defense demos.
 
@@ -106,7 +106,7 @@ class PipelineBlock:
                 
                 if is_valid:
                     if self.config.enable_logging:
-                        logger.info(f"[{self.name}] ✓ Success in {execution_time:.2f}s")
+                        logger.info(f"[{self.name}] âœ“ Success in {execution_time:.2f}s")
                     
                     return BlockResult(
                         status=BlockStatus.SUCCESS,
@@ -125,7 +125,7 @@ class PipelineBlock:
                 )
 
                 if self.config.enable_logging:
-                    logger.warning(f"[{self.name}] ✗ Attempt {attempt} failed: {error_msg}")
+                    logger.warning(f"[{self.name}] âœ— Attempt {attempt} failed: {error_msg}")
 
                 if attempt < self.config.max_retries:
                     if self.config.enable_logging:
@@ -143,12 +143,12 @@ class PipelineBlock:
                         execution_time=execution_time,
                         attempts=attempt
                     )
-            except Exception as e:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as e:
                 execution_time = time.time() - start_time
                 error_msg = f"{type(e).__name__}: {str(e)}"
                 
                 if self.config.enable_logging:
-                    logger.warning(f"[{self.name}] ✗ Attempt {attempt} failed: {error_msg}")
+                    logger.warning(f"[{self.name}] âœ— Attempt {attempt} failed: {error_msg}")
                 
                 # Check if we should retry
                 if attempt < self.config.max_retries:
@@ -183,9 +183,9 @@ class RobustPipeline:
     
     Architecture:
         Block I:   Evolutionary Director (topology generation)
-        Block II:  VQ-VAE Encoder (graph → latent)
-        Block III: Condition Encoder (user controls → embedding)
-        Block IV:  Diffusion Model (latent → spatial layout)
+        Block II:  VQ-VAE Encoder (graph â†’ latent)
+        Block III: Condition Encoder (user controls â†’ embedding)
+        Block IV:  Diffusion Model (latent â†’ spatial layout)
         Block V:   LogicNet (constraint satisfaction)
         Block VI:  WFC Refiner (local coherence)
         Block VII: MAP-Elites (archive management)
@@ -260,7 +260,7 @@ class RobustPipeline:
         
         for block_name in block_order:
             if block_name not in self.executors:
-                logger.warning(f"⚠ Block '{block_name}' not configured, skipping")
+                logger.warning(f"âš  Block '{block_name}' not configured, skipping")
                 continue
             
             executor = self.executors[block_name]
@@ -279,7 +279,7 @@ class RobustPipeline:
                 return False, pipeline_state, diagnostics
         
         logger.info("=" * 60)
-        logger.info("✓ Pipeline completed successfully")
+        logger.info("âœ“ Pipeline completed successfully")
         logger.info("=" * 60)
         
         return True, pipeline_state, diagnostics
@@ -293,9 +293,9 @@ class RobustPipeline:
         
         for name, result in diagnostics.items():
             status_symbol = {
-                BlockStatus.SUCCESS: "✓",
-                BlockStatus.FAILED: "✗",
-                BlockStatus.RETRYING: "⏳"
+                BlockStatus.SUCCESS: "âœ“",
+                BlockStatus.FAILED: "âœ—",
+                BlockStatus.RETRYING: "â³"
             }.get(result.status, "?")
             
             lines.append(
@@ -576,6 +576,6 @@ if __name__ == "__main__":
     print(pipeline.get_performance_report(diagnostics))
     
     if success:
-        print("\n✓ Generation succeeded!")
+        print("\nâœ“ Generation succeeded!")
     else:
-        print("\n✗ Generation failed after retries")
+        print("\nâœ— Generation failed after retries")

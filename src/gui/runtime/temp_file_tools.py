@@ -14,7 +14,7 @@ def list_existing_paths(paths: Iterable[str]) -> List[str]:
             continue
         try:
             s = str(p)
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             continue
         if os.path.exists(s):
             out.append(s)
@@ -47,7 +47,7 @@ def delete_files(paths: Iterable[str]) -> Tuple[int, List[Tuple[str, str]]]:
         try:
             os.remove(p)
             deleted += 1
-        except Exception as e:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as e:
             failures.append((p, str(e)))
     return deleted, failures
 
@@ -66,5 +66,5 @@ def open_folder(path: str) -> Tuple[bool, str]:
         else:
             subprocess.Popen(["open", folder])
         return True, ""
-    except Exception as e:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as e:
         return False, str(e)

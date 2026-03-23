@@ -26,18 +26,18 @@ def force_focus(gui: Any, pygame: Any, logger: Any, os_module: Any) -> bool:
         attached = False
         try:
             attached = bool(user32.AttachThreadInput(fg_tid, cur_tid, True))
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             attached = False
 
         SW_SHOW = 5
         user32.ShowWindow(hwnd, SW_SHOW)
         try:
             user32.SetForegroundWindow(hwnd)
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             logger.debug("SetForegroundWindow failed; continuing")
         try:
             user32.BringWindowToTop(hwnd)
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             pass
 
         try:
@@ -47,19 +47,19 @@ def force_focus(gui: Any, pygame: Any, logger: Any, os_module: Any) -> bool:
             HWND_NOTOPMOST = -2
             user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE)
             user32.SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE)
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             pass
 
         try:
             if attached:
                 user32.AttachThreadInput(fg_tid, cur_tid, False)
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             pass
 
         pygame.event.pump()
         logger.debug("Attempted Win32 force-focus sequence")
         return True
-    except Exception as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         logger.exception("Win32 focus helper failed")
         return False
 
@@ -71,13 +71,13 @@ def toggle_fullscreen(gui: Any, pygame: Any, logger: Any, os_module: Any, platfo
         if gui.fullscreen:
             try:
                 gui._prev_window_size = (gui.screen_w, gui.screen_h)
-            except Exception as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                 gui._prev_window_size = getattr(gui, "_prev_window_size", (800, 600))
 
             try:
                 disp = pygame.display.Info()
                 new_size = (int(disp.current_w), int(disp.current_h))
-            except Exception as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                 new_size = (0, 0)
 
             flags = pygame.FULLSCREEN | getattr(pygame, "HWSURFACE", 0) | getattr(pygame, "DOUBLEBUF", 0)
@@ -91,10 +91,10 @@ def toggle_fullscreen(gui: Any, pygame: Any, logger: Any, os_module: Any, platfo
             gui.screen = screen
             try:
                 gui.screen_w, gui.screen_h = gui.screen.get_size()
-            except Exception as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                 try:
                     gui.screen_w, gui.screen_h = new_size
-                except Exception as exc:
+                except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                     gui.screen_w, gui.screen_h = (800, 600)
 
             try:
@@ -103,7 +103,7 @@ def toggle_fullscreen(gui: Any, pygame: Any, logger: Any, os_module: Any, platfo
                     pygame.event.set_grab(True)
                 else:
                     logger.debug("KLTN_FULLSCREEN_GRAB=0 or platform indicates no grab; skipping event grab")
-            except Exception as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                 logger.debug("Could not set event grab for fullscreen")
 
             try:
@@ -112,7 +112,7 @@ def toggle_fullscreen(gui: Any, pygame: Any, logger: Any, os_module: Any, platfo
                 gui._render()
                 pygame.display.flip()
                 gui._show_toast("Entered fullscreen", 2.5, "success")
-            except Exception as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                 logger.exception("Post-fullscreen redraw failed")
             return
 
@@ -129,7 +129,7 @@ def toggle_fullscreen(gui: Any, pygame: Any, logger: Any, os_module: Any, platfo
         gui.screen_w, gui.screen_h = gui.screen.get_size()
         try:
             pygame.event.set_grab(False)
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             logger.debug("Could not clear event grab on exiting fullscreen")
         try:
             pygame.event.pump()
@@ -137,42 +137,42 @@ def toggle_fullscreen(gui: Any, pygame: Any, logger: Any, os_module: Any, platfo
             gui._render()
             pygame.display.flip()
             gui._show_toast("Exited fullscreen", 2.0, "info")
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             logger.exception("Post-windowed redraw failed")
-    except Exception as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         logger.exception("Unhandled exception in _toggle_fullscreen")
         try:
             prev = getattr(gui, "_prev_window_size", (800, 600))
             gui.screen = pygame.display.set_mode(prev, pygame.RESIZABLE)
             gui.screen_w, gui.screen_h = gui.screen.get_size()
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             logger.exception("Failed to revert to previous window mode after fullscreen error")
             try:
                 gui.screen = pygame.display.set_mode((800, 600), pygame.RESIZABLE)
                 gui.screen_w, gui.screen_h = gui.screen.get_size()
-            except Exception as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                 gui.screen_w, gui.screen_h = (800, 600)
 
         try:
             pygame.event.pump()
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             pass
 
         try:
             gui._load_assets()
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             logger.exception("Failed to reload assets after fullscreen toggle")
         try:
             if gui.control_panel_enabled:
                 gui._update_control_panel_positions()
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             pass
 
         try:
             gui._center_view()
             gui._render()
             pygame.display.flip()
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             logger.exception("Failed to render after fullscreen toggle")
 
         gui._set_message(f"Fullscreen: {'ON' if gui.fullscreen else 'OFF'}", 1.5)

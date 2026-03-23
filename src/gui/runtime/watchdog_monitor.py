@@ -7,7 +7,7 @@ def watchdog_loop(gui: Any, logger: Any, os_module: Any, time_module: Any, tempf
     """Background watchdog that writes stack traces and requests screenshots on stalls."""
     try:
         import faulthandler
-    except Exception as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         logger.debug("faulthandler not available; watchdog disabled")
         return
 
@@ -35,7 +35,7 @@ def watchdog_loop(gui: Any, logger: Any, os_module: Any, time_module: Any, tempf
                     trace_file.write(f"Watchdog dump: time={now} last_frame={last}\n")
                     faulthandler.dump_traceback(file=trace_file)
                 logger.warning("Watchdog detected stall; stack dump written: %s", trace_path)
-            except Exception as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                 logger.exception("Failed writing watchdog stack dump")
 
             try:
@@ -43,9 +43,9 @@ def watchdog_loop(gui: Any, logger: Any, os_module: Any, time_module: Any, tempf
                 try:
                     gui._watchdog_request_screenshot = shot_path
                     logger.warning("Watchdog requested screenshot: %s", shot_path)
-                except Exception as exc:
+                except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                     logger.exception("Failed to set watchdog screenshot request")
-            except Exception as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                 logger.exception("Watchdog screenshot request failed")
 
             try:
@@ -55,16 +55,16 @@ def watchdog_loop(gui: Any, logger: Any, os_module: Any, time_module: Any, tempf
                         logger.warning("Watchdog terminating solver process pid=%s", getattr(proc, "pid", None))
                         try:
                             proc.terminate()
-                        except Exception as exc:
+                        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                             logger.exception("Failed to terminate solver process")
-            except Exception as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                 logger.exception("Watchdog failed to check/terminate solver process")
 
             try:
                 gui._set_message(f"Watchdog: dumped trace ({os_module.path.basename(trace_path)})", 5.0)
-            except Exception as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                 pass
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             logger.exception("Uncaught exception in watchdog loop")
 
     logger.debug("Watchdog loop exiting")

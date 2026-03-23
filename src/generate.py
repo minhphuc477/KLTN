@@ -1,4 +1,4 @@
-"""
+﻿"""
 Generation and Evaluation Pipeline for KLTN PCG
 ===============================================
 
@@ -177,7 +177,7 @@ class DungeonValidator:
             solver = StateSpaceAStar(env, timeout=5000)
             success, _, _ = solver.solve()
             return success
-        except Exception as e:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as e:
             logger.warning(f"A* validation failed: {e}")
             return False
     

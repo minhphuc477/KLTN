@@ -1,4 +1,4 @@
-"""
+﻿"""
 Advanced Neural-Symbolic Pipeline
 ==================================
 Unified integration of all 15 features for thesis defense and industry validation.
@@ -10,21 +10,21 @@ This pipeline combines:
 
 Architecture:
     Evolutionary Director
-    → VQ-VAE Encoder
-    → Condition Encoder
-    → Latent Diffusion (with LCM-LoRA)
-    → VQ-VAE Decoder
-    → Style Transfer
-    → LogicNet + WFC Refiner (with global state)
-    → Big Room Generator
-    → Graph Constraint Enforcer
-    → Seam Smoother
-    → Collision Validator
-    → Entity Spawner
-    → MAP-Elites (with diversity metrics)
-    → Fun Metrics
-    → Demo Recorder
-    → Explainability System
+    â†’ VQ-VAE Encoder
+    â†’ Condition Encoder
+    â†’ Latent Diffusion (with LCM-LoRA)
+    â†’ VQ-VAE Decoder
+    â†’ Style Transfer
+    â†’ LogicNet + WFC Refiner (with global state)
+    â†’ Big Room Generator
+    â†’ Graph Constraint Enforcer
+    â†’ Seam Smoother
+    â†’ Collision Validator
+    â†’ Entity Spawner
+    â†’ MAP-Elites (with diversity metrics)
+    â†’ Fun Metrics
+    â†’ Demo Recorder
+    â†’ Explainability System
 """
 
 import torch
@@ -634,7 +634,7 @@ class AdvancedNeuralSymbolicPipeline:
                     self.map_elites.add_dungeon(room_grid, room_grid, solver_result)
 
                 diversity_score = float(calculate_diversity_score(self.map_elites))
-            except Exception as e:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as e:
                 logger.warning(f"Diversity analysis failed: {e}")
         
         # Step 13: Explainability report
@@ -663,7 +663,7 @@ class AdvancedNeuralSymbolicPipeline:
             try:
                 self.demo_recorder.export_gif(str(gif_path))
                 logger.info(f"Demo recorded: {gif_path}")
-            except Exception as e:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as e:
                 logger.warning(f"Failed to export demo GIF: {e}")
         
         # Calculate stats
@@ -731,7 +731,7 @@ class AdvancedNeuralSymbolicPipeline:
             )
             raw_graph = generator.evolve()
             return self._normalize_mission_graph(raw_graph, effective_curve, room_count)
-        except Exception as e:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as e:
             logger.warning(f"Evolutionary director unavailable/failure ({e}); using deterministic linear fallback")
             return self._build_linear_mission_graph(effective_curve, room_count)
 
@@ -1028,7 +1028,7 @@ class AdvancedNeuralSymbolicPipeline:
                         room_onehot = torch.nn.functional.one_hot(room_tensor, num_classes=44).permute(0, 3, 1, 2).float()
                         z_q, _ = self.neural_pipeline.vqvae.encode(room_onehot)
                         neighbor_latents[node_id] = z_q.detach()
-                except Exception as e:
+                except (AttributeError, RuntimeError, ValueError, TypeError) as e:
                     logger.warning(f"Failed to cache latent for room {node_id}: {e}")
         
         return rooms
@@ -1096,13 +1096,13 @@ class AdvancedNeuralSymbolicPipeline:
                     logger.debug(f"Room {node_id}: WFC refinement applied")
                     return refined_room
                     
-                except Exception as e:
+                except (AttributeError, RuntimeError, ValueError, TypeError) as e:
                     logger.warning(f"WFC refinement failed for room {node_id}: {e}, using neural output")
                     return neural_room
             else:
                 return neural_room
                 
-        except Exception as e:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as e:
             logger.error(f"Failed to generate room {node_id} with ML pipeline: {e}")
             # Fallback to simple pattern
             room = np.zeros((16, 11), dtype=int)
@@ -1176,7 +1176,7 @@ class AdvancedNeuralSymbolicPipeline:
                         logits = self.neural_pipeline.vqvae.decode(z_noise)
                         grid = logits.argmax(dim=1).cpu().numpy()[0]
                         sample_grids.append(grid)
-                except Exception as e:
+                except (AttributeError, RuntimeError, ValueError, TypeError) as e:
                     logger.warning(f"Sample generation {i} failed: {e}")
                     continue
             
@@ -1190,7 +1190,7 @@ class AdvancedNeuralSymbolicPipeline:
                 logger.warning("Not enough samples to extract tile priors")
                 return None
                 
-        except Exception as e:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as e:
             logger.error(f"Failed to extract WFC priors: {e}")
             return None
     
@@ -1435,9 +1435,9 @@ def quick_start_demo():
     
     # Print explainability info
     if result.explainability_mgr:
-        print("\n🔍 Explainability system active - check explainability_report.json")
+        print("\nðŸ” Explainability system active - check explainability_report.json")
     # Print results
-    print(f"\n✅ Generation complete!")
+    print(f"\nâœ… Generation complete!")
     print(f"   Total time: {result.stats.total_time:.2f}s")
     print(f"   LCM-LoRA speedup: {result.stats.lcm_speedup:.1f}x")
     print(f"   Fun score: {result.stats.fun_score:.2f}/1.0")
@@ -1449,14 +1449,14 @@ def quick_start_demo():
     
     # Save artifacts
     result.save_artifacts(config.output_dir)
-    print(f"\n📁 All artifacts saved to: {config.output_dir}")
+    print(f"\nðŸ“ All artifacts saved to: {config.output_dir}")
     
     # Launch explainability GUI (if available)
     if result.explainability_mgr:
-        print("\n🔍 Explainability system captured all decisions")
+        print("\nðŸ” Explainability system captured all decisions")
     
     print("\n" + "=" * 60)
-    print("THESIS DEFENSE READY ✅")
+    print("THESIS DEFENSE READY âœ…")
     print("=" * 60)
 
 

@@ -29,7 +29,7 @@ def load_assets(*, gui, semantic_palette, pygame):
             tile_size=gui.TILE_SIZE,
             pygame=pygame,
         )
-    except Exception as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         gui.stair_sprite = None
         gui.stair_anim_phase = 0.0
 

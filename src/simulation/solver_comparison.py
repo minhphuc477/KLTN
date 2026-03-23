@@ -1,4 +1,4 @@
-"""
+﻿"""
 Solver Comparison Mode - Compare Multiple Search Algorithms
 ==========================================================
 
@@ -41,12 +41,12 @@ class SolverMetrics:
     optimality: float  # 1.0 = optimal, >1.0 = suboptimal
     
     def __str__(self):
-        status = "✓" if self.success else "✗"
+        status = "âœ“" if self.success else "âœ—"
         return (f"{status} {self.name}: "
                 f"Length={self.path_length}, "
                 f"Explored={self.states_explored}, "
                 f"Time={self.time_taken:.3f}s, "
-                f"Optimality={self.optimality:.2f}×")
+                f"Optimality={self.optimality:.2f}Ã—")
 
 
 class SolverComparison:
@@ -100,10 +100,10 @@ class SolverComparison:
         for name, metrics in results.items():
             logger.info(str(metrics))
         
-        # Determine winner (best optimality × speed trade-off)
+        # Determine winner (best optimality Ã— speed trade-off)
         if successful:
             winner = min(successful, key=lambda m: m.optimality * m.time_taken)
-            logger.info(f"🏆 Winner: {winner.name}")
+            logger.info(f"ðŸ† Winner: {winner.name}")
         
         return results
     
@@ -127,7 +127,7 @@ class SolverComparison:
                 time_taken=elapsed,
                 optimality=1.0  # Will be updated later
             )
-        except Exception as e:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as e:
             logger.error(f"A* failed: {e}")
             return SolverMetrics("A*", False, [], 0, 0, time.time() - start_time, float('inf'))
     

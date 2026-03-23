@@ -51,13 +51,13 @@ def update_inventory_and_hud(gui: Any, logger: Any) -> None:
             logger.debug("_update_inventory_and_hud: clearing deferred flag (main thread)")
             try:
                 gui.inventory_needs_refresh = False
-            except Exception as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                 pass
 
         if getattr(gui, "modern_hud", None):
             try:
                 hud_before = getattr(gui.modern_hud, "last", None) if hasattr(gui.modern_hud, "last") else None
-            except Exception as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                 hud_before = None
 
             gui.modern_hud.update_game_state(
@@ -158,7 +158,7 @@ def track_item_collection(
         gui.item_pickup_times["key"] = timestamp
         try:
             gui.item_type_map[pos] = gui.item_type_map.get(pos, "key")
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             pass
 
         if pos in gui.item_markers and gui.item_markers[pos].item_type == "key":
@@ -180,15 +180,15 @@ def track_item_collection(
                 gui.keys_collected,
                 getattr(gui.env.state, "keys", None),
             )
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             pass
         try:
             gui.last_pickup_msg = f"Picked up key at {pos}"
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             pass
         try:
             gui._update_inventory_and_hud()
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             pass
 
     if new_state.has_bomb and not old_state.has_bomb:
@@ -201,7 +201,7 @@ def track_item_collection(
         gui.item_pickup_times["bomb"] = timestamp
         try:
             gui.item_type_map[pos] = gui.item_type_map.get(pos, "bomb")
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             pass
 
         gui._remove_from_path_items(pos, "bombs")
@@ -223,11 +223,11 @@ def track_item_collection(
                 gui.bombs_collected,
                 getattr(gui.env.state, "has_bomb", None),
             )
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             pass
         try:
             gui._update_inventory_and_hud()
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             pass
 
     if new_state.has_boss_key and not old_state.has_boss_key:
@@ -252,7 +252,7 @@ def track_item_collection(
         gui._show_toast("Boss Key acquired! Can now face the boss", duration=3.0, toast_type="success")
         try:
             gui._update_inventory_and_hud()
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             pass
 
 
@@ -271,17 +271,17 @@ def track_item_usage(gui: Any, old_state: Any, new_state: Any, time_module: Any,
 
         try:
             gui.used_items.append((pos, "key", pos, timestamp))
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             logger.exception("Failed appending to used_items")
         gui.keys_used = getattr(gui, "keys_used", 0) + keys_used
         try:
             logger.info("Key used at %s (keys_used=%s, env.keys=%s)", pos, gui.keys_used, getattr(gui.env.state, "keys", None))
             gui.last_use_msg = f"Used key at {pos}"
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             pass
         try:
             gui._update_inventory_and_hud()
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             pass
 
         if gui.effects:
@@ -298,7 +298,7 @@ def track_item_usage(gui: Any, old_state: Any, new_state: Any, time_module: Any,
         gui.bombs_used = getattr(gui, "bombs_used", 0) + 1
         try:
             logger.info("Bomb used at %s (bombs_used=%s, env.has_bomb=%s)", pos, gui.bombs_used, getattr(gui.env.state, "has_bomb", None))
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             pass
 
         if gui.effects:
@@ -308,7 +308,7 @@ def track_item_usage(gui: Any, old_state: Any, new_state: Any, time_module: Any,
         gui._show_toast(f"Bomb used! ({gui.bombs_used} used)", duration=1.8, toast_type="info")
         try:
             gui._update_inventory_and_hud()
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             pass
 
     if old_state.has_boss_key and not new_state.has_boss_key:
@@ -325,7 +325,7 @@ def track_item_usage(gui: Any, old_state: Any, new_state: Any, time_module: Any,
         gui._show_toast(f"Boss key used! ({gui.boss_keys_used} used)", duration=2.5, toast_type="info")
         try:
             gui._update_inventory_and_hud()
-        except Exception as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
             pass
 
 
@@ -360,7 +360,7 @@ def sync_inventory_counters(gui: Any) -> None:
                 bc_map += 1
             elif it == "boss_key":
                 bkc_map += 1
-    except Exception as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         pass
 
     gui.keys_collected = max(kc_list, kc_map)

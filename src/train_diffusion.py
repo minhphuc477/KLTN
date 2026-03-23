@@ -562,7 +562,7 @@ class DiffusionTrainer:
                         c_i = self._encode_graph_conditioning(graph_dict)
                         cond_vectors.append(c_i)
                     conditioning = torch.cat(cond_vectors, dim=0)  # [B, context_dim]
-                except Exception as e:
+                except (AttributeError, RuntimeError, ValueError, TypeError) as e:
                     logger.debug(f"Graph conditioning failed: {e}")
                     conditioning = None
                 
@@ -571,7 +571,7 @@ class DiffusionTrainer:
                 if include_logic:
                     try:
                         logic_graph_data = self._build_logic_graph_data(graph_list[0])
-                    except Exception as e:
+                    except (AttributeError, RuntimeError, ValueError, TypeError) as e:
                         logger.debug(f"Logic graph build failed: {e}")
                         logic_graph_data = None
             
@@ -629,7 +629,7 @@ class DiffusionTrainer:
                 for idx, graph_dict in enumerate(graph_list):
                     try:
                         c_i = self._encode_graph_conditioning(graph_dict)
-                    except Exception as exc:
+                    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                         logger.debug(
                             "Graph conditioning encode failed for sample %d; using dummy conditioning: %s",
                             idx,
@@ -657,7 +657,7 @@ class DiffusionTrainer:
                     try:
                         logic_graph_data = self._build_logic_graph_data(graph_dict)
                         break
-                    except Exception as exc:
+                    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                         build_failures += 1
                         logger.debug("LogicNet graph-data build failed for one sample: %s", exc)
                 if logic_graph_data is None and build_failures > 0:
@@ -859,7 +859,7 @@ def main():
         logger.info("Training complete!")
     except KeyboardInterrupt:
         logger.info("Training interrupted")
-    except Exception as e:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as e:
         logger.error(f"Training failed: {e}")
         raise
 

@@ -1,4 +1,4 @@
-"""
+﻿"""
 Feature 8: Performance Optimization (LCM-LoRA)
 ===============================================
 Accelerate diffusion from 50 steps (45s) to 4 steps (<5s) using LCM-LoRA.
@@ -62,15 +62,15 @@ class LoRALayer(nn.Module):
     """
     Low-Rank Adaptation layer for efficient fine-tuning.
     
-    Instead of updating full weight matrix W (d_out × d_in):
-        W_new = W + ΔW
+    Instead of updating full weight matrix W (d_out Ã— d_in):
+        W_new = W + Î”W
     
-    LoRA parameterizes ΔW as low-rank decomposition:
-        ΔW = B @ A
-    where A (d_in × r) and B (d_out × r), with r << min(d_in, d_out)
+    LoRA parameterizes Î”W as low-rank decomposition:
+        Î”W = B @ A
+    where A (d_in Ã— r) and B (d_out Ã— r), with r << min(d_in, d_out)
     
-    This reduces trainable parameters from d_out × d_in to (d_in + d_out) × r.
-    For d_in=d_out=768, r=8: 589,824 params → 12,416 params (47x reduction)
+    This reduces trainable parameters from d_out Ã— d_in to (d_in + d_out) Ã— r.
+    For d_in=d_out=768, r=8: 589,824 params â†’ 12,416 params (47x reduction)
     """
     
     def __init__(
@@ -188,7 +188,7 @@ class LCMScheduler:
     LCM distills diffusion models for 1-4 step generation:
     1. Train consistency function: f(x_t, t) predicts x_0 directly
     2. Use guided distillation to preserve quality
-    3. Sample: x_t → f(x_t, t) = x_0 in 1 step (or 2-4 for quality)
+    3. Sample: x_t â†’ f(x_t, t) = x_0 in 1 step (or 2-4 for quality)
     
     Reference: Song et al. (2023) "Latent Consistency Models"
     """
@@ -293,7 +293,7 @@ class LCMLoRAFastSampler:
             try:
                 self.model = torch.compile(self.model, mode='reduce-overhead')
                 logger.info("Model compiled with torch.compile()")
-            except Exception as e:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as e:
                 logger.warning(f"torch.compile() failed: {e}")
         
         # LCM scheduler
