@@ -12,7 +12,7 @@ def create_solver_temp_files(grid_arr: Any) -> Tuple[str, str | None]:
     os.close(fd_out)
     try:
         os.remove(out_file)
-    except Exception:
+    except OSError:
         pass
 
     grid_file = None
@@ -22,13 +22,13 @@ def create_solver_temp_files(grid_arr: Any) -> Tuple[str, str | None]:
         fd, grid_file = tempfile.mkstemp(prefix="zave_grid_", suffix=".npy")
         os.close(fd)
         _np.save(grid_file, _np.array(grid_arr, dtype=_np.int64))
-    except Exception:
+    except (ImportError, OSError, ValueError, TypeError):
         try:
             fd, grid_file = tempfile.mkstemp(prefix="zave_grid_", suffix=".pkl")
             os.close(fd)
             with open(grid_file, "wb") as grid_file_handle:
                 pickle.dump(grid_arr, grid_file_handle)
-        except Exception:
+        except (OSError, pickle.PickleError, TypeError, ValueError):
             grid_file = None
 
     return out_file, grid_file
@@ -101,9 +101,9 @@ def solver_thread_fallback_worker(
             with open(launch_kwargs["out_file"], "wb") as out_file_handle:
                 pickle.dump(result, out_file_handle)
             logger.info("SOLVER: Thread fallback wrote result to %s", launch_kwargs["out_file"])
-        except Exception as write_err:
+        except (OSError, pickle.PickleError, TypeError, ValueError) as write_err:
             logger.exception("SOLVER: Thread fallback failed to write output: %s", write_err)
-    except Exception as solve_err:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as solve_err:
         logger.exception("SOLVER: Thread fallback solver exception: %s", solve_err)
     finally:
         solver_lock = getattr(gui, "_solver_lock", None)
@@ -134,7 +134,7 @@ def start_solver_thread_fallback(
         gui.solver_thread = thread
         thread.start()
         gui._set_message("Solver started in background (thread fallback)")
-    except Exception as thread_err:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as thread_err:
         logger.exception("SOLVER: Failed to start thread fallback: %s", thread_err)
         gui.solver_running = False
         gui.solver_proc = None

@@ -52,7 +52,7 @@ def load_maps_from_adapter(*, os_module, file_path, print_fn=print):
                             print_fn(f"  [precalc] Map {idx + 1}: Error - {exc}")
 
                 threading.Thread(target=_precalc_worker, daemon=True).start()
-            except Exception:
+            except Exception as exc:
                 print_fn("Precalc worker failed to start")
 
         return maps if maps else None, map_names if map_names else None
@@ -63,4 +63,5 @@ def load_maps_from_adapter(*, os_module, file_path, print_fn=print):
 
         traceback.print_exc()
         return None, None
+
 

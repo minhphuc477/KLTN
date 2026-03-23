@@ -429,14 +429,14 @@ def smart_grid_path(
                 logger.info(f"{algo_label} succeeded: path_len={len(display_path)}, nodes={nodes_explored}")
                 return True, display_path, 0
             logger.warning("D* Lite failed, falling back to A*")
-        except Exception as e:
+        except (ImportError, AttributeError, RuntimeError, ValueError, TypeError) as e:
             logger.error(f"D* Lite error: {e}, falling back to A*")
 
     def heuristic(a, b):
         if gui.feature_flags.get("ml_heuristic", False) and getattr(gui, "_ml_heuristic", None):
             try:
                 return gui._ml_heuristic(a, b)
-            except Exception as e:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as e:
                 logger.warning(f"ML heuristic failed, falling back to Manhattan/Octile: {e}")
         if gui.feature_flags.get("diagonal_movement", False):
             return math.hypot(a[0] - b[0], a[1] - b[1])
@@ -466,9 +466,9 @@ def smart_grid_path(
                     gui.ml_model = HeuristicTrainer.load_model(str(model_path))
                     logger.info(f"Loaded ML heuristic model: {model_path}")
                     break
-                except Exception as model_err:
+                except (AttributeError, RuntimeError, ValueError, TypeError, OSError) as model_err:
                     logger.warning(f"Failed loading ML heuristic model {model_path}: {model_err}")
-        except Exception as import_err:
+        except ImportError as import_err:
             logger.debug(f"ML heuristic module unavailable: {import_err}")
 
         if gui.ml_model is None and gui.feature_flags.get("ml_heuristic", False):
@@ -515,7 +515,7 @@ def smart_grid_path(
                     return base
 
                 return max(0.0, min(pred, base))
-            except Exception as runtime_err:
+            except (AttributeError, RuntimeError, ValueError, TypeError) as runtime_err:
                 logger.debug(f"ML heuristic runtime fallback: {runtime_err}")
                 return base
 
@@ -659,7 +659,7 @@ def smart_grid_path(
                         h_score = heuristic(target, goal)
                         heapq.heappush(heap, (new_g + h_score, new_g, counter, target, stairs, teleports, path + [target]))
                         counter += 1
-            except Exception:
+            except (ImportError, AttributeError, RuntimeError, ValueError, TypeError):
                 gui.last_jps_trace = None
 
     gui.last_search_iterations = iterations

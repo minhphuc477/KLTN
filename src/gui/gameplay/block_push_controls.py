@@ -44,7 +44,7 @@ def update_block_push_animations(gui: Any, pygame: Any, semantic_palette: dict, 
             logger.debug("BLOCK_PUSH: Animation complete, grid updated: %s->%s", from_pos, to_pos)
             if getattr(gui, "effects", None):
                 gui.effects.add_effect(pop_effect_cls(to_pos, (139, 90, 43)))
-        except Exception as e:
+        except (AttributeError, RuntimeError, ValueError, TypeError, KeyError, IndexError) as e:
             logger.warning("BLOCK_PUSH: Failed to update grid after animation: %s", e)
 
     gui.block_push_animations = still_active

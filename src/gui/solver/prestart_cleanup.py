@@ -10,7 +10,7 @@ def cleanup_preview_before_solver_start(gui: Any, logger: Any, os_module: Any) -
         preview_alive = False
         try:
             preview_alive = bool(preview_proc and preview_proc.is_alive())
-        except Exception:
+        except (AttributeError, RuntimeError, ValueError, TypeError):
             preview_alive = False
 
         if preview_alive:
@@ -20,27 +20,27 @@ def cleanup_preview_before_solver_start(gui: Any, logger: Any, os_module: Any) -
             )
             try:
                 preview_proc.terminate()
-            except Exception:
+            except (AttributeError, RuntimeError, ValueError, TypeError):
                 logger.exception("DEBUG_SOLVER: Failed to terminate preview process")
             try:
                 preview_proc.join(timeout=0.2)
-            except Exception:
+            except (AttributeError, RuntimeError, ValueError, TypeError):
                 pass
-    except Exception:
+    except (AttributeError, RuntimeError, ValueError, TypeError):
         logger.exception("DEBUG_SOLVER: Error while stopping preview process")
 
     try:
         out_file = getattr(gui, "preview_outfile", None)
         if out_file and os_module.path.exists(out_file):
             os_module.remove(out_file)
-    except Exception:
+    except (AttributeError, OSError, TypeError):
         pass
 
     try:
         grid_file = getattr(gui, "preview_gridfile", None)
         if grid_file and os_module.path.exists(grid_file):
             os_module.remove(grid_file)
-    except Exception:
+    except (AttributeError, OSError, TypeError):
         pass
 
     gui.preview_done = False

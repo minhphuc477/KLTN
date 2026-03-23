@@ -88,17 +88,17 @@ def apply_pickup_at(
         try:
             collected = set(getattr(gui.env.state, "collected_items", set()) or set())
             gui.env.state.collected_items = collected | {pos}
-        except Exception:
+        except (AttributeError, RuntimeError, ValueError, TypeError):
             pass
 
         if tile_id == semantic_palette["KEY_SMALL"]:
             try:
                 gui.env.state.keys = getattr(gui.env.state, "keys", 0) + 1
-            except Exception:
+            except (AttributeError, RuntimeError, ValueError, TypeError):
                 pass
             try:
                 gui.env.grid[r, c] = semantic_palette["FLOOR"]
-            except Exception:
+            except (AttributeError, RuntimeError, ValueError, TypeError, IndexError, KeyError):
                 logger.warning("Failed to update grid for collected key")
             gui.collected_items.append((pos, "key", time_module.time()))
             gui.collected_positions.add(pos)
@@ -117,11 +117,11 @@ def apply_pickup_at(
         if tile_id == semantic_palette.get("ITEM_BOMB", -1):
             try:
                 gui.env.state.bomb_count += 4
-            except Exception:
+            except (AttributeError, RuntimeError, ValueError, TypeError):
                 pass
             try:
                 gui.env.grid[r, c] = semantic_palette["FLOOR"]
-            except Exception:
+            except (AttributeError, RuntimeError, ValueError, TypeError, IndexError, KeyError):
                 logger.warning("Failed to update grid for collected bomb")
             gui.collected_items.append((pos, "bomb", time_module.time()))
             gui.collected_positions.add(pos)
@@ -140,11 +140,11 @@ def apply_pickup_at(
         if tile_id == semantic_palette["KEY_BOSS"]:
             try:
                 gui.env.state.has_boss_key = True
-            except Exception:
+            except (AttributeError, RuntimeError, ValueError, TypeError):
                 pass
             try:
                 gui.env.grid[r, c] = semantic_palette["FLOOR"]
-            except Exception:
+            except (AttributeError, RuntimeError, ValueError, TypeError, IndexError, KeyError):
                 logger.warning("Failed to update grid for collected boss key")
             gui.collected_items.append((pos, "boss_key", time_module.time()))
             gui.collected_positions.add(pos)
@@ -163,7 +163,7 @@ def apply_pickup_at(
         if tile_id == semantic_palette["TRIFORCE"]:
             try:
                 gui.env.state.collected_items = getattr(gui.env.state, "collected_items", set()) | {pos}
-            except Exception:
+            except (AttributeError, RuntimeError, ValueError, TypeError):
                 pass
             if gui.effects:
                 eff = item_collection_effect_cls(pos, "triforce", "TRI", f"Triforce at ({pos[0]}, {pos[1]})!")
@@ -171,6 +171,6 @@ def apply_pickup_at(
             gui._show_toast("Triforce found!", duration=3.0, toast_type="success")
             gui.item_type_map[pos] = "triforce"
             return True
-    except Exception as e:
+    except (AttributeError, RuntimeError, ValueError, TypeError, IndexError, KeyError) as e:
         logger.warning(f"_apply_pickup_at failed: {e}")
     return False

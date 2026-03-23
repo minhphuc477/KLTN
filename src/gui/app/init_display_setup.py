@@ -1,4 +1,4 @@
-"""Display/window setup helpers for ZeldaGUI initialization."""
+﻿"""Display/window setup helpers for ZeldaGUI initialization."""
 
 from __future__ import annotations
 
@@ -37,11 +37,11 @@ def initialize_display_window(*, gui: Any, pygame: Any, os_module: Any, logger: 
 
     try:
         pygame.event.set_grab(False)
-    except Exception:
+    except Exception as exc:
         logger.debug("Could not clear event grab at startup")
     try:
         pygame.mouse.set_visible(True)
-    except Exception:
+    except Exception as exc:
         logger.debug("Could not ensure mouse cursor visible at startup")
 
     try:
@@ -59,7 +59,8 @@ def initialize_display_window(*, gui: Any, pygame: Any, os_module: Any, logger: 
                     pygame.mouse.set_visible(True)
                     pygame.event.set_grab(False)
                     logger.debug("Set focus to window via Win32 API")
-            except Exception:
+            except Exception as exc:
                 logger.debug("Windows focus helper failed", exc_info=True)
-    except Exception:
+    except Exception as exc:
         logger.debug("Focus bring-to-front helper encountered an error", exc_info=True)
+

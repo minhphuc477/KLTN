@@ -1,4 +1,4 @@
-"""Control panel animation and scrolling helpers."""
+﻿"""Control panel animation and scrolling helpers."""
 
 from typing import Any
 
@@ -22,7 +22,7 @@ def update_control_panel_animation(gui: Any, time_module: Any) -> None:
 
     try:
         gui._update_control_panel_positions()
-    except Exception:
+    except Exception as exc:
         pass
 
     elapsed = time_module.time() - gui.control_panel_anim_start
@@ -38,5 +38,6 @@ def update_control_panel_animation(gui: Any, time_module: Any) -> None:
             if not gui.control_panel_collapsed:
                 gui._update_control_panel_positions()
             gui._set_message(f"Panel: {'collapsed' if gui.control_panel_collapsed else 'expanded'}")
-        except Exception:
+        except Exception as exc:
             pass
+

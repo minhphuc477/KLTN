@@ -1,4 +1,4 @@
-"""Process-safe solver worker functions extracted from gui_runner.py."""
+﻿"""Process-safe solver worker functions extracted from gui_runner.py."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ def _solve_in_subprocess(grid, start_pos, goal_pos, algorithm_idx, feature_flags
             import numpy as _np
             if not isinstance(grid_arr, _np.ndarray):
                 grid_arr = _np.array(grid, dtype=_np.int64)
-        except Exception:
+        except Exception as exc:
             grid_arr = grid
 
         priority_options = dict(priority_options or {})
@@ -65,10 +65,10 @@ def _solve_in_subprocess(grid, start_pos, goal_pos, algorithm_idx, feature_flags
         )
 
         logger = logging.getLogger(__name__)
-        logger.info('═══════════════════════════════════════════════════')
+        logger.info('â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•')
         logger.info('SOLVER DISPATCH: algorithm_idx=%s -> %s', algorithm_idx, alg_name)
         logger.info('Start: %s, Goal: %s', start_pos, goal_pos)
-        logger.info('═══════════════════════════════════════════════════')
+        logger.info('â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•')
 
         cbs_personas = {
             7: 'balanced',
@@ -130,7 +130,7 @@ def _solve_in_subprocess(grid, start_pos, goal_pos, algorithm_idx, feature_flags
                         rules_profile=str(priority_options.get('rules_profile', 'vglc_strict')),
                         representation=rep_mode,
                     )
-                except Exception:
+                except Exception as exc:
                     config = GameStateSearchConfig()
 
                 search_result = run_game_state_solver(env, algorithm_idx, config)
@@ -275,7 +275,7 @@ def _run_solver_and_dump(grid_or_path, start_pos, goal_pos, algorithm_idx, featu
         try:
             sys.stderr.write(f'[SOLVER_SUBPROCESS] {msg}\n')
             sys.stderr.flush()
-        except Exception:
+        except Exception as exc:
             pass
 
     _log(f'Started: start={start_pos}, goal={goal_pos}, alg={algorithm_idx}, out={out_path}')
@@ -327,7 +327,7 @@ def _run_solver_and_dump(grid_or_path, start_pos, goal_pos, algorithm_idx, featu
         try:
             with open(out_path, 'wb') as f:
                 pickle.dump({'success': False, 'message': f'failed to write output: {exc}'}, f)
-        except Exception:
+        except Exception as exc:
             pass
 
 
@@ -340,7 +340,7 @@ def _run_preview_and_dump(grid_or_path, start_pos, goal_pos, algorithm_idx, feat
             if isinstance(grid_or_path, str) and os.path.exists(grid_or_path):
                 import numpy as _np
                 grid = _np.load(grid_or_path, allow_pickle=False)
-        except Exception:
+        except Exception as exc:
             pass
 
         res = _solve_in_subprocess(
@@ -364,15 +364,16 @@ def _run_preview_and_dump(grid_or_path, start_pos, goal_pos, algorithm_idx, feat
         try:
             with open(out_path, 'wb') as f:
                 pickle.dump(out, f)
-        except Exception:
+        except Exception as exc:
             try:
                 with open(out_path, 'wb') as f:
                     pickle.dump({'success': False, 'message': 'failed to write preview output'}, f)
-            except Exception:
+            except Exception as exc:
                 pass
     except Exception as exc:
         try:
             with open(out_path, 'wb') as f:
                 pickle.dump({'success': False, 'message': str(exc)}, f)
-        except Exception:
+        except Exception as exc:
             pass
+

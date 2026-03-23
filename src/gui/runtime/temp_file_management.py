@@ -89,7 +89,7 @@ def delete_temp_files(
     preview_alive = False
     try:
         preview_alive = bool(preview_proc and preview_proc.is_alive())
-    except Exception:
+    except (AttributeError, RuntimeError, ValueError, TypeError):
         preview_alive = False
     if preview_alive:
         active_tracked.update(

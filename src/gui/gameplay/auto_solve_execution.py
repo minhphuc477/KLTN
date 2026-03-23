@@ -62,7 +62,7 @@ def execute_auto_solve(gui: Any, path: Any, solver_result: Any, teleports: int, 
         items_text = gui._get_path_items_display_text()
         if items_text:
             logger.info("EXECUTE: Path items preview: %s", items_text)
-    except Exception as scan_err:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as scan_err:
         logger.warning("EXECUTE: Failed to scan path items: %s", scan_err)
 
     logger.info(
@@ -119,7 +119,7 @@ def execute_auto_solve_from_preview(gui: Any, logger: Any) -> None:
     try:
         gui._scan_items_along_path(gui.auto_path)
         items_text = gui._get_path_items_display_text()
-    except Exception as scan_err:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as scan_err:
         logger.warning("EXECUTE_PREVIEW: Failed to scan path items: %s", scan_err)
         items_text = ""
 

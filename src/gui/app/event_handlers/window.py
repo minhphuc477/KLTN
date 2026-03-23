@@ -1,4 +1,4 @@
-"""Window/system event handlers for GUI event loop."""
+﻿"""Window/system event handlers for GUI event loop."""
 
 from __future__ import annotations
 
@@ -13,13 +13,13 @@ def handle_videoresize_event(gui, event, pygame_module, logger):
             logger.warning("VIDEORESIZE: _safe_set_mode failed; attempting display reinit")
             try:
                 gui._attempt_display_reinit()
-            except Exception:
+            except Exception as exc:
                 logger.exception("VIDEORESIZE: display reinit failed")
         else:
             gui.screen = screen
             try:
                 gui.screen_w, gui.screen_h = gui.screen.get_size()
-            except Exception:
+            except Exception as exc:
                 pass
 
         try:
@@ -27,9 +27,9 @@ def handle_videoresize_event(gui, event, pygame_module, logger):
             gui._render()
             try:
                 pygame_module.display.flip()
-            except Exception:
+            except Exception as exc:
                 logger.exception("Flip failed after VIDEORESIZE")
-        except Exception:
+        except Exception as exc:
             logger.exception("Failed to refresh UI after VIDEORESIZE")
 
     if gui.control_panel_enabled:

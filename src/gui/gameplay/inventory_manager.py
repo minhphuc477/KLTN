@@ -1,4 +1,4 @@
-"""Inventory and item usage tracking helpers for Zelda GUI."""
+﻿"""Inventory and item usage tracking helpers for Zelda GUI."""
 
 from typing import Any
 
@@ -10,7 +10,7 @@ def update_inventory_and_hud(gui: Any, logger: Any) -> None:
         import threading
 
         thread_name = threading.current_thread().name
-    except Exception:
+    except (ImportError, RuntimeError):
         thread_name = "unknown"
     logger.debug(
         "_update_inventory_and_hud: entry (thread=%s, inventory_needs_refresh=%s)",
@@ -26,14 +26,14 @@ def update_inventory_and_hud(gui: Any, logger: Any) -> None:
         gui._sync_inventory_counters()
         after_keys = getattr(gui, "keys_collected", None)
         logger.debug("Counters after sync: keys_collected=%s", after_keys)
-    except Exception:
+    except (AttributeError, RuntimeError, ValueError, TypeError):
         logger.exception("_update_inventory_and_hud: failed while syncing counters")
 
     try:
         if getattr(gui.env, "state", None):
             if getattr(gui.env.state, "keys", 0) < 0:
                 logger.warning("Inventory inconsistency: env.state.keys < 0")
-    except Exception:
+    except (AttributeError, RuntimeError, ValueError, TypeError):
         pass
 
     try:
@@ -43,7 +43,7 @@ def update_inventory_and_hud(gui: Any, logger: Any) -> None:
             gui.inventory_needs_refresh = True
             logger.debug("_update_inventory_and_hud: deferred to main thread (set inventory_needs_refresh=True)")
             return
-    except Exception:
+    except (ImportError, RuntimeError):
         pass
 
     try:
@@ -51,13 +51,13 @@ def update_inventory_and_hud(gui: Any, logger: Any) -> None:
             logger.debug("_update_inventory_and_hud: clearing deferred flag (main thread)")
             try:
                 gui.inventory_needs_refresh = False
-            except Exception:
+            except Exception as exc:
                 pass
 
         if getattr(gui, "modern_hud", None):
             try:
                 hud_before = getattr(gui.modern_hud, "last", None) if hasattr(gui.modern_hud, "last") else None
-            except Exception:
+            except Exception as exc:
                 hud_before = None
 
             gui.modern_hud.update_game_state(
@@ -91,9 +91,9 @@ def update_inventory_and_hud(gui: Any, logger: Any) -> None:
                         gui.modern_hud.inventory.keys_used = getattr(gui, "keys_used", 0)
                         gui.modern_hud.inventory.bombs_used = getattr(gui, "bombs_used", 0)
                         gui.modern_hud.inventory.boss_keys_used = getattr(gui, "boss_keys_used", 0)
-                    except Exception:
+                    except (AttributeError, RuntimeError, ValueError, TypeError):
                         logger.exception("Failed setting nested inventory attributes")
-            except Exception:
+            except (AttributeError, RuntimeError, ValueError, TypeError):
                 logger.exception("Failed setting HUD count attributes")
 
             try:
@@ -105,9 +105,9 @@ def update_inventory_and_hud(gui: Any, logger: Any) -> None:
                     getattr(gui.env.state, "keys", None),
                     getattr(gui, "keys_collected", None),
                 )
-            except Exception:
+            except (AttributeError, RuntimeError, ValueError, TypeError):
                 logger.exception("Failed to log HUD post-update state")
-    except Exception as e:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as e:
         logger.warning(f"Failed to update modern HUD: {e}")
 
 
@@ -122,7 +122,7 @@ def remove_from_path_items(gui: Any, pos: tuple, item_type: str, logger: Any) ->
             if item_type in path_summary and path_summary[item_type] > 0:
                 path_summary[item_type] -= 1
             logger.debug("Removed %s at %s from path items preview", item_type, pos)
-    except Exception as e:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as e:
         logger.warning("Failed to remove %s at %s from path items: %s", item_type, pos, e)
 
 
@@ -158,7 +158,7 @@ def track_item_collection(
         gui.item_pickup_times["key"] = timestamp
         try:
             gui.item_type_map[pos] = gui.item_type_map.get(pos, "key")
-        except Exception:
+        except Exception as exc:
             pass
 
         if pos in gui.item_markers and gui.item_markers[pos].item_type == "key":
@@ -180,15 +180,15 @@ def track_item_collection(
                 gui.keys_collected,
                 getattr(gui.env.state, "keys", None),
             )
-        except Exception:
+        except Exception as exc:
             pass
         try:
             gui.last_pickup_msg = f"Picked up key at {pos}"
-        except Exception:
+        except Exception as exc:
             pass
         try:
             gui._update_inventory_and_hud()
-        except Exception:
+        except Exception as exc:
             pass
 
     if new_state.has_bomb and not old_state.has_bomb:
@@ -201,7 +201,7 @@ def track_item_collection(
         gui.item_pickup_times["bomb"] = timestamp
         try:
             gui.item_type_map[pos] = gui.item_type_map.get(pos, "bomb")
-        except Exception:
+        except Exception as exc:
             pass
 
         gui._remove_from_path_items(pos, "bombs")
@@ -223,11 +223,11 @@ def track_item_collection(
                 gui.bombs_collected,
                 getattr(gui.env.state, "has_bomb", None),
             )
-        except Exception:
+        except Exception as exc:
             pass
         try:
             gui._update_inventory_and_hud()
-        except Exception:
+        except Exception as exc:
             pass
 
     if new_state.has_boss_key and not old_state.has_boss_key:
@@ -252,7 +252,7 @@ def track_item_collection(
         gui._show_toast("Boss Key acquired! Can now face the boss", duration=3.0, toast_type="success")
         try:
             gui._update_inventory_and_hud()
-        except Exception:
+        except Exception as exc:
             pass
 
 
@@ -271,17 +271,17 @@ def track_item_usage(gui: Any, old_state: Any, new_state: Any, time_module: Any,
 
         try:
             gui.used_items.append((pos, "key", pos, timestamp))
-        except Exception:
+        except Exception as exc:
             logger.exception("Failed appending to used_items")
         gui.keys_used = getattr(gui, "keys_used", 0) + keys_used
         try:
             logger.info("Key used at %s (keys_used=%s, env.keys=%s)", pos, gui.keys_used, getattr(gui.env.state, "keys", None))
             gui.last_use_msg = f"Used key at {pos}"
-        except Exception:
+        except Exception as exc:
             pass
         try:
             gui._update_inventory_and_hud()
-        except Exception:
+        except Exception as exc:
             pass
 
         if gui.effects:
@@ -298,7 +298,7 @@ def track_item_usage(gui: Any, old_state: Any, new_state: Any, time_module: Any,
         gui.bombs_used = getattr(gui, "bombs_used", 0) + 1
         try:
             logger.info("Bomb used at %s (bombs_used=%s, env.has_bomb=%s)", pos, gui.bombs_used, getattr(gui.env.state, "has_bomb", None))
-        except Exception:
+        except Exception as exc:
             pass
 
         if gui.effects:
@@ -308,7 +308,7 @@ def track_item_usage(gui: Any, old_state: Any, new_state: Any, time_module: Any,
         gui._show_toast(f"Bomb used! ({gui.bombs_used} used)", duration=1.8, toast_type="info")
         try:
             gui._update_inventory_and_hud()
-        except Exception:
+        except Exception as exc:
             pass
 
     if old_state.has_boss_key and not new_state.has_boss_key:
@@ -325,7 +325,7 @@ def track_item_usage(gui: Any, old_state: Any, new_state: Any, time_module: Any,
         gui._show_toast(f"Boss key used! ({gui.boss_keys_used} used)", duration=2.5, toast_type="info")
         try:
             gui._update_inventory_and_hud()
-        except Exception:
+        except Exception as exc:
             pass
 
 
@@ -360,7 +360,7 @@ def sync_inventory_counters(gui: Any) -> None:
                 bc_map += 1
             elif it == "boss_key":
                 bkc_map += 1
-    except Exception:
+    except Exception as exc:
         pass
 
     gui.keys_collected = max(kc_list, kc_map)
@@ -370,3 +370,4 @@ def sync_inventory_counters(gui: Any) -> None:
     gui.keys_used = getattr(gui, "keys_used", 0)
     gui.bombs_used = getattr(gui, "bombs_used", 0)
     gui.boss_keys_used = getattr(gui, "boss_keys_used", 0)
+

@@ -57,7 +57,7 @@ def show_path_preview(gui: Any, dialog_factory: Any, logger: Any) -> None:
                 gui.path_preview_mode = False
                 gui.preview_overlay_visible = True
                 gui.message = "Path preview ready (Enter to start, Esc to dismiss)"
-        except Exception as e:
+        except (AttributeError, RuntimeError, ValueError, TypeError) as e:
             logger.exception("Failed to create path preview dialog")
             gui.path_preview_dialog = None
             gui.path_preview_mode = False

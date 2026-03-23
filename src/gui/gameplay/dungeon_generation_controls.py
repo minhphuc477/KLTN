@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from typing import Any
 
-def stop_auto_solve(gui):
+
+def stop_auto_solve(gui: Any) -> None:
     """Stop auto-solve and clear transient animation/path state."""
     gui.auto_mode = False
     gui.auto_path = []
@@ -12,7 +14,7 @@ def stop_auto_solve(gui):
     gui.message = "Auto-solve stopped"
 
 
-def generate_dungeon(gui, logger):
+def generate_dungeon(gui: Any, logger: Any) -> None:
     """Generate a procedural dungeon and switch the GUI to the new map."""
     try:
         from src.generation.dungeon_generator import DungeonGenerator, Difficulty
@@ -54,6 +56,6 @@ def generate_dungeon(gui, logger):
     except ImportError as exc:
         logger.warning("Dungeon generator not available: %s", exc)
         gui._set_message("Dungeon generator module not found")
-    except Exception as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         logger.exception("Failed to generate dungeon: %s", exc)
         gui._set_message(f"Generation failed: {str(exc)}")

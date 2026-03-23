@@ -66,7 +66,7 @@ def manual_step(
 
     try:
         gui._track_item_usage(old_state, gui.env.state)
-    except Exception:
+    except (AttributeError, RuntimeError, ValueError, TypeError):
         pass
 
     if gui.modern_hud:

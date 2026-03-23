@@ -14,7 +14,7 @@ def handle_watchdog_screenshot(gui: Any, pygame: Any, logger: Any, os_module: An
             logger.warning("Watchdog requested screenshot but no display surface available")
             try:
                 gui._watchdog_request_screenshot = None
-            except Exception:
+            except AttributeError:
                 pass
             return False
         try:
@@ -22,13 +22,13 @@ def handle_watchdog_screenshot(gui: Any, pygame: Any, logger: Any, os_module: An
             logger.warning("Watchdog screenshot saved by main thread: %s", shot)
             gui._show_toast(f"Watchdog screenshot: {os_module.path.basename(shot)}", 3.0, "info")
             return True
-        except Exception:
+        except (AttributeError, RuntimeError, ValueError, TypeError, OSError):
             logger.exception("Failed to save watchdog screenshot on main thread")
             return False
     finally:
         try:
             gui._watchdog_request_screenshot = None
-        except Exception:
+        except AttributeError:
             pass
 
 
@@ -53,6 +53,6 @@ def report_ui_state(gui: Any, logger: Any) -> dict:
             )(),
             "debug_click_log_len": len(getattr(gui, "debug_click_log", [])),
         }
-    except Exception:
+    except (AttributeError, RuntimeError, ValueError, TypeError):
         logger.exception("Failed to build UI state report")
         return {}

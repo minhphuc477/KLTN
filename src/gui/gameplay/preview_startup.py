@@ -20,7 +20,7 @@ def start_preview_for_current_map(
     if getattr(gui, "env", None) and getattr(gui.env, "done", False):
         try:
             gui._load_current_map()
-        except Exception:
+        except (AttributeError, RuntimeError, ValueError, TypeError):
             logger.exception("Failed to reload current map during preview startup")
 
     try:
@@ -29,7 +29,7 @@ def start_preview_for_current_map(
         scan_duration = (time_module.time() - scan_start)
         if scan_duration > 0.05:
             logger.debug("Item scan took %.3fs", scan_duration)
-    except Exception:
+    except (AttributeError, RuntimeError, ValueError, TypeError):
         logger.exception("Item scanning failed")
 
     solver_name = gui._algorithm_name(gui.algorithm_idx) if hasattr(gui, "algorithm_idx") else "A*"
@@ -37,7 +37,7 @@ def start_preview_for_current_map(
     try:
         gui._render()
         pygame_module.display.flip()
-    except Exception:
+    except (AttributeError, RuntimeError, ValueError, TypeError):
         logger.debug("Render/flip failed during preview startup (may be uninitialized yet)")
 
     logger.info(
@@ -75,7 +75,7 @@ def start_preview_for_current_map(
                         if success2:
                             gui.preview_result = {"path": path2, "solver_result": result, "teleports": teleports2}
                             return
-                except Exception:
+                except (ImportError, AttributeError, RuntimeError, ValueError, TypeError):
                     logger.debug("Graph-based quick solve failed in worker", exc_info=True)
 
             try:
@@ -83,7 +83,7 @@ def start_preview_for_current_map(
                 if success:
                     gui.preview_result = {"path": path, "solver_result": {}, "teleports": teleports}
                     return
-            except Exception:
+            except (AttributeError, RuntimeError, ValueError, TypeError):
                 logger.debug("Grid quick solve failed in worker", exc_info=True)
         finally:
             gui.preview_thread = None
@@ -91,7 +91,7 @@ def start_preview_for_current_map(
         if os.environ.get("KLTN_ALLOW_HEAVY", "1") == "1":
             try:
                 gui._schedule_solver()
-            except Exception:
+            except (AttributeError, RuntimeError, ValueError, TypeError):
                 logger.exception("Failed to schedule heavy solver from preview worker")
         else:
             gui._set_message("No preview found; heavy solver disabled", 3.0)
@@ -115,7 +115,7 @@ def start_preview_for_current_map(
             os.close(fd_out)
             try:
                 os.remove(preview_out)
-            except Exception:
+            except OSError:
                 pass
 
             start_pos = getattr(getattr(gui, "env", None), "start_pos", None)
@@ -169,7 +169,7 @@ def start_preview_for_current_map(
             gui.preview_result = None
             gui.preview_done = False
             gui._set_message("Preview search started (background)")
-        except Exception:
+        except (ImportError, AttributeError, RuntimeError, ValueError, TypeError, OSError):
             logger.exception("Failed to spawn preview process; falling back to threaded worker")
             gui.preview_result = None
             gui.preview_thread = threading_module.Thread(target=_preview_worker, daemon=True)

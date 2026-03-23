@@ -23,7 +23,7 @@ def _stop_auto_local(gui: Any, logger: Any, reason: str = None) -> None:
     try:
         logger.debug("_stop_auto_local calling _stop_auto: %s", reason)
         gui._stop_auto(reason)
-    except Exception:  # pragma: no cover - defensive fallback
+    except (AttributeError, RuntimeError, ValueError, TypeError):  # pragma: no cover - defensive fallback
         logger.exception("_stop_auto_local failed: %s", reason)
 
 
@@ -218,7 +218,7 @@ def auto_step(
                 getattr(gui, "auto_step_idx", None),
                 len(getattr(gui, "auto_path", []) if getattr(gui, "auto_path", None) else []),
             )
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             logger.debug("_auto_step entry: failed to read entry state")
 
         if not gui.auto_mode:

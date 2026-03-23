@@ -1,4 +1,4 @@
-"""Keyboard event handlers for GUI event loop."""
+﻿"""Keyboard event handlers for GUI event loop."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ def handle_global_keydown_shortcuts(
             "mods": pygame_module.key.get_mods(),
             "time": time_module.time(),
         }
-    except Exception:
+    except Exception as exc:
         pass
 
     logger.debug("KEYDOWN key=%s mods=%s", event.key, pygame_module.key.get_mods())
@@ -36,7 +36,7 @@ def handle_global_keydown_shortcuts(
                 gui._set_message("Overlays hidden", 2.0)
             else:
                 gui._show_toast("No overlays active", 1.5, "info")
-        except Exception:
+        except Exception as exc:
             logger.exception("Failed to toggle overlays")
         return True
 
@@ -51,16 +51,16 @@ def handle_global_keydown_shortcuts(
     if event.key == pygame_module.K_f:
         try:
             pygame_module.event.set_grab(False)
-        except Exception:
+        except Exception as exc:
             logger.debug("Failed to clear event grab via F key")
         try:
             pygame_module.mouse.set_visible(True)
-        except Exception:
+        except Exception as exc:
             logger.debug("Failed to set mouse visible via F key")
         try:
             gui._show_toast("Forced focus/ungrab (F)", 2.0, "info")
             gui._set_message("Forced focus/ungrab (F)")
-        except Exception:
+        except Exception as exc:
             pass
         return True
 
@@ -120,7 +120,7 @@ def handle_keyup_event(gui, event, logger):
     try:
         if event.key in getattr(gui, "keys_held", {}):
             gui.keys_held[event.key] = False
-    except Exception:
+    except Exception as exc:
         logger.debug("Failed to handle KEYUP for %r", getattr(event, "key", None))
 
 
@@ -179,9 +179,9 @@ def handle_keydown_event(
             )
             try:
                 gui._dump_control_panel_widget_state(pos)
-            except Exception:
+            except Exception as exc:
                 logger.exception("F7: _dump_control_panel_widget_state failed")
-        except Exception:
+        except Exception as exc:
             logger.exception("F7 diagnostic failed")
 
     elif event.key == pygame_module.K_F8:
@@ -202,7 +202,7 @@ def handle_keydown_event(
                 gui.debug_control_panel,
                 gui.debug_panel_click_padding,
             )
-        except Exception:
+        except Exception as exc:
             logger.exception("Failed to toggle debug control panel")
 
     elif event.key == pygame_module.K_m:

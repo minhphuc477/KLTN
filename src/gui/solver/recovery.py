@@ -8,7 +8,7 @@ def log_active_solver_state(gui: Any, logger: Any, os_module: Any, time_module: 
     proc = getattr(gui, "solver_proc", None)
     try:
         proc_alive = proc.is_alive() if proc else "N/A"
-    except Exception:
+    except (AttributeError, RuntimeError, ValueError, TypeError):
         proc_alive = "N/A"
 
     logger.warning("DEBUG_SOLVER: Solver state dump:")
@@ -46,7 +46,7 @@ def compute_solver_timeout_seconds(
         grid_ref = current_map.global_grid if hasattr(current_map, "global_grid") else current_map
         grid_cells = int(np_module.asarray(grid_ref).size)
         default_timeout = scale_timeout_by_grid_size(default_timeout, grid_cells)
-    except Exception:
+    except (AttributeError, RuntimeError, ValueError, TypeError):
         pass
     try:
         return float(os_module.environ.get("KLTN_SOLVER_TIMEOUT", str(default_timeout)))
@@ -64,7 +64,7 @@ def terminate_hung_solver_process(proc: Any, logger: Any) -> None:
             logger.error("DEBUG_SOLVER: Process still alive after terminate, trying kill")
             proc.kill()
             proc.join(timeout=0.5)
-    except Exception as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         logger.exception("DEBUG_SOLVER: Failed to terminate hung process: %s", exc)
 
 
@@ -107,7 +107,7 @@ def prepare_active_solver_for_new_start(
     start_time = getattr(gui, "solver_start_time", None)
     try:
         proc_alive = proc.is_alive() if proc else False
-    except Exception:
+    except (AttributeError, RuntimeError, ValueError, TypeError):
         proc_alive = False
 
     solver_age = (time_module.time() - start_time) if start_time else 0

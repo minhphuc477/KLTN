@@ -43,13 +43,14 @@ def map_elites_worker(
     plot_heatmap_fn: Any = None,
 ) -> None:
     """Run MAP-Elites evaluation and persist optional heatmap artifact."""
+    _ = n_samples
     try:
         if run_map_elites_on_maps_fn is None:
             from src.simulation.map_elites import run_map_elites_on_maps as run_map_elites_on_maps_fn
         if plot_heatmap_fn is None:
             try:
                 from src.simulation.map_elites import plot_heatmap as plot_heatmap_fn
-            except Exception:
+            except ImportError:
                 plot_heatmap_fn = None
 
         evaluator, occ = run_map_elites_on_maps_fn(maps, resolution=resolution)
@@ -62,11 +63,11 @@ def map_elites_worker(
                 gui.map_elites_heatmap_path = out_path
             else:
                 gui.map_elites_heatmap_path = None
-        except Exception:
+        except (AttributeError, RuntimeError, ValueError, TypeError, OSError, KeyError):
             gui.map_elites_heatmap_path = None
 
         gui.map_elites_result = evaluator
         gui._show_toast("MAP-Elites completed", 4.0, "success")
-    except Exception as exc:
+    except (ImportError, AttributeError, RuntimeError, ValueError, TypeError, OSError, KeyError) as exc:
         logger.exception("MAP-Elites worker failed: %s", exc)
         gui._show_toast(f"MAP-Elites failed: {exc}", 4.0, "error")
