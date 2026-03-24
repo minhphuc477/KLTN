@@ -16,7 +16,6 @@ Usage:
     >>> epoch = manager.load(model, optimizer)
 """
 
-import os
 import json
 import shutil
 import logging
@@ -29,6 +28,34 @@ import torch.nn as nn
 import torch.optim as optim
 
 logger = logging.getLogger(__name__)
+
+
+def write_checkpoint_metadata(
+    checkpoint_path: str,
+    *,
+    model_type: str,
+    architecture: Optional[Dict[str, Any]] = None,
+    extra: Optional[Dict[str, Any]] = None,
+    format_version: str = "1.0",
+) -> Path:
+    """Write a lightweight sidecar metadata JSON next to a checkpoint file."""
+    path = Path(checkpoint_path)
+    metadata_path = Path(f"{path}.meta.json")
+    metadata: Dict[str, Any] = {
+        "format_version": str(format_version),
+        "model_type": str(model_type),
+        "checkpoint_file": path.name,
+        "saved_at_utc": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+    }
+    if architecture:
+        metadata["architecture"] = dict(architecture)
+    if extra:
+        metadata["extra"] = dict(extra)
+
+    with open(metadata_path, "w", encoding="utf-8") as f:
+        json.dump(metadata, f, indent=2)
+    logger.debug("Wrote checkpoint metadata sidecar: %s", metadata_path)
+    return metadata_path
 
 
 class CheckpointManager:

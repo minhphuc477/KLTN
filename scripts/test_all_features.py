@@ -31,7 +31,7 @@ try:
     )
     
     # Feature 3: Style Transfer
-    from src.generation.style_transfer import ThemeManager, ThemeType
+    from src.generation.style_transfer import ThemeManager
     
     # Feature 4: Fun Metrics
     from src.evaluation.fun_metrics import FunMetricsEvaluator
@@ -43,14 +43,13 @@ try:
     from src.generation.global_state import GlobalStateManager, GlobalStateType
     
     # Feature 7: Big Rooms
-    from src.generation.big_room_generator import BigRoomGenerator, RoomSize
+    from src.generation.big_room_generator import RoomSize
     
     # Feature 8: LCM-LoRA
-    from src.optimization.lcm_lora import LCMLoRAFastSampler, LoRALayer
+    from src.optimization.lcm_lora import LoRALayer
     
     # Feature 9: Explainability
     from src.utils.explainability import ExplainabilityManager, DecisionTrace, DecisionSource
-    from src.utils.explainability_gui import ExplainabilityDebugOverlay
     
     print("âœ“ All feature imports successful")
 except ImportError as e:
@@ -455,7 +454,6 @@ class FeatureTester:
         try:
             # Test LoRA layer creation
             import torch
-            import torch.nn as nn
             
             start_time = time.time()
             
@@ -550,7 +548,7 @@ class FeatureTester:
             print(f"  âœ“ Explainability works ({elapsed:.3f}s)")
             print(f"  âœ“ Traces stored: {len(manager.traces)}")
             print(f"  âœ“ Query successful: found {len(traces_for_node)} traces for node 0")
-            print(f"  âœ“ JSON export successful")
+            print("  âœ“ JSON export successful")
             
             self.results['explainability'] = {
                 'status': 'PASS',

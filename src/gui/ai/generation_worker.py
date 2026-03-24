@@ -1,5 +1,7 @@
 ﻿"""Worker orchestration for AI dungeon generation."""
 
+import os
+
 from src.gui.ai.generation_pipeline import (
     apply_generated_dungeon,
     build_conditioning_vector,
@@ -24,17 +26,46 @@ def run_ai_generation_worker(gui, logger):
             logger.warning("Checkpoint not found: %s", checkpoint_path)
             return
 
+        strict_checkpoint_mode = str(os.environ.get("KLTN_STRICT_CHECKPOINTS", "")).strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+
+        configured_seed = None
+        env_seed = str(os.environ.get("KLTN_AI_SEED", "")).strip()
+        if env_seed:
+            try:
+                configured_seed = int(env_seed)
+            except (TypeError, ValueError):
+                logger.warning("Ignoring invalid KLTN_AI_SEED=%r", env_seed)
+                configured_seed = None
+
+        gui_seed = getattr(gui, "ai_seed", None)
+        if gui_seed is not None:
+            try:
+                configured_seed = int(gui_seed)
+            except (TypeError, ValueError):
+                logger.warning("Ignoring invalid gui.ai_seed=%r", gui_seed)
+
         gui._set_message("Generating mission graph...")
         logger.info("AI Generation: Loading checkpoint from %s", checkpoint_path)
         device = torch.device("cpu")
 
-        mission_data = generate_mission_graph(_random)
+        mission_data = generate_mission_graph(_random, seed=configured_seed)
         mission_graph = mission_data["mission_graph"]
         edge_index = mission_data["edge_index"]
         seed = mission_data["seed"]
         num_nodes = mission_data["num_nodes"]
         num_edges = mission_data["num_edges"]
-        logger.info("  Mission graph: %d nodes, %d edges, seed=%d", num_nodes, num_edges, seed)
+        logger.info(
+            "  Mission graph: %d nodes, %d edges, seed=%d%s",
+            num_nodes,
+            num_edges,
+            seed,
+            " (deterministic)" if configured_seed is not None else "",
+        )
 
         gui._set_message("Loading AI model...")
         vqvae, diffusion, cond_encoder = load_models_and_weights(
@@ -42,6 +73,7 @@ def run_ai_generation_worker(gui, logger):
             device=device,
             torch_module=torch,
             logger=logger,
+            strict_checkpoint_mode=strict_checkpoint_mode,
         )
 
         gui._set_message("Running diffusion sampling...")

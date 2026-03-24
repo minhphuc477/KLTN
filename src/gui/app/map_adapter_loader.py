@@ -1,4 +1,4 @@
-﻿"""Adapter-backed map loading orchestration for GUI startup."""
+"""Adapter-backed map loading orchestration for GUI startup."""
 
 from __future__ import annotations
 
@@ -52,7 +52,7 @@ def load_maps_from_adapter(*, os_module, file_path, print_fn=print):
                             print_fn(f"  [precalc] Map {idx + 1}: Error - {exc}")
 
                 threading.Thread(target=_precalc_worker, daemon=True).start()
-            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError):
                 print_fn("Precalc worker failed to start")
 
         return maps if maps else None, map_names if map_names else None

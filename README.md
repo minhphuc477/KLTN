@@ -12,7 +12,7 @@ KLTN implements a complete research pipeline for generating Legend of Zelda-like
 - **Neural-Symbolic Pipeline**: Complete 7-block H-MOLQD architecture integrating VQ-VAE, latent diffusion, LogicNet guidance, and symbolic repair - with full Block I integration for automatic topology generation
 - **VGLC Compliance**: Full compliance with Video Game Level Corpus standards for Zelda dungeon structure validation, including composite node labels, Boss-Goal subgraph validation, and centralized graph utilities
 - **Interactive GUI**: Real-time visualization and validation environment for dungeon exploration with route export/loading and multi-algorithm pathfinding
-- **Comprehensive Testing**: 250+ test functions covering all major components and VGLC compliance requirements
+- **Comprehensive Testing**: 490+ test functions covering major components and VGLC compliance requirements
 
 ## Architecture
 
@@ -67,6 +67,9 @@ python main.py --dungeon 1 --variant 1
 # Validate single dungeon
 python main.py --dungeon 1 --variant 1
 
+# Deterministic run (also supported via KLTN_SEED environment variable)
+python main.py --dungeon 1 --variant 1 --seed 42
+
 # Validate all dungeons with GUI
 python main.py --all --gui
 
@@ -78,6 +81,15 @@ python main.py --dungeon 1 --export dungeon_data.npz
 ```bash
 # Launch visualization environment
 python gui_runner.py
+
+# Optional deterministic GUI AI generation seed
+set KLTN_AI_SEED=42
+
+# Optional checkpoint override for GUI AI generation
+set KLTN_CHECKPOINT_PATH=checkpoints\final_model.pth
+
+# Optional hardening: require checkpoint metadata sidecars for GUI AI generation
+set KLTN_STRICT_CHECKPOINTS=1
 
 # Controls:
 # Arrow keys: Manual movement
@@ -94,6 +106,12 @@ import networkx as nx
 
 # Initialize pipeline
 pipeline = create_pipeline(checkpoint_dir="./checkpoints")
+
+# Optional hardening: fail fast when checkpoints/metadata are incompatible
+strict_pipeline = create_pipeline(
+  checkpoint_dir="./checkpoints",
+  strict_checkpoint_mode=True,
+)
 
 # Option 1: Generate with automatic topology evolution (all 7 blocks)
 result = pipeline.generate_dungeon(
@@ -137,7 +155,7 @@ KLTN/
 │   ├── generation/          # Evolutionary topology director
 │   ├── pipeline/            # Neural-symbolic pipeline (7 blocks)
 │   ├── core/                # Neural network components
-│   ├── data/                # VGLC data processing and compliance
+│   ├── zelda_data/          # VGLC data processing and compliance
 │   ├── simulation/          # Dungeon validation and solving
 │   ├── utils/               # Graph utilities and training helpers
 │   └── visualization/       # Plotting and analysis tools
@@ -153,11 +171,11 @@ KLTN/
 
 ```bash
 # Run full test suite
-pytest tests/ -v
+python -m pytest tests/ -v
 
 # Run specific component tests
-pytest tests/test_vglc_compliance.py -v
-pytest tests/test_neural_pipeline.py -v
+python -m pytest tests/test_vglc_compliance.py -v
+python -m pytest tests/test_neural_pipeline.py -v
 
 # Focused validation
 python -m pytest tests/test_topology_generation_fixes.py -q
@@ -173,8 +191,17 @@ python -m src.train --stage all --data-dir "Data/The Legend of Zelda"
 # Only VQ-VAE pretraining
 python -m src.train --stage vqvae --epochs-vqvae 300
 
+# VQ-VAE with CoordConv + differentiable illegal adjacency penalty
+python -m src.train_vqvae --data-dir "Data/The Legend of Zelda" --seed 42 --use-coordconv --mrf-penalty-weight 0.05
+
 # Only diffusion (with pretrained VQ-VAE)
 python -m src.train --stage diffusion --vqvae-checkpoint checkpoints/vqvae_pretrained.pth
+
+# Diffusion with graph-node token conditioning for U-Net cross-attention
+python -m src.train_diffusion --data-dir "Data/The Legend of Zelda" --graph-conditioning-mode node_sequence --condition-gnn-type gcn
+
+# Training now writes sidecar metadata (*.meta.json) next to checkpoints,
+# which can be validated when strict checkpoint mode is enabled in the pipeline.
 ```
 
 ## Topology tuning workflow
@@ -182,6 +209,9 @@ python -m src.train --stage diffusion --vqvae-checkpoint checkpoints/vqvae_pretr
 ```bash
 # Sweep realism coefficients and export ranked results
 python scripts/sweep_block_i_realism_tuning.py --num-generated 12 --seed 42
+
+# Matched-budget topology benchmark with preflight config validation
+python scripts/run_matched_budget_topology_benchmark.py --num-samples 12 --seed 42
 
 # Benchmark defaults to the recommended gate_quality_heavy realism profile
 python -m src.evaluation.benchmark_suite --num-generated 12
@@ -203,6 +233,9 @@ python scripts/analyze_sequence_breaks.py --num-samples 8 --output results/seque
 
 # Per-rule marginal fitness credit (leave-one-out ablation on best genome)
 python scripts/analyze_rule_marginal_credit.py --output results/rule_marginal_credit.json
+
+# Paired cognitive objective A/B (off vs on) with per-seed deltas
+python scripts/run_cognitive_objective_ab.py --num-samples 12 --seed 42 --output results/cognitive_objective_ab
 
 # One-command P0/P1/P2(+others) consolidated suite
 python scripts/run_priority_research_suite.py --output-dir results/priority_research_suite

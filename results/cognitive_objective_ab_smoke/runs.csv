@@ -1,0 +1,3 @@
+seed,arm,cognitive_weight,generation_time_sec,nodes,edges,linearity,leniency,progression_complexity,topology_complexity,cycle_density,shortcut_density,gate_depth_ratio,path_depth_ratio,directionality_gap,constraint_valid,path_exists,cbs_fitness,cbs_confusion_ratio,cbs_path_efficiency,cbs_room_entropy,cbs_proxy_mode
+42,COGNITIVE_OFF,0.0,1.1406829357147217,31,62,0.25806451612903225,1.0,0.47807219662058376,0.3813870967741936,0.2,0.0,0.2857142857142857,0.23333333333333334,0.0,0.0,1.0,-10.0,1.6564516129032258,0.0,0.3360107516760966,1.0
+42,COGNITIVE_ON,0.08,1.1134963035583496,30,62,0.23333333333333334,1.0,0.3481850574712643,0.3436129032258065,0.26666666666666666,0.0,0.16666666666666666,0.20689655172413793,0.0,0.0,1.0,0.9833808634083979,1.67,0.625,0.3043219712655631,1.0

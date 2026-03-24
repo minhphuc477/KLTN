@@ -1,4 +1,4 @@
-﻿"""Overlay UI render helpers extracted from gui_runner._render."""
+"""Overlay UI render helpers extracted from gui_runner._render."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ def render_translucent_event_overlays(
                 gui.screen.blit(ov, (0, 0))
                 label = gui.big_font.render("PATH PREVIEW (overlay) - captures clicks", True, (255, 220, 120))
                 gui.screen.blit(label, (20, view_h // 2 - 20))
-            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError):
                 pass
 
         if getattr(gui, "show_solver_comparison_overlay", False):
@@ -34,9 +34,9 @@ def render_translucent_event_overlays(
                 gui.screen.blit(ov2, (0, 0))
                 label2 = gui.big_font.render("SOLVER COMPARISON - modal", True, (200, 200, 255))
                 gui.screen.blit(label2, (20, view_h // 2 - 20))
-            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError):
                 pass
-    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError):
         pass
 
 

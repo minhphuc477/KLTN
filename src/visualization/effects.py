@@ -18,7 +18,7 @@ All effects use delta-time for frame-rate independent animation.
 from __future__ import annotations
 
 import math
-from typing import Tuple, Optional, List, TYPE_CHECKING
+from typing import Tuple, Optional, List
 from dataclasses import dataclass
 from enum import Enum
 
@@ -646,7 +646,7 @@ class ItemCollectionEffect(BaseEffect):
         alpha = int(255 * (1 - progress))
         
         # Render particles
-        for px, py, vx, vy in self.particles:
+        for px, py, _vx, _vy in self.particles:
             screen_x = int(px * tile_size - camera_offset[0])
             screen_y = int(py * tile_size - camera_offset[1])
             
@@ -790,7 +790,7 @@ class ItemUsageEffect(BaseEffect):
         
         elif self.item_type == "bomb":
             # Draw explosion particles
-            for px, py, vx, vy in self.explosion_particles:
+            for px, py, _vx, _vy in self.explosion_particles:
                 screen_x = int(px * tile_size - camera_offset[0])
                 screen_y = int(py * tile_size - camera_offset[1])
                 

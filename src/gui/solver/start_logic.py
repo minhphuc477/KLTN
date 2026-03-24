@@ -1,4 +1,4 @@
-﻿"""Pure helpers for solver-start synchronization and recovery decisions."""
+"""Pure helpers for solver-start synchronization and recovery decisions."""
 
 from typing import Iterable, Tuple
 
@@ -24,14 +24,14 @@ def sync_solver_dropdown_settings(
         if control_name == "algorithm":
             try:
                 alg_idx = int(widget.selected)
-            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError):
                 pass
         elif control_name == "representation":
             rep_mode = _REPRESENTATION_BY_INDEX.get(getattr(widget, "selected", 0), rep_mode)
         elif control_name == "ara_weight":
             try:
                 weight = float(widget.options[widget.selected])
-            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError):
                 pass
 
     if rep_mode not in _VALID_REPRESENTATIONS:

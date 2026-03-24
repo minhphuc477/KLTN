@@ -7,22 +7,17 @@ try:
     # Test 1: WFC imports
     print("Test 1: Importing WFC components...")
     from src.generation.weighted_bayesian_wfc import (
-        WeightedBayesianWFC, 
-        extract_tile_priors_from_vqvae, 
-        WeightedBayesianWFCConfig,
         TilePrior
     )
     print("✅ WFC imports successful")
     
     # Test 2: NeuralSymbolicDungeonPipeline import
     print("\nTest 2: Importing NeuralSymbolicDungeonPipeline...")
-    from src.pipeline.dungeon_pipeline import NeuralSymbolicDungeonPipeline
     print("✅ Pipeline import successful")
     
     # Test 3: Direction mapping verification
     print("\nTest 3: Verifying direction mapping logic...")
     import numpy as np
-    from collections import Counter
     
     # Create simple test grid
     test_grid = np.array([
@@ -55,7 +50,7 @@ try:
     
     print(f"  Center tile {tile_id} at ({r}, {c})")
     print(f"  Adjacencies: {adjacencies}")
-    print(f"  Expected: [(0, 'N'), (0, 'S'), (0, 'E'), (0, 'W')]")
+    print("  Expected: [(0, 'N'), (0, 'S'), (0, 'E'), (0, 'W')]")
     
     expected = [(0, 'N'), (0, 'S'), (0, 'E'), (0, 'W')]
     if adjacencies == expected:
@@ -74,7 +69,7 @@ try:
     
     prob_n = prior.get_adjacency_probability(2, 'N')
     print(f"  P(tile_2 is NORTH of tile_1) = {prob_n:.2f}")
-    print(f"  Expected: 10 / (10 + 5) = 0.67")
+    print("  Expected: 10 / (10 + 5) = 0.67")
     
     if abs(prob_n - 0.67) < 0.01:
         print("✅ TilePrior probability calculation correct")

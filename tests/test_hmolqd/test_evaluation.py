@@ -6,7 +6,6 @@ Tests for solvability validation and quality diversity.
 """
 
 import pytest
-import numpy as np
 
 # NetworkX required for these tests
 nx = pytest.importorskip("networkx")
@@ -99,7 +98,7 @@ class TestSolvabilityChecker:
         graph.add_node(1, label="t")
         # No edge between start and goal
         
-        is_solvable, path = checker.check(graph)
+        is_solvable, _path = checker.check(graph)
         
         assert is_solvable == False
 

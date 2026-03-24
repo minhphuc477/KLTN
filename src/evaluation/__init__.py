@@ -10,7 +10,6 @@ Block VI: External Validator & MAP-Elites
 """
 
 from importlib import import_module
-from typing import TYPE_CHECKING
 
 from .validator import (
     ExternalValidator,
@@ -37,21 +36,6 @@ from .cbs_fitness import (
     compute_cbs_fitness,
     cbs_loss_term,
 )
-
-if TYPE_CHECKING:
-    from .benchmark_suite import (
-        GraphDescriptor,
-        BenchmarkSummary,
-        extract_graph_descriptor,
-        load_vglc_reference_graphs,
-        load_vglc_reference_rooms,
-        audit_block0_dataset,
-        generate_block_i_graphs,
-        run_wfc_robustness_probe,
-        calibrate_rule_weights_to_vglc,
-        run_block_i_benchmark,
-        run_block_i_benchmark_from_scratch,
-    )
 
 _BENCHMARK_EXPORTS = [
     'GraphDescriptor',

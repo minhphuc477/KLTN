@@ -1,12 +1,100 @@
 """CBS-based fitness function for MAP-Elites / H-MOLQD."""
 
+from __future__ import annotations
+
+from typing import Any, Dict
+
+import networkx as nx
 import numpy as np
+
 from src.simulation.cognitive_bounded_search import CognitiveBoundedSearch
 from src.simulation.validator import StateSpaceAStar, ZeldaLogicEnv
 
 
+def _compute_graph_cognitive_proxy(
+    graph: nx.Graph,
+    target_confusion_ratio: float,
+) -> Dict[str, float]:
+    """
+    Approximate cognitive navigation metrics directly from topology.
+
+    This proxy is used when room-level semantic grids are unavailable
+    (e.g., MAP-Elites graph feature extraction stage).
+    """
+    n = int(graph.number_of_nodes())
+    e = int(graph.number_of_edges())
+    if n <= 0:
+        return {
+            'fitness': -10.0,
+            'solvable_astar': False,
+            'solvable_cbs': False,
+            'confusion_ratio': float('inf'),
+            'path_efficiency': 0.0,
+            'room_entropy': 0.0,
+            'confusion_index': 0.0,
+            'astar_path_length': 0,
+            'cbs_path_length': 0,
+            'astar_states': 0,
+            'is_proxy': 1.0,
+        }
+
+    # Ensure directed reachability is judged on directed graph semantics.
+    dg = graph if graph.is_directed() else nx.DiGraph(graph)
+
+    # Heuristic start/goal selection by in/out-degree extrema.
+    start = min(dg.nodes(), key=lambda node: (dg.in_degree(node), str(node)))
+    goal = max(dg.nodes(), key=lambda node: (dg.out_degree(node), str(node)))
+
+    try:
+        shortest = nx.shortest_path_length(dg, source=start, target=goal)
+        solvable = True
+    except (nx.NetworkXNoPath, nx.NodeNotFound):
+        shortest = 0
+        solvable = False
+
+    degrees = [deg for _node, deg in dg.degree()]
+    mean_deg = float(np.mean(degrees)) if degrees else 0.0
+    deg_std = float(np.std(degrees)) if degrees else 0.0
+
+    # Dead-end pressure and loop pressure proxy human confusion tendencies.
+    dead_ends = float(sum(1 for _n, deg in dg.out_degree() if deg == 0)) / float(max(1, n))
+    loop_pressure = max(0.0, float(e - n + 1)) / float(max(1, n))
+    branch_pressure = float(np.clip((mean_deg - 1.0) / 3.0, 0.0, 1.0))
+
+    confusion_index = float(np.clip((0.45 * branch_pressure) + (0.35 * dead_ends) + (0.20 * loop_pressure), 0.0, 3.0))
+    confusion_ratio = 1.0 + confusion_index
+
+    if not solvable:
+        fitness = -10.0
+        path_efficiency = 0.0
+        cbs_path_len = int(max(1, n))
+    else:
+        # Assume bounded agent pays structural overhead over optimal shortest path.
+        cbs_path_len = int(max(1, round(shortest * (1.0 + confusion_index))))
+        path_efficiency = float(shortest) / float(max(1, cbs_path_len))
+        cr_penalty = (confusion_ratio - float(target_confusion_ratio)) ** 2
+        fitness = 1.0 / (1.0 + cr_penalty)
+
+    # Entropy proxy from degree spread (more uniform branching -> higher entropy).
+    room_entropy = float(np.clip((deg_std / max(1.0, mean_deg + 1e-8)), 0.0, 1.0))
+
+    return {
+        'fitness': float(fitness),
+        'solvable_astar': bool(solvable),
+        'solvable_cbs': bool(solvable),
+        'confusion_ratio': float(confusion_ratio),
+        'path_efficiency': float(path_efficiency),
+        'room_entropy': float(room_entropy),
+        'confusion_index': float(confusion_index),
+        'astar_path_length': int(shortest),
+        'cbs_path_length': int(cbs_path_len),
+        'astar_states': int(max(0, n + e)),
+        'is_proxy': 1.0,
+    }
+
+
 def compute_cbs_fitness(
-    grid: np.ndarray,
+    grid: Any,
     target_confusion_ratio: float = 2.0,
     persona: str = 'balanced',
     astar_timeout: int = 100000,
@@ -25,6 +113,19 @@ def compute_cbs_fitness(
         room_entropy: float
         confusion_index: float
     """
+    # Graph mode: use cognitive-topology proxy when no semantic grid is available.
+    if isinstance(grid, (nx.Graph, nx.DiGraph)):
+        return _compute_graph_cognitive_proxy(
+            graph=grid,
+            target_confusion_ratio=float(target_confusion_ratio),
+        )
+
+    if not isinstance(grid, np.ndarray):
+        raise TypeError(
+            "compute_cbs_fitness expects a numpy grid or networkx graph, "
+            f"got {type(grid).__name__}"
+        )
+
     env_a = ZeldaLogicEnv(semantic_grid=grid)
     solver_a = StateSpaceAStar(env_a, timeout=astar_timeout)
     success_a, path_a, states_a = solver_a.solve()
@@ -60,6 +161,7 @@ def compute_cbs_fitness(
         'astar_path_length': len(path_a) if success_a else 0,
         'cbs_path_length': len(path_c),
         'astar_states': states_a,
+        'is_proxy': 0.0,
     }
 
 

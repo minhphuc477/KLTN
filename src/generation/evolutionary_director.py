@@ -1208,6 +1208,17 @@ class TensionCurveEvaluator:
         self.min_narrative_score = float(
             np.clip(float(provided_targets.get("narrative_min_score", 0.0)), 0.0, 1.0)
         )
+        # Optional cognitive objective from CBS-style navigation metrics.
+        self.cognitive_persona = str(provided_targets.get("cognitive_persona", "balanced"))
+        self.target_cognitive_confusion_ratio = float(
+            np.clip(float(provided_targets.get("cognitive_target_confusion_ratio", 1.8)), 1.0, 6.0)
+        )
+        self.cognitive_score_weight = float(
+            np.clip(float(provided_targets.get("cognitive_score_weight", 0.0)), 0.0, 0.18)
+        )
+        self.min_cognitive_score = float(
+            np.clip(float(provided_targets.get("cognitive_min_score", 0.0)), 0.0, 1.0)
+        )
 
         # Minimal criteria used as explicit structural constraints.
         # Keep them as strict floors relative to target topology realism.
@@ -1731,6 +1742,29 @@ class TensionCurveEvaluator:
         narrative_score = self._score_narrative_beats(graph, critical_path or [])
         descriptor_metrics["narrative_score"] = float(narrative_score)
 
+        cognitive_score = 0.5
+        cognitive_metrics: Dict[str, Any] = {}
+        if not self.legacy_baseline_mode:
+            try:
+                from src.evaluation.cbs_fitness import compute_cbs_fitness
+
+                cbs_input_graph = mission_graph_to_networkx(graph, directed=True)
+                cognitive_metrics = compute_cbs_fitness(
+                    cbs_input_graph,
+                    persona=self.cognitive_persona,
+                    target_confusion_ratio=self.target_cognitive_confusion_ratio,
+                )
+                cognitive_score = float(np.clip(cognitive_metrics.get("fitness", 0.5), 0.0, 1.0))
+            except (ImportError, RuntimeError, ValueError, TypeError, KeyError) as error:
+                logger.debug("CBS cognitive scoring failed, using neutral score: %s", error)
+                cognitive_metrics = {}
+                cognitive_score = 0.5
+        descriptor_metrics["cognitive_score"] = float(cognitive_score)
+        descriptor_metrics["cognitive_confusion_ratio"] = float(cognitive_metrics.get("confusion_ratio", 0.0))
+        descriptor_metrics["cognitive_path_efficiency"] = float(cognitive_metrics.get("path_efficiency", 0.0))
+        descriptor_metrics["cognitive_room_entropy"] = float(cognitive_metrics.get("room_entropy", 0.0))
+        descriptor_metrics["cognitive_proxy_mode"] = float(cognitive_metrics.get("is_proxy", 0.0))
+
         path_depth_score = 1.0 - min(
             abs(float(critical_edges - self.desired_critical_edges)) / float(max(1, self.desired_critical_edges)),
             1.0,
@@ -1927,9 +1961,11 @@ class TensionCurveEvaluator:
             ))
             narrative_weight = 0.0
             structural_weight = 0.0
+            cognitive_weight = 0.0
         else:
             narrative_weight = float(self.narrative_score_weight if self.narrative_beats_enabled else 0.0)
-            structural_weight = float(np.clip(0.42 - narrative_weight, 0.22, 0.42))
+            cognitive_weight = float(self.cognitive_score_weight)
+            structural_weight = float(np.clip(0.42 - narrative_weight - cognitive_weight, 0.12, 0.42))
             fitness = (
                 (0.20 * curve_fitness)
                 + (0.08 * backtracking_score)
@@ -1937,6 +1973,7 @@ class TensionCurveEvaluator:
                 + (0.18 * descriptor_score)
                 + (structural_weight * structural_objective_score)
                 + (narrative_weight * narrative_score)
+                + (cognitive_weight * cognitive_score)
             )
         if self.legacy_baseline_mode:
             realism_multiplier = 1.0
@@ -1972,6 +2009,7 @@ class TensionCurveEvaluator:
         descriptor_metrics["realism_multiplier"] = float(realism_multiplier)
         descriptor_metrics["realism_distribution_multiplier"] = float(realism_distribution_multiplier)
         descriptor_metrics["generation_efficiency_multiplier"] = float(generation_efficiency_multiplier)
+        descriptor_metrics["cognitive_weight"] = float(cognitive_weight)
 
         structural_violation = self._structural_violation(descriptor_metrics)
         descriptor_metrics["structural_violation"] = float(structural_violation)
@@ -2004,6 +2042,12 @@ class TensionCurveEvaluator:
         narrative_violation = float(np.clip(narrative_violation, 0.0, 2.0))
         descriptor_metrics["narrative_violation"] = float(narrative_violation)
 
+        cognitive_violation = 0.0
+        if self.min_cognitive_score > 0.0:
+            cognitive_violation = max(0.0, self.min_cognitive_score - cognitive_score) / max(0.05, self.min_cognitive_score)
+        cognitive_violation = float(np.clip(cognitive_violation, 0.0, 2.0))
+        descriptor_metrics["cognitive_violation"] = float(cognitive_violation)
+
         directionality_violation = max(
             0.0,
             float(descriptor_metrics.get("directionality_gap", 0.0)) - float(self.max_directionality_gap),
@@ -2026,7 +2070,8 @@ class TensionCurveEvaluator:
                     + (0.25 * topology_realism_error)
                     + (0.34 * curve_alignment_violation)
                     + (0.18 * curve_trend_violation)
-                    + (0.16 * narrative_violation),
+                    + (0.16 * narrative_violation)
+                    + (0.20 * cognitive_violation),
                     0.0,
                     3.0,
                 )

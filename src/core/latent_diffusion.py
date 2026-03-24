@@ -30,8 +30,7 @@ Architecture:
 
 import math
 import logging
-from typing import Dict, List, Tuple, Optional, Any, Callable
-from functools import partial
+from typing import Dict, List, Tuple, Optional
 
 import torch
 import torch.nn as nn
@@ -220,6 +219,11 @@ class CrossAttention(nn.Module):
 
 class ResBlock(nn.Module):
     """Residual block with timestep conditioning."""
+
+    @staticmethod
+    def num_groups(channels: int, max_groups: int = 32) -> int:
+        """Public wrapper for GroupNorm group-count selection."""
+        return ResBlock._num_groups(channels, max_groups)
     
     @staticmethod
     def _num_groups(channels: int, max_groups: int = 32) -> int:
@@ -542,7 +546,7 @@ class UNetDenoiser(nn.Module):
             channels.append(out_ch)
         
         # Output projection
-        self.output_norm = nn.GroupNorm(ResBlock._num_groups(model_channels), model_channels)
+        self.output_norm = nn.GroupNorm(ResBlock.num_groups(model_channels), model_channels)
         self.output_proj = nn.Conv2d(model_channels, out_channels, 3, padding=1)
     
     def forward(

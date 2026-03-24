@@ -51,7 +51,6 @@ Integration Point:
     Fitness function in evolutionary algorithm
 """
 
-import numpy as np
 import networkx as nx
 from typing import Dict, List, Tuple, Optional, Set, FrozenSet
 from dataclasses import dataclass, field
@@ -640,7 +639,7 @@ if __name__ == "__main__":
     validator = KeyEconomyValidator(G)
     result = validator.validate()
     
-    print(f"\nValidation Result:")
+    print("\nValidation Result:")
     print(f"  Valid: {result.is_valid}")
     print(f"  Greedy solvable: {result.greedy_solvable}")
     print(f"  Adversarial solvable: {result.adversarial_solvable}")

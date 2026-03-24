@@ -1,4 +1,4 @@
-﻿"""Helpers for synchronous solver execution in debug mode."""
+"""Helpers for synchronous solver execution in debug mode."""
 
 from typing import Any, Callable, Optional
 

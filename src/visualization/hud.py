@@ -17,10 +17,8 @@ All components use delta-time for animations and smooth transitions.
 
 from __future__ import annotations
 
-import math
-from typing import Dict, List, Tuple, Optional, Any
-from dataclasses import dataclass, field
-from enum import Enum
+from typing import Dict, Tuple, Optional, Any
+from dataclasses import dataclass
 
 try:
     import pygame

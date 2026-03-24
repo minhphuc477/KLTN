@@ -23,7 +23,7 @@ Sources:
 import networkx as nx
 import numpy as np
 import logging
-from typing import Dict, List, Set, Tuple, Optional, Any
+from typing import Dict, List, Set, Tuple, Optional
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -31,13 +31,7 @@ from pathlib import Path
 from src.constants.vglc_constants import (
     ROOM_WIDTH_TILES,
     ROOM_HEIGHT_TILES,
-    ROOM_SHAPE,
     TILE_SIZE_PX,
-    NODE_TYPE_MAP,
-    EDGE_TYPE_MAP,
-    VIRTUAL_NODE_TYPES,
-    PHYSICAL_NODE_TYPES,
-    LEAF_NODE_TYPES,
 )
 from src.core.definitions import (
     parse_node_label_tokens,
@@ -126,7 +120,7 @@ class EdgeAttributes:
             flags.append("oneway")
         
         flag_str = f" [{', '.join(flags)}]" if flags else ""
-        return f"Edge({self.source}â†’{self.target}, {type_name}{flag_str})"
+        return f"Edge({self.source}->{self.target}, {type_name}{flag_str})"
 
 
 @dataclass
@@ -170,39 +164,39 @@ class TopologyReport:
         lines.append("=" * 60)
         
         # Overall status
-        status = "âœ… VALID" if self.is_valid else "âŒ INVALID"
+        status = "[OK] VALID" if self.is_valid else "[FAIL] INVALID"
         lines.append(f"\nStatus: {status}")
         
         # Metrics
-        lines.append(f"\nMetrics:")
+        lines.append("\nMetrics:")
         lines.append(f"  Total Nodes: {self.num_nodes}")
         lines.append(f"  Physical Nodes: {self.num_physical_nodes}")
         lines.append(f"  Virtual Nodes: {self.num_virtual_nodes}")
         lines.append(f"  Edges: {self.num_edges}")
         
         # Node types
-        lines.append(f"\nNode Types:")
+        lines.append("\nNode Types:")
         lines.append(f"  Triforce: {self.num_triforce}")
         lines.append(f"  Boss: {self.num_boss}")
         lines.append(f"  Enemy: {self.num_enemy}")
         lines.append(f"  Key: {self.num_key}")
         
         # Connectivity
-        lines.append(f"\nConnectivity:")
-        lines.append(f"  Connected: {'âœ…' if self.is_connected else 'âŒ'}")
+        lines.append("\nConnectivity:")
+        lines.append(f"  Connected: {'[OK]' if self.is_connected else '[FAIL]'}")
         lines.append(f"  Components: {self.num_components}")
         if self.isolated_nodes:
             lines.append(f"  Isolated Nodes: {self.isolated_nodes}")
         
         # Goal subgraph
-        lines.append(f"\nGoal Subgraph:")
-        lines.append(f"  Exists: {'âœ…' if self.has_goal_subgraph else 'âŒ'}")
-        lines.append(f"  Valid: {'âœ…' if self.goal_subgraph_valid else 'âŒ'}")
+        lines.append("\nGoal Subgraph:")
+        lines.append(f"  Exists: {'[OK]' if self.has_goal_subgraph else '[FAIL]'}")
+        lines.append(f"  Valid: {'[OK]' if self.goal_subgraph_valid else '[FAIL]'}")
         lines.append(f"  Message: {self.goal_subgraph_message}")
         
         # Start node
-        lines.append(f"\nStart Node:")
-        lines.append(f"  Found: {'âœ…' if self.has_start else 'âŒ'}")
+        lines.append("\nStart Node:")
+        lines.append(f"  Found: {'[OK]' if self.has_start else '[FAIL]'}")
         if self.start_node is not None:
             lines.append(f"  Node ID: {self.start_node}")
         
@@ -210,13 +204,13 @@ class TopologyReport:
         if self.warnings:
             lines.append(f"\nWarnings ({len(self.warnings)}):")
             for warning in self.warnings:
-                lines.append(f"  âš ï¸  {warning}")
+                lines.append(f"  [WARN] {warning}")
         
         # Errors
         if self.errors:
             lines.append(f"\nErrors ({len(self.errors)}):")
             for error in self.errors:
-                lines.append(f"  âŒ {error}")
+                lines.append(f"  [FAIL] {error}")
         
         lines.append("=" * 60)
         return "\n".join(lines)
@@ -235,10 +229,10 @@ class VGLCGraphParser:
         Parse composite node labels.
         
         Examples:
-            "e,k,p" â†’ {"e", "k", "p"}
-            "b" â†’ {"b"}
-            "s" â†’ {"s"}
-            "" â†’ set()
+            "e,k,p" -> {"e", "k", "p"}
+            "b" -> {"b"}
+            "s" -> {"s"}
+            "" -> set()
         
         Args:
             label: Raw label string from graph node
@@ -415,8 +409,8 @@ class VGLCTopologyValidator:
         removes them and marks their successors as entry points.
         
         Example:
-            Before: s (virtual) â†’ 8 (physical) â†’ 9
-            After:  8 (entry=True) â†’ 9
+            Before: s (virtual) -> 8 (physical) -> 9
+            After:  8 (entry=True) -> 9
         
         Args:
             graph: NetworkX graph (may contain virtual nodes)
@@ -432,7 +426,7 @@ class VGLCTopologyValidator:
         for vnode in virtual_nodes:
             # Get successors (physical nodes)
             successors = list(graph.successors(vnode))
-            logger.debug(f"Virtual node {vnode} â†’ successors {successors}")
+            logger.debug(f"Virtual node {vnode} -> successors {successors}")
             
             # Remove virtual node
             filtered.remove_node(vnode)
@@ -471,7 +465,7 @@ class VGLCTopologyValidator:
                 else:
                     successors = list(graph.neighbors(node))
                 if successors:
-                    logger.info(f"Found start pointer {node} â†’ physical start {successors[0]}")
+                    logger.info(f"Found start pointer {node} -> physical start {successors[0]}")
                     return successors[0]
         
         # Find node marked as entry
@@ -668,8 +662,8 @@ class VGLCDimensionValidator:
         height, width = room_array.shape
         
         if height != ROOM_HEIGHT_TILES or width != ROOM_WIDTH_TILES:
-            return False, (f"Wrong dimensions: {height}Ã—{width} "
-                          f"(expected {ROOM_HEIGHT_TILES}Ã—{ROOM_WIDTH_TILES})")
+            return False, (f"Wrong dimensions: {height}x{width} "
+                          f"(expected {ROOM_HEIGHT_TILES}x{ROOM_WIDTH_TILES})")
         
         return True, "Valid dimensions"
     
@@ -699,8 +693,8 @@ class VGLCDimensionValidator:
         height, width = image_array.shape[:2]
         
         if height != expected_height or width != expected_width:
-            return False, (f"Wrong pixel dimensions: {height}Ã—{width} "
-                          f"(expected {expected_height}Ã—{expected_width})")
+            return False, (f"Wrong pixel dimensions: {height}x{width} "
+                          f"(expected {expected_height}x{expected_width})")
         
         return True, "Valid pixel dimensions"
     
@@ -710,7 +704,7 @@ class VGLCDimensionValidator:
         Validate room has standard VGLC shape.
         
         Checks:
-        - Correct dimensions (16Ã—11)
+        - Correct dimensions (16x11)
         - Wall perimeter present
         - Interior region exists
         

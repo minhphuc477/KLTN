@@ -33,7 +33,7 @@ def run_simple_bench():
     t0 = time.time()
     path, nodes = astar(grid, start, goal)
     dt = time.time() - t0
-    print(f"solver,grid_size,ob_ratio,time_sec,nodes_expanded,path_len")
+    print("solver,grid_size,ob_ratio,time_sec,nodes_expanded,path_len")
     print(f"astar,{len(grid)},{0.12},{dt:.4f},{nodes},{len(path) if path else -1}")
 
     t0 = time.time()

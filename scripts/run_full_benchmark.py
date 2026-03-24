@@ -19,14 +19,12 @@ Usage:
 """
 
 import sys
-import os
 import argparse
 import logging
 import random
 import time
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional, Any
-from collections import defaultdict
+from typing import Dict, List, Tuple, Any
 
 import numpy as np
 import pandas as pd
@@ -38,7 +36,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from src.core.definitions import SEMANTIC_PALETTE
 from src.simulation.validator import ZeldaLogicEnv, StateSpaceAStar
 from src.simulation.cognitive_bounded_search import (
-    CognitiveBoundedSearch, CBSMetrics, PERSONA_CONFIGS
+    CognitiveBoundedSearch
 )
 from src.zelda_data.zelda_core import ZeldaDungeonAdapter
 
@@ -795,24 +793,24 @@ def main():
     print(f"GREEDY (Î»=1.0, no decay) samples: {analysis['greedy_n']}")
     print(f"BALANCED (Î»=0.95) samples: {analysis['balanced_n']}")
     print()
-    print(f"Success Rate:")
+    print("Success Rate:")
     print(f"  BALANCED: {analysis['balanced_success_rate']:.2%}")
     print(f"  GREEDY:   {analysis['greedy_success_rate']:.2%}")
     print(f"  Diff:     {analysis['success_rate_diff']:+.2%}")
     print()
-    print(f"Mean Confusion Index:")
+    print("Mean Confusion Index:")
     print(f"  BALANCED: {analysis['balanced_mean_confusion_index']:.3f}")
     print(f"  GREEDY:   {analysis['greedy_mean_confusion_index']:.3f}")
     print(f"  Diff:     {analysis['confusion_index_diff']:+.3f} (GREEDY more confused)")
     print()
-    print(f"Mean Path Length:")
+    print("Mean Path Length:")
     print(f"  BALANCED: {analysis['balanced_mean_path_length']:.1f}")
     print(f"  GREEDY:   {analysis['greedy_mean_path_length']:.1f}")
     print(f"  Diff:     {analysis['path_length_diff']:+.1f}")
     
     if 'confusion_ttest_pvalue' in analysis:
         print()
-        print(f"Statistical Significance (t-test):")
+        print("Statistical Significance (t-test):")
         print(f"  t-statistic: {analysis['confusion_ttest_statistic']:.3f}")
         print(f"  p-value:     {analysis['confusion_ttest_pvalue']:.4f}")
         if analysis['confusion_ttest_pvalue'] < 0.05:

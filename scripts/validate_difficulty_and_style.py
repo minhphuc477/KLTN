@@ -23,12 +23,9 @@ Defense Statements Generated:
 """
 
 import sys
-import os
 import argparse
-import numpy as np
 import torch
 from pathlib import Path
-from typing import Dict, List, Tuple
 
 # Add project root to path
 project_root = Path(__file__).parent.parent
@@ -36,7 +33,6 @@ sys.path.insert(0, str(project_root))
 
 from src.evaluation.difficulty_calculator import (
     DifficultyCalculator,
-    DifficultyComponents,
     compute_dungeon_difficulty_curve,
     apply_difficulty_constraint_to_genome
 )

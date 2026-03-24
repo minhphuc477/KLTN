@@ -1,4 +1,6 @@
 """Debug A* pathfinding with block"""
+# pyright: reportPrivateUsage=false
+
 import numpy as np
 import sys
 from pathlib import Path
@@ -8,7 +10,7 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 from src.core.definitions import SEMANTIC_PALETTE
-from src.simulation.validator import ZeldaLogicEnv, StateSpaceAStar, GameState
+from src.simulation.validator import ZeldaLogicEnv, StateSpaceAStar
 
 # Simple block test
 grid = np.full((5, 8), SEMANTIC_PALETTE['WALL'], dtype=np.int64)

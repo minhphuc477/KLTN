@@ -15,7 +15,6 @@ Run: pytest tests/test_evolutionary_director.py -v
 
 import sys
 from pathlib import Path
-import numpy as np
 import networkx as nx
 
 # Add project root to path
@@ -29,7 +28,6 @@ from src.generation.evolutionary_director import (
     mission_graph_to_networkx,
     networkx_to_mission_graph,
 )
-from src.generation.grammar import MissionGraph, NodeType
 
 
 class TestEvolutionaryDirector:
@@ -149,7 +147,7 @@ class TestEvolutionaryDirector:
             seed=42,
         )
         
-        graph = gen.evolve()
+        _graph = gen.evolve()
         stats = gen.get_statistics()
         
         # Check fitness is reasonable
@@ -162,7 +160,7 @@ class TestEvolutionaryDirector:
     def test_empty_target_curve(self):
         """Test handling of edge case: empty target curve."""
         try:
-            gen = EvolutionaryTopologyGenerator(
+            EvolutionaryTopologyGenerator(
                 target_curve=[],
                 population_size=10,
                 generations=5,
@@ -265,7 +263,7 @@ class TestEvolutionaryDirector:
             seed=42,
         )
         
-        graph = gen.evolve()
+        _graph = gen.evolve()
         stats = gen.get_statistics()
         
         # Large population should converge quickly
@@ -460,7 +458,7 @@ class TestStatistics:
             seed=42,
         )
         
-        graph = gen.evolve()
+        _graph = gen.evolve()
         stats = gen.get_statistics()
         
         # Check all fields present
@@ -487,7 +485,7 @@ class TestStatistics:
             seed=42,
         )
         
-        graph = gen.evolve()
+        _graph = gen.evolve()
         stats = gen.get_statistics()
         
         # Diversity should be recorded

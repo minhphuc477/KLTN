@@ -19,14 +19,13 @@ Heuristic: Manhattan distance + key deficit penalty
 import heapq
 import logging
 import numpy as np
-from typing import List, Tuple, Dict, Set, Optional, FrozenSet
-from dataclasses import dataclass, field
-from collections import defaultdict
+from typing import List, Tuple, Dict, Set, Optional
+from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
 from src.zelda_data.zelda_core import (
-    Dungeon, Room, InventoryState,
+    Dungeon, InventoryState,
     SEMANTIC_PALETTE, ValidationMode
 )
 
@@ -680,7 +679,6 @@ def print_solution(result: Dict):
 # ==========================================
 if __name__ == '__main__':
     """Test the pathfinder on sample dungeons."""
-    import sys
     from src.zelda_data.zelda_core import ZeldaDungeonAdapter
     
     logger.info("Zelda A* Pathfinder Test")

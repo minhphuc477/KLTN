@@ -1,4 +1,4 @@
-﻿"""Bottom panel rendering helpers extracted from gui_runner."""
+"""Bottom panel rendering helpers extracted from gui_runner."""
 
 from typing import Any
 
@@ -98,7 +98,7 @@ def render_inventory_section(gui: Any, x: int, y: int, width: int, height: int, 
     _ = height
     try:
         gui._sync_inventory_counters()
-    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError):
         pass
 
     logger.debug(

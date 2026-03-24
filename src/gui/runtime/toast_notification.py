@@ -1,4 +1,4 @@
-﻿"""Floating toast notification model and renderer for GUI overlays."""
+"""Floating toast notification model and renderer for GUI overlays."""
 
 from typing import Any
 
@@ -53,7 +53,7 @@ class ToastNotification:
 
         try:
             pygame.draw.rect(toast_surf, (50, 60, 80, int(alpha)), bg_rect, border_radius=8)
-        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError):
             pygame.draw.rect(toast_surf, (50, 60, 80), bg_rect, border_radius=8)
 
         col = self.colors.get(self.toast_type, (200, 200, 200))
@@ -65,13 +65,13 @@ class ToastNotification:
                 2,
                 border_radius=8,
             )
-        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError):
             pygame.draw.rect(toast_surf, (200, 200, 200), bg_rect, 2, border_radius=8)
 
         text_with_alpha = text_surf.copy()
         try:
             text_with_alpha.set_alpha(int(alpha))
-        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError):
             pass
         toast_surf.blit(text_with_alpha, (padding, padding))
 

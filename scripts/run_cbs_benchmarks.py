@@ -13,12 +13,11 @@ Usage:
     python scripts/run_cbs_benchmarks.py --levels 1,2,3 --personas balanced,explorer
     python scripts/run_cbs_benchmarks.py --quick  # Only level 1
 """
-import os
 import sys
 import csv
 import argparse
 from pathlib import Path
-from typing import List, Tuple, Optional, Dict, Any
+from typing import List, Tuple, Dict, Any
 import numpy as np
 
 # Add project root to path
@@ -28,7 +27,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from src.zelda_data.zelda_core import ZeldaDungeonAdapter
 from src.simulation.validator import StateSpaceAStar, ZeldaLogicEnv
 from src.simulation.cognitive_bounded_search import (
-    CognitiveBoundedSearch, AgentPersona, CBSMetrics
+    CognitiveBoundedSearch, AgentPersona
 )
 
 
@@ -253,12 +252,12 @@ def print_summary(summary: Dict[str, Any]) -> None:
     print("BENCHMARK SUMMARY")
     print("="*70)
     print(f"Total maps tested: {summary['total_maps']}")
-    print(f"\nA* (Optimal):")
+    print("\nA* (Optimal):")
     print(f"  Success rate: {summary['astar']['success_rate']*100:.1f}%")
     print(f"  Avg path length: {summary['astar']['avg_path_length']:.1f}")
     print(f"  Avg states explored: {summary['astar']['avg_states']:.0f}")
     
-    print(f"\nCBS+ Results by Persona:")
+    print("\nCBS+ Results by Persona:")
     for persona, stats in summary['cbs'].items():
         print(f"\n  {persona.upper()}:")
         print(f"    Success rate: {stats['success_rate']*100:.1f}%")

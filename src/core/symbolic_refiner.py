@@ -26,7 +26,7 @@ Collapse Step:
 
 Propagation Step:
     For neighbors n of collapsed cell:
-    P(n = t) âˆ P(n = t) Ã— Î£_{t'} A(t, t') Ã— P(c = t')
+    P(n = t) proportional_to P(n = t) * sum_{t'} A(t, t') * P(c = t')
     where A(t, t') = adjacency compatibility
 
 Convergence:
@@ -531,6 +531,11 @@ class LearnedTileStatistics:
         """Accumulate statistics from a batch of room grids."""
         for grid in grids:
             self.observe(grid)
+
+    @property
+    def total_tiles(self) -> int:
+        """Total number of observed tiles."""
+        return self._total_tiles
     
     def get_adjacency_rules(
         self,
@@ -983,7 +988,8 @@ class SymbolicRefiner:
         effective_adjacency = adjacency
         effective_weights = tile_weights
         
-        if learned_stats is not None and learned_stats._total_tiles > 0:
+        total_tiles = learned_stats.total_tiles if learned_stats is not None else 0
+        if learned_stats is not None and total_tiles > 0:
             if effective_adjacency is None:
                 effective_adjacency = learned_stats.get_adjacency_rules(
                     threshold=adjacency_threshold
@@ -991,11 +997,11 @@ class SymbolicRefiner:
                 logger.info(
                     f"Using learned adjacency rules: "
                     f"{len(effective_adjacency)} tile types, "
-                    f"from {learned_stats._total_tiles} observations"
+                    f"from {total_tiles} observations"
                 )
             if effective_weights is None:
                 effective_weights = learned_stats.get_tile_weights()
-                logger.info(f"Using learned tile weights from training data")
+                logger.info("Using learned tile weights from training data")
         
         if effective_adjacency is None:
             effective_adjacency = DEFAULT_ADJACENCY

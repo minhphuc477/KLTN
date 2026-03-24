@@ -33,7 +33,7 @@ Architecture:
 
 import math
 import logging
-from typing import Dict, List, Tuple, Optional, Any
+from typing import Dict, Optional
 
 import torch
 import torch.nn as nn
@@ -44,9 +44,7 @@ logger = logging.getLogger(__name__)
 
 # Try to import torch_geometric for GNN
 try:
-    import torch_geometric
-    from torch_geometric.nn import GCNConv, GATConv, GATv2Conv, MessagePassing
-    from torch_geometric.data import Data, Batch
+    from torch_geometric.nn import GCNConv, GATv2Conv
     HAS_TORCH_GEOMETRIC = True
 except ImportError:
     HAS_TORCH_GEOMETRIC = False
@@ -744,6 +742,7 @@ class DualStreamConditionEncoder(nn.Module):
         hidden_dim: int = 256,
         output_dim: int = 256,
         num_gnn_layers: int = 3,
+        gnn_type: str = 'gat',
         num_attention_heads: int = 8,
         dropout: float = 0.1,
         num_style_tokens: int = 6,
@@ -769,6 +768,7 @@ class DualStreamConditionEncoder(nn.Module):
             hidden_dim=hidden_dim,
             output_dim=output_dim,
             num_layers=num_gnn_layers,
+            gnn_type=gnn_type,
         )
         
         # GLOBAL STYLE TOKEN (Theme Consistency)

@@ -27,12 +27,10 @@ Usage:
     python examples/neural_generation_demo.py --output-dir ./demo_outputs
 """
 
-import os
 import sys
 import argparse
 import logging
 from pathlib import Path
-from typing import Optional
 
 import torch
 import numpy as np
@@ -96,7 +94,7 @@ def visualize_dungeon_structure(result):
     print("DUNGEON GENERATION RESULTS")
     print("="*70)
     
-    print(f"\nGeneral Metrics:")
+    print("\nGeneral Metrics:")
     print(f"  Total rooms: {result.metrics['num_rooms']}")
     print(f"  Dungeon shape: {result.metrics['dungeon_shape']}")
     print(f"  Generation time: {result.generation_time:.2f}s")
@@ -104,12 +102,12 @@ def visualize_dungeon_structure(result):
     print(f"  Total tiles repaired: {result.metrics['total_tiles_repaired']}")
     
     if result.map_elites_score:
-        print(f"\nMAP-Elites Metrics:")
+        print("\nMAP-Elites Metrics:")
         print(f"  Linearity: {result.map_elites_score['linearity']:.3f}")
         print(f"  Leniency: {result.map_elites_score['leniency']:.3f}")
         print(f"  Path length: {result.map_elites_score['path_length']}")
     
-    print(f"\nPer-Room Statistics:")
+    print("\nPer-Room Statistics:")
     for room_id, room_result in sorted(result.rooms.items()):
         status = "REPAIRED" if room_result.was_repaired else "ORIGINAL"
         tiles_changed = room_result.metrics.get('tiles_changed', 0)
@@ -253,7 +251,7 @@ def demo_single_room_generation(pipeline: NeuralSymbolicDungeonPipeline, args):
     print_room_ascii(result.neural_grid, "Neural Output (Before Repair)")
     print_room_ascii(result.room_grid, "Final Room (After Repair)")
     
-    print(f"\nRoom Metrics:")
+    print("\nRoom Metrics:")
     print(f"  Entropy: {result.metrics['neural_grid_entropy']:.3f}")
     print(f"  Was repaired: {result.was_repaired}")
     print(f"  Tiles changed: {result.metrics.get('tiles_changed', 0)}")
@@ -430,7 +428,7 @@ def main():
     print("\n" + "="*70)
     print("NEURAL-SYMBOLIC DUNGEON GENERATION - INTERACTIVE DEMO")
     print("="*70)
-    print(f"\nConfiguration:")
+    print("\nConfiguration:")
     print(f"  Checkpoint dir: {args.checkpoint_dir}")
     print(f"  Device: {args.device}")
     print(f"  Seed: {args.seed}")

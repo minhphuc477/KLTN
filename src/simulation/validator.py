@@ -1446,10 +1446,10 @@ class StateSpaceAStar:
         
         # PERFORMANCE FIX: Cache door and element positions at initialization
         # Avoids O(width × height) scan on every heuristic call
-        self._locked_doors_cache = self.env._find_all_positions(SEMANTIC_PALETTE['DOOR_LOCKED'])
-        self._boss_doors_cache = self.env._find_all_positions(SEMANTIC_PALETTE['DOOR_BOSS'])
-        self._bomb_doors_cache = self.env._find_all_positions(SEMANTIC_PALETTE['DOOR_BOMB'])
-        self._element_tiles_cache = self.env._find_all_positions(SEMANTIC_PALETTE['ELEMENT'])
+        self._locked_doors_cache = self.env.find_all_positions(SEMANTIC_PALETTE['DOOR_LOCKED'])
+        self._boss_doors_cache = self.env.find_all_positions(SEMANTIC_PALETTE['DOOR_BOSS'])
+        self._bomb_doors_cache = self.env.find_all_positions(SEMANTIC_PALETTE['DOOR_BOMB'])
+        self._element_tiles_cache = self.env.find_all_positions(SEMANTIC_PALETTE['ELEMENT'])
 
         # ── HIERARCHICAL SOLVER PRECOMPUTATION ──
         # Precompute graph BFS distance (hops) from every node to the goal node.
@@ -3207,6 +3207,26 @@ class StateSpaceAStar:
                         SEMANTIC_PALETTE['KEY_ITEM'], SEMANTIC_PALETTE['ITEM_MINOR']]:
             pickups.extend(self.env.find_all_positions(tile_id))
         return pickups
+
+    def get_stair_destinations(self, current_pos: Tuple[int, int]) -> List[Tuple[int, int]]:
+        """Public wrapper for stair-transition destination lookup."""
+        return self._get_stair_destinations(current_pos)
+
+    def get_controlled_virtual_destinations(
+        self,
+        current_pos: Tuple[int, int],
+        state: GameState,
+    ) -> List[Tuple[Tuple[int, int], int, str]]:
+        """Public wrapper for controlled virtual-node transitions."""
+        return self._get_controlled_virtual_destinations(current_pos, state)
+
+    def get_graph_warp_destinations(
+        self,
+        current_pos: Tuple[int, int],
+        state: GameState,
+    ) -> List[Tuple[Tuple[int, int], int, str]]:
+        """Public wrapper for non-adjacent graph warp transitions."""
+        return self._get_graph_warp_destinations(current_pos, state)
     
     def _get_stair_destinations(self, current_pos: Tuple[int, int]) -> List[Tuple[int, int]]:
         """
@@ -4185,7 +4205,16 @@ class ZeldaValidator:
             path=path
         )
     
-    def check_soft_locks(self, semantic_grid: np.ndarray, sample_count: int = 10) -> Tuple[bool, List[str]]:
+    def check_soft_locks(
+        self,
+        semantic_grid: np.ndarray,
+        sample_count: int = 10,
+        deterministic: bool = True,
+        graph=None,
+        room_to_node=None,
+        room_positions=None,
+        node_to_room=None,
+    ) -> Tuple[bool, List[str]]:
         """
         Detect soft-lock traps (one-way rooms where player gets stuck).
         
@@ -4207,6 +4236,15 @@ class ZeldaValidator:
         Returns:
             (is_safe, trap_descriptions): True if no soft-locks found, plus list of trap locations
         """
+        if deterministic:
+            return self.check_soft_locks_deterministic(
+                semantic_grid,
+                graph=graph,
+                room_to_node=room_to_node,
+                room_positions=room_positions,
+                node_to_room=node_to_room,
+            )
+
         import random
         
         # Create environment

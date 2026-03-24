@@ -19,11 +19,9 @@ Integration Point: In generate_dungeon, add state propagation between rooms
 """
 
 import numpy as np
-import networkx as nx
-from typing import Dict, List, Tuple, Optional, Set, Any, FrozenSet
+from typing import Dict, List, Optional, Set, Any
 from dataclasses import dataclass, field
 from enum import Enum
-from collections import defaultdict, deque
 import logging
 
 logger = logging.getLogger(__name__)

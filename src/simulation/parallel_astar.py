@@ -24,7 +24,7 @@ Python Implementation Notes:
 import multiprocessing as mp
 import heapq
 import logging
-from typing import Any, Dict, List, Tuple, Optional, Set
+from typing import Any, Dict, List, Tuple, Optional
 from dataclasses import dataclass
 from .validator import (
     GameState,
@@ -445,7 +445,7 @@ class ParallelAStarSolver:
     def _try_move(self, state: GameState, target_pos: Tuple[int, int], 
                   target_tile: int) -> Tuple[bool, GameState]:
         """Canonical movement check shared with sequential solvers."""
-        return self.env._try_move_pure(state, target_pos, target_tile)
+        return self.env.try_move_pure(state, target_pos, target_tile)
 
 
 # ==========================================

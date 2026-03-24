@@ -1,4 +1,6 @@
-﻿import random
+﻿# pyright: reportPrivateUsage=false
+
+import random
 import networkx as nx
 from src.zelda_data.zelda_core import RoomGraphMatcher, Room
 import numpy as np
@@ -13,7 +15,7 @@ def test_mapping_deterministic_longrun():
     rooms = {}
     for r in range(3):
         for c in range(3):
-            doors = {'N': False, 'S': False, 'E': False, 'W': False}
+            _doors = {'N': False, 'S': False, 'E': False, 'W': False}
             rooms[(r, c)] = make_room((r, c),)
     # connect doors
     for r in range(3):

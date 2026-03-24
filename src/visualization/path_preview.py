@@ -8,7 +8,6 @@ Shows user the AI's plan before execution to build trust and reduce surprise.
 """
 
 import pygame
-import time
 from typing import Optional, List, Tuple, Dict
 
 

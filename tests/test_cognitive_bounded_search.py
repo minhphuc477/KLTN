@@ -20,7 +20,6 @@ from src.simulation.cognitive_bounded_search import (
     BeliefMap,
     VisionSystem,
     WorkingMemory,
-    MemoryItem,
     MemoryItemType,
     TileKnowledge,
     AgentPersona,
@@ -457,7 +456,7 @@ class TestCBS:
         env = ZeldaLogicEnv(semantic_grid=simple_grid)
         cbs = CognitiveBoundedSearch(env, persona=AgentPersona.BALANCED, timeout=10000)
         
-        success, path, states, metrics = cbs.solve()
+        success, path, _states, _metrics = cbs.solve()
         
         assert success
         assert len(path) > 0
@@ -469,7 +468,7 @@ class TestCBS:
         env = ZeldaLogicEnv(semantic_grid=grid_with_key)
         cbs = CognitiveBoundedSearch(env, persona=AgentPersona.BALANCED, timeout=20000)
         
-        success, path, states, metrics = cbs.solve()
+        success, path, _states, _metrics = cbs.solve()
         
         assert success
         # Path should include key position before door
@@ -484,7 +483,7 @@ class TestCBS:
         env = ZeldaLogicEnv(semantic_grid=simple_grid)
         cbs = CognitiveBoundedSearch(env, persona=AgentPersona.BALANCED, timeout=10000)
         
-        success, path, states, metrics = cbs.solve()
+        _success, path, _states, metrics = cbs.solve()
         
         assert isinstance(metrics, CBSMetrics)
         assert metrics.total_steps == len(path)
@@ -498,12 +497,12 @@ class TestCBS:
         
         # Speedrunner (ignores enemies)
         cbs_speed = CognitiveBoundedSearch(env, persona=AgentPersona.SPEEDRUNNER, seed=42)
-        success_s, path_s, _, metrics_s = cbs_speed.solve()
+        success_s, _path_s, _, _metrics_s = cbs_speed.solve()
         
         # Cautious (avoids enemies)
         env.reset()
         cbs_caution = CognitiveBoundedSearch(env, persona=AgentPersona.CAUTIOUS, seed=42)
-        success_c, path_c, _, metrics_c = cbs_caution.solve()
+        success_c, _path_c, _, _metrics_c = cbs_caution.solve()
         
         # Both should succeed
         assert success_s
@@ -519,7 +518,7 @@ class TestCBS:
         
         assert len(results) == len(AgentPersona)
         
-        for persona_name, (success, path_len, metrics) in results.items():
+        for _persona_name, (success, path_len, metrics) in results.items():
             assert isinstance(success, bool)
             assert path_len >= 0
             assert isinstance(metrics, CBSMetrics)
@@ -528,11 +527,11 @@ class TestCBS:
         """Test CBS produces same results with same seed."""
         env1 = ZeldaLogicEnv(semantic_grid=simple_grid)
         cbs1 = CognitiveBoundedSearch(env1, persona=AgentPersona.EXPLORER, seed=12345)
-        success1, path1, states1, metrics1 = cbs1.solve()
+        success1, path1, _states1, metrics1 = cbs1.solve()
         
         env2 = ZeldaLogicEnv(semantic_grid=simple_grid)
         cbs2 = CognitiveBoundedSearch(env2, persona=AgentPersona.EXPLORER, seed=12345)
-        success2, path2, states2, metrics2 = cbs2.solve()
+        success2, path2, _states2, metrics2 = cbs2.solve()
         
         assert success1 == success2
         assert path1 == path2
@@ -548,7 +547,7 @@ class TestConvenienceFunctions:
     
     def test_solve_with_cbs(self, simple_grid):
         """Test convenience function."""
-        success, path, states, metrics = solve_with_cbs(
+        success, path, _states, metrics = solve_with_cbs(
             simple_grid,
             persona='balanced',
             timeout=10000,
@@ -622,12 +621,12 @@ class TestIntegration:
         
         # A* solution
         astar = StateSpaceAStar(env)
-        astar_success, astar_path, astar_states = astar.solve()
+        astar_success, astar_path, _astar_states = astar.solve()
         
         # CBS solution
         env.reset()
         cbs = CognitiveBoundedSearch(env, persona=AgentPersona.SPEEDRUNNER, seed=42)
-        cbs_success, cbs_path, cbs_states, cbs_metrics = cbs.solve()
+        cbs_success, cbs_path, _cbs_states, _cbs_metrics = cbs.solve()
         
         # Both should succeed on simple grid
         assert astar_success

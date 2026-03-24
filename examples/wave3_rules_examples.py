@@ -10,8 +10,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from src.generation.grammar import (
-    MissionGrammar, MissionGraph, MissionNode, MissionEdge,
-    NodeType, EdgeType, Difficulty,
+    MissionGrammar, NodeType, EdgeType, Difficulty,
     validate_skill_chains, validate_battery_reachability,
     validate_resource_loops
 )
@@ -161,7 +160,7 @@ def example_6_item_shortcut():
     
     if shortcuts:
         for shortcut in shortcuts:
-            print(f"\n🪝 Item Shortcut:")
+            print("\n🪝 Item Shortcut:")
             print(f"   From: {shortcut.source} → To: {shortcut.target}")
             print(f"   Requires: {shortcut.item_required}")
             print(f"   Saves: {shortcut.path_savings} hops")
@@ -193,13 +192,13 @@ def example_7_pruning():
             else:
                 dead_ends.append(node)
     
-    print(f"\nDead-End Analysis:")
+    print("\nDead-End Analysis:")
     print(f"   Total dead-ends: {len(dead_ends) + len(valuable_dead_ends)}")
     print(f"   Valuable (kept): {len(valuable_dead_ends)}")
     print(f"   Useless (pruned): {len(dead_ends)}")
     
     if valuable_dead_ends:
-        print(f"\n   Kept dead-ends:")
+        print("\n   Kept dead-ends:")
         for node in valuable_dead_ends[:3]:
             print(f"      - {node.node_type.name} at node {node.id}")
 
@@ -213,7 +212,7 @@ def full_generation_example():
     grammar = MissionGrammar(seed=42)
     graph = grammar.generate(Difficulty.MEDIUM, num_rooms=25, max_keys=3)  # Larger dungeon
     
-    print(f"\nGenerated Dungeon:")
+    print("\nGenerated Dungeon:")
     print(f"  Total Nodes: {len(graph.nodes)}")
     print(f"  Total Edges: {len(graph.edges)}")
     print(f"  Connected: {graph.is_graph_connected()}")
@@ -227,7 +226,7 @@ def full_generation_example():
     shortcuts = sum(1 for e in graph.edges 
                    if e.edge_type == EdgeType.ITEM_GATE and e.preferred_direction == "backward")
     
-    print(f"\nWave 3 Features:")
+    print("\nWave 3 Features:")
     print(f"  [Tutorial] Tutorial Chains: {tutorials}")
     print(f"  [Pacing] Sanctuaries: {sanctuaries}")
     print(f"  [Safety] Resource Farms: {farms}")
@@ -236,7 +235,7 @@ def full_generation_example():
     print(f"  [Quality] Item Shortcuts: {shortcuts}")
     
     # Node type distribution
-    print(f"\nNode Type Distribution:")
+    print("\nNode Type Distribution:")
     type_counts = {}
     for node in graph.nodes.values():
         type_name = node.node_type.name
@@ -246,7 +245,7 @@ def full_generation_example():
         print(f"  {node_type}: {count}")
     
     # Validation
-    print(f"\nValidation:")
+    print("\nValidation:")
     print(f"  Lock-Key Valid: {grammar.validate_lock_key_ordering(graph)}")
     print(f"  Skill Chains Valid: {validate_skill_chains(graph)}")
     print(f"  Battery Reachability: {validate_battery_reachability(graph)}")

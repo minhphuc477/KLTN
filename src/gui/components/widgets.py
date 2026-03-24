@@ -1,4 +1,4 @@
-﻿"""
+"""
 KLTN GUI - Interactive Widgets
 ================================
 
@@ -129,7 +129,7 @@ class CheckboxWidget(BaseWidget):
             if not pygame.font.get_init():
                 try:
                     pygame.font.init()
-                except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+                except (AttributeError, RuntimeError, ValueError, TypeError):
                     # If font init fails, fall back to a simple stub to avoid crashing tests
                     class _StubFont:
                         def render(self, *_args, **_kwargs):
@@ -292,7 +292,7 @@ class DropdownWidget(BaseWidget):
                 lbl_font = pygame.font.SysFont('Arial', 11, bold=True)
             # Add a bit more padding above the control so the label sits further away
             label_h = max(12, lbl_font.get_height() + 8)
-        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError):
             label_h = 14
         # Store full_rect including label area
         self.full_rect = pygame.Rect(self.rect.x, self.rect.y - label_h, self.rect.width, self.rect.height + label_h)
@@ -386,7 +386,7 @@ class DropdownWidget(BaseWidget):
                 # If widget.render was called with the widget's pos set to (0,0) (as when
                 # rendering into a temp surface), this will place the label correctly.
                 surface.blit(label_surf, (6, label_y_local))
-            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError):
                 # On error, fallback to render with main font at a safe offset
                 try:
                     fallback = getattr(self, 'font', None) or pygame.font.SysFont('Arial', 12)
@@ -669,7 +669,7 @@ class WidgetManager:
                 s = state[w.control_name]
                 try:
                     w.selected = int(min(max(0, int(s.get('selected', 0))), len(w.options) - 1))
-                except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+                except (AttributeError, RuntimeError, ValueError, TypeError):
                     w.selected = 0
                 # Restore is_open exactly as snapshot (user intent persists across rebuild)
                 w.is_open = bool(s.get('is_open', False))

@@ -67,6 +67,10 @@ def _maybe_replan_dstar(gui: Any, logger: Any) -> None:
         gui._set_message(f"D* Lite replanned ({updated} updates)")
     except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         logger.warning("D* Lite replanning failed: %s", exc)
+        try:
+            gui._set_message("D* Lite replanning failed; continuing with current path", 2.0)
+        except (AttributeError, RuntimeError, ValueError, TypeError):
+            pass
 
 
 def _validate_and_apply_teleport(
@@ -103,13 +107,13 @@ def _validate_and_apply_teleport(
 
             replay_solver = StateSpaceAStar(gui.env)
             if is_stair:
-                allowed_targets.update(replay_solver._get_stair_destinations(current))
+                allowed_targets.update(replay_solver.get_stair_destinations(current))
             if not strict_original:
                 allowed_targets.update(
-                    pos for pos, _cost, _edge_type in replay_solver._get_controlled_virtual_destinations(current, gui.env.state)
+                    pos for pos, _cost, _edge_type in replay_solver.get_controlled_virtual_destinations(current, gui.env.state)
                 )
                 allowed_targets.update(
-                    pos for pos, _cost, _edge_type in replay_solver._get_graph_warp_destinations(current, gui.env.state)
+                    pos for pos, _cost, _edge_type in replay_solver.get_graph_warp_destinations(current, gui.env.state)
                 )
         except (ImportError, AttributeError, RuntimeError, ValueError, TypeError) as exc:
             logger.warning("Teleport validation helper failed: %s", exc)

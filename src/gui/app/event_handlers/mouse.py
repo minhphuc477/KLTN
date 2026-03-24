@@ -1,4 +1,4 @@
-﻿"""Mouse event handlers for GUI event loop."""
+"""Mouse event handlers for GUI event loop."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ def handle_mouse_button_down_preamble(
         focused = pygame_module.mouse.get_focused()
         grabbed = pygame_module.event.get_grab()
         pressed = pygame_module.mouse.get_pressed()
-    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError):
         focused = False
         grabbed = False
         pressed = None
@@ -70,9 +70,9 @@ def handle_mouse_button_down_preamble(
                 gui.control_panel_ignore_click_until = 0.0
                 gui.control_panel_scroll_dragging = False
                 gui._show_toast("Debug: overlays/ignore cleared", 1.2, "info")
-            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError):
                 logger.exception("INPUT_DIAG: failed to clear debug state")
-    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError):
         logger.exception("INPUT_DIAG: failure while computing diagnostics")
 
     try:
@@ -88,9 +88,9 @@ def handle_mouse_button_down_preamble(
                 gui.path_preview_dialog = None
                 gui._show_toast("Preview dismissed (click)", 1.5, "info")
                 gui._set_message("Preview dismissed", 1.5)
-            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError):
                 pass
-    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError):
         logger.exception("Error while checking/dismissing non-modal preview overlay")
 
     try:
@@ -100,7 +100,7 @@ def handle_mouse_button_down_preamble(
             "button": getattr(event, "button", None),
             "time": time_module.time(),
         }
-    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError):
         gui._last_mouse_event = None
 
     if getattr(gui, "debug_click_log", None) is not None:
@@ -112,7 +112,7 @@ def handle_mouse_button_down_preamble(
         logger.info("Window does not have input focus; attempting to force focus")
         try:
             gui._force_focus()
-        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError):
             logger.exception("Force focus attempt failed")
         return mouse_pos, True
 
@@ -208,7 +208,7 @@ def handle_mouse_button_up_event(gui, event, pygame_module, time_module, logger)
         focused = pygame_module.mouse.get_focused()
         grabbed = pygame_module.event.get_grab()
         pressed = pygame_module.mouse.get_pressed()
-    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError):
         focused = False
         grabbed = False
         pressed = None
@@ -229,7 +229,7 @@ def handle_mouse_button_up_event(gui, event, pygame_module, time_module, logger)
             "button": getattr(event, "button", None),
             "time": time_module.time(),
         }
-    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError):
         pass
 
     if gui.dragging_panel:
@@ -259,7 +259,7 @@ def handle_mouse_motion_diagnostics(gui, event, pygame_module, time_module, logg
         focused = pygame_module.mouse.get_focused()
         grabbed = pygame_module.event.get_grab()
         buttons = pygame_module.mouse.get_pressed()
-    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError):
         focused = False
         grabbed = False
         buttons = None
@@ -298,7 +298,7 @@ def handle_mouse_motion_diagnostics(gui, event, pygame_module, time_module, logg
             "rel": getattr(event, "rel", None),
             "time": time_module.time(),
         }
-    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError):
         pass
 
     return mouse_pos

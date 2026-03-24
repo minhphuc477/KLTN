@@ -21,14 +21,12 @@ Scientific Basis:
 """
 
 import logging
-from typing import Dict, List, Tuple, Optional, Set, FrozenSet
+from typing import Dict, List, Tuple, Set
 from dataclasses import dataclass
-from collections import deque
 
 from .validator import (
-    GameState, ZeldaLogicEnv, SolverOptions, SolverDiagnostics,
-    SEMANTIC_PALETTE, ACTION_DELTAS, CARDINAL_COST, DIAGONAL_COST,
-    WALKABLE_IDS, BLOCKING_IDS, PICKUP_IDS, PUSHABLE_IDS, WATER_IDS
+    GameState, ZeldaLogicEnv, SolverDiagnostics,
+    SEMANTIC_PALETTE, BLOCKING_IDS
 )
 
 logger = logging.getLogger(__name__)
@@ -352,7 +350,7 @@ class StateSpaceDFS:
         Delegates to the canonical transition logic on ZeldaLogicEnv to keep
         DFS behavior identical to A*/Dijkstra/BFS on full game state.
         """
-        return self.env._try_move_pure(state, target_pos, target_tile)
+        return self.env.try_move_pure(state, target_pos, target_tile)
     
     def solve_with_diagnostics(self) -> Tuple[bool, List[Tuple[int, int]], SolverDiagnostics]:
         """

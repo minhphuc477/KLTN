@@ -8,7 +8,7 @@ each dungeon, tracking which dungeons are solvable and which aren't.
 import pytest
 import sys
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, Tuple
 import time
 
 # Add project root to path

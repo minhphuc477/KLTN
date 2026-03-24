@@ -40,7 +40,6 @@ for d in DUNGEONS:
         print(f"D{d} {mode_name}: success={ok}, states={states}, time={elapsed:.2f}s, path_len={len(path)}")
 
 # Write CSV
-from datetime import datetime
 fname = OUT_DIR / f"ab_benchmark_{int(time.time())}.csv"
 with open(fname, 'w', newline='') as f:
     w = csv.DictWriter(f, fieldnames=['dungeon','mode','success','states','time_s','path_len'])

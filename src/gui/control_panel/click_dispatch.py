@@ -1,4 +1,4 @@
-﻿"""Control-panel click dispatch orchestration for ZeldaGUI wrappers."""
+"""Control-panel click dispatch orchestration for ZeldaGUI wrappers."""
 
 from __future__ import annotations
 
@@ -41,7 +41,7 @@ def handle_control_panel_click(gui, pos, button, event_type, *, logger, debug_in
             if debug_input_active:
                 try:
                     gui._dump_control_panel_widget_state(pos)
-                except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+                except (AttributeError, RuntimeError, ValueError, TypeError):
                     logger.exception("Failed to dump widget hit tests after unhandled click")
             handled = gui._retry_control_panel_click_after_auto_scroll(pos, sc_pos, button, handled)
 

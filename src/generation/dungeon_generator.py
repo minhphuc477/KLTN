@@ -20,7 +20,7 @@ Output: VGLC-compatible dungeon grid
 import random
 import logging
 import numpy as np
-from typing import List, Tuple, Optional, Set, Dict
+from typing import List, Tuple, Optional
 from dataclasses import dataclass
 from enum import Enum
 from src.core.definitions import SEMANTIC_PALETTE

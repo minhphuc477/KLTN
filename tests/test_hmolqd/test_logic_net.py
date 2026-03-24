@@ -6,7 +6,6 @@ Tests for differentiable pathfinding and solvability checking.
 """
 
 import pytest
-import numpy as np
 
 torch = pytest.importorskip("torch")
 

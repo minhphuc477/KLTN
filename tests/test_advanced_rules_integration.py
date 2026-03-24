@@ -12,23 +12,21 @@ Or standalone:
     cd F:\KLTN
     python tests/test_advanced_rules_integration.py
 """
+# pyright: reportPrivateUsage=false
 
 import sys
-import os
 from pathlib import Path
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import pytest
-from typing import List, Dict, Set
+from typing import List, Dict
 
 from src.generation.grammar import (
     MissionGrammar, 
     Difficulty, 
     NodeType, 
     EdgeType,
-    MissionGraph,
 )
 
 
@@ -139,7 +137,7 @@ class TestAdvancedRulesIntegration:
         print(f"   One-way edges: {len(one_way_edges)}")
         
         if cycles and one_way_edges:
-            print(f"✅ Valve rule applied successfully")
+            print("✅ Valve rule applied successfully")
             
             # Verify asymmetry
             valve = one_way_edges[0]
@@ -184,7 +182,7 @@ class TestAdvancedRulesIntegration:
         multi_locks = [e for e in graph.edges if e.edge_type == EdgeType.MULTI_LOCK]
         
         if multi_locks:
-            print(f"\n✅ Collection challenge found")
+            print("\n✅ Collection challenge found")
             print(f"   Tokens: {len(tokens)}")
             print(f"   Multi-locks: {len(multi_locks)}")
             
@@ -254,7 +252,7 @@ class TestAdvancedRulesIntegration:
         state_blocks = [e for e in graph.edges if e.edge_type == EdgeType.STATE_BLOCK]
         
         if switches and state_blocks:
-            print(f"\n✅ Entangled branches detected")
+            print("\n✅ Entangled branches detected")
             print(f"   Switches: {len(switches)}")
             print(f"   State blocks: {len(state_blocks)}")
             
@@ -291,7 +289,7 @@ class TestAdvancedRulesIntegration:
                 matching = [p for p in protections 
                            if p.item_type == hazard.protection_item_id]
                 if not matching:
-                    print(f"      ⚠️  No matching protection item found")
+                    print("      ⚠️  No matching protection item found")
         else:
             print("\n⚠️  Hazard gate rule not applied (probabilistic)")
     
@@ -354,7 +352,7 @@ class TestAdvancedRulesIntegration:
             'multi_locks': len([e for e in graph.edges if e.edge_type == EdgeType.MULTI_LOCK]),
         }
         
-        print(f"\n📊 Advanced Features Summary:")
+        print("\n📊 Advanced Features Summary:")
         total = 0
         for feature, count in features.items():
             if count > 0:

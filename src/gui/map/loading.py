@@ -1,4 +1,4 @@
-﻿"""Map and visual-loading helpers extracted from gui_runner."""
+"""Map and visual-loading helpers extracted from gui_runner."""
 
 from __future__ import annotations
 
@@ -17,9 +17,8 @@ def load_visual_assets(
 ) -> bool:
     """Optionally override GUI assets with extracted visual tiles/sprites."""
     try:
-        from src.data_processing.visual_extractor import extract_grid  # noqa: F401
         from PIL import Image
-    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError):
         return False
 
     if templates_dir and os_module.path.isdir(templates_dir):
@@ -39,7 +38,7 @@ def load_visual_assets(
                     gui.images[semantic_palette["DOOR_OPEN"]] = pygame.transform.scale(surf, (gui.TILE_SIZE, gui.TILE_SIZE))
                 if "key" in ln:
                     gui.images[semantic_palette["KEY"]] = pygame.transform.scale(surf, (gui.TILE_SIZE, gui.TILE_SIZE))
-            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError):
                 continue
 
     if link_sprite_path and os_module.path.exists(link_sprite_path):
@@ -67,9 +66,8 @@ def load_visual_map(
         from src.data_processing.visual_integration import (
             visual_extract_to_room,
             make_stitched_for_single_room,
-            infer_inventory_from_room,  # noqa: F401
         )
-    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError):
         return False
 
     try:
@@ -229,7 +227,7 @@ def load_current_map(
     gui._auto_fit_zoom()
     try:
         gui._center_view()
-    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError):
         pass
 
     try:
@@ -242,10 +240,10 @@ def load_current_map(
             getattr(gui, "view_offset_y", 0),
             len(getattr(gui, "images", {})),
         )
-    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError):
         pass
 
     try:
         gui._start_preview_for_current_map()
-    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError):
         logger.exception("Failed to start preview for current map")

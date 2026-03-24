@@ -31,7 +31,7 @@ def visual_extract_to_room(image_path: str, templates_dir: str, tile_px: int = 1
 
     # Heuristic mapping: if a template index corresponds to a known semantic
     # id (not available from extractor), caller can post-process. Return raw ids
-    # for now alongside confidence â€” higher layers will convert using template
+    # for now alongside confidence -- higher layers will convert using template
     # metadata if available.
     return ids, conf
 

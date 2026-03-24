@@ -20,8 +20,6 @@ from src.zelda_data.vglc_utils import (
     # Parsing
     parse_node_label,
     parse_node_attributes,
-    parse_edge_attributes,
-    # Validation
     filter_virtual_nodes,
     get_physical_start_node,
     validate_goal_subgraph,
@@ -29,7 +27,6 @@ from src.zelda_data.vglc_utils import (
     validate_room_dimensions,
     validate_pixel_dimensions,
     # Utilities
-    analyze_vglc_graph,
     convert_to_physical_graph,
 )
 
@@ -138,7 +135,7 @@ def demo_dimension_validation():
     print("DEMO 3: Dimension Validation")
     print("=" * 70)
     
-    print(f"\nVGLC Room Dimensions:")
+    print("\nVGLC Room Dimensions:")
     print(f"  Width: {ROOM_WIDTH_TILES} tiles ({ROOM_WIDTH_PX} pixels)")
     print(f"  Height: {ROOM_HEIGHT_TILES} tiles ({ROOM_HEIGHT_PX} pixels)")
     print(f"  Shape (numpy): {ROOM_SHAPE}")
@@ -289,10 +286,9 @@ def demo_real_vglc_data():
     if level1_graph.exists():
         print("\nâœ… Found VGLC Level 1 graph data")
         try:
-            import pydot
             G = nx.DiGraph(nx.drawing.nx_pydot.read_dot(str(level1_graph)))
             
-            print(f"\nðŸ“Š Level 1 Graph Statistics:")
+            print("\nðŸ“Š Level 1 Graph Statistics:")
             print(f"   Nodes: {G.number_of_nodes()}")
             print(f"   Edges: {G.number_of_edges()}")
             

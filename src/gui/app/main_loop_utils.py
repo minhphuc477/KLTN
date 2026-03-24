@@ -1,4 +1,4 @@
-﻿"""Utilities for the GUI main loop extracted from gui_runner."""
+"""Utilities for the GUI main loop extracted from gui_runner."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ def resolve_test_mode_max_frames(max_frames, env):
     if env.get("KLTN_TEST_MODE") or env.get("PYTEST_CURRENT_TEST") or env.get("CI"):
         try:
             return int(env.get("KLTN_RUN_MAX_FRAMES", "10"))
-        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError):
             return 10
     return None
 
@@ -45,13 +45,13 @@ def compute_solver_timeout_seconds(active_alg, grid_cell_count=None, env_getter=
             ratio = float(grid_cell_count) / float(max(1, baseline_cells))
             scale = max(1.0, min(3.0, ratio))
             timeout_sec *= scale
-        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError):
             pass
 
     if env_getter is not None:
         try:
             return float(env_getter("KLTN_SOLVER_TIMEOUT", str(timeout_sec)))
-        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError):
             return float(timeout_sec)
     return float(timeout_sec)
 
@@ -67,7 +67,7 @@ def find_path_tile_violations(path, grid, blocked_tile_ids):
         try:
             r, c = point
             tile_id = int(grid[r, c])
-        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError):
             continue
         if tile_id in blocked:
             violations.append((idx, int(r), int(c), tile_id))

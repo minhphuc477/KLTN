@@ -1,4 +1,6 @@
 """Debug _try_move_pure for block pushing"""
+# pyright: reportPrivateUsage=false
+
 import numpy as np
 import sys
 from pathlib import Path

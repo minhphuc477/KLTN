@@ -1,4 +1,4 @@
-﻿"""Helpers for orchestrating solver scheduling from GUI state."""
+"""Helpers for orchestrating solver scheduling from GUI state."""
 
 from typing import Any, Optional
 
@@ -77,7 +77,7 @@ def schedule_solver(gui: Any, algorithm_idx: Optional[int], logger: Any, time_mo
     try:
         worker = threading_module.Thread(target=gui._launch_solver_worker, kwargs=launch_kwargs, daemon=True)
         worker.start()
-    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError):
         gui._launch_solver_worker(**launch_kwargs)
 
     return True

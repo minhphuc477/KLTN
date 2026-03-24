@@ -1,4 +1,4 @@
-﻿"""Pure helpers for control-panel click routing and scroll behavior."""
+"""Pure helpers for control-panel click routing and scroll behavior."""
 
 from time import time
 from typing import Any, Callable, Optional, Tuple
@@ -86,7 +86,7 @@ def handle_outside_control_panel_click(
         ):
             return widget_manager.handle_mouse_down(pos, button)
         return False
-    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError):
         if logger is not None:
             logger.exception("Error while checking outside-panel click handling")
         return None
@@ -128,7 +128,7 @@ def refresh_control_panel_layout_if_needed(
         if panel_rect and reposition_widgets is not None:
             try:
                 reposition_widgets(panel_rect.x, panel_rect.y)
-            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError):
                 if logger is not None:
                     logger.exception("Reposition attempt failed")
             else:
@@ -138,7 +138,7 @@ def refresh_control_panel_layout_if_needed(
                     if (full_rect and full_rect.collidepoint(sc_pos)) or (rect and rect.collidepoint(sc_pos)):
                         return True
         return False
-    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError):
         if logger is not None:
             logger.exception("Failure while checking widget rects before dispatch")
         return False
@@ -206,11 +206,11 @@ def retry_control_panel_click_after_auto_scroll(
             handled = widget_manager.handle_mouse_down(new_sc_pos, button)
             if logger is not None:
                 logger.debug("After auto-scroll, re-dispatch handled=%s", handled)
-        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError):
             if logger is not None:
                 logger.exception("Re-dispatch after auto-scroll failed")
         return handled, target_scroll, ignore_until
-    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError):
         if logger is not None:
             logger.exception("Auto-scroll retry failed")
         return handled, int(control_panel_scroll or 0), 0.0

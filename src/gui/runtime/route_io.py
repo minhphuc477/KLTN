@@ -1,4 +1,4 @@
-﻿"""Route import/export operations for GUI runner."""
+"""Route import/export operations for GUI runner."""
 
 import json
 import logging
@@ -32,7 +32,7 @@ def export_route(gui: Any) -> None:
 
         try:
             display_path = export_file.relative_to(getattr(gui, "repo_root", Path.cwd()))
-        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError):
             display_path = export_file
         gui.message = f"Route exported to {display_path}"
         logger.info("Route exported to %s", export_file)
@@ -62,7 +62,7 @@ def load_route(gui: Any) -> None:
         path_len = apply_loaded_route_data(gui, route_data)
         try:
             display_path = latest_file.relative_to(getattr(gui, "repo_root", Path.cwd()))
-        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError):
             display_path = latest_file
         gui.message = f"Route loaded from {display_path} ({path_len} steps)"
         logger.info("Route loaded from %s", latest_file)

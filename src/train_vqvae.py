@@ -12,16 +12,16 @@ Then pass the checkpoint to diffusion training:
     python -m src.train_diffusion --vqvae-checkpoint checkpoints/vqvae_pretrained.pth ...
 """
 
-import os
 import sys
 import argparse
 import logging
 import json
+import random
 from pathlib import Path
-from datetime import datetime
 
 import torch
 import torch.nn.functional as F
+import numpy as np
 from torch.utils.data import DataLoader
 
 # Ensure project root on path
@@ -29,8 +29,9 @@ PROJECT_ROOT = Path(__file__).parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.core.vqvae import SemanticVQVAE, create_vqvae, VQVAETrainer
-from src.zelda_data.zelda_loader import create_dataloader, ZeldaDungeonDataset
+from src.core.vqvae import create_vqvae, VQVAETrainer
+from src.zelda_data.zelda_loader import create_dataloader
+from src.utils.checkpoint import write_checkpoint_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,14 @@ def grids_to_onehot(batch: torch.Tensor, num_classes: int = 44) -> torch.Tensor:
 
 def train_vqvae(args):
     """Full VQ-VAE pre-training loop."""
+
+    if args.seed is not None:
+        seed = int(args.seed)
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
 
     # ------------------------------------------------------------------
     # Logging
@@ -88,7 +97,10 @@ def train_vqvae(args):
     # Small dataset â†’ duplicate to fill an epoch with more gradient steps
     effective_size = max(len(dataset), args.min_samples_per_epoch)
     sampler = torch.utils.data.RandomSampler(
-        dataset, replacement=True, num_samples=effective_size
+        dataset,
+        replacement=True,
+        num_samples=effective_size,
+        generator=(torch.Generator().manual_seed(int(args.seed)) if args.seed is not None else None),
     )
     dataloader = DataLoader(
         dataset,
@@ -107,6 +119,8 @@ def train_vqvae(args):
         num_classes=44,
         codebook_size=args.codebook_size,
         latent_dim=args.latent_dim,
+        use_coordconv=bool(args.use_coordconv),
+        mrf_penalty_weight=float(args.mrf_penalty_weight),
     ).to(device)
 
     total_params = sum(p.numel() for p in model.parameters())
@@ -137,7 +151,13 @@ def train_vqvae(args):
 
     for epoch in range(start_epoch, args.epochs):
         model.train()
-        epoch_metrics = {"loss": 0.0, "recon_loss": 0.0, "vq_loss": 0.0, "perplexity": 0.0}
+        epoch_metrics = {
+            "loss": 0.0,
+            "recon_loss": 0.0,
+            "vq_loss": 0.0,
+            "illegal_adjacency_penalty": 0.0,
+            "perplexity": 0.0,
+        }
         num_batches = 0
 
         for batch_idx, batch in enumerate(dataloader):
@@ -148,8 +168,19 @@ def train_vqvae(args):
             batch = batch.to(device)
             x_onehot = grids_to_onehot(batch, num_classes=44)
 
-            # Forward / backward
-            _loss, metrics = trainer.train_step(x_onehot, return_metrics=True)
+            # Forward / backward. Some trainer implementations return only scalar loss.
+            step_out = trainer.train_step(x_onehot, return_metrics=True)
+            if isinstance(step_out, tuple):
+                _loss, metrics = step_out
+            else:
+                _loss = float(step_out)
+                metrics = {
+                    "loss": _loss,
+                    "recon_loss": 0.0,
+                    "vq_loss": 0.0,
+                    "illegal_adjacency_penalty": 0.0,
+                    "perplexity": 0.0,
+                }
 
             for k in epoch_metrics:
                 epoch_metrics[k] += metrics.get(k, 0.0)
@@ -159,7 +190,9 @@ def train_vqvae(args):
                 logger.debug(
                     f"  Epoch {epoch+1}/{args.epochs} | Batch {batch_idx}/{len(dataloader)} | "
                     f"loss={metrics['loss']:.4f} recon={metrics['recon_loss']:.4f} "
-                    f"vq={metrics['vq_loss']:.4f} perp={metrics['perplexity']:.1f}"
+                    f"vq={metrics['vq_loss']:.4f} "
+                    f"mrf={metrics.get('illegal_adjacency_penalty', 0.0):.4f} "
+                    f"perp={metrics['perplexity']:.1f}"
                 )
 
         # Average metrics
@@ -189,6 +222,7 @@ def train_vqvae(args):
             f"loss={epoch_metrics['loss']:.4f} | "
             f"recon={epoch_metrics['recon_loss']:.4f} | "
             f"vq={epoch_metrics['vq_loss']:.4f} | "
+            f"mrf={epoch_metrics['illegal_adjacency_penalty']:.4f} | "
             f"perplexity={epoch_metrics['perplexity']:.1f} | "
             f"accuracy={eval_acc:.3f}"
         )
@@ -206,6 +240,21 @@ def train_vqvae(args):
                 "accuracy": eval_acc,
                 "perplexity": epoch_metrics["perplexity"],
             }, save_path)
+            write_checkpoint_metadata(
+                str(save_path),
+                model_type="vqvae",
+                architecture={
+                    "latent_dim": int(args.latent_dim),
+                    "codebook_size": int(args.codebook_size),
+                    "use_coordconv": bool(args.use_coordconv),
+                    "mrf_penalty_weight": float(args.mrf_penalty_weight),
+                },
+                extra={
+                    "epoch": int(epoch + 1),
+                    "loss": float(best_loss),
+                    "accuracy": float(eval_acc),
+                },
+            )
             logger.info(f"  â˜… Saved best model â†’ {save_path} (loss={best_loss:.4f})")
 
         # Periodic checkpoint
@@ -217,6 +266,20 @@ def train_vqvae(args):
                 "optimizer_state_dict": trainer.optimizer.state_dict(),
                 "loss": epoch_metrics["loss"],
             }, periodic)
+            write_checkpoint_metadata(
+                str(periodic),
+                model_type="vqvae",
+                architecture={
+                    "latent_dim": int(args.latent_dim),
+                    "codebook_size": int(args.codebook_size),
+                    "use_coordconv": bool(args.use_coordconv),
+                    "mrf_penalty_weight": float(args.mrf_penalty_weight),
+                },
+                extra={
+                    "epoch": int(epoch + 1),
+                    "loss": float(epoch_metrics["loss"]),
+                },
+            )
 
     # Save training history
     hist_path = save_dir / "vqvae_training_history.json"
@@ -240,11 +303,17 @@ def main():
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--latent-dim", type=int, default=64)
     parser.add_argument("--codebook-size", type=int, default=512)
+    parser.add_argument("--use-coordconv", action=argparse.BooleanOptionalAction, default=True,
+                        help="Use CoordConv in first VQ-VAE encoder layer.")
+    parser.add_argument("--mrf-penalty-weight", type=float, default=0.05,
+                        help="Weight for differentiable illegal adjacency penalty.")
     parser.add_argument("--min-samples-per-epoch", type=int, default=64,
                         help="Minimum samples per epoch (upsampled for small datasets)")
     parser.add_argument("--save-dir", type=str, default="checkpoints")
     parser.add_argument("--save-every", type=int, default=50,
                         help="Save periodic checkpoint every N epochs")
+    parser.add_argument("--seed", type=int, default=None,
+                        help="Deterministic seed for reproducible A/B runs.")
     parser.add_argument("--resume", type=str, default=None,
                         help="Resume from checkpoint")
     parser.add_argument("--device", type=str, default="auto",

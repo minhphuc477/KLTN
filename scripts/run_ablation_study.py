@@ -24,7 +24,7 @@ import time
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import networkx as nx
 import numpy as np
@@ -53,8 +53,10 @@ from src.generation.weighted_bayesian_wfc import (
     extract_tile_priors_from_vqvae,
 )
 from src.core.definitions import ROOM_HEIGHT, ROOM_WIDTH
+from src.core.definitions import TileID
 from src.simulation.cognitive_bounded_search import solve_with_cbs
 from src.simulation.validator import StateSpaceAStar, ZeldaLogicEnv
+from src.pipeline.spatial_utils import first_free_position, get_node_grid_position
 
 logger = logging.getLogger(__name__)
 
@@ -156,6 +158,138 @@ def _pairwise_diversity(vectors: Sequence[np.ndarray]) -> float:
     return float(total / max(1, count))
 
 
+def _build_room_placement(graph: nx.Graph, room_ids: Sequence[Any]) -> Dict[Any, Tuple[int, int]]:
+    """Reconstruct the room placement policy used by the pipeline stitch step."""
+    placement: Dict[Any, Tuple[int, int]] = {}
+    occupied = set()
+
+    for room_id in room_ids:
+        pos = get_node_grid_position(graph, room_id)
+        if pos is None:
+            continue
+        resolved = first_free_position(pos, occupied)
+        placement[room_id] = resolved
+        occupied.add(resolved)
+
+    if graph.is_directed():
+        try:
+            order = [n for n in nx.topological_sort(graph) if n in room_ids]
+        except nx.NetworkXUnfeasible:
+            order = sorted(list(room_ids), key=lambda x: str(x))
+    else:
+        order = sorted(list(room_ids), key=lambda x: str(x))
+
+    next_row = max((r for r, _ in occupied), default=-1) + 1
+    for room_id in order:
+        if room_id in placement:
+            continue
+        while (next_row, 0) in occupied:
+            next_row += 1
+        placement[room_id] = (next_row, 0)
+        occupied.add((next_row, 0))
+        next_row += 1
+
+    min_r = min(r for r, _ in placement.values()) if placement else 0
+    min_c = min(c for _, c in placement.values()) if placement else 0
+    return {rid: (r - min_r, c - min_c) for rid, (r, c) in placement.items()}
+
+
+def _boundary_connection_exists(global_grid: np.ndarray, src_pos: Tuple[int, int], dst_pos: Tuple[int, int]) -> bool:
+    """Check whether adjacent rooms share at least one traversable boundary opening."""
+    dr = int(dst_pos[0] - src_pos[0])
+    dc = int(dst_pos[1] - src_pos[1])
+    if abs(dr) + abs(dc) != 1:
+        return False
+
+    blocked = {
+        int(TileID.VOID),
+        int(TileID.WALL),
+        int(TileID.BLOCK),
+        int(TileID.ELEMENT),
+    }
+
+    def _is_passable(val: Any) -> bool:
+        try:
+            return int(val) not in blocked
+        except Exception:
+            return False
+
+    if dr != 0:
+        src_row = (src_pos[0] + (1 if dr > 0 else 0)) * ROOM_HEIGHT - (1 if dr > 0 else 0)
+        dst_row = src_row + (1 if dr > 0 else -1)
+        c0 = src_pos[1] * ROOM_WIDTH
+        c1 = c0 + ROOM_WIDTH
+        for col in range(c0, c1):
+            if 0 <= src_row < global_grid.shape[0] and 0 <= dst_row < global_grid.shape[0] and 0 <= col < global_grid.shape[1]:
+                if _is_passable(global_grid[src_row, col]) and _is_passable(global_grid[dst_row, col]):
+                    return True
+        return False
+
+    src_col = (src_pos[1] + (1 if dc > 0 else 0)) * ROOM_WIDTH - (1 if dc > 0 else 0)
+    dst_col = src_col + (1 if dc > 0 else -1)
+    r0 = src_pos[0] * ROOM_HEIGHT
+    r1 = r0 + ROOM_HEIGHT
+    for row in range(r0, r1):
+        if 0 <= row < global_grid.shape[0] and 0 <= src_col < global_grid.shape[1] and 0 <= dst_col < global_grid.shape[1]:
+            if _is_passable(global_grid[row, src_col]) and _is_passable(global_grid[row, dst_col]):
+                return True
+    return False
+
+
+def _topology_information_scorecard(
+    *,
+    graph: nx.Graph,
+    rooms: Dict[Any, RoomGenerationResult],
+    dungeon_grid: np.ndarray,
+) -> Dict[str, float]:
+    """Measure how well stitched room connectivity preserves mission-graph topology."""
+    room_ids = list(rooms.keys()) if rooms else list(graph.nodes())
+    placement = _build_room_placement(graph, room_ids)
+
+    directed_edges = [(u, v) for u, v in graph.edges() if u in placement and v in placement]
+    undirected_edge_set = {tuple(sorted((u, v), key=lambda x: str(x))) for u, v in directed_edges if u != v}
+
+    adjacent_pairs = set()
+    ids = list(placement.keys())
+    for i in range(len(ids)):
+        for j in range(i + 1, len(ids)):
+            a, b = ids[i], ids[j]
+            pa, pb = placement[a], placement[b]
+            if abs(pa[0] - pb[0]) + abs(pa[1] - pb[1]) == 1:
+                adjacent_pairs.add(tuple(sorted((a, b), key=lambda x: str(x))))
+
+    representable_edges = [e for e in undirected_edge_set if e in adjacent_pairs]
+    representable_edge_rate = float(len(representable_edges) / max(1, len(undirected_edge_set)))
+
+    connected_representable = 0
+    for a, b in representable_edges:
+        if _boundary_connection_exists(dungeon_grid, placement[a], placement[b]):
+            connected_representable += 1
+    edge_connection_recall = float(connected_representable / max(1, len(representable_edges)))
+
+    phantom_pairs = [p for p in adjacent_pairs if p not in undirected_edge_set]
+    phantom_connections = 0
+    for a, b in phantom_pairs:
+        if _boundary_connection_exists(dungeon_grid, placement[a], placement[b]):
+            phantom_connections += 1
+    phantom_connection_rate = float(phantom_connections / max(1, len(phantom_pairs)))
+
+    topology_preservation_score = float(np.clip(
+        (0.45 * representable_edge_rate)
+        + (0.45 * edge_connection_recall)
+        + (0.10 * (1.0 - phantom_connection_rate)),
+        0.0,
+        1.0,
+    ))
+
+    return {
+        "topology_representable_edge_rate": representable_edge_rate,
+        "topology_edge_connection_recall": edge_connection_recall,
+        "topology_phantom_connection_rate": phantom_connection_rate,
+        "topology_preservation_score": topology_preservation_score,
+    }
+
+
 def _paired_bootstrap_ci(
     deltas: np.ndarray,
     *,
@@ -226,6 +360,10 @@ class AblationStudy:
         cbs_timeout: int,
         evolution_population: int,
         evolution_generations: int,
+        vqvae_checkpoint: Optional[str] = None,
+        diffusion_checkpoint: Optional[str] = None,
+        logic_net_checkpoint: Optional[str] = None,
+        condition_encoder_checkpoint: Optional[str] = None,
         max_runtime_sec: Optional[float] = None,
     ):
         self.output_dir = output_dir
@@ -238,6 +376,12 @@ class AblationStudy:
         self.cbs_timeout = int(cbs_timeout)
         self.evolution_population = int(evolution_population)
         self.evolution_generations = int(evolution_generations)
+        self.vqvae_checkpoint = str(vqvae_checkpoint) if vqvae_checkpoint else None
+        self.diffusion_checkpoint = str(diffusion_checkpoint) if diffusion_checkpoint else None
+        self.logic_net_checkpoint = str(logic_net_checkpoint) if logic_net_checkpoint else None
+        self.condition_encoder_checkpoint = (
+            str(condition_encoder_checkpoint) if condition_encoder_checkpoint else None
+        )
         self.max_runtime_sec = float(max_runtime_sec) if max_runtime_sec is not None else None
 
         self.reference_graphs = load_vglc_reference_graphs(self.data_root, limit=64)
@@ -257,9 +401,10 @@ class AblationStudy:
     def _get_pipeline(self) -> NeuralSymbolicDungeonPipeline:
         if self._pipeline is None:
             self._pipeline = NeuralSymbolicDungeonPipeline(
-                vqvae_checkpoint=None,
-                diffusion_checkpoint=None,
-                logic_net_checkpoint=None,
+                vqvae_checkpoint=self.vqvae_checkpoint,
+                diffusion_checkpoint=self.diffusion_checkpoint,
+                logic_net_checkpoint=self.logic_net_checkpoint,
+                condition_encoder_checkpoint=self.condition_encoder_checkpoint,
                 device="auto",
                 use_learned_refiner_rules=True,
                 enable_logging=False,
@@ -383,7 +528,7 @@ class AblationStudy:
                 metrics={"wfc_only": 1.0},
             )
 
-        dungeon_grid = pipeline._stitch_rooms(rooms, graph)
+        dungeon_grid = pipeline.stitch_rooms(rooms, graph)
         metrics = {
             "num_rooms": len(rooms),
             "total_tiles_repaired": 0.0,
@@ -476,6 +621,10 @@ class AblationStudy:
             "constraint_valid": np.nan,
             "room_repair_rate": np.nan,
             "tiles_repaired": np.nan,
+            "topology_representable_edge_rate": np.nan,
+            "topology_edge_connection_recall": np.nan,
+            "topology_phantom_connection_rate": np.nan,
+            "topology_preservation_score": np.nan,
             "error": "",
         }
 
@@ -537,6 +686,11 @@ class AblationStudy:
 
             room_repair_rate = float(result.metrics.get("repair_rate", float("nan")))
             tiles_repaired = float(result.metrics.get("total_tiles_repaired", float("nan")))
+            topology_scorecard = _topology_information_scorecard(
+                graph=graph,
+                rooms=result.rooms,
+                dungeon_grid=grid,
+            )
 
             row.update(
                 {
@@ -553,6 +707,10 @@ class AblationStudy:
                     "constraint_valid": float(constraint_valid),
                     "room_repair_rate": float(room_repair_rate),
                     "tiles_repaired": float(tiles_repaired),
+                    "topology_representable_edge_rate": float(topology_scorecard["topology_representable_edge_rate"]),
+                    "topology_edge_connection_recall": float(topology_scorecard["topology_edge_connection_recall"]),
+                    "topology_phantom_connection_rate": float(topology_scorecard["topology_phantom_connection_rate"]),
+                    "topology_preservation_score": float(topology_scorecard["topology_preservation_score"]),
                     "_descriptor_vec": desc_vec.tolist(),
                 }
             )
@@ -609,6 +767,10 @@ class AblationStudy:
                     "constraint_valid_rate": float(sub["constraint_valid"].mean(skipna=True)) if len(sub) > 0 else float("nan"),
                     "room_repair_rate": float(sub["room_repair_rate"].mean(skipna=True)) if len(sub) > 0 else float("nan"),
                     "tiles_repaired": float(sub["tiles_repaired"].mean(skipna=True)) if len(sub) > 0 else float("nan"),
+                    "topology_representable_edge_rate": float(sub["topology_representable_edge_rate"].mean(skipna=True)) if len(sub) > 0 else float("nan"),
+                    "topology_edge_connection_recall": float(sub["topology_edge_connection_recall"].mean(skipna=True)) if len(sub) > 0 else float("nan"),
+                    "topology_phantom_connection_rate": float(sub["topology_phantom_connection_rate"].mean(skipna=True)) if len(sub) > 0 else float("nan"),
+                    "topology_preservation_score": float(sub["topology_preservation_score"].mean(skipna=True)) if len(sub) > 0 else float("nan"),
                     "diversity": float(_pairwise_diversity(descriptor_store.get(cfg.name, []))),
                 }
             )
@@ -637,6 +799,10 @@ class AblationStudy:
                 "constraint_valid",
                 "room_repair_rate",
                 "tiles_repaired",
+                "topology_representable_edge_rate",
+                "topology_edge_connection_recall",
+                "topology_phantom_connection_rate",
+                "topology_preservation_score",
             ]
 
         rows: List[Dict[str, Any]] = []
@@ -789,6 +955,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cbs-timeout", type=int, default=120000)
     parser.add_argument("--evolution-population", type=int, default=24)
     parser.add_argument("--evolution-generations", type=int, default=30)
+    parser.add_argument("--vqvae-checkpoint", type=str, default=None)
+    parser.add_argument("--diffusion-checkpoint", type=str, default=None)
+    parser.add_argument("--logic-net-checkpoint", type=str, default=None)
+    parser.add_argument("--condition-encoder-checkpoint", type=str, default=None)
     parser.add_argument(
         "--max-runtime-sec",
         type=float,
@@ -870,6 +1040,10 @@ def main() -> int:
         cbs_timeout=args.cbs_timeout,
         evolution_population=args.evolution_population,
         evolution_generations=args.evolution_generations,
+        vqvae_checkpoint=args.vqvae_checkpoint,
+        diffusion_checkpoint=args.diffusion_checkpoint,
+        logic_net_checkpoint=args.logic_net_checkpoint,
+        condition_encoder_checkpoint=args.condition_encoder_checkpoint,
         max_runtime_sec=args.max_runtime_sec,
     )
 

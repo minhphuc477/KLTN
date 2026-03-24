@@ -21,10 +21,9 @@ Complexity:
 - With pruning: O(N² × A*) for typical dungeons
 """
 
-import heapq
 import itertools
 import logging
-from typing import List, Tuple, Optional, Set, Dict
+from typing import List, Tuple, Optional
 from dataclasses import dataclass
 from .validator import GameState, ZeldaLogicEnv, StateSpaceAStar, SEMANTIC_PALETTE
 
@@ -94,7 +93,7 @@ class MultiGoalPathfinder:
         # Find all target positions
         target_positions = []
         for tile_id in goal_types:
-            positions = self.env._find_all_positions(tile_id)
+            positions = self.env.find_all_positions(tile_id)
             target_positions.extend(positions)
         
         # Add goal position as final waypoint

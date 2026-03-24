@@ -23,8 +23,7 @@ Integration Point: Replace LatentDiffusionModel.sample() with LCM sampling
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from typing import Dict, Tuple, Optional, Callable
+from typing import Tuple, Optional
 from enum import Enum
 from dataclasses import dataclass
 import time

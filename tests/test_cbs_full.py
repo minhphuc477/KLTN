@@ -30,9 +30,6 @@ from src.simulation.cognitive_bounded_search import (
     VisionSystem,
     WorkingMemory,
     MemoryItemType,
-    CBSMetrics,
-    PersonaConfig,
-    AgentPersona,
     PERSONA_CONFIGS,
 )
 
@@ -136,7 +133,7 @@ class TestBayesianBeliefUpdate:
         
         # Get prior
         prior_conf = belief_map.get_confidence(r, c)
-        prior_tile = belief_map.get_tile(r, c)
+        _prior_tile = belief_map.get_tile(r, c)
         
         # Update with observation
         belief_map.update(r, c, observed_tile=obs_tile)
@@ -153,11 +150,11 @@ class TestBayesianBeliefUpdate:
         
         # First observe as floor
         belief_map.update(r, c, observed_tile=SEMANTIC_PALETTE['FLOOR'])
-        conf_after_floor = belief_map.get_confidence(r, c)
+        _conf_after_floor = belief_map.get_confidence(r, c)
         
         # Then observe as wall (contradiction)
         belief_map.update(r, c, observed_tile=SEMANTIC_PALETTE['WALL'])
-        conf_after_wall = belief_map.get_confidence(r, c)
+        _conf_after_wall = belief_map.get_confidence(r, c)
         
         # Belief should have changed - tile type should now be wall
         assert belief_map.get_tile(r, c) == SEMANTIC_PALETTE['WALL'], \
@@ -213,9 +210,9 @@ class TestMemoryDecay:
         assert final_conf < initial_conf, "Memory should decay over time"
         
         # Check decay magnitude
-        expected_ratio = np.exp(-0.01 * 100)  # ≈ 0.368
+        _expected_ratio = np.exp(-0.01 * 100)  # ≈ 0.368
         actual_ratio = final_conf / initial_conf if initial_conf > 0 else 0
-        assert actual_ratio < 0.5, f"Decay should be significant after 100 steps"
+        assert actual_ratio < 0.5, "Decay should be significant after 100 steps"
 
     def test_recent_observation_beats_old(self, belief_map):
         """Recent observations should dominate old memories."""
@@ -250,7 +247,7 @@ class TestInventoryAwarePlanning:
         # ZeldaLogicEnv finds start/goal from the grid tiles
         env = ZeldaLogicEnv(semantic_grid=small_grid)
         cbs = CognitiveBoundedSearch(env, persona='balanced', timeout=500, seed=42)
-        success, path, states, metrics = cbs.solve()
+        success, path, _states, _metrics = cbs.solve()
         
         if not success:
             pytest.skip("CBS did not find solution in time")
@@ -279,11 +276,11 @@ class TestInventoryAwarePlanning:
         cbs = CognitiveBoundedSearch(env, persona='balanced', timeout=500, seed=42)
         
         # Run the solver to completion - it will handle subgoal insertion internally
-        success, path, metrics, visited = cbs.solve()
+        success, path, _metrics, _visited = cbs.solve()
         
         # If path found, it should visit the key before door
         if success and path:
-            key_pos = tuple(np.argwhere(small_grid == SEMANTIC_PALETTE['KEY'])[0]) \
+            _key_pos = tuple(np.argwhere(small_grid == SEMANTIC_PALETTE['KEY'])[0]) \
                 if SEMANTIC_PALETTE['KEY'] in small_grid else None
             # The solver should have found a valid path
             assert len(path) > 0, "Should find a path"
@@ -362,8 +359,8 @@ class TestCuriosityHeuristic:
         cbs_explorer = CognitiveBoundedSearch(env_explorer, persona='explorer', timeout=300, seed=42)
         cbs_cautious = CognitiveBoundedSearch(env_cautious, persona='cautious', timeout=300, seed=42)
         
-        success_e, path_e, _, metrics_e = cbs_explorer.solve()
-        success_c, path_c, _, metrics_c = cbs_cautious.solve()
+        success_e, path_e, _, _metrics_e = cbs_explorer.solve()
+        success_c, path_c, _, _metrics_c = cbs_cautious.solve()
         
         if success_e and success_c:
             unique_e = len(set(path_e))
@@ -432,7 +429,7 @@ class TestPersonaEffects:
         for persona_name in ['balanced', 'explorer', 'cautious']:
             env = ZeldaLogicEnv(semantic_grid=exploration_grid.copy())
             cbs = CognitiveBoundedSearch(env, persona=persona_name, timeout=300, seed=42)
-            success, path, states, metrics = cbs.solve()
+            success, path, states, _metrics = cbs.solve()
             
             if success:
                 results[persona_name] = {
@@ -457,7 +454,7 @@ class TestCBSIntegration:
         """CBS+ should solve a simple 5x5 dungeon."""
         env = ZeldaLogicEnv(semantic_grid=small_grid)
         cbs = CognitiveBoundedSearch(env, persona='balanced', timeout=1000, seed=42)
-        success, path, states, metrics = cbs.solve()
+        success, path, _states, _metrics = cbs.solve()
         
         assert success, "CBS should solve simple dungeon"
         assert len(path) > 0, "Path should not be empty"
@@ -468,7 +465,7 @@ class TestCBSIntegration:
         """CBS+ should record all required metrics."""
         env = ZeldaLogicEnv(semantic_grid=small_grid)
         cbs = CognitiveBoundedSearch(env, persona='balanced', timeout=1000, seed=42)
-        success, path, states, metrics = cbs.solve()
+        _success, _path, _states, metrics = cbs.solve()
         
         # Check metrics exist
         assert hasattr(metrics, 'path_length'), "Should record path_length"
@@ -484,8 +481,8 @@ class TestCBSIntegration:
         cbs1 = CognitiveBoundedSearch(env1, persona='balanced', timeout=500, seed=12345)
         cbs2 = CognitiveBoundedSearch(env2, persona='balanced', timeout=500, seed=12345)
         
-        success1, path1, _, _ = cbs1.solve()
-        success2, path2, _, _ = cbs2.solve()
+        success1, _path1, _, _ = cbs1.solve()
+        success2, _path2, _, _ = cbs2.solve()
         
         # Both should succeed/fail consistently
         assert success1 == success2, "Same seed should produce same success result"
@@ -523,7 +520,7 @@ class TestEdgeCases:
         
         env = ZeldaLogicEnv(semantic_grid=grid)
         cbs = CognitiveBoundedSearch(env, persona='balanced', timeout=100, seed=42)
-        success, path, states, metrics = cbs.solve()
+        success, path, _states, _metrics = cbs.solve()
         
         # Should immediately succeed
         assert success or len(path) <= 1, "Start=Goal should succeed quickly"
@@ -536,7 +533,7 @@ class TestEdgeCases:
         
         env = ZeldaLogicEnv(semantic_grid=grid)
         cbs = CognitiveBoundedSearch(env, persona='balanced', timeout=100, seed=42)
-        success, path, states, metrics = cbs.solve()
+        success, _path, _states, _metrics = cbs.solve()
         
         # Should fail gracefully
         assert not success, "Should fail when no path exists"

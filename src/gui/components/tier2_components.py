@@ -21,7 +21,7 @@ This module extends gui_runner.py with new UI components.
 
 import pygame
 import logging
-from typing import Optional, List, Tuple, Dict
+from typing import Optional, List, Tuple
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
@@ -354,7 +354,7 @@ class ItemTooltip:
             collected_items: Set of collected item positions
             current_time: Current time (seconds)
         """
-        from src.core.definitions import SEMANTIC_PALETTE, ID_TO_NAME
+        from src.core.definitions import SEMANTIC_PALETTE
         
         # Check if hovering over new tile
         if tile_pos != self.hover_pos:

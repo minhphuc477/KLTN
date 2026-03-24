@@ -21,7 +21,7 @@ Educational Value:
 import heapq
 import time
 import logging
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple
 from dataclasses import dataclass
 from collections import deque
 from .validator import GameState, ZeldaLogicEnv, ACTION_DELTAS, SEMANTIC_PALETTE
@@ -97,7 +97,7 @@ class SolverComparison:
         
         # Log summary
         logger.info("=== Comparison Results ===")
-        for name, metrics in results.items():
+        for _name, metrics in results.items():
             logger.info(str(metrics))
         
         # Determine winner (best optimality Ã— speed trade-off)
@@ -158,7 +158,7 @@ class SolverComparison:
                 )
             
             # Expand neighbors
-            for action, (dr, dc) in ACTION_DELTAS.items():
+            for _action, (dr, dc) in ACTION_DELTAS.items():
                 new_r = current_state.position[0] + dr
                 new_c = current_state.position[1] + dc
                 
@@ -216,7 +216,7 @@ class SolverComparison:
                 )
             
             # Expand neighbors
-            for action, (dr, dc) in ACTION_DELTAS.items():
+            for _action, (dr, dc) in ACTION_DELTAS.items():
                 new_r = current_state.position[0] + dr
                 new_c = current_state.position[1] + dc
                 
@@ -282,7 +282,7 @@ class SolverComparison:
                 )
             
             # Expand neighbors
-            for action, (dr, dc) in ACTION_DELTAS.items():
+            for _action, (dr, dc) in ACTION_DELTAS.items():
                 new_r = current_state.position[0] + dr
                 new_c = current_state.position[1] + dc
                 

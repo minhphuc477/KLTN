@@ -1,7 +1,9 @@
+# pyright: reportPrivateUsage=false
+
 import numpy as np
 
 from src.core.definitions import SEMANTIC_PALETTE
-from src.simulation.validator import GameState, SolverOptions, StateSpaceAStar, ZeldaLogicEnv
+from src.simulation.validator import SolverOptions, StateSpaceAStar, ZeldaLogicEnv
 
 
 def _build_two_room_grid():

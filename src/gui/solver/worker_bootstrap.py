@@ -1,4 +1,4 @@
-﻿"""Helpers to bootstrap solver worker launch with test mode and fallback."""
+"""Helpers to bootstrap solver worker launch with test mode and fallback."""
 
 import os
 from typing import Any, Callable

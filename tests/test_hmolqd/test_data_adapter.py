@@ -1,3 +1,5 @@
+# pyright: reportPrivateUsage=false
+
 """
 Tests for H-MOLQD Block I: Intelligent Data Adapter
 ====================================================
@@ -7,7 +9,6 @@ Tests for VGLC/Graphviz parsing, phase alignment, and tensor conversion.
 
 import pytest
 import numpy as np
-from pathlib import Path
 
 # Skip if dependencies not available
 pytest.importorskip("numpy")
@@ -29,7 +30,7 @@ class TestVGLCParser:
         """Test parsing a room from string."""
         from src.data_processing.data_adapter import VGLCParser
         
-        parser = VGLCParser()
+        _parser = VGLCParser()
         
         # Simple room string
         room_str = """wwwwwwwwwww
@@ -52,10 +53,7 @@ class TestGraphvizParser:
     
     def test_parse_dot_string(self):
         """Test parsing a DOT string."""
-        try:
-            import networkx as nx
-        except ImportError:
-            pytest.skip("NetworkX not available")
+        pytest.importorskip("networkx")
         
         from src.data_processing.data_adapter import GraphvizParser
         

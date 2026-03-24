@@ -38,6 +38,7 @@ Usage:
     )
 """
 
+import json
 import logging
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Any
@@ -93,6 +94,13 @@ from src.pipeline.graph_features import (
     encode_edge_feature_vector,
     extract_node_feature_vector,
     fit_feature_vector,
+)
+from src.pipeline.block_contracts import (
+    BlockShapeContract,
+    summarize_missing_keys,
+    validate_checkpoint_metadata,
+    validate_feature_dims,
+    validate_tensor_contract,
 )
 
 logger = logging.getLogger(__name__)
@@ -174,6 +182,9 @@ class NeuralSymbolicDungeonPipeline:
         use_learned_refiner_rules: bool = True,
         map_elites_resolution: int = 20,
         enable_logging: bool = True,
+        strict_checkpoint_mode: bool = False,
+        use_graph_node_cross_attention: bool = True,
+        condition_gnn_type: str = "gcn",
     ):
         # Device setup
         if device == 'auto':
@@ -183,6 +194,15 @@ class NeuralSymbolicDungeonPipeline:
         
         if enable_logging:
             logger.info(f"Initializing NeuralSymbolicDungeonPipeline on {self.device}")
+
+        self.strict_checkpoint_mode = bool(strict_checkpoint_mode)
+        self.use_graph_node_cross_attention = bool(use_graph_node_cross_attention)
+        gnn_type = str(condition_gnn_type).strip().lower()
+        if gnn_type not in {"gcn", "gat", "sage"}:
+            raise ValueError(
+                f"Invalid condition_gnn_type={condition_gnn_type!r}. Expected 'gcn', 'gat', or 'sage'."
+            )
+        self.condition_gnn_type = gnn_type
         
         # Block II: VQ-VAE
         self.vqvae = self._load_vqvae(vqvae_checkpoint)
@@ -219,6 +239,21 @@ class NeuralSymbolicDungeonPipeline:
         if enable_logging:
             logger.info("Pipeline initialized successfully")
 
+    def _load_checkpoint_and_metadata(self, checkpoint_path: str, model_name: str) -> Tuple[dict, dict]:
+        """Load checkpoint and optional sidecar metadata for strict validation."""
+        checkpoint = torch.load(checkpoint_path, map_location=self.device)
+        metadata_path = Path(f"{checkpoint_path}.meta.json")
+        metadata: dict = {}
+        if metadata_path.exists():
+            with open(metadata_path, "r", encoding="utf-8") as f:
+                metadata = json.load(f)
+            validate_checkpoint_metadata(metadata=metadata, model_name=model_name)
+        elif self.strict_checkpoint_mode:
+            raise FileNotFoundError(
+                f"Strict checkpoint mode enabled: metadata sidecar missing for {model_name} at {metadata_path}"
+            )
+        return checkpoint, metadata
+
     def _bump_diagnostic(self, key: str) -> None:
         """Increment a named runtime diagnostic counter."""
         k = str(key).strip().lower()
@@ -228,21 +263,45 @@ class NeuralSymbolicDungeonPipeline:
     
     def _load_vqvae(self, checkpoint_path: Optional[str]) -> SemanticVQVAE:
         """Load or create VQ-VAE model."""
+        use_coordconv = True
+        checkpoint: Optional[Dict[str, Any]] = None
+        state_dict: Optional[Dict[str, Any]] = None
+        if checkpoint_path and Path(checkpoint_path).exists():
+            checkpoint, _metadata = self._load_checkpoint_and_metadata(checkpoint_path, "vqvae")
+            if isinstance(checkpoint, dict):
+                state_dict = checkpoint.get('model_state_dict', checkpoint)
+            # Backward compatibility: older checkpoints may use plain Conv2d
+            # keys (encoder.conv_in.weight) while newer CoordConv checkpoints
+            # use encoder.conv_in.conv.weight.
+            if isinstance(state_dict, dict):
+                has_coordconv_keys = ('encoder.conv_in.conv.weight' in state_dict)
+                has_plain_conv_keys = ('encoder.conv_in.weight' in state_dict)
+                if has_plain_conv_keys and not has_coordconv_keys:
+                    use_coordconv = False
+
         model = SemanticVQVAE(
             num_classes=44,
             codebook_size=512,
             latent_dim=64,
             hidden_dim=128,
+            use_coordconv=use_coordconv,
         ).to(self.device)
         
         if checkpoint_path and Path(checkpoint_path).exists():
-            checkpoint = torch.load(checkpoint_path, map_location=self.device)
-            if 'model_state_dict' in checkpoint:
-                model.load_state_dict(checkpoint['model_state_dict'])
+            if checkpoint is None:
+                checkpoint, _metadata = self._load_checkpoint_and_metadata(checkpoint_path, "vqvae")
+            if state_dict is None and isinstance(checkpoint, dict):
+                state_dict = checkpoint.get('model_state_dict', checkpoint)
+            if isinstance(state_dict, dict):
+                model.load_state_dict(state_dict)
             else:
                 model.load_state_dict(checkpoint)
             logger.info(f"Loaded VQ-VAE from {checkpoint_path}")
         else:
+            if self.strict_checkpoint_mode:
+                raise FileNotFoundError(
+                    f"Strict checkpoint mode enabled: missing VQ-VAE checkpoint at {checkpoint_path!r}"
+                )
             logger.warning("No VQ-VAE checkpoint provided, using random initialization")
         
         return model
@@ -265,7 +324,7 @@ class NeuralSymbolicDungeonPipeline:
         checkpoint_state: Optional[Dict[str, Any]] = None
 
         if checkpoint_path and Path(checkpoint_path).exists():
-            checkpoint = torch.load(checkpoint_path, map_location=self.device)
+            checkpoint, _metadata = self._load_checkpoint_and_metadata(checkpoint_path, "condition_encoder")
             checkpoint_state = checkpoint.get('model_state_dict', checkpoint)
             if isinstance(checkpoint_state, dict):
                 node_weight = checkpoint_state.get('global_encoder.node_encoder.weight')
@@ -281,9 +340,23 @@ class NeuralSymbolicDungeonPipeline:
             edge_feature_dim=edge_feature_dim,
             hidden_dim=256,
             output_dim=256,
+            gnn_type=self.condition_gnn_type,
         ).to(self.device)
         
         if checkpoint_state is not None:
+            if isinstance(checkpoint_state, dict):
+                model_state = model.state_dict()
+                filtered_state: Dict[str, Any] = {}
+                dropped_shape: List[str] = []
+                for k, v in checkpoint_state.items():
+                    if k not in model_state:
+                        continue
+                    target_v = model_state[k]
+                    if hasattr(v, 'shape') and hasattr(target_v, 'shape') and tuple(v.shape) != tuple(target_v.shape):
+                        dropped_shape.append(k)
+                        continue
+                    filtered_state[k] = v
+                checkpoint_state = filtered_state
             incompatible = model.load_state_dict(checkpoint_state, strict=False)
             missing = list(getattr(incompatible, 'missing_keys', []))
             unexpected = list(getattr(incompatible, 'unexpected_keys', []))
@@ -295,11 +368,24 @@ class NeuralSymbolicDungeonPipeline:
                 len(missing),
                 len(unexpected),
             )
-            if missing:
-                logger.warning("Condition encoder missing keys (first 8): %s", missing[:8])
-            if unexpected:
-                logger.warning("Condition encoder unexpected keys (first 8): %s", unexpected[:8])
+            if 'dropped_shape' in locals() and dropped_shape:
+                logger.warning(
+                    "Condition encoder dropped incompatible checkpoint keys (shape mismatch): %s",
+                    summarize_missing_keys(dropped_shape),
+                )
+            if missing or unexpected:
+                msg = (
+                    "Condition encoder checkpoint/schema mismatch: "
+                    f"missing={summarize_missing_keys(missing)} unexpected={summarize_missing_keys(unexpected)}"
+                )
+                if self.strict_checkpoint_mode:
+                    raise RuntimeError(msg)
+                logger.warning(msg)
         else:
+            if self.strict_checkpoint_mode:
+                raise FileNotFoundError(
+                    f"Strict checkpoint mode enabled: missing condition encoder checkpoint at {checkpoint_path!r}"
+                )
             logger.warning(
                 "No condition encoder checkpoint, using random initialization with enhanced schema (node_dim=%d edge_dim=%d)",
                 node_feature_dim,
@@ -327,13 +413,48 @@ class NeuralSymbolicDungeonPipeline:
         ).to(self.device)
         
         if checkpoint_path and Path(checkpoint_path).exists():
-            checkpoint = torch.load(checkpoint_path, map_location=self.device)
-            if 'model_state_dict' in checkpoint:
-                model.load_state_dict(checkpoint['model_state_dict'])
-            else:
-                model.load_state_dict(checkpoint)
-            logger.info(f"Loaded diffusion model from {checkpoint_path}")
+            checkpoint, _metadata = self._load_checkpoint_and_metadata(checkpoint_path, "diffusion")
+            checkpoint_state = checkpoint.get('model_state_dict', checkpoint)
+            if isinstance(checkpoint_state, dict):
+                model_state = model.state_dict()
+                filtered_state: Dict[str, Any] = {}
+                dropped_shape: List[str] = []
+                for k, v in checkpoint_state.items():
+                    if k not in model_state:
+                        continue
+                    target_v = model_state[k]
+                    if hasattr(v, 'shape') and hasattr(target_v, 'shape') and tuple(v.shape) != tuple(target_v.shape):
+                        dropped_shape.append(k)
+                        continue
+                    filtered_state[k] = v
+                checkpoint_state = filtered_state
+            incompatible = model.load_state_dict(checkpoint_state, strict=False)
+            missing = list(getattr(incompatible, 'missing_keys', []))
+            unexpected = list(getattr(incompatible, 'unexpected_keys', []))
+            logger.info(
+                "Loaded diffusion model from %s (missing=%d unexpected=%d)",
+                checkpoint_path,
+                len(missing),
+                len(unexpected),
+            )
+            if 'dropped_shape' in locals() and dropped_shape:
+                logger.warning(
+                    "Diffusion dropped incompatible checkpoint keys (shape mismatch): %s",
+                    summarize_missing_keys(dropped_shape),
+                )
+            if missing or unexpected:
+                msg = (
+                    "Diffusion checkpoint/schema mismatch: "
+                    f"missing={summarize_missing_keys(missing)} unexpected={summarize_missing_keys(unexpected)}"
+                )
+                if self.strict_checkpoint_mode:
+                    raise RuntimeError(msg)
+                logger.warning(msg)
         else:
+            if self.strict_checkpoint_mode:
+                raise FileNotFoundError(
+                    f"Strict checkpoint mode enabled: missing diffusion checkpoint at {checkpoint_path!r}"
+                )
             logger.warning("No diffusion checkpoint, using random initialization")
         
         return model
@@ -347,13 +468,17 @@ class NeuralSymbolicDungeonPipeline:
         ).to(self.device)
         
         if checkpoint_path and Path(checkpoint_path).exists():
-            checkpoint = torch.load(checkpoint_path, map_location=self.device)
+            checkpoint, _metadata = self._load_checkpoint_and_metadata(checkpoint_path, "logic_net")
             if 'model_state_dict' in checkpoint:
                 model.load_state_dict(checkpoint['model_state_dict'])
             else:
                 model.load_state_dict(checkpoint)
             logger.info(f"Loaded LogicNet from {checkpoint_path}")
         else:
+            if self.strict_checkpoint_mode:
+                raise FileNotFoundError(
+                    f"Strict checkpoint mode enabled: missing LogicNet checkpoint at {checkpoint_path!r}"
+                )
             logger.warning("No LogicNet checkpoint, using random initialization")
         
         return model
@@ -465,6 +590,13 @@ class NeuralSymbolicDungeonPipeline:
         
         # BLOCK III: Dual-Stream Conditioning
         try:
+            node_dim, edge_dim = self._condition_feature_dims()
+            validate_feature_dims(
+                node_features=graph_context.get('node_features'),
+                edge_features=graph_context.get('edge_features'),
+                expected_node_dim=node_dim,
+                expected_edge_dim=edge_dim,
+            )
             condition = self.condition_encoder(
                 neighbor_latents=neighbor_latents,
                 boundary_constraints=boundary_constraints,
@@ -475,10 +607,31 @@ class NeuralSymbolicDungeonPipeline:
                 tpe=graph_context.get('tpe'),
                 current_node_idx=graph_context.get('current_node_idx'),
             )
+            validate_tensor_contract(
+                condition,
+                BlockShapeContract(name='block_iii_condition_output', dims=2, batch_dim=1, channel_dim=256),
+            )
         except (AttributeError, RuntimeError, ValueError, TypeError) as e:
             self._bump_diagnostic("condition_encoder_fallback")
             logger.warning(f"Condition encoding failed: {e}, using zero condition")
             condition = torch.zeros(1, 256, device=self.device)
+
+        # Optional graph-node token conditioning for U-Net cross-attention.
+        if self.use_graph_node_cross_attention:
+            try:
+                node_tokens = self.condition_encoder.encode_global_only(
+                    node_features=graph_context.get('node_features'),
+                    edge_index=graph_context.get('edge_index'),
+                    edge_features=graph_context.get('edge_features'),
+                    tpe=graph_context.get('tpe'),
+                )
+                if node_tokens.dim() == 2:
+                    node_tokens = node_tokens.unsqueeze(0)  # [1, N, C]
+                # Prepend fused local/global room condition as an anchor token.
+                condition = torch.cat([condition.unsqueeze(1), node_tokens], dim=1)
+            except (AttributeError, RuntimeError, ValueError, TypeError) as e:
+                self._bump_diagnostic("graph_node_cross_attention_fallback")
+                logger.debug("Falling back to single conditioning vector: %s", e)
         
         # BLOCK V: Logic guidance configuration for diffusion sampler
         self.diffusion.cfg_scale = float(guidance_scale)
@@ -534,6 +687,10 @@ class NeuralSymbolicDungeonPipeline:
             logits = self.vqvae.decode_indices(indices_t)  # (1, 44, 16, 11)
             with torch.no_grad():
                 z_latent = self.vqvae.quantizer.encode_indices(indices_t).permute(0, 3, 1, 2).contiguous()
+            validate_tensor_contract(
+                z_latent,
+                BlockShapeContract(name='block_iv_categorical_latent', dims=4, batch_dim=1),
+            )
         else:
             # BLOCK IV: Latent Diffusion Sampling
             logger.debug(f"Room {room_id}: Sampling with {num_diffusion_steps} steps")
@@ -551,8 +708,28 @@ class NeuralSymbolicDungeonPipeline:
                     graph_data=graph_data,
                 )
 
+            validate_tensor_contract(
+                z_latent,
+                BlockShapeContract(
+                    name='block_iv_diffusion_latent',
+                    dims=4,
+                    batch_dim=1,
+                    channel_dim=int(self.diffusion.latent_dim),
+                ),
+            )
+
             # BLOCK II: VQ-VAE Decoding
             logits = self.vqvae.decode(z_latent)  # (1, 44, 16, 11)
+        validate_tensor_contract(
+            logits,
+            BlockShapeContract(
+                name='block_ii_decode_logits',
+                dims=4,
+                batch_dim=1,
+                channel_dim=44,
+                spatial_hw=(ROOM_HEIGHT, ROOM_WIDTH),
+            ),
+        )
         neural_grid = logits.argmax(dim=1).cpu().numpy()[0]  # (16, 11)
         
         # BLOCK VI: Symbolic Repair (if enabled)
@@ -713,7 +890,7 @@ class NeuralSymbolicDungeonPipeline:
                 target_curve = [0.2, 0.4, 0.6, 0.8, 1.0]
             
             # Calculate genome_length to target desired room count
-            # Empirical relationship: genome_length â‰ˆ num_rooms * 0.7 (rules don't always apply)
+            # Empirical relationship: genome_length ~ num_rooms * 0.7 (rules don't always apply)
             target_genome_length = max(10, int(num_rooms * 0.7))
             
             topology_generator = EvolutionaryTopologyGenerator(

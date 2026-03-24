@@ -29,12 +29,11 @@ Usage:
     # graph_nodes: [B, N_nodes, graph_dim] from GNN
     # node_positions: [B, N_nodes, 2] optional positional info
     
-    output = cross_attn(grid_features, graph_nodes, node_positions)
+    output = cross_attn(grid_features, graph_nodes, node_positions=node_positions)
 """
 
-import math
 import logging
-from typing import Dict, List, Tuple, Optional
+from typing import Tuple, Optional
 
 import torch
 import torch.nn as nn
@@ -42,6 +41,51 @@ import torch.nn.functional as F
 from torch import Tensor
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# LIGHTWEIGHT GRAPH CONV
+# ============================================================================
+
+class LightweightGCNLayer(nn.Module):
+    """Simple normalized A_hat X W graph convolution without external deps."""
+
+    def __init__(self, in_dim: int, out_dim: int):
+        super().__init__()
+        self.linear = nn.Linear(in_dim, out_dim)
+
+    def forward(self, x: Tensor, edge_index: Tensor) -> Tensor:
+        """
+        Args:
+            x: [B, N, D]
+            edge_index: [2, E] or [B, 2, E]
+        """
+        b, n, _d = x.shape
+        out = []
+        for bi in range(b):
+            xb = x[bi]  # [N, D]
+            adj = torch.zeros(n, n, device=xb.device, dtype=xb.dtype)
+
+            if edge_index.dim() == 3:
+                ei = edge_index[bi]
+            else:
+                ei = edge_index
+
+            if ei.numel() > 0:
+                src = ei[0].long().clamp(0, n - 1)
+                dst = ei[1].long().clamp(0, n - 1)
+                adj[src, dst] = 1.0
+                adj[dst, src] = 1.0
+
+            # Add self-loops and normalize.
+            adj = adj + torch.eye(n, device=adj.device, dtype=adj.dtype)
+            deg = adj.sum(dim=1).clamp(min=1.0)
+            inv_sqrt = deg.pow(-0.5)
+            norm_adj = inv_sqrt[:, None] * adj * inv_sqrt[None, :]
+
+            out.append(norm_adj @ self.linear(xb))
+
+        return torch.stack(out, dim=0)
 
 
 # ============================================================================
@@ -235,6 +279,9 @@ class GraphToGridCrossAttention(nn.Module):
         
         # Grid position encoding
         self.grid_pe = SinusoidalPositionEncoding2D(grid_dim)
+
+        # Optional graph convolution preprocessing before attention.
+        self.graph_gcn = LightweightGCNLayer(graph_dim, graph_dim)
         
         # Graph node position encoding
         self.graph_pe = GraphNodePositionEncoding(graph_dim)
@@ -268,6 +315,7 @@ class GraphToGridCrossAttention(nn.Module):
         self,
         grid_features: Tensor,
         graph_nodes: Tensor,
+        edge_index: Optional[Tensor] = None,
         node_positions: Optional[Tensor] = None,
         node_tpe: Optional[Tensor] = None,
         node_mask: Optional[Tensor] = None,
@@ -278,6 +326,7 @@ class GraphToGridCrossAttention(nn.Module):
         Args:
             grid_features: [B, C, H, W] grid features from U-Net
             graph_nodes: [B, N, graph_dim] graph node features
+            edge_index: [2, E] or [B, 2, E] graph connectivity for GCN prepass
             node_positions: [B, N, 2] optional node positions
             node_tpe: [B, N, 8] topological positional encoding
             node_mask: [B, N] optional mask (1 = valid, 0 = padding)
@@ -294,6 +343,10 @@ class GraphToGridCrossAttention(nn.Module):
         # Flatten grid to sequence: [B, H*W, C]
         grid_seq = grid_with_pe.view(B, C, -1).permute(0, 2, 1)
         
+        # Optional GCN preprocessing preserves node-topology dependencies.
+        if edge_index is not None:
+            graph_nodes = self.graph_gcn(graph_nodes, edge_index)
+
         # Add position encoding to graph nodes
         graph_with_pe = self.graph_pe(graph_nodes, node_positions, node_tpe)
         
@@ -416,6 +469,7 @@ class EnhancedAttentionBlock(nn.Module):
         x: Tensor,
         context: Optional[Tensor] = None,
         graph_nodes: Optional[Tensor] = None,
+        edge_index: Optional[Tensor] = None,
         node_positions: Optional[Tensor] = None,
         node_tpe: Optional[Tensor] = None,
         node_mask: Optional[Tensor] = None,
@@ -427,6 +481,7 @@ class EnhancedAttentionBlock(nn.Module):
             x: [B, C, H, W] grid features
             context: [B, context_dim] single context vector (optional)
             graph_nodes: [B, N, graph_dim] graph node features (optional)
+            edge_index: [2, E] or [B, 2, E] graph connectivity (optional)
             node_positions: [B, N, 2] node positions
             node_tpe: [B, N, 8] topological encoding
             node_mask: [B, N] node validity mask
@@ -450,7 +505,7 @@ class EnhancedAttentionBlock(nn.Module):
         # Graph cross-attention (new per-position attention)
         if graph_nodes is not None:
             x = self.graph_cross_attn(
-                x, graph_nodes, node_positions, node_tpe, node_mask
+                x, graph_nodes, edge_index, node_positions, node_tpe, node_mask
             )
         
         # Context cross-attention (backward compat)
@@ -549,7 +604,12 @@ if __name__ == '__main__':
     node_tpe = torch.randn(B, N_nodes, 8)
     
     # Forward pass
-    output = cross_attn(grid_features, graph_nodes, node_positions, node_tpe)
+    output = cross_attn(
+        grid_features,
+        graph_nodes,
+        node_positions=node_positions,
+        node_tpe=node_tpe,
+    )
     
     print(f"Input shape: {grid_features.shape}")
     print(f"Graph nodes: {graph_nodes.shape}")

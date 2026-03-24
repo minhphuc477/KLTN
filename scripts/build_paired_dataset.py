@@ -18,13 +18,12 @@ Usage:
     python scripts/build_paired_dataset.py --format hdf5 --output datasets/zelda_paired.h5
 """
 
-import os
 import sys
 import json
 import argparse
 import logging
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional, Any
+from typing import Dict, Any
 
 import numpy as np
 
@@ -279,7 +278,7 @@ def main():
         verbose=not args.quiet,
     )
     
-    print(f"\nâœ“ Dataset built successfully!")
+    print("\nâœ“ Dataset built successfully!")
     print(f"  Dungeons: {stats['dungeons_processed']}")
     print(f"  Rooms: {stats['rooms_saved']}")
     print(f"  Graph nodes: {stats['total_nodes']}")

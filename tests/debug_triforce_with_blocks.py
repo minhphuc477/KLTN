@@ -1,4 +1,6 @@
 """Debug TRIFORCE with pushed blocks in state"""
+# pyright: reportPrivateUsage=false
+
 import numpy as np
 import sys
 from pathlib import Path
@@ -38,7 +40,7 @@ success, state = env._try_move_pure(state, (2, 5), grid[2, 5])
 print(f"4. Move to (2,5): success={success}, pos={state.position}, pushed_blocks={state.pushed_blocks}")
 
 # Move to (2,6) - TRIFORCE
-print(f"\nMoving to TRIFORCE at (2,6)...")
+print("\nMoving to TRIFORCE at (2,6)...")
 print(f"Current state: pos={state.position}, pushed_blocks={state.pushed_blocks}")
 print(f"Target tile at (2,6): {grid[2,6]} (TRIFORCE={SEMANTIC_PALETTE['TRIFORCE']})")
 print()
@@ -47,9 +49,9 @@ print()
 for from_pos, to_pos in state.pushed_blocks:
     print(f"  Pushed block: {from_pos} -> {to_pos}")
     if to_pos == (2, 6):
-        print(f"  WARNING: Block was pushed TO (2,6)!")
+        print("  WARNING: Block was pushed TO (2,6)!")
     if from_pos == (2, 6):
-        print(f"  INFO: Block was pushed FROM (2,6)")
+        print("  INFO: Block was pushed FROM (2,6)")
 
 success, state = env._try_move_pure(state, (2, 6), grid[2, 6])
 print(f"\n5. Move to TRIFORCE (2,6): success={success}, pos={state.position}")

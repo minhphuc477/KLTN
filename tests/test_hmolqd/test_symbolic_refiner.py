@@ -1,3 +1,5 @@
+# pyright: reportPrivateUsage=false
+
 """
 Tests for H-MOLQD Block VII: Symbolic Refiner
 ==============================================
@@ -107,7 +109,7 @@ class TestWaveFunctionCollapse:
         
         state = wfc.initialize_state(height=8, width=8)
         
-        result_grid, success = wfc.collapse(state)
+        result_grid, _success = wfc.collapse(state)
         
         assert result_grid.shape == (8, 8)
         assert set(np.unique(result_grid)).issubset({TileType.FLOOR.value, TileType.WALL.value})
@@ -138,7 +140,7 @@ class TestWaveFunctionCollapse:
         # Top row should be collapsed to WALL
         assert state.collapsed[0, 0] == True
         
-        result_grid, success = wfc.collapse(state)
+        result_grid, _success = wfc.collapse(state)
         
         # Top row should still be WALL
         assert np.all(result_grid[0, :] == TileType.WALL.value)
@@ -180,7 +182,7 @@ class TestSymbolicRefiner:
         
         grid = np.full((16, 11), TileType.FLOOR.value)
         
-        repaired, success = refiner.repair_room(
+        _repaired, success = refiner.repair_room(
             grid, start=(5, 0), goal=(5, 15)
         )
         
@@ -196,7 +198,7 @@ class TestSymbolicRefiner:
         grid = np.full((16, 11), TileType.FLOOR.value)
         grid[8, :] = TileType.WALL.value  # Wall in middle
         
-        repaired, success = refiner.repair_room(
+        repaired, _success = refiner.repair_room(
             grid, start=(5, 0), goal=(5, 15)
         )
         

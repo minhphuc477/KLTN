@@ -1,4 +1,4 @@
-﻿"""Utilities for managing GUI temp files."""
+"""Utilities for managing GUI temp files."""
 
 import os
 import subprocess
@@ -14,7 +14,7 @@ def list_existing_paths(paths: Iterable[str]) -> List[str]:
             continue
         try:
             s = str(p)
-        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError):
             continue
         if os.path.exists(s):
             out.append(s)

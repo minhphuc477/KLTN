@@ -1,3 +1,5 @@
+# pyright: reportPrivateUsage=false
+
 import os
 import time
 import pygame
@@ -20,7 +22,7 @@ def test_toggle_fullscreen_roundtrip():
     grid = np.zeros((8, 8), dtype=int)
     gui = ZeldaGUI(maps=[grid], map_names=['M1'])
     # Record initial size
-    init_size = (gui.screen_w, gui.screen_h)
+    _init_size = (gui.screen_w, gui.screen_h)
 
     # Toggle fullscreen on (should not raise or hang)
     t0 = time.time()

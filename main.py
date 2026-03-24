@@ -21,8 +21,9 @@ Usage:
 """
 
 import argparse
-import sys
 import logging
+import os
+import random
 from pathlib import Path
 
 # Configure logging
@@ -43,18 +44,8 @@ from src.zelda_data.zelda_core import (
     DungeonSolver,
     
     # ML Features
-    MLFeatureExtractor,
-    GridBasedRoomExtractor,
-    
-    # Data classes
     Dungeon,
     StitchedDungeon,
-    DungeonData,
-    RoomData,
-    
-    # Constants
-    SEMANTIC_PALETTE,
-    ID_TO_NAME,
     ValidationMode,
     
     # Utilities
@@ -64,6 +55,11 @@ from src.zelda_data.zelda_core import (
 )
 
 import numpy as np
+
+try:
+    import torch
+except (ImportError, AttributeError, RuntimeError, TypeError, ValueError):
+    torch = None
 
 
 def load_dungeon(dungeon_num: int, variant: int = 1, data_root: str = None) -> Dungeon:
@@ -117,6 +113,7 @@ def validate_dungeon(stitched: StitchedDungeon, mode: str = ValidationMode.FULL)
 
 def run_pipeline(dungeon_num: int, variant: int = 1, 
                  mode: str = ValidationMode.FULL,
+                 seed: int = None,
                  verbose: bool = True) -> dict:
     """
     Run the complete pipeline: Load -> Stitch -> Validate
@@ -135,6 +132,13 @@ def run_pipeline(dungeon_num: int, variant: int = 1,
         print(f"\n{'='*60}")
         print(f"PIPELINE: Dungeon {dungeon_num} (Quest {variant})")
         print(f"{'='*60}")
+
+    if seed is not None:
+        random.seed(int(seed))
+        np.random.seed(int(seed))
+        if torch is not None:
+            torch.manual_seed(int(seed))
+        logger.info("Using deterministic seed=%s", seed)
     
     # Step 1: Load
     logger.info("[STEP 1] Loading dungeon data...")
@@ -143,49 +147,48 @@ def run_pipeline(dungeon_num: int, variant: int = 1,
     except FileNotFoundError as e:
         logger.error(f"Dungeon data not found: {e}")
         raise
-    except Exception as e:
+    except Exception:
         logger.exception("Error loading dungeon")
         raise
     
     if verbose:
-        print(f"\n[STEP 1] Loading dungeon data...")
-        print(f"  âœ“ Loaded {len(dungeon.rooms)} rooms")
-        print(f"  âœ“ Graph: {dungeon.graph.number_of_nodes()} nodes, {dungeon.graph.number_of_edges()} edges")
+        print("\n[STEP 1] Loading dungeon data...")
+        print(f"  [OK] Loaded {len(dungeon.rooms)} rooms")
+        print(f"  [OK] Graph: {dungeon.graph.number_of_nodes()} nodes, {dungeon.graph.number_of_edges()} edges")
     
     # Step 2: Stitch
     logger.info("[STEP 2] Stitching rooms...")
     try:
         stitched = stitch_dungeon(dungeon)
-    except Exception as e:
+    except Exception:
         logger.exception("Error stitching dungeon")
-        raise
         raise
     
     if verbose:
-        print(f"\n[STEP 2] Stitching rooms...")
-        print(f"  âœ“ Global grid: {stitched.global_grid.shape}")
-        print(f"  âœ“ Start: {stitched.start_global}")
-        print(f"  âœ“ Triforce: {stitched.triforce_global}")
+        print("\n[STEP 2] Stitching rooms...")
+        print(f"  [OK] Global grid: {stitched.global_grid.shape}")
+        print(f"  [OK] Start: {stitched.start_global}")
+        print(f"  [OK] Triforce: {stitched.triforce_global}")
     
     # Step 3: Validate
     logger.info(f"[STEP 3] Validating solvability (mode: {mode})...")
     try:
         result = validate_dungeon(stitched, mode=mode)
-    except Exception as e:
+    except Exception:
         logger.exception("Error validating dungeon")
         raise
     
     if verbose:
         if result['solvable']:
-            print(f"  âœ“ SOLVABLE!")
-            print(f"  âœ“ Path length: {result.get('path_length', 'N/A')} steps")
-            print(f"  âœ“ Rooms traversed: {result.get('rooms_traversed', 'N/A')}")
+            print("  [OK] SOLVABLE!")
+            print(f"  [OK] Path length: {result.get('path_length', 'N/A')} steps")
+            print(f"  [OK] Rooms traversed: {result.get('rooms_traversed', 'N/A')}")
             if 'keys_available' in result:
-                print(f"  âœ“ Keys available: {result['keys_available']}")
-                print(f"  âœ“ Keys used: {result['keys_used']}")
+                print(f"  [OK] Keys available: {result['keys_available']}")
+                print(f"  [OK] Keys used: {result['keys_used']}")
         else:
-            print(f"  âœ— NOT SOLVABLE")
-            print(f"  âœ— Reason: {result.get('reason', 'Unknown')}")
+            print("  [FAIL] NOT SOLVABLE")
+            print(f"  [FAIL] Reason: {result.get('reason', 'Unknown')}")
     
     # Return complete result
     return {
@@ -270,6 +273,11 @@ def main():
         '--ascii', action='store_true',
         help='Print ASCII visualization of the dungeon'
     )
+    parser.add_argument(
+        '--seed', type=int,
+        default=(int(os.environ['KLTN_SEED']) if 'KLTN_SEED' in os.environ else None),
+        help='Deterministic seed (or set KLTN_SEED env var)'
+    )
     
     args = parser.parse_args()
     
@@ -300,6 +308,7 @@ def main():
         args.dungeon, 
         args.variant,
         mode=mode,
+        seed=args.seed,
         verbose=not args.quiet
     )
     

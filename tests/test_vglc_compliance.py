@@ -18,7 +18,6 @@ All tests use ground-truth VGLC specifications.
 import pytest
 import numpy as np
 import networkx as nx
-from pathlib import Path
 
 from src.constants.vglc_constants import (
     ROOM_WIDTH_TILES,
@@ -29,7 +28,6 @@ from src.constants.vglc_constants import (
     TILE_SIZE_PX,
     ROOM_WIDTH_PX,
     ROOM_HEIGHT_PX,
-    VIRTUAL_NODE_TYPES,
 )
 
 from src.zelda_data.vglc_utils import (
@@ -37,25 +35,10 @@ from src.zelda_data.vglc_utils import (
     parse_node_label,
     parse_node_attributes,
     parse_edge_attributes,
-    get_node_type_counts,
-    # Validation
-    is_virtual_node,
-    get_virtual_nodes,
     filter_virtual_nodes,
     get_physical_start_node,
     validate_goal_subgraph,
     validate_topology,
-    validate_room_dimensions,
-    validate_pixel_dimensions,
-    validate_room_shape,
-    # Classes
-    VGLCGraphParser,
-    VGLCTopologyValidator,
-    VGLCDimensionValidator,
-    # Data classes
-    NodeAttributes,
-    EdgeAttributes,
-    TopologyReport,
 )
 
 # Compatibility helpers for old test code
@@ -485,7 +468,7 @@ class TestGraphTopologyValidation:
         G.add_node(2, label='e')
         # No edge between them - disconnected!
         
-        is_valid, errors = validate_graph_topology(G)
+        _is_valid, errors = validate_graph_topology(G)
         # Disconnected graphs produce warnings, not necessarily errors
         # (depends on whether start node can be found)
         assert len(errors) > 0, "Should have warnings or errors for disconnected graph"
@@ -498,7 +481,7 @@ class TestGraphTopologyValidation:
         G.add_node(2, label='t')   # Goal (only 1 hop)
         G.add_edge(1, 2)
         
-        is_valid, errors = validate_graph_topology(G)
+        is_valid, _errors = validate_graph_topology(G)
         # Short paths may or may not fail depending on validation rules
         # VGLC doesn't strictly enforce minimum path length
         # (This is a design choice - some validators may enforce it)

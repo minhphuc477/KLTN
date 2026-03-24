@@ -1,4 +1,4 @@
-﻿"""Final constructor boot sequence helpers for ZeldaGUI."""
+"""Final constructor boot sequence helpers for ZeldaGUI."""
 
 from __future__ import annotations
 
@@ -16,6 +16,6 @@ def finalize_initial_map_boot(*, gui: Any, pygame: Any, logger: Any) -> None:
     try:
         gui._render()
         pygame.display.flip()
-    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError):
         logger.debug("Initial frame paint failed during constructor bootstrap", exc_info=True)
 

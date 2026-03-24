@@ -30,7 +30,6 @@ Metrics:
 import logging
 from typing import Dict, List, Tuple, Optional, Any, Callable
 from dataclasses import dataclass, field
-from collections import defaultdict
 import random
 
 import numpy as np

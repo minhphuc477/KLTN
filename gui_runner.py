@@ -174,7 +174,6 @@ from src.gui.orchestration.control_panel.click_render_orchestration import (
 )
 from src.gui.solver.start_logic import (
     default_solver_timeout_for_algorithm,
-    evaluate_solver_recovery_state,
     scale_timeout_by_grid_size,
     sync_solver_dropdown_settings,
 )
@@ -249,13 +248,6 @@ from src.gui.orchestration.map.navigation_orchestration import (
     prev_map as _prev_map_orchestration_helper,
     render_minimap as _render_minimap_orchestration_helper,
 )
-from src.gui.gameplay.block_push_controls import (
-    start_block_push_animation as _start_block_push_animation_helper,
-    update_block_push_animations as _update_block_push_animations_helper,
-    render_block_push_animations as _render_block_push_animations_helper,
-    get_animating_block_positions as _get_animating_block_positions_helper,
-    check_and_start_block_push as _check_and_start_block_push_helper,
-)
 from src.gui.orchestration.rendering.panel_overlay_orchestration import (
     render_controls_section as _render_controls_section_orchestration_helper,
     render_debug_overlay as _render_debug_overlay_orchestration_helper,
@@ -317,12 +309,6 @@ from src.gui.orchestration.control_panel.layout_orchestration import (
     reposition_widgets as _reposition_widgets_orchestration_helper,
     update_control_panel_positions as _update_control_panel_positions_orchestration_helper,
 )
-from src.gui.gameplay.inventory_manager import (
-    remove_from_path_items as _remove_from_path_items_helper,
-    track_item_collection as _track_item_collection_helper,
-    track_item_usage as _track_item_usage_helper,
-    sync_inventory_counters as _sync_inventory_counters_helper,
-)
 from src.gui.orchestration.gameplay.inventory_orchestration import (
     apply_pickup_at as _apply_pickup_at_orchestration_helper,
     get_path_items_display_text as _get_path_items_display_text_orchestration_helper,
@@ -334,24 +320,6 @@ from src.gui.orchestration.gameplay.inventory_orchestration import (
     track_item_collection as _track_item_collection_orchestration_helper,
     track_item_usage as _track_item_usage_orchestration_helper,
     update_inventory_and_hud as _update_inventory_and_hud_orchestration_helper,
-)
-from src.gui.gameplay.path_analysis import scan_items_along_path as _scan_items_along_path_helper
-from src.gui.rendering.inventory_display import (
-    get_path_items_display_text as _get_path_items_display_text_helper,
-    render_item_legend as _render_item_legend_helper,
-)
-from src.gui.gameplay.item_markers import (
-    scan_and_mark_items as _scan_and_mark_items_helper,
-    apply_pickup_at as _apply_pickup_at_helper,
-)
-from src.gui.gameplay.path_strategies import (
-    smart_grid_path as _smart_grid_path_helper,
-    graph_guided_path as _graph_guided_path_helper,
-    hybrid_graph_grid_path as _hybrid_graph_grid_path_helper,
-)
-from src.gui.gameplay.auto_step_controller import (
-    stop_auto as _stop_auto_helper,
-    auto_step as _auto_step_helper,
 )
 from src.gui.orchestration.gameplay.action_orchestration import (
     auto_step as _auto_step_orchestration_helper,
@@ -453,12 +421,12 @@ except ImportError:
 
 # Try to import new visualization system
 try:
-    from src.visualization.renderer import ZeldaRenderer, ThemeConfig, Vector2
+    from src.visualization.renderer import ZeldaRenderer
     from src.visualization.effects import (
         EffectManager, PopEffect, FlashEffect, RippleEffect,
         ItemCollectionEffect, ItemUsageEffect, ItemMarkerEffect
     )
-    from src.visualization.hud import ModernHUD, HUDTheme
+    from src.visualization.hud import ModernHUD
     from src.visualization.path_preview import PathPreviewDialog
     VISUALIZATION_AVAILABLE = True
 except ImportError:
@@ -468,8 +436,6 @@ except ImportError:
         pygame_available=PYGAME_AVAILABLE,
     )
     ZeldaRenderer = _visual_fallbacks["ZeldaRenderer"]
-    ThemeConfig = _visual_fallbacks["ThemeConfig"]
-    Vector2 = _visual_fallbacks["Vector2"]
     EffectManager = _visual_fallbacks["EffectManager"]
     PopEffect = _visual_fallbacks["PopEffect"]
     FlashEffect = _visual_fallbacks["FlashEffect"]
@@ -478,7 +444,6 @@ except ImportError:
     ItemUsageEffect = _visual_fallbacks["ItemUsageEffect"]
     ItemMarkerEffect = _visual_fallbacks["ItemMarkerEffect"]
     ModernHUD = _visual_fallbacks["ModernHUD"]
-    HUDTheme = _visual_fallbacks["HUDTheme"]
     PathPreviewDialog = _visual_fallbacks["PathPreviewDialog"]
 
     logger.warning("New visualization system not available; using no-op fallbacks for GUI components.")
@@ -487,7 +452,7 @@ except ImportError:
 try:
     from src.gui.components.widgets import (
         CheckboxWidget, DropdownWidget, ButtonWidget,
-        WidgetManager, WidgetTheme
+        WidgetManager
     )
     WIDGETS_AVAILABLE = True
 except ImportError:
@@ -498,14 +463,12 @@ except ImportError:
     DropdownWidget = _widget_fallbacks["DropdownWidget"]
     ButtonWidget = _widget_fallbacks["ButtonWidget"]
     WidgetManager = _widget_fallbacks["WidgetManager"]
-    WidgetTheme = _widget_fallbacks["WidgetTheme"]
 
-    logger.warning("GUI widgets not available Î“Ã‡Ã¶ using no-op widget manager.")
+    logger.warning("GUI widgets not available - using no-op widget manager.")
 
 # --- Subprocess-based solver helper ---
 # This helper runs inside a separate process to avoid blocking the main thread
 # with heavy CPU-bound pathfinding work (which would starve the GUI due to the GIL).
-import tempfile
 import multiprocessing
 
 

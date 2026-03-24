@@ -1,4 +1,4 @@
-﻿"""Guaranteed path overlay renderer extracted from gui_runner."""
+"""Guaranteed path overlay renderer extracted from gui_runner."""
 
 from __future__ import annotations
 

@@ -15,7 +15,6 @@ the expected behavior of the system.
 import numpy as np
 import pytest
 import logging
-from typing import List, Tuple
 
 from src.core.definitions import SEMANTIC_PALETTE
 from src.generation.evolutionary_director import (
@@ -151,7 +150,7 @@ class TestDStarLitePredecessorFix:
         solver = DStarLiteSolver(env, heuristic_mode='balanced')
         
         start_state = env.state.copy()
-        success, path, nodes = solver.solve(start_state)
+        success, path, _nodes = solver.solve(start_state)
         
         assert success, "Should find path requiring key collection"
         
@@ -209,7 +208,7 @@ class TestBidirectionalAStarCollisionFix:
     def test_collision_with_opened_doors(self):
         """Test collision detection properly checks opened_doors compatibility."""
         grid = self.create_test_dungeon()
-        env = ZeldaLogicEnv(grid)
+        _env = ZeldaLogicEnv(grid)
         
         # Create two states at same position with different opened_doors
         pos = (5, 5)

@@ -10,45 +10,42 @@ This pipeline combines:
 
 Architecture:
     Evolutionary Director
-    â†’ VQ-VAE Encoder
-    â†’ Condition Encoder
-    â†’ Latent Diffusion (with LCM-LoRA)
-    â†’ VQ-VAE Decoder
-    â†’ Style Transfer
-    â†’ LogicNet + WFC Refiner (with global state)
-    â†’ Big Room Generator
-    â†’ Graph Constraint Enforcer
-    â†’ Seam Smoother
-    â†’ Collision Validator
-    â†’ Entity Spawner
-    â†’ MAP-Elites (with diversity metrics)
-    â†’ Fun Metrics
-    â†’ Demo Recorder
-    â†’ Explainability System
+    -> VQ-VAE Encoder
+    -> Condition Encoder
+    -> Latent Diffusion (with LCM-LoRA)
+    -> VQ-VAE Decoder
+    -> Style Transfer
+    -> LogicNet + WFC Refiner (with global state)
+    -> Big Room Generator
+    -> Graph Constraint Enforcer
+    -> Seam Smoother
+    -> Collision Validator
+    -> Entity Spawner
+    -> MAP-Elites (with diversity metrics)
+    -> Fun Metrics
+    -> Demo Recorder
+    -> Explainability System
 """
 
 import torch
 import numpy as np
 import networkx as nx
 from typing import Dict, List, Tuple, Optional, Any, Set
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from datetime import datetime
 import logging
 import time
 import json
 from collections import deque
 
 # Core pipeline
-from src.pipeline.robust_pipeline import RobustPipeline, PipelineBlock, BlockResult
 
 # Generation
 from src.generation.graph_constraint_enforcer import GraphConstraintEnforcer, enforce_all_rooms
 from src.generation.entity_spawner import EntitySpawner, spawn_all_entities
 from src.generation.seam_smoother import SeamSmoother
-from src.generation.style_transfer import StyleTransferEngine, ThemeType
+from src.generation.style_transfer import ThemeType
 from src.generation.global_state import GlobalStateManager, GlobalStateType
-from src.generation.big_room_generator import BigRoomGenerator, RoomSize
 from src.generation.weighted_bayesian_wfc import WeightedBayesianWFC, extract_tile_priors_from_vqvae, WeightedBayesianWFCConfig
 from src.pipeline.dungeon_pipeline import NeuralSymbolicDungeonPipeline
 
@@ -57,16 +54,11 @@ from src.validation.collision_alignment_validator import CollisionAlignmentValid
 
 # Evaluation
 from src.evaluation.fun_metrics import (
-    FunMetricsEvaluator,
-    FrustrationMetrics,
-    ExplorabilityMetrics,
-    FlowMetrics,
-    PacingMetrics
+    FunMetricsEvaluator
 )
 from src.simulation.map_elites import MAPElitesEvaluator
 
 # Optimization
-from src.optimization.lcm_lora import LCMLoRAFastSampler, SamplingStrategy
 
 # Utils
 from src.utils.demo_recorder import DemoRecorder, RecordingMode
@@ -533,7 +525,7 @@ class AdvancedNeuralSymbolicPipeline:
         if self.collision_validator:
             # Validate each room individually and aggregate scores
             alignment_scores = []
-            for room_id, bbox in room_layout.items():
+            for _room_id, bbox in room_layout.items():
                 x_min, y_min, x_max, y_max = bbox
                 room_grid = dungeon_grid[y_min:y_max+1, x_min:x_max+1]
                 # Find a valid start position (any floor tile)
@@ -1357,6 +1349,14 @@ class AdvancedNeuralSymbolicPipeline:
         
         return dungeon_grid, room_layout
 
+    def stitch_rooms(
+        self,
+        rooms: Dict[int, np.ndarray],
+        mission_graph: nx.DiGraph,
+    ) -> Tuple[np.ndarray, Dict[int, Tuple[int, int, int, int]]]:
+        """Public wrapper for graph-aware room stitching."""
+        return self._stitch_rooms(rooms, mission_graph)
+
 
 @dataclass
 class DungeonGenerationResult:
@@ -1435,9 +1435,9 @@ def quick_start_demo():
     
     # Print explainability info
     if result.explainability_mgr:
-        print("\nðŸ” Explainability system active - check explainability_report.json")
+        print("\n[INFO] Explainability system active - check explainability_report.json")
     # Print results
-    print(f"\nâœ… Generation complete!")
+    print("\n[OK] Generation complete!")
     print(f"   Total time: {result.stats.total_time:.2f}s")
     print(f"   LCM-LoRA speedup: {result.stats.lcm_speedup:.1f}x")
     print(f"   Fun score: {result.stats.fun_score:.2f}/1.0")
@@ -1449,14 +1449,14 @@ def quick_start_demo():
     
     # Save artifacts
     result.save_artifacts(config.output_dir)
-    print(f"\nðŸ“ All artifacts saved to: {config.output_dir}")
+    print(f"\n[INFO] All artifacts saved to: {config.output_dir}")
     
     # Launch explainability GUI (if available)
     if result.explainability_mgr:
-        print("\nðŸ” Explainability system captured all decisions")
+        print("\n[INFO] Explainability system captured all decisions")
     
     print("\n" + "=" * 60)
-    print("THESIS DEFENSE READY âœ…")
+    print("THESIS DEFENSE READY [OK]")
     print("=" * 60)
 
 

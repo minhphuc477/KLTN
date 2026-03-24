@@ -12,7 +12,7 @@ from pathlib import Path
 
 try:
     from PIL import Image
-except (AttributeError, RuntimeError, ValueError, TypeError) as e:
+except (AttributeError, RuntimeError, ValueError, TypeError):
     raise SystemExit("Pillow is required: pip install pillow")
 
 

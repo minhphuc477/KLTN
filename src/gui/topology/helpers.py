@@ -1,4 +1,4 @@
-﻿"""Topology helper utilities extracted from gui_runner for readability and reuse."""
+"""Topology helper utilities extracted from gui_runner for readability and reuse."""
 
 from __future__ import annotations
 
@@ -14,12 +14,12 @@ def _grid_dims(grid: Any) -> Optional[Tuple[int, int]]:
     try:
         h, w = grid.shape
         return int(h), int(w)
-    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError):
         try:
             h = len(grid)
             w = len(grid[0]) if h > 0 else 0
             return int(h), int(w)
-        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError):
             return None
 
 
@@ -27,7 +27,7 @@ def _grid_get(grid: Any, r: int, c: int) -> Any:
     """Index grid cell for numpy arrays and nested lists."""
     try:
         return grid[r, c]
-    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError):
         return grid[r][c]
 
 
@@ -70,7 +70,7 @@ def node_has_critical_content(graph: Any, node_id: Any) -> bool:
     """Whether a graph node should be preserved during dead-end pruning."""
     try:
         attrs = graph.nodes[node_id] if graph is not None and node_id in graph else {}
-    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError):
         attrs = {}
     if not isinstance(attrs, dict):
         return False
@@ -113,7 +113,7 @@ def build_room_adjacency_from_graph(graph: Any, room_to_node: dict, node_to_room
             if room_u in adjacency and room_v in adjacency and room_u != room_v:
                 adjacency[room_u].add(room_v)
                 adjacency[room_v].add(room_u)
-    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError):
         return adjacency
     return adjacency
 
@@ -124,7 +124,7 @@ def topology_has_path(graph: Any, start_node: Any, goal_node: Any) -> bool:
         import networkx as nx
 
         return bool(nx.has_path(graph.to_undirected(), start_node, goal_node))
-    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError):
         return True
 
 
@@ -211,17 +211,17 @@ def capture_precheck_snapshot(current: Any, reason: str = "") -> dict:
     if isinstance(rooms, dict):
         try:
             snapshot["rooms"] = copy.deepcopy(rooms)
-        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError):
             snapshot["rooms"] = dict(rooms)
     graph = getattr(current, "graph", None)
     if graph is not None:
         try:
             snapshot["graph"] = copy.deepcopy(graph)
-        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError):
             if hasattr(graph, "copy"):
                 try:
                     snapshot["graph"] = graph.copy()
-                except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+                except (AttributeError, RuntimeError, ValueError, TypeError):
                     snapshot["graph"] = graph
             else:
                 snapshot["graph"] = graph

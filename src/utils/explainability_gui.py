@@ -12,15 +12,12 @@ Integrates with gui_runner.py to show:
 
 import pygame
 import numpy as np
-from typing import Dict, List, Tuple, Optional, Any
+from typing import Dict, Tuple, Optional
 from dataclasses import dataclass
 import networkx as nx
 
 from src.utils.explainability import (
-    ExplainabilityManager,
-    DecisionTrace,
-    DecisionSource,
-    EvolutionaryGenealogy
+    ExplainabilityManager
 )
 
 # ============================================================================
@@ -190,7 +187,7 @@ class ExplainabilityDebugOverlay:
         if self.selected_genome not in self.manager.fitness_attributions[generation]:
             return
         
-        attribution = self.manager.fitness_attributions[generation][self.selected_genome]
+        _attribution = self.manager.fitness_attributions[generation][self.selected_genome]
         
         # Draw colored circles around nodes based on fitness contribution
         for node_id in mission_graph.nodes():
@@ -432,7 +429,6 @@ def cli_explain_dungeon(trace_file: str):
     Usage:
         python -m src.utils.explainability_gui outputs/explainability/traces.json
     """
-    import sys
     
     manager = ExplainabilityManager()
     manager.load_json(trace_file)

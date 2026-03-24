@@ -3,6 +3,7 @@ from pathlib import Path
 
 from src.gui.ai.ai_generation_controls import start_ai_dungeon_generation
 from src.gui import ai_generation_worker
+from src.gui.ai import generation_pipeline
 
 
 class _DummyGUI:
@@ -49,4 +50,24 @@ def test_worker_reports_missing_checkpoint(monkeypatch):
 
     assert gui.messages
     assert gui.messages[-1][0] == "No AI checkpoint found - train first!"
+
+
+def test_resolve_checkpoint_path_honors_env_override(monkeypatch):
+    monkeypatch.setenv("KLTN_CHECKPOINT_PATH", "checkpoints/custom_model.pth")
+    resolved = generation_pipeline.resolve_checkpoint_path()
+
+    assert resolved.name == "custom_model.pth"
+
+
+def test_generate_mission_graph_is_deterministic_with_seed():
+    import random
+
+    fixed_seed = 314159
+    data_a = generation_pipeline.generate_mission_graph(random, seed=fixed_seed)
+    data_b = generation_pipeline.generate_mission_graph(random, seed=fixed_seed)
+
+    assert data_a["seed"] == fixed_seed
+    assert data_b["seed"] == fixed_seed
+    assert data_a["num_nodes"] == data_b["num_nodes"]
+    assert data_a["num_edges"] == data_b["num_edges"]
 

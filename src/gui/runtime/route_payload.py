@@ -1,7 +1,7 @@
 """Helpers for route payload shaping and application."""
 
 from datetime import datetime
-from typing import Any, Dict, Iterable, List, Tuple
+from typing import Any, Dict, Iterable, Tuple
 
 
 def build_route_export_payload(gui: Any, path: Iterable[Tuple[int, int]]) -> Dict[str, Any]:

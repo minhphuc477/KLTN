@@ -1,4 +1,4 @@
-﻿"""Map-layer render pipeline helpers extracted from gui_runner._render."""
+"""Map-layer render pipeline helpers extracted from gui_runner._render."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ def create_map_surface(*, gui: Any, pygame: Any) -> Tuple[Any, int, int]:
 
     try:
         map_surface = pygame.Surface((view_w, view_h)).convert()
-    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError):
         map_surface = pygame.Surface((view_w, view_h))
     map_surface.fill((20, 20, 30))
     return map_surface, view_w, view_h
@@ -86,7 +86,7 @@ def render_visible_tiles(
                         sx = screen_x + (gui.TILE_SIZE - stair_sprite.get_width()) // 2
                         sy = screen_y + (gui.TILE_SIZE - stair_sprite.get_height()) // 2
                         map_surface.blit(stair_sprite, (sx, sy))
-                    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+                    except (AttributeError, RuntimeError, ValueError, TypeError):
                         pass
         return tiles_drawn
 
@@ -114,7 +114,7 @@ def render_visible_tiles(
                     sx = screen_x + (gui.TILE_SIZE - stair_sprite.get_width()) // 2
                     sy = screen_y + (gui.TILE_SIZE - stair_sprite.get_height()) // 2
                     map_surface.blit(stair_sprite, (sx, sy))
-                except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+                except (AttributeError, RuntimeError, ValueError, TypeError):
                     pass
 
     return tiles_drawn

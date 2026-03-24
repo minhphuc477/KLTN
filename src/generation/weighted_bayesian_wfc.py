@@ -47,10 +47,9 @@ Research:
 
 import numpy as np
 import logging
-from typing import Dict, List, Tuple, Optional, Set, Any
+from typing import Dict, List, Tuple, Optional, Any
 from dataclasses import dataclass, field
 from collections import defaultdict, Counter
-import heapq
 
 logger = logging.getLogger(__name__)
 

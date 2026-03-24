@@ -1,4 +1,4 @@
-﻿"""Per-frame state update and map-layer actor rendering helpers."""
+"""Per-frame state update and map-layer actor rendering helpers."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ def update_frame_render_state(*, gui: Any, logger: Any) -> None:
         try:
             logger.debug("Processing deferred inventory refresh on main thread")
             gui._update_inventory_and_hud()
-        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError):
             pass
         finally:
             gui.inventory_needs_refresh = False

@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from src.gui.solver.process_worker import (
-    _run_preview_and_dump as _run_preview_and_dump_helper,
-    _run_solver_and_dump as _run_solver_and_dump_helper,
-    _solve_in_subprocess as _solve_in_subprocess_helper,
+    run_preview_and_dump as _run_preview_and_dump_helper,
+    run_solver_and_dump as _run_solver_and_dump_helper,
+    solve_in_subprocess as _solve_in_subprocess_helper,
 )
 from src.gui.solver.utils import (
     convert_diagonal_to_4dir as _convert_diagonal_to_4dir_helper,

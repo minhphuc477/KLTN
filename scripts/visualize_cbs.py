@@ -22,12 +22,11 @@ Usage:
     python scripts/visualize_cbs.py --csv results/cbs_benchmark.csv
     python scripts/visualize_cbs.py --all
 """
-import os
 import sys
 import csv
 import argparse
 from pathlib import Path
-from typing import List, Tuple, Optional, Dict, Any
+from typing import List, Tuple, Optional
 import numpy as np
 
 # Add project root to path
@@ -44,11 +43,11 @@ except ImportError:
     HAS_MATPLOTLIB = False
     print("Warning: matplotlib not available. Install with: pip install matplotlib")
 
-from src.core.definitions import SEMANTIC_PALETTE, ID_TO_NAME
+from src.core.definitions import SEMANTIC_PALETTE
 from src.zelda_data.zelda_core import ZeldaDungeonAdapter
 from src.simulation.validator import StateSpaceAStar, ZeldaLogicEnv
 from src.simulation.cognitive_bounded_search import (
-    CognitiveBoundedSearch, BeliefMap, CBSMetrics, AgentPersona
+    CognitiveBoundedSearch, BeliefMap, CBSMetrics
 )
 
 

@@ -8,12 +8,9 @@ import sys
 sys.path.insert(0, 'f:/KLTN')
 
 from src.generation.grammar import (
-    MissionGrammar, Difficulty, NodeType, EdgeType,
-    StartRule, InsertChallengeRule, InsertLockKeyRule, BranchRule,
-    MergeRule, InsertSwitchRule, AddBossGauntlet,
+    MissionGrammar, Difficulty, MergeRule, InsertSwitchRule, AddBossGauntlet,
     AddItemGateRule, CreateHubRule, AddStairsRule,
-    AddSecretRule, AddTeleportRule, PruneGraphRule,
-    MissionGraph, MissionNode
+    AddSecretRule, AddTeleportRule, PruneGraphRule
 )
 
 
@@ -38,7 +35,7 @@ def test_basic_generation():
     
     assert start is not None, "START node missing"
     assert goal is not None, "GOAL node missing"
-    print(f"âœ“ START and GOAL nodes present")
+    print("âœ“ START and GOAL nodes present")
     
     # Validate lock-key ordering
     valid = grammar.validate_lock_key_ordering(graph)
@@ -188,9 +185,9 @@ def test_3d_positions():
                 print(f"âœ“ Found node {node.id} ({node.node_type.name}) on floor {node.position[2]}")
     
     if has_3d:
-        print(f"âœ“ 3D positions supported")
+        print("âœ“ 3D positions supported")
     else:
-        print(f"âš  No nodes on non-zero floors (may be random)")
+        print("âš  No nodes on non-zero floors (may be random)")
 
 
 def print_detailed_graph(graph):

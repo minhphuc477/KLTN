@@ -21,7 +21,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 from src.generation.evolutionary_director import (
     EvolutionaryTopologyGenerator,
-    mission_graph_to_networkx,
 )
 
 # Configure logging
@@ -129,14 +128,14 @@ def example_linear_progression():
     print(f"Converged: {stats['converged']}")
     
     # Analyze graph
-    print(f"\nGraph Properties:")
+    print("\nGraph Properties:")
     print(f"  Nodes: {best_graph.number_of_nodes()}")
     print(f"  Edges: {best_graph.number_of_edges()}")
     
     # Count node types
     from collections import Counter
     node_types = Counter(best_graph.nodes[n]['type'] for n in best_graph.nodes())
-    print(f"\nNode Type Distribution:")
+    print("\nNode Type Distribution:")
     for ntype, count in sorted(node_types.items()):
         print(f"  {ntype}: {count}")
     
@@ -180,7 +179,7 @@ def example_wave_pattern():
     print(f"Generations: {stats['generations_run']}")
     
     # Analyze complexity
-    print(f"\nGraph Complexity:")
+    print("\nGraph Complexity:")
     print(f"  Total Nodes: {best_graph.number_of_nodes()}")
     print(f"  Average Degree: {2 * best_graph.number_of_edges() / best_graph.number_of_nodes():.2f}")
     
@@ -254,7 +253,7 @@ def example_metroidvania():
     # Analyze branching structure
     stats = generator.get_statistics()
     print(f"\nFinal Fitness: {stats['final_best_fitness']:.4f}")
-    print(f"Branching Analysis:")
+    print("Branching Analysis:")
     
     # Count nodes by degree
     degree_dist = {}
@@ -262,7 +261,7 @@ def example_metroidvania():
         degree = best_graph.degree(node)
         degree_dist[degree] = degree_dist.get(degree, 0) + 1
     
-    print(f"  Degree Distribution:")
+    print("  Degree Distribution:")
     for degree in sorted(degree_dist.keys()):
         print(f"    Degree {degree}: {degree_dist[degree]} nodes")
     

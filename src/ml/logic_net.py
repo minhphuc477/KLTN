@@ -28,7 +28,7 @@ Usage:
 
 import logging
 import math
-from typing import List, Tuple, Optional, Union, Dict
+from typing import List, Tuple, Optional, Dict
 
 import torch
 import torch.nn as nn

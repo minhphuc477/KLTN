@@ -70,7 +70,6 @@ VERSION: 1.0.0
 
 from __future__ import annotations
 
-import heapq
 import math
 import logging
 import random
@@ -79,21 +78,21 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import (
     Dict, List, Tuple, Optional, Set, Any, 
-    FrozenSet, Callable, NamedTuple, TYPE_CHECKING
+    TYPE_CHECKING
 )
 from collections import deque, defaultdict
 
 import numpy as np
 
 if TYPE_CHECKING:
-    from src.simulation.validator import ZeldaLogicEnv, GameState
+    from src.simulation.validator import ZeldaLogicEnv
 
 # Configure logging
 logger = logging.getLogger(__name__)
 
 # Import tile constants from canonical source
 from src.core.definitions import (
-    SEMANTIC_PALETTE, ID_TO_NAME, ROOM_HEIGHT, ROOM_WIDTH
+    SEMANTIC_PALETTE
 )
 
 # Re-import blocking/walkable sets for convenience
@@ -538,7 +537,7 @@ class BeliefMap:
             decay_rate: Optional override for decay rate
         """
         rate = decay_rate if decay_rate is not None else self.decay_rate
-        for pos, obs in self.known_tiles.items():
+        for _pos, obs in self.known_tiles.items():
             if obs.confidence > 0:
                 obs.confidence *= rate
                 # Downgrade knowledge if confidence too low
@@ -1075,7 +1074,7 @@ class WorkingMemory:
     def _forget_excess(self) -> None:
         """Remove lowest-salience items if over capacity."""
         while len(self.items) > self.capacity:
-            forgotten = self.items.pop()  # Remove lowest salience
+            _ = self.items.pop()  # Remove lowest salience
             self.total_forgotten += 1
     
     def is_remembered(
@@ -1812,6 +1811,14 @@ class CognitiveBoundedSearch:
             metrics: CBSMetrics with cognitive analysis
         """
         self.env.reset()
+
+        # Reset run-specific metric accumulators to avoid cross-run leakage.
+        self._direction_counts.clear()
+        self._visit_counts.clear()
+        self._goal_first_seen = -1
+        self._decisions_made = 0
+        self._suboptimal_decisions = 0
+        self._memory_timeline = []
         
         # Validation
         if self.env.goal_pos is None:
@@ -1830,9 +1837,12 @@ class CognitiveBoundedSearch:
         
         path = [cog_state.game_state.position]
         states_explored = 0
+
+        # Include starting position in visit/memory traces for entropy/load metrics.
+        self._visit_counts[cog_state.game_state.position] += 1
+        self._memory_timeline.append(len(self.memory.items))
         
         grid = self.env.original_grid
-        height, width = grid.shape
         
         # Main simulation loop
         while states_explored < self.timeout:
@@ -2036,15 +2046,12 @@ class CognitiveBoundedSearch:
         up to `max_depth` steps. Returns a path of positions if goal reachable
         within depth, otherwise None.
         """
-        from collections import deque
 
         if start_state.position == goal_pos:
             return [start_state.position]
 
         grid = self.env.original_grid
         height, width = grid.shape
-
-        Node = Tuple[_GameState, List[Tuple[int, int]]]
         q = deque()
         q.append((start_state.copy(), [start_state.position]))
         visited = set()
@@ -2115,7 +2122,7 @@ class CognitiveBoundedSearch:
                 g = MissionGrammar(seed=42)
                 graph = g.generate(num_rooms=6)
                 # Map KEY nodes to observed key tiles
-                for node in graph.get_nodes_by_type(NodeType.KEY):
+                for _node in graph.get_nodes_by_type(NodeType.KEY):
                     # find nearest observed key in belief_map
                     best = None
                     bestd = 1e9
@@ -2511,7 +2518,7 @@ def compare_personas(
     results = {}
     
     for persona_name in personas:
-        success, path, states, metrics = solve_with_cbs(
+        success, path, _states, metrics = solve_with_cbs(
             grid, persona=persona_name, timeout=timeout, seed=seed
         )
         results[persona_name] = (success, len(path), metrics)

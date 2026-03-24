@@ -116,7 +116,7 @@ class TilesetCutter:
             y += stride
             row += 1
         
-        print(f"\nExtraction complete!")
+        print("\nExtraction complete!")
         print(f"  - Tiles saved: {tile_count}")
         print(f"  - Tiles skipped (empty): {skipped_count}")
         print(f"  - Output directory: {output_dir}")

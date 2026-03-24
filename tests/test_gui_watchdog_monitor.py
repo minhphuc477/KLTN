@@ -1,4 +1,6 @@
-﻿from src.gui.services.watchdog_monitor import watchdog_loop
+﻿# pyright: reportPrivateUsage=false
+
+from src.gui.services.watchdog_monitor import watchdog_loop
 
 
 class DummyLogger:

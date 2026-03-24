@@ -29,7 +29,6 @@ Architecture:
 
 """
 
-import math
 import logging
 from typing import Dict, List, Tuple, Optional, Any
 
@@ -38,7 +37,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-from src.core.definitions import ROOM_HEIGHT, ROOM_WIDTH
+from src.core.definitions import ROOM_HEIGHT, ROOM_WIDTH, TileID
 
 logger = logging.getLogger(__name__)
 
@@ -284,6 +283,51 @@ class VectorQuantizer(nn.Module):
 
 
 # ============================================================================
+# COORDCONV
+# ============================================================================
+
+class CoordConv2d(nn.Module):
+    """
+    Conv2d with explicit normalized coordinate channels.
+
+    Appends x/y channels in [-1, 1] before applying convolution so the model
+    can learn absolute boundary-aware behaviors on fixed-size room grids.
+    """
+
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int = 3,
+        stride: int = 1,
+        padding: int = 1,
+        bias: bool = True,
+    ):
+        super().__init__()
+        self.conv = nn.Conv2d(
+            in_channels + 2,
+            out_channels,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+            bias=bias,
+        )
+
+    def forward(self, x: Tensor) -> Tensor:
+        b, _c, h, w = x.shape
+        device = x.device
+        dtype = x.dtype
+
+        y_coords = torch.linspace(-1.0, 1.0, h, device=device, dtype=dtype)
+        x_coords = torch.linspace(-1.0, 1.0, w, device=device, dtype=dtype)
+
+        y_grid = y_coords.view(1, 1, h, 1).expand(b, 1, h, w)
+        x_grid = x_coords.view(1, 1, 1, w).expand(b, 1, h, w)
+
+        return self.conv(torch.cat([x, x_grid, y_grid], dim=1))
+
+
+# ============================================================================
 # RESIDUAL BLOCK
 # ============================================================================
 
@@ -363,6 +407,7 @@ class Encoder(nn.Module):
         num_res_blocks: int = 2,
         channel_mult: Tuple[int, ...] = (1, 2, 4),
         downsample_factor: int = 2,
+        use_coordconv: bool = True,
     ):
         super().__init__()
 
@@ -379,8 +424,11 @@ class Encoder(nn.Module):
         self.hidden_channels = hidden_channels
         self.latent_channels = latent_channels
         
-        # Initial projection
-        self.conv_in = nn.Conv2d(in_channels, block_channels[0], 3, padding=1)
+        # Initial projection (CoordConv improves absolute spatial awareness).
+        if bool(use_coordconv):
+            self.conv_in = CoordConv2d(in_channels, block_channels[0], 3, padding=1)
+        else:
+            self.conv_in = nn.Conv2d(in_channels, block_channels[0], 3, padding=1)
         
         # Build encoder blocks
         self.down_blocks = nn.ModuleList()
@@ -586,6 +634,8 @@ class SemanticVQVAE(nn.Module):
         commitment_cost: float = 0.25,
         rare_tile_weight: float = 5.0,
         use_ema: bool = True,
+        use_coordconv: bool = True,
+        mrf_penalty_weight: float = 0.05,
     ):
         super().__init__()
 
@@ -598,6 +648,7 @@ class SemanticVQVAE(nn.Module):
         self.codebook_size = codebook_size
         self.latent_dim = latent_dim
         self.rare_tile_weight = rare_tile_weight
+        self.mrf_penalty_weight = float(max(0.0, mrf_penalty_weight))
         
         # Encoder
         self.encoder = Encoder(
@@ -608,6 +659,7 @@ class SemanticVQVAE(nn.Module):
             latent_dim=latent_dim,
             num_res_blocks=num_res_blocks,
             channel_mult=(1, 2, 4),
+            use_coordconv=bool(use_coordconv),
         )
         
         # Vector Quantizer
@@ -634,6 +686,7 @@ class SemanticVQVAE(nn.Module):
             'tile_weights',
             self._build_tile_weights()
         )
+        self.register_buffer('illegal_adjacency_matrix', self._build_illegal_adjacency_matrix())
     
     def _build_tile_weights(self) -> Tensor:
         """Build weight tensor for semantic-aware reconstruction."""
@@ -642,6 +695,67 @@ class SemanticVQVAE(nn.Module):
             if tile_id < self.num_classes:
                 weights[tile_id] = self.rare_tile_weight
         return weights
+
+    def _build_illegal_adjacency_matrix(self) -> Tensor:
+        """
+        Build static illegal tile-pair mask for soft MRF-style penalties.
+
+        Mask value 1 means adjacency is illegal and should be penalized.
+        """
+        m = torch.zeros(self.num_classes, self.num_classes, dtype=torch.float32)
+
+        door_ids = [
+            int(TileID.DOOR_OPEN),
+            int(TileID.DOOR_LOCKED),
+            int(TileID.DOOR_BOMB),
+            int(TileID.DOOR_PUZZLE),
+            int(TileID.DOOR_BOSS),
+            int(TileID.DOOR_SOFT),
+        ]
+        element_ids = [
+            int(TileID.ELEMENT),
+        ]
+
+        # Example hard rule from user request: Water/Element next to doors is illegal.
+        for a in element_ids:
+            if a >= self.num_classes:
+                continue
+            for b in door_ids:
+                if b >= self.num_classes:
+                    continue
+                m[a, b] = 1.0
+                m[b, a] = 1.0
+
+        return m
+
+    def _illegal_adjacency_penalty(self, recon_logits: Tensor) -> Tensor:
+        """
+        Differentiable soft penalty over 3x3 neighborhood illegal adjacencies.
+        """
+        probs = F.softmax(recon_logits, dim=1)
+        illegal = self.illegal_adjacency_matrix.to(dtype=probs.dtype, device=probs.device)
+
+        # 8-neighborhood shifts (3x3 window excluding center).
+        shifts = [
+            (-1, -1), (-1, 0), (-1, 1),
+            (0, -1),           (0, 1),
+            (1, -1),  (1, 0),  (1, 1),
+        ]
+
+        total = torch.tensor(0.0, device=probs.device, dtype=probs.dtype)
+        padded = F.pad(probs, (1, 1, 1, 1), mode='constant', value=0.0)
+        h = probs.shape[2]
+        w = probs.shape[3]
+
+        for dy, dx in shifts:
+            y0 = 1 + dy
+            x0 = 1 + dx
+            neighbor = padded[:, :, y0:y0 + h, x0:x0 + w]
+            # Expected illegal pair probability per pixel.
+            pair_score = torch.einsum('bchw,cd,bdhw->bhw', probs, illegal, neighbor)
+            total = total + pair_score.mean()
+
+        return total / float(len(shifts))
     
     def encode(self, x: Tensor) -> Tuple[Tensor, Tensor]:
         """
@@ -735,9 +849,12 @@ class SemanticVQVAE(nn.Module):
         # Weighted cross-entropy for semantic preservation
         recon_loss = self._weighted_reconstruction_loss(recon, x)
         losses['recon_loss'] = recon_loss
+
+        illegal_penalty = self._illegal_adjacency_penalty(recon)
+        losses['illegal_adjacency_penalty'] = illegal_penalty
         
         # Total loss
-        losses['total_loss'] = recon_loss + losses['vq_loss']
+        losses['total_loss'] = recon_loss + losses['vq_loss'] + (self.mrf_penalty_weight * illegal_penalty)
         
         return recon, indices, losses
 
@@ -869,6 +986,7 @@ class VQVAETrainer:
             'loss': loss.item(),
             'recon_loss': losses['recon_loss'].item(),
             'vq_loss': losses['vq_loss'].item(),
+            'illegal_adjacency_penalty': losses.get('illegal_adjacency_penalty', torch.tensor(0.0)).item(),
             'perplexity': losses['perplexity'].item(),
         }
         
@@ -893,6 +1011,7 @@ class VQVAETrainer:
         return {
             'loss': losses['total_loss'].item(),
             'recon_loss': losses['recon_loss'].item(),
+            'illegal_adjacency_penalty': losses.get('illegal_adjacency_penalty', torch.tensor(0.0)).item(),
             'accuracy': accuracy.item(),
             'perplexity': losses['perplexity'].item(),
         }

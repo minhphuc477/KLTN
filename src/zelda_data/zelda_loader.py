@@ -12,13 +12,13 @@ Supports:
 
 References:
 - VGLC: Video Game Level Corpus (https://github.com/TheVGLC/TheVGLC)
-- Zelda dungeon format: 16 rows Ã— 11 columns per room
+- Zelda dungeon format: 16 rows x 11 columns per room
 """
 
 import os
 import logging
 import numpy as np
-from typing import Optional, List, Callable, Tuple, Union
+from typing import Optional, Callable, Tuple, Union
 from pathlib import Path
 
 import torch
@@ -46,13 +46,10 @@ TILE_MAPPING = {
 
 # Import semantic palette from local zelda_core module
 from .zelda_core import (
-    ROOM_HEIGHT,
-    ROOM_WIDTH,
     ZeldaDungeonAdapter
 )
 from src.core.definitions import (
     SEMANTIC_PALETTE,
-    CHAR_TO_SEMANTIC,
     parse_node_label_tokens,
     parse_edge_type_tokens,
     select_primary_edge_type,
@@ -171,7 +168,7 @@ class ZeldaDungeonDataset(Dataset):
         
         Uses the DOT graph topology (dungeon.graph) as the authoritative
         source for node features and edge types. The 's' (start pointer)
-        node is NOT included as a room node â€” instead, its connected room
+        node is NOT included as a room node -- instead, its connected room
         is marked with start_node_id.
         """
         graph = getattr(dungeon, 'graph', None)
@@ -196,7 +193,7 @@ class ZeldaDungeonDataset(Dataset):
             'stair': 6, 's': 6,
         }
         
-        # Create nodes â€” skip the 's' start pointer node
+        # Create nodes -- skip the 's' start pointer node
         idx = 0
         for node_id, data in sorted(graph.nodes(data=True)):
             if data.get('is_start_pointer', False):
@@ -490,7 +487,7 @@ def graph_collate_fn(batch):
         graphs = [item[1] for item in batch]
         return images, graphs
     else:
-        # No graph data â€” plain image batch
+        # No graph data -- plain image batch
         return torch.stack(batch)
 
 

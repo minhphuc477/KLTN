@@ -1,4 +1,4 @@
-﻿"""Post-map UI composition helpers for gui_runner._render."""
+"""Post-map UI composition helpers for gui_runner._render."""
 
 from __future__ import annotations
 

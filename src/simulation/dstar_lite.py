@@ -124,7 +124,7 @@ class DStarLiteSolver:
             
             # CRITICAL FIX: Get proper predecessor states using environment's movement logic
             # We need to find all states that can reach this state in ONE move
-            for action, (dr, dc) in ACTION_DELTAS.items():
+            for _action, (dr, dc) in ACTION_DELTAS.items():
                 pred_r = state.position[0] - dr
                 pred_c = state.position[1] - dc
                 
@@ -514,7 +514,7 @@ class DStarLiteSolver:
         """Get all valid successor states using proper state transition logic."""
         successors = []
         
-        for action, (dr, dc) in ACTION_DELTAS.items():
+        for _action, (dr, dc) in ACTION_DELTAS.items():
             new_r = state.position[0] + dr
             new_c = state.position[1] + dc
             

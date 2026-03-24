@@ -16,7 +16,7 @@ import sys
 import argparse
 import logging
 from pathlib import Path
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, List
 
 import torch
 import torch.optim as optim
@@ -33,7 +33,7 @@ from src.core.vqvae import SemanticVQVAE as VQVAE, create_vqvae
 from src.core.condition_encoder import DualStreamConditionEncoder, create_condition_encoder
 # Use Block V LogicNet (with temperature annealing), not legacy src.ml.logic_net
 from src.core.logic_net import LogicNet
-from src.utils.checkpoint import MetricsLogger
+from src.utils.checkpoint import MetricsLogger, write_checkpoint_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +59,7 @@ class DiffusionTrainingConfig:
         latent_dim: int = 64,
         model_channels: int = 128,
         context_dim: int = 256,
+        condition_gnn_type: str = "gcn",  # gcn | gat | sage
         num_timesteps: int = 1000,
         schedule_type: str = "cosine",
         
@@ -71,6 +72,8 @@ class DiffusionTrainingConfig:
         learning_rate: float = 1e-4,
         alpha_visual: float = 1.0,   # Diffusion loss weight
         alpha_logic: float = 0.1,     # Solvability loss weight
+        logic_loss_mode: str = "predicted_latent",  # predicted_latent | detached_real
+        graph_conditioning_mode: str = "node_sequence",  # node_sequence | pooled
         warmup_epochs: int = 5,       # Epochs before adding logic loss
         
         # Checkpointing
@@ -92,6 +95,13 @@ class DiffusionTrainingConfig:
         self.latent_dim = latent_dim
         self.model_channels = model_channels
         self.context_dim = context_dim
+        gnn_type = str(condition_gnn_type).strip().lower()
+        if gnn_type not in {"gcn", "gat", "sage"}:
+            raise ValueError(
+                f"Invalid condition_gnn_type={condition_gnn_type!r}. "
+                "Expected 'gcn', 'gat', or 'sage'."
+            )
+        self.condition_gnn_type = gnn_type
         self.num_timesteps = num_timesteps
         self.schedule_type = schedule_type
         
@@ -102,6 +112,20 @@ class DiffusionTrainingConfig:
         self.learning_rate = learning_rate
         self.alpha_visual = alpha_visual
         self.alpha_logic = alpha_logic
+        mode = str(logic_loss_mode).strip().lower()
+        if mode not in {"predicted_latent", "detached_real"}:
+            raise ValueError(
+                f"Invalid logic_loss_mode={logic_loss_mode!r}. "
+                "Expected 'predicted_latent' or 'detached_real'."
+            )
+        self.logic_loss_mode = mode
+        gmode = str(graph_conditioning_mode).strip().lower()
+        if gmode not in {"node_sequence", "pooled"}:
+            raise ValueError(
+                f"Invalid graph_conditioning_mode={graph_conditioning_mode!r}. "
+                "Expected 'node_sequence' or 'pooled'."
+            )
+        self.graph_conditioning_mode = gmode
         self.warmup_epochs = warmup_epochs
         
         self.checkpoint_dir = checkpoint_dir
@@ -227,7 +251,30 @@ class DiffusionTrainer:
         return create_condition_encoder(
             latent_dim=self.config.latent_dim,
             output_dim=self.config.context_dim,
+            gnn_type=self.config.condition_gnn_type,
         )
+
+    def _stack_conditioning_vectors(self, cond_vectors: List[torch.Tensor]) -> torch.Tensor:
+        """Stack per-sample conditioning vectors into batch tensor for diffusion."""
+        if not cond_vectors:
+            raise ValueError("cond_vectors must be non-empty")
+
+        if self.config.graph_conditioning_mode == "node_sequence":
+            max_nodes = max(int(c.shape[0]) for c in cond_vectors)
+            padded = []
+            for c in cond_vectors:
+                if c.shape[0] < max_nodes:
+                    pad = torch.zeros(
+                        max_nodes - c.shape[0],
+                        c.shape[1],
+                        device=c.device,
+                        dtype=c.dtype,
+                    )
+                    c = torch.cat([c, pad], dim=0)
+                padded.append(c.unsqueeze(0))
+            return torch.cat(padded, dim=0)  # [B, N_max, context_dim]
+
+        return torch.cat(cond_vectors, dim=0)  # [B, context_dim]
     
     def _create_logic_net(self) -> LogicNet:
         """Create LogicNet for solvability."""
@@ -291,7 +338,26 @@ class DiffusionTrainer:
         Used only as a fallback during validation or when graph loading fails.
         During training, real graph data from .dot files is used instead.
         """
+        if self.config.graph_conditioning_mode == "node_sequence":
+            return torch.randn(batch_size, 1, self.config.context_dim, device=self.device)
         return torch.randn(batch_size, self.config.context_dim, device=self.device)
+
+    def _prediction_to_x0(
+        self,
+        prediction: torch.Tensor,
+        x_t: torch.Tensor,
+        t: torch.Tensor,
+    ) -> torch.Tensor:
+        """Convert diffusion model prediction to predicted clean latent x0."""
+        sqrt_alpha_t = self.diffusion.sqrt_alphas_cumprod[t][:, None, None, None]
+        sqrt_one_minus_alpha_t = self.diffusion.sqrt_one_minus_alphas_cumprod[t][:, None, None, None]
+
+        if self.diffusion.prediction_type == 'v':
+            # v-prediction: x0 = sqrt(alpha_bar_t) * x_t - sqrt(1-alpha_bar_t) * v
+            return sqrt_alpha_t * x_t - sqrt_one_minus_alpha_t * prediction
+
+        # epsilon-prediction: x0 = (x_t - sqrt(1-alpha_bar_t) * eps) / sqrt(alpha_bar_t)
+        return (x_t - sqrt_one_minus_alpha_t * prediction) / (sqrt_alpha_t + 1e-8)
     
     def _encode_graph_conditioning(
         self,
@@ -307,7 +373,8 @@ class DiffusionTrainer:
                 - edge_attr: [E] edge type labels
                 
         Returns:
-            Conditioning vector [1, context_dim]
+            If graph_conditioning_mode='pooled': [1, context_dim]
+            If graph_conditioning_mode='node_sequence': [N, context_dim]
         """
         node_features = graph_dict['node_features'].to(self.device)
         edge_index = graph_dict['edge_index'].to(self.device)
@@ -325,14 +392,16 @@ class DiffusionTrainer:
                 edge_attr_clamped, num_classes=num_edge_types
             ).float()
         
-        # Encode through global stream
+        # Encode through global stream (GCN/GAT/SAGE depending on config)
         c_global = self.condition_encoder.encode_global_only(
             node_features, edge_index,
             edge_features=edge_features,
         )
-        # Pool node embeddings â†’ single conditioning vector [1, context_dim]
-        c = c_global.mean(dim=0, keepdim=True)
-        return c
+        if self.config.graph_conditioning_mode == "node_sequence":
+            return c_global
+
+        # Pooled baseline.
+        return c_global.mean(dim=0, keepdim=True)
     
     def _build_logic_graph_data(
         self,
@@ -476,15 +545,33 @@ class DiffusionTrainer:
         # === Part 1: Diffusion loss (standard noise prediction) ===
         diffusion_loss = self.diffusion.training_loss(z_0, conditioning)
         
-        # === Part 2: LogicNet loss on REAL data WITH graph topology ===
+        # === Part 2: LogicNet loss on model-predicted latent WITH graph topology ===
+        # IMPORTANT: computing logic loss on detached real z_0 does not train diffusion.
+        # We instead denoise a noisy latent and apply LogicNet to predicted x0 so
+        # logic gradients flow into diffusion + condition encoder.
         logic_loss = torch.tensor(0.0, device=self.device)
         solvability_score = torch.tensor(0.0, device=self.device)
         
         if include_logic_loss and self.config.alpha_logic > 0:
-            # Detach z_0 from VQ-VAE graph but enable gradients for LogicNet
-            z_for_logic = z_0.detach().requires_grad_(True)
-            # Pass real graph_data to LogicNet for graph-level pathfinding
-            logic_loss, _logic_info = self.logic_net(z_for_logic, graph_data=logic_graph_data)
+            if self.config.logic_loss_mode == "detached_real":
+                # Legacy baseline: logic regularization on real latent only.
+                z_for_logic = z_0.detach().requires_grad_(True)
+                logic_loss, _logic_info = self.logic_net(z_for_logic, graph_data=logic_graph_data)
+            else:
+                # New default: logic supervision on predicted latent (trains diffusion).
+                t_logic = torch.randint(0, self.diffusion.num_timesteps, (batch_size,), device=self.device)
+                noise_logic = torch.randn_like(z_0)
+                x_t_logic = self.diffusion.q_sample(z_0, t_logic, noise_logic)
+
+                # Predict noise/velocity and convert to predicted clean latent x0.
+                pred_logic = self.diffusion.denoiser(x_t_logic, t_logic, conditioning)
+                pred_x0_logic = self._prediction_to_x0(pred_logic, x_t_logic, t_logic)
+
+                # Keep latent range bounded similarly to sampling path.
+                pred_x0_logic = torch.clamp(pred_x0_logic, -1.0, 1.0)
+
+                # Pass predicted latent to LogicNet for graph-level pathfinding loss.
+                logic_loss, _logic_info = self.logic_net(pred_x0_logic, graph_data=logic_graph_data)
             solvability_score = 1.0 - logic_loss.detach()
         
         # Combined loss
@@ -518,6 +605,7 @@ class DiffusionTrainer:
             'diffusion_loss': diffusion_loss.item(),
             'logic_loss': logic_loss.item(),
             'solvability': solvability_score.item(),
+            'logic_loss_mode_predicted': 1.0 if self.config.logic_loss_mode == 'predicted_latent' else 0.0,
         }
     
     def _extract_coords_from_maps(self, real_maps: torch.Tensor) -> Tuple[Tuple[int,int], Tuple[int,int]]:
@@ -556,12 +644,12 @@ class DiffusionTrainer:
             
             if graph_list is not None and self.condition_encoder is not None:
                 try:
-                    # Encode each graph through GNN and stack
+                    # Encode each graph through GNN and stack.
                     cond_vectors = []
                     for graph_dict in graph_list:
                         c_i = self._encode_graph_conditioning(graph_dict)
                         cond_vectors.append(c_i)
-                    conditioning = torch.cat(cond_vectors, dim=0)  # [B, context_dim]
+                    conditioning = self._stack_conditioning_vectors(cond_vectors)
                 except (AttributeError, RuntimeError, ValueError, TypeError) as e:
                     logger.debug(f"Graph conditioning failed: {e}")
                     conditioning = None
@@ -638,7 +726,7 @@ class DiffusionTrainer:
                         c_i = self.get_dummy_conditioning(1)
                     cond_vectors.append(c_i)
                 if cond_vectors:
-                    conditioning = torch.cat(cond_vectors, dim=0)
+                    conditioning = self._stack_conditioning_vectors(cond_vectors)
             
             if conditioning is None:
                 conditioning = self.get_dummy_conditioning(batch_size)
@@ -697,6 +785,21 @@ class DiffusionTrainer:
             'schedule_type': self.config.schedule_type,
         }
         torch.save(checkpoint, path)
+        write_checkpoint_metadata(
+            path,
+            model_type="diffusion",
+            architecture={
+                "latent_dim": int(self.config.latent_dim),
+                "context_dim": int(self.config.context_dim),
+                "num_timesteps": int(self.config.num_timesteps),
+                "schedule_type": str(self.config.schedule_type),
+            },
+            extra={
+                "epoch": int(self.epoch),
+                "global_step": int(self.global_step),
+                "contains": ["vqvae", "diffusion", "condition_encoder", "logic_net"],
+            },
+        )
         logger.info(f"Saved checkpoint to {path}")
     
     def load_checkpoint(self, path: str):
@@ -825,6 +928,27 @@ def main():
     parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--lr', type=float, default=1e-4)
     parser.add_argument('--alpha-logic', type=float, default=0.1)
+    parser.add_argument(
+        '--logic-loss-mode',
+        type=str,
+        default='predicted_latent',
+        choices=['predicted_latent', 'detached_real'],
+        help='Logic-loss target mode for A/B: predicted_latent (new) or detached_real (legacy).',
+    )
+    parser.add_argument(
+        '--graph-conditioning-mode',
+        type=str,
+        default='node_sequence',
+        choices=['node_sequence', 'pooled'],
+        help='Graph conditioning for diffusion cross-attention: node_sequence (GCN node tokens) or pooled baseline.',
+    )
+    parser.add_argument(
+        '--condition-gnn-type',
+        type=str,
+        default='gcn',
+        choices=['gcn', 'gat', 'sage'],
+        help='GNN backbone for graph-node conditioning.',
+    )
     parser.add_argument('--guidance-scale', type=float, default=1.0)
     parser.add_argument('--checkpoint-dir', type=str, default='./checkpoints')
     parser.add_argument('--vqvae-checkpoint', type=str, default=None)
@@ -847,6 +971,9 @@ def main():
         epochs=args.epochs,
         learning_rate=args.lr,
         alpha_logic=args.alpha_logic,
+        logic_loss_mode=args.logic_loss_mode,
+        graph_conditioning_mode=args.graph_conditioning_mode,
+        condition_gnn_type=args.condition_gnn_type,
         guidance_scale=args.guidance_scale,
         checkpoint_dir=args.checkpoint_dir,
         vqvae_checkpoint=args.vqvae_checkpoint,

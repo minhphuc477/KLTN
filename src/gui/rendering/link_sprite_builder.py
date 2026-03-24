@@ -1,4 +1,4 @@
-﻿"""Link sprite builder extracted from gui_runner."""
+"""Link sprite builder extracted from gui_runner."""
 
 from __future__ import annotations
 
@@ -35,6 +35,6 @@ def build_link_sprite(*, tile_size: int, pygame: Any) -> Any:
 
     try:
         return link_img.convert_alpha()
-    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError):
         return link_img
 

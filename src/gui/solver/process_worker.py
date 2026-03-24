@@ -1,4 +1,4 @@
-﻿"""Process-safe solver worker functions extracted from gui_runner.py."""
+"""Process-safe solver worker functions extracted from gui_runner.py."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ def _solve_in_subprocess(grid, start_pos, goal_pos, algorithm_idx, feature_flags
             import numpy as _np
             if not isinstance(grid_arr, _np.ndarray):
                 grid_arr = _np.array(grid, dtype=_np.int64)
-        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError):
             grid_arr = grid
 
         priority_options = dict(priority_options or {})
@@ -65,10 +65,10 @@ def _solve_in_subprocess(grid, start_pos, goal_pos, algorithm_idx, feature_flags
         )
 
         logger = logging.getLogger(__name__)
-        logger.info('â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•')
+        logger.info('===================================================')
         logger.info('SOLVER DISPATCH: algorithm_idx=%s -> %s', algorithm_idx, alg_name)
         logger.info('Start: %s, Goal: %s', start_pos, goal_pos)
-        logger.info('â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•')
+        logger.info('===================================================')
 
         cbs_personas = {
             7: 'balanced',
@@ -130,7 +130,7 @@ def _solve_in_subprocess(grid, start_pos, goal_pos, algorithm_idx, feature_flags
                         rules_profile=str(priority_options.get('rules_profile', 'vglc_strict')),
                         representation=rep_mode,
                     )
-                except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+                except (AttributeError, RuntimeError, ValueError, TypeError):
                     config = GameStateSearchConfig()
 
                 search_result = run_game_state_solver(env, algorithm_idx, config)
@@ -266,16 +266,33 @@ def _solve_in_subprocess(grid, start_pos, goal_pos, algorithm_idx, feature_flags
         return {'success': False, 'path': None, 'teleports': 0, 'solver_result': None, 'message': f'Child failed: {exc}'}
 
 
-def _run_solver_and_dump(grid_or_path, start_pos, goal_pos, algorithm_idx, feature_flags, priority_options, out_path,
-                         graph=None, room_to_node=None, room_positions=None, node_to_room=None):
-    """Run solver and pickle result to disk (Windows multiprocessing safe)."""
+def solve_in_subprocess(grid, start_pos, goal_pos, algorithm_idx, feature_flags, priority_options,
+                        graph=None, room_to_node=None, room_positions=None, node_to_room=None):
+    """Public API wrapper for subprocess-safe solve helper."""
+    return _solve_in_subprocess(
+        grid,
+        start_pos,
+        goal_pos,
+        algorithm_idx,
+        feature_flags,
+        priority_options,
+        graph=graph,
+        room_to_node=room_to_node,
+        room_positions=room_positions,
+        node_to_room=node_to_room,
+    )
+
+
+def run_solver_and_dump(grid_or_path, start_pos, goal_pos, algorithm_idx, feature_flags, priority_options, out_path,
+                        graph=None, room_to_node=None, room_positions=None, node_to_room=None):
+    """Run solver and pickle full result to disk (Windows multiprocessing safe)."""
     import sys
 
     def _log(msg):
         try:
             sys.stderr.write(f'[SOLVER_SUBPROCESS] {msg}\n')
             sys.stderr.flush()
-        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError):
             pass
 
     _log(f'Started: start={start_pos}, goal={goal_pos}, alg={algorithm_idx}, out={out_path}')
@@ -301,8 +318,8 @@ def _run_solver_and_dump(grid_or_path, start_pos, goal_pos, algorithm_idx, featu
         _log(f'Grid load exception: {exc}')
         grid = grid_or_path
 
-    _log('Calling _solve_in_subprocess...')
-    res = _solve_in_subprocess(
+    _log('Calling solve_in_subprocess...')
+    res = solve_in_subprocess(
         grid,
         start_pos,
         goal_pos,
@@ -327,12 +344,12 @@ def _run_solver_and_dump(grid_or_path, start_pos, goal_pos, algorithm_idx, featu
         try:
             with open(out_path, 'wb') as f:
                 pickle.dump({'success': False, 'message': f'failed to write output: {exc}'}, f)
-        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError):
             pass
 
 
-def _run_preview_and_dump(grid_or_path, start_pos, goal_pos, algorithm_idx, feature_flags, priority_options, out_path,
-                          graph=None, room_to_node=None, room_positions=None, node_to_room=None):
+def run_preview_and_dump(grid_or_path, start_pos, goal_pos, algorithm_idx, feature_flags, priority_options, out_path,
+                         graph=None, room_to_node=None, room_positions=None, node_to_room=None):
     """Run quick preview solver and write compact result to disk."""
     try:
         grid = grid_or_path
@@ -340,10 +357,10 @@ def _run_preview_and_dump(grid_or_path, start_pos, goal_pos, algorithm_idx, feat
             if isinstance(grid_or_path, str) and os.path.exists(grid_or_path):
                 import numpy as _np
                 grid = _np.load(grid_or_path, allow_pickle=False)
-        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError):
             pass
 
-        res = _solve_in_subprocess(
+        res = solve_in_subprocess(
             grid,
             start_pos,
             goal_pos,
@@ -364,16 +381,18 @@ def _run_preview_and_dump(grid_or_path, start_pos, goal_pos, algorithm_idx, feat
         try:
             with open(out_path, 'wb') as f:
                 pickle.dump(out, f)
-        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError):
             try:
                 with open(out_path, 'wb') as f:
                     pickle.dump({'success': False, 'message': 'failed to write preview output'}, f)
-            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError):
                 pass
     except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         try:
             with open(out_path, 'wb') as f:
                 pickle.dump({'success': False, 'message': str(exc)}, f)
-        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError):
             pass
+
+
 

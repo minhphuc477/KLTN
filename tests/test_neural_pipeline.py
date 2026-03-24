@@ -15,7 +15,6 @@ import pytest
 import torch
 import numpy as np
 import networkx as nx
-from pathlib import Path
 
 from src.pipeline import (
     NeuralSymbolicDungeonPipeline,
@@ -450,7 +449,7 @@ def test_complete_pipeline_smoke():
     assert 'generation_time_sec' in result.metrics
     
     # Check individual rooms
-    for room_id, room_result in result.rooms.items():
+    for _room_id, room_result in result.rooms.items():
         assert room_result.room_grid.shape == (ROOM_HEIGHT, ROOM_WIDTH)
         assert room_result.latent.shape == (1, 64, 4, 3)
         assert 'neural_grid_entropy' in room_result.metrics

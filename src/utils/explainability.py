@@ -22,10 +22,8 @@ Solution:
 Integration Point: Throughout pipeline, aggregated in GUI debug panel
 """
 
-import numpy as np
-import torch
 import networkx as nx
-from typing import Dict, List, Tuple, Optional, Set, Any, Union
+from typing import Dict, List, Tuple, Optional, Any
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -383,12 +381,12 @@ class ExplainabilityManager:
             data = json.load(f)
         
         # Load traces
-        for tid, trace_data in data.get("traces", {}).items():
+        for _tid, trace_data in data.get("traces", {}).items():
             trace = DecisionTrace.from_dict(trace_data)
             self.add_trace(trace)
         
         # Load genealogy
-        for gid, gen_data in data.get("genealogy", {}).items():
+        for _gid, gen_data in data.get("genealogy", {}).items():
             genealogy = EvolutionaryGenealogy(**gen_data)
             self.add_genealogy(genealogy)
         
@@ -621,4 +619,4 @@ if __name__ == "__main__":
     manager.export_json("outputs/explainability/traces.json")
     manager.generate_html_report("outputs/explainability/report.html")
     
-    print(f"\n✓ Explainability data saved. Open outputs/explainability/report.html")
+    print("\n✓ Explainability data saved. Open outputs/explainability/report.html")

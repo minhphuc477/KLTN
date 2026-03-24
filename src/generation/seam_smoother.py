@@ -19,8 +19,7 @@ Integration Point: After room stitching in DungeonStitcher
 import numpy as np
 from typing import Dict, Tuple, List, Optional
 from dataclasses import dataclass
-from scipy.ndimage import gaussian_filter, median_filter
-from scipy.signal import convolve2d
+from scipy.ndimage import median_filter
 import logging
 
 logger = logging.getLogger(__name__)
@@ -245,7 +244,6 @@ class SeamSmoother:
         Bilateral filter smooths gradual transitions while preserving sharp edges
         (like wall-floor boundaries), making it ideal for seam smoothing.
         """
-        from scipy.ndimage import gaussian_filter
         
         # Simple bilateral approximation using domain + range Gaussians
         # For full bilateral, use OpenCV's cv2.bilateralFilter

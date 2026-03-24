@@ -18,13 +18,12 @@ Usage:
 """
 
 import sys
-import os
 import csv
 import argparse
 import logging
 import time
 from pathlib import Path
-from typing import Dict, List, Tuple, Any
+from typing import Dict, List, Any
 
 import numpy as np
 
@@ -35,7 +34,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from src.zelda_data.zelda_core import ZeldaDungeonAdapter
 from src.simulation.validator import ZeldaLogicEnv, StateSpaceAStar
 from src.simulation.cognitive_bounded_search import (
-    CognitiveBoundedSearch, CBSMetrics, AgentPersona
+    CognitiveBoundedSearch
 )
 
 logger = logging.getLogger(__name__)
@@ -171,7 +170,6 @@ def generate_figures(csv_path: str, fig_dir: str = 'results/figures'):
         import pandas as pd
         import matplotlib
         matplotlib.use('Agg')
-        import matplotlib.pyplot as plt
     except ImportError as e:
         print(f'Cannot generate figures (missing dependency): {e}')
         return
@@ -190,7 +188,7 @@ def generate_figures(csv_path: str, fig_dir: str = 'results/figures'):
 
 
 def _fig_cr_all_levels(df, fig_dir):
-    import pandas as pd, matplotlib
+    import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
 
@@ -217,11 +215,11 @@ def _fig_cr_all_levels(df, fig_dir):
     fig.tight_layout()
     fig.savefig(f'{fig_dir}/fig_confusion_ratio_all_levels.png', dpi=150)
     plt.close(fig)
-    print(f'  Saved fig_confusion_ratio_all_levels.png')
+    print('  Saved fig_confusion_ratio_all_levels.png')
 
 
 def _fig_greedy_vs_balanced(df, fig_dir):
-    import pandas as pd, matplotlib
+    import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
 
@@ -247,11 +245,11 @@ def _fig_greedy_vs_balanced(df, fig_dir):
     fig.tight_layout()
     fig.savefig(f'{fig_dir}/fig_greedy_vs_balanced_full.png', dpi=150)
     plt.close(fig)
-    print(f'  Saved fig_greedy_vs_balanced_full.png')
+    print('  Saved fig_greedy_vs_balanced_full.png')
 
 
 def _fig_persona_comparison(df, fig_dir):
-    import pandas as pd, matplotlib
+    import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
 
@@ -289,7 +287,7 @@ def _fig_persona_comparison(df, fig_dir):
     fig.tight_layout()
     fig.savefig(f'{fig_dir}/fig_persona_comparison.png', dpi=150)
     plt.close(fig)
-    print(f'  Saved fig_persona_comparison.png')
+    print('  Saved fig_persona_comparison.png')
 
 
 # =============================================================================

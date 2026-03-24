@@ -1,0 +1,17 @@
+{
+  "format_version": "1.0",
+  "model_type": "vqvae",
+  "checkpoint_file": "vqvae_pretrained.pth",
+  "saved_at_utc": "2026-03-24T10:10:07Z",
+  "architecture": {
+    "latent_dim": 64,
+    "codebook_size": 512,
+    "use_coordconv": false,
+    "mrf_penalty_weight": 0.05
+  },
+  "extra": {
+    "epoch": 2,
+    "loss": 1.7902416288852692,
+    "accuracy": 0.7276633501052856
+  }
+}

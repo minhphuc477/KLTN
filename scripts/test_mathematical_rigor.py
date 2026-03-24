@@ -34,7 +34,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import numpy as np
 import networkx as nx
-from typing import Dict, List
 import argparse
 
 logger = logging.getLogger(__name__)
@@ -43,8 +42,7 @@ logger = logging.getLogger(__name__)
 from src.generation.weighted_bayesian_wfc import (
     WeightedBayesianWFC,
     WeightedBayesianWFCConfig,
-    TilePrior,
-    extract_tile_priors_from_vqvae
+    TilePrior
 )
 try:
     from src.evaluation.difficulty_calculator import DifficultyCalculator
@@ -53,10 +51,7 @@ except ImportError:
     DifficultyCalculator = None
 
 from src.simulation.key_economy_validator import (
-    KeyEconomyValidator,
-    GraphTopology,
-    GreedyPlayer,
-    AdversarialPlayer
+    KeyEconomyValidator
 )
 
 # ============================================================================
@@ -130,7 +125,7 @@ def test_weighted_wfc_distribution_preservation(verbose: bool = False):
     if verbose:
         print(f"Grid shape: {grid.shape}")
         print(f"Unique tiles: {np.unique(grid)}")
-        print(f"\nTile frequency comparison:")
+        print("\nTile frequency comparison:")
         unique, counts = np.unique(grid, return_counts=True)
         total = grid.size
         for tile_id, count in zip(unique, counts):

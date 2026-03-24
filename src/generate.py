@@ -14,7 +14,6 @@ Usage:
     python -m src.generate --quick
 """
 
-import os
 import sys
 import argparse
 import logging
@@ -32,11 +31,10 @@ if str(PROJECT_ROOT) not in sys.path:
 
 # Use Block V LogicNet (not legacy ml.logic_net)
 from src.core.logic_net import LogicNet
-from src.core.latent_diffusion import LatentDiffusionModel, create_latent_diffusion
-from src.core.vqvae import SemanticVQVAE, create_vqvae
-from src.core.condition_encoder import DualStreamConditionEncoder, create_condition_encoder
-from src.core.symbolic_refiner import SymbolicRefiner, create_symbolic_refiner
-from src.utils.checkpoint import CheckpointManager
+from src.core.latent_diffusion import create_latent_diffusion
+from src.core.vqvae import create_vqvae
+from src.core.condition_encoder import create_condition_encoder
+from src.core.symbolic_refiner import create_symbolic_refiner
 
 logger = logging.getLogger(__name__)
 
@@ -335,7 +333,7 @@ def generate_and_evaluate(
     }
     
     logger.info(f"\n{'='*50}")
-    logger.info(f"Generation Results:")
+    logger.info("Generation Results:")
     logger.info(f"  Total Samples: {num_samples}")
     logger.info(f"  Initially Valid: {initial_valid} ({100*initial_valid/num_samples:.1f}%)")
     logger.info(f"  Repaired: {repaired_count}")

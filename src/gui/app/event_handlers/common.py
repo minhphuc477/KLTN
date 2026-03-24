@@ -1,4 +1,4 @@
-﻿"""Shared event-loop utilities for polling and generic maintenance."""
+"""Shared event-loop utilities for polling and generic maintenance."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ def poll_pygame_events(pygame_module, time_module, logger):
         if duration > 0.05:
             logger.debug("Slow event.get() detected: %.3fs", duration)
         return events
-    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError):
         logger.exception("pygame.event.get() raised")
         return []
 
@@ -30,7 +30,7 @@ def clear_stale_preview_overlay(gui, logger):
         gui.path_preview_dialog = None
         try:
             gui._set_message("Cleared stale preview overlay", 1.5)
-        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError):
             pass
-    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError):
         logger.exception("Failed to clear stale preview overlay")

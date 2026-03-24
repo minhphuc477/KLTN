@@ -1,3 +1,5 @@
+# pyright: reportPrivateUsage=false
+
 """
 H-MOLQD Block Integration Test
 ================================
@@ -24,7 +26,7 @@ import numpy as np
 
 def test_block_ii_vqvae():
     """Block II: SemanticVQVAE instantiation, encode/decode round-trip."""
-    from src.core.vqvae import SemanticVQVAE, create_vqvae
+    from src.core.vqvae import create_vqvae
 
     model = create_vqvae(num_classes=44, codebook_size=64, latent_dim=32)
     x = torch.randn(2, 44, 11, 16)  # [B, C=44, H=11, W=16]
@@ -47,7 +49,7 @@ def test_block_ii_vqvae():
 
 def test_block_iii_condition_encoder():
     """Block III: DualStreamConditionEncoder with edge features."""
-    from src.core.condition_encoder import DualStreamConditionEncoder, create_condition_encoder
+    from src.core.condition_encoder import create_condition_encoder
 
     encoder = create_condition_encoder(latent_dim=32, output_dim=128)
     assert encoder.global_encoder.edge_feature_dim == 8
@@ -72,7 +74,7 @@ def test_block_iii_condition_encoder():
 
 def test_block_iv_latent_diffusion():
     """Block IV: LatentDiffusionModel training loss and sampling."""
-    from src.core.latent_diffusion import LatentDiffusionModel, create_latent_diffusion
+    from src.core.latent_diffusion import create_latent_diffusion
 
     model = create_latent_diffusion(
         latent_dim=32, model_channels=32, context_dim=64,
@@ -156,7 +158,7 @@ def test_block_vi_map_elites():
 def test_block_vii_symbolic_refiner():
     """Block VII: SymbolicRefiner with LearnedTileStatistics."""
     from src.core.symbolic_refiner import (
-        SymbolicRefiner, create_symbolic_refiner,
+        create_symbolic_refiner,
         LearnedTileStatistics, FailurePoint,
     )
 
@@ -188,7 +190,7 @@ def test_block_vii_symbolic_refiner():
     # Quick repair test
     grid = np.ones((11, 16), dtype=int)  # all floor
     grid[5, :] = 2  # wall barrier
-    repaired, success = refiner.repair_room(grid, start=(2, 8), goal=(8, 8))
+    repaired, _success = refiner.repair_room(grid, start=(2, 8), goal=(8, 8))
     assert repaired.shape == (11, 16)
     print("  ✓ Block VII (SymbolicRefiner): LearnedTileStatistics + repair OK")
 
@@ -210,7 +212,7 @@ def test_pipeline_vqvae_to_diffusion():
     x = torch.randn(2, 44, 11, 16)
     vqvae.eval()
     with torch.no_grad():
-        z_q, indices = vqvae.encode(x)  # CRITICAL-2: 2 values
+        z_q, _indices = vqvae.encode(x)  # CRITICAL-2: 2 values
 
     # Build conditioning
     node_features = torch.randn(4, 5)

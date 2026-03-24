@@ -17,7 +17,6 @@ Sources:
 """
 
 from typing import Dict, Set, Tuple
-from enum import IntEnum
 from src.core.definitions import (
     parse_node_label_tokens,
     parse_edge_type_tokens,

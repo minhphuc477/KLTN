@@ -9,7 +9,6 @@ Usage:
     python tests/test_advanced_pathfinding.py
 """
 
-import pytest
 import numpy as np
 import logging
 from typing import Tuple
@@ -124,7 +123,7 @@ def verify_path_validity(env: ZeldaLogicEnv, path: list) -> Tuple[bool, str]:
     
     # Reset environment
     env.reset()
-    current_state = env.state.copy()
+    _current_state = env.state.copy()
     
     # Check each step
     for i in range(len(path) - 1):
@@ -344,12 +343,12 @@ class TestComparison:
         # Standard A*
         env1 = ZeldaLogicEnv(grid)
         astar = StateSpaceAStar(env1, timeout=100000)
-        success1, path1, nodes1 = astar.solve()
+        success1, _path1, nodes1 = astar.solve()
         
         # Bidirectional A*
         env2 = ZeldaLogicEnv(grid)
         bidir = BidirectionalAStar(env2, timeout=100000)
-        success2, path2, nodes2 = bidir.solve()
+        success2, _path2, nodes2 = bidir.solve()
         
         assert success1 and success2, "Both algorithms should succeed"
         

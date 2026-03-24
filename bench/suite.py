@@ -46,7 +46,6 @@ def maze_grid(size=50, seed=42):
         # stop recursion to keep it fast
     carve(0,0,size-1,size-1)
     # make some openings
-    import random
     for _ in range(size*3):
         r = random.randrange(1,size-1)
         c = random.randrange(1,size-1)

@@ -1,4 +1,4 @@
-﻿"""Display lifecycle and recovery helpers for pygame window management."""
+"""Display lifecycle and recovery helpers for pygame window management."""
 
 from typing import Any
 
@@ -45,7 +45,7 @@ def attempt_display_reinit(gui: Any, pygame: Any, logger: Any) -> bool:
             try:
                 disp = pygame.display.Info()
                 new_size = (int(disp.current_w), int(disp.current_h))
-            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError):
                 new_size = (800, 600)
             flags = pygame.FULLSCREEN | getattr(pygame, "HWSURFACE", 0) | getattr(pygame, "DOUBLEBUF", 0)
             screen = safe_set_mode(new_size, pygame, logger, flags)
@@ -57,14 +57,14 @@ def attempt_display_reinit(gui: Any, pygame: Any, logger: Any) -> bool:
             gui.screen = screen
             try:
                 gui.screen_w, gui.screen_h = gui.screen.get_size()
-            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError):
                 gui.screen_w, gui.screen_h = (800, 600)
             try:
                 gui._load_assets()
-            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError):
                 logger.exception("Failed to reload assets after display reinit")
             return True
-    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError):
         logger.exception("Display reinit failed")
     return False
 

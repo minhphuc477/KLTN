@@ -26,13 +26,11 @@ Critical Challenge: Backward Search in State-Space Graphs
 
 import heapq
 import logging
-from typing import Dict, List, Tuple, Optional, Set
+from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass, field
 
 from .validator import (
-    GameState, ZeldaLogicEnv, SolverOptions, SolverDiagnostics,
-    SEMANTIC_PALETTE, ACTION_DELTAS, CARDINAL_COST, DIAGONAL_COST,
-    WALKABLE_IDS, BLOCKING_IDS, PICKUP_IDS
+    GameState, ZeldaLogicEnv, SEMANTIC_PALETTE, WALKABLE_IDS, BLOCKING_IDS, PICKUP_IDS
 )
 
 logger = logging.getLogger(__name__)
@@ -270,14 +268,14 @@ class BidirectionalAStar:
             GameState at goal position with maximal inventory
         """
         # Count all collectable items in dungeon
-        all_keys = len(self.env._find_all_positions(SEMANTIC_PALETTE['KEY_SMALL']))
-        all_bombs = len(self.env._find_all_positions(SEMANTIC_PALETTE['ITEM_MINOR'])) * 4
+        all_keys = len(self.env.find_all_positions(SEMANTIC_PALETTE['KEY_SMALL']))
+        all_bombs = len(self.env.find_all_positions(SEMANTIC_PALETTE['ITEM_MINOR'])) * 4
         
         # Check for boss key
-        has_boss_key = len(self.env._find_all_positions(SEMANTIC_PALETTE['KEY_BOSS'])) > 0
+        has_boss_key = len(self.env.find_all_positions(SEMANTIC_PALETTE['KEY_BOSS'])) > 0
         
         # Check for key item (ladder)
-        has_item = len(self.env._find_all_positions(SEMANTIC_PALETTE['KEY_ITEM'])) > 0
+        has_item = len(self.env.find_all_positions(SEMANTIC_PALETTE['KEY_ITEM'])) > 0
         if has_item:
             all_bombs += 4  # KEY_ITEM also gives bombs
         
@@ -286,7 +284,7 @@ class BidirectionalAStar:
         for door_type in [SEMANTIC_PALETTE['DOOR_LOCKED'], 
                          SEMANTIC_PALETTE['DOOR_BOMB'],
                          SEMANTIC_PALETTE['DOOR_BOSS']]:
-            all_door_positions.update(self.env._find_all_positions(door_type))
+            all_door_positions.update(self.env.find_all_positions(door_type))
         
         # Find all items (for collected_items set)
         all_item_positions = set()
@@ -294,7 +292,7 @@ class BidirectionalAStar:
                          SEMANTIC_PALETTE['KEY_BOSS'],
                          SEMANTIC_PALETTE['KEY_ITEM'],
                          SEMANTIC_PALETTE['ITEM_MINOR']]:
-            all_item_positions.update(self.env._find_all_positions(item_type))
+            all_item_positions.update(self.env.find_all_positions(item_type))
         
         goal_state = GameState(
             position=self.env.goal_pos,
@@ -622,7 +620,7 @@ class BidirectionalAStar:
         """
         Forward move using canonical environment transition logic.
         """
-        return self.env._try_move_pure(state, target_pos, target_tile)
+        return self.env.try_move_pure(state, target_pos, target_tile)
     
     def _try_move_backward(self, state: GameState, prev_pos: Tuple[int, int],
                           prev_tile: int) -> Tuple[bool, GameState]:

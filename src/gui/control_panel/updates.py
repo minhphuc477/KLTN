@@ -1,4 +1,4 @@
-﻿"""Helpers for applying control-panel widget state updates to GUI objects."""
+"""Helpers for applying control-panel widget state updates to GUI objects."""
 
 from typing import Any
 
@@ -82,7 +82,7 @@ def apply_dropdown_widget_update(gui: Any, widget: Any, logger: Any) -> None:
             selected_val = widget.options[widget.selected]
             gui.ara_weight = float(selected_val)
             gui._set_message(f"ARA* weight: {gui.ara_weight:g}", 1.2)
-        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+        except (AttributeError, RuntimeError, ValueError, TypeError):
             gui.ara_weight = 1.0
     elif widget.control_name == "presets":
         old = gui.current_preset_idx
@@ -124,7 +124,7 @@ def apply_algorithm_dropdown_update(gui: Any, widget: Any, logger: Any) -> None:
         if hasattr(gui, "preview_proc") and gui.preview_proc:
             try:
                 gui.preview_proc.terminate()
-            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError):
                 pass
             gui.preview_proc = None
         gui._clear_solver_state(reason=f"algorithm changed to {new_algorithm_name}")

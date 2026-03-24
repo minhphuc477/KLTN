@@ -418,6 +418,39 @@ def _build_seed_scenarios(seeds: Sequence[int], min_rooms: int, max_rooms: int, 
     return scenarios
 
 
+def _validate_experiment_config(args: argparse.Namespace, methods: Sequence[str]) -> None:
+    """Fail-fast validation for benchmark runtime configuration."""
+    if not methods:
+        raise ValueError("No benchmark methods selected")
+
+    if int(args.num_samples) < 1:
+        raise ValueError("--num-samples must be >= 1")
+
+    if int(args.eval_budget) < 16:
+        raise ValueError("--eval-budget must be >= 16")
+
+    if int(args.population_hint) < 8:
+        raise ValueError("--population-hint must be >= 8")
+
+    if int(args.min_rooms) < 1 or int(args.max_rooms) < int(args.min_rooms):
+        raise ValueError("Invalid room range: expected 1 <= min_rooms <= max_rooms")
+
+    if int(args.room_budget_cap) < int(args.max_rooms):
+        raise ValueError("--room-budget-cap must be >= --max-rooms")
+
+    if not Path(args.data_root).exists():
+        raise FileNotFoundError(f"Data root not found: {args.data_root}")
+
+    out_dir = Path(args.output)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    probe = out_dir / ".write_probe.tmp"
+    try:
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink(missing_ok=True)
+    except OSError as exc:
+        raise OSError(f"Output directory is not writable: {out_dir}") from exc
+
+
 def main() -> int:
     args = parse_args()
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -439,6 +472,7 @@ def main() -> int:
         args.calibrate_full = True
 
     methods = _build_method_list(str(args.methods))
+    _validate_experiment_config(args, methods)
     seeds = [int(args.seed) + i for i in range(int(args.num_samples))]
     refs = load_vglc_reference_graphs(data_root=args.data_root, limit=args.reference_limit)
     if not refs:

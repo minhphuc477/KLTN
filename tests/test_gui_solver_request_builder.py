@@ -1,3 +1,5 @@
+# pyright: reportPrivateUsage=false
+
 import gui_runner
 
 

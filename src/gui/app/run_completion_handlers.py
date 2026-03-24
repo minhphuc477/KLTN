@@ -1,4 +1,4 @@
-﻿"""Post-event-loop completion handlers for gui_runner run loop."""
+"""Post-event-loop completion handlers for gui_runner run loop."""
 
 from __future__ import annotations
 
@@ -44,7 +44,7 @@ def handle_preview_process_completion(gui, os_module, logger, safe_unpickle_fn, 
     proc_alive = False
     try:
         proc_alive = proc.is_alive()
-    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError):
         proc_alive = False
 
     if not proc_alive:
@@ -58,18 +58,18 @@ def handle_preview_process_completion(gui, os_module, logger, safe_unpickle_fn, 
         finally:
             try:
                 proc.join(timeout=0.1)
-            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError):
                 pass
             try:
                 if out and os_module.path.exists(out):
                     os_module.remove(out)
-            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError):
                 pass
             try:
                 grid_file = getattr(gui, "preview_gridfile", None)
                 if grid_file and os_module.path.exists(grid_file):
                     os_module.remove(grid_file)
-            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+            except (AttributeError, RuntimeError, ValueError, TypeError):
                 pass
             gui.preview_proc = None
             gui.preview_outfile = None
@@ -90,7 +90,7 @@ def handle_preview_process_completion(gui, os_module, logger, safe_unpickle_fn, 
                             solver_result=solver_result_preview,
                             speed_multiplier=gui.speed_multiplier,
                         )
-                    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+                    except (AttributeError, RuntimeError, ValueError, TypeError):
                         gui.path_preview_dialog = None
                     gui._set_message("Preview ready (sidebar)")
                 else:
@@ -135,7 +135,7 @@ def handle_solver_process_completion(
         current_map = gui.maps[gui.current_map_idx]
         grid_ref = current_map.global_grid if hasattr(current_map, "global_grid") else current_map
         grid_cells = int(np_module.asarray(grid_ref).size)
-    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+    except (AttributeError, RuntimeError, ValueError, TypeError):
         pass
 
     solver_timeout = compute_solver_timeout_seconds_fn(

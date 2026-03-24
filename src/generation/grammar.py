@@ -56,6 +56,8 @@ Usage:
     edge_index, node_features = graph.to_tensor()
 """
 
+# pyright: reportPrivateUsage=false
+
 # pylint: disable=redefined-outer-name,protected-access,logging-fstring-interpolation,unused-argument
 
 import random
@@ -2367,7 +2369,7 @@ if __name__ == '__main__':
     
     # Convert to tensors
     gnn_input = graph_to_gnn_input(graph, current_node_idx=0)
-    print(f"\nGNN Input:")
+    print("\nGNN Input:")
 
 
 # ============================================================================
@@ -4918,7 +4920,7 @@ if __name__ == '__main__':
     
     # Convert to tensors
     gnn_input = graph_to_gnn_input(graph, current_node_idx=0)
-    print(f"\nGNN Input:")
+    print("\nGNN Input:")
     print(f"  edge_index: {gnn_input['edge_index'].shape}")
     print(f"  node_features: {gnn_input['node_features'].shape}")
     print(f"  tpe: {gnn_input['tpe'].shape}")

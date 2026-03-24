@@ -1,4 +1,4 @@
-﻿"""Top-level frame rendering orchestration for ZeldaGUI."""
+"""Top-level frame rendering orchestration for ZeldaGUI."""
 
 from __future__ import annotations
 

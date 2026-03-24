@@ -19,7 +19,6 @@ Each test creates a dungeon that REQUIRES specific mechanics to solve,
 ensuring that incomplete implementations fail.
 """
 
-import pytest
 import numpy as np
 import sys
 from pathlib import Path
@@ -247,11 +246,11 @@ class TestUnifiedGameLogic:
             solver = solver_class(env)
             
             if name == 'D* Lite':
-                success, path, _ = solver.solve(env.state.copy())
+                success, _path, _ = solver.solve(env.state.copy())
             elif hasattr(solver, 'solve'):
-                success, path, _ = solver.solve()
+                success, _path, _ = solver.solve()
             else:
-                success, path, _ = solver.solve_with_diagnostics()
+                success, _path, _ = solver.solve_with_diagnostics()
             
             assert success, f"{name} failed block chain pushing"
             
@@ -287,9 +286,9 @@ class TestUnifiedGameLogic:
                 print(f"⚠ {name}: Complex test skipped (D* Lite best for replanning, not initial search)")
                 continue
             elif hasattr(solver, 'solve'):
-                success, path, _ = solver.solve()
+                success, _path, _ = solver.solve()
             else:
-                success, path, _ = solver.solve_with_diagnostics()
+                success, _path, _ = solver.solve_with_diagnostics()
             
             # Note: This test may be too complex for simple DFS without heuristics
             # If it fails, that's expected - the point is to verify the mechanics work

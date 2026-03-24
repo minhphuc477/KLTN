@@ -1,6 +1,6 @@
 """Simple grid solvers for benchmarking (A* and JPS variants)."""
 import heapq
-from typing import List, Tuple, Optional
+from typing import List, Tuple
 
 Grid = List[List[int]]  # 0 = free, 1 = blocked
 

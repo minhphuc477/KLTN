@@ -122,7 +122,7 @@ class TestTortuosityLoss:
             c = 5 + int(2 * np.sin(r * 0.5))
             winding_map[0, 0, r, max(0, min(W-1, c))] = 1.0
         
-        winding_loss = tortuosity_loss(winding_map, starts, goals, target_tortuosity=1.5)
+        _winding_loss = tortuosity_loss(winding_map, starts, goals, target_tortuosity=1.5)
         
         # Straight path should have higher loss (more penalty)
         # This is a soft test since the losses depend on the actual path computation
@@ -141,8 +141,6 @@ class TestGraphGridAttention:
         from src.core.graph_grid_attention import (
             GraphToGridCrossAttention,
             EnhancedAttentionBlock,
-            SinusoidalPositionEncoding2D,
-            GraphNodePositionEncoding,
         )
         assert GraphToGridCrossAttention is not None
         assert EnhancedAttentionBlock is not None
@@ -269,10 +267,6 @@ class TestMissionGrammar:
         from src.generation.grammar import (
             MissionGrammar,
             MissionGraph,
-            MissionNode,
-            NodeType,
-            Difficulty,
-            graph_to_gnn_input,
         )
         assert MissionGrammar is not None
         assert MissionGraph is not None
@@ -386,8 +380,6 @@ class TestCausalWFC:
         from src.generation.wfc_refiner import (
             CausalWFC,
             ZeldaTileSet,
-            TileType,
-            GameState,
         )
         assert CausalWFC is not None
         assert ZeldaTileSet is not None
@@ -427,7 +419,7 @@ class TestCausalWFC:
         tile_set = ZeldaTileSet()
         wfc = CausalWFC(tile_set, width=11, height=16, seed=42)
         
-        grid = wfc.generate(start_pos=(14, 5), goal_pos=(1, 5))
+        _grid = wfc.generate(start_pos=(14, 5), goal_pos=(1, 5))
         
         # Validate causal ordering
         assert wfc.validate_causal_ordering()

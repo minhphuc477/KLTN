@@ -1,3 +1,5 @@
+# pyright: reportPrivateUsage=false
+
 """
 Test Suite for Wave 3 Pedagogical & Quality Control Rules
 ==========================================================
@@ -391,7 +393,7 @@ class TestPruneDeadEndRule:
         graph.add_node(key_deadend)
         graph.add_edge(1, 2, EdgeType.PATH)
         
-        initial_count = len(graph.nodes)
+        _initial_count = len(graph.nodes)
         
         # Apply rule
         rule = PruneDeadEndRule()

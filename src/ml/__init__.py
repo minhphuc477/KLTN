@@ -17,6 +17,7 @@ from .heuristic_learning import HeuristicNetwork, TrainingExample
 # Import LogicNet if available
 try:
     from .logic_net import LogicNet, SoftBellmanFord
+    _ = (LogicNet, SoftBellmanFord)
     __all__ = ['LogicNet', 'SoftBellmanFord', 'HeuristicNetwork', 'TrainingExample']
 except ImportError:
     __all__ = ['HeuristicNetwork', 'TrainingExample']

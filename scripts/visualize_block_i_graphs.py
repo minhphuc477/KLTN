@@ -16,7 +16,7 @@ import logging
 import math
 import sys
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 import matplotlib.pyplot as plt
 import networkx as nx

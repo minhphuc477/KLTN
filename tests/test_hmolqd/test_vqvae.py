@@ -6,7 +6,6 @@ Tests for vector quantization, encoder/decoder, and training.
 """
 
 import pytest
-import numpy as np
 
 # Skip entire module if torch not available
 torch = pytest.importorskip("torch")
@@ -127,7 +126,7 @@ class TestSemanticVQVAE:
         
         x = torch.randn(2, 44, 16, 11)
         
-        recon, vq_loss, indices = model(x)
+        recon, vq_loss, _indices = model(x)
         
         assert recon.shape == x.shape
         assert vq_loss.ndim == 0

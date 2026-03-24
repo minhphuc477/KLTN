@@ -1,0 +1,202 @@
+{
+  "rows": [
+    {
+      "weight": 0.01,
+      "seed": 111,
+      "loss": 1.7277289181947708,
+      "recon_loss": 1.7157382518053055,
+      "vq_loss": 0.011936760565731674,
+      "illegal_adjacency_penalty": 0.005388261517509818,
+      "accuracy": 0.6839133620262146,
+      "perplexity": 3.1553327441215515
+    },
+    {
+      "weight": 0.01,
+      "seed": 222,
+      "loss": 1.79441736638546,
+      "recon_loss": 1.7828390002250671,
+      "vq_loss": 0.011507158342283219,
+      "illegal_adjacency_penalty": 0.007122292561689392,
+      "accuracy": 0.6818004369735717,
+      "perplexity": 4.575589060783386
+    },
+    {
+      "weight": 0.01,
+      "seed": 333,
+      "loss": 1.7540701776742935,
+      "recon_loss": 1.7462532818317413,
+      "vq_loss": 0.007745466835331172,
+      "illegal_adjacency_penalty": 0.007145627110730857,
+      "accuracy": 0.7168545722961426,
+      "perplexity": 4.263162970542908
+    },
+    {
+      "weight": 0.01,
+      "seed": 444,
+      "loss": 1.6302652657032013,
+      "recon_loss": 1.620952308177948,
+      "vq_loss": 0.009256101388018578,
+      "illegal_adjacency_penalty": 0.005685415759216994,
+      "accuracy": 0.7441317558288574,
+      "perplexity": 4.138141095638275
+    },
+    {
+      "weight": 0.03,
+      "seed": 111,
+      "loss": 1.7112988978624344,
+      "recon_loss": 1.6982882171869278,
+      "vq_loss": 0.012861913128290325,
+      "illegal_adjacency_penalty": 0.004958587494911626,
+      "accuracy": 0.6933371663093567,
+      "perplexity": 3.297190934419632
+    },
+    {
+      "weight": 0.03,
+      "seed": 222,
+      "loss": 1.8993878811597824,
+      "recon_loss": 1.889992594718933,
+      "vq_loss": 0.009232841897755861,
+      "illegal_adjacency_penalty": 0.005413744773250073,
+      "accuracy": 0.6953568816184997,
+      "perplexity": 4.7220839858055115
+    },
+    {
+      "weight": 0.03,
+      "seed": 333,
+      "loss": 1.753955751657486,
+      "recon_loss": 1.7460056841373444,
+      "vq_loss": 0.007736359839327633,
+      "illegal_adjacency_penalty": 0.007123530318494886,
+      "accuracy": 0.7168235063552857,
+      "perplexity": 4.264652758836746
+    },
+    {
+      "weight": 0.03,
+      "seed": 444,
+      "loss": 1.6307882070541382,
+      "recon_loss": 1.6213444620370865,
+      "vq_loss": 0.009273229748941958,
+      "illegal_adjacency_penalty": 0.005683791940100491,
+      "accuracy": 0.7440873503684997,
+      "perplexity": 4.139022320508957
+    },
+    {
+      "weight": 0.05,
+      "seed": 111,
+      "loss": 1.7120241075754166,
+      "recon_loss": 1.6988645046949387,
+      "vq_loss": 0.012912318226881325,
+      "illegal_adjacency_penalty": 0.00494569557486102,
+      "accuracy": 0.6908957719802856,
+      "perplexity": 3.28446763753891
+    },
+    {
+      "weight": 0.05,
+      "seed": 222,
+      "loss": 1.801064670085907,
+      "recon_loss": 1.7902394235134125,
+      "vq_loss": 0.010504749254323542,
+      "illegal_adjacency_penalty": 0.006410241010598838,
+      "accuracy": 0.6924183130264282,
+      "perplexity": 4.936295986175537
+    },
+    {
+      "weight": 0.05,
+      "seed": 333,
+      "loss": 1.7550995349884033,
+      "recon_loss": 1.7470142841339111,
+      "vq_loss": 0.007729505188763142,
+      "illegal_adjacency_penalty": 0.0071149300201795995,
+      "accuracy": 0.7170499086380004,
+      "perplexity": 4.2515042424201965
+    },
+    {
+      "weight": 0.05,
+      "seed": 444,
+      "loss": 1.6308202147483826,
+      "recon_loss": 1.621253177523613,
+      "vq_loss": 0.009283593273721635,
+      "illegal_adjacency_penalty": 0.005668986355885863,
+      "accuracy": 0.7440962433815003,
+      "perplexity": 4.14177080988884
+    },
+    {
+      "weight": 0.08,
+      "seed": 111,
+      "loss": 1.7125916332006454,
+      "recon_loss": 1.699253872036934,
+      "vq_loss": 0.012943435402121395,
+      "illegal_adjacency_penalty": 0.004928947368171066,
+      "accuracy": 0.6900923252105713,
+      "perplexity": 3.2817917466163635
+    },
+    {
+      "weight": 0.08,
+      "seed": 222,
+      "loss": 1.9285682439804077,
+      "recon_loss": 1.91917222738266,
+      "vq_loss": 0.00897536420961842,
+      "illegal_adjacency_penalty": 0.005258215736830607,
+      "accuracy": 0.6043989598751068,
+      "perplexity": 4.664393782615662
+    },
+    {
+      "weight": 0.08,
+      "seed": 333,
+      "loss": 1.7555877566337585,
+      "recon_loss": 1.7472949177026749,
+      "vq_loss": 0.007725487579591572,
+      "illegal_adjacency_penalty": 0.007092311512678862,
+      "accuracy": 0.7170853972434997,
+      "perplexity": 4.242127388715744
+    },
+    {
+      "weight": 0.08,
+      "seed": 444,
+      "loss": 1.6314086467027664,
+      "recon_loss": 1.621661737561226,
+      "vq_loss": 0.009294414019677788,
+      "illegal_adjacency_penalty": 0.005656488589011133,
+      "accuracy": 0.7440962314605712,
+      "perplexity": 4.137403726577759
+    }
+  ],
+  "summary": [
+    {
+      "weight": 0.01,
+      "mean_loss": 1.7266204319894314,
+      "mean_recon_loss": 1.7164457105100155,
+      "mean_vq_loss": 0.010111371782841161,
+      "mean_illegal_adjacency_penalty": 0.006335399237286765,
+      "mean_accuracy": 0.7066750317811965,
+      "mean_perplexity": 4.03305646777153
+    },
+    {
+      "weight": 0.03,
+      "mean_loss": 1.7488576844334602,
+      "mean_recon_loss": 1.738907739520073,
+      "mean_vq_loss": 0.009776086153578945,
+      "mean_illegal_adjacency_penalty": 0.005794913631689269,
+      "mean_accuracy": 0.7124012261629105,
+      "mean_perplexity": 4.105737499892712
+    },
+    {
+      "weight": 0.05,
+      "mean_loss": 1.7247521318495274,
+      "mean_recon_loss": 1.7143428474664688,
+      "mean_vq_loss": 0.010107541485922411,
+      "mean_illegal_adjacency_penalty": 0.00603496324038133,
+      "mean_accuracy": 0.7111150592565536,
+      "mean_perplexity": 4.153509669005871
+    },
+    {
+      "weight": 0.08,
+      "mean_loss": 1.7570390701293945,
+      "mean_recon_loss": 1.7468456886708736,
+      "mean_vq_loss": 0.009734675302752294,
+      "mean_illegal_adjacency_penalty": 0.005733990801672917,
+      "mean_accuracy": 0.6889182284474373,
+      "mean_perplexity": 4.081429161131382
+    }
+  ]
+}

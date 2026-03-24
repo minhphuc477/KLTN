@@ -11,7 +11,7 @@ This test suite verifies that dungeon data is consistent:
 import pytest
 import sys
 from pathlib import Path
-from typing import Dict, List, Set, Tuple, Optional
+from typing import Dict, List, Set, Tuple
 from collections import defaultdict
 
 # Add project root to path
@@ -169,10 +169,10 @@ def _check_item_placement(dungeon, stitched) -> List[str]:
         return issues
     
     # Collect expected items from graph edges
-    expected_keys = 0
+    _expected_keys = 0
     expected_locked_doors = 0
     
-    for u, v, data in stitched.graph.edges(data=True):
+    for _u, _v, data in stitched.graph.edges(data=True):
         edge_type = data.get('edge_type', '')
         label = data.get('label', '')
         

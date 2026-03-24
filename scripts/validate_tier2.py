@@ -75,7 +75,6 @@ def main():
     print("Test 3: Parallel Search")
     try:
         from src.simulation import ParallelAStarSolver
-        import multiprocessing as mp
         
         grid = np.full((10, 10), SEMANTIC_PALETTE['FLOOR'])
         grid[0, 0] = SEMANTIC_PALETTE['START']
@@ -172,7 +171,6 @@ def main():
     print("Test 7: ML Heuristic Learning (Optional)")
     try:
         from src.ml.heuristic_learning import HeuristicNetwork
-        import torch
         
         net = HeuristicNetwork(map_height=30, map_width=30)
         assert net is not None

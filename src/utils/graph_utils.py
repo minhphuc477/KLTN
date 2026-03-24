@@ -34,8 +34,6 @@ import networkx as nx
 
 from src.constants.vglc_constants import (
     VIRTUAL_NODE_TYPES,
-    PHYSICAL_NODE_TYPES,
-    LEAF_NODE_TYPES,
     GOAL_NODE_MAX_DEGREE,
     GOAL_CONNECTS_TO_BOSS,
     BOSS_REQUIRED_FOR_GOAL,

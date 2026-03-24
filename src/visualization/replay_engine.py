@@ -64,12 +64,6 @@ from src.core.definitions import SEMANTIC_PALETTE
 from src.visualization.asset_manager import AssetManager, SEMANTIC_COLORS
 from src.visualization.camera import create_camera_for_map
 
-try:
-    from src.utils.playtest_telemetry import PlaytestTelemetryCollector
-except Exception:
-    PlaytestTelemetryCollector = None  # type: ignore[assignment]
-
-
 # ==========================================
 # CONFIGURATION
 # ==========================================
@@ -827,14 +821,14 @@ class DungeonReplayEngine:
         y += 18
         
         # Boss Key
-        boss_text = f"Boss Key: {'âœ“' if self.has_boss_key else 'âœ—'}"
+        boss_text = f"Boss Key: {'[OK]' if self.has_boss_key else '[NO]'}"
         boss_color = (100, 255, 100) if self.has_boss_key else (150, 155, 165)
         boss_surf = self.font_small.render(boss_text, True, boss_color)
         hud_surface.blit(boss_surf, (15, y))
         y += 18
         
         # Bomb
-        bomb_text = f"Bomb: {'âœ“' if self.has_bomb else 'âœ—'}"
+        bomb_text = f"Bomb: {'[OK]' if self.has_bomb else '[NO]'}"
         bomb_color = (100, 255, 100) if self.has_bomb else (150, 155, 165)
         bomb_surf = self.font_small.render(bomb_text, True, bomb_color)
         hud_surface.blit(bomb_surf, (15, y))
@@ -882,7 +876,7 @@ class DungeonReplayEngine:
         
         controls = [
             "SPACE  Play/Pause",
-            "â† â†’    Step",
+            "<- ->    Step",
             "R      Reset",
             "+/-    Speed",
             "Wheel  Zoom",
@@ -917,7 +911,7 @@ class DungeonReplayEngine:
             ReplayState.IDLE: "Ready - Press SPACE to play",
             ReplayState.PLAYING: "Playing...",
             ReplayState.PAUSED: "Paused",
-            ReplayState.FINISHED: "â˜… Complete! Press R to restart â˜…",
+            ReplayState.FINISHED: "* Complete! Press R to restart *",
         }
         state_color = {
             ReplayState.IDLE: (200, 205, 215),
@@ -943,7 +937,7 @@ class DungeonReplayEngine:
         bar_surface.blit(fps_surf, (bar_width - 80, 35))
         
         # Map size
-        size_text = f"Map: {self.grid_cols}Ã—{self.grid_rows}"
+        size_text = f"Map: {self.grid_cols}x{self.grid_rows}"
         size_surf = self.font_small.render(size_text, True, (150, 155, 165))
         bar_surface.blit(size_surf, (bar_width - 80, 55))
         
@@ -1008,21 +1002,21 @@ class DungeonReplayEngine:
             overlay.fill((10, 12, 16, 200))
 
             # Title
-            title = self.font_large.render("Help â€” Controls & Info", True, (200, 230, 255))
+            title = self.font_large.render("Help - Controls & Info", True, (200, 230, 255))
             overlay.blit(title, (30, 30))
 
             lines = [
-                "SPACE â€” Play / Pause",
-                "â† / â†’ â€” Step backward / forward",
-                "R â€” Reset replay",
-                "+ / - â€” Increase / decrease speed",
-                "H â€” Toggle HUD sidebar",
-                "P â€” Toggle path overlay",
-                "M â€” Toggle minimap",
-                "G â€” Toggle grid overlay",
-                "F â€” Toggle fog of war",
-                "F1 â€” Toggle this help",
-                "ESC â€” Quit",
+                "SPACE - Play / Pause",
+                "<- / -> - Step backward / forward",
+                "R - Reset replay",
+                "+ / - - Increase / decrease speed",
+                "H - Toggle HUD sidebar",
+                "P - Toggle path overlay",
+                "M - Toggle minimap",
+                "G - Toggle grid overlay",
+                "F - Toggle fog of war",
+                "F1 - Toggle this help",
+                "ESC - Quit",
             ]
 
             y = 70
@@ -1032,7 +1026,7 @@ class DungeonReplayEngine:
                 y += 22
 
             # Footer: short status
-            status = f"Map: {self.grid_cols}Ã—{self.grid_rows}    Steps: {len(self.path)}    Speed: {self.speed_multiplier}x"
+            status = f"Map: {self.grid_cols}x{self.grid_rows}    Steps: {len(self.path)}    Speed: {self.speed_multiplier}x"
             footer = self.font_small.render(status, True, (160, 170, 180))
             overlay.blit(footer, (40, height - 40))
 

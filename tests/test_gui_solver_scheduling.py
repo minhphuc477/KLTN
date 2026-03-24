@@ -1,4 +1,5 @@
-import numpy as np
+# pyright: reportPrivateUsage=false
+
 import gui_runner
 import json
 from pathlib import Path
@@ -72,7 +73,8 @@ def test_schedule_solver_is_thread_safe(monkeypatch):
     def caller():
         results.append(gui._schedule_solver())
 
-    import threading, time
+    import threading
+    import time
     t1 = threading.Thread(target=caller)
     t2 = threading.Thread(target=caller)
     t1.start(); t2.start()

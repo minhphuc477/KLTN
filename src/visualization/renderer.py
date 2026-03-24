@@ -21,7 +21,6 @@ import math
 import logging
 from typing import Dict, List, Tuple, Optional, Any, TYPE_CHECKING
 from dataclasses import dataclass, field
-from enum import Enum
 
 try:
     import pygame

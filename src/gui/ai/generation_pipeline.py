@@ -1,28 +1,80 @@
-﻿"""Core AI-generation pipeline helpers extracted from gui_runner."""
+"""Core AI-generation pipeline helpers extracted from gui_runner."""
 
+import json
+import os
+import random
 from pathlib import Path
+
+from src.pipeline.block_contracts import BlockContractError, validate_checkpoint_metadata
 
 
 def resolve_checkpoint_path():
-    """Resolve canonical checkpoint path under repository root."""
+    """Resolve checkpoint path, allowing an explicit environment override."""
+    override = str(os.environ.get("KLTN_CHECKPOINT_PATH", "")).strip()
+    if override:
+        return Path(override).expanduser().resolve()
+
     repo_root = Path(__file__).resolve().parents[2]
     return repo_root / "checkpoints" / "final_model.pth"
 
 
-def generate_mission_graph(random_module):
+def _load_checkpoint_metadata(checkpoint_path: Path):
+    """Load optional checkpoint metadata sidecar JSON."""
+    metadata_path = Path(f"{checkpoint_path}.meta.json")
+    if not metadata_path.exists():
+        return None, metadata_path
+    with open(metadata_path, "r", encoding="utf-8") as f:
+        return json.load(f), metadata_path
+
+
+def _validate_checkpoint_metadata_for_gui(
+    *,
+    checkpoint_path: Path,
+    model_type: str,
+    logger,
+    strict_checkpoint_mode: bool,
+):
+    """Validate checkpoint sidecar metadata for GUI loading flow."""
+    metadata, metadata_path = _load_checkpoint_metadata(checkpoint_path)
+    if metadata is None:
+        message = (
+            f"Checkpoint metadata sidecar missing for {model_type} at {metadata_path}"
+        )
+        if strict_checkpoint_mode:
+            raise RuntimeError(message)
+        logger.warning(message)
+        return
+
+    try:
+        validate_checkpoint_metadata(metadata=metadata, model_name=model_type)
+    except BlockContractError as exc:
+        if strict_checkpoint_mode:
+            raise RuntimeError(str(exc)) from exc
+        logger.warning("Checkpoint metadata validation warning: %s", exc)
+
+
+def generate_mission_graph(random_module, *, seed=None, num_rooms=None):
     """Generate a medium-difficulty mission graph and return metadata."""
     from src.generation.grammar import MissionGrammar, Difficulty as GrammarDifficulty, graph_to_gnn_input
 
-    seed = random_module.randint(0, 999999)
-    grammar = MissionGrammar(seed=seed)
+    if seed is None:
+        chosen_seed = int(random_module.randint(0, 999999))
+        room_count = int(random_module.randint(5, 10)) if num_rooms is None else int(num_rooms)
+    else:
+        deterministic_rng = random.Random(int(seed))
+        chosen_seed = int(seed)
+        room_count = int(deterministic_rng.randint(5, 10)) if num_rooms is None else int(num_rooms)
+
+    room_count = max(5, min(10, int(room_count)))
+    grammar = MissionGrammar(seed=chosen_seed)
     mission_graph = grammar.generate(
         difficulty=GrammarDifficulty.MEDIUM,
-        num_rooms=random_module.randint(5, 10),
+        num_rooms=room_count,
         max_keys=2,
     )
     gnn_input = graph_to_gnn_input(mission_graph, current_node_idx=0)
     return {
-        "seed": seed,
+        "seed": chosen_seed,
         "mission_graph": mission_graph,
         "edge_index": gnn_input["edge_index"],
         "num_nodes": len(mission_graph.nodes),
@@ -30,7 +82,13 @@ def generate_mission_graph(random_module):
     }
 
 
-def load_models_and_weights(checkpoint_path, device, torch_module, logger):
+def load_models_and_weights(
+    checkpoint_path,
+    device,
+    torch_module,
+    logger,
+    strict_checkpoint_mode=False,
+):
     """Construct model components and load checkpoint weights."""
     from src.core.latent_diffusion import create_latent_diffusion
     from src.core.vqvae import create_vqvae
@@ -39,8 +97,15 @@ def load_models_and_weights(checkpoint_path, device, torch_module, logger):
 
     vqvae = create_vqvae(num_classes=44, latent_dim=64)
     diffusion = create_latent_diffusion(latent_dim=64, context_dim=256)
-    cond_encoder = create_condition_encoder(latent_dim=64, output_dim=256)
+    cond_encoder = create_condition_encoder(latent_dim=64, output_dim=256, gnn_type="gcn")
     diffusion.guidance.logic_net = _LogicNet(latent_dim=64, num_classes=44)
+
+    _validate_checkpoint_metadata_for_gui(
+        checkpoint_path=Path(checkpoint_path),
+        model_type="diffusion",
+        logger=logger,
+        strict_checkpoint_mode=bool(strict_checkpoint_mode),
+    )
 
     ckpt = torch_module.load(checkpoint_path, map_location=device, weights_only=False)
 
@@ -55,6 +120,12 @@ def load_models_and_weights(checkpoint_path, device, torch_module, logger):
     else:
         vqvae_path = Path("checkpoints/vqvae_pretrained.pth")
         if vqvae_path.exists():
+            _validate_checkpoint_metadata_for_gui(
+                checkpoint_path=vqvae_path,
+                model_type="vqvae",
+                logger=logger,
+                strict_checkpoint_mode=bool(strict_checkpoint_mode),
+            )
             vqvae_ckpt = torch_module.load(vqvae_path, map_location=device, weights_only=False)
             vqvae.load_state_dict(vqvae_ckpt["model_state_dict"])
             logger.info("  Loaded VQ-VAE from %s", vqvae_path)

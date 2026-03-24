@@ -20,7 +20,6 @@ Integration with existing KLTN pathfinding:
 import logging
 from typing import Dict, List, Tuple, Optional, Set, Any
 from dataclasses import dataclass, field
-from collections import defaultdict
 import heapq
 
 import numpy as np
@@ -28,10 +27,6 @@ import networkx as nx
 
 # Import KLTN core definitions
 from src.core.definitions import (
-    SEMANTIC_PALETTE,
-    TileID,
-    ROOM_HEIGHT,
-    ROOM_WIDTH,
     EDGE_TYPE_MAP,
 )
 
