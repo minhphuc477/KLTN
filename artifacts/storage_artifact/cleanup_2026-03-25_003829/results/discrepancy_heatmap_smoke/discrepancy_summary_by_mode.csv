@@ -1,0 +1,3 @@
+mode,n_runs,changed_ratio_mean,changed_ratio_std,mean_changed_heat_mean,mean_changed_heat_std,max_heat_mean,max_heat_std
+gat2,1,0.0,,0.0,,0.0,
+lightweight,1,0.0,,0.0,,0.0,

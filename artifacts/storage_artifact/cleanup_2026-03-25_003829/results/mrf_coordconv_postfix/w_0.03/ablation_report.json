@@ -1,0 +1,59 @@
+{
+  "configs": [
+    {
+      "name": "FULL",
+      "use_evolution": true,
+      "random_topology": false,
+      "use_wfc": true,
+      "pure_wfc": false,
+      "logic_guidance_scale": 1.0,
+      "latent_sampler": "diffusion",
+      "categorical_codebook_size": null,
+      "use_tpe": true,
+      "disable_graph_node_cross_attention": false
+    }
+  ],
+  "seeds": [
+    42,
+    43,
+    44,
+    45,
+    46,
+    47,
+    48,
+    49,
+    50,
+    51,
+    52,
+    53
+  ],
+  "summary": [
+    {
+      "config": "FULL",
+      "n": 12,
+      "success_rate": 1.0,
+      "solvability_rate": 0.0,
+      "confusion_ratio": NaN,
+      "confusion_index": 0.0,
+      "path_optimal": 0.0,
+      "tile_prior_kl": 13.683875129655107,
+      "graph_edit_distance": 0.20928903000594176,
+      "generation_time_sec": 18.109653929869335,
+      "novelty": 0.05737380721953908,
+      "reconstruction_error": 0.0,
+      "constraint_valid_rate": 1.0,
+      "room_repair_rate": 0.0,
+      "tiles_repaired": 0.0,
+      "topology_representable_edge_rate": 0.2592592592592593,
+      "topology_edge_connection_recall": 1.0,
+      "topology_phantom_connection_rate": 0.0,
+      "topology_preservation_score": 0.6666666666666666,
+      "directed_representable_edge_rate": 0.026041666666666668,
+      "directed_edge_realization_rate": 0.4166666666666667,
+      "directed_directionality_leak_rate": 0.0,
+      "directed_edge_preservation_score": 0.4166666666666667,
+      "diversity": 0.09732302982761076
+    }
+  ],
+  "significance": []
+}

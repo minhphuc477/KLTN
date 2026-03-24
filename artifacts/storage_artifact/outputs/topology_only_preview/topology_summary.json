@@ -1,0 +1,21 @@
+{
+  "seed": 42,
+  "topology_profile": "gate_quality_heavy",
+  "num_nodes_full": 6,
+  "num_edges_full": 11,
+  "num_nodes_physical": 6,
+  "num_edges_physical": 11,
+  "physical_start_node": 0,
+  "topology_valid": false,
+  "topology_errors": [
+    "No start node found or determined",
+    "No boss node found (required for goal)",
+    "Goal node 1 has degree 2 (should be \u22641)",
+    "Goal node 1 not connected to boss (neighbors: [2, 2])",
+    "Goal node 1 has 1 outgoing edges (should be terminal node)"
+  ],
+  "images": [
+    "topology_full.png",
+    "topology_physical.png"
+  ]
+}

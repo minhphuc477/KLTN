@@ -1,0 +1,8 @@
+config,n,success_rate,solvability_rate,confusion_ratio,confusion_index,path_optimal,tile_prior_kl,graph_edit_distance,generation_time_sec,novelty,reconstruction_error,constraint_valid_rate,room_repair_rate,tiles_repaired,topology_representable_edge_rate,topology_edge_connection_recall,topology_phantom_connection_rate,topology_preservation_score,directed_representable_edge_rate,directed_edge_realization_rate,directed_directionality_leak_rate,directed_edge_preservation_score,diversity
+FULL,1,1.0,1.0,,5999.2,0.0,3.4722764892824425,0.26866883116883117,390.00152492523193,0.18720679903087667,0.8238636363636364,1.0,0.14285714285714285,154.0,0.375,1.0,1.0,0.61875,0.06666666666666667,1.0,0.0,1.0,0.0
+TOPO_LIGHTWEIGHT,0,0.0,0.0,,,0.0,,,,,,,,,,,,,,,,,0.0
+NO_EVOLUTION,0,0.0,0.0,,,0.0,,,,,,,,,,,,,,,,,0.0
+RANDOM_TOPOLOGY,0,0.0,0.0,,,0.0,,,,,,,,,,,,,,,,,0.0
+NO_WFC,0,0.0,0.0,,,0.0,,,,,,,,,,,,,,,,,0.0
+NO_LOGIC,0,0.0,0.0,,,0.0,,,,,,,,,,,,,,,,,0.0
+PURE_WFC,0,0.0,0.0,,,0.0,,,,,,,,,,,,,,,,,0.0

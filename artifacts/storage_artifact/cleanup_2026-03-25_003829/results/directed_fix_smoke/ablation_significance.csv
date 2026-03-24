@@ -1,0 +1,7 @@
+config,metric,n_pairs,delta_mean_cfg_minus_full,delta_ci_low,delta_ci_high,p_value,effect_size_d,p_value_bh_fdr,significant_fdr_0_05
+COND_NO_TPE,solvable,2,0.0,0.0,0.0,1.0,0.0,1.0,False
+COND_NO_TPE,path_optimal,2,0.0,0.0,0.0,1.0,0.0,1.0,False
+COND_NO_TPE,generation_time_sec,2,-0.13173818588256836,-0.255964994430542,-0.0075113773345947266,0.5113721569607598,-1.0604650270130218,1.0,False
+COND_WEAK_GRAPH,solvable,2,0.0,0.0,0.0,1.0,0.0,1.0,False
+COND_WEAK_GRAPH,path_optimal,2,0.0,0.0,0.0,1.0,0.0,1.0,False
+COND_WEAK_GRAPH,generation_time_sec,2,-0.06502926349639893,-0.21786928176879883,0.08781075477600098,1.0,-0.425472754004126,1.0,False

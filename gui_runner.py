@@ -2091,11 +2091,12 @@ class ZeldaGUI:
             gui=self,
         )
     
-    def _handle_minimap_click(self, mouse_pos: Tuple[int, int]) -> bool:
+    def _handle_minimap_click(self, mouse_pos: Tuple[int, int], button: int = 1) -> bool:
         """Handle mouse click on minimap to jump to that location."""
         return _handle_minimap_click_orchestration_helper(
             gui=self,
             mouse_pos=mouse_pos,
+            button=button,
         )
     
     def _render_help_overlay(self):

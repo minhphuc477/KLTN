@@ -1,0 +1,24 @@
+{
+  "seeds": [
+    123
+  ],
+  "modes": [
+    "gat2"
+  ],
+  "num_rooms": 6,
+  "num_diffusion_steps": 8,
+  "outputs": {
+    "room_metrics_csv": "results\\discrepancy_heatmap_study_smoke\\discrepancy_room_metrics.csv",
+    "run_metrics_csv": "results\\discrepancy_heatmap_study_smoke\\discrepancy_run_metrics.csv",
+    "summary_csv": "results\\discrepancy_heatmap_study_smoke\\discrepancy_summary_by_mode.csv",
+    "plots": [
+      "results\\discrepancy_heatmap_study_smoke\\plots\\box_changed_ratio.png",
+      "results\\discrepancy_heatmap_study_smoke\\plots\\seed_lines_changed_ratio.png",
+      "results\\discrepancy_heatmap_study_smoke\\plots\\box_mean_changed_heat.png",
+      "results\\discrepancy_heatmap_study_smoke\\plots\\seed_lines_mean_changed_heat.png",
+      "results\\discrepancy_heatmap_study_smoke\\plots\\box_max_heat.png",
+      "results\\discrepancy_heatmap_study_smoke\\plots\\seed_lines_max_heat.png"
+    ],
+    "room_matrices_dir": "results\\discrepancy_heatmap_study_smoke\\room_matrices"
+  }
+}

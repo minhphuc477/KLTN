@@ -1,12 +1,76 @@
-"""Helper utilities for WFC-guided diffusion feedback in the generation pipeline."""
+"""Helper utilities for WFC-guided and boundary-constrained diffusion inpainting."""
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 import torch
 import torch.nn.functional as F
+
+
+def build_neighbor_boundary_inpaint_inputs(
+    base_latent: torch.Tensor,
+    neighbor_latents: Dict[str, Optional[torch.Tensor]],
+    *,
+    band: int = 1,
+) -> Tuple[torch.Tensor, torch.Tensor, bool]:
+    """
+    Build latent reference + edit mask to hard-preserve shared boundaries.
+
+    Args:
+        base_latent: Current room latent [B, C, H, W]
+        neighbor_latents: Directional neighbor latents {'N','S','E','W'}
+        band: Number of latent cells to preserve per edge
+
+    Returns:
+        reference_latent: [B, C, H, W] with constrained edges copied from neighbors
+        edit_mask: [B, 1, H, W], 1=editable, 0=preserve
+        has_constraints: Whether any neighbor constraint was applied
+    """
+    if base_latent.dim() != 4:
+        raise ValueError("base_latent must be [B, C, H, W]")
+
+    ref = base_latent.clone()
+    bsz, _ch, h, w = ref.shape
+    edge_band_h = max(1, min(int(band), h))
+    edge_band_w = max(1, min(int(band), w))
+
+    edit_mask = torch.ones((bsz, 1, h, w), device=ref.device, dtype=ref.dtype)
+    constrained = False
+
+    def _valid_neighbor(lat: Optional[torch.Tensor]) -> bool:
+        return isinstance(lat, torch.Tensor) and lat.dim() == 4 and tuple(lat.shape) == tuple(ref.shape)
+
+    north = neighbor_latents.get("N")
+    if _valid_neighbor(north):
+        n = north.to(device=ref.device, dtype=ref.dtype)
+        ref[:, :, :edge_band_h, :] = n[:, :, -edge_band_h:, :]
+        edit_mask[:, :, :edge_band_h, :] = 0.0
+        constrained = True
+
+    south = neighbor_latents.get("S")
+    if _valid_neighbor(south):
+        s = south.to(device=ref.device, dtype=ref.dtype)
+        ref[:, :, -edge_band_h:, :] = s[:, :, :edge_band_h, :]
+        edit_mask[:, :, -edge_band_h:, :] = 0.0
+        constrained = True
+
+    west = neighbor_latents.get("W")
+    if _valid_neighbor(west):
+        w_lat = west.to(device=ref.device, dtype=ref.dtype)
+        ref[:, :, :, :edge_band_w] = w_lat[:, :, :, -edge_band_w:]
+        edit_mask[:, :, :, :edge_band_w] = 0.0
+        constrained = True
+
+    east = neighbor_latents.get("E")
+    if _valid_neighbor(east):
+        e = east.to(device=ref.device, dtype=ref.dtype)
+        ref[:, :, :, -edge_band_w:] = e[:, :, :, :edge_band_w]
+        edit_mask[:, :, :, -edge_band_w:] = 0.0
+        constrained = True
+
+    return ref, edit_mask, constrained
 
 
 def build_latent_edit_mask(

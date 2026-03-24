@@ -1,0 +1,3 @@
+seed,mode,n_rooms,changed_ratio,mean_changed_heat,max_heat,changed_tiles
+42,gat2,8,0.0,0.0,0.0,0.0
+42,lightweight,8,0.0,0.0,0.0,0.0

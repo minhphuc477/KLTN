@@ -20,6 +20,7 @@ from src.pipeline import (
     NeuralSymbolicDungeonPipeline,
     create_pipeline,
 )
+from src.pipeline.dungeon_pipeline import RoomGenerationResult
 from src.core import ROOM_HEIGHT, ROOM_WIDTH
 
 
@@ -305,6 +306,77 @@ def test_room_order_preservation(pipeline, simple_graph):
     assert expected_ids == actual_ids, f"Missing rooms: {expected_ids - actual_ids}"
     
     print(f"✓ All {len(expected_ids)} rooms generated correctly")
+
+
+def test_generate_dungeon_passes_boundary_and_position(monkeypatch, pipeline, simple_graph):
+    """Dungeon loop must pass graph-derived boundary constraints and positions into room generation."""
+    captured = []
+
+    def fake_generate_room(**kwargs):
+        captured.append(
+            {
+                'room_id': kwargs.get('room_id'),
+                'boundary_constraints': kwargs.get('boundary_constraints'),
+                'position': kwargs.get('position'),
+            }
+        )
+        rid = int(kwargs.get('room_id', 0))
+        room_grid = np.zeros((ROOM_HEIGHT, ROOM_WIDTH), dtype=np.int32)
+        latent = torch.zeros(1, 64, 4, 3)
+        return RoomGenerationResult(
+            room_id=rid,
+            room_grid=room_grid,
+            latent=latent,
+            neural_grid=room_grid.copy(),
+            was_repaired=False,
+            repair_mask=None,
+            neural_probs=None,
+            metrics={},
+        )
+
+    monkeypatch.setattr(pipeline, 'generate_room', fake_generate_room)
+
+    result = pipeline.generate_dungeon(
+        mission_graph=simple_graph,
+        num_diffusion_steps=1,
+        apply_repair=False,
+        enable_map_elites=False,
+        seed=42,
+    )
+
+    assert result.metrics['num_rooms'] == len(simple_graph.nodes())
+    assert len(captured) == len(simple_graph.nodes())
+    for entry in captured:
+        bc = entry['boundary_constraints']
+        pos = entry['position']
+        assert bc is not None
+        assert tuple(bc.shape) == (1, 8)
+        assert pos is not None
+        assert tuple(pos.shape) == (1, 2)
+
+
+def test_strict_adjacency_placement_preserves_all_edges(pipeline):
+    """Strict placement must embed all graph edges as room-adjacent relationships."""
+    G = nx.DiGraph()
+    G.add_edges_from([(0, 1), (0, 2), (1, 3), (2, 3)])
+
+    placement = pipeline._compute_strict_room_placement(G, room_ids=list(G.nodes()))
+    assert set(placement.keys()) == set(G.nodes())
+
+    for u, v in G.edges():
+        manhattan = abs(placement[u][0] - placement[v][0]) + abs(placement[u][1] - placement[v][1])
+        assert manhattan == 1, f"Edge {u}->{v} is non-adjacent under strict placement"
+
+
+def test_strict_adjacency_placement_rejects_degree_over_four(pipeline):
+    """Grid embedding must fail fast when strict adjacency is mathematically impossible."""
+    G = nx.Graph()
+    G.add_node(0)
+    for nid in [1, 2, 3, 4, 5]:
+        G.add_edge(0, nid)
+
+    with pytest.raises(ValueError, match="degree exceeds 4"):
+        pipeline._compute_strict_room_placement(G, room_ids=list(G.nodes()))
 
 
 # =============================================================================

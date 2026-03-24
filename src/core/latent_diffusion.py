@@ -169,6 +169,7 @@ class CrossAttention(nn.Module):
         context_dim: int, 
         num_heads: int = 8, 
         dropout: float = 0.0,
+        topology_refinement_mode: str = "gat2",
     ):
         super().__init__()
         self.num_heads = num_heads
@@ -183,12 +184,162 @@ class CrossAttention(nn.Module):
         self.v = nn.Linear(context_dim, query_dim)
         self.proj = nn.Linear(query_dim, query_dim)
         self.dropout = nn.Dropout(dropout)
+
+        # Topology-aware context refinement (2-layer graph message passing).
+        self.topology_norm = nn.LayerNorm(context_dim)
+        self.topology_light_self = nn.Linear(context_dim, context_dim)
+        self.topology_light_neigh = nn.Linear(context_dim, context_dim)
+        self.topology_in = nn.ModuleList([nn.Linear(context_dim, context_dim), nn.Linear(context_dim, context_dim)])
+        self.topology_neigh = nn.ModuleList([nn.Linear(context_dim, context_dim), nn.Linear(context_dim, context_dim)])
+        self.topology_gat_q = nn.ModuleList([nn.Linear(context_dim, context_dim), nn.Linear(context_dim, context_dim)])
+        self.topology_gat_k = nn.ModuleList([nn.Linear(context_dim, context_dim), nn.Linear(context_dim, context_dim)])
+        self.topology_gat_v = nn.ModuleList([nn.Linear(context_dim, context_dim), nn.Linear(context_dim, context_dim)])
+        self.topology_gat_o = nn.ModuleList([nn.Linear(context_dim, context_dim), nn.Linear(context_dim, context_dim)])
+        self.topology_refinement_mode = "gat2"
+        self.set_topology_refinement_mode(topology_refinement_mode)
+
+    def set_topology_refinement_mode(self, mode: str) -> None:
+        """Set topology refinement mode: none | lightweight | gat2 (alias: upgraded)."""
+        m = str(mode).strip().lower()
+        if m == "upgraded":
+            m = "gat2"
+        if m not in {"none", "lightweight", "gat2"}:
+            raise ValueError(
+                f"Invalid topology_refinement_mode={mode!r}. Expected 'none', 'lightweight', or 'gat2'."
+            )
+        self.topology_refinement_mode = m
     
-    def forward(self, x: Tensor, context: Tensor) -> Tensor:
+    def _normalize_adjacency(self, num_nodes: int, edge_index: Tensor, device: torch.device, dtype: torch.dtype) -> Tensor:
+        """Build normalized adjacency with self loops for lightweight GCN refinement."""
+        adj = torch.zeros(num_nodes, num_nodes, device=device, dtype=dtype)
+        if edge_index.numel() > 0:
+            src = edge_index[0].long().clamp(0, max(0, num_nodes - 1))
+            dst = edge_index[1].long().clamp(0, max(0, num_nodes - 1))
+            adj[src, dst] = 1.0
+            adj[dst, src] = 1.0
+        adj = adj + torch.eye(num_nodes, device=device, dtype=dtype)
+        deg = adj.sum(dim=1).clamp(min=1.0)
+        inv_sqrt = deg.pow(-0.5)
+        return inv_sqrt[:, None] * adj * inv_sqrt[None, :]
+
+    def _refine_context_topology(
+        self,
+        context: Tensor,
+        edge_index: Optional[Tensor] = None,
+        node_mask: Optional[Tensor] = None,
+    ) -> Tensor:
+        """
+        Refine token context with topology-aware message passing before K/V projection.
+
+        Args:
+            context: [B, L, C]
+            edge_index: [2, E] or [B, 2, E]
+            node_mask: [B, L] optional valid-token mask
+        """
+        if edge_index is None or context.dim() != 3 or self.topology_refinement_mode == "none":
+            return context
+
+        bsz, seq_len, _ctx_dim = context.shape
+        refined = self.topology_norm(context)
+
+        if node_mask is not None and node_mask.dim() == 2 and node_mask.shape[0] == 1 and bsz > 1:
+            node_mask = node_mask.expand(bsz, -1)
+
+        outputs: List[Tensor] = []
+        for bi in range(bsz):
+            xb = refined[bi]
+            if node_mask is not None and node_mask.dim() == 2 and bi < node_mask.shape[0]:
+                valid = node_mask[bi].to(dtype=torch.bool)
+                if valid.shape[0] > seq_len:
+                    valid = valid[:seq_len]
+                elif valid.shape[0] < seq_len:
+                    valid = F.pad(valid, (0, seq_len - valid.shape[0]), value=False)
+            else:
+                valid = torch.ones(seq_len, device=xb.device, dtype=torch.bool)
+
+            valid_idx = torch.nonzero(valid, as_tuple=False).flatten()
+            valid_count = int(valid_idx.numel())
+
+            if valid_count <= 0:
+                outputs.append(xb)
+                continue
+
+            if edge_index.dim() == 3:
+                if edge_index.shape[0] == bsz:
+                    ei = edge_index[bi]
+                elif edge_index.shape[0] == 1:
+                    ei = edge_index[0]
+                else:
+                    ei = edge_index[min(bi, edge_index.shape[0] - 1)]
+            else:
+                ei = edge_index
+
+            # Restrict message passing to valid tokens while preserving padded slots.
+            valid_x = xb.index_select(0, valid_idx)
+
+            if ei.numel() > 0:
+                src = ei[0].long()
+                dst = ei[1].long()
+                in_bounds = (src >= 0) & (src < seq_len) & (dst >= 0) & (dst < seq_len)
+                src = src[in_bounds]
+                dst = dst[in_bounds]
+
+                local_map = torch.full((seq_len,), -1, device=xb.device, dtype=torch.long)
+                local_map[valid_idx] = torch.arange(valid_count, device=xb.device, dtype=torch.long)
+                src_local = local_map[src]
+                dst_local = local_map[dst]
+                keep = (src_local >= 0) & (dst_local >= 0)
+                if bool(keep.any()):
+                    ei_local = torch.stack([src_local[keep], dst_local[keep]], dim=0)
+                else:
+                    ei_local = torch.empty((2, 0), device=xb.device, dtype=torch.long)
+            else:
+                ei_local = torch.empty((2, 0), device=xb.device, dtype=torch.long)
+
+            norm_adj = self._normalize_adjacency(valid_count, ei_local, device=valid_x.device, dtype=valid_x.dtype)
+
+            h = valid_x
+            if self.topology_refinement_mode == "lightweight":
+                neigh = norm_adj @ h
+                update = F.gelu(self.topology_light_self(h) + self.topology_light_neigh(neigh))
+                h = h + self.dropout(update)
+            else:
+                attn_mask = norm_adj > 0.0
+                for q_lin, k_lin, v_lin, o_lin in zip(
+                    self.topology_gat_q,
+                    self.topology_gat_k,
+                    self.topology_gat_v,
+                    self.topology_gat_o,
+                ):
+                    q = q_lin(h)
+                    k = k_lin(h)
+                    v = v_lin(h)
+                    scores = (q @ k.transpose(0, 1)) / (q.shape[-1] ** 0.5)
+                    scores = scores.masked_fill(~attn_mask, float("-inf"))
+                    attn = torch.softmax(scores, dim=-1)
+                    attn = self.dropout(attn)
+                    update = o_lin(attn @ v)
+                    h = h + self.dropout(F.gelu(update))
+
+            full = xb.clone()
+            full[valid_idx] = h
+            outputs.append(full)
+
+        return torch.stack(outputs, dim=0)
+    
+    def forward(
+        self,
+        x: Tensor,
+        context: Tensor,
+        edge_index: Optional[Tensor] = None,
+        node_mask: Optional[Tensor] = None,
+    ) -> Tensor:
         """
         Args:
             x: Query [B, H*W, C]
             context: Context [B, context_dim] or [B, L, context_dim]
+            edge_index: Optional graph topology for context tokens [2, E] or [B, 2, E]
+            node_mask: Optional valid-token mask [B, L]
         Returns:
             [B, H*W, C]
         """
@@ -199,6 +350,7 @@ class CrossAttention(nn.Module):
         # Handle 2D context
         if context.dim() == 2:
             context = context.unsqueeze(1)
+        context = self._refine_context_topology(context, edge_index=edge_index, node_mask=node_mask)
         context = self.norm_context(context)
         
         q = self.q(x).reshape(B, N, self.num_heads, self.head_dim).transpose(1, 2)
@@ -306,11 +458,19 @@ class AttentionBlock(nn.Module):
             nn.Linear(dim * 4, dim),
         )
     
-    def forward(self, x: Tensor, context: Tensor) -> Tensor:
+    def forward(
+        self,
+        x: Tensor,
+        context: Tensor,
+        context_edge_index: Optional[Tensor] = None,
+        context_node_mask: Optional[Tensor] = None,
+    ) -> Tensor:
         """
         Args:
             x: [B, C, H, W]
             context: [B, context_dim]
+            context_edge_index: Optional topology for context tokens [2, E] or [B, 2, E]
+            context_node_mask: Optional valid-token mask [B, L]
         """
         B, C, H, W = x.shape
         
@@ -321,7 +481,12 @@ class AttentionBlock(nn.Module):
         x_flat = x_flat + self.self_attn(x_flat)
         
         # Cross-attention with context
-        x_flat = x_flat + self.cross_attn(x_flat, context)
+        x_flat = x_flat + self.cross_attn(
+            x_flat,
+            context,
+            edge_index=context_edge_index,
+            node_mask=context_node_mask,
+        )
         
         # FFN
         x_flat = x_flat + self.ffn(x_flat)
@@ -366,6 +531,8 @@ class DownBlock(nn.Module):
         x: Tensor, 
         t_emb: Tensor, 
         context: Tensor,
+        context_edge_index: Optional[Tensor] = None,
+        context_node_mask: Optional[Tensor] = None,
     ) -> Tuple[Tensor, List[Tensor]]:
         """
         Returns:
@@ -376,7 +543,12 @@ class DownBlock(nn.Module):
         for res_block, attn_block in zip(self.res_blocks, self.attn_blocks):
             x = res_block(x, t_emb)
             if not isinstance(attn_block, nn.Identity):
-                x = attn_block(x, context)
+                x = attn_block(
+                    x,
+                    context,
+                    context_edge_index=context_edge_index,
+                    context_node_mask=context_node_mask,
+                )
             skips.append(x)
         
         if self.downsample is not None:
@@ -429,6 +601,8 @@ class UpBlock(nn.Module):
         all_skips: List[Tensor], 
         t_emb: Tensor, 
         context: Tensor,
+        context_edge_index: Optional[Tensor] = None,
+        context_node_mask: Optional[Tensor] = None,
     ) -> Tensor:
         """Pop num_res_blocks skip connections from all_skips (from the end)."""
         if self.upsample is not None:
@@ -443,7 +617,12 @@ class UpBlock(nn.Module):
             
             x = res_block(x, t_emb)
             if not isinstance(attn_block, nn.Identity):
-                x = attn_block(x, context)
+                x = attn_block(
+                    x,
+                    context,
+                    context_edge_index=context_edge_index,
+                    context_node_mask=context_node_mask,
+                )
         
         return x
 
@@ -554,6 +733,8 @@ class UNetDenoiser(nn.Module):
         x: Tensor, 
         t: Tensor, 
         context: Tensor,
+        context_edge_index: Optional[Tensor] = None,
+        context_node_mask: Optional[Tensor] = None,
     ) -> Tensor:
         """
         Predict noise in x_t.
@@ -575,17 +756,35 @@ class UNetDenoiser(nn.Module):
         # Encoder with skip connections
         all_skips = []
         for down_block in self.down_blocks:
-            h, skips = down_block(h, t_emb, context)
+            h, skips = down_block(
+                h,
+                t_emb,
+                context,
+                context_edge_index=context_edge_index,
+                context_node_mask=context_node_mask,
+            )
             all_skips.extend(skips)
         
         # Bottleneck
         h = self.mid_block1(h, t_emb)
-        h = self.mid_attn(h, context)
+        h = self.mid_attn(
+            h,
+            context,
+            context_edge_index=context_edge_index,
+            context_node_mask=context_node_mask,
+        )
         h = self.mid_block2(h, t_emb)
         
         # Decoder with skip connections
         for up_block in self.up_blocks:
-            h = up_block(h, all_skips, t_emb, context)
+            h = up_block(
+                h,
+                all_skips,
+                t_emb,
+                context,
+                context_edge_index=context_edge_index,
+                context_node_mask=context_node_mask,
+            )
         
         # Output
         h = self.output_norm(h)
@@ -747,6 +946,7 @@ class LatentDiffusionModel(nn.Module):
         prediction_type: str = 'epsilon',  # 'epsilon' or 'v'
         # --- Phase 4B: Min-SNR-γ weighting (Hang et al., ICCV 2023) ---
         min_snr_gamma: float = 5.0,
+        topology_refinement_mode: str = "gat2",
     ):
         super().__init__()
         
@@ -765,6 +965,7 @@ class LatentDiffusionModel(nn.Module):
             out_channels=latent_dim,
             context_dim=context_dim,
         )
+        self.set_topology_refinement_mode(topology_refinement_mode)
         
         # Gradient guidance
         self.guidance = GradientGuidance(
@@ -791,6 +992,22 @@ class LatentDiffusionModel(nn.Module):
         posterior_variance = betas * (1.0 - alphas_cumprod_prev) / (1.0 - alphas_cumprod)
         self.register_buffer('posterior_variance', posterior_variance)
         self.register_buffer('posterior_log_variance', torch.log(torch.clamp(posterior_variance, min=1e-20)))
+
+    def set_topology_refinement_mode(self, mode: str) -> int:
+        """Set topology refinement mode across all active CrossAttention layers."""
+        updated = 0
+        for module in self.modules():
+            if isinstance(module, CrossAttention):
+                module.set_topology_refinement_mode(mode)
+                updated += 1
+        return updated
+
+    def get_topology_refinement_mode(self) -> str:
+        """Get current topology refinement mode from first CrossAttention layer."""
+        for module in self.modules():
+            if isinstance(module, CrossAttention):
+                return str(getattr(module, "topology_refinement_mode", "gat2"))
+        return "gat2"
     
     def q_sample(
         self, 
@@ -811,11 +1028,55 @@ class LatentDiffusionModel(nn.Module):
         
         return sqrt_alpha_t * x_0 + sqrt_one_minus_alpha_t * noise
     
+    def _extract_context_topology(
+        self,
+        context: Tensor,
+        graph_data: Optional[Dict[str, Tensor]] = None,
+    ) -> Tuple[Optional[Tensor], Optional[Tensor]]:
+        """Prepare topology tensors for context-token cross-attention refinement."""
+        if graph_data is None or context.dim() != 3:
+            return None, None
+
+        edge_index = graph_data.get("edge_index") if isinstance(graph_data, dict) else None
+        if not isinstance(edge_index, torch.Tensor):
+            return None, None
+
+        seq_len = int(context.shape[1])
+        adjusted = edge_index.to(context.device)
+
+        # If an anchor token is prepended to node tokens, shift edges by +1.
+        node_features = graph_data.get("node_features") if isinstance(graph_data, dict) else None
+        if isinstance(node_features, torch.Tensor):
+            num_nodes = int(node_features.shape[0])
+            if seq_len == num_nodes + 1:
+                adjusted = adjusted + 1
+
+        node_mask = graph_data.get("node_mask") if isinstance(graph_data, dict) else None
+        if isinstance(node_mask, torch.Tensor):
+            node_mask = node_mask.to(context.device)
+            if node_mask.dim() == 1:
+                node_mask = node_mask.unsqueeze(0)
+            if node_mask.shape[1] + 1 == seq_len:
+                anchor = torch.ones(node_mask.shape[0], 1, device=node_mask.device, dtype=node_mask.dtype)
+                node_mask = torch.cat([anchor, node_mask], dim=1)
+            if node_mask.shape[1] != seq_len:
+                if node_mask.shape[1] > seq_len:
+                    node_mask = node_mask[:, :seq_len]
+                else:
+                    node_mask = F.pad(node_mask, (0, seq_len - node_mask.shape[1]), value=0)
+            if node_mask.shape[0] == 1 and context.shape[0] > 1:
+                node_mask = node_mask.expand(context.shape[0], -1)
+        else:
+            node_mask = None
+
+        return adjusted, node_mask
+
     def _predict_noise_cfg(
         self,
         x_t: Tensor,
         t: Tensor,
         context: Tensor,
+        graph_data: Optional[Dict[str, Tensor]] = None,
     ) -> Tensor:
         """
         Predict noise with Classifier-Free Guidance (CFG).
@@ -823,7 +1084,14 @@ class LatentDiffusionModel(nn.Module):
         At inference: ε̃ = ε_uncond + s * (ε_cond - ε_uncond)
         where s = cfg_scale. When s=1 → standard conditional, s>1 → stronger conditioning.
         """
-        pred_cond = self.denoiser(x_t, t, context)
+        context_edge_index, context_node_mask = self._extract_context_topology(context, graph_data)
+        pred_cond = self.denoiser(
+            x_t,
+            t,
+            context,
+            context_edge_index=context_edge_index,
+            context_node_mask=context_node_mask,
+        )
         
         if self.cfg_scale > 1.0:
             # Unconditional prediction (zero context)
@@ -867,6 +1135,7 @@ class LatentDiffusionModel(nn.Module):
         x_t: Tensor,
         t: Tensor,
         context: Tensor,
+        graph_data: Optional[Dict[str, Tensor]] = None,
         clip_denoised: bool = True,
     ) -> Tuple[Tensor, Tensor, Tensor]:
         """
@@ -874,7 +1143,7 @@ class LatentDiffusionModel(nn.Module):
         Now supports CFG and v-prediction.
         """
         # Predict with CFG
-        prediction = self._predict_noise_cfg(x_t, t, context)
+        prediction = self._predict_noise_cfg(x_t, t, context, graph_data=graph_data)
         
         # Convert to pred_x0 and pred_noise
         pred_x0, _pred_noise = self._convert_prediction(prediction, x_t, t)
@@ -915,7 +1184,7 @@ class LatentDiffusionModel(nn.Module):
         t_tensor = torch.full((B,), t, device=x_t.device, dtype=torch.long)
         
         # Get mean and variance
-        mean, variance, _ = self.p_mean_variance(x_t, t_tensor, context)
+        mean, variance, _ = self.p_mean_variance(x_t, t_tensor, context, graph_data=graph_data)
         
         # Apply gradient guidance
         if self.guidance.logic_net is not None and self.guidance.guidance_scale > 0:
@@ -1000,7 +1269,7 @@ class LatentDiffusionModel(nn.Module):
             t_tensor = torch.full((shape[0],), t, device=device, dtype=torch.long)
             
             # Predict with CFG
-            prediction = self._predict_noise_cfg(x_t, t_tensor, context)
+            prediction = self._predict_noise_cfg(x_t, t_tensor, context, graph_data=graph_data)
             
             # Convert to (pred_x0, pred_noise) supporting v-prediction
             pred_x0, pred_noise = self._convert_prediction(prediction, x_t, t_tensor)

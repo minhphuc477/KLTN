@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional, Tuple, Set
+from typing import Any, Dict, Optional, Tuple, Set
 
 import networkx as nx
 import numpy as np
 
-from src.core.definitions import ROOM_HEIGHT, ROOM_WIDTH, SEMANTIC_PALETTE, parse_node_label_tokens
+from src.core.definitions import ROOM_HEIGHT, ROOM_WIDTH, SEMANTIC_PALETTE, parse_edge_type_tokens, parse_node_label_tokens
 
 
 def parse_label_tokens(label: Any) -> Set[str]:
@@ -141,14 +141,48 @@ def carve_room_connection(
     global_grid: np.ndarray,
     src_pos: Tuple[int, int],
     dst_pos: Tuple[int, int],
+    edge_data: Optional[Dict[str, Any]] = None,
+    has_reverse_edge: bool = False,
 ) -> None:
-    """Carve floor tiles at shared boundaries for adjacent rooms."""
+    """Carve boundary connectors for adjacent rooms, preserving edge semantics when possible."""
     dr = dst_pos[0] - src_pos[0]
     dc = dst_pos[1] - src_pos[1]
     if abs(dr) + abs(dc) != 1:
         return
 
     floor_id = int(SEMANTIC_PALETTE.get("FLOOR", 1))
+    wall_id = int(SEMANTIC_PALETTE.get("WALL", 2))
+
+    data = edge_data or {}
+    label = str(data.get("label", "") or "")
+    edge_type = str(data.get("edge_type", data.get("type", "")) or "")
+    edge_tokens = set(parse_edge_type_tokens(label=label, edge_type=edge_type))
+
+    # Default connector semantics.
+    src_tile = floor_id
+    dst_tile = floor_id
+
+    # Encode gate semantics into boundary tiles.
+    if {"key_locked", "locked"}.intersection(edge_tokens):
+        src_tile = int(SEMANTIC_PALETTE.get("DOOR_LOCKED", floor_id))
+        dst_tile = int(SEMANTIC_PALETTE.get("DOOR_LOCKED", floor_id))
+    elif "boss_locked" in edge_tokens:
+        src_tile = int(SEMANTIC_PALETTE.get("DOOR_BOSS", floor_id))
+        dst_tile = int(SEMANTIC_PALETTE.get("DOOR_BOSS", floor_id))
+    elif "bombable" in edge_tokens:
+        src_tile = int(SEMANTIC_PALETTE.get("DOOR_BOMB", floor_id))
+        dst_tile = int(SEMANTIC_PALETTE.get("DOOR_BOMB", floor_id))
+    elif {"item_gate", "item_locked", "switch", "switch_locked", "on_off_gate", "state_block"}.intersection(edge_tokens):
+        src_tile = int(SEMANTIC_PALETTE.get("DOOR_PUZZLE", floor_id))
+        dst_tile = int(SEMANTIC_PALETTE.get("DOOR_PUZZLE", floor_id))
+
+    # If there is no reverse edge (or explicit one-way token), mark source as soft door
+    # and keep destination as a normal doorway. This preserves directional intent in tiles
+    # while keeping traversal possible for current grid-only validators.
+    if (not has_reverse_edge) or {"soft_locked", "one_way", "shutter"}.intersection(edge_tokens):
+        src_tile = int(SEMANTIC_PALETTE.get("DOOR_SOFT", src_tile))
+        if dst_tile == wall_id:
+            dst_tile = floor_id
 
     if dr != 0:
         src_row = (src_pos[0] + (1 if dr > 0 else 0)) * ROOM_HEIGHT - (1 if dr > 0 else 0)
@@ -156,9 +190,9 @@ def carve_room_connection(
         center_c = src_pos[1] * ROOM_WIDTH + ROOM_WIDTH // 2
         for col in range(center_c - 2, center_c + 3):
             if 0 <= src_row < global_grid.shape[0] and 0 <= col < global_grid.shape[1]:
-                global_grid[src_row, col] = floor_id
+                global_grid[src_row, col] = src_tile
             if 0 <= dst_row < global_grid.shape[0] and 0 <= col < global_grid.shape[1]:
-                global_grid[dst_row, col] = floor_id
+                global_grid[dst_row, col] = dst_tile
         return
 
     src_col = (src_pos[1] + (1 if dc > 0 else 0)) * ROOM_WIDTH - (1 if dc > 0 else 0)
@@ -166,6 +200,6 @@ def carve_room_connection(
     center_r = src_pos[0] * ROOM_HEIGHT + ROOM_HEIGHT // 2
     for row in range(center_r - 2, center_r + 3):
         if 0 <= row < global_grid.shape[0] and 0 <= src_col < global_grid.shape[1]:
-            global_grid[row, src_col] = floor_id
+            global_grid[row, src_col] = src_tile
         if 0 <= row < global_grid.shape[0] and 0 <= dst_col < global_grid.shape[1]:
-            global_grid[row, dst_col] = floor_id
+            global_grid[row, dst_col] = dst_tile

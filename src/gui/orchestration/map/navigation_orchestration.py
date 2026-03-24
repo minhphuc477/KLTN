@@ -70,5 +70,5 @@ def render_minimap(*, gui):
     _render_minimap(gui, pygame)
 
 
-def handle_minimap_click(*, gui, mouse_pos):
-    return _handle_minimap_click(gui, mouse_pos)
+def handle_minimap_click(*, gui, mouse_pos, button=1):
+    return _handle_minimap_click(gui, mouse_pos, pygame_module=pygame, button=button)

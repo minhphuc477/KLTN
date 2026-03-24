@@ -182,8 +182,12 @@ def handle_mouse_button_down_event(gui, event, mouse_pos, pygame_module):
     if gui.control_panel_enabled and gui._handle_control_panel_click(mouse_pos, event.button, "down"):
         return True
 
+    if event.button in (1, 3):
+        if gui._handle_minimap_click(mouse_pos, button=event.button):
+            return True
+
     if event.button == 1:
-        if not gui._handle_minimap_click(mouse_pos):
+        if not gui._handle_minimap_click(mouse_pos, button=event.button):
             sidebar_x = gui.screen_w - gui.SIDEBAR_WIDTH
             if mouse_pos[0] < sidebar_x and not (
                 gui.control_panel_enabled

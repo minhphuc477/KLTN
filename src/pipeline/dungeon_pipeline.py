@@ -40,6 +40,7 @@ Usage:
 
 import json
 import logging
+import hashlib
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Any
 from dataclasses import dataclass, field
@@ -74,6 +75,7 @@ from src.zelda_data.vglc_utils import (
 from src.utils.graph_utils import validate_graph_topology
 from src.pipeline.repair_feedback import (
     build_latent_edit_mask,
+    build_neighbor_boundary_inpaint_inputs,
     wfc_guided_inpaint_room,
 )
 from src.pipeline.spatial_utils import (
@@ -95,6 +97,7 @@ from src.pipeline.graph_features import (
     extract_node_feature_vector,
     fit_feature_vector,
 )
+from src.core.condition_encoder import build_boundary_constraints
 from src.pipeline.block_contracts import (
     BlockShapeContract,
     summarize_missing_keys,
@@ -120,6 +123,15 @@ def _stable_node_sort_key(node: Any) -> Tuple[int, Any]:
     return (2, str(node))
 
 
+def _stable_node_seed_offset(node: Any) -> int:
+    """Deterministic integer seed offset for arbitrary node-id types."""
+    if isinstance(node, (int, np.integer)):
+        return int(node) & 0xFFFFFFFF
+    payload = repr(node).encode("utf-8", errors="ignore")
+    digest = hashlib.blake2b(payload, digest_size=4).digest()
+    return int.from_bytes(digest, byteorder="little", signed=False)
+
+
 # =============================================================================
 # DATA STRUCTURES
 # =============================================================================
@@ -133,6 +145,7 @@ class RoomGenerationResult:
     neural_grid: np.ndarray  # (16, 11) before symbolic repair
     was_repaired: bool
     repair_mask: Optional[np.ndarray] = None  # (16, 11) bool mask
+    neural_probs: Optional[np.ndarray] = None  # (44, 16, 11) pre-repair tile probabilities
     metrics: Dict[str, float] = field(default_factory=dict)
 
 
@@ -184,7 +197,9 @@ class NeuralSymbolicDungeonPipeline:
         enable_logging: bool = True,
         strict_checkpoint_mode: bool = False,
         use_graph_node_cross_attention: bool = True,
+        use_latent_boundary_masking: bool = True,
         condition_gnn_type: str = "gcn",
+        topology_refinement_mode: str = "gat2",
     ):
         # Device setup
         if device == 'auto':
@@ -197,6 +212,15 @@ class NeuralSymbolicDungeonPipeline:
 
         self.strict_checkpoint_mode = bool(strict_checkpoint_mode)
         self.use_graph_node_cross_attention = bool(use_graph_node_cross_attention)
+        self.use_latent_boundary_masking = bool(use_latent_boundary_masking)
+        self.topology_refinement_mode = str(topology_refinement_mode).strip().lower()
+        if self.topology_refinement_mode == "upgraded":
+            self.topology_refinement_mode = "gat2"
+        if self.topology_refinement_mode not in {"none", "lightweight", "gat2"}:
+            raise ValueError(
+                f"Invalid topology_refinement_mode={topology_refinement_mode!r}. "
+                "Expected 'none', 'lightweight', or 'gat2'."
+            )
         gnn_type = str(condition_gnn_type).strip().lower()
         if gnn_type not in {"gcn", "gat", "sage"}:
             raise ValueError(
@@ -293,7 +317,20 @@ class NeuralSymbolicDungeonPipeline:
             if state_dict is None and isinstance(checkpoint, dict):
                 state_dict = checkpoint.get('model_state_dict', checkpoint)
             if isinstance(state_dict, dict):
-                model.load_state_dict(state_dict)
+                incompatible = model.load_state_dict(state_dict, strict=False)
+                missing = [str(k) for k in getattr(incompatible, 'missing_keys', [])]
+                unexpected = [str(k) for k in getattr(incompatible, 'unexpected_keys', [])]
+
+                # Legacy checkpoints created before explicit legality buffer registration.
+                allowed_missing = {"illegal_adjacency_matrix"}
+                unexpected_missing = [k for k in missing if k not in allowed_missing]
+
+                if unexpected_missing or unexpected:
+                    logger.warning(
+                        "VQ-VAE checkpoint key mismatch. missing=%s unexpected=%s",
+                        unexpected_missing,
+                        unexpected,
+                    )
             else:
                 model.load_state_dict(checkpoint)
             logger.info(f"Loaded VQ-VAE from {checkpoint_path}")
@@ -410,6 +447,7 @@ class NeuralSymbolicDungeonPipeline:
             context_dim=256,
             num_timesteps=1000,
             model_channels=128,
+            topology_refinement_mode=self.topology_refinement_mode,
         ).to(self.device)
         
         if checkpoint_path and Path(checkpoint_path).exists():
@@ -613,6 +651,10 @@ class NeuralSymbolicDungeonPipeline:
             )
         except (AttributeError, RuntimeError, ValueError, TypeError) as e:
             self._bump_diagnostic("condition_encoder_fallback")
+            if self.strict_checkpoint_mode:
+                raise RuntimeError(
+                    f"Condition encoding failed in strict mode: {e}"
+                ) from e
             logger.warning(f"Condition encoding failed: {e}, using zero condition")
             condition = torch.zeros(1, 256, device=self.device)
 
@@ -718,6 +760,27 @@ class NeuralSymbolicDungeonPipeline:
                 ),
             )
 
+            # Autoregressive spatial generation: preserve known boundary latents from generated neighbors.
+            if self.use_latent_boundary_masking:
+                try:
+                    z_ref, boundary_edit_mask, has_boundary_constraints = build_neighbor_boundary_inpaint_inputs(
+                        base_latent=z_latent,
+                        neighbor_latents=neighbor_latents,
+                        band=1,
+                    )
+                    if has_boundary_constraints:
+                        z_latent = self.diffusion.inpaint(
+                            x_0=z_ref,
+                            mask=boundary_edit_mask,
+                            context=condition,
+                            graph_data=graph_data,
+                            num_steps=max(8, int(num_diffusion_steps) // 2),
+                        )
+                        self._bump_diagnostic("boundary_latent_masking_applied")
+                except (AttributeError, RuntimeError, ValueError, TypeError) as e:
+                    self._bump_diagnostic("boundary_latent_masking_fallback")
+                    logger.debug("Boundary latent masking skipped due to error: %s", e)
+
             # BLOCK II: VQ-VAE Decoding
             logits = self.vqvae.decode(z_latent)  # (1, 44, 16, 11)
         validate_tensor_contract(
@@ -731,6 +794,7 @@ class NeuralSymbolicDungeonPipeline:
             ),
         )
         neural_grid = logits.argmax(dim=1).cpu().numpy()[0]  # (16, 11)
+        neural_probs = logits.softmax(dim=1).detach().cpu().numpy()[0]  # (44, 16, 11)
         
         # BLOCK VI: Symbolic Repair (if enabled)
         was_repaired = False
@@ -812,6 +876,7 @@ class NeuralSymbolicDungeonPipeline:
             neural_grid=neural_grid,
             was_repaired=was_repaired,
             repair_mask=repair_mask,
+            neural_probs=neural_probs,
             metrics=metrics,
         )
     
@@ -908,6 +973,10 @@ class NeuralSymbolicDungeonPipeline:
             # Validate generated topology
             is_valid, errors = validate_graph_topology(mission_graph)
             if not is_valid:
+                if self.strict_checkpoint_mode:
+                    raise ValueError(
+                        f"Block I: Generated topology failed validation in strict mode: {errors}"
+                    )
                 logger.warning(f"Block I: Generated topology has validation errors: {errors}")
         
         # Continue with existing pipeline (Blocks II-VII)
@@ -962,7 +1031,22 @@ class NeuralSymbolicDungeonPipeline:
             
             # Get start/goal for repair
             start_goal = self._extract_room_start_goal(mission_graph_physical, room_id)
+
+            # Build explicit topology-aware local conditioning.
+            boundary_constraints = self._build_room_boundary_constraints(
+                graph=mission_graph_physical,
+                room_id=room_id,
+            )
+            room_position = self._build_room_position_tensor(
+                graph=mission_graph_physical,
+                room_id=room_id,
+                fallback_order_index=idx,
+            )
             
+            room_seed = None
+            if seed is not None:
+                room_seed = int(seed) + int(_stable_node_seed_offset(room_id))
+
             # Generate room
             room_result = self.generate_room(
                 neighbor_latents=neighbor_latents,
@@ -974,6 +1058,8 @@ class NeuralSymbolicDungeonPipeline:
                     'current_node_idx': graph_data.get('node_to_idx', {}).get(room_id, idx),
                 },
                 room_id=room_id,
+                boundary_constraints=boundary_constraints,
+                position=room_position,
                 guidance_scale=guidance_scale,
                 logic_guidance_scale=logic_guidance_scale,
                 num_diffusion_steps=num_diffusion_steps,
@@ -981,7 +1067,7 @@ class NeuralSymbolicDungeonPipeline:
                 categorical_codebook_size=categorical_codebook_size,
                 apply_repair=apply_repair,
                 start_goal_coords=start_goal,
-                seed=seed + room_id if seed is not None else None,
+                seed=room_seed,
             )
             
             rooms[room_id] = room_result
@@ -1018,10 +1104,15 @@ class NeuralSymbolicDungeonPipeline:
         
         # Compute overall metrics
         generation_time = time.time() - start_time
+        num_rooms_generated = len(rooms)
         metrics = {
-            'num_rooms': len(rooms),
+            'num_rooms': num_rooms_generated,
             'total_tiles_repaired': sum(r.metrics.get('tiles_changed', 0) for r in rooms.values()),
-            'repair_rate': sum(r.was_repaired for r in rooms.values()) / len(rooms),
+            'repair_rate': (
+                sum(r.was_repaired for r in rooms.values()) / max(1, num_rooms_generated)
+                if num_rooms_generated > 0
+                else 0.0
+            ),
             'dungeon_shape': dungeon_grid.shape,
             'generation_time_sec': generation_time,
         }
@@ -1146,7 +1237,7 @@ class NeuralSymbolicDungeonPipeline:
             return neighbor_dict
 
         unresolved: List[int] = []
-        for nid in sorted(neighbor_ids):
+        for nid in sorted(neighbor_ids, key=_stable_node_sort_key):
             direction = self._infer_direction(graph, source_node=nid, target_node=room_id)
             if direction is not None and neighbor_dict[direction] is None:
                 neighbor_dict[direction] = generated_latents[nid].to(self.device)
@@ -1217,35 +1308,18 @@ class NeuralSymbolicDungeonPipeline:
         if not rooms:
             return np.zeros((ROOM_HEIGHT, ROOM_WIDTH), dtype=np.int32)
 
-        # Prefer explicit node positions when present.
-        placement: Dict[int, Tuple[int, int]] = {}
-        occupied = set()
-        for room_id in rooms.keys():
-            pos = self._get_node_grid_position(graph, room_id)
-            if pos is None:
-                continue
-            pos = self._first_free_position(pos, occupied)
-            placement[room_id] = pos
-            occupied.add(pos)
+        for room_id, room_result in rooms.items():
+            valid_dims, dim_msg = validate_room_dimensions(room_result.room_grid)
+            if not valid_dims:
+                raise ValueError(
+                    "CRITICAL: Room dimension mismatch before stitching for "
+                    f"room {room_id}. {dim_msg}"
+                )
 
-        # Fallback placement for nodes without coordinates.
-        if graph.is_directed():
-            try:
-                order = [n for n in nx.topological_sort(graph) if n in rooms]
-            except nx.NetworkXUnfeasible:
-                order = sorted(rooms.keys())
-        else:
-            order = sorted(rooms.keys())
-
-        next_row = max((r for r, _ in occupied), default=-1) + 1
-        for room_id in order:
-            if room_id in placement:
-                continue
-            while (next_row, 0) in occupied:
-                next_row += 1
-            placement[room_id] = (next_row, 0)
-            occupied.add((next_row, 0))
-            next_row += 1
+        placement = self._compute_strict_room_placement(
+            graph=graph,
+            room_ids=list(rooms.keys()),
+        )
 
         # Normalize to non-negative origin.
         min_r = min(r for r, _ in placement.values())
@@ -1263,7 +1337,7 @@ class NeuralSymbolicDungeonPipeline:
         )
 
         for room_id, (grid_r, grid_c) in placement.items():
-            room_grid = self._fit_room_grid(rooms[room_id].room_grid)
+            room_grid = rooms[room_id].room_grid.astype(np.int32, copy=False)
             r0 = grid_r * ROOM_HEIGHT
             c0 = grid_c * ROOM_WIDTH
             global_grid[r0:r0 + ROOM_HEIGHT, c0:c0 + ROOM_WIDTH] = room_grid
@@ -1271,9 +1345,245 @@ class NeuralSymbolicDungeonPipeline:
         # Carve door openings for adjacent graph-connected rooms.
         for u, v in graph.edges():
             if u in placement and v in placement:
-                self._carve_room_connection(global_grid, placement[u], placement[v])
+                src = placement[u]
+                dst = placement[v]
+                if (abs(src[0] - dst[0]) + abs(src[1] - dst[1])) != 1:
+                    raise ValueError(
+                        "Strict adjacency placement invariant violated for edge "
+                        f"{u!r}->{v!r}: {src} vs {dst}"
+                    )
+                self._carve_room_connection(
+                    global_grid,
+                    src,
+                    dst,
+                    edge_data=graph.get_edge_data(u, v, default={}) or {},
+                    has_reverse_edge=bool(graph.has_edge(v, u)),
+                )
 
         return global_grid
+
+    def _build_room_boundary_constraints(
+        self,
+        graph: nx.Graph,
+        room_id: Any,
+    ) -> torch.Tensor:
+        """Build [1, 8] boundary constraints from incident topology edges."""
+        has_neighbor: Dict[str, bool] = {"N": False, "S": False, "E": False, "W": False}
+        required_door: Dict[str, bool] = {"N": False, "S": False, "E": False, "W": False}
+
+        if room_id not in graph:
+            return torch.zeros(1, 8, device=self.device, dtype=torch.float32)
+
+        incident: List[Any] = []
+        if graph.is_directed():
+            incident.extend(list(graph.predecessors(room_id)))
+            incident.extend(list(graph.successors(room_id)))
+        else:
+            incident.extend(list(graph.neighbors(room_id)))
+
+        incident_unique = sorted(set(incident), key=_stable_node_sort_key)
+        unresolved: List[Any] = []
+        for nid in incident_unique:
+            direction = self._infer_direction(graph, source_node=nid, target_node=room_id)
+            if direction is None:
+                unresolved.append(nid)
+                continue
+            has_neighbor[direction] = True
+            required_door[direction] = True
+
+        for direction, _nid in zip(["N", "E", "S", "W"], unresolved):
+            if not has_neighbor[direction]:
+                has_neighbor[direction] = True
+                required_door[direction] = True
+
+        boundary = build_boundary_constraints(has_neighbor=has_neighbor, required_door=required_door)
+        return boundary.to(device=self.device, dtype=torch.float32).unsqueeze(0)
+
+    def _build_room_position_tensor(
+        self,
+        graph: nx.Graph,
+        room_id: Any,
+        fallback_order_index: int,
+    ) -> torch.Tensor:
+        """Build [1, 2] room position tensor from graph metadata."""
+        pos = self._get_node_grid_position(graph, room_id)
+        if pos is None:
+            pos = (int(fallback_order_index), 0)
+        return torch.tensor([[float(pos[0]), float(pos[1])]], device=self.device, dtype=torch.float32)
+
+    def _compute_strict_room_placement(
+        self,
+        graph: nx.Graph,
+        room_ids: List[Any],
+    ) -> Dict[Any, Tuple[int, int]]:
+        """
+        Compute a strict room placement where every graph edge is Manhattan-adjacent.
+
+        Raises ValueError when no adjacency-preserving embedding is found.
+        """
+        nodes = [n for n in room_ids if n in graph]
+        if not nodes:
+            return {}
+
+        undirected = graph.to_undirected()
+        adjacency: Dict[Any, set] = {n: set(undirected.neighbors(n)) & set(nodes) for n in nodes}
+        explicit_pos: Dict[Any, Tuple[int, int]] = {}
+        for n in nodes:
+            p = self._get_node_grid_position(graph, n)
+            if p is not None:
+                explicit_pos[n] = (int(p[0]), int(p[1]))
+
+        max_degree = max((len(adjacency[n]) for n in nodes), default=0)
+        if max_degree > 4:
+            raise ValueError(
+                "Strict adjacency placement impossible: node degree exceeds 4 "
+                f"(max_degree={max_degree})."
+            )
+
+        components = [sorted(c, key=_stable_node_sort_key) for c in nx.connected_components(undirected.subgraph(nodes))]
+        components.sort(key=lambda comp: (_stable_node_sort_key(comp[0]) if comp else (99, "")))
+
+        placement: Dict[Any, Tuple[int, int]] = {}
+        row_cursor = 0
+        for comp in components:
+            comp_positions = self._solve_component_strict_adjacency(
+                comp_nodes=comp,
+                adjacency=adjacency,
+                explicit_pos=explicit_pos,
+            )
+
+            min_r = min(r for r, _ in comp_positions.values())
+            max_r = max(r for r, _ in comp_positions.values())
+            min_c = min(c for _, c in comp_positions.values())
+
+            translated = {
+                n: (r - min_r + row_cursor, c - min_c)
+                for n, (r, c) in comp_positions.items()
+            }
+            placement.update(translated)
+            row_cursor += (max_r - min_r + 2)
+
+        return placement
+
+    def _solve_component_strict_adjacency(
+        self,
+        comp_nodes: List[Any],
+        adjacency: Dict[Any, set],
+        explicit_pos: Dict[Any, Tuple[int, int]],
+    ) -> Dict[Any, Tuple[int, int]]:
+        """Backtracking solver for one connected component strict-adjacency embedding."""
+        offsets = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+
+        placement: Dict[Any, Tuple[int, int]] = {}
+        occupied: set = set()
+
+        root = comp_nodes[0]
+        root_pos = explicit_pos.get(root, (0, 0))
+        placement[root] = root_pos
+        occupied.add(root_pos)
+
+        search_budget = 50000
+
+        def _neighbors_of(pos: Tuple[int, int]) -> set:
+            r, c = pos
+            return {(r + dr, c + dc) for dr, dc in offsets}
+
+        def _is_adjacent(a: Tuple[int, int], b: Tuple[int, int]) -> bool:
+            return abs(a[0] - b[0]) + abs(a[1] - b[1]) == 1
+
+        def _candidate_positions(node: Any) -> List[Tuple[int, int]]:
+            if node in explicit_pos:
+                return [explicit_pos[node]]
+
+            placed_neighbors = [n for n in adjacency[node] if n in placement]
+            if placed_neighbors:
+                common = None
+                for pn in placed_neighbors:
+                    neigh_cells = _neighbors_of(placement[pn])
+                    common = neigh_cells if common is None else (common & neigh_cells)
+                candidates = sorted(common or set())
+            else:
+                frontier = set()
+                for p in placement.values():
+                    frontier |= _neighbors_of(p)
+                candidates = sorted(frontier)
+
+            filtered = [c for c in candidates if c not in occupied]
+            if not filtered:
+                return []
+
+            def _score(cell: Tuple[int, int]) -> Tuple[float, int, int]:
+                # Prefer cells near neighboring constraints and near explicit target if provided.
+                neigh_score = 0.0
+                for pn in adjacency[node]:
+                    if pn in placement:
+                        neigh_score += abs(cell[0] - placement[pn][0]) + abs(cell[1] - placement[pn][1])
+                pref = explicit_pos.get(node)
+                pref_penalty = 0.0
+                if pref is not None:
+                    pref_penalty = abs(cell[0] - pref[0]) + abs(cell[1] - pref[1])
+                return (neigh_score + (0.25 * pref_penalty), cell[0], cell[1])
+
+            filtered.sort(key=_score)
+            return filtered
+
+        def _node_priority(node: Any) -> Tuple[int, int, Any]:
+            placed_neighbors = sum(1 for n in adjacency[node] if n in placement)
+            return (-placed_neighbors, -len(adjacency[node]), _stable_node_sort_key(node))
+
+        def _check_partial(node: Any, pos: Tuple[int, int]) -> bool:
+            # Must be adjacent to all already-placed graph neighbors.
+            for pn in adjacency[node]:
+                if pn in placement and not _is_adjacent(pos, placement[pn]):
+                    return False
+            # Must not create accidental overlap.
+            if pos in occupied:
+                return False
+            # Respect pinned neighbors already placed.
+            for other, other_pos in placement.items():
+                if other == node:
+                    continue
+                if other in adjacency[node] and not _is_adjacent(pos, other_pos):
+                    return False
+            return True
+
+        def _dfs() -> bool:
+            nonlocal search_budget
+            if len(placement) == len(comp_nodes):
+                return True
+            if search_budget <= 0:
+                return False
+            search_budget -= 1
+
+            unplaced = [n for n in comp_nodes if n not in placement]
+            unplaced.sort(key=_node_priority)
+            node = unplaced[0]
+
+            for cand in _candidate_positions(node):
+                if not _check_partial(node, cand):
+                    continue
+                placement[node] = cand
+                occupied.add(cand)
+                if _dfs():
+                    return True
+                occupied.remove(cand)
+                placement.pop(node, None)
+            return False
+
+        solved = _dfs()
+        if not solved:
+            raise ValueError(
+                "Failed strict adjacency placement for component with nodes "
+                f"{comp_nodes}. Consider simplifying topology or providing explicit positions."
+            )
+
+        # Final sanity check: every undirected adjacency must be Manhattan-adjacent.
+        for u in comp_nodes:
+            for v in adjacency[u]:
+                if u < v and (abs(placement[u][0] - placement[v][0]) + abs(placement[u][1] - placement[v][1]) != 1):
+                    raise ValueError(f"Strict adjacency invariant failed for edge {u!r}<->{v!r}")
+
+        return placement
     
     def _validate_dungeon(self, dungeon_grid: np.ndarray) -> Optional[Dict[str, Any]]:
         """
@@ -1441,9 +1751,17 @@ class NeuralSymbolicDungeonPipeline:
         global_grid: np.ndarray,
         src_pos: Tuple[int, int],
         dst_pos: Tuple[int, int],
+        edge_data: Optional[Dict[str, Any]] = None,
+        has_reverse_edge: bool = False,
     ) -> None:
         """Compatibility wrapper around extracted spatial helper."""
-        carve_room_connection(global_grid, src_pos, dst_pos)
+        carve_room_connection(
+            global_grid,
+            src_pos,
+            dst_pos,
+            edge_data=edge_data,
+            has_reverse_edge=has_reverse_edge,
+        )
 
 
 # =============================================================================

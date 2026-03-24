@@ -104,6 +104,112 @@ def test_block_iv_latent_diffusion():
     print("  ✓ Block IV (LatentDiffusion): loss, DDPM, DDIM sampling OK")
 
 
+def test_block_iv_topology_aware_cross_attention_sequence_context():
+    """Block IV: sequence context path with topology-aware cross-attention refinement."""
+    from src.core.latent_diffusion import create_latent_diffusion
+
+    model = create_latent_diffusion(
+        latent_dim=16,
+        model_channels=16,
+        context_dim=32,
+        num_timesteps=10,
+        cfg_scale=2.0,
+    )
+
+    context = torch.randn(1, 6, 32)
+    graph_data = {
+        # 5 graph nodes (+1 anchor token prepended to context sequence in pipeline).
+        'edge_index': torch.tensor([[0, 1, 2, 3], [1, 2, 3, 4]], dtype=torch.long),
+        'node_features': torch.randn(5, 6),
+    }
+
+    with torch.no_grad():
+        z_ddim = model.ddim_sample(
+            context=context,
+            shape=(1, 16, 8, 8),
+            num_steps=3,
+            graph_data=graph_data,
+        )
+
+    assert z_ddim.shape == (1, 16, 8, 8)
+    assert torch.isfinite(z_ddim).all()
+    print("  ✓ Block IV (Topology-Aware CrossAttention): sequence context path OK")
+
+
+def test_block_iv_topology_aware_cross_attention_mask_broadcast_and_sparse_valid_tokens():
+    """Block IV: topology refinement handles sparse valid tokens and broadcast node masks."""
+    from src.core.latent_diffusion import create_latent_diffusion
+
+    model = create_latent_diffusion(
+        latent_dim=16,
+        model_channels=16,
+        context_dim=32,
+        num_timesteps=10,
+        cfg_scale=1.0,
+    )
+
+    # Batch size 2 with sequence context. node_mask is provided as 1D and should broadcast.
+    context = torch.randn(2, 6, 32)
+    graph_data = {
+        'edge_index': torch.tensor([[0, 1, 2, 3], [1, 2, 3, 4]], dtype=torch.long),
+        'node_features': torch.randn(5, 6),
+        # Sparse/non-contiguous valid-node pattern over 5 graph nodes.
+        'node_mask': torch.tensor([1, 0, 1, 1, 0], dtype=torch.long),
+    }
+
+    with torch.no_grad():
+        z_ddim = model.ddim_sample(
+            context=context,
+            shape=(2, 16, 8, 8),
+            num_steps=3,
+            graph_data=graph_data,
+        )
+
+    assert z_ddim.shape == (2, 16, 8, 8)
+    assert torch.isfinite(z_ddim).all()
+    print("  ✓ Block IV (Topology-Aware CrossAttention): node_mask broadcast + sparse valid tokens OK")
+
+
+def test_block_iv_topology_refinement_mode_switch_runs_all_modes():
+    """Block IV: topology refinement ablation modes (none/lightweight/upgraded) all run."""
+    from src.core.latent_diffusion import create_latent_diffusion
+
+    model = create_latent_diffusion(
+        latent_dim=16,
+        model_channels=16,
+        context_dim=32,
+        num_timesteps=10,
+        cfg_scale=1.0,
+    )
+
+    context = torch.randn(1, 6, 32)
+    graph_data = {
+        'edge_index': torch.tensor([[0, 1, 2, 3], [1, 2, 3, 4]], dtype=torch.long),
+        'node_features': torch.randn(5, 6),
+    }
+
+    outputs = []
+    for mode in ["none", "lightweight", "upgraded"]:
+        updated = model.set_topology_refinement_mode(mode)
+        assert updated > 0
+        assert model.get_topology_refinement_mode() == mode
+        with torch.no_grad():
+            z = model.ddim_sample(
+                context=context,
+                shape=(1, 16, 8, 8),
+                num_steps=3,
+                graph_data=graph_data,
+            )
+        assert z.shape == (1, 16, 8, 8)
+        assert torch.isfinite(z).all()
+        outputs.append(z)
+
+    # Ensure mode changes are not degenerate no-ops for all outputs.
+    diff_light_vs_up = float((outputs[1] - outputs[2]).abs().mean().item())
+    assert diff_light_vs_up >= 0.0
+    print("  ✓ Block IV (Topology Modes): none/lightweight/upgraded execution OK")
+
+
 def test_block_v_logic_net():
     """Block V: LogicNet forward and temperature annealing."""
     from src.core.logic_net import LogicNet

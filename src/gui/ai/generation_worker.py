@@ -1,12 +1,17 @@
 ﻿"""Worker orchestration for AI dungeon generation."""
 
+import copy
 import os
 
 from src.gui.ai.generation_pipeline import (
+    apply_mission_graph_constraints,
+    apply_mixed_initiative_constraints,
     apply_generated_dungeon,
     build_conditioning_vector,
+    ensure_mission_graph_editor_draft,
     generate_mission_graph,
     load_models_and_weights,
+    mission_graph_to_gnn_input,
     refine_and_fix_terminals,
     resolve_checkpoint_path,
     sample_tile_grid,
@@ -53,10 +58,33 @@ def run_ai_generation_worker(gui, logger):
         logger.info("AI Generation: Loading checkpoint from %s", checkpoint_path)
         device = torch.device("cpu")
 
-        mission_data = generate_mission_graph(_random, seed=configured_seed)
-        mission_graph = mission_data["mission_graph"]
+        if getattr(gui, "ai_mission_graph_editor_enabled", False):
+            ensure_mission_graph_editor_draft(gui, _random, logger=logger)
+
+        draft_graph = getattr(gui, "ai_mission_graph_draft", None)
+        if draft_graph is not None:
+            mission_graph = copy.deepcopy(draft_graph)
+            seed = int(getattr(gui, "ai_mission_graph_seed", configured_seed or 0) or 0)
+            mission_data = mission_graph_to_gnn_input(mission_graph)
+            mission_data["seed"] = seed
+        else:
+            mission_data = generate_mission_graph(_random, seed=configured_seed)
+            mission_graph = mission_data["mission_graph"]
+            seed = mission_data["seed"]
+
+        graph_constraints = {
+            "boss_node": getattr(gui, "ai_mission_graph_boss_node", None),
+            "locked_edges": list(getattr(gui, "ai_mission_graph_locked_edges", []) or []),
+        }
+        mission_graph, graph_constraint_info = apply_mission_graph_constraints(
+            mission_graph,
+            constraints=graph_constraints,
+            logger=logger,
+        )
+        mission_data = mission_graph_to_gnn_input(mission_graph)
+        mission_data["seed"] = seed
+
         edge_index = mission_data["edge_index"]
-        seed = mission_data["seed"]
         num_nodes = mission_data["num_nodes"]
         num_edges = mission_data["num_edges"]
         logger.info(
@@ -66,6 +94,12 @@ def run_ai_generation_worker(gui, logger):
             seed,
             " (deterministic)" if configured_seed is not None else "",
         )
+        if graph_constraint_info.get("boss_applied") or int(graph_constraint_info.get("locked_edges_applied", 0)) > 0:
+            logger.info(
+                "  Mission constraints: boss=%s, locked_edges=%d",
+                graph_constraint_info.get("boss_applied"),
+                int(graph_constraint_info.get("locked_edges_applied", 0)),
+            )
 
         gui._set_message("Loading AI model...")
         vqvae, diffusion, cond_encoder = load_models_and_weights(
@@ -102,6 +136,18 @@ def run_ai_generation_worker(gui, logger):
             logger=logger,
         )
 
+        staged_constraints = {
+            "boss_norm": getattr(gui, "ai_constraint_boss_norm", None),
+            "lock_norm": getattr(gui, "ai_constraint_lock_norm", None),
+            "key_norm": getattr(gui, "ai_constraint_key_norm", None),
+        }
+        tile_grid, applied_constraints = apply_mixed_initiative_constraints(
+            tile_grid=tile_grid,
+            constraints=staged_constraints,
+            np_module=np,
+            logger=logger,
+        )
+
         applied = apply_generated_dungeon(
             gui=gui,
             tile_grid=tile_grid,
@@ -119,6 +165,21 @@ def run_ai_generation_worker(gui, logger):
             applied["width"],
             applied["unique_tiles"],
         )
+        if (
+            applied_constraints.get("boss_applied")
+            or applied_constraints.get("lock_applied")
+            or applied_constraints.get("key_applied")
+        ):
+            gui._set_message(
+                "AI dungeon generated with mixed-initiative constraints "
+                f"(boss={applied_constraints.get('boss_applied')}, "
+                f"lock={applied_constraints.get('lock_applied')}, "
+                f"key={applied_constraints.get('key_applied')})"
+            )
+            gui.ai_constraint_boss_norm = None
+            gui.ai_constraint_lock_norm = None
+            gui.ai_constraint_key_norm = None
+        gui.ai_mission_graph_draft = copy.deepcopy(mission_graph)
     except (AttributeError, RuntimeError, ValueError, TypeError, ImportError, OSError) as exc:
         logger.exception("AI generation failed: %s", exc)
         gui._set_message(f"AI generation failed: {exc}")

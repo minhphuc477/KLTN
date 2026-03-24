@@ -62,6 +62,7 @@ class DiffusionTrainingConfig:
         condition_gnn_type: str = "gcn",  # gcn | gat | sage
         num_timesteps: int = 1000,
         schedule_type: str = "cosine",
+        topology_refinement_mode: str = "gat2",  # none | lightweight | gat2
         
         # LogicNet
         num_logic_iterations: int = 30,
@@ -104,6 +105,15 @@ class DiffusionTrainingConfig:
         self.condition_gnn_type = gnn_type
         self.num_timesteps = num_timesteps
         self.schedule_type = schedule_type
+        trm = str(topology_refinement_mode).strip().lower()
+        if trm == "upgraded":
+            trm = "gat2"
+        if trm not in {"none", "lightweight", "gat2"}:
+            raise ValueError(
+                f"Invalid topology_refinement_mode={topology_refinement_mode!r}. "
+                "Expected 'none', 'lightweight', or 'gat2'."
+            )
+        self.topology_refinement_mode = trm
         
         self.num_logic_iterations = num_logic_iterations
         self.guidance_scale = guidance_scale
@@ -244,6 +254,7 @@ class DiffusionTrainer:
             context_dim=self.config.context_dim,
             num_timesteps=self.config.num_timesteps,
             schedule_type=self.config.schedule_type,
+            topology_refinement_mode=self.config.topology_refinement_mode,
         )
     
     def _create_condition_encoder(self) -> DualStreamConditionEncoder:
@@ -671,7 +682,7 @@ class DiffusionTrainer:
             )
             
             for k, v in metrics.items():
-                metrics_sum[k] += v
+                metrics_sum[k] = metrics_sum.get(k, 0.0) + float(v)
             num_batches += 1
             
             if batch_idx % 10 == 0:
@@ -949,6 +960,13 @@ def main():
         choices=['gcn', 'gat', 'sage'],
         help='GNN backbone for graph-node conditioning.',
     )
+    parser.add_argument(
+        '--topology-refinement-mode',
+        type=str,
+        default='gat2',
+        choices=['none', 'lightweight', 'gat2', 'upgraded'],
+        help='Topology preprocessing inside diffusion cross-attention (gat2 is explicit 2-layer GAT).',
+    )
     parser.add_argument('--guidance-scale', type=float, default=1.0)
     parser.add_argument('--checkpoint-dir', type=str, default='./checkpoints')
     parser.add_argument('--vqvae-checkpoint', type=str, default=None)
@@ -974,6 +992,7 @@ def main():
         logic_loss_mode=args.logic_loss_mode,
         graph_conditioning_mode=args.graph_conditioning_mode,
         condition_gnn_type=args.condition_gnn_type,
+        topology_refinement_mode=args.topology_refinement_mode,
         guidance_scale=args.guidance_scale,
         checkpoint_dir=args.checkpoint_dir,
         vqvae_checkpoint=args.vqvae_checkpoint,

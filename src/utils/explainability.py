@@ -23,6 +23,7 @@ Integration Point: Throughout pipeline, aggregated in GUI debug panel
 """
 
 import networkx as nx
+import numpy as np
 from typing import Dict, List, Tuple, Optional, Any
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -32,6 +33,124 @@ import logging
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+
+def compute_neuro_symbolic_discrepancy_heatmap(
+    neural_probs: np.ndarray,
+    neural_grid: np.ndarray,
+    symbolic_grid: np.ndarray,
+) -> Tuple[np.ndarray, Dict[str, float]]:
+    """
+    Compute a discrepancy heatmap where symbolic repair diverges from neural belief.
+
+    Heat intensity is high when:
+    - Symbolic changed the chosen tile, and
+    - Neural probability for that symbolic tile was low.
+
+    Args:
+        neural_probs: [C, H, W] or [H, W, C] tile probabilities/logits from neural model
+        neural_grid: [H, W] argmax tiles before symbolic repair
+        symbolic_grid: [H, W] final tiles after symbolic repair
+
+    Returns:
+        heatmap: [H, W] float32 in [0, 1]
+        stats: summary metrics for reporting
+    """
+    ng = np.asarray(neural_grid, dtype=np.int64)
+    sg = np.asarray(symbolic_grid, dtype=np.int64)
+    probs = np.asarray(neural_probs, dtype=np.float32)
+
+    if ng.shape != sg.shape:
+        raise ValueError(f"neural_grid shape {ng.shape} must match symbolic_grid shape {sg.shape}")
+    if probs.ndim != 3:
+        raise ValueError("neural_probs must be 3D: [C,H,W] or [H,W,C]")
+
+    h, w = ng.shape
+    if probs.shape[1:] == (h, w):
+        probs_hwc = np.transpose(probs, (1, 2, 0))
+    elif probs.shape[:2] == (h, w):
+        probs_hwc = probs
+    else:
+        raise ValueError(
+            f"neural_probs shape {probs.shape} incompatible with grid shape {(h, w)}"
+        )
+
+    # Convert logits to probabilities if needed.
+    row_sums = probs_hwc.sum(axis=-1, keepdims=True)
+    if np.any(row_sums <= 0.0) or not np.allclose(row_sums.mean(), 1.0, atol=1e-2):
+        shifted = probs_hwc - np.max(probs_hwc, axis=-1, keepdims=True)
+        expv = np.exp(np.clip(shifted, -60.0, 60.0))
+        denom = np.clip(expv.sum(axis=-1, keepdims=True), 1e-8, None)
+        probs_hwc = expv / denom
+    else:
+        probs_hwc = probs_hwc / np.clip(row_sums, 1e-8, None)
+
+    num_classes = int(probs_hwc.shape[-1])
+    ng = np.clip(ng, 0, max(0, num_classes - 1))
+    sg = np.clip(sg, 0, max(0, num_classes - 1))
+
+    rows = np.arange(h)[:, None]
+    cols = np.arange(w)[None, :]
+    p_neural_choice = probs_hwc[rows, cols, ng]
+    p_symbolic_choice = probs_hwc[rows, cols, sg]
+
+    changed = (ng != sg)
+    confidence_gap = np.clip(p_neural_choice - p_symbolic_choice, 0.0, 1.0)
+    symbolic_surprise = np.clip(1.0 - p_symbolic_choice, 0.0, 1.0)
+
+    heat = np.where(changed, 0.5 * confidence_gap + 0.5 * symbolic_surprise, 0.0).astype(np.float32)
+
+    changed_count = int(changed.sum())
+    total = int(h * w)
+    changed_ratio = float(changed_count / total) if total > 0 else 0.0
+    mean_changed_heat = float(heat[changed].mean()) if changed_count > 0 else 0.0
+    max_heat = float(heat.max()) if total > 0 else 0.0
+
+    stats = {
+        "changed_tiles": float(changed_count),
+        "changed_ratio": changed_ratio,
+        "mean_changed_heat": mean_changed_heat,
+        "max_heat": max_heat,
+    }
+    return heat, stats
+
+
+def save_discrepancy_heatmap(
+    heatmap: np.ndarray,
+    output_prefix: str,
+) -> Dict[str, str]:
+    """Save discrepancy heatmap as .npy and (if available) .png."""
+    heat = np.asarray(heatmap, dtype=np.float32)
+    if heat.ndim != 2:
+        raise ValueError("heatmap must be 2D")
+
+    prefix_path = Path(output_prefix)
+    prefix_path.parent.mkdir(parents=True, exist_ok=True)
+
+    npy_path = prefix_path.with_suffix(".npy")
+    np.save(npy_path, heat)
+
+    outputs = {"npy": str(npy_path)}
+
+    try:
+        import matplotlib.pyplot as plt  # Optional dependency in some environments.
+
+        png_path = prefix_path.with_suffix(".png")
+        fig = plt.figure(figsize=(5, 4), dpi=120)
+        ax = fig.add_subplot(111)
+        im = ax.imshow(heat, cmap="hot", vmin=0.0, vmax=1.0)
+        ax.set_title("Neuro-Symbolic Discrepancy Heatmap")
+        ax.set_xlabel("col")
+        ax.set_ylabel("row")
+        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        fig.tight_layout()
+        fig.savefig(png_path)
+        plt.close(fig)
+        outputs["png"] = str(png_path)
+    except Exception as exc:  # pragma: no cover
+        logger.debug("Skipping discrepancy heatmap PNG export: %s", exc)
+
+    return outputs
 
 # ============================================================================
 # DATA STRUCTURES

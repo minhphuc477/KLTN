@@ -54,6 +54,7 @@ from src.generation.weighted_bayesian_wfc import (
 )
 from src.core.definitions import ROOM_HEIGHT, ROOM_WIDTH
 from src.core.definitions import TileID
+from src.core.definitions import parse_edge_type_tokens
 from src.simulation.cognitive_bounded_search import solve_with_cbs
 from src.simulation.validator import StateSpaceAStar, ZeldaLogicEnv
 from src.pipeline.spatial_utils import first_free_position, get_node_grid_position
@@ -72,6 +73,8 @@ class ExperimentConfig:
     latent_sampler: str = "diffusion"  # diffusion | categorical
     categorical_codebook_size: Optional[int] = None
     use_tpe: bool = True
+    disable_graph_node_cross_attention: bool = False
+    topology_refinement_mode: str = "gat2"  # none | lightweight | gat2
 
 
 def _tile_distribution(grids: Sequence[np.ndarray]) -> Dict[int, float]:
@@ -236,6 +239,45 @@ def _boundary_connection_exists(global_grid: np.ndarray, src_pos: Tuple[int, int
     return False
 
 
+def _boundary_has_directional_marker(
+    global_grid: np.ndarray,
+    src_pos: Tuple[int, int],
+    dst_pos: Tuple[int, int],
+) -> bool:
+    """Detect source-side directional/gating markers on a shared room boundary."""
+    dr = int(dst_pos[0] - src_pos[0])
+    dc = int(dst_pos[1] - src_pos[1])
+    if abs(dr) + abs(dc) != 1:
+        return False
+
+    directional_marker_ids = {
+        int(TileID.DOOR_SOFT),
+        int(TileID.DOOR_LOCKED),
+        int(TileID.DOOR_BOMB),
+        int(TileID.DOOR_PUZZLE),
+        int(TileID.DOOR_BOSS),
+    }
+
+    if dr != 0:
+        src_row = (src_pos[0] + (1 if dr > 0 else 0)) * ROOM_HEIGHT - (1 if dr > 0 else 0)
+        c0 = src_pos[1] * ROOM_WIDTH
+        c1 = c0 + ROOM_WIDTH
+        for col in range(c0, c1):
+            if 0 <= src_row < global_grid.shape[0] and 0 <= col < global_grid.shape[1]:
+                if int(global_grid[src_row, col]) in directional_marker_ids:
+                    return True
+        return False
+
+    src_col = (src_pos[1] + (1 if dc > 0 else 0)) * ROOM_WIDTH - (1 if dc > 0 else 0)
+    r0 = src_pos[0] * ROOM_HEIGHT
+    r1 = r0 + ROOM_HEIGHT
+    for row in range(r0, r1):
+        if 0 <= row < global_grid.shape[0] and 0 <= src_col < global_grid.shape[1]:
+            if int(global_grid[row, src_col]) in directional_marker_ids:
+                return True
+    return False
+
+
 def _topology_information_scorecard(
     *,
     graph: nx.Graph,
@@ -282,11 +324,83 @@ def _topology_information_scorecard(
         1.0,
     ))
 
+    # Strict directed/gating preservation checks.
+    # These metrics are intentionally strict: stitched room boundary carving is
+    # currently symmetric, so one-way semantics from Block I can leak.
+    directional_tokens = {
+        "soft_locked",
+        "one_way",
+        "state_block",
+        "switch",
+        "switch_locked",
+        "on_off_gate",
+        "item_gate",
+        "item_locked",
+        "boss_locked",
+        "key_locked",
+        "locked",
+        "multi_lock",
+        "hazard",
+        "shutter",
+    }
+
+    directed_candidates: List[Tuple[Any, Any]] = []
+    directed_realized = 0
+    directed_leaks = 0
+
+    if graph.is_directed():
+        for u, v, attrs in graph.edges(data=True):
+            if u not in placement or v not in placement or u == v:
+                continue
+            if abs(placement[u][0] - placement[v][0]) + abs(placement[u][1] - placement[v][1]) != 1:
+                continue
+
+            label = str(attrs.get("label", "") or "")
+            edge_type = str(attrs.get("edge_type", attrs.get("type", "")) or "")
+            tokens = set(parse_edge_type_tokens(label=label, edge_type=edge_type))
+            reverse_exists = bool(graph.has_edge(v, u))
+            is_directional = (not reverse_exists) or bool(tokens.intersection(directional_tokens))
+            if not is_directional:
+                continue
+
+            directed_candidates.append((u, v))
+            opened = _boundary_connection_exists(dungeon_grid, placement[u], placement[v])
+            if opened:
+                directed_realized += 1
+                # If reverse edge is absent, symmetric opening leaks one-way intent.
+                if not reverse_exists:
+                    has_marker = _boundary_has_directional_marker(
+                        dungeon_grid,
+                        placement[u],
+                        placement[v],
+                    )
+                    if not has_marker:
+                        directed_leaks += 1
+
+    directed_representable_edge_rate = float(
+        len(directed_candidates) / max(1, len(directed_edges))
+    )
+    directed_edge_realization_rate = float(
+        directed_realized / max(1, len(directed_candidates))
+    )
+    directed_directionality_leak_rate = float(
+        directed_leaks / max(1, directed_realized)
+    )
+    directed_edge_preservation_score = float(np.clip(
+        directed_edge_realization_rate * (1.0 - directed_directionality_leak_rate),
+        0.0,
+        1.0,
+    ))
+
     return {
         "topology_representable_edge_rate": representable_edge_rate,
         "topology_edge_connection_recall": edge_connection_recall,
         "topology_phantom_connection_rate": phantom_connection_rate,
         "topology_preservation_score": topology_preservation_score,
+        "directed_representable_edge_rate": directed_representable_edge_rate,
+        "directed_edge_realization_rate": directed_edge_realization_rate,
+        "directed_directionality_leak_rate": directed_directionality_leak_rate,
+        "directed_edge_preservation_score": directed_edge_preservation_score,
     }
 
 
@@ -625,12 +739,24 @@ class AblationStudy:
             "topology_edge_connection_recall": np.nan,
             "topology_phantom_connection_rate": np.nan,
             "topology_preservation_score": np.nan,
+            "directed_representable_edge_rate": np.nan,
+            "directed_edge_realization_rate": np.nan,
+            "directed_directionality_leak_rate": np.nan,
+            "directed_edge_preservation_score": np.nan,
             "error": "",
         }
 
         try:
             pipeline = self._get_pipeline()
             mission_graph = self._build_mission_graph(cfg, seed=seed)
+
+            original_graph_token_flag = bool(getattr(pipeline, "use_graph_node_cross_attention", True))
+            original_topology_mode = str(getattr(pipeline.diffusion, "get_topology_refinement_mode", lambda: "gat2")())
+            pipeline.use_graph_node_cross_attention = not bool(cfg.disable_graph_node_cross_attention)
+            try:
+                pipeline.diffusion.set_topology_refinement_mode(cfg.topology_refinement_mode)
+            except (AttributeError, RuntimeError, ValueError, TypeError) as e:
+                logger.debug("Topology refinement mode switch unavailable, keeping default: %s", e)
 
             if bool(cfg.pure_wfc):
                 result = self._generate_dungeon_pure_wfc(
@@ -656,6 +782,12 @@ class AblationStudy:
                     enable_map_elites=False,
                     seed=seed,
                 )
+
+            pipeline.use_graph_node_cross_attention = original_graph_token_flag
+            try:
+                pipeline.diffusion.set_topology_refinement_mode(original_topology_mode)
+            except (AttributeError, RuntimeError, ValueError, TypeError):
+                pass
 
             grid = np.asarray(result.dungeon_grid, dtype=np.int32)
             graph = result.mission_graph
@@ -711,12 +843,25 @@ class AblationStudy:
                     "topology_edge_connection_recall": float(topology_scorecard["topology_edge_connection_recall"]),
                     "topology_phantom_connection_rate": float(topology_scorecard["topology_phantom_connection_rate"]),
                     "topology_preservation_score": float(topology_scorecard["topology_preservation_score"]),
+                    "directed_representable_edge_rate": float(topology_scorecard["directed_representable_edge_rate"]),
+                    "directed_edge_realization_rate": float(topology_scorecard["directed_edge_realization_rate"]),
+                    "directed_directionality_leak_rate": float(topology_scorecard["directed_directionality_leak_rate"]),
+                    "directed_edge_preservation_score": float(topology_scorecard["directed_edge_preservation_score"]),
                     "_descriptor_vec": desc_vec.tolist(),
                 }
             )
         except (AttributeError, RuntimeError, ValueError, TypeError) as e:
             row["generation_time_sec"] = float(time.time() - started)
             row["error"] = f"{type(e).__name__}: {e}"
+            try:
+                if "pipeline" in locals():
+                    pipeline.use_graph_node_cross_attention = original_graph_token_flag
+                    try:
+                        pipeline.diffusion.set_topology_refinement_mode(original_topology_mode)
+                    except (AttributeError, RuntimeError, ValueError, TypeError):
+                        pass
+            except Exception:
+                pass
         return row
 
     def run(self, configs: Sequence[ExperimentConfig], seeds: Sequence[int]) -> Tuple[pd.DataFrame, pd.DataFrame]:
@@ -771,6 +916,10 @@ class AblationStudy:
                     "topology_edge_connection_recall": float(sub["topology_edge_connection_recall"].mean(skipna=True)) if len(sub) > 0 else float("nan"),
                     "topology_phantom_connection_rate": float(sub["topology_phantom_connection_rate"].mean(skipna=True)) if len(sub) > 0 else float("nan"),
                     "topology_preservation_score": float(sub["topology_preservation_score"].mean(skipna=True)) if len(sub) > 0 else float("nan"),
+                    "directed_representable_edge_rate": float(sub["directed_representable_edge_rate"].mean(skipna=True)) if len(sub) > 0 else float("nan"),
+                    "directed_edge_realization_rate": float(sub["directed_edge_realization_rate"].mean(skipna=True)) if len(sub) > 0 else float("nan"),
+                    "directed_directionality_leak_rate": float(sub["directed_directionality_leak_rate"].mean(skipna=True)) if len(sub) > 0 else float("nan"),
+                    "directed_edge_preservation_score": float(sub["directed_edge_preservation_score"].mean(skipna=True)) if len(sub) > 0 else float("nan"),
                     "diversity": float(_pairwise_diversity(descriptor_store.get(cfg.name, []))),
                 }
             )
@@ -803,6 +952,10 @@ class AblationStudy:
                 "topology_edge_connection_recall",
                 "topology_phantom_connection_rate",
                 "topology_preservation_score",
+                "directed_representable_edge_rate",
+                "directed_edge_realization_rate",
+                "directed_directionality_leak_rate",
+                "directed_edge_preservation_score",
             ]
 
         rows: List[Dict[str, Any]] = []
@@ -918,7 +1071,8 @@ class AblationStudy:
 
 def build_experiment_set(include_extended: bool = True) -> List[ExperimentConfig]:
     core = [
-        ExperimentConfig(name="FULL"),
+        ExperimentConfig(name="FULL", topology_refinement_mode="gat2"),
+        ExperimentConfig(name="TOPO_LIGHTWEIGHT", topology_refinement_mode="lightweight"),
         ExperimentConfig(name="NO_EVOLUTION", use_evolution=False),
         ExperimentConfig(name="RANDOM_TOPOLOGY", use_evolution=False, random_topology=True),
         ExperimentConfig(name="NO_WFC", use_wfc=False),
@@ -935,6 +1089,7 @@ def build_experiment_set(include_extended: bool = True) -> List[ExperimentConfig
         ExperimentConfig(name="LATENT_DIFFUSION", latent_sampler="diffusion"),
         ExperimentConfig(name="LATENT_CATEGORICAL", latent_sampler="categorical"),
         ExperimentConfig(name="COND_NO_TPE", use_tpe=False),
+        ExperimentConfig(name="COND_WEAK_GRAPH", use_tpe=False, disable_graph_node_cross_attention=True),
         ExperimentConfig(name="LOGIC_G_0.25", logic_guidance_scale=0.25),
         ExperimentConfig(name="LOGIC_G_0.50", logic_guidance_scale=0.50),
         ExperimentConfig(name="LOGIC_G_1.50", logic_guidance_scale=1.50),

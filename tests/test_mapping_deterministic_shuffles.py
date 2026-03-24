@@ -1,5 +1,3 @@
-﻿# pyright: reportPrivateUsage=false
-
 import random
 import networkx as nx
 from src.zelda_data.zelda_core import RoomGraphMatcher, Room

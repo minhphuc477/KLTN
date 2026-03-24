@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from src.gui.ai.generation_pipeline import ensure_mission_graph_editor_draft
+
 
 def handle_global_keydown_shortcuts(
     gui,
@@ -217,6 +219,23 @@ def handle_keydown_event(
                 ):
                     widget.checked = gui.show_minimap
         gui.message = f"Minimap: {'ON' if gui.show_minimap else 'OFF'}"
+
+    elif event.key == pygame_module.K_g:
+        import random as _random
+
+        gui.ai_mission_graph_editor_enabled = not bool(getattr(gui, "ai_mission_graph_editor_enabled", False))
+        if gui.ai_mission_graph_editor_enabled:
+            ensure_mission_graph_editor_draft(gui, _random)
+            gui.message = "Mission-graph editor: ON (LMB boss, RMB source/target for locked edge)"
+        else:
+            gui.message = "Mission-graph editor: OFF"
+
+    elif event.key == pygame_module.K_BACKSPACE:
+        if bool(getattr(gui, "ai_mission_graph_editor_enabled", False)):
+            gui.ai_mission_graph_boss_node = None
+            gui.ai_mission_graph_locked_edges = []
+            gui.ai_mission_graph_pending_lock_source = None
+            gui.message = "Mission-graph constraints cleared"
 
     elif event.key == pygame_module.K_RIGHTBRACKET or event.key == pygame_module.K_PERIOD:
         gui.speed_index = min(len(gui.speed_levels) - 1, gui.speed_index + 1)

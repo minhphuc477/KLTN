@@ -1,6 +1,4 @@
-﻿# pyright: reportPrivateUsage=false
-
-from src.gui.common.fallbacks import get_visualization_fallbacks, get_widget_fallbacks
+﻿from src.gui.common.fallbacks import get_visualization_fallbacks, get_widget_fallbacks
 
 
 class _FakeSurface:

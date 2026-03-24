@@ -32,7 +32,15 @@ def build_global_grid_from_rooms(
         room_positions[pos] = (r_offset, c_offset)
 
         h, w = room.semantic_grid.shape
-        global_grid[r_offset : r_offset + h, c_offset : c_offset + w] = room.semantic_grid
+        if h != room_height or w != room_width:
+            raise ValueError(
+                "CRITICAL: Room dimension mismatch before stitching at "
+                f"room {pos}: expected {room_height}x{room_width}, got {h}x{w}."
+            )
+        global_grid[
+            r_offset : r_offset + room_height,
+            c_offset : c_offset + room_width,
+        ] = room.semantic_grid
 
     return global_grid, room_positions
 

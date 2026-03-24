@@ -80,6 +80,9 @@ class DummyGui:
         self.view_offset_x = 0
         self.view_offset_y = 0
         self.message = ""
+        self.ai_constraint_boss_norm = None
+        self.ai_constraint_lock_norm = None
+        self.ai_constraint_key_norm = None
 
     def _clamp_view_offset(self):
         return None
@@ -102,4 +105,32 @@ def test_render_minimap_executes_with_fake_pygame():
     gui = DummyGui()
     render_minimap(gui, FakePygame())
     assert len(gui.screen.blit_calls) >= 1
+
+
+class _FakeKey:
+    def __init__(self, mods):
+        self._mods = int(mods)
+
+    def get_mods(self):
+        return self._mods
+
+
+class _FakePygameMods:
+    KMOD_SHIFT = 1
+    KMOD_CTRL = 2
+    KMOD_ALT = 4
+
+    def __init__(self, mods):
+        self.key = _FakeKey(mods)
+
+
+def test_handle_minimap_click_alt_stages_small_key_anchor():
+    gui = DummyGui()
+    x = gui.screen_w - gui.SIDEBAR_WIDTH - gui.minimap_size + 20
+    y = gui.screen_h - gui.HUD_HEIGHT - gui.minimap_size + 20
+    fake_pygame = _FakePygameMods(_FakePygameMods.KMOD_ALT)
+
+    assert handle_minimap_click(gui, (x, y), pygame_module=fake_pygame) is True
+    assert isinstance(gui.ai_constraint_key_norm, tuple)
+    assert gui.message.startswith("Staged Small Key anchor")
 

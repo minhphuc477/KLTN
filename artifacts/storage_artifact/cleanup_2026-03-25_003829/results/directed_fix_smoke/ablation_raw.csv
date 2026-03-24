@@ -1,0 +1,13 @@
+config,seed,success,solvable,confusion_ratio,confusion_index,path_optimal,tile_prior_kl,graph_edit_distance,generation_time_sec,novelty,reconstruction_error,constraint_valid,room_repair_rate,tiles_repaired,topology_representable_edge_rate,topology_edge_connection_recall,topology_phantom_connection_rate,topology_preservation_score,directed_representable_edge_rate,directed_edge_realization_rate,directed_directionality_leak_rate,directed_edge_preservation_score,error
+FULL,42,False,False,,,0.0,,,0.7450027465820312,,,,,,,,,,,,,,"RuntimeError: Error(s) in loading state_dict for SemanticVQVAE:
+	Missing key(s) in state_dict: ""illegal_adjacency_matrix"". "
+FULL,43,False,False,,,0.0,,,0.5065364837646484,,,,,,,,,,,,,,"RuntimeError: Error(s) in loading state_dict for SemanticVQVAE:
+	Missing key(s) in state_dict: ""illegal_adjacency_matrix"". "
+COND_NO_TPE,42,False,False,,,0.0,,,0.48903775215148926,,,,,,,,,,,,,,"RuntimeError: Error(s) in loading state_dict for SemanticVQVAE:
+	Missing key(s) in state_dict: ""illegal_adjacency_matrix"". "
+COND_NO_TPE,43,False,False,,,0.0,,,0.4990251064300537,,,,,,,,,,,,,,"RuntimeError: Error(s) in loading state_dict for SemanticVQVAE:
+	Missing key(s) in state_dict: ""illegal_adjacency_matrix"". "
+COND_WEAK_GRAPH,42,False,False,,,0.0,,,0.5271334648132324,,,,,,,,,,,,,,"RuntimeError: Error(s) in loading state_dict for SemanticVQVAE:
+	Missing key(s) in state_dict: ""illegal_adjacency_matrix"". "
+COND_WEAK_GRAPH,43,False,False,,,0.0,,,0.5943472385406494,,,,,,,,,,,,,,"RuntimeError: Error(s) in loading state_dict for SemanticVQVAE:
+	Missing key(s) in state_dict: ""illegal_adjacency_matrix"". "

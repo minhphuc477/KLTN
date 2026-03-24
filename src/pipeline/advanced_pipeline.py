@@ -62,7 +62,13 @@ from src.simulation.map_elites import MAPElitesEvaluator
 
 # Utils
 from src.utils.demo_recorder import DemoRecorder, RecordingMode
-from src.utils.explainability import ExplainabilityManager, DecisionSource, DecisionTrace
+from src.utils.explainability import (
+    ExplainabilityManager,
+    DecisionSource,
+    DecisionTrace,
+    compute_neuro_symbolic_discrepancy_heatmap,
+    save_discrepancy_heatmap,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1084,6 +1090,39 @@ class AdvancedNeuralSymbolicPipeline:
                     
                     # Initialize WFC with neural output as seed
                     refined_room = wfc.generate(seed=None, initial_grid=neural_room)
+
+                    # Neuro-symbolic discrepancy heatmap: where symbolic correction overrides neural belief.
+                    if self.explainability_mgr is not None and getattr(result, "neural_probs", None) is not None:
+                        try:
+                            heatmap, stats = compute_neuro_symbolic_discrepancy_heatmap(
+                                neural_probs=result.neural_probs,
+                                neural_grid=neural_room,
+                                symbolic_grid=refined_room,
+                            )
+                            prefix = self.config.output_dir / "discrepancy_heatmaps" / f"room_{int(node_id)}"
+                            saved_paths = save_discrepancy_heatmap(heatmap, str(prefix))
+
+                            from datetime import datetime
+
+                            trace = DecisionTrace(
+                                decision_id=f"wfc_discrepancy_{int(time.time() * 1000)}_{int(node_id)}",
+                                source=DecisionSource.WFC_REFINER,
+                                timestamp=datetime.now(),
+                                description=f"Computed neuro-symbolic discrepancy heatmap for room {node_id}",
+                                confidence=1.0,
+                                metadata={
+                                    "room_id": int(node_id),
+                                    "changed_tiles": int(stats.get("changed_tiles", 0.0)),
+                                    "changed_ratio": float(stats.get("changed_ratio", 0.0)),
+                                    "mean_changed_heat": float(stats.get("mean_changed_heat", 0.0)),
+                                    "max_heat": float(stats.get("max_heat", 0.0)),
+                                    "heatmap_npy": saved_paths.get("npy"),
+                                    "heatmap_png": saved_paths.get("png"),
+                                },
+                            )
+                            self.explainability_mgr.add_trace(trace)
+                        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+                            logger.debug("Discrepancy heatmap generation failed for room %s: %s", node_id, exc)
                     
                     logger.debug(f"Room {node_id}: WFC refinement applied")
                     return refined_room

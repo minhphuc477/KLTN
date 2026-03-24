@@ -2410,6 +2410,8 @@ class EvolutionaryTopologyGenerator:
         qd_emitter_mutation_rate: float = 0.18,
         realism_tuning: Optional[Dict[str, float]] = None,
         enable_rule_credit_assignment: bool = False,
+        enforce_generation_constraints: bool = False,
+        allow_candidate_repairs: bool = False,
     ):
         """
         Initialize evolutionary generator.
@@ -2438,6 +2440,12 @@ class EvolutionaryTopologyGenerator:
             qd_init_random_fraction: Bootstrap fraction sampled uniformly
                 before archive emitters dominate.
             qd_emitter_mutation_rate: Mutation rate for emitter offspring.
+            enforce_generation_constraints: If True, reject rule outcomes that
+                violate lock/progression constraints during genome execution.
+                Default is False to preserve QD diversity and avoid hard-kill
+                behavior in early generations.
+            allow_candidate_repairs: If True, attempt local candidate repair
+                when generation constraints fail.
         """
         self.target_curve = target_curve
         self.transition_matrix = zelda_transition_matrix or DEFAULT_ZELDA_TRANSITIONS
@@ -2465,6 +2473,8 @@ class EvolutionaryTopologyGenerator:
         self.qd_emitter_mutation_rate = float(np.clip(float(qd_emitter_mutation_rate), 0.01, 0.95))
         self.realism_tuning = self._merge_realism_tuning(realism_tuning)
         self.enable_rule_credit_assignment = bool(enable_rule_credit_assignment)
+        self.enforce_generation_constraints = bool(enforce_generation_constraints)
+        self.allow_candidate_repairs = bool(allow_candidate_repairs)
         parsed_rule_space = str(rule_space).strip().lower() if rule_space is not None else "full"
         if parsed_rule_space not in {"core", "full"}:
             logger.warning("Unknown rule_space='%s', defaulting to 'full'", rule_space)
@@ -2481,8 +2491,8 @@ class EvolutionaryTopologyGenerator:
             seed=seed,
             use_full_rule_space=(self.rule_space == "full"),
             rule_weight_overrides=self.rule_weight_overrides,
-            enforce_generation_constraints=True,
-            allow_candidate_repairs=False,
+            enforce_generation_constraints=self.enforce_generation_constraints,
+            allow_candidate_repairs=self.allow_candidate_repairs,
         )
         self.evaluator = TensionCurveEvaluator(
             target_curve,

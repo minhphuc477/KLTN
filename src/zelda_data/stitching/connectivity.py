@@ -10,6 +10,19 @@ import numpy as np
 RoomPos = Tuple[int, int]
 
 
+def _boundary_carve_tiles(semantic_palette: Dict[str, int], reciprocal: bool) -> Tuple[int, int]:
+    """Return (src_tile, dst_tile) for a stitched room boundary.
+
+    If the reverse doorway is absent, preserve one-way intent by marking
+    the source boundary as DOOR_SOFT while keeping destination as DOOR_OPEN.
+    """
+    door_open = int(semantic_palette["DOOR_OPEN"])
+    if reciprocal:
+        return door_open, door_open
+    door_soft = int(semantic_palette.get("DOOR_SOFT", door_open))
+    return door_soft, door_open
+
+
 def ensure_room_connectivity(
     grid: np.ndarray,
     rooms: Dict[RoomPos, Any],
@@ -65,13 +78,15 @@ def connect_doors(
 
         if room.doors.get("N"):
             north_pos = (row - 1, col)
-            if north_pos in rooms and rooms[north_pos].doors.get("S"):
+            if north_pos in rooms:
+                reciprocal = bool(rooms[north_pos].doors.get("S"))
+                src_tile, dst_tile = _boundary_carve_tiles(semantic_palette, reciprocal)
                 wall_row = r_base
                 for c in range(c_base + 3, c_base + 8):
                     if 0 <= c < grid.shape[1]:
-                        grid[wall_row, c] = semantic_palette["FLOOR"]
+                        grid[wall_row, c] = src_tile
                         if wall_row > 0:
-                            grid[wall_row - 1, c] = semantic_palette["FLOOR"]
+                            grid[wall_row - 1, c] = dst_tile
                 for r in range(r_base + 1, r_base + 4):
                     for c in range(c_base + 4, c_base + 7):
                         if grid[r, c] == semantic_palette["WALL"]:
@@ -79,13 +94,15 @@ def connect_doors(
 
         if room.doors.get("S"):
             south_pos = (row + 1, col)
-            if south_pos in rooms and rooms[south_pos].doors.get("N"):
+            if south_pos in rooms:
+                reciprocal = bool(rooms[south_pos].doors.get("N"))
+                src_tile, dst_tile = _boundary_carve_tiles(semantic_palette, reciprocal)
                 wall_row = r_base + room_height - 1
                 for c in range(c_base + 3, c_base + 8):
                     if 0 <= c < grid.shape[1]:
-                        grid[wall_row, c] = semantic_palette["FLOOR"]
+                        grid[wall_row, c] = src_tile
                         if wall_row + 1 < grid.shape[0]:
-                            grid[wall_row + 1, c] = semantic_palette["FLOOR"]
+                            grid[wall_row + 1, c] = dst_tile
                 for r in range(r_base + room_height - 4, r_base + room_height - 1):
                     for c in range(c_base + 4, c_base + 7):
                         if grid[r, c] == semantic_palette["WALL"]:
@@ -93,13 +110,15 @@ def connect_doors(
 
         if room.doors.get("W"):
             west_pos = (row, col - 1)
-            if west_pos in rooms and rooms[west_pos].doors.get("E"):
+            if west_pos in rooms:
+                reciprocal = bool(rooms[west_pos].doors.get("E"))
+                src_tile, dst_tile = _boundary_carve_tiles(semantic_palette, reciprocal)
                 wall_col = c_base
                 for r in range(r_base + 5, r_base + 11):
                     if 0 <= r < grid.shape[0]:
-                        grid[r, wall_col] = semantic_palette["FLOOR"]
+                        grid[r, wall_col] = src_tile
                         if wall_col > 0:
-                            grid[r, wall_col - 1] = semantic_palette["FLOOR"]
+                            grid[r, wall_col - 1] = dst_tile
                 for r in range(r_base + 6, r_base + 10):
                     for c in range(c_base + 1, c_base + 4):
                         if grid[r, c] == semantic_palette["WALL"]:
@@ -107,13 +126,15 @@ def connect_doors(
 
         if room.doors.get("E"):
             east_pos = (row, col + 1)
-            if east_pos in rooms and rooms[east_pos].doors.get("W"):
+            if east_pos in rooms:
+                reciprocal = bool(rooms[east_pos].doors.get("W"))
+                src_tile, dst_tile = _boundary_carve_tiles(semantic_palette, reciprocal)
                 wall_col = c_base + room_width - 1
                 for r in range(r_base + 5, r_base + 11):
                     if 0 <= r < grid.shape[0]:
-                        grid[r, wall_col] = semantic_palette["FLOOR"]
+                        grid[r, wall_col] = src_tile
                         if wall_col + 1 < grid.shape[1]:
-                            grid[r, wall_col + 1] = semantic_palette["FLOOR"]
+                            grid[r, wall_col + 1] = dst_tile
                 for r in range(r_base + 6, r_base + 10):
                     for c in range(c_base + room_width - 4, c_base + room_width - 1):
                         if grid[r, c] == semantic_palette["WALL"]:

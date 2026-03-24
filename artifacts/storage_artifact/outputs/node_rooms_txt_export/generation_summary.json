@@ -1,0 +1,19 @@
+{
+  "generation_time_sec": 83.96889114379883,
+  "metrics": {
+    "num_rooms": 7,
+    "total_tiles_repaired": 298,
+    "repair_rate": 0.2857142857142857,
+    "dungeon_shape": [
+      96,
+      66
+    ],
+    "generation_time_sec": 83.96889114379883
+  },
+  "map_elites_score": null,
+  "num_rooms": 7,
+  "dungeon_shape": [
+    96,
+    66
+  ]
+}

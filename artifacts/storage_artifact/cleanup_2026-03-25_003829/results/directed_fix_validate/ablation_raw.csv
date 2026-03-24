@@ -1,0 +1,17 @@
+config,seed,success,solvable,confusion_ratio,confusion_index,path_optimal,tile_prior_kl,graph_edit_distance,generation_time_sec,novelty,reconstruction_error,constraint_valid,room_repair_rate,tiles_repaired,topology_representable_edge_rate,topology_edge_connection_recall,topology_phantom_connection_rate,topology_preservation_score,directed_representable_edge_rate,directed_edge_realization_rate,directed_directionality_leak_rate,directed_edge_preservation_score,error
+FULL,42,False,False,,,0.0,,,0.5784320831298828,,,,,,,,,,,,,,"RuntimeError: Error(s) in loading state_dict for SemanticVQVAE:
+	Missing key(s) in state_dict: ""illegal_adjacency_matrix"". "
+FULL,43,False,False,,,0.0,,,0.47338271141052246,,,,,,,,,,,,,,"RuntimeError: Error(s) in loading state_dict for SemanticVQVAE:
+	Missing key(s) in state_dict: ""illegal_adjacency_matrix"". "
+FULL,44,False,False,,,0.0,,,0.45799708366394043,,,,,,,,,,,,,,"RuntimeError: Error(s) in loading state_dict for SemanticVQVAE:
+	Missing key(s) in state_dict: ""illegal_adjacency_matrix"". "
+FULL,45,False,False,,,0.0,,,0.487105131149292,,,,,,,,,,,,,,"RuntimeError: Error(s) in loading state_dict for SemanticVQVAE:
+	Missing key(s) in state_dict: ""illegal_adjacency_matrix"". "
+COND_WEAK_GRAPH,42,False,False,,,0.0,,,0.41363096237182617,,,,,,,,,,,,,,"RuntimeError: Error(s) in loading state_dict for SemanticVQVAE:
+	Missing key(s) in state_dict: ""illegal_adjacency_matrix"". "
+COND_WEAK_GRAPH,43,False,False,,,0.0,,,0.45084118843078613,,,,,,,,,,,,,,"RuntimeError: Error(s) in loading state_dict for SemanticVQVAE:
+	Missing key(s) in state_dict: ""illegal_adjacency_matrix"". "
+COND_WEAK_GRAPH,44,False,False,,,0.0,,,0.47968530654907227,,,,,,,,,,,,,,"RuntimeError: Error(s) in loading state_dict for SemanticVQVAE:
+	Missing key(s) in state_dict: ""illegal_adjacency_matrix"". "
+COND_WEAK_GRAPH,45,False,False,,,0.0,,,0.4982912540435791,,,,,,,,,,,,,,"RuntimeError: Error(s) in loading state_dict for SemanticVQVAE:
+	Missing key(s) in state_dict: ""illegal_adjacency_matrix"". "

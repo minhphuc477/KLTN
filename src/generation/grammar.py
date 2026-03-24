@@ -3012,7 +3012,7 @@ class AddStairsRule(ProductionRule):
         graph.add_node(room)
         graph.add_edge(stairs_up_id, room_id, EdgeType.PATH)
         
-        logger.info(f"AddStairsRule: Stairs at ({anchor_pos[0]}, {anchor_pos[1]}) connecting floors 0â†”1")
+        logger.info(f"AddStairsRule: Stairs at ({anchor_pos[0]}, {anchor_pos[1]}) connecting floors 0<->1")
         return graph
 
 
@@ -3153,7 +3153,7 @@ class AddTeleportRule(ProductionRule):
         graph._adjacency[node1].append(node2)
         graph._adjacency[node2].append(node1)
         
-        logger.info(f"AddTeleportRule: Warp between {node1} â†” {node2} (saved {dist} hops)")
+        logger.info(f"AddTeleportRule: Warp between {node1} <-> {node2} (saved {dist} hops)")
         return graph
 
 

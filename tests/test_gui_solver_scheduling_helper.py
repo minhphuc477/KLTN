@@ -1,5 +1,3 @@
-﻿# pyright: reportPrivateUsage=false
-
 from src.gui.services.solver_scheduling import schedule_solver
 
 

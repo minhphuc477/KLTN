@@ -1,5 +1,6 @@
 """Core AI-generation pipeline helpers extracted from gui_runner."""
 
+import copy
 import json
 import os
 import random
@@ -53,6 +54,162 @@ def _validate_checkpoint_metadata_for_gui(
         logger.warning("Checkpoint metadata validation warning: %s", exc)
 
 
+def _compute_editor_layout(mission_graph):
+    """Compute stable normalized 2D positions for mission-graph editor rendering."""
+    try:
+        import networkx as nx
+    except (AttributeError, RuntimeError, ValueError, TypeError, ImportError):
+        nx = None
+
+    node_ids = sorted(list(mission_graph.nodes.keys()))
+    if not node_ids:
+        return {}
+
+    layout = {}
+    if nx is not None:
+        try:
+            g = nx.DiGraph()
+            g.add_nodes_from(node_ids)
+            for e in mission_graph.edges:
+                g.add_edge(e.source, e.target)
+            pos = nx.spring_layout(g, seed=17, k=max(0.2, 1.8 / max(1, len(node_ids))))
+            xs = [float(pos[n][0]) for n in node_ids]
+            ys = [float(pos[n][1]) for n in node_ids]
+            min_x, max_x = min(xs), max(xs)
+            min_y, max_y = min(ys), max(ys)
+            dx = max(1e-6, max_x - min_x)
+            dy = max(1e-6, max_y - min_y)
+            for nid in node_ids:
+                x = (float(pos[nid][0]) - min_x) / dx
+                y = (float(pos[nid][1]) - min_y) / dy
+                layout[int(nid)] = (0.08 + 0.84 * x, 0.12 + 0.76 * y)
+            return layout
+        except (AttributeError, RuntimeError, ValueError, TypeError):
+            pass
+
+    # Fallback: topological-order line layout.
+    count = len(node_ids)
+    for idx, nid in enumerate(node_ids):
+        x = 0.08 + 0.84 * (float(idx) / float(max(1, count - 1)))
+        y = 0.5
+        layout[int(nid)] = (x, y)
+    return layout
+
+
+def _mission_graph_constraints_from_gui(gui):
+    """Collect staged mission-graph constraints from GUI state."""
+    boss_node = getattr(gui, "ai_mission_graph_boss_node", None)
+    locked_edges = list(getattr(gui, "ai_mission_graph_locked_edges", []) or [])
+    cleaned_edges = []
+    for pair in locked_edges:
+        if not isinstance(pair, (tuple, list)) or len(pair) < 2:
+            continue
+        try:
+            src = int(pair[0])
+            dst = int(pair[1])
+        except (TypeError, ValueError):
+            continue
+        if src == dst:
+            continue
+        cleaned_edges.append((src, dst))
+    return {
+        "boss_node": int(boss_node) if isinstance(boss_node, (int, float)) else boss_node,
+        "locked_edges": cleaned_edges,
+    }
+
+
+def apply_mission_graph_constraints(mission_graph, constraints, logger):
+    """Apply staged boss-node and locked-edge constraints directly to mission graph."""
+    from src.generation.grammar import EdgeType, NodeType
+
+    if mission_graph is None or not isinstance(constraints, dict):
+        return mission_graph, {"boss_applied": False, "locked_edges_applied": 0}
+
+    boss_applied = False
+    lock_applied = 0
+
+    boss_node = constraints.get("boss_node")
+    if boss_node is not None:
+        try:
+            boss_node = int(boss_node)
+            if boss_node in mission_graph.nodes:
+                mission_graph.nodes[boss_node].node_type = NodeType.BOSS
+                boss_applied = True
+        except (AttributeError, RuntimeError, ValueError, TypeError):
+            boss_applied = False
+
+    locked_pairs = constraints.get("locked_edges") or []
+    for src, dst in locked_pairs:
+        try:
+            src_i = int(src)
+            dst_i = int(dst)
+        except (TypeError, ValueError):
+            continue
+        if src_i not in mission_graph.nodes or dst_i not in mission_graph.nodes or src_i == dst_i:
+            continue
+
+        existing = None
+        for edge in mission_graph.edges:
+            if int(edge.source) == src_i and int(edge.target) == dst_i:
+                existing = edge
+                break
+        if existing is None:
+            mission_graph.add_edge(src_i, dst_i, edge_type=EdgeType.LOCKED)
+        else:
+            existing.edge_type = EdgeType.LOCKED
+        lock_applied += 1
+
+    try:
+        mission_graph.sanitize()
+    except (AttributeError, RuntimeError, ValueError, TypeError):
+        pass
+
+    if boss_applied or lock_applied > 0:
+        logger.info(
+            "Mission-graph constraints applied: boss=%s, locked_edges=%d",
+            boss_applied,
+            lock_applied,
+        )
+    return mission_graph, {"boss_applied": boss_applied, "locked_edges_applied": int(lock_applied)}
+
+
+def mission_graph_to_gnn_input(mission_graph):
+    """Convert mission graph to GNN inputs and return metadata."""
+    from src.generation.grammar import graph_to_gnn_input
+
+    gnn_input = graph_to_gnn_input(mission_graph, current_node_idx=0)
+    return {
+        "mission_graph": mission_graph,
+        "edge_index": gnn_input["edge_index"],
+        "num_nodes": len(mission_graph.nodes),
+        "num_edges": len(mission_graph.edges),
+    }
+
+
+def ensure_mission_graph_editor_draft(gui, random_module, logger=None):
+    """Create a draft mission graph for editor interactions when absent."""
+    if getattr(gui, "ai_mission_graph_draft", None) is not None:
+        return
+
+    configured_seed = getattr(gui, "ai_seed", None)
+    try:
+        configured_seed = int(configured_seed) if configured_seed is not None else None
+    except (TypeError, ValueError):
+        configured_seed = None
+
+    mission_data = generate_mission_graph(random_module, seed=configured_seed)
+    gui.ai_mission_graph_draft = copy.deepcopy(mission_data["mission_graph"])
+    gui.ai_mission_graph_seed = int(mission_data["seed"])
+    gui.ai_mission_graph_layout = _compute_editor_layout(gui.ai_mission_graph_draft)
+    if logger is not None:
+        logger.info(
+            "Prepared mission-graph draft for editor: seed=%d, nodes=%d, edges=%d",
+            gui.ai_mission_graph_seed,
+            int(mission_data["num_nodes"]),
+            int(mission_data["num_edges"]),
+        )
+
+
 def generate_mission_graph(random_module, *, seed=None, num_rooms=None):
     """Generate a medium-difficulty mission graph and return metadata."""
     from src.generation.grammar import MissionGrammar, Difficulty as GrammarDifficulty, graph_to_gnn_input
@@ -72,14 +229,9 @@ def generate_mission_graph(random_module, *, seed=None, num_rooms=None):
         num_rooms=room_count,
         max_keys=2,
     )
-    gnn_input = graph_to_gnn_input(mission_graph, current_node_idx=0)
-    return {
-        "seed": chosen_seed,
-        "mission_graph": mission_graph,
-        "edge_index": gnn_input["edge_index"],
-        "num_nodes": len(mission_graph.nodes),
-        "num_edges": len(mission_graph.edges),
-    }
+    out = mission_graph_to_gnn_input(mission_graph)
+    out["seed"] = chosen_seed
+    return out
 
 
 def load_models_and_weights(
@@ -261,3 +413,117 @@ def apply_generated_dungeon(gui, tile_grid, seed, num_nodes, num_edges, np_modul
         "num_nodes": num_nodes,
         "num_edges": num_edges,
     }
+
+
+def apply_mixed_initiative_constraints(tile_grid, constraints, np_module, logger):
+    """
+    Apply user-staged mixed-initiative constraints to a generated tile grid.
+
+    Constraints are normalized anchors in [0, 1] from minimap clicks:
+    - boss_norm: prefer placing ENEMY_BOSS near this anchor
+    - lock_norm: prefer placing DOOR_LOCKED near this anchor
+    - key_norm: prefer placing KEY_SMALL near this anchor
+    """
+    from src.core.definitions import SEMANTIC_PALETTE as _SP
+
+    grid = np_module.asarray(tile_grid).copy()
+    if grid.ndim != 2 or constraints is None:
+        return grid, {"boss_applied": False, "lock_applied": False, "key_applied": False}
+
+    h, w = int(grid.shape[0]), int(grid.shape[1])
+
+    floor_id = int(_SP.get("FLOOR", 1))
+    wall_id = int(_SP.get("WALL", 2))
+    void_id = int(_SP.get("VOID", 0))
+    door_open_id = int(_SP.get("DOOR_OPEN", floor_id))
+    door_locked_id = int(_SP.get("DOOR_LOCKED", door_open_id))
+    enemy_boss_id = int(_SP.get("ENEMY_BOSS", _SP.get("ENEMY", 7)))
+    key_small_id = int(_SP.get("KEY_SMALL", _SP.get("KEY", 8)))
+    start_id = int(_SP.get("START", 5))
+    triforce_id = int(_SP.get("TRIFORCE", 6))
+
+    def _anchor_to_cell(norm):
+        if not isinstance(norm, (tuple, list)) or len(norm) < 2:
+            return None
+        try:
+            nr = float(norm[0])
+            nc = float(norm[1])
+        except (TypeError, ValueError):
+            return None
+        nr = max(0.0, min(1.0, nr))
+        nc = max(0.0, min(1.0, nc))
+        rr = int(round(nr * max(0, h - 1)))
+        cc = int(round(nc * max(0, w - 1)))
+        return rr, cc
+
+    def _find_nearest_walkable(r0, c0):
+        best = None
+        best_d = 10**9
+        for r in range(h):
+            for c in range(w):
+                tid = int(grid[r, c])
+                if tid in {wall_id, void_id, start_id, triforce_id}:
+                    continue
+                d = abs(r - r0) + abs(c - c0)
+                if d < best_d:
+                    best = (r, c)
+                    best_d = d
+        return best
+
+    def _find_nearest_floor_or_walkable(r0, c0):
+        best_floor = None
+        best_floor_d = 10**9
+        for r in range(h):
+            for c in range(w):
+                if int(grid[r, c]) != floor_id:
+                    continue
+                d = abs(r - r0) + abs(c - c0)
+                if d < best_floor_d:
+                    best_floor = (r, c)
+                    best_floor_d = d
+        if best_floor is not None:
+            return best_floor
+        return _find_nearest_walkable(r0, c0)
+
+    def _find_nearest_door_or_walkable(r0, c0):
+        best_door = None
+        best_d = 10**9
+        for r in range(h):
+            for c in range(w):
+                tid = int(grid[r, c])
+                if tid in {door_open_id, door_locked_id}:
+                    d = abs(r - r0) + abs(c - c0)
+                    if d < best_d:
+                        best_door = (r, c)
+                        best_d = d
+        if best_door is not None:
+            return best_door
+        return _find_nearest_walkable(r0, c0)
+
+    applied = {"boss_applied": False, "lock_applied": False, "key_applied": False}
+
+    boss_cell = _anchor_to_cell(constraints.get("boss_norm"))
+    if boss_cell is not None:
+        target = _find_nearest_walkable(boss_cell[0], boss_cell[1])
+        if target is not None:
+            grid[target[0], target[1]] = enemy_boss_id
+            applied["boss_applied"] = True
+            logger.info("Mixed-initiative: placed boss anchor near (%d, %d)", target[0], target[1])
+
+    lock_cell = _anchor_to_cell(constraints.get("lock_norm"))
+    if lock_cell is not None:
+        target = _find_nearest_door_or_walkable(lock_cell[0], lock_cell[1])
+        if target is not None:
+            grid[target[0], target[1]] = door_locked_id
+            applied["lock_applied"] = True
+            logger.info("Mixed-initiative: placed locked door near (%d, %d)", target[0], target[1])
+
+    key_cell = _anchor_to_cell(constraints.get("key_norm"))
+    if key_cell is not None:
+        target = _find_nearest_floor_or_walkable(key_cell[0], key_cell[1])
+        if target is not None:
+            grid[target[0], target[1]] = key_small_id
+            applied["key_applied"] = True
+            logger.info("Mixed-initiative: placed small key near (%d, %d)", target[0], target[1])
+
+    return grid, applied

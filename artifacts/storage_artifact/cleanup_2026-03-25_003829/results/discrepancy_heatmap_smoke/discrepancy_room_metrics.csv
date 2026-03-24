@@ -1,0 +1,17 @@
+seed,mode,room_id,changed_tiles,changed_ratio,mean_changed_heat,max_heat,heatmap_npy,heatmap_png
+42,gat2,0,0.0,0.0,0.0,0.0,results\discrepancy_heatmap_smoke\room_heatmaps\seed_42\gat2_room_0.npy,results\discrepancy_heatmap_smoke\room_heatmaps\seed_42\gat2_room_0.png
+42,gat2,1,0.0,0.0,0.0,0.0,results\discrepancy_heatmap_smoke\room_heatmaps\seed_42\gat2_room_1.npy,results\discrepancy_heatmap_smoke\room_heatmaps\seed_42\gat2_room_1.png
+42,gat2,2,0.0,0.0,0.0,0.0,results\discrepancy_heatmap_smoke\room_heatmaps\seed_42\gat2_room_2.npy,results\discrepancy_heatmap_smoke\room_heatmaps\seed_42\gat2_room_2.png
+42,gat2,3,0.0,0.0,0.0,0.0,results\discrepancy_heatmap_smoke\room_heatmaps\seed_42\gat2_room_3.npy,results\discrepancy_heatmap_smoke\room_heatmaps\seed_42\gat2_room_3.png
+42,gat2,4,0.0,0.0,0.0,0.0,results\discrepancy_heatmap_smoke\room_heatmaps\seed_42\gat2_room_4.npy,results\discrepancy_heatmap_smoke\room_heatmaps\seed_42\gat2_room_4.png
+42,gat2,5,0.0,0.0,0.0,0.0,results\discrepancy_heatmap_smoke\room_heatmaps\seed_42\gat2_room_5.npy,results\discrepancy_heatmap_smoke\room_heatmaps\seed_42\gat2_room_5.png
+42,gat2,6,0.0,0.0,0.0,0.0,results\discrepancy_heatmap_smoke\room_heatmaps\seed_42\gat2_room_6.npy,results\discrepancy_heatmap_smoke\room_heatmaps\seed_42\gat2_room_6.png
+42,gat2,7,0.0,0.0,0.0,0.0,results\discrepancy_heatmap_smoke\room_heatmaps\seed_42\gat2_room_7.npy,results\discrepancy_heatmap_smoke\room_heatmaps\seed_42\gat2_room_7.png
+42,lightweight,0,0.0,0.0,0.0,0.0,results\discrepancy_heatmap_smoke\room_heatmaps\seed_42\lightweight_room_0.npy,results\discrepancy_heatmap_smoke\room_heatmaps\seed_42\lightweight_room_0.png
+42,lightweight,1,0.0,0.0,0.0,0.0,results\discrepancy_heatmap_smoke\room_heatmaps\seed_42\lightweight_room_1.npy,results\discrepancy_heatmap_smoke\room_heatmaps\seed_42\lightweight_room_1.png
+42,lightweight,2,0.0,0.0,0.0,0.0,results\discrepancy_heatmap_smoke\room_heatmaps\seed_42\lightweight_room_2.npy,results\discrepancy_heatmap_smoke\room_heatmaps\seed_42\lightweight_room_2.png
+42,lightweight,3,0.0,0.0,0.0,0.0,results\discrepancy_heatmap_smoke\room_heatmaps\seed_42\lightweight_room_3.npy,results\discrepancy_heatmap_smoke\room_heatmaps\seed_42\lightweight_room_3.png
+42,lightweight,4,0.0,0.0,0.0,0.0,results\discrepancy_heatmap_smoke\room_heatmaps\seed_42\lightweight_room_4.npy,results\discrepancy_heatmap_smoke\room_heatmaps\seed_42\lightweight_room_4.png
+42,lightweight,5,0.0,0.0,0.0,0.0,results\discrepancy_heatmap_smoke\room_heatmaps\seed_42\lightweight_room_5.npy,results\discrepancy_heatmap_smoke\room_heatmaps\seed_42\lightweight_room_5.png
+42,lightweight,6,0.0,0.0,0.0,0.0,results\discrepancy_heatmap_smoke\room_heatmaps\seed_42\lightweight_room_6.npy,results\discrepancy_heatmap_smoke\room_heatmaps\seed_42\lightweight_room_6.png
+42,lightweight,7,0.0,0.0,0.0,0.0,results\discrepancy_heatmap_smoke\room_heatmaps\seed_42\lightweight_room_7.npy,results\discrepancy_heatmap_smoke\room_heatmaps\seed_42\lightweight_room_7.png

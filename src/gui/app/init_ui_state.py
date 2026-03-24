@@ -30,6 +30,16 @@ def initialize_ui_control_state(*, gui: Any, pygame: Any, widgets_available: boo
     gui.show_minimap = True
     gui.minimap_size = 150
     gui.minimap_clickable = True
+    gui.ai_mission_graph_editor_enabled = False
+    gui.ai_mission_graph_draft = None
+    gui.ai_mission_graph_layout = {}
+    gui.ai_mission_graph_seed = None
+    gui.ai_mission_graph_boss_node = None
+    gui.ai_mission_graph_locked_edges = []
+    gui.ai_mission_graph_pending_lock_source = None
+    gui.ai_constraint_boss_norm = None
+    gui.ai_constraint_lock_norm = None
+    gui.ai_constraint_key_norm = None
 
     gui.collected_items = []
     gui.collected_positions = set()
