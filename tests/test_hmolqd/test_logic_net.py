@@ -8,6 +8,7 @@ Tests for differentiable pathfinding and solvability checking.
 import pytest
 
 torch = pytest.importorskip("torch")
+from src.core.definitions import ROOM_HEIGHT, ROOM_WIDTH
 
 
 class TestDifferentiablePathfinder:
@@ -48,6 +49,18 @@ class TestDifferentiablePathfinder:
         assert distances.shape == (1, 16, 11)
         # Goal should have small distance
         assert distances[0, 15, 10] < distances[0, 0, 0]
+
+    def test_pathfinder_grid_mode_requires_all_rank3_tensors(self):
+        """Mixed-rank grid inputs should raise a clean ValueError instead of attribute errors."""
+        from src.core.logic_net import DifferentiablePathfinder
+
+        pathfinder = DifferentiablePathfinder(iterations=4)
+        walkability = torch.ones(1, 8, 8)
+        start = torch.zeros(1, 8, 8)
+        source_mask = torch.zeros(8)
+
+        with pytest.raises(ValueError, match="DifferentiablePathfinder grid mode expects"):
+            pathfinder(walkability, start, source_mask)
 
 
 class TestReachabilityScorer:
@@ -143,6 +156,24 @@ class TestLogicNet:
         
         assert room.grad is not None
         assert room.grad.abs().sum() > 0
+
+    def test_logicnet_projects_latent_room_pathfinding_to_canonical_room_size(self):
+        """Latent inputs should be lifted to room resolution before door/path checks."""
+        from src.core.logic_net import LogicNet
+
+        logic_net = LogicNet(
+            num_tile_classes=44,
+            hidden_dim=32,
+        )
+
+        z = torch.randn(1, 64, 4, 3)
+        loss, info = logic_net(z)
+
+        assert loss.ndim == 0
+        assert tuple(info["latent_tile_logits"].shape[-2:]) == (4, 3)
+        assert tuple(info["tile_logits"].shape[-2:]) == (ROOM_HEIGHT, ROOM_WIDTH)
+        assert tuple(info["walkability"].shape[-2:]) == (ROOM_HEIGHT, ROOM_WIDTH)
+        assert tuple(info["grid_distances"].shape[-2:]) == (ROOM_HEIGHT, ROOM_WIDTH)
 
 
 class TestTileClassifier:

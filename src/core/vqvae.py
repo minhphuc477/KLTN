@@ -30,16 +30,46 @@ Architecture:
 """
 
 import logging
-from typing import Dict, List, Tuple, Optional, Any
+import math
+from typing import Dict, List, Tuple, Optional, Any, Sequence
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-from src.core.definitions import ROOM_HEIGHT, ROOM_WIDTH, TileID
+from src.core.definitions import ROOM_HEIGHT, ROOM_WIDTH, TileID, normalize_room_shape
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# SHAPE HELPERS
+# ============================================================================
+
+def canonical_latent_shape(
+    room_shape: Sequence[int] = (ROOM_HEIGHT, ROOM_WIDTH),
+    *,
+    channel_mult: Tuple[int, ...] = (1, 2, 4),
+    downsample_factor: int = 2,
+) -> Tuple[int, int]:
+    """
+    Compute the default VQ-VAE latent `(rows, cols)` for a room grid.
+
+    The encoder downsamples once per level except the last using a stride-2
+    convolution with padding=1, which yields `ceil(size / 2)` each time.
+    Keeping this calculation in one place avoids scattering hardcoded
+    `(ROOM_HEIGHT // 4, (ROOM_WIDTH + 3) // 4)` assumptions across the codebase.
+    """
+    latent_h, latent_w = normalize_room_shape(room_shape)
+    stride = max(1, int(downsample_factor))
+    num_downsamples = max(0, len(channel_mult) - 1)
+
+    for _ in range(num_downsamples):
+        latent_h = int(math.ceil(latent_h / stride))
+        latent_w = int(math.ceil(latent_w / stride))
+
+    return latent_h, latent_w
 
 
 # ============================================================================
@@ -470,7 +500,7 @@ class Encoder(nn.Module):
         h = self.conv_in(x)
         
         for block in self.down_blocks:
-            for layer in block.children():
+            for layer in list(block.children()):
                 h = layer(h)
         
         h = self.norm_out(h)
@@ -563,7 +593,7 @@ class Decoder(nn.Module):
         h = self.conv_in(z)
         
         for block in self.up_blocks:
-            for layer in block.children():
+            for layer in list(block.children()):
                 h = layer(h)
         
         h = self.norm_out(h)
@@ -794,8 +824,10 @@ class SemanticVQVAE(nn.Module):
             Output logits [B, C, H, W]
         """
         if target_size is None:
-            # Zelda rooms have canonical non-square dimensions (16x11).
+            # Internal room tensors use row-major `(rows, cols)`.
             target_size = (ROOM_HEIGHT, ROOM_WIDTH)
+        else:
+            target_size = normalize_room_shape(target_size)
         return self.decoder(z_q, target_size)
     
     def decode_indices(

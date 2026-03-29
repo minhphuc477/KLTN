@@ -23,6 +23,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from typing import List, Dict
 
 from src.generation.grammar import (
+    AddValveRule,
+    MissionEdge,
+    MissionGraph,
+    MissionNode,
     MissionGrammar, 
     Difficulty, 
     NodeType, 
@@ -399,6 +403,33 @@ class TestRuleConstraints:
             assert edge.source != edge.target, \
                 f"Self-loop detected: {edge.source} → {edge.target}"
     
+    def test_add_valve_rule_preserves_string_node_ids(self):
+        """Valve insertion should not require integer-coercible node IDs."""
+        import random
+
+        graph = MissionGraph()
+        graph.add_node(MissionNode(id="start", node_type=NodeType.START, position=(0, 0, 0)))
+        graph.add_node(MissionNode(id="a", node_type=NodeType.EMPTY, position=(1, 0, 0)))
+        graph.add_node(MissionNode(id="b", node_type=NodeType.EMPTY, position=(2, 0, 0)))
+        graph.add_node(MissionNode(id="c", node_type=NodeType.EMPTY, position=(1, 1, 0)))
+        graph.add_node(MissionNode(id="goal", node_type=NodeType.GOAL, position=(3, 0, 0)))
+
+        graph.add_edge("start", "a", EdgeType.PATH)
+        graph.add_edge("a", "b", EdgeType.PATH)
+        graph.add_edge("b", "goal", EdgeType.PATH)
+        graph.add_edge("b", "c", EdgeType.PATH)
+        graph.edges.append(MissionEdge(source="c", target="a", edge_type=EdgeType.PATH))
+        graph._adjacency["c"].append("a")
+        graph._adjacency["a"].append("c")
+
+        updated = AddValveRule().apply(graph, {"rng": random.Random(0)})
+
+        one_way_edges = [edge for edge in updated.edges if edge.edge_type == EdgeType.ONE_WAY]
+        assert one_way_edges, "Expected AddValveRule to convert one cycle edge to ONE_WAY"
+        valve = one_way_edges[0]
+        assert valve.target in updated._adjacency.get(valve.source, [])
+        assert valve.source not in updated._adjacency.get(valve.target, [])
+
     def test_start_and_goal_exist(self):
         """Test that START and GOAL nodes always exist."""
         grammar = MissionGrammar(seed=1111)

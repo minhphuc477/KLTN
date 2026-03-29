@@ -433,9 +433,9 @@ class MissionGraph:
         """Get directed out-degree from cached adjacency."""
         return int(len(self._adjacency.get(node_id, [])))
 
-    def get_adjacency_map(self) -> Dict[int, List[int]]:
+    def get_adjacency_map(self) -> Dict[Any, List[Any]]:
         """Return a shallow copy of adjacency for read-only traversal."""
-        return {int(node_id): list(neighbors) for node_id, neighbors in self._adjacency.items()}
+        return {node_id: list(neighbors) for node_id, neighbors in self._adjacency.items()}
     
     def get_nodes_by_type(self, node_type: NodeType) -> List[MissionNode]:
         """Get all nodes of a given type."""
@@ -3546,7 +3546,7 @@ class AddValveRule(ProductionRule):
                 queue.append((neighbor, new_path))
         return None
 
-    def _critical_path_pairs(self, graph: MissionGraph) -> Set[Tuple[int, int]]:
+    def _critical_path_pairs(self, graph: MissionGraph) -> Set[Tuple[Any, Any]]:
         """
         Directed/undirected edge pairs on current START->GOAL path.
 
@@ -3560,10 +3560,10 @@ class AddValveRule(ProductionRule):
         path = self._bfs_path(graph._adjacency, start.id, goal.id)
         if not path or len(path) < 2:
             return set()
-        pairs: Set[Tuple[int, int]] = set()
+        pairs: Set[Tuple[Any, Any]] = set()
         for i in range(len(path) - 1):
-            a = int(path[i])
-            b = int(path[i + 1])
+            a = path[i]
+            b = path[i + 1]
             pairs.add((a, b))
             pairs.add((b, a))
         return pairs
@@ -3598,11 +3598,11 @@ class AddValveRule(ProductionRule):
                 continue
 
             # Make the ring explicit even when detect_cycles omits closing node.
-            cycle_steps: List[Tuple[int, int]] = []
+            cycle_steps: List[Tuple[Any, Any]] = []
             for i in range(len(cycle) - 1):
-                cycle_steps.append((int(cycle[i]), int(cycle[i + 1])))
-            if int(cycle[0]) != int(cycle[-1]):
-                cycle_steps.append((int(cycle[-1]), int(cycle[0])))
+                cycle_steps.append((cycle[i], cycle[i + 1]))
+            if cycle[0] != cycle[-1]:
+                cycle_steps.append((cycle[-1], cycle[0]))
 
             all_candidates: List[Tuple[int, MissionEdge]] = []
             noncritical_candidates: List[Tuple[int, MissionEdge]] = []
@@ -3614,8 +3614,8 @@ class AddValveRule(ProductionRule):
                     if idx in seen_edge_ids or edge.edge_type != EdgeType.PATH:
                         continue
                     if not (
-                        (int(edge.source) == src and int(edge.target) == tgt)
-                        or (int(edge.source) == tgt and int(edge.target) == src)
+                        (edge.source == src and edge.target == tgt)
+                        or (edge.source == tgt and edge.target == src)
                     ):
                         continue
                     seen_edge_ids.add(idx)
@@ -3623,8 +3623,8 @@ class AddValveRule(ProductionRule):
                     all_candidates.append(candidate)
                     touches_protected = (edge.source in protected_nodes) or (edge.target in protected_nodes)
                     on_critical = (
-                        (int(edge.source), int(edge.target)) in critical_pairs
-                        or (int(edge.target), int(edge.source)) in critical_pairs
+                        (edge.source, edge.target) in critical_pairs
+                        or (edge.target, edge.source) in critical_pairs
                     )
                     if not on_critical:
                         noncritical_candidates.append(candidate)
@@ -3656,7 +3656,7 @@ class AddValveRule(ProductionRule):
         # Remove backward adjacency (it's now one-way only)
         if edge.target in graph._adjacency:
             graph._adjacency[edge.target] = [
-                n for n in graph._adjacency.get(edge.target, []) if int(n) != int(edge.source)
+                n for n in graph._adjacency.get(edge.target, []) if n != edge.source
             ]
         
         logger.info(f"AddValveRule: Made edge {edge.source}->{edge.target} ONE_WAY in cycle")

@@ -429,12 +429,21 @@ class GlobalStreamEncoder(nn.Module):
                 torch.int32,
                 torch.int64,
             ):
-                num_classes = max(
-                    self.edge_feature_dim,
-                    int(edge_features.max().item()) + 1 if edge_features.numel() > 0 else 1,
-                )
+                num_classes = max(1, int(self.edge_feature_dim))
+                labels = edge_features.long()
+                if labels.numel() > 0:
+                    min_label = int(labels.min().item())
+                    max_label = int(labels.max().item())
+                    if min_label < 0 or max_label >= num_classes:
+                        self._warn_once(
+                            f"edge_label_clamp:{min_label}:{max_label}->{num_classes}",
+                            (
+                                f"edge_features integer labels out of range for fixed width {num_classes}. "
+                                "Clamping to preserve a stable one-hot schema."
+                            ),
+                        )
                 edge_features = F.one_hot(
-                    edge_features.long().clamp(min=0, max=num_classes - 1),
+                    labels.clamp(min=0, max=num_classes - 1),
                     num_classes=num_classes,
                 ).float()
             else:

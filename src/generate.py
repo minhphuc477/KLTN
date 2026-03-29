@@ -35,6 +35,7 @@ from src.core.latent_diffusion import create_latent_diffusion
 from src.core.vqvae import create_vqvae
 from src.core.condition_encoder import create_condition_encoder
 from src.core.symbolic_refiner import create_symbolic_refiner
+from src.core.definitions import SEMANTIC_TO_CHAR, semantic_grid_to_vglc_lines
 
 logger = logging.getLogger(__name__)
 
@@ -365,17 +366,35 @@ def save_generated_maps(
     saved_files = []
     
     for i, map_tensor in enumerate(maps):
-        grid = map_tensor.squeeze().numpy()
-        
+        grid = map_tensor.detach().cpu().squeeze().numpy()
+
         if format == 'npy':
             filepath = output_path / f"dungeon_{i:04d}.npy"
             np.save(filepath, grid)
         else:
             filepath = output_path / f"dungeon_{i:04d}.txt"
-            with open(filepath, 'w') as f:
-                for row in grid:
-                    line = ''.join(['F' if v > 0.5 else 'W' for v in row])
-                    f.write(line + '\n')
+            if grid.ndim != 2:
+                raise ValueError(
+                    f"TXT export expects 2D semantic grid, got shape={tuple(grid.shape)}"
+                )
+            grid_int = np.rint(grid).astype(np.int32, copy=False)
+            if not np.allclose(grid, grid_int, atol=1e-4):
+                raise ValueError(
+                    "TXT export expects semantic ID grids with values close to integers; "
+                    f"got non-integer data range [{float(np.min(grid)):.4f}, {float(np.max(grid)):.4f}]."
+                )
+            unknown_ids = sorted(
+                int(v) for v in np.unique(grid_int) if int(v) not in SEMANTIC_TO_CHAR
+            )
+            if unknown_ids:
+                logger.warning(
+                    "TXT export encountered unknown semantic IDs %s; writing as '-'",
+                    unknown_ids,
+                )
+            lines = semantic_grid_to_vglc_lines(grid_int)
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write('\n'.join(lines))
+                f.write('\n')
         
         saved_files.append(filepath)
     
@@ -488,7 +507,7 @@ def main():
     # Wrap in a simple model interface for generate_and_evaluate
     class LatentDiffusionWrapper(nn.Module):
         """Wraps VQ-VAE + Diffusion + CondEncoder for generation."""
-        def __init__(self, vqvae, diffusion, cond_encoder, latent_shape=(1, 64, 3, 4)):
+        def __init__(self, vqvae, diffusion, cond_encoder, latent_shape=(1, 64, 4, 3)):
             super().__init__()
             self.vqvae = vqvae
             self.diffusion = diffusion

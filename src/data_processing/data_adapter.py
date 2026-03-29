@@ -415,7 +415,7 @@ class VGLCParser:
         """
         Detect doors on room boundaries.
         
-        Door positions in 16x11 room:
+        Door positions in the canonical internal room grid `(16, 11)`:
         - North: row 0, cols 4-6
         - South: row 15, cols 4-6
         - East: col 10, rows 7-8

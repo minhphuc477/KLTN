@@ -6,6 +6,8 @@ from typing import Any, Callable, Dict, Optional, Tuple
 
 import numpy as np
 
+from src.pipeline.room_stitching import StitchedRoomLayout, build_room_canvas_from_slots
+
 RoomPos = Tuple[int, int]
 Offset = Tuple[int, int]
 
@@ -15,34 +17,36 @@ def build_global_grid_from_rooms(
     room_height: int,
     room_width: int,
 ) -> Tuple[np.ndarray, Dict[RoomPos, Offset]]:
-    """Build a stitched global grid and per-room offsets from remapped rooms."""
-    max_row = max(pos[0] for pos in rooms_remapped.keys())
-    max_col = max(pos[1] for pos in rooms_remapped.keys())
+    """Compatibility wrapper around the canonical stitched-room layout builder."""
+    stitched = build_stitched_room_layout_from_rooms(
+        rooms_remapped=rooms_remapped,
+        room_height=room_height,
+        room_width=room_width,
+    )
+    return stitched.dungeon_grid, stitched.room_offsets
 
-    global_height = (max_row + 1) * room_height
-    global_width = (max_col + 1) * room_width
 
-    global_grid = np.zeros((global_height, global_width), dtype=np.int32)
-    room_positions: Dict[RoomPos, Offset] = {}
-
+def build_stitched_room_layout_from_rooms(
+    rooms_remapped: Dict[RoomPos, Any],
+    room_height: int,
+    room_width: int,
+) -> StitchedRoomLayout:
+    """Build the canonical stitched-room layout object for remapped Zelda rooms."""
+    room_grids: Dict[RoomPos, np.ndarray] = {}
     for pos, room in rooms_remapped.items():
-        row, col = pos
-        r_offset = row * room_height
-        c_offset = col * room_width
-        room_positions[pos] = (r_offset, c_offset)
-
         h, w = room.semantic_grid.shape
         if h != room_height or w != room_width:
             raise ValueError(
                 "CRITICAL: Room dimension mismatch before stitching at "
                 f"room {pos}: expected {room_height}x{room_width}, got {h}x{w}."
             )
-        global_grid[
-            r_offset : r_offset + room_height,
-            c_offset : c_offset + room_width,
-        ] = room.semantic_grid
+        room_grids[pos] = np.asarray(room.semantic_grid, dtype=np.int32)
 
-    return global_grid, room_positions
+    return build_room_canvas_from_slots(
+        room_grids=room_grids,
+        slot_positions={pos: pos for pos in rooms_remapped.keys()},
+        fill_tile=0,
+    )
 
 
 def build_room_node_mappings(

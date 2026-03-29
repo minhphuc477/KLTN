@@ -37,6 +37,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
+from src.core.definitions import DOOR_POSITIONS, ROOM_HEIGHT, ROOM_WIDTH
+
 logger = logging.getLogger(__name__)
 
 
@@ -127,20 +129,54 @@ class DifferentiablePathfinder(nn.Module):
     ) -> Tensor:
         """
         Compute differentiable shortest distances from sources.
+
+        Supports two explicit modes:
+
+        1) Graph mode (Bellman-Ford over adjacency matrix):
+           - adjacency: [N, N]
+           - edge_weights: [N, N]
+           - source_mask: [N]
+
+        2) Grid compatibility mode (room flood-fill approximation):
+           - adjacency: walkability [B, H, W]
+           - edge_weights: start mask [B, H, W]
+           - source_mask: goal mask [B, H, W] (accepted for compatibility)
         
         Args:
-            adjacency: [N, N] adjacency matrix (1 = connected)
-            edge_weights: [N, N] edge costs (higher = harder to traverse)
-            source_mask: [N] binary mask for source nodes
+            adjacency: Graph adjacency or grid walkability tensor
+            edge_weights: Graph edge weights or grid start-mask tensor
+            source_mask: Graph source mask or grid goal-mask tensor
             
         Returns:
             distances: [N] soft distances from nearest source
         """
+        if not isinstance(adjacency, torch.Tensor) or not isinstance(edge_weights, torch.Tensor) or not isinstance(source_mask, torch.Tensor):
+            raise TypeError("DifferentiablePathfinder.forward expects tensor inputs.")
+
         # Backward-compatible grid mode:
         #   adjacency -> walkability [B, H, W]
         #   edge_weights -> start mask [B, H, W]
         #   source_mask -> goal mask [B, H, W] (accepted but not required for distance field)
-        if adjacency.ndim == 3 and edge_weights.ndim == 3 and source_mask.ndim == 3:
+        grid_mode = (
+            isinstance(adjacency, torch.Tensor)
+            and isinstance(edge_weights, torch.Tensor)
+            and isinstance(source_mask, torch.Tensor)
+            and any(t.ndim == 3 for t in (adjacency, edge_weights, source_mask))
+        )
+        if grid_mode:
+            if not all(t.ndim == 3 for t in (adjacency, edge_weights, source_mask)):
+                raise ValueError(
+                    "DifferentiablePathfinder grid mode expects adjacency, edge_weights, and "
+                    "source_mask to all be rank-3 [B,H,W] tensors. "
+                    f"Got adjacency={tuple(adjacency.shape)}, edge_weights={tuple(edge_weights.shape)}, "
+                    f"source_mask={tuple(source_mask.shape)}. "
+                    "Update legacy callers to pass explicit batched [B,H,W] walkability/start/goal tensors."
+                )
+            if adjacency.shape != edge_weights.shape or adjacency.shape != source_mask.shape:
+                raise ValueError(
+                    f"Grid mode shape mismatch: adjacency={tuple(adjacency.shape)}, "
+                    f"edge_weights={tuple(edge_weights.shape)}, source_mask={tuple(source_mask.shape)}."
+                )
             walkability = adjacency.float().clamp(0.0, 1.0)
             start = edge_weights.float().clamp(0.0, 1.0)
             B, H, W = walkability.shape
@@ -151,10 +187,16 @@ class DifferentiablePathfinder(nn.Module):
 
             # Soft Bellman-style relaxation over 4-neighborhood.
             for _ in range(self.num_iterations):
-                up = torch.roll(dist, shifts=1, dims=1)
-                down = torch.roll(dist, shifts=-1, dims=1)
-                left = torch.roll(dist, shifts=1, dims=2)
-                right = torch.roll(dist, shifts=-1, dims=2)
+                # Non-wrapping neighbor shifts (avoid torch.roll border wrap-around).
+                inf = float(self.inf_distance)
+                up = torch.full_like(dist, inf)
+                down = torch.full_like(dist, inf)
+                left = torch.full_like(dist, inf)
+                right = torch.full_like(dist, inf)
+                up[:, 1:, :] = dist[:, :-1, :]
+                down[:, :-1, :] = dist[:, 1:, :]
+                left[:, :, 1:] = dist[:, :, :-1]
+                right[:, :, :-1] = dist[:, :, 1:]
                 candidates = torch.stack([dist, up + 1.0, down + 1.0, left + 1.0, right + 1.0], dim=0)
                 relaxed = soft_min(candidates, dim=0, temperature=max(self.temperature, 1e-4))
                 # Penalize non-walkable cells while preserving gradients through walkability.
@@ -163,6 +205,23 @@ class DifferentiablePathfinder(nn.Module):
                 dist = dist * (1.0 - start) + torch.zeros_like(dist) * start
 
             return dist
+
+        if adjacency.ndim != 2 or edge_weights.ndim != 2 or source_mask.ndim != 1:
+            raise ValueError(
+                "Graph mode requires adjacency [N,N], edge_weights [N,N], source_mask [N]."
+            )
+        if adjacency.shape != edge_weights.shape:
+            raise ValueError(
+                f"Graph mode shape mismatch: adjacency={tuple(adjacency.shape)} edge_weights={tuple(edge_weights.shape)}."
+            )
+        if adjacency.shape[0] != adjacency.shape[1]:
+            raise ValueError(
+                f"Graph mode adjacency must be square, got {tuple(adjacency.shape)}."
+            )
+        if source_mask.shape[0] != adjacency.shape[0]:
+            raise ValueError(
+                f"Graph mode source_mask length {source_mask.shape[0]} must equal N={adjacency.shape[0]}."
+            )
 
         N = adjacency.shape[0]
         device = adjacency.device
@@ -666,6 +725,18 @@ class LogicNet(nn.Module):
             margin=1.0,
             temperature=temperature,
         )
+
+    @staticmethod
+    def _project_tile_logits_to_room(tile_logits: Tensor) -> Tensor:
+        """Project latent-resolution tile logits onto the canonical room grid."""
+        if tuple(tile_logits.shape[-2:]) == (ROOM_HEIGHT, ROOM_WIDTH):
+            return tile_logits
+        return F.interpolate(
+            tile_logits,
+            size=(ROOM_HEIGHT, ROOM_WIDTH),
+            mode="bilinear",
+            align_corners=False,
+        )
     
     def update_temperature(self, progress: float):
         """
@@ -703,17 +774,28 @@ class LogicNet(nn.Module):
         
         Args:
             z: Latent codes [B, D, H, W]
-            graph_data: Optional dict with:
-                - 'adjacency': [N, N] room adjacency
-                - 'edge_weights': [N, N] traversal costs
-                - 'start_idx': Index of start room
-                - 'target_idx': Index of target room
-                - 'key_lock_pairs': List of (key_idx, lock_idx)
+            graph_data:
+                - Compatibility mode: start mask tensor [B, H, W], paired with `goal_mask`
+                - Graph mode dict with optional keys:
+                  'adjacency' [N,N], 'edge_weights' [N,N], 'start_idx', 'target_idx',
+                  and 'key_lock_pairs'
+            goal_mask: Compatibility mode goal mask [B, H, W]
             
         Returns:
             loss: Scalar solvability loss
             info: Dict with detailed metrics
         """
+        if not isinstance(z, torch.Tensor):
+            raise TypeError(f"LogicNet.forward expected z tensor, got {type(z).__name__}.")
+        if z.dim() != 4:
+            raise ValueError(f"LogicNet.forward expected z shape [B,D,H,W], got {tuple(z.shape)}.")
+        if goal_mask is not None and not isinstance(goal_mask, torch.Tensor):
+            raise TypeError(f"LogicNet.forward expected goal_mask tensor, got {type(goal_mask).__name__}.")
+        if graph_data is not None and not isinstance(graph_data, (dict, torch.Tensor)):
+            raise TypeError(
+                f"LogicNet.forward expected graph_data dict/tensor/None, got {type(graph_data).__name__}."
+            )
+
         # Backward-compatible inference mode:
         #   logic_net(tile_probs, start_mask, goal_mask) -> solvability scores [B]
         if isinstance(graph_data, torch.Tensor) and isinstance(goal_mask, torch.Tensor):
@@ -736,18 +818,21 @@ class LogicNet(nn.Module):
         
         info = {}
         
-        # 1. Classify tiles
-        tile_logits = self.tile_classifier(z)
+        # 1. Classify latent tiles, then lift to room resolution before
+        #    walkability/pathfinding so door constraints align with VGLC rooms.
+        latent_tile_logits = self.tile_classifier(z)
+        tile_logits = self._project_tile_logits_to_room(latent_tile_logits)
+        info['latent_tile_logits'] = latent_tile_logits
         info['tile_logits'] = tile_logits
-        
+
         # 2. Predict walkability
         walkability = self.walkability(tile_logits)
         info['walkability'] = walkability
-        
+
         # 3. Compute within-room pathability
-        # Create source mask at typical door positions
-        source_mask = self._create_door_source_mask(z.shape, device)
-        
+        # Create source mask at canonical door positions on the room grid.
+        source_mask = self._create_door_source_mask(B, device)
+
         grid_distances = self.grid_pathfinder(
             tile_logits,
             source_mask,
@@ -773,6 +858,21 @@ class LogicNet(nn.Module):
             start_idx = graph_data.get('start_idx', 0)
             target_idx = graph_data.get('target_idx')
             key_lock_pairs = graph_data.get('key_lock_pairs', [])
+
+            if adjacency is not None:
+                if not isinstance(adjacency, torch.Tensor) or adjacency.ndim != 2:
+                    raise ValueError("LogicNet graph_data['adjacency'] must be a rank-2 tensor [N,N].")
+                if adjacency.shape[0] != adjacency.shape[1]:
+                    raise ValueError(
+                        f"LogicNet graph_data['adjacency'] must be square, got {tuple(adjacency.shape)}."
+                    )
+            if edge_weights is not None:
+                if not isinstance(edge_weights, torch.Tensor):
+                    raise ValueError("LogicNet graph_data['edge_weights'] must be a tensor when provided.")
+                if adjacency is not None and edge_weights.shape != adjacency.shape:
+                    raise ValueError(
+                        "LogicNet graph_data['edge_weights'] must match adjacency shape."
+                    )
             
             if adjacency is not None and edge_weights is not None:
                 N = adjacency.shape[0]
@@ -830,27 +930,26 @@ class LogicNet(nn.Module):
     
     def _create_door_source_mask(
         self,
-        shape: Tuple[int, ...],
+        batch_size: int,
         device: torch.device,
     ) -> Tensor:
         """Create source mask at door positions for grid pathfinding."""
-        B, _, H, W = shape
-        mask = torch.zeros(B, 1, H, W, device=device)
-        
-        # Place sources at typical door positions
-        # North door (top center)
-        if H > 0:
-            mask[:, :, 0, W//2-1:W//2+2] = 1.0
-        # South door (bottom center)
-        if H > 1:
-            mask[:, :, -1, W//2-1:W//2+2] = 1.0
-        # East door (right middle)
-        if W > 0:
-            mask[:, :, H//2-1:H//2+2, -1] = 1.0
-        # West door (left middle)
-        if W > 1:
-            mask[:, :, H//2-1:H//2+2, 0] = 1.0
-        
+        mask = torch.zeros(batch_size, 1, ROOM_HEIGHT, ROOM_WIDTH, device=device)
+
+        for direction, spec in DOOR_POSITIONS.items():
+            if direction in {"N", "S"}:
+                row = int(max(0, min(ROOM_HEIGHT - 1, spec["row"])))
+                col_start = int(max(0, min(ROOM_WIDTH - 1, spec["col_start"])))
+                col_end = int(max(0, min(ROOM_WIDTH - 1, spec["col_end"])))
+                if col_end >= col_start:
+                    mask[:, :, row, col_start:col_end + 1] = 1.0
+            else:
+                col = int(max(0, min(ROOM_WIDTH - 1, spec["col"])))
+                row_start = int(max(0, min(ROOM_HEIGHT - 1, spec["row_start"])))
+                row_end = int(max(0, min(ROOM_HEIGHT - 1, spec["row_end"])))
+                if row_end >= row_start:
+                    mask[:, :, row_start:row_end + 1, col] = 1.0
+
         return mask
     
     def get_gradient(

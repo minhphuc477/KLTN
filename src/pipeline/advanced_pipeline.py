@@ -1,18 +1,18 @@
 ﻿"""
 Advanced Neural-Symbolic Pipeline
 ==================================
-Unified integration of all 15 features for thesis defense and industry validation.
+Unified integration of advanced features for thesis defense and industry validation.
 
 This pipeline combines:
 - Core 6 features: Graph enforcer, robust pipeline, entity spawner, ablation, controllability, diversity
 - Thesis defense 5: Seam smoothing, collision validation, style transfer, fun metrics, demo recording
-- Industry 4: Global state, big rooms, LCM-LoRA performance, explainability
+- Industry 4: Global state, big rooms, optional fast-sampling extension, explainability
 
 Architecture:
     Evolutionary Director
     -> VQ-VAE Encoder
     -> Condition Encoder
-    -> Latent Diffusion (with LCM-LoRA)
+    -> Latent Diffusion
     -> VQ-VAE Decoder
     -> Style Transfer
     -> LogicNet + WFC Refiner (with global state)
@@ -48,6 +48,7 @@ from src.generation.style_transfer import ThemeType
 from src.generation.global_state import GlobalStateManager, GlobalStateType
 from src.generation.weighted_bayesian_wfc import WeightedBayesianWFC, extract_tile_priors_from_vqvae, WeightedBayesianWFCConfig
 from src.pipeline.dungeon_pipeline import NeuralSymbolicDungeonPipeline
+from src.pipeline.room_stitching import StitchedRoomLayout, compute_graph_aware_room_slots
 
 # Validation
 from src.validation.collision_alignment_validator import CollisionAlignmentValidator
@@ -79,7 +80,8 @@ class AdvancedPipelineConfig:
     
     # Performance
     use_lcm_lora: bool = True
-    lcm_steps: int = 4  # LCM-LoRA: 4 steps instead of 50
+    lcm_steps: int = 4  # Only used when a real fast-sampling path is available.
+    lcm_lora_checkpoint: Optional[Path] = None
     
     # Visual quality
     enable_seam_smoothing: bool = True
@@ -117,7 +119,7 @@ class PipelineStats:
     evaluation_time: float
     
     # Performance metrics
-    lcm_speedup: float  # e.g., 22.5x
+    lcm_speedup: float  # >1.0 only when a real fast-sampling backend is active
     rooms_per_second: float
     
     # Quality metrics
@@ -197,6 +199,9 @@ class AdvancedNeuralSymbolicPipeline:
         
         # Optimization
         self.lcm_diffusion = None  # Will be set when diffusion model is available
+        self.fast_sampling_active = False
+        self.fast_sampling_reason = "LCM-LoRA fast sampling is not wired into the graph-aware core pipeline."
+        self._configure_fast_sampling()
         
         # Utils
         from src.utils.demo_recorder import RecordingConfig
@@ -205,6 +210,50 @@ class AdvancedNeuralSymbolicPipeline:
         self.explainability_mgr = ExplainabilityManager() if config.enable_explainability else None
         
         logger.info("Advanced pipeline initialized successfully")
+
+    def _configure_fast_sampling(self) -> None:
+        """
+        Configure optional fast sampling.
+
+        Paper-faithful LCM-LoRA requires LCM-specific distillation and inference
+        semantics. The current advanced pipeline delegates room generation
+        through the main NeuralSymbolicDungeonPipeline graph-aware path, so we
+        intentionally keep the legacy LCM-LoRA switch disabled unless a future
+        fully compatible backend is added.
+        """
+        if not self.config.use_lcm_lora:
+            self.fast_sampling_active = False
+            self.fast_sampling_reason = "LCM-LoRA disabled by config."
+            return
+
+        checkpoint = self.config.lcm_lora_checkpoint
+        if checkpoint is not None and not Path(checkpoint).exists():
+            self.fast_sampling_active = False
+            self.fast_sampling_reason = (
+                f"Requested LCM-LoRA checkpoint does not exist: {checkpoint}"
+            )
+            logger.warning(self.fast_sampling_reason)
+            return
+
+        self.fast_sampling_active = False
+        self.fast_sampling_reason = (
+            "Requested LCM-LoRA, but this codebase does not yet implement the "
+            "paper-faithful LCM-LoRA runtime. Falling back to standard DDIM sampling."
+        )
+        logger.warning(self.fast_sampling_reason)
+
+    def _effective_diffusion_steps(self) -> int:
+        """Return the real sampler step count for room generation."""
+        if self.fast_sampling_active:
+            return max(1, int(self.config.lcm_steps))
+        return 50
+
+    def _compute_reported_lcm_speedup(self, room_count: int, gen_time: float) -> float:
+        """Only report LCM speedup when a real fast-sampling backend is active."""
+        if not self.fast_sampling_active:
+            return 1.0
+        baseline_time = float(max(1, int(room_count))) * 45.0
+        return baseline_time / gen_time if gen_time > 0 else 1.0
 
     def _estimate_boundary_discontinuity(
         self,
@@ -406,7 +455,11 @@ class AdvancedNeuralSymbolicPipeline:
         # Create output directory
         self.config.output_dir.mkdir(parents=True, exist_ok=True)
         
-        logger.info(f"Starting advanced dungeon generation: {room_count} rooms, LCM-LoRA={self.config.use_lcm_lora}")
+        logger.info(
+            "Starting advanced dungeon generation: %d rooms, fast_sampling_active=%s",
+            room_count,
+            self.fast_sampling_active,
+        )
         
         # Step 1: Start demo recording
         if self.demo_recorder:
@@ -451,7 +504,7 @@ class AdvancedNeuralSymbolicPipeline:
         else:
             global_state_config = {}
         
-        # Step 5: Generate rooms with LCM-LoRA acceleration
+        # Step 5: Generate rooms with the active diffusion backend
         gen_start = time.time()
         rooms = self._generate_all_rooms(
             mission_graph,
@@ -667,12 +720,7 @@ class AdvancedNeuralSymbolicPipeline:
         # Calculate stats
         total_time = time.time() - start_time
         
-        # LCM-LoRA speedup (baseline: 50 steps * 0.9s = 45s per room)
-        if self.config.use_lcm_lora:
-            baseline_time = room_count * 45  # 45s per room with DDIM
-            lcm_speedup = baseline_time / gen_time if gen_time > 0 else 1.0
-        else:
-            lcm_speedup = 1.0
+        lcm_speedup = self._compute_reported_lcm_speedup(room_count=room_count, gen_time=gen_time)
         
         stats = PipelineStats(
             total_time=total_time,
@@ -689,7 +737,12 @@ class AdvancedNeuralSymbolicPipeline:
             fully_traceable=fully_traceable
         )
         
-        logger.info(f"Pipeline complete in {total_time:.2f}s (generation: {gen_time:.2f}s, {lcm_speedup:.1f}x speedup)")
+        logger.info(
+            "Pipeline complete in %.2fs (generation: %.2fs, reported_lcm_speedup=%.1fx)",
+            total_time,
+            gen_time,
+            lcm_speedup,
+        )
         
         return DungeonGenerationResult(
             dungeon_grid=dungeon_grid,
@@ -1058,7 +1111,7 @@ class AdvancedNeuralSymbolicPipeline:
                 position=None,
                 guidance_scale=7.5,
                 logic_guidance_scale=1.0,
-                num_diffusion_steps=self.config.lcm_steps if self.config.use_lcm_lora else 50,
+                num_diffusion_steps=self._effective_diffusion_steps(),
                 use_ddim=True,
                 apply_repair=True,
                 start_goal_coords=((1, 5), (14, 5)),  # Default start/goal
@@ -1230,95 +1283,14 @@ class AdvancedNeuralSymbolicPipeline:
         mission_graph: nx.DiGraph,
         room_ids: List[int],
     ) -> Dict[int, Tuple[int, int]]:
-        """
-        Assign each room a coarse grid slot, keeping graph neighbors spatially close.
-        """
-        room_set = set(room_ids)
-        if not room_set:
-            return {}
-        
-        graph = mission_graph.to_undirected()
-        nodes = [n for n in graph.nodes() if n in room_set]
-        if not nodes:
-            return {}
-        
-        nodes_sorted = sorted(nodes, key=self._node_sort_key)
-        start = None
-        for n in nodes_sorted:
-            if mission_graph.nodes[n].get('is_start'):
-                start = n
-                break
-        if start is None:
-            start = nodes_sorted[0]
-        
-        positions: Dict[int, Tuple[int, int]] = {start: (0, 0)}
-        occupied: Set[Tuple[int, int]] = {(0, 0)}
-        bfs_queue: deque = deque([start])
-        offsets = [(0, 1), (1, 0), (0, -1), (-1, 0)]
-
-        def nearest_free(anchor: Tuple[int, int]) -> Tuple[int, int]:
-            ar, ac = anchor
-            for radius in range(1, max(4, len(nodes) * 2)):
-                candidates = []
-                for dr in range(-radius, radius + 1):
-                    for dc in range(-radius, radius + 1):
-                        if abs(dr) + abs(dc) != radius:
-                            continue
-                        pos = (ar + dr, ac + dc)
-                        if pos in occupied:
-                            continue
-                        candidates.append(pos)
-                if candidates:
-                    candidates.sort(key=lambda p: (abs(p[0]) + abs(p[1]), p[0], p[1]))
-                    return candidates[0]
-            # Last-resort deterministic fallback.
-            probe = (ar, ac + len(occupied) + 1)
-            while probe in occupied:
-                probe = (probe[0], probe[1] + 1)
-            return probe
-
-        while bfs_queue:
-            u = bfs_queue.popleft()
-            ur, uc = positions[u]
-            for v in sorted(graph.neighbors(u), key=self._node_sort_key):
-                if v not in room_set or v in positions:
-                    continue
-                
-                candidates = []
-                for dr, dc in offsets:
-                    pos = (ur + dr, uc + dc)
-                    if pos in occupied:
-                        continue
-                    adjacency_bonus = 0
-                    for nb in graph.neighbors(v):
-                        if nb in positions:
-                            pr, pc = positions[nb]
-                            if abs(pr - pos[0]) + abs(pc - pos[1]) == 1:
-                                adjacency_bonus += 1
-                    candidates.append((-adjacency_bonus, abs(pos[0]) + abs(pos[1]), pos[0], pos[1], pos))
-                
-                if candidates:
-                    candidates.sort()
-                    chosen = candidates[0][-1]
-                else:
-                    chosen = nearest_free((ur, uc))
-                
-                positions[v] = chosen
-                occupied.add(chosen)
-                bfs_queue.append(v)
-        
-        # Handle disconnected components.
-        for node in nodes_sorted:
-            if node in positions:
-                continue
-            fallback = nearest_free((0, 0))
-            positions[node] = fallback
-            occupied.add(fallback)
-        
-        # Normalize so smallest coordinate starts at (0,0).
-        min_r = min(r for r, _ in positions.values())
-        min_c = min(c for _, c in positions.values())
-        return {n: (r - min_r, c - min_c) for n, (r, c) in positions.items()}
+        """Compatibility wrapper around the shared graph-aware slot placement."""
+        return compute_graph_aware_room_slots(
+            graph=mission_graph,
+            room_ids=list(room_ids),
+            sort_key=self._node_sort_key,
+            node_position_getter=self.neural_pipeline._get_node_grid_position,
+            first_free_position_fn=self.neural_pipeline._first_free_position,
+        )
 
     def _stitch_rooms(
         self,
@@ -1326,74 +1298,44 @@ class AdvancedNeuralSymbolicPipeline:
         mission_graph: nx.DiGraph
     ) -> Tuple[np.ndarray, Dict[int, Tuple[int, int, int, int]]]:
         """
-        Stitch rooms using a graph-aware slot layout instead of naive horizontal concat.
+        Stitch rooms using the shared graph-aware layout from the core pipeline.
         """
         if not rooms:
             return np.zeros((0, 0), dtype=int), {}
-        
-        from src.core.definitions import SEMANTIC_PALETTE
-        void_id = int(SEMANTIC_PALETTE.get('VOID', 0))
-        
-        slot_positions = self._compute_room_slot_positions(mission_graph, list(rooms.keys()))
-        
-        # Ensure every room gets a slot (including any room not present in graph).
-        missing = [rid for rid in sorted(rooms.keys(), key=self._node_sort_key) if rid not in slot_positions]
-        if missing:
-            used = set(slot_positions.values())
-            next_col = (max((c for _, c in used), default=-1) + 1)
-            for rid in missing:
-                pos = (0, next_col)
-                while pos in used:
-                    next_col += 1
-                    pos = (0, next_col)
-                slot_positions[rid] = pos
-                used.add(pos)
-                next_col += 1
-        
-        rows = sorted({rc[0] for rc in slot_positions.values()})
-        cols = sorted({rc[1] for rc in slot_positions.values()})
-        row_to_idx = {r: i for i, r in enumerate(rows)}
-        col_to_idx = {c: i for i, c in enumerate(cols)}
-        
-        row_heights = [0] * len(rows)
-        col_widths = [0] * len(cols)
-        for room_id, (slot_r, slot_c) in slot_positions.items():
-            room = rooms[room_id]
-            r_idx = row_to_idx[slot_r]
-            c_idx = col_to_idx[slot_c]
-            row_heights[r_idx] = max(row_heights[r_idx], int(room.shape[0]))
-            col_widths[c_idx] = max(col_widths[c_idx], int(room.shape[1]))
-        
-        y_offsets = [0] * len(rows)
-        x_offsets = [0] * len(cols)
-        for i in range(1, len(rows)):
-            y_offsets[i] = y_offsets[i - 1] + row_heights[i - 1]
-        for i in range(1, len(cols)):
-            x_offsets[i] = x_offsets[i - 1] + col_widths[i - 1]
-        
-        total_height = int(sum(row_heights))
-        total_width = int(sum(col_widths))
-        dungeon_grid = np.full((total_height, total_width), fill_value=void_id, dtype=int)
-        room_layout: Dict[int, Tuple[int, int, int, int]] = {}
-        
-        for room_id, room in rooms.items():
-            slot_r, slot_c = slot_positions[room_id]
-            r_idx = row_to_idx[slot_r]
-            c_idx = col_to_idx[slot_c]
-            y0 = y_offsets[r_idx]
-            x0 = x_offsets[c_idx]
-            h, w = int(room.shape[0]), int(room.shape[1])
-            dungeon_grid[y0:y0 + h, x0:x0 + w] = room
-            room_layout[room_id] = (x0, y0, x0 + w - 1, y0 + h - 1)
-        
-        return dungeon_grid, room_layout
+
+        stitched = self.stitch_room_layout(
+            rooms=rooms,
+            mission_graph=mission_graph,
+        )
+        return stitched.dungeon_grid, stitched.layout_map
+
+    def stitch_room_layout(
+        self,
+        rooms: Dict[int, np.ndarray],
+        mission_graph: nx.DiGraph,
+    ) -> StitchedRoomLayout:
+        """Return the canonical stitched-room layout object used across generation paths."""
+        if not rooms:
+            return StitchedRoomLayout(
+                dungeon_grid=np.zeros((0, 0), dtype=np.int32),
+                slot_positions={},
+                room_offsets={},
+                layout_map={},
+            )
+
+        return self.neural_pipeline.stitch_room_layout(
+            rooms=rooms,
+            graph=mission_graph,
+            enforce_room_dimensions=None,
+            carve_connections=True,
+        )
 
     def stitch_rooms(
         self,
         rooms: Dict[int, np.ndarray],
         mission_graph: nx.DiGraph,
     ) -> Tuple[np.ndarray, Dict[int, Tuple[int, int, int, int]]]:
-        """Public wrapper for graph-aware room stitching."""
+        """Compatibility wrapper that exposes `(grid, layout_map)` for legacy callers."""
         return self._stitch_rooms(rooms, mission_graph)
 
 
@@ -1449,7 +1391,7 @@ def quick_start_demo():
     
     # Configure with all features enabled
     config = AdvancedPipelineConfig(
-        use_lcm_lora=True,  # 22.5x speedup
+        use_lcm_lora=True,  # Will only activate when a real fast sampler is available
         enable_seam_smoothing=True,  # 87% discontinuity reduction
         enable_collision_validation=True,  # 98.3% alignment
         theme=ThemeType.CASTLE,  # Style transfer
@@ -1478,7 +1420,7 @@ def quick_start_demo():
     # Print results
     print("\n[OK] Generation complete!")
     print(f"   Total time: {result.stats.total_time:.2f}s")
-    print(f"   LCM-LoRA speedup: {result.stats.lcm_speedup:.1f}x")
+    print(f"   Reported fast-sampling speedup: {result.stats.lcm_speedup:.1f}x")
     print(f"   Fun score: {result.stats.fun_score:.2f}/1.0")
     print(f"   Diversity score: {result.stats.diversity_score:.2f}/1.0")
     print(f"   Collision alignment: {result.stats.collision_alignment_score:.1%}")

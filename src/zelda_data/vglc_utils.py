@@ -704,7 +704,7 @@ class VGLCDimensionValidator:
         Validate room has standard VGLC shape.
         
         Checks:
-        - Correct dimensions (16x11)
+        - Correct canonical internal dimensions `(16, 11)`
         - Wall perimeter present
         - Interior region exists
         

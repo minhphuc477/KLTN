@@ -19,7 +19,7 @@ It also validates the external reviewer statement describing the system as a 3-t
 | Search includes a QD/Map-Elites style option | TRUE (OPTIONAL) | `search_strategy` supports `cvt_emitter`; uses `CVTEliteArchive` when available |
 | Default topology strategy is MAP-Elites | FALSE | Default `search_strategy` is `ga`; only optional aliases map to `cvt_emitter` |
 | Tier-2 representation uses VQ-VAE + latent diffusion in the main pipeline | TRUE | `src/core/vqvae.py`, `src/core/latent_diffusion.py`, and `generate_room(...)` in `dungeon_pipeline.py` |
-| LCM-LoRA is part of the default core pipeline path | PARTIAL / OPTIONAL | LCM-LoRA implementation exists in `src/optimization/lcm_lora.py`; wired in `src/pipeline/advanced_pipeline.py`, not the default `dungeon_pipeline.py` path |
+| LCM-LoRA is part of the default core pipeline path | FALSE | The repo contains consistency-LoRA fast-sampler scaffolding in `src/optimization/lcm_lora.py`, but not a paper-faithful LCM-LoRA runtime on the default core path |
 | Tier-3 refinement is WFC-based and symbolic | TRUE | `src/core/symbolic_refiner.py` contains WFC-based repair used by `dungeon_pipeline._create_refiner(...)` |
 | Default runtime refiner is Weighted Bayesian WFC | FALSE | Core path instantiates `SymbolicRefiner`; Weighted Bayesian WFC is not directly invoked by `dungeon_pipeline.py` |
 | Weighted Bayesian WFC exists and is used in research/benchmark probing | TRUE | `src/generation/weighted_bayesian_wfc.py`; used in `src/evaluation/benchmark_suite.py` via `integrate_weighted_wfc_into_pipeline(...)` |
@@ -38,10 +38,11 @@ It also validates the external reviewer statement describing the system as a 3-t
 ### B. "Tier 2 includes LCM-LoRA in the main path"
 
 - Current reality:
-  - LCM-LoRA is implemented and integrated in `advanced_pipeline.py`.
+  - The repo has a consistency-LoRA fast-sampler path and legacy LCM-LoRA naming.
   - Main thesis pipeline (`dungeon_pipeline.py`) does not default to this path.
+  - A paper-faithful LCM-LoRA runtime is not currently implemented.
 - Defense-safe wording:
-  - "Tier 2 mainline uses VQ-VAE + latent diffusion; LCM-LoRA is an accelerated optional extension path."
+  - "Tier 2 mainline uses VQ-VAE + latent diffusion; the repo contains an experimental consistency-LoRA fast-sampling path, not a full LCM-LoRA deployment."
 
 ### C. "Tier 3 default bridge is Weighted Bayesian WFC"
 
@@ -72,7 +73,7 @@ Overall verdict: MOSTLY VALID, with 3 important precision fixes.
 ### Corrections required
 
 1. MAP-Elites is not the always-on Tier-1 default.
-2. LCM-LoRA is not on the default core execution path.
+2. Paper-faithful LCM-LoRA is not implemented on the default core execution path.
 3. Weighted Bayesian WFC is not yet the default runtime refiner in `dungeon_pipeline.py`.
 
 ## Ablation Matrix Feasibility Against Current Code
@@ -87,4 +88,4 @@ Overall verdict: MOSTLY VALID, with 3 important precision fixes.
 
 ## Recommended Defense-Safe One-Liner
 
-"The architecture is a three-tier evolutionary neuro-symbolic system: macro topology search, micro neural prior generation, and symbolic repair. Each tier is independently ablated in code; optional acceleration (LCM-LoRA) and weighted Bayesian WFC variants are implemented as advanced paths."
+"The architecture is a three-tier evolutionary neuro-symbolic system: macro topology search, micro neural prior generation, and symbolic repair. Each tier is independently ablated in code; weighted Bayesian WFC and a repo-specific consistency-LoRA fast-sampling path exist as advanced extensions."

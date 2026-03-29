@@ -24,9 +24,11 @@ Architecture:
 
 """
 
+import json
 import random
 import logging
 import math
+import re
 from typing import List, Tuple, Optional, Dict, Set, Any, Sequence
 from dataclasses import dataclass, field
 from collections import defaultdict
@@ -73,6 +75,9 @@ except ImportError:
     CVTEliteArchive = None
 
 logger = logging.getLogger(__name__)
+
+_SAFE_RULE_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
+DEFAULT_REPLAY_PAYLOAD_MAX_BYTES = 256 * 1024
 
 
 DEFAULT_REALISM_TUNING: Dict[str, float] = {
@@ -190,6 +195,128 @@ class GraphGrammarExecutor:
                             e,
                         )
                         continue
+
+    @staticmethod
+    def _compute_node_degrees(graph: MissionGraph) -> Dict[Any, int]:
+        """Compute undirected degree counts directly from MissionGraph edges."""
+        deg: Dict[Any, int] = {nid: 0 for nid in graph.nodes.keys()}
+        for edge in graph.edges:
+            src = edge.source
+            dst = edge.target
+            deg[src] = int(deg.get(src, 0)) + 1
+            if dst != src:
+                deg[dst] = int(deg.get(dst, 0)) + 1
+        return deg
+
+    @staticmethod
+    def _is_edge_expanding_rule_name(rule_name: str) -> bool:
+        """Heuristic classifier for rules that can increase node connectivity."""
+        name = str(rule_name or "").strip().lower()
+        edge_keywords = (
+            "branch",
+            "merge",
+            "lock",
+            "gate",
+            "shortcut",
+            "teleport",
+            "valve",
+            "loop",
+            "split",
+            "hub",
+            "sector",
+            "stairs",
+            "switch",
+            "foreshadow",
+            "arena",
+        )
+        return any(k in name for k in edge_keywords)
+
+    @staticmethod
+    def _estimate_rule_node_delta(rule_name: str) -> int:
+        """Conservative node growth estimate for masking against max_nodes."""
+        name = str(rule_name or "").strip().lower()
+        if "start" in name:
+            return 3
+        if "branch" in name or "split" in name or "hub" in name or "sector" in name:
+            return 2
+        if "merge" in name or "prune" in name:
+            return 0
+        if "teleport" in name or "shortcut" in name or "valve" in name:
+            return 1
+        return 1
+
+    def _build_action_mask(
+        self,
+        graph: MissionGraph,
+        context: Dict[str, Any],
+        *,
+        max_nodes: int,
+        allow_override: bool,
+        key_count: int,
+    ) -> Dict[int, bool]:
+        """Dynamic admissible action mask for current graph state."""
+        mask: Dict[int, bool] = {}
+        degrees = self._compute_node_degrees(graph)
+        has_degree_capacity = any(int(d) < 4 for d in degrees.values()) if degrees else True
+        node_count = int(len(graph.nodes))
+
+        for rid in range(1, len(self.rules)):
+            rule = self.rules[rid]
+            rule_name = self.rule_names[rid]
+
+            if isinstance(rule, InsertLockKeyRule) and key_count >= self.max_lock_key_rules:
+                mask[rid] = False
+                continue
+
+            if (not allow_override) and (node_count + self._estimate_rule_node_delta(rule_name) > int(max_nodes)):
+                mask[rid] = False
+                continue
+
+            if self._is_edge_expanding_rule_name(rule_name) and (not has_degree_capacity):
+                mask[rid] = False
+                continue
+
+            try:
+                mask[rid] = bool(rule.can_apply(graph, context))
+            except (RuntimeError, ValueError, TypeError, KeyError, AttributeError):
+                mask[rid] = False
+
+        return mask
+
+    def _enforce_max_degree(self, graph: MissionGraph, max_degree: int = 4) -> int:
+        """Deterministically prune excess incident edges to keep degree <= max_degree."""
+        removed = 0
+        if max_degree < 1 or not graph.edges:
+            return removed
+
+        # Stable pruning order: prefer pruning later-added soft/path edges first.
+        def _edge_prune_priority(edge: MissionEdge) -> Tuple[int, str, str, int]:
+            edge_type_name = str(getattr(edge.edge_type, "name", edge.edge_type)).upper()
+            protected = 0 if edge_type_name in {"PATH", "SHORTCUT", "HIDDEN", "WARP", "STAIRS"} else 1
+            return (protected, str(edge.source), str(edge.target), 0)
+
+        changed = True
+        while changed:
+            changed = False
+            deg = self._compute_node_degrees(graph)
+            offenders = {nid for nid, d in deg.items() if int(d) > int(max_degree)}
+            if not offenders:
+                break
+
+            ordered_edges = sorted(list(graph.edges), key=_edge_prune_priority, reverse=True)
+            for e in ordered_edges:
+                if e.source in offenders or e.target in offenders:
+                    try:
+                        graph.edges.remove(e)
+                        removed += 1
+                        changed = True
+                        break
+                    except ValueError:
+                        continue
+            if changed:
+                graph.sanitize()
+
+        return removed
     
     def execute(
         self,
@@ -264,8 +391,38 @@ class GraphGrammarExecutor:
                     )
                 break
             
-            # Clamp rule_id to valid range
+            # Clamp rule_id to valid range and build dynamic action mask.
             rule_id = max(1, min(requested_rule_id, len(self.rules) - 1))
+            action_mask = self._build_action_mask(
+                graph,
+                context,
+                max_nodes=max_nodes,
+                allow_override=allow_override,
+                key_count=key_count,
+            )
+
+            allowed_rule_ids = [rid for rid, allowed in action_mask.items() if allowed]
+            requested_allowed = bool(action_mask.get(rule_id, False))
+
+            if not requested_allowed:
+                rules_skipped += 1
+                if record_trace:
+                    trace_row: Dict[str, Any] = {
+                        "genome_index": int(genome_index),
+                        "requested_rule_id": int(requested_rule_id),
+                        "rule_id": int(rule_id),
+                        "rule_name": str(self.rule_names[rule_id]),
+                        "status": "skipped_action_masked",
+                        "reason": "requested action masked by dynamic feasibility constraints",
+                        "nodes_before": before_nodes,
+                        "edges_before": before_edges,
+                        "nodes_after": before_nodes,
+                        "edges_after": before_edges,
+                        "allowed_actions": [int(rid) for rid in allowed_rule_ids[:16]],
+                    }
+                    rule_trace.append(trace_row)
+                continue
+
             rule = self.rules[rule_id]
             trace_row: Dict[str, Any] = {
                 "genome_index": int(genome_index),
@@ -280,102 +437,62 @@ class GraphGrammarExecutor:
                 "edges_after": before_edges,
             }
             
-            # Check if rule is applicable
-            if not rule.can_apply(graph, context):
-                rules_skipped += 1
-                if record_trace:
-                    trace_row["status"] = "skipped_not_applicable"
-                    trace_row["reason"] = "rule precondition failed"
-                    rule_trace.append(trace_row)
-                continue
-            
-            # Limit key-lock pairs to 3
-            if isinstance(rule, InsertLockKeyRule) and key_count >= self.max_lock_key_rules:
-                rules_skipped += 1
-                if record_trace:
-                    trace_row["status"] = "skipped_key_cap"
-                    trace_row["reason"] = f"max_lock_key_rules reached ({self.max_lock_key_rules})"
-                    rule_trace.append(trace_row)
-                continue
-            
-            # Apply rule
+            # Apply rule on a candidate copy so max-node constraints are enforced exactly.
             try:
-                # Apply on a temporary graph first so multi-node rules
-                # (e.g., lock+key insertions) cannot overflow max_nodes.
                 candidate = copy.deepcopy(graph)
                 candidate = rule.apply(candidate, context)
                 candidate.sanitize()
 
-                # In full-rule mode, keep candidate progression coherent
-                # before accepting it into the phenotype trajectory.
+                if (not allow_override) and (len(candidate.nodes) > max_nodes):
+                    rules_skipped += 1
+                    if record_trace:
+                        trace_row["status"] = "skipped_max_nodes"
+                        trace_row["reason"] = (
+                            f"candidate node cap exceeded after apply ({len(candidate.nodes)} > {max_nodes})"
+                        )
+                        trace_row["nodes_after"] = int(len(candidate.nodes))
+                        trace_row["edges_after"] = int(len(candidate.edges))
+                        rule_trace.append(trace_row)
+                    continue
+
+                # Degree cap projection (keeps graph realizable without copy+reject churn).
+                pruned_edges = self._enforce_max_degree(candidate, max_degree=4)
+
+                # Optional strict progression enforcement in-place.
                 if self._constraint_grammar is not None:
                     candidate = self._constraint_grammar.ensure_anchor_nodes(candidate)
                     candidate.sanitize()
 
                     lock_ok = bool(self._constraint_grammar.validate_lock_key_ordering(candidate))
                     prog_ok = bool(self._constraint_grammar.validate_progression_constraints(candidate))
-
                     if self.enforce_generation_constraints and (not lock_ok or not prog_ok):
-                        if not self.allow_candidate_repairs:
-                            generation_constraint_rejections += 1
-                            rules_skipped += 1
-                            if record_trace:
-                                trace_row["status"] = "skipped_generation_constraints"
-                                trace_row["reason"] = "candidate violated lock/progression constraints"
-                                trace_row["nodes_after"] = int(len(candidate.nodes))
-                                trace_row["edges_after"] = int(len(candidate.edges))
-                                rule_trace.append(trace_row)
-                            continue
-
-                        repaired = copy.deepcopy(candidate)
-                        if not lock_ok:
-                            repaired = self._constraint_grammar.fix_lock_key_ordering(repaired)
-                            repaired.sanitize()
-                        if not prog_ok:
-                            repaired = self._constraint_grammar.repair_progression_constraints(repaired)
-                            repaired.sanitize()
-
-                        lock_ok = bool(self._constraint_grammar.validate_lock_key_ordering(repaired))
-                        prog_ok = bool(self._constraint_grammar.validate_progression_constraints(repaired))
-                        if not lock_ok or not prog_ok:
-                            generation_constraint_rejections += 1
-                            rules_skipped += 1
-                            if record_trace:
-                                trace_row["status"] = "skipped_generation_constraints_after_repair"
-                                trace_row["reason"] = "candidate remained invalid after repair"
-                                trace_row["nodes_after"] = int(len(repaired.nodes))
-                                trace_row["edges_after"] = int(len(repaired.edges))
-                                rule_trace.append(trace_row)
-                            continue
-
-                        candidate = repaired
-                        candidate_repairs_applied += 1
-                    elif self.allow_candidate_repairs and (not lock_ok or not prog_ok):
-                        # Optional relaxed mode: keep old behavior if strict rejection is off.
-                        if not lock_ok:
-                            candidate = self._constraint_grammar.fix_lock_key_ordering(candidate)
-                            candidate.sanitize()
-                        if not prog_ok:
-                            candidate = self._constraint_grammar.repair_progression_constraints(candidate)
-                            candidate.sanitize()
+                        generation_constraint_rejections += 1
+                        candidate = self._constraint_grammar.fix_lock_key_ordering(candidate)
+                        candidate.sanitize()
+                        candidate = self._constraint_grammar.repair_progression_constraints(candidate)
+                        candidate.sanitize()
                         candidate_repairs_applied += 1
 
-                if not allow_override and len(candidate.nodes) > max_nodes:
+                if (not allow_override) and (len(candidate.nodes) > max_nodes):
                     rules_skipped += 1
                     if record_trace:
-                        trace_row["status"] = "skipped_max_nodes_after_apply"
-                        trace_row["reason"] = f"candidate exceeded node cap ({len(candidate.nodes)} > {max_nodes})"
+                        trace_row["status"] = "skipped_max_nodes"
+                        trace_row["reason"] = (
+                            f"candidate node cap exceeded after repair ({len(candidate.nodes)} > {max_nodes})"
+                        )
                         trace_row["nodes_after"] = int(len(candidate.nodes))
                         trace_row["edges_after"] = int(len(candidate.edges))
                         rule_trace.append(trace_row)
                     continue
 
                 graph = candidate
+
                 rules_applied += 1
                 if record_trace:
                     trace_row["status"] = "applied"
                     trace_row["nodes_after"] = int(len(graph.nodes))
                     trace_row["edges_after"] = int(len(graph.edges))
+                    trace_row["pruned_edges_for_degree_cap"] = int(pruned_edges)
                     trace_row["lock_key_count"] = int(key_count + (1 if isinstance(rule, InsertLockKeyRule) else 0))
                     rule_trace.append(trace_row)
                 
@@ -443,29 +560,296 @@ class GraphGrammarExecutor:
         payload: Dict[str, Any],
         *,
         record_trace: bool = False,
+        payload_size_budget: int = DEFAULT_REPLAY_PAYLOAD_MAX_BYTES,
     ) -> MissionGraph:
         """
         Rebuild a mission graph deterministically from serialized replay payload.
         """
+        try:
+            payload_budget = int(payload_size_budget)
+        except (TypeError, ValueError, OverflowError) as e:
+            raise ValueError("Replay payload size budget must be an integer.") from e
+        payload_budget = max(1024, payload_budget)
+
+        def _bounded_int(
+            field: str,
+            value: Any,
+            *,
+            default: int,
+            lo: int,
+            hi: int,
+        ) -> int:
+            if value is None:
+                return int(default)
+            try:
+                parsed = int(value)
+            except (TypeError, ValueError, OverflowError) as e:
+                raise ValueError(f"Replay payload field '{field}' must be an integer.") from e
+            if parsed < int(lo) or parsed > int(hi):
+                raise ValueError(
+                    f"Replay payload field '{field}' out of bounds: {parsed} not in [{lo}, {hi}]"
+                )
+            return parsed
+
+        def _bounded_float(
+            field: str,
+            value: Any,
+            *,
+            default: float,
+            lo: float,
+            hi: float,
+        ) -> float:
+            if value is None:
+                return float(default)
+            try:
+                parsed = float(value)
+            except (TypeError, ValueError, OverflowError) as e:
+                raise ValueError(f"Replay payload field '{field}' must be a float.") from e
+            if (not math.isfinite(parsed)) or parsed < float(lo) or parsed > float(hi):
+                raise ValueError(
+                    f"Replay payload field '{field}' out of bounds: {parsed} not in [{lo}, {hi}]"
+                )
+            return parsed
+
+        def _bounded_bool(
+            field: str,
+            value: Any,
+            *,
+            default: bool,
+        ) -> bool:
+            if value is None:
+                return bool(default)
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, (int, np.integer)) and int(value) in (0, 1):
+                return bool(int(value))
+            raise ValueError(f"Replay payload field '{field}' must be a boolean.")
+
+        def _estimate_json_size(
+            value: Any,
+            *,
+            depth: int = 0,
+            budget: int = payload_budget,
+        ) -> int:
+            if depth > 16:
+                raise ValueError("Replay payload nesting exceeds supported depth.")
+            if value is None:
+                return 4
+            if isinstance(value, bool):
+                return 4 if value else 5
+            if isinstance(value, (int, np.integer)):
+                return len(str(int(value)))
+            if isinstance(value, (float, np.floating)):
+                parsed = float(value)
+                if not math.isfinite(parsed):
+                    raise ValueError("Replay payload contains non-finite numeric values.")
+                return len(format(parsed, ".17g"))
+            if isinstance(value, str):
+                return len(value.encode("utf-8")) + 2
+            if isinstance(value, (list, tuple)):
+                total = 2
+                for idx, item in enumerate(value):
+                    if idx > 0:
+                        total += 1
+                    total += _estimate_json_size(item, depth=depth + 1, budget=budget)
+                    if total > budget:
+                        raise ValueError(
+                            f"Replay payload too large ({total} bytes > {budget} bytes)."
+                        )
+                return total
+            if isinstance(value, dict):
+                total = 2
+                for idx, (raw_key, raw_val) in enumerate(value.items()):
+                    if idx > 0:
+                        total += 1
+                    if not isinstance(raw_key, (str, int, np.integer, float, np.floating, bool)):
+                        raise ValueError("Replay payload keys must be JSON-compatible scalar values.")
+                    total += _estimate_json_size(str(raw_key), depth=depth + 1, budget=budget)
+                    total += 1
+                    total += _estimate_json_size(raw_val, depth=depth + 1, budget=budget)
+                    if total > budget:
+                        raise ValueError(
+                            f"Replay payload too large ({total} bytes > {budget} bytes)."
+                        )
+                return total
+            raise ValueError(
+                f"Replay payload contains unsupported value type: {type(value).__name__}."
+            )
+
+        def _sanitize_rule_name(
+            raw_name: Any,
+            *,
+            field: str,
+            index: Optional[int] = None,
+        ) -> str:
+            name = str(raw_name).strip()
+            suffix = f" {index}" if index is not None else ""
+            if not name or len(name) > 128:
+                field_label = f"{field}s" if field == "override key" else field
+                raise ValueError(
+                    f"Replay payload {field_label}{suffix} must be 1-128 characters."
+                )
+            if not _SAFE_RULE_NAME_RE.fullmatch(name):
+                raise ValueError(
+                    f"Replay payload {field}{suffix} must match {_SAFE_RULE_NAME_RE.pattern}."
+                )
+            return name
+
         if not isinstance(payload, dict):
             raise ValueError("Replay payload must be a dictionary.")
+        allowed_fields = {
+            "seed",
+            "difficulty",
+            "max_nodes",
+            "allow_override",
+            "use_full_rule_space",
+            "max_lock_key_rules",
+            "enforce_generation_constraints",
+            "allow_candidate_repairs",
+            "rule_weight_overrides",
+            "genome",
+            "rule_names",
+        }
+        unknown_fields = sorted(str(key) for key in payload.keys() if str(key) not in allowed_fields)
+        if unknown_fields:
+            raise ValueError(
+                f"Replay payload contains unknown fields: {', '.join(unknown_fields[:8])}"
+            )
+        payload_size = _estimate_json_size(payload, budget=payload_budget)
+        if payload_size > payload_budget:
+            raise ValueError(
+                f"Replay payload too large ({payload_size} bytes > {payload_budget} bytes)."
+            )
         raw_genome = payload.get("genome", [])
         if not isinstance(raw_genome, list):
             raise ValueError("Replay payload missing list field 'genome'.")
-        genome = [int(v) for v in raw_genome]
+        if len(raw_genome) > 1000:
+            raise ValueError(
+                f"Replay payload genome too long ({len(raw_genome)} > 1000)."
+            )
+        genome: List[int] = []
+        for idx, raw_rule in enumerate(raw_genome):
+            try:
+                rule_id = int(raw_rule)
+            except (TypeError, ValueError, OverflowError) as e:
+                raise ValueError(f"Replay payload genome entry {idx} is not an integer.") from e
+            if abs(rule_id) > 100000:
+                raise ValueError(
+                    f"Replay payload genome entry {idx} is out of bounds: {rule_id}"
+                )
+            genome.append(rule_id)
+
+        raw_overrides = payload.get("rule_weight_overrides", {})
+        if raw_overrides is None:
+            raw_overrides = {}
+        if not isinstance(raw_overrides, dict):
+            raise ValueError("Replay payload field 'rule_weight_overrides' must be a dictionary.")
+        if len(raw_overrides) > 256:
+            raise ValueError(
+                f"Replay payload has too many rule weight overrides ({len(raw_overrides)} > 256)."
+            )
+        safe_overrides: Dict[str, float] = {}
+        for raw_key, raw_value in raw_overrides.items():
+            key = _sanitize_rule_name(raw_key, field="override key")
+            try:
+                weight = float(raw_value)
+            except (TypeError, ValueError, OverflowError) as e:
+                raise ValueError(f"Replay payload override '{key}' must be numeric.") from e
+            if (not math.isfinite(weight)) or weight < 0.0 or weight > 100.0:
+                raise ValueError(
+                    f"Replay payload override '{key}' out of bounds: {weight} not in [0, 100]"
+                )
+            safe_overrides[key] = weight
+
+        raw_rule_names = payload.get("rule_names")
+        safe_rule_names: Optional[List[str]] = None
+        if raw_rule_names is not None:
+            if not isinstance(raw_rule_names, list):
+                raise ValueError("Replay payload field 'rule_names' must be a list.")
+            if len(raw_rule_names) > 1000:
+                raise ValueError(
+                    f"Replay payload field 'rule_names' too long ({len(raw_rule_names)} > 1000)."
+                )
+            safe_rule_names = []
+            seen_rule_names: Set[str] = set()
+            for idx, raw_name in enumerate(raw_rule_names):
+                name = _sanitize_rule_name(raw_name, field="rule name", index=idx)
+                if name in seen_rule_names:
+                    raise ValueError(f"Replay payload rule name {idx} duplicates '{name}'.")
+                seen_rule_names.add(name)
+                safe_rule_names.append(name)
+
         executor = cls(
-            seed=payload.get("seed"),
-            use_full_rule_space=bool(payload.get("use_full_rule_space", False)),
-            max_lock_key_rules=int(payload.get("max_lock_key_rules", 3)),
-            rule_weight_overrides=payload.get("rule_weight_overrides", {}),
-            enforce_generation_constraints=bool(payload.get("enforce_generation_constraints", True)),
-            allow_candidate_repairs=bool(payload.get("allow_candidate_repairs", False)),
+            seed=(
+                None
+                if payload.get("seed") is None
+                else _bounded_int(
+                    "seed",
+                    payload.get("seed"),
+                    default=0,
+                    lo=-(2**31),
+                    hi=(2**31) - 1,
+                )
+            ),
+            use_full_rule_space=_bounded_bool(
+                "use_full_rule_space",
+                payload.get("use_full_rule_space", False),
+                default=False,
+            ),
+            max_lock_key_rules=_bounded_int(
+                "max_lock_key_rules",
+                payload.get("max_lock_key_rules", 3),
+                default=3,
+                lo=0,
+                hi=128,
+            ),
+            rule_weight_overrides=safe_overrides,
+            enforce_generation_constraints=_bounded_bool(
+                "enforce_generation_constraints",
+                payload.get("enforce_generation_constraints", True),
+                default=True,
+            ),
+            allow_candidate_repairs=_bounded_bool(
+                "allow_candidate_repairs",
+                payload.get("allow_candidate_repairs", False),
+                default=False,
+            ),
         )
+        if safe_overrides:
+            valid_rule_names = set(executor.rule_names)
+            unknown_override_names = sorted(name for name in safe_overrides.keys() if name not in valid_rule_names)
+            if unknown_override_names:
+                raise ValueError(
+                    f"Replay payload override keys must reference known rules: {', '.join(unknown_override_names[:8])}"
+                )
+        if safe_rule_names is not None:
+            valid_rule_names = set(executor.rule_names)
+            unknown_rule_names = sorted(name for name in safe_rule_names if name not in valid_rule_names)
+            if unknown_rule_names:
+                raise ValueError(
+                    f"Replay payload rule_names must reference known rules: {', '.join(unknown_rule_names[:8])}"
+                )
         return executor.execute(
             genome=genome,
-            difficulty=float(payload.get("difficulty", 0.5)),
-            max_nodes=int(payload.get("max_nodes", 20)),
-            allow_override=bool(payload.get("allow_override", False)),
+            difficulty=_bounded_float(
+                "difficulty",
+                payload.get("difficulty", 0.5),
+                default=0.5,
+                lo=0.0,
+                hi=1.0,
+            ),
+            max_nodes=_bounded_int(
+                "max_nodes",
+                payload.get("max_nodes", 20),
+                default=20,
+                lo=1,
+                hi=512,
+            ),
+            allow_override=_bounded_bool(
+                "allow_override",
+                payload.get("allow_override", False),
+                default=False,
+            ),
             record_trace=bool(record_trace),
         )
 
@@ -1453,13 +1837,13 @@ class TensionCurveEvaluator:
         branching_factor = self._clip01(float(directed_branch_nodes) / float(max(1, node_count)))
 
         # Undirected edge set for cycle rank estimate.
-        undirected_edges: Set[Tuple[int, int]] = set()
+        undirected_edges: Set[Tuple[Any, Any]] = set()
         for e in graph.edges:
-            a = int(e.source)
-            b = int(e.target)
+            a = e.source
+            b = e.target
             if a == b:
                 continue
-            if a < b:
+            if str(a) <= str(b):
                 undirected_edges.add((a, b))
             else:
                 undirected_edges.add((b, a))
@@ -1477,7 +1861,7 @@ class TensionCurveEvaluator:
         # Raw branching factor for Pareto constraints (not normalized 0..1).
         U_branch = nx.DiGraph()
         U_branch.add_nodes_from(graph.nodes.keys())
-        U_branch.add_edges_from([(int(e.source), int(e.target)) for e in graph.edges])
+        U_branch.add_edges_from([(e.source, e.target) for e in graph.edges])
         branching_factor_raw = float(compute_branching_factor(U_branch))
 
         # Raw loop complexity for hard loop constraints.
@@ -2256,16 +2640,16 @@ class TensionCurveEvaluator:
     
     @staticmethod
     def _find_path_in_adjacency(
-        adjacency: Dict[int, List[int]],
-        start_id: int,
-        goal_id: int,
-    ) -> Optional[List[int]]:
+        adjacency: Dict[Any, List[Any]],
+        start_id: Any,
+        goal_id: Any,
+    ) -> Optional[List[Any]]:
         """Breadth-first shortest path on an adjacency mapping."""
         if start_id == goal_id:
             return [start_id]
 
         visited = {start_id}
-        queue: List[Tuple[int, List[int]]] = [(start_id, [start_id])]
+        queue: List[Tuple[Any, List[Any]]] = [(start_id, [start_id])]
 
         while queue:
             current, path = queue.pop(0)
@@ -2283,28 +2667,28 @@ class TensionCurveEvaluator:
     def _find_weak_path(
         self,
         graph: MissionGraph,
-        start_id: int,
-        goal_id: int,
-    ) -> Optional[List[int]]:
+        start_id: Any,
+        goal_id: Any,
+    ) -> Optional[List[Any]]:
         """
         Undirected shortest path over traversable mission adjacency.
 
         This intentionally ignores edge direction for directionality-gap
         diagnostics while still respecting traversable-edge filtering.
         """
-        weak_adj: Dict[int, List[int]] = {int(nid): [] for nid in graph.nodes.keys()}
+        weak_adj: Dict[Any, List[Any]] = {nid: [] for nid in graph.nodes.keys()}
         for src, neighbors in graph.get_adjacency_map().items():
-            s = int(src)
+            s = src
             weak_adj.setdefault(s, [])
             for dst in neighbors:
-                d = int(dst)
+                d = dst
                 weak_adj.setdefault(d, [])
                 weak_adj[s].append(d)
                 weak_adj[d].append(s)
 
         for node_id, neighbors in list(weak_adj.items()):
-            seen: Set[int] = set()
-            deduped: List[int] = []
+            seen: Set[Any] = set()
+            deduped: List[Any] = []
             for neighbor in neighbors:
                 if neighbor in seen:
                     continue
@@ -2317,9 +2701,9 @@ class TensionCurveEvaluator:
     def _find_path(
         self,
         graph: MissionGraph,
-        start_id: int,
-        goal_id: int
-    ) -> Optional[List[int]]:
+        start_id: Any,
+        goal_id: Any
+    ) -> Optional[List[Any]]:
         """
         Find directed path from start to goal over mission adjacency.
         """

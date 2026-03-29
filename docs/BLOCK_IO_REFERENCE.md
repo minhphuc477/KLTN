@@ -348,6 +348,8 @@ Sampling:  DDPM (T steps), DDIM (<<T steps, deterministic when eta=0)
 | `TimestepEmbedding` | Sinusoidal timestep → MLP embedding |
 | `ResBlock` | GroupNorm + Conv2d + time conditioning |
 | `AttentionBlock` | Self-attention + cross-attention + FFN |
+| `GraphToGridCrossAttention` | Per-grid position cross-attention to mission graph nodes |
+| `SpatialGraphConditioner` | Combines room topology map + graph cross-attention conditioning |
 | `DownBlock` | Encoder: ResBlocks + Attention + Downsample |
 | `UpBlock` | Decoder: Upsample + skip concat + ResBlocks + Attention |
 | `GradientGuidance` | LogicNet gradient guidance at sampling time |

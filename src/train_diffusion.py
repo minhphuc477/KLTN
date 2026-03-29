@@ -31,6 +31,7 @@ from src.zelda_data.zelda_loader import create_dataloader, extract_start_goal
 from src.core.latent_diffusion import LatentDiffusionModel, create_latent_diffusion
 from src.core.vqvae import SemanticVQVAE as VQVAE, create_vqvae
 from src.core.condition_encoder import DualStreamConditionEncoder, create_condition_encoder
+from src.core.definitions import ROOM_HEIGHT, ROOM_WIDTH
 # Use Block V LogicNet (with temperature annealing), not legacy src.ml.logic_net
 from src.core.logic_net import LogicNet
 from src.utils.checkpoint import MetricsLogger, write_checkpoint_metadata
@@ -51,6 +52,7 @@ class DiffusionTrainingConfig:
         data_dir: str = "Data/The Legend of Zelda",
         batch_size: int = 4,
         use_vglc: bool = True,
+        room_level: bool = True,
         
         # VQ-VAE (frozen encoder)
         vqvae_checkpoint: Optional[str] = None,
@@ -90,6 +92,7 @@ class DiffusionTrainingConfig:
         self.data_dir = data_dir
         self.batch_size = batch_size
         self.use_vglc = use_vglc
+        self.room_level = bool(room_level)
         
         self.vqvae_checkpoint = vqvae_checkpoint
         
@@ -340,7 +343,23 @@ class DiffusionTrainer:
             Tensor [B, C=44, H, W] of tile class logits
         """
         with torch.no_grad():
-            return self.vqvae.decode(z, target_size=(11, 16))
+            return self.vqvae.decode(z, target_size=(ROOM_HEIGHT, ROOM_WIDTH))
+
+    def _encode_edge_features(self, graph_dict: dict) -> Optional[torch.Tensor]:
+        """Convert integer edge labels to one-hot features for the condition encoder."""
+        edge_attr = graph_dict.get('edge_attr')
+        if edge_attr is None:
+            return None
+        if not isinstance(edge_attr, torch.Tensor):
+            edge_attr = torch.tensor(edge_attr, dtype=torch.long)
+        if edge_attr.numel() == 0:
+            return None
+        edge_attr = edge_attr.to(self.device)
+        num_edge_types = 8
+        edge_attr_clamped = edge_attr.clamp(0, num_edge_types - 1)
+        return torch.nn.functional.one_hot(
+            edge_attr_clamped, num_classes=num_edge_types
+        ).float()
     
     def get_dummy_conditioning(self, batch_size: int) -> torch.Tensor:
         """
@@ -390,29 +409,214 @@ class DiffusionTrainer:
         node_features = graph_dict['node_features'].to(self.device)
         edge_index = graph_dict['edge_index'].to(self.device)
         
-        # Convert edge_attr from integer labels to one-hot for edge_features
-        edge_attr = graph_dict.get('edge_attr')
-        edge_features = None
-        if edge_attr is not None and edge_attr.numel() > 0:
-            edge_attr = edge_attr.to(self.device)
-            # 8 edge types: open, key_locked, bombable, soft_locked,
-            # boss_locked, item_locked, stair, switch
-            num_edge_types = 8
-            edge_attr_clamped = edge_attr.clamp(0, num_edge_types - 1)
-            edge_features = torch.nn.functional.one_hot(
-                edge_attr_clamped, num_classes=num_edge_types
-            ).float()
-        
-        # Encode through global stream (GCN/GAT/SAGE depending on config)
+        edge_features = self._encode_edge_features(graph_dict)
         c_global = self.condition_encoder.encode_global_only(
             node_features, edge_index,
             edge_features=edge_features,
+            tpe=graph_dict.get('tpe').to(self.device) if isinstance(graph_dict.get('tpe'), torch.Tensor) else None,
         )
+
+        boundary_constraints = graph_dict.get("boundary_constraints")
+        room_position = graph_dict.get("room_position")
+        current_node_idx = graph_dict.get("current_node_idx")
+        has_room_anchor = bool(graph_dict.get("has_room_anchor", False)) or (
+            isinstance(boundary_constraints, torch.Tensor)
+            and isinstance(room_position, torch.Tensor)
+        )
+        if has_room_anchor:
+            boundary_constraints = boundary_constraints.to(self.device, dtype=torch.float32)
+            room_position = room_position.to(self.device, dtype=torch.float32)
+            if boundary_constraints.dim() == 1:
+                boundary_constraints = boundary_constraints.unsqueeze(0)
+            if room_position.dim() == 1:
+                room_position = room_position.unsqueeze(0)
+            room_anchor = self.condition_encoder(
+                neighbor_latents={'N': None, 'S': None, 'E': None, 'W': None},
+                boundary_constraints=boundary_constraints,
+                position=room_position,
+                node_features=node_features,
+                edge_index=edge_index,
+                edge_features=edge_features,
+                tpe=graph_dict.get('tpe').to(self.device) if isinstance(graph_dict.get('tpe'), torch.Tensor) else None,
+                current_node_idx=int(current_node_idx) if current_node_idx is not None else None,
+            )
+            if self.config.graph_conditioning_mode == "node_sequence":
+                return torch.cat([room_anchor, c_global], dim=0)
+            return room_anchor
+
         if self.config.graph_conditioning_mode == "node_sequence":
             return c_global
 
         # Pooled baseline.
         return c_global.mean(dim=0, keepdim=True)
+
+    def _normalize_diffusion_graph_sample(self, graph_dict: dict) -> Dict[str, torch.Tensor]:
+        """Prepare one graph sample for diffusion spatial/topological conditioning."""
+        node_features = graph_dict["node_features"]
+        edge_index = graph_dict["edge_index"]
+        if not isinstance(node_features, torch.Tensor):
+            node_features = torch.tensor(node_features, dtype=torch.float32)
+        if not isinstance(edge_index, torch.Tensor):
+            edge_index = torch.tensor(edge_index, dtype=torch.long)
+        node_features = node_features.to(self.device, dtype=torch.float32)
+        edge_index = edge_index.to(self.device, dtype=torch.long)
+        if node_features.dim() != 2:
+            raise ValueError(f"node_features must have shape [N, F], got {tuple(node_features.shape)}")
+        if edge_index.dim() != 2 or int(edge_index.shape[0]) != 2:
+            raise ValueError(f"edge_index must have shape [2, E], got {tuple(edge_index.shape)}")
+
+        num_nodes = int(node_features.shape[0])
+        tpe = graph_dict.get("tpe")
+        if not isinstance(tpe, torch.Tensor):
+            tpe = torch.zeros(num_nodes, 8, dtype=torch.float32)
+        tpe = tpe.to(self.device, dtype=torch.float32)
+        if tpe.dim() == 1:
+            tpe = tpe.unsqueeze(0)
+        if tpe.dim() != 2 or int(tpe.shape[0]) != num_nodes:
+            raise ValueError(
+                f"tpe must have shape [N, D] matching node_features; got {tuple(tpe.shape)} for N={num_nodes}."
+            )
+
+        node_positions = graph_dict.get("node_positions")
+        if not isinstance(node_positions, torch.Tensor):
+            node_positions = torch.stack(
+                [
+                    torch.arange(num_nodes, dtype=torch.float32),
+                    torch.zeros(num_nodes, dtype=torch.float32),
+                ],
+                dim=1,
+            ) if num_nodes > 0 else torch.zeros((0, 2), dtype=torch.float32)
+        node_positions = node_positions.to(self.device, dtype=torch.float32)
+        if node_positions.dim() == 1:
+            node_positions = node_positions.view(-1, 2)
+        if node_positions.dim() != 2 or int(node_positions.shape[0]) != num_nodes or int(node_positions.shape[1]) != 2:
+            raise ValueError(
+                f"node_positions must have shape [N, 2] matching node_features; got {tuple(node_positions.shape)} for N={num_nodes}."
+            )
+
+        node_mask = graph_dict.get("node_mask")
+        if not isinstance(node_mask, torch.Tensor):
+            node_mask = torch.ones(num_nodes, dtype=torch.float32)
+        node_mask = node_mask.to(self.device, dtype=torch.float32)
+        if node_mask.dim() == 2:
+            if int(node_mask.shape[0]) != 1:
+                raise ValueError(f"Unbatched diffusion sample cannot provide multi-row node_mask: {tuple(node_mask.shape)}")
+            node_mask = node_mask.squeeze(0)
+        if node_mask.dim() != 1 or int(node_mask.shape[0]) != num_nodes:
+            raise ValueError(
+                f"node_mask must have shape [N] matching node_features; got {tuple(node_mask.shape)} for N={num_nodes}."
+            )
+
+        room_topology_map = graph_dict.get("room_topology_map")
+        if isinstance(room_topology_map, torch.Tensor):
+            room_topology_map = room_topology_map.to(self.device, dtype=torch.float32)
+            if room_topology_map.dim() == 4:
+                if int(room_topology_map.shape[0]) != 1:
+                    raise ValueError(
+                        f"Single graph sample room_topology_map must be [C,H,W] or [1,C,H,W], got {tuple(room_topology_map.shape)}."
+                    )
+                room_topology_map = room_topology_map.squeeze(0)
+            if room_topology_map.dim() != 3:
+                raise ValueError(
+                    f"room_topology_map must have shape [C,H,W] for one sample, got {tuple(room_topology_map.shape)}."
+                )
+
+        has_room_anchor = bool(graph_dict.get("has_room_anchor", False)) or (
+            isinstance(graph_dict.get("boundary_constraints"), torch.Tensor)
+            and isinstance(graph_dict.get("room_position"), torch.Tensor)
+        )
+
+        return {
+            "node_features": node_features,
+            "edge_index": edge_index,
+            "tpe": tpe,
+            "node_positions": node_positions,
+            "node_mask": node_mask,
+            "has_room_anchor": has_room_anchor,
+            **({"room_topology_map": room_topology_map} if isinstance(room_topology_map, torch.Tensor) else {}),
+        }
+
+    def _stack_diffusion_graph_batch(self, graph_list: List[dict]) -> Optional[Dict[str, torch.Tensor]]:
+        """Pad a batch of variable-size graph tensors for diffusion conditioning."""
+        if not graph_list:
+            return None
+
+        samples = [self._normalize_diffusion_graph_sample(graph_dict) for graph_dict in graph_list]
+        if not samples:
+            return None
+
+        anchor_flags = {bool(sample.get("has_room_anchor", False)) for sample in samples}
+        if len(anchor_flags) > 1:
+            raise ValueError(
+                "Mixed graph anchor semantics in one diffusion batch. "
+                "All samples must either include a room anchor token or omit it."
+            )
+
+        max_nodes = max(int(sample["node_features"].shape[0]) for sample in samples)
+        feat_dim = max(int(sample["node_features"].shape[1]) if sample["node_features"].dim() == 2 else 0 for sample in samples)
+        tpe_dim = max(int(sample["tpe"].shape[1]) if sample["tpe"].dim() == 2 else 0 for sample in samples)
+        pos_dim = max(int(sample["node_positions"].shape[1]) if sample["node_positions"].dim() == 2 else 0 for sample in samples)
+        max_edges = max(int(sample["edge_index"].shape[1]) if sample["edge_index"].dim() == 2 else 0 for sample in samples)
+
+        node_features_batch = torch.zeros(len(samples), max_nodes, max(1, feat_dim), device=self.device, dtype=torch.float32)
+        tpe_batch = torch.zeros(len(samples), max_nodes, max(1, tpe_dim), device=self.device, dtype=torch.float32)
+        node_positions_batch = torch.zeros(len(samples), max_nodes, max(1, pos_dim), device=self.device, dtype=torch.float32)
+        node_mask_batch = torch.zeros(len(samples), max_nodes, device=self.device, dtype=torch.float32)
+        edge_index_batch = torch.full((len(samples), 2, max_edges), -1, device=self.device, dtype=torch.long)
+
+        topo_maps = []
+        has_topology = [("room_topology_map" in sample) for sample in samples]
+        if any(has_topology) and not all(has_topology):
+            raise ValueError(
+                "room_topology_map must be present for every graph in a diffusion batch or omitted for all of them."
+            )
+        can_stack_topology = all(has_topology)
+        topo_shape = None
+
+        for i, sample in enumerate(samples):
+            num_nodes = int(sample["node_features"].shape[0])
+            if num_nodes > 0:
+                node_features_batch[i, :num_nodes, : sample["node_features"].shape[1]] = sample["node_features"]
+                tpe_batch[i, :num_nodes, : sample["tpe"].shape[1]] = sample["tpe"]
+                node_positions_batch[i, :num_nodes, : sample["node_positions"].shape[1]] = sample["node_positions"]
+                node_mask_batch[i, :num_nodes] = sample["node_mask"]
+
+            num_edges = int(sample["edge_index"].shape[1]) if sample["edge_index"].dim() == 2 else 0
+            if num_edges > 0:
+                edge_index_batch[i, :, :num_edges] = sample["edge_index"]
+
+            if can_stack_topology:
+                topo = sample["room_topology_map"]
+                if topo.dim() == 3:
+                    topo = topo.unsqueeze(0)
+                current_shape = tuple(topo.shape[1:])
+                if topo_shape is None:
+                    topo_shape = current_shape
+                if current_shape != topo_shape:
+                    if not bool(getattr(self, "_topology_shape_mismatch_warning_emitted", False)):
+                        logger.warning(
+                            "Disabling batched room_topology_map stacking due to shape mismatch: "
+                            "expected %s, got %s. Topology conditioning will be omitted for this batch.",
+                            str(topo_shape),
+                            str(current_shape),
+                        )
+                        self._topology_shape_mismatch_warning_emitted = True
+                    can_stack_topology = False
+                    topo_maps = []
+                else:
+                    topo_maps.append(topo)
+
+        batch_graph = {
+            "node_features": node_features_batch,
+            "edge_index": edge_index_batch,
+            "tpe": tpe_batch,
+            "node_positions": node_positions_batch,
+            "node_mask": node_mask_batch,
+            "has_room_anchor": bool(next(iter(anchor_flags))) if anchor_flags else False,
+        }
+        if can_stack_topology and topo_maps:
+            batch_graph["room_topology_map"] = torch.cat(topo_maps, dim=0)
+        return batch_graph
     
     def _build_logic_graph_data(
         self,
@@ -502,6 +706,18 @@ class DiffusionTrainer:
             'target_idx': target_idx,
             'key_lock_pairs': key_lock_pairs,
         }
+
+    @staticmethod
+    def _logic_loss_to_solvability_proxy(logic_loss: torch.Tensor) -> torch.Tensor:
+        """
+        Convert unbounded non-negative LogicNet loss into a bounded proxy score.
+
+        We use exp(-loss) so the proxy stays in (0, 1], decreases smoothly as
+        constraints are violated, and never becomes negative.
+        """
+        if not isinstance(logic_loss, torch.Tensor):
+            logic_loss = torch.tensor(float(logic_loss), dtype=torch.float32)
+        return torch.exp(-logic_loss.detach().clamp_min(0.0))
     
     def _update_ema(self):
         """
@@ -521,6 +737,7 @@ class DiffusionTrainer:
         conditioning: Optional[torch.Tensor] = None,
         include_logic_loss: bool = True,
         logic_graph_data: Optional[dict] = None,
+        diffusion_graph_data: Optional[dict] = None,
     ) -> Dict[str, float]:
         """
         Single training step.
@@ -554,14 +771,14 @@ class DiffusionTrainer:
         z_0 = self.encode_to_latent(real_maps)
         
         # === Part 1: Diffusion loss (standard noise prediction) ===
-        diffusion_loss = self.diffusion.training_loss(z_0, conditioning)
+        diffusion_loss = self.diffusion.training_loss(z_0, conditioning, graph_data=diffusion_graph_data)
         
         # === Part 2: LogicNet loss on model-predicted latent WITH graph topology ===
         # IMPORTANT: computing logic loss on detached real z_0 does not train diffusion.
         # We instead denoise a noisy latent and apply LogicNet to predicted x0 so
         # logic gradients flow into diffusion + condition encoder.
         logic_loss = torch.tensor(0.0, device=self.device)
-        solvability_score = torch.tensor(0.0, device=self.device)
+        solvability_proxy = torch.tensor(0.0, device=self.device)
         
         if include_logic_loss and self.config.alpha_logic > 0:
             if self.config.logic_loss_mode == "detached_real":
@@ -575,7 +792,22 @@ class DiffusionTrainer:
                 x_t_logic = self.diffusion.q_sample(z_0, t_logic, noise_logic)
 
                 # Predict noise/velocity and convert to predicted clean latent x0.
-                pred_logic = self.diffusion.denoiser(x_t_logic, t_logic, conditioning)
+                context_edge_index, context_node_mask = self.diffusion._extract_context_topology(
+                    conditioning,
+                    diffusion_graph_data,
+                )
+                spatial_graph_data = self.diffusion._extract_spatial_graph_context(
+                    conditioning,
+                    diffusion_graph_data,
+                )
+                pred_logic = self.diffusion.denoiser(
+                    x_t_logic,
+                    t_logic,
+                    conditioning,
+                    context_edge_index=context_edge_index,
+                    context_node_mask=context_node_mask,
+                    spatial_graph_data=spatial_graph_data,
+                )
                 pred_x0_logic = self._prediction_to_x0(pred_logic, x_t_logic, t_logic)
 
                 # Keep latent range bounded similarly to sampling path.
@@ -583,7 +815,7 @@ class DiffusionTrainer:
 
                 # Pass predicted latent to LogicNet for graph-level pathfinding loss.
                 logic_loss, _logic_info = self.logic_net(pred_x0_logic, graph_data=logic_graph_data)
-            solvability_score = 1.0 - logic_loss.detach()
+            solvability_proxy = self._logic_loss_to_solvability_proxy(logic_loss)
         
         # Combined loss
         total_loss = (
@@ -615,7 +847,8 @@ class DiffusionTrainer:
             'loss': total_loss.item(),
             'diffusion_loss': diffusion_loss.item(),
             'logic_loss': logic_loss.item(),
-            'solvability': solvability_score.item(),
+            'solvability_proxy': solvability_proxy.item(),
+            'solvability': solvability_proxy.item(),
             'logic_loss_mode_predicted': 1.0 if self.config.logic_loss_mode == 'predicted_latent' else 0.0,
         }
     
@@ -635,10 +868,18 @@ class DiffusionTrainer:
         Each graph in graph_list is a dict from zelda_loader._extract_graph()
         containing real mission topology from the VGLC .dot files.
         """
-        metrics_sum = {'loss': 0, 'diffusion_loss': 0, 'logic_loss': 0, 'solvability': 0}
+        metrics_sum = {'loss': 0, 'diffusion_loss': 0, 'logic_loss': 0, 'solvability_proxy': 0, 'solvability': 0}
         num_batches = 0
         
         include_logic = self.epoch >= self.config.warmup_epochs
+        total_epochs = int(getattr(self.config, "epochs", self.epoch + 1))
+        logger.info(
+            "Train epoch %d/%d: logic_loss_%s (warmup_epochs=%d)",
+            int(self.epoch + 1),
+            total_epochs,
+            "enabled" if include_logic and self.config.alpha_logic > 0 else "disabled",
+            int(self.config.warmup_epochs),
+        )
         
         for batch_idx, batch_data in enumerate(dataloader):
             # Handle (images, graph_list) from graph_collate_fn
@@ -652,6 +893,7 @@ class DiffusionTrainer:
             # === Build conditioning from REAL graph data ===
             conditioning = None
             logic_graph_data = None
+            diffusion_graph_data = None
             
             if graph_list is not None and self.condition_encoder is not None:
                 try:
@@ -664,6 +906,12 @@ class DiffusionTrainer:
                 except (AttributeError, RuntimeError, ValueError, TypeError) as e:
                     logger.debug(f"Graph conditioning failed: {e}")
                     conditioning = None
+
+                try:
+                    diffusion_graph_data = self._stack_diffusion_graph_batch(graph_list)
+                except (AttributeError, RuntimeError, ValueError, TypeError) as e:
+                    logger.debug(f"Diffusion graph-data build failed: {e}")
+                    diffusion_graph_data = None
                 
                 # Build LogicNet graph data from first graph in batch
                 # (LogicNet processes single graphs, not batches)
@@ -679,6 +927,7 @@ class DiffusionTrainer:
                 conditioning=conditioning,
                 include_logic_loss=include_logic,
                 logic_graph_data=logic_graph_data,
+                diffusion_graph_data=diffusion_graph_data,
             )
             
             for k, v in metrics.items():
@@ -689,7 +938,8 @@ class DiffusionTrainer:
                 logger.debug(
                     f"Batch {batch_idx}: loss={metrics['loss']:.4f}, "
                     f"diffusion={metrics['diffusion_loss']:.4f}, "
-                    f"solvability={metrics['solvability']:.4f}"
+                    f"train_solvability_proxy={metrics.get('solvability_proxy', metrics['solvability']):.4f}, "
+                    f"logic_loss={metrics['logic_loss']:.4f}"
                 )
         
         self.epoch += 1
@@ -707,7 +957,8 @@ class DiffusionTrainer:
         eval_model = self.ema_diffusion if hasattr(self, 'ema_diffusion') else self.diffusion
         eval_model.eval()
         
-        total_solvability = 0.0
+        total_logic_loss = 0.0
+        total_solvability_proxy = 0.0
         num_samples_eval = 0
         
         for batch_data in dataloader:
@@ -723,6 +974,7 @@ class DiffusionTrainer:
             
             # Build conditioning from real graphs if available
             conditioning = None
+            diffusion_graph_data = None
             if graph_list is not None:
                 cond_vectors = []
                 for idx, graph_dict in enumerate(graph_list):
@@ -738,6 +990,11 @@ class DiffusionTrainer:
                     cond_vectors.append(c_i)
                 if cond_vectors:
                     conditioning = self._stack_conditioning_vectors(cond_vectors)
+                try:
+                    diffusion_graph_data = self._stack_diffusion_graph_batch(graph_list)
+                except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+                    logger.debug("Diffusion graph-data build failed during validation: %s", exc)
+                    diffusion_graph_data = None
             
             if conditioning is None:
                 conditioning = self.get_dummy_conditioning(batch_size)
@@ -746,7 +1003,7 @@ class DiffusionTrainer:
             z_0 = self.encode_to_latent(real_maps)
             
             # Generate samples using EMA model
-            z_gen = eval_model.sample(conditioning, shape=z_0.shape)
+            z_gen = eval_model.sample(conditioning, shape=z_0.shape, graph_data=diffusion_graph_data)
             
             # Build LogicNet graph data if available
             logic_graph_data = None
@@ -767,15 +1024,18 @@ class DiffusionTrainer:
             
             # LogicNet: evaluate with graph topology
             logic_loss, _logic_info = self.logic_net(z_gen, graph_data=logic_graph_data)
-            solvability = 1.0 - logic_loss.item()
-            total_solvability += solvability * batch_size
+            solvability_proxy = float(self._logic_loss_to_solvability_proxy(logic_loss).item())
+            total_logic_loss += float(logic_loss.item()) * batch_size
+            total_solvability_proxy += solvability_proxy * batch_size
             num_samples_eval += batch_size
             
             if num_samples_eval >= num_samples:
                 break
         
         return {
-            'val_solvability': total_solvability / max(num_samples_eval, 1),
+            'val_logic_loss': total_logic_loss / max(num_samples_eval, 1),
+            'val_solvability_proxy': total_solvability_proxy / max(num_samples_eval, 1),
+            'val_solvability': total_solvability_proxy / max(num_samples_eval, 1),
         }
     
     def save_checkpoint(self, path: str, metrics: Optional[Dict] = None):
@@ -850,6 +1110,7 @@ def train_diffusion(config: DiffusionTrainingConfig) -> DiffusionTrainer:
         shuffle=True,
         use_vglc=config.use_vglc,
         normalize=True,
+        room_level=config.room_level,
         load_graphs=True,
     )
     
@@ -859,10 +1120,12 @@ def train_diffusion(config: DiffusionTrainingConfig) -> DiffusionTrainer:
         shuffle=False,
         use_vglc=config.use_vglc,
         normalize=True,
+        room_level=config.room_level,
         load_graphs=True,
     )
     
-    logger.info(f"Training samples: {len(train_loader.dataset)}")
+    sample_kind = "rooms" if config.room_level else "dungeons"
+    logger.info(f"Training samples: {len(train_loader.dataset)} {sample_kind}")
     
     # Create trainer
     trainer = DiffusionTrainer(config)
@@ -900,7 +1163,9 @@ def train_diffusion(config: DiffusionTrainingConfig) -> DiffusionTrainer:
             f"Epoch {epoch+1}/{config.epochs}: "
             f"loss={train_metrics['loss']:.4f}, "
             f"diffusion={train_metrics['diffusion_loss']:.4f}, "
-            f"solvability={val_metrics['val_solvability']:.4f}"
+            f"val_logic_loss={val_metrics.get('val_logic_loss', 0.0):.4f}, "
+            f"val_solvability_proxy={val_metrics.get('val_solvability_proxy', val_metrics['val_solvability']):.4f}, "
+            f"logic_loss_{'enabled' if epoch >= config.warmup_epochs and config.alpha_logic > 0 else 'disabled'}"
         )
         
         # Save checkpoints
@@ -936,6 +1201,8 @@ def main():
     
     parser.add_argument('--data-dir', type=str, default='Data/The Legend of Zelda')
     parser.add_argument('--batch-size', type=int, default=4)
+    parser.add_argument('--room-level', dest='room_level', action='store_true', help='Train the diffusion model on individual room samples.')
+    parser.add_argument('--dungeon-level', dest='room_level', action='store_false', help='Train the diffusion model on whole-dungeon samples.')
     parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--lr', type=float, default=1e-4)
     parser.add_argument('--alpha-logic', type=float, default=0.1)
@@ -973,6 +1240,7 @@ def main():
     parser.add_argument('--device', type=str, default='auto')
     parser.add_argument('--quick', action='store_true')
     parser.add_argument('--verbose', '-v', action='store_true')
+    parser.set_defaults(room_level=True)
     
     args = parser.parse_args()
     
@@ -986,6 +1254,7 @@ def main():
     config = DiffusionTrainingConfig(
         data_dir=args.data_dir,
         batch_size=args.batch_size,
+        room_level=args.room_level,
         epochs=args.epochs,
         learning_rate=args.lr,
         alpha_logic=args.alpha_logic,

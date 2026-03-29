@@ -13,13 +13,14 @@ Key Features:
 
 Scientific Rationale:
 --------------------
-Zelda dungeons are stitched from multiple rooms (16x11 tiles each), resulting
+Zelda dungeons are stitched from multiple rooms using the repo's canonical
+row-major room shape `(16, 11)`, resulting
 in maps up to 96x66 tiles. At 32px/tile, this is 3072x2112 pixels - far larger
 than typical screen sizes. The camera system enables visualization of the
 complete solution path while keeping the active agent visible.
 
 Reference:
-- VGLC room dimensions: 16 rows × 11 columns
+- Internal room-array dimensions: 16 rows × 11 columns
 - Typical dungeon: 6×6 room grid = 96×66 tiles
 
 """

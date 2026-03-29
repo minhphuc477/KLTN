@@ -54,6 +54,9 @@ class FakeDraw:
     def circle(self, *args, **kwargs):
         return None
 
+    def line(self, *args, **kwargs):
+        return None
+
 
 class FakePygame:
     SRCALPHA = 0
@@ -133,4 +136,25 @@ def test_handle_minimap_click_alt_stages_small_key_anchor():
     assert handle_minimap_click(gui, (x, y), pygame_module=fake_pygame) is True
     assert isinstance(gui.ai_constraint_key_norm, tuple)
     assert gui.message.startswith("Staged Small Key anchor")
+
+
+def test_editor_mode_supports_string_node_ids():
+    gui = DummyGui()
+    gui.ai_mission_graph_editor_enabled = True
+    gui.ai_mission_graph_draft = type(
+        "Graph",
+        (),
+        {
+            "nodes": {"start": object(), "boss": object()},
+            "edges": [type("Edge", (), {"source": "start", "target": "boss", "edge_type": None})()],
+        },
+    )()
+    gui.ai_mission_graph_layout = {"start": (0.2, 0.5), "boss": (0.8, 0.5)}
+
+    render_minimap(gui, FakePygame())
+    x = gui.screen_w - gui.SIDEBAR_WIDTH - gui.minimap_size + 40
+    y = gui.screen_h - gui.HUD_HEIGHT - gui.minimap_size + 60
+
+    assert handle_minimap_click(gui, (x, y), button=1) is True
+    assert gui.ai_mission_graph_boss_node in {"start", "boss"}
 

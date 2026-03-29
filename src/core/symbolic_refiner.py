@@ -39,9 +39,10 @@ from typing import Dict, List, Tuple, Optional, Set, Any, Callable
 from dataclasses import dataclass, field
 from enum import Enum
 import heapq
-from collections import defaultdict
+from collections import defaultdict, deque
 
 import numpy as np
+from src.core.definitions import SEMANTIC_PALETTE
 
 try:
     import networkx as nx
@@ -93,6 +94,23 @@ DEFAULT_ADJACENCY: Dict[int, Set[int]] = {
     TileType.ENEMY.value: {TileType.FLOOR.value},
 }
 
+CANONICAL_WALKABLE_IDS: Set[int] = {
+    int(SEMANTIC_PALETTE["FLOOR"]),
+    int(SEMANTIC_PALETTE["DOOR_OPEN"]),
+    int(SEMANTIC_PALETTE["DOOR_SOFT"]),
+    int(SEMANTIC_PALETTE["START"]),
+    int(SEMANTIC_PALETTE["TRIFORCE"]),
+    int(SEMANTIC_PALETTE["KEY_SMALL"]),
+    int(SEMANTIC_PALETTE["KEY_BOSS"]),
+    int(SEMANTIC_PALETTE["KEY_ITEM"]),
+    int(SEMANTIC_PALETTE["ITEM_MINOR"]),
+    int(SEMANTIC_PALETTE["ELEMENT_FLOOR"]),
+    int(SEMANTIC_PALETTE["STAIR"]),
+    int(SEMANTIC_PALETTE["ENEMY"]),
+    int(SEMANTIC_PALETTE["BOSS"]),
+    int(SEMANTIC_PALETTE["PUZZLE"]),
+}
+
 
 # ============================================================================
 # DATA STRUCTURES
@@ -101,11 +119,33 @@ DEFAULT_ADJACENCY: Dict[int, Set[int]] = {
 @dataclass
 class FailurePoint:
     """Location where pathfinding failed."""
-    position: Tuple[int, int]       # (x, y) or (room_id, position)
+    position: Tuple[Any, Any]       # Grid failures use (row, col); graph failures may store node pairs
     failure_type: str               # 'blocked', 'missing_key', 'disconnected'
     required_item: Optional[str]    # Required item to proceed
     blocking_tiles: List[Tuple[int, int]] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)  # Extra info (e.g., room_id)
+
+
+def _normalize_grid_coord(
+    coord: Any,
+    grid_shape: Tuple[int, int],
+    *,
+    field_name: str,
+) -> Tuple[int, int]:
+    """Normalize public room coordinates to bounded (row, col) tuples."""
+    if not isinstance(coord, (tuple, list, np.ndarray)) or len(coord) < 2:
+        raise ValueError(f"{field_name} must be a 2-item (row, col) coordinate, got {coord!r}.")
+    try:
+        row = int(coord[0])
+        col = int(coord[1])
+    except (TypeError, ValueError, OverflowError) as e:
+        raise ValueError(
+            f"{field_name} must contain integer-compatible row/col values."
+        ) from e
+    h, w = int(grid_shape[0]), int(grid_shape[1])
+    row = max(0, min(h - 1, row))
+    col = max(0, min(w - 1, col))
+    return (row, col)
 
 
 @dataclass
@@ -169,6 +209,7 @@ class PathAnalyzer:
             TileType.DOOR_E.value, TileType.DOOR_W.value,
             TileType.KEY.value, TileType.CHEST.value,
         }
+        self.walkable_tiles = set(int(v) for v in self.walkable_tiles) | CANONICAL_WALKABLE_IDS
     
     def analyze_grid(
         self,
@@ -181,12 +222,14 @@ class PathAnalyzer:
         
         Args:
             grid: H x W tile grid
-            start: Start position
-            goal: Goal position
+            start: Start position as (row, col)
+            goal: Goal position as (row, col)
             
         Returns:
             List of failure points
         """
+        start = _normalize_grid_coord(start, grid.shape[:2], field_name="start")
+        goal = _normalize_grid_coord(goal, grid.shape[:2], field_name="goal")
         failures = []
         
         # Try A* pathfinding
@@ -294,18 +337,17 @@ class PathAnalyzer:
         start: Tuple[int, int],
         goal: Tuple[int, int],
     ) -> Optional[List[Tuple[int, int]]]:
-        """Simple A* pathfinding."""
+        """Simple A* pathfinding using (row, col) coordinates."""
         h, w = grid.shape[:2]
         
         def heuristic(a, b):
             return abs(a[0] - b[0]) + abs(a[1] - b[1])
         
-        def neighbors(x, y):
-            for dx, dy in [(0, 1), (1, 0), (0, -1), (-1, 0)]:
-                nx_, ny_ = x + dx, y + dy
-                if 0 <= nx_ < w and 0 <= ny_ < h:
-                    if grid[ny_, nx_] in self.walkable_tiles:
-                        yield (nx_, ny_)
+        def neighbors(r: int, c: int):
+            for dr, dc in [(0, 1), (1, 0), (0, -1), (-1, 0)]:
+                nr, nc = r + dr, c + dc
+                if 0 <= nr < h and 0 <= nc < w and grid[nr, nc] in self.walkable_tiles:
+                    yield (nr, nc)
         
         # A* search
         open_set = [(heuristic(start, goal), 0, start, [start])]
@@ -334,22 +376,22 @@ class PathAnalyzer:
         grid: np.ndarray,
         start: Tuple[int, int],
     ) -> Set[Tuple[int, int]]:
-        """Flood fill to find reachable region."""
+        """Flood fill to find reachable region using (row, col) coordinates."""
         h, w = grid.shape[:2]
         reachable = set()
-        queue = [start]
+        queue = deque([start])
         
         while queue:
-            x, y = queue.pop()
-            if (x, y) in reachable:
+            r, c = queue.popleft()
+            if (r, c) in reachable:
                 continue
-            if not (0 <= x < w and 0 <= y < h):
+            if not (0 <= r < h and 0 <= c < w):
                 continue
-            if grid[y, x] not in self.walkable_tiles:
+            if grid[r, c] not in self.walkable_tiles:
                 continue
             
-            reachable.add((x, y))
-            queue.extend([(x+1, y), (x-1, y), (x, y+1), (x, y-1)])
+            reachable.add((r, c))
+            queue.extend([(r, c + 1), (r + 1, c), (r, c - 1), (r - 1, c)])
         
         return reachable
     
@@ -359,16 +401,16 @@ class PathAnalyzer:
         region_a: Set[Tuple[int, int]],
         region_b: Set[Tuple[int, int]],
     ) -> List[Tuple[int, int]]:
-        """Find boundary tiles between two regions."""
+        """Find boundary tiles between two regions using (row, col) coordinates."""
         h, w = grid.shape[:2]
         boundary = []
         
-        for x, y in region_a:
-            for dx, dy in [(0, 1), (1, 0), (0, -1), (-1, 0)]:
-                nx_, ny_ = x + dx, y + dy
-                if 0 <= nx_ < w and 0 <= ny_ < h:
-                    if (nx_, ny_) not in region_a and (nx_, ny_) not in region_b:
-                        boundary.append((nx_, ny_))
+        for r, c in region_a:
+            for dr, dc in [(0, 1), (1, 0), (0, -1), (-1, 0)]:
+                nr, nc = r + dr, c + dc
+                if 0 <= nr < h and 0 <= nc < w:
+                    if (nr, nc) not in region_a and (nr, nc) not in region_b:
+                        boundary.append((nr, nc))
         
         return boundary
 
@@ -413,25 +455,25 @@ class EntropyReset:
         for fp in failure_points:
             # Mark failure position
             if isinstance(fp.position, tuple) and len(fp.position) == 2:
-                x, y = fp.position
-                if isinstance(x, int) and isinstance(y, int):
-                    self._mark_region(mask, x, y)
+                row, col = fp.position
+                if isinstance(row, int) and isinstance(col, int):
+                    self._mark_region(mask, row, col)
             
             # Mark blocking tiles
-            for bx, by in fp.blocking_tiles:
-                self._mark_region(mask, bx, by)
+            for block_row, block_col in fp.blocking_tiles:
+                self._mark_region(mask, block_row, block_col)
         
         return mask
     
-    def _mark_region(self, mask: np.ndarray, cx: int, cy: int):
-        """Mark region around center point."""
+    def _mark_region(self, mask: np.ndarray, center_row: int, center_col: int):
+        """Mark region around a grid center point using (row, col) coordinates."""
         h, w = mask.shape
         
-        for dy in range(-self.margin, self.margin + 1):
-            for dx in range(-self.margin, self.margin + 1):
-                x, y = cx + dx, cy + dy
-                if 0 <= x < w and 0 <= y < h:
-                    mask[y, x] = True
+        for dr in range(-self.margin, self.margin + 1):
+            for dc in range(-self.margin, self.margin + 1):
+                row, col = center_row + dr, center_col + dc
+                if 0 <= row < h and 0 <= col < w:
+                    mask[row, col] = True
     
     def expand_mask(
         self,
@@ -732,8 +774,8 @@ class WaveFunctionCollapse:
                 # All cells collapsed
                 break
             
-            if min_entropy == 0:
-                # Contradiction - no valid options
+            options = state.get_options(*min_cell)
+            if not options:
                 logger.warning(f"WFC contradiction at {min_cell}")
                 return self._extract_grid(state), False
             
@@ -843,41 +885,57 @@ class ConstraintPropagator:
         start: Tuple[int, int],
         goal: Tuple[int, int],
         walkable: Set[int],
+        required_floor_mask: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """
         Ensure start-goal connectivity.
         
-        Creates a path if none exists.
+        Creates a path if none exists. Coordinates use (row, col).
         """
-        _h, _w = grid.shape
+        start = _normalize_grid_coord(start, grid.shape[:2], field_name="start")
+        goal = _normalize_grid_coord(goal, grid.shape[:2], field_name="goal")
         
-        # Check existing path
-        path = self._find_path(grid, start, goal, walkable)
-        
-        if path is not None:
-            return grid
-        
-        # Create a simple path
         result = grid.copy()
-        
-        x0, y0 = start
-        x1, y1 = goal
-        
-        # Horizontal then vertical path
-        x, y = x0, y0
-        
-        while x != x1:
-            if result[y, x] not in walkable:
-                result[y, x] = TileType.FLOOR.value
-            x += 1 if x1 > x else -1
-        
-        while y != y1:
-            if result[y, x] not in walkable:
-                result[y, x] = TileType.FLOOR.value
-            y += 1 if y1 > y else -1
-        
+
+        if isinstance(required_floor_mask, np.ndarray) and required_floor_mask.shape == result.shape:
+            floor_id = int(SEMANTIC_PALETTE.get("FLOOR", TileType.FLOOR.value))
+            constrained = required_floor_mask.astype(bool, copy=False)
+            needs_floor = constrained & ~np.isin(result, list(walkable))
+            result[needs_floor] = floor_id
+
+        # Check existing path
+        path = self._find_path(result, start, goal, walkable)
+
+        if path is not None:
+            return result
+
+        # Create a simple path
+        r0, c0 = start
+        r1, c1 = goal
+
+        # Move across columns first, then across rows.
+        r, c = r0, c0
+
+        while c != c1:
+            if result[r, c] not in walkable:
+                result[r, c] = TileType.FLOOR.value
+            c += 1 if c1 > c else -1
+
+        while r != r1:
+            if result[r, c] not in walkable:
+                result[r, c] = TileType.FLOOR.value
+            r += 1 if r1 > r else -1
+
+        if result[r, c] not in walkable:
+            result[r, c] = TileType.FLOOR.value
+
+        if isinstance(required_floor_mask, np.ndarray) and required_floor_mask.shape == result.shape:
+            floor_id = int(SEMANTIC_PALETTE.get("FLOOR", TileType.FLOOR.value))
+            constrained = required_floor_mask.astype(bool, copy=False)
+            needs_floor = constrained & ~np.isin(result, list(walkable))
+            result[needs_floor] = floor_id
         return result
-    
+
     def _find_path(
         self,
         grid: np.ndarray,
@@ -885,17 +943,17 @@ class ConstraintPropagator:
         goal: Tuple[int, int],
         walkable: Set[int],
     ) -> Optional[List[Tuple[int, int]]]:
-        """BFS pathfinding."""
+        """BFS pathfinding using (row, col) coordinates."""
         h, w = grid.shape
         
-        queue = [start]
+        queue = deque([start])
         visited = {start}
         parent = {start: None}
         
         while queue:
-            x, y = queue.pop(0)
+            r, c = queue.popleft()
             
-            if (x, y) == goal:
+            if (r, c) == goal:
                 # Reconstruct path
                 path = []
                 current = goal
@@ -904,19 +962,19 @@ class ConstraintPropagator:
                     current = parent[current]
                 return list(reversed(path))
             
-            for dx, dy in [(0, 1), (1, 0), (0, -1), (-1, 0)]:
-                nx_, ny_ = x + dx, y + dy
+            for dr, dc in [(0, 1), (1, 0), (0, -1), (-1, 0)]:
+                nr, nc = r + dr, c + dc
                 
-                if not (0 <= nx_ < w and 0 <= ny_ < h):
+                if not (0 <= nr < h and 0 <= nc < w):
                     continue
-                if (nx_, ny_) in visited:
+                if (nr, nc) in visited:
                     continue
-                if grid[ny_, nx_] not in walkable:
+                if grid[nr, nc] not in walkable:
                     continue
                 
-                visited.add((nx_, ny_))
-                parent[(nx_, ny_)] = (x, y)
-                queue.append((nx_, ny_))
+                visited.add((nr, nc))
+                parent[(nr, nc)] = (r, c)
+                queue.append((nr, nc))
         
         return None
 
@@ -944,8 +1002,8 @@ class SymbolicRefiner:
         # Repair a room grid
         fixed_grid = refiner.repair_room(
             grid=room_grid,
-            start=(5, 0),
-            goal=(5, 15),
+            start=(0, 5),
+            goal=(15, 5),
         )
         
         # Repair a dungeon graph
@@ -1028,6 +1086,7 @@ class SymbolicRefiner:
         goal: Tuple[int, int],
         feedback_callback: Optional[Callable[[np.ndarray, np.ndarray, Tuple[int, int], Tuple[int, int], int], np.ndarray]] = None,
         max_feedback_rounds: int = 2,
+        required_floor_mask: Optional[np.ndarray] = None,
     ) -> Tuple[np.ndarray, bool, Dict[str, Any]]:
         """
         Repair a room and optionally call a neural feedback callback on WFC dead-ends.
@@ -1036,13 +1095,42 @@ class SymbolicRefiner:
         and must return a patched room grid of identical shape.
         """
         current_grid = grid.copy()
+        start = _normalize_grid_coord(start, current_grid.shape[:2], field_name="start")
+        goal = _normalize_grid_coord(goal, current_grid.shape[:2], field_name="goal")
         feedback_used = 0
+        floor_mask = None
+        if isinstance(required_floor_mask, np.ndarray) and required_floor_mask.shape == current_grid.shape:
+            floor_mask = required_floor_mask.astype(bool, copy=False)
+        floor_id = int(SEMANTIC_PALETTE["FLOOR"])
+
+        def _apply_required_floor_constraints(grid_in: np.ndarray) -> np.ndarray:
+            if floor_mask is None:
+                return grid_in
+            constrained_grid = np.asarray(grid_in).copy()
+            preserved_walkable_ids = np.array(
+                sorted(
+                    CANONICAL_WALKABLE_IDS
+                    | {
+                        int(TileType.KEY.value),
+                        int(TileType.CHEST.value),
+                        int(TileType.ENEMY.value),
+                    }
+                ),
+                dtype=np.int32,
+            )
+            non_floorable = np.isin(constrained_grid, preserved_walkable_ids)
+            force_floor = floor_mask & (~non_floorable)
+            constrained_grid[force_floor] = floor_id
+            return constrained_grid
+
+        current_grid = _apply_required_floor_constraints(current_grid)
         diagnostics: Dict[str, Any] = {
             "attempts": 0,
             "wfc_failures": 0,
             "feedback_rounds": 0,
             "feedback_applied": 0,
             "last_dead_end_mask_pixels": 0,
+            "required_floor_pixels": int(np.sum(floor_mask)) if floor_mask is not None else 0,
             "final_failure_count": 0,
         }
 
@@ -1053,6 +1141,19 @@ class SymbolicRefiner:
             failures = self.path_analyzer.analyze_grid(current_grid, start, goal)
 
             if not failures:
+                if floor_mask is not None:
+                    walkable = {
+                        TileType.FLOOR.value,
+                        TileType.KEY.value,
+                        TileType.CHEST.value,
+                    } | CANONICAL_WALKABLE_IDS
+                    current_grid = self.constraint_propagator.enforce_connectivity(
+                        current_grid,
+                        start,
+                        goal,
+                        walkable,
+                        required_floor_mask=floor_mask,
+                    )
                 logger.info(f"Room repaired successfully in {attempt + 1} attempts")
                 diagnostics["final_failure_count"] = 0
                 self.last_repair_diagnostics = diagnostics
@@ -1063,6 +1164,7 @@ class SymbolicRefiner:
             # Create localized reset mask around failure points.
             mask = self.entropy_reset.create_mask(grid.shape[:2], failures)
             mask = self.entropy_reset.expand_mask(mask, iterations=1)
+            current_grid = _apply_required_floor_constraints(current_grid)
 
             # Run local WFC repair for masked region.
             state = self.wfc.initialize_state(
@@ -1072,6 +1174,7 @@ class SymbolicRefiner:
                 mask=mask,
             )
             current_grid, wfc_success = self.wfc.collapse(state)
+            current_grid = _apply_required_floor_constraints(current_grid)
 
             if not wfc_success:
                 diagnostics["wfc_failures"] = int(diagnostics["wfc_failures"] + 1)
@@ -1089,7 +1192,9 @@ class SymbolicRefiner:
                             int(attempt),
                         )
                         if isinstance(feedback_grid, np.ndarray) and feedback_grid.shape == current_grid.shape:
-                            current_grid = feedback_grid.astype(current_grid.dtype, copy=False)
+                            current_grid = _apply_required_floor_constraints(
+                                feedback_grid.astype(current_grid.dtype, copy=False)
+                            )
                             feedback_used += 1
                             diagnostics["feedback_rounds"] = int(feedback_used)
                             diagnostics["feedback_applied"] = int(diagnostics["feedback_applied"] + 1)
@@ -1103,13 +1208,15 @@ class SymbolicRefiner:
                 TileType.FLOOR.value,
                 TileType.KEY.value,
                 TileType.CHEST.value,
-            }
+            } | CANONICAL_WALKABLE_IDS
             current_grid = self.constraint_propagator.enforce_connectivity(
                 current_grid,
                 start,
                 goal,
                 walkable,
+                required_floor_mask=floor_mask,
             )
+            current_grid = _apply_required_floor_constraints(current_grid)
 
         # Final check.
         failures = self.path_analyzer.analyze_grid(current_grid, start, goal)
@@ -1122,14 +1229,16 @@ class SymbolicRefiner:
         grid: np.ndarray,
         start: Tuple[int, int],
         goal: Tuple[int, int],
+        *,
+        required_floor_mask: Optional[np.ndarray] = None,
     ) -> Tuple[np.ndarray, bool]:
         """
         Repair a room grid to ensure solvability.
         
         Args:
             grid: H x W tile grid
-            start: Start position
-            goal: Goal position
+            start: Start position as (row, col)
+            goal: Goal position as (row, col)
             
         Returns:
             (repaired_grid, success)
@@ -1140,6 +1249,7 @@ class SymbolicRefiner:
             goal=goal,
             feedback_callback=None,
             max_feedback_rounds=0,
+            required_floor_mask=required_floor_mask,
         )
         self.last_repair_diagnostics = diagnostics
         return repaired, success
@@ -1179,8 +1289,8 @@ class SymbolicRefiner:
                 if hasattr(room, 'grid'):
                     # Find start/goal for this room
                     h, w = room.grid.shape[:2]
-                    start = (w // 2, 0)
-                    goal = (w // 2, h - 1)
+                    start = (0, w // 2)
+                    goal = (h - 1, w // 2)
                     
                     repaired_grid, room_success = self.repair_room(
                         room.grid, start, goal
@@ -1231,8 +1341,8 @@ class SymbolicRefiner:
             for room_id, room in enumerate(dungeon.rooms):
                 if hasattr(room, 'grid'):
                     h, w = room.grid.shape[:2]
-                    start = (w // 2, 0)
-                    goal = (w // 2, h - 1)
+                    start = (0, w // 2)
+                    goal = (h - 1, w // 2)
                     
                     failures = self.path_analyzer.analyze_grid(
                         room.grid, start, goal
@@ -1281,8 +1391,8 @@ def quick_repair(
     
     Args:
         grid: H x W tile grid
-        start: Start position
-        goal: Goal position
+        start: Start position as (row, col)
+        goal: Goal position as (row, col)
         
     Returns:
         (repaired_grid, success)

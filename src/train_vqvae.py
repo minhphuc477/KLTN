@@ -43,7 +43,7 @@ def grids_to_onehot(batch: torch.Tensor, num_classes: int = 44) -> torch.Tensor:
     Data loader returns [B, 1, H, W] with values in [0, 1].
     The normalisation divides by a fixed constant (43 = TileID.PUZZLE, the
     highest tile ID).  To recover integer IDs we multiply by 43, round, and
-    clamp â€” this gives an exact round-trip for all dungeons.
+    clamp; this gives an exact round-trip for all dungeons.
 
     Returns [B, C, H, W] float32 one-hot.
     """
@@ -77,13 +77,13 @@ def train_vqvae(args):
     logger.info(f"Device: {device}")
 
     # ------------------------------------------------------------------
-    # Dataset â€” use VGLC mode, same as diffusion training
+    # Dataset - use VGLC mode, same as diffusion training
     # ------------------------------------------------------------------
     base_loader = create_dataloader(
         data_dir=args.data_dir,
         batch_size=args.batch_size,
         shuffle=True,
-        use_vglc=True,       # â† CRITICAL: must match diffusion training
+        use_vglc=True,       # CRITICAL: must match diffusion training
         normalize=True,
         load_graphs=False,
     )
@@ -94,7 +94,7 @@ def train_vqvae(args):
         logger.error("No dungeon samples found! Check --data-dir path.")
         sys.exit(1)
 
-    # Small dataset â†’ duplicate to fill an epoch with more gradient steps
+    # Small dataset -> duplicate to fill an epoch with more gradient steps
     effective_size = max(len(dataset), args.min_samples_per_epoch)
     sampler = torch.utils.data.RandomSampler(
         dataset,
@@ -255,7 +255,7 @@ def train_vqvae(args):
                     "accuracy": float(eval_acc),
                 },
             )
-            logger.info(f"  â˜… Saved best model â†’ {save_path} (loss={best_loss:.4f})")
+            logger.info(f"  [BEST] Saved best model -> {save_path} (loss={best_loss:.4f})")
 
         # Periodic checkpoint
         if (epoch + 1) % args.save_every == 0:

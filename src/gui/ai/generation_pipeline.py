@@ -7,6 +7,7 @@ import random
 from pathlib import Path
 
 from src.pipeline.block_contracts import BlockContractError, validate_checkpoint_metadata
+from src.pipeline.spatial_utils import normalize_node_id, stable_node_sort_key
 
 
 def resolve_checkpoint_path():
@@ -61,7 +62,7 @@ def _compute_editor_layout(mission_graph):
     except (AttributeError, RuntimeError, ValueError, TypeError, ImportError):
         nx = None
 
-    node_ids = sorted(list(mission_graph.nodes.keys()))
+    node_ids = sorted(list(mission_graph.nodes.keys()), key=stable_node_sort_key)
     if not node_ids:
         return {}
 
@@ -82,7 +83,7 @@ def _compute_editor_layout(mission_graph):
             for nid in node_ids:
                 x = (float(pos[nid][0]) - min_x) / dx
                 y = (float(pos[nid][1]) - min_y) / dy
-                layout[int(nid)] = (0.08 + 0.84 * x, 0.12 + 0.76 * y)
+                layout[nid] = (0.08 + 0.84 * x, 0.12 + 0.76 * y)
             return layout
         except (AttributeError, RuntimeError, ValueError, TypeError):
             pass
@@ -92,28 +93,32 @@ def _compute_editor_layout(mission_graph):
     for idx, nid in enumerate(node_ids):
         x = 0.08 + 0.84 * (float(idx) / float(max(1, count - 1)))
         y = 0.5
-        layout[int(nid)] = (x, y)
+        layout[nid] = (x, y)
     return layout
+
+
+def _normalize_node_ref(value):
+    """Best-effort normalization for GUI-staged node references."""
+    return normalize_node_id(value)
 
 
 def _mission_graph_constraints_from_gui(gui):
     """Collect staged mission-graph constraints from GUI state."""
-    boss_node = getattr(gui, "ai_mission_graph_boss_node", None)
+    boss_node = _normalize_node_ref(getattr(gui, "ai_mission_graph_boss_node", None))
     locked_edges = list(getattr(gui, "ai_mission_graph_locked_edges", []) or [])
     cleaned_edges = []
     for pair in locked_edges:
         if not isinstance(pair, (tuple, list)) or len(pair) < 2:
             continue
-        try:
-            src = int(pair[0])
-            dst = int(pair[1])
-        except (TypeError, ValueError):
+        src = _normalize_node_ref(pair[0])
+        dst = _normalize_node_ref(pair[1])
+        if src is None or dst is None:
             continue
         if src == dst:
             continue
         cleaned_edges.append((src, dst))
     return {
-        "boss_node": int(boss_node) if isinstance(boss_node, (int, float)) else boss_node,
+        "boss_node": boss_node,
         "locked_edges": cleaned_edges,
     }
 
@@ -129,32 +134,27 @@ def apply_mission_graph_constraints(mission_graph, constraints, logger):
     lock_applied = 0
 
     boss_node = constraints.get("boss_node")
-    if boss_node is not None:
-        try:
-            boss_node = int(boss_node)
-            if boss_node in mission_graph.nodes:
-                mission_graph.nodes[boss_node].node_type = NodeType.BOSS
-                boss_applied = True
-        except (AttributeError, RuntimeError, ValueError, TypeError):
-            boss_applied = False
+    boss_node = _normalize_node_ref(boss_node)
+    if boss_node is not None and boss_node in mission_graph.nodes:
+        mission_graph.nodes[boss_node].node_type = NodeType.BOSS
+        boss_applied = True
 
     locked_pairs = constraints.get("locked_edges") or []
     for src, dst in locked_pairs:
-        try:
-            src_i = int(src)
-            dst_i = int(dst)
-        except (TypeError, ValueError):
+        src_ref = _normalize_node_ref(src)
+        dst_ref = _normalize_node_ref(dst)
+        if src_ref is None or dst_ref is None:
             continue
-        if src_i not in mission_graph.nodes or dst_i not in mission_graph.nodes or src_i == dst_i:
+        if src_ref not in mission_graph.nodes or dst_ref not in mission_graph.nodes or src_ref == dst_ref:
             continue
 
         existing = None
         for edge in mission_graph.edges:
-            if int(edge.source) == src_i and int(edge.target) == dst_i:
+            if edge.source == src_ref and edge.target == dst_ref:
                 existing = edge
                 break
         if existing is None:
-            mission_graph.add_edge(src_i, dst_i, edge_type=EdgeType.LOCKED)
+            mission_graph.add_edge(src_ref, dst_ref, edge_type=EdgeType.LOCKED)
         else:
             existing.edge_type = EdgeType.LOCKED
         lock_applied += 1

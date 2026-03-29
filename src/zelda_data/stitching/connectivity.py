@@ -6,6 +6,7 @@ from collections import deque
 from typing import Any, Dict, Set, Tuple
 
 import numpy as np
+from src.pipeline.room_stitching import carve_room_connection_between_bboxes
 
 RoomPos = Tuple[int, int]
 
@@ -70,75 +71,57 @@ def connect_doors(
     room_height: int,
     room_width: int,
 ) -> None:
-    """Punch through adjacent room boundaries where reciprocal doors exist."""
-    for pos, room in rooms.items():
+    """Punch through adjacent room boundaries using the shared bbox connector."""
+    def _room_bbox(pos: RoomPos) -> Tuple[int, int, int, int]:
         row, col = pos
-        r_base = row * room_height
-        c_base = col * room_width
+        room = rooms[pos]
+        local_h = int(getattr(room, "height", 0) or getattr(room, "room_height", 0) or 0)
+        local_w = int(getattr(room, "width", 0) or getattr(room, "room_width", 0) or 0)
+        if local_h <= 0 or local_w <= 0:
+            semantic_grid = getattr(room, "semantic_grid", None)
+            char_grid = getattr(room, "char_grid", None)
+            grid_ref = semantic_grid if isinstance(semantic_grid, np.ndarray) else char_grid
+            if isinstance(grid_ref, np.ndarray) and grid_ref.ndim == 2:
+                local_h, local_w = int(grid_ref.shape[0]), int(grid_ref.shape[1])
+        if local_h <= 0:
+            local_h = int(room_height)
+        if local_w <= 0:
+            local_w = int(room_width)
+        y0 = row * int(room_height)
+        x0 = col * int(room_width)
+        return (x0, y0, x0 + local_w - 1, y0 + local_h - 1)
 
-        if room.doors.get("N"):
-            north_pos = (row - 1, col)
-            if north_pos in rooms:
-                reciprocal = bool(rooms[north_pos].doors.get("S"))
-                src_tile, dst_tile = _boundary_carve_tiles(semantic_palette, reciprocal)
-                wall_row = r_base
-                for c in range(c_base + 3, c_base + 8):
-                    if 0 <= c < grid.shape[1]:
-                        grid[wall_row, c] = src_tile
-                        if wall_row > 0:
-                            grid[wall_row - 1, c] = dst_tile
-                for r in range(r_base + 1, r_base + 4):
-                    for c in range(c_base + 4, c_base + 7):
-                        if grid[r, c] == semantic_palette["WALL"]:
-                            grid[r, c] = semantic_palette["FLOOR"]
+    def _dataset_connector_tiles(_edge_data: Dict[str, Any] | None, has_reverse_edge: bool) -> Tuple[int, int]:
+        return _boundary_carve_tiles(semantic_palette, reciprocal=has_reverse_edge)
 
-        if room.doors.get("S"):
-            south_pos = (row + 1, col)
-            if south_pos in rooms:
-                reciprocal = bool(rooms[south_pos].doors.get("N"))
-                src_tile, dst_tile = _boundary_carve_tiles(semantic_palette, reciprocal)
-                wall_row = r_base + room_height - 1
-                for c in range(c_base + 3, c_base + 8):
-                    if 0 <= c < grid.shape[1]:
-                        grid[wall_row, c] = src_tile
-                        if wall_row + 1 < grid.shape[0]:
-                            grid[wall_row + 1, c] = dst_tile
-                for r in range(r_base + room_height - 4, r_base + room_height - 1):
-                    for c in range(c_base + 4, c_base + 7):
-                        if grid[r, c] == semantic_palette["WALL"]:
-                            grid[r, c] = semantic_palette["FLOOR"]
+    directions = {
+        "N": ((-1, 0), "S"),
+        "S": ((1, 0), "N"),
+        "W": ((0, -1), "E"),
+        "E": ((0, 1), "W"),
+    }
 
-        if room.doors.get("W"):
-            west_pos = (row, col - 1)
-            if west_pos in rooms:
-                reciprocal = bool(rooms[west_pos].doors.get("E"))
-                src_tile, dst_tile = _boundary_carve_tiles(semantic_palette, reciprocal)
-                wall_col = c_base
-                for r in range(r_base + 5, r_base + 11):
-                    if 0 <= r < grid.shape[0]:
-                        grid[r, wall_col] = src_tile
-                        if wall_col > 0:
-                            grid[r, wall_col - 1] = dst_tile
-                for r in range(r_base + 6, r_base + 10):
-                    for c in range(c_base + 1, c_base + 4):
-                        if grid[r, c] == semantic_palette["WALL"]:
-                            grid[r, c] = semantic_palette["FLOOR"]
+    for pos, room in rooms.items():
+        for direction, (delta, reverse_direction) in directions.items():
+            if not room.doors.get(direction):
+                continue
 
-        if room.doors.get("E"):
-            east_pos = (row, col + 1)
-            if east_pos in rooms:
-                reciprocal = bool(rooms[east_pos].doors.get("W"))
-                src_tile, dst_tile = _boundary_carve_tiles(semantic_palette, reciprocal)
-                wall_col = c_base + room_width - 1
-                for r in range(r_base + 5, r_base + 11):
-                    if 0 <= r < grid.shape[0]:
-                        grid[r, wall_col] = src_tile
-                        if wall_col + 1 < grid.shape[1]:
-                            grid[r, wall_col + 1] = dst_tile
-                for r in range(r_base + 6, r_base + 10):
-                    for c in range(c_base + room_width - 4, c_base + room_width - 1):
-                        if grid[r, c] == semantic_palette["WALL"]:
-                            grid[r, c] = semantic_palette["FLOOR"]
+            neighbor = (pos[0] + delta[0], pos[1] + delta[1])
+            if neighbor not in rooms:
+                continue
+
+            reciprocal = bool(rooms[neighbor].doors.get(reverse_direction))
+            if reciprocal and pos > neighbor:
+                continue
+
+            carve_room_connection_between_bboxes(
+                grid,
+                _room_bbox(pos),
+                _room_bbox(neighbor),
+                has_reverse_edge=reciprocal,
+                fill_tile=int(semantic_palette.get("VOID", 0)),
+                connector_tile_resolver=_dataset_connector_tiles,
+            )
 
     ensure_room_connectivity(
         grid=grid,

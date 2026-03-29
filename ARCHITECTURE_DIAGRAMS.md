@@ -106,6 +106,9 @@ Fitness: Float 0.0-1.0 (curve matching + solvability)
 │  │  Graph Context      │                    │                              │ │
 │  │  (Node/Edge/TPE)    └────────────────────┼──▶ Fusion ──▶ Condition (256)│ │
 │  │                                          │                              │ │
+│  │                                          │  + Graph-to-grid conditioning (new):
+│  │                                          │    GraphToGridCrossAttention +
+│  │                                          │    SpatialGraphConditioner       │ │
 │  │                                          └────────────▶ Global Context  │ │
 │  └─────────────────────────────────────────────────────────────────────────┘ │
 │                                                                             │

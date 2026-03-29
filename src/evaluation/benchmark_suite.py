@@ -943,7 +943,7 @@ def load_vglc_reference_graphs(
 
 def _is_vglc_room_slot(slot: np.ndarray) -> bool:
     """
-    Fast VGLC room detector for 16x11 slot extraction.
+    Fast VGLC room detector for the canonical internal `(16, 11)` room slots.
     """
     if slot.size == 0:
         return False

@@ -71,3 +71,77 @@ def test_generate_mission_graph_is_deterministic_with_seed():
     assert data_a["num_nodes"] == data_b["num_nodes"]
     assert data_a["num_edges"] == data_b["num_edges"]
 
+
+def test_compute_editor_layout_preserves_string_node_ids():
+    from src.generation.grammar import EdgeType, MissionGraph, MissionNode, NodeType
+
+    graph = MissionGraph()
+    graph.add_node(MissionNode(id="start", node_type=NodeType.START))
+    graph.add_node(MissionNode(id="boss", node_type=NodeType.GOAL))
+    graph.add_edge("start", "boss", edge_type=EdgeType.PATH)
+
+    layout = generation_pipeline._compute_editor_layout(graph)
+
+    assert set(layout.keys()) == {"start", "boss"}
+    for x, y in layout.values():
+        assert 0.0 <= float(x) <= 1.0
+        assert 0.0 <= float(y) <= 1.0
+
+
+def test_compute_editor_layout_supports_mixed_hashable_node_ids():
+    from src.generation.grammar import EdgeType, MissionGraph, MissionNode, NodeType
+
+    graph = MissionGraph()
+    graph.add_node(MissionNode(id=0, node_type=NodeType.START))
+    graph.add_node(MissionNode(id="boss", node_type=NodeType.GOAL))
+    graph.add_edge(0, "boss", edge_type=EdgeType.PATH)
+
+    layout = generation_pipeline._compute_editor_layout(graph)
+
+    assert set(layout.keys()) == {0, "boss"}
+
+
+def test_apply_mission_graph_constraints_preserves_string_node_ids():
+    from src.generation.grammar import EdgeType, MissionGraph, MissionNode, NodeType
+
+    class _Logger:
+        def __init__(self):
+            self.info_calls = []
+
+        def info(self, *args, **kwargs):
+            self.info_calls.append((args, kwargs))
+
+        def warning(self, *_args, **_kwargs):
+            return None
+
+        def exception(self, *_args, **_kwargs):
+            return None
+
+    graph = MissionGraph()
+    graph.add_node(MissionNode(id="start", node_type=NodeType.START))
+    graph.add_node(MissionNode(id="hall", node_type=NodeType.EMPTY))
+    graph.add_node(MissionNode(id="boss", node_type=NodeType.GOAL))
+    graph.add_edge("start", "hall", edge_type=EdgeType.PATH)
+
+    logger = _Logger()
+    updated, applied = generation_pipeline.apply_mission_graph_constraints(
+        graph,
+        {
+            "boss_node": "boss",
+            "locked_edges": [("start", "hall"), ("hall", "boss"), (3.5, "boss"), ("boss", "boss")],
+        },
+        logger,
+    )
+
+    assert updated.nodes["boss"].node_type == NodeType.BOSS
+    assert applied == {"boss_applied": True, "locked_edges_applied": 2}
+    assert any(
+        edge.source == "start" and edge.target == "hall" and edge.edge_type == EdgeType.LOCKED
+        for edge in updated.edges
+    )
+    assert any(
+        edge.source == "hall" and edge.target == "boss" and edge.edge_type == EdgeType.LOCKED
+        for edge in updated.edges
+    )
+    assert logger.info_calls
+

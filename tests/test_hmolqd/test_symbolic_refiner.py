@@ -37,10 +37,23 @@ class TestPathAnalyzer:
         grid = np.full((10, 10), TileType.FLOOR.value)
         grid[5, :] = TileType.WALL.value  # Wall across middle
         
-        failures = analyzer.analyze_grid(grid, start=(5, 0), goal=(5, 9))
+        failures = analyzer.analyze_grid(grid, start=(0, 5), goal=(9, 5))
         
         assert len(failures) > 0
         assert any(f.failure_type == 'disconnected' for f in failures)
+
+    def test_analyze_non_square_grid_uses_row_col_coordinates(self):
+        """Row/col coordinates should work correctly on non-square grids."""
+        from src.core.symbolic_refiner import PathAnalyzer, TileType
+
+        analyzer = PathAnalyzer()
+
+        grid = np.full((16, 11), TileType.WALL.value)
+        grid[8, :] = TileType.FLOOR.value
+
+        failures = analyzer.analyze_grid(grid, start=(8, 0), goal=(8, 10))
+
+        assert failures == []
 
 
 class TestEntropyReset:
@@ -145,6 +158,26 @@ class TestWaveFunctionCollapse:
         # Top row should still be WALL
         assert np.all(result_grid[0, :] == TileType.WALL.value)
 
+    def test_wfc_single_option_zero_entropy_is_not_contradiction(self):
+        """A single valid option should collapse successfully even with zero entropy."""
+        from src.core.symbolic_refiner import WaveFunctionCollapse, WFCState, TileType
+
+        wfc = WaveFunctionCollapse(
+            tile_types=[TileType.FLOOR.value, TileType.WALL.value],
+            max_iterations=10,
+        )
+        state = WFCState(
+            grid=np.array([[[1.0, 0.0]]], dtype=np.float32),
+            collapsed=np.array([[False]], dtype=bool),
+            tile_types=[TileType.FLOOR.value, TileType.WALL.value],
+            adjacency={},
+        )
+
+        result_grid, success = wfc.collapse(state)
+
+        assert success is True
+        assert result_grid[0, 0] == TileType.FLOOR.value
+
 
 class TestConstraintPropagator:
     """Tests for constraint propagation."""
@@ -170,6 +203,43 @@ class TestConstraintPropagator:
         has_path = propagator._find_path(fixed_grid, (5, 0), (5, 9), walkable)
         assert has_path is not None
 
+    def test_enforce_connectivity_uses_row_col_on_non_square_grid(self):
+        """Connectivity carving should follow row/col coordinates on non-square grids."""
+        from src.core.symbolic_refiner import ConstraintPropagator, TileType
+
+        propagator = ConstraintPropagator()
+        grid = np.full((16, 11), TileType.WALL.value)
+        walkable = {TileType.FLOOR.value}
+
+        fixed_grid = propagator.enforce_connectivity(
+            grid,
+            start=(8, 0),
+            goal=(8, 10),
+            walkable=walkable,
+        )
+
+        assert np.all(fixed_grid[8, :] == TileType.FLOOR.value)
+
+    def test_enforce_connectivity_honors_required_floor_mask(self):
+        """Required plan masks should be preserved as walkable floor during repair."""
+        from src.core.symbolic_refiner import ConstraintPropagator, TileType
+
+        propagator = ConstraintPropagator()
+        grid = np.full((10, 10), TileType.WALL.value)
+        required = np.zeros((10, 10), dtype=bool)
+        required[2:8, 4] = True
+        walkable = {TileType.FLOOR.value}
+
+        fixed_grid = propagator.enforce_connectivity(
+            grid,
+            start=(2, 4),
+            goal=(7, 4),
+            walkable=walkable,
+            required_floor_mask=required,
+        )
+
+        assert np.all(fixed_grid[2:8, 4] == TileType.FLOOR.value)
+
 
 class TestSymbolicRefiner:
     """Tests for complete Symbolic Refiner."""
@@ -183,7 +253,7 @@ class TestSymbolicRefiner:
         grid = np.full((16, 11), TileType.FLOOR.value)
         
         _repaired, success = refiner.repair_room(
-            grid, start=(5, 0), goal=(5, 15)
+            grid, start=(0, 5), goal=(15, 5)
         )
         
         assert success == True
@@ -199,11 +269,46 @@ class TestSymbolicRefiner:
         grid[8, :] = TileType.WALL.value  # Wall in middle
         
         repaired, _success = refiner.repair_room(
-            grid, start=(5, 0), goal=(5, 15)
+            grid, start=(0, 5), goal=(15, 5)
         )
         
         # Should attempt repair (may or may not succeed depending on WFC)
         assert repaired.shape == grid.shape
+
+    def test_repair_room_clamps_public_row_col_coordinates(self):
+        """Public repair entry point should normalize out-of-bounds row/col coordinates."""
+        from src.core.symbolic_refiner import SymbolicRefiner, TileType
+
+        refiner = SymbolicRefiner(max_repair_attempts=1)
+        grid = np.full((16, 11), TileType.FLOOR.value)
+
+        repaired, success = refiner.repair_room(
+            grid,
+            start=(-5, 99),
+            goal=(99, -3),
+        )
+
+        assert repaired.shape == grid.shape
+        assert isinstance(success, bool)
+
+    def test_repair_room_preserves_required_floor_mask(self):
+        """Repair should preserve a provided traversability prior."""
+        from src.core.symbolic_refiner import SymbolicRefiner, TileType
+
+        refiner = SymbolicRefiner(max_repair_attempts=1)
+        grid = np.full((16, 11), TileType.WALL.value)
+        required = np.zeros((16, 11), dtype=bool)
+        required[8, :] = True
+
+        repaired, success = refiner.repair_room(
+            grid,
+            start=(8, 0),
+            goal=(8, 10),
+            required_floor_mask=required,
+        )
+
+        assert isinstance(success, bool)
+        assert np.all(repaired[8, :] == TileType.FLOOR.value)
     
     def test_analyze_failures(self):
         """Test failure analysis."""

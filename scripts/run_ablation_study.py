@@ -62,6 +62,26 @@ from src.pipeline.spatial_utils import first_free_position, get_node_grid_positi
 logger = logging.getLogger(__name__)
 
 
+def _stitch_with_pipeline(
+    pipeline: NeuralSymbolicDungeonPipeline,
+    rooms: Dict[Any, RoomGenerationResult],
+    graph: nx.Graph,
+) -> np.ndarray:
+    """Use the public stitch API while remaining compatible with positional-only stitchers."""
+    stitch_fn = getattr(pipeline, "stitch_rooms", None)
+    if callable(stitch_fn):
+        try:
+            return stitch_fn(rooms=rooms, graph=graph)
+        except TypeError:
+            return stitch_fn(rooms, graph)
+    return pipeline._stitch_rooms(rooms, graph)
+
+
+def _sanitized_exception_name(exc: BaseException) -> str:
+    """Short exception summary safe to persist in experiment outputs."""
+    return type(exc).__name__
+
+
 @dataclass
 class ExperimentConfig:
     name: str
@@ -642,7 +662,7 @@ class AblationStudy:
                 metrics={"wfc_only": 1.0},
             )
 
-        dungeon_grid = pipeline.stitch_rooms(rooms, graph)
+        dungeon_grid = _stitch_with_pipeline(pipeline, rooms, graph)
         metrics = {
             "num_rooms": len(rooms),
             "total_tiles_repaired": 0.0,
@@ -743,6 +763,11 @@ class AblationStudy:
             "directed_edge_realization_rate": np.nan,
             "directed_directionality_leak_rate": np.nan,
             "directed_edge_preservation_score": np.nan,
+            "raw_topology_preservation_score": np.nan,
+            "raw_directed_directionality_leak_rate": np.nan,
+            "raw_topology_failed": False,
+            "raw_topology_error_count": 0,
+            "raw_topology_error": "",
             "error": "",
         }
 
@@ -791,6 +816,41 @@ class AblationStudy:
 
             grid = np.asarray(result.dungeon_grid, dtype=np.int32)
             graph = result.mission_graph
+            # Build a stitched dungeon from raw neural outputs (before symbolic repair)
+            try:
+                neural_rooms: Dict[Any, RoomGenerationResult] = {}
+                for rid, r in result.rooms.items():
+                    neural_rooms[rid] = RoomGenerationResult(
+                        room_id=r.room_id,
+                        room_grid=np.asarray(r.neural_grid, dtype=np.int32),
+                        latent=r.latent,
+                        neural_grid=np.asarray(r.neural_grid, dtype=np.int32),
+                        was_repaired=False,
+                        repair_mask=None,
+                        neural_probs=getattr(r, 'neural_probs', None),
+                        metrics=(r.metrics if isinstance(r.metrics, dict) else {}),
+                    )
+                neural_grid_global = np.asarray(
+                    _stitch_with_pipeline(pipeline, neural_rooms, graph),
+                    dtype=np.int32,
+                )
+                raw_topology_scorecard = _topology_information_scorecard(
+                    graph=graph,
+                    rooms=neural_rooms,
+                    dungeon_grid=neural_grid_global,
+                )
+            except (AttributeError, RuntimeError, ValueError, TypeError, KeyError, IndexError) as e:
+                neural_grid_global = None
+                raw_topology_scorecard = None
+                row["raw_topology_failed"] = True
+                row["raw_topology_error_count"] = int(row.get("raw_topology_error_count", 0)) + 1
+                row["raw_topology_error"] = _sanitized_exception_name(e)
+                logger.warning(
+                    "Failed to compute raw topology scorecard for config=%s seed=%d (%s)",
+                    cfg.name,
+                    int(seed),
+                    _sanitized_exception_name(e),
+                )
             desc_vec = _descriptor_vector(graph)
 
             tile_kl = _kl_divergence(self.reference_tile_dist, _tile_distribution([grid]))
@@ -847,6 +907,8 @@ class AblationStudy:
                     "directed_edge_realization_rate": float(topology_scorecard["directed_edge_realization_rate"]),
                     "directed_directionality_leak_rate": float(topology_scorecard["directed_directionality_leak_rate"]),
                     "directed_edge_preservation_score": float(topology_scorecard["directed_edge_preservation_score"]),
+                    "raw_topology_preservation_score": float(raw_topology_scorecard["topology_preservation_score"]) if raw_topology_scorecard is not None else float("nan"),
+                    "raw_directed_directionality_leak_rate": float(raw_topology_scorecard["directed_directionality_leak_rate"]) if raw_topology_scorecard is not None else float("nan"),
                     "_descriptor_vec": desc_vec.tolist(),
                 }
             )

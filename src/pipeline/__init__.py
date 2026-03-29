@@ -2,41 +2,69 @@
 KLTN Pipeline Module
 ====================
 
-Master pipeline orchestration for neural-symbolic dungeon generation.
-
-This module provides the complete end-to-end pipeline that integrates
-all 7 H-MOLQD blocks for Legend of Zelda dungeon generation.
-
-Usage:
-    from src.pipeline import NeuralSymbolicDungeonPipeline, create_pipeline
-    
-    # Create pipeline with checkpoints
-    pipeline = create_pipeline(checkpoint_dir="./checkpoints")
-    
-    # Generate dungeon
-    result = pipeline.generate_dungeon(
-        mission_graph=my_graph,
-        seed=42
-    )
-    
-    # Access results
-    print(f"Generated {result.metrics['num_rooms']} rooms")
-    print(f"Repair rate: {result.metrics['repair_rate']:.1%}")
-    
-    # Save dungeon
-    np.save("dungeon.npy", result.dungeon_grid)
+Lazy exports for neural-symbolic dungeon generation pipeline components.
 """
 
-from src.pipeline.dungeon_pipeline import (
-    NeuralSymbolicDungeonPipeline,
-    RoomGenerationResult,
-    DungeonGenerationResult,
-    create_pipeline,
-)
+from __future__ import annotations
+
+from importlib import import_module
+from typing import TYPE_CHECKING, Any
 
 __all__ = [
-    'NeuralSymbolicDungeonPipeline',
-    'RoomGenerationResult',
-    'DungeonGenerationResult',
-    'create_pipeline',
+    "NeuralSymbolicDungeonPipeline",
+    "MissingPipelineComponentError",
+    "NeuralGenerationComponents",
+    "SymbolicGenerationComponents",
+    "PipelineComponents",
+    "PipelineComponentFactory",
+    "RoomGenerationResult",
+    "DungeonGenerationResult",
+    "PreparedDungeonGeneration",
+    "GeneratedRoomSet",
+    "StitchedRoomLayout",
+    "create_pipeline",
 ]
+
+_DUNGEON_PIPELINE_EXPORTS = {
+    "NeuralSymbolicDungeonPipeline",
+    "MissingPipelineComponentError",
+    "NeuralGenerationComponents",
+    "SymbolicGenerationComponents",
+    "PipelineComponents",
+    "PipelineComponentFactory",
+    "RoomGenerationResult",
+    "DungeonGenerationResult",
+    "PreparedDungeonGeneration",
+    "GeneratedRoomSet",
+    "create_pipeline",
+}
+
+if TYPE_CHECKING:
+    from src.pipeline.dungeon_pipeline import (
+        DungeonGenerationResult,
+        GeneratedRoomSet,
+        MissingPipelineComponentError,
+        NeuralGenerationComponents,
+        NeuralSymbolicDungeonPipeline,
+        PipelineComponentFactory,
+        PipelineComponents,
+        PreparedDungeonGeneration,
+        RoomGenerationResult,
+        SymbolicGenerationComponents,
+        create_pipeline,
+    )
+    from src.pipeline.room_stitching import StitchedRoomLayout
+
+
+def __getattr__(name: str) -> Any:
+    if name in _DUNGEON_PIPELINE_EXPORTS:
+        module = import_module("src.pipeline.dungeon_pipeline")
+        value = getattr(module, name)
+        globals()[name] = value
+        return value
+    if name == "StitchedRoomLayout":
+        module = import_module("src.pipeline.room_stitching")
+        value = getattr(module, name)
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

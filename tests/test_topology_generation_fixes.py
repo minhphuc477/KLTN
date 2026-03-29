@@ -284,6 +284,52 @@ class TestGraphGrammarExecutorMaxNodes:
         assert len(graph.nodes) > 1, "Should have applied some rules"
         assert len(graph.nodes) <= 12, "Should respect max_nodes"
 
+    def test_replay_from_payload_rejects_oversized_genome(self):
+        """Replay payloads should reject unbounded genomes before reconstruction."""
+        with pytest.raises(ValueError, match="genome too long"):
+            GraphGrammarExecutor.replay_from_payload({"genome": [0] * 1001})
+
+    def test_replay_from_payload_rejects_unknown_fields(self):
+        """Replay payloads should reject unexpected top-level fields."""
+        with pytest.raises(ValueError, match="unknown fields"):
+            GraphGrammarExecutor.replay_from_payload(
+                {
+                    "genome": [0, 1, 2],
+                    "difficulty": 0.5,
+                    "surprise": {"nested": "value"},
+                }
+            )
+
+    def test_replay_from_payload_rejects_oversized_override_keys(self):
+        """Replay payloads should bound nested override metadata sizes."""
+        with pytest.raises(ValueError, match="override keys must be 1-128 characters"):
+            GraphGrammarExecutor.replay_from_payload(
+                {
+                    "genome": [0],
+                    "rule_weight_overrides": {"x" * 129: 1.0},
+                }
+            )
+
+    def test_replay_from_payload_rejects_unsupported_nested_types_before_serialization(self):
+        """Replay payload size validation should reject unsupported nested types cleanly."""
+        with pytest.raises(ValueError, match="unsupported value type"):
+            GraphGrammarExecutor.replay_from_payload(
+                {
+                    "genome": [0],
+                    "rule_weight_overrides": {"StartRule": object()},
+                }
+            )
+
+    def test_replay_from_payload_rejects_rule_names_with_unsafe_characters(self):
+        """Replay payload rule_names should be constrained to a safe identifier subset."""
+        with pytest.raises(ValueError, match="rule name 0 must match"):
+            GraphGrammarExecutor.replay_from_payload(
+                {
+                    "genome": [0],
+                    "rule_names": ["Start Rule"],
+                }
+            )
+
 
 class TestIntegrationPipeline:
     """Integration test for entire topology generation pipeline."""

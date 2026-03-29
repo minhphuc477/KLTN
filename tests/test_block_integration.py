@@ -20,8 +20,11 @@ PROJECT_ROOT = Path(__file__).parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+import pytest
 import torch
 import numpy as np
+
+from src.core.definitions import ROOM_HEIGHT, ROOM_WIDTH
 
 
 def test_block_ii_vqvae():
@@ -29,7 +32,7 @@ def test_block_ii_vqvae():
     from src.core.vqvae import create_vqvae
 
     model = create_vqvae(num_classes=44, codebook_size=64, latent_dim=32)
-    x = torch.randn(2, 44, 11, 16)  # [B, C=44, H=11, W=16]
+    x = torch.randn(2, 44, ROOM_HEIGHT, ROOM_WIDTH)
 
     # encode returns exactly 2 values
     z_q, indices = model.encode(x)
@@ -38,8 +41,10 @@ def test_block_ii_vqvae():
     assert indices.shape[0] == 2
 
     # decode round-trip
-    recon = model.decode(z_q, target_size=(11, 16))
-    assert recon.shape == (2, 44, 11, 16)
+    recon = model.decode(z_q, target_size=(ROOM_HEIGHT, ROOM_WIDTH))
+    assert recon.shape == (2, 44, ROOM_HEIGHT, ROOM_WIDTH)
+    recon_swapped = model.decode(z_q, target_size=(ROOM_WIDTH, ROOM_HEIGHT))
+    assert recon_swapped.shape == (2, 44, ROOM_HEIGHT, ROOM_WIDTH)
 
     # full forward returns (recon, indices, losses_dict)
     recon, indices, losses = model(x)
@@ -72,6 +77,28 @@ def test_block_iii_condition_encoder():
     print("  ✓ Block III (ConditionEncoder): global encoding with/without edge features OK")
 
 
+def test_block_iii_condition_encoder_clamps_integer_edge_labels_to_fixed_width():
+    """Block III: integer edge labels should use stable fixed-width one-hot encoding."""
+    from src.core.condition_encoder import create_condition_encoder
+
+    encoder = create_condition_encoder(latent_dim=32, output_dim=64)
+    global_encoder = encoder.global_encoder
+    edge_index = torch.tensor([[0, 1, 2], [1, 2, 0]], dtype=torch.long)
+    edge_labels = torch.tensor(
+        [0, global_encoder.edge_feature_dim - 1, global_encoder.edge_feature_dim + 5],
+        dtype=torch.long,
+    )
+
+    prepared = global_encoder._prepare_edge_features(edge_labels, edge_index)
+
+    assert prepared is not None
+    assert prepared.shape == (3, global_encoder.edge_feature_dim)
+    assert torch.allclose(prepared.sum(dim=1), torch.ones(3))
+    assert prepared[0, 0] == 1.0
+    assert prepared[1, global_encoder.edge_feature_dim - 1] == 1.0
+    assert prepared[2, global_encoder.edge_feature_dim - 1] == 1.0
+
+
 def test_block_iv_latent_diffusion():
     """Block IV: LatentDiffusionModel training loss and sampling."""
     from src.core.latent_diffusion import create_latent_diffusion
@@ -102,6 +129,181 @@ def test_block_iv_latent_diffusion():
         z_ddim = model.ddim_sample(context, shape=(2, 32, 3, 4), num_steps=5)
     assert z_ddim.shape == (2, 32, 3, 4)
     print("  ✓ Block IV (LatentDiffusion): loss, DDPM, DDIM sampling OK")
+
+
+def test_block_iv_ddim_sample_clamps_when_num_steps_exceeds_num_timesteps():
+    """Block IV: DDIM sampling should remain valid when num_steps exceeds schedule length."""
+    from src.core.latent_diffusion import create_latent_diffusion
+
+    model = create_latent_diffusion(
+        latent_dim=8,
+        model_channels=8,
+        context_dim=16,
+        num_timesteps=4,
+        cfg_scale=1.0,
+    )
+    model.eval()
+    context = torch.randn(1, 16)
+
+    with torch.no_grad():
+        z_ddim = model.ddim_sample(context, shape=(1, 8, 8, 8), num_steps=9)
+
+    assert z_ddim.shape == (1, 8, 8, 8)
+    assert torch.isfinite(z_ddim).all()
+
+
+def test_block_iv_cfg_schedule_decays_toward_min_scale():
+    """Block IV: scheduled CFG should start high and decay near the final denoising steps."""
+    from src.core.latent_diffusion import create_latent_diffusion
+
+    model = create_latent_diffusion(
+        latent_dim=8,
+        model_channels=8,
+        context_dim=16,
+        num_timesteps=10,
+        cfg_scale=5.0,
+        cfg_schedule_mode="linear_decay",
+        cfg_schedule_min_scale=1.0,
+        cfg_schedule_power=1.0,
+    )
+
+    scales = model._cfg_scale_for_timestep(torch.tensor([9, 4, 0]))
+    assert scales.shape == (3,)
+    assert scales[0].item() == pytest.approx(5.0)
+    assert scales[-1].item() == pytest.approx(1.0)
+    assert 1.0 < scales[1].item() < 5.0
+
+
+def test_block_iv_predict_noise_cfg_uses_scheduled_scale():
+    """Block IV: CFG interpolation should follow the scheduled scale, not a static scalar."""
+    from src.core.latent_diffusion import create_latent_diffusion
+
+    class _DummyDenoiser(torch.nn.Module):
+        def forward(self, x_t, t, context, **kwargs):
+            strength = context.sum(dim=1, keepdim=True)
+            return strength[:, :, None, None].expand_as(x_t)
+
+    model = create_latent_diffusion(
+        latent_dim=4,
+        model_channels=8,
+        context_dim=4,
+        num_timesteps=10,
+        cfg_scale=5.0,
+        cfg_schedule_mode="linear_decay",
+        cfg_schedule_min_scale=1.0,
+    )
+    model.denoiser = _DummyDenoiser()
+
+    x_t = torch.zeros(1, 4, 2, 2)
+    context = torch.ones(1, 4)
+
+    pred_early = model._predict_noise_cfg(x_t, torch.tensor([9]), context)
+    pred_late = model._predict_noise_cfg(x_t, torch.tensor([0]), context)
+
+    assert torch.allclose(pred_early, torch.full_like(pred_early, 20.0))
+    assert torch.allclose(pred_late, torch.full_like(pred_late, 4.0))
+
+
+def test_block_iv_gradient_guidance_sanitizes_graph_data_and_vector_loss():
+    """Block IV: guidance should sanitize graph tensors and accept vector LogicNet loss."""
+    from src.core.latent_diffusion import GradientGuidance
+
+    class _DummyLogicNet(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.captured_graph_data = None
+
+        def forward(self, x_t, graph_data=None):
+            self.captured_graph_data = graph_data
+            assert graph_data is not None
+            assert graph_data["adjacency"].device == x_t.device
+            assert graph_data["edge_weights"].device == x_t.device
+            assert graph_data["adjacency"].dtype == x_t.dtype
+            assert graph_data["edge_weights"].dtype == x_t.dtype
+            assert graph_data["adjacency"].requires_grad is False
+            assert graph_data["edge_weights"].requires_grad is False
+            return x_t.flatten(1).mean(dim=1)
+
+    logic_net = _DummyLogicNet()
+    guidance = GradientGuidance(
+        logic_net=logic_net,
+        guidance_scale=0.5,
+        clamp_magnitude=10.0,
+        schedule_enabled=False,
+        max_graph_nodes=8,
+        max_key_lock_pairs=4,
+        max_guidance_elements=1024,
+    )
+
+    x_t = torch.randn(2, 4, 3, 3)
+    graph_data = {
+        "adjacency": torch.tensor(
+            [
+                [0.0, float("nan"), 2.0],
+                [1.0, 0.0, float("inf")],
+                [0.0, -3.0, 0.0],
+            ],
+            dtype=torch.float32,
+            requires_grad=True,
+        ),
+        "edge_weights": torch.tensor(
+            [
+                [0.0, 1.0, float("inf")],
+                [2.0, float("nan"), 4.0],
+                [5.0, -7.0, 0.0],
+            ],
+            dtype=torch.float32,
+            requires_grad=True,
+        ),
+        "start_idx": "1",
+        "target_idx": 99,
+        "key_lock_pairs": [("0", "1"), ("bad", 2), (1, 99)],
+    }
+
+    grad = guidance.compute_guidance(x_t, graph_data)
+
+    assert grad.shape == x_t.shape
+    assert torch.isfinite(grad).all()
+    assert float(grad.abs().sum().item()) > 0.0
+
+    captured = logic_net.captured_graph_data
+    assert captured is not None
+    assert captured["start_idx"] == 1
+    assert captured["target_idx"] is None
+    assert captured["key_lock_pairs"] == [(0, 1)]
+    assert torch.equal(
+        captured["adjacency"],
+        torch.tensor(
+            [
+                [0.0, 0.0, 1.0],
+                [1.0, 0.0, 1.0],
+                [0.0, 0.0, 0.0],
+            ],
+            dtype=x_t.dtype,
+        ),
+    )
+    assert float(captured["edge_weights"].max().item()) == float(guidance.max_graph_nodes)
+    assert float(captured["edge_weights"][2, 1].item()) == 0.0
+
+
+def test_block_iv_gradient_guidance_skips_oversized_latents():
+    """Block IV: guidance should skip expensive autograd when latent size exceeds cap."""
+    from src.core.latent_diffusion import GradientGuidance
+
+    class _FailIfCalled(torch.nn.Module):
+        def forward(self, *_args, **_kwargs):
+            raise AssertionError("LogicNet should not be invoked for oversized guidance payloads")
+
+    guidance = GradientGuidance(
+        logic_net=_FailIfCalled(),
+        schedule_enabled=False,
+        max_guidance_elements=4,
+    )
+
+    x_t = torch.randn(1, 2, 2, 2)
+    grad = guidance.compute_guidance(x_t)
+
+    assert torch.equal(grad, torch.zeros_like(x_t))
 
 
 def test_block_iv_topology_aware_cross_attention_sequence_context():
@@ -210,6 +412,119 @@ def test_block_iv_topology_refinement_mode_switch_runs_all_modes():
     print("  ✓ Block IV (Topology Modes): none/lightweight/upgraded execution OK")
 
 
+def test_block_iv_attention_mode_switch_runs_softmax_and_linear_hedgehog():
+    """Block IV: cross-attention kernel can switch between softmax and linear Hedgehog."""
+    from src.core.latent_diffusion import create_latent_diffusion
+
+    model = create_latent_diffusion(
+        latent_dim=16,
+        model_channels=16,
+        context_dim=32,
+        num_timesteps=10,
+        cfg_scale=1.0,
+        attention_mode="softmax",
+        hedgehog_feature_dim=16,
+    )
+
+    context = torch.randn(1, 6, 32)
+    graph_data = {
+        'edge_index': torch.tensor([[0, 1, 2, 3], [1, 2, 3, 4]], dtype=torch.long),
+        'node_features': torch.randn(5, 6),
+    }
+
+    outputs = []
+    for mode in ["softmax", "linear_hedgehog"]:
+        updated = model.set_attention_mode(mode)
+        assert updated > 0
+        assert model.get_attention_mode() == mode
+        with torch.no_grad():
+            z = model.ddim_sample(
+                context=context,
+                shape=(1, 16, 8, 8),
+                num_steps=3,
+                graph_data=graph_data,
+            )
+        assert z.shape == (1, 16, 8, 8)
+        assert torch.isfinite(z).all()
+        outputs.append(z)
+
+    mean_abs_diff = float((outputs[0] - outputs[1]).abs().mean().item())
+    assert mean_abs_diff >= 0.0
+
+
+def test_block_iv_spatial_graph_conditioning_accepts_room_topology_maps():
+    """Block IV: active denoiser accepts graph-grid spatial topology conditioning."""
+    from src.core.latent_diffusion import create_latent_diffusion
+
+    model = create_latent_diffusion(
+        latent_dim=16,
+        model_channels=16,
+        context_dim=32,
+        num_timesteps=10,
+        cfg_scale=1.0,
+        attention_mode="linear_hedgehog",
+        hedgehog_feature_dim=16,
+    )
+
+    context = torch.randn(2, 6, 32)
+    graph_data = {
+        'edge_index': torch.tensor([[0, 1, 2, 3], [1, 2, 3, 4]], dtype=torch.long),
+        'node_features': torch.randn(5, 6),
+        'tpe': torch.randn(5, 8),
+        'node_positions': torch.tensor(
+            [[0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [1.0, 2.0], [2.0, 2.0]],
+            dtype=torch.float32,
+        ),
+        'node_mask': torch.ones(5, dtype=torch.float32),
+        'room_topology_map': torch.randn(2, 18, ROOM_HEIGHT, ROOM_WIDTH),
+    }
+
+    with torch.no_grad():
+        z = model.ddim_sample(
+            context=context,
+            shape=(2, 16, 4, 3),
+            num_steps=3,
+            graph_data=graph_data,
+        )
+
+    assert z.shape == (2, 16, 4, 3)
+    assert torch.isfinite(z).all()
+
+
+def test_block_iv_spatial_graph_conditioning_rejects_mismatched_topology_batch():
+    """Block IV: room-topology maps should align with the context batch size."""
+    from src.core.latent_diffusion import create_latent_diffusion
+
+    model = create_latent_diffusion(
+        latent_dim=16,
+        model_channels=16,
+        context_dim=32,
+        num_timesteps=10,
+        cfg_scale=1.0,
+        attention_mode="linear_hedgehog",
+        hedgehog_feature_dim=16,
+    )
+
+    context = torch.randn(2, 6, 32)
+    graph_data = {
+        'edge_index': torch.tensor([[0, 1, 2, 3], [1, 2, 3, 4]], dtype=torch.long),
+        'node_features': torch.randn(5, 6),
+        'tpe': torch.randn(5, 8),
+        'node_positions': torch.randn(5, 2),
+        'node_mask': torch.ones(5, dtype=torch.float32),
+        'room_topology_map': torch.randn(3, 18, ROOM_HEIGHT, ROOM_WIDTH),
+    }
+
+    with pytest.raises(ValueError, match="room_topology_map batch size"):
+        with torch.no_grad():
+            model.ddim_sample(
+                context=context,
+                shape=(2, 16, 4, 3),
+                num_steps=3,
+                graph_data=graph_data,
+            )
+
+
 def test_block_v_logic_net():
     """Block V: LogicNet forward and temperature annealing."""
     from src.core.logic_net import LogicNet
@@ -279,7 +594,7 @@ def test_block_vii_symbolic_refiner():
 
     # LearnedTileStatistics (Phase 3B)
     stats = LearnedTileStatistics()
-    fake_room = np.random.randint(0, 10, size=(11, 16))
+    fake_room = np.random.randint(0, 10, size=(ROOM_HEIGHT, ROOM_WIDTH))
     stats.observe(fake_room)
     assert stats._total_tiles > 0
 
@@ -294,10 +609,10 @@ def test_block_vii_symbolic_refiner():
     assert refiner.learned_stats is not None
 
     # Quick repair test
-    grid = np.ones((11, 16), dtype=int)  # all floor
+    grid = np.ones((ROOM_HEIGHT, ROOM_WIDTH), dtype=int)  # all floor
     grid[5, :] = 2  # wall barrier
     repaired, _success = refiner.repair_room(grid, start=(2, 8), goal=(8, 8))
-    assert repaired.shape == (11, 16)
+    assert repaired.shape == (ROOM_HEIGHT, ROOM_WIDTH)
     print("  ✓ Block VII (SymbolicRefiner): LearnedTileStatistics + repair OK")
 
 
@@ -315,7 +630,7 @@ def test_pipeline_vqvae_to_diffusion():
     cond_encoder = create_condition_encoder(latent_dim=16, output_dim=32)
 
     # Simulate training step
-    x = torch.randn(2, 44, 11, 16)
+    x = torch.randn(2, 44, ROOM_HEIGHT, ROOM_WIDTH)
     vqvae.eval()
     with torch.no_grad():
         z_q, _indices = vqvae.encode(x)  # CRITICAL-2: 2 values
@@ -333,8 +648,8 @@ def test_pipeline_vqvae_to_diffusion():
     # Sample and decode
     with torch.no_grad():
         z_gen = diffusion.ddim_sample(conditioning, shape=z_q.shape, num_steps=5)
-        recon = vqvae.decode(z_gen, target_size=(11, 16))
-    assert recon.shape == (2, 44, 11, 16)
+        recon = vqvae.decode(z_gen, target_size=(ROOM_HEIGHT, ROOM_WIDTH))
+    assert recon.shape == (2, 44, ROOM_HEIGHT, ROOM_WIDTH)
     print("  ✓ Pipeline: VQ-VAE → Diffusion → VQ-VAE decode OK")
 
 

@@ -33,7 +33,8 @@ flowchart TB
     %% =========================
     %% Block 0
     %% =========================
-    subgraph B0[Block 0 Data Adapter and Stitching Utilities]
+    subgraph B0
+        B0_label["Block 0 Data Adapter and Stitching Utilities"]
         B0A[VGLCParser and adapters in src/data_processing/data_adapter.py]
         B0B[DungeonStitcher in src/zelda_data/zelda_core.py]
     end
@@ -43,7 +44,8 @@ flowchart TB
     %% =========================
     %% Block I
     %% =========================
-    subgraph B1[Block I Evolutionary Topology Director]
+    subgraph B1
+        B1_label["Block I Evolutionary Topology Director"]
         B1A[generate_dungeon generate_topology flag]
         B1B[EvolutionaryTopologyGenerator]
         B1C[GraphGrammarExecutor]
@@ -61,7 +63,8 @@ flowchart TB
     %% =========================
     %% Block II
     %% =========================
-    subgraph B2[Block II Semantic VQ-VAE]
+    subgraph B2
+        B2_label["Block II Semantic VQ-VAE"]
         B2A[SemanticVQVAE encode decode]
         B2B[num_classes 44 codebook 512 latent_dim 64]
     end
@@ -72,22 +75,27 @@ flowchart TB
     %% =========================
     %% Block III
     %% =========================
-    subgraph B3[Block III Dual-Stream Condition Encoder]
+    subgraph B3
+        B3_label["Block III Dual-Stream Condition Encoder"]
         B3A[DualStreamConditionEncoder]
         B3B[LocalStreamEncoder boundary and neighbors]
         B3C[GlobalStreamEncoder graph GNN]
-        B3D[Graph node cross-attention optional]
+        B3D[GraphToGridCrossAttention]
+        B3F[SpatialGraphConditioner]
+        B3E[RoomTopologyConditioner]
     end
 
     NP --> B3A
     B3A --> B3B
     B3A --> B3C
     B3A --> B3D
+    B3A --> B3F
 
     %% =========================
     %% Block IV
     %% =========================
-    subgraph B4[Block IV Latent Diffusion]
+    subgraph B4
+        B4_label["Block IV Latent Diffusion"]
         B4A[LatentDiffusionModel]
         B4B[CFG cfg_scale plus conditional dropout]
         B4C[DDIM or DDPM sampling]
@@ -104,7 +112,8 @@ flowchart TB
     %% =========================
     %% Block V
     %% =========================
-    subgraph B5[Block V LogicNet Guidance]
+    subgraph B5
+        B5_label["Block V LogicNet Guidance"]
         B5A[LogicNet differentiable constraints]
         B5B[GradientGuidance inside diffusion]
     end
@@ -116,7 +125,8 @@ flowchart TB
     %% =========================
     %% Block VI
     %% =========================
-    subgraph B6[Block VI Symbolic Refiner]
+    subgraph B6
+        B6_label["Block VI Symbolic Refiner"]
         B6A[SymbolicRefiner]
         B6B[Weighted Bayesian WFC]
         B6C[repair_room_with_feedback and local inpaint callbacks]
@@ -131,7 +141,8 @@ flowchart TB
     %% =========================
     %% Block VII
     %% =========================
-    subgraph B7[Block VII MAP-Elites Quality Diversity]
+    subgraph B7
+        B7_label["Block VII MAP-Elites Quality Diversity"]
         B7A[MAPElitesEvaluator]
         B7B[descriptor_mode hybrid tie_breaker quality_score in pipeline]
         B7C[advanced CVT archive optional]

@@ -1,512 +1,382 @@
-﻿"""
-Feature 8: Performance Optimization (LCM-LoRA)
-===============================================
-Accelerate diffusion from 50 steps (45s) to 4 steps (<5s) using LCM-LoRA.
-
-Problem:
-    DDIM sampling requires 50 steps for quality, taking 45 seconds per room.
-    For 8-room dungeon: 6 minutes total generation time (unacceptable for demos).
-
-Solution:
-    - Latent Consistency Models (LCM): Distilled diffusion with 1-4 steps
-    - Low-Rank Adaptation (LoRA): Efficient fine-tuning (< 1M params)
-    - LCM-LoRA Fusion: Combine LCM distillation with LoRA efficiency
-    - Inference Optimization: Half-precision, compiled models, batch generation
-
-Research:
-    - Song et al. (2023) "Latent Consistency Models"
-    - Hu et al. (2021) "LoRA: Low-Rank Adaptation"
-    - Luo et al. (2023) "LCM-LoRA: Fast Diffusion with Minimal Training"
-
-Integration Point: Replace LatentDiffusionModel.sample() with LCM sampling
 """
+Fast sampling via consistency-distilled LoRA adapters.
+
+Important terminology note:
+
+This module does not implement paper-faithful LCM-LoRA inference. In the LCM
+and LCM-LoRA papers, the accelerated model is distilled with the latent
+consistency objective and used with LCM-specific sampling semantics. This repo's
+current fast path is narrower:
+
+- it distills LoRA adapters against the repo's existing latent diffusion model
+- it preserves the graph-aware conditioning path already used by the project
+- it reuses the project's DDIM sampler at inference time
+
+So this is a graph-aware consistency-LoRA fast sampler for this codebase, not a
+drop-in implementation of the published Stable Diffusion LCM-LoRA stack.
+"""
+
+from __future__ import annotations
+
+import copy
+import json
+import logging
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Dict, Iterable, Optional, Tuple
 
 import torch
 import torch.nn as nn
-from typing import Tuple, Optional
-from enum import Enum
-from dataclasses import dataclass
-import time
-import logging
+
+from src.utils.checkpoint import write_checkpoint_metadata
 
 logger = logging.getLogger(__name__)
 
-# ============================================================================
-# DATA STRUCTURES
-# ============================================================================
 
-class SamplingStrategy(Enum):
-    """Diffusion sampling strategies."""
-    DDPM = "ddpm"  # Original DDPM (slow, 1000 steps)
-    DDIM = "ddim"  # Faster deterministic (50 steps)
-    LCM = "lcm"  # Latent Consistency Model (1-4 steps)
-    LCM_LORA = "lcm_lora"  # LCM with LoRA (fastest)
+DEFAULT_LORA_TARGETS = (
+    "cross_attn.q",
+    "cross_attn.k",
+    "cross_attn.v",
+    "cross_attn.proj",
+    "graph_cross_attn.q_proj",
+    "graph_cross_attn.k_proj",
+    "graph_cross_attn.v_proj",
+    "graph_cross_attn.out_proj",
+)
+
+
+@dataclass
+class FastSamplerCheckpointInfo:
+    checkpoint_path: str
+    distillation_type: str
+    base_diffusion_checkpoint: Optional[str]
+    num_inference_steps: int
+    lora_rank: int
+    lora_alpha: float
+    target_modules: Tuple[str, ...]
 
 
 @dataclass
 class PerformanceMetrics:
-    """Performance benchmarking metrics."""
     sampling_strategy: str
     num_steps: int
-    generation_time: float  # Seconds
-    throughput: float  # Rooms per second
-    quality_score: Optional[float] = None  # Optional quality metric
+    generation_time: float
+    throughput: float
+    quality_score: Optional[float] = None
 
-
-# ============================================================================
-# LOW-RANK ADAPTATION (LoRA)
-# ============================================================================
 
 class LoRALayer(nn.Module):
-    """
-    Low-Rank Adaptation layer for efficient fine-tuning.
-    
-    Instead of updating full weight matrix W (d_out Ã— d_in):
-        W_new = W + Î”W
-    
-    LoRA parameterizes Î”W as low-rank decomposition:
-        Î”W = B @ A
-    where A (d_in Ã— r) and B (d_out Ã— r), with r << min(d_in, d_out)
-    
-    This reduces trainable parameters from d_out Ã— d_in to (d_in + d_out) Ã— r.
-    For d_in=d_out=768, r=8: 589,824 params â†’ 12,416 params (47x reduction)
-    """
-    
     def __init__(
         self,
         in_features: int,
         out_features: int,
         rank: int = 8,
         alpha: float = 8.0,
-        dropout: float = 0.0
+        dropout: float = 0.0,
     ):
         super().__init__()
-        self.rank = rank
-        self.alpha = alpha
-        self.scaling = alpha / rank
-        
-        # Low-rank matrices
-        self.lora_A = nn.Parameter(torch.randn(in_features, rank) * 0.01)
-        self.lora_B = nn.Parameter(torch.zeros(rank, out_features))
-        
+        self.rank = int(max(1, rank))
+        self.alpha = float(alpha)
+        self.scaling = float(alpha) / float(self.rank)
+        self.lora_A = nn.Parameter(torch.randn(in_features, self.rank) * 0.01)
+        self.lora_B = nn.Parameter(torch.zeros(self.rank, out_features))
         self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
-    
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Apply LoRA adaptation."""
-        # x: (..., in_features)
-        lora_out = (self.dropout(x) @ self.lora_A) @ self.lora_B
-        return lora_out * self.scaling
+        return ((self.dropout(x) @ self.lora_A) @ self.lora_B) * self.scaling
 
 
 class LoRALinear(nn.Module):
-    """Linear layer with LoRA adaptation."""
-    
     def __init__(
         self,
         base_layer: nn.Linear,
         rank: int = 8,
         alpha: float = 8.0,
-        dropout: float = 0.0
+        dropout: float = 0.0,
     ):
         super().__init__()
         self.base_layer = base_layer
-        self.base_layer.requires_grad_(False)  # Freeze base weights
-        
+        self.base_layer.requires_grad_(False)
         self.lora = LoRALayer(
             in_features=base_layer.in_features,
             out_features=base_layer.out_features,
             rank=rank,
             alpha=alpha,
-            dropout=dropout
+            dropout=dropout,
         )
-    
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward with base + LoRA."""
-        base_out = self.base_layer(x)
-        lora_out = self.lora(x)
-        return base_out + lora_out
+        return self.base_layer(x) + self.lora(x)
+
+
+def _iter_target_linear_modules(
+    model: nn.Module,
+    target_modules: Iterable[str],
+):
+    targets = tuple(str(t) for t in target_modules)
+    for name, module in model.named_modules():
+        if isinstance(module, nn.Linear) and any(target in name for target in targets):
+            yield name, module
 
 
 def inject_lora_into_model(
     model: nn.Module,
     rank: int = 8,
     alpha: float = 8.0,
-    target_modules: Optional[list] = None
+    target_modules: Optional[Iterable[str]] = None,
 ) -> int:
-    """
-    Inject LoRA layers into model.
-    
-    Args:
-        model: Base model to adapt
-        rank: LoRA rank
-        alpha: LoRA alpha (scaling factor)
-        target_modules: List of module names to adapt (default: all Linear)
-    
-    Returns:
-        Number of parameters added
-    """
-    if target_modules is None:
-        target_modules = ['q_proj', 'v_proj', 'k_proj', 'o_proj']  # Common attention modules
-    
+    targets = tuple(target_modules or DEFAULT_LORA_TARGETS)
     params_added = 0
-    
-    for name, module in model.named_modules():
-        # Check if this module should get LoRA
-        should_adapt = any(target in name for target in target_modules)
-        
-        if should_adapt and isinstance(module, nn.Linear):
-            # Replace with LoRA version
-            parent_name = '.'.join(name.split('.')[:-1])
-            child_name = name.split('.')[-1]
-            
-            if parent_name:
-                parent = model.get_submodule(parent_name)
-            else:
-                parent = model
-            
-            lora_linear = LoRALinear(module, rank=rank, alpha=alpha)
-            setattr(parent, child_name, lora_linear)
-            
-            # Count added params
-            params_added += rank * (module.in_features + module.out_features)
-            
-            logger.debug(f"Injected LoRA into {name}")
-    
-    logger.info(f"Injected LoRA: {params_added:,} parameters added")
+    seen = set()
+    for name, module in _iter_target_linear_modules(model, targets):
+        if name in seen:
+            continue
+        seen.add(name)
+        parent_name = ".".join(name.split(".")[:-1])
+        child_name = name.split(".")[-1]
+        parent = model.get_submodule(parent_name) if parent_name else model
+        setattr(parent, child_name, LoRALinear(module, rank=rank, alpha=alpha))
+        params_added += rank * (module.in_features + module.out_features)
+    logger.info("Injected LoRA adapters into %d modules (%d parameters).", len(seen), params_added)
     return params_added
 
 
-# ============================================================================
-# LATENT CONSISTENCY MODEL (LCM)
-# ============================================================================
+def freeze_non_lora_parameters(model: nn.Module) -> None:
+    for name, param in model.named_parameters():
+        param.requires_grad = ".lora." in name
 
-class LCMScheduler:
+
+def extract_lora_state_dict(model: nn.Module) -> Dict[str, torch.Tensor]:
+    return {
+        key: value.detach().cpu()
+        for key, value in model.state_dict().items()
+        if ".lora." in key
+    }
+
+
+def load_lora_state_dict(
+    model: nn.Module,
+    lora_state_dict: Dict[str, torch.Tensor],
+    *,
+    strict: bool = False,
+) -> Tuple[list[str], list[str]]:
+    incompatible = model.load_state_dict(lora_state_dict, strict=False)
+    missing = [k for k in getattr(incompatible, "missing_keys", []) if ".lora." in k]
+    unexpected = [k for k in getattr(incompatible, "unexpected_keys", []) if ".lora." in k]
+    if strict and (missing or unexpected):
+        raise RuntimeError(
+            f"LoRA state mismatch: missing={missing[:8]} unexpected={unexpected[:8]}"
+        )
+    return missing, unexpected
+
+
+def save_fast_sampler_checkpoint(
+    path: str,
+    *,
+    lora_state_dict: Dict[str, torch.Tensor],
+    base_diffusion_checkpoint: Optional[str],
+    num_inference_steps: int,
+    lora_rank: int,
+    lora_alpha: float,
+    target_modules: Iterable[str] = DEFAULT_LORA_TARGETS,
+    metrics: Optional[Dict[str, Any]] = None,
+    distillation_type: str = "consistency_lora",
+) -> None:
+    payload = {
+        "lora_state_dict": dict(lora_state_dict),
+        "metadata": {
+            "distillation_type": str(distillation_type),
+            "base_diffusion_checkpoint": None if base_diffusion_checkpoint is None else str(base_diffusion_checkpoint),
+            "num_inference_steps": int(max(1, num_inference_steps)),
+            "lora_rank": int(max(1, lora_rank)),
+            "lora_alpha": float(lora_alpha),
+            "target_modules": [str(t) for t in target_modules],
+            "metrics": dict(metrics or {}),
+        },
+    }
+    torch.save(payload, path)
+    write_checkpoint_metadata(
+        path,
+        model_type="fast_sampler_adapter",
+        architecture={
+            "distillation_type": str(distillation_type),
+            "num_inference_steps": int(max(1, num_inference_steps)),
+            "lora_rank": int(max(1, lora_rank)),
+        },
+        extra={
+            "base_diffusion_checkpoint": None if base_diffusion_checkpoint is None else str(base_diffusion_checkpoint),
+            "target_modules": [str(t) for t in target_modules],
+        },
+    )
+
+
+def load_fast_sampler_checkpoint(path: str) -> Tuple[Dict[str, torch.Tensor], FastSamplerCheckpointInfo]:
+    payload = torch.load(path, map_location="cpu")
+    if not isinstance(payload, dict) or "lora_state_dict" not in payload or "metadata" not in payload:
+        raise ValueError(f"Invalid fast-sampler checkpoint format at {path!r}.")
+    metadata = payload["metadata"]
+    if not isinstance(metadata, dict):
+        raise ValueError(f"Invalid fast-sampler metadata at {path!r}.")
+    distillation_type = str(metadata.get("distillation_type", "")).strip().lower()
+    if distillation_type == "lcm_lora":
+        raise ValueError(
+            "This runtime does not support paper-faithful LCM-LoRA checkpoints yet. "
+            "Expected distillation_type='consistency_lora' for the repo's graph-aware fast sampler."
+        )
+    if distillation_type != "consistency_lora":
+        raise ValueError(
+            f"Unsupported fast-sampler distillation_type={distillation_type!r} in {path!r}."
+        )
+    info = FastSamplerCheckpointInfo(
+        checkpoint_path=str(path),
+        distillation_type=distillation_type,
+        base_diffusion_checkpoint=metadata.get("base_diffusion_checkpoint"),
+        num_inference_steps=int(max(1, int(metadata.get("num_inference_steps", 4)))),
+        lora_rank=int(max(1, int(metadata.get("lora_rank", 8)))),
+        lora_alpha=float(metadata.get("lora_alpha", 8.0)),
+        target_modules=tuple(str(t) for t in metadata.get("target_modules", DEFAULT_LORA_TARGETS)),
+    )
+    return dict(payload["lora_state_dict"]), info
+
+
+class GraphConditionedFastSampler:
     """
-    Latent Consistency Model sampler.
-    
-    LCM distills diffusion models for 1-4 step generation:
-    1. Train consistency function: f(x_t, t) predicts x_0 directly
-    2. Use guided distillation to preserve quality
-    3. Sample: x_t â†’ f(x_t, t) = x_0 in 1 step (or 2-4 for quality)
-    
-    Reference: Song et al. (2023) "Latent Consistency Models"
+    Graph-aware fast sampler for a LatentDiffusionModel.
+
+    The underlying model must already have a compatible consistency-LoRA adapter.
+    Runtime intentionally reuses the full graph-aware DDIM path so room topology
+    conditioning, room anchors, and cross-attention semantics stay aligned with
+    the main architecture.
     """
-    
+
     def __init__(
         self,
-        num_train_timesteps: int = 1000,
-        num_inference_steps: int = 4,
-        beta_schedule: str = "cosine"
+        diffusion_model: Any,
+        *,
+        adapter_checkpoint: str,
+        num_inference_steps: Optional[int] = None,
+        use_fp16: bool = False,
+        compile_model: bool = False,
+        strict: bool = True,
     ):
-        self.num_train_timesteps = num_train_timesteps
-        self.num_inference_steps = num_inference_steps
-        
-        # Precompute timestep schedule for LCM
-        self.timesteps = self._get_lcm_timesteps(num_inference_steps, num_train_timesteps)
-    
-    def _get_lcm_timesteps(self, num_steps: int, num_train: int) -> torch.Tensor:
-        """
-        Get optimized timestep schedule for LCM.
-        
-        LCM uses fewer, carefully spaced timesteps for efficiency.
-        """
-        # Linspace from num_train to 0
-        timesteps = torch.linspace(num_train - 1, 0, num_steps).long()
-        return timesteps
-    
-    def step(
-        self,
-        model_output: torch.Tensor,
-        timestep: int,
-        sample: torch.Tensor,
-        guidance_scale: float = 1.0
-    ) -> torch.Tensor:
-        """
-        LCM sampling step.
-        
-        Args:
-            model_output: Direct prediction of x_0 from consistency model
-            timestep: Current timestep
-            sample: Current noisy latent x_t
-            guidance_scale: Classifier-free guidance scale
-        
-        Returns:
-            Predicted x_0
-        """
-        # LCM directly predicts x_0 (no iterative denoising)
-        pred_x0 = model_output
-        
-        # Apply guidance if scale > 1
-        if guidance_scale > 1.0:
-            # This assumes model_output contains both conditional and unconditional predictions
-            # Split and apply guidance
-            # (Simplified - full implementation handles batching)
-            pass
-        
-        return pred_x0
+        self.diffusion_model = diffusion_model
+        self.adapter_checkpoint = str(adapter_checkpoint)
+        lora_state_dict, info = load_fast_sampler_checkpoint(self.adapter_checkpoint)
+        self.info = info
+        base_num_timesteps = int(max(1, int(getattr(self.diffusion_model, "num_timesteps", 1))))
+        requested_steps = int(max(1, num_inference_steps or info.num_inference_steps))
+        if requested_steps > base_num_timesteps:
+            raise ValueError(
+                "Fast sampler adapter requests "
+                f"{requested_steps} inference steps, but the base diffusion model only defines "
+                f"{base_num_timesteps} timesteps."
+            )
+        self.num_inference_steps = int(max(1, num_inference_steps or info.num_inference_steps))
+        if num_inference_steps is not None and int(num_inference_steps) != int(info.num_inference_steps):
+            logger.info(
+                "Fast sampler overriding adapter num_inference_steps from %d to %d.",
+                int(info.num_inference_steps),
+                int(self.num_inference_steps),
+            )
+        if int(self.num_inference_steps) >= base_num_timesteps:
+            logger.warning(
+                "Fast sampler is configured with %d steps against a %d-step base schedule; "
+                "this provides little or no acceleration.",
+                int(self.num_inference_steps),
+                base_num_timesteps,
+            )
+        self.use_fp16 = bool(use_fp16 and torch.cuda.is_available())
+        self.compile_model = bool(compile_model)
 
+        inject_lora_into_model(
+            self.diffusion_model.denoiser,
+            rank=info.lora_rank,
+            alpha=info.lora_alpha,
+            target_modules=info.target_modules,
+        )
+        missing, unexpected = load_lora_state_dict(
+            self.diffusion_model,
+            lora_state_dict,
+            strict=strict,
+        )
+        if missing or unexpected:
+            logger.warning(
+                "Fast sampler adapter loaded with LoRA mismatch: missing=%d unexpected=%d",
+                len(missing),
+                len(unexpected),
+            )
 
-# ============================================================================
-# LCM-LoRA FAST SAMPLER
-# ============================================================================
-
-class LCMLoRAFastSampler:
-    """
-    Ultra-fast sampling using LCM + LoRA.
-    
-    Pipeline:
-    1. Apply LoRA to base diffusion model (lightweight adaptation)
-    2. Use LCM distillation for 1-4 step sampling
-    3. Apply half-precision (FP16) for 2x speedup
-    4. Optional: Compile with torch.compile() for additional 1.5x
-    
-    Expected Performance:
-    - DDIM 50 steps: ~45 seconds/room
-    - LCM 4 steps: ~3.6 seconds/room (12.5x faster)
-    - LCM-LoRA 4 steps + optimizations: ~2 seconds/room (22.5x faster)
-    """
-    
-    def __init__(
-        self,
-        diffusion_model: nn.Module,
-        lora_checkpoint: Optional[str] = None,
-        num_inference_steps: int = 4,
-        use_fp16: bool = True,
-        compile_model: bool = False
-    ):
-        self.model = diffusion_model
-        self.num_inference_steps = num_inference_steps
-        self.use_fp16 = use_fp16
-        
-        # Inject LoRA if checkpoint provided
-        if lora_checkpoint:
-            self._load_lora_weights(lora_checkpoint)
-        
-        # Convert to FP16 for speedup
-        if use_fp16 and torch.cuda.is_available():
-            self.model = self.model.half()
-            logger.info("Enabled FP16 inference")
-        
-        # Compile model for additional speedup
-        if compile_model:
+        if self.use_fp16:
+            self.diffusion_model = self.diffusion_model.half()
+        if self.compile_model:
             try:
-                self.model = torch.compile(self.model, mode='reduce-overhead')
-                logger.info("Model compiled with torch.compile()")
-            except (AttributeError, RuntimeError, ValueError, TypeError) as e:
-                logger.warning(f"torch.compile() failed: {e}")
-        
-        # LCM scheduler
-        self.scheduler = LCMScheduler(num_inference_steps=num_inference_steps)
-    
-    def _load_lora_weights(self, checkpoint_path: str):
-        """Load LoRA weights from checkpoint."""
-        logger.info(f"Loading LoRA weights from {checkpoint_path}")
-        
-        # Inject LoRA layers into model
-        inject_lora_into_model(self.model, rank=8, alpha=8.0)
-        
-        # Load LoRA parameters
-        lora_state_dict = torch.load(checkpoint_path, map_location='cpu')
-        missing, unexpected = self.model.load_state_dict(lora_state_dict, strict=False)
-        
-        logger.info(f"LoRA weights loaded: {len(missing)} missing, {len(unexpected)} unexpected")
-    
+                self.diffusion_model = torch.compile(self.diffusion_model, mode="reduce-overhead")
+            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+                logger.warning("torch.compile() unavailable for fast sampler: %s", exc)
+
     @torch.inference_mode()
     def sample_fast(
         self,
-        condition: torch.Tensor,
+        *,
+        context: torch.Tensor,
         latent_shape: Tuple[int, ...],
-        guidance_scale: float = 7.5,
-        seed: Optional[int] = None
+        graph_data: Optional[Dict[str, torch.Tensor]] = None,
+        guidance_scale: Optional[float] = None,
+        seed: Optional[int] = None,
     ) -> torch.Tensor:
-        """
-        Fast sampling with LCM-LoRA (1-4 steps).
-        
-        Args:
-            condition: Conditioning tensor
-            latent_shape: Shape of latent to generate
-            guidance_scale: CFG guidance scale
-            seed: Random seed
-        
-        Returns:
-            Generated latent tensor
-        """
         if seed is not None:
-            torch.manual_seed(seed)
-        
-        device = next(self.model.parameters()).device
-        dtype = next(self.model.parameters()).dtype
-        
-        # Initialize random latent
-        latent = torch.randn(latent_shape, device=device, dtype=dtype)
-        
-        # Cast condition to appropriate dtype
-        condition = condition.to(device=device, dtype=dtype)
-        
-        # LCM sampling loop (few steps)
-        for t in self.scheduler.timesteps:
-            # Expand timestep
-            t_tensor = torch.tensor([t], device=device, dtype=torch.long)
-            
-            # Model prediction
-            model_output = self.model(latent, t_tensor, condition)
-            
-            # LCM step (direct x_0 prediction)
-            latent = self.scheduler.step(
-                model_output=model_output,
-                timestep=t,
-                sample=latent,
-                guidance_scale=guidance_scale
+            torch.manual_seed(int(seed))
+        original_cfg = float(self.diffusion_model.cfg_scale)
+        try:
+            if guidance_scale is not None:
+                self.diffusion_model.cfg_scale = float(guidance_scale)
+            return self.diffusion_model.ddim_sample(
+                context=context,
+                shape=latent_shape,
+                num_steps=int(max(1, self.num_inference_steps)),
+                graph_data=graph_data,
             )
-        
-        return latent
-    
+        finally:
+            self.diffusion_model.cfg_scale = original_cfg
+
     def benchmark(
         self,
-        condition: torch.Tensor,
+        *,
+        context: torch.Tensor,
         latent_shape: Tuple[int, ...],
-        num_trials: int = 10
+        graph_data: Optional[Dict[str, torch.Tensor]] = None,
+        num_trials: int = 10,
     ) -> PerformanceMetrics:
-        """
-        Benchmark sampling performance.
-        
-        Returns:
-            PerformanceMetrics with timing statistics
-        """
         times = []
-        
-        # Warmup
-        for _ in range(3):
-            self.sample_fast(condition, latent_shape)
-        
-        # Benchmark
-        for _ in range(num_trials):
+        for _ in range(2):
+            self.sample_fast(context=context, latent_shape=latent_shape, graph_data=graph_data)
+        for _ in range(max(1, int(num_trials))):
             start = time.time()
-            self.sample_fast(condition, latent_shape)
-            torch.cuda.synchronize() if torch.cuda.is_available() else None
+            self.sample_fast(context=context, latent_shape=latent_shape, graph_data=graph_data)
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
             times.append(time.time() - start)
-        
-        avg_time = sum(times) / len(times)
-        throughput = 1.0 / avg_time
-        
+        avg_time = sum(times) / max(1, len(times))
         return PerformanceMetrics(
-            sampling_strategy="lcm_lora",
+            sampling_strategy=self.info.distillation_type,
             num_steps=self.num_inference_steps,
             generation_time=avg_time,
-            throughput=throughput
+            throughput=(1.0 / avg_time) if avg_time > 0 else 0.0,
         )
 
 
-# ============================================================================
-# INTEGRATION EXAMPLE
-# ============================================================================
-
-"""
-# In src/core/latent_diffusion.py:
-
-from src.optimization.lcm_lora import LCMLoRAFastSampler, inject_lora_into_model
-
-class LatentDiffusionModel(nn.Module):
-    def __init__(self, ..., use_lcm_lora: bool = False, lora_checkpoint: Optional[str] = None):
-        # ... existing init ...
-        
-        self.use_lcm_lora = use_lcm_lora
-        
-        if use_lcm_lora:
-            self.fast_sampler = LCMLoRAFastSampler(
-                diffusion_model=self.unet,
-                lora_checkpoint=lora_checkpoint,
-                num_inference_steps=4,
-                use_fp16=True,
-                compile_model=True
-            )
-            logger.info("Enabled LCM-LoRA fast sampling")
-    
-    def sample(self, condition, ..., use_fast_sampling: bool = False):
-        '''Sample with optional fast LCM-LoRA.'''
-        
-        if use_fast_sampling and self.use_lcm_lora:
-            # Fast path: 4-step LCM-LoRA
-            return self.fast_sampler.sample_fast(
-                condition=condition,
-                latent_shape=(1, self.latent_dim, self.latent_h, self.latent_w),
-                guidance_scale=guidance_scale,
-                seed=seed
-            )
-        else:
-            # Standard path: 50-step DDIM
-            return self._sample_ddim(condition, ...)
-
-
-# In src/pipeline/dungeon_pipeline.py:
-
-class NeuralSymbolicDungeonPipeline:
-    def __init__(self, ..., enable_fast_mode: bool = False):
-        # ... existing init ...
-        
-        if enable_fast_mode:
-            self.diffusion = LatentDiffusionModel(
-                ...,
-                use_lcm_lora=True,
-                lora_checkpoint="checkpoints/lcm_lora_dungeon.pth"
-            )
-    
-    def generate_room(self, ..., fast_mode: bool = False):
-        # ... existing generation ...
-        
-        # Use fast sampling if enabled
-        z_latent = self.diffusion.sample(
-            condition=condition,
-            use_fast_sampling=fast_mode,
-            ...
-        )
-
-
-# Train LCM-LoRA (separate training script):
-
-from src.optimization.lcm_lora import inject_lora_into_model
-
-# Load base diffusion model
-diffusion = LatentDiffusionModel(...)
-diffusion.load_state_dict(torch.load("checkpoints/diffusion_best.pth"))
-
-# Inject LoRA
-inject_lora_into_model(diffusion.unet, rank=8, alpha=8.0)
-
-# Freeze base weights, train only LoRA
-for name, param in diffusion.named_parameters():
-    if 'lora' not in name:
-        param.requires_grad = False
-
-# LCM distillation training loop
-optimizer = torch.optim.AdamW(
-    [p for p in diffusion.parameters() if p.requires_grad],
-    lr=1e-4
-)
-
-for batch in dataloader:
-    # LCM consistency loss
-    loss = compute_lcm_consistency_loss(diffusion, batch)
-    loss.backward()
-    optimizer.step()
-
-# Save LoRA weights only
-lora_state_dict = {k: v for k, v in diffusion.state_dict().items() if 'lora' in k}
-torch.save(lora_state_dict, "checkpoints/lcm_lora_dungeon.pth")
-
-
-# Performance comparison:
-
-# Standard DDIM (50 steps)
-pipeline_slow = NeuralSymbolicDungeonPipeline(enable_fast_mode=False)
-start = time.time()
-dungeon_slow = pipeline_slow.generate_dungeon(mission_graph)
-print(f"Standard: {time.time() - start:.1f}s")  # ~6 minutes for 8 rooms
-
-# LCM-LoRA (4 steps)
-pipeline_fast = NeuralSymbolicDungeonPipeline(enable_fast_mode=True)
-start = time.time()
-dungeon_fast = pipeline_fast.generate_dungeon(mission_graph, fast_mode=True)
-print(f"Fast: {time.time() - start:.1f}s")  # ~16 seconds for 8 rooms (22x faster!)
-"""
-
+__all__ = [
+    "DEFAULT_LORA_TARGETS",
+    "FastSamplerCheckpointInfo",
+    "GraphConditionedFastSampler",
+    "LoRALayer",
+    "LoRALinear",
+    "PerformanceMetrics",
+    "extract_lora_state_dict",
+    "freeze_non_lora_parameters",
+    "inject_lora_into_model",
+    "load_fast_sampler_checkpoint",
+    "load_lora_state_dict",
+    "save_fast_sampler_checkpoint",
+]

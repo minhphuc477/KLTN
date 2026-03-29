@@ -39,33 +39,58 @@ def build_neighbor_boundary_inpaint_inputs(
     edit_mask = torch.ones((bsz, 1, h, w), device=ref.device, dtype=ref.dtype)
     constrained = False
 
-    def _valid_neighbor(lat: Optional[torch.Tensor]) -> bool:
-        return isinstance(lat, torch.Tensor) and lat.dim() == 4 and tuple(lat.shape) == tuple(ref.shape)
+    def _align_neighbor(lat: Optional[torch.Tensor]) -> Optional[torch.Tensor]:
+        """
+        Normalize neighbor latent to [B, C, H, W] for boundary copying.
+
+        Accepts:
+        - Exact shape match
+        - Batch-1 neighbor broadcast to base batch size
+        - Spatial mismatch resolved via nearest resize
+        """
+        if not isinstance(lat, torch.Tensor) or lat.dim() != 4:
+            return None
+
+        n = lat.to(device=ref.device, dtype=ref.dtype)
+        if int(n.shape[1]) != int(_ch):
+            return None
+
+        if int(n.shape[0]) == int(bsz):
+            pass
+        elif int(n.shape[0]) == 1 and int(bsz) > 1:
+            n = n.expand(bsz, -1, -1, -1)
+        else:
+            return None
+
+        if int(n.shape[2]) != int(h) or int(n.shape[3]) != int(w):
+            n = F.interpolate(n, size=(h, w), mode="nearest")
+
+        return n
 
     north = neighbor_latents.get("N")
-    if _valid_neighbor(north):
-        n = north.to(device=ref.device, dtype=ref.dtype)
+    n = _align_neighbor(north)
+    if n is not None:
         ref[:, :, :edge_band_h, :] = n[:, :, -edge_band_h:, :]
         edit_mask[:, :, :edge_band_h, :] = 0.0
         constrained = True
 
     south = neighbor_latents.get("S")
-    if _valid_neighbor(south):
-        s = south.to(device=ref.device, dtype=ref.dtype)
+    s = _align_neighbor(south)
+    if s is not None:
         ref[:, :, -edge_band_h:, :] = s[:, :, :edge_band_h, :]
         edit_mask[:, :, -edge_band_h:, :] = 0.0
         constrained = True
 
     west = neighbor_latents.get("W")
-    if _valid_neighbor(west):
-        w_lat = west.to(device=ref.device, dtype=ref.dtype)
+    w_lat = _align_neighbor(west)
+    if w_lat is not None:
         ref[:, :, :, :edge_band_w] = w_lat[:, :, :, -edge_band_w:]
         edit_mask[:, :, :, :edge_band_w] = 0.0
         constrained = True
 
     east = neighbor_latents.get("E")
-    if _valid_neighbor(east):
-        e = east.to(device=ref.device, dtype=ref.dtype)
+    e = _align_neighbor(east)
+    if e is not None:
         ref[:, :, :, -edge_band_w:] = e[:, :, :, :edge_band_w]
         edit_mask[:, :, :, -edge_band_w:] = 0.0
         constrained = True
@@ -109,6 +134,18 @@ def wfc_guided_inpaint_room(
 ) -> np.ndarray:
     """Regenerate only dead-end regions in latent space and merge back."""
     grid_int = np.asarray(current_grid, dtype=np.int64)
+    if grid_int.ndim != 2:
+        raise ValueError(f"current_grid must be 2D, got shape={tuple(grid_int.shape)}")
+
+    mask_bool = np.asarray(dead_end_mask, dtype=bool)
+    if mask_bool.shape != grid_int.shape:
+        raise ValueError(
+            f"dead_end_mask shape {tuple(mask_bool.shape)} must match room grid shape {tuple(grid_int.shape)}"
+        )
+    if not bool(np.any(mask_bool)):
+        # No repair region requested.
+        return grid_int.astype(np.int32, copy=False)
+
     grid_int = np.clip(grid_int, 0, int(num_classes) - 1)
     one_hot = np.eye(int(num_classes), dtype=np.float32)[grid_int]
     x_0 = torch.from_numpy(one_hot).to(device).permute(2, 0, 1).unsqueeze(0).contiguous()
@@ -116,7 +153,7 @@ def wfc_guided_inpaint_room(
     z_0, _ = vqvae.encode(x_0)
     latent_h, latent_w = int(z_0.shape[2]), int(z_0.shape[3])
     latent_mask = build_latent_edit_mask(
-        dead_end_mask,
+        mask_bool,
         latent_h=latent_h,
         latent_w=latent_w,
         device=device,
@@ -135,7 +172,7 @@ def wfc_guided_inpaint_room(
     logits = vqvae.decode(z_inpaint)
     inpainted_grid = logits.argmax(dim=1).detach().cpu().numpy()[0]
 
-    keep = ~np.asarray(dead_end_mask, dtype=bool)
+    keep = ~mask_bool
     merged = inpainted_grid.copy()
     merged[keep] = grid_int[keep]
     return merged.astype(np.int32, copy=False)

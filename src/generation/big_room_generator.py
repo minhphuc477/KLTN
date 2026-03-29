@@ -4,7 +4,8 @@ Feature 7: Big Room Support (Scalability)
 Support for variable room sizes, especially large boss arenas (22x32).
 
 Problem:
-    Current system hardcodes 16x11 rooms. Boss arenas need 22x32.
+    Current system hardcodes the canonical internal room-array shape `(16, 11)`.
+    Boss arenas need 22x32.
     VQ-VAE and diffusion models trained on fixed latent dimensions.
 
 Solution:

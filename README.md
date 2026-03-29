@@ -26,6 +26,7 @@ KLTN implements a complete research pipeline for generating Legend of Zelda-like
 ### Block II-VII: Neural-Symbolic Pipeline (H-MOLQD)
 - **Block II**: Semantic VQ-VAE for discrete latent representation
 - **Block III**: Dual-stream condition encoder for local/global context fusion
+  - Includes **graph-to-grid spatial conditioning**: `GraphToGridCrossAttention` + `SpatialGraphConditioner` for per-position mission graph cross-attention in U-Net.
 - **Block IV**: Latent diffusion with classifier-free guidance
 - **Block V**: LogicNet for differentiable solvability constraints
 - **Block VI**: Symbolic WaveFunctionCollapse repair for broken paths

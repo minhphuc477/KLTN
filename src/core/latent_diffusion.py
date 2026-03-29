@@ -30,12 +30,15 @@ Architecture:
 
 import math
 import logging
-from typing import Dict, List, Tuple, Optional
+from typing import Any, Dict, List, Tuple, Optional
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
+
+from src.core.attention_kernels import HedgehogFeatureMap, hedgehog_linear_attention
+from src.core.graph_grid_attention import SpatialGraphConditioner
 
 logger = logging.getLogger(__name__)
 
@@ -170,6 +173,8 @@ class CrossAttention(nn.Module):
         num_heads: int = 8, 
         dropout: float = 0.0,
         topology_refinement_mode: str = "gat2",
+        attention_mode: str = "softmax",
+        hedgehog_feature_dim: int = 32,
     ):
         super().__init__()
         self.num_heads = num_heads
@@ -184,6 +189,18 @@ class CrossAttention(nn.Module):
         self.v = nn.Linear(context_dim, query_dim)
         self.proj = nn.Linear(query_dim, query_dim)
         self.dropout = nn.Dropout(dropout)
+        self.hedgehog_q = HedgehogFeatureMap(
+            num_heads=num_heads,
+            head_dim=self.head_dim,
+            feature_dim=hedgehog_feature_dim,
+        )
+        self.hedgehog_k = HedgehogFeatureMap(
+            num_heads=num_heads,
+            head_dim=self.head_dim,
+            feature_dim=hedgehog_feature_dim,
+        )
+        self.attention_mode = "softmax"
+        self.set_attention_mode(attention_mode)
 
         # Topology-aware context refinement (2-layer graph message passing).
         self.topology_norm = nn.LayerNorm(context_dim)
@@ -197,6 +214,15 @@ class CrossAttention(nn.Module):
         self.topology_gat_o = nn.ModuleList([nn.Linear(context_dim, context_dim), nn.Linear(context_dim, context_dim)])
         self.topology_refinement_mode = "gat2"
         self.set_topology_refinement_mode(topology_refinement_mode)
+
+    def set_attention_mode(self, mode: str) -> None:
+        """Set cross-attention kernel: softmax or linear_hedgehog."""
+        normalized = str(mode).strip().lower()
+        if normalized not in {"softmax", "linear_hedgehog"}:
+            raise ValueError(
+                f"Invalid attention_mode={mode!r}. Expected 'softmax' or 'linear_hedgehog'."
+            )
+        self.attention_mode = normalized
 
     def set_topology_refinement_mode(self, mode: str) -> None:
         """Set topology refinement mode: none | lightweight | gat2 (alias: upgraded)."""
@@ -356,12 +382,28 @@ class CrossAttention(nn.Module):
         q = self.q(x).reshape(B, N, self.num_heads, self.head_dim).transpose(1, 2)
         k = self.k(context).reshape(B, -1, self.num_heads, self.head_dim).transpose(1, 2)
         v = self.v(context).reshape(B, -1, self.num_heads, self.head_dim).transpose(1, 2)
-        
-        attn = (q @ k.transpose(-2, -1)) * self.scale
-        attn = attn.softmax(dim=-1)
-        attn = self.dropout(attn)
-        
-        out = (attn @ v).transpose(1, 2).reshape(B, N, C)
+
+        if self.attention_mode == "linear_hedgehog":
+            out = hedgehog_linear_attention(
+                q,
+                k,
+                v,
+                q_map=self.hedgehog_q,
+                k_map=self.hedgehog_k,
+                token_mask=node_mask,
+            ).transpose(1, 2).reshape(B, N, C)
+        else:
+            attn = (q @ k.transpose(-2, -1)) * self.scale
+            if node_mask is not None:
+                mask = node_mask
+                if mask.dim() == 1:
+                    mask = mask.unsqueeze(0)
+                if mask.shape[0] == 1 and B > 1:
+                    mask = mask.expand(B, -1)
+                attn = attn.masked_fill(mask[:, None, None, :] == 0, float("-inf"))
+            attn = attn.softmax(dim=-1)
+            attn = self.dropout(attn)
+            out = (attn @ v).transpose(1, 2).reshape(B, N, C)
         return self.proj(out)
 
 
@@ -444,11 +486,30 @@ class AttentionBlock(nn.Module):
         context_dim: int,
         num_heads: int = 8,
         dropout: float = 0.1,
+        attention_mode: str = "softmax",
+        hedgehog_feature_dim: int = 32,
+        topology_map_channels: int = 18,
     ):
         super().__init__()
         
         self.self_attn = SelfAttention(dim, num_heads, dropout)
-        self.cross_attn = CrossAttention(dim, context_dim, num_heads, dropout)
+        self.cross_attn = CrossAttention(
+            dim,
+            context_dim,
+            num_heads,
+            dropout,
+            attention_mode=attention_mode,
+            hedgehog_feature_dim=hedgehog_feature_dim,
+        )
+        self.spatial_graph_conditioner = SpatialGraphConditioner(
+            grid_dim=dim,
+            graph_dim=context_dim,
+            topology_channels=topology_map_channels,
+            num_heads=num_heads,
+            dropout=dropout,
+            attention_mode=attention_mode,
+            hedgehog_feature_dim=hedgehog_feature_dim,
+        )
         
         self.ffn = nn.Sequential(
             nn.LayerNorm(dim),
@@ -464,6 +525,7 @@ class AttentionBlock(nn.Module):
         context: Tensor,
         context_edge_index: Optional[Tensor] = None,
         context_node_mask: Optional[Tensor] = None,
+        spatial_graph_data: Optional[Dict[str, Tensor]] = None,
     ) -> Tensor:
         """
         Args:
@@ -487,6 +549,19 @@ class AttentionBlock(nn.Module):
             edge_index=context_edge_index,
             node_mask=context_node_mask,
         )
+
+        x = x_flat.permute(0, 2, 1).view(B, C, H, W)
+        if spatial_graph_data:
+            x = self.spatial_graph_conditioner(
+                x,
+                graph_nodes=spatial_graph_data.get("graph_nodes"),
+                edge_index=spatial_graph_data.get("edge_index"),
+                node_positions=spatial_graph_data.get("node_positions"),
+                node_tpe=spatial_graph_data.get("node_tpe"),
+                node_mask=spatial_graph_data.get("node_mask"),
+                room_topology_map=spatial_graph_data.get("room_topology_map"),
+            )
+            x_flat = x.view(B, C, -1).permute(0, 2, 1)
         
         # FFN
         x_flat = x_flat + self.ffn(x_flat)
@@ -507,6 +582,9 @@ class DownBlock(nn.Module):
         num_res_blocks: int = 2,
         has_attention: bool = True,
         downsample: bool = True,
+        attention_mode: str = "softmax",
+        hedgehog_feature_dim: int = 32,
+        topology_map_channels: int = 18,
     ):
         super().__init__()
         
@@ -518,7 +596,15 @@ class DownBlock(nn.Module):
             self.res_blocks.append(ResBlock(in_ch, out_channels, time_dim))
             
             if has_attention:
-                self.attn_blocks.append(AttentionBlock(out_channels, context_dim))
+                self.attn_blocks.append(
+                    AttentionBlock(
+                        out_channels,
+                        context_dim,
+                        attention_mode=attention_mode,
+                        hedgehog_feature_dim=hedgehog_feature_dim,
+                        topology_map_channels=topology_map_channels,
+                    )
+                )
             else:
                 self.attn_blocks.append(nn.Identity())
         
@@ -533,6 +619,7 @@ class DownBlock(nn.Module):
         context: Tensor,
         context_edge_index: Optional[Tensor] = None,
         context_node_mask: Optional[Tensor] = None,
+        spatial_graph_data: Optional[Dict[str, Tensor]] = None,
     ) -> Tuple[Tensor, List[Tensor]]:
         """
         Returns:
@@ -548,6 +635,7 @@ class DownBlock(nn.Module):
                     context,
                     context_edge_index=context_edge_index,
                     context_node_mask=context_node_mask,
+                    spatial_graph_data=spatial_graph_data,
                 )
             skips.append(x)
         
@@ -574,6 +662,9 @@ class UpBlock(nn.Module):
         num_res_blocks: int = 2,
         has_attention: bool = True,
         upsample: bool = True,
+        attention_mode: str = "softmax",
+        hedgehog_feature_dim: int = 32,
+        topology_map_channels: int = 18,
     ):
         super().__init__()
         
@@ -591,7 +682,15 @@ class UpBlock(nn.Module):
             self.res_blocks.append(ResBlock(in_ch, out_channels, time_dim))
             
             if has_attention:
-                self.attn_blocks.append(AttentionBlock(out_channels, context_dim))
+                self.attn_blocks.append(
+                    AttentionBlock(
+                        out_channels,
+                        context_dim,
+                        attention_mode=attention_mode,
+                        hedgehog_feature_dim=hedgehog_feature_dim,
+                        topology_map_channels=topology_map_channels,
+                    )
+                )
             else:
                 self.attn_blocks.append(nn.Identity())
     
@@ -603,6 +702,7 @@ class UpBlock(nn.Module):
         context: Tensor,
         context_edge_index: Optional[Tensor] = None,
         context_node_mask: Optional[Tensor] = None,
+        spatial_graph_data: Optional[Dict[str, Tensor]] = None,
     ) -> Tensor:
         """Pop num_res_blocks skip connections from all_skips (from the end)."""
         if self.upsample is not None:
@@ -622,6 +722,7 @@ class UpBlock(nn.Module):
                     context,
                     context_edge_index=context_edge_index,
                     context_node_mask=context_node_mask,
+                    spatial_graph_data=spatial_graph_data,
                 )
         
         return x
@@ -661,6 +762,9 @@ class UNetDenoiser(nn.Module):
         num_res_blocks: int = 2,
         attention_resolutions: Tuple[int, ...] = (1, 2),
         dropout: float = 0.1,
+        attention_mode: str = "softmax",
+        hedgehog_feature_dim: int = 32,
+        topology_map_channels: int = 18,
     ):
         super().__init__()
         
@@ -693,13 +797,22 @@ class UNetDenoiser(nn.Module):
                 num_res_blocks=num_res_blocks,
                 has_attention=has_attn,
                 downsample=downsample,
+                attention_mode=attention_mode,
+                hedgehog_feature_dim=hedgehog_feature_dim,
+                topology_map_channels=topology_map_channels,
             ))
             channels.append(out_ch)
         
         # Bottleneck
         mid_ch = channels[-1]
         self.mid_block1 = ResBlock(mid_ch, mid_ch, time_dim)
-        self.mid_attn = AttentionBlock(mid_ch, context_dim)
+        self.mid_attn = AttentionBlock(
+            mid_ch,
+            context_dim,
+            attention_mode=attention_mode,
+            hedgehog_feature_dim=hedgehog_feature_dim,
+            topology_map_channels=topology_map_channels,
+        )
         self.mid_block2 = ResBlock(mid_ch, mid_ch, time_dim)
         
         # Build decoder
@@ -721,6 +834,9 @@ class UNetDenoiser(nn.Module):
                 num_res_blocks=num_res_blocks,
                 has_attention=has_attn,
                 upsample=upsample,
+                attention_mode=attention_mode,
+                hedgehog_feature_dim=hedgehog_feature_dim,
+                topology_map_channels=topology_map_channels,
             ))
             channels.append(out_ch)
         
@@ -735,6 +851,7 @@ class UNetDenoiser(nn.Module):
         context: Tensor,
         context_edge_index: Optional[Tensor] = None,
         context_node_mask: Optional[Tensor] = None,
+        spatial_graph_data: Optional[Dict[str, Tensor]] = None,
     ) -> Tensor:
         """
         Predict noise in x_t.
@@ -762,6 +879,7 @@ class UNetDenoiser(nn.Module):
                 context,
                 context_edge_index=context_edge_index,
                 context_node_mask=context_node_mask,
+                spatial_graph_data=spatial_graph_data,
             )
             all_skips.extend(skips)
         
@@ -772,6 +890,7 @@ class UNetDenoiser(nn.Module):
             context,
             context_edge_index=context_edge_index,
             context_node_mask=context_node_mask,
+            spatial_graph_data=spatial_graph_data,
         )
         h = self.mid_block2(h, t_emb)
         
@@ -784,6 +903,7 @@ class UNetDenoiser(nn.Module):
                 context,
                 context_edge_index=context_edge_index,
                 context_node_mask=context_node_mask,
+                spatial_graph_data=spatial_graph_data,
             )
         
         # Output
@@ -818,16 +938,173 @@ class GradientGuidance(nn.Module):
         logic_net: Optional[nn.Module] = None,
         guidance_scale: float = 1.0,
         clamp_magnitude: float = 1.0,
+        schedule_enabled: bool = True,
+        active_fraction: float = 0.30,
+        decay_power: float = 1.0,
+        max_graph_nodes: int = 512,
+        max_key_lock_pairs: int = 2048,
+        max_guidance_elements: int = 2_000_000,
     ):
         super().__init__()
         self.logic_net = logic_net
         self.guidance_scale = guidance_scale
         self.clamp_magnitude = clamp_magnitude
+        self.schedule_enabled = bool(schedule_enabled)
+        self.active_fraction = float(max(0.05, min(1.0, float(active_fraction))))
+        self.decay_power = float(max(0.25, float(decay_power)))
+        self.max_graph_nodes = int(max(1, int(max_graph_nodes)))
+        self.max_key_lock_pairs = int(max(0, int(max_key_lock_pairs)))
+        self.max_guidance_elements = int(max(1, int(max_guidance_elements)))
+        self._missing_logic_net_warning_emitted = False
+
+    def _sanitize_graph_data(
+        self,
+        graph_data: Optional[Any],
+        *,
+        device: Optional[torch.device] = None,
+        dtype: Optional[torch.dtype] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Validate and clamp graph_data passed into LogicNet to avoid expensive
+        unbounded path-computation on malformed payloads.
+        """
+        if graph_data is None:
+            return None
+        if not isinstance(graph_data, dict):
+            logger.warning(
+                "Gradient guidance: ignoring non-dict graph_data of type %s",
+                type(graph_data).__name__,
+            )
+            return None
+
+        adjacency = graph_data.get("adjacency")
+        edge_weights = graph_data.get("edge_weights")
+
+        # No graph adjacency => run LogicNet in room-only mode.
+        if adjacency is None and edge_weights is None:
+            return None
+
+        if not isinstance(adjacency, torch.Tensor) or adjacency.dim() != 2:
+            logger.warning("Gradient guidance: invalid adjacency tensor; disabling graph guidance.")
+            return None
+        if adjacency.shape[0] != adjacency.shape[1]:
+            logger.warning(
+                "Gradient guidance: adjacency must be square, got %s.",
+                tuple(adjacency.shape),
+            )
+            return None
+        node_count = int(adjacency.shape[0])
+        if node_count > self.max_graph_nodes:
+            logger.warning(
+                "Gradient guidance: graph too large (%d nodes > %d cap); disabling graph guidance.",
+                node_count,
+                self.max_graph_nodes,
+            )
+            return None
+
+        target_device = device if device is not None else adjacency.device
+        target_dtype = dtype if dtype is not None else (
+            adjacency.dtype if torch.is_floating_point(adjacency) else torch.float32
+        )
+        adjacency = adjacency.detach().to(device=target_device, dtype=torch.float32)
+        adjacency = torch.nan_to_num(adjacency, nan=0.0, posinf=1.0, neginf=0.0)
+        adjacency = (adjacency > 0).to(dtype=target_dtype)
+
+        if edge_weights is not None:
+            if (not isinstance(edge_weights, torch.Tensor)) or edge_weights.shape != adjacency.shape:
+                logger.warning(
+                    "Gradient guidance: edge_weights shape mismatch (%s vs %s); disabling graph guidance.",
+                    tuple(edge_weights.shape) if isinstance(edge_weights, torch.Tensor) else type(edge_weights).__name__,
+                    tuple(adjacency.shape),
+                )
+                return None
+        else:
+            edge_weights = adjacency
+
+        edge_weights = edge_weights.detach().to(device=target_device, dtype=target_dtype)
+        edge_weights = torch.nan_to_num(
+            edge_weights,
+            nan=float(self.max_graph_nodes),
+            posinf=float(self.max_graph_nodes),
+            neginf=0.0,
+        ).clamp(min=0.0, max=float(self.max_graph_nodes))
+
+        try:
+            start_idx = int(graph_data.get("start_idx", 0))
+        except (TypeError, ValueError, OverflowError):
+            start_idx = 0
+        if start_idx < 0 or start_idx >= node_count:
+            start_idx = 0
+
+        target_idx_raw = graph_data.get("target_idx")
+        target_idx: Optional[int] = None
+        if target_idx_raw is not None:
+            try:
+                target_idx = int(target_idx_raw)
+            except (TypeError, ValueError, OverflowError):
+                target_idx = None
+            if target_idx is not None and (target_idx < 0 or target_idx >= node_count):
+                target_idx = None
+
+        key_lock_pairs_raw = graph_data.get("key_lock_pairs", [])
+        key_lock_pairs: List[Tuple[int, int]] = []
+        if isinstance(key_lock_pairs_raw, (list, tuple)):
+            for pair in list(key_lock_pairs_raw)[: self.max_key_lock_pairs]:
+                if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+                    continue
+                try:
+                    key_idx = int(pair[0])
+                    lock_idx = int(pair[1])
+                except (TypeError, ValueError, OverflowError):
+                    continue
+                if 0 <= key_idx < node_count and 0 <= lock_idx < node_count:
+                    key_lock_pairs.append((key_idx, lock_idx))
+
+        return {
+            "adjacency": adjacency,
+            "edge_weights": edge_weights,
+            "start_idx": int(start_idx),
+            "target_idx": target_idx,
+            "key_lock_pairs": key_lock_pairs,
+        }
+
+    @staticmethod
+    def _extract_logic_loss(logic_out: Any) -> Optional[Tensor]:
+        """Support both LogicNet return signatures: Tensor or (loss, info)."""
+        if isinstance(logic_out, tuple):
+            if len(logic_out) == 0:
+                return None
+            loss = logic_out[0]
+        else:
+            loss = logic_out
+
+        if not isinstance(loss, torch.Tensor) or loss.numel() == 0:
+            return None
+        if loss.numel() != 1:
+            loss = loss.mean()
+        return loss
+
+    def _scheduled_scale(self, *, t: Optional[int], num_timesteps: Optional[int]) -> float:
+        """Scale guidance by reverse-step progress to reduce late-step compute pressure."""
+        if (not self.schedule_enabled) or t is None or num_timesteps is None or num_timesteps <= 1:
+            return float(self.guidance_scale)
+
+        total = max(1, int(num_timesteps) - 1)
+        # Reverse progress: 0 at first denoise step, 1 at final step.
+        reverse_progress = float(total - int(t)) / float(total)
+        active = float(self.active_fraction)
+        if reverse_progress >= active:
+            return 0.0
+        phase = 1.0 - (reverse_progress / max(active, 1e-8))
+        return float(self.guidance_scale) * float(max(0.0, phase) ** self.decay_power)
     
     def compute_guidance(
         self,
         x_t: Tensor,
-        graph_data: Optional[Dict[str, Tensor]] = None,
+        graph_data: Optional[Dict[str, Any]] = None,
+        *,
+        t: Optional[int] = None,
+        num_timesteps: Optional[int] = None,
     ) -> Tensor:
         """
         Compute guidance gradient from LogicNet.
@@ -840,44 +1117,75 @@ class GradientGuidance(nn.Module):
             Gradient tensor [B, C, H, W]
         """
         if self.logic_net is None:
+            if (not self._missing_logic_net_warning_emitted) and float(self.guidance_scale) > 0.0:
+                logger.warning(
+                    "Gradient guidance requested but no LogicNet is configured; skipping guidance."
+                )
+                self._missing_logic_net_warning_emitted = True
+            return torch.zeros_like(x_t)
+        scaled_gamma = self._scheduled_scale(t=t, num_timesteps=num_timesteps)
+        if scaled_gamma <= 0.0:
+            return torch.zeros_like(x_t)
+        if int(x_t.numel()) > self.max_guidance_elements:
+            logger.warning(
+                "Gradient guidance: latent too large for safe autograd guidance (%d elements > %d cap); skipping guidance.",
+                int(x_t.numel()),
+                self.max_guidance_elements,
+            )
             return torch.zeros_like(x_t)
         
         # Use torch.enable_grad() so autograd works even inside @torch.no_grad() sampling
-        with torch.enable_grad():
-            # Enable gradient computation for x_t
-            x_t_grad = x_t.detach().requires_grad_(True)
-            
-            # Compute LogicNet loss
-            loss, _ = self.logic_net(x_t_grad, graph_data)
-            
-            # Compute gradient
-            grad = torch.autograd.grad(
-                loss,
-                x_t_grad,
-                create_graph=False,
-                retain_graph=False,
-            )[0]
+        try:
+            safe_graph_data = self._sanitize_graph_data(
+                graph_data,
+                device=x_t.device,
+                dtype=(x_t.dtype if torch.is_floating_point(x_t) else torch.float32),
+            )
+            with torch.enable_grad():
+                # Enable gradient computation for x_t
+                x_t_grad = x_t.detach().requires_grad_(True)
+
+                # Compute LogicNet loss (supports tuple or tensor return modes).
+                logic_out = self.logic_net(x_t_grad, safe_graph_data)
+                loss = self._extract_logic_loss(logic_out)
+                if loss is None:
+                    logger.warning("Gradient guidance: LogicNet returned invalid loss; skipping guidance step.")
+                    return torch.zeros_like(x_t)
+                if not bool(torch.isfinite(loss).all()):
+                    logger.warning("Gradient guidance: non-finite loss detected; skipping guidance step.")
+                    return torch.zeros_like(x_t)
+
+                # Compute gradient
+                grad = torch.autograd.grad(
+                    loss,
+                    x_t_grad,
+                    create_graph=False,
+                    retain_graph=False,
+                )[0]
+        except (AttributeError, RuntimeError, ValueError, TypeError) as e:
+            logger.warning(
+                "Gradient guidance failed (%s); continuing without guidance.",
+                type(e).__name__,
+            )
+            return torch.zeros_like(x_t)
         
         # Clamp gradient magnitude
         if self.clamp_magnitude > 0:
-            # Flatten all dims except batch for norm, handles any tensor shape
-            flat = grad.flatten(1)
-            grad_norm = flat.norm(dim=1, keepdim=True)
-            # Reshape norm back for broadcasting
-            for _ in range(grad.dim() - 1):
-                grad_norm = grad_norm.unsqueeze(-1)
-            # Remove extra dims to match grad shape
-            while grad_norm.dim() > grad.dim():
-                grad_norm = grad_norm.squeeze(-1)
+            # Per-batch scalar norm with deterministic broadcast shape [B,1,1,...].
+            grad_norm = grad.view(grad.shape[0], -1).norm(dim=1)
+            grad_norm = grad_norm.view(grad.shape[0], *([1] * (grad.dim() - 1)))
             grad = grad * torch.clamp(self.clamp_magnitude / (grad_norm + 1e-8), max=1.0)
         
-        return self.guidance_scale * grad
+        return float(scaled_gamma) * grad
     
     def apply_guidance(
         self,
         predicted_mean: Tensor,
         x_t: Tensor,
         graph_data: Optional[Dict[str, Tensor]] = None,
+        *,
+        t: Optional[int] = None,
+        num_timesteps: Optional[int] = None,
     ) -> Tensor:
         """
         Apply gradient guidance to predicted mean.
@@ -890,7 +1198,12 @@ class GradientGuidance(nn.Module):
         Returns:
             Guided mean
         """
-        guidance = self.compute_guidance(x_t, graph_data)
+        guidance = self.compute_guidance(
+            x_t,
+            graph_data,
+            t=t,
+            num_timesteps=num_timesteps,
+        )
         return predicted_mean - guidance
 
 
@@ -942,11 +1255,17 @@ class LatentDiffusionModel(nn.Module):
         # --- Phase 1A: Classifier-Free Guidance (Ho & Salimans, 2022) ---
         cfg_dropout_prob: float = 0.1,
         cfg_scale: float = 3.0,
+        cfg_schedule_mode: str = "constant",
+        cfg_schedule_min_scale: float = 1.0,
+        cfg_schedule_power: float = 1.0,
         # --- Phase 1C: v-prediction (Salimans & Ho, ICLR 2022) ---
         prediction_type: str = 'epsilon',  # 'epsilon' or 'v'
         # --- Phase 4B: Min-SNR-γ weighting (Hang et al., ICCV 2023) ---
         min_snr_gamma: float = 5.0,
         topology_refinement_mode: str = "gat2",
+        attention_mode: str = "softmax",
+        hedgehog_feature_dim: int = 32,
+        room_topology_channels: int = 18,
     ):
         super().__init__()
         
@@ -955,8 +1274,16 @@ class LatentDiffusionModel(nn.Module):
         self.num_timesteps = num_timesteps
         self.cfg_dropout_prob = cfg_dropout_prob
         self.cfg_scale = cfg_scale
+        self.cfg_schedule_mode = "constant"
+        self.cfg_schedule_min_scale = 1.0
+        self.cfg_schedule_power = 1.0
         self.prediction_type = prediction_type
         self.min_snr_gamma = min_snr_gamma
+        self.attention_mode = str(attention_mode).strip().lower()
+        self.hedgehog_feature_dim = int(max(4, int(hedgehog_feature_dim)))
+        self.room_topology_channels = int(max(1, int(room_topology_channels)))
+        self.fast_sampler = None
+        self.fast_sampler_checkpoint: Optional[str] = None
         
         # Denoising U-Net
         self.denoiser = UNetDenoiser(
@@ -964,8 +1291,17 @@ class LatentDiffusionModel(nn.Module):
             model_channels=model_channels,
             out_channels=latent_dim,
             context_dim=context_dim,
+            attention_mode=self.attention_mode,
+            hedgehog_feature_dim=self.hedgehog_feature_dim,
+            topology_map_channels=self.room_topology_channels,
         )
         self.set_topology_refinement_mode(topology_refinement_mode)
+        self.set_attention_mode(self.attention_mode)
+        self.set_cfg_schedule(
+            mode=cfg_schedule_mode,
+            min_scale=cfg_schedule_min_scale,
+            power=cfg_schedule_power,
+        )
         
         # Gradient guidance
         self.guidance = GradientGuidance(
@@ -993,21 +1329,146 @@ class LatentDiffusionModel(nn.Module):
         self.register_buffer('posterior_variance', posterior_variance)
         self.register_buffer('posterior_log_variance', torch.log(torch.clamp(posterior_variance, min=1e-20)))
 
+    def set_cfg_schedule(
+        self,
+        mode: str = "constant",
+        min_scale: float = 1.0,
+        power: float = 1.0,
+    ) -> None:
+        """Configure inference-time classifier-free guidance scheduling."""
+        normalized = str(mode).strip().lower()
+        if normalized not in {"constant", "linear_decay", "cosine_decay"}:
+            raise ValueError(
+                f"Invalid cfg_schedule_mode={mode!r}. "
+                "Expected 'constant', 'linear_decay', or 'cosine_decay'."
+            )
+        self.cfg_schedule_mode = normalized
+        self.cfg_schedule_min_scale = float(max(0.0, min_scale))
+        self.cfg_schedule_power = float(max(1e-6, power))
+
+    def _cfg_scale_for_timestep(self, t: Tensor) -> Tensor:
+        """Return per-sample CFG scale for the current reverse-diffusion timestep."""
+        if not isinstance(t, torch.Tensor):
+            t = torch.as_tensor(t, device=self.betas.device, dtype=torch.long)
+        if t.dim() == 0:
+            t = t.unsqueeze(0)
+        t = t.to(device=self.betas.device, dtype=torch.float32)
+
+        base_scale = float(self.cfg_scale)
+        min_scale = float(self.cfg_schedule_min_scale)
+        lower = min(base_scale, min_scale)
+        upper = max(base_scale, min_scale)
+
+        if self.cfg_schedule_mode == "constant" or math.isclose(base_scale, min_scale, rel_tol=1e-6, abs_tol=1e-6):
+            scale = torch.full_like(t, fill_value=base_scale, dtype=torch.float32)
+        else:
+            denom = float(max(1, int(self.num_timesteps) - 1))
+            progress = torch.clamp(t / denom, 0.0, 1.0)
+            shaped = progress.pow(float(self.cfg_schedule_power))
+            if self.cfg_schedule_mode == "cosine_decay":
+                shaped = torch.sin(shaped * (math.pi * 0.5))
+            scale = min_scale + (base_scale - min_scale) * shaped
+
+        return torch.clamp(scale, min=lower, max=upper)
+
     def set_topology_refinement_mode(self, mode: str) -> int:
         """Set topology refinement mode across all active CrossAttention layers."""
         updated = 0
+        requested = str(mode).strip().lower()
         for module in self.modules():
             if isinstance(module, CrossAttention):
                 module.set_topology_refinement_mode(mode)
                 updated += 1
+        self._topology_refinement_mode_alias = requested
         return updated
 
     def get_topology_refinement_mode(self) -> str:
         """Get current topology refinement mode from first CrossAttention layer."""
+        alias = getattr(self, "_topology_refinement_mode_alias", None)
+        if isinstance(alias, str) and alias:
+            return alias
         for module in self.modules():
             if isinstance(module, CrossAttention):
                 return str(getattr(module, "topology_refinement_mode", "gat2"))
         return "gat2"
+
+    def set_attention_mode(self, mode: str) -> int:
+        """Set attention kernel across all active token and graph-grid attention layers."""
+        updated = 0
+        normalized = str(mode).strip().lower()
+        for module in self.modules():
+            if isinstance(module, CrossAttention):
+                module.set_attention_mode(normalized)
+                updated += 1
+            elif hasattr(module, "set_attention_mode") and module is not self:
+                if isinstance(module, SpatialGraphConditioner):
+                    module.set_attention_mode(normalized)
+                    updated += 1
+        self.attention_mode = normalized
+        return updated
+
+    def get_attention_mode(self) -> str:
+        """Get current attention kernel from first CrossAttention layer."""
+        for module in self.modules():
+            if isinstance(module, CrossAttention):
+                return str(getattr(module, "attention_mode", "softmax"))
+        return "softmax"
+
+    def supports_fast_sampling(self) -> bool:
+        """Whether a validated fast-sampling adapter is currently configured."""
+        return self.fast_sampler is not None
+
+    def disable_fast_sampling(self) -> None:
+        """Disable the optional fast-sampling adapter."""
+        self.fast_sampler = None
+        self.fast_sampler_checkpoint = None
+
+    def enable_fast_sampling(
+        self,
+        *,
+        adapter_checkpoint: str,
+        num_inference_steps: Optional[int] = None,
+        use_fp16: bool = False,
+        compile_model: bool = False,
+        strict: bool = True,
+    ) -> None:
+        """Enable metadata-gated fast sampling from a distilled adapter checkpoint."""
+        from src.optimization.lcm_lora import GraphConditionedFastSampler
+
+        self.fast_sampler = GraphConditionedFastSampler(
+            self,
+            adapter_checkpoint=adapter_checkpoint,
+            num_inference_steps=num_inference_steps,
+            use_fp16=use_fp16,
+            compile_model=compile_model,
+            strict=strict,
+        )
+        self.fast_sampler_checkpoint = str(adapter_checkpoint)
+
+    @torch.no_grad()
+    def fast_sample(
+        self,
+        *,
+        context: Tensor,
+        shape: Tuple[int, ...],
+        graph_data: Optional[Dict[str, Tensor]] = None,
+        guidance_scale: Optional[float] = None,
+        seed: Optional[int] = None,
+    ) -> Tensor:
+        """Run the configured fast-sampling backend, if available.
+
+        Note: adapter-controlled fast sampling uses the adapter's configured
+        inference-step count rather than the standard DDPM/DDIM timestep schedule.
+        """
+        if self.fast_sampler is None:
+            raise RuntimeError("Fast sampling requested but no fast-sampler adapter is configured.")
+        return self.fast_sampler.sample_fast(
+            context=context,
+            latent_shape=shape,
+            graph_data=graph_data,
+            guidance_scale=guidance_scale,
+            seed=seed,
+        )
     
     def q_sample(
         self, 
@@ -1044,32 +1505,161 @@ class LatentDiffusionModel(nn.Module):
         seq_len = int(context.shape[1])
         adjusted = edge_index.to(context.device)
 
-        # If an anchor token is prepended to node tokens, shift edges by +1.
-        node_features = graph_data.get("node_features") if isinstance(graph_data, dict) else None
-        if isinstance(node_features, torch.Tensor):
-            num_nodes = int(node_features.shape[0])
-            if seq_len == num_nodes + 1:
-                adjusted = adjusted + 1
+        def _batched_tensor(name: str, value: Optional[Tensor], *, min_dim: int = 3) -> Optional[Tensor]:
+            if not isinstance(value, torch.Tensor):
+                return None
+            tensor = value.to(context.device)
+            if min_dim == 3 and tensor.dim() == 2:
+                tensor = tensor.unsqueeze(0)
+                if int(context.shape[0]) > 1:
+                    tensor = tensor.expand(int(context.shape[0]), -1, -1)
+            if tensor.dim() < min_dim:
+                raise ValueError(f"{name} has invalid shape {tuple(tensor.shape)}")
+            if int(tensor.shape[0]) != int(context.shape[0]):
+                raise ValueError(
+                    f"{name} batch size {int(tensor.shape[0])} does not match context batch size {int(context.shape[0])}."
+                )
+            return tensor
 
+        node_features = _batched_tensor("node_features", graph_data.get("node_features"))
         node_mask = graph_data.get("node_mask") if isinstance(graph_data, dict) else None
         if isinstance(node_mask, torch.Tensor):
             node_mask = node_mask.to(context.device)
             if node_mask.dim() == 1:
                 node_mask = node_mask.unsqueeze(0)
-            if node_mask.shape[1] + 1 == seq_len:
-                anchor = torch.ones(node_mask.shape[0], 1, device=node_mask.device, dtype=node_mask.dtype)
-                node_mask = torch.cat([anchor, node_mask], dim=1)
-            if node_mask.shape[1] != seq_len:
-                if node_mask.shape[1] > seq_len:
-                    node_mask = node_mask[:, :seq_len]
-                else:
-                    node_mask = F.pad(node_mask, (0, seq_len - node_mask.shape[1]), value=0)
-            if node_mask.shape[0] == 1 and context.shape[0] > 1:
-                node_mask = node_mask.expand(context.shape[0], -1)
+                if int(context.shape[0]) > 1:
+                    node_mask = node_mask.expand(int(context.shape[0]), -1)
+            if node_mask.dim() != 2:
+                raise ValueError(f"node_mask has invalid shape {tuple(node_mask.shape)}")
+            if int(node_mask.shape[0]) != int(context.shape[0]):
+                raise ValueError(
+                    f"node_mask batch size {int(node_mask.shape[0])} does not match context batch size {int(context.shape[0])}."
+                )
         else:
             node_mask = None
 
+        has_room_anchor = bool(graph_data.get("has_room_anchor", False)) if isinstance(graph_data, dict) else False
+        if node_features is not None:
+            num_nodes = int(node_features.shape[1])
+            if node_mask is not None and int(node_mask.shape[1]) != num_nodes:
+                raise ValueError(
+                    f"node_mask node count {int(node_mask.shape[1])} does not match node_features node count {num_nodes}."
+                )
+            required_seq_len = num_nodes + (1 if has_room_anchor else 0)
+            if seq_len < required_seq_len:
+                raise ValueError(
+                    f"context sequence length {seq_len} is smaller than required graph token length {required_seq_len}."
+                )
+            if has_room_anchor:
+                adjusted = adjusted + 1
+                if node_mask is not None:
+                    anchor = torch.ones(node_mask.shape[0], 1, device=node_mask.device, dtype=node_mask.dtype)
+                    node_mask = torch.cat([anchor, node_mask], dim=1)
+            elif node_mask is not None and int(node_mask.shape[1]) != seq_len:
+                if int(node_mask.shape[1]) > seq_len:
+                    raise ValueError(
+                        f"node_mask length {int(node_mask.shape[1])} exceeds context sequence length {seq_len}."
+                    )
+                node_mask = F.pad(node_mask, (0, seq_len - int(node_mask.shape[1])), value=0)
+
         return adjusted, node_mask
+
+    def _extract_spatial_graph_context(
+        self,
+        context: Tensor,
+        graph_data: Optional[Dict[str, Tensor]] = None,
+    ) -> Optional[Dict[str, Tensor]]:
+        """Prepare graph-node tokens and room topology maps for spatial conditioning."""
+        if not isinstance(graph_data, dict):
+            return None
+
+        spatial: Dict[str, Tensor] = {}
+        batch_size = int(context.shape[0])
+
+        def _normalize_node_tensor(name: str, value: Optional[Tensor], *, trailing_dim: Optional[int] = None) -> Optional[Tensor]:
+            if not isinstance(value, torch.Tensor):
+                return None
+            tensor = value.to(context.device)
+            if tensor.dim() == 2:
+                tensor = tensor.unsqueeze(0)
+                if batch_size > 1:
+                    tensor = tensor.expand(batch_size, -1, -1)
+            if tensor.dim() < 3:
+                raise ValueError(f"{name} has invalid shape {tuple(tensor.shape)}")
+            if int(tensor.shape[0]) != batch_size:
+                raise ValueError(f"{name} batch size {int(tensor.shape[0])} does not match context batch size {batch_size}.")
+            if trailing_dim is not None and int(tensor.shape[-1]) != trailing_dim:
+                raise ValueError(f"{name} trailing dimension must be {trailing_dim}, got {int(tensor.shape[-1])}.")
+            return tensor
+
+        node_features = _normalize_node_tensor("node_features", graph_data.get("node_features"))
+        if node_features is None:
+            return None
+        num_nodes = int(node_features.shape[1])
+        has_room_anchor = bool(graph_data.get("has_room_anchor", False))
+
+        if context.dim() == 3 and int(context.shape[1]) > 1:
+            if num_nodes > 0:
+                needed = num_nodes + (1 if has_room_anchor else 0)
+                if int(context.shape[1]) < needed:
+                    raise ValueError(
+                        f"context sequence length {int(context.shape[1])} is too short for has_room_anchor={has_room_anchor} and num_nodes={num_nodes}."
+                    )
+                if has_room_anchor:
+                    graph_nodes = context[:, 1:1 + num_nodes, :]
+                else:
+                    graph_nodes = context[:, :num_nodes, :]
+                spatial["graph_nodes"] = graph_nodes
+
+        node_mask = graph_data.get("node_mask")
+        if isinstance(node_mask, torch.Tensor):
+            node_mask = node_mask.to(context.device)
+            if node_mask.dim() == 1:
+                node_mask = node_mask.unsqueeze(0)
+                if batch_size > 1:
+                    node_mask = node_mask.expand(batch_size, -1)
+            if node_mask.dim() != 2:
+                raise ValueError(f"node_mask has invalid shape {tuple(node_mask.shape)}")
+            if int(node_mask.shape[0]) != batch_size or int(node_mask.shape[1]) != num_nodes:
+                raise ValueError(
+                    f"node_mask shape {tuple(node_mask.shape)} must match [B, N] = ({batch_size}, {num_nodes})."
+                )
+            spatial["node_mask"] = node_mask
+
+        for key in ("edge_index", "tpe", "node_positions", "room_topology_map"):
+            value = graph_data.get(key)
+            if not isinstance(value, torch.Tensor):
+                continue
+            value = value.to(context.device)
+            if key in {"tpe", "node_positions"} and value.dim() == 2:
+                value = value.unsqueeze(0)
+                if batch_size > 1:
+                    value = value.expand(batch_size, -1, -1)
+            if key == "tpe" and value.dim() >= 3 and int(value.shape[1]) != num_nodes:
+                raise ValueError(f"tpe node count {int(value.shape[1])} does not match node_features node count {num_nodes}.")
+            if key == "node_positions" and value.dim() >= 3:
+                if int(value.shape[1]) != num_nodes or int(value.shape[-1]) != 2:
+                    raise ValueError(
+                        f"node_positions shape {tuple(value.shape)} must match [B, N, 2] with N={num_nodes}."
+                    )
+            if key == "room_topology_map" and value.dim() == 3:
+                value = value.unsqueeze(0)
+                if batch_size > 1:
+                    value = value.expand(batch_size, -1, -1, -1)
+            if key == "room_topology_map" and int(value.shape[0]) != batch_size:
+                raise ValueError(
+                    f"room_topology_map batch size {int(value.shape[0])} does not match context batch size {batch_size}."
+                )
+            if key == "edge_index" and value.dim() == 3 and int(value.shape[0]) != batch_size:
+                raise ValueError(
+                    f"edge_index batch size {int(value.shape[0])} does not match context batch size {batch_size}."
+                )
+            target_key = "node_tpe" if key == "tpe" else key
+            spatial[target_key] = value
+
+        spatial["has_room_anchor"] = torch.tensor([1.0 if has_room_anchor else 0.0], device=context.device)
+
+        return spatial or None
 
     def _predict_noise_cfg(
         self,
@@ -1085,19 +1675,22 @@ class LatentDiffusionModel(nn.Module):
         where s = cfg_scale. When s=1 → standard conditional, s>1 → stronger conditioning.
         """
         context_edge_index, context_node_mask = self._extract_context_topology(context, graph_data)
+        spatial_graph_data = self._extract_spatial_graph_context(context, graph_data)
+        cfg_scale = self._cfg_scale_for_timestep(t).to(device=x_t.device, dtype=x_t.dtype)
         pred_cond = self.denoiser(
             x_t,
             t,
             context,
             context_edge_index=context_edge_index,
             context_node_mask=context_node_mask,
+            spatial_graph_data=spatial_graph_data,
         )
         
-        if self.cfg_scale > 1.0:
+        if torch.any(cfg_scale > (1.0 + 1e-6)):
             # Unconditional prediction (zero context)
             pred_uncond = self.denoiser(x_t, t, torch.zeros_like(context))
             # CFG interpolation
-            return pred_uncond + self.cfg_scale * (pred_cond - pred_uncond)
+            return pred_uncond + cfg_scale[:, None, None, None] * (pred_cond - pred_uncond)
         
         return pred_cond
     
@@ -1188,7 +1781,13 @@ class LatentDiffusionModel(nn.Module):
         
         # Apply gradient guidance
         if self.guidance.logic_net is not None and self.guidance.guidance_scale > 0:
-            mean = self.guidance.apply_guidance(mean, x_t, graph_data)
+            mean = self.guidance.apply_guidance(
+                mean,
+                x_t,
+                graph_data,
+                t=int(t),
+                num_timesteps=int(self.num_timesteps),
+            )
         
         # Add noise (except at t=0)
         noise = torch.randn_like(x_t) if t > 0 else torch.zeros_like(x_t)
@@ -1259,7 +1858,8 @@ class LatentDiffusionModel(nn.Module):
         device = context.device
         
         # Create timestep schedule
-        step_size = self.num_timesteps // num_steps
+        num_steps = max(1, int(num_steps))
+        step_size = max(1, self.num_timesteps // num_steps)
         timesteps = list(range(0, self.num_timesteps, step_size))[::-1]
         
         # Start from noise
@@ -1295,7 +1895,12 @@ class LatentDiffusionModel(nn.Module):
             
             # Apply guidance
             if self.guidance.logic_net is not None and self.guidance.guidance_scale > 0:
-                guidance_grad = self.guidance.compute_guidance(x_t, graph_data)
+                guidance_grad = self.guidance.compute_guidance(
+                    x_t,
+                    graph_data,
+                    t=int(t),
+                    num_timesteps=int(self.num_timesteps),
+                )
                 x_t = x_t - guidance_grad
         
         return x_t
@@ -1354,6 +1959,7 @@ class LatentDiffusionModel(nn.Module):
         self,
         x_0: Tensor,
         context: Tensor,
+        graph_data: Optional[Dict[str, Tensor]] = None,
         noise: Optional[Tensor] = None,
     ) -> Tensor:
         """
@@ -1385,14 +1991,30 @@ class LatentDiffusionModel(nn.Module):
         # --- Phase 1A: CFG dropout during training ---
         # Randomly zero-out conditioning to train unconditional path
         if self.training and self.cfg_dropout_prob > 0:
-            cfg_mask = (torch.rand(B, device=device) > self.cfg_dropout_prob).float()
-            context = context * cfg_mask[:, None]  # Zero out entire conditioning
+            if int(context.shape[0]) != B:
+                raise ValueError(
+                    f"context batch size {int(context.shape[0])} does not match latent batch size {B}."
+                )
+            # Keep/drop one whole conditioning payload per sample and broadcast
+            # across any trailing conditioning dimensions (e.g. [B, C] or [B, N, C]).
+            keep_mask = (torch.rand(B, device=device) > self.cfg_dropout_prob).to(dtype=context.dtype)
+            mask_shape = [B] + [1] * max(0, context.dim() - 1)
+            context = context * keep_mask.view(*mask_shape)
         
         # Get noisy samples
         x_t = self.q_sample(x_0, t, noise)
         
         # Predict
-        prediction = self.denoiser(x_t, t, context)
+        context_edge_index, context_node_mask = self._extract_context_topology(context, graph_data)
+        spatial_graph_data = self._extract_spatial_graph_context(context, graph_data)
+        prediction = self.denoiser(
+            x_t,
+            t,
+            context,
+            context_edge_index=context_edge_index,
+            context_node_mask=context_node_mask,
+            spatial_graph_data=spatial_graph_data,
+        )
         
         # --- Phase 1C: Build target based on prediction_type ---
         if self.prediction_type == 'v':
@@ -1430,6 +2052,9 @@ def create_latent_diffusion(
     prediction_type: str = 'epsilon',
     cfg_dropout_prob: float = 0.1,
     cfg_scale: float = 3.0,
+    cfg_schedule_mode: str = "constant",
+    cfg_schedule_min_scale: float = 1.0,
+    cfg_schedule_power: float = 1.0,
     min_snr_gamma: float = 5.0,
     **kwargs,
 ) -> LatentDiffusionModel:
@@ -1443,6 +2068,9 @@ def create_latent_diffusion(
         prediction_type: 'epsilon' or 'v' (v-prediction, Salimans & Ho 2022)
         cfg_dropout_prob: Conditioning dropout probability for CFG training
         cfg_scale: Classifier-free guidance scale for inference (1.0 = no CFG)
+        cfg_schedule_mode: Inference CFG scheduling mode
+        cfg_schedule_min_scale: Minimum CFG scale near final denoising steps
+        cfg_schedule_power: Shape parameter for non-constant CFG schedules
         min_snr_gamma: Min-SNR-γ clamp value (0 = disabled, 5.0 = recommended)
         **kwargs: Additional arguments
         
@@ -1456,6 +2084,9 @@ def create_latent_diffusion(
         prediction_type=prediction_type,
         cfg_dropout_prob=cfg_dropout_prob,
         cfg_scale=cfg_scale,
+        cfg_schedule_mode=cfg_schedule_mode,
+        cfg_schedule_min_scale=cfg_schedule_min_scale,
+        cfg_schedule_power=cfg_schedule_power,
         min_snr_gamma=min_snr_gamma,
         **kwargs,
     )

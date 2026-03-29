@@ -2110,6 +2110,7 @@ class ZeldaGUI:
 def load_maps_from_adapter():
     """Load processed maps from data adapter using new zelda_core - ALL 18 variants."""
     return _load_maps_from_adapter_orchestration_helper(
+        os_module=os,
         file_path=__file__,
         print_fn=print,
     )

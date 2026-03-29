@@ -113,6 +113,7 @@ from src.pipeline.room_topology_conditioning import (
     build_room_topology_condition_map,
 )
 from src.core.condition_encoder import build_boundary_constraints
+from src.core.vqvae import canonical_latent_shape
 from src.pipeline.block_contracts import (
     BlockShapeContract,
     summarize_missing_keys,
@@ -124,6 +125,7 @@ from src.pipeline.block_contracts import (
 logger = logging.getLogger(__name__)
 
 _stable_node_sort_key = stable_node_sort_key
+DEFAULT_ROOM_LATENT_HW: Tuple[int, int] = canonical_latent_shape((ROOM_HEIGHT, ROOM_WIDTH))
 
 def _stable_node_seed_offset(node: Any) -> int:
     """Deterministic integer seed offset for arbitrary node-id types."""
@@ -1091,8 +1093,8 @@ class NeuralSymbolicDungeonPipeline:
             diffusion = self._require_component("diffusion", "_infer_room_latent_shape")
             default_shape = (
                 int(diffusion.latent_dim),
-                max(1, ROOM_HEIGHT // 4),
-                max(1, (ROOM_WIDTH + 3) // 4),
+                int(DEFAULT_ROOM_LATENT_HW[0]),
+                int(DEFAULT_ROOM_LATENT_HW[1]),
             )
         for latent in neighbor_latents.values():
             if isinstance(latent, torch.Tensor) and latent.dim() == 4:
@@ -1346,8 +1348,8 @@ class NeuralSymbolicDungeonPipeline:
             if latent_shape_chw is None:
                 latent_shape_chw = (
                     int(self.diffusion.latent_dim),
-                    max(1, ROOM_HEIGHT // 4),
-                    max(1, (ROOM_WIDTH + 3) // 4),
+                    int(DEFAULT_ROOM_LATENT_HW[0]),
+                    int(DEFAULT_ROOM_LATENT_HW[1]),
                 )
 
             latent_shape: Tuple[int, int, int, int] = (
@@ -1557,8 +1559,8 @@ class NeuralSymbolicDungeonPipeline:
             latent_shape: Tuple[int, int, int, int] = (
                 1,
                 int(self.diffusion.latent_dim),
-                max(1, ROOM_HEIGHT // 4),
-                max(1, (ROOM_WIDTH + 3) // 4),
+                int(DEFAULT_ROOM_LATENT_HW[0]),
+                int(DEFAULT_ROOM_LATENT_HW[1]),
             )
             for latent in neighbor_latents.values():
                 if isinstance(latent, torch.Tensor) and latent.dim() == 4:
@@ -1611,8 +1613,8 @@ class NeuralSymbolicDungeonPipeline:
             latent_shape = (
                 1,
                 int(self.diffusion.latent_dim),
-                max(1, ROOM_HEIGHT // 4),
-                max(1, (ROOM_WIDTH + 3) // 4),
+                int(DEFAULT_ROOM_LATENT_HW[0]),
+                int(DEFAULT_ROOM_LATENT_HW[1]),
             )
             for latent in neighbor_latents.values():
                 if isinstance(latent, torch.Tensor) and latent.dim() == 4:

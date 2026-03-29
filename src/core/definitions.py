@@ -14,7 +14,7 @@ Import from here instead of duplicating constants across modules.
 
 """
 
-from typing import Dict, Set, Iterable, List
+from typing import Dict, Set, Iterable, List, Sequence, Tuple
 from enum import IntEnum
 
 # ==========================================
@@ -125,6 +125,34 @@ CHAR_TO_SEMANTIC: Dict[str, int] = {
     'd': TileID.DOOR_OPEN,
 }
 
+# Canonical semantic->character export mapping for VGLC-style text outputs.
+# Use this mapping for saving generated .txt files so output stays aligned with
+# Processed/tloz*.txt symbol family.
+SEMANTIC_TO_CHAR: Dict[int, str] = {
+    int(TileID.VOID): "-",
+    int(TileID.FLOOR): "F",
+    int(TileID.WALL): "W",
+    int(TileID.BLOCK): "B",
+    int(TileID.DOOR_OPEN): "D",
+    int(TileID.DOOR_LOCKED): "D",
+    int(TileID.DOOR_BOMB): "D",
+    int(TileID.DOOR_PUZZLE): "D",
+    int(TileID.DOOR_BOSS): "D",
+    int(TileID.DOOR_SOFT): "D",
+    int(TileID.ENEMY): "M",
+    int(TileID.START): "F",
+    int(TileID.TRIFORCE): "F",
+    int(TileID.BOSS): "M",
+    int(TileID.KEY_SMALL): "F",
+    int(TileID.KEY_BOSS): "F",
+    int(TileID.KEY_ITEM): "F",
+    int(TileID.ITEM_MINOR): "F",
+    int(TileID.ELEMENT): "P",
+    int(TileID.ELEMENT_FLOOR): "O",
+    int(TileID.STAIR): "S",
+    int(TileID.PUZZLE): "P",
+}
+
 # Characters that represent walkable tiles
 WALKABLE_CHARS: Set[str] = {'F', 'f', '.', 'O', 'o', 'D', 'd', 'S', 's'}
 
@@ -135,9 +163,19 @@ WALL_CHARS: Set[str] = {'W', 'w', 'B', 'b', 'I', 'i', 'P', 'p'}
 # ROOM DIMENSIONS (VGLC Zelda Standard)
 # ==========================================
 
-# Standard VGLC Zelda room dimensions
+# Standard room-array dimensions used internally by this codebase.
+#
+# Important orientation note:
+# - Classic Zelda rooms are often described in screen terms as
+#   "16 columns x 11 rows".
+# - Internally we store room grids in NumPy/PyTorch row-major order as
+#   (rows, cols) = (ROOM_HEIGHT, ROOM_WIDTH).
+# - Historical code sometimes passes the swapped literal (ROOM_WIDTH, ROOM_HEIGHT);
+#   shared helpers below normalize that boundary case instead of silently cropping.
 ROOM_HEIGHT: int = 16  # Rows per room (including walls)
 ROOM_WIDTH: int = 11   # Columns per room (including walls)
+ROOM_SHAPE: Tuple[int, int] = (ROOM_HEIGHT, ROOM_WIDTH)
+ROOM_TRANSPOSED_SHAPE: Tuple[int, int] = (ROOM_WIDTH, ROOM_HEIGHT)
 
 # Interior dimensions (without walls)
 ROOM_INTERIOR_HEIGHT: int = 14
@@ -146,6 +184,29 @@ ROOM_INTERIOR_WIDTH: int = 9
 # Grid slot dimensions (same as room for VGLC)
 SLOT_HEIGHT: int = 16
 SLOT_WIDTH: int = 11
+
+
+def normalize_room_shape(
+    shape: Sequence[int],
+    *,
+    allow_transposed: bool = True,
+) -> Tuple[int, int]:
+    """
+    Normalize a `(rows, cols)` room shape to the internal canonical layout.
+
+    Historical code occasionally supplies the swapped pair `(cols, rows)`.
+    When that exact transposed shape is detected and `allow_transposed=True`,
+    we map it back to `(ROOM_HEIGHT, ROOM_WIDTH)`.
+    """
+    if len(shape) != 2:
+        raise ValueError(f"Room shape must have exactly 2 dimensions, got {tuple(shape)!r}")
+
+    normalized = (int(shape[0]), int(shape[1]))
+    if normalized == ROOM_SHAPE:
+        return ROOM_SHAPE
+    if allow_transposed and normalized == ROOM_TRANSPOSED_SHAPE:
+        return ROOM_SHAPE
+    return normalized
 
 # ==========================================
 # GRAPH EDGE TYPES (DOT Format)
@@ -246,6 +307,25 @@ EDGE_TYPE_PRIORITY: Dict[str, int] = {
     'stair': 10,
     'open': 0,
 }
+
+
+def semantic_to_vglc_char(tile_id: int, unknown_char: str = "-") -> str:
+    """Convert semantic tile id to canonical VGLC character."""
+    try:
+        return SEMANTIC_TO_CHAR[int(tile_id)]
+    except (KeyError, TypeError, ValueError):
+        return str(unknown_char)
+
+
+def semantic_grid_to_vglc_lines(
+    grid: Sequence[Sequence[int]],
+    unknown_char: str = "-",
+) -> List[str]:
+    """Convert a 2D semantic-id grid into VGLC text lines."""
+    return [
+        "".join(semantic_to_vglc_char(int(tile), unknown_char=unknown_char) for tile in row)
+        for row in grid
+    ]
 
 
 def _dedupe_preserve_order(tokens: Iterable[str]) -> List[str]:
@@ -389,7 +469,8 @@ def select_primary_edge_type(edge_types: Iterable[str]) -> str:
 # DOOR POSITIONS IN ROOM
 # ==========================================
 
-# Where doors can appear in a 16x11 room grid (row, col ranges)
+# Where doors can appear in the canonical internal room grid
+# `(rows, cols) = (ROOM_HEIGHT, ROOM_WIDTH)`.
 DOOR_POSITIONS: Dict[str, Dict[str, int]] = {
     'N': {'row': 0, 'col_start': 4, 'col_end': 7},      # North door
     'S': {'row': 15, 'col_start': 4, 'col_end': 7},     # South door
@@ -453,6 +534,9 @@ __all__ = [
     'SEMANTIC_PALETTE',
     'ID_TO_NAME',
     'CHAR_TO_SEMANTIC',
+    'SEMANTIC_TO_CHAR',
+    'semantic_to_vglc_char',
+    'semantic_grid_to_vglc_lines',
     
     # Character sets
     'WALKABLE_CHARS',
@@ -461,10 +545,13 @@ __all__ = [
     # Dimensions
     'ROOM_HEIGHT',
     'ROOM_WIDTH',
+    'ROOM_SHAPE',
+    'ROOM_TRANSPOSED_SHAPE',
     'ROOM_INTERIOR_HEIGHT',
     'ROOM_INTERIOR_WIDTH',
     'SLOT_HEIGHT',
     'SLOT_WIDTH',
+    'normalize_room_shape',
     
     # Graph mappings
     'EDGE_TYPE_MAP',

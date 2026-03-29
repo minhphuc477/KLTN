@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import Tuple, Set, Optional
 import numpy as np
 from src.core.definitions import SEMANTIC_PALETTE, ROOM_HEIGHT, ROOM_WIDTH
+from src.pipeline.room_stitching import build_room_canvas_from_slots
 from src.zelda_data.zelda_core import StitchedDungeon
 from src.data_processing.visual_extractor import extract_grid
 
@@ -61,9 +62,13 @@ def make_stitched_for_single_room(room_grid: np.ndarray, room_pos: Tuple[int, in
     h, w = room_grid.shape
     assert h == ROOM_HEIGHT and w == ROOM_WIDTH, "expected single-room grid"
 
-    # Place the room at global origin (0,0)
-    global_grid = np.array(room_grid, dtype=np.int32)
-    room_positions = {room_pos: (0, 0)}
+    stitched_layout = build_room_canvas_from_slots(
+        room_grids={room_pos: np.asarray(room_grid, dtype=np.int32)},
+        slot_positions={room_pos: room_pos},
+        fill_tile=int(SEMANTIC_PALETTE.get("VOID", 0)),
+    )
+    global_grid = stitched_layout.dungeon_grid
+    room_positions = stitched_layout.room_offsets
 
     # Find START/TRIFORCE tile positions if present
     starts = np.argwhere(global_grid == SEMANTIC_PALETTE.get('START', 21))

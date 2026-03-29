@@ -7,7 +7,14 @@ from typing import Any, Dict, Optional, Tuple, Set
 import networkx as nx
 import numpy as np
 
-from src.core.definitions import ROOM_HEIGHT, ROOM_WIDTH, SEMANTIC_PALETTE, parse_edge_type_tokens, parse_node_label_tokens
+from src.core.definitions import (
+    ROOM_HEIGHT,
+    ROOM_WIDTH,
+    ROOM_SHAPE,
+    ROOM_TRANSPOSED_SHAPE,
+    SEMANTIC_PALETTE,
+    parse_node_label_tokens,
+)
 
 
 def parse_label_tokens(label: Any) -> Set[str]:
@@ -15,6 +22,36 @@ def parse_label_tokens(label: Any) -> Set[str]:
     if label is None:
         return set()
     return set(str(t).strip().lower() for t in parse_node_label_tokens(str(label)) if str(t).strip())
+
+
+def normalize_node_id(value: Any) -> Optional[Any]:
+    """Normalize externally supplied node IDs while preserving heterogeneous hashable IDs."""
+    if value is None:
+        return None
+    if isinstance(value, np.generic):
+        value = value.item()
+    if isinstance(value, float):
+        if value.is_integer():
+            return int(value)
+        return None
+    if isinstance(value, str):
+        stripped = value.strip()
+        return stripped if stripped else None
+    try:
+        hash(value)
+    except TypeError:
+        return None
+    return value
+
+
+def stable_node_sort_key(node: Any) -> Tuple[int, Any]:
+    """Deterministic sort key that remains valid for mixed node-ID types."""
+    normalized = normalize_node_id(node)
+    if isinstance(normalized, (int, np.integer)):
+        return (0, int(normalized))
+    if isinstance(normalized, str):
+        return (1, normalized)
+    return (2, str(normalized))
 
 
 def coerce_bool(value: Any) -> bool:
@@ -83,7 +120,7 @@ def clamp_room_coord(coord: Tuple[int, int]) -> Tuple[int, int]:
     return (r, c)
 
 
-def get_node_grid_position(graph: nx.Graph, node_id: int) -> Optional[Tuple[int, int]]:
+def get_node_grid_position(graph: nx.Graph, node_id: Any) -> Optional[Tuple[int, int]]:
     """Extract room-grid position for a node from graph metadata."""
     if node_id not in graph:
         return None
@@ -95,7 +132,7 @@ def get_node_grid_position(graph: nx.Graph, node_id: int) -> Optional[Tuple[int,
     return None
 
 
-def infer_direction(graph: nx.Graph, source_node: int, target_node: int) -> Optional[str]:
+def infer_direction(graph: nx.Graph, source_node: Any, target_node: Any) -> Optional[str]:
     """Infer cardinal direction of source_node relative to target_node."""
     source_pos = get_node_grid_position(graph, source_node)
     target_pos = get_node_grid_position(graph, target_node)
@@ -127,10 +164,13 @@ def first_free_position(start_pos: Tuple[int, int], occupied: set) -> Tuple[int,
 
 def fit_room_grid(room_grid: np.ndarray) -> np.ndarray:
     """Ensure room grid has exact ROOM_HEIGHT x ROOM_WIDTH shape."""
-    if room_grid.shape == (ROOM_HEIGHT, ROOM_WIDTH):
+    if room_grid.shape == ROOM_SHAPE:
         return room_grid.astype(np.int32, copy=False)
+    if room_grid.shape == ROOM_TRANSPOSED_SHAPE:
+        return room_grid.transpose().astype(np.int32, copy=False)
 
-    fitted = np.zeros((ROOM_HEIGHT, ROOM_WIDTH), dtype=np.int32)
+    void_id = int(SEMANTIC_PALETTE.get("VOID", 0))
+    fitted = np.full((ROOM_HEIGHT, ROOM_WIDTH), void_id, dtype=np.int32)
     h = min(ROOM_HEIGHT, room_grid.shape[0])
     w = min(ROOM_WIDTH, room_grid.shape[1])
     fitted[:h, :w] = room_grid[:h, :w].astype(np.int32, copy=False)
@@ -144,62 +184,31 @@ def carve_room_connection(
     edge_data: Optional[Dict[str, Any]] = None,
     has_reverse_edge: bool = False,
 ) -> None:
-    """Carve boundary connectors for adjacent rooms, preserving edge semantics when possible."""
+    """Compatibility wrapper around the shared bbox-based connection carver."""
     dr = dst_pos[0] - src_pos[0]
     dc = dst_pos[1] - src_pos[1]
     if abs(dr) + abs(dc) != 1:
         return
 
-    floor_id = int(SEMANTIC_PALETTE.get("FLOOR", 1))
-    wall_id = int(SEMANTIC_PALETTE.get("WALL", 2))
+    from src.pipeline.room_stitching import carve_room_connection_between_bboxes
 
-    data = edge_data or {}
-    label = str(data.get("label", "") or "")
-    edge_type = str(data.get("edge_type", data.get("type", "")) or "")
-    edge_tokens = set(parse_edge_type_tokens(label=label, edge_type=edge_type))
-
-    # Default connector semantics.
-    src_tile = floor_id
-    dst_tile = floor_id
-
-    # Encode gate semantics into boundary tiles.
-    if {"key_locked", "locked"}.intersection(edge_tokens):
-        src_tile = int(SEMANTIC_PALETTE.get("DOOR_LOCKED", floor_id))
-        dst_tile = int(SEMANTIC_PALETTE.get("DOOR_LOCKED", floor_id))
-    elif "boss_locked" in edge_tokens:
-        src_tile = int(SEMANTIC_PALETTE.get("DOOR_BOSS", floor_id))
-        dst_tile = int(SEMANTIC_PALETTE.get("DOOR_BOSS", floor_id))
-    elif "bombable" in edge_tokens:
-        src_tile = int(SEMANTIC_PALETTE.get("DOOR_BOMB", floor_id))
-        dst_tile = int(SEMANTIC_PALETTE.get("DOOR_BOMB", floor_id))
-    elif {"item_gate", "item_locked", "switch", "switch_locked", "on_off_gate", "state_block"}.intersection(edge_tokens):
-        src_tile = int(SEMANTIC_PALETTE.get("DOOR_PUZZLE", floor_id))
-        dst_tile = int(SEMANTIC_PALETTE.get("DOOR_PUZZLE", floor_id))
-
-    # If there is no reverse edge (or explicit one-way token), mark source as soft door
-    # and keep destination as a normal doorway. This preserves directional intent in tiles
-    # while keeping traversal possible for current grid-only validators.
-    if (not has_reverse_edge) or {"soft_locked", "one_way", "shutter"}.intersection(edge_tokens):
-        src_tile = int(SEMANTIC_PALETTE.get("DOOR_SOFT", src_tile))
-        if dst_tile == wall_id:
-            dst_tile = floor_id
-
-    if dr != 0:
-        src_row = (src_pos[0] + (1 if dr > 0 else 0)) * ROOM_HEIGHT - (1 if dr > 0 else 0)
-        dst_row = src_row + (1 if dr > 0 else -1)
-        center_c = src_pos[1] * ROOM_WIDTH + ROOM_WIDTH // 2
-        for col in range(center_c - 2, center_c + 3):
-            if 0 <= src_row < global_grid.shape[0] and 0 <= col < global_grid.shape[1]:
-                global_grid[src_row, col] = src_tile
-            if 0 <= dst_row < global_grid.shape[0] and 0 <= col < global_grid.shape[1]:
-                global_grid[dst_row, col] = dst_tile
-        return
-
-    src_col = (src_pos[1] + (1 if dc > 0 else 0)) * ROOM_WIDTH - (1 if dc > 0 else 0)
-    dst_col = src_col + (1 if dc > 0 else -1)
-    center_r = src_pos[0] * ROOM_HEIGHT + ROOM_HEIGHT // 2
-    for row in range(center_r - 2, center_r + 3):
-        if 0 <= row < global_grid.shape[0] and 0 <= src_col < global_grid.shape[1]:
-            global_grid[row, src_col] = src_tile
-        if 0 <= row < global_grid.shape[0] and 0 <= dst_col < global_grid.shape[1]:
-            global_grid[row, dst_col] = dst_tile
+    src_bbox = (
+        int(src_pos[1] * ROOM_WIDTH),
+        int(src_pos[0] * ROOM_HEIGHT),
+        int((src_pos[1] + 1) * ROOM_WIDTH - 1),
+        int((src_pos[0] + 1) * ROOM_HEIGHT - 1),
+    )
+    dst_bbox = (
+        int(dst_pos[1] * ROOM_WIDTH),
+        int(dst_pos[0] * ROOM_HEIGHT),
+        int((dst_pos[1] + 1) * ROOM_WIDTH - 1),
+        int((dst_pos[0] + 1) * ROOM_HEIGHT - 1),
+    )
+    carve_room_connection_between_bboxes(
+        global_grid,
+        src_bbox,
+        dst_bbox,
+        edge_data=edge_data,
+        has_reverse_edge=has_reverse_edge,
+        fill_tile=int(SEMANTIC_PALETTE.get("VOID", 0)),
+    )

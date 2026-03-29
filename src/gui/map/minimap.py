@@ -5,6 +5,7 @@ import time
 from typing import Any, Tuple
 
 from src.core.definitions import SEMANTIC_PALETTE
+from src.pipeline.spatial_utils import normalize_node_id, stable_node_sort_key
 
 
 def render_minimap(gui: Any, pygame: Any) -> None:
@@ -42,14 +43,14 @@ def render_minimap(gui: Any, pygame: Any) -> None:
     if editor_mode:
         graph = gui.ai_mission_graph_draft
         layout = dict(getattr(gui, "ai_mission_graph_layout", {}) or {})
-        node_ids = sorted(list(getattr(graph, "nodes", {}).keys()))
+        node_ids = sorted(list(getattr(graph, "nodes", {}).keys()), key=stable_node_sort_key)
         if node_ids and len(layout) != len(node_ids):
             layout = {}
             total = len(node_ids)
             for idx, node_id in enumerate(node_ids):
                 x = 0.08 + 0.84 * (float(idx) / float(max(1, total - 1)))
                 y = 0.5
-                layout[int(node_id)] = (x, y)
+                layout[node_id] = (x, y)
             gui.ai_mission_graph_layout = layout
 
         staged_locked = set(tuple(edge) for edge in list(getattr(gui, "ai_mission_graph_locked_edges", []) or []))
@@ -57,15 +58,15 @@ def render_minimap(gui: Any, pygame: Any) -> None:
         pending_source = getattr(gui, "ai_mission_graph_pending_lock_source", None)
 
         def _pos(node_id):
-            nxn, nyn = layout.get(int(node_id), (0.5, 0.5))
+            nxn, nyn = layout.get(node_id, (0.5, 0.5))
             px = offset_x + int(float(nxn) * max(1, scaled_w - 1))
             py = offset_y + int(float(nyn) * max(1, scaled_h - 1))
             return px, py
 
         for edge in getattr(graph, "edges", []):
-            src = int(getattr(edge, "source", -1))
-            dst = int(getattr(edge, "target", -1))
-            if src < 0 or dst < 0:
+            src = normalize_node_id(getattr(edge, "source", None))
+            dst = normalize_node_id(getattr(edge, "target", None))
+            if src is None or dst is None:
                 continue
             x1, y1 = _pos(src)
             x2, y2 = _pos(dst)
@@ -78,9 +79,9 @@ def render_minimap(gui: Any, pygame: Any) -> None:
         for node_id in node_ids:
             x, y = _pos(node_id)
             fill = (80, 120, 200)
-            if boss_node is not None and int(node_id) == int(boss_node):
+            if boss_node is not None and normalize_node_id(node_id) == normalize_node_id(boss_node):
                 fill = (215, 65, 65)
-            if pending_source is not None and int(node_id) == int(pending_source):
+            if pending_source is not None and normalize_node_id(node_id) == normalize_node_id(pending_source):
                 fill = (230, 175, 45)
             pygame.draw.circle(minimap, (230, 230, 245), (x, y), 7)
             pygame.draw.circle(minimap, fill, (x, y), 5)
@@ -206,20 +207,20 @@ def handle_minimap_click(gui: Any, mouse_pos: Tuple[int, int], pygame_module: An
     if editor_mode:
         graph = gui.ai_mission_graph_draft
         layout = dict(getattr(gui, "ai_mission_graph_layout", {}) or {})
-        node_ids = sorted(list(getattr(graph, "nodes", {}).keys()))
+        node_ids = sorted(list(getattr(graph, "nodes", {}).keys()), key=stable_node_sort_key)
         if not node_ids:
             return True
 
         if len(layout) != len(node_ids):
             total = len(node_ids)
             layout = {
-                int(node_id): (0.08 + 0.84 * (float(idx) / float(max(1, total - 1))), 0.5)
+                node_id: (0.08 + 0.84 * (float(idx) / float(max(1, total - 1))), 0.5)
                 for idx, node_id in enumerate(node_ids)
             }
             gui.ai_mission_graph_layout = layout
 
         def _node_pixel(node_id):
-            nxn, nyn = layout.get(int(node_id), (0.5, 0.5))
+            nxn, nyn = layout.get(node_id, (0.5, 0.5))
             px = offset_x + int(float(nxn) * max(1, scaled_w - 1))
             py = offset_y + int(float(nyn) * max(1, scaled_h - 1))
             return px, py
@@ -231,26 +232,29 @@ def handle_minimap_click(gui: Any, mouse_pos: Tuple[int, int], pygame_module: An
             d = (float(local_x) - float(px)) ** 2 + (float(local_y) - float(py)) ** 2
             if d < best_d:
                 best_d = d
-                nearest = int(node_id)
+                nearest = node_id
 
         if nearest is None or best_d > float(max(9, int(scale) + 7) ** 2):
             return True
 
         if int(button) == 1:
-            gui.ai_mission_graph_boss_node = int(nearest)
-            gui.message = f"Mission editor: boss room node = {int(nearest)}"
+            gui.ai_mission_graph_boss_node = nearest
+            gui.message = f"Mission editor: boss room node = {nearest}"
             return True
 
         if int(button) == 3:
             pending = getattr(gui, "ai_mission_graph_pending_lock_source", None)
             if pending is None:
-                gui.ai_mission_graph_pending_lock_source = int(nearest)
-                gui.message = f"Mission editor: lock source node = {int(nearest)}"
+                gui.ai_mission_graph_pending_lock_source = nearest
+                gui.message = f"Mission editor: lock source node = {nearest}"
                 return True
 
-            src = int(pending)
-            dst = int(nearest)
+            src = normalize_node_id(pending)
+            dst = normalize_node_id(nearest)
             gui.ai_mission_graph_pending_lock_source = None
+            if src is None or dst is None:
+                gui.message = "Mission editor: ignored invalid node reference"
+                return True
             if src == dst:
                 gui.message = "Mission editor: ignored self-lock edge"
                 return True

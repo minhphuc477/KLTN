@@ -18,10 +18,13 @@ import networkx as nx
 
 from src.pipeline import (
     NeuralSymbolicDungeonPipeline,
+    MissingPipelineComponentError,
+    PipelineComponents,
+    SymbolicGenerationComponents,
     create_pipeline,
 )
 from src.pipeline.dungeon_pipeline import RoomGenerationResult
-from src.core import ROOM_HEIGHT, ROOM_WIDTH
+from src.core import ROOM_HEIGHT, ROOM_WIDTH, SEMANTIC_PALETTE
 
 
 # =============================================================================
@@ -114,6 +117,336 @@ def test_create_pipeline_convenience():
     print("✓ Convenience function works correctly")
 
 
+def test_symbolic_only_pipeline_skips_neural_stack_initialization():
+    """Symbolic-only constructor should avoid building the neural generation stack."""
+    pipeline = NeuralSymbolicDungeonPipeline.create_symbolic_repair_pipeline(
+        device='cpu',
+        enable_logging=False,
+    )
+
+    status = pipeline.component_status()
+    assert status['vqvae'] is False
+    assert status['condition_encoder'] is False
+    assert status['diffusion'] is False
+    assert status['logic_net'] is False
+    assert status['refiner'] is True
+    assert pipeline.supports_room_generation() is False
+    assert pipeline.supports_symbolic_repair() is True
+
+
+def test_symbolic_only_pipeline_repair_room_public_api():
+    """Symbolic-only pipelines should still expose a working repair entry point."""
+    pipeline = NeuralSymbolicDungeonPipeline.create_symbolic_repair_pipeline(
+        device='cpu',
+        enable_logging=False,
+    )
+    floor = int(SEMANTIC_PALETTE['FLOOR'])
+    room_grid = np.full((ROOM_HEIGHT, ROOM_WIDTH), floor, dtype=np.int32)
+
+    repaired, success, diagnostics = pipeline.repair_room(
+        room_grid,
+        start=(ROOM_HEIGHT // 2, 0),
+        goal=(ROOM_HEIGHT // 2, ROOM_WIDTH - 1),
+    )
+
+    assert success is True
+    assert repaired.shape == room_grid.shape
+    assert isinstance(diagnostics, dict)
+    assert diagnostics.get('final_failure_count', 1) == 0
+
+
+def test_symbolic_only_pipeline_generate_room_fails_fast():
+    """Missing neural components should raise a targeted error instead of deep attribute failures."""
+    pipeline = NeuralSymbolicDungeonPipeline.create_symbolic_repair_pipeline(
+        device='cpu',
+        enable_logging=False,
+    )
+
+    with pytest.raises(MissingPipelineComponentError, match="generate_room requires neural generation components"):
+        pipeline.generate_room(
+            neighbor_latents={'N': None, 'S': None, 'E': None, 'W': None},
+            graph_context={},
+            room_id=0,
+            apply_repair=False,
+            logic_guidance_scale=0.0,
+            num_diffusion_steps=1,
+            seed=42,
+        )
+
+
+def test_symbolic_only_pipeline_repair_and_stitch_dungeon_public_api():
+    """Symbolic-only pipelines should expose repair-and-stitch without neural components."""
+    pipeline = NeuralSymbolicDungeonPipeline.create_symbolic_repair_pipeline(
+        device='cpu',
+        enable_logging=False,
+    )
+    floor = int(SEMANTIC_PALETTE['FLOOR'])
+    room_grid = np.full((ROOM_HEIGHT, ROOM_WIDTH), floor, dtype=np.int32)
+    graph = nx.DiGraph()
+    graph.add_node(0, is_start=True, pos=(0, 0))
+    graph.add_node(1, pos=(0, 1))
+    graph.add_edge(0, 1, edge_type="open")
+
+    result = pipeline.repair_and_stitch_dungeon(
+        rooms={0: room_grid, 1: room_grid.copy()},
+        mission_graph=graph,
+        apply_repair=True,
+        enable_map_elites=False,
+    )
+
+    assert result.dungeon_grid.ndim == 2
+    assert set(result.rooms.keys()) == {0, 1}
+    assert result.metrics["symbolic_only"] is True
+    assert result.map_elites_score is None
+
+
+def test_injected_stitcher_is_used_for_public_stitch_rooms():
+    """Room stitching should delegate to an injected stitcher when one is provided."""
+
+    class _StubStitcher:
+        def __init__(self):
+            self.calls = 0
+
+        def stitch_rooms(self, *, rooms, graph):
+            self.calls += 1
+            return np.full((ROOM_HEIGHT, ROOM_WIDTH), 7, dtype=np.int32)
+
+    stitcher = _StubStitcher()
+    pipeline = NeuralSymbolicDungeonPipeline.from_components(
+        components=PipelineComponents(
+            symbolic=SymbolicGenerationComponents(stitcher=stitcher),
+        ),
+        device='cpu',
+        enable_logging=False,
+    )
+
+    rooms = {
+        0: RoomGenerationResult(
+            room_id=0,
+            room_grid=np.zeros((ROOM_HEIGHT, ROOM_WIDTH), dtype=np.int32),
+            latent=torch.zeros(1, 64, 4, 3),
+            neural_grid=np.zeros((ROOM_HEIGHT, ROOM_WIDTH), dtype=np.int32),
+            was_repaired=False,
+            repair_mask=None,
+            neural_probs=None,
+            metrics={},
+        )
+    }
+    graph = nx.Graph()
+    graph.add_node(0)
+
+    stitched = pipeline.stitch_rooms(rooms, graph)
+
+    assert stitcher.calls == 1
+    assert stitched.shape == (ROOM_HEIGHT, ROOM_WIDTH)
+    assert int(stitched[0, 0]) == 7
+
+
+def test_public_stitch_rooms_supports_positional_only_stitchers():
+    """Public stitch API should fall back to positional arguments for legacy stitchers."""
+
+    class _PositionalStitcher:
+        def __init__(self):
+            self.calls = 0
+
+        def stitch_rooms(self, rooms, graph):
+            self.calls += 1
+            return np.full((ROOM_HEIGHT, ROOM_WIDTH), 9, dtype=np.int32)
+
+    stitcher = _PositionalStitcher()
+    pipeline = NeuralSymbolicDungeonPipeline.from_components(
+        components=PipelineComponents(
+            symbolic=SymbolicGenerationComponents(stitcher=stitcher),
+        ),
+        device='cpu',
+        enable_logging=False,
+    )
+
+    rooms = {
+        0: RoomGenerationResult(
+            room_id=0,
+            room_grid=np.zeros((ROOM_HEIGHT, ROOM_WIDTH), dtype=np.int32),
+            latent=torch.zeros(1, 64, 4, 3),
+            neural_grid=np.zeros((ROOM_HEIGHT, ROOM_WIDTH), dtype=np.int32),
+            was_repaired=False,
+            repair_mask=None,
+            neural_probs=None,
+            metrics={},
+        )
+    }
+    graph = nx.Graph()
+    graph.add_node(0)
+
+    stitched = pipeline.stitch_rooms(rooms, graph)
+
+    assert stitcher.calls == 1
+    assert stitched.shape == (ROOM_HEIGHT, ROOM_WIDTH)
+    assert int(stitched[0, 0]) == 9
+
+
+def test_prepare_graph_context_and_room_graph_context_include_spatial_topology(pipeline):
+    """Prepared graph context should expose node positions and per-room topology maps."""
+    graph = nx.DiGraph()
+    graph.add_node(0, is_start=True, pos=(0, 0))
+    graph.add_node(1, has_boss=True, pos=(0, 1))
+    graph.add_edge(0, 1, edge_type="key_locked")
+
+    graph_data = pipeline._prepare_graph_context(graph)
+    room_graph_context = pipeline._build_room_graph_context(
+        graph_data=graph_data,
+        mission_graph=graph,
+        room_id=1,
+        start_goal=((ROOM_HEIGHT // 2, 0), (ROOM_HEIGHT // 2, ROOM_WIDTH - 1)),
+    )
+
+    assert "node_positions" in graph_data
+    assert tuple(graph_data["node_positions"].shape) == (2, 2)
+    assert room_graph_context["has_room_anchor"] is True
+    assert "room_topology_map" in room_graph_context
+    topo = room_graph_context["room_topology_map"]
+    assert tuple(topo.shape) == (1, 18, ROOM_HEIGHT, ROOM_WIDTH)
+    assert float(topo[:, 5:11].sum().item()) > 0.0
+
+
+def test_validate_dungeon_without_map_elites_returns_none():
+    """Validation should no-op cleanly when MAP-Elites is not configured."""
+    pipeline = NeuralSymbolicDungeonPipeline.from_components(
+        components=PipelineComponents(
+            symbolic=SymbolicGenerationComponents(),
+        ),
+        device='cpu',
+        enable_logging=False,
+    )
+
+    dungeon_grid = np.zeros((ROOM_HEIGHT, ROOM_WIDTH), dtype=np.int32)
+    assert pipeline._validate_dungeon(dungeon_grid) is None
+
+
+def test_public_repair_room_clamps_row_col_coordinates():
+    """Public repair API should normalize room-local coordinates as (row, col)."""
+
+    class _CaptureRefiner:
+        def __init__(self):
+            self.start = None
+            self.goal = None
+
+        def repair_room_with_feedback(self, grid, start, goal, **_kwargs):
+            self.start = start
+            self.goal = goal
+            return np.asarray(grid, dtype=np.int32), True, {"captured": True}
+
+    refiner = _CaptureRefiner()
+    pipeline = NeuralSymbolicDungeonPipeline.from_components(
+        components=PipelineComponents(
+            symbolic=SymbolicGenerationComponents(refiner=refiner),
+        ),
+        device='cpu',
+        enable_logging=False,
+    )
+
+    grid = np.zeros((ROOM_HEIGHT, ROOM_WIDTH), dtype=np.int32)
+    repaired, success, diagnostics = pipeline.repair_room(
+        grid,
+        start=(-5, ROOM_WIDTH + 3),
+        goal=(ROOM_HEIGHT + 4, -2),
+    )
+
+    assert success is True
+    assert diagnostics["captured"] is True
+    assert repaired.shape == grid.shape
+    assert refiner.start == (0, ROOM_WIDTH - 1)
+    assert refiner.goal == (ROOM_HEIGHT - 1, 0)
+
+
+def test_public_repair_room_forwards_required_floor_mask():
+    """Public repair API should forward an optional traversability prior to the refiner."""
+
+    class _CaptureRefiner:
+        def __init__(self):
+            self.required_floor_mask = None
+
+        def repair_room_with_feedback(self, grid, start, goal, required_floor_mask=None, **_kwargs):
+            self.required_floor_mask = required_floor_mask
+            return np.asarray(grid, dtype=np.int32), True, {"captured": True}
+
+    refiner = _CaptureRefiner()
+    pipeline = NeuralSymbolicDungeonPipeline.from_components(
+        components=PipelineComponents(
+            symbolic=SymbolicGenerationComponents(refiner=refiner),
+        ),
+        device='cpu',
+        enable_logging=False,
+    )
+
+    grid = np.zeros((ROOM_HEIGHT, ROOM_WIDTH), dtype=np.int32)
+    required = np.zeros((ROOM_HEIGHT, ROOM_WIDTH), dtype=bool)
+    required[ROOM_HEIGHT // 2, :] = True
+
+    _repaired, success, diagnostics = pipeline.repair_room(
+        grid,
+        start=(ROOM_HEIGHT // 2, 0),
+        goal=(ROOM_HEIGHT // 2, ROOM_WIDTH - 1),
+        required_floor_mask=required,
+    )
+
+    assert success is True
+    assert diagnostics["captured"] is True
+    assert isinstance(refiner.required_floor_mask, np.ndarray)
+    assert bool(refiner.required_floor_mask[ROOM_HEIGHT // 2, ROOM_WIDTH // 2]) is True
+
+
+def test_prepare_dungeon_generation_returns_graph_bundle(pipeline, simple_graph):
+    """Graph preparation should expose the original graph, physical graph, and conditioning tensors."""
+    prepared = pipeline.prepare_dungeon_generation(
+        mission_graph=simple_graph,
+        use_topological_positional_encoding=True,
+    )
+
+    assert prepared.mission_graph is simple_graph
+    assert isinstance(prepared.mission_graph_physical, nx.DiGraph)
+    assert set(prepared.mission_graph_physical.nodes()) == set(simple_graph.nodes())
+    assert 'node_features' in prepared.graph_data
+    assert 'edge_index' in prepared.graph_data
+    assert 'node_to_idx' in prepared.graph_data
+
+
+def test_generate_rooms_for_graph_partial_api(monkeypatch, pipeline, simple_graph):
+    """Room-only phase API should generate all rooms without requiring full dungeon assembly."""
+    prepared = pipeline.prepare_dungeon_generation(
+        mission_graph=simple_graph,
+        use_topological_positional_encoding=False,
+    )
+
+    def fake_generate_room(**kwargs):
+        room_id = kwargs['room_id']
+        room_grid = np.zeros((ROOM_HEIGHT, ROOM_WIDTH), dtype=np.int32)
+        return RoomGenerationResult(
+            room_id=int(room_id),
+            room_grid=room_grid,
+            latent=torch.zeros(1, 64, 4, 3),
+            neural_grid=room_grid.copy(),
+            was_repaired=False,
+            repair_mask=None,
+            neural_probs=None,
+            metrics={'room_id': int(room_id)},
+        )
+
+    monkeypatch.setattr(pipeline, 'generate_room', fake_generate_room)
+
+    room_set = pipeline.generate_rooms_for_graph(
+        prepared,
+        num_diffusion_steps=1,
+        logic_guidance_scale=0.0,
+        apply_repair=False,
+        batch_independent_rooms=False,
+        seed=42,
+    )
+
+    assert set(room_set.rooms.keys()) == set(simple_graph.nodes())
+    assert set(room_set.room_latents.keys()) == set(simple_graph.nodes())
+    assert isinstance(room_set.batch_runtime_diagnostics, list)
+
+
 # =============================================================================
 # DIMENSION TESTS
 # =============================================================================
@@ -134,6 +467,8 @@ def test_room_dimensions(pipeline, neighbor_latents, graph_context):
         f"Expected (16, 11), got {result.room_grid.shape}"
     
     # Check latent dimensions
+    assert isinstance(result.latent, torch.Tensor)
+    assert result.latent.device.type == 'cpu'
     assert result.latent.shape == (1, 64, 4, 3), \
         f"Expected (1, 64, 4, 3), got {result.latent.shape}"
     
@@ -167,6 +502,21 @@ def test_latent_space_consistency(pipeline):
 # SINGLE ROOM GENERATION TESTS
 # =============================================================================
 
+def test_pipeline_threads_cfg_schedule_into_diffusion():
+    """Pipeline init should propagate CFG scheduling into the diffusion model."""
+    pipeline = NeuralSymbolicDungeonPipeline(
+        device='cpu',
+        enable_logging=False,
+        diffusion_cfg_schedule_mode="cosine_decay",
+        diffusion_cfg_schedule_min_scale=1.25,
+        diffusion_cfg_schedule_power=2.0,
+    )
+
+    assert pipeline.diffusion is not None
+    assert pipeline.diffusion.cfg_schedule_mode == "cosine_decay"
+    assert pipeline.diffusion.cfg_schedule_min_scale == pytest.approx(1.25)
+    assert pipeline.diffusion.cfg_schedule_power == pytest.approx(2.0)
+
 def test_single_room_generation_basic(pipeline, neighbor_latents, graph_context):
     """Test basic single room generation without repair."""
     result = pipeline.generate_room(
@@ -182,6 +532,7 @@ def test_single_room_generation_basic(pipeline, neighbor_latents, graph_context)
     assert result.room_id == 0
     assert result.room_grid is not None
     assert result.latent is not None
+    assert isinstance(result.latent, torch.Tensor)
     assert result.neural_grid is not None
     assert not result.was_repaired
     assert result.repair_mask is None
@@ -355,6 +706,48 @@ def test_generate_dungeon_passes_boundary_and_position(monkeypatch, pipeline, si
         assert tuple(pos.shape) == (1, 2)
 
 
+def test_encode_room_grid_to_latent_returns_tensor(pipeline):
+    room_grid = np.zeros((ROOM_HEIGHT, ROOM_WIDTH), dtype=np.int32)
+    latent = pipeline._encode_room_grid_to_latent(room_grid)
+    assert isinstance(latent, torch.Tensor)
+    assert latent.dim() == 4
+    assert tuple(latent.shape[1:]) == (64, 4, 3)
+
+
+def test_generate_dungeon_emits_batch_diagnostics(monkeypatch, pipeline, simple_graph):
+    """Batch generation mode should record planner/chunk diagnostics in metrics."""
+    def fake_generate_room_batch(**kwargs):
+        out = {}
+        for room_id in kwargs.get('room_ids', []):
+            room_grid = np.zeros((ROOM_HEIGHT, ROOM_WIDTH), dtype=np.int32)
+            out[room_id] = RoomGenerationResult(
+                room_id=int(room_id),
+                room_grid=room_grid,
+                latent=torch.zeros(1, 64, 4, 3),
+                neural_grid=room_grid.copy(),
+                was_repaired=False,
+                repair_mask=None,
+                neural_probs=None,
+                metrics={},
+            )
+        return out
+
+    monkeypatch.setattr(pipeline, '_generate_room_batch', fake_generate_room_batch)
+    result = pipeline.generate_dungeon(
+        mission_graph=simple_graph,
+        num_diffusion_steps=1,
+        apply_repair=False,
+        enable_map_elites=False,
+        batch_independent_rooms=True,
+        max_batch_size=2,
+        seed=42,
+    )
+
+    diagnostics = result.metrics.get('batch_generation_diagnostics')
+    assert isinstance(diagnostics, list)
+    assert len(diagnostics) > 0
+
+
 def test_strict_adjacency_placement_preserves_all_edges(pipeline):
     """Strict placement must embed all graph edges as room-adjacent relationships."""
     G = nx.DiGraph()
@@ -368,15 +761,71 @@ def test_strict_adjacency_placement_preserves_all_edges(pipeline):
         assert manhattan == 1, f"Edge {u}->{v} is non-adjacent under strict placement"
 
 
-def test_strict_adjacency_placement_rejects_degree_over_four(pipeline):
-    """Grid embedding must fail fast when strict adjacency is mathematically impossible."""
+def test_strict_adjacency_placement_falls_back_on_degree_over_four(pipeline):
+    """When strict adjacency is impossible, placement must gracefully fall back."""
     G = nx.Graph()
     G.add_node(0)
     for nid in [1, 2, 3, 4, 5]:
         G.add_edge(0, nid)
 
-    with pytest.raises(ValueError, match="degree exceeds 4"):
-        pipeline._compute_strict_room_placement(G, room_ids=list(G.nodes()))
+    placement = pipeline._compute_strict_room_placement(G, room_ids=list(G.nodes()))
+    assert set(placement.keys()) == set(G.nodes())
+    assert len(set(placement.values())) == len(G.nodes())
+
+
+def test_stitch_rooms_public_api_handles_impossible_strict_graph(pipeline):
+    """Public stitch API must succeed for topologies that cannot be strict-embedded."""
+    G = nx.Graph()
+    G.add_node(0)
+    for nid in [1, 2, 3, 4, 5]:
+        G.add_edge(0, nid)
+
+    rooms = {}
+    for room_id in G.nodes():
+        room_grid = np.zeros((ROOM_HEIGHT, ROOM_WIDTH), dtype=np.int32)
+        rooms[room_id] = RoomGenerationResult(
+            room_id=int(room_id),
+            room_grid=room_grid,
+            latent=torch.zeros(1, 64, 4, 3),
+            neural_grid=room_grid.copy(),
+            was_repaired=False,
+            repair_mask=None,
+            neural_probs=None,
+            metrics={},
+        )
+
+    stitched = pipeline.stitch_rooms(rooms, G)
+    assert stitched.ndim == 2
+    assert stitched.shape[0] >= ROOM_HEIGHT
+    assert stitched.shape[1] >= ROOM_WIDTH
+
+
+def test_stitch_room_layout_supports_variable_room_sizes(pipeline):
+    """Shared stitch core should return bbox metadata for non-uniform room grids."""
+    G = nx.DiGraph()
+    G.add_edges_from([(0, 1)])
+
+    rooms = {
+        0: np.full((8, 6), 1, dtype=np.int32),
+        1: np.full((6, 10), 2, dtype=np.int32),
+    }
+
+    stitched = pipeline.stitch_room_layout(
+        rooms,
+        G,
+        enforce_room_dimensions=None,
+        carve_connections=True,
+    )
+
+    assert stitched.dungeon_grid.ndim == 2
+    assert set(stitched.layout_map.keys()) == {0, 1}
+
+    x0_min, y0_min, x0_max, y0_max = stitched.layout_map[0]
+    x1_min, y1_min, x1_max, y1_max = stitched.layout_map[1]
+    assert (y0_max - y0_min + 1, x0_max - x0_min + 1) == rooms[0].shape
+    assert (y1_max - y1_min + 1, x1_max - x1_min + 1) == rooms[1].shape
+    assert np.any(stitched.dungeon_grid[y0_min:y0_max + 1, x0_min:x0_max + 1] == 1)
+    assert np.any(stitched.dungeon_grid[y1_min:y1_max + 1, x1_min:x1_max + 1] == 2)
 
 
 # =============================================================================
@@ -460,6 +909,27 @@ def test_invalid_graph_context_fallback(pipeline, neighbor_latents):
     print("✓ Invalid graph context handled with fallback")
 
 
+def test_refiner_tile_vocab_uses_canonical_semantic_ids(pipeline):
+    """Symbolic refiner should not emit legacy out-of-schema tile IDs."""
+    tile_ids = {int(v) for v in getattr(pipeline.refiner, 'tile_types', [])}
+    assert 50 not in tile_ids
+
+
+def test_sanitize_semantic_grid_replaces_invalid_ids_with_fallback(pipeline):
+    """Invalid semantic IDs should be clamped to canonical palette."""
+    grid = np.array([[1, 50, 2], [999, 0, 3]], dtype=np.int32)
+    fallback = np.array([[1, 2, 2], [1, 0, 3]], dtype=np.int32)
+    sanitized, invalid_count, invalid_ids = pipeline._sanitize_semantic_grid(
+        grid,
+        fallback_grid=fallback,
+    )
+    assert int(invalid_count) == 2
+    assert sorted(int(v) for v in invalid_ids) == [50, 999]
+    assert sanitized.shape == grid.shape
+    assert int(sanitized[0, 1]) == int(fallback[0, 1])
+    assert int(sanitized[1, 0]) == int(fallback[1, 0])
+
+
 # =============================================================================
 # PERFORMANCE TESTS
 # =============================================================================
@@ -523,6 +993,8 @@ def test_complete_pipeline_smoke():
     # Check individual rooms
     for _room_id, room_result in result.rooms.items():
         assert room_result.room_grid.shape == (ROOM_HEIGHT, ROOM_WIDTH)
+        assert isinstance(room_result.latent, torch.Tensor)
+        assert room_result.latent.device.type == 'cpu'
         assert room_result.latent.shape == (1, 64, 4, 3)
         assert 'neural_grid_entropy' in room_result.metrics
     

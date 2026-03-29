@@ -179,7 +179,12 @@ class TestGraphGridAttention:
         node_positions = torch.randint(0, 10, (B, N_nodes, 2)).float()
         node_tpe = torch.randn(B, N_nodes, 8)
         
-        output = module(grid_features, graph_nodes, node_positions, node_tpe)
+        output = module(
+            grid_features,
+            graph_nodes,
+            node_positions=node_positions,
+            node_tpe=node_tpe,
+        )
         
         assert output.shape == grid_features.shape
     
@@ -253,6 +258,81 @@ class TestGraphGridAttention:
         
         output = module(grid_features, graph_nodes, node_mask=node_mask)
         assert output.shape == grid_features.shape
+
+    def test_graph_to_grid_linear_hedgehog_and_topology_map(self):
+        """Graph-grid conditioning should support linear Hedgehog attention and topology maps."""
+        from src.core.graph_grid_attention import SpatialGraphConditioner
+
+        module = SpatialGraphConditioner(
+            grid_dim=64,
+            graph_dim=128,
+            topology_channels=18,
+            attention_mode="linear_hedgehog",
+            hedgehog_feature_dim=16,
+        )
+
+        grid_features = torch.randn(2, 64, 8, 8)
+        graph_nodes = torch.randn(2, 5, 128)
+        node_positions = torch.randn(2, 5, 2)
+        node_tpe = torch.randn(2, 5, 8)
+        room_topology_map = torch.randn(2, 18, 16, 11)
+
+        output = module(
+            grid_features,
+            graph_nodes=graph_nodes,
+            node_positions=node_positions,
+            node_tpe=node_tpe,
+            room_topology_map=room_topology_map,
+        )
+        assert output.shape == grid_features.shape
+
+    def test_graph_to_grid_rejects_node_mask_shape_mismatch(self):
+        """Graph-grid conditioning should fail fast when mask length does not match node count."""
+        from src.core.graph_grid_attention import GraphToGridCrossAttention
+
+        module = GraphToGridCrossAttention(grid_dim=64, graph_dim=128)
+        grid_features = torch.randn(2, 64, 8, 8)
+        graph_nodes = torch.randn(2, 5, 128)
+        node_mask = torch.ones(2, 4)
+
+        with pytest.raises(ValueError, match="node_mask shape"):
+            module(grid_features, graph_nodes, node_mask=node_mask)
+
+    def test_graph_to_grid_legacy_positional_swap_requires_explicit_opt_in(self):
+        """Legacy positional node_positions/node_tpe calls should require an explicit compatibility flag."""
+        from src.core.graph_grid_attention import GraphToGridCrossAttention
+
+        module = GraphToGridCrossAttention(grid_dim=64, graph_dim=128)
+        grid_features = torch.randn(2, 64, 8, 8)
+        graph_nodes = torch.randn(2, 5, 128)
+        node_positions = torch.randn(2, 5, 2)
+        node_tpe = torch.randn(2, 5, 8)
+
+        with pytest.raises(ValueError, match="legacy positional arguments"):
+            module(grid_features, graph_nodes, node_positions, node_tpe)
+
+        compat_module = GraphToGridCrossAttention(
+            grid_dim=64,
+            graph_dim=128,
+            allow_legacy_argument_swap=True,
+        )
+        output = compat_module(grid_features, graph_nodes, node_positions, node_tpe)
+        assert output.shape == grid_features.shape
+
+    def test_spatial_graph_conditioner_rejects_topology_batch_mismatch(self):
+        """SpatialGraphConditioner should validate room-topology batch alignment."""
+        from src.core.graph_grid_attention import SpatialGraphConditioner
+
+        module = SpatialGraphConditioner(
+            grid_dim=64,
+            graph_dim=128,
+            topology_channels=18,
+        )
+        grid_features = torch.randn(2, 64, 8, 8)
+        room_topology_map = torch.randn(1, 18, 16, 11)
+
+        with pytest.raises(ValueError, match="room_topology_map batch size"):
+            module(grid_features, room_topology_map=room_topology_map)
 
 
 # ============================================================================

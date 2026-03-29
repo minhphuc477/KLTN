@@ -2497,7 +2497,13 @@ class StateSpaceAStar:
                     logger.debug('Hierarchical solver succeeded: %d states', h_states)
                     # ── UPGRADE 3: Store abstract plan for heuristic guidance ──
                     self._populate_abstract_plan(h_path)
-                    return True, h_path, h_states
+                    if self.representation == 'graph':
+                        return True, h_path, h_states
+                    logger.debug(
+                        'Hierarchical solver produced abstract path in %s mode; '
+                        'continuing to tile-level refinement',
+                        self.representation,
+                    )
                 else:
                     logger.debug('Hierarchical solver failed with %d states, '
                                 'falling back to macro-action', h_states)
@@ -2519,7 +2525,13 @@ class StateSpaceAStar:
                 graph_states_explored += m_states
                 if m_success:
                     logger.debug('Macro-action solver succeeded: %d states', m_states)
-                    return True, m_path, m_states
+                    if self.representation == 'graph':
+                        return True, m_path, m_states
+                    logger.debug(
+                        'Macro-action solver produced abstract path in %s mode; '
+                        'continuing to tile-level refinement',
+                        self.representation,
+                    )
                 else:
                     logger.debug('Macro-action solver failed with %d states, '
                                 'falling back to tile-level', m_states)
@@ -4990,7 +5002,7 @@ def create_test_map() -> np.ndarray:
     K = SEMANTIC_PALETTE['KEY_SMALL']
     L = SEMANTIC_PALETTE['DOOR_LOCKED']
     
-    # 11x16 test map - Simple solvable layout
+    # Demo map with 11 rows x 16 columns for standalone validator smoke tests.
     # Player starts at top-left, gets key, unlocks door, reaches triforce
     # Path: Start -> Key -> Door -> Triforce
     test_map = np.array([
@@ -5019,7 +5031,7 @@ if __name__ == "__main__":
     
     # Create test map
     demo_map = create_test_map()
-    print("Created test map (11x16)")
+    print("Created test map (11 rows x 16 cols)")
     print(f"Start: {np.where(demo_map == SEMANTIC_PALETTE['START'])}")
     print(f"Goal: {np.where(demo_map == SEMANTIC_PALETTE['TRIFORCE'])}")
     

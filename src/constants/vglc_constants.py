@@ -27,8 +27,11 @@ from src.core.definitions import (
 # ROOM DIMENSIONS (CRITICAL: NON-SQUARE!)
 # ==========================================
 
-# Standard VGLC Zelda room dimensions
-# These are GROUND TRUTH from the dataset
+# Standard room-array dimensions used by the processed local corpus.
+# Note: papers often describe Zelda rooms in screen terms as
+# "16 columns x 11 rows"; internally we store arrays in row-major order.
+# The processed corpus used here is therefore represented as
+# `(rows, cols) = (16, 11)`.
 ROOM_WIDTH_TILES: int = 11   # Horizontal (columns)
 ROOM_HEIGHT_TILES: int = 16  # Vertical (rows)
 

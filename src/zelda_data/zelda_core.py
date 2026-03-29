@@ -76,7 +76,7 @@ from src.zelda_data.matching.topology_utils import (
     room_signature,
 )
 from src.zelda_data.stitching.stitch_orchestration import (
-    build_global_grid_from_rooms,
+    build_stitched_room_layout_from_rooms,
     build_room_node_mappings,
     place_special_markers,
     project_output_metadata,
@@ -184,8 +184,8 @@ class MLFeatureExtractor:
 class Room:
     """A single dungeon room."""
     position: Tuple[int, int]  # (row, col) in VGLC grid
-    char_grid: np.ndarray      # Raw character grid (16x11)
-    semantic_grid: np.ndarray  # Semantic ID grid (16x11)
+    char_grid: np.ndarray      # Raw character grid [ROOM_HEIGHT, ROOM_WIDTH]
+    semantic_grid: np.ndarray  # Semantic ID grid [ROOM_HEIGHT, ROOM_WIDTH]
     doors: Dict[str, bool]     # {N, S, E, W} -> has_door
     has_stair: bool
     has_triforce: bool = False
@@ -1148,11 +1148,13 @@ class DungeonStitcher:
             rooms_remapped = dungeon.rooms
             pos_remap = {pos: pos for pos in dungeon.rooms.keys()}
 
-        global_grid, room_positions = build_global_grid_from_rooms(
+        stitched_layout = build_stitched_room_layout_from_rooms(
             rooms_remapped=rooms_remapped,
             room_height=ROOM_HEIGHT,
             room_width=ROOM_WIDTH,
         )
+        global_grid = stitched_layout.dungeon_grid
+        room_positions = stitched_layout.room_offsets
         
         # Connect doors by punching through walls
         self._connect_doors(global_grid, rooms_remapped)

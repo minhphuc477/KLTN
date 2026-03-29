@@ -23,7 +23,7 @@ import numpy as np
 from typing import List, Tuple, Optional
 from dataclasses import dataclass
 from enum import Enum
-from src.core.definitions import SEMANTIC_PALETTE
+from src.core.definitions import SEMANTIC_PALETTE, semantic_to_vglc_char
 
 logger = logging.getLogger(__name__)
 
@@ -458,23 +458,9 @@ class DungeonGenerator:
         Args:
             filename: Output file path
         """
-        # Map semantic IDs to VGLC characters
-        SEMANTIC_TO_CHAR = {
-            SEMANTIC_PALETTE['VOID']: '-',
-            SEMANTIC_PALETTE['FLOOR']: 'F',
-            SEMANTIC_PALETTE['WALL']: 'W',
-            SEMANTIC_PALETTE['BLOCK']: 'B',
-            SEMANTIC_PALETTE['DOOR_OPEN']: 'D',
-            SEMANTIC_PALETTE['DOOR_LOCKED']: 'D',
-            SEMANTIC_PALETTE['ENEMY']: 'M',
-            SEMANTIC_PALETTE['START']: 'S',
-            SEMANTIC_PALETTE['TRIFORCE']: 'T',
-            SEMANTIC_PALETTE['KEY_SMALL']: 'K'
-        }
-        
-        with open(filename, 'w') as f:
+        with open(filename, 'w', encoding='utf-8') as f:
             for row in self.grid:
-                line = ''.join(SEMANTIC_TO_CHAR.get(tile, 'F') for tile in row)
+                line = ''.join(semantic_to_vglc_char(int(tile)) for tile in row)
                 f.write(line + '\n')
         
         logger.info(f"Saved dungeon to {filename}")

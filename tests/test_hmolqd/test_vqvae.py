@@ -112,6 +112,22 @@ class TestDecoder:
 
 class TestSemanticVQVAE:
     """Tests for complete Semantic VQ-VAE."""
+
+    def test_canonical_latent_shape_matches_default_encoder_output(self):
+        """Shared latent-shape helper should match the default VQ-VAE encoder."""
+        from src.core.vqvae import SemanticVQVAE, canonical_latent_shape
+
+        model = SemanticVQVAE(
+            num_tile_classes=44,
+            latent_dim=32,
+            num_embeddings=64,
+        )
+
+        x = torch.randn(1, 44, 16, 11)
+        z_q, indices = model.encode(x)
+
+        assert tuple(z_q.shape[-2:]) == canonical_latent_shape((16, 11))
+        assert tuple(indices.shape[-2:]) == canonical_latent_shape((16, 11))
     
     def test_vqvae_forward(self):
         """Test VQ-VAE forward pass."""
