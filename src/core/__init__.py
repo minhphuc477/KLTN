@@ -48,6 +48,7 @@ from src.core.definitions import (
 from src.core.vqvae import SemanticVQVAE, create_vqvae
 from src.core.condition_encoder import DualStreamConditionEncoder, create_condition_encoder
 from src.core.latent_diffusion import LatentDiffusionModel, create_latent_diffusion
+from src.core.discrete_masked_model import DiscreteMaskedRoomModel, create_discrete_masked_model
 from src.core.logic_net import LogicNet
 from src.core.symbolic_refiner import (
     SymbolicRefiner, create_symbolic_refiner, LearnedTileStatistics
@@ -73,6 +74,8 @@ __all__ = [
     'create_condition_encoder',
     'LatentDiffusionModel',
     'create_latent_diffusion',
+    'DiscreteMaskedRoomModel',
+    'create_discrete_masked_model',
     'LogicNet',
     'SymbolicRefiner',
     'create_symbolic_refiner',

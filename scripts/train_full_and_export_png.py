@@ -17,7 +17,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 from collections import Counter
 
 import numpy as np
@@ -28,6 +28,8 @@ from PIL import Image
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
+from src.core.definitions import semantic_to_vglc_char
 
 
 def _run(cmd: list[str]) -> None:
@@ -40,8 +42,17 @@ def train_from_scratch(
     checkpoint_dir: Path,
     epochs_vqvae: int,
     epochs_diffusion: int,
+    epochs_fast_sampler: int,
+    epochs_masked_room: int,
     batch_size: int,
     seed: int,
+    graph_conditioning_mode: str,
+    condition_gnn_type: str,
+    topology_refinement_mode: str,
+    train_fast_sampler: bool,
+    train_masked_room: bool,
+    fast_sampler_steps: int,
+    masked_steps: int,
 ) -> Path:
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
     vqvae_cmd = [
@@ -78,9 +89,59 @@ def train_from_scratch(
         "--vqvae-checkpoint",
         str(checkpoint_dir / "vqvae_pretrained.pth"),
         "--graph-conditioning-mode",
-        "pooled",
+        str(graph_conditioning_mode),
+        "--condition-gnn-type",
+        str(condition_gnn_type),
+        "--topology-refinement-mode",
+        str(topology_refinement_mode),
     ]
     _run(diffusion_cmd)
+
+    if train_fast_sampler:
+        fast_cmd = [
+            sys.executable,
+            "-m",
+            "src.train_lcm",
+            "--base-diffusion-checkpoint",
+            str(checkpoint_dir / "best_model.pth"),
+            "--data-dir",
+            data_dir,
+            "--batch-size",
+            str(int(batch_size)),
+            "--epochs",
+            str(int(epochs_fast_sampler)),
+            "--num-inference-steps",
+            str(int(fast_sampler_steps)),
+            "--checkpoint-dir",
+            str(checkpoint_dir / "fast_sampler"),
+            "--device",
+            "auto",
+        ]
+        _run(fast_cmd)
+
+    if train_masked_room:
+        masked_cmd = [
+            sys.executable,
+            "-m",
+            "src.train_masked_room",
+            "--data-dir",
+            data_dir,
+            "--batch-size",
+            str(int(batch_size)),
+            "--epochs",
+            str(int(epochs_masked_room)),
+            "--graph-conditioning-mode",
+            str(graph_conditioning_mode),
+            "--condition-gnn-type",
+            str(condition_gnn_type),
+            "--masked-steps",
+            str(int(masked_steps)),
+            "--checkpoint-dir",
+            str(checkpoint_dir / "masked_room"),
+            "--device",
+            "auto",
+        ]
+        _run(masked_cmd)
 
     final_ckpt = checkpoint_dir / "final_model.pth"
     if not final_ckpt.exists():
@@ -156,85 +217,12 @@ def save_grid_png(grid: np.ndarray, out_path: Path, tile_px: int = 16) -> None:
 
 
 def _tile_to_vglc_char(tile: int) -> str:
-    # Dataset-style Zelda VGLC character mapping.
-    # Keep output in the canonical symbol family used by Processed/tloz*.txt.
-    mapping = {
-        0: "-",
-        1: "F",
-        2: "W",
-        3: "B",
-        10: "D",
-        11: "D",
-        12: "D",
-        13: "D",
-        14: "D",
-        15: "D",
-        20: "M",
-        21: "F",
-        22: "F",
-        23: "M",
-        30: "F",
-        31: "F",
-        32: "F",
-        33: "F",
-        40: "P",
-        41: "f",
-        42: "S",
-        43: "P",
-    }
-    return mapping.get(tile, "-")
+    return semantic_to_vglc_char(int(tile))
 
 
 def _infer_unknown_vglc_mapping(ids: np.ndarray) -> Dict[int, str]:
     """Infer dataset-style chars for unknown tile IDs from local context."""
-    known = {
-        k: v
-        for k, v in ((
-            0, "-",
-        ), (
-            1, "F",
-        ), (
-            2, "W",
-        ), (
-            3, "B",
-        ), (
-            10, "D",
-        ), (
-            11, "D",
-        ), (
-            12, "D",
-        ), (
-            13, "D",
-        ), (
-            14, "D",
-        ), (
-            15, "D",
-        ), (
-            20, "M",
-        ), (
-            21, "F",
-        ), (
-            22, "F",
-        ), (
-            23, "M",
-        ), (
-            30, "F",
-        ), (
-            31, "F",
-        ), (
-            32, "F",
-        ), (
-            33, "F",
-        ), (
-            40, "P",
-        ), (
-            41, "O",
-        ), (
-            42, "S",
-        ), (
-            43, "P",
-        ))
-    }
+    known = {tile: _tile_to_vglc_char(tile) for tile in range(44)}
     unique_ids = {int(v) for v in np.unique(ids)}
     unknown_ids = sorted(unique_ids - set(known.keys()))
     if not unknown_ids:
@@ -299,10 +287,28 @@ def generate_and_export(
     num_diffusion_steps: int,
     topology_population: int,
     topology_generations: int,
+    diffusion_cfg_schedule_mode: str,
+    diffusion_cfg_schedule_min_scale: float,
+    diffusion_cfg_schedule_power: float,
+    room_generator_mode: str,
+    masked_room_checkpoint: Optional[Path],
+    fast_sampling_checkpoint: Optional[Path],
+    use_fast_sampling: bool,
 ) -> None:
     from src.pipeline.dungeon_pipeline import create_pipeline
 
-    pipeline = create_pipeline(checkpoint_dir=str(checkpoint_dir), device="auto")
+    pipeline = create_pipeline(
+        checkpoint_dir=str(checkpoint_dir),
+        device="auto",
+        diffusion_cfg_schedule_mode=diffusion_cfg_schedule_mode,
+        diffusion_cfg_schedule_min_scale=diffusion_cfg_schedule_min_scale,
+        diffusion_cfg_schedule_power=diffusion_cfg_schedule_power,
+        room_generator_mode=str(room_generator_mode),
+        masked_room_checkpoint=(str(masked_room_checkpoint) if masked_room_checkpoint is not None else None),
+        masked_sampling_steps=max(1, min(12, int(num_diffusion_steps))),
+        fast_sampling_checkpoint=(str(fast_sampling_checkpoint) if fast_sampling_checkpoint is not None else None),
+        fast_sampling_steps=max(1, int(num_diffusion_steps)),
+    )
 
     result = pipeline.generate_dungeon(
         mission_graph=None,
@@ -314,6 +320,7 @@ def generate_and_export(
         guidance_scale=2.0,
         logic_guidance_scale=1.5,
         num_diffusion_steps=int(num_diffusion_steps),
+        use_fast_sampling=bool(use_fast_sampling),
         apply_repair=True,
         enable_map_elites=True,
     )
@@ -355,6 +362,20 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--num-diffusion-steps", type=int, default=50)
     p.add_argument("--topology-population", type=int, default=24)
     p.add_argument("--topology-generations", type=int, default=24)
+    p.add_argument("--graph-conditioning-mode", type=str, default="node_sequence")
+    p.add_argument("--condition-gnn-type", type=str, default="gcn")
+    p.add_argument("--topology-refinement-mode", type=str, default="gat2")
+    p.add_argument("--diffusion-cfg-schedule-mode", type=str, default="constant")
+    p.add_argument("--diffusion-cfg-schedule-min-scale", type=float, default=1.0)
+    p.add_argument("--diffusion-cfg-schedule-power", type=float, default=1.0)
+    p.add_argument("--train-fast-sampler", action="store_true")
+    p.add_argument("--epochs-fast-sampler", type=int, default=5)
+    p.add_argument("--fast-sampler-steps", type=int, default=4)
+    p.add_argument("--train-masked-room", action="store_true")
+    p.add_argument("--epochs-masked-room", type=int, default=20)
+    p.add_argument("--masked-steps", type=int, default=8)
+    p.add_argument("--room-generator-mode", type=str, default="latent_diffusion")
+    p.add_argument("--use-fast-sampling", action="store_true")
     p.add_argument("--skip-train", action="store_true")
     return p.parse_args()
 
@@ -376,11 +397,27 @@ def main() -> None:
             checkpoint_dir=ckpt_dir,
             epochs_vqvae=args.epochs_vqvae,
             epochs_diffusion=args.epochs_diffusion,
+            epochs_fast_sampler=args.epochs_fast_sampler,
+            epochs_masked_room=args.epochs_masked_room,
             batch_size=args.batch_size,
             seed=args.seed,
+            graph_conditioning_mode=args.graph_conditioning_mode,
+            condition_gnn_type=args.condition_gnn_type,
+            topology_refinement_mode=args.topology_refinement_mode,
+            train_fast_sampler=bool(args.train_fast_sampler),
+            train_masked_room=bool(args.train_masked_room),
+            fast_sampler_steps=args.fast_sampler_steps,
+            masked_steps=args.masked_steps,
         )
 
     split_component_checkpoints(final_ckpt=final_ckpt, out_dir=ckpt_dir)
+
+    fast_sampler_checkpoint = ckpt_dir / "fast_sampler" / "fast_sampler_best.pth"
+    if not fast_sampler_checkpoint.exists():
+        fast_sampler_checkpoint = None
+    masked_room_checkpoint = ckpt_dir / "masked_room" / "masked_room_best.pth"
+    if not masked_room_checkpoint.exists():
+        masked_room_checkpoint = None
 
     generate_and_export(
         checkpoint_dir=ckpt_dir,
@@ -390,6 +427,13 @@ def main() -> None:
         num_diffusion_steps=args.num_diffusion_steps,
         topology_population=args.topology_population,
         topology_generations=args.topology_generations,
+        diffusion_cfg_schedule_mode=args.diffusion_cfg_schedule_mode,
+        diffusion_cfg_schedule_min_scale=args.diffusion_cfg_schedule_min_scale,
+        diffusion_cfg_schedule_power=args.diffusion_cfg_schedule_power,
+        room_generator_mode=args.room_generator_mode,
+        masked_room_checkpoint=masked_room_checkpoint,
+        fast_sampling_checkpoint=fast_sampler_checkpoint,
+        use_fast_sampling=bool(args.use_fast_sampling),
     )
 
     print("[DONE] Outputs:")
