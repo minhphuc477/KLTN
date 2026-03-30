@@ -4,6 +4,9 @@ This document captures the current end-to-end architecture in code.
 The original dated snapshot is archived at
 `docs/archive/2026-q1/CURRENT_ARCHITECTURE_FULL_DRAWING_2026_03_25.md`.
 
+Canonical training now runs through `python main.py train --config configs/zelda_hmolqd.yaml ...`.
+`python -m src.train ...` remains available only as a thin compatibility wrapper over the same validated path.
+
 ## 1) Full System Architecture
 
 ```mermaid
@@ -11,7 +14,7 @@ flowchart TB
     %% =========================
     %% Entry points
     %% =========================
-    U1[main.py legacy validation path]
+    U1[main.py train canonical config path]
     U2[gui_runner.py interactive path]
     U3[scripts/train_full_and_export_png.py run/export path]
 
@@ -81,8 +84,8 @@ flowchart TB
         B3_label["Block III Dual-Stream Condition Encoder"]
         B3A[DualStreamConditionEncoder]
         B3B[LocalStreamEncoder boundary and neighbors]
-        B3C[GlobalStreamEncoder graph GNN]
-        B3D[GraphToGridCrossAttention]
+        B3C[GlobalStreamEncoder graph GNN plus current-room distance]
+        B3D[GraphToGridCrossAttention with distance-aware bias]
         B3F[SpatialGraphConditioner]
         B3E[RoomTopologyConditioner]
     end
@@ -99,7 +102,7 @@ flowchart TB
     subgraph B4
         B4_label["Block IV Latent Diffusion"]
         B4A[LatentDiffusionModel]
-        B4B[CFG cfg_scale plus conditional dropout]
+        B4B[CFG cfg_scale plus conditional dropout plus Min-SNR]
         B4C[DDIM or DDPM sampling]
         B4D[Topology refinement mode none lightweight gat2]
         B4E[Latent boundary masking and inpaint]
@@ -116,7 +119,7 @@ flowchart TB
     %% =========================
     subgraph B5
         B5_label["Block V LogicNet Guidance"]
-        B5A[LogicNet differentiable constraints]
+        B5A[LogicNet room-grid plus topology-trace plus anchor losses]
         B5B[GradientGuidance inside diffusion]
     end
 
@@ -203,7 +206,7 @@ sequenceDiagram
 
     loop for each room_id in deterministic generation order
         Pipe->>Cond: encode local plus global context
-        Pipe->>Diff: sample latent DDIM or DDPM with CFG and optional LogicNet guidance
+        Pipe->>Diff: sample latent DDIM or DDPM with CFG and optional LogicNet room-topology guidance
         Diff-->>Pipe: z_latent
         Pipe->>Pipe: decode via VQ-VAE logits to neural_grid
         alt apply_repair true
@@ -251,7 +254,16 @@ flowchart LR
     H --> M --> N
 ```
 
-## 4) Effective Hyperparameter Layers (Current)
+## 4) Canonical Training and Schema Lock
+
+- Canonical experiment surface: `main.py train` plus the validated YAML/CLI config system in `src/config_system.py`.
+- Legacy compatibility entrypoint: `src/train.py` forwards to `main.py train` so there is no second divergent training surface anymore.
+- Explicit dataset lock: `dataset.schema_profile=zelda_v1` makes the current `16x11`, `44`-class, `6/8/8` graph schema contract visible in config and metadata instead of hiding it in validators.
+- Current canonical YAML: `configs/zelda_hmolqd.yaml` now uses the reduced small-data-balanced profile (`diffusion.model_channels=96`, `diffusion.condition_hidden_dim=192`, `diffusion.condition_num_gnn_layers=2`, mirrored in `masked_room`) recommended by the audit.
+- Runtime guardrails: diffusion and masked-room training now log trainable parameter counts and warn when the configured model looks oversized relative to the available Zelda sample count.
+- Composite diffusion checkpoints now reconstruct bundled diffusion, condition-encoder, and LogicNet submodules from embedded config values instead of silently assuming default widths.
+
+## 5) Effective Hyperparameter Layers (Current)
 
 ```mermaid
 flowchart TB
@@ -266,7 +278,7 @@ flowchart TB
     HP1 --> HP4
 ```
 
-## 5) Component Index (Code Locations)
+## 6) Component Index (Code Locations)
 
 - Pipeline facade and orchestration: src/pipeline/dungeon_pipeline.py
 - Topology evolution: src/generation/evolutionary_director.py

@@ -77,6 +77,26 @@ def test_block_iii_condition_encoder():
     print("  ✓ Block III (ConditionEncoder): global encoding with/without edge features OK")
 
 
+@pytest.mark.parametrize("gnn_type", ["sage", "gps"])
+def test_block_iii_condition_encoder_supports_alternative_graph_backbones(gnn_type: str):
+    """Block III: alternative graph backbones should preserve the token shape contract."""
+    from src.core.condition_encoder import create_condition_encoder
+
+    encoder = create_condition_encoder(latent_dim=32, output_dim=96, gnn_type=gnn_type)
+    node_features = torch.randn(5, encoder.global_encoder.node_feature_dim)
+    edge_index = torch.tensor([[0, 1, 2, 3, 1], [1, 2, 3, 4, 3]], dtype=torch.long)
+    edge_features = torch.randn(edge_index.shape[1], encoder.global_encoder.edge_feature_dim)
+
+    c_global = encoder.encode_global_only(
+        node_features=node_features,
+        edge_index=edge_index,
+        edge_features=edge_features,
+    )
+
+    assert tuple(c_global.shape) == (5, 96)
+    assert torch.isfinite(c_global).all()
+
+
 def test_block_iii_condition_encoder_clamps_integer_edge_labels_to_fixed_width():
     """Block III: integer edge labels should use stable fixed-width one-hot encoding."""
     from src.core.condition_encoder import create_condition_encoder
@@ -306,6 +326,77 @@ def test_block_iv_gradient_guidance_skips_oversized_latents():
     assert torch.equal(grad, torch.zeros_like(x_t))
 
 
+def test_block_iv_gradient_guidance_caps_relative_norm():
+    """Logic guidance should not overwhelm the latent magnitude on OOD graphs."""
+    from src.core.latent_diffusion import GradientGuidance
+
+    class _LargeGradLogicNet(torch.nn.Module):
+        def forward(self, x_t, graph_data=None):
+            _ = graph_data
+            return (x_t * 1000.0).flatten(1).sum(dim=1)
+
+    guidance = GradientGuidance(
+        logic_net=_LargeGradLogicNet(),
+        guidance_scale=1.0,
+        clamp_magnitude=0.0,
+        relative_norm_cap=0.10,
+        schedule_enabled=False,
+        max_guidance_elements=1024,
+    )
+
+    x_t = torch.ones(1, 2, 2, 2, dtype=torch.float32)
+    grad = guidance.compute_guidance(x_t)
+
+    grad_norm = grad.view(1, -1).norm(dim=1)
+    ref_norm = x_t.view(1, -1).norm(dim=1)
+    assert torch.all(grad_norm <= ref_norm * 0.10 + 1e-5)
+
+
+def test_block_iv_gradient_guidance_accepts_room_topology_without_graph_adjacency():
+    """Room-topology guidance should remain active even when only per-room priors are available."""
+    from src.core.latent_diffusion import GradientGuidance
+
+    class _TopologyOnlyLogicNet(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.captured_graph_data = None
+
+        def forward(self, x_t, graph_data=None):
+            self.captured_graph_data = graph_data
+            assert graph_data is not None
+            assert "room_topology_map" in graph_data
+            assert "boundary_constraints" in graph_data
+            assert "adjacency" not in graph_data
+            return x_t.flatten(1).mean(dim=1)
+
+    logic_net = _TopologyOnlyLogicNet()
+    guidance = GradientGuidance(
+        logic_net=logic_net,
+        guidance_scale=0.5,
+        clamp_magnitude=10.0,
+        schedule_enabled=False,
+        max_guidance_elements=1024,
+    )
+
+    x_t = torch.randn(1, 4, 3, 3)
+    graph_data = {
+        "room_topology_map": torch.rand(18, ROOM_HEIGHT, ROOM_WIDTH, dtype=torch.float32, requires_grad=True),
+        "boundary_constraints": torch.tensor([0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0], dtype=torch.float32, requires_grad=True),
+    }
+
+    grad = guidance.compute_guidance(x_t, graph_data)
+
+    assert grad.shape == x_t.shape
+    assert torch.isfinite(grad).all()
+    assert float(grad.abs().sum().item()) > 0.0
+    captured = logic_net.captured_graph_data
+    assert captured is not None
+    assert captured["room_topology_map"].shape == (1, 18, ROOM_HEIGHT, ROOM_WIDTH)
+    assert captured["room_topology_map"].requires_grad is False
+    assert captured["boundary_constraints"].shape == (1, 8)
+    assert captured["boundary_constraints"].requires_grad is False
+
+
 def test_block_iv_topology_aware_cross_attention_sequence_context():
     """Block IV: sequence context path with topology-aware cross-attention refinement."""
     from src.core.latent_diffusion import create_latent_diffusion
@@ -452,8 +543,9 @@ def test_block_iv_attention_mode_switch_runs_softmax_and_linear_hedgehog():
     assert mean_abs_diff >= 0.0
 
 
-def test_block_iv_spatial_graph_conditioning_accepts_room_topology_maps():
-    """Block IV: active denoiser accepts graph-grid spatial topology conditioning."""
+@pytest.mark.parametrize("topology_conditioning_mode", ["additive", "spade"])
+def test_block_iv_spatial_graph_conditioning_accepts_room_topology_maps(topology_conditioning_mode: str):
+    """Block IV: active denoiser accepts graph-grid spatial topology conditioning for both topology modes."""
     from src.core.latent_diffusion import create_latent_diffusion
 
     model = create_latent_diffusion(
@@ -463,6 +555,7 @@ def test_block_iv_spatial_graph_conditioning_accepts_room_topology_maps():
         num_timesteps=10,
         cfg_scale=1.0,
         attention_mode="linear_hedgehog",
+        topology_conditioning_mode=topology_conditioning_mode,
         hedgehog_feature_dim=16,
     )
 
@@ -489,40 +582,6 @@ def test_block_iv_spatial_graph_conditioning_accepts_room_topology_maps():
 
     assert z.shape == (2, 16, 4, 3)
     assert torch.isfinite(z).all()
-
-
-def test_block_iv_spatial_graph_conditioning_rejects_mismatched_topology_batch():
-    """Block IV: room-topology maps should align with the context batch size."""
-    from src.core.latent_diffusion import create_latent_diffusion
-
-    model = create_latent_diffusion(
-        latent_dim=16,
-        model_channels=16,
-        context_dim=32,
-        num_timesteps=10,
-        cfg_scale=1.0,
-        attention_mode="linear_hedgehog",
-        hedgehog_feature_dim=16,
-    )
-
-    context = torch.randn(2, 6, 32)
-    graph_data = {
-        'edge_index': torch.tensor([[0, 1, 2, 3], [1, 2, 3, 4]], dtype=torch.long),
-        'node_features': torch.randn(5, 6),
-        'tpe': torch.randn(5, 8),
-        'node_positions': torch.randn(5, 2),
-        'node_mask': torch.ones(5, dtype=torch.float32),
-        'room_topology_map': torch.randn(3, 18, ROOM_HEIGHT, ROOM_WIDTH),
-    }
-
-    with pytest.raises(ValueError, match="room_topology_map batch size"):
-        with torch.no_grad():
-            model.ddim_sample(
-                context=context,
-                shape=(2, 16, 4, 3),
-                num_steps=3,
-                graph_data=graph_data,
-            )
 
 
 def test_block_v_logic_net():

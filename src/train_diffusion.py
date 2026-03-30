@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any, Tuple, List
 
 import torch
+import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader
 
@@ -34,9 +35,32 @@ from src.core.condition_encoder import DualStreamConditionEncoder, create_condit
 from src.core.definitions import ROOM_HEIGHT, ROOM_WIDTH
 # Use Block V LogicNet (with temperature annealing), not legacy src.ml.logic_net
 from src.core.logic_net import LogicNet
+from src.pipeline.graph_features import (
+    align_nodewise_tensor,
+    build_default_node_positions,
+    compute_current_node_distance_features,
+    compute_rwse_features,
+)
+from src.config_system import merge_config
 from src.utils.checkpoint import MetricsLogger, write_checkpoint_metadata
+from src.utils.distributed import (
+    DistributedContext,
+    average_gradients,
+    destroy_distributed,
+    initialize_distributed,
+    make_distributed_sampler,
+    maybe_barrier,
+    reduce_scalar_metrics,
+    resolve_device,
+)
+from src.utils.model_capacity import (
+    count_parameters,
+    format_parameter_count,
+    log_capacity_guardrails,
+)
 
 logger = logging.getLogger(__name__)
+CARDINAL_DIRECTIONS = ("N", "S", "E", "W")
 
 
 # =============================================================================
@@ -51,8 +75,15 @@ class DiffusionTrainingConfig:
         # Data
         data_dir: str = "Data/The Legend of Zelda",
         batch_size: int = 4,
+        num_workers: int = 0,
+        pin_memory: bool = True,
+        drop_last: bool = True,
+        shuffle_train: bool = True,
+        shuffle_val: bool = False,
+        normalize: bool = True,
         use_vglc: bool = True,
         room_level: bool = True,
+        num_classes: int = 44,
         
         # VQ-VAE (frozen encoder)
         vqvae_checkpoint: Optional[str] = None,
@@ -61,23 +92,66 @@ class DiffusionTrainingConfig:
         latent_dim: int = 64,
         model_channels: int = 128,
         context_dim: int = 256,
-        condition_gnn_type: str = "gcn",  # gcn | gat | sage
+        unet_channel_mult: Tuple[int, ...] = (1, 2, 4),
+        unet_num_res_blocks: int = 2,
+        unet_attention_resolutions: Tuple[int, ...] = (1, 2),
+        unet_num_heads: int = 8,
+        unet_dropout: float = 0.1,
+        condition_hidden_dim: int = 256,
+        condition_num_gnn_layers: int = 3,
+        condition_num_attention_heads: int = 8,
+        condition_dropout: float = 0.1,
+        condition_gnn_type: str = "gcn",  # gcn | gat | sage | gps
         num_timesteps: int = 1000,
         schedule_type: str = "cosine",
         topology_refinement_mode: str = "gat2",  # none | lightweight | gat2
+        attention_mode: str = "softmax",
+        topology_conditioning_mode: str = "additive",
+        hedgehog_feature_dim: int = 32,
+        graph_auto_linear_attention_nodes: int = 128,
+        spatial_graph_gate_init: float = -2.0,
+        spatial_topology_gate_init: float = -2.0,
+        use_teacher_forced_neighbor_latents: bool = True,
+        use_current_node_distance_features: bool = True,
+        current_node_distance_max: int = 8,
+        room_topology_channels: int = 18,
+        cfg_dropout_prob: float = 0.1,
+        cfg_scale: float = 3.0,
+        cfg_schedule_mode: str = "constant",
+        cfg_schedule_min_scale: float = 1.0,
+        cfg_schedule_power: float = 1.0,
+        prediction_type: str = "epsilon",
+        min_snr_gamma: float = 5.0,
         
         # LogicNet
         num_logic_iterations: int = 30,
+        logic_topology_trace_weight: float = 0.25,
+        logic_topology_anchor_weight: float = 0.25,
         guidance_scale: float = 1.0,
+        guidance_clamp_magnitude: float = 1.0,
+        guidance_relative_norm_cap: float = 0.25,
+        guidance_schedule_enabled: bool = True,
+        guidance_active_fraction: float = 0.30,
+        guidance_decay_power: float = 1.0,
+        guidance_max_graph_nodes: int = 512,
+        guidance_max_key_lock_pairs: int = 2048,
+        guidance_max_guidance_elements: int = 2_000_000,
         
         # Training
         epochs: int = 100,
         learning_rate: float = 1e-4,
+        optimizer_weight_decay: float = 1e-5,
         alpha_visual: float = 1.0,   # Diffusion loss weight
         alpha_logic: float = 0.1,     # Solvability loss weight
         logic_loss_mode: str = "predicted_latent",  # predicted_latent | detached_real
         graph_conditioning_mode: str = "node_sequence",  # node_sequence | pooled
         warmup_epochs: int = 5,       # Epochs before adding logic loss
+        scheduler_t0: int = 10,
+        scheduler_t_mult: int = 2,
+        scheduler_eta_min: float = 1e-6,
+        ema_decay: float = 0.9999,
+        grad_clip_norm: float = 1.0,
+        validation_num_samples: int = 4,
         
         # Checkpointing
         checkpoint_dir: str = "./checkpoints",
@@ -85,25 +159,89 @@ class DiffusionTrainingConfig:
         
         # Device
         device: str = "auto",
+        distributed_enabled: bool = False,
+        distributed_backend: str = "nccl",
+        distributed_find_unused_parameters: bool = False,
         
         # Quick mode
         quick: bool = False,
     ):
         self.data_dir = data_dir
         self.batch_size = batch_size
+        self.num_workers = int(max(0, num_workers))
+        self.pin_memory = bool(pin_memory)
+        self.drop_last = bool(drop_last)
+        self.shuffle_train = bool(shuffle_train)
+        self.shuffle_val = bool(shuffle_val)
+        self.normalize = bool(normalize)
         self.use_vglc = use_vglc
         self.room_level = bool(room_level)
+        self.num_classes = int(num_classes)
         
         self.vqvae_checkpoint = vqvae_checkpoint
         
         self.latent_dim = latent_dim
-        self.model_channels = model_channels
-        self.context_dim = context_dim
+        self.model_channels = int(model_channels)
+        self.context_dim = int(context_dim)
+
+        def _normalize_int_sequence(
+            name: str,
+            values: Any,
+            *,
+            allow_zero: bool = True,
+            allow_empty: bool = False,
+        ) -> Tuple[int, ...]:
+            if isinstance(values, str):
+                parts = [part.strip() for part in values.split(",") if part.strip()]
+                values = [int(part) for part in parts]
+            elif isinstance(values, torch.Tensor):
+                values = values.detach().cpu().tolist()
+            elif not isinstance(values, (list, tuple)):
+                raise TypeError(f"{name} must be a list/tuple of integers, got {type(values).__name__}.")
+
+            seq = tuple(int(v) for v in values)
+            if not seq and not allow_empty:
+                raise ValueError(f"{name} must be non-empty.")
+            lower_bound = 0 if allow_zero else 1
+            if any(v < lower_bound for v in seq):
+                qualifier = "non-negative" if allow_zero else "positive"
+                raise ValueError(f"{name} must contain only {qualifier} integers, got {seq!r}.")
+            return seq
+
+        self.unet_channel_mult = _normalize_int_sequence(
+            "unet_channel_mult",
+            unet_channel_mult,
+            allow_zero=False,
+        )
+        self.unet_num_res_blocks = int(max(1, unet_num_res_blocks))
+        self.unet_attention_resolutions = _normalize_int_sequence(
+            "unet_attention_resolutions",
+            unet_attention_resolutions,
+            allow_zero=True,
+            allow_empty=True,
+        )
+        self.unet_num_heads = int(max(1, unet_num_heads))
+        self.unet_dropout = float(max(0.0, min(1.0, unet_dropout)))
+        if any((self.model_channels * mult) % self.unet_num_heads != 0 for mult in self.unet_channel_mult):
+            raise ValueError(
+                "Every attention-enabled U-Net channel width must be divisible by unet_num_heads; "
+                f"got model_channels={self.model_channels}, unet_channel_mult={self.unet_channel_mult}, "
+                f"unet_num_heads={self.unet_num_heads}."
+            )
+        max_level = len(self.unet_channel_mult) - 1
+        if any(level > max_level for level in self.unet_attention_resolutions):
+            raise ValueError(
+                f"unet_attention_resolutions={self.unet_attention_resolutions!r} contains a level above {max_level}."
+            )
+        self.condition_hidden_dim = int(condition_hidden_dim)
+        self.condition_num_gnn_layers = int(max(1, condition_num_gnn_layers))
+        self.condition_num_attention_heads = int(max(1, condition_num_attention_heads))
+        self.condition_dropout = float(max(0.0, min(1.0, condition_dropout)))
         gnn_type = str(condition_gnn_type).strip().lower()
-        if gnn_type not in {"gcn", "gat", "sage"}:
+        if gnn_type not in {"gcn", "gat", "sage", "gps"}:
             raise ValueError(
                 f"Invalid condition_gnn_type={condition_gnn_type!r}. "
-                "Expected 'gcn', 'gat', or 'sage'."
+                "Expected 'gcn', 'gat', 'sage', or 'gps'."
             )
         self.condition_gnn_type = gnn_type
         self.num_timesteps = num_timesteps
@@ -117,12 +255,52 @@ class DiffusionTrainingConfig:
                 "Expected 'none', 'lightweight', or 'gat2'."
             )
         self.topology_refinement_mode = trm
+        attn_mode = str(attention_mode).strip().lower()
+        if attn_mode not in {"softmax", "linear_hedgehog"}:
+            raise ValueError(
+                f"Invalid attention_mode={attention_mode!r}. "
+                "Expected 'softmax' or 'linear_hedgehog'."
+            )
+        self.attention_mode = attn_mode
+        topo_mode = str(topology_conditioning_mode).strip().lower()
+        if topo_mode not in {"additive", "spade"}:
+            raise ValueError(
+                f"Invalid topology_conditioning_mode={topology_conditioning_mode!r}. "
+                "Expected 'additive' or 'spade'."
+            )
+        self.topology_conditioning_mode = topo_mode
+        self.hedgehog_feature_dim = int(max(4, hedgehog_feature_dim))
+        self.graph_auto_linear_attention_nodes = int(max(0, graph_auto_linear_attention_nodes))
+        self.spatial_graph_gate_init = float(spatial_graph_gate_init)
+        self.spatial_topology_gate_init = float(spatial_topology_gate_init)
+        self.use_teacher_forced_neighbor_latents = bool(use_teacher_forced_neighbor_latents)
+        self.use_current_node_distance_features = bool(use_current_node_distance_features)
+        self.current_node_distance_max = int(max(1, current_node_distance_max))
+        self.room_topology_channels = int(max(1, room_topology_channels))
+        self.cfg_dropout_prob = float(max(0.0, min(1.0, cfg_dropout_prob)))
+        self.cfg_scale = float(max(0.0, cfg_scale))
+        self.cfg_schedule_mode = str(cfg_schedule_mode).strip().lower()
+        self.cfg_schedule_min_scale = float(max(0.0, cfg_schedule_min_scale))
+        self.cfg_schedule_power = float(max(1e-6, cfg_schedule_power))
+        self.prediction_type = str(prediction_type).strip().lower()
+        self.min_snr_gamma = float(max(0.0, min_snr_gamma))
         
         self.num_logic_iterations = num_logic_iterations
+        self.logic_topology_trace_weight = float(max(0.0, logic_topology_trace_weight))
+        self.logic_topology_anchor_weight = float(max(0.0, logic_topology_anchor_weight))
         self.guidance_scale = guidance_scale
+        self.guidance_clamp_magnitude = float(max(0.0, guidance_clamp_magnitude))
+        self.guidance_relative_norm_cap = float(max(0.0, guidance_relative_norm_cap))
+        self.guidance_schedule_enabled = bool(guidance_schedule_enabled)
+        self.guidance_active_fraction = float(max(0.05, min(1.0, guidance_active_fraction)))
+        self.guidance_decay_power = float(max(0.25, guidance_decay_power))
+        self.guidance_max_graph_nodes = int(max(1, guidance_max_graph_nodes))
+        self.guidance_max_key_lock_pairs = int(max(0, guidance_max_key_lock_pairs))
+        self.guidance_max_guidance_elements = int(max(1, guidance_max_guidance_elements))
         
         self.epochs = epochs if not quick else 2
         self.learning_rate = learning_rate
+        self.optimizer_weight_decay = float(max(0.0, optimizer_weight_decay))
         self.alpha_visual = alpha_visual
         self.alpha_logic = alpha_logic
         mode = str(logic_loss_mode).strip().lower()
@@ -140,6 +318,12 @@ class DiffusionTrainingConfig:
             )
         self.graph_conditioning_mode = gmode
         self.warmup_epochs = warmup_epochs
+        self.scheduler_t0 = int(max(1, scheduler_t0))
+        self.scheduler_t_mult = int(max(1, scheduler_t_mult))
+        self.scheduler_eta_min = float(max(0.0, scheduler_eta_min))
+        self.ema_decay = float(min(0.999999, max(0.0, ema_decay)))
+        self.grad_clip_norm = float(max(0.0, grad_clip_norm))
+        self.validation_num_samples = int(max(1, validation_num_samples))
         
         self.checkpoint_dir = checkpoint_dir
         self.save_every = save_every
@@ -148,11 +332,185 @@ class DiffusionTrainingConfig:
             self.device = "cuda" if torch.cuda.is_available() else "cpu"
         else:
             self.device = device
+        self.distributed_enabled = bool(distributed_enabled)
+        backend = str(distributed_backend).strip().lower()
+        if backend not in {"nccl", "gloo"}:
+            raise ValueError(
+                f"Invalid distributed_backend={distributed_backend!r}. Expected 'nccl' or 'gloo'."
+            )
+        self.distributed_backend = backend
+        self.distributed_find_unused_parameters = bool(distributed_find_unused_parameters)
         
         self.quick = quick
     
     def to_dict(self) -> Dict[str, Any]:
         return {k: v for k, v in self.__dict__.items() if not k.startswith('_')}
+
+
+def diffusion_training_kwargs_from_resolved_config(
+    config: Dict[str, Any],
+    *,
+    fallback_vqvae_checkpoint: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Build DiffusionTrainingConfig kwargs from the validated global config payload."""
+    stage = config["diffusion"]
+    dataset = config["dataset"]
+    runtime = config["runtime"]
+    distributed = config["distributed"]
+    ckpt_path = stage["vqvae_checkpoint"] or fallback_vqvae_checkpoint
+    return {
+        "data_dir": dataset["data_dir"],
+        "batch_size": dataset["batch_size"],
+        "num_workers": dataset["num_workers"],
+        "pin_memory": dataset["pin_memory"],
+        "drop_last": dataset["drop_last"],
+        "shuffle_train": dataset["shuffle_train"],
+        "shuffle_val": dataset["shuffle_val"],
+        "normalize": dataset["normalize"],
+        "use_vglc": dataset["use_vglc"],
+        "room_level": dataset["room_level"],
+        "num_classes": dataset["num_classes"],
+        "vqvae_checkpoint": ckpt_path,
+        "latent_dim": stage["latent_dim"],
+        "model_channels": stage["model_channels"],
+        "context_dim": stage["context_dim"],
+        "unet_channel_mult": tuple(stage["unet_channel_mult"]),
+        "unet_num_res_blocks": stage["unet_num_res_blocks"],
+        "unet_attention_resolutions": tuple(stage["unet_attention_resolutions"]),
+        "unet_num_heads": stage["unet_num_heads"],
+        "unet_dropout": stage["unet_dropout"],
+        "condition_hidden_dim": stage["condition_hidden_dim"],
+        "condition_num_gnn_layers": stage["condition_num_gnn_layers"],
+        "condition_num_attention_heads": stage["condition_num_attention_heads"],
+        "condition_dropout": stage["condition_dropout"],
+        "condition_gnn_type": stage["condition_gnn_type"],
+        "num_timesteps": stage["num_timesteps"],
+        "schedule_type": stage["schedule_type"],
+        "topology_refinement_mode": stage["topology_refinement_mode"],
+        "attention_mode": stage["attention_mode"],
+        "topology_conditioning_mode": stage["topology_conditioning_mode"],
+        "hedgehog_feature_dim": stage["hedgehog_feature_dim"],
+        "graph_auto_linear_attention_nodes": stage["graph_auto_linear_attention_nodes"],
+        "spatial_graph_gate_init": stage["spatial_graph_gate_init"],
+        "spatial_topology_gate_init": stage["spatial_topology_gate_init"],
+        "use_teacher_forced_neighbor_latents": stage["use_teacher_forced_neighbor_latents"],
+        "use_current_node_distance_features": stage["use_current_node_distance_features"],
+        "current_node_distance_max": stage["current_node_distance_max"],
+        "room_topology_channels": stage["room_topology_channels"],
+        "cfg_dropout_prob": stage["cfg_dropout_prob"],
+        "cfg_scale": stage["cfg_scale"],
+        "cfg_schedule_mode": stage["cfg_schedule_mode"],
+        "cfg_schedule_min_scale": stage["cfg_schedule_min_scale"],
+        "cfg_schedule_power": stage["cfg_schedule_power"],
+        "prediction_type": stage["prediction_type"],
+        "min_snr_gamma": stage["min_snr_gamma"],
+        "num_logic_iterations": stage["num_logic_iterations"],
+        "logic_topology_trace_weight": stage["logic_topology_trace_weight"],
+        "logic_topology_anchor_weight": stage["logic_topology_anchor_weight"],
+        "guidance_scale": stage["guidance_scale"],
+        "guidance_clamp_magnitude": stage["guidance_clamp_magnitude"],
+        "guidance_relative_norm_cap": stage["guidance_relative_norm_cap"],
+        "guidance_schedule_enabled": stage["guidance_schedule_enabled"],
+        "guidance_active_fraction": stage["guidance_active_fraction"],
+        "guidance_decay_power": stage["guidance_decay_power"],
+        "guidance_max_graph_nodes": stage["guidance_max_graph_nodes"],
+        "guidance_max_key_lock_pairs": stage["guidance_max_key_lock_pairs"],
+        "guidance_max_guidance_elements": stage["guidance_max_guidance_elements"],
+        "epochs": stage["epochs"],
+        "learning_rate": stage["learning_rate"],
+        "optimizer_weight_decay": stage["optimizer_weight_decay"],
+        "alpha_visual": stage["alpha_visual"],
+        "alpha_logic": stage["alpha_logic"],
+        "logic_loss_mode": stage["logic_loss_mode"],
+        "graph_conditioning_mode": stage["graph_conditioning_mode"],
+        "warmup_epochs": stage["warmup_epochs"],
+        "scheduler_t0": stage["scheduler_t0"],
+        "scheduler_t_mult": stage["scheduler_t_mult"],
+        "scheduler_eta_min": stage["scheduler_eta_min"],
+        "ema_decay": stage["ema_decay"],
+        "grad_clip_norm": stage["grad_clip_norm"],
+        "validation_num_samples": stage["validation_num_samples"],
+        "checkpoint_dir": stage["checkpoint_dir"],
+        "save_every": stage["save_every"],
+        "device": runtime["device"],
+        "distributed_enabled": distributed["enabled"],
+        "distributed_backend": distributed["backend"],
+        "distributed_find_unused_parameters": distributed["find_unused_parameters"],
+        "quick": runtime["quick"],
+    }
+
+
+def _legacy_diffusion_overrides_from_args(args: argparse.Namespace) -> Dict[str, Any]:
+    """Collect only explicitly provided legacy CLI overrides."""
+    overrides: Dict[str, Any] = {}
+
+    def _set(name: str, value: Any, *, transform=None) -> None:
+        if value is None:
+            return
+        overrides[name] = transform(value) if transform is not None else value
+
+    _set("data_dir", getattr(args, "data_dir", None))
+    _set("batch_size", getattr(args, "batch_size", None))
+    _set("room_level", getattr(args, "room_level", None))
+    _set("epochs", getattr(args, "epochs", None))
+    _set("learning_rate", getattr(args, "lr", None))
+    _set("model_channels", getattr(args, "model_channels", None))
+    _set("context_dim", getattr(args, "context_dim", None))
+    _set("unet_channel_mult", getattr(args, "unet_channel_mult", None), transform=tuple)
+    _set("unet_num_res_blocks", getattr(args, "unet_num_res_blocks", None))
+    _set(
+        "unet_attention_resolutions",
+        getattr(args, "unet_attention_resolutions", None),
+        transform=tuple,
+    )
+    _set("unet_num_heads", getattr(args, "unet_num_heads", None))
+    _set("unet_dropout", getattr(args, "unet_dropout", None))
+    _set("alpha_logic", getattr(args, "alpha_logic", None))
+    _set("logic_loss_mode", getattr(args, "logic_loss_mode", None))
+    _set("graph_conditioning_mode", getattr(args, "graph_conditioning_mode", None))
+    _set("condition_gnn_type", getattr(args, "condition_gnn_type", None))
+    _set("topology_refinement_mode", getattr(args, "topology_refinement_mode", None))
+    _set("attention_mode", getattr(args, "attention_mode", None))
+    _set("topology_conditioning_mode", getattr(args, "topology_conditioning_mode", None))
+    _set("hedgehog_feature_dim", getattr(args, "hedgehog_feature_dim", None))
+    _set(
+        "graph_auto_linear_attention_nodes",
+        getattr(args, "graph_auto_linear_attention_nodes", None),
+    )
+    _set("spatial_graph_gate_init", getattr(args, "spatial_graph_gate_init", None))
+    _set("spatial_topology_gate_init", getattr(args, "spatial_topology_gate_init", None))
+    _set(
+        "use_teacher_forced_neighbor_latents",
+        getattr(args, "use_teacher_forced_neighbor_latents", None),
+    )
+    _set(
+        "use_current_node_distance_features",
+        getattr(args, "use_current_node_distance_features", None),
+    )
+    _set("current_node_distance_max", getattr(args, "current_node_distance_max", None))
+    _set("guidance_scale", getattr(args, "guidance_scale", None))
+    _set("logic_topology_trace_weight", getattr(args, "logic_topology_trace_weight", None))
+    _set("logic_topology_anchor_weight", getattr(args, "logic_topology_anchor_weight", None))
+    _set("checkpoint_dir", getattr(args, "checkpoint_dir", None))
+    _set("vqvae_checkpoint", getattr(args, "vqvae_checkpoint", None))
+    _set("device", getattr(args, "device", None))
+    _set("distributed_enabled", getattr(args, "distributed_enabled", None))
+    _set("distributed_backend", getattr(args, "distributed_backend", None))
+    _set("quick", getattr(args, "quick", None))
+    return overrides
+
+
+def build_diffusion_training_config_from_args(args: argparse.Namespace) -> DiffusionTrainingConfig:
+    """Resolve the standalone diffusion CLI into a validated DiffusionTrainingConfig."""
+    base_kwargs: Dict[str, Any] = {}
+    config_path = getattr(args, "config", None)
+    if config_path:
+        resolved = merge_config(yaml_path=str(config_path), cli_overrides=None)
+        base_kwargs = diffusion_training_kwargs_from_resolved_config(resolved)
+        if getattr(args, "verbose", None) is None:
+            setattr(args, "verbose", bool(resolved["runtime"]["verbose"]))
+    legacy_overrides = _legacy_diffusion_overrides_from_args(args)
+    return DiffusionTrainingConfig(**{**base_kwargs, **legacy_overrides})
 
 
 # =============================================================================
@@ -173,13 +531,21 @@ class DiffusionTrainer:
     def __init__(
         self,
         config: DiffusionTrainingConfig,
+        distributed_context: Optional[DistributedContext] = None,
         vqvae: Optional[VQVAE] = None,
         diffusion: Optional[LatentDiffusionModel] = None,
         condition_encoder: Optional[DualStreamConditionEncoder] = None,
         logic_net: Optional[LogicNet] = None,
     ):
         self.config = config
-        self.device = torch.device(config.device)
+        self.distributed_context = distributed_context or DistributedContext(
+            enabled=False,
+            backend=str(getattr(config, "distributed_backend", "nccl")),
+            world_size=1,
+            rank=0,
+            local_rank=0,
+        )
+        self.device = resolve_device(config.device, self.distributed_context)
         
         # Initialize models
         self.vqvae = vqvae or self._create_vqvae()
@@ -203,6 +569,14 @@ class DiffusionTrainer:
         # step, âˆ‡_{x_t}L_logic nudges the sample toward solvable configs.
         self.diffusion.guidance.logic_net = self.logic_net
         self.diffusion.guidance.guidance_scale = config.guidance_scale
+        self.diffusion.guidance.clamp_magnitude = float(config.guidance_clamp_magnitude)
+        self.diffusion.guidance.relative_norm_cap = float(config.guidance_relative_norm_cap)
+        self.diffusion.guidance.schedule_enabled = bool(config.guidance_schedule_enabled)
+        self.diffusion.guidance.active_fraction = float(config.guidance_active_fraction)
+        self.diffusion.guidance.decay_power = float(config.guidance_decay_power)
+        self.diffusion.guidance.max_graph_nodes = int(config.guidance_max_graph_nodes)
+        self.diffusion.guidance.max_key_lock_pairs = int(config.guidance_max_key_lock_pairs)
+        self.diffusion.guidance.max_guidance_elements = int(config.guidance_max_guidance_elements)
         
         # Setup optimizer: train diffusion + condition encoder
         # Note: LogicNet is now a submodule of diffusion.guidance, so its
@@ -211,15 +585,15 @@ class DiffusionTrainer:
             list(self.diffusion.parameters()) + 
             list(self.condition_encoder.parameters()),
             lr=config.learning_rate,
-            weight_decay=1e-5,
+            weight_decay=config.optimizer_weight_decay,
         )
         
         # Scheduler
         self.scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
             self.optimizer,
-            T_0=10,
-            T_mult=2,
-            eta_min=1e-6,
+            T_0=config.scheduler_t0,
+            T_mult=config.scheduler_t_mult,
+            eta_min=config.scheduler_eta_min,
         )
         
         # Metrics tracking
@@ -232,13 +606,13 @@ class DiffusionTrainer:
         self.ema_diffusion.eval()
         for param in self.ema_diffusion.parameters():
             param.requires_grad = False
-        self.ema_decay = 0.9999
+        self.ema_decay = float(config.ema_decay)
     
     def _create_vqvae(self) -> VQVAE:
         """Create or load VQ-VAE."""
         # CRITICAL-1 fix: create_vqvae expects num_classes (default 44), not in_channels
         vqvae = create_vqvae(
-            num_classes=44,
+            num_classes=self.config.num_classes,
             latent_dim=self.config.latent_dim,
         )
         
@@ -255,9 +629,29 @@ class DiffusionTrainer:
             latent_dim=self.config.latent_dim,
             model_channels=self.config.model_channels,
             context_dim=self.config.context_dim,
+            unet_channel_mult=self.config.unet_channel_mult,
+            unet_num_res_blocks=self.config.unet_num_res_blocks,
+            unet_attention_resolutions=self.config.unet_attention_resolutions,
+            unet_num_heads=self.config.unet_num_heads,
+            unet_dropout=self.config.unet_dropout,
             num_timesteps=self.config.num_timesteps,
             schedule_type=self.config.schedule_type,
+            prediction_type=self.config.prediction_type,
+            cfg_dropout_prob=self.config.cfg_dropout_prob,
+            cfg_scale=self.config.cfg_scale,
+            cfg_schedule_mode=self.config.cfg_schedule_mode,
+            cfg_schedule_min_scale=self.config.cfg_schedule_min_scale,
+            cfg_schedule_power=self.config.cfg_schedule_power,
+            min_snr_gamma=self.config.min_snr_gamma,
+            guidance_scale=self.config.guidance_scale,
             topology_refinement_mode=self.config.topology_refinement_mode,
+            attention_mode=self.config.attention_mode,
+            topology_conditioning_mode=self.config.topology_conditioning_mode,
+            hedgehog_feature_dim=self.config.hedgehog_feature_dim,
+            graph_auto_linear_attention_nodes=self.config.graph_auto_linear_attention_nodes,
+            spatial_graph_gate_init=self.config.spatial_graph_gate_init,
+            spatial_topology_gate_init=self.config.spatial_topology_gate_init,
+            room_topology_channels=self.config.room_topology_channels,
         )
     
     def _create_condition_encoder(self) -> DualStreamConditionEncoder:
@@ -265,7 +659,12 @@ class DiffusionTrainer:
         return create_condition_encoder(
             latent_dim=self.config.latent_dim,
             output_dim=self.config.context_dim,
+            hidden_dim=self.config.condition_hidden_dim,
+            num_gnn_layers=self.config.condition_num_gnn_layers,
             gnn_type=self.config.condition_gnn_type,
+            num_attention_heads=self.config.condition_num_attention_heads,
+            dropout=self.config.condition_dropout,
+            use_current_node_distance_features=self.config.use_current_node_distance_features,
         )
 
     def _stack_conditioning_vectors(self, cond_vectors: List[torch.Tensor]) -> torch.Tensor:
@@ -294,8 +693,10 @@ class DiffusionTrainer:
         """Create LogicNet for solvability."""
         return LogicNet(
             latent_dim=self.config.latent_dim,
-            num_classes=44,
+            num_classes=self.config.num_classes,
             num_iterations=self.config.num_logic_iterations,
+            topology_trace_weight=self.config.logic_topology_trace_weight,
+            topology_anchor_weight=self.config.logic_topology_anchor_weight,
         )
     
     def encode_to_latent(self, x: torch.Tensor) -> torch.Tensor:
@@ -354,10 +755,13 @@ class DiffusionTrainer:
             edge_attr = torch.tensor(edge_attr, dtype=torch.long)
         if edge_attr.numel() == 0:
             return None
-        edge_attr = edge_attr.to(self.device)
+        edge_attr = edge_attr.to(self.device, dtype=torch.long)
         num_edge_types = 8
+        # Ensure edge_attr is 1D for one_hot
+        if edge_attr.dim() > 1:
+            edge_attr = edge_attr.squeeze()
         edge_attr_clamped = edge_attr.clamp(0, num_edge_types - 1)
-        return torch.nn.functional.one_hot(
+        return F.one_hot(
             edge_attr_clamped, num_classes=num_edge_types
         ).float()
     
@@ -369,8 +773,42 @@ class DiffusionTrainer:
         During training, real graph data from .dot files is used instead.
         """
         if self.config.graph_conditioning_mode == "node_sequence":
-            return torch.randn(batch_size, 1, self.config.context_dim, device=self.device)
-        return torch.randn(batch_size, self.config.context_dim, device=self.device)
+            return torch.zeros(batch_size, 1, self.config.context_dim, device=self.device)
+        return torch.zeros(batch_size, self.config.context_dim, device=self.device)
+
+    def _encode_neighbor_maps_to_latents(
+        self,
+        neighbor_maps: Optional[Dict[str, Optional[torch.Tensor]]],
+    ) -> Dict[str, Optional[torch.Tensor]]:
+        """
+        Encode teacher-forced neighboring room maps into VQ-VAE latent tensors.
+
+        This closes the train/inference gap between:
+        - training: room-local conditioner saw only null neighbors, and
+        - inference: room-local conditioner receives actual generated neighbors.
+        """
+        latents: Dict[str, Optional[torch.Tensor]] = {direction: None for direction in CARDINAL_DIRECTIONS}
+        if not isinstance(neighbor_maps, dict):
+            return latents
+
+        for direction in CARDINAL_DIRECTIONS:
+            room_map = neighbor_maps.get(direction)
+            if room_map is None:
+                continue
+            if not isinstance(room_map, torch.Tensor):
+                room_map = torch.as_tensor(room_map, dtype=torch.float32)
+            if room_map.dim() == 2:
+                room_map = room_map.unsqueeze(0).unsqueeze(0)
+            elif room_map.dim() == 3:
+                room_map = room_map.unsqueeze(0)
+            if room_map.dim() != 4:
+                raise ValueError(
+                    f"Neighbor room map for direction {direction!r} must be rank-2/3/4, got {tuple(room_map.shape)}."
+                )
+            room_map = room_map.to(self.device, dtype=torch.float32)
+            latents[direction] = self.encode_to_latent(room_map).detach()
+
+        return latents
 
     def _prediction_to_x0(
         self,
@@ -404,21 +842,50 @@ class DiffusionTrainer:
                 
         Returns:
             If graph_conditioning_mode='pooled': [1, context_dim]
-            If graph_conditioning_mode='node_sequence': [N, context_dim]
+            If graph_conditioning_mode='node_sequence': [N+1, context_dim]
+            with a canonical room-anchor token prepended.
         """
         node_features = graph_dict['node_features'].to(self.device)
         edge_index = graph_dict['edge_index'].to(self.device)
         
         edge_features = self._encode_edge_features(graph_dict)
-        c_global = self.condition_encoder.encode_global_only(
-            node_features, edge_index,
-            edge_features=edge_features,
-            tpe=graph_dict.get('tpe').to(self.device) if isinstance(graph_dict.get('tpe'), torch.Tensor) else None,
+        tpe = align_nodewise_tensor(
+            graph_dict.get("tpe"),
+            num_nodes=int(node_features.shape[0]),
+            feature_dim=8,
+            device=self.device,
+            dtype=torch.float32,
+            feature_name="tpe",
+            default_value=compute_rwse_features(
+                edge_index,
+                int(node_features.shape[0]),
+                steps=8,
+                device=self.device,
+                dtype=torch.float32,
+            ),
         )
 
         boundary_constraints = graph_dict.get("boundary_constraints")
         room_position = graph_dict.get("room_position")
         current_node_idx = graph_dict.get("current_node_idx")
+        current_node_distance = None
+        if bool(getattr(self.config, "use_current_node_distance_features", True)):
+            current_node_distance = align_nodewise_tensor(
+                graph_dict.get("current_node_distance"),
+                num_nodes=int(node_features.shape[0]),
+                feature_dim=4,
+                device=self.device,
+                dtype=torch.float32,
+                feature_name="current_node_distance",
+                default_value=compute_current_node_distance_features(
+                    edge_index,
+                    int(node_features.shape[0]),
+                    current_node_idx=int(current_node_idx) if current_node_idx is not None else None,
+                    device=self.device,
+                    dtype=torch.float32,
+                    max_distance=int(getattr(self.config, "current_node_distance_max", 8)),
+                ),
+            )
         has_room_anchor = bool(graph_dict.get("has_room_anchor", False)) or (
             isinstance(boundary_constraints, torch.Tensor)
             and isinstance(room_position, torch.Tensor)
@@ -430,22 +897,52 @@ class DiffusionTrainer:
                 boundary_constraints = boundary_constraints.unsqueeze(0)
             if room_position.dim() == 1:
                 room_position = room_position.unsqueeze(0)
-            room_anchor = self.condition_encoder(
-                neighbor_latents={'N': None, 'S': None, 'E': None, 'W': None},
+            if bool(getattr(self.config, "use_teacher_forced_neighbor_latents", True)):
+                neighbor_latents = self._encode_neighbor_maps_to_latents(graph_dict.get("neighbor_maps"))
+            else:
+                neighbor_latents = {direction: None for direction in CARDINAL_DIRECTIONS}
+            condition_out = self.condition_encoder(
+                neighbor_latents=neighbor_latents,
                 boundary_constraints=boundary_constraints,
                 position=room_position,
                 node_features=node_features,
                 edge_index=edge_index,
                 edge_features=edge_features,
-                tpe=graph_dict.get('tpe').to(self.device) if isinstance(graph_dict.get('tpe'), torch.Tensor) else None,
+                tpe=tpe,
+                current_node_distance=current_node_distance,
                 current_node_idx=int(current_node_idx) if current_node_idx is not None else None,
+                return_global_tokens=self.config.graph_conditioning_mode == "node_sequence",
             )
             if self.config.graph_conditioning_mode == "node_sequence":
+                if not isinstance(condition_out, tuple) or len(condition_out) != 2:
+                    raise ValueError(
+                        "Condition encoder must return (room_anchor, global_tokens) "
+                        "when graph_conditioning_mode='node_sequence' and a room anchor is requested."
+                    )
+                room_anchor, c_global = condition_out
+                if c_global.dim() == 3:
+                    if int(c_global.shape[0]) != 1:
+                        raise ValueError(
+                            f"Expected a single-sample global token batch, got shape {tuple(c_global.shape)}."
+                        )
+                    c_global = c_global.squeeze(0)
                 return torch.cat([room_anchor, c_global], dim=0)
-            return room_anchor
+            return condition_out
+
+        c_global = self.condition_encoder.encode_global_only(
+            node_features, edge_index,
+            edge_features=edge_features,
+            tpe=tpe,
+            current_node_distance=current_node_distance,
+        )
 
         if self.config.graph_conditioning_mode == "node_sequence":
-            return c_global
+            default_anchor = self.condition_encoder.encode_local_only(
+                neighbor_latents={direction: None for direction in CARDINAL_DIRECTIONS},
+                boundary_constraints=torch.zeros(1, 8, device=self.device, dtype=torch.float32),
+                position=torch.zeros(1, 2, device=self.device, dtype=torch.float32),
+            )
+            return torch.cat([default_anchor, c_global], dim=0)
 
         # Pooled baseline.
         return c_global.mean(dim=0, keepdim=True)
@@ -466,33 +963,52 @@ class DiffusionTrainer:
             raise ValueError(f"edge_index must have shape [2, E], got {tuple(edge_index.shape)}")
 
         num_nodes = int(node_features.shape[0])
-        tpe = graph_dict.get("tpe")
-        if not isinstance(tpe, torch.Tensor):
-            tpe = torch.zeros(num_nodes, 8, dtype=torch.float32)
-        tpe = tpe.to(self.device, dtype=torch.float32)
-        if tpe.dim() == 1:
-            tpe = tpe.unsqueeze(0)
-        if tpe.dim() != 2 or int(tpe.shape[0]) != num_nodes:
-            raise ValueError(
-                f"tpe must have shape [N, D] matching node_features; got {tuple(tpe.shape)} for N={num_nodes}."
-            )
+        current_node_idx = graph_dict.get("current_node_idx")
+        tpe = align_nodewise_tensor(
+            graph_dict.get("tpe"),
+            num_nodes=num_nodes,
+            feature_dim=8,
+            device=self.device,
+            dtype=torch.float32,
+            feature_name="tpe",
+            default_value=compute_rwse_features(
+                edge_index,
+                num_nodes,
+                steps=8,
+                device=self.device,
+                dtype=torch.float32,
+            ),
+        )
+        current_node_distance = align_nodewise_tensor(
+            graph_dict.get("current_node_distance"),
+            num_nodes=num_nodes,
+            feature_dim=4,
+            device=self.device,
+            dtype=torch.float32,
+            feature_name="current_node_distance",
+            default_value=compute_current_node_distance_features(
+                edge_index,
+                num_nodes,
+                current_node_idx=int(current_node_idx) if current_node_idx is not None else None,
+                device=self.device,
+                dtype=torch.float32,
+                max_distance=int(getattr(self.config, "current_node_distance_max", 8)),
+            ),
+        )
 
-        node_positions = graph_dict.get("node_positions")
-        if not isinstance(node_positions, torch.Tensor):
-            node_positions = torch.stack(
-                [
-                    torch.arange(num_nodes, dtype=torch.float32),
-                    torch.zeros(num_nodes, dtype=torch.float32),
-                ],
-                dim=1,
-            ) if num_nodes > 0 else torch.zeros((0, 2), dtype=torch.float32)
-        node_positions = node_positions.to(self.device, dtype=torch.float32)
-        if node_positions.dim() == 1:
-            node_positions = node_positions.view(-1, 2)
-        if node_positions.dim() != 2 or int(node_positions.shape[0]) != num_nodes or int(node_positions.shape[1]) != 2:
-            raise ValueError(
-                f"node_positions must have shape [N, 2] matching node_features; got {tuple(node_positions.shape)} for N={num_nodes}."
-            )
+        node_positions = align_nodewise_tensor(
+            graph_dict.get("node_positions"),
+            num_nodes=num_nodes,
+            feature_dim=2,
+            device=self.device,
+            dtype=torch.float32,
+            feature_name="node_positions",
+            default_value=build_default_node_positions(
+                num_nodes,
+                device=self.device,
+                dtype=torch.float32,
+            ),
+        )
 
         node_mask = graph_dict.get("node_mask")
         if not isinstance(node_mask, torch.Tensor):
@@ -521,6 +1037,21 @@ class DiffusionTrainer:
                     f"room_topology_map must have shape [C,H,W] for one sample, got {tuple(room_topology_map.shape)}."
                 )
 
+        boundary_constraints = graph_dict.get("boundary_constraints")
+        if isinstance(boundary_constraints, torch.Tensor):
+            boundary_constraints = boundary_constraints.to(self.device, dtype=torch.float32)
+            if boundary_constraints.dim() == 2:
+                if int(boundary_constraints.shape[0]) != 1:
+                    raise ValueError(
+                        "Single graph sample boundary_constraints must be [8] or [1,8], "
+                        f"got {tuple(boundary_constraints.shape)}."
+                    )
+                boundary_constraints = boundary_constraints.squeeze(0)
+            if boundary_constraints.dim() != 1 or int(boundary_constraints.shape[0]) != 8:
+                raise ValueError(
+                    f"boundary_constraints must have shape [8] for one sample, got {tuple(boundary_constraints.shape)}."
+                )
+
         has_room_anchor = bool(graph_dict.get("has_room_anchor", False)) or (
             isinstance(graph_dict.get("boundary_constraints"), torch.Tensor)
             and isinstance(graph_dict.get("room_position"), torch.Tensor)
@@ -530,9 +1061,11 @@ class DiffusionTrainer:
             "node_features": node_features,
             "edge_index": edge_index,
             "tpe": tpe,
+            "current_node_distance": current_node_distance,
             "node_positions": node_positions,
             "node_mask": node_mask,
             "has_room_anchor": has_room_anchor,
+            **({"boundary_constraints": boundary_constraints} if isinstance(boundary_constraints, torch.Tensor) else {}),
             **({"room_topology_map": room_topology_map} if isinstance(room_topology_map, torch.Tensor) else {}),
         }
 
@@ -546,20 +1079,20 @@ class DiffusionTrainer:
             return None
 
         anchor_flags = {bool(sample.get("has_room_anchor", False)) for sample in samples}
-        if len(anchor_flags) > 1:
-            raise ValueError(
-                "Mixed graph anchor semantics in one diffusion batch. "
-                "All samples must either include a room anchor token or omit it."
-            )
 
         max_nodes = max(int(sample["node_features"].shape[0]) for sample in samples)
         feat_dim = max(int(sample["node_features"].shape[1]) if sample["node_features"].dim() == 2 else 0 for sample in samples)
         tpe_dim = max(int(sample["tpe"].shape[1]) if sample["tpe"].dim() == 2 else 0 for sample in samples)
+        distance_dim = max(
+            int(sample["current_node_distance"].shape[1]) if sample["current_node_distance"].dim() == 2 else 0
+            for sample in samples
+        )
         pos_dim = max(int(sample["node_positions"].shape[1]) if sample["node_positions"].dim() == 2 else 0 for sample in samples)
         max_edges = max(int(sample["edge_index"].shape[1]) if sample["edge_index"].dim() == 2 else 0 for sample in samples)
 
         node_features_batch = torch.zeros(len(samples), max_nodes, max(1, feat_dim), device=self.device, dtype=torch.float32)
         tpe_batch = torch.zeros(len(samples), max_nodes, max(1, tpe_dim), device=self.device, dtype=torch.float32)
+        current_node_distance_batch = torch.zeros(len(samples), max_nodes, max(1, distance_dim), device=self.device, dtype=torch.float32)
         node_positions_batch = torch.zeros(len(samples), max_nodes, max(1, pos_dim), device=self.device, dtype=torch.float32)
         node_mask_batch = torch.zeros(len(samples), max_nodes, device=self.device, dtype=torch.float32)
         edge_index_batch = torch.full((len(samples), 2, max_edges), -1, device=self.device, dtype=torch.long)
@@ -572,12 +1105,23 @@ class DiffusionTrainer:
             )
         can_stack_topology = all(has_topology)
         topo_shape = None
+        has_boundary = [("boundary_constraints" in sample) for sample in samples]
+        if any(has_boundary) and not all(has_boundary):
+            raise ValueError(
+                "boundary_constraints must be present for every graph in a diffusion batch or omitted for all of them."
+            )
+        boundary_batch = (
+            torch.zeros(len(samples), 8, device=self.device, dtype=torch.float32)
+            if all(has_boundary)
+            else None
+        )
 
         for i, sample in enumerate(samples):
             num_nodes = int(sample["node_features"].shape[0])
             if num_nodes > 0:
                 node_features_batch[i, :num_nodes, : sample["node_features"].shape[1]] = sample["node_features"]
                 tpe_batch[i, :num_nodes, : sample["tpe"].shape[1]] = sample["tpe"]
+                current_node_distance_batch[i, :num_nodes, : sample["current_node_distance"].shape[1]] = sample["current_node_distance"]
                 node_positions_batch[i, :num_nodes, : sample["node_positions"].shape[1]] = sample["node_positions"]
                 node_mask_batch[i, :num_nodes] = sample["node_mask"]
 
@@ -605,17 +1149,24 @@ class DiffusionTrainer:
                     topo_maps = []
                 else:
                     topo_maps.append(topo)
+            if boundary_batch is not None:
+                boundary_batch[i] = sample["boundary_constraints"]
 
         batch_graph = {
             "node_features": node_features_batch,
             "edge_index": edge_index_batch,
             "tpe": tpe_batch,
+            "current_node_distance": current_node_distance_batch,
             "node_positions": node_positions_batch,
             "node_mask": node_mask_batch,
-            "has_room_anchor": bool(next(iter(anchor_flags))) if anchor_flags else False,
+            "has_room_anchor": bool(self.config.graph_conditioning_mode == "node_sequence") or (
+                bool(next(iter(anchor_flags))) if anchor_flags else False
+            ),
         }
         if can_stack_topology and topo_maps:
             batch_graph["room_topology_map"] = torch.cat(topo_maps, dim=0)
+        if boundary_batch is not None:
+            batch_graph["boundary_constraints"] = boundary_batch
         return batch_graph
     
     def _build_logic_graph_data(
@@ -828,11 +1379,17 @@ class DiffusionTrainer:
         # Backward
         self.optimizer.zero_grad()
         total_loss.backward()
-        torch.nn.utils.clip_grad_norm_(
-            list(self.diffusion.parameters()) + 
-            list(self.condition_encoder.parameters()),
-            max_norm=1.0
+        average_gradients(
+            (self.diffusion, self.condition_encoder),
+            context=getattr(self, "distributed_context", None),
         )
+        grad_clip_norm = float(max(0.0, float(getattr(self.config, "grad_clip_norm", 1.0))))
+        if grad_clip_norm > 0:
+            torch.nn.utils.clip_grad_norm_(
+                list(self.diffusion.parameters()) +
+                list(self.condition_encoder.parameters()),
+                max_norm=grad_clip_norm
+            )
         self.optimizer.step()
         
         # --- Phase 4A: Update EMA model weights ---
@@ -841,7 +1398,8 @@ class DiffusionTrainer:
         # --- Phase 1D: Anneal LogicNet temperature ---
         # Use estimated total steps from config instead of hardcoded epochs*100
         if hasattr(self.logic_net, 'update_temperature'):
-            estimated_total_steps = max(1, getattr(self, '_estimated_total_steps', self.config.epochs * 100))
+            default_total_steps = max(1, int(getattr(self.config, "epochs", 1)) * 100)
+            estimated_total_steps = max(1, getattr(self, '_estimated_total_steps', default_total_steps))
             progress = min(1.0, self.global_step / estimated_total_steps)
             self.logic_net.update_temperature(progress)
         
@@ -864,6 +1422,7 @@ class DiffusionTrainer:
     def train_epoch(
         self,
         dataloader: DataLoader,
+        sampler: Optional[Any] = None,
     ) -> Dict[str, float]:
         """
         Train for one epoch using real graph data from .dot files.
@@ -876,10 +1435,12 @@ class DiffusionTrainer:
         num_batches = 0
         
         # DESIGN-08: Compute actual total training steps for temperature annealing
-        self._estimated_total_steps = max(1, self.config.epochs * len(dataloader))
+        total_epochs = int(getattr(self.config, "epochs", self.epoch + 1))
+        self._estimated_total_steps = max(1, total_epochs * len(dataloader))
         
         include_logic = self.epoch >= self.config.warmup_epochs
-        total_epochs = int(getattr(self.config, "epochs", self.epoch + 1))
+        if sampler is not None and hasattr(sampler, "set_epoch"):
+            sampler.set_epoch(int(self.epoch))
         logger.info(
             "Train epoch %d/%d: logic_loss_%s (warmup_epochs=%d)",
             int(self.epoch + 1),
@@ -920,14 +1481,8 @@ class DiffusionTrainer:
                     logger.debug(f"Diffusion graph-data build failed: {e}")
                     diffusion_graph_data = None
                 
-                # Build LogicNet graph data from first graph in batch
-                # (LogicNet processes single graphs, not batches)
                 if include_logic:
-                    try:
-                        logic_graph_data = self._build_logic_graph_data(graph_list[0])
-                    except (AttributeError, RuntimeError, ValueError, TypeError) as e:
-                        logger.debug(f"Logic graph build failed: {e}")
-                        logic_graph_data = None
+                    logic_graph_data = diffusion_graph_data
             
             metrics = self.train_step(
                 real_maps,
@@ -951,8 +1506,16 @@ class DiffusionTrainer:
         
         self.epoch += 1
         self.scheduler.step()
-        
-        return {k: v / max(num_batches, 1) for k, v in metrics_sum.items()}
+
+        metrics_sum["num_batches"] = float(num_batches)
+        reduced = reduce_scalar_metrics(
+            metrics_sum,
+            device=self.device,
+            context=getattr(self, "distributed_context", None),
+            average=False,
+        )
+        total_batches = float(max(1.0, reduced.pop("num_batches", float(num_batches))))
+        return {k: float(v) / total_batches for k, v in reduced.items()}
     
     @torch.no_grad()
     def validate(
@@ -1013,21 +1576,7 @@ class DiffusionTrainer:
             z_gen = eval_model.sample(conditioning, shape=z_0.shape, graph_data=diffusion_graph_data)
             
             # Build LogicNet graph data if available
-            logic_graph_data = None
-            if graph_list is not None:
-                build_failures = 0
-                for graph_dict in graph_list:
-                    try:
-                        logic_graph_data = self._build_logic_graph_data(graph_dict)
-                        break
-                    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
-                        build_failures += 1
-                        logger.debug("LogicNet graph-data build failed for one sample: %s", exc)
-                if logic_graph_data is None and build_failures > 0:
-                    logger.debug(
-                        "LogicNet graph-data unavailable for this validation batch (%d failures); proceeding without graph_data",
-                        build_failures,
-                    )
+            logic_graph_data = diffusion_graph_data
             
             # LogicNet: evaluate with graph topology
             logic_loss, _logic_info = self.logic_net(z_gen, graph_data=logic_graph_data)
@@ -1097,6 +1646,15 @@ class DiffusionTrainer:
         
         # Re-wire LogicNet into guidance after loading
         self.diffusion.guidance.logic_net = self.logic_net
+        self.diffusion.guidance.guidance_scale = float(getattr(self.config, "guidance_scale", 1.0))
+        self.diffusion.guidance.clamp_magnitude = float(getattr(self.config, "guidance_clamp_magnitude", 1.0))
+        self.diffusion.guidance.relative_norm_cap = float(getattr(self.config, "guidance_relative_norm_cap", 0.25))
+        self.diffusion.guidance.schedule_enabled = bool(getattr(self.config, "guidance_schedule_enabled", True))
+        self.diffusion.guidance.active_fraction = float(getattr(self.config, "guidance_active_fraction", 0.30))
+        self.diffusion.guidance.decay_power = float(getattr(self.config, "guidance_decay_power", 1.0))
+        self.diffusion.guidance.max_graph_nodes = int(getattr(self.config, "guidance_max_graph_nodes", 512))
+        self.diffusion.guidance.max_key_lock_pairs = int(getattr(self.config, "guidance_max_key_lock_pairs", 2048))
+        self.diffusion.guidance.max_guidance_elements = int(getattr(self.config, "guidance_max_guidance_elements", 2_000_000))
         
         logger.info(f"Loaded checkpoint from {path} (epoch {self.epoch})")
 
@@ -1108,93 +1666,157 @@ class DiffusionTrainer:
 def train_diffusion(config: DiffusionTrainingConfig) -> DiffusionTrainer:
     """Main training function."""
     logger.info(f"Starting diffusion training with config: {config.to_dict()}")
-    
-    # Create data loaders WITH real graph data from .dot files.
-    # graph_collate_fn handles variable-size graphs by returning a list.
-    train_loader = create_dataloader(
-        config.data_dir,
-        batch_size=config.batch_size,
-        shuffle=True,
-        use_vglc=config.use_vglc,
-        normalize=True,
-        room_level=config.room_level,
-        load_graphs=True,
+
+    distributed_context = initialize_distributed(
+        enabled=bool(getattr(config, "distributed_enabled", False)),
+        backend=str(getattr(config, "distributed_backend", "nccl")),
     )
-    
-    val_loader = create_dataloader(
-        config.data_dir,
-        batch_size=config.batch_size,
-        shuffle=False,
-        use_vglc=config.use_vglc,
-        normalize=True,
-        room_level=config.room_level,
-        load_graphs=True,
-    )
-    
-    sample_kind = "rooms" if config.room_level else "dungeons"
-    logger.info(f"Training samples: {len(train_loader.dataset)} {sample_kind}")
-    
-    # Create trainer
-    trainer = DiffusionTrainer(config)
-    
-    # Checkpoint manager
-    checkpoint_dir = Path(config.checkpoint_dir)
-    checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    
-    metrics_logger = MetricsLogger(
-        log_dir=str(checkpoint_dir / 'logs'),
-        experiment_name='diffusion_training',
-    )
-    
-    best_solvability = 0.0
-    
-    # Training loop
-    for epoch in range(config.epochs):
-        # Train
-        train_metrics = trainer.train_epoch(train_loader)
-        
-        # Validate
-        val_metrics = trainer.validate(val_loader)
-        
-        # Combine metrics
-        metrics = {
-            'epoch': epoch,
-            'lr': trainer.scheduler.get_last_lr()[0],
-            **train_metrics,
-            **val_metrics,
-        }
-        
-        metrics_logger.log(metrics)
-        
-        logger.info(
-            f"Epoch {epoch+1}/{config.epochs}: "
-            f"loss={train_metrics['loss']:.4f}, "
-            f"diffusion={train_metrics['diffusion_loss']:.4f}, "
-            f"val_logic_loss={val_metrics.get('val_logic_loss', 0.0):.4f}, "
-            f"val_solvability_proxy={val_metrics.get('val_solvability_proxy', val_metrics['val_solvability']):.4f}, "
-            f"logic_loss_{'enabled' if epoch >= config.warmup_epochs and config.alpha_logic > 0 else 'disabled'}"
+
+    try:
+        train_loader_plain = create_dataloader(
+            config.data_dir,
+            batch_size=config.batch_size,
+            shuffle=config.shuffle_train,
+            num_workers=config.num_workers,
+            pin_memory=config.pin_memory,
+            drop_last=config.drop_last,
+            use_vglc=config.use_vglc,
+            normalize=config.normalize,
+            room_level=config.room_level,
+            load_graphs=True,
         )
-        
-        # Save checkpoints
-        if (epoch + 1) % config.save_every == 0:
-            trainer.save_checkpoint(
-                str(checkpoint_dir / f"checkpoint_epoch_{epoch+1:04d}.pth"),
-                metrics,
+        train_sampler = make_distributed_sampler(
+            train_loader_plain.dataset,
+            context=distributed_context,
+            shuffle=config.shuffle_train,
+            drop_last=config.drop_last,
+            seed=42,
+        )
+        train_loader = create_dataloader(
+            config.data_dir,
+            batch_size=config.batch_size,
+            shuffle=config.shuffle_train,
+            num_workers=config.num_workers,
+            pin_memory=config.pin_memory,
+            drop_last=config.drop_last,
+            use_vglc=config.use_vglc,
+            normalize=config.normalize,
+            room_level=config.room_level,
+            load_graphs=True,
+            sampler=train_sampler,
+        )
+
+        val_loader = None
+        if distributed_context.is_main_process:
+            val_loader = create_dataloader(
+                config.data_dir,
+                batch_size=config.batch_size,
+                shuffle=config.shuffle_val,
+                num_workers=config.num_workers,
+                pin_memory=config.pin_memory,
+                drop_last=config.drop_last,
+                use_vglc=config.use_vglc,
+                normalize=config.normalize,
+                room_level=config.room_level,
+                load_graphs=True,
             )
-        
-        # Save best model
-        if val_metrics['val_solvability'] > best_solvability:
-            best_solvability = val_metrics['val_solvability']
-            trainer.save_checkpoint(
-                str(checkpoint_dir / "best_model.pth"),
-                metrics,
+
+        sample_kind = "rooms" if config.room_level else "dungeons"
+        logger.info(
+            "Training samples: %d %s%s",
+            len(train_loader.dataset),
+            sample_kind,
+            f" (world_size={distributed_context.world_size})" if distributed_context.enabled else "",
+        )
+
+        trainer = DiffusionTrainer(config, distributed_context=distributed_context)
+        if distributed_context.is_main_process:
+            diffusion_trainable = count_parameters(trainer.diffusion, trainable_only=True)
+            condition_trainable = count_parameters(trainer.condition_encoder, trainable_only=True)
+            logic_subset = count_parameters(trainer.logic_net, trainable_only=True)
+            logger.info(
+                "Diffusion guidance subset (already included in diffusion total): logic_net=%s.",
+                format_parameter_count(logic_subset),
             )
-    
-    # Final save
-    trainer.save_checkpoint(str(checkpoint_dir / "final_model.pth"), metrics)
-    metrics_logger.save()
-    
-    return trainer
+            log_capacity_guardrails(
+                logger,
+                stage_name="Diffusion trainer",
+                dataset_size=len(train_loader.dataset),
+                param_groups={
+                    "diffusion_plus_guidance": diffusion_trainable,
+                    "condition_encoder": condition_trainable,
+                },
+                recommended_config="configs/zelda_hmolqd.yaml",
+                capacity_knobs=(
+                    "diffusion.model_channels, diffusion.condition_hidden_dim, "
+                    "diffusion.condition_num_gnn_layers"
+                ),
+            )
+
+        checkpoint_dir = Path(config.checkpoint_dir)
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+        metrics_logger = (
+            MetricsLogger(
+                log_dir=str(checkpoint_dir / 'logs'),
+                experiment_name='diffusion_training',
+            )
+            if distributed_context.is_main_process
+            else None
+        )
+
+        best_solvability = 0.0
+        metrics: Dict[str, float] = {}
+
+        for epoch in range(config.epochs):
+            train_metrics = trainer.train_epoch(train_loader, sampler=train_sampler)
+            maybe_barrier(distributed_context)
+
+            if distributed_context.is_main_process:
+                assert val_loader is not None
+                val_metrics = trainer.validate(val_loader, num_samples=config.validation_num_samples)
+                metrics = {
+                    'epoch': epoch,
+                    'lr': trainer.scheduler.get_last_lr()[0],
+                    **train_metrics,
+                    **val_metrics,
+                }
+                assert metrics_logger is not None
+                metrics_logger.log(metrics)
+
+                logger.info(
+                    f"Epoch {epoch+1}/{config.epochs}: "
+                    f"loss={train_metrics['loss']:.4f}, "
+                    f"diffusion={train_metrics['diffusion_loss']:.4f}, "
+                    f"val_logic_loss={val_metrics.get('val_logic_loss', 0.0):.4f}, "
+                    f"val_solvability_proxy={val_metrics.get('val_solvability_proxy', val_metrics['val_solvability']):.4f}, "
+                    f"logic_loss_{'enabled' if epoch >= config.warmup_epochs and config.alpha_logic > 0 else 'disabled'}"
+                )
+
+                if (epoch + 1) % config.save_every == 0:
+                    trainer.save_checkpoint(
+                        str(checkpoint_dir / f"checkpoint_epoch_{epoch+1:04d}.pth"),
+                        metrics,
+                    )
+
+                if val_metrics['val_solvability'] > best_solvability:
+                    best_solvability = val_metrics['val_solvability']
+                    trainer.save_checkpoint(
+                        str(checkpoint_dir / "best_model.pth"),
+                        metrics,
+                    )
+
+            maybe_barrier(distributed_context)
+
+        if distributed_context.is_main_process:
+            trainer.save_checkpoint(str(checkpoint_dir / "final_model.pth"), metrics or None)
+            assert metrics_logger is not None
+            metrics_logger.save()
+
+        maybe_barrier(distributed_context)
+        return trainer
+    finally:
+        destroy_distributed(distributed_context)
 
 
 # =============================================================================
@@ -1204,78 +1826,102 @@ def train_diffusion(config: DiffusionTrainingConfig) -> DiffusionTrainer:
 def main():
     parser = argparse.ArgumentParser(
         description='Train Latent Diffusion for Dungeon Generation',
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    
-    parser.add_argument('--data-dir', type=str, default='Data/The Legend of Zelda')
-    parser.add_argument('--batch-size', type=int, default=4)
+
+    parser.add_argument(
+        '--config',
+        type=str,
+        default=None,
+        help='Optional YAML config path using the shared validated config system. '
+             'When provided, omitted legacy flags inherit values from that config.',
+    )
+    parser.add_argument('--data-dir', type=str, default=None)
+    parser.add_argument('--batch-size', type=int, default=None)
     parser.add_argument('--room-level', dest='room_level', action='store_true', help='Train the diffusion model on individual room samples.')
     parser.add_argument('--dungeon-level', dest='room_level', action='store_false', help='Train the diffusion model on whole-dungeon samples.')
-    parser.add_argument('--epochs', type=int, default=100)
-    parser.add_argument('--lr', type=float, default=1e-4)
-    parser.add_argument('--alpha-logic', type=float, default=0.1)
+    parser.set_defaults(room_level=None)
+    parser.add_argument('--epochs', type=int, default=None)
+    parser.add_argument('--lr', type=float, default=None)
+    parser.add_argument('--model-channels', type=int, default=None)
+    parser.add_argument('--context-dim', type=int, default=None)
+    parser.add_argument('--unet-channel-mult', type=int, nargs='+', default=None)
+    parser.add_argument('--unet-num-res-blocks', type=int, default=None)
+    parser.add_argument('--unet-attention-resolutions', type=int, nargs='+', default=None)
+    parser.add_argument('--unet-num-heads', type=int, default=None)
+    parser.add_argument('--unet-dropout', type=float, default=None)
+    parser.add_argument('--alpha-logic', type=float, default=None)
     parser.add_argument(
         '--logic-loss-mode',
         type=str,
-        default='predicted_latent',
+        default=None,
         choices=['predicted_latent', 'detached_real'],
         help='Logic-loss target mode for A/B: predicted_latent (new) or detached_real (legacy).',
     )
     parser.add_argument(
         '--graph-conditioning-mode',
         type=str,
-        default='node_sequence',
+        default=None,
         choices=['node_sequence', 'pooled'],
         help='Graph conditioning for diffusion cross-attention: node_sequence (GCN node tokens) or pooled baseline.',
     )
     parser.add_argument(
         '--condition-gnn-type',
         type=str,
-        default='gcn',
-        choices=['gcn', 'gat', 'sage'],
+        default=None,
+        choices=['gcn', 'gat', 'sage', 'gps'],
         help='GNN backbone for graph-node conditioning.',
     )
     parser.add_argument(
         '--topology-refinement-mode',
         type=str,
-        default='gat2',
+        default=None,
         choices=['none', 'lightweight', 'gat2', 'upgraded'],
         help='Topology preprocessing inside diffusion cross-attention (gat2 is explicit 2-layer GAT).',
     )
-    parser.add_argument('--guidance-scale', type=float, default=1.0)
-    parser.add_argument('--checkpoint-dir', type=str, default='./checkpoints')
+    parser.add_argument(
+        '--attention-mode',
+        type=str,
+        default=None,
+        choices=['softmax', 'linear_hedgehog'],
+        help='Cross-attention kernel used in diffusion graph conditioning.',
+    )
+    parser.add_argument(
+        '--topology-conditioning-mode',
+        type=str,
+        default=None,
+        choices=['additive', 'spade'],
+        help='Room-topology conditioning path: additive bias or SPADE-style affine modulation.',
+    )
+    parser.add_argument('--hedgehog-feature-dim', type=int, default=None)
+    parser.add_argument('--graph-auto-linear-attention-nodes', type=int, default=None)
+    parser.add_argument('--spatial-graph-gate-init', type=float, default=None)
+    parser.add_argument('--spatial-topology-gate-init', type=float, default=None)
+    parser.add_argument('--use-teacher-forced-neighbor-latents', action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument('--use-current-node-distance-features', action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument('--current-node-distance-max', type=int, default=None)
+    parser.add_argument('--logic-topology-trace-weight', type=float, default=None)
+    parser.add_argument('--logic-topology-anchor-weight', type=float, default=None)
+    parser.add_argument('--guidance-scale', type=float, default=None)
+    parser.add_argument('--checkpoint-dir', type=str, default=None)
     parser.add_argument('--vqvae-checkpoint', type=str, default=None)
-    parser.add_argument('--device', type=str, default='auto')
-    parser.add_argument('--quick', action='store_true')
-    parser.add_argument('--verbose', '-v', action='store_true')
-    parser.set_defaults(room_level=True)
+    parser.add_argument('--device', type=str, default=None)
+    parser.add_argument('--distributed-enabled', action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument('--distributed-backend', type=str, default=None, choices=['nccl', 'gloo'])
+    parser.add_argument('--quick', action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument('--verbose', '-v', action=argparse.BooleanOptionalAction, default=None)
     
     args = parser.parse_args()
-    
-    log_level = logging.DEBUG if args.verbose else logging.INFO
+
+    config = build_diffusion_training_config_from_args(args)
+
+    log_level = logging.DEBUG if bool(getattr(args, "verbose", False)) else logging.INFO
     logging.basicConfig(
         level=log_level,
         format='%(asctime)s | %(levelname)s | %(message)s',
         datefmt='%H:%M:%S',
     )
-    
-    config = DiffusionTrainingConfig(
-        data_dir=args.data_dir,
-        batch_size=args.batch_size,
-        room_level=args.room_level,
-        epochs=args.epochs,
-        learning_rate=args.lr,
-        alpha_logic=args.alpha_logic,
-        logic_loss_mode=args.logic_loss_mode,
-        graph_conditioning_mode=args.graph_conditioning_mode,
-        condition_gnn_type=args.condition_gnn_type,
-        topology_refinement_mode=args.topology_refinement_mode,
-        guidance_scale=args.guidance_scale,
-        checkpoint_dir=args.checkpoint_dir,
-        vqvae_checkpoint=args.vqvae_checkpoint,
-        device=args.device,
-        quick=args.quick,
-    )
-    
+
     try:
         _trainer = train_diffusion(config)
         logger.info("Training complete!")

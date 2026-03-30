@@ -9,8 +9,9 @@ Point-in-time notes, dated audits, and experimental fit studies now live under
 1. [INDEX.md](INDEX.md) - canonical documentation map
 2. [CURRENT_ARCHITECTURE.md](CURRENT_ARCHITECTURE.md) - current end-to-end implementation map
 3. [TRACEABILITY_AND_CLAIM_VALIDATION.md](TRACEABILITY_AND_CLAIM_VALIDATION.md) - claim-to-code traceability
-4. [../README.md](../README.md) - project overview, setup, and usage
-5. [../ARCHITECTURE_DIAGRAMS.md](../ARCHITECTURE_DIAGRAMS.md) - high-level diagrams
+4. [ARCHITECTURE_RESEARCH_AUDIT_2026_03_30.md](ARCHITECTURE_RESEARCH_AUDIT_2026_03_30.md) - latest literature-backed architecture audit
+5. [../README.md](../README.md) - project overview, setup, and usage
+6. [../ARCHITECTURE_DIAGRAMS.md](../ARCHITECTURE_DIAGRAMS.md) - high-level diagrams
 
 ## Core References
 
@@ -24,6 +25,7 @@ Point-in-time notes, dated audits, and experimental fit studies now live under
 ## Evaluation And Research
 
 - [SOTA_COMPARISON_AND_BENCHMARKS.md](SOTA_COMPARISON_AND_BENCHMARKS.md)
+- [ARCHITECTURE_RESEARCH_AUDIT_2026_03_30.md](ARCHITECTURE_RESEARCH_AUDIT_2026_03_30.md)
 - [REALISM_PROFILE_WEIGHTING_AND_TUNING_GUIDE.md](REALISM_PROFILE_WEIGHTING_AND_TUNING_GUIDE.md)
 - [MATCHED_BUDGET_BENCHMARK_PROTOCOL.md](MATCHED_BUDGET_BENCHMARK_PROTOCOL.md)
 - [OOD_SCALING_AND_BLINDED_EVAL_PROTOCOL.md](OOD_SCALING_AND_BLINDED_EVAL_PROTOCOL.md)

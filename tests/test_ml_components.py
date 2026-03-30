@@ -178,12 +178,14 @@ class TestGraphGridAttention:
         graph_nodes = torch.randn(B, N_nodes, graph_dim)
         node_positions = torch.randint(0, 10, (B, N_nodes, 2)).float()
         node_tpe = torch.randn(B, N_nodes, 8)
+        current_node_distance = torch.randn(B, N_nodes, 4)
         
         output = module(
             grid_features,
             graph_nodes,
             node_positions=node_positions,
             node_tpe=node_tpe,
+            current_node_distance=current_node_distance,
         )
         
         assert output.shape == grid_features.shape
@@ -350,6 +352,92 @@ class TestGraphGridAttention:
         output = module(grid_features, graph_nodes, edge_index=edge_index)
         assert output.shape == grid_features.shape
 
+    def test_graph_to_grid_aligns_malformed_tpe_width(self):
+        """OOD graph metadata with the wrong TPE width should be normalized instead of crashing."""
+        from src.core.graph_grid_attention import GraphToGridCrossAttention
+
+        module = GraphToGridCrossAttention(grid_dim=64, graph_dim=128)
+        grid_features = torch.randn(2, 64, 8, 8)
+        graph_nodes = torch.randn(2, 5, 128)
+        node_tpe = torch.randn(2, 5, 5)
+
+        output = module(grid_features, graph_nodes, node_tpe=node_tpe)
+        assert output.shape == grid_features.shape
+
+    def test_graph_to_grid_aligns_malformed_current_node_distance_width(self):
+        """Current-room distance features with the wrong width should be normalized instead of crashing."""
+        from src.core.graph_grid_attention import GraphToGridCrossAttention
+
+        module = GraphToGridCrossAttention(grid_dim=64, graph_dim=128)
+        grid_features = torch.randn(2, 64, 8, 8)
+        graph_nodes = torch.randn(2, 5, 128)
+        current_node_distance = torch.randn(2, 5, 2)
+
+        output = module(
+            grid_features,
+            graph_nodes,
+            current_node_distance=current_node_distance,
+        )
+        assert output.shape == grid_features.shape
+
+    def test_graph_to_grid_switches_to_linear_attention_for_large_graphs(self, monkeypatch):
+        """Large graph batches should automatically avoid quadratic softmax attention."""
+        import src.core.graph_grid_attention as graph_grid_attention
+        from src.core.graph_grid_attention import GraphToGridCrossAttention
+
+        seen = {"linear_called": False}
+
+        def _fake_linear_attention(Q, K, V, q_map, k_map, token_mask=None):
+            _ = (q_map, k_map, token_mask)
+            seen["linear_called"] = True
+            return torch.zeros_like(Q)
+
+        monkeypatch.setattr(graph_grid_attention, "hedgehog_linear_attention", _fake_linear_attention)
+
+        module = GraphToGridCrossAttention(
+            grid_dim=64,
+            graph_dim=128,
+            attention_mode="softmax",
+            auto_linear_attention_nodes=4,
+        )
+        grid_features = torch.randn(1, 64, 8, 8)
+        graph_nodes = torch.randn(1, 6, 128)
+
+        output = module(grid_features, graph_nodes)
+
+        assert output.shape == grid_features.shape
+        assert seen["linear_called"] is True
+
+    def test_lightweight_gcn_matches_dense_normalized_reference(self):
+        """The lightweight GCN should preserve normalized-adjacency behavior without dense N x N materialization."""
+        from src.core.graph_grid_attention import LightweightGCNLayer
+
+        layer = LightweightGCNLayer(in_dim=3, out_dim=2)
+        with torch.no_grad():
+            layer.linear.weight.copy_(torch.tensor([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]))
+            layer.linear.bias.zero_()
+
+        x = torch.tensor(
+            [[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]]],
+            dtype=torch.float32,
+        )
+        edge_index = torch.tensor([[0, 1], [1, 2]], dtype=torch.long)
+
+        output = layer(x, edge_index)
+
+        adj = torch.zeros(3, 3, dtype=torch.float32)
+        adj[0, 1] = 1.0
+        adj[1, 0] = 1.0
+        adj[1, 2] = 1.0
+        adj[2, 1] = 1.0
+        adj = adj + torch.eye(3, dtype=torch.float32)
+        deg = adj.sum(dim=1).clamp(min=1.0)
+        norm_adj = deg.pow(-0.5)[:, None] * adj * deg.pow(-0.5)[None, :]
+        projected = x[0, :, :2]
+        expected = norm_adj @ projected
+
+        assert torch.allclose(output[0], expected, atol=1e-6)
+
     def test_spatial_graph_conditioner_rejects_topology_batch_mismatch(self):
         """SpatialGraphConditioner should validate room-topology batch alignment."""
         from src.core.graph_grid_attention import SpatialGraphConditioner
@@ -365,14 +453,19 @@ class TestGraphGridAttention:
         with pytest.raises(ValueError, match="room_topology_map batch size"):
             module(grid_features, room_topology_map=room_topology_map)
 
-    def test_spatial_graph_conditioner_gates_allow_branch_gradients_from_step_one(self):
-        """Conditioning branches should receive gradients immediately instead of being frozen by zero gates."""
+    @pytest.mark.parametrize("topology_conditioning_mode", ["additive", "spade"])
+    def test_spatial_graph_conditioner_gates_allow_branch_gradients_from_step_one(
+        self,
+        topology_conditioning_mode,
+    ):
+        """Conditioning branches should receive gradients immediately for both additive and SPADE topology paths."""
         from src.core.graph_grid_attention import SpatialGraphConditioner
 
         module = SpatialGraphConditioner(
             grid_dim=64,
             graph_dim=128,
             topology_channels=18,
+            topology_conditioning_mode=topology_conditioning_mode,
         )
         grid_features = torch.randn(2, 64, 8, 8, requires_grad=True)
         graph_nodes = torch.randn(2, 5, 128, requires_grad=True)
@@ -390,13 +483,62 @@ class TestGraphGridAttention:
         loss = output.square().mean()
         loss.backward()
 
-        topo_grad = module.topology_conditioner.proj[0].weight.grad
+        topo_module = module.topology_conditioner
+        if topology_conditioning_mode == "additive":
+            topo_grad = topo_module.proj[0].weight.grad
+        else:
+            topo_grad = topo_module.to_scale_shift[0].weight.grad
         graph_grad = module.graph_cross_attn.q_proj.weight.grad
 
         assert topo_grad is not None
         assert graph_grad is not None
         assert topo_grad.abs().sum() > 0
         assert graph_grad.abs().sum() > 0
+
+    def test_attention_block_uses_room_anchor_only_for_generic_cross_attention_when_spatial_graph_path_is_active(self, monkeypatch):
+        """Graph-node tokens should flow through the dedicated spatial path rather than a duplicated generic cross-attention."""
+        from src.core.latent_diffusion import AttentionBlock
+
+        block = AttentionBlock(dim=64, context_dim=128)
+        x = torch.randn(2, 64, 8, 8)
+        context = torch.randn(2, 6, 128)
+        spatial_graph_data = {
+            "graph_nodes": torch.randn(2, 5, 128),
+            "edge_index": torch.tensor([[[0, 1, 2], [1, 2, 3]]], dtype=torch.long),
+            "node_positions": torch.randn(2, 5, 2),
+            "node_tpe": torch.randn(2, 5, 8),
+            "node_mask": torch.ones(2, 5),
+            "room_topology_map": torch.randn(2, 18, 16, 11),
+        }
+
+        seen = {}
+
+        def _fake_cross_attn(x_flat, cross_context, edge_index=None, node_mask=None):
+            seen["context_shape"] = tuple(cross_context.shape)
+            seen["edge_index"] = edge_index
+            seen["node_mask"] = node_mask
+            return torch.zeros_like(x_flat)
+
+        def _fake_spatial_conditioner(x_in, **kwargs):
+            seen["spatial_called"] = True
+            return x_in
+
+        monkeypatch.setattr(block.cross_attn, "forward", _fake_cross_attn)
+        monkeypatch.setattr(block.spatial_graph_conditioner, "forward", _fake_spatial_conditioner)
+
+        out = block(
+            x,
+            context,
+            context_edge_index=torch.tensor([[[0, 1, 2], [1, 2, 3]]], dtype=torch.long),
+            context_node_mask=torch.ones(2, 6),
+            spatial_graph_data=spatial_graph_data,
+        )
+
+        assert out.shape == x.shape
+        assert seen["context_shape"] == (2, 1, 128)
+        assert seen["edge_index"] is None
+        assert seen["node_mask"] is None
+        assert seen["spatial_called"] is True
 
 
 # ============================================================================

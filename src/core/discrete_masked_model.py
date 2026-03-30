@@ -245,12 +245,12 @@ class DiscreteMaskedRoomModel(nn.Module):
                 )
             spatial["node_mask"] = node_mask
 
-        for key in ("edge_index", "tpe", "node_positions", "room_topology_map"):
+        for key in ("edge_index", "tpe", "node_positions", "current_node_distance", "room_topology_map"):
             value = graph_data.get(key)
             if not isinstance(value, torch.Tensor):
                 continue
             value = value.to(context.device)
-            if key in {"tpe", "node_positions"} and value.dim() == 2:
+            if key in {"tpe", "node_positions", "current_node_distance"} and value.dim() == 2:
                 value = value.unsqueeze(0)
                 if batch_size > 1:
                     value = value.expand(batch_size, -1, -1)

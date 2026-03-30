@@ -39,12 +39,22 @@ class FastSamplerTrainingConfig:
         base_diffusion_checkpoint: str,
         data_dir: Optional[str] = None,
         batch_size: int = 4,
+        num_workers: int = 0,
+        pin_memory: bool = True,
+        drop_last: bool = True,
+        shuffle_train: bool = True,
+        shuffle_val: bool = False,
+        normalize: bool = True,
         room_level: bool = True,
         epochs: int = 10,
         learning_rate: float = 1e-4,
+        optimizer_weight_decay: float = 1e-4,
+        grad_clip_norm: float = 1.0,
         num_inference_steps: int = 4,
         lora_rank: int = 8,
         lora_alpha: float = 8.0,
+        prediction_loss_weight: float = 0.25,
+        save_every: int = 5,
         checkpoint_dir: str = "./checkpoints/fast_sampler",
         device: str = "auto",
         quick: bool = False,
@@ -52,12 +62,22 @@ class FastSamplerTrainingConfig:
         self.base_diffusion_checkpoint = str(base_diffusion_checkpoint)
         self.data_dir = data_dir
         self.batch_size = int(batch_size)
+        self.num_workers = int(max(0, num_workers))
+        self.pin_memory = bool(pin_memory)
+        self.drop_last = bool(drop_last)
+        self.shuffle_train = bool(shuffle_train)
+        self.shuffle_val = bool(shuffle_val)
+        self.normalize = bool(normalize)
         self.room_level = bool(room_level)
         self.epochs = 1 if quick else int(epochs)
         self.learning_rate = float(learning_rate)
+        self.optimizer_weight_decay = float(max(0.0, optimizer_weight_decay))
+        self.grad_clip_norm = float(max(0.0, grad_clip_norm))
         self.num_inference_steps = int(max(1, num_inference_steps))
         self.lora_rank = int(max(1, lora_rank))
         self.lora_alpha = float(lora_alpha)
+        self.prediction_loss_weight = float(max(0.0, prediction_loss_weight))
+        self.save_every = int(max(1, save_every))
         self.checkpoint_dir = str(checkpoint_dir)
         if device == "auto":
             self.device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -91,7 +111,7 @@ class ConsistencyLoRATrainer:
         self.optimizer = optim.AdamW(
             [p for p in self.student.parameters() if p.requires_grad],
             lr=self.config.learning_rate,
-            weight_decay=1e-4,
+            weight_decay=self.config.optimizer_weight_decay,
         )
         self.global_step = 0
         self.epoch = 0
@@ -172,14 +192,15 @@ class ConsistencyLoRATrainer:
 
         x0_loss = F.mse_loss(student_x0, teacher_x0)
         pred_loss = F.mse_loss(student_pred, teacher_pred)
-        loss = x0_loss + 0.25 * pred_loss
+        loss = x0_loss + (self.config.prediction_loss_weight * pred_loss)
 
         self.optimizer.zero_grad()
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(
-            [p for p in self.student.parameters() if p.requires_grad],
-            max_norm=1.0,
-        )
+        if self.config.grad_clip_norm > 0:
+            torch.nn.utils.clip_grad_norm_(
+                [p for p in self.student.parameters() if p.requires_grad],
+                max_norm=self.config.grad_clip_norm,
+            )
         self.optimizer.step()
         self.global_step += 1
 
@@ -225,7 +246,7 @@ class ConsistencyLoRATrainer:
 
         x0_loss = F.mse_loss(student_x0, teacher_x0)
         pred_loss = F.mse_loss(student_pred, teacher_pred)
-        loss = x0_loss + 0.25 * pred_loss
+        loss = x0_loss + (self.config.prediction_loss_weight * pred_loss)
         return {
             "val_loss": float(loss.item()),
             "val_x0_loss": float(x0_loss.item()),
@@ -255,18 +276,24 @@ def train_fast_sampler(config: FastSamplerTrainingConfig) -> ConsistencyLoRATrai
     train_loader = create_dataloader(
         data_dir,
         batch_size=config.batch_size,
-        shuffle=True,
+        shuffle=config.shuffle_train,
+        num_workers=config.num_workers,
+        pin_memory=config.pin_memory,
+        drop_last=config.drop_last,
         use_vglc=True,
-        normalize=True,
+        normalize=config.normalize,
         room_level=config.room_level,
         load_graphs=True,
     )
     val_loader = create_dataloader(
         data_dir,
         batch_size=config.batch_size,
-        shuffle=False,
+        shuffle=config.shuffle_val,
+        num_workers=config.num_workers,
+        pin_memory=config.pin_memory,
+        drop_last=config.drop_last,
         use_vglc=True,
-        normalize=True,
+        normalize=config.normalize,
         room_level=config.room_level,
         load_graphs=True,
     )
@@ -311,7 +338,7 @@ def train_fast_sampler(config: FastSamplerTrainingConfig) -> ConsistencyLoRATrai
             val_metrics["val_loss"],
         )
 
-        if (epoch + 1) % 5 == 0:
+        if (epoch + 1) % config.save_every == 0:
             trainer.save_checkpoint(str(checkpoint_dir / f"fast_sampler_epoch_{epoch+1:04d}.pth"), metrics)
         if val_metrics["val_loss"] < best_val:
             best_val = val_metrics["val_loss"]

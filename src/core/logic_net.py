@@ -38,6 +38,22 @@ import torch.nn.functional as F
 from torch import Tensor
 
 from src.core.definitions import DOOR_POSITIONS, ROOM_HEIGHT, ROOM_WIDTH
+try:
+    from src.pipeline.room_topology_conditioning import ROOM_TOPOLOGY_CHANNELS
+except Exception:
+    ROOM_TOPOLOGY_CHANNELS = {
+        "traversability": 0,
+        "start": 1,
+        "goal": 2,
+        "door_n": 3,
+        "door_s": 4,
+        "door_e": 5,
+        "door_w": 6,
+        "gated_n": 7,
+        "gated_s": 8,
+        "gated_e": 9,
+        "gated_w": 10,
+    }
 
 logger = logging.getLogger(__name__)
 
@@ -680,6 +696,8 @@ class LogicNet(nn.Module):
         temperature: float = 0.1,
         reach_weight: float = 1.0,
         lock_weight: float = 0.5,
+        topology_trace_weight: float = 0.25,
+        topology_anchor_weight: float = 0.25,
         # --- Phase 1D: Temperature annealing (Jang et al., 2017) ---
         initial_temperature: float = 1.0,
         final_temperature: float = 0.05,
@@ -692,6 +710,8 @@ class LogicNet(nn.Module):
         self.num_classes = num_classes
         self.reach_weight = reach_weight
         self.lock_weight = lock_weight
+        self.topology_trace_weight = float(max(0.0, topology_trace_weight))
+        self.topology_anchor_weight = float(max(0.0, topology_anchor_weight))
         
         # --- Phase 1D: Temperature annealing state ---
         self.initial_temperature = initial_temperature
@@ -745,6 +765,189 @@ class LogicNet(nn.Module):
             mode="bilinear",
             align_corners=False,
         )
+
+    @staticmethod
+    def _normalize_room_topology_map(
+        room_topology_map: Optional[Any],
+        *,
+        batch_size: int,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> Optional[Tensor]:
+        if not isinstance(room_topology_map, torch.Tensor):
+            return None
+        topo = room_topology_map.to(device=device, dtype=dtype)
+        if topo.dim() == 3:
+            topo = topo.unsqueeze(0)
+        if topo.dim() != 4:
+            raise ValueError(
+                f"LogicNet graph_data['room_topology_map'] must have shape [B,C,H,W] or [C,H,W], got {tuple(topo.shape)}."
+            )
+        if int(topo.shape[0]) == 1 and batch_size > 1:
+            topo = topo.expand(batch_size, -1, -1, -1)
+        elif int(topo.shape[0]) != batch_size:
+            raise ValueError(
+                f"LogicNet graph_data['room_topology_map'] batch {int(topo.shape[0])} does not match latent batch {batch_size}."
+            )
+        return topo
+
+    @staticmethod
+    def _normalize_boundary_constraints(
+        boundary_constraints: Optional[Any],
+        *,
+        batch_size: int,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> Optional[Tensor]:
+        if not isinstance(boundary_constraints, torch.Tensor):
+            return None
+        boundary = boundary_constraints.to(device=device, dtype=dtype)
+        if boundary.dim() == 1:
+            boundary = boundary.unsqueeze(0)
+        if boundary.dim() != 2 or int(boundary.shape[1]) != 8:
+            raise ValueError(
+                "LogicNet graph_data['boundary_constraints'] must have shape [B,8] or [8]."
+            )
+        if int(boundary.shape[0]) == 1 and batch_size > 1:
+            boundary = boundary.expand(batch_size, -1)
+        elif int(boundary.shape[0]) != batch_size:
+            raise ValueError(
+                f"LogicNet graph_data['boundary_constraints'] batch {int(boundary.shape[0])} does not match latent batch {batch_size}."
+            )
+        return boundary
+
+    @staticmethod
+    def _build_boundary_door_mask(
+        boundary_constraints: Optional[Tensor],
+        *,
+        batch_size: int,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> Optional[Tensor]:
+        if boundary_constraints is None:
+            return None
+        active = torch.maximum(
+            boundary_constraints[:, 0::2],
+            boundary_constraints[:, 1::2],
+        ).clamp(0.0, 1.0)
+        if float(active.sum().item()) <= 0.0:
+            return None
+
+        mask = torch.zeros(batch_size, 1, ROOM_HEIGHT, ROOM_WIDTH, device=device, dtype=dtype)
+        for idx, direction in enumerate(("N", "S", "E", "W")):
+            values = active[:, idx]
+            if direction in {"N", "S"}:
+                row = int(DOOR_POSITIONS[direction]["row"])
+                col_start = int(DOOR_POSITIONS[direction]["col_start"])
+                col_end = int(DOOR_POSITIONS[direction]["col_end"]) + 1
+                expanded = values.unsqueeze(-1).expand(-1, col_end - col_start)
+                mask[:, 0, row, col_start:col_end] = torch.maximum(mask[:, 0, row, col_start:col_end], expanded)
+            else:
+                row_start = int(DOOR_POSITIONS[direction]["row_start"])
+                row_end = int(DOOR_POSITIONS[direction]["row_end"]) + 1
+                col = int(DOOR_POSITIONS[direction]["col"])
+                expanded = values.unsqueeze(-1).expand(-1, row_end - row_start)
+                mask[:, 0, row_start:row_end, col] = torch.maximum(mask[:, 0, row_start:row_end, col], expanded)
+        return mask
+
+    def _resolve_room_logic_targets(
+        self,
+        graph_data: Optional[Any],
+        *,
+        batch_size: int,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> Dict[str, Optional[Tensor]]:
+        targets: Dict[str, Optional[Tensor]] = {
+            "source_mask": None,
+            "target_mask": None,
+            "trace_target": None,
+            "anchor_target": None,
+        }
+        if not isinstance(graph_data, dict):
+            return targets
+
+        topology_map = self._normalize_room_topology_map(
+            graph_data.get("room_topology_map"),
+            batch_size=batch_size,
+            device=device,
+            dtype=dtype,
+        )
+        boundary = self._normalize_boundary_constraints(
+            graph_data.get("boundary_constraints"),
+            batch_size=batch_size,
+            device=device,
+            dtype=dtype,
+        )
+
+        def _channel(name: str) -> Optional[Tensor]:
+            if topology_map is None:
+                return None
+            index = int(ROOM_TOPOLOGY_CHANNELS.get(name, -1))
+            if index < 0 or index >= int(topology_map.shape[1]):
+                return None
+            return topology_map[:, index:index + 1].clamp(0.0, 1.0)
+
+        trace_target = _channel("traversability")
+        start_target = _channel("start")
+        goal_target = _channel("goal")
+
+        door_parts = [
+            maybe
+            for maybe in (
+                _channel("door_n"),
+                _channel("door_s"),
+                _channel("door_e"),
+                _channel("door_w"),
+                _channel("gated_n"),
+                _channel("gated_s"),
+                _channel("gated_e"),
+                _channel("gated_w"),
+            )
+            if maybe is not None
+        ]
+        door_target = None
+        if door_parts:
+            door_target = torch.clamp(torch.sum(torch.cat(door_parts, dim=1), dim=1, keepdim=True), 0.0, 1.0)
+
+        boundary_door_target = self._build_boundary_door_mask(
+            boundary,
+            batch_size=batch_size,
+            device=device,
+            dtype=dtype,
+        )
+        if door_target is None:
+            door_target = boundary_door_target
+        elif boundary_door_target is not None:
+            door_target = torch.maximum(door_target, boundary_door_target)
+
+        if start_target is not None and float(start_target.sum().item()) > 0.0:
+            targets["source_mask"] = start_target
+        elif door_target is not None and float(door_target.sum().item()) > 0.0:
+            targets["source_mask"] = door_target
+
+        if goal_target is not None and float(goal_target.sum().item()) > 0.0:
+            targets["target_mask"] = goal_target
+        elif trace_target is not None and float(trace_target.sum().item()) > 0.0:
+            targets["target_mask"] = trace_target
+        elif door_target is not None and float(door_target.sum().item()) > 0.0:
+            targets["target_mask"] = door_target
+
+        anchor_parts = [
+            maybe
+            for maybe in (start_target, goal_target, door_target)
+            if maybe is not None and float(maybe.sum().item()) > 0.0
+        ]
+        if anchor_parts:
+            targets["anchor_target"] = torch.clamp(
+                torch.sum(torch.cat(anchor_parts, dim=1), dim=1, keepdim=True),
+                0.0,
+                1.0,
+            )
+        if trace_target is not None and float(trace_target.sum().item()) > 0.0:
+            targets["trace_target"] = trace_target
+
+        return targets
     
     def update_temperature(self, progress: float):
         """
@@ -847,8 +1050,15 @@ class LogicNet(nn.Module):
         info['walkability'] = walkability
 
         # 3. Compute within-room pathability
-        # Create source mask at canonical door positions on the room grid.
-        source_mask = self._create_door_source_mask(B, device)
+        room_logic_targets = self._resolve_room_logic_targets(
+            graph_data,
+            batch_size=B,
+            device=device,
+            dtype=walkability.dtype,
+        )
+        source_mask = room_logic_targets.get("source_mask")
+        if source_mask is None:
+            source_mask = self._create_door_source_mask(B, device)
 
         grid_distances = self.grid_pathfinder(
             tile_logits,
@@ -862,12 +1072,31 @@ class LogicNet(nn.Module):
         # to maintain differentiability. k=10 gives a steep but smooth step function.
         # (Bengio et al. 2013: smooth estimators for discrete latents)
         soft_walkable_mask = torch.sigmoid(10.0 * (walkability - 0.5))
+        grid_target_mask = room_logic_targets.get("target_mask")
+        if grid_target_mask is None:
+            grid_target_mask = soft_walkable_mask
         grid_reach_scores, grid_reach_loss = self.reachability(
             grid_distances.view(B, -1),
-            soft_walkable_mask.view(B, -1),
+            grid_target_mask.view(B, -1),
             return_loss=True,
         )
         info['grid_reachability'] = grid_reach_scores.mean()
+
+        topology_trace_loss = torch.tensor(0.0, device=device)
+        trace_target = room_logic_targets.get("trace_target")
+        if trace_target is not None:
+            trace_mass = trace_target.sum(dim=(1, 2, 3)).clamp_min(1e-6)
+            topology_trace_loss = (
+                ((1.0 - walkability) * trace_target).sum(dim=(1, 2, 3)) / trace_mass
+            ).mean()
+
+        topology_anchor_loss = torch.tensor(0.0, device=device)
+        anchor_target = room_logic_targets.get("anchor_target")
+        if anchor_target is not None:
+            anchor_mass = anchor_target.sum(dim=(1, 2, 3)).clamp_min(1e-6)
+            topology_anchor_loss = (
+                ((1.0 - walkability) * anchor_target).sum(dim=(1, 2, 3)) / anchor_mass
+            ).mean()
         
         # 4. Graph-level pathfinding (if graph data provided)
         graph_reach_loss = torch.tensor(0.0, device=device)
@@ -945,11 +1174,17 @@ class LogicNet(nn.Module):
         # for diagnostic/evaluation purposes.
         # Graph-level solvability is enforced at the dungeon-sequence level via
         # evaluate_dungeon_solvability() in the pipeline.
-        loss = self.reach_weight * grid_reach_loss
-        
+        loss = (
+            self.reach_weight * grid_reach_loss
+            + self.topology_trace_weight * topology_trace_loss
+            + self.topology_anchor_weight * topology_anchor_loss
+        )
+
         info['grid_reach_loss'] = grid_reach_loss
         info['graph_reach_loss'] = graph_reach_loss  # diagnostic only, not in loss
         info['lock_loss'] = lock_loss                 # diagnostic only, not in loss
+        info['topology_trace_loss'] = topology_trace_loss
+        info['topology_anchor_loss'] = topology_anchor_loss
         info['total_loss'] = loss
         
         return loss, info

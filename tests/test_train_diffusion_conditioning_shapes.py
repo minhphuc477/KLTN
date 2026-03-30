@@ -8,6 +8,8 @@ import torch
 from src.core.definitions import ROOM_HEIGHT, ROOM_WIDTH
 from src.train_diffusion import DiffusionTrainer
 
+EMPTY_NEIGHBORS = {"N": None, "S": None, "E": None, "W": None}
+
 
 class _DummyEvalModel:
     def __init__(self):
@@ -24,8 +26,12 @@ class _DummyEvalModel:
 
 
 class _DummyLogicNet(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.last_graph_data = None
+
     def forward(self, z_latent, graph_data=None):
-        _ = graph_data
+        self.last_graph_data = graph_data
         return torch.tensor(0.25, dtype=torch.float32), {}
 
 
@@ -33,6 +39,10 @@ class _DummyRoomAwareConditionEncoder:
     def __init__(self, output_dim: int = 8):
         self.output_dim = output_dim
         self.captured_current_node_idx = None
+        self.captured_current_node_distance = None
+        self.captured_return_global_tokens = None
+        self.captured_neighbor_latents = None
+        self.encode_global_only_calls = 0
 
     def __call__(
         self,
@@ -44,12 +54,21 @@ class _DummyRoomAwareConditionEncoder:
         edge_index,
         edge_features=None,
         tpe=None,
+        current_node_distance=None,
         current_node_idx=None,
         style_id=None,
+        return_global_tokens=False,
     ):
-        _ = (neighbor_latents, boundary_constraints, position, node_features, edge_index, edge_features, tpe, style_id)
+        _ = (boundary_constraints, position, node_features, edge_index, edge_features, tpe, style_id)
         self.captured_current_node_idx = current_node_idx
-        return torch.full((1, self.output_dim), 7.0, dtype=torch.float32)
+        self.captured_current_node_distance = current_node_distance
+        self.captured_return_global_tokens = return_global_tokens
+        self.captured_neighbor_latents = neighbor_latents
+        room_anchor = torch.full((1, self.output_dim), 7.0, dtype=torch.float32)
+        if return_global_tokens:
+            global_tokens = torch.full((1, int(node_features.shape[0]), self.output_dim), 3.0, dtype=torch.float32)
+            return room_anchor, global_tokens
+        return room_anchor
 
     def encode_global_only(
         self,
@@ -57,9 +76,68 @@ class _DummyRoomAwareConditionEncoder:
         edge_index,
         edge_features=None,
         tpe=None,
+        current_node_distance=None,
     ):
-        _ = (edge_index, edge_features, tpe)
+        _ = (edge_index, edge_features, tpe, current_node_distance)
+        self.encode_global_only_calls += 1
         return torch.full((int(node_features.shape[0]), self.output_dim), 3.0, dtype=torch.float32)
+
+    def encode_local_only(
+        self,
+        neighbor_latents,
+        boundary_constraints,
+        position,
+    ):
+        _ = (neighbor_latents, boundary_constraints, position)
+        return torch.full((1, self.output_dim), 5.0, dtype=torch.float32)
+
+
+def _make_node_sequence_graph_list() -> list[dict[str, torch.Tensor]]:
+    return [
+        {
+            "n": 3,
+            "node_features": torch.randn(3, 6),
+            "edge_index": torch.tensor([[0, 1], [1, 2]], dtype=torch.long),
+            "tpe": torch.tensor([[0.0] * 8, [0.5] * 8, [1.0] * 8], dtype=torch.float32),
+            "node_positions": torch.tensor([[0.0, 0.0], [0.0, 1.0], [1.0, 1.0]], dtype=torch.float32),
+        },
+        {
+            "n": 5,
+            "node_features": torch.randn(5, 6),
+            "edge_index": torch.tensor([[0, 1, 2], [1, 2, 3]], dtype=torch.long),
+            "tpe": torch.ones(5, 8, dtype=torch.float32),
+            "node_positions": torch.tensor(
+                [[0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [1.0, 2.0], [2.0, 2.0]],
+                dtype=torch.float32,
+            ),
+        },
+    ]
+
+
+def _assert_batched_graph_sequence(
+    graph_data: dict[str, torch.Tensor],
+    graph_list: list[dict[str, torch.Tensor]],
+) -> None:
+    assert tuple(graph_data["node_positions"].shape) == (2, 5, 2)
+    assert tuple(graph_data["current_node_distance"].shape) == (2, 5, 4)
+    assert tuple(graph_data["node_mask"].shape) == (2, 5)
+    assert tuple(graph_data["edge_index"].shape[:2]) == (2, 2)
+    assert torch.allclose(graph_data["node_positions"][0, :3], graph_list[0]["node_positions"])
+    assert torch.allclose(graph_data["tpe"][1, :5], graph_list[1]["tpe"])
+
+
+def _make_room_condition_graph_dict(**overrides) -> dict[str, object]:
+    graph_dict: dict[str, object] = {
+        "node_features": torch.randn(2, 6),
+        "edge_index": torch.tensor([[0], [1]], dtype=torch.long),
+        "edge_attr": torch.tensor([0], dtype=torch.long),
+        "tpe": torch.randn(2, 8),
+        "boundary_constraints": torch.zeros(8, dtype=torch.float32),
+        "room_position": torch.tensor([1.0, 2.0], dtype=torch.float32),
+        "current_node_idx": 0,
+    }
+    graph_dict.update(overrides)
+    return graph_dict
 
 
 def _make_stub_trainer(context_dim: int = 8) -> DiffusionTrainer:
@@ -98,8 +176,9 @@ def _make_stub_trainer(context_dim: int = 8) -> DiffusionTrainer:
         logic_graph_data=None,
         diffusion_graph_data=None,
     ):
-        _ = (real_maps, include_logic_loss, logic_graph_data)
+        _ = (real_maps, include_logic_loss)
         trainer.last_train_conditioning_shape = tuple(conditioning.shape)
+        trainer.last_train_logic_graph_data = logic_graph_data
         trainer.last_train_diffusion_graph_data = diffusion_graph_data
         return {
             "loss": 0.0,
@@ -116,77 +195,26 @@ def test_train_epoch_node_sequence_conditioning_is_batched_and_padded():
     trainer = _make_stub_trainer(context_dim=8)
 
     real_maps = torch.zeros((2, 1, ROOM_HEIGHT, ROOM_WIDTH), dtype=torch.float32)
-    graph_list = [
-        {
-            "n": 3,
-            "node_features": torch.randn(3, 6),
-            "edge_index": torch.tensor([[0, 1], [1, 2]], dtype=torch.long),
-            "tpe": torch.tensor([[0.0] * 8, [0.5] * 8, [1.0] * 8], dtype=torch.float32),
-            "node_positions": torch.tensor([[0.0, 0.0], [0.0, 1.0], [1.0, 1.0]], dtype=torch.float32),
-        },
-        {
-            "n": 5,
-            "node_features": torch.randn(5, 6),
-            "edge_index": torch.tensor([[0, 1, 2], [1, 2, 3]], dtype=torch.long),
-            "tpe": torch.ones(5, 8, dtype=torch.float32),
-            "node_positions": torch.tensor(
-                [[0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [1.0, 2.0], [2.0, 2.0]],
-                dtype=torch.float32,
-            ),
-        },
-    ]
+    graph_list = _make_node_sequence_graph_list()
     dataloader = [(real_maps, graph_list)]
 
     DiffusionTrainer.train_epoch(trainer, dataloader)
 
     assert trainer.last_train_conditioning_shape == (2, 5, 8)
-    assert tuple(trainer.last_train_diffusion_graph_data["node_positions"].shape) == (2, 5, 2)
-    assert tuple(trainer.last_train_diffusion_graph_data["node_mask"].shape) == (2, 5)
-    assert tuple(trainer.last_train_diffusion_graph_data["edge_index"].shape[:2]) == (2, 2)
-    assert torch.allclose(
-        trainer.last_train_diffusion_graph_data["node_positions"][0, :3],
-        graph_list[0]["node_positions"],
-    )
-    assert torch.allclose(
-        trainer.last_train_diffusion_graph_data["tpe"][1, :5],
-        graph_list[1]["tpe"],
-    )
+    _assert_batched_graph_sequence(trainer.last_train_diffusion_graph_data, graph_list)
 
 
 def test_validate_node_sequence_conditioning_is_batched_and_padded():
     trainer = _make_stub_trainer(context_dim=8)
 
     real_maps = torch.zeros((2, 1, ROOM_HEIGHT, ROOM_WIDTH), dtype=torch.float32)
-    graph_list = [
-        {
-            "n": 3,
-            "node_features": torch.randn(3, 6),
-            "edge_index": torch.tensor([[0, 1], [1, 2]], dtype=torch.long),
-            "tpe": torch.tensor([[0.0] * 8, [0.5] * 8, [1.0] * 8], dtype=torch.float32),
-            "node_positions": torch.tensor([[0.0, 0.0], [0.0, 1.0], [1.0, 1.0]], dtype=torch.float32),
-        },
-        {
-            "n": 5,
-            "node_features": torch.randn(5, 6),
-            "edge_index": torch.tensor([[0, 1, 2], [1, 2, 3]], dtype=torch.long),
-            "tpe": torch.ones(5, 8, dtype=torch.float32),
-            "node_positions": torch.tensor(
-                [[0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [1.0, 2.0], [2.0, 2.0]],
-                dtype=torch.float32,
-            ),
-        },
-    ]
+    graph_list = _make_node_sequence_graph_list()
     dataloader = [(real_maps, graph_list)]
 
     _metrics = DiffusionTrainer.validate(trainer, dataloader, num_samples=2)
 
     assert tuple(trainer.ema_diffusion.last_conditioning.shape) == (2, 5, 8)
-    assert tuple(trainer.ema_diffusion.last_graph_data["node_positions"].shape) == (2, 5, 2)
-    assert tuple(trainer.ema_diffusion.last_graph_data["node_mask"].shape) == (2, 5)
-    assert torch.allclose(
-        trainer.ema_diffusion.last_graph_data["node_positions"][0, :3],
-        graph_list[0]["node_positions"],
-    )
+    _assert_batched_graph_sequence(trainer.ema_diffusion.last_graph_data, graph_list)
     assert _metrics["val_logic_loss"] == pytest.approx(0.25)
     assert _metrics["val_solvability_proxy"] == pytest.approx(float(torch.exp(torch.tensor(-0.25)).item()))
     assert 0.0 <= _metrics["val_solvability_proxy"] <= 1.0
@@ -214,9 +242,101 @@ def test_encode_graph_conditioning_prepends_room_anchor_for_room_samples():
     assert torch.allclose(encoded[0], torch.full((8,), 7.0))
     assert torch.allclose(encoded[1:], torch.full((3, 8), 3.0))
     assert trainer.condition_encoder.captured_current_node_idx == 2
+    assert tuple(trainer.condition_encoder.captured_current_node_distance.shape) == (3, 4)
+    assert float(trainer.condition_encoder.captured_current_node_distance[2, 3]) == pytest.approx(1.0)
+    assert trainer.condition_encoder.captured_return_global_tokens is True
+    assert trainer.condition_encoder.encode_global_only_calls == 0
+    assert trainer.condition_encoder.captured_neighbor_latents == EMPTY_NEIGHBORS
 
 
-def test_stack_diffusion_graph_batch_rejects_mixed_anchor_semantics():
+def test_encode_graph_conditioning_uses_teacher_forced_neighbor_latents_when_available():
+    trainer = DiffusionTrainer.__new__(DiffusionTrainer)
+    trainer.config = SimpleNamespace(graph_conditioning_mode="node_sequence", context_dim=8)
+    trainer.device = torch.device("cpu")
+    trainer.condition_encoder = _DummyRoomAwareConditionEncoder(output_dim=8)
+
+    def _encode_to_latent_stub(room_map):
+        value = float(room_map.mean().item())
+        return torch.full((int(room_map.shape[0]), 4, 2, 2), value, dtype=torch.float32)
+
+    trainer.encode_to_latent = _encode_to_latent_stub
+
+    graph_dict = _make_room_condition_graph_dict(
+        neighbor_maps={
+            "N": torch.full((1, ROOM_HEIGHT, ROOM_WIDTH), 0.25, dtype=torch.float32),
+            "S": None,
+            "E": torch.full((1, ROOM_HEIGHT, ROOM_WIDTH), 0.75, dtype=torch.float32),
+            "W": None,
+        },
+    )
+
+    _encoded = DiffusionTrainer._encode_graph_conditioning(trainer, graph_dict)
+
+    captured = trainer.condition_encoder.captured_neighbor_latents
+    assert captured is not None
+    assert captured["S"] is None
+    assert captured["W"] is None
+    assert tuple(captured["N"].shape) == (1, 4, 2, 2)
+    assert tuple(captured["E"].shape) == (1, 4, 2, 2)
+    assert torch.allclose(captured["N"], torch.full((1, 4, 2, 2), 0.25))
+    assert torch.allclose(captured["E"], torch.full((1, 4, 2, 2), 0.75))
+
+
+def test_encode_graph_conditioning_can_disable_teacher_forced_neighbor_latents():
+    trainer = DiffusionTrainer.__new__(DiffusionTrainer)
+    trainer.config = SimpleNamespace(
+        graph_conditioning_mode="node_sequence",
+        context_dim=8,
+        use_teacher_forced_neighbor_latents=False,
+    )
+    trainer.device = torch.device("cpu")
+    trainer.condition_encoder = _DummyRoomAwareConditionEncoder(output_dim=8)
+    trainer.encode_to_latent = lambda room_map: torch.full((1, 4, 2, 2), 9.0, dtype=torch.float32)
+
+    graph_dict = _make_room_condition_graph_dict(
+        neighbor_maps={
+            "N": torch.full((1, ROOM_HEIGHT, ROOM_WIDTH), 0.25, dtype=torch.float32),
+        },
+    )
+
+    _encoded = DiffusionTrainer._encode_graph_conditioning(trainer, graph_dict)
+
+    assert trainer.condition_encoder.captured_neighbor_latents == EMPTY_NEIGHBORS
+
+
+def test_encode_graph_conditioning_prepends_default_anchor_for_plain_graph_samples():
+    trainer = DiffusionTrainer.__new__(DiffusionTrainer)
+    trainer.config = SimpleNamespace(graph_conditioning_mode="node_sequence", context_dim=8)
+    trainer.device = torch.device("cpu")
+    trainer.condition_encoder = _DummyRoomAwareConditionEncoder(output_dim=8)
+
+    graph_dict = {
+        "node_features": torch.randn(3, 6),
+        "edge_index": torch.tensor([[0, 1], [1, 2]], dtype=torch.long),
+        "edge_attr": torch.tensor([0, 1], dtype=torch.long),
+        "tpe": torch.randn(3, 8),
+    }
+
+    encoded = DiffusionTrainer._encode_graph_conditioning(trainer, graph_dict)
+
+    assert tuple(encoded.shape) == (4, 8)
+    assert torch.allclose(encoded[0], torch.full((8,), 5.0))
+    assert torch.allclose(encoded[1:], torch.full((3, 8), 3.0))
+    assert trainer.condition_encoder.encode_global_only_calls == 1
+
+
+def test_get_dummy_conditioning_returns_deterministic_null_conditioning():
+    trainer = DiffusionTrainer.__new__(DiffusionTrainer)
+    trainer.config = SimpleNamespace(graph_conditioning_mode="node_sequence", context_dim=8)
+    trainer.device = torch.device("cpu")
+
+    conditioning = DiffusionTrainer.get_dummy_conditioning(trainer, batch_size=3)
+
+    assert tuple(conditioning.shape) == (3, 1, 8)
+    assert torch.count_nonzero(conditioning) == 0
+
+
+def test_stack_diffusion_graph_batch_canonicalizes_mixed_anchor_semantics():
     trainer = _make_stub_trainer(context_dim=8)
 
     graph_list = [
@@ -225,8 +345,7 @@ def test_stack_diffusion_graph_batch_rejects_mixed_anchor_semantics():
             "edge_index": torch.tensor([[0, 1], [1, 2]], dtype=torch.long),
             "tpe": torch.randn(3, 8),
             "node_positions": torch.randn(3, 2),
-            "boundary_constraints": torch.zeros(8, dtype=torch.float32),
-            "room_position": torch.zeros(2, dtype=torch.float32),
+            "has_room_anchor": True,
         },
         {
             "node_features": torch.randn(3, 6),
@@ -236,8 +355,89 @@ def test_stack_diffusion_graph_batch_rejects_mixed_anchor_semantics():
         },
     ]
 
-    with pytest.raises(ValueError, match="Mixed graph anchor semantics"):
-        DiffusionTrainer._stack_diffusion_graph_batch(trainer, graph_list)
+    stacked = DiffusionTrainer._stack_diffusion_graph_batch(trainer, graph_list)
+
+    assert stacked["has_room_anchor"] is True
+    assert tuple(stacked["node_features"].shape) == (2, 3, 6)
+    assert tuple(stacked["node_mask"].shape) == (2, 3)
+
+
+def test_train_epoch_and_validate_pass_batched_room_topology_into_logicnet():
+    trainer = _make_stub_trainer(context_dim=8)
+
+    real_maps = torch.zeros((2, 1, ROOM_HEIGHT, ROOM_WIDTH), dtype=torch.float32)
+    graph_list = [
+        {
+            "n": 3,
+            "node_features": torch.randn(3, 6),
+            "edge_index": torch.tensor([[0, 1], [1, 2]], dtype=torch.long),
+            "tpe": torch.randn(3, 8),
+            "node_positions": torch.randn(3, 2),
+            "room_topology_map": torch.randn(18, ROOM_HEIGHT, ROOM_WIDTH),
+            "boundary_constraints": torch.zeros(8, dtype=torch.float32),
+        },
+        {
+            "n": 4,
+            "node_features": torch.randn(4, 6),
+            "edge_index": torch.tensor([[0, 1, 2], [1, 2, 3]], dtype=torch.long),
+            "tpe": torch.randn(4, 8),
+            "node_positions": torch.randn(4, 2),
+            "room_topology_map": torch.randn(18, ROOM_HEIGHT, ROOM_WIDTH),
+            "boundary_constraints": torch.tensor([0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0], dtype=torch.float32),
+        },
+    ]
+    dataloader = [(real_maps, graph_list)]
+
+    DiffusionTrainer.train_epoch(trainer, dataloader)
+    _ = DiffusionTrainer.validate(trainer, dataloader, num_samples=2)
+
+    assert trainer.last_train_logic_graph_data is not None
+    assert trainer.last_train_diffusion_graph_data is not None
+    assert tuple(trainer.last_train_logic_graph_data["room_topology_map"].shape) == (2, 18, ROOM_HEIGHT, ROOM_WIDTH)
+    assert tuple(trainer.last_train_logic_graph_data["boundary_constraints"].shape) == (2, 8)
+    assert tuple(trainer.logic_net.last_graph_data["room_topology_map"].shape) == (2, 18, ROOM_HEIGHT, ROOM_WIDTH)
+    assert tuple(trainer.logic_net.last_graph_data["boundary_constraints"].shape) == (2, 8)
+
+
+def test_normalize_diffusion_graph_sample_uses_rwse_fallback_for_missing_tpe_and_positions():
+    trainer = _make_stub_trainer(context_dim=8)
+
+    graph_dict = {
+        "node_features": torch.randn(4, 6),
+        "edge_index": torch.tensor([[0, 1, 2], [1, 2, 3]], dtype=torch.long),
+        "tpe": torch.randn(2, 5),
+        "node_positions": torch.randn(3, 1),
+    }
+
+    sample = DiffusionTrainer._normalize_diffusion_graph_sample(trainer, graph_dict)
+
+    assert tuple(sample["tpe"].shape) == (4, 8)
+    assert tuple(sample["current_node_distance"].shape) == (4, 4)
+    assert tuple(sample["node_positions"].shape) == (4, 2)
+    assert torch.isfinite(sample["tpe"]).all()
+    assert torch.isfinite(sample["current_node_distance"]).all()
+    assert torch.isfinite(sample["node_positions"]).all()
+    assert float(sample["tpe"].abs().sum().item()) > 0.0
+
+
+def test_normalize_diffusion_graph_sample_builds_current_node_distance_from_anchor():
+    trainer = _make_stub_trainer(context_dim=8)
+    trainer.config.current_node_distance_max = 4
+
+    graph_dict = {
+        "node_features": torch.randn(4, 6),
+        "edge_index": torch.tensor([[0, 1, 2], [1, 2, 3]], dtype=torch.long),
+        "current_node_idx": 2,
+    }
+
+    sample = DiffusionTrainer._normalize_diffusion_graph_sample(trainer, graph_dict)
+
+    assert tuple(sample["current_node_distance"].shape) == (4, 4)
+    assert float(sample["current_node_distance"][2, 0]) == pytest.approx(0.0)
+    assert float(sample["current_node_distance"][2, 1]) == pytest.approx(0.0)
+    assert float(sample["current_node_distance"][2, 2]) == pytest.approx(0.0)
+    assert float(sample["current_node_distance"][2, 3]) == pytest.approx(1.0)
+    assert float(sample["current_node_distance"][3, 1]) == pytest.approx(0.25)
 
 
 def test_stack_diffusion_graph_batch_rejects_mixed_topology_map_presence():

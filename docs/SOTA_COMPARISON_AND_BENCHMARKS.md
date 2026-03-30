@@ -1,6 +1,6 @@
 # SOTA Comparison, Architecture Audit, and Benchmark Protocol
 
-Last updated: 2026-02-24
+Last updated: 2026-03-30
 
 This is the research baseline for this repository:
 - what is already implemented,
@@ -65,6 +65,18 @@ Implemented upgrades:
 - Ablation metrics semantics are now explicit:
   - `confusion_ratio` = CBS path length / optimal path length (when both succeed)
   - `confusion_index` = CBS revisit-based cognitive confusion metric
+
+### 1.5 Audit-closure implementation updates
+
+Implemented in the current pass:
+- `main.py train` is now the single canonical training surface; `src/train.py` forwards into it as a compatibility wrapper instead of maintaining a second configuration path.
+- The Zelda schema lock is now explicit and reproducible via `dataset.schema_profile=zelda_v1`, and the resolved snapshot metadata records the exact schema contract used by each run.
+- `configs/zelda_hmolqd.yaml` now encodes the reduced small-data-balanced profile recommended by the audit:
+  - diffusion `model_channels=96`
+  - diffusion `condition_hidden_dim=192`
+  - diffusion `condition_num_gnn_layers=2`
+  - masked-room analogues aligned to the same profile
+- Diffusion and masked-room entrypoints now log trainable parameter counts and emit runtime warnings when model capacity is disproportionately large relative to the current Zelda corpus.
 
 ## 2. Quantitative Literature Comparison (Numbers, Not Only Ideas)
 
@@ -131,8 +143,8 @@ flowchart LR
   B0[Block 0 Data Adapter<br/>VGLC txt + DOT parsing]
   B1[Block I Mission Graph Generator<br/>Grammar + Evolution/QD]
   B2[Block II VQ-VAE<br/>Discrete latent space]
-  B3[Block III Condition Encoder<br/>Neighbors + graph + TPE]
-  B4[Block IV Latent Generator<br/>Diffusion or categorical]
+  B3[Block III Condition Encoder<br/>Neighbors + graph + TPE + current-room distance]
+  B4[Block IV Latent Generator<br/>Latent diffusion or categorical]
   B5[Block V Logic Guidance<br/>Differentiable solvability signal]
   B6[Block VI Symbolic Repair<br/>WFC / local repair]
   B7[Block VII Evaluation/QD<br/>Benchmark suite + MAP-Elites]
@@ -190,8 +202,8 @@ Soft constraints:
 
 `src/pipeline/dungeon_pipeline.py`:
 1. Encode mission graph into node/edge features (+ optional TPE).
-2. Build per-room conditioning using neighborhood + graph context.
-3. Sample room latent (`diffusion` or `categorical` path).
+2. Build per-room conditioning using neighborhood context, node-sequence graph tokens, and explicit current-room distance features.
+3. Sample room latent (`diffusion` or `categorical` path) with CFG plus topology-aware conditioning and optional LogicNet room-topology guidance.
 4. Decode latent to tile logits/grid.
 5. Apply symbolic repair if enabled, then stitch all rooms.
 
@@ -199,7 +211,11 @@ Soft constraints:
 
 - Supports both diffusion and categorical latent generation.
 - Supports conditioning ablation with/without TPE.
+- Supports current-room-relative graph conditioning instead of relying on implicit token selection only.
+- Supports explicit room-topology-aware LogicNet losses instead of relying on room-grid reachability alone.
 - Supports room-level repair-rate measurement.
+- Supports canonical YAML-driven reproducibility snapshots with an explicit dataset schema lock.
+- Supports composite diffusion checkpoint reuse without silently reverting to default latent widths and hidden widths.
 
 ### 7.3 Current gap and best next improvement
 
@@ -237,6 +253,18 @@ Recommendation:
 In short: evolution-at-end is optional; repair and correctness should stay before final evaluation.
 
 ## 10. Reproducible Commands
+
+Canonical full training:
+
+```bash
+python main.py train --config configs/zelda_hmolqd.yaml --stage all
+```
+
+Canonical diffusion-only training:
+
+```bash
+python main.py train --config configs/zelda_hmolqd.yaml --stage diffusion
+```
 
 Block-I benchmark + calibration + WFC probe:
 
@@ -282,10 +310,11 @@ python scripts/run_matched_budget_topology_benchmark.py \
 
 ## 11. Current Priority Roadmap
 
-1. Move production QD archive to CVT/CMA-emitter configuration.
-2. Add explicit room-maze descriptors to Block II-IV objectives.
-3. Expand fixed-seed ablations to trained checkpoints for final thesis tables.
-4. Add player-study or stronger cognitive-agent validation beyond solver pass/fail.
+1. Benchmark the reduced canonical profile against the older high-capacity profile and report the quality/cost tradeoff explicitly.
+2. Move production QD archive to CVT/CMA-emitter configuration.
+3. Add explicit room-maze descriptors to Block II-IV objectives.
+4. Expand fixed-seed ablations to trained checkpoints for final thesis tables.
+5. Add player-study or stronger cognitive-agent validation beyond solver pass/fail.
 
 ## References
 

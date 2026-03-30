@@ -28,6 +28,7 @@ from src.generation.evolutionary_director import (
     mission_graph_to_networkx,
     networkx_to_mission_graph,
 )
+from src.generation.grammar import MissionGraph, MissionNode, NodeType, EdgeType
 
 
 class TestEvolutionaryDirector:
@@ -392,6 +393,120 @@ class TestGraphGrammarExecutor:
         assert len(graph.nodes) > 0
         assert len(graph.nodes) <= 20  # max_nodes limit
 
+    def test_degree_projection_preserves_locked_edges_before_paths(self):
+        """Degree pruning should remove soft edges before progression gates."""
+        executor = GraphGrammarExecutor(seed=42)
+        graph = MissionGraph()
+        for nid, node_type in [
+            (0, NodeType.START),
+            (1, NodeType.EMPTY),
+            (2, NodeType.LOCK),
+            (3, NodeType.ENEMY),
+            (4, NodeType.ENEMY),
+            (5, NodeType.ENEMY),
+            (6, NodeType.GOAL),
+        ]:
+            graph.add_node(MissionNode(id=nid, node_type=node_type))
+
+        graph.add_edge(0, 1, EdgeType.PATH)
+        graph.add_edge(1, 2, EdgeType.LOCKED, key_required=99)
+        graph.add_edge(1, 3, EdgeType.PATH)
+        graph.add_edge(1, 4, EdgeType.PATH)
+        graph.add_edge(1, 5, EdgeType.PATH)
+        graph.add_edge(1, 6, EdgeType.PATH)
+        graph.sanitize()
+
+        removed = executor._enforce_max_degree(graph, max_degree=4)
+
+        assert removed > 0
+        assert any(edge.edge_type == EdgeType.LOCKED for edge in graph.edges)
+
+    def test_allow_candidate_repairs_false_skips_invalid_candidates(self):
+        """Invalid candidates should be skipped when repairs are disabled."""
+        class DummyInvalidRule:
+            name = "DummyInvalid"
+
+            def can_apply(self, graph, context):
+                return True
+
+            def apply(self, graph, context):
+                graph.add_node(MissionNode(id=2, node_type=NodeType.ENEMY))
+                graph.add_edge(0, 2, EdgeType.PATH)
+                return graph
+
+        class DummyConstraintGrammar:
+            def ensure_anchor_nodes(self, graph):
+                return graph
+
+            def validate_lock_key_ordering(self, graph):
+                return False
+
+            def validate_progression_constraints(self, graph):
+                return False
+
+            def fix_lock_key_ordering(self, graph):
+                raise AssertionError("repairs must not run when allow_candidate_repairs=False")
+
+            def repair_progression_constraints(self, graph):
+                raise AssertionError("repairs must not run when allow_candidate_repairs=False")
+
+        executor = GraphGrammarExecutor(seed=42, allow_candidate_repairs=False)
+        executor.rules = [executor.rules[0], DummyInvalidRule()]
+        executor.rule_names = ["Start", "DummyInvalid"]
+        executor._constraint_grammar = DummyConstraintGrammar()
+
+        graph = executor.execute([1], record_trace=True)
+
+        assert len(graph.nodes) == 2
+        assert graph.generation_stats["candidate_repairs_applied"] == 0
+        assert graph.generation_stats["generation_constraint_rejections"] == 1
+        assert graph.generation_stats["rule_skipped"] == 1
+
+    def test_allow_candidate_repairs_true_retries_invalid_candidates(self):
+        """When enabled, candidate repairs should be attempted before rejection."""
+        class DummyInvalidRule:
+            name = "DummyInvalid"
+
+            def can_apply(self, graph, context):
+                return True
+
+            def apply(self, graph, context):
+                graph.add_node(MissionNode(id=2, node_type=NodeType.ENEMY))
+                graph.add_edge(0, 2, EdgeType.PATH)
+                return graph
+
+        class DummyConstraintGrammar:
+            def __init__(self):
+                self.repaired = False
+
+            def ensure_anchor_nodes(self, graph):
+                return graph
+
+            def validate_lock_key_ordering(self, graph):
+                return self.repaired
+
+            def validate_progression_constraints(self, graph):
+                return self.repaired
+
+            def fix_lock_key_ordering(self, graph):
+                self.repaired = True
+                return graph
+
+            def repair_progression_constraints(self, graph):
+                return graph
+
+        executor = GraphGrammarExecutor(seed=42, allow_candidate_repairs=True)
+        executor.rules = [executor.rules[0], DummyInvalidRule()]
+        executor.rule_names = ["Start", "DummyInvalid"]
+        executor._constraint_grammar = DummyConstraintGrammar()
+
+        graph = executor.execute([1], record_trace=True)
+
+        assert len(graph.nodes) == 3
+        assert graph.generation_stats["candidate_repairs_applied"] == 1
+        assert graph.generation_stats["generation_constraint_rejections"] == 1
+        assert graph.generation_stats["rule_applied"] == 1
+
 
 class TestGraphConversion:
     """Test graph format conversions."""
@@ -442,6 +557,65 @@ class TestGraphConversion:
         # Verify START and GOAL preserved
         assert reconstructed.get_start_node() is not None
         assert reconstructed.get_goal_node() is not None
+
+    def test_sparse_node_ids_export_to_dense_tensor_indices(self):
+        """Sparse node IDs from rewrites must still export valid tensors."""
+        graph = MissionGraph()
+        graph.add_node(MissionNode(id=0, node_type=NodeType.START))
+        graph.add_node(MissionNode(id=2, node_type=NodeType.ENEMY))
+        graph.add_node(MissionNode(id=5, node_type=NodeType.GOAL))
+        graph.add_edge(0, 2, EdgeType.PATH)
+        graph.add_edge(2, 5, EdgeType.PATH)
+        graph.sanitize()
+
+        edge_index, node_features = graph.to_tensor()
+        adjacency = graph.to_adjacency_matrix()
+
+        assert edge_index.shape == (2, 2)
+        assert node_features.shape[0] == len(graph.nodes)
+        assert int(edge_index.max().item()) < node_features.shape[0]
+        assert adjacency.shape == (len(graph.nodes), len(graph.nodes))
+        assert adjacency[0, 1] == 1.0
+        assert adjacency[1, 2] == 1.0
+        assert adjacency[1, 0] == 1.0
+        assert adjacency[2, 1] == 1.0
+
+    def test_full_rule_executor_graph_export_handles_sparse_ids(self):
+        """Executor outputs remain exportable after prune and merge rules."""
+        executor = GraphGrammarExecutor(seed=0, use_full_rule_space=True)
+        genome = [i % (len(executor.rules) - 1) + 1 for i in range(25)]
+        graph = executor.execute(genome, max_nodes=18, allow_override=True)
+
+        edge_index, node_features = graph.to_tensor()
+        adjacency = graph.to_adjacency_matrix()
+
+        assert edge_index.shape[0] == 2
+        assert node_features.shape[0] == len(graph.nodes)
+        if edge_index.numel() > 0:
+            assert int(edge_index.max().item()) < node_features.shape[0]
+        assert adjacency.shape == (len(graph.nodes), len(graph.nodes))
+
+    def test_compute_tpe_uses_reverse_goal_distances_for_directed_edges(self):
+        """Distance-to-goal must respect reverse traversal over directed mission edges."""
+        graph = MissionGraph()
+        graph.add_node(MissionNode(id=0, node_type=NodeType.START))
+        graph.add_node(MissionNode(id=1, node_type=NodeType.ENEMY))
+        graph.add_node(MissionNode(id=2, node_type=NodeType.GOAL))
+        graph.add_edge(0, 1, EdgeType.PATH)
+        graph.add_edge(1, 2, EdgeType.ONE_WAY)
+        graph.sanitize()
+
+        tpe = graph.compute_tpe()
+
+        assert tpe.shape == (3, 8)
+        # start -> goal distance is 2 hops, so reverse distance-to-goal
+        # should normalize to [1.0, 0.5, 0.0] for [start, mid, goal].
+        assert abs(float(tpe[0, 1]) - 1.0) < 1e-6
+        assert abs(float(tpe[1, 1]) - 0.5) < 1e-6
+        assert abs(float(tpe[2, 1]) - 0.0) < 1e-6
+        assert float(tpe[0, 3]) == 1.0
+        assert float(tpe[1, 3]) == 1.0
+        assert float(tpe[2, 3]) == 1.0
 
 
 class TestStatistics:

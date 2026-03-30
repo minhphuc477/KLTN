@@ -41,6 +41,7 @@ from src.core.attention_kernels import HedgehogFeatureMap, hedgehog_linear_atten
 from src.core.graph_grid_attention import SpatialGraphConditioner
 
 logger = logging.getLogger(__name__)
+HAS_SDPA = hasattr(F, "scaled_dot_product_attention")
 
 
 # ============================================================================
@@ -132,6 +133,12 @@ class SelfAttention(nn.Module):
     
     def __init__(self, dim: int, num_heads: int = 8, dropout: float = 0.0):
         super().__init__()
+        if int(num_heads) <= 0:
+            raise ValueError(f"SelfAttention num_heads must be > 0, got {num_heads}.")
+        if int(dim) % int(num_heads) != 0:
+            raise ValueError(
+                f"SelfAttention requires dim to be divisible by num_heads; got dim={dim}, num_heads={num_heads}."
+            )
         self.num_heads = num_heads
         self.head_dim = dim // num_heads
         self.scale = self.head_dim ** -0.5
@@ -154,12 +161,19 @@ class SelfAttention(nn.Module):
         qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, self.head_dim)
         qkv = qkv.permute(2, 0, 3, 1, 4)  # [3, B, H, N, D]
         q, k, v = qkv[0], qkv[1], qkv[2]
-        
-        attn = (q @ k.transpose(-2, -1)) * self.scale
-        attn = attn.softmax(dim=-1)
-        attn = self.dropout(attn)
-        
-        out = (attn @ v).transpose(1, 2).reshape(B, N, C)
+
+        if HAS_SDPA:
+            out = F.scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                dropout_p=self.dropout.p if self.training else 0.0,
+            ).transpose(1, 2).reshape(B, N, C)
+        else:
+            attn = (q @ k.transpose(-2, -1)) * self.scale
+            attn = attn.softmax(dim=-1)
+            attn = self.dropout(attn)
+            out = (attn @ v).transpose(1, 2).reshape(B, N, C)
         return self.proj(out)
 
 
@@ -177,6 +191,13 @@ class CrossAttention(nn.Module):
         hedgehog_feature_dim: int = 32,
     ):
         super().__init__()
+        if int(num_heads) <= 0:
+            raise ValueError(f"CrossAttention num_heads must be > 0, got {num_heads}.")
+        if int(query_dim) % int(num_heads) != 0:
+            raise ValueError(
+                "CrossAttention requires query_dim to be divisible by num_heads; "
+                f"got query_dim={query_dim}, num_heads={num_heads}."
+            )
         self.num_heads = num_heads
         self.head_dim = query_dim // num_heads
         self.scale = self.head_dim ** -0.5
@@ -393,17 +414,38 @@ class CrossAttention(nn.Module):
                 token_mask=node_mask,
             ).transpose(1, 2).reshape(B, N, C)
         else:
-            attn = (q @ k.transpose(-2, -1)) * self.scale
+            attn_mask = None
             if node_mask is not None:
                 mask = node_mask
                 if mask.dim() == 1:
                     mask = mask.unsqueeze(0)
                 if mask.shape[0] == 1 and B > 1:
                     mask = mask.expand(B, -1)
-                attn = attn.masked_fill(mask[:, None, None, :] == 0, float("-inf"))
-            attn = attn.softmax(dim=-1)
-            attn = self.dropout(attn)
-            out = (attn @ v).transpose(1, 2).reshape(B, N, C)
+                attn_mask = torch.zeros(
+                    B,
+                    1,
+                    1,
+                    int(mask.shape[-1]),
+                    device=q.device,
+                    dtype=q.dtype,
+                )
+                attn_mask = attn_mask.masked_fill(mask[:, None, None, :] == 0, float("-inf"))
+
+            if HAS_SDPA:
+                out = F.scaled_dot_product_attention(
+                    q,
+                    k,
+                    v,
+                    attn_mask=attn_mask,
+                    dropout_p=self.dropout.p if self.training else 0.0,
+                ).transpose(1, 2).reshape(B, N, C)
+            else:
+                attn = (q @ k.transpose(-2, -1)) * self.scale
+                if attn_mask is not None:
+                    attn = attn + attn_mask
+                attn = attn.softmax(dim=-1)
+                attn = self.dropout(attn)
+                out = (attn @ v).transpose(1, 2).reshape(B, N, C)
         return self.proj(out)
 
 
@@ -489,6 +531,10 @@ class AttentionBlock(nn.Module):
         attention_mode: str = "softmax",
         hedgehog_feature_dim: int = 32,
         topology_map_channels: int = 18,
+        topology_conditioning_mode: str = "additive",
+        auto_linear_attention_nodes: int = 128,
+        graph_gate_init: float = -2.0,
+        topology_gate_init: float = -2.0,
     ):
         super().__init__()
         
@@ -505,10 +551,14 @@ class AttentionBlock(nn.Module):
             grid_dim=dim,
             graph_dim=context_dim,
             topology_channels=topology_map_channels,
+            topology_conditioning_mode=topology_conditioning_mode,
             num_heads=num_heads,
             dropout=dropout,
             attention_mode=attention_mode,
             hedgehog_feature_dim=hedgehog_feature_dim,
+            auto_linear_attention_nodes=auto_linear_attention_nodes,
+            graph_gate_init=graph_gate_init,
+            topology_gate_init=topology_gate_init,
         )
         
         self.ffn = nn.Sequential(
@@ -542,12 +592,30 @@ class AttentionBlock(nn.Module):
         # Self-attention
         x_flat = x_flat + self.self_attn(x_flat)
         
+        cross_context = context
+        cross_edge_index = context_edge_index
+        cross_node_mask = context_node_mask
+        if (
+            spatial_graph_data
+            and isinstance(context, torch.Tensor)
+            and context.dim() == 3
+            and int(context.shape[1]) > 1
+            and isinstance(spatial_graph_data.get("graph_nodes"), torch.Tensor)
+            and int(spatial_graph_data["graph_nodes"].shape[1]) > 0
+        ):
+            # Avoid injecting the same graph-node sequence twice: keep the room
+            # summary token on the generic cross-attention path and let the
+            # dedicated spatial conditioner handle graph-node grounding.
+            cross_context = context[:, :1, :]
+            cross_edge_index = None
+            cross_node_mask = None
+
         # Cross-attention with context
         x_flat = x_flat + self.cross_attn(
             x_flat,
-            context,
-            edge_index=context_edge_index,
-            node_mask=context_node_mask,
+            cross_context,
+            edge_index=cross_edge_index,
+            node_mask=cross_node_mask,
         )
 
         x = x_flat.permute(0, 2, 1).view(B, C, H, W)
@@ -558,6 +626,7 @@ class AttentionBlock(nn.Module):
                 edge_index=spatial_graph_data.get("edge_index"),
                 node_positions=spatial_graph_data.get("node_positions"),
                 node_tpe=spatial_graph_data.get("node_tpe"),
+                current_node_distance=spatial_graph_data.get("current_node_distance"),
                 node_mask=spatial_graph_data.get("node_mask"),
                 room_topology_map=spatial_graph_data.get("room_topology_map"),
             )
@@ -579,12 +648,18 @@ class DownBlock(nn.Module):
         out_channels: int,
         time_dim: int,
         context_dim: int,
+        num_heads: int = 8,
         num_res_blocks: int = 2,
         has_attention: bool = True,
         downsample: bool = True,
+        dropout: float = 0.1,
         attention_mode: str = "softmax",
         hedgehog_feature_dim: int = 32,
         topology_map_channels: int = 18,
+        topology_conditioning_mode: str = "additive",
+        auto_linear_attention_nodes: int = 128,
+        graph_gate_init: float = -2.0,
+        topology_gate_init: float = -2.0,
     ):
         super().__init__()
         
@@ -593,16 +668,22 @@ class DownBlock(nn.Module):
         
         for i in range(num_res_blocks):
             in_ch = in_channels if i == 0 else out_channels
-            self.res_blocks.append(ResBlock(in_ch, out_channels, time_dim))
+            self.res_blocks.append(ResBlock(in_ch, out_channels, time_dim, dropout=dropout))
             
             if has_attention:
                 self.attn_blocks.append(
                     AttentionBlock(
                         out_channels,
                         context_dim,
+                        num_heads=num_heads,
+                        dropout=dropout,
                         attention_mode=attention_mode,
                         hedgehog_feature_dim=hedgehog_feature_dim,
                         topology_map_channels=topology_map_channels,
+                        topology_conditioning_mode=topology_conditioning_mode,
+                        auto_linear_attention_nodes=auto_linear_attention_nodes,
+                        graph_gate_init=graph_gate_init,
+                        topology_gate_init=topology_gate_init,
                     )
                 )
             else:
@@ -659,12 +740,18 @@ class UpBlock(nn.Module):
         skip_channels: int,
         time_dim: int,
         context_dim: int,
+        num_heads: int = 8,
         num_res_blocks: int = 2,
         has_attention: bool = True,
         upsample: bool = True,
+        dropout: float = 0.1,
         attention_mode: str = "softmax",
         hedgehog_feature_dim: int = 32,
         topology_map_channels: int = 18,
+        topology_conditioning_mode: str = "additive",
+        auto_linear_attention_nodes: int = 128,
+        graph_gate_init: float = -2.0,
+        topology_gate_init: float = -2.0,
     ):
         super().__init__()
         
@@ -679,16 +766,22 @@ class UpBlock(nn.Module):
         for i in range(num_res_blocks):
             # Every ResBlock receives a skip connection (concat on channel dim)
             in_ch = (in_channels if i == 0 else out_channels) + skip_channels
-            self.res_blocks.append(ResBlock(in_ch, out_channels, time_dim))
+            self.res_blocks.append(ResBlock(in_ch, out_channels, time_dim, dropout=dropout))
             
             if has_attention:
                 self.attn_blocks.append(
                     AttentionBlock(
                         out_channels,
                         context_dim,
+                        num_heads=num_heads,
+                        dropout=dropout,
                         attention_mode=attention_mode,
                         hedgehog_feature_dim=hedgehog_feature_dim,
                         topology_map_channels=topology_map_channels,
+                        topology_conditioning_mode=topology_conditioning_mode,
+                        auto_linear_attention_nodes=auto_linear_attention_nodes,
+                        graph_gate_init=graph_gate_init,
+                        topology_gate_init=topology_gate_init,
                     )
                 )
             else:
@@ -761,10 +854,15 @@ class UNetDenoiser(nn.Module):
         channel_mult: Tuple[int, ...] = (1, 2, 4),
         num_res_blocks: int = 2,
         attention_resolutions: Tuple[int, ...] = (1, 2),
+        num_heads: int = 8,
         dropout: float = 0.1,
         attention_mode: str = "softmax",
         hedgehog_feature_dim: int = 32,
         topology_map_channels: int = 18,
+        topology_conditioning_mode: str = "additive",
+        auto_linear_attention_nodes: int = 128,
+        graph_gate_init: float = -2.0,
+        topology_gate_init: float = -2.0,
     ):
         super().__init__()
         
@@ -794,26 +892,38 @@ class UNetDenoiser(nn.Module):
                 out_channels=out_ch,
                 time_dim=time_dim,
                 context_dim=context_dim,
+                num_heads=num_heads,
                 num_res_blocks=num_res_blocks,
                 has_attention=has_attn,
                 downsample=downsample,
+                dropout=dropout,
                 attention_mode=attention_mode,
                 hedgehog_feature_dim=hedgehog_feature_dim,
                 topology_map_channels=topology_map_channels,
+                topology_conditioning_mode=topology_conditioning_mode,
+                auto_linear_attention_nodes=auto_linear_attention_nodes,
+                graph_gate_init=graph_gate_init,
+                topology_gate_init=topology_gate_init,
             ))
             channels.append(out_ch)
         
         # Bottleneck
         mid_ch = channels[-1]
-        self.mid_block1 = ResBlock(mid_ch, mid_ch, time_dim)
+        self.mid_block1 = ResBlock(mid_ch, mid_ch, time_dim, dropout=dropout)
         self.mid_attn = AttentionBlock(
             mid_ch,
             context_dim,
+            num_heads=num_heads,
+            dropout=dropout,
             attention_mode=attention_mode,
             hedgehog_feature_dim=hedgehog_feature_dim,
             topology_map_channels=topology_map_channels,
+            topology_conditioning_mode=topology_conditioning_mode,
+            auto_linear_attention_nodes=auto_linear_attention_nodes,
+            graph_gate_init=graph_gate_init,
+            topology_gate_init=topology_gate_init,
         )
-        self.mid_block2 = ResBlock(mid_ch, mid_ch, time_dim)
+        self.mid_block2 = ResBlock(mid_ch, mid_ch, time_dim, dropout=dropout)
         
         # Build decoder
         self.up_blocks = nn.ModuleList()
@@ -831,12 +941,18 @@ class UNetDenoiser(nn.Module):
                 skip_channels=skip_ch,
                 time_dim=time_dim,
                 context_dim=context_dim,
+                num_heads=num_heads,
                 num_res_blocks=num_res_blocks,
                 has_attention=has_attn,
                 upsample=upsample,
+                dropout=dropout,
                 attention_mode=attention_mode,
                 hedgehog_feature_dim=hedgehog_feature_dim,
                 topology_map_channels=topology_map_channels,
+                topology_conditioning_mode=topology_conditioning_mode,
+                auto_linear_attention_nodes=auto_linear_attention_nodes,
+                graph_gate_init=graph_gate_init,
+                topology_gate_init=topology_gate_init,
             ))
             channels.append(out_ch)
         
@@ -938,6 +1054,7 @@ class GradientGuidance(nn.Module):
         logic_net: Optional[nn.Module] = None,
         guidance_scale: float = 1.0,
         clamp_magnitude: float = 1.0,
+        relative_norm_cap: float = 0.25,
         schedule_enabled: bool = True,
         active_fraction: float = 0.30,
         decay_power: float = 1.0,
@@ -949,6 +1066,7 @@ class GradientGuidance(nn.Module):
         self.logic_net = logic_net
         self.guidance_scale = guidance_scale
         self.clamp_magnitude = clamp_magnitude
+        self.relative_norm_cap = float(max(0.0, float(relative_norm_cap)))
         self.schedule_enabled = bool(schedule_enabled)
         self.active_fraction = float(max(0.05, min(1.0, float(active_fraction))))
         self.decay_power = float(max(0.25, float(decay_power)))
@@ -977,22 +1095,78 @@ class GradientGuidance(nn.Module):
             )
             return None
 
+        target_device = device
+        target_dtype = dtype
+
+        room_topology_map = graph_data.get("room_topology_map")
+        if isinstance(room_topology_map, torch.Tensor):
+            room_topology_map = room_topology_map.detach()
+            if room_topology_map.dim() == 3:
+                room_topology_map = room_topology_map.unsqueeze(0)
+            if room_topology_map.dim() != 4:
+                logger.warning(
+                    "Gradient guidance: room_topology_map must have shape [B,C,H,W] or [C,H,W], got %s; ignoring topology map.",
+                    tuple(room_topology_map.shape),
+                )
+                room_topology_map = None
+            else:
+                if target_device is None:
+                    target_device = room_topology_map.device
+                if target_dtype is None:
+                    target_dtype = room_topology_map.dtype if torch.is_floating_point(room_topology_map) else torch.float32
+                room_topology_map = room_topology_map.to(device=target_device, dtype=torch.float32).clamp_(0.0, 1.0)
+                room_topology_map = room_topology_map.to(dtype=target_dtype)
+        else:
+            room_topology_map = None
+
+        boundary_constraints = graph_data.get("boundary_constraints")
+        if isinstance(boundary_constraints, torch.Tensor):
+            boundary_constraints = boundary_constraints.detach()
+            if boundary_constraints.dim() == 1:
+                boundary_constraints = boundary_constraints.unsqueeze(0)
+            if boundary_constraints.dim() != 2 or int(boundary_constraints.shape[1]) != 8:
+                logger.warning(
+                    "Gradient guidance: boundary_constraints must have shape [B,8] or [8], got %s; ignoring boundary constraints.",
+                    tuple(boundary_constraints.shape),
+                )
+                boundary_constraints = None
+            else:
+                if target_device is None:
+                    target_device = boundary_constraints.device
+                if target_dtype is None:
+                    target_dtype = (
+                        boundary_constraints.dtype if torch.is_floating_point(boundary_constraints) else torch.float32
+                    )
+                boundary_constraints = boundary_constraints.to(device=target_device, dtype=torch.float32).clamp_(0.0, 1.0)
+                boundary_constraints = boundary_constraints.to(dtype=target_dtype)
+        else:
+            boundary_constraints = None
+
         adjacency = graph_data.get("adjacency")
         edge_weights = graph_data.get("edge_weights")
 
-        # No graph adjacency => run LogicNet in room-only mode.
-        if adjacency is None and edge_weights is None:
+        # No graph adjacency and no room-topology context => nothing to sanitize.
+        if adjacency is None and edge_weights is None and room_topology_map is None and boundary_constraints is None:
             return None
+
+        sanitized: Dict[str, Any] = {}
+        if room_topology_map is not None:
+            sanitized["room_topology_map"] = room_topology_map
+        if boundary_constraints is not None:
+            sanitized["boundary_constraints"] = boundary_constraints
+
+        if adjacency is None and edge_weights is None:
+            return sanitized or None
 
         if not isinstance(adjacency, torch.Tensor) or adjacency.dim() != 2:
             logger.warning("Gradient guidance: invalid adjacency tensor; disabling graph guidance.")
-            return None
+            return sanitized or None
         if adjacency.shape[0] != adjacency.shape[1]:
             logger.warning(
                 "Gradient guidance: adjacency must be square, got %s.",
                 tuple(adjacency.shape),
             )
-            return None
+            return sanitized or None
         node_count = int(adjacency.shape[0])
         if node_count > self.max_graph_nodes:
             logger.warning(
@@ -1000,10 +1174,10 @@ class GradientGuidance(nn.Module):
                 node_count,
                 self.max_graph_nodes,
             )
-            return None
+            return sanitized or None
 
-        target_device = device if device is not None else adjacency.device
-        target_dtype = dtype if dtype is not None else (
+        target_device = target_device if target_device is not None else adjacency.device
+        target_dtype = target_dtype if target_dtype is not None else (
             adjacency.dtype if torch.is_floating_point(adjacency) else torch.float32
         )
         adjacency = adjacency.detach().to(device=target_device, dtype=torch.float32)
@@ -1060,13 +1234,14 @@ class GradientGuidance(nn.Module):
                 if 0 <= key_idx < node_count and 0 <= lock_idx < node_count:
                     key_lock_pairs.append((key_idx, lock_idx))
 
-        return {
+        sanitized.update({
             "adjacency": adjacency,
             "edge_weights": edge_weights,
             "start_idx": int(start_idx),
             "target_idx": target_idx,
             "key_lock_pairs": key_lock_pairs,
-        }
+        })
+        return sanitized
 
     @staticmethod
     def _extract_logic_loss(logic_out: Any) -> Optional[Tensor]:
@@ -1175,8 +1350,17 @@ class GradientGuidance(nn.Module):
             grad_norm = grad.view(grad.shape[0], -1).norm(dim=1)
             grad_norm = grad_norm.view(grad.shape[0], *([1] * (grad.dim() - 1)))
             grad = grad * torch.clamp(self.clamp_magnitude / (grad_norm + 1e-8), max=1.0)
-        
-        return float(scaled_gamma) * grad
+
+        guidance = float(scaled_gamma) * grad
+        if self.relative_norm_cap > 0:
+            ref_norm = x_t.detach().view(x_t.shape[0], -1).norm(dim=1)
+            ref_norm = ref_norm.view(x_t.shape[0], *([1] * (x_t.dim() - 1)))
+            guidance_norm = guidance.view(guidance.shape[0], -1).norm(dim=1)
+            guidance_norm = guidance_norm.view(guidance.shape[0], *([1] * (guidance.dim() - 1)))
+            max_guidance_norm = torch.clamp(ref_norm * self.relative_norm_cap, min=1e-8)
+            guidance = guidance * torch.clamp(max_guidance_norm / (guidance_norm + 1e-8), max=1.0)
+
+        return guidance
     
     def apply_guidance(
         self,
@@ -1266,6 +1450,15 @@ class LatentDiffusionModel(nn.Module):
         attention_mode: str = "softmax",
         hedgehog_feature_dim: int = 32,
         room_topology_channels: int = 18,
+        topology_conditioning_mode: str = "additive",
+        unet_channel_mult: Tuple[int, ...] = (1, 2, 4),
+        unet_num_res_blocks: int = 2,
+        unet_attention_resolutions: Tuple[int, ...] = (1, 2),
+        unet_num_heads: int = 8,
+        unet_dropout: float = 0.1,
+        graph_auto_linear_attention_nodes: int = 128,
+        spatial_graph_gate_init: float = -2.0,
+        spatial_topology_gate_init: float = -2.0,
     ):
         super().__init__()
         
@@ -1282,6 +1475,12 @@ class LatentDiffusionModel(nn.Module):
         self.attention_mode = str(attention_mode).strip().lower()
         self.hedgehog_feature_dim = int(max(4, int(hedgehog_feature_dim)))
         self.room_topology_channels = int(max(1, int(room_topology_channels)))
+        self.topology_conditioning_mode = str(topology_conditioning_mode).strip().lower()
+        if self.topology_conditioning_mode not in {"additive", "spade"}:
+            raise ValueError(
+                "topology_conditioning_mode must be 'additive' or 'spade'. "
+                f"Got {topology_conditioning_mode!r}."
+            )
         self.fast_sampler = None
         self.fast_sampler_checkpoint: Optional[str] = None
         
@@ -1291,9 +1490,18 @@ class LatentDiffusionModel(nn.Module):
             model_channels=model_channels,
             out_channels=latent_dim,
             context_dim=context_dim,
+            channel_mult=tuple(int(v) for v in unet_channel_mult),
+            num_res_blocks=int(unet_num_res_blocks),
+            attention_resolutions=tuple(int(v) for v in unet_attention_resolutions),
+            num_heads=int(unet_num_heads),
+            dropout=float(unet_dropout),
             attention_mode=self.attention_mode,
             hedgehog_feature_dim=self.hedgehog_feature_dim,
             topology_map_channels=self.room_topology_channels,
+            topology_conditioning_mode=self.topology_conditioning_mode,
+            auto_linear_attention_nodes=int(graph_auto_linear_attention_nodes),
+            graph_gate_init=float(spatial_graph_gate_init),
+            topology_gate_init=float(spatial_topology_gate_init),
         )
         self.set_topology_refinement_mode(topology_refinement_mode)
         self.set_attention_mode(self.attention_mode)
@@ -1626,12 +1834,12 @@ class LatentDiffusionModel(nn.Module):
                 )
             spatial["node_mask"] = node_mask
 
-        for key in ("edge_index", "tpe", "node_positions", "room_topology_map"):
+        for key in ("edge_index", "tpe", "node_positions", "current_node_distance", "room_topology_map"):
             value = graph_data.get(key)
             if not isinstance(value, torch.Tensor):
                 continue
             value = value.to(context.device)
-            if key in {"tpe", "node_positions"} and value.dim() == 2:
+            if key in {"tpe", "node_positions", "current_node_distance"} and value.dim() == 2:
                 value = value.unsqueeze(0)
                 if batch_size > 1:
                     value = value.expand(batch_size, -1, -1)
@@ -1641,6 +1849,12 @@ class LatentDiffusionModel(nn.Module):
                 if int(value.shape[1]) != num_nodes or int(value.shape[-1]) != 2:
                     raise ValueError(
                         f"node_positions shape {tuple(value.shape)} must match [B, N, 2] with N={num_nodes}."
+                    )
+            if key == "current_node_distance" and value.dim() >= 3:
+                if int(value.shape[1]) != num_nodes or int(value.shape[-1]) != 4:
+                    raise ValueError(
+                        "current_node_distance shape "
+                        f"{tuple(value.shape)} must match [B, N, 4] with N={num_nodes}."
                     )
             if key == "room_topology_map" and value.dim() == 3:
                 value = value.unsqueeze(0)
@@ -1656,8 +1870,6 @@ class LatentDiffusionModel(nn.Module):
                 )
             target_key = "node_tpe" if key == "tpe" else key
             spatial[target_key] = value
-
-        spatial["has_room_anchor"] = torch.tensor([1.0 if has_room_anchor else 0.0], device=context.device)
 
         return spatial or None
 
@@ -1735,6 +1947,38 @@ class LatentDiffusionModel(nn.Module):
             pred_noise = prediction
             pred_x0 = (x_t - sqrt_one_minus_alpha_t * pred_noise) / (sqrt_alpha_t + 1e-8)
         
+        return pred_x0, pred_noise
+
+    def _apply_logic_guidance_to_prediction(
+        self,
+        *,
+        x_t: Tensor,
+        pred_x0: Tensor,
+        pred_noise: Tensor,
+        t: int,
+        graph_data: Optional[Dict[str, Tensor]] = None,
+    ) -> Tuple[Tensor, Tensor]:
+        """
+        Apply LogicNet guidance to a DDIM-style score/noise parameterization.
+
+        Dhariwal & Nichol (NeurIPS 2021) formulate guidance in score space.
+        For epsilon-parameterized diffusion this corresponds to adjusting the
+        predicted noise and then recomputing x_0 from the same timestep.
+        """
+        if self.guidance.logic_net is None or self.guidance.guidance_scale <= 0:
+            return pred_x0, pred_noise
+
+        guidance_grad = self.guidance.compute_guidance(
+            x_t,
+            graph_data,
+            t=int(t),
+            num_timesteps=int(self.num_timesteps),
+        )
+        sqrt_one_minus_alpha_t = self.sqrt_one_minus_alphas_cumprod[t]
+        pred_noise = pred_noise + sqrt_one_minus_alpha_t * guidance_grad
+        sqrt_alpha_t = self.sqrt_alphas_cumprod[t]
+        pred_x0 = (x_t - sqrt_one_minus_alpha_t * pred_noise) / torch.clamp(sqrt_alpha_t, min=1e-8)
+        pred_x0 = torch.clamp(pred_x0, -1.0, 1.0)
         return pred_x0, pred_noise
     
     def p_mean_variance(
@@ -1950,21 +2194,13 @@ class LatentDiffusionModel(nn.Module):
             
             # Apply LogicNet gradient guidance BEFORE the DDIM step
             # (Dhariwal & Nichol 2021 §3.2: guidance modifies score prediction)
-            if self.guidance.logic_net is not None and self.guidance.guidance_scale > 0:
-                guidance_grad = self.guidance.compute_guidance(
-                    x_t,
-                    graph_data,
-                    t=int(t),
-                    num_timesteps=int(self.num_timesteps),
-                )
-                # Modify predicted noise to steer the trajectory towards lower loss
-                # score = -noise/sigma -> new_score = score - grad_loss
-                # new_noise = noise + sigma * grad_loss
-                sqrt_one_minus_alpha_t = self.sqrt_one_minus_alphas_cumprod[t]
-                pred_noise = pred_noise + sqrt_one_minus_alpha_t * guidance_grad
-                sqrt_alpha_t = self.sqrt_alphas_cumprod[t]
-                pred_x0 = (x_t - sqrt_one_minus_alpha_t * pred_noise) / torch.clamp(sqrt_alpha_t, min=1e-8)
-                pred_x0 = torch.clamp(pred_x0, -1.0, 1.0)
+            pred_x0, pred_noise = self._apply_logic_guidance_to_prediction(
+                x_t=x_t,
+                pred_x0=pred_x0,
+                pred_noise=pred_noise,
+                t=int(t),
+                graph_data=graph_data,
+            )
             
             # Get next timestep
             if i + 1 < len(timesteps):
@@ -2055,18 +2291,13 @@ class LatentDiffusionModel(nn.Module):
             pred_x0, pred_noise = self._convert_prediction(prediction, x_t, t_tensor)
             pred_x0 = torch.clamp(pred_x0, -1.0, 1.0)
 
-            if self.guidance.logic_net is not None and self.guidance.guidance_scale > 0:
-                guidance_grad = self.guidance.compute_guidance(
-                    x_t,
-                    graph_data,
-                    t=int(t),
-                    num_timesteps=int(self.num_timesteps),
-                )
-                sqrt_one_minus_alpha_t = self.sqrt_one_minus_alphas_cumprod[t]
-                pred_noise = pred_noise + sqrt_one_minus_alpha_t * guidance_grad
-                sqrt_alpha_t = self.sqrt_alphas_cumprod[t]
-                pred_x0 = (x_t - sqrt_one_minus_alpha_t * pred_noise) / torch.clamp(sqrt_alpha_t, min=1e-8)
-                pred_x0 = torch.clamp(pred_x0, -1.0, 1.0)
+            pred_x0, pred_noise = self._apply_logic_guidance_to_prediction(
+                x_t=x_t,
+                pred_x0=pred_x0,
+                pred_noise=pred_noise,
+                t=int(t),
+                graph_data=graph_data,
+            )
 
             if i + 1 < len(t_schedule):
                 t_prev = int(t_schedule[i + 1])
@@ -2185,6 +2416,15 @@ def create_latent_diffusion(
     cfg_schedule_min_scale: float = 1.0,
     cfg_schedule_power: float = 1.0,
     min_snr_gamma: float = 5.0,
+    topology_conditioning_mode: str = "additive",
+    unet_channel_mult: Tuple[int, ...] = (1, 2, 4),
+    unet_num_res_blocks: int = 2,
+    unet_attention_resolutions: Tuple[int, ...] = (1, 2),
+    unet_num_heads: int = 8,
+    unet_dropout: float = 0.1,
+    graph_auto_linear_attention_nodes: int = 128,
+    spatial_graph_gate_init: float = -2.0,
+    spatial_topology_gate_init: float = -2.0,
     **kwargs,
 ) -> LatentDiffusionModel:
     """
@@ -2217,5 +2457,14 @@ def create_latent_diffusion(
         cfg_schedule_min_scale=cfg_schedule_min_scale,
         cfg_schedule_power=cfg_schedule_power,
         min_snr_gamma=min_snr_gamma,
+        topology_conditioning_mode=topology_conditioning_mode,
+        unet_channel_mult=unet_channel_mult,
+        unet_num_res_blocks=unet_num_res_blocks,
+        unet_attention_resolutions=unet_attention_resolutions,
+        unet_num_heads=unet_num_heads,
+        unet_dropout=unet_dropout,
+        graph_auto_linear_attention_nodes=graph_auto_linear_attention_nodes,
+        spatial_graph_gate_init=spatial_graph_gate_init,
+        spatial_topology_gate_init=spatial_topology_gate_init,
         **kwargs,
     )

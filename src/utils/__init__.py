@@ -12,6 +12,22 @@ Components:
 """
 
 from .checkpoint import CheckpointManager, EarlyStopping, MetricsLogger
+from .distributed import (
+    DistributedContext,
+    average_gradients,
+    build_torchrun_command,
+    destroy_distributed,
+    get_env_local_rank,
+    get_env_rank,
+    get_env_world_size,
+    initialize_distributed,
+    is_torchrun_environment,
+    make_distributed_sampler,
+    maybe_barrier,
+    maybe_launch_with_torchrun,
+    reduce_scalar_metrics,
+    resolve_device,
+)
 from .graph_utils import (
     filter_virtual_nodes,
     get_physical_start_node,
@@ -33,6 +49,20 @@ __all__ = [
     'CheckpointManager', 
     'EarlyStopping', 
     'MetricsLogger',
+    'DistributedContext',
+    'average_gradients',
+    'build_torchrun_command',
+    'destroy_distributed',
+    'get_env_local_rank',
+    'get_env_rank',
+    'get_env_world_size',
+    'initialize_distributed',
+    'is_torchrun_environment',
+    'make_distributed_sampler',
+    'maybe_barrier',
+    'maybe_launch_with_torchrun',
+    'reduce_scalar_metrics',
+    'resolve_device',
     # Graph utilities
     'filter_virtual_nodes',
     'get_physical_start_node',

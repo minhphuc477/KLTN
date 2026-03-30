@@ -43,6 +43,7 @@ from torch import Tensor
 from src.core.attention_kernels import HedgehogFeatureMap, hedgehog_linear_attention
 
 logger = logging.getLogger(__name__)
+HAS_SDPA = hasattr(F, "scaled_dot_product_attention")
 
 
 # ============================================================================
@@ -70,7 +71,6 @@ class LightweightGCNLayer(nn.Module):
         out = []
         for bi in range(b):
             xb = x[bi]  # [N, D]
-            adj = torch.zeros(n, n, device=xb.device, dtype=xb.dtype)
 
             if edge_index.dim() == 3:
                 if int(edge_index.shape[0]) == b:
@@ -90,22 +90,28 @@ class LightweightGCNLayer(nn.Module):
                     f"LightweightGCNLayer edge_index first dimension must be 2, got {tuple(ei.shape)}."
                 )
 
+            z = self.linear(xb)
+            self_idx = torch.arange(n, device=xb.device, dtype=torch.long)
             if ei.numel() > 0:
                 src = ei[0].long()
                 dst = ei[1].long()
                 valid = (src >= 0) & (src < n) & (dst >= 0) & (dst < n)
                 src = src[valid]
                 dst = dst[valid]
-                adj[src, dst] = 1.0
-                adj[dst, src] = 1.0
+                src_all = torch.cat([src, dst, self_idx], dim=0)
+                dst_all = torch.cat([dst, src, self_idx], dim=0)
+            else:
+                src_all = self_idx
+                dst_all = self_idx
 
-            # Add self-loops and normalize.
-            adj = adj + torch.eye(n, device=adj.device, dtype=adj.dtype)
-            deg = adj.sum(dim=1).clamp(min=1.0)
-            inv_sqrt = deg.pow(-0.5)
-            norm_adj = inv_sqrt[:, None] * adj * inv_sqrt[None, :]
+            deg = torch.zeros(n, device=xb.device, dtype=xb.dtype)
+            deg.index_add_(0, src_all, torch.ones(src_all.shape[0], device=xb.device, dtype=xb.dtype))
+            norm = deg[src_all].clamp(min=1.0).pow(-0.5) * deg[dst_all].clamp(min=1.0).pow(-0.5)
 
-            out.append(norm_adj @ self.linear(xb))
+            messages = z[dst_all] * norm.unsqueeze(-1)
+            aggregated = torch.zeros_like(z)
+            aggregated.index_add_(0, src_all, messages)
+            out.append(aggregated)
 
         return torch.stack(out, dim=0)
 
@@ -226,6 +232,11 @@ class GraphNodePositionEncoding(nn.Module):
             nn.ReLU(),
             nn.Linear(hidden_dim, dim),
         )
+        self.distance_embed = nn.Sequential(
+            nn.Linear(4, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, dim),
+        )
         # Degree-style structural features are lightweight but permutation aware.
         self.struct_embed = nn.Sequential(
             nn.Linear(2, hidden_dim),
@@ -234,6 +245,7 @@ class GraphNodePositionEncoding(nn.Module):
         )
         self.pos_gate = nn.Parameter(torch.tensor(1.0))
         self.topo_gate = nn.Parameter(torch.tensor(1.0))
+        self.distance_gate = nn.Parameter(torch.tensor(1.0))
         self.struct_gate = nn.Parameter(torch.tensor(1.0))
         self.output_norm = nn.LayerNorm(dim)
     
@@ -242,6 +254,7 @@ class GraphNodePositionEncoding(nn.Module):
         node_features: Tensor,
         node_positions: Optional[Tensor] = None,
         tpe: Optional[Tensor] = None,
+        current_node_distance: Optional[Tensor] = None,
         structure_features: Optional[Tensor] = None,
     ) -> Tensor:
         """
@@ -264,6 +277,10 @@ class GraphNodePositionEncoding(nn.Module):
         if tpe is not None:
             topo_enc = self.topo_embed(tpe.float())
             output = output + torch.sigmoid(self.topo_gate) * topo_enc
+
+        if current_node_distance is not None:
+            distance_enc = self.distance_embed(current_node_distance.float())
+            output = output + torch.sigmoid(self.distance_gate) * distance_enc
 
         if structure_features is not None:
             struct_enc = self.struct_embed(structure_features.float())
@@ -308,6 +325,7 @@ class GraphToGridCrossAttention(nn.Module):
         dropout: float = 0.1,
         attention_mode: str = "softmax",
         hedgehog_feature_dim: int = 32,
+        auto_linear_attention_nodes: int = 128,
         allow_legacy_argument_swap: bool = False,
     ):
         super().__init__()
@@ -329,7 +347,9 @@ class GraphToGridCrossAttention(nn.Module):
         self.head_dim = grid_dim // num_heads
         self.scale = self.head_dim ** -0.5
         self.attention_mode = "softmax"
+        self.auto_linear_attention_nodes = int(max(0, int(auto_linear_attention_nodes)))
         self.allow_legacy_argument_swap = bool(allow_legacy_argument_swap)
+        self._large_graph_fallback_warning_emitted = False
 
         # Grid position encoding
         self.grid_pe = SinusoidalPositionEncoding2D(grid_dim)
@@ -343,6 +363,11 @@ class GraphToGridCrossAttention(nn.Module):
             nn.Linear(2, max(4, num_heads)),
             nn.SiLU(),
             nn.Linear(max(4, num_heads), num_heads),
+        )
+        self.node_distance_bias = nn.Sequential(
+            nn.Linear(4, max(8, num_heads)),
+            nn.SiLU(),
+            nn.Linear(max(8, num_heads), num_heads),
         )
         
         # Normalization layers
@@ -454,6 +479,7 @@ class GraphToGridCrossAttention(nn.Module):
         edge_index: Optional[Tensor] = None,
         node_positions: Optional[Tensor] = None,
         node_tpe: Optional[Tensor] = None,
+        current_node_distance: Optional[Tensor] = None,
         node_mask: Optional[Tensor] = None,
     ) -> Tensor:
         """
@@ -531,14 +557,31 @@ class GraphToGridCrossAttention(nn.Module):
                     f"does not match graph_nodes N={N}; shape={tuple(tensor.shape)}."
                 )
             if expected_last is not None and int(tensor.shape[-1]) != expected_last:
-                raise ValueError(
-                    f"GraphToGridCrossAttention {name} trailing dimension must be {expected_last}, "
-                    f"got {int(tensor.shape[-1])}; shape={tuple(tensor.shape)}."
+                logger.warning(
+                    "GraphToGridCrossAttention %s trailing dimension mismatch: got %d, expected %d. Applying pad/truncate.",
+                    name,
+                    int(tensor.shape[-1]),
+                    int(expected_last),
                 )
+                if int(tensor.shape[-1]) > int(expected_last):
+                    tensor = tensor[..., :expected_last]
+                else:
+                    pad = torch.zeros(
+                        *tensor.shape[:-1],
+                        int(expected_last) - int(tensor.shape[-1]),
+                        device=tensor.device,
+                        dtype=tensor.dtype,
+                    )
+                    tensor = torch.cat([tensor, pad], dim=-1)
             return tensor
 
         node_positions = _normalize_batched("node_positions", node_positions, expected_last=2)
-        node_tpe = _normalize_batched("node_tpe", node_tpe)
+        node_tpe = _normalize_batched("node_tpe", node_tpe, expected_last=8)
+        current_node_distance = _normalize_batched(
+            "current_node_distance",
+            current_node_distance,
+            expected_last=4,
+        )
 
         valid_rows = None
         if node_mask is not None:
@@ -587,6 +630,7 @@ class GraphToGridCrossAttention(nn.Module):
             graph_nodes,
             node_positions,
             node_tpe,
+            current_node_distance=current_node_distance,
             structure_features=degree_features,
         )
         
@@ -604,7 +648,22 @@ class GraphToGridCrossAttention(nn.Module):
         K = K.reshape(B, N, self.num_heads, self.head_dim).transpose(1, 2)      # [B, heads, N, head_dim]
         V = V.reshape(B, N, self.num_heads, self.head_dim).transpose(1, 2)      # [B, heads, N, head_dim]
         
-        if self.attention_mode == "linear_hedgehog":
+        attention_mode = self.attention_mode
+        if (
+            attention_mode == "softmax"
+            and self.auto_linear_attention_nodes > 0
+            and int(N) > self.auto_linear_attention_nodes
+        ):
+            if not self._large_graph_fallback_warning_emitted:
+                logger.warning(
+                    "GraphToGridCrossAttention received %d nodes, exceeding softmax threshold %d; switching to linear attention.",
+                    int(N),
+                    int(self.auto_linear_attention_nodes),
+                )
+                self._large_graph_fallback_warning_emitted = True
+            attention_mode = "linear_hedgehog"
+
+        if attention_mode == "linear_hedgehog":
             attn_output = hedgehog_linear_attention(
                 Q,
                 K,
@@ -617,17 +676,30 @@ class GraphToGridCrossAttention(nn.Module):
                 attn_output = attn_output.clone()
                 attn_output[~valid_rows] = 0.0
         else:
-            # Attention scores: [B, heads, H*W, N]
-            attn_scores = torch.matmul(Q, K.transpose(-2, -1)) * self.scale
             struct_bias = self.node_struct_bias(degree_features).permute(0, 2, 1).unsqueeze(2)
-            attn_scores = attn_scores + struct_bias.to(dtype=attn_scores.dtype)
+            attn_bias = struct_bias.to(dtype=Q.dtype)
+            if current_node_distance is not None:
+                distance_bias = self.node_distance_bias(current_node_distance).permute(0, 2, 1).unsqueeze(2)
+                attn_bias = attn_bias + distance_bias.to(dtype=Q.dtype)
 
             if node_mask is not None:
-                attn_scores = attn_scores.masked_fill(node_mask[:, None, None, :] == 0, float('-inf'))
+                attn_bias = attn_bias.masked_fill(node_mask[:, None, None, :] == 0, float('-inf'))
 
-            attn_weights = F.softmax(attn_scores, dim=-1)
-            attn_weights = self.dropout(attn_weights)
-            attn_output = torch.matmul(attn_weights, V)
+            if HAS_SDPA:
+                attn_output = F.scaled_dot_product_attention(
+                    Q,
+                    K,
+                    V,
+                    attn_mask=attn_bias,
+                    dropout_p=self.dropout.p if self.training else 0.0,
+                )
+            else:
+                # Attention scores: [B, heads, H*W, N]
+                attn_scores = torch.matmul(Q, K.transpose(-2, -1)) * self.scale
+                attn_scores = attn_scores + attn_bias
+                attn_weights = F.softmax(attn_scores, dim=-1)
+                attn_weights = self.dropout(attn_weights)
+                attn_output = torch.matmul(attn_weights, V)
             if valid_rows is not None and not torch.all(valid_rows):
                 attn_output = attn_output.clone()
                 attn_output[~valid_rows] = 0.0
@@ -651,27 +723,71 @@ class GraphToGridCrossAttention(nn.Module):
 
 
 class RoomTopologyConditioner(nn.Module):
-    """Project explicit room topology maps into a spatial feature bias."""
+    """Project explicit room topology maps into either an additive bias or SPADE-style modulation."""
 
     def __init__(
         self,
         topology_channels: int,
         grid_dim: int,
         hidden_dim: Optional[int] = None,
+        conditioning_mode: str = "additive",
     ):
         super().__init__()
+        mode = str(conditioning_mode).strip().lower()
+        if mode not in {"additive", "spade"}:
+            raise ValueError(
+                f"Invalid conditioning_mode={conditioning_mode!r}. Expected 'additive' or 'spade'."
+            )
+        self.conditioning_mode = mode
+        self.grid_dim = int(grid_dim)
         hid = int(hidden_dim or max(32, grid_dim // 2))
-        self.proj = nn.Sequential(
-            nn.Conv2d(int(topology_channels), hid, kernel_size=3, padding=1),
-            nn.SiLU(),
-            nn.Conv2d(hid, grid_dim, kernel_size=1),
-        )
 
-    def forward(self, room_topology_map: Tensor, *, target_hw: Tuple[int, int]) -> Tensor:
+        if self.conditioning_mode == "additive":
+            self.proj = nn.Sequential(
+                nn.Conv2d(int(topology_channels), hid, kernel_size=3, padding=1),
+                nn.SiLU(),
+                nn.Conv2d(hid, grid_dim, kernel_size=1),
+            )
+        else:
+            self.norm = nn.GroupNorm(self._num_groups(self.grid_dim), self.grid_dim, affine=False)
+            self.to_scale_shift = nn.Sequential(
+                nn.Conv2d(int(topology_channels), hid, kernel_size=3, padding=1),
+                nn.SiLU(),
+                nn.Conv2d(hid, grid_dim * 2, kernel_size=1),
+            )
+
+    @staticmethod
+    def _num_groups(channels: int, max_groups: int = 32) -> int:
+        for groups in range(min(max_groups, int(channels)), 0, -1):
+            if int(channels) % groups == 0:
+                return groups
+        return 1
+
+    def forward(
+        self,
+        room_topology_map: Tensor,
+        *,
+        target_hw: Tuple[int, int],
+        features: Optional[Tensor] = None,
+    ) -> Tensor:
         topo = room_topology_map
         if topo.shape[-2:] != target_hw:
             topo = F.interpolate(topo, size=target_hw, mode="bilinear", align_corners=False)
-        return self.proj(topo)
+
+        if self.conditioning_mode == "additive":
+            return self.proj(topo)
+
+        if features is None:
+            raise ValueError("SPADE-style topology conditioning requires the current grid features.")
+        if tuple(features.shape[-2:]) != tuple(target_hw):
+            raise ValueError(
+                f"features spatial shape {tuple(features.shape[-2:])} does not match target_hw={tuple(target_hw)}."
+            )
+
+        gamma_beta = self.to_scale_shift(topo)
+        gamma, beta = torch.chunk(gamma_beta, 2, dim=1)
+        normalized = self.norm(features)
+        return normalized * (1.0 + gamma) + beta
 
 
 class SpatialGraphConditioner(nn.Module):
@@ -687,10 +803,12 @@ class SpatialGraphConditioner(nn.Module):
         grid_dim: int,
         graph_dim: int,
         topology_channels: int,
+        topology_conditioning_mode: str = "additive",
         num_heads: int = 8,
         dropout: float = 0.1,
         attention_mode: str = "softmax",
         hedgehog_feature_dim: int = 32,
+        auto_linear_attention_nodes: int = 128,
         graph_gate_init: float = -2.0,
         topology_gate_init: float = -2.0,
     ):
@@ -698,6 +816,7 @@ class SpatialGraphConditioner(nn.Module):
         self.topology_conditioner = RoomTopologyConditioner(
             topology_channels=topology_channels,
             grid_dim=grid_dim,
+            conditioning_mode=topology_conditioning_mode,
         )
         self.graph_cross_attn = GraphToGridCrossAttention(
             grid_dim=grid_dim,
@@ -706,6 +825,7 @@ class SpatialGraphConditioner(nn.Module):
             dropout=dropout,
             attention_mode=attention_mode,
             hedgehog_feature_dim=hedgehog_feature_dim,
+            auto_linear_attention_nodes=auto_linear_attention_nodes,
         )
         # GLIGEN-style gates are zero-initialized to protect frozen pretrained
         # backbones. H-MOLQD trains this path end-to-end, so we keep the initial
@@ -725,6 +845,7 @@ class SpatialGraphConditioner(nn.Module):
         edge_index: Optional[Tensor] = None,
         node_positions: Optional[Tensor] = None,
         node_tpe: Optional[Tensor] = None,
+        current_node_distance: Optional[Tensor] = None,
         node_mask: Optional[Tensor] = None,
         room_topology_map: Optional[Tensor] = None,
     ) -> Tensor:
@@ -733,11 +854,16 @@ class SpatialGraphConditioner(nn.Module):
                 f"room_topology_map batch size {int(room_topology_map.shape[0])} does not match x batch size {int(x.shape[0])}."
             )
         if room_topology_map is not None:
-            topo_bias = self.topology_conditioner(
+            topo_out = self.topology_conditioner(
                 room_topology_map,
                 target_hw=(int(x.shape[-2]), int(x.shape[-1])),
+                features=x,
             )
-            x = x + torch.sigmoid(self.topology_gate) * topo_bias
+            gate = torch.sigmoid(self.topology_gate)
+            if self.topology_conditioner.conditioning_mode == "additive":
+                x = x + gate * topo_out
+            else:
+                x = x + gate * (topo_out - x)
 
         if graph_nodes is not None:
             conditioned = self.graph_cross_attn(
@@ -746,6 +872,7 @@ class SpatialGraphConditioner(nn.Module):
                 edge_index=edge_index,
                 node_positions=node_positions,
                 node_tpe=node_tpe,
+                current_node_distance=current_node_distance,
                 node_mask=node_mask,
             )
             x = x + torch.sigmoid(self.graph_gate) * (conditioned - x)
@@ -827,6 +954,7 @@ class EnhancedAttentionBlock(nn.Module):
         edge_index: Optional[Tensor] = None,
         node_positions: Optional[Tensor] = None,
         node_tpe: Optional[Tensor] = None,
+        current_node_distance: Optional[Tensor] = None,
         node_mask: Optional[Tensor] = None,
     ) -> Tensor:
         """
@@ -860,7 +988,13 @@ class EnhancedAttentionBlock(nn.Module):
         # Graph cross-attention (new per-position attention)
         if graph_nodes is not None:
             x = self.graph_cross_attn(
-                x, graph_nodes, edge_index, node_positions, node_tpe, node_mask
+                x,
+                graph_nodes,
+                edge_index,
+                node_positions,
+                node_tpe,
+                current_node_distance,
+                node_mask,
             )
         
         # Context cross-attention (backward compat)

@@ -23,7 +23,7 @@ from typing import Optional, Callable, Tuple, Union, Any, Dict, List, Set
 from pathlib import Path
 
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, Sampler
 
 logger = logging.getLogger(__name__)
 
@@ -406,6 +406,21 @@ def _build_room_graph_sample(dungeon, room_position: Tuple[int, int], room, base
         traversability_trace=traversability_trace,
     )
 
+    neighbor_maps: Dict[str, Optional[np.ndarray]] = {}
+    direction_to_neighbor = {
+        "N": (room_position[0] - 1, room_position[1]),
+        "S": (room_position[0] + 1, room_position[1]),
+        "E": (room_position[0], room_position[1] + 1),
+        "W": (room_position[0], room_position[1] - 1),
+    }
+    for direction, neighbor_pos in direction_to_neighbor.items():
+        neighbor_room = dungeon.rooms.get(neighbor_pos)
+        neighbor_grid = getattr(neighbor_room, "semantic_grid", None) if neighbor_room is not None else None
+        if neighbor_grid is None:
+            neighbor_maps[direction] = None
+        else:
+            neighbor_maps[direction] = np.asarray(neighbor_grid, dtype=np.float32)
+
     return {
         'node_features': base_graph['node_features'],
         'edge_index': base_graph['edge_index'],
@@ -420,6 +435,7 @@ def _build_room_graph_sample(dungeon, room_position: Tuple[int, int], room, base
         'room_position': np.array([float(room_position[0]), float(room_position[1])], dtype=np.float32),
         'boundary_constraints': build_boundary_constraints(has_neighbor=has_neighbor, required_door=required_doors).numpy().astype(np.float32),
         'room_topology_map': room_topology_map.astype(np.float32),
+        'neighbor_maps': neighbor_maps,
     }
 
 
@@ -718,6 +734,16 @@ class ZeldaRoomDataset(Dataset):
 
         if self.load_graphs and self.graphs is not None:
             graph = self.graphs[idx]
+            num_tile_ids = 43
+            neighbor_maps = {}
+            for direction, room_map in dict(graph.get('neighbor_maps', {})).items():
+                if room_map is None:
+                    neighbor_maps[direction] = None
+                    continue
+                room_tensor = torch.tensor(room_map, dtype=torch.float32).unsqueeze(0)
+                if self.normalize and room_tensor.max() > 1:
+                    room_tensor = room_tensor / num_tile_ids
+                neighbor_maps[direction] = room_tensor
             return tensor, {
                 'node_features': torch.tensor(graph['node_features'], dtype=torch.float32),
                 'edge_index': torch.tensor(graph['edge_index'], dtype=torch.long),
@@ -727,6 +753,7 @@ class ZeldaRoomDataset(Dataset):
                 'room_topology_map': torch.tensor(graph.get('room_topology_map', np.zeros((ROOM_TOPOLOGY_CHANNEL_COUNT, ROOM_HEIGHT, ROOM_WIDTH), dtype=np.float32)), dtype=torch.float32),
                 'boundary_constraints': torch.tensor(graph.get('boundary_constraints', np.zeros((8,), dtype=np.float32)), dtype=torch.float32),
                 'room_position': torch.tensor(graph.get('room_position', np.zeros((2,), dtype=np.float32)), dtype=torch.float32),
+                'neighbor_maps': neighbor_maps,
                 'num_nodes': graph['num_nodes'],
                 'num_edges': graph['num_edges'],
                 'start_node_id': graph.get('start_node_id', -1),
@@ -784,12 +811,16 @@ def create_dataloader(
     batch_size: int = 16,
     shuffle: bool = True,
     num_workers: int = 0,
+    pin_memory: Optional[bool] = None,
+    drop_last: bool = True,
     use_vglc: bool = False,
     normalize: bool = True,
     target_size: Optional[Tuple[int, int]] = None,
     transform: Optional[Callable] = None,
     room_level: bool = False,
     load_graphs: bool = False,
+    sampler: Optional[Sampler] = None,
+    return_sampler: bool = False,
 ) -> DataLoader:
     """
     Create a DataLoader for Zelda dungeon training.
@@ -834,15 +865,19 @@ def create_dataloader(
             load_graphs=load_graphs,
         )
     
-    return DataLoader(
+    dataloader = DataLoader(
         dataset,
         batch_size=batch_size,
-        shuffle=shuffle,
+        shuffle=(bool(shuffle) if sampler is None else False),
+        sampler=sampler,
         num_workers=num_workers,
-        pin_memory=torch.cuda.is_available(),
-        drop_last=True,  # Ensure consistent batch sizes
+        pin_memory=torch.cuda.is_available() if pin_memory is None else bool(pin_memory),
+        drop_last=bool(drop_last),
         collate_fn=graph_collate_fn if load_graphs else None,
     )
+    if return_sampler:
+        return dataloader, sampler
+    return dataloader
 
 
 # =============================================================================

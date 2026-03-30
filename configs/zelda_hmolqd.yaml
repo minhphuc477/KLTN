@@ -1,0 +1,161 @@
+# KLTN staged training baseline.
+# Every field below is part of the validated schema and can also be overridden
+# from the CLI via `python main.py train --config configs/zelda_hmolqd.yaml ...`.
+
+training:
+  stage: all  # type=str, default=all, valid={all,vqvae,diffusion,fast_sampler,masked_room}
+
+runtime:
+  experiment_name: zelda_hmolqd  # type=str, default=zelda_hmolqd, valid=non-empty string
+  output_dir: outputs/zelda_hmolqd  # type=str, default=outputs/zelda_hmolqd, valid=filesystem path
+  log_file: training.log  # type=str, default=training.log, valid=filename relative to output_dir
+  device: auto  # type=str, default=auto, valid={auto,cuda,cpu}
+  seed: 42  # type=int, default=42, valid>=0
+  verbose: false  # type=bool, default=false, valid={true,false}
+  quick: false  # type=bool, default=false, valid={true,false}; short smoke-test mode
+  resume: null  # type=str|null, default=null, valid=checkpoint path or null
+
+distributed:
+  enabled: false  # type=bool, default=false, valid={true,false}
+  backend: nccl  # type=str, default=nccl, valid={nccl,gloo}
+  nproc_per_node: 1  # type=int, default=1, valid>=1
+  master_port: 29500  # type=int, default=29500, valid=1024..65535
+  cuda_visible_devices: ""  # type=str, default="", valid=comma-separated GPU ids or empty
+  find_unused_parameters: false  # type=bool, default=false, valid={true,false}
+
+dataset:
+  data_dir: Data/The Legend of Zelda  # type=str, default=Data/The Legend of Zelda, valid=dataset root path
+  schema_profile: zelda_v1  # type=str, default=zelda_v1, valid={zelda_v1}; explicit repository schema lock
+  batch_size: 4  # type=int, default=4, valid>=1
+  num_workers: 0  # type=int, default=0, valid>=0
+  pin_memory: true  # type=bool, default=true, valid={true,false}
+  drop_last: true  # type=bool, default=true, valid={true,false}
+  shuffle_train: true  # type=bool, default=true, valid={true,false}
+  shuffle_val: false  # type=bool, default=false, valid={true,false}
+  use_vglc: true  # type=bool, default=true, valid={true,false}
+  normalize: true  # type=bool, default=true, valid={true,false}
+  room_level: true  # type=bool, default=true, valid={true,false}
+  load_graphs: true  # type=bool, default=true, valid={true,false}
+  min_samples_per_epoch: 64  # type=int, default=64, valid>=1; VQ-VAE effective epoch floor
+  num_classes: 44  # type=int, default=44, valid={44}; current semantic palette size
+  room_height: 16  # type=int, default=16, valid={16}; current implementation assumption
+  room_width: 11  # type=int, default=11, valid={11}; current implementation assumption
+  node_feature_dim: 6  # type=int, default=6, valid={6}; current graph schema assumption
+  edge_feature_dim: 8  # type=int, default=8, valid={8}; current graph schema assumption
+  tpe_dim: 8  # type=int, default=8, valid={8}; current graph schema assumption
+
+vqvae:
+  checkpoint_dir: ""  # type=str, default="", valid=path; empty=>output_dir/checkpoints/vqvae
+  resume_checkpoint: null  # type=str|null, default=null, valid=checkpoint path or null
+  epochs: 300  # type=int, default=300, valid>=1
+  learning_rate: 0.0003  # type=float, default=3e-4, valid>0
+  weight_decay: 0.00001  # type=float, default=1e-5, valid>=0
+  grad_clip_norm: 1.0  # type=float, default=1.0, valid>=0
+  save_every: 50  # type=int, default=50, valid>=1
+  latent_dim: 64  # type=int, default=64, valid>=1
+  hidden_dim: 128  # type=int, default=128, valid>=8
+  codebook_size: 512  # type=int, default=512, valid>=8
+  commitment_cost: 0.25  # type=float, default=0.25, valid>=0
+  rare_tile_weight: 5.0  # type=float, default=5.0, valid>=1
+  use_ema: true  # type=bool, default=true, valid={true,false}
+  use_coordconv: true  # type=bool, default=true, valid={true,false}
+  mrf_penalty_weight: 0.05  # type=float, default=0.05, valid>=0
+
+diffusion:
+  checkpoint_dir: ""  # type=str, default="", valid=path; empty=>output_dir/checkpoints/diffusion
+  vqvae_checkpoint: null  # type=str|null, default=null, valid=checkpoint path or null
+  epochs: 100  # type=int, default=100, valid>=1
+  learning_rate: 0.0001  # type=float, default=1e-4, valid>0
+  optimizer_weight_decay: 0.00001  # type=float, default=1e-5, valid>=0
+  grad_clip_norm: 1.0  # type=float, default=1.0, valid>=0
+  save_every: 10  # type=int, default=10, valid>=1
+  latent_dim: 64  # type=int, default=64, valid>=1
+  model_channels: 96  # type=int, default=128, valid>=8; recommended small-data-balanced setting for the current Zelda corpus
+  context_dim: 256  # type=int, default=256, valid>=8
+  unet_channel_mult: [1, 2, 4]  # type=list[int], default=[1,2,4], valid=positive ints; per-level U-Net channel multipliers
+  unet_num_res_blocks: 2  # type=int, default=2, valid>=1
+  unet_attention_resolutions: [1, 2]  # type=list[int], default=[1,2], valid=level indices into unet_channel_mult
+  unet_num_heads: 8  # type=int, default=8, valid>=1; each model_channels*mult must be divisible by this
+  unet_dropout: 0.1  # type=float, default=0.1, valid=0..1
+  condition_hidden_dim: 192  # type=int, default=256, valid>=8; reduced default for small-data stability/cost
+  condition_num_gnn_layers: 2  # type=int, default=3, valid>=1; shallower graph stack reduces over-smoothing and compute
+  condition_num_attention_heads: 8  # type=int, default=8, valid>=1
+  condition_dropout: 0.1  # type=float, default=0.1, valid=0..1
+  condition_gnn_type: gps  # type=str, default=gcn, valid={gcn,gat,sage,gps}; GraphGPS-style hybrid graph encoder is the recommended training setting
+  graph_conditioning_mode: node_sequence  # type=str, default=node_sequence, valid={node_sequence,pooled}
+  num_timesteps: 1000  # type=int, default=1000, valid>=10
+  schedule_type: cosine  # type=str, default=cosine, valid={linear,cosine}
+  topology_refinement_mode: gat2  # type=str, default=gat2, valid={none,lightweight,gat2,upgraded}
+  attention_mode: softmax  # type=str, default=softmax, valid={softmax,linear_hedgehog}
+  topology_conditioning_mode: spade  # type=str, default=additive, valid={additive,spade}; SPADE-style affine modulation is recommended for room topology maps
+  hedgehog_feature_dim: 32  # type=int, default=32, valid>=4
+  graph_auto_linear_attention_nodes: 128  # type=int, default=128, valid>=0; 0 disables auto-switch to linear graph attention
+  spatial_graph_gate_init: -2.0  # type=float, default=-2.0
+  spatial_topology_gate_init: -2.0  # type=float, default=-2.0
+  use_teacher_forced_neighbor_latents: true  # type=bool, default=true, valid={true,false}; enables real-neighbor local conditioning during room-level training
+  use_current_node_distance_features: true  # type=bool, default=true, valid={true,false}; adds current-room distance encoding to Block III/IV graph conditioning
+  current_node_distance_max: 8  # type=int, default=8, valid>=1; clip/normalize graph distances beyond this radius
+  room_topology_channels: 18  # type=int, default=18, valid>=1
+  cfg_dropout_prob: 0.1  # type=float, default=0.1, valid=0..1
+  cfg_scale: 3.0  # type=float, default=3.0, valid>=0
+  cfg_schedule_mode: constant  # type=str, default=constant, valid={constant,linear_decay,cosine_decay}
+  cfg_schedule_min_scale: 1.0  # type=float, default=1.0, valid>=0
+  cfg_schedule_power: 1.0  # type=float, default=1.0, valid>0
+  prediction_type: epsilon  # type=str, default=epsilon, valid={epsilon,v}
+  min_snr_gamma: 5.0  # type=float, default=5.0, valid>=0
+  num_logic_iterations: 30  # type=int, default=30, valid>=1
+  logic_topology_trace_weight: 0.25  # type=float, default=0.25, valid>=0; extra LogicNet pressure on mission-conditioned traversability traces
+  logic_topology_anchor_weight: 0.25  # type=float, default=0.25, valid>=0; extra LogicNet pressure on start/goal/door anchor walkability
+  guidance_scale: 1.0  # type=float, default=1.0, valid>=0
+  guidance_clamp_magnitude: 1.0  # type=float, default=1.0, valid>=0
+  guidance_relative_norm_cap: 0.25  # type=float, default=0.25, valid>=0
+  guidance_schedule_enabled: true  # type=bool, default=true, valid={true,false}
+  guidance_active_fraction: 0.3  # type=float, default=0.3, valid=0.05..1.0
+  guidance_decay_power: 1.0  # type=float, default=1.0, valid>=0.25
+  guidance_max_graph_nodes: 512  # type=int, default=512, valid>=1
+  guidance_max_key_lock_pairs: 2048  # type=int, default=2048, valid>=0
+  guidance_max_guidance_elements: 2000000  # type=int, default=2000000, valid>=1
+  alpha_visual: 1.0  # type=float, default=1.0, valid>=0
+  alpha_logic: 0.1  # type=float, default=0.1, valid>=0
+  logic_loss_mode: predicted_latent  # type=str, default=predicted_latent, valid={predicted_latent,detached_real}
+  warmup_epochs: 5  # type=int, default=5, valid>=0
+  scheduler_t0: 10  # type=int, default=10, valid>=1
+  scheduler_t_mult: 2  # type=int, default=2, valid>=1
+  scheduler_eta_min: 0.000001  # type=float, default=1e-6, valid>=0
+  ema_decay: 0.9999  # type=float, default=0.9999, valid=0..0.999999
+  validation_num_samples: 4  # type=int, default=4, valid>=1
+
+fast_sampler:
+  checkpoint_dir: ""  # type=str, default="", valid=path; empty=>output_dir/checkpoints/fast_sampler
+  base_diffusion_checkpoint: null  # type=str|null, default=null, valid=checkpoint path or null
+  epochs: 10  # type=int, default=10, valid>=1
+  learning_rate: 0.0001  # type=float, default=1e-4, valid>0
+  optimizer_weight_decay: 0.0001  # type=float, default=1e-4, valid>=0
+  grad_clip_norm: 1.0  # type=float, default=1.0, valid>=0
+  num_inference_steps: 4  # type=int, default=4, valid>=1
+  lora_rank: 8  # type=int, default=8, valid>=1
+  lora_alpha: 8.0  # type=float, default=8.0, valid>=0
+  prediction_loss_weight: 0.25  # type=float, default=0.25, valid>=0
+  save_every: 5  # type=int, default=5, valid>=1
+
+masked_room:
+  checkpoint_dir: ""  # type=str, default="", valid=path; empty=>output_dir/checkpoints/masked_room
+  epochs: 100  # type=int, default=100, valid>=1
+  learning_rate: 0.0001  # type=float, default=1e-4, valid>0
+  optimizer_weight_decay: 0.00001  # type=float, default=1e-5, valid>=0
+  grad_clip_norm: 1.0  # type=float, default=1.0, valid>=0
+  scheduler_eta_min: 0.000001  # type=float, default=1e-6, valid>=0
+  save_every: 10  # type=int, default=10, valid>=1
+  context_dim: 256  # type=int, default=256, valid>=8
+  condition_hidden_dim: 192  # type=int, default=256, valid>=8; aligned with the reduced diffusion profile
+  condition_num_gnn_layers: 2  # type=int, default=3, valid>=1
+  condition_num_attention_heads: 8  # type=int, default=8, valid>=1
+  condition_dropout: 0.1  # type=float, default=0.1, valid=0..1
+  condition_gnn_type: gcn  # type=str, default=gcn, valid={gcn,gat,sage,gps}
+  graph_conditioning_mode: node_sequence  # type=str, default=node_sequence, valid={node_sequence,pooled}
+  use_current_node_distance_features: true  # type=bool, default=true, valid={true,false}
+  current_node_distance_max: 8  # type=int, default=8, valid>=1
+  model_channels: 96  # type=int, default=128, valid>=8; aligned with the reduced diffusion profile
+  hidden_dim: 64  # type=int, default=64, valid>=8
+  masked_steps: 8  # type=int, default=8, valid>=1
+  room_topology_channels: 18  # type=int, default=18, valid>=1

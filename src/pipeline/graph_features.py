@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections import deque
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import networkx as nx
@@ -31,6 +32,221 @@ def fit_feature_vector(values: List[float], target_dim: int) -> List[float]:
     if len(values) >= dim:
         return [float(v) for v in values[:dim]]
     return [float(v) for v in values] + ([0.0] * (dim - len(values)))
+
+
+def build_default_node_positions(
+    num_nodes: int,
+    *,
+    device: torch.device,
+    dtype: torch.dtype = torch.float32,
+) -> torch.Tensor:
+    """Return deterministic fallback positions [N, 2] on a normalized line."""
+    n = max(0, int(num_nodes))
+    if n == 0:
+        return torch.zeros((0, 2), device=device, dtype=dtype)
+    if n == 1:
+        return torch.zeros((1, 2), device=device, dtype=dtype)
+    xs = torch.linspace(0.0, 1.0, steps=n, device=device, dtype=dtype)
+    ys = torch.zeros(n, device=device, dtype=dtype)
+    return torch.stack([xs, ys], dim=1)
+
+
+def compute_rwse_features(
+    edge_index: torch.Tensor,
+    num_nodes: int,
+    *,
+    steps: int = 8,
+    device: torch.device,
+    dtype: torch.dtype = torch.float32,
+) -> torch.Tensor:
+    """
+    Compute Random Walk Structural Encodings (RWSE) [N, steps].
+
+    GPS (NeurIPS 2022) identifies RWSE as a low-cost structural encoding that
+    consistently improves graph transformer performance. We use it as a robust
+    fallback when explicit topological positional encodings are unavailable.
+    """
+    n = max(0, int(num_nodes))
+    k = max(1, int(steps))
+    rwse = torch.zeros((n, k), device=device, dtype=dtype)
+    if n == 0:
+        return rwse
+
+    if not isinstance(edge_index, torch.Tensor) or edge_index.dim() != 2 or int(edge_index.shape[0]) != 2:
+        return rwse
+
+    adjacency = torch.zeros((n, n), device=device, dtype=dtype)
+    if edge_index.numel() > 0:
+        src = edge_index[0].to(device=device, dtype=torch.long)
+        dst = edge_index[1].to(device=device, dtype=torch.long)
+        valid = (src >= 0) & (src < n) & (dst >= 0) & (dst < n)
+        src = src[valid]
+        dst = dst[valid]
+        if src.numel() > 0:
+            adjacency[src, dst] = 1.0
+            adjacency[dst, src] = 1.0
+
+    adjacency = adjacency + torch.eye(n, device=device, dtype=dtype)
+    transition = adjacency / adjacency.sum(dim=1, keepdim=True).clamp(min=1.0)
+    walk = transition
+    for step_idx in range(k):
+        rwse[:, step_idx] = torch.diagonal(walk, 0)
+        walk = walk @ transition
+    return rwse
+
+
+def _single_source_graph_distances(
+    adjacency: List[List[int]],
+    source_idx: int,
+) -> List[int]:
+    """Breadth-first shortest-path distances over a Python adjacency list."""
+    num_nodes = len(adjacency)
+    if num_nodes == 0 or source_idx < 0 or source_idx >= num_nodes:
+        return [-1] * num_nodes
+
+    distances = [-1] * num_nodes
+    distances[source_idx] = 0
+    queue: deque[int] = deque([int(source_idx)])
+
+    while queue:
+        node = int(queue.popleft())
+        next_distance = int(distances[node]) + 1
+        for neighbor in adjacency[node]:
+            if neighbor < 0 or neighbor >= num_nodes:
+                continue
+            if distances[neighbor] != -1:
+                continue
+            distances[neighbor] = next_distance
+            queue.append(neighbor)
+
+    return distances
+
+
+def compute_current_node_distance_features(
+    edge_index: Optional[torch.Tensor],
+    num_nodes: int,
+    *,
+    current_node_idx: Optional[int],
+    device: torch.device,
+    dtype: torch.dtype = torch.float32,
+    max_distance: int = 8,
+) -> torch.Tensor:
+    """
+    Compute current-room-aware distance features [N, 4].
+
+    Feature layout:
+    - [:, 0] normalized undirected shortest-path distance to current node
+    - [:, 1] normalized directed forward distance (current -> node)
+    - [:, 2] normalized directed backward distance (node -> current)
+    - [:, 3] current-node indicator
+
+    Unreachable nodes are assigned a distance value of 1.0, which intentionally
+    separates them from nearby nodes while staying numerically stable.
+    """
+    n = max(0, int(num_nodes))
+    features = torch.zeros((n, 4), device=device, dtype=dtype)
+    if n == 0 or current_node_idx is None:
+        return features
+
+    anchor = int(current_node_idx)
+    if anchor < 0 or anchor >= n:
+        logger.warning(
+            "compute_current_node_distance_features received current_node_idx=%d for num_nodes=%d. Returning zeros.",
+            anchor,
+            n,
+        )
+        return features
+
+    max_d = max(1, int(max_distance))
+    directed_adj: List[List[int]] = [[] for _ in range(n)]
+    reverse_adj: List[List[int]] = [[] for _ in range(n)]
+    undirected_adj: List[List[int]] = [[] for _ in range(n)]
+
+    if isinstance(edge_index, torch.Tensor) and edge_index.dim() == 2 and int(edge_index.shape[0]) == 2:
+        if edge_index.numel() > 0:
+            src = edge_index[0].detach().to(device="cpu", dtype=torch.long)
+            dst = edge_index[1].detach().to(device="cpu", dtype=torch.long)
+            valid = (src >= 0) & (src < n) & (dst >= 0) & (dst < n)
+            src = src[valid].tolist()
+            dst = dst[valid].tolist()
+            for s, d in zip(src, dst):
+                directed_adj[s].append(d)
+                reverse_adj[d].append(s)
+                undirected_adj[s].append(d)
+                if s != d:
+                    undirected_adj[d].append(s)
+
+    undirected_dist = _single_source_graph_distances(undirected_adj, anchor)
+    forward_dist = _single_source_graph_distances(directed_adj, anchor)
+    backward_dist = _single_source_graph_distances(reverse_adj, anchor)
+
+    def _encode_distances(distances: List[int]) -> torch.Tensor:
+        encoded = torch.ones(n, device=device, dtype=dtype)
+        for node_idx, raw_distance in enumerate(distances):
+            if raw_distance < 0:
+                continue
+            encoded[node_idx] = float(min(raw_distance, max_d)) / float(max_d)
+        return encoded
+
+    features[:, 0] = _encode_distances(undirected_dist)
+    features[:, 1] = _encode_distances(forward_dist)
+    features[:, 2] = _encode_distances(backward_dist)
+    features[anchor, 3] = 1.0
+    return features
+
+
+def align_nodewise_tensor(
+    value: Optional[torch.Tensor],
+    *,
+    num_nodes: int,
+    feature_dim: int,
+    device: torch.device,
+    dtype: torch.dtype,
+    feature_name: str,
+    default_value: torch.Tensor,
+) -> torch.Tensor:
+    """
+    Pad/truncate node-aligned tensors to [N, D].
+
+    This keeps graph conditioning robust when OOD graphs arrive with missing or
+    schema-shifted metadata.
+    """
+    target = default_value.to(device=device, dtype=dtype)
+    if tuple(target.shape) != (int(num_nodes), int(feature_dim)):
+        raise ValueError(
+            f"default_value for {feature_name} must have shape {(int(num_nodes), int(feature_dim))}, "
+            f"got {tuple(target.shape)}."
+        )
+    if not isinstance(value, torch.Tensor):
+        return target
+
+    tensor = value.to(device=device, dtype=dtype)
+    if tensor.dim() == 1:
+        expected = int(num_nodes) * int(feature_dim)
+        if int(tensor.numel()) == expected:
+            tensor = tensor.view(int(num_nodes), int(feature_dim))
+        else:
+            tensor = tensor.unsqueeze(-1)
+    if tensor.dim() != 2:
+        logger.warning(
+            "%s must be 2D [N, D], got %s. Using fallback tensor.",
+            feature_name,
+            tuple(tensor.shape),
+        )
+        return target
+
+    if tuple(tensor.shape) != tuple(target.shape):
+        logger.warning(
+            "%s shape mismatch: got %s, expected %s. Applying pad/truncate fallback.",
+            feature_name,
+            tuple(tensor.shape),
+            tuple(target.shape),
+        )
+    rows = min(int(num_nodes), int(tensor.shape[0]))
+    cols = min(int(feature_dim), int(tensor.shape[1]))
+    if rows > 0 and cols > 0:
+        target[:rows, :cols] = tensor[:rows, :cols]
+    return target
 
 
 def extract_node_feature_vector(

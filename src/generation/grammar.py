@@ -65,7 +65,7 @@ import logging
 from typing import ClassVar, Dict, List, Tuple, Optional, Set, Any
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from collections import defaultdict
+from collections import defaultdict, deque
 import math
 
 import torch
@@ -450,6 +450,19 @@ class MissionGraph:
         """Get the GOAL node."""
         goals = self.get_nodes_by_type(NodeType.GOAL)
         return goals[0] if goals else None
+
+    def _node_index_map(self) -> Tuple[List[int], Dict[int, int]]:
+        """
+        Build a stable dense node index for tensor exports.
+
+        Rule rewrites may legitimately delete interior nodes, leaving sparse
+        IDs such as [0, 2, 5]. Tensor exporters must remap these IDs onto a
+        contiguous [0, N) index space so edge_index and adjacency stay aligned
+        with node_features.
+        """
+        node_ids = sorted(self.nodes.keys())
+        id_to_idx = {node_id: idx for idx, node_id in enumerate(node_ids)}
+        return node_ids, id_to_idx
     
     def to_tensor(self) -> Tuple[Tensor, Tensor]:
         """
@@ -459,34 +472,49 @@ class MissionGraph:
             edge_index: [2, num_edges] edge connections
             node_features: [num_nodes, feature_dim] node features
         """
+        node_ids, id_to_idx = self._node_index_map()
+
         # Build edge index
         sources = []
         targets = []
         for edge in self.edges:
-            sources.append(edge.source)
-            targets.append(edge.target)
-        
-        edge_index = torch.tensor([sources, targets], dtype=torch.long)
+            if edge.source not in id_to_idx or edge.target not in id_to_idx:
+                continue
+            sources.append(id_to_idx[edge.source])
+            targets.append(id_to_idx[edge.target])
+
+        if sources:
+            edge_index = torch.tensor([sources, targets], dtype=torch.long)
+        else:
+            edge_index = torch.zeros((2, 0), dtype=torch.long)
         
         # Build node features
-        node_ids = sorted(self.nodes.keys())
         features = []
         for nid in node_ids:
             features.append(self.nodes[nid].to_feature_vector())
-        
-        node_features = torch.tensor(features, dtype=torch.float32)
+
+        if features:
+            node_features = torch.tensor(features, dtype=torch.float32)
+        else:
+            feature_dim = len(NodeType) + 14
+            node_features = torch.zeros((0, feature_dim), dtype=torch.float32)
         
         return edge_index, node_features
     
     def to_adjacency_matrix(self) -> Tensor:
         """Convert to adjacency matrix."""
-        n = len(self.nodes)
+        node_ids, id_to_idx = self._node_index_map()
+        n = len(node_ids)
         adj = torch.zeros(n, n)
         
         for edge in self.edges:
-            adj[edge.source, edge.target] = 1.0
+            if edge.source not in id_to_idx or edge.target not in id_to_idx:
+                continue
+            src_idx = id_to_idx[edge.source]
+            tgt_idx = id_to_idx[edge.target]
+            adj[src_idx, tgt_idx] = 1.0
             if edge.edge_type in self.BIDIRECTIONAL_EDGE_TYPES:  # Bidirectional
-                adj[edge.target, edge.source] = 1.0
+                adj[tgt_idx, src_idx] = 1.0
         
         return adj
     
@@ -514,14 +542,17 @@ class MissionGraph:
         start = self.get_start_node()
         goal = self.get_goal_node()
         
-        start_id = start.id if start else 0
-        goal_id = goal.id if goal else n - 1
+        start_id = start.id if start else (node_ids[0] if node_ids else 0)
+        goal_id = goal.id if goal else (node_ids[-1] if node_ids else 0)
         
         # Compute BFS distances from start
         dist_from_start = self._bfs_distances(start_id)
         
         # Compute BFS distances from goal (reverse)
-        dist_to_goal = self._bfs_distances(goal_id)
+        dist_to_goal = self._bfs_distances(
+            goal_id,
+            adjacency=self._build_reverse_adjacency(),
+        )
         
         max_dist = max([*dist_from_start.values(), 1])
         
@@ -552,16 +583,52 @@ class MissionGraph:
         
         return tpe
     
-    def _bfs_distances(self, start_id: int) -> Dict[int, int]:
+    def _build_reverse_adjacency(self) -> Dict[int, List[int]]:
+        """Build reverse traversal adjacency that respects directed edge semantics."""
+        reverse_adj: Dict[int, List[int]] = defaultdict(list)
+        valid_nodes = set(self.nodes.keys())
+
+        for node_id in valid_nodes:
+            reverse_adj[node_id] = []
+
+        for edge in self.edges:
+            if edge.source not in valid_nodes or edge.target not in valid_nodes:
+                continue
+            reverse_adj[edge.target].append(edge.source)
+            if edge.edge_type in self.BIDIRECTIONAL_EDGE_TYPES:
+                reverse_adj[edge.source].append(edge.target)
+
+        for node_id, neighbors in list(reverse_adj.items()):
+            seen: Set[int] = set()
+            deduped: List[int] = []
+            for neighbor in neighbors:
+                if neighbor in seen:
+                    continue
+                seen.add(neighbor)
+                deduped.append(neighbor)
+            reverse_adj[node_id] = deduped
+
+        return reverse_adj
+
+    def _bfs_distances(
+        self,
+        start_id: int,
+        *,
+        adjacency: Optional[Dict[int, List[int]]] = None,
+    ) -> Dict[int, int]:
         """Compute BFS distances from a node."""
+        if start_id not in self.nodes:
+            return {}
+
+        adjacency_map = self._adjacency if adjacency is None else adjacency
         distances = {start_id: 0}
-        queue = [start_id]
+        queue = deque([start_id])
         
         while queue:
-            current = queue.pop(0)
+            current = queue.popleft()
             current_dist = distances[current]
             
-            for neighbor in self._adjacency.get(current, []):
+            for neighbor in adjacency_map.get(current, []):
                 if neighbor not in distances:
                     distances[neighbor] = current_dist + 1
                     queue.append(neighbor)
@@ -608,10 +675,10 @@ class MissionGraph:
             excluded_nodes = set()
         
         reachable = {start_node}
-        queue = [start_node]
+        queue = deque([start_node])
         
         while queue:
-            current = queue.pop(0)
+            current = queue.popleft()
             
             for neighbor in self._adjacency.get(current, []):
                 # Check exclusions
@@ -713,10 +780,10 @@ class MissionGraph:
         """
         branch = []
         visited = {start_node}
-        queue = [(start_node, 0)]
+        queue = deque([(start_node, 0)])
         
         while queue:
-            current, depth = queue.pop(0)
+            current, depth = queue.popleft()
             if depth >= max_depth:
                 continue
             
@@ -749,10 +816,10 @@ class MissionGraph:
             # Trace from this neighbor, excluding hub
             branch = []
             visited = {hub_id, neighbor}
-            queue = [neighbor]
+            queue = deque([neighbor])
             
             while queue:
-                current = queue.pop(0)
+                current = queue.popleft()
                 branch.append(current)
                 
                 for next_node in self._adjacency.get(current, []):
@@ -810,10 +877,10 @@ class MissionGraph:
         
         successors = []
         visited = {node_id}
-        queue = [(node_id, 0)]
+        queue = deque([(node_id, 0)])
         
         while queue:
-            current, current_depth = queue.pop(0)
+            current, current_depth = queue.popleft()
             
             if current_depth >= depth:
                 continue
@@ -1207,9 +1274,9 @@ class InsertLockKeyRule(ProductionRule):
             return [start_id]
 
         visited = {start_id}
-        queue: List[Tuple[int, List[int]]] = [(start_id, [start_id])]
+        queue = deque([(start_id, [start_id])])
         while queue:
-            current, path = queue.pop(0)
+            current, path = queue.popleft()
             for neighbor in graph._adjacency.get(current, []):
                 if neighbor in visited:
                     continue
@@ -1921,10 +1988,10 @@ class MissionGrammar:
             return True
         
         visited = {start}
-        queue = [start]
+        queue = deque([start])
         
         while queue:
-            current = queue.pop(0)
+            current = queue.popleft()
             
             for neighbor in graph._adjacency.get(current, []):
                 if neighbor in visited or neighbor in exclude:
@@ -1950,10 +2017,10 @@ class MissionGrammar:
             return True
 
         visited = {start}
-        queue = [start]
+        queue = deque([start])
 
         while queue:
-            current = queue.pop(0)
+            current = queue.popleft()
 
             for neighbor in graph._adjacency.get(current, []):
                 if (current, neighbor) in exclude_edges:
@@ -2260,10 +2327,10 @@ class MissionGrammar:
         
         # BFS to assign layers
         layers = {start.id: 0}
-        queue = [start.id]
+        queue = deque([start.id])
         
         while queue:
-            current = queue.pop(0)
+            current = queue.popleft()
             current_layer = layers[current]
             
             for neighbor in graph._adjacency.get(current, []):
@@ -2469,10 +2536,10 @@ class MergeRule(ProductionRule):
             return 0
         
         visited = {start}
-        queue = [(start, 0)]
+        queue = deque([(start, 0)])
         
         while queue:
-            current, dist = queue.pop(0)
+            current, dist = queue.popleft()
             for neighbor in graph._adjacency.get(current, []):
                 if neighbor == end:
                     return dist + 1
@@ -2629,9 +2696,9 @@ class AddBossGauntlet(ProductionRule):
             if source == target:
                 return True
             visited = {source}
-            queue = [source]
+            queue = deque([source])
             while queue:
-                current = queue.pop(0)
+                current = queue.popleft()
                 for neighbor in graph._adjacency.get(current, []):
                     if (current, neighbor) in excluded_edge:
                         continue
@@ -3533,9 +3600,9 @@ class AddValveRule(ProductionRule):
         if start_id == goal_id:
             return [start_id]
         visited = {start_id}
-        queue: List[Tuple[int, List[int]]] = [(start_id, [start_id])]
+        queue = deque([(start_id, [start_id])])
         while queue:
-            current, path = queue.pop(0)
+            current, path = queue.popleft()
             for neighbor in adjacency.get(current, []):
                 if neighbor in visited:
                     continue

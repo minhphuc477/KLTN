@@ -33,7 +33,7 @@ Architecture:
 
 import math
 import logging
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 
 # Try to import torch_geometric for GNN
 try:
-    from torch_geometric.nn import GCNConv, GATv2Conv
+    from torch_geometric.nn import GATv2Conv, GCNConv, SAGEConv
     HAS_TORCH_GEOMETRIC = True
 except ImportError:
     HAS_TORCH_GEOMETRIC = False
@@ -269,7 +269,7 @@ class GlobalStreamEncoder(nn.Module):
         hidden_dim: GNN hidden dimension
         output_dim: Output conditioning dimension
         num_layers: Number of GNN layers
-        gnn_type: Type of GNN ('gcn', 'gat', or 'sage')
+        gnn_type: Type of GNN ('gcn', 'gat', 'sage', or 'gps')
     """
     
     def __init__(
@@ -281,17 +281,37 @@ class GlobalStreamEncoder(nn.Module):
         num_layers: int = 3,
         gnn_type: str = 'gat',
         num_heads: int = 4,
+        dropout: float = 0.1,
+        use_current_node_distance_features: bool = True,
+        current_node_distance_dim: int = 4,
     ):
         super().__init__()
-        
+
         self.node_feature_dim = node_feature_dim
         self.edge_feature_dim = edge_feature_dim
         self.hidden_dim = hidden_dim
         self.output_dim = output_dim
-        self.use_torch_geometric = HAS_TORCH_GEOMETRIC
+        self.use_current_node_distance_features = bool(use_current_node_distance_features)
+        self.current_node_distance_dim = int(max(1, current_node_distance_dim))
+        self.gnn_type = str(gnn_type).strip().lower()
+        if self.gnn_type not in {"gcn", "gat", "sage", "gps"}:
+            raise ValueError(
+                f"Unsupported gnn_type={gnn_type!r}. Expected 'gcn', 'gat', 'sage', or 'gps'."
+            )
+        self.use_torch_geometric = HAS_TORCH_GEOMETRIC and self.gnn_type != "gps"
         self._warned_shape_mismatches = set()
-        
-        if HAS_TORCH_GEOMETRIC:
+
+        if self.gnn_type == "gps":
+            self._build_gps_gnn(
+                node_feature_dim=node_feature_dim,
+                edge_feature_dim=edge_feature_dim,
+                hidden_dim=hidden_dim,
+                output_dim=output_dim,
+                num_layers=num_layers,
+                num_heads=num_heads,
+                dropout=dropout,
+            )
+        elif self.use_torch_geometric:
             self._build_torch_geometric_gnn(
                 node_feature_dim, edge_feature_dim, 
                 hidden_dim, output_dim, num_layers, 
@@ -307,7 +327,9 @@ class GlobalStreamEncoder(nn.Module):
         
         # TPE (Topological Positional Encoding) projection
         self.tpe_proj = nn.Linear(8, hidden_dim)
-        
+        self.current_node_distance_proj = nn.Linear(self.current_node_distance_dim, hidden_dim)
+        self.current_node_distance_gate = nn.Parameter(torch.tensor(0.0))
+
         # Final output projection
         self.output_proj = nn.Sequential(
             nn.Linear(output_dim + hidden_dim, output_dim),
@@ -350,12 +372,39 @@ class GlobalStreamEncoder(nn.Module):
                     concat=True,
                     edge_dim=hidden_dim,  # Encoded edge features
                 )
+            elif gnn_type == 'sage':
+                layer = SAGEConv(hidden_dim, hidden_dim)
             else:  # gcn
                 layer = GCNConv(hidden_dim, hidden_dim)
             
             self.gnn_layers.append(layer)
             self.layer_norms.append(nn.LayerNorm(hidden_dim))
         
+        self.node_output = nn.Linear(hidden_dim, output_dim)
+
+    def _build_gps_gnn(
+        self,
+        node_feature_dim: int,
+        edge_feature_dim: int,
+        hidden_dim: int,
+        output_dim: int,
+        num_layers: int,
+        num_heads: int,
+        dropout: float,
+    ) -> None:
+        """Build a GraphGPS-style hybrid encoder with local MPNN plus global attention."""
+        self.node_encoder = nn.Linear(node_feature_dim, hidden_dim)
+        self.edge_encoder = nn.Linear(edge_feature_dim, hidden_dim)
+        self.gps_layers = nn.ModuleList(
+            [
+                GPSLayer(
+                    hidden_dim=hidden_dim,
+                    num_heads=num_heads,
+                    dropout=dropout,
+                )
+                for _ in range(num_layers)
+            ]
+        )
         self.node_output = nn.Linear(hidden_dim, output_dim)
 
     def _warn_once(self, key: str, message: str) -> None:
@@ -488,6 +537,77 @@ class GlobalStreamEncoder(nn.Module):
             expected_dim=self.edge_feature_dim,
             feature_name="edge_features",
         )
+
+    def _prepare_tpe(
+        self,
+        tpe: Optional[Tensor],
+        num_nodes: int,
+        *,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> Optional[Tensor]:
+        """Normalize topological positional encodings to [N, 8]."""
+        if tpe is None:
+            return None
+        tensor = tpe.to(device=device, dtype=dtype)
+        if tensor.dim() == 1:
+            tensor = tensor.unsqueeze(0)
+        if tensor.dim() != 2:
+            raise ValueError(f"tpe must be 2D [N, D], got shape {tuple(tensor.shape)}")
+
+        if int(tensor.shape[0]) != int(num_nodes) or int(tensor.shape[1]) != 8:
+            self._warn_once(
+                f"tpe:{tuple(tensor.shape)}->{(int(num_nodes), 8)}",
+                (
+                    f"tpe shape mismatch: got {tuple(tensor.shape)}, expected {(int(num_nodes), 8)}. "
+                    "Applying automatic pad/truncate."
+                ),
+            )
+            aligned = torch.zeros(int(num_nodes), 8, device=device, dtype=dtype)
+            rows = min(int(num_nodes), int(tensor.shape[0]))
+            cols = min(8, int(tensor.shape[1]))
+            if rows > 0 and cols > 0:
+                aligned[:rows, :cols] = tensor[:rows, :cols]
+            tensor = aligned
+        return tensor
+
+    def _prepare_current_node_distance(
+        self,
+        current_node_distance: Optional[Tensor],
+        num_nodes: int,
+        *,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> Optional[Tensor]:
+        """Normalize current-room distance features to [N, D]."""
+        if not self.use_current_node_distance_features or current_node_distance is None:
+            return None
+        tensor = current_node_distance.to(device=device, dtype=dtype)
+        if tensor.dim() == 1:
+            tensor = tensor.unsqueeze(0)
+        if tensor.dim() != 2:
+            raise ValueError(
+                "current_node_distance must be 2D [N, D], "
+                f"got shape {tuple(tensor.shape)}"
+            )
+
+        expected_shape = (int(num_nodes), int(self.current_node_distance_dim))
+        if tuple(tensor.shape) != expected_shape:
+            self._warn_once(
+                f"current_node_distance:{tuple(tensor.shape)}->{expected_shape}",
+                (
+                    "current_node_distance shape mismatch: got "
+                    f"{tuple(tensor.shape)}, expected {expected_shape}. "
+                    "Applying automatic pad/truncate."
+                ),
+            )
+            aligned = torch.zeros(*expected_shape, device=device, dtype=dtype)
+            rows = min(int(num_nodes), int(tensor.shape[0]))
+            cols = min(int(self.current_node_distance_dim), int(tensor.shape[1]))
+            if rows > 0 and cols > 0:
+                aligned[:rows, :cols] = tensor[:rows, :cols]
+            tensor = aligned
+        return tensor
     
     def forward(
         self,
@@ -495,6 +615,7 @@ class GlobalStreamEncoder(nn.Module):
         edge_index: Tensor,
         edge_features: Optional[Tensor] = None,
         tpe: Optional[Tensor] = None,
+        current_node_distance: Optional[Tensor] = None,
         batch_idx: Optional[Tensor] = None,
         node_idx: Optional[int] = None,
     ) -> Tensor:
@@ -514,9 +635,23 @@ class GlobalStreamEncoder(nn.Module):
         """
         node_features = self._prepare_node_features(node_features)
         edge_features = self._prepare_edge_features(edge_features, edge_index)
+        tpe = self._prepare_tpe(
+            tpe,
+            num_nodes=int(node_features.shape[0]),
+            device=node_features.device,
+            dtype=node_features.dtype,
+        )
+        current_node_distance = self._prepare_current_node_distance(
+            current_node_distance,
+            num_nodes=int(node_features.shape[0]),
+            device=node_features.device,
+            dtype=node_features.dtype,
+        )
 
         if self.use_torch_geometric:
             h = self._forward_torch_geometric(node_features, edge_index, edge_features)
+        elif self.gnn_type == "gps":
+            h = self._forward_gps(node_features, edge_index, edge_features)
         else:
             # Build adjacency matrix from edge_index
             N = node_features.shape[0]
@@ -525,14 +660,15 @@ class GlobalStreamEncoder(nn.Module):
                 adj[edge_index[0], edge_index[1]] = 1.0
             h = self.gnn(node_features, adj)
         
-        # Add TPE if available
+        aux_features = torch.zeros(h.shape[0], self.hidden_dim, device=h.device, dtype=h.dtype)
         if tpe is not None:
-            tpe_feat = self.tpe_proj(tpe)
-            h = self.output_proj(torch.cat([h, tpe_feat], dim=-1))
-        else:
-            # Pad with zeros of hidden_dim width to match output_proj input size
-            pad = torch.zeros(h.shape[0], self.hidden_dim, device=h.device, dtype=h.dtype)
-            h = self.output_proj(torch.cat([h, pad], dim=-1))
+            aux_features = aux_features + self.tpe_proj(tpe)
+        if current_node_distance is not None:
+            aux_features = aux_features + (
+                torch.sigmoid(self.current_node_distance_gate)
+                * self.current_node_distance_proj(current_node_distance)
+            )
+        h = self.output_proj(torch.cat([h, aux_features], dim=-1))
         
         # Return specific node embedding or all
         if node_idx is not None:
@@ -568,6 +704,134 @@ class GlobalStreamEncoder(nn.Module):
             h = F.relu(h_new) + h  # Residual connection
         
         return self.node_output(h)
+
+    def _forward_gps(
+        self,
+        node_features: Tensor,
+        edge_index: Tensor,
+        edge_features: Optional[Tensor] = None,
+    ) -> Tensor:
+        """
+        Forward through a GraphGPS-style encoder.
+
+        GraphGPS couples local message passing with a global attention branch.
+        This improves long-range information flow without discarding the graph
+        inductive bias that the mission-conditioning path relies on.
+        """
+        h = self.node_encoder(node_features)
+        edge_attr = self.edge_encoder(edge_features) if edge_features is not None else None
+
+        for layer in self.gps_layers:
+            h = layer(h, edge_index=edge_index, edge_attr=edge_attr)
+
+        return self.node_output(h)
+
+
+class GPSLayer(nn.Module):
+    """GraphGPS-style block: local message passing, global attention, then FFN."""
+
+    def __init__(
+        self,
+        hidden_dim: int,
+        num_heads: int = 4,
+        dropout: float = 0.1,
+    ) -> None:
+        super().__init__()
+        if int(num_heads) <= 0:
+            raise ValueError(f"GPSLayer num_heads must be > 0, got {num_heads}.")
+        if int(hidden_dim) % int(num_heads) != 0:
+            raise ValueError(
+                f"GPSLayer requires hidden_dim divisible by num_heads; got hidden_dim={hidden_dim}, num_heads={num_heads}."
+            )
+
+        self.hidden_dim = int(hidden_dim)
+        self.num_heads = int(num_heads)
+        self.dropout = nn.Dropout(float(dropout))
+        self.local_norm = nn.LayerNorm(self.hidden_dim)
+        self.global_norm = nn.LayerNorm(self.hidden_dim)
+        self.ffn_norm = nn.LayerNorm(self.hidden_dim)
+
+        if HAS_TORCH_GEOMETRIC:
+            self.local_gnn = GATv2Conv(
+                self.hidden_dim,
+                self.hidden_dim // self.num_heads,
+                heads=self.num_heads,
+                concat=True,
+                edge_dim=self.hidden_dim,
+            )
+        else:
+            self.local_gnn = None
+
+        self.local_self = nn.Linear(self.hidden_dim, self.hidden_dim)
+        self.local_neighbor = nn.Linear(self.hidden_dim, self.hidden_dim)
+        self.local_edge = nn.Linear(self.hidden_dim, self.hidden_dim)
+        self.global_attn = nn.MultiheadAttention(
+            embed_dim=self.hidden_dim,
+            num_heads=self.num_heads,
+            dropout=float(dropout),
+            batch_first=True,
+        )
+        self.ffn = nn.Sequential(
+            nn.Linear(self.hidden_dim, self.hidden_dim * 4),
+            nn.GELU(),
+            nn.Dropout(float(dropout)),
+            nn.Linear(self.hidden_dim * 4, self.hidden_dim),
+        )
+
+    def _fallback_local_message(
+        self,
+        h: Tensor,
+        edge_index: Tensor,
+        edge_attr: Optional[Tensor] = None,
+    ) -> Tensor:
+        num_nodes = int(h.shape[0])
+        if num_nodes == 0:
+            return h
+
+        update = self.local_self(h)
+        if edge_index.numel() <= 0:
+            return update
+
+        src = edge_index[0].long().clamp(0, max(0, num_nodes - 1))
+        dst = edge_index[1].long().clamp(0, max(0, num_nodes - 1))
+        messages = self.local_neighbor(h[src])
+        if edge_attr is not None:
+            messages = messages + self.local_edge(edge_attr)
+
+        aggregated = torch.zeros_like(h)
+        aggregated.index_add_(0, dst, messages)
+        degree = torch.zeros(num_nodes, 1, device=h.device, dtype=h.dtype)
+        degree.index_add_(
+            0,
+            dst,
+            torch.ones(dst.shape[0], 1, device=h.device, dtype=h.dtype),
+        )
+        aggregated = aggregated / degree.clamp(min=1.0)
+        return update + aggregated
+
+    def forward(
+        self,
+        h: Tensor,
+        *,
+        edge_index: Tensor,
+        edge_attr: Optional[Tensor] = None,
+    ) -> Tensor:
+        local_in = self.local_norm(h)
+        if self.local_gnn is not None:
+            if edge_attr is not None:
+                local_out = self.local_gnn(local_in, edge_index, edge_attr=edge_attr)
+            else:
+                local_out = self.local_gnn(local_in, edge_index)
+        else:
+            local_out = self._fallback_local_message(local_in, edge_index=edge_index, edge_attr=edge_attr)
+        h = h + self.dropout(F.gelu(local_out))
+
+        global_in = self.global_norm(h).unsqueeze(0)
+        global_out, _ = self.global_attn(global_in, global_in, global_in, need_weights=False)
+        h = h + self.dropout(global_out.squeeze(0))
+
+        h = h + self.dropout(self.ffn(self.ffn_norm(h)))
+        return h
 
 
 # ============================================================================
@@ -762,6 +1026,7 @@ class DualStreamConditionEncoder(nn.Module):
         dropout: float = 0.1,
         num_style_tokens: int = 6,
         style_dim: int = 128,
+        use_current_node_distance_features: bool = True,
     ):
         super().__init__()
         
@@ -784,6 +1049,8 @@ class DualStreamConditionEncoder(nn.Module):
             output_dim=output_dim,
             num_layers=num_gnn_layers,
             gnn_type=gnn_type,
+            dropout=dropout,
+            use_current_node_distance_features=use_current_node_distance_features,
         )
         
         # GLOBAL STYLE TOKEN (Theme Consistency)
@@ -828,9 +1095,11 @@ class DualStreamConditionEncoder(nn.Module):
         edge_index: Tensor,
         edge_features: Optional[Tensor] = None,
         tpe: Optional[Tensor] = None,
+        current_node_distance: Optional[Tensor] = None,
         current_node_idx: Optional[int] = None,
         style_id: Optional[Tensor] = None,
-    ) -> Tensor:
+        return_global_tokens: bool = False,
+    ) -> Union[Tensor, Tuple[Tensor, Tensor]]:
         """
         Compute conditioning vector from local, global, and style context.
         
@@ -845,9 +1114,12 @@ class DualStreamConditionEncoder(nn.Module):
             current_node_idx: Index of current node in graph
             style_id: [B] or scalar - Global style token ID for dungeon theme
                      (0=ruins, 1=lava, 2=cult, 3=tech, 4=water, 5=forest)
+            return_global_tokens: When True, also return the batched graph-token
+                sequence so callers do not have to re-run the global encoder.
             
         Returns:
-            Conditioning vector [B, output_dim]
+            Conditioning vector [B, output_dim], optionally paired with global
+            graph tokens [B, N, output_dim].
         """
         batch_size = boundary_constraints.shape[0]
         device = boundary_constraints.device
@@ -859,18 +1131,31 @@ class DualStreamConditionEncoder(nn.Module):
             position,
         )
         
-        # Stream B: Global context
-        c_global = self.global_encoder(
+        # Stream B: Global context. When callers need both the current-room
+        # summary token and the full graph-token sequence, run the global
+        # encoder once and slice the current node locally.
+        global_tokens = self.global_encoder(
             node_features,
             edge_index,
             edge_features=edge_features,
             tpe=tpe,
-            node_idx=current_node_idx,
+            current_node_distance=current_node_distance,
+            node_idx=None,
         )
-        
-        # Ensure c_global has proper shape for cross-attention
-        if c_global.dim() == 2:
-            c_global = c_global.unsqueeze(0).expand(c_local.shape[0], -1, -1)
+
+        # Ensure global tokens have proper shape for cross-attention.
+        if global_tokens.dim() == 2:
+            global_tokens = global_tokens.unsqueeze(0).expand(c_local.shape[0], -1, -1)
+
+        if current_node_idx is not None:
+            num_tokens = int(global_tokens.shape[1])
+            if current_node_idx < 0 or current_node_idx >= num_tokens:
+                raise IndexError(
+                    f"current_node_idx={current_node_idx} is out of range for {num_tokens} graph tokens"
+                )
+            c_global = global_tokens[:, current_node_idx:current_node_idx + 1, :]
+        else:
+            c_global = global_tokens
         
         # GLOBAL STYLE TOKEN: Inject theme consistency
         if style_id is not None:
@@ -899,7 +1184,9 @@ class DualStreamConditionEncoder(nn.Module):
         # This ensures style influences every room while respecting local geometry
         c_combined = torch.cat([c_fused, style_feat], dim=-1)
         c = self.output_proj(c_combined)
-        
+
+        if return_global_tokens:
+            return c, global_tokens
         return c
     
     def encode_local_only(
@@ -921,6 +1208,7 @@ class DualStreamConditionEncoder(nn.Module):
         edge_index: Tensor,
         edge_features: Optional[Tensor] = None,
         tpe: Optional[Tensor] = None,
+        current_node_distance: Optional[Tensor] = None,
     ) -> Tensor:
         """Encode only global context (all nodes)."""
         return self.global_encoder(
@@ -928,6 +1216,7 @@ class DualStreamConditionEncoder(nn.Module):
             edge_index,
             edge_features=edge_features,
             tpe=tpe,
+            current_node_distance=current_node_distance,
         )
 
 

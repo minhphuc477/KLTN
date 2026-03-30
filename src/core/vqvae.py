@@ -997,10 +997,12 @@ class VQVAETrainer:
         lr: float = 1e-4,
         learning_rate: Optional[float] = None,
         weight_decay: float = 1e-5,
+        grad_clip_norm: float = 1.0,
     ):
         if learning_rate is not None:
             lr = float(learning_rate)
         self.model = model
+        self.grad_clip_norm = float(max(0.0, float(grad_clip_norm)))
         self.optimizer = torch.optim.AdamW(
             model.parameters(),
             lr=lr,
@@ -1033,7 +1035,8 @@ class VQVAETrainer:
         loss.backward()
         
         # Gradient clipping
-        torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+        if self.grad_clip_norm > 0:
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip_norm)
         
         self.optimizer.step()
         

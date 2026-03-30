@@ -28,6 +28,7 @@ Architecture:
 """
 
 import torch
+import torch.nn.functional as F
 import numpy as np
 import networkx as nx
 from typing import Dict, List, Tuple, Optional, Any, Set
@@ -1076,7 +1077,7 @@ class AdvancedNeuralSymbolicPipeline:
                         # VQ-VAE expects one-hot [B, C, H, W], not integer [B, H, W].
                         room_tensor = torch.from_numpy(room).long().unsqueeze(0).to(self.neural_pipeline.device)
                         room_tensor = room_tensor.clamp(min=0, max=43)
-                        room_onehot = torch.nn.functional.one_hot(room_tensor, num_classes=44).permute(0, 3, 1, 2).float()
+                        room_onehot = F.one_hot(room_tensor, num_classes=44).permute(0, 3, 1, 2).float()
                         z_q, _ = self.neural_pipeline.vqvae.encode(room_onehot)
                         neighbor_latents[node_id] = z_q.detach()
                 except (AttributeError, RuntimeError, ValueError, TypeError) as e:

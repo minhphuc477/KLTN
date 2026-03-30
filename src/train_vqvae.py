@@ -106,8 +106,9 @@ def train_vqvae(args):
         dataset,
         batch_size=args.batch_size,
         sampler=sampler,
-        num_workers=0,
-        drop_last=True,
+        num_workers=int(getattr(args, "num_workers", 0)),
+        pin_memory=bool(getattr(args, "pin_memory", torch.cuda.is_available())),
+        drop_last=bool(getattr(args, "drop_last", True)),
     )
     logger.info(f"Effective samples/epoch: {effective_size}, "
                 f"batches/epoch: {len(dataloader)}")
@@ -116,9 +117,13 @@ def train_vqvae(args):
     # Model
     # ------------------------------------------------------------------
     model = create_vqvae(
-        num_classes=44,
+        num_classes=int(getattr(args, "num_classes", 44)),
         codebook_size=args.codebook_size,
         latent_dim=args.latent_dim,
+        hidden_dim=int(getattr(args, "hidden_dim", 128)),
+        commitment_cost=float(getattr(args, "commitment_cost", 0.25)),
+        rare_tile_weight=float(getattr(args, "rare_tile_weight", 5.0)),
+        use_ema=bool(getattr(args, "use_ema", True)),
         use_coordconv=bool(args.use_coordconv),
         mrf_penalty_weight=float(args.mrf_penalty_weight),
     ).to(device)
@@ -126,7 +131,12 @@ def train_vqvae(args):
     total_params = sum(p.numel() for p in model.parameters())
     logger.info(f"VQ-VAE parameters: {total_params:,}")
 
-    trainer = VQVAETrainer(model, lr=args.lr)
+    trainer = VQVAETrainer(
+        model,
+        lr=args.lr,
+        weight_decay=float(getattr(args, "weight_decay", 1e-5)),
+        grad_clip_norm=float(getattr(args, "grad_clip_norm", 1.0)),
+    )
 
     # ------------------------------------------------------------------
     # Checkpoint resume
@@ -301,8 +311,15 @@ def main():
     parser.add_argument("--epochs", type=int, default=300)
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--lr", type=float, default=3e-4)
+    parser.add_argument("--weight-decay", type=float, default=1e-5)
+    parser.add_argument("--grad-clip-norm", type=float, default=1.0)
     parser.add_argument("--latent-dim", type=int, default=64)
+    parser.add_argument("--hidden-dim", type=int, default=128)
     parser.add_argument("--codebook-size", type=int, default=512)
+    parser.add_argument("--num-classes", type=int, default=44)
+    parser.add_argument("--commitment-cost", type=float, default=0.25)
+    parser.add_argument("--rare-tile-weight", type=float, default=5.0)
+    parser.add_argument("--use-ema", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--use-coordconv", action=argparse.BooleanOptionalAction, default=True,
                         help="Use CoordConv in first VQ-VAE encoder layer.")
     parser.add_argument("--mrf-penalty-weight", type=float, default=0.05,
@@ -312,6 +329,9 @@ def main():
     parser.add_argument("--save-dir", type=str, default="checkpoints")
     parser.add_argument("--save-every", type=int, default=50,
                         help="Save periodic checkpoint every N epochs")
+    parser.add_argument("--num-workers", type=int, default=0)
+    parser.add_argument("--pin-memory", action=argparse.BooleanOptionalAction, default=torch.cuda.is_available())
+    parser.add_argument("--drop-last", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--seed", type=int, default=None,
                         help="Deterministic seed for reproducible A/B runs.")
     parser.add_argument("--resume", type=str, default=None,

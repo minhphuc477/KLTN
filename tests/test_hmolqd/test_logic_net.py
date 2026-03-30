@@ -9,6 +9,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 from src.core.definitions import ROOM_HEIGHT, ROOM_WIDTH
+from src.pipeline.room_topology_conditioning import ROOM_TOPOLOGY_CHANNELS
 
 
 class TestDifferentiablePathfinder:
@@ -174,6 +175,47 @@ class TestLogicNet:
         assert tuple(info["tile_logits"].shape[-2:]) == (ROOM_HEIGHT, ROOM_WIDTH)
         assert tuple(info["walkability"].shape[-2:]) == (ROOM_HEIGHT, ROOM_WIDTH)
         assert tuple(info["grid_distances"].shape[-2:]) == (ROOM_HEIGHT, ROOM_WIDTH)
+
+    def test_logicnet_room_topology_losses_are_included_in_total_loss(self):
+        """Room-topology traces and anchors should contribute directly to the optimized loss."""
+        from src.core.logic_net import LogicNet
+
+        logic_net = LogicNet(
+            latent_dim=64,
+            num_classes=44,
+            num_iterations=4,
+            topology_trace_weight=0.6,
+            topology_anchor_weight=0.4,
+        )
+
+        topology = torch.zeros(1, len(ROOM_TOPOLOGY_CHANNELS), ROOM_HEIGHT, ROOM_WIDTH, dtype=torch.float32)
+        topology[:, ROOM_TOPOLOGY_CHANNELS["traversability"], 4:12, 2:9] = 1.0
+        topology[:, ROOM_TOPOLOGY_CHANNELS["start"], ROOM_HEIGHT // 2, 1] = 1.0
+        topology[:, ROOM_TOPOLOGY_CHANNELS["goal"], ROOM_HEIGHT // 2, ROOM_WIDTH - 2] = 1.0
+        topology[:, ROOM_TOPOLOGY_CHANNELS["door_w"], ROOM_HEIGHT // 2 - 1:ROOM_HEIGHT // 2 + 2, 0] = 1.0
+        topology[:, ROOM_TOPOLOGY_CHANNELS["door_e"], ROOM_HEIGHT // 2 - 1:ROOM_HEIGHT // 2 + 2, ROOM_WIDTH - 1] = 1.0
+
+        boundary = torch.tensor([[0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0]], dtype=torch.float32)
+        z = torch.randn(1, 64, 4, 3)
+
+        loss, info = logic_net(
+            z,
+            graph_data={
+                "room_topology_map": topology,
+                "boundary_constraints": boundary,
+            },
+        )
+
+        expected = (
+            logic_net.reach_weight * info["grid_reach_loss"]
+            + logic_net.topology_trace_weight * info["topology_trace_loss"]
+            + logic_net.topology_anchor_weight * info["topology_anchor_loss"]
+        )
+        assert loss.ndim == 0
+        assert torch.isfinite(loss)
+        assert torch.isfinite(info["topology_trace_loss"])
+        assert torch.isfinite(info["topology_anchor_loss"])
+        assert torch.allclose(loss, expected, atol=1e-6, rtol=1e-5)
 
 
 class TestTileClassifier:

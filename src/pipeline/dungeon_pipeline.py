@@ -93,6 +93,7 @@ from src.pipeline.spatial_utils import (
     stable_node_sort_key,
 )
 from src.pipeline.graph_features import (
+    compute_current_node_distance_features,
     compute_tpe_features,
     condition_feature_dims,
     encode_edge_feature_vector,
@@ -293,6 +294,8 @@ class NeuralSymbolicDungeonPipeline:
         diffusion_cfg_schedule_mode: str = "constant",
         diffusion_cfg_schedule_min_scale: float = 1.0,
         diffusion_cfg_schedule_power: float = 1.0,
+        use_current_node_distance_features: bool = True,
+        current_node_distance_max: int = 8,
         room_generator_mode: str = "latent_diffusion",
         masked_room_checkpoint: Optional[str] = None,
         masked_sampling_steps: int = 8,
@@ -318,6 +321,8 @@ class NeuralSymbolicDungeonPipeline:
         self.diffusion_cfg_schedule_mode = str(diffusion_cfg_schedule_mode).strip().lower()
         self.diffusion_cfg_schedule_min_scale = float(max(0.0, diffusion_cfg_schedule_min_scale))
         self.diffusion_cfg_schedule_power = float(max(1e-6, diffusion_cfg_schedule_power))
+        self.use_current_node_distance_features = bool(use_current_node_distance_features)
+        self.current_node_distance_max = int(max(1, int(current_node_distance_max)))
         self.room_generator_mode = str(room_generator_mode).strip().lower()
         self.masked_room_checkpoint = (
             None if masked_room_checkpoint is None else str(masked_room_checkpoint).strip()
@@ -351,9 +356,9 @@ class NeuralSymbolicDungeonPipeline:
                 "Expected 'none', 'lightweight', or 'gat2'."
             )
         gnn_type = str(condition_gnn_type).strip().lower()
-        if gnn_type not in {"gcn", "gat", "sage"}:
+        if gnn_type not in {"gcn", "gat", "sage", "gps"}:
             raise ValueError(
-                f"Invalid condition_gnn_type={condition_gnn_type!r}. Expected 'gcn', 'gat', or 'sage'."
+                f"Invalid condition_gnn_type={condition_gnn_type!r}. Expected 'gcn', 'gat', 'sage', or 'gps'."
             )
         self.condition_gnn_type = gnn_type
 
@@ -442,7 +447,13 @@ class NeuralSymbolicDungeonPipeline:
             components=PipelineComponents(symbolic=symbolic),
         )
 
-    def _load_checkpoint_and_metadata(self, checkpoint_path: str, model_name: str) -> Tuple[dict, dict]:
+    def _load_checkpoint_and_metadata(
+        self,
+        checkpoint_path: str,
+        model_name: str,
+        *,
+        accepted_model_types: Optional[Tuple[str, ...]] = None,
+    ) -> Tuple[dict, dict]:
         """Load checkpoint and optional sidecar metadata for strict validation."""
         checkpoint = torch.load(checkpoint_path, map_location=self.device)
         metadata_path = Path(f"{checkpoint_path}.meta.json")
@@ -450,12 +461,37 @@ class NeuralSymbolicDungeonPipeline:
         if metadata_path.exists():
             with open(metadata_path, "r", encoding="utf-8") as f:
                 metadata = json.load(f)
-            validate_checkpoint_metadata(metadata=metadata, model_name=model_name)
+            validate_checkpoint_metadata(
+                metadata=metadata,
+                model_name=model_name,
+                accepted_model_types=accepted_model_types,
+            )
         elif self.strict_checkpoint_mode:
             raise FileNotFoundError(
                 f"Strict checkpoint mode enabled: metadata sidecar missing for {model_name} at {metadata_path}"
             )
         return checkpoint, metadata
+
+    @staticmethod
+    def _extract_checkpoint_config(checkpoint: Any) -> Dict[str, Any]:
+        if isinstance(checkpoint, dict) and isinstance(checkpoint.get("config"), dict):
+            return dict(checkpoint["config"])
+        return {}
+
+    @staticmethod
+    def _extract_checkpoint_state_dict(checkpoint: Any, *candidate_keys: str) -> Optional[Dict[str, Any]]:
+        if isinstance(checkpoint, dict):
+            for key in candidate_keys:
+                state = checkpoint.get(key)
+                if isinstance(state, dict):
+                    return state
+            state = checkpoint.get("model_state_dict")
+            if isinstance(state, dict):
+                return state
+            if checkpoint and all(isinstance(k, str) for k in checkpoint.keys()):
+                if any(isinstance(v, torch.Tensor) for v in checkpoint.values()):
+                    return checkpoint
+        return None
 
     def _bump_diagnostic(self, key: str) -> None:
         """Increment a named runtime diagnostic counter."""
@@ -559,10 +595,18 @@ class NeuralSymbolicDungeonPipeline:
         use_coordconv = True
         checkpoint: Optional[Dict[str, Any]] = None
         state_dict: Optional[Dict[str, Any]] = None
+        metadata: Dict[str, Any] = {}
+        latent_dim = 64
+        codebook_size = 512
+        hidden_dim = 128
         if checkpoint_path and Path(checkpoint_path).exists():
-            checkpoint, _metadata = self._load_checkpoint_and_metadata(checkpoint_path, "vqvae")
+            checkpoint, metadata = self._load_checkpoint_and_metadata(checkpoint_path, "vqvae")
             if isinstance(checkpoint, dict):
                 state_dict = checkpoint.get('model_state_dict', checkpoint)
+            architecture = metadata.get("architecture", {}) if isinstance(metadata, dict) else {}
+            latent_dim = int(architecture.get("latent_dim", latent_dim))
+            codebook_size = int(architecture.get("codebook_size", codebook_size))
+            use_coordconv = bool(architecture.get("use_coordconv", use_coordconv))
             # Backward compatibility: older checkpoints may use plain Conv2d
             # keys (encoder.conv_in.weight) while newer CoordConv checkpoints
             # use encoder.conv_in.conv.weight.
@@ -571,12 +615,16 @@ class NeuralSymbolicDungeonPipeline:
                 has_plain_conv_keys = ('encoder.conv_in.weight' in state_dict)
                 if has_plain_conv_keys and not has_coordconv_keys:
                     use_coordconv = False
+                conv_key = 'encoder.conv_in.conv.weight' if has_coordconv_keys else 'encoder.conv_in.weight'
+                conv_weight = state_dict.get(conv_key)
+                if isinstance(conv_weight, torch.Tensor) and conv_weight.dim() == 4:
+                    hidden_dim = int(max(1, int(conv_weight.shape[0])))
 
         model = SemanticVQVAE(
             num_classes=44,
-            codebook_size=512,
-            latent_dim=64,
-            hidden_dim=128,
+            codebook_size=codebook_size,
+            latent_dim=latent_dim,
+            hidden_dim=hidden_dim,
             use_coordconv=use_coordconv,
         ).to(self.device)
         
@@ -628,10 +676,19 @@ class NeuralSymbolicDungeonPipeline:
         node_feature_dim = int(default_node_feature_dim)
         edge_feature_dim = int(default_edge_feature_dim)
         checkpoint_state: Optional[Dict[str, Any]] = None
+        checkpoint_config: Dict[str, Any] = {}
 
         if checkpoint_path and Path(checkpoint_path).exists():
-            checkpoint, _metadata = self._load_checkpoint_and_metadata(checkpoint_path, "condition_encoder")
-            checkpoint_state = checkpoint.get('model_state_dict', checkpoint)
+            checkpoint, _metadata = self._load_checkpoint_and_metadata(
+                checkpoint_path,
+                "condition_encoder",
+                accepted_model_types=("diffusion", "masked_room_model"),
+            )
+            checkpoint_state = self._extract_checkpoint_state_dict(
+                checkpoint,
+                "condition_encoder_state_dict",
+            )
+            checkpoint_config = self._extract_checkpoint_config(checkpoint)
             if isinstance(checkpoint_state, dict):
                 node_weight = checkpoint_state.get('global_encoder.node_encoder.weight')
                 edge_weight = checkpoint_state.get('global_encoder.edge_encoder.weight')
@@ -641,12 +698,18 @@ class NeuralSymbolicDungeonPipeline:
                     edge_feature_dim = int(max(1, int(edge_weight.shape[1])))
 
         model = DualStreamConditionEncoder(
-            latent_dim=64,
+            latent_dim=int(checkpoint_config.get("latent_dim", 64)),
             node_feature_dim=node_feature_dim,
             edge_feature_dim=edge_feature_dim,
-            hidden_dim=256,
-            output_dim=256,
-            gnn_type=self.condition_gnn_type,
+            hidden_dim=int(checkpoint_config.get("condition_hidden_dim", 256)),
+            output_dim=int(checkpoint_config.get("context_dim", 256)),
+            gnn_type=str(checkpoint_config.get("condition_gnn_type", self.condition_gnn_type)),
+            num_gnn_layers=int(checkpoint_config.get("condition_num_gnn_layers", 3)),
+            num_attention_heads=int(checkpoint_config.get("condition_num_attention_heads", 8)),
+            dropout=float(checkpoint_config.get("condition_dropout", 0.1)),
+            use_current_node_distance_features=bool(
+                checkpoint_config.get("use_current_node_distance_features", self.use_current_node_distance_features)
+            ),
         ).to(self.device)
         
         if checkpoint_state is not None:
@@ -712,23 +775,47 @@ class NeuralSymbolicDungeonPipeline:
     
     def _load_diffusion(self, checkpoint_path: Optional[str]) -> LatentDiffusionModel:
         """Load or create latent diffusion model."""
+        checkpoint_config: Dict[str, Any] = {}
+        checkpoint_state: Optional[Dict[str, Any]] = None
+        if checkpoint_path and Path(checkpoint_path).exists():
+            checkpoint, _metadata = self._load_checkpoint_and_metadata(checkpoint_path, "diffusion")
+            checkpoint_config = self._extract_checkpoint_config(checkpoint)
+            checkpoint_state = self._extract_checkpoint_state_dict(
+                checkpoint,
+                "diffusion_state_dict",
+            )
         model = LatentDiffusionModel(
-            latent_dim=64,
-            context_dim=256,
-            num_timesteps=1000,
-            model_channels=128,
-            topology_refinement_mode=self.topology_refinement_mode,
-            attention_mode=self.diffusion_attention_mode,
-            hedgehog_feature_dim=self.diffusion_hedgehog_feature_dim,
-            cfg_schedule_mode=self.diffusion_cfg_schedule_mode,
-            cfg_schedule_min_scale=self.diffusion_cfg_schedule_min_scale,
-            cfg_schedule_power=self.diffusion_cfg_schedule_power,
-            room_topology_channels=ROOM_TOPOLOGY_CHANNEL_COUNT,
+            latent_dim=int(checkpoint_config.get("latent_dim", 64)),
+            context_dim=int(checkpoint_config.get("context_dim", 256)),
+            num_timesteps=int(checkpoint_config.get("num_timesteps", 1000)),
+            prediction_type=str(checkpoint_config.get("prediction_type", "epsilon")),
+            cfg_dropout_prob=float(checkpoint_config.get("cfg_dropout_prob", 0.1)),
+            cfg_scale=float(checkpoint_config.get("cfg_scale", 3.0)),
+            cfg_schedule_mode=str(checkpoint_config.get("cfg_schedule_mode", self.diffusion_cfg_schedule_mode)),
+            cfg_schedule_min_scale=float(checkpoint_config.get("cfg_schedule_min_scale", self.diffusion_cfg_schedule_min_scale)),
+            cfg_schedule_power=float(checkpoint_config.get("cfg_schedule_power", self.diffusion_cfg_schedule_power)),
+            min_snr_gamma=float(checkpoint_config.get("min_snr_gamma", 5.0)),
+            model_channels=int(checkpoint_config.get("model_channels", 128)),
+            topology_refinement_mode=str(checkpoint_config.get("topology_refinement_mode", self.topology_refinement_mode)),
+            attention_mode=str(checkpoint_config.get("attention_mode", self.diffusion_attention_mode)),
+            topology_conditioning_mode=str(checkpoint_config.get("topology_conditioning_mode", "additive")),
+            hedgehog_feature_dim=int(checkpoint_config.get("hedgehog_feature_dim", self.diffusion_hedgehog_feature_dim)),
+            unet_channel_mult=tuple(checkpoint_config.get("unet_channel_mult", (1, 2, 4))),
+            unet_num_res_blocks=int(checkpoint_config.get("unet_num_res_blocks", 2)),
+            unet_attention_resolutions=tuple(checkpoint_config.get("unet_attention_resolutions", (1, 2))),
+            unet_num_heads=int(checkpoint_config.get("unet_num_heads", 8)),
+            unet_dropout=float(checkpoint_config.get("unet_dropout", 0.1)),
+            graph_auto_linear_attention_nodes=int(checkpoint_config.get("graph_auto_linear_attention_nodes", 128)),
+            spatial_graph_gate_init=float(checkpoint_config.get("spatial_graph_gate_init", -2.0)),
+            spatial_topology_gate_init=float(checkpoint_config.get("spatial_topology_gate_init", -2.0)),
+            room_topology_channels=int(checkpoint_config.get("room_topology_channels", ROOM_TOPOLOGY_CHANNEL_COUNT)),
         ).to(self.device)
         
         if checkpoint_path and Path(checkpoint_path).exists():
-            checkpoint, _metadata = self._load_checkpoint_and_metadata(checkpoint_path, "diffusion")
-            checkpoint_state = checkpoint.get('model_state_dict', checkpoint)
+            if not isinstance(checkpoint_state, dict):
+                raise ValueError(
+                    f"Diffusion checkpoint at {checkpoint_path!r} does not contain a loadable state_dict."
+                )
             if isinstance(checkpoint_state, dict):
                 model_state = model.state_dict()
                 filtered_state: Dict[str, Any] = {}
@@ -808,18 +895,41 @@ class NeuralSymbolicDungeonPipeline:
     
     def _load_logic_net(self, checkpoint_path: Optional[str]) -> LogicNet:
         """Load or create LogicNet."""
+        checkpoint_state: Optional[Dict[str, Any]] = None
+        checkpoint_config: Dict[str, Any] = {}
         model = LogicNet(
             latent_dim=64,
             num_classes=44,
             num_iterations=20,
+            topology_trace_weight=0.25,
+            topology_anchor_weight=0.25,
         ).to(self.device)
         
         if checkpoint_path and Path(checkpoint_path).exists():
-            checkpoint, _metadata = self._load_checkpoint_and_metadata(checkpoint_path, "logic_net")
-            if 'model_state_dict' in checkpoint:
-                model.load_state_dict(checkpoint['model_state_dict'])
+            checkpoint, metadata = self._load_checkpoint_and_metadata(
+                checkpoint_path,
+                "logic_net",
+                accepted_model_types=("diffusion",),
+            )
+            checkpoint_state = self._extract_checkpoint_state_dict(
+                checkpoint,
+                "logic_net_state_dict",
+            )
+            checkpoint_config = self._extract_checkpoint_config(checkpoint)
+            architecture = metadata.get("architecture", {}) if isinstance(metadata, dict) else {}
+            model = LogicNet(
+                latent_dim=int(checkpoint_config.get("latent_dim", architecture.get("latent_dim", 64))),
+                num_classes=int(checkpoint_config.get("num_classes", architecture.get("num_classes", 44))),
+                num_iterations=int(checkpoint_config.get("num_logic_iterations", 20)),
+                topology_trace_weight=float(checkpoint_config.get("logic_topology_trace_weight", 0.25)),
+                topology_anchor_weight=float(checkpoint_config.get("logic_topology_anchor_weight", 0.25)),
+            ).to(self.device)
+            if isinstance(checkpoint_state, dict):
+                model.load_state_dict(checkpoint_state)
             else:
-                model.load_state_dict(checkpoint)
+                raise ValueError(
+                    f"LogicNet checkpoint at {checkpoint_path!r} does not contain a loadable state_dict."
+                )
             logger.info(f"Loaded LogicNet from {checkpoint_path}")
         else:
             if self.strict_checkpoint_mode:
@@ -840,20 +950,32 @@ class NeuralSymbolicDungeonPipeline:
 
         from src.core.discrete_masked_model import create_discrete_masked_model
 
+        checkpoint_config: Dict[str, Any] = {}
+        checkpoint_state: Optional[Dict[str, Any]] = None
+        checkpoint: Optional[Dict[str, Any]] = None
+        if checkpoint_path and Path(checkpoint_path).exists():
+            checkpoint, _metadata = self._load_checkpoint_and_metadata(checkpoint_path, "masked_room_model")
+            checkpoint_config = self._extract_checkpoint_config(checkpoint)
+            checkpoint_state = self._extract_checkpoint_state_dict(checkpoint)
+
         model = create_discrete_masked_model(
-            num_classes=44,
-            hidden_dim=64,
-            model_channels=128,
-            context_dim=256,
-            num_steps=self.masked_sampling_steps,
+            num_classes=int(checkpoint_config.get("num_classes", 44)),
+            hidden_dim=int(checkpoint_config.get("hidden_dim", 64)),
+            model_channels=int(checkpoint_config.get("model_channels", 128)),
+            context_dim=int(checkpoint_config.get("context_dim", 256)),
+            num_steps=int(checkpoint_config.get("masked_steps", self.masked_sampling_steps)),
             attention_mode=self.diffusion_attention_mode,
             hedgehog_feature_dim=self.diffusion_hedgehog_feature_dim,
-            room_topology_channels=ROOM_TOPOLOGY_CHANNEL_COUNT,
+            room_topology_channels=int(checkpoint_config.get("room_topology_channels", ROOM_TOPOLOGY_CHANNEL_COUNT)),
         ).to(self.device)
 
         if checkpoint_path and Path(checkpoint_path).exists():
-            checkpoint, _metadata = self._load_checkpoint_and_metadata(checkpoint_path, "masked_room_model")
-            state_dict = checkpoint.get("model_state_dict", checkpoint)
+            assert checkpoint is not None
+            state_dict = checkpoint_state
+            if not isinstance(state_dict, dict):
+                raise ValueError(
+                    f"Masked-room checkpoint at {checkpoint_path!r} does not contain a loadable state_dict."
+                )
             incompatible = model.load_state_dict(state_dict, strict=False)
             missing = list(getattr(incompatible, "missing_keys", []))
             unexpected = list(getattr(incompatible, "unexpected_keys", []))
@@ -1016,6 +1138,7 @@ class NeuralSymbolicDungeonPipeline:
         if position is None:
             position = torch.zeros(1, 2, device=self.device)
 
+        node_tokens: Optional[torch.Tensor] = None
         try:
             node_dim, edge_dim = self._condition_feature_dims()
             validate_feature_dims(
@@ -1024,7 +1147,7 @@ class NeuralSymbolicDungeonPipeline:
                 expected_node_dim=node_dim,
                 expected_edge_dim=edge_dim,
             )
-            condition = self.condition_encoder(
+            condition_out = self.condition_encoder(
                 neighbor_latents=neighbor_latents,
                 boundary_constraints=boundary_constraints,
                 position=position,
@@ -1032,8 +1155,19 @@ class NeuralSymbolicDungeonPipeline:
                 edge_index=graph_context.get('edge_index'),
                 edge_features=graph_context.get('edge_features'),
                 tpe=graph_context.get('tpe'),
+                current_node_distance=graph_context.get('current_node_distance'),
                 current_node_idx=graph_context.get('current_node_idx'),
+                return_global_tokens=self.use_graph_node_cross_attention,
             )
+            if self.use_graph_node_cross_attention:
+                if not isinstance(condition_out, tuple) or len(condition_out) != 2:
+                    raise ValueError(
+                        "Condition encoder must return (conditioning, global_tokens) when "
+                        "graph-node cross-attention is enabled."
+                    )
+                condition, node_tokens = condition_out
+            else:
+                condition = condition_out
             validate_tensor_contract(
                 condition,
                 BlockShapeContract(name='block_iii_condition_output', dims=2, batch_dim=1, channel_dim=256),
@@ -1046,15 +1180,10 @@ class NeuralSymbolicDungeonPipeline:
                 ) from e
             logger.warning(f"Condition encoding failed: {e}, using zero condition")
             condition = torch.zeros(1, 256, device=self.device)
+            node_tokens = None
 
-        if self.use_graph_node_cross_attention:
+        if self.use_graph_node_cross_attention and isinstance(node_tokens, torch.Tensor):
             try:
-                node_tokens = self.condition_encoder.encode_global_only(
-                    node_features=graph_context.get('node_features'),
-                    edge_index=graph_context.get('edge_index'),
-                    edge_features=graph_context.get('edge_features'),
-                    tpe=graph_context.get('tpe'),
-                )
                 if node_tokens.dim() == 2:
                     node_tokens = node_tokens.unsqueeze(0)
                 condition = torch.cat([condition.unsqueeze(1), node_tokens], dim=1)
@@ -1277,11 +1406,20 @@ class NeuralSymbolicDungeonPipeline:
             'tpe': graph_data.get('tpe'),
             'node_positions': graph_data.get('node_positions'),
             'node_mask': graph_data.get('node_mask'),
+            'boundary_constraints': torch.cat(
+                [inp['boundary_constraints'].to(self.device, dtype=torch.float32) for inp in per_room_inputs],
+                dim=0,
+            ),
             'room_topology_map': torch.cat(
                 [inp['graph_context']['room_topology_map'] for inp in per_room_inputs],
                 dim=0,
             ),
         }
+        if self.use_current_node_distance_features:
+            graph_ctx_for_guidance['current_node_distance'] = torch.cat(
+                [inp['graph_context']['current_node_distance'] for inp in per_room_inputs],
+                dim=0,
+            )
 
         tokens_batch: Optional[torch.Tensor] = None
         if self.room_generator_mode == "discrete_masked":
@@ -1528,6 +1666,11 @@ class NeuralSymbolicDungeonPipeline:
 
         sampler_mode = str(latent_sampler or "diffusion").strip().lower()
         graph_data = graph_context if isinstance(graph_context, dict) else None
+        if graph_data is not None and boundary_constraints is not None and "boundary_constraints" not in graph_data:
+            graph_data = {
+                **graph_data,
+                "boundary_constraints": boundary_constraints.to(self.device, dtype=torch.float32),
+            }
         mission_graph_for_room = graph_data.get("mission_graph") if isinstance(graph_data, dict) else None
 
         sampled_tokens: Optional[torch.Tensor] = None
@@ -3005,6 +3148,15 @@ class NeuralSymbolicDungeonPipeline:
         start_goal: Optional[Tuple[Tuple[int, int], Tuple[int, int]]] = None,
     ) -> Dict[str, Any]:
         """Build per-room graph context shared by condition encoding and diffusion."""
+        current_node_idx = graph_data.get('node_to_idx', {}).get(room_id, 0)
+        current_node_distance = compute_current_node_distance_features(
+            graph_data.get('edge_index'),
+            int(graph_data.get('node_features').shape[0]) if isinstance(graph_data.get('node_features'), torch.Tensor) else 0,
+            current_node_idx=current_node_idx,
+            device=self.device,
+            dtype=torch.float32,
+            max_distance=self.current_node_distance_max,
+        )
         return {
             'node_features': graph_data.get('node_features'),
             'edge_index': graph_data.get('edge_index'),
@@ -3014,7 +3166,8 @@ class NeuralSymbolicDungeonPipeline:
             'node_mask': graph_data.get('node_mask'),
             'has_room_anchor': True,
             'mission_graph': mission_graph,
-            'current_node_idx': graph_data.get('node_to_idx', {}).get(room_id, 0),
+            'current_node_idx': current_node_idx,
+            **({'current_node_distance': current_node_distance} if self.use_current_node_distance_features else {}),
             'room_topology_map': self._build_room_topology_condition_tensor(
                 mission_graph,
                 room_id,

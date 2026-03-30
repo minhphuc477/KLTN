@@ -289,11 +289,27 @@ class GraphGrammarExecutor:
         if max_degree < 1 or not graph.edges:
             return removed
 
-        # Stable pruning order: prefer pruning later-added soft/path edges first.
-        def _edge_prune_priority(edge: MissionEdge) -> Tuple[int, str, str, int]:
+        # Stable pruning order: prefer pruning later-added soft/path edges first
+        # and preserve progression-defining gates until there is no safer option.
+        def _edge_prune_priority(item: Tuple[int, MissionEdge]) -> Tuple[int, int, int]:
+            idx, edge = item
             edge_type_name = str(getattr(edge.edge_type, "name", edge.edge_type)).upper()
-            protected = 0 if edge_type_name in {"PATH", "SHORTCUT", "HIDDEN", "WARP", "STAIRS"} else 1
-            return (protected, str(edge.source), str(edge.target), 0)
+            is_soft_edge = int(edge_type_name not in {"PATH", "SHORTCUT", "HIDDEN", "WARP", "STAIRS"})
+            is_progression_edge = int(
+                edge_type_name in {
+                    "LOCKED",
+                    "BOSS_LOCKED",
+                    "ITEM_GATE",
+                    "ON_OFF_GATE",
+                    "STATE_BLOCK",
+                    "MULTI_LOCK",
+                    "SHUTTER",
+                    "HAZARD",
+                    "ONE_WAY",
+                }
+            )
+            # Lower sort keys are pruned first.
+            return (is_progression_edge, is_soft_edge, -int(idx))
 
         changed = True
         while changed:
@@ -303,7 +319,10 @@ class GraphGrammarExecutor:
             if not offenders:
                 break
 
-            ordered_edges = sorted(list(graph.edges), key=_edge_prune_priority, reverse=True)
+            ordered_edges = [
+                edge
+                for _, edge in sorted(enumerate(list(graph.edges)), key=_edge_prune_priority)
+            ]
             for e in ordered_edges:
                 if e.source in offenders or e.target in offenders:
                     try:
@@ -471,11 +490,27 @@ class GraphGrammarExecutor:
                     prog_ok = bool(self._constraint_grammar.validate_progression_constraints(candidate))
                     if self.enforce_generation_constraints and (not lock_ok or not prog_ok):
                         generation_constraint_rejections += 1
-                        candidate = self._constraint_grammar.fix_lock_key_ordering(candidate)
-                        candidate.sanitize()
-                        candidate = self._constraint_grammar.repair_progression_constraints(candidate)
-                        candidate.sanitize()
-                        candidate_repairs_applied += 1
+                        if self.allow_candidate_repairs:
+                            candidate = self._constraint_grammar.fix_lock_key_ordering(candidate)
+                            candidate.sanitize()
+                            candidate = self._constraint_grammar.repair_progression_constraints(candidate)
+                            candidate.sanitize()
+                            candidate_repairs_applied += 1
+                            lock_ok = bool(self._constraint_grammar.validate_lock_key_ordering(candidate))
+                            prog_ok = bool(self._constraint_grammar.validate_progression_constraints(candidate))
+
+                        if not lock_ok or not prog_ok:
+                            rules_skipped += 1
+                            if record_trace:
+                                trace_row["status"] = "skipped_generation_constraints"
+                                trace_row["reason"] = (
+                                    "candidate violates generation constraints"
+                                    + (" after repair attempt" if self.allow_candidate_repairs else "")
+                                )
+                                trace_row["nodes_after"] = int(len(candidate.nodes))
+                                trace_row["edges_after"] = int(len(candidate.edges))
+                                rule_trace.append(trace_row)
+                            continue
 
                 if (not allow_override) and (len(candidate.nodes) > hard_cap):
                     rules_skipped += 1

@@ -81,6 +81,7 @@ def validate_checkpoint_metadata(
     metadata: dict,
     model_name: str,
     expected_version: str = "1.0",
+    accepted_model_types: Optional[Sequence[str]] = None,
 ) -> None:
     """Validate lightweight checkpoint metadata schema."""
     fmt = str(metadata.get("format_version", "")).strip()
@@ -90,7 +91,15 @@ def validate_checkpoint_metadata(
         )
 
     declared_model = str(metadata.get("model_type", "")).strip().lower()
-    if declared_model and declared_model != str(model_name).strip().lower():
+    accepted = {
+        str(model_name).strip().lower(),
+        *(
+            str(model_type).strip().lower()
+            for model_type in (accepted_model_types or [])
+            if str(model_type).strip()
+        ),
+    }
+    if declared_model and declared_model not in accepted:
         raise BlockContractError(
             f"{model_name}: metadata model_type={declared_model!r} does not match loader"
         )
