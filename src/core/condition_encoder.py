@@ -238,9 +238,15 @@ class FallbackGNN(nn.Module):
         """
         h = self.input_proj(node_features)
         
+        # Symmetric degree normalization: D^{-1/2} A D^{-1/2} (Kipf & Welling 2017)
+        # Prevents feature magnitude explosion on high-degree nodes.
+        degree = adjacency.sum(dim=-1, keepdim=True).clamp_min(1.0)
+        deg_inv_sqrt = degree.pow(-0.5)
+        adjacency_norm = adjacency * deg_inv_sqrt * deg_inv_sqrt.transpose(-2, -1)
+        
         for layer in self.layers:
-            # Aggregate neighbor features
-            neighbor_sum = torch.matmul(adjacency, h)
+            # Aggregate neighbor features (degree-normalized)
+            neighbor_sum = torch.matmul(adjacency_norm, h)
             # Concatenate self and neighbor
             combined = torch.cat([h, neighbor_sum], dim=-1)
             h = layer(combined) + h  # Residual

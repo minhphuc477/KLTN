@@ -382,10 +382,18 @@ class ReachabilityScorer(nn.Module):
             scores: [N] or [B, N] reachability scores in [0, 1]
             loss: Scalar loss (1 - mean reachability of targets)
         """
-        # Compute reachability scores
-        scores = torch.sigmoid(
-            (self.max_distance - distances) / self.temperature
-        )
+        # Compute reachability scores — smooth, no saturation or clamp dead zones.
+        # Use exponential decay for the primary score (always has gradient).
+        # Temperature controls the sharpness: high temp = smooth gradients early,
+        # annealed low temp = sharp scores at convergence.
+        effective_temp = max(self.temperature, 0.1)
+        scores = torch.exp(-distances / (effective_temp * self.max_distance + 1e-8))
+        
+        # Mix with a linear component for stable early-training gradients.
+        # The linear part uses softplus instead of clamp to avoid dead zones.
+        normalized = distances / (self.max_distance + 1e-8)
+        linear_scores = torch.sigmoid(2.0 * (1.0 - normalized))  # smooth [0, 1]
+        scores = 0.5 * scores + 0.5 * linear_scores
         
         # Compute loss
         if target_mask is not None:
@@ -802,8 +810,17 @@ class LogicNet(nn.Module):
             start_mask = graph_data.float()
             goal = goal_mask.float()
 
-            # Accept either logits/probabilities as input and derive walkability.
-            walkability = self.walkability(z).squeeze(1)
+            # BUG-06 fix: detect whether z contains tile probs (num_classes
+            # channels) or latent codes (latent_dim channels). Route through
+            # tile_classifier if needed.
+            if z.shape[1] == self.num_classes:
+                # z is already tile probs/logits — use directly
+                walkability = self.walkability(z).squeeze(1)
+            else:
+                # z is latent codes — classify first, then lift to room size
+                tile_logits = self.tile_classifier(z)
+                tile_logits = self._project_tile_logits_to_room(tile_logits)
+                walkability = self.walkability(tile_logits).squeeze(1)
             distances = self.graph_pathfinder(walkability, start_mask, goal)
             reach_scores = self.reachability(distances, goal)
 
@@ -841,9 +858,13 @@ class LogicNet(nn.Module):
         info['grid_distances'] = grid_distances
         
         # Grid-level reachability: can we traverse the room?
+        # Use smooth sigmoid approximation of the hard threshold (walkability > 0.5)
+        # to maintain differentiability. k=10 gives a steep but smooth step function.
+        # (Bengio et al. 2013: smooth estimators for discrete latents)
+        soft_walkable_mask = torch.sigmoid(10.0 * (walkability - 0.5))
         grid_reach_scores, grid_reach_loss = self.reachability(
             grid_distances.view(B, -1),
-            (walkability > 0.5).view(B, -1).float(),
+            soft_walkable_mask.view(B, -1),
             return_loss=True,
         )
         info['grid_reachability'] = grid_reach_scores.mean()

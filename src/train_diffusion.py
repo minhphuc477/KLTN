@@ -1,4 +1,4 @@
-﻿"""
+"""
 Training Pipeline for Latent Diffusion Model
 =============================================
 
@@ -654,21 +654,23 @@ class DiffusionTrainer:
         
         if edge_index.numel() > 0:
             edge_index_dev = edge_index.to(self.device)
-            for e in range(edge_index_dev.shape[1]):
-                src, dst = edge_index_dev[0, e].item(), edge_index_dev[1, e].item()
-                adjacency[src, dst] = 1.0
-                
-                # Edge cost: locked doors have higher cost
-                edge_type = 0
-                if edge_attr is not None and e < len(edge_attr):
-                    edge_type = edge_attr[e].item()
-                
-                if edge_type == 1:   # key_locked
-                    edge_weights[src, dst] = 2.0
-                elif edge_type == 4:  # boss_locked
-                    edge_weights[src, dst] = 3.0
-                else:
-                    edge_weights[src, dst] = 1.0
+            src_indices = edge_index_dev[0]
+            dst_indices = edge_index_dev[1]
+            
+            # Vectorized adjacency construction
+            adjacency[src_indices, dst_indices] = 1.0
+            
+            # Vectorized edge weights: default=1.0, key_locked=2.0, boss_locked=3.0
+            edge_weights[src_indices, dst_indices] = 1.0
+            if edge_attr is not None:
+                edge_attr_dev = edge_attr.to(self.device) if isinstance(edge_attr, torch.Tensor) else torch.tensor(edge_attr, device=self.device)
+                num_edges = min(len(edge_attr_dev), edge_index_dev.shape[1])
+                key_locked_mask = edge_attr_dev[:num_edges] == 1
+                boss_locked_mask = edge_attr_dev[:num_edges] == 4
+                if key_locked_mask.any():
+                    edge_weights[src_indices[:num_edges][key_locked_mask], dst_indices[:num_edges][key_locked_mask]] = 2.0
+                if boss_locked_mask.any():
+                    edge_weights[src_indices[:num_edges][boss_locked_mask], dst_indices[:num_edges][boss_locked_mask]] = 3.0
         
         # Find start and target nodes from node_features
         start_idx = graph_dict.get('start_node_id', 0)
@@ -837,8 +839,10 @@ class DiffusionTrainer:
         self._update_ema()
         
         # --- Phase 1D: Anneal LogicNet temperature ---
+        # Use estimated total steps from config instead of hardcoded epochs*100
         if hasattr(self.logic_net, 'update_temperature'):
-            progress = min(1.0, self.global_step / max(1, self.config.epochs * 100))
+            estimated_total_steps = max(1, getattr(self, '_estimated_total_steps', self.config.epochs * 100))
+            progress = min(1.0, self.global_step / estimated_total_steps)
             self.logic_net.update_temperature(progress)
         
         self.global_step += 1
@@ -870,6 +874,9 @@ class DiffusionTrainer:
         """
         metrics_sum = {'loss': 0, 'diffusion_loss': 0, 'logic_loss': 0, 'solvability_proxy': 0, 'solvability': 0}
         num_batches = 0
+        
+        # DESIGN-08: Compute actual total training steps for temperature annealing
+        self._estimated_total_steps = max(1, self.config.epochs * len(dataloader))
         
         include_logic = self.epoch >= self.config.warmup_epochs
         total_epochs = int(getattr(self.config, "epochs", self.epoch + 1))

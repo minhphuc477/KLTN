@@ -1,4 +1,4 @@
-﻿"""
+"""
 H-MOLQD Block VII: Symbolic Refiner with Wave Function Collapse
 ===============================================================
 
@@ -58,41 +58,84 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 class TileType(Enum):
-    """Tile types for WFC."""
+    """Tile types for WFC — aligned with canonical TileID from definitions.py."""
     VOID = 0        # Impassable
     FLOOR = 1       # Walkable
     WALL = 2        # Solid
-    DOOR_N = 10     # North door
-    DOOR_S = 11     # South door
-    DOOR_E = 12     # East door
-    DOOR_W = 13     # West door
-    KEY = 30        # Small key
-    CHEST = 40      # Chest
-    ENEMY = 50      # Enemy spawn
+    BLOCK = 3       # Pushable/decorative block
+    DOOR_OPEN = 10  # Open passage
+    DOOR_LOCKED = 11  # Key-locked door
+    DOOR_BOMB = 12  # Bombable wall
+    DOOR_PUZZLE = 13  # Puzzle/switch door
+    DOOR_BOSS = 14  # Boss key door
+    DOOR_SOFT = 15  # Soft-locked (one-way) door
+    ENEMY = 20      # Monster
+    START = 21      # Starting position
+    TRIFORCE = 22   # Goal
+    BOSS = 23       # Boss enemy
+    KEY_SMALL = 30  # Small key
+    KEY_BOSS = 31   # Boss key
+    KEY_ITEM = 32   # Key item
+    ITEM_MINOR = 33 # Minor collectible
+    ELEMENT = 40    # Hazard element
+    ELEMENT_FLOOR = 41  # Walkable element
+    STAIR = 42      # Stairs
+    PUZZLE = 43     # Puzzle element
 
 
-# Default adjacency rules for Zelda dungeons
+# Walkable tile set (canonical, derives from definitions.py TileID)
+_WALKABLE_TILES: Set[int] = {
+    TileType.FLOOR.value, TileType.DOOR_OPEN.value, TileType.DOOR_LOCKED.value,
+    TileType.DOOR_BOMB.value, TileType.DOOR_PUZZLE.value, TileType.DOOR_BOSS.value,
+    TileType.DOOR_SOFT.value, TileType.KEY_SMALL.value, TileType.KEY_BOSS.value,
+    TileType.KEY_ITEM.value, TileType.ITEM_MINOR.value, TileType.ENEMY.value,
+    TileType.BOSS.value, TileType.START.value, TileType.TRIFORCE.value,
+    TileType.STAIR.value, TileType.ELEMENT_FLOOR.value, TileType.PUZZLE.value,
+}
+
+# Door tile IDs (all door types)
+_DOOR_TILES: Set[int] = {
+    TileType.DOOR_OPEN.value, TileType.DOOR_LOCKED.value, TileType.DOOR_BOMB.value,
+    TileType.DOOR_PUZZLE.value, TileType.DOOR_BOSS.value, TileType.DOOR_SOFT.value,
+}
+
+# Default adjacency rules for Zelda dungeons — uses canonical TileID values.
+# Every tile must appear as a key; tiles not listed default to empty adjacency
+# (WFC will reject them during constraint propagation).
 DEFAULT_ADJACENCY: Dict[int, Set[int]] = {
     TileType.FLOOR.value: {
-        TileType.FLOOR.value, TileType.WALL.value, 
-        TileType.KEY.value, TileType.CHEST.value, TileType.ENEMY.value,
-        TileType.DOOR_N.value, TileType.DOOR_S.value,
-        TileType.DOOR_E.value, TileType.DOOR_W.value,
-    },
+        TileType.FLOOR.value, TileType.WALL.value, TileType.BLOCK.value,
+        TileType.KEY_SMALL.value, TileType.KEY_BOSS.value, TileType.KEY_ITEM.value,
+        TileType.ITEM_MINOR.value, TileType.ENEMY.value, TileType.BOSS.value,
+        TileType.START.value, TileType.TRIFORCE.value, TileType.STAIR.value,
+        TileType.ELEMENT_FLOOR.value, TileType.PUZZLE.value,
+    } | _DOOR_TILES,
     TileType.WALL.value: {
         TileType.WALL.value, TileType.FLOOR.value, TileType.VOID.value,
-    },
+        TileType.BLOCK.value, TileType.ELEMENT.value,
+    } | _DOOR_TILES,
     TileType.VOID.value: {
         TileType.VOID.value, TileType.WALL.value,
     },
-    TileType.DOOR_N.value: {TileType.FLOOR.value, TileType.WALL.value},
-    TileType.DOOR_S.value: {TileType.FLOOR.value, TileType.WALL.value},
-    TileType.DOOR_E.value: {TileType.FLOOR.value, TileType.WALL.value},
-    TileType.DOOR_W.value: {TileType.FLOOR.value, TileType.WALL.value},
-    TileType.KEY.value: {TileType.FLOOR.value},
-    TileType.CHEST.value: {TileType.FLOOR.value},
-    TileType.ENEMY.value: {TileType.FLOOR.value},
+    TileType.BLOCK.value: {
+        TileType.FLOOR.value, TileType.WALL.value, TileType.BLOCK.value,
+    },
+    TileType.ELEMENT.value: {
+        TileType.WALL.value, TileType.ELEMENT.value, TileType.ELEMENT_FLOOR.value,
+    },
+    TileType.ELEMENT_FLOOR.value: {
+        TileType.FLOOR.value, TileType.ELEMENT.value, TileType.ELEMENT_FLOOR.value,
+    },
 }
+# All door types can be adjacent to floor and wall.
+for _dt in _DOOR_TILES:
+    DEFAULT_ADJACENCY[_dt] = {TileType.FLOOR.value, TileType.WALL.value}
+# Entities/items can only be adjacent to floor.
+for _et in (TileType.KEY_SMALL.value, TileType.KEY_BOSS.value, TileType.KEY_ITEM.value,
+            TileType.ITEM_MINOR.value, TileType.ENEMY.value, TileType.BOSS.value,
+            TileType.START.value, TileType.TRIFORCE.value, TileType.STAIR.value,
+            TileType.PUZZLE.value):
+    DEFAULT_ADJACENCY[_et] = {TileType.FLOOR.value}
 
 CANONICAL_WALKABLE_IDS: Set[int] = {
     int(SEMANTIC_PALETTE["FLOOR"]),
@@ -166,7 +209,7 @@ class WFCState:
     adjacency: Dict[int, Set[int]]          # Compatibility rules
     
     def entropy(self, x: int, y: int) -> float:
-        """Compute entropy at cell (x, y)."""
+        """Compute entropy at cell. NOTE: x=column, y=row (grid is [row, col])."""
         probs = self.grid[y, x]
         # Filter out zeros for log
         probs = probs[probs > 0]
@@ -175,11 +218,11 @@ class WFCState:
         return -np.sum(probs * np.log2(probs + 1e-10))
     
     def is_collapsed(self, x: int, y: int) -> bool:
-        """Check if cell is collapsed."""
+        """Check if cell is collapsed. NOTE: x=column, y=row."""
         return self.collapsed[y, x]
     
     def get_options(self, x: int, y: int) -> List[int]:
-        """Get possible tile types at cell."""
+        """Get possible tile types at cell. NOTE: x=column, y=row."""
         probs = self.grid[y, x]
         return [t for t, p in zip(self.tile_types, probs) if p > 0]
 
@@ -203,12 +246,7 @@ class PathAnalyzer:
         Args:
             walkable_tiles: Set of walkable tile IDs
         """
-        self.walkable_tiles = walkable_tiles or {
-            TileType.FLOOR.value,
-            TileType.DOOR_N.value, TileType.DOOR_S.value,
-            TileType.DOOR_E.value, TileType.DOOR_W.value,
-            TileType.KEY.value, TileType.CHEST.value,
-        }
+        self.walkable_tiles = walkable_tiles or _WALKABLE_TILES
         self.walkable_tiles = set(int(v) for v in self.walkable_tiles) | CANONICAL_WALKABLE_IDS
     
     def analyze_grid(
@@ -337,7 +375,7 @@ class PathAnalyzer:
         start: Tuple[int, int],
         goal: Tuple[int, int],
     ) -> Optional[List[Tuple[int, int]]]:
-        """Simple A* pathfinding using (row, col) coordinates."""
+        """A* pathfinding using (row, col) coordinates with parent-pointer reconstruction."""
         h, w = grid.shape[:2]
         
         def heuristic(a, b):
@@ -349,25 +387,33 @@ class PathAnalyzer:
                 if 0 <= nr < h and 0 <= nc < w and grid[nr, nc] in self.walkable_tiles:
                     yield (nr, nc)
         
-        # A* search
-        open_set = [(heuristic(start, goal), 0, start, [start])]
-        closed = set()
+        # A* with parent-pointer reconstruction (O(n) memory, no path-in-heap)
+        open_set = [(heuristic(start, goal), 0, start)]
+        g_score = {start: 0}
+        parent = {start: None}
         
         while open_set:
-            _, g, current, path = heapq.heappop(open_set)
+            _, g, current = heapq.heappop(open_set)
             
             if current == goal:
-                return path
+                # Reconstruct path from parent pointers
+                path = []
+                node = goal
+                while node is not None:
+                    path.append(node)
+                    node = parent[node]
+                return path[::-1]
             
-            if current in closed:
+            if g > g_score.get(current, float('inf')):
                 continue
-            closed.add(current)
             
             for next_pos in neighbors(*current):
-                if next_pos not in closed:
-                    new_g = g + 1
+                new_g = g + 1
+                if new_g < g_score.get(next_pos, float('inf')):
+                    g_score[next_pos] = new_g
+                    parent[next_pos] = current
                     new_f = new_g + heuristic(next_pos, goal)
-                    heapq.heappush(open_set, (new_f, new_g, next_pos, path + [next_pos]))
+                    heapq.heappush(open_set, (new_f, new_g, next_pos))
         
         return None
     
@@ -1111,8 +1157,8 @@ class SymbolicRefiner:
                 sorted(
                     CANONICAL_WALKABLE_IDS
                     | {
-                        int(TileType.KEY.value),
-                        int(TileType.CHEST.value),
+                        int(TileType.KEY_SMALL.value),
+                        int(TileType.ITEM_MINOR.value),
                         int(TileType.ENEMY.value),
                     }
                 ),
@@ -1144,8 +1190,8 @@ class SymbolicRefiner:
                 if floor_mask is not None:
                     walkable = {
                         TileType.FLOOR.value,
-                        TileType.KEY.value,
-                        TileType.CHEST.value,
+                        TileType.KEY_SMALL.value,
+                        TileType.ITEM_MINOR.value,
                     } | CANONICAL_WALKABLE_IDS
                     current_grid = self.constraint_propagator.enforce_connectivity(
                         current_grid,
@@ -1206,8 +1252,8 @@ class SymbolicRefiner:
 
             walkable = {
                 TileType.FLOOR.value,
-                TileType.KEY.value,
-                TileType.CHEST.value,
+                TileType.KEY_SMALL.value,
+                TileType.ITEM_MINOR.value,
             } | CANONICAL_WALKABLE_IDS
             current_grid = self.constraint_propagator.enforce_connectivity(
                 current_grid,

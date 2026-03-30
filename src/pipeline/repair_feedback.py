@@ -168,6 +168,7 @@ def wfc_guided_inpaint_room(
         context=condition,
         graph_data=graph_data,
         num_steps=max(8, int(num_diffusion_steps)),
+        noise_strength=0.5,  # Higher noise for dead-end repair (full regeneration of broken regions)
     )
     logits = vqvae.decode(z_inpaint)
     inpainted_grid = logits.argmax(dim=1).detach().cpu().numpy()[0]

@@ -1667,15 +1667,29 @@ class LatentDiffusionModel(nn.Module):
         t: Tensor,
         context: Tensor,
         graph_data: Optional[Dict[str, Tensor]] = None,
+        *,
+        cached_topology: Optional[Tuple] = None,
+        cached_spatial: Optional[Dict[str, Tensor]] = None,
     ) -> Tensor:
         """
         Predict noise with Classifier-Free Guidance (CFG).
         
         At inference: ε̃ = ε_uncond + s * (ε_cond - ε_uncond)
         where s = cfg_scale. When s=1 → standard conditional, s>1 → stronger conditioning.
+        
+        PERF-02: accepts pre-computed topology/spatial context to avoid
+        redundant extraction at every sampling step.
         """
-        context_edge_index, context_node_mask = self._extract_context_topology(context, graph_data)
-        spatial_graph_data = self._extract_spatial_graph_context(context, graph_data)
+        if cached_topology is not None:
+            context_edge_index, context_node_mask = cached_topology
+        else:
+            context_edge_index, context_node_mask = self._extract_context_topology(context, graph_data)
+        
+        if cached_spatial is not None:
+            spatial_graph_data = cached_spatial
+        else:
+            spatial_graph_data = self._extract_spatial_graph_context(context, graph_data)
+        
         cfg_scale = self._cfg_scale_for_timestep(t).to(device=x_t.device, dtype=x_t.dtype)
         pred_cond = self.denoiser(
             x_t,
@@ -1730,19 +1744,23 @@ class LatentDiffusionModel(nn.Module):
         context: Tensor,
         graph_data: Optional[Dict[str, Tensor]] = None,
         clip_denoised: bool = True,
+        *,
+        cached_topology: Optional[Tuple] = None,
+        cached_spatial: Optional[Dict[str, Tensor]] = None,
     ) -> Tuple[Tensor, Tensor, Tensor]:
         """
         Compute p(x_{t-1} | x_t) mean and variance.
-        Now supports CFG and v-prediction.
+        Now supports CFG, v-prediction, and topology caching.
         """
         # Predict with CFG
-        prediction = self._predict_noise_cfg(x_t, t, context, graph_data=graph_data)
+        prediction = self._predict_noise_cfg(
+            x_t, t, context, graph_data=graph_data,
+            cached_topology=cached_topology, cached_spatial=cached_spatial,
+        )
         
         # Convert to pred_x0 and pred_noise
         pred_x0, _pred_noise = self._convert_prediction(prediction, x_t, t)
         
-        # Compute predicted x_0
-        # pred_x0 already computed by _convert_prediction above
         if clip_denoised:
             pred_x0 = torch.clamp(pred_x0, -1.0, 1.0)
         
@@ -1769,6 +1787,9 @@ class LatentDiffusionModel(nn.Module):
         t: int,
         context: Tensor,
         graph_data: Optional[Dict[str, Tensor]] = None,
+        *,
+        cached_topology: Optional[Tuple] = None,
+        cached_spatial: Optional[Dict[str, Tensor]] = None,
     ) -> Tensor:
         """
         Sample x_{t-1} from x_t (single step).
@@ -1777,17 +1798,22 @@ class LatentDiffusionModel(nn.Module):
         t_tensor = torch.full((B,), t, device=x_t.device, dtype=torch.long)
         
         # Get mean and variance
-        mean, variance, _ = self.p_mean_variance(x_t, t_tensor, context, graph_data=graph_data)
+        mean, variance, _ = self.p_mean_variance(
+            x_t, t_tensor, context, graph_data=graph_data,
+            cached_topology=cached_topology, cached_spatial=cached_spatial,
+        )
         
-        # Apply gradient guidance
+        # Apply variance-scaled gradient guidance (Dhariwal & Nichol 2021 Eq. 10):
+        # μ̃ = μ + s·Σ·∇log p(y|x_t)
+        # Scaling by variance ensures consistent guidance strength across timesteps.
         if self.guidance.logic_net is not None and self.guidance.guidance_scale > 0:
-            mean = self.guidance.apply_guidance(
-                mean,
+            guidance_grad = self.guidance.compute_guidance(
                 x_t,
                 graph_data,
                 t=int(t),
                 num_timesteps=int(self.num_timesteps),
             )
+            mean = mean + variance * guidance_grad
         
         # Add noise (except at t=0)
         noise = torch.randn_like(x_t) if t > 0 else torch.zeros_like(x_t)
@@ -1817,6 +1843,10 @@ class LatentDiffusionModel(nn.Module):
         device = context.device
         _B = context.shape[0]
         
+        # PERF-02: Cache topology extraction (static throughout sampling)
+        cached_topology = self._extract_context_topology(context, graph_data)
+        cached_spatial = self._extract_spatial_graph_context(context, graph_data)
+        
         # Start from noise
         x_t = torch.randn(shape, device=device)
         
@@ -1824,7 +1854,10 @@ class LatentDiffusionModel(nn.Module):
         
         # Reverse diffusion
         for t in reversed(range(self.num_timesteps)):
-            x_t = self.p_sample(x_t, t, context, graph_data)
+            x_t = self.p_sample(
+                x_t, t, context, graph_data,
+                cached_topology=cached_topology, cached_spatial=cached_spatial,
+            )
             
             if return_intermediates:
                 intermediates.append(x_t)
@@ -1862,18 +1895,38 @@ class LatentDiffusionModel(nn.Module):
         step_size = max(1, self.num_timesteps // num_steps)
         timesteps = list(range(0, self.num_timesteps, step_size))[::-1]
         
+        # PERF-02: Cache topology extraction (static throughout sampling)
+        cached_topology = self._extract_context_topology(context, graph_data)
+        cached_spatial = self._extract_spatial_graph_context(context, graph_data)
+        
         # Start from noise
         x_t = torch.randn(shape, device=device)
         
         for i, t in enumerate(timesteps):
             t_tensor = torch.full((shape[0],), t, device=device, dtype=torch.long)
             
-            # Predict with CFG
-            prediction = self._predict_noise_cfg(x_t, t_tensor, context, graph_data=graph_data)
+            # Predict with CFG (using cached topology)
+            prediction = self._predict_noise_cfg(
+                x_t, t_tensor, context, graph_data=graph_data,
+                cached_topology=cached_topology, cached_spatial=cached_spatial,
+            )
             
             # Convert to (pred_x0, pred_noise) supporting v-prediction
             pred_x0, pred_noise = self._convert_prediction(prediction, x_t, t_tensor)
             pred_x0 = torch.clamp(pred_x0, -1.0, 1.0)
+            
+            # Apply LogicNet gradient guidance BEFORE the DDIM step
+            # (Dhariwal & Nichol 2021 §3.2: guidance modifies noise prediction)
+            if self.guidance.logic_net is not None and self.guidance.guidance_scale > 0:
+                guidance_grad = self.guidance.compute_guidance(
+                    x_t,
+                    graph_data,
+                    t=int(t),
+                    num_timesteps=int(self.num_timesteps),
+                )
+                # Modify predicted noise to steer the trajectory
+                sqrt_one_minus_alpha_t = self.sqrt_one_minus_alphas_cumprod[t]
+                pred_noise = pred_noise - sqrt_one_minus_alpha_t * guidance_grad
             
             # Get next timestep
             if i + 1 < len(timesteps):
@@ -1892,16 +1945,6 @@ class LatentDiffusionModel(nn.Module):
             noise = torch.randn_like(x_t) if t > 0 else torch.zeros_like(x_t)
             
             x_t = torch.sqrt(alpha_prev) * pred_x0 + pred_dir + sigma * noise
-            
-            # Apply guidance
-            if self.guidance.logic_net is not None and self.guidance.guidance_scale > 0:
-                guidance_grad = self.guidance.compute_guidance(
-                    x_t,
-                    graph_data,
-                    t=int(t),
-                    num_timesteps=int(self.num_timesteps),
-                )
-                x_t = x_t - guidance_grad
         
         return x_t
 
@@ -1913,6 +1956,7 @@ class LatentDiffusionModel(nn.Module):
         context: Tensor,
         graph_data: Optional[Dict[str, Tensor]] = None,
         num_steps: int = 30,
+        noise_strength: float = 0.35,
     ) -> Tensor:
         """
         Masked latent inpainting using reverse diffusion with hard constraint injection.
@@ -1923,6 +1967,8 @@ class LatentDiffusionModel(nn.Module):
             context: Conditioning [B, context_dim]
             graph_data: Optional graph data for logic guidance
             num_steps: Number of reverse diffusion steps
+            noise_strength: Fraction of diffusion schedule to noise (0.0-1.0).
+                SDEdit (Meng et al. 2021) recommends 0.3-0.5 for partial edits.
 
         Returns:
             Inpainted latent tensor [B, C, H, W]
@@ -1942,12 +1988,21 @@ class LatentDiffusionModel(nn.Module):
 
         preserve_mask = 1.0 - edit_mask
 
-        # Start from noisy version of x_0 so preserved context remains coherent.
-        start_t = max(1, min(self.num_timesteps - 1, int(num_steps) - 1))
+        # Compute noise level from noise_strength (fraction of full schedule).
+        # SDEdit (Meng et al. 2021): 30-50% strength is optimal for partial edits.
+        # Decoupled from num_steps so callers can control both independently.
+        noise_strength = max(0.01, min(1.0, float(noise_strength)))
+        start_t = max(1, min(self.num_timesteps - 1, int(self.num_timesteps * noise_strength)))
+
         t_start = torch.full((B,), start_t, device=device, dtype=torch.long)
         x_t = self.q_sample(x_0, t_start)
 
-        for t in reversed(range(start_t + 1)):
+        # Compute step schedule within [0, start_t]
+        actual_steps = max(1, min(int(num_steps), start_t + 1))
+        step_size = max(1, (start_t + 1) // actual_steps)
+        t_schedule = list(range(0, start_t + 1, step_size))[::-1]
+
+        for t in t_schedule:
             x_t = self.p_sample(x_t, t, context, graph_data)
             t_tensor = torch.full((B,), t, device=device, dtype=torch.long)
             known_t = self.q_sample(x_0, t_tensor)

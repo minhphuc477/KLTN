@@ -1,4 +1,4 @@
-﻿"""
+"""
 H-MOLQD Master Pipeline - Neural-Symbolic Dungeon Generation
 ==============================================================
 
@@ -1675,6 +1675,7 @@ class NeuralSymbolicDungeonPipeline:
                             context=condition,
                             graph_data=graph_data,
                             num_steps=max(8, int(num_diffusion_steps) // 2),
+                            noise_strength=0.25,  # Lower noise for boundary blending (not full regeneration)
                         )
                         self._bump_diagnostic("boundary_latent_masking_applied")
                 except (AttributeError, RuntimeError, ValueError, TypeError) as e:

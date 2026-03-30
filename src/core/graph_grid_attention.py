@@ -126,37 +126,36 @@ class SinusoidalPositionEncoding2D(nn.Module):
         max_w: int, 
         temperature: float,
     ) -> Tensor:
-        """Create 2D positional encoding."""
+        """Create 2D positional encoding (vectorized, no Python loops)."""
         half_dim = dim // 2
+        half = max(1, half_dim // 2)
         
         # Create frequency bands
-        omega = torch.arange(half_dim // 2, dtype=torch.float32)
-        omega = 1.0 / (temperature ** (omega / (half_dim // 2)))
+        omega = torch.arange(half, dtype=torch.float32)
+        omega = 1.0 / (temperature ** (omega / max(1, half)))
         
         # Row and column positions
         rows = torch.arange(max_h, dtype=torch.float32)
         cols = torch.arange(max_w, dtype=torch.float32)
         
-        # Compute encodings
-        row_pe = rows.unsqueeze(1) * omega.unsqueeze(0)  # [H, D/4]
-        col_pe = cols.unsqueeze(1) * omega.unsqueeze(0)  # [W, D/4]
+        # Compute encodings — [H, half] and [W, half]
+        row_pe = rows.unsqueeze(1) * omega.unsqueeze(0)
+        col_pe = cols.unsqueeze(1) * omega.unsqueeze(0)
         
-        # Sin and cos
-        row_sin = torch.sin(row_pe)
-        row_cos = torch.cos(row_pe)
-        col_sin = torch.sin(col_pe)
-        col_cos = torch.cos(col_pe)
+        row_sin = torch.sin(row_pe)  # [H, half]
+        row_cos = torch.cos(row_pe)  # [H, half]
+        col_sin = torch.sin(col_pe)  # [W, half]
+        col_cos = torch.cos(col_pe)  # [W, half]
         
-        # Combine into [H, W, D] tensor
+        # Vectorized broadcast into [H, W, D] — no Python loops
         pe = torch.zeros(max_h, max_w, dim)
-        half = half_dim // 2
-        
-        for h in range(max_h):
-            for w in range(max_w):
-                pe[h, w, :half] = row_sin[h]
-                pe[h, w, half:half*2] = row_cos[h]
-                pe[h, w, half*2:half*3] = col_sin[w]
-                pe[h, w, half*3:] = col_cos[w]
+        pe[:, :, :half] = row_sin.unsqueeze(1).expand(max_h, max_w, half)
+        pe[:, :, half:half*2] = row_cos.unsqueeze(1).expand(max_h, max_w, half)
+        pe[:, :, half*2:half*3] = col_sin.unsqueeze(0).expand(max_h, max_w, half)
+        remaining = dim - half * 3
+        if remaining > 0:
+            fill = min(remaining, half)
+            pe[:, :, half*3:half*3 + fill] = col_cos[:, :fill].unsqueeze(0).expand(max_h, max_w, fill)
         
         return pe
     

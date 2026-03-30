@@ -215,12 +215,15 @@ class VectorQuantizer(nn.Module):
         perplexity = torch.exp(-torch.sum(avg_probs * torch.log(avg_probs + 1e-10)))
         losses['perplexity'] = perplexity
         
-        # Update usage statistics
+        # Update usage statistics (EMA-tracked, not forever-accumulating)
         if self.training:
             with torch.no_grad():
-                self.codebook_usage += torch.bincount(
+                batch_usage = torch.bincount(
                     indices, minlength=self.num_embeddings
                 ).float()
+                # EMA decay prevents stale early-training bias from
+                # blocking dead-code resets in long training runs.
+                self.codebook_usage = 0.99 * self.codebook_usage + 0.01 * batch_usage
         
         # Reshape indices
         indices = indices.view(B, H, W)
@@ -234,19 +237,29 @@ class VectorQuantizer(nn.Module):
         return z_q, losses['vq_loss'], indices
     
     def _ema_update(self, z_flat: Tensor, indices: Tensor):
-        """Update codebook using exponential moving average."""
+        """Update codebook using exponential moving average (DDP-safe)."""
         with torch.no_grad():
             encodings = F.one_hot(indices, self.num_embeddings).float()
             
             # Update cluster sizes
             cluster_size = torch.sum(encodings, dim=0)
+            embedding_sum = torch.matmul(encodings.t(), z_flat)
+            
+            # DDP synchronization: aggregate stats across all GPUs
+            # before applying EMA so every replica sees the same update.
+            try:
+                import torch.distributed as dist
+                if dist.is_initialized():
+                    dist.all_reduce(cluster_size, op=dist.ReduceOp.SUM)
+                    dist.all_reduce(embedding_sum, op=dist.ReduceOp.SUM)
+            except (ImportError, RuntimeError):
+                pass  # single-GPU fallback: no-op
+            
             self.ema_cluster_size = (
                 self.decay * self.ema_cluster_size 
                 + (1 - self.decay) * cluster_size
             )
             
-            # Update embedding sums
-            embedding_sum = torch.matmul(encodings.t(), z_flat)
             self.ema_embedding_sum = (
                 self.decay * self.ema_embedding_sum
                 + (1 - self.decay) * embedding_sum
@@ -276,6 +289,9 @@ class VectorQuantizer(nn.Module):
         Dead codes (rarely or never selected) waste codebook capacity.
         Resetting them to actual encoder outputs ensures they capture
         useful patterns. (Dhariwal et al. 2020, Zeghidour et al. 2021)
+        
+        DDP-safe: replacement vectors are determined on rank-0 and
+        broadcast to all replicas.
         """
         with torch.no_grad():
             # Identify dead codes: those with very low EMA cluster size
@@ -288,6 +304,14 @@ class VectorQuantizer(nn.Module):
                                                device=z_flat.device)
                 new_embeddings = z_flat[random_indices].detach()
                 new_embeddings = new_embeddings + torch.randn_like(new_embeddings) * 0.01
+                
+                # DDP: broadcast from rank 0 so all replicas reset identically
+                try:
+                    import torch.distributed as dist
+                    if dist.is_initialized():
+                        dist.broadcast(new_embeddings, src=0)
+                except (ImportError, RuntimeError):
+                    pass  # single-GPU fallback: no-op
                 
                 self.embedding.weight.data[dead_mask] = new_embeddings
                 
