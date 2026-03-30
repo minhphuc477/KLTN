@@ -279,12 +279,14 @@ Expected evidence artifacts:
 
 - **Start Here (single docs entrypoint)**: `docs/INDEX.md`
 - **Docs Folder Landing**: `docs/README.md`
+- **Current Architecture**: `docs/CURRENT_ARCHITECTURE.md`
+- **Claim Traceability**: `docs/TRACEABILITY_AND_CLAIM_VALIDATION.md`
 - **Architecture & Benchmarks**: `docs/SOTA_COMPARISON_AND_BENCHMARKS.md`
 - **Block-by-Block Audit**: `docs/BLOCK_BY_BLOCK_ARCHITECTURE_AND_IMPLEMENTATION_AUDIT.md`
 - **Paper Blueprint + Room Block**: `docs/IEEE_TOG_BLUEPRINT_AND_ROOM_GENERATION.md`
-- **Topology Rubric**: `docs/TOPOLOGY_STACK_EVALUATION_RUBRIC_2026_03_08.md`
 - **Solver + GUI Reference**: `docs/SOLVERS_AND_GUI_REFERENCE.md`
 - **VGLC Compliance Guide**: `docs/VGLC_COMPLIANCE_GUIDE.md`
+- **Archived Snapshot Notes**: `docs/archive/README.md`
 
 ## Citation
 

@@ -291,10 +291,6 @@ Some documentation claims "zero placeholders", but codebase still contains:
 
 These are not full missing implementations, but the "zero placeholders" wording is too absolute.
 
-Files with absolute claims:
-- `docs/MATHEMATICAL_RIGOR_COMPLETION_REPORT.md`
-- `docs/THESIS_DEFENSE_IMPLEMENTATION_REPORT.md`
-
 Recommendation:
 - Replace "zero placeholders" with "no missing canonical runtime block implementations; abstract contracts and best-effort fallbacks remain."
 

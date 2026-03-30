@@ -30,7 +30,7 @@ This guide focuses on **The Legend of Zelda** dungeon data from VGLC.
 ### 1.2 Purpose of This Guide
 
 This guide provides:
-- Complete API documentation for `src/data/vglc_utils.py`
+- Complete API documentation for `src/zelda_data/vglc_utils.py`
 - Usage examples for all compliance features
 - Migration guide for existing code
 - Best practices for VGLC-compliant generation
@@ -534,7 +534,7 @@ G.add_edge(4, 5)          # Connect!
 
 ### 9.3 Related Files
 
-- **Implementation**: [src/data/vglc_utils.py](../src/data/vglc_utils.py)
+- **Implementation**: [src/zelda_data/vglc_utils.py](../src/zelda_data/vglc_utils.py)
 - **Constants**: [src/constants/vglc_constants.py](../src/constants/vglc_constants.py)
 - **Tests**: [tests/test_vglc_compliance.py](../tests/test_vglc_compliance.py)
 - **Demo**: [examples/vglc_compliance_demo.py](../examples/vglc_compliance_demo.py)
