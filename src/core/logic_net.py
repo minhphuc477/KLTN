@@ -937,14 +937,19 @@ class LogicNet(nn.Module):
                     info.update(lock_info)
         
         # 5. Combine losses
-        loss = (
-            self.reach_weight * (grid_reach_loss + graph_reach_loss)
-            + self.lock_weight * lock_loss
-        )
+        # ARCHITECTURAL FIX: Only include grid_reach_loss in training loss.
+        # graph_reach_loss and lock_loss operate on ground-truth adjacency/edge_weights
+        # from the conditioning context, NOT derived from z. A single room's z [B, 64, 4, 3]
+        # cannot encode inter-room key-lock ordering, so these losses provide zero useful
+        # gradient to the diffusion model. They are still computed and returned in `info`
+        # for diagnostic/evaluation purposes.
+        # Graph-level solvability is enforced at the dungeon-sequence level via
+        # evaluate_dungeon_solvability() in the pipeline.
+        loss = self.reach_weight * grid_reach_loss
         
         info['grid_reach_loss'] = grid_reach_loss
-        info['graph_reach_loss'] = graph_reach_loss
-        info['lock_loss'] = lock_loss
+        info['graph_reach_loss'] = graph_reach_loss  # diagnostic only, not in loss
+        info['lock_loss'] = lock_loss                 # diagnostic only, not in loss
         info['total_loss'] = loss
         
         return loss, info

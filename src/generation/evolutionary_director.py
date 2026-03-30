@@ -1,4 +1,4 @@
-﻿"""
+"""
 Evolutionary Topology Director: Search-Based Procedural Content Generation
 ==========================================================================
 
@@ -370,8 +370,12 @@ class GraphGrammarExecutor:
             graph.sanitize()
             before_nodes = int(len(graph.nodes))
             before_edges = int(len(graph.edges))
-            # Stop if too many nodes
-            if len(graph.nodes) >= max_nodes:
+            # Soft node cap: allow temporary overshoot so the EA can explore
+            # through intermediate over-sized topologies to reach complex valid ones.
+            # The fitness function's _constraint_violation() applies a smooth penalty
+            # for node_count > max_nodes_soft. Hard safety valve at 1.5x prevents runaway.
+            hard_cap = int(max(max_nodes + 2, max_nodes * 1.5))
+            if len(graph.nodes) >= hard_cap:
                 if record_trace:
                     rule_trace.append(
                         {
@@ -381,8 +385,8 @@ class GraphGrammarExecutor:
                             "rule_name": str(
                                 self.rule_names[max(1, min(requested_rule_id, len(self.rule_names) - 1))]
                             ),
-                            "status": "stopped_max_nodes",
-                            "reason": f"node cap reached ({len(graph.nodes)} >= {max_nodes})",
+                            "status": "stopped_hard_cap",
+                            "reason": f"hard safety cap reached ({len(graph.nodes)} >= {hard_cap})",
                             "nodes_before": before_nodes,
                             "edges_before": before_edges,
                             "nodes_after": before_nodes,
@@ -443,12 +447,12 @@ class GraphGrammarExecutor:
                 candidate = rule.apply(candidate, context)
                 candidate.sanitize()
 
-                if (not allow_override) and (len(candidate.nodes) > max_nodes):
+                if (not allow_override) and (len(candidate.nodes) > hard_cap):
                     rules_skipped += 1
                     if record_trace:
-                        trace_row["status"] = "skipped_max_nodes"
+                        trace_row["status"] = "skipped_hard_cap"
                         trace_row["reason"] = (
-                            f"candidate node cap exceeded after apply ({len(candidate.nodes)} > {max_nodes})"
+                            f"candidate hard cap exceeded after apply ({len(candidate.nodes)} > {hard_cap})"
                         )
                         trace_row["nodes_after"] = int(len(candidate.nodes))
                         trace_row["edges_after"] = int(len(candidate.edges))
@@ -473,12 +477,12 @@ class GraphGrammarExecutor:
                         candidate.sanitize()
                         candidate_repairs_applied += 1
 
-                if (not allow_override) and (len(candidate.nodes) > max_nodes):
+                if (not allow_override) and (len(candidate.nodes) > hard_cap):
                     rules_skipped += 1
                     if record_trace:
-                        trace_row["status"] = "skipped_max_nodes"
+                        trace_row["status"] = "skipped_hard_cap"
                         trace_row["reason"] = (
-                            f"candidate node cap exceeded after repair ({len(candidate.nodes)} > {max_nodes})"
+                            f"candidate hard cap exceeded after repair ({len(candidate.nodes)} > {hard_cap})"
                         )
                         trace_row["nodes_after"] = int(len(candidate.nodes))
                         trace_row["edges_after"] = int(len(candidate.edges))
@@ -4622,14 +4626,14 @@ if __name__ == "__main__":
     print("ALL TESTS COMPLETED SUCCESSFULLY")
     print("=" * 60)
     print("\nVerification Checklist:")
-    print("  âœ“ Genome is List[int] (rule IDs)")
-    print("  âœ“ Phenotype building uses grammar rules sequentially")
-    print("  âœ“ Invalid rules are skipped (not rejected)")
-    print("  âœ“ Fitness function checks solvability first")
-    print("  âœ“ Tension curve extraction uses critical path")
-    print("  âœ“ Mutation uses weighted probabilities (Zelda matrix)")
-    print("  âœ“ Output is networkx.Graph with node attributes")
-    print("  âœ“ NO 2D grid generation in this module")
-    print("  âœ“ Tests run successfully and produce valid graphs")
-    print("\nðŸŽ® Evolutionary Topology Director is ready for use!")
+    print("   Genome is List[int] (rule IDs)")
+    print("   Phenotype building uses grammar rules sequentially")
+    print("   Invalid rules are skipped (not rejected)")
+    print("   Fitness function checks solvability first")
+    print("   Tension curve extraction uses critical path")
+    print("   Mutation uses weighted probabilities (Zelda matrix)")
+    print("   Output is networkx.Graph with node attributes")
+    print("   NO 2D grid generation in this module")
+    print("   Tests run successfully and produce valid graphs")
+    print("\n Evolutionary Topology Director is ready for use!")
 

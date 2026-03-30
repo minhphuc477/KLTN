@@ -61,7 +61,7 @@ from src.core import (
     ROOM_HEIGHT,
     ROOM_WIDTH,
 )
-from src.core.definitions import DOOR_POSITIONS, parse_edge_type_tokens
+from src.core.definitions import DOOR_POSITIONS, TileID, parse_edge_type_tokens
 from src.core.symbolic_refiner import DEFAULT_ADJACENCY
 from src.simulation.map_elites import MAPElitesEvaluator
 # Block I: Evolutionary Topology Director
@@ -1709,6 +1709,45 @@ class NeuralSymbolicDungeonPipeline:
             )
         neural_probs = logits.softmax(dim=1).detach().cpu().numpy()[0]  # (44, 16, 11)
         
+        # BLOCK III: Topology-Enforced Door Projection
+        # Hard-force door tiles at canonical DOOR_POSITIONS where the mission graph
+        # requires connectivity. This ensures the neural output has valid doors BEFORE
+        # WFC repair, so WFC propagates inward from correct door anchors rather than
+        # overriding the neural distribution from scratch.
+        door_tiles_forced = 0
+        if isinstance(mission_graph_for_room, nx.Graph) and room_id in mission_graph_for_room:
+            try:
+                semantics = self._extract_room_topology_semantics(mission_graph_for_room, room_id)
+                required_doors = semantics.get("required_doors", {})
+                for direction, is_required in required_doors.items():
+                    if not is_required:
+                        continue
+                    spec = DOOR_POSITIONS.get(direction)
+                    if spec is None:
+                        continue
+                    door_tile = int(TileID.DOOR_OPEN)
+                    if direction in {"N", "S"}:
+                        row = int(max(0, min(ROOM_HEIGHT - 1, spec["row"])))
+                        col_start = int(max(0, min(ROOM_WIDTH - 1, spec["col_start"])))
+                        col_end = int(max(0, min(ROOM_WIDTH - 1, spec["col_end"])))
+                        for c in range(col_start, col_end + 1):
+                            if int(neural_grid[row, c]) not in range(10, 16):
+                                neural_grid[row, c] = door_tile
+                                door_tiles_forced += 1
+                    else:
+                        col = int(max(0, min(ROOM_WIDTH - 1, spec["col"])))
+                        row_start = int(max(0, min(ROOM_HEIGHT - 1, spec["row_start"])))
+                        row_end = int(max(0, min(ROOM_HEIGHT - 1, spec["row_end"])))
+                        for r in range(row_start, row_end + 1):
+                            if int(neural_grid[r, col]) not in range(10, 16):
+                                neural_grid[r, col] = door_tile
+                                door_tiles_forced += 1
+            except (AttributeError, RuntimeError, ValueError, TypeError) as e:
+                logger.debug("Topology door projection skipped for room %s: %s", room_id, e)
+        if door_tiles_forced > 0:
+            self._bump_diagnostic("topology_door_tiles_forced")
+            logger.debug("Room %s: forced %d door tiles via topology projection", room_id, door_tiles_forced)
+        
         # BLOCK VI: Symbolic Repair (if enabled)
         was_repaired = False
         repair_mask = None
@@ -2221,6 +2260,72 @@ class NeuralSymbolicDungeonPipeline:
         except (AttributeError, RuntimeError, ValueError, TypeError) as e:
             logger.warning(f"MAP-Elites evaluation failed: {e}")
         return map_elites_score
+    
+    @torch.no_grad()
+    def evaluate_dungeon_solvability(
+        self,
+        rooms: Dict[Any, 'RoomGenerationResult'],
+        mission_graph_physical: nx.Graph,
+    ) -> Dict[str, float]:
+        """
+        Evaluate dungeon-level solvability using LogicNet at the correct scope.
+        
+        This is the graph-level evaluation that was previously (incorrectly) embedded
+        in the per-room training loss. A single room's z [B, 64, 4, 3] cannot encode
+        inter-room key-lock ordering; only a dungeon-level assessment with the actual
+        generated room connectivity can meaningfully evaluate graph solvability.
+        
+        Args:
+            rooms: Dict of room_id -> RoomGenerationResult from generate_rooms_for_graph
+            mission_graph_physical: The physical mission graph with edge types
+            
+        Returns:
+            Dict with solvability_score, graph_reach_loss, lock_loss, and
+            failing_rooms (list of room IDs where local solvability failed)
+        """
+        result: Dict[str, float] = {
+            'solvability_score': 0.0,
+            'graph_reach_loss': 0.0,
+            'lock_loss': 0.0,
+        }
+        failing_rooms: List[Any] = []
+        
+        if self.logic_net is None:
+            logger.debug("evaluate_dungeon_solvability skipped: no logic_net component")
+            return result
+        
+        # Evaluate per-room walkability via LogicNet (grid-level only)
+        total_grid_reach = 0.0
+        num_rooms = 0
+        for room_id, room_result in rooms.items():
+            if room_result.latent is None:
+                continue
+            z = room_result.latent.to(self.device)
+            try:
+                loss, info = self.logic_net(z, graph_data=None)
+                grid_reach = float(info.get('grid_reachability', 0.0))
+                total_grid_reach += grid_reach
+                num_rooms += 1
+                if grid_reach < 0.5:
+                    failing_rooms.append(room_id)
+            except (RuntimeError, ValueError) as e:
+                logger.debug("Room %s solvability eval failed: %s", room_id, e)
+                failing_rooms.append(room_id)
+        
+        if num_rooms > 0:
+            result['solvability_score'] = total_grid_reach / num_rooms
+        
+        result['failing_rooms'] = failing_rooms  # type: ignore[assignment]
+        result['num_rooms_evaluated'] = float(num_rooms)
+        result['num_failing'] = float(len(failing_rooms))
+        
+        logger.info(
+            "Dungeon solvability: %.3f (%d/%d rooms passing)",
+            result['solvability_score'],
+            num_rooms - len(failing_rooms),
+            num_rooms,
+        )
+        return result
     
     @torch.no_grad()
     def generate_dungeon(
