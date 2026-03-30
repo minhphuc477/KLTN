@@ -922,7 +922,7 @@ class NeuralSymbolicDungeonPipeline:
         
         refiner = SymbolicRefiner(
             tile_types=tile_types,
-            adjacency=canonical_adjacency,
+            adjacency=(None if use_learned_rules else canonical_adjacency),
             learned_stats=learned_stats,
             max_repair_attempts=5,
             margin=2,
@@ -1694,6 +1694,55 @@ class NeuralSymbolicDungeonPipeline:
                 spatial_hw=(ROOM_HEIGHT, ROOM_WIDTH),
             ),
         )
+        
+        # BLOCK II.a: Topology-Enforced Constrained Decoding
+        # Clamp doorway logits to the exact door type implied by graph semantics
+        # before argmax. This keeps the topology constraint inside the decoder
+        # instead of stamping a mismatched discrete tile after generation.
+        door_tiles_forced = 0
+        if isinstance(mission_graph_for_room, nx.Graph) and room_id in mission_graph_for_room:
+            try:
+                neg_large = float(-1e4)
+                pos_large = float(1e4)
+                semantics = self._extract_room_topology_semantics(mission_graph_for_room, room_id)
+                required_doors = semantics.get("required_doors", {})
+                for direction, is_required in required_doors.items():
+                    if not is_required:
+                        continue
+                    spec = DOOR_POSITIONS.get(direction)
+                    if spec is None:
+                        continue
+                    door_tile = int(
+                        self._edge_tokens_to_door_tile(
+                            semantics.get("edge_constraints", {}).get(direction, set())
+                        )
+                    )
+                    
+                    if direction in {"N", "S"}:
+                        row = int(max(0, min(ROOM_HEIGHT - 1, spec["row"])))
+                        col_start = int(max(0, min(ROOM_WIDTH - 1, spec["col_start"])))
+                        col_end = int(max(0, min(ROOM_WIDTH - 1, spec["col_end"])))
+                        for c in range(col_start, col_end + 1):
+                            if int(logits[0, :, row, c].argmax()) != door_tile:
+                                logits[0, :, row, c] = neg_large
+                                logits[0, door_tile, row, c] = pos_large
+                                door_tiles_forced += 1
+                    else:
+                        col = int(max(0, min(ROOM_WIDTH - 1, spec["col"])))
+                        row_start = int(max(0, min(ROOM_HEIGHT - 1, spec["row_start"])))
+                        row_end = int(max(0, min(ROOM_HEIGHT - 1, spec["row_end"])))
+                        for r in range(row_start, row_end + 1):
+                            if int(logits[0, :, r, col].argmax()) != door_tile:
+                                logits[0, :, r, col] = neg_large
+                                logits[0, door_tile, r, col] = pos_large
+                                door_tiles_forced += 1
+            except (AttributeError, RuntimeError, ValueError, TypeError) as e:
+                logger.debug("Topology door constrained decoding skipped for room %s: %s", room_id, e)
+                
+        if door_tiles_forced > 0:
+            self._bump_diagnostic("topology_door_tiles_forced")
+            logger.debug("Room %s: forced %d door tiles via constrained decoding", room_id, door_tiles_forced)
+
         if self.room_generator_mode == "discrete_masked" and sampled_tokens is not None:
             neural_grid = sampled_tokens.detach().cpu().numpy()[0].astype(np.int32, copy=False)
         else:
@@ -1709,44 +1758,7 @@ class NeuralSymbolicDungeonPipeline:
             )
         neural_probs = logits.softmax(dim=1).detach().cpu().numpy()[0]  # (44, 16, 11)
         
-        # BLOCK III: Topology-Enforced Door Projection
-        # Hard-force door tiles at canonical DOOR_POSITIONS where the mission graph
-        # requires connectivity. This ensures the neural output has valid doors BEFORE
-        # WFC repair, so WFC propagates inward from correct door anchors rather than
-        # overriding the neural distribution from scratch.
-        door_tiles_forced = 0
-        if isinstance(mission_graph_for_room, nx.Graph) and room_id in mission_graph_for_room:
-            try:
-                semantics = self._extract_room_topology_semantics(mission_graph_for_room, room_id)
-                required_doors = semantics.get("required_doors", {})
-                for direction, is_required in required_doors.items():
-                    if not is_required:
-                        continue
-                    spec = DOOR_POSITIONS.get(direction)
-                    if spec is None:
-                        continue
-                    door_tile = int(TileID.DOOR_OPEN)
-                    if direction in {"N", "S"}:
-                        row = int(max(0, min(ROOM_HEIGHT - 1, spec["row"])))
-                        col_start = int(max(0, min(ROOM_WIDTH - 1, spec["col_start"])))
-                        col_end = int(max(0, min(ROOM_WIDTH - 1, spec["col_end"])))
-                        for c in range(col_start, col_end + 1):
-                            if int(neural_grid[row, c]) not in range(10, 16):
-                                neural_grid[row, c] = door_tile
-                                door_tiles_forced += 1
-                    else:
-                        col = int(max(0, min(ROOM_WIDTH - 1, spec["col"])))
-                        row_start = int(max(0, min(ROOM_HEIGHT - 1, spec["row_start"])))
-                        row_end = int(max(0, min(ROOM_HEIGHT - 1, spec["row_end"])))
-                        for r in range(row_start, row_end + 1):
-                            if int(neural_grid[r, col]) not in range(10, 16):
-                                neural_grid[r, col] = door_tile
-                                door_tiles_forced += 1
-            except (AttributeError, RuntimeError, ValueError, TypeError) as e:
-                logger.debug("Topology door projection skipped for room %s: %s", room_id, e)
-        if door_tiles_forced > 0:
-            self._bump_diagnostic("topology_door_tiles_forced")
-            logger.debug("Room %s: forced %d door tiles via topology projection", room_id, door_tiles_forced)
+        # BLOCK III: Removed (Migrated to Block II.a Constrained Decoding)
         
         # BLOCK VI: Symbolic Repair (if enabled)
         was_repaired = False
@@ -3439,4 +3451,3 @@ __all__ = [
     'GeneratedRoomSet',
     'create_pipeline',
 ]
-

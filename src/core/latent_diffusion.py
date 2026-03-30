@@ -1804,7 +1804,7 @@ class LatentDiffusionModel(nn.Module):
         )
         
         # Apply variance-scaled gradient guidance (Dhariwal & Nichol 2021 Eq. 10):
-        # μ̃ = μ + s·Σ·∇log p(y|x_t)
+        # μ̃ = μ - s·Σ·∇L_logic (gradient descent on logic loss)
         # Scaling by variance ensures consistent guidance strength across timesteps.
         if self.guidance.logic_net is not None and self.guidance.guidance_scale > 0:
             guidance_grad = self.guidance.compute_guidance(
@@ -1813,7 +1813,7 @@ class LatentDiffusionModel(nn.Module):
                 t=int(t),
                 num_timesteps=int(self.num_timesteps),
             )
-            mean = mean + variance * guidance_grad
+            mean = mean - variance * guidance_grad
         
         # Add noise (except at t=0)
         noise = torch.randn_like(x_t) if t > 0 else torch.zeros_like(x_t)
@@ -1865,6 +1865,38 @@ class LatentDiffusionModel(nn.Module):
         if return_intermediates:
             return x_t, intermediates
         return x_t
+
+    @staticmethod
+    def _build_reverse_t_schedule(start_t: int, num_steps: int) -> List[int]:
+        """
+        Build a descending timestep schedule that always includes both endpoints.
+
+        DDIM-style striding must start from the actual noised timestep and end at 0.
+        Simple ``range(..., step)`` schedules can silently skip the start timestep,
+        which misaligns reverse updates with the forward noise level.
+        """
+        start_t = max(0, int(start_t))
+        if start_t == 0:
+            return [0]
+
+        # Include both start_t and 0. A single denoise step is not meaningful when
+        # starting from a noisy latent, so we ensure both endpoints are present.
+        num_steps = max(2, min(int(num_steps), start_t + 1))
+        raw = torch.linspace(float(start_t), 0.0, steps=num_steps, dtype=torch.float64)
+
+        schedule: List[int] = []
+        last_t: Optional[int] = None
+        for value in raw.tolist():
+            t = max(0, min(start_t, int(round(value))))
+            if last_t is None or t < last_t:
+                schedule.append(t)
+                last_t = t
+
+        if not schedule or schedule[0] != start_t:
+            schedule.insert(0, start_t)
+        if schedule[-1] != 0:
+            schedule.append(0)
+        return schedule
     
     @torch.no_grad()
     def ddim_sample(
@@ -1891,9 +1923,10 @@ class LatentDiffusionModel(nn.Module):
         device = context.device
         
         # Create timestep schedule
-        num_steps = max(1, int(num_steps))
-        step_size = max(1, self.num_timesteps // num_steps)
-        timesteps = list(range(0, self.num_timesteps, step_size))[::-1]
+        timesteps = self._build_reverse_t_schedule(
+            int(self.num_timesteps) - 1,
+            num_steps,
+        )
         
         # PERF-02: Cache topology extraction (static throughout sampling)
         cached_topology = self._extract_context_topology(context, graph_data)
@@ -1916,7 +1949,7 @@ class LatentDiffusionModel(nn.Module):
             pred_x0 = torch.clamp(pred_x0, -1.0, 1.0)
             
             # Apply LogicNet gradient guidance BEFORE the DDIM step
-            # (Dhariwal & Nichol 2021 §3.2: guidance modifies noise prediction)
+            # (Dhariwal & Nichol 2021 §3.2: guidance modifies score prediction)
             if self.guidance.logic_net is not None and self.guidance.guidance_scale > 0:
                 guidance_grad = self.guidance.compute_guidance(
                     x_t,
@@ -1924,9 +1957,14 @@ class LatentDiffusionModel(nn.Module):
                     t=int(t),
                     num_timesteps=int(self.num_timesteps),
                 )
-                # Modify predicted noise to steer the trajectory
+                # Modify predicted noise to steer the trajectory towards lower loss
+                # score = -noise/sigma -> new_score = score - grad_loss
+                # new_noise = noise + sigma * grad_loss
                 sqrt_one_minus_alpha_t = self.sqrt_one_minus_alphas_cumprod[t]
-                pred_noise = pred_noise - sqrt_one_minus_alpha_t * guidance_grad
+                pred_noise = pred_noise + sqrt_one_minus_alpha_t * guidance_grad
+                sqrt_alpha_t = self.sqrt_alphas_cumprod[t]
+                pred_x0 = (x_t - sqrt_one_minus_alpha_t * pred_noise) / torch.clamp(sqrt_alpha_t, min=1e-8)
+                pred_x0 = torch.clamp(pred_x0, -1.0, 1.0)
             
             # Get next timestep
             if i + 1 < len(timesteps):
@@ -1994,19 +2032,55 @@ class LatentDiffusionModel(nn.Module):
         noise_strength = max(0.01, min(1.0, float(noise_strength)))
         start_t = max(1, min(self.num_timesteps - 1, int(self.num_timesteps * noise_strength)))
 
-        t_start = torch.full((B,), start_t, device=device, dtype=torch.long)
+        t_schedule = self._build_reverse_t_schedule(start_t, num_steps)
+        t_start = torch.full((B,), t_schedule[0], device=device, dtype=torch.long)
         x_t = self.q_sample(x_0, t_start)
 
-        # Compute step schedule within [0, start_t]
-        actual_steps = max(1, min(int(num_steps), start_t + 1))
-        step_size = max(1, (start_t + 1) // actual_steps)
-        t_schedule = list(range(0, start_t + 1, step_size))[::-1]
+        # Cache graph-conditioned context just once; the topology is static through
+        # the reverse trajectory.
+        cached_topology = self._extract_context_topology(context, graph_data)
+        cached_spatial = self._extract_spatial_graph_context(context, graph_data)
 
-        for t in t_schedule:
-            x_t = self.p_sample(x_t, t, context, graph_data)
+        for i, t in enumerate(t_schedule):
             t_tensor = torch.full((B,), t, device=device, dtype=torch.long)
-            known_t = self.q_sample(x_0, t_tensor)
-            x_t = edit_mask * x_t + preserve_mask * known_t
+
+            prediction = self._predict_noise_cfg(
+                x_t,
+                t_tensor,
+                context,
+                graph_data=graph_data,
+                cached_topology=cached_topology,
+                cached_spatial=cached_spatial,
+            )
+            pred_x0, pred_noise = self._convert_prediction(prediction, x_t, t_tensor)
+            pred_x0 = torch.clamp(pred_x0, -1.0, 1.0)
+
+            if self.guidance.logic_net is not None and self.guidance.guidance_scale > 0:
+                guidance_grad = self.guidance.compute_guidance(
+                    x_t,
+                    graph_data,
+                    t=int(t),
+                    num_timesteps=int(self.num_timesteps),
+                )
+                sqrt_one_minus_alpha_t = self.sqrt_one_minus_alphas_cumprod[t]
+                pred_noise = pred_noise + sqrt_one_minus_alpha_t * guidance_grad
+                sqrt_alpha_t = self.sqrt_alphas_cumprod[t]
+                pred_x0 = (x_t - sqrt_one_minus_alpha_t * pred_noise) / torch.clamp(sqrt_alpha_t, min=1e-8)
+                pred_x0 = torch.clamp(pred_x0, -1.0, 1.0)
+
+            if i + 1 < len(t_schedule):
+                t_prev = int(t_schedule[i + 1])
+                alpha_prev = self.alphas_cumprod[t_prev]
+                t_prev_tensor = torch.full((B,), t_prev, device=device, dtype=torch.long)
+                known_prev = self.q_sample(x_0, t_prev_tensor)
+            else:
+                t_prev = -1
+                alpha_prev = torch.tensor(1.0, device=device, dtype=x_t.dtype)
+                known_prev = x_0
+
+            pred_dir = torch.sqrt(torch.clamp(1.0 - alpha_prev, min=0.0)) * pred_noise
+            x_prev = torch.sqrt(alpha_prev) * pred_x0 + pred_dir
+            x_t = edit_mask * x_prev + preserve_mask * known_prev
 
         return x_t
     

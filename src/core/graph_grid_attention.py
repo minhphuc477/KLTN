@@ -63,15 +63,32 @@ class LightweightGCNLayer(nn.Module):
             edge_index: [2, E] or [B, 2, E]
         """
         b, n, _d = x.shape
+        if edge_index.dim() not in {2, 3}:
+            raise ValueError(
+                f"LightweightGCNLayer edge_index must have shape [2, E] or [B, 2, E], got {tuple(edge_index.shape)}."
+            )
         out = []
         for bi in range(b):
             xb = x[bi]  # [N, D]
             adj = torch.zeros(n, n, device=xb.device, dtype=xb.dtype)
 
             if edge_index.dim() == 3:
-                ei = edge_index[bi]
+                if int(edge_index.shape[0]) == b:
+                    ei = edge_index[bi]
+                elif int(edge_index.shape[0]) == 1:
+                    ei = edge_index[0]
+                else:
+                    raise ValueError(
+                        f"LightweightGCNLayer edge_index batch size {int(edge_index.shape[0])} "
+                        f"does not match graph batch size {b}."
+                    )
             else:
                 ei = edge_index
+
+            if int(ei.shape[0]) != 2:
+                raise ValueError(
+                    f"LightweightGCNLayer edge_index first dimension must be 2, got {tuple(ei.shape)}."
+                )
 
             if ei.numel() > 0:
                 src = ei[0].long()
@@ -193,26 +210,39 @@ class GraphNodePositionEncoding(nn.Module):
     ):
         super().__init__()
         self.dim = dim
+        hidden_dim = max(4, dim // 2)
         
         # Learnable position embedding
+        self.feature_norm = nn.LayerNorm(dim)
         self.pos_embed = nn.Sequential(
-            nn.Linear(2, dim // 2),
+            nn.Linear(2, hidden_dim),
             nn.ReLU(),
-            nn.Linear(dim // 2, dim),
+            nn.Linear(hidden_dim, dim),
         )
         
         # Learnable topological encoding
         self.topo_embed = nn.Sequential(
-            nn.Linear(8, dim // 2),  # 8-dim TPE
+            nn.Linear(8, hidden_dim),  # 8-dim TPE
             nn.ReLU(),
-            nn.Linear(dim // 2, dim),
+            nn.Linear(hidden_dim, dim),
         )
+        # Degree-style structural features are lightweight but permutation aware.
+        self.struct_embed = nn.Sequential(
+            nn.Linear(2, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, dim),
+        )
+        self.pos_gate = nn.Parameter(torch.tensor(1.0))
+        self.topo_gate = nn.Parameter(torch.tensor(1.0))
+        self.struct_gate = nn.Parameter(torch.tensor(1.0))
+        self.output_norm = nn.LayerNorm(dim)
     
     def forward(
         self,
         node_features: Tensor,
         node_positions: Optional[Tensor] = None,
         tpe: Optional[Tensor] = None,
+        structure_features: Optional[Tensor] = None,
     ) -> Tensor:
         """
         Add position encoding to node features.
@@ -225,17 +255,21 @@ class GraphNodePositionEncoding(nn.Module):
         Returns:
             [B, N, D] with position encoding added
         """
-        output = node_features
+        output = self.feature_norm(node_features)
         
         if node_positions is not None:
             pos_enc = self.pos_embed(node_positions.float())
-            output = output + pos_enc
+            output = output + torch.sigmoid(self.pos_gate) * pos_enc
         
         if tpe is not None:
             topo_enc = self.topo_embed(tpe.float())
-            output = output + topo_enc
+            output = output + torch.sigmoid(self.topo_gate) * topo_enc
+
+        if structure_features is not None:
+            struct_enc = self.struct_embed(structure_features.float())
+            output = output + torch.sigmoid(self.struct_gate) * struct_enc
         
-        return output
+        return self.output_norm(output)
 
 
 # ============================================================================
@@ -277,6 +311,17 @@ class GraphToGridCrossAttention(nn.Module):
         allow_legacy_argument_swap: bool = False,
     ):
         super().__init__()
+        if int(grid_dim) <= 0 or int(graph_dim) <= 0:
+            raise ValueError(
+                f"GraphToGridCrossAttention expects positive dims, got grid_dim={grid_dim}, graph_dim={graph_dim}."
+            )
+        if int(num_heads) <= 0:
+            raise ValueError(f"GraphToGridCrossAttention num_heads must be > 0, got {num_heads}.")
+        if int(grid_dim) % int(num_heads) != 0:
+            raise ValueError(
+                "GraphToGridCrossAttention requires grid_dim to be divisible by num_heads; "
+                f"got grid_dim={grid_dim}, num_heads={num_heads}."
+            )
         
         self.grid_dim = grid_dim
         self.graph_dim = graph_dim
@@ -294,6 +339,11 @@ class GraphToGridCrossAttention(nn.Module):
         
         # Graph node position encoding
         self.graph_pe = GraphNodePositionEncoding(graph_dim)
+        self.node_struct_bias = nn.Sequential(
+            nn.Linear(2, max(4, num_heads)),
+            nn.SiLU(),
+            nn.Linear(max(4, num_heads), num_heads),
+        )
         
         # Normalization layers
         self.norm_grid = nn.LayerNorm(grid_dim)
@@ -338,6 +388,64 @@ class GraphToGridCrossAttention(nn.Module):
                 f"Invalid attention_mode={mode!r}. Expected 'softmax' or 'linear_hedgehog'."
             )
         self.attention_mode = normalized
+
+    def _compute_degree_features(
+        self,
+        edge_index: Optional[Tensor],
+        *,
+        batch_size: int,
+        num_nodes: int,
+        device: torch.device,
+        dtype: torch.dtype,
+        node_mask: Optional[Tensor] = None,
+    ) -> Tensor:
+        """Compute normalized in/out-degree features used as lightweight structural encodings."""
+        degree = torch.zeros(batch_size, num_nodes, 2, device=device, dtype=dtype)
+        if num_nodes == 0 or edge_index is None:
+            return degree
+
+        if edge_index.dim() not in {2, 3}:
+            raise ValueError(
+                f"GraphToGridCrossAttention edge_index must have shape [2, E] or [B, 2, E], got {tuple(edge_index.shape)}."
+            )
+
+        ones_dtype = degree.dtype
+        degree_norm = float(max(1, num_nodes - 1))
+        for bi in range(batch_size):
+            if edge_index.dim() == 3:
+                if int(edge_index.shape[0]) == batch_size:
+                    ei = edge_index[bi]
+                elif int(edge_index.shape[0]) == 1:
+                    ei = edge_index[0]
+                else:
+                    raise ValueError(
+                        f"GraphToGridCrossAttention edge_index batch size {int(edge_index.shape[0])} "
+                        f"does not match graph batch size {batch_size}."
+                    )
+            else:
+                ei = edge_index
+
+            if int(ei.shape[0]) != 2:
+                raise ValueError(
+                    f"GraphToGridCrossAttention edge_index first dimension must be 2, got {tuple(ei.shape)}."
+                )
+            if ei.numel() == 0:
+                continue
+            src = ei[0].long()
+            dst = ei[1].long()
+            valid = (src >= 0) & (src < num_nodes) & (dst >= 0) & (dst < num_nodes)
+            src = src[valid]
+            dst = dst[valid]
+            if src.numel() == 0:
+                continue
+            ones = torch.ones(src.shape[0], device=device, dtype=ones_dtype)
+            degree[bi, :, 0].scatter_add_(0, dst, ones)
+            degree[bi, :, 1].scatter_add_(0, src, ones)
+
+        degree = degree / degree_norm
+        if node_mask is not None:
+            degree = degree * node_mask.unsqueeze(-1).to(device=device, dtype=dtype)
+        return degree
     
     def forward(
         self,
@@ -396,6 +504,9 @@ class GraphToGridCrossAttention(nn.Module):
                 f"grid_features {tuple(grid_features.shape)} and graph_nodes {tuple(graph_nodes.shape)}."
             )
         N = graph_nodes.shape[1]
+        if N == 0:
+            logger.debug("GraphToGridCrossAttention received zero graph nodes; returning grid features unchanged.")
+            return grid_features
 
         def _normalize_batched(name: str, value: Optional[Tensor], expected_last: Optional[int] = None) -> Optional[Tensor]:
             if value is None:
@@ -456,14 +567,28 @@ class GraphToGridCrossAttention(nn.Module):
         grid_with_pe = self.grid_pe(grid_features)
         
         # Flatten grid to sequence: [B, H*W, C]
-        grid_seq = grid_with_pe.view(B, C, -1).permute(0, 2, 1)
+        grid_seq = grid_with_pe.reshape(B, C, -1).permute(0, 2, 1)
+
+        degree_features = self._compute_degree_features(
+            edge_index,
+            batch_size=B,
+            num_nodes=N,
+            device=grid_features.device,
+            dtype=graph_nodes.dtype,
+            node_mask=node_mask,
+        )
         
         # Optional GCN preprocessing preserves node-topology dependencies.
         if edge_index is not None:
             graph_nodes = self.graph_gcn(graph_nodes, edge_index)
 
         # Add position encoding to graph nodes
-        graph_with_pe = self.graph_pe(graph_nodes, node_positions, node_tpe)
+        graph_with_pe = self.graph_pe(
+            graph_nodes,
+            node_positions,
+            node_tpe,
+            structure_features=degree_features,
+        )
         
         # Normalize
         grid_normed = self.norm_grid(grid_seq)
@@ -475,9 +600,9 @@ class GraphToGridCrossAttention(nn.Module):
         V = self.v_proj(graph_normed)  # [B, N, C]
         
         # Reshape for multi-head attention
-        Q = Q.view(B, H * W, self.num_heads, self.head_dim).transpose(1, 2)  # [B, heads, H*W, head_dim]
-        K = K.view(B, N, self.num_heads, self.head_dim).transpose(1, 2)      # [B, heads, N, head_dim]
-        V = V.view(B, N, self.num_heads, self.head_dim).transpose(1, 2)      # [B, heads, N, head_dim]
+        Q = Q.reshape(B, H * W, self.num_heads, self.head_dim).transpose(1, 2)  # [B, heads, H*W, head_dim]
+        K = K.reshape(B, N, self.num_heads, self.head_dim).transpose(1, 2)      # [B, heads, N, head_dim]
+        V = V.reshape(B, N, self.num_heads, self.head_dim).transpose(1, 2)      # [B, heads, N, head_dim]
         
         if self.attention_mode == "linear_hedgehog":
             attn_output = hedgehog_linear_attention(
@@ -494,6 +619,8 @@ class GraphToGridCrossAttention(nn.Module):
         else:
             # Attention scores: [B, heads, H*W, N]
             attn_scores = torch.matmul(Q, K.transpose(-2, -1)) * self.scale
+            struct_bias = self.node_struct_bias(degree_features).permute(0, 2, 1).unsqueeze(2)
+            attn_scores = attn_scores + struct_bias.to(dtype=attn_scores.dtype)
 
             if node_mask is not None:
                 attn_scores = attn_scores.masked_fill(node_mask[:, None, None, :] == 0, float('-inf'))
@@ -506,7 +633,7 @@ class GraphToGridCrossAttention(nn.Module):
                 attn_output[~valid_rows] = 0.0
         
         # Reshape: [B, H*W, C]
-        attn_output = attn_output.transpose(1, 2).contiguous().view(B, H * W, C)
+        attn_output = attn_output.transpose(1, 2).contiguous().reshape(B, H * W, C)
         
         # Project output
         attn_output = self.out_proj(attn_output)
@@ -518,7 +645,7 @@ class GraphToGridCrossAttention(nn.Module):
         grid_seq = grid_seq + self.ffn(grid_seq)
         
         # Reshape back to grid: [B, C, H, W]
-        output = grid_seq.permute(0, 2, 1).view(B, C, H, W)
+        output = grid_seq.permute(0, 2, 1).reshape(B, C, H, W)
         
         return output
 
@@ -564,6 +691,8 @@ class SpatialGraphConditioner(nn.Module):
         dropout: float = 0.1,
         attention_mode: str = "softmax",
         hedgehog_feature_dim: int = 32,
+        graph_gate_init: float = -2.0,
+        topology_gate_init: float = -2.0,
     ):
         super().__init__()
         self.topology_conditioner = RoomTopologyConditioner(
@@ -578,8 +707,12 @@ class SpatialGraphConditioner(nn.Module):
             attention_mode=attention_mode,
             hedgehog_feature_dim=hedgehog_feature_dim,
         )
-        self.topology_gate = nn.Parameter(torch.zeros(1))
-        self.graph_gate = nn.Parameter(torch.zeros(1))
+        # GLIGEN-style gates are zero-initialized to protect frozen pretrained
+        # backbones. H-MOLQD trains this path end-to-end, so we keep the initial
+        # influence small but non-zero to avoid starving the conditioner weights
+        # of gradients on the first optimization steps.
+        self.topology_gate = nn.Parameter(torch.full((1,), float(topology_gate_init)))
+        self.graph_gate = nn.Parameter(torch.full((1,), float(graph_gate_init)))
 
     def set_attention_mode(self, mode: str) -> None:
         self.graph_cross_attn.set_attention_mode(mode)
@@ -604,7 +737,7 @@ class SpatialGraphConditioner(nn.Module):
                 room_topology_map,
                 target_hw=(int(x.shape[-2]), int(x.shape[-1])),
             )
-            x = x + torch.tanh(self.topology_gate) * topo_bias
+            x = x + torch.sigmoid(self.topology_gate) * topo_bias
 
         if graph_nodes is not None:
             conditioned = self.graph_cross_attn(
@@ -615,7 +748,7 @@ class SpatialGraphConditioner(nn.Module):
                 node_tpe=node_tpe,
                 node_mask=node_mask,
             )
-            x = x + torch.tanh(self.graph_gate) * (conditioned - x)
+            x = x + torch.sigmoid(self.graph_gate) * (conditioned - x)
 
         return x
 

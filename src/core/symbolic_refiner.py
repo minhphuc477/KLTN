@@ -99,43 +99,95 @@ _DOOR_TILES: Set[int] = {
     TileType.DOOR_PUZZLE.value, TileType.DOOR_BOSS.value, TileType.DOOR_SOFT.value,
 }
 
+_ENTITY_TILES: Set[int] = {
+    TileType.KEY_SMALL.value,
+    TileType.KEY_BOSS.value,
+    TileType.KEY_ITEM.value,
+    TileType.ITEM_MINOR.value,
+    TileType.ENEMY.value,
+    TileType.START.value,
+    TileType.TRIFORCE.value,
+    TileType.BOSS.value,
+    TileType.STAIR.value,
+    TileType.PUZZLE.value,
+}
+
+
+def _symmetrize_adjacency(adjacency: Dict[int, Set[int]]) -> Dict[int, Set[int]]:
+    """
+    Make compatibility bidirectional for this orientation-free tile vocabulary.
+
+    Zelda room tiles are not direction-specific (e.g. there is no "wall-facing-east"
+    variant in the semantic palette), so a local adjacency relation should hold in
+    both directions. Thresholding learned frequencies or hand-written tables can
+    otherwise introduce order-dependent contradictions inside the greedy WFC loop.
+    """
+    symmetric: Dict[int, Set[int]] = {
+        int(src): {int(dst) for dst in neighbors} | {int(src)}
+        for src, neighbors in dict(adjacency).items()
+    }
+
+    for src, neighbors in list(symmetric.items()):
+        for dst in set(neighbors):
+            symmetric.setdefault(int(dst), {int(dst)}).add(int(src))
+
+    return {int(src): set(sorted(int(dst) for dst in neighbors)) for src, neighbors in symmetric.items()}
+
+
+def _build_default_adjacency() -> Dict[int, Set[int]]:
+    """
+    Build a permissive fallback prior for WFC repair.
+
+    The repair stage is a backstop for neural samples, not a style authoring tool.
+    Its fallback constraints therefore bias toward preserving valid walkable/door
+    geometry instead of rejecting anything that does not match a tiny hand-written
+    motif table.
+    """
+    walkable_support = {
+        TileType.FLOOR.value,
+        TileType.ELEMENT_FLOOR.value,
+    } | _DOOR_TILES
+    floor_like = walkable_support | _ENTITY_TILES | {
+        TileType.WALL.value,
+        TileType.BLOCK.value,
+        TileType.ELEMENT.value,
+    }
+    solid_like = floor_like | {
+        TileType.VOID.value,
+    }
+
+    adjacency: Dict[int, Set[int]] = {
+        TileType.FLOOR.value: set(floor_like),
+        TileType.WALL.value: set(solid_like),
+        TileType.VOID.value: {
+            TileType.VOID.value,
+            TileType.WALL.value,
+            TileType.BLOCK.value,
+        },
+        TileType.BLOCK.value: set(solid_like),
+        TileType.ELEMENT.value: {
+            TileType.WALL.value,
+            TileType.BLOCK.value,
+            TileType.ELEMENT.value,
+            TileType.FLOOR.value,
+            TileType.ELEMENT_FLOOR.value,
+        },
+        TileType.ELEMENT_FLOOR.value: set(floor_like),
+    }
+
+    for door_tile in _DOOR_TILES:
+        adjacency[door_tile] = set(floor_like)
+
+    for entity_tile in _ENTITY_TILES:
+        adjacency[entity_tile] = set(floor_like)
+
+    return _symmetrize_adjacency(adjacency)
+
+
 # Default adjacency rules for Zelda dungeons — uses canonical TileID values.
 # Every tile must appear as a key; tiles not listed default to empty adjacency
 # (WFC will reject them during constraint propagation).
-DEFAULT_ADJACENCY: Dict[int, Set[int]] = {
-    TileType.FLOOR.value: {
-        TileType.FLOOR.value, TileType.WALL.value, TileType.BLOCK.value,
-        TileType.KEY_SMALL.value, TileType.KEY_BOSS.value, TileType.KEY_ITEM.value,
-        TileType.ITEM_MINOR.value, TileType.ENEMY.value, TileType.BOSS.value,
-        TileType.START.value, TileType.TRIFORCE.value, TileType.STAIR.value,
-        TileType.ELEMENT_FLOOR.value, TileType.PUZZLE.value,
-    } | _DOOR_TILES,
-    TileType.WALL.value: {
-        TileType.WALL.value, TileType.FLOOR.value, TileType.VOID.value,
-        TileType.BLOCK.value, TileType.ELEMENT.value,
-    } | _DOOR_TILES,
-    TileType.VOID.value: {
-        TileType.VOID.value, TileType.WALL.value,
-    },
-    TileType.BLOCK.value: {
-        TileType.FLOOR.value, TileType.WALL.value, TileType.BLOCK.value,
-    },
-    TileType.ELEMENT.value: {
-        TileType.WALL.value, TileType.ELEMENT.value, TileType.ELEMENT_FLOOR.value,
-    },
-    TileType.ELEMENT_FLOOR.value: {
-        TileType.FLOOR.value, TileType.ELEMENT.value, TileType.ELEMENT_FLOOR.value,
-    },
-}
-# All door types can be adjacent to floor and wall.
-for _dt in _DOOR_TILES:
-    DEFAULT_ADJACENCY[_dt] = {TileType.FLOOR.value, TileType.WALL.value}
-# Entities/items can only be adjacent to floor.
-for _et in (TileType.KEY_SMALL.value, TileType.KEY_BOSS.value, TileType.KEY_ITEM.value,
-            TileType.ITEM_MINOR.value, TileType.ENEMY.value, TileType.BOSS.value,
-            TileType.START.value, TileType.TRIFORCE.value, TileType.STAIR.value,
-            TileType.PUZZLE.value):
-    DEFAULT_ADJACENCY[_et] = {TileType.FLOOR.value}
+DEFAULT_ADJACENCY: Dict[int, Set[int]] = _build_default_adjacency()
 
 CANONICAL_WALKABLE_IDS: Set[int] = {
     int(SEMANTIC_PALETTE["FLOOR"]),
@@ -664,7 +716,7 @@ class LearnedTileStatistics:
             if tile not in adjacency:
                 adjacency[tile] = {tile}
         
-        return dict(adjacency)
+        return _symmetrize_adjacency(dict(adjacency))
     
     def get_tile_weights(self) -> Dict[int, float]:
         """
@@ -1084,46 +1136,67 @@ class SymbolicRefiner:
             tile_types = [t.value for t in TileType]
         
         self.tile_types = tile_types
-        self.adjacency = adjacency or DEFAULT_ADJACENCY
         self.max_repair_attempts = max_repair_attempts
         self.learned_stats = learned_stats
-        
-        # Phase 3B: Override with learned statistics if provided
-        effective_adjacency = adjacency
-        effective_weights = tile_weights
-        
-        total_tiles = learned_stats.total_tiles if learned_stats is not None else 0
-        if learned_stats is not None and total_tiles > 0:
-            if effective_adjacency is None:
-                effective_adjacency = learned_stats.get_adjacency_rules(
-                    threshold=adjacency_threshold
-                )
-                logger.info(
-                    f"Using learned adjacency rules: "
-                    f"{len(effective_adjacency)} tile types, "
-                    f"from {total_tiles} observations"
-                )
-            if effective_weights is None:
-                effective_weights = learned_stats.get_tile_weights()
-                logger.info("Using learned tile weights from training data")
-        
-        if effective_adjacency is None:
-            effective_adjacency = DEFAULT_ADJACENCY
-        
-        self.adjacency = effective_adjacency
+        self.adjacency_threshold = float(adjacency_threshold)
+        self._adjacency_override = (
+            {int(src): set(int(dst) for dst in neighbors) for src, neighbors in adjacency.items()}
+            if adjacency is not None
+            else None
+        )
+        self._tile_weights_override = dict(tile_weights) if tile_weights is not None else None
         
         # Components
         self.path_analyzer = PathAnalyzer()
         self.entropy_reset = EntropyReset(margin=margin)
+        self.adjacency = DEFAULT_ADJACENCY
+        self.wfc = WaveFunctionCollapse(tile_types=tile_types)
+        self.constraint_propagator = ConstraintPropagator()
+        self.last_repair_diagnostics: Dict[str, Any] = {}
+        self.refresh_learned_rules()
+
+    def _resolve_effective_rules(self) -> Tuple[Dict[int, Set[int]], Optional[Dict[int, float]]]:
+        """Resolve the active adjacency/weight configuration for WFC repair."""
+        effective_adjacency = self._adjacency_override
+        effective_weights = self._tile_weights_override
+
+        total_tiles = self.learned_stats.total_tiles if self.learned_stats is not None else 0
+        if self.learned_stats is not None and total_tiles > 0:
+            if effective_adjacency is None:
+                effective_adjacency = self.learned_stats.get_adjacency_rules(
+                    threshold=self.adjacency_threshold
+                )
+                logger.info(
+                    "Using learned adjacency rules: %d tile types from %d observations",
+                    len(effective_adjacency),
+                    total_tiles,
+                )
+            if effective_weights is None:
+                effective_weights = self.learned_stats.get_tile_weights()
+                logger.info("Using learned tile weights from training data")
+
+        if effective_adjacency is None:
+            effective_adjacency = DEFAULT_ADJACENCY
+
+        return effective_adjacency, effective_weights
+
+    def refresh_learned_rules(self) -> None:
+        """
+        Rebuild WFC components from the current rule source.
+
+        This allows a refiner created with empty learned statistics to start with
+        safe defaults and later switch over once observations have been populated.
+        """
+        effective_adjacency, effective_weights = self._resolve_effective_rules()
+        self.adjacency = effective_adjacency
         self.wfc = WaveFunctionCollapse(
-            tile_types=tile_types,
+            tile_types=self.tile_types,
             adjacency=effective_adjacency,
             tile_weights=effective_weights,
         )
         self.constraint_propagator = ConstraintPropagator(
             adjacency=effective_adjacency
         )
-        self.last_repair_diagnostics: Dict[str, Any] = {}
 
     def repair_room_with_feedback(
         self,
@@ -1140,6 +1213,7 @@ class SymbolicRefiner:
         The callback receives (current_grid, dead_end_mask, start, goal, attempt)
         and must return a patched room grid of identical shape.
         """
+        self.refresh_learned_rules()
         current_grid = grid.copy()
         start = _normalize_grid_coord(start, current_grid.shape[:2], field_name="start")
         goal = _normalize_grid_coord(goal, current_grid.shape[:2], field_name="goal")

@@ -319,6 +319,37 @@ class TestGraphGridAttention:
         output = compat_module(grid_features, graph_nodes, node_positions, node_tpe)
         assert output.shape == grid_features.shape
 
+    def test_graph_to_grid_rejects_non_divisible_head_configuration(self):
+        """Transformer-style multi-head projections require grid_dim to split evenly across heads."""
+        from src.core.graph_grid_attention import GraphToGridCrossAttention
+
+        with pytest.raises(ValueError, match="divisible by num_heads"):
+            GraphToGridCrossAttention(grid_dim=62, graph_dim=128, num_heads=8)
+
+    def test_graph_to_grid_empty_graph_is_identity(self):
+        """Empty graph batches should safely no-op instead of producing invalid attention tensors."""
+        from src.core.graph_grid_attention import GraphToGridCrossAttention
+
+        module = GraphToGridCrossAttention(grid_dim=64, graph_dim=128)
+        grid_features = torch.randn(2, 64, 8, 8)
+        graph_nodes = torch.randn(2, 0, 128)
+
+        output = module(grid_features, graph_nodes)
+        assert output.shape == grid_features.shape
+        assert torch.equal(output, grid_features)
+
+    def test_graph_to_grid_supports_shared_batched_edge_index(self):
+        """A shared graph topology batched as [1, 2, E] should broadcast across samples."""
+        from src.core.graph_grid_attention import GraphToGridCrossAttention
+
+        module = GraphToGridCrossAttention(grid_dim=64, graph_dim=128)
+        grid_features = torch.randn(2, 64, 8, 8)
+        graph_nodes = torch.randn(2, 5, 128)
+        edge_index = torch.tensor([[[0, 1, 2], [1, 2, 3]]], dtype=torch.long)
+
+        output = module(grid_features, graph_nodes, edge_index=edge_index)
+        assert output.shape == grid_features.shape
+
     def test_spatial_graph_conditioner_rejects_topology_batch_mismatch(self):
         """SpatialGraphConditioner should validate room-topology batch alignment."""
         from src.core.graph_grid_attention import SpatialGraphConditioner
@@ -333,6 +364,39 @@ class TestGraphGridAttention:
 
         with pytest.raises(ValueError, match="room_topology_map batch size"):
             module(grid_features, room_topology_map=room_topology_map)
+
+    def test_spatial_graph_conditioner_gates_allow_branch_gradients_from_step_one(self):
+        """Conditioning branches should receive gradients immediately instead of being frozen by zero gates."""
+        from src.core.graph_grid_attention import SpatialGraphConditioner
+
+        module = SpatialGraphConditioner(
+            grid_dim=64,
+            graph_dim=128,
+            topology_channels=18,
+        )
+        grid_features = torch.randn(2, 64, 8, 8, requires_grad=True)
+        graph_nodes = torch.randn(2, 5, 128, requires_grad=True)
+        node_positions = torch.randn(2, 5, 2)
+        node_tpe = torch.randn(2, 5, 8)
+        room_topology_map = torch.randn(2, 18, 16, 11)
+
+        output = module(
+            grid_features,
+            graph_nodes=graph_nodes,
+            node_positions=node_positions,
+            node_tpe=node_tpe,
+            room_topology_map=room_topology_map,
+        )
+        loss = output.square().mean()
+        loss.backward()
+
+        topo_grad = module.topology_conditioner.proj[0].weight.grad
+        graph_grad = module.graph_cross_attn.q_proj.weight.grad
+
+        assert topo_grad is not None
+        assert graph_grad is not None
+        assert topo_grad.abs().sum() > 0
+        assert graph_grad.abs().sum() > 0
 
 
 # ============================================================================
