@@ -20,9 +20,8 @@ output/
 validation_report.json
 checkpoints/
 
-# Artifacts - generated demo outputs
-artifacts/demo/
-artifacts/visual_extracts_demo/
+# Artifacts - generated outputs, logs, and experiment checkpoints
+artifacts/
 
 # Editor / OS
 .vscode/
