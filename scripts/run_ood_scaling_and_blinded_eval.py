@@ -27,6 +27,7 @@ from src.evaluation.benchmark_suite import (
     load_vglc_reference_graphs,
     run_block_i_benchmark,
 )
+from src.utils.stable_seed import stable_seed_offset
 
 
 @dataclass(frozen=True)
@@ -41,6 +42,61 @@ METHODS: Dict[str, MethodConfig] = {
     "FULL_CVT": MethodConfig(name="FULL_CVT", rule_space="full", search_strategy="cvt_emitter"),
     "CORE_GA": MethodConfig(name="CORE_GA", rule_space="core", search_strategy="ga"),
 }
+
+
+def _build_ood_summary_row(
+    *,
+    regime_name: str,
+    method_name: str,
+    bench,
+    min_rooms: int,
+    max_rooms: int,
+    gen_times: Sequence[float],
+    wall_time_sec: float,
+    n_graphs: int,
+) -> Dict[str, Any]:
+    return {
+        "regime": regime_name,
+        "method": method_name,
+        "n": int(n_graphs),
+        "min_rooms": int(min_rooms),
+        "max_rooms": int(max_rooms),
+        "overall_completeness": float(bench.completeness.get("overall_completeness", 0.0)),
+        "constraint_valid_rate": float(bench.completeness.get("constraint_valid_rate", 0.0)),
+        "key_before_lock_rate": float(bench.completeness.get("key_before_lock_rate", 0.0)),
+        "switch_before_gate_rate": float(bench.completeness.get("switch_before_gate_rate", 0.0)),
+        "battery_satisfaction_rate": float(bench.completeness.get("battery_satisfaction_rate", 0.0)),
+        "repair_rate": float(bench.robustness.get("repair_rate", 0.0)),
+        "mean_generation_constraint_rejections": float(
+            bench.robustness.get("mean_generation_constraint_rejections", 0.0)
+        ),
+        "linearity": float(bench.generated_descriptor_means.get("linearity", 0.0)),
+        "leniency": float(bench.generated_descriptor_means.get("leniency", 0.0)),
+        "progression_complexity": float(bench.generated_descriptor_means.get("progression_complexity", 0.0)),
+        "topology_complexity": float(bench.generated_descriptor_means.get("topology_complexity", 0.0)),
+        "path_length": float(bench.generated_descriptor_means.get("path_length", 0.0)),
+        "num_nodes": float(bench.generated_descriptor_means.get("num_nodes", 0.0)),
+        "key_gate_count": float(bench.generated_descriptor_means.get("key_gate_count", 0.0)),
+        "switch_gate_count": float(bench.generated_descriptor_means.get("switch_gate_count", 0.0)),
+        "battery_gate_count": float(bench.generated_descriptor_means.get("battery_gate_count", 0.0)),
+        "path_redundancy": float(bench.generated_descriptor_means.get("path_redundancy", 0.0)),
+        "articulation_count": float(bench.generated_descriptor_means.get("articulation_count", 0.0)),
+        "articulation_ratio": float(bench.generated_descriptor_means.get("articulation_ratio", 0.0)),
+        "branch_count": float(bench.generated_descriptor_means.get("branch_count", 0.0)),
+        "branch_utility_rate": float(bench.generated_descriptor_means.get("branch_utility_rate", 0.0)),
+        "secret_component_count": float(bench.generated_descriptor_means.get("secret_component_count", 0.0)),
+        "secret_content_discoverability_rate": float(
+            bench.generated_descriptor_means.get("secret_content_discoverability_rate", 0.0)
+        ),
+        "novelty_vs_reference": float(bench.reference_comparison.get("novelty_vs_reference", 0.0)),
+        "expressive_overlap_reference": float(bench.reference_comparison.get("expressive_overlap_reference", 0.0)),
+        "coverage_redundancy_articulation": float(
+            bench.expressive_range.get("coverage_redundancy_articulation", 0.0)
+        ),
+        "coverage_branch_secret": float(bench.expressive_range.get("coverage_branch_secret", 0.0)),
+        "generation_time_sec": float(np.mean(gen_times)) if gen_times else 0.0,
+        "wall_time_sec": float(wall_time_sec),
+    }
 
 
 def _method_list(raw: str) -> List[MethodConfig]:
@@ -245,7 +301,7 @@ def main() -> int:
             t0 = time.time()
             graphs, gen_times = generate_block_i_graphs(
                 num_samples=int(args.num_samples),
-                seed=int(args.seed) + hash((regime_name, m.name)) % 100000,
+                seed=int(args.seed) + stable_seed_offset((regime_name, m.name), modulo=100000),
                 min_rooms=int(min_rooms),
                 max_rooms=int(max_rooms),
                 population_size=int(args.population_size),
@@ -261,27 +317,16 @@ def main() -> int:
             bench = run_block_i_benchmark(generated_graphs=graphs, reference_graphs=refs, generation_times=gen_times)
             benchmark_payloads[f"{regime_name}:{m.name}"] = asdict(bench)
             summary_rows.append(
-                {
-                    "regime": regime_name,
-                    "method": m.name,
-                    "n": int(len(graphs)),
-                    "min_rooms": int(min_rooms),
-                    "max_rooms": int(max_rooms),
-                    "overall_completeness": float(bench.completeness.get("overall_completeness", 0.0)),
-                    "constraint_valid_rate": float(bench.completeness.get("constraint_valid_rate", 0.0)),
-                    "repair_rate": float(bench.robustness.get("repair_rate", 0.0)),
-                    "mean_generation_constraint_rejections": float(bench.robustness.get("mean_generation_constraint_rejections", 0.0)),
-                    "linearity": float(bench.generated_descriptor_means.get("linearity", 0.0)),
-                    "leniency": float(bench.generated_descriptor_means.get("leniency", 0.0)),
-                    "progression_complexity": float(bench.generated_descriptor_means.get("progression_complexity", 0.0)),
-                    "topology_complexity": float(bench.generated_descriptor_means.get("topology_complexity", 0.0)),
-                    "path_length": float(bench.generated_descriptor_means.get("path_length", 0.0)),
-                    "num_nodes": float(bench.generated_descriptor_means.get("num_nodes", 0.0)),
-                    "novelty_vs_reference": float(bench.reference_comparison.get("novelty_vs_reference", 0.0)),
-                    "expressive_overlap_reference": float(bench.reference_comparison.get("expressive_overlap_reference", 0.0)),
-                    "generation_time_sec": float(np.mean(gen_times)) if gen_times else 0.0,
-                    "wall_time_sec": float(time.time() - t0),
-                }
+                _build_ood_summary_row(
+                    regime_name=regime_name,
+                    method_name=m.name,
+                    bench=bench,
+                    min_rooms=min_rooms,
+                    max_rooms=max_rooms,
+                    gen_times=gen_times,
+                    wall_time_sec=float(time.time() - t0),
+                    n_graphs=len(graphs),
+                )
             )
             for idx, g in enumerate(graphs):
                 graph_bank.append(

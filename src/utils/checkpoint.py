@@ -17,17 +17,156 @@ Usage:
 """
 
 import json
+import os
 import shutil
 import logging
 from pathlib import Path
-from datetime import datetime
-from typing import Optional, Dict, Any, List
+from datetime import datetime, timezone
+from typing import Optional, Dict, Any, List, Iterable
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
 
 logger = logging.getLogger(__name__)
+LATEST_RESUME_FILENAME = "latest_resume.pth"
+
+
+def format_bytes(num_bytes: int) -> str:
+    """Format a byte count into a compact human-readable string."""
+    size = float(max(0, int(num_bytes)))
+    units = ("B", "KB", "MB", "GB", "TB")
+    unit_idx = 0
+    while size >= 1024.0 and unit_idx < len(units) - 1:
+        size /= 1024.0
+        unit_idx += 1
+    precision = 0 if unit_idx == 0 else 1
+    return f"{size:.{precision}f} {units[unit_idx]}"
+
+
+def checkpoint_size_bytes(path: str | Path) -> int:
+    """Return the checkpoint file size in bytes, or 0 when missing."""
+    checkpoint_path = Path(path)
+    if not checkpoint_path.exists():
+        return 0
+    return int(checkpoint_path.stat().st_size)
+
+
+def checkpoint_directory_size_bytes(
+    checkpoint_dir: str | Path,
+    *,
+    pattern: str = "*.pth",
+) -> int:
+    """Return total size in bytes for checkpoint files in a directory."""
+    root = Path(checkpoint_dir)
+    if not root.exists():
+        return 0
+    return int(sum(path.stat().st_size for path in root.glob(pattern) if path.is_file()))
+
+
+def log_checkpoint_artifact(
+    log: logging.Logger,
+    checkpoint_path: str | Path,
+    *,
+    checkpoint_dir: Optional[str | Path] = None,
+    label: str = "checkpoint",
+    pattern: str = "*.pth",
+) -> None:
+    """Log the size of a saved checkpoint and the current checkpoint-dir footprint."""
+    path = Path(checkpoint_path)
+    file_size = checkpoint_size_bytes(path)
+    message = f"{label}: {path} ({format_bytes(file_size)})"
+    if checkpoint_dir is not None:
+        total_size = checkpoint_directory_size_bytes(checkpoint_dir, pattern=pattern)
+        message += f" | checkpoint_dir_total={format_bytes(total_size)}"
+    log.info(message)
+
+
+def enforce_checkpoint_storage_budget(
+    log: logging.Logger,
+    *,
+    checkpoint_dir: str | Path,
+    budget_gb: Optional[float],
+    warning_fraction: float = 0.8,
+    cleanup_enabled: bool = True,
+    cleanup_target_fraction: float = 0.6,
+    removable_patterns: Optional[Iterable[str]] = None,
+) -> Dict[str, Any]:
+    """
+    Warn when checkpoint storage approaches a budget and optionally prune expendable checkpoints.
+
+    Only files matching `removable_patterns` are eligible for automatic deletion.
+    This is intended for retained resume checkpoints, not best/final/latest artifacts.
+    """
+    if budget_gb is None:
+        return {"budget_enabled": False, "removed": []}
+
+    budget_value = float(budget_gb)
+    if budget_value <= 0.0:
+        return {"budget_enabled": False, "removed": []}
+
+    root = Path(checkpoint_dir)
+    if not root.exists():
+        return {"budget_enabled": True, "removed": []}
+
+    budget_bytes = int(budget_value * (1024 ** 3))
+    total_before = checkpoint_directory_size_bytes(root)
+    warning_ratio = max(0.0, min(1.0, float(warning_fraction)))
+    cleanup_target_ratio = max(0.0, min(1.0, float(cleanup_target_fraction)))
+    warning_bytes = int(budget_bytes * warning_ratio)
+    target_bytes = int(budget_bytes * cleanup_target_ratio)
+
+    if total_before >= warning_bytes:
+        log.warning(
+            "Checkpoint storage usage is %s / %s in %s.",
+            format_bytes(total_before),
+            format_bytes(budget_bytes),
+            root,
+        )
+
+    removed: List[Path] = []
+    if total_before >= budget_bytes and bool(cleanup_enabled):
+        patterns = tuple(removable_patterns or ())
+        removable_paths: List[Path] = []
+        for pattern in patterns:
+            removable_paths.extend(path for path in root.glob(pattern) if path.is_file())
+        removable_paths = sorted(set(removable_paths), key=lambda path: (path.stat().st_mtime, path.name))
+
+        total_after = total_before
+        for victim in removable_paths:
+            if total_after <= target_bytes:
+                break
+            size = checkpoint_size_bytes(victim)
+            if victim.exists():
+                victim.unlink()
+                removed.append(victim)
+            meta = Path(f"{victim}.meta.json")
+            if meta.exists():
+                meta.unlink()
+            total_after = max(0, total_after - size)
+
+        if removed:
+            log.warning(
+                "Checkpoint storage exceeded budget; removed %d retained checkpoint(s) to reduce usage to %s.",
+                len(removed),
+                format_bytes(total_after),
+            )
+
+    total_final = checkpoint_directory_size_bytes(root)
+    if total_final >= budget_bytes:
+        log.warning(
+            "Checkpoint storage remains above budget after cleanup: %s / %s in %s.",
+            format_bytes(total_final),
+            format_bytes(budget_bytes),
+            root,
+        )
+
+    return {
+        "budget_enabled": True,
+        "budget_bytes": budget_bytes,
+        "total_bytes": total_final,
+        "removed": removed,
+    }
 
 
 def write_checkpoint_metadata(
@@ -45,7 +184,9 @@ def write_checkpoint_metadata(
         "format_version": str(format_version),
         "model_type": str(model_type),
         "checkpoint_file": path.name,
-        "saved_at_utc": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+        "saved_at_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "file_size_bytes": int(checkpoint_size_bytes(path)),
+        "file_size_human": format_bytes(checkpoint_size_bytes(path)),
     }
     if architecture:
         metadata["architecture"] = dict(architecture)
@@ -56,6 +197,64 @@ def write_checkpoint_metadata(
         json.dump(metadata, f, indent=2)
     logger.debug("Wrote checkpoint metadata sidecar: %s", metadata_path)
     return metadata_path
+
+
+def atomic_torch_save(payload: Any, path: str) -> Path:
+    """Atomically save a PyTorch payload to disk."""
+    out_path = Path(path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = out_path.with_name(f"{out_path.name}.tmp")
+    torch.save(payload, tmp_path)
+    os.replace(tmp_path, out_path)
+    return out_path
+
+
+def resolve_resume_checkpoint(
+    *,
+    explicit_path: Optional[str],
+    checkpoint_dir: str,
+    auto_resume: bool = True,
+    latest_filename: str = LATEST_RESUME_FILENAME,
+) -> Optional[Path]:
+    """Resolve the checkpoint to resume from."""
+    if explicit_path:
+        candidate = Path(explicit_path)
+        if candidate.exists():
+            return candidate
+        raise FileNotFoundError(f"Requested resume checkpoint does not exist: {candidate}")
+
+    if not bool(auto_resume):
+        return None
+
+    candidate = Path(checkpoint_dir) / str(latest_filename)
+    if candidate.exists():
+        return candidate
+    return None
+
+
+def prune_checkpoints(
+    *,
+    checkpoint_dir: str,
+    pattern: str,
+    keep_last: int,
+) -> List[Path]:
+    """Prune old checkpoints matching a glob pattern and remove sidecars too."""
+    root = Path(checkpoint_dir)
+    if not root.exists():
+        return []
+
+    matches = sorted(root.glob(pattern))
+    removed: List[Path] = []
+    keep = max(0, int(keep_last))
+    while len(matches) > keep:
+        oldest = matches.pop(0)
+        if oldest.exists():
+            oldest.unlink()
+            removed.append(oldest)
+        meta = Path(f"{oldest}.meta.json")
+        if meta.exists():
+            meta.unlink()
+    return removed
 
 
 class CheckpointManager:

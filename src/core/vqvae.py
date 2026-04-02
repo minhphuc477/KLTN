@@ -103,6 +103,11 @@ class VectorQuantizer(nn.Module):
         decay: float = 0.99,
         use_ema: bool = True,
         epsilon: float = 1e-5,
+        dead_code_reset_interval: int = 100,
+        dead_code_threshold: float = 0.05,
+        dead_code_warmup_steps: int = 500,
+        protect_active_codes_during_reset: bool = True,
+        max_dead_code_resets_per_event: int = 16,
     ):
         super().__init__()
         
@@ -127,11 +132,18 @@ class VectorQuantizer(nn.Module):
         
         # Statistics tracking
         self.register_buffer('codebook_usage', torch.zeros(num_embeddings))
-        
+
         # --- Phase 1B: Dead code reset tracking ---
         self._reset_counter = 0
-        self._reset_interval = 100  # Reset dead codes every N batches
-        self._dead_threshold = 2    # Usage below this = "dead"
+        self._reset_interval = int(max(1, dead_code_reset_interval))
+        # The EMA cluster-size statistic converges to the expected count per
+        # batch, not a cumulative lifetime count. Small room batches only
+        # produce a few dozen assignments per step, so thresholds like 2.0 can
+        # incorrectly classify healthy-but-infrequent codes as dead.
+        self._dead_threshold = float(max(0.0, dead_code_threshold))
+        self._dead_code_warmup_steps = int(max(0, dead_code_warmup_steps))
+        self._protect_active_codes_during_reset = bool(protect_active_codes_during_reset)
+        self._max_dead_code_resets_per_event = int(max(0, max_dead_code_resets_per_event))
     
     def forward(
         self,
@@ -280,9 +292,9 @@ class VectorQuantizer(nn.Module):
             # --- Phase 1B: Periodic dead code reset ---
             self._reset_counter += 1
             if self._reset_counter % self._reset_interval == 0:
-                self._reset_dead_codes(z_flat)
-    
-    def _reset_dead_codes(self, z_flat: Tensor):
+                self._reset_dead_codes(z_flat, indices)
+
+    def _reset_dead_codes(self, z_flat: Tensor, indices: Optional[Tensor] = None):
         """
         Reset dead codebook entries to random encoder outputs + noise.
         
@@ -294,9 +306,35 @@ class VectorQuantizer(nn.Module):
         broadcast to all replicas.
         """
         with torch.no_grad():
+            if self._reset_counter < self._dead_code_warmup_steps:
+                return
+
             # Identify dead codes: those with very low EMA cluster size
             dead_mask = self.ema_cluster_size < self._dead_threshold
-            num_dead = dead_mask.sum().item()
+            ema_live_before = int((self.ema_cluster_size >= self._dead_threshold).sum().item())
+            batch_active = 0
+            if indices is not None and self._protect_active_codes_during_reset:
+                batch_active_mask = torch.bincount(
+                    indices.view(-1), minlength=self.num_embeddings
+                ) > 0
+                batch_active = int(batch_active_mask.sum().item())
+                dead_mask = dead_mask & (~batch_active_mask)
+            candidate_dead = int(dead_mask.sum().item())
+
+            if candidate_dead > 0 and self._max_dead_code_resets_per_event > 0:
+                candidate_indices = torch.nonzero(dead_mask, as_tuple=False).view(-1)
+                if candidate_indices.numel() > self._max_dead_code_resets_per_event:
+                    candidate_scores = self.ema_cluster_size[candidate_indices]
+                    keep_idx = torch.topk(
+                        candidate_scores,
+                        k=self._max_dead_code_resets_per_event,
+                        largest=False,
+                    ).indices
+                    selected = candidate_indices[keep_idx]
+                    new_dead_mask = torch.zeros_like(dead_mask, dtype=torch.bool)
+                    new_dead_mask[selected] = True
+                    dead_mask = new_dead_mask
+            num_dead = int(dead_mask.sum().item())
             
             if num_dead > 0 and z_flat.shape[0] > 0:
                 # Replace dead codes with random encoder outputs + small noise
@@ -316,12 +354,17 @@ class VectorQuantizer(nn.Module):
                 self.embedding.weight.data[dead_mask] = new_embeddings
                 
                 # Reset EMA stats for replaced codes
-                self.ema_cluster_size[dead_mask] = 1.0
+                self.ema_cluster_size[dead_mask] = max(1.0, self._dead_threshold)
                 self.ema_embedding_sum[dead_mask] = new_embeddings
                 
                 logger.debug(
                     f"VQ codebook: reset {num_dead}/{self.num_embeddings} dead codes "
-                    f"(utilization: {(~dead_mask).sum().item()}/{self.num_embeddings})"
+                    f"(candidates={candidate_dead}/{self.num_embeddings}, "
+                    f"ema_live_before={ema_live_before}/{self.num_embeddings}, "
+                    f"batch_active={batch_active}/{self.num_embeddings}, "
+                    f"threshold={self._dead_threshold:.4f}, "
+                    f"warmup={self._dead_code_warmup_steps}, "
+                    f"max_per_event={self._max_dead_code_resets_per_event})"
                 )
     
     def get_codebook_usage(self) -> Tensor:
@@ -690,6 +733,11 @@ class SemanticVQVAE(nn.Module):
         use_ema: bool = True,
         use_coordconv: bool = True,
         mrf_penalty_weight: float = 0.05,
+        dead_code_reset_interval: int = 100,
+        dead_code_threshold: float = 0.05,
+        dead_code_warmup_steps: int = 500,
+        protect_active_codes_during_reset: bool = True,
+        max_dead_code_resets_per_event: int = 16,
     ):
         super().__init__()
 
@@ -722,6 +770,11 @@ class SemanticVQVAE(nn.Module):
             embedding_dim=latent_dim,
             commitment_cost=commitment_cost,
             use_ema=use_ema,
+            dead_code_reset_interval=dead_code_reset_interval,
+            dead_code_threshold=dead_code_threshold,
+            dead_code_warmup_steps=dead_code_warmup_steps,
+            protect_active_codes_during_reset=protect_active_codes_during_reset,
+            max_dead_code_resets_per_event=max_dead_code_resets_per_event,
         )
         
         # Decoder

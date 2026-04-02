@@ -38,6 +38,7 @@ import torch.nn.functional as F
 from torch import Tensor
 
 from src.core.attention_kernels import HedgehogFeatureMap, hedgehog_linear_attention
+from src.core.definitions import ROOM_TOPOLOGY_CHANNEL_COUNT
 from src.core.graph_grid_attention import SpatialGraphConditioner
 
 logger = logging.getLogger(__name__)
@@ -1074,6 +1075,19 @@ class GradientGuidance(nn.Module):
         self.max_key_lock_pairs = int(max(0, int(max_key_lock_pairs)))
         self.max_guidance_elements = int(max(1, int(max_guidance_elements)))
         self._missing_logic_net_warning_emitted = False
+        self._warning_counts: Dict[str, int] = {}
+
+    def _warn_rate_limited(self, key: str, message: str, *args: Any) -> None:
+        """Rate-limit repeated guidance warnings to keep logs readable."""
+        count = int(self._warning_counts.get(key, 0)) + 1
+        self._warning_counts[key] = count
+        if count <= 5 or count in {10, 20, 50} or count % 100 == 0:
+            logger.warning(message, *args)
+            if count == 5:
+                logger.warning(
+                    "Further `%s` guidance warnings will be rate-limited.",
+                    key,
+                )
 
     def _sanitize_graph_data(
         self,
@@ -1324,10 +1338,16 @@ class GradientGuidance(nn.Module):
                 logic_out = self.logic_net(x_t_grad, safe_graph_data)
                 loss = self._extract_logic_loss(logic_out)
                 if loss is None:
-                    logger.warning("Gradient guidance: LogicNet returned invalid loss; skipping guidance step.")
+                    self._warn_rate_limited(
+                        "invalid_loss",
+                        "Gradient guidance: LogicNet returned invalid loss; skipping guidance step.",
+                    )
                     return torch.zeros_like(x_t)
                 if not bool(torch.isfinite(loss).all()):
-                    logger.warning("Gradient guidance: non-finite loss detected; skipping guidance step.")
+                    self._warn_rate_limited(
+                        "nonfinite_loss",
+                        "Gradient guidance: non-finite loss detected; skipping guidance step.",
+                    )
                     return torch.zeros_like(x_t)
 
                 # Compute gradient
@@ -1338,7 +1358,8 @@ class GradientGuidance(nn.Module):
                     retain_graph=False,
                 )[0]
         except (AttributeError, RuntimeError, ValueError, TypeError) as e:
-            logger.warning(
+            self._warn_rate_limited(
+                "guidance_failure",
                 "Gradient guidance failed (%s); continuing without guidance.",
                 type(e).__name__,
             )
@@ -1449,7 +1470,7 @@ class LatentDiffusionModel(nn.Module):
         topology_refinement_mode: str = "gat2",
         attention_mode: str = "softmax",
         hedgehog_feature_dim: int = 32,
-        room_topology_channels: int = 18,
+        room_topology_channels: int = ROOM_TOPOLOGY_CHANNEL_COUNT,
         topology_conditioning_mode: str = "additive",
         unet_channel_mult: Tuple[int, ...] = (1, 2, 4),
         unet_num_res_blocks: int = 2,

@@ -58,6 +58,7 @@ from src.core.definitions import parse_edge_type_tokens
 from src.simulation.cognitive_bounded_search import solve_with_cbs
 from src.simulation.validator import StateSpaceAStar, ZeldaLogicEnv
 from src.pipeline.spatial_utils import first_free_position, get_node_grid_position
+from src.utils.stable_seed import stable_seed_offset
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +96,8 @@ class ExperimentConfig:
     use_tpe: bool = True
     disable_graph_node_cross_attention: bool = False
     topology_refinement_mode: str = "gat2"  # none | lightweight | gat2
+    room_generator_mode: str = "latent_diffusion"  # latent_diffusion | discrete_masked
+    use_reference_room_maps: Optional[bool] = None
 
 
 def _tile_distribution(grids: Sequence[np.ndarray]) -> Dict[int, float]:
@@ -496,6 +499,7 @@ class AblationStudy:
         evolution_generations: int,
         vqvae_checkpoint: Optional[str] = None,
         diffusion_checkpoint: Optional[str] = None,
+        masked_room_checkpoint: Optional[str] = None,
         logic_net_checkpoint: Optional[str] = None,
         condition_encoder_checkpoint: Optional[str] = None,
         max_runtime_sec: Optional[float] = None,
@@ -512,6 +516,7 @@ class AblationStudy:
         self.evolution_generations = int(evolution_generations)
         self.vqvae_checkpoint = str(vqvae_checkpoint) if vqvae_checkpoint else None
         self.diffusion_checkpoint = str(diffusion_checkpoint) if diffusion_checkpoint else None
+        self.masked_room_checkpoint = str(masked_room_checkpoint) if masked_room_checkpoint else None
         self.logic_net_checkpoint = str(logic_net_checkpoint) if logic_net_checkpoint else None
         self.condition_encoder_checkpoint = (
             str(condition_encoder_checkpoint) if condition_encoder_checkpoint else None
@@ -528,22 +533,26 @@ class AblationStudy:
             else np.zeros((0, 4), dtype=np.float64)
         )
 
-        self._pipeline: Optional[NeuralSymbolicDungeonPipeline] = None
+        self._pipeline_cache: Dict[str, NeuralSymbolicDungeonPipeline] = {}
         self._constraint_grammar = MissionGrammar(seed=2026)
         self._wfc_tile_priors: Optional[Dict[int, Any]] = None
 
-    def _get_pipeline(self) -> NeuralSymbolicDungeonPipeline:
-        if self._pipeline is None:
-            self._pipeline = NeuralSymbolicDungeonPipeline(
+    def _get_pipeline(self, cfg: ExperimentConfig) -> NeuralSymbolicDungeonPipeline:
+        room_generator_mode = str(getattr(cfg, "room_generator_mode", "latent_diffusion")).strip().lower()
+        if room_generator_mode not in self._pipeline_cache:
+            self._pipeline_cache[room_generator_mode] = NeuralSymbolicDungeonPipeline(
                 vqvae_checkpoint=self.vqvae_checkpoint,
                 diffusion_checkpoint=self.diffusion_checkpoint,
+                masked_room_checkpoint=self.masked_room_checkpoint,
                 logic_net_checkpoint=self.logic_net_checkpoint,
                 condition_encoder_checkpoint=self.condition_encoder_checkpoint,
+                room_generator_mode=room_generator_mode,
+                condition_use_reference_room_maps=True,
                 device="auto",
                 use_learned_refiner_rules=True,
                 enable_logging=False,
             )
-        return self._pipeline
+        return self._pipeline_cache[room_generator_mode]
 
     def _build_non_evolution_graph(self, seed: int) -> nx.Graph:
         grammar = MissionGrammar(seed=seed)
@@ -642,7 +651,7 @@ class AblationStudy:
         latent_w = max(1, (ROOM_WIDTH + 3) // 4)
 
         for room_id in sorted(list(graph.nodes()), key=lambda x: str(x)):
-            room_seed = int(seed + (int(room_id) if isinstance(room_id, int) else abs(hash(str(room_id))) % 100000))
+            room_seed = int(seed + stable_seed_offset(room_id, modulo=100000))
             wfc = WeightedBayesianWFC(
                 width=ROOM_WIDTH,
                 height=ROOM_HEIGHT,
@@ -651,7 +660,8 @@ class AblationStudy:
                 seed=room_seed,
             )
             room_grid = wfc.generate(seed=room_seed)
-            latent = torch.zeros((1, 64, latent_h, latent_w), dtype=torch.float32)
+            latent_dim = int(getattr(getattr(pipeline, "vqvae", None), "latent_dim", 64))
+            latent = torch.zeros((1, latent_dim, latent_h, latent_w), dtype=torch.float32)
             rooms[int(room_id) if isinstance(room_id, int) else room_id] = RoomGenerationResult(
                 room_id=int(room_id) if isinstance(room_id, int) else 0,
                 room_grid=np.asarray(room_grid, dtype=np.int32),
@@ -772,12 +782,21 @@ class AblationStudy:
         }
 
         try:
-            pipeline = self._get_pipeline()
+            pipeline = self._get_pipeline(cfg)
             mission_graph = self._build_mission_graph(cfg, seed=seed)
 
             original_graph_token_flag = bool(getattr(pipeline, "use_graph_node_cross_attention", True))
             original_topology_mode = str(getattr(pipeline.diffusion, "get_topology_refinement_mode", lambda: "gat2")())
+            original_reference_flag = bool(getattr(getattr(pipeline, "condition_encoder", None), "use_reference_room_maps", False))
             pipeline.use_graph_node_cross_attention = not bool(cfg.disable_graph_node_cross_attention)
+            if cfg.use_reference_room_maps is not None and getattr(pipeline, "condition_encoder", None) is not None:
+                reference_encoder = getattr(pipeline.condition_encoder, "reference_room_encoder", None)
+                if bool(cfg.use_reference_room_maps) and reference_encoder is None:
+                    raise RuntimeError(
+                        "Room-branch benchmark requested reference-room conditioning, "
+                        "but the loaded condition encoder has no reference encoder."
+                    )
+                pipeline.condition_encoder.use_reference_room_maps = bool(cfg.use_reference_room_maps)
             try:
                 pipeline.diffusion.set_topology_refinement_mode(cfg.topology_refinement_mode)
             except (AttributeError, RuntimeError, ValueError, TypeError) as e:
@@ -809,6 +828,8 @@ class AblationStudy:
                 )
 
             pipeline.use_graph_node_cross_attention = original_graph_token_flag
+            if getattr(pipeline, "condition_encoder", None) is not None:
+                pipeline.condition_encoder.use_reference_room_maps = original_reference_flag
             try:
                 pipeline.diffusion.set_topology_refinement_mode(original_topology_mode)
             except (AttributeError, RuntimeError, ValueError, TypeError):
@@ -918,6 +939,8 @@ class AblationStudy:
             try:
                 if "pipeline" in locals():
                     pipeline.use_graph_node_cross_attention = original_graph_token_flag
+                    if getattr(pipeline, "condition_encoder", None) is not None:
+                        pipeline.condition_encoder.use_reference_room_maps = original_reference_flag
                     try:
                         pipeline.diffusion.set_topology_refinement_mode(original_topology_mode)
                     except (AttributeError, RuntimeError, ValueError, TypeError):
@@ -1174,6 +1197,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--evolution-generations", type=int, default=30)
     parser.add_argument("--vqvae-checkpoint", type=str, default=None)
     parser.add_argument("--diffusion-checkpoint", type=str, default=None)
+    parser.add_argument("--masked-room-checkpoint", type=str, default=None)
     parser.add_argument("--logic-net-checkpoint", type=str, default=None)
     parser.add_argument("--condition-encoder-checkpoint", type=str, default=None)
     parser.add_argument(
@@ -1259,6 +1283,7 @@ def main() -> int:
         evolution_generations=args.evolution_generations,
         vqvae_checkpoint=args.vqvae_checkpoint,
         diffusion_checkpoint=args.diffusion_checkpoint,
+        masked_room_checkpoint=args.masked_room_checkpoint,
         logic_net_checkpoint=args.logic_net_checkpoint,
         condition_encoder_checkpoint=args.condition_encoder_checkpoint,
         max_runtime_sec=args.max_runtime_sec,

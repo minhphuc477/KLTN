@@ -185,6 +185,78 @@ ROOM_INTERIOR_WIDTH: int = 9
 SLOT_HEIGHT: int = 16
 SLOT_WIDTH: int = 11
 
+# ==========================================
+# GRAPH CONDITIONING SCHEMA
+# ==========================================
+
+# Shared graph-conditioning contract used by loaders, training, and runtime.
+GRAPH_NODE_FEATURE_DIM: int = 14
+GRAPH_EDGE_FEATURE_DIM: int = 16
+GRAPH_TPE_DIM: int = 8
+
+# Shared room-topology conditioning contract used by loaders, training, runtime,
+# and logic regularization. Keep this centralized so spatial topology channels
+# stay synchronized with the symbolic mission-graph schema.
+ROOM_TOPOLOGY_GATE_FAMILY_TOKENS: Dict[str, Set[str]] = {
+    "gate_key": {"key_locked", "locked", "multi_lock"},
+    "gate_boss": {"boss_locked"},
+    "gate_item": {"item_locked", "item_gate"},
+    "gate_soft": {"soft_locked", "one_way", "shutter"},
+    "gate_switch": {"switch", "switch_locked", "state_block", "on_off_gate", "puzzle"},
+    "gate_bomb": {"bombable"},
+    "gate_secret": {"hidden", "secret"},
+    "gate_hazard": {"hazard"},
+}
+ROOM_TOPOLOGY_GATE_FAMILY_PREFIXES: Tuple[str, ...] = tuple(ROOM_TOPOLOGY_GATE_FAMILY_TOKENS.keys())
+ROOM_TOPOLOGY_DIRECTION_SUFFIXES: Tuple[str, ...] = ("n", "s", "e", "w")
+ROOM_TOPOLOGY_BASE_CHANNEL_NAMES: Tuple[str, ...] = (
+    "traversability",
+    "start",
+    "goal",
+    "door_n",
+    "door_s",
+    "door_e",
+    "door_w",
+    "gated_n",
+    "gated_s",
+    "gated_e",
+    "gated_w",
+)
+ROOM_TOPOLOGY_ROLE_CHANNEL_NAMES: Tuple[str, ...] = (
+    "role_start",
+    "role_enemy",
+    "role_key",
+    "role_item",
+    "role_goal",
+    "role_boss",
+    "role_puzzle",
+)
+ROOM_TOPOLOGY_CHANNEL_NAMES: Tuple[str, ...] = (
+    ROOM_TOPOLOGY_BASE_CHANNEL_NAMES
+    + tuple(
+        f"{family}_{direction}"
+        for family in ROOM_TOPOLOGY_GATE_FAMILY_PREFIXES
+        for direction in ROOM_TOPOLOGY_DIRECTION_SUFFIXES
+    )
+    + ROOM_TOPOLOGY_ROLE_CHANNEL_NAMES
+)
+ROOM_TOPOLOGY_CHANNELS: Dict[str, int] = {
+    name: index
+    for index, name in enumerate(ROOM_TOPOLOGY_CHANNEL_NAMES)
+}
+ROOM_TOPOLOGY_CHANNEL_COUNT: int = len(ROOM_TOPOLOGY_CHANNEL_NAMES)
+ROOM_TOPOLOGY_DIRECTIONAL_CHANNEL_GROUPS: Dict[str, Tuple[str, ...]] = {
+    direction.upper(): (
+        f"door_{direction}",
+        f"gated_{direction}",
+        *tuple(f"{family}_{direction}" for family in ROOM_TOPOLOGY_GATE_FAMILY_PREFIXES),
+    )
+    for direction in ROOM_TOPOLOGY_DIRECTION_SUFFIXES
+}
+ROOM_TOPOLOGY_GENERIC_GATED_CHANNELS: Tuple[str, ...] = tuple(
+    f"gated_{direction}" for direction in ROOM_TOPOLOGY_DIRECTION_SUFFIXES
+)
+
 
 def normalize_room_shape(
     shape: Sequence[int],
@@ -551,6 +623,16 @@ __all__ = [
     'ROOM_INTERIOR_WIDTH',
     'SLOT_HEIGHT',
     'SLOT_WIDTH',
+    'GRAPH_NODE_FEATURE_DIM',
+    'GRAPH_EDGE_FEATURE_DIM',
+    'GRAPH_TPE_DIM',
+    'ROOM_TOPOLOGY_GATE_FAMILY_TOKENS',
+    'ROOM_TOPOLOGY_GATE_FAMILY_PREFIXES',
+    'ROOM_TOPOLOGY_CHANNELS',
+    'ROOM_TOPOLOGY_CHANNEL_COUNT',
+    'ROOM_TOPOLOGY_CHANNEL_NAMES',
+    'ROOM_TOPOLOGY_DIRECTIONAL_CHANNEL_GROUPS',
+    'ROOM_TOPOLOGY_GENERIC_GATED_CHANNELS',
     'normalize_room_shape',
     
     # Graph mappings

@@ -50,6 +50,8 @@ from src.generation.global_state import GlobalStateManager, GlobalStateType
 from src.generation.weighted_bayesian_wfc import WeightedBayesianWFC, extract_tile_priors_from_vqvae, WeightedBayesianWFCConfig
 from src.pipeline.dungeon_pipeline import NeuralSymbolicDungeonPipeline
 from src.pipeline.room_stitching import StitchedRoomLayout, compute_graph_aware_room_slots
+from src.core.definitions import ROOM_HEIGHT, ROOM_WIDTH
+from src.core.vqvae import canonical_latent_shape
 
 # Validation
 from src.validation.collision_alignment_validator import CollisionAlignmentValidator
@@ -71,6 +73,7 @@ from src.utils.explainability import (
     compute_neuro_symbolic_discrepancy_heatmap,
     save_discrepancy_heatmap,
 )
+from src.utils.stable_seed import stable_seed_offset
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +112,7 @@ class AdvancedPipelineConfig:
     # Output
     output_dir: Path = Path("artifacts/advanced_runs")
     save_checkpoints: bool = True
+    seed: int = 42
 
 
 @dataclass
@@ -452,6 +456,8 @@ class AdvancedNeuralSymbolicPipeline:
             DungeonGenerationResult with grid, entities, stats, and provenance
         """
         start_time = time.time()
+        constraints = dict(user_constraints or {})
+        base_seed = int(constraints.get("seed", self.config.seed))
         
         # Create output directory
         self.config.output_dir.mkdir(parents=True, exist_ok=True)
@@ -477,7 +483,7 @@ class AdvancedNeuralSymbolicPipeline:
             )
             self.explainability_mgr.add_trace(trace)
         
-        mission_graph = self._generate_mission_graph(tension_curve, room_count, user_constraints)
+        mission_graph = self._generate_mission_graph(tension_curve, room_count, constraints)
         
         if self.explainability_mgr:
             from datetime import datetime
@@ -511,7 +517,8 @@ class AdvancedNeuralSymbolicPipeline:
             mission_graph,
             big_rooms,
             global_state_config,
-            theme or self.config.theme
+            theme or self.config.theme,
+            seed=base_seed,
         )
         gen_time = time.time() - gen_start
         
@@ -638,7 +645,7 @@ class AdvancedNeuralSymbolicPipeline:
             dungeon_grid=dungeon_grid,
             mission_graph=mission_graph_dict,
             layout_map=room_layout,
-            seed=42
+            seed=base_seed,
         )
         logger.info(f"Spawned {len(entities)} entities")
         
@@ -763,7 +770,7 @@ class AdvancedNeuralSymbolicPipeline:
     ) -> nx.DiGraph:
         """Generate mission graph with evolutionary search and robust fallbacks."""
         constraints = user_constraints or {}
-        seed = int(constraints.get('seed', 42))
+        seed = int(constraints.get('seed', self.config.seed))
         effective_curve = list(tension_curve) if tension_curve else [0.5] * max(1, room_count)
         
         try:
@@ -1004,7 +1011,8 @@ class AdvancedNeuralSymbolicPipeline:
         mission_graph: nx.DiGraph,
         big_rooms: Dict[int, Tuple[int, int]],
         global_state_config: Dict[str, Any],
-        theme: ThemeType
+        theme: ThemeType,
+        seed: Optional[int] = None,
     ) -> Dict[int, np.ndarray]:
         """Generate all rooms with full ML pipeline integration."""
         rooms = {}
@@ -1056,7 +1064,8 @@ class AdvancedNeuralSymbolicPipeline:
                         mission_graph=mission_graph,
                         graph_context=room_graph_context,
                         neighbor_latents=neighbor_latents,
-                        theme=theme
+                        theme=theme,
+                        seed=seed,
                     )
             else:
                 # Standard room: full ML pipeline
@@ -1065,7 +1074,8 @@ class AdvancedNeuralSymbolicPipeline:
                     mission_graph=mission_graph,
                     graph_context=room_graph_context,
                     neighbor_latents=neighbor_latents,
-                    theme=theme
+                    theme=theme,
+                    seed=seed,
                 )
             
             rooms[node_id] = room
@@ -1076,8 +1086,9 @@ class AdvancedNeuralSymbolicPipeline:
                     with torch.no_grad():
                         # VQ-VAE expects one-hot [B, C, H, W], not integer [B, H, W].
                         room_tensor = torch.from_numpy(room).long().unsqueeze(0).to(self.neural_pipeline.device)
-                        room_tensor = room_tensor.clamp(min=0, max=43)
-                        room_onehot = F.one_hot(room_tensor, num_classes=44).permute(0, 3, 1, 2).float()
+                        num_classes = int(getattr(self.neural_pipeline.vqvae, "num_classes", 44))
+                        room_tensor = room_tensor.clamp(min=0, max=num_classes - 1)
+                        room_onehot = F.one_hot(room_tensor, num_classes=num_classes).permute(0, 3, 1, 2).float()
                         z_q, _ = self.neural_pipeline.vqvae.encode(room_onehot)
                         neighbor_latents[node_id] = z_q.detach()
                 except (AttributeError, RuntimeError, ValueError, TypeError) as e:
@@ -1091,7 +1102,8 @@ class AdvancedNeuralSymbolicPipeline:
         mission_graph: nx.DiGraph,
         graph_context: Dict[str, Any],
         neighbor_latents: Dict[int, torch.Tensor],
-        theme: ThemeType
+        theme: ThemeType,
+        seed: Optional[int] = None,
     ) -> np.ndarray:
         """Generate a single room using full ML pipeline with WFC refinement."""
         try:
@@ -1102,6 +1114,7 @@ class AdvancedNeuralSymbolicPipeline:
                     # Map graph edge to spatial direction (simplified)
                     neighbors['N'] = neighbor_latents[pred]
                     break
+            room_seed = None if seed is None else int(seed) + stable_seed_offset(node_id, modulo=100000)
             
             # STEP 1: Neural generation (VQ-VAE + Diffusion + LogicNet)
             result = self.neural_pipeline.generate_room(
@@ -1110,13 +1123,13 @@ class AdvancedNeuralSymbolicPipeline:
                 room_id=node_id,
                 boundary_constraints=None,
                 position=None,
-                guidance_scale=7.5,
-                logic_guidance_scale=1.0,
+                guidance_scale=self.neural_pipeline.default_guidance_scale,
+                logic_guidance_scale=self.neural_pipeline.default_logic_guidance_scale,
                 num_diffusion_steps=self._effective_diffusion_steps(),
                 use_ddim=True,
-                apply_repair=True,
-                start_goal_coords=((1, 5), (14, 5)),  # Default start/goal
-                seed=None
+                apply_repair=self.neural_pipeline.default_apply_repair,
+                start_goal_coords=self.neural_pipeline.default_start_goal_coords,
+                seed=room_seed,
             )
             
             neural_room = result.room_grid
@@ -1143,7 +1156,7 @@ class AdvancedNeuralSymbolicPipeline:
                     )
                     
                     # Initialize WFC with neural output as seed
-                    refined_room = wfc.generate(seed=None, initial_grid=neural_room)
+                    refined_room = wfc.generate(seed=room_seed, initial_grid=neural_room)
 
                     # Neuro-symbolic discrepancy heatmap: where symbolic correction overrides neural belief.
                     if self.explainability_mgr is not None and getattr(result, "neural_probs", None) is not None:
@@ -1190,7 +1203,7 @@ class AdvancedNeuralSymbolicPipeline:
         except (AttributeError, RuntimeError, ValueError, TypeError) as e:
             logger.error(f"Failed to generate room {node_id} with ML pipeline: {e}")
             # Fallback to simple pattern
-            room = np.zeros((16, 11), dtype=int)
+            room = np.zeros((ROOM_HEIGHT, ROOM_WIDTH), dtype=int)
             from src.core.definitions import SEMANTIC_PALETTE
             # Create simple bordered room
             room[:, :] = SEMANTIC_PALETTE['FLOOR']
@@ -1256,7 +1269,9 @@ class AdvancedNeuralSymbolicPipeline:
             for i in range(10):
                 try:
                     # Simple generation without WFC
-                    z_noise = torch.randn(1, 64, 4, 3, device=self.neural_pipeline.device)
+                    latent_dim = int(getattr(self.neural_pipeline.vqvae, "latent_dim", 64))
+                    latent_hw = canonical_latent_shape((ROOM_HEIGHT, ROOM_WIDTH))
+                    z_noise = torch.randn(1, latent_dim, latent_hw[0], latent_hw[1], device=self.neural_pipeline.device)
                     with torch.no_grad():
                         logits = self.neural_pipeline.vqvae.decode(z_noise)
                         grid = logits.argmax(dim=1).cpu().numpy()[0]

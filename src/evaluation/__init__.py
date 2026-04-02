@@ -49,6 +49,13 @@ _BENCHMARK_EXPORTS = [
     'calibrate_rule_weights_to_vglc',
     'run_block_i_benchmark',
     'run_block_i_benchmark_from_scratch',
+    'PCGBenchmarkZeldaVariant',
+    'PCGBenchmarkZeldaMapping',
+    'PCG_BENCHMARK_ZELDA_VARIANTS',
+    'select_pcg_benchmark_zelda_problem',
+    'map_graph_to_pcg_benchmark_zelda',
+    'import_pcg_benchmark',
+    'evaluate_graphs_with_pcg_benchmark_zelda',
 ]
 
 __all__ = [
@@ -82,6 +89,11 @@ __all__ = [
 def __getattr__(name: str):
     """Lazily expose benchmark_suite symbols to avoid import cycles."""
     if name in _BENCHMARK_EXPORTS:
-        globals()[name] = getattr(import_module('src.evaluation.benchmark_suite'), name)
+        benchmark_mod = import_module('src.evaluation.benchmark_suite')
+        if hasattr(benchmark_mod, name):
+            globals()[name] = getattr(benchmark_mod, name)
+            return globals()[name]
+        alignment_mod = import_module('src.evaluation.pcg_benchmark_alignment')
+        globals()[name] = getattr(alignment_mod, name)
         return globals()[name]
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

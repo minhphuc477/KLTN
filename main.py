@@ -42,13 +42,17 @@ from src.train_diffusion import (
     diffusion_training_kwargs_from_resolved_config,
     train_diffusion,
 )
-from src.train_lcm import FastSamplerTrainingConfig, train_fast_sampler
+from src.train_lcm import (
+    FastSamplerTrainingConfig,
+    fast_sampler_training_kwargs_from_resolved_config,
+    train_fast_sampler,
+)
 from src.train_masked_room import (
     MaskedRoomTrainingConfig,
     masked_room_training_kwargs_from_resolved_config,
     train_masked_room,
 )
-from src.train_vqvae import train_vqvae
+from src.train_vqvae import train_vqvae, vqvae_training_kwargs_from_resolved_config
 from src.utils.distributed import get_env_rank, maybe_launch_with_torchrun
 from src.zelda_data.zelda_core import (
     Dungeon,
@@ -235,53 +239,78 @@ def _build_root_parser() -> argparse.ArgumentParser:
 
 def _run_vqvae_stage_from_config(config: Dict[str, Any]) -> Path:
     stage = config["vqvae"]
-    dataset = config["dataset"]
-    runtime = config["runtime"]
-    args = SimpleNamespace(
-        data_dir=dataset["data_dir"],
-        epochs=stage["epochs"],
-        batch_size=dataset["batch_size"],
-        lr=stage["learning_rate"],
-        weight_decay=stage["weight_decay"],
-        grad_clip_norm=stage["grad_clip_norm"],
-        latent_dim=stage["latent_dim"],
-        hidden_dim=stage["hidden_dim"],
-        codebook_size=stage["codebook_size"],
-        num_classes=dataset["num_classes"],
-        commitment_cost=stage["commitment_cost"],
-        rare_tile_weight=stage["rare_tile_weight"],
-        use_ema=stage["use_ema"],
-        use_coordconv=stage["use_coordconv"],
-        mrf_penalty_weight=stage["mrf_penalty_weight"],
-        min_samples_per_epoch=dataset["min_samples_per_epoch"],
-        save_dir=stage["checkpoint_dir"],
-        save_every=stage["save_every"],
-        num_workers=dataset["num_workers"],
-        pin_memory=dataset["pin_memory"],
-        drop_last=dataset["drop_last"],
-        seed=runtime["seed"],
-        resume=stage["resume_checkpoint"] or runtime["resume"],
-        device=runtime["device"],
-        verbose=runtime["verbose"],
-    )
+    args = SimpleNamespace(**vqvae_training_kwargs_from_resolved_config(config))
     train_vqvae(args)
     return Path(stage["checkpoint_dir"]) / "vqvae_pretrained.pth"
 
 
+def _resolve_diffusion_stage_vqvae_checkpoint(
+    config: Dict[str, Any],
+    *,
+    fallback_vqvae_checkpoint: Optional[Path],
+) -> Path:
+    explicit = config["diffusion"]["vqvae_checkpoint"]
+    if explicit:
+        candidate = Path(str(explicit))
+        if not candidate.exists():
+            raise FileNotFoundError(
+                f"diffusion.vqvae_checkpoint points to a missing file: {candidate}"
+            )
+        return candidate
+
+    if fallback_vqvae_checkpoint is not None:
+        candidate = Path(fallback_vqvae_checkpoint)
+        if candidate.exists():
+            return candidate
+        raise FileNotFoundError(
+            f"Fresh VQ-VAE stage reported checkpoint {candidate}, but the file does not exist."
+        )
+
+    canonical = Path(config["vqvae"]["checkpoint_dir"]) / "vqvae_pretrained.pth"
+    if canonical.exists():
+        return canonical
+
+    raise FileNotFoundError(
+        "Diffusion training requires a trained VQ-VAE checkpoint. "
+        f"Expected diffusion.vqvae_checkpoint or {canonical}."
+    )
+
+
 def _run_diffusion_stage_from_config(config: Dict[str, Any], vqvae_checkpoint: Optional[Path]) -> None:
+    resolved_vqvae_checkpoint = _resolve_diffusion_stage_vqvae_checkpoint(
+        config,
+        fallback_vqvae_checkpoint=vqvae_checkpoint,
+    )
     cfg = DiffusionTrainingConfig(
         **diffusion_training_kwargs_from_resolved_config(
             config,
-            fallback_vqvae_checkpoint=(str(vqvae_checkpoint) if vqvae_checkpoint is not None else None),
+            fallback_vqvae_checkpoint=str(resolved_vqvae_checkpoint),
         )
     )
     train_diffusion(cfg)
 
 
+def _warn_if_full_retrain_may_resume(config: Dict[str, Any]) -> None:
+    if config["training"]["stage"] != "all" or not bool(config["runtime"]["auto_resume"]):
+        return
+
+    existing = []
+    for section_name in ("vqvae", "diffusion", "fast_sampler", "masked_room"):
+        checkpoint_dir = Path(config[section_name]["checkpoint_dir"])
+        latest_resume = checkpoint_dir / "latest_resume.pth"
+        if latest_resume.exists():
+            existing.append(str(latest_resume))
+
+    if existing:
+        logger.warning(
+            "Full-stack retrain requested with runtime.auto_resume=true, and existing stage checkpoints were found: %s. "
+            "This run may resume previous work instead of starting fresh. Use a new runtime.output_dir or disable auto-resume for a clean retrain.",
+            existing,
+        )
+
+
 def _run_fast_sampler_stage_from_config(config: Dict[str, Any]) -> None:
     stage = config["fast_sampler"]
-    dataset = config["dataset"]
-    runtime = config["runtime"]
     base_ckpt = stage["base_diffusion_checkpoint"]
     if not base_ckpt:
         candidate = Path(config["diffusion"]["checkpoint_dir"]) / "best_model.pth"
@@ -292,30 +321,9 @@ def _run_fast_sampler_stage_from_config(config: Dict[str, Any]) -> None:
             "Fast sampler stage requires fast_sampler.base_diffusion_checkpoint "
             "or an existing diffusion best_model.pth."
         )
-    cfg = FastSamplerTrainingConfig(
-        base_diffusion_checkpoint=base_ckpt,
-        data_dir=dataset["data_dir"],
-        batch_size=dataset["batch_size"],
-        num_workers=dataset["num_workers"],
-        pin_memory=dataset["pin_memory"],
-        drop_last=dataset["drop_last"],
-        shuffle_train=dataset["shuffle_train"],
-        shuffle_val=dataset["shuffle_val"],
-        normalize=dataset["normalize"],
-        room_level=dataset["room_level"],
-        epochs=stage["epochs"],
-        learning_rate=stage["learning_rate"],
-        optimizer_weight_decay=stage["optimizer_weight_decay"],
-        grad_clip_norm=stage["grad_clip_norm"],
-        num_inference_steps=stage["num_inference_steps"],
-        lora_rank=stage["lora_rank"],
-        lora_alpha=stage["lora_alpha"],
-        prediction_loss_weight=stage["prediction_loss_weight"],
-        save_every=stage["save_every"],
-        checkpoint_dir=stage["checkpoint_dir"],
-        device=runtime["device"],
-        quick=runtime["quick"],
-    )
+    kwargs = fast_sampler_training_kwargs_from_resolved_config(config)
+    kwargs["base_diffusion_checkpoint"] = base_ckpt
+    cfg = FastSamplerTrainingConfig(**kwargs)
     train_fast_sampler(cfg)
 
 
@@ -366,6 +374,7 @@ def run_training_from_args(args: argparse.Namespace) -> None:
         logger.info("Saved config snapshot to %s", snapshot_paths["resolved_yaml"])
         logger.info("Saved run metadata to %s", snapshot_paths["metadata_json"])
         _log_resolved_config(config)
+        _warn_if_full_retrain_may_resume(config)
 
     vqvae_ckpt: Optional[Path] = None
     if stage in {"all", "vqvae"}:

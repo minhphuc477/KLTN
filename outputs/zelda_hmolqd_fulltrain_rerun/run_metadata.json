@@ -1,0 +1,20 @@
+{
+  "saved_at_utc": "2026-04-02T16:26:44+00:00",
+  "seed": 42,
+  "git_commit": "c73bac54914c416dd75ed1f47d2ea1d4359646f5",
+  "command": [
+    "main.py",
+    "train",
+    "--config",
+    "configs/zelda_hmolqd.yaml",
+    "--output-dir",
+    "outputs/zelda_hmolqd_fulltrain_rerun",
+    "--no-auto-resume",
+    "--verbose"
+  ],
+  "dataset_schema_profile": "zelda_v1",
+  "dataset_schema_lock": "zelda_v1: num_classes=44, room_shape=16x11, node_feature_dim=14, edge_feature_dim=16, tpe_dim=8",
+  "python": "3.13.7 (tags/v3.13.7:bcee1c3, Aug 14 2025, 14:15:11) [MSC v.1944 64 bit (AMD64)]",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "torch_version": "2.11.0+cu128"
+}

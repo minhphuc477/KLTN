@@ -8,13 +8,14 @@ where are the enemies, keys, chests?"
 
 import numpy as np
 import random
-from typing import Dict, List, Tuple, Optional
+from typing import Any, Dict, List, Tuple, Optional
 from dataclasses import dataclass, field
 from enum import Enum
 import json
 import logging
 
 from src.core.definitions import SEMANTIC_PALETTE, parse_node_label_tokens
+from src.utils.stable_seed import stable_seed_offset
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +41,7 @@ class Entity:
     entity_type: EntityType
     x: int
     y: int
-    room_id: int
+    room_id: Any
     properties: Dict = field(default_factory=dict)
     
     def to_dict(self) -> Dict:
@@ -56,7 +57,7 @@ class Entity:
 @dataclass
 class RoomSemantics:
     """Semantic information about a room from mission graph."""
-    node_id: int
+    node_id: Any
     room_type: str  # 'start', 'combat', 'treasure', 'boss', 'puzzle', 'safe'
     difficulty: float  # 0.0 to 1.0
     has_key: bool = False
@@ -555,7 +556,7 @@ class EntitySpawner:
 
 def create_room_semantics_from_graph(
     mission_graph: Dict,
-    node_id: int,
+    node_id: Any,
     tension_curve: Optional[List[float]] = None
 ) -> RoomSemantics:
     """
@@ -577,7 +578,7 @@ def create_room_semantics_from_graph(
         except Exception:
             return int(default)
 
-    def _normalize_room_type(attrs: Dict, nid: int) -> str:
+    def _normalize_room_type(attrs: Dict, nid: Any) -> str:
         raw_type = str(attrs.get('type', '') or '').strip().lower()
         label_tokens = set(parse_node_label_tokens(str(attrs.get('label', '') or '')))
 
@@ -612,8 +613,12 @@ def create_room_semantics_from_graph(
     
     # Get difficulty
     difficulty = node_data.get('difficulty', 0.5)
-    if tension_curve and node_id < len(tension_curve):
-        difficulty = tension_curve[node_id]
+    try:
+        node_index = int(node_id)
+    except (TypeError, ValueError):
+        node_index = None
+    if tension_curve and node_index is not None and 0 <= node_index < len(tension_curve):
+        difficulty = tension_curve[node_index]
     
     label_tokens = set(parse_node_label_tokens(str(node_data.get('label', '') or '')))
     has_key = bool(node_data.get('has_key', False))
@@ -648,7 +653,7 @@ def create_room_semantics_from_graph(
 def spawn_all_entities(
     dungeon_grid: np.ndarray,
     mission_graph: Dict,
-    layout_map: Dict[int, Tuple[int, int, int, int]],
+    layout_map: Dict[Any, Tuple[int, int, int, int]],
     config: Optional[Dict] = None,
     seed: Optional[int] = None
 ) -> List[Entity]:
@@ -680,7 +685,9 @@ def spawn_all_entities(
         semantics = create_room_semantics_from_graph(mission_graph, node_id)
         
         # Spawn entities
-        room_seed = (seed + node_id) if seed is not None else None
+        room_seed = None
+        if seed is not None:
+            room_seed = int(seed) + stable_seed_offset(node_id, modulo=100000)
         entities = spawner.spawn_entities(
             room_grid,
             semantics,

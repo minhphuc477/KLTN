@@ -40,7 +40,6 @@ Usage:
 
 import json
 import logging
-import hashlib
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Any, Set
 from dataclasses import dataclass, field
@@ -61,7 +60,13 @@ from src.core import (
     ROOM_HEIGHT,
     ROOM_WIDTH,
 )
-from src.core.definitions import DOOR_POSITIONS, TileID, parse_edge_type_tokens
+from src.core.definitions import (
+    DOOR_POSITIONS,
+    GRAPH_EDGE_FEATURE_DIM,
+    GRAPH_NODE_FEATURE_DIM,
+    TileID,
+    parse_edge_type_tokens,
+)
 from src.core.symbolic_refiner import DEFAULT_ADJACENCY
 from src.simulation.map_elites import MAPElitesEvaluator
 # Block I: Evolutionary Topology Director
@@ -74,6 +79,8 @@ from src.zelda_data.vglc_utils import (
     get_physical_start_node,
 )
 from src.utils.graph_utils import validate_graph_topology
+from src.utils.stable_seed import stable_seed_offset
+from src.utils.style_tokens import iter_style_metadata_candidates, resolve_style_token_id
 from src.pipeline.repair_feedback import (
     build_latent_edit_mask,
     build_neighbor_boundary_inpaint_inputs,
@@ -130,11 +137,7 @@ DEFAULT_ROOM_LATENT_HW: Tuple[int, int] = canonical_latent_shape((ROOM_HEIGHT, R
 
 def _stable_node_seed_offset(node: Any) -> int:
     """Deterministic integer seed offset for arbitrary node-id types."""
-    if isinstance(node, (int, np.integer)):
-        return int(node) & 0xFFFFFFFF
-    payload = repr(node).encode("utf-8", errors="ignore")
-    digest = hashlib.blake2b(payload, digest_size=4).digest()
-    return int.from_bytes(digest, byteorder="little", signed=False)
+    return stable_seed_offset(node, digest_size=4)
 
 
 class MissingPipelineComponentError(RuntimeError):
@@ -183,6 +186,9 @@ class PipelineComponentFactory:
     condition_encoder_checkpoint: Optional[str] = None
     use_learned_refiner_rules: bool = True
     map_elites_resolution: int = 20
+    symbolic_max_repair_attempts: int = 5
+    symbolic_repair_margin: int = 2
+    symbolic_adjacency_threshold: float = 0.01
 
     def build(self, pipeline: "NeuralSymbolicDungeonPipeline") -> PipelineComponents:
         return PipelineComponents(
@@ -193,7 +199,12 @@ class PipelineComponentFactory:
                 logic_net=pipeline._load_logic_net(self.logic_net_checkpoint),
             ),
             symbolic=SymbolicGenerationComponents(
-                refiner=pipeline._create_refiner(self.use_learned_refiner_rules),
+                refiner=pipeline._create_refiner(
+                    self.use_learned_refiner_rules,
+                    max_repair_attempts=self.symbolic_max_repair_attempts,
+                    margin=self.symbolic_repair_margin,
+                    adjacency_threshold=self.symbolic_adjacency_threshold,
+                ),
                 stitcher=None,
                 map_elites=MAPElitesEvaluator(
                     resolution=self.map_elites_resolution,
@@ -288,6 +299,10 @@ class NeuralSymbolicDungeonPipeline:
         use_graph_node_cross_attention: bool = True,
         use_latent_boundary_masking: bool = True,
         condition_gnn_type: str = "gcn",
+        condition_use_reference_room_maps: bool = False,
+        condition_reference_tile_vocab_size: int = 44,
+        condition_reference_embedding_dim: int = 32,
+        condition_reference_hidden_dim: int = 64,
         topology_refinement_mode: str = "gat2",
         diffusion_attention_mode: str = "softmax",
         diffusion_hedgehog_feature_dim: int = 32,
@@ -301,6 +316,40 @@ class NeuralSymbolicDungeonPipeline:
         masked_sampling_steps: int = 8,
         fast_sampling_checkpoint: Optional[str] = None,
         fast_sampling_steps: int = 4,
+        default_guidance_scale: float = 7.5,
+        default_logic_guidance_scale: float = 1.0,
+        default_num_diffusion_steps: int = 50,
+        default_use_fast_sampling: bool = False,
+        default_latent_sampler: str = "diffusion",
+        default_categorical_codebook_size: Optional[int] = None,
+        default_use_topological_positional_encoding: bool = True,
+        default_apply_repair: bool = True,
+        default_enable_map_elites: bool = False,
+        default_start_goal_coords: Optional[Tuple[Tuple[int, int], Tuple[int, int]]] = ((1, 5), (14, 5)),
+        condition_encoder_fallback_config: Optional[Dict[str, Any]] = None,
+        diffusion_fallback_config: Optional[Dict[str, Any]] = None,
+        logic_net_fallback_config: Optional[Dict[str, Any]] = None,
+        masked_room_fallback_config: Optional[Dict[str, Any]] = None,
+        topology_default_target_curve: Optional[List[float]] = None,
+        topology_num_rooms: int = 8,
+        topology_population_size: int = 50,
+        topology_generations: int = 100,
+        topology_mutation_rate: float = 0.15,
+        topology_crossover_rate: float = 0.7,
+        topology_genome_length: int = 0,
+        topology_rule_space: str = "full",
+        topology_transition_mix: float = 0.7,
+        topology_search_strategy: str = "ga",
+        topology_qd_archive_cells: int = 128,
+        topology_qd_init_random_fraction: float = 0.35,
+        topology_qd_emitter_mutation_rate: float = 0.18,
+        topology_max_lock_key_rules: int = 3,
+        topology_enable_rule_credit_assignment: bool = False,
+        topology_enforce_generation_constraints: bool = False,
+        topology_allow_candidate_repairs: bool = False,
+        symbolic_max_repair_attempts: int = 5,
+        symbolic_repair_margin: int = 2,
+        symbolic_adjacency_threshold: float = 0.01,
         components: Optional[PipelineComponents] = None,
         component_factory: Optional[PipelineComponentFactory] = None,
     ):
@@ -332,6 +381,57 @@ class NeuralSymbolicDungeonPipeline:
             None if fast_sampling_checkpoint is None else str(fast_sampling_checkpoint).strip()
         ) or None
         self.fast_sampling_steps = int(max(1, int(fast_sampling_steps)))
+        self.default_guidance_scale = float(max(0.0, float(default_guidance_scale)))
+        self.default_logic_guidance_scale = float(max(0.0, float(default_logic_guidance_scale)))
+        self.default_num_diffusion_steps = int(max(1, int(default_num_diffusion_steps)))
+        self.default_use_fast_sampling = bool(default_use_fast_sampling)
+        self.default_latent_sampler = str(default_latent_sampler or "diffusion").strip().lower()
+        self.default_categorical_codebook_size = (
+            None
+            if default_categorical_codebook_size is None
+            else int(max(1, int(default_categorical_codebook_size)))
+        )
+        self.default_use_topological_positional_encoding = bool(default_use_topological_positional_encoding)
+        self.default_apply_repair = bool(default_apply_repair)
+        self.default_enable_map_elites = bool(default_enable_map_elites)
+        self.default_start_goal_coords = (
+            None
+            if default_start_goal_coords is None
+            else self._normalize_start_goal_coords(default_start_goal_coords)
+        )
+        self.condition_encoder_fallback_config = dict(condition_encoder_fallback_config or {})
+        self.diffusion_fallback_config = dict(diffusion_fallback_config or {})
+        self.logic_net_fallback_config = dict(logic_net_fallback_config or {})
+        self.masked_room_fallback_config = dict(masked_room_fallback_config or {})
+        default_curve = topology_default_target_curve
+        if default_curve is None:
+            default_curve = [0.2, 0.4, 0.6, 0.8, 1.0]
+        self.topology_default_target_curve = [float(v) for v in default_curve]
+        if not self.topology_default_target_curve:
+            raise ValueError("topology_default_target_curve must be non-empty.")
+        self.topology_num_rooms = int(max(1, int(topology_num_rooms)))
+        self.topology_population_size = int(max(1, int(topology_population_size)))
+        self.topology_generations = int(max(1, int(topology_generations)))
+        self.topology_mutation_rate = float(np.clip(float(topology_mutation_rate), 0.0, 1.0))
+        self.topology_crossover_rate = float(np.clip(float(topology_crossover_rate), 0.0, 1.0))
+        self.topology_genome_length = int(max(0, int(topology_genome_length)))
+        self.topology_rule_space = str(topology_rule_space).strip().lower()
+        self.topology_transition_mix = float(np.clip(float(topology_transition_mix), 0.0, 1.0))
+        self.topology_search_strategy = str(topology_search_strategy).strip().lower()
+        self.topology_qd_archive_cells = int(max(32, int(topology_qd_archive_cells)))
+        self.topology_qd_init_random_fraction = float(
+            np.clip(float(topology_qd_init_random_fraction), 0.05, 0.95)
+        )
+        self.topology_qd_emitter_mutation_rate = float(
+            np.clip(float(topology_qd_emitter_mutation_rate), 0.01, 0.95)
+        )
+        self.topology_max_lock_key_rules = int(max(0, int(topology_max_lock_key_rules)))
+        self.topology_enable_rule_credit_assignment = bool(topology_enable_rule_credit_assignment)
+        self.topology_enforce_generation_constraints = bool(topology_enforce_generation_constraints)
+        self.topology_allow_candidate_repairs = bool(topology_allow_candidate_repairs)
+        self.symbolic_max_repair_attempts = int(max(1, int(symbolic_max_repair_attempts)))
+        self.symbolic_repair_margin = int(max(0, int(symbolic_repair_margin)))
+        self.symbolic_adjacency_threshold = float(max(0.0, float(symbolic_adjacency_threshold)))
         if self.room_generator_mode not in {"latent_diffusion", "discrete_masked"}:
             raise ValueError(
                 f"Invalid room_generator_mode={room_generator_mode!r}. "
@@ -342,12 +442,26 @@ class NeuralSymbolicDungeonPipeline:
                 f"Invalid diffusion_attention_mode={diffusion_attention_mode!r}. "
                 "Expected 'softmax' or 'linear_hedgehog'."
             )
+        if self.default_latent_sampler not in {"diffusion", "categorical"}:
+            raise ValueError(
+                f"Invalid default_latent_sampler={default_latent_sampler!r}. "
+                "Expected 'diffusion' or 'categorical'."
+            )
         if self.diffusion_cfg_schedule_mode not in {"constant", "linear_decay", "cosine_decay"}:
             raise ValueError(
                 f"Invalid diffusion_cfg_schedule_mode={diffusion_cfg_schedule_mode!r}. "
                 "Expected 'constant', 'linear_decay', or 'cosine_decay'."
             )
         self.diffusion_hedgehog_feature_dim = int(max(4, int(diffusion_hedgehog_feature_dim)))
+        if self.topology_rule_space not in {"core", "full"}:
+            raise ValueError(
+                f"Invalid topology_rule_space={topology_rule_space!r}. Expected 'core' or 'full'."
+            )
+        if self.topology_search_strategy not in {"ga", "cvt_emitter", "map_elites", "cvt", "cvt_map_elites"}:
+            raise ValueError(
+                f"Invalid topology_search_strategy={topology_search_strategy!r}. "
+                "Expected 'ga', 'cvt_emitter', 'map_elites', 'cvt', or 'cvt_map_elites'."
+            )
         if self.topology_refinement_mode == "upgraded":
             self.topology_refinement_mode = "gat2"
         if self.topology_refinement_mode not in {"none", "lightweight", "gat2"}:
@@ -361,6 +475,10 @@ class NeuralSymbolicDungeonPipeline:
                 f"Invalid condition_gnn_type={condition_gnn_type!r}. Expected 'gcn', 'gat', 'sage', or 'gps'."
             )
         self.condition_gnn_type = gnn_type
+        self.condition_use_reference_room_maps = bool(condition_use_reference_room_maps)
+        self.condition_reference_tile_vocab_size = int(max(2, int(condition_reference_tile_vocab_size)))
+        self.condition_reference_embedding_dim = int(max(4, int(condition_reference_embedding_dim)))
+        self.condition_reference_hidden_dim = int(max(4, int(condition_reference_hidden_dim)))
 
         # Runtime fallback diagnostics for auditability of best-effort paths.
         self.runtime_diagnostics: Dict[str, int] = {}
@@ -380,6 +498,9 @@ class NeuralSymbolicDungeonPipeline:
                 condition_encoder_checkpoint=condition_encoder_checkpoint,
                 use_learned_refiner_rules=use_learned_refiner_rules,
                 map_elites_resolution=map_elites_resolution,
+                symbolic_max_repair_attempts=self.symbolic_max_repair_attempts,
+                symbolic_repair_margin=self.symbolic_repair_margin,
+                symbolic_adjacency_threshold=self.symbolic_adjacency_threshold,
             )
             components = factory.build(self)
 
@@ -408,6 +529,9 @@ class NeuralSymbolicDungeonPipeline:
         *,
         device: str = 'cpu',
         use_learned_refiner_rules: bool = True,
+        symbolic_max_repair_attempts: int = 5,
+        symbolic_repair_margin: int = 2,
+        symbolic_adjacency_threshold: float = 0.01,
         enable_map_elites: bool = False,
         map_elites_resolution: int = 20,
         enable_logging: bool = True,
@@ -422,7 +546,12 @@ class NeuralSymbolicDungeonPipeline:
         exercise repair logic without loading VQ-VAE, diffusion, or LogicNet.
         """
         symbolic = SymbolicGenerationComponents(
-            refiner=cls._create_refiner(use_learned_refiner_rules),
+            refiner=cls._create_refiner(
+                use_learned_refiner_rules,
+                max_repair_attempts=symbolic_max_repair_attempts,
+                margin=symbolic_repair_margin,
+                adjacency_threshold=symbolic_adjacency_threshold,
+            ),
             stitcher=stitcher,
             map_elites=(
                 map_elites
@@ -444,6 +573,9 @@ class NeuralSymbolicDungeonPipeline:
             map_elites_resolution=map_elites_resolution,
             enable_logging=enable_logging,
             strict_checkpoint_mode=strict_checkpoint_mode,
+            symbolic_max_repair_attempts=symbolic_max_repair_attempts,
+            symbolic_repair_margin=symbolic_repair_margin,
+            symbolic_adjacency_threshold=symbolic_adjacency_threshold,
             components=PipelineComponents(symbolic=symbolic),
         )
 
@@ -596,16 +728,41 @@ class NeuralSymbolicDungeonPipeline:
         checkpoint: Optional[Dict[str, Any]] = None
         state_dict: Optional[Dict[str, Any]] = None
         metadata: Dict[str, Any] = {}
+        checkpoint_config: Dict[str, Any] = {}
+        num_classes = int(np.max(self._valid_semantic_tile_ids_np)) + 1
         latent_dim = 64
         codebook_size = 512
         hidden_dim = 128
         if checkpoint_path and Path(checkpoint_path).exists():
-            checkpoint, metadata = self._load_checkpoint_and_metadata(checkpoint_path, "vqvae")
+            checkpoint, metadata = self._load_checkpoint_and_metadata(
+                checkpoint_path,
+                "vqvae",
+                accepted_model_types=("diffusion",),
+            )
             if isinstance(checkpoint, dict):
-                state_dict = checkpoint.get('model_state_dict', checkpoint)
+                checkpoint_config = self._extract_checkpoint_config(checkpoint)
+                declared_model_type = str(metadata.get("model_type", "")).strip().lower()
+                explicit_vq_state = checkpoint.get("vqvae_state_dict")
+                is_composite_generation_checkpoint = any(
+                    isinstance(checkpoint.get(key), dict)
+                    for key in ("diffusion_state_dict", "condition_encoder_state_dict", "logic_net_state_dict")
+                )
+                if isinstance(explicit_vq_state, dict):
+                    state_dict = explicit_vq_state
+                elif declared_model_type not in {"diffusion"} and not is_composite_generation_checkpoint:
+                    state_dict = self._extract_checkpoint_state_dict(checkpoint)
             architecture = metadata.get("architecture", {}) if isinstance(metadata, dict) else {}
+            num_classes = int(
+                checkpoint_config.get(
+                    "num_classes",
+                    architecture.get("num_classes", num_classes),
+                )
+            )
+            latent_dim = int(checkpoint_config.get("latent_dim", latent_dim))
             latent_dim = int(architecture.get("latent_dim", latent_dim))
+            codebook_size = int(checkpoint_config.get("codebook_size", codebook_size))
             codebook_size = int(architecture.get("codebook_size", codebook_size))
+            use_coordconv = bool(checkpoint_config.get("use_coordconv", use_coordconv))
             use_coordconv = bool(architecture.get("use_coordconv", use_coordconv))
             # Backward compatibility: older checkpoints may use plain Conv2d
             # keys (encoder.conv_in.weight) while newer CoordConv checkpoints
@@ -621,7 +778,7 @@ class NeuralSymbolicDungeonPipeline:
                     hidden_dim = int(max(1, int(conv_weight.shape[0])))
 
         model = SemanticVQVAE(
-            num_classes=44,
+            num_classes=num_classes,
             codebook_size=codebook_size,
             latent_dim=latent_dim,
             hidden_dim=hidden_dim,
@@ -630,9 +787,22 @@ class NeuralSymbolicDungeonPipeline:
         
         if checkpoint_path and Path(checkpoint_path).exists():
             if checkpoint is None:
-                checkpoint, _metadata = self._load_checkpoint_and_metadata(checkpoint_path, "vqvae")
+                checkpoint, _metadata = self._load_checkpoint_and_metadata(
+                    checkpoint_path,
+                    "vqvae",
+                    accepted_model_types=("diffusion",),
+                )
             if state_dict is None and isinstance(checkpoint, dict):
-                state_dict = checkpoint.get('model_state_dict', checkpoint)
+                declared_model_type = str(metadata.get("model_type", "")).strip().lower()
+                explicit_vq_state = checkpoint.get("vqvae_state_dict")
+                is_composite_generation_checkpoint = any(
+                    isinstance(checkpoint.get(key), dict)
+                    for key in ("diffusion_state_dict", "condition_encoder_state_dict", "logic_net_state_dict")
+                )
+                if isinstance(explicit_vq_state, dict):
+                    state_dict = explicit_vq_state
+                elif declared_model_type not in {"diffusion"} and not is_composite_generation_checkpoint:
+                    state_dict = self._extract_checkpoint_state_dict(checkpoint)
             if isinstance(state_dict, dict):
                 incompatible = model.load_state_dict(state_dict, strict=False)
                 missing = [str(k) for k in getattr(incompatible, 'missing_keys', [])]
@@ -671,12 +841,16 @@ class NeuralSymbolicDungeonPipeline:
         - default to richer graph-conditioning schema for fresh training,
         - auto-infer legacy schema from checkpoint weights for compatibility.
         """
-        default_node_feature_dim = 12
-        default_edge_feature_dim = 14
+        default_node_feature_dim = int(GRAPH_NODE_FEATURE_DIM)
+        default_edge_feature_dim = int(GRAPH_EDGE_FEATURE_DIM)
         node_feature_dim = int(default_node_feature_dim)
         edge_feature_dim = int(default_edge_feature_dim)
         checkpoint_state: Optional[Dict[str, Any]] = None
         checkpoint_config: Dict[str, Any] = {}
+        fallback_config = dict(self.condition_encoder_fallback_config)
+        default_latent_dim = int(
+            getattr(getattr(self, "vqvae", None), "latent_dim", 64)
+        )
 
         if checkpoint_path and Path(checkpoint_path).exists():
             checkpoint, _metadata = self._load_checkpoint_and_metadata(
@@ -698,17 +872,44 @@ class NeuralSymbolicDungeonPipeline:
                     edge_feature_dim = int(max(1, int(edge_weight.shape[1])))
 
         model = DualStreamConditionEncoder(
-            latent_dim=int(checkpoint_config.get("latent_dim", 64)),
+            latent_dim=int(checkpoint_config.get("latent_dim", fallback_config.get("latent_dim", default_latent_dim))),
             node_feature_dim=node_feature_dim,
             edge_feature_dim=edge_feature_dim,
-            hidden_dim=int(checkpoint_config.get("condition_hidden_dim", 256)),
-            output_dim=int(checkpoint_config.get("context_dim", 256)),
-            gnn_type=str(checkpoint_config.get("condition_gnn_type", self.condition_gnn_type)),
-            num_gnn_layers=int(checkpoint_config.get("condition_num_gnn_layers", 3)),
-            num_attention_heads=int(checkpoint_config.get("condition_num_attention_heads", 8)),
-            dropout=float(checkpoint_config.get("condition_dropout", 0.1)),
+            hidden_dim=int(checkpoint_config.get("condition_hidden_dim", fallback_config.get("condition_hidden_dim", 256))),
+            output_dim=int(checkpoint_config.get("context_dim", fallback_config.get("context_dim", 256))),
+            gnn_type=str(checkpoint_config.get("condition_gnn_type", fallback_config.get("condition_gnn_type", self.condition_gnn_type))),
+            num_gnn_layers=int(checkpoint_config.get("condition_num_gnn_layers", fallback_config.get("condition_num_gnn_layers", 3))),
+            num_attention_heads=int(checkpoint_config.get("condition_num_attention_heads", fallback_config.get("condition_num_attention_heads", 8))),
+            dropout=float(checkpoint_config.get("condition_dropout", fallback_config.get("condition_dropout", 0.1))),
             use_current_node_distance_features=bool(
-                checkpoint_config.get("use_current_node_distance_features", self.use_current_node_distance_features)
+                checkpoint_config.get(
+                    "use_current_node_distance_features",
+                    fallback_config.get("use_current_node_distance_features", self.use_current_node_distance_features),
+                )
+            ),
+            use_reference_room_maps=bool(
+                checkpoint_config.get(
+                    "condition_use_reference_room_maps",
+                    fallback_config.get("condition_use_reference_room_maps", self.condition_use_reference_room_maps),
+                )
+            ),
+            reference_num_tile_types=int(
+                checkpoint_config.get(
+                    "condition_reference_tile_vocab_size",
+                    fallback_config.get("condition_reference_tile_vocab_size", self.condition_reference_tile_vocab_size),
+                )
+            ),
+            reference_embedding_dim=int(
+                checkpoint_config.get(
+                    "condition_reference_embedding_dim",
+                    fallback_config.get("condition_reference_embedding_dim", self.condition_reference_embedding_dim),
+                )
+            ),
+            reference_hidden_dim=int(
+                checkpoint_config.get(
+                    "condition_reference_hidden_dim",
+                    fallback_config.get("condition_reference_hidden_dim", self.condition_reference_hidden_dim),
+                )
             ),
         ).to(self.device)
         
@@ -777,6 +978,19 @@ class NeuralSymbolicDungeonPipeline:
         """Load or create latent diffusion model."""
         checkpoint_config: Dict[str, Any] = {}
         checkpoint_state: Optional[Dict[str, Any]] = None
+        fallback_config = dict(self.diffusion_fallback_config)
+        default_latent_dim = int(
+            checkpoint_config.get(
+                "latent_dim",
+                fallback_config.get("latent_dim", getattr(getattr(self, "vqvae", None), "latent_dim", 64)),
+            )
+        )
+        default_context_dim = int(
+            checkpoint_config.get(
+                "context_dim",
+                fallback_config.get("context_dim", getattr(getattr(self, "condition_encoder", None), "output_dim", 256)),
+            )
+        )
         if checkpoint_path and Path(checkpoint_path).exists():
             checkpoint, _metadata = self._load_checkpoint_and_metadata(checkpoint_path, "diffusion")
             checkpoint_config = self._extract_checkpoint_config(checkpoint)
@@ -784,31 +998,58 @@ class NeuralSymbolicDungeonPipeline:
                 checkpoint,
                 "diffusion_state_dict",
             )
+            default_latent_dim = int(
+                checkpoint_config.get(
+                    "latent_dim",
+                    getattr(getattr(self, "vqvae", None), "latent_dim", default_latent_dim),
+                )
+            )
+            default_context_dim = int(
+                checkpoint_config.get(
+                    "context_dim",
+                    getattr(getattr(self, "condition_encoder", None), "output_dim", default_context_dim),
+                )
+            )
         model = LatentDiffusionModel(
-            latent_dim=int(checkpoint_config.get("latent_dim", 64)),
-            context_dim=int(checkpoint_config.get("context_dim", 256)),
-            num_timesteps=int(checkpoint_config.get("num_timesteps", 1000)),
-            prediction_type=str(checkpoint_config.get("prediction_type", "epsilon")),
-            cfg_dropout_prob=float(checkpoint_config.get("cfg_dropout_prob", 0.1)),
-            cfg_scale=float(checkpoint_config.get("cfg_scale", 3.0)),
+            latent_dim=default_latent_dim,
+            context_dim=default_context_dim,
+            num_timesteps=int(checkpoint_config.get("num_timesteps", fallback_config.get("num_timesteps", 1000))),
+            prediction_type=str(checkpoint_config.get("prediction_type", fallback_config.get("prediction_type", "epsilon"))),
+            cfg_dropout_prob=float(checkpoint_config.get("cfg_dropout_prob", fallback_config.get("cfg_dropout_prob", 0.1))),
+            cfg_scale=float(checkpoint_config.get("cfg_scale", fallback_config.get("cfg_scale", 3.0))),
             cfg_schedule_mode=str(checkpoint_config.get("cfg_schedule_mode", self.diffusion_cfg_schedule_mode)),
             cfg_schedule_min_scale=float(checkpoint_config.get("cfg_schedule_min_scale", self.diffusion_cfg_schedule_min_scale)),
             cfg_schedule_power=float(checkpoint_config.get("cfg_schedule_power", self.diffusion_cfg_schedule_power)),
-            min_snr_gamma=float(checkpoint_config.get("min_snr_gamma", 5.0)),
-            model_channels=int(checkpoint_config.get("model_channels", 128)),
+            min_snr_gamma=float(checkpoint_config.get("min_snr_gamma", fallback_config.get("min_snr_gamma", 5.0))),
+            model_channels=int(checkpoint_config.get("model_channels", fallback_config.get("model_channels", 128))),
             topology_refinement_mode=str(checkpoint_config.get("topology_refinement_mode", self.topology_refinement_mode)),
             attention_mode=str(checkpoint_config.get("attention_mode", self.diffusion_attention_mode)),
-            topology_conditioning_mode=str(checkpoint_config.get("topology_conditioning_mode", "additive")),
+            topology_conditioning_mode=str(
+                checkpoint_config.get("topology_conditioning_mode", fallback_config.get("topology_conditioning_mode", "additive"))
+            ),
             hedgehog_feature_dim=int(checkpoint_config.get("hedgehog_feature_dim", self.diffusion_hedgehog_feature_dim)),
-            unet_channel_mult=tuple(checkpoint_config.get("unet_channel_mult", (1, 2, 4))),
-            unet_num_res_blocks=int(checkpoint_config.get("unet_num_res_blocks", 2)),
-            unet_attention_resolutions=tuple(checkpoint_config.get("unet_attention_resolutions", (1, 2))),
-            unet_num_heads=int(checkpoint_config.get("unet_num_heads", 8)),
-            unet_dropout=float(checkpoint_config.get("unet_dropout", 0.1)),
-            graph_auto_linear_attention_nodes=int(checkpoint_config.get("graph_auto_linear_attention_nodes", 128)),
-            spatial_graph_gate_init=float(checkpoint_config.get("spatial_graph_gate_init", -2.0)),
-            spatial_topology_gate_init=float(checkpoint_config.get("spatial_topology_gate_init", -2.0)),
-            room_topology_channels=int(checkpoint_config.get("room_topology_channels", ROOM_TOPOLOGY_CHANNEL_COUNT)),
+            unet_channel_mult=tuple(checkpoint_config.get("unet_channel_mult", fallback_config.get("unet_channel_mult", (1, 2, 4)))),
+            unet_num_res_blocks=int(checkpoint_config.get("unet_num_res_blocks", fallback_config.get("unet_num_res_blocks", 2))),
+            unet_attention_resolutions=tuple(
+                checkpoint_config.get("unet_attention_resolutions", fallback_config.get("unet_attention_resolutions", (1, 2)))
+            ),
+            unet_num_heads=int(checkpoint_config.get("unet_num_heads", fallback_config.get("unet_num_heads", 8))),
+            unet_dropout=float(checkpoint_config.get("unet_dropout", fallback_config.get("unet_dropout", 0.1))),
+            graph_auto_linear_attention_nodes=int(
+                checkpoint_config.get(
+                    "graph_auto_linear_attention_nodes",
+                    fallback_config.get("graph_auto_linear_attention_nodes", 128),
+                )
+            ),
+            spatial_graph_gate_init=float(
+                checkpoint_config.get("spatial_graph_gate_init", fallback_config.get("spatial_graph_gate_init", -2.0))
+            ),
+            spatial_topology_gate_init=float(
+                checkpoint_config.get("spatial_topology_gate_init", fallback_config.get("spatial_topology_gate_init", -2.0))
+            ),
+            room_topology_channels=int(
+                checkpoint_config.get("room_topology_channels", fallback_config.get("room_topology_channels", ROOM_TOPOLOGY_CHANNEL_COUNT))
+            ),
         ).to(self.device)
         
         if checkpoint_path and Path(checkpoint_path).exists():
@@ -897,12 +1138,23 @@ class NeuralSymbolicDungeonPipeline:
         """Load or create LogicNet."""
         checkpoint_state: Optional[Dict[str, Any]] = None
         checkpoint_config: Dict[str, Any] = {}
+        fallback_config = dict(self.logic_net_fallback_config)
+        default_latent_dim = int(
+            getattr(
+                getattr(self, "diffusion", None),
+                "latent_dim",
+                fallback_config.get("latent_dim", getattr(getattr(self, "vqvae", None), "latent_dim", 64)),
+            )
+        )
+        default_num_classes = int(
+            fallback_config.get("num_classes", getattr(getattr(self, "vqvae", None), "num_classes", 44))
+        )
         model = LogicNet(
-            latent_dim=64,
-            num_classes=44,
-            num_iterations=20,
-            topology_trace_weight=0.25,
-            topology_anchor_weight=0.25,
+            latent_dim=default_latent_dim,
+            num_classes=default_num_classes,
+            num_iterations=int(fallback_config.get("num_logic_iterations", 20)),
+            topology_trace_weight=float(fallback_config.get("logic_topology_trace_weight", 0.25)),
+            topology_anchor_weight=float(fallback_config.get("logic_topology_anchor_weight", 0.25)),
         ).to(self.device)
         
         if checkpoint_path and Path(checkpoint_path).exists():
@@ -918,8 +1170,8 @@ class NeuralSymbolicDungeonPipeline:
             checkpoint_config = self._extract_checkpoint_config(checkpoint)
             architecture = metadata.get("architecture", {}) if isinstance(metadata, dict) else {}
             model = LogicNet(
-                latent_dim=int(checkpoint_config.get("latent_dim", architecture.get("latent_dim", 64))),
-                num_classes=int(checkpoint_config.get("num_classes", architecture.get("num_classes", 44))),
+                latent_dim=int(checkpoint_config.get("latent_dim", architecture.get("latent_dim", default_latent_dim))),
+                num_classes=int(checkpoint_config.get("num_classes", architecture.get("num_classes", default_num_classes))),
                 num_iterations=int(checkpoint_config.get("num_logic_iterations", 20)),
                 topology_trace_weight=float(checkpoint_config.get("logic_topology_trace_weight", 0.25)),
                 topology_anchor_weight=float(checkpoint_config.get("logic_topology_anchor_weight", 0.25)),
@@ -953,20 +1205,55 @@ class NeuralSymbolicDungeonPipeline:
         checkpoint_config: Dict[str, Any] = {}
         checkpoint_state: Optional[Dict[str, Any]] = None
         checkpoint: Optional[Dict[str, Any]] = None
+        fallback_config = dict(self.masked_room_fallback_config)
         if checkpoint_path and Path(checkpoint_path).exists():
             checkpoint, _metadata = self._load_checkpoint_and_metadata(checkpoint_path, "masked_room_model")
             checkpoint_config = self._extract_checkpoint_config(checkpoint)
             checkpoint_state = self._extract_checkpoint_state_dict(checkpoint)
 
         model = create_discrete_masked_model(
-            num_classes=int(checkpoint_config.get("num_classes", 44)),
-            hidden_dim=int(checkpoint_config.get("hidden_dim", 64)),
-            model_channels=int(checkpoint_config.get("model_channels", 128)),
-            context_dim=int(checkpoint_config.get("context_dim", 256)),
+            num_classes=int(
+                checkpoint_config.get(
+                    "num_classes",
+                    fallback_config.get("num_classes", getattr(getattr(self, "vqvae", None), "num_classes", 44)),
+                )
+            ),
+            hidden_dim=int(checkpoint_config.get("hidden_dim", fallback_config.get("hidden_dim", 64))),
+            model_channels=int(checkpoint_config.get("model_channels", fallback_config.get("model_channels", 128))),
+            context_dim=int(
+                checkpoint_config.get(
+                    "context_dim",
+                    fallback_config.get("context_dim", getattr(getattr(self, "condition_encoder", None), "output_dim", 256)),
+                )
+            ),
             num_steps=int(checkpoint_config.get("masked_steps", self.masked_sampling_steps)),
-            attention_mode=self.diffusion_attention_mode,
-            hedgehog_feature_dim=self.diffusion_hedgehog_feature_dim,
-            room_topology_channels=int(checkpoint_config.get("room_topology_channels", ROOM_TOPOLOGY_CHANNEL_COUNT)),
+            attention_mode=str(checkpoint_config.get("attention_mode", self.diffusion_attention_mode)),
+            topology_conditioning_mode=str(
+                checkpoint_config.get("topology_conditioning_mode", fallback_config.get("topology_conditioning_mode", "additive"))
+            ),
+            hedgehog_feature_dim=int(checkpoint_config.get("hedgehog_feature_dim", self.diffusion_hedgehog_feature_dim)),
+            graph_auto_linear_attention_nodes=int(
+                checkpoint_config.get(
+                    "graph_auto_linear_attention_nodes",
+                    fallback_config.get("graph_auto_linear_attention_nodes", 128),
+                )
+            ),
+            spatial_graph_gate_init=float(
+                checkpoint_config.get("spatial_graph_gate_init", fallback_config.get("spatial_graph_gate_init", -2.0))
+            ),
+            spatial_topology_gate_init=float(
+                checkpoint_config.get("spatial_topology_gate_init", fallback_config.get("spatial_topology_gate_init", -2.0))
+            ),
+            unet_channel_mult=tuple(checkpoint_config.get("unet_channel_mult", fallback_config.get("unet_channel_mult", (1, 2, 4)))),
+            unet_num_res_blocks=int(checkpoint_config.get("unet_num_res_blocks", fallback_config.get("unet_num_res_blocks", 2))),
+            unet_attention_resolutions=tuple(
+                checkpoint_config.get("unet_attention_resolutions", fallback_config.get("unet_attention_resolutions", (1, 2)))
+            ),
+            unet_num_heads=int(checkpoint_config.get("unet_num_heads", fallback_config.get("unet_num_heads", 8))),
+            unet_dropout=float(checkpoint_config.get("unet_dropout", fallback_config.get("unet_dropout", 0.1))),
+            room_topology_channels=int(
+                checkpoint_config.get("room_topology_channels", fallback_config.get("room_topology_channels", ROOM_TOPOLOGY_CHANNEL_COUNT))
+            ),
         ).to(self.device)
 
         if checkpoint_path and Path(checkpoint_path).exists():
@@ -1013,7 +1300,13 @@ class NeuralSymbolicDungeonPipeline:
         return model
     
     @staticmethod
-    def _create_refiner(use_learned_rules: bool) -> SymbolicRefiner:
+    def _create_refiner(
+        use_learned_rules: bool,
+        *,
+        max_repair_attempts: int = 5,
+        margin: int = 2,
+        adjacency_threshold: float = 0.01,
+    ) -> SymbolicRefiner:
         """Create symbolic refiner with optional learned rules."""
         learned_stats = LearnedTileStatistics() if use_learned_rules else None
 
@@ -1046,8 +1339,9 @@ class NeuralSymbolicDungeonPipeline:
             tile_types=tile_types,
             adjacency=(None if use_learned_rules else canonical_adjacency),
             learned_stats=learned_stats,
-            max_repair_attempts=5,
-            margin=2,
+            max_repair_attempts=int(max(1, int(max_repair_attempts))),
+            margin=int(max(0, int(margin))),
+            adjacency_threshold=float(max(0.0, float(adjacency_threshold))),
         )
         
         logger.info(f"Created SymbolicRefiner (learned_rules={use_learned_rules})")
@@ -1121,13 +1415,14 @@ class NeuralSymbolicDungeonPipeline:
             device=self.device,
             vqvae=self.vqvae,
             diffusion=self.diffusion,
-            num_classes=44,
+            num_classes=int(getattr(self.vqvae, "num_classes", int(np.max(self._valid_semantic_tile_ids_np)) + 1)),
         )
 
     def _compute_room_condition(
         self,
         *,
         neighbor_latents: Dict[str, Optional[torch.Tensor]],
+        reference_room_maps: Optional[Dict[str, Optional[torch.Tensor]]] = None,
         graph_context: Dict[str, Any],
         boundary_constraints: Optional[torch.Tensor],
         position: Optional[torch.Tensor],
@@ -1139,6 +1434,8 @@ class NeuralSymbolicDungeonPipeline:
             position = torch.zeros(1, 2, device=self.device)
 
         node_tokens: Optional[torch.Tensor] = None
+        condition_dim = int(getattr(self.condition_encoder, "output_dim", 256))
+        style_id = graph_context.get("style_id")
         try:
             node_dim, edge_dim = self._condition_feature_dims()
             validate_feature_dims(
@@ -1149,6 +1446,7 @@ class NeuralSymbolicDungeonPipeline:
             )
             condition_out = self.condition_encoder(
                 neighbor_latents=neighbor_latents,
+                reference_room_maps=reference_room_maps,
                 boundary_constraints=boundary_constraints,
                 position=position,
                 node_features=graph_context.get('node_features'),
@@ -1157,6 +1455,7 @@ class NeuralSymbolicDungeonPipeline:
                 tpe=graph_context.get('tpe'),
                 current_node_distance=graph_context.get('current_node_distance'),
                 current_node_idx=graph_context.get('current_node_idx'),
+                style_id=style_id,
                 return_global_tokens=self.use_graph_node_cross_attention,
             )
             if self.use_graph_node_cross_attention:
@@ -1170,7 +1469,7 @@ class NeuralSymbolicDungeonPipeline:
                 condition = condition_out
             validate_tensor_contract(
                 condition,
-                BlockShapeContract(name='block_iii_condition_output', dims=2, batch_dim=1, channel_dim=256),
+                BlockShapeContract(name='block_iii_condition_output', dims=2, batch_dim=1, channel_dim=condition_dim),
             )
         except (AttributeError, RuntimeError, ValueError, TypeError) as e:
             self._bump_diagnostic("condition_encoder_fallback")
@@ -1179,7 +1478,7 @@ class NeuralSymbolicDungeonPipeline:
                     f"Condition encoding failed in strict mode: {e}"
                 ) from e
             logger.warning(f"Condition encoding failed: {e}, using zero condition")
-            condition = torch.zeros(1, 256, device=self.device)
+            condition = torch.zeros(1, condition_dim, device=self.device)
             node_tokens = None
 
         if self.use_graph_node_cross_attention and isinstance(node_tokens, torch.Tensor):
@@ -1324,6 +1623,7 @@ class NeuralSymbolicDungeonPipeline:
         room_ids: List[Any],
         mission_graph_physical: nx.Graph,
         graph_data: Dict[str, Any],
+        generated_rooms: Dict[Any, RoomGenerationResult],
         room_latents: Dict[int, torch.Tensor],
         guidance_scale: float,
         logic_guidance_scale: float,
@@ -1349,6 +1649,11 @@ class NeuralSymbolicDungeonPipeline:
             neighbor_latents = self._normalize_neighbor_latents(
                 self._get_neighbor_latents(room_id, mission_graph_physical, room_latents)
             )
+            reference_room_maps = (
+                self._get_neighbor_reference_room_maps(room_id, mission_graph_physical, generated_rooms)
+                if bool(getattr(self.condition_encoder, "use_reference_room_maps", False))
+                else None
+            )
             boundary_constraints = self._build_room_boundary_constraints(
                 graph=mission_graph_physical,
                 room_id=room_id,
@@ -1371,6 +1676,7 @@ class NeuralSymbolicDungeonPipeline:
             )
             condition = self._compute_room_condition(
                 neighbor_latents=neighbor_latents,
+                reference_room_maps=reference_room_maps,
                 graph_context=room_graph_context,
                 boundary_constraints=boundary_constraints,
                 position=room_position,
@@ -1381,6 +1687,7 @@ class NeuralSymbolicDungeonPipeline:
                     'batch_index': int(j),
                     'room_id': room_id,
                     'neighbor_latents': neighbor_latents,
+                    'reference_room_maps': reference_room_maps,
                     'graph_context': room_graph_context,
                     'boundary_constraints': boundary_constraints,
                     'position': room_position,
@@ -1416,10 +1723,20 @@ class NeuralSymbolicDungeonPipeline:
             ),
         }
         if self.use_current_node_distance_features:
-            graph_ctx_for_guidance['current_node_distance'] = torch.cat(
-                [inp['graph_context']['current_node_distance'] for inp in per_room_inputs],
-                dim=0,
-            )
+            current_node_distance_batch: List[torch.Tensor] = []
+            for inp in per_room_inputs:
+                value = inp['graph_context']['current_node_distance']
+                if not isinstance(value, torch.Tensor):
+                    continue
+                tensor = value.to(self.device, dtype=torch.float32)
+                if tensor.dim() == 3 and int(tensor.shape[0]) == 1:
+                    tensor = tensor.squeeze(0)
+                current_node_distance_batch.append(tensor)
+            if current_node_distance_batch:
+                graph_ctx_for_guidance['current_node_distance'] = torch.stack(
+                    current_node_distance_batch,
+                    dim=0,
+                )
 
         tokens_batch: Optional[torch.Tensor] = None
         if self.room_generator_mode == "discrete_masked":
@@ -1561,6 +1878,7 @@ class NeuralSymbolicDungeonPipeline:
                 room_id=inp['room_id'],
                 boundary_constraints=inp['boundary_constraints'],
                 position=inp['position'],
+                reference_room_maps=inp['reference_room_maps'],
                 guidance_scale=guidance_scale,
                 logic_guidance_scale=logic_guidance_scale,
                 num_diffusion_steps=num_diffusion_steps,
@@ -1591,14 +1909,15 @@ class NeuralSymbolicDungeonPipeline:
         room_id: int,
         boundary_constraints: Optional[torch.Tensor] = None,
         position: Optional[torch.Tensor] = None,
-        guidance_scale: float = 7.5,
-        logic_guidance_scale: float = 1.0,
-        num_diffusion_steps: int = 50,
-        use_fast_sampling: bool = False,
-        latent_sampler: str = "diffusion",
+        reference_room_maps: Optional[Dict[str, Optional[torch.Tensor]]] = None,
+        guidance_scale: Optional[float] = None,
+        logic_guidance_scale: Optional[float] = None,
+        num_diffusion_steps: Optional[int] = None,
+        use_fast_sampling: Optional[bool] = None,
+        latent_sampler: Optional[str] = None,
         categorical_codebook_size: Optional[int] = None,
         use_ddim: bool = True,
-        apply_repair: bool = True,
+        apply_repair: Optional[bool] = None,
         start_goal_coords: Optional[Tuple[Tuple[int, int], Tuple[int, int]]] = None,
         seed: Optional[int] = None,
         precomputed_condition: Optional[torch.Tensor] = None,
@@ -1638,6 +1957,26 @@ class NeuralSymbolicDungeonPipeline:
         if seed is not None:
             torch.manual_seed(seed)
         neighbor_latents = self._normalize_neighbor_latents(neighbor_latents)
+        guidance_scale = self.default_guidance_scale if guidance_scale is None else float(guidance_scale)
+        logic_guidance_scale = (
+            self.default_logic_guidance_scale
+            if logic_guidance_scale is None
+            else float(logic_guidance_scale)
+        )
+        num_diffusion_steps = (
+            self.default_num_diffusion_steps if num_diffusion_steps is None else int(num_diffusion_steps)
+        )
+        use_fast_sampling = (
+            self.default_use_fast_sampling if use_fast_sampling is None else bool(use_fast_sampling)
+        )
+        latent_sampler = self.default_latent_sampler if latent_sampler is None else str(latent_sampler)
+        if categorical_codebook_size is None and self.default_categorical_codebook_size is not None:
+            categorical_codebook_size = int(self.default_categorical_codebook_size)
+        apply_repair = self.default_apply_repair if apply_repair is None else bool(apply_repair)
+        if start_goal_coords is None:
+            start_goal_coords = self.default_start_goal_coords
+        elif start_goal_coords is not None:
+            start_goal_coords = self._normalize_start_goal_coords(start_goal_coords)
 
         if logic_guidance_scale > 0 and self.logic_net is None:
             self._bump_diagnostic("logic_guidance_disabled_missing_component")
@@ -1659,6 +1998,7 @@ class NeuralSymbolicDungeonPipeline:
         else:
             condition = self._compute_room_condition(
                 neighbor_latents=neighbor_latents,
+                reference_room_maps=reference_room_maps,
                 graph_context=graph_context,
                 boundary_constraints=boundary_constraints,
                 position=position,
@@ -1833,7 +2173,7 @@ class NeuralSymbolicDungeonPipeline:
                 name='block_ii_decode_logits',
                 dims=4,
                 batch_dim=1,
-                channel_dim=44,
+                channel_dim=int(getattr(self.vqvae, "num_classes", logits.shape[1])),
                 spatial_hw=(ROOM_HEIGHT, ROOM_WIDTH),
             ),
         )
@@ -2079,9 +2419,22 @@ class NeuralSymbolicDungeonPipeline:
         use_topological_positional_encoding: bool = True,
         generate_topology: bool = False,
         target_curve: Optional[List[float]] = None,
-        num_rooms: int = 8,
-        population_size: int = 50,
-        generations: int = 100,
+        num_rooms: Optional[int] = None,
+        population_size: Optional[int] = None,
+        generations: Optional[int] = None,
+        mutation_rate: Optional[float] = None,
+        crossover_rate: Optional[float] = None,
+        genome_length: Optional[int] = None,
+        rule_space: Optional[str] = None,
+        transition_mix: Optional[float] = None,
+        search_strategy: Optional[str] = None,
+        qd_archive_cells: Optional[int] = None,
+        qd_init_random_fraction: Optional[float] = None,
+        qd_emitter_mutation_rate: Optional[float] = None,
+        max_lock_key_rules: Optional[int] = None,
+        enable_rule_credit_assignment: Optional[bool] = None,
+        enforce_generation_constraints: Optional[bool] = None,
+        allow_candidate_repairs: Optional[bool] = None,
         seed: Optional[int] = None,
     ) -> PreparedDungeonGeneration:
         """
@@ -2099,16 +2452,88 @@ class NeuralSymbolicDungeonPipeline:
                 )
 
             logger.info("Block I: Generating dungeon topology via evolutionary search")
-            if target_curve is None:
-                target_curve = [0.2, 0.4, 0.6, 0.8, 1.0]
-
-            target_genome_length = max(10, int(num_rooms * 0.7))
+            resolved_target_curve = (
+                [float(v) for v in target_curve]
+                if target_curve is not None
+                else list(self.topology_default_target_curve)
+            )
+            resolved_num_rooms = int(self.topology_num_rooms if num_rooms is None else max(1, int(num_rooms)))
+            resolved_population_size = int(
+                self.topology_population_size if population_size is None else max(1, int(population_size))
+            )
+            resolved_generations = int(
+                self.topology_generations if generations is None else max(1, int(generations))
+            )
+            resolved_mutation_rate = float(
+                self.topology_mutation_rate if mutation_rate is None else np.clip(float(mutation_rate), 0.0, 1.0)
+            )
+            resolved_crossover_rate = float(
+                self.topology_crossover_rate if crossover_rate is None else np.clip(float(crossover_rate), 0.0, 1.0)
+            )
+            resolved_genome_length = self.topology_genome_length if genome_length is None else int(max(0, int(genome_length)))
+            resolved_rule_space = (
+                self.topology_rule_space if rule_space is None else str(rule_space).strip().lower()
+            )
+            resolved_transition_mix = float(
+                self.topology_transition_mix if transition_mix is None else np.clip(float(transition_mix), 0.0, 1.0)
+            )
+            resolved_search_strategy = (
+                self.topology_search_strategy if search_strategy is None else str(search_strategy).strip().lower()
+            )
+            resolved_qd_archive_cells = int(
+                self.topology_qd_archive_cells if qd_archive_cells is None else max(32, int(qd_archive_cells))
+            )
+            resolved_qd_init_random_fraction = float(
+                self.topology_qd_init_random_fraction
+                if qd_init_random_fraction is None
+                else np.clip(float(qd_init_random_fraction), 0.05, 0.95)
+            )
+            resolved_qd_emitter_mutation_rate = float(
+                self.topology_qd_emitter_mutation_rate
+                if qd_emitter_mutation_rate is None
+                else np.clip(float(qd_emitter_mutation_rate), 0.01, 0.95)
+            )
+            resolved_max_lock_key_rules = int(
+                self.topology_max_lock_key_rules
+                if max_lock_key_rules is None
+                else max(0, int(max_lock_key_rules))
+            )
+            resolved_enable_rule_credit_assignment = bool(
+                self.topology_enable_rule_credit_assignment
+                if enable_rule_credit_assignment is None
+                else enable_rule_credit_assignment
+            )
+            resolved_enforce_generation_constraints = bool(
+                self.topology_enforce_generation_constraints
+                if enforce_generation_constraints is None
+                else enforce_generation_constraints
+            )
+            resolved_allow_candidate_repairs = bool(
+                self.topology_allow_candidate_repairs
+                if allow_candidate_repairs is None
+                else allow_candidate_repairs
+            )
+            target_genome_length = int(resolved_genome_length)
+            if target_genome_length <= 0:
+                target_genome_length = max(10, int(resolved_num_rooms * 0.7))
             topology_generator = EvolutionaryTopologyGenerator(
-                target_curve=target_curve,
-                population_size=population_size,
-                generations=generations,
+                target_curve=resolved_target_curve,
+                population_size=resolved_population_size,
+                generations=resolved_generations,
+                mutation_rate=resolved_mutation_rate,
+                crossover_rate=resolved_crossover_rate,
                 genome_length=target_genome_length,
-                max_nodes=num_rooms,
+                max_nodes=resolved_num_rooms,
+                rule_space=resolved_rule_space,
+                transition_mix=resolved_transition_mix,
+                search_strategy=resolved_search_strategy,
+                qd_archive_cells=resolved_qd_archive_cells,
+                qd_init_random_fraction=resolved_qd_init_random_fraction,
+                qd_emitter_mutation_rate=resolved_qd_emitter_mutation_rate,
+                max_lock_key_rules=resolved_max_lock_key_rules,
+                enable_rule_credit_assignment=resolved_enable_rule_credit_assignment,
+                enforce_generation_constraints=resolved_enforce_generation_constraints,
+                allow_candidate_repairs=resolved_allow_candidate_repairs,
                 seed=seed,
             )
 
@@ -2152,13 +2577,13 @@ class NeuralSymbolicDungeonPipeline:
         self,
         prepared: PreparedDungeonGeneration,
         *,
-        guidance_scale: float = 7.5,
-        logic_guidance_scale: float = 1.0,
-        num_diffusion_steps: int = 50,
-        use_fast_sampling: bool = False,
-        latent_sampler: str = "diffusion",
+        guidance_scale: Optional[float] = None,
+        logic_guidance_scale: Optional[float] = None,
+        num_diffusion_steps: Optional[int] = None,
+        use_fast_sampling: Optional[bool] = None,
+        latent_sampler: Optional[str] = None,
         categorical_codebook_size: Optional[int] = None,
-        apply_repair: bool = True,
+        apply_repair: Optional[bool] = None,
         seed: Optional[int] = None,
         batch_independent_rooms: bool = True,
         max_batch_size: int = 8,
@@ -2170,6 +2595,22 @@ class NeuralSymbolicDungeonPipeline:
         stitching the final dungeon grid.
         """
         self._require_room_generation_components("generate_rooms_for_graph")
+        guidance_scale = self.default_guidance_scale if guidance_scale is None else float(guidance_scale)
+        logic_guidance_scale = (
+            self.default_logic_guidance_scale
+            if logic_guidance_scale is None
+            else float(logic_guidance_scale)
+        )
+        num_diffusion_steps = (
+            self.default_num_diffusion_steps if num_diffusion_steps is None else int(num_diffusion_steps)
+        )
+        use_fast_sampling = (
+            self.default_use_fast_sampling if use_fast_sampling is None else bool(use_fast_sampling)
+        )
+        latent_sampler = self.default_latent_sampler if latent_sampler is None else str(latent_sampler)
+        if categorical_codebook_size is None and self.default_categorical_codebook_size is not None:
+            categorical_codebook_size = int(self.default_categorical_codebook_size)
+        apply_repair = self.default_apply_repair if apply_repair is None else bool(apply_repair)
 
         mission_graph_physical = prepared.mission_graph_physical
         graph_data = prepared.graph_data
@@ -2205,6 +2646,11 @@ class NeuralSymbolicDungeonPipeline:
                             neighbor_latents = self._get_neighbor_latents(
                                 room_id, mission_graph_physical, room_latents
                             )
+                            reference_room_maps = (
+                                self._get_neighbor_reference_room_maps(room_id, mission_graph_physical, rooms)
+                                if bool(getattr(self.condition_encoder, "use_reference_room_maps", False))
+                                else None
+                            )
                             start_goal = self._extract_room_start_goal(mission_graph_physical, room_id)
                             boundary_constraints = self._build_room_boundary_constraints(
                                 graph=mission_graph_physical,
@@ -2230,6 +2676,7 @@ class NeuralSymbolicDungeonPipeline:
                                 room_id=room_id,
                                 boundary_constraints=boundary_constraints,
                                 position=room_position,
+                                reference_room_maps=reference_room_maps,
                                 guidance_scale=guidance_scale,
                                 logic_guidance_scale=logic_guidance_scale,
                                 num_diffusion_steps=num_diffusion_steps,
@@ -2303,6 +2750,7 @@ class NeuralSymbolicDungeonPipeline:
                             room_ids=batch_room_ids,
                             mission_graph_physical=mission_graph_physical,
                             graph_data=graph_data,
+                            generated_rooms=rooms,
                             room_latents=room_latents,
                             guidance_scale=guidance_scale,
                             logic_guidance_scale=logic_guidance_scale,
@@ -2330,6 +2778,11 @@ class NeuralSymbolicDungeonPipeline:
                 neighbor_latents = self._get_neighbor_latents(
                     room_id, mission_graph_physical, room_latents
                 )
+                reference_room_maps = (
+                    self._get_neighbor_reference_room_maps(room_id, mission_graph_physical, rooms)
+                    if bool(getattr(self.condition_encoder, "use_reference_room_maps", False))
+                    else None
+                )
                 start_goal = self._extract_room_start_goal(mission_graph_physical, room_id)
                 boundary_constraints = self._build_room_boundary_constraints(
                     graph=mission_graph_physical,
@@ -2356,6 +2809,7 @@ class NeuralSymbolicDungeonPipeline:
                     room_id=room_id,
                     boundary_constraints=boundary_constraints,
                     position=room_position,
+                    reference_room_maps=reference_room_maps,
                     guidance_scale=guidance_scale,
                     logic_guidance_scale=logic_guidance_scale,
                     num_diffusion_steps=num_diffusion_steps,
@@ -2486,22 +2940,35 @@ class NeuralSymbolicDungeonPipeline:
     def generate_dungeon(
         self,
         mission_graph: Optional[nx.Graph] = None,
-        guidance_scale: float = 7.5,
-        logic_guidance_scale: float = 1.0,
-        num_diffusion_steps: int = 50,
-        use_fast_sampling: bool = False,
-        latent_sampler: str = "diffusion",
+        guidance_scale: Optional[float] = None,
+        logic_guidance_scale: Optional[float] = None,
+        num_diffusion_steps: Optional[int] = None,
+        use_fast_sampling: Optional[bool] = None,
+        latent_sampler: Optional[str] = None,
         categorical_codebook_size: Optional[int] = None,
-        use_topological_positional_encoding: bool = True,
-        apply_repair: bool = True,
+        use_topological_positional_encoding: Optional[bool] = None,
+        apply_repair: Optional[bool] = None,
         seed: Optional[int] = None,
-        enable_map_elites: bool = True,
+        enable_map_elites: Optional[bool] = None,
         # Block I: Evolutionary generation parameters
         generate_topology: bool = False,
         target_curve: Optional[List[float]] = None,
-        num_rooms: int = 8,
-        population_size: int = 50,
-        generations: int = 100,
+        num_rooms: Optional[int] = None,
+        population_size: Optional[int] = None,
+        generations: Optional[int] = None,
+        mutation_rate: Optional[float] = None,
+        crossover_rate: Optional[float] = None,
+        genome_length: Optional[int] = None,
+        rule_space: Optional[str] = None,
+        transition_mix: Optional[float] = None,
+        search_strategy: Optional[str] = None,
+        qd_archive_cells: Optional[int] = None,
+        qd_init_random_fraction: Optional[float] = None,
+        qd_emitter_mutation_rate: Optional[float] = None,
+        max_lock_key_rules: Optional[int] = None,
+        enable_rule_credit_assignment: Optional[bool] = None,
+        enforce_generation_constraints: Optional[bool] = None,
+        allow_candidate_repairs: Optional[bool] = None,
         batch_independent_rooms: bool = True,
         max_batch_size: int = 8,
     ) -> DungeonGenerationResult:
@@ -2536,6 +3003,19 @@ class NeuralSymbolicDungeonPipeline:
             num_rooms: Number of rooms for generated topology
             population_size: Evolution population size
             generations: Number of evolutionary generations
+            mutation_rate: Per-gene mutation probability for Block I
+            crossover_rate: Crossover probability for Block I
+            genome_length: Optional fixed genome length (0/None => auto)
+            rule_space: Grammar rule-space (`core` or `full`)
+            transition_mix: Mix between transition-biased and global rule priors
+            search_strategy: Search backend (`ga` or `cvt_emitter` aliases)
+            qd_archive_cells: CVT archive cells when using QD search
+            qd_init_random_fraction: Bootstrap random fraction for QD search
+            qd_emitter_mutation_rate: Emitter mutation rate for QD search
+            max_lock_key_rules: Soft cap on InsertLockKey use per genome
+            enable_rule_credit_assignment: Enable adaptive rule-credit assignment
+            enforce_generation_constraints: Reject invalid intermediate candidates
+            allow_candidate_repairs: Attempt local candidate repairs when constraints fail
             
         Returns:
             DungeonGenerationResult with complete dungeon and metrics
@@ -2543,7 +3023,31 @@ class NeuralSymbolicDungeonPipeline:
         self._require_room_generation_components("generate_dungeon")
         import time
         start_time = time.time()
-        
+        guidance_scale = self.default_guidance_scale if guidance_scale is None else float(guidance_scale)
+        logic_guidance_scale = (
+            self.default_logic_guidance_scale
+            if logic_guidance_scale is None
+            else float(logic_guidance_scale)
+        )
+        num_diffusion_steps = (
+            self.default_num_diffusion_steps if num_diffusion_steps is None else int(num_diffusion_steps)
+        )
+        use_fast_sampling = (
+            self.default_use_fast_sampling if use_fast_sampling is None else bool(use_fast_sampling)
+        )
+        latent_sampler = self.default_latent_sampler if latent_sampler is None else str(latent_sampler)
+        if categorical_codebook_size is None and self.default_categorical_codebook_size is not None:
+            categorical_codebook_size = int(self.default_categorical_codebook_size)
+        use_topological_positional_encoding = (
+            self.default_use_topological_positional_encoding
+            if use_topological_positional_encoding is None
+            else bool(use_topological_positional_encoding)
+        )
+        apply_repair = self.default_apply_repair if apply_repair is None else bool(apply_repair)
+        enable_map_elites = (
+            self.default_enable_map_elites if enable_map_elites is None else bool(enable_map_elites)
+        )
+
         if seed is not None:
             torch.manual_seed(seed)
 
@@ -2568,6 +3072,19 @@ class NeuralSymbolicDungeonPipeline:
             num_rooms=num_rooms,
             population_size=population_size,
             generations=generations,
+            mutation_rate=mutation_rate,
+            crossover_rate=crossover_rate,
+            genome_length=genome_length,
+            rule_space=rule_space,
+            transition_mix=transition_mix,
+            search_strategy=search_strategy,
+            qd_archive_cells=qd_archive_cells,
+            qd_init_random_fraction=qd_init_random_fraction,
+            qd_emitter_mutation_rate=qd_emitter_mutation_rate,
+            max_lock_key_rules=max_lock_key_rules,
+            enable_rule_credit_assignment=enable_rule_credit_assignment,
+            enforce_generation_constraints=enforce_generation_constraints,
+            allow_candidate_repairs=allow_candidate_repairs,
             seed=seed,
         )
 
@@ -2855,6 +3372,75 @@ class NeuralSymbolicDungeonPipeline:
                 neighbor_dict[direction] = generated_latents[nid].to(self.device)
 
         return neighbor_dict
+
+    def _get_neighbor_reference_room_maps(
+        self,
+        room_id: int,
+        graph: nx.Graph,
+        generated_rooms: Dict[Any, Any],
+    ) -> Dict[str, Optional[torch.Tensor]]:
+        """
+        Get directional neighboring room maps for already-generated rooms.
+
+        This mirrors the teacher-forced room-map signal used during training
+        and closes the exemplar-conditioning gap at inference time.
+        """
+        neighbor_dict: Dict[str, Optional[torch.Tensor]] = {
+            'N': None, 'S': None, 'E': None, 'W': None
+        }
+
+        if room_id not in graph:
+            return neighbor_dict
+
+        if graph.is_directed():
+            neighbor_ids = [n for n in graph.predecessors(room_id) if n in generated_rooms]
+        else:
+            neighbor_ids = [n for n in graph.neighbors(room_id) if n in generated_rooms]
+
+        if not neighbor_ids:
+            return neighbor_dict
+
+        def _coerce_room_map(room_value: Any) -> Optional[torch.Tensor]:
+            if isinstance(room_value, RoomGenerationResult):
+                room_map = room_value.room_grid
+            elif hasattr(room_value, "room_grid"):
+                room_map = getattr(room_value, "room_grid")
+            else:
+                room_map = room_value
+            if room_map is None:
+                return None
+            if isinstance(room_map, torch.Tensor):
+                tensor = room_map.detach().to(self.device)
+            else:
+                tensor = torch.as_tensor(room_map, device=self.device)
+            if tensor.dim() == 4 and int(tensor.shape[0]) == 1 and int(tensor.shape[1]) == 1:
+                tensor = tensor.squeeze(0).squeeze(0)
+            elif tensor.dim() == 3 and int(tensor.shape[0]) == 1:
+                tensor = tensor.squeeze(0)
+            if tensor.dim() != 2:
+                raise ValueError(
+                    f"Reference room map must resolve to [H,W], got shape={tuple(tensor.shape)}."
+                )
+            return tensor.contiguous()
+
+        unresolved: List[int] = []
+        for nid in sorted(neighbor_ids, key=_stable_node_sort_key):
+            room_map = _coerce_room_map(generated_rooms[nid])
+            if room_map is None:
+                continue
+            direction = self._infer_direction(graph, source_node=nid, target_node=room_id)
+            if direction is not None and neighbor_dict[direction] is None:
+                neighbor_dict[direction] = room_map
+            else:
+                unresolved.append(nid)
+
+        for direction, nid in zip(['N', 'W', 'E', 'S'], unresolved):
+            if neighbor_dict[direction] is None:
+                room_map = _coerce_room_map(generated_rooms[nid])
+                if room_map is not None:
+                    neighbor_dict[direction] = room_map
+
+        return neighbor_dict
     
     def _extract_room_start_goal(
         self,
@@ -3139,6 +3725,34 @@ class NeuralSymbolicDungeonPipeline:
         )
         return torch.from_numpy(topo_np).unsqueeze(0).to(device=self.device, dtype=torch.float32)
 
+    @staticmethod
+    def _extract_explicit_style_id(graph: nx.Graph, *, room_id: Any) -> Optional[int]:
+        """
+        Extract an explicit style/theme token for one room.
+
+        This prefers explicit numeric IDs, but it also accepts the repo's
+        canonical symbolic sector-theme labels so generated mission graphs can
+        drive the style path without inventing a broader visual taxonomy.
+        """
+        candidate_values: List[Any] = []
+        if room_id in graph.nodes:
+            node_attrs = dict(graph.nodes[room_id])
+            candidate_values.extend(
+                iter_style_metadata_candidates(
+                    node_attrs,
+                    keys=("style_id", "theme_id", "sector_theme_id", "sector_theme", "theme", "theme_name"),
+                )
+            )
+        graph_attrs = getattr(graph, "graph", None)
+        if isinstance(graph_attrs, dict):
+            candidate_values.extend(
+                iter_style_metadata_candidates(
+                    graph_attrs,
+                    keys=("style_id", "theme_id", "sector_theme_id", "sector_theme", "theme", "theme_name"),
+                )
+            )
+        return resolve_style_token_id(*candidate_values)
+
     def _build_room_graph_context(
         self,
         *,
@@ -3149,6 +3763,7 @@ class NeuralSymbolicDungeonPipeline:
     ) -> Dict[str, Any]:
         """Build per-room graph context shared by condition encoding and diffusion."""
         current_node_idx = graph_data.get('node_to_idx', {}).get(room_id, 0)
+        style_id = self._extract_explicit_style_id(mission_graph, room_id=room_id)
         current_node_distance = compute_current_node_distance_features(
             graph_data.get('edge_index'),
             int(graph_data.get('node_features').shape[0]) if isinstance(graph_data.get('node_features'), torch.Tensor) else 0,
@@ -3168,6 +3783,7 @@ class NeuralSymbolicDungeonPipeline:
             'mission_graph': mission_graph,
             'current_node_idx': current_node_idx,
             **({'current_node_distance': current_node_distance} if self.use_current_node_distance_features else {}),
+            **({'style_id': int(style_id)} if style_id is not None else {}),
             'room_topology_map': self._build_room_topology_condition_tensor(
                 mission_graph,
                 room_id,
@@ -3494,12 +4110,21 @@ class NeuralSymbolicDungeonPipeline:
         return fit_room_grid(room_grid)
 
     @torch.no_grad()
-    def _encode_room_grid_to_latent(self, room_grid: np.ndarray, num_classes: int = 44) -> torch.Tensor:
+    def _encode_room_grid_to_latent(
+        self,
+        room_grid: np.ndarray,
+        num_classes: Optional[int] = None,
+    ) -> torch.Tensor:
         """Encode finalized room grid back into latent space for neighbor conditioning."""
         vqvae = self._require_component("vqvae", "_encode_room_grid_to_latent")
+        resolved_num_classes = int(
+            num_classes
+            if num_classes is not None
+            else getattr(vqvae, "num_classes", int(np.max(self._valid_semantic_tile_ids_np)) + 1)
+        )
         grid = np.asarray(room_grid, dtype=np.int64)
-        grid = np.clip(grid, 0, int(num_classes) - 1)
-        one_hot = np.eye(int(num_classes), dtype=np.float32)[grid]
+        grid = np.clip(grid, 0, resolved_num_classes - 1)
+        one_hot = np.eye(resolved_num_classes, dtype=np.float32)[grid]
         x_0 = (
             torch.from_numpy(one_hot)
             .to(self.device)
@@ -3562,6 +4187,135 @@ class NeuralSymbolicDungeonPipeline:
 # =============================================================================
 # CONVENIENCE FUNCTIONS
 # =============================================================================
+def topology_generation_kwargs_from_resolved_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    """Build Block I generation kwargs from the validated global config payload."""
+    stage = config["topology"]
+    return {
+        "target_curve": list(stage["default_target_curve"]),
+        "num_rooms": stage["num_rooms"],
+        "population_size": stage["population_size"],
+        "generations": stage["generations"],
+        "mutation_rate": stage["mutation_rate"],
+        "crossover_rate": stage["crossover_rate"],
+        "genome_length": stage["genome_length"],
+        "rule_space": stage["rule_space"],
+        "transition_mix": stage["transition_mix"],
+        "search_strategy": stage["search_strategy"],
+        "qd_archive_cells": stage["qd_archive_cells"],
+        "qd_init_random_fraction": stage["qd_init_random_fraction"],
+        "qd_emitter_mutation_rate": stage["qd_emitter_mutation_rate"],
+        "max_lock_key_rules": stage["max_lock_key_rules"],
+        "enable_rule_credit_assignment": stage["enable_rule_credit_assignment"],
+        "enforce_generation_constraints": stage["enforce_generation_constraints"],
+        "allow_candidate_repairs": stage["allow_candidate_repairs"],
+    }
+
+
+def generation_runtime_kwargs_from_resolved_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    """Build runtime room/dungeon generation defaults from the validated config payload."""
+    stage = config["generation"]
+    return {
+        "default_guidance_scale": stage["guidance_scale"],
+        "default_logic_guidance_scale": stage["logic_guidance_scale"],
+        "default_num_diffusion_steps": stage["num_diffusion_steps"],
+        "default_use_fast_sampling": stage["use_fast_sampling"],
+        "default_latent_sampler": stage["latent_sampler"],
+        "default_categorical_codebook_size": stage["categorical_codebook_size"],
+        "default_use_topological_positional_encoding": stage["use_topological_positional_encoding"],
+        "default_apply_repair": stage["apply_repair"],
+        "default_enable_map_elites": stage["enable_map_elites"],
+        "default_start_goal_coords": (
+            tuple(int(v) for v in stage["default_start_coord"]),
+            tuple(int(v) for v in stage["default_goal_coord"]),
+        ),
+    }
+
+
+def pipeline_kwargs_from_resolved_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    """Build canonical pipeline constructor kwargs from the validated global config payload."""
+    diffusion = config["diffusion"]
+    fast_sampler = config["fast_sampler"]
+    masked_room = config["masked_room"]
+    kwargs = topology_generation_kwargs_from_resolved_config(config)
+    kwargs.update(generation_runtime_kwargs_from_resolved_config(config))
+    kwargs.update(
+        {
+            "condition_gnn_type": diffusion["condition_gnn_type"],
+            "condition_use_reference_room_maps": diffusion["condition_use_reference_room_maps"],
+            "condition_reference_tile_vocab_size": diffusion["condition_reference_tile_vocab_size"],
+            "condition_reference_embedding_dim": diffusion["condition_reference_embedding_dim"],
+            "condition_reference_hidden_dim": diffusion["condition_reference_hidden_dim"],
+            "topology_refinement_mode": diffusion["topology_refinement_mode"],
+            "diffusion_attention_mode": diffusion["attention_mode"],
+            "diffusion_hedgehog_feature_dim": diffusion["hedgehog_feature_dim"],
+            "diffusion_cfg_schedule_mode": diffusion["cfg_schedule_mode"],
+            "diffusion_cfg_schedule_min_scale": diffusion["cfg_schedule_min_scale"],
+            "diffusion_cfg_schedule_power": diffusion["cfg_schedule_power"],
+            "use_current_node_distance_features": diffusion["use_current_node_distance_features"],
+            "current_node_distance_max": diffusion["current_node_distance_max"],
+            "masked_sampling_steps": masked_room["masked_steps"],
+            "fast_sampling_steps": fast_sampler["num_inference_steps"],
+            "condition_encoder_fallback_config": {
+                "latent_dim": diffusion["latent_dim"],
+                "condition_hidden_dim": diffusion["condition_hidden_dim"],
+                "context_dim": diffusion["context_dim"],
+                "condition_gnn_type": diffusion["condition_gnn_type"],
+                "condition_num_gnn_layers": diffusion["condition_num_gnn_layers"],
+                "condition_num_attention_heads": diffusion["condition_num_attention_heads"],
+                "condition_dropout": diffusion["condition_dropout"],
+                "use_current_node_distance_features": diffusion["use_current_node_distance_features"],
+                "condition_use_reference_room_maps": diffusion["condition_use_reference_room_maps"],
+                "condition_reference_tile_vocab_size": diffusion["condition_reference_tile_vocab_size"],
+                "condition_reference_embedding_dim": diffusion["condition_reference_embedding_dim"],
+                "condition_reference_hidden_dim": diffusion["condition_reference_hidden_dim"],
+            },
+            "diffusion_fallback_config": {
+                "latent_dim": diffusion["latent_dim"],
+                "context_dim": diffusion["context_dim"],
+                "num_timesteps": diffusion["num_timesteps"],
+                "prediction_type": diffusion["prediction_type"],
+                "cfg_dropout_prob": diffusion["cfg_dropout_prob"],
+                "cfg_scale": diffusion["cfg_scale"],
+                "min_snr_gamma": diffusion["min_snr_gamma"],
+                "model_channels": diffusion["model_channels"],
+                "topology_conditioning_mode": diffusion["topology_conditioning_mode"],
+                "unet_channel_mult": list(diffusion["unet_channel_mult"]),
+                "unet_num_res_blocks": diffusion["unet_num_res_blocks"],
+                "unet_attention_resolutions": list(diffusion["unet_attention_resolutions"]),
+                "unet_num_heads": diffusion["unet_num_heads"],
+                "unet_dropout": diffusion["unet_dropout"],
+                "graph_auto_linear_attention_nodes": diffusion["graph_auto_linear_attention_nodes"],
+                "spatial_graph_gate_init": diffusion["spatial_graph_gate_init"],
+                "spatial_topology_gate_init": diffusion["spatial_topology_gate_init"],
+                "room_topology_channels": diffusion["room_topology_channels"],
+            },
+            "logic_net_fallback_config": {
+                "latent_dim": diffusion["latent_dim"],
+                "num_classes": config["dataset"]["num_classes"],
+                "num_logic_iterations": diffusion["num_logic_iterations"],
+                "logic_topology_trace_weight": diffusion["logic_topology_trace_weight"],
+                "logic_topology_anchor_weight": diffusion["logic_topology_anchor_weight"],
+            },
+            "masked_room_fallback_config": {
+                "num_classes": config["dataset"]["num_classes"],
+                "hidden_dim": masked_room["hidden_dim"],
+                "model_channels": masked_room["model_channels"],
+                "context_dim": masked_room["context_dim"],
+                "topology_conditioning_mode": masked_room["topology_conditioning_mode"],
+                "graph_auto_linear_attention_nodes": masked_room["graph_auto_linear_attention_nodes"],
+                "spatial_graph_gate_init": masked_room["spatial_graph_gate_init"],
+                "spatial_topology_gate_init": masked_room["spatial_topology_gate_init"],
+                "unet_channel_mult": list(masked_room["unet_channel_mult"]),
+                "unet_num_res_blocks": masked_room["unet_num_res_blocks"],
+                "unet_attention_resolutions": list(masked_room["unet_attention_resolutions"]),
+                "unet_num_heads": masked_room["unet_num_heads"],
+                "unet_dropout": masked_room["unet_dropout"],
+                "room_topology_channels": masked_room["room_topology_channels"],
+            },
+        }
+    )
+    return kwargs
+
 
 def create_pipeline(
     checkpoint_dir: str = "./checkpoints",
@@ -3580,14 +4334,26 @@ def create_pipeline(
         Initialized pipeline
     """
     checkpoint_dir = Path(checkpoint_dir)
-    
+    resolved_config = kwargs.pop("resolved_config", None)
+    if resolved_config is None:
+        try:
+            from src.config_system import load_resolved_config_for_artifact
+
+            resolved_config = load_resolved_config_for_artifact(checkpoint_dir)
+        except (ImportError, RuntimeError, ValueError, TypeError):
+            resolved_config = None
+    pipeline_kwargs: Dict[str, Any] = {}
+    if isinstance(resolved_config, dict):
+        pipeline_kwargs.update(pipeline_kwargs_from_resolved_config(resolved_config))
+    pipeline_kwargs.update(kwargs)
+
     return NeuralSymbolicDungeonPipeline(
         vqvae_checkpoint=str(checkpoint_dir / "vqvae_best.pth"),
         diffusion_checkpoint=str(checkpoint_dir / "diffusion_best.pth"),
         logic_net_checkpoint=str(checkpoint_dir / "logic_net_best.pth"),
         condition_encoder_checkpoint=str(checkpoint_dir / "condition_encoder_best.pth"),
         device=device,
-        **kwargs
+        **pipeline_kwargs
     )
 
 
@@ -3602,5 +4368,8 @@ __all__ = [
     'DungeonGenerationResult',
     'PreparedDungeonGeneration',
     'GeneratedRoomSet',
+    'topology_generation_kwargs_from_resolved_config',
+    'generation_runtime_kwargs_from_resolved_config',
+    'pipeline_kwargs_from_resolved_config',
     'create_pipeline',
 ]

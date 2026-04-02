@@ -80,6 +80,28 @@ _SAFE_RULE_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 DEFAULT_REPLAY_PAYLOAD_MAX_BYTES = 256 * 1024
 
 
+def _stable_graph_node_identity(node: Any) -> Tuple[str, str]:
+    """Deterministic heterogeneous node-ID identity used in topology round-trips."""
+    if isinstance(node, np.generic):
+        node = node.item()
+    if isinstance(node, float) and float(node).is_integer():
+        node = int(node)
+    return (type(node).__name__, str(node))
+
+
+def _stable_bidirectional_pair_key(
+    src: Any,
+    tgt: Any,
+    edge_type_name: str,
+) -> Tuple[Tuple[str, str], Tuple[str, str], str]:
+    """Canonical key for mirrored bidirectional edges without salted hashing."""
+    ordered = sorted(
+        (_stable_graph_node_identity(src), _stable_graph_node_identity(tgt)),
+        key=lambda item: (item[0], item[1]),
+    )
+    return (ordered[0], ordered[1], str(edge_type_name))
+
+
 DEFAULT_REALISM_TUNING: Dict[str, float] = {
     "node_cap_floor_ratio": 0.92,
     "node_cap_expand_ratio": 1.08,
@@ -1354,7 +1376,7 @@ def networkx_to_mission_graph(
     # When MissionGraph was exported as directed with mirrored implied reverse
     # edges for bidirectional semantics, skip those synthetic reverse arcs so
     # round-trip conversion preserves original edge count.
-    seen_bidirectional_pairs: Set[Tuple[int, int, str]] = set()
+    seen_bidirectional_pairs: Set[Tuple[Tuple[str, str], Tuple[str, str], str]] = set()
     for src, tgt, data in G.edges(data=True):
         payload = data if isinstance(data, dict) else {}
         metadata = payload.get("metadata", {}) if isinstance(payload.get("metadata", {}), dict) else {}
@@ -1370,18 +1392,11 @@ def networkx_to_mission_graph(
             EdgeType.HIDDEN,
         }
         if inferred_edge_type in bidirectional_types:
-            try:
-                key = (
-                    int(min(src, tgt)),
-                    int(max(src, tgt)),
-                    str(inferred_edge_type.name),
-                )
-            except (TypeError, ValueError, OverflowError):
-                key = (
-                    hash(min(str(src), str(tgt))),
-                    hash(max(str(src), str(tgt))),
-                    str(inferred_edge_type.name),
-                )
+            key = _stable_bidirectional_pair_key(
+                src,
+                tgt,
+                inferred_edge_type.name,
+            )
             if key in seen_bidirectional_pairs:
                 continue
             seen_bidirectional_pairs.add(key)
@@ -2831,6 +2846,7 @@ class EvolutionaryTopologyGenerator:
         qd_archive_cells: int = 128,
         qd_init_random_fraction: float = 0.35,
         qd_emitter_mutation_rate: float = 0.18,
+        max_lock_key_rules: int = 3,
         realism_tuning: Optional[Dict[str, float]] = None,
         enable_rule_credit_assignment: bool = False,
         enforce_generation_constraints: bool = False,
@@ -2863,6 +2879,8 @@ class EvolutionaryTopologyGenerator:
             qd_init_random_fraction: Bootstrap fraction sampled uniformly
                 before archive emitters dominate.
             qd_emitter_mutation_rate: Mutation rate for emitter offspring.
+            max_lock_key_rules: Soft cap on InsertLockKey rule applications
+                permitted during genome execution.
             enforce_generation_constraints: If True, reject rule outcomes that
                 violate lock/progression constraints during genome execution.
                 Default is False to preserve QD diversity and avoid hard-kill
@@ -2894,6 +2912,7 @@ class EvolutionaryTopologyGenerator:
         self.qd_archive_cells = int(max(32, qd_archive_cells))
         self.qd_init_random_fraction = float(np.clip(float(qd_init_random_fraction), 0.05, 0.95))
         self.qd_emitter_mutation_rate = float(np.clip(float(qd_emitter_mutation_rate), 0.01, 0.95))
+        self.max_lock_key_rules = int(max(0, max_lock_key_rules))
         self.realism_tuning = self._merge_realism_tuning(realism_tuning)
         self.enable_rule_credit_assignment = bool(enable_rule_credit_assignment)
         self.enforce_generation_constraints = bool(enforce_generation_constraints)
@@ -2913,6 +2932,7 @@ class EvolutionaryTopologyGenerator:
         self.executor = GraphGrammarExecutor(
             seed=seed,
             use_full_rule_space=(self.rule_space == "full"),
+            max_lock_key_rules=self.max_lock_key_rules,
             rule_weight_overrides=self.rule_weight_overrides,
             enforce_generation_constraints=self.enforce_generation_constraints,
             allow_candidate_repairs=self.allow_candidate_repairs,

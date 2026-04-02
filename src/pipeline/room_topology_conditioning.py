@@ -7,32 +7,16 @@ from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
 import numpy as np
 
-from src.core.definitions import DOOR_POSITIONS, ROOM_HEIGHT, ROOM_WIDTH, SEMANTIC_PALETTE
+from src.core.definitions import (
+    DOOR_POSITIONS,
+    ROOM_HEIGHT,
+    ROOM_TOPOLOGY_CHANNELS,
+    ROOM_TOPOLOGY_CHANNEL_COUNT,
+    ROOM_TOPOLOGY_GATE_FAMILY_TOKENS,
+    ROOM_WIDTH,
+    SEMANTIC_PALETTE,
+)
 from src.simulation.validator import GameState, ZeldaLogicEnv
-
-
-ROOM_TOPOLOGY_CHANNELS: Dict[str, int] = {
-    "traversability": 0,
-    "start": 1,
-    "goal": 2,
-    "door_n": 3,
-    "door_s": 4,
-    "door_e": 5,
-    "door_w": 6,
-    "gated_n": 7,
-    "gated_s": 8,
-    "gated_e": 9,
-    "gated_w": 10,
-    "role_start": 11,
-    "role_enemy": 12,
-    "role_key": 13,
-    "role_item": 14,
-    "role_goal": 15,
-    "role_boss": 16,
-    "role_puzzle": 17,
-}
-
-ROOM_TOPOLOGY_CHANNEL_COUNT = len(ROOM_TOPOLOGY_CHANNELS)
 
 _DIRECTION_TO_DOOR_CHANNEL = {
     "N": ROOM_TOPOLOGY_CHANNELS["door_n"],
@@ -56,23 +40,7 @@ _ROLE_TO_CHANNEL = {
     "has_puzzle": ROOM_TOPOLOGY_CHANNELS["role_puzzle"],
 }
 
-_GATED_EDGE_TYPES = {
-    "key_locked",
-    "locked",
-    "boss_locked",
-    "item_locked",
-    "soft_locked",
-    "one_way",
-    "shutter",
-    "switch",
-    "switch_locked",
-    "state_block",
-    "bombable",
-    "multi_lock",
-    "hazard",
-    "hidden",
-    "secret",
-}
+_GATED_EDGE_TYPES = set().union(*ROOM_TOPOLOGY_GATE_FAMILY_TOKENS.values())
 
 _DEFAULT_WALKABLE_IDS = {
     int(SEMANTIC_PALETTE["FLOOR"]),
@@ -142,6 +110,23 @@ def _paint_door_strip(channel: np.ndarray, direction: str, value: float = 1.0) -
         channel[int(spec["row"]), int(spec["col_start"]): int(spec["col_end"]) + 1] = value
     else:
         channel[int(spec["row_start"]): int(spec["row_end"]) + 1, int(spec["col"])] = value
+
+
+def _paint_typed_gated_channels(
+    topo: np.ndarray,
+    *,
+    direction: str,
+    tokens: Set[str],
+) -> None:
+    direction_suffix = str(direction).strip().lower()
+    for family_name, family_tokens in ROOM_TOPOLOGY_GATE_FAMILY_TOKENS.items():
+        if not (tokens & family_tokens):
+            continue
+        channel_name = f"{family_name}_{direction_suffix}"
+        channel_idx = ROOM_TOPOLOGY_CHANNELS.get(channel_name)
+        if channel_idx is None:
+            continue
+        _paint_door_strip(topo[int(channel_idx)], direction)
 
 
 def _is_walkable(
@@ -764,5 +749,10 @@ def build_room_topology_condition_map(
         tokens = edge_constraint_tokens.get(direction, set())
         if tokens & _GATED_EDGE_TYPES:
             _paint_door_strip(topo[_DIRECTION_TO_GATED_CHANNEL[direction]], direction)
+            _paint_typed_gated_channels(
+                topo,
+                direction=direction,
+                tokens=tokens,
+            )
 
     return topo

@@ -24,7 +24,13 @@ import pytest
 import torch
 import numpy as np
 
-from src.core.definitions import ROOM_HEIGHT, ROOM_WIDTH
+from src.core.definitions import (
+    GRAPH_EDGE_FEATURE_DIM,
+    GRAPH_NODE_FEATURE_DIM,
+    ROOM_HEIGHT,
+    ROOM_TOPOLOGY_CHANNEL_COUNT,
+    ROOM_WIDTH,
+)
 
 
 def test_block_ii_vqvae():
@@ -57,12 +63,14 @@ def test_block_iii_condition_encoder():
     from src.core.condition_encoder import create_condition_encoder
 
     encoder = create_condition_encoder(latent_dim=32, output_dim=128)
-    assert encoder.global_encoder.edge_feature_dim == 8
+    assert encoder.global_encoder.node_feature_dim == GRAPH_NODE_FEATURE_DIM
+    assert encoder.global_encoder.edge_feature_dim == GRAPH_EDGE_FEATURE_DIM
+    assert encoder.global_encoder.gnn_type == "gcn"
 
     # Test encode_global_only (most common path)
     node_features = torch.randn(5, 5)
     edge_index = torch.tensor([[0,1,2,3,1], [1,2,3,4,3]], dtype=torch.long)
-    edge_features = torch.randn(5, 8)  # Phase 3A: edge features
+    edge_features = torch.randn(5, GRAPH_EDGE_FEATURE_DIM)  # Phase 3A: edge features
 
     c_global = encoder.encode_global_only(
         node_features, edge_index,
@@ -380,7 +388,7 @@ def test_block_iv_gradient_guidance_accepts_room_topology_without_graph_adjacenc
 
     x_t = torch.randn(1, 4, 3, 3)
     graph_data = {
-        "room_topology_map": torch.rand(18, ROOM_HEIGHT, ROOM_WIDTH, dtype=torch.float32, requires_grad=True),
+        "room_topology_map": torch.rand(ROOM_TOPOLOGY_CHANNEL_COUNT, ROOM_HEIGHT, ROOM_WIDTH, dtype=torch.float32, requires_grad=True),
         "boundary_constraints": torch.tensor([0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0], dtype=torch.float32, requires_grad=True),
     }
 
@@ -391,7 +399,7 @@ def test_block_iv_gradient_guidance_accepts_room_topology_without_graph_adjacenc
     assert float(grad.abs().sum().item()) > 0.0
     captured = logic_net.captured_graph_data
     assert captured is not None
-    assert captured["room_topology_map"].shape == (1, 18, ROOM_HEIGHT, ROOM_WIDTH)
+    assert captured["room_topology_map"].shape == (1, ROOM_TOPOLOGY_CHANNEL_COUNT, ROOM_HEIGHT, ROOM_WIDTH)
     assert captured["room_topology_map"].requires_grad is False
     assert captured["boundary_constraints"].shape == (1, 8)
     assert captured["boundary_constraints"].requires_grad is False
@@ -569,7 +577,7 @@ def test_block_iv_spatial_graph_conditioning_accepts_room_topology_maps(topology
             dtype=torch.float32,
         ),
         'node_mask': torch.ones(5, dtype=torch.float32),
-        'room_topology_map': torch.randn(2, 18, ROOM_HEIGHT, ROOM_WIDTH),
+        'room_topology_map': torch.randn(2, ROOM_TOPOLOGY_CHANNEL_COUNT, ROOM_HEIGHT, ROOM_WIDTH),
     }
 
     with torch.no_grad():

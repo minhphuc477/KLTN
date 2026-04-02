@@ -28,6 +28,7 @@ import argparse
 import json
 import logging
 import time
+from collections import defaultdict
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -49,7 +50,7 @@ from src.generation.evolutionary_director import (
     EvolutionaryTopologyGenerator,
     networkx_to_mission_graph,
 )
-from src.generation.grammar import MissionGrammar
+from src.generation.grammar import EdgeType, MissionGrammar, NodeType
 from src.generation.realism_profiles import (
     get_realism_tuning_profile,
     list_realism_tuning_profiles,
@@ -81,6 +82,7 @@ STAIR_EDGE_TYPES = {"stair", "stairs", "warp"}
 # Shortcut excludes generic stair connectors so topology shortcut pressure
 # is not conflated with vertical traversal semantics.
 SHORTCUT_EDGE_TYPES = {"shortcut", "warp", "teleport", "portal"}
+SECRET_EDGE_TYPES = {"hidden", "secret"}
 
 
 DEFAULT_WFC_PROBE_MASK_RATIOS: Tuple[float, ...] = (0.15, 0.35, 0.55)
@@ -116,11 +118,24 @@ class GraphDescriptor:
     linearity: float
     leniency: float
     branching_factor: float
+    branch_count: int
+    branch_utility_rate: float
     cycle_density: float
     shortcut_density: float
+    path_redundancy: float
+    articulation_count: int
+    articulation_ratio: float
     gating_density: float
     gate_depth_ratio: float
     path_depth_ratio: float
+    key_gate_count: int
+    key_before_lock_rate: float
+    switch_gate_count: int
+    switch_before_gate_rate: float
+    battery_gate_count: int
+    battery_satisfaction_rate: float
+    secret_component_count: int
+    secret_content_discoverability_rate: float
     progression_complexity: float
     topology_complexity: float
     constraint_valid: bool
@@ -401,6 +416,303 @@ def _step_constraints(G: nx.Graph, u: Any, v: Any) -> List[str]:
     return []
 
 
+def _pair_constraints(G: nx.Graph, u: Any, v: Any) -> List[str]:
+    """Collect edge-constraint tokens for a node pair, trying both directions."""
+    tokens = list(_step_constraints(G, u, v))
+    if isinstance(G, nx.DiGraph):
+        tokens.extend(_step_constraints(G, v, u))
+    if not tokens:
+        return []
+    out: List[str] = []
+    seen = set()
+    for token in tokens:
+        key = str(token).strip().lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(key)
+    return out
+
+
+def _mission_node_has_branch_utility(node: Any) -> bool:
+    """Heuristic for whether an optional branch contains meaningful content."""
+    if node is None:
+        return False
+    node_type_name = str(getattr(getattr(node, "node_type", None), "name", "") or "").upper()
+    if node_type_name in {
+        "KEY",
+        "BIG_KEY",
+        "ITEM",
+        "SWITCH",
+        "TOKEN",
+        "TREASURE",
+        "PROTECTION_ITEM",
+        "SECRET",
+        "MINI_BOSS",
+        "RESOURCE_FARM",
+        "GOAL",
+    }:
+        return True
+    if bool(getattr(node, "is_secret", False)):
+        return True
+    return bool(getattr(node, "item_type", None) or getattr(node, "drops_resource", None))
+
+
+def _mission_node_is_secret(node: Any) -> bool:
+    if node is None:
+        return False
+    node_type_name = str(getattr(getattr(node, "node_type", None), "name", "") or "").upper()
+    return bool(getattr(node, "is_secret", False) or node_type_name == "SECRET")
+
+
+def _progression_semantics_summary(mission_graph: Optional[Any]) -> Dict[str, float]:
+    """Compute per-graph pre-gate satisfaction rates for key and switch dependencies."""
+    unavailable = {
+        "key_gate_count": 0,
+        "key_before_lock_rate": 0.0,
+        "switch_gate_count": 0,
+        "switch_before_gate_rate": 0.0,
+        "battery_gate_count": 0,
+        "battery_satisfaction_rate": 0.0,
+    }
+    if mission_graph is None:
+        return dict(unavailable)
+
+    try:
+        mission_graph.sanitize()
+        start = mission_graph.get_start_node()
+        if not start:
+            return dict(unavailable)
+
+        key_providers: Dict[int, List[int]] = defaultdict(list)
+        fungible_key_nodes: List[int] = []
+        switch_providers: Dict[int, List[int]] = defaultdict(list)
+
+        for node in mission_graph.nodes.values():
+            if node.node_type in {NodeType.KEY, NodeType.BIG_KEY}:
+                fungible_key_nodes.append(int(node.id))
+                if node.key_id is not None:
+                    key_providers[int(node.key_id)].append(int(node.id))
+            if node.node_type == NodeType.SWITCH:
+                switch_providers[int(node.id)].append(int(node.id))
+                if node.switch_id is not None:
+                    switch_providers[int(node.switch_id)].append(int(node.id))
+
+        key_checks: List[float] = []
+        switch_checks: List[float] = []
+        battery_checks: List[float] = []
+        seen_key_gates: set[Tuple[Tuple[int, int], str, int, int]] = set()
+        seen_switch_gates: set[Tuple[Tuple[int, int], str, Tuple[int, ...], int]] = set()
+
+        for node in mission_graph.nodes.values():
+            if node.node_type not in {NodeType.LOCK, NodeType.BOSS_DOOR} or node.key_id is None:
+                continue
+            reachable = mission_graph.get_reachable_nodes(int(start.id), excluded_nodes={int(node.id)})
+            providers = key_providers.get(int(node.key_id), [])
+            key_checks.append(float(bool(providers) and any(int(pid) in reachable for pid in providers)))
+
+        for edge in mission_graph.edges:
+            excluded_edge = {(int(edge.source), int(edge.target))}
+            reachable = mission_graph.get_reachable_nodes(int(start.id), excluded_edges=excluded_edge)
+
+            if edge.edge_type in {EdgeType.LOCKED, EdgeType.BOSS_LOCKED}:
+                gate_key = (
+                    tuple(sorted((int(edge.source), int(edge.target)))),
+                    str(edge.edge_type.name),
+                    int(edge.key_required) if edge.key_required is not None else -1,
+                    int(getattr(edge, "requires_key_count", 0) or 0),
+                )
+                if gate_key not in seen_key_gates:
+                    seen_key_gates.add(gate_key)
+                    satisfied = False
+                    if edge.key_required is not None:
+                        providers = key_providers.get(int(edge.key_required), [])
+                        satisfied = bool(providers) and any(int(pid) in reachable for pid in providers)
+                    elif int(getattr(edge, "requires_key_count", 0) or 0) > 0:
+                        satisfied = (
+                            sum(1 for key_node in fungible_key_nodes if int(key_node) in reachable)
+                            >= int(edge.requires_key_count)
+                        )
+                    key_checks.append(float(bool(satisfied)))
+            elif int(getattr(edge, "requires_key_count", 0) or 0) > 0:
+                gate_key = (
+                    tuple(sorted((int(edge.source), int(edge.target)))),
+                    "REQUIRES_KEY_COUNT",
+                    -1,
+                    int(getattr(edge, "requires_key_count", 0) or 0),
+                )
+                if gate_key not in seen_key_gates:
+                    seen_key_gates.add(gate_key)
+                    satisfied = (
+                        sum(1 for key_node in fungible_key_nodes if int(key_node) in reachable)
+                        >= int(edge.requires_key_count)
+                    )
+                    key_checks.append(float(bool(satisfied)))
+
+            required_switches = [int(v) for v in getattr(edge, "switches_required", []) if v is not None]
+            if not required_switches and getattr(edge, "switch_id", None) is not None:
+                required_switches = [int(edge.switch_id)]
+
+            if edge.edge_type in {EdgeType.STATE_BLOCK, EdgeType.ON_OFF_GATE} and required_switches:
+                gate_key = (
+                    tuple(sorted((int(edge.source), int(edge.target)))),
+                    str(edge.edge_type.name),
+                    tuple(sorted(required_switches)),
+                    int(edge.battery_id) if edge.battery_id is not None else -1,
+                )
+                if gate_key not in seen_switch_gates:
+                    seen_switch_gates.add(gate_key)
+                    satisfied = True
+                    for switch_id in required_switches:
+                        providers = switch_providers.get(int(switch_id), [int(switch_id)])
+                        if not any(int(provider_id) in reachable for provider_id in providers):
+                            satisfied = False
+                            break
+                    switch_checks.append(float(bool(satisfied)))
+                    if edge.battery_id is not None or len(required_switches) > 1:
+                        battery_checks.append(float(bool(satisfied)))
+
+        return {
+            "key_gate_count": int(len(key_checks)),
+            "key_before_lock_rate": float(np.mean(key_checks)) if key_checks else 1.0,
+            "switch_gate_count": int(len(switch_checks)),
+            "switch_before_gate_rate": float(np.mean(switch_checks)) if switch_checks else 1.0,
+            "battery_gate_count": int(len(battery_checks)),
+            "battery_satisfaction_rate": float(np.mean(battery_checks)) if battery_checks else 1.0,
+        }
+    except Exception:
+        return dict(unavailable)
+
+
+def _structural_topology_summary(
+    graph: nx.Graph,
+    mission_graph: Optional[Any],
+    path_nodes: Sequence[Any],
+) -> Dict[str, float]:
+    """Extract branch, redundancy, articulation, and secret-structure metrics."""
+    U = graph.to_undirected()
+    n_nodes = int(U.number_of_nodes())
+    if n_nodes <= 0:
+        return {
+            "branch_count": 0,
+            "branch_utility_rate": 0.0,
+            "path_redundancy": 0.0,
+            "articulation_count": 0,
+            "articulation_ratio": 0.0,
+            "secret_component_count": 0,
+            "secret_content_discoverability_rate": 0.0,
+        }
+
+    try:
+        articulation_points = list(nx.articulation_points(U)) if n_nodes >= 3 else []
+    except Exception:
+        articulation_points = []
+    articulation_count = int(len(articulation_points))
+    articulation_ratio = _clip01(articulation_count / max(1, n_nodes))
+
+    path_redundancy = 0.0
+    if path_nodes and len(path_nodes) >= 2:
+        try:
+            bridge_keys = {frozenset((u, v)) for u, v in nx.bridges(U)}
+            redundant_steps = sum(
+                1
+                for u, v in zip(path_nodes[:-1], path_nodes[1:])
+                if frozenset((u, v)) not in bridge_keys
+            )
+            path_redundancy = _clip01(redundant_steps / max(1, len(path_nodes) - 1))
+        except Exception:
+            path_redundancy = 0.0
+
+    path_set = set(path_nodes)
+    if not path_set:
+        return {
+            "branch_count": 0,
+            "branch_utility_rate": 0.0,
+            "path_redundancy": path_redundancy,
+            "articulation_count": articulation_count,
+            "articulation_ratio": articulation_ratio,
+            "secret_component_count": 0,
+            "secret_content_discoverability_rate": 0.0,
+        }
+
+    branch_checks: List[float] = []
+    secret_checks: List[float] = []
+    secret_component_count = 0
+
+    off_path_nodes = [node for node in U.nodes() if node not in path_set]
+    branch_components: List[Tuple[set[Any], set[Any]]] = []
+    if off_path_nodes:
+        off_path_subgraph = U.subgraph(off_path_nodes)
+        for component in nx.connected_components(off_path_subgraph):
+            component_nodes = set(component)
+            anchors = {
+                neighbor
+                for node in component_nodes
+                for neighbor in U.neighbors(node)
+                if neighbor in path_set
+            }
+            if anchors:
+                branch_components.append((component_nodes, anchors))
+
+    def _component_constraints(component_nodes: set[Any], anchors: set[Any]) -> set[str]:
+        constraints: set[str] = set()
+        eligible_nodes = component_nodes | anchors
+        for node in component_nodes:
+            for neighbor in U.neighbors(node):
+                if neighbor not in eligible_nodes:
+                    continue
+                constraints.update(_pair_constraints(graph, node, neighbor))
+        return constraints
+
+    for component_nodes, anchors in branch_components:
+        constraints = _component_constraints(component_nodes, anchors)
+        mission_nodes = []
+        if mission_graph is not None:
+            mission_nodes = [
+                mission_graph.nodes.get(node_id)
+                for node_id in component_nodes
+                if node_id in mission_graph.nodes
+            ]
+        has_utility_node = any(_mission_node_has_branch_utility(node) for node in mission_nodes)
+        has_progression_edge = bool(
+            constraints.intersection(
+                LOCK_EDGE_TYPES
+                | ITEM_GATE_EDGE_TYPES
+                | SWITCH_EDGE_TYPES
+                | SHORTCUT_EDGE_TYPES
+                | BOMBABLE_EDGE_TYPES
+                | SECRET_EDGE_TYPES
+                | {"multi_lock"}
+            )
+        )
+        useful_branch = bool(has_utility_node or has_progression_edge or len(anchors) >= 2)
+        branch_checks.append(float(useful_branch))
+
+        has_secret_node = any(_mission_node_is_secret(node) for node in mission_nodes)
+        has_secret_access = bool(constraints.intersection(SECRET_EDGE_TYPES | BOMBABLE_EDGE_TYPES))
+        if has_secret_node or has_secret_access:
+            secret_component_count += 1
+            secret_checks.append(float(bool(useful_branch and (has_secret_node or has_secret_access))))
+
+    if mission_graph is not None:
+        for node_id in path_set:
+            node = mission_graph.nodes.get(node_id)
+            if _mission_node_is_secret(node):
+                secret_component_count += 1
+                secret_checks.append(1.0)
+
+    branch_count = int(len(branch_components))
+    return {
+        "branch_count": branch_count,
+        "branch_utility_rate": float(np.mean(branch_checks)) if branch_checks else 1.0,
+        "path_redundancy": path_redundancy,
+        "articulation_count": articulation_count,
+        "articulation_ratio": articulation_ratio,
+        "secret_component_count": int(secret_component_count),
+        "secret_content_discoverability_rate": float(np.mean(secret_checks)) if secret_checks else 1.0,
+    }
+
+
 def _mission_constraints_valid(G: nx.Graph, grammar: MissionGrammar) -> bool:
     """
     Validate lock/key + progression constraints for generated graph representations.
@@ -546,6 +858,16 @@ def extract_graph_descriptor(
         + 0.15 * gate_variety
     )
 
+    mission_graph = None
+    try:
+        mission_graph = networkx_to_mission_graph(graph)
+        mission_graph.sanitize()
+    except Exception:
+        mission_graph = None
+
+    progression_semantics = _progression_semantics_summary(mission_graph)
+    structural_semantics = _structural_topology_summary(graph, mission_graph, path_nodes)
+
     progression_complexity = _clip01(
         0.28 * lock_pressure
         + 0.18 * backtracking_proxy
@@ -566,8 +888,14 @@ def extract_graph_descriptor(
     )
 
     constraint_valid = False
-    if grammar is not None:
-        constraint_valid = _mission_constraints_valid(graph, grammar)
+    if grammar is not None and mission_graph is not None:
+        try:
+            constraint_valid = bool(
+                grammar.validate_lock_key_ordering(mission_graph)
+                and grammar.validate_progression_constraints(mission_graph)
+            )
+        except Exception:
+            constraint_valid = False
     repair_stats = _extract_generation_stats(graph)
 
     return GraphDescriptor(
@@ -597,11 +925,26 @@ def extract_graph_descriptor(
         linearity=linearity,
         leniency=leniency,
         branching_factor=branching_factor,
+        branch_count=int(structural_semantics["branch_count"]),
+        branch_utility_rate=float(structural_semantics["branch_utility_rate"]),
         cycle_density=cycle_density,
         shortcut_density=shortcut_density,
+        path_redundancy=float(structural_semantics["path_redundancy"]),
+        articulation_count=int(structural_semantics["articulation_count"]),
+        articulation_ratio=float(structural_semantics["articulation_ratio"]),
         gating_density=gating_density,
         gate_depth_ratio=gate_depth_ratio,
         path_depth_ratio=path_depth_ratio,
+        key_gate_count=int(progression_semantics["key_gate_count"]),
+        key_before_lock_rate=float(progression_semantics["key_before_lock_rate"]),
+        switch_gate_count=int(progression_semantics["switch_gate_count"]),
+        switch_before_gate_rate=float(progression_semantics["switch_before_gate_rate"]),
+        battery_gate_count=int(progression_semantics["battery_gate_count"]),
+        battery_satisfaction_rate=float(progression_semantics["battery_satisfaction_rate"]),
+        secret_component_count=int(structural_semantics["secret_component_count"]),
+        secret_content_discoverability_rate=float(
+            structural_semantics["secret_content_discoverability_rate"]
+        ),
         progression_complexity=progression_complexity,
         topology_complexity=topology_complexity,
         constraint_valid=constraint_valid,
@@ -688,11 +1031,22 @@ def _descriptor_summary(descriptors: Sequence[GraphDescriptor]) -> Tuple[Dict[st
             "directed_path_exists_rate": 0.0,
             "weak_path_exists_rate": 0.0,
             "branching_factor": 0.0,
+            "branch_count": 0.0,
+            "branch_utility_rate": 0.0,
             "cycle_density": 0.0,
             "shortcut_density": 0.0,
+            "path_redundancy": 0.0,
+            "articulation_count": 0.0,
+            "articulation_ratio": 0.0,
             "gating_density": 0.0,
             "gate_depth_ratio": 0.0,
             "path_depth_ratio": 0.0,
+            "key_gate_count": 0.0,
+            "key_before_lock_rate": 0.0,
+            "switch_gate_count": 0.0,
+            "switch_before_gate_rate": 0.0,
+            "battery_gate_count": 0.0,
+            "battery_satisfaction_rate": 0.0,
             "num_nodes": 0.0,
             "num_edges": 0.0,
             "enemy_count": 0.0,
@@ -704,6 +1058,8 @@ def _descriptor_summary(descriptors: Sequence[GraphDescriptor]) -> Tuple[Dict[st
             "item_gate_count": 0.0,
             "switch_count": 0.0,
             "stair_count": 0.0,
+            "secret_component_count": 0.0,
+            "secret_content_discoverability_rate": 0.0,
             "gate_variety": 0.0,
             "repair_rate": 0.0,
             "total_repairs": 0.0,
@@ -729,11 +1085,22 @@ def _descriptor_summary(descriptors: Sequence[GraphDescriptor]) -> Tuple[Dict[st
                 float(d.directed_path_exists),
                 float(d.weak_path_exists),
                 d.branching_factor,
+                d.branch_count,
+                d.branch_utility_rate,
                 d.cycle_density,
                 d.shortcut_density,
+                d.path_redundancy,
+                d.articulation_count,
+                d.articulation_ratio,
                 d.gating_density,
                 d.gate_depth_ratio,
                 d.path_depth_ratio,
+                d.key_gate_count,
+                d.key_before_lock_rate,
+                d.switch_gate_count,
+                d.switch_before_gate_rate,
+                d.battery_gate_count,
+                d.battery_satisfaction_rate,
                 d.num_nodes,
                 d.num_edges,
                 d.enemy_count,
@@ -745,6 +1112,8 @@ def _descriptor_summary(descriptors: Sequence[GraphDescriptor]) -> Tuple[Dict[st
                 d.item_gate_count,
                 d.switch_count,
                 d.stair_count,
+                d.secret_component_count,
+                d.secret_content_discoverability_rate,
                 d.gate_variety,
                 float(d.repair_applied),
                 d.total_repairs,
@@ -774,11 +1143,22 @@ def _descriptor_summary(descriptors: Sequence[GraphDescriptor]) -> Tuple[Dict[st
         "directed_path_exists_rate",
         "weak_path_exists_rate",
         "branching_factor",
+        "branch_count",
+        "branch_utility_rate",
         "cycle_density",
         "shortcut_density",
+        "path_redundancy",
+        "articulation_count",
+        "articulation_ratio",
         "gating_density",
         "gate_depth_ratio",
         "path_depth_ratio",
+        "key_gate_count",
+        "key_before_lock_rate",
+        "switch_gate_count",
+        "switch_before_gate_rate",
+        "battery_gate_count",
+        "battery_satisfaction_rate",
         "num_nodes",
         "num_edges",
         "enemy_count",
@@ -790,6 +1170,8 @@ def _descriptor_summary(descriptors: Sequence[GraphDescriptor]) -> Tuple[Dict[st
         "item_gate_count",
         "switch_count",
         "stair_count",
+        "secret_component_count",
+        "secret_content_discoverability_rate",
         "gate_variety",
         "repair_rate",
         "total_repairs",
@@ -1654,6 +2036,9 @@ def run_block_i_benchmark(
     weak_path_exists_series = [float(d.weak_path_exists) for d in gen_desc]
     directionality_gap_series = [float(d.directionality_gap) for d in gen_desc]
     constraint_valid_series = [float(d.constraint_valid) for d in gen_desc]
+    key_before_lock_series = [float(d.key_before_lock_rate) for d in gen_desc]
+    switch_before_gate_series = [float(d.switch_before_gate_rate) for d in gen_desc]
+    battery_satisfaction_series = [float(d.battery_satisfaction_rate) for d in gen_desc]
 
     completeness = {
         "start_goal_rate": float(np.mean(start_goal_series)) if start_goal_series else 0.0,
@@ -1663,6 +2048,9 @@ def run_block_i_benchmark(
         "weak_path_exists_rate": float(np.mean(weak_path_exists_series)) if weak_path_exists_series else 0.0,
         "path_directionality_gap_mean": float(np.mean(directionality_gap_series)) if directionality_gap_series else 0.0,
         "constraint_valid_rate": float(np.mean(constraint_valid_series)) if constraint_valid_series else 0.0,
+        "key_before_lock_rate": float(np.mean(key_before_lock_series)) if key_before_lock_series else 0.0,
+        "switch_before_gate_rate": float(np.mean(switch_before_gate_series)) if switch_before_gate_series else 0.0,
+        "battery_satisfaction_rate": float(np.mean(battery_satisfaction_series)) if battery_satisfaction_series else 0.0,
     }
     completeness["overall_completeness"] = float(
         0.25 * completeness["start_goal_rate"]
@@ -1807,9 +2195,32 @@ def run_block_i_benchmark(
     expressive = {
         "coverage_linearity_leniency": _coverage_2d(gen_vec[:, :2], bins=20) if gen_vec.size else 0.0,
         "coverage_progression_topology": _coverage_2d(gen_vec[:, 2:], bins=20) if gen_vec.size else 0.0,
+        "coverage_redundancy_articulation": _coverage_2d(
+            np.array([[d.path_redundancy, d.articulation_ratio] for d in gen_desc], dtype=np.float64),
+            bins=20,
+        )
+        if gen_desc
+        else 0.0,
+        "coverage_branch_secret": _coverage_2d(
+            np.array(
+                [[d.branch_utility_rate, d.secret_content_discoverability_rate] for d in gen_desc],
+                dtype=np.float64,
+            ),
+            bins=20,
+        )
+        if gen_desc
+        else 0.0,
         "descriptor_diversity": float(
             np.mean(np.std(gen_vec, axis=0)) if gen_vec.size else 0.0
         ),
+        "mean_path_redundancy": float(np.mean([d.path_redundancy for d in gen_desc])) if gen_desc else 0.0,
+        "mean_articulation_ratio": float(np.mean([d.articulation_ratio for d in gen_desc])) if gen_desc else 0.0,
+        "mean_branch_utility_rate": float(np.mean([d.branch_utility_rate for d in gen_desc])) if gen_desc else 0.0,
+        "mean_secret_content_discoverability_rate": float(
+            np.mean([d.secret_content_discoverability_rate for d in gen_desc])
+        )
+        if gen_desc
+        else 0.0,
     }
 
     novelty = 0.0
@@ -1877,6 +2288,24 @@ def run_block_i_benchmark(
             alpha=bootstrap_alpha,
             seed=bootstrap_seed + 4,
         ),
+        "key_before_lock_rate": _bootstrap_mean_ci(
+            key_before_lock_series,
+            n_bootstrap=bootstrap_samples,
+            alpha=bootstrap_alpha,
+            seed=bootstrap_seed + 36,
+        ),
+        "switch_before_gate_rate": _bootstrap_mean_ci(
+            switch_before_gate_series,
+            n_bootstrap=bootstrap_samples,
+            alpha=bootstrap_alpha,
+            seed=bootstrap_seed + 37,
+        ),
+        "battery_satisfaction_rate": _bootstrap_mean_ci(
+            battery_satisfaction_series,
+            n_bootstrap=bootstrap_samples,
+            alpha=bootstrap_alpha,
+            seed=bootstrap_seed + 38,
+        ),
         "overall_completeness": _bootstrap_mean_ci(
             overall_series,
             n_bootstrap=bootstrap_samples,
@@ -1916,8 +2345,15 @@ def run_block_i_benchmark(
         "topology_complexity",
         "cycle_density",
         "shortcut_density",
+        "path_redundancy",
+        "articulation_ratio",
         "gate_depth_ratio",
         "path_depth_ratio",
+        "branch_utility_rate",
+        "secret_content_discoverability_rate",
+        "key_before_lock_rate",
+        "switch_before_gate_rate",
+        "battery_satisfaction_rate",
         "path_length",
         "num_nodes",
     ]

@@ -14,7 +14,9 @@ Usage:
 
 import sys
 import argparse
+import json
 import logging
+import math
 from pathlib import Path
 from typing import Optional, Dict, Any, Tuple, List
 
@@ -32,7 +34,13 @@ from src.zelda_data.zelda_loader import create_dataloader, extract_start_goal
 from src.core.latent_diffusion import LatentDiffusionModel, create_latent_diffusion
 from src.core.vqvae import SemanticVQVAE as VQVAE, create_vqvae
 from src.core.condition_encoder import DualStreamConditionEncoder, create_condition_encoder
-from src.core.definitions import ROOM_HEIGHT, ROOM_WIDTH
+from src.core.definitions import (
+    GRAPH_EDGE_FEATURE_DIM,
+    GRAPH_NODE_FEATURE_DIM,
+    ROOM_HEIGHT,
+    ROOM_TOPOLOGY_CHANNEL_COUNT,
+    ROOM_WIDTH,
+)
 # Use Block V LogicNet (with temperature annealing), not legacy src.ml.logic_net
 from src.core.logic_net import LogicNet
 from src.pipeline.graph_features import (
@@ -41,8 +49,17 @@ from src.pipeline.graph_features import (
     compute_current_node_distance_features,
     compute_rwse_features,
 )
-from src.config_system import merge_config
-from src.utils.checkpoint import MetricsLogger, write_checkpoint_metadata
+from src.config_system import merge_config, seed_everything
+from src.utils.checkpoint import (
+    LATEST_RESUME_FILENAME,
+    MetricsLogger,
+    atomic_torch_save,
+    enforce_checkpoint_storage_budget,
+    log_checkpoint_artifact,
+    prune_checkpoints,
+    resolve_resume_checkpoint,
+    write_checkpoint_metadata,
+)
 from src.utils.distributed import (
     DistributedContext,
     average_gradients,
@@ -84,9 +101,15 @@ class DiffusionTrainingConfig:
         use_vglc: bool = True,
         room_level: bool = True,
         num_classes: int = 44,
+        node_feature_dim: int = GRAPH_NODE_FEATURE_DIM,
+        edge_feature_dim: int = GRAPH_EDGE_FEATURE_DIM,
         
         # VQ-VAE (frozen encoder)
         vqvae_checkpoint: Optional[str] = None,
+        vqvae_hidden_dim: int = 96,
+        vqvae_codebook_size: int = 256,
+        vqvae_use_coordconv: bool = True,
+        vqvae_mrf_penalty_weight: float = 0.05,
         
         # Diffusion Model
         latent_dim: int = 64,
@@ -102,6 +125,10 @@ class DiffusionTrainingConfig:
         condition_num_attention_heads: int = 8,
         condition_dropout: float = 0.1,
         condition_gnn_type: str = "gcn",  # gcn | gat | sage | gps
+        condition_use_reference_room_maps: bool = False,
+        condition_reference_tile_vocab_size: int = 44,
+        condition_reference_embedding_dim: int = 32,
+        condition_reference_hidden_dim: int = 64,
         num_timesteps: int = 1000,
         schedule_type: str = "cosine",
         topology_refinement_mode: str = "gat2",  # none | lightweight | gat2
@@ -114,7 +141,7 @@ class DiffusionTrainingConfig:
         use_teacher_forced_neighbor_latents: bool = True,
         use_current_node_distance_features: bool = True,
         current_node_distance_max: int = 8,
-        room_topology_channels: int = 18,
+        room_topology_channels: int = ROOM_TOPOLOGY_CHANNEL_COUNT,
         cfg_dropout_prob: float = 0.1,
         cfg_scale: float = 3.0,
         cfg_schedule_mode: str = "constant",
@@ -156,9 +183,17 @@ class DiffusionTrainingConfig:
         # Checkpointing
         checkpoint_dir: str = "./checkpoints",
         save_every: int = 10,
+        keep_last: int = 2,
+        auto_resume: bool = True,
+        resume_checkpoint: Optional[str] = None,
+        checkpoint_storage_budget_gb: Optional[float] = None,
+        checkpoint_storage_warning_fraction: float = 0.8,
+        checkpoint_storage_cleanup_enabled: bool = True,
+        checkpoint_storage_cleanup_target_fraction: float = 0.6,
         
         # Device
         device: str = "auto",
+        seed: int = 42,
         distributed_enabled: bool = False,
         distributed_backend: str = "nccl",
         distributed_find_unused_parameters: bool = False,
@@ -177,8 +212,14 @@ class DiffusionTrainingConfig:
         self.use_vglc = use_vglc
         self.room_level = bool(room_level)
         self.num_classes = int(num_classes)
+        self.node_feature_dim = int(max(1, node_feature_dim))
+        self.edge_feature_dim = int(max(1, edge_feature_dim))
         
         self.vqvae_checkpoint = vqvae_checkpoint
+        self.vqvae_hidden_dim = int(max(8, vqvae_hidden_dim))
+        self.vqvae_codebook_size = int(max(8, vqvae_codebook_size))
+        self.vqvae_use_coordconv = bool(vqvae_use_coordconv)
+        self.vqvae_mrf_penalty_weight = float(max(0.0, vqvae_mrf_penalty_weight))
         
         self.latent_dim = latent_dim
         self.model_channels = int(model_channels)
@@ -244,6 +285,10 @@ class DiffusionTrainingConfig:
                 "Expected 'gcn', 'gat', 'sage', or 'gps'."
             )
         self.condition_gnn_type = gnn_type
+        self.condition_use_reference_room_maps = bool(condition_use_reference_room_maps)
+        self.condition_reference_tile_vocab_size = int(max(2, condition_reference_tile_vocab_size))
+        self.condition_reference_embedding_dim = int(max(4, condition_reference_embedding_dim))
+        self.condition_reference_hidden_dim = int(max(4, condition_reference_hidden_dim))
         self.num_timesteps = num_timesteps
         self.schedule_type = schedule_type
         trm = str(topology_refinement_mode).strip().lower()
@@ -327,11 +372,23 @@ class DiffusionTrainingConfig:
         
         self.checkpoint_dir = checkpoint_dir
         self.save_every = save_every
+        self.keep_last = int(max(0, keep_last))
+        self.auto_resume = bool(auto_resume)
+        self.resume_checkpoint = None if resume_checkpoint is None else str(resume_checkpoint)
+        self.checkpoint_storage_budget_gb = (
+            None if checkpoint_storage_budget_gb is None else float(max(0.0, checkpoint_storage_budget_gb))
+        )
+        self.checkpoint_storage_warning_fraction = float(max(0.0, min(1.0, checkpoint_storage_warning_fraction)))
+        self.checkpoint_storage_cleanup_enabled = bool(checkpoint_storage_cleanup_enabled)
+        self.checkpoint_storage_cleanup_target_fraction = float(
+            max(0.0, min(1.0, checkpoint_storage_cleanup_target_fraction))
+        )
         
         if device == "auto":
             self.device = "cuda" if torch.cuda.is_available() else "cpu"
         else:
             self.device = device
+        self.seed = int(seed)
         self.distributed_enabled = bool(distributed_enabled)
         backend = str(distributed_backend).strip().lower()
         if backend not in {"nccl", "gloo"}:
@@ -357,6 +414,7 @@ def diffusion_training_kwargs_from_resolved_config(
     dataset = config["dataset"]
     runtime = config["runtime"]
     distributed = config["distributed"]
+    vqvae_stage = config["vqvae"]
     ckpt_path = stage["vqvae_checkpoint"] or fallback_vqvae_checkpoint
     return {
         "data_dir": dataset["data_dir"],
@@ -370,7 +428,13 @@ def diffusion_training_kwargs_from_resolved_config(
         "use_vglc": dataset["use_vglc"],
         "room_level": dataset["room_level"],
         "num_classes": dataset["num_classes"],
+        "node_feature_dim": dataset["node_feature_dim"],
+        "edge_feature_dim": dataset["edge_feature_dim"],
         "vqvae_checkpoint": ckpt_path,
+        "vqvae_hidden_dim": vqvae_stage["hidden_dim"],
+        "vqvae_codebook_size": vqvae_stage["codebook_size"],
+        "vqvae_use_coordconv": vqvae_stage["use_coordconv"],
+        "vqvae_mrf_penalty_weight": vqvae_stage["mrf_penalty_weight"],
         "latent_dim": stage["latent_dim"],
         "model_channels": stage["model_channels"],
         "context_dim": stage["context_dim"],
@@ -384,6 +448,10 @@ def diffusion_training_kwargs_from_resolved_config(
         "condition_num_attention_heads": stage["condition_num_attention_heads"],
         "condition_dropout": stage["condition_dropout"],
         "condition_gnn_type": stage["condition_gnn_type"],
+        "condition_use_reference_room_maps": stage["condition_use_reference_room_maps"],
+        "condition_reference_tile_vocab_size": stage["condition_reference_tile_vocab_size"],
+        "condition_reference_embedding_dim": stage["condition_reference_embedding_dim"],
+        "condition_reference_hidden_dim": stage["condition_reference_hidden_dim"],
         "num_timesteps": stage["num_timesteps"],
         "schedule_type": stage["schedule_type"],
         "topology_refinement_mode": stage["topology_refinement_mode"],
@@ -432,11 +500,85 @@ def diffusion_training_kwargs_from_resolved_config(
         "validation_num_samples": stage["validation_num_samples"],
         "checkpoint_dir": stage["checkpoint_dir"],
         "save_every": stage["save_every"],
+        "keep_last": stage["keep_last"],
+        "auto_resume": runtime["auto_resume"],
+        "resume_checkpoint": runtime["resume"],
+        "checkpoint_storage_budget_gb": runtime["checkpoint_storage_budget_gb"],
+        "checkpoint_storage_warning_fraction": runtime["checkpoint_storage_warning_fraction"],
+        "checkpoint_storage_cleanup_enabled": runtime["checkpoint_storage_cleanup_enabled"],
+        "checkpoint_storage_cleanup_target_fraction": runtime["checkpoint_storage_cleanup_target_fraction"],
         "device": runtime["device"],
+        "seed": runtime["seed"],
         "distributed_enabled": distributed["enabled"],
         "distributed_backend": distributed["backend"],
         "distributed_find_unused_parameters": distributed["find_unused_parameters"],
         "quick": runtime["quick"],
+    }
+
+
+def _load_checkpoint_metadata_sidecar(checkpoint_path: str | Path) -> Dict[str, Any]:
+    """Load `<checkpoint>.meta.json` when present."""
+    meta_path = Path(f"{checkpoint_path}.meta.json")
+    if not meta_path.exists():
+        return {}
+    try:
+        with open(meta_path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+        return payload if isinstance(payload, dict) else {}
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning("Failed to read checkpoint metadata sidecar %s: %s", meta_path, exc)
+        return {}
+
+
+def _resolve_vqvae_architecture(
+    checkpoint_path: Optional[str],
+    *,
+    num_classes: int,
+    latent_dim: int,
+    hidden_dim: int,
+    codebook_size: int,
+    use_coordconv: bool,
+    mrf_penalty_weight: float,
+) -> Dict[str, Any]:
+    """
+    Resolve the VQ-VAE architecture from config first, then checkpoint metadata.
+
+    This keeps stage handoffs compatible when the trained VQ-VAE shape differs
+    from historical diffusion defaults.
+    """
+    resolved: Dict[str, Any] = {
+        "num_classes": int(num_classes),
+        "latent_dim": int(latent_dim),
+        "hidden_dim": int(hidden_dim),
+        "codebook_size": int(codebook_size),
+        "use_coordconv": bool(use_coordconv),
+        "mrf_penalty_weight": float(mrf_penalty_weight),
+    }
+    if not checkpoint_path:
+        return resolved
+
+    checkpoint = Path(checkpoint_path)
+    metadata = _load_checkpoint_metadata_sidecar(checkpoint)
+    architecture = metadata.get("architecture", {}) if isinstance(metadata, dict) else {}
+    if isinstance(architecture, dict):
+        for key in (
+            "num_classes",
+            "latent_dim",
+            "hidden_dim",
+            "codebook_size",
+            "use_coordconv",
+            "mrf_penalty_weight",
+        ):
+            if key in architecture and architecture[key] is not None:
+                resolved[key] = architecture[key]
+
+    return {
+        "num_classes": int(resolved["num_classes"]),
+        "latent_dim": int(resolved["latent_dim"]),
+        "hidden_dim": int(resolved["hidden_dim"]),
+        "codebook_size": int(resolved["codebook_size"]),
+        "use_coordconv": bool(resolved["use_coordconv"]),
+        "mrf_penalty_weight": float(resolved["mrf_penalty_weight"]),
     }
 
 
@@ -469,6 +611,26 @@ def _legacy_diffusion_overrides_from_args(args: argparse.Namespace) -> Dict[str,
     _set("logic_loss_mode", getattr(args, "logic_loss_mode", None))
     _set("graph_conditioning_mode", getattr(args, "graph_conditioning_mode", None))
     _set("condition_gnn_type", getattr(args, "condition_gnn_type", None))
+    _set(
+        "condition_use_reference_room_maps",
+        getattr(args, "condition_use_reference_room_maps", None),
+    )
+    _set(
+        "condition_reference_tile_vocab_size",
+        getattr(args, "condition_reference_tile_vocab_size", None),
+    )
+    _set(
+        "condition_reference_embedding_dim",
+        getattr(args, "condition_reference_embedding_dim", None),
+    )
+    _set(
+        "condition_reference_hidden_dim",
+        getattr(args, "condition_reference_hidden_dim", None),
+    )
+    _set("vqvae_hidden_dim", getattr(args, "vqvae_hidden_dim", None))
+    _set("vqvae_codebook_size", getattr(args, "vqvae_codebook_size", None))
+    _set("vqvae_use_coordconv", getattr(args, "vqvae_use_coordconv", None))
+    _set("vqvae_mrf_penalty_weight", getattr(args, "vqvae_mrf_penalty_weight", None))
     _set("topology_refinement_mode", getattr(args, "topology_refinement_mode", None))
     _set("attention_mode", getattr(args, "attention_mode", None))
     _set("topology_conditioning_mode", getattr(args, "topology_conditioning_mode", None))
@@ -492,8 +654,16 @@ def _legacy_diffusion_overrides_from_args(args: argparse.Namespace) -> Dict[str,
     _set("logic_topology_trace_weight", getattr(args, "logic_topology_trace_weight", None))
     _set("logic_topology_anchor_weight", getattr(args, "logic_topology_anchor_weight", None))
     _set("checkpoint_dir", getattr(args, "checkpoint_dir", None))
+    _set("keep_last", getattr(args, "keep_last", None))
+    _set("auto_resume", getattr(args, "auto_resume", None))
+    _set("resume_checkpoint", getattr(args, "resume", None))
+    _set("checkpoint_storage_budget_gb", getattr(args, "checkpoint_storage_budget_gb", None))
+    _set("checkpoint_storage_warning_fraction", getattr(args, "checkpoint_storage_warning_fraction", None))
+    _set("checkpoint_storage_cleanup_enabled", getattr(args, "checkpoint_storage_cleanup_enabled", None))
+    _set("checkpoint_storage_cleanup_target_fraction", getattr(args, "checkpoint_storage_cleanup_target_fraction", None))
     _set("vqvae_checkpoint", getattr(args, "vqvae_checkpoint", None))
     _set("device", getattr(args, "device", None))
+    _set("seed", getattr(args, "seed", None))
     _set("distributed_enabled", getattr(args, "distributed_enabled", None))
     _set("distributed_backend", getattr(args, "distributed_backend", None))
     _set("quick", getattr(args, "quick", None))
@@ -610,16 +780,35 @@ class DiffusionTrainer:
     
     def _create_vqvae(self) -> VQVAE:
         """Create or load VQ-VAE."""
-        # CRITICAL-1 fix: create_vqvae expects num_classes (default 44), not in_channels
-        vqvae = create_vqvae(
+        vqvae_arch = _resolve_vqvae_architecture(
+            self.config.vqvae_checkpoint,
             num_classes=self.config.num_classes,
             latent_dim=self.config.latent_dim,
+            hidden_dim=self.config.vqvae_hidden_dim,
+            codebook_size=self.config.vqvae_codebook_size,
+            use_coordconv=self.config.vqvae_use_coordconv,
+            mrf_penalty_weight=self.config.vqvae_mrf_penalty_weight,
+        )
+        vqvae = create_vqvae(
+            num_classes=vqvae_arch["num_classes"],
+            latent_dim=vqvae_arch["latent_dim"],
+            hidden_dim=vqvae_arch["hidden_dim"],
+            codebook_size=vqvae_arch["codebook_size"],
+            use_coordconv=vqvae_arch["use_coordconv"],
+            mrf_penalty_weight=vqvae_arch["mrf_penalty_weight"],
         )
         
         if self.config.vqvae_checkpoint:
             checkpoint = torch.load(self.config.vqvae_checkpoint, map_location='cpu')
             vqvae.load_state_dict(checkpoint['model_state_dict'])
-            logger.info(f"Loaded VQ-VAE from {self.config.vqvae_checkpoint}")
+            logger.info(
+                "Loaded VQ-VAE from %s with architecture num_classes=%d latent_dim=%d hidden_dim=%d codebook_size=%d",
+                self.config.vqvae_checkpoint,
+                vqvae_arch["num_classes"],
+                vqvae_arch["latent_dim"],
+                vqvae_arch["hidden_dim"],
+                vqvae_arch["codebook_size"],
+            )
         
         return vqvae
     
@@ -658,6 +847,8 @@ class DiffusionTrainer:
         """Create condition encoder."""
         return create_condition_encoder(
             latent_dim=self.config.latent_dim,
+            node_feature_dim=self.config.node_feature_dim,
+            edge_feature_dim=self.config.edge_feature_dim,
             output_dim=self.config.context_dim,
             hidden_dim=self.config.condition_hidden_dim,
             num_gnn_layers=self.config.condition_num_gnn_layers,
@@ -665,6 +856,10 @@ class DiffusionTrainer:
             num_attention_heads=self.config.condition_num_attention_heads,
             dropout=self.config.condition_dropout,
             use_current_node_distance_features=self.config.use_current_node_distance_features,
+            use_reference_room_maps=self.config.condition_use_reference_room_maps,
+            reference_num_tile_types=self.config.condition_reference_tile_vocab_size,
+            reference_embedding_dim=self.config.condition_reference_embedding_dim,
+            reference_hidden_dim=self.config.condition_reference_hidden_dim,
         )
 
     def _stack_conditioning_vectors(self, cond_vectors: List[torch.Tensor]) -> torch.Tensor:
@@ -747,7 +942,18 @@ class DiffusionTrainer:
             return self.vqvae.decode(z, target_size=(ROOM_HEIGHT, ROOM_WIDTH))
 
     def _encode_edge_features(self, graph_dict: dict) -> Optional[torch.Tensor]:
-        """Convert integer edge labels to one-hot features for the condition encoder."""
+        """Load explicit edge features when available, else fall back to one-hot labels."""
+        edge_features = graph_dict.get("edge_features")
+        if edge_features is not None:
+            if not isinstance(edge_features, torch.Tensor):
+                edge_features = torch.tensor(edge_features, dtype=torch.float32)
+            edge_features = edge_features.to(self.device, dtype=torch.float32)
+            if edge_features.numel() == 0:
+                return None
+            if edge_features.dim() == 1:
+                edge_features = edge_features.unsqueeze(-1)
+            return edge_features
+
         edge_attr = graph_dict.get('edge_attr')
         if edge_attr is None:
             return None
@@ -756,7 +962,7 @@ class DiffusionTrainer:
         if edge_attr.numel() == 0:
             return None
         edge_attr = edge_attr.to(self.device, dtype=torch.long)
-        num_edge_types = 8
+        num_edge_types = int(getattr(self.config, "edge_feature_dim", GRAPH_EDGE_FEATURE_DIM))
         # Ensure edge_attr is 1D for one_hot
         if edge_attr.dim() > 1:
             edge_attr = edge_attr.squeeze()
@@ -868,6 +1074,7 @@ class DiffusionTrainer:
         boundary_constraints = graph_dict.get("boundary_constraints")
         room_position = graph_dict.get("room_position")
         current_node_idx = graph_dict.get("current_node_idx")
+        style_id = graph_dict.get("style_id")
         current_node_distance = None
         if bool(getattr(self.config, "use_current_node_distance_features", True)):
             current_node_distance = align_nodewise_tensor(
@@ -901,6 +1108,11 @@ class DiffusionTrainer:
                 neighbor_latents = self._encode_neighbor_maps_to_latents(graph_dict.get("neighbor_maps"))
             else:
                 neighbor_latents = {direction: None for direction in CARDINAL_DIRECTIONS}
+            reference_room_maps = (
+                graph_dict.get("neighbor_maps")
+                if bool(getattr(self.config, "condition_use_reference_room_maps", False))
+                else None
+            )
             condition_out = self.condition_encoder(
                 neighbor_latents=neighbor_latents,
                 boundary_constraints=boundary_constraints,
@@ -911,6 +1123,8 @@ class DiffusionTrainer:
                 tpe=tpe,
                 current_node_distance=current_node_distance,
                 current_node_idx=int(current_node_idx) if current_node_idx is not None else None,
+                reference_room_maps=reference_room_maps,
+                style_id=style_id,
                 return_global_tokens=self.config.graph_conditioning_mode == "node_sequence",
             )
             if self.config.graph_conditioning_mode == "node_sequence":
@@ -1283,6 +1497,56 @@ class DiffusionTrainer:
             for p_ema, p in zip(self.ema_diffusion.parameters(),
                                 self.diffusion.parameters()):
                 p_ema.data.mul_(self.ema_decay).add_(p.data, alpha=1.0 - self.ema_decay)
+
+    @staticmethod
+    def _tensor_is_finite(value: Any) -> bool:
+        """Return True when a tensor/scalar payload contains only finite values."""
+        if isinstance(value, torch.Tensor):
+            return bool(torch.isfinite(value).all())
+        try:
+            return math.isfinite(float(value))
+        except (TypeError, ValueError):
+            return False
+
+    @staticmethod
+    def _state_dict_is_finite(state_dict: Any) -> bool:
+        """Recursively validate that a state dict does not contain NaN/Inf tensors."""
+        if isinstance(state_dict, dict):
+            for value in state_dict.values():
+                if not DiffusionTrainer._state_dict_is_finite(value):
+                    return False
+            return True
+        if isinstance(state_dict, (list, tuple)):
+            return all(DiffusionTrainer._state_dict_is_finite(value) for value in state_dict)
+        if isinstance(state_dict, torch.Tensor):
+            return bool(torch.isfinite(state_dict).all())
+        return True
+
+    def _warn_nonfinite(self, key: str, message: str, *args: Any) -> None:
+        """Rate-limit repeated non-finite warnings so logs stay readable."""
+        counts = getattr(self, "_nonfinite_warning_counts", None)
+        if not isinstance(counts, dict):
+            counts = {}
+            self._nonfinite_warning_counts = counts
+        count = int(counts.get(key, 0)) + 1
+        counts[key] = count
+        if count <= 5 or count in {10, 20, 50} or count % 100 == 0:
+            logger.warning(message, *args)
+            if count == 5:
+                logger.warning(
+                    "Further `%s` non-finite warnings will be rate-limited.",
+                    key,
+                )
+
+    def _gradients_are_finite(self) -> bool:
+        """Check trainable diffusion/condition-encoder gradients before stepping."""
+        for module in (self.diffusion, self.condition_encoder):
+            for param in module.parameters():
+                if param.grad is None:
+                    continue
+                if not bool(torch.isfinite(param.grad).all()):
+                    return False
+        return True
     
     def train_step(
         self,
@@ -1325,6 +1589,22 @@ class DiffusionTrainer:
         
         # === Part 1: Diffusion loss (standard noise prediction) ===
         diffusion_loss = self.diffusion.training_loss(z_0, conditioning, graph_data=diffusion_graph_data)
+        if not self._tensor_is_finite(diffusion_loss):
+            self.optimizer.zero_grad(set_to_none=True)
+            self._warn_nonfinite(
+                "diffusion_loss",
+                "Diffusion training: non-finite diffusion loss detected; skipping optimizer step for this batch.",
+            )
+            self.global_step += 1
+            return {
+                'loss': 0.0,
+                'diffusion_loss': 0.0,
+                'logic_loss': 0.0,
+                'solvability_proxy': 0.0,
+                'solvability': 0.0,
+                'logic_loss_mode_predicted': 1.0 if self.config.logic_loss_mode == 'predicted_latent' else 0.0,
+                'skipped_nonfinite_batch': 1.0,
+            }
         
         # === Part 2: LogicNet loss on model-predicted latent WITH graph topology ===
         # IMPORTANT: computing logic loss on detached real z_0 does not train diffusion.
@@ -1365,31 +1645,97 @@ class DiffusionTrainer:
 
                 # Keep latent range bounded similarly to sampling path.
                 pred_x0_logic = torch.clamp(pred_x0_logic, -1.0, 1.0)
+                if not self._tensor_is_finite(pred_x0_logic):
+                    self._warn_nonfinite(
+                        "logic_pred_x0",
+                        "Diffusion training: non-finite predicted x0 for logic supervision; disabling logic loss for this batch.",
+                    )
+                    pred_x0_logic = None
 
                 # Pass predicted latent to LogicNet for graph-level pathfinding loss.
-                logic_loss, _logic_info = self.logic_net(pred_x0_logic, graph_data=logic_graph_data)
-            solvability_proxy = self._logic_loss_to_solvability_proxy(logic_loss)
+                if pred_x0_logic is not None:
+                    logic_loss, _logic_info = self.logic_net(pred_x0_logic, graph_data=logic_graph_data)
+
+            if self._tensor_is_finite(logic_loss):
+                if isinstance(logic_loss, torch.Tensor) and logic_loss.numel() != 1:
+                    logic_loss = logic_loss.mean()
+                solvability_proxy = self._logic_loss_to_solvability_proxy(logic_loss)
+            else:
+                self._warn_nonfinite(
+                    "logic_loss",
+                    "Diffusion training: non-finite logic loss detected; disabling logic loss for this batch.",
+                )
+                logic_loss = torch.zeros((), device=self.device, dtype=diffusion_loss.dtype)
+                solvability_proxy = torch.zeros((), device=self.device, dtype=diffusion_loss.dtype)
         
         # Combined loss
         total_loss = (
             self.config.alpha_visual * diffusion_loss + 
             self.config.alpha_logic * logic_loss
         )
+        if not self._tensor_is_finite(total_loss):
+            self.optimizer.zero_grad(set_to_none=True)
+            self._warn_nonfinite(
+                "total_loss",
+                "Diffusion training: non-finite total loss detected; skipping optimizer step for this batch.",
+            )
+            self.global_step += 1
+            return {
+                'loss': 0.0,
+                'diffusion_loss': float(diffusion_loss.detach().item()) if self._tensor_is_finite(diffusion_loss) else 0.0,
+                'logic_loss': 0.0,
+                'solvability_proxy': 0.0,
+                'solvability': 0.0,
+                'logic_loss_mode_predicted': 1.0 if self.config.logic_loss_mode == 'predicted_latent' else 0.0,
+                'skipped_nonfinite_batch': 1.0,
+            }
         
         # Backward
-        self.optimizer.zero_grad()
+        self.optimizer.zero_grad(set_to_none=True)
         total_loss.backward()
         average_gradients(
             (self.diffusion, self.condition_encoder),
             context=getattr(self, "distributed_context", None),
         )
+        if not self._gradients_are_finite():
+            self.optimizer.zero_grad(set_to_none=True)
+            self._warn_nonfinite(
+                "gradient",
+                "Diffusion training: non-finite gradients detected; skipping optimizer step for this batch.",
+            )
+            self.global_step += 1
+            return {
+                'loss': float(total_loss.detach().item()),
+                'diffusion_loss': float(diffusion_loss.detach().item()),
+                'logic_loss': float(logic_loss.detach().item()) if self._tensor_is_finite(logic_loss) else 0.0,
+                'solvability_proxy': float(solvability_proxy.detach().item()) if self._tensor_is_finite(solvability_proxy) else 0.0,
+                'solvability': float(solvability_proxy.detach().item()) if self._tensor_is_finite(solvability_proxy) else 0.0,
+                'logic_loss_mode_predicted': 1.0 if self.config.logic_loss_mode == 'predicted_latent' else 0.0,
+                'skipped_nonfinite_batch': 1.0,
+            }
         grad_clip_norm = float(max(0.0, float(getattr(self.config, "grad_clip_norm", 1.0))))
         if grad_clip_norm > 0:
-            torch.nn.utils.clip_grad_norm_(
+            grad_norm = torch.nn.utils.clip_grad_norm_(
                 list(self.diffusion.parameters()) +
                 list(self.condition_encoder.parameters()),
                 max_norm=grad_clip_norm
             )
+            if not self._tensor_is_finite(grad_norm):
+                self.optimizer.zero_grad(set_to_none=True)
+                self._warn_nonfinite(
+                    "gradient_norm",
+                    "Diffusion training: non-finite gradient norm detected after clipping; skipping optimizer step for this batch.",
+                )
+                self.global_step += 1
+                return {
+                    'loss': float(total_loss.detach().item()),
+                    'diffusion_loss': float(diffusion_loss.detach().item()),
+                    'logic_loss': float(logic_loss.detach().item()) if self._tensor_is_finite(logic_loss) else 0.0,
+                    'solvability_proxy': float(solvability_proxy.detach().item()) if self._tensor_is_finite(solvability_proxy) else 0.0,
+                    'solvability': float(solvability_proxy.detach().item()) if self._tensor_is_finite(solvability_proxy) else 0.0,
+                    'logic_loss_mode_predicted': 1.0 if self.config.logic_loss_mode == 'predicted_latent' else 0.0,
+                    'skipped_nonfinite_batch': 1.0,
+                }
         self.optimizer.step()
         
         # --- Phase 4A: Update EMA model weights ---
@@ -1530,6 +1876,7 @@ class DiffusionTrainer:
         total_logic_loss = 0.0
         total_solvability_proxy = 0.0
         num_samples_eval = 0
+        skipped_nonfinite = 0
         
         for batch_data in dataloader:
             # Handle (images, graph_list) from graph_collate_fn
@@ -1574,12 +1921,26 @@ class DiffusionTrainer:
             
             # Generate samples using EMA model
             z_gen = eval_model.sample(conditioning, shape=z_0.shape, graph_data=diffusion_graph_data)
+            if not self._tensor_is_finite(z_gen):
+                skipped_nonfinite += int(batch_size)
+                self._warn_nonfinite(
+                    "validation_sample",
+                    "Diffusion validation: generated non-finite latent sample; skipping this validation batch.",
+                )
+                continue
             
             # Build LogicNet graph data if available
             logic_graph_data = diffusion_graph_data
             
             # LogicNet: evaluate with graph topology
             logic_loss, _logic_info = self.logic_net(z_gen, graph_data=logic_graph_data)
+            if not self._tensor_is_finite(logic_loss):
+                skipped_nonfinite += int(batch_size)
+                self._warn_nonfinite(
+                    "validation_logic_loss",
+                    "Diffusion validation: non-finite logic loss detected on sampled latent; skipping this validation batch.",
+                )
+                continue
             solvability_proxy = float(self._logic_loss_to_solvability_proxy(logic_loss).item())
             total_logic_loss += float(logic_loss.item()) * batch_size
             total_solvability_proxy += solvability_proxy * batch_size
@@ -1588,18 +1949,25 @@ class DiffusionTrainer:
             if num_samples_eval >= num_samples:
                 break
         
+        if num_samples_eval <= 0:
+            return {
+                'val_logic_loss': float("inf"),
+                'val_solvability_proxy': 0.0,
+                'val_solvability': 0.0,
+                'val_skipped_nonfinite': float(skipped_nonfinite),
+            }
+
         return {
             'val_logic_loss': total_logic_loss / max(num_samples_eval, 1),
             'val_solvability_proxy': total_solvability_proxy / max(num_samples_eval, 1),
             'val_solvability': total_solvability_proxy / max(num_samples_eval, 1),
+            'val_skipped_nonfinite': float(skipped_nonfinite),
         }
     
-    def save_checkpoint(self, path: str, metrics: Optional[Dict] = None):
-        """Save training checkpoint."""
-        checkpoint = {
+    def _build_resume_checkpoint_payload(self, metrics: Optional[Dict] = None) -> Dict[str, Any]:
+        return {
             'epoch': self.epoch,
             'global_step': self.global_step,
-            'vqvae_state_dict': self.vqvae.state_dict(),
             'diffusion_state_dict': self.diffusion.state_dict(),
             'ema_diffusion_state_dict': self.ema_diffusion.state_dict(),
             'condition_encoder_state_dict': self.condition_encoder.state_dict(),
@@ -1611,27 +1979,73 @@ class DiffusionTrainer:
             # Store schedule/prediction type for inference consistency
             'schedule_type': self.config.schedule_type,
         }
-        torch.save(checkpoint, path)
+
+    def _build_inference_checkpoint_payload(self, metrics: Optional[Dict] = None) -> Dict[str, Any]:
+        return {
+            'epoch': self.epoch,
+            'global_step': self.global_step,
+            'diffusion_state_dict': self.diffusion.state_dict(),
+            'ema_diffusion_state_dict': self.ema_diffusion.state_dict(),
+            'condition_encoder_state_dict': self.condition_encoder.state_dict(),
+            'logic_net_state_dict': self.logic_net.state_dict(),
+            'config': self.config.to_dict(),
+            'metrics': metrics,
+            'schedule_type': self.config.schedule_type,
+        }
+
+    def save_checkpoint(self, path: str, metrics: Optional[Dict] = None, *, include_optimizer: bool = True):
+        """Save training or inference checkpoint."""
+        checkpoint = (
+            self._build_resume_checkpoint_payload(metrics)
+            if bool(include_optimizer)
+            else self._build_inference_checkpoint_payload(metrics)
+        )
+        atomic_torch_save(checkpoint, path)
         write_checkpoint_metadata(
             path,
-            model_type="diffusion",
+            model_type="diffusion_resume" if include_optimizer else "diffusion",
             architecture={
                 "latent_dim": int(self.config.latent_dim),
                 "context_dim": int(self.config.context_dim),
                 "num_timesteps": int(self.config.num_timesteps),
                 "schedule_type": str(self.config.schedule_type),
+                "num_classes": int(self.config.num_classes),
+                "vqvae_hidden_dim": int(self.config.vqvae_hidden_dim),
+                "vqvae_codebook_size": int(self.config.vqvae_codebook_size),
+                "vqvae_use_coordconv": bool(self.config.vqvae_use_coordconv),
             },
             extra={
                 "epoch": int(self.epoch),
                 "global_step": int(self.global_step),
-                "contains": ["vqvae", "diffusion", "condition_encoder", "logic_net"],
+                "checkpoint_kind": "resume" if include_optimizer else "inference",
+                "contains": (
+                    ["diffusion", "ema_diffusion", "condition_encoder", "logic_net", "optimizer", "scheduler"]
+                    if include_optimizer
+                    else ["diffusion", "ema_diffusion", "condition_encoder", "logic_net"]
+                ),
+                "vqvae_checkpoint": str(getattr(self.config, "vqvae_checkpoint", "") or ""),
             },
         )
-        logger.info(f"Saved checkpoint to {path}")
+        log_checkpoint_artifact(
+            logger,
+            path,
+            checkpoint_dir=Path(path).parent,
+            label="Saved checkpoint",
+        )
     
     def load_checkpoint(self, path: str):
         """Load training checkpoint."""
-        checkpoint = torch.load(path, map_location=self.device)
+        checkpoint = torch.load(path, map_location=self.device, weights_only=False)
+        for key in (
+            'diffusion_state_dict',
+            'ema_diffusion_state_dict',
+            'condition_encoder_state_dict',
+            'logic_net_state_dict',
+        ):
+            if key in checkpoint and not self._state_dict_is_finite(checkpoint[key]):
+                raise ValueError(
+                    f"Checkpoint {path} contains non-finite values in `{key}` and cannot be resumed safely."
+                )
         
         self.epoch = checkpoint['epoch']
         self.global_step = checkpoint['global_step']
@@ -1641,8 +2055,10 @@ class DiffusionTrainer:
         self.condition_encoder.load_state_dict(checkpoint['condition_encoder_state_dict'])
         if 'logic_net_state_dict' in checkpoint:
             self.logic_net.load_state_dict(checkpoint['logic_net_state_dict'])
-        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        if 'optimizer_state_dict' in checkpoint:
+            self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        if 'scheduler_state_dict' in checkpoint:
+            self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
         
         # Re-wire LogicNet into guidance after loading
         self.diffusion.guidance.logic_net = self.logic_net
@@ -1671,6 +2087,13 @@ def train_diffusion(config: DiffusionTrainingConfig) -> DiffusionTrainer:
         enabled=bool(getattr(config, "distributed_enabled", False)),
         backend=str(getattr(config, "distributed_backend", "nccl")),
     )
+    worker_seed = seed_everything(int(getattr(config, "seed", 42)) + int(distributed_context.rank))
+    logger.info(
+        "Diffusion trainer seeds initialized: base_seed=%d worker_seed=%d rank=%d",
+        int(getattr(config, "seed", 42)),
+        worker_seed,
+        int(distributed_context.rank),
+    )
 
     try:
         train_loader_plain = create_dataloader(
@@ -1684,13 +2107,15 @@ def train_diffusion(config: DiffusionTrainingConfig) -> DiffusionTrainer:
             normalize=config.normalize,
             room_level=config.room_level,
             load_graphs=True,
+            node_feature_dim=config.node_feature_dim,
+            edge_feature_dim=config.edge_feature_dim,
         )
         train_sampler = make_distributed_sampler(
             train_loader_plain.dataset,
             context=distributed_context,
             shuffle=config.shuffle_train,
             drop_last=config.drop_last,
-            seed=42,
+            seed=int(getattr(config, "seed", 42)),
         )
         train_loader = create_dataloader(
             config.data_dir,
@@ -1704,6 +2129,8 @@ def train_diffusion(config: DiffusionTrainingConfig) -> DiffusionTrainer:
             room_level=config.room_level,
             load_graphs=True,
             sampler=train_sampler,
+            node_feature_dim=config.node_feature_dim,
+            edge_feature_dim=config.edge_feature_dim,
         )
 
         val_loader = None
@@ -1719,6 +2146,8 @@ def train_diffusion(config: DiffusionTrainingConfig) -> DiffusionTrainer:
                 normalize=config.normalize,
                 room_level=config.room_level,
                 load_graphs=True,
+                node_feature_dim=config.node_feature_dim,
+                edge_feature_dim=config.edge_feature_dim,
             )
 
         sample_kind = "rooms" if config.room_level else "dungeons"
@@ -1755,6 +2184,26 @@ def train_diffusion(config: DiffusionTrainingConfig) -> DiffusionTrainer:
 
         checkpoint_dir = Path(config.checkpoint_dir)
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        resume_path = resolve_resume_checkpoint(
+            explicit_path=getattr(config, "resume_checkpoint", None),
+            checkpoint_dir=str(checkpoint_dir),
+            auto_resume=bool(getattr(config, "auto_resume", True)),
+            latest_filename=LATEST_RESUME_FILENAME,
+        )
+        if resume_path is not None:
+            try:
+                trainer.load_checkpoint(str(resume_path))
+                logger.info("Auto-resumed diffusion training from %s", resume_path)
+            except ValueError as exc:
+                explicit_resume = bool(getattr(config, "resume_checkpoint", None))
+                if explicit_resume:
+                    raise
+                logger.warning(
+                    "Ignoring auto-resume diffusion checkpoint %s because it is not safe to resume: %s",
+                    resume_path,
+                    exc,
+                )
+                resume_path = None
 
         metrics_logger = (
             MetricsLogger(
@@ -1767,8 +2216,14 @@ def train_diffusion(config: DiffusionTrainingConfig) -> DiffusionTrainer:
 
         best_solvability = 0.0
         metrics: Dict[str, float] = {}
+        if resume_path is not None:
+            latest_ckpt = torch.load(str(resume_path), map_location="cpu", weights_only=False)
+            latest_metrics = latest_ckpt.get("metrics", {})
+            if isinstance(latest_metrics, dict):
+                best_solvability = float(latest_metrics.get("best_solvability", latest_metrics.get("val_solvability", 0.0)))
 
-        for epoch in range(config.epochs):
+        for epoch in range(int(getattr(trainer, "epoch", -1)) + 1, config.epochs):
+            trainer.epoch = int(epoch)
             train_metrics = trainer.train_epoch(train_loader, sampler=train_sampler)
             maybe_barrier(distributed_context)
 
@@ -1795,8 +2250,14 @@ def train_diffusion(config: DiffusionTrainingConfig) -> DiffusionTrainer:
 
                 if (epoch + 1) % config.save_every == 0:
                     trainer.save_checkpoint(
-                        str(checkpoint_dir / f"checkpoint_epoch_{epoch+1:04d}.pth"),
+                        str(checkpoint_dir / f"resume_epoch_{epoch+1:04d}.pth"),
                         metrics,
+                        include_optimizer=True,
+                    )
+                    prune_checkpoints(
+                        checkpoint_dir=str(checkpoint_dir),
+                        pattern="resume_epoch_*.pth",
+                        keep_last=int(getattr(config, "keep_last", 2)),
                     )
 
                 if val_metrics['val_solvability'] > best_solvability:
@@ -1804,12 +2265,32 @@ def train_diffusion(config: DiffusionTrainingConfig) -> DiffusionTrainer:
                     trainer.save_checkpoint(
                         str(checkpoint_dir / "best_model.pth"),
                         metrics,
+                        include_optimizer=False,
                     )
+
+                latest_metrics = dict(metrics)
+                latest_metrics["best_solvability"] = float(best_solvability)
+                trainer.save_checkpoint(
+                    str(checkpoint_dir / LATEST_RESUME_FILENAME),
+                    latest_metrics,
+                    include_optimizer=True,
+                )
+                enforce_checkpoint_storage_budget(
+                    logger,
+                    checkpoint_dir=checkpoint_dir,
+                    budget_gb=getattr(config, "checkpoint_storage_budget_gb", None),
+                    warning_fraction=float(getattr(config, "checkpoint_storage_warning_fraction", 0.8)),
+                    cleanup_enabled=bool(getattr(config, "checkpoint_storage_cleanup_enabled", True)),
+                    cleanup_target_fraction=float(
+                        getattr(config, "checkpoint_storage_cleanup_target_fraction", 0.6)
+                    ),
+                    removable_patterns=("resume_epoch_*.pth",),
+                )
 
             maybe_barrier(distributed_context)
 
         if distributed_context.is_main_process:
-            trainer.save_checkpoint(str(checkpoint_dir / "final_model.pth"), metrics or None)
+            trainer.save_checkpoint(str(checkpoint_dir / "final_model.pth"), metrics or None, include_optimizer=False)
             assert metrics_logger is not None
             metrics_logger.save()
 
@@ -1872,6 +2353,14 @@ def main():
         choices=['gcn', 'gat', 'sage', 'gps'],
         help='GNN backbone for graph-node conditioning.',
     )
+    parser.add_argument('--condition-use-reference-room-maps', action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument('--condition-reference-tile-vocab-size', type=int, default=None)
+    parser.add_argument('--condition-reference-embedding-dim', type=int, default=None)
+    parser.add_argument('--condition-reference-hidden-dim', type=int, default=None)
+    parser.add_argument('--vqvae-hidden-dim', type=int, default=None)
+    parser.add_argument('--vqvae-codebook-size', type=int, default=None)
+    parser.add_argument('--vqvae-use-coordconv', action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument('--vqvae-mrf-penalty-weight', type=float, default=None)
     parser.add_argument(
         '--topology-refinement-mode',
         type=str,
@@ -1904,8 +2393,16 @@ def main():
     parser.add_argument('--logic-topology-anchor-weight', type=float, default=None)
     parser.add_argument('--guidance-scale', type=float, default=None)
     parser.add_argument('--checkpoint-dir', type=str, default=None)
+    parser.add_argument('--keep-last', type=int, default=None)
+    parser.add_argument('--auto-resume', action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument('--checkpoint-storage-budget-gb', type=float, default=None)
+    parser.add_argument('--checkpoint-storage-warning-fraction', type=float, default=None)
+    parser.add_argument('--checkpoint-storage-cleanup-enabled', action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument('--checkpoint-storage-cleanup-target-fraction', type=float, default=None)
+    parser.add_argument('--resume', type=str, default=None)
     parser.add_argument('--vqvae-checkpoint', type=str, default=None)
     parser.add_argument('--device', type=str, default=None)
+    parser.add_argument('--seed', type=int, default=None)
     parser.add_argument('--distributed-enabled', action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument('--distributed-backend', type=str, default=None, choices=['nccl', 'gloo'])
     parser.add_argument('--quick', action=argparse.BooleanOptionalAction, default=None)

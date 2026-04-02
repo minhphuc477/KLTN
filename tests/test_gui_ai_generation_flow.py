@@ -1,6 +1,10 @@
 ﻿import threading
 from pathlib import Path
 
+import numpy as np
+import torch
+
+from src import generate as generation_cli
 from src.gui.ai.ai_generation_controls import start_ai_dungeon_generation
 from src.gui import ai_generation_worker
 from src.gui.ai import generation_pipeline
@@ -144,4 +148,105 @@ def test_apply_mission_graph_constraints_preserves_string_node_ids():
         for edge in updated.edges
     )
     assert logger.info_calls
+
+
+def test_resolve_vqvae_checkpoint_prefers_sibling_pretrain_for_composite_diffusion(tmp_path):
+    composite = tmp_path / "final_model.pth"
+    sibling_vqvae = tmp_path / "vqvae_pretrained.pth"
+
+    torch.save({"diffusion_state_dict": {"weight": torch.tensor(1.0)}}, composite)
+    torch.save({"model_state_dict": {"weight": torch.tensor(2.0)}}, sibling_vqvae)
+
+    resolved = generation_pipeline._resolve_vqvae_checkpoint_for_generation(composite)
+
+    assert resolved == sibling_vqvae
+
+
+def test_generate_dungeon_with_pipeline_uses_canonical_roomwise_generation():
+    import networkx as nx
+
+    from src.generation.grammar import EdgeType, MissionGraph, MissionNode, NodeType
+
+    class _Logger:
+        def __init__(self):
+            self.info_calls = []
+
+        def info(self, *args, **kwargs):
+            self.info_calls.append((args, kwargs))
+
+    class _Guidance:
+        guidance_scale = 0.75
+
+    class _Diffusion:
+        cfg_scale = 2.5
+        guidance = _Guidance()
+
+    class _Pipeline:
+        def __init__(self):
+            self.diffusion = _Diffusion()
+            self.calls = []
+
+        def generate_dungeon(self, **kwargs):
+            self.calls.append(kwargs)
+
+            class _Result:
+                dungeon_grid = np.zeros((16, 11), dtype=np.int32)
+                metrics = {"num_rooms": 2, "repair_rate": 0.0}
+
+            return _Result()
+
+    mission_graph = MissionGraph()
+    mission_graph.add_node(MissionNode(id=0, node_type=NodeType.START))
+    mission_graph.add_node(MissionNode(id=1, node_type=NodeType.GOAL))
+    mission_graph.add_edge(0, 1, edge_type=EdgeType.PATH)
+
+    pipeline = _Pipeline()
+    logger = _Logger()
+
+    result = generation_pipeline.generate_dungeon_with_pipeline(
+        pipeline,
+        mission_graph,
+        seed=123,
+        logger=logger,
+    )
+
+    assert tuple(result.dungeon_grid.shape) == (16, 11)
+    assert pipeline.calls
+    kwargs = pipeline.calls[0]
+    assert isinstance(kwargs["mission_graph"], nx.DiGraph)
+    assert kwargs["seed"] == 123
+    assert kwargs["enable_map_elites"] is False
+    assert kwargs["apply_repair"] is True
+    assert logger.info_calls
+
+
+def test_generation_cli_canonical_wrapper_samples_through_pipeline(monkeypatch):
+    pipeline = object()
+    captured = {}
+
+    def _fake_generate_mission_graph(random_module, *, seed=None, num_rooms=None):
+        captured["mission_seed"] = seed
+        return {"mission_graph": {"seed": seed}}
+
+    def _fake_generate_dungeon_with_pipeline(active_pipeline, mission_graph, *, seed, logger):
+        captured["pipeline"] = active_pipeline
+        captured["mission_graph"] = mission_graph
+        captured["sample_seed"] = seed
+
+        class _Result:
+            dungeon_grid = np.zeros((16, 11), dtype=np.int32)
+
+        return _Result()
+
+    monkeypatch.setattr(generation_cli, "generate_mission_graph", _fake_generate_mission_graph)
+    monkeypatch.setattr(generation_cli, "generate_dungeon_with_pipeline", _fake_generate_dungeon_with_pipeline)
+
+    generator = generation_cli.CanonicalDungeonGenerator(pipeline, seed=77)
+    sample = generator.sample(device=torch.device("cpu"))
+
+    assert tuple(sample.shape) == (1, 1, 16, 11)
+    assert captured["pipeline"] is pipeline
+    assert captured["mission_graph"] == {"seed": 77}
+    assert captured["mission_seed"] == 77
+    assert captured["sample_seed"] == 77
 

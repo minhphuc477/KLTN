@@ -22,6 +22,9 @@ __all__ = [
     "PreparedDungeonGeneration",
     "GeneratedRoomSet",
     "StitchedRoomLayout",
+    "topology_generation_kwargs_from_resolved_config",
+    "generation_runtime_kwargs_from_resolved_config",
+    "pipeline_kwargs_from_resolved_config",
     "create_pipeline",
 ]
 
@@ -36,6 +39,9 @@ _DUNGEON_PIPELINE_EXPORTS = {
     "DungeonGenerationResult",
     "PreparedDungeonGeneration",
     "GeneratedRoomSet",
+    "topology_generation_kwargs_from_resolved_config",
+    "generation_runtime_kwargs_from_resolved_config",
+    "pipeline_kwargs_from_resolved_config",
     "create_pipeline",
 }
 
@@ -51,6 +57,9 @@ if TYPE_CHECKING:
         PreparedDungeonGeneration,
         RoomGenerationResult,
         SymbolicGenerationComponents,
+        topology_generation_kwargs_from_resolved_config,
+        generation_runtime_kwargs_from_resolved_config,
+        pipeline_kwargs_from_resolved_config,
         create_pipeline,
     )
     from src.pipeline.room_stitching import StitchedRoomLayout

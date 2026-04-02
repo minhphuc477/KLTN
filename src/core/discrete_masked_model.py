@@ -17,9 +17,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-from src.core.definitions import ROOM_HEIGHT, ROOM_WIDTH
+from src.core.definitions import ROOM_HEIGHT, ROOM_TOPOLOGY_CHANNEL_COUNT, ROOM_WIDTH
 from src.core.latent_diffusion import UNetDenoiser
-from src.pipeline.room_topology_conditioning import ROOM_TOPOLOGY_CHANNEL_COUNT
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +45,16 @@ class DiscreteMaskedRoomModel(nn.Module):
         context_dim: int = 256,
         num_steps: int = 8,
         attention_mode: str = "softmax",
+        topology_conditioning_mode: str = "additive",
         hedgehog_feature_dim: int = 32,
+        graph_auto_linear_attention_nodes: int = 128,
+        spatial_graph_gate_init: float = -2.0,
+        spatial_topology_gate_init: float = -2.0,
+        unet_channel_mult: Sequence[int] = (1, 2, 4),
+        unet_num_res_blocks: int = 2,
+        unet_attention_resolutions: Sequence[int] = (1, 2),
+        unet_num_heads: int = 8,
+        unet_dropout: float = 0.1,
         room_topology_channels: int = ROOM_TOPOLOGY_CHANNEL_COUNT,
         mask_token_id: Optional[int] = None,
     ):
@@ -69,9 +77,18 @@ class DiscreteMaskedRoomModel(nn.Module):
             out_channels=self.hidden_dim,
             model_channels=model_channels,
             context_dim=context_dim,
+            channel_mult=tuple(int(v) for v in unet_channel_mult),
+            num_res_blocks=int(unet_num_res_blocks),
+            attention_resolutions=tuple(int(v) for v in unet_attention_resolutions),
+            num_heads=int(unet_num_heads),
+            dropout=float(unet_dropout),
             attention_mode=attention_mode,
             hedgehog_feature_dim=hedgehog_feature_dim,
             topology_map_channels=room_topology_channels,
+            topology_conditioning_mode=topology_conditioning_mode,
+            auto_linear_attention_nodes=int(graph_auto_linear_attention_nodes),
+            graph_gate_init=float(spatial_graph_gate_init),
+            topology_gate_init=float(spatial_topology_gate_init),
         )
         self.classifier = nn.Conv2d(self.hidden_dim, self.num_classes, kernel_size=1)
 
@@ -322,8 +339,14 @@ class DiscreteMaskedRoomModel(nn.Module):
         if fixed_mask is None:
             fixed_mask = torch.zeros_like(target, dtype=torch.bool)
         available = ~fixed_mask
+        min_mask_ratio = float(min_mask_ratio)
+        max_mask_ratio = float(max_mask_ratio)
+        if min_mask_ratio > max_mask_ratio:
+            raise ValueError(
+                f"min_mask_ratio must be <= max_mask_ratio, got {min_mask_ratio} > {max_mask_ratio}."
+            )
 
-        mask_ratio = torch.empty(batch_size, device=device).uniform_(float(min_mask_ratio), float(max_mask_ratio))
+        mask_ratio = torch.empty(batch_size, device=device).uniform_(min_mask_ratio, max_mask_ratio)
         random_mask = torch.rand_like(target.float()) < mask_ratio[:, None, None]
         train_mask = random_mask & available
 
@@ -449,7 +472,16 @@ def create_discrete_masked_model(
     context_dim: int = 256,
     num_steps: int = 8,
     attention_mode: str = "softmax",
+    topology_conditioning_mode: str = "additive",
     hedgehog_feature_dim: int = 32,
+    graph_auto_linear_attention_nodes: int = 128,
+    spatial_graph_gate_init: float = -2.0,
+    spatial_topology_gate_init: float = -2.0,
+    unet_channel_mult: Sequence[int] = (1, 2, 4),
+    unet_num_res_blocks: int = 2,
+    unet_attention_resolutions: Sequence[int] = (1, 2),
+    unet_num_heads: int = 8,
+    unet_dropout: float = 0.1,
     room_topology_channels: int = ROOM_TOPOLOGY_CHANNEL_COUNT,
 ) -> DiscreteMaskedRoomModel:
     """Factory for the graph-conditioned discrete masked room model."""
@@ -460,7 +492,16 @@ def create_discrete_masked_model(
         context_dim=context_dim,
         num_steps=num_steps,
         attention_mode=attention_mode,
+        topology_conditioning_mode=topology_conditioning_mode,
         hedgehog_feature_dim=hedgehog_feature_dim,
+        graph_auto_linear_attention_nodes=graph_auto_linear_attention_nodes,
+        spatial_graph_gate_init=spatial_graph_gate_init,
+        spatial_topology_gate_init=spatial_topology_gate_init,
+        unet_channel_mult=unet_channel_mult,
+        unet_num_res_blocks=unet_num_res_blocks,
+        unet_attention_resolutions=unet_attention_resolutions,
+        unet_num_heads=unet_num_heads,
+        unet_dropout=unet_dropout,
         room_topology_channels=room_topology_channels,
     )
 

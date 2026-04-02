@@ -36,6 +36,7 @@ import numpy as np
 import networkx as nx
 
 from src.core.definitions import parse_edge_type_tokens, parse_node_label_tokens
+from src.utils.stable_seed import stable_int_hash
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +85,56 @@ class FeatureExtractor:
     def extract(self, dungeon: Any) -> Tuple[float, ...]:
         """Extract features from a dungeon."""
         raise NotImplementedError
+
+
+def _stable_graph_cache_node_id(value: Any) -> Tuple[str, str]:
+    """Canonicalize heterogeneous node IDs for deterministic cache keys."""
+    if isinstance(value, np.generic):
+        value = value.item()
+    return (type(value).__name__, repr(value))
+
+
+def _canonical_cache_value(value: Any) -> Any:
+    """Normalize nested graph attrs into a deterministically ordered structure."""
+    if isinstance(value, dict):
+        items = [
+            (str(key), _canonical_cache_value(val))
+            for key, val in value.items()
+        ]
+        return tuple(sorted(items, key=repr))
+    if isinstance(value, (list, tuple)):
+        return tuple(_canonical_cache_value(item) for item in value)
+    if isinstance(value, set):
+        return tuple(sorted((_canonical_cache_value(item) for item in value), key=repr))
+    if isinstance(value, np.generic):
+        return value.item()
+    return value
+
+
+def _stable_graph_cache_key(graph: nx.DiGraph) -> int:
+    """Build a deterministic cache key from graph topology plus node/edge attrs."""
+    node_payload = [
+        (
+            _stable_graph_cache_node_id(node),
+            _canonical_cache_value(dict(data)),
+        )
+        for node, data in graph.nodes(data=True)
+    ]
+    edge_payload = [
+        (
+            _stable_graph_cache_node_id(src),
+            _stable_graph_cache_node_id(tgt),
+            _canonical_cache_value(dict(data)),
+        )
+        for src, tgt, data in graph.edges(data=True)
+    ]
+    return stable_int_hash(
+        (
+            bool(graph.is_directed()),
+            tuple(sorted(node_payload, key=repr)),
+            tuple(sorted(edge_payload, key=repr)),
+        )
+    )
 
 
 def _node_tokens(data: Dict[str, Any]) -> set:
@@ -909,8 +960,7 @@ class CBSFeatureExtractor(FeatureExtractor):
         
         Uses caching since CBS evaluation can be expensive.
         """
-        # Simple cache key from graph structure
-        cache_key = hash(str(sorted(graph.edges())))
+        cache_key = _stable_graph_cache_key(graph)
         
         if cache_key in self._cache:
             return self._cache[cache_key]

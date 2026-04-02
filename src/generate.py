@@ -17,6 +17,7 @@ Usage:
 import sys
 import argparse
 import logging
+import random
 from pathlib import Path
 from typing import List, Tuple, Optional, Dict, Any
 
@@ -31,11 +32,15 @@ if str(PROJECT_ROOT) not in sys.path:
 
 # Use Block V LogicNet (not legacy ml.logic_net)
 from src.core.logic_net import LogicNet
-from src.core.latent_diffusion import create_latent_diffusion
-from src.core.vqvae import create_vqvae
-from src.core.condition_encoder import create_condition_encoder
+from src.config_system import load_resolved_config_for_artifact
 from src.core.symbolic_refiner import create_symbolic_refiner
 from src.core.definitions import SEMANTIC_TO_CHAR, semantic_grid_to_vglc_lines
+from src.gui.ai.generation_pipeline import (
+    generate_dungeon_with_pipeline,
+    generate_mission_graph,
+    load_canonical_generation_pipeline,
+)
+from src.pipeline.dungeon_pipeline import NeuralSymbolicDungeonPipeline, pipeline_kwargs_from_resolved_config
 
 logger = logging.getLogger(__name__)
 
@@ -241,6 +246,97 @@ class WFCRepair:
 # GENERATION PIPELINE
 # =============================================================================
 
+
+class CanonicalDungeonGenerator(nn.Module):
+    """
+    Wrap the canonical room-wise neural-symbolic pipeline in a sample() interface.
+
+    This keeps the legacy CLI/evaluation helpers working while ensuring generation
+    actually follows the documented mission-graph -> per-room -> symbolic-repair
+    stack instead of constructing a separate hardcoded inference model.
+    """
+
+    def __init__(
+        self,
+        pipeline: NeuralSymbolicDungeonPipeline,
+        *,
+        seed: Optional[int] = None,
+    ):
+        super().__init__()
+        self.pipeline = pipeline
+        self.base_seed = None if seed is None else int(seed)
+        self.samples_generated = 0
+        self.register_buffer("_device_anchor", torch.empty(0), persistent=False)
+
+    def sample(self, num_samples: int = 1, device: Optional[torch.device] = None) -> torch.Tensor:
+        if device is None:
+            device = self._device_anchor.device
+
+        rooms: List[torch.Tensor] = []
+        for _ in range(max(1, int(num_samples))):
+            sample_seed = (
+                None
+                if self.base_seed is None
+                else int(self.base_seed + self.samples_generated)
+            )
+            mission_data = generate_mission_graph(random, seed=sample_seed)
+            result = generate_dungeon_with_pipeline(
+                self.pipeline,
+                mission_data["mission_graph"],
+                seed=sample_seed,
+                logger=logger,
+            )
+            grid = torch.as_tensor(result.dungeon_grid, dtype=torch.float32, device=device)
+            if grid.dim() != 2:
+                raise ValueError(
+                    "Canonical pipeline must return a 2D semantic grid for CLI generation, "
+                    f"got shape={tuple(grid.shape)}."
+                )
+            rooms.append(grid.unsqueeze(0).unsqueeze(0))
+            self.samples_generated += 1
+
+        return torch.cat(rooms, dim=0)
+
+
+def load_generation_pipeline(
+    checkpoint_path: Optional[str],
+    *,
+    device: torch.device,
+    strict_checkpoint_mode: bool = False,
+) -> NeuralSymbolicDungeonPipeline:
+    """Load the canonical inference stack, or create a random-init canonical stack."""
+    if checkpoint_path:
+        checkpoint = Path(checkpoint_path)
+        if checkpoint.exists():
+            return load_canonical_generation_pipeline(
+                checkpoint_path=checkpoint,
+                device=device,
+                logger=logger,
+                strict_checkpoint_mode=bool(strict_checkpoint_mode),
+            )
+        if strict_checkpoint_mode:
+            raise FileNotFoundError(f"Generation checkpoint not found at {checkpoint_path!r}.")
+        logger.warning(
+            "Checkpoint %s not found; falling back to randomly initialized canonical pipeline.",
+            checkpoint,
+        )
+    else:
+        logger.warning("No checkpoint provided; using randomly initialized canonical pipeline.")
+
+    resolved_config = load_resolved_config_for_artifact(checkpoint_path) if checkpoint_path else None
+    pipeline_kwargs = (
+        pipeline_kwargs_from_resolved_config(resolved_config)
+        if isinstance(resolved_config, dict)
+        else {}
+    )
+    return NeuralSymbolicDungeonPipeline(
+        device=str(device),
+        enable_logging=False,
+        strict_checkpoint_mode=bool(strict_checkpoint_mode),
+        **pipeline_kwargs,
+    )
+
+
 def generate_and_evaluate(
     model: nn.Module,
     num_samples: int = 100,
@@ -270,7 +366,11 @@ def generate_and_evaluate(
     model.eval()
     
     if device is None:
-        device = next(model.parameters()).device
+        try:
+            device = next(model.parameters()).device
+        except StopIteration:
+            first_buffer = next(model.buffers(), None)
+            device = first_buffer.device if first_buffer is not None else torch.device("cpu")
     
     validator = DungeonValidator()
     wfc_repair = WFCRepair() if use_repair else None
@@ -451,6 +551,14 @@ def main():
         help='Device to use'
     )
     parser.add_argument(
+        '--seed', type=int, default=None,
+        help='Base seed for reproducible mission-graph and room generation.'
+    )
+    parser.add_argument(
+        '--strict-checkpoint-mode', action='store_true',
+        help='Fail instead of falling back when checkpoint metadata or files are missing.'
+    )
+    parser.add_argument(
         '--verbose', '-v', action='store_true',
         help='Verbose output'
     )
@@ -477,58 +585,12 @@ def main():
     
     logger.info(f"Using device: {device}")
     
-    # Load or create model
-    # Uses Block IV LatentDiffusionModel + Block II VQ-VAE for generation
-    vqvae = create_vqvae(num_classes=44, latent_dim=64)
-    diffusion = create_latent_diffusion(latent_dim=64, context_dim=256)
-    condition_encoder = create_condition_encoder(latent_dim=64, output_dim=256)
-    
-    if args.checkpoint and Path(args.checkpoint).exists():
-        checkpoint = torch.load(args.checkpoint, map_location=device)
-        # Load EMA weights if available (Phase 4A), else regular weights
-        if 'ema_diffusion_state_dict' in checkpoint:
-            diffusion.load_state_dict(checkpoint['ema_diffusion_state_dict'])
-            logger.info(f"Loaded EMA diffusion weights from {args.checkpoint}")
-        elif 'diffusion_state_dict' in checkpoint:
-            diffusion.load_state_dict(checkpoint['diffusion_state_dict'])
-            logger.info(f"Loaded diffusion weights from {args.checkpoint}")
-        if 'condition_encoder_state_dict' in checkpoint:
-            condition_encoder.load_state_dict(checkpoint['condition_encoder_state_dict'])
-        # Load VQ-VAE if saved separately or in same checkpoint
-        if 'vqvae_state_dict' in checkpoint:
-            vqvae.load_state_dict(checkpoint['vqvae_state_dict'])
-    else:
-        logger.warning("No checkpoint provided, using random initialized model")
-    
-    vqvae = vqvae.to(device).eval()
-    diffusion = diffusion.to(device).eval()
-    condition_encoder = condition_encoder.to(device).eval()
-    
-    # Wrap in a simple model interface for generate_and_evaluate
-    class LatentDiffusionWrapper(nn.Module):
-        """Wraps VQ-VAE + Diffusion + CondEncoder for generation."""
-        def __init__(self, vqvae, diffusion, cond_encoder, latent_shape=(1, 64, 4, 3)):
-            super().__init__()
-            self.vqvae = vqvae
-            self.diffusion = diffusion
-            self.cond_encoder = cond_encoder
-            self.latent_shape = latent_shape
-        
-        def sample(self, num_samples=1, device=None):
-            if device is None:
-                device = next(self.parameters()).device
-            # Random conditioning
-            cond = torch.randn(num_samples, 256, device=device)
-            z = self.diffusion.ddim_sample(
-                context=cond,
-                shape=(num_samples, *self.latent_shape[1:]),
-                num_steps=50,
-            )
-            # Decode through VQ-VAE
-            recon = self.vqvae.decode(z)
-            return recon.argmax(dim=1, keepdim=True).float()
-    
-    model = LatentDiffusionWrapper(vqvae, diffusion, condition_encoder).to(device)
+    pipeline = load_generation_pipeline(
+        args.checkpoint,
+        device=device,
+        strict_checkpoint_mode=bool(args.strict_checkpoint_mode),
+    )
+    model = CanonicalDungeonGenerator(pipeline, seed=args.seed).to(device)
     
     # Generate
     num_samples = 10 if args.quick else args.num_samples

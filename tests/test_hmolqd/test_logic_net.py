@@ -86,6 +86,23 @@ class TestReachabilityScorer:
         assert scores.shape == (2,)
         assert scores[0] > scores[1]
 
+    def test_negative_distances_do_not_produce_negative_loss(self):
+        """Reachability loss should remain a penalty even if upstream distances go negative."""
+        from src.core.logic_net import ReachabilityScorer
+
+        scorer = ReachabilityScorer()
+
+        distances = torch.full((1, 16, 11), -25.0)
+        goal = torch.zeros(1, 16, 11)
+        goal[:, 8, 5] = 1.0
+
+        scores, loss = scorer(distances, goal, return_loss=True)
+
+        assert torch.isfinite(scores).all()
+        assert torch.isfinite(loss)
+        assert torch.all(scores <= 1.0 + 1e-6)
+        assert float(loss.item()) >= 0.0
+
 
 class TestKeyLockChecker:
     """Tests for key-lock constraint checking."""
@@ -216,6 +233,31 @@ class TestLogicNet:
         assert torch.isfinite(info["topology_trace_loss"])
         assert torch.isfinite(info["topology_anchor_loss"])
         assert torch.allclose(loss, expected, atol=1e-6, rtol=1e-5)
+
+    def test_logicnet_resolves_typed_gate_channels_as_door_anchors(self):
+        """Typed gate-only topology maps should still register as doorway anchors."""
+        from src.core.logic_net import LogicNet
+
+        logic_net = LogicNet(
+            latent_dim=64,
+            num_classes=44,
+            num_iterations=4,
+        )
+
+        topology = torch.zeros(1, len(ROOM_TOPOLOGY_CHANNELS), ROOM_HEIGHT, ROOM_WIDTH, dtype=torch.float32)
+        topology[:, ROOM_TOPOLOGY_CHANNELS["gate_switch_e"], ROOM_HEIGHT // 2 - 1:ROOM_HEIGHT // 2 + 2, ROOM_WIDTH - 1] = 1.0
+
+        targets = logic_net._resolve_room_logic_targets(
+            {"room_topology_map": topology},
+            batch_size=1,
+            device=torch.device("cpu"),
+            dtype=torch.float32,
+        )
+
+        assert targets["source_mask"] is not None
+        assert targets["target_mask"] is not None
+        assert targets["anchor_target"] is not None
+        assert float(targets["anchor_target"].sum().item()) > 0.0
 
 
 class TestTileClassifier:

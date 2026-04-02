@@ -4562,13 +4562,32 @@ class GraphGuidedValidator:
             Dictionary with integer keys and room data
         """
         normalized = {}
+        used_room_ids: Set[int] = set()
+        tuple_key_to_id: Dict[Tuple[Any, ...], int] = {}
+
+        tuple_keys = [key for key in rooms.keys() if isinstance(key, tuple)]
+        for key in rooms.keys():
+            if isinstance(key, str):
+                try:
+                    used_room_ids.add(int(key))
+                except ValueError:
+                    continue
+            elif isinstance(key, int):
+                used_room_ids.add(int(key))
+
+        next_tuple_room_id = (max(used_room_ids) + 1) if used_room_ids else 0
+        for key in sorted(tuple_keys, key=repr):
+            while next_tuple_room_id in used_room_ids:
+                next_tuple_room_id += 1
+            tuple_key_to_id[key] = next_tuple_room_id
+            used_room_ids.add(next_tuple_room_id)
+            next_tuple_room_id += 1
+
         for key, room_data in rooms.items():
             try:
                 # Handle tuple keys (e.g., from Dungeon objects)
                 if isinstance(key, tuple):
-                    # For tuple keys, we need a unique integer ID
-                    # Use hash or create a simple mapping
-                    room_id = hash(key) % 1000000  # Simple int mapping
+                    room_id = tuple_key_to_id[key]
                     logger.debug("Normalized tuple key %s to %s", key, room_id)
                 # Handle string keys (e.g., from DungeonData)
                 elif isinstance(key, str):

@@ -50,6 +50,9 @@ from .zelda_core import (
     ZeldaDungeonAdapter
 )
 from src.core.definitions import (
+    GRAPH_EDGE_FEATURE_DIM,
+    GRAPH_NODE_FEATURE_DIM,
+    GRAPH_TPE_DIM,
     ROOM_HEIGHT,
     ROOM_WIDTH,
     SEMANTIC_PALETTE,
@@ -59,13 +62,18 @@ from src.core.definitions import (
     select_primary_edge_type,
 )
 from src.core.condition_encoder import build_boundary_constraints
-from src.pipeline.graph_features import compute_tpe_features
+from src.pipeline.graph_features import (
+    compute_tpe_features,
+    encode_edge_feature_vector,
+    extract_node_feature_vector,
+)
 from src.pipeline.room_topology_conditioning import (
     ROOM_TOPOLOGY_CHANNEL_COUNT,
     build_room_topology_condition_map,
     build_semantic_room_plan_trace,
     nearest_walkable_point,
 )
+from src.utils.style_tokens import iter_style_metadata_candidates, resolve_style_token_id
 VGLC_AVAILABLE = True
 logger.info("VGLC adapter available via zelda_core")
 
@@ -74,14 +82,67 @@ _EDGE_TYPE_ENCODING = {
     'open': 0, '': 0,
     'key_locked': 1, 'k': 1,
     'bombable': 2, 'b': 2,
-    'soft_locked': 3, 'l': 3,
+    'soft_locked': 3, 'l': 3, 'one_way': 3, 'shutter': 3,
     'boss_locked': 4, 'K': 4,
     'item_locked': 5, 'I': 5,
-    'stair': 6, 's': 6,
+    'stair': 6, 'stairs': 6, 'warp': 6, 's': 6,
+    'switch': 7, 'switch_locked': 7, 'state_block': 7, 'on_off_gate': 7,
 }
 
 
-def _extract_graph_spatial_from_dungeon(dungeon) -> dict:
+def _parse_label_tokens_local(label: Any) -> set:
+    return {str(part).strip().lower() for part in parse_node_label_tokens(str(label or "")) if str(part).strip()}
+
+
+def _coerce_bool_local(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, np.integer)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "1", "yes", "y", "on"}
+    return bool(value)
+
+
+def _coerce_difficulty_local(value: Any) -> float:
+    try:
+        return float(max(0.0, min(1.0, float(value))))
+    except Exception:
+        return 0.5
+
+
+def _extract_explicit_style_id(
+    room: Any,
+    *,
+    graph_node_attrs: Optional[Dict[str, Any]] = None,
+    graph: Any = None,
+) -> Optional[int]:
+    """
+    Extract an explicitly provided numeric style/theme token.
+
+    We only forward numeric IDs that already exist in room/node/graph metadata.
+    This avoids inventing a theme taxonomy from free-form labels or sector names.
+    """
+    graph_attrs = getattr(graph, "graph", None)
+    candidate_values: List[Any] = []
+    for key in ("style_id", "theme_id", "sector_theme_id", "sector_theme", "theme", "theme_name"):
+        if room is not None and hasattr(room, key):
+            candidate_values.append(getattr(room, key))
+    candidate_values.extend(
+        iter_style_metadata_candidates(graph_node_attrs, graph_attrs, keys=("style_id", "theme_id", "sector_theme_id"))
+    )
+    candidate_values.extend(
+        iter_style_metadata_candidates(graph_node_attrs, graph_attrs, keys=("sector_theme", "theme", "theme_name"))
+    )
+    return resolve_style_token_id(*candidate_values)
+
+
+def _extract_graph_spatial_from_dungeon(
+    dungeon,
+    *,
+    node_feature_dim: int = GRAPH_NODE_FEATURE_DIM,
+    edge_feature_dim: int = GRAPH_EDGE_FEATURE_DIM,
+) -> dict:
     """Fallback graph extraction from room adjacency only."""
     nodes = []
     edges = []
@@ -89,7 +150,7 @@ def _extract_graph_spatial_from_dungeon(dungeon) -> dict:
 
     for idx, (coord, _room) in enumerate(dungeon.rooms.items()):
         room_to_idx[coord] = idx
-        nodes.append([0.0] * 6)
+        nodes.append([0.0] * int(max(1, node_feature_dim)))
 
     for coord in dungeon.rooms:
         src_idx = room_to_idx[coord]
@@ -100,10 +161,11 @@ def _extract_graph_spatial_from_dungeon(dungeon) -> dict:
                 edges.append([src_idx, dst_idx])
 
     return {
-        'node_features': np.array(nodes, dtype=np.float32) if nodes else np.zeros((0, 6), dtype=np.float32),
+        'node_features': np.array(nodes, dtype=np.float32) if nodes else np.zeros((0, int(max(1, node_feature_dim))), dtype=np.float32),
         'edge_index': np.array(edges, dtype=np.int64).T if edges else np.zeros((2, 0), dtype=np.int64),
         'edge_attr': np.zeros((len(edges),), dtype=np.int64),
-        'tpe': np.zeros((len(nodes), 8), dtype=np.float32),
+        'edge_features': np.zeros((len(edges), int(max(1, edge_feature_dim))), dtype=np.float32),
+        'tpe': np.zeros((len(nodes), GRAPH_TPE_DIM), dtype=np.float32),
         'node_positions': np.stack(
             [
                 np.arange(len(nodes), dtype=np.float32),
@@ -118,15 +180,25 @@ def _extract_graph_spatial_from_dungeon(dungeon) -> dict:
     }
 
 
-def _extract_graph_from_dungeon(dungeon) -> dict:
+def _extract_graph_from_dungeon(
+    dungeon,
+    *,
+    node_feature_dim: int = GRAPH_NODE_FEATURE_DIM,
+    edge_feature_dim: int = GRAPH_EDGE_FEATURE_DIM,
+) -> dict:
     """Extract authoritative graph tensors from a stitched VGLC dungeon."""
     graph = getattr(dungeon, 'graph', None)
     if graph is None or len(graph.nodes()) == 0:
-        return _extract_graph_spatial_from_dungeon(dungeon)
+        return _extract_graph_spatial_from_dungeon(
+            dungeon,
+            node_feature_dim=node_feature_dim,
+            edge_feature_dim=edge_feature_dim,
+        )
 
     nodes: List[List[float]] = []
     edges: List[List[int]] = []
     edge_attrs: List[int] = []
+    edge_features_list: List[List[float]] = []
     node_id_to_idx: Dict[Any, int] = {}
     start_node_idx = -1
     node_positions: List[List[float]] = []
@@ -143,17 +215,15 @@ def _extract_graph_from_dungeon(dungeon) -> dict:
             continue
 
         node_id_to_idx[node_id] = idx
-        label = data.get('label', '')
-        parts = parse_node_label_tokens(label)
-        node_features = [
-            float('e' in parts or data.get('has_enemy', False)),
-            float('k' in parts or data.get('has_key', False)),
-            float('i' in parts or 'I' in parts or 'K' in parts or data.get('has_item', False)),
-            float('t' in parts or data.get('is_triforce', False)),
-            float('b' in parts or data.get('is_boss', False)),
-            float('p' in parts or data.get('has_puzzle', False)),
-        ]
-        nodes.append(node_features)
+        node_features = extract_node_feature_vector(
+            dict(data),
+            node_dim=int(max(1, node_feature_dim)),
+            device=torch.device("cpu"),
+            parse_label_tokens=_parse_label_tokens_local,
+            coerce_bool=_coerce_bool_local,
+            coerce_difficulty=_coerce_difficulty_local,
+        )
+        nodes.append(node_features.cpu().numpy().astype(np.float32).tolist())
         pos = room_position_by_graph_node.get(node_id)
         if pos is None:
             pos = (idx, 0)
@@ -183,29 +253,18 @@ def _extract_graph_from_dungeon(dungeon) -> dict:
         )
         edge_type = select_primary_edge_type(constraints)
         edge_attrs.append(_EDGE_TYPE_ENCODING.get(edge_type, 0))
+        edge_features_list.append(
+            encode_edge_feature_vector(
+                dict(data),
+                edge_dim=int(max(1, edge_feature_dim)),
+            )
+        )
 
-    node_features_arr = np.array(nodes, dtype=np.float32) if nodes else np.zeros((0, 6), dtype=np.float32)
+    node_features_arr = np.array(nodes, dtype=np.float32) if nodes else np.zeros((0, int(max(1, node_feature_dim))), dtype=np.float32)
     edge_index_arr = np.array(edges, dtype=np.int64).T if edges else np.zeros((2, 0), dtype=np.int64)
     edge_attr_arr = np.array(edge_attrs, dtype=np.int64) if edge_attrs else np.zeros((0,), dtype=np.int64)
+    edge_features_arr = np.array(edge_features_list, dtype=np.float32) if edge_features_list else np.zeros((0, int(max(1, edge_feature_dim))), dtype=np.float32)
     node_positions_arr = np.array(node_positions, dtype=np.float32) if node_positions else np.zeros((0, 2), dtype=np.float32)
-
-    def _parse_label_tokens_local(label: Any) -> set:
-        return {str(part).strip().lower() for part in parse_node_label_tokens(str(label or "")) if str(part).strip()}
-
-    def _coerce_bool_local(value: Any) -> bool:
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, (int, np.integer)):
-            return value != 0
-        if isinstance(value, str):
-            return value.strip().lower() in {"true", "1", "yes", "y", "on"}
-        return bool(value)
-
-    def _coerce_difficulty_local(value: Any) -> float:
-        try:
-            return float(max(0.0, min(1.0, float(value))))
-        except Exception:
-            return 0.5
 
     filtered_nodes = [node_id for node_id in sorted(graph.nodes()) if node_id in node_id_to_idx]
     tpe_tensor = compute_tpe_features(
@@ -222,6 +281,7 @@ def _extract_graph_from_dungeon(dungeon) -> dict:
         'node_features': node_features_arr,
         'edge_index': edge_index_arr,
         'edge_attr': edge_attr_arr,
+        'edge_features': edge_features_arr,
         'tpe': tpe_tensor.cpu().numpy().astype(np.float32),
         'node_positions': node_positions_arr,
         'num_nodes': len(nodes),
@@ -371,6 +431,7 @@ def _build_room_graph_sample(dungeon, room_position: Tuple[int, int], room, base
     graph_node_attrs = None
     if graph is not None and graph_node_id is not None and graph_node_id in graph.nodes:
         graph_node_attrs = dict(graph.nodes[graph_node_id])
+    style_id = _extract_explicit_style_id(room, graph_node_attrs=graph_node_attrs, graph=graph)
 
     role_flags = _room_role_flags(room, graph_node_attrs)
     start, goal = extract_start_goal(getattr(room, "semantic_grid", None))
@@ -425,7 +486,8 @@ def _build_room_graph_sample(dungeon, room_position: Tuple[int, int], room, base
         'node_features': base_graph['node_features'],
         'edge_index': base_graph['edge_index'],
         'edge_attr': base_graph.get('edge_attr', np.zeros((0,), dtype=np.int64)),
-        'tpe': base_graph.get('tpe', np.zeros((base_graph.get('num_nodes', 0), 8), dtype=np.float32)),
+        'edge_features': base_graph.get('edge_features', np.zeros((0, GRAPH_EDGE_FEATURE_DIM), dtype=np.float32)),
+        'tpe': base_graph.get('tpe', np.zeros((base_graph.get('num_nodes', 0), GRAPH_TPE_DIM), dtype=np.float32)),
         'node_positions': base_graph.get('node_positions', np.zeros((base_graph.get('num_nodes', 0), 2), dtype=np.float32)),
         'num_nodes': int(base_graph.get('num_nodes', 0)),
         'num_edges': int(base_graph.get('num_edges', 0)),
@@ -436,6 +498,7 @@ def _build_room_graph_sample(dungeon, room_position: Tuple[int, int], room, base
         'boundary_constraints': build_boundary_constraints(has_neighbor=has_neighbor, required_door=required_doors).numpy().astype(np.float32),
         'room_topology_map': room_topology_map.astype(np.float32),
         'neighbor_maps': neighbor_maps,
+        **({'style_id': int(style_id)} if style_id is not None else {}),
     }
 
 
@@ -475,6 +538,8 @@ class ZeldaDungeonDataset(Dataset):
         target_size: Optional[Tuple[int, int]] = None,
         pad_to_max: bool = True,  # Pad all samples to max size for batching
         load_graphs: bool = False,  # NEW: Load graph data for dual-stream
+        node_feature_dim: int = GRAPH_NODE_FEATURE_DIM,
+        edge_feature_dim: int = GRAPH_EDGE_FEATURE_DIM,
     ):
         self.data_dir = Path(data_dir)
         self.transform = transform
@@ -483,6 +548,8 @@ class ZeldaDungeonDataset(Dataset):
         self.use_vglc = use_vglc and VGLC_AVAILABLE
         self.pad_to_max = pad_to_max
         self.load_graphs = load_graphs
+        self.node_feature_dim = int(max(1, node_feature_dim))
+        self.edge_feature_dim = int(max(1, edge_feature_dim))
         
         # Track max dimensions for padding
         self.max_h = 0
@@ -552,11 +619,19 @@ class ZeldaDungeonDataset(Dataset):
         node is NOT included as a room node -- instead, its connected room
         is marked with start_node_id.
         """
-        return _extract_graph_from_dungeon(dungeon)
+        return _extract_graph_from_dungeon(
+            dungeon,
+            node_feature_dim=self.node_feature_dim,
+            edge_feature_dim=self.edge_feature_dim,
+        )
     
     def _extract_graph_spatial(self, dungeon) -> dict:
         """Fallback: extract graph from spatial adjacency when DOT graph unavailable."""
-        return _extract_graph_spatial_from_dungeon(dungeon)
+        return _extract_graph_spatial_from_dungeon(
+            dungeon,
+            node_feature_dim=self.node_feature_dim,
+            edge_feature_dim=self.edge_feature_dim,
+        )
     
     def __len__(self) -> int:
         if self.samples is not None:
@@ -601,11 +676,13 @@ class ZeldaDungeonDataset(Dataset):
         # Return with graph if requested
         if self.load_graphs and self.graphs is not None:
             graph = self.graphs[idx]
+            edge_feature_dim = int(getattr(self, "edge_feature_dim", GRAPH_EDGE_FEATURE_DIM))
             return tensor_map, {
                 'node_features': torch.tensor(graph['node_features'], dtype=torch.float32),
                 'edge_index': torch.tensor(graph['edge_index'], dtype=torch.long),
                 'edge_attr': torch.tensor(graph.get('edge_attr', np.zeros((0,), dtype=np.int64)), dtype=torch.long),
-                'tpe': torch.tensor(graph.get('tpe', np.zeros((0, 8), dtype=np.float32)), dtype=torch.float32),
+                'edge_features': torch.tensor(graph.get('edge_features', np.zeros((0, edge_feature_dim), dtype=np.float32)), dtype=torch.float32),
+                'tpe': torch.tensor(graph.get('tpe', np.zeros((0, GRAPH_TPE_DIM), dtype=np.float32)), dtype=torch.float32),
                 'node_positions': torch.tensor(graph.get('node_positions', np.zeros((0, 2), dtype=np.float32)), dtype=torch.float32),
                 'num_nodes': graph['num_nodes'],
                 'num_edges': graph['num_edges'],
@@ -686,10 +763,14 @@ class ZeldaRoomDataset(Dataset):
         transform: Optional[Callable] = None,
         normalize: bool = True,
         load_graphs: bool = False,
+        node_feature_dim: int = GRAPH_NODE_FEATURE_DIM,
+        edge_feature_dim: int = GRAPH_EDGE_FEATURE_DIM,
     ):
         self.transform = transform
         self.normalize = normalize
         self.load_graphs = load_graphs
+        self.node_feature_dim = int(max(1, node_feature_dim))
+        self.edge_feature_dim = int(max(1, edge_feature_dim))
         self.rooms = []
         self.graphs = [] if load_graphs else None
         
@@ -702,7 +783,11 @@ class ZeldaRoomDataset(Dataset):
             for variant in [1, 2]:
                 try:
                     dungeon = adapter.load_dungeon(dungeon_num, variant)
-                    dungeon_graph = _extract_graph_from_dungeon(dungeon) if load_graphs else None
+                    dungeon_graph = _extract_graph_from_dungeon(
+                        dungeon,
+                        node_feature_dim=self.node_feature_dim,
+                        edge_feature_dim=self.edge_feature_dim,
+                    ) if load_graphs else None
                     for coord, room in dungeon.rooms.items():
                         grid = getattr(room, 'semantic_grid', None)
                         if grid is None:
@@ -735,6 +820,7 @@ class ZeldaRoomDataset(Dataset):
         if self.load_graphs and self.graphs is not None:
             graph = self.graphs[idx]
             num_tile_ids = 43
+            edge_feature_dim = int(getattr(self, "edge_feature_dim", GRAPH_EDGE_FEATURE_DIM))
             neighbor_maps = {}
             for direction, room_map in dict(graph.get('neighbor_maps', {})).items():
                 if room_map is None:
@@ -748,7 +834,8 @@ class ZeldaRoomDataset(Dataset):
                 'node_features': torch.tensor(graph['node_features'], dtype=torch.float32),
                 'edge_index': torch.tensor(graph['edge_index'], dtype=torch.long),
                 'edge_attr': torch.tensor(graph.get('edge_attr', np.zeros((0,), dtype=np.int64)), dtype=torch.long),
-                'tpe': torch.tensor(graph.get('tpe', np.zeros((0, 8), dtype=np.float32)), dtype=torch.float32),
+                'edge_features': torch.tensor(graph.get('edge_features', np.zeros((0, edge_feature_dim), dtype=np.float32)), dtype=torch.float32),
+                'tpe': torch.tensor(graph.get('tpe', np.zeros((0, GRAPH_TPE_DIM), dtype=np.float32)), dtype=torch.float32),
                 'node_positions': torch.tensor(graph.get('node_positions', np.zeros((0, 2), dtype=np.float32)), dtype=torch.float32),
                 'room_topology_map': torch.tensor(graph.get('room_topology_map', np.zeros((ROOM_TOPOLOGY_CHANNEL_COUNT, ROOM_HEIGHT, ROOM_WIDTH), dtype=np.float32)), dtype=torch.float32),
                 'boundary_constraints': torch.tensor(graph.get('boundary_constraints', np.zeros((8,), dtype=np.float32)), dtype=torch.float32),
@@ -759,6 +846,7 @@ class ZeldaRoomDataset(Dataset):
                 'start_node_id': graph.get('start_node_id', -1),
                 'current_node_idx': int(graph.get('current_node_idx', 0)),
                 'node_to_idx': dict(graph.get('node_to_idx', {})),
+                **({'style_id': int(graph.get('style_id'))} if graph.get('style_id', None) is not None else {}),
             }
 
         return tensor
@@ -819,6 +907,8 @@ def create_dataloader(
     transform: Optional[Callable] = None,
     room_level: bool = False,
     load_graphs: bool = False,
+    node_feature_dim: int = GRAPH_NODE_FEATURE_DIM,
+    edge_feature_dim: int = GRAPH_EDGE_FEATURE_DIM,
     sampler: Optional[Sampler] = None,
     return_sampler: bool = False,
 ) -> DataLoader:
@@ -854,6 +944,8 @@ def create_dataloader(
             transform=transform,
             normalize=normalize,
             load_graphs=load_graphs,
+            node_feature_dim=node_feature_dim,
+            edge_feature_dim=edge_feature_dim,
         )
     else:
         dataset = ZeldaDungeonDataset(
@@ -863,6 +955,8 @@ def create_dataloader(
             normalize=normalize,
             target_size=target_size,
             load_graphs=load_graphs,
+            node_feature_dim=node_feature_dim,
+            edge_feature_dim=edge_feature_dim,
         )
     
     dataloader = DataLoader(

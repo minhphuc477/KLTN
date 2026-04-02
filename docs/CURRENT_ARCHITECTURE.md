@@ -3,9 +3,19 @@
 This document captures the current end-to-end architecture in code.
 The original dated snapshot is archived at
 `docs/archive/2026-q1/CURRENT_ARCHITECTURE_FULL_DRAWING_2026_03_25.md`.
+Architecture positioning, comparison boundaries, attention-layer inventory,
+and remaining runtime/fallback hard-coded knobs are documented separately in
+`docs/ARCHITECTURE_POSITIONING_AND_ATTENTION_NOTES_2026_04_02.md`.
 
 Canonical training now runs through `python main.py train --config configs/zelda_hmolqd.yaml ...`.
 `python -m src.train ...` remains available only as a thin compatibility wrapper over the same validated path.
+`python -m src.train_vqvae --config configs/zelda_hmolqd.yaml ...` now resolves VQ-VAE stage settings from that same validated config contract.
+`python -m src.train_lcm --config configs/zelda_hmolqd.yaml ...` now does the same for the fast-sampler stage.
+`python -m src.generate ...` now samples through the canonical `NeuralSymbolicDungeonPipeline` instead of a separate hardcoded inference stack.
+Canonical GUI/script generation now also discovers the nearest `resolved_config.yaml/json` snapshot and reuses the validated runtime generation defaults from that config, rather than silently falling back to private helper constants.
+Active graph/topology paths now avoid Python's salted `hash(...)` for edge deduplication, MAP-Elites graph caching, and graph-derived per-room seeds.
+Graph-guided validation also now normalizes tuple room keys with deterministic dense IDs instead of salted hash-derived room IDs.
+The reusable condition-encoder factory still defaults to `gnn_type=gcn` for compatibility, while the canonical diffusion YAML now uses `gnn_type=gps` and the masked-room branch keeps `gnn_type=gcn`.
 
 ## 1) Full System Architecture
 
@@ -71,7 +81,7 @@ flowchart TB
     subgraph B2
         B2_label["Block II Semantic VQ-VAE"]
         B2A[SemanticVQVAE encode decode]
-        B2B[num_classes 44 codebook 512 latent_dim 64]
+        B2B[num_classes 44 codebook 256 latent_dim 64]
     end
 
     NP --> B2A
@@ -258,10 +268,19 @@ flowchart LR
 
 - Canonical experiment surface: `main.py train` plus the validated YAML/CLI config system in `src/config_system.py`.
 - Legacy compatibility entrypoint: `src/train.py` forwards to `main.py train` so there is no second divergent training surface anymore.
+- Standalone VQ-VAE compatibility entrypoint: `src/train_vqvae.py` now accepts `--config` and resolves dataset/runtime/VQ-VAE stage settings from the same validated YAML contract used by `main.py train`.
+- Standalone fast-sampler compatibility entrypoint: `src/train_lcm.py` now accepts `--config` and resolves dataset/runtime/fast-sampler settings from the same validated YAML contract used by `main.py train`.
+- GUI AI generation now routes through `NeuralSymbolicDungeonPipeline.generate_dungeon(...)` rather than a separate pooled-graph shortcut, so the interactive path matches the documented room-wise Block I-VII pipeline.
+- Offline generation/evaluation via `src/generate.py` now also routes through the canonical mission-graph-conditioned room-wise pipeline instead of building a separate hardcoded VQ-VAE/diffusion/condition-encoder stack.
+- Symbolic repair budgets are now explicit pipeline constructor controls: `symbolic_max_repair_attempts`, `symbolic_repair_margin`, and `symbolic_adjacency_threshold`.
 - Explicit dataset lock: `dataset.schema_profile=zelda_v1` makes the current `16x11`, `44`-class, `6/8/8` graph schema contract visible in config and metadata instead of hiding it in validators.
 - Current canonical YAML: `configs/zelda_hmolqd.yaml` now uses the reduced small-data-balanced profile (`diffusion.model_channels=96`, `diffusion.condition_hidden_dim=192`, `diffusion.condition_num_gnn_layers=2`, mirrored in `masked_room`) recommended by the audit.
+- Runtime seed propagation: standalone diffusion, masked-room, VQ-VAE, and fast-sampler entrypoints now all carry `runtime.seed` through their resolved config objects and apply shared seeding explicitly.
+- Stable seed derivation: research/benchmark scripts now use deterministic BLAKE2-based seed offsets instead of Python `hash(...)` when deriving per-method or per-room seeds.
 - Runtime guardrails: diffusion and masked-room training now log trainable parameter counts and warn when the configured model looks oversized relative to the available Zelda sample count.
 - Composite diffusion checkpoints now reconstruct bundled diffusion, condition-encoder, and LogicNet submodules from embedded config values instead of silently assuming default widths.
+- Canonical diffusion training now requires a trained VQ-VAE checkpoint and resolves it from either the just-finished Stage 1 artifact, `diffusion.vqvae_checkpoint`, or `vqvae.checkpoint_dir/vqvae_pretrained.pth`; it no longer has a valid canonical path that silently trains against a random VQ-VAE.
+- Random-init pipeline fallbacks also now inherit latent width, context width, and class count from already-bound components where possible, reducing consistency drift when only part of the neural stack is loaded.
 
 ## 5) Effective Hyperparameter Layers (Current)
 

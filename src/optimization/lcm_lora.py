@@ -29,7 +29,7 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 import torch
 import torch.nn as nn
 
-from src.utils.checkpoint import write_checkpoint_metadata
+from src.utils.checkpoint import atomic_torch_save, log_checkpoint_artifact, write_checkpoint_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -195,7 +195,7 @@ def save_fast_sampler_checkpoint(
             "metrics": dict(metrics or {}),
         },
     }
-    torch.save(payload, path)
+    atomic_torch_save(payload, path)
     write_checkpoint_metadata(
         path,
         model_type="fast_sampler_adapter",
@@ -209,10 +209,16 @@ def save_fast_sampler_checkpoint(
             "target_modules": [str(t) for t in target_modules],
         },
     )
+    log_checkpoint_artifact(
+        logger,
+        path,
+        checkpoint_dir=Path(path).parent,
+        label="Saved fast-sampler adapter checkpoint",
+    )
 
 
 def load_fast_sampler_checkpoint(path: str) -> Tuple[Dict[str, torch.Tensor], FastSamplerCheckpointInfo]:
-    payload = torch.load(path, map_location="cpu")
+    payload = torch.load(path, map_location="cpu", weights_only=False)
     if not isinstance(payload, dict) or "lora_state_dict" not in payload or "metadata" not in payload:
         raise ValueError(f"Invalid fast-sampler checkpoint format at {path!r}.")
     metadata = payload["metadata"]

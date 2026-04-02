@@ -15,6 +15,7 @@ import pytest
 import torch
 import numpy as np
 import networkx as nx
+import src.pipeline.dungeon_pipeline as dungeon_pipeline_module
 
 from src.pipeline import (
     NeuralSymbolicDungeonPipeline,
@@ -410,6 +411,71 @@ def test_prepare_dungeon_generation_returns_graph_bundle(pipeline, simple_graph)
     assert 'node_to_idx' in prepared.graph_data
 
 
+def test_prepare_dungeon_generation_uses_pipeline_topology_defaults(monkeypatch):
+    captured = {}
+
+    class _StubTopologyGenerator:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def evolve(self):
+            graph = nx.DiGraph()
+            graph.add_nodes_from([0, 1])
+            graph.add_edge(0, 1)
+            return graph
+
+    monkeypatch.setattr(dungeon_pipeline_module, "EvolutionaryTopologyGenerator", _StubTopologyGenerator)
+    monkeypatch.setattr(dungeon_pipeline_module, "validate_graph_topology", lambda graph: (True, []))
+
+    pipeline = NeuralSymbolicDungeonPipeline(
+        device="cpu",
+        enable_logging=False,
+        topology_default_target_curve=[0.1, 0.25, 0.5, 0.8],
+        topology_num_rooms=11,
+        topology_population_size=24,
+        topology_generations=12,
+        topology_mutation_rate=0.22,
+        topology_crossover_rate=0.61,
+        topology_genome_length=17,
+        topology_rule_space="full",
+        topology_transition_mix=0.5,
+        topology_search_strategy="cvt_emitter",
+        topology_qd_archive_cells=160,
+        topology_qd_init_random_fraction=0.25,
+        topology_qd_emitter_mutation_rate=0.27,
+        topology_max_lock_key_rules=2,
+        topology_enable_rule_credit_assignment=True,
+        topology_enforce_generation_constraints=True,
+        topology_allow_candidate_repairs=True,
+    )
+
+    prepared = pipeline.prepare_dungeon_generation(
+        mission_graph=None,
+        generate_topology=True,
+        use_topological_positional_encoding=False,
+        seed=123,
+    )
+
+    assert captured["target_curve"] == [0.1, 0.25, 0.5, 0.8]
+    assert captured["population_size"] == 24
+    assert captured["generations"] == 12
+    assert captured["mutation_rate"] == pytest.approx(0.22)
+    assert captured["crossover_rate"] == pytest.approx(0.61)
+    assert captured["genome_length"] == 17
+    assert captured["max_nodes"] == 11
+    assert captured["rule_space"] == "full"
+    assert captured["transition_mix"] == pytest.approx(0.5)
+    assert captured["search_strategy"] == "cvt_emitter"
+    assert captured["qd_archive_cells"] == 160
+    assert captured["qd_init_random_fraction"] == pytest.approx(0.25)
+    assert captured["qd_emitter_mutation_rate"] == pytest.approx(0.27)
+    assert captured["max_lock_key_rules"] == 2
+    assert captured["enable_rule_credit_assignment"] is True
+    assert captured["enforce_generation_constraints"] is True
+    assert captured["allow_candidate_repairs"] is True
+    assert prepared.mission_graph.number_of_nodes() == 2
+
+
 def test_generate_rooms_for_graph_partial_api(monkeypatch, pipeline, simple_graph):
     """Room-only phase API should generate all rooms without requiring full dungeon assembly."""
     prepared = pipeline.prepare_dungeon_generation(
@@ -746,6 +812,67 @@ def test_generate_dungeon_emits_batch_diagnostics(monkeypatch, pipeline, simple_
     diagnostics = result.metrics.get('batch_generation_diagnostics')
     assert isinstance(diagnostics, list)
     assert len(diagnostics) > 0
+
+
+def test_generate_room_batch_stacks_current_node_distance_per_room(monkeypatch, pipeline, simple_graph):
+    """Batched diffusion guidance should receive current-node distance as [B, N, 4]."""
+    prepared = pipeline.prepare_dungeon_generation(
+        mission_graph=simple_graph,
+        generate_topology=False,
+        use_topological_positional_encoding=True,
+    )
+
+    captured = {}
+
+    def fake_ddim_sample(*, context, shape, num_steps, graph_data, **kwargs):
+        current_node_distance = graph_data.get("current_node_distance")
+        assert isinstance(current_node_distance, torch.Tensor)
+        assert tuple(current_node_distance.shape) == (
+            int(shape[0]),
+            int(prepared.graph_data["node_features"].shape[0]),
+            4,
+        )
+        captured["shape"] = tuple(current_node_distance.shape)
+        return torch.zeros(shape, device=pipeline.device)
+
+    def fake_decode(z_batch):
+        batch = int(z_batch.shape[0])
+        num_classes = int(getattr(pipeline.vqvae, "num_classes", 44))
+        return torch.zeros((batch, num_classes, ROOM_HEIGHT, ROOM_WIDTH), device=z_batch.device)
+
+    def fake_generate_room(**kwargs):
+        room_id = int(kwargs["room_id"])
+        room_grid = np.zeros((ROOM_HEIGHT, ROOM_WIDTH), dtype=np.int32)
+        latent = kwargs.get("precomputed_latent")
+        if not isinstance(latent, torch.Tensor):
+            latent = torch.zeros(1, 64, 4, 3)
+        return RoomGenerationResult(
+            room_id=room_id,
+            room_grid=room_grid,
+            latent=latent.detach().cpu(),
+            neural_grid=room_grid.copy(),
+            was_repaired=False,
+            repair_mask=None,
+            neural_probs=None,
+            metrics={},
+        )
+
+    monkeypatch.setattr(pipeline.diffusion, "ddim_sample", fake_ddim_sample)
+    monkeypatch.setattr(pipeline.vqvae, "decode", fake_decode)
+    monkeypatch.setattr(pipeline, "generate_room", fake_generate_room)
+
+    room_set = pipeline.generate_rooms_for_graph(
+        prepared,
+        num_diffusion_steps=1,
+        apply_repair=False,
+        batch_independent_rooms=True,
+        max_batch_size=8,
+        seed=42,
+    )
+
+    assert len(room_set.rooms) == len(prepared.mission_graph_physical.nodes())
+    assert captured["shape"][1] == len(prepared.graph_data["node_features"])
+    assert captured["shape"][2] == 4
 
 
 def test_strict_adjacency_placement_preserves_all_edges(pipeline):

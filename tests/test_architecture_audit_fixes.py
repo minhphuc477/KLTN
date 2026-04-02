@@ -9,6 +9,7 @@ from src.core.definitions import DOOR_POSITIONS, ROOM_HEIGHT, ROOM_WIDTH, SEMANT
 from src.core.condition_encoder import create_condition_encoder
 from src.core.latent_diffusion import create_latent_diffusion
 from src.core.logic_net import LogicNet
+from src.core.vqvae import create_vqvae
 from src.core.symbolic_refiner import DEFAULT_ADJACENCY, TileType
 from src.pipeline.dungeon_pipeline import NeuralSymbolicDungeonPipeline
 from src.pipeline.room_topology_conditioning import ROOM_TOPOLOGY_CHANNEL_COUNT
@@ -237,6 +238,53 @@ def test_room_graph_context_includes_current_node_distance_features():
     assert float(current_node_distance[current_node_idx, 3]) == 1.0
 
 
+def test_room_graph_context_preserves_explicit_numeric_style_id():
+    pipeline = NeuralSymbolicDungeonPipeline(
+        device="cpu",
+        enable_logging=False,
+        room_generator_mode="latent_diffusion",
+    )
+
+    mission_graph = nx.DiGraph()
+    mission_graph.graph["style_id"] = 2
+    mission_graph.add_node(0, is_start=True, pos=(0, 0))
+    mission_graph.add_node(1, pos=(0, 1), style_id=5)
+    mission_graph.add_edge(0, 1)
+
+    graph_data = pipeline._prepare_graph_context(mission_graph, use_tpe=True)
+    room_graph_context = pipeline._build_room_graph_context(
+        graph_data=graph_data,
+        mission_graph=mission_graph,
+        room_id=1,
+        start_goal=((ROOM_HEIGHT // 2, 0), (ROOM_HEIGHT // 2, ROOM_WIDTH - 1)),
+    )
+
+    assert room_graph_context["style_id"] == 5
+
+
+def test_room_graph_context_resolves_canonical_sector_theme_labels():
+    pipeline = NeuralSymbolicDungeonPipeline(
+        device="cpu",
+        enable_logging=False,
+        room_generator_mode="latent_diffusion",
+    )
+
+    mission_graph = nx.DiGraph()
+    mission_graph.add_node(0, is_start=True, pos=(0, 0), sector_theme="fire-temple")
+    mission_graph.add_node(1, pos=(0, 1), sector_theme="shadow_dungeon")
+    mission_graph.add_edge(0, 1)
+
+    graph_data = pipeline._prepare_graph_context(mission_graph, use_tpe=True)
+    room_graph_context = pipeline._build_room_graph_context(
+        graph_data=graph_data,
+        mission_graph=mission_graph,
+        room_id=1,
+        start_goal=((ROOM_HEIGHT // 2, 0), (ROOM_HEIGHT // 2, ROOM_WIDTH - 1)),
+    )
+
+    assert room_graph_context["style_id"] == 4
+
+
 def test_condition_encoder_return_global_tokens_keeps_full_graph_sequence():
     encoder = create_condition_encoder(latent_dim=32, output_dim=128)
     encoder.eval()
@@ -271,6 +319,43 @@ def test_condition_encoder_return_global_tokens_keeps_full_graph_sequence():
     assert tuple(condition.shape) == (1, 128)
     assert tuple(node_tokens.shape) == (1, 3, 128)
     assert torch.allclose(node_tokens, expected_tokens, atol=1e-5)
+
+
+def test_condition_encoder_reference_room_maps_change_conditioning_signal():
+    encoder = create_condition_encoder(
+        latent_dim=32,
+        output_dim=64,
+        use_reference_room_maps=True,
+        reference_num_tile_types=44,
+        reference_embedding_dim=16,
+        reference_hidden_dim=32,
+    )
+    encoder.eval()
+
+    kwargs = {
+        "neighbor_latents": {"N": None, "S": None, "E": None, "W": None},
+        "boundary_constraints": torch.zeros(1, 8),
+        "position": torch.zeros(1, 2),
+        "node_features": torch.randn(3, encoder.global_encoder.node_feature_dim),
+        "edge_index": torch.tensor([[0, 1], [1, 2]], dtype=torch.long),
+        "edge_features": torch.randn(2, encoder.global_encoder.edge_feature_dim),
+        "tpe": torch.randn(3, 8),
+        "current_node_idx": 1,
+    }
+
+    baseline = encoder(**kwargs)
+    conditioned = encoder(
+        **kwargs,
+        reference_room_maps={
+            "N": torch.full((1, ROOM_HEIGHT, ROOM_WIDTH), 0.25, dtype=torch.float32),
+            "S": None,
+            "E": torch.full((1, ROOM_HEIGHT, ROOM_WIDTH), 0.75, dtype=torch.float32),
+            "W": None,
+        },
+    )
+
+    assert tuple(conditioned.shape) == (1, 64)
+    assert not torch.allclose(baseline, conditioned)
 
 
 def test_pipeline_loaders_accept_composite_diffusion_checkpoint_metadata(tmp_path):
@@ -405,6 +490,58 @@ def test_pipeline_loaders_accept_composite_diffusion_checkpoint_metadata(tmp_pat
     assert loaded_logic_net.topology_anchor_weight == pytest.approx(0.4)
 
 
+def test_pipeline_vqvae_loader_accepts_embedded_vqvae_from_composite_checkpoint(tmp_path):
+    pipeline = NeuralSymbolicDungeonPipeline.create_symbolic_repair_pipeline(
+        device="cpu",
+        enable_logging=False,
+    )
+
+    vqvae = create_vqvae(
+        num_classes=44,
+        codebook_size=32,
+        latent_dim=16,
+        hidden_dim=32,
+        use_coordconv=False,
+    )
+
+    ckpt_path = tmp_path / "diffusion_bundle_with_vqvae.pth"
+    torch.save(
+        {
+            "vqvae_state_dict": vqvae.state_dict(),
+            "diffusion_state_dict": {"dummy": torch.tensor(1.0)},
+            "config": {
+                "num_classes": 44,
+                "latent_dim": 16,
+                "codebook_size": 32,
+                "use_coordconv": False,
+            },
+        },
+        ckpt_path,
+    )
+    ckpt_path.with_suffix(".pth.meta.json").write_text(
+        json.dumps(
+            {
+                "format_version": "1.0",
+                "model_type": "diffusion",
+                "architecture": {
+                    "num_classes": 44,
+                    "latent_dim": 16,
+                    "codebook_size": 32,
+                    "use_coordconv": False,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded_vqvae = pipeline._load_vqvae(str(ckpt_path))
+
+    assert loaded_vqvae.num_classes == 44
+    assert loaded_vqvae.latent_dim == 16
+    assert loaded_vqvae.codebook_size == 32
+    assert loaded_vqvae.encoder.conv_in.__class__.__name__ == "Conv2d"
+
+
 def test_pipeline_diffusion_loader_rejects_checkpoint_without_diffusion_state_dict(tmp_path):
     pipeline = NeuralSymbolicDungeonPipeline.create_symbolic_repair_pipeline(
         device="cpu",
@@ -420,3 +557,36 @@ def test_pipeline_diffusion_loader_rejects_checkpoint_without_diffusion_state_di
 
     with pytest.raises(ValueError, match="does not contain a loadable state_dict"):
         pipeline._load_diffusion(str(ckpt_path))
+
+
+def test_pipeline_random_init_loaders_follow_bound_component_dimensions():
+    pipeline = NeuralSymbolicDungeonPipeline.create_symbolic_repair_pipeline(
+        device="cpu",
+        enable_logging=False,
+    )
+    pipeline.vqvae = create_vqvae(
+        num_classes=31,
+        codebook_size=32,
+        latent_dim=24,
+        hidden_dim=32,
+        use_coordconv=False,
+    )
+    pipeline.condition_encoder = create_condition_encoder(
+        latent_dim=24,
+        hidden_dim=80,
+        output_dim=72,
+        num_gnn_layers=2,
+        gnn_type="sage",
+        num_attention_heads=4,
+    )
+
+    diffusion = pipeline._load_diffusion(None)
+    pipeline.diffusion = diffusion
+    logic_net = pipeline._load_logic_net(None)
+    masked_room = pipeline._load_masked_room_model(None)
+
+    assert diffusion.latent_dim == 24
+    assert diffusion.context_dim == 72
+    assert logic_net.latent_dim == 24
+    assert logic_net.num_classes == 31
+    assert masked_room is None

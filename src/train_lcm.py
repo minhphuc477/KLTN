@@ -18,15 +18,26 @@ import torch
 import torch.nn.functional as F
 import torch.optim as optim
 
+from src.config_system import merge_config, seed_everything
 from src.optimization.lcm_lora import (
     DEFAULT_LORA_TARGETS,
     extract_lora_state_dict,
     freeze_non_lora_parameters,
     inject_lora_into_model,
+    load_lora_state_dict,
     save_fast_sampler_checkpoint,
 )
 from src.train_diffusion import DiffusionTrainer, DiffusionTrainingConfig
-from src.utils.checkpoint import MetricsLogger
+from src.utils.checkpoint import (
+    LATEST_RESUME_FILENAME,
+    MetricsLogger,
+    atomic_torch_save,
+    enforce_checkpoint_storage_budget,
+    log_checkpoint_artifact,
+    prune_checkpoints,
+    resolve_resume_checkpoint,
+    write_checkpoint_metadata,
+)
 from src.zelda_data.zelda_loader import create_dataloader
 
 logger = logging.getLogger(__name__)
@@ -44,6 +55,7 @@ class FastSamplerTrainingConfig:
         drop_last: bool = True,
         shuffle_train: bool = True,
         shuffle_val: bool = False,
+        use_vglc: bool = True,
         normalize: bool = True,
         room_level: bool = True,
         epochs: int = 10,
@@ -55,8 +67,16 @@ class FastSamplerTrainingConfig:
         lora_alpha: float = 8.0,
         prediction_loss_weight: float = 0.25,
         save_every: int = 5,
+        keep_last: int = 2,
+        auto_resume: bool = True,
+        resume_checkpoint: Optional[str] = None,
+        checkpoint_storage_budget_gb: Optional[float] = None,
+        checkpoint_storage_warning_fraction: float = 0.8,
+        checkpoint_storage_cleanup_enabled: bool = True,
+        checkpoint_storage_cleanup_target_fraction: float = 0.6,
         checkpoint_dir: str = "./checkpoints/fast_sampler",
         device: str = "auto",
+        seed: int = 42,
         quick: bool = False,
     ):
         self.base_diffusion_checkpoint = str(base_diffusion_checkpoint)
@@ -67,6 +87,7 @@ class FastSamplerTrainingConfig:
         self.drop_last = bool(drop_last)
         self.shuffle_train = bool(shuffle_train)
         self.shuffle_val = bool(shuffle_val)
+        self.use_vglc = bool(use_vglc)
         self.normalize = bool(normalize)
         self.room_level = bool(room_level)
         self.epochs = 1 if quick else int(epochs)
@@ -78,15 +99,121 @@ class FastSamplerTrainingConfig:
         self.lora_alpha = float(lora_alpha)
         self.prediction_loss_weight = float(max(0.0, prediction_loss_weight))
         self.save_every = int(max(1, save_every))
+        self.keep_last = int(max(0, keep_last))
+        self.auto_resume = bool(auto_resume)
+        self.resume_checkpoint = None if resume_checkpoint is None else str(resume_checkpoint)
+        self.checkpoint_storage_budget_gb = (
+            None if checkpoint_storage_budget_gb is None else float(max(0.0, checkpoint_storage_budget_gb))
+        )
+        self.checkpoint_storage_warning_fraction = float(max(0.0, min(1.0, checkpoint_storage_warning_fraction)))
+        self.checkpoint_storage_cleanup_enabled = bool(checkpoint_storage_cleanup_enabled)
+        self.checkpoint_storage_cleanup_target_fraction = float(
+            max(0.0, min(1.0, checkpoint_storage_cleanup_target_fraction))
+        )
         self.checkpoint_dir = str(checkpoint_dir)
         if device == "auto":
             self.device = "cuda" if torch.cuda.is_available() else "cpu"
         else:
             self.device = str(device)
+        self.seed = int(seed)
         self.quick = bool(quick)
 
     def to_dict(self) -> Dict[str, Any]:
         return dict(self.__dict__)
+
+
+def fast_sampler_training_kwargs_from_resolved_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    """Build FastSamplerTrainingConfig kwargs from the validated global config payload."""
+    stage = config["fast_sampler"]
+    dataset = config["dataset"]
+    runtime = config["runtime"]
+    return {
+        "base_diffusion_checkpoint": stage["base_diffusion_checkpoint"],
+        "data_dir": dataset["data_dir"],
+        "batch_size": dataset["batch_size"],
+        "num_workers": dataset["num_workers"],
+        "pin_memory": dataset["pin_memory"],
+        "drop_last": dataset["drop_last"],
+        "shuffle_train": dataset["shuffle_train"],
+        "shuffle_val": dataset["shuffle_val"],
+        "use_vglc": dataset["use_vglc"],
+        "normalize": dataset["normalize"],
+        "room_level": dataset["room_level"],
+        "epochs": stage["epochs"],
+        "learning_rate": stage["learning_rate"],
+        "optimizer_weight_decay": stage["optimizer_weight_decay"],
+        "grad_clip_norm": stage["grad_clip_norm"],
+        "num_inference_steps": stage["num_inference_steps"],
+        "lora_rank": stage["lora_rank"],
+        "lora_alpha": stage["lora_alpha"],
+        "prediction_loss_weight": stage["prediction_loss_weight"],
+        "save_every": stage["save_every"],
+        "keep_last": stage["keep_last"],
+        "auto_resume": runtime["auto_resume"],
+        "resume_checkpoint": runtime["resume"],
+        "checkpoint_storage_budget_gb": runtime["checkpoint_storage_budget_gb"],
+        "checkpoint_storage_warning_fraction": runtime["checkpoint_storage_warning_fraction"],
+        "checkpoint_storage_cleanup_enabled": runtime["checkpoint_storage_cleanup_enabled"],
+        "checkpoint_storage_cleanup_target_fraction": runtime["checkpoint_storage_cleanup_target_fraction"],
+        "checkpoint_dir": stage["checkpoint_dir"],
+        "device": runtime["device"],
+        "seed": runtime["seed"],
+        "quick": runtime["quick"],
+    }
+
+
+def _legacy_fast_sampler_overrides_from_args(args: argparse.Namespace) -> Dict[str, Any]:
+    overrides: Dict[str, Any] = {}
+
+    def _set(name: str, value: Any) -> None:
+        if value is None:
+            return
+        overrides[name] = value
+
+    _set("base_diffusion_checkpoint", getattr(args, "base_diffusion_checkpoint", None))
+    _set("data_dir", getattr(args, "data_dir", None))
+    _set("batch_size", getattr(args, "batch_size", None))
+    _set("use_vglc", getattr(args, "use_vglc", None))
+    _set("epochs", getattr(args, "epochs", None))
+    _set("learning_rate", getattr(args, "lr", None))
+    _set("num_inference_steps", getattr(args, "num_inference_steps", None))
+    _set("lora_rank", getattr(args, "lora_rank", None))
+    _set("lora_alpha", getattr(args, "lora_alpha", None))
+    _set("save_every", getattr(args, "save_every", None))
+    _set("keep_last", getattr(args, "keep_last", None))
+    _set("auto_resume", getattr(args, "auto_resume", None))
+    _set("resume_checkpoint", getattr(args, "resume", None))
+    _set("checkpoint_storage_budget_gb", getattr(args, "checkpoint_storage_budget_gb", None))
+    _set("checkpoint_storage_warning_fraction", getattr(args, "checkpoint_storage_warning_fraction", None))
+    _set("checkpoint_storage_cleanup_enabled", getattr(args, "checkpoint_storage_cleanup_enabled", None))
+    _set("checkpoint_storage_cleanup_target_fraction", getattr(args, "checkpoint_storage_cleanup_target_fraction", None))
+    _set("checkpoint_dir", getattr(args, "checkpoint_dir", None))
+    _set("device", getattr(args, "device", None))
+    _set("seed", getattr(args, "seed", None))
+    _set("quick", getattr(args, "quick", None))
+    return overrides
+
+
+def build_fast_sampler_training_config_from_args(args: argparse.Namespace) -> FastSamplerTrainingConfig:
+    base_kwargs: Dict[str, Any] = {}
+    config_path = getattr(args, "config", None)
+    if config_path:
+        resolved = merge_config(yaml_path=str(config_path), cli_overrides=None)
+        base_kwargs = fast_sampler_training_kwargs_from_resolved_config(resolved)
+        if not base_kwargs.get("base_diffusion_checkpoint"):
+            candidate = Path(resolved["diffusion"]["checkpoint_dir"]) / "best_model.pth"
+            if candidate.exists():
+                base_kwargs["base_diffusion_checkpoint"] = str(candidate)
+        if getattr(args, "verbose", None) is None:
+            setattr(args, "verbose", bool(resolved["runtime"]["verbose"]))
+    legacy_overrides = _legacy_fast_sampler_overrides_from_args(args)
+    merged = {**base_kwargs, **legacy_overrides}
+    if not merged.get("base_diffusion_checkpoint"):
+        raise ValueError(
+            "Fast sampler training requires --base-diffusion-checkpoint or --config with "
+            "fast_sampler.base_diffusion_checkpoint / an existing diffusion best_model.pth."
+        )
+    return FastSamplerTrainingConfig(**merged)
 
 
 class ConsistencyLoRATrainer:
@@ -119,7 +246,7 @@ class ConsistencyLoRATrainer:
         self.target_timesteps = self._build_target_timestep_schedule()
 
     def _load_base_bundle(self, checkpoint_path: str) -> DiffusionTrainer:
-        checkpoint = torch.load(checkpoint_path, map_location="cpu")
+        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
         base_cfg_raw = checkpoint.get("config", {})
         if not isinstance(base_cfg_raw, dict):
             raise ValueError(f"Base diffusion checkpoint {checkpoint_path!r} is missing config metadata.")
@@ -266,8 +393,64 @@ class ConsistencyLoRATrainer:
             distillation_type="consistency_lora",
         )
 
+    def save_resume_checkpoint(self, path: str, metrics: Optional[Dict[str, Any]] = None) -> None:
+        payload = {
+            "epoch": int(self.epoch),
+            "global_step": int(self.global_step),
+            "lora_state_dict": extract_lora_state_dict(self.student),
+            "optimizer_state_dict": self.optimizer.state_dict(),
+            "config": self.config.to_dict(),
+            "metrics": dict(metrics or {}),
+            "metadata": {
+                "distillation_type": "consistency_lora",
+                "base_diffusion_checkpoint": str(self.config.base_diffusion_checkpoint),
+                "num_inference_steps": int(self.config.num_inference_steps),
+                "lora_rank": int(self.config.lora_rank),
+                "lora_alpha": float(self.config.lora_alpha),
+                "target_modules": [str(t) for t in DEFAULT_LORA_TARGETS],
+            },
+        }
+        atomic_torch_save(payload, path)
+        write_checkpoint_metadata(
+            path,
+            model_type="fast_sampler_resume",
+            architecture={
+                "distillation_type": "consistency_lora",
+                "num_inference_steps": int(self.config.num_inference_steps),
+                "lora_rank": int(self.config.lora_rank),
+            },
+            extra={
+                "epoch": int(self.epoch),
+                "global_step": int(self.global_step),
+                "base_diffusion_checkpoint": str(self.config.base_diffusion_checkpoint),
+                "checkpoint_kind": "resume",
+                "contains": ["lora", "optimizer"],
+            },
+        )
+        log_checkpoint_artifact(
+            logger,
+            path,
+            checkpoint_dir=Path(path).parent,
+            label="Saved fast-sampler resume checkpoint",
+        )
+
+    def load_checkpoint(self, path: str) -> Dict[str, Any]:
+        payload = torch.load(path, map_location=self.device, weights_only=False)
+        lora_state = payload.get("lora_state_dict")
+        if not isinstance(lora_state, dict):
+            raise ValueError(f"Invalid fast-sampler resume checkpoint at {path!r}: missing lora_state_dict.")
+        load_lora_state_dict(self.student, lora_state, strict=True)
+        if "optimizer_state_dict" in payload:
+            self.optimizer.load_state_dict(payload["optimizer_state_dict"])
+        self.epoch = int(payload.get("epoch", 0))
+        self.global_step = int(payload.get("global_step", 0))
+        logger.info("Loaded fast-sampler checkpoint from %s (epoch %d)", path, self.epoch)
+        return payload
+
 
 def train_fast_sampler(config: FastSamplerTrainingConfig) -> ConsistencyLoRATrainer:
+    resolved_seed = seed_everything(int(getattr(config, "seed", 42)))
+    logger.info("Fast-sampler trainer seeds initialized: seed=%d", resolved_seed)
     trainer = ConsistencyLoRATrainer(config)
     checkpoint_dir = Path(config.checkpoint_dir)
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -280,7 +463,7 @@ def train_fast_sampler(config: FastSamplerTrainingConfig) -> ConsistencyLoRATrai
         num_workers=config.num_workers,
         pin_memory=config.pin_memory,
         drop_last=config.drop_last,
-        use_vglc=True,
+        use_vglc=config.use_vglc,
         normalize=config.normalize,
         room_level=config.room_level,
         load_graphs=True,
@@ -292,7 +475,7 @@ def train_fast_sampler(config: FastSamplerTrainingConfig) -> ConsistencyLoRATrai
         num_workers=config.num_workers,
         pin_memory=config.pin_memory,
         drop_last=config.drop_last,
-        use_vglc=True,
+        use_vglc=config.use_vglc,
         normalize=config.normalize,
         room_level=config.room_level,
         load_graphs=True,
@@ -303,8 +486,21 @@ def train_fast_sampler(config: FastSamplerTrainingConfig) -> ConsistencyLoRATrai
         experiment_name="fast_sampler_training",
     )
     best_val = float("inf")
+    metrics: Dict[str, Any] = {}
+    resume_path = resolve_resume_checkpoint(
+        explicit_path=getattr(config, "resume_checkpoint", None),
+        checkpoint_dir=str(checkpoint_dir),
+        auto_resume=bool(getattr(config, "auto_resume", True)),
+        latest_filename=LATEST_RESUME_FILENAME,
+    )
+    if resume_path is not None:
+        resume_payload = trainer.load_checkpoint(str(resume_path))
+        latest_metrics = resume_payload.get("metrics", {})
+        if isinstance(latest_metrics, dict):
+            best_val = float(latest_metrics.get("best_val_loss", latest_metrics.get("val_loss", best_val)))
+        logger.info("Auto-resumed fast-sampler training from %s", resume_path)
 
-    for epoch in range(config.epochs):
+    for epoch in range(int(getattr(trainer, "epoch", -1)) + 1, config.epochs):
         trainer.epoch = epoch
         running = {"loss": 0.0, "x0_loss": 0.0, "prediction_loss": 0.0}
         count = 0
@@ -339,10 +535,28 @@ def train_fast_sampler(config: FastSamplerTrainingConfig) -> ConsistencyLoRATrai
         )
 
         if (epoch + 1) % config.save_every == 0:
-            trainer.save_checkpoint(str(checkpoint_dir / f"fast_sampler_epoch_{epoch+1:04d}.pth"), metrics)
+            trainer.save_resume_checkpoint(str(checkpoint_dir / f"fast_sampler_resume_epoch_{epoch+1:04d}.pth"), metrics)
+            prune_checkpoints(
+                checkpoint_dir=str(checkpoint_dir),
+                pattern="fast_sampler_resume_epoch_*.pth",
+                keep_last=int(getattr(config, "keep_last", 2)),
+            )
         if val_metrics["val_loss"] < best_val:
             best_val = val_metrics["val_loss"]
             trainer.save_checkpoint(str(checkpoint_dir / "fast_sampler_best.pth"), metrics)
+
+        latest_metrics = dict(metrics)
+        latest_metrics["best_val_loss"] = float(best_val)
+        trainer.save_resume_checkpoint(str(checkpoint_dir / LATEST_RESUME_FILENAME), latest_metrics)
+        enforce_checkpoint_storage_budget(
+            logger,
+            checkpoint_dir=checkpoint_dir,
+            budget_gb=getattr(config, "checkpoint_storage_budget_gb", None),
+            warning_fraction=float(getattr(config, "checkpoint_storage_warning_fraction", 0.8)),
+            cleanup_enabled=bool(getattr(config, "checkpoint_storage_cleanup_enabled", True)),
+            cleanup_target_fraction=float(getattr(config, "checkpoint_storage_cleanup_target_fraction", 0.6)),
+            removable_patterns=("fast_sampler_resume_epoch_*.pth",),
+        )
 
     trainer.save_checkpoint(str(checkpoint_dir / "fast_sampler_final.pth"), metrics)
     metrics_logger.save()
@@ -353,38 +567,46 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Train the repo's graph-aware consistency-LoRA fast sampler."
     )
-    parser.add_argument("--base-diffusion-checkpoint", type=str, required=True)
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="Optional YAML config path using the shared validated config system. "
+             "When provided, omitted legacy flags inherit values from that config.",
+    )
+    parser.add_argument("--base-diffusion-checkpoint", type=str, default=None)
     parser.add_argument("--data-dir", type=str, default=None)
-    parser.add_argument("--batch-size", type=int, default=4)
-    parser.add_argument("--epochs", type=int, default=10)
-    parser.add_argument("--lr", type=float, default=1e-4)
-    parser.add_argument("--num-inference-steps", type=int, default=4)
-    parser.add_argument("--lora-rank", type=int, default=8)
-    parser.add_argument("--lora-alpha", type=float, default=8.0)
-    parser.add_argument("--checkpoint-dir", type=str, default="./checkpoints/fast_sampler")
-    parser.add_argument("--device", type=str, default="auto")
-    parser.add_argument("--quick", action="store_true")
-    parser.add_argument("--verbose", "-v", action="store_true")
+    parser.add_argument("--batch-size", type=int, default=None)
+    parser.add_argument("--use-vglc", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--epochs", type=int, default=None)
+    parser.add_argument("--lr", type=float, default=None)
+    parser.add_argument("--num-inference-steps", type=int, default=None)
+    parser.add_argument("--lora-rank", type=int, default=None)
+    parser.add_argument("--lora-alpha", type=float, default=None)
+    parser.add_argument("--save-every", type=int, default=None)
+    parser.add_argument("--keep-last", type=int, default=None)
+    parser.add_argument("--auto-resume", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--checkpoint-storage-budget-gb", type=float, default=None)
+    parser.add_argument("--checkpoint-storage-warning-fraction", type=float, default=None)
+    parser.add_argument("--checkpoint-storage-cleanup-enabled", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--checkpoint-storage-cleanup-target-fraction", type=float, default=None)
+    parser.add_argument("--resume", type=str, default=None)
+    parser.add_argument("--checkpoint-dir", type=str, default=None)
+    parser.add_argument("--device", type=str, default=None)
+    parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument("--quick", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--verbose", "-v", action=argparse.BooleanOptionalAction, default=None)
     args = parser.parse_args()
 
+    try:
+        config = build_fast_sampler_training_config_from_args(args)
+    except ValueError as exc:
+        parser.error(str(exc))
+
     logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
+        level=logging.DEBUG if bool(args.verbose) else logging.INFO,
         format="%(asctime)s | %(levelname)s | %(message)s",
         datefmt="%H:%M:%S",
-    )
-
-    config = FastSamplerTrainingConfig(
-        base_diffusion_checkpoint=args.base_diffusion_checkpoint,
-        data_dir=args.data_dir,
-        batch_size=args.batch_size,
-        epochs=args.epochs,
-        learning_rate=args.lr,
-        num_inference_steps=args.num_inference_steps,
-        lora_rank=args.lora_rank,
-        lora_alpha=args.lora_alpha,
-        checkpoint_dir=args.checkpoint_dir,
-        device=args.device,
-        quick=args.quick,
     )
     train_fast_sampler(config)
 

@@ -49,6 +49,71 @@ class TestVectorQuantizer:
         unique_codes = torch.unique(indices)
         assert len(unique_codes) >= 2
 
+    def test_dead_code_reset_respects_warmup(self):
+        """Dead-code resets should not fire before the configured warmup."""
+        from src.core.vqvae import VectorQuantizer
+
+        quantizer = VectorQuantizer(
+            num_embeddings=8,
+            embedding_dim=4,
+            dead_code_threshold=0.05,
+            dead_code_warmup_steps=10,
+        )
+
+        before = quantizer.embedding.weight.detach().clone()
+        quantizer._reset_counter = 5
+        z_flat = torch.randn(6, 4)
+        indices = torch.tensor([0, 1, 2, 3, 0, 1], dtype=torch.long)
+
+        quantizer._reset_dead_codes(z_flat, indices)
+
+        assert torch.allclose(quantizer.embedding.weight, before)
+
+    def test_dead_code_reset_protects_batch_active_codes(self):
+        """Codes active in the current batch should not be reset."""
+        from src.core.vqvae import VectorQuantizer
+
+        quantizer = VectorQuantizer(
+            num_embeddings=8,
+            embedding_dim=4,
+            dead_code_threshold=0.05,
+            dead_code_warmup_steps=0,
+            protect_active_codes_during_reset=True,
+        )
+        quantizer.ema_cluster_size.zero_()
+        before = quantizer.embedding.weight.detach().clone()
+        quantizer._reset_counter = quantizer._reset_interval
+        z_flat = torch.randn(6, 4)
+        indices = torch.tensor([0, 1, 2, 3, 0, 1], dtype=torch.long)
+
+        quantizer._reset_dead_codes(z_flat, indices)
+
+        assert torch.allclose(quantizer.embedding.weight[:4], before[:4])
+        assert not torch.allclose(quantizer.embedding.weight[4:], before[4:])
+
+    def test_dead_code_reset_is_capped_per_event(self):
+        """Large dead-code sets should be reset gradually, not all at once."""
+        from src.core.vqvae import VectorQuantizer
+
+        quantizer = VectorQuantizer(
+            num_embeddings=32,
+            embedding_dim=4,
+            dead_code_threshold=0.05,
+            dead_code_warmup_steps=0,
+            protect_active_codes_during_reset=False,
+            max_dead_code_resets_per_event=3,
+        )
+        quantizer.ema_cluster_size.zero_()
+        before = quantizer.embedding.weight.detach().clone()
+        quantizer._reset_counter = quantizer._reset_interval
+        z_flat = torch.randn(12, 4)
+        indices = torch.zeros(12, dtype=torch.long)
+
+        quantizer._reset_dead_codes(z_flat, indices)
+
+        changed = (~torch.isclose(quantizer.embedding.weight, before)).any(dim=1).sum().item()
+        assert changed == 3
+
 
 class TestEncoder:
     """Tests for VQ-VAE Encoder."""

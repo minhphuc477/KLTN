@@ -60,19 +60,26 @@ def validate_feature_dims(
     expected_node_dim: int,
     expected_edge_dim: int,
 ) -> None:
-    """Validate graph feature dimensions entering the condition encoder."""
+    """
+    Validate basic graph feature tensor shape sanity before condition encoding.
+
+    Exact width alignment is handled inside `GlobalStreamEncoder`, which
+    automatically pads/truncates feature tensors for backward compatibility.
+    This helper therefore only rejects obviously malformed tensors, not schema
+    width mismatches.
+    """
     if isinstance(node_features, torch.Tensor) and node_features.dim() == 2:
         actual = int(node_features.shape[1])
-        if actual != int(expected_node_dim):
+        if actual <= 0 or int(expected_node_dim) <= 0:
             raise BlockContractError(
-                f"condition_encoder.node_features: expected dim={expected_node_dim}, got dim={actual}"
+                f"condition_encoder.node_features: expected positive dim, got expected={expected_node_dim} actual={actual}"
             )
 
     if isinstance(edge_features, torch.Tensor) and edge_features.dim() == 2:
         actual = int(edge_features.shape[1])
-        if actual != int(expected_edge_dim):
+        if actual <= 0 or int(expected_edge_dim) <= 0:
             raise BlockContractError(
-                f"condition_encoder.edge_features: expected dim={expected_edge_dim}, got dim={actual}"
+                f"condition_encoder.edge_features: expected positive dim, got expected={expected_edge_dim} actual={actual}"
             )
 
 

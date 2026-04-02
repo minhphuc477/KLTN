@@ -23,7 +23,15 @@ from typing import Any, Dict, Iterable, List, Optional
 import numpy as np
 import yaml
 
-from src.core.definitions import ROOM_HEIGHT, ROOM_WIDTH, SEMANTIC_PALETTE
+from src.core.definitions import (
+    GRAPH_EDGE_FEATURE_DIM,
+    GRAPH_NODE_FEATURE_DIM,
+    GRAPH_TPE_DIM,
+    ROOM_HEIGHT,
+    ROOM_TOPOLOGY_CHANNEL_COUNT,
+    ROOM_WIDTH,
+    SEMANTIC_PALETTE,
+)
 
 try:
     import torch
@@ -39,9 +47,9 @@ DATASET_SCHEMA_PROFILES: Dict[str, Dict[str, int]] = {
         "num_classes": int(max(int(v) for v in SEMANTIC_PALETTE.values()) + 1),
         "room_height": int(ROOM_HEIGHT),
         "room_width": int(ROOM_WIDTH),
-        "node_feature_dim": 6,
-        "edge_feature_dim": 8,
-        "tpe_dim": 8,
+        "node_feature_dim": int(GRAPH_NODE_FEATURE_DIM),
+        "edge_feature_dim": int(GRAPH_EDGE_FEATURE_DIM),
+        "tpe_dim": int(GRAPH_TPE_DIM),
     },
 }
 
@@ -92,6 +100,11 @@ CONFIG_FIELDS: List[ConfigField] = [
     ConfigField("runtime.seed", int, 42, "Global random seed.", min_value=0),
     ConfigField("runtime.verbose", bool, False, "Enable verbose logging."),
     ConfigField("runtime.quick", bool, False, "Shorten training for smoke tests."),
+    ConfigField("runtime.auto_resume", bool, True, "Automatically resume from checkpoint_dir/latest_resume.pth when present."),
+    ConfigField("runtime.checkpoint_storage_budget_gb", float, None, "Optional per-stage checkpoint storage budget in GB. Null disables budget enforcement.", min_value=0.0, allow_none=True),
+    ConfigField("runtime.checkpoint_storage_warning_fraction", float, 0.8, "Warn when checkpoint usage reaches this fraction of the storage budget.", min_value=0.0, max_value=1.0),
+    ConfigField("runtime.checkpoint_storage_cleanup_enabled", bool, True, "Automatically remove retained resume checkpoints when the storage budget is exceeded."),
+    ConfigField("runtime.checkpoint_storage_cleanup_target_fraction", float, 0.6, "After automatic cleanup, aim to reduce checkpoint usage to this fraction of the storage budget.", min_value=0.0, max_value=1.0),
     ConfigField("runtime.resume", str, None, "Optional checkpoint to resume from.", allow_none=True),
     ConfigField("distributed.enabled", bool, False, "Enable distributed launch metadata and environment setup.", cli="distributed_enabled"),
     ConfigField("distributed.backend", str, "nccl", "torch.distributed backend.", choices=("nccl", "gloo"), cli="distributed_backend"),
@@ -115,9 +128,9 @@ CONFIG_FIELDS: List[ConfigField] = [
     ConfigField("dataset.num_classes", int, 44, "Semantic tile vocabulary size.", min_value=1),
     ConfigField("dataset.room_height", int, 16, "Supported room height.", min_value=1),
     ConfigField("dataset.room_width", int, 11, "Supported room width.", min_value=1),
-    ConfigField("dataset.node_feature_dim", int, 6, "Supported graph node-feature width.", min_value=1),
-    ConfigField("dataset.edge_feature_dim", int, 8, "Supported graph edge-feature width.", min_value=1),
-    ConfigField("dataset.tpe_dim", int, 8, "Supported topological positional encoding width.", min_value=1),
+    ConfigField("dataset.node_feature_dim", int, GRAPH_NODE_FEATURE_DIM, "Supported graph node-feature width.", min_value=1),
+    ConfigField("dataset.edge_feature_dim", int, GRAPH_EDGE_FEATURE_DIM, "Supported graph edge-feature width.", min_value=1),
+    ConfigField("dataset.tpe_dim", int, GRAPH_TPE_DIM, "Supported topological positional encoding width.", min_value=1),
     ConfigField("vqvae.checkpoint_dir", str, "", "Directory for VQ-VAE checkpoints. Empty means output_dir/checkpoints/vqvae."),
     ConfigField("vqvae.resume_checkpoint", str, None, "Optional VQ-VAE checkpoint to resume.", allow_none=True),
     ConfigField("vqvae.epochs", int, 300, "VQ-VAE training epochs.", min_value=1),
@@ -125,14 +138,20 @@ CONFIG_FIELDS: List[ConfigField] = [
     ConfigField("vqvae.weight_decay", float, 1e-5, "VQ-VAE optimizer weight decay.", min_value=0.0),
     ConfigField("vqvae.grad_clip_norm", float, 1.0, "VQ-VAE gradient clipping norm.", min_value=0.0),
     ConfigField("vqvae.save_every", int, 50, "VQ-VAE checkpoint interval.", min_value=1),
+    ConfigField("vqvae.keep_last", int, 2, "Number of retained full-resume VQ-VAE checkpoints besides latest_resume/best.", min_value=0),
     ConfigField("vqvae.latent_dim", int, 64, "VQ-VAE latent width.", min_value=1),
-    ConfigField("vqvae.hidden_dim", int, 128, "VQ-VAE base channel width.", min_value=8),
-    ConfigField("vqvae.codebook_size", int, 512, "VQ-VAE codebook size.", min_value=8),
+    ConfigField("vqvae.hidden_dim", int, 96, "VQ-VAE base channel width.", min_value=8),
+    ConfigField("vqvae.codebook_size", int, 256, "VQ-VAE codebook size.", min_value=8),
     ConfigField("vqvae.commitment_cost", float, 0.25, "VQ-VAE commitment loss weight.", min_value=0.0),
     ConfigField("vqvae.rare_tile_weight", float, 5.0, "Rare-tile reconstruction reweighting.", min_value=1.0),
     ConfigField("vqvae.use_ema", bool, True, "Use EMA VQ codebook updates."),
     ConfigField("vqvae.use_coordconv", bool, True, "Use CoordConv in VQ-VAE encoder."),
     ConfigField("vqvae.mrf_penalty_weight", float, 0.05, "Illegal-adjacency penalty coefficient.", min_value=0.0),
+    ConfigField("vqvae.dead_code_reset_interval", int, 100, "Check for dead VQ codes every N optimizer steps.", min_value=1),
+    ConfigField("vqvae.dead_code_threshold", float, 0.05, "EMA assignment-count threshold below which a VQ code is considered dead.", min_value=0.0),
+    ConfigField("vqvae.dead_code_warmup_steps", int, 500, "Do not reset VQ codes until at least this many optimizer steps have elapsed.", min_value=0),
+    ConfigField("vqvae.protect_active_codes_during_reset", bool, True, "Never reset VQ codes that are still active in the current batch."),
+    ConfigField("vqvae.max_dead_code_resets_per_event", int, 16, "Maximum number of VQ codes to reset in a single maintenance event; 0 disables the cap.", min_value=0),
     ConfigField("diffusion.checkpoint_dir", str, "", "Directory for diffusion checkpoints. Empty means output_dir/checkpoints/diffusion."),
     ConfigField("diffusion.vqvae_checkpoint", str, None, "Frozen VQ-VAE checkpoint for diffusion.", allow_none=True),
     ConfigField("diffusion.epochs", int, 100, "Diffusion training epochs.", min_value=1),
@@ -140,19 +159,24 @@ CONFIG_FIELDS: List[ConfigField] = [
     ConfigField("diffusion.optimizer_weight_decay", float, 1e-5, "Diffusion optimizer weight decay.", min_value=0.0),
     ConfigField("diffusion.grad_clip_norm", float, 1.0, "Diffusion gradient clipping norm.", min_value=0.0),
     ConfigField("diffusion.save_every", int, 10, "Diffusion checkpoint interval.", min_value=1),
+    ConfigField("diffusion.keep_last", int, 2, "Number of retained full-resume diffusion checkpoints besides latest_resume/best/final.", min_value=0),
     ConfigField("diffusion.latent_dim", int, 64, "Diffusion latent width.", min_value=1),
-    ConfigField("diffusion.model_channels", int, 128, "Diffusion U-Net base channels.", min_value=8),
+    ConfigField("diffusion.model_channels", int, 96, "Diffusion U-Net base channels.", min_value=8),
     ConfigField("diffusion.context_dim", int, 256, "Conditioning context width.", min_value=8),
     ConfigField("diffusion.unet_channel_mult", list, [1, 2, 4], "Per-level U-Net channel multipliers.", sequence_item_type=int, min_value=1),
     ConfigField("diffusion.unet_num_res_blocks", int, 2, "Residual blocks per U-Net level.", min_value=1),
     ConfigField("diffusion.unet_attention_resolutions", list, [1, 2], "U-Net level indices that enable attention.", sequence_item_type=int, min_value=0),
     ConfigField("diffusion.unet_num_heads", int, 8, "U-Net attention head count.", min_value=1),
     ConfigField("diffusion.unet_dropout", float, 0.1, "U-Net residual/attention dropout.", min_value=0.0, max_value=1.0),
-    ConfigField("diffusion.condition_hidden_dim", int, 256, "Condition-encoder hidden width.", min_value=8),
-    ConfigField("diffusion.condition_num_gnn_layers", int, 3, "Condition-encoder GNN depth.", min_value=1),
+    ConfigField("diffusion.condition_hidden_dim", int, 192, "Condition-encoder hidden width.", min_value=8),
+    ConfigField("diffusion.condition_num_gnn_layers", int, 2, "Condition-encoder GNN depth.", min_value=1),
     ConfigField("diffusion.condition_num_attention_heads", int, 8, "Condition-encoder fusion heads.", min_value=1),
     ConfigField("diffusion.condition_dropout", float, 0.1, "Condition-encoder dropout.", min_value=0.0, max_value=1.0),
-    ConfigField("diffusion.condition_gnn_type", str, "gcn", "Condition-encoder graph backbone.", choices=("gcn", "gat", "sage", "gps")),
+    ConfigField("diffusion.condition_gnn_type", str, "gps", "Condition-encoder graph backbone.", choices=("gcn", "gat", "sage", "gps")),
+    ConfigField("diffusion.condition_use_reference_room_maps", bool, True, "Enable discrete neighboring-room exemplar conditioning in Block III."),
+    ConfigField("diffusion.condition_reference_tile_vocab_size", int, 44, "Tile vocabulary size used by the reference-room exemplar encoder.", min_value=2),
+    ConfigField("diffusion.condition_reference_embedding_dim", int, 32, "Embedding width for the reference-room exemplar encoder.", min_value=4),
+    ConfigField("diffusion.condition_reference_hidden_dim", int, 64, "CNN hidden width for the reference-room exemplar encoder.", min_value=4),
     ConfigField("diffusion.graph_conditioning_mode", str, "node_sequence", "Graph-conditioning representation.", choices=("node_sequence", "pooled")),
     ConfigField("diffusion.num_timesteps", int, 1000, "Forward diffusion timesteps.", min_value=10),
     ConfigField("diffusion.schedule_type", str, "cosine", "Diffusion noise schedule.", choices=("linear", "cosine")),
@@ -166,7 +190,7 @@ CONFIG_FIELDS: List[ConfigField] = [
     ConfigField("diffusion.use_teacher_forced_neighbor_latents", bool, True, "Use real adjacent room maps during room-level diffusion training to encode neighbor latents."),
     ConfigField("diffusion.use_current_node_distance_features", bool, True, "Inject current-room distance features into Block III/IV graph conditioning."),
     ConfigField("diffusion.current_node_distance_max", int, 8, "Distance clip used when normalizing current-room graph distances.", min_value=1),
-    ConfigField("diffusion.room_topology_channels", int, 18, "Room-topology conditioning channel count.", min_value=1),
+    ConfigField("diffusion.room_topology_channels", int, ROOM_TOPOLOGY_CHANNEL_COUNT, "Room-topology conditioning channel count.", min_value=1),
     ConfigField("diffusion.cfg_dropout_prob", float, 0.1, "Classifier-free conditioning dropout.", min_value=0.0, max_value=1.0),
     ConfigField("diffusion.cfg_scale", float, 3.0, "Classifier-free guidance scale.", min_value=0.0),
     ConfigField("diffusion.cfg_schedule_mode", str, "constant", "Classifier-free guidance schedule.", choices=("constant", "linear_decay", "cosine_decay")),
@@ -195,6 +219,34 @@ CONFIG_FIELDS: List[ConfigField] = [
     ConfigField("diffusion.scheduler_eta_min", float, 1e-6, "CosineWarmRestarts eta_min.", min_value=0.0),
     ConfigField("diffusion.ema_decay", float, 0.9999, "EMA decay for diffusion weights.", min_value=0.0, max_value=0.999999),
     ConfigField("diffusion.validation_num_samples", int, 4, "Validation sample count.", min_value=1),
+    ConfigField("topology.default_target_curve", list, [0.2, 0.4, 0.6, 0.8, 1.0], "Default target difficulty/tension curve for evolutionary topology generation.", sequence_item_type=float, min_value=0.0, max_value=1.0),
+    ConfigField("topology.num_rooms", int, 8, "Default room budget for generated topologies.", min_value=1),
+    ConfigField("topology.population_size", int, 50, "Default evolutionary population size for Block I.", min_value=1),
+    ConfigField("topology.generations", int, 100, "Default number of evolutionary generations for Block I.", min_value=1),
+    ConfigField("topology.mutation_rate", float, 0.15, "Per-gene mutation probability for Block I search.", min_value=0.0, max_value=1.0),
+    ConfigField("topology.crossover_rate", float, 0.7, "Crossover probability for Block I search.", min_value=0.0, max_value=1.0),
+    ConfigField("topology.genome_length", int, 0, "Genome length for Block I. Set to 0 to auto-derive from num_rooms.", min_value=0),
+    ConfigField("topology.rule_space", str, "full", "Grammar rule-space for Block I.", choices=("core", "full")),
+    ConfigField("topology.transition_mix", float, 0.7, "Mixing ratio between transition-biased and global rule priors.", min_value=0.0, max_value=1.0),
+    ConfigField("topology.search_strategy", str, "ga", "Topology search backend.", choices=("ga", "cvt_emitter", "map_elites", "cvt", "cvt_map_elites")),
+    ConfigField("topology.qd_archive_cells", int, 128, "CVT archive cell count when using QD topology search.", min_value=32),
+    ConfigField("topology.qd_init_random_fraction", float, 0.35, "Bootstrap fraction of random samples before CVT emitters dominate.", min_value=0.05, max_value=0.95),
+    ConfigField("topology.qd_emitter_mutation_rate", float, 0.18, "Emitter mutation rate when using CVT topology search.", min_value=0.01, max_value=0.95),
+    ConfigField("topology.max_lock_key_rules", int, 3, "Soft cap on InsertLockKey rule applications per genome execution.", min_value=0),
+    ConfigField("topology.enable_rule_credit_assignment", bool, False, "Enable adaptive rule-credit assignment during topology search."),
+    ConfigField("topology.enforce_generation_constraints", bool, False, "Reject intermediate topology candidates that violate progression constraints."),
+    ConfigField("topology.allow_candidate_repairs", bool, False, "Attempt local repairs when topology generation constraints fail."),
+    ConfigField("generation.guidance_scale", float, 7.5, "Default classifier-free guidance scale for runtime generation.", min_value=0.0),
+    ConfigField("generation.logic_guidance_scale", float, 1.0, "Default LogicNet guidance scale for runtime generation.", min_value=0.0),
+    ConfigField("generation.num_diffusion_steps", int, 50, "Default diffusion or masked-token sampling steps for runtime generation.", min_value=1),
+    ConfigField("generation.use_fast_sampling", bool, False, "Prefer fast-sampler inference when available during runtime generation."),
+    ConfigField("generation.latent_sampler", str, "diffusion", "Default latent sampling backend for runtime generation.", choices=("diffusion", "categorical")),
+    ConfigField("generation.categorical_codebook_size", int, None, "Optional codebook-size cap for categorical runtime sampling.", min_value=1, allow_none=True),
+    ConfigField("generation.use_topological_positional_encoding", bool, True, "Enable topological positional encoding during runtime generation."),
+    ConfigField("generation.apply_repair", bool, True, "Apply symbolic repair during runtime generation."),
+    ConfigField("generation.enable_map_elites", bool, False, "Compute MAP-Elites descriptors during runtime generation."),
+    ConfigField("generation.default_start_coord", list, [1, 5], "Fallback room start coordinate used when no room-specific anchor metadata exists.", sequence_item_type=int, min_value=0),
+    ConfigField("generation.default_goal_coord", list, [14, 5], "Fallback room goal coordinate used when no room-specific anchor metadata exists.", sequence_item_type=int, min_value=0),
     ConfigField("fast_sampler.checkpoint_dir", str, "", "Directory for fast-sampler checkpoints. Empty means output_dir/checkpoints/fast_sampler."),
     ConfigField("fast_sampler.base_diffusion_checkpoint", str, None, "Base diffusion checkpoint for distillation.", allow_none=True),
     ConfigField("fast_sampler.epochs", int, 10, "Fast-sampler distillation epochs.", min_value=1),
@@ -206,6 +258,7 @@ CONFIG_FIELDS: List[ConfigField] = [
     ConfigField("fast_sampler.lora_alpha", float, 8.0, "LoRA alpha.", min_value=0.0),
     ConfigField("fast_sampler.prediction_loss_weight", float, 0.25, "Weight on student-vs-teacher prediction loss.", min_value=0.0),
     ConfigField("fast_sampler.save_every", int, 5, "Fast-sampler checkpoint interval.", min_value=1),
+    ConfigField("fast_sampler.keep_last", int, 2, "Number of retained full-resume fast-sampler checkpoints besides latest_resume/best/final.", min_value=0),
     ConfigField("masked_room.checkpoint_dir", str, "", "Directory for masked-room checkpoints. Empty means output_dir/checkpoints/masked_room."),
     ConfigField("masked_room.epochs", int, 100, "Masked-room training epochs.", min_value=1),
     ConfigField("masked_room.learning_rate", float, 1e-4, "Masked-room learning rate.", min_value=1e-8),
@@ -213,19 +266,37 @@ CONFIG_FIELDS: List[ConfigField] = [
     ConfigField("masked_room.grad_clip_norm", float, 1.0, "Masked-room gradient clipping norm.", min_value=0.0),
     ConfigField("masked_room.scheduler_eta_min", float, 1e-6, "Masked-room cosine scheduler eta_min.", min_value=0.0),
     ConfigField("masked_room.save_every", int, 10, "Masked-room checkpoint interval.", min_value=1),
+    ConfigField("masked_room.keep_last", int, 2, "Number of retained full-resume masked-room checkpoints besides latest_resume/best/final.", min_value=0),
     ConfigField("masked_room.context_dim", int, 256, "Masked-room conditioning width.", min_value=8),
-    ConfigField("masked_room.condition_hidden_dim", int, 256, "Masked-room condition-encoder hidden width.", min_value=8),
-    ConfigField("masked_room.condition_num_gnn_layers", int, 3, "Masked-room condition-encoder GNN depth.", min_value=1),
+    ConfigField("masked_room.condition_hidden_dim", int, 192, "Masked-room condition-encoder hidden width.", min_value=8),
+    ConfigField("masked_room.condition_num_gnn_layers", int, 2, "Masked-room condition-encoder GNN depth.", min_value=1),
     ConfigField("masked_room.condition_num_attention_heads", int, 8, "Masked-room fusion heads.", min_value=1),
     ConfigField("masked_room.condition_dropout", float, 0.1, "Masked-room condition-encoder dropout.", min_value=0.0, max_value=1.0),
     ConfigField("masked_room.condition_gnn_type", str, "gcn", "Masked-room graph backbone.", choices=("gcn", "gat", "sage", "gps")),
+    ConfigField("masked_room.condition_use_reference_room_maps", bool, True, "Enable discrete neighboring-room exemplar conditioning for the masked-room conditioner."),
+    ConfigField("masked_room.condition_reference_tile_vocab_size", int, 44, "Tile vocabulary size used by the masked-room exemplar encoder.", min_value=2),
+    ConfigField("masked_room.condition_reference_embedding_dim", int, 32, "Embedding width for the masked-room exemplar encoder.", min_value=4),
+    ConfigField("masked_room.condition_reference_hidden_dim", int, 64, "CNN hidden width for the masked-room exemplar encoder.", min_value=4),
     ConfigField("masked_room.graph_conditioning_mode", str, "node_sequence", "Masked-room graph-conditioning mode.", choices=("node_sequence", "pooled")),
     ConfigField("masked_room.use_current_node_distance_features", bool, True, "Inject current-room distance features into masked-room graph conditioning."),
     ConfigField("masked_room.current_node_distance_max", int, 8, "Distance clip used when normalizing current-room graph distances for masked-room training.", min_value=1),
-    ConfigField("masked_room.model_channels", int, 128, "Masked-room U-Net base channels.", min_value=8),
+    ConfigField("masked_room.model_channels", int, 96, "Masked-room U-Net base channels.", min_value=8),
     ConfigField("masked_room.hidden_dim", int, 64, "Masked-room token hidden width.", min_value=8),
     ConfigField("masked_room.masked_steps", int, 8, "Masked-token corruption steps.", min_value=1),
-    ConfigField("masked_room.room_topology_channels", int, 18, "Masked-room topology-channel count.", min_value=1),
+    ConfigField("masked_room.attention_mode", str, "softmax", "Masked-room attention kernel.", choices=("softmax", "linear_hedgehog")),
+    ConfigField("masked_room.topology_conditioning_mode", str, "additive", "Masked-room room-topology conditioning path.", choices=("additive", "spade")),
+    ConfigField("masked_room.hedgehog_feature_dim", int, 32, "Masked-room linear-attention feature width.", min_value=4),
+    ConfigField("masked_room.graph_auto_linear_attention_nodes", int, 128, "Switch masked-room graph-to-grid attention to linear mode above this node count. 0 disables the auto-switch.", min_value=0),
+    ConfigField("masked_room.spatial_graph_gate_init", float, -2.0, "Initial logit for masked-room graph-conditioning gate."),
+    ConfigField("masked_room.spatial_topology_gate_init", float, -2.0, "Initial logit for masked-room room-topology gate."),
+    ConfigField("masked_room.unet_channel_mult", list, [1, 2, 4], "Per-level masked-room U-Net channel multipliers.", sequence_item_type=int, min_value=1),
+    ConfigField("masked_room.unet_num_res_blocks", int, 2, "Residual blocks per masked-room U-Net level.", min_value=1),
+    ConfigField("masked_room.unet_attention_resolutions", list, [1, 2], "Masked-room U-Net level indices that enable attention.", sequence_item_type=int, min_value=0),
+    ConfigField("masked_room.unet_num_heads", int, 8, "Masked-room U-Net attention head count.", min_value=1),
+    ConfigField("masked_room.unet_dropout", float, 0.1, "Masked-room U-Net residual/attention dropout.", min_value=0.0, max_value=1.0),
+    ConfigField("masked_room.min_mask_ratio", float, 0.15, "Minimum token-mask ratio sampled during masked-room training.", min_value=0.0, max_value=1.0),
+    ConfigField("masked_room.max_mask_ratio", float, 0.90, "Maximum token-mask ratio sampled during masked-room training.", min_value=0.0, max_value=1.0),
+    ConfigField("masked_room.room_topology_channels", int, ROOM_TOPOLOGY_CHANNEL_COUNT, "Masked-room topology-channel count.", min_value=1),
 ]
 
 
@@ -421,6 +492,58 @@ def validate_config(config: Dict[str, Any]) -> Dict[str, Any]:
             int(validated["diffusion"]["context_dim"]),
         )
 
+    if int(validated["diffusion"]["latent_dim"]) != int(validated["vqvae"]["latent_dim"]):
+        raise ValueError(
+            "diffusion.latent_dim must match vqvae.latent_dim for stage handoff compatibility. "
+            f"Got diffusion.latent_dim={validated['diffusion']['latent_dim']} and "
+            f"vqvae.latent_dim={validated['vqvae']['latent_dim']}."
+        )
+
+    expected_topology_channels = int(ROOM_TOPOLOGY_CHANNEL_COUNT)
+    if int(validated["diffusion"]["room_topology_channels"]) != expected_topology_channels:
+        raise ValueError(
+            "diffusion.room_topology_channels must match the repository room-topology schema. "
+            f"Expected {expected_topology_channels}, got {validated['diffusion']['room_topology_channels']}."
+        )
+    if int(validated["masked_room"]["room_topology_channels"]) != expected_topology_channels:
+        raise ValueError(
+            "masked_room.room_topology_channels must match the repository room-topology schema. "
+            f"Expected {expected_topology_channels}, got {validated['masked_room']['room_topology_channels']}."
+        )
+
+    categorical_codebook_size = validated["generation"]["categorical_codebook_size"]
+    if categorical_codebook_size is not None and int(categorical_codebook_size) > int(validated["vqvae"]["codebook_size"]):
+        raise ValueError(
+            "generation.categorical_codebook_size cannot exceed vqvae.codebook_size. "
+            f"Got {categorical_codebook_size} > {validated['vqvae']['codebook_size']}."
+        )
+
+    if int(validated["fast_sampler"]["num_inference_steps"]) > int(validated["diffusion"]["num_timesteps"]):
+        raise ValueError(
+            "fast_sampler.num_inference_steps cannot exceed diffusion.num_timesteps. "
+            f"Got {validated['fast_sampler']['num_inference_steps']} > {validated['diffusion']['num_timesteps']}."
+        )
+
+    if (
+        float(validated["runtime"]["checkpoint_storage_cleanup_target_fraction"])
+        > float(validated["runtime"]["checkpoint_storage_warning_fraction"])
+    ):
+        raise ValueError(
+            "runtime.checkpoint_storage_cleanup_target_fraction must be <= "
+            "runtime.checkpoint_storage_warning_fraction."
+        )
+
+    dataset_num_classes = int(validated["dataset"]["num_classes"])
+    for section_name in ("diffusion", "masked_room"):
+        section = validated[section_name]
+        if bool(section["condition_use_reference_room_maps"]):
+            vocab_size = int(section["condition_reference_tile_vocab_size"])
+            if vocab_size != dataset_num_classes:
+                raise ValueError(
+                    f"{section_name}.condition_reference_tile_vocab_size={vocab_size} must match "
+                    f"dataset.num_classes={dataset_num_classes} when reference-room conditioning is enabled."
+                )
+
     channel_mult = [int(v) for v in validated["diffusion"]["unet_channel_mult"]]
     attention_levels = [int(v) for v in validated["diffusion"]["unet_attention_resolutions"]]
     unet_num_heads = int(validated["diffusion"]["unet_num_heads"])
@@ -437,6 +560,56 @@ def validate_config(config: Dict[str, Any]) -> Dict[str, Any]:
             "Every diffusion U-Net channel width must be divisible by diffusion.unet_num_heads. "
             f"Got model_channels={model_channels}, unet_channel_mult={channel_mult}, "
             f"unet_num_heads={unet_num_heads}."
+        )
+
+    topology_curve = [float(v) for v in validated["topology"]["default_target_curve"]]
+    if not topology_curve:
+        raise ValueError("topology.default_target_curve must be non-empty.")
+    if (
+        bool(validated["topology"]["allow_candidate_repairs"])
+        and not bool(validated["topology"]["enforce_generation_constraints"])
+    ):
+        logger.warning(
+            "topology.allow_candidate_repairs=true has no effect unless "
+            "topology.enforce_generation_constraints is also true."
+        )
+
+    room_height = int(validated["dataset"]["room_height"])
+    room_width = int(validated["dataset"]["room_width"])
+    for field_name in ("default_start_coord", "default_goal_coord"):
+        coord = [int(v) for v in validated["generation"][field_name]]
+        if len(coord) != 2:
+            raise ValueError(f"generation.{field_name} must contain exactly two integers [row, col].")
+        row, col = int(coord[0]), int(coord[1])
+        if row < 0 or row >= room_height or col < 0 or col >= room_width:
+            raise ValueError(
+                f"generation.{field_name}={coord!r} must lie within the configured room bounds "
+                f"{room_height}x{room_width}."
+            )
+
+    masked_channel_mult = [int(v) for v in validated["masked_room"]["unet_channel_mult"]]
+    masked_attention_levels = [int(v) for v in validated["masked_room"]["unet_attention_resolutions"]]
+    masked_unet_num_heads = int(validated["masked_room"]["unet_num_heads"])
+    masked_model_channels = int(validated["masked_room"]["model_channels"])
+    if not masked_channel_mult:
+        raise ValueError("masked_room.unet_channel_mult must be non-empty.")
+    if any(level < 0 or level >= len(masked_channel_mult) for level in masked_attention_levels):
+        raise ValueError(
+            "masked_room.unet_attention_resolutions contains an out-of-range level for "
+            f"masked_room.unet_channel_mult={masked_channel_mult!r}."
+        )
+    if any((masked_model_channels * mult) % masked_unet_num_heads != 0 for mult in masked_channel_mult):
+        raise ValueError(
+            "Every masked-room U-Net channel width must be divisible by masked_room.unet_num_heads. "
+            f"Got model_channels={masked_model_channels}, unet_channel_mult={masked_channel_mult}, "
+            f"unet_num_heads={masked_unet_num_heads}."
+        )
+    min_mask_ratio = float(validated["masked_room"]["min_mask_ratio"])
+    max_mask_ratio = float(validated["masked_room"]["max_mask_ratio"])
+    if min_mask_ratio > max_mask_ratio:
+        raise ValueError(
+            "masked_room.min_mask_ratio must be <= masked_room.max_mask_ratio. "
+            f"Got {min_mask_ratio} > {max_mask_ratio}."
         )
 
     output_dir = Path(validated["runtime"]["output_dir"])
@@ -486,6 +659,38 @@ def apply_runtime_environment(config: Dict[str, Any]) -> None:
     if cuda_visible_devices:
         os.environ["CUDA_VISIBLE_DEVICES"] = cuda_visible_devices
     os.environ.setdefault("MASTER_PORT", str(config["distributed"]["master_port"]))
+
+
+def find_resolved_config_path(start_path: Optional[str | Path]) -> Optional[Path]:
+    """Find the nearest resolved_config snapshot for an artifact or output directory."""
+    if start_path is None:
+        return None
+    anchor = Path(start_path).expanduser().resolve()
+    search_root = anchor if anchor.is_dir() else anchor.parent
+    candidates = [search_root, *search_root.parents]
+    for directory in candidates:
+        yaml_path = directory / "resolved_config.yaml"
+        if yaml_path.exists():
+            return yaml_path
+        json_path = directory / "resolved_config.json"
+        if json_path.exists():
+            return json_path
+    return None
+
+
+def load_resolved_config_for_artifact(start_path: Optional[str | Path]) -> Optional[Dict[str, Any]]:
+    """Load and validate the nearest resolved_config snapshot for an artifact path."""
+    resolved_path = find_resolved_config_path(start_path)
+    if resolved_path is None:
+        return None
+    suffix = resolved_path.suffix.lower()
+    if suffix in {".yaml", ".yml"}:
+        return merge_config(yaml_path=str(resolved_path), cli_overrides=None)
+    if suffix == ".json":
+        with open(resolved_path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+        return validate_config(payload)
+    raise ValueError(f"Unsupported resolved config format: {resolved_path}")
 
 
 def seed_everything(seed: Optional[int]) -> int:

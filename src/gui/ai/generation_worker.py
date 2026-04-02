@@ -7,14 +7,12 @@ from src.gui.ai.generation_pipeline import (
     apply_mission_graph_constraints,
     apply_mixed_initiative_constraints,
     apply_generated_dungeon,
-    build_conditioning_vector,
     ensure_mission_graph_editor_draft,
+    generate_dungeon_with_pipeline,
     generate_mission_graph,
-    load_models_and_weights,
+    load_canonical_generation_pipeline,
     mission_graph_to_gnn_input,
-    refine_and_fix_terminals,
     resolve_checkpoint_path,
-    sample_tile_grid,
 )
 
 
@@ -102,39 +100,21 @@ def run_ai_generation_worker(gui, logger):
             )
 
         gui._set_message("Loading AI model...")
-        vqvae, diffusion, cond_encoder = load_models_and_weights(
+        pipeline = load_canonical_generation_pipeline(
             checkpoint_path=checkpoint_path,
             device=device,
-            torch_module=torch,
             logger=logger,
             strict_checkpoint_mode=strict_checkpoint_mode,
         )
 
-        gui._set_message("Running diffusion sampling...")
-        conditioning = build_conditioning_vector(
+        gui._set_message("Generating rooms with canonical pipeline...")
+        dungeon_result = generate_dungeon_with_pipeline(
+            pipeline=pipeline,
             mission_graph=mission_graph,
-            edge_index=edge_index,
-            cond_encoder=cond_encoder,
-            torch_module=torch,
-            device=device,
-        )
-
-        tile_grid = sample_tile_grid(
-            diffusion=diffusion,
-            vqvae=vqvae,
-            conditioning=conditioning,
-            num_nodes=num_nodes,
-            torch_module=torch,
-            np_module=np,
+            seed=seed,
             logger=logger,
         )
-
-        gui._set_message("Refining dungeon structure...")
-        tile_grid = refine_and_fix_terminals(
-            tile_grid=tile_grid,
-            np_module=np,
-            logger=logger,
-        )
+        tile_grid = dungeon_result.dungeon_grid.astype(np.int32, copy=False)
 
         staged_constraints = {
             "boss_norm": getattr(gui, "ai_constraint_boss_norm", None),

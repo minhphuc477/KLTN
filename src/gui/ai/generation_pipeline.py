@@ -6,7 +6,9 @@ import os
 import random
 from pathlib import Path
 
+from src.config_system import load_resolved_config_for_artifact
 from src.pipeline.block_contracts import BlockContractError, validate_checkpoint_metadata
+from src.pipeline.dungeon_pipeline import pipeline_kwargs_from_resolved_config
 from src.pipeline.spatial_utils import normalize_node_id, stable_node_sort_key
 
 
@@ -234,6 +236,116 @@ def generate_mission_graph(random_module, *, seed=None, num_rooms=None):
     return out
 
 
+def _resolve_vqvae_checkpoint_for_generation(checkpoint_path: Path):
+    """Prefer an embedded VQ-VAE, otherwise fall back to sibling pretrain weights."""
+    import torch
+
+    fallback_path = checkpoint_path.parent / "vqvae_pretrained.pth"
+    try:
+        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    except (AttributeError, RuntimeError, ValueError, TypeError, OSError):
+        checkpoint = None
+
+    if isinstance(checkpoint, dict):
+        if isinstance(checkpoint.get("vqvae_state_dict"), dict):
+            return checkpoint_path
+        is_standalone_vqvae = isinstance(checkpoint.get("model_state_dict"), dict) and not any(
+            isinstance(checkpoint.get(key), dict)
+            for key in ("diffusion_state_dict", "condition_encoder_state_dict", "logic_net_state_dict")
+        )
+        if is_standalone_vqvae:
+            return checkpoint_path
+
+    if fallback_path.exists():
+        return fallback_path
+    return checkpoint_path
+
+
+def load_canonical_generation_pipeline(
+    checkpoint_path,
+    device,
+    logger,
+    strict_checkpoint_mode=False,
+):
+    """Construct the canonical room-wise neural-symbolic generation pipeline."""
+    from src.pipeline.dungeon_pipeline import NeuralSymbolicDungeonPipeline
+
+    checkpoint_path = Path(checkpoint_path)
+    vqvae_checkpoint = _resolve_vqvae_checkpoint_for_generation(checkpoint_path)
+    resolved_config = load_resolved_config_for_artifact(checkpoint_path)
+    pipeline_kwargs = (
+        pipeline_kwargs_from_resolved_config(resolved_config)
+        if isinstance(resolved_config, dict)
+        else {}
+    )
+    pipeline = NeuralSymbolicDungeonPipeline(
+        vqvae_checkpoint=str(vqvae_checkpoint),
+        diffusion_checkpoint=str(checkpoint_path),
+        logic_net_checkpoint=str(checkpoint_path),
+        condition_encoder_checkpoint=str(checkpoint_path),
+        device=str(device),
+        enable_logging=False,
+        strict_checkpoint_mode=bool(strict_checkpoint_mode),
+        **pipeline_kwargs,
+    )
+    logger.info(
+        "Loaded canonical generation pipeline from %s (vqvae=%s, resolved_config=%s)",
+        checkpoint_path,
+        vqvae_checkpoint,
+        "yes" if resolved_config is not None else "no",
+    )
+    return pipeline
+
+
+def generate_dungeon_with_pipeline(
+    pipeline,
+    mission_graph,
+    *,
+    seed,
+    logger,
+):
+    """Generate a stitched dungeon with the canonical per-room pipeline."""
+    from src.generation.evolutionary_director import mission_graph_to_networkx
+
+    networkx_graph = mission_graph_to_networkx(mission_graph, directed=True)
+    diffusion = getattr(pipeline, "diffusion", None)
+    guidance = getattr(diffusion, "guidance", None)
+    result = pipeline.generate_dungeon(
+        mission_graph=networkx_graph,
+        guidance_scale=float(
+            getattr(
+                pipeline,
+                "default_guidance_scale",
+                getattr(diffusion, "cfg_scale", 3.0),
+            )
+        ),
+        logic_guidance_scale=float(
+            getattr(
+                pipeline,
+                "default_logic_guidance_scale",
+                getattr(guidance, "guidance_scale", 1.0),
+            )
+        ),
+        num_diffusion_steps=int(getattr(pipeline, "default_num_diffusion_steps", 50)),
+        use_fast_sampling=bool(getattr(pipeline, "default_use_fast_sampling", False)),
+        latent_sampler=str(getattr(pipeline, "default_latent_sampler", "diffusion")),
+        categorical_codebook_size=getattr(pipeline, "default_categorical_codebook_size", None),
+        use_topological_positional_encoding=bool(
+            getattr(pipeline, "default_use_topological_positional_encoding", True)
+        ),
+        apply_repair=bool(getattr(pipeline, "default_apply_repair", True)),
+        enable_map_elites=bool(getattr(pipeline, "default_enable_map_elites", False)),
+        seed=(None if seed is None else int(seed)),
+    )
+    logger.info(
+        "Canonical pipeline generated dungeon: rooms=%d shape=%s repair_rate=%.3f",
+        int(result.metrics.get("num_rooms", 0)),
+        tuple(result.dungeon_grid.shape),
+        float(result.metrics.get("repair_rate", 0.0)),
+    )
+    return result
+
+
 def load_models_and_weights(
     checkpoint_path,
     device,
@@ -241,57 +353,14 @@ def load_models_and_weights(
     logger,
     strict_checkpoint_mode=False,
 ):
-    """Construct model components and load checkpoint weights."""
-    from src.core.latent_diffusion import create_latent_diffusion
-    from src.core.vqvae import create_vqvae
-    from src.core.condition_encoder import create_condition_encoder
-    from src.core.logic_net import LogicNet as _LogicNet
-
-    vqvae = create_vqvae(num_classes=44, latent_dim=64)
-    diffusion = create_latent_diffusion(latent_dim=64, context_dim=256)
-    cond_encoder = create_condition_encoder(latent_dim=64, output_dim=256, gnn_type="gcn")
-    diffusion.guidance.logic_net = _LogicNet(latent_dim=64, num_classes=44)
-
-    _validate_checkpoint_metadata_for_gui(
-        checkpoint_path=Path(checkpoint_path),
-        model_type="diffusion",
+    """Compatibility wrapper that returns components from the canonical pipeline."""
+    pipeline = load_canonical_generation_pipeline(
+        checkpoint_path=checkpoint_path,
+        device=device,
         logger=logger,
         strict_checkpoint_mode=bool(strict_checkpoint_mode),
     )
-
-    ckpt = torch_module.load(checkpoint_path, map_location=device, weights_only=False)
-
-    if "ema_diffusion_state_dict" in ckpt:
-        diffusion.load_state_dict(ckpt["ema_diffusion_state_dict"])
-    elif "diffusion_state_dict" in ckpt:
-        diffusion.load_state_dict(ckpt["diffusion_state_dict"])
-
-    if "vqvae_state_dict" in ckpt:
-        vqvae.load_state_dict(ckpt["vqvae_state_dict"])
-        logger.info("  Loaded VQ-VAE from main checkpoint")
-    else:
-        vqvae_path = Path("checkpoints/vqvae_pretrained.pth")
-        if vqvae_path.exists():
-            _validate_checkpoint_metadata_for_gui(
-                checkpoint_path=vqvae_path,
-                model_type="vqvae",
-                logger=logger,
-                strict_checkpoint_mode=bool(strict_checkpoint_mode),
-            )
-            vqvae_ckpt = torch_module.load(vqvae_path, map_location=device, weights_only=False)
-            vqvae.load_state_dict(vqvae_ckpt["model_state_dict"])
-            logger.info("  Loaded VQ-VAE from %s", vqvae_path)
-        else:
-            logger.warning("  No VQ-VAE weights found; decode quality may degrade")
-
-    if "condition_encoder_state_dict" in ckpt:
-        cond_encoder.load_state_dict(ckpt["condition_encoder_state_dict"])
-
-    vqvae.eval()
-    diffusion.eval()
-    cond_encoder.eval()
-
-    return vqvae, diffusion, cond_encoder
+    return pipeline.vqvae, pipeline.diffusion, pipeline.condition_encoder
 
 
 def build_conditioning_vector(mission_graph, edge_index, cond_encoder, torch_module, device):
@@ -324,12 +393,19 @@ def sample_tile_grid(diffusion, vqvae, conditioning, num_nodes, torch_module, np
     scale = max(1, int(num_nodes ** 0.5))
     lat_h = 3 * scale
     lat_w = 4 * scale
-    logger.info("  Latent shape: (1, 64, %d, %d) for %d-node graph", lat_h, lat_w, num_nodes)
+    latent_dim = int(getattr(diffusion, "latent_dim", 64))
+    logger.info(
+        "  Latent shape: (1, %d, %d, %d) for %d-node graph",
+        latent_dim,
+        lat_h,
+        lat_w,
+        num_nodes,
+    )
 
     with torch_module.no_grad():
         latent = diffusion.ddim_sample(
             context=conditioning,
-            shape=(1, 64, lat_h, lat_w),
+            shape=(1, latent_dim, lat_h, lat_w),
             num_steps=50,
         )
         target_h = lat_h * 4

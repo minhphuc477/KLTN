@@ -451,6 +451,83 @@ def _validate_experiment_config(args: argparse.Namespace, methods: Sequence[str]
         raise OSError(f"Output directory is not writable: {out_dir}") from exc
 
 
+def _safe_mean(sub: pd.DataFrame, column: str, default: float = 0.0) -> float:
+    if column not in sub.columns:
+        return float(default)
+    return float(sub[column].mean(skipna=True))
+
+
+def _build_summary_row(method: str, sub: pd.DataFrame, payload: Dict[str, Any]) -> Dict[str, Any]:
+    completeness = dict(payload.get("completeness", {}))
+    expressive = dict(payload.get("expressive_range", {}))
+    generated = dict(payload.get("generated_descriptor_means", {}))
+    reference = dict(payload.get("reference_comparison", {}))
+    return {
+        "method": method,
+        "n": int(len(sub)),
+        "fitness": _safe_mean(sub, "fitness"),
+        "feasible_search_rate": _safe_mean(sub, "feasible_search"),
+        "feasible_operational_rate": _safe_mean(sub, "feasible_operational"),
+        "overall_completeness": _safe_mean(sub, "overall_completeness"),
+        "constraint_valid_rate": _safe_mean(sub, "constraint_valid"),
+        "key_gate_count": float(generated.get("key_gate_count", _safe_mean(sub, "key_gate_count"))),
+        "key_before_lock_rate": float(completeness.get("key_before_lock_rate", _safe_mean(sub, "key_before_lock_rate"))),
+        "switch_gate_count": float(generated.get("switch_gate_count", _safe_mean(sub, "switch_gate_count"))),
+        "switch_before_gate_rate": float(
+            completeness.get("switch_before_gate_rate", _safe_mean(sub, "switch_before_gate_rate"))
+        ),
+        "battery_gate_count": float(generated.get("battery_gate_count", _safe_mean(sub, "battery_gate_count"))),
+        "battery_satisfaction_rate": float(
+            completeness.get("battery_satisfaction_rate", _safe_mean(sub, "battery_satisfaction_rate"))
+        ),
+        "linearity": _safe_mean(sub, "linearity"),
+        "leniency": _safe_mean(sub, "leniency"),
+        "progression_complexity": _safe_mean(sub, "progression_complexity"),
+        "topology_complexity": _safe_mean(sub, "topology_complexity"),
+        "path_length": _safe_mean(sub, "path_length"),
+        "num_nodes": _safe_mean(sub, "num_nodes"),
+        "path_redundancy": float(expressive.get("mean_path_redundancy", generated.get("path_redundancy", _safe_mean(sub, "path_redundancy")))),
+        "articulation_count": float(generated.get("articulation_count", _safe_mean(sub, "articulation_count"))),
+        "articulation_ratio": float(expressive.get("mean_articulation_ratio", generated.get("articulation_ratio", _safe_mean(sub, "articulation_ratio")))),
+        "branch_count": float(generated.get("branch_count", _safe_mean(sub, "branch_count"))),
+        "branch_utility_rate": float(
+            expressive.get("mean_branch_utility_rate", generated.get("branch_utility_rate", _safe_mean(sub, "branch_utility_rate")))
+        ),
+        "secret_component_count": float(
+            generated.get("secret_component_count", _safe_mean(sub, "secret_component_count"))
+        ),
+        "secret_content_discoverability_rate": float(
+            expressive.get(
+                "mean_secret_content_discoverability_rate",
+                generated.get(
+                    "secret_content_discoverability_rate",
+                    _safe_mean(sub, "secret_content_discoverability_rate"),
+                ),
+            )
+        ),
+        "repair_rate": _safe_mean(sub, "repair_applied"),
+        "mean_generation_constraint_rejections": _safe_mean(sub, "generation_constraint_rejections"),
+        "mean_candidate_repairs_applied": _safe_mean(sub, "candidate_repairs_applied"),
+        "novelty_vs_reference": _safe_mean(sub, "novelty_vs_reference"),
+        "graph_edit_distance": _safe_mean(sub, "graph_edit_distance"),
+        "generation_time_sec": _safe_mean(sub, "generation_time_sec"),
+        "evaluations_used": _safe_mean(sub, "evaluations_used"),
+        "fidelity_js_divergence": float(reference.get("fidelity_js_divergence", 0.0)),
+        "expressive_overlap_reference": float(reference.get("expressive_overlap_reference", 0.0)),
+        "coverage_linearity_leniency": float(expressive.get("coverage_linearity_leniency", 0.0)),
+        "coverage_progression_topology": float(expressive.get("coverage_progression_topology", 0.0)),
+        "coverage_redundancy_articulation": float(expressive.get("coverage_redundancy_articulation", 0.0)),
+        "coverage_branch_secret": float(expressive.get("coverage_branch_secret", 0.0)),
+    }
+
+
+def _select_columns(df: pd.DataFrame, columns: Sequence[str]) -> pd.DataFrame:
+    keep = [col for col in columns if col in df.columns]
+    if not keep:
+        return pd.DataFrame()
+    return df.loc[:, keep]
+
+
 def main() -> int:
     args = parse_args()
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -615,9 +692,22 @@ def main() -> int:
                     "leniency": float(desc.leniency),
                     "progression_complexity": float(desc.progression_complexity),
                     "topology_complexity": float(desc.topology_complexity),
+                    "key_gate_count": float(desc.key_gate_count),
+                    "key_before_lock_rate": float(desc.key_before_lock_rate),
+                    "switch_gate_count": float(desc.switch_gate_count),
+                    "switch_before_gate_rate": float(desc.switch_before_gate_rate),
+                    "battery_gate_count": float(desc.battery_gate_count),
+                    "battery_satisfaction_rate": float(desc.battery_satisfaction_rate),
                     "path_length": float(desc.path_length),
                     "num_nodes": float(desc.num_nodes),
                     "num_edges": float(desc.num_edges),
+                    "path_redundancy": float(desc.path_redundancy),
+                    "articulation_count": float(desc.articulation_count),
+                    "articulation_ratio": float(desc.articulation_ratio),
+                    "branch_count": float(desc.branch_count),
+                    "branch_utility_rate": float(desc.branch_utility_rate),
+                    "secret_component_count": float(desc.secret_component_count),
+                    "secret_content_discoverability_rate": float(desc.secret_content_discoverability_rate),
                     "repair_applied": float(desc.repair_applied),
                     "total_repairs": float(desc.total_repairs),
                     "generation_constraint_rejections": float(desc.generation_constraint_rejections),
@@ -638,39 +728,14 @@ def main() -> int:
         bench = run_block_i_benchmark(generated_graphs=gen_by_method[method], reference_graphs=refs, generation_times=time_by_method[method])
         payload = asdict(bench)
         benchmark_payload_by_method[method] = payload
-        summary_rows.append(
-            {
-                "method": method,
-                "n": int(len(sub)),
-                "fitness": float(sub["fitness"].mean(skipna=True)),
-                "feasible_search_rate": float(sub["feasible_search"].mean(skipna=True)),
-                "feasible_operational_rate": float(sub["feasible_operational"].mean(skipna=True)),
-                "overall_completeness": float(sub["overall_completeness"].mean(skipna=True)),
-                "constraint_valid_rate": float(sub["constraint_valid"].mean(skipna=True)),
-                "linearity": float(sub["linearity"].mean(skipna=True)),
-                "leniency": float(sub["leniency"].mean(skipna=True)),
-                "progression_complexity": float(sub["progression_complexity"].mean(skipna=True)),
-                "topology_complexity": float(sub["topology_complexity"].mean(skipna=True)),
-                "path_length": float(sub["path_length"].mean(skipna=True)),
-                "num_nodes": float(sub["num_nodes"].mean(skipna=True)),
-                "repair_rate": float(sub["repair_applied"].mean(skipna=True)),
-                "mean_generation_constraint_rejections": float(sub["generation_constraint_rejections"].mean(skipna=True)),
-                "mean_candidate_repairs_applied": float(sub["candidate_repairs_applied"].mean(skipna=True)),
-                "novelty_vs_reference": float(sub["novelty_vs_reference"].mean(skipna=True)),
-                "graph_edit_distance": float(sub["graph_edit_distance"].mean(skipna=True)),
-                "generation_time_sec": float(sub["generation_time_sec"].mean(skipna=True)),
-                "evaluations_used": float(sub["evaluations_used"].mean(skipna=True)),
-                "fidelity_js_divergence": float(payload["reference_comparison"]["fidelity_js_divergence"]),
-                "expressive_overlap_reference": float(payload["reference_comparison"]["expressive_overlap_reference"]),
-                "coverage_linearity_leniency": float(payload["expressive_range"]["coverage_linearity_leniency"]),
-                "coverage_progression_topology": float(payload["expressive_range"]["coverage_progression_topology"]),
-            }
-        )
+        summary_rows.append(_build_summary_row(method=method, sub=sub, payload=payload))
     summary_df = pd.DataFrame(summary_rows)
 
     metrics_for_sig = [
         "fitness", "feasible_search", "feasible_operational", "overall_completeness", "constraint_valid", "linearity", "leniency", "progression_complexity",
-        "topology_complexity", "path_length", "num_nodes", "repair_applied", "generation_constraint_rejections",
+        "topology_complexity", "key_before_lock_rate", "switch_before_gate_rate", "battery_satisfaction_rate",
+        "path_length", "num_nodes", "path_redundancy", "articulation_ratio", "branch_utility_rate",
+        "secret_content_discoverability_rate", "repair_applied", "generation_constraint_rejections",
         "candidate_repairs_applied", "novelty_vs_reference", "graph_edit_distance", "generation_time_sec",
     ]
     baseline = "FULL" if "FULL" in methods else methods[0]
@@ -752,8 +817,50 @@ def main() -> int:
     def _fmt(df: pd.DataFrame) -> str:
         try:
             return df.to_markdown(index=False)
-        except (TypeError, ValueError, AttributeError):
+        except (TypeError, ValueError, AttributeError, ImportError):
             return df.to_string(index=False)
+
+    core_summary_df = _select_columns(
+        summary_df,
+        [
+            "method",
+            "n",
+            "fitness",
+            "feasible_search_rate",
+            "feasible_operational_rate",
+            "overall_completeness",
+            "constraint_valid_rate",
+            "linearity",
+            "leniency",
+            "progression_complexity",
+            "topology_complexity",
+            "path_length",
+            "num_nodes",
+            "generation_time_sec",
+            "evaluations_used",
+        ],
+    )
+    topology_summary_df = _select_columns(
+        summary_df,
+        [
+            "method",
+            "key_gate_count",
+            "key_before_lock_rate",
+            "switch_gate_count",
+            "switch_before_gate_rate",
+            "battery_gate_count",
+            "battery_satisfaction_rate",
+            "path_redundancy",
+            "articulation_count",
+            "articulation_ratio",
+            "branch_count",
+            "branch_utility_rate",
+            "secret_component_count",
+            "secret_content_discoverability_rate",
+            "coverage_redundancy_articulation",
+            "coverage_branch_secret",
+        ],
+    )
 
     lines = [
         "# Matched-Budget Block-I Benchmark",
@@ -771,9 +878,13 @@ def main() -> int:
         f"- `rule_space`: {str(args.rule_space)}",
         f"- `baseline_for_significance`: {baseline}",
         "",
-        "## Summary",
+        "## Core Summary",
         "",
-        _fmt(summary_df),
+        _fmt(core_summary_df if not core_summary_df.empty else summary_df),
+        "",
+        "## Topology Semantics",
+        "",
+        _fmt(topology_summary_df) if not topology_summary_df.empty else "_No topology summary rows available_",
         "",
         "## Paired Significance",
         "",

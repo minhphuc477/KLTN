@@ -10,15 +10,20 @@ import networkx as nx
 import numpy as np
 import torch
 
-from src.core.definitions import parse_edge_type_tokens
+from src.core.definitions import (
+    GRAPH_EDGE_FEATURE_DIM,
+    GRAPH_NODE_FEATURE_DIM,
+    GRAPH_TPE_DIM,
+    parse_edge_type_tokens,
+)
 
 logger = logging.getLogger(__name__)
 
 
 def condition_feature_dims(condition_encoder: Any) -> Tuple[int, int]:
     """Get active (node_dim, edge_dim) expected by the condition encoder."""
-    node_dim = 6
-    edge_dim = 8
+    node_dim = int(GRAPH_NODE_FEATURE_DIM)
+    edge_dim = int(GRAPH_EDGE_FEATURE_DIM)
     global_encoder = getattr(condition_encoder, "global_encoder", None)
     if global_encoder is not None:
         node_dim = int(getattr(global_encoder, "node_feature_dim", node_dim))
@@ -327,14 +332,6 @@ def extract_node_feature_vector(
         or "s" in tokens
         or "start" in tokens
     )
-    has_gate_hint = (
-        coerce_bool(attrs.get("is_lock"))
-        or coerce_bool(attrs.get("requires_key"))
-        or coerce_bool(attrs.get("has_gate"))
-        or "l" in tokens
-        or "lock" in tokens
-        or "locked" in tokens
-    )
     difficulty = coerce_difficulty(attrs.get("difficulty", attrs.get("difficulty_rating", 0.5)))
 
     enemy_signal = float(np.clip(max(float(has_enemy), enemy_hint / 3.0), 0.0, 1.0))
@@ -350,6 +347,17 @@ def extract_node_feature_vector(
         float(has_boss),
         puzzle_signal,
     ]
+    is_secret = (
+        coerce_bool(attrs.get("is_secret"))
+        or "secret" in tokens
+        or "hidden" in tokens
+    )
+    is_hub = (
+        coerce_bool(attrs.get("is_hub"))
+        or (int(max(0, int(attrs.get("virtual_layer", 0) or 0))) > 0)
+        or (int(max(0, int(attrs.get("sector_id", 0) or 0))) > 0)
+    )
+
     extended_features: List[float] = [
         float(np.clip(enemy_hint / 4.0, 0.0, 1.0)),
         float(np.clip(key_hint / 3.0, 0.0, 1.0)),
@@ -357,8 +365,8 @@ def extract_node_feature_vector(
         float(np.clip(puzzle_hint / 3.0, 0.0, 1.0)),
         float(difficulty),
         float(is_start),
-        float(has_gate_hint),
-        float(coerce_bool(attrs.get("is_safe"))),
+        float(is_secret),
+        float(is_hub),
     ]
     values = fit_feature_vector(base_features + extended_features, node_dim)
     return torch.tensor(values, device=device, dtype=torch.float32)
@@ -379,8 +387,26 @@ def encode_edge_feature_vector(edge_data: Dict[str, Any], *, edge_dim: int) -> L
     def _has_any(*names: str) -> bool:
         return any(n in constraints for n in names)
 
-    key_strength = float(np.clip(float(edge_data.get("requires_key_count", 1 if _has_any("key_locked", "locked") else 0)) / 3.0, 0.0, 1.0))
-    token_strength = float(np.clip(float(edge_data.get("token_count", 1 if _has_any("multi_lock") else 0)) / 3.0, 0.0, 1.0))
+    def _safe_nonneg_int(value: Any, default: int = 0) -> int:
+        try:
+            return int(max(0, int(value)))
+        except Exception:
+            return int(default)
+
+    key_strength = float(
+        np.clip(
+            float(edge_data.get("requires_key_count", 1 if _has_any("key_locked", "locked") else 0)) / 3.0,
+            0.0,
+            1.0,
+        )
+    )
+    token_strength = float(
+        np.clip(
+            float(edge_data.get("token_count", 1 if _has_any("multi_lock") else 0)) / 3.0,
+            0.0,
+            1.0,
+        )
+    )
 
     key_locked = _has_any("key_locked", "locked", "multi_lock")
     bombable = _has_any("bombable")
@@ -393,6 +419,34 @@ def encode_edge_feature_vector(edge_data: Dict[str, Any], *, edge_dim: int) -> L
     hidden = _has_any("hidden", "secret")
     shutter = _has_any("shutter")
     state_block = _has_any("state_block")
+    one_way = _has_any("one_way")
+
+    preferred_direction = str(
+        edge_data.get("preferred_direction", metadata.get("preferred_direction", "")) or ""
+    ).strip().lower()
+    one_way_forward = 0.0
+    one_way_backward = 0.0
+    if one_way:
+        if preferred_direction in {"forward", "east", "south", "down"}:
+            one_way_forward = 1.0
+        elif preferred_direction in {"backward", "west", "north", "up"}:
+            one_way_backward = 1.0
+        else:
+            one_way_forward = 0.5
+            one_way_backward = 0.5
+
+    switches_required = edge_data.get("switches_required", metadata.get("switches_required", []))
+    if isinstance(switches_required, (list, tuple, set)):
+        switch_count = len([value for value in switches_required if value is not None])
+    else:
+        switch_count = _safe_nonneg_int(switches_required, default=0)
+    if switch_count <= 0 and switch:
+        switch_count = 1
+    switch_count_strength = float(np.clip(float(switch_count) / 4.0, 0.0, 1.0))
+    battery_signal = float(
+        (_safe_nonneg_int(edge_data.get("battery_id", metadata.get("battery_id")), default=0) > 0)
+        or (switch_count > 1)
+    )
 
     base_vec: List[float] = [
         1.0 if (not constraints or _has_any("open", "path")) else 0.0,
@@ -410,10 +464,12 @@ def encode_edge_feature_vector(edge_data: Dict[str, Any], *, edge_dim: int) -> L
     extended_vec: List[float] = [
         float(hazard),
         float(shutter),
-        max(float(_has_any("multi_lock")), token_strength),
-        float(state_block),
         float(hidden),
-        key_strength,
+        one_way_forward,
+        one_way_backward,
+        max(float(_has_any("multi_lock")), token_strength),
+        max(float(state_block), switch_count_strength),
+        battery_signal,
     ]
     return fit_feature_vector(base_vec + extended_vec, edge_dim)
 
@@ -432,7 +488,7 @@ def compute_tpe_features(
 ) -> torch.Tensor:
     """Compute lightweight topological positional encodings [N, 8]."""
     num_nodes = len(node_order)
-    tpe = torch.zeros(num_nodes, 8, device=device, dtype=torch.float32)
+    tpe = torch.zeros(num_nodes, int(GRAPH_TPE_DIM), device=device, dtype=torch.float32)
     if num_nodes == 0:
         return tpe
 

@@ -34,8 +34,76 @@ class StepResult:
 class StepSpec:
     name: str
     priority: str
+    category: str
     command: List[str]
     output: Path
+
+
+def _safe_float(value: Any) -> Optional[float]:
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _artifact_summary_lines(step_name: str, payload: Dict[str, Any]) -> List[str]:
+    lines: List[str] = []
+    summary_rows = payload.get("summary")
+    if isinstance(summary_rows, list) and summary_rows:
+        first = summary_rows[0] if isinstance(summary_rows[0], dict) else None
+        if isinstance(first, dict):
+            if step_name == "matched_budget":
+                for row in summary_rows:
+                    if not isinstance(row, dict):
+                        continue
+                    method = str(row.get("method", "unknown"))
+                    completeness = _safe_float(row.get("overall_completeness"))
+                    valid_rate = _safe_float(row.get("constraint_valid_rate"))
+                    lines.append(
+                        f"- `{method}`: completeness={completeness:.3f}, constraint_valid_rate={valid_rate:.3f}"
+                        if completeness is not None and valid_rate is not None
+                        else f"- `{method}`: summary row present"
+                    )
+            elif step_name == "room_branch_benchmark":
+                for row in summary_rows:
+                    if not isinstance(row, dict):
+                        continue
+                    cfg = str(row.get("config", row.get("name", "unknown")))
+                    valid_rate = _safe_float(row.get("valid_rate"))
+                    repair_rate = _safe_float(row.get("room_repair_rate"))
+                    diversity = _safe_float(row.get("diversity"))
+                    parts = [f"`{cfg}`"]
+                    if valid_rate is not None:
+                        parts.append(f"valid_rate={valid_rate:.3f}")
+                    if repair_rate is not None:
+                        parts.append(f"repair_rate={repair_rate:.3f}")
+                    if diversity is not None:
+                        parts.append(f"diversity={diversity:.3f}")
+                    lines.append("- " + ", ".join(parts))
+            elif step_name == "ablation_fixed_seed":
+                for row in summary_rows:
+                    if not isinstance(row, dict):
+                        continue
+                    cfg = str(row.get("config", row.get("name", "unknown")))
+                    valid_rate = _safe_float(row.get("valid_rate"))
+                    repair_rate = _safe_float(row.get("room_repair_rate"))
+                    novelty = _safe_float(row.get("novelty_vs_reference"))
+                    parts = [f"`{cfg}`"]
+                    if valid_rate is not None:
+                        parts.append(f"valid_rate={valid_rate:.3f}")
+                    if repair_rate is not None:
+                        parts.append(f"repair_rate={repair_rate:.3f}")
+                    if novelty is not None:
+                        parts.append(f"novelty={novelty:.3f}")
+                    lines.append("- " + ", ".join(parts))
+    if not lines:
+        notes = payload.get("notes")
+        if isinstance(notes, list) and notes:
+            for note in notes[:2]:
+                lines.append(f"- {note}")
+    return lines
 
 
 def _run(command: List[str], cwd: Path, timeout_sec: Optional[int]) -> StepResult:
@@ -94,6 +162,7 @@ def _build_steps(args: argparse.Namespace) -> List[StepSpec]:
         StepSpec(
             name="matched_budget",
             priority="p0",
+            category="topology",
             command=[
                 py,
                 "scripts/run_matched_budget_topology_benchmark.py",
@@ -113,6 +182,7 @@ def _build_steps(args: argparse.Namespace) -> List[StepSpec]:
         StepSpec(
             name="ablation_fixed_seed",
             priority="p1",
+            category="full_stack",
             command=[
                 py,
                 "scripts/run_ablation_study.py",
@@ -136,8 +206,32 @@ def _build_steps(args: argparse.Namespace) -> List[StepSpec]:
             output=out / "ablation" / "ablation_report.json",
         ),
         StepSpec(
+            name="room_branch_benchmark",
+            priority="p1",
+            category="room_branch",
+            command=[
+                py,
+                "scripts/run_room_branch_benchmark.py",
+                "--num-samples",
+                str(int(quick_samples)),
+                "--diffusion-steps",
+                str(int(8 if bool(args.quick) else 25)),
+                "--evolution-population",
+                str(int(12 if bool(args.quick) else 24)),
+                "--evolution-generations",
+                str(int(12 if bool(args.quick) else 30)),
+                "--seed",
+                str(int(args.seed)),
+                "--output",
+                str(out / "room_branch_benchmark"),
+                *( ["--quick"] if bool(args.quick) else [] ),
+            ],
+            output=out / "room_branch_benchmark" / "room_branch_benchmark_report.json",
+        ),
+        StepSpec(
             name="sequence_break_analysis",
             priority="p2",
+            category="full_stack",
             command=[
                 py,
                 "scripts/analyze_sequence_breaks.py",
@@ -153,6 +247,7 @@ def _build_steps(args: argparse.Namespace) -> List[StepSpec]:
         StepSpec(
             name="rule_marginal_credit",
             priority="p2",
+            category="topology",
             command=[
                 py,
                 "scripts/analyze_rule_marginal_credit.py",
@@ -166,6 +261,7 @@ def _build_steps(args: argparse.Namespace) -> List[StepSpec]:
         StepSpec(
             name="ood_blinded_eval",
             priority="others",
+            category="full_stack",
             command=[
                 py,
                 "scripts/run_ood_scaling_and_blinded_eval.py",
@@ -181,6 +277,7 @@ def _build_steps(args: argparse.Namespace) -> List[StepSpec]:
         StepSpec(
             name="rule_weight_ab_test",
             priority="p1",
+            category="topology",
             command=[
                 py,
                 "scripts/run_rule_weight_ab_test.py",
@@ -196,6 +293,7 @@ def _build_steps(args: argparse.Namespace) -> List[StepSpec]:
         StepSpec(
             name="feature_distribution",
             priority="p2",
+            category="topology",
             command=[
                 py,
                 "scripts/analyze_block_i_feature_distribution.py",
@@ -215,6 +313,7 @@ def _build_steps(args: argparse.Namespace) -> List[StepSpec]:
         StepSpec(
             name="topology_rubric",
             priority="others",
+            category="topology",
             command=[
                 py,
                 "scripts/score_topology_stack_rubric.py",
@@ -245,7 +344,7 @@ def parse_args() -> argparse.Namespace:
         "--steps",
         type=str,
         default="all",
-        help="Comma-separated step names or 'all'. Names: matched_budget,ablation_fixed_seed,sequence_break_analysis,rule_marginal_credit,ood_blinded_eval,rule_weight_ab_test,feature_distribution,topology_rubric",
+        help="Comma-separated step names or 'all'. Names: matched_budget,ablation_fixed_seed,room_branch_benchmark,sequence_break_analysis,rule_marginal_credit,ood_blinded_eval,rule_weight_ab_test,feature_distribution,topology_rubric",
     )
     parser.add_argument("--step-timeout-sec", type=int, default=0)
     parser.add_argument("--dry-run", action="store_true")
@@ -285,6 +384,7 @@ def main() -> int:
                 {
                     "name": str(spec.name),
                     "priority": str(spec.priority),
+                    "category": str(spec.category),
                     "command": spec.command,
                     "output": str(spec.output),
                 }
@@ -313,6 +413,8 @@ def main() -> int:
                 "name": r.name,
                 "command": r.command,
                 "exit_code": r.exit_code,
+                "priority": str(next((spec.priority for spec in steps if spec.name == r.name), "unknown")),
+                "category": str(next((spec.category for spec in steps if spec.name == r.name), "unknown")),
                 "duration_sec": r.duration_sec,
                 "output_path": r.output_path,
                 "stdout_tail": r.stdout_tail,
@@ -347,7 +449,46 @@ def main() -> int:
         "",
     ]
     for r in executed:
-        lines.append(f"- {r.name}: exit={r.exit_code}, duration_sec={r.duration_sec:.2f}, output={r.output_path}")
+        spec = next((item for item in steps if item.name == r.name), None)
+        category = getattr(spec, "category", "unknown")
+        priority = getattr(spec, "priority", "unknown")
+        lines.append(
+            f"- {r.name}: category={category}, priority={priority}, exit={r.exit_code}, duration_sec={r.duration_sec:.2f}, output={r.output_path}"
+        )
+
+    category_titles = {
+        "topology": "Topology Evidence",
+        "room_branch": "Room-Branch Evidence",
+        "full_stack": "Full-Stack Evidence",
+    }
+    for category_key, title in category_titles.items():
+        category_steps = [r for r in executed if next((spec.category for spec in steps if spec.name == r.name), None) == category_key]
+        if not category_steps:
+            continue
+        lines.extend(["", f"## {title}", ""])
+        for r in category_steps:
+            lines.append(
+                f"### {r.name}"
+            )
+            lines.append("")
+            lines.append(
+                f"- exit_code: {r.exit_code}"
+            )
+            lines.append(
+                f"- duration_sec: {r.duration_sec:.2f}"
+            )
+            lines.append(
+                f"- output: {r.output_path}"
+            )
+            artifact_payload = suite_payload["artifacts"].get(r.name)
+            artifact_lines = (
+                _artifact_summary_lines(r.name, artifact_payload)
+                if isinstance(artifact_payload, dict)
+                else []
+            )
+            if artifact_lines:
+                lines.append("- highlights:")
+                lines.extend([f"  {line}" for line in artifact_lines])
 
     md_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(json.dumps({"report_json": str(json_path), "report_md": str(md_path)}, indent=2))

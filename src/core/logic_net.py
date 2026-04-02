@@ -37,7 +37,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-from src.core.definitions import DOOR_POSITIONS, ROOM_HEIGHT, ROOM_WIDTH
+from src.core.definitions import (
+    DOOR_POSITIONS,
+    ROOM_HEIGHT,
+    ROOM_TOPOLOGY_DIRECTIONAL_CHANNEL_GROUPS,
+    ROOM_WIDTH,
+)
 try:
     from src.pipeline.room_topology_conditioning import ROOM_TOPOLOGY_CHANNELS
 except Exception:
@@ -53,6 +58,12 @@ except Exception:
         "gated_s": 8,
         "gated_e": 9,
         "gated_w": 10,
+    }
+    ROOM_TOPOLOGY_DIRECTIONAL_CHANNEL_GROUPS = {
+        "N": ("door_n", "gated_n"),
+        "S": ("door_s", "gated_s"),
+        "E": ("door_e", "gated_e"),
+        "W": ("door_w", "gated_w"),
     }
 
 logger = logging.getLogger(__name__)
@@ -398,6 +409,12 @@ class ReachabilityScorer(nn.Module):
             scores: [N] or [B, N] reachability scores in [0, 1]
             loss: Scalar loss (1 - mean reachability of targets)
         """
+        # Distances are semantically non-negative. The CNN room pathfinder can emit
+        # unconstrained values early in training, so softly project them back into
+        # the valid domain before computing reachability. This prevents scores > 1
+        # and negative "losses" that would otherwise destabilize diffusion training.
+        distances = F.softplus(distances)
+
         # Compute reachability scores — smooth, no saturation or clamp dead zones.
         # Use exponential decay for the primary score (always has gradient).
         # Temperature controls the sharpness: high temp = smooth gradients early,
@@ -892,18 +909,12 @@ class LogicNet(nn.Module):
         start_target = _channel("start")
         goal_target = _channel("goal")
 
+        door_channel_names: List[str] = []
+        for direction in ("N", "S", "E", "W"):
+            door_channel_names.extend(ROOM_TOPOLOGY_DIRECTIONAL_CHANNEL_GROUPS.get(direction, ()))
         door_parts = [
             maybe
-            for maybe in (
-                _channel("door_n"),
-                _channel("door_s"),
-                _channel("door_e"),
-                _channel("door_w"),
-                _channel("gated_n"),
-                _channel("gated_s"),
-                _channel("gated_e"),
-                _channel("gated_w"),
-            )
+            for maybe in (_channel(name) for name in door_channel_names)
             if maybe is not None
         ]
         door_target = None

@@ -13,6 +13,11 @@ runtime:
   seed: 42  # type=int, default=42, valid>=0
   verbose: false  # type=bool, default=false, valid={true,false}
   quick: false  # type=bool, default=false, valid={true,false}; short smoke-test mode
+  auto_resume: true  # type=bool, default=true, valid={true,false}; resume from checkpoint_dir/latest_resume.pth when present
+  checkpoint_storage_budget_gb: null  # type=float|null, default=null, valid>=0 or null; optional per-stage checkpoint budget
+  checkpoint_storage_warning_fraction: 0.8  # type=float, default=0.8, valid=0..1; warn before the checkpoint directory fills up
+  checkpoint_storage_cleanup_enabled: true  # type=bool, default=true, valid={true,false}; prune retained resume checkpoints if over budget
+  checkpoint_storage_cleanup_target_fraction: 0.6  # type=float, default=0.6, valid=0..1; cleanup target after automatic pruning
   resume: null  # type=str|null, default=null, valid=checkpoint path or null
 
 distributed:
@@ -40,8 +45,8 @@ dataset:
   num_classes: 44  # type=int, default=44, valid={44}; current semantic palette size
   room_height: 16  # type=int, default=16, valid={16}; current implementation assumption
   room_width: 11  # type=int, default=11, valid={11}; current implementation assumption
-  node_feature_dim: 6  # type=int, default=6, valid={6}; current graph schema assumption
-  edge_feature_dim: 8  # type=int, default=8, valid={8}; current graph schema assumption
+  node_feature_dim: 14  # type=int, default=14, valid={14}; graph schema contract shared by training and runtime
+  edge_feature_dim: 16  # type=int, default=16, valid={16}; relation-aware edge schema with one-way/battery support
   tpe_dim: 8  # type=int, default=8, valid={8}; current graph schema assumption
 
 vqvae:
@@ -52,14 +57,20 @@ vqvae:
   weight_decay: 0.00001  # type=float, default=1e-5, valid>=0
   grad_clip_norm: 1.0  # type=float, default=1.0, valid>=0
   save_every: 50  # type=int, default=50, valid>=1
+  keep_last: 2  # type=int, default=2, valid>=0; number of retained full-resume checkpoints besides latest_resume/best
   latent_dim: 64  # type=int, default=64, valid>=1
-  hidden_dim: 128  # type=int, default=128, valid>=8
-  codebook_size: 512  # type=int, default=512, valid>=8
+  hidden_dim: 96  # type=int, default=96, valid>=8; reduced canonical width keeps the full stack intact but avoids the small-data VQ capacity warning
+  codebook_size: 256  # type=int, default=256, valid>=8; reduced canonical codebook better matches the tiny Zelda room corpus and cuts dead-code churn
   commitment_cost: 0.25  # type=float, default=0.25, valid>=0
   rare_tile_weight: 5.0  # type=float, default=5.0, valid>=1
   use_ema: true  # type=bool, default=true, valid={true,false}
   use_coordconv: true  # type=bool, default=true, valid={true,false}
   mrf_penalty_weight: 0.05  # type=float, default=0.05, valid>=0
+  dead_code_reset_interval: 100  # type=int, default=100, valid>=1
+  dead_code_threshold: 0.05  # type=float, default=0.05, valid>=0; batch-scale-aware dead-code threshold for small Zelda datasets
+  dead_code_warmup_steps: 500  # type=int, default=500, valid>=0; delay resets until the codebook has seen enough assignments
+  protect_active_codes_during_reset: true  # type=bool, default=true, valid={true,false}; do not reset codes that are active in the current batch
+  max_dead_code_resets_per_event: 16  # type=int, default=16, valid>=0; cap maintenance churn on small-data runs
 
 diffusion:
   checkpoint_dir: ""  # type=str, default="", valid=path; empty=>output_dir/checkpoints/diffusion
@@ -69,6 +80,7 @@ diffusion:
   optimizer_weight_decay: 0.00001  # type=float, default=1e-5, valid>=0
   grad_clip_norm: 1.0  # type=float, default=1.0, valid>=0
   save_every: 10  # type=int, default=10, valid>=1
+  keep_last: 2  # type=int, default=2, valid>=0; number of retained full-resume checkpoints besides latest_resume/best/final
   latent_dim: 64  # type=int, default=64, valid>=1
   model_channels: 96  # type=int, default=128, valid>=8; recommended small-data-balanced setting for the current Zelda corpus
   context_dim: 256  # type=int, default=256, valid>=8
@@ -82,6 +94,10 @@ diffusion:
   condition_num_attention_heads: 8  # type=int, default=8, valid>=1
   condition_dropout: 0.1  # type=float, default=0.1, valid=0..1
   condition_gnn_type: gps  # type=str, default=gcn, valid={gcn,gat,sage,gps}; GraphGPS-style hybrid graph encoder is the recommended training setting
+  condition_use_reference_room_maps: true  # type=bool, default=false, valid={true,false}; use neighboring room exemplars as a lightweight prompt-free local reference signal
+  condition_reference_tile_vocab_size: 44  # type=int, default=44, valid>=2; must match dataset.num_classes when enabled
+  condition_reference_embedding_dim: 32  # type=int, default=32, valid>=4
+  condition_reference_hidden_dim: 64  # type=int, default=64, valid>=4
   graph_conditioning_mode: node_sequence  # type=str, default=node_sequence, valid={node_sequence,pooled}
   num_timesteps: 1000  # type=int, default=1000, valid>=10
   schedule_type: cosine  # type=str, default=cosine, valid={linear,cosine}
@@ -95,7 +111,7 @@ diffusion:
   use_teacher_forced_neighbor_latents: true  # type=bool, default=true, valid={true,false}; enables real-neighbor local conditioning during room-level training
   use_current_node_distance_features: true  # type=bool, default=true, valid={true,false}; adds current-room distance encoding to Block III/IV graph conditioning
   current_node_distance_max: 8  # type=int, default=8, valid>=1; clip/normalize graph distances beyond this radius
-  room_topology_channels: 18  # type=int, default=18, valid>=1
+  room_topology_channels: 50  # type=int, default=50, valid>=1
   cfg_dropout_prob: 0.1  # type=float, default=0.1, valid=0..1
   cfg_scale: 3.0  # type=float, default=3.0, valid>=0
   cfg_schedule_mode: constant  # type=str, default=constant, valid={constant,linear_decay,cosine_decay}
@@ -125,6 +141,38 @@ diffusion:
   ema_decay: 0.9999  # type=float, default=0.9999, valid=0..0.999999
   validation_num_samples: 4  # type=int, default=4, valid>=1
 
+topology:
+  default_target_curve: [0.2, 0.4, 0.6, 0.8, 1.0]  # type=list[float], default=[0.2,0.4,0.6,0.8,1.0], valid=0..1; default Block I difficulty/tension target
+  num_rooms: 8  # type=int, default=8, valid>=1
+  population_size: 50  # type=int, default=50, valid>=1
+  generations: 100  # type=int, default=100, valid>=1
+  mutation_rate: 0.15  # type=float, default=0.15, valid=0..1
+  crossover_rate: 0.7  # type=float, default=0.7, valid=0..1
+  genome_length: 0  # type=int, default=0, valid>=0; 0 auto-derives genome length from num_rooms
+  rule_space: full  # type=str, default=full, valid={core,full}
+  transition_mix: 0.7  # type=float, default=0.7, valid=0..1
+  search_strategy: ga  # type=str, default=ga, valid={ga,cvt_emitter,map_elites,cvt,cvt_map_elites}
+  qd_archive_cells: 128  # type=int, default=128, valid>=32
+  qd_init_random_fraction: 0.35  # type=float, default=0.35, valid=0.05..0.95
+  qd_emitter_mutation_rate: 0.18  # type=float, default=0.18, valid=0.01..0.95
+  max_lock_key_rules: 3  # type=int, default=3, valid>=0
+  enable_rule_credit_assignment: false  # type=bool, default=false, valid={true,false}
+  enforce_generation_constraints: false  # type=bool, default=false, valid={true,false}
+  allow_candidate_repairs: false  # type=bool, default=false, valid={true,false}
+
+generation:
+  guidance_scale: 7.5  # type=float, default=7.5, valid>=0; default CFG scale for runtime generation
+  logic_guidance_scale: 1.0  # type=float, default=1.0, valid>=0; default LogicNet guidance scale for runtime generation
+  num_diffusion_steps: 50  # type=int, default=50, valid>=1
+  use_fast_sampling: false  # type=bool, default=false, valid={true,false}
+  latent_sampler: diffusion  # type=str, default=diffusion, valid={diffusion,categorical}
+  categorical_codebook_size: null  # type=int|null, default=null, valid>=1 when not null
+  use_topological_positional_encoding: true  # type=bool, default=true, valid={true,false}
+  apply_repair: true  # type=bool, default=true, valid={true,false}
+  enable_map_elites: false  # type=bool, default=false, valid={true,false}
+  default_start_coord: [1, 5]  # type=list[int], default=[1,5], valid=in-bounds [row,col]
+  default_goal_coord: [14, 5]  # type=list[int], default=[14,5], valid=in-bounds [row,col]
+
 fast_sampler:
   checkpoint_dir: ""  # type=str, default="", valid=path; empty=>output_dir/checkpoints/fast_sampler
   base_diffusion_checkpoint: null  # type=str|null, default=null, valid=checkpoint path or null
@@ -137,6 +185,7 @@ fast_sampler:
   lora_alpha: 8.0  # type=float, default=8.0, valid>=0
   prediction_loss_weight: 0.25  # type=float, default=0.25, valid>=0
   save_every: 5  # type=int, default=5, valid>=1
+  keep_last: 2  # type=int, default=2, valid>=0; number of retained full-resume checkpoints besides latest_resume/best/final
 
 masked_room:
   checkpoint_dir: ""  # type=str, default="", valid=path; empty=>output_dir/checkpoints/masked_room
@@ -146,16 +195,34 @@ masked_room:
   grad_clip_norm: 1.0  # type=float, default=1.0, valid>=0
   scheduler_eta_min: 0.000001  # type=float, default=1e-6, valid>=0
   save_every: 10  # type=int, default=10, valid>=1
+  keep_last: 2  # type=int, default=2, valid>=0; number of retained full-resume checkpoints besides latest_resume/best/final
   context_dim: 256  # type=int, default=256, valid>=8
   condition_hidden_dim: 192  # type=int, default=256, valid>=8; aligned with the reduced diffusion profile
   condition_num_gnn_layers: 2  # type=int, default=3, valid>=1
   condition_num_attention_heads: 8  # type=int, default=8, valid>=1
   condition_dropout: 0.1  # type=float, default=0.1, valid=0..1
   condition_gnn_type: gcn  # type=str, default=gcn, valid={gcn,gat,sage,gps}
+  condition_use_reference_room_maps: true  # type=bool, default=false, valid={true,false}; masked-room training should see neighboring room exemplars, not only null local anchors
+  condition_reference_tile_vocab_size: 44  # type=int, default=44, valid>=2; must match dataset.num_classes when enabled
+  condition_reference_embedding_dim: 32  # type=int, default=32, valid>=4
+  condition_reference_hidden_dim: 64  # type=int, default=64, valid>=4
   graph_conditioning_mode: node_sequence  # type=str, default=node_sequence, valid={node_sequence,pooled}
   use_current_node_distance_features: true  # type=bool, default=true, valid={true,false}
   current_node_distance_max: 8  # type=int, default=8, valid>=1
   model_channels: 96  # type=int, default=128, valid>=8; aligned with the reduced diffusion profile
   hidden_dim: 64  # type=int, default=64, valid>=8
   masked_steps: 8  # type=int, default=8, valid>=1
-  room_topology_channels: 18  # type=int, default=18, valid>=1
+  attention_mode: softmax  # type=str, default=softmax, valid={softmax,linear_hedgehog}
+  topology_conditioning_mode: additive  # type=str, default=additive, valid={additive,spade}
+  hedgehog_feature_dim: 32  # type=int, default=32, valid>=4
+  graph_auto_linear_attention_nodes: 128  # type=int, default=128, valid>=0; 0 disables auto-switch to linear graph attention
+  spatial_graph_gate_init: -2.0  # type=float, default=-2.0
+  spatial_topology_gate_init: -2.0  # type=float, default=-2.0
+  unet_channel_mult: [1, 2, 4]  # type=list[int], default=[1,2,4], valid=positive ints
+  unet_num_res_blocks: 2  # type=int, default=2, valid>=1
+  unet_attention_resolutions: [1, 2]  # type=list[int], default=[1,2], valid=level indices into unet_channel_mult
+  unet_num_heads: 8  # type=int, default=8, valid>=1; each model_channels*mult must be divisible by this
+  unet_dropout: 0.1  # type=float, default=0.1, valid=0..1
+  min_mask_ratio: 0.15  # type=float, default=0.15, valid=0..1
+  max_mask_ratio: 0.9  # type=float, default=0.9, valid=0..1; must be >= min_mask_ratio
+  room_topology_channels: 50  # type=int, default=50, valid>=1

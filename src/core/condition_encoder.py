@@ -11,8 +11,9 @@ This module implements a dual-stream architecture that combines:
 Mathematical Formulation:
 -------------------------
 Local Stream:
-    c_local = MLP(concat(z_N, z_W, boundary_feats))
-    where z_N, z_W are latent tokens of North/West neighbors
+    c_local = MLP(concat(z_N, z_S, z_E, z_W, boundary_feats, position_feats))
+    where z_* are latent tokens of the four cardinal neighbors and
+    boundary/position features anchor room-local geometry
 
 Global Stream:
     h_v = GNN(node_features, edge_index)
@@ -40,7 +41,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
+from src.core.definitions import GRAPH_EDGE_FEATURE_DIM, GRAPH_NODE_FEATURE_DIM, GRAPH_TPE_DIM
+
 logger = logging.getLogger(__name__)
+CARDINAL_DIRECTIONS = ("N", "S", "E", "W")
 
 # Try to import torch_geometric for GNN
 try:
@@ -186,6 +190,114 @@ class LocalStreamEncoder(nn.Module):
         return c_local
 
 
+class ReferenceRoomMapEncoder(nn.Module):
+    """
+    Lightweight exemplar encoder over discrete neighboring room maps.
+
+    This mirrors the "reference-derived context" lesson from recent prompt-free
+    and single-example diffusion work: preserve domain-native local structure
+    instead of forcing style/control through a heavyweight generic encoder.
+    """
+
+    def __init__(
+        self,
+        num_tile_types: int = 44,
+        embedding_dim: int = 32,
+        hidden_dim: int = 64,
+        output_dim: int = 256,
+    ):
+        super().__init__()
+        self.num_tile_types = int(max(2, num_tile_types))
+        self.embedding_dim = int(max(4, embedding_dim))
+        self.hidden_dim = int(max(4, hidden_dim))
+        self.output_dim = int(max(4, output_dim))
+
+        self.tile_embedding = nn.Embedding(self.num_tile_types, self.embedding_dim)
+        self.direction_embedding = nn.Embedding(len(CARDINAL_DIRECTIONS), self.embedding_dim)
+        self.encoder = nn.Sequential(
+            nn.Conv2d(self.embedding_dim, self.hidden_dim, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(self.hidden_dim, self.hidden_dim, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.AdaptiveAvgPool2d(1),
+        )
+        self.output_proj = nn.Sequential(
+            nn.Linear(self.hidden_dim, output_dim),
+            nn.LayerNorm(output_dim),
+        )
+
+        nn.init.normal_(self.tile_embedding.weight, mean=0.0, std=0.02)
+        nn.init.normal_(self.direction_embedding.weight, mean=0.0, std=0.02)
+
+    def _coerce_room_map(
+        self,
+        room_map: Union[Tensor, torch.Tensor],
+        *,
+        batch_size: int,
+        device: torch.device,
+    ) -> Tensor:
+        if not isinstance(room_map, torch.Tensor):
+            room_map = torch.as_tensor(room_map)
+
+        if room_map.dim() == 2:
+            room_map = room_map.unsqueeze(0)
+        elif room_map.dim() == 4:
+            if int(room_map.shape[1]) != 1:
+                raise ValueError(
+                    f"Reference room maps must have a singleton channel dimension, got shape={tuple(room_map.shape)}."
+                )
+            room_map = room_map.squeeze(1)
+        elif room_map.dim() != 3:
+            raise ValueError(
+                f"Reference room maps must be rank-2/3/4, got shape={tuple(room_map.shape)}."
+            )
+
+        room_map = room_map.to(device)
+        if int(room_map.shape[0]) == 1 and batch_size > 1:
+            room_map = room_map.expand(batch_size, -1, -1)
+        elif int(room_map.shape[0]) != batch_size:
+            raise ValueError(
+                f"Reference room map batch mismatch: expected batch_size={batch_size}, got shape={tuple(room_map.shape)}."
+            )
+
+        if room_map.is_floating_point():
+            max_value = float(room_map.detach().max().item()) if room_map.numel() > 0 else 0.0
+            if max_value <= 1.0 + 1e-6:
+                room_map = room_map * float(self.num_tile_types - 1)
+            room_map = room_map.round()
+
+        room_map = room_map.long().clamp_(0, self.num_tile_types - 1)
+        return room_map
+
+    def forward(
+        self,
+        reference_room_maps: Optional[Dict[str, Optional[Tensor]]],
+        *,
+        batch_size: int,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> Tensor:
+        if not isinstance(reference_room_maps, dict):
+            return torch.zeros(batch_size, self.output_dim, device=device, dtype=dtype)
+
+        encoded_maps = []
+        for direction_index, direction in enumerate(CARDINAL_DIRECTIONS):
+            room_map = reference_room_maps.get(direction)
+            if room_map is None:
+                continue
+            room_ids = self._coerce_room_map(room_map, batch_size=batch_size, device=device)
+            room_embed = self.tile_embedding(room_ids).permute(0, 3, 1, 2).contiguous()
+            direction_bias = self.direction_embedding.weight[direction_index].view(1, -1, 1, 1)
+            pooled = self.encoder(room_embed + direction_bias).flatten(1)
+            encoded_maps.append(pooled)
+
+        if not encoded_maps:
+            return torch.zeros(batch_size, self.output_dim, device=device, dtype=dtype)
+
+        stacked = torch.stack(encoded_maps, dim=0).mean(dim=0)
+        return self.output_proj(stacked).to(dtype=dtype)
+
+
 # ============================================================================
 # GLOBAL STREAM ENCODER (Stream B) - GNN
 # ============================================================================
@@ -264,8 +376,8 @@ class GlobalStreamEncoder(nn.Module):
     Uses either torch_geometric GNN or fallback implementation.
     
     Args:
-        node_feature_dim: Dimension of node features (default: 6)
-        edge_feature_dim: Dimension of edge features (default: 8)
+        node_feature_dim: Dimension of node features (default: 14)
+        edge_feature_dim: Dimension of edge features (default: 16)
         hidden_dim: GNN hidden dimension
         output_dim: Output conditioning dimension
         num_layers: Number of GNN layers
@@ -274,12 +386,12 @@ class GlobalStreamEncoder(nn.Module):
     
     def __init__(
         self,
-        node_feature_dim: int = 6,
-        edge_feature_dim: int = 8,
+        node_feature_dim: int = GRAPH_NODE_FEATURE_DIM,
+        edge_feature_dim: int = GRAPH_EDGE_FEATURE_DIM,
         hidden_dim: int = 256,
         output_dim: int = 256,
         num_layers: int = 3,
-        gnn_type: str = 'gat',
+        gnn_type: str = 'gcn',
         num_heads: int = 4,
         dropout: float = 0.1,
         use_current_node_distance_features: bool = True,
@@ -326,7 +438,7 @@ class GlobalStreamEncoder(nn.Module):
             )
         
         # TPE (Topological Positional Encoding) projection
-        self.tpe_proj = nn.Linear(8, hidden_dim)
+        self.tpe_proj = nn.Linear(int(GRAPH_TPE_DIM), hidden_dim)
         self.current_node_distance_proj = nn.Linear(self.current_node_distance_dim, hidden_dim)
         self.current_node_distance_gate = nn.Parameter(torch.tensor(0.0))
 
@@ -546,7 +658,7 @@ class GlobalStreamEncoder(nn.Module):
         device: torch.device,
         dtype: torch.dtype,
     ) -> Optional[Tensor]:
-        """Normalize topological positional encodings to [N, 8]."""
+        """Normalize topological positional encodings to [N, D]."""
         if tpe is None:
             return None
         tensor = tpe.to(device=device, dtype=dtype)
@@ -555,17 +667,18 @@ class GlobalStreamEncoder(nn.Module):
         if tensor.dim() != 2:
             raise ValueError(f"tpe must be 2D [N, D], got shape {tuple(tensor.shape)}")
 
-        if int(tensor.shape[0]) != int(num_nodes) or int(tensor.shape[1]) != 8:
+        expected_tpe_dim = int(GRAPH_TPE_DIM)
+        if int(tensor.shape[0]) != int(num_nodes) or int(tensor.shape[1]) != expected_tpe_dim:
             self._warn_once(
-                f"tpe:{tuple(tensor.shape)}->{(int(num_nodes), 8)}",
+                f"tpe:{tuple(tensor.shape)}->{(int(num_nodes), expected_tpe_dim)}",
                 (
-                    f"tpe shape mismatch: got {tuple(tensor.shape)}, expected {(int(num_nodes), 8)}. "
+                    f"tpe shape mismatch: got {tuple(tensor.shape)}, expected {(int(num_nodes), expected_tpe_dim)}. "
                     "Applying automatic pad/truncate."
                 ),
             )
-            aligned = torch.zeros(int(num_nodes), 8, device=device, dtype=dtype)
+            aligned = torch.zeros(int(num_nodes), expected_tpe_dim, device=device, dtype=dtype)
             rows = min(int(num_nodes), int(tensor.shape[0]))
-            cols = min(8, int(tensor.shape[1]))
+            cols = min(expected_tpe_dim, int(tensor.shape[1]))
             if rows > 0 and cols > 0:
                 aligned[:rows, :cols] = tensor[:rows, :cols]
             tensor = aligned
@@ -1016,23 +1129,28 @@ class DualStreamConditionEncoder(nn.Module):
     def __init__(
         self,
         latent_dim: int = 64,
-        node_feature_dim: int = 6,
-        edge_feature_dim: int = 8,
+        node_feature_dim: int = GRAPH_NODE_FEATURE_DIM,
+        edge_feature_dim: int = GRAPH_EDGE_FEATURE_DIM,
         hidden_dim: int = 256,
         output_dim: int = 256,
         num_gnn_layers: int = 3,
-        gnn_type: str = 'gat',
+        gnn_type: str = 'gcn',
         num_attention_heads: int = 8,
         dropout: float = 0.1,
         num_style_tokens: int = 6,
         style_dim: int = 128,
         use_current_node_distance_features: bool = True,
+        use_reference_room_maps: bool = False,
+        reference_num_tile_types: int = 44,
+        reference_embedding_dim: int = 32,
+        reference_hidden_dim: int = 64,
     ):
         super().__init__()
         
         self.latent_dim = latent_dim
         self.output_dim = output_dim
         self.style_dim = style_dim
+        self.use_reference_room_maps = bool(use_reference_room_maps)
         
         # Stream A: Local context
         self.local_encoder = LocalStreamEncoder(
@@ -1054,7 +1172,8 @@ class DualStreamConditionEncoder(nn.Module):
         )
         
         # GLOBAL STYLE TOKEN (Theme Consistency)
-        # Embeds dungeon-wide aesthetic: ruins, lava, cult, tech, water, forest
+        # Embeds the repo's canonical sector themes:
+        # fire, water, ice, forest, shadow, spirit.
         # Injected into cross-attention to anchor all room generations to a
         # consistent visual style, preventing "telephone game" drift.
         self.style_embedding = nn.Embedding(
@@ -1069,6 +1188,17 @@ class DualStreamConditionEncoder(nn.Module):
             nn.Linear(style_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, output_dim),
+        )
+
+        self.reference_room_encoder = (
+            ReferenceRoomMapEncoder(
+                num_tile_types=reference_num_tile_types,
+                embedding_dim=reference_embedding_dim,
+                hidden_dim=reference_hidden_dim,
+                output_dim=output_dim,
+            )
+            if self.use_reference_room_maps
+            else None
         )
         
         # Cross-attention fusion (now receives style-augmented global context)
@@ -1097,6 +1227,7 @@ class DualStreamConditionEncoder(nn.Module):
         tpe: Optional[Tensor] = None,
         current_node_distance: Optional[Tensor] = None,
         current_node_idx: Optional[int] = None,
+        reference_room_maps: Optional[Dict[str, Optional[Tensor]]] = None,
         style_id: Optional[Tensor] = None,
         return_global_tokens: bool = False,
     ) -> Union[Tensor, Tuple[Tensor, Tensor]]:
@@ -1112,8 +1243,10 @@ class DualStreamConditionEncoder(nn.Module):
             edge_features: [E, edge_feature_dim] edge type features (Phase 3A)
             tpe: [N, 8] topological positional encoding
             current_node_idx: Index of current node in graph
+            reference_room_maps: Optional neighboring room-grid exemplars keyed by
+                cardinal direction. Each value can be [H,W], [1,H,W], or [B,1,H,W].
             style_id: [B] or scalar - Global style token ID for dungeon theme
-                     (0=ruins, 1=lava, 2=cult, 3=tech, 4=water, 5=forest)
+                     (0=fire, 1=water, 2=ice, 3=forest, 4=shadow, 5=spirit)
             return_global_tokens: When True, also return the batched graph-token
                 sequence so callers do not have to re-run the global encoder.
             
@@ -1176,13 +1309,28 @@ class DualStreamConditionEncoder(nn.Module):
             # No style specified: use zero vector
             style_feat = torch.zeros(batch_size, self.output_dim, 
                                     device=device, dtype=c_local.dtype)
+
+        if self.reference_room_encoder is not None:
+            reference_feat = self.reference_room_encoder(
+                reference_room_maps,
+                batch_size=batch_size,
+                device=device,
+                dtype=c_local.dtype,
+            )
+        else:
+            reference_feat = torch.zeros(
+                batch_size,
+                self.output_dim,
+                device=device,
+                dtype=c_local.dtype,
+            )
         
         # Cross-attention fusion (local queries global with style-augmented keys)
         c_fused = self.fusion(c_local, c_global)
-        
-        # Final projection: Concatenate fused context + style token
-        # This ensures style influences every room while respecting local geometry
-        c_combined = torch.cat([c_fused, style_feat], dim=-1)
+
+        # Final projection: fuse graph-aware room context with the global style token
+        # and any discrete reference-room exemplar features.
+        c_combined = torch.cat([c_fused, style_feat + reference_feat], dim=-1)
         c = self.output_proj(c_combined)
 
         if return_global_tokens:
