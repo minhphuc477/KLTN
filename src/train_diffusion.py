@@ -49,6 +49,11 @@ from src.pipeline.graph_features import (
     compute_current_node_distance_features,
     compute_rwse_features,
 )
+from src.pipeline.room_topology_conditioning import (
+    DEFAULT_SEMANTIC_PUZZLE_OFFSET,
+    DEFAULT_SEMANTIC_ROLE_PRIOR_STRENGTH,
+    build_topology_anchor_policy_metadata,
+)
 from src.config_system import merge_config, seed_everything
 from src.utils.checkpoint import (
     LATEST_RESUME_FILENAME,
@@ -142,6 +147,9 @@ class DiffusionTrainingConfig:
         use_current_node_distance_features: bool = True,
         current_node_distance_max: int = 8,
         room_topology_channels: int = ROOM_TOPOLOGY_CHANNEL_COUNT,
+        topology_supervision_mode: str = "runtime_aligned",
+        semantic_role_prior_strength: float = DEFAULT_SEMANTIC_ROLE_PRIOR_STRENGTH,
+        semantic_puzzle_offset: int = DEFAULT_SEMANTIC_PUZZLE_OFFSET,
         cfg_dropout_prob: float = 0.1,
         cfg_scale: float = 3.0,
         cfg_schedule_mode: str = "constant",
@@ -178,7 +186,8 @@ class DiffusionTrainingConfig:
         scheduler_eta_min: float = 1e-6,
         ema_decay: float = 0.9999,
         grad_clip_norm: float = 1.0,
-        validation_num_samples: int = 4,
+        validation_num_samples: int = 8,
+        validation_num_diffusion_samples: int = 64,
         
         # Checkpointing
         checkpoint_dir: str = "./checkpoints",
@@ -322,6 +331,13 @@ class DiffusionTrainingConfig:
         self.use_current_node_distance_features = bool(use_current_node_distance_features)
         self.current_node_distance_max = int(max(1, current_node_distance_max))
         self.room_topology_channels = int(max(1, room_topology_channels))
+        self.topology_supervision_mode = str(topology_supervision_mode).strip().lower()
+        if self.topology_supervision_mode not in {"runtime_aligned", "oracle_room_grid"}:
+            raise ValueError(
+                "topology_supervision_mode must be 'runtime_aligned' or 'oracle_room_grid'."
+            )
+        self.semantic_role_prior_strength = float(max(0.0, min(1.0, semantic_role_prior_strength)))
+        self.semantic_puzzle_offset = int(max(0, semantic_puzzle_offset))
         self.cfg_dropout_prob = float(max(0.0, min(1.0, cfg_dropout_prob)))
         self.cfg_scale = float(max(0.0, cfg_scale))
         self.cfg_schedule_mode = str(cfg_schedule_mode).strip().lower()
@@ -369,6 +385,7 @@ class DiffusionTrainingConfig:
         self.ema_decay = float(min(0.999999, max(0.0, ema_decay)))
         self.grad_clip_norm = float(max(0.0, grad_clip_norm))
         self.validation_num_samples = int(max(1, validation_num_samples))
+        self.validation_num_diffusion_samples = int(max(1, validation_num_diffusion_samples))
         
         self.checkpoint_dir = checkpoint_dir
         self.save_every = save_every
@@ -465,6 +482,9 @@ def diffusion_training_kwargs_from_resolved_config(
         "use_current_node_distance_features": stage["use_current_node_distance_features"],
         "current_node_distance_max": stage["current_node_distance_max"],
         "room_topology_channels": stage["room_topology_channels"],
+        "topology_supervision_mode": dataset["topology_supervision_mode"],
+        "semantic_role_prior_strength": config["generation"]["semantic_role_prior_strength"],
+        "semantic_puzzle_offset": config["generation"]["semantic_puzzle_offset"],
         "cfg_dropout_prob": stage["cfg_dropout_prob"],
         "cfg_scale": stage["cfg_scale"],
         "cfg_schedule_mode": stage["cfg_schedule_mode"],
@@ -498,6 +518,7 @@ def diffusion_training_kwargs_from_resolved_config(
         "ema_decay": stage["ema_decay"],
         "grad_clip_norm": stage["grad_clip_norm"],
         "validation_num_samples": stage["validation_num_samples"],
+        "validation_num_diffusion_samples": stage["validation_num_diffusion_samples"],
         "checkpoint_dir": stage["checkpoint_dir"],
         "save_every": stage["save_every"],
         "keep_last": stage["keep_last"],
@@ -681,6 +702,21 @@ def build_diffusion_training_config_from_args(args: argparse.Namespace) -> Diffu
             setattr(args, "verbose", bool(resolved["runtime"]["verbose"]))
     legacy_overrides = _legacy_diffusion_overrides_from_args(args)
     return DiffusionTrainingConfig(**{**base_kwargs, **legacy_overrides})
+
+
+def compute_teacher_validation_total_loss(
+    *,
+    val_diffusion_loss: float,
+    val_logic_loss: float,
+    alpha_visual: float,
+    alpha_logic: float,
+    include_logic_loss: bool,
+) -> float:
+    """Mirror the training objective for checkpoint selection."""
+    total = float(alpha_visual) * float(val_diffusion_loss)
+    if include_logic_loss and float(alpha_logic) > 0.0:
+        total += float(alpha_logic) * float(val_logic_loss)
+    return float(total)
 
 
 # =============================================================================
@@ -1868,16 +1904,22 @@ class DiffusionTrainer:
         self,
         dataloader: DataLoader,
         num_samples: int = 4,
+        num_diffusion_samples: Optional[int] = None,
     ) -> Dict[str, float]:
         """Validate model using EMA weights and real graph conditioning."""
         eval_model = self.ema_diffusion if hasattr(self, 'ema_diffusion') else self.diffusion
         eval_model.eval()
-        
+
+        if num_diffusion_samples is None:
+            num_diffusion_samples = int(getattr(self.config, "validation_num_diffusion_samples", num_samples))
+
+        total_diffusion_loss = 0.0
+        num_diffusion_eval = 0
         total_logic_loss = 0.0
         total_solvability_proxy = 0.0
-        num_samples_eval = 0
+        num_generated_eval = 0
         skipped_nonfinite = 0
-        
+
         for batch_data in dataloader:
             # Handle (images, graph_list) from graph_collate_fn
             if isinstance(batch_data, (list, tuple)) and len(batch_data) >= 2:
@@ -1918,49 +1960,80 @@ class DiffusionTrainer:
             
             # Encode real maps to get latent shape
             z_0 = self.encode_to_latent(real_maps)
-            
-            # Generate samples using EMA model
-            z_gen = eval_model.sample(conditioning, shape=z_0.shape, graph_data=diffusion_graph_data)
-            if not self._tensor_is_finite(z_gen):
-                skipped_nonfinite += int(batch_size)
-                self._warn_nonfinite(
-                    "validation_sample",
-                    "Diffusion validation: generated non-finite latent sample; skipping this validation batch.",
-                )
-                continue
-            
-            # Build LogicNet graph data if available
-            logic_graph_data = diffusion_graph_data
-            
-            # LogicNet: evaluate with graph topology
-            logic_loss, _logic_info = self.logic_net(z_gen, graph_data=logic_graph_data)
-            if not self._tensor_is_finite(logic_loss):
-                skipped_nonfinite += int(batch_size)
-                self._warn_nonfinite(
-                    "validation_logic_loss",
-                    "Diffusion validation: non-finite logic loss detected on sampled latent; skipping this validation batch.",
-                )
-                continue
-            solvability_proxy = float(self._logic_loss_to_solvability_proxy(logic_loss).item())
-            total_logic_loss += float(logic_loss.item()) * batch_size
-            total_solvability_proxy += solvability_proxy * batch_size
-            num_samples_eval += batch_size
-            
-            if num_samples_eval >= num_samples:
+
+            if num_diffusion_eval < int(num_diffusion_samples):
+                diffusion_loss = eval_model.training_loss(z_0, conditioning, graph_data=diffusion_graph_data)
+                if self._tensor_is_finite(diffusion_loss):
+                    diffusion_batch = min(batch_size, int(num_diffusion_samples) - num_diffusion_eval)
+                    total_diffusion_loss += float(diffusion_loss.item()) * diffusion_batch
+                    num_diffusion_eval += diffusion_batch
+                else:
+                    skipped_nonfinite += int(batch_size)
+                    self._warn_nonfinite(
+                        "validation_diffusion_loss",
+                        "Diffusion validation: non-finite denoising loss detected; skipping this validation batch.",
+                    )
+
+            if num_generated_eval < int(num_samples):
+                # Generate samples using EMA model
+                z_gen = eval_model.sample(conditioning, shape=z_0.shape, graph_data=diffusion_graph_data)
+                if not self._tensor_is_finite(z_gen):
+                    skipped_nonfinite += int(batch_size)
+                    self._warn_nonfinite(
+                        "validation_sample",
+                        "Diffusion validation: generated non-finite latent sample; skipping this validation batch.",
+                    )
+                    if num_diffusion_eval >= int(num_diffusion_samples):
+                        continue
+                else:
+                    # Build LogicNet graph data if available
+                    logic_graph_data = diffusion_graph_data
+
+                    # LogicNet: evaluate with graph topology
+                    logic_loss, _logic_info = self.logic_net(z_gen, graph_data=logic_graph_data)
+                    if not self._tensor_is_finite(logic_loss):
+                        skipped_nonfinite += int(batch_size)
+                        self._warn_nonfinite(
+                            "validation_logic_loss",
+                            "Diffusion validation: non-finite logic loss detected on sampled latent; skipping this validation batch.",
+                        )
+                    else:
+                        generated_batch = min(batch_size, int(num_samples) - num_generated_eval)
+                        solvability_proxy = float(self._logic_loss_to_solvability_proxy(logic_loss).item())
+                        total_logic_loss += float(logic_loss.item()) * generated_batch
+                        total_solvability_proxy += solvability_proxy * generated_batch
+                        num_generated_eval += generated_batch
+
+            if num_generated_eval >= int(num_samples) and num_diffusion_eval >= int(num_diffusion_samples):
                 break
-        
-        if num_samples_eval <= 0:
+
+        if num_generated_eval <= 0 or num_diffusion_eval <= 0:
             return {
+                'val_diffusion_loss': float("inf"),
                 'val_logic_loss': float("inf"),
+                'val_total_loss': float("inf"),
                 'val_solvability_proxy': 0.0,
                 'val_solvability': 0.0,
                 'val_skipped_nonfinite': float(skipped_nonfinite),
             }
 
+        include_logic = self.epoch >= self.config.warmup_epochs and self.config.alpha_logic > 0
+        val_diffusion_loss = total_diffusion_loss / max(num_diffusion_eval, 1)
+        val_logic_loss = total_logic_loss / max(num_generated_eval, 1)
+        val_total_loss = compute_teacher_validation_total_loss(
+            val_diffusion_loss=val_diffusion_loss,
+            val_logic_loss=val_logic_loss,
+            alpha_visual=float(getattr(self.config, "alpha_visual", 1.0)),
+            alpha_logic=float(getattr(self.config, "alpha_logic", 0.0)),
+            include_logic_loss=bool(include_logic),
+        )
+
         return {
-            'val_logic_loss': total_logic_loss / max(num_samples_eval, 1),
-            'val_solvability_proxy': total_solvability_proxy / max(num_samples_eval, 1),
-            'val_solvability': total_solvability_proxy / max(num_samples_eval, 1),
+            'val_diffusion_loss': val_diffusion_loss,
+            'val_logic_loss': val_logic_loss,
+            'val_total_loss': val_total_loss,
+            'val_solvability_proxy': total_solvability_proxy / max(num_generated_eval, 1),
+            'val_solvability': total_solvability_proxy / max(num_generated_eval, 1),
             'val_skipped_nonfinite': float(skipped_nonfinite),
         }
     
@@ -2024,6 +2097,11 @@ class DiffusionTrainer:
                     else ["diffusion", "ema_diffusion", "condition_encoder", "logic_net"]
                 ),
                 "vqvae_checkpoint": str(getattr(self.config, "vqvae_checkpoint", "") or ""),
+                "topology_anchor_policy": build_topology_anchor_policy_metadata(
+                    semantic_role_prior_strength=self.config.semantic_role_prior_strength,
+                    semantic_puzzle_offset=self.config.semantic_puzzle_offset,
+                    topology_supervision_mode=self.config.topology_supervision_mode,
+                ),
             },
         )
         log_checkpoint_artifact(
@@ -2109,6 +2187,9 @@ def train_diffusion(config: DiffusionTrainingConfig) -> DiffusionTrainer:
             load_graphs=True,
             node_feature_dim=config.node_feature_dim,
             edge_feature_dim=config.edge_feature_dim,
+            topology_supervision_mode=config.topology_supervision_mode,
+            semantic_role_prior_strength=config.semantic_role_prior_strength,
+            semantic_puzzle_offset=config.semantic_puzzle_offset,
         )
         train_sampler = make_distributed_sampler(
             train_loader_plain.dataset,
@@ -2131,6 +2212,9 @@ def train_diffusion(config: DiffusionTrainingConfig) -> DiffusionTrainer:
             sampler=train_sampler,
             node_feature_dim=config.node_feature_dim,
             edge_feature_dim=config.edge_feature_dim,
+            topology_supervision_mode=config.topology_supervision_mode,
+            semantic_role_prior_strength=config.semantic_role_prior_strength,
+            semantic_puzzle_offset=config.semantic_puzzle_offset,
         )
 
         val_loader = None
@@ -2148,6 +2232,9 @@ def train_diffusion(config: DiffusionTrainingConfig) -> DiffusionTrainer:
                 load_graphs=True,
                 node_feature_dim=config.node_feature_dim,
                 edge_feature_dim=config.edge_feature_dim,
+                topology_supervision_mode=config.topology_supervision_mode,
+                semantic_role_prior_strength=config.semantic_role_prior_strength,
+                semantic_puzzle_offset=config.semantic_puzzle_offset,
             )
 
         sample_kind = "rooms" if config.room_level else "dungeons"
@@ -2215,12 +2302,14 @@ def train_diffusion(config: DiffusionTrainingConfig) -> DiffusionTrainer:
         )
 
         best_solvability = 0.0
+        best_teacher_loss = float("inf")
         metrics: Dict[str, float] = {}
         if resume_path is not None:
             latest_ckpt = torch.load(str(resume_path), map_location="cpu", weights_only=False)
             latest_metrics = latest_ckpt.get("metrics", {})
             if isinstance(latest_metrics, dict):
                 best_solvability = float(latest_metrics.get("best_solvability", latest_metrics.get("val_solvability", 0.0)))
+                best_teacher_loss = float(latest_metrics.get("best_teacher_loss", latest_metrics.get("val_total_loss", float("inf"))))
 
         for epoch in range(int(getattr(trainer, "epoch", -1)) + 1, config.epochs):
             trainer.epoch = int(epoch)
@@ -2229,7 +2318,11 @@ def train_diffusion(config: DiffusionTrainingConfig) -> DiffusionTrainer:
 
             if distributed_context.is_main_process:
                 assert val_loader is not None
-                val_metrics = trainer.validate(val_loader, num_samples=config.validation_num_samples)
+                val_metrics = trainer.validate(
+                    val_loader,
+                    num_samples=config.validation_num_samples,
+                    num_diffusion_samples=config.validation_num_diffusion_samples,
+                )
                 metrics = {
                     'epoch': epoch,
                     'lr': trainer.scheduler.get_last_lr()[0],
@@ -2243,7 +2336,9 @@ def train_diffusion(config: DiffusionTrainingConfig) -> DiffusionTrainer:
                     f"Epoch {epoch+1}/{config.epochs}: "
                     f"loss={train_metrics['loss']:.4f}, "
                     f"diffusion={train_metrics['diffusion_loss']:.4f}, "
+                    f"val_diffusion_loss={val_metrics.get('val_diffusion_loss', float('inf')):.4f}, "
                     f"val_logic_loss={val_metrics.get('val_logic_loss', 0.0):.4f}, "
+                    f"val_total_loss={val_metrics.get('val_total_loss', float('inf')):.4f}, "
                     f"val_solvability_proxy={val_metrics.get('val_solvability_proxy', val_metrics['val_solvability']):.4f}, "
                     f"logic_loss_{'enabled' if epoch >= config.warmup_epochs and config.alpha_logic > 0 else 'disabled'}"
                 )
@@ -2260,16 +2355,33 @@ def train_diffusion(config: DiffusionTrainingConfig) -> DiffusionTrainer:
                         keep_last=int(getattr(config, "keep_last", 2)),
                     )
 
-                if val_metrics['val_solvability'] > best_solvability:
-                    best_solvability = val_metrics['val_solvability']
+                current_teacher_loss = float(val_metrics.get("val_total_loss", float("inf")))
+                current_solvability = float(val_metrics['val_solvability'])
+                is_better_teacher = (
+                    current_teacher_loss < (best_teacher_loss - 1e-8)
+                    or (
+                        abs(current_teacher_loss - best_teacher_loss) <= 1e-8
+                        and current_solvability > best_solvability
+                    )
+                )
+                if is_better_teacher:
+                    best_teacher_loss = current_teacher_loss
                     trainer.save_checkpoint(
                         str(checkpoint_dir / "best_model.pth"),
+                        metrics,
+                        include_optimizer=False,
+                    )
+                if current_solvability > best_solvability:
+                    best_solvability = current_solvability
+                    trainer.save_checkpoint(
+                        str(checkpoint_dir / "best_logic_model.pth"),
                         metrics,
                         include_optimizer=False,
                     )
 
                 latest_metrics = dict(metrics)
                 latest_metrics["best_solvability"] = float(best_solvability)
+                latest_metrics["best_teacher_loss"] = float(best_teacher_loss)
                 trainer.save_checkpoint(
                     str(checkpoint_dir / LATEST_RESUME_FILENAME),
                     latest_metrics,

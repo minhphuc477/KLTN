@@ -20,6 +20,12 @@ from src.core.discrete_masked_model import (
     DiscreteMaskedRoomModel,
     create_discrete_masked_model,
 )
+from src.pipeline.room_topology_conditioning import (
+    DEFAULT_SEMANTIC_ANCHOR_THRESHOLD,
+    DEFAULT_SEMANTIC_PUZZLE_OFFSET,
+    DEFAULT_SEMANTIC_ROLE_PRIOR_STRENGTH,
+    build_topology_anchor_policy_metadata,
+)
 from src.pipeline.graph_features import (
     align_nodewise_tensor,
     build_default_node_positions,
@@ -72,8 +78,8 @@ class MaskedRoomTrainingConfig:
         graph_conditioning_mode: str = "node_sequence",
         use_current_node_distance_features: bool = True,
         current_node_distance_max: int = 8,
-        model_channels: int = 128,
-        hidden_dim: int = 64,
+        model_channels: int = 64,
+        hidden_dim: int = 48,
         masked_steps: int = 8,
         attention_mode: str = "softmax",
         topology_conditioning_mode: str = "additive",
@@ -81,17 +87,20 @@ class MaskedRoomTrainingConfig:
         graph_auto_linear_attention_nodes: int = 128,
         spatial_graph_gate_init: float = -2.0,
         spatial_topology_gate_init: float = -2.0,
-        unet_channel_mult: Tuple[int, ...] = (1, 2, 4),
-        unet_num_res_blocks: int = 2,
-        unet_attention_resolutions: Tuple[int, ...] = (1, 2),
-        unet_num_heads: int = 8,
+        unet_channel_mult: Tuple[int, ...] = (1, 2),
+        unet_num_res_blocks: int = 1,
+        unet_attention_resolutions: Tuple[int, ...] = (0, 1),
+        unet_num_heads: int = 4,
         unet_dropout: float = 0.1,
-        min_mask_ratio: float = 0.15,
-        max_mask_ratio: float = 0.90,
+        min_mask_ratio: float = 0.12,
+        max_mask_ratio: float = 0.85,
         optimizer_weight_decay: float = 1e-5,
         scheduler_eta_min: float = 1e-6,
         grad_clip_norm: float = 1.0,
         room_topology_channels: int = ROOM_TOPOLOGY_CHANNEL_COUNT,
+        topology_supervision_mode: str = "runtime_aligned",
+        semantic_role_prior_strength: float = DEFAULT_SEMANTIC_ROLE_PRIOR_STRENGTH,
+        semantic_puzzle_offset: int = DEFAULT_SEMANTIC_PUZZLE_OFFSET,
         checkpoint_dir: str = "./checkpoints/masked_room",
         save_every: int = 10,
         keep_last: int = 2,
@@ -104,6 +113,7 @@ class MaskedRoomTrainingConfig:
         device: str = "auto",
         seed: int = 42,
         quick: bool = False,
+        semantic_anchor_threshold: float = DEFAULT_SEMANTIC_ANCHOR_THRESHOLD,
     ):
         self.data_dir = data_dir
         self.batch_size = int(batch_size)
@@ -186,6 +196,9 @@ class MaskedRoomTrainingConfig:
         self.scheduler_eta_min = float(max(0.0, scheduler_eta_min))
         self.grad_clip_norm = float(max(0.0, grad_clip_norm))
         self.room_topology_channels = int(max(1, room_topology_channels))
+        self.topology_supervision_mode = str(topology_supervision_mode).strip().lower()
+        self.semantic_role_prior_strength = float(max(0.0, min(1.0, semantic_role_prior_strength)))
+        self.semantic_puzzle_offset = int(max(0, semantic_puzzle_offset))
         self.checkpoint_dir = str(checkpoint_dir)
         self.save_every = int(save_every)
         self.keep_last = int(max(0, keep_last))
@@ -202,11 +215,14 @@ class MaskedRoomTrainingConfig:
         self.device = ("cuda" if torch.cuda.is_available() else "cpu") if device == "auto" else str(device)
         self.seed = int(seed)
         self.quick = bool(quick)
+        self.semantic_anchor_threshold = float(max(0.0, min(1.0, semantic_anchor_threshold)))
 
         if self.condition_gnn_type not in {"gcn", "gat", "sage", "gps"}:
             raise ValueError("condition_gnn_type must be 'gcn', 'gat', 'sage', or 'gps'.")
         if self.graph_conditioning_mode not in {"node_sequence", "pooled"}:
             raise ValueError("graph_conditioning_mode must be 'node_sequence' or 'pooled'.")
+        if self.topology_supervision_mode not in {"runtime_aligned", "oracle_room_grid"}:
+            raise ValueError("topology_supervision_mode must be 'runtime_aligned' or 'oracle_room_grid'.")
         if self.attention_mode not in {"softmax", "linear_hedgehog"}:
             raise ValueError("attention_mode must be 'softmax' or 'linear_hedgehog'.")
         if self.topology_conditioning_mode not in {"additive", "spade"}:
@@ -285,6 +301,10 @@ def masked_room_training_kwargs_from_resolved_config(config: Dict[str, Any]) -> 
         "scheduler_eta_min": stage["scheduler_eta_min"],
         "grad_clip_norm": stage["grad_clip_norm"],
         "room_topology_channels": stage["room_topology_channels"],
+        "topology_supervision_mode": dataset["topology_supervision_mode"],
+        "semantic_role_prior_strength": config["generation"]["semantic_role_prior_strength"],
+        "semantic_puzzle_offset": config["generation"]["semantic_puzzle_offset"],
+        "semantic_anchor_threshold": config["generation"]["semantic_anchor_threshold"],
         "checkpoint_dir": stage["checkpoint_dir"],
         "save_every": stage["save_every"],
         "keep_last": stage["keep_last"],
@@ -732,6 +752,7 @@ class MaskedRoomTrainer:
             token_ids,
             topo,
             num_classes=self.config.num_classes,
+            semantic_anchor_threshold=self.config.semantic_anchor_threshold,
         )
         loss, metrics = self.model.training_loss(
             token_ids,
@@ -812,6 +833,7 @@ class MaskedRoomTrainer:
                 "unet_dropout": float(self.config.unet_dropout),
                 "min_mask_ratio": float(self.config.min_mask_ratio),
                 "max_mask_ratio": float(self.config.max_mask_ratio),
+                "semantic_anchor_threshold": float(self.config.semantic_anchor_threshold),
             },
             extra={
                 "graph_conditioning_mode": self.config.graph_conditioning_mode,
@@ -819,6 +841,12 @@ class MaskedRoomTrainer:
                 "global_step": int(self.global_step),
                 "checkpoint_kind": checkpoint_kind,
                 "contains": contains,
+                "topology_anchor_policy": build_topology_anchor_policy_metadata(
+                    semantic_role_prior_strength=self.config.semantic_role_prior_strength,
+                    semantic_anchor_threshold=self.config.semantic_anchor_threshold,
+                    semantic_puzzle_offset=self.config.semantic_puzzle_offset,
+                    topology_supervision_mode=self.config.topology_supervision_mode,
+                ),
             },
         )
         log_checkpoint_artifact(
@@ -862,6 +890,9 @@ def train_masked_room(config: MaskedRoomTrainingConfig) -> MaskedRoomTrainer:
         load_graphs=True,
         node_feature_dim=config.node_feature_dim,
         edge_feature_dim=config.edge_feature_dim,
+        topology_supervision_mode=config.topology_supervision_mode,
+        semantic_role_prior_strength=config.semantic_role_prior_strength,
+        semantic_puzzle_offset=config.semantic_puzzle_offset,
     )
     val_loader = create_dataloader(
         config.data_dir,
@@ -876,6 +907,9 @@ def train_masked_room(config: MaskedRoomTrainingConfig) -> MaskedRoomTrainer:
         load_graphs=True,
         node_feature_dim=config.node_feature_dim,
         edge_feature_dim=config.edge_feature_dim,
+        topology_supervision_mode=config.topology_supervision_mode,
+        semantic_role_prior_strength=config.semantic_role_prior_strength,
+        semantic_puzzle_offset=config.semantic_puzzle_offset,
     )
     log_capacity_guardrails(
         logger,
@@ -885,10 +919,12 @@ def train_masked_room(config: MaskedRoomTrainingConfig) -> MaskedRoomTrainer:
             "masked_room_model": count_parameters(trainer.model, trainable_only=True),
             "condition_encoder": count_parameters(trainer.condition_encoder, trainable_only=True),
         },
-        recommended_config="configs/zelda_hmolqd.yaml",
+        recommended_config="configs/zelda_hmolqd_masked_small.yaml",
         capacity_knobs=(
             "masked_room.model_channels, masked_room.hidden_dim, "
-            "masked_room.condition_hidden_dim, masked_room.condition_num_gnn_layers"
+            "masked_room.condition_hidden_dim, masked_room.condition_num_gnn_layers, "
+            "masked_room.unet_channel_mult, masked_room.unet_num_res_blocks, "
+            "masked_room.unet_num_heads"
         ),
     )
 
@@ -905,11 +941,21 @@ def train_masked_room(config: MaskedRoomTrainingConfig) -> MaskedRoomTrainer:
         latest_filename=LATEST_RESUME_FILENAME,
     )
     if resume_path is not None:
-        resume_payload = trainer.load_checkpoint(str(resume_path))
-        latest_metrics = resume_payload.get("metrics", {})
-        if isinstance(latest_metrics, dict):
-            best_val = float(latest_metrics.get("best_val_loss", latest_metrics.get("val_loss", best_val)))
-        logger.info("Auto-resumed masked-room training from %s", resume_path)
+        try:
+            resume_payload = trainer.load_checkpoint(str(resume_path))
+        except (RuntimeError, ValueError) as exc:
+            if getattr(config, "resume_checkpoint", None):
+                raise
+            logger.warning(
+                "Skipping auto-resume masked-room checkpoint at %s because it is incompatible with the current architecture: %s",
+                resume_path,
+                exc,
+            )
+        else:
+            latest_metrics = resume_payload.get("metrics", {})
+            if isinstance(latest_metrics, dict):
+                best_val = float(latest_metrics.get("best_val_loss", latest_metrics.get("val_loss", best_val)))
+            logger.info("Auto-resumed masked-room training from %s", resume_path)
 
     for epoch in range(int(getattr(trainer, "epoch", -1)) + 1, config.epochs):
         trainer.epoch = int(epoch)

@@ -526,8 +526,7 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main() -> None:
-    args = _build_parser().parse_args()
+def run_from_args(args: argparse.Namespace) -> Dict[str, Any]:
     # Keep CLI output concise (file paths + summary only).
     logging.getLogger().setLevel(logging.ERROR)
     logging.getLogger("src.generation.grammar").setLevel(logging.ERROR)
@@ -609,6 +608,12 @@ def main() -> None:
 
     print(json.dumps(summary["files"], indent=2))
     print(f"Saved summary: {summary_path}")
+    return summary
+
+
+def main() -> None:
+    args = _build_parser().parse_args()
+    run_from_args(args)
 
 
 if __name__ == "__main__":

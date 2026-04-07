@@ -2,7 +2,13 @@ from types import SimpleNamespace
 
 import torch
 
-from src.optimization.lcm_lora import DEFAULT_LORA_TARGETS, freeze_non_lora_parameters, inject_lora_into_model
+from src.core.latent_diffusion import TimestepEmbedding
+from src.optimization.lcm_lora import (
+    DEFAULT_LORA_TARGETS,
+    LoRALinear,
+    freeze_non_lora_parameters,
+    inject_lora_into_model,
+)
 from src.train_lcm import ConsistencyLoRATrainer
 
 
@@ -79,3 +85,33 @@ def test_fast_sampler_resume_checkpoint_round_trip(tmp_path):
     assert trainer.epoch == 5
     assert trainer.global_step == 21
     assert torch.allclose(tracked_param, original)
+
+
+def test_injected_lora_matches_wrapped_linear_device_and_dtype():
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    student = _TinyStudent().to(device=device, dtype=torch.float64)
+
+    inject_lora_into_model(
+        student.denoiser,
+        rank=2,
+        alpha=4.0,
+        target_modules=DEFAULT_LORA_TARGETS,
+    )
+
+    lora_modules = [module for module in student.modules() if isinstance(module, LoRALinear)]
+    assert lora_modules
+
+    for module in lora_modules:
+        assert module.lora.lora_A.device == module.base_layer.weight.device
+        assert module.lora.lora_B.device == module.base_layer.weight.device
+        assert module.lora.lora_A.dtype == module.base_layer.weight.dtype
+        assert module.lora.lora_B.dtype == module.base_layer.weight.dtype
+
+
+def test_timestep_embedding_matches_mlp_dtype():
+    embed = TimestepEmbedding(dim=8).to(dtype=torch.float64)
+    t = torch.tensor([1, 7], dtype=torch.long)
+
+    out = embed(t)
+
+    assert out.dtype == torch.float64

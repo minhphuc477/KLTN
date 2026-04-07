@@ -1,15 +1,16 @@
 {
-  "saved_at_utc": "2026-04-02T16:26:44+00:00",
+  "saved_at_utc": "2026-04-03T08:00:19+00:00",
   "seed": 42,
-  "git_commit": "c73bac54914c416dd75ed1f47d2ea1d4359646f5",
+  "git_commit": "cef96a2ba5fbd7c288098af0b2b6d192a69568f7",
   "command": [
     "main.py",
     "train",
     "--config",
     "configs/zelda_hmolqd.yaml",
+    "--stage",
+    "masked_room",
     "--output-dir",
     "outputs/zelda_hmolqd_fulltrain_rerun",
-    "--no-auto-resume",
     "--verbose"
   ],
   "dataset_schema_profile": "zelda_v1",

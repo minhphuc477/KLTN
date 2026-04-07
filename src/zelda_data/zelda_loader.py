@@ -68,11 +68,14 @@ from src.pipeline.graph_features import (
     extract_node_feature_vector,
 )
 from src.pipeline.room_topology_conditioning import (
+    DEFAULT_SEMANTIC_PUZZLE_OFFSET,
+    DEFAULT_SEMANTIC_ROLE_PRIOR_STRENGTH,
     ROOM_TOPOLOGY_CHANNEL_COUNT,
     build_room_topology_condition_map,
     build_semantic_room_plan_trace,
     nearest_walkable_point,
 )
+from src.pipeline.spatial_utils import clamp_room_coord, parse_room_coord
 from src.utils.style_tokens import iter_style_metadata_candidates, resolve_style_token_id
 VGLC_AVAILABLE = True
 logger.info("VGLC adapter available via zelda_core")
@@ -412,7 +415,50 @@ def _content_anchor_points(
     return anchors
 
 
-def _build_room_graph_sample(dungeon, room_position: Tuple[int, int], room, base_graph: dict) -> dict:
+def _graph_room_start_goal(
+    graph,
+    graph_node_id: Any,
+    *,
+    incoming_dirs: Set[str],
+    outgoing_dirs: Set[str],
+) -> Tuple[Tuple[int, int], Tuple[int, int]]:
+    attrs = {}
+    if graph is not None and graph_node_id is not None and hasattr(graph, "nodes") and graph_node_id in graph.nodes:
+        attrs = dict(graph.nodes[graph_node_id])
+
+    start = (
+        parse_room_coord(attrs.get("start_pos"))
+        or parse_room_coord(attrs.get("entry_pos"))
+        or parse_room_coord(attrs.get("entrance"))
+    )
+    goal = (
+        parse_room_coord(attrs.get("goal_pos"))
+        or parse_room_coord(attrs.get("exit_pos"))
+        or parse_room_coord(attrs.get("exit"))
+    )
+
+    if start is None:
+        start = (ROOM_HEIGHT // 2, 0) if incoming_dirs else (ROOM_HEIGHT // 2, ROOM_WIDTH // 4)
+    if goal is None:
+        goal = (ROOM_HEIGHT // 2, ROOM_WIDTH - 1) if outgoing_dirs else (ROOM_HEIGHT // 2, (3 * ROOM_WIDTH) // 4)
+
+    start = clamp_room_coord(start)
+    goal = clamp_room_coord(goal)
+    if start == goal:
+        goal = clamp_room_coord((goal[0], goal[1] + 1))
+    return start, goal
+
+
+def _build_room_graph_sample(
+    dungeon,
+    room_position: Tuple[int, int],
+    room,
+    base_graph: dict,
+    *,
+    topology_supervision_mode: str = "runtime_aligned",
+    semantic_role_prior_strength: float = DEFAULT_SEMANTIC_ROLE_PRIOR_STRENGTH,
+    semantic_puzzle_offset: int = DEFAULT_SEMANTIC_PUZZLE_OFFSET,
+) -> dict:
     """Build one room-level graph-conditioning sample aligned with inference."""
     graph = getattr(dungeon, "graph", None)
     graph_node_id = getattr(room, "graph_node_id", None)
@@ -434,28 +480,44 @@ def _build_room_graph_sample(dungeon, room_position: Tuple[int, int], room, base
     style_id = _extract_explicit_style_id(room, graph_node_attrs=graph_node_attrs, graph=graph)
 
     role_flags = _room_role_flags(room, graph_node_attrs)
-    start, goal = extract_start_goal(getattr(room, "semantic_grid", None))
-    room_grid = np.asarray(getattr(room, "semantic_grid", None), dtype=np.int32)
-    content_anchors = _content_anchor_points(room_grid, role_flags)
-    if start is None:
-        start = content_anchors.get("start")
-    if goal is None:
-        goal = content_anchors.get("goal")
-    if start is None and bool(getattr(room, "is_start", False)):
-        start = nearest_walkable_point(room_grid, (ROOM_HEIGHT // 2, ROOM_WIDTH // 2))
-    if goal is None and bool(getattr(room, "has_triforce", False)):
-        goal = nearest_walkable_point(room_grid, (ROOM_HEIGHT // 2, ROOM_WIDTH // 2))
-
-    traversability_trace = build_semantic_room_plan_trace(
-        room_grid,
-        start=start,
-        goal=goal,
-        required_doors=required_doors,
+    supervision_mode = str(topology_supervision_mode).strip().lower()
+    if supervision_mode not in {"runtime_aligned", "oracle_room_grid"}:
+        raise ValueError(
+            f"topology_supervision_mode must be 'runtime_aligned' or 'oracle_room_grid', got {topology_supervision_mode!r}."
+        )
+    start, goal = _graph_room_start_goal(
+        graph,
+        graph_node_id,
         incoming_dirs=incoming_dirs,
         outgoing_dirs=outgoing_dirs,
-        edge_constraint_tokens=_edge_constraint_tokens_by_direction(dungeon, room_position, graph_node_id),
-        room_role_flags=role_flags,
     )
+    traversability_trace = None
+    if supervision_mode == "oracle_room_grid":
+        room_grid = np.asarray(getattr(room, "semantic_grid", None), dtype=np.int32)
+        oracle_start, oracle_goal = extract_start_goal(getattr(room, "semantic_grid", None))
+        content_anchors = _content_anchor_points(room_grid, role_flags)
+        if oracle_start is None:
+            oracle_start = content_anchors.get("start")
+        if oracle_goal is None:
+            oracle_goal = content_anchors.get("goal")
+        if oracle_start is None and bool(getattr(room, "is_start", False)):
+            oracle_start = nearest_walkable_point(room_grid, (ROOM_HEIGHT // 2, ROOM_WIDTH // 2))
+        if oracle_goal is None and bool(getattr(room, "has_triforce", False)):
+            oracle_goal = nearest_walkable_point(room_grid, (ROOM_HEIGHT // 2, ROOM_WIDTH // 2))
+        if oracle_start is not None:
+            start = clamp_room_coord(oracle_start)
+        if oracle_goal is not None:
+            goal = clamp_room_coord(oracle_goal)
+        traversability_trace = build_semantic_room_plan_trace(
+            room_grid,
+            start=start,
+            goal=goal,
+            required_doors=required_doors,
+            incoming_dirs=incoming_dirs,
+            outgoing_dirs=outgoing_dirs,
+            edge_constraint_tokens=_edge_constraint_tokens_by_direction(dungeon, room_position, graph_node_id),
+            room_role_flags=role_flags,
+        )
 
     room_topology_map = build_room_topology_condition_map(
         room_shape=(ROOM_HEIGHT, ROOM_WIDTH),
@@ -465,6 +527,8 @@ def _build_room_graph_sample(dungeon, room_position: Tuple[int, int], room, base
         edge_constraint_tokens=_edge_constraint_tokens_by_direction(dungeon, room_position, graph_node_id),
         room_role_flags=role_flags,
         traversability_trace=traversability_trace,
+        semantic_role_prior_strength=float(semantic_role_prior_strength),
+        semantic_puzzle_offset=int(max(0, semantic_puzzle_offset)),
     )
 
     neighbor_maps: Dict[str, Optional[np.ndarray]] = {}
@@ -498,6 +562,7 @@ def _build_room_graph_sample(dungeon, room_position: Tuple[int, int], room, base
         'boundary_constraints': build_boundary_constraints(has_neighbor=has_neighbor, required_door=required_doors).numpy().astype(np.float32),
         'room_topology_map': room_topology_map.astype(np.float32),
         'neighbor_maps': neighbor_maps,
+        'topology_supervision_mode': supervision_mode,
         **({'style_id': int(style_id)} if style_id is not None else {}),
     }
 
@@ -765,14 +830,24 @@ class ZeldaRoomDataset(Dataset):
         load_graphs: bool = False,
         node_feature_dim: int = GRAPH_NODE_FEATURE_DIM,
         edge_feature_dim: int = GRAPH_EDGE_FEATURE_DIM,
+        topology_supervision_mode: str = "runtime_aligned",
+        semantic_role_prior_strength: float = DEFAULT_SEMANTIC_ROLE_PRIOR_STRENGTH,
+        semantic_puzzle_offset: int = DEFAULT_SEMANTIC_PUZZLE_OFFSET,
     ):
         self.transform = transform
         self.normalize = normalize
         self.load_graphs = load_graphs
         self.node_feature_dim = int(max(1, node_feature_dim))
         self.edge_feature_dim = int(max(1, edge_feature_dim))
+        self.topology_supervision_mode = str(topology_supervision_mode).strip().lower()
+        self.semantic_role_prior_strength = float(max(0.0, min(1.0, semantic_role_prior_strength)))
+        self.semantic_puzzle_offset = int(max(0, semantic_puzzle_offset))
         self.rooms = []
         self.graphs = [] if load_graphs else None
+        if self.topology_supervision_mode not in {"runtime_aligned", "oracle_room_grid"}:
+            raise ValueError(
+                "topology_supervision_mode must be 'runtime_aligned' or 'oracle_room_grid'."
+            )
         
         if not VGLC_AVAILABLE:
             raise ImportError("VGLC adapter required for room dataset")
@@ -795,7 +870,17 @@ class ZeldaRoomDataset(Dataset):
                         if grid is not None:
                             self.rooms.append(grid.astype(np.float32))
                             if self.graphs is not None and dungeon_graph is not None:
-                                self.graphs.append(_build_room_graph_sample(dungeon, coord, room, dungeon_graph))
+                                self.graphs.append(
+                                    _build_room_graph_sample(
+                                        dungeon,
+                                        coord,
+                                        room,
+                                        dungeon_graph,
+                                        topology_supervision_mode=self.topology_supervision_mode,
+                                        semantic_role_prior_strength=self.semantic_role_prior_strength,
+                                        semantic_puzzle_offset=self.semantic_puzzle_offset,
+                                    )
+                                )
                 except (AttributeError, RuntimeError, ValueError, TypeError) as e:
                     logger.debug(f"Skipping dungeon {dungeon_num}v{variant}: {e}")
         
@@ -909,6 +994,9 @@ def create_dataloader(
     load_graphs: bool = False,
     node_feature_dim: int = GRAPH_NODE_FEATURE_DIM,
     edge_feature_dim: int = GRAPH_EDGE_FEATURE_DIM,
+    topology_supervision_mode: str = "runtime_aligned",
+    semantic_role_prior_strength: float = DEFAULT_SEMANTIC_ROLE_PRIOR_STRENGTH,
+    semantic_puzzle_offset: int = DEFAULT_SEMANTIC_PUZZLE_OFFSET,
     sampler: Optional[Sampler] = None,
     return_sampler: bool = False,
 ) -> DataLoader:
@@ -946,6 +1034,9 @@ def create_dataloader(
             load_graphs=load_graphs,
             node_feature_dim=node_feature_dim,
             edge_feature_dim=edge_feature_dim,
+            topology_supervision_mode=topology_supervision_mode,
+            semantic_role_prior_strength=semantic_role_prior_strength,
+            semantic_puzzle_offset=semantic_puzzle_offset,
         )
     else:
         dataset = ZeldaDungeonDataset(

@@ -442,14 +442,14 @@ def validate_graph_topology(G: nx.Graph) -> Tuple[bool, List[str]]:
     start = get_physical_start_node(G)
     goal_nodes = find_nodes_by_type(G, 'triforce')
     
-    if not start:
+    if start is None:
         errors.append("No start node found or determined")
     
     if not goal_nodes:
         errors.append("No goal (triforce) node found")
     
     # Check path length from start to goal
-    if start and goal_nodes:
+    if start is not None and goal_nodes:
         goal = goal_nodes[0]
         try:
             if G.is_directed():

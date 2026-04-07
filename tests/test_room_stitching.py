@@ -2,7 +2,7 @@ import numpy as np
 
 from src.core.definitions import ROOM_HEIGHT, ROOM_WIDTH, SEMANTIC_PALETTE
 from src.pipeline.spatial_utils import carve_room_connection
-from src.pipeline.room_stitching import build_room_canvas_from_slots
+from src.pipeline.room_stitching import build_room_canvas_from_slots, carve_room_connection_between_bboxes
 from src.data_processing.visual_integration import make_stitched_for_single_room
 from src.zelda_data.stitching.connectivity import connect_doors
 from src.zelda_data.stitching.stitch_orchestration import (
@@ -138,3 +138,32 @@ def test_spatial_utils_carve_room_connection_delegates_to_shared_bbox_connector(
     boundary_rows = np.where(grid[:, ROOM_WIDTH - 1] == locked)[0]
     assert len(boundary_rows) > 0
     assert np.all(grid[boundary_rows, ROOM_WIDTH] == locked)
+
+
+def test_non_adjacent_bbox_connector_walls_off_relaxed_corridor():
+    void_id = int(SEMANTIC_PALETTE["VOID"])
+    wall_id = int(SEMANTIC_PALETTE["WALL"])
+    floor_id = int(SEMANTIC_PALETTE["FLOOR"])
+
+    grid = np.full((24, 40), void_id, dtype=np.int32)
+    # Paint two separated room footprints so the connector must route through void.
+    grid[4:16, 2:13] = wall_id
+    grid[4:16, 24:35] = wall_id
+
+    src_bbox = (2, 4, 12, 15)
+    dst_bbox = (24, 4, 34, 15)
+
+    carve_room_connection_between_bboxes(
+        grid,
+        src_bbox,
+        dst_bbox,
+        fill_tile=void_id,
+    )
+
+    gap_mask = np.zeros_like(grid, dtype=bool)
+    gap_mask[:, 13:24] = True
+    corridor_floor = np.argwhere((grid == floor_id) & gap_mask)
+    corridor_walls = np.argwhere((grid == wall_id) & gap_mask)
+
+    assert len(corridor_floor) > 0
+    assert len(corridor_walls) > 0

@@ -146,6 +146,7 @@ def test_default_config_uses_small_data_recommended_room_model_profile():
     assert resolved["runtime"]["checkpoint_storage_warning_fraction"] == pytest.approx(0.8)
     assert resolved["runtime"]["checkpoint_storage_cleanup_enabled"] is True
     assert resolved["runtime"]["checkpoint_storage_cleanup_target_fraction"] == pytest.approx(0.6)
+    assert resolved["dataset"]["topology_supervision_mode"] == "runtime_aligned"
     assert resolved["vqvae"]["keep_last"] == 2
     assert resolved["diffusion"]["keep_last"] == 2
     assert resolved["fast_sampler"]["keep_last"] == 2
@@ -155,15 +156,70 @@ def test_default_config_uses_small_data_recommended_room_model_profile():
     assert resolved["diffusion"]["condition_num_gnn_layers"] == 2
     assert resolved["diffusion"]["condition_gnn_type"] == "gps"
     assert resolved["diffusion"]["condition_use_reference_room_maps"] is True
-    assert resolved["masked_room"]["model_channels"] == 96
+    assert resolved["masked_room"]["model_channels"] == 64
+    assert resolved["masked_room"]["hidden_dim"] == 48
     assert resolved["masked_room"]["condition_hidden_dim"] == 192
     assert resolved["masked_room"]["condition_num_gnn_layers"] == 2
     assert resolved["masked_room"]["condition_use_reference_room_maps"] is True
-    assert resolved["generation"]["guidance_scale"] == pytest.approx(7.5)
-    assert resolved["generation"]["logic_guidance_scale"] == pytest.approx(1.0)
+    assert resolved["masked_room"]["unet_channel_mult"] == [1, 2]
+    assert resolved["masked_room"]["unet_num_res_blocks"] == 1
+    assert resolved["masked_room"]["unet_attention_resolutions"] == [0, 1]
+    assert resolved["masked_room"]["unet_num_heads"] == 4
+    assert resolved["masked_room"]["min_mask_ratio"] == pytest.approx(0.12)
+    assert resolved["masked_room"]["max_mask_ratio"] == pytest.approx(0.85)
+    assert resolved["dataset"]["topology_supervision_mode"] == "runtime_aligned"
+    assert resolved["generation"]["guidance_scale"] == pytest.approx(3.0)
+    assert resolved["generation"]["logic_guidance_scale"] == pytest.approx(0.0)
     assert resolved["generation"]["num_diffusion_steps"] == 50
     assert resolved["generation"]["apply_repair"] is True
     assert resolved["generation"]["enable_map_elites"] is False
+    assert resolved["generation"]["semantic_role_prior_strength"] == pytest.approx(0.15)
+    assert resolved["generation"]["semantic_anchor_threshold"] == pytest.approx(0.5)
+    assert resolved["generation"]["semantic_puzzle_offset"] == 2
+    assert resolved["generation"]["semantic_constrained_decoding_enabled"] is True
+    assert resolved["generation"]["semantic_marker_logit_bias"] == pytest.approx(10000.0)
+    assert resolved["generation"]["semantic_marker_suppression_bias"] == pytest.approx(100.0)
+    assert resolved["generation"]["puzzle_room_scaffold_enabled"] is True
+    assert resolved["generation"]["puzzle_room_scaffold_min_structure_tiles"] == 10
+    assert resolved["generation"]["puzzle_room_archetype_mode"] == "auto"
+    assert resolved["generation"]["puzzle_room_branch_density"] == pytest.approx(0.75)
+    assert resolved["generation"]["puzzle_room_block_budget"] == 28
+    assert resolved["generation"]["puzzle_room_preserve_route_margin"] == 0
+    assert resolved["generation"]["deterministic_graph_marker_overlay_enabled"] is True
+    assert resolved["generation"]["fast_sampler_teacher_fallback_enabled"] is True
+    assert resolved["generation"]["masked_room_teacher_fallback_enabled"] is True
+    assert resolved["diffusion"]["validation_num_samples"] == 8
+    assert resolved["diffusion"]["validation_num_diffusion_samples"] == 64
+
+
+def test_canonical_yaml_uses_downsized_masked_room_profile():
+    resolved = merge_config(yaml_path="configs/zelda_hmolqd.yaml", cli_overrides=None)
+
+    assert resolved["masked_room"]["model_channels"] == 64
+    assert resolved["masked_room"]["hidden_dim"] == 48
+    assert resolved["masked_room"]["unet_channel_mult"] == [1, 2]
+    assert resolved["masked_room"]["unet_num_res_blocks"] == 1
+    assert resolved["masked_room"]["unet_attention_resolutions"] == [0, 1]
+    assert resolved["masked_room"]["unet_num_heads"] == 4
+    assert resolved["masked_room"]["min_mask_ratio"] == pytest.approx(0.12)
+    assert resolved["masked_room"]["max_mask_ratio"] == pytest.approx(0.85)
+    assert resolved["generation"]["guidance_scale"] == pytest.approx(3.0)
+    assert resolved["generation"]["logic_guidance_scale"] == pytest.approx(0.0)
+    assert resolved["generation"]["semantic_role_prior_strength"] == pytest.approx(0.15)
+    assert resolved["generation"]["semantic_anchor_threshold"] == pytest.approx(0.5)
+    assert resolved["generation"]["semantic_puzzle_offset"] == 2
+    assert resolved["generation"]["semantic_constrained_decoding_enabled"] is True
+    assert resolved["generation"]["semantic_marker_logit_bias"] == pytest.approx(10000.0)
+    assert resolved["generation"]["semantic_marker_suppression_bias"] == pytest.approx(100.0)
+    assert resolved["generation"]["puzzle_room_scaffold_enabled"] is True
+    assert resolved["generation"]["puzzle_room_scaffold_min_structure_tiles"] == 10
+    assert resolved["generation"]["puzzle_room_archetype_mode"] == "auto"
+    assert resolved["generation"]["puzzle_room_branch_density"] == pytest.approx(0.75)
+    assert resolved["generation"]["puzzle_room_block_budget"] == 28
+    assert resolved["generation"]["puzzle_room_preserve_route_margin"] == 0
+    assert resolved["generation"]["deterministic_graph_marker_overlay_enabled"] is True
+    assert resolved["generation"]["fast_sampler_teacher_fallback_enabled"] is True
+    assert resolved["generation"]["masked_room_teacher_fallback_enabled"] is True
 
 
 def test_stage_helpers_forward_checkpoint_retention_and_resume_defaults():
@@ -194,18 +250,167 @@ def test_stage_helpers_forward_checkpoint_retention_and_resume_defaults():
     assert diffusion_kwargs["vqvae_codebook_size"] == resolved["vqvae"]["codebook_size"]
     assert diffusion_kwargs["vqvae_use_coordconv"] == resolved["vqvae"]["use_coordconv"]
     assert diffusion_kwargs["vqvae_mrf_penalty_weight"] == pytest.approx(resolved["vqvae"]["mrf_penalty_weight"])
+    assert diffusion_kwargs["validation_num_samples"] == 8
+    assert diffusion_kwargs["validation_num_diffusion_samples"] == 64
 
     generation_kwargs = generation_runtime_kwargs_from_resolved_config(resolved)
     pipeline_kwargs = pipeline_kwargs_from_resolved_config(resolved)
-    assert generation_kwargs["default_guidance_scale"] == pytest.approx(7.5)
-    assert generation_kwargs["default_logic_guidance_scale"] == pytest.approx(1.0)
+    assert generation_kwargs["default_guidance_scale"] == pytest.approx(3.0)
+    assert generation_kwargs["default_logic_guidance_scale"] == pytest.approx(0.0)
     assert generation_kwargs["default_num_diffusion_steps"] == 50
     assert generation_kwargs["default_start_goal_coords"] == ((1, 5), (14, 5))
+    assert generation_kwargs["default_semantic_role_prior_strength"] == pytest.approx(0.15)
+    assert generation_kwargs["default_semantic_anchor_threshold"] == pytest.approx(0.5)
+    assert generation_kwargs["default_semantic_puzzle_offset"] == 2
+    assert generation_kwargs["default_semantic_constrained_decoding_enabled"] is True
+    assert generation_kwargs["default_semantic_marker_logit_bias"] == pytest.approx(10000.0)
+    assert generation_kwargs["default_semantic_marker_suppression_bias"] == pytest.approx(100.0)
+    assert generation_kwargs["default_puzzle_room_scaffold_enabled"] is True
+    assert generation_kwargs["default_puzzle_room_scaffold_min_structure_tiles"] == 10
+    assert generation_kwargs["default_puzzle_room_archetype_mode"] == "auto"
+    assert generation_kwargs["default_puzzle_room_branch_density"] == pytest.approx(0.75)
+    assert generation_kwargs["default_puzzle_room_block_budget"] == 28
+    assert generation_kwargs["default_puzzle_room_preserve_route_margin"] == 0
+    assert generation_kwargs["default_deterministic_graph_marker_overlay_enabled"] is True
+    assert generation_kwargs["default_fast_sampler_teacher_fallback_enabled"] is True
+    assert generation_kwargs["default_masked_room_teacher_fallback_enabled"] is True
+    assert pipeline_kwargs["topology_default_target_curve"] == resolved["topology"]["default_target_curve"]
+    assert pipeline_kwargs["topology_num_rooms"] == resolved["topology"]["num_rooms"]
+    assert pipeline_kwargs["topology_population_size"] == resolved["topology"]["population_size"]
+    assert "target_curve" not in pipeline_kwargs
+    assert "num_rooms" not in pipeline_kwargs
     assert pipeline_kwargs["condition_gnn_type"] == resolved["diffusion"]["condition_gnn_type"]
     assert pipeline_kwargs["fast_sampling_steps"] == resolved["fast_sampler"]["num_inference_steps"]
     assert pipeline_kwargs["diffusion_fallback_config"]["model_channels"] == resolved["diffusion"]["model_channels"]
     assert pipeline_kwargs["condition_encoder_fallback_config"]["context_dim"] == resolved["diffusion"]["context_dim"]
     assert pipeline_kwargs["masked_room_fallback_config"]["model_channels"] == resolved["masked_room"]["model_channels"]
+
+
+def test_generation_runtime_kwargs_remain_backward_compatible_when_newer_generation_fields_are_missing():
+    resolved = merge_config(yaml_path=None, cli_overrides=None)
+    generation = resolved["generation"]
+    for key in (
+        "semantic_role_prior_strength",
+        "semantic_anchor_threshold",
+        "semantic_puzzle_offset",
+        "semantic_constrained_decoding_enabled",
+        "semantic_marker_logit_bias",
+        "semantic_marker_suppression_bias",
+        "puzzle_room_scaffold_enabled",
+        "puzzle_room_scaffold_min_structure_tiles",
+        "puzzle_room_archetype_mode",
+        "puzzle_room_branch_density",
+        "puzzle_room_block_budget",
+        "puzzle_room_preserve_route_margin",
+        "deterministic_graph_marker_overlay_enabled",
+        "fast_sampler_teacher_fallback_enabled",
+        "masked_room_teacher_fallback_enabled",
+    ):
+        generation.pop(key, None)
+
+    generation_kwargs = generation_runtime_kwargs_from_resolved_config(resolved)
+    pipeline_kwargs = pipeline_kwargs_from_resolved_config(resolved)
+
+    assert generation_kwargs["default_semantic_role_prior_strength"] == pytest.approx(0.15)
+    assert generation_kwargs["default_semantic_anchor_threshold"] == pytest.approx(0.5)
+    assert generation_kwargs["default_semantic_puzzle_offset"] == 2
+    assert generation_kwargs["default_semantic_constrained_decoding_enabled"] is True
+    assert generation_kwargs["default_semantic_marker_logit_bias"] == pytest.approx(10000.0)
+    assert generation_kwargs["default_semantic_marker_suppression_bias"] == pytest.approx(100.0)
+    assert generation_kwargs["default_puzzle_room_scaffold_enabled"] is True
+    assert generation_kwargs["default_puzzle_room_scaffold_min_structure_tiles"] == 10
+    assert generation_kwargs["default_puzzle_room_archetype_mode"] == "auto"
+    assert generation_kwargs["default_puzzle_room_branch_density"] == pytest.approx(0.75)
+    assert generation_kwargs["default_puzzle_room_block_budget"] == 28
+    assert generation_kwargs["default_puzzle_room_preserve_route_margin"] == 0
+    assert generation_kwargs["default_deterministic_graph_marker_overlay_enabled"] is True
+    assert generation_kwargs["default_fast_sampler_teacher_fallback_enabled"] is True
+    assert generation_kwargs["default_masked_room_teacher_fallback_enabled"] is True
+    assert pipeline_kwargs["default_semantic_role_prior_strength"] == pytest.approx(0.15)
+    assert pipeline_kwargs["default_semantic_anchor_threshold"] == pytest.approx(0.5)
+    assert pipeline_kwargs["default_semantic_puzzle_offset"] == 2
+    assert pipeline_kwargs["default_semantic_constrained_decoding_enabled"] is True
+    assert pipeline_kwargs["default_semantic_marker_logit_bias"] == pytest.approx(10000.0)
+    assert pipeline_kwargs["default_semantic_marker_suppression_bias"] == pytest.approx(100.0)
+    assert pipeline_kwargs["default_puzzle_room_scaffold_enabled"] is True
+    assert pipeline_kwargs["default_puzzle_room_scaffold_min_structure_tiles"] == 10
+    assert pipeline_kwargs["default_puzzle_room_archetype_mode"] == "auto"
+    assert pipeline_kwargs["default_puzzle_room_branch_density"] == pytest.approx(0.75)
+    assert pipeline_kwargs["default_puzzle_room_block_budget"] == 28
+    assert pipeline_kwargs["default_puzzle_room_preserve_route_margin"] == 0
+    assert pipeline_kwargs["default_deterministic_graph_marker_overlay_enabled"] is True
+    assert pipeline_kwargs["default_fast_sampler_teacher_fallback_enabled"] is True
+    assert pipeline_kwargs["default_masked_room_teacher_fallback_enabled"] is True
+
+
+def test_root_parser_accepts_topology_comparison_subcommands(tmp_path: Path):
+    parser = main._build_root_parser()
+
+    compare_args = parser.parse_args(
+        [
+            "topology-compare-manual",
+            "--run-dir",
+            str(tmp_path / "run"),
+            "--output-dir",
+            str(tmp_path / "compare_out"),
+            "--semantic-role-prior-strength",
+            "0.25",
+            "--semantic-puzzle-offset",
+            "3",
+            "--no-semantic-constrained-decoding-enabled",
+            "--semantic-marker-logit-bias",
+            "9.5",
+            "--semantic-marker-suppression-bias",
+            "1.5",
+            "--no-puzzle-room-scaffold-enabled",
+            "--puzzle-room-scaffold-min-structure-tiles",
+            "6",
+            "--puzzle-room-archetype-mode",
+            "hub",
+            "--puzzle-room-branch-density",
+            "0.5",
+            "--puzzle-room-block-budget",
+            "18",
+            "--puzzle-room-preserve-route-margin",
+            "2",
+            "--no-deterministic-graph-marker-overlay-enabled",
+            "--no-fast-sampler-teacher-fallback-enabled",
+            "--no-masked-room-teacher-fallback-enabled",
+        ]
+    )
+    fixed_args = parser.parse_args(
+        [
+            "topology-audit-fixed-graph",
+            "--run-dir",
+            str(tmp_path / "run"),
+            "--output-dir",
+            str(tmp_path / "audit_out"),
+            "--seeds",
+            "1",
+            "2",
+            "--fast-sampler-teacher-fallback-enabled",
+        ]
+    )
+
+    assert compare_args.command == "topology-compare-manual"
+    assert fixed_args.command == "topology-audit-fixed-graph"
+    assert fixed_args.seeds == [1, 2]
+    assert compare_args.semantic_role_prior_strength == pytest.approx(0.25)
+    assert compare_args.semantic_puzzle_offset == 3
+    assert compare_args.semantic_constrained_decoding_enabled is False
+    assert compare_args.semantic_marker_logit_bias == pytest.approx(9.5)
+    assert compare_args.semantic_marker_suppression_bias == pytest.approx(1.5)
+    assert compare_args.puzzle_room_scaffold_enabled is False
+    assert compare_args.puzzle_room_scaffold_min_structure_tiles == 6
+    assert compare_args.puzzle_room_archetype_mode == "hub"
+    assert compare_args.puzzle_room_branch_density == pytest.approx(0.5)
+    assert compare_args.puzzle_room_block_budget == 18
+    assert compare_args.puzzle_room_preserve_route_margin == 2
+    assert compare_args.deterministic_graph_marker_overlay_enabled is False
+    assert compare_args.fast_sampler_teacher_fallback_enabled is False
+    assert compare_args.masked_room_teacher_fallback_enabled is False
+    assert fixed_args.fast_sampler_teacher_fallback_enabled is True
+    assert fixed_args.mission_graph is None
 
 
 def test_train_parser_accepts_distributed_cli_flags(tmp_path: Path):

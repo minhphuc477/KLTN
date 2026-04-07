@@ -397,6 +397,8 @@ class GraphGrammarExecutor:
         
         # Always apply start rule first
         graph = self.rules[0].apply(graph, context)
+        graph.ensure_generation_stats_defaults()
+        graph.generation_stats["require_goal_gauntlet"] = bool(self.use_full_rule_space)
         
         # Track statistics
         rules_applied = 0
@@ -1045,6 +1047,7 @@ def mission_graph_to_networkx(
 
     # Add edges
     for edge in graph.edges:
+        target_node = graph.nodes.get(edge.target)
         edge_attrs = dict(
             label=edge.edge_type.name.lower(),  # VGLC edge label
             edge_type=edge.edge_type.name,
@@ -1067,6 +1070,7 @@ def mission_graph_to_networkx(
         if (
             directed
             and edge.edge_type in bidirectional_output_types
+            and (target_node is None or target_node.node_type != NodeType.GOAL)
             and not G.has_edge(edge.target, edge.source)
         ):
             reverse_attrs = dict(edge_attrs)
@@ -3273,10 +3277,22 @@ class EvolutionaryTopologyGenerator:
 
     def _finalize_graph_output(self, graph: MissionGraph, *, directed_output: bool) -> nx.Graph:
         """Convert phenotype graph to validated output graph."""
+        constraint_grammar = getattr(getattr(self, "executor", None), "_constraint_grammar", None)
+        if constraint_grammar is not None:
+            graph = copy.deepcopy(graph)
+            graph.ensure_generation_stats_defaults()
+            graph.generation_stats["require_goal_gauntlet"] = True
+            graph = constraint_grammar.ensure_anchor_nodes(graph)
+            graph = constraint_grammar.fix_lock_key_ordering(graph)
+            graph = constraint_grammar.repair_progression_constraints(graph)
+            graph = constraint_grammar.ensure_anchor_nodes(graph)
+            graph.sanitize()
+
         best_networkx = mission_graph_to_networkx(graph, directed=True)
 
         logger.debug("Applying VGLC compliance: filtering virtual nodes...")
         best_networkx_physical = filter_virtual_nodes(best_networkx)
+        best_networkx_physical = self._repair_output_connectivity(best_networkx_physical)
 
         topology_report = validate_topology(best_networkx_physical)
         if not topology_report.is_valid:
@@ -3287,6 +3303,108 @@ class EvolutionaryTopologyGenerator:
         if directed_output:
             return best_networkx_physical
         return best_networkx_physical.to_undirected()
+
+    @staticmethod
+    def _repair_output_connectivity(graph: nx.Graph) -> nx.Graph:
+        """
+        Connect disconnected physical components with PATH edges.
+
+        Block I search can occasionally leave an isolated side-room after
+        constraint repair. Downstream strict topology validation rejects those
+        graphs, so final export stitches the components together using the
+        closest non-goal anchors.
+        """
+        if graph.number_of_nodes() <= 1:
+            return graph
+
+        undirected = graph.to_undirected()
+        if nx.is_connected(undirected):
+            return graph
+
+        repaired = graph.copy()
+        repaired.graph["generation_stats"] = copy.deepcopy(graph.graph.get("generation_stats", {}))
+        stats = repaired.graph.setdefault("generation_stats", {})
+        protected_goal_type = "GOAL"
+
+        def _node_type(node_id: Any) -> str:
+            attrs = repaired.nodes.get(node_id, {})
+            return str(attrs.get("type", attrs.get("label", "")) or "").strip().upper()
+
+        def _position(node_id: Any) -> Tuple[float, float, float]:
+            pos = repaired.nodes.get(node_id, {}).get("position", (0, 0, 0))
+            if isinstance(pos, (list, tuple)) and len(pos) >= 2:
+                z = float(pos[2]) if len(pos) > 2 else 0.0
+                return (float(pos[0]), float(pos[1]), z)
+            return (0.0, 0.0, 0.0)
+
+        def _candidate_nodes(component: set[Any]) -> List[Any]:
+            preferred = [node_id for node_id in component if _node_type(node_id) != protected_goal_type]
+            return preferred if preferred else list(component)
+
+        def _distance(node_a: Any, node_b: Any) -> float:
+            ax, ay, az = _position(node_a)
+            bx, by, bz = _position(node_b)
+            return abs(ax - bx) + abs(ay - by) + abs(az - bz)
+
+        components = [set(component) for component in nx.connected_components(repaired.to_undirected())]
+        start_candidates = [node for node, attrs in repaired.nodes(data=True) if str(attrs.get("type", "")).upper() == "START"]
+        if start_candidates:
+            start_node = start_candidates[0]
+            main_index = next((idx for idx, component in enumerate(components) if start_node in component), 0)
+        else:
+            main_index = max(range(len(components)), key=lambda idx: len(components[idx]))
+        main_component = set(components.pop(main_index))
+
+        connectivity_repairs = 0
+        while components:
+            other_component = components.pop(0)
+            best_pair: Optional[Tuple[Any, Any]] = None
+            best_distance: Optional[float] = None
+            for left in _candidate_nodes(main_component):
+                for right in _candidate_nodes(other_component):
+                    dist = _distance(left, right)
+                    if best_distance is None or dist < best_distance:
+                        best_distance = dist
+                        best_pair = (left, right)
+
+            if best_pair is None:
+                main_component.update(other_component)
+                continue
+
+            source, target = best_pair
+            edge_attrs = {
+                "label": EdgeType.PATH.name.lower(),
+                "edge_type": EdgeType.PATH.name,
+                "key_required": None,
+                "item_required": None,
+                "switch_id": None,
+                "metadata": {"connectivity_repair": True},
+                "requires_key_count": 0,
+                "token_count": 0,
+                "token_id": None,
+                "is_window": False,
+                "hazard_damage": 0,
+                "protection_item_id": None,
+                "preferred_direction": None,
+                "battery_id": None,
+                "switches_required": [],
+                "path_savings": 0,
+            }
+            repaired.add_edge(source, target, **edge_attrs)
+            if repaired.is_directed() and _node_type(target) != protected_goal_type and not repaired.has_edge(target, source):
+                reverse_attrs = copy.deepcopy(edge_attrs)
+                reverse_attrs["metadata"] = {"connectivity_repair": True, "implied_reverse": True}
+                repaired.add_edge(target, source, **reverse_attrs)
+            connectivity_repairs += 1
+            main_component.update(other_component)
+            components = [set(component) for component in nx.connected_components(repaired.to_undirected()) if not component.issubset(main_component)]
+
+        if connectivity_repairs > 0:
+            stats["connectivity_repairs"] = int(stats.get("connectivity_repairs", 0)) + int(connectivity_repairs)
+            stats["total_repairs"] = int(stats.get("total_repairs", 0)) + int(connectivity_repairs)
+            stats["repair_applied"] = True
+
+        return repaired
 
     
     def _generate_initial_population(self) -> List[Individual]:

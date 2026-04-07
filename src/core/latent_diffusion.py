@@ -118,10 +118,15 @@ class TimestepEmbedding(nn.Module):
         )
         args = t[:, None].float() * freqs[None]
         embedding = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
-        
+
         if self.dim % 2:
             embedding = F.pad(embedding, (0, 1), mode='constant')
-        
+
+        first_linear = self.mlp[0]
+        target_dtype = getattr(first_linear, "weight", None)
+        if isinstance(target_dtype, torch.Tensor):
+            embedding = embedding.to(dtype=target_dtype.dtype)
+
         return self.mlp(embedding)
 
 
@@ -1894,6 +1899,52 @@ class LatentDiffusionModel(nn.Module):
 
         return spatial or None
 
+    def _sampling_dtype(self) -> torch.dtype:
+        """Return the floating-point dtype currently used by the denoiser."""
+        for param in self.denoiser.parameters():
+            if param.is_floating_point():
+                return param.dtype
+        for buffer in self.denoiser.buffers():
+            if buffer.is_floating_point():
+                return buffer.dtype
+        for param in self.parameters():
+            if param.is_floating_point():
+                return param.dtype
+        for buffer in self.buffers():
+            if buffer.is_floating_point():
+                return buffer.dtype
+        return torch.float32
+
+    @staticmethod
+    def _cast_tensor_for_sampling(
+        value: Optional[Tensor],
+        *,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> Optional[Tensor]:
+        if not isinstance(value, torch.Tensor):
+            return value
+        kwargs: Dict[str, Any] = {}
+        if value.device != device:
+            kwargs["device"] = device
+        if value.is_floating_point() and value.dtype != dtype:
+            kwargs["dtype"] = dtype
+        return value.to(**kwargs) if kwargs else value
+
+    def _cast_spatial_graph_context_for_sampling(
+        self,
+        spatial_graph_data: Optional[Dict[str, Tensor]],
+        *,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> Optional[Dict[str, Tensor]]:
+        if spatial_graph_data is None:
+            return None
+        return {
+            key: self._cast_tensor_for_sampling(value, device=device, dtype=dtype)
+            for key, value in spatial_graph_data.items()
+        }
+
     def _predict_noise_cfg(
         self,
         x_t: Tensor,
@@ -1922,7 +1973,18 @@ class LatentDiffusionModel(nn.Module):
             spatial_graph_data = cached_spatial
         else:
             spatial_graph_data = self._extract_spatial_graph_context(context, graph_data)
-        
+
+        context = self._cast_tensor_for_sampling(context, device=x_t.device, dtype=x_t.dtype)
+        context_edge_index = self._cast_tensor_for_sampling(
+            context_edge_index, device=x_t.device, dtype=x_t.dtype
+        )
+        context_node_mask = self._cast_tensor_for_sampling(
+            context_node_mask, device=x_t.device, dtype=x_t.dtype
+        )
+        spatial_graph_data = self._cast_spatial_graph_context_for_sampling(
+            spatial_graph_data, device=x_t.device, dtype=x_t.dtype
+        )
+
         cfg_scale = self._cfg_scale_for_timestep(t).to(device=x_t.device, dtype=x_t.dtype)
         pred_cond = self.denoiser(
             x_t,
@@ -2111,9 +2173,13 @@ class LatentDiffusionModel(nn.Module):
         # PERF-02: Cache topology extraction (static throughout sampling)
         cached_topology = self._extract_context_topology(context, graph_data)
         cached_spatial = self._extract_spatial_graph_context(context, graph_data)
-        
+
+        sample_dtype = self._sampling_dtype()
+        context = self._cast_tensor_for_sampling(context, device=device, dtype=sample_dtype)
+        work_dtype = torch.float32 if sample_dtype in {torch.float16, torch.bfloat16} else sample_dtype
+
         # Start from noise
-        x_t = torch.randn(shape, device=device)
+        x_t = torch.randn(shape, device=device, dtype=sample_dtype)
         
         intermediates = [x_t] if return_intermediates else None
         
@@ -2162,6 +2228,59 @@ class LatentDiffusionModel(nn.Module):
         if schedule[-1] != 0:
             schedule.append(0)
         return schedule
+
+    @staticmethod
+    def _compute_ddim_sigma(
+        alpha_t: Tensor,
+        alpha_prev: Tensor,
+        *,
+        eta: float,
+    ) -> Tensor:
+        """
+        Compute the DDIM stochasticity term safely.
+
+        Deterministic DDIM (`eta == 0`) should yield sigma=0 exactly. In reduced
+        precision, evaluating the full formula at the last step can produce 0/0
+        when `alpha_t` rounds to 1, which then turns the latent into NaNs.
+        """
+        eta = float(eta)
+        if eta <= 0.0:
+            return torch.zeros_like(alpha_t)
+
+        one = torch.ones_like(alpha_t)
+        alpha_prev_safe = torch.clamp(alpha_prev, min=1e-8)
+        denom = torch.clamp(one - alpha_t, min=0.0)
+        numer = torch.clamp(one - alpha_prev, min=0.0)
+        ratio = torch.where(
+            denom > 1e-8,
+            numer / denom,
+            torch.zeros_like(alpha_t),
+        )
+        direction = torch.clamp(one - (alpha_t / alpha_prev_safe), min=0.0)
+        eta_tensor = alpha_t.new_tensor(eta)
+        return eta_tensor * torch.sqrt(torch.clamp(ratio, min=0.0)) * torch.sqrt(direction)
+
+    @staticmethod
+    def _sanitize_sampling_tensor(
+        value: Tensor,
+        *,
+        fallback: Optional[Tensor] = None,
+        clamp_range: Optional[Tuple[float, float]] = None,
+    ) -> Tensor:
+        """Replace non-finite values with a finite fallback during sampling."""
+        if torch.isfinite(value).all():
+            if clamp_range is not None:
+                lo, hi = clamp_range
+                return torch.clamp(value, lo, hi)
+            return value
+
+        safe_fallback = fallback if isinstance(fallback, torch.Tensor) else torch.zeros_like(value)
+        safe = torch.where(torch.isfinite(value), value, safe_fallback)
+        safe = torch.nan_to_num(safe, nan=0.0, posinf=1.0, neginf=-1.0)
+        if clamp_range is not None:
+            lo, hi = clamp_range
+            safe = torch.clamp(safe, lo, hi)
+        return safe
     
     @torch.no_grad()
     def ddim_sample(
@@ -2196,9 +2315,13 @@ class LatentDiffusionModel(nn.Module):
         # PERF-02: Cache topology extraction (static throughout sampling)
         cached_topology = self._extract_context_topology(context, graph_data)
         cached_spatial = self._extract_spatial_graph_context(context, graph_data)
-        
+
+        sample_dtype = self._sampling_dtype()
+        context = self._cast_tensor_for_sampling(context, device=device, dtype=sample_dtype)
+        work_dtype = torch.float32 if sample_dtype in {torch.float16, torch.bfloat16} else sample_dtype
+
         # Start from noise
-        x_t = torch.randn(shape, device=device)
+        x_t = torch.randn(shape, device=device, dtype=sample_dtype)
         
         for i, t in enumerate(timesteps):
             t_tensor = torch.full((shape[0],), t, device=device, dtype=torch.long)
@@ -2208,10 +2331,22 @@ class LatentDiffusionModel(nn.Module):
                 x_t, t_tensor, context, graph_data=graph_data,
                 cached_topology=cached_topology, cached_spatial=cached_spatial,
             )
+            prediction = self._sanitize_sampling_tensor(
+                prediction,
+                fallback=torch.zeros_like(prediction),
+            )
             
             # Convert to (pred_x0, pred_noise) supporting v-prediction
             pred_x0, pred_noise = self._convert_prediction(prediction, x_t, t_tensor)
-            pred_x0 = torch.clamp(pred_x0, -1.0, 1.0)
+            pred_x0 = self._sanitize_sampling_tensor(
+                pred_x0,
+                fallback=x_t,
+                clamp_range=(-1.0, 1.0),
+            )
+            pred_noise = self._sanitize_sampling_tensor(
+                pred_noise,
+                fallback=torch.zeros_like(pred_noise),
+            )
             
             # Apply LogicNet gradient guidance BEFORE the DDIM step
             # (Dhariwal & Nichol 2021 §3.2: guidance modifies score prediction)
@@ -2222,24 +2357,51 @@ class LatentDiffusionModel(nn.Module):
                 t=int(t),
                 graph_data=graph_data,
             )
+            pred_x0 = self._sanitize_sampling_tensor(
+                pred_x0,
+                fallback=x_t,
+                clamp_range=(-1.0, 1.0),
+            )
+            pred_noise = self._sanitize_sampling_tensor(
+                pred_noise,
+                fallback=torch.zeros_like(pred_noise),
+            )
             
             # Get next timestep
             if i + 1 < len(timesteps):
                 t_prev = timesteps[i + 1]
-                alpha_prev = self.alphas_cumprod[t_prev]
+                alpha_prev = self.alphas_cumprod[t_prev].to(device=device, dtype=work_dtype)
             else:
-                alpha_prev = torch.tensor(1.0, device=device)
+                alpha_prev = torch.tensor(1.0, device=device, dtype=work_dtype)
             
             # CRITICAL-3 fix: compute alpha_t from current timestep
-            alpha_t = self.alphas_cumprod[t]
+            alpha_t = self.alphas_cumprod[t].to(device=device, dtype=work_dtype)
+            pred_x0_work = pred_x0.to(dtype=work_dtype)
+            pred_noise_work = pred_noise.to(dtype=work_dtype)
+
+            if int(t) == 0:
+                x_t = pred_x0_work.to(dtype=sample_dtype)
+                continue
             
             # DDIM update
-            sigma = eta * torch.sqrt((1 - alpha_prev) / (1 - alpha_t)) * torch.sqrt(1 - alpha_t / alpha_prev)
-            
-            pred_dir = torch.sqrt(1 - alpha_prev - sigma**2) * pred_noise
-            noise = torch.randn_like(x_t) if t > 0 else torch.zeros_like(x_t)
-            
-            x_t = torch.sqrt(alpha_prev) * pred_x0 + pred_dir + sigma * noise
+            sigma = self._compute_ddim_sigma(alpha_t, alpha_prev, eta=eta)
+
+            pred_dir_scale = torch.sqrt(torch.clamp(1.0 - alpha_prev - sigma**2, min=0.0))
+            noise = (
+                torch.randn(shape, device=device, dtype=work_dtype)
+                if t > 0
+                else torch.zeros(shape, device=device, dtype=work_dtype)
+            )
+
+            x_next = torch.sqrt(torch.clamp(alpha_prev, min=0.0)) * pred_x0_work
+            x_next = x_next + pred_dir_scale * pred_noise_work + sigma * noise
+            x_next = self._sanitize_sampling_tensor(
+                x_next,
+                fallback=pred_x0_work,
+                clamp_range=(-1.0, 1.0),
+            )
+
+            x_t = x_next.to(dtype=sample_dtype)
         
         return x_t
 

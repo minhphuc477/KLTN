@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import deque
-from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
 import numpy as np
 
@@ -73,6 +73,46 @@ _VALIDATOR_COMPLEX_EDGE_TYPES = {
     "state_block",
 }
 
+TOPOLOGY_ANCHOR_POLICY_VERSION = "2026-04-07.semantic_anchor_v4_puzzle_archetypes"
+DEFAULT_SEMANTIC_ROLE_PRIOR_STRENGTH = 0.15
+DEFAULT_SEMANTIC_ANCHOR_THRESHOLD = 0.5
+DEFAULT_SEMANTIC_PUZZLE_OFFSET = 2
+
+
+def build_topology_anchor_policy_metadata(
+    *,
+    semantic_role_prior_strength: float = DEFAULT_SEMANTIC_ROLE_PRIOR_STRENGTH,
+    semantic_anchor_threshold: float = DEFAULT_SEMANTIC_ANCHOR_THRESHOLD,
+    semantic_puzzle_offset: int = DEFAULT_SEMANTIC_PUZZLE_OFFSET,
+    fast_sampler_teacher_fallback_enabled: Optional[bool] = None,
+    topology_supervision_mode: Optional[str] = None,
+    semantic_constrained_decoding_enabled: Optional[bool] = None,
+    semantic_marker_logit_bias: Optional[float] = None,
+    semantic_marker_suppression_bias: Optional[float] = None,
+    deterministic_graph_marker_overlay_enabled: Optional[bool] = None,
+) -> Dict[str, Any]:
+    metadata: Dict[str, Any] = {
+        "version": TOPOLOGY_ANCHOR_POLICY_VERSION,
+        "semantic_role_prior_strength": float(semantic_role_prior_strength),
+        "semantic_anchor_threshold": float(semantic_anchor_threshold),
+        "semantic_puzzle_offset": int(semantic_puzzle_offset),
+    }
+    if fast_sampler_teacher_fallback_enabled is not None:
+        metadata["fast_sampler_teacher_fallback_enabled"] = bool(fast_sampler_teacher_fallback_enabled)
+    if topology_supervision_mode is not None:
+        metadata["topology_supervision_mode"] = str(topology_supervision_mode)
+    if semantic_constrained_decoding_enabled is not None:
+        metadata["semantic_constrained_decoding_enabled"] = bool(semantic_constrained_decoding_enabled)
+    if semantic_marker_logit_bias is not None:
+        metadata["semantic_marker_logit_bias"] = float(semantic_marker_logit_bias)
+    if semantic_marker_suppression_bias is not None:
+        metadata["semantic_marker_suppression_bias"] = float(semantic_marker_suppression_bias)
+    if deterministic_graph_marker_overlay_enabled is not None:
+        metadata["deterministic_graph_marker_overlay_enabled"] = bool(
+            deterministic_graph_marker_overlay_enabled
+        )
+    return metadata
+
 
 def _clamp_point(point: Tuple[int, int], shape: Tuple[int, int]) -> Tuple[int, int]:
     h, w = shape
@@ -89,6 +129,139 @@ def _door_center(direction: str) -> Tuple[int, int]:
         return (int(spec["row"]), col)
     row = (int(spec["row_start"]) + int(spec["row_end"])) // 2
     return (row, int(spec["col"]))
+
+
+def _interior_point(point: Tuple[int, int], shape: Tuple[int, int]) -> Tuple[int, int]:
+    h, w = shape
+    return (
+        max(1, min(h - 2, int(point[0]))),
+        max(1, min(w - 2, int(point[1]))),
+    )
+
+
+def _centroid_point(
+    points: Sequence[Tuple[int, int]],
+    *,
+    shape: Tuple[int, int],
+    fallback: Tuple[int, int],
+) -> Tuple[int, int]:
+    if not points:
+        return _interior_point(fallback, shape)
+    rows = [float(p[0]) for p in points]
+    cols = [float(p[1]) for p in points]
+    return _interior_point((int(round(sum(rows) / len(rows))), int(round(sum(cols) / len(cols)))), shape)
+
+
+def _interpolate_point(
+    start: Tuple[int, int],
+    end: Tuple[int, int],
+    *,
+    alpha: float,
+    shape: Tuple[int, int],
+) -> Tuple[int, int]:
+    alpha = float(max(0.0, min(1.0, alpha)))
+    row = (1.0 - alpha) * float(start[0]) + alpha * float(end[0])
+    col = (1.0 - alpha) * float(start[1]) + alpha * float(end[1])
+    return _interior_point((int(round(row)), int(round(col))), shape)
+
+
+def _perpendicular_offset_point(
+    source: Tuple[int, int],
+    destination: Tuple[int, int],
+    *,
+    shape: Tuple[int, int],
+    magnitude: int = 2,
+) -> Tuple[int, int]:
+    h, w = shape
+    center = (h // 2, w // 2)
+    d_row = int(destination[0]) - int(source[0])
+    d_col = int(destination[1]) - int(source[1])
+    if abs(d_col) >= abs(d_row):
+        offset = (int(np.sign(d_col)) or 1, 0)
+    else:
+        offset = (0, -(int(np.sign(d_row)) or 1))
+    return _interior_point(
+        (center[0] + offset[0] * int(max(1, magnitude)), center[1] + offset[1] * int(max(1, magnitude))),
+        shape,
+    )
+
+
+def build_room_semantic_anchor_points(
+    *,
+    room_shape: Tuple[int, int] = (ROOM_HEIGHT, ROOM_WIDTH),
+    start: Optional[Tuple[int, int]] = None,
+    goal: Optional[Tuple[int, int]] = None,
+    required_doors: Optional[Mapping[str, bool]] = None,
+    incoming_dirs: Optional[Set[str]] = None,
+    outgoing_dirs: Optional[Set[str]] = None,
+    room_role_flags: Optional[Mapping[str, bool]] = None,
+    semantic_puzzle_offset: int = DEFAULT_SEMANTIC_PUZZLE_OFFSET,
+) -> Dict[str, Tuple[int, int]]:
+    """
+    Build deterministic in-room semantic anchors shared by conditioning and placement.
+
+    These anchors are intentionally simple and stable. They preserve coarse
+    room-wide role information for backward compatibility while giving the model
+    a stronger spatial hint for mission-critical semantics.
+    """
+    h, w = int(room_shape[0]), int(room_shape[1])
+    shape = (h, w)
+    center = _interior_point((h // 2, w // 2), shape)
+
+    required = {str(direction): bool(enabled) for direction, enabled in dict(required_doors or {}).items()}
+    incoming = {str(direction) for direction in set(incoming_dirs or set())}
+    outgoing = {str(direction) for direction in set(outgoing_dirs or set())}
+    role_flags = {str(key): bool(value) for key, value in dict(room_role_flags or {}).items()}
+
+    anchors: Dict[str, Tuple[int, int]] = {}
+    all_door_points: List[Tuple[int, int]] = []
+    incoming_points: List[Tuple[int, int]] = []
+    outgoing_points: List[Tuple[int, int]] = []
+
+    for direction in ("N", "S", "E", "W"):
+        if not required.get(direction, False):
+            continue
+        point = _clamp_point(_door_center(direction), shape)
+        anchors[f"door:{direction}"] = point
+        all_door_points.append(point)
+        if direction in incoming:
+            incoming_points.append(point)
+        if direction in outgoing:
+            outgoing_points.append(point)
+
+    source_anchor = (
+        _interior_point(start, shape)
+        if start is not None
+        else _centroid_point(incoming_points or all_door_points, shape=shape, fallback=center)
+    )
+    destination_anchor = (
+        _interior_point(goal, shape)
+        if goal is not None
+        else _centroid_point(outgoing_points or all_door_points, shape=shape, fallback=center)
+    )
+
+    if start is not None or role_flags.get("is_start", False):
+        anchors["start"] = source_anchor
+    if goal is not None or role_flags.get("has_goal", False):
+        anchors["goal"] = destination_anchor
+
+    if role_flags.get("has_enemy", False):
+        anchors["enemy"] = _interpolate_point(source_anchor, center, alpha=0.55, shape=shape)
+    if role_flags.get("has_key", False):
+        anchors["key"] = _interpolate_point(source_anchor, center, alpha=0.72, shape=shape)
+    if role_flags.get("has_item", False):
+        anchors["item"] = _interpolate_point(center, destination_anchor, alpha=0.38, shape=shape)
+    if role_flags.get("has_boss", False):
+        anchors["boss"] = _interpolate_point(center, destination_anchor, alpha=0.62, shape=shape)
+    if role_flags.get("has_puzzle", False):
+        anchors["puzzle"] = _perpendicular_offset_point(
+            source_anchor,
+            destination_anchor,
+            shape=shape,
+            magnitude=int(max(0, semantic_puzzle_offset)),
+        )
+
+    return anchors
 
 
 def _paint_line(canvas: np.ndarray, start: Tuple[int, int], end: Tuple[int, int], value: float = 1.0) -> None:
@@ -625,13 +798,24 @@ def build_semantic_room_plan_trace(
     through the hybrid planner.
     """
     role_flags = {str(key): bool(value) for key, value in dict(room_role_flags or {}).items()}
+    heuristic_anchors = build_room_semantic_anchor_points(
+        room_shape=room_grid.shape[:2],
+        start=start,
+        goal=goal,
+        required_doors=required_doors,
+        incoming_dirs=incoming_dirs,
+        outgoing_dirs=outgoing_dirs,
+        room_role_flags=role_flags,
+    )
     anchors: Dict[str, Tuple[int, int]] = {}
 
     for direction, enabled in dict(required_doors).items():
         if not enabled:
             continue
-        door_point = _door_center(str(direction))
-        snapped = nearest_walkable_point(room_grid, door_point)
+        snapped = nearest_walkable_point(
+            room_grid,
+            heuristic_anchors.get(f"door:{direction}", _door_center(str(direction))),
+        )
         if snapped is not None:
             anchors[f"door:{direction}"] = snapped
 
@@ -655,7 +839,7 @@ def build_semantic_room_plan_trace(
     for anchor_name, (tile_ids, enabled) in tile_anchor_specs.items():
         if not enabled:
             continue
-        explicit_point = {"start": start, "goal": goal}.get(anchor_name)
+        explicit_point = heuristic_anchors.get(anchor_name) or {"start": start, "goal": goal}.get(anchor_name)
         snapped = nearest_walkable_point(
             room_grid,
             explicit_point or _first_tile(tile_ids) or (room_grid.shape[0] // 2, room_grid.shape[1] // 2),
@@ -680,9 +864,13 @@ def build_room_topology_condition_map(
     start: Optional[Tuple[int, int]] = None,
     goal: Optional[Tuple[int, int]] = None,
     required_doors: Optional[Mapping[str, bool]] = None,
+    incoming_dirs: Optional[Set[str]] = None,
+    outgoing_dirs: Optional[Set[str]] = None,
     edge_constraint_tokens: Optional[Mapping[str, Set[str]]] = None,
     room_role_flags: Optional[Mapping[str, bool]] = None,
     traversability_trace: Optional[np.ndarray] = None,
+    semantic_role_prior_strength: float = DEFAULT_SEMANTIC_ROLE_PRIOR_STRENGTH,
+    semantic_puzzle_offset: int = DEFAULT_SEMANTIC_PUZZLE_OFFSET,
 ) -> np.ndarray:
     """
     Build a dense [C, H, W] topology prior for a single room.
@@ -691,16 +879,40 @@ def build_room_topology_condition_map(
     - explicit start/goal hints
     - required doorway locations and whether they are gated
     - a simple traversability scaffold between important anchors
-    - broadcast room-role semantics (boss/key/puzzle/etc.)
+    - room-role semantics with light room-wide priors plus exact anchor hints
     """
     h, w = int(room_shape[0]), int(room_shape[1])
     topo = np.zeros((ROOM_TOPOLOGY_CHANNEL_COUNT, h, w), dtype=np.float32)
+    role_flags = {str(key): bool(value) for key, value in dict(room_role_flags or {}).items()}
+    semantic_anchors = build_room_semantic_anchor_points(
+        room_shape=(h, w),
+        start=start,
+        goal=goal,
+        required_doors=required_doors,
+        incoming_dirs=set(incoming_dirs or set()),
+        outgoing_dirs=set(outgoing_dirs or set()),
+        room_role_flags=role_flags,
+        semantic_puzzle_offset=int(max(0, semantic_puzzle_offset)),
+    )
+    role_prior_strength = float(max(0.0, min(1.0, semantic_role_prior_strength)))
 
-    if room_role_flags:
-        for key, enabled in room_role_flags.items():
+    if role_flags:
+        for key, enabled in role_flags.items():
             channel = _ROLE_TO_CHANNEL.get(str(key))
             if channel is not None and bool(enabled):
-                topo[channel, :, :] = 1.0
+                topo[channel, :, :] = np.maximum(topo[channel, :, :], role_prior_strength)
+                anchor_key = {
+                    "is_start": "start",
+                    "has_enemy": "enemy",
+                    "has_key": "key",
+                    "has_item": "item",
+                    "has_goal": "goal",
+                    "has_boss": "boss",
+                    "has_puzzle": "puzzle",
+                }.get(str(key))
+                if anchor_key is not None and anchor_key in semantic_anchors:
+                    r, c = semantic_anchors[anchor_key]
+                    topo[channel, int(r), int(c)] = 1.0
 
     center = (h // 2, w // 2)
     use_trace = isinstance(traversability_trace, np.ndarray) and traversability_trace.shape == (h, w) and bool(np.any(traversability_trace > 0))
@@ -754,5 +966,22 @@ def build_room_topology_condition_map(
                 direction=direction,
                 tokens=tokens,
             )
+
+    if not use_trace:
+        for anchor_name, point in semantic_anchors.items():
+            if anchor_name.startswith("door:"):
+                continue
+            topo[ROOM_TOPOLOGY_CHANNELS["traversability"], int(point[0]), int(point[1])] = 1.0
+        for src_name, dst_name in build_anchor_pairs_from_room_semantics(
+            incoming_dirs=set(incoming_dirs or set()),
+            outgoing_dirs=set(outgoing_dirs or set()),
+            required_doors=required_doors,
+            content_anchors=semantic_anchors,
+        ):
+            src = semantic_anchors.get(str(src_name))
+            dst = semantic_anchors.get(str(dst_name))
+            if src is None or dst is None:
+                continue
+            _paint_line(topo[ROOM_TOPOLOGY_CHANNELS["traversability"]], src, dst)
 
     return topo

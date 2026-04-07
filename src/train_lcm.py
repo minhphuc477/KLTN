@@ -27,6 +27,11 @@ from src.optimization.lcm_lora import (
     load_lora_state_dict,
     save_fast_sampler_checkpoint,
 )
+from src.pipeline.room_topology_conditioning import (
+    DEFAULT_SEMANTIC_PUZZLE_OFFSET,
+    DEFAULT_SEMANTIC_ROLE_PRIOR_STRENGTH,
+    build_topology_anchor_policy_metadata,
+)
 from src.train_diffusion import DiffusionTrainer, DiffusionTrainingConfig
 from src.utils.checkpoint import (
     LATEST_RESUME_FILENAME,
@@ -58,6 +63,9 @@ class FastSamplerTrainingConfig:
         use_vglc: bool = True,
         normalize: bool = True,
         room_level: bool = True,
+        topology_supervision_mode: str = "runtime_aligned",
+        semantic_role_prior_strength: float = DEFAULT_SEMANTIC_ROLE_PRIOR_STRENGTH,
+        semantic_puzzle_offset: int = DEFAULT_SEMANTIC_PUZZLE_OFFSET,
         epochs: int = 10,
         learning_rate: float = 1e-4,
         optimizer_weight_decay: float = 1e-4,
@@ -90,6 +98,9 @@ class FastSamplerTrainingConfig:
         self.use_vglc = bool(use_vglc)
         self.normalize = bool(normalize)
         self.room_level = bool(room_level)
+        self.topology_supervision_mode = str(topology_supervision_mode).strip().lower()
+        self.semantic_role_prior_strength = float(max(0.0, min(1.0, semantic_role_prior_strength)))
+        self.semantic_puzzle_offset = int(max(0, semantic_puzzle_offset))
         self.epochs = 1 if quick else int(epochs)
         self.learning_rate = float(learning_rate)
         self.optimizer_weight_decay = float(max(0.0, optimizer_weight_decay))
@@ -117,6 +128,8 @@ class FastSamplerTrainingConfig:
             self.device = str(device)
         self.seed = int(seed)
         self.quick = bool(quick)
+        if self.topology_supervision_mode not in {"runtime_aligned", "oracle_room_grid"}:
+            raise ValueError("topology_supervision_mode must be 'runtime_aligned' or 'oracle_room_grid'.")
 
     def to_dict(self) -> Dict[str, Any]:
         return dict(self.__dict__)
@@ -139,6 +152,9 @@ def fast_sampler_training_kwargs_from_resolved_config(config: Dict[str, Any]) ->
         "use_vglc": dataset["use_vglc"],
         "normalize": dataset["normalize"],
         "room_level": dataset["room_level"],
+        "topology_supervision_mode": dataset["topology_supervision_mode"],
+        "semantic_role_prior_strength": config["generation"]["semantic_role_prior_strength"],
+        "semantic_puzzle_offset": config["generation"]["semantic_puzzle_offset"],
         "epochs": stage["epochs"],
         "learning_rate": stage["learning_rate"],
         "optimizer_weight_decay": stage["optimizer_weight_decay"],
@@ -391,6 +407,11 @@ class ConsistencyLoRATrainer:
             target_modules=DEFAULT_LORA_TARGETS,
             metrics=metrics,
             distillation_type="consistency_lora",
+            topology_anchor_policy=build_topology_anchor_policy_metadata(
+                semantic_role_prior_strength=self.config.semantic_role_prior_strength,
+                semantic_puzzle_offset=self.config.semantic_puzzle_offset,
+                topology_supervision_mode=self.config.topology_supervision_mode,
+            ),
         )
 
     def save_resume_checkpoint(self, path: str, metrics: Optional[Dict[str, Any]] = None) -> None:
@@ -425,6 +446,11 @@ class ConsistencyLoRATrainer:
                 "base_diffusion_checkpoint": str(self.config.base_diffusion_checkpoint),
                 "checkpoint_kind": "resume",
                 "contains": ["lora", "optimizer"],
+                "topology_anchor_policy": build_topology_anchor_policy_metadata(
+                    semantic_role_prior_strength=self.config.semantic_role_prior_strength,
+                    semantic_puzzle_offset=self.config.semantic_puzzle_offset,
+                    topology_supervision_mode=self.config.topology_supervision_mode,
+                ),
             },
         )
         log_checkpoint_artifact(
@@ -467,6 +493,9 @@ def train_fast_sampler(config: FastSamplerTrainingConfig) -> ConsistencyLoRATrai
         normalize=config.normalize,
         room_level=config.room_level,
         load_graphs=True,
+        topology_supervision_mode=config.topology_supervision_mode,
+        semantic_role_prior_strength=config.semantic_role_prior_strength,
+        semantic_puzzle_offset=config.semantic_puzzle_offset,
     )
     val_loader = create_dataloader(
         data_dir,
@@ -479,6 +508,9 @@ def train_fast_sampler(config: FastSamplerTrainingConfig) -> ConsistencyLoRATrai
         normalize=config.normalize,
         room_level=config.room_level,
         load_graphs=True,
+        topology_supervision_mode=config.topology_supervision_mode,
+        semantic_role_prior_strength=config.semantic_role_prior_strength,
+        semantic_puzzle_offset=config.semantic_puzzle_offset,
     )
 
     metrics_logger = MetricsLogger(

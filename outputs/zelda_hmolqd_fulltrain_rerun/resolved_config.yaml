@@ -1,5 +1,5 @@
 training:
-  stage: all
+  stage: masked_room
 runtime:
   experiment_name: zelda_hmolqd
   output_dir: outputs/zelda_hmolqd_fulltrain_rerun
@@ -8,7 +8,7 @@ runtime:
   seed: 42
   verbose: true
   quick: false
-  auto_resume: false
+  auto_resume: true
   checkpoint_storage_budget_gb: null
   checkpoint_storage_warning_fraction: 0.8
   checkpoint_storage_cleanup_enabled: true
@@ -210,8 +210,8 @@ masked_room:
   graph_conditioning_mode: node_sequence
   use_current_node_distance_features: true
   current_node_distance_max: 8
-  model_channels: 96
-  hidden_dim: 64
+  model_channels: 64
+  hidden_dim: 48
   masked_steps: 8
   attention_mode: softmax
   topology_conditioning_mode: additive
@@ -222,13 +222,12 @@ masked_room:
   unet_channel_mult:
   - 1
   - 2
-  - 4
-  unet_num_res_blocks: 2
+  unet_num_res_blocks: 1
   unet_attention_resolutions:
+  - 0
   - 1
-  - 2
-  unet_num_heads: 8
+  unet_num_heads: 4
   unet_dropout: 0.1
-  min_mask_ratio: 0.15
-  max_mask_ratio: 0.9
+  min_mask_ratio: 0.12
+  max_mask_ratio: 0.85
   room_topology_channels: 50

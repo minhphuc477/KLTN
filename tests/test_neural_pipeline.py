@@ -305,7 +305,12 @@ def test_prepare_graph_context_and_room_graph_context_include_spatial_topology(p
     assert room_graph_context["has_room_anchor"] is True
     assert "room_topology_map" in room_graph_context
     topo = room_graph_context["room_topology_map"]
-    assert tuple(topo.shape) == (1, 18, ROOM_HEIGHT, ROOM_WIDTH)
+    assert tuple(topo.shape) == (
+        1,
+        int(dungeon_pipeline_module.ROOM_TOPOLOGY_CHANNEL_COUNT),
+        ROOM_HEIGHT,
+        ROOM_WIDTH,
+    )
     assert float(topo[:, 5:11].sum().item()) > 0.0
 
 
@@ -608,6 +613,62 @@ def test_single_room_generation_basic(pipeline, neighbor_latents, graph_context)
     assert 'neural_grid_entropy' in result.metrics
     
     print(f"✓ Basic room generation successful (entropy={result.metrics['neural_grid_entropy']:.3f})")
+
+
+def test_latent_diffusion_room_cleanup_strips_invalid_doors_and_tiny_obstacles():
+    """Latent-room postprocessing should remove obvious decode noise without touching required doors."""
+    pipeline = NeuralSymbolicDungeonPipeline(
+        device='cpu',
+        enable_logging=False,
+        room_generator_mode="latent_diffusion",
+    )
+
+    mission_graph = nx.DiGraph()
+    mission_graph.add_node(0, is_start=True, pos=(0, 0))
+    mission_graph.add_node(1, pos=(0, 1))
+    mission_graph.add_edge(0, 1, edge_type="key_locked")
+
+    graph_data = pipeline._prepare_graph_context(mission_graph, use_tpe=True)
+    room_graph_context = pipeline._build_room_graph_context(
+        graph_data=graph_data,
+        mission_graph=mission_graph,
+        room_id=0,
+        start_goal=((ROOM_HEIGHT // 2, 0), (ROOM_HEIGHT // 2, ROOM_WIDTH - 1)),
+    )
+
+    floor_id = int(SEMANTIC_PALETTE["FLOOR"])
+    door_open_id = int(SEMANTIC_PALETTE["DOOR_OPEN"])
+    wall_id = int(SEMANTIC_PALETTE["WALL"])
+
+    logits = torch.full((1, 44, ROOM_HEIGHT, ROOM_WIDTH), fill_value=-4.0, dtype=torch.float32)
+    logits[:, floor_id, :, :] = 4.0
+    logits[:, door_open_id, 8, 5] = 8.0
+    logits[:, floor_id, 8, 5] = -8.0
+    logits[:, wall_id, 6, 4] = 8.0
+    logits[:, floor_id, 6, 4] = -8.0
+    logits[:, wall_id, 6, 5] = 8.0
+    logits[:, floor_id, 6, 5] = -8.0
+    latent = torch.zeros(1, int(pipeline.diffusion.latent_dim), 4, 3, dtype=torch.float32)
+
+    result = pipeline.generate_room(
+        neighbor_latents={"N": None, "S": None, "E": None, "W": None},
+        graph_context=room_graph_context,
+        room_id=0,
+        apply_repair=False,
+        logic_guidance_scale=0.0,
+        num_diffusion_steps=4,
+        start_goal_coords=((ROOM_HEIGHT // 2, 0), (ROOM_HEIGHT // 2, ROOM_WIDTH - 1)),
+        precomputed_latent=latent,
+        precomputed_logits=logits,
+    )
+
+    assert int(result.neural_grid[8, 5]) == floor_id
+    assert int(result.neural_grid[6, 4]) == floor_id
+    assert int(result.neural_grid[6, 5]) == floor_id
+    assert int(result.neural_grid[8, ROOM_WIDTH - 1]) == int(SEMANTIC_PALETTE["DOOR_LOCKED"])
+    assert result.metrics["neural_invalid_door_tiles_removed"] == 1
+    assert result.metrics["neural_interior_obstacle_tiles_removed"] == 2
+    assert result.metrics["neural_interior_obstacle_components_removed"] == 1
 
 
 def test_single_room_generation_with_repair(pipeline, neighbor_latents, graph_context):

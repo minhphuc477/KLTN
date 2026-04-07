@@ -10,7 +10,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 import networkx as nx
 import numpy as np
 
-from src.core.definitions import SEMANTIC_PALETTE, parse_edge_type_tokens
+from src.core.definitions import SEMANTIC_PALETTE, TileID, parse_edge_type_tokens
 from src.pipeline.spatial_utils import (
     first_free_position,
     get_node_grid_position,
@@ -343,6 +343,33 @@ def _bbox_center_row_col(bbox: Tuple[int, int, int, int]) -> Tuple[int, int]:
     return ((y_min + y_max) // 2, (x_min + x_max) // 2)
 
 
+def _wall_off_corridor_path(
+    global_grid: np.ndarray,
+    corridor_cells: List[Tuple[int, int]],
+    *,
+    fill_tile: int,
+) -> None:
+    """Wrap relaxed-placement corridor floor with walls so it reads as a hallway."""
+    if not corridor_cells:
+        return
+
+    wall_id = int(TileID.WALL)
+    corridor_set = {(int(r), int(c)) for r, c in corridor_cells}
+    h, w = global_grid.shape
+
+    for row, col in corridor_set:
+        for d_row, d_col in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            next_row = row + d_row
+            next_col = col + d_col
+            if not (0 <= next_row < h and 0 <= next_col < w):
+                continue
+            if (next_row, next_col) in corridor_set:
+                continue
+            if int(global_grid[next_row, next_col]) != int(fill_tile):
+                continue
+            global_grid[next_row, next_col] = wall_id
+
+
 def carve_room_connection_between_bboxes(
     global_grid: np.ndarray,
     src_bbox: Tuple[int, int, int, int],
@@ -468,9 +495,16 @@ def carve_room_connection_between_bboxes(
             path.append(current)
             current = came_from.get(current)
         path.reverse()
+        carved_cells: List[Tuple[int, int]] = []
         for row, col in path:
             if global_grid[row, col] == int(fill_tile):
                 global_grid[row, col] = floor_id
+                carved_cells.append((int(row), int(col)))
+        _wall_off_corridor_path(
+            global_grid,
+            carved_cells,
+            fill_tile=int(fill_tile),
+        )
         return
 
     if expansions >= max_expansions and diagnostic_callback is not None:
@@ -486,13 +520,21 @@ def carve_room_connection_between_bboxes(
     sr, sc = start
     tr, tc = goal
     step_c = 1 if tc >= sc else -1
+    carved_cells: List[Tuple[int, int]] = []
     for col in range(sc, tc + step_c, step_c):
         if 0 <= sr < H and 0 <= col < W and global_grid[sr, col] == int(fill_tile):
             global_grid[sr, col] = floor_id
+            carved_cells.append((int(sr), int(col)))
     step_r = 1 if tr >= sr else -1
     for row in range(sr, tr + step_r, step_r):
         if 0 <= row < H and 0 <= tc < W and global_grid[row, tc] == int(fill_tile):
             global_grid[row, tc] = floor_id
+            carved_cells.append((int(row), int(tc)))
+    _wall_off_corridor_path(
+        global_grid,
+        carved_cells,
+        fill_tile=int(fill_tile),
+    )
 
 
 def build_stitched_room_layout(

@@ -1526,6 +1526,8 @@ class MissionGrammar:
             Generated MissionGraph
         """
         graph = MissionGraph()
+        graph.ensure_generation_stats_defaults()
+        graph.generation_stats["require_goal_gauntlet"] = True
         
         context = {
             'rng': self.rng,
@@ -1817,6 +1819,271 @@ class MissionGrammar:
     def ensure_anchor_nodes(self, graph: MissionGraph) -> MissionGraph:
         """Public wrapper for anchor-node normalization."""
         return self._ensure_anchor_nodes(graph)
+
+    def validate_goal_gauntlet(self, graph: MissionGraph) -> bool:
+        """
+        Validate the final boss-goal chain used by strict VGLC topology checks.
+
+        The canonical endgame contract is:
+        approach -> BOSS_DOOR -> BOSS -> GOAL
+        with GOAL as a terminal leaf node and at least one reachable BIG_KEY
+        provider for the boss door.
+        """
+        graph.sanitize()
+        goal = graph.get_goal_node()
+        if goal is None:
+            logger.warning("Goal gauntlet validation failed: missing GOAL node")
+            return False
+
+        boss_nodes = graph.get_nodes_by_type(NodeType.BOSS)
+        if not boss_nodes:
+            logger.warning("Goal gauntlet validation failed: missing BOSS node")
+            return False
+
+        goal_neighbors = list(dict.fromkeys(graph._adjacency.get(goal.id, [])))
+        if len(goal_neighbors) != 1:
+            logger.warning(
+                "Goal gauntlet validation failed: GOAL %s has neighbors %s (expected exactly one boss neighbor)",
+                goal.id,
+                goal_neighbors,
+            )
+            return False
+
+        boss_id = goal_neighbors[0]
+        boss = graph.nodes.get(boss_id)
+        if boss is None or boss.node_type != NodeType.BOSS:
+            logger.warning(
+                "Goal gauntlet validation failed: GOAL %s is not attached to a BOSS node (neighbor=%s)",
+                goal.id,
+                boss_id,
+            )
+            return False
+
+        if any(edge.source == goal.id for edge in graph.edges):
+            logger.warning("Goal gauntlet validation failed: GOAL %s has outgoing edges", goal.id)
+            return False
+
+        boss_door_nodes = graph.get_nodes_by_type(NodeType.BOSS_DOOR)
+        if boss_door_nodes:
+            boss_door_ids = {node.id for node in boss_door_nodes}
+            boss_predecessors = [edge.source for edge in graph.edges if edge.target == boss_id]
+            if not any(pred in boss_door_ids for pred in boss_predecessors):
+                logger.warning(
+                    "Goal gauntlet validation failed: BOSS %s is not gated by a BOSS_DOOR predecessor",
+                    boss_id,
+                )
+                return False
+
+            for boss_door in boss_door_nodes:
+                if boss_door.key_id is None:
+                    logger.warning(
+                        "Goal gauntlet validation failed: BOSS_DOOR %s is missing key_id",
+                        boss_door.id,
+                    )
+                    return False
+                has_big_key = any(
+                    node.node_type == NodeType.BIG_KEY and node.key_id == boss_door.key_id
+                    for node in graph.nodes.values()
+                )
+                if not has_big_key:
+                    logger.warning(
+                        "Goal gauntlet validation failed: no BIG_KEY provider found for BOSS_DOOR %s",
+                        boss_door.id,
+                    )
+                    return False
+
+        return True
+
+    def _repair_goal_gauntlet(self, graph: MissionGraph) -> MissionGraph:
+        """
+        Best-effort normalization of the final boss-goal chain.
+
+        This keeps the generator aligned with the strict downstream topology
+        validator even when stochastic rule sequences leave the final stretch in
+        a partially constructed state.
+        """
+        graph.sanitize()
+        goal = graph.get_goal_node()
+        if goal is None:
+            return graph
+
+        start = graph.get_start_node()
+        repairs = 0
+
+        goal_incoming = [
+            edge.source
+            for edge in graph.edges
+            if edge.target == goal.id and edge.source in graph.nodes
+        ]
+        primary_approach = next(
+            (source for source in goal_incoming if source != goal.id),
+            None,
+        )
+        if primary_approach is None:
+            non_goal_nodes = sorted(node_id for node_id in graph.nodes if node_id != goal.id)
+            if not non_goal_nodes:
+                return graph
+            primary_approach = non_goal_nodes[0]
+
+        boss_neighbors = [
+            neighbor
+            for neighbor in graph._adjacency.get(goal.id, [])
+            if graph.nodes.get(neighbor) is not None
+            and graph.nodes[neighbor].node_type == NodeType.BOSS
+        ]
+        boss_node = graph.nodes.get(boss_neighbors[0]) if boss_neighbors else None
+        if boss_node is None:
+            existing_bosses = sorted(graph.get_nodes_by_type(NodeType.BOSS), key=lambda node: node.id)
+            boss_node = existing_bosses[0] if existing_bosses else None
+
+        if boss_node is None:
+            boss_id = max(graph.nodes.keys(), default=-1) + 1
+            goal_pos = goal.position
+            goal_z = goal_pos[2] if len(goal_pos) > 2 else 0
+            boss_node = MissionNode(
+                id=boss_id,
+                node_type=NodeType.BOSS,
+                position=(goal_pos[0] - 1, goal_pos[1], goal_z),
+                difficulty=max(0.9, float(goal.difficulty)),
+            )
+            graph.add_node(boss_node)
+            repairs += 1
+
+        boss_door_nodes = sorted(graph.get_nodes_by_type(NodeType.BOSS_DOOR), key=lambda node: node.id)
+        boss_door = boss_door_nodes[0] if boss_door_nodes else None
+        if boss_door is None:
+            goal_pos = goal.position
+            goal_z = goal_pos[2] if len(goal_pos) > 2 else 0
+            boss_door_id = max(graph.nodes.keys(), default=-1) + 1
+            boss_door = MissionNode(
+                id=boss_door_id,
+                node_type=NodeType.BOSS_DOOR,
+                position=(goal_pos[0] - 2, goal_pos[1], goal_z),
+                difficulty=0.9,
+                key_id=boss_door_id,
+            )
+            graph.add_node(boss_door)
+            repairs += 1
+        elif boss_door.key_id is None:
+            boss_door.key_id = boss_door.id
+            repairs += 1
+
+        retained_edges: List[MissionEdge] = []
+        kept_boss_to_goal = False
+        kept_door_to_boss = False
+        kept_approach_to_door = False
+        for edge in graph.edges:
+            if edge.source == goal.id:
+                repairs += 1
+                continue
+            if edge.target == goal.id:
+                if edge.source == boss_node.id and not kept_boss_to_goal:
+                    edge.edge_type = EdgeType.PATH
+                    edge.key_required = None
+                    retained_edges.append(edge)
+                    kept_boss_to_goal = True
+                else:
+                    repairs += 1
+                continue
+            if edge.source == boss_door.id:
+                if edge.target == boss_node.id and not kept_door_to_boss:
+                    edge.edge_type = EdgeType.PATH
+                    edge.key_required = None
+                    retained_edges.append(edge)
+                    kept_door_to_boss = True
+                else:
+                    repairs += 1
+                continue
+            if edge.target == boss_door.id:
+                if edge.source == primary_approach and not kept_approach_to_door:
+                    edge.edge_type = EdgeType.BOSS_LOCKED
+                    edge.key_required = boss_door.key_id
+                    retained_edges.append(edge)
+                    kept_approach_to_door = True
+                else:
+                    retained_edges.append(edge)
+                continue
+            retained_edges.append(edge)
+
+        graph.edges = retained_edges
+        graph.rebuild_adjacency()
+
+        def _edge_exists(source: int, target: int) -> bool:
+            return any(edge.source == source and edge.target == target for edge in graph.edges)
+
+        if not _edge_exists(primary_approach, boss_door.id):
+            graph.add_edge(
+                primary_approach,
+                boss_door.id,
+                EdgeType.BOSS_LOCKED,
+                key_required=boss_door.key_id,
+            )
+            repairs += 1
+
+        if not _edge_exists(boss_door.id, boss_node.id):
+            graph.add_edge(boss_door.id, boss_node.id, EdgeType.PATH)
+            repairs += 1
+
+        if not _edge_exists(boss_node.id, goal.id):
+            graph.add_edge(boss_node.id, goal.id, EdgeType.PATH)
+            repairs += 1
+
+        key_anchor_id = None
+        if start is not None and start.id not in {goal.id, boss_node.id, boss_door.id}:
+            key_anchor_id = start.id
+        elif primary_approach not in {goal.id, boss_node.id, boss_door.id}:
+            key_anchor_id = primary_approach
+        else:
+            fallback_nodes = sorted(
+                node_id
+                for node_id in graph.nodes
+                if node_id not in {goal.id, boss_node.id, boss_door.id}
+            )
+            if fallback_nodes:
+                key_anchor_id = fallback_nodes[0]
+
+        if key_anchor_id is not None:
+            provider_ids = [
+                node.id
+                for node in graph.nodes.values()
+                if node.node_type == NodeType.BIG_KEY and node.key_id == boss_door.key_id
+            ]
+            excluded_edge = {(primary_approach, boss_door.id)}
+            has_reachable_provider = bool(start) and any(
+                self._is_reachable_without_edges(graph, start.id, provider_id, excluded_edge)
+                for provider_id in provider_ids
+            )
+            if not provider_ids or not has_reachable_provider:
+                anchor = graph.nodes[key_anchor_id]
+                anchor_pos = anchor.position
+                big_key_id = max(graph.nodes.keys(), default=-1) + 1
+                big_key = MissionNode(
+                    id=big_key_id,
+                    node_type=NodeType.BIG_KEY,
+                    position=(
+                        anchor_pos[0],
+                        anchor_pos[1] + 1,
+                        anchor_pos[2] if len(anchor_pos) > 2 else 0,
+                    ),
+                    difficulty=min(0.8, max(0.4, float(anchor.difficulty) + 0.1)),
+                    key_id=boss_door.key_id,
+                )
+                graph.add_node(big_key)
+                graph.add_edge(key_anchor_id, big_key_id, EdgeType.PATH)
+                repairs += 1
+
+        graph._key_to_lock[boss_door.key_id] = boss_door.id
+        graph.sanitize()
+        if repairs > 0:
+            graph.record_repair("goal_gauntlet_repairs", amount=int(repairs))
+            logger.info(
+                "Goal gauntlet repair normalized GOAL %s via BOSS %s and BOSS_DOOR %s (%d edits)",
+                goal.id,
+                boss_node.id,
+                boss_door.id,
+                repairs,
+            )
+        return graph
     
     def validate_lock_key_ordering(self, graph: MissionGraph) -> bool:
         """
@@ -1973,6 +2240,14 @@ class MissionGrammar:
                         f"{missing_switches}"
                     )
                     return False
+
+        require_goal_gauntlet = bool(graph.generation_stats.get("require_goal_gauntlet", False))
+        has_goal_gauntlet_artifacts = any(
+            node.node_type in {NodeType.BOSS, NodeType.BOSS_DOOR, NodeType.BIG_KEY}
+            for node in graph.nodes.values()
+        )
+        if (require_goal_gauntlet or has_goal_gauntlet_artifacts) and not self.validate_goal_gauntlet(graph):
+            return False
 
         return True
     
@@ -2232,6 +2507,13 @@ class MissionGrammar:
                     edge.switches_required = kept_switches
                     relaxed_edges += 1
 
+        require_goal_gauntlet = bool(graph.generation_stats.get("require_goal_gauntlet", False))
+        has_goal_gauntlet_artifacts = any(
+            node.node_type in {NodeType.BOSS, NodeType.BOSS_DOOR, NodeType.BIG_KEY}
+            for node in graph.nodes.values()
+        )
+        if require_goal_gauntlet or has_goal_gauntlet_artifacts:
+            graph = self._repair_goal_gauntlet(graph)
         graph.sanitize()
         if relaxed_edges > 0:
             graph.record_repair("progression_repairs", amount=int(relaxed_edges))
@@ -2640,7 +2922,7 @@ class AddBossGauntlet(ProductionRule):
         return any(e.target == goal_id for e in graph.edges)
     
     def apply(self, graph: MissionGraph, context: Dict[str, Any]) -> MissionGraph:
-        """Insert Boss Door before Goal, spawn Big Key far away."""
+        """Insert Boss Door -> Boss -> Goal, spawn Big Key on the pre-lock side."""
         graph.sanitize()
         
         # Find goal node
@@ -2657,27 +2939,41 @@ class AddBossGauntlet(ProductionRule):
             return graph
         
         pred = preds[0]
-        
-        # Create Boss Door
-        boss_door_id = max(graph.nodes.keys()) + 1
         goal_pos = goal.position
+        goal_z = goal_pos[2] if len(goal_pos) > 2 else 0
+
+        # Create Boss Door and Boss chain directly so strict validation passes
+        # without needing a later normalization pass.
+        boss_door_id = max(graph.nodes.keys()) + 1
         boss_door = MissionNode(
             id=boss_door_id,
             node_type=NodeType.BOSS_DOOR,
-            position=(goal_pos[0] - 1, goal_pos[1], goal_pos[2] if len(goal_pos) > 2 else 0),
+            position=(goal_pos[0] - 2, goal_pos[1], goal_z),
             difficulty=0.9,
             key_id=boss_door_id,  # Requires big key
         )
         graph.add_node(boss_door)
-        
-        # Rewire: pred -> boss_door -> goal
-        edge_to_remove = next((i for i, e in enumerate(graph.edges) 
-                              if e.source == pred and e.target == goal.id), None)
-        if edge_to_remove is not None:
-            graph.edges.pop(edge_to_remove)
-        
-        graph.add_edge(pred, boss_door_id, EdgeType.BOSS_LOCKED, key_required=boss_door_id)
-        graph.add_edge(boss_door_id, goal.id, EdgeType.PATH)
+
+        boss_id = boss_door_id + 1
+        boss = MissionNode(
+            id=boss_id,
+            node_type=NodeType.BOSS,
+            position=(goal_pos[0] - 1, goal_pos[1], goal_z),
+            difficulty=0.95,
+        )
+        graph.add_node(boss)
+
+        # Rewire every approach edge into a single boss-door chain and make the
+        # goal a strict terminal leaf off the boss.
+        graph.edges = [
+            edge for edge in graph.edges
+            if edge.target != goal.id and edge.source != goal.id
+        ]
+
+        for source in sorted(set(preds)):
+            graph.add_edge(source, boss_door_id, EdgeType.BOSS_LOCKED, key_required=boss_door_id)
+        graph.add_edge(boss_door_id, boss_id, EdgeType.PATH)
+        graph.add_edge(boss_id, goal.id, EdgeType.PATH)
         graph.sanitize()
         
         # Spawn Big Key in a node guaranteed reachable before the boss lock.

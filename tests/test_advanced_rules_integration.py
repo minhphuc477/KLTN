@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from typing import List, Dict
 
 from src.generation.grammar import (
+    AddBossGauntlet,
     AddValveRule,
     MissionEdge,
     MissionGraph,
@@ -63,6 +64,39 @@ class TestAdvancedRulesIntegration:
         for rule_name in advanced_rules:
             assert any(rule_name in name for name in rule_names), \
                 f"Advanced rule '{rule_name}' not found in grammar"
+
+    def test_add_boss_gauntlet_creates_strict_boss_chain(self):
+        """Boss gauntlet should build BOSS_DOOR -> BOSS -> GOAL, not door -> goal directly."""
+        graph = MissionGraph()
+        graph.add_node(MissionNode(id=0, node_type=NodeType.START, position=(0, 0, 0), difficulty=0.0))
+        graph.add_node(MissionNode(id=1, node_type=NodeType.ENEMY, position=(1, 0, 0), difficulty=0.4))
+        graph.add_node(MissionNode(id=2, node_type=NodeType.GOAL, position=(3, 0, 0), difficulty=1.0))
+        graph.add_edge(0, 1, EdgeType.PATH)
+        graph.add_edge(1, 2, EdgeType.PATH)
+
+        rule = AddBossGauntlet()
+        updated = rule.apply(graph, {"rng": None})
+        updated.sanitize()
+
+        boss_doors = updated.get_nodes_by_type(NodeType.BOSS_DOOR)
+        bosses = updated.get_nodes_by_type(NodeType.BOSS)
+        big_keys = updated.get_nodes_by_type(NodeType.BIG_KEY)
+
+        assert len(boss_doors) == 1
+        assert len(bosses) == 1
+        assert len(big_keys) >= 1
+        assert any(
+            edge.source == boss_doors[0].id and edge.target == bosses[0].id and edge.edge_type == EdgeType.PATH
+            for edge in updated.edges
+        )
+        assert any(
+            edge.source == bosses[0].id and edge.target == 2 and edge.edge_type == EdgeType.PATH
+            for edge in updated.edges
+        )
+        assert not any(edge.source == boss_doors[0].id and edge.target == 2 for edge in updated.edges)
+
+        grammar = MissionGrammar(seed=42)
+        assert grammar.validate_goal_gauntlet(updated)
     
     def test_large_dungeon_generation(self):
         """Test generating large dungeon with all rules active."""

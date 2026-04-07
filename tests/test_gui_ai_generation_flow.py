@@ -162,6 +162,24 @@ def test_resolve_vqvae_checkpoint_prefers_sibling_pretrain_for_composite_diffusi
     assert resolved == sibling_vqvae
 
 
+def test_resolve_vqvae_checkpoint_prefers_stage_sibling_pretrain_for_diffusion_checkpoint(tmp_path):
+    checkpoint_dir = tmp_path / "checkpoints"
+    diffusion_dir = checkpoint_dir / "diffusion"
+    vqvae_dir = checkpoint_dir / "vqvae"
+    diffusion_dir.mkdir(parents=True)
+    vqvae_dir.mkdir(parents=True)
+
+    diffusion_ckpt = diffusion_dir / "best_model.pth"
+    stage_vqvae = vqvae_dir / "vqvae_pretrained.pth"
+
+    torch.save({"diffusion_state_dict": {"weight": torch.tensor(1.0)}}, diffusion_ckpt)
+    torch.save({"model_state_dict": {"weight": torch.tensor(2.0)}}, stage_vqvae)
+
+    resolved = generation_pipeline._resolve_vqvae_checkpoint_for_generation(diffusion_ckpt)
+
+    assert resolved == stage_vqvae
+
+
 def test_generate_dungeon_with_pipeline_uses_canonical_roomwise_generation():
     import networkx as nx
 
@@ -249,4 +267,16 @@ def test_generation_cli_canonical_wrapper_samples_through_pipeline(monkeypatch):
     assert captured["mission_graph"] == {"seed": 77}
     assert captured["mission_seed"] == 77
     assert captured["sample_seed"] == 77
+
+
+def test_dungeon_validator_uses_grid_bfs_for_semantic_dungeon_maps():
+    validator = generation_cli.DungeonValidator(use_external=False)
+    grid = np.full((6, 6), generation_cli.SEMANTIC_PALETTE["WALL"], dtype=np.int32)
+    grid[1:5, 1:5] = generation_cli.SEMANTIC_PALETTE["FLOOR"]
+    grid[1, 1] = generation_cli.SEMANTIC_PALETTE["START"]
+    grid[4, 4] = generation_cli.SEMANTIC_PALETTE["TRIFORCE"]
+
+    dungeon_map = torch.tensor(grid, dtype=torch.float32).unsqueeze(0).unsqueeze(0)
+
+    assert validator.check_solvability(dungeon_map) is True
 

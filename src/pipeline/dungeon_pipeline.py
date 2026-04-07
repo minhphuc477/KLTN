@@ -32,8 +32,8 @@ Usage:
     # Generate full dungeon
     dungeon_result = pipeline.generate_dungeon(
         mission_graph=nx.Graph(...),
-        guidance_scale=7.5,
-        logic_guidance_scale=1.0,
+        guidance_scale=3.0,
+        logic_guidance_scale=0.0,
         seed=42
     )
 """
@@ -116,7 +116,11 @@ from src.pipeline.room_stitching import (
     solve_component_strict_adjacency,
 )
 from src.pipeline.room_topology_conditioning import (
+    DEFAULT_SEMANTIC_PUZZLE_OFFSET,
+    DEFAULT_SEMANTIC_ROLE_PRIOR_STRENGTH,
     ROOM_TOPOLOGY_CHANNEL_COUNT,
+    TOPOLOGY_ANCHOR_POLICY_VERSION,
+    build_room_semantic_anchor_points,
     build_semantic_room_plan_trace,
     build_room_topology_condition_map,
 )
@@ -316,8 +320,8 @@ class NeuralSymbolicDungeonPipeline:
         masked_sampling_steps: int = 8,
         fast_sampling_checkpoint: Optional[str] = None,
         fast_sampling_steps: int = 4,
-        default_guidance_scale: float = 7.5,
-        default_logic_guidance_scale: float = 1.0,
+        default_guidance_scale: float = 3.0,
+        default_logic_guidance_scale: float = 0.0,
         default_num_diffusion_steps: int = 50,
         default_use_fast_sampling: bool = False,
         default_latent_sampler: str = "diffusion",
@@ -326,6 +330,21 @@ class NeuralSymbolicDungeonPipeline:
         default_apply_repair: bool = True,
         default_enable_map_elites: bool = False,
         default_start_goal_coords: Optional[Tuple[Tuple[int, int], Tuple[int, int]]] = ((1, 5), (14, 5)),
+        default_semantic_role_prior_strength: float = DEFAULT_SEMANTIC_ROLE_PRIOR_STRENGTH,
+        default_semantic_anchor_threshold: float = 0.5,
+        default_semantic_puzzle_offset: int = DEFAULT_SEMANTIC_PUZZLE_OFFSET,
+        default_semantic_constrained_decoding_enabled: bool = True,
+        default_semantic_marker_logit_bias: float = 10000.0,
+        default_semantic_marker_suppression_bias: float = 100.0,
+        default_puzzle_room_scaffold_enabled: bool = True,
+        default_puzzle_room_scaffold_min_structure_tiles: int = 10,
+        default_puzzle_room_archetype_mode: str = "auto",
+        default_puzzle_room_branch_density: float = 0.75,
+        default_puzzle_room_block_budget: int = 28,
+        default_puzzle_room_preserve_route_margin: int = 0,
+        default_deterministic_graph_marker_overlay_enabled: bool = True,
+        default_fast_sampler_teacher_fallback_enabled: bool = True,
+        default_masked_room_teacher_fallback_enabled: bool = True,
         condition_encoder_fallback_config: Optional[Dict[str, Any]] = None,
         diffusion_fallback_config: Optional[Dict[str, Any]] = None,
         logic_net_fallback_config: Optional[Dict[str, Any]] = None,
@@ -399,6 +418,39 @@ class NeuralSymbolicDungeonPipeline:
             if default_start_goal_coords is None
             else self._normalize_start_goal_coords(default_start_goal_coords)
         )
+        self.default_semantic_role_prior_strength = float(
+            max(0.0, min(1.0, float(default_semantic_role_prior_strength)))
+        )
+        self.default_semantic_anchor_threshold = float(
+            max(0.0, min(1.0, float(default_semantic_anchor_threshold)))
+        )
+        self.default_semantic_puzzle_offset = int(max(0, int(default_semantic_puzzle_offset)))
+        self.default_semantic_constrained_decoding_enabled = bool(default_semantic_constrained_decoding_enabled)
+        self.default_semantic_marker_logit_bias = float(max(0.0, float(default_semantic_marker_logit_bias)))
+        self.default_semantic_marker_suppression_bias = float(
+            max(0.0, float(default_semantic_marker_suppression_bias))
+        )
+        self.default_puzzle_room_scaffold_enabled = bool(default_puzzle_room_scaffold_enabled)
+        self.default_puzzle_room_scaffold_min_structure_tiles = int(
+            max(0, int(default_puzzle_room_scaffold_min_structure_tiles))
+        )
+        scaffold_mode = str(default_puzzle_room_archetype_mode or "auto").strip().lower()
+        if scaffold_mode not in {"auto", "gate", "serpentine", "hub", "island", "combat"}:
+            scaffold_mode = "auto"
+        self.default_puzzle_room_archetype_mode = scaffold_mode
+        self.default_puzzle_room_branch_density = float(
+            max(0.0, min(1.0, float(default_puzzle_room_branch_density)))
+        )
+        self.default_puzzle_room_block_budget = int(max(0, int(default_puzzle_room_block_budget)))
+        self.default_puzzle_room_preserve_route_margin = int(
+            max(0, min(4, int(default_puzzle_room_preserve_route_margin)))
+        )
+        self.default_deterministic_graph_marker_overlay_enabled = bool(
+            default_deterministic_graph_marker_overlay_enabled
+        )
+        self.default_fast_sampler_teacher_fallback_enabled = bool(default_fast_sampler_teacher_fallback_enabled)
+        self.default_masked_room_teacher_fallback_enabled = bool(default_masked_room_teacher_fallback_enabled)
+        self.topology_anchor_policy_version = TOPOLOGY_ANCHOR_POLICY_VERSION
         self.condition_encoder_fallback_config = dict(condition_encoder_fallback_config or {})
         self.diffusion_fallback_config = dict(diffusion_fallback_config or {})
         self.logic_net_fallback_config = dict(logic_net_fallback_config or {})
@@ -484,6 +536,25 @@ class NeuralSymbolicDungeonPipeline:
         self.runtime_diagnostics: Dict[str, int] = {}
         self._valid_semantic_tile_ids_np = np.array(
             sorted({int(v) for v in SEMANTIC_PALETTE.values()}),
+            dtype=np.int32,
+        )
+        self._volatile_room_semantic_tile_ids_np = np.array(
+            sorted(
+                {
+                    int(TileID.ENEMY),
+                    int(TileID.START),
+                    int(TileID.TRIFORCE),
+                    int(TileID.BOSS),
+                    int(TileID.KEY_SMALL),
+                    int(TileID.KEY_BOSS),
+                    int(TileID.KEY_ITEM),
+                    int(TileID.ITEM_MINOR),
+                    int(TileID.ELEMENT),
+                    int(TileID.ELEMENT_FLOOR),
+                    int(TileID.STAIR),
+                    int(TileID.PUZZLE),
+                }
+            ),
             dtype=np.int32,
         )
 
@@ -994,10 +1065,16 @@ class NeuralSymbolicDungeonPipeline:
         if checkpoint_path and Path(checkpoint_path).exists():
             checkpoint, _metadata = self._load_checkpoint_and_metadata(checkpoint_path, "diffusion")
             checkpoint_config = self._extract_checkpoint_config(checkpoint)
+            checkpoint_state_key = "ema_diffusion_state_dict"
             checkpoint_state = self._extract_checkpoint_state_dict(
                 checkpoint,
+                "ema_diffusion_state_dict",
                 "diffusion_state_dict",
             )
+            if checkpoint_state is None:
+                checkpoint_state_key = "diffusion_state_dict"
+            elif not isinstance(checkpoint.get("ema_diffusion_state_dict"), dict):
+                checkpoint_state_key = "diffusion_state_dict"
             default_latent_dim = int(
                 checkpoint_config.get(
                     "latent_dim",
@@ -1051,6 +1128,16 @@ class NeuralSymbolicDungeonPipeline:
                 checkpoint_config.get("room_topology_channels", fallback_config.get("room_topology_channels", ROOM_TOPOLOGY_CHANNEL_COUNT))
             ),
         ).to(self.device)
+        setattr(
+            model,
+            "training_cfg_scale",
+            float(checkpoint_config.get("cfg_scale", fallback_config.get("cfg_scale", 3.0))),
+        )
+        setattr(
+            model,
+            "inference_checkpoint_state_key",
+            str(locals().get("checkpoint_state_key", "random_init")),
+        )
         
         if checkpoint_path and Path(checkpoint_path).exists():
             if not isinstance(checkpoint_state, dict):
@@ -1074,8 +1161,9 @@ class NeuralSymbolicDungeonPipeline:
             missing = list(getattr(incompatible, 'missing_keys', []))
             unexpected = list(getattr(incompatible, 'unexpected_keys', []))
             logger.info(
-                "Loaded diffusion model from %s (missing=%d unexpected=%d)",
+                "Loaded diffusion model from %s using %s (missing=%d unexpected=%d)",
                 checkpoint_path,
+                getattr(model, "inference_checkpoint_state_key", "diffusion_state_dict"),
                 len(missing),
                 len(unexpected),
             )
@@ -1218,8 +1306,8 @@ class NeuralSymbolicDungeonPipeline:
                     fallback_config.get("num_classes", getattr(getattr(self, "vqvae", None), "num_classes", 44)),
                 )
             ),
-            hidden_dim=int(checkpoint_config.get("hidden_dim", fallback_config.get("hidden_dim", 64))),
-            model_channels=int(checkpoint_config.get("model_channels", fallback_config.get("model_channels", 128))),
+            hidden_dim=int(checkpoint_config.get("hidden_dim", fallback_config.get("hidden_dim", 48))),
+            model_channels=int(checkpoint_config.get("model_channels", fallback_config.get("model_channels", 64))),
             context_dim=int(
                 checkpoint_config.get(
                     "context_dim",
@@ -1244,12 +1332,12 @@ class NeuralSymbolicDungeonPipeline:
             spatial_topology_gate_init=float(
                 checkpoint_config.get("spatial_topology_gate_init", fallback_config.get("spatial_topology_gate_init", -2.0))
             ),
-            unet_channel_mult=tuple(checkpoint_config.get("unet_channel_mult", fallback_config.get("unet_channel_mult", (1, 2, 4)))),
-            unet_num_res_blocks=int(checkpoint_config.get("unet_num_res_blocks", fallback_config.get("unet_num_res_blocks", 2))),
+            unet_channel_mult=tuple(checkpoint_config.get("unet_channel_mult", fallback_config.get("unet_channel_mult", (1, 2)))),
+            unet_num_res_blocks=int(checkpoint_config.get("unet_num_res_blocks", fallback_config.get("unet_num_res_blocks", 1))),
             unet_attention_resolutions=tuple(
-                checkpoint_config.get("unet_attention_resolutions", fallback_config.get("unet_attention_resolutions", (1, 2)))
+                checkpoint_config.get("unet_attention_resolutions", fallback_config.get("unet_attention_resolutions", (0, 1)))
             ),
-            unet_num_heads=int(checkpoint_config.get("unet_num_heads", fallback_config.get("unet_num_heads", 8))),
+            unet_num_heads=int(checkpoint_config.get("unet_num_heads", fallback_config.get("unet_num_heads", 4))),
             unet_dropout=float(checkpoint_config.get("unet_dropout", fallback_config.get("unet_dropout", 0.1))),
             room_topology_channels=int(
                 checkpoint_config.get("room_topology_channels", fallback_config.get("room_topology_channels", ROOM_TOPOLOGY_CHANNEL_COUNT))
@@ -1378,6 +1466,1227 @@ class NeuralSymbolicDungeonPipeline:
         else:
             out[invalid_mask] = floor_id
         return out, invalid_count, invalid_ids
+
+    def _strip_volatile_room_semantics(
+        self,
+        grid: np.ndarray,
+        *,
+        graph: Optional[nx.Graph] = None,
+        room_id: Any = None,
+        start_goal: Optional[Tuple[Tuple[int, int], Tuple[int, int]]] = None,
+        salvage_graph_markers: bool = True,
+        salvage_max_manhattan_distance: int = 2,
+    ) -> Tuple[np.ndarray, int, List[int], int, List[int]]:
+        """
+        Remove volatile gameplay semantics from a generated room.
+
+        The neural room generator is responsible for layout/geometry. Graph-owned
+        semantics such as keys, enemies, stairs, and puzzle markers are placed
+        deterministically after room structure is finalized.
+        """
+        out = np.asarray(grid, dtype=np.int32).copy()
+        preserved_count = 0
+        preserved_ids: List[int] = []
+        keep_mask = np.zeros_like(out, dtype=bool)
+        if bool(salvage_graph_markers) and isinstance(graph, nx.Graph) and room_id in graph:
+            structural_view = out.copy()
+            structural_view[np.isin(structural_view, self._volatile_room_semantic_tile_ids_np)] = int(
+                SEMANTIC_PALETTE.get("FLOOR", 1)
+            )
+            planned = self._plan_room_graph_marker_layout(
+                structural_view,
+                graph=graph,
+                room_id=room_id,
+                start_goal=start_goal,
+            )
+            max_distance = int(max(0, salvage_max_manhattan_distance))
+            for tile_id, slot in planned:
+                hits = np.argwhere(out == int(tile_id))
+                if hits.size <= 0:
+                    continue
+                distances = np.abs(hits[:, 0] - int(slot[0])) + np.abs(hits[:, 1] - int(slot[1]))
+                best_idx = int(np.argmin(distances))
+                best_distance = int(distances[best_idx])
+                if best_distance > max_distance:
+                    continue
+                best_row = int(hits[best_idx][0])
+                best_col = int(hits[best_idx][1])
+                if (best_row, best_col) != (int(slot[0]), int(slot[1])):
+                    out[best_row, best_col] = int(SEMANTIC_PALETTE.get("FLOOR", 1))
+                out[int(slot[0]), int(slot[1])] = int(tile_id)
+                keep_mask[int(slot[0]), int(slot[1])] = True
+                preserved_count += 1
+                preserved_ids.append(int(tile_id))
+
+        volatile_mask = np.isin(out, self._volatile_room_semantic_tile_ids_np) & ~keep_mask
+        volatile_count = int(np.sum(volatile_mask))
+        if volatile_count <= 0:
+            return out, 0, [], preserved_count, preserved_ids
+
+        volatile_ids = [int(v) for v in np.unique(out[volatile_mask])]
+        out[volatile_mask] = int(SEMANTIC_PALETTE.get("FLOOR", 1))
+        return out, volatile_count, volatile_ids, preserved_count, preserved_ids
+
+    def _apply_semantic_constrained_decoding(
+        self,
+        logits: torch.Tensor,
+        *,
+        graph: Optional[nx.Graph],
+        room_id: Any,
+        start_goal: Optional[Tuple[Tuple[int, int], Tuple[int, int]]] = None,
+    ) -> Dict[str, int]:
+        """
+        Bias decode logits toward graph-owned semantic markers before argmax.
+
+        This keeps semantic alignment inside the learned decode path instead of
+        relying exclusively on post-hoc deterministic overlay. The bias is
+        intentionally softer than hard door forcing: graph markers are nudged
+        toward planned slots while stray volatile semantic channels are
+        suppressed elsewhere.
+        """
+        if not bool(self.default_semantic_constrained_decoding_enabled):
+            return {"planned_markers": 0, "biased_slots": 0}
+        if not isinstance(graph, nx.Graph) or room_id not in graph:
+            return {"planned_markers": 0, "biased_slots": 0}
+        if not isinstance(logits, torch.Tensor) or logits.dim() != 4 or int(logits.shape[0]) != 1:
+            return {"planned_markers": 0, "biased_slots": 0}
+
+        try:
+            preview_grid = logits.argmax(dim=1).detach().cpu().numpy()[0]
+            preview_grid, _, _ = self._sanitize_semantic_grid(preview_grid)
+            preview_grid[np.isin(preview_grid, self._volatile_room_semantic_tile_ids_np)] = int(
+                SEMANTIC_PALETTE.get("FLOOR", 1)
+            )
+            planned = self._plan_room_graph_marker_layout(
+                preview_grid,
+                graph=graph,
+                room_id=room_id,
+                start_goal=start_goal,
+            )
+            if not planned:
+                return {"planned_markers": 0, "biased_slots": 0}
+
+            suppression_bias = float(self.default_semantic_marker_suppression_bias)
+            positive_bias = float(self.default_semantic_marker_logit_bias)
+            marker_channels = [
+                int(tile_id)
+                for tile_id in self._volatile_room_semantic_tile_ids_np.tolist()
+                if 0 <= int(tile_id) < int(logits.shape[1])
+            ]
+            if suppression_bias > 0.0 and marker_channels:
+                logits[0, marker_channels, :, :] = logits[0, marker_channels, :, :] - suppression_bias
+
+            biased_slots = 0
+            if positive_bias > 0.0:
+                for tile_id, slot in planned:
+                    tile_index = int(tile_id)
+                    if tile_index < 0 or tile_index >= int(logits.shape[1]):
+                        continue
+                    row, col = self._clamp_room_coord(slot)
+                    logits[0, tile_index, row, col] = logits[0, tile_index, row, col] + positive_bias
+                    biased_slots += 1
+
+            return {"planned_markers": int(len(planned)), "biased_slots": int(biased_slots)}
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+            logger.debug("Semantic constrained decoding skipped for room %s: %s", room_id, exc)
+            return {"planned_markers": 0, "biased_slots": 0}
+
+    @staticmethod
+    def _all_room_door_slots_mask() -> np.ndarray:
+        """Return a boolean mask covering every canonical doorway slot in a room."""
+        mask = np.zeros((ROOM_HEIGHT, ROOM_WIDTH), dtype=bool)
+        for direction, spec in DOOR_POSITIONS.items():
+            if direction in {"N", "S"}:
+                row = int(spec["row"])
+                c0 = int(spec["col_start"])
+                c1 = int(spec["col_end"]) + 1
+                mask[row, c0:c1] = True
+            else:
+                col = int(spec["col"])
+                r0 = int(spec["row_start"])
+                r1 = int(spec["row_end"]) + 1
+                mask[r0:r1, col] = True
+        return mask
+
+    def _required_room_door_slots_mask(
+        self,
+        *,
+        graph: Optional[nx.Graph],
+        room_id: Any,
+    ) -> np.ndarray:
+        """
+        Return a mask of boundary door slots that are legal for this room.
+
+        When graph metadata is unavailable, fall back to all canonical doorway
+        slots so standalone room generation does not over-strip doors.
+        """
+        if not isinstance(graph, nx.Graph) or room_id not in graph:
+            return self._all_room_door_slots_mask()
+
+        semantics = self._extract_room_topology_semantics(graph, room_id)
+        mask = np.zeros((ROOM_HEIGHT, ROOM_WIDTH), dtype=bool)
+        for direction, enabled in semantics["required_doors"].items():
+            if not bool(enabled):
+                continue
+            spec = DOOR_POSITIONS[str(direction)]
+            if direction in {"N", "S"}:
+                row = int(spec["row"])
+                c0 = int(spec["col_start"])
+                c1 = int(spec["col_end"]) + 1
+                mask[row, c0:c1] = True
+            else:
+                col = int(spec["col"])
+                r0 = int(spec["row_start"])
+                r1 = int(spec["row_end"]) + 1
+                mask[r0:r1, col] = True
+        return mask
+
+    def _enforce_room_boundary_shell(
+        self,
+        grid: np.ndarray,
+        *,
+        graph: Optional[nx.Graph],
+        room_id: Any,
+    ) -> Tuple[np.ndarray, Dict[str, int]]:
+        """
+        Seal room boundaries deterministically and reopen only valid doorway slots.
+
+        Neural generation and symbolic repair can both leave boundary floor leaks,
+        which later read as "rooms" expanding into stitched void. The exported
+        contract should be simple: boundary tiles are walls unless the graph
+        explicitly requires a doorway there.
+        """
+        out = np.asarray(grid, dtype=np.int32).copy()
+        before = out.copy()
+        wall_id = int(TileID.WALL)
+        floor_id = int(TileID.FLOOR)
+        door_tile_values = np.array(
+            [
+                int(TileID.DOOR_OPEN),
+                int(TileID.DOOR_LOCKED),
+                int(TileID.DOOR_BOMB),
+                int(TileID.DOOR_PUZZLE),
+                int(TileID.DOOR_BOSS),
+                int(TileID.DOOR_SOFT),
+            ],
+            dtype=np.int32,
+        )
+
+        boundary_mask = np.zeros((ROOM_HEIGHT, ROOM_WIDTH), dtype=bool)
+        boundary_mask[0, :] = True
+        boundary_mask[ROOM_HEIGHT - 1, :] = True
+        boundary_mask[:, 0] = True
+        boundary_mask[:, ROOM_WIDTH - 1] = True
+
+        # Default to a closed shell first, then reopen only legal canonical doors.
+        out[boundary_mask] = wall_id
+
+        required_doors: Dict[str, bool] = {}
+        edge_constraints: Dict[str, Set[str]] = {}
+        if isinstance(graph, nx.Graph) and room_id in graph:
+            semantics = self._extract_room_topology_semantics(graph, room_id)
+            required_doors = {str(k): bool(v) for k, v in semantics["required_doors"].items()}
+            edge_constraints = {
+                str(k): {str(tok) for tok in set(v)}
+                for k, v in semantics["edge_constraints"].items()
+            }
+
+        # Standalone generation has no graph semantics; preserve any canonical
+        # door tiles that the model placed in legal doorway strips.
+        if not required_doors:
+            for direction, spec in DOOR_POSITIONS.items():
+                if direction in {"N", "S"}:
+                    row = int(spec["row"])
+                    c0 = int(spec["col_start"])
+                    c1 = int(spec["col_end"]) + 1
+                    strip = before[row, c0:c1]
+                    if bool(np.any(np.isin(strip, door_tile_values))):
+                        out[row, c0:c1] = strip
+                else:
+                    col = int(spec["col"])
+                    r0 = int(spec["row_start"])
+                    r1 = int(spec["row_end"]) + 1
+                    strip = before[r0:r1, col]
+                    if bool(np.any(np.isin(strip, door_tile_values))):
+                        out[r0:r1, col] = strip
+        else:
+            for direction, enabled in required_doors.items():
+                if not bool(enabled):
+                    continue
+                tile_id = int(self._edge_tokens_to_door_tile(edge_constraints.get(str(direction), set())))
+                spec = DOOR_POSITIONS[str(direction)]
+                if direction in {"N", "S"}:
+                    row = int(spec["row"])
+                    c0 = int(spec["col_start"])
+                    c1 = int(spec["col_end"]) + 1
+                    out[row, c0:c1] = tile_id
+                    interior_row = 1 if direction == "N" else ROOM_HEIGHT - 2
+                    out[interior_row, c0:c1] = floor_id
+                else:
+                    col = int(spec["col"])
+                    r0 = int(spec["row_start"])
+                    r1 = int(spec["row_end"]) + 1
+                    out[r0:r1, col] = tile_id
+                    interior_col = 1 if direction == "W" else ROOM_WIDTH - 2
+                    out[r0:r1, interior_col] = floor_id
+
+        boundary_wall_tiles_forced = int(np.sum(boundary_mask & (out == wall_id) & (before != wall_id)))
+        boundary_door_tiles_forced = int(
+            np.sum(boundary_mask & np.isin(out, door_tile_values) & (before != out))
+        )
+        interior_door_apron_tiles_forced = int(
+            np.sum((~boundary_mask) & (out == floor_id) & (before != floor_id))
+        )
+
+        return out, {
+            "boundary_wall_tiles_forced": int(boundary_wall_tiles_forced),
+            "boundary_door_tiles_forced": int(boundary_door_tiles_forced),
+            "interior_door_apron_tiles_forced": int(interior_door_apron_tiles_forced),
+        }
+
+    def _strip_structural_room_artifacts(
+        self,
+        grid: np.ndarray,
+        *,
+        graph: Optional[nx.Graph],
+        room_id: Any,
+        max_interior_component_tiles: int = 4,
+    ) -> Tuple[np.ndarray, Dict[str, int]]:
+        """
+        Remove impossible structural artifacts from generated rooms.
+
+        The diffusion branch is currently prone to producing:
+        - door tiles floating inside the room interior or on the wrong wall slot
+        - tiny isolated wall/block islands that read as decode noise rather than
+          intentional room structure
+
+        These artifacts are deterministic to detect from room topology and can
+        be cleaned without changing mission-graph semantics.
+        """
+        out = np.asarray(grid, dtype=np.int32).copy()
+        floor_id = int(SEMANTIC_PALETTE.get("FLOOR", 1))
+        door_tiles = np.array(
+            [
+                int(TileID.DOOR_OPEN),
+                int(TileID.DOOR_LOCKED),
+                int(TileID.DOOR_BOMB),
+                int(TileID.DOOR_PUZZLE),
+                int(TileID.DOOR_BOSS),
+                int(TileID.DOOR_SOFT),
+            ],
+            dtype=np.int32,
+        )
+        allowed_door_mask = self._required_room_door_slots_mask(graph=graph, room_id=room_id)
+        invalid_door_mask = np.isin(out, door_tiles) & ~allowed_door_mask
+        invalid_door_tiles_removed = int(np.sum(invalid_door_mask))
+        if invalid_door_tiles_removed > 0:
+            out[invalid_door_mask] = floor_id
+
+        wall_like_mask = np.isin(out, np.array([int(TileID.WALL), int(TileID.BLOCK)], dtype=np.int32))
+        visited = np.zeros_like(wall_like_mask, dtype=bool)
+        interior_obstacle_tiles_removed = 0
+        interior_obstacle_components_removed = 0
+
+        for row in range(ROOM_HEIGHT):
+            for col in range(ROOM_WIDTH):
+                if not bool(wall_like_mask[row, col]) or bool(visited[row, col]):
+                    continue
+
+                component: List[Tuple[int, int]] = []
+                stack: List[Tuple[int, int]] = [(row, col)]
+                visited[row, col] = True
+                touches_allowed_door = False
+
+                while stack:
+                    cur_r, cur_c = stack.pop()
+                    component.append((cur_r, cur_c))
+                    if bool(allowed_door_mask[cur_r, cur_c]):
+                        touches_allowed_door = True
+                    for d_r, d_c in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                        next_r = cur_r + d_r
+                        next_c = cur_c + d_c
+                        if not (0 <= next_r < ROOM_HEIGHT and 0 <= next_c < ROOM_WIDTH):
+                            continue
+                        if not bool(wall_like_mask[next_r, next_c]) or bool(visited[next_r, next_c]):
+                            continue
+                        visited[next_r, next_c] = True
+                        stack.append((next_r, next_c))
+
+                if touches_allowed_door or len(component) > int(max_interior_component_tiles):
+                    continue
+
+                for comp_r, comp_c in component:
+                    out[comp_r, comp_c] = floor_id
+                interior_obstacle_tiles_removed += int(len(component))
+                interior_obstacle_components_removed += 1
+
+        return out, {
+            "invalid_door_tiles_removed": int(invalid_door_tiles_removed),
+            "interior_obstacle_tiles_removed": int(interior_obstacle_tiles_removed),
+            "interior_obstacle_components_removed": int(interior_obstacle_components_removed),
+        }
+
+    @staticmethod
+    def _dilate_room_mask(mask: np.ndarray, radius: int = 1) -> np.ndarray:
+        """Lightweight 4-neighbour dilation for room-scale boolean masks."""
+        out = np.asarray(mask, dtype=bool).copy()
+        steps = int(max(0, int(radius)))
+        for _ in range(steps):
+            prev = out.copy()
+            out[1:, :] |= prev[:-1, :]
+            out[:-1, :] |= prev[1:, :]
+            out[:, 1:] |= prev[:, :-1]
+            out[:, :-1] |= prev[:, 1:]
+        return out
+
+    def _select_puzzle_room_scaffold_archetype(
+        self,
+        *,
+        role_flags: Dict[str, bool],
+        semantics: Dict[str, Any],
+        node_type: str,
+    ) -> str:
+        """Select the constructive puzzle archetype from graph-local semantics."""
+        forced = str(getattr(self, "default_puzzle_room_archetype_mode", "auto") or "auto").strip().lower()
+        valid = {"auto", "gate", "serpentine", "hub", "island", "combat"}
+        if forced not in valid:
+            forced = "auto"
+        if forced != "auto":
+            return forced
+
+        edge_constraints = semantics.get("edge_constraints", {})
+        flat_edge_tokens: Set[str] = set()
+        for tokens in edge_constraints.values():
+            flat_edge_tokens.update(str(token) for token in tokens)
+
+        required_doors = semantics.get("required_doors", {})
+        required_door_count = int(sum(1 for enabled in required_doors.values() if enabled))
+
+        if node_type == "combat_puzzle" or bool(role_flags.get("has_enemy", False)):
+            return "combat"
+        if {"switch", "switch_locked", "state_block", "on_off_gate"} & flat_edge_tokens:
+            return "gate"
+        if node_type in {"item", "protection_item", "minor_item", "treasure", "stair", "stairs_up", "stairs_down", "warp"} or bool(role_flags.get("has_item", False)):
+            return "island"
+        if required_door_count >= 3:
+            return "hub"
+        return "serpentine"
+
+    def _build_puzzle_room_segments(
+        self,
+        *,
+        archetype: str,
+        flow_is_horizontal: bool,
+        puzzle_anchor: Tuple[int, int],
+    ) -> Tuple[List[List[Tuple[int, int]]], List[List[Tuple[int, int]]]]:
+        """
+        Return required and optional puzzle scaffold segments.
+
+        Each segment is a list of room coordinates that will be painted as BLOCK
+        tiles when they do not collide with reserved route/anchor cells.
+        """
+        center_r = max(3, min(ROOM_HEIGHT - 4, int(puzzle_anchor[0])))
+        center_c = max(3, min(ROOM_WIDTH - 4, int(puzzle_anchor[1])))
+        left_col = 3
+        right_col = ROOM_WIDTH - 4
+        top_row = 3
+        bottom_row = ROOM_HEIGHT - 4
+
+        required: List[List[Tuple[int, int]]] = []
+        optional: List[List[Tuple[int, int]]] = []
+
+        if archetype == "gate":
+            if flow_is_horizontal:
+                for spine_col in (left_col, right_col):
+                    required.append([(row, spine_col) for row in range(2, ROOM_HEIGHT - 2)])
+                optional.append([(center_r, col) for col in range(left_col + 1, right_col)])
+                optional.append([(center_r + 1, col) for col in range(left_col + 1, center_c)])
+            else:
+                for spine_row in (top_row, bottom_row):
+                    required.append([(spine_row, col) for col in range(2, ROOM_WIDTH - 2)])
+                optional.append([(row, center_c) for row in range(top_row + 1, bottom_row)])
+                optional.append([(row, center_c + 1) for row in range(top_row + 1, center_r)])
+        elif archetype == "hub":
+            if flow_is_horizontal:
+                required.append(
+                    [(row, center_c - 1) for row in range(2, ROOM_HEIGHT - 2) if abs(row - center_r) > 1]
+                )
+                required.append(
+                    [(row, center_c + 1) for row in range(2, ROOM_HEIGHT - 2) if abs(row - center_r) > 1]
+                )
+                optional.append(
+                    [(center_r - 2, col) for col in range(2, center_c - 1)]
+                )
+                optional.append(
+                    [(center_r + 2, col) for col in range(center_c + 2, ROOM_WIDTH - 2)]
+                )
+            else:
+                required.append(
+                    [(center_r - 1, col) for col in range(2, ROOM_WIDTH - 2) if abs(col - center_c) > 1]
+                )
+                required.append(
+                    [(center_r + 1, col) for col in range(2, ROOM_WIDTH - 2) if abs(col - center_c) > 1]
+                )
+                optional.append(
+                    [(row, center_c - 2) for row in range(2, center_r - 1)]
+                )
+                optional.append(
+                    [(row, center_c + 2) for row in range(center_r + 2, ROOM_HEIGHT - 2)]
+                )
+        elif archetype == "island":
+            optional.extend(
+                [
+                    [(center_r - 3, center_c - 2), (center_r - 3, center_c - 1), (center_r - 2, center_c - 2), (center_r - 2, center_c - 1)],
+                    [(center_r - 1, center_c + 1), (center_r - 1, center_c + 2), (center_r, center_c + 1), (center_r, center_c + 2)],
+                    [(center_r + 2, center_c - 2), (center_r + 2, center_c - 1), (center_r + 3, center_c - 2), (center_r + 3, center_c - 1)],
+                    [(center_r + 1, center_c + 1), (center_r + 1, center_c + 2), (center_r + 2, center_c + 1), (center_r + 2, center_c + 2)],
+                ]
+            )
+            if flow_is_horizontal:
+                required.append([(center_r, col) for col in range(left_col + 1, right_col) if abs(col - center_c) > 2])
+            else:
+                required.append([(row, center_c) for row in range(top_row + 1, bottom_row) if abs(row - center_r) > 2])
+        elif archetype == "combat":
+            optional.extend(
+                [
+                    [(center_r - 3, center_c - 2), (center_r - 3, center_c - 1), (center_r - 2, center_c - 2), (center_r - 2, center_c - 1)],
+                    [(center_r - 3, center_c + 1), (center_r - 3, center_c + 2), (center_r - 2, center_c + 1), (center_r - 2, center_c + 2)],
+                    [(center_r + 2, center_c - 2), (center_r + 2, center_c - 1), (center_r + 3, center_c - 2), (center_r + 3, center_c - 1)],
+                    [(center_r + 2, center_c + 1), (center_r + 2, center_c + 2), (center_r + 3, center_c + 1), (center_r + 3, center_c + 2)],
+                ]
+            )
+            required.append([(center_r, center_c - 3), (center_r, center_c - 2)])
+            required.append([(center_r, center_c + 2), (center_r, center_c + 3)])
+        else:  # serpentine
+            if flow_is_horizontal:
+                rows = [3, 6, 9, 12]
+                for idx, row in enumerate(rows):
+                    if row >= ROOM_HEIGHT - 2:
+                        continue
+                    gap_on_left = (idx % 2) == 0
+                    segment = [
+                        (row, col)
+                        for col in range(2, ROOM_WIDTH - 2)
+                        if not (2 <= col <= 4 and gap_on_left)
+                        and not (ROOM_WIDTH - 5 <= col <= ROOM_WIDTH - 3 and not gap_on_left)
+                    ]
+                    optional.append(segment)
+                required.append([(center_r, center_c - 1), (center_r, center_c + 1)])
+            else:
+                cols = [3, 5, 7]
+                for idx, col in enumerate(cols):
+                    if col >= ROOM_WIDTH - 2:
+                        continue
+                    gap_on_top = (idx % 2) == 0
+                    segment = [
+                        (row, col)
+                        for row in range(2, ROOM_HEIGHT - 2)
+                        if not (2 <= row <= 4 and gap_on_top)
+                        and not (ROOM_HEIGHT - 5 <= row <= ROOM_HEIGHT - 3 and not gap_on_top)
+                    ]
+                    optional.append(segment)
+                required.append([(center_r - 1, center_c), (center_r + 1, center_c)])
+
+        return required, optional
+
+    def _apply_puzzle_room_scaffold(
+        self,
+        grid: np.ndarray,
+        *,
+        graph: Optional[nx.Graph],
+        room_id: Any,
+        room_plan_mask: Optional[np.ndarray] = None,
+        start_goal: Optional[Tuple[Tuple[int, int], Tuple[int, int]]] = None,
+    ) -> Tuple[np.ndarray, Dict[str, Any]]:
+        """
+        Inject a lightweight constructive scaffold into under-structured puzzle rooms.
+
+        Research-backed room-generation systems tend to keep structure explicit for
+        constrained layouts instead of expecting small-data generators to discover
+        reliable puzzle geometry on their own. We follow the same pragmatic
+        hybrid approach here: preserve the planned traversability route, then add a
+        small deterministic block-maze scaffold only when the current room is still
+        overly empty.
+        """
+        out = np.asarray(grid, dtype=np.int32).copy()
+        stats: Dict[str, Any] = {
+            "applied": 0,
+            "tiles_added": 0,
+            "segments_added": 0,
+            "existing_structure_tiles": 0,
+            "planned_route_pixels": 0,
+        }
+        if not bool(self.default_puzzle_room_scaffold_enabled):
+            return out, stats
+        if not isinstance(graph, nx.Graph) or room_id not in graph:
+            return out, stats
+
+        attrs = dict(graph.nodes[room_id])
+        role_flags = self._room_role_flags(attrs)
+        semantics = self._extract_room_topology_semantics(graph, room_id)
+        has_puzzle_gate = any(
+            {"switch", "switch_locked", "state_block", "on_off_gate", "puzzle"} & set(tokens)
+            for tokens in semantics["edge_constraints"].values()
+        )
+        node_type = str(
+            attrs.get("type", attrs.get("node_type", attrs.get("room_type", ""))) or ""
+        ).strip().lower()
+        if not (
+            role_flags.get("has_puzzle", False)
+            or has_puzzle_gate
+            or node_type in {"switch", "puzzle", "tutorial_puzzle", "combat_puzzle", "complex_puzzle"}
+        ):
+            return out, stats
+
+        block_id = int(TileID.BLOCK)
+        wall_id = int(TileID.WALL)
+        floor_id = int(TileID.FLOOR)
+        structure_mask = np.isin(out, np.array([wall_id, block_id], dtype=np.int32))
+        interior_mask = np.zeros_like(out, dtype=bool)
+        interior_mask[2:ROOM_HEIGHT - 2, 2:ROOM_WIDTH - 2] = True
+        existing_structure_tiles = int(np.sum(structure_mask & interior_mask))
+        stats["existing_structure_tiles"] = existing_structure_tiles
+        if existing_structure_tiles >= int(self.default_puzzle_room_scaffold_min_structure_tiles):
+            return out, stats
+
+        normalized_start_goal = start_goal
+        if normalized_start_goal is None:
+            normalized_start_goal = self._extract_room_start_goal(graph, room_id)
+        if normalized_start_goal is None:
+            normalized_start_goal = ((ROOM_HEIGHT // 2, 1), (ROOM_HEIGHT // 2, ROOM_WIDTH - 2))
+        start_coord, goal_coord = self._normalize_start_goal_coords(normalized_start_goal)
+
+        if isinstance(room_plan_mask, np.ndarray) and room_plan_mask.shape == (ROOM_HEIGHT, ROOM_WIDTH):
+            route_mask = np.asarray(room_plan_mask, dtype=np.float32) > 0.0
+        else:
+            try:
+                route_mask = self._build_room_plan_trace(
+                    graph,
+                    room_id,
+                    out,
+                    start_goal=(start_coord, goal_coord),
+                ) > 0.0
+            except Exception:
+                route_mask = np.zeros((ROOM_HEIGHT, ROOM_WIDTH), dtype=bool)
+        stats["planned_route_pixels"] = int(np.sum(route_mask))
+        preserve_margin = int(max(0, getattr(self, "default_puzzle_room_preserve_route_margin", 1)))
+        reserved = self._dilate_room_mask(route_mask, radius=preserve_margin) if preserve_margin > 0 else route_mask.copy()
+
+        semantic_anchors = build_room_semantic_anchor_points(
+            room_shape=(ROOM_HEIGHT, ROOM_WIDTH),
+            start=start_coord,
+            goal=goal_coord,
+            required_doors=semantics["required_doors"],
+            incoming_dirs=semantics["incoming_dirs"],
+            outgoing_dirs=semantics["outgoing_dirs"],
+            room_role_flags=role_flags,
+            semantic_puzzle_offset=self.default_semantic_puzzle_offset,
+        )
+        for point in semantic_anchors.values():
+            rr, cc = self._clamp_room_coord(point)
+            reserved[int(rr), int(cc)] = True
+
+        planned_markers = self._plan_room_graph_marker_layout(
+            out,
+            graph=graph,
+            room_id=room_id,
+            start_goal=(start_coord, goal_coord),
+        )
+        for _tile_id, slot in planned_markers:
+            rr, cc = self._clamp_room_coord(slot)
+            reserved[int(rr), int(cc)] = True
+
+        for direction, enabled in semantics["required_doors"].items():
+            if not bool(enabled):
+                continue
+            spec = DOOR_POSITIONS[str(direction)]
+            if direction in {"N", "S"}:
+                apron_row = 2 if direction == "N" else ROOM_HEIGHT - 3
+                c0 = int(spec["col_start"])
+                c1 = int(spec["col_end"]) + 1
+                reserved[apron_row, c0:c1] = True
+            else:
+                apron_col = 2 if direction == "W" else ROOM_WIDTH - 3
+                r0 = int(spec["row_start"])
+                r1 = int(spec["row_end"]) + 1
+                reserved[r0:r1, apron_col] = True
+
+        puzzle_anchor = semantic_anchors.get("puzzle", (ROOM_HEIGHT // 2, ROOM_WIDTH // 2))
+        source_anchor = semantic_anchors.get("start", start_coord)
+        destination_anchor = semantic_anchors.get("goal", goal_coord)
+        flow_is_horizontal = abs(int(destination_anchor[1]) - int(source_anchor[1])) >= abs(
+            int(destination_anchor[0]) - int(source_anchor[0])
+        )
+        archetype = self._select_puzzle_room_scaffold_archetype(
+            role_flags=role_flags,
+            semantics=semantics,
+            node_type=node_type,
+        )
+        stats["archetype"] = str(archetype)
+
+        def _can_place(row: int, col: int) -> bool:
+            if not (2 <= int(row) <= ROOM_HEIGHT - 3 and 2 <= int(col) <= ROOM_WIDTH - 3):
+                return False
+            if bool(reserved[int(row), int(col)]):
+                return False
+            return int(out[int(row), int(col)]) == floor_id
+
+        budget_remaining = int(max(0, getattr(self, "default_puzzle_room_block_budget", 28)))
+
+        def _paint_block_line(points: List[Tuple[int, int]]) -> int:
+            nonlocal budget_remaining
+            added = 0
+            for row, col in points:
+                if budget_remaining <= 0:
+                    break
+                if _can_place(int(row), int(col)):
+                    out[int(row), int(col)] = block_id
+                    added += 1
+                    budget_remaining -= 1
+            return int(added)
+
+        segments_added = 0
+        tiles_added = 0
+        required_segments, optional_segments = self._build_puzzle_room_segments(
+            archetype=archetype,
+            flow_is_horizontal=flow_is_horizontal,
+            puzzle_anchor=puzzle_anchor,
+        )
+
+        for segment in required_segments:
+            added = _paint_block_line(segment)
+            if added > 0:
+                segments_added += 1
+                tiles_added += added
+
+        branch_density = float(max(0.0, min(1.0, getattr(self, "default_puzzle_room_branch_density", 0.75))))
+        optional_quota = int(round(branch_density * len(optional_segments)))
+        if branch_density > 0.0 and optional_segments and optional_quota <= 0:
+            optional_quota = 1
+        optional_quota = min(len(optional_segments), max(0, optional_quota))
+        stats["optional_segments_requested"] = int(optional_quota)
+        optional_segments_applied = 0
+        for segment in optional_segments[:optional_quota]:
+            added = _paint_block_line(segment)
+            if added > 0:
+                segments_added += 1
+                optional_segments_applied += 1
+                tiles_added += added
+
+        stats["applied"] = int(tiles_added > 0)
+        stats["tiles_added"] = int(tiles_added)
+        stats["segments_added"] = int(segments_added)
+        stats["optional_segments_applied"] = int(optional_segments_applied)
+        return out, stats
+
+    def _count_small_interior_structure_components(
+        self,
+        grid: np.ndarray,
+        *,
+        graph: Optional[nx.Graph],
+        room_id: Any,
+        max_component_tiles: int = 6,
+    ) -> int:
+        """
+        Count small interior wall/block islands that survive structural cleanup.
+
+        These components are a good proxy for fast-sampler drift: they usually
+        show up as isolated 1x1 / 2x2 block clusters inside otherwise plain
+        rooms. We use the count as a quality gate for teacher fallback without
+        touching topology semantics.
+        """
+        out = np.asarray(grid, dtype=np.int32)
+        wall_like_mask = np.isin(out, np.array([int(TileID.WALL), int(TileID.BLOCK)], dtype=np.int32))
+        allowed_door_mask = self._required_room_door_slots_mask(graph=graph, room_id=room_id)
+        visited = np.zeros_like(wall_like_mask, dtype=bool)
+        suspicious_components = 0
+
+        for row in range(ROOM_HEIGHT):
+            for col in range(ROOM_WIDTH):
+                if not bool(wall_like_mask[row, col]) or bool(visited[row, col]):
+                    continue
+
+                component: List[Tuple[int, int]] = []
+                stack: List[Tuple[int, int]] = [(row, col)]
+                visited[row, col] = True
+                touches_boundary = False
+                touches_allowed_door = False
+
+                while stack:
+                    cur_r, cur_c = stack.pop()
+                    component.append((cur_r, cur_c))
+                    if cur_r in {0, ROOM_HEIGHT - 1} or cur_c in {0, ROOM_WIDTH - 1}:
+                        touches_boundary = True
+                    if bool(allowed_door_mask[cur_r, cur_c]):
+                        touches_allowed_door = True
+                    for d_r, d_c in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                        next_r = cur_r + d_r
+                        next_c = cur_c + d_c
+                        if not (0 <= next_r < ROOM_HEIGHT and 0 <= next_c < ROOM_WIDTH):
+                            continue
+                        if not bool(wall_like_mask[next_r, next_c]) or bool(visited[next_r, next_c]):
+                            continue
+                        visited[next_r, next_c] = True
+                        stack.append((next_r, next_c))
+
+                if touches_boundary or touches_allowed_door:
+                    continue
+                if len(component) <= int(max_component_tiles):
+                    suspicious_components += 1
+
+        return int(suspicious_components)
+
+    def _should_retry_room_with_teacher(
+        self,
+        *,
+        final_grid: np.ndarray,
+        graph: Optional[nx.Graph],
+        room_id: Any,
+        metrics: Dict[str, float],
+        source_mode: str = "fast_sampler",
+    ) -> bool:
+        """
+        Decide whether a non-teacher room should be regenerated with the full teacher.
+
+        The goal is pragmatic: keep cheaper / weaker generators for normal rooms,
+        but avoid exporting rooms that still contain obvious structural decode
+        noise after cleanup/repair.
+        """
+        suspicious_components = self._count_small_interior_structure_components(
+            final_grid,
+            graph=graph,
+            room_id=room_id,
+        )
+        if suspicious_components >= 1:
+            return True
+
+        block_id = int(TileID.BLOCK)
+        interior_block_tiles = int(np.sum(np.asarray(final_grid, dtype=np.int32) == block_id))
+        graph_markers = set(int(v) for v in self._resolve_room_graph_markers(graph, room_id))
+        if interior_block_tiles > 0 and not graph_markers.intersection({int(TileID.PUZZLE), int(TileID.STAIR)}):
+            return True
+
+        door_like_tiles = np.isin(
+            np.asarray(final_grid, dtype=np.int32),
+            np.array(
+                [
+                    int(TileID.DOOR_OPEN),
+                    int(TileID.DOOR_LOCKED),
+                    int(TileID.DOOR_BOMB),
+                    int(TileID.DOOR_PUZZLE),
+                    int(TileID.DOOR_BOSS),
+                    int(TileID.DOOR_SOFT),
+                ],
+                dtype=np.int32,
+            ),
+        )
+        allowed_door_mask = self._required_room_door_slots_mask(graph=graph, room_id=room_id)
+        unexpected_door_tiles = int(np.sum(door_like_tiles & ~allowed_door_mask))
+        if unexpected_door_tiles >= 1:
+            return True
+
+        repair_tiles = int(metrics.get("tiles_changed", 0))
+        repair_obstacles = int(metrics.get("repair_interior_obstacle_tiles_removed", 0))
+        neural_obstacles = int(metrics.get("neural_interior_obstacle_tiles_removed", 0))
+        if repair_tiles >= 18 and (repair_obstacles > 0 or neural_obstacles > 0):
+            return True
+
+        source_mode = str(source_mode or "fast_sampler").strip().lower()
+        if source_mode == "masked_room":
+            if float(metrics.get("final_graph_marker_overwrite_rate", 0.0)) > 0.34:
+                return True
+            if repair_tiles >= 12:
+                return True
+
+        return False
+
+    def _resolve_effective_sampling_guidance(
+        self,
+        *,
+        use_fast_sampling: bool,
+        guidance_scale: float,
+        logic_guidance_scale: float,
+    ) -> Tuple[float, float]:
+        """
+        Clamp runtime guidance to the regime the distilled fast sampler was trained for.
+
+        The fast-sampler student is distilled from the base diffusion model using
+        the diffusion checkpoint's CFG setting and without LogicNet gradient
+        guidance. Reusing more aggressive diffusion-time overrides than the
+        teacher was trained with pushes the short-step student out of
+        distribution and hurts room quality.
+        """
+        effective_guidance_scale = float(guidance_scale)
+        effective_logic_guidance_scale = float(logic_guidance_scale)
+        if not bool(use_fast_sampling) or not self.diffusion.supports_fast_sampling():
+            return effective_guidance_scale, effective_logic_guidance_scale
+
+        trained_cfg_scale = float(
+            max(
+                0.0,
+                getattr(
+                    self.diffusion,
+                    "training_cfg_scale",
+                    self.diffusion_fallback_config.get(
+                        "cfg_scale",
+                        getattr(self.diffusion, "cfg_scale", effective_guidance_scale),
+                    ),
+                ),
+            )
+        )
+        if effective_guidance_scale > trained_cfg_scale + 1e-6:
+            self._bump_diagnostic("fast_sampling_cfg_clamped")
+            logger.debug(
+                "Fast sampling clamped CFG from %.3f to %.3f to match the distilled teacher regime.",
+                effective_guidance_scale,
+                trained_cfg_scale,
+            )
+            effective_guidance_scale = trained_cfg_scale
+
+        if effective_logic_guidance_scale > 0.0:
+            self._bump_diagnostic("fast_sampling_logic_guidance_disabled")
+            logger.debug(
+                "Fast sampling disabled LogicNet runtime guidance (requested %.3f) because the student was "
+                "not distilled with gradient guidance enabled.",
+                effective_logic_guidance_scale,
+            )
+            effective_logic_guidance_scale = 0.0
+
+        return effective_guidance_scale, effective_logic_guidance_scale
+
+    def _resolve_room_graph_markers(
+        self,
+        graph: Optional[nx.Graph],
+        room_id: Any,
+    ) -> List[int]:
+        """Infer deterministic per-room semantic markers from mission-graph metadata."""
+        if not isinstance(graph, nx.Graph) or room_id not in graph:
+            return []
+
+        attrs = dict(graph.nodes[room_id])
+        role_flags = self._room_role_flags(attrs)
+        label_tokens = self._parse_label_tokens(attrs.get("label"))
+        node_type = str(
+            attrs.get("type", attrs.get("node_type", attrs.get("room_type", ""))) or ""
+        ).strip().lower()
+
+        markers: List[int] = []
+
+        if role_flags.get("is_start", False) or node_type == "start":
+            markers.append(int(TileID.START))
+        if role_flags.get("has_goal", False) or node_type in {"goal", "triforce"}:
+            markers.append(int(TileID.TRIFORCE))
+
+        if node_type in {"boss", "mini_boss"} or role_flags.get("has_boss", False):
+            markers.append(int(TileID.BOSS))
+        elif (
+            role_flags.get("has_enemy", False)
+            or node_type in {"enemy", "arena", "combat_puzzle"}
+            or "e" in label_tokens
+        ):
+            markers.append(int(TileID.ENEMY))
+
+        if node_type in {"big_key", "boss_key"}:
+            markers.append(int(TileID.KEY_BOSS))
+        elif role_flags.get("has_key", False) or node_type == "key" or "k" in label_tokens:
+            markers.append(int(TileID.KEY_SMALL))
+
+        if node_type in {"item", "protection_item"} or role_flags.get("has_item", False):
+            markers.append(int(TileID.KEY_ITEM))
+        elif node_type in {"minor_item", "treasure"}:
+            markers.append(int(TileID.ITEM_MINOR))
+
+        if node_type in {"stairs_up", "stairs_down", "stair", "warp"}:
+            markers.append(int(TileID.STAIR))
+
+        if (
+            role_flags.get("has_puzzle", False)
+            or node_type in {"switch", "puzzle", "tutorial_puzzle", "combat_puzzle", "complex_puzzle"}
+            or "p" in label_tokens
+        ):
+            markers.append(int(TileID.PUZZLE))
+
+        return markers
+
+    def _find_room_graph_marker_slot(
+        self,
+        grid: np.ndarray,
+        *,
+        preferred: Tuple[int, int],
+        occupied: Set[Tuple[int, int]],
+        tile_id: Optional[int] = None,
+    ) -> Tuple[int, int]:
+        """Find a stable in-room placement slot near a preferred coordinate."""
+        floor_id = int(SEMANTIC_PALETTE.get("FLOOR", 1))
+        preferred = self._clamp_room_coord(preferred)
+        wanted_tile = None if tile_id is None else int(tile_id)
+
+        if (
+            wanted_tile is not None
+            and preferred not in occupied
+            and int(grid[preferred[0], preferred[1]]) == wanted_tile
+        ):
+            return preferred
+
+        if wanted_tile is not None:
+            for radius in range(0, max(ROOM_HEIGHT, ROOM_WIDTH)):
+                row_min = max(1, preferred[0] - radius)
+                row_max = min(ROOM_HEIGHT - 2, preferred[0] + radius)
+                col_min = max(1, preferred[1] - radius)
+                col_max = min(ROOM_WIDTH - 2, preferred[1] + radius)
+                for r in range(row_min, row_max + 1):
+                    for c in range(col_min, col_max + 1):
+                        if max(abs(r - preferred[0]), abs(c - preferred[1])) != radius:
+                            continue
+                        if (r, c) in occupied:
+                            continue
+                        if int(grid[r, c]) == wanted_tile:
+                            return (r, c)
+
+        def _search(valid_tiles: Set[int]) -> Optional[Tuple[int, int]]:
+            for radius in range(0, max(ROOM_HEIGHT, ROOM_WIDTH)):
+                row_min = max(1, preferred[0] - radius)
+                row_max = min(ROOM_HEIGHT - 2, preferred[0] + radius)
+                col_min = max(1, preferred[1] - radius)
+                col_max = min(ROOM_WIDTH - 2, preferred[1] + radius)
+                for r in range(row_min, row_max + 1):
+                    for c in range(col_min, col_max + 1):
+                        if max(abs(r - preferred[0]), abs(c - preferred[1])) != radius:
+                            continue
+                        if (r, c) in occupied:
+                            continue
+                        if int(grid[r, c]) in valid_tiles:
+                            return (r, c)
+            return None
+
+        slot = _search({floor_id})
+        if slot is not None:
+            return slot
+
+        # Fallback: any non-boundary position that is not a hard wall.
+        non_blocking_tiles = {
+            int(TileID.FLOOR),
+            int(TileID.VOID),
+            int(TileID.BLOCK),
+            int(TileID.DOOR_OPEN),
+            int(TileID.DOOR_LOCKED),
+            int(TileID.DOOR_BOMB),
+            int(TileID.DOOR_PUZZLE),
+            int(TileID.DOOR_BOSS),
+            int(TileID.DOOR_SOFT),
+        }
+        slot = _search(non_blocking_tiles)
+        if slot is not None:
+            return slot
+
+        if preferred not in occupied:
+            return preferred
+
+        for r in range(1, ROOM_HEIGHT - 1):
+            for c in range(1, ROOM_WIDTH - 1):
+                if (r, c) not in occupied:
+                    return (r, c)
+
+        return preferred
+
+    def _overlay_room_graph_markers(
+        self,
+        grid: np.ndarray,
+        *,
+        graph: Optional[nx.Graph],
+        room_id: Any,
+        start_goal: Optional[Tuple[Tuple[int, int], Tuple[int, int]]] = None,
+    ) -> Tuple[np.ndarray, int, List[int]]:
+        """
+        Reintroduce graph-owned semantics after structural room generation.
+
+        This keeps the generator focused on layout while still producing rooms
+        with the mission-critical markers the graph requires.
+        """
+        out = np.asarray(grid, dtype=np.int32).copy()
+        markers = self._resolve_room_graph_markers(graph, room_id)
+        if not markers:
+            return out, 0, []
+
+        if start_goal is None:
+            start_goal = self._extract_room_start_goal(graph, room_id) if isinstance(graph, nx.Graph) else None
+        start_coord, goal_coord = start_goal if start_goal is not None else (
+            (ROOM_HEIGHT // 2, 0),
+            (ROOM_HEIGHT // 2, ROOM_WIDTH - 1),
+        )
+        role_flags = self._room_role_flags(dict(graph.nodes[room_id])) if isinstance(graph, nx.Graph) and room_id in graph else {}
+        semantics = self._extract_room_topology_semantics(graph, room_id) if isinstance(graph, nx.Graph) and room_id in graph else {
+            "required_doors": {},
+            "incoming_dirs": set(),
+            "outgoing_dirs": set(),
+        }
+        semantic_anchors = build_room_semantic_anchor_points(
+            room_shape=(ROOM_HEIGHT, ROOM_WIDTH),
+            start=start_coord,
+            goal=goal_coord,
+            required_doors=semantics["required_doors"],
+            incoming_dirs=semantics["incoming_dirs"],
+            outgoing_dirs=semantics["outgoing_dirs"],
+            room_role_flags=role_flags,
+            semantic_puzzle_offset=self.default_semantic_puzzle_offset,
+        )
+        preferred_positions: Dict[int, Tuple[int, int]] = {
+            int(TileID.START): self._clamp_room_coord(semantic_anchors.get("start", start_coord)),
+            int(TileID.TRIFORCE): self._clamp_room_coord(semantic_anchors.get("goal", goal_coord)),
+            int(TileID.BOSS): self._clamp_room_coord(semantic_anchors.get("boss", (ROOM_HEIGHT // 2, ROOM_WIDTH // 2))),
+            int(TileID.ENEMY): self._clamp_room_coord(semantic_anchors.get("enemy", (ROOM_HEIGHT // 2 - 2, ROOM_WIDTH // 2))),
+            int(TileID.KEY_SMALL): self._clamp_room_coord(semantic_anchors.get("key", (ROOM_HEIGHT // 2, max(1, ROOM_WIDTH // 2 - 2)))),
+            int(TileID.KEY_BOSS): self._clamp_room_coord(semantic_anchors.get("key", (ROOM_HEIGHT // 2, ROOM_WIDTH // 2))),
+            int(TileID.KEY_ITEM): self._clamp_room_coord(semantic_anchors.get("item", (ROOM_HEIGHT // 2, min(ROOM_WIDTH - 2, ROOM_WIDTH // 2 + 2)))),
+            int(TileID.ITEM_MINOR): self._clamp_room_coord(semantic_anchors.get("item", (min(ROOM_HEIGHT - 2, ROOM_HEIGHT // 2 + 2), ROOM_WIDTH // 2))),
+            int(TileID.STAIR): self._clamp_room_coord(semantic_anchors.get("item", (min(ROOM_HEIGHT - 2, ROOM_HEIGHT // 2 + 2), ROOM_WIDTH // 2))),
+            int(TileID.PUZZLE): self._clamp_room_coord(semantic_anchors.get("puzzle", (max(1, ROOM_HEIGHT // 2 - 2), ROOM_WIDTH // 2))),
+        }
+
+        occupied: Set[Tuple[int, int]] = set()
+        placed: List[int] = []
+
+        for tile_id in markers:
+            preferred = preferred_positions.get(int(tile_id), (ROOM_HEIGHT // 2, ROOM_WIDTH // 2))
+            slot = self._find_room_graph_marker_slot(
+                out,
+                preferred=preferred,
+                occupied=occupied,
+                tile_id=int(tile_id),
+            )
+            occupied.add(slot)
+            out[slot[0], slot[1]] = int(tile_id)
+            placed.append(int(tile_id))
+
+        return out, len(placed), placed
+
+    def _plan_room_graph_marker_layout(
+        self,
+        grid: np.ndarray,
+        *,
+        graph: Optional[nx.Graph],
+        room_id: Any,
+        start_goal: Optional[Tuple[Tuple[int, int], Tuple[int, int]]] = None,
+    ) -> List[Tuple[int, Tuple[int, int]]]:
+        """
+        Compute the deterministic graph-marker placement plan for a room without
+        mutating the room grid.
+
+        The returned slots are the same positions `_overlay_room_graph_markers`
+        would target on the same pre-overlay grid. This lets audits measure how
+        much semantic placement is learned vs. forced by the symbolic overlay.
+        """
+        base_grid = np.asarray(grid, dtype=np.int32).copy()
+        markers = self._resolve_room_graph_markers(graph, room_id)
+        if not markers:
+            return []
+
+        if start_goal is None:
+            start_goal = self._extract_room_start_goal(graph, room_id) if isinstance(graph, nx.Graph) else None
+        start_coord, goal_coord = start_goal if start_goal is not None else (
+            (ROOM_HEIGHT // 2, 0),
+            (ROOM_HEIGHT // 2, ROOM_WIDTH - 1),
+        )
+        role_flags = self._room_role_flags(dict(graph.nodes[room_id])) if isinstance(graph, nx.Graph) and room_id in graph else {}
+        semantics = self._extract_room_topology_semantics(graph, room_id) if isinstance(graph, nx.Graph) and room_id in graph else {
+            "required_doors": {},
+            "incoming_dirs": set(),
+            "outgoing_dirs": set(),
+        }
+        semantic_anchors = build_room_semantic_anchor_points(
+            room_shape=(ROOM_HEIGHT, ROOM_WIDTH),
+            start=start_coord,
+            goal=goal_coord,
+            required_doors=semantics["required_doors"],
+            incoming_dirs=semantics["incoming_dirs"],
+            outgoing_dirs=semantics["outgoing_dirs"],
+            room_role_flags=role_flags,
+            semantic_puzzle_offset=self.default_semantic_puzzle_offset,
+        )
+        preferred_positions: Dict[int, Tuple[int, int]] = {
+            int(TileID.START): self._clamp_room_coord(semantic_anchors.get("start", start_coord)),
+            int(TileID.TRIFORCE): self._clamp_room_coord(semantic_anchors.get("goal", goal_coord)),
+            int(TileID.BOSS): self._clamp_room_coord(semantic_anchors.get("boss", (ROOM_HEIGHT // 2, ROOM_WIDTH // 2))),
+            int(TileID.ENEMY): self._clamp_room_coord(semantic_anchors.get("enemy", (ROOM_HEIGHT // 2 - 2, ROOM_WIDTH // 2))),
+            int(TileID.KEY_SMALL): self._clamp_room_coord(semantic_anchors.get("key", (ROOM_HEIGHT // 2, max(1, ROOM_WIDTH // 2 - 2)))),
+            int(TileID.KEY_BOSS): self._clamp_room_coord(semantic_anchors.get("key", (ROOM_HEIGHT // 2, ROOM_WIDTH // 2))),
+            int(TileID.KEY_ITEM): self._clamp_room_coord(semantic_anchors.get("item", (ROOM_HEIGHT // 2, min(ROOM_WIDTH - 2, ROOM_WIDTH // 2 + 2)))),
+            int(TileID.ITEM_MINOR): self._clamp_room_coord(semantic_anchors.get("item", (min(ROOM_HEIGHT - 2, ROOM_HEIGHT // 2 + 2), ROOM_WIDTH // 2))),
+            int(TileID.STAIR): self._clamp_room_coord(semantic_anchors.get("item", (min(ROOM_HEIGHT - 2, ROOM_HEIGHT // 2 + 2), ROOM_WIDTH // 2))),
+            int(TileID.PUZZLE): self._clamp_room_coord(semantic_anchors.get("puzzle", (max(1, ROOM_HEIGHT // 2 - 2), ROOM_WIDTH // 2))),
+        }
+
+        occupied: Set[Tuple[int, int]] = set()
+        placements: List[Tuple[int, Tuple[int, int]]] = []
+        for tile_id in markers:
+            preferred = preferred_positions.get(int(tile_id), (ROOM_HEIGHT // 2, ROOM_WIDTH // 2))
+            slot = self._find_room_graph_marker_slot(
+                base_grid,
+                preferred=preferred,
+                occupied=occupied,
+                tile_id=int(tile_id),
+            )
+            occupied.add(slot)
+            placements.append((int(tile_id), slot))
+        return placements
+
+    def _measure_room_graph_marker_alignment(
+        self,
+        grid: np.ndarray,
+        *,
+        placements: List[Tuple[int, Tuple[int, int]]],
+        prefix: str,
+    ) -> Dict[str, float]:
+        """Measure how well a room already matches the planned graph markers."""
+        grid_np = np.asarray(grid, dtype=np.int32)
+        expected = int(len(placements))
+        if expected <= 0:
+            return {
+                f"{prefix}graph_marker_expected": 0.0,
+                f"{prefix}graph_marker_exact_matches": 0.0,
+                f"{prefix}graph_marker_tile_present": 0.0,
+                f"{prefix}graph_marker_exact_match_rate": 1.0,
+                f"{prefix}graph_marker_presence_rate": 1.0,
+                f"{prefix}semantic_anchor_avg_manhattan_error": 0.0,
+                f"{prefix}semantic_anchor_max_manhattan_error": 0.0,
+            }
+
+        exact_matches = 0
+        tile_present = 0
+        distances: List[float] = []
+        for tile_id, slot in placements:
+            sr, sc = int(slot[0]), int(slot[1])
+            if int(grid_np[sr, sc]) == int(tile_id):
+                exact_matches += 1
+                tile_present += 1
+                distances.append(0.0)
+                continue
+
+            positions = np.argwhere(grid_np == int(tile_id))
+            if positions.size == 0:
+                distances.append(float(ROOM_HEIGHT + ROOM_WIDTH))
+                continue
+
+            tile_present += 1
+            min_dist = min(
+                abs(int(pos[0]) - sr) + abs(int(pos[1]) - sc)
+                for pos in positions
+            )
+            distances.append(float(min_dist))
+
+        exact_rate = float(exact_matches) / float(expected)
+        presence_rate = float(tile_present) / float(expected)
+        avg_error = float(sum(distances) / len(distances)) if distances else 0.0
+        max_error = float(max(distances)) if distances else 0.0
+        return {
+            f"{prefix}graph_marker_expected": float(expected),
+            f"{prefix}graph_marker_exact_matches": float(exact_matches),
+            f"{prefix}graph_marker_tile_present": float(tile_present),
+            f"{prefix}graph_marker_exact_match_rate": exact_rate,
+            f"{prefix}graph_marker_presence_rate": presence_rate,
+            f"{prefix}semantic_anchor_avg_manhattan_error": avg_error,
+            f"{prefix}semantic_anchor_max_manhattan_error": max_error,
+        }
 
     def _build_latent_edit_mask(
         self,
@@ -1569,6 +2878,20 @@ class NeuralSymbolicDungeonPipeline:
                 f"Neighbor latent '{direction_key}' has unsupported type: {type(latent).__name__}"
             )
         return normalized
+
+    def _cast_latent_for_vqvae_decode(self, latent: torch.Tensor) -> torch.Tensor:
+        """Match sampled latent dtype/device to the VQ-VAE decoder contract."""
+        try:
+            reference = next(self.vqvae.parameters())
+            target_device = reference.device
+            target_dtype = reference.dtype
+        except StopIteration:
+            target_device = self.device
+            target_dtype = latent.dtype
+
+        if latent.device == target_device and latent.dtype == target_dtype:
+            return latent
+        return latent.to(device=target_device, dtype=target_dtype)
 
     def _estimate_safe_batch_size(
         self,
@@ -1795,6 +3118,11 @@ class NeuralSymbolicDungeonPipeline:
             logits_batch = self.vqvae.decode_indices(indices_t)
             z_batch = self.vqvae.quantizer.encode_indices(indices_t).permute(0, 3, 1, 2).contiguous()
         else:
+            guidance_scale, logic_guidance_scale = self._resolve_effective_sampling_guidance(
+                use_fast_sampling=use_fast_sampling,
+                guidance_scale=float(guidance_scale),
+                logic_guidance_scale=float(logic_guidance_scale),
+            )
             self.diffusion.cfg_scale = float(guidance_scale)
             self.diffusion.guidance.logic_net = self.logic_net if logic_guidance_scale > 0 else None
             self.diffusion.guidance.guidance_scale = max(0.0, float(logic_guidance_scale))
@@ -1863,8 +3191,7 @@ class NeuralSymbolicDungeonPipeline:
                             )
                     except (AttributeError, RuntimeError, ValueError, TypeError):
                         continue
-
-            logits_batch = self.vqvae.decode(z_batch)
+            logits_batch = self.vqvae.decode(self._cast_latent_for_vqvae_decode(z_batch))
 
         out: Dict[Any, RoomGenerationResult] = {}
         for i, inp in enumerate(per_room_inputs):
@@ -1924,6 +3251,8 @@ class NeuralSymbolicDungeonPipeline:
         precomputed_latent: Optional[torch.Tensor] = None,
         precomputed_logits: Optional[torch.Tensor] = None,
         precomputed_tokens: Optional[torch.Tensor] = None,
+        allow_teacher_fallback: Optional[bool] = None,
+        room_generator_override: Optional[str] = None,
     ) -> RoomGenerationResult:
         """
         Generate a single room using the full 7-block pipeline.
@@ -1977,6 +3306,18 @@ class NeuralSymbolicDungeonPipeline:
             start_goal_coords = self.default_start_goal_coords
         elif start_goal_coords is not None:
             start_goal_coords = self._normalize_start_goal_coords(start_goal_coords)
+        effective_room_generator_mode = (
+            self.room_generator_mode
+            if room_generator_override is None
+            else str(room_generator_override).strip().lower()
+        )
+        if allow_teacher_fallback is None:
+            if effective_room_generator_mode == "discrete_masked":
+                allow_teacher_fallback = self.default_masked_room_teacher_fallback_enabled
+            else:
+                allow_teacher_fallback = self.default_fast_sampler_teacher_fallback_enabled
+        else:
+            allow_teacher_fallback = bool(allow_teacher_fallback)
 
         if logic_guidance_scale > 0 and self.logic_net is None:
             self._bump_diagnostic("logic_guidance_disabled_missing_component")
@@ -2020,7 +3361,7 @@ class NeuralSymbolicDungeonPipeline:
             logits = precomputed_logits.to(self.device)
             if precomputed_tokens is not None:
                 sampled_tokens = precomputed_tokens.to(self.device, dtype=torch.long)
-        elif self.room_generator_mode == "discrete_masked":
+        elif effective_room_generator_mode == "discrete_masked":
             fixed_tokens = None
             fixed_mask = None
             if mission_graph_for_room is not None:
@@ -2088,6 +3429,11 @@ class NeuralSymbolicDungeonPipeline:
             )
         else:
             # BLOCK V: Logic guidance configuration for diffusion sampler
+            guidance_scale, logic_guidance_scale = self._resolve_effective_sampling_guidance(
+                use_fast_sampling=use_fast_sampling,
+                guidance_scale=float(guidance_scale),
+                logic_guidance_scale=float(logic_guidance_scale),
+            )
             self.diffusion.cfg_scale = float(guidance_scale)
             self.diffusion.guidance.logic_net = self.logic_net if logic_guidance_scale > 0 else None
             self.diffusion.guidance.guidance_scale = max(0.0, float(logic_guidance_scale))
@@ -2166,7 +3512,7 @@ class NeuralSymbolicDungeonPipeline:
                     logger.debug("Boundary latent masking skipped due to error: %s", e)
 
             # BLOCK II: VQ-VAE Decoding
-            logits = self.vqvae.decode(z_latent)  # (1, 44, 16, 11)
+            logits = self.vqvae.decode(self._cast_latent_for_vqvae_decode(z_latent))  # (1, 44, 16, 11)
         validate_tensor_contract(
             logits,
             BlockShapeContract(
@@ -2226,7 +3572,22 @@ class NeuralSymbolicDungeonPipeline:
             self._bump_diagnostic("topology_door_tiles_forced")
             logger.debug("Room %s: forced %d door tiles via constrained decoding", room_id, door_tiles_forced)
 
-        if self.room_generator_mode == "discrete_masked" and sampled_tokens is not None:
+        semantic_decode_stats = self._apply_semantic_constrained_decoding(
+            logits,
+            graph=mission_graph_for_room,
+            room_id=room_id,
+            start_goal=start_goal_coords,
+        )
+        if int(semantic_decode_stats.get("biased_slots", 0)) > 0:
+            self._bump_diagnostic("semantic_constrained_decode_applied")
+            logger.debug(
+                "Room %s: biased %d/%d planned graph-marker slots via semantic constrained decoding",
+                room_id,
+                int(semantic_decode_stats.get("biased_slots", 0)),
+                int(semantic_decode_stats.get("planned_markers", 0)),
+            )
+
+        if effective_room_generator_mode == "discrete_masked" and sampled_tokens is not None:
             neural_grid = sampled_tokens.detach().cpu().numpy()[0].astype(np.int32, copy=False)
         else:
             neural_grid = logits.argmax(dim=1).detach().cpu().numpy()[0]  # (16, 11)
@@ -2239,6 +3600,46 @@ class NeuralSymbolicDungeonPipeline:
                 neural_invalid_ids,
                 neural_invalid_count,
             )
+        neural_grid, neural_semantic_strip_count, neural_semantic_strip_ids, neural_semantic_preserved_count, neural_semantic_preserved_ids = self._strip_volatile_room_semantics(
+            neural_grid,
+            graph=mission_graph_for_room,
+            room_id=room_id,
+            start_goal=start_goal_coords,
+        )
+        if neural_semantic_strip_count > 0:
+            self._bump_diagnostic("neural_room_semantics_stripped")
+            logger.debug(
+                "Room %s stripped %d volatile semantic tiles from neural output: %s",
+                room_id,
+                neural_semantic_strip_count,
+                neural_semantic_strip_ids,
+            )
+        if neural_semantic_preserved_count > 0:
+            self._bump_diagnostic("neural_graph_semantic_hints_salvaged")
+            logger.debug(
+                "Room %s preserved %d graph-owned semantic hints from neural output: %s",
+                room_id,
+                neural_semantic_preserved_count,
+                neural_semantic_preserved_ids,
+            )
+        neural_structural_cleanup = {
+            "invalid_door_tiles_removed": 0,
+            "interior_obstacle_tiles_removed": 0,
+            "interior_obstacle_components_removed": 0,
+        }
+        if effective_room_generator_mode == "latent_diffusion":
+            neural_grid, neural_structural_cleanup = self._strip_structural_room_artifacts(
+                neural_grid,
+                graph=mission_graph_for_room,
+                room_id=room_id,
+            )
+            if any(int(v) > 0 for v in neural_structural_cleanup.values()):
+                self._bump_diagnostic("neural_structural_artifacts_stripped")
+                logger.debug(
+                    "Room %s stripped structural artifacts from neural output: %s",
+                    room_id,
+                    neural_structural_cleanup,
+                )
         neural_probs = logits.softmax(dim=1).detach().cpu().numpy()[0]  # (44, 16, 11)
         
         # BLOCK III: Removed (Migrated to Block II.a Constrained Decoding)
@@ -2250,10 +3651,46 @@ class NeuralSymbolicDungeonPipeline:
         final_grid = neural_grid.copy()
         repaired_invalid_count = 0
         repaired_invalid_ids: List[int] = []
+        repaired_semantic_strip_count = 0
+        repaired_semantic_strip_ids: List[int] = []
+        repaired_semantic_preserved_count = 0
+        repaired_semantic_preserved_ids: List[int] = []
+        neural_boundary_shell = {
+            "boundary_wall_tiles_forced": 0,
+            "boundary_door_tiles_forced": 0,
+            "interior_door_apron_tiles_forced": 0,
+        }
+        repaired_boundary_shell = {
+            "boundary_wall_tiles_forced": 0,
+            "boundary_door_tiles_forced": 0,
+            "interior_door_apron_tiles_forced": 0,
+        }
+        neural_puzzle_scaffold = {
+            "applied": 0,
+            "tiles_added": 0,
+            "segments_added": 0,
+            "existing_structure_tiles": 0,
+            "planned_route_pixels": 0,
+        }
+        final_puzzle_scaffold = {
+            "applied": 0,
+            "tiles_added": 0,
+            "segments_added": 0,
+            "existing_structure_tiles": 0,
+            "planned_route_pixels": 0,
+        }
+        repaired_structural_cleanup = {
+            "invalid_door_tiles_removed": 0,
+            "interior_obstacle_tiles_removed": 0,
+            "interior_obstacle_components_removed": 0,
+        }
         repair_diag: Dict[str, Any] = {}
+        normalized_start_goal: Optional[Tuple[Tuple[int, int], Tuple[int, int]]] = None
+        if start_goal_coords is not None:
+            normalized_start_goal = self._normalize_start_goal_coords(start_goal_coords)
         
         if apply_repair and start_goal_coords is not None:
-            start, goal = self._normalize_start_goal_coords(start_goal_coords)
+            start, goal = normalized_start_goal if normalized_start_goal is not None else self._normalize_start_goal_coords(start_goal_coords)
             try:
                 if isinstance(mission_graph_for_room, nx.Graph) and room_id in mission_graph_for_room:
                     room_plan_mask = self._build_room_plan_trace(
@@ -2314,6 +3751,43 @@ class NeuralSymbolicDungeonPipeline:
                             room_id,
                             np.array2string(repaired_grid_raw, max_line_width=240),
                         )
+                    repaired_grid, repaired_semantic_strip_count, repaired_semantic_strip_ids, repaired_semantic_preserved_count, repaired_semantic_preserved_ids = (
+                        self._strip_volatile_room_semantics(
+                            repaired_grid,
+                            graph=mission_graph_for_room,
+                            room_id=room_id,
+                            start_goal=normalized_start_goal if normalized_start_goal is not None else start_goal_coords,
+                        )
+                    )
+                    if repaired_semantic_strip_count > 0:
+                        self._bump_diagnostic("repair_room_semantics_stripped")
+                        logger.debug(
+                            "Room %s stripped %d volatile semantic tiles after repair: %s",
+                            room_id,
+                            repaired_semantic_strip_count,
+                            repaired_semantic_strip_ids,
+                        )
+                    if repaired_semantic_preserved_count > 0:
+                        self._bump_diagnostic("repair_graph_semantic_hints_salvaged")
+                        logger.debug(
+                            "Room %s preserved %d graph-owned semantic hints after repair: %s",
+                            room_id,
+                            repaired_semantic_preserved_count,
+                            repaired_semantic_preserved_ids,
+                        )
+                    if effective_room_generator_mode == "latent_diffusion":
+                        repaired_grid, repaired_structural_cleanup = self._strip_structural_room_artifacts(
+                            repaired_grid,
+                            graph=mission_graph_for_room,
+                            room_id=room_id,
+                        )
+                        if any(int(v) > 0 for v in repaired_structural_cleanup.values()):
+                            self._bump_diagnostic("repair_structural_artifacts_stripped")
+                            logger.debug(
+                                "Room %s stripped structural artifacts after repair: %s",
+                                room_id,
+                                repaired_structural_cleanup,
+                            )
                     repair_mask = (repaired_grid != neural_grid)
                     final_grid = repaired_grid
                     was_repaired = bool(np.any(repair_mask))
@@ -2325,7 +3799,7 @@ class NeuralSymbolicDungeonPipeline:
                 self._bump_diagnostic("room_repair_exception")
                 logger.error(f"Room {room_id}: Repair error: {e}")
         elif start_goal_coords is not None:
-            start, goal = self._normalize_start_goal_coords(start_goal_coords)
+            start, goal = normalized_start_goal if normalized_start_goal is not None else self._normalize_start_goal_coords(start_goal_coords)
             try:
                 if isinstance(mission_graph_for_room, nx.Graph) and room_id in mission_graph_for_room:
                     room_plan_mask = self._build_room_plan_trace(
@@ -2336,7 +3810,159 @@ class NeuralSymbolicDungeonPipeline:
                     )
             except (AttributeError, RuntimeError, ValueError, TypeError):
                 room_plan_mask = None
-        
+
+        neural_grid, neural_boundary_shell = self._enforce_room_boundary_shell(
+            neural_grid,
+            graph=mission_graph_for_room,
+            room_id=room_id,
+        )
+        final_grid, repaired_boundary_shell = self._enforce_room_boundary_shell(
+            final_grid,
+            graph=mission_graph_for_room,
+            room_id=room_id,
+        )
+        if any(int(v) > 0 for v in neural_boundary_shell.values()):
+            self._bump_diagnostic("neural_boundary_shell_enforced")
+            logger.debug(
+                "Room %s enforced boundary shell on neural output: %s",
+                room_id,
+                neural_boundary_shell,
+            )
+        if any(int(v) > 0 for v in repaired_boundary_shell.values()):
+            self._bump_diagnostic("final_boundary_shell_enforced")
+            logger.debug(
+                "Room %s enforced boundary shell on final output: %s",
+                room_id,
+                repaired_boundary_shell,
+            )
+
+        overlay_start_goal = normalized_start_goal
+        if overlay_start_goal is None and isinstance(mission_graph_for_room, nx.Graph) and room_id in mission_graph_for_room:
+            overlay_start_goal = self._extract_room_start_goal(mission_graph_for_room, room_id)
+
+        neural_grid, _, _, neural_post_boundary_preserved_count, neural_post_boundary_preserved_ids = (
+            self._strip_volatile_room_semantics(
+                neural_grid,
+                graph=mission_graph_for_room,
+                room_id=room_id,
+                start_goal=overlay_start_goal,
+            )
+        )
+        if neural_post_boundary_preserved_count > 0:
+            self._bump_diagnostic("neural_post_boundary_graph_semantic_hints_salvaged")
+            logger.debug(
+                "Room %s re-salvaged %d graph-owned semantic hints after boundary enforcement: %s",
+                room_id,
+                neural_post_boundary_preserved_count,
+                neural_post_boundary_preserved_ids,
+            )
+
+        final_grid, _, _, final_post_boundary_preserved_count, final_post_boundary_preserved_ids = (
+            self._strip_volatile_room_semantics(
+                final_grid,
+                graph=mission_graph_for_room,
+                room_id=room_id,
+                start_goal=overlay_start_goal,
+            )
+        )
+        if final_post_boundary_preserved_count > 0:
+            self._bump_diagnostic("final_post_boundary_graph_semantic_hints_salvaged")
+            logger.debug(
+                "Room %s re-salvaged %d graph-owned semantic hints on final grid after boundary enforcement: %s",
+                room_id,
+                final_post_boundary_preserved_count,
+                final_post_boundary_preserved_ids,
+            )
+
+        neural_grid, neural_puzzle_scaffold = self._apply_puzzle_room_scaffold(
+            neural_grid,
+            graph=mission_graph_for_room,
+            room_id=room_id,
+            room_plan_mask=room_plan_mask,
+            start_goal=overlay_start_goal,
+        )
+        final_grid, final_puzzle_scaffold = self._apply_puzzle_room_scaffold(
+            final_grid,
+            graph=mission_graph_for_room,
+            room_id=room_id,
+            room_plan_mask=room_plan_mask,
+            start_goal=overlay_start_goal,
+        )
+        if int(final_puzzle_scaffold.get("applied", 0)) > 0:
+            self._bump_diagnostic("puzzle_room_scaffold_applied")
+            puzzle_archetype = str(final_puzzle_scaffold.get("archetype", "")).strip().lower()
+            if puzzle_archetype:
+                self._bump_diagnostic(f"puzzle_room_scaffold_{puzzle_archetype}")
+            logger.debug(
+                "Room %s applied puzzle scaffold: %s",
+                room_id,
+                final_puzzle_scaffold,
+            )
+
+        neural_pre_marker_grid = np.asarray(neural_grid, dtype=np.int32).copy()
+        final_pre_marker_grid = np.asarray(final_grid, dtype=np.int32).copy()
+        neural_marker_plan = self._plan_room_graph_marker_layout(
+            neural_pre_marker_grid,
+            graph=mission_graph_for_room,
+            room_id=room_id,
+            start_goal=overlay_start_goal,
+        )
+        final_marker_plan = self._plan_room_graph_marker_layout(
+            final_pre_marker_grid,
+            graph=mission_graph_for_room,
+            room_id=room_id,
+            start_goal=overlay_start_goal,
+        )
+
+        if bool(self.default_deterministic_graph_marker_overlay_enabled):
+            neural_grid, neural_marker_count, neural_marker_ids = self._overlay_room_graph_markers(
+                neural_grid,
+                graph=mission_graph_for_room,
+                room_id=room_id,
+                start_goal=overlay_start_goal,
+            )
+            final_grid, final_marker_count, final_marker_ids = self._overlay_room_graph_markers(
+                final_grid,
+                graph=mission_graph_for_room,
+                room_id=room_id,
+                start_goal=overlay_start_goal,
+            )
+            if final_marker_count > 0:
+                logger.debug(
+                    "Room %s placed %d graph-owned semantic markers: %s",
+                    room_id,
+                    final_marker_count,
+                    final_marker_ids,
+                )
+        else:
+            neural_marker_count = 0
+            final_marker_count = 0
+            neural_marker_ids = []
+            final_marker_ids = []
+            self._bump_diagnostic("deterministic_graph_marker_overlay_disabled")
+
+        neural_marker_alignment = self._measure_room_graph_marker_alignment(
+            neural_pre_marker_grid,
+            placements=neural_marker_plan,
+            prefix="neural_",
+        )
+        final_pre_overlay_alignment = self._measure_room_graph_marker_alignment(
+            final_pre_marker_grid,
+            placements=final_marker_plan,
+            prefix="final_pre_overlay_",
+        )
+        final_post_overlay_alignment = self._measure_room_graph_marker_alignment(
+            final_grid,
+            placements=final_marker_plan,
+            prefix="final_post_overlay_",
+        )
+        final_marker_overwrites = sum(
+            int(final_pre_marker_grid[int(slot[0]), int(slot[1])]) != int(tile_id)
+            for tile_id, slot in final_marker_plan
+        )
+        final_marker_expected = max(1, len(final_marker_plan))
+        final_marker_overwrite_rate = float(final_marker_overwrites) / float(final_marker_expected)
+
         # VGLC Compliance: Validate room dimensions
         valid_dims, dim_msg = validate_room_dimensions(final_grid)
         if not valid_dims:
@@ -2363,12 +3989,113 @@ class NeuralSymbolicDungeonPipeline:
             'tiles_changed': int(np.sum(repair_mask)) if repair_mask is not None else 0,
             'neural_invalid_tile_ids': int(neural_invalid_count),
             'repair_invalid_tile_ids': int(repaired_invalid_count),
+            'neural_semantic_tiles_stripped': int(neural_semantic_strip_count),
+            'neural_graph_semantic_hints_salvaged': int(neural_semantic_preserved_count),
+            'repair_semantic_tiles_stripped': int(repaired_semantic_strip_count),
+            'repair_graph_semantic_hints_salvaged': int(repaired_semantic_preserved_count),
+            'neural_invalid_door_tiles_removed': int(neural_structural_cleanup['invalid_door_tiles_removed']),
+            'neural_interior_obstacle_tiles_removed': int(neural_structural_cleanup['interior_obstacle_tiles_removed']),
+            'neural_interior_obstacle_components_removed': int(neural_structural_cleanup['interior_obstacle_components_removed']),
+            'neural_boundary_wall_tiles_forced': int(neural_boundary_shell['boundary_wall_tiles_forced']),
+            'neural_boundary_door_tiles_forced': int(neural_boundary_shell['boundary_door_tiles_forced']),
+            'neural_interior_door_apron_tiles_forced': int(neural_boundary_shell['interior_door_apron_tiles_forced']),
+            'repair_invalid_door_tiles_removed': int(repaired_structural_cleanup['invalid_door_tiles_removed']),
+            'repair_interior_obstacle_tiles_removed': int(repaired_structural_cleanup['interior_obstacle_tiles_removed']),
+            'repair_interior_obstacle_components_removed': int(repaired_structural_cleanup['interior_obstacle_components_removed']),
+            'repair_boundary_wall_tiles_forced': int(repaired_boundary_shell['boundary_wall_tiles_forced']),
+            'repair_boundary_door_tiles_forced': int(repaired_boundary_shell['boundary_door_tiles_forced']),
+            'repair_interior_door_apron_tiles_forced': int(repaired_boundary_shell['interior_door_apron_tiles_forced']),
+            'neural_puzzle_scaffold_applied': int(neural_puzzle_scaffold['applied']),
+            'neural_puzzle_scaffold_tiles_added': int(neural_puzzle_scaffold['tiles_added']),
+            'neural_puzzle_scaffold_segments_added': int(neural_puzzle_scaffold['segments_added']),
+            'neural_puzzle_scaffold_optional_segments_requested': int(neural_puzzle_scaffold.get('optional_segments_requested', 0)),
+            'neural_puzzle_scaffold_optional_segments_applied': int(neural_puzzle_scaffold.get('optional_segments_applied', 0)),
+            'final_puzzle_scaffold_applied': int(final_puzzle_scaffold['applied']),
+            'final_puzzle_scaffold_tiles_added': int(final_puzzle_scaffold['tiles_added']),
+            'final_puzzle_scaffold_segments_added': int(final_puzzle_scaffold['segments_added']),
+            'final_puzzle_scaffold_optional_segments_requested': int(final_puzzle_scaffold.get('optional_segments_requested', 0)),
+            'final_puzzle_scaffold_optional_segments_applied': int(final_puzzle_scaffold.get('optional_segments_applied', 0)),
+            'neural_graph_markers_placed': int(neural_marker_count),
+            'final_graph_markers_placed': int(final_marker_count),
+            'final_graph_marker_overwrites': int(final_marker_overwrites),
+            'final_graph_marker_overwrite_rate': float(final_marker_overwrite_rate),
+            'semantic_constrained_decode_planned_markers': float(semantic_decode_stats.get('planned_markers', 0)),
+            'semantic_constrained_decode_biased_slots': float(semantic_decode_stats.get('biased_slots', 0)),
+            'neural_post_boundary_graph_semantic_hints_salvaged': float(neural_post_boundary_preserved_count),
+            'final_post_boundary_graph_semantic_hints_salvaged': float(final_post_boundary_preserved_count),
             'vglc_compliant': valid_dims,
             'wfc_feedback_rounds': float(repair_diag.get('feedback_rounds', 0)),
             'wfc_failures': float(repair_diag.get('wfc_failures', 0)),
             'planned_traversability_pixels': float(np.sum(room_plan_mask)) if isinstance(room_plan_mask, np.ndarray) else 0.0,
+            'used_fast_sampling': float(bool(use_fast_sampling)),
         }
-        
+        metrics.update(neural_marker_alignment)
+        metrics.update(final_pre_overlay_alignment)
+        metrics.update(final_post_overlay_alignment)
+
+        teacher_fallback_source: Optional[str] = None
+        if (
+            bool(allow_teacher_fallback)
+            and effective_room_generator_mode == "latent_diffusion"
+            and bool(use_fast_sampling)
+            and self.diffusion.supports_fast_sampling()
+            and self._should_retry_room_with_teacher(
+                final_grid=final_grid,
+                graph=mission_graph_for_room,
+                room_id=room_id,
+                metrics=metrics,
+                source_mode="fast_sampler",
+            )
+        ):
+            teacher_fallback_source = "fast_sampler"
+        elif (
+            bool(allow_teacher_fallback)
+            and effective_room_generator_mode == "discrete_masked"
+            and self.diffusion is not None
+            and self._should_retry_room_with_teacher(
+                final_grid=final_grid,
+                graph=mission_graph_for_room,
+                room_id=room_id,
+                metrics=metrics,
+                source_mode="masked_room",
+            )
+        ):
+            teacher_fallback_source = "masked_room"
+
+        if teacher_fallback_source is not None:
+            self._bump_diagnostic(f"{teacher_fallback_source}_teacher_fallback")
+            logger.debug(
+                "Room %s triggered %s teacher fallback; rerunning with full diffusion teacher.",
+                room_id,
+                teacher_fallback_source.replace("_", "-"),
+            )
+            teacher_result = self.generate_room(
+                neighbor_latents=neighbor_latents,
+                graph_context=graph_context,
+                room_id=room_id,
+                boundary_constraints=boundary_constraints,
+                position=position,
+                reference_room_maps=reference_room_maps,
+                guidance_scale=guidance_scale,
+                logic_guidance_scale=logic_guidance_scale,
+                num_diffusion_steps=max(int(self.default_num_diffusion_steps), int(num_diffusion_steps)),
+                use_fast_sampling=False,
+                latent_sampler=latent_sampler,
+                categorical_codebook_size=categorical_codebook_size,
+                use_ddim=use_ddim,
+                apply_repair=apply_repair,
+                start_goal_coords=start_goal_coords,
+                seed=seed,
+                precomputed_condition=condition.detach().clone(),
+                allow_teacher_fallback=False,
+                room_generator_override="latent_diffusion",
+            )
+            teacher_result.metrics["teacher_fallback_used"] = 1.0
+            teacher_result.metrics[f"teacher_fallback_source_{teacher_fallback_source}"] = 1.0
+            teacher_result.metrics["original_fallback_candidate_neural_grid_entropy"] = float(metrics["neural_grid_entropy"])
+            teacher_result.metrics["original_fallback_candidate_tiles_changed"] = float(metrics["tiles_changed"])
+            return teacher_result
+
         return RoomGenerationResult(
             room_id=room_id,
             room_grid=final_grid,
@@ -3112,6 +4839,39 @@ class NeuralSymbolicDungeonPipeline:
         # Compute overall metrics
         generation_time = time.time() - start_time
         num_rooms_generated = len(room_set.rooms)
+        room_metric_dicts = [dict(r.metrics) for r in room_set.rooms.values()]
+        total_graph_marker_expected = float(sum(m.get("final_pre_overlay_graph_marker_expected", 0.0) for m in room_metric_dicts))
+        total_graph_marker_overwrites = float(sum(m.get("final_graph_marker_overwrites", 0.0) for m in room_metric_dicts))
+        avg_neural_graph_marker_exact_match_rate = (
+            float(np.mean([m.get("neural_graph_marker_exact_match_rate", 1.0) for m in room_metric_dicts]))
+            if room_metric_dicts
+            else 1.0
+        )
+        avg_final_pre_overlay_graph_marker_exact_match_rate = (
+            float(np.mean([m.get("final_pre_overlay_graph_marker_exact_match_rate", 1.0) for m in room_metric_dicts]))
+            if room_metric_dicts
+            else 1.0
+        )
+        avg_final_post_overlay_graph_marker_exact_match_rate = (
+            float(np.mean([m.get("final_post_overlay_graph_marker_exact_match_rate", 1.0) for m in room_metric_dicts]))
+            if room_metric_dicts
+            else 1.0
+        )
+        avg_final_graph_marker_overwrite_rate = (
+            float(np.mean([m.get("final_graph_marker_overwrite_rate", 0.0) for m in room_metric_dicts]))
+            if room_metric_dicts
+            else 0.0
+        )
+        avg_neural_semantic_anchor_error = (
+            float(np.mean([m.get("neural_semantic_anchor_avg_manhattan_error", 0.0) for m in room_metric_dicts]))
+            if room_metric_dicts
+            else 0.0
+        )
+        avg_final_pre_overlay_semantic_anchor_error = (
+            float(np.mean([m.get("final_pre_overlay_semantic_anchor_avg_manhattan_error", 0.0) for m in room_metric_dicts]))
+            if room_metric_dicts
+            else 0.0
+        )
         metrics = {
             'num_rooms': num_rooms_generated,
             'total_tiles_repaired': sum(r.metrics.get('tiles_changed', 0) for r in room_set.rooms.values()),
@@ -3123,6 +4883,14 @@ class NeuralSymbolicDungeonPipeline:
             'dungeon_shape': dungeon_grid.shape,
             'generation_time_sec': generation_time,
             'batch_generation_diagnostics': room_set.batch_runtime_diagnostics,
+            'total_graph_marker_expected': total_graph_marker_expected,
+            'total_graph_marker_overwrites': total_graph_marker_overwrites,
+            'avg_neural_graph_marker_exact_match_rate': avg_neural_graph_marker_exact_match_rate,
+            'avg_final_pre_overlay_graph_marker_exact_match_rate': avg_final_pre_overlay_graph_marker_exact_match_rate,
+            'avg_final_post_overlay_graph_marker_exact_match_rate': avg_final_post_overlay_graph_marker_exact_match_rate,
+            'avg_final_graph_marker_overwrite_rate': avg_final_graph_marker_overwrite_rate,
+            'avg_neural_semantic_anchor_error': avg_neural_semantic_anchor_error,
+            'avg_final_pre_overlay_semantic_anchor_error': avg_final_pre_overlay_semantic_anchor_error,
         }
         
         logger.info(f"Dungeon generated in {generation_time:.2f}s "
@@ -3592,7 +5360,7 @@ class NeuralSymbolicDungeonPipeline:
             return self._coerce_bool(attrs.get(name)) or any(self._coerce_bool(attrs.get(alias)) for alias in aliases)
 
         return {
-            "is_start": _hint("is_start", "is_entry") or "s" in tokens or "start" in tokens,
+            "is_start": _hint("is_start", "is_entry") or "start" in tokens,
             "has_enemy": _hint("has_enemy") or "e" in tokens or "enemy" in tokens,
             "has_key": _hint("has_key") or "k" in tokens or "key" in tokens,
             "has_item": _hint("has_item", "has_macro_item", "has_minor_item") or "i" in tokens or "item" in tokens or "treasure" in tokens,
@@ -3720,8 +5488,12 @@ class NeuralSymbolicDungeonPipeline:
             start=start,
             goal=goal,
             required_doors=semantics["required_doors"],
+            incoming_dirs=semantics["incoming_dirs"],
+            outgoing_dirs=semantics["outgoing_dirs"],
             edge_constraint_tokens=semantics["edge_constraints"],
             room_role_flags=self._room_role_flags(attrs),
+            semantic_role_prior_strength=self.default_semantic_role_prior_strength,
+            semantic_puzzle_offset=self.default_semantic_puzzle_offset,
         )
         return torch.from_numpy(topo_np).unsqueeze(0).to(device=self.device, dtype=torch.float32)
 
@@ -3849,12 +5621,59 @@ class NeuralSymbolicDungeonPipeline:
             start_goal = self._extract_room_start_goal(graph, room_id)
         if start_goal is not None:
             start, goal = start_goal
-            sr, sc = self._clamp_room_coord(start)
-            gr, gc = self._clamp_room_coord(goal)
-            fixed_tokens[0, sr, sc] = int(SEMANTIC_PALETTE["START"])
+            role_flags = self._room_role_flags(dict(graph.nodes[room_id]))
+            semantic_anchors = build_room_semantic_anchor_points(
+                room_shape=(ROOM_HEIGHT, ROOM_WIDTH),
+                start=start,
+                goal=goal,
+                required_doors=semantics["required_doors"],
+                incoming_dirs=semantics["incoming_dirs"],
+                outgoing_dirs=semantics["outgoing_dirs"],
+                room_role_flags=role_flags,
+                semantic_puzzle_offset=self.default_semantic_puzzle_offset,
+            )
+            sr, sc = self._clamp_room_coord(semantic_anchors.get("start", start))
+            gr, gc = self._clamp_room_coord(semantic_anchors.get("goal", goal))
+
+            # These anchors primarily encode local traversability hints. Only the
+            # actual start / goal rooms should receive semantic START / TRIFORCE
+            # tiles; all other rooms keep these anchors walkable as plain floor.
+            start_tile = (
+                int(SEMANTIC_PALETTE["START"])
+                if role_flags.get("is_start", False)
+                else int(SEMANTIC_PALETTE["FLOOR"])
+            )
+            goal_tile = (
+                int(SEMANTIC_PALETTE["TRIFORCE"])
+                if role_flags.get("has_goal", False)
+                else int(SEMANTIC_PALETTE["FLOOR"])
+            )
+            fixed_tokens[0, sr, sc] = start_tile
             fixed_mask[0, sr, sc] = True
-            fixed_tokens[0, gr, gc] = int(SEMANTIC_PALETTE["TRIFORCE"])
+            fixed_tokens[0, gr, gc] = goal_tile
             fixed_mask[0, gr, gc] = True
+
+            marker_to_anchor = {
+                int(TileID.KEY_SMALL): "key",
+                int(TileID.KEY_BOSS): "key",
+                int(TileID.KEY_ITEM): "item",
+                int(TileID.ITEM_MINOR): "item",
+                int(TileID.BOSS): "boss",
+                int(TileID.PUZZLE): "puzzle",
+                int(TileID.STAIR): "item",
+            }
+            for tile_id in self._resolve_room_graph_markers(graph, room_id):
+                if int(tile_id) in {int(TileID.START), int(TileID.TRIFORCE), int(TileID.ENEMY)}:
+                    continue
+                anchor_name = marker_to_anchor.get(int(tile_id))
+                if anchor_name is None:
+                    continue
+                point = semantic_anchors.get(anchor_name)
+                if point is None:
+                    continue
+                rr, cc = self._clamp_room_coord(point)
+                fixed_tokens[0, rr, cc] = int(tile_id)
+                fixed_mask[0, rr, cc] = True
 
         return fixed_tokens, fixed_mask
 
@@ -4215,18 +6034,75 @@ def generation_runtime_kwargs_from_resolved_config(config: Dict[str, Any]) -> Di
     """Build runtime room/dungeon generation defaults from the validated config payload."""
     stage = config["generation"]
     return {
-        "default_guidance_scale": stage["guidance_scale"],
-        "default_logic_guidance_scale": stage["logic_guidance_scale"],
-        "default_num_diffusion_steps": stage["num_diffusion_steps"],
-        "default_use_fast_sampling": stage["use_fast_sampling"],
-        "default_latent_sampler": stage["latent_sampler"],
-        "default_categorical_codebook_size": stage["categorical_codebook_size"],
-        "default_use_topological_positional_encoding": stage["use_topological_positional_encoding"],
-        "default_apply_repair": stage["apply_repair"],
-        "default_enable_map_elites": stage["enable_map_elites"],
+        "default_guidance_scale": stage.get("guidance_scale", 3.0),
+        "default_logic_guidance_scale": stage.get("logic_guidance_scale", 0.0),
+        "default_num_diffusion_steps": stage.get("num_diffusion_steps", 50),
+        "default_use_fast_sampling": stage.get("use_fast_sampling", False),
+        "default_latent_sampler": stage.get("latent_sampler", "diffusion"),
+        "default_categorical_codebook_size": stage.get("categorical_codebook_size", 256),
+        "default_use_topological_positional_encoding": stage.get("use_topological_positional_encoding", True),
+        "default_apply_repair": stage.get("apply_repair", True),
+        "default_enable_map_elites": stage.get("enable_map_elites", False),
         "default_start_goal_coords": (
-            tuple(int(v) for v in stage["default_start_coord"]),
-            tuple(int(v) for v in stage["default_goal_coord"]),
+            tuple(int(v) for v in stage.get("default_start_coord", (1, 5))),
+            tuple(int(v) for v in stage.get("default_goal_coord", (14, 5))),
+        ),
+        "default_semantic_role_prior_strength": stage.get(
+            "semantic_role_prior_strength",
+            DEFAULT_SEMANTIC_ROLE_PRIOR_STRENGTH,
+        ),
+        "default_semantic_anchor_threshold": stage.get("semantic_anchor_threshold", 0.5),
+        "default_semantic_puzzle_offset": stage.get(
+            "semantic_puzzle_offset",
+            DEFAULT_SEMANTIC_PUZZLE_OFFSET,
+        ),
+        "default_semantic_constrained_decoding_enabled": stage.get(
+            "semantic_constrained_decoding_enabled",
+            True,
+        ),
+        "default_semantic_marker_logit_bias": stage.get(
+            "semantic_marker_logit_bias",
+            10000.0,
+        ),
+        "default_semantic_marker_suppression_bias": stage.get(
+            "semantic_marker_suppression_bias",
+            100.0,
+        ),
+        "default_puzzle_room_scaffold_enabled": stage.get(
+            "puzzle_room_scaffold_enabled",
+            True,
+        ),
+        "default_puzzle_room_scaffold_min_structure_tiles": stage.get(
+            "puzzle_room_scaffold_min_structure_tiles",
+            10,
+        ),
+        "default_puzzle_room_archetype_mode": stage.get(
+            "puzzle_room_archetype_mode",
+            "auto",
+        ),
+        "default_puzzle_room_branch_density": stage.get(
+            "puzzle_room_branch_density",
+            0.75,
+        ),
+        "default_puzzle_room_block_budget": stage.get(
+            "puzzle_room_block_budget",
+            28,
+        ),
+        "default_puzzle_room_preserve_route_margin": stage.get(
+            "puzzle_room_preserve_route_margin",
+            0,
+        ),
+        "default_deterministic_graph_marker_overlay_enabled": stage.get(
+            "deterministic_graph_marker_overlay_enabled",
+            True,
+        ),
+        "default_fast_sampler_teacher_fallback_enabled": stage.get(
+            "fast_sampler_teacher_fallback_enabled",
+            True,
+        ),
+        "default_masked_room_teacher_fallback_enabled": stage.get(
+            "masked_room_teacher_fallback_enabled",
+            True,
         ),
     }
 
@@ -4236,7 +6112,26 @@ def pipeline_kwargs_from_resolved_config(config: Dict[str, Any]) -> Dict[str, An
     diffusion = config["diffusion"]
     fast_sampler = config["fast_sampler"]
     masked_room = config["masked_room"]
-    kwargs = topology_generation_kwargs_from_resolved_config(config)
+    topology_kwargs = topology_generation_kwargs_from_resolved_config(config)
+    kwargs = {
+        "topology_default_target_curve": list(topology_kwargs["target_curve"]),
+        "topology_num_rooms": topology_kwargs["num_rooms"],
+        "topology_population_size": topology_kwargs["population_size"],
+        "topology_generations": topology_kwargs["generations"],
+        "topology_mutation_rate": topology_kwargs["mutation_rate"],
+        "topology_crossover_rate": topology_kwargs["crossover_rate"],
+        "topology_genome_length": topology_kwargs["genome_length"],
+        "topology_rule_space": topology_kwargs["rule_space"],
+        "topology_transition_mix": topology_kwargs["transition_mix"],
+        "topology_search_strategy": topology_kwargs["search_strategy"],
+        "topology_qd_archive_cells": topology_kwargs["qd_archive_cells"],
+        "topology_qd_init_random_fraction": topology_kwargs["qd_init_random_fraction"],
+        "topology_qd_emitter_mutation_rate": topology_kwargs["qd_emitter_mutation_rate"],
+        "topology_max_lock_key_rules": topology_kwargs["max_lock_key_rules"],
+        "topology_enable_rule_credit_assignment": topology_kwargs["enable_rule_credit_assignment"],
+        "topology_enforce_generation_constraints": topology_kwargs["enforce_generation_constraints"],
+        "topology_allow_candidate_repairs": topology_kwargs["allow_candidate_repairs"],
+    }
     kwargs.update(generation_runtime_kwargs_from_resolved_config(config))
     kwargs.update(
         {

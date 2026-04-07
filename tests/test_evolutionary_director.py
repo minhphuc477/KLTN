@@ -29,6 +29,7 @@ from src.generation.evolutionary_director import (
     networkx_to_mission_graph,
 )
 from src.generation.grammar import MissionGraph, MissionNode, NodeType, EdgeType
+from src.utils.graph_utils import validate_graph_topology
 
 
 class TestEvolutionaryDirector:
@@ -48,6 +49,61 @@ class TestEvolutionaryDirector:
         assert gen.target_curve == target
         assert gen.population_size == 20
         assert gen.generations == 10
+
+    def test_finalize_graph_output_repairs_goal_gauntlet(self):
+        """Final export should normalize malformed goal chains before validation."""
+        gen = EvolutionaryTopologyGenerator(
+            target_curve=[0.2, 0.5, 0.8, 1.0],
+            population_size=4,
+            generations=1,
+            seed=42,
+            rule_space="full",
+            enforce_generation_constraints=True,
+            allow_candidate_repairs=True,
+        )
+
+        graph = MissionGraph()
+        graph.add_node(MissionNode(id=0, node_type=NodeType.START, position=(0, 0, 0), difficulty=0.0))
+        graph.add_node(MissionNode(id=1, node_type=NodeType.ENEMY, position=(1, 0, 0), difficulty=0.4))
+        graph.add_node(MissionNode(id=2, node_type=NodeType.GOAL, position=(3, 0, 0), difficulty=1.0))
+        graph.add_node(MissionNode(id=3, node_type=NodeType.BOSS_DOOR, position=(2, 0, 0), difficulty=0.9, key_id=3))
+        graph.add_edge(0, 1, EdgeType.PATH)
+        graph.add_edge(1, 3, EdgeType.BOSS_LOCKED, key_required=3)
+        graph.add_edge(3, 2, EdgeType.PATH)
+        graph.sanitize()
+
+        finalized = gen._finalize_graph_output(graph, directed_output=True)
+        is_valid, errors = validate_graph_topology(finalized)
+
+        assert is_valid, errors
+
+    def test_finalize_graph_output_repairs_disconnected_component(self):
+        """Final export should stitch isolated physical components back into the main graph."""
+        gen = EvolutionaryTopologyGenerator(
+            target_curve=[0.2, 0.5, 0.8, 1.0],
+            population_size=4,
+            generations=1,
+            seed=42,
+            rule_space="full",
+            enforce_generation_constraints=True,
+            allow_candidate_repairs=True,
+        )
+
+        graph = MissionGraph()
+        graph.add_node(MissionNode(id=0, node_type=NodeType.START, position=(0, 0, 0), difficulty=0.0))
+        graph.add_node(MissionNode(id=1, node_type=NodeType.ENEMY, position=(1, 0, 0), difficulty=0.4))
+        graph.add_node(MissionNode(id=2, node_type=NodeType.GOAL, position=(4, 0, 0), difficulty=1.0))
+        graph.add_node(MissionNode(id=3, node_type=NodeType.ENEMY, position=(7, 0, 0), difficulty=0.5))
+        graph.add_edge(0, 1, EdgeType.PATH)
+        graph.add_edge(1, 2, EdgeType.PATH)
+        # Node 3 is intentionally isolated.
+        graph.sanitize()
+
+        finalized = gen._finalize_graph_output(graph, directed_output=True)
+        is_valid, errors = validate_graph_topology(finalized)
+
+        assert is_valid, errors
+        assert nx.is_connected(finalized.to_undirected())
         assert gen.seed == 42
         assert len(gen.best_fitness_history) == 0
     

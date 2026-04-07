@@ -5,10 +5,9 @@ runtime:
   checkpoint_storage_cleanup_enabled: true
   checkpoint_storage_cleanup_target_fraction: 0.6
 
-# Small masked-room override profile. Unspecified fields inherit from the main
-# validated config, including runtime.auto_resume=true and masked_room.keep_last=2.
-
-# Downsized masked-room profile for ablation and efficiency probing
+# Canonical small masked-room profile alias. The main validated config now uses
+# the same downsized masked-room architecture; this file keeps the storage
+# budget guardrails and remains a convenient explicit preset.
 masked_room:
   model_channels: 64
   hidden_dim: 48

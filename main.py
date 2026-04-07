@@ -4,6 +4,9 @@ Top-level entry point for validation and training.
 Usage:
     python main.py validate --dungeon 1 --variant 1
     python main.py train --config configs/zelda_hmolqd.yaml --stage diffusion
+    python main.py topology-visualize --seed 20260406
+    python main.py topology-compare-manual --run-dir outputs/zelda_hmolqd_semantic_anchor_retrain_v1 --output-dir outputs/manual_compare
+    python main.py topology-audit-fixed-graph --run-dir outputs/zelda_hmolqd_semantic_anchor_retrain_v1 --output-dir outputs/fixed_graph_audit
 
 Legacy validation usage without a subcommand is preserved:
     python main.py --dungeon 1 --variant 1
@@ -65,6 +68,10 @@ from src.zelda_data.zelda_core import (
     test_all_dungeons,
     visualize_semantic_grid,
 )
+from scripts.export_manual_rich_topology_compare import run_from_args as run_manual_topology_compare_from_args
+from scripts.run_fixed_graph_multi_seed_audit import run_from_args as run_fixed_graph_audit_from_args
+from scripts.run_fast_sampler_visual_audit import add_generation_override_args as add_generation_export_override_args
+from scripts.visualize_block_i_graphs import run_from_args as run_topology_visualize_from_args
 
 
 logger = logging.getLogger(__name__)
@@ -226,14 +233,90 @@ def _build_validate_parser(subparsers: argparse._SubParsersAction) -> None:
     )
 
 
+def _build_topology_visualize_parser(subparsers: argparse._SubParsersAction) -> None:
+    topology_parser = subparsers.add_parser(
+        "topology-visualize",
+        help="Generate Block I topology graph image galleries and descriptor scatter plots.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    topology_parser.add_argument("--seed", type=int, default=42)
+    topology_parser.add_argument("--num-generated", type=int, default=12)
+    topology_parser.add_argument("--num-show", type=int, default=12)
+    topology_parser.add_argument("--reference-limit", type=int, default=18)
+    topology_parser.add_argument("--population-size", type=int, default=24)
+    topology_parser.add_argument("--generations", type=int, default=24)
+    topology_parser.add_argument("--min-rooms", type=int, default=8)
+    topology_parser.add_argument("--max-rooms", type=int, default=16)
+    topology_parser.add_argument("--rule-space", choices=["core", "full"], default="full")
+    topology_parser.add_argument("--search-strategy", choices=["ga", "cvt_emitter"], default="ga")
+    topology_parser.add_argument("--qd-archive-cells", type=int, default=128)
+    topology_parser.add_argument("--qd-init-random-fraction", type=float, default=0.35)
+    topology_parser.add_argument("--qd-emitter-mutation-rate", type=float, default=0.18)
+    topology_parser.add_argument(
+        "--data-root",
+        type=Path,
+        default=Path("Data") / "The Legend of Zelda",
+    )
+    topology_parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("results") / "topology_visuals",
+    )
+
+
+def _build_topology_compare_manual_parser(subparsers: argparse._SubParsersAction) -> None:
+    compare_parser = subparsers.add_parser(
+        "topology-compare-manual",
+        help="Run diffusion / fast-sampler / masked-room on one fixed manual topology and export aligned comparison PNGs.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    compare_parser.add_argument("--run-dir", type=Path, required=True)
+    compare_parser.add_argument("--output-dir", type=Path, required=True)
+    compare_parser.add_argument(
+        "--mission-graph",
+        type=Path,
+        default=None,
+        help="Optional path to a user-authored mission_graph.json. If omitted, the built-in rich manual topology is used.",
+    )
+    compare_parser.add_argument("--seed", type=int, default=20260406)
+    add_generation_export_override_args(compare_parser)
+
+
+def _build_topology_fixed_graph_audit_parser(subparsers: argparse._SubParsersAction) -> None:
+    fixed_parser = subparsers.add_parser(
+        "topology-audit-fixed-graph",
+        help="Re-run diffusion / fast-sampler on one fixed mission graph across multiple seeds.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    fixed_parser.add_argument("--run-dir", type=Path, required=True)
+    fixed_parser.add_argument(
+        "--mission-graph",
+        type=Path,
+        default=None,
+        help="Optional path to a fixed mission_graph.json. If omitted, the built-in rich manual topology is used.",
+    )
+    fixed_parser.add_argument("--output-dir", type=Path, required=True)
+    fixed_parser.add_argument(
+        "--seeds",
+        type=int,
+        nargs="+",
+        default=[20260404, 20260405, 20260406],
+        help="Seeds to audit on the same fixed mission graph.",
+    )
+    add_generation_export_override_args(fixed_parser)
+
+
 def _build_root_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="KLTN entry point for validation and training.",
+        description="KLTN entry point for training, validation, and topology-driven export workflows.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     subparsers = parser.add_subparsers(dest="command")
     _build_train_parser(subparsers)
     _build_validate_parser(subparsers)
+    _build_topology_visualize_parser(subparsers)
+    _build_topology_compare_manual_parser(subparsers)
+    _build_topology_fixed_graph_audit_parser(subparsers)
     return parser
 
 
@@ -481,7 +564,7 @@ def _run_legacy_validate(argv: list[str]) -> None:
 
 def main(argv: Optional[list[str]] = None) -> None:
     argv = list(sys.argv[1:] if argv is None else argv)
-    if argv and argv[0] not in {"train", "validate"}:
+    if argv and argv[0].startswith("-") and argv[0] not in {"-h", "--help"}:
         _run_legacy_validate(argv)
         return
 
@@ -491,6 +574,12 @@ def main(argv: Optional[list[str]] = None) -> None:
         run_training_from_args(args)
     elif args.command == "validate":
         run_validation_from_args(args)
+    elif args.command == "topology-visualize":
+        run_topology_visualize_from_args(args)
+    elif args.command == "topology-compare-manual":
+        run_manual_topology_compare_from_args(args)
+    elif args.command == "topology-audit-fixed-graph":
+        run_fixed_graph_audit_from_args(args)
     else:
         parser.print_help()
 

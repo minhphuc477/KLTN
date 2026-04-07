@@ -41,6 +41,7 @@ dataset:
   normalize: true  # type=bool, default=true, valid={true,false}
   room_level: true  # type=bool, default=true, valid={true,false}
   load_graphs: true  # type=bool, default=true, valid={true,false}
+  topology_supervision_mode: runtime_aligned  # type=str, default=runtime_aligned, valid={runtime_aligned,oracle_room_grid}; keep train-time room-topology priors aligned with inference instead of leaking target-room geometry
   min_samples_per_epoch: 64  # type=int, default=64, valid>=1; VQ-VAE effective epoch floor
   num_classes: 44  # type=int, default=44, valid={44}; current semantic palette size
   room_height: 16  # type=int, default=16, valid={16}; current implementation assumption
@@ -139,7 +140,8 @@ diffusion:
   scheduler_t_mult: 2  # type=int, default=2, valid>=1
   scheduler_eta_min: 0.000001  # type=float, default=1e-6, valid>=0
   ema_decay: 0.9999  # type=float, default=0.9999, valid=0..0.999999
-  validation_num_samples: 4  # type=int, default=4, valid>=1
+  validation_num_samples: 8  # type=int, default=8, valid>=1; generated-sample validation budget for logic/solvability
+  validation_num_diffusion_samples: 64  # type=int, default=64, valid>=1; real-latent validation budget for denoising teacher quality
 
 topology:
   default_target_curve: [0.2, 0.4, 0.6, 0.8, 1.0]  # type=list[float], default=[0.2,0.4,0.6,0.8,1.0], valid=0..1; default Block I difficulty/tension target
@@ -161,8 +163,8 @@ topology:
   allow_candidate_repairs: false  # type=bool, default=false, valid={true,false}
 
 generation:
-  guidance_scale: 7.5  # type=float, default=7.5, valid>=0; default CFG scale for runtime generation
-  logic_guidance_scale: 1.0  # type=float, default=1.0, valid>=0; default LogicNet guidance scale for runtime generation
+  guidance_scale: 3.0  # type=float, default=3.0, valid>=0; align runtime CFG with the trained diffusion teacher
+  logic_guidance_scale: 0.0  # type=float, default=0.0, valid>=0; keep extra LogicNet gradient guidance opt-in at runtime
   num_diffusion_steps: 50  # type=int, default=50, valid>=1
   use_fast_sampling: false  # type=bool, default=false, valid={true,false}
   latent_sampler: diffusion  # type=str, default=diffusion, valid={diffusion,categorical}
@@ -172,6 +174,21 @@ generation:
   enable_map_elites: false  # type=bool, default=false, valid={true,false}
   default_start_coord: [1, 5]  # type=list[int], default=[1,5], valid=in-bounds [row,col]
   default_goal_coord: [14, 5]  # type=list[int], default=[14,5], valid=in-bounds [row,col]
+  semantic_role_prior_strength: 0.15  # type=float, default=0.15, valid=0..1; light room-wide prior that complements exact anchor pixels in topology maps
+  semantic_anchor_threshold: 0.5  # type=float, default=0.5, valid=0..1; used when freezing topology-derived semantic anchors for masked-room training/ablations
+  semantic_puzzle_offset: 2  # type=int, default=2, valid=0..4; perpendicular displacement for puzzle anchors inside rooms
+  semantic_constrained_decoding_enabled: true  # type=bool, default=true, valid={true,false}; bias planned graph-owned semantic markers directly in decode logits before argmax
+  semantic_marker_logit_bias: 10000.0  # type=float, default=10000.0, valid=>=0; effectively hard-constrains planned semantic marker slots during decode for current checkpoint family
+  semantic_marker_suppression_bias: 100.0  # type=float, default=100.0, valid=>=0; strongly suppresses stray volatile semantic channels away from planned slots
+  puzzle_room_scaffold_enabled: true  # type=bool, default=true, valid={true,false}; add a constructive block-maze scaffold when puzzle rooms are still too empty after generation/repair
+  puzzle_room_scaffold_min_structure_tiles: 10  # type=int, default=10, valid>=0; skip the runtime puzzle scaffold when a puzzle room already contains at least this many interior wall/block tiles
+  puzzle_room_archetype_mode: auto  # type=str, default=auto, valid={auto,gate,serpentine,hub,island,combat}; auto-select constructive puzzle archetypes from local room semantics, or force one for ablations
+  puzzle_room_branch_density: 0.75  # type=float, default=0.75, valid=0..1; controls how many optional scaffold branches are enabled within a puzzle archetype
+  puzzle_room_block_budget: 28  # type=int, default=28, valid>=0; soft cap on scaffolded block placements per puzzle room
+  puzzle_room_preserve_route_margin: 0  # type=int, default=0, valid=0..4; tiny 16x11 rooms lose too much usable interior when the route buffer is dilated by default
+  deterministic_graph_marker_overlay_enabled: true  # type=bool, default=true, valid={true,false}; keep enabled for the production hybrid path, disable only for purely-neural semantic ablations
+  fast_sampler_teacher_fallback_enabled: true  # type=bool, default=true, valid={true,false}; lets runtime guardrails reroute bad fast-sampler rooms to the teacher
+  masked_room_teacher_fallback_enabled: true  # type=bool, default=true, valid={true,false}; protects production exports by rerouting obviously noisy masked-room outputs to the diffusion teacher
 
 fast_sampler:
   checkpoint_dir: ""  # type=str, default="", valid=path; empty=>output_dir/checkpoints/fast_sampler
@@ -209,8 +226,8 @@ masked_room:
   graph_conditioning_mode: node_sequence  # type=str, default=node_sequence, valid={node_sequence,pooled}
   use_current_node_distance_features: true  # type=bool, default=true, valid={true,false}
   current_node_distance_max: 8  # type=int, default=8, valid>=1
-  model_channels: 96  # type=int, default=128, valid>=8; aligned with the reduced diffusion profile
-  hidden_dim: 64  # type=int, default=64, valid>=8
+  model_channels: 64  # type=int, default=64, valid>=8; downsized canonical masked-room width keeps the auxiliary branch out of the small-data danger zone
+  hidden_dim: 48  # type=int, default=48, valid>=8; slightly smaller token width is sufficient for 16x11 Zelda rooms
   masked_steps: 8  # type=int, default=8, valid>=1
   attention_mode: softmax  # type=str, default=softmax, valid={softmax,linear_hedgehog}
   topology_conditioning_mode: additive  # type=str, default=additive, valid={additive,spade}
@@ -218,11 +235,11 @@ masked_room:
   graph_auto_linear_attention_nodes: 128  # type=int, default=128, valid>=0; 0 disables auto-switch to linear graph attention
   spatial_graph_gate_init: -2.0  # type=float, default=-2.0
   spatial_topology_gate_init: -2.0  # type=float, default=-2.0
-  unet_channel_mult: [1, 2, 4]  # type=list[int], default=[1,2,4], valid=positive ints
-  unet_num_res_blocks: 2  # type=int, default=2, valid>=1
-  unet_attention_resolutions: [1, 2]  # type=list[int], default=[1,2], valid=level indices into unet_channel_mult
-  unet_num_heads: 8  # type=int, default=8, valid>=1; each model_channels*mult must be divisible by this
+  unet_channel_mult: [1, 2]  # type=list[int], default=[1,2], valid=positive ints; keep the discrete branch shallower than diffusion on this tiny corpus
+  unet_num_res_blocks: 1  # type=int, default=1, valid>=1
+  unet_attention_resolutions: [0, 1]  # type=list[int], default=[0,1], valid=level indices into unet_channel_mult
+  unet_num_heads: 4  # type=int, default=4, valid>=1; each model_channels*mult must be divisible by this
   unet_dropout: 0.1  # type=float, default=0.1, valid=0..1
-  min_mask_ratio: 0.15  # type=float, default=0.15, valid=0..1
-  max_mask_ratio: 0.9  # type=float, default=0.9, valid=0..1; must be >= min_mask_ratio
+  min_mask_ratio: 0.12  # type=float, default=0.12, valid=0..1
+  max_mask_ratio: 0.85  # type=float, default=0.85, valid=0..1; must be >= min_mask_ratio
   room_topology_channels: 50  # type=int, default=50, valid>=1

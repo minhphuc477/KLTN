@@ -18,6 +18,7 @@ import sys
 import argparse
 import logging
 import random
+from collections import deque
 from pathlib import Path
 from typing import List, Tuple, Optional, Dict, Any
 
@@ -34,7 +35,11 @@ if str(PROJECT_ROOT) not in sys.path:
 from src.core.logic_net import LogicNet
 from src.config_system import load_resolved_config_for_artifact
 from src.core.symbolic_refiner import create_symbolic_refiner
-from src.core.definitions import SEMANTIC_TO_CHAR, semantic_grid_to_vglc_lines
+from src.core.definitions import (
+    SEMANTIC_PALETTE as CORE_SEMANTIC_PALETTE,
+    SEMANTIC_TO_CHAR,
+    semantic_grid_to_vglc_lines,
+)
 from src.gui.ai.generation_pipeline import (
     generate_dungeon_with_pipeline,
     generate_mission_graph,
@@ -54,12 +59,29 @@ try:
         ZeldaLogicEnv,
         StateSpaceAStar,
         SEMANTIC_PALETTE,
+        WALKABLE_IDS,
     )
     VALIDATOR_AVAILABLE = True
     logger.info("External validator available")
 except ImportError:
     VALIDATOR_AVAILABLE = False
-    SEMANTIC_PALETTE = None
+    SEMANTIC_PALETTE = CORE_SEMANTIC_PALETTE
+    WALKABLE_IDS = {
+        SEMANTIC_PALETTE["FLOOR"],
+        SEMANTIC_PALETTE["DOOR_OPEN"],
+        SEMANTIC_PALETTE["DOOR_SOFT"],
+        SEMANTIC_PALETTE["START"],
+        SEMANTIC_PALETTE["TRIFORCE"],
+        SEMANTIC_PALETTE["KEY_SMALL"],
+        SEMANTIC_PALETTE["KEY_BOSS"],
+        SEMANTIC_PALETTE["KEY_ITEM"],
+        SEMANTIC_PALETTE["ITEM_MINOR"],
+        SEMANTIC_PALETTE["ELEMENT_FLOOR"],
+        SEMANTIC_PALETTE["STAIR"],
+        SEMANTIC_PALETTE["ENEMY"],
+        SEMANTIC_PALETTE["BOSS"],
+        SEMANTIC_PALETTE["PUZZLE"],
+    }
     logger.warning("External validator not available, using LogicNet approximation only")
 
 
@@ -125,9 +147,29 @@ class DungeonValidator:
         # Use external validator if requested and available
         if use_ground_truth and self.use_external:
             return self._check_with_astar(grid, start, goal)
-        
-        # Use LogicNet for fast approximation
+
+        # Canonical generation returns stitched semantic ID grids, not VQ latents.
+        # Route those through a direct grid-space reachability check instead of
+        # feeding them into the room-level LogicNet latent head.
+        if self._is_semantic_grid_input(dungeon_map):
+            return self._check_with_grid_bfs(grid, start, goal)
+
+        # Use LogicNet only for latent / tile-probability tensors.
         return self._check_with_logic_net(dungeon_map, start, goal)
+
+    def _is_semantic_grid_input(self, dungeon_map: Any) -> bool:
+        """Return True when the input looks like a stitched semantic grid."""
+        if isinstance(dungeon_map, torch.Tensor):
+            if dungeon_map.dim() == 2:
+                return True
+            if dungeon_map.dim() == 3:
+                return int(dungeon_map.shape[0]) == 1
+            if dungeon_map.dim() == 4:
+                return int(dungeon_map.shape[1]) == 1
+            return False
+
+        array = np.asarray(dungeon_map)
+        return array.ndim == 2
     
     def _check_with_logic_net(
         self,
@@ -171,9 +213,7 @@ class DungeonValidator:
     ) -> bool:
         """Check solvability using A* search."""
         if not VALIDATOR_AVAILABLE:
-            return self._check_with_logic_net(
-                torch.tensor(grid).float(), start, goal
-            )
+            return self._check_with_grid_bfs(grid, start, goal)
         
         try:
             # Create environment
@@ -184,6 +224,53 @@ class DungeonValidator:
         except (AttributeError, RuntimeError, ValueError, TypeError) as e:
             logger.warning(f"A* validation failed: {e}")
             return False
+
+    def _check_with_grid_bfs(
+        self,
+        grid: np.ndarray,
+        start: Tuple[int, int],
+        goal: Tuple[int, int],
+    ) -> bool:
+        """Fast semantic-grid approximation for stitched dungeon validation."""
+        grid = np.rint(np.asarray(grid)).astype(np.int64, copy=False)
+        if grid.ndim != 2:
+            raise ValueError(f"Expected 2D grid for BFS validation, got shape={tuple(grid.shape)}.")
+
+        height, width = grid.shape
+        start = (int(start[0]), int(start[1]))
+        goal = (int(goal[0]), int(goal[1]))
+        if not (0 <= start[0] < height and 0 <= start[1] < width):
+            return False
+        if not (0 <= goal[0] < height and 0 <= goal[1] < width):
+            return False
+
+        walkable_ids = {int(v) for v in WALKABLE_IDS}
+        if int(grid[start]) not in walkable_ids:
+            walkable_ids.add(int(grid[start]))
+        if int(grid[goal]) not in walkable_ids:
+            walkable_ids.add(int(grid[goal]))
+
+        queue = deque([start])
+        visited = {start}
+
+        while queue:
+            row, col = queue.popleft()
+            if (row, col) == goal:
+                return True
+            for d_row, d_col in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                next_row = row + d_row
+                next_col = col + d_col
+                if not (0 <= next_row < height and 0 <= next_col < width):
+                    continue
+                next_pos = (next_row, next_col)
+                if next_pos in visited:
+                    continue
+                if int(grid[next_row, next_col]) not in walkable_ids:
+                    continue
+                visited.add(next_pos)
+                queue.append(next_pos)
+
+        return False
     
     def _find_tile(
         self,

@@ -240,7 +240,11 @@ def _resolve_vqvae_checkpoint_for_generation(checkpoint_path: Path):
     """Prefer an embedded VQ-VAE, otherwise fall back to sibling pretrain weights."""
     import torch
 
-    fallback_path = checkpoint_path.parent / "vqvae_pretrained.pth"
+    candidate_paths = [
+        checkpoint_path.parent / "vqvae_pretrained.pth",
+        checkpoint_path.parent.parent / "vqvae" / "vqvae_pretrained.pth",
+        checkpoint_path.parent.parent / "vqvae" / "latest_resume.pth",
+    ]
     try:
         checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     except (AttributeError, RuntimeError, ValueError, TypeError, OSError):
@@ -256,8 +260,9 @@ def _resolve_vqvae_checkpoint_for_generation(checkpoint_path: Path):
         if is_standalone_vqvae:
             return checkpoint_path
 
-    if fallback_path.exists():
-        return fallback_path
+    for candidate in candidate_paths:
+        if candidate.exists():
+            return candidate
     return checkpoint_path
 
 

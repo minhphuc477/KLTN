@@ -15,6 +15,38 @@ from src.pipeline.dungeon_pipeline import NeuralSymbolicDungeonPipeline
 from src.pipeline.room_topology_conditioning import ROOM_TOPOLOGY_CHANNEL_COUNT
 
 
+def _generate_precomputed_room(
+    pipeline: NeuralSymbolicDungeonPipeline,
+    mission_graph: nx.DiGraph,
+    *,
+    room_id: int = 0,
+    start_goal=((ROOM_HEIGHT // 2, 0), (ROOM_HEIGHT // 2, ROOM_WIDTH - 1)),
+):
+    graph_data = pipeline._prepare_graph_context(mission_graph, use_tpe=True)
+    room_graph_context = pipeline._build_room_graph_context(
+        graph_data=graph_data,
+        mission_graph=mission_graph,
+        room_id=room_id,
+        start_goal=start_goal,
+    )
+
+    logits = torch.full((1, 44, ROOM_HEIGHT, ROOM_WIDTH), fill_value=-4.0, dtype=torch.float32)
+    logits[:, int(SEMANTIC_PALETTE["FLOOR"]), :, :] = 4.0
+    latent = torch.zeros(1, int(pipeline.diffusion.latent_dim), 4, 3, dtype=torch.float32)
+
+    return pipeline.generate_room(
+        neighbor_latents={"N": None, "S": None, "E": None, "W": None},
+        graph_context=room_graph_context,
+        room_id=room_id,
+        apply_repair=False,
+        logic_guidance_scale=0.0,
+        num_diffusion_steps=4,
+        start_goal_coords=start_goal,
+        precomputed_latent=latent,
+        precomputed_logits=logits,
+    )
+
+
 def test_inpaint_schedule_starts_at_noise_level_and_preserves_previous_timestep(monkeypatch):
     model = create_latent_diffusion(
         latent_dim=4,
@@ -136,6 +168,402 @@ def test_generate_room_constrained_decode_uses_exact_door_type():
     row_end = int(spec["row_end"]) + 1
 
     assert np.all(result.neural_grid[row_start:row_end, col] == int(SEMANTIC_PALETTE["DOOR_LOCKED"]))
+
+
+def test_generate_room_semantic_constrained_decode_biases_graph_marker_inside_decoder():
+    pipeline = NeuralSymbolicDungeonPipeline(
+        device="cpu",
+        enable_logging=False,
+        room_generator_mode="latent_diffusion",
+        default_semantic_constrained_decoding_enabled=True,
+        default_semantic_marker_logit_bias=12.0,
+        default_semantic_marker_suppression_bias=3.0,
+    )
+
+    mission_graph = nx.DiGraph()
+    mission_graph.add_node(0, is_start=True, pos=(0, 0))
+    mission_graph.add_node(1, pos=(0, 1))
+    mission_graph.add_edge(0, 1, edge_type="path")
+
+    logits = torch.full((1, 44, ROOM_HEIGHT, ROOM_WIDTH), fill_value=-4.0, dtype=torch.float32)
+    logits[:, int(SEMANTIC_PALETTE["FLOOR"]), :, :] = 4.0
+
+    structural_grid = np.full((ROOM_HEIGHT, ROOM_WIDTH), int(SEMANTIC_PALETTE["FLOOR"]), dtype=np.int32)
+    placements = pipeline._plan_room_graph_marker_layout(
+        structural_grid,
+        graph=mission_graph,
+        room_id=0,
+        start_goal=((ROOM_HEIGHT // 2, 0), (ROOM_HEIGHT // 2, ROOM_WIDTH - 1)),
+    )
+    assert placements
+    tile_id, slot = placements[0]
+
+    stats = pipeline._apply_semantic_constrained_decoding(
+        logits,
+        graph=mission_graph,
+        room_id=0,
+        start_goal=((ROOM_HEIGHT // 2, 0), (ROOM_HEIGHT // 2, ROOM_WIDTH - 1)),
+    )
+    decoded = logits.argmax(dim=1).detach().cpu().numpy()[0]
+
+    assert stats["planned_markers"] == 1
+    assert stats["biased_slots"] == 1
+    assert int(decoded[int(slot[0]), int(slot[1])]) == int(tile_id)
+
+
+def test_generate_room_re_salvages_graph_marker_after_boundary_enforcement():
+    pipeline = NeuralSymbolicDungeonPipeline(
+        device="cpu",
+        enable_logging=False,
+        room_generator_mode="latent_diffusion",
+        default_semantic_constrained_decoding_enabled=True,
+        default_semantic_marker_logit_bias=10000.0,
+        default_semantic_marker_suppression_bias=100.0,
+    )
+
+    mission_graph = nx.DiGraph()
+    mission_graph.add_node(0, is_start=True, pos=(0, 0))
+    mission_graph.add_node(1, pos=(0, 1))
+    mission_graph.add_edge(0, 1, edge_type="path")
+
+    graph_data = pipeline._prepare_graph_context(mission_graph, use_tpe=True)
+    room_graph_context = pipeline._build_room_graph_context(
+        graph_data=graph_data,
+        mission_graph=mission_graph,
+        room_id=0,
+        start_goal=((ROOM_HEIGHT // 2, 0), (ROOM_HEIGHT // 2, ROOM_WIDTH - 1)),
+    )
+
+    logits = torch.full((1, 44, ROOM_HEIGHT, ROOM_WIDTH), fill_value=-4.0, dtype=torch.float32)
+    logits[:, int(SEMANTIC_PALETTE["FLOOR"]), :, :] = 4.0
+    latent = torch.zeros(1, int(pipeline.diffusion.latent_dim), 4, 3, dtype=torch.float32)
+
+    result = pipeline.generate_room(
+        neighbor_latents={"N": None, "S": None, "E": None, "W": None},
+        graph_context=room_graph_context,
+        room_id=0,
+        apply_repair=False,
+        logic_guidance_scale=0.0,
+        num_diffusion_steps=4,
+        start_goal_coords=((ROOM_HEIGHT // 2, 0), (ROOM_HEIGHT // 2, ROOM_WIDTH - 1)),
+        precomputed_latent=latent,
+        precomputed_logits=logits,
+    )
+
+    assert result.metrics["neural_post_boundary_graph_semantic_hints_salvaged"] == pytest.approx(1.0)
+    assert result.metrics["neural_graph_marker_exact_match_rate"] == pytest.approx(1.0)
+
+
+def test_generate_room_can_disable_deterministic_graph_marker_overlay():
+    pipeline = NeuralSymbolicDungeonPipeline(
+        device="cpu",
+        enable_logging=False,
+        room_generator_mode="latent_diffusion",
+        default_semantic_constrained_decoding_enabled=False,
+        default_deterministic_graph_marker_overlay_enabled=False,
+    )
+
+    mission_graph = nx.DiGraph()
+    mission_graph.add_node(0, is_start=True, pos=(0, 0))
+    mission_graph.add_node(1, pos=(0, 1))
+    mission_graph.add_edge(0, 1, edge_type="path")
+
+    graph_data = pipeline._prepare_graph_context(mission_graph, use_tpe=True)
+    room_graph_context = pipeline._build_room_graph_context(
+        graph_data=graph_data,
+        mission_graph=mission_graph,
+        room_id=0,
+        start_goal=((ROOM_HEIGHT // 2, 0), (ROOM_HEIGHT // 2, ROOM_WIDTH - 1)),
+    )
+
+    logits = torch.full((1, 44, ROOM_HEIGHT, ROOM_WIDTH), fill_value=-4.0, dtype=torch.float32)
+    logits[:, int(SEMANTIC_PALETTE["FLOOR"]), :, :] = 4.0
+    latent = torch.zeros(1, int(pipeline.diffusion.latent_dim), 4, 3, dtype=torch.float32)
+
+    result = pipeline.generate_room(
+        neighbor_latents={"N": None, "S": None, "E": None, "W": None},
+        graph_context=room_graph_context,
+        room_id=0,
+        apply_repair=False,
+        logic_guidance_scale=0.0,
+        num_diffusion_steps=4,
+        start_goal_coords=((ROOM_HEIGHT // 2, 0), (ROOM_HEIGHT // 2, ROOM_WIDTH - 1)),
+        precomputed_latent=latent,
+        precomputed_logits=logits,
+    )
+
+    assert int(np.sum(result.room_grid == int(SEMANTIC_PALETTE["START"]))) == 0
+    assert result.metrics["final_graph_markers_placed"] == pytest.approx(0.0)
+
+
+def test_generate_room_puzzle_scaffold_adds_structure_to_underfilled_puzzle_rooms():
+    pipeline = NeuralSymbolicDungeonPipeline(
+        device="cpu",
+        enable_logging=False,
+        room_generator_mode="latent_diffusion",
+        default_puzzle_room_scaffold_enabled=True,
+        default_puzzle_room_scaffold_min_structure_tiles=10,
+    )
+
+    mission_graph = nx.DiGraph()
+    mission_graph.add_node(0, node_type="puzzle", has_puzzle=True, pos=(0, 0))
+    mission_graph.add_node(1, pos=(0, 1))
+    mission_graph.add_edge(0, 1, edge_type="path")
+
+    result = _generate_precomputed_room(pipeline, mission_graph)
+
+    block_id = int(SEMANTIC_PALETTE["BLOCK"])
+    puzzle_id = int(SEMANTIC_PALETTE["PUZZLE"])
+    assert result.metrics["final_puzzle_scaffold_applied"] == pytest.approx(1.0)
+    assert result.metrics["final_puzzle_scaffold_tiles_added"] > 0
+    assert result.metrics["final_puzzle_scaffold_segments_added"] > 0
+    assert int(np.sum(result.room_grid == block_id)) > 0
+    assert int(np.sum(result.room_grid == puzzle_id)) == 1
+
+
+def test_generate_room_puzzle_scaffold_skips_non_puzzle_rooms():
+    pipeline = NeuralSymbolicDungeonPipeline(
+        device="cpu",
+        enable_logging=False,
+        room_generator_mode="latent_diffusion",
+        default_puzzle_room_scaffold_enabled=True,
+        default_puzzle_room_scaffold_min_structure_tiles=10,
+    )
+
+    mission_graph = nx.DiGraph()
+    mission_graph.add_node(0, pos=(0, 0))
+    mission_graph.add_node(1, pos=(0, 1))
+    mission_graph.add_edge(0, 1, edge_type="path")
+
+    result = _generate_precomputed_room(pipeline, mission_graph)
+
+    assert result.metrics["final_puzzle_scaffold_applied"] == pytest.approx(0.0)
+    assert result.metrics["final_puzzle_scaffold_tiles_added"] == pytest.approx(0.0)
+    assert result.metrics["final_puzzle_scaffold_segments_added"] == pytest.approx(0.0)
+
+
+def test_generate_room_puzzle_scaffold_preserves_planned_route_cells():
+    pipeline = NeuralSymbolicDungeonPipeline(
+        device="cpu",
+        enable_logging=False,
+        room_generator_mode="latent_diffusion",
+        default_puzzle_room_scaffold_enabled=True,
+        default_puzzle_room_scaffold_min_structure_tiles=10,
+    )
+
+    mission_graph = nx.DiGraph()
+    mission_graph.add_node(0, node_type="switch", has_puzzle=True, pos=(0, 0))
+    mission_graph.add_node(1, pos=(1, 0))
+    mission_graph.add_edge(0, 1, edge_type="switch_locked")
+
+    start_goal = ((0, ROOM_WIDTH // 2), (ROOM_HEIGHT - 1, ROOM_WIDTH // 2))
+    result = _generate_precomputed_room(pipeline, mission_graph, start_goal=start_goal)
+
+    assert isinstance(result.room_plan_mask, np.ndarray)
+    route_mask = np.asarray(result.room_plan_mask, dtype=np.float32) > 0.0
+    route_tiles = result.room_grid[route_mask]
+    disallowed = {int(SEMANTIC_PALETTE["WALL"]), int(SEMANTIC_PALETTE["BLOCK"])}
+    assert route_tiles.size > 0
+    assert not any(int(tile) in disallowed for tile in route_tiles.tolist())
+
+
+def test_generate_room_enforces_boundary_shell_except_required_doors():
+    pipeline = NeuralSymbolicDungeonPipeline(
+        device="cpu",
+        enable_logging=False,
+        room_generator_mode="latent_diffusion",
+    )
+
+    mission_graph = nx.DiGraph()
+    mission_graph.add_node(0, pos=(0, 0))
+    mission_graph.add_node(1, pos=(0, 1))
+    mission_graph.add_edge(0, 1, edge_type="key_locked")
+
+    graph_data = pipeline._prepare_graph_context(mission_graph, use_tpe=True)
+    room_graph_context = pipeline._build_room_graph_context(
+        graph_data=graph_data,
+        mission_graph=mission_graph,
+        room_id=0,
+        start_goal=((ROOM_HEIGHT // 2, 0), (ROOM_HEIGHT // 2, ROOM_WIDTH - 1)),
+    )
+
+    logits = torch.full((1, 44, ROOM_HEIGHT, ROOM_WIDTH), fill_value=-4.0, dtype=torch.float32)
+    logits[:, int(SEMANTIC_PALETTE["FLOOR"]), :, :] = 4.0
+    latent = torch.zeros(1, int(pipeline.diffusion.latent_dim), 4, 3, dtype=torch.float32)
+
+    result = pipeline.generate_room(
+        neighbor_latents={"N": None, "S": None, "E": None, "W": None},
+        graph_context=room_graph_context,
+        room_id=0,
+        apply_repair=False,
+        logic_guidance_scale=0.0,
+        num_diffusion_steps=4,
+        start_goal_coords=((ROOM_HEIGHT // 2, 0), (ROOM_HEIGHT // 2, ROOM_WIDTH - 1)),
+        precomputed_latent=latent,
+        precomputed_logits=logits,
+    )
+
+    boundary_mask = np.zeros((ROOM_HEIGHT, ROOM_WIDTH), dtype=bool)
+    boundary_mask[0, :] = True
+    boundary_mask[ROOM_HEIGHT - 1, :] = True
+    boundary_mask[:, 0] = True
+    boundary_mask[:, ROOM_WIDTH - 1] = True
+    allowed_door_mask = pipeline._required_room_door_slots_mask(graph=mission_graph, room_id=0)
+
+    wall_id = int(SEMANTIC_PALETTE["WALL"])
+    assert np.all(result.room_grid[boundary_mask & ~allowed_door_mask] == wall_id)
+
+    spec = DOOR_POSITIONS["E"]
+    col = int(spec["col"])
+    row_start = int(spec["row_start"])
+    row_end = int(spec["row_end"]) + 1
+    assert np.all(result.room_grid[row_start:row_end, col] == int(SEMANTIC_PALETTE["DOOR_LOCKED"]))
+    assert np.all(result.room_grid[row_start:row_end, ROOM_WIDTH - 2] == int(SEMANTIC_PALETTE["FLOOR"]))
+
+
+def test_start_marker_overlay_stays_inside_room_boundary():
+    pipeline = NeuralSymbolicDungeonPipeline(
+        device="cpu",
+        enable_logging=False,
+        room_generator_mode="latent_diffusion",
+    )
+
+    mission_graph = nx.DiGraph()
+    mission_graph.add_node(0, is_start=True, pos=(0, 0))
+    mission_graph.add_node(1, pos=(0, 1))
+    mission_graph.add_edge(0, 1, edge_type="path")
+
+    base_grid = np.full((ROOM_HEIGHT, ROOM_WIDTH), int(SEMANTIC_PALETTE["WALL"]), dtype=np.int32)
+    base_grid[1:-1, 1:-1] = int(SEMANTIC_PALETTE["FLOOR"])
+
+    overlaid, marker_count, marker_ids = pipeline._overlay_room_graph_markers(
+        base_grid,
+        graph=mission_graph,
+        room_id=0,
+        start_goal=((ROOM_HEIGHT // 2, 0), (ROOM_HEIGHT // 2, ROOM_WIDTH - 1)),
+    )
+
+    start_positions = np.argwhere(overlaid == int(SEMANTIC_PALETTE["START"]))
+    assert marker_count == 1
+    assert marker_ids == [int(SEMANTIC_PALETTE["START"])]
+    assert start_positions.shape[0] == 1
+    assert int(start_positions[0, 0]) not in {0, ROOM_HEIGHT - 1}
+    assert int(start_positions[0, 1]) not in {0, ROOM_WIDTH - 1}
+
+
+def test_strip_volatile_room_semantics_salvages_nearby_graph_owned_marker():
+    pipeline = NeuralSymbolicDungeonPipeline(
+        device="cpu",
+        enable_logging=False,
+        room_generator_mode="latent_diffusion",
+    )
+
+    mission_graph = nx.DiGraph()
+    mission_graph.add_node(0, is_start=True, pos=(0, 0))
+    mission_graph.add_node(1, pos=(0, 1))
+    mission_graph.add_edge(0, 1, edge_type="path")
+
+    structural_grid = np.full((ROOM_HEIGHT, ROOM_WIDTH), int(SEMANTIC_PALETTE["WALL"]), dtype=np.int32)
+    structural_grid[1:-1, 1:-1] = int(SEMANTIC_PALETTE["FLOOR"])
+    placements = pipeline._plan_room_graph_marker_layout(
+        structural_grid,
+        graph=mission_graph,
+        room_id=0,
+        start_goal=((ROOM_HEIGHT // 2, 0), (ROOM_HEIGHT // 2, ROOM_WIDTH - 1)),
+    )
+    assert placements
+    tile_id, slot = placements[0]
+
+    noisy_grid = structural_grid.copy()
+    nearby_col = int(slot[1]) + 1 if int(slot[1]) < ROOM_WIDTH - 2 else int(slot[1]) - 1
+    nearby_slot = (int(slot[0]), int(nearby_col))
+    noisy_grid[nearby_slot[0], nearby_slot[1]] = int(tile_id)
+
+    cleaned, stripped_count, stripped_ids, preserved_count, preserved_ids = pipeline._strip_volatile_room_semantics(
+        noisy_grid,
+        graph=mission_graph,
+        room_id=0,
+        start_goal=((ROOM_HEIGHT // 2, 0), (ROOM_HEIGHT // 2, ROOM_WIDTH - 1)),
+    )
+
+    assert cleaned[int(slot[0]), int(slot[1])] == int(tile_id)
+    assert cleaned[nearby_slot[0], nearby_slot[1]] == int(SEMANTIC_PALETTE["FLOOR"])
+    assert stripped_count == 0
+    assert stripped_ids == []
+    assert preserved_count == 1
+    assert preserved_ids == [int(tile_id)]
+
+
+def test_graph_marker_alignment_metrics_detect_missing_neural_semantics():
+    pipeline = NeuralSymbolicDungeonPipeline(
+        device="cpu",
+        enable_logging=False,
+        room_generator_mode="latent_diffusion",
+    )
+
+    mission_graph = nx.DiGraph()
+    mission_graph.add_node(0, is_start=True, pos=(0, 0))
+    mission_graph.add_node(1, pos=(0, 1))
+    mission_graph.add_edge(0, 1, edge_type="path")
+
+    base_grid = np.full((ROOM_HEIGHT, ROOM_WIDTH), int(SEMANTIC_PALETTE["WALL"]), dtype=np.int32)
+    base_grid[1:-1, 1:-1] = int(SEMANTIC_PALETTE["FLOOR"])
+
+    placements = pipeline._plan_room_graph_marker_layout(
+        base_grid,
+        graph=mission_graph,
+        room_id=0,
+        start_goal=((ROOM_HEIGHT // 2, 0), (ROOM_HEIGHT // 2, ROOM_WIDTH - 1)),
+    )
+    metrics = pipeline._measure_room_graph_marker_alignment(
+        base_grid,
+        placements=placements,
+        prefix="neural_",
+    )
+
+    assert metrics["neural_graph_marker_expected"] == pytest.approx(1.0)
+    assert metrics["neural_graph_marker_exact_matches"] == pytest.approx(0.0)
+    assert metrics["neural_graph_marker_exact_match_rate"] == pytest.approx(0.0)
+    assert metrics["neural_semantic_anchor_avg_manhattan_error"] > 0.0
+
+
+def test_graph_marker_alignment_metrics_reach_exact_match_after_overlay():
+    pipeline = NeuralSymbolicDungeonPipeline(
+        device="cpu",
+        enable_logging=False,
+        room_generator_mode="latent_diffusion",
+    )
+
+    mission_graph = nx.DiGraph()
+    mission_graph.add_node(0, is_start=True, pos=(0, 0))
+    mission_graph.add_node(1, pos=(0, 1))
+    mission_graph.add_edge(0, 1, edge_type="path")
+
+    base_grid = np.full((ROOM_HEIGHT, ROOM_WIDTH), int(SEMANTIC_PALETTE["WALL"]), dtype=np.int32)
+    base_grid[1:-1, 1:-1] = int(SEMANTIC_PALETTE["FLOOR"])
+
+    placements = pipeline._plan_room_graph_marker_layout(
+        base_grid,
+        graph=mission_graph,
+        room_id=0,
+        start_goal=((ROOM_HEIGHT // 2, 0), (ROOM_HEIGHT // 2, ROOM_WIDTH - 1)),
+    )
+    overlaid, _, _ = pipeline._overlay_room_graph_markers(
+        base_grid,
+        graph=mission_graph,
+        room_id=0,
+        start_goal=((ROOM_HEIGHT // 2, 0), (ROOM_HEIGHT // 2, ROOM_WIDTH - 1)),
+    )
+    metrics = pipeline._measure_room_graph_marker_alignment(
+        overlaid,
+        placements=placements,
+        prefix="final_post_overlay_",
+    )
+
+    assert metrics["final_post_overlay_graph_marker_expected"] == pytest.approx(1.0)
+    assert metrics["final_post_overlay_graph_marker_exact_matches"] == pytest.approx(1.0)
+    assert metrics["final_post_overlay_graph_marker_exact_match_rate"] == pytest.approx(1.0)
+    assert metrics["final_post_overlay_semantic_anchor_avg_manhattan_error"] == pytest.approx(0.0)
 
 
 def test_default_wfc_adjacency_allows_multi_tile_doors():
@@ -557,6 +985,62 @@ def test_pipeline_diffusion_loader_rejects_checkpoint_without_diffusion_state_di
 
     with pytest.raises(ValueError, match="does not contain a loadable state_dict"):
         pipeline._load_diffusion(str(ckpt_path))
+
+
+def test_pipeline_diffusion_loader_prefers_ema_weights_for_inference(tmp_path):
+    pipeline = NeuralSymbolicDungeonPipeline.create_symbolic_repair_pipeline(
+        device="cpu",
+        enable_logging=False,
+    )
+
+    model = create_latent_diffusion(
+        latent_dim=4,
+        context_dim=8,
+        model_channels=8,
+        num_timesteps=10,
+        cfg_scale=3.0,
+        unet_channel_mult=(1,),
+        unet_num_res_blocks=1,
+        unet_attention_resolutions=(),
+        unet_num_heads=1,
+        room_topology_channels=ROOM_TOPOLOGY_CHANNEL_COUNT,
+    )
+    raw_state = model.state_dict()
+    probe_key = next(
+        key for key, value in raw_state.items()
+        if torch.is_tensor(value) and value.dtype.is_floating_point
+    )
+    ema_state = {
+        key: value.clone() if torch.is_tensor(value) else value
+        for key, value in raw_state.items()
+    }
+    ema_state[probe_key] = ema_state[probe_key] + 1.0
+
+    ckpt_path = tmp_path / "diffusion_ema_bundle.pth"
+    torch.save(
+        {
+            "diffusion_state_dict": raw_state,
+            "ema_diffusion_state_dict": ema_state,
+            "config": {
+                "latent_dim": 4,
+                "context_dim": 8,
+                "num_timesteps": 10,
+                "cfg_scale": 3.0,
+                "model_channels": 8,
+                "unet_channel_mult": [1],
+                "unet_num_res_blocks": 1,
+                "unet_attention_resolutions": [],
+                "unet_num_heads": 1,
+                "room_topology_channels": ROOM_TOPOLOGY_CHANNEL_COUNT,
+            },
+        },
+        ckpt_path,
+    )
+
+    loaded = pipeline._load_diffusion(str(ckpt_path))
+
+    assert getattr(loaded, "inference_checkpoint_state_key") == "ema_diffusion_state_dict"
+    assert torch.allclose(loaded.state_dict()[probe_key], ema_state[probe_key])
 
 
 def test_pipeline_random_init_loaders_follow_bound_component_dimensions():

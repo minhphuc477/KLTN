@@ -12,7 +12,11 @@ from src.core.definitions import (
     SEMANTIC_PALETTE,
 )
 from src.pipeline.spatial_utils import fit_room_grid
-from src.pipeline.room_topology_conditioning import ROOM_TOPOLOGY_CHANNELS, build_room_topology_condition_map
+from src.pipeline.room_topology_conditioning import (
+    ROOM_TOPOLOGY_CHANNELS,
+    build_room_semantic_anchor_points,
+    build_room_topology_condition_map,
+)
 from src.zelda_data.zelda_loader import (
     ZeldaDungeonDataset,
     _build_room_graph_sample,
@@ -189,6 +193,8 @@ def test_graph_extraction_preserves_one_way_direction_and_battery_features():
 def test_room_topology_condition_map_preserves_typed_gate_channels():
     topo = build_room_topology_condition_map(
         required_doors={"N": False, "S": False, "E": True, "W": True},
+        incoming_dirs={"W"},
+        outgoing_dirs={"E"},
         edge_constraint_tokens={
             "E": {"bombable", "secret"},
             "W": {"switch", "state_block"},
@@ -203,6 +209,45 @@ def test_room_topology_condition_map_preserves_typed_gate_channels():
     assert float(topo[ROOM_TOPOLOGY_CHANNELS["gate_switch_w"]].sum()) > 0.0
 
 
+def test_room_topology_condition_map_localizes_semantic_role_anchors():
+    role_flags = {
+        "is_start": True,
+        "has_goal": True,
+        "has_key": True,
+        "has_item": True,
+        "has_puzzle": True,
+    }
+    anchors = build_room_semantic_anchor_points(
+        start=(8, 1),
+        goal=(8, ROOM_WIDTH - 2),
+        required_doors={"W": True, "E": True},
+        incoming_dirs={"W"},
+        outgoing_dirs={"E"},
+        room_role_flags=role_flags,
+    )
+    topo = build_room_topology_condition_map(
+        start=(8, 1),
+        goal=(8, ROOM_WIDTH - 2),
+        required_doors={"W": True, "E": True},
+        incoming_dirs={"W"},
+        outgoing_dirs={"E"},
+        room_role_flags=role_flags,
+    )
+
+    for role_name, anchor_name in (
+        ("role_start", "start"),
+        ("role_goal", "goal"),
+        ("role_key", "key"),
+        ("role_item", "item"),
+        ("role_puzzle", "puzzle"),
+    ):
+        channel = topo[ROOM_TOPOLOGY_CHANNELS[role_name]]
+        anchor = anchors[anchor_name]
+        assert float(channel[anchor[0], anchor[1]]) == 1.0
+        assert float(np.sum(channel == 1.0)) == 1.0
+        assert float(channel[ROOM_HEIGHT // 2, ROOM_WIDTH // 2]) >= 0.15
+
+
 def test_fit_room_grid_transposes_swapped_room_shape_instead_of_cropping():
     swapped = np.arange(ROOM_WIDTH * ROOM_HEIGHT, dtype=np.int32).reshape(ROOM_WIDTH, ROOM_HEIGHT)
 
@@ -212,7 +257,7 @@ def test_fit_room_grid_transposes_swapped_room_shape_instead_of_cropping():
     assert np.array_equal(fitted, swapped.transpose())
 
 
-def test_room_graph_sample_uses_actual_room_trace_for_traversability():
+def test_room_graph_sample_runtime_aligned_topology_avoids_room_grid_trace_leakage():
     graph = nx.DiGraph()
     graph.add_node(10, label="s", is_start=True)
     graph.add_node(20, label="e")
@@ -255,11 +300,65 @@ def test_room_graph_sample_uses_actual_room_trace_for_traversability():
     sample = _build_room_graph_sample(dungeon, (0, 0), start_room, base_graph)
     traversability = sample["room_topology_map"][ROOM_TOPOLOGY_CHANNELS["traversability"]]
 
+    assert sample["topology_supervision_mode"] == "runtime_aligned"
+    assert traversability[ROOM_HEIGHT // 2, ROOM_WIDTH // 2] == 1.0
+    assert float(traversability[1, 1:ROOM_WIDTH].sum()) < float(ROOM_WIDTH - 1)
+
+
+def test_room_graph_sample_oracle_mode_uses_actual_room_trace_for_traversability():
+    graph = nx.DiGraph()
+    graph.add_node(10, label="s", is_start=True)
+    graph.add_node(20, label="e")
+    graph.add_edge(10, 20, label="", edge_type="open")
+
+    wall = int(SEMANTIC_PALETTE["WALL"])
+    floor = int(SEMANTIC_PALETTE["FLOOR"])
+    start_tile = int(SEMANTIC_PALETTE["START"])
+    room_grid = np.full((ROOM_HEIGHT, ROOM_WIDTH), wall, dtype=np.int32)
+    room_grid[1, 1:ROOM_WIDTH] = floor
+    room_grid[1, 1] = start_tile
+
+    start_room = SimpleNamespace(
+        semantic_grid=room_grid,
+        doors={"N": False, "S": False, "E": True, "W": False},
+        has_boss=False,
+        has_triforce=False,
+        is_start=True,
+        graph_node_id=10,
+        node_label="s",
+    )
+    next_room = SimpleNamespace(
+        semantic_grid=np.full((ROOM_HEIGHT, ROOM_WIDTH), floor, dtype=np.int32),
+        doors={"N": False, "S": False, "E": False, "W": True},
+        has_boss=False,
+        has_triforce=False,
+        is_start=False,
+        graph_node_id=20,
+        node_label="e",
+    )
+    dungeon = SimpleNamespace(
+        graph=graph,
+        rooms={
+            (0, 0): start_room,
+            (0, 1): next_room,
+        },
+    )
+
+    base_graph = _extract_graph_from_dungeon(dungeon)
+    sample = _build_room_graph_sample(
+        dungeon,
+        (0, 0),
+        start_room,
+        base_graph,
+        topology_supervision_mode="oracle_room_grid",
+    )
+    traversability = sample["room_topology_map"][ROOM_TOPOLOGY_CHANNELS["traversability"]]
+
     assert float(traversability[1, 1:ROOM_WIDTH].sum()) >= float(ROOM_WIDTH - 1)
     assert traversability[ROOM_HEIGHT // 2, ROOM_WIDTH // 2] == 0.0
 
 
-def test_room_graph_sample_uses_validator_plan_for_locked_exit_key_room():
+def test_room_graph_sample_oracle_mode_uses_validator_plan_for_locked_exit_key_room():
     graph = nx.DiGraph()
     graph.add_node(10, label="s", is_start=True)
     graph.add_node(20, label="")
@@ -303,13 +402,19 @@ def test_room_graph_sample_uses_validator_plan_for_locked_exit_key_room():
     )
 
     base_graph = _extract_graph_from_dungeon(dungeon)
-    sample = _build_room_graph_sample(dungeon, (0, 0), key_room, base_graph)
+    sample = _build_room_graph_sample(
+        dungeon,
+        (0, 0),
+        key_room,
+        base_graph,
+        topology_supervision_mode="oracle_room_grid",
+    )
     traversability = sample["room_topology_map"][ROOM_TOPOLOGY_CHANNELS["traversability"]]
 
     assert traversability[6, 3] == 1.0
 
 
-def test_room_graph_sample_uses_validator_plan_for_soft_locked_enemy_room():
+def test_room_graph_sample_oracle_mode_uses_validator_plan_for_soft_locked_enemy_room():
     graph = nx.DiGraph()
     graph.add_node(5, label="")
     graph.add_node(10, label="e")
@@ -363,7 +468,13 @@ def test_room_graph_sample_uses_validator_plan_for_soft_locked_enemy_room():
     )
 
     base_graph = _extract_graph_from_dungeon(dungeon)
-    sample = _build_room_graph_sample(dungeon, (0, 1), combat_room, base_graph)
+    sample = _build_room_graph_sample(
+        dungeon,
+        (0, 1),
+        combat_room,
+        base_graph,
+        topology_supervision_mode="oracle_room_grid",
+    )
     traversability = sample["room_topology_map"][ROOM_TOPOLOGY_CHANNELS["traversability"]]
 
     assert traversability[6, 3] == 1.0

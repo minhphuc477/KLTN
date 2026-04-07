@@ -29,6 +29,7 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 import torch
 import torch.nn as nn
 
+from src.pipeline.room_topology_conditioning import build_topology_anchor_policy_metadata
 from src.utils.checkpoint import atomic_torch_save, log_checkpoint_artifact, write_checkpoint_metadata
 
 logger = logging.getLogger(__name__)
@@ -74,13 +75,20 @@ class LoRALayer(nn.Module):
         rank: int = 8,
         alpha: float = 8.0,
         dropout: float = 0.0,
+        *,
+        device: Optional[torch.device] = None,
+        dtype: Optional[torch.dtype] = None,
     ):
         super().__init__()
         self.rank = int(max(1, rank))
         self.alpha = float(alpha)
         self.scaling = float(alpha) / float(self.rank)
-        self.lora_A = nn.Parameter(torch.randn(in_features, self.rank) * 0.01)
-        self.lora_B = nn.Parameter(torch.zeros(self.rank, out_features))
+        self.lora_A = nn.Parameter(
+            torch.randn(in_features, self.rank, device=device, dtype=dtype) * 0.01
+        )
+        self.lora_B = nn.Parameter(
+            torch.zeros(self.rank, out_features, device=device, dtype=dtype)
+        )
         self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -104,6 +112,8 @@ class LoRALinear(nn.Module):
             rank=rank,
             alpha=alpha,
             dropout=dropout,
+            device=base_layer.weight.device,
+            dtype=base_layer.weight.dtype,
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -182,6 +192,7 @@ def save_fast_sampler_checkpoint(
     target_modules: Iterable[str] = DEFAULT_LORA_TARGETS,
     metrics: Optional[Dict[str, Any]] = None,
     distillation_type: str = "consistency_lora",
+    topology_anchor_policy: Optional[Dict[str, Any]] = None,
 ) -> None:
     payload = {
         "lora_state_dict": dict(lora_state_dict),
@@ -207,6 +218,10 @@ def save_fast_sampler_checkpoint(
         extra={
             "base_diffusion_checkpoint": None if base_diffusion_checkpoint is None else str(base_diffusion_checkpoint),
             "target_modules": [str(t) for t in target_modules],
+            "topology_anchor_policy": dict(
+                topology_anchor_policy
+                or build_topology_anchor_policy_metadata()
+            ),
         },
     )
     log_checkpoint_artifact(

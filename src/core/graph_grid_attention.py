@@ -269,21 +269,22 @@ class GraphNodePositionEncoding(nn.Module):
             [B, N, D] with position encoding added
         """
         output = self.feature_norm(node_features)
+        target_dtype = output.dtype
         
         if node_positions is not None:
-            pos_enc = self.pos_embed(node_positions.float())
+            pos_enc = self.pos_embed(node_positions.to(dtype=target_dtype))
             output = output + torch.sigmoid(self.pos_gate) * pos_enc
         
         if tpe is not None:
-            topo_enc = self.topo_embed(tpe.float())
+            topo_enc = self.topo_embed(tpe.to(dtype=target_dtype))
             output = output + torch.sigmoid(self.topo_gate) * topo_enc
 
         if current_node_distance is not None:
-            distance_enc = self.distance_embed(current_node_distance.float())
+            distance_enc = self.distance_embed(current_node_distance.to(dtype=target_dtype))
             output = output + torch.sigmoid(self.distance_gate) * distance_enc
 
         if structure_features is not None:
-            struct_enc = self.struct_embed(structure_features.float())
+            struct_enc = self.struct_embed(structure_features.to(dtype=target_dtype))
             output = output + torch.sigmoid(self.struct_gate) * struct_enc
         
         return self.output_norm(output)

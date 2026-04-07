@@ -17,7 +17,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-from src.core.definitions import ROOM_HEIGHT, ROOM_TOPOLOGY_CHANNEL_COUNT, ROOM_WIDTH
+from src.core.definitions import (
+    ROOM_HEIGHT,
+    ROOM_TOPOLOGY_CHANNEL_COUNT,
+    ROOM_TOPOLOGY_CHANNELS,
+    ROOM_WIDTH,
+)
 from src.core.latent_diffusion import UNetDenoiser
 
 logger = logging.getLogger(__name__)
@@ -40,8 +45,8 @@ class DiscreteMaskedRoomModel(nn.Module):
         self,
         *,
         num_classes: int = 44,
-        hidden_dim: int = 64,
-        model_channels: int = 128,
+        hidden_dim: int = 48,
+        model_channels: int = 64,
         context_dim: int = 256,
         num_steps: int = 8,
         attention_mode: str = "softmax",
@@ -50,10 +55,10 @@ class DiscreteMaskedRoomModel(nn.Module):
         graph_auto_linear_attention_nodes: int = 128,
         spatial_graph_gate_init: float = -2.0,
         spatial_topology_gate_init: float = -2.0,
-        unet_channel_mult: Sequence[int] = (1, 2, 4),
-        unet_num_res_blocks: int = 2,
-        unet_attention_resolutions: Sequence[int] = (1, 2),
-        unet_num_heads: int = 8,
+        unet_channel_mult: Sequence[int] = (1, 2),
+        unet_num_res_blocks: int = 1,
+        unet_attention_resolutions: Sequence[int] = (0, 1),
+        unet_num_heads: int = 4,
         unet_dropout: float = 0.1,
         room_topology_channels: int = ROOM_TOPOLOGY_CHANNEL_COUNT,
         mask_token_id: Optional[int] = None,
@@ -140,6 +145,7 @@ class DiscreteMaskedRoomModel(nn.Module):
         room_topology_map: Optional[Tensor],
         *,
         num_classes: int = 44,
+        semantic_anchor_threshold: float = 0.5,
     ) -> Tuple[Tensor, Tensor]:
         """
         Extract hard-known tokens from a topology map.
@@ -168,14 +174,27 @@ class DiscreteMaskedRoomModel(nn.Module):
         if int(topo.shape[0]) != B:
             raise ValueError(f"room_topology_map batch size {int(topo.shape[0])} does not match tokens batch {B}")
 
-        keep = (
-            (topo[:, 1] > 0.5)   # start
-            | (topo[:, 2] > 0.5) # goal
-            | (topo[:, 3] > 0.5) # door_n
-            | (topo[:, 4] > 0.5) # door_s
-            | (topo[:, 5] > 0.5) # door_e
-            | (topo[:, 6] > 0.5) # door_w
+        semantic_anchor_channels = (
+            ROOM_TOPOLOGY_CHANNELS["start"],
+            ROOM_TOPOLOGY_CHANNELS["goal"],
+            ROOM_TOPOLOGY_CHANNELS["door_n"],
+            ROOM_TOPOLOGY_CHANNELS["door_s"],
+            ROOM_TOPOLOGY_CHANNELS["door_e"],
+            ROOM_TOPOLOGY_CHANNELS["door_w"],
+            ROOM_TOPOLOGY_CHANNELS["role_start"],
+            ROOM_TOPOLOGY_CHANNELS["role_goal"],
+            ROOM_TOPOLOGY_CHANNELS["role_enemy"],
+            ROOM_TOPOLOGY_CHANNELS["role_key"],
+            ROOM_TOPOLOGY_CHANNELS["role_item"],
+            ROOM_TOPOLOGY_CHANNELS["role_boss"],
+            ROOM_TOPOLOGY_CHANNELS["role_puzzle"],
         )
+        keep = torch.zeros(B, H, W, device=tokens.device, dtype=torch.bool)
+        threshold = float(semantic_anchor_threshold)
+        for channel in semantic_anchor_channels:
+            if int(channel) >= int(topo.shape[1]):
+                continue
+            keep |= topo[:, int(channel)] > threshold
         fixed_mask |= keep
         fixed_tokens[fixed_mask] = tokens[fixed_mask].clamp(0, num_classes - 1)
         return fixed_tokens, fixed_mask
@@ -193,6 +212,16 @@ class DiscreteMaskedRoomModel(nn.Module):
 
         batch_size = int(context.shape[0])
         adjusted = edge_index.to(context.device)
+        if adjusted.dim() == 2:
+            adjusted = adjusted.unsqueeze(0)
+            if batch_size > 1:
+                adjusted = adjusted.expand(batch_size, -1, -1)
+        elif adjusted.dim() == 3 and int(adjusted.shape[0]) == 1 and batch_size > 1:
+            adjusted = adjusted.expand(batch_size, -1, -1)
+        if adjusted.dim() != 3 or int(adjusted.shape[0]) != batch_size or int(adjusted.shape[1]) != 2:
+            raise ValueError(
+                f"edge_index shape {tuple(adjusted.shape)} must match [B,2,E] for batch size {batch_size}."
+            )
         node_mask = graph_data.get("node_mask")
         if isinstance(node_mask, torch.Tensor):
             node_mask = node_mask.to(context.device)
@@ -267,6 +296,12 @@ class DiscreteMaskedRoomModel(nn.Module):
             if not isinstance(value, torch.Tensor):
                 continue
             value = value.to(context.device)
+            if key == "edge_index" and value.dim() == 2:
+                value = value.unsqueeze(0)
+                if batch_size > 1:
+                    value = value.expand(batch_size, -1, -1)
+            if key == "edge_index" and value.dim() == 3 and int(value.shape[0]) == 1 and batch_size > 1:
+                value = value.expand(batch_size, -1, -1)
             if key in {"tpe", "node_positions", "current_node_distance"} and value.dim() == 2:
                 value = value.unsqueeze(0)
                 if batch_size > 1:
@@ -275,6 +310,10 @@ class DiscreteMaskedRoomModel(nn.Module):
                 value = value.unsqueeze(0)
                 if batch_size > 1:
                     value = value.expand(batch_size, -1, -1, -1)
+            if key == "edge_index" and (value.dim() != 3 or int(value.shape[1]) != 2):
+                raise ValueError(
+                    f"edge_index shape {tuple(value.shape)} must match [B,2,E] for batch size {batch_size}."
+                )
             if int(value.shape[0]) != batch_size:
                 raise ValueError(
                     f"{key} batch size {int(value.shape[0])} does not match context batch size {batch_size}."
@@ -467,8 +506,8 @@ class DiscreteMaskedRoomModel(nn.Module):
 def create_discrete_masked_model(
     *,
     num_classes: int = 44,
-    hidden_dim: int = 64,
-    model_channels: int = 128,
+    hidden_dim: int = 48,
+    model_channels: int = 64,
     context_dim: int = 256,
     num_steps: int = 8,
     attention_mode: str = "softmax",
@@ -477,10 +516,10 @@ def create_discrete_masked_model(
     graph_auto_linear_attention_nodes: int = 128,
     spatial_graph_gate_init: float = -2.0,
     spatial_topology_gate_init: float = -2.0,
-    unet_channel_mult: Sequence[int] = (1, 2, 4),
-    unet_num_res_blocks: int = 2,
-    unet_attention_resolutions: Sequence[int] = (1, 2),
-    unet_num_heads: int = 8,
+    unet_channel_mult: Sequence[int] = (1, 2),
+    unet_num_res_blocks: int = 1,
+    unet_attention_resolutions: Sequence[int] = (0, 1),
+    unet_num_heads: int = 4,
     unet_dropout: float = 0.1,
     room_topology_channels: int = ROOM_TOPOLOGY_CHANNEL_COUNT,
 ) -> DiscreteMaskedRoomModel:

@@ -11,13 +11,21 @@ from src.train_diffusion import DiffusionTrainer
 EMPTY_NEIGHBORS = {"N": None, "S": None, "E": None, "W": None}
 
 
-class _DummyEvalModel:
-    def __init__(self):
+class _DummyEvalModel(torch.nn.Module):
+    def __init__(self, diffusion_loss: float = 0.5):
+        super().__init__()
         self.last_conditioning = None
         self.last_graph_data = None
+        self.diffusion_loss = float(diffusion_loss)
 
     def eval(self):
         return self
+
+    def training_loss(self, z_0, conditioning, graph_data=None):
+        self.last_conditioning = conditioning
+        self.last_graph_data = graph_data
+        _ = z_0
+        return torch.tensor(self.diffusion_loss, dtype=torch.float32)
 
     def sample(self, conditioning, shape, graph_data=None):
         self.last_conditioning = conditioning
@@ -26,6 +34,12 @@ class _DummyEvalModel:
 
 
 class _NaNEvalModel(_DummyEvalModel):
+    def training_loss(self, z_0, conditioning, graph_data=None):
+        self.last_conditioning = conditioning
+        self.last_graph_data = graph_data
+        _ = z_0
+        return torch.full((), float("nan"), dtype=torch.float32)
+
     def sample(self, conditioning, shape, graph_data=None):
         self.last_conditioning = conditioning
         self.last_graph_data = graph_data
@@ -179,7 +193,9 @@ def _make_stub_trainer(context_dim: int = 8) -> DiffusionTrainer:
         context_dim=context_dim,
         edge_feature_dim=GRAPH_EDGE_FEATURE_DIM,
         warmup_epochs=0,
+        alpha_visual=1.0,
         alpha_logic=0.1,
+        validation_num_diffusion_samples=4,
     )
     trainer.device = torch.device("cpu")
     trainer.epoch = 0
@@ -281,13 +297,30 @@ def test_validate_node_sequence_conditioning_is_batched_and_padded():
     graph_list = _make_node_sequence_graph_list()
     dataloader = [(real_maps, graph_list)]
 
-    _metrics = DiffusionTrainer.validate(trainer, dataloader, num_samples=2)
+    _metrics = DiffusionTrainer.validate(trainer, dataloader, num_samples=2, num_diffusion_samples=2)
 
     assert tuple(trainer.ema_diffusion.last_conditioning.shape) == (2, 5, 8)
     _assert_batched_graph_sequence(trainer.ema_diffusion.last_graph_data, graph_list)
+    assert _metrics["val_diffusion_loss"] == pytest.approx(0.5)
     assert _metrics["val_logic_loss"] == pytest.approx(0.25)
+    assert _metrics["val_total_loss"] == pytest.approx(0.525)
     assert _metrics["val_solvability_proxy"] == pytest.approx(float(torch.exp(torch.tensor(-0.25)).item()))
     assert 0.0 <= _metrics["val_solvability_proxy"] <= 1.0
+
+
+def test_validate_warmup_total_loss_excludes_logic_term():
+    trainer = _make_stub_trainer(context_dim=8)
+    trainer.epoch = -1
+
+    real_maps = torch.zeros((2, 1, ROOM_HEIGHT, ROOM_WIDTH), dtype=torch.float32)
+    graph_list = _make_node_sequence_graph_list()
+    dataloader = [(real_maps, graph_list)]
+
+    metrics = DiffusionTrainer.validate(trainer, dataloader, num_samples=2, num_diffusion_samples=2)
+
+    assert metrics["val_diffusion_loss"] == pytest.approx(0.5)
+    assert metrics["val_logic_loss"] == pytest.approx(0.25)
+    assert metrics["val_total_loss"] == pytest.approx(0.5)
 
 
 def test_encode_graph_conditioning_prepends_room_anchor_for_room_samples():
@@ -646,9 +679,11 @@ def test_validate_skips_nonfinite_generated_samples():
 
     metrics = DiffusionTrainer.validate(trainer, [batch], num_samples=2)
 
+    assert metrics["val_diffusion_loss"] == pytest.approx(float("inf"))
     assert metrics["val_logic_loss"] == pytest.approx(float("inf"))
+    assert metrics["val_total_loss"] == pytest.approx(float("inf"))
     assert metrics["val_solvability"] == pytest.approx(0.0)
-    assert metrics["val_skipped_nonfinite"] == pytest.approx(2.0)
+    assert metrics["val_skipped_nonfinite"] == pytest.approx(4.0)
 
 
 def test_state_dict_is_finite_rejects_nan_weights():

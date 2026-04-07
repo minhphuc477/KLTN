@@ -1,6 +1,6 @@
 # KLTN Documentation Index
 
-Last updated: 2026-03-30
+Last updated: 2026-04-06
 
 This is the single entrypoint for repository documentation. The top level of
 `docs/` now contains only current reference material. Dated snapshots and
@@ -10,10 +10,12 @@ one-off research notes are archived under [`archive/`](archive/README.md).
 
 1. [`../README.md`](../README.md) - repository overview, setup, and usage
 2. [`../ARCHITECTURE_DIAGRAMS.md`](../ARCHITECTURE_DIAGRAMS.md) - high-level visual overview
-3. [`README.md`](README.md) - docs-folder landing page
-4. [`CURRENT_ARCHITECTURE.md`](CURRENT_ARCHITECTURE.md) - current implementation map
+3. [`CURRENT_ARCHITECTURE.md`](CURRENT_ARCHITECTURE.md) - current implementation map
+4. [`CANONICAL_MODEL_RATIONALE_ABLATION_AND_COMPLEXITY_GUIDE.md`](CANONICAL_MODEL_RATIONALE_ABLATION_AND_COMPLEXITY_GUIDE.md) - thesis/report-ready explanation of the canonical model, config rationale, block-by-block flow, ablations, and complexity
 5. [`TRACEABILITY_AND_CLAIM_VALIDATION.md`](TRACEABILITY_AND_CLAIM_VALIDATION.md) - claim-to-code traceability
-6. [`ARCHITECTURE_RESEARCH_AUDIT_2026_03_30.md`](ARCHITECTURE_RESEARCH_AUDIT_2026_03_30.md) - latest literature-backed architecture audit and implementation summary
+6. [`TOPOLOGY_COMMANDS.md`](TOPOLOGY_COMMANDS.md) - canonical CLI guide for topology graphs, manual mission graphs, and fixed-graph audits
+7. [`ARCHITECTURE_RESEARCH_AUDIT_2026_03_31.md`](ARCHITECTURE_RESEARCH_AUDIT_2026_03_31.md) - latest broad literature-backed architecture audit
+8. [`ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md`](ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md) - focused topology-signal audit and semantic-anchor recommendations
 
 ## Architecture And Core System Docs
 
@@ -22,13 +24,15 @@ one-off research notes are archived under [`archive/`](archive/README.md).
 - [`CBS_ARCHITECTURE.md`](CBS_ARCHITECTURE.md)
 - [`GRAMMAR_REFERENCE.md`](GRAMMAR_REFERENCE.md)
 - [`SOLVERS_AND_GUI_REFERENCE.md`](SOLVERS_AND_GUI_REFERENCE.md)
+- [`TOPOLOGY_COMMANDS.md`](TOPOLOGY_COMMANDS.md)
 - [`VGLC_COMPLIANCE_GUIDE.md`](VGLC_COMPLIANCE_GUIDE.md)
 - [`ZELDA_SOLVER_DOCUMENTATION.md`](ZELDA_SOLVER_DOCUMENTATION.md)
 
 ## Benchmarking, Evaluation, And Research Guides
 
 - [`SOTA_COMPARISON_AND_BENCHMARKS.md`](SOTA_COMPARISON_AND_BENCHMARKS.md)
-- [`ARCHITECTURE_RESEARCH_AUDIT_2026_03_30.md`](ARCHITECTURE_RESEARCH_AUDIT_2026_03_30.md)
+- [`ARCHITECTURE_RESEARCH_AUDIT_2026_03_31.md`](ARCHITECTURE_RESEARCH_AUDIT_2026_03_31.md)
+- [`ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md`](ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md)
 - [`REALISM_PROFILE_WEIGHTING_AND_TUNING_GUIDE.md`](REALISM_PROFILE_WEIGHTING_AND_TUNING_GUIDE.md)
 - [`MATCHED_BUDGET_BENCHMARK_PROTOCOL.md`](MATCHED_BUDGET_BENCHMARK_PROTOCOL.md)
 - [`OOD_SCALING_AND_BLINDED_EVAL_PROTOCOL.md`](OOD_SCALING_AND_BLINDED_EVAL_PROTOCOL.md)

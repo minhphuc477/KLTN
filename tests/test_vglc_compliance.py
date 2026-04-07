@@ -488,6 +488,21 @@ class TestGraphTopologyValidation:
         # For now, just check that goal subgraph validation runs
         assert isinstance(is_valid, bool)
 
+    def test_physical_start_node_zero_is_valid(self):
+        """A real start room with node id 0 should not be treated as missing."""
+        G = nx.DiGraph()
+        G.add_node(0, label='start')
+        G.add_node(1, label='e')
+        G.add_node(2, label='b')
+        G.add_node(3, label='t')
+        G.add_edge(0, 1)
+        G.add_edge(1, 2)
+        G.add_edge(2, 3, label='l')
+
+        is_valid, errors = validate_graph_topology(G)
+
+        assert is_valid, f"Graph with physical start id 0 should be valid, errors: {errors}"
+
 
 # ============================================================================
 # INTEGRATION TESTS
