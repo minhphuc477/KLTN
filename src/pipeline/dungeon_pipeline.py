@@ -2069,7 +2069,13 @@ class NeuralSymbolicDungeonPipeline:
             except Exception:
                 route_mask = np.zeros((ROOM_HEIGHT, ROOM_WIDTH), dtype=bool)
         stats["planned_route_pixels"] = int(np.sum(route_mask))
-        preserve_margin = int(max(0, getattr(self, "default_puzzle_room_preserve_route_margin", 1)))
+        scaffold_profile = self._resolve_puzzle_room_scaffold_profile(
+            attrs=attrs,
+            role_flags=role_flags,
+            semantics=semantics,
+            node_type=node_type,
+        )
+        preserve_margin = int(max(0, scaffold_profile.get("preserve_route_margin", getattr(self, "default_puzzle_room_preserve_route_margin", 0))))
         reserved = self._dilate_room_mask(route_mask, radius=preserve_margin) if preserve_margin > 0 else route_mask.copy()
 
         semantic_anchors = build_room_semantic_anchor_points(
@@ -2117,12 +2123,11 @@ class NeuralSymbolicDungeonPipeline:
         flow_is_horizontal = abs(int(destination_anchor[1]) - int(source_anchor[1])) >= abs(
             int(destination_anchor[0]) - int(source_anchor[0])
         )
-        archetype = self._select_puzzle_room_scaffold_archetype(
-            role_flags=role_flags,
-            semantics=semantics,
-            node_type=node_type,
-        )
+        archetype = str(scaffold_profile.get("archetype", "serpentine") or "serpentine").strip().lower()
         stats["archetype"] = str(archetype)
+        stats["profile_branch_density"] = float(scaffold_profile.get("branch_density", getattr(self, "default_puzzle_room_branch_density", 0.75)))
+        stats["profile_block_budget"] = int(scaffold_profile.get("block_budget", getattr(self, "default_puzzle_room_block_budget", 28)))
+        stats["profile_preserve_route_margin"] = int(preserve_margin)
 
         def _can_place(row: int, col: int) -> bool:
             if not (2 <= int(row) <= ROOM_HEIGHT - 3 and 2 <= int(col) <= ROOM_WIDTH - 3):
@@ -2131,7 +2136,7 @@ class NeuralSymbolicDungeonPipeline:
                 return False
             return int(out[int(row), int(col)]) == floor_id
 
-        budget_remaining = int(max(0, getattr(self, "default_puzzle_room_block_budget", 28)))
+        budget_remaining = int(max(0, scaffold_profile.get("block_budget", getattr(self, "default_puzzle_room_block_budget", 28))))
 
         def _paint_block_line(points: List[Tuple[int, int]]) -> int:
             nonlocal budget_remaining
@@ -2159,7 +2164,7 @@ class NeuralSymbolicDungeonPipeline:
                 segments_added += 1
                 tiles_added += added
 
-        branch_density = float(max(0.0, min(1.0, getattr(self, "default_puzzle_room_branch_density", 0.75))))
+        branch_density = float(max(0.0, min(1.0, scaffold_profile.get("branch_density", getattr(self, "default_puzzle_room_branch_density", 0.75)))))
         optional_quota = int(round(branch_density * len(optional_segments)))
         if branch_density > 0.0 and optional_segments and optional_quota <= 0:
             optional_quota = 1
@@ -5355,6 +5360,8 @@ class NeuralSymbolicDungeonPipeline:
     def _room_role_flags(self, attrs: Dict[str, Any]) -> Dict[str, bool]:
         """Extract high-level room-role booleans from graph node metadata."""
         tokens = self._parse_label_tokens(attrs.get("label"))
+        raw_type = str(attrs.get("type", attrs.get("node_type", attrs.get("room_type", ""))) or "").strip().lower()
+        difficulty_rating = str(attrs.get("difficulty_rating", "") or "").strip().upper()
 
         def _hint(name: str, *aliases: str) -> bool:
             return self._coerce_bool(attrs.get(name)) or any(self._coerce_bool(attrs.get(alias)) for alias in aliases)
@@ -5367,6 +5374,74 @@ class NeuralSymbolicDungeonPipeline:
             "has_goal": _hint("has_triforce", "is_triforce", "is_goal") or "t" in tokens or "goal" in tokens or "triforce" in tokens,
             "has_boss": _hint("has_boss", "is_boss") or "b" in tokens or "boss" in tokens,
             "has_puzzle": _hint("has_puzzle") or "p" in tokens or "puzzle" in tokens,
+            "is_tutorial_puzzle": bool(_hint("is_tutorial") or raw_type == "tutorial_puzzle" or difficulty_rating == "SAFE"),
+            "is_combat_puzzle": bool(raw_type == "combat_puzzle"),
+            "is_complex_puzzle": bool(raw_type == "complex_puzzle" or difficulty_rating in {"HARD", "EXTREME"}),
+            "is_switch_puzzle": bool(raw_type == "switch"),
+        }
+
+    def _resolve_puzzle_room_scaffold_profile(
+        self,
+        *,
+        attrs: Dict[str, Any],
+        role_flags: Dict[str, bool],
+        semantics: Dict[str, Any],
+        node_type: str,
+    ) -> Dict[str, Any]:
+        """
+        Derive a per-room constructive puzzle profile from topology semantics.
+
+        Hybrid PCG systems work best when local room structure reflects explicit
+        mission intent. This profile keeps the existing scaffold mechanism but
+        adapts its density to pedagogical puzzle subtype information.
+        """
+        archetype = self._select_puzzle_room_scaffold_archetype(
+            role_flags=role_flags,
+            semantics=semantics,
+            node_type=node_type,
+        )
+        branch_density = float(max(0.0, min(1.0, getattr(self, "default_puzzle_room_branch_density", 0.75))))
+        block_budget = int(max(0, getattr(self, "default_puzzle_room_block_budget", 28)))
+        preserve_margin = int(max(0, getattr(self, "default_puzzle_room_preserve_route_margin", 0)))
+        difficulty_rating = str(attrs.get("difficulty_rating", "") or "").strip().upper()
+
+        edge_constraints = semantics.get("edge_constraints", {})
+        flat_edge_tokens: Set[str] = set()
+        for tokens in edge_constraints.values():
+            flat_edge_tokens.update(str(token) for token in tokens)
+
+        required_doors = semantics.get("required_doors", {})
+        required_door_count = int(sum(1 for enabled in required_doors.values() if enabled))
+
+        if role_flags.get("is_tutorial_puzzle", False):
+            archetype = "gate"
+            branch_density = min(branch_density, 0.35)
+            block_budget = min(block_budget, 14)
+        elif role_flags.get("is_combat_puzzle", False):
+            archetype = "combat"
+            branch_density = min(branch_density, 0.45)
+            block_budget = min(block_budget, 18)
+        elif role_flags.get("is_complex_puzzle", False):
+            if archetype not in {"hub", "serpentine"}:
+                archetype = "hub" if required_door_count >= 3 else "serpentine"
+            branch_density = max(branch_density, 0.9)
+            block_budget = max(block_budget, 34)
+        elif role_flags.get("is_switch_puzzle", False) or {"switch", "switch_locked", "state_block", "on_off_gate"} & flat_edge_tokens:
+            archetype = "gate"
+            branch_density = max(branch_density, 0.7)
+            block_budget = max(block_budget, 24)
+        elif node_type in {"item", "protection_item", "minor_item", "treasure", "stair", "stairs_up", "stairs_down", "warp"}:
+            archetype = "island"
+            branch_density = min(max(branch_density, 0.55), 0.8)
+            block_budget = max(block_budget, 22)
+        elif difficulty_rating == "MODERATE" and archetype == "serpentine":
+            branch_density = min(max(branch_density, 0.6), 0.8)
+
+        return {
+            "archetype": str(archetype),
+            "branch_density": float(max(0.0, min(1.0, branch_density))),
+            "block_budget": int(max(0, block_budget)),
+            "preserve_route_margin": int(max(0, preserve_margin)),
         }
 
     def _extract_room_topology_semantics(

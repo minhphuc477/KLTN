@@ -367,6 +367,69 @@ def test_generate_room_puzzle_scaffold_preserves_planned_route_cells():
     assert not any(int(tile) in disallowed for tile in route_tiles.tolist())
 
 
+def test_puzzle_scaffold_profile_adapts_to_complex_puzzle_topology():
+    pipeline = NeuralSymbolicDungeonPipeline.__new__(NeuralSymbolicDungeonPipeline)
+    pipeline.default_puzzle_room_branch_density = 0.75
+    pipeline.default_puzzle_room_block_budget = 28
+    pipeline.default_puzzle_room_preserve_route_margin = 0
+
+    attrs = {
+        "type": "COMPLEX_PUZZLE",
+        "has_puzzle": True,
+        "difficulty_rating": "HARD",
+    }
+    role_flags = pipeline._room_role_flags(attrs)
+    semantics = {
+        "required_doors": {"N": True, "S": True, "E": True, "W": False},
+        "edge_constraints": {"N": set(), "S": set(), "E": set(), "W": set()},
+        "incoming_dirs": {"N"},
+        "outgoing_dirs": {"S", "E"},
+    }
+
+    profile = pipeline._resolve_puzzle_room_scaffold_profile(
+        attrs=attrs,
+        role_flags=role_flags,
+        semantics=semantics,
+        node_type="complex_puzzle",
+    )
+
+    assert profile["archetype"] in {"hub", "serpentine"}
+    assert profile["branch_density"] >= 0.9
+    assert profile["block_budget"] >= 34
+
+
+def test_puzzle_scaffold_profile_prefers_combat_archetype_for_combat_puzzle():
+    pipeline = NeuralSymbolicDungeonPipeline.__new__(NeuralSymbolicDungeonPipeline)
+    pipeline.default_puzzle_room_branch_density = 0.75
+    pipeline.default_puzzle_room_block_budget = 28
+    pipeline.default_puzzle_room_preserve_route_margin = 0
+
+    attrs = {
+        "type": "COMBAT_PUZZLE",
+        "has_puzzle": True,
+        "has_enemy": True,
+        "difficulty_rating": "MODERATE",
+    }
+    role_flags = pipeline._room_role_flags(attrs)
+    semantics = {
+        "required_doors": {"N": False, "S": True, "E": True, "W": False},
+        "edge_constraints": {"N": set(), "S": {"path"}, "E": {"path"}, "W": set()},
+        "incoming_dirs": {"S"},
+        "outgoing_dirs": {"E"},
+    }
+
+    profile = pipeline._resolve_puzzle_room_scaffold_profile(
+        attrs=attrs,
+        role_flags=role_flags,
+        semantics=semantics,
+        node_type="combat_puzzle",
+    )
+
+    assert profile["archetype"] == "combat"
+    assert profile["branch_density"] <= 0.45
+    assert profile["block_budget"] <= 18
+
+
 def test_generate_room_enforces_boundary_shell_except_required_doors():
     pipeline = NeuralSymbolicDungeonPipeline(
         device="cpu",

@@ -45,10 +45,10 @@ def build_manual_rich_topology_graph() -> nx.Graph:
     graph.graph.update(
         {
             "style_id": 1,
-            "name": "manual_rich_topology_v1",
+            "name": "manual_rich_topology_v2",
             "description": (
                 "Hand-authored rich topology for room-branch comparison: "
-                "start, enemy, key, big-key, bomb resource, puzzle, item, stair, arena, boss door, boss, goal."
+                "start, enemy, key, big-key, bomb resource, complex puzzle, item, stair, combat puzzle, boss door, boss, goal."
             ),
         }
     )
@@ -59,11 +59,11 @@ def build_manual_rich_topology_graph() -> nx.Graph:
         {"id": 2, "label": "KEY", "type": "KEY", "pos": (0, 2), "has_key": True, "key_id": 1},
         {"id": 3, "label": "BIG_KEY", "type": "BIG_KEY", "pos": (0, 3), "has_key": True, "key_id": 2},
         {"id": 4, "label": "RESOURCE_FARM", "type": "RESOURCE_FARM", "pos": (1, 0), "drops_resource": "BOMB"},
-        {"id": 5, "label": "PUZZLE", "type": "PUZZLE", "pos": (1, 1), "has_puzzle": True},
+        {"id": 5, "label": "COMPLEX_PUZZLE", "type": "COMPLEX_PUZZLE", "pos": (1, 1), "has_puzzle": True, "difficulty_rating": "HARD"},
         {"id": 6, "label": "ITEM", "type": "ITEM", "pos": (1, 2), "has_item": True, "item_type": "BOMB"},
         {"id": 7, "label": "BOSS_DOOR", "type": "BOSS_DOOR", "pos": (1, 3), "key_id": 2},
         {"id": 8, "label": "STAIR", "type": "STAIR", "pos": (2, 1)},
-        {"id": 9, "label": "ARENA", "type": "ARENA", "pos": (2, 2), "has_enemy": True, "is_arena": True, "enemy_count": 3},
+        {"id": 9, "label": "COMBAT_PUZZLE", "type": "COMBAT_PUZZLE", "pos": (2, 2), "has_enemy": True, "has_puzzle": True, "enemy_count": 3, "difficulty_rating": "MODERATE"},
         {"id": 10, "label": "BOSS", "type": "BOSS", "pos": (2, 3), "has_boss": True, "has_enemy": True, "enemy_count": 1},
         {"id": 11, "label": "GOAL", "type": "GOAL", "pos": (3, 3), "is_goal": True, "has_triforce": True},
     ]
@@ -149,6 +149,9 @@ def _save_manual_graph_layout_png(graph: nx.Graph, out_path: Path) -> None:
         "BIG_KEY": "#4e79a7",
         "RESOURCE_FARM": "#8c564b",
         "PUZZLE": "#9467bd",
+        "TUTORIAL_PUZZLE": "#8b5cf6",
+        "COMBAT_PUZZLE": "#ec4899",
+        "COMPLEX_PUZZLE": "#7c3aed",
         "ITEM": "#17becf",
         "BOSS_DOOR": "#d62728",
         "STAIR": "#bcbd22",
