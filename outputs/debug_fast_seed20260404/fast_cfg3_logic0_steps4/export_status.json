@@ -1,0 +1,9 @@
+{
+  "variant_name": "fast_cfg3_logic0_steps4",
+  "stage": "generating_dungeon",
+  "seed": 20260404,
+  "guidance_scale": 3.0,
+  "logic_guidance_scale": 0.0,
+  "num_diffusion_steps": 4,
+  "use_fast_sampling": true
+}

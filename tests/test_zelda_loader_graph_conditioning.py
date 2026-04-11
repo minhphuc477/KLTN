@@ -14,9 +14,14 @@ from src.core.definitions import (
 from src.pipeline.spatial_utils import fit_room_grid
 from src.pipeline.room_topology_conditioning import (
     ROOM_TOPOLOGY_CHANNELS,
+    _state_key,
+    _room_local_state_search,
+    _initial_state_for_sequence,
     build_room_semantic_anchor_points,
+    build_semantic_room_plan_trace,
     build_room_topology_condition_map,
 )
+from src.simulation.validator import GameState, ZeldaLogicEnv
 from src.zelda_data.zelda_loader import (
     ZeldaDungeonDataset,
     _build_room_graph_sample,
@@ -207,6 +212,60 @@ def test_room_topology_condition_map_preserves_typed_gate_channels():
     assert float(topo[ROOM_TOPOLOGY_CHANNELS["gate_secret_e"]].sum()) > 0.0
     assert float(topo[ROOM_TOPOLOGY_CHANNELS["gated_w"]].sum()) > 0.0
     assert float(topo[ROOM_TOPOLOGY_CHANNELS["gate_switch_w"]].sum()) > 0.0
+
+
+def test_validator_initial_state_treats_non_local_item_gate_as_carried_item():
+    room = np.full((ROOM_HEIGHT, ROOM_WIDTH), int(SEMANTIC_PALETTE["FLOOR"]), dtype=np.int32)
+
+    state = _initial_state_for_sequence(
+        room,
+        (ROOM_HEIGHT // 2, 1),
+        ["start", "door:E"],
+        {"E": {"item_gate"}},
+    )
+
+    assert state.has_item is True
+
+
+def test_validator_state_key_includes_current_floor():
+    state_a = GameState(position=(1, 1), current_floor=0)
+    state_b = GameState(position=(1, 1), current_floor=1)
+
+    assert _state_key(state_a) != _state_key(state_b)
+
+
+def test_room_local_state_search_respects_state_budget():
+    room = np.full((ROOM_HEIGHT, ROOM_WIDTH), int(SEMANTIC_PALETTE["FLOOR"]), dtype=np.int32)
+    env = ZeldaLogicEnv(room, render_mode=False)
+    start_state = GameState(position=(1, 1))
+
+    result = _room_local_state_search(
+        env,
+        start_state,
+        (ROOM_HEIGHT - 2, ROOM_WIDTH - 2),
+        max_states=1,
+    )
+
+    assert result is None
+
+
+def test_semantic_room_plan_trace_falls_back_when_validator_budget_is_too_small():
+    room = np.full((ROOM_HEIGHT, ROOM_WIDTH), int(SEMANTIC_PALETTE["FLOOR"]), dtype=np.int32)
+
+    trace = build_semantic_room_plan_trace(
+        room,
+        required_doors={"N": False, "S": False, "E": True, "W": True},
+        incoming_dirs={"W"},
+        outgoing_dirs={"E"},
+        edge_constraint_tokens={"E": {"switch_locked"}},
+        room_role_flags={"has_puzzle": True},
+        start=(ROOM_HEIGHT // 2, 1),
+        goal=(ROOM_HEIGHT // 2, ROOM_WIDTH - 2),
+        validator_plan_max_states=1,
+    )
+
+    assert trace.shape == (ROOM_HEIGHT, ROOM_WIDTH)
+    assert float(trace.sum()) > 0.0
 
 
 def test_room_topology_condition_map_localizes_semantic_role_anchors():

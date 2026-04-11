@@ -277,5 +277,48 @@ class TestVQVAETrainer:
         assert loss >= 0
 
 
+class TestVQVAETrainingHelpers:
+    """Focused tests for Block II training/evaluation helpers."""
+
+    def test_validation_split_is_deterministic_and_nonempty(self):
+        """Validation split helper should create a stable held-out slice."""
+        from src.train_vqvae import split_dataset_for_vqvae_validation
+
+        dataset = list(range(20))
+        train_a, val_a = split_dataset_for_vqvae_validation(dataset, validation_fraction=0.2, seed=123)
+        train_b, val_b = split_dataset_for_vqvae_validation(dataset, validation_fraction=0.2, seed=123)
+
+        assert len(train_a) == 16
+        assert len(val_a) == 4
+        assert train_a.indices == train_b.indices
+        assert val_a.indices == val_b.indices
+
+    def test_codebook_health_reports_utilization_metrics(self):
+        """Codebook-health helper should expose activity/utilization fields."""
+        from src.core.vqvae import SemanticVQVAE
+        from src.train_vqvae import compute_vqvae_codebook_health
+
+        model = SemanticVQVAE(
+            num_tile_classes=44,
+            latent_dim=16,
+            num_embeddings=8,
+            hidden_dims=[8, 16],
+        )
+        model.quantizer.codebook_usage.zero_()
+        model.quantizer.codebook_usage[:3] = torch.tensor([1.0, 0.5, 0.25])
+        if hasattr(model.quantizer, "ema_cluster_size"):
+            model.quantizer.ema_cluster_size.zero_()
+            model.quantizer.ema_cluster_size[:2] = torch.tensor([0.2, 0.1])
+
+        metrics = compute_vqvae_codebook_health(model)
+
+        assert metrics["codebook_size"] == 8.0
+        assert metrics["codebook_active_codes"] == 3.0
+        assert metrics["codebook_active_codes_gt_1e4"] == 3.0
+        assert metrics["codebook_utilization"] == pytest.approx(3.0 / 8.0)
+        assert "codebook_usage_entropy" in metrics
+        assert "ema_live_codes" in metrics
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

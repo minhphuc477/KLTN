@@ -412,7 +412,9 @@ def main() -> None:
 
     split_component_checkpoints(final_ckpt=final_ckpt, out_dir=ckpt_dir)
 
-    fast_sampler_checkpoint = ckpt_dir / "fast_sampler" / "fast_sampler_best.pth"
+    fast_sampler_checkpoint = ckpt_dir / "fast_sampler" / "fast_sampler_best_reselected.pth"
+    if not fast_sampler_checkpoint.exists():
+        fast_sampler_checkpoint = ckpt_dir / "fast_sampler" / "fast_sampler_best.pth"
     if not fast_sampler_checkpoint.exists():
         fast_sampler_checkpoint = None
     masked_room_checkpoint = ckpt_dir / "masked_room" / "masked_room_best.pth"

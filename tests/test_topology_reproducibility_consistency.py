@@ -13,6 +13,7 @@ from src.generation.entity_spawner import (
     create_room_semantics_from_graph,
     spawn_all_entities,
 )
+from scripts.export_manual_rich_topology_compare import build_manual_rich_topology_graph
 from src.generation.evolutionary_director import networkx_to_mission_graph
 from src.generation.grammar import EdgeType
 from src.simulation.validator import GraphGuidedValidator
@@ -44,6 +45,16 @@ def test_networkx_to_mission_graph_deduplicates_implied_reverse_edges_for_string
     assert converted.edges[0].source == "start"
     assert converted.edges[0].target == "goal"
     assert converted.edges[0].edge_type == EdgeType.PATH
+
+
+def test_built_in_manual_rich_topology_graph_preserves_direction():
+    graph = build_manual_rich_topology_graph()
+
+    assert graph.is_directed()
+    assert graph.has_edge(0, 1)
+    assert not graph.has_edge(1, 0)
+    assert graph.has_edge(10, 11)
+    assert not graph.has_edge(11, 10)
 
 
 def test_cbs_feature_cache_key_tracks_node_attributes(monkeypatch):

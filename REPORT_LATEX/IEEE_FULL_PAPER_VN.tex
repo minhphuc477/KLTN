@@ -1,0 +1,348 @@
+\documentclass[oneside,a4paper,12pt]{extreport}
+\usepackage[a4paper,left=3cm,right=2cm,top=2cm,bottom=2cm,headheight=16pt]{geometry}
+\usepackage{iftex}
+\ifPDFTeX
+\PackageError{IEEE_FULL_PAPER}{This report must be compiled with XeLaTeX}{Run xelatex IEEE_FULL_PAPER_VN.tex from REPORT_LATEX/.}
+\fi
+\usepackage{fontspec}
+\setmainfont{Times New Roman}
+\usepackage{unicode-math}
+\setmathfont{Cambria Math}
+\usepackage{setspace}
+\setstretch{1.35}
+\AtBeginDocument{\fontsize{13pt}{18.2pt}\selectfont}
+\setlength{\parindent}{1.25em}
+\usepackage{indentfirst}
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[C]{\thepage}
+\renewcommand{\headrulewidth}{0pt}
+\fancypagestyle{plain}{
+  \fancyhf{}
+  \fancyhead[C]{\thepage}
+  \renewcommand{\headrulewidth}{0pt}
+}
+\setlength{\headheight}{16pt}
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{longtable}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{siunitx}
+\usepackage{enumitem}
+\usepackage{float}
+\usepackage{placeins}
+\usepackage{etoolbox}
+\usepackage{tocloft}
+\usepackage{titlesec}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,shapes.geometric,calc,fit,backgrounds}
+\usepackage[unicode,hidelinks]{hyperref}
+\usepackage{xurl}
+\Urlmuskip=0mu plus 1mu
+% Vietnamese algorithm name and keywords
+\floatname{algorithm}{Thuật toán}
+\algrenewcommand\algorithmicrequire{\textbf{Đầu vào:}}
+\algrenewcommand\algorithmicensure{\textbf{Đầu ra:}}
+\algrenewcommand\algorithmicreturn{\textbf{Trả về:}}
+\algrenewcommand\algorithmicfor{\textbf{Đối với mỗi}}
+\algrenewcommand\algorithmicforall{\textbf{Với mỗi}}
+\algrenewcommand\algorithmicif{\textbf{Nếu}}
+\algrenewcommand\algorithmicelse{\textbf{Ngược lại}}
+\algrenewcommand\algorithmicthen{\textbf{thì}}
+\algrenewcommand\algorithmicdo{\textbf{thực hiện}}
+\algrenewcommand\algorithmicwhile{\textbf{Trong khi}}
+\algrenewcommand\algorithmicrepeat{\textbf{Lặp}}
+\algrenewcommand\algorithmicuntil{\textbf{cho đến khi}}
+\setcounter{secnumdepth}{2}
+\setcounter{tocdepth}{2}
+\renewcommand{\thesection}{\arabic{section}}
+\renewcommand{\thesubsection}{\thesection.\arabic{subsection}}
+\renewcommand{\thesubsubsection}{\thesubsection.\arabic{subsubsection}}
+\titleformat{\section}{\bfseries\fontsize{15}{20}\selectfont}{Chương \thesection:}{0.6em}{}
+\renewcommand{\contentsname}{Mục lục}
+\renewcommand{\listtablename}{Danh sách bảng}
+\renewcommand{\listfigurename}{Danh sách hình}
+\renewcommand{\tablename}{Bảng}
+\renewcommand{\figurename}{Hình}
+\providecommand*{\tableautorefname}{Bảng}
+\providecommand*{\figureautorefname}{Hình}
+\setlength{\cftsecnumwidth}{3.2em}
+\setlength{\emergencystretch}{3em}
+\makeatletter
+% Start each numbered chapter on a new page (no blank page)
+\pretocmd{\section}{\ifnum\value{section}>0\clearpage\fi}{}{}
+\makeatother
+
+\newcommand{\ReportTitleVN}{Tối ưu chất lượng - đa dạng có điều kiện ngữ nghĩa trong không gian tiềm ẩn để tạo sinh màn chơi The Legend of Zelda}
+\newcommand{\ReportTitleEN}{Semantic-Conditioned Quality-Diversity Optimization in Latent Space for The Legend of Zelda Level Generation}
+\newcommand{\AuthorName}{Lê Trần Minh Phúc}
+\newcommand{\AdvisorName}{TS. Lê Đăng Giáp}
+\newcommand{\FacultyName}{Đào Tạo Đặc Biệt}
+\newcommand{\MajorName}{Khoa học máy tính}
+\newcommand{\MajorNameCover}{KHOA HỌC MÁY TÍNH}
+\newcommand{\ThesisType}{KHÓA LUẬN TỐT NGHIỆP}
+\newcommand{\ClassName}{DH22CS01C}
+\newcommand{\StudentID}{2251010074}
+\newcommand{\BirthDate}{18/04/2004}
+\newcommand{\BirthPlace}{Tây Ninh}
+\newcommand{\ReportDate}{TP. HỒ CHÍ MINH, 2026}
+\newcommand{\DefenseDate}{Thành phố Hồ Chí Minh, ngày ..... tháng ..... năm 2026}
+\newcommand{\LogoPath}{logo-doan-crop.png}
+
+\newcommand{\ind}{\mathbf{1}}
+\newcommand{\BootstrapSamples}{5000}
+\newcommand{\codeid}[1]{\textit{#1}}
+
+\newcommand{\MaybeLogo}{%
+  \IfFileExists{\LogoPath}{%
+    \par\noindent\begin{minipage}{\textwidth}
+    \centering
+    \includegraphics[width=1.75cm]{\LogoPath}
+    \end{minipage}\par\vspace{0.50cm}%
+  }{}%
+}
+
+\newcommand{\CoverPageBorderDouble}{
+\begin{tikzpicture}[remember picture,overlay]
+  \draw[draw=black,line width=0.55pt]
+    ($ (current page.north west) + (3.0cm,-2.0cm) $)
+    rectangle
+    ($ (current page.south east) + (-2.0cm,2.0cm) $);
+  \draw[draw=black,line width=0.28pt]
+    ($ (current page.north west) + (3.10cm,-2.10cm) $)
+    rectangle
+    ($ (current page.south east) + (-2.10cm,2.10cm) $);
+\end{tikzpicture}
+}
+
+\newcommand{\CoverHeaderBlock}{
+\begin{minipage}{0.86\textwidth}
+\centering
+{\fontsize{10.6pt}{12.6pt}\selectfont \textbf{BỘ GIÁO DỤC VÀ ĐÀO TẠO}}\\
+{\fontsize{10.6pt}{12.6pt}\selectfont \textbf{TRƯỜNG ĐẠI HỌC MỞ THÀNH PHỐ HỒ CHÍ MINH}}\\
+{\fontsize{9.8pt}{11.6pt}\selectfont \textbf{---ooOoo---}}\\[0.02cm]
+\end{minipage}
+}
+
+\newcommand{\CoverTitleBlock}{
+\begin{minipage}{0.82\textwidth}
+\centering
+\textbf{\fontsize{13.9pt}{16.8pt}\selectfont \MakeUppercase{\ReportTitleVN}}
+\end{minipage}
+}
+
+\newcommand{\MainCoverPage}{
+\begin{titlepage}
+\thispagestyle{empty}
+\CoverPageBorderDouble
+\begin{center}
+\begin{spacing}{1.03}
+\vspace*{1.50cm}
+\CoverHeaderBlock
+\par
+\MaybeLogo
+\vspace{0.25cm}
+{\fontsize{12.8pt}{15.2pt}\selectfont \textbf{\MakeUppercase{\AuthorName}}}\\[0.85cm]
+\CoverTitleBlock\\[0.85cm]
+{\fontsize{11.7pt}{13.8pt}\selectfont \textbf{\ThesisType}}\\[0.24cm]
+{\fontsize{11.7pt}{13.8pt}\selectfont \textbf{NGÀNH \MajorNameCover}}
+\vfill
+{\fontsize{11.2pt}{13.2pt}\selectfont \textbf{\ReportDate}}
+\vspace*{0.30cm}
+\end{spacing}
+\end{center}
+\end{titlepage}
+}
+
+\newcommand{\SecondaryCoverPage}{
+\begin{titlepage}
+\thispagestyle{empty}
+\CoverPageBorderDouble
+\begin{center}
+\begin{spacing}{1.03}
+\vspace*{1.50cm}
+\CoverHeaderBlock
+\par
+\MaybeLogo
+\vspace{0.20cm}
+{\fontsize{12.5pt}{14.7pt}\selectfont \textbf{\MakeUppercase{\AuthorName}}}\\[0.70cm]
+\CoverTitleBlock\\[0.72cm]
+{\fontsize{10.9pt}{13pt}\selectfont Chuyên ngành: \MajorName}\\
+{\fontsize{10.9pt}{13pt}\selectfont Mã số sinh viên: \StudentID \quad Lớp: \ClassName}\\[0.46cm]
+{\fontsize{11.7pt}{13.8pt}\selectfont \textbf{\ThesisType}}\\[0.20cm]
+{\fontsize{11.7pt}{13.8pt}\selectfont \textbf{NGÀNH \MajorNameCover}}\\[0.52cm]
+{\fontsize{10.9pt}{13pt}\selectfont Giảng viên hướng dẫn: \textbf{\AdvisorName}}
+\vfill
+{\fontsize{11.2pt}{13.2pt}\selectfont \textbf{\ReportDate}}
+\vspace*{0.30cm}
+\end{spacing}
+\end{center}
+\end{titlepage}
+}
+
+\newcommand{\ConfirmationPage}{
+\clearpage
+\thispagestyle{empty}
+\begin{center}
+\begin{minipage}{0.46\textwidth}
+\centering
+\textbf{TRƯỜNG ĐẠI HỌC MỞ}\\
+\textbf{THÀNH PHỐ HỒ CHÍ MINH}\\
+\textbf{KHOA \FacultyName}
+\end{minipage}
+\hfill
+\begin{minipage}{0.50\textwidth}
+\centering
+\textbf{CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM}\\
+\underline{\textbf{Độc lập - Tự do - Hạnh phúc}}\\[0.5cm]
+\textit{\DefenseDate}
+\end{minipage}
+
+\vspace{1cm}
+{\Large \textbf{GIẤY XÁC NHẬN}}\\[0.8cm]
+\end{center}
+
+\noindent Tôi tên là: \AuthorName\\[0.45em]
+\noindent Ngày sinh: \BirthDate \hfill Nơi sinh: \BirthPlace\\[0.45em]
+\noindent Chuyên ngành: \MajorName \hfill Mã sinh viên: \StudentID\\[0.45em]
+
+\vspace{0.8cm}
+\noindent Tôi đồng ý cung cấp toàn văn thông tin khóa luận tốt nghiệp hợp lệ và bản quyền cho Thư viện Trường Đại học Mở Thành phố Hồ Chí Minh.
+Thư viện Trường Đại học Mở Thành phố Hồ Chí Minh được phép nộp toàn văn thông tin khóa luận vào hệ thống thông tin khoa học theo quy định hiện hành.
+
+\vfill
+\begin{flushright}
+Ký tên\\
+\textit{(Ghi rõ họ và tên)}\\[2.2cm]
+\textbf{\AuthorName}
+\end{flushright}
+}
+
+\newcommand{\AdvisorDefenseApprovalPage}{
+\clearpage
+\thispagestyle{empty}
+\begin{center}
+{\Large \textbf{Ý KIẾN CHO PHÉP BẢO VỆ KHÓA LUẬN TỐT NGHIỆP}}\\
+\end{center}
+
+\vspace{1cm}
+\noindent Giảng viên hướng dẫn: \AdvisorName\\[0.5em]
+\noindent Sinh viên thực hiện: \AuthorName \hfill Lớp: \ClassName\\[0.5em]
+\noindent Ngày sinh: \BirthDate \hfill Nơi sinh: \BirthPlace\\[0.5em]
+\noindent Tên khóa luận: \ReportTitleVN
+
+\vspace{1.2cm}
+\noindent Ý kiến của giảng viên hướng dẫn về việc cho phép sinh viên được bảo vệ khóa luận tốt nghiệp trước Hội đồng:\\[0.6cm]
+\dotfill\\[0.8cm]
+\dotfill\\[0.8cm]
+\dotfill\\[0.8cm]
+\dotfill\\[0.8cm]
+\dotfill
+
+\vfill
+\begin{flushright}
+\DefenseDate\\
+\textit{Giảng viên hướng dẫn}\\[2.2cm]
+\textbf{\AdvisorName}
+\end{flushright}
+}
+
+\newcommand{\AcknowledgementPage}{
+\clearpage
+\thispagestyle{empty}
+\begin{center}
+{\Large \textbf{LỜI CẢM ƠN}}
+\end{center}
+\vspace{0.8cm}
+\noindent
+Sinh viên cập nhật nội dung lời cảm ơn tại đây.
+\vfill
+\begin{flushright}
+Trân trọng,\\[1.8cm]
+\textbf{\AuthorName}
+\end{flushright}
+}
+
+\newcommand{\DeclarationPage}{
+\clearpage
+\thispagestyle{empty}
+\begin{center}
+{\Large \textbf{LỜI CAM ĐOAN}}
+\end{center}
+\vspace{0.8cm}
+\noindent
+Tôi cam đoan toàn bộ nội dung trong khóa luận này là kết quả nghiên cứu của cá nhân hoặc nhóm dưới sự hướng dẫn của giảng viên, các tài liệu tham khảo đều được trích dẫn đầy đủ, và tôi chịu trách nhiệm trước nhà trường về tính trung thực của khóa luận.
+\vfill
+\begin{flushright}
+\DefenseDate\\[1.8cm]
+\textbf{\AuthorName}
+\end{flushright}
+}
+
+\newcommand{\AbstractVNPage}{
+\clearpage
+\chapter*{Tóm tắt}
+\addcontentsline{toc}{chapter}{Tóm tắt}
+Sinh viên cập nhật phần tóm tắt tiếng Việt tại đây.
+}
+
+\newcommand{\AbstractENPage}{
+\clearpage
+\chapter*{Abstract}
+\addcontentsline{toc}{chapter}{Abstract}
+Update the English abstract here.
+}
+
+\begin{document}
+
+\pagenumbering{gobble}
+\MainCoverPage
+\SecondaryCoverPage
+\ConfirmationPage
+\AdvisorDefenseApprovalPage
+
+% Optional pages from the DOAN-style front matter:
+% \AcknowledgementPage
+% \DeclarationPage
+% \AbstractENPage
+% \AbstractVNPage
+
+\clearpage
+\pagenumbering{roman}
+\setcounter{page}{1}
+\tableofcontents
+\clearpage
+\listoffigures
+\clearpage
+\listoftables
+
+\clearpage
+\pagenumbering{arabic}
+\setcounter{page}{1}
+
+\chapter{Giới thiệu}
+Nội dung chương mở đầu.
+
+\chapter{Cơ sở lý thuyết và công trình liên quan}
+Nội dung tổng quan và nền tảng.
+
+\chapter{Phương pháp đề xuất}
+Mô tả mô hình, pipeline, và thiết kế thực nghiệm.
+
+\chapter{Kết quả thực nghiệm và thảo luận}
+Trình bày bảng biểu, so sánh, và phân tích.
+
+\chapter{Kết luận và hướng phát triển}
+Tổng kết đóng góp và đề xuất mở rộng.
+
+% Uncomment if using BibTeX/Biber setup:
+% \clearpage
+% \bibliographystyle{ieeetr}
+% \bibliography{references}
+
+\end{document}

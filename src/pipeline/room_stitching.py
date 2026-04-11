@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections import deque
 from dataclasses import dataclass
 from heapq import heappop, heappush
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
@@ -69,9 +70,6 @@ def solve_component_strict_adjacency(
         return abs(a[0] - b[0]) + abs(a[1] - b[1]) == 1
 
     def _candidate_positions(node: Any) -> List[Tuple[int, int]]:
-        if node in explicit_pos:
-            return [explicit_pos[node]]
-
         placed_neighbors = [n for n in adjacency[node] if n in placement]
         if placed_neighbors:
             common = None
@@ -85,6 +83,31 @@ def solve_component_strict_adjacency(
                 frontier |= _neighbors_of(pos)
             candidates = sorted(frontier)
 
+        pref = explicit_pos.get(node)
+        if pref is not None:
+            candidates.append(pref)
+            ring_budget = max(4, len(comp_nodes) + len(adjacency[node]))
+            radius_limit = max(2, min(8, len(comp_nodes)))
+            for radius in range(1, radius_limit + 1):
+                ring_cells: List[Tuple[int, int]] = []
+                for d_row in range(-radius, radius + 1):
+                    d_col = radius - abs(d_row)
+                    ring_cells.append((pref[0] + d_row, pref[1] + d_col))
+                    if d_col != 0:
+                        ring_cells.append((pref[0] + d_row, pref[1] - d_col))
+                candidates.extend(ring_cells)
+                if len(candidates) >= ring_budget:
+                    break
+
+        deduped_candidates: List[Tuple[int, int]] = []
+        seen_candidates = set()
+        for cand in candidates:
+            if cand in seen_candidates:
+                continue
+            seen_candidates.add(cand)
+            deduped_candidates.append(cand)
+        candidates = deduped_candidates
+
         filtered = [cand for cand in candidates if cand not in occupied]
         if not filtered:
             return []
@@ -94,7 +117,6 @@ def solve_component_strict_adjacency(
             for pn in adjacency[node]:
                 if pn in placement:
                     neigh_score += abs(cell[0] - placement[pn][0]) + abs(cell[1] - placement[pn][1])
-            pref = explicit_pos.get(node)
             pref_penalty = 0.0
             if pref is not None:
                 pref_penalty = abs(cell[0] - pref[0]) + abs(cell[1] - pref[1])
@@ -155,6 +177,64 @@ def solve_component_strict_adjacency(
                 raise ValueError(f"Strict adjacency invariant failed for edge {u!r}<->{v!r}")
 
     return placement
+
+
+def _component_root_node(
+    graph: nx.Graph,
+    comp_nodes: List[Any],
+    adjacency: Dict[Any, set],
+    *,
+    sort_key: NodeSortKey = stable_node_sort_key,
+) -> Any:
+    """Pick a stable semantic root for tree-style fallback placement."""
+    component = set(comp_nodes)
+
+    def _is_start_like(node_id: Any) -> bool:
+        attrs = graph.nodes.get(node_id, {}) if node_id in graph else {}
+        node_type = str(attrs.get("type", "") or "").strip().upper()
+        label = str(attrs.get("label", "") or "").strip().upper()
+        return node_type == "START" or label == "START" or bool(attrs.get("is_start"))
+
+    start_like = [node_id for node_id in comp_nodes if node_id in component and _is_start_like(node_id)]
+    if start_like:
+        return min(start_like, key=sort_key)
+
+    return min(
+        comp_nodes,
+        key=lambda node_id: (-len(adjacency.get(node_id, ())), sort_key(node_id)),
+    )
+
+
+def _component_tree_adjacency(
+    graph: nx.Graph,
+    comp_nodes: List[Any],
+    adjacency: Dict[Any, set],
+    *,
+    sort_key: NodeSortKey = stable_node_sort_key,
+) -> Tuple[List[Any], Dict[Any, set]]:
+    """Build a deterministic BFS tree for fallback room placement."""
+    root = _component_root_node(graph, comp_nodes, adjacency, sort_key=sort_key)
+    component = set(comp_nodes)
+    queue: deque[Any] = deque([root])
+    visited = {root}
+    bfs_order: List[Any] = []
+    tree_adjacency: Dict[Any, set] = {node_id: set() for node_id in comp_nodes}
+
+    while queue:
+        node_id = queue.popleft()
+        bfs_order.append(node_id)
+        neighbors = sorted(adjacency.get(node_id, ()) & component, key=sort_key)
+        for neighbor in neighbors:
+            if neighbor in visited:
+                continue
+            visited.add(neighbor)
+            queue.append(neighbor)
+            tree_adjacency[node_id].add(neighbor)
+            tree_adjacency[neighbor].add(node_id)
+
+    remaining = [node_id for node_id in sorted(comp_nodes, key=sort_key) if node_id not in visited]
+    bfs_order.extend(remaining)
+    return bfs_order, tree_adjacency
 
 
 def compute_relaxed_room_placement(
@@ -237,17 +317,36 @@ def compute_strict_room_placement(
             )
         except ValueError as exc:
             logger.warning(
-                "Strict adjacency solver failed for component %s (%s). Using relaxed placement.",
+                "Strict adjacency solver failed for component %s (%s). Trying tree-preserving fallback.",
                 comp,
                 exc,
             )
-            return compute_relaxed_room_placement(
-                graph,
-                room_ids,
-                sort_key=sort_key,
-                node_position_getter=node_position_getter,
-                first_free_position_fn=first_free_position_fn,
-            )
+            try:
+                bfs_order, tree_adjacency = _component_tree_adjacency(
+                    graph,
+                    comp,
+                    adjacency,
+                    sort_key=sort_key,
+                )
+                comp_positions = solve_component_strict_adjacency(
+                    bfs_order,
+                    tree_adjacency,
+                    {},
+                    sort_key=sort_key,
+                )
+            except ValueError as tree_exc:
+                logger.warning(
+                    "Tree-preserving fallback also failed for component %s (%s). Using relaxed placement.",
+                    comp,
+                    tree_exc,
+                )
+                return compute_relaxed_room_placement(
+                    graph,
+                    room_ids,
+                    sort_key=sort_key,
+                    node_position_getter=node_position_getter,
+                    first_free_position_fn=first_free_position_fn,
+                )
 
         min_r = min(r for r, _ in comp_positions.values())
         max_r = max(r for r, _ in comp_positions.values())
@@ -299,6 +398,131 @@ def compute_graph_aware_room_slots(
     return {
         room_id: (r - min_r, c - min_c)
         for room_id, (r, c) in placement.items()
+    }
+
+
+def compute_layout_quality_metrics(
+    graph: nx.Graph,
+    slot_positions: Mapping[Any, Tuple[int, int]],
+    *,
+    sort_key: NodeSortKey = stable_node_sort_key,
+    node_position_getter: NodePositionGetter = get_node_grid_position,
+) -> Dict[str, Optional[float]]:
+    """
+    Compute layout-quality metrics that remain meaningful when graph coordinates are noisy.
+
+    `graph_slot_match_rate` is retained for debugging, but the primary quality
+    readout is edge-based:
+    - how often graph-linked rooms are Manhattan-adjacent in stitched slots
+    - how much extra slot distance graph edges incur on average
+    """
+    slots: Dict[Any, Tuple[int, int]] = {
+        node_id: (int(pos[0]), int(pos[1]))
+        for node_id, pos in slot_positions.items()
+    }
+    room_count = int(len(slots))
+
+    graph_positions: Dict[Any, Tuple[int, int]] = {}
+    for node_id in graph.nodes():
+        if node_id not in slots:
+            continue
+        pos = node_position_getter(graph, node_id)
+        if pos is None:
+            continue
+        graph_positions[node_id] = (int(pos[0]), int(pos[1]))
+
+    normalized_graph_positions: Dict[Any, Tuple[int, int]] = {}
+    if graph_positions:
+        min_r = min(r for r, _ in graph_positions.values())
+        min_c = min(c for _, c in graph_positions.values())
+        normalized_graph_positions = {
+            node_id: (int(r - min_r), int(c - min_c))
+            for node_id, (r, c) in graph_positions.items()
+        }
+
+    comparable_nodes = sorted(normalized_graph_positions.keys(), key=sort_key)
+    preference_distances: List[int] = []
+    slot_match_count = 0
+    for node_id in comparable_nodes:
+        slot_pos = slots.get(node_id)
+        graph_pos = normalized_graph_positions.get(node_id)
+        if slot_pos is None or graph_pos is None:
+            continue
+        dist = abs(int(slot_pos[0]) - int(graph_pos[0])) + abs(int(slot_pos[1]) - int(graph_pos[1]))
+        preference_distances.append(int(dist))
+        if dist == 0:
+            slot_match_count += 1
+
+    comparable_count = int(len(preference_distances))
+    duplicate_preferred_positions = max(0, int(len(graph_positions)) - int(len(set(graph_positions.values()))))
+
+    edge_distances: List[int] = []
+    seen_edges = set()
+    for src, dst in graph.edges():
+        if src not in slots or dst not in slots:
+            continue
+        edge_key = tuple(sorted((src, dst), key=sort_key))
+        if edge_key in seen_edges:
+            continue
+        seen_edges.add(edge_key)
+        src_pos = slots[src]
+        dst_pos = slots[dst]
+        dist = abs(int(src_pos[0]) - int(dst_pos[0])) + abs(int(src_pos[1]) - int(dst_pos[1]))
+        edge_distances.append(int(dist))
+
+    comparable_edge_count = int(len(edge_distances))
+    adjacent_edge_count = int(sum(1 for dist in edge_distances if dist == 1))
+    mean_edge_distance = (
+        float(sum(edge_distances) / comparable_edge_count)
+        if comparable_edge_count > 0
+        else None
+    )
+    mean_edge_excess = (
+        float(sum(max(0, dist - 1) for dist in edge_distances) / comparable_edge_count)
+        if comparable_edge_count > 0
+        else None
+    )
+
+    return {
+        "room_count": float(room_count),
+        "graph_slot_match_rate": (
+            float(slot_match_count / comparable_count)
+            if comparable_count > 0
+            else None
+        ),
+        "graph_position_coverage_rate": (
+            float(comparable_count / max(1, room_count))
+            if room_count > 0
+            else None
+        ),
+        "graph_preferred_position_duplicate_rate": (
+            float(duplicate_preferred_positions / max(1, len(graph_positions)))
+            if graph_positions
+            else None
+        ),
+        "graph_slot_preference_mean_distance": (
+            float(sum(preference_distances) / comparable_count)
+            if comparable_count > 0
+            else None
+        ),
+        "graph_slot_preference_max_distance": (
+            float(max(preference_distances))
+            if preference_distances
+            else None
+        ),
+        "graph_edge_slot_adjacency_rate": (
+            float(adjacent_edge_count / comparable_edge_count)
+            if comparable_edge_count > 0
+            else None
+        ),
+        "graph_edge_slot_mean_distance": mean_edge_distance,
+        "graph_edge_slot_mean_excess_distance": mean_edge_excess,
+        "graph_edge_slot_max_distance": (
+            float(max(edge_distances))
+            if edge_distances
+            else None
+        ),
+        "graph_edge_count_evaluated": float(comparable_edge_count),
     }
 
 

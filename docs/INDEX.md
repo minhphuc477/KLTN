@@ -1,6 +1,6 @@
 # KLTN Documentation Index
 
-Last updated: 2026-04-06
+Last updated: 2026-04-11
 
 This is the single entrypoint for repository documentation. The top level of
 `docs/` now contains only current reference material. Dated snapshots and
@@ -16,6 +16,10 @@ one-off research notes are archived under [`archive/`](archive/README.md).
 6. [`TOPOLOGY_COMMANDS.md`](TOPOLOGY_COMMANDS.md) - canonical CLI guide for topology graphs, manual mission graphs, and fixed-graph audits
 7. [`ARCHITECTURE_RESEARCH_AUDIT_2026_03_31.md`](ARCHITECTURE_RESEARCH_AUDIT_2026_03_31.md) - latest broad literature-backed architecture audit
 8. [`ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md`](ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md) - focused topology-signal audit and semantic-anchor recommendations
+9. [`STATEFUL_PUZZLE_ARCHITECTURE_AUDIT_2026_04_09.md`](STATEFUL_PUZZLE_ARCHITECTURE_AUDIT_2026_04_09.md) - research-backed audit and implementation notes for stateful puzzle templates, hidden repair assumptions, and runtime puzzle semantics
+10. [`VQVAE_RESEARCH_AUDIT_2026_04_10.md`](VQVAE_RESEARCH_AUDIT_2026_04_10.md) - focused Block II audit covering literature, assumptions, complexity, validation protocol, and whether the current tokenizer actually needs an upgrade
+11. [`VQVAE_PROTOCOL_RESULTS_2026_04_10.md`](VQVAE_PROTOCOL_RESULTS_2026_04_10.md) - held-out comparison of all completed VQ-VAE ablations and the current recommendation for which tokenizer to carry forward
+12. [`DOWNSTREAM_CODEBOOK512_PROTOCOL_RESULTS_2026_04_11.md`](DOWNSTREAM_CODEBOOK512_PROTOCOL_RESULTS_2026_04_11.md) - end-to-end judgment of the downstream retrain performed on top of the codebook512 tokenizer
 
 ## Architecture And Core System Docs
 
@@ -33,6 +37,10 @@ one-off research notes are archived under [`archive/`](archive/README.md).
 - [`SOTA_COMPARISON_AND_BENCHMARKS.md`](SOTA_COMPARISON_AND_BENCHMARKS.md)
 - [`ARCHITECTURE_RESEARCH_AUDIT_2026_03_31.md`](ARCHITECTURE_RESEARCH_AUDIT_2026_03_31.md)
 - [`ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md`](ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md)
+- [`STATEFUL_PUZZLE_ARCHITECTURE_AUDIT_2026_04_09.md`](STATEFUL_PUZZLE_ARCHITECTURE_AUDIT_2026_04_09.md)
+- [`VQVAE_RESEARCH_AUDIT_2026_04_10.md`](VQVAE_RESEARCH_AUDIT_2026_04_10.md)
+- [`VQVAE_PROTOCOL_RESULTS_2026_04_10.md`](VQVAE_PROTOCOL_RESULTS_2026_04_10.md)
+- [`DOWNSTREAM_CODEBOOK512_PROTOCOL_RESULTS_2026_04_11.md`](DOWNSTREAM_CODEBOOK512_PROTOCOL_RESULTS_2026_04_11.md)
 - [`REALISM_PROFILE_WEIGHTING_AND_TUNING_GUIDE.md`](REALISM_PROFILE_WEIGHTING_AND_TUNING_GUIDE.md)
 - [`MATCHED_BUDGET_BENCHMARK_PROTOCOL.md`](MATCHED_BUDGET_BENCHMARK_PROTOCOL.md)
 - [`OOD_SCALING_AND_BLINDED_EVAL_PROTOCOL.md`](OOD_SCALING_AND_BLINDED_EVAL_PROTOCOL.md)

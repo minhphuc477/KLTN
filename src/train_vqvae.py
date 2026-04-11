@@ -90,6 +90,9 @@ def vqvae_training_kwargs_from_resolved_config(config: Dict[str, Any]) -> Dict[s
         "dead_code_warmup_steps": stage["dead_code_warmup_steps"],
         "protect_active_codes_during_reset": stage["protect_active_codes_during_reset"],
         "max_dead_code_resets_per_event": stage["max_dead_code_resets_per_event"],
+        "validation_fraction": stage["validation_fraction"],
+        "validation_max_batches": stage["validation_max_batches"],
+        "best_checkpoint_metric": stage["best_checkpoint_metric"],
         "min_samples_per_epoch": dataset["min_samples_per_epoch"],
         "save_dir": stage["checkpoint_dir"],
         "save_every": stage["save_every"],
@@ -136,6 +139,9 @@ def _default_vqvae_training_kwargs() -> Dict[str, Any]:
         "dead_code_warmup_steps": 500,
         "protect_active_codes_during_reset": True,
         "max_dead_code_resets_per_event": 16,
+        "validation_fraction": 0.1,
+        "validation_max_batches": 16,
+        "best_checkpoint_metric": "val_loss",
         "min_samples_per_epoch": 64,
         "save_dir": "checkpoints",
         "save_every": 50,
@@ -189,6 +195,9 @@ def _legacy_vqvae_overrides_from_args(args: argparse.Namespace) -> Dict[str, Any
     _set("dead_code_warmup_steps", getattr(args, "dead_code_warmup_steps", None))
     _set("protect_active_codes_during_reset", getattr(args, "protect_active_codes_during_reset", None))
     _set("max_dead_code_resets_per_event", getattr(args, "max_dead_code_resets_per_event", None))
+    _set("validation_fraction", getattr(args, "validation_fraction", None))
+    _set("validation_max_batches", getattr(args, "validation_max_batches", None))
+    _set("best_checkpoint_metric", getattr(args, "best_checkpoint_metric", None))
     _set("min_samples_per_epoch", getattr(args, "min_samples_per_epoch", None))
     _set("save_dir", getattr(args, "save_dir", None))
     _set("save_every", getattr(args, "save_every", None))
@@ -227,6 +236,117 @@ def build_vqvae_training_args_from_args(args: argparse.Namespace) -> SimpleNames
         raise ValueError("VQ-VAE training requires --data-dir or --config with dataset.data_dir.")
 
     return SimpleNamespace(**merged_kwargs)
+
+
+def split_dataset_for_vqvae_validation(
+    dataset,
+    *,
+    validation_fraction: float,
+    seed: int | None,
+):
+    """Deterministically split the dataset into train/validation subsets."""
+    dataset_size = len(dataset)
+    fraction = float(max(0.0, validation_fraction))
+    if dataset_size < 2 or fraction <= 0.0:
+        return dataset, None
+
+    val_size = int(round(dataset_size * fraction))
+    val_size = max(1, min(dataset_size - 1, val_size))
+    train_size = dataset_size - val_size
+    generator = None
+    if seed is not None:
+        generator = torch.Generator().manual_seed(int(seed))
+    train_subset, val_subset = torch.utils.data.random_split(
+        dataset,
+        [train_size, val_size],
+        generator=generator,
+    )
+    return train_subset, val_subset
+
+
+def compute_vqvae_codebook_health(model: torch.nn.Module) -> Dict[str, float]:
+    """Summarize codebook activity for logging/metadata."""
+    quantizer = getattr(model, "quantizer", None)
+    if quantizer is None:
+        return {}
+
+    usage = getattr(quantizer, "codebook_usage", None)
+    if usage is None:
+        return {}
+
+    usage_tensor = usage.detach().float().cpu()
+    num_codes = int(usage_tensor.numel())
+    if num_codes <= 0:
+        return {}
+
+    active_codes = int((usage_tensor > 0).sum().item())
+    active_codes_gt_1e4 = int((usage_tensor > 1e-4).sum().item())
+    usage_total = float(usage_tensor.sum().item())
+    usage_entropy = 0.0
+    normalized_entropy = 0.0
+    if usage_total > 0.0:
+        probs = usage_tensor / usage_total
+        mask = probs > 0
+        usage_entropy = float((-(probs[mask] * probs[mask].log())).sum().item())
+        if num_codes > 1:
+            normalized_entropy = float(usage_entropy / np.log(float(num_codes)))
+
+    metrics: Dict[str, float] = {
+        "codebook_size": float(num_codes),
+        "codebook_active_codes": float(active_codes),
+        "codebook_active_codes_gt_1e4": float(active_codes_gt_1e4),
+        "codebook_utilization": float(active_codes_gt_1e4 / max(1, num_codes)),
+        "codebook_usage_entropy": float(usage_entropy),
+        "codebook_usage_entropy_normalized": float(normalized_entropy),
+    }
+
+    ema_cluster_size = getattr(quantizer, "ema_cluster_size", None)
+    dead_threshold = getattr(quantizer, "_dead_threshold", None)
+    if ema_cluster_size is not None and dead_threshold is not None:
+        ema_tensor = ema_cluster_size.detach().float().cpu()
+        ema_live_codes = int((ema_tensor >= float(dead_threshold)).sum().item())
+        metrics["ema_live_codes"] = float(ema_live_codes)
+        metrics["ema_live_rate"] = float(ema_live_codes / max(1, num_codes))
+
+    return metrics
+
+
+def evaluate_vqvae_loader(
+    model: torch.nn.Module,
+    trainer: VQVAETrainer,
+    loader: DataLoader,
+    *,
+    num_classes: int,
+    device: torch.device,
+    max_batches: int | None = None,
+) -> Dict[str, float]:
+    """Run a bounded evaluation pass on a loader."""
+    totals = {
+        "loss": 0.0,
+        "recon_loss": 0.0,
+        "illegal_adjacency_penalty": 0.0,
+        "accuracy": 0.0,
+        "perplexity": 0.0,
+    }
+    batches = 0
+    model.eval()
+    with torch.no_grad():
+        for batch in loader:
+            if isinstance(batch, (list, tuple)):
+                batch = batch[0]
+            batch = batch.to(device)
+            x_onehot = grids_to_onehot(batch, num_classes=num_classes)
+            info = trainer.eval_step(x_onehot)
+            for key in totals:
+                totals[key] += float(info.get(key, 0.0))
+            batches += 1
+            if max_batches is not None and batches >= int(max_batches):
+                break
+
+    for key in totals:
+        totals[key] /= max(1, batches)
+    totals["batches"] = float(batches)
+    return totals
 
 
 def train_vqvae(args):
@@ -268,6 +388,11 @@ def train_vqvae(args):
         load_graphs=False,
     )
     dataset = base_loader.dataset
+    train_dataset, val_dataset = split_dataset_for_vqvae_validation(
+        dataset,
+        validation_fraction=float(getattr(args, "validation_fraction", 0.0)),
+        seed=getattr(args, "seed", None),
+    )
     sample_kind = "rooms" if room_level else "dungeons"
     logger.info("Dataset: %d %s", len(dataset), sample_kind)
 
@@ -276,23 +401,42 @@ def train_vqvae(args):
         sys.exit(1)
 
     # Small dataset -> duplicate to fill an epoch with more gradient steps
-    effective_size = max(len(dataset), args.min_samples_per_epoch)
+    effective_size = max(len(train_dataset), args.min_samples_per_epoch)
     sampler = torch.utils.data.RandomSampler(
-        dataset,
+        train_dataset,
         replacement=True,
         num_samples=effective_size,
         generator=(torch.Generator().manual_seed(int(args.seed)) if args.seed is not None else None),
     )
     dataloader = DataLoader(
-        dataset,
+        train_dataset,
         batch_size=args.batch_size,
         sampler=sampler,
         num_workers=int(getattr(args, "num_workers", 0)),
         pin_memory=bool(getattr(args, "pin_memory", torch.cuda.is_available())),
         drop_last=bool(getattr(args, "drop_last", True)),
     )
+    eval_source = val_dataset if val_dataset is not None else train_dataset
+    eval_split_name = "val" if val_dataset is not None else "train"
+    eval_loader = DataLoader(
+        eval_source,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=int(getattr(args, "num_workers", 0)),
+        pin_memory=bool(getattr(args, "pin_memory", torch.cuda.is_available())),
+        drop_last=False,
+    )
     logger.info(f"Effective samples/epoch: {effective_size}, "
                 f"batches/epoch: {len(dataloader)}")
+    logger.info(
+        "VQ-VAE split: train=%d %s | %s=%d %s | best_metric=%s",
+        len(train_dataset),
+        sample_kind,
+        eval_split_name,
+        len(eval_source),
+        sample_kind,
+        str(getattr(args, "best_checkpoint_metric", "val_loss")),
+    )
 
     # ------------------------------------------------------------------
     # Model
@@ -349,10 +493,22 @@ def train_vqvae(args):
         if "optimizer_state_dict" in ckpt:
             trainer.optimizer.load_state_dict(ckpt["optimizer_state_dict"])
         start_epoch = ckpt.get("epoch", 0) + 1
-        best_loss = float(ckpt.get("best_loss", ckpt.get("loss", float("inf"))))
+        best_metric_name = str(
+            ckpt.get(
+                "best_metric_name",
+                "val_loss" if float(getattr(args, "validation_fraction", 0.0)) > 0.0 else "train_loss",
+            )
+        )
+        best_metric_value = float(
+            ckpt.get(
+                "best_metric_value",
+                ckpt.get("best_loss", ckpt.get("loss", float("inf"))),
+            )
+        )
         logger.info(f"Resumed from {resume_path} (epoch {start_epoch})")
     else:
-        best_loss = float("inf")
+        best_metric_name = "val_loss" if float(getattr(args, "validation_fraction", 0.0)) > 0.0 else "train_loss"
+        best_metric_value = float("inf")
 
     # ------------------------------------------------------------------
     # Training loop
@@ -412,23 +568,39 @@ def train_vqvae(args):
         for k in epoch_metrics:
             epoch_metrics[k] /= max(num_batches, 1)
 
-        # Evaluation accuracy
-        model.eval()
-        eval_acc = 0.0
-        eval_n = 0
-        with torch.no_grad():
-            for batch in dataloader:
-                if isinstance(batch, (list, tuple)):
-                    batch = batch[0]
-                batch = batch.to(device)
-                x_onehot = grids_to_onehot(batch, num_classes=num_classes)
-                info = trainer.eval_step(x_onehot)
-                eval_acc += info["accuracy"]
-                eval_n += 1
-                if eval_n >= 5:  # cap eval batches
-                    break
-        eval_acc /= max(eval_n, 1)
-        epoch_metrics["accuracy"] = eval_acc
+        eval_metrics = evaluate_vqvae_loader(
+            model,
+            trainer,
+            eval_loader,
+            num_classes=num_classes,
+            device=device,
+            max_batches=int(getattr(args, "validation_max_batches", 16)),
+        )
+        epoch_metrics["accuracy"] = float(eval_metrics["accuracy"])
+        epoch_metrics["eval_split"] = eval_split_name
+        epoch_metrics["eval_batches"] = int(eval_metrics["batches"])
+        if eval_split_name == "val":
+            epoch_metrics["val_loss"] = float(eval_metrics["loss"])
+            epoch_metrics["val_recon_loss"] = float(eval_metrics["recon_loss"])
+            epoch_metrics["val_illegal_adjacency_penalty"] = float(eval_metrics["illegal_adjacency_penalty"])
+            epoch_metrics["val_accuracy"] = float(eval_metrics["accuracy"])
+            epoch_metrics["val_perplexity"] = float(eval_metrics["perplexity"])
+        else:
+            epoch_metrics["train_eval_loss"] = float(eval_metrics["loss"])
+            epoch_metrics["train_eval_recon_loss"] = float(eval_metrics["recon_loss"])
+            epoch_metrics["train_eval_illegal_adjacency_penalty"] = float(eval_metrics["illegal_adjacency_penalty"])
+            epoch_metrics["train_eval_accuracy"] = float(eval_metrics["accuracy"])
+            epoch_metrics["train_eval_perplexity"] = float(eval_metrics["perplexity"])
+
+        codebook_metrics = compute_vqvae_codebook_health(model)
+        epoch_metrics.update(codebook_metrics)
+
+        checkpoint_metric_name = str(getattr(args, "best_checkpoint_metric", "val_loss"))
+        if checkpoint_metric_name == "val_loss" and eval_split_name == "val":
+            checkpoint_metric_value = float(epoch_metrics["val_loss"])
+        else:
+            checkpoint_metric_name = "train_loss"
+            checkpoint_metric_value = float(epoch_metrics["loss"])
 
         logger.info(
             f"Epoch {epoch+1}/{args.epochs} | "
@@ -437,30 +609,44 @@ def train_vqvae(args):
             f"vq={epoch_metrics['vq_loss']:.4f} | "
             f"mrf={epoch_metrics['illegal_adjacency_penalty']:.4f} | "
             f"perplexity={epoch_metrics['perplexity']:.1f} | "
-            f"accuracy={eval_acc:.3f}"
+            f"{eval_split_name}_loss={eval_metrics['loss']:.4f} | "
+            f"{eval_split_name}_accuracy={eval_metrics['accuracy']:.3f} | "
+            f"active_codes={int(epoch_metrics.get('codebook_active_codes_gt_1e4', 0))}/{int(epoch_metrics.get('codebook_size', 0))} | "
+            f"best_metric={checkpoint_metric_name}:{checkpoint_metric_value:.4f}"
         )
         history.append({"epoch": epoch + 1, **epoch_metrics})
 
         # Save best
-        if epoch_metrics["loss"] < best_loss:
-            best_loss = epoch_metrics["loss"]
+        if checkpoint_metric_value < best_metric_value:
+            best_metric_name = checkpoint_metric_name
+            best_metric_value = checkpoint_metric_value
             save_path = save_dir / "vqvae_pretrained.pth"
             best_payload = {
                 "epoch": epoch,
                 "model_state_dict": model.state_dict(),
-                "loss": best_loss,
-                "accuracy": eval_acc,
-                "perplexity": epoch_metrics["perplexity"],
+                "loss": float(epoch_metrics["loss"]),
+                "accuracy": float(eval_metrics["accuracy"]),
+                "perplexity": float(eval_metrics["perplexity"]),
+                "best_metric_name": str(best_metric_name),
+                "best_metric_value": float(best_metric_value),
             }
             atomic_torch_save(best_payload, str(save_path))
             write_checkpoint_metadata(
                 str(save_path),
                 model_type="vqvae",
                 architecture={
+                    "num_classes": int(num_classes),
                     "latent_dim": int(args.latent_dim),
+                    "hidden_dim": int(getattr(args, "hidden_dim", 128)),
                     "codebook_size": int(args.codebook_size),
+                    "commitment_cost": float(getattr(args, "commitment_cost", 0.25)),
+                    "rare_tile_weight": float(getattr(args, "rare_tile_weight", 5.0)),
+                    "use_ema": bool(getattr(args, "use_ema", True)),
                     "use_coordconv": bool(args.use_coordconv),
                     "mrf_penalty_weight": float(args.mrf_penalty_weight),
+                    "num_res_blocks": 2,
+                    "encoder_channel_mult": [1, 2, 4],
+                    "decoder_channel_mult": [4, 2, 1],
                     "dead_code_reset_interval": int(args.dead_code_reset_interval),
                     "dead_code_threshold": float(args.dead_code_threshold),
                     "dead_code_warmup_steps": int(args.dead_code_warmup_steps),
@@ -470,15 +656,19 @@ def train_vqvae(args):
                 },
                 extra={
                     "epoch": int(epoch + 1),
-                    "loss": float(best_loss),
-                    "accuracy": float(eval_acc),
+                    "loss": float(epoch_metrics["loss"]),
+                    "accuracy": float(eval_metrics["accuracy"]),
+                    "eval_split": eval_split_name,
+                    "best_metric_name": str(best_metric_name),
+                    "best_metric_value": float(best_metric_value),
+                    **{key: value for key, value in epoch_metrics.items() if key.startswith("val_") or key.startswith("train_eval_") or key.startswith("codebook_") or key.startswith("ema_")},
                 },
             )
             log_checkpoint_artifact(
                 logger,
                 save_path,
                 checkpoint_dir=save_dir,
-                label=f"[BEST] Saved best model (loss={best_loss:.4f})",
+                label=f"[BEST] Saved best model ({best_metric_name}={best_metric_value:.4f})",
             )
 
         # Periodic checkpoint
@@ -486,8 +676,10 @@ def train_vqvae(args):
             "epoch": epoch,
             "model_state_dict": model.state_dict(),
             "optimizer_state_dict": trainer.optimizer.state_dict(),
-            "loss": epoch_metrics["loss"],
-            "best_loss": float(best_loss),
+            "loss": float(epoch_metrics["loss"]),
+            "best_loss": float(best_metric_value),
+            "best_metric_name": str(best_metric_name),
+            "best_metric_value": float(best_metric_value),
             "history_length": len(history),
         }
         latest_resume = save_dir / LATEST_RESUME_FILENAME
@@ -496,9 +688,18 @@ def train_vqvae(args):
             str(latest_resume),
             model_type="vqvae_resume",
             architecture={
+                "num_classes": int(num_classes),
                 "latent_dim": int(args.latent_dim),
+                "hidden_dim": int(getattr(args, "hidden_dim", 128)),
                 "codebook_size": int(args.codebook_size),
+                "commitment_cost": float(getattr(args, "commitment_cost", 0.25)),
+                "rare_tile_weight": float(getattr(args, "rare_tile_weight", 5.0)),
+                "use_ema": bool(getattr(args, "use_ema", True)),
                 "use_coordconv": bool(args.use_coordconv),
+                "mrf_penalty_weight": float(args.mrf_penalty_weight),
+                "num_res_blocks": 2,
+                "encoder_channel_mult": [1, 2, 4],
+                "decoder_channel_mult": [4, 2, 1],
                 "dead_code_reset_interval": int(args.dead_code_reset_interval),
                 "dead_code_threshold": float(args.dead_code_threshold),
                 "dead_code_warmup_steps": int(args.dead_code_warmup_steps),
@@ -509,6 +710,10 @@ def train_vqvae(args):
             extra={
                 "epoch": int(epoch + 1),
                 "checkpoint_kind": "latest_resume",
+                "eval_split": eval_split_name,
+                "best_metric_name": str(best_metric_name),
+                "best_metric_value": float(best_metric_value),
+                **{key: value for key, value in epoch_metrics.items() if key.startswith("val_") or key.startswith("train_eval_") or key.startswith("codebook_") or key.startswith("ema_")},
             },
         )
         log_checkpoint_artifact(
@@ -524,10 +729,18 @@ def train_vqvae(args):
                 str(periodic),
                 model_type="vqvae_resume",
                 architecture={
+                    "num_classes": int(num_classes),
                     "latent_dim": int(args.latent_dim),
+                    "hidden_dim": int(getattr(args, "hidden_dim", 128)),
                     "codebook_size": int(args.codebook_size),
+                    "commitment_cost": float(getattr(args, "commitment_cost", 0.25)),
+                    "rare_tile_weight": float(getattr(args, "rare_tile_weight", 5.0)),
+                    "use_ema": bool(getattr(args, "use_ema", True)),
                     "use_coordconv": bool(args.use_coordconv),
                     "mrf_penalty_weight": float(args.mrf_penalty_weight),
+                    "num_res_blocks": 2,
+                    "encoder_channel_mult": [1, 2, 4],
+                    "decoder_channel_mult": [4, 2, 1],
                     "dead_code_reset_interval": int(args.dead_code_reset_interval),
                     "dead_code_threshold": float(args.dead_code_threshold),
                     "dead_code_warmup_steps": int(args.dead_code_warmup_steps),
@@ -539,6 +752,10 @@ def train_vqvae(args):
                     "epoch": int(epoch + 1),
                     "loss": float(epoch_metrics["loss"]),
                     "checkpoint_kind": "retained_resume",
+                    "eval_split": eval_split_name,
+                    "best_metric_name": str(best_metric_name),
+                    "best_metric_value": float(best_metric_value),
+                    **{key: value for key, value in epoch_metrics.items() if key.startswith("val_") or key.startswith("train_eval_") or key.startswith("codebook_") or key.startswith("ema_")},
                 },
             )
             log_checkpoint_artifact(
@@ -567,7 +784,7 @@ def train_vqvae(args):
     with open(hist_path, "w") as f:
         json.dump(history, f, indent=2)
     logger.info(f"Training history saved to {hist_path}")
-    logger.info(f"Best loss: {best_loss:.4f}")
+    logger.info("Best %s: %.4f", best_metric_name, best_metric_value)
 
     return model
 
@@ -607,6 +824,13 @@ def main():
                         help="Never reset codes that are still active in the current batch.")
     parser.add_argument("--max-dead-code-resets-per-event", type=int, default=None,
                         help="Maximum number of VQ codes to reset in one maintenance event; 0 disables the cap.")
+    parser.add_argument("--validation-fraction", type=float, default=None,
+                        help="Held-out validation fraction for VQ-VAE model selection; 0 disables a validation split.")
+    parser.add_argument("--validation-max-batches", type=int, default=None,
+                        help="Maximum number of validation mini-batches evaluated each epoch.")
+    parser.add_argument("--best-checkpoint-metric", type=str, default=None,
+                        choices=["val_loss", "train_loss"],
+                        help="Metric used to select the best VQ-VAE checkpoint.")
     parser.add_argument("--min-samples-per-epoch", type=int, default=None,
                         help="Minimum samples per epoch (upsampled for small datasets)")
     parser.add_argument("--save-dir", type=str, default=None)

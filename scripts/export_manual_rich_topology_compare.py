@@ -33,7 +33,25 @@ from scripts.run_fast_sampler_visual_audit import (
 )
 
 
-def build_manual_rich_topology_graph() -> nx.Graph:
+def _ensure_directed_progression_graph(graph: nx.Graph, *, source: str) -> nx.DiGraph:
+    """
+    Require directed mission graphs for progression-sensitive audits.
+
+    Research and prior bugs in this repo both point in the same direction:
+    topology semantics like ITEM -> TUTORIAL -> COMBAT -> COMPLEX -> GOAL are
+    directional. Quietly accepting undirected graphs weakens those semantics and
+    makes the audit lie about what Block I and the room models are doing.
+    """
+    if graph.is_directed():
+        return nx.DiGraph(graph)
+    raise ValueError(
+        f"{source} must be a directed mission graph (nx.DiGraph). "
+        "Undirected graphs flatten progression semantics and are not valid for "
+        "manual topology comparison or fixed-graph audits."
+    )
+
+
+def build_manual_rich_topology_graph() -> nx.DiGraph:
     """
     Build a rich, explicitly positioned mission graph for controlled room testing.
 
@@ -41,7 +59,7 @@ def build_manual_rich_topology_graph() -> nx.Graph:
     placement is feasible and we avoid conflating room quality with relaxed
     topology stitching artifacts.
     """
-    graph = nx.Graph()
+    graph = nx.DiGraph()
     graph.graph.update(
         {
             "style_id": 1,
@@ -99,12 +117,13 @@ def build_manual_rich_topology_graph() -> nx.Graph:
     _add_edge(7, 10, "boss_locked", key_required=2)
     _add_edge(10, 11, "path")
 
-    return graph
+    return _ensure_directed_progression_graph(graph, source="built_in_manual_rich_topology")
 
 
-def _load_mission_graph(path: Path) -> nx.Graph:
+def _load_mission_graph(path: Path) -> nx.DiGraph:
     payload = json.loads(path.read_text(encoding="utf-8"))
-    return json_graph.node_link_graph(payload, edges="links")
+    graph = json_graph.node_link_graph(payload, edges="links")
+    return _ensure_directed_progression_graph(graph, source=str(path))
 
 
 def _write_graph_summary(graph: nx.Graph, out_dir: Path) -> None:

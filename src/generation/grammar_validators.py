@@ -3,9 +3,33 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from collections import deque
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+
+def _find_forward_path(
+    adjacency: Dict[int, List[int]],
+    start_id: int,
+    goal_id: int,
+) -> Optional[List[int]]:
+    if start_id == goal_id:
+        return [start_id]
+
+    visited = {start_id}
+    queue = deque([(start_id, [start_id])])
+    while queue:
+        current, path = queue.popleft()
+        for neighbor in adjacency.get(current, []):
+            if neighbor in visited:
+                continue
+            new_path = path + [neighbor]
+            if neighbor == goal_id:
+                return new_path
+            visited.add(neighbor)
+            queue.append((neighbor, new_path))
+    return None
 
 
 def validate_skill_chains(graph: Any) -> bool:
@@ -17,20 +41,65 @@ def validate_skill_chains(graph: Any) -> bool:
     """
     graph.sanitize()
     tutorial_nodes = [n for n in graph.nodes.values() if getattr(n, "is_tutorial", False)]
-    pedagogical_types = {"COMBAT_PUZZLE", "COMPLEX_PUZZLE"}
+    if not tutorial_nodes:
+        return True
+
+    forward_adj = graph.get_forward_adjacency_map()
+    item_ids = [
+        node.id
+        for node in graph.nodes.values()
+        if getattr(getattr(node, "node_type", None), "name", "") == "ITEM"
+    ]
+    climax_ids = [
+        node.id
+        for node in graph.nodes.values()
+        if getattr(getattr(node, "node_type", None), "name", "") in {"BOSS_DOOR", "BOSS", "GOAL"}
+    ]
 
     for tutorial in tutorial_nodes:
-        successors = [
-            n
-            for n in graph.get_successors(tutorial.id, depth=3)
-            if getattr(getattr(n, "node_type", None), "name", "") in pedagogical_types
-        ]
-        if len(successors) < 2:
-            continue
+        if not any(_find_forward_path(forward_adj, item_id, tutorial.id) for item_id in item_ids):
+            logger.warning(
+                "Tutorial node %s is not reachable from any ITEM node via forward progression",
+                tutorial.id,
+            )
+            return False
 
-        successors.sort(key=lambda n: graph.get_shortest_path_length(tutorial.id, n.id))
-        first, second = successors[0], successors[1]
-        if first.difficulty > second.difficulty:
+        candidate_paths: List[List[int]] = []
+        for climax_id in climax_ids:
+            path = _find_forward_path(forward_adj, tutorial.id, climax_id)
+            if path and len(path) >= 2:
+                candidate_paths.append(path)
+        if not candidate_paths:
+            logger.warning(
+                "Tutorial node %s does not lead to any climax target via forward progression",
+                tutorial.id,
+            )
+            return False
+
+        candidate_paths.sort(key=len)
+        path = candidate_paths[0]
+        path_nodes = [graph.get_node(node_id) for node_id in path[1:]]
+        combat_node = next(
+            (node for node in path_nodes if getattr(getattr(node, "node_type", None), "name", "") == "COMBAT_PUZZLE"),
+            None,
+        )
+        complex_node = next(
+            (node for node in path_nodes if getattr(getattr(node, "node_type", None), "name", "") == "COMPLEX_PUZZLE"),
+            None,
+        )
+        if combat_node is None or complex_node is None:
+            logger.warning(
+                "Tutorial node %s does not lead to COMBAT_PUZZLE -> COMPLEX_PUZZLE in order",
+                tutorial.id,
+            )
+            return False
+        if path.index(combat_node.id) >= path.index(complex_node.id):
+            logger.warning(
+                "Skill chain from %s has improper pedagogical ordering",
+                tutorial.id,
+            )
+            return False
+        if combat_node.difficulty > complex_node.difficulty:
             logger.warning(
                 "Skill chain from %s has improper difficulty progression",
                 tutorial.id,

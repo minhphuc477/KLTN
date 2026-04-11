@@ -12,7 +12,10 @@ from src.core.logic_net import LogicNet
 from src.core.vqvae import create_vqvae
 from src.core.symbolic_refiner import DEFAULT_ADJACENCY, TileType
 from src.pipeline.dungeon_pipeline import NeuralSymbolicDungeonPipeline
-from src.pipeline.room_topology_conditioning import ROOM_TOPOLOGY_CHANNEL_COUNT
+from src.pipeline.room_topology_conditioning import (
+    ROOM_TOPOLOGY_CHANNEL_COUNT,
+    build_room_semantic_anchor_points,
+)
 
 
 def _generate_precomputed_room(
@@ -360,10 +363,39 @@ def test_generate_room_puzzle_scaffold_preserves_planned_route_cells():
     result = _generate_precomputed_room(pipeline, mission_graph, start_goal=start_goal)
 
     assert isinstance(result.room_plan_mask, np.ndarray)
-    route_mask = np.asarray(result.room_plan_mask, dtype=np.float32) > 0.0
-    route_tiles = result.room_grid[route_mask]
+    semantics = pipeline._extract_room_topology_semantics(mission_graph, 0)
+    role_flags = pipeline._room_role_flags(dict(mission_graph.nodes[0]))
+    semantic_anchors = build_room_semantic_anchor_points(
+        room_shape=(ROOM_HEIGHT, ROOM_WIDTH),
+        start=start_goal[0],
+        goal=start_goal[1],
+        required_doors=semantics["required_doors"],
+        incoming_dirs=semantics["incoming_dirs"],
+        outgoing_dirs=semantics["outgoing_dirs"],
+        room_role_flags=role_flags,
+        semantic_puzzle_offset=pipeline.default_semantic_puzzle_offset,
+    )
+    profile = pipeline._resolve_puzzle_room_scaffold_profile(
+        attrs=dict(mission_graph.nodes[0]),
+        role_flags=role_flags,
+        semantics=semantics,
+        node_type="switch",
+    )
+    template_mask = pipeline._build_puzzle_room_route_template(
+        archetype=profile["archetype"],
+        gate_family=profile["gate_family"],
+        stateful_anchor=semantic_anchors.get("puzzle"),
+        flow_is_horizontal=False,
+        source_anchor=semantic_anchors.get("start", pipeline._clamp_room_coord(start_goal[0])),
+        destination_anchor=semantic_anchors.get("goal", pipeline._clamp_room_coord(start_goal[1])),
+        puzzle_anchor=semantic_anchors.get("puzzle", (ROOM_HEIGHT // 2, ROOM_WIDTH // 2)),
+        role_flags=role_flags,
+        semantics=semantics,
+    )
+    route_tiles = result.room_grid[np.asarray(template_mask, dtype=bool)]
     disallowed = {int(SEMANTIC_PALETTE["WALL"]), int(SEMANTIC_PALETTE["BLOCK"])}
     assert route_tiles.size > 0
+    assert result.metrics["final_puzzle_scaffold_route_template_used"] == pytest.approx(1.0)
     assert not any(int(tile) in disallowed for tile in route_tiles.tolist())
 
 
@@ -398,6 +430,18 @@ def test_puzzle_scaffold_profile_adapts_to_complex_puzzle_topology():
     assert profile["block_budget"] >= 34
 
 
+def test_room_role_flags_treat_switch_and_complex_puzzle_types_as_puzzles():
+    pipeline = NeuralSymbolicDungeonPipeline.__new__(NeuralSymbolicDungeonPipeline)
+
+    switch_flags = pipeline._room_role_flags({"type": "switch"})
+    complex_flags = pipeline._room_role_flags({"type": "complex_puzzle"})
+
+    assert switch_flags["has_puzzle"] is True
+    assert switch_flags["is_switch_puzzle"] is True
+    assert complex_flags["has_puzzle"] is True
+    assert complex_flags["is_complex_puzzle"] is True
+
+
 def test_puzzle_scaffold_profile_prefers_combat_archetype_for_combat_puzzle():
     pipeline = NeuralSymbolicDungeonPipeline.__new__(NeuralSymbolicDungeonPipeline)
     pipeline.default_puzzle_room_branch_density = 0.75
@@ -428,6 +472,367 @@ def test_puzzle_scaffold_profile_prefers_combat_archetype_for_combat_puzzle():
     assert profile["archetype"] == "combat"
     assert profile["branch_density"] <= 0.45
     assert profile["block_budget"] <= 18
+
+
+def test_puzzle_scaffold_profile_classifies_stateful_gate_families():
+    pipeline = NeuralSymbolicDungeonPipeline.__new__(NeuralSymbolicDungeonPipeline)
+    pipeline.default_puzzle_room_branch_density = 0.75
+    pipeline.default_puzzle_room_block_budget = 28
+    pipeline.default_puzzle_room_preserve_route_margin = 0
+
+    common = {
+        "required_doors": {"N": False, "S": False, "E": True, "W": True},
+        "incoming_dirs": {"W"},
+        "outgoing_dirs": {"E"},
+    }
+    role_flags = pipeline._room_role_flags({"type": "puzzle", "has_puzzle": True})
+
+    bombable_profile = pipeline._resolve_puzzle_room_scaffold_profile(
+        attrs={"type": "puzzle", "has_puzzle": True},
+        role_flags=role_flags,
+        semantics={**common, "edge_constraints": {"N": set(), "S": set(), "E": {"bombable"}, "W": set()}},
+        node_type="puzzle",
+    )
+    item_profile = pipeline._resolve_puzzle_room_scaffold_profile(
+        attrs={"type": "puzzle", "has_puzzle": True},
+        role_flags=role_flags,
+        semantics={**common, "edge_constraints": {"N": set(), "S": set(), "E": {"item_gate"}, "W": set()}},
+        node_type="puzzle",
+    )
+    key_profile = pipeline._resolve_puzzle_room_scaffold_profile(
+        attrs={"type": "puzzle", "has_puzzle": True},
+        role_flags=role_flags,
+        semantics={**common, "edge_constraints": {"N": set(), "S": set(), "E": {"key_locked"}, "W": set()}},
+        node_type="puzzle",
+    )
+    switch_profile = pipeline._resolve_puzzle_room_scaffold_profile(
+        attrs={"type": "switch", "has_puzzle": True},
+        role_flags=pipeline._room_role_flags({"type": "switch", "has_puzzle": True}),
+        semantics={**common, "edge_constraints": {"N": set(), "S": set(), "E": {"switch_locked"}, "W": set()}},
+        node_type="switch",
+    )
+    toggle_profile = pipeline._resolve_puzzle_room_scaffold_profile(
+        attrs={"type": "puzzle", "has_puzzle": True},
+        role_flags=role_flags,
+        semantics={**common, "edge_constraints": {"N": set(), "S": set(), "E": {"on_off_gate"}, "W": set()}},
+        node_type="puzzle",
+    )
+
+    assert bombable_profile["gate_family"] == "bombable"
+    assert bombable_profile["archetype"] == "gate"
+    assert item_profile["gate_family"] == "item_unlock"
+    assert item_profile["archetype"] == "gate"
+    assert key_profile["gate_family"] == "key"
+    assert key_profile["archetype"] == "gate"
+    assert switch_profile["gate_family"] == "switch"
+    assert switch_profile["archetype"] == "gate"
+    assert toggle_profile["gate_family"] == "toggle"
+    assert toggle_profile["archetype"] == "gate"
+
+
+def test_puzzle_scaffold_cleans_small_interior_noise_components_before_layout():
+    pipeline = NeuralSymbolicDungeonPipeline.__new__(NeuralSymbolicDungeonPipeline)
+    pipeline.default_puzzle_room_scaffold_enabled = True
+    pipeline.default_puzzle_room_scaffold_min_structure_tiles = 10
+    pipeline.default_puzzle_room_archetype_mode = "auto"
+    pipeline.default_puzzle_room_branch_density = 0.75
+    pipeline.default_puzzle_room_block_budget = 28
+    pipeline.default_puzzle_room_preserve_route_margin = 0
+    pipeline.default_semantic_puzzle_offset = 2
+
+    room = np.full((ROOM_HEIGHT, ROOM_WIDTH), int(SEMANTIC_PALETTE["FLOOR"]), dtype=np.int32)
+    room[0, :] = int(SEMANTIC_PALETTE["WALL"])
+    room[-1, :] = int(SEMANTIC_PALETTE["WALL"])
+    room[:, 0] = int(SEMANTIC_PALETTE["WALL"])
+    room[:, -1] = int(SEMANTIC_PALETTE["WALL"])
+    room[5, 5] = int(SEMANTIC_PALETTE["BLOCK"])
+    room[10, 7] = int(SEMANTIC_PALETTE["BLOCK"])
+
+    mission_graph = nx.DiGraph()
+    mission_graph.add_node(0, type="switch", has_puzzle=True, pos=(0, 0))
+    mission_graph.add_node(1, pos=(1, 0))
+    mission_graph.add_edge(0, 1, edge_type="switch_locked")
+
+    cleaned, cleanup_stats = pipeline._strip_small_interior_structure_components(
+        room,
+        graph=mission_graph,
+        room_id=0,
+    )
+    assert cleanup_stats["removed_components"] == 2
+    assert cleanup_stats["removed_tiles"] == 2
+    assert int(cleaned[5, 5]) != int(SEMANTIC_PALETTE["BLOCK"])
+    assert int(cleaned[10, 7]) != int(SEMANTIC_PALETTE["BLOCK"])
+
+    route = np.zeros((ROOM_HEIGHT, ROOM_WIDTH), dtype=np.float32)
+    route[1:ROOM_HEIGHT - 1, ROOM_WIDTH // 2] = 1.0
+    out, stats = pipeline._apply_puzzle_room_scaffold(
+        room,
+        graph=mission_graph,
+        room_id=0,
+        room_plan_mask=route,
+        start_goal=((0, ROOM_WIDTH // 2), (ROOM_HEIGHT - 1, ROOM_WIDTH // 2)),
+    )
+
+    assert stats["noise_components_removed"] == 2
+    assert stats["noise_tiles_removed"] == 2
+    assert int(np.sum(out == int(SEMANTIC_PALETTE["BLOCK"]))) >= 3
+
+
+def test_gate_puzzle_scaffold_uses_route_template_and_builds_transverse_gate():
+    pipeline = NeuralSymbolicDungeonPipeline.__new__(NeuralSymbolicDungeonPipeline)
+    pipeline.default_puzzle_room_scaffold_enabled = True
+    pipeline.default_puzzle_room_scaffold_min_structure_tiles = 10
+    pipeline.default_puzzle_room_archetype_mode = "auto"
+    pipeline.default_puzzle_room_branch_density = 0.75
+    pipeline.default_puzzle_room_block_budget = 28
+    pipeline.default_puzzle_room_preserve_route_margin = 0
+    pipeline.default_semantic_puzzle_offset = 2
+
+    room = np.full((ROOM_HEIGHT, ROOM_WIDTH), int(SEMANTIC_PALETTE["FLOOR"]), dtype=np.int32)
+    room[0, :] = int(SEMANTIC_PALETTE["WALL"])
+    room[-1, :] = int(SEMANTIC_PALETTE["WALL"])
+    room[:, 0] = int(SEMANTIC_PALETTE["WALL"])
+    room[:, -1] = int(SEMANTIC_PALETTE["WALL"])
+
+    mission_graph = nx.DiGraph()
+    mission_graph.add_node(0, type="switch", has_puzzle=True, pos=(0, 0))
+    mission_graph.add_node(1, pos=(1, 0))
+    mission_graph.add_edge(0, 1, edge_type="switch_locked")
+
+    route = np.zeros((ROOM_HEIGHT, ROOM_WIDTH), dtype=np.float32)
+    route[1:ROOM_HEIGHT - 1, ROOM_WIDTH // 2] = 1.0
+    out, stats = pipeline._apply_puzzle_room_scaffold(
+        room,
+        graph=mission_graph,
+        room_id=0,
+        room_plan_mask=route,
+        start_goal=((0, ROOM_WIDTH // 2), (ROOM_HEIGHT - 1, ROOM_WIDTH // 2)),
+    )
+
+    block_id = int(SEMANTIC_PALETTE["BLOCK"])
+    row_block_counts = np.sum(out == block_id, axis=1)
+
+    assert stats["route_template_used"] == 1
+    assert stats["archetype"] == "gate"
+    assert stats["gate_family"] == "switch"
+    assert int(np.max(row_block_counts)) >= 3
+
+
+def test_bombable_gate_puzzle_scaffold_builds_offset_bypass_instead_of_center_gap():
+    pipeline = NeuralSymbolicDungeonPipeline.__new__(NeuralSymbolicDungeonPipeline)
+    pipeline.default_puzzle_room_scaffold_enabled = True
+    pipeline.default_puzzle_room_scaffold_min_structure_tiles = 10
+    pipeline.default_puzzle_room_archetype_mode = "auto"
+    pipeline.default_puzzle_room_branch_density = 0.75
+    pipeline.default_puzzle_room_block_budget = 28
+    pipeline.default_puzzle_room_preserve_route_margin = 0
+    pipeline.default_semantic_puzzle_offset = 2
+    pipeline.default_puzzle_room_resource_bypass_offset = 2
+
+    room = np.full((ROOM_HEIGHT, ROOM_WIDTH), int(SEMANTIC_PALETTE["FLOOR"]), dtype=np.int32)
+    room[0, :] = int(SEMANTIC_PALETTE["WALL"])
+    room[-1, :] = int(SEMANTIC_PALETTE["WALL"])
+    room[:, 0] = int(SEMANTIC_PALETTE["WALL"])
+    room[:, -1] = int(SEMANTIC_PALETTE["WALL"])
+
+    mission_graph = nx.DiGraph()
+    mission_graph.add_node(0, type="puzzle", has_puzzle=True, pos=(0, 0))
+    mission_graph.add_node(1, pos=(1, 0))
+    mission_graph.add_edge(0, 1, edge_type="bombable")
+
+    route = np.zeros((ROOM_HEIGHT, ROOM_WIDTH), dtype=np.float32)
+    route[1:ROOM_HEIGHT - 1, ROOM_WIDTH // 2] = 1.0
+    out, stats = pipeline._apply_puzzle_room_scaffold(
+        room,
+        graph=mission_graph,
+        room_id=0,
+        room_plan_mask=route,
+        start_goal=((0, ROOM_WIDTH // 2), (ROOM_HEIGHT - 1, ROOM_WIDTH // 2)),
+    )
+
+    block_id = int(SEMANTIC_PALETTE["BLOCK"])
+    center_row = ROOM_HEIGHT // 2
+    row_block_counts = np.sum(out == block_id, axis=1)
+
+    assert stats["gate_family"] == "bombable"
+    assert stats["stateful_anchor_name"] == "puzzle"
+    assert stats["route_template_used"] == 1
+    assert int(np.max(row_block_counts)) >= 3
+    assert int(np.sum(row_block_counts[:center_row] >= 2)) >= 1
+
+
+def test_item_unlock_puzzle_scaffold_prefers_item_anchor_when_present():
+    pipeline = NeuralSymbolicDungeonPipeline.__new__(NeuralSymbolicDungeonPipeline)
+    pipeline.default_puzzle_room_scaffold_enabled = True
+    pipeline.default_puzzle_room_scaffold_min_structure_tiles = 10
+    pipeline.default_puzzle_room_archetype_mode = "auto"
+    pipeline.default_puzzle_room_branch_density = 0.75
+    pipeline.default_puzzle_room_block_budget = 28
+    pipeline.default_puzzle_room_preserve_route_margin = 0
+    pipeline.default_semantic_puzzle_offset = 2
+    pipeline.default_puzzle_room_item_slot_depth = 3
+
+    room = np.full((ROOM_HEIGHT, ROOM_WIDTH), int(SEMANTIC_PALETTE["FLOOR"]), dtype=np.int32)
+    room[0, :] = int(SEMANTIC_PALETTE["WALL"])
+    room[-1, :] = int(SEMANTIC_PALETTE["WALL"])
+    room[:, 0] = int(SEMANTIC_PALETTE["WALL"])
+    room[:, -1] = int(SEMANTIC_PALETTE["WALL"])
+
+    mission_graph = nx.DiGraph()
+    mission_graph.add_node(0, type="puzzle", has_puzzle=True, has_item=True, pos=(0, 0))
+    mission_graph.add_node(1, pos=(1, 0))
+    mission_graph.add_edge(0, 1, edge_type="item_gate")
+
+    route = np.zeros((ROOM_HEIGHT, ROOM_WIDTH), dtype=np.float32)
+    route[1:ROOM_HEIGHT - 1, ROOM_WIDTH // 2] = 1.0
+    out, stats = pipeline._apply_puzzle_room_scaffold(
+        room,
+        graph=mission_graph,
+        room_id=0,
+        room_plan_mask=route,
+        start_goal=((0, ROOM_WIDTH // 2), (ROOM_HEIGHT - 1, ROOM_WIDTH // 2)),
+    )
+
+    block_id = int(SEMANTIC_PALETTE["BLOCK"])
+    row_block_counts = np.sum(out == block_id, axis=1)
+
+    assert stats["gate_family"] == "item_unlock"
+    assert stats["stateful_anchor_name"] == "item"
+    assert stats["route_template_used"] == 1
+    assert int(np.max(row_block_counts)) >= 3
+
+
+def test_toggle_gate_puzzle_scaffold_builds_state_corridor():
+    pipeline = NeuralSymbolicDungeonPipeline.__new__(NeuralSymbolicDungeonPipeline)
+    pipeline.default_puzzle_room_scaffold_enabled = True
+    pipeline.default_puzzle_room_scaffold_min_structure_tiles = 10
+    pipeline.default_puzzle_room_archetype_mode = "auto"
+    pipeline.default_puzzle_room_branch_density = 0.75
+    pipeline.default_puzzle_room_block_budget = 28
+    pipeline.default_puzzle_room_preserve_route_margin = 0
+    pipeline.default_semantic_puzzle_offset = 2
+    pipeline.default_puzzle_room_toggle_corridor_offset = 2
+
+    room = np.full((ROOM_HEIGHT, ROOM_WIDTH), int(SEMANTIC_PALETTE["FLOOR"]), dtype=np.int32)
+    room[0, :] = int(SEMANTIC_PALETTE["WALL"])
+    room[-1, :] = int(SEMANTIC_PALETTE["WALL"])
+    room[:, 0] = int(SEMANTIC_PALETTE["WALL"])
+    room[:, -1] = int(SEMANTIC_PALETTE["WALL"])
+
+    mission_graph = nx.DiGraph()
+    mission_graph.add_node(0, type="puzzle", has_puzzle=True, pos=(0, 0))
+    mission_graph.add_node(1, pos=(1, 0))
+    mission_graph.add_edge(0, 1, edge_type="on_off_gate")
+
+    route = np.zeros((ROOM_HEIGHT, ROOM_WIDTH), dtype=np.float32)
+    route[1:ROOM_HEIGHT - 1, ROOM_WIDTH // 2] = 1.0
+    out, stats = pipeline._apply_puzzle_room_scaffold(
+        room,
+        graph=mission_graph,
+        room_id=0,
+        room_plan_mask=route,
+        start_goal=((0, ROOM_WIDTH // 2), (ROOM_HEIGHT - 1, ROOM_WIDTH // 2)),
+    )
+
+    block_id = int(SEMANTIC_PALETTE["BLOCK"])
+    row_block_counts = np.sum(out == block_id, axis=1)
+
+    assert stats["gate_family"] == "toggle"
+    assert stats["stateful_anchor_name"] == "puzzle"
+    assert stats["route_template_used"] == 1
+    assert int(np.sum(row_block_counts >= 2)) >= 2
+
+
+def test_serpentine_puzzle_scaffold_forms_multiple_baffles_in_complex_rooms():
+    pipeline = NeuralSymbolicDungeonPipeline.__new__(NeuralSymbolicDungeonPipeline)
+    pipeline.default_puzzle_room_scaffold_enabled = True
+    pipeline.default_puzzle_room_scaffold_min_structure_tiles = 10
+    pipeline.default_puzzle_room_archetype_mode = "auto"
+    pipeline.default_puzzle_room_branch_density = 0.75
+    pipeline.default_puzzle_room_block_budget = 28
+    pipeline.default_puzzle_room_preserve_route_margin = 0
+    pipeline.default_semantic_puzzle_offset = 2
+
+    room = np.full((ROOM_HEIGHT, ROOM_WIDTH), int(SEMANTIC_PALETTE["FLOOR"]), dtype=np.int32)
+    room[0, :] = int(SEMANTIC_PALETTE["WALL"])
+    room[-1, :] = int(SEMANTIC_PALETTE["WALL"])
+    room[:, 0] = int(SEMANTIC_PALETTE["WALL"])
+    room[:, -1] = int(SEMANTIC_PALETTE["WALL"])
+
+    mission_graph = nx.DiGraph()
+    mission_graph.add_node(0, type="complex_puzzle", has_puzzle=True, difficulty_rating="HARD", pos=(0, 0))
+    mission_graph.add_node(1, pos=(0, 1))
+    mission_graph.add_edge(0, 1, edge_type="path")
+
+    route = np.zeros((ROOM_HEIGHT, ROOM_WIDTH), dtype=np.float32)
+    route[ROOM_HEIGHT // 2, 1:ROOM_WIDTH - 1] = 1.0
+    out, stats = pipeline._apply_puzzle_room_scaffold(
+        room,
+        graph=mission_graph,
+        room_id=0,
+        room_plan_mask=route,
+        start_goal=((ROOM_HEIGHT // 2, 0), (ROOM_HEIGHT // 2, ROOM_WIDTH - 1)),
+    )
+
+    block_id = int(SEMANTIC_PALETTE["BLOCK"])
+    row_block_counts = np.sum(out == block_id, axis=1)
+
+    assert stats["route_template_used"] == 1
+    assert stats["archetype"] == "serpentine"
+    assert int(np.sum(row_block_counts >= 3)) >= 2
+
+
+def test_hub_puzzle_scaffold_builds_meaningful_ring_for_four_door_complex_room():
+    pipeline = NeuralSymbolicDungeonPipeline.__new__(NeuralSymbolicDungeonPipeline)
+    pipeline.default_puzzle_room_scaffold_enabled = True
+    pipeline.default_puzzle_room_scaffold_min_structure_tiles = 10
+    pipeline.default_puzzle_room_archetype_mode = "auto"
+    pipeline.default_puzzle_room_branch_density = 0.75
+    pipeline.default_puzzle_room_block_budget = 28
+    pipeline.default_puzzle_room_preserve_route_margin = 0
+    pipeline.default_semantic_puzzle_offset = 2
+
+    room = np.full((ROOM_HEIGHT, ROOM_WIDTH), int(SEMANTIC_PALETTE["FLOOR"]), dtype=np.int32)
+    room[0, :] = int(SEMANTIC_PALETTE["WALL"])
+    room[-1, :] = int(SEMANTIC_PALETTE["WALL"])
+    room[:, 0] = int(SEMANTIC_PALETTE["WALL"])
+    room[:, -1] = int(SEMANTIC_PALETTE["WALL"])
+
+    mission_graph = nx.DiGraph()
+    mission_graph.add_node(
+        0,
+        type="complex_puzzle",
+        has_puzzle=True,
+        difficulty_rating="HARD",
+        pos=(1, 1),
+    )
+    mission_graph.add_node(1, pos=(0, 1))
+    mission_graph.add_node(2, pos=(2, 1))
+    mission_graph.add_node(3, pos=(1, 0))
+    mission_graph.add_node(4, pos=(1, 2))
+    mission_graph.add_edge(1, 0, edge_type="key_locked")
+    mission_graph.add_edge(3, 0, edge_type="bombable")
+    mission_graph.add_edge(0, 2, edge_type="path")
+    mission_graph.add_edge(0, 4, edge_type="switch_locked")
+
+    route = np.zeros((ROOM_HEIGHT, ROOM_WIDTH), dtype=np.float32)
+    route[ROOM_HEIGHT // 2, 1:ROOM_WIDTH - 1] = 1.0
+    out, stats = pipeline._apply_puzzle_room_scaffold(
+        room,
+        graph=mission_graph,
+        room_id=0,
+        room_plan_mask=route,
+        start_goal=((ROOM_HEIGHT // 2, 0), (ROOM_HEIGHT // 2, ROOM_WIDTH - 1)),
+    )
+
+    block_id = int(SEMANTIC_PALETTE["BLOCK"])
+    block_count = int(np.sum(out == block_id))
+    row_block_counts = np.sum(out == block_id, axis=1)
+
+    assert stats["route_template_used"] == 1
+    assert stats["archetype"] == "hub"
+    assert block_count >= 8
+    assert int(np.sum(row_block_counts >= 2)) >= 2
 
 
 def test_generate_room_enforces_boundary_shell_except_required_doors():

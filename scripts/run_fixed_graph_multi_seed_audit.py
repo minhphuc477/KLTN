@@ -28,12 +28,16 @@ from scripts.run_fast_sampler_visual_audit import (
     export_variant,
     generation_overrides_from_namespace,
 )
-from scripts.export_manual_rich_topology_compare import build_manual_rich_topology_graph
+from scripts.export_manual_rich_topology_compare import (
+    _ensure_directed_progression_graph,
+    build_manual_rich_topology_graph,
+)
 
 
 def _load_mission_graph(path: Path):
     payload = json.loads(path.read_text(encoding="utf-8"))
-    return json_graph.node_link_graph(payload, edges="links")
+    graph = json_graph.node_link_graph(payload, edges="links")
+    return _ensure_directed_progression_graph(graph, source=str(path))
 
 
 def _safe_mean(values: Sequence[float]) -> float:

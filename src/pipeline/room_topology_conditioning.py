@@ -64,6 +64,7 @@ _VALIDATOR_COMPLEX_EDGE_TYPES = {
     "locked",
     "boss_locked",
     "item_locked",
+    "item_gate",
     "bombable",
     "soft_locked",
     "one_way",
@@ -71,12 +72,14 @@ _VALIDATOR_COMPLEX_EDGE_TYPES = {
     "switch",
     "switch_locked",
     "state_block",
+    "on_off_gate",
 }
 
-TOPOLOGY_ANCHOR_POLICY_VERSION = "2026-04-07.semantic_anchor_v5_adaptive_puzzle_profiles"
+TOPOLOGY_ANCHOR_POLICY_VERSION = "2026-04-09.semantic_anchor_v7_stateful_puzzle_edge_semantics"
 DEFAULT_SEMANTIC_ROLE_PRIOR_STRENGTH = 0.15
 DEFAULT_SEMANTIC_ANCHOR_THRESHOLD = 0.5
 DEFAULT_SEMANTIC_PUZZLE_OFFSET = 2
+DEFAULT_VALIDATOR_PLAN_MAX_STATES = 512
 
 
 def build_topology_anchor_policy_metadata(
@@ -525,9 +528,9 @@ def _required_prerequisites(
 
     if tokens & {"key_locked", "locked", "boss_locked"} and "key" in anchors:
         prereqs.append("key")
-    if tokens & {"item_locked", "bombable"} and "item" in anchors:
+    if tokens & {"item_locked", "item_gate", "bombable"} and "item" in anchors:
         prereqs.append("item")
-    if tokens & {"soft_locked", "one_way", "shutter", "switch", "switch_locked", "state_block"}:
+    if tokens & {"soft_locked", "one_way", "shutter", "switch", "switch_locked", "state_block", "on_off_gate"}:
         for candidate in ("enemy", "boss", "puzzle"):
             if candidate in anchors:
                 prereqs.append(candidate)
@@ -596,7 +599,7 @@ def _room_requires_validator_plan(
     return any(name in anchors for name in ("key", "item", "enemy", "boss", "puzzle"))
 
 
-def _state_key(state: GameState) -> Tuple[Tuple[int, int], int, int, bool, bool, frozenset, frozenset, frozenset, frozenset]:
+def _state_key(state: GameState) -> Tuple[Tuple[int, int], int, int, bool, bool, frozenset, frozenset, frozenset, frozenset, int]:
     return (
         tuple(state.position),
         int(state.keys),
@@ -607,6 +610,7 @@ def _state_key(state: GameState) -> Tuple[Tuple[int, int], int, int, bool, bool,
         frozenset(state.collected_items),
         frozenset(state.pushed_blocks),
         frozenset(state.defeated_enemies),
+        int(getattr(state, "current_floor", 0)),
     )
 
 
@@ -614,13 +618,17 @@ def _room_local_state_search(
     env: ZeldaLogicEnv,
     start_state: GameState,
     goal_pos: Tuple[int, int],
+    *,
+    max_states: int = DEFAULT_VALIDATOR_PLAN_MAX_STATES,
 ) -> Optional[Tuple[List[Tuple[int, int]], GameState]]:
     """Plan a room-local path using validator transition rules."""
     goal = (int(goal_pos[0]), int(goal_pos[1]))
-    queue = deque([start_state.copy()])
-    start_key = _state_key(start_state)
+    state_budget = max(1, int(max_states))
+    start_copy = start_state.copy()
+    start_key = _state_key(start_copy)
+    queue = deque([start_copy])
     parents: Dict[Tuple, Optional[Tuple]] = {start_key: None}
-    states: Dict[Tuple, GameState] = {start_key: start_state.copy()}
+    states: Dict[Tuple, GameState] = {start_key: start_copy}
 
     while queue:
         current = queue.popleft()
@@ -635,7 +643,11 @@ def _room_local_state_search(
             return path, current
 
         r, c = current.position
-        for nr, nc in ((r, c + 1), (r + 1, c), (r, c - 1), (r - 1, c)):
+        neighbor_positions = [(r, c + 1), (r + 1, c), (r, c - 1), (r - 1, c)]
+        neighbor_positions.sort(
+            key=lambda pos: abs(int(pos[0]) - goal[0]) + abs(int(pos[1]) - goal[1])
+        )
+        for nr, nc in neighbor_positions:
             if not (0 <= nr < env.height and 0 <= nc < env.width):
                 continue
             can_move, next_state = env.try_move_pure(current, (nr, nc), int(env.grid[nr, nc]))
@@ -643,6 +655,8 @@ def _room_local_state_search(
                 continue
             next_key = _state_key(next_state)
             if next_key in states:
+                continue
+            if len(states) >= state_budget:
                 continue
             states[next_key] = next_state
             parents[next_key] = current_key
@@ -666,7 +680,7 @@ def _initial_state_for_sequence(
         keys=0 if needs_local_key else (1 if final_tokens & {"key_locked", "locked"} else 0),
         bomb_count=0 if needs_local_item else (1 if "bombable" in final_tokens else 0),
         has_boss_key=(not needs_local_key and "boss_locked" in final_tokens),
-        has_item=(not needs_local_item and "item_locked" in final_tokens),
+        has_item=(not needs_local_item and bool(final_tokens & {"item_locked", "item_gate"})),
     )
 
 
@@ -679,6 +693,7 @@ def build_validator_room_plan_trace_mask(
     required_doors: Mapping[str, bool],
     edge_constraint_tokens: Optional[Mapping[str, Set[str]]] = None,
     room_role_flags: Optional[Mapping[str, bool]] = None,
+    validator_plan_max_states: int = DEFAULT_VALIDATOR_PLAN_MAX_STATES,
 ) -> np.ndarray:
     """
     Build a traversability mask from validator-aware ordered subgoal plans.
@@ -719,7 +734,12 @@ def build_validator_room_plan_trace_mask(
             if goal_anchor is None:
                 sequence_ok = False
                 break
-            result = _room_local_state_search(env, state, goal_anchor)
+            result = _room_local_state_search(
+                env,
+                state,
+                goal_anchor,
+                max_states=int(validator_plan_max_states),
+            )
             if result is None:
                 sequence_ok = False
                 break
@@ -742,6 +762,7 @@ def build_room_traversability_prior(
     required_doors: Mapping[str, bool],
     edge_constraint_tokens: Optional[Mapping[str, Set[str]]] = None,
     room_role_flags: Optional[Mapping[str, bool]] = None,
+    validator_plan_max_states: int = DEFAULT_VALIDATOR_PLAN_MAX_STATES,
 ) -> np.ndarray:
     """Hybrid router: simple rooms use shortest traces, complex rooms use validator plans."""
     normalized_tokens = {
@@ -763,6 +784,7 @@ def build_room_traversability_prior(
             required_doors=required_doors,
             edge_constraint_tokens=normalized_tokens,
             room_role_flags=role_flags,
+            validator_plan_max_states=int(validator_plan_max_states),
         )
         if np.any(validator_trace > 0):
             return validator_trace
@@ -789,6 +811,7 @@ def build_semantic_room_plan_trace(
     room_role_flags: Optional[Mapping[str, bool]] = None,
     start: Optional[Tuple[int, int]] = None,
     goal: Optional[Tuple[int, int]] = None,
+    validator_plan_max_states: int = DEFAULT_VALIDATOR_PLAN_MAX_STATES,
 ) -> np.ndarray:
     """
     Build a room traversability prior directly from a concrete room grid.
@@ -855,7 +878,52 @@ def build_semantic_room_plan_trace(
         required_doors=required_doors,
         edge_constraint_tokens=edge_constraint_tokens,
         room_role_flags=role_flags,
+        validator_plan_max_states=int(validator_plan_max_states),
     )
+
+
+def _build_synthetic_topology_trace_grid(
+    *,
+    room_shape: Tuple[int, int],
+    semantic_anchors: Mapping[str, Tuple[int, int]],
+    required_doors: Mapping[str, bool],
+    room_role_flags: Mapping[str, bool],
+) -> np.ndarray:
+    """Build a simple synthetic room grid for validator-aware topology tracing."""
+    h, w = int(room_shape[0]), int(room_shape[1])
+    wall = int(SEMANTIC_PALETTE["WALL"])
+    floor = int(SEMANTIC_PALETTE["FLOOR"])
+    grid = np.full((h, w), wall, dtype=np.int32)
+    grid[1:h - 1, 1:w - 1] = floor
+
+    for direction, enabled in dict(required_doors or {}).items():
+        if not bool(enabled):
+            continue
+        spec = DOOR_POSITIONS[str(direction)]
+        if direction in {"N", "S"}:
+            row = int(spec["row"])
+            grid[row, int(spec["col_start"]): int(spec["col_end"]) + 1] = int(SEMANTIC_PALETTE["DOOR_OPEN"])
+        else:
+            col = int(spec["col"])
+            grid[int(spec["row_start"]): int(spec["row_end"]) + 1, col] = int(SEMANTIC_PALETTE["DOOR_OPEN"])
+
+    anchor_tiles: Dict[str, int] = {
+        "start": int(SEMANTIC_PALETTE["START"]),
+        "goal": int(SEMANTIC_PALETTE["TRIFORCE"]),
+        "key": int(SEMANTIC_PALETTE["KEY_SMALL"]),
+        "item": int(SEMANTIC_PALETTE["KEY_ITEM"]),
+        "enemy": int(SEMANTIC_PALETTE["ENEMY"]),
+        "boss": int(SEMANTIC_PALETTE["BOSS"]),
+        "puzzle": int(SEMANTIC_PALETTE["PUZZLE"]),
+    }
+    for anchor_name, tile_id in anchor_tiles.items():
+        point = semantic_anchors.get(anchor_name)
+        if point is None:
+            continue
+        r, c = _clamp_point(point, (h, w))
+        grid[int(r), int(c)] = int(tile_id)
+
+    return grid
 
 
 def build_room_topology_condition_map(
@@ -884,6 +952,7 @@ def build_room_topology_condition_map(
     h, w = int(room_shape[0]), int(room_shape[1])
     topo = np.zeros((ROOM_TOPOLOGY_CHANNEL_COUNT, h, w), dtype=np.float32)
     role_flags = {str(key): bool(value) for key, value in dict(room_role_flags or {}).items()}
+    trace_source: Optional[np.ndarray] = None
     semantic_anchors = build_room_semantic_anchor_points(
         room_shape=(h, w),
         start=start,
@@ -916,10 +985,41 @@ def build_room_topology_condition_map(
 
     center = (h // 2, w // 2)
     use_trace = isinstance(traversability_trace, np.ndarray) and traversability_trace.shape == (h, w) and bool(np.any(traversability_trace > 0))
+    edge_constraint_tokens = {
+        str(direction): {str(token).strip().lower() for token in tokens}
+        for direction, tokens in dict(edge_constraint_tokens or {}).items()
+    }
+
+    if not use_trace and _room_requires_validator_plan(
+        edge_constraint_tokens=edge_constraint_tokens,
+        room_role_flags=role_flags,
+        anchors=semantic_anchors,
+    ):
+        synthetic_grid = _build_synthetic_topology_trace_grid(
+            room_shape=(h, w),
+            semantic_anchors=semantic_anchors,
+            required_doors=dict(required_doors or {}),
+            room_role_flags=role_flags,
+        )
+        synthetic_trace = build_validator_room_plan_trace_mask(
+            synthetic_grid,
+            anchors=semantic_anchors,
+            incoming_dirs=set(incoming_dirs or set()),
+            outgoing_dirs=set(outgoing_dirs or set()),
+            required_doors=dict(required_doors or {}),
+            edge_constraint_tokens=edge_constraint_tokens,
+            room_role_flags=role_flags,
+        )
+        if bool(np.any(synthetic_trace > 0)):
+            trace_source = synthetic_trace.astype(np.float32, copy=False)
+            use_trace = True
+
     if use_trace:
+        if trace_source is None:
+            trace_source = traversability_trace.astype(np.float32, copy=False)
         topo[ROOM_TOPOLOGY_CHANNELS["traversability"], :, :] = np.maximum(
             topo[ROOM_TOPOLOGY_CHANNELS["traversability"], :, :],
-            traversability_trace.astype(np.float32, copy=False),
+            trace_source,
         )
     else:
         topo[ROOM_TOPOLOGY_CHANNELS["traversability"], center[0], center[1]] = 1.0
@@ -946,10 +1046,6 @@ def build_room_topology_condition_map(
         )
 
     required_doors = dict(required_doors or {})
-    edge_constraint_tokens = {
-        str(direction): {str(token).strip().lower() for token in tokens}
-        for direction, tokens in dict(edge_constraint_tokens or {}).items()
-    }
     for direction in ("N", "S", "E", "W"):
         if not bool(required_doors.get(direction, False)):
             continue

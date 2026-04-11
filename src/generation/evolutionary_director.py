@@ -38,9 +38,18 @@ import numpy as np
 import networkx as nx
 
 from src.generation.grammar import (
+    AddArenaRule,
+    AddEntangledBranchesRule,
+    AddGatekeeperRule,
+    AddHazardGateRule,
+    AddItemGateRule,
+    AddMultiLockRule,
+    PruneDeadEndRule,
+    AddSkillChainRule,
     MissionGrammar,
     MissionGraph,
     MissionEdge,
+    MissionNode,
     NodeType,
     EdgeType,
     StartRule,
@@ -113,9 +122,40 @@ DEFAULT_REALISM_TUNING: Dict[str, float] = {
     "prior_node_boost_max": 1.25,
     "prior_edge_boost_gain": 0.48,
     "prior_edge_boost_max": 1.20,
+    "prior_pedagogical_boost_gain": 0.48,
+    "prior_pedagogical_boost_max": 1.42,
+    "prior_linearity_branch_damp_gain": 0.22,
+    "prior_linearity_boost_gain": 0.34,
+    "prior_linearity_prune_boost_gain": 0.30,
+    "prior_leniency_key_damp_gain": 0.52,
+    "prior_leniency_gate_boost_gain": 0.46,
+    "prior_leniency_depth_boost_gain": 0.28,
     "adapt_node_gain": 0.36,
     "adapt_edge_density_gain": 0.62,
     "adapt_edge_budget_gain": 0.44,
+    "adapt_pedagogical_gain": 0.58,
+    "adapt_tutorial_climax_gain": 0.48,
+    "adapt_leniency_gate_boost_gain": 0.52,
+    "adapt_leniency_key_damp_gain": 0.34,
+    "adapt_linearity_boost_gain": 0.40,
+    "adapt_branch_damp_gain": 0.26,
+    "adapt_prune_boost_gain": 0.34,
+    "initial_pedagogical_seed_fraction": 0.28,
+    "initial_pedagogical_seed_min": 3.0,
+    "initial_pedagogical_seed_max_fraction": 0.50,
+    "progression_balance_repair_iterations": 3.0,
+    "progression_balance_leniency_weight": 0.36,
+    "progression_balance_linearity_weight": 0.30,
+    "progression_balance_depth_weight": 0.16,
+    "progression_balance_variety_weight": 0.10,
+    "progression_balance_skill_weight": 0.08,
+    "progression_balance_gate_density_weight": 0.28,
+    "progression_balance_key_surplus_weight": 0.24,
+    "progression_balance_big_key_surplus_weight": 0.08,
+    "final_min_gate_density": 0.20,
+    "final_max_key_surplus": 1.0,
+    "final_max_big_key_surplus": 0.0,
+    "final_gate_calibration_iterations": 4.0,
 }
 
 
@@ -510,8 +550,18 @@ class GraphGrammarExecutor:
                     candidate = self._constraint_grammar.ensure_anchor_nodes(candidate)
                     candidate.sanitize()
 
-                    lock_ok = bool(self._constraint_grammar.validate_lock_key_ordering(candidate))
-                    prog_ok = bool(self._constraint_grammar.validate_progression_constraints(candidate))
+                    lock_ok = bool(
+                        self._constraint_grammar.validate_lock_key_ordering(
+                            candidate,
+                            log_failures=False,
+                        )
+                    )
+                    prog_ok = bool(
+                        self._constraint_grammar.validate_progression_constraints(
+                            candidate,
+                            log_failures=False,
+                        )
+                    )
                     if self.enforce_generation_constraints and (not lock_ok or not prog_ok):
                         generation_constraint_rejections += 1
                         if self.allow_candidate_repairs:
@@ -520,8 +570,18 @@ class GraphGrammarExecutor:
                             candidate = self._constraint_grammar.repair_progression_constraints(candidate)
                             candidate.sanitize()
                             candidate_repairs_applied += 1
-                            lock_ok = bool(self._constraint_grammar.validate_lock_key_ordering(candidate))
-                            prog_ok = bool(self._constraint_grammar.validate_progression_constraints(candidate))
+                            lock_ok = bool(
+                                self._constraint_grammar.validate_lock_key_ordering(
+                                    candidate,
+                                    log_failures=False,
+                                )
+                            )
+                            prog_ok = bool(
+                                self._constraint_grammar.validate_progression_constraints(
+                                    candidate,
+                                    log_failures=False,
+                                )
+                            )
 
                         if not lock_ok or not prog_ok:
                             rules_skipped += 1
@@ -1047,7 +1107,22 @@ def mission_graph_to_networkx(
 
     # Add edges
     for edge in graph.edges:
+        source_node = graph.nodes.get(edge.source)
         target_node = graph.nodes.get(edge.target)
+        is_goal_gauntlet_edge = bool(
+            source_node is not None
+            and target_node is not None
+            and (
+                (
+                    source_node.node_type == NodeType.BOSS_DOOR
+                    and target_node.node_type == NodeType.BOSS
+                )
+                or (
+                    source_node.node_type == NodeType.BOSS
+                    and target_node.node_type == NodeType.GOAL
+                )
+            )
+        )
         edge_attrs = dict(
             label=edge.edge_type.name.lower(),  # VGLC edge label
             edge_type=edge.edge_type.name,
@@ -1070,6 +1145,7 @@ def mission_graph_to_networkx(
         if (
             directed
             and edge.edge_type in bidirectional_output_types
+            and not is_goal_gauntlet_edge
             and (target_node is None or target_node.node_type != NodeType.GOAL)
             and not G.has_edge(edge.target, edge.source)
         ):
@@ -1478,10 +1554,10 @@ class TensionCurveEvaluator:
         provided_targets = descriptor_targets or {}
         # Descriptor targets anchor search toward VGLC-like topology.
         self.target_linearity = float(
-            np.clip(float(provided_targets.get("linearity", 0.52 - (0.0025 * self.target_length))), 0.30, 0.65)
+            np.clip(float(provided_targets.get("linearity", 0.58 - (0.0020 * self.target_length))), 0.36, 0.72)
         )
         self.target_leniency = float(
-            np.clip(float(provided_targets.get("leniency", 0.50)), 0.15, 0.90)
+            np.clip(float(provided_targets.get("leniency", 0.42)), 0.12, 0.85)
         )
         self.target_progression_complexity = float(
             np.clip(float(provided_targets.get("progression_complexity", 0.52 + (0.006 * self.target_length))), 0.45, 0.85)
@@ -1635,6 +1711,30 @@ class TensionCurveEvaluator:
         self.target_stair_ratio = float(
             np.clip(float(provided_targets.get("stair_ratio", 0.03)), 0.0, 1.0)
         )
+        # Encourage richer tutorial -> combat -> complex puzzle intent in
+        # automatic topology generation instead of treating all puzzles as one
+        # undifferentiated bucket.
+        self.target_pedagogical_puzzle_variety = float(
+            np.clip(
+                float(provided_targets.get("pedagogical_puzzle_variety", 0.58 + (0.008 * self.target_length))),
+                0.0,
+                1.0,
+            )
+        )
+        self.target_skill_chain_score = float(
+            np.clip(
+                float(provided_targets.get("skill_chain_score", 0.50 + (0.010 * self.target_length))),
+                0.0,
+                1.0,
+            )
+        )
+        self.target_tutorial_climax_depth_score = float(
+            np.clip(
+                float(provided_targets.get("tutorial_climax_depth_score", 0.44 + (0.012 * self.target_length))),
+                0.0,
+                1.0,
+            )
+        )
         # Hard global difficulty-curve constraints (opt-in via descriptor targets).
         self.min_curve_alignment_score = float(
             np.clip(float(provided_targets.get("difficulty_curve_min_alignment", 0.0)), 0.0, 1.0)
@@ -1763,6 +1863,98 @@ class TensionCurveEvaluator:
             deficits.append(max(0.0, t - value) / t)
         return float(np.clip(np.mean(deficits) if deficits else 0.0, 0.0, 2.0))
 
+    def _pedagogical_progression_metrics(self, graph: MissionGraph) -> Dict[str, float]:
+        """
+        Measure whether the graph contains an item-gated tutorial progression.
+
+        We care about two distinct things:
+        - subtype variety: are tutorial/combat/complex puzzle roles present?
+        - skill-chain quality: does at least one ITEM lead into those roles in
+          escalating order?
+
+        This follows the existing AddSkillChainRule contract instead of only
+        rewarding generic puzzle density.
+        """
+        stage_order = (
+            NodeType.TUTORIAL_PUZZLE,
+            NodeType.COMBAT_PUZZLE,
+            NodeType.COMPLEX_PUZZLE,
+        )
+        counts = {
+            NodeType.TUTORIAL_PUZZLE: 0,
+            NodeType.COMBAT_PUZZLE: 0,
+            NodeType.COMPLEX_PUZZLE: 0,
+        }
+        for node in graph.nodes.values():
+            if node.node_type in counts:
+                counts[node.node_type] += 1
+
+        present_types = sum(1 for value in counts.values() if value > 0)
+        pedagogical_puzzle_variety = self._clip01(float(present_types) / 3.0)
+
+        best_skill_chain_score = 0.0
+        best_tutorial_climax_depth_score = 0.0
+        forward_adj = graph.get_forward_adjacency_map()
+        item_nodes = graph.get_nodes_by_type(NodeType.ITEM)
+        climax_candidates: List[Tuple[int, int]] = []
+        for priority, node_type in enumerate((NodeType.BOSS_DOOR, NodeType.BOSS, NodeType.GOAL)):
+            for node in graph.get_nodes_by_type(node_type):
+                climax_candidates.append((priority, int(node.id)))
+
+        for item_node in item_nodes:
+            candidate_paths: List[Tuple[int, int, List[int]]] = []
+            for priority, target_id in climax_candidates:
+                path = self._find_path_in_adjacency(forward_adj, item_node.id, target_id)
+                if path and len(path) >= 2:
+                    candidate_paths.append((len(path), priority, list(path)))
+            if not candidate_paths:
+                continue
+
+            candidate_paths.sort(key=lambda entry: (entry[0], entry[1]))
+            path = candidate_paths[0][2]
+            ordered_stage_distances: List[int] = []
+            previous_index = 0
+            local_score = 0.0
+            for weight, stage in zip((0.34, 0.33, 0.33), stage_order):
+                matched_index = None
+                for idx in range(previous_index + 1, len(path)):
+                    node = graph.get_node(int(path[idx]))
+                    if node is not None and node.node_type == stage:
+                        matched_index = idx
+                        break
+                if matched_index is None:
+                    break
+                previous_index = matched_index
+                ordered_stage_distances.append(int(matched_index))
+                local_score += float(weight)
+            best_skill_chain_score = max(best_skill_chain_score, float(np.clip(local_score, 0.0, 1.0)))
+
+            if len(ordered_stage_distances) == len(stage_order):
+                tutorial_dist = int(ordered_stage_distances[0])
+                complex_dist = int(ordered_stage_distances[-1])
+                stage_span = max(0, complex_dist - tutorial_dist)
+                target_stage_span = max(2.0, 0.35 * float(max(3, self.target_length)))
+                chain_depth_score = self._clip01(float(stage_span) / float(target_stage_span))
+
+                climax_dist = max(0, int(len(path) - 1))
+                climax_span = max(0, climax_dist - tutorial_dist)
+                target_climax_span = max(3.0, 0.60 * float(max(4, self.target_length)))
+                climax_depth_score = self._clip01(float(climax_span) / float(target_climax_span))
+
+                local_depth_score = float(
+                    np.clip((0.55 * chain_depth_score) + (0.45 * climax_depth_score), 0.0, 1.0)
+                )
+                best_tutorial_climax_depth_score = max(best_tutorial_climax_depth_score, local_depth_score)
+
+        return {
+            "tutorial_puzzle_count": float(counts[NodeType.TUTORIAL_PUZZLE]),
+            "combat_puzzle_count": float(counts[NodeType.COMBAT_PUZZLE]),
+            "complex_puzzle_count": float(counts[NodeType.COMPLEX_PUZZLE]),
+            "pedagogical_puzzle_variety": float(pedagogical_puzzle_variety),
+            "skill_chain_score": float(best_skill_chain_score),
+            "tutorial_climax_depth_score": float(best_tutorial_climax_depth_score),
+        }
+
     def _edge_for_step(
         self,
         graph: MissionGraph,
@@ -1884,7 +2076,29 @@ class TensionCurveEvaluator:
                 item_count += max(1, item_hint)
             else:
                 item_count += item_hint
+        pedagogical_metrics = self._pedagogical_progression_metrics(graph)
         lock_count = sum(1 for e in graph.edges if e.edge_type in self.GATE_EDGE_TYPES)
+        small_key_supply = sum(1 for node in graph.nodes.values() if node.node_type == NodeType.KEY)
+        small_key_demand = 0
+        for edge in graph.edges:
+            if edge.edge_type != EdgeType.LOCKED:
+                continue
+            if edge.requires_key_count > 0:
+                small_key_demand += int(max(1, edge.requires_key_count))
+            else:
+                small_key_demand += 1
+        boss_key_supply = sum(1 for node in graph.nodes.values() if node.node_type == NodeType.BIG_KEY)
+        boss_key_demand = sum(
+            1
+            for edge in graph.edges
+            if edge.edge_type == EdgeType.BOSS_LOCKED
+        )
+        if boss_key_demand <= 0:
+            boss_key_demand = sum(
+                1 for node in graph.nodes.values() if node.node_type == NodeType.BOSS_DOOR
+            )
+        small_key_surplus = max(0.0, float(small_key_supply - small_key_demand))
+        boss_key_surplus = max(0.0, float(boss_key_supply - boss_key_demand))
         leniency = self._clip01(float(key_count) / float(max(1, lock_count))) if lock_count > 0 else 1.0
 
         directed_branch_nodes = 0
@@ -2041,10 +2255,22 @@ class TensionCurveEvaluator:
             "edge_count": float(edge_count),
             "enemy_count": float(enemy_count),
             "key_count": float(key_count),
+            "small_key_supply": float(small_key_supply),
+            "small_key_demand": float(small_key_demand),
+            "small_key_surplus": float(small_key_surplus),
+            "boss_key_supply": float(boss_key_supply),
+            "boss_key_demand": float(boss_key_demand),
+            "boss_key_surplus": float(boss_key_surplus),
             "puzzle_count": float(puzzle_count),
             "item_count": float(item_count),
+            "tutorial_puzzle_count": float(pedagogical_metrics["tutorial_puzzle_count"]),
+            "combat_puzzle_count": float(pedagogical_metrics["combat_puzzle_count"]),
+            "complex_puzzle_count": float(pedagogical_metrics["complex_puzzle_count"]),
             "puzzle_density": float(puzzle_density),
             "item_density": float(item_density),
+            "pedagogical_puzzle_variety": float(pedagogical_metrics["pedagogical_puzzle_variety"]),
+            "skill_chain_score": float(pedagogical_metrics["skill_chain_score"]),
+            "tutorial_climax_depth_score": float(pedagogical_metrics["tutorial_climax_depth_score"]),
             "feature_complexity": float(feature_complexity),
             "branching_factor": float(branching_factor),
             "branching_factor_raw": float(branching_factor_raw),
@@ -2223,14 +2449,14 @@ class TensionCurveEvaluator:
         progression_score = float(np.clip((0.65 * path_depth_score) + (0.35 * coverage_score), 0.0, 1.0))
 
         descriptor_score = float(np.clip(
-            0.20 * self._score_target(descriptor_metrics["linearity"], self.target_linearity, tol=0.30)
-            + 0.20 * self._score_target(descriptor_metrics["leniency"], self.target_leniency, tol=0.35)
-            + 0.25 * self._score_target(
+            0.24 * self._score_target(descriptor_metrics["linearity"], self.target_linearity, tol=0.26)
+            + 0.24 * self._score_target(descriptor_metrics["leniency"], self.target_leniency, tol=0.26)
+            + 0.22 * self._score_target(
                 descriptor_metrics["progression_complexity"],
                 self.target_progression_complexity,
                 tol=0.30,
             )
-            + 0.35 * self._score_target(
+            + 0.30 * self._score_target(
                 descriptor_metrics["topology_complexity"],
                 self.target_topology_complexity,
                 tol=0.32,
@@ -2239,40 +2465,55 @@ class TensionCurveEvaluator:
             1.0,
         ))
         feature_score = float(np.clip(
-            0.20 * self._score_target(
+            0.17 * self._score_target(
                 descriptor_metrics.get("puzzle_density", 0.0),
                 self.target_puzzle_density,
                 tol=0.35,
             )
-            + 0.15 * self._score_target(
+            + 0.11 * self._score_target(
                 descriptor_metrics.get("item_density", 0.0),
                 self.target_item_density,
                 tol=0.35,
             )
-            + 0.20 * self._score_target(
+            + 0.16 * self._score_target(
                 descriptor_metrics.get("gate_variety", 0.0),
                 self.target_gate_variety,
                 tol=0.40,
             )
-            + 0.15 * self._score_target(
+            + 0.10 * self._score_target(
                 descriptor_metrics.get("bombable_ratio", 0.0),
                 self.target_bombable_ratio,
                 tol=0.30,
             )
-            + 0.15 * self._score_target(
+            + 0.10 * self._score_target(
                 descriptor_metrics.get("soft_lock_ratio", 0.0),
                 self.target_soft_lock_ratio,
                 tol=0.30,
             )
-            + 0.075 * self._score_target(
+            + 0.05 * self._score_target(
                 descriptor_metrics.get("switch_ratio", 0.0),
                 self.target_switch_ratio,
                 tol=0.20,
             )
-            + 0.075 * self._score_target(
+            + 0.05 * self._score_target(
                 descriptor_metrics.get("stair_ratio", 0.0),
                 self.target_stair_ratio,
                 tol=0.20,
+            )
+            + 0.08 * self._score_target(
+                descriptor_metrics.get("pedagogical_puzzle_variety", 0.0),
+                self.target_pedagogical_puzzle_variety,
+                tol=0.28,
+            )
+            + 0.08 * self._score_target(
+                descriptor_metrics.get("skill_chain_score", 0.0),
+                self.target_skill_chain_score,
+                tol=0.26,
+            )
+            + 0.10 * self._score_target(
+                descriptor_metrics.get("tutorial_climax_depth_score", 0.0),
+                self.target_tutorial_climax_depth_score,
+                tol=0.24,
             ),
             0.0,
             1.0,
@@ -2344,6 +2585,22 @@ class TensionCurveEvaluator:
             1.0,
         ))
         under_target_gap = self._under_target_gap(descriptor_metrics)
+        linearity_under_gap = max(
+            0.0,
+            float(self.target_linearity) - float(descriptor_metrics.get("linearity", 0.0)),
+        ) / max(0.08, float(self.target_linearity))
+        linearity_under_gap = float(np.clip(linearity_under_gap, 0.0, 2.0))
+        leniency_excess_gap = max(
+            0.0,
+            float(descriptor_metrics.get("leniency", 0.0)) - float(self.target_leniency),
+        ) / max(0.06, float(self.target_leniency))
+        leniency_excess_gap = float(np.clip(leniency_excess_gap, 0.0, 2.0))
+        tutorial_climax_depth_gap = max(
+            0.0,
+            float(self.target_tutorial_climax_depth_score)
+            - float(descriptor_metrics.get("tutorial_climax_depth_score", 0.0)),
+        ) / max(0.08, float(self.target_tutorial_climax_depth_score))
+        tutorial_climax_depth_gap = float(np.clip(tutorial_climax_depth_gap, 0.0, 2.0))
         shortcut_density_value = float(descriptor_metrics.get("shortcut_density", 0.0))
         shortcut_excess_gap = max(0.0, shortcut_density_value - float(self.target_shortcut_density)) / max(
             0.05,
@@ -2377,6 +2634,9 @@ class TensionCurveEvaluator:
         descriptor_metrics["node_count_score"] = float(node_count_score)
         descriptor_metrics["edge_count_score"] = float(edge_count_score)
         descriptor_metrics["under_target_gap"] = float(under_target_gap)
+        descriptor_metrics["linearity_under_gap"] = float(linearity_under_gap)
+        descriptor_metrics["leniency_excess_gap"] = float(leniency_excess_gap)
+        descriptor_metrics["tutorial_climax_depth_gap"] = float(tutorial_climax_depth_gap)
         descriptor_metrics["shortcut_excess_gap"] = float(shortcut_excess_gap)
         descriptor_metrics["directionality_excess_gap"] = float(directionality_excess_gap)
         descriptor_metrics["rejection_excess_gap"] = float(rejection_excess_gap)
@@ -2426,6 +2686,9 @@ class TensionCurveEvaluator:
                 np.clip(
                     1.0
                     - (0.38 * under_target_gap)
+                    - (0.18 * linearity_under_gap)
+                    - (0.18 * leniency_excess_gap)
+                    - (0.14 * tutorial_climax_depth_gap)
                     - (0.20 * shortcut_excess_gap)
                     - (0.14 * directionality_excess_gap),
                     0.25,
@@ -2504,6 +2767,9 @@ class TensionCurveEvaluator:
                     violation
                     + (0.95 * structural_violation)
                     + (0.70 * under_target_gap)
+                    + (0.22 * linearity_under_gap)
+                    + (0.26 * leniency_excess_gap)
+                    + (0.18 * tutorial_climax_depth_gap)
                     + (0.35 * shortcut_excess_gap)
                     + (0.22 * directionality_excess_gap)
                     + (0.15 * directionality_violation)
@@ -2765,7 +3031,7 @@ class TensionCurveEvaluator:
         """
         Find directed path from start to goal over mission adjacency.
         """
-        return self._find_path_in_adjacency(graph.get_adjacency_map(), start_id, goal_id)
+        return self._find_path_in_adjacency(graph.get_forward_adjacency_map(), start_id, goal_id)
     
     def _interpolate(
         self,
@@ -2894,6 +3160,7 @@ class EvolutionaryTopologyGenerator:
         """
         self.target_curve = target_curve
         self.transition_matrix = zelda_transition_matrix or DEFAULT_ZELDA_TRANSITIONS
+        self._has_custom_transition_matrix = zelda_transition_matrix is not None
         self.population_size = population_size
         self.generations = generations
         self.mutation_rate = mutation_rate
@@ -3081,6 +3348,11 @@ class EvolutionaryTopologyGenerator:
                 "InsertLockKey",
                 "AddFungibleLock",
                 "AddBossGauntlet",
+                "AddCollectionChallenge",
+                "CreateHub",
+                "AddSecret",
+                "AddForeshadowing",
+                "SplitRoom",
             ]
         )
         self._non_key_gate_rule_ids = self._select_rule_ids_by_exact_names(
@@ -3109,13 +3381,59 @@ class EvolutionaryTopologyGenerator:
             names=[
                 "InsertChallenge_ENEMY",
                 "InsertChallenge_PUZZLE",
+                "AddItemGate",
                 "AddArena",
                 "AddSkillChain",
                 "AddBossGauntlet",
+                "AddPacingBreaker",
+            ]
+        )
+        self._linear_progression_rule_ids = self._select_rule_ids_by_exact_names(
+            names=[
+                "InsertChallenge_ENEMY",
+                "InsertChallenge_PUZZLE",
+                "AddSkillChain",
+                "AddGatekeeper",
+                "AddBossGauntlet",
+                "AddPacingBreaker",
+            ]
+        )
+        self._branch_pruning_rule_ids = self._select_rule_ids_by_exact_names(
+            names=[
+                "PruneDeadEnd",
+            ]
+        )
+        self._pedagogical_rule_ids = self._select_rule_ids_by_exact_names(
+            names=[
+                "AddSkillChain",
+            ]
+        )
+        self._pedagogical_support_rule_ids = self._select_rule_ids_by_exact_names(
+            names=[
+                "AddItemGate",
+                "AddCollectionChallenge",
+                "AddResourceLoop",
+                "AddPacingBreaker",
+                "AddGatekeeper",
+            ]
+        )
+        self._pedagogical_depth_support_rule_ids = self._select_rule_ids_by_exact_names(
+            names=[
+                "AddSkillChain",
+                "AddGatekeeper",
+                "AddBossGauntlet",
+                "AddPacingBreaker",
+                "AddItemGate",
+                "AddCollectionChallenge",
+            ]
+        )
+        self._wide_branch_rule_ids = self._select_rule_ids_by_exact_names(
+            names=[
                 "Branch",
                 "CreateHub",
                 "AddEntangledBranches",
                 "AddSector",
+                "SplitRoom",
             ]
         )
         self._node_expansion_rule_ids = self._select_rule_ids_by_exact_names(
@@ -3169,6 +3487,7 @@ class EvolutionaryTopologyGenerator:
             rid for rid in self._gate_heavy_rule_ids if rid not in directionality_set
         ]
         self._apply_target_aware_rule_prior()
+        self._apply_custom_transition_bias_to_global_prior()
         self._target_aware_rule_weights = dict(self._global_rule_weights)
         self._renormalize_global_rule_probs()
         
@@ -3285,6 +3604,9 @@ class EvolutionaryTopologyGenerator:
             graph = constraint_grammar.ensure_anchor_nodes(graph)
             graph = constraint_grammar.fix_lock_key_ordering(graph)
             graph = constraint_grammar.repair_progression_constraints(graph)
+            graph = self._repair_pedagogical_progression(graph, constraint_grammar=constraint_grammar)
+            graph = self._repair_progression_balance(graph, constraint_grammar=constraint_grammar)
+            graph = self._repair_gate_economy(graph, constraint_grammar=constraint_grammar)
             graph = constraint_grammar.ensure_anchor_nodes(graph)
             graph.sanitize()
 
@@ -3303,6 +3625,384 @@ class EvolutionaryTopologyGenerator:
         if directed_output:
             return best_networkx_physical
         return best_networkx_physical.to_undirected()
+
+    def _repair_pedagogical_progression(
+        self,
+        graph: MissionGraph,
+        *,
+        constraint_grammar: Optional[MissionGrammar],
+    ) -> MissionGraph:
+        """Final Block I repair that backstops missing tutorial/combat/complex chains."""
+        if graph is None:
+            return graph
+
+        metrics = self.evaluator._extract_descriptor_metrics(graph)
+        needs_repair = (
+            float(metrics.get("pedagogical_puzzle_variety", 0.0)) + 1e-6 < float(self.evaluator.target_pedagogical_puzzle_variety)
+            or float(metrics.get("skill_chain_score", 0.0)) + 1e-6 < float(self.evaluator.target_skill_chain_score)
+            or float(metrics.get("tutorial_climax_depth_score", 0.0)) + 1e-6 < float(self.evaluator.target_tutorial_climax_depth_score)
+        )
+        if not needs_repair:
+            return graph
+
+        repaired = copy.deepcopy(graph)
+        rule = AddSkillChainRule()
+        context = {"rng": self.rng, "difficulty": 0.5}
+        repairs_applied = 0
+        for _ in range(2):
+            if not rule.can_apply(repaired, context):
+                break
+            candidate = rule.apply(repaired, context)
+            if constraint_grammar is not None:
+                candidate = constraint_grammar.fix_lock_key_ordering(candidate)
+                candidate = constraint_grammar.repair_progression_constraints(candidate)
+                candidate = constraint_grammar.ensure_anchor_nodes(candidate)
+            candidate.sanitize()
+            repaired = candidate
+            repairs_applied += 1
+            metrics = self.evaluator._extract_descriptor_metrics(repaired)
+            if (
+                float(metrics.get("pedagogical_puzzle_variety", 0.0)) + 1e-6 >= float(self.evaluator.target_pedagogical_puzzle_variety)
+                and float(metrics.get("skill_chain_score", 0.0)) + 1e-6 >= float(self.evaluator.target_skill_chain_score)
+                and float(metrics.get("tutorial_climax_depth_score", 0.0)) + 1e-6 >= float(self.evaluator.target_tutorial_climax_depth_score)
+            ):
+                break
+
+        if repairs_applied > 0:
+            repaired.record_repair("wave3_repairs", amount=int(repairs_applied))
+            logger.info(
+                "Applied %d final pedagogical progression repairs before Block I export",
+                repairs_applied,
+            )
+        return repaired
+
+    def _progression_balance_gap(self, metrics: Dict[str, float]) -> float:
+        """Single scalar gap for final leniency/linearity balancing repairs."""
+        min_gate_density = float(
+            np.clip(self._rt("final_min_gate_density", 0.16), 0.0, 1.0)
+        )
+        max_key_surplus = float(
+            max(0.0, self._rt("final_max_key_surplus", 1.0))
+        )
+        max_big_key_surplus = float(
+            max(0.0, self._rt("final_max_big_key_surplus", 0.0))
+        )
+        leniency_excess = max(
+            0.0,
+            float(metrics.get("leniency", 0.0)) - float(self.evaluator.target_leniency),
+        )
+        gate_density_shortfall = max(
+            0.0,
+            min_gate_density - float(metrics.get("gating_density", 0.0)),
+        )
+        linearity_shortfall = max(
+            0.0,
+            float(self.evaluator.target_linearity) - float(metrics.get("linearity", 0.0)),
+        )
+        key_surplus_excess = max(
+            0.0,
+            float(metrics.get("small_key_surplus", 0.0)) - max_key_surplus,
+        ) / max(1.0, max_key_surplus + 1.0)
+        big_key_surplus_excess = max(
+            0.0,
+            float(metrics.get("boss_key_surplus", 0.0)) - max_big_key_surplus,
+        )
+        depth_shortfall = max(
+            0.0,
+            float(self.evaluator.target_tutorial_climax_depth_score)
+            - float(metrics.get("tutorial_climax_depth_score", 0.0)),
+        )
+        variety_shortfall = max(
+            0.0,
+            float(self.evaluator.target_pedagogical_puzzle_variety)
+            - float(metrics.get("pedagogical_puzzle_variety", 0.0)),
+        )
+        skill_shortfall = max(
+            0.0,
+            float(self.evaluator.target_skill_chain_score)
+            - float(metrics.get("skill_chain_score", 0.0)),
+        )
+        leniency_weight = float(
+            np.clip(self._rt("progression_balance_leniency_weight", 0.36), 0.0, 1.5)
+        )
+        linearity_weight = float(
+            np.clip(self._rt("progression_balance_linearity_weight", 0.30), 0.0, 1.5)
+        )
+        gate_density_weight = float(
+            np.clip(self._rt("progression_balance_gate_density_weight", 0.18), 0.0, 1.5)
+        )
+        key_surplus_weight = float(
+            np.clip(self._rt("progression_balance_key_surplus_weight", 0.18), 0.0, 1.5)
+        )
+        big_key_surplus_weight = float(
+            np.clip(self._rt("progression_balance_big_key_surplus_weight", 0.08), 0.0, 1.0)
+        )
+        depth_weight = float(
+            np.clip(self._rt("progression_balance_depth_weight", 0.16), 0.0, 1.0)
+        )
+        variety_weight = float(
+            np.clip(self._rt("progression_balance_variety_weight", 0.10), 0.0, 1.0)
+        )
+        skill_weight = float(
+            np.clip(self._rt("progression_balance_skill_weight", 0.08), 0.0, 1.0)
+        )
+        return float(
+            (leniency_weight * leniency_excess)
+            + (gate_density_weight * gate_density_shortfall)
+            + (linearity_weight * linearity_shortfall)
+            + (key_surplus_weight * key_surplus_excess)
+            + (big_key_surplus_weight * big_key_surplus_excess)
+            + (depth_weight * depth_shortfall)
+            + (variety_weight * variety_shortfall)
+            + (skill_weight * skill_shortfall)
+        )
+
+    def _repair_progression_balance(
+        self,
+        graph: MissionGraph,
+        *,
+        constraint_grammar: Optional[MissionGrammar],
+    ) -> MissionGraph:
+        """
+        Final Block I pass that tightens overly lenient graphs with existing gate rules.
+
+        This uses existing grammar rules instead of bespoke topology surgery so the
+        exported graph stays aligned with the rest of the grammar/search system.
+        """
+        if graph is None:
+            return graph
+
+        repaired = copy.deepcopy(graph)
+        current_metrics = self.evaluator._extract_descriptor_metrics(repaired)
+        current_gap = self._progression_balance_gap(current_metrics)
+        if current_gap <= 1e-6:
+            return repaired
+
+        repair_rules = (
+            PruneDeadEndRule(),
+            AddGatekeeperRule(),
+            AddItemGateRule(),
+            AddHazardGateRule(),
+            AddEntangledBranchesRule(),
+            AddArenaRule(),
+            AddMultiLockRule(),
+        )
+        context = {"rng": self.rng, "difficulty": 0.5}
+        repairs_applied = 0
+        max_repairs = int(
+            np.clip(round(self._rt("progression_balance_repair_iterations", 3.0)), 1.0, 6.0)
+        )
+        for _ in range(max_repairs):
+            best_candidate: Optional[MissionGraph] = None
+            best_gap = current_gap
+            best_candidate_trim_changes = 0
+            for rule in repair_rules:
+                if not rule.can_apply(copy.deepcopy(repaired), context):
+                    continue
+                candidate = rule.apply(copy.deepcopy(repaired), context)
+                if constraint_grammar is not None:
+                    candidate = constraint_grammar.fix_lock_key_ordering(candidate)
+                    candidate = constraint_grammar.repair_progression_constraints(candidate)
+                    candidate = self._repair_pedagogical_progression(candidate, constraint_grammar=constraint_grammar)
+                    candidate = constraint_grammar.ensure_anchor_nodes(candidate)
+                candidate.sanitize()
+                candidate_metrics = self.evaluator._extract_descriptor_metrics(candidate)
+                candidate_gap = self._progression_balance_gap(candidate_metrics)
+                if candidate_gap + 1e-6 < best_gap:
+                    best_candidate = candidate
+                    best_gap = candidate_gap
+
+            if best_candidate is None:
+                break
+            repaired = best_candidate
+            current_gap = best_gap
+            repairs_applied += 1
+            if current_gap <= 1e-6:
+                break
+
+        if repairs_applied > 0:
+            repaired.record_repair("progression_repairs", amount=int(repairs_applied))
+            logger.info(
+                "Applied %d final progression-balance repairs before Block I export",
+                repairs_applied,
+            )
+        return repaired
+
+    def _trim_surplus_reward_keys(self, graph: MissionGraph) -> Tuple[MissionGraph, int]:
+        """
+        Demote gratuitous side-branch KEY/BIG_KEY rewards before export.
+
+        This specifically targets topology-expansion rules that can mint free
+        reward keys without corresponding gate pressure. Critical-path keys and
+        the canonical boss-gauntlet BIG_KEY are preserved.
+        """
+        trimmed = copy.deepcopy(graph)
+        start = trimmed.get_start_node()
+        goal = trimmed.get_goal_node()
+        critical_path: Set[Any] = set()
+        if start is not None and goal is not None:
+            path = self.evaluator._find_path(trimmed, start.id, goal.id)
+            if path:
+                critical_path = set(path)
+
+        max_small_key_surplus = int(max(0.0, self._rt("final_max_key_surplus", 1.0)))
+        max_big_key_surplus = int(max(0.0, self._rt("final_max_big_key_surplus", 0.0)))
+
+        small_key_demand = 0
+        for edge in trimmed.edges:
+            if edge.edge_type != EdgeType.LOCKED:
+                continue
+            small_key_demand += int(max(1, edge.requires_key_count)) if edge.requires_key_count > 0 else 1
+        boss_door_key_ids = {
+            node.key_id
+            for node in trimmed.nodes.values()
+            if node.node_type == NodeType.BOSS_DOOR and node.key_id is not None
+        }
+
+        changes = 0
+
+        def _demote(node: MissionNode, target_type: NodeType) -> None:
+            nonlocal changes
+            node.node_type = target_type
+            node.key_id = None
+            if target_type != NodeType.ITEM:
+                node.item_type = None
+            changes += 1
+
+        small_key_nodes = [
+            node for node in trimmed.nodes.values()
+            if node.node_type == NodeType.KEY and node.key_id is None
+        ]
+        small_key_nodes.sort(
+            key=lambda node: (
+                node.id in critical_path,
+                -int(trimmed.get_node_degree(node.id)),
+                node.id,
+            )
+        )
+        keep_small_keys = int(max(0, small_key_demand + max_small_key_surplus))
+        for node in small_key_nodes[keep_small_keys:]:
+            if node.id in critical_path:
+                continue
+            replacement = NodeType.TREASURE if (node.id % 2 == 0) else NodeType.ITEM
+            _demote(node, replacement)
+
+        matching_big_keys = [
+            node
+            for node in trimmed.nodes.values()
+            if node.node_type == NodeType.BIG_KEY and node.key_id in boss_door_key_ids
+        ]
+        extra_big_keys = [
+            node
+            for node in trimmed.nodes.values()
+            if node.node_type == NodeType.BIG_KEY and node not in matching_big_keys
+        ]
+        if len(matching_big_keys) > len(boss_door_key_ids) + max_big_key_surplus:
+            protected: Set[int] = set()
+            for key_id in boss_door_key_ids:
+                keeper = next((node for node in matching_big_keys if node.key_id == key_id), None)
+                if keeper is not None:
+                    protected.add(keeper.id)
+            for node in matching_big_keys:
+                if node.id in protected:
+                    continue
+                extra_big_keys.append(node)
+
+        for node in extra_big_keys:
+            if node.id in critical_path and node.key_id in boss_door_key_ids:
+                continue
+            _demote(node, NodeType.TREASURE)
+
+        if changes > 0:
+            trimmed.sanitize()
+        return trimmed, int(changes)
+
+    def _repair_gate_economy(
+        self,
+        graph: MissionGraph,
+        *,
+        constraint_grammar: Optional[MissionGrammar],
+    ) -> MissionGraph:
+        """
+        Final export calibration for gate density and key surplus.
+
+        The progression-balance pass improves overall shape, but this stricter
+        pass focuses on two concrete Block I issues:
+        - too many free reward keys relative to actual gates
+        - too few meaningful gates on the exported mission graph
+        """
+        if graph is None:
+            return graph
+
+        repaired = copy.deepcopy(graph)
+        trimmed, trim_changes = self._trim_surplus_reward_keys(repaired)
+        repaired = trimmed
+        if constraint_grammar is not None:
+            repaired = constraint_grammar.fix_lock_key_ordering(repaired)
+            repaired = constraint_grammar.repair_progression_constraints(repaired)
+            repaired = self._repair_pedagogical_progression(repaired, constraint_grammar=constraint_grammar)
+            repaired = constraint_grammar.ensure_anchor_nodes(repaired)
+            if not constraint_grammar.validate_goal_gauntlet(repaired, log_failures=False):
+                repaired = constraint_grammar.repair_progression_constraints(repaired)
+        repaired.sanitize()
+
+        current_metrics = self.evaluator._extract_descriptor_metrics(repaired)
+        current_gap = self._progression_balance_gap(current_metrics)
+        repair_rules = (
+            PruneDeadEndRule(),
+            AddGatekeeperRule(),
+            AddItemGateRule(),
+        )
+        context = {"rng": self.rng, "difficulty": 0.55}
+        repairs_applied = int(max(0, trim_changes))
+        max_repairs = int(
+            np.clip(round(self._rt("final_gate_calibration_iterations", 4.0)), 1.0, 8.0)
+        )
+
+        for _ in range(max_repairs):
+            best_candidate: Optional[MissionGraph] = None
+            best_gap = current_gap
+            for rule in repair_rules:
+                if not rule.can_apply(copy.deepcopy(repaired), context):
+                    continue
+                candidate = rule.apply(copy.deepcopy(repaired), context)
+                candidate, candidate_trim_changes = self._trim_surplus_reward_keys(candidate)
+                if constraint_grammar is not None:
+                    candidate = constraint_grammar.fix_lock_key_ordering(candidate)
+                    candidate = constraint_grammar.repair_progression_constraints(candidate)
+                    candidate = self._repair_pedagogical_progression(candidate, constraint_grammar=constraint_grammar)
+                    candidate = constraint_grammar.ensure_anchor_nodes(candidate)
+                    if not constraint_grammar.validate_goal_gauntlet(candidate, log_failures=False):
+                        continue
+                candidate.sanitize()
+                candidate_metrics = self.evaluator._extract_descriptor_metrics(candidate)
+                candidate_gap = self._progression_balance_gap(candidate_metrics)
+                if candidate_gap + 1e-6 < best_gap:
+                    best_candidate = candidate
+                    best_gap = candidate_gap
+                    best_candidate_trim_changes = int(max(0, candidate_trim_changes))
+
+            if best_candidate is None:
+                break
+            repaired = best_candidate
+            current_gap = best_gap
+            repairs_applied += int(1 + best_candidate_trim_changes)
+            if current_gap <= 1e-6:
+                break
+
+        if repairs_applied > 0:
+            repaired.record_repair("progression_repairs", amount=int(repairs_applied))
+            repaired.generation_stats["gate_economy_repairs"] = int(
+                repaired.generation_stats.get("gate_economy_repairs", 0)
+            ) + int(repairs_applied)
+            logger.info(
+                "Applied %d final gate-economy calibrations before Block I export",
+                repairs_applied,
+            )
+        if constraint_grammar is not None and not constraint_grammar.validate_goal_gauntlet(repaired, log_failures=False):
+            repaired = constraint_grammar.repair_progression_constraints(repaired)
+            repaired.sanitize()
+        return repaired
 
     @staticmethod
     def _repair_output_connectivity(graph: nx.Graph) -> nx.Graph:
@@ -3324,7 +4024,7 @@ class EvolutionaryTopologyGenerator:
         repaired = graph.copy()
         repaired.graph["generation_stats"] = copy.deepcopy(graph.graph.get("generation_stats", {}))
         stats = repaired.graph.setdefault("generation_stats", {})
-        protected_goal_type = "GOAL"
+        protected_goal_types = {"GOAL", "BOSS", "BOSS_DOOR"}
 
         def _node_type(node_id: Any) -> str:
             attrs = repaired.nodes.get(node_id, {})
@@ -3338,7 +4038,7 @@ class EvolutionaryTopologyGenerator:
             return (0.0, 0.0, 0.0)
 
         def _candidate_nodes(component: set[Any]) -> List[Any]:
-            preferred = [node_id for node_id in component if _node_type(node_id) != protected_goal_type]
+            preferred = [node_id for node_id in component if _node_type(node_id) not in protected_goal_types]
             return preferred if preferred else list(component)
 
         def _distance(node_a: Any, node_b: Any) -> float:
@@ -3391,7 +4091,7 @@ class EvolutionaryTopologyGenerator:
                 "path_savings": 0,
             }
             repaired.add_edge(source, target, **edge_attrs)
-            if repaired.is_directed() and _node_type(target) != protected_goal_type and not repaired.has_edge(target, source):
+            if repaired.is_directed() and _node_type(target) not in protected_goal_types and not repaired.has_edge(target, source):
                 reverse_attrs = copy.deepcopy(edge_attrs)
                 reverse_attrs["metadata"] = {"connectivity_repair": True, "implied_reverse": True}
                 repaired.add_edge(target, source, **reverse_attrs)
@@ -3421,7 +4121,10 @@ class EvolutionaryTopologyGenerator:
             List of Individual objects with random genomes
         """
         population = []
-        
+        pedagogical_seed_count = self._pedagogical_seed_genome_count()
+        for _ in range(pedagogical_seed_count):
+            population.append(Individual(genome=self._build_structured_seed_genome(), generation=0))
+
         # Weighted rule sampling.
         rule_ids = self._rule_ids
         if len(self.executor.rules) == 5 and self.rule_space != "full":
@@ -3431,8 +4134,8 @@ class EvolutionaryTopologyGenerator:
             # Full-rule mode: reuse grammar rule weights with a small floor
             # to preserve exploration.
             sampling_weights = [max(0.01, float(self._global_rule_weights.get(rid, 0.01))) for rid in rule_ids]
-        
-        for _ in range(self.population_size):
+
+        while len(population) < self.population_size:
             # Generate random genome
             genome = []
             for _ in range(self.genome_length):
@@ -3448,8 +4151,78 @@ class EvolutionaryTopologyGenerator:
             population.append(individual)
         
         logger.debug("Generated initial population of %d individuals", len(population))
-        
+
         return population
+
+    def _pedagogical_seed_genome_count(self) -> int:
+        """How many initial genomes should be biased toward tutorial progression."""
+        if self.population_size <= 0:
+            return 0
+        pedagogical_target = float(
+            np.clip(
+                (0.40 * self.evaluator.target_pedagogical_puzzle_variety)
+                + (0.35 * self.evaluator.target_skill_chain_score)
+                + (0.25 * self.evaluator.target_tutorial_climax_depth_score),
+                0.0,
+                1.0,
+            )
+        )
+        if pedagogical_target <= 0.0:
+            return 0
+        seed_fraction = float(np.clip(self._rt("initial_pedagogical_seed_fraction", 0.20), 0.0, 0.80))
+        min_seed = int(max(0, round(self._rt("initial_pedagogical_seed_min", 2.0))))
+        max_seed_fraction = float(np.clip(self._rt("initial_pedagogical_seed_max_fraction", 0.45), 0.05, 1.0))
+        proposed = int(round(float(self.population_size) * seed_fraction * pedagogical_target))
+        max_allowed = int(max(1, math.ceil(float(self.population_size) * max_seed_fraction)))
+        return int(max(0, min(max_allowed, max(min_seed, proposed))))
+
+    def _choose_rule_for_seed(self, *groups: Sequence[int]) -> Optional[int]:
+        """Pick one rule from the first non-empty candidate group."""
+        candidates: List[int] = []
+        for group in groups:
+            ids = [int(rid) for rid in group if int(rid) in self._global_rule_weights]
+            if ids:
+                candidates.extend(ids)
+                break
+        if not candidates:
+            return None
+        weights = [max(1e-6, float(self._global_rule_weights.get(rid, 1e-6))) for rid in candidates]
+        return int(self.rng.choices(candidates, weights=weights, k=1)[0])
+
+    def _build_structured_seed_genome(self) -> List[int]:
+        """Construct an initial genome that already contains a tutorial-to-climax skeleton."""
+        genome = self._sample_weighted_genome()
+        if not genome:
+            return genome
+
+        anchor_specs = [
+            (
+                0.18,
+                self._choose_rule_for_seed(self._linear_progression_rule_ids, self._path_depth_rule_ids),
+            ),
+            (
+                0.34,
+                self._choose_rule_for_seed(self._pedagogical_rule_ids, self._linear_progression_rule_ids),
+            ),
+            (
+                0.52,
+                self._choose_rule_for_seed(self._non_key_gate_rule_ids, self._pedagogical_depth_support_rule_ids),
+            ),
+            (
+                0.72,
+                self._choose_rule_for_seed(self._pedagogical_depth_support_rule_ids, self._critical_path_gate_rule_ids),
+            ),
+            (
+                0.88,
+                self._choose_rule_for_seed(self._critical_path_gate_rule_ids, self._linear_progression_rule_ids),
+            ),
+        ]
+        for ratio, rule_id in anchor_specs:
+            if rule_id is None:
+                continue
+            idx = int(np.clip(round((len(genome) - 1) * float(ratio)), 0, len(genome) - 1))
+            genome[idx] = int(rule_id)
+        return genome
     
     def _evaluate_population(
         self,
@@ -3701,23 +4474,187 @@ class EvolutionaryTopologyGenerator:
                         max(1e-6, float(self._global_rule_weights.get(rid, 1e-6)) * non_dir_gate_boost)
                     )
 
+        # If the target asks for stronger main-path structure, shift part of the
+        # prior from wide branching toward critical-path/tutorial operators.
+        target_linearity = float(np.clip(self.evaluator.target_linearity, 0.0, 1.0))
+        if target_linearity > 0.42:
+            linearity_pressure = float(np.clip((target_linearity - 0.42) / 0.24, 0.0, 1.0))
+            if getattr(self, "_wide_branch_rule_ids", None):
+                branch_damp = float(
+                    np.clip(
+                        1.0
+                        - (
+                            float(
+                                np.clip(
+                                    self._rt("prior_linearity_branch_damp_gain", 0.22),
+                                    0.0,
+                                    0.60,
+                                )
+                            )
+                            * linearity_pressure
+                        ),
+                        0.64,
+                        1.0,
+                    )
+                )
+                for rid in self._wide_branch_rule_ids:
+                    self._global_rule_weights[rid] = float(
+                        max(1e-6, float(self._global_rule_weights.get(rid, 1e-6)) * branch_damp)
+                    )
+            if getattr(self, "_linear_progression_rule_ids", None):
+                linear_boost = float(
+                    np.clip(
+                        1.0
+                        + (
+                            float(
+                                np.clip(
+                                    self._rt("prior_linearity_boost_gain", 0.34),
+                                    0.0,
+                                    0.80,
+                                )
+                            )
+                            * linearity_pressure
+                        ),
+                        1.0,
+                        1.48,
+                    )
+                )
+                for rid in self._linear_progression_rule_ids:
+                    self._global_rule_weights[rid] = float(
+                        max(1e-6, float(self._global_rule_weights.get(rid, 1e-6)) * linear_boost)
+                    )
+            if getattr(self, "_branch_pruning_rule_ids", None):
+                prune_boost = float(
+                    np.clip(
+                        1.0
+                        + (
+                            float(
+                                np.clip(
+                                    self._rt("prior_linearity_prune_boost_gain", 0.30),
+                                    0.0,
+                                    0.80,
+                                )
+                            )
+                            * linearity_pressure
+                        ),
+                        1.0,
+                        1.40,
+                    )
+                )
+                for rid in self._branch_pruning_rule_ids:
+                    self._global_rule_weights[rid] = float(
+                        max(1e-6, float(self._global_rule_weights.get(rid, 1e-6)) * prune_boost)
+                    )
+
         # If leniency target is moderate/strict (VGLC-like), shift part of prior
         # from key-inflating rules to non-key gate operators.
         target_leniency = float(np.clip(self.evaluator.target_leniency, 0.0, 1.0))
         if target_leniency < 0.70:
             leniency_tightness = float(np.clip((0.70 - target_leniency) / 0.40, 0.0, 1.0))
             if getattr(self, "_key_inflating_rule_ids", None):
-                key_damp = float(np.clip(1.0 - (0.28 * leniency_tightness), 0.55, 1.0))
+                key_damp = float(
+                    np.clip(
+                        1.0
+                        - (
+                            float(
+                                np.clip(
+                                    self._rt("prior_leniency_key_damp_gain", 0.44),
+                                    0.0,
+                                    0.80,
+                                )
+                            )
+                            * leniency_tightness
+                        ),
+                        0.40,
+                        1.0,
+                    )
+                )
                 for rid in self._key_inflating_rule_ids:
                     self._global_rule_weights[rid] = float(
                         max(1e-6, float(self._global_rule_weights.get(rid, 1e-6)) * key_damp)
                     )
             if getattr(self, "_non_key_gate_rule_ids", None):
-                gate_boost = float(np.clip(1.0 + (0.22 * leniency_tightness), 1.0, 1.25))
+                gate_boost = float(
+                    np.clip(
+                        1.0
+                        + (
+                            float(
+                                np.clip(
+                                    self._rt("prior_leniency_gate_boost_gain", 0.34),
+                                    0.0,
+                                    0.80,
+                                )
+                            )
+                            * leniency_tightness
+                        ),
+                        1.0,
+                        1.42,
+                    )
+                )
                 for rid in self._non_key_gate_rule_ids:
                     self._global_rule_weights[rid] = float(
                         max(1e-6, float(self._global_rule_weights.get(rid, 1e-6)) * gate_boost)
                     )
+            if getattr(self, "_path_depth_rule_ids", None):
+                depth_boost = float(
+                    np.clip(
+                        1.0
+                        + (
+                            float(
+                                np.clip(
+                                    self._rt("prior_leniency_depth_boost_gain", 0.24),
+                                    0.0,
+                                    0.60,
+                                )
+                            )
+                            * leniency_tightness
+                        ),
+                        1.0,
+                        1.30,
+                    )
+                )
+                for rid in self._path_depth_rule_ids:
+                    self._global_rule_weights[rid] = float(
+                        max(1e-6, float(self._global_rule_weights.get(rid, 1e-6)) * depth_boost)
+                    )
+
+        # If the descriptor targets ask for pedagogical item->challenge arcs,
+        # bias the prior toward the dedicated skill-chain rule instead of
+        # hoping generic puzzle operators stumble into that structure.
+        pedagogical_target = float(
+            np.clip(
+                (0.45 * self.evaluator.target_pedagogical_puzzle_variety)
+                + (0.30 * self.evaluator.target_skill_chain_score)
+                + (0.25 * self.evaluator.target_tutorial_climax_depth_score),
+                0.0,
+                1.0,
+            )
+        )
+        if getattr(self, "_pedagogical_rule_ids", None) and pedagogical_target > 0.0:
+            pedagogical_boost_gain = float(
+                np.clip(self._rt("prior_pedagogical_boost_gain", 0.42), 0.0, 1.0)
+            )
+            pedagogical_boost_max = float(
+                np.clip(self._rt("prior_pedagogical_boost_max", 1.35), 1.0, 2.0)
+            )
+            self._scale_rule_weight_group(
+                self._pedagogical_rule_ids,
+                1.0 + (pedagogical_boost_gain * pedagogical_target),
+                min_factor=1.0,
+                max_factor=pedagogical_boost_max,
+            )
+            self._scale_rule_weight_group(
+                self._pedagogical_support_rule_ids,
+                1.0 + (0.20 * pedagogical_target),
+                min_factor=1.0,
+                max_factor=1.24,
+            )
+            self._scale_rule_weight_group(
+                self._pedagogical_depth_support_rule_ids,
+                1.0 + (0.26 * pedagogical_target),
+                min_factor=1.0,
+                max_factor=1.30,
+            )
 
         # Rebalance toward topology rules to avoid shrinking exploration
         # while keeping gate depth from overshooting reference.
@@ -3764,6 +4701,56 @@ class EvolutionaryTopologyGenerator:
                     min_factor=1.0,
                     max_factor=edge_boost_max,
                 )
+
+        self._renormalize_global_rule_probs()
+
+    def _apply_custom_transition_bias_to_global_prior(self) -> None:
+        """
+        Preserve explicit user transition priors after target-aware shaping.
+
+        Research-wise, the mission graph prior is the user's high-level control
+        surface. If we let later realism/pedagogical priors completely swamp a
+        supplied transition matrix, search stops honoring the requested style.
+        This helper keeps custom transition intent alive in initial sampling and
+        long-run prior relaxation, while leaving the default learned Zelda
+        transition matrix unchanged.
+        """
+        if not getattr(self, "_has_custom_transition_matrix", False):
+            return
+
+        inbound_mass: Dict[int, float] = defaultdict(float)
+        for transitions in dict(self.transition_matrix or {}).values():
+            if not isinstance(transitions, dict):
+                continue
+            for rule_name, raw_weight in transitions.items():
+                rid = self.rule_name_to_id.get(str(rule_name))
+                if rid is None or rid not in self._global_rule_weights:
+                    continue
+                try:
+                    weight = float(raw_weight)
+                except (TypeError, ValueError, OverflowError):
+                    continue
+                if not math.isfinite(weight) or weight <= 0.0:
+                    continue
+                inbound_mass[int(rid)] += float(weight)
+
+        if not inbound_mass:
+            return
+
+        max_mass = max(float(value) for value in inbound_mass.values())
+        if max_mass <= 0.0:
+            return
+
+        # Keep the boost moderate: explicit user transitions should steer the
+        # search, but not fully override target realism / constraint pressures.
+        base_gain = float(np.clip(0.35 + (0.35 * self.transition_mix), 0.20, 0.80))
+        max_boost = float(np.clip(1.0 + base_gain, 1.10, 1.80))
+        for rid, mass in inbound_mass.items():
+            normalized = float(np.clip(float(mass) / max_mass, 0.0, 1.0))
+            boost = float(np.clip(1.0 + (base_gain * normalized), 1.0, max_boost))
+            self._global_rule_weights[rid] = float(
+                max(1e-6, float(self._global_rule_weights.get(rid, 1e-6)) * boost)
+            )
 
         self._renormalize_global_rule_probs()
 
@@ -3817,19 +4804,27 @@ class EvolutionaryTopologyGenerator:
         mean_shortcut = _mean_metric("shortcut_density")
         mean_gate = _mean_metric("gate_depth_ratio")
         mean_path = _mean_metric("path_depth_ratio")
+        mean_linearity = _mean_metric("linearity")
         mean_directionality = _mean_metric("directionality_gap")
         mean_gating_density = _mean_metric("gating_density")
         mean_edges = _mean_metric("edge_count")
         mean_nodes = _mean_metric("node_count")
         mean_leniency = _mean_metric("leniency")
+        mean_pedagogical_variety = _mean_metric("pedagogical_puzzle_variety")
+        mean_skill_chain = _mean_metric("skill_chain_score")
+        mean_tutorial_climax_depth = _mean_metric("tutorial_climax_depth_score")
 
         cycle_target = float(max(1e-6, self.evaluator.target_cycle_density))
         shortcut_target = float(max(1e-6, self.evaluator.target_shortcut_density))
         gate_target = float(max(1e-6, self.evaluator.target_gate_depth_ratio))
         path_target = float(max(1e-6, self.evaluator.target_path_depth_ratio))
+        linearity_target = float(max(1e-6, self.evaluator.target_linearity))
         directionality_target = float(max(0.0, self.evaluator.target_directionality_gap))
         gating_density_target = float(max(1e-6, self.evaluator.target_gating_density))
         leniency_target = float(max(1e-6, self.evaluator.target_leniency))
+        pedagogical_variety_target = float(max(1e-6, self.evaluator.target_pedagogical_puzzle_variety))
+        skill_chain_target = float(max(1e-6, self.evaluator.target_skill_chain_score))
+        tutorial_climax_depth_target = float(max(1e-6, self.evaluator.target_tutorial_climax_depth_score))
         edge_target = float(max(1e-6, self.evaluator.target_num_edges)) if float(self.evaluator.target_num_edges) > 0.0 else 0.0
         node_target = float(max(1e-6, self.evaluator.target_num_nodes)) if float(self.evaluator.target_num_nodes) > 0.0 else 0.0
 
@@ -3844,6 +4839,13 @@ class EvolutionaryTopologyGenerator:
         )
         gate_error = float(np.clip((gate_target - mean_gate) / gate_target, -2.0, 2.0))
         path_error = float(np.clip((path_target - mean_path) / path_target, -2.0, 2.0))
+        linearity_error = float(
+            np.clip(
+                (linearity_target - mean_linearity) / max(0.08, linearity_target),
+                -2.0,
+                2.0,
+            )
+        )
         directionality_error = float(
             np.clip(
                 (directionality_target - mean_directionality) / max(0.05, directionality_target + 0.05),
@@ -3861,6 +4863,27 @@ class EvolutionaryTopologyGenerator:
         leniency_error = float(
             np.clip(
                 (leniency_target - mean_leniency) / max(0.08, leniency_target),
+                -2.0,
+                2.0,
+            )
+        )
+        pedagogical_variety_error = float(
+            np.clip(
+                (pedagogical_variety_target - mean_pedagogical_variety) / max(0.10, pedagogical_variety_target),
+                -2.0,
+                2.0,
+            )
+        )
+        skill_chain_error = float(
+            np.clip(
+                (skill_chain_target - mean_skill_chain) / max(0.08, skill_chain_target),
+                -2.0,
+                2.0,
+            )
+        )
+        tutorial_climax_depth_error = float(
+            np.clip(
+                (tutorial_climax_depth_target - mean_tutorial_climax_depth) / max(0.08, tutorial_climax_depth_target),
                 -2.0,
                 2.0,
             )
@@ -3990,14 +5013,34 @@ class EvolutionaryTopologyGenerator:
         if leniency_overshoot > 0.0:
             self._scale_rule_weight_group(
                 self._non_key_gate_rule_ids,
-                1.0 + (0.28 * leniency_overshoot),
+                1.0
+                + (
+                    float(
+                        np.clip(
+                            self._rt("adapt_leniency_gate_boost_gain", 0.40),
+                            0.0,
+                            1.0,
+                        )
+                    )
+                    * leniency_overshoot
+                ),
                 min_factor=1.0,
-                max_factor=1.40,
+                max_factor=1.55,
             )
             self._scale_rule_weight_group(
                 self._key_inflating_rule_ids,
-                1.0 - (0.18 * leniency_overshoot),
-                min_factor=0.55,
+                1.0
+                - (
+                    float(
+                        np.clip(
+                            self._rt("adapt_leniency_key_damp_gain", 0.26),
+                            0.0,
+                            0.80,
+                        )
+                    )
+                    * leniency_overshoot
+                ),
+                min_factor=0.42,
                 max_factor=1.0,
             )
 
@@ -4007,6 +5050,86 @@ class EvolutionaryTopologyGenerator:
             1.0 + (0.22 * path_error),
             min_factor=0.70,
             max_factor=1.35,
+        )
+
+        if linearity_error != 0.0:
+            self._scale_rule_weight_group(
+                self._linear_progression_rule_ids,
+                1.0
+                + (
+                    float(
+                        np.clip(
+                            self._rt("adapt_linearity_boost_gain", 0.40),
+                            0.0,
+                            1.0,
+                        )
+                    )
+                    * linearity_error
+                ),
+                min_factor=0.62,
+                max_factor=1.55,
+            )
+            self._scale_rule_weight_group(
+                self._wide_branch_rule_ids,
+                1.0
+                - (
+                    float(
+                        np.clip(
+                            self._rt("adapt_branch_damp_gain", 0.26),
+                            0.0,
+                            0.80,
+                        )
+                    )
+                    * max(0.0, linearity_error)
+                ),
+                min_factor=0.60,
+                max_factor=1.0,
+            )
+            self._scale_rule_weight_group(
+                getattr(self, "_branch_pruning_rule_ids", []),
+                1.0
+                + (
+                    float(
+                        np.clip(
+                            self._rt("adapt_prune_boost_gain", 0.34),
+                            0.0,
+                            1.0,
+                        )
+                    )
+                    * max(0.0, linearity_error)
+                ),
+                min_factor=1.0,
+                max_factor=1.45,
+            )
+
+        pedagogical_error = float(
+            np.clip(
+                (0.42 * pedagogical_variety_error)
+                + (0.33 * skill_chain_error)
+                + (0.25 * tutorial_climax_depth_error),
+                -2.0,
+                2.0,
+            )
+        )
+        adapt_pedagogical_gain = float(np.clip(self._rt("adapt_pedagogical_gain", 0.52), 0.0, 1.0))
+        adapt_tutorial_climax_gain = float(np.clip(self._rt("adapt_tutorial_climax_gain", 0.40), 0.0, 1.0))
+        self._scale_rule_weight_group(
+            self._pedagogical_rule_ids,
+            1.0 + (adapt_pedagogical_gain * pedagogical_error),
+            min_factor=0.50,
+            max_factor=1.55,
+        )
+        self._scale_rule_weight_group(
+            self._pedagogical_support_rule_ids,
+            1.0 + (0.24 * pedagogical_error),
+            min_factor=0.72,
+            max_factor=1.28,
+        )
+        self._scale_rule_weight_group(
+            self._pedagogical_depth_support_rule_ids,
+            1.0 + (adapt_tutorial_climax_gain * tutorial_climax_depth_error),
+            min_factor=0.72,
+            max_factor=1.32,
         )
 
         # If gate-depth overshoots, bias toward relief/loop rules.
@@ -4083,12 +5206,12 @@ class EvolutionaryTopologyGenerator:
                 out.append(int(rid))
         return sorted(set(out))
 
-    def _estimate_structural_deficit(self, parents: Sequence[Individual]) -> Tuple[float, float, float, float, float]:
+    def _estimate_structural_deficit(self, parents: Sequence[Individual]) -> Tuple[float, float, float, float, float, float]:
         """
         Estimate topology/gate deficits and shortcut over-saturation.
         """
         if not parents:
-            return 0.0, 0.0, 0.0, 0.0, 0.0
+            return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
         cycle_vals = [float((p.descriptor_metrics or {}).get("cycle_density", 0.0)) for p in parents]
         shortcut_vals = [float((p.descriptor_metrics or {}).get("shortcut_density", 0.0)) for p in parents]
         gate_vals = [float((p.descriptor_metrics or {}).get("gate_depth_ratio", 0.0)) for p in parents]
@@ -4096,6 +5219,15 @@ class EvolutionaryTopologyGenerator:
         gating_vals = [float((p.descriptor_metrics or {}).get("gating_density", 0.0)) for p in parents]
         edge_vals = [float((p.descriptor_metrics or {}).get("edge_count", 0.0)) for p in parents]
         directionality_vals = [float((p.descriptor_metrics or {}).get("directionality_gap", 0.0)) for p in parents]
+        pedagogical_variety_vals = [
+            float((p.descriptor_metrics or {}).get("pedagogical_puzzle_variety", 0.0)) for p in parents
+        ]
+        skill_chain_vals = [
+            float((p.descriptor_metrics or {}).get("skill_chain_score", 0.0)) for p in parents
+        ]
+        tutorial_climax_depth_vals = [
+            float((p.descriptor_metrics or {}).get("tutorial_climax_depth_score", 0.0)) for p in parents
+        ]
         # Use low-quantile descriptors for deficit detection so one strong parent
         # does not hide a structural weakness.
         mean_cycle = float(np.quantile(cycle_vals, 0.25)) if cycle_vals else 0.0
@@ -4104,6 +5236,11 @@ class EvolutionaryTopologyGenerator:
         mean_path = float(np.quantile(path_vals, 0.25)) if path_vals else 0.0
         mean_gating = float(np.quantile(gating_vals, 0.25)) if gating_vals else 0.0
         mean_edges = float(np.quantile(edge_vals, 0.25)) if edge_vals else 0.0
+        mean_pedagogical_variety = float(np.quantile(pedagogical_variety_vals, 0.25)) if pedagogical_variety_vals else 0.0
+        mean_skill_chain = float(np.quantile(skill_chain_vals, 0.25)) if skill_chain_vals else 0.0
+        mean_tutorial_climax_depth = (
+            float(np.quantile(tutorial_climax_depth_vals, 0.25)) if tutorial_climax_depth_vals else 0.0
+        )
         high_shortcut = float(np.quantile(shortcut_vals, 0.75)) if shortcut_vals else mean_shortcut
         high_gate = float(np.quantile(gate_vals, 0.75)) if gate_vals else mean_gate
         high_directionality = float(np.quantile(directionality_vals, 0.75)) if directionality_vals else 0.0
@@ -4124,6 +5261,18 @@ class EvolutionaryTopologyGenerator:
             1e-6,
             self.evaluator.target_gating_density,
         )
+        pedagogical_variety_def = max(
+            0.0,
+            self.evaluator.target_pedagogical_puzzle_variety - mean_pedagogical_variety,
+        ) / max(1e-6, self.evaluator.target_pedagogical_puzzle_variety)
+        skill_chain_def = max(
+            0.0,
+            self.evaluator.target_skill_chain_score - mean_skill_chain,
+        ) / max(1e-6, self.evaluator.target_skill_chain_score)
+        tutorial_climax_depth_def = max(
+            0.0,
+            self.evaluator.target_tutorial_climax_depth_score - mean_tutorial_climax_depth,
+        ) / max(1e-6, self.evaluator.target_tutorial_climax_depth_score)
         edge_def = 0.0
         if float(self.evaluator.target_num_edges) > 0.0:
             edge_def = max(0.0, float(self.evaluator.target_num_edges) - mean_edges) / max(
@@ -4150,12 +5299,22 @@ class EvolutionaryTopologyGenerator:
                 1.5,
             )
         )
+        pedagogical_deficit = float(
+            np.clip(
+                (0.40 * pedagogical_variety_def)
+                + (0.35 * skill_chain_def)
+                + (0.25 * tutorial_climax_depth_def),
+                0.0,
+                1.5,
+            )
+        )
         return (
             topology_deficit,
             gate_deficit,
             float(np.clip(shortcut_excess, 0.0, 2.0)),
             float(np.clip(gate_excess, 0.0, 2.0)),
             float(np.clip(directionality_excess, 0.0, 2.0)),
+            pedagogical_deficit,
         )
 
     def _inject_rule_pressure(
@@ -4167,6 +5326,7 @@ class EvolutionaryTopologyGenerator:
         shortcut_excess: float = 0.0,
         gate_excess: float = 0.0,
         directionality_excess: float = 0.0,
+        pedagogical_deficit: float = 0.0,
     ) -> List[int]:
         """
         Apply targeted gene replacements toward missing topology mechanics.
@@ -4197,6 +5357,29 @@ class EvolutionaryTopologyGenerator:
                 gate_candidate_pool = list(self._gate_pressure_rule_ids)
             for idx in replace_idx:
                 pressured[idx] = int(self.rng.choice(gate_candidate_pool))
+
+        if self._pedagogical_rule_ids and float(pedagogical_deficit) > 0.0:
+            ped_slots = int(
+                np.clip(
+                    round(float(pedagogical_deficit) * 1.5),
+                    0,
+                    max(0, len(pressured) // 3),
+                )
+            )
+            if ped_slots > 0:
+                replace_idx = self.rng.sample(range(len(pressured)), k=min(len(pressured), ped_slots))
+                candidate_pool = (
+                    list(self._pedagogical_rule_ids)
+                    + list(self._pedagogical_rule_ids)
+                    + list(self._pedagogical_rule_ids)
+                    + list(self._pedagogical_support_rule_ids)
+                    + list(self._pedagogical_depth_support_rule_ids)
+                    + list(self._linear_progression_rule_ids)
+                )
+                if not candidate_pool:
+                    candidate_pool = list(self._pedagogical_rule_ids)
+                for idx in replace_idx:
+                    pressured[idx] = int(self.rng.choice(candidate_pool))
 
         # If shortcut density is already above target, rewrite explicit
         # shortcut genes toward non-shortcut topology/gating operators.
@@ -4498,7 +5681,14 @@ class EvolutionaryTopologyGenerator:
                 child1_genome = parent1.genome.copy()
                 child2_genome = parent2.genome.copy()
 
-            topology_deficit, gate_deficit, shortcut_excess, gate_excess, directionality_excess = self._estimate_structural_deficit(
+            (
+                topology_deficit,
+                gate_deficit,
+                shortcut_excess,
+                gate_excess,
+                directionality_excess,
+                pedagogical_deficit,
+            ) = self._estimate_structural_deficit(
                 [parent1, parent2]
             )
             adaptive_mutation_rate = float(
@@ -4508,6 +5698,7 @@ class EvolutionaryTopologyGenerator:
                         1.0
                         + (0.70 * topology_deficit)
                         + (0.45 * gate_deficit)
+                        + (0.24 * pedagogical_deficit)
                         - (0.40 * shortcut_excess)
                         - (0.22 * gate_excess)
                         - (0.28 * directionality_excess)
@@ -4527,6 +5718,7 @@ class EvolutionaryTopologyGenerator:
                 shortcut_excess=shortcut_excess,
                 gate_excess=gate_excess,
                 directionality_excess=directionality_excess,
+                pedagogical_deficit=pedagogical_deficit,
             )
             child2_genome = self._inject_rule_pressure(
                 child2_genome,
@@ -4535,6 +5727,7 @@ class EvolutionaryTopologyGenerator:
                 shortcut_excess=shortcut_excess,
                 gate_excess=gate_excess,
                 directionality_excess=directionality_excess,
+                pedagogical_deficit=pedagogical_deficit,
             )
             
             # Create offspring individuals

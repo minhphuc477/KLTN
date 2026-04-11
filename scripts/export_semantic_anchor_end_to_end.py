@@ -14,9 +14,11 @@ from __future__ import annotations
 
 import argparse
 import copy
+import gc
 import hashlib
 import json
 import sys
+import time
 from collections import Counter
 from pathlib import Path
 from typing import Any, Dict
@@ -24,6 +26,11 @@ from typing import Any, Dict
 import networkx as nx
 import numpy as np
 from networkx.readwrite import json_graph
+
+try:
+    import torch
+except (ImportError, AttributeError, RuntimeError, TypeError, ValueError):
+    torch = None
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
@@ -44,6 +51,16 @@ from scripts.run_fast_sampler_visual_audit import (
     write_room_layout_artifacts,
 )
 from src.pipeline.dungeon_pipeline import NeuralSymbolicDungeonPipeline, pipeline_kwargs_from_resolved_config
+
+
+def _emit_progress(message: str) -> None:
+    print(f"[export-semantic-anchor] {message}", flush=True)
+
+
+def _release_torch_memory() -> None:
+    gc.collect()
+    if torch is not None and torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
 
 def _resolve_masked_room_checkpoint(run_dir: Path) -> Path:
@@ -165,10 +182,15 @@ def export_masked_variant(
         "room_hashes": room_hashes,
         "layout": {
             "room_count": int(layout_payload.get("room_count", 0)),
-            "graph_slot_match_rate": layout_payload.get("graph_slot_match_rate"),
+            "primary_quality_metric_name": layout_payload.get("primary_quality_metric_name"),
+            "primary_quality_metric_value": layout_payload.get("primary_quality_metric_value"),
+            **dict(layout_payload.get("layout_quality", {})),
         },
     }
     (variant_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    del result
+    del pipeline
+    _release_torch_memory()
     return summary
 
 
@@ -187,7 +209,14 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     generation_overrides = generation_overrides_from_namespace(args)
+    _emit_progress(f"loading run directory: {args.run_dir}")
     diffusion_pipeline = build_pipeline(args.run_dir, generation_overrides=generation_overrides)
+    _emit_progress(
+        "generating shared topology "
+        f"(seed={int(args.seed)}, rooms={int(args.num_rooms)}, population={int(args.topology_population)}, "
+        f"generations={int(args.topology_generations)})"
+    )
+    topology_started = time.perf_counter()
     prepared = diffusion_pipeline.prepare_dungeon_generation(
         mission_graph=None,
         generate_topology=True,
@@ -196,16 +225,24 @@ def main() -> None:
         generations=int(args.topology_generations),
         seed=int(args.seed),
     )
+    _emit_progress(f"shared topology ready in {time.perf_counter() - topology_started:.1f}s")
     mission_graph = copy.deepcopy(prepared.mission_graph)
+    del prepared
+    del diffusion_pipeline
+    _release_torch_memory()
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     (args.output_dir / "mission_graph.json").write_text(
         json.dumps(json_graph.node_link_data(mission_graph, edges="links"), indent=2),
         encoding="utf-8",
     )
+    _emit_progress(f"wrote mission graph: {args.output_dir / 'mission_graph.json'}")
 
-    summaries = {
-        "diffusion_cfg3_logic0_steps50": export_variant(
+    summaries: Dict[str, Any] = {}
+
+    _emit_progress("starting diffusion export (50-step teacher)")
+    started = time.perf_counter()
+    summaries["diffusion_cfg3_logic0_steps50"] = export_variant(
             run_dir=args.run_dir,
             mission_graph=mission_graph,
             variant_name="diffusion_cfg3_logic0_steps50",
@@ -216,8 +253,13 @@ def main() -> None:
             use_fast_sampling=False,
             seed=int(args.seed),
             generation_overrides=generation_overrides,
-        ),
-        "fast_cfg3_logic0_steps4": export_variant(
+        )
+    _emit_progress(f"finished diffusion export in {time.perf_counter() - started:.1f}s")
+    _release_torch_memory()
+
+    _emit_progress("starting fast-sampler export (4-step)")
+    started = time.perf_counter()
+    summaries["fast_cfg3_logic0_steps4"] = export_variant(
             run_dir=args.run_dir,
             mission_graph=mission_graph,
             variant_name="fast_cfg3_logic0_steps4",
@@ -228,16 +270,22 @@ def main() -> None:
             use_fast_sampling=True,
             seed=int(args.seed),
             generation_overrides=generation_overrides,
-        ),
-        "masked_room_full": export_masked_variant(
+        )
+    _emit_progress(f"finished fast-sampler export in {time.perf_counter() - started:.1f}s")
+    _release_torch_memory()
+
+    _emit_progress("starting masked-room export")
+    started = time.perf_counter()
+    summaries["masked_room_full"] = export_masked_variant(
             run_dir=args.run_dir,
             mission_graph=mission_graph,
             variant_name="masked_room_full",
             out_dir=args.output_dir,
             seed=int(args.seed),
             generation_overrides=generation_overrides,
-        ),
-    }
+        )
+    _emit_progress(f"finished masked-room export in {time.perf_counter() - started:.1f}s")
+    _release_torch_memory()
     (args.output_dir / "summary.json").write_text(
         json.dumps(
             {
@@ -248,6 +296,7 @@ def main() -> None:
         ),
         encoding="utf-8",
     )
+    _emit_progress(f"wrote summary: {args.output_dir / 'summary.json'}")
 
 
 if __name__ == "__main__":

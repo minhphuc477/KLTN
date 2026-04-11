@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import gc
 import hashlib
 import json
 import math
@@ -30,6 +31,11 @@ import numpy as np
 from PIL import Image, ImageDraw
 from networkx.readwrite import json_graph
 
+try:
+    import torch
+except (ImportError, AttributeError, RuntimeError, TypeError, ValueError):
+    torch = None
+
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
@@ -40,7 +46,11 @@ from src.pipeline.dungeon_pipeline import (
     NeuralSymbolicDungeonPipeline,
     pipeline_kwargs_from_resolved_config,
 )
-from src.pipeline.room_stitching import StitchedRoomLayout, build_stitched_room_layout
+from src.pipeline.room_stitching import (
+    StitchedRoomLayout,
+    build_stitched_room_layout,
+    compute_layout_quality_metrics,
+)
 
 
 def _tile_color(tile: int) -> Tuple[int, int, int]:
@@ -70,6 +80,12 @@ def _tile_color(tile: int) -> Tuple[int, int, int]:
 
 
 _ROOM_SHEET_BACKGROUND: Tuple[int, int, int] = (234, 239, 247)
+
+
+def _release_torch_memory() -> None:
+    gc.collect()
+    if torch is not None and torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
 
 def _crop_grid_to_non_void(grid: np.ndarray, *, void_tile: int = 0, margin: int = 1) -> np.ndarray:
@@ -364,7 +380,8 @@ def build_room_layout_payload(
 ) -> Dict[str, Any]:
     graph_positions: Dict[Any, Tuple[int, int]] = {}
     for node_id in graph.nodes():
-        pos = graph.nodes[node_id].get("pos")
+        attrs = graph.nodes[node_id]
+        pos = attrs.get("pos", attrs.get("position"))
         if isinstance(pos, (list, tuple)) and len(pos) >= 2:
             graph_positions[node_id] = (int(pos[0]), int(pos[1]))
 
@@ -377,9 +394,12 @@ def build_room_layout_payload(
             for node_id, (r, c) in graph_positions.items()
         }
 
+    layout_metrics = compute_layout_quality_metrics(
+        graph,
+        stitched_layout.slot_positions,
+    )
+
     entries: List[Dict[str, Any]] = []
-    slot_match_count = 0
-    slot_comparable_count = 0
     for room_id in sorted(stitched_layout.layout_map.keys(), key=_room_sort_key):
         bbox = stitched_layout.layout_map[room_id]
         x_min, y_min, x_max, y_max = bbox
@@ -387,10 +407,6 @@ def build_room_layout_payload(
         graph_pos = normalized_graph_positions.get(room_id)
         slot_pos = stitched_layout.slot_positions.get(room_id)
         slot_matches_graph_pos = bool(graph_pos is not None and slot_pos == graph_pos)
-        if graph_pos is not None:
-            slot_comparable_count += 1
-            if slot_matches_graph_pos:
-                slot_match_count += 1
         entries.append(
             {
                 "room_id": int(room_id) if str(room_id).isdigit() else str(room_id),
@@ -407,11 +423,12 @@ def build_room_layout_payload(
 
     return {
         "room_count": int(len(entries)),
-        "graph_slot_match_rate": (
-            float(slot_match_count / max(1, slot_comparable_count))
-            if slot_comparable_count > 0
-            else None
-        ),
+        "layout_quality": {
+            key: (float(value) if isinstance(value, (int, float)) and value is not None else value)
+            for key, value in layout_metrics.items()
+        },
+        "primary_quality_metric_name": "graph_edge_slot_adjacency_rate",
+        "primary_quality_metric_value": layout_metrics.get("graph_edge_slot_adjacency_rate"),
         "rooms": entries,
     }
 
@@ -546,6 +563,24 @@ def add_generation_override_args(parser: argparse.ArgumentParser) -> None:
         help="Override generation.semantic_role_prior_strength for this export only.",
     )
     parser.add_argument(
+        "--symbolic-max-repair-attempts",
+        type=int,
+        default=None,
+        help="Override generation.symbolic_max_repair_attempts for this export only.",
+    )
+    parser.add_argument(
+        "--symbolic-repair-margin",
+        type=int,
+        default=None,
+        help="Override generation.symbolic_repair_margin for this export only.",
+    )
+    parser.add_argument(
+        "--symbolic-adjacency-threshold",
+        type=float,
+        default=None,
+        help="Override generation.symbolic_adjacency_threshold for this export only.",
+    )
+    parser.add_argument(
         "--semantic-puzzle-offset",
         type=int,
         default=None,
@@ -609,6 +644,42 @@ def add_generation_override_args(parser: argparse.ArgumentParser) -> None:
         help="Override generation.puzzle_room_preserve_route_margin for this export only.",
     )
     parser.add_argument(
+        "--puzzle-room-switch-pocket-depth",
+        type=int,
+        default=None,
+        help="Override generation.puzzle_room_switch_pocket_depth for this export only.",
+    )
+    parser.add_argument(
+        "--puzzle-room-resource-bypass-offset",
+        type=int,
+        default=None,
+        help="Override generation.puzzle_room_resource_bypass_offset for this export only.",
+    )
+    parser.add_argument(
+        "--puzzle-room-key-pocket-depth",
+        type=int,
+        default=None,
+        help="Override generation.puzzle_room_key_pocket_depth for this export only.",
+    )
+    parser.add_argument(
+        "--puzzle-room-item-slot-depth",
+        type=int,
+        default=None,
+        help="Override generation.puzzle_room_item_slot_depth for this export only.",
+    )
+    parser.add_argument(
+        "--puzzle-room-toggle-corridor-offset",
+        type=int,
+        default=None,
+        help="Override generation.puzzle_room_toggle_corridor_offset for this export only.",
+    )
+    parser.add_argument(
+        "--validator-plan-max-states",
+        type=int,
+        default=None,
+        help="Override generation.validator_plan_max_states for this export only.",
+    )
+    parser.add_argument(
         "--deterministic-graph-marker-overlay-enabled",
         dest="deterministic_graph_marker_overlay_enabled",
         action=argparse.BooleanOptionalAction,
@@ -635,6 +706,12 @@ def generation_overrides_from_namespace(args: argparse.Namespace) -> Dict[str, A
     overrides: Dict[str, Any] = {}
     if getattr(args, "semantic_role_prior_strength", None) is not None:
         overrides["semantic_role_prior_strength"] = float(args.semantic_role_prior_strength)
+    if getattr(args, "symbolic_max_repair_attempts", None) is not None:
+        overrides["symbolic_max_repair_attempts"] = int(args.symbolic_max_repair_attempts)
+    if getattr(args, "symbolic_repair_margin", None) is not None:
+        overrides["symbolic_repair_margin"] = int(args.symbolic_repair_margin)
+    if getattr(args, "symbolic_adjacency_threshold", None) is not None:
+        overrides["symbolic_adjacency_threshold"] = float(args.symbolic_adjacency_threshold)
     if getattr(args, "semantic_puzzle_offset", None) is not None:
         overrides["semantic_puzzle_offset"] = int(args.semantic_puzzle_offset)
     if getattr(args, "semantic_constrained_decoding_enabled", None) is not None:
@@ -655,6 +732,18 @@ def generation_overrides_from_namespace(args: argparse.Namespace) -> Dict[str, A
         overrides["puzzle_room_block_budget"] = int(args.puzzle_room_block_budget)
     if getattr(args, "puzzle_room_preserve_route_margin", None) is not None:
         overrides["puzzle_room_preserve_route_margin"] = int(args.puzzle_room_preserve_route_margin)
+    if getattr(args, "puzzle_room_switch_pocket_depth", None) is not None:
+        overrides["puzzle_room_switch_pocket_depth"] = int(args.puzzle_room_switch_pocket_depth)
+    if getattr(args, "puzzle_room_resource_bypass_offset", None) is not None:
+        overrides["puzzle_room_resource_bypass_offset"] = int(args.puzzle_room_resource_bypass_offset)
+    if getattr(args, "puzzle_room_key_pocket_depth", None) is not None:
+        overrides["puzzle_room_key_pocket_depth"] = int(args.puzzle_room_key_pocket_depth)
+    if getattr(args, "puzzle_room_item_slot_depth", None) is not None:
+        overrides["puzzle_room_item_slot_depth"] = int(args.puzzle_room_item_slot_depth)
+    if getattr(args, "puzzle_room_toggle_corridor_offset", None) is not None:
+        overrides["puzzle_room_toggle_corridor_offset"] = int(args.puzzle_room_toggle_corridor_offset)
+    if getattr(args, "validator_plan_max_states", None) is not None:
+        overrides["validator_plan_max_states"] = int(args.validator_plan_max_states)
     if getattr(args, "deterministic_graph_marker_overlay_enabled", None) is not None:
         overrides["deterministic_graph_marker_overlay_enabled"] = bool(
             args.deterministic_graph_marker_overlay_enabled
@@ -686,6 +775,15 @@ def _generation_policy_summary(pipeline: NeuralSymbolicDungeonPipeline) -> Dict[
         ),
         "semantic_role_prior_strength": float(
             getattr(pipeline, "default_semantic_role_prior_strength", 0.15)
+        ),
+        "symbolic_max_repair_attempts": int(
+            getattr(pipeline, "symbolic_max_repair_attempts", 5)
+        ),
+        "symbolic_repair_margin": int(
+            getattr(pipeline, "symbolic_repair_margin", 2)
+        ),
+        "symbolic_adjacency_threshold": float(
+            getattr(pipeline, "symbolic_adjacency_threshold", 0.01)
         ),
         "semantic_anchor_threshold": float(
             getattr(pipeline, "default_semantic_anchor_threshold", 0.5)
@@ -720,6 +818,24 @@ def _generation_policy_summary(pipeline: NeuralSymbolicDungeonPipeline) -> Dict[
         "puzzle_room_preserve_route_margin": int(
             getattr(pipeline, "default_puzzle_room_preserve_route_margin", 0)
         ),
+        "puzzle_room_switch_pocket_depth": int(
+            getattr(pipeline, "default_puzzle_room_switch_pocket_depth", 3)
+        ),
+        "puzzle_room_resource_bypass_offset": int(
+            getattr(pipeline, "default_puzzle_room_resource_bypass_offset", 2)
+        ),
+        "puzzle_room_key_pocket_depth": int(
+            getattr(pipeline, "default_puzzle_room_key_pocket_depth", 3)
+        ),
+        "puzzle_room_item_slot_depth": int(
+            getattr(pipeline, "default_puzzle_room_item_slot_depth", 3)
+        ),
+        "puzzle_room_toggle_corridor_offset": int(
+            getattr(pipeline, "default_puzzle_room_toggle_corridor_offset", 2)
+        ),
+        "validator_plan_max_states": int(
+            getattr(pipeline, "default_validator_plan_max_states", 512)
+        ),
         "deterministic_graph_marker_overlay_enabled": bool(
             getattr(pipeline, "default_deterministic_graph_marker_overlay_enabled", True)
         ),
@@ -742,9 +858,14 @@ def build_pipeline(
     pipeline_kwargs = pipeline_kwargs_from_resolved_config(resolved)
     vqvae_checkpoint = _resolve_vqvae_checkpoint(run_dir)
 
+    fast_reselected = run_dir / "checkpoints" / "fast_sampler" / "fast_sampler_best_reselected.pth"
     fast_best = run_dir / "checkpoints" / "fast_sampler" / "fast_sampler_best.pth"
     fast_final = run_dir / "checkpoints" / "fast_sampler" / "fast_sampler_final.pth"
-    fast_checkpoint = fast_best if fast_best.exists() else fast_final
+    fast_checkpoint = (
+        fast_reselected
+        if fast_reselected.exists()
+        else (fast_best if fast_best.exists() else fast_final)
+    )
 
     pipeline_kwargs.update(
         {
@@ -778,8 +899,28 @@ def export_variant(
     seed: int,
     generation_overrides: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
+    variant_dir = out_dir / variant_name
+    variant_dir.mkdir(parents=True, exist_ok=True)
+
+    status_path = variant_dir / "export_status.json"
+
+    def _write_status(stage: str, **extra: Any) -> None:
+        payload = {
+            "variant_name": str(variant_name),
+            "stage": str(stage),
+            "seed": int(seed),
+            "guidance_scale": float(guidance_scale),
+            "logic_guidance_scale": float(logic_guidance_scale),
+            "num_diffusion_steps": int(num_diffusion_steps),
+            "use_fast_sampling": bool(use_fast_sampling),
+        }
+        payload.update({str(k): v for k, v in extra.items()})
+        status_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    _write_status("building_pipeline")
     pipeline = build_pipeline(run_dir, generation_overrides=generation_overrides)
     pipeline.runtime_diagnostics = {}
+    _write_status("generating_dungeon")
     result = pipeline.generate_dungeon(
         mission_graph=copy.deepcopy(mission_graph),
         generate_topology=False,
@@ -791,8 +932,11 @@ def export_variant(
         enable_map_elites=False,
         seed=int(seed),
     )
-
-    variant_dir = out_dir / variant_name
+    _write_status(
+        "generation_complete",
+        generation_time_sec=float(result.generation_time),
+        room_count=int(len(result.rooms)),
+    )
     rooms_dir = variant_dir / "rooms"
     room_texts: Dict[int, str] = {}
     room_hashes: Dict[str, str] = {}
@@ -891,10 +1035,21 @@ def export_variant(
         "room_hashes": room_hashes,
         "layout": {
             "room_count": int(layout_payload.get("room_count", 0)),
-            "graph_slot_match_rate": layout_payload.get("graph_slot_match_rate"),
+            "primary_quality_metric_name": layout_payload.get("primary_quality_metric_name"),
+            "primary_quality_metric_value": layout_payload.get("primary_quality_metric_value"),
+            **dict(layout_payload.get("layout_quality", {})),
         },
     }
     (variant_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    _write_status(
+        "complete",
+        generation_time_sec=float(result.generation_time),
+        room_count=int(len(result.rooms)),
+        summary_path=str(variant_dir / "summary.json"),
+    )
+    del result
+    del pipeline
+    _release_torch_memory()
     return summary
 
 

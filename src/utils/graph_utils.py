@@ -38,11 +38,97 @@ from src.constants.vglc_constants import (
     GOAL_CONNECTS_TO_BOSS,
     BOSS_REQUIRED_FOR_GOAL,
     MIN_PATH_LENGTH_START_TO_GOAL,
+    NODE_TYPE_MAP,
     parse_composite_node_label,
     parse_edge_label,
 )
 
 logger = logging.getLogger(__name__)
+
+
+_NODE_SEMANTIC_ALIASES = {
+    "s": "start_pointer",
+    "start_pointer": "start_pointer",
+    "start": "start",
+    "goal": "triforce",
+    "triforce": "triforce",
+    "t": "triforce",
+    "boss": "boss",
+    "b": "boss",
+    "boss_door": "boss_door",
+    "boss-door": "boss_door",
+    "bossdoor": "boss_door",
+    "big_key": "boss_key",
+    "bigkey": "boss_key",
+    "boss_key": "boss_key",
+    "bosskey": "boss_key",
+    "k": "key",
+    "key": "key",
+    "enemy": "enemy",
+    "e": "enemy",
+    "mini_boss": "mini_boss",
+    "miniboss": "mini_boss",
+    "m": "mini_boss",
+    "switch": "switch",
+    "s1": "switch",
+    "puzzle": "puzzle",
+    "p": "puzzle",
+    "item": "macro_item",
+    "macro_item": "macro_item",
+    "minor_item": "minor_item",
+    "treasure": "minor_item",
+    "i": "minor_item",
+    "i_macro": "macro_item",
+}
+
+
+def _canonicalize_node_semantics(*raw_values: Any) -> Set[str]:
+    """Normalize legacy DOT labels and exported graph attrs to shared semantic tags."""
+    semantics: Set[str] = set()
+    for raw in raw_values:
+        if raw is None:
+            continue
+        if isinstance(raw, (list, tuple, set)):
+            for item in raw:
+                semantics.update(_canonicalize_node_semantics(item))
+            continue
+        text = str(raw).strip()
+        if not text:
+            continue
+        for token in text.split(","):
+            token = token.strip()
+            if not token:
+                continue
+            if token in NODE_TYPE_MAP:
+                semantics.add(NODE_TYPE_MAP[token])
+                continue
+            lowered = token.lower()
+            semantics.add(_NODE_SEMANTIC_ALIASES.get(lowered, lowered))
+    return semantics
+
+
+def _node_semantics(G: nx.Graph, node: Any) -> Set[str]:
+    """Return canonical semantic tags for a node across legacy and exported attrs."""
+    data = G.nodes[node]
+    semantics = _canonicalize_node_semantics(
+        data.get("label", ""),
+        data.get("type", ""),
+    )
+    if bool(data.get("is_goal")) or bool(data.get("is_triforce")):
+        semantics.add("triforce")
+    if bool(data.get("is_boss")):
+        semantics.add("boss")
+    if bool(data.get("is_start")):
+        semantics.add("start")
+    return semantics
+
+
+def _has_semantic(G: nx.Graph, node: Any, semantic: str) -> bool:
+    return semantic in _node_semantics(G, node)
+
+
+def _find_nodes_with_semantic(G: nx.Graph, semantic: str) -> List[Any]:
+    return [node for node in G.nodes() if _has_semantic(G, node, semantic)]
 
 
 # ==========================================
@@ -330,7 +416,7 @@ def validate_goal_subgraph(G: nx.Graph) -> Tuple[bool, List[str]]:
         >>> is_valid
         True
     """
-    errors = []
+    return _validate_goal_subgraph_strict(G)
     
     # Find goal and boss nodes
     goal_nodes = find_nodes_by_type(G, 'triforce')
@@ -392,6 +478,117 @@ def validate_goal_subgraph(G: nx.Graph) -> Tuple[bool, List[str]]:
     else:
         logger.warning(f"Boss-Goal subgraph validation FAILED: {errors}")
     
+    return is_valid, errors
+
+
+def _validate_goal_subgraph_strict(G: nx.Graph) -> Tuple[bool, List[str]]:
+    """Strict export-side boss gauntlet validation aligned with generation-time checks."""
+    errors: List[str] = []
+
+    goal_nodes = _find_nodes_with_semantic(G, "triforce")
+    boss_nodes = _find_nodes_with_semantic(G, "boss")
+    boss_door_nodes = _find_nodes_with_semantic(G, "boss_door")
+    boss_key_nodes = _find_nodes_with_semantic(G, "boss_key")
+
+    if not goal_nodes:
+        errors.append("No goal (triforce) node found in graph")
+        return False, errors
+    if len(goal_nodes) != 1:
+        errors.append(f"Expected exactly one goal (triforce) node, found {len(goal_nodes)}")
+        return False, errors
+
+    if BOSS_REQUIRED_FOR_GOAL and not boss_nodes:
+        errors.append("No boss node found (required for goal)")
+        return False, errors
+    if len(boss_nodes) != 1:
+        errors.append(f"Expected exactly one boss node, found {len(boss_nodes)}")
+        return False, errors
+
+    goal = goal_nodes[0]
+    boss = boss_nodes[0]
+
+    goal_degree = G.degree(goal)
+    if goal_degree > GOAL_NODE_MAX_DEGREE:
+        errors.append(f"Goal node {goal} has degree {goal_degree} (should be <= {GOAL_NODE_MAX_DEGREE})")
+
+    if G.is_directed():
+        goal_neighbors = list(dict.fromkeys(list(G.predecessors(goal)) + list(G.successors(goal))))
+        goal_outgoing = list(dict.fromkeys(G.successors(goal)))
+    else:
+        goal_neighbors = list(dict.fromkeys(G.neighbors(goal)))
+        goal_outgoing = []
+
+    if GOAL_CONNECTS_TO_BOSS and goal_neighbors != [boss]:
+        errors.append(
+            f"Goal node {goal} must connect only to boss {boss} (neighbors: {goal_neighbors})"
+        )
+
+    if goal_outgoing:
+        errors.append(
+            f"Goal node {goal} has outgoing edges {goal_outgoing} (should be terminal node)"
+        )
+
+    # Preserve the legacy/simple boss -> goal case when there is no explicit boss door.
+    if boss_door_nodes:
+        if len(boss_door_nodes) != 1:
+            errors.append(f"Expected exactly one boss door node, found {len(boss_door_nodes)}")
+        else:
+            boss_door = boss_door_nodes[0]
+            if G.is_directed():
+                boss_predecessors = list(dict.fromkeys(G.predecessors(boss)))
+                boss_successors = list(dict.fromkeys(G.successors(boss)))
+                boss_door_predecessors = list(dict.fromkeys(G.predecessors(boss_door)))
+                boss_door_successors = list(dict.fromkeys(G.successors(boss_door)))
+
+                if boss_predecessors != [boss_door]:
+                    errors.append(
+                        f"Boss node {boss} must have only boss door {boss_door} as predecessor (found {boss_predecessors})"
+                    )
+                if boss_successors != [goal]:
+                    errors.append(
+                        f"Boss node {boss} must have only goal {goal} as successor (found {boss_successors})"
+                    )
+                if boss_door_successors != [boss]:
+                    errors.append(
+                        f"Boss door node {boss_door} must have only boss {boss} as successor (found {boss_door_successors})"
+                    )
+                if not boss_door_predecessors or any(
+                    predecessor in {boss_door, boss, goal}
+                    for predecessor in boss_door_predecessors
+                ):
+                    errors.append(
+                        f"Boss door node {boss_door} has invalid predecessors {boss_door_predecessors}"
+                    )
+            else:
+                boss_neighbors = list(dict.fromkeys(G.neighbors(boss)))
+                boss_door_neighbors = list(dict.fromkeys(G.neighbors(boss_door)))
+                if sorted(boss_neighbors) != sorted([goal, boss_door]):
+                    errors.append(
+                        f"Boss node {boss} must connect only to goal {goal} and boss door {boss_door} (neighbors: {boss_neighbors})"
+                    )
+                if boss not in boss_door_neighbors:
+                    errors.append(
+                        f"Boss door node {boss_door} must connect to boss {boss} (neighbors: {boss_door_neighbors})"
+                    )
+
+            boss_door_key_id = G.nodes[boss_door].get("key_id")
+            if boss_door_key_id is None:
+                errors.append(f"Boss door node {boss_door} is missing key_id")
+            else:
+                has_matching_big_key = any(
+                    G.nodes[node].get("key_id") == boss_door_key_id
+                    for node in boss_key_nodes
+                )
+                if not has_matching_big_key:
+                    errors.append(
+                        f"No BIG_KEY / boss_key provider found for boss door {boss_door} (key_id={boss_door_key_id})"
+                    )
+
+    is_valid = len(errors) == 0
+    if is_valid:
+        logger.info("Boss-Goal subgraph validation PASSED")
+    else:
+        logger.warning(f"Boss-Goal subgraph validation FAILED: {errors}")
     return is_valid, errors
 
 

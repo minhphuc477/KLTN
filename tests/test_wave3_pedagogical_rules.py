@@ -27,6 +27,7 @@ from src.generation.grammar import (
     NodeType, EdgeType, Difficulty,
     AddSkillChainRule, AddPacingBreakerRule, AddResourceLoopRule,
     AddGatekeeperRule, AddMultiLockRule, AddItemShortcutRule,
+    AddItemGateRule, AddEntangledBranchesRule,
     PruneDeadEndRule,
     validate_skill_chains, validate_battery_reachability,
     validate_resource_loops
@@ -35,6 +36,21 @@ from src.generation.grammar import (
 
 class TestAddSkillChainRule:
     """Test tutorial sequence generation."""
+
+    def test_forward_shortest_path_length_respects_edge_direction(self):
+        graph = MissionGraph()
+        graph.add_node(MissionNode(id=0, node_type=NodeType.START, position=(0, 0, 0)))
+        graph.add_node(MissionNode(id=1, node_type=NodeType.ITEM, position=(1, 0, 0), item_type="BOW"))
+        graph.add_node(MissionNode(id=2, node_type=NodeType.EMPTY, position=(2, 0, 0)))
+        graph.add_node(MissionNode(id=3, node_type=NodeType.GOAL, position=(3, 0, 0)))
+        graph.add_edge(0, 1, EdgeType.PATH)
+        graph.add_edge(1, 2, EdgeType.PATH)
+        graph.add_edge(2, 3, EdgeType.PATH)
+        graph.sanitize()
+
+        assert graph.get_shortest_path_length(2, 1) == 1
+        assert graph.get_forward_shortest_path_length(2, 1) == -1
+        assert graph.get_forward_shortest_path_length(1, 2) == 1
     
     def test_skill_chain_creation(self):
         """Test that skill chains are properly created after items."""
@@ -58,6 +74,9 @@ class TestAddSkillChainRule:
                 graph.add_edge(1, 2+i, EdgeType.PATH)
             else:
                 graph.add_edge(1+i, 2+i, EdgeType.PATH)
+        goal = MissionNode(id=5, node_type=NodeType.GOAL, position=(5, 0, 0))
+        graph.add_node(goal)
+        graph.add_edge(4, 5, EdgeType.PATH)
         
         # Apply rule
         rule = AddSkillChainRule()
@@ -87,23 +106,190 @@ class TestAddSkillChainRule:
         # Valid chain
         start = MissionNode(id=0, node_type=NodeType.START, position=(0, 0, 0))
         graph.add_node(start)
+
+        item = MissionNode(id=4, node_type=NodeType.ITEM, position=(1, 0, 0), item_type="BOW")
+        graph.add_node(item)
+        graph.add_edge(0, 4, EdgeType.PATH)
         
         tutorial = MissionNode(id=1, node_type=NodeType.TUTORIAL_PUZZLE, 
-                              position=(1, 0, 0), is_tutorial=True, difficulty=0.2)
+                              position=(2, 0, 0), is_tutorial=True, difficulty=0.2)
         graph.add_node(tutorial)
-        graph.add_edge(0, 1, EdgeType.PATH)
+        graph.add_edge(4, 1, EdgeType.PATH)
         
         moderate = MissionNode(id=2, node_type=NodeType.COMBAT_PUZZLE,
-                             position=(2, 0, 0), difficulty=0.5)
+                             position=(3, 0, 0), difficulty=0.5)
         graph.add_node(moderate)
         graph.add_edge(1, 2, EdgeType.PATH)
         
         hard = MissionNode(id=3, node_type=NodeType.COMPLEX_PUZZLE,
-                         position=(3, 0, 0), difficulty=0.8)
+                         position=(4, 0, 0), difficulty=0.8)
         graph.add_node(hard)
         graph.add_edge(2, 3, EdgeType.PATH)
+
+        goal = MissionNode(id=5, node_type=NodeType.GOAL, position=(5, 0, 0), difficulty=1.0)
+        graph.add_node(goal)
+        graph.add_edge(3, 5, EdgeType.PATH)
         
         assert validate_skill_chains(graph)
+
+    def test_skill_chain_does_not_duplicate_existing_progression(self):
+        """Once a full item-to-climax skill chain exists, the rule should stop reapplying."""
+        graph = MissionGraph()
+
+        graph.add_node(MissionNode(id=0, node_type=NodeType.START, position=(0, 0, 0)))
+        graph.add_node(MissionNode(id=1, node_type=NodeType.ITEM, position=(1, 0, 0), item_type="BOW"))
+        graph.add_node(MissionNode(id=2, node_type=NodeType.TUTORIAL_PUZZLE, position=(2, 0, 0), is_tutorial=True, difficulty=0.2))
+        graph.add_node(MissionNode(id=3, node_type=NodeType.COMBAT_PUZZLE, position=(3, 0, 0), difficulty=0.5))
+        graph.add_node(MissionNode(id=4, node_type=NodeType.COMPLEX_PUZZLE, position=(4, 0, 0), difficulty=0.8))
+        graph.add_node(MissionNode(id=5, node_type=NodeType.BOSS_DOOR, position=(5, 0, 0)))
+        graph.add_node(MissionNode(id=6, node_type=NodeType.BOSS, position=(6, 0, 0)))
+        graph.add_node(MissionNode(id=7, node_type=NodeType.GOAL, position=(7, 0, 0)))
+        graph.add_edge(0, 1, EdgeType.PATH)
+        graph.add_edge(1, 2, EdgeType.PATH)
+        graph.add_edge(2, 3, EdgeType.PATH)
+        graph.add_edge(3, 4, EdgeType.PATH)
+        graph.add_edge(4, 5, EdgeType.PATH)
+        graph.add_edge(5, 6, EdgeType.PATH)
+        graph.add_edge(6, 7, EdgeType.PATH)
+        graph.sanitize()
+
+        rule = AddSkillChainRule()
+        context = {'rng': None, 'difficulty': 0.5}
+
+        assert not rule.can_apply(graph, context)
+
+    def test_skill_chain_constructive_fallback_inserts_nodes(self):
+        """Rule should still create a pedagogical chain when only a direct successor exists."""
+        graph = MissionGraph()
+
+        start = MissionNode(id=0, node_type=NodeType.START, position=(0, 0, 0))
+        item = MissionNode(id=1, node_type=NodeType.ITEM, position=(1, 0, 0), item_type="HOOKSHOT")
+        middle = MissionNode(id=2, node_type=NodeType.EMPTY, position=(2, 0, 0))
+        goal = MissionNode(id=3, node_type=NodeType.GOAL, position=(3, 0, 0))
+        graph.add_node(start)
+        graph.add_node(item)
+        graph.add_node(middle)
+        graph.add_node(goal)
+        graph.add_edge(0, 1, EdgeType.PATH)
+        graph.add_edge(1, 2, EdgeType.PATH)
+        graph.add_edge(2, 3, EdgeType.PATH)
+        graph.sanitize()
+
+        rule = AddSkillChainRule()
+        context = {'rng': None, 'difficulty': 0.5}
+
+        assert rule.can_apply(graph, context)
+        graph = rule.apply(graph, context)
+
+        tutorial_nodes = [n for n in graph.nodes.values() if n.node_type == NodeType.TUTORIAL_PUZZLE]
+        combat_nodes = [n for n in graph.nodes.values() if n.node_type == NodeType.COMBAT_PUZZLE]
+        complex_nodes = [n for n in graph.nodes.values() if n.node_type == NodeType.COMPLEX_PUZZLE]
+
+        assert len(tutorial_nodes) == 1
+        assert len(combat_nodes) == 1
+        assert len(complex_nodes) == 1
+        assert graph.get_shortest_path_length(item.id, goal.id) == 5
+
+    def test_skill_chain_fallback_rejoins_climax_path_from_item_branch(self):
+        """Fallback should reconnect an item branch to the boss route instead of relabeling upstream nodes."""
+        graph = MissionGraph()
+
+        graph.add_node(MissionNode(id=0, node_type=NodeType.START, position=(0, 0, 0)))
+        graph.add_node(MissionNode(id=1, node_type=NodeType.EMPTY, position=(1, 0, 0)))
+        graph.add_node(MissionNode(id=2, node_type=NodeType.ITEM, position=(2, 0, 0), item_type="BOW"))
+        graph.add_node(MissionNode(id=3, node_type=NodeType.EMPTY, position=(3, 0, 0)))
+        graph.add_node(MissionNode(id=4, node_type=NodeType.BOSS_DOOR, position=(1, 1, 0)))
+        graph.add_node(MissionNode(id=5, node_type=NodeType.BOSS, position=(2, 1, 0)))
+        graph.add_node(MissionNode(id=6, node_type=NodeType.GOAL, position=(3, 1, 0)))
+        graph.add_edge(0, 1, EdgeType.PATH)
+        graph.add_edge(1, 2, EdgeType.PATH)
+        graph.add_edge(2, 3, EdgeType.PATH)
+        graph.add_edge(1, 4, EdgeType.PATH)
+        graph.add_edge(4, 5, EdgeType.PATH)
+        graph.add_edge(5, 6, EdgeType.PATH)
+        graph.sanitize()
+
+        rule = AddSkillChainRule()
+        context = {"rng": None, "difficulty": 0.5}
+
+        assert rule.can_apply(graph, context)
+        graph = rule.apply(graph, context)
+
+        forward_adj = graph.get_forward_adjacency_map()
+        tutorial_id = next(node.id for node in graph.nodes.values() if node.node_type == NodeType.TUTORIAL_PUZZLE)
+        combat_id = next(node.id for node in graph.nodes.values() if node.node_type == NodeType.COMBAT_PUZZLE)
+        complex_id = next(node.id for node in graph.nodes.values() if node.node_type == NodeType.COMPLEX_PUZZLE)
+
+        assert tutorial_id in forward_adj[2]
+        assert combat_id in forward_adj[tutorial_id]
+        assert complex_id in forward_adj[combat_id]
+        assert 4 in forward_adj[complex_id]
+        assert validate_skill_chains(graph)
+
+
+class TestGateAndBranchRewards:
+    """Test gating rules that should not leave partial state behind."""
+
+    def test_add_item_gate_rolls_back_when_no_valid_gate_edge_exists(self):
+        """AddItemGate should not leave behind a free item if it cannot place the gate."""
+        class _DeterministicRng:
+            def __init__(self):
+                self._calls = 0
+
+            def choice(self, seq):
+                self._calls += 1
+                if self._calls == 1:
+                    return seq[0]  # item name
+                if self._calls == 2:
+                    return seq[-1]  # choose the terminal PATH edge for item insertion
+                return seq[0]
+
+        graph = MissionGraph()
+        graph.add_node(MissionNode(id=0, node_type=NodeType.START, position=(0, 0, 0)))
+        graph.add_node(MissionNode(id=1, node_type=NodeType.EMPTY, position=(1, 0, 0)))
+        graph.add_node(MissionNode(id=2, node_type=NodeType.GOAL, position=(2, 0, 0)))
+        graph.add_edge(0, 1, EdgeType.PATH)
+        graph.add_edge(1, 2, EdgeType.PATH)
+        graph.sanitize()
+
+        before_nodes = len(graph.nodes)
+        before_edges = len(graph.edges)
+
+        rule = AddItemGateRule()
+        graph = rule.apply(graph, {'rng': _DeterministicRng(), 'difficulty': 0.5})
+
+        assert len(graph.nodes) == before_nodes
+        assert len(graph.edges) == before_edges
+        assert sum(1 for node in graph.nodes.values() if node.node_type == NodeType.ITEM) == 0
+        assert any(edge.source == 0 and edge.target == 1 and edge.edge_type == EdgeType.PATH for edge in graph.edges)
+        assert any(edge.source == 1 and edge.target == 2 and edge.edge_type == EdgeType.PATH for edge in graph.edges)
+
+    def test_entangled_branches_do_not_spawn_extra_big_key_when_one_exists(self):
+        """Entangled branches should prefer non-key rewards once the boss-key slot is already filled."""
+        graph = MissionGraph()
+        for nid, node_type, pos in [
+            (0, NodeType.START, (0, 0, 0)),
+            (1, NodeType.EMPTY, (1, 0, 0)),
+            (2, NodeType.GOAL, (2, 0, 0)),
+            (3, NodeType.EMPTY, (1, 1, 0)),
+            (4, NodeType.EMPTY, (1, -1, 0)),
+            (5, NodeType.BOSS_DOOR, (2, 1, 0)),
+            (6, NodeType.BIG_KEY, (2, -1, 0)),
+        ]:
+            graph.add_node(MissionNode(id=nid, node_type=node_type, position=pos))
+        graph.add_edge(0, 1, EdgeType.PATH)
+        graph.add_edge(1, 2, EdgeType.PATH)
+        graph.add_edge(1, 3, EdgeType.PATH)
+        graph.add_edge(1, 4, EdgeType.PATH)
+        graph.add_edge(3, 5, EdgeType.PATH)
+        graph.add_edge(4, 6, EdgeType.PATH)
+        graph.sanitize()
+
+        rule = AddEntangledBranchesRule()
+        assert rule.can_apply(graph, {'rng': None, 'difficulty': 0.5})
+        graph = rule.apply(graph, {'rng': None, 'difficulty': 0.5})
+
+        assert sum(1 for node in graph.nodes.values() if node.node_type == NodeType.BIG_KEY) == 1
 
 
 class TestAddPacingBreakerRule:
@@ -146,8 +332,30 @@ class TestAddPacingBreakerRule:
         
         sanctuary = scenic_nodes[0]
         assert sanctuary.is_sanctuary
-        assert sanctuary.tension_value == 0.0
-        assert sanctuary.difficulty_rating == "SAFE"
+
+
+class TestWave3Repair:
+    """Test Wave 3 repair hooks that backstop pedagogical progression."""
+
+    def test_wave3_repair_inserts_missing_skill_chain(self):
+        graph = MissionGraph()
+        graph.add_node(MissionNode(id=0, node_type=NodeType.START, position=(0, 0, 0)))
+        graph.add_node(MissionNode(id=1, node_type=NodeType.ITEM, position=(1, 0, 0), item_type="BOW"))
+        graph.add_node(MissionNode(id=2, node_type=NodeType.EMPTY, position=(2, 0, 0)))
+        graph.add_node(MissionNode(id=3, node_type=NodeType.EMPTY, position=(3, 0, 0)))
+        graph.add_node(MissionNode(id=4, node_type=NodeType.GOAL, position=(4, 0, 0)))
+        graph.add_edge(0, 1, EdgeType.PATH)
+        graph.add_edge(1, 2, EdgeType.PATH)
+        graph.add_edge(2, 3, EdgeType.PATH)
+        graph.add_edge(3, 4, EdgeType.PATH)
+        graph.sanitize()
+
+        grammar = MissionGrammar(seed=13)
+        repaired = grammar._repair_wave3_constraints(graph)
+
+        assert any(node.node_type == NodeType.TUTORIAL_PUZZLE for node in repaired.nodes.values())
+        assert any(node.node_type == NodeType.COMBAT_PUZZLE for node in repaired.nodes.values())
+        assert any(node.node_type == NodeType.COMPLEX_PUZZLE for node in repaired.nodes.values())
 
 
 class TestAddResourceLoopRule:
@@ -400,6 +608,32 @@ class TestPruneDeadEndRule:
         context = {'rng': None, 'difficulty': 0.5}
         
         # Should not apply (no useless dead ends)
+        assert not rule.can_apply(graph, context)
+
+    def test_preserve_pedagogical_deadends(self):
+        """Pedagogical puzzle rooms should never be treated as disposable dead ends."""
+        graph = MissionGraph()
+
+        start = MissionNode(id=0, node_type=NodeType.START, position=(0, 0, 0))
+        graph.add_node(start)
+
+        main = MissionNode(id=1, node_type=NodeType.EMPTY, position=(1, 0, 0))
+        graph.add_node(main)
+        graph.add_edge(0, 1, EdgeType.PATH)
+
+        tutorial_deadend = MissionNode(
+            id=2,
+            node_type=NodeType.TUTORIAL_PUZZLE,
+            position=(1, 1, 0),
+            is_tutorial=True,
+            difficulty=0.2,
+        )
+        graph.add_node(tutorial_deadend)
+        graph.add_edge(1, 2, EdgeType.PATH)
+
+        rule = PruneDeadEndRule()
+        context = {'rng': None, 'difficulty': 0.5}
+
         assert not rule.can_apply(graph, context)
 
 

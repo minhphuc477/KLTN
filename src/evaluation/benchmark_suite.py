@@ -489,10 +489,12 @@ def _progression_semantics_summary(mission_graph: Optional[Any]) -> Dict[str, fl
         switch_providers: Dict[int, List[int]] = defaultdict(list)
 
         for node in mission_graph.nodes.values():
-            if node.node_type in {NodeType.KEY, NodeType.BIG_KEY}:
+            if node.node_type == NodeType.KEY:
                 fungible_key_nodes.append(int(node.id))
                 if node.key_id is not None:
                     key_providers[int(node.key_id)].append(int(node.id))
+            elif node.node_type == NodeType.BIG_KEY and node.key_id is not None:
+                key_providers[int(node.key_id)].append(int(node.id))
             if node.node_type == NodeType.SWITCH:
                 switch_providers[int(node.id)].append(int(node.id))
                 if node.switch_id is not None:

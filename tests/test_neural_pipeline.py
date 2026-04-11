@@ -423,7 +423,8 @@ def test_prepare_dungeon_generation_uses_pipeline_topology_defaults(monkeypatch)
         def __init__(self, **kwargs):
             captured.update(kwargs)
 
-        def evolve(self):
+        def evolve(self, directed_output=False):
+            captured["directed_output"] = bool(directed_output)
             graph = nx.DiGraph()
             graph.add_nodes_from([0, 1])
             graph.add_edge(0, 1)
@@ -478,7 +479,9 @@ def test_prepare_dungeon_generation_uses_pipeline_topology_defaults(monkeypatch)
     assert captured["enable_rule_credit_assignment"] is True
     assert captured["enforce_generation_constraints"] is True
     assert captured["allow_candidate_repairs"] is True
+    assert captured["directed_output"] is True
     assert prepared.mission_graph.number_of_nodes() == 2
+    assert prepared.mission_graph.is_directed()
 
 
 def test_generate_rooms_for_graph_partial_api(monkeypatch, pipeline, simple_graph):

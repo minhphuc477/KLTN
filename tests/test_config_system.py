@@ -5,10 +5,12 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import torch
 import yaml
 
 import main
 import src.train as legacy_train
+from src.core.vqvae import create_vqvae
 from src.config_system import (
     cli_overrides_from_namespace,
     find_resolved_config_path,
@@ -21,6 +23,8 @@ from src.pipeline import (
     topology_generation_kwargs_from_resolved_config,
 )
 from src.train_diffusion import (
+    DiffusionTrainer,
+    DiffusionTrainingConfig,
     _resolve_vqvae_architecture,
     build_diffusion_training_config_from_args,
     diffusion_training_kwargs_from_resolved_config,
@@ -148,8 +152,15 @@ def test_default_config_uses_small_data_recommended_room_model_profile():
     assert resolved["runtime"]["checkpoint_storage_cleanup_target_fraction"] == pytest.approx(0.6)
     assert resolved["dataset"]["topology_supervision_mode"] == "runtime_aligned"
     assert resolved["vqvae"]["keep_last"] == 2
+    assert resolved["vqvae"]["validation_fraction"] == pytest.approx(0.1)
+    assert resolved["vqvae"]["validation_max_batches"] == 16
+    assert resolved["vqvae"]["best_checkpoint_metric"] == "val_loss"
     assert resolved["diffusion"]["keep_last"] == 2
     assert resolved["fast_sampler"]["keep_last"] == 2
+    assert resolved["fast_sampler"]["decode_alignment_weight"] == pytest.approx(0.25)
+    assert resolved["fast_sampler"]["validation_fraction"] == pytest.approx(0.1)
+    assert resolved["fast_sampler"]["validation_max_batches"] == 16
+    assert resolved["fast_sampler"]["best_checkpoint_metric"] == "val_decode_ce_loss"
     assert resolved["masked_room"]["keep_last"] == 2
     assert resolved["diffusion"]["model_channels"] == 96
     assert resolved["diffusion"]["condition_hidden_dim"] == 192
@@ -173,6 +184,9 @@ def test_default_config_uses_small_data_recommended_room_model_profile():
     assert resolved["generation"]["num_diffusion_steps"] == 50
     assert resolved["generation"]["apply_repair"] is True
     assert resolved["generation"]["enable_map_elites"] is False
+    assert resolved["generation"]["symbolic_max_repair_attempts"] == 5
+    assert resolved["generation"]["symbolic_repair_margin"] == 2
+    assert resolved["generation"]["symbolic_adjacency_threshold"] == pytest.approx(0.01)
     assert resolved["generation"]["semantic_role_prior_strength"] == pytest.approx(0.15)
     assert resolved["generation"]["semantic_anchor_threshold"] == pytest.approx(0.5)
     assert resolved["generation"]["semantic_puzzle_offset"] == 2
@@ -185,6 +199,12 @@ def test_default_config_uses_small_data_recommended_room_model_profile():
     assert resolved["generation"]["puzzle_room_branch_density"] == pytest.approx(0.75)
     assert resolved["generation"]["puzzle_room_block_budget"] == 28
     assert resolved["generation"]["puzzle_room_preserve_route_margin"] == 0
+    assert resolved["generation"]["puzzle_room_switch_pocket_depth"] == 3
+    assert resolved["generation"]["puzzle_room_resource_bypass_offset"] == 2
+    assert resolved["generation"]["puzzle_room_key_pocket_depth"] == 3
+    assert resolved["generation"]["puzzle_room_item_slot_depth"] == 3
+    assert resolved["generation"]["puzzle_room_toggle_corridor_offset"] == 2
+    assert resolved["generation"]["validator_plan_max_states"] == 512
     assert resolved["generation"]["deterministic_graph_marker_overlay_enabled"] is True
     assert resolved["generation"]["fast_sampler_teacher_fallback_enabled"] is True
     assert resolved["generation"]["masked_room_teacher_fallback_enabled"] is True
@@ -205,6 +225,9 @@ def test_canonical_yaml_uses_downsized_masked_room_profile():
     assert resolved["masked_room"]["max_mask_ratio"] == pytest.approx(0.85)
     assert resolved["generation"]["guidance_scale"] == pytest.approx(3.0)
     assert resolved["generation"]["logic_guidance_scale"] == pytest.approx(0.0)
+    assert resolved["generation"]["symbolic_max_repair_attempts"] == 5
+    assert resolved["generation"]["symbolic_repair_margin"] == 2
+    assert resolved["generation"]["symbolic_adjacency_threshold"] == pytest.approx(0.01)
     assert resolved["generation"]["semantic_role_prior_strength"] == pytest.approx(0.15)
     assert resolved["generation"]["semantic_anchor_threshold"] == pytest.approx(0.5)
     assert resolved["generation"]["semantic_puzzle_offset"] == 2
@@ -217,6 +240,12 @@ def test_canonical_yaml_uses_downsized_masked_room_profile():
     assert resolved["generation"]["puzzle_room_branch_density"] == pytest.approx(0.75)
     assert resolved["generation"]["puzzle_room_block_budget"] == 28
     assert resolved["generation"]["puzzle_room_preserve_route_margin"] == 0
+    assert resolved["generation"]["puzzle_room_switch_pocket_depth"] == 3
+    assert resolved["generation"]["puzzle_room_resource_bypass_offset"] == 2
+    assert resolved["generation"]["puzzle_room_key_pocket_depth"] == 3
+    assert resolved["generation"]["puzzle_room_item_slot_depth"] == 3
+    assert resolved["generation"]["puzzle_room_toggle_corridor_offset"] == 2
+    assert resolved["generation"]["validator_plan_max_states"] == 512
     assert resolved["generation"]["deterministic_graph_marker_overlay_enabled"] is True
     assert resolved["generation"]["fast_sampler_teacher_fallback_enabled"] is True
     assert resolved["generation"]["masked_room_teacher_fallback_enabled"] is True
@@ -238,11 +267,18 @@ def test_stage_helpers_forward_checkpoint_retention_and_resume_defaults():
     assert fast_sampler_kwargs["auto_resume"] is True
     assert fast_sampler_kwargs["resume_checkpoint"] is None
     assert fast_sampler_kwargs["checkpoint_storage_budget_gb"] is None
+    assert fast_sampler_kwargs["decode_alignment_weight"] == pytest.approx(0.25)
+    assert fast_sampler_kwargs["validation_fraction"] == pytest.approx(0.1)
+    assert fast_sampler_kwargs["validation_max_batches"] == 16
+    assert fast_sampler_kwargs["best_checkpoint_metric"] == "val_decode_ce_loss"
     assert masked_room_kwargs["keep_last"] == 2
     assert masked_room_kwargs["auto_resume"] is True
     assert masked_room_kwargs["resume_checkpoint"] is None
     assert masked_room_kwargs["checkpoint_storage_budget_gb"] is None
     assert vqvae_kwargs["keep_last"] == 2
+    assert vqvae_kwargs["validation_fraction"] == pytest.approx(0.1)
+    assert vqvae_kwargs["validation_max_batches"] == 16
+    assert vqvae_kwargs["best_checkpoint_metric"] == "val_loss"
     assert vqvae_kwargs["auto_resume"] is True
     assert vqvae_kwargs["checkpoint_storage_budget_gb"] is None
     assert vqvae_kwargs["resume"] is None
@@ -258,6 +294,9 @@ def test_stage_helpers_forward_checkpoint_retention_and_resume_defaults():
     assert generation_kwargs["default_guidance_scale"] == pytest.approx(3.0)
     assert generation_kwargs["default_logic_guidance_scale"] == pytest.approx(0.0)
     assert generation_kwargs["default_num_diffusion_steps"] == 50
+    assert generation_kwargs["symbolic_max_repair_attempts"] == 5
+    assert generation_kwargs["symbolic_repair_margin"] == 2
+    assert generation_kwargs["symbolic_adjacency_threshold"] == pytest.approx(0.01)
     assert generation_kwargs["default_start_goal_coords"] == ((1, 5), (14, 5))
     assert generation_kwargs["default_semantic_role_prior_strength"] == pytest.approx(0.15)
     assert generation_kwargs["default_semantic_anchor_threshold"] == pytest.approx(0.5)
@@ -271,6 +310,12 @@ def test_stage_helpers_forward_checkpoint_retention_and_resume_defaults():
     assert generation_kwargs["default_puzzle_room_branch_density"] == pytest.approx(0.75)
     assert generation_kwargs["default_puzzle_room_block_budget"] == 28
     assert generation_kwargs["default_puzzle_room_preserve_route_margin"] == 0
+    assert generation_kwargs["default_puzzle_room_switch_pocket_depth"] == 3
+    assert generation_kwargs["default_puzzle_room_resource_bypass_offset"] == 2
+    assert generation_kwargs["default_puzzle_room_key_pocket_depth"] == 3
+    assert generation_kwargs["default_puzzle_room_item_slot_depth"] == 3
+    assert generation_kwargs["default_puzzle_room_toggle_corridor_offset"] == 2
+    assert generation_kwargs["default_validator_plan_max_states"] == 512
     assert generation_kwargs["default_deterministic_graph_marker_overlay_enabled"] is True
     assert generation_kwargs["default_fast_sampler_teacher_fallback_enabled"] is True
     assert generation_kwargs["default_masked_room_teacher_fallback_enabled"] is True
@@ -291,6 +336,9 @@ def test_generation_runtime_kwargs_remain_backward_compatible_when_newer_generat
     generation = resolved["generation"]
     for key in (
         "semantic_role_prior_strength",
+        "symbolic_max_repair_attempts",
+        "symbolic_repair_margin",
+        "symbolic_adjacency_threshold",
         "semantic_anchor_threshold",
         "semantic_puzzle_offset",
         "semantic_constrained_decoding_enabled",
@@ -302,6 +350,12 @@ def test_generation_runtime_kwargs_remain_backward_compatible_when_newer_generat
         "puzzle_room_branch_density",
         "puzzle_room_block_budget",
         "puzzle_room_preserve_route_margin",
+        "puzzle_room_switch_pocket_depth",
+        "puzzle_room_resource_bypass_offset",
+        "puzzle_room_key_pocket_depth",
+        "puzzle_room_item_slot_depth",
+        "puzzle_room_toggle_corridor_offset",
+        "validator_plan_max_states",
         "deterministic_graph_marker_overlay_enabled",
         "fast_sampler_teacher_fallback_enabled",
         "masked_room_teacher_fallback_enabled",
@@ -312,6 +366,9 @@ def test_generation_runtime_kwargs_remain_backward_compatible_when_newer_generat
     pipeline_kwargs = pipeline_kwargs_from_resolved_config(resolved)
 
     assert generation_kwargs["default_semantic_role_prior_strength"] == pytest.approx(0.15)
+    assert generation_kwargs["symbolic_max_repair_attempts"] == 5
+    assert generation_kwargs["symbolic_repair_margin"] == 2
+    assert generation_kwargs["symbolic_adjacency_threshold"] == pytest.approx(0.01)
     assert generation_kwargs["default_semantic_anchor_threshold"] == pytest.approx(0.5)
     assert generation_kwargs["default_semantic_puzzle_offset"] == 2
     assert generation_kwargs["default_semantic_constrained_decoding_enabled"] is True
@@ -323,10 +380,19 @@ def test_generation_runtime_kwargs_remain_backward_compatible_when_newer_generat
     assert generation_kwargs["default_puzzle_room_branch_density"] == pytest.approx(0.75)
     assert generation_kwargs["default_puzzle_room_block_budget"] == 28
     assert generation_kwargs["default_puzzle_room_preserve_route_margin"] == 0
+    assert generation_kwargs["default_puzzle_room_switch_pocket_depth"] == 3
+    assert generation_kwargs["default_puzzle_room_resource_bypass_offset"] == 2
+    assert generation_kwargs["default_puzzle_room_key_pocket_depth"] == 3
+    assert generation_kwargs["default_puzzle_room_item_slot_depth"] == 3
+    assert generation_kwargs["default_puzzle_room_toggle_corridor_offset"] == 2
+    assert generation_kwargs["default_validator_plan_max_states"] == 512
     assert generation_kwargs["default_deterministic_graph_marker_overlay_enabled"] is True
     assert generation_kwargs["default_fast_sampler_teacher_fallback_enabled"] is True
     assert generation_kwargs["default_masked_room_teacher_fallback_enabled"] is True
     assert pipeline_kwargs["default_semantic_role_prior_strength"] == pytest.approx(0.15)
+    assert pipeline_kwargs["symbolic_max_repair_attempts"] == 5
+    assert pipeline_kwargs["symbolic_repair_margin"] == 2
+    assert pipeline_kwargs["symbolic_adjacency_threshold"] == pytest.approx(0.01)
     assert pipeline_kwargs["default_semantic_anchor_threshold"] == pytest.approx(0.5)
     assert pipeline_kwargs["default_semantic_puzzle_offset"] == 2
     assert pipeline_kwargs["default_semantic_constrained_decoding_enabled"] is True
@@ -338,6 +404,12 @@ def test_generation_runtime_kwargs_remain_backward_compatible_when_newer_generat
     assert pipeline_kwargs["default_puzzle_room_branch_density"] == pytest.approx(0.75)
     assert pipeline_kwargs["default_puzzle_room_block_budget"] == 28
     assert pipeline_kwargs["default_puzzle_room_preserve_route_margin"] == 0
+    assert pipeline_kwargs["default_puzzle_room_switch_pocket_depth"] == 3
+    assert pipeline_kwargs["default_puzzle_room_resource_bypass_offset"] == 2
+    assert pipeline_kwargs["default_puzzle_room_key_pocket_depth"] == 3
+    assert pipeline_kwargs["default_puzzle_room_item_slot_depth"] == 3
+    assert pipeline_kwargs["default_puzzle_room_toggle_corridor_offset"] == 2
+    assert pipeline_kwargs["default_validator_plan_max_states"] == 512
     assert pipeline_kwargs["default_deterministic_graph_marker_overlay_enabled"] is True
     assert pipeline_kwargs["default_fast_sampler_teacher_fallback_enabled"] is True
     assert pipeline_kwargs["default_masked_room_teacher_fallback_enabled"] is True
@@ -355,6 +427,12 @@ def test_root_parser_accepts_topology_comparison_subcommands(tmp_path: Path):
             str(tmp_path / "compare_out"),
             "--semantic-role-prior-strength",
             "0.25",
+            "--symbolic-max-repair-attempts",
+            "7",
+            "--symbolic-repair-margin",
+            "3",
+            "--symbolic-adjacency-threshold",
+            "0.02",
             "--semantic-puzzle-offset",
             "3",
             "--no-semantic-constrained-decoding-enabled",
@@ -373,6 +451,18 @@ def test_root_parser_accepts_topology_comparison_subcommands(tmp_path: Path):
             "18",
             "--puzzle-room-preserve-route-margin",
             "2",
+            "--puzzle-room-switch-pocket-depth",
+            "4",
+            "--puzzle-room-resource-bypass-offset",
+            "3",
+            "--puzzle-room-key-pocket-depth",
+            "5",
+            "--puzzle-room-item-slot-depth",
+            "4",
+            "--puzzle-room-toggle-corridor-offset",
+            "3",
+            "--validator-plan-max-states",
+            "384",
             "--no-deterministic-graph-marker-overlay-enabled",
             "--no-fast-sampler-teacher-fallback-enabled",
             "--no-masked-room-teacher-fallback-enabled",
@@ -396,6 +486,9 @@ def test_root_parser_accepts_topology_comparison_subcommands(tmp_path: Path):
     assert fixed_args.command == "topology-audit-fixed-graph"
     assert fixed_args.seeds == [1, 2]
     assert compare_args.semantic_role_prior_strength == pytest.approx(0.25)
+    assert compare_args.symbolic_max_repair_attempts == 7
+    assert compare_args.symbolic_repair_margin == 3
+    assert compare_args.symbolic_adjacency_threshold == pytest.approx(0.02)
     assert compare_args.semantic_puzzle_offset == 3
     assert compare_args.semantic_constrained_decoding_enabled is False
     assert compare_args.semantic_marker_logit_bias == pytest.approx(9.5)
@@ -406,6 +499,12 @@ def test_root_parser_accepts_topology_comparison_subcommands(tmp_path: Path):
     assert compare_args.puzzle_room_branch_density == pytest.approx(0.5)
     assert compare_args.puzzle_room_block_budget == 18
     assert compare_args.puzzle_room_preserve_route_margin == 2
+    assert compare_args.puzzle_room_switch_pocket_depth == 4
+    assert compare_args.puzzle_room_resource_bypass_offset == 3
+    assert compare_args.puzzle_room_key_pocket_depth == 5
+    assert compare_args.puzzle_room_item_slot_depth == 4
+    assert compare_args.puzzle_room_toggle_corridor_offset == 3
+    assert compare_args.validator_plan_max_states == 384
     assert compare_args.deterministic_graph_marker_overlay_enabled is False
     assert compare_args.fast_sampler_teacher_fallback_enabled is False
     assert compare_args.masked_room_teacher_fallback_enabled is False
@@ -667,6 +766,50 @@ def test_diffusion_vqvae_architecture_resolves_from_checkpoint_metadata(tmp_path
     assert resolved["mrf_penalty_weight"] == pytest.approx(0.125)
 
 
+def test_diffusion_trainer_updates_config_to_loaded_vqvae_architecture(tmp_path: Path):
+    ckpt = tmp_path / "vqvae_pretrained.pth"
+    model = create_vqvae(
+        num_classes=44,
+        latent_dim=64,
+        hidden_dim=96,
+        codebook_size=512,
+        use_coordconv=True,
+        mrf_penalty_weight=0.05,
+    )
+    torch.save({"model_state_dict": model.state_dict()}, ckpt)
+    meta = {
+        "format_version": "1.0",
+        "model_type": "vqvae",
+        "architecture": {
+            "num_classes": 44,
+            "latent_dim": 64,
+            "hidden_dim": 96,
+            "codebook_size": 512,
+            "use_coordconv": True,
+            "mrf_penalty_weight": 0.05,
+        },
+    }
+    ckpt.with_suffix(".pth.meta.json").write_text(json.dumps(meta), encoding="utf-8")
+
+    trainer = object.__new__(DiffusionTrainer)
+    trainer.config = DiffusionTrainingConfig(
+        vqvae_checkpoint=str(ckpt),
+        num_classes=44,
+        latent_dim=64,
+        vqvae_hidden_dim=96,
+        vqvae_codebook_size=256,
+        vqvae_use_coordconv=False,
+        vqvae_mrf_penalty_weight=0.125,
+    )
+
+    vqvae = trainer._create_vqvae()
+
+    assert vqvae.codebook_size == 512
+    assert trainer.config.vqvae_codebook_size == 512
+    assert trainer.config.vqvae_use_coordconv is True
+    assert trainer.config.vqvae_mrf_penalty_weight == pytest.approx(0.05)
+
+
 def test_build_diffusion_training_config_from_args_preserves_yaml_only_methodology_knobs(tmp_path: Path):
     cfg_path = tmp_path / "config.yaml"
     _write_yaml(
@@ -925,6 +1068,10 @@ def test_fast_sampler_stage_inherits_shared_yaml_runtime_and_dataset_settings(tm
                 "num_inference_steps": 6,
                 "lora_rank": 4,
                 "lora_alpha": 12.0,
+                "decode_alignment_weight": 0.4,
+                "validation_fraction": 0.2,
+                "validation_max_batches": 5,
+                "best_checkpoint_metric": "val_decode_ce_loss",
             },
         },
     )
@@ -939,6 +1086,10 @@ def test_fast_sampler_stage_inherits_shared_yaml_runtime_and_dataset_settings(tm
     assert kwargs["num_inference_steps"] == 6
     assert kwargs["lora_rank"] == 4
     assert kwargs["lora_alpha"] == pytest.approx(12.0)
+    assert kwargs["decode_alignment_weight"] == pytest.approx(0.4)
+    assert kwargs["validation_fraction"] == pytest.approx(0.2)
+    assert kwargs["validation_max_batches"] == 5
+    assert kwargs["best_checkpoint_metric"] == "val_decode_ce_loss"
     assert kwargs["device"] == "cpu"
     assert kwargs["seed"] == 321
     assert kwargs["use_vglc"] is False
@@ -952,6 +1103,10 @@ def test_fast_sampler_stage_inherits_shared_yaml_runtime_and_dataset_settings(tm
     assert args.num_inference_steps == 6
     assert args.lora_rank == 4
     assert args.lora_alpha == pytest.approx(12.0)
+    assert args.decode_alignment_weight == pytest.approx(0.4)
+    assert args.validation_fraction == pytest.approx(0.2)
+    assert args.validation_max_batches == 5
+    assert args.best_checkpoint_metric == "val_decode_ce_loss"
     assert args.device == "cpu"
     assert args.seed == 321
     assert args.use_vglc is False
@@ -1006,6 +1161,9 @@ def test_vqvae_stage_inherits_shared_yaml_runtime_and_dataset_settings(tmp_path:
     assert kwargs["hidden_dim"] == 160
     assert kwargs["use_coordconv"] is False
     assert kwargs["mrf_penalty_weight"] == pytest.approx(0.2)
+    assert kwargs["validation_fraction"] == pytest.approx(0.1)
+    assert kwargs["validation_max_batches"] == 16
+    assert kwargs["best_checkpoint_metric"] == "val_loss"
     assert kwargs["device"] == "cpu"
     assert kwargs["seed"] == 123
     assert kwargs["verbose"] is True
@@ -1022,6 +1180,9 @@ def test_vqvae_stage_inherits_shared_yaml_runtime_and_dataset_settings(tmp_path:
     assert args.hidden_dim == 160
     assert args.use_coordconv is False
     assert args.mrf_penalty_weight == pytest.approx(0.2)
+    assert args.validation_fraction == pytest.approx(0.1)
+    assert args.validation_max_batches == 16
+    assert args.best_checkpoint_metric == "val_loss"
     assert args.device == "cpu"
     assert args.seed == 123
     assert args.verbose is True

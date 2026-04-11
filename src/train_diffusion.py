@@ -825,6 +825,10 @@ class DiffusionTrainer:
             use_coordconv=self.config.vqvae_use_coordconv,
             mrf_penalty_weight=self.config.vqvae_mrf_penalty_weight,
         )
+        self.config.vqvae_hidden_dim = int(vqvae_arch["hidden_dim"])
+        self.config.vqvae_codebook_size = int(vqvae_arch["codebook_size"])
+        self.config.vqvae_use_coordconv = bool(vqvae_arch["use_coordconv"])
+        self.config.vqvae_mrf_penalty_weight = float(vqvae_arch["mrf_penalty_weight"])
         vqvae = create_vqvae(
             num_classes=vqvae_arch["num_classes"],
             latent_dim=vqvae_arch["latent_dim"],

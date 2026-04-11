@@ -420,6 +420,54 @@ class TestBossGoalValidation:
         if not is_valid:
             assert any('boss' in err.lower() for err in errors)
 
+    def test_export_style_goal_gauntlet_with_type_attrs_passes(self):
+        """Generated graphs export uppercase `type` attrs; validator should still read them correctly."""
+        G = nx.DiGraph()
+        G.add_node(1, label='START', type='START')
+        G.add_node(2, label='BIG_KEY', type='BIG_KEY', key_id=7)
+        G.add_node(3, label='BOSS_DOOR', type='BOSS_DOOR', key_id=7)
+        G.add_node(4, label='BOSS', type='BOSS')
+        G.add_node(5, label='GOAL', type='GOAL', is_triforce=True)
+        G.add_edge(1, 2, edge_type='PATH', label='path')
+        G.add_edge(1, 3, edge_type='BOSS_LOCKED', label='boss_locked')
+        G.add_edge(3, 4, edge_type='PATH', label='path')
+        G.add_edge(4, 5, edge_type='PATH', label='path')
+
+        is_valid, errors = validate_goal_subgraph(G)
+        assert is_valid, f"Should be valid, errors: {errors}"
+
+    def test_boss_door_cycle_fails_strict_goal_gauntlet_validation(self):
+        """Malformed boss-door cycles should fail export-side validation too."""
+        G = nx.DiGraph()
+        G.add_node(1, label='BIG_KEY', type='BIG_KEY', key_id=3)
+        G.add_node(2, label='BOSS', type='BOSS')
+        G.add_node(3, label='BOSS_DOOR', type='BOSS_DOOR', key_id=3)
+        G.add_node(4, label='GOAL', type='GOAL', is_triforce=True)
+        G.add_edge(3, 2, edge_type='PATH', label='path')
+        G.add_edge(2, 3, edge_type='PATH', label='path')
+        G.add_edge(2, 4, edge_type='PATH', label='path')
+
+        is_valid, errors = validate_goal_subgraph(G)
+        assert not is_valid
+        assert any('boss door' in err.lower() or 'predecessor' in err.lower() for err in errors)
+
+    def test_boss_door_without_matching_big_key_fails(self):
+        """Boss-door gauntlets should require a matching BIG_KEY provider."""
+        G = nx.DiGraph()
+        G.add_node(1, label='START', type='START')
+        G.add_node(2, label='BIG_KEY', type='BIG_KEY', key_id=4)
+        G.add_node(3, label='BOSS_DOOR', type='BOSS_DOOR', key_id=9)
+        G.add_node(4, label='BOSS', type='BOSS')
+        G.add_node(5, label='GOAL', type='GOAL', is_triforce=True)
+        G.add_edge(1, 2, edge_type='PATH', label='path')
+        G.add_edge(1, 3, edge_type='BOSS_LOCKED', label='boss_locked')
+        G.add_edge(3, 4, edge_type='PATH', label='path')
+        G.add_edge(4, 5, edge_type='PATH', label='path')
+
+        is_valid, errors = validate_goal_subgraph(G)
+        assert not is_valid
+        assert any('big_key' in err.lower() or 'boss_key' in err.lower() for err in errors)
+
 
 # ============================================================================
 # GRAPH TOPOLOGY VALIDATION TESTS

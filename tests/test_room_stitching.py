@@ -1,8 +1,14 @@
+import networkx as nx
 import numpy as np
 
 from src.core.definitions import ROOM_HEIGHT, ROOM_WIDTH, SEMANTIC_PALETTE
 from src.pipeline.spatial_utils import carve_room_connection
-from src.pipeline.room_stitching import build_room_canvas_from_slots, carve_room_connection_between_bboxes
+from src.pipeline.room_stitching import (
+    build_room_canvas_from_slots,
+    carve_room_connection_between_bboxes,
+    compute_layout_quality_metrics,
+    compute_graph_aware_room_slots,
+)
 from src.data_processing.visual_integration import make_stitched_for_single_room
 from src.zelda_data.stitching.connectivity import connect_doors
 from src.zelda_data.stitching.stitch_orchestration import (
@@ -167,3 +173,106 @@ def test_non_adjacent_bbox_connector_walls_off_relaxed_corridor():
 
     assert len(corridor_floor) > 0
     assert len(corridor_walls) > 0
+
+
+def test_compute_graph_aware_room_slots_handles_duplicate_preferred_positions():
+    graph = nx.Graph()
+    graph.add_node(0, position=(0, 0, 0))
+    graph.add_node(1, position=(1, 0, 0))
+    graph.add_node(2, position=(1, 1, 0))
+    # Different floor, same row/col preference once z is ignored.
+    graph.add_node(3, position=(1, 1, 1))
+    graph.add_edges_from(((0, 1), (1, 2), (1, 3)))
+
+    slot_positions = compute_graph_aware_room_slots(graph, [0, 1, 2, 3])
+
+    assert len(set(slot_positions.values())) == 4
+    for src, dst in graph.edges():
+        src_pos = slot_positions[src]
+        dst_pos = slot_positions[dst]
+        assert abs(src_pos[0] - dst_pos[0]) + abs(src_pos[1] - dst_pos[1]) == 1
+
+    metrics = compute_layout_quality_metrics(graph, slot_positions)
+    assert metrics["graph_edge_slot_adjacency_rate"] == 1.0
+    assert metrics["graph_edge_slot_mean_distance"] == 1.0
+    assert metrics["graph_preferred_position_duplicate_rate"] is not None
+    assert metrics["graph_preferred_position_duplicate_rate"] > 0.0
+
+
+def test_compute_graph_aware_room_slots_uses_tree_fallback_for_cyclic_progression_graph():
+    graph = nx.Graph()
+    positions = {
+        0: (0, 0, 0),
+        1: (5, 5, 0),
+        2: (2, 2, 0),
+        3: (2, 2, 0),
+        4: (2, 2, 1),
+        5: (4, 2, 1),
+        6: (2, 2, 1),
+        7: (2, 2, 1),
+        8: (3, 5, 0),
+        9: (4, 5, 0),
+        10: (2, 3, 1),
+    }
+    labels = {
+        0: "START",
+        1: "GOAL",
+        2: "COMBAT_PUZZLE",
+        3: "COMPLEX_PUZZLE",
+        4: "STAIRS_UP",
+        5: "TUTORIAL_PUZZLE",
+        6: "ITEM",
+        7: "EMPTY",
+        8: "BOSS_DOOR",
+        9: "BOSS",
+        10: "BIG_KEY",
+    }
+    for node_id, pos in positions.items():
+        graph.add_node(node_id, position=pos, label=labels[node_id], type=labels[node_id])
+    graph.add_edges_from(
+        (
+            (0, 2),
+            (0, 5),
+            (2, 3),
+            (2, 8),
+            (3, 4),
+            (3, 5),
+            (4, 7),
+            (5, 6),
+            (6, 7),
+            (7, 10),
+            (8, 9),
+            (9, 1),
+        )
+    )
+
+    slot_positions = compute_graph_aware_room_slots(graph, sorted(graph.nodes()))
+
+    assert abs(slot_positions[0][0] - slot_positions[2][0]) + abs(slot_positions[0][1] - slot_positions[2][1]) == 1
+    assert abs(slot_positions[0][0] - slot_positions[5][0]) + abs(slot_positions[0][1] - slot_positions[5][1]) == 1
+    assert len({col for _, col in slot_positions.values()}) >= 3
+
+
+def test_layout_quality_metrics_do_not_rely_on_exact_graph_slot_matches_for_noisy_coordinates():
+    graph = nx.Graph()
+    graph.add_node(0, position=(0, 0, 0), label="START", type="START")
+    graph.add_node(1, position=(4, 4, 0), label="ITEM", type="ITEM")
+    graph.add_node(2, position=(4, 4, 0), label="COMBAT_PUZZLE", type="COMBAT_PUZZLE")
+    graph.add_node(3, position=(5, 5, 0), label="GOAL", type="GOAL")
+    graph.add_edges_from(((0, 1), (1, 2), (2, 3)))
+
+    slot_positions = {
+        0: (0, 0),
+        1: (0, 1),
+        2: (1, 1),
+        3: (1, 2),
+    }
+
+    metrics = compute_layout_quality_metrics(graph, slot_positions)
+
+    assert metrics["graph_slot_match_rate"] is not None
+    assert metrics["graph_slot_match_rate"] < 1.0
+    assert metrics["graph_edge_slot_adjacency_rate"] == 1.0
+    assert metrics["graph_edge_slot_mean_excess_distance"] == 0.0
+    assert metrics["graph_preferred_position_duplicate_rate"] is not None
+    assert metrics["graph_preferred_position_duplicate_rate"] > 0.0

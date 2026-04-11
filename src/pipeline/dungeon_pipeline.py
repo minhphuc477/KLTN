@@ -116,6 +116,7 @@ from src.pipeline.room_stitching import (
     solve_component_strict_adjacency,
 )
 from src.pipeline.room_topology_conditioning import (
+    DEFAULT_VALIDATOR_PLAN_MAX_STATES,
     DEFAULT_SEMANTIC_PUZZLE_OFFSET,
     DEFAULT_SEMANTIC_ROLE_PRIOR_STRENGTH,
     ROOM_TOPOLOGY_CHANNEL_COUNT,
@@ -342,6 +343,12 @@ class NeuralSymbolicDungeonPipeline:
         default_puzzle_room_branch_density: float = 0.75,
         default_puzzle_room_block_budget: int = 28,
         default_puzzle_room_preserve_route_margin: int = 0,
+        default_puzzle_room_switch_pocket_depth: int = 3,
+        default_puzzle_room_resource_bypass_offset: int = 2,
+        default_puzzle_room_key_pocket_depth: int = 3,
+        default_puzzle_room_item_slot_depth: int = 3,
+        default_puzzle_room_toggle_corridor_offset: int = 2,
+        default_validator_plan_max_states: int = DEFAULT_VALIDATOR_PLAN_MAX_STATES,
         default_deterministic_graph_marker_overlay_enabled: bool = True,
         default_fast_sampler_teacher_fallback_enabled: bool = True,
         default_masked_room_teacher_fallback_enabled: bool = True,
@@ -445,6 +452,22 @@ class NeuralSymbolicDungeonPipeline:
         self.default_puzzle_room_preserve_route_margin = int(
             max(0, min(4, int(default_puzzle_room_preserve_route_margin)))
         )
+        self.default_puzzle_room_switch_pocket_depth = int(
+            max(1, min(6, int(default_puzzle_room_switch_pocket_depth)))
+        )
+        self.default_puzzle_room_resource_bypass_offset = int(
+            max(1, min(5, int(default_puzzle_room_resource_bypass_offset)))
+        )
+        self.default_puzzle_room_key_pocket_depth = int(
+            max(1, min(6, int(default_puzzle_room_key_pocket_depth)))
+        )
+        self.default_puzzle_room_item_slot_depth = int(
+            max(1, min(6, int(default_puzzle_room_item_slot_depth)))
+        )
+        self.default_puzzle_room_toggle_corridor_offset = int(
+            max(1, min(5, int(default_puzzle_room_toggle_corridor_offset)))
+        )
+        self.default_validator_plan_max_states = int(max(32, int(default_validator_plan_max_states)))
         self.default_deterministic_graph_marker_overlay_enabled = bool(
             default_deterministic_graph_marker_overlay_enabled
         )
@@ -1839,6 +1862,252 @@ class NeuralSymbolicDungeonPipeline:
             out[:, :-1] |= prev[:, 1:]
         return out
 
+    @staticmethod
+    def _paint_room_line_mask(
+        canvas: np.ndarray,
+        start: Tuple[int, int],
+        end: Tuple[int, int],
+        *,
+        value: bool = True,
+    ) -> None:
+        """Paint a Manhattan polyline between two room-local points."""
+        r0, c0 = int(start[0]), int(start[1])
+        r1, c1 = int(end[0]), int(end[1])
+        r, c = r0, c0
+        while r != r1:
+            canvas[r, c] = bool(value)
+            r += 1 if r1 > r else -1
+        while c != c1:
+            canvas[r, c] = bool(value)
+            c += 1 if c1 > c else -1
+        canvas[r1, c1] = bool(value)
+
+    def _build_puzzle_room_route_template(
+        self,
+        *,
+        archetype: str,
+        gate_family: str,
+        stateful_anchor: Optional[Tuple[int, int]],
+        flow_is_horizontal: bool,
+        source_anchor: Tuple[int, int],
+        destination_anchor: Tuple[int, int],
+        puzzle_anchor: Tuple[int, int],
+        role_flags: Dict[str, bool],
+        semantics: Dict[str, Any],
+    ) -> np.ndarray:
+        """
+        Build an archetype-specific route skeleton for constructive puzzle rooms.
+
+        The default semantic room trace is intentionally permissive; it keeps
+        traversal valid, but it does not impose much puzzle readability. For
+        puzzle rooms we instead reserve a more explicit route skeleton first,
+        then place obstacles around it. This yields rooms that read like
+        gates/hubs/serpentines instead of random block bars.
+        """
+        mask = np.zeros((ROOM_HEIGHT, ROOM_WIDTH), dtype=bool)
+        source = self._clamp_room_coord(source_anchor)
+        destination = self._clamp_room_coord(destination_anchor)
+        puzzle = self._clamp_room_coord(puzzle_anchor)
+        stateful = self._clamp_room_coord(stateful_anchor) if stateful_anchor is not None else puzzle
+        center = (ROOM_HEIGHT // 2, ROOM_WIDTH // 2)
+        switch_depth = int(max(1, getattr(self, "default_puzzle_room_switch_pocket_depth", 3)))
+        resource_offset = int(max(1, getattr(self, "default_puzzle_room_resource_bypass_offset", 2)))
+        key_depth = int(max(1, getattr(self, "default_puzzle_room_key_pocket_depth", 3)))
+        item_slot_depth = int(max(1, getattr(self, "default_puzzle_room_item_slot_depth", 3)))
+        toggle_offset = int(max(1, getattr(self, "default_puzzle_room_toggle_corridor_offset", 2)))
+
+        def _pick_side_lane(anchor_value: int, reference_value: int, *, low: int, high: int, offset: int) -> int:
+            anchor_value = int(anchor_value)
+            reference_value = int(reference_value)
+            direction = 1 if anchor_value >= reference_value else -1
+            candidates = []
+            if abs(anchor_value - reference_value) >= 1:
+                candidates.append(anchor_value)
+            candidates.append(anchor_value + direction * max(1, offset))
+            candidates.append(reference_value + direction * max(2, offset))
+            candidates.append(reference_value + (2 if direction >= 0 else -2))
+            for candidate in candidates:
+                candidate = max(low, min(high, int(candidate)))
+                if abs(candidate - reference_value) >= 1:
+                    return candidate
+            fallback = reference_value + (1 if reference_value < ((low + high) // 2) else -1)
+            return max(low, min(high, int(fallback)))
+
+        def _add_polyline(points: List[Tuple[int, int]]) -> None:
+            if len(points) < 2:
+                return
+            for start, end in zip(points, points[1:]):
+                self._paint_room_line_mask(mask, self._clamp_room_coord(start), self._clamp_room_coord(end))
+
+        if archetype == "gate":
+            if flow_is_horizontal:
+                gate_col = max(3, min(ROOM_WIDTH - 4, int(puzzle[1])))
+                pocket_row = max(2, min(ROOM_HEIGHT - 3, int(stateful[0])))
+                entry = (source[0], max(2, gate_col - 2))
+                if gate_family == "switch":
+                    pocket = (pocket_row, max(2, gate_col - switch_depth))
+                    gate_open = (pocket_row, gate_col)
+                    exit_point = (pocket_row, min(ROOM_WIDTH - 3, gate_col + 2))
+                elif gate_family == "toggle":
+                    toggle_row = max(
+                        2,
+                        min(
+                            ROOM_HEIGHT - 3,
+                            int(stateful[0]) + (-toggle_offset if stateful[0] > ROOM_HEIGHT // 2 else toggle_offset),
+                        ),
+                    )
+                    pocket = (toggle_row, max(2, gate_col - 2))
+                    gate_open = (stateful[0], gate_col)
+                    exit_point = (stateful[0], min(ROOM_WIDTH - 3, gate_col + 2))
+                elif gate_family == "bombable":
+                    bypass_row = _pick_side_lane(
+                        int(stateful[0]),
+                        int(center[0]),
+                        low=2,
+                        high=ROOM_HEIGHT - 3,
+                        offset=resource_offset,
+                    )
+                    pocket = (bypass_row, max(2, gate_col - (resource_offset + 1)))
+                    gate_open = (bypass_row, gate_col)
+                    exit_point = (bypass_row, min(ROOM_WIDTH - 3, gate_col + 2))
+                elif gate_family == "item_unlock":
+                    item_row = max(2, min(ROOM_HEIGHT - 3, int(stateful[0])))
+                    item_col = max(2, min(ROOM_WIDTH - 3, int(stateful[1])))
+                    pocket = (item_row, item_col)
+                    gate_open = (center[0], gate_col)
+                    exit_point = (center[0], max(min(ROOM_WIDTH - 3, item_col), min(ROOM_WIDTH - 3, gate_col + 2)))
+                elif gate_family == "key" and stateful_anchor is not None:
+                    key_row = max(2, min(ROOM_HEIGHT - 3, int(stateful[0])))
+                    pocket = (key_row, max(2, gate_col - key_depth))
+                    gate_open = (center[0], gate_col)
+                    exit_point = (center[0], min(ROOM_WIDTH - 3, gate_col + 2))
+                else:
+                    pocket = (pocket_row, max(2, gate_col - 2))
+                    gate_open = (pocket_row, gate_col)
+                    exit_point = (pocket_row, min(ROOM_WIDTH - 3, gate_col + 2))
+                destination_hook = (destination[0], int(exit_point[1]))
+                _add_polyline([source, entry, pocket, gate_open, exit_point, destination_hook, destination])
+            else:
+                gate_row = max(3, min(ROOM_HEIGHT - 4, int(puzzle[0])))
+                pocket_col = max(2, min(ROOM_WIDTH - 3, int(stateful[1])))
+                entry = (max(2, gate_row - 2), source[1])
+                if gate_family == "switch":
+                    pocket = (max(2, gate_row - switch_depth), pocket_col)
+                    gate_open = (gate_row, pocket_col)
+                    exit_point = (min(ROOM_HEIGHT - 3, gate_row + 2), pocket_col)
+                elif gate_family == "toggle":
+                    toggle_col = max(
+                        2,
+                        min(
+                            ROOM_WIDTH - 3,
+                            int(stateful[1]) + (-toggle_offset if stateful[1] > ROOM_WIDTH // 2 else toggle_offset),
+                        ),
+                    )
+                    pocket = (max(2, gate_row - 2), toggle_col)
+                    gate_open = (gate_row, stateful[1])
+                    exit_point = (min(ROOM_HEIGHT - 3, gate_row + 2), stateful[1])
+                elif gate_family == "bombable":
+                    bypass_col = _pick_side_lane(
+                        int(stateful[1]),
+                        int(center[1]),
+                        low=2,
+                        high=ROOM_WIDTH - 3,
+                        offset=resource_offset,
+                    )
+                    pocket = (max(2, gate_row - (resource_offset + 1)), bypass_col)
+                    gate_open = (gate_row, bypass_col)
+                    exit_point = (min(ROOM_HEIGHT - 3, gate_row + 2), bypass_col)
+                elif gate_family == "item_unlock":
+                    item_row = max(2, min(ROOM_HEIGHT - 3, int(stateful[0])))
+                    item_col = max(2, min(ROOM_WIDTH - 3, int(stateful[1])))
+                    pocket = (item_row, item_col)
+                    gate_open = (gate_row, center[1])
+                    exit_point = (max(min(ROOM_HEIGHT - 3, item_row), min(ROOM_HEIGHT - 3, gate_row + 2)), center[1])
+                elif gate_family == "key" and stateful_anchor is not None:
+                    key_col = max(2, min(ROOM_WIDTH - 3, int(stateful[1])))
+                    pocket = (max(2, gate_row - key_depth), key_col)
+                    gate_open = (gate_row, center[1])
+                    exit_point = (min(ROOM_HEIGHT - 3, gate_row + 2), center[1])
+                else:
+                    pocket = (max(2, gate_row - 2), pocket_col)
+                    gate_open = (gate_row, pocket_col)
+                    exit_point = (min(ROOM_HEIGHT - 3, gate_row + 2), pocket_col)
+                destination_hook = (int(exit_point[0]), destination[1])
+                _add_polyline([source, entry, pocket, gate_open, exit_point, destination_hook, destination])
+        elif archetype == "hub":
+            hub = self._clamp_room_coord(
+                (
+                    int(round((puzzle[0] + center[0]) / 2.0)),
+                    int(round((puzzle[1] + center[1]) / 2.0)),
+                )
+            )
+            _add_polyline([source, hub, destination])
+            for direction, enabled in semantics.get("required_doors", {}).items():
+                if not bool(enabled):
+                    continue
+                door_anchor = self._clamp_room_coord(
+                    build_room_semantic_anchor_points(
+                        room_shape=(ROOM_HEIGHT, ROOM_WIDTH),
+                        required_doors={str(direction): True},
+                        incoming_dirs=set(),
+                        outgoing_dirs=set(),
+                        room_role_flags={},
+                        semantic_puzzle_offset=self.default_semantic_puzzle_offset,
+                    ).get(f"door:{direction}", hub)
+                )
+                self._paint_room_line_mask(mask, hub, door_anchor)
+            mask[max(1, hub[0] - 1): min(ROOM_HEIGHT - 1, hub[0] + 2), max(1, hub[1] - 1): min(ROOM_WIDTH - 1, hub[1] + 2)] = True
+        elif archetype == "combat":
+            arena_center = self._clamp_room_coord(
+                (
+                    int(round((source[0] + destination[0] + puzzle[0]) / 3.0)),
+                    int(round((source[1] + destination[1] + puzzle[1]) / 3.0)),
+                )
+            )
+            _add_polyline([source, arena_center, destination])
+            self._paint_room_line_mask(mask, arena_center, puzzle)
+            mask[max(1, arena_center[0] - 1): min(ROOM_HEIGHT - 1, arena_center[0] + 2), max(1, arena_center[1] - 1): min(ROOM_WIDTH - 1, arena_center[1] + 2)] = True
+        elif archetype == "island":
+            waypoint = self._clamp_room_coord(
+                (
+                    int(round((puzzle[0] + destination[0]) / 2.0)),
+                    int(round((puzzle[1] + destination[1]) / 2.0)),
+                )
+            )
+            _add_polyline([source, puzzle, waypoint, destination])
+            mask[max(1, puzzle[0] - 1): min(ROOM_HEIGHT - 1, puzzle[0] + 2), max(1, puzzle[1] - 1): min(ROOM_WIDTH - 1, puzzle[1] + 2)] = True
+        else:  # serpentine
+            if flow_is_horizontal:
+                waypoints = [
+                    source,
+                    (2, 3),
+                    (4, 3),
+                    (4, ROOM_WIDTH - 4),
+                    (8, ROOM_WIDTH - 4),
+                    (8, 3),
+                    (12, 3),
+                    (12, ROOM_WIDTH - 4),
+                    destination,
+                ]
+            else:
+                waypoints = [
+                    source,
+                    (3, 2),
+                    (3, 4),
+                    (ROOM_HEIGHT - 4, 4),
+                    (ROOM_HEIGHT - 4, 6),
+                    (3, 6),
+                    (3, ROOM_WIDTH - 3),
+                    destination,
+                ]
+            _add_polyline(waypoints)
+            self._paint_room_line_mask(mask, puzzle, waypoints[min(len(waypoints) - 2, 3)])
+
+        if role_flags.get("has_puzzle", False):
+            mask[max(1, puzzle[0] - 1): min(ROOM_HEIGHT - 1, puzzle[0] + 2), max(1, puzzle[1] - 1): min(ROOM_WIDTH - 1, puzzle[1] + 2)] = True
+
+        return mask
+
     def _select_puzzle_room_scaffold_archetype(
         self,
         *,
@@ -1872,10 +2141,41 @@ class NeuralSymbolicDungeonPipeline:
             return "hub"
         return "serpentine"
 
+    def _classify_puzzle_gate_family(
+        self,
+        *,
+        role_flags: Dict[str, bool],
+        semantics: Dict[str, Any],
+        node_type: str,
+    ) -> str:
+        """Classify the local puzzle as a concrete gate semantic family."""
+        edge_constraints = semantics.get("edge_constraints", {})
+        flat_edge_tokens: Set[str] = set()
+        for tokens in edge_constraints.values():
+            flat_edge_tokens.update(str(token) for token in tokens)
+
+        if {"state_block", "on_off_gate"} & flat_edge_tokens:
+            return "toggle"
+        if role_flags.get("is_switch_puzzle", False) or {"switch", "switch_locked"} & flat_edge_tokens:
+            return "switch"
+        if role_flags.get("is_combat_puzzle", False) or node_type == "combat_puzzle":
+            return "combat"
+        if {"bombable"} & flat_edge_tokens:
+            return "bombable"
+        if {"item_locked", "item_gate"} & flat_edge_tokens:
+            return "item_unlock"
+        if {"key_locked", "locked", "boss_locked"} & flat_edge_tokens:
+            return "key"
+        if {"shutter", "soft_locked"} & flat_edge_tokens:
+            return "combat"
+        return "generic"
+
     def _build_puzzle_room_segments(
         self,
         *,
         archetype: str,
+        gate_family: str,
+        stateful_anchor: Optional[Tuple[int, int]],
         flow_is_horizontal: bool,
         puzzle_anchor: Tuple[int, int],
     ) -> Tuple[List[List[Tuple[int, int]]], List[List[Tuple[int, int]]]]:
@@ -1887,52 +2187,168 @@ class NeuralSymbolicDungeonPipeline:
         """
         center_r = max(3, min(ROOM_HEIGHT - 4, int(puzzle_anchor[0])))
         center_c = max(3, min(ROOM_WIDTH - 4, int(puzzle_anchor[1])))
+        if stateful_anchor is not None:
+            stateful_r = max(3, min(ROOM_HEIGHT - 4, int(stateful_anchor[0])))
+            stateful_c = max(3, min(ROOM_WIDTH - 4, int(stateful_anchor[1])))
+        else:
+            stateful_r = center_r
+            stateful_c = center_c
         left_col = 3
         right_col = ROOM_WIDTH - 4
         top_row = 3
         bottom_row = ROOM_HEIGHT - 4
+        resource_offset = int(max(1, getattr(self, "default_puzzle_room_resource_bypass_offset", 2)))
+        key_depth = int(max(1, getattr(self, "default_puzzle_room_key_pocket_depth", 3)))
+        item_slot_depth = int(max(1, getattr(self, "default_puzzle_room_item_slot_depth", 3)))
+        toggle_offset = int(max(1, getattr(self, "default_puzzle_room_toggle_corridor_offset", 2)))
 
         required: List[List[Tuple[int, int]]] = []
         optional: List[List[Tuple[int, int]]] = []
 
         if archetype == "gate":
             if flow_is_horizontal:
-                for spine_col in (left_col, right_col):
-                    required.append([(row, spine_col) for row in range(2, ROOM_HEIGHT - 2)])
-                optional.append([(center_r, col) for col in range(left_col + 1, right_col)])
-                optional.append([(center_r + 1, col) for col in range(left_col + 1, center_c)])
+                gate_col = max(left_col + 1, min(right_col - 1, center_c))
+                if gate_family == "bombable":
+                    bypass_row = max(
+                        2,
+                        min(
+                            ROOM_HEIGHT - 3,
+                            stateful_r + (-resource_offset if stateful_r > ROOM_HEIGHT // 2 else resource_offset),
+                        ),
+                    )
+                    gap_rows = {bypass_row}
+                elif gate_family == "toggle":
+                    gap_rows = {stateful_r}
+                elif gate_family == "key" and stateful_anchor is not None:
+                    gap_rows = {center_r}
+                else:
+                    gap_rows = {max(2, center_r - 1), center_r, min(ROOM_HEIGHT - 3, center_r + 1)}
+                required.append([(row, gate_col) for row in range(2, ROOM_HEIGHT - 2) if row not in gap_rows])
+                pocket_side = -1 if center_r <= ROOM_HEIGHT // 2 else 1
+                pocket_row = max(2, min(ROOM_HEIGHT - 3, center_r + pocket_side * 2))
+                if gate_family == "switch":
+                    required.append([(stateful_r, col) for col in range(max(2, gate_col - 3), min(ROOM_WIDTH - 2, gate_col + 1))])
+                    required.append([(row, max(2, gate_col - 3)) for row in range(min(center_r, stateful_r), max(center_r, stateful_r) + 1)])
+                    optional.append([(row, min(ROOM_WIDTH - 3, gate_col + 2)) for row in range(3, ROOM_HEIGHT - 3) if abs(row - center_r) > 1])
+                elif gate_family == "toggle":
+                    corridor_top = max(2, stateful_r - toggle_offset)
+                    corridor_bottom = min(ROOM_HEIGHT - 3, stateful_r + toggle_offset)
+                    required.append([(corridor_top, col) for col in range(max(2, gate_col - 3), min(ROOM_WIDTH - 2, gate_col + 2))])
+                    required.append([(corridor_bottom, col) for col in range(max(2, gate_col - 3), min(ROOM_WIDTH - 2, gate_col + 2))])
+                    optional.append([(row, max(2, gate_col - 2)) for row in range(corridor_top + 1, corridor_bottom)])
+                elif gate_family == "bombable":
+                    bypass_row = max(
+                        2,
+                        min(
+                            ROOM_HEIGHT - 3,
+                            stateful_r + (-resource_offset if stateful_r > ROOM_HEIGHT // 2 else resource_offset),
+                        ),
+                    )
+                    resource_row = stateful_r
+                    required.append([(resource_row, col) for col in range(max(2, gate_col - 4), max(3, gate_col - 1))])
+                    required.append([(row, max(2, gate_col - 4)) for row in range(min(resource_row, bypass_row), max(resource_row, bypass_row) + 1)])
+                    optional.append([(row, max(2, gate_col - 2)) for row in range(min(resource_row, bypass_row), max(resource_row, bypass_row) + 1)])
+                    optional.append([(bypass_row, col) for col in range(min(gate_col + 1, ROOM_WIDTH - 3), min(ROOM_WIDTH - 2, gate_col + 4))])
+                elif gate_family == "item_unlock":
+                    item_row = stateful_r
+                    item_col = max(gate_col + 2, min(ROOM_WIDTH - 3, stateful_c))
+                    left_col = max(2, item_col - 1)
+                    right_col = min(ROOM_WIDTH - 3, item_col + 1)
+                    top_row = max(2, item_row - 1)
+                    bottom_row = min(ROOM_HEIGHT - 3, item_row + 1)
+                    required.append([(row, left_col) for row in range(top_row, bottom_row + 1) if row != item_row])
+                    required.append([(row, right_col) for row in range(top_row, bottom_row + 1) if row != item_row])
+                    required.append([(top_row, col) for col in range(left_col, right_col + 1) if col != item_col])
+                    required.append([(bottom_row, col) for col in range(left_col, right_col + 1) if col != item_col])
+                    optional.append([(center_r - 1, col) for col in range(min(gate_col + 1, item_col), max(gate_col + 1, item_col) + 1)])
+                    optional.append([(center_r + 1, col) for col in range(min(gate_col + 1, item_col), max(gate_col + 1, item_col) + 1)])
+                elif gate_family == "key" and stateful_anchor is not None:
+                    key_row = stateful_r
+                    required.append([(key_row, col) for col in range(max(2, gate_col - key_depth - 1), max(3, gate_col - 1))])
+                    required.append([(row, max(2, gate_col - key_depth - 1)) for row in range(min(center_r, key_row), max(center_r, key_row) + 1)])
+                    optional.append([(row, min(ROOM_WIDTH - 3, gate_col + 2)) for row in range(3, ROOM_HEIGHT - 3) if abs(row - center_r) > 1])
+                else:
+                    required.append([(pocket_row, col) for col in range(max(2, gate_col - 2), min(ROOM_WIDTH - 2, gate_col + 1))])
+                    optional.append([(row, max(2, gate_col - 2)) for row in range(min(center_r, pocket_row), max(center_r, pocket_row) + 1)])
+                    optional.append([(row, min(ROOM_WIDTH - 3, gate_col + 2)) for row in range(3, ROOM_HEIGHT - 3) if abs(row - center_r) > 1])
             else:
-                for spine_row in (top_row, bottom_row):
-                    required.append([(spine_row, col) for col in range(2, ROOM_WIDTH - 2)])
-                optional.append([(row, center_c) for row in range(top_row + 1, bottom_row)])
-                optional.append([(row, center_c + 1) for row in range(top_row + 1, center_r)])
+                gate_row = max(top_row + 1, min(bottom_row - 1, center_r))
+                if gate_family == "bombable":
+                    bypass_col = max(
+                        2,
+                        min(
+                            ROOM_WIDTH - 3,
+                            stateful_c + (-resource_offset if stateful_c > ROOM_WIDTH // 2 else resource_offset),
+                        ),
+                    )
+                    gap_cols = {bypass_col}
+                elif gate_family == "toggle":
+                    gap_cols = {stateful_c}
+                elif gate_family == "key" and stateful_anchor is not None:
+                    gap_cols = {center_c}
+                else:
+                    gap_cols = {max(2, center_c - 1), center_c, min(ROOM_WIDTH - 3, center_c + 1)}
+                required.append([(gate_row, col) for col in range(2, ROOM_WIDTH - 2) if col not in gap_cols])
+                pocket_side = -1 if center_c <= ROOM_WIDTH // 2 else 1
+                pocket_col = max(2, min(ROOM_WIDTH - 3, center_c + pocket_side * 2))
+                if gate_family == "switch":
+                    required.append([(row, stateful_c) for row in range(max(2, gate_row - 3), min(ROOM_HEIGHT - 2, gate_row + 1))])
+                    required.append([(max(2, gate_row - 3), col) for col in range(min(center_c, stateful_c), max(center_c, stateful_c) + 1)])
+                    optional.append([(min(ROOM_HEIGHT - 3, gate_row + 2), col) for col in range(3, ROOM_WIDTH - 3) if abs(col - center_c) > 1])
+                elif gate_family == "toggle":
+                    corridor_left = max(2, stateful_c - toggle_offset)
+                    corridor_right = min(ROOM_WIDTH - 3, stateful_c + toggle_offset)
+                    required.append([(row, corridor_left) for row in range(max(2, gate_row - 3), min(ROOM_HEIGHT - 2, gate_row + 2))])
+                    required.append([(row, corridor_right) for row in range(max(2, gate_row - 3), min(ROOM_HEIGHT - 2, gate_row + 2))])
+                    optional.append([(max(2, gate_row - 2), col) for col in range(corridor_left + 1, corridor_right)])
+                elif gate_family == "bombable":
+                    bypass_col = max(
+                        2,
+                        min(
+                            ROOM_WIDTH - 3,
+                            stateful_c + (-resource_offset if stateful_c > ROOM_WIDTH // 2 else resource_offset),
+                        ),
+                    )
+                    resource_col = stateful_c
+                    required.append([(row, resource_col) for row in range(max(2, gate_row - 4), max(3, gate_row - 1))])
+                    required.append([(max(2, gate_row - 4), col) for col in range(min(resource_col, bypass_col), max(resource_col, bypass_col) + 1)])
+                    optional.append([(max(2, gate_row - 2), col) for col in range(min(resource_col, bypass_col), max(resource_col, bypass_col) + 1)])
+                    optional.append([(row, bypass_col) for row in range(min(gate_row + 1, ROOM_HEIGHT - 3), min(ROOM_HEIGHT - 2, gate_row + 4))])
+                elif gate_family == "item_unlock":
+                    item_row = max(gate_row + 2, min(ROOM_HEIGHT - 3, stateful_r))
+                    item_col = stateful_c
+                    top_row = max(2, item_row - 1)
+                    bottom_row = min(ROOM_HEIGHT - 3, item_row + 1)
+                    left_col = max(2, item_col - 1)
+                    right_col = min(ROOM_WIDTH - 3, item_col + 1)
+                    required.append([(row, left_col) for row in range(top_row, bottom_row + 1) if row != item_row])
+                    required.append([(row, right_col) for row in range(top_row, bottom_row + 1) if row != item_row])
+                    required.append([(top_row, col) for col in range(left_col, right_col + 1) if col != item_col])
+                    required.append([(bottom_row, col) for col in range(left_col, right_col + 1) if col != item_col])
+                    optional.append([(row, center_c - 1) for row in range(min(gate_row + 1, item_row), max(gate_row + 1, item_row) + 1)])
+                    optional.append([(row, center_c + 1) for row in range(min(gate_row + 1, item_row), max(gate_row + 1, item_row) + 1)])
+                elif gate_family == "key" and stateful_anchor is not None:
+                    key_col = stateful_c
+                    required.append([(row, key_col) for row in range(max(2, gate_row - key_depth - 1), max(3, gate_row - 1))])
+                    required.append([(max(2, gate_row - key_depth - 1), col) for col in range(min(center_c, key_col), max(center_c, key_col) + 1)])
+                    optional.append([(min(ROOM_HEIGHT - 3, gate_row + 2), col) for col in range(3, ROOM_WIDTH - 3) if abs(col - center_c) > 1])
+                else:
+                    required.append([(row, pocket_col) for row in range(max(2, gate_row - 2), min(ROOM_HEIGHT - 2, gate_row + 1))])
+                    optional.append([(max(2, gate_row - 2), col) for col in range(min(center_c, pocket_col), max(center_c, pocket_col) + 1)])
+                    optional.append([(min(ROOM_HEIGHT - 3, gate_row + 2), col) for col in range(3, ROOM_WIDTH - 3) if abs(col - center_c) > 1])
         elif archetype == "hub":
-            if flow_is_horizontal:
-                required.append(
-                    [(row, center_c - 1) for row in range(2, ROOM_HEIGHT - 2) if abs(row - center_r) > 1]
-                )
-                required.append(
-                    [(row, center_c + 1) for row in range(2, ROOM_HEIGHT - 2) if abs(row - center_r) > 1]
-                )
-                optional.append(
-                    [(center_r - 2, col) for col in range(2, center_c - 1)]
-                )
-                optional.append(
-                    [(center_r + 2, col) for col in range(center_c + 2, ROOM_WIDTH - 2)]
-                )
-            else:
-                required.append(
-                    [(center_r - 1, col) for col in range(2, ROOM_WIDTH - 2) if abs(col - center_c) > 1]
-                )
-                required.append(
-                    [(center_r + 1, col) for col in range(2, ROOM_WIDTH - 2) if abs(col - center_c) > 1]
-                )
-                optional.append(
-                    [(row, center_c - 2) for row in range(2, center_r - 1)]
-                )
-                optional.append(
-                    [(row, center_c + 2) for row in range(center_r + 2, ROOM_HEIGHT - 2)]
-                )
+            top = max(2, center_r - 3)
+            bottom = min(ROOM_HEIGHT - 3, center_r + 3)
+            left = max(2, center_c - 3)
+            right = min(ROOM_WIDTH - 3, center_c + 3)
+            required.append([(top, col) for col in range(left, right + 1) if abs(col - center_c) > 1])
+            required.append([(bottom, col) for col in range(left, right + 1) if abs(col - center_c) > 1])
+            required.append([(row, left) for row in range(top, bottom + 1) if abs(row - center_r) > 1])
+            required.append([(row, right) for row in range(top, bottom + 1) if abs(row - center_r) > 1])
+            optional.append([(center_r - 2, col) for col in range(left + 1, center_c - 1)])
+            optional.append([(center_r - 2, col) for col in range(center_c + 2, right)])
+            optional.append([(center_r + 2, col) for col in range(left + 1, center_c - 1)])
+            optional.append([(center_r + 2, col) for col in range(center_c + 2, right)])
         elif archetype == "island":
             optional.extend(
                 [
@@ -1970,8 +2386,11 @@ class NeuralSymbolicDungeonPipeline:
                         if not (2 <= col <= 4 and gap_on_left)
                         and not (ROOM_WIDTH - 5 <= col <= ROOM_WIDTH - 3 and not gap_on_left)
                     ]
-                    optional.append(segment)
-                required.append([(center_r, center_c - 1), (center_r, center_c + 1)])
+                    if idx < 2:
+                        required.append(segment)
+                    else:
+                        optional.append(segment)
+                optional.append([(center_r, center_c - 1), (center_r, center_c + 1)])
             else:
                 cols = [3, 5, 7]
                 for idx, col in enumerate(cols):
@@ -1984,10 +2403,69 @@ class NeuralSymbolicDungeonPipeline:
                         if not (2 <= row <= 4 and gap_on_top)
                         and not (ROOM_HEIGHT - 5 <= row <= ROOM_HEIGHT - 3 and not gap_on_top)
                     ]
-                    optional.append(segment)
-                required.append([(center_r - 1, center_c), (center_r + 1, center_c)])
+                    if idx < 2:
+                        required.append(segment)
+                    else:
+                        optional.append(segment)
+                optional.append([(center_r - 1, center_c), (center_r + 1, center_c)])
 
         return required, optional
+
+    def _strip_small_interior_structure_components(
+        self,
+        grid: np.ndarray,
+        *,
+        graph: Optional[nx.Graph],
+        room_id: Any,
+        max_component_tiles: int = 6,
+    ) -> Tuple[np.ndarray, Dict[str, int]]:
+        """Remove tiny isolated interior wall/block islands that read as noise."""
+        out = np.asarray(grid, dtype=np.int32).copy()
+        wall_like_mask = np.isin(out, np.array([int(TileID.WALL), int(TileID.BLOCK)], dtype=np.int32))
+        allowed_door_mask = self._required_room_door_slots_mask(graph=graph, room_id=room_id)
+        visited = np.zeros_like(wall_like_mask, dtype=bool)
+        removed_components = 0
+        removed_tiles = 0
+
+        for row in range(ROOM_HEIGHT):
+            for col in range(ROOM_WIDTH):
+                if not bool(wall_like_mask[row, col]) or bool(visited[row, col]):
+                    continue
+
+                component: List[Tuple[int, int]] = []
+                stack: List[Tuple[int, int]] = [(row, col)]
+                visited[row, col] = True
+                touches_boundary = False
+                touches_allowed_door = False
+
+                while stack:
+                    cur_r, cur_c = stack.pop()
+                    component.append((cur_r, cur_c))
+                    if cur_r in {0, ROOM_HEIGHT - 1} or cur_c in {0, ROOM_WIDTH - 1}:
+                        touches_boundary = True
+                    if bool(allowed_door_mask[cur_r, cur_c]):
+                        touches_allowed_door = True
+                    for d_r, d_c in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                        next_r = cur_r + d_r
+                        next_c = cur_c + d_c
+                        if not (0 <= next_r < ROOM_HEIGHT and 0 <= next_c < ROOM_WIDTH):
+                            continue
+                        if not bool(wall_like_mask[next_r, next_c]) or bool(visited[next_r, next_c]):
+                            continue
+                        visited[next_r, next_c] = True
+                        stack.append((next_r, next_c))
+
+                if touches_boundary or touches_allowed_door or len(component) > int(max_component_tiles):
+                    continue
+                for comp_r, comp_c in component:
+                    out[comp_r, comp_c] = int(TileID.FLOOR)
+                removed_components += 1
+                removed_tiles += len(component)
+
+        return out, {
+            "removed_components": int(removed_components),
+            "removed_tiles": int(removed_tiles),
+        }
 
     def _apply_puzzle_room_scaffold(
         self,
@@ -2038,6 +2516,14 @@ class NeuralSymbolicDungeonPipeline:
         ):
             return out, stats
 
+        out, structure_cleanup = self._strip_small_interior_structure_components(
+            out,
+            graph=graph,
+            room_id=room_id,
+        )
+        stats["noise_components_removed"] = int(structure_cleanup["removed_components"])
+        stats["noise_tiles_removed"] = int(structure_cleanup["removed_tiles"])
+
         block_id = int(TileID.BLOCK)
         wall_id = int(TileID.WALL)
         floor_id = int(TileID.FLOOR)
@@ -2046,7 +2532,10 @@ class NeuralSymbolicDungeonPipeline:
         interior_mask[2:ROOM_HEIGHT - 2, 2:ROOM_WIDTH - 2] = True
         existing_structure_tiles = int(np.sum(structure_mask & interior_mask))
         stats["existing_structure_tiles"] = existing_structure_tiles
-        if existing_structure_tiles >= int(self.default_puzzle_room_scaffold_min_structure_tiles):
+        if (
+            existing_structure_tiles >= int(self.default_puzzle_room_scaffold_min_structure_tiles)
+            and int(structure_cleanup["removed_components"]) <= 0
+        ):
             return out, stats
 
         normalized_start_goal = start_goal
@@ -2124,7 +2613,63 @@ class NeuralSymbolicDungeonPipeline:
             int(destination_anchor[0]) - int(source_anchor[0])
         )
         archetype = str(scaffold_profile.get("archetype", "serpentine") or "serpentine").strip().lower()
+        gate_family = str(scaffold_profile.get("gate_family", "generic") or "generic").strip().lower()
+        if gate_family == "switch":
+            stateful_anchor_name = "puzzle" if "puzzle" in semantic_anchors else None
+        elif gate_family == "toggle":
+            stateful_anchor_name = "puzzle" if "puzzle" in semantic_anchors else None
+        elif gate_family == "bombable":
+            stateful_anchor_name = "puzzle" if "puzzle" in semantic_anchors else None
+        elif gate_family == "item_unlock":
+            stateful_anchor_name = "item" if "item" in semantic_anchors else ("puzzle" if "puzzle" in semantic_anchors else None)
+        elif gate_family == "key":
+            stateful_anchor_name = "key" if "key" in semantic_anchors else None
+        elif gate_family == "combat":
+            stateful_anchor_name = "enemy" if "enemy" in semantic_anchors else None
+        else:
+            stateful_anchor_name = "puzzle" if "puzzle" in semantic_anchors else None
+        stateful_anchor = semantic_anchors.get(stateful_anchor_name) if stateful_anchor_name is not None else None
+        route_template = self._build_puzzle_room_route_template(
+            archetype=archetype,
+            gate_family=gate_family,
+            stateful_anchor=stateful_anchor,
+            flow_is_horizontal=flow_is_horizontal,
+            source_anchor=source_anchor,
+            destination_anchor=destination_anchor,
+            puzzle_anchor=puzzle_anchor,
+            role_flags=role_flags,
+            semantics=semantics,
+        )
+        if bool(np.any(route_template)):
+            route_mask = route_template
+            reserved = self._dilate_room_mask(route_mask, radius=preserve_margin) if preserve_margin > 0 else route_mask.copy()
+            for point in semantic_anchors.values():
+                rr, cc = self._clamp_room_coord(point)
+                reserved[int(rr), int(cc)] = True
+            for _tile_id, slot in planned_markers:
+                rr, cc = self._clamp_room_coord(slot)
+                reserved[int(rr), int(cc)] = True
+            for direction, enabled in semantics["required_doors"].items():
+                if not bool(enabled):
+                    continue
+                spec = DOOR_POSITIONS[str(direction)]
+                if direction in {"N", "S"}:
+                    apron_row = 2 if direction == "N" else ROOM_HEIGHT - 3
+                    c0 = int(spec["col_start"])
+                    c1 = int(spec["col_end"]) + 1
+                    reserved[apron_row, c0:c1] = True
+                else:
+                    apron_col = 2 if direction == "W" else ROOM_WIDTH - 3
+                    r0 = int(spec["row_start"])
+                    r1 = int(spec["row_end"]) + 1
+                    reserved[r0:r1, apron_col] = True
+            stats["planned_route_pixels"] = int(np.sum(route_mask))
+            stats["route_template_used"] = 1
+        else:
+            stats["route_template_used"] = 0
         stats["archetype"] = str(archetype)
+        stats["gate_family"] = str(gate_family)
+        stats["stateful_anchor_name"] = str(stateful_anchor_name or "")
         stats["profile_branch_density"] = float(scaffold_profile.get("branch_density", getattr(self, "default_puzzle_room_branch_density", 0.75)))
         stats["profile_block_budget"] = int(scaffold_profile.get("block_budget", getattr(self, "default_puzzle_room_block_budget", 28)))
         stats["profile_preserve_route_margin"] = int(preserve_margin)
@@ -2154,6 +2699,8 @@ class NeuralSymbolicDungeonPipeline:
         tiles_added = 0
         required_segments, optional_segments = self._build_puzzle_room_segments(
             archetype=archetype,
+            gate_family=gate_family,
+            stateful_anchor=stateful_anchor,
             flow_is_horizontal=flow_is_horizontal,
             puzzle_anchor=puzzle_anchor,
         )
@@ -3898,6 +4445,9 @@ class NeuralSymbolicDungeonPipeline:
             puzzle_archetype = str(final_puzzle_scaffold.get("archetype", "")).strip().lower()
             if puzzle_archetype:
                 self._bump_diagnostic(f"puzzle_room_scaffold_{puzzle_archetype}")
+            puzzle_gate_family = str(final_puzzle_scaffold.get("gate_family", "")).strip().lower()
+            if puzzle_gate_family:
+                self._bump_diagnostic(f"puzzle_room_scaffold_gate_{puzzle_gate_family}")
             logger.debug(
                 "Room %s applied puzzle scaffold: %s",
                 room_id,
@@ -4015,11 +4565,17 @@ class NeuralSymbolicDungeonPipeline:
             'neural_puzzle_scaffold_segments_added': int(neural_puzzle_scaffold['segments_added']),
             'neural_puzzle_scaffold_optional_segments_requested': int(neural_puzzle_scaffold.get('optional_segments_requested', 0)),
             'neural_puzzle_scaffold_optional_segments_applied': int(neural_puzzle_scaffold.get('optional_segments_applied', 0)),
+            'neural_puzzle_scaffold_route_template_used': int(neural_puzzle_scaffold.get('route_template_used', 0)),
+            'neural_puzzle_scaffold_noise_components_removed': int(neural_puzzle_scaffold.get('noise_components_removed', 0)),
+            'neural_puzzle_scaffold_noise_tiles_removed': int(neural_puzzle_scaffold.get('noise_tiles_removed', 0)),
             'final_puzzle_scaffold_applied': int(final_puzzle_scaffold['applied']),
             'final_puzzle_scaffold_tiles_added': int(final_puzzle_scaffold['tiles_added']),
             'final_puzzle_scaffold_segments_added': int(final_puzzle_scaffold['segments_added']),
             'final_puzzle_scaffold_optional_segments_requested': int(final_puzzle_scaffold.get('optional_segments_requested', 0)),
             'final_puzzle_scaffold_optional_segments_applied': int(final_puzzle_scaffold.get('optional_segments_applied', 0)),
+            'final_puzzle_scaffold_route_template_used': int(final_puzzle_scaffold.get('route_template_used', 0)),
+            'final_puzzle_scaffold_noise_components_removed': int(final_puzzle_scaffold.get('noise_components_removed', 0)),
+            'final_puzzle_scaffold_noise_tiles_removed': int(final_puzzle_scaffold.get('noise_tiles_removed', 0)),
             'neural_graph_markers_placed': int(neural_marker_count),
             'final_graph_markers_placed': int(final_marker_count),
             'final_graph_marker_overwrites': int(final_marker_overwrites),
@@ -4269,7 +4825,7 @@ class NeuralSymbolicDungeonPipeline:
                 seed=seed,
             )
 
-            graph = topology_generator.evolve()
+            graph = topology_generator.evolve(directed_output=True)
             logger.info("Block I: Generated topology with %d rooms", graph.number_of_nodes())
 
             is_valid, errors = validate_graph_topology(graph)
@@ -5373,7 +5929,7 @@ class NeuralSymbolicDungeonPipeline:
             "has_item": _hint("has_item", "has_macro_item", "has_minor_item") or "i" in tokens or "item" in tokens or "treasure" in tokens,
             "has_goal": _hint("has_triforce", "is_triforce", "is_goal") or "t" in tokens or "goal" in tokens or "triforce" in tokens,
             "has_boss": _hint("has_boss", "is_boss") or "b" in tokens or "boss" in tokens,
-            "has_puzzle": _hint("has_puzzle") or "p" in tokens or "puzzle" in tokens,
+            "has_puzzle": _hint("has_puzzle") or "p" in tokens or "puzzle" in tokens or raw_type in {"switch", "puzzle", "tutorial_puzzle", "combat_puzzle", "complex_puzzle"} or "puzzle" in raw_type,
             "is_tutorial_puzzle": bool(_hint("is_tutorial") or raw_type == "tutorial_puzzle" or difficulty_rating == "SAFE"),
             "is_combat_puzzle": bool(raw_type == "combat_puzzle"),
             "is_complex_puzzle": bool(raw_type == "complex_puzzle" or difficulty_rating in {"HARD", "EXTREME"}),
@@ -5396,6 +5952,11 @@ class NeuralSymbolicDungeonPipeline:
         adapts its density to pedagogical puzzle subtype information.
         """
         archetype = self._select_puzzle_room_scaffold_archetype(
+            role_flags=role_flags,
+            semantics=semantics,
+            node_type=node_type,
+        )
+        gate_family = self._classify_puzzle_gate_family(
             role_flags=role_flags,
             semantics=semantics,
             node_type=node_type,
@@ -5426,10 +5987,21 @@ class NeuralSymbolicDungeonPipeline:
                 archetype = "hub" if required_door_count >= 3 else "serpentine"
             branch_density = max(branch_density, 0.9)
             block_budget = max(block_budget, 34)
-        elif role_flags.get("is_switch_puzzle", False) or {"switch", "switch_locked", "state_block", "on_off_gate"} & flat_edge_tokens:
+        elif gate_family in {"switch", "toggle"}:
             archetype = "gate"
             branch_density = max(branch_density, 0.7)
             block_budget = max(block_budget, 24)
+        elif gate_family in {"bombable", "item_unlock", "key"} and archetype not in {"hub", "combat"}:
+            archetype = "gate"
+            if gate_family == "key":
+                branch_density = max(branch_density, 0.55)
+                block_budget = max(block_budget, 20)
+            elif gate_family == "item_unlock":
+                branch_density = max(branch_density, 0.6)
+                block_budget = max(block_budget, 22)
+            else:
+                branch_density = max(branch_density, 0.65)
+                block_budget = max(block_budget, 24)
         elif node_type in {"item", "protection_item", "minor_item", "treasure", "stair", "stairs_up", "stairs_down", "warp"}:
             archetype = "island"
             branch_density = min(max(branch_density, 0.55), 0.8)
@@ -5439,6 +6011,7 @@ class NeuralSymbolicDungeonPipeline:
 
         return {
             "archetype": str(archetype),
+            "gate_family": str(gate_family),
             "branch_density": float(max(0.0, min(1.0, branch_density))),
             "block_budget": int(max(0, block_budget)),
             "preserve_route_margin": int(max(0, preserve_margin)),
@@ -5533,6 +6106,7 @@ class NeuralSymbolicDungeonPipeline:
             outgoing_dirs=semantics["outgoing_dirs"],
             edge_constraint_tokens=semantics["edge_constraints"],
             room_role_flags=self._room_role_flags(attrs),
+            validator_plan_max_states=self.default_validator_plan_max_states,
         ).astype(np.float32, copy=False)
 
     def _build_room_topology_condition_tensor(
@@ -6118,6 +6692,9 @@ def generation_runtime_kwargs_from_resolved_config(config: Dict[str, Any]) -> Di
         "default_use_topological_positional_encoding": stage.get("use_topological_positional_encoding", True),
         "default_apply_repair": stage.get("apply_repair", True),
         "default_enable_map_elites": stage.get("enable_map_elites", False),
+        "symbolic_max_repair_attempts": stage.get("symbolic_max_repair_attempts", 5),
+        "symbolic_repair_margin": stage.get("symbolic_repair_margin", 2),
+        "symbolic_adjacency_threshold": stage.get("symbolic_adjacency_threshold", 0.01),
         "default_start_goal_coords": (
             tuple(int(v) for v in stage.get("default_start_coord", (1, 5))),
             tuple(int(v) for v in stage.get("default_goal_coord", (14, 5))),
@@ -6166,6 +6743,30 @@ def generation_runtime_kwargs_from_resolved_config(config: Dict[str, Any]) -> Di
         "default_puzzle_room_preserve_route_margin": stage.get(
             "puzzle_room_preserve_route_margin",
             0,
+        ),
+        "default_puzzle_room_switch_pocket_depth": stage.get(
+            "puzzle_room_switch_pocket_depth",
+            3,
+        ),
+        "default_puzzle_room_resource_bypass_offset": stage.get(
+            "puzzle_room_resource_bypass_offset",
+            2,
+        ),
+        "default_puzzle_room_key_pocket_depth": stage.get(
+            "puzzle_room_key_pocket_depth",
+            3,
+        ),
+        "default_puzzle_room_item_slot_depth": stage.get(
+            "puzzle_room_item_slot_depth",
+            3,
+        ),
+        "default_puzzle_room_toggle_corridor_offset": stage.get(
+            "puzzle_room_toggle_corridor_offset",
+            2,
+        ),
+        "default_validator_plan_max_states": stage.get(
+            "validator_plan_max_states",
+            DEFAULT_VALIDATOR_PLAN_MAX_STATES,
         ),
         "default_deterministic_graph_marker_overlay_enabled": stage.get(
             "deterministic_graph_marker_overlay_enabled",

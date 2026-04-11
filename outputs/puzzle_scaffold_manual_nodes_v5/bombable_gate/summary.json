@@ -1,0 +1,80 @@
+{
+  "case_name": "bombable_gate",
+  "room_id": 0,
+  "start_goal": [
+    [
+      8,
+      0
+    ],
+    [
+      8,
+      10
+    ]
+  ],
+  "stats": {
+    "applied": 1,
+    "tiles_added": 10,
+    "segments_added": 3,
+    "existing_structure_tiles": 0,
+    "planned_route_pixels": 20,
+    "noise_components_removed": 0,
+    "noise_tiles_removed": 0,
+    "route_template_used": 1,
+    "archetype": "gate",
+    "gate_family": "bombable",
+    "stateful_anchor_name": "puzzle",
+    "profile_branch_density": 0.75,
+    "profile_block_budget": 28,
+    "profile_preserve_route_margin": 0,
+    "optional_segments_requested": 2,
+    "optional_segments_applied": 1
+  },
+  "role_flags": {
+    "is_start": false,
+    "has_enemy": false,
+    "has_key": false,
+    "has_item": false,
+    "has_goal": false,
+    "has_boss": false,
+    "has_puzzle": true,
+    "is_tutorial_puzzle": false,
+    "is_combat_puzzle": false,
+    "is_complex_puzzle": false,
+    "is_switch_puzzle": false
+  },
+  "anchors": {
+    "door:E": [
+      8,
+      10
+    ],
+    "start": [
+      8,
+      1
+    ],
+    "goal": [
+      8,
+      9
+    ],
+    "puzzle": [
+      10,
+      5
+    ]
+  },
+  "edge_constraints": {
+    "N": [],
+    "S": [],
+    "E": [
+      "bombable"
+    ],
+    "W": []
+  },
+  "required_doors": {
+    "N": false,
+    "S": false,
+    "E": true,
+    "W": false
+  },
+  "block_tiles": 10,
+  "wall_tiles": 50,
+  "room_text_sha256_prefix": "f7cc8927b0a8a222"
+}

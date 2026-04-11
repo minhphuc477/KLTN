@@ -1,0 +1,146 @@
+{
+  "name": "masked_room_full",
+  "room_generator_mode": "discrete_masked",
+  "metrics": {
+    "num_rooms": 11,
+    "total_tiles_repaired": 52,
+    "repair_rate": 0.8181818181818182,
+    "dungeon_shape": [
+      48,
+      55
+    ],
+    "generation_time_sec": 59.670639514923096,
+    "batch_generation_diagnostics": [
+      {
+        "layer_index": 0,
+        "latent_shape_chw": [
+          48,
+          16,
+          11
+        ],
+        "target_room_size_hw": [
+          16,
+          11
+        ],
+        "bucket_room_count": 11,
+        "requested_batch_size": 8,
+        "safe_chunk_size": 8,
+        "cuda_free_mb": 1691.7000007629395
+      },
+      {
+        "layer_index": 0,
+        "bucket_key": "(48, 16, 11, 16, 11)",
+        "chunk_start": 0,
+        "actual_chunk_size": 8
+      },
+      {
+        "layer_index": 0,
+        "bucket_key": "(48, 16, 11, 16, 11)",
+        "chunk_start": 8,
+        "actual_chunk_size": 3
+      }
+    ],
+    "total_graph_marker_expected": 10.0,
+    "total_graph_marker_overwrites": 0.0,
+    "avg_neural_graph_marker_exact_match_rate": 1.0,
+    "avg_final_pre_overlay_graph_marker_exact_match_rate": 1.0,
+    "avg_final_post_overlay_graph_marker_exact_match_rate": 1.0,
+    "avg_final_graph_marker_overwrite_rate": 0.0,
+    "avg_neural_semantic_anchor_error": 0.0,
+    "avg_final_pre_overlay_semantic_anchor_error": 0.0
+  },
+  "runtime_diagnostics": {
+    "semantic_constrained_decode_applied": 17,
+    "wfc_feedback_attempts": 21,
+    "neural_boundary_shell_enforced": 21,
+    "final_boundary_shell_enforced": 21,
+    "masked_room_teacher_fallback": 10,
+    "topology_door_tiles_forced": 10,
+    "neural_graph_semantic_hints_salvaged": 15,
+    "neural_structural_artifacts_stripped": 8,
+    "repair_graph_semantic_hints_salvaged": 15,
+    "neural_post_boundary_graph_semantic_hints_salvaged": 15,
+    "final_post_boundary_graph_semantic_hints_salvaged": 15,
+    "repair_structural_artifacts_stripped": 2,
+    "neural_room_semantics_stripped": 2,
+    "repair_room_semantics_stripped": 1,
+    "puzzle_room_scaffold_applied": 6,
+    "puzzle_room_scaffold_gate": 2,
+    "boundary_latent_masking_applied": 2,
+    "puzzle_room_scaffold_combat": 2,
+    "puzzle_room_scaffold_serpentine": 2
+  },
+  "topology_anchor_policy": {
+    "topology_anchor_policy_version": "2026-04-07.semantic_anchor_v5_adaptive_puzzle_profiles",
+    "semantic_role_prior_strength": 0.15,
+    "semantic_anchor_threshold": 0.5,
+    "semantic_puzzle_offset": 2,
+    "semantic_constrained_decoding_enabled": true,
+    "semantic_marker_logit_bias": 10000.0,
+    "semantic_marker_suppression_bias": 100.0,
+    "puzzle_room_scaffold_enabled": true,
+    "puzzle_room_scaffold_min_structure_tiles": 10,
+    "puzzle_room_archetype_mode": "auto",
+    "puzzle_room_branch_density": 0.75,
+    "puzzle_room_block_budget": 28,
+    "puzzle_room_preserve_route_margin": 0,
+    "deterministic_graph_marker_overlay_enabled": true,
+    "fast_sampler_teacher_fallback_enabled": true,
+    "masked_room_teacher_fallback_enabled": true
+  },
+  "semantic_metrics": {
+    "total_graph_marker_expected": 10.0,
+    "total_graph_marker_overwrites": 0.0,
+    "avg_neural_graph_marker_exact_match_rate": 1.0,
+    "avg_final_pre_overlay_graph_marker_exact_match_rate": 1.0,
+    "avg_final_post_overlay_graph_marker_exact_match_rate": 1.0,
+    "avg_final_graph_marker_overwrite_rate": 0.0,
+    "avg_neural_semantic_anchor_error": 0.0,
+    "avg_final_pre_overlay_semantic_anchor_error": 0.0
+  },
+  "tile_hist": {
+    "0": 704,
+    "2": 726,
+    "10": 50,
+    "1": 1065,
+    "3": 42,
+    "20": 2,
+    "32": 1,
+    "43": 3,
+    "31": 1,
+    "15": 15,
+    "14": 23,
+    "13": 5,
+    "21": 1,
+    "23": 1,
+    "22": 1
+  },
+  "room_hashes": {
+    "0": "0b1e636c8b67f27f",
+    "1": "13ba690a0bf50c91",
+    "2": "a31c1904f9f59ea5",
+    "3": "2fdaded7073316f6",
+    "4": "30a29c5bde1a607a",
+    "5": "283a93fd0447d988",
+    "6": "32d1aa2ea40e9276",
+    "7": "5a56eb72c4a1bf67",
+    "8": "50a4d55b731513df",
+    "9": "c311562170d7786b",
+    "10": "cba9cabbf9e39eb0"
+  },
+  "layout": {
+    "room_count": 11.0,
+    "primary_quality_metric_name": "graph_edge_slot_adjacency_rate",
+    "primary_quality_metric_value": 1.0,
+    "graph_slot_match_rate": 0.0,
+    "graph_position_coverage_rate": 1.0,
+    "graph_preferred_position_duplicate_rate": 0.45454545454545453,
+    "graph_slot_preference_mean_distance": 5.2727272727272725,
+    "graph_slot_preference_max_distance": 10.0,
+    "graph_edge_slot_adjacency_rate": 1.0,
+    "graph_edge_slot_mean_distance": 1.0,
+    "graph_edge_slot_mean_excess_distance": 0.0,
+    "graph_edge_slot_max_distance": 1.0,
+    "graph_edge_count_evaluated": 11.0
+  }
+}

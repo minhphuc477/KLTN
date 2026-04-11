@@ -252,6 +252,9 @@ class MissionGraph:
         EdgeType.STAIRS,
         EdgeType.HIDDEN,
     }
+    NON_TRAVERSABLE_EDGE_TYPES: ClassVar[Set[EdgeType]] = {
+        EdgeType.VISUAL_LINK,
+    }
 
     nodes: Dict[int, MissionNode] = field(default_factory=dict)
     edges: List[MissionEdge] = field(default_factory=list)
@@ -430,12 +433,60 @@ class MissionGraph:
         return self._adjacency.get(node_id, [])
 
     def get_out_degree(self, node_id: int) -> int:
-        """Get directed out-degree from cached adjacency."""
-        return int(len(self._adjacency.get(node_id, [])))
+        """Get directed out-degree from explicit forward edges."""
+        return int(len(self.get_forward_adjacency_map().get(node_id, [])))
 
     def get_adjacency_map(self) -> Dict[Any, List[Any]]:
         """Return a shallow copy of adjacency for read-only traversal."""
         return {node_id: list(neighbors) for node_id, neighbors in self._adjacency.items()}
+
+    def get_forward_adjacency_map(self) -> Dict[Any, List[Any]]:
+        """
+        Return forward-only traversable adjacency from the explicit edge list.
+
+        This keeps mission ordering separate from the weak/bidirectional
+        traversal map used for reachability and layout.
+        """
+        adjacency: Dict[Any, List[Any]] = {node_id: [] for node_id in self.nodes.keys()}
+        for edge in self.edges:
+            if edge.source not in self.nodes or edge.target not in self.nodes:
+                continue
+            if edge.edge_type in self.NON_TRAVERSABLE_EDGE_TYPES:
+                continue
+            adjacency.setdefault(edge.source, []).append(edge.target)
+
+        for node_id, neighbors in list(adjacency.items()):
+            seen: Set[Any] = set()
+            deduped: List[Any] = []
+            for neighbor in neighbors:
+                if neighbor in seen:
+                    continue
+                seen.add(neighbor)
+                deduped.append(neighbor)
+            adjacency[node_id] = deduped
+        return adjacency
+
+    def get_forward_successors(self, node_id: int, depth: int = 1) -> List[MissionNode]:
+        """Get forward-only successors reachable within `depth` mission steps."""
+        if node_id not in self.nodes:
+            return []
+
+        adjacency = self.get_forward_adjacency_map()
+        successors: List[MissionNode] = []
+        visited = {node_id}
+        queue = deque([(node_id, 0)])
+
+        while queue:
+            current, current_depth = queue.popleft()
+            if current_depth >= depth:
+                continue
+            for neighbor in adjacency.get(current, []):
+                if neighbor in visited or neighbor not in self.nodes:
+                    continue
+                visited.add(neighbor)
+                successors.append(self.nodes[neighbor])
+                queue.append((neighbor, current_depth + 1))
+        return successors
     
     def get_nodes_by_type(self, node_type: NodeType) -> List[MissionNode]:
         """Get all nodes of a given type."""
@@ -646,6 +697,22 @@ class MissionGraph:
             return 0
         
         distances = self._bfs_distances(node_a)
+        return distances.get(node_b, -1)
+
+    def get_forward_shortest_path_length(self, node_a: int, node_b: int) -> int:
+        """
+        Get shortest directed path length using explicit forward mission edges.
+
+        This is the safe choice for progression semantics such as "item before
+        gate" or "tutorial before climax".
+        """
+        if node_a == node_b:
+            return 0
+
+        distances = self._bfs_distances(
+            node_a,
+            adjacency=self.get_forward_adjacency_map(),
+        )
         return distances.get(node_b, -1)
     
     def get_node_degree(self, node_id: int) -> int:
@@ -1045,6 +1112,48 @@ class ProductionRule:
         """Apply the rule and return modified graph."""
         raise NotImplementedError
 
+    @staticmethod
+    def _small_key_supply(graph: MissionGraph) -> int:
+        return sum(1 for node in graph.nodes.values() if node.node_type == NodeType.KEY)
+
+    @staticmethod
+    def _small_key_demand(graph: MissionGraph) -> int:
+        demand = 0
+        for edge in graph.edges:
+            if edge.edge_type != EdgeType.LOCKED:
+                continue
+            if edge.requires_key_count > 0:
+                demand += int(max(1, edge.requires_key_count))
+            else:
+                demand += 1
+        return int(max(0, demand))
+
+    def _allow_bonus_small_key(self, graph: MissionGraph) -> bool:
+        """Only allow side-reward keys when the graph is actually key-starved."""
+        supply = self._small_key_supply(graph)
+        demand = self._small_key_demand(graph)
+        # Avoid minting free keys on side branches unless we are still behind.
+        return bool(supply < demand)
+
+    def _reward_node_choices(
+        self,
+        graph: MissionGraph,
+        *,
+        include_empty: bool = False,
+        include_treasure: bool = True,
+        include_protection_item: bool = False,
+    ) -> List[NodeType]:
+        choices: List[NodeType] = [NodeType.ITEM]
+        if include_treasure:
+            choices.append(NodeType.TREASURE)
+        if include_protection_item:
+            choices.append(NodeType.PROTECTION_ITEM)
+        if include_empty:
+            choices.append(NodeType.EMPTY)
+        if self._allow_bonus_small_key(graph):
+            choices.append(NodeType.KEY)
+        return choices
+
 
 class StartRule(ProductionRule):
     """S -> START, SEGMENT, GOAL"""
@@ -1269,15 +1378,16 @@ class InsertLockKeyRule(ProductionRule):
         start_id: int,
         goal_id: int,
     ) -> List[int]:
-        """Return one shortest path (node sequence) over adjacency."""
+        """Return one shortest path (node sequence) over forward progression edges."""
         if start_id == goal_id:
             return [start_id]
 
+        adjacency = graph.get_forward_adjacency_map()
         visited = {start_id}
         queue = deque([(start_id, [start_id])])
         while queue:
             current, path = queue.popleft()
-            for neighbor in graph._adjacency.get(current, []):
+            for neighbor in adjacency.get(current, []):
                 if neighbor in visited:
                     continue
                 new_path = path + [neighbor]
@@ -1820,7 +1930,7 @@ class MissionGrammar:
         """Public wrapper for anchor-node normalization."""
         return self._ensure_anchor_nodes(graph)
 
-    def validate_goal_gauntlet(self, graph: MissionGraph) -> bool:
+    def validate_goal_gauntlet(self, graph: MissionGraph, *, log_failures: bool = True) -> bool:
         """
         Validate the final boss-goal chain used by strict VGLC topology checks.
 
@@ -1832,65 +1942,124 @@ class MissionGrammar:
         graph.sanitize()
         goal = graph.get_goal_node()
         if goal is None:
-            logger.warning("Goal gauntlet validation failed: missing GOAL node")
+            if log_failures:
+                logger.warning("Goal gauntlet validation failed: missing GOAL node")
             return False
 
         boss_nodes = graph.get_nodes_by_type(NodeType.BOSS)
         if not boss_nodes:
-            logger.warning("Goal gauntlet validation failed: missing BOSS node")
+            if log_failures:
+                logger.warning("Goal gauntlet validation failed: missing BOSS node")
+            return False
+        if len(boss_nodes) != 1:
+            if log_failures:
+                logger.warning(
+                    "Goal gauntlet validation failed: expected exactly one BOSS node, found %s",
+                    len(boss_nodes),
+                )
             return False
 
         goal_neighbors = list(dict.fromkeys(graph._adjacency.get(goal.id, [])))
         if len(goal_neighbors) != 1:
-            logger.warning(
-                "Goal gauntlet validation failed: GOAL %s has neighbors %s (expected exactly one boss neighbor)",
-                goal.id,
-                goal_neighbors,
-            )
+            if log_failures:
+                logger.warning(
+                    "Goal gauntlet validation failed: GOAL %s has neighbors %s (expected exactly one boss neighbor)",
+                    goal.id,
+                    goal_neighbors,
+                )
             return False
 
         boss_id = goal_neighbors[0]
         boss = graph.nodes.get(boss_id)
         if boss is None or boss.node_type != NodeType.BOSS:
-            logger.warning(
-                "Goal gauntlet validation failed: GOAL %s is not attached to a BOSS node (neighbor=%s)",
-                goal.id,
-                boss_id,
-            )
+            if log_failures:
+                logger.warning(
+                    "Goal gauntlet validation failed: GOAL %s is not attached to a BOSS node (neighbor=%s)",
+                    goal.id,
+                    boss_id,
+                )
             return False
 
         if any(edge.source == goal.id for edge in graph.edges):
-            logger.warning("Goal gauntlet validation failed: GOAL %s has outgoing edges", goal.id)
+            if log_failures:
+                logger.warning("Goal gauntlet validation failed: GOAL %s has outgoing edges", goal.id)
             return False
 
         boss_door_nodes = graph.get_nodes_by_type(NodeType.BOSS_DOOR)
         if boss_door_nodes:
-            boss_door_ids = {node.id for node in boss_door_nodes}
-            boss_predecessors = [edge.source for edge in graph.edges if edge.target == boss_id]
-            if not any(pred in boss_door_ids for pred in boss_predecessors):
-                logger.warning(
-                    "Goal gauntlet validation failed: BOSS %s is not gated by a BOSS_DOOR predecessor",
-                    boss_id,
-                )
+            if len(boss_door_nodes) != 1:
+                if log_failures:
+                    logger.warning(
+                        "Goal gauntlet validation failed: expected exactly one BOSS_DOOR node, found %s",
+                        len(boss_door_nodes),
+                    )
                 return False
 
-            for boss_door in boss_door_nodes:
-                if boss_door.key_id is None:
+            boss_door = boss_door_nodes[0]
+            boss_predecessors = [edge.source for edge in graph.edges if edge.target == boss_id]
+            if boss_predecessors != [boss_door.id]:
+                if log_failures:
+                    logger.warning(
+                        "Goal gauntlet validation failed: BOSS %s has predecessors %s (expected only BOSS_DOOR %s)",
+                        boss_id,
+                        boss_predecessors,
+                        boss_door.id,
+                    )
+                return False
+
+            boss_successors = [edge.target for edge in graph.edges if edge.source == boss_id]
+            if boss_successors != [goal.id]:
+                if log_failures:
+                    logger.warning(
+                        "Goal gauntlet validation failed: BOSS %s has successors %s (expected only GOAL %s)",
+                        boss_id,
+                        boss_successors,
+                        goal.id,
+                    )
+                return False
+
+            boss_door_successors = [edge.target for edge in graph.edges if edge.source == boss_door.id]
+            if boss_door_successors != [boss_id]:
+                if log_failures:
+                    logger.warning(
+                        "Goal gauntlet validation failed: BOSS_DOOR %s has successors %s (expected only BOSS %s)",
+                        boss_door.id,
+                        boss_door_successors,
+                        boss_id,
+                    )
+                return False
+
+            boss_door_predecessors = [edge.source for edge in graph.edges if edge.target == boss_door.id]
+            if not boss_door_predecessors or any(
+                predecessor in {boss_door.id, boss_id, goal.id}
+                for predecessor in boss_door_predecessors
+            ):
+                if log_failures:
+                    logger.warning(
+                        "Goal gauntlet validation failed: BOSS_DOOR %s has invalid predecessors %s",
+                        boss_door.id,
+                        boss_door_predecessors,
+                    )
+                return False
+
+            if boss_door.key_id is None:
+                if log_failures:
                     logger.warning(
                         "Goal gauntlet validation failed: BOSS_DOOR %s is missing key_id",
                         boss_door.id,
                     )
-                    return False
-                has_big_key = any(
-                    node.node_type == NodeType.BIG_KEY and node.key_id == boss_door.key_id
-                    for node in graph.nodes.values()
-                )
-                if not has_big_key:
+                return False
+            has_big_key = any(
+                node.node_type == NodeType.BIG_KEY and node.key_id == boss_door.key_id
+                for node in graph.nodes.values()
+            )
+            if not has_big_key:
+                if log_failures:
                     logger.warning(
                         "Goal gauntlet validation failed: no BIG_KEY provider found for BOSS_DOOR %s",
                         boss_door.id,
                     )
-                    return False
+                return False
 
         return True
 
@@ -1915,15 +2084,6 @@ class MissionGrammar:
             for edge in graph.edges
             if edge.target == goal.id and edge.source in graph.nodes
         ]
-        primary_approach = next(
-            (source for source in goal_incoming if source != goal.id),
-            None,
-        )
-        if primary_approach is None:
-            non_goal_nodes = sorted(node_id for node_id in graph.nodes if node_id != goal.id)
-            if not non_goal_nodes:
-                return graph
-            primary_approach = non_goal_nodes[0]
 
         boss_neighbors = [
             neighbor
@@ -1932,9 +2092,9 @@ class MissionGrammar:
             and graph.nodes[neighbor].node_type == NodeType.BOSS
         ]
         boss_node = graph.nodes.get(boss_neighbors[0]) if boss_neighbors else None
+        boss_nodes = sorted(graph.get_nodes_by_type(NodeType.BOSS), key=lambda node: node.id)
         if boss_node is None:
-            existing_bosses = sorted(graph.get_nodes_by_type(NodeType.BOSS), key=lambda node: node.id)
-            boss_node = existing_bosses[0] if existing_bosses else None
+            boss_node = boss_nodes[0] if boss_nodes else None
 
         if boss_node is None:
             boss_id = max(graph.nodes.keys(), default=-1) + 1
@@ -1948,6 +2108,33 @@ class MissionGrammar:
             )
             graph.add_node(boss_node)
             repairs += 1
+            boss_nodes = [boss_node]
+
+        boss_predecessors = [
+            edge.source
+            for edge in graph.edges
+            if edge.target == boss_node.id and edge.source in graph.nodes
+        ]
+        primary_approach = next(
+            (
+                source
+                for source in goal_incoming + boss_predecessors
+                if source not in {goal.id, boss_node.id}
+                and graph.nodes.get(source) is not None
+                and graph.nodes[source].node_type != NodeType.BOSS_DOOR
+            ),
+            None,
+        )
+        if primary_approach is None:
+            non_reserved_nodes = sorted(
+                node_id
+                for node_id, node in graph.nodes.items()
+                if node_id not in {goal.id, boss_node.id}
+                and node.node_type != NodeType.BOSS_DOOR
+            )
+            if not non_reserved_nodes:
+                return graph
+            primary_approach = non_reserved_nodes[0]
 
         boss_door_nodes = sorted(graph.get_nodes_by_type(NodeType.BOSS_DOOR), key=lambda node: node.id)
         boss_door = boss_door_nodes[0] if boss_door_nodes else None
@@ -1968,40 +2155,40 @@ class MissionGrammar:
             boss_door.key_id = boss_door.id
             repairs += 1
 
+        preserved_door_approaches = [
+            edge.source
+            for edge in graph.edges
+            if edge.target == boss_door.id
+            and edge.source not in {goal.id, boss_node.id, boss_door.id}
+            and graph.nodes.get(edge.source) is not None
+        ]
+        if preserved_door_approaches:
+            primary_approach = preserved_door_approaches[0]
+
+        for extra_boss in boss_nodes:
+            if extra_boss.id == boss_node.id:
+                continue
+            extra_boss.node_type = NodeType.MINI_BOSS
+            extra_boss.is_mini_boss = True
+            repairs += 1
+
+        for extra_boss_door in boss_door_nodes:
+            if extra_boss_door.id == boss_door.id:
+                continue
+            extra_boss_door.node_type = NodeType.EMPTY
+            extra_boss_door.key_id = None
+            repairs += 1
+
         retained_edges: List[MissionEdge] = []
-        kept_boss_to_goal = False
-        kept_door_to_boss = False
-        kept_approach_to_door = False
         for edge in graph.edges:
             if edge.source == goal.id:
                 repairs += 1
                 continue
             if edge.target == goal.id:
-                if edge.source == boss_node.id and not kept_boss_to_goal:
-                    edge.edge_type = EdgeType.PATH
-                    edge.key_required = None
-                    retained_edges.append(edge)
-                    kept_boss_to_goal = True
-                else:
-                    repairs += 1
+                repairs += 1
                 continue
-            if edge.source == boss_door.id:
-                if edge.target == boss_node.id and not kept_door_to_boss:
-                    edge.edge_type = EdgeType.PATH
-                    edge.key_required = None
-                    retained_edges.append(edge)
-                    kept_door_to_boss = True
-                else:
-                    repairs += 1
-                continue
-            if edge.target == boss_door.id:
-                if edge.source == primary_approach and not kept_approach_to_door:
-                    edge.edge_type = EdgeType.BOSS_LOCKED
-                    edge.key_required = boss_door.key_id
-                    retained_edges.append(edge)
-                    kept_approach_to_door = True
-                else:
-                    retained_edges.append(edge)
+            if edge.source in {boss_door.id, boss_node.id} or edge.target in {boss_door.id, boss_node.id}:
+                repairs += 1
                 continue
             retained_edges.append(edge)
 
@@ -2085,7 +2272,7 @@ class MissionGrammar:
             )
         return graph
     
-    def validate_lock_key_ordering(self, graph: MissionGraph) -> bool:
+    def validate_lock_key_ordering(self, graph: MissionGraph, *, log_failures: bool = True) -> bool:
         """
         Validate that all keys can be reached before their locks.
         
@@ -2114,7 +2301,8 @@ class MissionGrammar:
             
             providers = key_by_id.get(lock.key_id, [])
             if not providers:
-                logger.warning(f"Lock {lock.id} references non-existent key {lock.key_id}")
+                if log_failures:
+                    logger.warning(f"Lock {lock.id} references non-existent key {lock.key_id}")
                 return False
             
             # Check if key is reachable from start without passing through lock
@@ -2122,15 +2310,16 @@ class MissionGrammar:
                 self._is_reachable_without(graph, start.id, key.id, exclude={lock.id})
                 for key in providers
             ):
-                logger.warning(
-                    f"No provider key for lock {lock.id} is reachable before lock "
-                    f"(key_id={lock.key_id})"
-                )
+                if log_failures:
+                    logger.warning(
+                        f"No provider key for lock {lock.id} is reachable before lock "
+                        f"(key_id={lock.key_id})"
+                    )
                 return False
         
         return True
 
-    def validate_progression_constraints(self, graph: MissionGraph) -> bool:
+    def validate_progression_constraints(self, graph: MissionGraph, *, log_failures: bool = True) -> bool:
         """
         Validate edge-level progression constraints (beyond lock-node ordering).
 
@@ -2159,7 +2348,7 @@ class MissionGrammar:
         token_nodes = [n.id for n in graph.nodes.values() if n.node_type == NodeType.TOKEN]
         key_nodes = [
             n.id for n in graph.nodes.values()
-            if n.node_type in {NodeType.KEY, NodeType.BIG_KEY}
+            if n.node_type == NodeType.KEY
         ]
 
         for edge in graph.edges:
@@ -2172,73 +2361,81 @@ class MissionGrammar:
                     if edge.edge_type == EdgeType.LOCKED and edge.requires_key_count > 0:
                         pass
                     else:
-                        logger.warning(
-                            f"{edge.edge_type.name} edge {edge.source}->{edge.target} missing key_required"
-                        )
+                        if log_failures:
+                            logger.warning(
+                                f"{edge.edge_type.name} edge {edge.source}->{edge.target} missing key_required"
+                            )
                         return False
                 if edge.key_required is not None:
                     providers = key_providers.get(edge.key_required, [])
                     if not providers:
-                        logger.warning(
-                            f"No key provider for edge {edge.source}->{edge.target} "
-                            f"(key_required={edge.key_required})"
-                        )
+                        if log_failures:
+                            logger.warning(
+                                f"No key provider for edge {edge.source}->{edge.target} "
+                                f"(key_required={edge.key_required})"
+                            )
                         return False
                     if not any(
                         self._is_reachable_without_edges(graph, start.id, provider, excluded_edge)
                         for provider in providers
                     ):
-                        logger.warning(
-                            f"Key for locked edge {edge.source}->{edge.target} is not reachable pre-gate"
-                        )
+                        if log_failures:
+                            logger.warning(
+                                f"Key for locked edge {edge.source}->{edge.target} is not reachable pre-gate"
+                            )
                         return False
 
             if edge.requires_key_count > 0:
                 reachable = graph.get_reachable_nodes(start.id, excluded_edges=excluded_edge)
                 reachable_keys = sum(1 for key_node in key_nodes if key_node in reachable)
                 if reachable_keys < edge.requires_key_count:
-                    logger.warning(
-                        f"Fungible key lock {edge.source}->{edge.target} requires "
-                        f"{edge.requires_key_count} but only {reachable_keys} keys are reachable pre-gate"
-                    )
+                    if log_failures:
+                        logger.warning(
+                            f"Fungible key lock {edge.source}->{edge.target} requires "
+                            f"{edge.requires_key_count} but only {reachable_keys} keys are reachable pre-gate"
+                        )
                     return False
 
             if edge.edge_type == EdgeType.ITEM_GATE and edge.item_required:
                 providers = item_providers.get(str(edge.item_required), [])
                 if not providers:
-                    logger.warning(
-                        f"No item provider for ITEM_GATE {edge.source}->{edge.target} "
-                        f"(item_required={edge.item_required})"
-                    )
+                    if log_failures:
+                        logger.warning(
+                            f"No item provider for ITEM_GATE {edge.source}->{edge.target} "
+                            f"(item_required={edge.item_required})"
+                        )
                     return False
                 if not any(
                     self._is_reachable_without_edges(graph, start.id, provider, excluded_edge)
                     for provider in providers
                 ):
-                    logger.warning(
-                        f"Item {edge.item_required} not reachable before ITEM_GATE "
-                        f"{edge.source}->{edge.target}"
-                    )
+                    if log_failures:
+                        logger.warning(
+                            f"Item {edge.item_required} not reachable before ITEM_GATE "
+                            f"{edge.source}->{edge.target}"
+                        )
                     return False
 
             if edge.edge_type == EdgeType.MULTI_LOCK and edge.token_count > 0:
                 reachable = graph.get_reachable_nodes(start.id, excluded_edges=excluded_edge)
                 reachable_tokens = sum(1 for token_node in token_nodes if token_node in reachable)
                 if reachable_tokens < edge.token_count:
-                    logger.warning(
-                        f"MULTI_LOCK {edge.source}->{edge.target} requires {edge.token_count} "
-                        f"tokens but only {reachable_tokens} are reachable pre-gate"
-                    )
+                    if log_failures:
+                        logger.warning(
+                            f"MULTI_LOCK {edge.source}->{edge.target} requires {edge.token_count} "
+                            f"tokens but only {reachable_tokens} are reachable pre-gate"
+                        )
                     return False
 
             if edge.edge_type == EdgeType.STATE_BLOCK and edge.switches_required:
                 reachable = graph.get_reachable_nodes(start.id, excluded_edges=excluded_edge)
                 missing_switches = [sid for sid in edge.switches_required if sid not in reachable]
                 if missing_switches:
-                    logger.warning(
-                        f"STATE_BLOCK {edge.source}->{edge.target} has unreachable switches before gate: "
-                        f"{missing_switches}"
-                    )
+                    if log_failures:
+                        logger.warning(
+                            f"STATE_BLOCK {edge.source}->{edge.target} has unreachable switches before gate: "
+                            f"{missing_switches}"
+                        )
                     return False
 
         require_goal_gauntlet = bool(graph.generation_stats.get("require_goal_gauntlet", False))
@@ -2246,7 +2443,7 @@ class MissionGrammar:
             node.node_type in {NodeType.BOSS, NodeType.BOSS_DOOR, NodeType.BIG_KEY}
             for node in graph.nodes.values()
         )
-        if (require_goal_gauntlet or has_goal_gauntlet_artifacts) and not self.validate_goal_gauntlet(graph):
+        if (require_goal_gauntlet or has_goal_gauntlet_artifacts) and not self.validate_goal_gauntlet(graph, log_failures=log_failures):
             return False
 
         return True
@@ -2424,7 +2621,7 @@ class MissionGrammar:
         token_nodes = [n.id for n in graph.nodes.values() if n.node_type == NodeType.TOKEN]
         key_nodes = [
             n.id for n in graph.nodes.values()
-            if n.node_type in {NodeType.KEY, NodeType.BIG_KEY}
+            if n.node_type == NodeType.KEY
         ]
 
         relaxed_edges = 0
@@ -2535,17 +2732,36 @@ class MissionGrammar:
         start = graph.get_start_node()
         changes = 0
 
+        # If the search missed the tutorial/combat/complex arc entirely, use
+        # the dedicated grammar rule as a final pedagogical repair rather than
+        # leaving progression quality to chance. This keeps Block I's explicit
+        # mission contract aligned with the downstream room archetype system.
+        pedagogical_types = {
+            NodeType.TUTORIAL_PUZZLE,
+            NodeType.COMBAT_PUZZLE,
+            NodeType.COMPLEX_PUZZLE,
+        }
+        present_pedagogical_types = {n.node_type for n in graph.nodes.values() if n.node_type in pedagogical_types}
+        needs_skill_chain_repair = len(present_pedagogical_types) < len(pedagogical_types) or not validate_skill_chains(graph)
+        if needs_skill_chain_repair:
+            skill_chain_rule = AddSkillChainRule()
+            repair_context = {"rng": self.rng, "difficulty": Difficulty.MEDIUM.value / 4.0}
+            if skill_chain_rule.can_apply(graph, repair_context):
+                graph = skill_chain_rule.apply(graph, repair_context)
+                graph.sanitize()
+                changes += 1
+
         # Normalize tutorial progression by nearest pedagogical successors.
         tutorial_nodes = [n for n in graph.nodes.values() if n.is_tutorial]
         pedagogical_types = {NodeType.COMBAT_PUZZLE, NodeType.COMPLEX_PUZZLE}
         for tutorial in tutorial_nodes:
             successors = [
-                n for n in graph.get_successors(tutorial.id, depth=3)
+                n for n in graph.get_forward_successors(tutorial.id, depth=3)
                 if n.node_type in pedagogical_types
             ]
             if len(successors) < 2:
                 continue
-            successors.sort(key=lambda n: graph.get_shortest_path_length(tutorial.id, n.id))
+            successors.sort(key=lambda n: graph.get_forward_shortest_path_length(tutorial.id, n.id))
             first, second = successors[0], successors[1]
             if first.difficulty > second.difficulty:
                 first.difficulty, second.difficulty = second.difficulty, first.difficulty
@@ -3136,7 +3352,7 @@ class AddItemGateRule(ProductionRule):
             if e.source == item_id:
                 continue
             # Gate should appear downstream from the item branch.
-            if graph.get_shortest_path_length(item_id, e.source) <= 0:
+            if graph.get_forward_shortest_path_length(item_id, e.source) <= 0:
                 continue
             if start is not None:
                 reachable = graph.get_reachable_nodes(
@@ -3179,8 +3395,17 @@ class AddItemGateRule(ProductionRule):
             
             logger.info(f"AddItemGateRule: Item {item_name} at {item_id}, gate at {gate_id}")
         else:
+            if item_id in graph.nodes:
+                del graph.nodes[item_id]
+            graph.edges = [
+                existing_edge
+                for existing_edge in graph.edges
+                if existing_edge.source != item_id and existing_edge.target != item_id
+            ]
+            graph.add_edge(item_edge.source, item_edge.target, EdgeType.PATH)
+            graph.sanitize()
             logger.debug(
-                "AddItemGateRule: No pre-gate-valid edge found after placing item %s at %s",
+                "AddItemGateRule: No pre-gate-valid edge found after placing item %s at %s; rolled back item-only insert",
                 item_name,
                 item_id,
             )
@@ -3276,7 +3501,13 @@ class CreateHubRule(ProductionRule):
             branch_end_id = max(graph.nodes.keys()) + 1
             branch_end = MissionNode(
                 id=branch_end_id,
-                node_type=rng.choice([NodeType.ITEM, NodeType.KEY, NodeType.EMPTY]),
+                node_type=rng.choice(
+                    self._reward_node_choices(
+                        graph,
+                        include_empty=True,
+                        include_treasure=True,
+                    )
+                ),
                 position=(
                     hub_pos[0] + offset_r * LAYOUT_HUB_BRANCH_SPACING,
                     hub_pos[1] + offset_c * LAYOUT_HUB_BRANCH_SPACING,
@@ -3437,11 +3668,18 @@ class AddSecretRule(ProductionRule):
         graph._adjacency[anchor_node.id].append(secret_id)
         graph._adjacency[secret_id].append(anchor_node.id)  # Can return
         
-        # Add reward in secret room (ITEM or extra KEY)
+        # Add reward in secret room. Bonus small keys are only allowed when the
+        # graph is actually key-starved; otherwise prefer treasure/items.
         reward_id = max(graph.nodes.keys()) + 1
         reward_node = MissionNode(
             id=reward_id,
-            node_type=rng.choice([NodeType.ITEM, NodeType.ITEM, NodeType.KEY]),  # Bias toward items
+            node_type=rng.choice(
+                self._reward_node_choices(
+                    graph,
+                    include_treasure=True,
+                    include_protection_item=True,
+                )
+            ),
             position=(secret_node.position[0] + 1, secret_node.position[1], floor),
             difficulty=context.get('difficulty', 0.5) * 0.4,
         )
@@ -3682,14 +3920,14 @@ class AddFungibleLockRule(ProductionRule):
         # Find a LATER edge for the lock.
         # Candidate must preserve pre-gate key reachability.
         start = graph.get_start_node()
-        key_node_types = {NodeType.KEY, NodeType.BIG_KEY}
+        key_node_types = {NodeType.KEY}
         lock_candidates: List[Tuple[int, MissionEdge]] = []
         for i, e in enumerate(graph.edges):
             if e.edge_type != EdgeType.PATH:
                 continue
             if e.source == key_id:
                 continue
-            if graph.get_shortest_path_length(key_id, e.source) <= 0:
+            if graph.get_forward_shortest_path_length(key_id, e.source) <= 0:
                 continue
             if start is not None:
                 reachable = graph.get_reachable_nodes(
@@ -4083,7 +4321,13 @@ class AddForeshadowingRule(ProductionRule):
         # Place reward at target node if not already interesting
         target_node = graph.nodes[node2]
         if target_node.node_type == NodeType.EMPTY:
-            target_node.node_type = rng.choice([NodeType.TREASURE, NodeType.ITEM, NodeType.KEY])
+            target_node.node_type = rng.choice(
+                self._reward_node_choices(
+                    graph,
+                    include_treasure=True,
+                    include_protection_item=False,
+                )
+            )
         
         # Add VISUAL_LINK edge (non-traversable)
         visual_edge = MissionEdge(
@@ -4177,7 +4421,7 @@ class AddCollectionChallengeRule(ProductionRule):
         for i, e in enumerate(graph.edges):
             if e.edge_type != EdgeType.PATH:
                 continue
-            if graph.get_shortest_path_length(hub.id, e.source) <= 0:
+            if graph.get_forward_shortest_path_length(hub.id, e.source) <= 0:
                 continue
             if start is not None:
                 reachable = graph.get_reachable_nodes(
@@ -4417,10 +4661,15 @@ class AddEntangledBranchesRule(ProductionRule):
         block_anchor = branch_b[-1] if len(branch_b) > 1 else branch_b[0]
         
         # Create reward node
+        has_big_key = any(node.node_type == NodeType.BIG_KEY for node in graph.nodes.values())
+        has_boss_door = any(node.node_type == NodeType.BOSS_DOOR for node in graph.nodes.values())
+        reward_choices = [NodeType.ITEM, NodeType.TREASURE, NodeType.PROTECTION_ITEM]
+        if has_boss_door and not has_big_key:
+            reward_choices.append(NodeType.BIG_KEY)
         reward_id = max(graph.nodes.keys()) + 1
         reward_node = MissionNode(
             id=reward_id,
-            node_type=rng.choice([NodeType.BIG_KEY, NodeType.ITEM, NodeType.TREASURE]),
+            node_type=rng.choice(reward_choices),
             position=graph.nodes[block_anchor].position,
             difficulty=context.get('difficulty', 0.5) * 0.8,
         )
@@ -4571,7 +4820,13 @@ class SplitRoomRule(ProductionRule):
         virtual_id = max(graph.nodes.keys()) + 1
         virtual_node = MissionNode(
             id=virtual_id,
-            node_type=rng.choice([NodeType.TREASURE, NodeType.ITEM, NodeType.KEY]),
+            node_type=rng.choice(
+                self._reward_node_choices(
+                    graph,
+                    include_treasure=True,
+                    include_protection_item=False,
+                )
+            ),
             position=original_node.position,  # SAME x, y, z
             difficulty=context.get('difficulty', 0.5) * 0.7,
             virtual_layer=1,  # Different virtual layer
@@ -4623,72 +4878,162 @@ class AddSkillChainRule(ProductionRule):
     """
     
     def __init__(self):
-        super().__init__("AddSkillChain", weight=0.15)
+        super().__init__("AddSkillChain", weight=0.20)
     
     def can_apply(self, graph: MissionGraph, context: Dict[str, Any]) -> bool:
-        """Can apply if there's an ITEM node with at least 3 successors."""
+        """Can apply if an ITEM node can anchor a downstream pedagogical chain."""
+        if self._has_stage_variety_cap(graph):
+            return False
+        if self._has_existing_skill_chain(graph):
+            return False
         items = graph.get_nodes_by_type(NodeType.ITEM)
         for item in items:
-            successors = self._eligible_successors(graph, item.id, depth=4)
-            if len(successors) >= 3:
+            path_nodes = self._find_forward_progression_path(graph, item.id)
+            successors = self._eligible_successors(graph, path_nodes)
+            if len(successors) >= 3 or self._eligible_direct_edges(graph, item.id) or self._select_progression_anchor(graph, item.id) is not None:
                 return True
         return False
     
     def apply(self, graph: MissionGraph, context: Dict[str, Any]) -> MissionGraph:
         """Create skill chain after item acquisition."""
+        if self._has_stage_variety_cap(graph):
+            return graph
+        if self._has_existing_skill_chain(graph):
+            return graph
         rng = context.get('rng') or random
         
         # Find ITEM nodes with sufficient successors
         items = graph.get_nodes_by_type(NodeType.ITEM)
-        candidates = []
+        candidates: List[Tuple[MissionNode, List[int], List[MissionNode]]] = []
         for item in items:
-            successors = self._eligible_successors(graph, item.id, depth=4)
+            path_nodes = self._find_forward_progression_path(graph, item.id)
+            successors = self._eligible_successors(graph, path_nodes)
             if len(successors) >= 3:
-                candidates.append((item, successors))
+                candidates.append((item, path_nodes, successors))
         
-        if not candidates:
+        if candidates:
+            item_node, _, successors = rng.choice(candidates)
+            
+            # Select 3 successors to convert
+            selected = sorted(
+                successors,
+                key=lambda node: graph.get_shortest_path_length(item_node.id, node.id)
+            )[:3]
+            
+            # Convert to tutorial sequence
+            for i, node in enumerate(selected):
+                if i == 0:
+                    # SAFE tutorial
+                    node.node_type = NodeType.TUTORIAL_PUZZLE
+                    node.difficulty_rating = "SAFE"
+                    node.difficulty = 0.2
+                    node.is_tutorial = True
+                    node.tension_value = 0.1
+                elif i == 1:
+                    # MODERATE combat
+                    node.node_type = NodeType.COMBAT_PUZZLE
+                    node.difficulty_rating = "MODERATE"
+                    node.difficulty = 0.5
+                    node.tension_value = 0.5
+                else:
+                    # HARD complex
+                    node.node_type = NodeType.COMPLEX_PUZZLE
+                    node.difficulty_rating = "HARD"
+                    node.difficulty = 0.8
+                    node.tension_value = 0.7
+            
+            logger.info(f"AddSkillChainRule: Created tutorial chain after item {item_node.id} ({item_node.item_type})")
             return graph
-        
-        item_node, successors = rng.choice(candidates)
-        
-        # Select 3 successors to convert
-        selected = sorted(
-            successors,
-            key=lambda node: graph.get_shortest_path_length(item_node.id, node.id)
-        )[:3]
-        
-        # Convert to tutorial sequence
-        for i, node in enumerate(selected):
-            if i == 0:
-                # SAFE tutorial
-                node.node_type = NodeType.TUTORIAL_PUZZLE
-                node.difficulty_rating = "SAFE"
-                node.difficulty = 0.2
-                node.is_tutorial = True
-                node.tension_value = 0.1
-            elif i == 1:
-                # MODERATE combat
-                node.node_type = NodeType.COMBAT_PUZZLE
-                node.difficulty_rating = "MODERATE"
-                node.difficulty = 0.5
-                node.tension_value = 0.5
-            else:
-                # HARD complex
-                node.node_type = NodeType.COMPLEX_PUZZLE
-                node.difficulty_rating = "HARD"
-                node.difficulty = 0.8
-                node.tension_value = 0.7
-        
-        logger.info(f"AddSkillChainRule: Created tutorial chain after item {item_node.id} ({item_node.item_type})")
+
+        fallback_candidates: List[Tuple[MissionNode, List[Tuple[int, MissionEdge]], Optional[int]]] = []
+        for item in items:
+            direct_edges = self._eligible_direct_edges(graph, item.id)
+            anchor_id = self._select_progression_anchor(graph, item.id)
+            if direct_edges or anchor_id is not None:
+                fallback_candidates.append((item, direct_edges, anchor_id))
+
+        if not fallback_candidates:
+            return graph
+
+        item_node, direct_edges, anchor_id = rng.choice(fallback_candidates)
+        edge_idx: Optional[int] = None
+        edge_target: Optional[int] = None
+        matching_anchor_edges = [
+            (candidate_idx, candidate_edge)
+            for candidate_idx, candidate_edge in direct_edges
+            if anchor_id is not None and int(candidate_edge.target) == int(anchor_id)
+        ]
+        if matching_anchor_edges:
+            edge_idx, edge = rng.choice(matching_anchor_edges)
+            edge_target = int(edge.target)
+        elif anchor_id is not None:
+            edge_target = int(anchor_id)
+            if direct_edges:
+                edge_idx, _ = rng.choice(direct_edges)
+        elif direct_edges:
+            edge_idx, edge = rng.choice(direct_edges)
+            edge_target = int(edge.target)
+        if edge_target is None:
+            return graph
+
+        next_id = max(graph.nodes.keys(), default=-1) + 1
+        base_pos = graph.nodes[item_node.id].position
+        base_floor = base_pos[2] if len(base_pos) > 2 else 0
+        base_x = base_pos[0]
+        base_y = base_pos[1]
+
+        created_nodes = [
+            MissionNode(
+                id=next_id,
+                node_type=NodeType.TUTORIAL_PUZZLE,
+                position=(base_x + 1, base_y, base_floor),
+                difficulty=0.2,
+                difficulty_rating="SAFE",
+                is_tutorial=True,
+                tension_value=0.1,
+            ),
+            MissionNode(
+                id=next_id + 1,
+                node_type=NodeType.COMBAT_PUZZLE,
+                position=(base_x + 2, base_y, base_floor),
+                difficulty=0.5,
+                difficulty_rating="MODERATE",
+                tension_value=0.5,
+            ),
+            MissionNode(
+                id=next_id + 2,
+                node_type=NodeType.COMPLEX_PUZZLE,
+                position=(base_x + 3, base_y, base_floor),
+                difficulty=0.8,
+                difficulty_rating="HARD",
+                tension_value=0.7,
+            ),
+        ]
+        for node in created_nodes:
+            graph.add_node(node)
+
+        if edge_idx is not None:
+            graph.edges = [existing for i, existing in enumerate(graph.edges) if i != edge_idx]
+        graph.add_edge(item_node.id, created_nodes[0].id, EdgeType.PATH)
+        graph.add_edge(created_nodes[0].id, created_nodes[1].id, EdgeType.PATH)
+        graph.add_edge(created_nodes[1].id, created_nodes[2].id, EdgeType.PATH)
+        graph.add_edge(created_nodes[2].id, edge_target, EdgeType.PATH)
+        graph.sanitize()
+
+        logger.info(
+            "AddSkillChainRule: Inserted pedagogical chain after item %s (%s) before node %s",
+            item_node.id,
+            item_node.item_type,
+            edge_target,
+        )
         return graph
 
     def _eligible_successors(
         self,
         graph: MissionGraph,
-        item_id: int,
-        depth: int = 4,
+        path_nodes: List[int],
     ) -> List[MissionNode]:
-        """Filter successors to progression-relevant rooms only."""
+        """Filter forward path nodes to progression-relevant rooms only."""
         blocked_types = {
             NodeType.START,
             NodeType.GOAL,
@@ -4698,14 +5043,153 @@ class AddSkillChainRule(ProductionRule):
         }
         seen: Set[int] = set()
         filtered: List[MissionNode] = []
-        for node in graph.get_successors(item_id, depth=depth):
-            if node.id == item_id or node.id in seen:
+        for node_id in path_nodes[1:]:
+            node = graph.get_node(node_id)
+            if node is None or node.id in seen:
                 continue
             if node.node_type in blocked_types:
                 continue
             seen.add(node.id)
             filtered.append(node)
         return filtered
+
+    def _find_forward_progression_path(
+        self,
+        graph: MissionGraph,
+        item_id: int,
+    ) -> List[int]:
+        """Find a forward-only path from an item toward the nearest climax anchor."""
+        forward_adj = graph.get_forward_adjacency_map()
+        candidate_paths: List[Tuple[int, int, List[int]]] = []
+        for priority, node_type in enumerate((NodeType.BOSS_DOOR, NodeType.BOSS, NodeType.GOAL)):
+            for target in graph.get_nodes_by_type(node_type):
+                path = self._find_forward_path_nodes(forward_adj, item_id, target.id)
+                if path and len(path) >= 2:
+                    candidate_paths.append((len(path), priority, path))
+        if not candidate_paths:
+            return []
+        candidate_paths.sort(key=lambda entry: (entry[0], entry[1]))
+        return list(candidate_paths[0][2])
+
+    def _select_progression_anchor(
+        self,
+        graph: MissionGraph,
+        item_id: int,
+    ) -> Optional[int]:
+        """
+        Choose a downstream anchor that lets an item branch rejoin the climax route.
+        """
+        forward_path = self._find_forward_progression_path(graph, item_id)
+        if len(forward_path) >= 2:
+            return int(forward_path[1])
+
+        start = graph.get_start_node()
+        goal = graph.get_goal_node()
+        if start is None or goal is None:
+            return None
+        critical_path = self._find_forward_path_nodes(
+            graph.get_forward_adjacency_map(),
+            start.id,
+            goal.id,
+        )
+        if not critical_path:
+            return None
+
+        preferred_types = {NodeType.BOSS_DOOR, NodeType.BOSS, NodeType.GOAL}
+        for node_id in critical_path:
+            node = graph.get_node(node_id)
+            if node is not None and node.node_type in preferred_types:
+                return int(node_id)
+        if len(critical_path) >= 2:
+            return int(critical_path[-1])
+        return None
+
+    def _has_existing_skill_chain(self, graph: MissionGraph) -> bool:
+        """Return True when the graph already has one valid item-to-climax skill chain."""
+        stage_order = (
+            NodeType.TUTORIAL_PUZZLE,
+            NodeType.COMBAT_PUZZLE,
+            NodeType.COMPLEX_PUZZLE,
+        )
+        for item in graph.get_nodes_by_type(NodeType.ITEM):
+            path_nodes = self._find_forward_progression_path(graph, item.id)
+            if len(path_nodes) < 2:
+                continue
+            prev_index = 0
+            matched_count = 0
+            for stage in stage_order:
+                matched_index = None
+                for idx in range(prev_index + 1, len(path_nodes)):
+                    node = graph.get_node(int(path_nodes[idx]))
+                    if node is not None and node.node_type == stage:
+                        matched_index = idx
+                        break
+                if matched_index is None:
+                    break
+                prev_index = matched_index
+                matched_count += 1
+            if matched_count == len(stage_order):
+                return True
+        return False
+
+    def _has_stage_variety_cap(self, graph: MissionGraph) -> bool:
+        """Treat one complete tutorial/combat/complex set as enough pedagogy for one topology."""
+        counts = {
+            NodeType.TUTORIAL_PUZZLE: 0,
+            NodeType.COMBAT_PUZZLE: 0,
+            NodeType.COMPLEX_PUZZLE: 0,
+        }
+        for node in graph.nodes.values():
+            if node.node_type in counts:
+                counts[node.node_type] += 1
+        return all(count >= 1 for count in counts.values())
+
+    def _find_forward_path_nodes(
+        self,
+        adjacency: Dict[int, List[int]],
+        start_id: int,
+        goal_id: int,
+    ) -> List[int]:
+        """Return one forward-only shortest path over explicit edge direction."""
+        if start_id == goal_id:
+            return [start_id]
+
+        visited = {start_id}
+        queue = deque([(start_id, [start_id])])
+        while queue:
+            current, path = queue.popleft()
+            for neighbor in adjacency.get(current, []):
+                if neighbor in visited:
+                    continue
+                new_path = path + [neighbor]
+                if neighbor == goal_id:
+                    return new_path
+                visited.add(neighbor)
+                queue.append((neighbor, new_path))
+        return []
+
+    def _eligible_direct_edges(
+        self,
+        graph: MissionGraph,
+        item_id: int,
+    ) -> List[Tuple[int, MissionEdge]]:
+        """Fallback edges that can be rewritten into an explicit skill chain."""
+        blocked_types = {
+            NodeType.START,
+            NodeType.GOAL,
+            NodeType.BOSS,
+            NodeType.BOSS_DOOR,
+            NodeType.BIG_KEY,
+        }
+        candidates: List[Tuple[int, MissionEdge]] = []
+        for edge_idx, edge in enumerate(graph.edges):
+            if edge.source != item_id or edge.edge_type != EdgeType.PATH:
+                continue
+            target = graph.get_node(edge.target)
+            if target is None or target.node_type in blocked_types:
+                continue
+            candidates.append((edge_idx, edge))
+        return candidates
 
 
 class AddPacingBreakerRule(ProductionRule):
@@ -5177,7 +5661,9 @@ class PruneDeadEndRule(ProductionRule):
         valuable_types = {
             NodeType.KEY, NodeType.ITEM, NodeType.BOSS, NodeType.MINI_BOSS,
             NodeType.SWITCH, NodeType.GOAL, NodeType.START, NodeType.BIG_KEY,
-            NodeType.TREASURE, NodeType.TOKEN
+            NodeType.TREASURE, NodeType.TOKEN,
+            NodeType.TUTORIAL_PUZZLE, NodeType.COMBAT_PUZZLE, NodeType.COMPLEX_PUZZLE,
+            NodeType.ARENA,
         }
         
         for node in graph.nodes.values():
@@ -5192,7 +5678,9 @@ class PruneDeadEndRule(ProductionRule):
         valuable_types = {
             NodeType.KEY, NodeType.ITEM, NodeType.BOSS, NodeType.MINI_BOSS,
             NodeType.SWITCH, NodeType.GOAL, NodeType.START, NodeType.BIG_KEY,
-            NodeType.TREASURE, NodeType.TOKEN
+            NodeType.TREASURE, NodeType.TOKEN,
+            NodeType.TUTORIAL_PUZZLE, NodeType.COMBAT_PUZZLE, NodeType.COMPLEX_PUZZLE,
+            NodeType.ARENA,
         }
         
         # Find dead ends without value

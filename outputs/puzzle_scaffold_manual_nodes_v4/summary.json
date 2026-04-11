@@ -1,0 +1,182 @@
+{
+  "switch_gate": {
+    "room_id": 0,
+    "node_type": "switch",
+    "start_goal": [
+      [
+        0,
+        5
+      ],
+      [
+        15,
+        5
+      ]
+    ],
+    "applied": 1,
+    "tiles_added": 6,
+    "segments_added": 2,
+    "existing_structure_tiles": 0,
+    "planned_route_pixels": 25,
+    "noise_components_removed": 0,
+    "noise_tiles_removed": 0,
+    "route_template_used": 1,
+    "archetype": "gate",
+    "gate_family": "switch",
+    "stateful_anchor_name": "puzzle",
+    "profile_branch_density": 0.75,
+    "profile_block_budget": 28,
+    "profile_preserve_route_margin": 0,
+    "optional_segments_requested": 1,
+    "optional_segments_applied": 1
+  },
+  "item_gate": {
+    "room_id": 0,
+    "node_type": "puzzle",
+    "start_goal": [
+      [
+        0,
+        5
+      ],
+      [
+        15,
+        5
+      ]
+    ],
+    "applied": 1,
+    "tiles_added": 6,
+    "segments_added": 4,
+    "existing_structure_tiles": 0,
+    "planned_route_pixels": 25,
+    "noise_components_removed": 0,
+    "noise_tiles_removed": 0,
+    "route_template_used": 1,
+    "archetype": "gate",
+    "gate_family": "resource",
+    "stateful_anchor_name": "puzzle",
+    "profile_branch_density": 0.75,
+    "profile_block_budget": 28,
+    "profile_preserve_route_margin": 0,
+    "optional_segments_requested": 2,
+    "optional_segments_applied": 1
+  },
+  "key_gate_no_local_key": {
+    "room_id": 0,
+    "node_type": "puzzle",
+    "start_goal": [
+      [
+        0,
+        5
+      ],
+      [
+        15,
+        5
+      ]
+    ],
+    "applied": 1,
+    "tiles_added": 7,
+    "segments_added": 3,
+    "existing_structure_tiles": 0,
+    "planned_route_pixels": 24,
+    "noise_components_removed": 0,
+    "noise_tiles_removed": 0,
+    "route_template_used": 1,
+    "archetype": "gate",
+    "gate_family": "key",
+    "stateful_anchor_name": "",
+    "profile_branch_density": 0.75,
+    "profile_block_budget": 28,
+    "profile_preserve_route_margin": 0,
+    "optional_segments_requested": 2,
+    "optional_segments_applied": 1
+  },
+  "key_gate_local_key": {
+    "room_id": 0,
+    "node_type": "puzzle",
+    "start_goal": [
+      [
+        0,
+        5
+      ],
+      [
+        15,
+        5
+      ]
+    ],
+    "applied": 1,
+    "tiles_added": 7,
+    "segments_added": 3,
+    "existing_structure_tiles": 0,
+    "planned_route_pixels": 23,
+    "noise_components_removed": 0,
+    "noise_tiles_removed": 0,
+    "route_template_used": 1,
+    "archetype": "gate",
+    "gate_family": "key",
+    "stateful_anchor_name": "key",
+    "profile_branch_density": 0.75,
+    "profile_block_budget": 28,
+    "profile_preserve_route_margin": 0,
+    "optional_segments_requested": 1,
+    "optional_segments_applied": 1
+  },
+  "manual_room_5": {
+    "room_id": 5,
+    "node_type": "COMPLEX_PUZZLE",
+    "start_goal": [
+      [
+        8,
+        0
+      ],
+      [
+        8,
+        10
+      ]
+    ],
+    "applied": 1,
+    "tiles_added": 9,
+    "segments_added": 6,
+    "existing_structure_tiles": 0,
+    "planned_route_pixels": 35,
+    "noise_components_removed": 0,
+    "noise_tiles_removed": 0,
+    "route_template_used": 1,
+    "archetype": "hub",
+    "gate_family": "switch",
+    "stateful_anchor_name": "puzzle",
+    "profile_branch_density": 0.9,
+    "profile_block_budget": 34,
+    "profile_preserve_route_margin": 0,
+    "optional_segments_requested": 4,
+    "optional_segments_applied": 2
+  },
+  "manual_room_9": {
+    "room_id": 9,
+    "node_type": "COMBAT_PUZZLE",
+    "start_goal": [
+      [
+        8,
+        0
+      ],
+      [
+        8,
+        10
+      ]
+    ],
+    "applied": 1,
+    "tiles_added": 8,
+    "segments_added": 4,
+    "existing_structure_tiles": 0,
+    "planned_route_pixels": 19,
+    "noise_components_removed": 0,
+    "noise_tiles_removed": 0,
+    "route_template_used": 1,
+    "archetype": "combat",
+    "gate_family": "combat",
+    "stateful_anchor_name": "enemy",
+    "profile_branch_density": 0.45,
+    "profile_block_budget": 18,
+    "profile_preserve_route_margin": 0,
+    "optional_segments_requested": 2,
+    "optional_segments_applied": 2
+  }
+}

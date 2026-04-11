@@ -347,11 +347,17 @@ class TestEvolutionaryDirector:
         )
         
         graph = gen.evolve()
-        
-        # Should favor ENEMY nodes
-        node_types = [graph.nodes[n]['type'] for n in graph.nodes()]
-        enemy_count = node_types.count('ENEMY')
-        assert enemy_count > 0
+
+        # Combat pressure can now surface as richer combat-bearing node types,
+        # not only the legacy ENEMY label.
+        combat_count = sum(
+            1
+            for _, data in graph.nodes(data=True)
+            if bool(data.get("has_enemy", False))
+            or str(data.get("type", "")).upper()
+            in {"ENEMY", "COMBAT_PUZZLE", "BOSS", "MINI_BOSS", "ARENA"}
+        )
+        assert combat_count > 0
 
 
 class TestTensionCurveEvaluator:
@@ -395,6 +401,297 @@ class TestTensionCurveEvaluator:
         # Check curve properties
         assert len(curve) == len(target)
         assert all(0.0 <= v <= 1.0 for v in curve)
+
+    def test_pedagogical_descriptor_metrics_detect_skill_chain(self):
+        """Evaluator should reward explicit item -> tutorial -> combat -> complex progression."""
+        target = [0.2, 0.4, 0.7, 1.0]
+        evaluator = TensionCurveEvaluator(target)
+
+        graph = MissionGraph()
+        graph.add_node(MissionNode(id=0, node_type=NodeType.START, position=(0, 0, 0)))
+        graph.add_node(MissionNode(id=1, node_type=NodeType.ITEM, position=(1, 0, 0), item_type="BOW"))
+        graph.add_node(
+            MissionNode(
+                id=2,
+                node_type=NodeType.TUTORIAL_PUZZLE,
+                position=(2, 0, 0),
+                is_tutorial=True,
+                difficulty=0.2,
+            )
+        )
+        graph.add_node(MissionNode(id=3, node_type=NodeType.COMBAT_PUZZLE, position=(3, 0, 0), difficulty=0.5))
+        graph.add_node(MissionNode(id=4, node_type=NodeType.COMPLEX_PUZZLE, position=(4, 0, 0), difficulty=0.8))
+        graph.add_node(MissionNode(id=5, node_type=NodeType.GOAL, position=(5, 0, 0), difficulty=1.0))
+        graph.add_edge(0, 1, EdgeType.PATH)
+        graph.add_edge(1, 2, EdgeType.PATH)
+        graph.add_edge(2, 3, EdgeType.PATH)
+        graph.add_edge(3, 4, EdgeType.PATH)
+        graph.add_edge(4, 5, EdgeType.PATH)
+        graph.sanitize()
+
+        metrics = evaluator._extract_descriptor_metrics(graph)
+
+        assert metrics["tutorial_puzzle_count"] == 1.0
+        assert metrics["combat_puzzle_count"] == 1.0
+        assert metrics["complex_puzzle_count"] == 1.0
+        assert metrics["pedagogical_puzzle_variety"] == 1.0
+        assert metrics["skill_chain_score"] == 1.0
+        assert metrics["tutorial_climax_depth_score"] > 0.0
+
+    def test_pedagogical_depth_score_prefers_deeper_tutorial_to_climax_chain(self):
+        """Longer tutorial->combat->complex->boss span should score higher than a compressed chain."""
+        target = [0.2, 0.4, 0.7, 1.0, 1.0, 1.0]
+        evaluator = TensionCurveEvaluator(target)
+
+        shallow = MissionGraph()
+        shallow.add_node(MissionNode(id=0, node_type=NodeType.START, position=(0, 0, 0)))
+        shallow.add_node(MissionNode(id=1, node_type=NodeType.ITEM, position=(1, 0, 0), item_type="HOOKSHOT"))
+        shallow.add_node(MissionNode(id=2, node_type=NodeType.TUTORIAL_PUZZLE, position=(2, 0, 0), is_tutorial=True))
+        shallow.add_node(MissionNode(id=3, node_type=NodeType.COMBAT_PUZZLE, position=(3, 0, 0)))
+        shallow.add_node(MissionNode(id=4, node_type=NodeType.COMPLEX_PUZZLE, position=(4, 0, 0)))
+        shallow.add_node(MissionNode(id=5, node_type=NodeType.BOSS, position=(5, 0, 0)))
+        shallow.add_edge(0, 1, EdgeType.PATH)
+        shallow.add_edge(1, 2, EdgeType.PATH)
+        shallow.add_edge(2, 3, EdgeType.PATH)
+        shallow.add_edge(3, 4, EdgeType.PATH)
+        shallow.add_edge(4, 5, EdgeType.PATH)
+        shallow.sanitize()
+
+        deep = MissionGraph()
+        deep.add_node(MissionNode(id=0, node_type=NodeType.START, position=(0, 0, 0)))
+        deep.add_node(MissionNode(id=1, node_type=NodeType.ITEM, position=(1, 0, 0), item_type="HOOKSHOT"))
+        deep.add_node(MissionNode(id=2, node_type=NodeType.TUTORIAL_PUZZLE, position=(2, 0, 0), is_tutorial=True))
+        deep.add_node(MissionNode(id=3, node_type=NodeType.EMPTY, position=(3, 0, 0)))
+        deep.add_node(MissionNode(id=4, node_type=NodeType.COMBAT_PUZZLE, position=(4, 0, 0)))
+        deep.add_node(MissionNode(id=5, node_type=NodeType.EMPTY, position=(5, 0, 0)))
+        deep.add_node(MissionNode(id=6, node_type=NodeType.COMPLEX_PUZZLE, position=(6, 0, 0)))
+        deep.add_node(MissionNode(id=7, node_type=NodeType.BOSS, position=(7, 0, 0)))
+        deep.add_edge(0, 1, EdgeType.PATH)
+        deep.add_edge(1, 2, EdgeType.PATH)
+        deep.add_edge(2, 3, EdgeType.PATH)
+        deep.add_edge(3, 4, EdgeType.PATH)
+        deep.add_edge(4, 5, EdgeType.PATH)
+        deep.add_edge(5, 6, EdgeType.PATH)
+        deep.add_edge(6, 7, EdgeType.PATH)
+        deep.sanitize()
+
+        shallow_metrics = evaluator._extract_descriptor_metrics(shallow)
+        deep_metrics = evaluator._extract_descriptor_metrics(deep)
+
+        assert deep_metrics["skill_chain_score"] == shallow_metrics["skill_chain_score"] == 1.0
+        assert deep_metrics["tutorial_climax_depth_score"] > shallow_metrics["tutorial_climax_depth_score"]
+
+    def test_generator_prior_boosts_add_skill_chain_rule(self):
+        """Target-aware priors should actively favor AddSkillChain in full-rule mode."""
+        gen = EvolutionaryTopologyGenerator(
+            target_curve=[0.2, 0.5, 0.8, 1.0],
+            population_size=6,
+            generations=2,
+            genome_length=8,
+            seed=42,
+            rule_space="full",
+        )
+
+        add_skill_rule_id = gen.rule_name_to_id["AddSkillChain"]
+
+        assert add_skill_rule_id in gen._pedagogical_rule_ids
+        assert gen._global_rule_weights[add_skill_rule_id] > float(gen.executor.rules[add_skill_rule_id].weight)
+
+    def test_initial_population_includes_structured_seed_genomes(self):
+        """High pedagogical targets should seed the initial population with tutorial-aware genomes."""
+        gen = EvolutionaryTopologyGenerator(
+            target_curve=[0.2, 0.4, 0.6, 0.8, 1.0, 1.0],
+            population_size=10,
+            generations=2,
+            genome_length=10,
+            seed=7,
+            rule_space="full",
+        )
+
+        population = gen._generate_initial_population()
+        add_skill_rule_id = gen.rule_name_to_id["AddSkillChain"]
+        assert any(add_skill_rule_id in ind.genome for ind in population)
+
+    def test_progression_balance_repair_reduces_leniency_on_item_path(self):
+        """Final Block I balancing should tighten overly lenient item-first graphs."""
+        gen = EvolutionaryTopologyGenerator(
+            target_curve=[0.2, 0.4, 0.6, 0.8, 1.0, 1.0],
+            population_size=6,
+            generations=2,
+            genome_length=8,
+            seed=21,
+            rule_space="full",
+        )
+
+        graph = MissionGraph()
+        graph.add_node(MissionNode(id=0, node_type=NodeType.START, position=(0, 0, 0)))
+        graph.add_node(MissionNode(id=1, node_type=NodeType.EMPTY, position=(1, 0, 0)))
+        graph.add_node(MissionNode(id=2, node_type=NodeType.ITEM, position=(2, 0, 0), item_type="BOW"))
+        graph.add_node(MissionNode(id=3, node_type=NodeType.TUTORIAL_PUZZLE, position=(3, 0, 0), is_tutorial=True, difficulty=0.2))
+        graph.add_node(MissionNode(id=4, node_type=NodeType.COMBAT_PUZZLE, position=(4, 0, 0), difficulty=0.5))
+        graph.add_node(MissionNode(id=5, node_type=NodeType.COMPLEX_PUZZLE, position=(5, 0, 0), difficulty=0.8))
+        graph.add_node(MissionNode(id=6, node_type=NodeType.BOSS_DOOR, position=(6, 0, 0)))
+        graph.add_node(MissionNode(id=7, node_type=NodeType.BOSS, position=(7, 0, 0)))
+        graph.add_node(MissionNode(id=8, node_type=NodeType.GOAL, position=(8, 0, 0)))
+        graph.add_edge(0, 1, EdgeType.PATH)
+        graph.add_edge(1, 2, EdgeType.PATH)
+        graph.add_edge(2, 3, EdgeType.PATH)
+        graph.add_edge(3, 4, EdgeType.PATH)
+        graph.add_edge(4, 5, EdgeType.PATH)
+        graph.add_edge(5, 6, EdgeType.PATH)
+        graph.add_edge(6, 7, EdgeType.PATH)
+        graph.add_edge(7, 8, EdgeType.PATH)
+        graph.sanitize()
+
+        before = gen.evaluator._extract_descriptor_metrics(graph)
+        constraint_grammar = getattr(getattr(gen, "executor", None), "_constraint_grammar", None)
+        repaired = gen._repair_progression_balance(graph, constraint_grammar=constraint_grammar)
+        after = gen.evaluator._extract_descriptor_metrics(repaired)
+
+        assert after["leniency"] < before["leniency"]
+
+    def test_progression_balance_repair_prunes_junk_deadend_without_hurting_pedagogy(self):
+        """Final Block I balancing should prune non-essential side junk before export."""
+        gen = EvolutionaryTopologyGenerator(
+            target_curve=[0.2, 0.4, 0.6, 0.8, 1.0, 1.0],
+            population_size=6,
+            generations=2,
+            genome_length=8,
+            seed=22,
+            rule_space="full",
+            descriptor_targets={"linearity": 0.68, "leniency": 1.0},
+        )
+
+        graph = MissionGraph()
+        graph.add_node(MissionNode(id=0, node_type=NodeType.START, position=(0, 0, 0)))
+        graph.add_node(MissionNode(id=1, node_type=NodeType.ITEM, position=(1, 0, 0), item_type="BOW"))
+        graph.add_node(MissionNode(id=2, node_type=NodeType.TUTORIAL_PUZZLE, position=(2, 0, 0), is_tutorial=True, difficulty=0.2))
+        graph.add_node(MissionNode(id=3, node_type=NodeType.COMBAT_PUZZLE, position=(3, 0, 0), difficulty=0.5))
+        graph.add_node(MissionNode(id=4, node_type=NodeType.COMPLEX_PUZZLE, position=(4, 0, 0), difficulty=0.8))
+        graph.add_node(MissionNode(id=5, node_type=NodeType.BOSS_DOOR, position=(5, 0, 0)))
+        graph.add_node(MissionNode(id=6, node_type=NodeType.BOSS, position=(6, 0, 0)))
+        graph.add_node(MissionNode(id=7, node_type=NodeType.GOAL, position=(7, 0, 0)))
+        for node_id, y in zip(range(8, 14), range(1, 7)):
+            graph.add_node(MissionNode(id=node_id, node_type=NodeType.EMPTY, position=(3, y, 0)))
+        graph.add_edge(0, 1, EdgeType.PATH)
+        graph.add_edge(1, 2, EdgeType.PATH)
+        graph.add_edge(2, 3, EdgeType.PATH)
+        graph.add_edge(3, 4, EdgeType.PATH)
+        graph.add_edge(4, 5, EdgeType.PATH)
+        graph.add_edge(5, 6, EdgeType.PATH)
+        graph.add_edge(6, 7, EdgeType.PATH)
+        for node_id in range(8, 14):
+            graph.add_edge(3, node_id, EdgeType.PATH)
+        graph.sanitize()
+
+        before = gen.evaluator._extract_descriptor_metrics(graph)
+        constraint_grammar = getattr(getattr(gen, "executor", None), "_constraint_grammar", None)
+        repaired = gen._repair_progression_balance(graph, constraint_grammar=constraint_grammar)
+        after = gen.evaluator._extract_descriptor_metrics(repaired)
+
+        assert 8 not in repaired.nodes
+        assert after["linearity"] > before["linearity"]
+        assert after["pedagogical_puzzle_variety"] >= before["pedagogical_puzzle_variety"]
+        assert after["skill_chain_score"] >= before["skill_chain_score"]
+
+    def test_trim_surplus_reward_keys_demotes_free_side_branch_keys(self):
+        """Final gate-economy pass should demote gratuitous side-branch reward keys."""
+        gen = EvolutionaryTopologyGenerator(
+            target_curve=[0.2, 0.4, 0.6, 0.8, 1.0, 1.0],
+            population_size=6,
+            generations=2,
+            genome_length=8,
+            seed=31,
+            rule_space="full",
+        )
+
+        graph = MissionGraph()
+        for node_id, node_type in [
+            (0, NodeType.START),
+            (1, NodeType.ITEM),
+            (2, NodeType.TUTORIAL_PUZZLE),
+            (3, NodeType.COMBAT_PUZZLE),
+            (4, NodeType.COMPLEX_PUZZLE),
+            (5, NodeType.BOSS_DOOR),
+            (6, NodeType.BOSS),
+            (7, NodeType.GOAL),
+            (8, NodeType.KEY),
+            (9, NodeType.KEY),
+        ]:
+            kwargs = {}
+            if node_type == NodeType.BOSS_DOOR:
+                kwargs["key_id"] = 5
+            if node_type == NodeType.ITEM:
+                kwargs["item_type"] = "BOW"
+            graph.add_node(MissionNode(id=node_id, node_type=node_type, position=(node_id, 0, 0), **kwargs))
+        graph.add_edge(0, 1, EdgeType.PATH)
+        graph.add_edge(1, 2, EdgeType.PATH)
+        graph.add_edge(2, 3, EdgeType.PATH)
+        graph.add_edge(3, 4, EdgeType.PATH)
+        graph.add_edge(4, 5, EdgeType.BOSS_LOCKED, key_required=5)
+        graph.add_edge(5, 6, EdgeType.PATH)
+        graph.add_edge(6, 7, EdgeType.PATH)
+        graph.add_edge(3, 8, EdgeType.PATH)
+        graph.add_edge(3, 9, EdgeType.PATH)
+        graph.sanitize()
+
+        trimmed, changes = gen._trim_surplus_reward_keys(graph)
+
+        assert changes >= 1
+        assert sum(1 for node in trimmed.nodes.values() if node.node_type == NodeType.KEY and node.key_id is None) <= 1
+        assert any(node.node_type in {NodeType.ITEM, NodeType.TREASURE} for node in [trimmed.nodes[8], trimmed.nodes[9]])
+
+    def test_gate_economy_repair_reduces_surplus_and_improves_gate_pressure(self):
+        """Final export calibration should reduce gratuitous key surplus without hurting pedagogy."""
+        gen = EvolutionaryTopologyGenerator(
+            target_curve=[0.2, 0.4, 0.6, 0.8, 1.0, 1.0],
+            population_size=6,
+            generations=2,
+            genome_length=8,
+            seed=32,
+            rule_space="full",
+        )
+
+        graph = MissionGraph()
+        for node_id, node_type in [
+            (0, NodeType.START),
+            (1, NodeType.ITEM),
+            (2, NodeType.TUTORIAL_PUZZLE),
+            (3, NodeType.COMBAT_PUZZLE),
+            (4, NodeType.COMPLEX_PUZZLE),
+            (5, NodeType.BOSS_DOOR),
+            (6, NodeType.BOSS),
+            (7, NodeType.GOAL),
+            (8, NodeType.KEY),
+            (9, NodeType.KEY),
+            (10, NodeType.KEY),
+        ]:
+            kwargs = {}
+            if node_type == NodeType.BOSS_DOOR:
+                kwargs["key_id"] = 5
+            if node_type == NodeType.ITEM:
+                kwargs["item_type"] = "HOOKSHOT"
+            graph.add_node(MissionNode(id=node_id, node_type=node_type, position=(node_id, 0, 0), **kwargs))
+        graph.add_edge(0, 1, EdgeType.PATH)
+        graph.add_edge(1, 2, EdgeType.PATH)
+        graph.add_edge(2, 3, EdgeType.PATH)
+        graph.add_edge(3, 4, EdgeType.PATH)
+        graph.add_edge(4, 5, EdgeType.PATH)
+        graph.add_edge(5, 6, EdgeType.PATH)
+        graph.add_edge(6, 7, EdgeType.PATH)
+        graph.add_edge(3, 8, EdgeType.PATH)
+        graph.add_edge(3, 9, EdgeType.PATH)
+        graph.add_edge(4, 10, EdgeType.PATH)
+        graph.sanitize()
+
+        before = gen.evaluator._extract_descriptor_metrics(graph)
+        constraint_grammar = getattr(getattr(gen, "executor", None), "_constraint_grammar", None)
+        repaired = gen._repair_gate_economy(graph, constraint_grammar=constraint_grammar)
+        after = gen.evaluator._extract_descriptor_metrics(repaired)
+
+        assert after["small_key_surplus"] < before["small_key_surplus"]
+        assert after["gating_density"] >= before["gating_density"]
+        assert after["pedagogical_puzzle_variety"] >= before["pedagogical_puzzle_variety"]
 
 
 class TestGraphGrammarExecutor:
@@ -494,10 +791,10 @@ class TestGraphGrammarExecutor:
             def ensure_anchor_nodes(self, graph):
                 return graph
 
-            def validate_lock_key_ordering(self, graph):
+            def validate_lock_key_ordering(self, graph, *, log_failures=True):
                 return False
 
-            def validate_progression_constraints(self, graph):
+            def validate_progression_constraints(self, graph, *, log_failures=True):
                 return False
 
             def fix_lock_key_ordering(self, graph):
@@ -538,10 +835,10 @@ class TestGraphGrammarExecutor:
             def ensure_anchor_nodes(self, graph):
                 return graph
 
-            def validate_lock_key_ordering(self, graph):
+            def validate_lock_key_ordering(self, graph, *, log_failures=True):
                 return self.repaired
 
-            def validate_progression_constraints(self, graph):
+            def validate_progression_constraints(self, graph, *, log_failures=True):
                 return self.repaired
 
             def fix_lock_key_ordering(self, graph):

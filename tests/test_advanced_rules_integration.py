@@ -97,6 +97,72 @@ class TestAdvancedRulesIntegration:
 
         grammar = MissionGrammar(seed=42)
         assert grammar.validate_goal_gauntlet(updated)
+
+    def test_validate_goal_gauntlet_rejects_boss_door_cycle(self):
+        """Validation should reject BOSS -> BOSS_DOOR -> BOSS cycles masquerading as a gauntlet."""
+        grammar = MissionGrammar(seed=42)
+        graph = MissionGraph()
+        graph.add_node(MissionNode(id=0, node_type=NodeType.START, position=(0, 0, 0), difficulty=0.0))
+        graph.add_node(MissionNode(id=1, node_type=NodeType.BOSS, position=(1, 0, 0), difficulty=0.9))
+        graph.add_node(MissionNode(id=2, node_type=NodeType.GOAL, position=(2, 0, 0), difficulty=1.0))
+        graph.add_node(MissionNode(id=3, node_type=NodeType.BOSS_DOOR, position=(1, -1, 0), difficulty=0.8, key_id=3))
+        graph.add_node(MissionNode(id=4, node_type=NodeType.BIG_KEY, position=(0, 1, 0), difficulty=0.4, key_id=3))
+        graph.add_edge(0, 1, EdgeType.PATH)
+        graph.add_edge(1, 2, EdgeType.PATH)
+        graph.add_edge(1, 3, EdgeType.BOSS_LOCKED, key_required=3)
+        graph.add_edge(3, 1, EdgeType.PATH)
+        graph.add_edge(0, 4, EdgeType.PATH)
+        graph.sanitize()
+
+        assert not grammar.validate_goal_gauntlet(graph)
+
+    def test_repair_goal_gauntlet_normalizes_missing_boss(self):
+        """Repair should create a strict approach -> BOSS_DOOR -> BOSS -> GOAL chain without self-loops."""
+        grammar = MissionGrammar(seed=42)
+        graph = MissionGraph()
+        graph.add_node(MissionNode(id=0, node_type=NodeType.START, position=(0, 0, 0), difficulty=0.0))
+        graph.add_node(MissionNode(id=1, node_type=NodeType.ENEMY, position=(1, 0, 0), difficulty=0.4))
+        graph.add_node(MissionNode(id=2, node_type=NodeType.BOSS_DOOR, position=(2, 0, 0), difficulty=0.9, key_id=2))
+        graph.add_node(MissionNode(id=3, node_type=NodeType.GOAL, position=(3, 0, 0), difficulty=1.0))
+        graph.add_edge(0, 1, EdgeType.PATH)
+        graph.add_edge(1, 2, EdgeType.BOSS_LOCKED, key_required=2)
+        graph.add_edge(2, 3, EdgeType.PATH)
+        graph.sanitize()
+
+        repaired = grammar._repair_goal_gauntlet(graph)
+        repaired.sanitize()
+
+        assert grammar.validate_goal_gauntlet(repaired)
+        assert not any(edge.source == edge.target for edge in repaired.edges)
+        boss_doors = repaired.get_nodes_by_type(NodeType.BOSS_DOOR)
+        bosses = repaired.get_nodes_by_type(NodeType.BOSS)
+        goals = repaired.get_nodes_by_type(NodeType.GOAL)
+        assert len(boss_doors) == 1
+        assert len(bosses) == 1
+        assert len(goals) == 1
+        assert any(edge.source == boss_doors[0].id and edge.target == bosses[0].id for edge in repaired.edges)
+        assert any(edge.source == bosses[0].id and edge.target == goals[0].id for edge in repaired.edges)
+
+    def test_repair_goal_gauntlet_normalizes_existing_boss_without_door(self):
+        """Repair should not create a BOSS -> BOSS_DOOR -> BOSS cycle when only BOSS -> GOAL exists."""
+        grammar = MissionGrammar(seed=42)
+        graph = MissionGraph()
+        graph.add_node(MissionNode(id=0, node_type=NodeType.START, position=(0, 0, 0), difficulty=0.0))
+        graph.add_node(MissionNode(id=1, node_type=NodeType.BOSS, position=(1, 0, 0), difficulty=0.9))
+        graph.add_node(MissionNode(id=2, node_type=NodeType.GOAL, position=(2, 0, 0), difficulty=1.0))
+        graph.add_edge(0, 1, EdgeType.PATH)
+        graph.add_edge(1, 2, EdgeType.PATH)
+        graph.sanitize()
+
+        repaired = grammar._repair_goal_gauntlet(graph)
+        repaired.sanitize()
+
+        assert grammar.validate_goal_gauntlet(repaired)
+        assert not any(
+            edge.source == 1 and getattr(repaired.nodes.get(edge.target), "node_type", None) == NodeType.BOSS_DOOR
+            for edge in repaired.edges
+        )
+        assert not any(edge.source == edge.target for edge in repaired.edges)
     
     def test_large_dungeon_generation(self):
         """Test generating large dungeon with all rules active."""
@@ -145,6 +211,33 @@ class TestAdvancedRulesIntegration:
         else:
             print("\n⚠️  Fungible lock rule not applied (probabilistic)")
     
+    def test_fungible_lock_does_not_count_big_key_as_small_key(self):
+        """Boss keys should not satisfy requires_key_count small-key locks."""
+        grammar = MissionGrammar(seed=42)
+        graph = MissionGraph()
+        graph.generation_stats["require_goal_gauntlet"] = True
+
+        graph.add_node(MissionNode(id=0, node_type=NodeType.START, position=(0, 0, 0), difficulty=0.0))
+        graph.add_node(MissionNode(id=1, node_type=NodeType.BIG_KEY, position=(1, 0, 0), difficulty=0.4, key_id=2))
+        graph.add_node(MissionNode(id=2, node_type=NodeType.BOSS_DOOR, position=(2, 0, 0), difficulty=0.9, key_id=2))
+        graph.add_node(MissionNode(id=3, node_type=NodeType.BOSS, position=(3, 0, 0), difficulty=0.95))
+        graph.add_node(MissionNode(id=4, node_type=NodeType.GOAL, position=(4, 0, 0), difficulty=1.0))
+        graph.add_node(MissionNode(id=5, node_type=NodeType.ENEMY, position=(1, 1, 0), difficulty=0.4))
+        graph.add_node(MissionNode(id=6, node_type=NodeType.ENEMY, position=(2, 1, 0), difficulty=0.5))
+
+        graph.add_edge(0, 1, EdgeType.PATH)
+        graph.add_edge(0, 5, EdgeType.PATH)
+        graph.add_edge(5, 2, EdgeType.BOSS_LOCKED, key_required=2)
+        graph.add_edge(2, 3, EdgeType.PATH)
+        graph.add_edge(3, 4, EdgeType.PATH)
+
+        fungible_lock = MissionEdge(source=5, target=6, edge_type=EdgeType.LOCKED)
+        fungible_lock.requires_key_count = 1
+        graph.edges.append(fungible_lock)
+        graph.sanitize()
+
+        assert not grammar.validate_progression_constraints(graph)
+
     def test_big_room_merging(self):
         """Test big room formation (RULE #2)."""
         grammar = MissionGrammar(seed=123)

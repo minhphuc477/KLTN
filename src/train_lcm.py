@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import json
 import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -17,6 +18,7 @@ from typing import Any, Dict, List, Optional
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
+from torch.utils.data import DataLoader
 
 from src.config_system import merge_config, seed_everything
 from src.optimization.lcm_lora import (
@@ -33,6 +35,7 @@ from src.pipeline.room_topology_conditioning import (
     build_topology_anchor_policy_metadata,
 )
 from src.train_diffusion import DiffusionTrainer, DiffusionTrainingConfig
+from src.train_vqvae import split_dataset_for_vqvae_validation
 from src.utils.checkpoint import (
     LATEST_RESUME_FILENAME,
     MetricsLogger,
@@ -43,7 +46,7 @@ from src.utils.checkpoint import (
     resolve_resume_checkpoint,
     write_checkpoint_metadata,
 )
-from src.zelda_data.zelda_loader import create_dataloader
+from src.zelda_data.zelda_loader import create_dataloader, graph_collate_fn
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +77,10 @@ class FastSamplerTrainingConfig:
         lora_rank: int = 8,
         lora_alpha: float = 8.0,
         prediction_loss_weight: float = 0.25,
+        decode_alignment_weight: float = 0.25,
+        validation_fraction: float = 0.1,
+        validation_max_batches: int = 16,
+        best_checkpoint_metric: str = "val_decode_ce_loss",
         save_every: int = 5,
         keep_last: int = 2,
         auto_resume: bool = True,
@@ -109,6 +116,14 @@ class FastSamplerTrainingConfig:
         self.lora_rank = int(max(1, lora_rank))
         self.lora_alpha = float(lora_alpha)
         self.prediction_loss_weight = float(max(0.0, prediction_loss_weight))
+        self.decode_alignment_weight = float(max(0.0, decode_alignment_weight))
+        self.validation_fraction = float(max(0.0, min(0.5, validation_fraction)))
+        self.validation_max_batches = int(max(1, validation_max_batches))
+        self.best_checkpoint_metric = str(best_checkpoint_metric).strip().lower()
+        if self.best_checkpoint_metric not in {"val_loss", "val_decode_ce_loss", "train_loss"}:
+            raise ValueError(
+                "best_checkpoint_metric must be 'val_loss', 'val_decode_ce_loss', or 'train_loss'."
+            )
         self.save_every = int(max(1, save_every))
         self.keep_last = int(max(0, keep_last))
         self.auto_resume = bool(auto_resume)
@@ -163,6 +178,10 @@ def fast_sampler_training_kwargs_from_resolved_config(config: Dict[str, Any]) ->
         "lora_rank": stage["lora_rank"],
         "lora_alpha": stage["lora_alpha"],
         "prediction_loss_weight": stage["prediction_loss_weight"],
+        "decode_alignment_weight": stage.get("decode_alignment_weight", 0.25),
+        "validation_fraction": stage.get("validation_fraction", 0.1),
+        "validation_max_batches": stage.get("validation_max_batches", 16),
+        "best_checkpoint_metric": stage.get("best_checkpoint_metric", "val_decode_ce_loss"),
         "save_every": stage["save_every"],
         "keep_last": stage["keep_last"],
         "auto_resume": runtime["auto_resume"],
@@ -195,6 +214,10 @@ def _legacy_fast_sampler_overrides_from_args(args: argparse.Namespace) -> Dict[s
     _set("num_inference_steps", getattr(args, "num_inference_steps", None))
     _set("lora_rank", getattr(args, "lora_rank", None))
     _set("lora_alpha", getattr(args, "lora_alpha", None))
+    _set("decode_alignment_weight", getattr(args, "decode_alignment_weight", None))
+    _set("validation_fraction", getattr(args, "validation_fraction", None))
+    _set("validation_max_batches", getattr(args, "validation_max_batches", None))
+    _set("best_checkpoint_metric", getattr(args, "best_checkpoint_metric", None))
     _set("save_every", getattr(args, "save_every", None))
     _set("keep_last", getattr(args, "keep_last", None))
     _set("auto_resume", getattr(args, "auto_resume", None))
@@ -274,6 +297,7 @@ class ConsistencyLoRATrainer:
         cfg_kwargs["device"] = self.config.device
         cfg_kwargs["quick"] = bool(self.config.quick)
         base_config = DiffusionTrainingConfig(**cfg_kwargs)
+        del checkpoint
 
         bundle = DiffusionTrainer(base_config)
         bundle.load_checkpoint(checkpoint_path)
@@ -292,9 +316,35 @@ class ConsistencyLoRATrainer:
         steps = int(self.config.num_inference_steps)
         return torch.linspace(num_train - 1, 0, steps).long().to(self.device)
 
+    def _room_tile_targets(self, real_maps: torch.Tensor) -> torch.Tensor:
+        num_classes = int(self.base_bundle.vqvae.num_classes)
+        if real_maps.shape[1] == 1:
+            tile_ids = (real_maps.squeeze(1) * (num_classes - 1)).round().long()
+            return tile_ids.clamp_(0, num_classes - 1)
+        if real_maps.shape[1] == num_classes:
+            return real_maps.argmax(dim=1)
+        raise ValueError(
+            f"Unexpected real_maps channel count {int(real_maps.shape[1])}; "
+            f"expected 1 or {num_classes}."
+        )
+
     def _sample_batch_timesteps(self, batch_size: int) -> torch.Tensor:
         idx = torch.randint(0, len(self.target_timesteps), (batch_size,), device=self.device)
         return self.target_timesteps[idx]
+
+    def _sample_batch_timesteps_deterministic(
+        self,
+        batch_size: int,
+        *,
+        generator: torch.Generator,
+    ) -> torch.Tensor:
+        idx = torch.randint(
+            0,
+            len(self.target_timesteps),
+            (batch_size,),
+            generator=generator,
+        )
+        return self.target_timesteps[idx.to(device=self.device)]
 
     def _build_conditioning(
         self,
@@ -316,9 +366,10 @@ class ConsistencyLoRATrainer:
         real_maps: torch.Tensor,
         graph_list: Optional[List[dict]] = None,
     ) -> Dict[str, float]:
+        real_maps = real_maps.to(self.device)
         batch_size = int(real_maps.shape[0])
         conditioning, diffusion_graph_data = self._build_conditioning(graph_list, batch_size)
-        z_0 = self.base_bundle.encode_to_latent(real_maps.to(self.device))
+        z_0 = self.base_bundle.encode_to_latent(real_maps)
 
         t = self._sample_batch_timesteps(batch_size)
         noise = torch.randn_like(z_0)
@@ -335,9 +386,18 @@ class ConsistencyLoRATrainer:
 
         x0_loss = F.mse_loss(student_x0, teacher_x0)
         pred_loss = F.mse_loss(student_pred, teacher_pred)
-        loss = x0_loss + (self.config.prediction_loss_weight * pred_loss)
+        decode_ce_loss = torch.zeros((), device=self.device, dtype=student_x0.dtype)
+        if self.config.decode_alignment_weight > 0.0:
+            target_tiles = self._room_tile_targets(real_maps)
+            student_logits = self.base_bundle.vqvae.decode(student_x0)
+            decode_ce_loss = F.cross_entropy(student_logits, target_tiles)
+        loss = (
+            x0_loss
+            + (self.config.prediction_loss_weight * pred_loss)
+            + (self.config.decode_alignment_weight * decode_ce_loss)
+        )
 
-        self.optimizer.zero_grad()
+        self.optimizer.zero_grad(set_to_none=True)
         loss.backward()
         if self.config.grad_clip_norm > 0:
             torch.nn.utils.clip_grad_norm_(
@@ -351,32 +411,68 @@ class ConsistencyLoRATrainer:
             "loss": float(loss.item()),
             "x0_loss": float(x0_loss.item()),
             "prediction_loss": float(pred_loss.item()),
+            "decode_ce_loss": float(decode_ce_loss.item()),
         }
 
     @torch.no_grad()
-    def validate(self, dataloader) -> Dict[str, float]:
+    def validate(
+        self,
+        dataloader,
+        *,
+        max_batches: Optional[int] = None,
+        eval_seed: Optional[int] = None,
+    ) -> Dict[str, float]:
         self.student.eval()
-        metrics = {"val_loss": 0.0, "val_x0_loss": 0.0, "val_prediction_loss": 0.0}
+        metrics = {
+            "val_loss": 0.0,
+            "val_x0_loss": 0.0,
+            "val_prediction_loss": 0.0,
+            "val_decode_ce_loss": 0.0,
+        }
         count = 0
-        for batch_data in dataloader:
+        for batch_idx, batch_data in enumerate(dataloader):
             if isinstance(batch_data, (list, tuple)) and len(batch_data) == 2:
                 real_maps, graph_list = batch_data
             else:
                 real_maps, graph_list = batch_data, None
-            step_metrics = self.distill_step_eval(real_maps.to(self.device), graph_list)
+            step_metrics = self.distill_step_eval(
+                real_maps,
+                graph_list,
+                batch_index=batch_idx,
+                eval_seed=eval_seed,
+            )
             for key, value in step_metrics.items():
                 metrics[key] += float(value)
             count += 1
+            if max_batches is not None and count >= int(max_batches):
+                break
         self.student.train()
         return {k: (v / max(1, count)) for k, v in metrics.items()}
 
     @torch.no_grad()
-    def distill_step_eval(self, real_maps: torch.Tensor, graph_list: Optional[List[dict]] = None) -> Dict[str, float]:
+    def distill_step_eval(
+        self,
+        real_maps: torch.Tensor,
+        graph_list: Optional[List[dict]] = None,
+        *,
+        batch_index: int = 0,
+        eval_seed: Optional[int] = None,
+    ) -> Dict[str, float]:
+        real_maps = real_maps.to(self.device)
         batch_size = int(real_maps.shape[0])
         conditioning, diffusion_graph_data = self._build_conditioning(graph_list, batch_size)
-        z_0 = self.base_bundle.encode_to_latent(real_maps.to(self.device))
-        t = self._sample_batch_timesteps(batch_size)
-        noise = torch.randn_like(z_0)
+        z_0 = self.base_bundle.encode_to_latent(real_maps)
+        if eval_seed is None:
+            t = self._sample_batch_timesteps(batch_size)
+            noise = torch.randn_like(z_0)
+        else:
+            generator = torch.Generator(device="cpu").manual_seed(int(eval_seed) + int(batch_index))
+            t = self._sample_batch_timesteps_deterministic(batch_size, generator=generator)
+            noise = torch.randn(
+                tuple(z_0.shape),
+                generator=generator,
+                dtype=torch.float32,
+            ).to(device=self.device, dtype=z_0.dtype)
         x_t = self.teacher.q_sample(z_0, t, noise)
 
         teacher_pred = self.teacher._predict_noise_cfg(x_t, t, conditioning, graph_data=diffusion_graph_data)
@@ -389,11 +485,21 @@ class ConsistencyLoRATrainer:
 
         x0_loss = F.mse_loss(student_x0, teacher_x0)
         pred_loss = F.mse_loss(student_pred, teacher_pred)
-        loss = x0_loss + (self.config.prediction_loss_weight * pred_loss)
+        decode_ce_loss = torch.zeros((), device=self.device, dtype=student_x0.dtype)
+        if self.config.decode_alignment_weight > 0.0:
+            target_tiles = self._room_tile_targets(real_maps)
+            student_logits = self.base_bundle.vqvae.decode(student_x0)
+            decode_ce_loss = F.cross_entropy(student_logits, target_tiles)
+        loss = (
+            x0_loss
+            + (self.config.prediction_loss_weight * pred_loss)
+            + (self.config.decode_alignment_weight * decode_ce_loss)
+        )
         return {
             "val_loss": float(loss.item()),
             "val_x0_loss": float(x0_loss.item()),
             "val_prediction_loss": float(pred_loss.item()),
+            "val_decode_ce_loss": float(decode_ce_loss.item()),
         }
 
     def save_checkpoint(self, path: str, metrics: Optional[Dict[str, Any]] = None) -> None:
@@ -408,9 +514,15 @@ class ConsistencyLoRATrainer:
             metrics=metrics,
             distillation_type="consistency_lora",
             topology_anchor_policy=build_topology_anchor_policy_metadata(
-                semantic_role_prior_strength=self.config.semantic_role_prior_strength,
-                semantic_puzzle_offset=self.config.semantic_puzzle_offset,
-                topology_supervision_mode=self.config.topology_supervision_mode,
+                semantic_role_prior_strength=float(
+                    getattr(self.config, "semantic_role_prior_strength", DEFAULT_SEMANTIC_ROLE_PRIOR_STRENGTH)
+                ),
+                semantic_puzzle_offset=int(
+                    getattr(self.config, "semantic_puzzle_offset", DEFAULT_SEMANTIC_PUZZLE_OFFSET)
+                ),
+                topology_supervision_mode=str(
+                    getattr(self.config, "topology_supervision_mode", "runtime_aligned")
+                ),
             ),
         )
 
@@ -447,9 +559,15 @@ class ConsistencyLoRATrainer:
                 "checkpoint_kind": "resume",
                 "contains": ["lora", "optimizer"],
                 "topology_anchor_policy": build_topology_anchor_policy_metadata(
-                    semantic_role_prior_strength=self.config.semantic_role_prior_strength,
-                    semantic_puzzle_offset=self.config.semantic_puzzle_offset,
-                    topology_supervision_mode=self.config.topology_supervision_mode,
+                    semantic_role_prior_strength=float(
+                        getattr(self.config, "semantic_role_prior_strength", DEFAULT_SEMANTIC_ROLE_PRIOR_STRENGTH)
+                    ),
+                    semantic_puzzle_offset=int(
+                        getattr(self.config, "semantic_puzzle_offset", DEFAULT_SEMANTIC_PUZZLE_OFFSET)
+                    ),
+                    topology_supervision_mode=str(
+                        getattr(self.config, "topology_supervision_mode", "runtime_aligned")
+                    ),
                 ),
             },
         )
@@ -474,6 +592,136 @@ class ConsistencyLoRATrainer:
         return payload
 
 
+def _create_fast_sampler_dataloaders(
+    config: FastSamplerTrainingConfig,
+    data_dir: str,
+) -> tuple[DataLoader, DataLoader, str, int, int]:
+    base_loader = create_dataloader(
+        data_dir,
+        batch_size=config.batch_size,
+        shuffle=False,
+        num_workers=config.num_workers,
+        pin_memory=config.pin_memory,
+        drop_last=config.drop_last,
+        use_vglc=config.use_vglc,
+        normalize=config.normalize,
+        room_level=config.room_level,
+        load_graphs=True,
+        topology_supervision_mode=config.topology_supervision_mode,
+        semantic_role_prior_strength=config.semantic_role_prior_strength,
+        semantic_puzzle_offset=config.semantic_puzzle_offset,
+    )
+    dataset = base_loader.dataset
+    train_dataset, val_dataset = split_dataset_for_vqvae_validation(
+        dataset,
+        validation_fraction=config.validation_fraction,
+        seed=config.seed,
+    )
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=config.batch_size,
+        shuffle=config.shuffle_train,
+        num_workers=config.num_workers,
+        pin_memory=config.pin_memory,
+        drop_last=config.drop_last,
+        collate_fn=graph_collate_fn,
+    )
+    eval_source = val_dataset if val_dataset is not None else train_dataset
+    eval_split_name = "val" if val_dataset is not None else "train"
+    val_loader = DataLoader(
+        eval_source,
+        batch_size=config.batch_size,
+        shuffle=False,
+        num_workers=config.num_workers,
+        pin_memory=config.pin_memory,
+        drop_last=False,
+        collate_fn=graph_collate_fn,
+    )
+    return train_loader, val_loader, eval_split_name, len(train_dataset), len(eval_source)
+
+
+def reevaluate_fast_sampler_checkpoint_candidates(
+    config: FastSamplerTrainingConfig,
+    *,
+    checkpoint_dir: Optional[str] = None,
+) -> Dict[str, Any]:
+    target_dir = Path(checkpoint_dir or config.checkpoint_dir)
+    if not target_dir.exists():
+        raise FileNotFoundError(f"Fast-sampler checkpoint directory not found: {target_dir}")
+
+    trainer = ConsistencyLoRATrainer(config)
+    data_dir = config.data_dir or trainer.base_bundle.config.data_dir
+    _train_loader, val_loader, eval_split_name, train_size, eval_size = _create_fast_sampler_dataloaders(
+        config,
+        data_dir,
+    )
+
+    candidate_paths: List[Path] = []
+    for filename in ("fast_sampler_best.pth", "fast_sampler_final.pth"):
+        candidate = target_dir / filename
+        if candidate.exists():
+            candidate_paths.append(candidate)
+    candidate_paths.extend(sorted(target_dir.glob("fast_sampler_resume_epoch_*.pth")))
+    if not candidate_paths:
+        raise FileNotFoundError(f"No fast-sampler checkpoints found under {target_dir}")
+
+    eval_seed = int(config.seed) + 10_000
+    rankings: List[Dict[str, Any]] = []
+    metric_name = "val_decode_ce_loss" if config.best_checkpoint_metric == "val_decode_ce_loss" else "val_loss"
+    best_path: Optional[Path] = None
+    best_metric_value = float("inf")
+
+    for candidate in candidate_paths:
+        trainer.load_checkpoint(str(candidate))
+        metrics = trainer.validate(
+            val_loader,
+            max_batches=config.validation_max_batches,
+            eval_seed=eval_seed,
+        )
+        metric_value = float(metrics["val_decode_ce_loss"] if metric_name == "val_decode_ce_loss" else metrics["val_loss"])
+        rankings.append(
+            {
+                "checkpoint": candidate.name,
+                "metric_name": metric_name,
+                "metric_value": metric_value,
+                **metrics,
+            }
+        )
+        if metric_value < best_metric_value:
+            best_metric_value = metric_value
+            best_path = candidate
+
+    assert best_path is not None
+    trainer.load_checkpoint(str(best_path))
+    reselected_path = target_dir / "fast_sampler_best_reselected.pth"
+    trainer.save_checkpoint(
+        str(reselected_path),
+        {
+            "reselected_metric_name": metric_name,
+            "reselected_metric_value": best_metric_value,
+            "reselected_from": best_path.name,
+            "eval_split": eval_split_name,
+        },
+    )
+    ranking_payload = {
+        "metric_name": metric_name,
+        "eval_split": eval_split_name,
+        "train_size": int(train_size),
+        "eval_size": int(eval_size),
+        "eval_seed": int(eval_seed),
+        "validation_max_batches": int(config.validation_max_batches),
+        "selected_checkpoint": best_path.name,
+        "selected_metric_value": float(best_metric_value),
+        "reselected_checkpoint": reselected_path.name,
+        "rankings": rankings,
+    }
+    (target_dir / "fast_sampler_checkpoint_ranking.json").write_text(
+        json.dumps(ranking_payload, indent=2),
+        encoding="utf-8",
+    )
+    return ranking_payload
+
+
 def train_fast_sampler(config: FastSamplerTrainingConfig) -> ConsistencyLoRATrainer:
     resolved_seed = seed_everything(int(getattr(config, "seed", 42)))
     logger.info("Fast-sampler trainer seeds initialized: seed=%d", resolved_seed)
@@ -482,43 +730,30 @@ def train_fast_sampler(config: FastSamplerTrainingConfig) -> ConsistencyLoRATrai
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     data_dir = config.data_dir or trainer.base_bundle.config.data_dir
-    train_loader = create_dataloader(
+    train_loader, val_loader, eval_split_name, train_size, eval_size = _create_fast_sampler_dataloaders(
+        config,
         data_dir,
-        batch_size=config.batch_size,
-        shuffle=config.shuffle_train,
-        num_workers=config.num_workers,
-        pin_memory=config.pin_memory,
-        drop_last=config.drop_last,
-        use_vglc=config.use_vglc,
-        normalize=config.normalize,
-        room_level=config.room_level,
-        load_graphs=True,
-        topology_supervision_mode=config.topology_supervision_mode,
-        semantic_role_prior_strength=config.semantic_role_prior_strength,
-        semantic_puzzle_offset=config.semantic_puzzle_offset,
-    )
-    val_loader = create_dataloader(
-        data_dir,
-        batch_size=config.batch_size,
-        shuffle=config.shuffle_val,
-        num_workers=config.num_workers,
-        pin_memory=config.pin_memory,
-        drop_last=config.drop_last,
-        use_vglc=config.use_vglc,
-        normalize=config.normalize,
-        room_level=config.room_level,
-        load_graphs=True,
-        topology_supervision_mode=config.topology_supervision_mode,
-        semantic_role_prior_strength=config.semantic_role_prior_strength,
-        semantic_puzzle_offset=config.semantic_puzzle_offset,
     )
 
     metrics_logger = MetricsLogger(
         log_dir=str(checkpoint_dir / "logs"),
         experiment_name="fast_sampler_training",
     )
-    best_val = float("inf")
+    if float(getattr(config, "validation_fraction", 0.0)) > 0.0:
+        best_metric_name = "val_decode_ce_loss" if config.best_checkpoint_metric == "val_decode_ce_loss" else "val_loss"
+    else:
+        best_metric_name = "train_loss"
+    if config.best_checkpoint_metric == "train_loss":
+        best_metric_name = "train_loss"
+    best_metric_value = float("inf")
     metrics: Dict[str, Any] = {}
+    logger.info(
+        "Fast sampler split: train=%d rooms | %s=%d rooms | best_metric=%s",
+        int(train_size),
+        eval_split_name,
+        int(eval_size),
+        best_metric_name,
+    )
     resume_path = resolve_resume_checkpoint(
         explicit_path=getattr(config, "resume_checkpoint", None),
         checkpoint_dir=str(checkpoint_dir),
@@ -529,19 +764,27 @@ def train_fast_sampler(config: FastSamplerTrainingConfig) -> ConsistencyLoRATrai
         resume_payload = trainer.load_checkpoint(str(resume_path))
         latest_metrics = resume_payload.get("metrics", {})
         if isinstance(latest_metrics, dict):
-            best_val = float(latest_metrics.get("best_val_loss", latest_metrics.get("val_loss", best_val)))
+            best_metric_name = str(latest_metrics.get("best_metric_name", best_metric_name))
+            best_metric_value = float(
+                latest_metrics.get("best_metric_value", latest_metrics.get("best_val_loss", best_metric_value))
+            )
         logger.info("Auto-resumed fast-sampler training from %s", resume_path)
 
     for epoch in range(int(getattr(trainer, "epoch", -1)) + 1, config.epochs):
         trainer.epoch = epoch
-        running = {"loss": 0.0, "x0_loss": 0.0, "prediction_loss": 0.0}
+        running = {
+            "loss": 0.0,
+            "x0_loss": 0.0,
+            "prediction_loss": 0.0,
+            "decode_ce_loss": 0.0,
+        }
         count = 0
         for batch_idx, batch_data in enumerate(train_loader):
             if isinstance(batch_data, (list, tuple)) and len(batch_data) == 2:
                 real_maps, graph_list = batch_data
             else:
                 real_maps, graph_list = batch_data, None
-            step_metrics = trainer.distill_step(real_maps.to(trainer.device), graph_list)
+            step_metrics = trainer.distill_step(real_maps, graph_list)
             for key, value in step_metrics.items():
                 running[key] += float(value)
             count += 1
@@ -555,15 +798,20 @@ def train_fast_sampler(config: FastSamplerTrainingConfig) -> ConsistencyLoRATrai
                 )
 
         train_metrics = {k: (v / max(1, count)) for k, v in running.items()}
-        val_metrics = trainer.validate(val_loader)
-        metrics = {"epoch": epoch, **train_metrics, **val_metrics}
+        val_metrics = trainer.validate(
+            val_loader,
+            max_batches=config.validation_max_batches,
+            eval_seed=int(config.seed) + 10_000,
+        )
+        metrics = {"epoch": epoch, "eval_split": eval_split_name, **train_metrics, **val_metrics}
         metrics_logger.log(metrics)
         logger.info(
-            "Fast sampler epoch %d/%d: loss=%.4f val_loss=%.4f",
+            "Fast sampler epoch %d/%d: loss=%.4f val_loss=%.4f val_decode_ce=%.4f",
             epoch + 1,
             config.epochs,
             train_metrics["loss"],
             val_metrics["val_loss"],
+            val_metrics["val_decode_ce_loss"],
         )
 
         if (epoch + 1) % config.save_every == 0:
@@ -573,12 +821,20 @@ def train_fast_sampler(config: FastSamplerTrainingConfig) -> ConsistencyLoRATrai
                 pattern="fast_sampler_resume_epoch_*.pth",
                 keep_last=int(getattr(config, "keep_last", 2)),
             )
-        if val_metrics["val_loss"] < best_val:
-            best_val = val_metrics["val_loss"]
+        if best_metric_name == "val_decode_ce_loss":
+            current_metric_value = float(val_metrics["val_decode_ce_loss"])
+        elif best_metric_name == "val_loss":
+            current_metric_value = float(val_metrics["val_loss"])
+        else:
+            current_metric_value = float(train_metrics["loss"])
+        if current_metric_value < best_metric_value:
+            best_metric_value = current_metric_value
             trainer.save_checkpoint(str(checkpoint_dir / "fast_sampler_best.pth"), metrics)
 
         latest_metrics = dict(metrics)
-        latest_metrics["best_val_loss"] = float(best_val)
+        latest_metrics["best_metric_name"] = str(best_metric_name)
+        latest_metrics["best_metric_value"] = float(best_metric_value)
+        latest_metrics["best_val_loss"] = float(best_metric_value if best_metric_name == "val_loss" else val_metrics["val_loss"])
         trainer.save_resume_checkpoint(str(checkpoint_dir / LATEST_RESUME_FILENAME), latest_metrics)
         enforce_checkpoint_storage_budget(
             logger,
@@ -615,6 +871,15 @@ def main() -> None:
     parser.add_argument("--num-inference-steps", type=int, default=None)
     parser.add_argument("--lora-rank", type=int, default=None)
     parser.add_argument("--lora-alpha", type=float, default=None)
+    parser.add_argument("--decode-alignment-weight", type=float, default=None)
+    parser.add_argument("--validation-fraction", type=float, default=None)
+    parser.add_argument("--validation-max-batches", type=int, default=None)
+    parser.add_argument(
+        "--best-checkpoint-metric",
+        type=str,
+        choices=("val_loss", "val_decode_ce_loss", "train_loss"),
+        default=None,
+    )
     parser.add_argument("--save-every", type=int, default=None)
     parser.add_argument("--keep-last", type=int, default=None)
     parser.add_argument("--auto-resume", action=argparse.BooleanOptionalAction, default=None)

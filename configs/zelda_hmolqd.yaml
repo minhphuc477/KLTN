@@ -72,6 +72,9 @@ vqvae:
   dead_code_warmup_steps: 500  # type=int, default=500, valid>=0; delay resets until the codebook has seen enough assignments
   protect_active_codes_during_reset: true  # type=bool, default=true, valid={true,false}; do not reset codes that are active in the current batch
   max_dead_code_resets_per_event: 16  # type=int, default=16, valid>=0; cap maintenance churn on small-data runs
+  validation_fraction: 0.1  # type=float, default=0.1, valid=0..0.5; held-out fraction for real Block II model selection instead of choosing checkpoints on training loss alone
+  validation_max_batches: 16  # type=int, default=16, valid>=1; keep per-epoch validation cheap on the tiny Zelda corpus while still checking more than a token 5-batch slice
+  best_checkpoint_metric: val_loss  # type=str, default=val_loss, valid={val_loss,train_loss}; use held-out validation when available, fall back to train_loss only for ablations/smokes
 
 diffusion:
   checkpoint_dir: ""  # type=str, default="", valid=path; empty=>output_dir/checkpoints/diffusion
@@ -172,6 +175,9 @@ generation:
   use_topological_positional_encoding: true  # type=bool, default=true, valid={true,false}
   apply_repair: true  # type=bool, default=true, valid={true,false}
   enable_map_elites: false  # type=bool, default=false, valid={true,false}
+  symbolic_max_repair_attempts: 5  # type=int, default=5, valid>=1; maximum post-generation symbolic repair passes per room
+  symbolic_repair_margin: 2  # type=int, default=2, valid>=0; local margin used by symbolic repair when patching disconnected structure
+  symbolic_adjacency_threshold: 0.01  # type=float, default=0.01, valid>=0; adjacency threshold used by symbolic repair connectivity checks
   default_start_coord: [1, 5]  # type=list[int], default=[1,5], valid=in-bounds [row,col]
   default_goal_coord: [14, 5]  # type=list[int], default=[14,5], valid=in-bounds [row,col]
   semantic_role_prior_strength: 0.15  # type=float, default=0.15, valid=0..1; light room-wide prior that complements exact anchor pixels in topology maps
@@ -186,6 +192,12 @@ generation:
   puzzle_room_branch_density: 0.75  # type=float, default=0.75, valid=0..1; controls how many optional scaffold branches are enabled within a puzzle archetype
   puzzle_room_block_budget: 28  # type=int, default=28, valid>=0; soft cap on scaffolded block placements per puzzle room
   puzzle_room_preserve_route_margin: 0  # type=int, default=0, valid=0..4; tiny 16x11 rooms lose too much usable interior when the route buffer is dilated by default
+  puzzle_room_switch_pocket_depth: 3  # type=int, default=3, valid=1..6; depth of the local switch alcove used by switch_locked templates
+  puzzle_room_resource_bypass_offset: 2  # type=int, default=2, valid=1..5; horizontal/vertical offset used to route bombable templates through a side bypass
+  puzzle_room_key_pocket_depth: 3  # type=int, default=3, valid=1..6; depth of the local key-before-gate alcove when the room owns a key anchor
+  puzzle_room_item_slot_depth: 3  # type=int, default=3, valid=1..6; depth of the local item-slot alcove used by item_gate/item_locked templates
+  puzzle_room_toggle_corridor_offset: 2  # type=int, default=2, valid=1..5; half-width offset for toggle-state corridor templates driven by on_off_gate/state_block edges
+  validator_plan_max_states: 512  # type=int, default=512, valid=32..4096; cap room-local validator search used for topology priors so complex puzzle/key rooms fall back to the geometric trace instead of stalling generation
   deterministic_graph_marker_overlay_enabled: true  # type=bool, default=true, valid={true,false}; keep enabled for the production hybrid path, disable only for purely-neural semantic ablations
   fast_sampler_teacher_fallback_enabled: true  # type=bool, default=true, valid={true,false}; lets runtime guardrails reroute bad fast-sampler rooms to the teacher
   masked_room_teacher_fallback_enabled: true  # type=bool, default=true, valid={true,false}; protects production exports by rerouting obviously noisy masked-room outputs to the diffusion teacher
@@ -201,6 +213,10 @@ fast_sampler:
   lora_rank: 8  # type=int, default=8, valid>=1
   lora_alpha: 8.0  # type=float, default=8.0, valid>=0
   prediction_loss_weight: 0.25  # type=float, default=0.25, valid>=0
+  decode_alignment_weight: 0.25  # type=float, default=0.25, valid>=0; add decoded-room CE supervision so few-step latent matching stays aligned with actual tile outputs
+  validation_fraction: 0.1  # type=float, default=0.1, valid=0..0.5; held-out split for actual fast-sampler model selection instead of reusing the training stream
+  validation_max_batches: 16  # type=int, default=16, valid>=1; keep per-epoch fast-sampler validation bounded and deterministic
+  best_checkpoint_metric: val_decode_ce_loss  # type=str, default=val_decode_ce_loss, valid={val_loss,val_decode_ce_loss,train_loss}; choose checkpoints by decoded-room quality first because latent-only loss was misaligned with symbolic room fidelity
   save_every: 5  # type=int, default=5, valid>=1
   keep_last: 2  # type=int, default=2, valid>=0; number of retained full-resume checkpoints besides latest_resume/best/final
 

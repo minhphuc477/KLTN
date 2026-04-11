@@ -1,0 +1,50 @@
+[
+  {
+    "row": 1,
+    "col": 4,
+    "baseline": "W",
+    "candidate": "F"
+  },
+  {
+    "row": 2,
+    "col": 4,
+    "baseline": "-",
+    "candidate": "F"
+  },
+  {
+    "row": 3,
+    "col": 4,
+    "baseline": "F",
+    "candidate": "-"
+  },
+  {
+    "row": 9,
+    "col": 7,
+    "baseline": "-",
+    "candidate": "F"
+  },
+  {
+    "row": 11,
+    "col": 7,
+    "baseline": "F",
+    "candidate": "-"
+  },
+  {
+    "row": 12,
+    "col": 7,
+    "baseline": "F",
+    "candidate": "-"
+  },
+  {
+    "row": 13,
+    "col": 4,
+    "baseline": "-",
+    "candidate": "F"
+  },
+  {
+    "row": 14,
+    "col": 6,
+    "baseline": "W",
+    "candidate": "F"
+  }
+]
