@@ -230,6 +230,10 @@ ROOM_TOPOLOGY_ROLE_CHANNEL_NAMES: Tuple[str, ...] = (
     "role_goal",
     "role_boss",
     "role_puzzle",
+    "role_tutorial_puzzle",
+    "role_combat_puzzle",
+    "role_complex_puzzle",
+    "role_switch_puzzle",
 )
 ROOM_TOPOLOGY_CHANNEL_NAMES: Tuple[str, ...] = (
     ROOM_TOPOLOGY_BASE_CHANNEL_NAMES

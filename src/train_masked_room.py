@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
+from torch.utils.data import DataLoader
 
 from src.config_system import merge_config, seed_everything
 from src.core.condition_encoder import DualStreamConditionEncoder, create_condition_encoder
@@ -25,6 +26,7 @@ from src.pipeline.room_topology_conditioning import (
     DEFAULT_SEMANTIC_PUZZLE_OFFSET,
     DEFAULT_SEMANTIC_ROLE_PRIOR_STRENGTH,
     build_topology_anchor_policy_metadata,
+    build_topology_loss_focus_map,
 )
 from src.pipeline.graph_features import (
     align_nodewise_tensor,
@@ -43,7 +45,8 @@ from src.utils.checkpoint import (
     write_checkpoint_metadata,
 )
 from src.utils.model_capacity import count_parameters, log_capacity_guardrails
-from src.zelda_data.zelda_loader import create_dataloader
+from src.zelda_data.zelda_loader import create_dataloader, graph_collate_fn
+from src.train_vqvae import split_dataset_for_vqvae_validation
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +97,13 @@ class MaskedRoomTrainingConfig:
         unet_dropout: float = 0.1,
         min_mask_ratio: float = 0.12,
         max_mask_ratio: float = 0.85,
+        topology_alignment_weight: float = 0.25,
+        topology_marker_weight: float = 2.0,
+        topology_trace_weight: float = 0.75,
+        topology_focus_dilation: int = 1,
+        validation_fraction: float = 0.1,
+        validation_max_batches: int = 16,
+        best_checkpoint_metric: str = "val_loss",
         optimizer_weight_decay: float = 1e-5,
         scheduler_eta_min: float = 1e-6,
         grad_clip_norm: float = 1.0,
@@ -192,6 +202,13 @@ class MaskedRoomTrainingConfig:
         self.unet_dropout = float(max(0.0, min(1.0, unet_dropout)))
         self.min_mask_ratio = float(max(0.0, min(1.0, min_mask_ratio)))
         self.max_mask_ratio = float(max(0.0, min(1.0, max_mask_ratio)))
+        self.topology_alignment_weight = float(max(0.0, topology_alignment_weight))
+        self.topology_marker_weight = float(max(0.0, topology_marker_weight))
+        self.topology_trace_weight = float(max(0.0, topology_trace_weight))
+        self.topology_focus_dilation = int(max(0, topology_focus_dilation))
+        self.validation_fraction = float(max(0.0, min(0.5, validation_fraction)))
+        self.validation_max_batches = int(max(1, validation_max_batches))
+        self.best_checkpoint_metric = str(best_checkpoint_metric).strip().lower()
         self.optimizer_weight_decay = float(max(0.0, optimizer_weight_decay))
         self.scheduler_eta_min = float(max(0.0, scheduler_eta_min))
         self.grad_clip_norm = float(max(0.0, grad_clip_norm))
@@ -242,6 +259,10 @@ class MaskedRoomTrainingConfig:
             raise ValueError(
                 "min_mask_ratio must be <= max_mask_ratio. "
                 f"Got {self.min_mask_ratio} > {self.max_mask_ratio}."
+            )
+        if self.best_checkpoint_metric not in {"val_loss", "val_topology_focus_loss", "train_loss"}:
+            raise ValueError(
+                "best_checkpoint_metric must be 'val_loss', 'val_topology_focus_loss', or 'train_loss'."
             )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -297,6 +318,13 @@ def masked_room_training_kwargs_from_resolved_config(config: Dict[str, Any]) -> 
         "unet_dropout": stage["unet_dropout"],
         "min_mask_ratio": stage["min_mask_ratio"],
         "max_mask_ratio": stage["max_mask_ratio"],
+        "topology_alignment_weight": stage.get("topology_alignment_weight", 0.25),
+        "topology_marker_weight": stage.get("topology_marker_weight", 2.0),
+        "topology_trace_weight": stage.get("topology_trace_weight", 0.75),
+        "topology_focus_dilation": stage.get("topology_focus_dilation", 1),
+        "validation_fraction": stage.get("validation_fraction", 0.1),
+        "validation_max_batches": stage.get("validation_max_batches", 16),
+        "best_checkpoint_metric": stage.get("best_checkpoint_metric", "val_loss"),
         "optimizer_weight_decay": stage["optimizer_weight_decay"],
         "scheduler_eta_min": stage["scheduler_eta_min"],
         "grad_clip_norm": stage["grad_clip_norm"],
@@ -365,6 +393,13 @@ def _legacy_masked_room_overrides_from_args(args: argparse.Namespace) -> Dict[st
     _set("unet_dropout", getattr(args, "unet_dropout", None))
     _set("min_mask_ratio", getattr(args, "min_mask_ratio", None))
     _set("max_mask_ratio", getattr(args, "max_mask_ratio", None))
+    _set("topology_alignment_weight", getattr(args, "topology_alignment_weight", None))
+    _set("topology_marker_weight", getattr(args, "topology_marker_weight", None))
+    _set("topology_trace_weight", getattr(args, "topology_trace_weight", None))
+    _set("topology_focus_dilation", getattr(args, "topology_focus_dilation", None))
+    _set("validation_fraction", getattr(args, "validation_fraction", None))
+    _set("validation_max_batches", getattr(args, "validation_max_batches", None))
+    _set("best_checkpoint_metric", getattr(args, "best_checkpoint_metric", None))
     _set("checkpoint_dir", getattr(args, "checkpoint_dir", None))
     _set("save_every", getattr(args, "save_every", None))
     _set("keep_last", getattr(args, "keep_last", None))
@@ -390,6 +425,63 @@ def build_masked_room_training_config_from_args(args: argparse.Namespace) -> Mas
             setattr(args, "verbose", bool(resolved["runtime"]["verbose"]))
     legacy_overrides = _legacy_masked_room_overrides_from_args(args)
     return MaskedRoomTrainingConfig(**{**base_kwargs, **legacy_overrides})
+
+
+def _create_masked_room_dataloaders(
+    config: MaskedRoomTrainingConfig,
+) -> tuple[DataLoader, DataLoader, str, int, int]:
+    base_loader = create_dataloader(
+        config.data_dir,
+        batch_size=config.batch_size,
+        shuffle=False,
+        num_workers=config.num_workers,
+        pin_memory=config.pin_memory,
+        drop_last=config.drop_last,
+        use_vglc=True,
+        normalize=config.normalize,
+        room_level=True,
+        load_graphs=True,
+        node_feature_dim=config.node_feature_dim,
+        edge_feature_dim=config.edge_feature_dim,
+        topology_supervision_mode=config.topology_supervision_mode,
+        semantic_role_prior_strength=config.semantic_role_prior_strength,
+        semantic_puzzle_offset=config.semantic_puzzle_offset,
+    )
+    dataset = base_loader.dataset
+    train_dataset, val_dataset = split_dataset_for_vqvae_validation(
+        dataset,
+        validation_fraction=config.validation_fraction,
+        seed=config.seed,
+    )
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=config.batch_size,
+        shuffle=config.shuffle_train,
+        num_workers=config.num_workers,
+        pin_memory=config.pin_memory,
+        drop_last=config.drop_last,
+        collate_fn=graph_collate_fn,
+    )
+    eval_source = val_dataset if val_dataset is not None else train_dataset
+    eval_split_name = "val" if val_dataset is not None else "train"
+    val_loader = DataLoader(
+        eval_source,
+        batch_size=config.batch_size,
+        shuffle=False,
+        num_workers=config.num_workers,
+        pin_memory=config.pin_memory,
+        drop_last=False,
+        collate_fn=graph_collate_fn,
+    )
+    return train_loader, val_loader, eval_split_name, len(train_dataset), len(eval_source)
+
+
+def _resolve_masked_room_best_metric_name(config: MaskedRoomTrainingConfig) -> str:
+    if config.best_checkpoint_metric == "train_loss":
+        return "train_loss"
+    if config.best_checkpoint_metric == "val_topology_focus_loss":
+        return "val_topology_focus_loss"
+    return "val_loss"
 
 
 class MaskedRoomTrainer:
@@ -754,6 +846,15 @@ class MaskedRoomTrainer:
             num_classes=self.config.num_classes,
             semantic_anchor_threshold=self.config.semantic_anchor_threshold,
         )
+        topology_focus_map = None
+        if topo is not None and float(getattr(self.config, "topology_alignment_weight", 0.0)) > 0.0:
+            topology_focus_map = build_topology_loss_focus_map(
+                topo,
+                semantic_anchor_threshold=self.config.semantic_anchor_threshold,
+                marker_weight=float(getattr(self.config, "topology_marker_weight", 2.0)),
+                trace_weight=float(getattr(self.config, "topology_trace_weight", 0.75)),
+                dilation=int(getattr(self.config, "topology_focus_dilation", 1)),
+            )
         loss, metrics = self.model.training_loss(
             token_ids,
             conditioning,
@@ -762,6 +863,8 @@ class MaskedRoomTrainer:
             fixed_mask=fixed_mask,
             min_mask_ratio=self.config.min_mask_ratio,
             max_mask_ratio=self.config.max_mask_ratio,
+            topology_focus_map=topology_focus_map,
+            topology_alignment_weight=float(getattr(self.config, "topology_alignment_weight", 0.0)),
         )
         if train:
             self.optimizer.zero_grad()
@@ -776,6 +879,12 @@ class MaskedRoomTrainer:
         return metrics
 
     def _build_resume_checkpoint_payload(self, metrics: Dict[str, Any]) -> Dict[str, Any]:
+        topology_anchor_policy = build_topology_anchor_policy_metadata(
+            semantic_role_prior_strength=self.config.semantic_role_prior_strength,
+            semantic_anchor_threshold=self.config.semantic_anchor_threshold,
+            semantic_puzzle_offset=self.config.semantic_puzzle_offset,
+            topology_supervision_mode=self.config.topology_supervision_mode,
+        )
         return {
             "epoch": int(self.epoch),
             "global_step": int(self.global_step),
@@ -785,9 +894,18 @@ class MaskedRoomTrainer:
             "scheduler_state_dict": self.scheduler.state_dict(),
             "config": self.config.to_dict(),
             "metrics": dict(metrics),
+            "metadata": {
+                "topology_anchor_policy": dict(topology_anchor_policy),
+            },
         }
 
     def _build_inference_checkpoint_payload(self, metrics: Dict[str, Any]) -> Dict[str, Any]:
+        topology_anchor_policy = build_topology_anchor_policy_metadata(
+            semantic_role_prior_strength=self.config.semantic_role_prior_strength,
+            semantic_anchor_threshold=self.config.semantic_anchor_threshold,
+            semantic_puzzle_offset=self.config.semantic_puzzle_offset,
+            topology_supervision_mode=self.config.topology_supervision_mode,
+        )
         return {
             "epoch": int(self.epoch),
             "global_step": int(self.global_step),
@@ -795,6 +913,9 @@ class MaskedRoomTrainer:
             "condition_encoder_state_dict": self.condition_encoder.state_dict(),
             "config": self.config.to_dict(),
             "metrics": dict(metrics),
+            "metadata": {
+                "topology_anchor_policy": dict(topology_anchor_policy),
+            },
         }
 
     def save_checkpoint(self, path: str, metrics: Dict[str, Any], *, include_optimizer: bool = True) -> None:
@@ -834,6 +955,10 @@ class MaskedRoomTrainer:
                 "min_mask_ratio": float(self.config.min_mask_ratio),
                 "max_mask_ratio": float(self.config.max_mask_ratio),
                 "semantic_anchor_threshold": float(self.config.semantic_anchor_threshold),
+                "topology_alignment_weight": float(self.config.topology_alignment_weight),
+                "topology_marker_weight": float(self.config.topology_marker_weight),
+                "topology_trace_weight": float(self.config.topology_trace_weight),
+                "topology_focus_dilation": int(self.config.topology_focus_dilation),
             },
             extra={
                 "graph_conditioning_mode": self.config.graph_conditioning_mode,
@@ -877,44 +1002,11 @@ def train_masked_room(config: MaskedRoomTrainingConfig) -> MaskedRoomTrainer:
     checkpoint_dir = Path(config.checkpoint_dir)
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-    train_loader = create_dataloader(
-        config.data_dir,
-        batch_size=config.batch_size,
-        shuffle=config.shuffle_train,
-        num_workers=config.num_workers,
-        pin_memory=config.pin_memory,
-        drop_last=config.drop_last,
-        use_vglc=True,
-        normalize=config.normalize,
-        room_level=True,
-        load_graphs=True,
-        node_feature_dim=config.node_feature_dim,
-        edge_feature_dim=config.edge_feature_dim,
-        topology_supervision_mode=config.topology_supervision_mode,
-        semantic_role_prior_strength=config.semantic_role_prior_strength,
-        semantic_puzzle_offset=config.semantic_puzzle_offset,
-    )
-    val_loader = create_dataloader(
-        config.data_dir,
-        batch_size=config.batch_size,
-        shuffle=config.shuffle_val,
-        num_workers=config.num_workers,
-        pin_memory=config.pin_memory,
-        drop_last=config.drop_last,
-        use_vglc=True,
-        normalize=config.normalize,
-        room_level=True,
-        load_graphs=True,
-        node_feature_dim=config.node_feature_dim,
-        edge_feature_dim=config.edge_feature_dim,
-        topology_supervision_mode=config.topology_supervision_mode,
-        semantic_role_prior_strength=config.semantic_role_prior_strength,
-        semantic_puzzle_offset=config.semantic_puzzle_offset,
-    )
+    train_loader, val_loader, eval_split_name, train_size, eval_size = _create_masked_room_dataloaders(config)
     log_capacity_guardrails(
         logger,
         stage_name="Masked-room trainer",
-        dataset_size=len(train_loader.dataset),
+        dataset_size=int(train_size),
         param_groups={
             "masked_room_model": count_parameters(trainer.model, trainable_only=True),
             "condition_encoder": count_parameters(trainer.condition_encoder, trainable_only=True),
@@ -932,8 +1024,21 @@ def train_masked_room(config: MaskedRoomTrainingConfig) -> MaskedRoomTrainer:
         log_dir=str(checkpoint_dir / "logs"),
         experiment_name="masked_room_training",
     )
-    best_val = float("inf")
+    if float(getattr(config, "validation_fraction", 0.0)) > 0.0:
+        best_metric_name = _resolve_masked_room_best_metric_name(config)
+    else:
+        best_metric_name = "train_loss"
+    if config.best_checkpoint_metric == "train_loss":
+        best_metric_name = "train_loss"
+    best_metric_value = float("inf")
     epoch_metrics: Dict[str, Any] = {}
+    logger.info(
+        "Masked-room split: train=%d rooms | %s=%d rooms | best_metric=%s",
+        int(train_size),
+        eval_split_name,
+        int(eval_size),
+        best_metric_name,
+    )
     resume_path = resolve_resume_checkpoint(
         explicit_path=getattr(config, "resume_checkpoint", None),
         checkpoint_dir=str(checkpoint_dir),
@@ -954,14 +1059,24 @@ def train_masked_room(config: MaskedRoomTrainingConfig) -> MaskedRoomTrainer:
         else:
             latest_metrics = resume_payload.get("metrics", {})
             if isinstance(latest_metrics, dict):
-                best_val = float(latest_metrics.get("best_val_loss", latest_metrics.get("val_loss", best_val)))
+                best_metric_name = str(latest_metrics.get("best_metric_name", best_metric_name))
+                best_metric_value = float(
+                    latest_metrics.get("best_metric_value", latest_metrics.get("best_val_loss", best_metric_value))
+                )
             logger.info("Auto-resumed masked-room training from %s", resume_path)
 
     for epoch in range(int(getattr(trainer, "epoch", -1)) + 1, config.epochs):
         trainer.epoch = int(epoch)
         trainer.model.train()
         trainer.condition_encoder.train()
-        train_sum = {"loss": 0.0, "mask_ratio": 0.0, "masked_fraction": 0.0}
+        train_sum = {
+            "loss": 0.0,
+            "base_loss": 0.0,
+            "mask_ratio": 0.0,
+            "masked_fraction": 0.0,
+            "topology_focus_loss": 0.0,
+            "topology_focus_fraction": 0.0,
+        }
         train_batches = 0
         for batch in train_loader:
             real_maps, graph_list = batch if isinstance(batch, (list, tuple)) and len(batch) == 2 else (batch, None)
@@ -972,30 +1087,44 @@ def train_masked_room(config: MaskedRoomTrainingConfig) -> MaskedRoomTrainer:
 
         trainer.model.eval()
         trainer.condition_encoder.eval()
-        val_sum = {"val_loss": 0.0, "val_mask_ratio": 0.0, "val_masked_fraction": 0.0}
+        val_sum = {
+            "val_loss": 0.0,
+            "val_base_loss": 0.0,
+            "val_mask_ratio": 0.0,
+            "val_masked_fraction": 0.0,
+            "val_topology_focus_loss": 0.0,
+            "val_topology_focus_fraction": 0.0,
+        }
         val_batches = 0
         with torch.no_grad():
-            for batch in val_loader:
+            for batch_idx, batch in enumerate(val_loader):
                 real_maps, graph_list = batch if isinstance(batch, (list, tuple)) and len(batch) == 2 else (batch, None)
                 metrics = trainer._step(real_maps, graph_list, train=False)
                 val_sum["val_loss"] += float(metrics["loss"])
+                val_sum["val_base_loss"] += float(metrics.get("base_loss", metrics["loss"]))
                 val_sum["val_mask_ratio"] += float(metrics["mask_ratio"])
                 val_sum["val_masked_fraction"] += float(metrics["masked_fraction"])
+                val_sum["val_topology_focus_loss"] += float(metrics.get("topology_focus_loss", 0.0))
+                val_sum["val_topology_focus_fraction"] += float(metrics.get("topology_focus_fraction", 0.0))
                 val_batches += 1
+                if batch_idx + 1 >= int(getattr(config, "validation_max_batches", 16)):
+                    break
 
         trainer.scheduler.step()
         epoch_metrics = {
             "epoch": epoch,
+            "eval_split": eval_split_name,
             **{k: v / max(1, train_batches) for k, v in train_sum.items()},
             **{k: v / max(1, val_batches) for k, v in val_sum.items()},
         }
         metrics_logger.log(epoch_metrics)
         logger.info(
-            "Masked room epoch %d/%d: loss=%.4f val_loss=%.4f",
+            "Masked room epoch %d/%d: loss=%.4f val_loss=%.4f val_topo=%.4f",
             epoch + 1,
             config.epochs,
             epoch_metrics["loss"],
             epoch_metrics["val_loss"],
+            epoch_metrics["val_topology_focus_loss"],
         )
         if (epoch + 1) % config.save_every == 0:
             trainer.save_checkpoint(
@@ -1008,12 +1137,22 @@ def train_masked_room(config: MaskedRoomTrainingConfig) -> MaskedRoomTrainer:
                 pattern="masked_room_resume_epoch_*.pth",
                 keep_last=int(getattr(config, "keep_last", 2)),
             )
-        if epoch_metrics["val_loss"] < best_val:
-            best_val = epoch_metrics["val_loss"]
+        if best_metric_name == "val_topology_focus_loss":
+            current_metric_value = float(epoch_metrics["val_topology_focus_loss"])
+        elif best_metric_name == "val_loss":
+            current_metric_value = float(epoch_metrics["val_loss"])
+        else:
+            current_metric_value = float(epoch_metrics["loss"])
+        if current_metric_value < best_metric_value:
+            best_metric_value = current_metric_value
             trainer.save_checkpoint(str(checkpoint_dir / "masked_room_best.pth"), epoch_metrics, include_optimizer=False)
 
         latest_metrics = dict(epoch_metrics)
-        latest_metrics["best_val_loss"] = float(best_val)
+        latest_metrics["best_metric_name"] = str(best_metric_name)
+        latest_metrics["best_metric_value"] = float(best_metric_value)
+        latest_metrics["best_val_loss"] = float(
+            best_metric_value if best_metric_name == "val_loss" else epoch_metrics["val_loss"]
+        )
         trainer.save_checkpoint(
             str(checkpoint_dir / LATEST_RESUME_FILENAME),
             latest_metrics,
@@ -1081,6 +1220,18 @@ def main() -> None:
     parser.add_argument("--unet-dropout", type=float, default=None)
     parser.add_argument("--min-mask-ratio", type=float, default=None)
     parser.add_argument("--max-mask-ratio", type=float, default=None)
+    parser.add_argument("--topology-alignment-weight", type=float, default=None)
+    parser.add_argument("--topology-marker-weight", type=float, default=None)
+    parser.add_argument("--topology-trace-weight", type=float, default=None)
+    parser.add_argument("--topology-focus-dilation", type=int, default=None)
+    parser.add_argument("--validation-fraction", type=float, default=None)
+    parser.add_argument("--validation-max-batches", type=int, default=None)
+    parser.add_argument(
+        "--best-checkpoint-metric",
+        type=str,
+        choices=["val_loss", "val_topology_focus_loss", "train_loss"],
+        default=None,
+    )
     parser.add_argument("--checkpoint-dir", type=str, default=None)
     parser.add_argument("--save-every", type=int, default=None)
     parser.add_argument("--keep-last", type=int, default=None)

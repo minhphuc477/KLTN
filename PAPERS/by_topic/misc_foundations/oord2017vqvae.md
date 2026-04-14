@@ -1,0 +1,17 @@
+# Neural Discrete Representation Learning Aaron van den Oord DeepMind avdnoord@google.com Oriol Vinyals DeepMind vinyals@google.com Koray Kavukcuoglu DeepMind korayk@google.com Abstr
+
+- PDF: [oord2017vqvae.pdf](../../oord2017vqvae.pdf)
+- Topic: misc_foundations
+
+## Abstract / Core Idea
+Neural Discrete Representation Learning Aaron van den Oord DeepMind avdnoord@google.com Oriol Vinyals DeepMind vinyals@google.com Koray Kavukcuoglu DeepMind korayk@google.com Abstract Learning useful representations without supervision remains a key challenge in machine learning. In this paper, we propose a simple yet powerful generative model that learns such discrete representations. Our model, the Vector Quantised- Variational AutoEncoder (VQ-V AE), differs from V AEs in two key ways: the encoder network outputs discrete, rather than continuous, codes; and the prior is learnt rather than static. In order to learn a discrete latent representation, we incorporate ideas from vector quantisation (VQ). Using the VQ method allows the model to circumvent issues of “posterior collapse” -— where the latents are ignored when they are paired with a powerful autoregressive decoder -— typically observed in the V AE framework. Pairing these representations with an autoregressive prior, the model can generate high quality images, videos, and speech as well as doing high quality speaker conversion and unsupervised learning of phonemes, providing further evidence of the utility of the learnt representations. 1 Introduction Recent advances in generative modelling of images [38, 12, 13, 22, 10], audio [37, 26] and videos [20, 11] have yielded impressive samples and applications [24, 18]. At the same time, challenging tasks such as few-shot learning [34], domain adaptation [17], or reinforcem
+
+## Method Signals
+- Keywords phat hien: vq
+
+## Conclusion / Findings
+ous variance-reduction techniques to speed up training. VIMCO [28] optimises a multi-sample objective [5], which speeds up convergence further by using multiple samples from the inference network. Recently a few authors have suggested the use of a new continuous reparemetrisation based on the so-called Concrete [25] or Gumbel-softmax [19] distribution, which is a continuous distribution and has a temperature constant that can be annealed during training to converge to a discrete distribution in the limit. In the beginning of training the A Appendix A.1 VQ-V AE dictionary updates with Exponential Moving A verages As mentioned in Section 3.2, one can also use exponential moving averages (EMA) to update the dictionary items instead of the loss term from Equation 3: ∥sg[ze(x)]−e∥2 2. (4) Let{zi,1,z i,2,...,z i,ni} be the set ofni outputs from the encoder that are closest to dictionary itemei, so that we can write the loss as: ni∑ j ∥zi,j−ei∥2 2. (5) The optimal value forei has a closed form solution, which is simply the average of elements in the set: ei = 1 ni ni∑ j zi,j. This update is typically used in algorithms such as K-Means. However, we cannot use this update directly when working with minibatches. Instead we can use exponential moving averages as an online version of this update: N (t) i :=N (t−1) i ∗γ +n(t) i (1−γ) (6) m(t) i :=m(t−1) i ∗γ + ∑ j z(t) i,j (1−γ) (7) e(t) i := m(t) i N (t) i , (8) withγ a value between 0 and 1. We foundγ = 0.99 to work well in practice. 11
+
+## Relevance To KLTN
+- Bai nay duoc xep vao nhom misc_foundations trong pipeline neural-symbolic topology-first.
+- Dung de doi chieu voi khoi tuong ung trong docs va Chapter 3/4.

@@ -55,12 +55,32 @@ def _aggregate_variant(entries: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
     repair_rates = [float(entry["metrics"]["repair_rate"]) for entry in entries]
     repaired_tiles = [int(entry["metrics"]["total_tiles_repaired"]) for entry in entries]
     generation_times = [float(entry["metrics"]["generation_time_sec"]) for entry in entries]
+    neural_match_rates = [
+        float(entry["metrics"].get("avg_neural_graph_marker_exact_match_rate", 1.0))
+        for entry in entries
+    ]
+    final_pre_overlay_match_rates = [
+        float(entry["metrics"].get("avg_final_pre_overlay_graph_marker_exact_match_rate", 1.0))
+        for entry in entries
+    ]
+    final_post_overlay_match_rates = [
+        float(entry["metrics"].get("avg_final_post_overlay_graph_marker_exact_match_rate", 1.0))
+        for entry in entries
+    ]
     marker_overwrite_rates = [
         float(entry["metrics"].get("avg_final_graph_marker_overwrite_rate", 0.0))
         for entry in entries
     ]
     neural_anchor_errors = [
         float(entry["metrics"].get("avg_neural_semantic_anchor_error", 0.0))
+        for entry in entries
+    ]
+    final_pre_overlay_anchor_errors = [
+        float(entry["metrics"].get("avg_final_pre_overlay_semantic_anchor_error", 0.0))
+        for entry in entries
+    ]
+    final_post_overlay_anchor_errors = [
+        float(entry["metrics"].get("avg_final_post_overlay_semantic_anchor_error", 0.0))
         for entry in entries
     ]
     room_hash_signatures = [
@@ -76,10 +96,20 @@ def _aggregate_variant(entries: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
         "median_total_tiles_repaired": _safe_median(repaired_tiles),
         "avg_generation_time_sec": _safe_mean(generation_times),
         "median_generation_time_sec": _safe_median(generation_times),
+        "avg_neural_graph_marker_exact_match_rate": _safe_mean(neural_match_rates),
+        "median_neural_graph_marker_exact_match_rate": _safe_median(neural_match_rates),
+        "avg_final_pre_overlay_graph_marker_exact_match_rate": _safe_mean(final_pre_overlay_match_rates),
+        "median_final_pre_overlay_graph_marker_exact_match_rate": _safe_median(final_pre_overlay_match_rates),
+        "avg_final_post_overlay_graph_marker_exact_match_rate": _safe_mean(final_post_overlay_match_rates),
+        "median_final_post_overlay_graph_marker_exact_match_rate": _safe_median(final_post_overlay_match_rates),
         "avg_final_graph_marker_overwrite_rate": _safe_mean(marker_overwrite_rates),
         "median_final_graph_marker_overwrite_rate": _safe_median(marker_overwrite_rates),
         "avg_neural_semantic_anchor_error": _safe_mean(neural_anchor_errors),
         "median_neural_semantic_anchor_error": _safe_median(neural_anchor_errors),
+        "avg_final_pre_overlay_semantic_anchor_error": _safe_mean(final_pre_overlay_anchor_errors),
+        "median_final_pre_overlay_semantic_anchor_error": _safe_median(final_pre_overlay_anchor_errors),
+        "avg_final_post_overlay_semantic_anchor_error": _safe_mean(final_post_overlay_anchor_errors),
+        "median_final_post_overlay_semantic_anchor_error": _safe_median(final_post_overlay_anchor_errors),
         "unique_layout_count": len(set(room_hash_signatures)),
         "all_layouts_identical": len(set(room_hash_signatures)) == 1,
     }

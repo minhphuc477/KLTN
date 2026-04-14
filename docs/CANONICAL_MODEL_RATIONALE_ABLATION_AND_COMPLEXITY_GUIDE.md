@@ -1,6 +1,6 @@
 # Canonical Model Rationale, Ablation, And Complexity Guide
 
-Last updated: 2026-04-06
+Last updated: 2026-04-15
 
 This document is the canonical report-writing reference for the current Zelda
 generation stack. It explains:
@@ -15,8 +15,19 @@ generation stack. It explains:
 Scope:
 
 - canonical config: [`configs/zelda_hmolqd.yaml`](../configs/zelda_hmolqd.yaml)
-- canonical topology-anchor policy: `2026-04-06.semantic_anchor_v1`
+- current topology-anchor policy in code: `2026-04-11.semantic_anchor_v8_puzzle_subtype_channels`
 - canonical training entrypoint: `python main.py train --config configs/zelda_hmolqd.yaml ...`
+
+Important note:
+
+- this document explains the `design rationale`
+- [`CURRENT_ARCHITECTURE.md`](CURRENT_ARCHITECTURE.md) owns the exact live
+  implementation snapshot
+- the latest downstream experimental result is in
+  [`DOWNSTREAM_CODEBOOK512_PUZZLE_SUBTYPE_PROTOCOL_RESULTS_2026_04_15.md`](DOWNSTREAM_CODEBOOK512_PUZZLE_SUBTYPE_PROTOCOL_RESULTS_2026_04_15.md)
+- the canonical YAML still keeps a conservative `codebook_size=256`, while the
+  latest downstream experiment used an explicit external `codebook512`
+  checkpoint
 
 This guide is intentionally detailed enough to support thesis/report writing.
 It should be read together with:

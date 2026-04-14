@@ -1,0 +1,552 @@
+{
+  "total_occurrences": 84,
+  "unique_publication_ids": 35,
+  "items": [
+    {
+      "type": "arxiv",
+      "id": "1504.04909",
+      "occurrences": [
+        {
+          "file": "docs/archive/2026-q1/ARCHITECTURE_RESEARCH_JUDGMENT_2026_02_24.md",
+          "line": 97
+        }
+      ]
+    },
+    {
+      "type": "arxiv",
+      "id": "1606.07487",
+      "occurrences": [
+        {
+          "file": "docs/archive/2026-q1/ARCHITECTURE_RESEARCH_JUDGMENT_2026_02_24.md",
+          "line": 103
+        },
+        {
+          "file": "docs/archive/2026-q1/BLOCK_I_TOPOLOGY_REALISM_TUNING_2026_02_24.md",
+          "line": 12
+        },
+        {
+          "file": "docs/archive/2026-q1/FEATURE_COVERAGE_LOGIC_UPGRADE_2026_02_24.md",
+          "line": 25
+        },
+        {
+          "file": "docs/GRAMMAR_REFERENCE.md",
+          "line": 268
+        },
+        {
+          "file": "docs/SOTA_COMPARISON_AND_BENCHMARKS.md",
+          "line": 324
+        }
+      ]
+    },
+    {
+      "type": "arxiv",
+      "id": "1610.05729",
+      "occurrences": [
+        {
+          "file": "docs/archive/2026-q1/ARCHITECTURE_RESEARCH_JUDGMENT_2026_02_24.md",
+          "line": 98
+        },
+        {
+          "file": "docs/archive/2026-q1/BLOCK_I_TOPOLOGY_REALISM_TUNING_2026_02_24.md",
+          "line": 16
+        },
+        {
+          "file": "docs/SOTA_COMPARISON_AND_BENCHMARKS.md",
+          "line": 322
+        }
+      ]
+    },
+    {
+      "type": "arxiv",
+      "id": "1711.00937",
+      "occurrences": [
+        {
+          "file": "docs/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md",
+          "line": 584
+        },
+        {
+          "file": "docs/CANONICAL_MODEL_RATIONALE_ABLATION_AND_COMPLEXITY_GUIDE.md",
+          "line": 1194
+        },
+        {
+          "file": "docs/STATEFUL_PUZZLE_ARCHITECTURE_AUDIT_2026_04_09.md",
+          "line": 581
+        },
+        {
+          "file": "docs/VQVAE_RESEARCH_AUDIT_2026_04_10.md",
+          "line": 46
+        }
+      ]
+    },
+    {
+      "type": "arxiv",
+      "id": "1807.03247",
+      "occurrences": [
+        {
+          "file": "docs/CANONICAL_MODEL_RATIONALE_ABLATION_AND_COMPLEXITY_GUIDE.md",
+          "line": 1195
+        },
+        {
+          "file": "docs/VQVAE_RESEARCH_AUDIT_2026_04_10.md",
+          "line": 58
+        }
+      ]
+    },
+    {
+      "type": "arxiv",
+      "id": "1903.07291",
+      "occurrences": [
+        {
+          "file": "docs/CANONICAL_MODEL_RATIONALE_ABLATION_AND_COMPLEXITY_GUIDE.md",
+          "line": 1206
+        },
+        {
+          "file": "docs/STATEFUL_PUZZLE_ARCHITECTURE_AUDIT_2026_04_09.md",
+          "line": 590
+        }
+      ]
+    },
+    {
+      "type": "arxiv",
+      "id": "1906.00446",
+      "occurrences": [
+        {
+          "file": "docs/VQVAE_RESEARCH_AUDIT_2026_04_10.md",
+          "line": 50
+        }
+      ]
+    },
+    {
+      "type": "arxiv",
+      "id": "1910.01603",
+      "occurrences": [
+        {
+          "file": "docs/ARCHITECTURE_RESEARCH_AUDIT_2026_03_31.md",
+          "line": 508
+        },
+        {
+          "file": "docs/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md",
+          "line": 72
+        },
+        {
+          "file": "docs/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md",
+          "line": 593
+        },
+        {
+          "file": "docs/CANONICAL_MODEL_RATIONALE_ABLATION_AND_COMPLEXITY_GUIDE.md",
+          "line": 1207
+        }
+      ]
+    },
+    {
+      "type": "arxiv",
+      "id": "1912.02400",
+      "occurrences": [
+        {
+          "file": "docs/archive/2026-q1/ARCHITECTURE_RESEARCH_JUDGMENT_2026_02_24.md",
+          "line": 99
+        },
+        {
+          "file": "docs/SOTA_COMPARISON_AND_BENCHMARKS.md",
+          "line": 323
+        }
+      ]
+    },
+    {
+      "type": "arxiv",
+      "id": "2001.05065",
+      "occurrences": [
+        {
+          "file": "docs/archive/2026-q1/FEATURE_COVERAGE_LOGIC_UPGRADE_2026_02_24.md",
+          "line": 26
+        },
+        {
+          "file": "docs/STATEFUL_PUZZLE_ARCHITECTURE_AUDIT_2026_04_09.md",
+          "line": 592
+        }
+      ]
+    },
+    {
+      "type": "arxiv",
+      "id": "2001.09212",
+      "occurrences": [
+        {
+          "file": "docs/archive/2026-q1/ARCHITECTURE_RESEARCH_JUDGMENT_2026_02_24.md",
+          "line": 100
+        },
+        {
+          "file": "docs/SOTA_COMPARISON_AND_BENCHMARKS.md",
+          "line": 321
+        }
+      ]
+    },
+    {
+      "type": "arxiv",
+      "id": "2003.04389",
+      "occurrences": [
+        {
+          "file": "docs/archive/2026-q1/BLOCK_I_TOPOLOGY_REALISM_TUNING_2026_02_24.md",
+          "line": 17
+        }
+      ]
+    },
+    {
+      "type": "arxiv",
+      "id": "2004.13204",
+      "occurrences": [
+        {
+          "file": "docs/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md",
+          "line": 68
+        },
+        {
+          "file": "docs/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md",
+          "line": 591
+        },
+        {
+          "file": "docs/CANONICAL_MODEL_RATIONALE_ABLATION_AND_COMPLEXITY_GUIDE.md",
+          "line": 1203
+        },
+        {
+          "file": "docs/STATEFUL_PUZZLE_ARCHITECTURE_AUDIT_2026_04_09.md",
+          "line": 586
+        },
+        {
+          "file": "docs/VQVAE_RESEARCH_AUDIT_2026_04_10.md",
+          "line": 67
+        }
+      ]
+    },
+    {
+      "type": "arxiv",
+      "id": "2006.11239",
+      "occurrences": [
+        {
+          "file": "docs/ARCHITECTURE_RESEARCH_AUDIT_2026_03_31.md",
+          "line": 499
+        },
+        {
+          "file": "docs/CANONICAL_MODEL_RATIONALE_ABLATION_AND_COMPLEXITY_GUIDE.md",
+          "line": 1196
+        },
+        {
+          "file": "docs/STATEFUL_PUZZLE_ARCHITECTURE_AUDIT_2026_04_09.md",
+          "line": 582
+        }
+      ]
+    },
+    {
+      "type": "arxiv",
+      "id": "2010.02502",
+      "occurrences": [
+        {
+          "file": "docs/CANONICAL_MODEL_RATIONALE_ABLATION_AND_COMPLEXITY_GUIDE.md",
+          "line": 1197
+        },
+        {
+          "file": "docs/STATEFUL_PUZZLE_ARCHITECTURE_AUDIT_2026_04_09.md",
+          "line": 583
+        }
+      ]
+    },
+    {
+      "type": "arxiv",
+      "id": "2012.09841",
+      "occurrences": [
+        {
+          "file": "docs/VQVAE_RESEARCH_AUDIT_2026_04_10.md",
+          "line": 54
+        }
+      ]
+    },
+    {
+      "type": "arxiv",
+      "id": "2106.05234",
+      "occurrences": [
+        {
+          "file": "docs/ARCHITECTURE_RESEARCH_AUDIT_2026_03_31.md",
+          "line": 510
+        },
+        {
+          "file": "docs/TOPOLOGY_GRAPH_RESEARCH_AUDIT_2026_03_31.md",
+          "line": 47
+        }
+      ]
+    },
+    {
+      "type": "arxiv",
+      "id": "2112.10752",
+      "occurrences": [
+        {
+          "file": "docs/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md",
+          "line": 52
+        },
+        {
+          "file": "docs/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md",
+          "line": 585
+        },
+        {
+          "file": "docs/CANONICAL_MODEL_RATIONALE_ABLATION_AND_COMPLEXITY_GUIDE.md",
+          "line": 1198
+        },
+        {
+          "file": "docs/STATEFUL_PUZZLE_ARCHITECTURE_AUDIT_2026_04_09.md",
+          "line": 584
+        }
+      ]
+    },
+    {
+      "type": "arxiv",
+      "id": "2202.04200",
+      "occurrences": [
+        {
+          "file": "docs/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md",
+          "line": 64
+        },
+        {
+          "file": "docs/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md",
+          "line": 589
+        },
+        {
+          "file": "docs/CANONICAL_MODEL_RATIONALE_ABLATION_AND_COMPLEXITY_GUIDE.md",
+          "line": 1202
+        },
+        {
+          "file": "docs/STATEFUL_PUZZLE_ARCHITECTURE_AUDIT_2026_04_09.md",
+          "line": 585
+        }
+      ]
+    },
+    {
+      "type": "arxiv",
+      "id": "2205.12454",
+      "occurrences": [
+        {
+          "file": "docs/ARCHITECTURE_RESEARCH_AUDIT_DIFFUSION_CONDITIONING_ADDENDUM_2026_03_31.md",
+          "line": 328
+        },
+        {
+          "file": "docs/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md",
+          "line": 590
+        },
+        {
+          "file": "docs/CANONICAL_MODEL_RATIONALE_ABLATION_AND_COMPLEXITY_GUIDE.md",
+          "line": 1205
+        },
+        {
+          "file": "docs/STATEFUL_PUZZLE_ARCHITECTURE_AUDIT_2026_04_09.md",
+          "line": 589
+        },
+        {
+          "file": "docs/TOPOLOGY_GRAPH_RESEARCH_AUDIT_2026_03_31.md",
+          "line": 51
+        }
+      ]
+    },
+    {
+      "type": "arxiv",
+      "id": "2207.12598",
+      "occurrences": [
+        {
+          "file": "docs/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md",
+          "line": 55
+        },
+        {
+          "file": "docs/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md",
+          "line": 586
+        },
+        {
+          "file": "docs/CANONICAL_MODEL_RATIONALE_ABLATION_AND_COMPLEXITY_GUIDE.md",
+          "line": 1199
+        }
+      ]
+    },
+    {
+      "type": "arxiv",
+      "id": "2209.14734",
+      "occurrences": [
+        {
+          "file": "docs/ARCHITECTURE_RESEARCH_AUDIT_DIFFUSION_CONDITIONING_ADDENDUM_2026_03_31.md",
+          "line": 330
+        }
+      ]
+    },
+    {
+      "type": "arxiv",
+      "id": "2211.13287",
+      "occurrences": [
+        {
+          "file": "docs/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md",
+          "line": 69
+        },
+        {
+          "file": "docs/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md",
+          "line": 592
+        },
+        {
+          "file": "docs/CANONICAL_MODEL_RATIONALE_ABLATION_AND_COMPLEXITY_GUIDE.md",
+          "line": 1204
+        },
+        {
+          "file": "docs/STATEFUL_PUZZLE_ARCHITECTURE_AUDIT_2026_04_09.md",
+          "line": 587
+        },
+        {
+          "file": "docs/VQVAE_RESEARCH_AUDIT_2026_04_10.md",
+          "line": 70
+        }
+      ]
+    },
+    {
+      "type": "arxiv",
+      "id": "2303.01469",
+      "occurrences": [
+        {
+          "file": "docs/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md",
+          "line": 61
+        },
+        {
+          "file": "docs/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md",
+          "line": 588
+        }
+      ]
+    },
+    {
+      "type": "arxiv",
+      "id": "2303.08137",
+      "occurrences": [
+        {
+          "file": "docs/STATEFUL_PUZZLE_ARCHITECTURE_AUDIT_2026_04_09.md",
+          "line": 588
+        },
+        {
+          "file": "docs/VQVAE_RESEARCH_AUDIT_2026_04_10.md",
+          "line": 73
+        }
+      ]
+    },
+    {
+      "type": "arxiv",
+      "id": "2303.09556",
+      "occurrences": [
+        {
+          "file": "docs/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md",
+          "line": 58
+        },
+        {
+          "file": "docs/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md",
+          "line": 587
+        },
+        {
+          "file": "docs/CANONICAL_MODEL_RATIONALE_ABLATION_AND_COMPLEXITY_GUIDE.md",
+          "line": 1200
+        }
+      ]
+    },
+    {
+      "type": "arxiv",
+      "id": "2310.04378",
+      "occurrences": [
+        {
+          "file": "docs/archive/2026-q1/LCM_LORA_ARCHITECTURE_FIT_2026_03_29.md",
+          "line": 32
+        },
+        {
+          "file": "docs/CANONICAL_MODEL_RATIONALE_ABLATION_AND_COMPLEXITY_GUIDE.md",
+          "line": 1201
+        }
+      ]
+    },
+    {
+      "type": "arxiv",
+      "id": "2406.11837",
+      "occurrences": [
+        {
+          "file": "docs/VQVAE_RESEARCH_AUDIT_2026_04_10.md",
+          "line": 62
+        }
+      ]
+    },
+    {
+      "type": "arxiv",
+      "id": "2503.14760",
+      "occurrences": [
+        {
+          "file": "docs/archive/2026-q1/BLOCK_I_TOPOLOGY_REALISM_TUNING_2026_02_24.md",
+          "line": 18
+        }
+      ]
+    },
+    {
+      "type": "arxiv",
+      "id": "2503.21474",
+      "occurrences": [
+        {
+          "file": "docs/archive/2026-q1/FEATURE_COVERAGE_LOGIC_UPGRADE_2026_02_24.md",
+          "line": 28
+        },
+        {
+          "file": "docs/MATCHED_BUDGET_BENCHMARK_PROTOCOL.md",
+          "line": 86
+        }
+      ]
+    },
+    {
+      "type": "arxiv",
+      "id": "2507.00184",
+      "occurrences": [
+        {
+          "file": "docs/ARCHITECTURE_POSITIONING_AND_ATTENTION_NOTES_2026_04_02.md",
+          "line": 16
+        },
+        {
+          "file": "docs/ARCHITECTURE_RESEARCH_AUDIT_DIFFUSION_CONDITIONING_ADDENDUM_2026_03_31.md",
+          "line": 322
+        }
+      ]
+    },
+    {
+      "type": "doi",
+      "id": "10.1109/CVPR52688.2022.01103",
+      "occurrences": [
+        {
+          "file": "docs/ARCHITECTURE_RESEARCH_AUDIT_DIFFUSION_CONDITIONING_ADDENDUM_2026_03_31.md",
+          "line": 325
+        }
+      ]
+    },
+    {
+      "type": "doi",
+      "id": "10.1109/TCIAIG.2011.2149523",
+      "occurrences": [
+        {
+          "file": "docs/GRAMMAR_REFERENCE.md",
+          "line": 267
+        },
+        {
+          "file": "docs/SOTA_COMPARISON_AND_BENCHMARKS.md",
+          "line": 326
+        }
+      ]
+    },
+    {
+      "type": "doi",
+      "id": "10.1145/3102071.3110566",
+      "occurrences": [
+        {
+          "file": "docs/SOTA_COMPARISON_AND_BENCHMARKS.md",
+          "line": 327
+        }
+      ]
+    },
+    {
+      "type": "doi",
+      "id": "10.1609/aaai.v38i9.28865",
+      "occurrences": [
+        {
+          "file": "docs/ARCHITECTURE_RESEARCH_AUDIT_DIFFUSION_CONDITIONING_ADDENDUM_2026_03_31.md",
+          "line": 324
+        }
+      ]
+    }
+  ]
+}

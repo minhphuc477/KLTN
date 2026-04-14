@@ -1,313 +1,163 @@
 # Current Architecture
 
-This document captures the current end-to-end architecture in code.
-The original dated snapshot is archived at
-`docs/archive/2026-q1/CURRENT_ARCHITECTURE_FULL_DRAWING_2026_03_25.md`.
-Architecture positioning, comparison boundaries, attention-layer inventory,
-and remaining runtime/fallback hard-coded knobs are documented separately in
-`docs/ARCHITECTURE_POSITIONING_AND_ATTENTION_NOTES_2026_04_02.md`.
+Last updated: 2026-04-15
 
-Canonical training now runs through `python main.py train --config configs/zelda_hmolqd.yaml ...`.
-`python -m src.train ...` remains available only as a thin compatibility wrapper over the same validated path.
-`python -m src.train_vqvae --config configs/zelda_hmolqd.yaml ...` now resolves VQ-VAE stage settings from that same validated config contract.
-`python -m src.train_lcm --config configs/zelda_hmolqd.yaml ...` now does the same for the fast-sampler stage.
-`python -m src.generate ...` now samples through the canonical `NeuralSymbolicDungeonPipeline` instead of a separate hardcoded inference stack.
-Canonical GUI/script generation now also discovers the nearest `resolved_config.yaml/json` snapshot and reuses the validated runtime generation defaults from that config, rather than silently falling back to private helper constants.
-Active graph/topology paths now avoid Python's salted `hash(...)` for edge deduplication, MAP-Elites graph caching, and graph-derived per-room seeds.
-Graph-guided validation also now normalizes tuple room keys with deterministic dense IDs instead of salted hash-derived room IDs.
-The reusable condition-encoder factory still defaults to `gnn_type=gcn` for compatibility, while the canonical diffusion YAML now uses `gnn_type=gps` and the masked-room branch keeps `gnn_type=gcn`.
+This is the concise, code-aligned description of the current stack. Use this
+file as the canonical architecture reference. Older deep-dive notes remain in
+`docs/` and `docs/archive/`, but this file owns the "what exists now" answer.
 
-## 1) Full System Architecture
+## System Summary
 
-```mermaid
-flowchart TB
-    %% =========================
-    %% Entry points
-    %% =========================
-    U1[main.py train canonical config path]
-    U2[gui_runner.py interactive path]
-    U3[scripts/train_full_and_export_png.py run/export path]
+The project is a `graph-first hybrid neural-symbolic Zelda dungeon generator`.
+The current production path is:
 
-    %% =========================
-    %% Data / Assets
-    %% =========================
-    D0[Data/The Legend of Zelda Processed txt and dot]
-    D1[checkpoints directory]
+1. build or accept a mission graph
+2. generate room layouts with the diffusion branch under graph conditioning
+3. enforce mission-critical semantics with constrained decode, overlay, and
+   repair
+4. stitch the rooms into a full dungeon and export metrics/artifacts
 
-    %% =========================
-    %% Core pipeline facade
-    %% =========================
-    CP[create_pipeline in src/pipeline/dungeon_pipeline.py]
-    NP[NeuralSymbolicDungeonPipeline]
+Fast sampler and masked-room still exist, but they remain research branches.
 
-    U2 --> CP
-    U3 --> CP
-    CP --> NP
-    D1 --> CP
+## Canonical Entry Points
 
-    %% =========================
-    %% Block 0
-    %% =========================
-    subgraph B0
-        B0_label["Block 0 Data Adapter and Stitching Utilities"]
-        B0A[VGLCParser and adapters in src/data_processing/data_adapter.py]
-        B0B[DungeonStitcher in src/zelda_data/zelda_core.py]
-    end
+- Training: `python main.py train --config configs/zelda_hmolqd.yaml --stage ...`
+- Generation and evaluation: `python -m src.generate ...`
+- GUI path: `python gui_runner.py`
+- Canonical runtime orchestrator:
+  [`src/pipeline/dungeon_pipeline.py`](../src/pipeline/dungeon_pipeline.py)
 
-    D0 --> B0A
+## Block Map
 
-    %% =========================
-    %% Block I
-    %% =========================
-    subgraph B1
-        B1_label["Block I Evolutionary Topology Director"]
-        B1A[generate_dungeon generate_topology flag]
-        B1B[EvolutionaryTopologyGenerator]
-        B1C[GraphGrammarExecutor]
-        B1D[Tension and descriptor evaluator]
-        B1E[validate_graph_topology]
-        B1F[filter_virtual_nodes and get_physical_start_node]
+| Block | Role | Main code |
+|---|---|---|
+| Block 0 | data parsing, room/graph alignment, stitching utilities | [`src/data_processing/data_adapter.py`](../src/data_processing/data_adapter.py), [`src/zelda_data/zelda_core.py`](../src/zelda_data/zelda_core.py) |
+| Block I | mission/topology graph generation and validation | `src/generation/*`, `src/evaluation/benchmark_suite.py` |
+| Block II | semantic room tokenizer (VQ-VAE) | [`src/core/vqvae.py`](../src/core/vqvae.py) |
+| Block III | local + global graph conditioning | [`src/core/condition_encoder.py`](../src/core/condition_encoder.py), [`src/pipeline/room_topology_conditioning.py`](../src/pipeline/room_topology_conditioning.py) |
+| Block IV | latent diffusion teacher | [`src/core/latent_diffusion.py`](../src/core/latent_diffusion.py) |
+| Block V | LogicNet guidance | [`src/core/logic_net.py`](../src/core/logic_net.py), [`src/core/latent_diffusion.py`](../src/core/latent_diffusion.py) |
+| Block VI | symbolic repair, graph marker overlay, puzzle scaffolds, stitching | [`src/pipeline/dungeon_pipeline.py`](../src/pipeline/dungeon_pipeline.py), [`src/core/symbolic_refiner.py`](../src/core/symbolic_refiner.py) |
+| Block VII | metrics, validation, QD / MAP-Elites hooks | `src/evaluation/*`, `src/simulation/*` |
 
-        B1A --> B1B --> B1C --> B1D
-        B1B --> B1E
-        B1B --> B1F
-    end
+Auxiliary branches:
 
-    NP --> B1A
+- fast sampler distillation: [`src/train_lcm.py`](../src/train_lcm.py)
+- masked-room branch: [`src/core/discrete_masked_model.py`](../src/core/discrete_masked_model.py), [`src/train_masked_room.py`](../src/train_masked_room.py)
 
-    %% =========================
-    %% Block II
-    %% =========================
-    subgraph B2
-        B2_label["Block II Semantic VQ-VAE"]
-        B2A[SemanticVQVAE encode decode]
-        B2B[num_classes 44 codebook 256 latent_dim 64]
-    end
+Auxiliary-branch training now also includes `topology-focused supervision`
+that upweights sparse anchors, doors, typed gates, and traversability traces.
+This is the current path toward stronger neural semantics without dropping the
+hybrid runtime safeguards prematurely.
 
-    NP --> B2A
-    B2A --> B2B
+## Runtime Flow
 
-    %% =========================
-    %% Block III
-    %% =========================
-    subgraph B3
-        B3_label["Block III Dual-Stream Condition Encoder"]
-        B3A[DualStreamConditionEncoder]
-        B3B[LocalStreamEncoder boundary and neighbors]
-        B3C[GlobalStreamEncoder graph GNN plus current-room distance]
-        B3D[GraphToGridCrossAttention with distance-aware bias]
-        B3F[SpatialGraphConditioner]
-        B3E[RoomTopologyConditioner]
-    end
-
-    NP --> B3A
-    B3A --> B3B
-    B3A --> B3C
-    B3A --> B3D
-    B3A --> B3F
-
-    %% =========================
-    %% Block IV
-    %% =========================
-    subgraph B4
-        B4_label["Block IV Latent Diffusion"]
-        B4A[LatentDiffusionModel]
-        B4B[CFG cfg_scale plus conditional dropout plus Min-SNR]
-        B4C[DDIM or DDPM sampling]
-        B4D[Topology refinement mode none lightweight gat2]
-        B4E[Latent boundary masking and inpaint]
-    end
-
-    NP --> B4A
-    B4A --> B4B
-    B4A --> B4C
-    B4A --> B4D
-    B4A --> B4E
-
-    %% =========================
-    %% Block V
-    %% =========================
-    subgraph B5
-        B5_label["Block V LogicNet Guidance"]
-        B5A[LogicNet room-grid plus topology-trace plus anchor losses]
-        B5B[GradientGuidance inside diffusion]
-    end
-
-    NP --> B5A
-    B4A --> B5B
-    B5A --> B5B
-
-    %% =========================
-    %% Block VI
-    %% =========================
-    subgraph B6
-        B6_label["Block VI Symbolic Refiner"]
-        B6A[SymbolicRefiner]
-        B6B[Weighted Bayesian WFC]
-        B6C[repair_room_with_feedback and local inpaint callbacks]
-        B6D[max_repair_attempts 5 margin 2]
-    end
-
-    NP --> B6A
-    B6A --> B6B
-    B6A --> B6C
-    B6A --> B6D
-
-    %% =========================
-    %% Block VII
-    %% =========================
-    subgraph B7
-        B7_label["Block VII MAP-Elites Quality Diversity"]
-        B7A[MAPElitesEvaluator]
-        B7B[descriptor_mode hybrid tie_breaker quality_score in pipeline]
-        B7C[advanced CVT archive optional]
-    end
-
-    NP --> B7A
-    B7A --> B7B
-    B7A --> B7C
-
-    %% =========================
-    %% Outputs
-    %% =========================
-    O1[RoomGenerationResult per room]
-    O2[DungeonGenerationResult stitched grid rooms metrics]
-    O3[Exporter outputs npy png txt ids txt vglc]
-
-    B2A --> O1
-    B3A --> O1
-    B4A --> O1
-    B5A --> O1
-    B6A --> O1
-    B7A --> O2
-    B0B --> O2
-    O2 --> O3
-
-    U3 --> O3
+```text
+Mission graph
+  -> room order + graph features + topology maps
+  -> condition encoder
+  -> diffusion / fast sampler / masked-room branch
+  -> VQ-VAE decode to semantic room grid
+  -> structural cleanup + semantic constrained decode
+  -> deterministic graph-marker overlay
+  -> symbolic repair / fallback
+  -> stitched dungeon + reports
 ```
 
-## 2) Runtime Execution Flow (Single Dungeon Generation)
+## Current Canonical Config
 
-```mermaid
-sequenceDiagram
-    autonumber
-    participant Caller as Caller script or GUI
-    participant Facade as create_pipeline
-    participant Pipe as NeuralSymbolicDungeonPipeline
-    participant Evo as EvolutionaryTopologyGenerator
-    participant Cond as ConditionEncoder
-    participant Diff as LatentDiffusionModel
-    participant Ref as SymbolicRefiner
-    participant ME as MAPElitesEvaluator
+The validated config surface is
+[`configs/zelda_hmolqd.yaml`](../configs/zelda_hmolqd.yaml).
 
-    Caller->>Facade: create_pipeline checkpoint_dir
-    Facade->>Pipe: init with checkpoint paths
+Current important defaults:
 
-    Caller->>Pipe: generate_dungeon params
+| Area | Current value |
+|---|---|
+| Dataset schema | `zelda_v1`, `44` classes, `16x11` rooms |
+| Topology anchor policy | `2026-04-11.semantic_anchor_v8_puzzle_subtype_channels` |
+| Room-topology channels | `54` |
+| Canonical VQ-VAE config | `hidden_dim=96`, `codebook_size=256`, `latent_dim=64` |
+| Canonical diffusion config | `model_channels=96`, `condition_hidden_dim=192`, `condition_gnn_type=gps` |
+| Canonical masked-room config | `hidden_dim=48`, `condition_gnn_type=gcn`, `room_topology_channels=54` |
+| Generation defaults | constrained decode `on`, deterministic marker overlay `on`, repair `on`, puzzle scaffold `on`, puzzle novelty search `on` |
 
-    alt mission_graph is None and generate_topology true
-        Pipe->>Evo: evolve target_curve and search params
-        Evo-->>Pipe: mission_graph
-        Pipe->>Pipe: validate_graph_topology
-    end
+Important distinction:
 
-    Pipe->>Pipe: filter_virtual_nodes mission_graph_physical
-    Pipe->>Pipe: prepare_graph_context tensors
+- the `canonical YAML` still uses a `256`-entry VQ-VAE
+- the latest verified downstream experimental branch used an external
+  `codebook512` VQ-VAE checkpoint during downstream training/inference
 
-    loop for each room_id in deterministic generation order
-        Pipe->>Cond: encode local plus global context
-        Pipe->>Diff: sample latent DDIM or DDPM with CFG and optional LogicNet room-topology guidance
-        Diff-->>Pipe: z_latent
-        Pipe->>Pipe: decode via VQ-VAE logits to neural_grid
-        alt apply_repair true
-            Pipe->>Ref: repair_room_with_feedback
-            Ref-->>Pipe: repaired grid and diagnostics
-        end
-        Pipe->>Pipe: store RoomGenerationResult and latent cache
-    end
+That distinction is intentional. The codebase supports both:
 
-    Pipe->>Pipe: stitch rooms into dungeon grid
-    alt enable_map_elites true
-        Pipe->>ME: add_dungeon and compute descriptors
-        ME-->>Pipe: archive and score
-    end
+- stable canonical defaults in `configs/zelda_hmolqd.yaml`
+- stronger experimental branches via explicit checkpoint handoff
 
-    Pipe-->>Caller: DungeonGenerationResult
-```
+## Conditioned Semantics
 
-## 3) Strict Mode and Fallback Behavior
+The current room-generation contract is stronger than the older generic
+"puzzle room" setup.
 
-```mermaid
-flowchart LR
-    A[Pipeline strict_checkpoint_mode false by default]
-    B[Checkpoint schema mismatch]
-    C[Warn and continue with partial load]
-    D[Condition encoding failure]
-    E[Fallback to zero condition]
-    F[Topology validation failure]
-    G[Warn and continue]
+The topology conditioning path now carries:
 
-    H[Pipeline strict_checkpoint_mode true]
-    I[Checkpoint schema mismatch]
-    J[Raise error fail-fast]
-    K[Condition encoding failure]
-    L[Raise error fail-fast]
-    M[Topology validation failure]
-    N[Raise error fail-fast]
+- graph node role channels
+- puzzle subtype channels
+  - `tutorial_puzzle`
+  - `combat_puzzle`
+  - `complex_puzzle`
+  - `switch_puzzle`
+- edge-semantic gate families
+  - `key_locked`
+  - `bombable`
+  - `item_gate` / `item_locked`
+  - `switch_locked`
+  - `on_off_gate` / `state_block`
 
-    A --> B --> C
-    A --> D --> E
-    A --> F --> G
+Runtime puzzle scaffolds can then specialize to those semantics instead of
+using one generic obstacle template.
 
-    H --> I --> J
-    H --> K --> L
-    H --> M --> N
-```
+## Production vs Research Branches
 
-## 4) Canonical Training and Schema Lock
+### Production branch
 
-- Canonical experiment surface: `main.py train` plus the validated YAML/CLI config system in `src/config_system.py`.
-- Legacy compatibility entrypoint: `src/train.py` forwards to `main.py train` so there is no second divergent training surface anymore.
-- Standalone VQ-VAE compatibility entrypoint: `src/train_vqvae.py` now accepts `--config` and resolves dataset/runtime/VQ-VAE stage settings from the same validated YAML contract used by `main.py train`.
-- Standalone fast-sampler compatibility entrypoint: `src/train_lcm.py` now accepts `--config` and resolves dataset/runtime/fast-sampler settings from the same validated YAML contract used by `main.py train`.
-- GUI AI generation now routes through `NeuralSymbolicDungeonPipeline.generate_dungeon(...)` rather than a separate pooled-graph shortcut, so the interactive path matches the documented room-wise Block I-VII pipeline.
-- Offline generation/evaluation via `src/generate.py` now also routes through the canonical mission-graph-conditioned room-wise pipeline instead of building a separate hardcoded VQ-VAE/diffusion/condition-encoder stack.
-- Symbolic repair budgets are now explicit pipeline constructor controls: `symbolic_max_repair_attempts`, `symbolic_repair_margin`, and `symbolic_adjacency_threshold`.
-- Explicit dataset lock: `dataset.schema_profile=zelda_v1` makes the current `16x11`, `44`-class, `6/8/8` graph schema contract visible in config and metadata instead of hiding it in validators.
-- Current canonical YAML: `configs/zelda_hmolqd.yaml` now uses the reduced small-data-balanced profile (`diffusion.model_channels=96`, `diffusion.condition_hidden_dim=192`, `diffusion.condition_num_gnn_layers=2`) plus a further-downsized masked-room branch (`model_channels=64`, `hidden_dim=48`, `unet_channel_mult=[1,2]`, `unet_num_res_blocks=1`, `unet_num_heads=4`) so the auxiliary discrete branch stays within the Zelda corpus small-data guardrails.
-- Runtime seed propagation: standalone diffusion, masked-room, VQ-VAE, and fast-sampler entrypoints now all carry `runtime.seed` through their resolved config objects and apply shared seeding explicitly.
-- Stable seed derivation: research/benchmark scripts now use deterministic BLAKE2-based seed offsets instead of Python `hash(...)` when deriving per-method or per-room seeds.
-- Runtime guardrails: diffusion and masked-room training now log trainable parameter counts and warn when the configured model looks oversized relative to the available Zelda sample count.
-- Composite diffusion checkpoints now reconstruct bundled diffusion, condition-encoder, and LogicNet submodules from embedded config values instead of silently assuming default widths.
-- Canonical diffusion training now requires a trained VQ-VAE checkpoint and resolves it from either the just-finished Stage 1 artifact, `diffusion.vqvae_checkpoint`, or `vqvae.checkpoint_dir/vqvae_pretrained.pth`; it no longer has a valid canonical path that silently trains against a random VQ-VAE.
-- Random-init pipeline fallbacks also now inherit latent width, context width, and class count from already-bound components where possible, reducing consistency drift when only part of the neural stack is loaded.
+- `latent diffusion`
+- graph-conditioned decode
+- deterministic overlay
+- symbolic repair
 
-## 5) Effective Hyperparameter Layers (Current)
+### Research branches
 
-```mermaid
-flowchart TB
-    HP0[Script-level defaults in train_full_and_export_png]
-    HP1[Pipeline-level defaults in generate_dungeon and generate_room]
-    HP2[Block model defaults VQ-VAE Condition Encoder Diffusion LogicNet Refiner]
-    HP3[Topology search defaults EvolutionaryTopologyGenerator]
-    HP4[WFC internal defaults WeightedBayesianWFCConfig]
+- `fast sampler`
+- `masked room`
+- pure-neural / reduced-fallback ablations
 
-    HP0 --> HP1 --> HP2
-    HP1 --> HP3
-    HP1 --> HP4
-```
+Current evidence still says diffusion is the only branch that should be treated
+as the production baseline.
 
-## 6) Component Index (Code Locations)
+## Checkpoint and Reproducibility Contract
 
-- Pipeline facade and orchestration: src/pipeline/dungeon_pipeline.py
-- Topology evolution: src/generation/evolutionary_director.py
-- VQ-VAE: src/core/vqvae.py
-- Condition encoder: src/core/condition_encoder.py
-- Diffusion: src/core/latent_diffusion.py
-- LogicNet: src/core/logic_net.py
-- Symbolic refiner and repair: src/core/symbolic_refiner.py
-- Weighted Bayesian WFC: src/generation/weighted_bayesian_wfc.py
-- MAP-Elites: src/simulation/map_elites.py
-- Zelda data and stitching: src/zelda_data/zelda_core.py
-- VGLC parsing and adapter: src/data_processing/data_adapter.py
-- Export runner: scripts/train_full_and_export_png.py
+The current stack expects:
+
+- checkpoints to carry enough metadata to reconstruct component shapes
+- generation to reuse the nearest `resolved_config.yaml/json` snapshot
+- CLI/YAML overrides to flow through `src/config_system.py`
+
+This means "current behavior" is defined by:
+
+1. resolved config
+2. checkpoint metadata
+3. runtime generation overrides
+
+not by private hardcoded script defaults.
+
+## Where To Read Next
+
+- High-level rationale and report-writing detail:
+  [`CANONICAL_MODEL_RATIONALE_ABLATION_AND_COMPLEXITY_GUIDE.md`](CANONICAL_MODEL_RATIONALE_ABLATION_AND_COMPLEXITY_GUIDE.md)
+- Topology commands and manual graph workflows:
+  [`TOPOLOGY_COMMANDS.md`](TOPOLOGY_COMMANDS.md)
+- Latest downstream protocol judgment:
+  [`DOWNSTREAM_CODEBOOK512_PUZZLE_SUBTYPE_PROTOCOL_RESULTS_2026_04_15.md`](DOWNSTREAM_CODEBOOK512_PUZZLE_SUBTYPE_PROTOCOL_RESULTS_2026_04_15.md)
+- Auxiliary-branch / neural-semantics research decision:
+  [`AUXILIARY_BRANCH_AND_NEURAL_SEMANTICS_AUDIT_2026_04_15.md`](AUXILIARY_BRANCH_AND_NEURAL_SEMANTICS_AUDIT_2026_04_15.md)
+- Latest VQ-VAE audit:
+  [`VQVAE_RESEARCH_AUDIT_2026_04_10.md`](VQVAE_RESEARCH_AUDIT_2026_04_10.md)

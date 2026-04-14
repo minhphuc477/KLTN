@@ -192,6 +192,10 @@ def save_fast_sampler_checkpoint(
     target_modules: Iterable[str] = DEFAULT_LORA_TARGETS,
     metrics: Optional[Dict[str, Any]] = None,
     distillation_type: str = "consistency_lora",
+    topology_alignment_weight: float = 0.0,
+    topology_marker_weight: float = 2.0,
+    topology_trace_weight: float = 0.75,
+    topology_focus_dilation: int = 1,
     topology_anchor_policy: Optional[Dict[str, Any]] = None,
 ) -> None:
     payload = {
@@ -203,6 +207,14 @@ def save_fast_sampler_checkpoint(
             "lora_rank": int(max(1, lora_rank)),
             "lora_alpha": float(lora_alpha),
             "target_modules": [str(t) for t in target_modules],
+            "topology_alignment_weight": float(max(0.0, topology_alignment_weight)),
+            "topology_marker_weight": float(max(0.0, topology_marker_weight)),
+            "topology_trace_weight": float(max(0.0, topology_trace_weight)),
+            "topology_focus_dilation": int(max(0, topology_focus_dilation)),
+            "topology_anchor_policy": dict(
+                topology_anchor_policy
+                or build_topology_anchor_policy_metadata()
+            ),
             "metrics": dict(metrics or {}),
         },
     }
@@ -214,6 +226,10 @@ def save_fast_sampler_checkpoint(
             "distillation_type": str(distillation_type),
             "num_inference_steps": int(max(1, num_inference_steps)),
             "lora_rank": int(max(1, lora_rank)),
+            "topology_alignment_weight": float(max(0.0, topology_alignment_weight)),
+            "topology_marker_weight": float(max(0.0, topology_marker_weight)),
+            "topology_trace_weight": float(max(0.0, topology_trace_weight)),
+            "topology_focus_dilation": int(max(0, topology_focus_dilation)),
         },
         extra={
             "base_diffusion_checkpoint": None if base_diffusion_checkpoint is None else str(base_diffusion_checkpoint),

@@ -1,0 +1,17 @@
+# Controlling the False Discovery Rate: A Practical and Powerful Approach to Multiple Testing Author(s): Yoav Benjamini and Yosef Hochberg Source: Journal of the Royal Statistical So
+
+- PDF: [benjamini1995fdr.pdf](../../benjamini1995fdr.pdf)
+- Topic: statistics_methods
+
+## Abstract / Core Idea
+Controlling the False Discovery Rate: A Practical and Powerful Approach to Multiple Testing Author(s): Yoav Benjamini and Yosef Hochberg Source: Journal of the Royal Statistical Society. Series B (Methodological), Vol. 57, No. 1 (1995), pp. 289-300 Published by: Blackwell Publishing for the Royal Statistical Society Stable URL: http://www.jstor.org/stable/2346101 Accessed: 19/10/2009 12:33 Your use of the JSTOR archive indicates your acceptance of JSTOR's Terms and Conditions of Use, available at http://www.jstor.org/page/info/about/policies/terms.jsp. JSTOR's Terms and Conditions of Use provides, in part, that unless you have obtained prior permission, you may not download an entire issue of a journal or multiple copies of articles, and you may use content in the JSTOR archive only for your personal, non-commercial use. Please contact the publisher regarding any further use of this work. Publisher contact information may be obtained at http://www.jstor.org/action/showPublisher?publisherCode=black. Each copy of any part of a JSTOR transmission must contain the same copyright notice that appears on the screen or printed page of such transmission. JSTOR is a not-for-profit service that helps scholars, researchers, and students discover, use, and build upon a wide range of content in a trusted digital archive. We use information technology and tools to increase productivity and facilitate new forms of scholarship. For more information about JSTOR, please contact support@jstor.or
+
+## Method Signals
+- Keywords phat hien: see_pdf_text
+
+## Conclusion / Findings
+ol. 57, No. 1 (1995), pp. 289-300 Published by: Blackwell Publishing for the Royal Statistical Society Stable URL: http://www.jstor.org/stable/2346101 Accessed: 19/10/2009 12:33 Your use of the JSTOR archive indicates your acceptance of JSTOR's Terms and Conditions of Use, available at http://www.jstor.org/page/info/about/policies/terms.jsp. JSTOR's Terms and Conditions of Use provides, in part, that unless you have obtained prior permission, you may not download an entire issue of a journal or multiple copies of articles, and you may use content in the JSTOR archive only for your personal, non-commercial use. Please contact the publisher regarding any further use of this work. Publisher contact information may be obtained at http://www.jstor.org/action/showPublisher?publisherCode=black. Each copy of any part of a JSTOR transmission must contain the same copyright notice that appears on the screen or printed page of such transmission. JSTOR is a not-for-profit service that helps scholars, researchers, and students discover, use, and build upon a wide range of content in a trusted digital archive. We use information technology and tools to increase productivity and facilitate new forms of scholarship. For more information about JSTOR, please contact support@jstor.org. Royal Statistical Society and Blackwell Publishing are collaborating with JSTOR to digitize, preserve and extend access to Journal of the Royal Statistical Society. Series B (Methodological). http://www.jstor.org
+
+## Relevance To KLTN
+- Bai nay duoc xep vao nhom statistics_methods trong pipeline neural-symbolic topology-first.
+- Dung de doi chieu voi khoi tuong ung trong docs va Chapter 3/4.

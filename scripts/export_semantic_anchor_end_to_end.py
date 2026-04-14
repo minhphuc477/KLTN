@@ -176,6 +176,7 @@ def export_masked_variant(
                 "avg_final_graph_marker_overwrite_rate",
                 "avg_neural_semantic_anchor_error",
                 "avg_final_pre_overlay_semantic_anchor_error",
+                "avg_final_post_overlay_semantic_anchor_error",
             )
         },
         "tile_hist": {str(int(k)): int(v) for k, v in Counter(int(v) for v in dungeon_grid.ravel()).items()},

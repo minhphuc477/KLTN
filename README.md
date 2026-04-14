@@ -280,9 +280,10 @@ Expected evidence artifacts:
 - **Start Here (single docs entrypoint)**: `docs/INDEX.md`
 - **Docs Folder Landing**: `docs/README.md`
 - **Current Architecture**: `docs/CURRENT_ARCHITECTURE.md`
+- **Canonical Model Rationale**: `docs/CANONICAL_MODEL_RATIONALE_ABLATION_AND_COMPLEXITY_GUIDE.md`
 - **Claim Traceability**: `docs/TRACEABILITY_AND_CLAIM_VALIDATION.md`
 - **Architecture & Benchmarks**: `docs/SOTA_COMPARISON_AND_BENCHMARKS.md`
-- **Block-by-Block Audit**: `docs/BLOCK_BY_BLOCK_ARCHITECTURE_AND_IMPLEMENTATION_AUDIT.md`
+- **Latest Downstream Protocol**: `docs/DOWNSTREAM_CODEBOOK512_PUZZLE_SUBTYPE_PROTOCOL_RESULTS_2026_04_15.md`
 - **Paper Blueprint + Room Block**: `docs/IEEE_TOG_BLUEPRINT_AND_ROOM_GENERATION.md`
 - **Solver + GUI Reference**: `docs/SOLVERS_AND_GUI_REFERENCE.md`
 - **VGLC Compliance Guide**: `docs/VGLC_COMPLIANCE_GUIDE.md`

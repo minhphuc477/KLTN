@@ -1,0 +1,17 @@
+# An Efﬁcient Constraint Handling Method for Genetic Algorithms Kalyanmoy Deb Kanpur Genetic Algorithms Laboratory (KanGAL) Department of Mechanical Engineering Indian Institute of T
+
+- PDF: [deb2000constraint.pdf](../../deb2000constraint.pdf)
+- Topic: misc_foundations
+
+## Abstract / Core Idea
+An Efﬁcient Constraint Handling Method for Genetic Algorithms Kalyanmoy Deb Kanpur Genetic Algorithms Laboratory (KanGAL) Department of Mechanical Engineering Indian Institute of Technology Kanpur Kanpur, PIN 208 016, India E-mail: deb@iitk.ac.in Abstract Many real-world search and optimization problems involve inequality and/or equality con- straints and are thus posed as constrained optimization pro blems. In trying to solve con- strained optimization problems using genetic algorithms ( GAs) or classical optimization methods, penalty function methods have been the most popular approach, because of their simplicity and ease of implementation. However, since the p enalty function approach is generic and applicable to any type of constraint (linear or n onlinear), their performance is not always satisfactory. Thus, researchers have developed sophisticated penalty functions speciﬁc to the problem at hand and the search algorithm used f or optimization. However, the most difﬁcult aspect of the penalty function approach is to ﬁnd appropriate penalty pa- rameters needed to guide the search towards the constrained optimum. In this paper, GA’s population-based approach and ability to make pair-wise comparison in tournament selec- tion operator are exploited to devise a penalty function app roach that does not require any penalty parameter. Careful comparisons among feasible and infeasible solutions are made so as to provide a search direction towards the feasible region. Once sufﬁci
+
+## Method Signals
+- Keywords phat hien: constraint
+
+## Conclusion / Findings
+S) and Powell and Skoln ick’s (PS) methods for constraint handling in terms of average number of feasible s olutions found in 50 GA runs on test problem 1. Fig. .8. Comparison of the proposed (TS) and Powell and Skoln ick’s (PS) methods for constraint handling in terms of average normalized Euclide an distance among feasible so- lutions in 50 GA runs on test problem 1. Fig. .9. Average normalized Euclidean distance of feasible solutions versus generation number on test problem 2. Fig. .10. Average ratio of the best f /( /~ x /) found by GAs to f / /2 is plotted versus generation number on test problem 2. Fig. .11. Average normalized Euclidean distance of feasibl e solutions for different real-coded GAs with the proposed constraint handling scheme is plotted versus generation number on test problem 3. Fig. .12. Average f /( /~ x /) /=f / /3 obtained by different real-coded GAs with the proposed con- straint handling scheme is plotted versus generation number on test problem 3. Fig. .13. Average Euclidean distance of feasible solutions in 50 runs of real-coded GAs with the proposed constraint handling scheme on test problem 4. Fig. .14. Average proportion of feasible solutions in the population obtained by 50 runs of real-coded GAs with the proposed constraint handling scheme on test problem 4. Fig. .15. Average f /( /~ x /) /=f / w obtained by different GAs with the proposed constraint handling scheme is plotted versus generation number on the welded beam design problem. 35
+
+## Relevance To KLTN
+- Bai nay duoc xep vao nhom misc_foundations trong pipeline neural-symbolic topology-first.
+- Dung de doi chieu voi khoi tuong ung trong docs va Chapter 3/4.

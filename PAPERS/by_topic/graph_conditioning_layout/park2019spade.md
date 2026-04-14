@@ -1,0 +1,17 @@
+# Semantic Image Synthesis with Spatially-Adaptive Normalization Taesung Park1,2∗ Ming-Yu Liu2 Ting-Chun Wang2 Jun-Yan Zhu2,3 1UC Berkeley 2NVIDIA 2,3MIT CSAIL sky sea tree cloud mou
+
+- PDF: [park2019spade.pdf](../../park2019spade.pdf)
+- Topic: graph_conditioning_layout
+
+## Abstract / Core Idea
+Semantic Image Synthesis with Spatially-Adaptive Normalization Taesung Park1,2∗ Ming-Yu Liu2 Ting-Chun Wang2 Jun-Yan Zhu2,3 1UC Berkeley 2NVIDIA 2,3MIT CSAIL sky sea tree cloud mountain grass Figure 1: Our model allows user control over both semantic and style as synthesizing an image. The semantic (e.g., the existence of a tree) is controlled via a label map (the top row), while the style is controlled via the reference style image (the leftmost column). Please visit our website for interactive image synthesis demos. Abstract We propose spatially-adaptive normalization, a simple but effective layer for synthesizing photorealistic images given an input semantic layout. Previous methods directly feed the semantic layout as input to the deep network, which is then processed through stacks of convolution, normaliza- tion, and nonlinearity layers. We show that this is subop- timal as the normalization layers tend to “wash away” se- mantic information. To address the issue, we propose using the input layout for modulating the activations in normal- ization layers through a spatially-adaptive, learned trans- formation. Experiments on several challenging datasets demonstrate the advantage of the proposed method over ex- isting approaches, regarding both visual ﬁdelity and align- ment with input layouts. Finally, our model allows user control over both semantic and style. Code is available at ∗Taesung Park contributed to the work during his NVIDIA internship. https://github.com/NVlab
+
+## Method Signals
+- Keywords phat hien: layout
+
+## Conclusion / Findings
+9, 41] learn to synthesize images given category labels. Researchers have explored various models for generating images based on text [18,44,52,55]. Another widely-used form is image-to-image translation based on a type of conditional GANs [20, 22, 24, 25, 33, 57, 59, 60], where both input and output are images. Compared to earlier non-parametric methods [7, 16, 23], learning-based methods typically run faster during test time and produce more realistic results. In this work, we focus on converting segmentation masks to photorealistic images. We assume the training dataset contains registered segmentation masks and images. With the proposed spatially-adaptive normal- ization, our compact network achieves better results com- pared to leading methods. Unconditional normalization layers have been an impor- tant component in modern deep networks and can be found in various classiﬁers, including the Local Response Nor- malization in the AlexNet [29] and the Batch Normaliza- tion (BatchNorm) in the Inception-v2 network [21]. Other popular normalization layers include the Instance Normal- ization (InstanceNorm) [46], the Layer Normalization [2], the Group Normalization [50], and the Weight Normaliza- tion [45]. We label these normalization layers a Label Ground Truth Multi-modal results Figure 21: Additional multi-modal synthesis results on the Flickr Landscapes Dataset. By sampling latent vectors from a standard Gaussian distribution, we synthesize images of diverse appearances. 19
+
+## Relevance To KLTN
+- Bai nay duoc xep vao nhom graph_conditioning_layout trong pipeline neural-symbolic topology-first.
+- Dung de doi chieu voi khoi tuong ung trong docs va Chapter 3/4.

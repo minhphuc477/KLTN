@@ -1,0 +1,309 @@
+{
+  "downloaded_from_thesis_keys": [
+    "togelius2011pcg",
+    "dormans2011missionspaces",
+    "summerville2016vglc",
+    "mota2021dungeon",
+    "hu2020graph2plan",
+    "shabani2023housediffusion",
+    "oord2017vqvae",
+    "ho2020ddpm",
+    "song2021ddim",
+    "khalifa2020pcgrl",
+    "rombach2022ldm",
+    "efron1994bootstrap",
+    "benjamini1995fdr",
+    "shaker2016pcgbook",
+    "goodfellow2016deeplearning",
+    "bishop2006prml",
+    "park2019spade",
+    "rampasek2022gps",
+    "deb2000constraint",
+    "goldberg1989genetic",
+    "beyer2002evolution",
+    "kahn1962topological",
+    "pugh2016quality",
+    "mouret2015mapelites",
+    "hang2023minsnr",
+    "ho2022cfg",
+    "vassiliades2017cvt",
+    "fontaine2020cma",
+    "karth2021wfc",
+    "ying2021graphormer",
+    "vignac2023digress",
+    "rodriguez2019bootstrapping"
+  ],
+  "results": [
+    {
+      "key": "togelius2011pcg",
+      "status": "downloaded",
+      "error": "HTTPError: HTTP Error 418: Unknown Code",
+      "candidates": [
+        "https://doi.org/10.1109/TCIAIG.2011.2148116"
+      ],
+      "source": "http://julian.togelius.com/Togelius2011Searchbased.pdf",
+      "final_url": "http://julian.togelius.com/Togelius2011Searchbased.pdf",
+      "file": "PAPERS/togelius2011pcg.pdf"
+    },
+    {
+      "key": "dormans2011missionspaces",
+      "status": "downloaded",
+      "error": "TimeoutError: The read operation timed out",
+      "candidates": [
+        "https://doi.org/10.1109/TCIAIG.2011.2149523"
+      ],
+      "source": "https://sander.landofsand.com/publications/Dormans_Bakkes_-_Generating_Missions_and_Spaces_for_Adaptable_Play_Experiences.pdf",
+      "final_url": "https://sander.landofsand.com/publications/Dormans_Bakkes_-_Generating_Missions_and_Spaces_for_Adaptable_Play_Experiences.pdf",
+      "file": "PAPERS/dormans2011missionspaces.pdf"
+    },
+    {
+      "key": "summerville2016vglc",
+      "status": "downloaded",
+      "error": "HTTPError: HTTP Error 404: Not Found",
+      "candidates": [
+        "https://ojs.aaai.org/index.php/AIIDE/article/view/14092"
+      ],
+      "source": "https://arxiv.org/pdf/1606.07487.pdf",
+      "final_url": "https://arxiv.org/pdf/1606.07487",
+      "file": "PAPERS/summerville2016vglc.pdf"
+    },
+    {
+      "key": "mota2021dungeon",
+      "status": "failed",
+      "error": "HTTPError: HTTP Error 403: Forbidden",
+      "candidates": [
+        "https://doi.org/10.1016/j.eswa.2021.115009",
+        "https://www.sciencedirect.com/science/article/pii/S0957417421014909"
+      ]
+    },
+    {
+      "key": "hu2020graph2plan",
+      "status": "downloaded",
+      "source": "https://arxiv.org/pdf/2004.13204",
+      "final_url": "https://arxiv.org/pdf/2004.13204",
+      "landing_page": "https://arxiv.org/abs/2004.13204",
+      "file": "PAPERS/hu2020graph2plan.pdf"
+    },
+    {
+      "key": "shabani2023housediffusion",
+      "status": "downloaded",
+      "source": "https://arxiv.org/pdf/2211.13287",
+      "final_url": "https://arxiv.org/pdf/2211.13287",
+      "landing_page": "https://arxiv.org/abs/2211.13287",
+      "file": "PAPERS/shabani2023housediffusion.pdf"
+    },
+    {
+      "key": "oord2017vqvae",
+      "status": "downloaded",
+      "source": "https://arxiv.org/pdf/1711.00937",
+      "final_url": "https://arxiv.org/pdf/1711.00937",
+      "landing_page": "https://arxiv.org/abs/1711.00937",
+      "file": "PAPERS/oord2017vqvae.pdf"
+    },
+    {
+      "key": "ho2020ddpm",
+      "status": "downloaded",
+      "source": "https://arxiv.org/pdf/2006.11239",
+      "final_url": "https://arxiv.org/pdf/2006.11239",
+      "landing_page": "https://arxiv.org/abs/2006.11239",
+      "file": "PAPERS/ho2020ddpm.pdf"
+    },
+    {
+      "key": "song2021ddim",
+      "status": "downloaded",
+      "source": "https://arxiv.org/pdf/2010.02502",
+      "final_url": "https://arxiv.org/pdf/2010.02502",
+      "landing_page": "https://arxiv.org/abs/2010.02502",
+      "file": "PAPERS/song2021ddim.pdf"
+    },
+    {
+      "key": "khalifa2020pcgrl",
+      "status": "downloaded",
+      "source": "https://ojs.aaai.org/index.php/AIIDE/article/download/7416/7341",
+      "final_url": "https://ojs.aaai.org/index.php/AIIDE/article/download/7416/7341",
+      "landing_page": "https://ojs.aaai.org/index.php/AIIDE/article/view/7416",
+      "file": "PAPERS/khalifa2020pcgrl.pdf"
+    },
+    {
+      "key": "rombach2022ldm",
+      "status": "downloaded",
+      "source": "https://arxiv.org/pdf/2112.10752",
+      "final_url": "https://arxiv.org/pdf/2112.10752",
+      "landing_page": "https://arxiv.org/abs/2112.10752",
+      "file": "PAPERS/rombach2022ldm.pdf"
+    },
+    {
+      "key": "efron1994bootstrap",
+      "status": "skipped_not_paper",
+      "type": "book"
+    },
+    {
+      "key": "benjamini1995fdr",
+      "status": "downloaded",
+      "error": "HTTPError: HTTP Error 403: Forbidden",
+      "candidates": [
+        "https://doi.org/10.1111/j.2517-6161.1995.tb02031.x"
+      ],
+      "source": "http://engr.case.edu/ray_soumya/mlrg/controlling_fdr_benjamini95.pdf",
+      "final_url": "http://engr.case.edu/ray_soumya/mlrg/controlling_fdr_benjamini95.pdf",
+      "file": "PAPERS/benjamini1995fdr.pdf"
+    },
+    {
+      "key": "shaker2016pcgbook",
+      "status": "skipped_not_paper",
+      "type": "book"
+    },
+    {
+      "key": "goodfellow2016deeplearning",
+      "status": "skipped_not_paper",
+      "type": "book"
+    },
+    {
+      "key": "bishop2006prml",
+      "status": "skipped_not_paper",
+      "type": "book"
+    },
+    {
+      "key": "park2019spade",
+      "status": "downloaded",
+      "source": "https://arxiv.org/pdf/1903.07291",
+      "final_url": "https://arxiv.org/pdf/1903.07291",
+      "landing_page": "https://arxiv.org/abs/1903.07291",
+      "file": "PAPERS/park2019spade.pdf"
+    },
+    {
+      "key": "rampasek2022gps",
+      "status": "downloaded",
+      "source": "https://arxiv.org/pdf/2205.12454",
+      "final_url": "https://arxiv.org/pdf/2205.12454",
+      "landing_page": "https://arxiv.org/abs/2205.12454",
+      "file": "PAPERS/rampasek2022gps.pdf"
+    },
+    {
+      "key": "deb2000constraint",
+      "status": "downloaded",
+      "error": "HTTPError: HTTP Error 403: Forbidden",
+      "candidates": [
+        "https://doi.org/10.1016/S0045-7825(99)00389-8"
+      ],
+      "source": "https://repository.ias.ac.in/9407/1/310.pdf",
+      "final_url": "https://repository.ias.ac.in/9407/1/310.pdf",
+      "file": "PAPERS/deb2000constraint.pdf"
+    },
+    {
+      "key": "goldberg1989genetic",
+      "status": "skipped_not_paper",
+      "type": "book"
+    },
+    {
+      "key": "beyer2002evolution",
+      "status": "downloaded",
+      "error": "landing_pdf_not_pdf:https://link.springer.com/content/pdf/10.1023/A:1015059928466.pdf",
+      "candidates": [
+        "https://doi.org/10.1023/A:1015059928466"
+      ],
+      "source": "https://gwern.net/doc/reinforcement-learning/model-free/2002-beyer.pdf",
+      "final_url": "https://gwern.net/doc/reinforcement-learning/model-free/2002-beyer.pdf",
+      "file": "PAPERS/beyer2002evolution.pdf"
+    },
+    {
+      "key": "kahn1962topological",
+      "status": "downloaded",
+      "error": "HTTPError: HTTP Error 403: Forbidden",
+      "candidates": [
+        "https://doi.org/10.1145/368996.369025"
+      ],
+      "source": "https://nairenc.github.io/nairenc_files/iotopologicalsort.pdf",
+      "final_url": "https://nairenc.github.io/nairenc_files/iotopologicalsort.pdf",
+      "file": "PAPERS/kahn1962topological.pdf"
+    },
+    {
+      "key": "pugh2016quality",
+      "status": "downloaded",
+      "source": "https://public-pages-files-2025.frontiersin.org/journals/robotics-and-ai/articles/10.3389/frobt.2016.00040/pdf",
+      "final_url": "https://public-pages-files-2025.frontiersin.org/journals/robotics-and-ai/articles/10.3389/frobt.2016.00040/pdf",
+      "file": "PAPERS/pugh2016quality.pdf"
+    },
+    {
+      "key": "mouret2015mapelites",
+      "status": "downloaded",
+      "source": "https://arxiv.org/pdf/1504.04909",
+      "final_url": "https://arxiv.org/pdf/1504.04909",
+      "landing_page": "https://arxiv.org/abs/1504.04909",
+      "file": "PAPERS/mouret2015mapelites.pdf"
+    },
+    {
+      "key": "hang2023minsnr",
+      "status": "downloaded",
+      "source": "https://arxiv.org/pdf/2303.09556",
+      "final_url": "https://arxiv.org/pdf/2303.09556",
+      "landing_page": "https://arxiv.org/abs/2303.09556",
+      "file": "PAPERS/hang2023minsnr.pdf"
+    },
+    {
+      "key": "ho2022cfg",
+      "status": "downloaded",
+      "source": "https://arxiv.org/pdf/2207.12598",
+      "final_url": "https://arxiv.org/pdf/2207.12598",
+      "landing_page": "https://arxiv.org/abs/2207.12598",
+      "file": "PAPERS/ho2022cfg.pdf"
+    },
+    {
+      "key": "vassiliades2017cvt",
+      "status": "downloaded",
+      "error": "HTTPError: HTTP Error 418: Unknown Code",
+      "candidates": [
+        "https://doi.org/10.1109/TEVC.2017.2735550"
+      ],
+      "source": "https://arxiv.org/pdf/1610.05729.pdf",
+      "final_url": "https://arxiv.org/pdf/1610.05729",
+      "file": "PAPERS/vassiliades2017cvt.pdf"
+    },
+    {
+      "key": "fontaine2020cma",
+      "status": "downloaded",
+      "error": "HTTPError: HTTP Error 403: Forbidden",
+      "candidates": [
+        "https://doi.org/10.1145/3377930.3390232"
+      ],
+      "source": "https://arxiv.org/pdf/1912.02400.pdf",
+      "final_url": "https://arxiv.org/pdf/1912.02400",
+      "file": "PAPERS/fontaine2020cma.pdf"
+    },
+    {
+      "key": "karth2021wfc",
+      "status": "downloaded",
+      "source": "https://adamsmith.as/papers/wfc_is_constraint_solving_in_the_wild.pdf",
+      "final_url": "https://adamsmith.as/papers/wfc_is_constraint_solving_in_the_wild.pdf",
+      "file": "PAPERS/karth2021wfc.pdf"
+    },
+    {
+      "key": "ying2021graphormer",
+      "status": "downloaded",
+      "source": "https://arxiv.org/pdf/2106.05234",
+      "final_url": "https://arxiv.org/pdf/2106.05234",
+      "landing_page": "https://arxiv.org/abs/2106.05234",
+      "file": "PAPERS/ying2021graphormer.pdf"
+    },
+    {
+      "key": "vignac2023digress",
+      "status": "downloaded",
+      "error": "HTTPError: HTTP Error 403: Forbidden",
+      "candidates": [
+        "https://openreview.net/forum?id=UaAD-Nu86WX",
+        "https://openreview.net/pdf?id=UaAD-Nu86WX"
+      ],
+      "source": "https://arxiv.org/pdf/2209.14734.pdf",
+      "final_url": "https://arxiv.org/pdf/2209.14734",
+      "file": "PAPERS/vignac2023digress.pdf"
+    },
+    {
+      "key": "rodriguez2019bootstrapping",
+      "status": "downloaded",
+      "source": "https://arxiv.org/pdf/1910.01603",
+      "final_url": "https://arxiv.org/pdf/1910.01603",
+      "landing_page": "https://arxiv.org/abs/1910.01603",
+      "file": "PAPERS/rodriguez2019bootstrapping.pdf"
+    }
+  ]
+}

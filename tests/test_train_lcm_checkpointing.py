@@ -83,6 +83,7 @@ def test_fast_sampler_resume_checkpoint_round_trip(tmp_path):
     assert payload["epoch"] == 5
     assert payload["global_step"] == 21
     assert payload["metadata"]["num_inference_steps"] == 4
+    assert payload["metadata"]["topology_anchor_policy"]["version"]
 
     with torch.no_grad():
         tracked_param.zero_()
@@ -258,4 +259,61 @@ def test_reselect_fast_sampler_checkpoint_can_rank_by_decode_ce(tmp_path, monkey
     ranking = reevaluate_fast_sampler_checkpoint_candidates(config, checkpoint_dir=str(checkpoint_dir))
 
     assert ranking["metric_name"] == "val_decode_ce_loss"
+
+
+def test_reselect_fast_sampler_checkpoint_can_rank_by_topology_decode_ce(tmp_path, monkeypatch):
+    checkpoint_dir = tmp_path / "fast_sampler"
+    checkpoint_dir.mkdir(parents=True)
+    (checkpoint_dir / "fast_sampler_best.pth").write_bytes(b"best")
+    (checkpoint_dir / "fast_sampler_final.pth").write_bytes(b"final")
+
+    class _FakeTrainer:
+        def __init__(self, config):
+            self.config = config
+            self.base_bundle = SimpleNamespace(config=SimpleNamespace(data_dir="unused"))
+            self.loaded = None
+
+        def load_checkpoint(self, path):
+            self.loaded = path
+            return {}
+
+        def validate(self, dataloader, *, max_batches=None, eval_seed=None):
+            filename = str(self.loaded)
+            if filename.endswith("fast_sampler_best.pth"):
+                return {
+                    "val_loss": 0.20,
+                    "val_x0_loss": 0.20,
+                    "val_prediction_loss": 0.20,
+                    "val_decode_ce_loss": 0.16,
+                    "val_topology_decode_ce_loss": 0.28,
+                }
+            return {
+                "val_loss": 0.24,
+                "val_x0_loss": 0.24,
+                "val_prediction_loss": 0.24,
+                "val_decode_ce_loss": 0.18,
+                "val_topology_decode_ce_loss": 0.08,
+            }
+
+        def save_checkpoint(self, path, metrics=None):
+            torch.save({"metrics": dict(metrics or {}), "selected_from": self.loaded}, path)
+
+    monkeypatch.setattr("src.train_lcm.ConsistencyLoRATrainer", _FakeTrainer)
+    monkeypatch.setattr(
+        "src.train_lcm._create_fast_sampler_dataloaders",
+        lambda config, data_dir: ([], [], "val", 8, 2),
+    )
+
+    config = _FastSamplerTestConfig(
+        checkpoint_dir=str(checkpoint_dir),
+        data_dir="unused",
+        seed=123,
+        validation_max_batches=4,
+        best_checkpoint_metric="val_topology_decode_ce_loss",
+    )
+
+    ranking = reevaluate_fast_sampler_checkpoint_candidates(config, checkpoint_dir=str(checkpoint_dir))
+
+    assert ranking["metric_name"] == "val_topology_decode_ce_loss"
+    assert ranking["selected_checkpoint"] == "fast_sampler_final.pth"
     assert ranking["selected_checkpoint"] == "fast_sampler_final.pth"

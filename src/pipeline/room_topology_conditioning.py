@@ -6,13 +6,18 @@ from collections import deque
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
 import numpy as np
+import torch
+import torch.nn.functional as F
 
 from src.core.definitions import (
     DOOR_POSITIONS,
     ROOM_HEIGHT,
     ROOM_TOPOLOGY_CHANNELS,
     ROOM_TOPOLOGY_CHANNEL_COUNT,
+    ROOM_TOPOLOGY_DIRECTION_SUFFIXES,
+    ROOM_TOPOLOGY_GATE_FAMILY_PREFIXES,
     ROOM_TOPOLOGY_GATE_FAMILY_TOKENS,
+    ROOM_TOPOLOGY_ROLE_CHANNEL_NAMES,
     ROOM_WIDTH,
     SEMANTIC_PALETTE,
 )
@@ -38,6 +43,23 @@ _ROLE_TO_CHANNEL = {
     "has_goal": ROOM_TOPOLOGY_CHANNELS["role_goal"],
     "has_boss": ROOM_TOPOLOGY_CHANNELS["role_boss"],
     "has_puzzle": ROOM_TOPOLOGY_CHANNELS["role_puzzle"],
+    "is_tutorial_puzzle": ROOM_TOPOLOGY_CHANNELS["role_tutorial_puzzle"],
+    "is_combat_puzzle": ROOM_TOPOLOGY_CHANNELS["role_combat_puzzle"],
+    "is_complex_puzzle": ROOM_TOPOLOGY_CHANNELS["role_complex_puzzle"],
+    "is_switch_puzzle": ROOM_TOPOLOGY_CHANNELS["role_switch_puzzle"],
+}
+_ROLE_TO_ANCHOR_KEY = {
+    "is_start": "start",
+    "has_enemy": "enemy",
+    "has_key": "key",
+    "has_item": "item",
+    "has_goal": "goal",
+    "has_boss": "boss",
+    "has_puzzle": "puzzle",
+    "is_tutorial_puzzle": "puzzle",
+    "is_combat_puzzle": "puzzle",
+    "is_complex_puzzle": "puzzle",
+    "is_switch_puzzle": "puzzle",
 }
 
 _GATED_EDGE_TYPES = set().union(*ROOM_TOPOLOGY_GATE_FAMILY_TOKENS.values())
@@ -75,7 +97,26 @@ _VALIDATOR_COMPLEX_EDGE_TYPES = {
     "on_off_gate",
 }
 
-TOPOLOGY_ANCHOR_POLICY_VERSION = "2026-04-09.semantic_anchor_v7_stateful_puzzle_edge_semantics"
+_TOPOLOGY_FOCUS_MARKER_CHANNEL_NAMES: Tuple[str, ...] = (
+    "start",
+    "goal",
+    "door_n",
+    "door_s",
+    "door_e",
+    "door_w",
+    "gated_n",
+    "gated_s",
+    "gated_e",
+    "gated_w",
+    *ROOM_TOPOLOGY_ROLE_CHANNEL_NAMES,
+    *tuple(
+        f"{family}_{direction}"
+        for family in ROOM_TOPOLOGY_GATE_FAMILY_PREFIXES
+        for direction in ROOM_TOPOLOGY_DIRECTION_SUFFIXES
+    ),
+)
+
+TOPOLOGY_ANCHOR_POLICY_VERSION = "2026-04-11.semantic_anchor_v8_puzzle_subtype_channels"
 DEFAULT_SEMANTIC_ROLE_PRIOR_STRENGTH = 0.15
 DEFAULT_SEMANTIC_ANCHOR_THRESHOLD = 0.5
 DEFAULT_SEMANTIC_PUZZLE_OFFSET = 2
@@ -303,6 +344,71 @@ def _paint_typed_gated_channels(
         if channel_idx is None:
             continue
         _paint_door_strip(topo[int(channel_idx)], direction)
+
+
+def _dilate_binary_focus_mask(mask: torch.Tensor, dilation: int) -> torch.Tensor:
+    if int(dilation) <= 0:
+        return mask.to(dtype=torch.bool)
+    x = mask.to(dtype=torch.float32).unsqueeze(1)
+    for _ in range(int(dilation)):
+        x = F.max_pool2d(x, kernel_size=3, stride=1, padding=1)
+    return x.squeeze(1) > 0.0
+
+
+def build_topology_loss_focus_map(
+    room_topology_map: Optional[torch.Tensor],
+    *,
+    semantic_anchor_threshold: float = DEFAULT_SEMANTIC_ANCHOR_THRESHOLD,
+    marker_weight: float = 2.0,
+    trace_weight: float = 0.75,
+    dilation: int = 1,
+) -> Optional[torch.Tensor]:
+    """
+    Build a sparse [B,H,W] supervision focus map from room-topology channels.
+
+    The focus map upweights precisely the regions where auxiliary branches most
+    often fail in this repo: semantic anchors, typed doors/gates, and the
+    traversability trace that encodes puzzle-route structure.
+    """
+    if room_topology_map is None:
+        return None
+    topo = room_topology_map
+    if not isinstance(topo, torch.Tensor):
+        topo = torch.as_tensor(topo)
+    if topo.dim() == 3:
+        topo = topo.unsqueeze(0)
+    if topo.dim() != 4:
+        raise ValueError(
+            f"room_topology_map must be [B,C,H,W] or [C,H,W], got {tuple(topo.shape)}"
+        )
+    topo = topo.to(dtype=torch.float32)
+
+    batch_size, _channels, height, width = topo.shape
+    threshold = float(max(0.0, min(1.0, semantic_anchor_threshold)))
+    marker_mask = torch.zeros(batch_size, height, width, device=topo.device, dtype=torch.bool)
+    for channel_name in _TOPOLOGY_FOCUS_MARKER_CHANNEL_NAMES:
+        channel_idx = ROOM_TOPOLOGY_CHANNELS.get(channel_name)
+        if channel_idx is None or int(channel_idx) >= int(topo.shape[1]):
+            continue
+        marker_mask |= topo[:, int(channel_idx)] > threshold
+
+    traversability_idx = ROOM_TOPOLOGY_CHANNELS["traversability"]
+    trace_mask = (
+        topo[:, int(traversability_idx)] > 0.0
+        if int(traversability_idx) < int(topo.shape[1])
+        else torch.zeros_like(marker_mask)
+    )
+
+    dilation_steps = int(max(0, dilation))
+    marker_mask = _dilate_binary_focus_mask(marker_mask, dilation_steps)
+    trace_mask = _dilate_binary_focus_mask(trace_mask, dilation_steps)
+
+    focus = torch.zeros(batch_size, height, width, device=topo.device, dtype=torch.float32)
+    if float(trace_weight) > 0.0:
+        focus = focus + (trace_mask.to(dtype=torch.float32) * float(trace_weight))
+    if float(marker_weight) > 0.0:
+        focus = focus + (marker_mask.to(dtype=torch.float32) * float(marker_weight))
+    return focus
 
 
 def _is_walkable(
@@ -728,6 +834,7 @@ def build_validator_room_plan_trace_mask(
         env = ZeldaLogicEnv(room_grid, render_mode=False)
         state = _initial_state_for_sequence(room_grid, start_anchor, sequence, normalized_tokens)
         sequence_ok = True
+        sequence_trace = np.zeros((h, w), dtype=np.float32)
 
         for anchor_name in sequence[1:]:
             goal_anchor = anchors.get(anchor_name)
@@ -745,10 +852,10 @@ def build_validator_room_plan_trace_mask(
                 break
             path, state = result
             for r, c in path:
-                trace[int(r), int(c)] = 1.0
+                sequence_trace[int(r), int(c)] = 1.0
 
-        if sequence_ok and np.any(trace > 0):
-            continue
+        if sequence_ok and np.any(sequence_trace > 0):
+            trace = np.maximum(trace, sequence_trace)
 
     return trace
 
@@ -939,6 +1046,7 @@ def build_room_topology_condition_map(
     traversability_trace: Optional[np.ndarray] = None,
     semantic_role_prior_strength: float = DEFAULT_SEMANTIC_ROLE_PRIOR_STRENGTH,
     semantic_puzzle_offset: int = DEFAULT_SEMANTIC_PUZZLE_OFFSET,
+    validator_plan_max_states: int = DEFAULT_VALIDATOR_PLAN_MAX_STATES,
 ) -> np.ndarray:
     """
     Build a dense [C, H, W] topology prior for a single room.
@@ -970,15 +1078,7 @@ def build_room_topology_condition_map(
             channel = _ROLE_TO_CHANNEL.get(str(key))
             if channel is not None and bool(enabled):
                 topo[channel, :, :] = np.maximum(topo[channel, :, :], role_prior_strength)
-                anchor_key = {
-                    "is_start": "start",
-                    "has_enemy": "enemy",
-                    "has_key": "key",
-                    "has_item": "item",
-                    "has_goal": "goal",
-                    "has_boss": "boss",
-                    "has_puzzle": "puzzle",
-                }.get(str(key))
+                anchor_key = _ROLE_TO_ANCHOR_KEY.get(str(key))
                 if anchor_key is not None and anchor_key in semantic_anchors:
                     r, c = semantic_anchors[anchor_key]
                     topo[channel, int(r), int(c)] = 1.0
@@ -1009,6 +1109,7 @@ def build_room_topology_condition_map(
             required_doors=dict(required_doors or {}),
             edge_constraint_tokens=edge_constraint_tokens,
             room_role_flags=role_flags,
+            validator_plan_max_states=int(validator_plan_max_states),
         )
         if bool(np.any(synthetic_trace > 0)):
             trace_source = synthetic_trace.astype(np.float32, copy=False)

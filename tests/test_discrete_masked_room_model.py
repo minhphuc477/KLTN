@@ -1,13 +1,20 @@
 import logging
+from types import SimpleNamespace
 import networkx as nx
 import numpy as np
+import pytest
 import torch
 
 from src.core.definitions import ROOM_HEIGHT, ROOM_TOPOLOGY_CHANNELS, ROOM_WIDTH, SEMANTIC_PALETTE
 from src.core.discrete_masked_model import DiscreteMaskedRoomModel, create_discrete_masked_model
 from src.pipeline.dungeon_pipeline import NeuralSymbolicDungeonPipeline
 from src.pipeline.room_topology_conditioning import build_room_semantic_anchor_points
-from src.train_masked_room import MaskedRoomTrainer, MaskedRoomTrainingConfig, train_masked_room
+from src.train_masked_room import (
+    MaskedRoomTrainer,
+    MaskedRoomTrainingConfig,
+    _create_masked_room_dataloaders,
+    train_masked_room,
+)
 
 
 class _DummyMaskedConditionEncoder:
@@ -95,6 +102,11 @@ def test_pipeline_generate_room_uses_discrete_masked_mode(monkeypatch):
         device="cpu",
         enable_logging=False,
         room_generator_mode="discrete_masked",
+        default_masked_room_sampling_temperature=0.9,
+        default_masked_room_sampling_schedule="cosine",
+        default_masked_room_sampling_stochastic=True,
+        default_masked_room_corrector_steps=1,
+        default_masked_room_corrector_mask_ratio=0.125,
     )
     mission_graph = nx.DiGraph()
     mission_graph.add_node(0, is_start=True, pos=(0, 0))
@@ -111,6 +123,7 @@ def test_pipeline_generate_room_uses_discrete_masked_mode(monkeypatch):
 
     def _sample(**kwargs):
         called["sample"] += 1
+        called["kwargs"] = dict(kwargs)
         fixed_tokens = kwargs.get("fixed_tokens")
         fixed_mask = kwargs.get("fixed_mask")
         tokens = torch.full((1, ROOM_HEIGHT, ROOM_WIDTH), fill_value=int(SEMANTIC_PALETTE["FLOOR"]), dtype=torch.long)
@@ -134,9 +147,107 @@ def test_pipeline_generate_room_uses_discrete_masked_mode(monkeypatch):
     )
 
     assert called["sample"] == 1
+    assert called["kwargs"]["temperature"] == pytest.approx(0.9)
+    assert called["kwargs"]["schedule_mode"] == "cosine"
+    assert called["kwargs"]["stochastic"] is True
+    assert called["kwargs"]["corrector_steps"] == 1
+    assert called["kwargs"]["corrector_mask_ratio"] == pytest.approx(0.125)
     assert result.room_grid.shape == (ROOM_HEIGHT, ROOM_WIDTH)
     assert int(np.sum(result.room_grid == int(SEMANTIC_PALETTE["START"]))) == 1
     assert int(np.sum(result.room_grid == int(SEMANTIC_PALETTE["TRIFORCE"]))) == 0
+
+
+def test_discrete_masked_model_sample_is_seeded_when_stochastic(monkeypatch):
+    model = create_discrete_masked_model(
+        num_classes=44,
+        hidden_dim=32,
+        model_channels=32,
+        context_dim=8,
+        num_steps=3,
+        unet_channel_mult=(1,),
+        unet_num_res_blocks=1,
+        unet_attention_resolutions=(0,),
+        unet_num_heads=1,
+    )
+    context = torch.zeros(1, 1, 8)
+
+    def _forward(tokens, step, context, *, graph_data=None, return_hidden=False):
+        _ = (tokens, step, context, graph_data)
+        logits = torch.full((1, 44, ROOM_HEIGHT, ROOM_WIDTH), fill_value=-8.0, dtype=torch.float32)
+        logits[:, int(SEMANTIC_PALETTE["FLOOR"]), :, :] = 0.0
+        logits[:, int(SEMANTIC_PALETTE["BLOCK"]), :, :] = 0.0
+        hidden = torch.zeros(1, model.hidden_dim, ROOM_HEIGHT, ROOM_WIDTH, dtype=torch.float32)
+        return (logits, hidden) if return_hidden else logits
+
+    monkeypatch.setattr(model, "forward", _forward)
+
+    sample_a, _logits_a, _hidden_a = model.sample(
+        context=context,
+        num_steps=3,
+        stochastic=True,
+        corrector_steps=0,
+        seed=11,
+    )
+    sample_b, _logits_b, _hidden_b = model.sample(
+        context=context,
+        num_steps=3,
+        stochastic=True,
+        corrector_steps=0,
+        seed=29,
+    )
+    sample_c, _logits_c, _hidden_c = model.sample(
+        context=context,
+        num_steps=3,
+        stochastic=True,
+        corrector_steps=0,
+        seed=11,
+    )
+
+    assert not torch.equal(sample_a, sample_b)
+    assert torch.equal(sample_a, sample_c)
+
+
+def test_discrete_masked_model_sample_can_disable_stochastic_decode(monkeypatch):
+    model = create_discrete_masked_model(
+        num_classes=44,
+        hidden_dim=32,
+        model_channels=32,
+        context_dim=8,
+        num_steps=3,
+        unet_channel_mult=(1,),
+        unet_num_res_blocks=1,
+        unet_attention_resolutions=(0,),
+        unet_num_heads=1,
+    )
+    context = torch.zeros(1, 1, 8)
+
+    def _forward(tokens, step, context, *, graph_data=None, return_hidden=False):
+        _ = (tokens, step, context, graph_data)
+        logits = torch.full((1, 44, ROOM_HEIGHT, ROOM_WIDTH), fill_value=-8.0, dtype=torch.float32)
+        logits[:, int(SEMANTIC_PALETTE["BLOCK"]), :, :] = 1.0
+        logits[:, int(SEMANTIC_PALETTE["FLOOR"]), :, :] = 2.0
+        hidden = torch.zeros(1, model.hidden_dim, ROOM_HEIGHT, ROOM_WIDTH, dtype=torch.float32)
+        return (logits, hidden) if return_hidden else logits
+
+    monkeypatch.setattr(model, "forward", _forward)
+
+    sample_a, _logits_a, _hidden_a = model.sample(
+        context=context,
+        num_steps=3,
+        stochastic=False,
+        corrector_steps=0,
+        seed=3,
+    )
+    sample_b, _logits_b, _hidden_b = model.sample(
+        context=context,
+        num_steps=3,
+        stochastic=False,
+        corrector_steps=0,
+        seed=97,
+    )
+
+    assert torch.equal(sample_a, sample_b)
+    assert int(sample_a[0, 4, 4]) == int(SEMANTIC_PALETTE["FLOOR"])
 
 
 def test_pipeline_generate_room_masked_mode_falls_back_to_diffusion_teacher_on_noise(monkeypatch):
@@ -452,6 +563,10 @@ def test_masked_room_trainer_passes_configurable_mask_schedule(monkeypatch):
         quick=True,
         min_mask_ratio=0.25,
         max_mask_ratio=0.55,
+        topology_alignment_weight=0.4,
+        topology_marker_weight=2.5,
+        topology_trace_weight=0.9,
+        topology_focus_dilation=2,
         model_channels=32,
         hidden_dim=32,
         condition_hidden_dim=64,
@@ -464,10 +579,15 @@ def test_masked_room_trainer_passes_configurable_mask_schedule(monkeypatch):
     def _fake_training_loss(*args, **kwargs):
         captured["min_mask_ratio"] = kwargs.get("min_mask_ratio")
         captured["max_mask_ratio"] = kwargs.get("max_mask_ratio")
+        captured["topology_alignment_weight"] = kwargs.get("topology_alignment_weight")
+        captured["topology_focus_map"] = kwargs.get("topology_focus_map")
         return torch.tensor(0.0, device=trainer.device), {
             "loss": 0.0,
+            "base_loss": 0.0,
             "mask_ratio": 0.0,
             "masked_fraction": 0.0,
+            "topology_focus_loss": 0.0,
+            "topology_focus_fraction": 0.0,
         }
 
     monkeypatch.setattr(trainer.model, "training_loss", _fake_training_loss)
@@ -478,6 +598,40 @@ def test_masked_room_trainer_passes_configurable_mask_schedule(monkeypatch):
     assert metrics["loss"] == 0.0
     assert captured["min_mask_ratio"] == 0.25
     assert captured["max_mask_ratio"] == 0.55
+    assert captured["topology_alignment_weight"] == pytest.approx(0.4)
+    assert captured["topology_focus_map"] is None
+
+
+def test_discrete_masked_model_training_loss_reports_topology_focus_term():
+    model = create_discrete_masked_model(
+        num_classes=44,
+        hidden_dim=32,
+        model_channels=32,
+        context_dim=8,
+        num_steps=3,
+        unet_channel_mult=(1,),
+        unet_num_res_blocks=1,
+        unet_attention_resolutions=(0,),
+        unet_num_heads=1,
+    )
+    context = torch.zeros(1, 1, 8)
+    target_tokens = torch.zeros(1, ROOM_HEIGHT, ROOM_WIDTH, dtype=torch.long)
+    topology_focus_map = torch.zeros(1, ROOM_HEIGHT, ROOM_WIDTH, dtype=torch.float32)
+    topology_focus_map[:, 4:8, 3:7] = 1.0
+
+    loss, metrics = model.training_loss(
+        target_tokens,
+        context,
+        min_mask_ratio=1.0,
+        max_mask_ratio=1.0,
+        topology_focus_map=topology_focus_map,
+        topology_alignment_weight=0.5,
+    )
+
+    assert float(loss.item()) >= 0.0
+    assert metrics["base_loss"] >= 0.0
+    assert metrics["topology_focus_loss"] >= 0.0
+    assert metrics["topology_focus_fraction"] > 0.0
 
 
 def test_masked_room_trainer_can_pass_reference_room_maps_into_condition_encoder():
@@ -572,6 +726,7 @@ def test_masked_room_resume_checkpoint_round_trip(tmp_path):
     resume_payload = torch.load(resume_path, map_location="cpu", weights_only=False)
     assert "optimizer_state_dict" in resume_payload
     assert "scheduler_state_dict" in resume_payload
+    assert resume_payload["metadata"]["topology_anchor_policy"]["version"]
     assert resume_payload["epoch"] == 3
     assert resume_payload["global_step"] == 17
 
@@ -579,6 +734,7 @@ def test_masked_room_resume_checkpoint_round_trip(tmp_path):
     inference_payload = torch.load(inference_path, map_location="cpu", weights_only=False)
     assert "optimizer_state_dict" not in inference_payload
     assert "scheduler_state_dict" not in inference_payload
+    assert inference_payload["metadata"]["topology_anchor_policy"]["version"]
 
     with torch.no_grad():
         tracked_param.zero_()
@@ -590,6 +746,37 @@ def test_masked_room_resume_checkpoint_round_trip(tmp_path):
     assert trainer.epoch == 3
     assert trainer.global_step == 17
     assert torch.allclose(tracked_param, original)
+
+
+def test_masked_room_dataloaders_use_real_validation_split(monkeypatch):
+    sample = (torch.zeros(1, ROOM_HEIGHT, ROOM_WIDTH, dtype=torch.float32), {"room_topology_map": torch.zeros(54, ROOM_HEIGHT, ROOM_WIDTH)})
+    fake_dataset = [sample for _ in range(10)]
+
+    def _fake_create_dataloader(*args, **kwargs):
+        _ = (args, kwargs)
+        return SimpleNamespace(dataset=fake_dataset)
+
+    monkeypatch.setattr("src.train_masked_room.create_dataloader", _fake_create_dataloader)
+
+    config = MaskedRoomTrainingConfig(
+        device="cpu",
+        quick=True,
+        batch_size=2,
+        validation_fraction=0.2,
+        model_channels=32,
+        hidden_dim=32,
+        condition_hidden_dim=64,
+        condition_num_attention_heads=4,
+        unet_num_heads=4,
+    )
+
+    train_loader, val_loader, eval_split_name, train_size, eval_size = _create_masked_room_dataloaders(config)
+
+    assert eval_split_name == "val"
+    assert train_size == 8
+    assert eval_size == 2
+    assert len(train_loader.dataset) == 8
+    assert len(val_loader.dataset) == 2
 
 
 def test_masked_room_auto_resume_skips_incompatible_latest_checkpoint(

@@ -1,0 +1,32 @@
+togelius2011pcg: downloaded -> PAPERS/togelius2011pcg.pdf
+dormans2011missionspaces: downloaded -> PAPERS/dormans2011missionspaces.pdf
+summerville2016vglc: downloaded -> PAPERS/summerville2016vglc.pdf
+mota2021dungeon: read -> PAPERS/j.eswa.2021.115009.pdf
+hu2020graph2plan: downloaded -> PAPERS/hu2020graph2plan.pdf
+shabani2023housediffusion: downloaded -> PAPERS/shabani2023housediffusion.pdf
+oord2017vqvae: downloaded -> PAPERS/oord2017vqvae.pdf
+ho2020ddpm: downloaded -> PAPERS/ho2020ddpm.pdf
+song2021ddim: downloaded -> PAPERS/song2021ddim.pdf
+khalifa2020pcgrl: downloaded -> PAPERS/khalifa2020pcgrl.pdf
+rombach2022ldm: downloaded -> PAPERS/rombach2022ldm.pdf
+efron1994bootstrap: skipped (book)
+benjamini1995fdr: downloaded -> PAPERS/benjamini1995fdr.pdf
+shaker2016pcgbook: skipped (book)
+goodfellow2016deeplearning: skipped (book)
+bishop2006prml: skipped (book)
+park2019spade: downloaded -> PAPERS/park2019spade.pdf
+rampasek2022gps: downloaded -> PAPERS/rampasek2022gps.pdf
+deb2000constraint: downloaded -> PAPERS/deb2000constraint.pdf
+goldberg1989genetic: skipped (book)
+beyer2002evolution: downloaded -> PAPERS/beyer2002evolution.pdf
+kahn1962topological: downloaded -> PAPERS/kahn1962topological.pdf
+pugh2016quality: downloaded -> PAPERS/pugh2016quality.pdf
+mouret2015mapelites: downloaded -> PAPERS/mouret2015mapelites.pdf
+hang2023minsnr: downloaded -> PAPERS/hang2023minsnr.pdf
+ho2022cfg: downloaded -> PAPERS/ho2022cfg.pdf
+vassiliades2017cvt: downloaded -> PAPERS/vassiliades2017cvt.pdf
+fontaine2020cma: downloaded -> PAPERS/fontaine2020cma.pdf
+karth2021wfc: downloaded -> PAPERS/karth2021wfc.pdf
+ying2021graphormer: downloaded -> PAPERS/ying2021graphormer.pdf
+vignac2023digress: downloaded -> PAPERS/vignac2023digress.pdf
+rodriguez2019bootstrapping: downloaded -> PAPERS/rodriguez2019bootstrapping.pdf

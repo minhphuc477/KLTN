@@ -384,6 +384,11 @@ def test_generate_room_puzzle_scaffold_preserves_planned_route_cells():
     template_mask = pipeline._build_puzzle_room_route_template(
         archetype=profile["archetype"],
         gate_family=profile["gate_family"],
+        variant_spec={
+            "name": str(result.metrics.get("final_puzzle_scaffold_variant_name", "") or "baseline"),
+            "style": str(result.metrics.get("final_puzzle_scaffold_variant_style", "") or "baseline"),
+            "side_bias": int(result.metrics.get("final_puzzle_scaffold_variant_side_bias", 0) or 0),
+        },
         stateful_anchor=semantic_anchors.get("puzzle"),
         flow_is_horizontal=False,
         source_anchor=semantic_anchors.get("start", pipeline._clamp_room_coord(start_goal[0])),
@@ -658,7 +663,10 @@ def test_bombable_gate_puzzle_scaffold_builds_offset_bypass_instead_of_center_ga
     assert stats["stateful_anchor_name"] == "puzzle"
     assert stats["route_template_used"] == 1
     assert int(np.max(row_block_counts)) >= 3
-    assert int(np.sum(row_block_counts[:center_row] >= 2)) >= 1
+    assert max(
+        int(np.sum(row_block_counts[:center_row] >= 2)),
+        int(np.sum(row_block_counts[center_row + 1 :] >= 2)),
+    ) >= 1
 
 
 def test_item_unlock_puzzle_scaffold_prefers_item_anchor_when_present():
@@ -833,6 +841,65 @@ def test_hub_puzzle_scaffold_builds_meaningful_ring_for_four_door_complex_room()
     assert stats["archetype"] == "hub"
     assert block_count >= 8
     assert int(np.sum(row_block_counts >= 2)) >= 2
+
+
+def test_puzzle_scaffold_novelty_diversifies_switch_variants_across_rooms():
+    pipeline = NeuralSymbolicDungeonPipeline.__new__(NeuralSymbolicDungeonPipeline)
+    pipeline.default_puzzle_room_scaffold_enabled = True
+    pipeline.default_puzzle_room_scaffold_min_structure_tiles = 10
+    pipeline.default_puzzle_room_archetype_mode = "auto"
+    pipeline.default_puzzle_room_branch_density = 0.75
+    pipeline.default_puzzle_room_block_budget = 28
+    pipeline.default_puzzle_room_preserve_route_margin = 0
+    pipeline.default_semantic_puzzle_offset = 2
+    pipeline.default_puzzle_room_switch_pocket_depth = 3
+    pipeline.default_puzzle_room_resource_bypass_offset = 2
+    pipeline.default_puzzle_room_key_pocket_depth = 3
+    pipeline.default_puzzle_room_item_slot_depth = 3
+    pipeline.default_puzzle_room_toggle_corridor_offset = 2
+    pipeline.default_puzzle_room_novelty_enabled = True
+    pipeline.default_puzzle_room_candidate_count = 4
+    pipeline.default_puzzle_room_novelty_weight = 0.45
+    pipeline._puzzle_novelty_history = []
+    pipeline._puzzle_variant_cache = {}
+    pipeline._puzzle_novelty_committed = set()
+
+    room = np.full((ROOM_HEIGHT, ROOM_WIDTH), int(SEMANTIC_PALETTE["FLOOR"]), dtype=np.int32)
+    room[0, :] = int(SEMANTIC_PALETTE["WALL"])
+    room[-1, :] = int(SEMANTIC_PALETTE["WALL"])
+    room[:, 0] = int(SEMANTIC_PALETTE["WALL"])
+    room[:, -1] = int(SEMANTIC_PALETTE["WALL"])
+    route = np.zeros((ROOM_HEIGHT, ROOM_WIDTH), dtype=np.float32)
+    route[:, ROOM_WIDTH // 2] = 1.0
+
+    mission_graph = nx.DiGraph()
+    mission_graph.add_node(0, type="switch", has_puzzle=True, pos=(0, 0))
+    mission_graph.add_node(1, type="switch", has_puzzle=True, pos=(1, 0))
+    mission_graph.add_node(2, pos=(0, 1))
+    mission_graph.add_node(3, pos=(1, 1))
+    mission_graph.add_edge(0, 2, edge_type="switch_locked")
+    mission_graph.add_edge(1, 3, edge_type="switch_locked")
+
+    _room_a, stats_a = pipeline._apply_puzzle_room_scaffold(
+        room,
+        graph=mission_graph,
+        room_id=0,
+        room_plan_mask=route,
+        start_goal=((0, ROOM_WIDTH // 2), (ROOM_HEIGHT - 1, ROOM_WIDTH // 2)),
+    )
+    pipeline._commit_puzzle_novelty_choice(room_id=0, scaffold_stats=stats_a)
+
+    _room_b, stats_b = pipeline._apply_puzzle_room_scaffold(
+        room,
+        graph=mission_graph,
+        room_id=1,
+        room_plan_mask=route,
+        start_goal=((0, ROOM_WIDTH // 2), (ROOM_HEIGHT - 1, ROOM_WIDTH // 2)),
+    )
+
+    assert stats_a["gate_family"] == "switch"
+    assert stats_b["gate_family"] == "switch"
+    assert stats_a["variant_name"] != stats_b["variant_name"]
 
 
 def test_generate_room_enforces_boundary_shell_except_required_doors():

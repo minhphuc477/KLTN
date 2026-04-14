@@ -1,0 +1,17 @@
+# Recipe for a General, Powerful, Scalable Graph Transformer Ladislav Rampášek∗ Mila, Université de Montréal Mikhail Galkin Mila, McGill University Vijay Prakash Dwivedi Nanyang Tech
+
+- PDF: [rampasek2022gps.pdf](../../rampasek2022gps.pdf)
+- Topic: graph_conditioning_layout
+
+## Abstract / Core Idea
+Recipe for a General, Powerful, Scalable Graph Transformer Ladislav Rampášek∗ Mila, Université de Montréal Mikhail Galkin Mila, McGill University Vijay Prakash Dwivedi Nanyang Technological University, Singapore Anh Tuan Luu Nanyang Technological University, Singapore Guy Wolf Mila, Université de Montréal Dominique Beaini Valence Discovery, Mila, Université de Montréal Abstract We propose a recipe on how to build a general, powerful, scalable (GPS) graph Transformer with linear complexity and state-of-the-art results on a diverse set of benchmarks. Graph Transformers (GTs) have gained popularity in the ﬁeld of graph representation learning with a variety of recent publications but they lack a common foundation about what constitutes a good positional or structural encoding, and what differentiates them. In this paper, we summarize the different types of encodings with a clearer deﬁnition and categorize them as being local, global or relative. The prior GTs are constrained to small graphs with a few hundred nodes, here we propose the ﬁrst architecture with a complexity linear in the number of nodes and edges O(N +E) by decoupling the local real-edge aggregation from the fully-connected Transformer. We argue that this decoupling does not negatively affect the expressivity, with our architecture being a universal function approximator on graphs. Our GPS recipe consists of choosing 3 main ingredients: (i) positional/structural encoding, (ii) local message-passing mechanism, and (
+
+## Method Signals
+- Keywords phat hien: graph
+
+## Conclusion / Findings
+propriate prediction head for graph, node, or edge -level prediction. 1. Pnode, Pedge, Snode, Sedge ← ∅ 2. if FPE is relative then Pedge ←FPE(G) ∈ RE×DPE else Pnode ←FPE(G) ∈ RN×DPE 3. if FSE is relative then Sedge ←FSE(G) ∈ RE×DSE else Snode ←FSE(G) ∈ RN×DSE 4. X0 ← ⨁ node ( NodeEncoder (X), Pnode, Snode ) ∈ RN×D 5. E0 ← ⨁ edge ( EdgeEncoder (E), Pedge, Sedge ) ∈ RE×D 6. for ℓ = 0, 1, · · ·,L − 1 (a) ˆXℓ+1 M , Eℓ+1 ← MPNNℓ e ( Xℓ, Eℓ, A ) (b) ˆXℓ+1 T ← GlobalAttnℓ( Xℓ) (c) Xℓ+1 M ← BatchNorm ( Dropout ( ˆXℓ+1 M ) + Xℓ ) (d) Xℓ+1 T ← BatchNorm ( Dropout ( ˆXℓ+1 T ) + Xℓ ) (e) Xℓ+1 ← MLPℓ( Xℓ+1 M + Xℓ+1 T ) 7. return XL ∈ RN×D and EL ∈ RE×D where⨁ denotes an operator for combining the input node or edge features with their respective positional and/or structural encoding, in practice this is a concatenation operator which can be changed to sum or other operators; NodeEncoder and EdgeEncoder are dataset-speciﬁc initial node and edge feature encoders potentially with learnable parameters; MPNNe and GlobalAttn have their corresponding learnable parameters at each layerℓ; ˆXℓ+1 M and ˆXℓ+1 T denote the intermediate node representations given by the local message passing module and the global attention module respectively; and MLPℓ is a multi layer perceptron module with its own learnable parameters that combines the intermediate Xℓ+1 M and Xℓ+1 T . Note that a relativeFPE orFSE produces PE or SE for each edge which are thence handled accordingly in lines 2 and 3 in Algorithm 1. 27
+
+## Relevance To KLTN
+- Bai nay duoc xep vao nhom graph_conditioning_layout trong pipeline neural-symbolic topology-first.
+- Dung de doi chieu voi khoi tuong ung trong docs va Chapter 3/4.

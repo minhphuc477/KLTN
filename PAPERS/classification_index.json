@@ -1,0 +1,410 @@
+{
+  "total_pdf": 43,
+  "topics": {
+    "diffusion_latent": [
+      {
+        "pdf": "consistency_models.pdf",
+        "note": "PAPERS/by_topic/diffusion_latent/consistency_models.md"
+      },
+      {
+        "pdf": "hang2023minsnr.pdf",
+        "note": "PAPERS/by_topic/diffusion_latent/hang2023minsnr.md"
+      },
+      {
+        "pdf": "ho2020ddpm.pdf",
+        "note": "PAPERS/by_topic/diffusion_latent/ho2020ddpm.md"
+      },
+      {
+        "pdf": "ho2022cfg.pdf",
+        "note": "PAPERS/by_topic/diffusion_latent/ho2022cfg.md"
+      },
+      {
+        "pdf": "latent_consistency_models_synthesizing_high_resolution_images_with_few_step_infe.pdf",
+        "note": "PAPERS/by_topic/diffusion_latent/latent_consistency_models_synthesizing_high_resolution_images_with_few_step_infe.md"
+      },
+      {
+        "pdf": "maskgit_masked_generative_image_transformer.pdf",
+        "note": "PAPERS/by_topic/diffusion_latent/maskgit_masked_generative_image_transformer.md"
+      },
+      {
+        "pdf": "rombach2022ldm.pdf",
+        "note": "PAPERS/by_topic/diffusion_latent/rombach2022ldm.md"
+      },
+      {
+        "pdf": "song2021ddim.pdf",
+        "note": "PAPERS/by_topic/diffusion_latent/song2021ddim.md"
+      }
+    ],
+    "graph_conditioning_layout": [
+      {
+        "pdf": "hu2020graph2plan.pdf",
+        "note": "PAPERS/by_topic/graph_conditioning_layout/hu2020graph2plan.md"
+      },
+      {
+        "pdf": "layoutdm_discrete_diffusion_model_for_controllable_layout_generation.pdf",
+        "note": "PAPERS/by_topic/graph_conditioning_layout/layoutdm_discrete_diffusion_model_for_controllable_layout_generation.md"
+      },
+      {
+        "pdf": "park2019spade.pdf",
+        "note": "PAPERS/by_topic/graph_conditioning_layout/park2019spade.md"
+      },
+      {
+        "pdf": "rampasek2022gps.pdf",
+        "note": "PAPERS/by_topic/graph_conditioning_layout/rampasek2022gps.md"
+      },
+      {
+        "pdf": "shabani2023housediffusion.pdf",
+        "note": "PAPERS/by_topic/graph_conditioning_layout/shabani2023housediffusion.md"
+      },
+      {
+        "pdf": "vignac2023digress.pdf",
+        "note": "PAPERS/by_topic/graph_conditioning_layout/vignac2023digress.md"
+      },
+      {
+        "pdf": "ying2021graphormer.pdf",
+        "note": "PAPERS/by_topic/graph_conditioning_layout/ying2021graphormer.md"
+      }
+    ],
+    "misc_foundations": [
+      {
+        "pdf": "an_intriguing_failing_of_convolutional_neural_networks_and_the_coordconv_solutio.pdf",
+        "note": "PAPERS/by_topic/misc_foundations/an_intriguing_failing_of_convolutional_neural_networks_and_the_coordconv_solutio.md"
+      },
+      {
+        "pdf": "deb2000constraint.pdf",
+        "note": "PAPERS/by_topic/misc_foundations/deb2000constraint.md"
+      },
+      {
+        "pdf": "kahn1962topological.pdf",
+        "note": "PAPERS/by_topic/misc_foundations/kahn1962topological.md"
+      },
+      {
+        "pdf": "oord2017vqvae.pdf",
+        "note": "PAPERS/by_topic/misc_foundations/oord2017vqvae.md"
+      },
+      {
+        "pdf": "taming_transformers_for_high_resolution_image_synthesis.pdf",
+        "note": "PAPERS/by_topic/misc_foundations/taming_transformers_for_high_resolution_image_synthesis.md"
+      },
+      {
+        "pdf": "validation_of_human_pose_estimation_and_human_mesh_recovery_for_extracting_clini.pdf",
+        "note": "PAPERS/by_topic/misc_foundations/validation_of_human_pose_estimation_and_human_mesh_recovery_for_extracting_clini.md"
+      }
+    ],
+    "pcg_mission_zelda": [
+      {
+        "pdf": "dormans2011missionspaces.pdf",
+        "note": "PAPERS/by_topic/pcg_mission_zelda/dormans2011missionspaces.md"
+      },
+      {
+        "pdf": "generative_adversarial_network_rooms_in_generative_graph_grammar_dungeons_for_th.pdf",
+        "note": "PAPERS/by_topic/pcg_mission_zelda/generative_adversarial_network_rooms_in_generative_graph_grammar_dungeons_for_th.md"
+      },
+      {
+        "pdf": "khalifa2020pcgrl.pdf",
+        "note": "PAPERS/by_topic/pcg_mission_zelda/khalifa2020pcgrl.md"
+      },
+      {
+        "pdf": "pcgrl_procedural_content_generation_via_reinforcement_learning.pdf",
+        "note": "PAPERS/by_topic/pcg_mission_zelda/pcgrl_procedural_content_generation_via_reinforcement_learning.md"
+      },
+      {
+        "pdf": "summerville2016vglc.pdf",
+        "note": "PAPERS/by_topic/pcg_mission_zelda/summerville2016vglc.md"
+      },
+      {
+        "pdf": "text_to_level_diffusion_models_with_various_text_encoders_for_super_mario_bros.pdf",
+        "note": "PAPERS/by_topic/pcg_mission_zelda/text_to_level_diffusion_models_with_various_text_encoders_for_super_mario_bros.md"
+      }
+    ],
+    "quality_diversity_evolution": [
+      {
+        "pdf": "beyer2002evolution.pdf",
+        "note": "PAPERS/by_topic/quality_diversity_evolution/beyer2002evolution.md"
+      },
+      {
+        "pdf": "discovering_representations_for_black_box_optimization.pdf",
+        "note": "PAPERS/by_topic/quality_diversity_evolution/discovering_representations_for_black_box_optimization.md"
+      },
+      {
+        "pdf": "fontaine2020cma.pdf",
+        "note": "PAPERS/by_topic/quality_diversity_evolution/fontaine2020cma.md"
+      },
+      {
+        "pdf": "illuminating_dungeon_maps_map_elites.pdf",
+        "note": "PAPERS/by_topic/quality_diversity_evolution/illuminating_dungeon_maps_map_elites.md"
+      },
+      {
+        "pdf": "j.eswa.2021.115009.pdf",
+        "note": "PAPERS/by_topic/quality_diversity_evolution/j.eswa.2021.115009.md"
+      },
+      {
+        "pdf": "mouret2015mapelites.pdf",
+        "note": "PAPERS/by_topic/quality_diversity_evolution/mouret2015mapelites.md"
+      },
+      {
+        "pdf": "pugh2016quality.pdf",
+        "note": "PAPERS/by_topic/quality_diversity_evolution/pugh2016quality.md"
+      },
+      {
+        "pdf": "the_procedural_content_generation_benchmark_an_open_source_testbed_for_generativ.pdf",
+        "note": "PAPERS/by_topic/quality_diversity_evolution/the_procedural_content_generation_benchmark_an_open_source_testbed_for_generativ.md"
+      },
+      {
+        "pdf": "togelius2011pcg.pdf",
+        "note": "PAPERS/by_topic/quality_diversity_evolution/togelius2011pcg.md"
+      },
+      {
+        "pdf": "vassiliades2017cvt.pdf",
+        "note": "PAPERS/by_topic/quality_diversity_evolution/vassiliades2017cvt.md"
+      }
+    ],
+    "statistics_methods": [
+      {
+        "pdf": "benjamini1995fdr.pdf",
+        "note": "PAPERS/by_topic/statistics_methods/benjamini1995fdr.md"
+      },
+      {
+        "pdf": "procedural_level_generation_with_diffusion_models_from_a_single_example.pdf",
+        "note": "PAPERS/by_topic/statistics_methods/procedural_level_generation_with_diffusion_models_from_a_single_example.md"
+      },
+      {
+        "pdf": "rodriguez2019bootstrapping.pdf",
+        "note": "PAPERS/by_topic/statistics_methods/rodriguez2019bootstrapping.md"
+      }
+    ],
+    "symbolic_constraints_wfc": [
+      {
+        "pdf": "karth2021wfc.pdf",
+        "note": "PAPERS/by_topic/symbolic_constraints_wfc/karth2021wfc.md"
+      }
+    ],
+    "vqvae_representation": [
+      {
+        "pdf": "generating_diverse_high_fidelity_images_with_vq_vae_2.pdf",
+        "note": "PAPERS/by_topic/vqvae_representation/generating_diverse_high_fidelity_images_with_vq_vae_2.md"
+      },
+      {
+        "pdf": "scaling_the_codebook_size_of_vqgan_to_100_000_with_a_utilization_rate_of_99.pdf",
+        "note": "PAPERS/by_topic/vqvae_representation/scaling_the_codebook_size_of_vqgan_to_100_000_with_a_utilization_rate_of_99.md"
+      }
+    ]
+  },
+  "rows": [
+    {
+      "pdf": "an_intriguing_failing_of_convolutional_neural_networks_and_the_coordconv_solutio.pdf",
+      "topic": "misc_foundations",
+      "note": "PAPERS/by_topic/misc_foundations/an_intriguing_failing_of_convolutional_neural_networks_and_the_coordconv_solutio.md"
+    },
+    {
+      "pdf": "benjamini1995fdr.pdf",
+      "topic": "statistics_methods",
+      "note": "PAPERS/by_topic/statistics_methods/benjamini1995fdr.md"
+    },
+    {
+      "pdf": "beyer2002evolution.pdf",
+      "topic": "quality_diversity_evolution",
+      "note": "PAPERS/by_topic/quality_diversity_evolution/beyer2002evolution.md"
+    },
+    {
+      "pdf": "consistency_models.pdf",
+      "topic": "diffusion_latent",
+      "note": "PAPERS/by_topic/diffusion_latent/consistency_models.md"
+    },
+    {
+      "pdf": "deb2000constraint.pdf",
+      "topic": "misc_foundations",
+      "note": "PAPERS/by_topic/misc_foundations/deb2000constraint.md"
+    },
+    {
+      "pdf": "discovering_representations_for_black_box_optimization.pdf",
+      "topic": "quality_diversity_evolution",
+      "note": "PAPERS/by_topic/quality_diversity_evolution/discovering_representations_for_black_box_optimization.md"
+    },
+    {
+      "pdf": "dormans2011missionspaces.pdf",
+      "topic": "pcg_mission_zelda",
+      "note": "PAPERS/by_topic/pcg_mission_zelda/dormans2011missionspaces.md"
+    },
+    {
+      "pdf": "fontaine2020cma.pdf",
+      "topic": "quality_diversity_evolution",
+      "note": "PAPERS/by_topic/quality_diversity_evolution/fontaine2020cma.md"
+    },
+    {
+      "pdf": "generating_diverse_high_fidelity_images_with_vq_vae_2.pdf",
+      "topic": "vqvae_representation",
+      "note": "PAPERS/by_topic/vqvae_representation/generating_diverse_high_fidelity_images_with_vq_vae_2.md"
+    },
+    {
+      "pdf": "generative_adversarial_network_rooms_in_generative_graph_grammar_dungeons_for_th.pdf",
+      "topic": "pcg_mission_zelda",
+      "note": "PAPERS/by_topic/pcg_mission_zelda/generative_adversarial_network_rooms_in_generative_graph_grammar_dungeons_for_th.md"
+    },
+    {
+      "pdf": "hang2023minsnr.pdf",
+      "topic": "diffusion_latent",
+      "note": "PAPERS/by_topic/diffusion_latent/hang2023minsnr.md"
+    },
+    {
+      "pdf": "ho2020ddpm.pdf",
+      "topic": "diffusion_latent",
+      "note": "PAPERS/by_topic/diffusion_latent/ho2020ddpm.md"
+    },
+    {
+      "pdf": "ho2022cfg.pdf",
+      "topic": "diffusion_latent",
+      "note": "PAPERS/by_topic/diffusion_latent/ho2022cfg.md"
+    },
+    {
+      "pdf": "hu2020graph2plan.pdf",
+      "topic": "graph_conditioning_layout",
+      "note": "PAPERS/by_topic/graph_conditioning_layout/hu2020graph2plan.md"
+    },
+    {
+      "pdf": "illuminating_dungeon_maps_map_elites.pdf",
+      "topic": "quality_diversity_evolution",
+      "note": "PAPERS/by_topic/quality_diversity_evolution/illuminating_dungeon_maps_map_elites.md"
+    },
+    {
+      "pdf": "j.eswa.2021.115009.pdf",
+      "topic": "quality_diversity_evolution",
+      "note": "PAPERS/by_topic/quality_diversity_evolution/j.eswa.2021.115009.md"
+    },
+    {
+      "pdf": "kahn1962topological.pdf",
+      "topic": "misc_foundations",
+      "note": "PAPERS/by_topic/misc_foundations/kahn1962topological.md"
+    },
+    {
+      "pdf": "karth2021wfc.pdf",
+      "topic": "symbolic_constraints_wfc",
+      "note": "PAPERS/by_topic/symbolic_constraints_wfc/karth2021wfc.md"
+    },
+    {
+      "pdf": "khalifa2020pcgrl.pdf",
+      "topic": "pcg_mission_zelda",
+      "note": "PAPERS/by_topic/pcg_mission_zelda/khalifa2020pcgrl.md"
+    },
+    {
+      "pdf": "latent_consistency_models_synthesizing_high_resolution_images_with_few_step_infe.pdf",
+      "topic": "diffusion_latent",
+      "note": "PAPERS/by_topic/diffusion_latent/latent_consistency_models_synthesizing_high_resolution_images_with_few_step_infe.md"
+    },
+    {
+      "pdf": "layoutdm_discrete_diffusion_model_for_controllable_layout_generation.pdf",
+      "topic": "graph_conditioning_layout",
+      "note": "PAPERS/by_topic/graph_conditioning_layout/layoutdm_discrete_diffusion_model_for_controllable_layout_generation.md"
+    },
+    {
+      "pdf": "maskgit_masked_generative_image_transformer.pdf",
+      "topic": "diffusion_latent",
+      "note": "PAPERS/by_topic/diffusion_latent/maskgit_masked_generative_image_transformer.md"
+    },
+    {
+      "pdf": "mouret2015mapelites.pdf",
+      "topic": "quality_diversity_evolution",
+      "note": "PAPERS/by_topic/quality_diversity_evolution/mouret2015mapelites.md"
+    },
+    {
+      "pdf": "oord2017vqvae.pdf",
+      "topic": "misc_foundations",
+      "note": "PAPERS/by_topic/misc_foundations/oord2017vqvae.md"
+    },
+    {
+      "pdf": "park2019spade.pdf",
+      "topic": "graph_conditioning_layout",
+      "note": "PAPERS/by_topic/graph_conditioning_layout/park2019spade.md"
+    },
+    {
+      "pdf": "pcgrl_procedural_content_generation_via_reinforcement_learning.pdf",
+      "topic": "pcg_mission_zelda",
+      "note": "PAPERS/by_topic/pcg_mission_zelda/pcgrl_procedural_content_generation_via_reinforcement_learning.md"
+    },
+    {
+      "pdf": "procedural_level_generation_with_diffusion_models_from_a_single_example.pdf",
+      "topic": "statistics_methods",
+      "note": "PAPERS/by_topic/statistics_methods/procedural_level_generation_with_diffusion_models_from_a_single_example.md"
+    },
+    {
+      "pdf": "pugh2016quality.pdf",
+      "topic": "quality_diversity_evolution",
+      "note": "PAPERS/by_topic/quality_diversity_evolution/pugh2016quality.md"
+    },
+    {
+      "pdf": "rampasek2022gps.pdf",
+      "topic": "graph_conditioning_layout",
+      "note": "PAPERS/by_topic/graph_conditioning_layout/rampasek2022gps.md"
+    },
+    {
+      "pdf": "rodriguez2019bootstrapping.pdf",
+      "topic": "statistics_methods",
+      "note": "PAPERS/by_topic/statistics_methods/rodriguez2019bootstrapping.md"
+    },
+    {
+      "pdf": "rombach2022ldm.pdf",
+      "topic": "diffusion_latent",
+      "note": "PAPERS/by_topic/diffusion_latent/rombach2022ldm.md"
+    },
+    {
+      "pdf": "scaling_the_codebook_size_of_vqgan_to_100_000_with_a_utilization_rate_of_99.pdf",
+      "topic": "vqvae_representation",
+      "note": "PAPERS/by_topic/vqvae_representation/scaling_the_codebook_size_of_vqgan_to_100_000_with_a_utilization_rate_of_99.md"
+    },
+    {
+      "pdf": "shabani2023housediffusion.pdf",
+      "topic": "graph_conditioning_layout",
+      "note": "PAPERS/by_topic/graph_conditioning_layout/shabani2023housediffusion.md"
+    },
+    {
+      "pdf": "song2021ddim.pdf",
+      "topic": "diffusion_latent",
+      "note": "PAPERS/by_topic/diffusion_latent/song2021ddim.md"
+    },
+    {
+      "pdf": "summerville2016vglc.pdf",
+      "topic": "pcg_mission_zelda",
+      "note": "PAPERS/by_topic/pcg_mission_zelda/summerville2016vglc.md"
+    },
+    {
+      "pdf": "taming_transformers_for_high_resolution_image_synthesis.pdf",
+      "topic": "misc_foundations",
+      "note": "PAPERS/by_topic/misc_foundations/taming_transformers_for_high_resolution_image_synthesis.md"
+    },
+    {
+      "pdf": "text_to_level_diffusion_models_with_various_text_encoders_for_super_mario_bros.pdf",
+      "topic": "pcg_mission_zelda",
+      "note": "PAPERS/by_topic/pcg_mission_zelda/text_to_level_diffusion_models_with_various_text_encoders_for_super_mario_bros.md"
+    },
+    {
+      "pdf": "the_procedural_content_generation_benchmark_an_open_source_testbed_for_generativ.pdf",
+      "topic": "quality_diversity_evolution",
+      "note": "PAPERS/by_topic/quality_diversity_evolution/the_procedural_content_generation_benchmark_an_open_source_testbed_for_generativ.md"
+    },
+    {
+      "pdf": "togelius2011pcg.pdf",
+      "topic": "quality_diversity_evolution",
+      "note": "PAPERS/by_topic/quality_diversity_evolution/togelius2011pcg.md"
+    },
+    {
+      "pdf": "validation_of_human_pose_estimation_and_human_mesh_recovery_for_extracting_clini.pdf",
+      "topic": "misc_foundations",
+      "note": "PAPERS/by_topic/misc_foundations/validation_of_human_pose_estimation_and_human_mesh_recovery_for_extracting_clini.md"
+    },
+    {
+      "pdf": "vassiliades2017cvt.pdf",
+      "topic": "quality_diversity_evolution",
+      "note": "PAPERS/by_topic/quality_diversity_evolution/vassiliades2017cvt.md"
+    },
+    {
+      "pdf": "vignac2023digress.pdf",
+      "topic": "graph_conditioning_layout",
+      "note": "PAPERS/by_topic/graph_conditioning_layout/vignac2023digress.md"
+    },
+    {
+      "pdf": "ying2021graphormer.pdf",
+      "topic": "graph_conditioning_layout",
+      "note": "PAPERS/by_topic/graph_conditioning_layout/ying2021graphormer.md"
+    }
+  ]
+}

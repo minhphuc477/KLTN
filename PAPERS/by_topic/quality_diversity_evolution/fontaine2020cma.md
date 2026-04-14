@@ -1,0 +1,17 @@
+# Covariance Matrix Adaptation for the Rapid Illumination of Behavior Space Matthew C
+
+- PDF: [fontaine2020cma.pdf](../../fontaine2020cma.pdf)
+- Topic: quality_diversity_evolution
+
+## Abstract / Core Idea
+Covariance Matrix Adaptation for the Rapid Illumination of Behavior Space Matthew C. Fontaine Viterbi School of Engineering University of Southern California Los Angeles, CA mfontain@usc.edu Julian Togelius Tandon School of Engineering New York University New York City, NY julian@togelius.com Stefanos Nikolaidis Viterbi School of Engineering University of Southern California Los Angeles, CA nikolaid@usc.edu Amy K. Hoover Ying Wu College of Computing New Jersey Institute of Technology Newark, NJ ahoover@njit.edu ABSTRACT We focus on the challenge of finding a diverse collection of quality solutions on complex continuous domains. While quality diver- sity (QD) algorithms like Novelty Search with Local Competition (NSLC) and MAP-Elites are designed to generate a diverse range of solutions, these algorithms require a large number of evaluations for exploration of continuous spaces. Meanwhile, variants of the Covariance Matrix Adaptation Evolution Strategy (CMA-ES) are among the best-performing derivative-free optimizers in single- objective continuous domains. This paper proposes a new QD algo- rithm called Covariance Matrix Adaptation MAP-Elites (CMA-ME). Our new algorithm combines the self-adaptation techniques of CMA-ES with archiving and mapping techniques for maintaining diversity in QD. Results from experiments based on standard con- tinuous optimization benchmarks show that CMA-ME finds better- quality solutions than MAP-Elites; similarly, results on the strategic game Hea
+
+## Method Signals
+- Keywords phat hien: map-elites
+
+## Conclusion / Findings
+ion for Au- tonomous Agents and Multiagent Systems, 998–1006. [7] Antoine Cully. 2019. Autonomous Skill Discovery with Quality-Diversity and Unsupervised Descriptors. In Proceedings of the Genetic and Evolutionary Compu- tation Conference (GECCO ’19). ACM, 81–89. [8] Antoine Cully, Jeff Clune, Danesh Tarapore, and Jean-Baptiste Mouret. 2015. Robots that can adapt like animals. Nature 521, 7553 (2015), 503. [9] Antoine Cully and Jean-Baptiste Mouret. 2013. Behavioral Repertoire Learning in Robotics. In Proceedings of the 15th Annual Conference on Genetic and Evolutionary Computation (GECCO âĂŸ13) . ACM, 175âĂŞ–182. [10] Antoine Cully and Jean-Baptiste Mouret. 2016. Evolving a Behavioral Repertoire for a Walking Robot. Evolutionary Computation 24 (2016), 59–88. Issue 1. [11] Fernando de Mesentier Silva, Rodrigo Canaan, Scott Lee, Matthew C Fontaine, Julian Togelius, and Amy K Hoover. 2019. Evolving the hearthstone meta. In 2019 IEEE Conference on Games (CoG) . IEEE, 1–8. [12] Cedric Decoster, Jean Seong Bjorn Choe, et al. 2019. Sabberstone. https://github. com/HearthSim/SabberStone Accessed: 2019-11-01. [13] A. E. Eiben, R. Hinterding, and Z. Michalewicz. 1999. Parameter control in evolutionary algorithms. IEEE Transactions on Evolutionary Computation 3, 2 (July 1999), 124–141. https://doi.org/10.1109/4235.771166 [14] Blizzard Entertainment. [n. d.]. Hearthstone. https://playhearthstone.com/en-us/. ([n. d.]). Accessed: 2019-11-01. [15] Stefano Fioravanzo and Giovanni Iacca. 201
+
+## Relevance To KLTN
+- Bai nay duoc xep vao nhom quality_diversity_evolution trong pipeline neural-symbolic topology-first.
+- Dung de doi chieu voi khoi tuong ung trong docs va Chapter 3/4.

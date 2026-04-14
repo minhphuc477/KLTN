@@ -1,0 +1,1286 @@
+{
+  "run_dir": "outputs\\zelda_hmolqd_downstream_codebook512_puzzle_subtype_v1",
+  "mission_graph": "built_in_manual_rich_topology",
+  "seeds": [
+    20260404,
+    20260405
+  ],
+  "generation_overrides": {
+    "semantic_constrained_decoding_enabled": false,
+    "deterministic_graph_marker_overlay_enabled": false,
+    "fast_sampler_teacher_fallback_enabled": false
+  },
+  "per_seed": [
+    {
+      "seed": 20260404,
+      "variants": {
+        "diffusion_cfg3_logic0_steps50": {
+          "name": "diffusion_cfg3_logic0_steps50",
+          "guidance_scale": 3.0,
+          "logic_guidance_scale": 0.0,
+          "num_diffusion_steps": 50,
+          "use_fast_sampling": false,
+          "diffusion_inference_checkpoint_state_key": "ema_diffusion_state_dict",
+          "diffusion_training_cfg_scale": 3.0,
+          "metrics": {
+            "num_rooms": 12,
+            "total_tiles_repaired": 584,
+            "repair_rate": 0.9166666666666666,
+            "dungeon_shape": [
+              64,
+              44
+            ],
+            "generation_time_sec": 859.7556092739105,
+            "batch_generation_diagnostics": [
+              {
+                "layer_index": 0,
+                "latent_shape_chw": [
+                  64,
+                  4,
+                  3
+                ],
+                "target_room_size_hw": [
+                  16,
+                  11
+                ],
+                "bucket_room_count": 1,
+                "requested_batch_size": 8,
+                "safe_chunk_size": 8,
+                "cuda_free_mb": 2113.7000007629395
+              },
+              {
+                "layer_index": 0,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 0,
+                "actual_chunk_size": 1
+              },
+              {
+                "layer_index": 1,
+                "latent_shape_chw": [
+                  64,
+                  4,
+                  3
+                ],
+                "target_room_size_hw": [
+                  16,
+                  11
+                ],
+                "bucket_room_count": 2,
+                "requested_batch_size": 8,
+                "safe_chunk_size": 8,
+                "cuda_free_mb": 2089.7000007629395
+              },
+              {
+                "layer_index": 1,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 0,
+                "actual_chunk_size": 2
+              },
+              {
+                "layer_index": 2,
+                "latent_shape_chw": [
+                  64,
+                  4,
+                  3
+                ],
+                "target_room_size_hw": [
+                  16,
+                  11
+                ],
+                "bucket_room_count": 2,
+                "requested_batch_size": 8,
+                "safe_chunk_size": 1,
+                "cuda_free_mb": 0.0
+              },
+              {
+                "layer_index": 2,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 0,
+                "actual_chunk_size": 1
+              },
+              {
+                "layer_index": 2,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 1,
+                "actual_chunk_size": 1
+              },
+              {
+                "layer_index": 3,
+                "latent_shape_chw": [
+                  64,
+                  4,
+                  3
+                ],
+                "target_room_size_hw": [
+                  16,
+                  11
+                ],
+                "bucket_room_count": 3,
+                "requested_batch_size": 8,
+                "safe_chunk_size": 8,
+                "cuda_free_mb": 2089.7000007629395
+              },
+              {
+                "layer_index": 3,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 0,
+                "actual_chunk_size": 3
+              },
+              {
+                "layer_index": 4,
+                "latent_shape_chw": [
+                  64,
+                  4,
+                  3
+                ],
+                "target_room_size_hw": [
+                  16,
+                  11
+                ],
+                "bucket_room_count": 2,
+                "requested_batch_size": 8,
+                "safe_chunk_size": 1,
+                "cuda_free_mb": 0.0
+              },
+              {
+                "layer_index": 4,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 0,
+                "actual_chunk_size": 1
+              },
+              {
+                "layer_index": 4,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 1,
+                "actual_chunk_size": 1
+              },
+              {
+                "layer_index": 5,
+                "latent_shape_chw": [
+                  64,
+                  4,
+                  3
+                ],
+                "target_room_size_hw": [
+                  16,
+                  11
+                ],
+                "bucket_room_count": 1,
+                "requested_batch_size": 8,
+                "safe_chunk_size": 1,
+                "cuda_free_mb": 0.0
+              },
+              {
+                "layer_index": 5,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 0,
+                "actual_chunk_size": 1
+              },
+              {
+                "layer_index": 6,
+                "latent_shape_chw": [
+                  64,
+                  4,
+                  3
+                ],
+                "target_room_size_hw": [
+                  16,
+                  11
+                ],
+                "bucket_room_count": 1,
+                "requested_batch_size": 8,
+                "safe_chunk_size": 1,
+                "cuda_free_mb": 0.0
+              },
+              {
+                "layer_index": 6,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 0,
+                "actual_chunk_size": 1
+              }
+            ],
+            "total_graph_marker_expected": 11.0,
+            "total_graph_marker_overwrites": 9.0,
+            "avg_neural_graph_marker_exact_match_rate": 0.16666666666666666,
+            "avg_final_pre_overlay_graph_marker_exact_match_rate": 0.3333333333333333,
+            "avg_final_post_overlay_graph_marker_exact_match_rate": 0.3333333333333333,
+            "avg_final_graph_marker_overwrite_rate": 0.6666666666666666,
+            "avg_neural_semantic_anchor_error": 22.5,
+            "avg_final_pre_overlay_semantic_anchor_error": 18.0
+          },
+          "runtime_diagnostics": {
+            "topology_door_tiles_forced": 12,
+            "neural_room_semantics_stripped": 12,
+            "neural_structural_artifacts_stripped": 12,
+            "repair_room_semantics_stripped": 8,
+            "repair_structural_artifacts_stripped": 8,
+            "wfc_feedback_attempts": 12,
+            "neural_boundary_shell_enforced": 12,
+            "final_boundary_shell_enforced": 12,
+            "deterministic_graph_marker_overlay_disabled": 12,
+            "repair_graph_semantic_hints_salvaged": 2,
+            "final_post_boundary_graph_semantic_hints_salvaged": 2,
+            "puzzle_room_scaffold_applied": 3,
+            "puzzle_room_scaffold_hub": 1,
+            "puzzle_room_scaffold_gate_switch": 2,
+            "puzzle_room_scaffold_novelty_selected": 3,
+            "puzzle_room_scaffold_gate": 1,
+            "puzzle_room_scaffold_combat": 1,
+            "puzzle_room_scaffold_gate_combat": 1
+          },
+          "topology_anchor_policy": {
+            "topology_anchor_policy_version": "2026-04-11.semantic_anchor_v8_puzzle_subtype_channels",
+            "semantic_role_prior_strength": 0.15,
+            "symbolic_max_repair_attempts": 5,
+            "symbolic_repair_margin": 2,
+            "symbolic_adjacency_threshold": 0.01,
+            "semantic_anchor_threshold": 0.5,
+            "semantic_puzzle_offset": 2,
+            "semantic_constrained_decoding_enabled": false,
+            "semantic_marker_logit_bias": 10000.0,
+            "semantic_marker_suppression_bias": 100.0,
+            "puzzle_room_scaffold_enabled": true,
+            "puzzle_room_scaffold_min_structure_tiles": 10,
+            "puzzle_room_archetype_mode": "auto",
+            "puzzle_room_branch_density": 0.75,
+            "puzzle_room_block_budget": 28,
+            "puzzle_room_preserve_route_margin": 0,
+            "puzzle_room_switch_pocket_depth": 3,
+            "puzzle_room_resource_bypass_offset": 2,
+            "puzzle_room_key_pocket_depth": 3,
+            "puzzle_room_item_slot_depth": 3,
+            "puzzle_room_toggle_corridor_offset": 2,
+            "puzzle_room_novelty_enabled": true,
+            "puzzle_room_candidate_count": 4,
+            "puzzle_room_novelty_weight": 0.45,
+            "validator_plan_max_states": 512,
+            "deterministic_graph_marker_overlay_enabled": false,
+            "fast_sampler_teacher_fallback_enabled": false,
+            "masked_room_teacher_fallback_enabled": true
+          },
+          "semantic_metrics": {
+            "total_graph_marker_expected": 11.0,
+            "total_graph_marker_overwrites": 9.0,
+            "avg_neural_graph_marker_exact_match_rate": 0.16666666666666666,
+            "avg_final_pre_overlay_graph_marker_exact_match_rate": 0.3333333333333333,
+            "avg_final_post_overlay_graph_marker_exact_match_rate": 0.3333333333333333,
+            "avg_final_graph_marker_overwrite_rate": 0.6666666666666666,
+            "avg_neural_semantic_anchor_error": 22.5,
+            "avg_final_pre_overlay_semantic_anchor_error": 18.0
+          },
+          "cleanup_totals": {
+            "neural_invalid_door_tiles_removed": 43,
+            "neural_interior_obstacle_tiles_removed": 31,
+            "neural_interior_obstacle_components_removed": 18,
+            "repair_invalid_door_tiles_removed": 277,
+            "repair_interior_obstacle_tiles_removed": 98,
+            "repair_interior_obstacle_components_removed": 79
+          },
+          "tile_hist": {
+            "2": 625,
+            "1": 1320,
+            "15": 75,
+            "20": 1,
+            "11": 5,
+            "3": 44,
+            "12": 5,
+            "13": 10,
+            "32": 1,
+            "0": 725,
+            "14": 5
+          },
+          "room_hashes": {
+            "0": "5428c06b5e9cca62",
+            "1": "0bbf308a727b6dd3",
+            "2": "a58f44faf5dad735",
+            "3": "ac0890397702bb82",
+            "4": "59f86e6c4866516f",
+            "5": "15e508c9b904dc82",
+            "6": "8c01516312138be5",
+            "7": "36d807d50725c6af",
+            "8": "9b80db929f67852a",
+            "9": "8ebf3ccd8c66f247",
+            "10": "572a515061ca614e",
+            "11": "98e46d1176bc7a62"
+          },
+          "layout": {
+            "room_count": 12.0,
+            "primary_quality_metric_name": "graph_edge_slot_adjacency_rate",
+            "primary_quality_metric_value": 1.0,
+            "graph_slot_match_rate": 1.0,
+            "graph_position_coverage_rate": 1.0,
+            "graph_preferred_position_duplicate_rate": 0.0,
+            "graph_slot_preference_mean_distance": 0.0,
+            "graph_slot_preference_max_distance": 0.0,
+            "graph_edge_slot_adjacency_rate": 1.0,
+            "graph_edge_slot_mean_distance": 1.0,
+            "graph_edge_slot_mean_excess_distance": 0.0,
+            "graph_edge_slot_max_distance": 1.0,
+            "graph_edge_count_evaluated": 15.0
+          }
+        },
+        "fast_cfg3_logic0_steps4": {
+          "name": "fast_cfg3_logic0_steps4",
+          "guidance_scale": 3.0,
+          "logic_guidance_scale": 0.0,
+          "num_diffusion_steps": 4,
+          "use_fast_sampling": true,
+          "diffusion_inference_checkpoint_state_key": "ema_diffusion_state_dict",
+          "diffusion_training_cfg_scale": 3.0,
+          "metrics": {
+            "num_rooms": 12,
+            "total_tiles_repaired": 485,
+            "repair_rate": 1.0,
+            "dungeon_shape": [
+              64,
+              44
+            ],
+            "generation_time_sec": 118.15566873550415,
+            "batch_generation_diagnostics": [
+              {
+                "layer_index": 0,
+                "latent_shape_chw": [
+                  64,
+                  4,
+                  3
+                ],
+                "target_room_size_hw": [
+                  16,
+                  11
+                ],
+                "bucket_room_count": 1,
+                "requested_batch_size": 8,
+                "safe_chunk_size": 8,
+                "cuda_free_mb": 2081.7000007629395
+              },
+              {
+                "layer_index": 0,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 0,
+                "actual_chunk_size": 1
+              },
+              {
+                "layer_index": 1,
+                "latent_shape_chw": [
+                  64,
+                  4,
+                  3
+                ],
+                "target_room_size_hw": [
+                  16,
+                  11
+                ],
+                "bucket_room_count": 2,
+                "requested_batch_size": 8,
+                "safe_chunk_size": 1,
+                "cuda_free_mb": 0.0
+              },
+              {
+                "layer_index": 1,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 0,
+                "actual_chunk_size": 1
+              },
+              {
+                "layer_index": 1,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 1,
+                "actual_chunk_size": 1
+              },
+              {
+                "layer_index": 2,
+                "latent_shape_chw": [
+                  64,
+                  4,
+                  3
+                ],
+                "target_room_size_hw": [
+                  16,
+                  11
+                ],
+                "bucket_room_count": 2,
+                "requested_batch_size": 8,
+                "safe_chunk_size": 8,
+                "cuda_free_mb": 2081.7000007629395
+              },
+              {
+                "layer_index": 2,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 0,
+                "actual_chunk_size": 2
+              },
+              {
+                "layer_index": 3,
+                "latent_shape_chw": [
+                  64,
+                  4,
+                  3
+                ],
+                "target_room_size_hw": [
+                  16,
+                  11
+                ],
+                "bucket_room_count": 3,
+                "requested_batch_size": 8,
+                "safe_chunk_size": 1,
+                "cuda_free_mb": 0.0
+              },
+              {
+                "layer_index": 3,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 0,
+                "actual_chunk_size": 1
+              },
+              {
+                "layer_index": 3,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 1,
+                "actual_chunk_size": 1
+              },
+              {
+                "layer_index": 3,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 2,
+                "actual_chunk_size": 1
+              },
+              {
+                "layer_index": 4,
+                "latent_shape_chw": [
+                  64,
+                  4,
+                  3
+                ],
+                "target_room_size_hw": [
+                  16,
+                  11
+                ],
+                "bucket_room_count": 2,
+                "requested_batch_size": 8,
+                "safe_chunk_size": 8,
+                "cuda_free_mb": 2081.7000007629395
+              },
+              {
+                "layer_index": 4,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 0,
+                "actual_chunk_size": 2
+              },
+              {
+                "layer_index": 5,
+                "latent_shape_chw": [
+                  64,
+                  4,
+                  3
+                ],
+                "target_room_size_hw": [
+                  16,
+                  11
+                ],
+                "bucket_room_count": 1,
+                "requested_batch_size": 8,
+                "safe_chunk_size": 1,
+                "cuda_free_mb": 0.0
+              },
+              {
+                "layer_index": 5,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 0,
+                "actual_chunk_size": 1
+              },
+              {
+                "layer_index": 6,
+                "latent_shape_chw": [
+                  64,
+                  4,
+                  3
+                ],
+                "target_room_size_hw": [
+                  16,
+                  11
+                ],
+                "bucket_room_count": 1,
+                "requested_batch_size": 8,
+                "safe_chunk_size": 1,
+                "cuda_free_mb": 0.0
+              },
+              {
+                "layer_index": 6,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 0,
+                "actual_chunk_size": 1
+              }
+            ],
+            "total_graph_marker_expected": 11.0,
+            "total_graph_marker_overwrites": 9.0,
+            "avg_neural_graph_marker_exact_match_rate": 0.16666666666666666,
+            "avg_final_pre_overlay_graph_marker_exact_match_rate": 0.2916666666666667,
+            "avg_final_post_overlay_graph_marker_exact_match_rate": 0.2916666666666667,
+            "avg_final_graph_marker_overwrite_rate": 0.7083333333333334,
+            "avg_neural_semantic_anchor_error": 22.5,
+            "avg_final_pre_overlay_semantic_anchor_error": 19.125
+          },
+          "runtime_diagnostics": {
+            "fast_sampling_used": 10,
+            "topology_door_tiles_forced": 12,
+            "neural_room_semantics_stripped": 12,
+            "repair_room_semantics_stripped": 9,
+            "repair_structural_artifacts_stripped": 9,
+            "wfc_feedback_attempts": 12,
+            "neural_boundary_shell_enforced": 12,
+            "final_boundary_shell_enforced": 12,
+            "deterministic_graph_marker_overlay_disabled": 12,
+            "neural_structural_artifacts_stripped": 11,
+            "repair_graph_semantic_hints_salvaged": 2,
+            "final_post_boundary_graph_semantic_hints_salvaged": 2,
+            "puzzle_room_scaffold_applied": 3,
+            "puzzle_room_scaffold_hub": 1,
+            "puzzle_room_scaffold_gate_switch": 2,
+            "puzzle_room_scaffold_novelty_selected": 3,
+            "puzzle_room_scaffold_gate": 1,
+            "puzzle_room_scaffold_combat": 1,
+            "puzzle_room_scaffold_gate_combat": 1
+          },
+          "topology_anchor_policy": {
+            "topology_anchor_policy_version": "2026-04-11.semantic_anchor_v8_puzzle_subtype_channels",
+            "semantic_role_prior_strength": 0.15,
+            "symbolic_max_repair_attempts": 5,
+            "symbolic_repair_margin": 2,
+            "symbolic_adjacency_threshold": 0.01,
+            "semantic_anchor_threshold": 0.5,
+            "semantic_puzzle_offset": 2,
+            "semantic_constrained_decoding_enabled": false,
+            "semantic_marker_logit_bias": 10000.0,
+            "semantic_marker_suppression_bias": 100.0,
+            "puzzle_room_scaffold_enabled": true,
+            "puzzle_room_scaffold_min_structure_tiles": 10,
+            "puzzle_room_archetype_mode": "auto",
+            "puzzle_room_branch_density": 0.75,
+            "puzzle_room_block_budget": 28,
+            "puzzle_room_preserve_route_margin": 0,
+            "puzzle_room_switch_pocket_depth": 3,
+            "puzzle_room_resource_bypass_offset": 2,
+            "puzzle_room_key_pocket_depth": 3,
+            "puzzle_room_item_slot_depth": 3,
+            "puzzle_room_toggle_corridor_offset": 2,
+            "puzzle_room_novelty_enabled": true,
+            "puzzle_room_candidate_count": 4,
+            "puzzle_room_novelty_weight": 0.45,
+            "validator_plan_max_states": 512,
+            "deterministic_graph_marker_overlay_enabled": false,
+            "fast_sampler_teacher_fallback_enabled": false,
+            "masked_room_teacher_fallback_enabled": true
+          },
+          "semantic_metrics": {
+            "total_graph_marker_expected": 11.0,
+            "total_graph_marker_overwrites": 9.0,
+            "avg_neural_graph_marker_exact_match_rate": 0.16666666666666666,
+            "avg_final_pre_overlay_graph_marker_exact_match_rate": 0.2916666666666667,
+            "avg_final_post_overlay_graph_marker_exact_match_rate": 0.2916666666666667,
+            "avg_final_graph_marker_overwrite_rate": 0.7083333333333334,
+            "avg_neural_semantic_anchor_error": 22.5,
+            "avg_final_pre_overlay_semantic_anchor_error": 19.125
+          },
+          "cleanup_totals": {
+            "neural_invalid_door_tiles_removed": 34,
+            "neural_interior_obstacle_tiles_removed": 6,
+            "neural_interior_obstacle_components_removed": 6,
+            "repair_invalid_door_tiles_removed": 234,
+            "repair_interior_obstacle_tiles_removed": 67,
+            "repair_interior_obstacle_components_removed": 59
+          },
+          "tile_hist": {
+            "2": 660,
+            "1": 1316,
+            "15": 75,
+            "20": 1,
+            "11": 5,
+            "3": 34,
+            "12": 5,
+            "13": 10,
+            "0": 704,
+            "14": 5,
+            "43": 1
+          },
+          "room_hashes": {
+            "0": "5428c06b5e9cca62",
+            "1": "a7759e1d162b2a8c",
+            "2": "a58f44faf5dad735",
+            "3": "2d61bdc04ec788f2",
+            "4": "6b0efb73596f6187",
+            "5": "042c27abd5dd9b83",
+            "6": "b99669c56e2ebb3b",
+            "7": "572a515061ca614e",
+            "8": "e581615bc1788dd0",
+            "9": "220fe90958d485cd",
+            "10": "572a515061ca614e",
+            "11": "e8c60c53d0227c2a"
+          },
+          "layout": {
+            "room_count": 12.0,
+            "primary_quality_metric_name": "graph_edge_slot_adjacency_rate",
+            "primary_quality_metric_value": 1.0,
+            "graph_slot_match_rate": 1.0,
+            "graph_position_coverage_rate": 1.0,
+            "graph_preferred_position_duplicate_rate": 0.0,
+            "graph_slot_preference_mean_distance": 0.0,
+            "graph_slot_preference_max_distance": 0.0,
+            "graph_edge_slot_adjacency_rate": 1.0,
+            "graph_edge_slot_mean_distance": 1.0,
+            "graph_edge_slot_mean_excess_distance": 0.0,
+            "graph_edge_slot_max_distance": 1.0,
+            "graph_edge_count_evaluated": 15.0
+          }
+        }
+      }
+    },
+    {
+      "seed": 20260405,
+      "variants": {
+        "diffusion_cfg3_logic0_steps50": {
+          "name": "diffusion_cfg3_logic0_steps50",
+          "guidance_scale": 3.0,
+          "logic_guidance_scale": 0.0,
+          "num_diffusion_steps": 50,
+          "use_fast_sampling": false,
+          "diffusion_inference_checkpoint_state_key": "ema_diffusion_state_dict",
+          "diffusion_training_cfg_scale": 3.0,
+          "metrics": {
+            "num_rooms": 12,
+            "total_tiles_repaired": 447,
+            "repair_rate": 0.9166666666666666,
+            "dungeon_shape": [
+              64,
+              44
+            ],
+            "generation_time_sec": 826.5921037197113,
+            "batch_generation_diagnostics": [
+              {
+                "layer_index": 0,
+                "latent_shape_chw": [
+                  64,
+                  4,
+                  3
+                ],
+                "target_room_size_hw": [
+                  16,
+                  11
+                ],
+                "bucket_room_count": 1,
+                "requested_batch_size": 8,
+                "safe_chunk_size": 1,
+                "cuda_free_mb": 0.0
+              },
+              {
+                "layer_index": 0,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 0,
+                "actual_chunk_size": 1
+              },
+              {
+                "layer_index": 1,
+                "latent_shape_chw": [
+                  64,
+                  4,
+                  3
+                ],
+                "target_room_size_hw": [
+                  16,
+                  11
+                ],
+                "bucket_room_count": 2,
+                "requested_batch_size": 8,
+                "safe_chunk_size": 8,
+                "cuda_free_mb": 2081.7000007629395
+              },
+              {
+                "layer_index": 1,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 0,
+                "actual_chunk_size": 2
+              },
+              {
+                "layer_index": 2,
+                "latent_shape_chw": [
+                  64,
+                  4,
+                  3
+                ],
+                "target_room_size_hw": [
+                  16,
+                  11
+                ],
+                "bucket_room_count": 2,
+                "requested_batch_size": 8,
+                "safe_chunk_size": 1,
+                "cuda_free_mb": 0.0
+              },
+              {
+                "layer_index": 2,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 0,
+                "actual_chunk_size": 1
+              },
+              {
+                "layer_index": 2,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 1,
+                "actual_chunk_size": 1
+              },
+              {
+                "layer_index": 3,
+                "latent_shape_chw": [
+                  64,
+                  4,
+                  3
+                ],
+                "target_room_size_hw": [
+                  16,
+                  11
+                ],
+                "bucket_room_count": 3,
+                "requested_batch_size": 8,
+                "safe_chunk_size": 1,
+                "cuda_free_mb": 0.0
+              },
+              {
+                "layer_index": 3,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 0,
+                "actual_chunk_size": 1
+              },
+              {
+                "layer_index": 3,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 1,
+                "actual_chunk_size": 1
+              },
+              {
+                "layer_index": 3,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 2,
+                "actual_chunk_size": 1
+              },
+              {
+                "layer_index": 4,
+                "latent_shape_chw": [
+                  64,
+                  4,
+                  3
+                ],
+                "target_room_size_hw": [
+                  16,
+                  11
+                ],
+                "bucket_room_count": 2,
+                "requested_batch_size": 8,
+                "safe_chunk_size": 8,
+                "cuda_free_mb": 2081.7000007629395
+              },
+              {
+                "layer_index": 4,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 0,
+                "actual_chunk_size": 2
+              },
+              {
+                "layer_index": 5,
+                "latent_shape_chw": [
+                  64,
+                  4,
+                  3
+                ],
+                "target_room_size_hw": [
+                  16,
+                  11
+                ],
+                "bucket_room_count": 1,
+                "requested_batch_size": 8,
+                "safe_chunk_size": 8,
+                "cuda_free_mb": 2081.7000007629395
+              },
+              {
+                "layer_index": 5,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 0,
+                "actual_chunk_size": 1
+              },
+              {
+                "layer_index": 6,
+                "latent_shape_chw": [
+                  64,
+                  4,
+                  3
+                ],
+                "target_room_size_hw": [
+                  16,
+                  11
+                ],
+                "bucket_room_count": 1,
+                "requested_batch_size": 8,
+                "safe_chunk_size": 1,
+                "cuda_free_mb": 0.0
+              },
+              {
+                "layer_index": 6,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 0,
+                "actual_chunk_size": 1
+              }
+            ],
+            "total_graph_marker_expected": 11.0,
+            "total_graph_marker_overwrites": 8.0,
+            "avg_neural_graph_marker_exact_match_rate": 0.16666666666666666,
+            "avg_final_pre_overlay_graph_marker_exact_match_rate": 0.375,
+            "avg_final_post_overlay_graph_marker_exact_match_rate": 0.375,
+            "avg_final_graph_marker_overwrite_rate": 0.625,
+            "avg_neural_semantic_anchor_error": 22.5,
+            "avg_final_pre_overlay_semantic_anchor_error": 16.875
+          },
+          "runtime_diagnostics": {
+            "topology_door_tiles_forced": 12,
+            "neural_room_semantics_stripped": 11,
+            "neural_structural_artifacts_stripped": 12,
+            "wfc_feedback_attempts": 12,
+            "neural_boundary_shell_enforced": 12,
+            "final_boundary_shell_enforced": 12,
+            "deterministic_graph_marker_overlay_disabled": 12,
+            "repair_room_semantics_stripped": 8,
+            "repair_graph_semantic_hints_salvaged": 3,
+            "repair_structural_artifacts_stripped": 8,
+            "final_post_boundary_graph_semantic_hints_salvaged": 3,
+            "puzzle_room_scaffold_applied": 3,
+            "puzzle_room_scaffold_hub": 1,
+            "puzzle_room_scaffold_gate_switch": 2,
+            "puzzle_room_scaffold_novelty_selected": 3,
+            "puzzle_room_scaffold_gate": 1,
+            "puzzle_room_scaffold_combat": 1,
+            "puzzle_room_scaffold_gate_combat": 1
+          },
+          "topology_anchor_policy": {
+            "topology_anchor_policy_version": "2026-04-11.semantic_anchor_v8_puzzle_subtype_channels",
+            "semantic_role_prior_strength": 0.15,
+            "symbolic_max_repair_attempts": 5,
+            "symbolic_repair_margin": 2,
+            "symbolic_adjacency_threshold": 0.01,
+            "semantic_anchor_threshold": 0.5,
+            "semantic_puzzle_offset": 2,
+            "semantic_constrained_decoding_enabled": false,
+            "semantic_marker_logit_bias": 10000.0,
+            "semantic_marker_suppression_bias": 100.0,
+            "puzzle_room_scaffold_enabled": true,
+            "puzzle_room_scaffold_min_structure_tiles": 10,
+            "puzzle_room_archetype_mode": "auto",
+            "puzzle_room_branch_density": 0.75,
+            "puzzle_room_block_budget": 28,
+            "puzzle_room_preserve_route_margin": 0,
+            "puzzle_room_switch_pocket_depth": 3,
+            "puzzle_room_resource_bypass_offset": 2,
+            "puzzle_room_key_pocket_depth": 3,
+            "puzzle_room_item_slot_depth": 3,
+            "puzzle_room_toggle_corridor_offset": 2,
+            "puzzle_room_novelty_enabled": true,
+            "puzzle_room_candidate_count": 4,
+            "puzzle_room_novelty_weight": 0.45,
+            "validator_plan_max_states": 512,
+            "deterministic_graph_marker_overlay_enabled": false,
+            "fast_sampler_teacher_fallback_enabled": false,
+            "masked_room_teacher_fallback_enabled": true
+          },
+          "semantic_metrics": {
+            "total_graph_marker_expected": 11.0,
+            "total_graph_marker_overwrites": 8.0,
+            "avg_neural_graph_marker_exact_match_rate": 0.16666666666666666,
+            "avg_final_pre_overlay_graph_marker_exact_match_rate": 0.375,
+            "avg_final_post_overlay_graph_marker_exact_match_rate": 0.375,
+            "avg_final_graph_marker_overwrite_rate": 0.625,
+            "avg_neural_semantic_anchor_error": 22.5,
+            "avg_final_pre_overlay_semantic_anchor_error": 16.875
+          },
+          "cleanup_totals": {
+            "neural_invalid_door_tiles_removed": 47,
+            "neural_interior_obstacle_tiles_removed": 30,
+            "neural_interior_obstacle_components_removed": 19,
+            "repair_invalid_door_tiles_removed": 215,
+            "repair_interior_obstacle_tiles_removed": 74,
+            "repair_interior_obstacle_components_removed": 61
+          },
+          "tile_hist": {
+            "2": 676,
+            "1": 1288,
+            "15": 75,
+            "20": 1,
+            "31": 1,
+            "11": 5,
+            "3": 45,
+            "12": 5,
+            "13": 10,
+            "0": 704,
+            "14": 5,
+            "43": 1
+          },
+          "room_hashes": {
+            "0": "b9db8b904447afdb",
+            "1": "51cf1270954c93f5",
+            "2": "a58f44faf5dad735",
+            "3": "ac0890397702bb82",
+            "4": "901f159bb3d3ec89",
+            "5": "15e508c9b904dc82",
+            "6": "a40352f562b6a4d9",
+            "7": "03be896b4dff427f",
+            "8": "5c1c1c101133118e",
+            "9": "8c27cee335d6500e",
+            "10": "572a515061ca614e",
+            "11": "38115d1b83a2dd5d"
+          },
+          "layout": {
+            "room_count": 12.0,
+            "primary_quality_metric_name": "graph_edge_slot_adjacency_rate",
+            "primary_quality_metric_value": 1.0,
+            "graph_slot_match_rate": 1.0,
+            "graph_position_coverage_rate": 1.0,
+            "graph_preferred_position_duplicate_rate": 0.0,
+            "graph_slot_preference_mean_distance": 0.0,
+            "graph_slot_preference_max_distance": 0.0,
+            "graph_edge_slot_adjacency_rate": 1.0,
+            "graph_edge_slot_mean_distance": 1.0,
+            "graph_edge_slot_mean_excess_distance": 0.0,
+            "graph_edge_slot_max_distance": 1.0,
+            "graph_edge_count_evaluated": 15.0
+          }
+        },
+        "fast_cfg3_logic0_steps4": {
+          "name": "fast_cfg3_logic0_steps4",
+          "guidance_scale": 3.0,
+          "logic_guidance_scale": 0.0,
+          "num_diffusion_steps": 4,
+          "use_fast_sampling": true,
+          "diffusion_inference_checkpoint_state_key": "ema_diffusion_state_dict",
+          "diffusion_training_cfg_scale": 3.0,
+          "metrics": {
+            "num_rooms": 12,
+            "total_tiles_repaired": 561,
+            "repair_rate": 0.75,
+            "dungeon_shape": [
+              64,
+              44
+            ],
+            "generation_time_sec": 81.54088973999023,
+            "batch_generation_diagnostics": [
+              {
+                "layer_index": 0,
+                "latent_shape_chw": [
+                  64,
+                  4,
+                  3
+                ],
+                "target_room_size_hw": [
+                  16,
+                  11
+                ],
+                "bucket_room_count": 1,
+                "requested_batch_size": 8,
+                "safe_chunk_size": 8,
+                "cuda_free_mb": 2081.7000007629395
+              },
+              {
+                "layer_index": 0,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 0,
+                "actual_chunk_size": 1
+              },
+              {
+                "layer_index": 1,
+                "latent_shape_chw": [
+                  64,
+                  4,
+                  3
+                ],
+                "target_room_size_hw": [
+                  16,
+                  11
+                ],
+                "bucket_room_count": 2,
+                "requested_batch_size": 8,
+                "safe_chunk_size": 1,
+                "cuda_free_mb": 0.0
+              },
+              {
+                "layer_index": 1,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 0,
+                "actual_chunk_size": 1
+              },
+              {
+                "layer_index": 1,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 1,
+                "actual_chunk_size": 1
+              },
+              {
+                "layer_index": 2,
+                "latent_shape_chw": [
+                  64,
+                  4,
+                  3
+                ],
+                "target_room_size_hw": [
+                  16,
+                  11
+                ],
+                "bucket_room_count": 2,
+                "requested_batch_size": 8,
+                "safe_chunk_size": 8,
+                "cuda_free_mb": 2081.7000007629395
+              },
+              {
+                "layer_index": 2,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 0,
+                "actual_chunk_size": 2
+              },
+              {
+                "layer_index": 3,
+                "latent_shape_chw": [
+                  64,
+                  4,
+                  3
+                ],
+                "target_room_size_hw": [
+                  16,
+                  11
+                ],
+                "bucket_room_count": 3,
+                "requested_batch_size": 8,
+                "safe_chunk_size": 8,
+                "cuda_free_mb": 2081.7000007629395
+              },
+              {
+                "layer_index": 3,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 0,
+                "actual_chunk_size": 3
+              },
+              {
+                "layer_index": 4,
+                "latent_shape_chw": [
+                  64,
+                  4,
+                  3
+                ],
+                "target_room_size_hw": [
+                  16,
+                  11
+                ],
+                "bucket_room_count": 2,
+                "requested_batch_size": 8,
+                "safe_chunk_size": 8,
+                "cuda_free_mb": 2081.7000007629395
+              },
+              {
+                "layer_index": 4,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 0,
+                "actual_chunk_size": 2
+              },
+              {
+                "layer_index": 5,
+                "latent_shape_chw": [
+                  64,
+                  4,
+                  3
+                ],
+                "target_room_size_hw": [
+                  16,
+                  11
+                ],
+                "bucket_room_count": 1,
+                "requested_batch_size": 8,
+                "safe_chunk_size": 1,
+                "cuda_free_mb": 0.0
+              },
+              {
+                "layer_index": 5,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 0,
+                "actual_chunk_size": 1
+              },
+              {
+                "layer_index": 6,
+                "latent_shape_chw": [
+                  64,
+                  4,
+                  3
+                ],
+                "target_room_size_hw": [
+                  16,
+                  11
+                ],
+                "bucket_room_count": 1,
+                "requested_batch_size": 8,
+                "safe_chunk_size": 8,
+                "cuda_free_mb": 2081.7000007629395
+              },
+              {
+                "layer_index": 6,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 0,
+                "actual_chunk_size": 1
+              }
+            ],
+            "total_graph_marker_expected": 11.0,
+            "total_graph_marker_overwrites": 9.0,
+            "avg_neural_graph_marker_exact_match_rate": 0.16666666666666666,
+            "avg_final_pre_overlay_graph_marker_exact_match_rate": 0.3333333333333333,
+            "avg_final_post_overlay_graph_marker_exact_match_rate": 0.3333333333333333,
+            "avg_final_graph_marker_overwrite_rate": 0.6666666666666666,
+            "avg_neural_semantic_anchor_error": 22.5,
+            "avg_final_pre_overlay_semantic_anchor_error": 18.0
+          },
+          "runtime_diagnostics": {
+            "fast_sampling_used": 8,
+            "topology_door_tiles_forced": 12,
+            "neural_room_semantics_stripped": 10,
+            "neural_structural_artifacts_stripped": 12,
+            "repair_room_semantics_stripped": 6,
+            "repair_structural_artifacts_stripped": 6,
+            "wfc_feedback_attempts": 12,
+            "neural_boundary_shell_enforced": 12,
+            "final_boundary_shell_enforced": 12,
+            "deterministic_graph_marker_overlay_disabled": 12,
+            "puzzle_room_scaffold_applied": 3,
+            "puzzle_room_scaffold_hub": 1,
+            "puzzle_room_scaffold_gate_switch": 2,
+            "puzzle_room_scaffold_novelty_selected": 3,
+            "repair_graph_semantic_hints_salvaged": 2,
+            "final_post_boundary_graph_semantic_hints_salvaged": 2,
+            "puzzle_room_scaffold_gate": 1,
+            "puzzle_room_scaffold_combat": 1,
+            "puzzle_room_scaffold_gate_combat": 1
+          },
+          "topology_anchor_policy": {
+            "topology_anchor_policy_version": "2026-04-11.semantic_anchor_v8_puzzle_subtype_channels",
+            "semantic_role_prior_strength": 0.15,
+            "symbolic_max_repair_attempts": 5,
+            "symbolic_repair_margin": 2,
+            "symbolic_adjacency_threshold": 0.01,
+            "semantic_anchor_threshold": 0.5,
+            "semantic_puzzle_offset": 2,
+            "semantic_constrained_decoding_enabled": false,
+            "semantic_marker_logit_bias": 10000.0,
+            "semantic_marker_suppression_bias": 100.0,
+            "puzzle_room_scaffold_enabled": true,
+            "puzzle_room_scaffold_min_structure_tiles": 10,
+            "puzzle_room_archetype_mode": "auto",
+            "puzzle_room_branch_density": 0.75,
+            "puzzle_room_block_budget": 28,
+            "puzzle_room_preserve_route_margin": 0,
+            "puzzle_room_switch_pocket_depth": 3,
+            "puzzle_room_resource_bypass_offset": 2,
+            "puzzle_room_key_pocket_depth": 3,
+            "puzzle_room_item_slot_depth": 3,
+            "puzzle_room_toggle_corridor_offset": 2,
+            "puzzle_room_novelty_enabled": true,
+            "puzzle_room_candidate_count": 4,
+            "puzzle_room_novelty_weight": 0.45,
+            "validator_plan_max_states": 512,
+            "deterministic_graph_marker_overlay_enabled": false,
+            "fast_sampler_teacher_fallback_enabled": false,
+            "masked_room_teacher_fallback_enabled": true
+          },
+          "semantic_metrics": {
+            "total_graph_marker_expected": 11.0,
+            "total_graph_marker_overwrites": 9.0,
+            "avg_neural_graph_marker_exact_match_rate": 0.16666666666666666,
+            "avg_final_pre_overlay_graph_marker_exact_match_rate": 0.3333333333333333,
+            "avg_final_post_overlay_graph_marker_exact_match_rate": 0.3333333333333333,
+            "avg_final_graph_marker_overwrite_rate": 0.6666666666666666,
+            "avg_neural_semantic_anchor_error": 22.5,
+            "avg_final_pre_overlay_semantic_anchor_error": 18.0
+          },
+          "cleanup_totals": {
+            "neural_invalid_door_tiles_removed": 45,
+            "neural_interior_obstacle_tiles_removed": 28,
+            "neural_interior_obstacle_components_removed": 10,
+            "repair_invalid_door_tiles_removed": 273,
+            "repair_interior_obstacle_tiles_removed": 84,
+            "repair_interior_obstacle_components_removed": 75
+          },
+          "tile_hist": {
+            "2": 639,
+            "1": 1316,
+            "15": 75,
+            "31": 1,
+            "11": 5,
+            "3": 55,
+            "12": 5,
+            "13": 10,
+            "0": 704,
+            "14": 5,
+            "23": 1
+          },
+          "room_hashes": {
+            "0": "5428c06b5e9cca62",
+            "1": "fb77ca7657d30b5a",
+            "2": "a58f44faf5dad735",
+            "3": "ac0890397702bb82",
+            "4": "a32a6e6c6b0777ce",
+            "5": "9da8b9322395ced1",
+            "6": "120ffb30c37bc02d",
+            "7": "c55417f856f5caef",
+            "8": "445d36c291a4a2d2",
+            "9": "8ebf3ccd8c66f247",
+            "10": "bf537a407703ab5f",
+            "11": "97ebe7a72bd6f36c"
+          },
+          "layout": {
+            "room_count": 12.0,
+            "primary_quality_metric_name": "graph_edge_slot_adjacency_rate",
+            "primary_quality_metric_value": 1.0,
+            "graph_slot_match_rate": 1.0,
+            "graph_position_coverage_rate": 1.0,
+            "graph_preferred_position_duplicate_rate": 0.0,
+            "graph_slot_preference_mean_distance": 0.0,
+            "graph_slot_preference_max_distance": 0.0,
+            "graph_edge_slot_adjacency_rate": 1.0,
+            "graph_edge_slot_mean_distance": 1.0,
+            "graph_edge_slot_mean_excess_distance": 0.0,
+            "graph_edge_slot_max_distance": 1.0,
+            "graph_edge_count_evaluated": 15.0
+          }
+        }
+      }
+    }
+  ],
+  "aggregate": {
+    "diffusion_cfg3_logic0_steps50": {
+      "num_runs": 2,
+      "avg_repair_rate": 0.9166666666666666,
+      "median_repair_rate": 0.9166666666666666,
+      "avg_total_tiles_repaired": 515.5,
+      "median_total_tiles_repaired": 515.5,
+      "avg_generation_time_sec": 843.1738564968109,
+      "median_generation_time_sec": 843.1738564968109,
+      "avg_final_graph_marker_overwrite_rate": 0.6458333333333333,
+      "median_final_graph_marker_overwrite_rate": 0.6458333333333333,
+      "avg_neural_semantic_anchor_error": 22.5,
+      "median_neural_semantic_anchor_error": 22.5,
+      "unique_layout_count": 2,
+      "all_layouts_identical": false
+    },
+    "fast_cfg3_logic0_steps4": {
+      "num_runs": 2,
+      "avg_repair_rate": 0.875,
+      "median_repair_rate": 0.875,
+      "avg_total_tiles_repaired": 523.0,
+      "median_total_tiles_repaired": 523.0,
+      "avg_generation_time_sec": 99.84827923774719,
+      "median_generation_time_sec": 99.84827923774719,
+      "avg_final_graph_marker_overwrite_rate": 0.6875,
+      "median_final_graph_marker_overwrite_rate": 0.6875,
+      "avg_neural_semantic_anchor_error": 22.5,
+      "median_neural_semantic_anchor_error": 22.5,
+      "unique_layout_count": 2,
+      "all_layouts_identical": false
+    }
+  }
+}

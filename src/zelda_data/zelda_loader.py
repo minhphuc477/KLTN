@@ -358,7 +358,13 @@ def _room_directional_flow(dungeon, room_position: Tuple[int, int], graph_node_i
 
 def _room_role_flags(room, graph_node_attrs: Optional[Dict[str, Any]]) -> Dict[str, bool]:
     attrs = graph_node_attrs or {}
-    tokens = {str(part).strip().lower() for part in parse_node_label_tokens(str(getattr(room, "node_label", "") or attrs.get("label", ""))) if str(part).strip()}
+    tokens = {
+        str(part).strip().lower()
+        for part in parse_node_label_tokens(str(getattr(room, "node_label", "") or attrs.get("label", "")))
+        if str(part).strip()
+    }
+    raw_type = str(attrs.get("type", attrs.get("node_type", attrs.get("room_type", ""))) or "").strip().lower()
+    difficulty_rating = str(attrs.get("difficulty_rating", "") or "").strip().upper()
     return {
         "is_start": bool(getattr(room, "is_start", False) or attrs.get("is_start", False) or "s" in tokens or "start" in tokens),
         "has_enemy": bool(attrs.get("has_enemy", False) or "e" in tokens or "enemy" in tokens),
@@ -366,7 +372,17 @@ def _room_role_flags(room, graph_node_attrs: Optional[Dict[str, Any]]) -> Dict[s
         "has_item": bool(attrs.get("has_item", False) or "i" in tokens or "item" in tokens or "treasure" in tokens),
         "has_goal": bool(getattr(room, "has_triforce", False) or attrs.get("is_triforce", False) or "t" in tokens or "goal" in tokens or "triforce" in tokens),
         "has_boss": bool(getattr(room, "has_boss", False) or attrs.get("is_boss", False) or "b" in tokens or "boss" in tokens),
-        "has_puzzle": bool(attrs.get("has_puzzle", False) or "p" in tokens or "puzzle" in tokens),
+        "has_puzzle": bool(
+            attrs.get("has_puzzle", False)
+            or "p" in tokens
+            or "puzzle" in tokens
+            or raw_type in {"switch", "puzzle", "tutorial_puzzle", "combat_puzzle", "complex_puzzle"}
+            or "puzzle" in raw_type
+        ),
+        "is_tutorial_puzzle": bool(attrs.get("is_tutorial", False) or raw_type == "tutorial_puzzle" or difficulty_rating == "SAFE"),
+        "is_combat_puzzle": bool(raw_type == "combat_puzzle"),
+        "is_complex_puzzle": bool(raw_type == "complex_puzzle" or difficulty_rating in {"HARD", "EXTREME"}),
+        "is_switch_puzzle": bool(raw_type == "switch"),
     }
 
 
@@ -402,6 +418,10 @@ def _content_anchor_points(
         "has_enemy": "enemy",
         "has_boss": "boss",
         "has_puzzle": "puzzle",
+        "is_tutorial_puzzle": "puzzle",
+        "is_combat_puzzle": "puzzle",
+        "is_complex_puzzle": "puzzle",
+        "is_switch_puzzle": "puzzle",
     }
     for role_key, anchor_name in role_to_anchor.items():
         if not room_role_flags.get(role_key, False):

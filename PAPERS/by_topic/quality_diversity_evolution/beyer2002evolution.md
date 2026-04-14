@@ -1,0 +1,17 @@
+# Natural Computing 1: 3–52, 2002
+
+- PDF: [beyer2002evolution.pdf](../../beyer2002evolution.pdf)
+- Topic: quality_diversity_evolution
+
+## Abstract / Core Idea
+Natural Computing 1: 3–52, 2002. © 2002 Kluwer Academic Publishers. Printed in the Netherlands. Evolution strategies A comprehensive introduction HANS-GEORG BEYER and HANS-PAUL SCHWEFEL Department of Computer Science XI, University of Dortmund, Joseph-von-Fraunhoferstr . 20, D-44221 Dortmund, Germany (E-mail: beyer@Ls11.cs.uni-dortmund.de; hps@udo.edu) Abstract. This article gives a comprehensive introduction into one of the main branches of evolutionary computation – the evolution strategies (ES) the history of which dates back to the 1960s in Germany. Starting from a survey of history the philosophical background is explained in order to make understandable why ES are realized in the way they are. Basic ES algorithms and design principles for variation and selection operators as well as theoretical issue s are presented, and future branches of ES research are discussed. Key words: computational intelligence, Darwinian evolution, design principles for genetic operators, evolutionary computation, evolution strategies, optimization Abbreviations: BBH – building block hypothesis; CMA – covariance matrix adaptation; CSA – cumulative step-size adaptation; EA – evolutionary algorithm; EC – evolutionary computation; ES – evolution strategy; EP – evolutionary programming; GA – genetic algorithm; GR – genetic repair; TSP – traveling salesman problem; TUB – Technical University of Berlin ACM Computing Classiﬁcation (1998): G.1.6, F1.2, G.3–4, I.2.8, J.3 1. Introduction Biological insp
+
+## Method Signals
+- Keywords phat hien: see_pdf_text
+
+## Conclusion / Findings
+vive and evolve. In: Fogel DB, Schwefel H-P, B äck T and Yao X (eds) Proc. Second IEEE World Congress on Computational Intelligence (WCCI’98) with Fifth IEEE Conf. Evolutionary Computation (IEEE/ICEC’98), pp. 1–8. Anchorage AK, IEEE Press, Piscataway NJ Schwefel H-P and Rudolph G (1995) Contemporary evolution strategies. In: Morana F, Moreno A, Merelo JJ and Chacon P (eds) Advances in Arti ﬁcial Life. Third ECAL Proceedings, pp. 893–907. Springer-Verlag, Berlin Sendhoff B, Kreuz M and von Seelen W (1997) A condition for the genotype-phenotype mapping: Causality. In: B äck T (ed) Proc. 7th Int ’l Conf. on Genetic Algorithms, pp. 73–80. Morgan Kaufmann Publishers, Inc., Francisco, CA Syswerda G (1989) Uniform crossover in genetic algorithms. In: Schaffer JD (ed) Proc. 3rd Int’l Conf. on Genetic Algorithms, pp. 2–9. Morgan Kaufmann, San Mateo, CA. Wegener I (2000) On the design and analysis of evolutionary algorithms. In: Workshop on Algorithm Engineering as a New Paradigm. Kyoto, pp. 36 –47. Research Institute for Mathematical Science, Kyoto Univ. Wegener I (2001) Theoretical aspects of evolutionary algorithms. In: Spirakis P (ed), Proc. 28th International Colloquium on Automata, Languages and Programming. Springer- Verlag, Berlin Wegener I and Witt C (2001) On the analysis of a simple evolutionary algorithm on quadratic pseudo-Boolean functions. Submitted to Journal of Discrete Algorithms Yao X (1999) Evolving artiﬁcial neural networks. Proceedings of the IEEE 87(9): 1423–1447
+
+## Relevance To KLTN
+- Bai nay duoc xep vao nhom quality_diversity_evolution trong pipeline neural-symbolic topology-first.
+- Dung de doi chieu voi khoi tuong ung trong docs va Chapter 3/4.

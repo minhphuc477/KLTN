@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 import networkx as nx
 import numpy as np
+import torch
 
 from src.core.definitions import (
     GRAPH_EDGE_FEATURE_DIM,
@@ -17,6 +18,7 @@ from src.pipeline.room_topology_conditioning import (
     _state_key,
     _room_local_state_search,
     _initial_state_for_sequence,
+    build_topology_loss_focus_map,
     build_room_semantic_anchor_points,
     build_semantic_room_plan_trace,
     build_room_topology_condition_map,
@@ -214,6 +216,32 @@ def test_room_topology_condition_map_preserves_typed_gate_channels():
     assert float(topo[ROOM_TOPOLOGY_CHANNELS["gate_switch_w"]].sum()) > 0.0
 
 
+def test_topology_loss_focus_map_emphasizes_markers_gates_and_trace():
+    topo = build_room_topology_condition_map(
+        start=(8, 1),
+        goal=(8, ROOM_WIDTH - 2),
+        required_doors={"N": False, "S": False, "E": True, "W": True},
+        incoming_dirs={"W"},
+        outgoing_dirs={"E"},
+        edge_constraint_tokens={"E": {"bombable"}, "W": {"switch_locked"}},
+        room_role_flags={"has_puzzle": True, "is_switch_puzzle": True},
+    )
+
+    focus = build_topology_loss_focus_map(
+        torch.from_numpy(topo),
+        marker_weight=2.0,
+        trace_weight=0.75,
+        dilation=1,
+    )
+
+    assert focus is not None
+    assert tuple(focus.shape) == (1, ROOM_HEIGHT, ROOM_WIDTH)
+    assert float(focus.max().item()) >= 2.0
+    assert float(focus.sum().item()) > 0.0
+    assert float(focus[0, 8, 1].item()) >= 2.0
+    assert float(focus[0, ROOM_HEIGHT // 2, ROOM_WIDTH // 2].item()) > 0.0
+
+
 def test_validator_initial_state_treats_non_local_item_gate_as_carried_item():
     room = np.full((ROOM_HEIGHT, ROOM_WIDTH), int(SEMANTIC_PALETTE["FLOOR"]), dtype=np.int32)
 
@@ -268,6 +296,68 @@ def test_semantic_room_plan_trace_falls_back_when_validator_budget_is_too_small(
     assert float(trace.sum()) > 0.0
 
 
+def test_semantic_room_plan_trace_discards_partial_validator_sequences_before_fallback():
+    room = np.full((ROOM_HEIGHT, ROOM_WIDTH), int(SEMANTIC_PALETTE["FLOOR"]), dtype=np.int32)
+    fallback_trace = build_semantic_room_plan_trace(
+        room,
+        required_doors={"N": False, "S": False, "E": True, "W": False},
+        incoming_dirs=set(),
+        outgoing_dirs={"E"},
+        edge_constraint_tokens={"E": {"switch_locked"}},
+        room_role_flags={"has_puzzle": True},
+        start=(ROOM_HEIGHT // 2, 1),
+        goal=(ROOM_HEIGHT // 2, ROOM_WIDTH - 2),
+        validator_plan_max_states=1,
+    )
+    partial_budget_trace = build_semantic_room_plan_trace(
+        room,
+        required_doors={"N": False, "S": False, "E": True, "W": False},
+        incoming_dirs=set(),
+        outgoing_dirs={"E"},
+        edge_constraint_tokens={"E": {"switch_locked"}},
+        room_role_flags={"has_puzzle": True},
+        start=(ROOM_HEIGHT // 2, 1),
+        goal=(ROOM_HEIGHT // 2, ROOM_WIDTH - 2),
+        validator_plan_max_states=60,
+    )
+
+    assert np.array_equal(partial_budget_trace, fallback_trace)
+
+
+def test_room_topology_condition_map_respects_validator_budget_for_synthetic_trace():
+    low_budget = build_room_topology_condition_map(
+        room_shape=(ROOM_HEIGHT, ROOM_WIDTH),
+        start=(ROOM_HEIGHT // 2, 1),
+        goal=(ROOM_HEIGHT // 2, ROOM_WIDTH - 2),
+        required_doors={"N": False, "S": False, "E": True, "W": False},
+        incoming_dirs=set(),
+        outgoing_dirs={"E"},
+        edge_constraint_tokens={"E": {"switch_locked"}},
+        room_role_flags={"has_puzzle": True},
+        validator_plan_max_states=1,
+    )
+    partial_budget = build_room_topology_condition_map(
+        room_shape=(ROOM_HEIGHT, ROOM_WIDTH),
+        start=(ROOM_HEIGHT // 2, 1),
+        goal=(ROOM_HEIGHT // 2, ROOM_WIDTH - 2),
+        required_doors={"N": False, "S": False, "E": True, "W": False},
+        incoming_dirs=set(),
+        outgoing_dirs={"E"},
+        edge_constraint_tokens={"E": {"switch_locked"}},
+        room_role_flags={"has_puzzle": True},
+        validator_plan_max_states=60,
+    )
+
+    traversability_channel = ROOM_TOPOLOGY_CHANNELS["traversability"]
+    assert not np.array_equal(
+        partial_budget[traversability_channel],
+        low_budget[traversability_channel],
+    )
+    assert float(np.sum(low_budget[traversability_channel])) > float(
+        np.sum(partial_budget[traversability_channel])
+    )
+
+
 def test_room_topology_condition_map_localizes_semantic_role_anchors():
     role_flags = {
         "is_start": True,
@@ -305,6 +395,72 @@ def test_room_topology_condition_map_localizes_semantic_role_anchors():
         assert float(channel[anchor[0], anchor[1]]) == 1.0
         assert float(np.sum(channel == 1.0)) == 1.0
         assert float(channel[ROOM_HEIGHT // 2, ROOM_WIDTH // 2]) >= 0.15
+
+
+def test_room_topology_condition_map_exposes_puzzle_subtype_channels():
+    role_flags = {
+        "has_puzzle": True,
+        "is_tutorial_puzzle": True,
+        "is_combat_puzzle": True,
+        "is_complex_puzzle": True,
+        "is_switch_puzzle": True,
+    }
+    topo = build_room_topology_condition_map(
+        start=(8, 1),
+        goal=(8, ROOM_WIDTH - 2),
+        required_doors={"W": True, "E": True},
+        incoming_dirs={"W"},
+        outgoing_dirs={"E"},
+        room_role_flags=role_flags,
+    )
+    puzzle_anchor = build_room_semantic_anchor_points(
+        start=(8, 1),
+        goal=(8, ROOM_WIDTH - 2),
+        required_doors={"W": True, "E": True},
+        incoming_dirs={"W"},
+        outgoing_dirs={"E"},
+        room_role_flags=role_flags,
+    )["puzzle"]
+
+    for role_name in (
+        "role_puzzle",
+        "role_tutorial_puzzle",
+        "role_combat_puzzle",
+        "role_complex_puzzle",
+        "role_switch_puzzle",
+    ):
+        channel = topo[ROOM_TOPOLOGY_CHANNELS[role_name]]
+        assert float(channel[puzzle_anchor[0], puzzle_anchor[1]]) == 1.0
+        assert float(channel[ROOM_HEIGHT // 2, ROOM_WIDTH // 2]) >= 0.15
+
+
+def test_room_graph_sample_promotes_puzzle_subtype_metadata_into_topology_channels():
+    graph = nx.DiGraph()
+    graph.add_node(
+        10,
+        label="p",
+        type="complex_puzzle",
+        has_puzzle=True,
+        difficulty_rating="HARD",
+    )
+
+    puzzle_room = SimpleNamespace(
+        semantic_grid=np.full((ROOM_HEIGHT, ROOM_WIDTH), int(SEMANTIC_PALETTE["FLOOR"]), dtype=np.int32),
+        doors={"N": False, "S": False, "E": False, "W": False},
+        has_boss=False,
+        has_triforce=False,
+        is_start=False,
+        graph_node_id=10,
+        node_label="p",
+    )
+    dungeon = SimpleNamespace(graph=graph, rooms={(0, 0): puzzle_room})
+
+    base_graph = _extract_graph_from_dungeon(dungeon)
+    sample = _build_room_graph_sample(dungeon, (0, 0), puzzle_room, base_graph)
+    topo = sample["room_topology_map"]
+
+    assert float(topo[ROOM_TOPOLOGY_CHANNELS["role_puzzle"]].sum()) > 0.0
+    assert float(topo[ROOM_TOPOLOGY_CHANNELS["role_complex_puzzle"]].sum()) > 0.0
 
 
 def test_fit_room_grid_transposes_swapped_room_shape_instead_of_cropping():

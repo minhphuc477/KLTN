@@ -37,5 +37,14 @@ build/
 # Logs
 *.log
 
+# LaTeX generated artifacts
+REPORT_LATEX/*.aux
+REPORT_LATEX/*.bbl
+REPORT_LATEX/*.blg
+REPORT_LATEX/*.lof
+REPORT_LATEX/*.lot
+REPORT_LATEX/*.out
+REPORT_LATEX/*.toc
+
 # Jupyter checkpoints
 .ipynb_checkpoints/

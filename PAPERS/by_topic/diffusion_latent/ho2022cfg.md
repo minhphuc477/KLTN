@@ -1,0 +1,17 @@
+# CLASSIFIER -FREE DIFFUSION GUIDANCE Jonathan Ho & Tim Salimans Google Research, Brain team {jonathanho,salimans}@google.com ABSTRACT Classiﬁer guidance is a recently introduced met
+
+- PDF: [ho2022cfg.pdf](../../ho2022cfg.pdf)
+- Topic: diffusion_latent
+
+## Abstract / Core Idea
+CLASSIFIER -FREE DIFFUSION GUIDANCE Jonathan Ho & Tim Salimans Google Research, Brain team {jonathanho,salimans}@google.com ABSTRACT Classiﬁer guidance is a recently introduced method to trade off mode coverage and sample ﬁdelity in conditional diffusion models post training, in the same spirit as low temperature sampling or truncation in other types of generative models. Classiﬁer guidance combines the score estimate of a diffusion model with the gradient of an image classiﬁer and thereby requires training an image classiﬁer separate from the diffusion model. It also raises the question of whether guidance can be performed without a classiﬁer. We show that guidance can be indeed performed by a pure generative model without such a classiﬁer: in what we call classiﬁer-free guidance, we jointly train a conditional and an unconditional diffusion model, and we combine the resulting conditional and unconditional score estimates to attain a trade-off between sample quality and diversity similar to that obtained using classiﬁer guidance. 1 I NTRODUCTION Diffusion models have recently emerged as an expressive and ﬂexible family of generative models, delivering competitive sample quality and likelihood scores on image and audio synthesis tasks (Sohl- Dickstein et al., 2015; Song & Ermon, 2019; Ho et al., 2020; Song et al., 2021b; Kingma et al., 2021; Song et al., 2021a). These models have delivered audio synthesis performance rivaling the quality of autoregressive models with substant
+
+## Method Signals
+- Keywords phat hien: diffusion
+
+## Conclusion / Findings
+rform well on such metrics. To resolve these questions, we present classiﬁer-free guidance, our guidance method which avoids any classiﬁer entirely. Rather than sampling in the direction of the gradient of an image classiﬁer, classiﬁer-free guidance instead mixes the score estimates of a conditional diffusion model and a jointly trained unconditional diffusion model. By sweeping over the mixing weight, we attain a FID/IS tradeoff similar to that attained by classiﬁer guidance. Our classiﬁer-free guidance results demonstrate that pure generative diffusion models are capable of synthesizing extremely high ﬁdelity samples possible with other types of generative models. 2 B ACKGROUND We train diffusion models in continuous time (Song et al., 2021b; Chen et al., 2021; Kingma et al., 2021): letting x ∼p(x) and z = {zλ |λ ∈ [λmin,λ max]} for hyperparametersλmin < λmax ∈ R, the forward processq(z|x) is the variance-preserving Markov process (Sohl-Dickstein et al., 2015): q(zλ|x) = N (αλx,σ 2 λI), whereα2 λ = 1/(1 +e−λ), σ2 λ = 1 −α2 λ (1) q(zλ|zλ′) = N ((αλ/αλ′)zλ′,σ 2 λ|λ′I), whereλ<λ ′, σ2 λ|λ′ = (1 −eλ−λ′ )σ2 λ (2) We will use the notation p(z) (orp(zλ)) to denote the marginal of z (or zλ) when x ∼ p(x) and z ∼q(z|x). Note thatλ = logα2 λ/σ2 λ, soλ can be interpreted as the log signal-to-noise ratio of zλ, and the forward process ru Figure 8: More examples of classiﬁer-free guidance on 128x128 ImageNet. Left: non-guided samples, right: classiﬁer-free guided samples withw = 3.0. 14
+
+## Relevance To KLTN
+- Bai nay duoc xep vao nhom diffusion_latent trong pipeline neural-symbolic topology-first.
+- Dung de doi chieu voi khoi tuong ung trong docs va Chapter 3/4.

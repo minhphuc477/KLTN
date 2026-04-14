@@ -1,0 +1,17 @@
+# Published as a conference paper at ICLR 2021 DENOISING DIFFUSION IMPLICIT MODELS Jiaming Song, Chenlin Meng & Stefano Ermon Stanford University {tsong,chenlin,ermon}@cs.stanford.ed
+
+- PDF: [song2021ddim.pdf](../../song2021ddim.pdf)
+- Topic: diffusion_latent
+
+## Abstract / Core Idea
+Published as a conference paper at ICLR 2021 DENOISING DIFFUSION IMPLICIT MODELS Jiaming Song, Chenlin Meng & Stefano Ermon Stanford University {tsong,chenlin,ermon}@cs.stanford.edu ABSTRACT Denoising diffusion probabilistic models (DDPMs) have achieved high qual- ity image generation without adversarial training, yet they require simulating a Markov chain for many steps in order to produce a sample. To accelerate sam- pling, we present denoising diffusion implicit models (DDIMs), a more efﬁcient class of iterative implicit probabilistic models with the same training procedure as DDPMs. In DDPMs, the generative process is deﬁned as the reverse of a particular Markovian diffusion process. We generalize DDPMs via a class of non-Markovian diffusion processes that lead to the same training objective. These non-Markovian processes can correspond to generative processes that are deterministic, giving rise to implicit models that produce high quality samples much faster. We empirically demonstrate that DDIMs can produce high quality samples 10× to 50× faster in terms of wall-clock time compared to DDPMs, allow us to trade off computation for sample quality, perform semantically meaningful image interpolation directly in the latent space, and reconstruct observations with very low error. 1 I NTRODUCTION Deep generative models have demonstrated the ability to produce high quality samples in many domains (Karras et al., 2020; van den Oord et al., 2016a). In terms of image generation, g
+
+## Method Signals
+- Keywords phat hien: diffusion
+
+## Conclusion / Findings
+s, unlike DDPMs which interpolates near the image space due to the stochastic generative process. 2 B ACKGROUND Given samples from a data distribution q(x0), we are interested in learning a model distribution pθ(x0) that approximatesq(x0) and is easy to sample from. Denoising diffusion probabilistic mod- els (DDPMs, Sohl-Dickstein et al. (2015); Ho et al. (2020)) are latent variable models of the form pθ(x0) = ∫ pθ(x0:T )dx1:T, where pθ(x0:T ) :=pθ(xT ) T∏ t=1 p(t) θ (xt−1|xt) (1) where x1,..., xT are latent variables in the same sample space as x0 (denoted asX ). The parame- tersθ are learned to ﬁt the data distributionq(x0) by maximizing a variational lower bound: max θ Eq(x0)[logpθ(x0)]≤ max θ Eq(x0,x1,...,xT ) [logpθ(x0:T )− logq(x1:T|x0)] (2) whereq(x1:T|x0) is some inference distribution over the latent variables. Unlike typical latent vari- able models (such as the variational autoencoder (Rezende et al., 2014)), DDPMs are learned with a ﬁxed (rather than trainable) inference procedureq(x1:T|x0), and latent variables are relatively high dimensional. For example, Ho et al. (2020) considered the following Markov chain with Gaussian transitions parameterized by a decreasing sequenceα1:T∈ (0, 1]T : q(x1:T|x0) := T∏ t=1 q(xt|xt−1), whereq(xt|xt−1) :=N (√ αt αt−1 xt−1, ( 1− αt αt−1 ) I ) (3) where the covariance matrix is ensured to have positive terms on its Published as a conference paper at ICLR 2021 Figure 13: More interpolations from the Church DDIM with dim(τ) = 50. 22
+
+## Relevance To KLTN
+- Bai nay duoc xep vao nhom diffusion_latent trong pipeline neural-symbolic topology-first.
+- Dung de doi chieu voi khoi tuong ung trong docs va Chapter 3/4.

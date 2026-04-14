@@ -1,0 +1,17 @@
+# I/O-Eﬃcient Algorithms for Topological Sort and Related Problems Nairen Cao∗ Jeremy T
+
+- PDF: [kahn1962topological.pdf](../../kahn1962topological.pdf)
+- Topic: misc_foundations
+
+## Abstract / Core Idea
+I/O-Eﬃcient Algorithms for Topological Sort and Related Problems Nairen Cao∗ Jeremy T. Fineman† Katina Russell‡ Eugene Yang§ Abstract This paper presents I/O-eﬃcient algorithms for topolog- ically sorting a directed acyclic graph and for the more general problem identifying and topologically sorting the strongly connected components of a directed graph G = (V,E ). Both algorithms are randomized and have I/O-costs O(sort (E)· poly(log V )), with high probabil- ity, where sort (E) = O(E B logM/B (E/B )) is the I/O cost of sorting an |E|-element array on a machine with size- B blocks and size-M cache/internal memory. These are the ﬁrst algorithms for these problems that do not incur at least one I/O per vertex, and as such these are the ﬁrst I/O-eﬃcient algorithms for sparse graphs. By ap- plying the technique of time-forward processing, these algorithms also imply I/O-eﬃcient algorithms for most problems on directed acyclic graphs, such as shortest paths, as well as the single-source reachability problem on arbitrary directed graphs. 1 Introduction Ullman and Yannakakis [25] and Chiang et al. [10] initiated the study of graph algorithms in the I/O model [2] over 20 years ago. Despite decades of research and many eﬃcient algorithms for undirected graphs, there are essentially no I/O-eﬃcient algorithms known for even the most basic problems on sparse directed graphs. Perhaps the most coveted is an algorithm for topologically sorting a directed acyclic graph (DAG). A topological s
+
+## Method Signals
+- Keywords phat hien: graph
+
+## Conclusion / Findings
+ths, with the same I/O cost. • Again applying time-forward processing [4,10], the SCC algorithm implies a solution to the single- source reachability problem on directed graphs. Speciﬁcally, given a directed graph (not necessarily acyclic) and source ve 445, 2003. [22] Ulrich Meyer and Norbert Zeh. I/O-eﬃcient undi- rected shortest paths with unbounded edge lengths. In Proceedings of the 14th Annual European Symposium on Algorithms , pages 540–551, 2006. [23] Kameshwar Munagala and Abhiram Ranade. I/O- complexity of graph algorithms. In Proceedings of the Tenth Annual ACM-SIAM Symposium on Discrete Algorithms, pages 687–694, 1999. [24] Robert Tarjan. Depth ﬁrst search and linear graph algorithms. Siam Journal on Computing , 1(2):146– 160, 1972. [25] Jeﬀrey D. Ullman and Mihalis Yannakakis. The in- put/output complexity of transitive closure. Annals of Mathematics and Artiﬁcial Intelligence , 3(2):331–360, 1991. [26] Jeﬀrey Scott Vitter. Algorithms and Data Structures for External Memory . 2008. [27] Norbert Zeh. I/O-eﬃcient graph algorithms. http:// cs.au.dk/ ~large/ioS05/Znotes.pdf . Accessed: 04- 06-2018. [28] Zhiwei Zhang, Jeﬀrey Xu Yu, Lu Qin, Lijun Chang, and Xuemin Lin. I/O eﬃcient: Computing SCCs in massive graphs. The VLDB Journal , 24(2):245–270, 2015. Copyright © 2019 by SIAM Unauthorized reproduction of this article is prohibited2070 Downloaded 07/21/22 to 128.84.125.138 . Redistribution subject to SIAM license or copyright; see https://epubs.siam.org/terms-privacy
+
+## Relevance To KLTN
+- Bai nay duoc xep vao nhom misc_foundations trong pipeline neural-symbolic topology-first.
+- Dung de doi chieu voi khoi tuong ung trong docs va Chapter 3/4.

@@ -1,0 +1,191 @@
+{
+  "total_missing_input": 18,
+  "downloaded_or_exists": 16,
+  "still_missing": 2,
+  "results": [
+    {
+      "type": "arxiv",
+      "id": "1807.03247",
+      "status": "exists",
+      "file": "PAPERS/an_intriguing_failing_of_convolutional_neural_networks_and_the_coordconv_solutio.pdf",
+      "title": "An Intriguing Failing of Convolutional Neural Networks and the CoordConv Solution",
+      "summary": "Few ideas have enjoyed as large an impact on deep learning as convolution. For any problem involving pixels or spatial representations, common intuition holds that convolutional neural networks may be appropriate. In this paper we show a striking counterexample to this intuition via the seemingly trivial coordinate transform problem, which simply requires learning a mapping between coordinates in (x,y) Cartesian space and one-hot pixel space. Although convolutional networks would seem appropriate for this task, we show that they fail spectacularly. We demonstrate and carefully analyze the failure first on a toy problem, at which point a simple fix becomes obvious. We call this solution CoordConv, which works by giving convolution access to its own input coordinates through the use of extra coordinate channels. Without sacrificing the computational and parametric efficiency of ordinary convolution, CoordConv allows networks to learn either complete translation invariance or varying degrees of translation dependence, as required by the end task. CoordConv solves the coordinate transform problem with perfect generalization and 150 times faster with 10--100 times fewer parameters than convolution. This stark contrast raises the question: to what extent has this inability of convolution persisted insidiously inside other tasks, subtly hampering performance from within? A complete answer to this question will require further investigation, but we show preliminary evidence that swapping convolution for CoordConv can improve models on a diverse set of tasks. Using CoordConv in a GAN produced less mode collapse as the transform between high-level spatial latents and pixels becomes easier to learn. A Faster R-CNN detection model trained on MNIST showed 24% better IOU when using CoordConv, and in the RL domain agents playing Atari games benefit significantly from the use of CoordConv layers.",
+      "attempts": [],
+      "error": ""
+    },
+    {
+      "type": "arxiv",
+      "id": "1906.00446",
+      "status": "exists",
+      "file": "PAPERS/generating_diverse_high_fidelity_images_with_vq_vae_2.pdf",
+      "title": "Generating Diverse High-Fidelity Images with VQ-VAE-2",
+      "summary": "We explore the use of Vector Quantized Variational AutoEncoder (VQ-VAE) models for large scale image generation. To this end, we scale and enhance the autoregressive priors used in VQ-VAE to generate synthetic samples of much higher coherence and fidelity than possible before. We use simple feed-forward encoder and decoder networks, making our model an attractive candidate for applications where the encoding and/or decoding speed is critical. Additionally, VQ-VAE requires sampling an autoregressive model only in the compressed latent space, which is an order of magnitude faster than sampling in the pixel space, especially for large images. We demonstrate that a multi-scale hierarchical organization of VQ-VAE, augmented with powerful priors over the latent codes, is able to generate samples with quality that rivals that of state of the art Generative Adversarial Networks on multifaceted datasets such as ImageNet, while not suffering from GAN's known shortcomings such as mode collapse and lack of diversity.",
+      "attempts": [],
+      "error": ""
+    },
+    {
+      "type": "arxiv",
+      "id": "2001.05065",
+      "status": "exists",
+      "file": "PAPERS/generative_adversarial_network_rooms_in_generative_graph_grammar_dungeons_for_th.pdf",
+      "title": "Generative Adversarial Network Rooms in Generative Graph Grammar Dungeons for The Legend of Zelda",
+      "summary": "Generative Adversarial Networks (GANs) have demonstrated their ability to learn patterns in data and produce new exemplars similar to, but different from, their training set in several domains, including video games. However, GANs have a fixed output size, so creating levels of arbitrary size for a dungeon crawling game is difficult. GANs also have trouble encoding semantic requirements that make levels interesting and playable. This paper combines a GAN approach to generating individual rooms with a graph grammar approach to combining rooms into a dungeon. The GAN captures design principles of individual rooms, but the graph grammar organizes rooms into a global layout with a sequence of obstacles determined by a designer. Room data from The Legend of Zelda is used to train the GAN. This approach is validated by a user study, showing that GAN dungeons are as enjoyable to play as a level from the original game, and levels generated with a graph grammar alone. However, GAN dungeons have rooms considered more complex, and plain graph grammar's dungeons are considered least complex and challenging. Only the GAN approach creates an extensive supply of both layouts and rooms, where rooms span across the spectrum of those seen in the training set to new creations merging design principles from multiple rooms.",
+      "attempts": [],
+      "error": ""
+    },
+    {
+      "type": "arxiv",
+      "id": "2001.09212",
+      "status": "exists",
+      "file": "PAPERS/pcgrl_procedural_content_generation_via_reinforcement_learning.pdf",
+      "title": "PCGRL: Procedural Content Generation via Reinforcement Learning",
+      "summary": "We investigate how reinforcement learning can be used to train level-designing agents. This represents a new approach to procedural content generation in games, where level design is framed as a game, and the content generator itself is learned. By seeing the design problem as a sequential task, we can use reinforcement learning to learn how to take the next action so that the expected final level quality is maximized. This approach can be used when few or no examples exist to train from, and the trained generator is very fast. We investigate three different ways of transforming two-dimensional level design problems into Markov decision processes and apply these to three game environments.",
+      "attempts": [],
+      "error": ""
+    },
+    {
+      "type": "arxiv",
+      "id": "2003.04389",
+      "status": "exists",
+      "file": "PAPERS/discovering_representations_for_black_box_optimization.pdf",
+      "title": "Discovering Representations for Black-box Optimization",
+      "summary": "The encoding of solutions in black-box optimization is a delicate, handcrafted balance between expressiveness and domain knowledge -- between exploring a wide variety of solutions, and ensuring that those solutions are useful. Our main insight is that this process can be automated by generating a dataset of high-performing solutions with a quality diversity algorithm (here, MAP-Elites), then learning a representation with a generative model (here, a Variational Autoencoder) from that dataset. Our second insight is that this representation can be used to scale quality diversity optimization to higher dimensions -- but only if we carefully mix solutions generated with the learned representation and those generated with traditional variation operators. We demonstrate these capabilities by learning an low-dimensional encoding for the inverse kinematics of a thousand joint planar arm. The results show that learned representations make it possible to solve high-dimensional problems with orders of magnitude fewer evaluations than the standard MAP-Elites, and that, once solved, the produced encoding can be used for rapid optimization of novel, but similar, tasks. The presented techniques not only scale up quality diversity algorithms to high dimensions, but show that black-box optimization encodings can be automatically learned, rather than hand designed.",
+      "attempts": [],
+      "error": ""
+    },
+    {
+      "type": "arxiv",
+      "id": "2012.09841",
+      "status": "exists",
+      "file": "PAPERS/taming_transformers_for_high_resolution_image_synthesis.pdf",
+      "title": "Taming Transformers for High-Resolution Image Synthesis",
+      "summary": "Designed to learn long-range interactions on sequential data, transformers continue to show state-of-the-art results on a wide variety of tasks. In contrast to CNNs, they contain no inductive bias that prioritizes local interactions. This makes them expressive, but also computationally infeasible for long sequences, such as high-resolution images. We demonstrate how combining the effectiveness of the inductive bias of CNNs with the expressivity of transformers enables them to model and thereby synthesize high-resolution images. We show how to (i) use CNNs to learn a context-rich vocabulary of image constituents, and in turn (ii) utilize transformers to efficiently model their composition within high-resolution images. Our approach is readily applied to conditional synthesis tasks, where both non-spatial information, such as object classes, and spatial information, such as segmentations, can control the generated image. In particular, we present the first results on semantically-guided synthesis of megapixel images with transformers and obtain the state of the art among autoregressive models on class-conditional ImageNet. Code and pretrained models can be found at https://github.com/CompVis/taming-transformers .",
+      "attempts": [],
+      "error": ""
+    },
+    {
+      "type": "arxiv",
+      "id": "2202.04200",
+      "status": "exists",
+      "file": "PAPERS/maskgit_masked_generative_image_transformer.pdf",
+      "title": "MaskGIT: Masked Generative Image Transformer",
+      "summary": "Generative transformers have experienced rapid popularity growth in the computer vision community in synthesizing high-fidelity and high-resolution images. The best generative transformer models so far, however, still treat an image naively as a sequence of tokens, and decode an image sequentially following the raster scan ordering (i.e. line-by-line). We find this strategy neither optimal nor efficient. This paper proposes a novel image synthesis paradigm using a bidirectional transformer decoder, which we term MaskGIT. During training, MaskGIT learns to predict randomly masked tokens by attending to tokens in all directions. At inference time, the model begins with generating all tokens of an image simultaneously, and then refines the image iteratively conditioned on the previous generation. Our experiments demonstrate that MaskGIT significantly outperforms the state-of-the-art transformer model on the ImageNet dataset, and accelerates autoregressive decoding by up to 64x. Besides, we illustrate that MaskGIT can be easily extended to various image editing tasks, such as inpainting, extrapolation, and image manipulation.",
+      "attempts": [],
+      "error": ""
+    },
+    {
+      "type": "arxiv",
+      "id": "2303.01469",
+      "status": "exists",
+      "file": "PAPERS/consistency_models.pdf",
+      "title": "Consistency Models",
+      "summary": "Diffusion models have significantly advanced the fields of image, audio, and video generation, but they depend on an iterative sampling process that causes slow generation. To overcome this limitation, we propose consistency models, a new family of models that generate high quality samples by directly mapping noise to data. They support fast one-step generation by design, while still allowing multistep sampling to trade compute for sample quality. They also support zero-shot data editing, such as image inpainting, colorization, and super-resolution, without requiring explicit training on these tasks. Consistency models can be trained either by distilling pre-trained diffusion models, or as standalone generative models altogether. Through extensive experiments, we demonstrate that they outperform existing distillation techniques for diffusion models in one- and few-step sampling, achieving the new state-of-the-art FID of 3.55 on CIFAR-10 and 6.20 on ImageNet 64x64 for one-step generation. When trained in isolation, consistency models become a new family of generative models that can outperform existing one-step, non-adversarial generative models on standard benchmarks such as CIFAR-10, ImageNet 64x64 and LSUN 256x256.",
+      "attempts": [],
+      "error": ""
+    },
+    {
+      "type": "arxiv",
+      "id": "2303.08137",
+      "status": "exists",
+      "file": "PAPERS/layoutdm_discrete_diffusion_model_for_controllable_layout_generation.pdf",
+      "title": "LayoutDM: Discrete Diffusion Model for Controllable Layout Generation",
+      "summary": "Controllable layout generation aims at synthesizing plausible arrangement of element bounding boxes with optional constraints, such as type or position of a specific element. In this work, we try to solve a broad range of layout generation tasks in a single model that is based on discrete state-space diffusion models. Our model, named LayoutDM, naturally handles the structured layout data in the discrete representation and learns to progressively infer a noiseless layout from the initial input, where we model the layout corruption process by modality-wise discrete diffusion. For conditional generation, we propose to inject layout constraints in the form of masking or logit adjustment during inference. We show in the experiments that our LayoutDM successfully generates high-quality layouts and outperforms both task-specific and task-agnostic baselines on several layout tasks.",
+      "attempts": [],
+      "error": ""
+    },
+    {
+      "type": "arxiv",
+      "id": "2310.04378",
+      "status": "exists",
+      "file": "PAPERS/latent_consistency_models_synthesizing_high_resolution_images_with_few_step_infe.pdf",
+      "title": "Latent Consistency Models: Synthesizing High-Resolution Images with Few-Step Inference",
+      "summary": "Latent Diffusion models (LDMs) have achieved remarkable results in synthesizing high-resolution images. However, the iterative sampling process is computationally intensive and leads to slow generation. Inspired by Consistency Models (song et al.), we propose Latent Consistency Models (LCMs), enabling swift inference with minimal steps on any pre-trained LDMs, including Stable Diffusion (rombach et al). Viewing the guided reverse diffusion process as solving an augmented probability flow ODE (PF-ODE), LCMs are designed to directly predict the solution of such ODE in latent space, mitigating the need for numerous iterations and allowing rapid, high-fidelity sampling. Efficiently distilled from pre-trained classifier-free guided diffusion models, a high-quality 768 x 768 2~4-step LCM takes only 32 A100 GPU hours for training. Furthermore, we introduce Latent Consistency Fine-tuning (LCF), a novel method that is tailored for fine-tuning LCMs on customized image datasets. Evaluation on the LAION-5B-Aesthetics dataset demonstrates that LCMs achieve state-of-the-art text-to-image generation performance with few-step inference. Project Page: https://latent-consistency-models.github.io/",
+      "attempts": [],
+      "error": ""
+    },
+    {
+      "type": "arxiv",
+      "id": "2406.11837",
+      "status": "exists",
+      "file": "PAPERS/scaling_the_codebook_size_of_vqgan_to_100_000_with_a_utilization_rate_of_99.pdf",
+      "title": "Scaling the Codebook Size of VQGAN to 100,000 with a Utilization Rate of 99%",
+      "summary": "In the realm of image quantization exemplified by VQGAN, the process encodes images into discrete tokens drawn from a codebook with a predefined size. Recent advancements, particularly with LLAMA 3, reveal that enlarging the codebook significantly enhances model performance. However, VQGAN and its derivatives, such as VQGAN-FC (Factorized Codes) and VQGAN-EMA, continue to grapple with challenges related to expanding the codebook size and enhancing codebook utilization. For instance, VQGAN-FC is restricted to learning a codebook with a maximum size of 16,384, maintaining a typically low utilization rate of less than 12% on ImageNet. In this work, we propose a novel image quantization model named VQGAN-LC (Large Codebook), which extends the codebook size to 100,000, achieving an utilization rate exceeding 99%. Unlike previous methods that optimize each codebook entry, our approach begins with a codebook initialized with 100,000 features extracted by a pre-trained vision encoder. Optimization then focuses on training a projector that aligns the entire codebook with the feature distributions of the encoder in VQGAN-LC. We demonstrate the superior performance of our model over its counterparts across a variety of tasks, including image reconstruction, image classification, auto-regressive image generation using GPT, and image creation with diffusion- and flow-based generative models. Code and models are available at https://github.com/zh460045050/VQGAN-LC.",
+      "attempts": [],
+      "error": ""
+    },
+    {
+      "type": "arxiv",
+      "id": "2503.14760",
+      "status": "exists",
+      "file": "PAPERS/validation_of_human_pose_estimation_and_human_mesh_recovery_for_extracting_clini.pdf",
+      "title": "Validation of Human Pose Estimation and Human Mesh Recovery for Extracting Clinically Relevant Motion Data from Videos",
+      "summary": "This work aims to discuss the current landscape of kinematic analysis tools, ranging from the state-of-the-art in sports biomechanics such as inertial measurement units (IMUs) and retroreflective marker-based optical motion capture (MoCap) to more novel approaches from the field of computing such as human pose estimation and human mesh recovery. Primarily, this comparative analysis aims to validate the use of marker-less MoCap techniques in a clinical setting by showing that these marker-less techniques are within a reasonable range for kinematics analysis compared to the more cumbersome and less portable state-of-the-art tools. Not only does marker-less motion capture using human pose estimation produce results in-line with the results of both the IMU and MoCap kinematics but also benefits from a reduced set-up time and reduced practical knowledge and expertise to set up. Overall, while there is still room for improvement when it comes to the quality of the data produced, we believe that this compromise is within the room of error that these low-speed actions that are used in small clinical tests.",
+      "attempts": [],
+      "error": ""
+    },
+    {
+      "type": "arxiv",
+      "id": "2503.21474",
+      "status": "exists",
+      "file": "PAPERS/the_procedural_content_generation_benchmark_an_open_source_testbed_for_generativ.pdf",
+      "title": "The Procedural Content Generation Benchmark: An Open-source Testbed for Generative Challenges in Games",
+      "summary": "This paper introduces the Procedural Content Generation Benchmark for evaluating generative algorithms on different game content creation tasks. The benchmark comes with 12 game-related problems with multiple variants on each problem. Problems vary from creating levels of different kinds to creating rule sets for simple arcade games. Each problem has its own content representation, control parameters, and evaluation metrics for quality, diversity, and controllability. This benchmark is intended as a first step towards a standardized way of comparing generative algorithms. We use the benchmark to score three baseline algorithms: a random generator, an evolution strategy, and a genetic algorithm. Results show that some problems are easier to solve than others, as well as the impact the chosen objective has on quality, diversity, and controllability of the generated artifacts.",
+      "attempts": [],
+      "error": ""
+    },
+    {
+      "type": "arxiv",
+      "id": "2507.00184",
+      "status": "exists",
+      "file": "PAPERS/text_to_level_diffusion_models_with_various_text_encoders_for_super_mario_bros.pdf",
+      "title": "Text-to-Level Diffusion Models With Various Text Encoders for Super Mario Bros",
+      "summary": "Recent research shows how diffusion models can unconditionally generate tile-based game levels, but use of diffusion models for text-to-level generation is underexplored. There are practical considerations for creating a usable model: caption/level pairs are needed, as is a text embedding model, and a way of generating entire playable levels, rather than individual scenes. We present strategies to automatically assign descriptive captions to an existing dataset, and train diffusion models using both pretrained text encoders and simple transformer models trained from scratch. Captions are automatically assigned to generated scenes so that the degree of overlap between input and output captions can be compared. We also assess the diversity and playability of the resulting level scenes. Results are compared with an unconditional diffusion model and a generative adversarial network, as well as the text-to-level approaches Five-Dollar Model and MarioGPT. Notably, the best diffusion model uses a simple transformer model for text embedding, and takes less time to train than diffusion models employing more complex text encoders, indicating that reliance on larger language models is not necessary. We also present a GUI allowing designers to construct long levels from model-generated scenes.",
+      "attempts": [],
+      "error": ""
+    },
+    {
+      "type": "doi",
+      "id": "10.1109/CVPR52688.2022.01103",
+      "status": "exists",
+      "file": "PAPERS/maskgit_masked_generative_image_transformer.pdf",
+      "title": "MaskGIT: Masked Generative Image Transformer",
+      "summary": "Generative transformers have experienced rapid popularity growth in the computer vision community in synthesizing high-fidelity and high-resolution images. The best generative transformer models so far, however, still treat an image naively as a sequence of tokens, and decode an image sequentially following the raster scan ordering (i.e. line-by-line). We find this strategy neither optimal nor efficient. This paper proposes a novel image synthesis paradigm using a bidirectional transformer decoder, which we term MaskGIT. During training, MaskGIT learns to predict randomly masked tokens by attending to tokens in all directions. At inference time, the model begins with generating all tokens of an image simultaneously, and then refines the image iteratively conditioned on the previous generation. Our experiments demonstrate that MaskGIT significantly outperforms the state-of-the-art transformer model on the ImageNet dataset, and accelerates autoregressive decoding by up to 48x. Besides, we illustrate that MaskGIT can be easily extended to various image editing tasks, such as inpainting, extrapolation, and image manipulation. Project page: masked-generative-image-transformer.github.io.",
+      "attempts": [],
+      "error": ""
+    },
+    {
+      "type": "doi",
+      "id": "10.1109/TCIAIG.2010.2067210",
+      "status": "failed",
+      "file": null,
+      "title": "",
+      "summary": "",
+      "attempts": [
+        "https://doi.org/10.1109/TCIAIG.2010.2067210"
+      ],
+      "error": "HTTPError: HTTP Error 404: Not Found"
+    },
+    {
+      "type": "doi",
+      "id": "10.1609/aaai.v38i9.28865",
+      "status": "exists",
+      "file": "PAPERS/procedural_level_generation_with_diffusion_models_from_a_single_example.pdf",
+      "title": "Procedural Level Generation with Diffusion Models from a Single Example",
+      "summary": "Level generation is a central focus of Procedural Content Generation (PCG), yet deep learning-based approaches are limited by scarce training data, i.e., human-designed levels. Despite being a dominant framework, Generative Adversarial Networks (GANs) exhibit a substantial quality gap between generated and human-authored levels, alongside rising training costs, particularly with increasing token complexity. In this paper, we introduce a diffusion-based generative model that learns from just one example. Our approach involves two core components: 1) an efficient yet expressive level representation, and 2) a latent denoising network with constrained receptive fields. To start with, our method utilizes token semantic labels, similar to word embeddings, to provide dense representations. This strategy not only surpasses one-hot encoding in representing larger game levels but also improves stability and accelerates convergence in latent diffusion. In addition, we adapt the denoising network architecture to confine the receptive field to localized patches of the data, aiming to facilitate single-example learning. Extensive experiments demonstrate that our model is capable of generating stylistically congruent samples of arbitrary sizes compared to manually designed levels. It suits a wide range of level structures with fewer artifacts than GAN-based approaches. The source code is available at https://github.com/shiqi-dai/diffusioncraft.",
+      "attempts": [],
+      "error": ""
+    },
+    {
+      "type": "doi",
+      "id": "10.1609/aiide.v13i1.12899",
+      "status": "failed",
+      "file": null,
+      "title": "",
+      "summary": "",
+      "attempts": [
+        "https://doi.org/10.1609/aiide.v13i1.12899"
+      ],
+      "error": "HTTPError: HTTP Error 404: Not Found"
+    }
+  ]
+}

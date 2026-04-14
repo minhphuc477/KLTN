@@ -33,6 +33,7 @@ from src.pipeline.room_topology_conditioning import (
     DEFAULT_SEMANTIC_PUZZLE_OFFSET,
     DEFAULT_SEMANTIC_ROLE_PRIOR_STRENGTH,
     build_topology_anchor_policy_metadata,
+    build_topology_loss_focus_map,
 )
 from src.train_diffusion import DiffusionTrainer, DiffusionTrainingConfig
 from src.train_vqvae import split_dataset_for_vqvae_validation
@@ -78,6 +79,10 @@ class FastSamplerTrainingConfig:
         lora_alpha: float = 8.0,
         prediction_loss_weight: float = 0.25,
         decode_alignment_weight: float = 0.25,
+        topology_alignment_weight: float = 0.25,
+        topology_marker_weight: float = 2.0,
+        topology_trace_weight: float = 0.75,
+        topology_focus_dilation: int = 1,
         validation_fraction: float = 0.1,
         validation_max_batches: int = 16,
         best_checkpoint_metric: str = "val_decode_ce_loss",
@@ -117,12 +122,22 @@ class FastSamplerTrainingConfig:
         self.lora_alpha = float(lora_alpha)
         self.prediction_loss_weight = float(max(0.0, prediction_loss_weight))
         self.decode_alignment_weight = float(max(0.0, decode_alignment_weight))
+        self.topology_alignment_weight = float(max(0.0, topology_alignment_weight))
+        self.topology_marker_weight = float(max(0.0, topology_marker_weight))
+        self.topology_trace_weight = float(max(0.0, topology_trace_weight))
+        self.topology_focus_dilation = int(max(0, topology_focus_dilation))
         self.validation_fraction = float(max(0.0, min(0.5, validation_fraction)))
         self.validation_max_batches = int(max(1, validation_max_batches))
         self.best_checkpoint_metric = str(best_checkpoint_metric).strip().lower()
-        if self.best_checkpoint_metric not in {"val_loss", "val_decode_ce_loss", "train_loss"}:
+        if self.best_checkpoint_metric not in {
+            "val_loss",
+            "val_decode_ce_loss",
+            "val_topology_decode_ce_loss",
+            "train_loss",
+        }:
             raise ValueError(
-                "best_checkpoint_metric must be 'val_loss', 'val_decode_ce_loss', or 'train_loss'."
+                "best_checkpoint_metric must be 'val_loss', 'val_decode_ce_loss', "
+                "'val_topology_decode_ce_loss', or 'train_loss'."
             )
         self.save_every = int(max(1, save_every))
         self.keep_last = int(max(0, keep_last))
@@ -179,6 +194,10 @@ def fast_sampler_training_kwargs_from_resolved_config(config: Dict[str, Any]) ->
         "lora_alpha": stage["lora_alpha"],
         "prediction_loss_weight": stage["prediction_loss_weight"],
         "decode_alignment_weight": stage.get("decode_alignment_weight", 0.25),
+        "topology_alignment_weight": stage.get("topology_alignment_weight", 0.25),
+        "topology_marker_weight": stage.get("topology_marker_weight", 2.0),
+        "topology_trace_weight": stage.get("topology_trace_weight", 0.75),
+        "topology_focus_dilation": stage.get("topology_focus_dilation", 1),
         "validation_fraction": stage.get("validation_fraction", 0.1),
         "validation_max_batches": stage.get("validation_max_batches", 16),
         "best_checkpoint_metric": stage.get("best_checkpoint_metric", "val_decode_ce_loss"),
@@ -215,6 +234,10 @@ def _legacy_fast_sampler_overrides_from_args(args: argparse.Namespace) -> Dict[s
     _set("lora_rank", getattr(args, "lora_rank", None))
     _set("lora_alpha", getattr(args, "lora_alpha", None))
     _set("decode_alignment_weight", getattr(args, "decode_alignment_weight", None))
+    _set("topology_alignment_weight", getattr(args, "topology_alignment_weight", None))
+    _set("topology_marker_weight", getattr(args, "topology_marker_weight", None))
+    _set("topology_trace_weight", getattr(args, "topology_trace_weight", None))
+    _set("topology_focus_dilation", getattr(args, "topology_focus_dilation", None))
     _set("validation_fraction", getattr(args, "validation_fraction", None))
     _set("validation_max_batches", getattr(args, "validation_max_batches", None))
     _set("best_checkpoint_metric", getattr(args, "best_checkpoint_metric", None))
@@ -361,6 +384,42 @@ class ConsistencyLoRATrainer:
         diffusion_graph_data = self.base_bundle._stack_diffusion_graph_batch(graph_list)
         return conditioning, diffusion_graph_data
 
+    def _topology_focus_map(
+        self,
+        graph_list: Optional[List[dict]],
+        batch_size: int,
+        *,
+        device: torch.device,
+    ) -> Optional[torch.Tensor]:
+        if (
+            not graph_list
+            or float(getattr(self.config, "topology_alignment_weight", 0.0)) <= 0.0
+        ):
+            return None
+        topo_maps: List[torch.Tensor] = []
+        for graph_dict in graph_list:
+            topo = graph_dict.get("room_topology_map")
+            if topo is None:
+                return None
+            if not isinstance(topo, torch.Tensor):
+                topo = torch.as_tensor(topo)
+            if topo.dim() == 4:
+                if int(topo.shape[0]) != 1:
+                    return None
+                topo = topo.squeeze(0)
+            if topo.dim() != 3:
+                return None
+            topo_maps.append(topo.to(device=device, dtype=torch.float32))
+        if len(topo_maps) != int(batch_size):
+            return None
+        stacked = torch.stack(topo_maps, dim=0)
+        return build_topology_loss_focus_map(
+            stacked,
+            marker_weight=float(getattr(self.config, "topology_marker_weight", 2.0)),
+            trace_weight=float(getattr(self.config, "topology_trace_weight", 0.75)),
+            dilation=int(getattr(self.config, "topology_focus_dilation", 1)),
+        )
+
     def distill_step(
         self,
         real_maps: torch.Tensor,
@@ -387,14 +446,29 @@ class ConsistencyLoRATrainer:
         x0_loss = F.mse_loss(student_x0, teacher_x0)
         pred_loss = F.mse_loss(student_pred, teacher_pred)
         decode_ce_loss = torch.zeros((), device=self.device, dtype=student_x0.dtype)
+        topology_decode_ce_loss = torch.zeros((), device=self.device, dtype=student_x0.dtype)
         if self.config.decode_alignment_weight > 0.0:
             target_tiles = self._room_tile_targets(real_maps)
             student_logits = self.base_bundle.vqvae.decode(student_x0)
             decode_ce_loss = F.cross_entropy(student_logits, target_tiles)
+            focus_map = self._topology_focus_map(graph_list, batch_size, device=target_tiles.device)
+            if focus_map is not None and bool((focus_map > 0).any()):
+                ce_map = F.cross_entropy(student_logits, target_tiles, reduction="none")
+                denom = focus_map.sum().clamp(min=1.0)
+                topology_decode_ce_loss = (ce_map * focus_map).sum() / denom
+        elif self.config.topology_alignment_weight > 0.0:
+            target_tiles = self._room_tile_targets(real_maps)
+            student_logits = self.base_bundle.vqvae.decode(student_x0)
+            focus_map = self._topology_focus_map(graph_list, batch_size, device=target_tiles.device)
+            if focus_map is not None and bool((focus_map > 0).any()):
+                ce_map = F.cross_entropy(student_logits, target_tiles, reduction="none")
+                denom = focus_map.sum().clamp(min=1.0)
+                topology_decode_ce_loss = (ce_map * focus_map).sum() / denom
         loss = (
             x0_loss
             + (self.config.prediction_loss_weight * pred_loss)
             + (self.config.decode_alignment_weight * decode_ce_loss)
+            + (self.config.topology_alignment_weight * topology_decode_ce_loss)
         )
 
         self.optimizer.zero_grad(set_to_none=True)
@@ -412,6 +486,7 @@ class ConsistencyLoRATrainer:
             "x0_loss": float(x0_loss.item()),
             "prediction_loss": float(pred_loss.item()),
             "decode_ce_loss": float(decode_ce_loss.item()),
+            "topology_decode_ce_loss": float(topology_decode_ce_loss.item()),
         }
 
     @torch.no_grad()
@@ -428,6 +503,7 @@ class ConsistencyLoRATrainer:
             "val_x0_loss": 0.0,
             "val_prediction_loss": 0.0,
             "val_decode_ce_loss": 0.0,
+            "val_topology_decode_ce_loss": 0.0,
         }
         count = 0
         for batch_idx, batch_data in enumerate(dataloader):
@@ -486,20 +562,36 @@ class ConsistencyLoRATrainer:
         x0_loss = F.mse_loss(student_x0, teacher_x0)
         pred_loss = F.mse_loss(student_pred, teacher_pred)
         decode_ce_loss = torch.zeros((), device=self.device, dtype=student_x0.dtype)
+        topology_decode_ce_loss = torch.zeros((), device=self.device, dtype=student_x0.dtype)
         if self.config.decode_alignment_weight > 0.0:
             target_tiles = self._room_tile_targets(real_maps)
             student_logits = self.base_bundle.vqvae.decode(student_x0)
             decode_ce_loss = F.cross_entropy(student_logits, target_tiles)
+            focus_map = self._topology_focus_map(graph_list, batch_size, device=target_tiles.device)
+            if focus_map is not None and bool((focus_map > 0).any()):
+                ce_map = F.cross_entropy(student_logits, target_tiles, reduction="none")
+                denom = focus_map.sum().clamp(min=1.0)
+                topology_decode_ce_loss = (ce_map * focus_map).sum() / denom
+        elif self.config.topology_alignment_weight > 0.0:
+            target_tiles = self._room_tile_targets(real_maps)
+            student_logits = self.base_bundle.vqvae.decode(student_x0)
+            focus_map = self._topology_focus_map(graph_list, batch_size, device=target_tiles.device)
+            if focus_map is not None and bool((focus_map > 0).any()):
+                ce_map = F.cross_entropy(student_logits, target_tiles, reduction="none")
+                denom = focus_map.sum().clamp(min=1.0)
+                topology_decode_ce_loss = (ce_map * focus_map).sum() / denom
         loss = (
             x0_loss
             + (self.config.prediction_loss_weight * pred_loss)
             + (self.config.decode_alignment_weight * decode_ce_loss)
+            + (self.config.topology_alignment_weight * topology_decode_ce_loss)
         )
         return {
             "val_loss": float(loss.item()),
             "val_x0_loss": float(x0_loss.item()),
             "val_prediction_loss": float(pred_loss.item()),
             "val_decode_ce_loss": float(decode_ce_loss.item()),
+            "val_topology_decode_ce_loss": float(topology_decode_ce_loss.item()),
         }
 
     def save_checkpoint(self, path: str, metrics: Optional[Dict[str, Any]] = None) -> None:
@@ -513,6 +605,10 @@ class ConsistencyLoRATrainer:
             target_modules=DEFAULT_LORA_TARGETS,
             metrics=metrics,
             distillation_type="consistency_lora",
+            topology_alignment_weight=float(getattr(self.config, "topology_alignment_weight", 0.0)),
+            topology_marker_weight=float(getattr(self.config, "topology_marker_weight", 2.0)),
+            topology_trace_weight=float(getattr(self.config, "topology_trace_weight", 0.75)),
+            topology_focus_dilation=int(getattr(self.config, "topology_focus_dilation", 1)),
             topology_anchor_policy=build_topology_anchor_policy_metadata(
                 semantic_role_prior_strength=float(
                     getattr(self.config, "semantic_role_prior_strength", DEFAULT_SEMANTIC_ROLE_PRIOR_STRENGTH)
@@ -527,6 +623,17 @@ class ConsistencyLoRATrainer:
         )
 
     def save_resume_checkpoint(self, path: str, metrics: Optional[Dict[str, Any]] = None) -> None:
+        topology_anchor_policy = build_topology_anchor_policy_metadata(
+            semantic_role_prior_strength=float(
+                getattr(self.config, "semantic_role_prior_strength", DEFAULT_SEMANTIC_ROLE_PRIOR_STRENGTH)
+            ),
+            semantic_puzzle_offset=int(
+                getattr(self.config, "semantic_puzzle_offset", DEFAULT_SEMANTIC_PUZZLE_OFFSET)
+            ),
+            topology_supervision_mode=str(
+                getattr(self.config, "topology_supervision_mode", "runtime_aligned")
+            ),
+        )
         payload = {
             "epoch": int(self.epoch),
             "global_step": int(self.global_step),
@@ -540,6 +647,11 @@ class ConsistencyLoRATrainer:
                 "num_inference_steps": int(self.config.num_inference_steps),
                 "lora_rank": int(self.config.lora_rank),
                 "lora_alpha": float(self.config.lora_alpha),
+                "topology_alignment_weight": float(getattr(self.config, "topology_alignment_weight", 0.0)),
+                "topology_marker_weight": float(getattr(self.config, "topology_marker_weight", 2.0)),
+                "topology_trace_weight": float(getattr(self.config, "topology_trace_weight", 0.75)),
+                "topology_focus_dilation": int(getattr(self.config, "topology_focus_dilation", 1)),
+                "topology_anchor_policy": dict(topology_anchor_policy),
                 "target_modules": [str(t) for t in DEFAULT_LORA_TARGETS],
             },
         }
@@ -551,6 +663,10 @@ class ConsistencyLoRATrainer:
                 "distillation_type": "consistency_lora",
                 "num_inference_steps": int(self.config.num_inference_steps),
                 "lora_rank": int(self.config.lora_rank),
+                "topology_alignment_weight": float(getattr(self.config, "topology_alignment_weight", 0.0)),
+                "topology_marker_weight": float(getattr(self.config, "topology_marker_weight", 2.0)),
+                "topology_trace_weight": float(getattr(self.config, "topology_trace_weight", 0.75)),
+                "topology_focus_dilation": int(getattr(self.config, "topology_focus_dilation", 1)),
             },
             extra={
                 "epoch": int(self.epoch),
@@ -558,17 +674,7 @@ class ConsistencyLoRATrainer:
                 "base_diffusion_checkpoint": str(self.config.base_diffusion_checkpoint),
                 "checkpoint_kind": "resume",
                 "contains": ["lora", "optimizer"],
-                "topology_anchor_policy": build_topology_anchor_policy_metadata(
-                    semantic_role_prior_strength=float(
-                        getattr(self.config, "semantic_role_prior_strength", DEFAULT_SEMANTIC_ROLE_PRIOR_STRENGTH)
-                    ),
-                    semantic_puzzle_offset=int(
-                        getattr(self.config, "semantic_puzzle_offset", DEFAULT_SEMANTIC_PUZZLE_OFFSET)
-                    ),
-                    topology_supervision_mode=str(
-                        getattr(self.config, "topology_supervision_mode", "runtime_aligned")
-                    ),
-                ),
+                "topology_anchor_policy": dict(topology_anchor_policy),
             },
         )
         log_checkpoint_artifact(
@@ -640,6 +746,16 @@ def _create_fast_sampler_dataloaders(
     return train_loader, val_loader, eval_split_name, len(train_dataset), len(eval_source)
 
 
+def _resolve_fast_sampler_best_metric_name(config: FastSamplerTrainingConfig) -> str:
+    if config.best_checkpoint_metric == "train_loss":
+        return "train_loss"
+    if config.best_checkpoint_metric == "val_topology_decode_ce_loss":
+        return "val_topology_decode_ce_loss"
+    if config.best_checkpoint_metric == "val_decode_ce_loss":
+        return "val_decode_ce_loss"
+    return "val_loss"
+
+
 def reevaluate_fast_sampler_checkpoint_candidates(
     config: FastSamplerTrainingConfig,
     *,
@@ -667,7 +783,9 @@ def reevaluate_fast_sampler_checkpoint_candidates(
 
     eval_seed = int(config.seed) + 10_000
     rankings: List[Dict[str, Any]] = []
-    metric_name = "val_decode_ce_loss" if config.best_checkpoint_metric == "val_decode_ce_loss" else "val_loss"
+    metric_name = _resolve_fast_sampler_best_metric_name(config)
+    if metric_name == "train_loss":
+        metric_name = "val_loss"
     best_path: Optional[Path] = None
     best_metric_value = float("inf")
 
@@ -678,7 +796,12 @@ def reevaluate_fast_sampler_checkpoint_candidates(
             max_batches=config.validation_max_batches,
             eval_seed=eval_seed,
         )
-        metric_value = float(metrics["val_decode_ce_loss"] if metric_name == "val_decode_ce_loss" else metrics["val_loss"])
+        if metric_name == "val_topology_decode_ce_loss":
+            metric_value = float(metrics["val_topology_decode_ce_loss"])
+        elif metric_name == "val_decode_ce_loss":
+            metric_value = float(metrics["val_decode_ce_loss"])
+        else:
+            metric_value = float(metrics["val_loss"])
         rankings.append(
             {
                 "checkpoint": candidate.name,
@@ -740,7 +863,7 @@ def train_fast_sampler(config: FastSamplerTrainingConfig) -> ConsistencyLoRATrai
         experiment_name="fast_sampler_training",
     )
     if float(getattr(config, "validation_fraction", 0.0)) > 0.0:
-        best_metric_name = "val_decode_ce_loss" if config.best_checkpoint_metric == "val_decode_ce_loss" else "val_loss"
+        best_metric_name = _resolve_fast_sampler_best_metric_name(config)
     else:
         best_metric_name = "train_loss"
     if config.best_checkpoint_metric == "train_loss":
@@ -777,6 +900,7 @@ def train_fast_sampler(config: FastSamplerTrainingConfig) -> ConsistencyLoRATrai
             "x0_loss": 0.0,
             "prediction_loss": 0.0,
             "decode_ce_loss": 0.0,
+            "topology_decode_ce_loss": 0.0,
         }
         count = 0
         for batch_idx, batch_data in enumerate(train_loader):
@@ -790,11 +914,12 @@ def train_fast_sampler(config: FastSamplerTrainingConfig) -> ConsistencyLoRATrai
             count += 1
             if batch_idx % 10 == 0:
                 logger.debug(
-                    "Fast sampler batch %d: loss=%.4f x0=%.4f pred=%.4f",
+                    "Fast sampler batch %d: loss=%.4f x0=%.4f pred=%.4f topo_ce=%.4f",
                     batch_idx,
                     step_metrics["loss"],
                     step_metrics["x0_loss"],
                     step_metrics["prediction_loss"],
+                    step_metrics["topology_decode_ce_loss"],
                 )
 
         train_metrics = {k: (v / max(1, count)) for k, v in running.items()}
@@ -806,12 +931,13 @@ def train_fast_sampler(config: FastSamplerTrainingConfig) -> ConsistencyLoRATrai
         metrics = {"epoch": epoch, "eval_split": eval_split_name, **train_metrics, **val_metrics}
         metrics_logger.log(metrics)
         logger.info(
-            "Fast sampler epoch %d/%d: loss=%.4f val_loss=%.4f val_decode_ce=%.4f",
+            "Fast sampler epoch %d/%d: loss=%.4f val_loss=%.4f val_decode_ce=%.4f val_topo_ce=%.4f",
             epoch + 1,
             config.epochs,
             train_metrics["loss"],
             val_metrics["val_loss"],
             val_metrics["val_decode_ce_loss"],
+            val_metrics["val_topology_decode_ce_loss"],
         )
 
         if (epoch + 1) % config.save_every == 0:
@@ -821,7 +947,9 @@ def train_fast_sampler(config: FastSamplerTrainingConfig) -> ConsistencyLoRATrai
                 pattern="fast_sampler_resume_epoch_*.pth",
                 keep_last=int(getattr(config, "keep_last", 2)),
             )
-        if best_metric_name == "val_decode_ce_loss":
+        if best_metric_name == "val_topology_decode_ce_loss":
+            current_metric_value = float(val_metrics["val_topology_decode_ce_loss"])
+        elif best_metric_name == "val_decode_ce_loss":
             current_metric_value = float(val_metrics["val_decode_ce_loss"])
         elif best_metric_name == "val_loss":
             current_metric_value = float(val_metrics["val_loss"])
@@ -872,12 +1000,16 @@ def main() -> None:
     parser.add_argument("--lora-rank", type=int, default=None)
     parser.add_argument("--lora-alpha", type=float, default=None)
     parser.add_argument("--decode-alignment-weight", type=float, default=None)
+    parser.add_argument("--topology-alignment-weight", type=float, default=None)
+    parser.add_argument("--topology-marker-weight", type=float, default=None)
+    parser.add_argument("--topology-trace-weight", type=float, default=None)
+    parser.add_argument("--topology-focus-dilation", type=int, default=None)
     parser.add_argument("--validation-fraction", type=float, default=None)
     parser.add_argument("--validation-max-batches", type=int, default=None)
     parser.add_argument(
         "--best-checkpoint-metric",
         type=str,
-        choices=("val_loss", "val_decode_ce_loss", "train_loss"),
+        choices=("val_loss", "val_decode_ce_loss", "val_topology_decode_ce_loss", "train_loss"),
         default=None,
     )
     parser.add_argument("--save-every", type=int, default=None)

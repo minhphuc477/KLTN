@@ -264,6 +264,6 @@ The grammar and constraints follow lock-and-key mission-graph patterns common in
 - Zelda-style gating and progression pedagogy.
 
 References:
-- Dormans, J. et al. *Generating Missions and Spaces for Adaptable Play Experiences* (2011). DOI: `10.1109/TCIAIG.2010.2067210`
+- Dormans, J. et al. *Generating Missions and Spaces for Adaptable Play Experiences* (2011). DOI: `10.1109/TCIAIG.2011.2149523`
 - Summerville et al. *The Video Game Level Corpus* (2016): https://arxiv.org/abs/1606.07487
 - VGLC repository: https://github.com/TheVGLC/TheVGLC

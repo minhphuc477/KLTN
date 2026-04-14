@@ -29,6 +29,7 @@ from src.train_diffusion import (
     build_diffusion_training_config_from_args,
     diffusion_training_kwargs_from_resolved_config,
 )
+from src.core.definitions import ROOM_TOPOLOGY_CHANNEL_COUNT
 from src.train_lcm import build_fast_sampler_training_config_from_args, fast_sampler_training_kwargs_from_resolved_config
 from src.train_masked_room import masked_room_training_kwargs_from_resolved_config
 from src.train_vqvae import build_vqvae_training_args_from_args, vqvae_training_kwargs_from_resolved_config
@@ -158,6 +159,10 @@ def test_default_config_uses_small_data_recommended_room_model_profile():
     assert resolved["diffusion"]["keep_last"] == 2
     assert resolved["fast_sampler"]["keep_last"] == 2
     assert resolved["fast_sampler"]["decode_alignment_weight"] == pytest.approx(0.25)
+    assert resolved["fast_sampler"]["topology_alignment_weight"] == pytest.approx(0.25)
+    assert resolved["fast_sampler"]["topology_marker_weight"] == pytest.approx(2.0)
+    assert resolved["fast_sampler"]["topology_trace_weight"] == pytest.approx(0.75)
+    assert resolved["fast_sampler"]["topology_focus_dilation"] == 1
     assert resolved["fast_sampler"]["validation_fraction"] == pytest.approx(0.1)
     assert resolved["fast_sampler"]["validation_max_batches"] == 16
     assert resolved["fast_sampler"]["best_checkpoint_metric"] == "val_decode_ce_loss"
@@ -178,6 +183,21 @@ def test_default_config_uses_small_data_recommended_room_model_profile():
     assert resolved["masked_room"]["unet_num_heads"] == 4
     assert resolved["masked_room"]["min_mask_ratio"] == pytest.approx(0.12)
     assert resolved["masked_room"]["max_mask_ratio"] == pytest.approx(0.85)
+    assert resolved["fast_sampler"]["topology_alignment_weight"] == pytest.approx(0.25)
+    assert resolved["fast_sampler"]["topology_marker_weight"] == pytest.approx(2.0)
+    assert resolved["fast_sampler"]["topology_trace_weight"] == pytest.approx(0.75)
+    assert resolved["fast_sampler"]["topology_focus_dilation"] == 1
+    assert resolved["masked_room"]["topology_alignment_weight"] == pytest.approx(0.25)
+    assert resolved["masked_room"]["topology_marker_weight"] == pytest.approx(2.0)
+    assert resolved["masked_room"]["topology_trace_weight"] == pytest.approx(0.75)
+    assert resolved["masked_room"]["topology_focus_dilation"] == 1
+    assert resolved["masked_room"]["validation_fraction"] == pytest.approx(0.1)
+    assert resolved["masked_room"]["validation_max_batches"] == 16
+    assert resolved["masked_room"]["best_checkpoint_metric"] == "val_loss"
+    assert resolved["masked_room"]["topology_alignment_weight"] == pytest.approx(0.25)
+    assert resolved["masked_room"]["topology_marker_weight"] == pytest.approx(2.0)
+    assert resolved["masked_room"]["topology_trace_weight"] == pytest.approx(0.75)
+    assert resolved["masked_room"]["topology_focus_dilation"] == 1
     assert resolved["dataset"]["topology_supervision_mode"] == "runtime_aligned"
     assert resolved["generation"]["guidance_scale"] == pytest.approx(3.0)
     assert resolved["generation"]["logic_guidance_scale"] == pytest.approx(0.0)
@@ -204,10 +224,18 @@ def test_default_config_uses_small_data_recommended_room_model_profile():
     assert resolved["generation"]["puzzle_room_key_pocket_depth"] == 3
     assert resolved["generation"]["puzzle_room_item_slot_depth"] == 3
     assert resolved["generation"]["puzzle_room_toggle_corridor_offset"] == 2
+    assert resolved["generation"]["puzzle_room_novelty_enabled"] is True
+    assert resolved["generation"]["puzzle_room_candidate_count"] == 4
+    assert resolved["generation"]["puzzle_room_novelty_weight"] == pytest.approx(0.45)
     assert resolved["generation"]["validator_plan_max_states"] == 512
     assert resolved["generation"]["deterministic_graph_marker_overlay_enabled"] is True
     assert resolved["generation"]["fast_sampler_teacher_fallback_enabled"] is True
     assert resolved["generation"]["masked_room_teacher_fallback_enabled"] is True
+    assert resolved["generation"]["masked_room_sampling_temperature"] == pytest.approx(1.0)
+    assert resolved["generation"]["masked_room_sampling_schedule"] == "cosine"
+    assert resolved["generation"]["masked_room_sampling_stochastic"] is True
+    assert resolved["generation"]["masked_room_corrector_steps"] == 1
+    assert resolved["generation"]["masked_room_corrector_mask_ratio"] == pytest.approx(0.1)
     assert resolved["diffusion"]["validation_num_samples"] == 8
     assert resolved["diffusion"]["validation_num_diffusion_samples"] == 64
 
@@ -215,6 +243,8 @@ def test_default_config_uses_small_data_recommended_room_model_profile():
 def test_canonical_yaml_uses_downsized_masked_room_profile():
     resolved = merge_config(yaml_path="configs/zelda_hmolqd.yaml", cli_overrides=None)
 
+    assert resolved["diffusion"]["room_topology_channels"] == ROOM_TOPOLOGY_CHANNEL_COUNT
+    assert resolved["masked_room"]["room_topology_channels"] == ROOM_TOPOLOGY_CHANNEL_COUNT
     assert resolved["masked_room"]["model_channels"] == 64
     assert resolved["masked_room"]["hidden_dim"] == 48
     assert resolved["masked_room"]["unet_channel_mult"] == [1, 2]
@@ -245,10 +275,18 @@ def test_canonical_yaml_uses_downsized_masked_room_profile():
     assert resolved["generation"]["puzzle_room_key_pocket_depth"] == 3
     assert resolved["generation"]["puzzle_room_item_slot_depth"] == 3
     assert resolved["generation"]["puzzle_room_toggle_corridor_offset"] == 2
+    assert resolved["generation"]["puzzle_room_novelty_enabled"] is True
+    assert resolved["generation"]["puzzle_room_candidate_count"] == 4
+    assert resolved["generation"]["puzzle_room_novelty_weight"] == pytest.approx(0.45)
     assert resolved["generation"]["validator_plan_max_states"] == 512
     assert resolved["generation"]["deterministic_graph_marker_overlay_enabled"] is True
     assert resolved["generation"]["fast_sampler_teacher_fallback_enabled"] is True
     assert resolved["generation"]["masked_room_teacher_fallback_enabled"] is True
+    assert resolved["generation"]["masked_room_sampling_temperature"] == pytest.approx(1.0)
+    assert resolved["generation"]["masked_room_sampling_schedule"] == "cosine"
+    assert resolved["generation"]["masked_room_sampling_stochastic"] is True
+    assert resolved["generation"]["masked_room_corrector_steps"] == 1
+    assert resolved["generation"]["masked_room_corrector_mask_ratio"] == pytest.approx(0.1)
 
 
 def test_stage_helpers_forward_checkpoint_retention_and_resume_defaults():
@@ -268,6 +306,10 @@ def test_stage_helpers_forward_checkpoint_retention_and_resume_defaults():
     assert fast_sampler_kwargs["resume_checkpoint"] is None
     assert fast_sampler_kwargs["checkpoint_storage_budget_gb"] is None
     assert fast_sampler_kwargs["decode_alignment_weight"] == pytest.approx(0.25)
+    assert fast_sampler_kwargs["topology_alignment_weight"] == pytest.approx(0.25)
+    assert fast_sampler_kwargs["topology_marker_weight"] == pytest.approx(2.0)
+    assert fast_sampler_kwargs["topology_trace_weight"] == pytest.approx(0.75)
+    assert fast_sampler_kwargs["topology_focus_dilation"] == 1
     assert fast_sampler_kwargs["validation_fraction"] == pytest.approx(0.1)
     assert fast_sampler_kwargs["validation_max_batches"] == 16
     assert fast_sampler_kwargs["best_checkpoint_metric"] == "val_decode_ce_loss"
@@ -275,6 +317,13 @@ def test_stage_helpers_forward_checkpoint_retention_and_resume_defaults():
     assert masked_room_kwargs["auto_resume"] is True
     assert masked_room_kwargs["resume_checkpoint"] is None
     assert masked_room_kwargs["checkpoint_storage_budget_gb"] is None
+    assert masked_room_kwargs["topology_alignment_weight"] == pytest.approx(0.25)
+    assert masked_room_kwargs["topology_marker_weight"] == pytest.approx(2.0)
+    assert masked_room_kwargs["topology_trace_weight"] == pytest.approx(0.75)
+    assert masked_room_kwargs["topology_focus_dilation"] == 1
+    assert masked_room_kwargs["validation_fraction"] == pytest.approx(0.1)
+    assert masked_room_kwargs["validation_max_batches"] == 16
+    assert masked_room_kwargs["best_checkpoint_metric"] == "val_loss"
     assert vqvae_kwargs["keep_last"] == 2
     assert vqvae_kwargs["validation_fraction"] == pytest.approx(0.1)
     assert vqvae_kwargs["validation_max_batches"] == 16
@@ -315,10 +364,18 @@ def test_stage_helpers_forward_checkpoint_retention_and_resume_defaults():
     assert generation_kwargs["default_puzzle_room_key_pocket_depth"] == 3
     assert generation_kwargs["default_puzzle_room_item_slot_depth"] == 3
     assert generation_kwargs["default_puzzle_room_toggle_corridor_offset"] == 2
+    assert generation_kwargs["default_puzzle_room_novelty_enabled"] is True
+    assert generation_kwargs["default_puzzle_room_candidate_count"] == 4
+    assert generation_kwargs["default_puzzle_room_novelty_weight"] == pytest.approx(0.45)
     assert generation_kwargs["default_validator_plan_max_states"] == 512
     assert generation_kwargs["default_deterministic_graph_marker_overlay_enabled"] is True
     assert generation_kwargs["default_fast_sampler_teacher_fallback_enabled"] is True
     assert generation_kwargs["default_masked_room_teacher_fallback_enabled"] is True
+    assert generation_kwargs["default_masked_room_sampling_temperature"] == pytest.approx(1.0)
+    assert generation_kwargs["default_masked_room_sampling_schedule"] == "cosine"
+    assert generation_kwargs["default_masked_room_sampling_stochastic"] is True
+    assert generation_kwargs["default_masked_room_corrector_steps"] == 1
+    assert generation_kwargs["default_masked_room_corrector_mask_ratio"] == pytest.approx(0.1)
     assert pipeline_kwargs["topology_default_target_curve"] == resolved["topology"]["default_target_curve"]
     assert pipeline_kwargs["topology_num_rooms"] == resolved["topology"]["num_rooms"]
     assert pipeline_kwargs["topology_population_size"] == resolved["topology"]["population_size"]
@@ -355,10 +412,18 @@ def test_generation_runtime_kwargs_remain_backward_compatible_when_newer_generat
         "puzzle_room_key_pocket_depth",
         "puzzle_room_item_slot_depth",
         "puzzle_room_toggle_corridor_offset",
+        "puzzle_room_novelty_enabled",
+        "puzzle_room_candidate_count",
+        "puzzle_room_novelty_weight",
         "validator_plan_max_states",
         "deterministic_graph_marker_overlay_enabled",
         "fast_sampler_teacher_fallback_enabled",
         "masked_room_teacher_fallback_enabled",
+        "masked_room_sampling_temperature",
+        "masked_room_sampling_schedule",
+        "masked_room_sampling_stochastic",
+        "masked_room_corrector_steps",
+        "masked_room_corrector_mask_ratio",
     ):
         generation.pop(key, None)
 
@@ -385,10 +450,18 @@ def test_generation_runtime_kwargs_remain_backward_compatible_when_newer_generat
     assert generation_kwargs["default_puzzle_room_key_pocket_depth"] == 3
     assert generation_kwargs["default_puzzle_room_item_slot_depth"] == 3
     assert generation_kwargs["default_puzzle_room_toggle_corridor_offset"] == 2
+    assert generation_kwargs["default_puzzle_room_novelty_enabled"] is True
+    assert generation_kwargs["default_puzzle_room_candidate_count"] == 4
+    assert generation_kwargs["default_puzzle_room_novelty_weight"] == pytest.approx(0.45)
     assert generation_kwargs["default_validator_plan_max_states"] == 512
     assert generation_kwargs["default_deterministic_graph_marker_overlay_enabled"] is True
     assert generation_kwargs["default_fast_sampler_teacher_fallback_enabled"] is True
     assert generation_kwargs["default_masked_room_teacher_fallback_enabled"] is True
+    assert generation_kwargs["default_masked_room_sampling_temperature"] == pytest.approx(1.0)
+    assert generation_kwargs["default_masked_room_sampling_schedule"] == "cosine"
+    assert generation_kwargs["default_masked_room_sampling_stochastic"] is True
+    assert generation_kwargs["default_masked_room_corrector_steps"] == 1
+    assert generation_kwargs["default_masked_room_corrector_mask_ratio"] == pytest.approx(0.1)
     assert pipeline_kwargs["default_semantic_role_prior_strength"] == pytest.approx(0.15)
     assert pipeline_kwargs["symbolic_max_repair_attempts"] == 5
     assert pipeline_kwargs["symbolic_repair_margin"] == 2
@@ -409,10 +482,18 @@ def test_generation_runtime_kwargs_remain_backward_compatible_when_newer_generat
     assert pipeline_kwargs["default_puzzle_room_key_pocket_depth"] == 3
     assert pipeline_kwargs["default_puzzle_room_item_slot_depth"] == 3
     assert pipeline_kwargs["default_puzzle_room_toggle_corridor_offset"] == 2
+    assert pipeline_kwargs["default_puzzle_room_novelty_enabled"] is True
+    assert pipeline_kwargs["default_puzzle_room_candidate_count"] == 4
+    assert pipeline_kwargs["default_puzzle_room_novelty_weight"] == pytest.approx(0.45)
     assert pipeline_kwargs["default_validator_plan_max_states"] == 512
     assert pipeline_kwargs["default_deterministic_graph_marker_overlay_enabled"] is True
     assert pipeline_kwargs["default_fast_sampler_teacher_fallback_enabled"] is True
     assert pipeline_kwargs["default_masked_room_teacher_fallback_enabled"] is True
+    assert pipeline_kwargs["default_masked_room_sampling_temperature"] == pytest.approx(1.0)
+    assert pipeline_kwargs["default_masked_room_sampling_schedule"] == "cosine"
+    assert pipeline_kwargs["default_masked_room_sampling_stochastic"] is True
+    assert pipeline_kwargs["default_masked_room_corrector_steps"] == 1
+    assert pipeline_kwargs["default_masked_room_corrector_mask_ratio"] == pytest.approx(0.1)
 
 
 def test_root_parser_accepts_topology_comparison_subcommands(tmp_path: Path):
@@ -461,6 +542,11 @@ def test_root_parser_accepts_topology_comparison_subcommands(tmp_path: Path):
             "4",
             "--puzzle-room-toggle-corridor-offset",
             "3",
+            "--no-puzzle-room-novelty-enabled",
+            "--puzzle-room-candidate-count",
+            "5",
+            "--puzzle-room-novelty-weight",
+            "1.1",
             "--validator-plan-max-states",
             "384",
             "--no-deterministic-graph-marker-overlay-enabled",
@@ -504,6 +590,9 @@ def test_root_parser_accepts_topology_comparison_subcommands(tmp_path: Path):
     assert compare_args.puzzle_room_key_pocket_depth == 5
     assert compare_args.puzzle_room_item_slot_depth == 4
     assert compare_args.puzzle_room_toggle_corridor_offset == 3
+    assert compare_args.puzzle_room_novelty_enabled is False
+    assert compare_args.puzzle_room_candidate_count == 5
+    assert compare_args.puzzle_room_novelty_weight == pytest.approx(1.1)
     assert compare_args.validator_plan_max_states == 384
     assert compare_args.deterministic_graph_marker_overlay_enabled is False
     assert compare_args.fast_sampler_teacher_fallback_enabled is False
@@ -912,7 +1001,12 @@ def test_masked_room_stage_derives_num_classes_and_latent_dim_from_shared_schema
             "training": {"stage": "masked_room"},
             "vqvae": {"latent_dim": 96},
             "diffusion": {"latent_dim": 96},
-            "masked_room": {"epochs": 2},
+            "masked_room": {
+                "epochs": 2,
+                "validation_fraction": 0.2,
+                "validation_max_batches": 5,
+                "best_checkpoint_metric": "val_topology_focus_loss",
+            },
         },
     )
 
@@ -920,6 +1014,9 @@ def test_masked_room_stage_derives_num_classes_and_latent_dim_from_shared_schema
     kwargs = masked_room_training_kwargs_from_resolved_config(resolved)
     assert kwargs["num_classes"] == 44
     assert kwargs["latent_dim"] == 96
+    assert kwargs["validation_fraction"] == pytest.approx(0.2)
+    assert kwargs["validation_max_batches"] == 5
+    assert kwargs["best_checkpoint_metric"] == "val_topology_focus_loss"
     assert kwargs["seed"] == 42
 
     captured = {}
@@ -932,6 +1029,7 @@ def test_masked_room_stage_derives_num_classes_and_latent_dim_from_shared_schema
 
     assert captured["config"].num_classes == 44
     assert captured["config"].latent_dim == 96
+    assert captured["config"].best_checkpoint_metric == "val_topology_focus_loss"
 
 
 def test_masked_room_helper_preserves_yaml_only_unet_and_mask_schedule_knobs(tmp_path: Path):
@@ -958,6 +1056,9 @@ def test_masked_room_helper_preserves_yaml_only_unet_and_mask_schedule_knobs(tmp
                 "unet_dropout": 0.2,
                 "min_mask_ratio": 0.2,
                 "max_mask_ratio": 0.65,
+                "validation_fraction": 0.2,
+                "validation_max_batches": 7,
+                "best_checkpoint_metric": "val_topology_focus_loss",
             },
         },
     )
@@ -982,6 +1083,9 @@ def test_masked_room_helper_preserves_yaml_only_unet_and_mask_schedule_knobs(tmp
     assert kwargs["unet_dropout"] == pytest.approx(0.2)
     assert kwargs["min_mask_ratio"] == pytest.approx(0.2)
     assert kwargs["max_mask_ratio"] == pytest.approx(0.65)
+    assert kwargs["validation_fraction"] == pytest.approx(0.2)
+    assert kwargs["validation_max_batches"] == 7
+    assert kwargs["best_checkpoint_metric"] == "val_topology_focus_loss"
 
 
 def test_reference_room_vocab_size_must_match_dataset_schema_when_enabled(tmp_path: Path):
@@ -1069,9 +1173,13 @@ def test_fast_sampler_stage_inherits_shared_yaml_runtime_and_dataset_settings(tm
                 "lora_rank": 4,
                 "lora_alpha": 12.0,
                 "decode_alignment_weight": 0.4,
+                "topology_alignment_weight": 0.3,
+                "topology_marker_weight": 2.5,
+                "topology_trace_weight": 0.9,
+                "topology_focus_dilation": 2,
                 "validation_fraction": 0.2,
                 "validation_max_batches": 5,
-                "best_checkpoint_metric": "val_decode_ce_loss",
+                "best_checkpoint_metric": "val_topology_decode_ce_loss",
             },
         },
     )
@@ -1087,9 +1195,13 @@ def test_fast_sampler_stage_inherits_shared_yaml_runtime_and_dataset_settings(tm
     assert kwargs["lora_rank"] == 4
     assert kwargs["lora_alpha"] == pytest.approx(12.0)
     assert kwargs["decode_alignment_weight"] == pytest.approx(0.4)
+    assert kwargs["topology_alignment_weight"] == pytest.approx(0.3)
+    assert kwargs["topology_marker_weight"] == pytest.approx(2.5)
+    assert kwargs["topology_trace_weight"] == pytest.approx(0.9)
+    assert kwargs["topology_focus_dilation"] == 2
     assert kwargs["validation_fraction"] == pytest.approx(0.2)
     assert kwargs["validation_max_batches"] == 5
-    assert kwargs["best_checkpoint_metric"] == "val_decode_ce_loss"
+    assert kwargs["best_checkpoint_metric"] == "val_topology_decode_ce_loss"
     assert kwargs["device"] == "cpu"
     assert kwargs["seed"] == 321
     assert kwargs["use_vglc"] is False
@@ -1104,9 +1216,13 @@ def test_fast_sampler_stage_inherits_shared_yaml_runtime_and_dataset_settings(tm
     assert args.lora_rank == 4
     assert args.lora_alpha == pytest.approx(12.0)
     assert args.decode_alignment_weight == pytest.approx(0.4)
+    assert args.topology_alignment_weight == pytest.approx(0.3)
+    assert args.topology_marker_weight == pytest.approx(2.5)
+    assert args.topology_trace_weight == pytest.approx(0.9)
+    assert args.topology_focus_dilation == 2
     assert args.validation_fraction == pytest.approx(0.2)
     assert args.validation_max_batches == 5
-    assert args.best_checkpoint_metric == "val_decode_ce_loss"
+    assert args.best_checkpoint_metric == "val_topology_decode_ce_loss"
     assert args.device == "cpu"
     assert args.seed == 321
     assert args.use_vglc is False

@@ -115,7 +115,7 @@ diffusion:
   use_teacher_forced_neighbor_latents: true  # type=bool, default=true, valid={true,false}; enables real-neighbor local conditioning during room-level training
   use_current_node_distance_features: true  # type=bool, default=true, valid={true,false}; adds current-room distance encoding to Block III/IV graph conditioning
   current_node_distance_max: 8  # type=int, default=8, valid>=1; clip/normalize graph distances beyond this radius
-  room_topology_channels: 50  # type=int, default=50, valid>=1
+  room_topology_channels: 54  # type=int, default=54, valid>=1
   cfg_dropout_prob: 0.1  # type=float, default=0.1, valid=0..1
   cfg_scale: 3.0  # type=float, default=3.0, valid>=0
   cfg_schedule_mode: constant  # type=str, default=constant, valid={constant,linear_decay,cosine_decay}
@@ -197,10 +197,18 @@ generation:
   puzzle_room_key_pocket_depth: 3  # type=int, default=3, valid=1..6; depth of the local key-before-gate alcove when the room owns a key anchor
   puzzle_room_item_slot_depth: 3  # type=int, default=3, valid=1..6; depth of the local item-slot alcove used by item_gate/item_locked templates
   puzzle_room_toggle_corridor_offset: 2  # type=int, default=2, valid=1..5; half-width offset for toggle-state corridor templates driven by on_off_gate/state_block edges
+  puzzle_room_novelty_enabled: true  # type=bool, default=true, valid={true,false}; evaluate several valid puzzle scaffold variants and choose one with a local quality-diversity score
+  puzzle_room_candidate_count: 4  # type=int, default=4, valid=1..6; local search budget for puzzle scaffold novelty selection
+  puzzle_room_novelty_weight: 0.45  # type=float, default=0.45, valid=0..2; strength of the novelty term when ranking valid puzzle scaffold candidates
   validator_plan_max_states: 512  # type=int, default=512, valid=32..4096; cap room-local validator search used for topology priors so complex puzzle/key rooms fall back to the geometric trace instead of stalling generation
   deterministic_graph_marker_overlay_enabled: true  # type=bool, default=true, valid={true,false}; keep enabled for the production hybrid path, disable only for purely-neural semantic ablations
   fast_sampler_teacher_fallback_enabled: true  # type=bool, default=true, valid={true,false}; lets runtime guardrails reroute bad fast-sampler rooms to the teacher
   masked_room_teacher_fallback_enabled: true  # type=bool, default=true, valid={true,false}; protects production exports by rerouting obviously noisy masked-room outputs to the diffusion teacher
+  masked_room_sampling_temperature: 1.0  # type=float, default=1.0, valid>0; calibrated categorical temperature for true MaskGIT-style token sampling
+  masked_room_sampling_schedule: cosine  # type=str, default=cosine, valid={cosine,linear}; cosine remaining-mask schedule matches the common MaskGIT decoding regime better than linear keep counts
+  masked_room_sampling_stochastic: true  # type=bool, default=true, valid={true,false}; use stochastic categorical token draws instead of greedy argmax-only updates
+  masked_room_corrector_steps: 1  # type=int, default=1, valid=0..4; one lightweight low-confidence correction pass approximates Token-Critic-style cleanup without retraining another network
+  masked_room_corrector_mask_ratio: 0.1  # type=float, default=0.1, valid=0..1; remask the lowest-confidence editable 10 percent of tokens during each correction round
 
 fast_sampler:
   checkpoint_dir: ""  # type=str, default="", valid=path; empty=>output_dir/checkpoints/fast_sampler
@@ -214,9 +222,13 @@ fast_sampler:
   lora_alpha: 8.0  # type=float, default=8.0, valid>=0
   prediction_loss_weight: 0.25  # type=float, default=0.25, valid>=0
   decode_alignment_weight: 0.25  # type=float, default=0.25, valid>=0; add decoded-room CE supervision so few-step latent matching stays aligned with actual tile outputs
+  topology_alignment_weight: 0.25  # type=float, default=0.25, valid>=0; extra CE pressure on topology-critical pixels so fast-sampler distillation cares about anchors, doors, gates, and puzzle-route structure
+  topology_marker_weight: 2.0  # type=float, default=2.0, valid>=0; relative emphasis for sparse topology markers, door slots, and typed gates inside the fast-sampler focus map
+  topology_trace_weight: 0.75  # type=float, default=0.75, valid>=0; relative emphasis for traversability-trace pixels inside the fast-sampler focus map
+  topology_focus_dilation: 1  # type=int, default=1, valid>=0; lightly dilate sparse topology focus regions so nearby pixels contribute to the fast-sampler topology loss
   validation_fraction: 0.1  # type=float, default=0.1, valid=0..0.5; held-out split for actual fast-sampler model selection instead of reusing the training stream
   validation_max_batches: 16  # type=int, default=16, valid>=1; keep per-epoch fast-sampler validation bounded and deterministic
-  best_checkpoint_metric: val_decode_ce_loss  # type=str, default=val_decode_ce_loss, valid={val_loss,val_decode_ce_loss,train_loss}; choose checkpoints by decoded-room quality first because latent-only loss was misaligned with symbolic room fidelity
+  best_checkpoint_metric: val_decode_ce_loss  # type=str, default=val_decode_ce_loss, valid={val_loss,val_decode_ce_loss,val_topology_decode_ce_loss,train_loss}; use the topology-only metric for semantic-alignment ablations, but keep decoded-room quality as the stable default
   save_every: 5  # type=int, default=5, valid>=1
   keep_last: 2  # type=int, default=2, valid>=0; number of retained full-resume checkpoints besides latest_resume/best/final
 
@@ -258,4 +270,11 @@ masked_room:
   unet_dropout: 0.1  # type=float, default=0.1, valid=0..1
   min_mask_ratio: 0.12  # type=float, default=0.12, valid=0..1
   max_mask_ratio: 0.85  # type=float, default=0.85, valid=0..1; must be >= min_mask_ratio
-  room_topology_channels: 50  # type=int, default=50, valid>=1
+  topology_alignment_weight: 0.25  # type=float, default=0.25, valid>=0; extra masked-token CE pressure on topology-critical pixels so masked-room training learns anchors, doors, gates, and puzzle-route structure more explicitly
+  topology_marker_weight: 2.0  # type=float, default=2.0, valid>=0; relative emphasis for sparse topology markers, door slots, and typed gates inside the masked-room focus map
+  topology_trace_weight: 0.75  # type=float, default=0.75, valid>=0; relative emphasis for traversability-trace pixels inside the masked-room focus map
+  topology_focus_dilation: 1  # type=int, default=1, valid>=0; lightly dilate sparse topology focus regions so nearby pixels contribute to the masked-room topology loss
+  validation_fraction: 0.1  # type=float, default=0.1, valid=0..0.5; masked-room now uses a real held-out split instead of re-evaluating on the training set
+  validation_max_batches: 16  # type=int, default=16, valid>=1; keep per-epoch masked-room validation bounded
+  best_checkpoint_metric: val_loss  # type=str, default=val_loss, valid={val_loss,val_topology_focus_loss,train_loss}; topology-only selection is available for semantic-alignment ablations, but total validation loss remains the stable default
+  room_topology_channels: 54  # type=int, default=54, valid>=1

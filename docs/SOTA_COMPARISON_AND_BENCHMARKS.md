@@ -323,6 +323,6 @@ python scripts/run_matched_budget_topology_benchmark.py \
 - CMA-ME: https://arxiv.org/abs/1912.02400
 - VGLC paper: https://arxiv.org/abs/1606.07487
 - VGLC repository: https://github.com/TheVGLC/TheVGLC
-- Mission-space paradigm (Dormans/Bakkes): https://doi.org/10.1109/TCIAIG.2010.2067210
-- WFC as constraint solving (Karth & Smith): https://doi.org/10.1609/aiide.v13i1.12899
+- Mission-space paradigm (Dormans/Bakkes): https://doi.org/10.1109/TCIAIG.2011.2149523
+- WFC as constraint solving (Karth & Smith): https://doi.org/10.1145/3102071.3110566
 - Zelda locked-door generation (ESWA): https://www.sciencedirect.com/science/article/pii/S0957417421004504

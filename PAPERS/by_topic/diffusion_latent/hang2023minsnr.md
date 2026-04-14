@@ -1,0 +1,17 @@
+# Efficient Diffusion Training via Min-SNR Weighting Strategy Tiankai Hang1, Shuyang Gu2*, Chen Li3, Jianmin Bao2, Dong Chen2, Han Hu2, Xin Geng1, Baining Guo1* 1Southeast University
+
+- PDF: [hang2023minsnr.pdf](../../hang2023minsnr.pdf)
+- Topic: diffusion_latent
+
+## Abstract / Core Idea
+Efficient Diffusion Training via Min-SNR Weighting Strategy Tiankai Hang1, Shuyang Gu2*, Chen Li3, Jianmin Bao2, Dong Chen2, Han Hu2, Xin Geng1, Baining Guo1* 1Southeast University, 2Microsoft Research Asia, 3National Key Laboratory of Human-Machine Hybrid Augmented Intelligence, National Engineering Research Center for Visual Information and Applications, and Institute of Artificial Intelligence and Robotics, Xi’an Jiaotong University {tkhang,xgeng,307000167}@seu.edu.cn,{shuyanggu,t-chenli1,jianmin.bao,doch,hanhu}@microsoft.com Abstract Denoising diffusion models have been a mainstream approach for image generation, however, training these models often suffers from slow convergence. In this pa- per, we discovered that the slow convergence is partly due to conflicting optimization directions between timesteps. To address this issue, we treat the diffusion training as a multi-task learning problem, and introduce a simple yet effective approach referred to as Min-SNR- γ. This method adapts loss weights of timesteps based on clamped signal-to-noise ratios, which effectively balances the con- flicts among timesteps. Our results demonstrate a signif- icant improvement in converging speed, 3.4 × faster than previous weighting strategies. It is also more effective, achieving a new record FID score of 2.06 on the Ima- geNet 256 × 256 benchmark using smaller architectures than that employed in previous state-of-the-art. The code is available at https://github.com/TiankaiHang/Min-SNR-
+
+## Method Signals
+- Keywords phat hien: diffusion
+
+## Conclusion / Findings
+rall training. Our proposed Min-SNR-γ strategy is a predefined global step-wise loss weighting setting, instead of run-time adap- tive loss weights for each iteration as in the original Pareto optimization, thus avoiding the sparsity issue. Moreover, the global loss weighting strategy eliminates the need for noisy computation of gradients and the time-consuming Pareto optimization process, making it more efficient and stable. Though suboptimal, the global strategy can be also almost as effective: Firstly, the optimization dynamics of each denoising task are largely shaped by the task’s noise level, without the need to account for individual samples too much. Secondly, after a moderate number of iterations, the gradients of the majority subsequent training process become more stable, thus it can be approximated by a sta- tionery weighting strategy. To validate the effectiveness of the Min-SNR-γ weight- ing strategy, we first compute its Pareto objective value and compare it with the optimal step-wise loss weights obtained by directly solving the Pareto problem. Together, we also compare it with several conventional loss weighting strate- gies, including constant weighting, SNR weighting, and SNR with an lower bound. Figure 4 shows that our Min- SNR-γ weighting strategy produces Pareto objective val- ues almost as low as the optimal one, significantly better than othe Figure 13: Additional generated samples on ImageNet 256 × 256. The samples are from ViT backbone with 2.06 FID.
+
+## Relevance To KLTN
+- Bai nay duoc xep vao nhom diffusion_latent trong pipeline neural-symbolic topology-first.
+- Dung de doi chieu voi khoi tuong ung trong docs va Chapter 3/4.

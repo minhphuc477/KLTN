@@ -1,0 +1,12 @@
+{
+  "variant_name": "diffusion_cfg3_logic0_steps50",
+  "stage": "complete",
+  "seed": 20260411,
+  "guidance_scale": 3.0,
+  "logic_guidance_scale": 0.0,
+  "num_diffusion_steps": 50,
+  "use_fast_sampling": false,
+  "generation_time_sec": 56.336480140686035,
+  "room_count": 12,
+  "summary_path": "outputs\\zelda_best_model_showcase_20260411_novelty_v2\\diffusion_cfg3_logic0_steps50\\summary.json"
+}

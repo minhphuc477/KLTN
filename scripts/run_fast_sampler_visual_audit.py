@@ -674,6 +674,25 @@ def add_generation_override_args(parser: argparse.ArgumentParser) -> None:
         help="Override generation.puzzle_room_toggle_corridor_offset for this export only.",
     )
     parser.add_argument(
+        "--puzzle-room-novelty-enabled",
+        dest="puzzle_room_novelty_enabled",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Override generation.puzzle_room_novelty_enabled for this export only.",
+    )
+    parser.add_argument(
+        "--puzzle-room-candidate-count",
+        type=int,
+        default=None,
+        help="Override generation.puzzle_room_candidate_count for this export only.",
+    )
+    parser.add_argument(
+        "--puzzle-room-novelty-weight",
+        type=float,
+        default=None,
+        help="Override generation.puzzle_room_novelty_weight for this export only.",
+    )
+    parser.add_argument(
         "--validator-plan-max-states",
         type=int,
         default=None,
@@ -742,6 +761,12 @@ def generation_overrides_from_namespace(args: argparse.Namespace) -> Dict[str, A
         overrides["puzzle_room_item_slot_depth"] = int(args.puzzle_room_item_slot_depth)
     if getattr(args, "puzzle_room_toggle_corridor_offset", None) is not None:
         overrides["puzzle_room_toggle_corridor_offset"] = int(args.puzzle_room_toggle_corridor_offset)
+    if getattr(args, "puzzle_room_novelty_enabled", None) is not None:
+        overrides["puzzle_room_novelty_enabled"] = bool(args.puzzle_room_novelty_enabled)
+    if getattr(args, "puzzle_room_candidate_count", None) is not None:
+        overrides["puzzle_room_candidate_count"] = int(args.puzzle_room_candidate_count)
+    if getattr(args, "puzzle_room_novelty_weight", None) is not None:
+        overrides["puzzle_room_novelty_weight"] = float(args.puzzle_room_novelty_weight)
     if getattr(args, "validator_plan_max_states", None) is not None:
         overrides["validator_plan_max_states"] = int(args.validator_plan_max_states)
     if getattr(args, "deterministic_graph_marker_overlay_enabled", None) is not None:
@@ -833,6 +858,15 @@ def _generation_policy_summary(pipeline: NeuralSymbolicDungeonPipeline) -> Dict[
         "puzzle_room_toggle_corridor_offset": int(
             getattr(pipeline, "default_puzzle_room_toggle_corridor_offset", 2)
         ),
+        "puzzle_room_novelty_enabled": bool(
+            getattr(pipeline, "default_puzzle_room_novelty_enabled", True)
+        ),
+        "puzzle_room_candidate_count": int(
+            getattr(pipeline, "default_puzzle_room_candidate_count", 4)
+        ),
+        "puzzle_room_novelty_weight": float(
+            getattr(pipeline, "default_puzzle_room_novelty_weight", 0.45)
+        ),
         "validator_plan_max_states": int(
             getattr(pipeline, "default_validator_plan_max_states", 512)
         ),
@@ -844,6 +878,21 @@ def _generation_policy_summary(pipeline: NeuralSymbolicDungeonPipeline) -> Dict[
         ),
         "masked_room_teacher_fallback_enabled": bool(
             getattr(pipeline, "default_masked_room_teacher_fallback_enabled", True)
+        ),
+        "masked_room_sampling_temperature": float(
+            getattr(pipeline, "default_masked_room_sampling_temperature", 1.0)
+        ),
+        "masked_room_sampling_schedule": str(
+            getattr(pipeline, "default_masked_room_sampling_schedule", "cosine")
+        ),
+        "masked_room_sampling_stochastic": bool(
+            getattr(pipeline, "default_masked_room_sampling_stochastic", True)
+        ),
+        "masked_room_corrector_steps": int(
+            getattr(pipeline, "default_masked_room_corrector_steps", 1)
+        ),
+        "masked_room_corrector_mask_ratio": float(
+            getattr(pipeline, "default_masked_room_corrector_mask_ratio", 0.1)
         ),
     }
 
@@ -1028,6 +1077,7 @@ def export_variant(
                 "avg_final_graph_marker_overwrite_rate",
                 "avg_neural_semantic_anchor_error",
                 "avg_final_pre_overlay_semantic_anchor_error",
+                "avg_final_post_overlay_semantic_anchor_error",
             )
         },
         "cleanup_totals": cleanup_totals,

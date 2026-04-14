@@ -319,10 +319,16 @@ def _write_report(
 ) -> None:
     def _metric_line(name: str, payload: Dict[str, Any]) -> str:
         metrics = payload.get("metrics", {})
+        layout = payload.get("layout", {})
+        layout_metric_name = str(layout.get("primary_quality_metric_name") or "layout_quality")
+        layout_metric_value = float(layout.get("primary_quality_metric_value", 0.0) or 0.0)
         return (
             f"- `{name}`: gen_time={float(metrics.get('generation_time_sec', 0.0)):.2f}s, "
             f"repair_rate={float(metrics.get('repair_rate', 0.0)):.3f}, "
-            f"total_tiles_repaired={int(metrics.get('total_tiles_repaired', 0))}"
+            f"total_tiles_repaired={int(metrics.get('total_tiles_repaired', 0))}, "
+            f"overwrite={float(metrics.get('avg_final_graph_marker_overwrite_rate', 0.0)):.3f}, "
+            f"post_overlay_anchor_error={float(metrics.get('avg_final_post_overlay_semantic_anchor_error', 0.0)):.3f}, "
+            f"{layout_metric_name}={layout_metric_value:.3f}"
         )
 
     lines = [

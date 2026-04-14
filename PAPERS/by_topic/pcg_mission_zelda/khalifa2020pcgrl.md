@@ -1,0 +1,17 @@
+# Proceedings of the Sixteenth AAAI Conference on Artiﬁcial Intelligence and Interactive Digital Entertainment (AIIDE-20) PCGRL: Procedural Content Generation via Reinforcement Learn
+
+- PDF: [khalifa2020pcgrl.pdf](../../khalifa2020pcgrl.pdf)
+- Topic: pcg_mission_zelda
+
+## Abstract / Core Idea
+Proceedings of the Sixteenth AAAI Conference on Artiﬁcial Intelligence and Interactive Digital Entertainment (AIIDE-20) PCGRL: Procedural Content Generation via Reinforcement Learning Ahmed Khalifa, Philip Bontrager, Sam Earle, Julian Togelius New York University ahmed@akhalifa.com, philipjb@nyu.edu, smearle93@gmail.com, julian@togelius.com Abstract We investigate how reinforcement learning can be used to train level-designing agents. This represents a new approach to procedural content generation in games, where level de- sign is framed as a game, and the content generator itself is learned. By seeing the design problem as a sequential task, we can use reinforcement learning to learn how to take the next action so that the expected ﬁnal level quality is maximized. This approach can be used when few or no examples exist to train from, and the trained generator is very fast. We inves- tigate three different ways of transforming two-dimensional level design problems into Markov decision processes, and apply these to three game environments. Introduction Reinforcement learning is commonly used to learn to play games, which makes sense as the problem of playing a game can easily be cast as a reinforcement learning problem; the action space is simply the actions available to the agent, and most games have a score or similar which can be used to provide a reward signal (Justesen et al. 2019). In contrast, problems of designing games or game content are most of- ten cast as optimiza
+
+## Method Signals
+- Keywords phat hien: pcg
+
+## Conclusion / Findings
+ion. In ICCC Workshop on Computational Creativity and Games. Justesen, N.; Torrado, R. R.; Bontrager, P.; Khalifa, A.; To- gelius, J.; and Risi, S. 2018. Illuminating generalization in deep reinforcement learning through procedural level gener- ation. In NeurIPS Workshop on Deep Reinforcement Learn- ing. Justesen, N.; Bontrager, P.; Togelius, J.; and Risi, S. 2019. Deep learning for video game playing. Transactions on Games. Kerssemakers, M.; Tuxen, J.; Togelius, J.; and Yannakakis, G. N. 2012. A procedural procedural level generator gener- ator. In Computational Intelligence and Games. IEEE. McDonald, N. 2019. Markov chains for proce- dural buildings. https://weigert.vsos.ethz.ch/2019/10/30/ markov-chains-for-procedural-buildings/. Mnih, V .; Kavukcuoglu, K.; Silver, D.; Rusu, A. A.; Veness, J.; Bellemare, M. G.; Graves, A.; Riedmiller, M.; Fidjeland, A. K.; Ostrovski, G.; et al. 2015. Human-level control through deep reinforcement learning. Nature 518(7540). Mnih, V .; Badia, A. P.; Mirza, M.; Graves, A.; Lillicrap, T.; Harley, T.; Silver, D.; and Kavukcuoglu, K. 2016. Asyn- chronous methods for deep reinforcement learning. In In- ternational conference on machine learning. Perez, D.; Liu, J.; Abdel Samea Khalifa, A.; Gaina, R. D.; Togelius, J.; and Lucas, S. M. 2019. General video game ai: a multi-track framework for evaluating agents, games and content generation algorithms. Transactions on Games. Schulman, J.; Wolski, F.; Dhariwal, P.; Radford, A.; and Klimov, O. 2017. P
+
+## Relevance To KLTN
+- Bai nay duoc xep vao nhom pcg_mission_zelda trong pipeline neural-symbolic topology-first.
+- Dung de doi chieu voi khoi tuong ung trong docs va Chapter 3/4.

@@ -98,6 +98,153 @@ class DiscreteMaskedRoomModel(nn.Module):
         self.classifier = nn.Conv2d(self.hidden_dim, self.num_classes, kernel_size=1)
 
     @staticmethod
+    def _build_generator(*, device: torch.device, seed: Optional[int]) -> Optional[torch.Generator]:
+        if seed is None:
+            return None
+        generator_device = device.type if device.type == "cuda" else "cpu"
+        return torch.Generator(device=generator_device).manual_seed(int(seed))
+
+    @staticmethod
+    def _remaining_mask_ratio(progress: float, *, schedule_mode: str) -> float:
+        clipped = float(max(0.0, min(1.0, progress)))
+        mode = str(schedule_mode or "cosine").strip().lower()
+        if mode == "linear":
+            return max(0.0, 1.0 - clipped)
+        return max(0.0, math.cos(0.5 * math.pi * clipped))
+
+    @staticmethod
+    def _sample_gumbel(
+        shape: Sequence[int],
+        *,
+        device: torch.device,
+        generator: Optional[torch.Generator],
+    ) -> Tensor:
+        uniform = torch.rand(shape, device=device, generator=generator).clamp_(1e-6, 1.0 - 1e-6)
+        return -torch.log(-torch.log(uniform))
+
+    def _apply_fixed_token_logits(
+        self,
+        logits: Tensor,
+        *,
+        fixed_tokens: Tensor,
+        fixed_mask: Tensor,
+    ) -> Tensor:
+        if not bool(fixed_mask.any()):
+            return logits
+        constrained = logits.clone()
+        constrained = constrained.masked_fill(fixed_mask.unsqueeze(1), -1e4)
+        constrained.scatter_(
+            1,
+            fixed_tokens.unsqueeze(1).clamp(min=0, max=self.num_classes - 1),
+            torch.where(
+                fixed_mask.unsqueeze(1),
+                torch.full_like(fixed_tokens.unsqueeze(1), 1e4, dtype=constrained.dtype),
+                torch.zeros_like(fixed_tokens.unsqueeze(1), dtype=constrained.dtype),
+            ),
+        )
+        return constrained
+
+    def _sample_predictions(
+        self,
+        probs: Tensor,
+        *,
+        stochastic: bool,
+        generator: Optional[torch.Generator],
+    ) -> Tuple[Tensor, Tensor]:
+        if not bool(stochastic):
+            confidence, prediction = probs.max(dim=1)
+            return prediction, confidence
+
+        batch_size, num_classes, height, width = probs.shape
+        flat = probs.permute(0, 2, 3, 1).reshape(-1, num_classes)
+        prediction = torch.multinomial(flat, num_samples=1, replacement=True, generator=generator)
+        prediction = prediction.view(batch_size, height, width)
+        confidence = probs.gather(1, prediction.unsqueeze(1)).squeeze(1)
+        return prediction, confidence
+
+    def _iterative_fill(
+        self,
+        *,
+        tokens: Tensor,
+        committed: Tensor,
+        context: Tensor,
+        graph_data: Optional[Dict[str, Tensor]],
+        fixed_tokens: Tensor,
+        fixed_mask: Tensor,
+        total_steps: int,
+        temperature: float,
+        schedule_mode: str,
+        stochastic: bool,
+        generator: Optional[torch.Generator],
+    ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+        batch_size = int(tokens.shape[0])
+        device = tokens.device
+        available_counts = (~fixed_mask).sum(dim=(1, 2))
+
+        logits = torch.zeros(batch_size, self.num_classes, ROOM_HEIGHT, ROOM_WIDTH, device=device)
+        hidden = self._embed_tokens(tokens)
+        for i in range(int(max(1, total_steps))):
+            step = torch.full(
+                (batch_size,),
+                fill_value=max(0, int(total_steps) - 1 - i),
+                device=device,
+                dtype=torch.long,
+            )
+            logits, hidden = self.forward(tokens, step, context, graph_data=graph_data, return_hidden=True)
+            logits = self._apply_fixed_token_logits(logits, fixed_tokens=fixed_tokens, fixed_mask=fixed_mask)
+
+            progress = float(i + 1) / float(max(1, total_steps))
+            anneal = max(0.25, 1.0 - progress)
+            current_temperature = max(1e-6, float(temperature) * anneal) if stochastic else max(1e-6, float(temperature))
+            probs = F.softmax(logits / current_temperature, dim=1)
+            prediction, confidence = self._sample_predictions(
+                probs,
+                stochastic=stochastic,
+                generator=generator,
+            )
+            ranking_scores = confidence
+            if bool(stochastic):
+                ranking_scores = ranking_scores + (
+                    current_temperature
+                    * anneal
+                    * self._sample_gumbel(
+                        ranking_scores.shape,
+                        device=device,
+                        generator=generator,
+                    )
+                )
+
+            unresolved = ~committed
+            if not bool(unresolved.any()):
+                break
+
+            tokens_candidate = tokens.clone()
+            tokens_candidate[unresolved] = prediction[unresolved]
+
+            new_commit = committed.clone()
+            for b in range(batch_size):
+                unresolved_idx = torch.nonzero(unresolved[b], as_tuple=False)
+                if int(unresolved_idx.shape[0]) == 0:
+                    continue
+                if i == int(total_steps) - 1:
+                    chosen = unresolved_idx
+                else:
+                    remaining_ratio = self._remaining_mask_ratio(progress, schedule_mode=schedule_mode)
+                    target_remaining = int(math.floor(int(available_counts[b].item()) * remaining_ratio))
+                    current_unresolved = int(unresolved_idx.shape[0])
+                    keep_b = max(1, min(current_unresolved, current_unresolved - target_remaining))
+                    scores = ranking_scores[b][unresolved[b]]
+                    top_idx = torch.topk(scores, k=keep_b, largest=True).indices
+                    chosen = unresolved_idx[top_idx]
+                new_commit[b, chosen[:, 0], chosen[:, 1]] = True
+
+            tokens = torch.where(new_commit, tokens_candidate, tokens)
+            committed = new_commit
+            tokens[fixed_mask] = fixed_tokens[fixed_mask]
+
+        return tokens, logits, hidden, committed
+
+    @staticmethod
     def _normalize_fixed_layout(
         *,
         fixed_tokens: Optional[Tensor],
@@ -363,6 +510,8 @@ class DiscreteMaskedRoomModel(nn.Module):
         fixed_mask: Optional[Tensor] = None,
         min_mask_ratio: float = 0.15,
         max_mask_ratio: float = 0.90,
+        topology_focus_map: Optional[Tensor] = None,
+        topology_alignment_weight: float = 0.0,
     ) -> Tuple[Tensor, Dict[str, float]]:
         target = target_tokens.long()
         if target.dim() == 2:
@@ -406,11 +555,32 @@ class DiscreteMaskedRoomModel(nn.Module):
         logits = self.forward(masked_tokens, step, context, graph_data=graph_data)
         loss_map = F.cross_entropy(logits, target, reduction="none")
         denom = train_mask.float().sum().clamp(min=1.0)
-        loss = (loss_map * train_mask.float()).sum() / denom
+        base_loss = (loss_map * train_mask.float()).sum() / denom
+        topology_focus_loss = torch.zeros((), device=device, dtype=base_loss.dtype)
+        topology_focus_fraction = torch.zeros((), device=device, dtype=base_loss.dtype)
+        topology_focus_map_t = topology_focus_map
+        if topology_focus_map_t is not None:
+            topology_focus_map_t = topology_focus_map_t.to(device=device, dtype=loss_map.dtype)
+            if topology_focus_map_t.dim() == 2:
+                topology_focus_map_t = topology_focus_map_t.unsqueeze(0)
+            if tuple(topology_focus_map_t.shape) != (batch_size, ROOM_HEIGHT, ROOM_WIDTH):
+                raise ValueError(
+                    f"topology_focus_map must have shape [B,H,W]=({batch_size},{ROOM_HEIGHT},{ROOM_WIDTH}), "
+                    f"got {tuple(topology_focus_map_t.shape)}"
+                )
+            masked_focus = topology_focus_map_t * train_mask.float()
+            focus_denom = masked_focus.sum()
+            if float(focus_denom.item()) > 0.0:
+                topology_focus_loss = (loss_map * masked_focus).sum() / focus_denom.clamp(min=1.0)
+                topology_focus_fraction = masked_focus.gt(0).float().mean()
+        loss = base_loss + float(max(0.0, topology_alignment_weight)) * topology_focus_loss
         metrics = {
             "loss": float(loss.item()),
+            "base_loss": float(base_loss.item()),
             "mask_ratio": float(mask_ratio.mean().item()),
             "masked_fraction": float(train_mask.float().mean().item()),
+            "topology_focus_loss": float(topology_focus_loss.item()),
+            "topology_focus_fraction": float(topology_focus_fraction.item()),
         }
         return loss, metrics
 
@@ -424,14 +594,22 @@ class DiscreteMaskedRoomModel(nn.Module):
         fixed_mask: Optional[Tensor] = None,
         num_steps: Optional[int] = None,
         temperature: float = 1.0,
+        schedule_mode: str = "cosine",
+        stochastic: bool = True,
+        corrector_steps: int = 0,
+        corrector_mask_ratio: float = 0.0,
         seed: Optional[int] = None,
     ) -> Tuple[Tensor, Tensor, Tensor]:
         batch_size = int(context.shape[0])
         device = context.device
-        if seed is not None:
-            torch.manual_seed(int(seed))
+        generator = self._build_generator(device=device, seed=seed)
 
         steps = int(max(1, num_steps or self.default_num_steps))
+        schedule_mode = str(schedule_mode or "cosine").strip().lower()
+        if schedule_mode not in {"cosine", "linear"}:
+            raise ValueError(f"schedule_mode must be 'cosine' or 'linear', got {schedule_mode!r}.")
+        corrector_steps = int(max(0, corrector_steps))
+        corrector_mask_ratio = float(max(0.0, min(1.0, corrector_mask_ratio)))
         fixed_tokens, fixed_mask = self._normalize_fixed_layout(
             fixed_tokens=fixed_tokens,
             fixed_mask=fixed_mask,
@@ -451,54 +629,64 @@ class DiscreteMaskedRoomModel(nn.Module):
         tokens[fixed_mask] = fixed_tokens[fixed_mask]
         committed = fixed_mask.clone()
 
-        logits = torch.zeros(batch_size, self.num_classes, ROOM_HEIGHT, ROOM_WIDTH, device=device)
-        hidden = self._embed_tokens(tokens)
-        for i in range(steps):
-            step = torch.full((batch_size,), fill_value=max(0, steps - 1 - i), device=device, dtype=torch.long)
-            logits, hidden = self.forward(tokens, step, context, graph_data=graph_data, return_hidden=True)
-            if bool(fixed_mask.any()):
-                logits = logits.clone()
-                logits = logits.masked_fill(fixed_mask.unsqueeze(1), -1e4)
-                logits.scatter_(
-                    1,
-                    fixed_tokens.unsqueeze(1).clamp(min=0, max=self.num_classes - 1),
-                    torch.where(
-                        fixed_mask.unsqueeze(1),
-                        torch.full_like(fixed_tokens.unsqueeze(1), 1e4, dtype=logits.dtype),
-                        torch.zeros_like(fixed_tokens.unsqueeze(1), dtype=logits.dtype),
-                    ),
+        tokens, logits, hidden, committed = self._iterative_fill(
+            tokens=tokens,
+            committed=committed,
+            context=context,
+            graph_data=graph_data,
+            fixed_tokens=fixed_tokens,
+            fixed_mask=fixed_mask,
+            total_steps=steps,
+            temperature=float(temperature),
+            schedule_mode=schedule_mode,
+            stochastic=bool(stochastic),
+            generator=generator,
+        )
+
+        if corrector_steps > 0 and corrector_mask_ratio > 0.0:
+            editable_base = ~fixed_mask
+            refinement_steps = max(1, min(3, steps // 2 if steps > 1 else 1))
+            for _ in range(corrector_steps):
+                logits = self.forward(
+                    tokens,
+                    torch.zeros(batch_size, device=device, dtype=torch.long),
+                    context,
+                    graph_data=graph_data,
                 )
-
-            probs = F.softmax(logits / max(float(temperature), 1e-6), dim=1)
-            conf, pred = probs.max(dim=1)
-            unresolved = ~committed
-            if not bool(unresolved.any()):
-                break
-
-            remaining_fraction = 1.0 - float(i + 1) / float(steps)
-            target_remaining = math.floor(float(unresolved[0].numel()) * max(0.0, remaining_fraction))
-            keep_now = max(1, int(unresolved.sum(dim=(1, 2)).max().item()) - target_remaining)
-
-            tokens_candidate = tokens.clone()
-            tokens_candidate[unresolved] = pred[unresolved]
-
-            new_commit = committed.clone()
-            for b in range(batch_size):
-                unresolved_idx = torch.nonzero(unresolved[b], as_tuple=False)
-                if int(unresolved_idx.shape[0]) == 0:
-                    continue
-                if i == steps - 1:
-                    chosen = unresolved_idx
-                else:
-                    keep_b = min(keep_now, int(unresolved_idx.shape[0]))
-                    scores = conf[b][unresolved[b]]
-                    top_idx = torch.topk(scores, k=max(1, keep_b), largest=True).indices
-                    chosen = unresolved_idx[top_idx]
-                new_commit[b, chosen[:, 0], chosen[:, 1]] = True
-
-            tokens = torch.where(new_commit, tokens_candidate, tokens)
-            committed = new_commit
-            tokens[fixed_mask] = fixed_tokens[fixed_mask]
+                logits = self._apply_fixed_token_logits(logits, fixed_tokens=fixed_tokens, fixed_mask=fixed_mask)
+                current_probs = F.softmax(logits / max(1e-6, float(temperature)), dim=1)
+                safe_tokens = tokens.clamp(min=0, max=self.num_classes - 1)
+                current_confidence = current_probs.gather(1, safe_tokens.unsqueeze(1)).squeeze(1)
+                remask = torch.zeros_like(committed)
+                for b in range(batch_size):
+                    candidates = torch.nonzero(committed[b] & editable_base[b], as_tuple=False)
+                    if int(candidates.shape[0]) == 0:
+                        continue
+                    remask_count = int(math.ceil(int(candidates.shape[0]) * corrector_mask_ratio))
+                    remask_count = max(1, min(remask_count, int(candidates.shape[0])))
+                    scores = current_confidence[b][committed[b] & editable_base[b]]
+                    worst_idx = torch.topk(scores, k=remask_count, largest=False).indices
+                    chosen = candidates[worst_idx]
+                    remask[b, chosen[:, 0], chosen[:, 1]] = True
+                if not bool(remask.any()):
+                    break
+                tokens = tokens.clone()
+                tokens[remask] = int(self.mask_token_id)
+                committed = committed.clone()
+                committed[remask] = False
+                tokens, logits, hidden, committed = self._iterative_fill(
+                    tokens=tokens,
+                    committed=committed,
+                    context=context,
+                    graph_data=graph_data,
+                    fixed_tokens=fixed_tokens,
+                    fixed_mask=fixed_mask,
+                    total_steps=refinement_steps,
+                    temperature=float(temperature),
+                    schedule_mode=schedule_mode,
+                    stochastic=bool(stochastic),
+                    generator=generator,
+                )
 
         return tokens, logits, hidden
 

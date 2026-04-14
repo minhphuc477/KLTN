@@ -8,13 +8,23 @@ Short answer:
 
 - **No urgent architectural replacement is justified right now.**
 - **Yes, Block II needed protocol and reproducibility improvements.**
-- The best immediate fixes were:
+- The strongest held-out tokenizer tested in this repo was the `codebook512`
+  ablation, but the canonical YAML still keeps the conservative `256`-entry
+  default and upgrades via explicit checkpoint handoff.
+- The most important fixes were:
   - real held-out validation
   - best-checkpoint selection by validation loss instead of training loss
   - fuller checkpoint metadata
   - explicit codebook-health logging
 
 The current evidence says the main quality bottlenecks are still downstream in Block I / Block III / runtime semantics, not in the tokenizer itself.
+
+Latest linked outcomes:
+
+- tokenizer-side result summary:
+  [`VQVAE_PROTOCOL_RESULTS_2026_04_10.md`](VQVAE_PROTOCOL_RESULTS_2026_04_10.md)
+- downstream follow-up with puzzle-subtype conditioning:
+  [`DOWNSTREAM_CODEBOOK512_PUZZLE_SUBTYPE_PROTOCOL_RESULTS_2026_04_15.md`](DOWNSTREAM_CODEBOOK512_PUZZLE_SUBTYPE_PROTOCOL_RESULTS_2026_04_15.md)
 
 ## Scope
 
@@ -479,4 +489,3 @@ The evidence does not support "VQ-VAE is the main generation bottleneck" as the 
    - diffusion teacher quality
    - stateful puzzle semantics
    - hybrid runtime semantics
-
