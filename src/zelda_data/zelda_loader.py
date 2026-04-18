@@ -73,6 +73,7 @@ from src.pipeline.room_topology_conditioning import (
     ROOM_TOPOLOGY_CHANNEL_COUNT,
     build_room_topology_condition_map,
     build_semantic_room_plan_trace,
+    infer_puzzle_room_structure_enabled,
     nearest_walkable_point,
 )
 from src.pipeline.spatial_utils import clamp_room_coord, parse_room_coord
@@ -550,6 +551,13 @@ def _build_room_graph_sample(
         semantic_role_prior_strength=float(semantic_role_prior_strength),
         semantic_puzzle_offset=int(max(0, semantic_puzzle_offset)),
     )
+    room_grid_for_structure = getattr(room, "semantic_grid", None)
+    if room_grid_for_structure is None:
+        room_grid_for_structure = getattr(room, "grid", np.zeros((ROOM_HEIGHT, ROOM_WIDTH), dtype=np.int32))
+    puzzle_room_structure_enabled = infer_puzzle_room_structure_enabled(
+        np.asarray(room_grid_for_structure, dtype=np.int32),
+        role_flags,
+    )
 
     neighbor_maps: Dict[str, Optional[np.ndarray]] = {}
     direction_to_neighbor = {
@@ -583,6 +591,8 @@ def _build_room_graph_sample(
         'room_topology_map': room_topology_map.astype(np.float32),
         'neighbor_maps': neighbor_maps,
         'topology_supervision_mode': supervision_mode,
+        'has_puzzle': bool(role_flags.get("has_puzzle", False)),
+        'puzzle_room_structure_enabled': bool(puzzle_room_structure_enabled),
         **({'style_id': int(style_id)} if style_id is not None else {}),
     }
 
@@ -951,6 +961,10 @@ class ZeldaRoomDataset(Dataset):
                 'start_node_id': graph.get('start_node_id', -1),
                 'current_node_idx': int(graph.get('current_node_idx', 0)),
                 'node_to_idx': dict(graph.get('node_to_idx', {})),
+                'has_puzzle': bool(graph.get('has_puzzle', False)),
+                'puzzle_room_structure_enabled': bool(
+                    graph.get('puzzle_room_structure_enabled', graph.get('has_puzzle', False))
+                ),
                 **({'style_id': int(graph.get('style_id'))} if graph.get('style_id', None) is not None else {}),
             }
 

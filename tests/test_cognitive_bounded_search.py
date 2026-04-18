@@ -454,7 +454,7 @@ class TestCBS:
     def test_basic_solve(self, simple_grid):
         """Test CBS can solve a simple grid."""
         env = ZeldaLogicEnv(semantic_grid=simple_grid)
-        cbs = CognitiveBoundedSearch(env, persona=AgentPersona.BALANCED, timeout=10000)
+        cbs = CognitiveBoundedSearch(env, persona=AgentPersona.BALANCED, timeout=10000, seed=42)
         
         success, path, _states, _metrics = cbs.solve()
         
@@ -466,7 +466,7 @@ class TestCBS:
     def test_key_collection(self, grid_with_key):
         """Test CBS collects key before locked door."""
         env = ZeldaLogicEnv(semantic_grid=grid_with_key)
-        cbs = CognitiveBoundedSearch(env, persona=AgentPersona.BALANCED, timeout=20000)
+        cbs = CognitiveBoundedSearch(env, persona=AgentPersona.BALANCED, timeout=20000, seed=123)
         
         success, path, _states, _metrics = cbs.solve()
         
@@ -481,7 +481,7 @@ class TestCBS:
     def test_metrics_computed(self, simple_grid):
         """Test CBS computes cognitive metrics."""
         env = ZeldaLogicEnv(semantic_grid=simple_grid)
-        cbs = CognitiveBoundedSearch(env, persona=AgentPersona.BALANCED, timeout=10000)
+        cbs = CognitiveBoundedSearch(env, persona=AgentPersona.BALANCED, timeout=10000, seed=42)
         
         _success, path, _states, metrics = cbs.solve()
         
@@ -537,6 +537,53 @@ class TestCBS:
         assert path1 == path2
         assert metrics1.confusion_index == metrics2.confusion_index
 
+    def test_solver_reuse_resets_internal_cognitive_state(self, simple_grid):
+        """Reusing one solver instance should not leak memory/belief across runs."""
+        env = ZeldaLogicEnv(semantic_grid=simple_grid)
+        config = PersonaConfig.get_persona(AgentPersona.SPEEDRUNNER)
+        config.random_tiebreaker = 0.0
+        cbs = CognitiveBoundedSearch(env, custom_config=config, seed=123)
+
+        success1, path1, _states1, metrics1 = cbs.solve()
+        obs_after_first = cbs.belief_map.total_observations
+        remembered_after_first = len(cbs.memory.items)
+
+        success2, path2, _states2, metrics2 = cbs.solve()
+        obs_after_second = cbs.belief_map.total_observations
+        remembered_after_second = len(cbs.memory.items)
+
+        assert success1
+        assert success2
+        assert path1 == path2
+        assert metrics1.total_steps == metrics2.total_steps
+        assert obs_after_first == obs_after_second
+        assert remembered_after_first == remembered_after_second
+
+    def test_metrics_include_deliberation_and_frustration(self, simple_grid):
+        """P-CBS metrics should expose the metacognitive control statistics."""
+        env = ZeldaLogicEnv(semantic_grid=simple_grid)
+        cbs = CognitiveBoundedSearch(env, persona=AgentPersona.BALANCED, timeout=10000, seed=42)
+
+        _success, _path, _states, metrics = cbs.solve()
+
+        assert metrics.deliberation_events >= 0
+        assert metrics.budget_exhaustion_events >= 0
+        assert metrics.peak_frustration >= 0.0
+        assert metrics.final_deliberation_budget >= 0.0
+
+    def test_metrics_track_affordance_reactivation(self, grid_with_key):
+        """Inventory gains should be able to reactivate remembered progression affordances."""
+        env = ZeldaLogicEnv(semantic_grid=grid_with_key)
+        cbs = CognitiveBoundedSearch(env, persona=AgentPersona.BALANCED, timeout=20000, seed=42)
+
+        success, _path, _states, metrics = cbs.solve()
+
+        assert success
+        assert metrics.inventory_change_events >= 1
+        assert metrics.affordance_reactivations >= 1
+        assert metrics.affordance_guided_steps >= 0
+        assert metrics.affordance_guided_steps <= metrics.decisions_made
+
 
 # ==============================================================================
 # CONVENIENCE FUNCTION TESTS
@@ -582,6 +629,8 @@ class TestCBSMetrics:
         assert 'confusion_index' in d
         assert 'navigation_entropy' in d
         assert d['total_steps'] == 75
+        assert 'affordance_reactivations' in d
+        assert 'inventory_change_events' in d
     
     def test_metrics_summary(self):
         """Test metrics summary string."""

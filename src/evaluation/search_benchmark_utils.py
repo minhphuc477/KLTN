@@ -1,0 +1,137 @@
+"""
+Utilities for search-benchmark accounting.
+
+These helpers keep benchmark semantics consistent across scripts:
+- distinguish solved / timeout / no-path / invalid-map / failed
+- avoid treating timeouts as proven unsolvable
+- keep path-efficiency and confusion-ratio math aligned
+"""
+
+from __future__ import annotations
+
+import math
+from typing import Any, Dict, List, Tuple
+
+from src.simulation.validator import SolverDiagnostics, StateSpaceAStar
+
+
+def oracle_status_from_outcome(success: bool, failure_reason: str) -> str:
+    """Normalize solver outcomes into a stable status vocabulary."""
+    if bool(success):
+        return "solved"
+    reason = str(failure_reason or "").strip().lower()
+    if not reason:
+        return "failed"
+    if "timeout" in reason:
+        return "timeout"
+    if "no path" in reason:
+        return "no_path"
+    if "no goal" in reason or "no start" in reason:
+        return "invalid_map"
+    return "failed"
+
+
+def path_efficiency_ratio(path_length: int, manhattan_distance: int) -> float:
+    """
+    Return a bounded path-efficiency ratio in [0, 1].
+
+    Higher is better: straight-line-optimal paths approach 1.0.
+    """
+    path_length_i = int(path_length or 0)
+    manhattan_i = int(manhattan_distance or 0)
+    if path_length_i <= 0 or manhattan_i <= 0:
+        return 0.0
+    return float(manhattan_i) / float(max(1, path_length_i))
+
+
+def confusion_ratio_vs_oracle(
+    oracle_path_length: int,
+    candidate_path_length: int,
+    *,
+    oracle_status: str,
+    candidate_success: bool,
+) -> float:
+    """
+    Compute candidate/oracle path ratio when the oracle actually solved.
+
+    Returns NaN when the ratio is undefined rather than polluting summaries with
+    +/-inf sentinels.
+    """
+    if str(oracle_status) != "solved" or not bool(candidate_success):
+        return float("nan")
+    oracle_len = int(oracle_path_length or 0)
+    candidate_len = int(candidate_path_length or 0)
+    if oracle_len <= 0 or candidate_len <= 0:
+        return float("nan")
+    return float(candidate_len) / float(oracle_len)
+
+
+def finite_mean(values: List[Any]) -> float:
+    """Average only finite numeric values; return 0.0 when empty."""
+    finite: List[float] = []
+    for value in values:
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(numeric):
+            finite.append(numeric)
+    if not finite:
+        return 0.0
+    return float(sum(finite) / len(finite))
+
+
+def run_astar_oracle(env: Any, timeout: int, heuristic_mode: str = "balanced") -> Dict[str, Any]:
+    """Run canonical A* with diagnostics and return a normalized payload."""
+    priority_options = {
+        "allow_diagonals": False,
+        "rules_profile": "vglc_strict",
+        "representation": "tile",
+        "enable_hierarchical": False,
+    }
+    solver = StateSpaceAStar(
+        env,
+        timeout=int(timeout),
+        heuristic_mode=str(heuristic_mode or "balanced"),
+        priority_options=priority_options,
+        search_mode="astar",
+    )
+    success, path, diagnostics = solver.solve_with_diagnostics()
+    if not isinstance(diagnostics, SolverDiagnostics):
+        diagnostics = SolverDiagnostics(success=bool(success), states_explored=0)
+    solver_used = "astar"
+    primary_failure = str(diagnostics.failure_reason or "")
+
+    if not bool(success):
+        env.reset()
+        fallback = StateSpaceAStar(
+            env,
+            timeout=int(timeout),
+            heuristic_mode=str(heuristic_mode or "balanced"),
+            priority_options=priority_options,
+            search_mode="dijkstra",
+        )
+        fb_success, fb_path, fb_diag = fallback.solve_with_diagnostics()
+        if isinstance(fb_diag, SolverDiagnostics) and bool(fb_success):
+            success = True
+            path = fb_path
+            diagnostics = fb_diag
+            solver_used = "dijkstra_fallback"
+
+    status = oracle_status_from_outcome(bool(success), diagnostics.failure_reason)
+    path_list: List[Tuple[int, int]] = list(path or [])
+    return {
+        "success": bool(success),
+        "path": path_list,
+        "path_length": int(len(path_list)),
+        "states_explored": int(diagnostics.states_explored or 0),
+        "status": status,
+        "failure_reason": str(diagnostics.failure_reason or ""),
+        "time_ms": float(diagnostics.time_taken_ms or 0.0),
+        "states_pruned_dominated": int(diagnostics.states_pruned_dominated or 0),
+        "max_queue_size": int(diagnostics.max_queue_size or 0),
+        "timeout_flag": int(status == "timeout"),
+        "final_inventory": dict(diagnostics.final_inventory or {}),
+        "solver_used": str(solver_used),
+        "primary_solver_error": primary_failure,
+    }

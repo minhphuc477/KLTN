@@ -16,8 +16,10 @@ from src.generation.entity_spawner import (
 from scripts.export_manual_rich_topology_compare import build_manual_rich_topology_graph
 from src.generation.evolutionary_director import networkx_to_mission_graph
 from src.generation.grammar import EdgeType
+from src.evaluation.validator import ExternalValidator
 from src.simulation.validator import GraphGuidedValidator
 from src.utils.stable_seed import stable_seed_offset
+from src.utils.graph_utils import validate_goal_subgraph
 
 
 def test_condition_encoder_factory_default_matches_config_default():
@@ -51,10 +53,27 @@ def test_built_in_manual_rich_topology_graph_preserves_direction():
     graph = build_manual_rich_topology_graph()
 
     assert graph.is_directed()
+    assert nx.is_directed_acyclic_graph(graph)
     assert graph.has_edge(0, 1)
     assert not graph.has_edge(1, 0)
     assert graph.has_edge(10, 11)
     assert not graph.has_edge(11, 10)
+
+
+def test_built_in_manual_rich_topology_graph_passes_strict_goal_gauntlet():
+    graph = build_manual_rich_topology_graph()
+
+    is_valid, errors = validate_goal_subgraph(graph)
+
+    assert is_valid, errors
+
+
+def test_built_in_manual_rich_topology_graph_is_solvable_for_graph_validator():
+    graph = build_manual_rich_topology_graph()
+
+    result = ExternalValidator().validate(graph)
+
+    assert result.is_solvable, result.failure_reason
 
 
 def test_cbs_feature_cache_key_tracks_node_attributes(monkeypatch):

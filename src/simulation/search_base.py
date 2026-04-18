@@ -36,6 +36,8 @@ class GameStateSearchConfig:
     allow_diagonals: bool = True
     rules_profile: str = "vglc_strict"  # vglc_strict | extended | strict_original
     representation: SearchRepresentation = SearchRepresentation.HYBRID
+    max_depth: int = 500
+    use_iddfs: bool = True
 
     def to_priority_options(self) -> Dict[str, Any]:
         return {
@@ -47,6 +49,8 @@ class GameStateSearchConfig:
             "rules_profile": str(self.rules_profile or "vglc_strict"),
             # Representation is consumed by StateSpaceAStar.
             "representation": self.representation.value,
+            "max_depth": int(self.max_depth),
+            "use_iddfs": bool(self.use_iddfs),
         }
 
 

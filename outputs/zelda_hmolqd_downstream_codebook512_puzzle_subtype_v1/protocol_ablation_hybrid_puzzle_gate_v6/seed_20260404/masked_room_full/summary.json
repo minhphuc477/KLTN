@@ -1,0 +1,458 @@
+{
+  "name": "masked_room_full",
+  "room_generator_mode": "discrete_masked",
+  "generation_overrides_applied": {},
+  "metrics": {
+    "num_rooms": 12,
+    "total_tiles_repaired": 457,
+    "repair_rate": 0.75,
+    "dungeon_shape": [
+      64,
+      44
+    ],
+    "generation_time_sec": 62.327922344207764,
+    "batch_generation_diagnostics": [
+      {
+        "layer_index": 0,
+        "latent_shape_chw": [
+          48,
+          16,
+          11
+        ],
+        "target_room_size_hw": [
+          16,
+          11
+        ],
+        "bucket_room_count": 1,
+        "requested_batch_size": 8,
+        "safe_chunk_size": 8,
+        "cuda_free_mb": 2219.7000007629395
+      },
+      {
+        "layer_index": 0,
+        "bucket_key": "(48, 16, 11, 16, 11)",
+        "chunk_start": 0,
+        "actual_chunk_size": 1
+      },
+      {
+        "layer_index": 1,
+        "latent_shape_chw": [
+          64,
+          4,
+          3
+        ],
+        "target_room_size_hw": [
+          16,
+          11
+        ],
+        "bucket_room_count": 2,
+        "requested_batch_size": 8,
+        "safe_chunk_size": 8,
+        "cuda_free_mb": 2217.7000007629395
+      },
+      {
+        "layer_index": 1,
+        "bucket_key": "(64, 4, 3, 16, 11)",
+        "chunk_start": 0,
+        "actual_chunk_size": 2
+      },
+      {
+        "layer_index": 2,
+        "latent_shape_chw": [
+          64,
+          4,
+          3
+        ],
+        "target_room_size_hw": [
+          16,
+          11
+        ],
+        "bucket_room_count": 2,
+        "requested_batch_size": 8,
+        "safe_chunk_size": 8,
+        "cuda_free_mb": 2195.7000007629395
+      },
+      {
+        "layer_index": 2,
+        "bucket_key": "(64, 4, 3, 16, 11)",
+        "chunk_start": 0,
+        "actual_chunk_size": 2
+      },
+      {
+        "layer_index": 3,
+        "latent_shape_chw": [
+          64,
+          4,
+          3
+        ],
+        "target_room_size_hw": [
+          16,
+          11
+        ],
+        "bucket_room_count": 3,
+        "requested_batch_size": 8,
+        "safe_chunk_size": 8,
+        "cuda_free_mb": 2195.7000007629395
+      },
+      {
+        "layer_index": 3,
+        "bucket_key": "(64, 4, 3, 16, 11)",
+        "chunk_start": 0,
+        "actual_chunk_size": 3
+      },
+      {
+        "layer_index": 4,
+        "latent_shape_chw": [
+          64,
+          4,
+          3
+        ],
+        "target_room_size_hw": [
+          16,
+          11
+        ],
+        "bucket_room_count": 2,
+        "requested_batch_size": 8,
+        "safe_chunk_size": 8,
+        "cuda_free_mb": 2195.7000007629395
+      },
+      {
+        "layer_index": 4,
+        "bucket_key": "(64, 4, 3, 16, 11)",
+        "chunk_start": 0,
+        "actual_chunk_size": 2
+      },
+      {
+        "layer_index": 5,
+        "latent_shape_chw": [
+          64,
+          4,
+          3
+        ],
+        "target_room_size_hw": [
+          16,
+          11
+        ],
+        "bucket_room_count": 1,
+        "requested_batch_size": 8,
+        "safe_chunk_size": 8,
+        "cuda_free_mb": 2195.7000007629395
+      },
+      {
+        "layer_index": 5,
+        "bucket_key": "(64, 4, 3, 16, 11)",
+        "chunk_start": 0,
+        "actual_chunk_size": 1
+      },
+      {
+        "layer_index": 6,
+        "latent_shape_chw": [
+          64,
+          4,
+          3
+        ],
+        "target_room_size_hw": [
+          16,
+          11
+        ],
+        "bucket_room_count": 1,
+        "requested_batch_size": 8,
+        "safe_chunk_size": 8,
+        "cuda_free_mb": 2195.7000007629395
+      },
+      {
+        "layer_index": 6,
+        "bucket_key": "(64, 4, 3, 16, 11)",
+        "chunk_start": 0,
+        "actual_chunk_size": 1
+      }
+    ],
+    "total_graph_marker_expected": 11.0,
+    "total_graph_marker_overwrites": 3.0,
+    "avg_neural_graph_marker_exact_match_rate": 1.0,
+    "avg_final_pre_overlay_graph_marker_exact_match_rate": 0.75,
+    "avg_final_post_overlay_graph_marker_exact_match_rate": 1.0,
+    "avg_final_graph_marker_overwrite_rate": 0.25,
+    "avg_neural_semantic_anchor_error": 0.0,
+    "avg_final_pre_overlay_semantic_anchor_error": 6.75,
+    "avg_final_post_overlay_semantic_anchor_error": 0.0
+  },
+  "runtime_diagnostics": {
+    "semantic_constrained_decode_applied": 17,
+    "neural_graph_semantic_hints_salvaged": 14,
+    "repair_graph_semantic_hints_salvaged": 11,
+    "wfc_feedback_attempts": 20,
+    "neural_boundary_shell_enforced": 20,
+    "final_boundary_shell_enforced": 20,
+    "neural_post_boundary_graph_semantic_hints_salvaged": 14,
+    "final_post_boundary_graph_semantic_hints_salvaged": 11,
+    "masked_room_teacher_fallback": 8,
+    "boundary_latent_masking_applied": 8,
+    "topology_door_tiles_forced": 8,
+    "neural_structural_artifacts_stripped": 8,
+    "repair_room_semantics_stripped": 8,
+    "repair_structural_artifacts_stripped": 6,
+    "neural_room_semantics_stripped": 3,
+    "puzzle_room_scaffold_applied": 3,
+    "puzzle_room_scaffold_hub": 1,
+    "puzzle_room_scaffold_gate_switch": 2,
+    "puzzle_room_scaffold_novelty_selected": 3,
+    "puzzle_room_scaffold_gate": 1,
+    "puzzle_room_scaffold_combat": 1,
+    "puzzle_room_scaffold_gate_combat": 1
+  },
+  "topology_anchor_policy": {
+    "topology_anchor_policy_version": "2026-04-11.semantic_anchor_v8_puzzle_subtype_channels",
+    "semantic_role_prior_strength": 0.15,
+    "symbolic_max_repair_attempts": 5,
+    "symbolic_repair_margin": 2,
+    "symbolic_adjacency_threshold": 0.01,
+    "semantic_anchor_threshold": 0.5,
+    "semantic_puzzle_offset": 2,
+    "semantic_constrained_decoding_enabled": true,
+    "semantic_marker_logit_bias": 10000.0,
+    "semantic_marker_suppression_bias": 100.0,
+    "puzzle_room_scaffold_enabled": true,
+    "puzzle_room_scaffold_min_structure_tiles": 10,
+    "puzzle_room_archetype_mode": "auto",
+    "puzzle_room_branch_density": 0.75,
+    "puzzle_room_block_budget": 28,
+    "puzzle_room_preserve_route_margin": 0,
+    "puzzle_room_switch_pocket_depth": 3,
+    "puzzle_room_resource_bypass_offset": 2,
+    "puzzle_room_key_pocket_depth": 3,
+    "puzzle_room_item_slot_depth": 3,
+    "puzzle_room_toggle_corridor_offset": 2,
+    "puzzle_room_novelty_enabled": true,
+    "puzzle_room_candidate_count": 4,
+    "puzzle_room_novelty_weight": 0.45,
+    "puzzle_room_min_quality_gain": 0.5,
+    "validator_plan_max_states": 512,
+    "deterministic_graph_marker_overlay_enabled": true,
+    "fast_sampler_teacher_fallback_enabled": true,
+    "masked_room_teacher_fallback_enabled": true,
+    "masked_room_sampling_temperature": 1.0,
+    "masked_room_sampling_schedule": "cosine",
+    "masked_room_sampling_stochastic": true,
+    "masked_room_corrector_steps": 1,
+    "masked_room_corrector_mask_ratio": 0.1
+  },
+  "semantic_metrics": {
+    "total_graph_marker_expected": 11.0,
+    "total_graph_marker_overwrites": 3.0,
+    "avg_neural_graph_marker_exact_match_rate": 1.0,
+    "avg_final_pre_overlay_graph_marker_exact_match_rate": 0.75,
+    "avg_final_post_overlay_graph_marker_exact_match_rate": 1.0,
+    "avg_final_graph_marker_overwrite_rate": 0.25,
+    "avg_neural_semantic_anchor_error": 0.0,
+    "avg_final_pre_overlay_semantic_anchor_error": 6.75,
+    "avg_final_post_overlay_semantic_anchor_error": 0.0
+  },
+  "tile_hist": {
+    "2": 718,
+    "1": 1250,
+    "0": 724,
+    "15": 70,
+    "21": 1,
+    "20": 2,
+    "30": 1,
+    "31": 1,
+    "11": 5,
+    "12": 5,
+    "13": 10,
+    "32": 1,
+    "43": 2,
+    "14": 5,
+    "3": 18,
+    "23": 1,
+    "42": 1,
+    "22": 1
+  },
+  "room_hashes": {
+    "0": "b9db8b904447afdb",
+    "1": "ba561c88f3e40005",
+    "2": "964afc283093414d",
+    "3": "ac0890397702bb82",
+    "4": "f54bf6288a56afd3",
+    "5": "fb0016f01e31d738",
+    "6": "bcc1656ed984ada9",
+    "7": "572a515061ca614e",
+    "8": "ca5548b738492e64",
+    "9": "43e35030162903fb",
+    "10": "242508567ef2f85c",
+    "11": "06236cee8fc3e96d"
+  },
+  "layout": {
+    "room_count": 12.0,
+    "primary_quality_metric_name": "graph_edge_slot_adjacency_rate",
+    "primary_quality_metric_value": 1.0,
+    "graph_slot_match_rate": 1.0,
+    "graph_position_coverage_rate": 1.0,
+    "graph_preferred_position_duplicate_rate": 0.0,
+    "graph_slot_preference_mean_distance": 0.0,
+    "graph_slot_preference_max_distance": 0.0,
+    "graph_edge_slot_adjacency_rate": 1.0,
+    "graph_edge_slot_mean_distance": 1.0,
+    "graph_edge_slot_mean_excess_distance": 0.0,
+    "graph_edge_slot_max_distance": 1.0,
+    "graph_edge_count_evaluated": 14.0
+  },
+  "validation": {
+    "astar_grid": {
+      "solvable": true,
+      "is_valid_syntax": true,
+      "path_length": 90,
+      "reachability": 0.067618332081142,
+      "backtracking_score": 0.0,
+      "error_message": ""
+    },
+    "softlock_check": {
+      "is_safe": true,
+      "issues": []
+    },
+    "search_algorithms": {
+      "search_suite_version": "2026-04-15.validation_search_suite_v2",
+      "tile_state_space": {
+        "astar": {
+          "success": true,
+          "path_length": 90,
+          "states_explored": 1941,
+          "time_sec": 0.0939150000049267,
+          "algorithm": "A*",
+          "validation_role": "oracle",
+          "rules_profile": "vglc_strict",
+          "allow_diagonals": false,
+          "timeout_limit_states": 200000,
+          "path_ratio_vs_astar": 1.0,
+          "states_ratio_vs_astar": 1.0
+        },
+        "bfs": {
+          "success": false,
+          "path_length": 0,
+          "states_explored": 50000,
+          "time_sec": 2.3706228000010015,
+          "algorithm": "BFS",
+          "validation_role": "comparison",
+          "rules_profile": "vglc_strict",
+          "allow_diagonals": false,
+          "timeout_limit_states": 50000,
+          "path_ratio_vs_astar": null,
+          "states_ratio_vs_astar": null
+        },
+        "dijkstra": {
+          "success": false,
+          "path_length": 0,
+          "states_explored": 50000,
+          "time_sec": 3.1738524999964284,
+          "algorithm": "Dijkstra",
+          "validation_role": "comparison",
+          "rules_profile": "vglc_strict",
+          "allow_diagonals": false,
+          "timeout_limit_states": 50000,
+          "path_ratio_vs_astar": null,
+          "states_ratio_vs_astar": null
+        },
+        "greedy": {
+          "success": false,
+          "path_length": 0,
+          "states_explored": 50000,
+          "time_sec": 2.872699499996088,
+          "algorithm": "Greedy",
+          "validation_role": "comparison",
+          "rules_profile": "vglc_strict",
+          "allow_diagonals": false,
+          "timeout_limit_states": 50000,
+          "path_ratio_vs_astar": null,
+          "states_ratio_vs_astar": null
+        },
+        "dstar_lite": {
+          "success": true,
+          "path_length": 90,
+          "states_explored": 1941,
+          "time_sec": 28.895850100001553,
+          "algorithm": "D* Lite (fallback: A*)",
+          "validation_role": "comparison",
+          "rules_profile": "vglc_strict",
+          "allow_diagonals": false,
+          "timeout_limit_states": 100000,
+          "fallback_used": true,
+          "replans": 0,
+          "path_ratio_vs_astar": 1.0,
+          "states_ratio_vs_astar": 1.0
+        },
+        "dfs_iddfs": {
+          "success": false,
+          "path_length": 0,
+          "states_explored": 109621,
+          "time_sec": 2.708516700004111,
+          "algorithm": "DFS/IDDFS",
+          "validation_role": "comparison",
+          "rules_profile": "vglc_strict",
+          "allow_diagonals": false,
+          "timeout_limit_states": 100000,
+          "max_depth_reached": 19,
+          "backtrack_count": 239226,
+          "cycle_detections": 0,
+          "use_iddfs": true,
+          "path_ratio_vs_astar": null,
+          "states_ratio_vs_astar": null
+        },
+        "bidirectional_astar": {
+          "success": true,
+          "path_length": 90,
+          "states_explored": 1941,
+          "time_sec": 0.3106589000017266,
+          "algorithm": "Bidirectional A* (fallback: A*)",
+          "validation_role": "comparison",
+          "rules_profile": "vglc_strict",
+          "allow_diagonals": false,
+          "timeout_limit_states": 100000,
+          "fallback_used": true,
+          "meeting_point": null,
+          "collision_checks": 0,
+          "path_ratio_vs_astar": 1.0,
+          "states_ratio_vs_astar": 1.0
+        }
+      },
+      "agreement": {
+        "astar_success": true,
+        "bfs_matches_astar_path_length": false,
+        "dijkstra_matches_astar_path_length": false,
+        "greedy_suboptimality_vs_astar": null,
+        "all_algorithms_solved": false
+      },
+      "excluded_algorithms": {
+        "parallel_astar": "Excluded from canonical export validation because multiprocessing adds high runtime overhead and non-trivial platform variance while targeting the same optimality contract as A*.",
+        "multi_goal": "Excluded because end-to-end dungeon validation here is single-goal START->TRIFORCE, not multi-goal routing.",
+        "key_economy_validator": "Excluded because it validates graph-level key economy, not tile/grid playability.",
+        "solver_comparison": "Excluded because it is a benchmark harness, not an independent solver."
+      },
+      "notes": {
+        "oracle": "A* remains the hard grid-level oracle in this suite.",
+        "behavioral_probe": "CBS is reported separately because it is a bounded-rational behavior probe, not the hard correctness oracle."
+      }
+    },
+    "cbs_balanced": {
+      "seed": 123,
+      "success": true,
+      "path_length": 3190,
+      "states_explored": 3189,
+      "confusion_ratio_vs_astar": 35.44444444444444,
+      "confusion_index": 22.115942028985508,
+      "navigation_entropy": 1.9959798315609945,
+      "room_entropy": 2.974660821599936,
+      "cognitive_load": 0.31138781465224313,
+      "aha_latency": 7
+    },
+    "graph_progression": {
+      "solvable": true,
+      "path_length": 7,
+      "states_explored": 11,
+      "failure_reason": "",
+      "goal_gauntlet_valid": true,
+      "goal_gauntlet_errors": [],
+      "virtual_nodes_removed": 0
+    },
+    "available": true
+  }
+}

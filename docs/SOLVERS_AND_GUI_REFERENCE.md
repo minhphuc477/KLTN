@@ -163,6 +163,12 @@ These exist in codebase but are not all fully wired into main auto-solve path:
 | `solver_comparison.py` | Algorithm metric comparison helper | Button path uses custom in-GUI comparison worker instead |
 | `map_elites.py` | MAP-Elites archive and diversity metrics | Wired via `Run MAP-Elites` button + overlay toggle |
 
+Canonical export validation uses:
+
+- hard oracle: `A*`, graph progression validation, softlock check
+- comparison solvers: `BFS`, `Dijkstra`, `Greedy`, `D* Lite`, `DFS/IDDFS`, `Bidirectional A*`
+- behavioral probe: `CognitiveBoundedSearch`
+
 ## 5. GUI Features
 
 ### 5.1 Checkboxes

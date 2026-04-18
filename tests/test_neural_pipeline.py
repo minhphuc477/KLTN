@@ -1121,6 +1121,22 @@ def test_sanitize_semantic_grid_replaces_invalid_ids_with_fallback(pipeline):
     assert int(sanitized[1, 0]) == int(fallback[1, 0])
 
 
+def test_sanitize_semantic_grid_can_strip_void_tiles(pipeline):
+    """Generated room grids should not preserve interior VOID tiles."""
+    floor_id = int(SEMANTIC_PALETTE["FLOOR"])
+    void_id = int(SEMANTIC_PALETTE["VOID"])
+    grid = np.array([[floor_id, void_id, floor_id], [void_id, floor_id, void_id]], dtype=np.int32)
+    fallback = np.array([[floor_id, floor_id, floor_id], [floor_id, floor_id, floor_id]], dtype=np.int32)
+    sanitized, invalid_count, invalid_ids = pipeline._sanitize_semantic_grid(
+        grid,
+        fallback_grid=fallback,
+        strip_void=True,
+    )
+    assert int(invalid_count) == 3
+    assert int(void_id) in {int(v) for v in invalid_ids}
+    assert np.all(sanitized == floor_id)
+
+
 # =============================================================================
 # PERFORMANCE TESTS
 # =============================================================================

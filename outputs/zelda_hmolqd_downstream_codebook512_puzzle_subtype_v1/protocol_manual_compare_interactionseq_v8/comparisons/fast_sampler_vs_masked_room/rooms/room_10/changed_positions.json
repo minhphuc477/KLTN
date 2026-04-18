@@ -1,0 +1,38 @@
+[
+  {
+    "row": 3,
+    "col": 3,
+    "baseline": "F",
+    "candidate": "B"
+  },
+  {
+    "row": 4,
+    "col": 3,
+    "baseline": "F",
+    "candidate": "B"
+  },
+  {
+    "row": 5,
+    "col": 3,
+    "baseline": "F",
+    "candidate": "B"
+  },
+  {
+    "row": 6,
+    "col": 3,
+    "baseline": "F",
+    "candidate": "B"
+  },
+  {
+    "row": 7,
+    "col": 3,
+    "baseline": "F",
+    "candidate": "B"
+  },
+  {
+    "row": 13,
+    "col": 7,
+    "baseline": "F",
+    "candidate": "B"
+  }
+]

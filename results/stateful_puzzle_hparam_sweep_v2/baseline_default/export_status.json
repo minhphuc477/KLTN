@@ -1,0 +1,12 @@
+{
+  "variant_name": "baseline_default",
+  "stage": "complete",
+  "seed": 20260418,
+  "guidance_scale": 3.0,
+  "logic_guidance_scale": 0.0,
+  "num_diffusion_steps": 50,
+  "use_fast_sampling": false,
+  "generation_time_sec": 98.02109289169312,
+  "room_count": 12,
+  "summary_path": "results\\stateful_puzzle_hparam_sweep_v2\\baseline_default\\summary.json"
+}

@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import math
 import statistics
 import sys
 from pathlib import Path
@@ -24,10 +25,12 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from scripts.run_fast_sampler_visual_audit import (
+    VALIDATION_SEARCH_SUITE_VERSION,
     add_generation_override_args,
     export_variant,
     generation_overrides_from_namespace,
 )
+from scripts.export_semantic_anchor_end_to_end import export_masked_variant
 from scripts.export_manual_rich_topology_compare import (
     _ensure_directed_progression_graph,
     build_manual_rich_topology_graph,
@@ -46,6 +49,40 @@ def _safe_mean(values: Sequence[float]) -> float:
 
 def _safe_median(values: Sequence[float]) -> float:
     return float(statistics.median(values)) if values else float("nan")
+
+
+def _safe_mean_or_none(values: Sequence[float]) -> float | None:
+    return float(statistics.fmean(values)) if values else None
+
+
+def _json_sanitize(value: Any) -> Any:
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {str(k): _json_sanitize(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_json_sanitize(v) for v in value]
+    if isinstance(value, tuple):
+        return [_json_sanitize(v) for v in value]
+    return value
+
+
+def _load_existing_variant_summary(seed_dir: Path, variant_name: str) -> Dict[str, Any]:
+    summary_path = seed_dir / str(variant_name) / "summary.json"
+    if not summary_path.exists():
+        raise FileNotFoundError(f"Missing cached variant summary: {summary_path}")
+    return json.loads(summary_path.read_text(encoding="utf-8"))
+
+
+def _try_load_existing_seed_summary(seed_dir: Path, variants: Sequence[Dict[str, Any]]) -> Dict[str, Any] | None:
+    cached_variants: Dict[str, Any] = {}
+    for variant in variants:
+        variant_name = str(variant["variant_name"])
+        summary_path = seed_dir / variant_name / "summary.json"
+        if not summary_path.exists():
+            return None
+        cached_variants[variant_name] = json.loads(summary_path.read_text(encoding="utf-8"))
+    return cached_variants
 
 
 def _aggregate_variant(entries: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
@@ -83,10 +120,180 @@ def _aggregate_variant(entries: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
         float(entry["metrics"].get("avg_final_post_overlay_semantic_anchor_error", 0.0))
         for entry in entries
     ]
+    astar_solvable = [
+        1.0 if bool(entry.get("validation", {}).get("astar_grid", {}).get("solvable", False)) else 0.0
+        for entry in entries
+    ]
+    graph_guided_solvable = [
+        1.0 if bool(entry.get("validation", {}).get("graph_guided_oracle", {}).get("solvable", False)) else 0.0
+        for entry in entries
+    ]
+    softlock_safe = [
+        1.0 if bool(entry.get("validation", {}).get("softlock_check", {}).get("is_safe", False)) else 0.0
+        for entry in entries
+    ]
+    cbs_success = [
+        1.0 if bool(entry.get("validation", {}).get("cbs_balanced", {}).get("success", False)) else 0.0
+        for entry in entries
+    ]
+    cbs_path_lengths = [
+        float(entry.get("validation", {}).get("cbs_balanced", {}).get("path_length", 0.0) or 0.0)
+        for entry in entries
+    ]
+    cbs_states = [
+        float(entry.get("validation", {}).get("cbs_balanced", {}).get("states_explored", 0.0) or 0.0)
+        for entry in entries
+    ]
+    cbs_confusion_ratios = [
+        float(entry.get("validation", {}).get("cbs_balanced", {}).get("confusion_ratio_vs_astar", float("inf")))
+        for entry in entries
+        if math.isfinite(float(entry.get("validation", {}).get("cbs_balanced", {}).get("confusion_ratio_vs_astar", float("inf"))))
+    ]
+    cbs_confusion_index = [
+        float(entry.get("validation", {}).get("cbs_balanced", {}).get("confusion_index", 0.0) or 0.0)
+        for entry in entries
+    ]
+    cbs_navigation_entropy = [
+        float(entry.get("validation", {}).get("cbs_balanced", {}).get("navigation_entropy", 0.0) or 0.0)
+        for entry in entries
+    ]
+    cbs_cognitive_load = [
+        float(entry.get("validation", {}).get("cbs_balanced", {}).get("cognitive_load", 0.0) or 0.0)
+        for entry in entries
+    ]
+    cbs_deliberation_events = [
+        float(entry.get("validation", {}).get("cbs_balanced", {}).get("deliberation_events", 0.0) or 0.0)
+        for entry in entries
+    ]
+    cbs_budget_exhaustion_events = [
+        float(entry.get("validation", {}).get("cbs_balanced", {}).get("budget_exhaustion_events", 0.0) or 0.0)
+        for entry in entries
+    ]
+    cbs_peak_frustration = [
+        float(entry.get("validation", {}).get("cbs_balanced", {}).get("peak_frustration", 0.0) or 0.0)
+        for entry in entries
+    ]
+    cbs_affordance_reactivations = [
+        float(entry.get("validation", {}).get("cbs_balanced", {}).get("affordance_reactivations", 0.0) or 0.0)
+        for entry in entries
+    ]
+    cbs_affordance_guided_steps = [
+        float(entry.get("validation", {}).get("cbs_balanced", {}).get("affordance_guided_steps", 0.0) or 0.0)
+        for entry in entries
+    ]
+    cbs_inventory_change_events = [
+        float(entry.get("validation", {}).get("cbs_balanced", {}).get("inventory_change_events", 0.0) or 0.0)
+        for entry in entries
+    ]
+    cbs_focus_switches = [
+        float(entry.get("validation", {}).get("cbs_balanced", {}).get("focus_switches", 0.0) or 0.0)
+        for entry in entries
+    ]
+    cbs_focus_guided_steps = [
+        float(entry.get("validation", {}).get("cbs_balanced", {}).get("focus_guided_steps", 0.0) or 0.0)
+        for entry in entries
+    ]
+    goal_gauntlet_valid = [
+        1.0 if bool(entry.get("validation", {}).get("graph_progression", {}).get("goal_gauntlet_valid", False)) else 0.0
+        for entry in entries
+    ]
+    hybrid_oracle_pass = [
+        1.0 if bool(entry.get("validation", {}).get("mechanical_contract", {}).get("hybrid_oracle_pass", False)) else 0.0
+        for entry in entries
+    ]
     room_hash_signatures = [
         "|".join(f"{room_id}:{digest}" for room_id, digest in sorted(entry["room_hashes"].items()))
         for entry in entries
     ]
+
+    search_algorithm_aggregate: Dict[str, Any] = {
+        "search_suite_version": VALIDATION_SEARCH_SUITE_VERSION,
+        "tile_state_space": {},
+        "agreement": {},
+        "behavioral_probe": {},
+        "oracle_stack": {},
+        "excluded_algorithms": {},
+    }
+    algorithm_buckets: Dict[str, Dict[str, List[float]]] = {}
+    agreement_buckets: Dict[str, List[float]] = {}
+    excluded_algorithms: Dict[str, str] = {}
+    for entry in entries:
+        suite = entry.get("validation", {}).get("search_algorithms", {})
+        excluded_algorithms.update({str(k): str(v) for k, v in dict(suite.get("excluded_algorithms", {})).items()})
+        for algorithm_name, result in dict(suite.get("tile_state_space", {})).items():
+            bucket = algorithm_buckets.setdefault(
+                str(algorithm_name),
+                {
+                    "success": [],
+                    "independent_success": [],
+                    "fallback_used": [],
+                    "path_length": [],
+                    "states_explored": [],
+                    "time_sec": [],
+                    "path_ratio_vs_astar": [],
+                    "states_ratio_vs_astar": [],
+                },
+            )
+            success_flag = bool(result.get("success", False))
+            fallback_flag = bool(result.get("fallback_used", False))
+            bucket["success"].append(1.0 if success_flag else 0.0)
+            bucket["independent_success"].append(1.0 if (success_flag and not fallback_flag) else 0.0)
+            bucket["fallback_used"].append(1.0 if fallback_flag else 0.0)
+            bucket["path_length"].append(float(result.get("path_length", 0.0) or 0.0))
+            bucket["states_explored"].append(float(result.get("states_explored", 0.0) or 0.0))
+            bucket["time_sec"].append(float(result.get("time_sec", 0.0) or 0.0))
+            path_ratio = result.get("path_ratio_vs_astar")
+            if path_ratio is not None and math.isfinite(float(path_ratio)):
+                bucket["path_ratio_vs_astar"].append(float(path_ratio))
+            states_ratio = result.get("states_ratio_vs_astar")
+            if states_ratio is not None and math.isfinite(float(states_ratio)):
+                bucket["states_ratio_vs_astar"].append(float(states_ratio))
+        for agreement_name, value in dict(suite.get("agreement", {})).items():
+            if isinstance(value, bool):
+                agreement_buckets.setdefault(str(agreement_name), []).append(1.0 if value else 0.0)
+            elif value is not None and math.isfinite(float(value)):
+                agreement_buckets.setdefault(str(agreement_name), []).append(float(value))
+
+    for algorithm_name, bucket in algorithm_buckets.items():
+        search_algorithm_aggregate["tile_state_space"][algorithm_name] = {
+            "success_rate": _safe_mean(bucket["success"]),
+            "independent_success_rate": _safe_mean(bucket["independent_success"]),
+            "fallback_rate": _safe_mean(bucket["fallback_used"]),
+            "avg_path_length": _safe_mean(bucket["path_length"]),
+            "avg_states_explored": _safe_mean(bucket["states_explored"]),
+            "avg_time_sec": _safe_mean(bucket["time_sec"]),
+            "avg_path_ratio_vs_astar": _safe_mean_or_none(bucket["path_ratio_vs_astar"]),
+            "avg_states_ratio_vs_astar": _safe_mean_or_none(bucket["states_ratio_vs_astar"]),
+        }
+    for agreement_name, values in agreement_buckets.items():
+        search_algorithm_aggregate["agreement"][agreement_name] = _safe_mean(values)
+    search_algorithm_aggregate["behavioral_probe"] = {
+        "cbs_balanced": {
+            "success_rate": _safe_mean(cbs_success),
+            "avg_path_length": _safe_mean(cbs_path_lengths),
+            "avg_states_explored": _safe_mean(cbs_states),
+            "avg_confusion_ratio_vs_astar": _safe_mean(cbs_confusion_ratios),
+            "avg_confusion_index": _safe_mean(cbs_confusion_index),
+            "avg_navigation_entropy": _safe_mean(cbs_navigation_entropy),
+            "avg_cognitive_load": _safe_mean(cbs_cognitive_load),
+            "avg_deliberation_events": _safe_mean(cbs_deliberation_events),
+            "avg_budget_exhaustion_events": _safe_mean(cbs_budget_exhaustion_events),
+            "avg_peak_frustration": _safe_mean(cbs_peak_frustration),
+            "avg_affordance_reactivations": _safe_mean(cbs_affordance_reactivations),
+            "avg_affordance_guided_steps": _safe_mean(cbs_affordance_guided_steps),
+            "avg_inventory_change_events": _safe_mean(cbs_inventory_change_events),
+            "avg_focus_switches": _safe_mean(cbs_focus_switches),
+            "avg_focus_guided_steps": _safe_mean(cbs_focus_guided_steps),
+        }
+    }
+    search_algorithm_aggregate["oracle_stack"] = {
+        "astar_grid_solvable_rate": _safe_mean(astar_solvable),
+        "graph_guided_oracle_solvable_rate": _safe_mean(graph_guided_solvable),
+        "softlock_safe_rate": _safe_mean(softlock_safe),
+        "goal_gauntlet_valid_rate": _safe_mean(goal_gauntlet_valid),
+        "hybrid_oracle_pass_rate": _safe_mean(hybrid_oracle_pass),
+    }
+    search_algorithm_aggregate["excluded_algorithms"] = excluded_algorithms
 
     return {
         "num_runs": len(entries),
@@ -110,8 +317,25 @@ def _aggregate_variant(entries: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
         "median_final_pre_overlay_semantic_anchor_error": _safe_median(final_pre_overlay_anchor_errors),
         "avg_final_post_overlay_semantic_anchor_error": _safe_mean(final_post_overlay_anchor_errors),
         "median_final_post_overlay_semantic_anchor_error": _safe_median(final_post_overlay_anchor_errors),
+        "astar_grid_solvable_rate": _safe_mean(astar_solvable),
+        "graph_guided_oracle_solvable_rate": _safe_mean(graph_guided_solvable),
+        "softlock_safe_rate": _safe_mean(softlock_safe),
+        "hybrid_oracle_pass_rate": _safe_mean(hybrid_oracle_pass),
+        "cbs_success_rate": _safe_mean(cbs_success),
+        "avg_cbs_confusion_ratio_vs_astar": _safe_mean(cbs_confusion_ratios),
+        "avg_cbs_cognitive_load": _safe_mean(cbs_cognitive_load),
+        "avg_cbs_deliberation_events": _safe_mean(cbs_deliberation_events),
+        "avg_cbs_budget_exhaustion_events": _safe_mean(cbs_budget_exhaustion_events),
+        "avg_cbs_peak_frustration": _safe_mean(cbs_peak_frustration),
+        "avg_cbs_affordance_reactivations": _safe_mean(cbs_affordance_reactivations),
+        "avg_cbs_affordance_guided_steps": _safe_mean(cbs_affordance_guided_steps),
+        "avg_cbs_inventory_change_events": _safe_mean(cbs_inventory_change_events),
+        "avg_cbs_focus_switches": _safe_mean(cbs_focus_switches),
+        "avg_cbs_focus_guided_steps": _safe_mean(cbs_focus_guided_steps),
+        "goal_gauntlet_valid_rate": _safe_mean(goal_gauntlet_valid),
         "unique_layout_count": len(set(room_hash_signatures)),
         "all_layouts_identical": len(set(room_hash_signatures)) == 1,
+        "search_algorithm_aggregate": search_algorithm_aggregate,
     }
 
 
@@ -141,6 +365,39 @@ def parse_args() -> argparse.Namespace:
         nargs="+",
         default=[20260404, 20260405, 20260406],
         help="Seeds to audit",
+    )
+    parser.add_argument(
+        "--reuse-existing-seed-summaries",
+        action="store_true",
+        help=(
+            "Reuse existing per-seed variant summary.json files when they already exist "
+            "under --output-dir instead of regenerating those variants."
+        ),
+    )
+    parser.add_argument(
+        "--aggregate-only",
+        action="store_true",
+        help=(
+            "Skip generation and rebuild the aggregate summary from existing per-seed "
+            "summary.json files under --output-dir. Fails if any expected seed/variant "
+            "summary is missing."
+        ),
+    )
+    parser.add_argument(
+        "--include-no-fallback-ablations",
+        action="store_true",
+        help=(
+            "Also export strict no-fallback variants for fast-sampler and masked-room, "
+            "plus pure-neural no-overlay variants used by the neural-semantics audit."
+        ),
+    )
+    parser.add_argument(
+        "--include-puzzle-ablations",
+        action="store_true",
+        help=(
+            "Also export puzzle-off variants with puzzle_room_scaffold_enabled=False "
+            "for diffusion, fast-sampler, and masked-room."
+        ),
     )
     add_generation_override_args(parser)
     return parser.parse_args()
@@ -172,6 +429,7 @@ def run_from_args(args: argparse.Namespace) -> Dict[str, str]:
 
     variants = [
         {
+            "exporter": "diffusion",
             "variant_name": "diffusion_cfg3_logic0_steps50",
             "guidance_scale": 3.0,
             "logic_guidance_scale": 0.0,
@@ -179,13 +437,109 @@ def run_from_args(args: argparse.Namespace) -> Dict[str, str]:
             "use_fast_sampling": False,
         },
         {
+            "exporter": "diffusion",
             "variant_name": "fast_cfg3_logic0_steps4",
             "guidance_scale": 3.0,
             "logic_guidance_scale": 0.0,
             "num_diffusion_steps": 4,
             "use_fast_sampling": True,
         },
+        {
+            "exporter": "masked_room",
+            "variant_name": "masked_room_full",
+        },
     ]
+    if bool(getattr(args, "include_no_fallback_ablations", False)):
+        variants.extend(
+            [
+                {
+                    "exporter": "diffusion",
+                    "variant_name": "fast_cfg3_logic0_steps4_no_fallback",
+                    "guidance_scale": 3.0,
+                    "logic_guidance_scale": 0.0,
+                    "num_diffusion_steps": 4,
+                    "use_fast_sampling": True,
+                    "variant_generation_overrides": {
+                        "fast_sampler_teacher_fallback_enabled": False,
+                    },
+                },
+                {
+                    "exporter": "masked_room",
+                    "variant_name": "masked_room_full_no_fallback",
+                    "variant_generation_overrides": {
+                        "masked_room_teacher_fallback_enabled": False,
+                    },
+                },
+                {
+                    "exporter": "diffusion",
+                    "variant_name": "diffusion_cfg3_logic0_steps50_pure_neural",
+                    "guidance_scale": 3.0,
+                    "logic_guidance_scale": 0.0,
+                    "num_diffusion_steps": 50,
+                    "use_fast_sampling": False,
+                    "variant_generation_overrides": {
+                        "deterministic_graph_marker_overlay_enabled": False,
+                    },
+                },
+                {
+                    "exporter": "diffusion",
+                    "variant_name": "fast_cfg3_logic0_steps4_pure_neural_no_fallback",
+                    "guidance_scale": 3.0,
+                    "logic_guidance_scale": 0.0,
+                    "num_diffusion_steps": 4,
+                    "use_fast_sampling": True,
+                    "variant_generation_overrides": {
+                        "deterministic_graph_marker_overlay_enabled": False,
+                        "fast_sampler_teacher_fallback_enabled": False,
+                    },
+                },
+                {
+                    "exporter": "masked_room",
+                    "variant_name": "masked_room_full_pure_neural_no_fallback",
+                    "variant_generation_overrides": {
+                        "deterministic_graph_marker_overlay_enabled": False,
+                        "masked_room_teacher_fallback_enabled": False,
+                    },
+                },
+            ]
+        )
+    if bool(getattr(args, "include_puzzle_ablations", False)):
+        variants.extend(
+            [
+                {
+                    "exporter": "diffusion",
+                    "variant_name": "diffusion_cfg3_logic0_steps50_no_puzzle",
+                    "guidance_scale": 3.0,
+                    "logic_guidance_scale": 0.0,
+                    "num_diffusion_steps": 50,
+                    "use_fast_sampling": False,
+                    "variant_generation_overrides": {
+                        "puzzle_room_scaffold_enabled": False,
+                        "puzzle_room_structure_enabled": False,
+                    },
+                },
+                {
+                    "exporter": "diffusion",
+                    "variant_name": "fast_cfg3_logic0_steps4_no_puzzle",
+                    "guidance_scale": 3.0,
+                    "logic_guidance_scale": 0.0,
+                    "num_diffusion_steps": 4,
+                    "use_fast_sampling": True,
+                    "variant_generation_overrides": {
+                        "puzzle_room_scaffold_enabled": False,
+                        "puzzle_room_structure_enabled": False,
+                    },
+                },
+                {
+                    "exporter": "masked_room",
+                    "variant_name": "masked_room_full_no_puzzle",
+                    "variant_generation_overrides": {
+                        "puzzle_room_scaffold_enabled": False,
+                        "puzzle_room_structure_enabled": False,
+                    },
+                },
+            ]
+        )
 
     per_seed: List[Dict[str, Any]] = []
     aggregate_inputs: Dict[str, List[Dict[str, Any]]] = {
@@ -196,19 +550,54 @@ def run_from_args(args: argparse.Namespace) -> Dict[str, str]:
         seed_dir = args.output_dir / f"seed_{int(seed)}"
         seed_dir.mkdir(parents=True, exist_ok=True)
         seed_summary: Dict[str, Any] = {"seed": int(seed), "variants": {}}
+        cached_variants = _try_load_existing_seed_summary(seed_dir, variants)
+        if bool(getattr(args, "aggregate_only", False)):
+            if cached_variants is None:
+                raise FileNotFoundError(
+                    "Cannot use --aggregate-only because one or more cached per-seed "
+                    f"summaries are missing under {seed_dir}"
+                )
+            for variant_name, summary in cached_variants.items():
+                seed_summary["variants"][variant_name] = summary
+                aggregate_inputs[variant_name].append(summary)
+            per_seed.append(seed_summary)
+            continue
+        if bool(getattr(args, "reuse_existing_seed_summaries", False)) and cached_variants is not None:
+            print(
+                f"[topology-audit-fixed-graph] seed={int(seed)} reusing cached variant summaries",
+                flush=True,
+            )
+            for variant_name, summary in cached_variants.items():
+                seed_summary["variants"][variant_name] = summary
+                aggregate_inputs[variant_name].append(summary)
+            per_seed.append(seed_summary)
+            continue
         for variant in variants:
+            variant_generation_overrides = dict(generation_overrides)
+            variant_generation_overrides.update(dict(variant.get("variant_generation_overrides", {})))
             print(
                 f"[topology-audit-fixed-graph] seed={int(seed)} variant={variant['variant_name']} starting",
                 flush=True,
             )
-            summary = export_variant(
-                run_dir=run_dir,
-                mission_graph=copy.deepcopy(mission_graph),
-                out_dir=seed_dir,
-                seed=int(seed),
-                generation_overrides=generation_overrides,
-                **variant,
-            )
+            if str(variant.get("exporter", "diffusion")) == "masked_room":
+                summary = export_masked_variant(
+                    run_dir=run_dir,
+                    mission_graph=copy.deepcopy(mission_graph),
+                    variant_name=str(variant["variant_name"]),
+                    out_dir=seed_dir,
+                    seed=int(seed),
+                    generation_overrides=variant_generation_overrides,
+                )
+            else:
+                export_kwargs = {k: v for k, v in variant.items() if k not in {"exporter", "variant_generation_overrides"}}
+                summary = export_variant(
+                    run_dir=run_dir,
+                    mission_graph=copy.deepcopy(mission_graph),
+                    out_dir=seed_dir,
+                    seed=int(seed),
+                    generation_overrides=variant_generation_overrides,
+                    **export_kwargs,
+                )
             variant_name = str(variant["variant_name"])
             seed_summary["variants"][variant_name] = summary
             aggregate_inputs[variant_name].append(summary)
@@ -235,7 +624,19 @@ def run_from_args(args: argparse.Namespace) -> Dict[str, str]:
         "aggregate": aggregate,
     }
     summary_path = args.output_dir / "summary.json"
-    summary_path.write_text(json.dumps(output, indent=2), encoding="utf-8")
+    summary_path.write_text(json.dumps(_json_sanitize(output), indent=2), encoding="utf-8")
+    (args.output_dir / "search_algorithm_comparison.json").write_text(
+        json.dumps(
+            _json_sanitize(
+                {
+                    variant_name: aggregate_payload.get("search_algorithm_aggregate", {})
+                    for variant_name, aggregate_payload in aggregate.items()
+                }
+            ),
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
     print(f"[topology-audit-fixed-graph] wrote {summary_path}", flush=True)
     return {"output": str(summary_path)}
 

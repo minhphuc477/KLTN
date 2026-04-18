@@ -18,10 +18,13 @@ from src.pipeline.room_topology_conditioning import (
     _state_key,
     _room_local_state_search,
     _initial_state_for_sequence,
+    apply_puzzle_structure_control_to_conditioning,
+    apply_puzzle_structure_dropout_batch,
     build_topology_loss_focus_map,
     build_room_semantic_anchor_points,
     build_semantic_room_plan_trace,
     build_room_topology_condition_map,
+    infer_puzzle_room_structure_enabled,
 )
 from src.simulation.validator import GameState, ZeldaLogicEnv
 from src.zelda_data.zelda_loader import (
@@ -141,6 +144,76 @@ def test_room_graph_sample_resolves_symbolic_sector_theme_into_style_id():
     sample = _build_room_graph_sample(dungeon, (0, 0), start_room, base_graph)
 
     assert sample["style_id"] == 2
+
+
+def test_room_graph_sample_exposes_puzzle_structure_flag():
+    graph = nx.DiGraph()
+    graph.add_node(10, label="p", type="puzzle", has_puzzle=True)
+
+    room_grid = np.ones((ROOM_HEIGHT, ROOM_WIDTH), dtype=np.int32)
+    room_grid[4:8, 4] = int(SEMANTIC_PALETTE["BLOCK"])
+    puzzle_room = SimpleNamespace(
+        semantic_grid=room_grid,
+        doors={"N": False, "S": False, "E": False, "W": False},
+        has_boss=False,
+        has_triforce=False,
+        is_start=False,
+        graph_node_id=10,
+        node_label="p",
+    )
+    dungeon = SimpleNamespace(graph=graph, rooms={(0, 0): puzzle_room})
+
+    base_graph = _extract_graph_from_dungeon(dungeon)
+    sample = _build_room_graph_sample(dungeon, (0, 0), puzzle_room, base_graph)
+
+    assert sample["has_puzzle"] is True
+    assert sample["puzzle_room_structure_enabled"] is True
+    assert infer_puzzle_room_structure_enabled(room_grid, {"has_puzzle": True}) is True
+
+
+def test_apply_puzzle_structure_dropout_batch_strips_blocks_and_flips_flag():
+    real_maps = torch.zeros(1, 1, ROOM_HEIGHT, ROOM_WIDTH, dtype=torch.float32)
+    real_maps[:, :, :, :] = float(SEMANTIC_PALETTE["FLOOR"]) / 43.0
+    real_maps[:, :, 6, 4] = float(SEMANTIC_PALETTE["BLOCK"]) / 43.0
+    graph_list = [{"has_puzzle": True, "puzzle_room_structure_enabled": True}]
+
+    augmented_maps, augmented_graphs = apply_puzzle_structure_dropout_batch(
+        real_maps,
+        graph_list,
+        num_classes=44,
+        dropout_prob=1.0,
+    )
+
+    tile_ids = (augmented_maps.squeeze(1) * 43.0).round().long()
+    assert int(tile_ids[0, 6, 4].item()) == int(SEMANTIC_PALETTE["FLOOR"])
+    assert augmented_graphs is not None
+    assert augmented_graphs[0]["puzzle_room_structure_enabled"] is False
+    assert augmented_graphs[0]["puzzle_structure_dropout_applied"] is True
+
+
+def test_apply_puzzle_structure_control_to_conditioning_is_explicit():
+    conditioning = torch.zeros(3, 8, dtype=torch.float32)
+    enabled = apply_puzzle_structure_control_to_conditioning(
+        conditioning,
+        puzzle_structure_enabled=True,
+        graph_conditioning_mode="node_sequence",
+    )
+    disabled = apply_puzzle_structure_control_to_conditioning(
+        conditioning,
+        puzzle_structure_enabled=False,
+        graph_conditioning_mode="node_sequence",
+    )
+    pooled = apply_puzzle_structure_control_to_conditioning(
+        conditioning[:1],
+        puzzle_structure_enabled=False,
+        graph_conditioning_mode="pooled",
+    )
+
+    assert tuple(enabled.shape) == (4, 8)
+    assert tuple(disabled.shape) == (4, 8)
+    assert not torch.allclose(enabled[-1], disabled[-1])
+    assert tuple(pooled.shape) == (1, 8)
+    assert not torch.allclose(pooled, conditioning[:1])
 
 
 def test_graph_extraction_preserves_one_way_direction_and_battery_features():

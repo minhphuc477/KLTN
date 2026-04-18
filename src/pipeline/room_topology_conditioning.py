@@ -121,6 +121,7 @@ DEFAULT_SEMANTIC_ROLE_PRIOR_STRENGTH = 0.15
 DEFAULT_SEMANTIC_ANCHOR_THRESHOLD = 0.5
 DEFAULT_SEMANTIC_PUZZLE_OFFSET = 2
 DEFAULT_VALIDATOR_PLAN_MAX_STATES = 512
+DEFAULT_PUZZLE_STRUCTURE_TOKEN_SCALE = 0.25
 
 
 def build_topology_anchor_policy_metadata(
@@ -156,6 +157,143 @@ def build_topology_anchor_policy_metadata(
             deterministic_graph_marker_overlay_enabled
         )
     return metadata
+
+
+def infer_puzzle_room_structure_enabled(
+    room_grid: np.ndarray,
+    room_role_flags: Optional[Mapping[str, bool]] = None,
+) -> bool:
+    """
+    Infer whether a room currently contains explicit puzzle-block structure.
+
+    This flag is intentionally narrower than `has_puzzle`. It means the room
+    owns interior BLOCK structure that the downstream room generators may learn
+    to emit or suppress.
+    """
+    role_flags = {str(key): bool(value) for key, value in dict(room_role_flags or {}).items()}
+    if not bool(role_flags.get("has_puzzle", False)):
+        return False
+    grid = np.asarray(room_grid, dtype=np.int64)
+    return bool(np.any(grid == int(SEMANTIC_PALETTE["BLOCK"])))
+
+
+def graph_sample_puzzle_structure_enabled(
+    graph_dict: Optional[Mapping[str, Any]],
+    *,
+    default: bool = True,
+) -> bool:
+    if not isinstance(graph_dict, Mapping):
+        return bool(default)
+    raw_value = graph_dict.get("puzzle_room_structure_enabled", default)
+    return bool(raw_value)
+
+
+def graph_sample_has_puzzle_semantics(graph_dict: Optional[Mapping[str, Any]]) -> bool:
+    if not isinstance(graph_dict, Mapping):
+        return False
+    if "has_puzzle" in graph_dict:
+        return bool(graph_dict.get("has_puzzle"))
+    role_flags = graph_dict.get("room_role_flags")
+    if isinstance(role_flags, Mapping):
+        return bool(role_flags.get("has_puzzle", False))
+    return False
+
+
+def apply_puzzle_structure_control_to_conditioning(
+    conditioning: torch.Tensor,
+    *,
+    puzzle_structure_enabled: bool,
+    graph_conditioning_mode: str,
+    scale: float = DEFAULT_PUZZLE_STRUCTURE_TOKEN_SCALE,
+) -> torch.Tensor:
+    """
+    Encode puzzle-structure on/off as a deterministic control signal.
+
+    This avoids changing condition-encoder parameter shapes while still giving
+    downstream retrains an explicit control token they can learn to use.
+    """
+    if not isinstance(conditioning, torch.Tensor) or conditioning.dim() != 2:
+        return conditioning
+    if int(conditioning.shape[-1]) <= 0:
+        return conditioning
+
+    sign = 1.0 if bool(puzzle_structure_enabled) else -1.0
+    token = torch.linspace(
+        -1.0,
+        1.0,
+        steps=int(conditioning.shape[-1]),
+        device=conditioning.device,
+        dtype=conditioning.dtype,
+    ).unsqueeze(0)
+    token = token * float(scale) * float(sign)
+
+    mode = str(graph_conditioning_mode or "node_sequence").strip().lower()
+    if mode == "node_sequence":
+        return torch.cat([conditioning, token], dim=0)
+    return conditioning + token
+
+
+def apply_puzzle_structure_dropout_batch(
+    real_maps: torch.Tensor,
+    graph_list: Optional[Sequence[Mapping[str, Any]]],
+    *,
+    num_classes: int,
+    dropout_prob: float,
+) -> Tuple[torch.Tensor, Optional[List[Dict[str, Any]]]]:
+    """
+    Train-only augmentation for explicit puzzle-structure control.
+
+    For a random subset of puzzle rooms, strip BLOCK tiles from the target room
+    and flip `puzzle_room_structure_enabled=False` in the graph metadata. This
+    creates paired puzzle-on / puzzle-off supervision without retraining VQ-VAE.
+    """
+    probability = float(max(0.0, min(1.0, dropout_prob)))
+    if probability <= 0.0 or graph_list is None or len(graph_list) == 0:
+        return real_maps, None if graph_list is None else [dict(sample) for sample in graph_list]
+    if not isinstance(real_maps, torch.Tensor) or real_maps.dim() != 4:
+        return real_maps, [dict(sample) for sample in graph_list]
+
+    candidate_indices = [
+        int(index)
+        for index, graph_dict in enumerate(graph_list)
+        if graph_sample_has_puzzle_semantics(graph_dict)
+        and graph_sample_puzzle_structure_enabled(graph_dict, default=True)
+    ]
+    if not candidate_indices:
+        return real_maps, [dict(sample) for sample in graph_list]
+
+    selected_indices = [
+        index for index in candidate_indices
+        if bool(torch.rand((), device=real_maps.device).item() < probability)
+    ]
+    if not selected_indices:
+        return real_maps, [dict(sample) for sample in graph_list]
+
+    maps = real_maps.clone()
+    updated_graph_list: List[Dict[str, Any]] = [dict(sample) for sample in graph_list]
+    block_id = int(SEMANTIC_PALETTE["BLOCK"])
+    floor_id = int(SEMANTIC_PALETTE["FLOOR"])
+    vocab_size = int(max(2, num_classes))
+
+    if int(maps.shape[1]) == 1:
+        tile_ids = (maps.squeeze(1) * float(vocab_size - 1)).round().long().clamp_(0, vocab_size - 1)
+        for batch_index in selected_indices:
+            tile_ids[batch_index][tile_ids[batch_index] == block_id] = floor_id
+            updated_graph_list[batch_index]["puzzle_room_structure_enabled"] = False
+            updated_graph_list[batch_index]["puzzle_structure_dropout_applied"] = True
+        maps = tile_ids.unsqueeze(1).to(dtype=maps.dtype) / float(vocab_size - 1)
+        return maps, updated_graph_list
+
+    if int(maps.shape[1]) == vocab_size:
+        tile_ids = maps.argmax(dim=1)
+        for batch_index in selected_indices:
+            tile_ids[batch_index][tile_ids[batch_index] == block_id] = floor_id
+            updated_graph_list[batch_index]["puzzle_room_structure_enabled"] = False
+            updated_graph_list[batch_index]["puzzle_structure_dropout_applied"] = True
+        maps = F.one_hot(tile_ids, num_classes=vocab_size).permute(0, 3, 1, 2).to(dtype=maps.dtype)
+        return maps, updated_graph_list
+
+    return real_maps, updated_graph_list
 
 
 def _clamp_point(point: Tuple[int, int], shape: Tuple[int, int]) -> Tuple[int, int]:

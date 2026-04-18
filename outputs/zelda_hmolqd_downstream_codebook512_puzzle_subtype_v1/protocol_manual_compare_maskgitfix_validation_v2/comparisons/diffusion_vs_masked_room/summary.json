@@ -1,0 +1,119 @@
+{
+  "baseline_dir": "outputs\\zelda_hmolqd_downstream_codebook512_puzzle_subtype_v1\\protocol_manual_compare_maskgitfix_validation_v2\\diffusion_cfg3_logic0_steps50",
+  "candidate_dir": "outputs\\zelda_hmolqd_downstream_codebook512_puzzle_subtype_v1\\protocol_manual_compare_maskgitfix_validation_v2\\masked_room_full",
+  "num_rooms_compared": 12,
+  "total_changed_tiles": 203,
+  "aggregate_change_types": {
+    "floor_to_structure": 88,
+    "filled_to_void": 38,
+    "structure_to_floor": 75,
+    "B_to_W": 1,
+    "W_to_B": 1
+  },
+  "rooms": [
+    {
+      "room_id": 0,
+      "changed_tiles": 35,
+      "change_ratio": 0.19886363636363635,
+      "change_types": {
+        "floor_to_structure": 35
+      }
+    },
+    {
+      "room_id": 1,
+      "changed_tiles": 30,
+      "change_ratio": 0.17045454545454544,
+      "change_types": {
+        "floor_to_structure": 21,
+        "filled_to_void": 9
+      }
+    },
+    {
+      "room_id": 6,
+      "changed_tiles": 30,
+      "change_ratio": 0.17045454545454544,
+      "change_types": {
+        "filled_to_void": 18,
+        "structure_to_floor": 4,
+        "floor_to_structure": 8
+      }
+    },
+    {
+      "room_id": 3,
+      "changed_tiles": 23,
+      "change_ratio": 0.13068181818181818,
+      "change_types": {
+        "structure_to_floor": 23
+      }
+    },
+    {
+      "room_id": 7,
+      "changed_tiles": 22,
+      "change_ratio": 0.125,
+      "change_types": {
+        "structure_to_floor": 22
+      }
+    },
+    {
+      "room_id": 9,
+      "changed_tiles": 21,
+      "change_ratio": 0.11931818181818182,
+      "change_types": {
+        "filled_to_void": 4,
+        "floor_to_structure": 17
+      }
+    },
+    {
+      "room_id": 5,
+      "changed_tiles": 16,
+      "change_ratio": 0.09090909090909091,
+      "change_types": {
+        "structure_to_floor": 13,
+        "B_to_W": 1,
+        "floor_to_structure": 1,
+        "W_to_B": 1
+      }
+    },
+    {
+      "room_id": 11,
+      "changed_tiles": 10,
+      "change_ratio": 0.056818181818181816,
+      "change_types": {
+        "floor_to_structure": 1,
+        "structure_to_floor": 9
+      }
+    },
+    {
+      "room_id": 2,
+      "changed_tiles": 9,
+      "change_ratio": 0.05113636363636364,
+      "change_types": {
+        "filled_to_void": 7,
+        "floor_to_structure": 2
+      }
+    },
+    {
+      "room_id": 4,
+      "changed_tiles": 6,
+      "change_ratio": 0.03409090909090909,
+      "change_types": {
+        "structure_to_floor": 3,
+        "floor_to_structure": 3
+      }
+    },
+    {
+      "room_id": 8,
+      "changed_tiles": 1,
+      "change_ratio": 0.005681818181818182,
+      "change_types": {
+        "structure_to_floor": 1
+      }
+    },
+    {
+      "room_id": 10,
+      "changed_tiles": 0,
+      "change_ratio": 0.0,
+      "change_types": {}
+    }
+  ]
+}

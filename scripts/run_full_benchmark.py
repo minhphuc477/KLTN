@@ -34,11 +34,16 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.core.definitions import SEMANTIC_PALETTE
-from src.simulation.validator import ZeldaLogicEnv, StateSpaceAStar
+from src.simulation.validator import ZeldaLogicEnv
 from src.simulation.cognitive_bounded_search import (
     CognitiveBoundedSearch
 )
 from src.zelda_data.zelda_core import ZeldaDungeonAdapter
+from src.evaluation.search_benchmark_utils import (
+    path_efficiency_ratio,
+    run_astar_oracle,
+)
+from src.evaluation.pcbs_validation import prepare_dungeon_grid_for_validation
 
 logger = logging.getLogger(__name__)
 
@@ -299,7 +304,8 @@ def load_nintendo_levels(data_dir: str = None) -> List[Tuple[str, np.ndarray]]:
                 try:
                     dungeon = adapter.load_dungeon(dungeon_num, variant)
                     stitched = adapter.stitch_dungeon(dungeon)
-                    grid = stitched.global_grid.astype(np.int32)
+                    prepared = prepare_dungeon_grid_for_validation(stitched)
+                    grid = prepared.grid.astype(np.int32, copy=False)
                     map_id = f"tloz{dungeon_num}_{variant}"
                     levels.append((map_id, grid))
                     logger.info(f"Loaded {map_id}: {grid.shape}")
@@ -385,7 +391,10 @@ def run_solver(
         'replans': 0,
         'confusion_events': 0,
         'confusion_ratio': 0.0,
+        'confusion_ratio_kind': '',
         'confusion_index': 0.0,
+        'solver_status': 'failed',
+        'failure_reason': '',
     }
     
     try:
@@ -398,17 +407,17 @@ def run_solver(
         start_time = time.time()
         
         if solver_type == 'astar':
-            solver = StateSpaceAStar(env, timeout=timeout)
-            success, path, states = solver.solve()
-            
-            result['success'] = success
-            result['path_length'] = len(path) if path else 0
-            result['states_explored'] = states
+            payload = run_astar_oracle(env, timeout=timeout)
+            result['success'] = bool(payload['success'])
+            result['path_length'] = int(payload['path_length'])
+            result['states_explored'] = int(payload['states_explored'])
+            result['solver_status'] = str(payload['status'])
+            result['failure_reason'] = str(payload['failure_reason'])
             
             # Compute optimal path efficiency (A* is optimal)
-            if success and len(path) > 0:
+            if result['success'] and result['path_length'] > 0:
                 manhattan = abs(env.goal_pos[0] - env.start_pos[0]) + abs(env.goal_pos[1] - env.start_pos[1])
-                result['PER'] = manhattan / len(path) if len(path) > 0 else 0.0
+                result['PER'] = path_efficiency_ratio(result['path_length'], manhattan)
             
         elif solver_type == 'cbs':
             cbs = CognitiveBoundedSearch(env, persona=persona, timeout=timeout, seed=seed)
@@ -417,6 +426,20 @@ def run_solver(
             result['success'] = success
             result['path_length'] = len(path) if path else 0
             result['states_explored'] = states
+            result['solver_status'] = (
+                'solved'
+                if success
+                else ('timeout' if int(states or 0) >= int(timeout) else 'failed')
+            )
+            result['failure_reason'] = (
+                ''
+                if success
+                else (
+                    f"Timeout: explored {int(states or 0):,} states (limit: {int(timeout):,})"
+                    if int(states or 0) >= int(timeout)
+                    else 'Bounded-rational search failed before reaching goal'
+                )
+            )
             
             # Metrics from CBS
             if metrics:
@@ -429,11 +452,12 @@ def run_solver(
                 # Confusion ratio: total_steps / unique_tiles
                 if metrics.unique_tiles_visited > 0:
                     result['confusion_ratio'] = metrics.total_steps / metrics.unique_tiles_visited
+                    result['confusion_ratio_kind'] = 'cbs_steps_per_unique_tile'
             
             # Path efficiency ratio
             if success and len(path) > 0:
                 manhattan = abs(env.goal_pos[0] - env.start_pos[0]) + abs(env.goal_pos[1] - env.start_pos[1])
-                result['PER'] = manhattan / len(path) if len(path) > 0 else 0.0
+                result['PER'] = path_efficiency_ratio(len(path), manhattan)
         
         result['time'] = time.time() - start_time
         
@@ -508,7 +532,10 @@ def compute_summary_statistics(df: pd.DataFrame) -> pd.DataFrame:
             'dataset_type': dataset_type,
             'n_levels': len(astar_subset),
             'astar_success_rate': astar_subset['success'].mean() if len(astar_subset) > 0 else 0.0,
+            'astar_timeout_rate': (astar_subset['solver_status'] == 'timeout').mean() if len(astar_subset) > 0 else 0.0,
+            'astar_no_path_rate': (astar_subset['solver_status'] == 'no_path').mean() if len(astar_subset) > 0 else 0.0,
             'cbs_success_rate': cbs_subset['success'].mean() if len(cbs_subset) > 0 else 0.0,
+            'confusion_ratio_semantics': 'cbs_steps_per_unique_tile',
             'mean_confusion_ratio': cbs_subset['confusion_ratio'].mean() if len(cbs_subset) > 0 else 0.0,
             'std_confusion_ratio': cbs_subset['confusion_ratio'].std() if len(cbs_subset) > 0 else 0.0,
             'mean_room_entropy': cbs_subset['room_entropy'].mean() if len(cbs_subset) > 0 else 0.0,

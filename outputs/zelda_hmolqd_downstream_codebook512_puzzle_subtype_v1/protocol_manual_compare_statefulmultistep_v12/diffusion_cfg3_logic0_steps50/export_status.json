@@ -1,0 +1,11 @@
+{
+  "variant_name": "diffusion_cfg3_logic0_steps50",
+  "stage": "generation_complete",
+  "seed": 20260418,
+  "guidance_scale": 3.0,
+  "logic_guidance_scale": 0.0,
+  "num_diffusion_steps": 50,
+  "use_fast_sampling": false,
+  "generation_time_sec": 97.97121524810791,
+  "room_count": 12
+}

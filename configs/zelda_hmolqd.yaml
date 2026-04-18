@@ -113,6 +113,7 @@ diffusion:
   spatial_graph_gate_init: -2.0  # type=float, default=-2.0
   spatial_topology_gate_init: -2.0  # type=float, default=-2.0
   use_teacher_forced_neighbor_latents: true  # type=bool, default=true, valid={true,false}; enables real-neighbor local conditioning during room-level training
+  puzzle_structure_dropout_prob: 0.35  # type=float, default=0.35, valid=0..1; train-only paired augmentation rate for puzzle rooms so the teacher learns explicit puzzle-on / puzzle-off control without changing VQ-VAE
   use_current_node_distance_features: true  # type=bool, default=true, valid={true,false}; adds current-room distance encoding to Block III/IV graph conditioning
   current_node_distance_max: 8  # type=int, default=8, valid>=1; clip/normalize graph distances beyond this radius
   room_topology_channels: 54  # type=int, default=54, valid>=1
@@ -187,6 +188,7 @@ generation:
   semantic_marker_logit_bias: 10000.0  # type=float, default=10000.0, valid=>=0; effectively hard-constrains planned semantic marker slots during decode for current checkpoint family
   semantic_marker_suppression_bias: 100.0  # type=float, default=100.0, valid=>=0; strongly suppresses stray volatile semantic channels away from planned slots
   puzzle_room_scaffold_enabled: true  # type=bool, default=true, valid={true,false}; add a constructive block-maze scaffold when puzzle rooms are still too empty after generation/repair
+  puzzle_room_structure_enabled: true  # type=bool, default=true, valid={true,false}; keep true for production, disable only for strict no-puzzle ablations so interior brown BLOCK structure is stripped even if it came from the neural decode instead of the scaffold
   puzzle_room_scaffold_min_structure_tiles: 10  # type=int, default=10, valid>=0; skip the runtime puzzle scaffold when a puzzle room already contains at least this many interior wall/block tiles
   puzzle_room_archetype_mode: auto  # type=str, default=auto, valid={auto,gate,serpentine,hub,island,combat}; auto-select constructive puzzle archetypes from local room semantics, or force one for ablations
   puzzle_room_branch_density: 0.75  # type=float, default=0.75, valid=0..1; controls how many optional scaffold branches are enabled within a puzzle archetype
@@ -200,6 +202,7 @@ generation:
   puzzle_room_novelty_enabled: true  # type=bool, default=true, valid={true,false}; evaluate several valid puzzle scaffold variants and choose one with a local quality-diversity score
   puzzle_room_candidate_count: 4  # type=int, default=4, valid=1..6; local search budget for puzzle scaffold novelty selection
   puzzle_room_novelty_weight: 0.45  # type=float, default=0.45, valid=0..2; strength of the novelty term when ranking valid puzzle scaffold candidates
+  puzzle_room_min_quality_gain: 0.5  # type=float, default=0.5, valid=0..10; minimum score gain a scaffolded puzzle room must achieve over the cleaned no-scaffold room before we keep the scaffold
   validator_plan_max_states: 512  # type=int, default=512, valid=32..4096; cap room-local validator search used for topology priors so complex puzzle/key rooms fall back to the geometric trace instead of stalling generation
   deterministic_graph_marker_overlay_enabled: true  # type=bool, default=true, valid={true,false}; keep enabled for the production hybrid path, disable only for purely-neural semantic ablations
   fast_sampler_teacher_fallback_enabled: true  # type=bool, default=true, valid={true,false}; lets runtime guardrails reroute bad fast-sampler rooms to the teacher
@@ -223,6 +226,7 @@ fast_sampler:
   prediction_loss_weight: 0.25  # type=float, default=0.25, valid>=0
   decode_alignment_weight: 0.25  # type=float, default=0.25, valid>=0; add decoded-room CE supervision so few-step latent matching stays aligned with actual tile outputs
   topology_alignment_weight: 0.25  # type=float, default=0.25, valid>=0; extra CE pressure on topology-critical pixels so fast-sampler distillation cares about anchors, doors, gates, and puzzle-route structure
+  puzzle_structure_dropout_prob: 0.35  # type=float, default=0.35, valid=0..1; train-only paired augmentation rate for puzzle rooms so the student learns the explicit puzzle-room-structure control instead of inheriting only the teacher prior
   topology_marker_weight: 2.0  # type=float, default=2.0, valid>=0; relative emphasis for sparse topology markers, door slots, and typed gates inside the fast-sampler focus map
   topology_trace_weight: 0.75  # type=float, default=0.75, valid>=0; relative emphasis for traversability-trace pixels inside the fast-sampler focus map
   topology_focus_dilation: 1  # type=int, default=1, valid>=0; lightly dilate sparse topology focus regions so nearby pixels contribute to the fast-sampler topology loss
@@ -271,6 +275,7 @@ masked_room:
   min_mask_ratio: 0.12  # type=float, default=0.12, valid=0..1
   max_mask_ratio: 0.85  # type=float, default=0.85, valid=0..1; must be >= min_mask_ratio
   topology_alignment_weight: 0.25  # type=float, default=0.25, valid>=0; extra masked-token CE pressure on topology-critical pixels so masked-room training learns anchors, doors, gates, and puzzle-route structure more explicitly
+  puzzle_structure_dropout_prob: 0.35  # type=float, default=0.35, valid=0..1; train-only paired augmentation rate for puzzle rooms so masked-room learns puzzle-on / puzzle-off room structure explicitly
   topology_marker_weight: 2.0  # type=float, default=2.0, valid>=0; relative emphasis for sparse topology markers, door slots, and typed gates inside the masked-room focus map
   topology_trace_weight: 0.75  # type=float, default=0.75, valid>=0; relative emphasis for traversability-trace pixels inside the masked-room focus map
   topology_focus_dilation: 1  # type=int, default=1, valid>=0; lightly dilate sparse topology focus regions so nearby pixels contribute to the masked-room topology loss

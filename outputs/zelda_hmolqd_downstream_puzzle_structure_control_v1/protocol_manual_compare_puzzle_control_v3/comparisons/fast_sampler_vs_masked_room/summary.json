@@ -1,0 +1,109 @@
+{
+  "baseline_dir": "outputs\\zelda_hmolqd_downstream_puzzle_structure_control_v1\\protocol_manual_compare_puzzle_control_v3\\fast_cfg3_logic0_steps4",
+  "candidate_dir": "outputs\\zelda_hmolqd_downstream_puzzle_structure_control_v1\\protocol_manual_compare_puzzle_control_v3\\masked_room_full",
+  "num_rooms_compared": 12,
+  "total_changed_tiles": 148,
+  "aggregate_change_types": {
+    "floor_to_structure": 84,
+    "structure_to_floor": 51,
+    "void_to_filled": 4,
+    "filled_to_void": 9
+  },
+  "rooms": [
+    {
+      "room_id": 2,
+      "changed_tiles": 36,
+      "change_ratio": 0.20454545454545456,
+      "change_types": {
+        "floor_to_structure": 36
+      }
+    },
+    {
+      "room_id": 0,
+      "changed_tiles": 35,
+      "change_ratio": 0.19886363636363635,
+      "change_types": {
+        "floor_to_structure": 35
+      }
+    },
+    {
+      "room_id": 1,
+      "changed_tiles": 31,
+      "change_ratio": 0.17613636363636365,
+      "change_types": {
+        "structure_to_floor": 27,
+        "void_to_filled": 4
+      }
+    },
+    {
+      "room_id": 6,
+      "changed_tiles": 15,
+      "change_ratio": 0.08522727272727272,
+      "change_types": {
+        "structure_to_floor": 6,
+        "filled_to_void": 9
+      }
+    },
+    {
+      "room_id": 10,
+      "changed_tiles": 11,
+      "change_ratio": 0.0625,
+      "change_types": {
+        "floor_to_structure": 2,
+        "structure_to_floor": 9
+      }
+    },
+    {
+      "room_id": 11,
+      "changed_tiles": 9,
+      "change_ratio": 0.05113636363636364,
+      "change_types": {
+        "floor_to_structure": 4,
+        "structure_to_floor": 5
+      }
+    },
+    {
+      "room_id": 8,
+      "changed_tiles": 8,
+      "change_ratio": 0.045454545454545456,
+      "change_types": {
+        "floor_to_structure": 4,
+        "structure_to_floor": 4
+      }
+    },
+    {
+      "room_id": 9,
+      "changed_tiles": 2,
+      "change_ratio": 0.011363636363636364,
+      "change_types": {
+        "floor_to_structure": 2
+      }
+    },
+    {
+      "room_id": 4,
+      "changed_tiles": 1,
+      "change_ratio": 0.005681818181818182,
+      "change_types": {
+        "floor_to_structure": 1
+      }
+    },
+    {
+      "room_id": 3,
+      "changed_tiles": 0,
+      "change_ratio": 0.0,
+      "change_types": {}
+    },
+    {
+      "room_id": 5,
+      "changed_tiles": 0,
+      "change_ratio": 0.0,
+      "change_types": {}
+    },
+    {
+      "room_id": 7,
+      "changed_tiles": 0,
+      "change_ratio": 0.0,
+      "change_types": {}
+    }
+  ]
+}

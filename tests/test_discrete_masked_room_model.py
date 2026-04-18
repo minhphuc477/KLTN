@@ -290,6 +290,12 @@ def test_pipeline_generate_room_masked_mode_falls_back_to_diffusion_teacher_on_n
     monkeypatch.setattr(pipeline.masked_room_model, "sample", _noisy_masked_sample)
     monkeypatch.setattr(pipeline.diffusion, "ddim_sample", _teacher_ddim_sample)
     monkeypatch.setattr(pipeline.vqvae, "decode", _teacher_decode)
+    sync_calls = {"count": 0}
+
+    def _sync():
+        sync_calls["count"] += 1
+
+    monkeypatch.setattr(pipeline, "_synchronize_cuda_device", _sync)
 
     result = pipeline.generate_room(
         neighbor_latents={"N": None, "S": None, "E": None, "W": None},
@@ -303,6 +309,7 @@ def test_pipeline_generate_room_masked_mode_falls_back_to_diffusion_teacher_on_n
 
     assert result.metrics["teacher_fallback_used"] == 1.0
     assert result.metrics["teacher_fallback_source_masked_room"] == 1.0
+    assert sync_calls["count"] == 1
     assert int(np.sum(result.room_grid == int(SEMANTIC_PALETTE["BLOCK"]))) == 0
 
 

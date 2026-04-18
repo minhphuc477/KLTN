@@ -1,10 +1,14 @@
 import random
+import sys
 
 import networkx as nx
+import pytest
 
 from src.evaluation.pcg_benchmark_alignment import (
     PCG_BENCHMARK_ZELDA_VARIANTS,
     _control_error,
+    _pcg_benchmark_repo_candidates,
+    import_pcg_benchmark,
     map_graph_to_pcg_benchmark_zelda,
     select_pcg_benchmark_zelda_problem,
 )
@@ -248,3 +252,33 @@ def test_ood_summary_row_includes_topology_semantics_metrics():
     assert "articulation_ratio" in row
     assert "branch_utility_rate" in row
     assert "secret_content_discoverability_rate" in row
+
+
+def test_pcg_benchmark_candidate_detection_prefers_cwd_clone(monkeypatch, tmp_path):
+    repo_root = tmp_path / "tmp" / "pcg_benchmark_upstream"
+    (repo_root / "pcg_benchmark").mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("PCG_BENCHMARK_REPO", raising=False)
+
+    candidates = _pcg_benchmark_repo_candidates()
+    assert candidates
+    assert candidates[0] == repo_root.resolve()
+
+
+def test_import_pcg_benchmark_uses_explicit_repo(monkeypatch, tmp_path):
+    repo_root = tmp_path / "local_repo"
+    pkg_root = repo_root / "pcg_benchmark"
+    pkg_root.mkdir(parents=True)
+    (pkg_root / "__init__.py").write_text("VALUE = 7\n", encoding="utf-8")
+
+    monkeypatch.delenv("PCG_BENCHMARK_REPO", raising=False)
+    sys.modules.pop("pcg_benchmark", None)
+    monkeypatch.setattr(
+        sys,
+        "path",
+        [entry for entry in list(sys.path) if "pcg_benchmark" not in str(entry).lower()],
+    )
+
+    module = import_pcg_benchmark(repo_path=repo_root)
+    assert getattr(module, "VALUE", None) == 7
+    assert str(getattr(module, "__file__", "")).startswith(str(repo_root))

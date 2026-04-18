@@ -90,6 +90,7 @@ Key outputs:
 - `mission_graph.json`
 - `mission_graph_layout.png`
 - `graph_summary.json`
+- `search_algorithm_comparison.json`
 - `dungeon_alignment_comparison.png`
 - `rooms_sheet_comparison.png`
 - `comparisons\...\summary.json`
@@ -121,10 +122,29 @@ python main.py topology-audit-fixed-graph `
   --no-fast-sampler-teacher-fallback-enabled
 ```
 
+Strict no-fallback / pure-neural ablation bundle:
+
+```powershell
+python main.py topology-audit-fixed-graph `
+  --run-dir outputs\zelda_hmolqd_semantic_anchor_retrain_v1 `
+  --mission-graph my_manual_graph.json `
+  --output-dir outputs\zelda_hmolqd_semantic_anchor_retrain_v1\full_architecture_verification\fixed_graph_multi_seed_no_fallback_v1 `
+  --seeds 20260404 20260405 20260406 `
+  --include-no-fallback-ablations
+```
+
 Key outputs:
 
 - per-seed variant folders
 - aggregate `summary.json`
+- aggregate `search_algorithm_comparison.json`
+
+Validation interpretation:
+
+- `summary.json` carries the end-to-end aggregate metrics
+- `search_algorithm_comparison.json` carries the canonical validation solver stack
+- the hard oracle is `A* + graph progression + softlock`
+- CBS is a bounded-rational probe, not the correctness oracle
 
 ## 4. Automatic topology + end-to-end export
 

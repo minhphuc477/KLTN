@@ -32,6 +32,8 @@ from src.optimization.lcm_lora import (
 from src.pipeline.room_topology_conditioning import (
     DEFAULT_SEMANTIC_PUZZLE_OFFSET,
     DEFAULT_SEMANTIC_ROLE_PRIOR_STRENGTH,
+    apply_puzzle_structure_control_to_conditioning,
+    apply_puzzle_structure_dropout_batch,
     build_topology_anchor_policy_metadata,
     build_topology_loss_focus_map,
 )
@@ -70,6 +72,7 @@ class FastSamplerTrainingConfig:
         topology_supervision_mode: str = "runtime_aligned",
         semantic_role_prior_strength: float = DEFAULT_SEMANTIC_ROLE_PRIOR_STRENGTH,
         semantic_puzzle_offset: int = DEFAULT_SEMANTIC_PUZZLE_OFFSET,
+        puzzle_structure_dropout_prob: float = 0.35,
         epochs: int = 10,
         learning_rate: float = 1e-4,
         optimizer_weight_decay: float = 1e-4,
@@ -113,6 +116,7 @@ class FastSamplerTrainingConfig:
         self.topology_supervision_mode = str(topology_supervision_mode).strip().lower()
         self.semantic_role_prior_strength = float(max(0.0, min(1.0, semantic_role_prior_strength)))
         self.semantic_puzzle_offset = int(max(0, semantic_puzzle_offset))
+        self.puzzle_structure_dropout_prob = float(max(0.0, min(1.0, puzzle_structure_dropout_prob)))
         self.epochs = 1 if quick else int(epochs)
         self.learning_rate = float(learning_rate)
         self.optimizer_weight_decay = float(max(0.0, optimizer_weight_decay))
@@ -185,6 +189,7 @@ def fast_sampler_training_kwargs_from_resolved_config(config: Dict[str, Any]) ->
         "topology_supervision_mode": dataset["topology_supervision_mode"],
         "semantic_role_prior_strength": config["generation"]["semantic_role_prior_strength"],
         "semantic_puzzle_offset": config["generation"]["semantic_puzzle_offset"],
+        "puzzle_structure_dropout_prob": stage.get("puzzle_structure_dropout_prob", 0.35),
         "epochs": stage["epochs"],
         "learning_rate": stage["learning_rate"],
         "optimizer_weight_decay": stage["optimizer_weight_decay"],
@@ -228,6 +233,7 @@ def _legacy_fast_sampler_overrides_from_args(args: argparse.Namespace) -> Dict[s
     _set("data_dir", getattr(args, "data_dir", None))
     _set("batch_size", getattr(args, "batch_size", None))
     _set("use_vglc", getattr(args, "use_vglc", None))
+    _set("puzzle_structure_dropout_prob", getattr(args, "puzzle_structure_dropout_prob", None))
     _set("epochs", getattr(args, "epochs", None))
     _set("learning_rate", getattr(args, "lr", None))
     _set("num_inference_steps", getattr(args, "num_inference_steps", None))
@@ -908,6 +914,13 @@ def train_fast_sampler(config: FastSamplerTrainingConfig) -> ConsistencyLoRATrai
                 real_maps, graph_list = batch_data
             else:
                 real_maps, graph_list = batch_data, None
+            if graph_list is not None and float(getattr(config, "puzzle_structure_dropout_prob", 0.0)) > 0.0:
+                real_maps, graph_list = apply_puzzle_structure_dropout_batch(
+                    real_maps,
+                    graph_list,
+                    num_classes=int(getattr(trainer.base_bundle.config, "num_classes", 44)),
+                    dropout_prob=float(config.puzzle_structure_dropout_prob),
+                )
             step_metrics = trainer.distill_step(real_maps, graph_list)
             for key, value in step_metrics.items():
                 running[key] += float(value)
@@ -994,6 +1007,7 @@ def main() -> None:
     parser.add_argument("--data-dir", type=str, default=None)
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--use-vglc", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--puzzle-structure-dropout-prob", type=float, default=None)
     parser.add_argument("--epochs", type=int, default=None)
     parser.add_argument("--lr", type=float, default=None)
     parser.add_argument("--num-inference-steps", type=int, default=None)

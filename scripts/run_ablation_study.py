@@ -36,6 +36,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from src.config_system import load_resolved_config_for_artifact
 from src.evaluation.benchmark_suite import (
     extract_graph_descriptor,
     load_vglc_reference_graphs,
@@ -47,6 +48,7 @@ from src.generation.evolutionary_director import EvolutionaryTopologyGenerator
 from src.generation.grammar import Difficulty, MissionGrammar
 from src.pipeline.dungeon_pipeline import NeuralSymbolicDungeonPipeline
 from src.pipeline.dungeon_pipeline import RoomGenerationResult
+from src.pipeline.dungeon_pipeline import pipeline_kwargs_from_resolved_config
 from src.generation.weighted_bayesian_wfc import (
     WeightedBayesianWFC,
     WeightedBayesianWFCConfig,
@@ -61,6 +63,35 @@ from src.pipeline.spatial_utils import first_free_position, get_node_grid_positi
 from src.utils.stable_seed import stable_seed_offset
 
 logger = logging.getLogger(__name__)
+
+
+def _maybe_existing_path(path_value: Optional[str]) -> Optional[Path]:
+    if not path_value:
+        return None
+    candidate = Path(str(path_value))
+    return candidate if candidate.exists() else None
+
+
+def _infer_logic_checkpoint(diffusion_checkpoint: Optional[str]) -> Optional[str]:
+    checkpoint_path = _maybe_existing_path(diffusion_checkpoint)
+    if checkpoint_path is None:
+        return None
+    siblings = [
+        checkpoint_path.with_name("best_logic_model.pth"),
+        checkpoint_path.with_name("logic_net_best.pth"),
+    ]
+    for candidate in siblings:
+        if candidate.exists():
+            return str(candidate)
+    return None
+
+
+def _load_pipeline_resolved_config(*artifact_paths: Optional[str]) -> Optional[Dict[str, Any]]:
+    for artifact in artifact_paths:
+        resolved = load_resolved_config_for_artifact(artifact)
+        if isinstance(resolved, dict):
+            return resolved
+    return None
 
 
 def _stitch_with_pipeline(
@@ -517,11 +548,22 @@ class AblationStudy:
         self.vqvae_checkpoint = str(vqvae_checkpoint) if vqvae_checkpoint else None
         self.diffusion_checkpoint = str(diffusion_checkpoint) if diffusion_checkpoint else None
         self.masked_room_checkpoint = str(masked_room_checkpoint) if masked_room_checkpoint else None
-        self.logic_net_checkpoint = str(logic_net_checkpoint) if logic_net_checkpoint else None
+        inferred_logic_checkpoint = _infer_logic_checkpoint(self.diffusion_checkpoint)
+        self.logic_net_checkpoint = str(logic_net_checkpoint) if logic_net_checkpoint else inferred_logic_checkpoint
         self.condition_encoder_checkpoint = (
             str(condition_encoder_checkpoint) if condition_encoder_checkpoint else None
         )
         self.max_runtime_sec = float(max_runtime_sec) if max_runtime_sec is not None else None
+        self.resolved_config = _load_pipeline_resolved_config(
+            self.diffusion_checkpoint,
+            self.masked_room_checkpoint,
+            self.logic_net_checkpoint,
+            self.condition_encoder_checkpoint,
+            self.vqvae_checkpoint,
+        )
+        self.pipeline_runtime_kwargs: Dict[str, Any] = {}
+        if isinstance(self.resolved_config, dict):
+            self.pipeline_runtime_kwargs.update(pipeline_kwargs_from_resolved_config(self.resolved_config))
 
         self.reference_graphs = load_vglc_reference_graphs(self.data_root, limit=64)
         ref_rooms = load_vglc_reference_rooms(self.data_root, max_rooms=256)
@@ -540,17 +582,23 @@ class AblationStudy:
     def _get_pipeline(self, cfg: ExperimentConfig) -> NeuralSymbolicDungeonPipeline:
         room_generator_mode = str(getattr(cfg, "room_generator_mode", "latent_diffusion")).strip().lower()
         if room_generator_mode not in self._pipeline_cache:
+            pipeline_kwargs = dict(self.pipeline_runtime_kwargs)
+            pipeline_kwargs.update(
+                {
+                    "vqvae_checkpoint": self.vqvae_checkpoint,
+                    "diffusion_checkpoint": self.diffusion_checkpoint,
+                    "masked_room_checkpoint": self.masked_room_checkpoint,
+                    "logic_net_checkpoint": self.logic_net_checkpoint,
+                    "condition_encoder_checkpoint": self.condition_encoder_checkpoint,
+                    "room_generator_mode": room_generator_mode,
+                    "condition_use_reference_room_maps": True,
+                    "device": "auto",
+                    "use_learned_refiner_rules": True,
+                    "enable_logging": False,
+                }
+            )
             self._pipeline_cache[room_generator_mode] = NeuralSymbolicDungeonPipeline(
-                vqvae_checkpoint=self.vqvae_checkpoint,
-                diffusion_checkpoint=self.diffusion_checkpoint,
-                masked_room_checkpoint=self.masked_room_checkpoint,
-                logic_net_checkpoint=self.logic_net_checkpoint,
-                condition_encoder_checkpoint=self.condition_encoder_checkpoint,
-                room_generator_mode=room_generator_mode,
-                condition_use_reference_room_maps=True,
-                device="auto",
-                use_learned_refiner_rules=True,
-                enable_logging=False,
+                **pipeline_kwargs,
             )
         return self._pipeline_cache[room_generator_mode]
 

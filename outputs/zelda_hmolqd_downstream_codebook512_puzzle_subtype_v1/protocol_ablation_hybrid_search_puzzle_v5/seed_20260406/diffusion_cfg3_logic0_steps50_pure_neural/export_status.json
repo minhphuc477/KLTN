@@ -1,0 +1,12 @@
+{
+  "variant_name": "diffusion_cfg3_logic0_steps50_pure_neural",
+  "stage": "complete",
+  "seed": 20260406,
+  "guidance_scale": 3.0,
+  "logic_guidance_scale": 0.0,
+  "num_diffusion_steps": 50,
+  "use_fast_sampling": false,
+  "generation_time_sec": 49.11172270774841,
+  "room_count": 12,
+  "summary_path": "outputs\\zelda_hmolqd_downstream_codebook512_puzzle_subtype_v1\\protocol_ablation_hybrid_search_puzzle_v5\\seed_20260406\\diffusion_cfg3_logic0_steps50_pure_neural\\summary.json"
+}

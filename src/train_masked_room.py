@@ -25,6 +25,8 @@ from src.pipeline.room_topology_conditioning import (
     DEFAULT_SEMANTIC_ANCHOR_THRESHOLD,
     DEFAULT_SEMANTIC_PUZZLE_OFFSET,
     DEFAULT_SEMANTIC_ROLE_PRIOR_STRENGTH,
+    apply_puzzle_structure_control_to_conditioning,
+    apply_puzzle_structure_dropout_batch,
     build_topology_anchor_policy_metadata,
     build_topology_loss_focus_map,
 )
@@ -111,6 +113,7 @@ class MaskedRoomTrainingConfig:
         topology_supervision_mode: str = "runtime_aligned",
         semantic_role_prior_strength: float = DEFAULT_SEMANTIC_ROLE_PRIOR_STRENGTH,
         semantic_puzzle_offset: int = DEFAULT_SEMANTIC_PUZZLE_OFFSET,
+        puzzle_structure_dropout_prob: float = 0.35,
         checkpoint_dir: str = "./checkpoints/masked_room",
         save_every: int = 10,
         keep_last: int = 2,
@@ -216,6 +219,7 @@ class MaskedRoomTrainingConfig:
         self.topology_supervision_mode = str(topology_supervision_mode).strip().lower()
         self.semantic_role_prior_strength = float(max(0.0, min(1.0, semantic_role_prior_strength)))
         self.semantic_puzzle_offset = int(max(0, semantic_puzzle_offset))
+        self.puzzle_structure_dropout_prob = float(max(0.0, min(1.0, puzzle_structure_dropout_prob)))
         self.checkpoint_dir = str(checkpoint_dir)
         self.save_every = int(save_every)
         self.keep_last = int(max(0, keep_last))
@@ -332,6 +336,7 @@ def masked_room_training_kwargs_from_resolved_config(config: Dict[str, Any]) -> 
         "topology_supervision_mode": dataset["topology_supervision_mode"],
         "semantic_role_prior_strength": config["generation"]["semantic_role_prior_strength"],
         "semantic_puzzle_offset": config["generation"]["semantic_puzzle_offset"],
+        "puzzle_structure_dropout_prob": stage.get("puzzle_structure_dropout_prob", 0.35),
         "semantic_anchor_threshold": config["generation"]["semantic_anchor_threshold"],
         "checkpoint_dir": stage["checkpoint_dir"],
         "save_every": stage["save_every"],
@@ -400,6 +405,7 @@ def _legacy_masked_room_overrides_from_args(args: argparse.Namespace) -> Dict[st
     _set("validation_fraction", getattr(args, "validation_fraction", None))
     _set("validation_max_batches", getattr(args, "validation_max_batches", None))
     _set("best_checkpoint_metric", getattr(args, "best_checkpoint_metric", None))
+    _set("puzzle_structure_dropout_prob", getattr(args, "puzzle_structure_dropout_prob", None))
     _set("checkpoint_dir", getattr(args, "checkpoint_dir", None))
     _set("save_every", getattr(args, "save_every", None))
     _set("keep_last", getattr(args, "keep_last", None))
@@ -672,8 +678,15 @@ class MaskedRoomTrainer:
                             f"Expected a single-sample global token batch, got shape {tuple(c_global.shape)}."
                         )
                     c_global = c_global.squeeze(0)
-                return torch.cat([room_anchor, c_global], dim=0)
-            return condition_out
+                condition_out = torch.cat([room_anchor, c_global], dim=0)
+            conditioning_out = condition_out
+            if float(getattr(self.config, "puzzle_structure_dropout_prob", 0.0)) > 0.0:
+                conditioning_out = apply_puzzle_structure_control_to_conditioning(
+                    conditioning_out,
+                    puzzle_structure_enabled=bool(graph_dict.get("puzzle_room_structure_enabled", True)),
+                    graph_conditioning_mode=self.config.graph_conditioning_mode,
+                )
+            return conditioning_out
 
         c_global = self.condition_encoder.encode_global_only(
             node_features,
@@ -689,8 +702,22 @@ class MaskedRoomTrainer:
                 boundary_constraints=torch.zeros(1, 8, device=self.device, dtype=torch.float32),
                 position=torch.zeros(1, 2, device=self.device, dtype=torch.float32),
             )
-            return torch.cat([default_anchor, c_global], dim=0)
-        return c_global.mean(dim=0, keepdim=True)
+            conditioning_out = torch.cat([default_anchor, c_global], dim=0)
+            if float(getattr(self.config, "puzzle_structure_dropout_prob", 0.0)) > 0.0:
+                conditioning_out = apply_puzzle_structure_control_to_conditioning(
+                    conditioning_out,
+                    puzzle_structure_enabled=bool(graph_dict.get("puzzle_room_structure_enabled", True)),
+                    graph_conditioning_mode=self.config.graph_conditioning_mode,
+                )
+            return conditioning_out
+        conditioning_out = c_global.mean(dim=0, keepdim=True)
+        if float(getattr(self.config, "puzzle_structure_dropout_prob", 0.0)) > 0.0:
+            conditioning_out = apply_puzzle_structure_control_to_conditioning(
+                conditioning_out,
+                puzzle_structure_enabled=bool(graph_dict.get("puzzle_room_structure_enabled", True)),
+                graph_conditioning_mode=self.config.graph_conditioning_mode,
+            )
+        return conditioning_out
 
     def _normalize_graph_sample(self, graph_dict: dict) -> Dict[str, torch.Tensor]:
         node_features = graph_dict["node_features"]
@@ -1080,6 +1107,13 @@ def train_masked_room(config: MaskedRoomTrainingConfig) -> MaskedRoomTrainer:
         train_batches = 0
         for batch in train_loader:
             real_maps, graph_list = batch if isinstance(batch, (list, tuple)) and len(batch) == 2 else (batch, None)
+            if graph_list is not None and float(getattr(config, "puzzle_structure_dropout_prob", 0.0)) > 0.0:
+                real_maps, graph_list = apply_puzzle_structure_dropout_batch(
+                    real_maps,
+                    graph_list,
+                    num_classes=int(config.num_classes),
+                    dropout_prob=float(config.puzzle_structure_dropout_prob),
+                )
             metrics = trainer._step(real_maps, graph_list, train=True)
             for key, value in metrics.items():
                 train_sum[key] += float(value)
@@ -1232,6 +1266,7 @@ def main() -> None:
         choices=["val_loss", "val_topology_focus_loss", "train_loss"],
         default=None,
     )
+    parser.add_argument("--puzzle-structure-dropout-prob", type=float, default=None)
     parser.add_argument("--checkpoint-dir", type=str, default=None)
     parser.add_argument("--save-every", type=int, default=None)
     parser.add_argument("--keep-last", type=int, default=None)

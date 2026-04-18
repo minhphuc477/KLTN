@@ -21,7 +21,9 @@ import gc
 import hashlib
 import json
 import math
+import os
 import sys
+import time
 from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
@@ -51,6 +53,38 @@ from src.pipeline.room_stitching import (
     build_stitched_room_layout,
     compute_layout_quality_metrics,
 )
+from src.simulation.search_factory import (
+    VALIDATION_EXCLUDED_ALGORITHMS,
+    iter_game_state_algorithm_specs,
+)
+
+
+VALIDATION_SEARCH_SUITE_VERSION = "2026-04-15.validation_search_suite_v2"
+
+
+def _resolve_export_device(resolved: Mapping[str, Any]) -> str:
+    override = str(os.environ.get("KLTN_EXPORT_DEVICE", "")).strip().lower()
+    if override in {"auto", "cuda", "cpu"}:
+        return override
+    runtime = resolved.get("runtime", {}) if isinstance(resolved, Mapping) else {}
+    configured = str(runtime.get("device", "auto")).strip().lower() if isinstance(runtime, Mapping) else "auto"
+    if configured in {"auto", "cuda", "cpu"}:
+        return configured
+    return "auto"
+
+
+def _resolve_export_execution_kwargs() -> Dict[str, Any]:
+    sequential_flag = str(os.environ.get("KLTN_EXPORT_SEQUENTIAL", "")).strip().lower()
+    sequential = sequential_flag in {"1", "true", "yes", "on"}
+    raw_batch_size = str(os.environ.get("KLTN_EXPORT_MAX_BATCH_SIZE", "")).strip()
+    try:
+        max_batch_size = max(1, int(raw_batch_size)) if raw_batch_size else (1 if sequential else 8)
+    except ValueError:
+        max_batch_size = 1 if sequential else 8
+    return {
+        "batch_independent_rooms": not sequential,
+        "max_batch_size": int(max_batch_size),
+    }
 
 
 def _tile_color(tile: int) -> Tuple[int, int, int]:
@@ -86,6 +120,65 @@ def _release_torch_memory() -> None:
     gc.collect()
     if torch is not None and torch.cuda.is_available():
         torch.cuda.empty_cache()
+
+
+def _is_cuda_oom_error(exc: BaseException) -> bool:
+    if torch is not None:
+        oom_type = getattr(getattr(torch, "cuda", None), "OutOfMemoryError", None)
+        if oom_type is not None and isinstance(exc, oom_type):
+            return True
+    message = str(exc).strip().lower()
+    return "out of memory" in message and ("cuda" in message or "cublas" in message or "cudnn" in message)
+
+
+def _normalized_execution_kwargs(execution_kwargs: Mapping[str, Any]) -> Dict[str, Any]:
+    return {
+        "batch_independent_rooms": bool(execution_kwargs.get("batch_independent_rooms", True)),
+        "max_batch_size": max(1, int(execution_kwargs.get("max_batch_size", 8) or 1)),
+    }
+
+
+def _build_generation_retry_plan(execution_kwargs: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    base = _normalized_execution_kwargs(execution_kwargs)
+    attempts = [
+        {
+            "name": "configured",
+            "device_override": None,
+            "execution_kwargs": dict(base),
+        }
+    ]
+    safe_cuda = {
+        "batch_independent_rooms": False,
+        "max_batch_size": 1,
+    }
+    if safe_cuda != base:
+        attempts.append(
+            {
+                "name": "sequential_cuda_batch1",
+                "device_override": None,
+                "execution_kwargs": safe_cuda,
+            }
+        )
+    attempts.append(
+        {
+            "name": "sequential_cpu_batch1",
+            "device_override": "cpu",
+            "execution_kwargs": safe_cuda,
+        }
+    )
+    deduped: List[Dict[str, Any]] = []
+    seen = set()
+    for attempt in attempts:
+        key = (
+            str(attempt.get("device_override") or "configured"),
+            bool(attempt["execution_kwargs"]["batch_independent_rooms"]),
+            int(attempt["execution_kwargs"]["max_batch_size"]),
+        )
+        if key in seen:
+            continue
+        deduped.append(attempt)
+        seen.add(key)
+    return deduped
 
 
 def _crop_grid_to_non_void(grid: np.ndarray, *, void_tile: int = 0, margin: int = 1) -> np.ndarray:
@@ -130,8 +223,78 @@ def save_grid_png(
             y0 = r * tile_px
             x0 = c * tile_px
             canvas[y0:y0 + tile_px, x0:x0 + tile_px] = _tile_color(int(grid[r, c]))
+    image = Image.fromarray(canvas)
+    draw = ImageDraw.Draw(image)
+    accent_tiles = {3, 20, 21, 22, 23, 30, 31, 32, 33, 43}
+    for r in range(h):
+        for c in range(w):
+            tile = int(grid[r, c])
+            if tile not in accent_tiles:
+                continue
+            _draw_semantic_overlay_tile(
+                draw,
+                tile=tile,
+                x0=c * tile_px,
+                y0=r * tile_px,
+                tile_px=tile_px,
+            )
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    Image.fromarray(canvas).save(out_path)
+    image.save(out_path)
+
+
+def _draw_semantic_overlay_tile(
+    draw: ImageDraw.ImageDraw,
+    *,
+    tile: int,
+    x0: int,
+    y0: int,
+    tile_px: int,
+) -> None:
+    """
+    Add lightweight semantic glyphs to the regular export PNGs.
+
+    These exports are intentionally flatter than the stylized sheets, but they
+    still need to make interactive tiles readable in report figures.
+    """
+    x1 = x0 + tile_px - 1
+    y1 = y0 + tile_px - 1
+    inset = max(1, tile_px // 6)
+    cx = x0 + tile_px // 2
+    cy = y0 + tile_px // 2
+
+    if int(tile) == 3:  # pushable block
+        draw.rectangle(
+            [x0 + inset, y0 + inset, x1 - inset, y1 - inset],
+            outline=(78, 52, 31),
+            width=max(1, tile_px // 10),
+        )
+        stud = max(1, tile_px // 8)
+        draw.rectangle([cx - stud, cy - stud, cx + stud, cy + stud], fill=(236, 215, 173))
+    elif int(tile) == 20:  # enemy
+        eye_r = max(1, tile_px // 10)
+        draw.ellipse([x0 + inset, y0 + inset, x1 - inset, y1 - inset], outline=(86, 0, 0), width=max(1, tile_px // 10))
+        draw.ellipse([cx - tile_px // 5 - eye_r, cy - eye_r, cx - tile_px // 5 + eye_r, cy + eye_r], fill=(18, 18, 18))
+        draw.ellipse([cx + tile_px // 5 - eye_r, cy - eye_r, cx + tile_px // 5 + eye_r, cy + eye_r], fill=(18, 18, 18))
+    elif int(tile) in {30, 31}:  # key / boss key
+        ring_r = max(2, tile_px // 6)
+        ring_x = x0 + inset + ring_r + 1
+        ring_y = y0 + inset + ring_r + 1
+        color = (255, 228, 120) if int(tile) == 30 else (255, 205, 140)
+        draw.ellipse([ring_x - ring_r, ring_y - ring_r, ring_x + ring_r, ring_y + ring_r], outline=color, width=max(1, tile_px // 12))
+        draw.line([ring_x + ring_r, ring_y, x1 - inset, ring_y], fill=color, width=max(1, tile_px // 12))
+    elif int(tile) in {32, 33}:  # item markers
+        color = (180, 245, 255) if int(tile) == 32 else (232, 232, 232)
+        draw.rectangle([x0 + inset, y0 + inset, x1 - inset, y1 - inset], outline=color, width=max(1, tile_px // 12))
+        draw.line([x0 + inset, y1 - inset, x1 - inset, y0 + inset], fill=color, width=max(1, tile_px // 12))
+    elif int(tile) == 21:  # start
+        draw.rectangle([x0 + inset, y0 + inset, x1 - inset, y1 - inset], outline=(214, 255, 214), width=max(1, tile_px // 10))
+    elif int(tile) == 22:  # triforce
+        draw.polygon([(cx, y0 + inset), (x0 + inset, y1 - inset), (x1 - inset, y1 - inset)], outline=(160, 122, 18), fill=(255, 236, 126))
+    elif int(tile) == 23:  # boss
+        draw.rectangle([x0 + inset, y0 + inset, x1 - inset, y1 - inset], outline=(110, 0, 0), width=max(1, tile_px // 10))
+    elif int(tile) == 43:  # puzzle marker
+        draw.line([x0 + inset, cy, x1 - inset, cy], fill=(245, 195, 255), width=max(1, tile_px // 10))
+        draw.line([cx, y0 + inset, cx, y1 - inset], fill=(245, 195, 255), width=max(1, tile_px // 10))
 
 
 def _tile_to_vglc_char(tile: int) -> str:
@@ -148,6 +311,12 @@ def save_grid_txt(grid: np.ndarray, out_path: Path) -> str:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(text, encoding="utf-8")
     return text
+
+
+def save_grid_json(grid: np.ndarray, out_path: Path) -> None:
+    grid = np.asarray(grid, dtype=np.int32)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(grid.tolist(), indent=2), encoding="utf-8")
 
 
 def _char_color(ch: str) -> Tuple[int, int, int]:
@@ -254,7 +423,16 @@ def _draw_stylized_tile(draw: ImageDraw.ImageDraw, *, tile: int, x0: int, y0: in
         for x in range(x0 + brick, x1, brick):
             draw.line([x, y0 + 1, x, y1 - 1], fill=clamp_rgb(base, -8), width=1)
     elif int(tile) == 3:  # block
-        draw.rectangle([x0 + inset, y0 + inset, x1 - inset, y1 - inset], outline=clamp_rgb(base, -30), width=max(1, tile_px // 10))
+        draw.rectangle(
+            [x0 + inset, y0 + inset, x1 - inset, y1 - inset],
+            fill=clamp_rgb(base, -10),
+            outline=clamp_rgb(base, -34),
+            width=max(1, tile_px // 10),
+        )
+        stud = max(1, tile_px // 8)
+        draw.rectangle([cx - stud, cy - stud, cx + stud, cy + stud], fill=clamp_rgb(base, 26))
+        draw.line([x0 + inset, cy, x0 + inset + stud + 1, cy], fill=clamp_rgb(base, 34), width=max(1, tile_px // 14))
+        draw.line([x1 - inset - stud - 1, cy, x1 - inset, cy], fill=clamp_rgb(base, 34), width=max(1, tile_px // 14))
     elif int(tile) in {10, 11, 12, 13, 14, 15}:  # doors
         door_w = max(4, tile_px // 2)
         draw.rectangle([cx - door_w // 2, y0 + 1, cx + door_w // 2, y1 - 1], fill=clamp_rgb(base, -25))
@@ -265,18 +443,40 @@ def _draw_stylized_tile(draw: ImageDraw.ImageDraw, *, tile: int, x0: int, y0: in
             draw.rectangle([cx - door_w // 2, y0 + 1, cx + door_w // 2, y0 + inset], fill=(215, 70, 70))
         elif int(tile) == 13:
             draw.line([x0 + inset, cy, x1 - inset, cy], fill=(220, 170, 255), width=max(1, tile_px // 10))
+    elif int(tile) == 20:  # enemy
+        eye_r = max(1, tile_px // 10)
+        body_top = y0 + inset
+        body_bottom = y1 - inset
+        draw.ellipse([x0 + inset, body_top, x1 - inset, body_bottom], fill=clamp_rgb(base, 6), outline=clamp_rgb(base, -24))
+        draw.ellipse([cx - tile_px // 5 - eye_r, cy - eye_r, cx - tile_px // 5 + eye_r, cy + eye_r], fill=(18, 18, 18))
+        draw.ellipse([cx + tile_px // 5 - eye_r, cy - eye_r, cx + tile_px // 5 + eye_r, cy + eye_r], fill=(18, 18, 18))
+        draw.line([cx - tile_px // 6, y1 - inset - 2, cx + tile_px // 6, y1 - inset - 2], fill=(255, 210, 210), width=max(1, tile_px // 14))
     elif int(tile) == 21:  # start
         draw.rectangle([x0 + inset, y0 + inset, x1 - inset, y1 - inset], outline=(210, 255, 210), width=max(1, tile_px // 10))
     elif int(tile) == 22:  # triforce
         draw.polygon([(cx, y0 + inset), (x0 + inset, y1 - inset), (x1 - inset, y1 - inset)], fill=(255, 235, 130), outline=(180, 140, 20))
     elif int(tile) == 23:  # boss
         draw.rectangle([x0 + inset, y0 + inset, x1 - inset, y1 - inset], fill=(160, 30, 30))
+    elif int(tile) == 30:  # small key
+        ring_r = max(2, tile_px // 6)
+        ring_x = x0 + inset + ring_r + 1
+        ring_y = y0 + inset + ring_r + 1
+        draw.ellipse([ring_x - ring_r, ring_y - ring_r, ring_x + ring_r, ring_y + ring_r], outline=(255, 232, 120), width=max(1, tile_px // 12))
+        draw.line([ring_x + ring_r, ring_y, x1 - inset, ring_y], fill=(255, 220, 110), width=max(1, tile_px // 12))
+        draw.line([x1 - inset - 2, ring_y, x1 - inset - 2, ring_y + ring_r + 1], fill=(255, 220, 110), width=max(1, tile_px // 12))
+        draw.line([x1 - inset - 5, ring_y, x1 - inset - 5, ring_y + ring_r], fill=(255, 220, 110), width=max(1, tile_px // 12))
     elif int(tile) == 31:  # boss key
         draw.ellipse([x0 + inset, y0 + inset, x0 + inset + tile_px // 3, y0 + inset + tile_px // 3], outline=(255, 225, 140), width=max(1, tile_px // 12))
         draw.rectangle([cx - 1, cy - 1, x1 - inset, cy + 1], fill=(255, 190, 100))
     elif int(tile) == 32:  # key item
         draw.rectangle([x0 + inset, y0 + inset, x1 - inset, y1 - inset], outline=(180, 245, 255), width=max(1, tile_px // 10))
         draw.line([x0 + inset, y1 - inset, x1 - inset, y0 + inset], fill=(180, 245, 255), width=max(1, tile_px // 12))
+    elif int(tile) == 33:  # minor item
+        draw.polygon(
+            [(cx, y0 + inset), (x0 + inset, cy), (cx, y1 - inset), (x1 - inset, cy)],
+            fill=(225, 225, 225),
+            outline=(160, 160, 160),
+        )
     elif int(tile) == 42:  # stair
         step_h = max(2, tile_px // 6)
         for i in range(4):
@@ -344,6 +544,493 @@ def save_stylized_rooms_sheet(room_grids: Dict[int, np.ndarray], out_path: Path,
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     canvas.save(out_path)
+
+
+def _compute_generation_validation(
+    *,
+    dungeon_grid: np.ndarray,
+    mission_graph: nx.Graph,
+    room_puzzle_metadata: Optional[Mapping[str, Any]] = None,
+    room_positions: Optional[Mapping[Any, Tuple[int, int]]] = None,
+    room_to_node: Optional[Mapping[Any, Any]] = None,
+    node_to_room: Optional[Mapping[Any, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Compute explicit playability diagnostics for export summaries.
+
+    Placement and repair metrics are not enough once post-overlay correction can
+    hide visually bad auxiliary outputs. This runs the repo's graph/grid
+    validators plus the CBS behavioral probe so audits carry actual playability
+    evidence.
+    """
+    grid = np.asarray(dungeon_grid, dtype=np.int32)
+    payload: Dict[str, Any] = {}
+    env_kwargs = {
+        "graph": mission_graph,
+        "room_to_node": room_to_node,
+        "room_positions": room_positions,
+        "node_to_room": node_to_room,
+        "room_puzzle_metadata": room_puzzle_metadata,
+    }
+
+    try:
+        from src.evaluation.validator import ExternalValidator
+        from src.simulation.cognitive_bounded_search import CognitiveBoundedSearch
+        from src.simulation.search_base import GameStateSearchConfig, SearchRepresentation
+        from src.simulation.search_factory import run_game_state_solver
+        from src.simulation.validator import GraphGuidedValidator, ZeldaLogicEnv, ZeldaValidator
+        from src.utils.graph_utils import filter_virtual_nodes, validate_goal_subgraph
+    except (ImportError, AttributeError, RuntimeError, TypeError, ValueError) as exc:
+        return {
+            "available": False,
+            "error": f"validation_import_error: {exc}",
+        }
+
+    def _finite_or_none(value: Any) -> Optional[float]:
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return None
+        return numeric if math.isfinite(numeric) else None
+
+    def _env_int(name: str, default: int, *, min_value: int = 1) -> int:
+        raw = str(os.environ.get(name, "")).strip()
+        if not raw:
+            return int(default)
+        try:
+            return max(int(min_value), int(raw))
+        except ValueError:
+            return int(default)
+
+    validation_mode = str(os.environ.get("KLTN_VALIDATION_MODE", "full")).strip().lower()
+    if validation_mode not in {"full", "core", "oracle_only"}:
+        validation_mode = "full"
+
+    def _run_search_suite() -> Dict[str, Any]:
+        if validation_mode == "full":
+            oracle_timeout_default = int(max(200000, grid.size * 64))
+            comparison_timeout_default = int(max(50000, grid.size * 16))
+            advanced_timeout_default = int(max(100000, grid.size * 24))
+        else:
+            oracle_timeout_default = int(max(50000, grid.size * 24))
+            comparison_timeout_default = int(max(12000, grid.size * 6))
+            advanced_timeout_default = int(max(20000, grid.size * 10))
+        oracle_timeout = _env_int("KLTN_VALIDATION_ASTAR_TIMEOUT", oracle_timeout_default)
+        comparison_timeout = _env_int("KLTN_VALIDATION_COMPARISON_TIMEOUT", comparison_timeout_default)
+        advanced_timeout = _env_int("KLTN_VALIDATION_ADVANCED_TIMEOUT", advanced_timeout_default)
+        all_specs = list(iter_game_state_algorithm_specs())
+        if validation_mode == "oracle_only":
+            specs = [spec for spec in all_specs if str(spec.key) == "astar"]
+        elif validation_mode == "core":
+            specs = [
+                spec
+                for spec in all_specs
+                if str(spec.key) in {"astar", "bfs", "dijkstra", "greedy"}
+            ]
+        else:
+            specs = all_specs
+        suite: Dict[str, Any] = {
+            "search_suite_version": VALIDATION_SEARCH_SUITE_VERSION,
+            "mode": str(validation_mode),
+            "tile_state_space": {},
+            "agreement": {},
+            "excluded_algorithms": dict(VALIDATION_EXCLUDED_ALGORITHMS),
+            "omitted_by_mode": [
+                str(spec.key) for spec in all_specs if spec not in specs
+            ],
+            "notes": {
+                "oracle": "A* remains the hard grid-level oracle in this suite.",
+                "behavioral_probe": "CBS is reported separately because it is a bounded-rational behavior probe, not the hard correctness oracle.",
+            },
+        }
+
+        astar_path_length: Optional[int] = None
+        astar_states: Optional[int] = None
+        astar_success = False
+
+        for spec in specs:
+            algorithm_name = str(spec.key)
+            algorithm_idx = int(spec.index)
+            env = ZeldaLogicEnv(semantic_grid=grid, render_mode=False, **env_kwargs)
+            started = time.perf_counter()
+            try:
+                if algorithm_name == "astar":
+                    timeout = oracle_timeout
+                elif algorithm_name in {"dstar_lite", "bidirectional_astar"}:
+                    timeout = advanced_timeout
+                elif algorithm_name == "dfs_iddfs":
+                    timeout = advanced_timeout
+                else:
+                    timeout = comparison_timeout
+                result = run_game_state_solver(
+                    env,
+                    algorithm_idx=algorithm_idx,
+                    config=GameStateSearchConfig(
+                        timeout=timeout,
+                        allow_diagonals=False,
+                        rules_profile="vglc_strict",
+                        representation=SearchRepresentation.TILE,
+                        max_depth=max(500, int(grid.size)),
+                        use_iddfs=True,
+                    ),
+                )
+                elapsed = float(time.perf_counter() - started)
+                entry = {
+                    "success": bool(result.success),
+                    "path_length": int(len(result.path or [])),
+                    "states_explored": int(result.states_explored or 0),
+                    "time_sec": elapsed,
+                    "algorithm": str(result.algorithm),
+                    "validation_role": str(spec.validation_role),
+                    "rules_profile": "vglc_strict",
+                    "allow_diagonals": False,
+                    "timeout_limit_states": int(timeout),
+                    **dict(result.metadata or {}),
+                }
+            except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+                elapsed = float(time.perf_counter() - started)
+                if algorithm_name == "astar":
+                    timeout = oracle_timeout
+                elif algorithm_name in {"dstar_lite", "bidirectional_astar", "dfs_iddfs"}:
+                    timeout = advanced_timeout
+                else:
+                    timeout = comparison_timeout
+                entry = {
+                    "success": False,
+                    "path_length": 0,
+                    "states_explored": 0,
+                    "time_sec": elapsed,
+                    "algorithm": str(algorithm_name).upper(),
+                    "validation_role": str(spec.validation_role),
+                    "rules_profile": "vglc_strict",
+                    "allow_diagonals": False,
+                    "timeout_limit_states": int(timeout),
+                    "error_message": f"{algorithm_name}_validation_error: {exc}",
+                }
+            finally:
+                try:
+                    env.close()
+                except Exception:
+                    pass
+
+            suite["tile_state_space"][algorithm_name] = entry
+            if algorithm_name == "astar":
+                astar_success = bool(entry["success"])
+                astar_path_length = int(entry["path_length"])
+                astar_states = int(entry["states_explored"])
+
+        for algorithm_name, entry in suite["tile_state_space"].items():
+            if astar_success and bool(entry.get("success", False)):
+                entry["path_ratio_vs_astar"] = _finite_or_none(
+                    float(entry["path_length"]) / float(max(1, int(astar_path_length or 0)))
+                )
+                entry["states_ratio_vs_astar"] = _finite_or_none(
+                    float(entry["states_explored"]) / float(max(1, int(astar_states or 0)))
+                )
+            else:
+                entry["path_ratio_vs_astar"] = None
+                entry["states_ratio_vs_astar"] = None
+
+        bfs_entry = suite["tile_state_space"].get("bfs", {})
+        dijkstra_entry = suite["tile_state_space"].get("dijkstra", {})
+        greedy_entry = suite["tile_state_space"].get("greedy", {})
+        suite["agreement"] = {
+            "astar_success": bool(astar_success),
+            "bfs_matches_astar_path_length": bool(
+                astar_success
+                and bool(bfs_entry.get("success", False))
+                and int(bfs_entry.get("path_length", 0)) == int(astar_path_length or 0)
+            ),
+            "dijkstra_matches_astar_path_length": bool(
+                astar_success
+                and bool(dijkstra_entry.get("success", False))
+                and int(dijkstra_entry.get("path_length", 0)) == int(astar_path_length or 0)
+            ),
+            "greedy_suboptimality_vs_astar": _finite_or_none(greedy_entry.get("path_ratio_vs_astar")),
+            "all_algorithms_solved": all(
+                bool(entry.get("success", False))
+                for entry in suite["tile_state_space"].values()
+            ),
+        }
+        return suite
+
+    try:
+        validator = ZeldaValidator()
+        if validation_mode == "full":
+            validator_timeout_default = int(max(120000, grid.size * 32))
+            softlock_timeout_default = int(max(100000, grid.size * 28))
+        else:
+            validator_timeout_default = int(max(40000, grid.size * 12))
+            softlock_timeout_default = int(max(30000, grid.size * 10))
+        validator_timeout = _env_int("KLTN_VALIDATION_VALIDATOR_TIMEOUT", validator_timeout_default)
+        softlock_timeout = _env_int("KLTN_VALIDATION_SOFTLOCK_TIMEOUT", softlock_timeout_default)
+        grid_result = validator.validate_single(
+            grid,
+            render=False,
+            persona_mode="balanced",
+            solver_timeout=validator_timeout,
+            **env_kwargs,
+        )
+        softlock_safe, softlock_issues = validator.check_soft_locks_deterministic(
+            grid,
+            solver_timeout=softlock_timeout,
+            **env_kwargs,
+        )
+        payload["astar_grid"] = {
+            "solvable": bool(grid_result.is_solvable),
+            "is_valid_syntax": bool(grid_result.is_valid_syntax),
+            "path_length": int(getattr(grid_result, "path_length", 0) or 0),
+            "reachability": float(getattr(grid_result, "reachability", 0.0) or 0.0),
+            "backtracking_score": float(getattr(grid_result, "backtracking_score", 0.0) or 0.0),
+            "error_message": str(getattr(grid_result, "error_message", "") or ""),
+            "solver_used": str(getattr(grid_result, "solver_used", "astar") or "astar"),
+            "primary_solver_solved": bool(getattr(grid_result, "primary_solver_solved", False)),
+            "primary_solver_error": str(getattr(grid_result, "primary_solver_error", "") or ""),
+            "states_explored": int(getattr(grid_result, "states_explored", 0) or 0),
+        }
+        payload["softlock_check"] = {
+            "is_safe": bool(softlock_safe),
+            "issues": [str(item) for item in list(softlock_issues or [])],
+        }
+        try:
+            from types import SimpleNamespace
+
+            graph_rooms: Dict[str, Any] = {}
+            for room_slot, offset in dict(room_positions or {}).items():
+                if not isinstance(offset, (list, tuple)) or len(offset) < 2:
+                    continue
+                room_id = dict(room_to_node or {}).get(room_slot)
+                if room_id is None:
+                    continue
+                row_off, col_off = int(offset[0]), int(offset[1])
+                room_grid = grid[row_off : row_off + ROOM_HEIGHT, col_off : col_off + ROOM_WIDTH]
+                graph_rooms[str(room_id)] = SimpleNamespace(grid=np.asarray(room_grid, dtype=np.int32))
+
+            graph_guided = GraphGuidedValidator().validate_dungeon_with_graph(
+                SimpleNamespace(graph=mission_graph, rooms=graph_rooms)
+            )
+            payload["graph_guided_oracle"] = {
+                "solvable": bool(graph_guided.is_solvable),
+                "graph_path": [int(node) for node in list(graph_guided.graph_path or [])],
+                "subgraph_path": [int(node) for node in list(graph_guided.subgraph_path or [])],
+                "missing_rooms": [int(node) for node in list(graph_guided.missing_rooms or [])],
+                "connectivity_score": float(graph_guided.connectivity_score or 0.0),
+                "error_message": str(graph_guided.error_message or ""),
+                "room_traversable_count": int(
+                    sum(
+                        1
+                        for item in dict(graph_guided.room_validations or {}).values()
+                        if bool(item.get("is_traversable", False))
+                    )
+                ),
+                "room_validation_count": int(len(dict(graph_guided.room_validations or {}))),
+            }
+        except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+            payload["graph_guided_oracle"] = {
+                "solvable": False,
+                "graph_path": [],
+                "subgraph_path": [],
+                "missing_rooms": [],
+                "connectivity_score": 0.0,
+                "error_message": f"graph_guided_validation_error: {exc}",
+                "room_traversable_count": 0,
+                "room_validation_count": 0,
+            }
+        payload["search_algorithms"] = _run_search_suite()
+
+        if validation_mode == "full":
+            cbs_timeout_default = int(max(5000, grid.size * 6))
+        else:
+            cbs_timeout_default = int(max(2500, grid.size * 3))
+        cbs_timeout = _env_int("KLTN_VALIDATION_CBS_TIMEOUT", cbs_timeout_default)
+        env_cbs = ZeldaLogicEnv(semantic_grid=grid, render_mode=False, **env_kwargs)
+        try:
+            cbs = CognitiveBoundedSearch(env_cbs, persona="balanced", timeout=cbs_timeout, seed=123)
+            cbs_success, cbs_path, cbs_states, cbs_metrics = cbs.solve()
+        finally:
+            try:
+                env_cbs.close()
+            except Exception:
+                pass
+
+        optimal_path_length = int(getattr(grid_result, "path_length", 0) or 0)
+        cbs_path_length = int(len(cbs_path or []))
+        confusion_ratio = (
+            float(cbs_path_length) / float(max(1, optimal_path_length))
+            if optimal_path_length > 0 and cbs_success
+            else float("inf")
+        )
+        payload["cbs_balanced"] = {
+            "seed": 123,
+            "success": bool(cbs_success),
+            "path_length": cbs_path_length,
+            "states_explored": int(cbs_states or 0),
+            "confusion_ratio_vs_astar": float(confusion_ratio),
+            "confusion_index": float(getattr(cbs_metrics, "confusion_index", 0.0) or 0.0),
+            "navigation_entropy": float(getattr(cbs_metrics, "navigation_entropy", 0.0) or 0.0),
+            "room_entropy": float(getattr(cbs_metrics, "room_entropy", 0.0) or 0.0),
+            "cognitive_load": float(getattr(cbs_metrics, "cognitive_load", 0.0) or 0.0),
+            "aha_latency": int(getattr(cbs_metrics, "aha_latency", 0) or 0),
+            "deliberation_events": int(getattr(cbs_metrics, "deliberation_events", 0) or 0),
+            "budget_exhaustion_events": int(getattr(cbs_metrics, "budget_exhaustion_events", 0) or 0),
+            "peak_frustration": float(getattr(cbs_metrics, "peak_frustration", 0.0) or 0.0),
+            "affordance_reactivations": int(getattr(cbs_metrics, "affordance_reactivations", 0) or 0),
+            "affordance_guided_steps": int(getattr(cbs_metrics, "affordance_guided_steps", 0) or 0),
+            "inventory_change_events": int(getattr(cbs_metrics, "inventory_change_events", 0) or 0),
+            "focus_switches": int(getattr(cbs_metrics, "focus_switches", 0) or 0),
+            "focus_guided_steps": int(getattr(cbs_metrics, "focus_guided_steps", 0) or 0),
+            "status": "success" if bool(cbs_success) else ("budget_exhausted" if int(cbs_states or 0) >= int(cbs_timeout) else "failed"),
+        }
+    except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+        payload["astar_grid"] = {
+            "solvable": False,
+            "is_valid_syntax": False,
+            "path_length": 0,
+            "reachability": 0.0,
+            "backtracking_score": 0.0,
+            "error_message": f"grid_validation_error: {exc}",
+            "solver_used": "astar",
+            "primary_solver_solved": False,
+            "primary_solver_error": f"grid_validation_error: {exc}",
+            "states_explored": 0,
+        }
+        payload["softlock_check"] = {
+            "is_safe": False,
+            "issues": [f"grid_validation_error: {exc}"],
+        }
+        payload["graph_guided_oracle"] = {
+            "solvable": False,
+            "graph_path": [],
+            "subgraph_path": [],
+            "missing_rooms": [],
+            "connectivity_score": 0.0,
+            "error_message": f"graph_guided_validation_error: {exc}",
+            "room_traversable_count": 0,
+            "room_validation_count": 0,
+        }
+        payload["search_algorithms"] = {
+            "tile_state_space": {},
+            "agreement": {
+                "astar_success": False,
+                "bfs_matches_astar_path_length": False,
+                "dijkstra_matches_astar_path_length": False,
+                "greedy_suboptimality_vs_astar": None,
+                "all_algorithms_solved": False,
+            },
+        }
+        payload["cbs_balanced"] = {
+            "success": False,
+            "path_length": 0,
+            "states_explored": 0,
+            "confusion_ratio_vs_astar": float("inf"),
+            "confusion_index": 0.0,
+            "navigation_entropy": 0.0,
+            "room_entropy": 0.0,
+            "cognitive_load": 0.0,
+            "aha_latency": 0,
+            "deliberation_events": 0,
+            "budget_exhaustion_events": 0,
+            "peak_frustration": 0.0,
+            "affordance_reactivations": 0,
+            "affordance_guided_steps": 0,
+            "inventory_change_events": 0,
+            "focus_switches": 0,
+            "focus_guided_steps": 0,
+            "status": "failed",
+            "error_message": f"cbs_validation_error: {exc}",
+        }
+
+    try:
+        mission_graph_physical, virtual_info = filter_virtual_nodes(mission_graph)
+        goal_gauntlet_valid, goal_gauntlet_errors = validate_goal_subgraph(mission_graph_physical)
+        graph_validator = ExternalValidator()
+        graph_result = graph_validator.validate(mission_graph_physical)
+        payload["graph_progression"] = {
+            "solvable": bool(graph_result.is_solvable),
+            "path_length": int(getattr(graph_result, "path_length", 0) or 0),
+            "states_explored": int(getattr(graph_result, "states_explored", 0) or 0),
+            "failure_reason": str(getattr(graph_result, "failure_reason", "") or ""),
+            "goal_gauntlet_valid": bool(goal_gauntlet_valid),
+            "goal_gauntlet_errors": [str(item) for item in list(goal_gauntlet_errors or [])],
+            "virtual_nodes_removed": int(len(virtual_info.get("removed_nodes", []) or [])),
+        }
+    except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+        payload["graph_progression"] = {
+            "solvable": False,
+            "path_length": 0,
+            "states_explored": 0,
+            "failure_reason": f"graph_validation_error: {exc}",
+            "goal_gauntlet_valid": False,
+            "goal_gauntlet_errors": [f"graph_validation_error: {exc}"],
+            "virtual_nodes_removed": 0,
+        }
+
+    payload["mechanical_contract"] = {
+        "tile_oracle_solved": bool(payload.get("astar_grid", {}).get("solvable", False)),
+        "graph_guided_solved": bool(payload.get("graph_guided_oracle", {}).get("solvable", False)),
+        "graph_progression_solved": bool(payload.get("graph_progression", {}).get("solvable", False)),
+        "goal_gauntlet_valid": bool(payload.get("graph_progression", {}).get("goal_gauntlet_valid", False)),
+        "softlock_safe": bool(payload.get("softlock_check", {}).get("is_safe", False)),
+    }
+    payload["mechanical_contract"]["hybrid_oracle_pass"] = bool(
+        payload["mechanical_contract"]["graph_guided_solved"]
+        and payload["mechanical_contract"]["graph_progression_solved"]
+        and payload["mechanical_contract"]["goal_gauntlet_valid"]
+        and payload["mechanical_contract"]["softlock_safe"]
+    )
+
+    payload["available"] = True
+    return payload
+
+
+def build_validation_context_from_generation_result(result: Any) -> Dict[str, Any]:
+    """
+    Extract stitched room metadata required by the hard oracle and P-CBS.
+
+    Validation works in stitched room-slot space. Using raw room ids here causes
+    subtle mismatches once puzzle plans and room-local progression metadata are
+    attached after stitching.
+    """
+    stitched_layout = getattr(result, "stitched_layout", None)
+    slot_positions = dict(getattr(stitched_layout, "slot_positions", {}) or {})
+    room_offsets = dict(getattr(stitched_layout, "room_offsets", {}) or {})
+
+    room_positions: Dict[Any, Tuple[int, int]] = {}
+    room_to_node: Dict[Any, Any] = {}
+    node_to_room: Dict[Any, Any] = {}
+
+    for room_id, slot_pos in slot_positions.items():
+        room_to_node[slot_pos] = room_id
+        node_to_room[room_id] = slot_pos
+        offset = room_offsets.get(room_id)
+        if isinstance(offset, (list, tuple)) and len(offset) >= 2:
+            room_positions[slot_pos] = (int(offset[0]), int(offset[1]))
+
+    return {
+        "room_puzzle_metadata": dict(getattr(result, "puzzle_metadata", {}) or {}),
+        "room_positions": room_positions,
+        "room_to_node": room_to_node,
+        "node_to_room": node_to_room,
+    }
+
+
+def build_validation_search_stats_payload(validation: Mapping[str, Any]) -> Dict[str, Any]:
+    """Build the dedicated validation-search JSON sidecar from full validation output."""
+    validation_dict = dict(validation or {})
+    return {
+        "search_suite_version": VALIDATION_SEARCH_SUITE_VERSION,
+        "search_algorithms": dict(validation_dict.get("search_algorithms", {})),
+        "hard_oracle": {
+            "astar_grid": dict(validation_dict.get("astar_grid", {})),
+            "graph_guided_oracle": dict(validation_dict.get("graph_guided_oracle", {})),
+            "graph_progression": dict(validation_dict.get("graph_progression", {})),
+            "softlock_check": dict(validation_dict.get("softlock_check", {})),
+            "mechanical_contract": dict(validation_dict.get("mechanical_contract", {})),
+        },
+        "behavioral_probe": {
+            "cbs_balanced": dict(validation_dict.get("cbs_balanced", {})),
+        },
+    }
 
 
 _ROOM_OVERLAY_COLORS: List[Tuple[int, int, int]] = [
@@ -613,6 +1300,13 @@ def add_generation_override_args(parser: argparse.ArgumentParser) -> None:
         help="Override generation.puzzle_room_scaffold_enabled for this export only.",
     )
     parser.add_argument(
+        "--puzzle-room-structure-enabled",
+        dest="puzzle_room_structure_enabled",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Override generation.puzzle_room_structure_enabled for this export only.",
+    )
+    parser.add_argument(
         "--puzzle-room-scaffold-min-structure-tiles",
         type=int,
         default=None,
@@ -693,6 +1387,12 @@ def add_generation_override_args(parser: argparse.ArgumentParser) -> None:
         help="Override generation.puzzle_room_novelty_weight for this export only.",
     )
     parser.add_argument(
+        "--puzzle-room-min-quality-gain",
+        type=float,
+        default=None,
+        help="Override generation.puzzle_room_min_quality_gain for this export only.",
+    )
+    parser.add_argument(
         "--validator-plan-max-states",
         type=int,
         default=None,
@@ -741,6 +1441,8 @@ def generation_overrides_from_namespace(args: argparse.Namespace) -> Dict[str, A
         overrides["semantic_marker_suppression_bias"] = float(args.semantic_marker_suppression_bias)
     if getattr(args, "puzzle_room_scaffold_enabled", None) is not None:
         overrides["puzzle_room_scaffold_enabled"] = bool(args.puzzle_room_scaffold_enabled)
+    if getattr(args, "puzzle_room_structure_enabled", None) is not None:
+        overrides["puzzle_room_structure_enabled"] = bool(args.puzzle_room_structure_enabled)
     if getattr(args, "puzzle_room_scaffold_min_structure_tiles", None) is not None:
         overrides["puzzle_room_scaffold_min_structure_tiles"] = int(args.puzzle_room_scaffold_min_structure_tiles)
     if getattr(args, "puzzle_room_archetype_mode", None) is not None:
@@ -767,6 +1469,8 @@ def generation_overrides_from_namespace(args: argparse.Namespace) -> Dict[str, A
         overrides["puzzle_room_candidate_count"] = int(args.puzzle_room_candidate_count)
     if getattr(args, "puzzle_room_novelty_weight", None) is not None:
         overrides["puzzle_room_novelty_weight"] = float(args.puzzle_room_novelty_weight)
+    if getattr(args, "puzzle_room_min_quality_gain", None) is not None:
+        overrides["puzzle_room_min_quality_gain"] = float(args.puzzle_room_min_quality_gain)
     if getattr(args, "validator_plan_max_states", None) is not None:
         overrides["validator_plan_max_states"] = int(args.validator_plan_max_states)
     if getattr(args, "deterministic_graph_marker_overlay_enabled", None) is not None:
@@ -828,6 +1532,9 @@ def _generation_policy_summary(pipeline: NeuralSymbolicDungeonPipeline) -> Dict[
         "puzzle_room_scaffold_enabled": bool(
             getattr(pipeline, "default_puzzle_room_scaffold_enabled", True)
         ),
+        "puzzle_room_structure_enabled": bool(
+            getattr(pipeline, "default_puzzle_room_structure_enabled", True)
+        ),
         "puzzle_room_scaffold_min_structure_tiles": int(
             getattr(pipeline, "default_puzzle_room_scaffold_min_structure_tiles", 10)
         ),
@@ -867,6 +1574,9 @@ def _generation_policy_summary(pipeline: NeuralSymbolicDungeonPipeline) -> Dict[
         "puzzle_room_novelty_weight": float(
             getattr(pipeline, "default_puzzle_room_novelty_weight", 0.45)
         ),
+        "puzzle_room_min_quality_gain": float(
+            getattr(pipeline, "default_puzzle_room_min_quality_gain", 0.5)
+        ),
         "validator_plan_max_states": int(
             getattr(pipeline, "default_validator_plan_max_states", 512)
         ),
@@ -901,9 +1611,11 @@ def build_pipeline(
     run_dir: Path,
     *,
     generation_overrides: Optional[Mapping[str, Any]] = None,
+    device_override: Optional[str] = None,
 ) -> NeuralSymbolicDungeonPipeline:
     resolved = json.loads((run_dir / "resolved_config.json").read_text(encoding="utf-8"))
     resolved = _apply_generation_overrides(resolved, generation_overrides)
+    export_device = str(device_override).strip().lower() if device_override else _resolve_export_device(resolved)
     pipeline_kwargs = pipeline_kwargs_from_resolved_config(resolved)
     vqvae_checkpoint = _resolve_vqvae_checkpoint(run_dir)
 
@@ -929,10 +1641,86 @@ def build_pipeline(
         diffusion_checkpoint=str(run_dir / "checkpoints" / "diffusion" / "best_model.pth"),
         condition_encoder_checkpoint=str(run_dir / "checkpoints" / "diffusion" / "best_model.pth"),
         logic_net_checkpoint=str(run_dir / "checkpoints" / "diffusion" / "best_model.pth"),
-        device="auto",
+        device=export_device,
         enable_logging=False,
         **pipeline_kwargs,
     )
+
+
+def _generate_dungeon_with_oom_backoff(
+    *,
+    pipeline_builder: Any,
+    run_dir: Path,
+    mission_graph: nx.Graph,
+    generation_overrides: Optional[Mapping[str, Any]],
+    execution_kwargs: Mapping[str, Any],
+    status_writer: Any,
+    generation_kwargs: Mapping[str, Any],
+) -> Tuple[NeuralSymbolicDungeonPipeline, Any, Dict[str, Any]]:
+    last_exc: Optional[BaseException] = None
+    retry_plan = _build_generation_retry_plan(execution_kwargs)
+    for attempt_index, attempt in enumerate(retry_plan, start=1):
+        device_override = attempt.get("device_override")
+        attempt_name = str(attempt.get("name", f"attempt_{attempt_index}"))
+        attempt_kwargs = _normalized_execution_kwargs(attempt.get("execution_kwargs", {}))
+        pipeline = None
+        try:
+            status_writer(
+                "building_pipeline",
+                attempt=int(attempt_index),
+                attempt_name=attempt_name,
+                device=str(device_override or "configured"),
+                execution_kwargs=attempt_kwargs,
+            )
+            pipeline = pipeline_builder(
+                run_dir,
+                generation_overrides=generation_overrides,
+                device_override=device_override,
+            )
+            pipeline.runtime_diagnostics = {}
+            status_writer(
+                "generating_dungeon",
+                attempt=int(attempt_index),
+                attempt_name=attempt_name,
+                device=str(device_override or "configured"),
+                execution_kwargs=attempt_kwargs,
+            )
+            result = pipeline.generate_dungeon(
+                mission_graph=copy.deepcopy(mission_graph),
+                **dict(generation_kwargs),
+                **attempt_kwargs,
+            )
+            return pipeline, result, {
+                "attempt": int(attempt_index),
+                "attempt_name": attempt_name,
+                "device": str(device_override or "configured"),
+                "execution_kwargs": attempt_kwargs,
+                "oom_retry_count": int(attempt_index - 1),
+            }
+        except (RuntimeError, ValueError) as exc:
+            if not _is_cuda_oom_error(exc):
+                raise
+            last_exc = exc
+            status_writer(
+                "generation_retry_after_oom",
+                attempt=int(attempt_index),
+                attempt_name=attempt_name,
+                device=str(device_override or "configured"),
+                execution_kwargs=attempt_kwargs,
+                error=str(exc),
+            )
+            if pipeline is not None:
+                try:
+                    del pipeline
+                except Exception:
+                    pass
+            _release_torch_memory()
+            continue
+    if last_exc is not None:
+        raise RuntimeError(
+            "Dungeon generation failed after exhausting the CUDA/CPU OOM retry ladder."
+        ) from last_exc
+    raise RuntimeError("Dungeon generation failed before any retry attempt was executed.")
 
 
 def export_variant(
@@ -966,20 +1754,24 @@ def export_variant(
         payload.update({str(k): v for k, v in extra.items()})
         status_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
-    _write_status("building_pipeline")
-    pipeline = build_pipeline(run_dir, generation_overrides=generation_overrides)
-    pipeline.runtime_diagnostics = {}
-    _write_status("generating_dungeon")
-    result = pipeline.generate_dungeon(
-        mission_graph=copy.deepcopy(mission_graph),
-        generate_topology=False,
-        guidance_scale=float(guidance_scale),
-        logic_guidance_scale=float(logic_guidance_scale),
-        num_diffusion_steps=int(num_diffusion_steps),
-        use_fast_sampling=bool(use_fast_sampling),
-        apply_repair=True,
-        enable_map_elites=False,
-        seed=int(seed),
+    execution_kwargs = _resolve_export_execution_kwargs()
+    pipeline, result, generation_execution = _generate_dungeon_with_oom_backoff(
+        pipeline_builder=build_pipeline,
+        run_dir=run_dir,
+        mission_graph=mission_graph,
+        generation_overrides=generation_overrides,
+        execution_kwargs=execution_kwargs,
+        status_writer=_write_status,
+        generation_kwargs={
+            "generate_topology": False,
+            "guidance_scale": float(guidance_scale),
+            "logic_guidance_scale": float(logic_guidance_scale),
+            "num_diffusion_steps": int(num_diffusion_steps),
+            "use_fast_sampling": bool(use_fast_sampling),
+            "apply_repair": True,
+            "enable_map_elites": False,
+            "seed": int(seed),
+        },
     )
     _write_status(
         "generation_complete",
@@ -1005,6 +1797,10 @@ def export_variant(
         variant_dir / "dungeon_grid.png",
         tile_px=16,
         crop_void=False,
+    )
+    save_grid_json(
+        np.asarray(result.dungeon_grid, dtype=np.int32),
+        variant_dir / "dungeon_grid_ids.json",
     )
     dungeon_preview = save_grid_txt(np.asarray(result.dungeon_grid, dtype=np.int32), variant_dir / "dungeon_grid.txt")
     (variant_dir / "preview.txt").write_text(dungeon_preview, encoding="utf-8")
@@ -1046,7 +1842,41 @@ def export_variant(
             "repair_interior_obstacle_components_removed",
         )
     }
-    tile_hist = {str(int(k)): int(v) for k, v in Counter(int(v) for v in np.asarray(result.dungeon_grid).ravel()).items()}
+    dungeon_grid = np.asarray(result.dungeon_grid, dtype=np.int32).copy()
+    result_metrics = dict(result.metrics)
+    generation_time_sec = float(result.generation_time)
+    room_count = int(len(result.rooms))
+    validation_context = build_validation_context_from_generation_result(result)
+    runtime_diagnostics = dict(pipeline.runtime_diagnostics)
+    topology_anchor_policy = _generation_policy_summary(pipeline)
+    diffusion_inference_checkpoint_state_key = str(
+        getattr(pipeline.diffusion, "inference_checkpoint_state_key", "unknown")
+    )
+    diffusion_training_cfg_scale = float(
+        getattr(pipeline.diffusion, "training_cfg_scale", float("nan"))
+    )
+    tile_hist = {str(int(k)): int(v) for k, v in Counter(int(v) for v in dungeon_grid.ravel()).items()}
+
+    _write_status(
+        "preparing_validation",
+        generation_time_sec=generation_time_sec,
+        room_count=room_count,
+    )
+    del room_texts
+    del room_grids
+    del pipeline
+    del result
+    _release_torch_memory()
+    validation = _compute_generation_validation(
+        dungeon_grid=dungeon_grid,
+        mission_graph=mission_graph,
+        **validation_context,
+    )
+    _write_status(
+        "validation_complete",
+        generation_time_sec=generation_time_sec,
+        room_count=room_count,
+    )
 
     summary = {
         "name": variant_name,
@@ -1054,20 +1884,18 @@ def export_variant(
         "logic_guidance_scale": float(logic_guidance_scale),
         "num_diffusion_steps": int(num_diffusion_steps),
         "use_fast_sampling": bool(use_fast_sampling),
-        "diffusion_inference_checkpoint_state_key": str(
-            getattr(pipeline.diffusion, "inference_checkpoint_state_key", "unknown")
-        ),
-        "diffusion_training_cfg_scale": float(
-            getattr(pipeline.diffusion, "training_cfg_scale", float("nan"))
-        ),
+        "generation_overrides_applied": dict(generation_overrides or {}),
+        "diffusion_inference_checkpoint_state_key": diffusion_inference_checkpoint_state_key,
+        "diffusion_training_cfg_scale": diffusion_training_cfg_scale,
+        "generation_execution": generation_execution,
         "metrics": {
-            **dict(result.metrics),
-            "generation_time_sec": float(result.generation_time),
+            **result_metrics,
+            "generation_time_sec": generation_time_sec,
         },
-        "runtime_diagnostics": dict(pipeline.runtime_diagnostics),
-        "topology_anchor_policy": _generation_policy_summary(pipeline),
+        "runtime_diagnostics": runtime_diagnostics,
+        "topology_anchor_policy": topology_anchor_policy,
         "semantic_metrics": {
-            key: dict(result.metrics).get(key)
+            key: result_metrics.get(key)
             for key in (
                 "total_graph_marker_expected",
                 "total_graph_marker_overwrites",
@@ -1089,16 +1917,19 @@ def export_variant(
             "primary_quality_metric_value": layout_payload.get("primary_quality_metric_value"),
             **dict(layout_payload.get("layout_quality", {})),
         },
+        "validation": validation,
     }
     (variant_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    (variant_dir / "validation_search_stats.json").write_text(
+        json.dumps(build_validation_search_stats_payload(summary.get("validation", {})), indent=2),
+        encoding="utf-8",
+    )
     _write_status(
         "complete",
-        generation_time_sec=float(result.generation_time),
-        room_count=int(len(result.rooms)),
+        generation_time_sec=generation_time_sec,
+        room_count=room_count,
         summary_path=str(variant_dir / "summary.json"),
     )
-    del result
-    del pipeline
     _release_torch_memory()
     return summary
 

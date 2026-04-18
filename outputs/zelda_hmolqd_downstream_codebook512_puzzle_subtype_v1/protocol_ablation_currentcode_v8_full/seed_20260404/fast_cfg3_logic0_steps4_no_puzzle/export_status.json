@@ -1,0 +1,12 @@
+{
+  "variant_name": "fast_cfg3_logic0_steps4_no_puzzle",
+  "stage": "complete",
+  "seed": 20260404,
+  "guidance_scale": 3.0,
+  "logic_guidance_scale": 0.0,
+  "num_diffusion_steps": 4,
+  "use_fast_sampling": true,
+  "generation_time_sec": 73.36909222602844,
+  "room_count": 12,
+  "summary_path": "outputs\\zelda_hmolqd_downstream_codebook512_puzzle_subtype_v1\\protocol_ablation_currentcode_v8_full\\seed_20260404\\fast_cfg3_logic0_steps4_no_puzzle\\summary.json"
+}

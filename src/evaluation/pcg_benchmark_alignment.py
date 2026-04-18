@@ -18,6 +18,8 @@ topology, primary progression anchors, and enemy pressure, while collapsing the
 from __future__ import annotations
 
 import importlib
+import importlib.util
+import os
 import sys
 from collections import deque
 from dataclasses import dataclass
@@ -811,20 +813,68 @@ def map_graph_to_pcg_benchmark_zelda(
     )
 
 
+def _pcg_benchmark_repo_candidates(*, repo_path: Optional[Path] = None) -> List[Path]:
+    """Return existing candidate clone roots in the order import fallback will try."""
+    candidate_roots: List[Path] = []
+    seen: set[str] = set()
+
+    env_repo = os.environ.get("PCG_BENCHMARK_REPO", "").strip()
+    project_root = Path(__file__).resolve().parents[2]
+    cwd_root = Path.cwd().resolve()
+    for candidate in (
+        repo_path,
+        Path(env_repo) if env_repo else None,
+        cwd_root / "tmp" / "pcg_benchmark_upstream",
+        cwd_root / "tmp" / "pcg_benchmark",
+        project_root / "tmp" / "pcg_benchmark_upstream",
+        project_root / "tmp" / "pcg_benchmark",
+        project_root / "external" / "pcg_benchmark",
+        project_root / "third_party" / "pcg_benchmark",
+    ):
+        if candidate is None:
+            continue
+        try:
+            resolved = Path(candidate).resolve()
+        except Exception:
+            continue
+        key = str(resolved)
+        if key in seen:
+            continue
+        seen.add(key)
+        if (resolved / "pcg_benchmark").exists():
+            candidate_roots.append(resolved)
+    return candidate_roots
+
+
 def import_pcg_benchmark(*, repo_path: Optional[Path] = None):
-    repo_root = None if repo_path is None else Path(repo_path)
-    if repo_root is not None:
-        if (repo_root / "pcg_benchmark").exists():
-            repo_root_str = str(repo_root.resolve())
-            if repo_root_str not in sys.path:
-                sys.path.insert(0, repo_root_str)
+    candidate_roots = _pcg_benchmark_repo_candidates(repo_path=repo_path)
+
+    explicit_root = Path(repo_path).resolve() if repo_path is not None else None
+    if explicit_root is not None:
+        init_file = explicit_root / "pcg_benchmark" / "__init__.py"
+        if init_file.exists():
+            sys.modules.pop("pcg_benchmark", None)
+            spec = importlib.util.spec_from_file_location("pcg_benchmark", init_file)
+            if spec is None or spec.loader is None:
+                raise ImportError(f"Could not load pcg_benchmark from explicit repo path: {explicit_root}")
+            module = importlib.util.module_from_spec(spec)
+            sys.modules["pcg_benchmark"] = module
+            spec.loader.exec_module(module)
+            return module
+
+    for repo_root in candidate_roots:
+        repo_root_str = str(repo_root)
+        if repo_root_str not in sys.path:
+            sys.path.insert(0, repo_root_str)
     try:
         return importlib.import_module("pcg_benchmark")
     except ImportError as exc:
         raise ImportError(
             "pcg_benchmark is not importable. Install it with "
             "`pip install git+https://github.com/amidos2006/pcg_benchmark.git` "
-            "or provide --pcg-benchmark-repo pointing at a local clone."
+            "or provide --pcg-benchmark-repo / PCG_BENCHMARK_REPO pointing at a local clone. "
+            "Auto-detected clone roots checked: "
+            + ", ".join(str(path) for path in candidate_roots)
         ) from exc
 
 
@@ -967,4 +1017,5 @@ __all__ = [
     "map_graph_to_pcg_benchmark_zelda",
     "import_pcg_benchmark",
     "evaluate_graphs_with_pcg_benchmark_zelda",
+    "_pcg_benchmark_repo_candidates",
 ]

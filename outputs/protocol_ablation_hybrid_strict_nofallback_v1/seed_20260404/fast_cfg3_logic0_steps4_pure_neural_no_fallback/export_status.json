@@ -1,0 +1,12 @@
+{
+  "variant_name": "fast_cfg3_logic0_steps4_pure_neural_no_fallback",
+  "stage": "complete",
+  "seed": 20260404,
+  "guidance_scale": 3.0,
+  "logic_guidance_scale": 0.0,
+  "num_diffusion_steps": 4,
+  "use_fast_sampling": true,
+  "generation_time_sec": 7.869485855102539,
+  "room_count": 12,
+  "summary_path": "outputs\\protocol_ablation_hybrid_strict_nofallback_v1\\seed_20260404\\fast_cfg3_logic0_steps4_pure_neural_no_fallback\\summary.json"
+}

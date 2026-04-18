@@ -1,0 +1,338 @@
+{
+  "diffusion_cfg3_logic0_steps50": {
+    "tile_state_space": {
+      "astar": {
+        "success_rate": 1.0,
+        "avg_path_length": 90.0,
+        "avg_states_explored": 52283.0,
+        "avg_time_sec": 3.701957099999466,
+        "avg_path_ratio_vs_astar": 1.0,
+        "avg_states_ratio_vs_astar": 1.0
+      },
+      "bfs": {
+        "success_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 50000.0,
+        "avg_time_sec": 2.928298166667446,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "dijkstra": {
+        "success_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 50000.0,
+        "avg_time_sec": 3.8794562999998257,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "greedy": {
+        "success_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 50000.0,
+        "avg_time_sec": 3.2929864333327714,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      }
+    },
+    "agreement": {
+      "astar_success": 1.0,
+      "bfs_matches_astar_path_length": 0.0,
+      "dijkstra_matches_astar_path_length": 0.0,
+      "all_algorithms_solved": 0.0
+    }
+  },
+  "fast_cfg3_logic0_steps4": {
+    "tile_state_space": {
+      "astar": {
+        "success_rate": 1.0,
+        "avg_path_length": 90.0,
+        "avg_states_explored": 17085.666666666668,
+        "avg_time_sec": 1.3231544999998732,
+        "avg_path_ratio_vs_astar": 1.0,
+        "avg_states_ratio_vs_astar": 1.0
+      },
+      "bfs": {
+        "success_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 50000.0,
+        "avg_time_sec": 3.3779069666670694,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "dijkstra": {
+        "success_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 50000.0,
+        "avg_time_sec": 4.551683099999839,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "greedy": {
+        "success_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 50000.0,
+        "avg_time_sec": 3.360897199999575,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      }
+    },
+    "agreement": {
+      "astar_success": 1.0,
+      "bfs_matches_astar_path_length": 0.0,
+      "dijkstra_matches_astar_path_length": 0.0,
+      "all_algorithms_solved": 0.0
+    }
+  },
+  "masked_room_full": {
+    "tile_state_space": {
+      "astar": {
+        "success_rate": 1.0,
+        "avg_path_length": 90.0,
+        "avg_states_explored": 55820.666666666664,
+        "avg_time_sec": 4.722989999999602,
+        "avg_path_ratio_vs_astar": 1.0,
+        "avg_states_ratio_vs_astar": 1.0
+      },
+      "bfs": {
+        "success_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 50000.0,
+        "avg_time_sec": 3.1557500666658598,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "dijkstra": {
+        "success_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 50000.0,
+        "avg_time_sec": 4.189391766666328,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "greedy": {
+        "success_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 50000.0,
+        "avg_time_sec": 3.2156435666662824,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      }
+    },
+    "agreement": {
+      "astar_success": 1.0,
+      "bfs_matches_astar_path_length": 0.0,
+      "dijkstra_matches_astar_path_length": 0.0,
+      "all_algorithms_solved": 0.0
+    }
+  },
+  "fast_cfg3_logic0_steps4_no_fallback": {
+    "tile_state_space": {
+      "astar": {
+        "success_rate": 1.0,
+        "avg_path_length": 90.0,
+        "avg_states_explored": 54885.666666666664,
+        "avg_time_sec": 3.9920339999995726,
+        "avg_path_ratio_vs_astar": 1.0,
+        "avg_states_ratio_vs_astar": 1.0
+      },
+      "bfs": {
+        "success_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 50000.0,
+        "avg_time_sec": 3.397434966667182,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "dijkstra": {
+        "success_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 50000.0,
+        "avg_time_sec": 4.6735132333342335,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "greedy": {
+        "success_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 50000.0,
+        "avg_time_sec": 3.7721083999998277,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      }
+    },
+    "agreement": {
+      "astar_success": 1.0,
+      "bfs_matches_astar_path_length": 0.0,
+      "dijkstra_matches_astar_path_length": 0.0,
+      "all_algorithms_solved": 0.0
+    }
+  },
+  "masked_room_full_no_fallback": {
+    "tile_state_space": {
+      "astar": {
+        "success_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 200000.0,
+        "avg_time_sec": 15.773790366665102,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "bfs": {
+        "success_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 50000.0,
+        "avg_time_sec": 3.009546000000531,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "dijkstra": {
+        "success_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 50000.0,
+        "avg_time_sec": 4.166663900000155,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "greedy": {
+        "success_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 50000.0,
+        "avg_time_sec": 3.6550601000011134,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      }
+    },
+    "agreement": {
+      "astar_success": 0.0,
+      "bfs_matches_astar_path_length": 0.0,
+      "dijkstra_matches_astar_path_length": 0.0,
+      "all_algorithms_solved": 0.0
+    }
+  },
+  "diffusion_cfg3_logic0_steps50_pure_neural": {
+    "tile_state_space": {
+      "astar": {
+        "success_rate": 1.0,
+        "avg_path_length": 88.66666666666667,
+        "avg_states_explored": 22809.333333333332,
+        "avg_time_sec": 1.608911633333264,
+        "avg_path_ratio_vs_astar": 1.0,
+        "avg_states_ratio_vs_astar": 1.0
+      },
+      "bfs": {
+        "success_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 50000.0,
+        "avg_time_sec": 2.964181433332366,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "dijkstra": {
+        "success_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 50000.0,
+        "avg_time_sec": 4.1601175333325955,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "greedy": {
+        "success_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 50000.0,
+        "avg_time_sec": 3.5242263000000094,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      }
+    },
+    "agreement": {
+      "astar_success": 1.0,
+      "bfs_matches_astar_path_length": 0.0,
+      "dijkstra_matches_astar_path_length": 0.0,
+      "all_algorithms_solved": 0.0
+    }
+  },
+  "fast_cfg3_logic0_steps4_pure_neural_no_fallback": {
+    "tile_state_space": {
+      "astar": {
+        "success_rate": 0.6666666666666666,
+        "avg_path_length": 59.333333333333336,
+        "avg_states_explored": 17194.333333333332,
+        "avg_time_sec": 1.333517266668423,
+        "avg_path_ratio_vs_astar": 1.0,
+        "avg_states_ratio_vs_astar": 1.0
+      },
+      "bfs": {
+        "success_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 33333.333333333336,
+        "avg_time_sec": 2.2043170999986614,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "dijkstra": {
+        "success_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 33333.333333333336,
+        "avg_time_sec": 2.922495000000102,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "greedy": {
+        "success_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 33333.333333333336,
+        "avg_time_sec": 2.5264268000003844,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      }
+    },
+    "agreement": {
+      "astar_success": 0.6666666666666666,
+      "bfs_matches_astar_path_length": 0.0,
+      "dijkstra_matches_astar_path_length": 0.0,
+      "all_algorithms_solved": 0.0
+    }
+  },
+  "masked_room_full_pure_neural_no_fallback": {
+    "tile_state_space": {
+      "astar": {
+        "success_rate": 0.3333333333333333,
+        "avg_path_length": 29.333333333333332,
+        "avg_states_explored": 174971.66666666666,
+        "avg_time_sec": 12.54423050000029,
+        "avg_path_ratio_vs_astar": 1.0,
+        "avg_states_ratio_vs_astar": 1.0
+      },
+      "bfs": {
+        "success_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 50000.0,
+        "avg_time_sec": 2.857056600000457,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "dijkstra": {
+        "success_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 50000.0,
+        "avg_time_sec": 4.1984461999988225,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "greedy": {
+        "success_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 50000.0,
+        "avg_time_sec": 3.394217133332859,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      }
+    },
+    "agreement": {
+      "astar_success": 0.3333333333333333,
+      "bfs_matches_astar_path_length": 0.0,
+      "dijkstra_matches_astar_path_length": 0.0,
+      "all_algorithms_solved": 0.0
+    }
+  }
+}

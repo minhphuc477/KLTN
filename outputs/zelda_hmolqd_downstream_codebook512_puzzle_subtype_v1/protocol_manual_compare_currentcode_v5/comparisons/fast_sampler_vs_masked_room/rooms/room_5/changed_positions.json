@@ -1,0 +1,116 @@
+[
+  {
+    "row": 2,
+    "col": 2,
+    "baseline": "F",
+    "candidate": "B"
+  },
+  {
+    "row": 3,
+    "col": 1,
+    "baseline": "B",
+    "candidate": "F"
+  },
+  {
+    "row": 3,
+    "col": 3,
+    "baseline": "F",
+    "candidate": "-"
+  },
+  {
+    "row": 4,
+    "col": 6,
+    "baseline": "F",
+    "candidate": "W"
+  },
+  {
+    "row": 4,
+    "col": 8,
+    "baseline": "F",
+    "candidate": "W"
+  },
+  {
+    "row": 5,
+    "col": 6,
+    "baseline": "F",
+    "candidate": "W"
+  },
+  {
+    "row": 5,
+    "col": 7,
+    "baseline": "F",
+    "candidate": "W"
+  },
+  {
+    "row": 5,
+    "col": 8,
+    "baseline": "F",
+    "candidate": "W"
+  },
+  {
+    "row": 6,
+    "col": 7,
+    "baseline": "F",
+    "candidate": "W"
+  },
+  {
+    "row": 6,
+    "col": 8,
+    "baseline": "F",
+    "candidate": "W"
+  },
+  {
+    "row": 9,
+    "col": 5,
+    "baseline": "W",
+    "candidate": "F"
+  },
+  {
+    "row": 9,
+    "col": 6,
+    "baseline": "W",
+    "candidate": "F"
+  },
+  {
+    "row": 10,
+    "col": 6,
+    "baseline": "W",
+    "candidate": "F"
+  },
+  {
+    "row": 11,
+    "col": 5,
+    "baseline": "W",
+    "candidate": "F"
+  },
+  {
+    "row": 11,
+    "col": 6,
+    "baseline": "W",
+    "candidate": "F"
+  },
+  {
+    "row": 11,
+    "col": 8,
+    "baseline": "F",
+    "candidate": "W"
+  },
+  {
+    "row": 12,
+    "col": 6,
+    "baseline": "B",
+    "candidate": "F"
+  },
+  {
+    "row": 12,
+    "col": 7,
+    "baseline": "B",
+    "candidate": "F"
+  },
+  {
+    "row": 13,
+    "col": 6,
+    "baseline": "W",
+    "candidate": "F"
+  }
+]

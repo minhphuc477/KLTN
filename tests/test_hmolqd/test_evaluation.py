@@ -67,6 +67,53 @@ class TestAgentSimulator:
         
         assert result.is_solvable == False
 
+    def test_simulation_respects_boss_key_and_item_gate(self):
+        """Boss/item progression should not be flattened into open traversal."""
+        from src.evaluation.validator import AgentSimulator
+
+        simulator = AgentSimulator()
+
+        graph = nx.DiGraph()
+        graph.add_node(0, label="s")
+        graph.add_node(1, label="K")  # boss key
+        graph.add_node(2, label="I")  # key item / ladder / bomb item
+        graph.add_node(3, label="")
+        graph.add_node(4, label="t")
+        graph.add_edge(0, 1, edge_type="open")
+        graph.add_edge(1, 2, edge_type="boss_locked")
+        graph.add_edge(2, 3, edge_type="item_gate", item_required="BOMB")
+        graph.add_edge(3, 4, edge_type="open")
+
+        result = simulator.simulate(graph)
+
+        assert result.is_solvable is True
+
+    def test_simulation_requires_switch_before_switch_locked_edge(self):
+        """Switch-like nodes should be required before switch_locked progression edges."""
+        from src.evaluation.validator import AgentSimulator
+
+        simulator = AgentSimulator()
+
+        graph = nx.DiGraph()
+        graph.add_node(0, label="s")
+        graph.add_node(1, type="SWITCH", has_puzzle=True)
+        graph.add_node(2, label="t")
+        graph.add_edge(0, 1, edge_type="open")
+        graph.add_edge(1, 2, edge_type="switch_locked")
+
+        result = simulator.simulate(graph)
+        assert result.is_solvable is True
+
+        unswitched = nx.DiGraph()
+        unswitched.add_node(0, label="s")
+        unswitched.add_node(1, label="")
+        unswitched.add_node(2, label="t")
+        unswitched.add_edge(0, 1, edge_type="open")
+        unswitched.add_edge(1, 2, edge_type="switch_locked")
+
+        result_unswitched = simulator.simulate(unswitched)
+        assert result_unswitched.is_solvable is False
+
 
 class TestSolvabilityChecker:
     """Tests for solvability checking."""
@@ -123,6 +170,28 @@ class TestExternalValidator:
         
         assert hasattr(result, 'is_solvable')
         assert result.is_solvable == True
+
+
+class TestCBSFitnessProxy:
+    """Tests for graph-proxy CBS fitness semantics."""
+
+    def test_graph_proxy_uses_explicit_start_and_goal_semantics(self):
+        """Explicit start/goal nodes should win over degree-based fallbacks."""
+        from src.evaluation.cbs_fitness import compute_cbs_fitness
+
+        graph = nx.DiGraph()
+        graph.add_node(10, label="s")
+        graph.add_node(20, label="")
+        graph.add_node(30, label="t")
+        graph.add_node(40, label="")
+        graph.add_edge(40, 10, edge_type="open")
+        graph.add_edge(10, 20, edge_type="open")
+        graph.add_edge(20, 30, edge_type="open")
+
+        metrics = compute_cbs_fitness(graph)
+
+        assert metrics["solvable_astar"] is True
+        assert metrics["astar_path_length"] == 2
 
 
 class TestFunMetrics:

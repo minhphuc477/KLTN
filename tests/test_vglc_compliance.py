@@ -19,6 +19,7 @@ import pytest
 import numpy as np
 import networkx as nx
 
+from src.simulation.edge_logic import edge_type_from_data
 from src.constants.vglc_constants import (
     ROOM_WIDTH_TILES,
     ROOM_HEIGHT_TILES,
@@ -320,6 +321,12 @@ class TestCompositeNodeLabels:
 
 class TestEdgeTypes:
     """Test edge type parsing."""
+
+    def test_extended_edge_aliases_canonicalize_for_traversal(self):
+        assert edge_type_from_data({'edge_type': 'item_gate'}) == 'item_locked'
+        assert edge_type_from_data({'edge_type': 'one_way'}) == 'soft_locked'
+        assert edge_type_from_data({'edge_type': 'switch_locked'}) == 'switch'
+        assert edge_type_from_data({'edge_type': 'state_block'}) == 'switch'
     
     def test_parse_open_edge(self):
         """Test parsing open door (empty label)."""

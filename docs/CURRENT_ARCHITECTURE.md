@@ -133,6 +133,26 @@ using one generic obstacle template.
 Current evidence still says diffusion is the only branch that should be treated
 as the production baseline.
 
+## Validation Contract
+
+Protocol exports now carry explicit validation/search artifacts instead of only
+tile-cleanup metrics:
+
+- per-variant `validation_search_stats.json`
+- root-level `search_algorithm_comparison.json` for manual compare and fixed-graph audits
+- graph progression / goal-gauntlet checks alongside grid A* and CBS
+
+Validation roles are now explicit:
+
+- hard oracle: grid A* + graph progression validator + softlock check
+- comparison solvers: BFS, Dijkstra, Greedy, D* Lite, DFS/IDDFS, Bidirectional A*
+- behavioral probe: CBS (`CognitiveBoundedSearch`)
+- excluded from canonical export comparison: `parallel_astar`, `multi_goal`,
+  `key_economy_validator`, and `solver_comparison`
+
+This makes the repo's "playable" claim depend on observable search evidence,
+not only on visual quality or repair counts.
+
 ## Checkpoint and Reproducibility Contract
 
 The current stack expects:
@@ -159,5 +179,7 @@ not by private hardcoded script defaults.
   [`DOWNSTREAM_CODEBOOK512_PUZZLE_SUBTYPE_PROTOCOL_RESULTS_2026_04_15.md`](DOWNSTREAM_CODEBOOK512_PUZZLE_SUBTYPE_PROTOCOL_RESULTS_2026_04_15.md)
 - Auxiliary-branch / neural-semantics research decision:
   [`AUXILIARY_BRANCH_AND_NEURAL_SEMANTICS_AUDIT_2026_04_15.md`](AUXILIARY_BRANCH_AND_NEURAL_SEMANTICS_AUDIT_2026_04_15.md)
+- Playability-evaluation / CBS research note:
+  [`PLAYABILITY_EVALUATION_AND_CBS_RESEARCH_2026_04_16.md`](PLAYABILITY_EVALUATION_AND_CBS_RESEARCH_2026_04_16.md)
 - Latest VQ-VAE audit:
   [`VQVAE_RESEARCH_AUDIT_2026_04_10.md`](VQVAE_RESEARCH_AUDIT_2026_04_10.md)

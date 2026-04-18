@@ -1,0 +1,5 @@
+config,n,success_rate,solvability_rate,confusion_ratio,confusion_index,path_optimal,tile_prior_kl,graph_edit_distance,generation_time_sec,novelty,reconstruction_error,constraint_valid_rate,room_repair_rate,tiles_repaired,topology_representable_edge_rate,topology_edge_connection_recall,topology_phantom_connection_rate,topology_preservation_score,directed_representable_edge_rate,directed_edge_realization_rate,directed_directionality_leak_rate,directed_edge_preservation_score,diversity
+LATENT_REF_ON,4,0.0,0.0,,,0.0,,,3.0559284687042236,,,,,,,,,,,,,,0.0
+LATENT_REF_OFF,4,0.0,0.0,,,0.0,,,3.2986761331558228,,,,,,,,,,,,,,0.0
+MASKED_REF_ON,4,0.0,0.0,,,0.0,,,3.373318612575531,,,,,,,,,,,,,,0.0
+MASKED_REF_OFF,4,0.0,0.0,,,0.0,,,3.238615572452545,,,,,,,,,,,,,,0.0

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import itertools
 import json
 import sys
 from pathlib import Path
@@ -28,9 +29,17 @@ from scripts.compare_room_variants import compare_variant_dirs
 from scripts.export_semantic_anchor_end_to_end import export_masked_variant
 from scripts.run_fast_sampler_visual_audit import (
     add_generation_override_args,
+    build_validation_search_stats_payload,
     export_variant,
     generation_overrides_from_namespace,
 )
+
+
+VARIANT_LABELS: Dict[str, str] = {
+    "diffusion_cfg3_logic0_steps50": "diffusion",
+    "fast_cfg3_logic0_steps4": "fast_sampler",
+    "masked_room_full": "masked_room",
+}
 
 
 def _ensure_directed_progression_graph(graph: nx.Graph, *, source: str) -> nx.DiGraph:
@@ -63,10 +72,12 @@ def build_manual_rich_topology_graph() -> nx.DiGraph:
     graph.graph.update(
         {
             "style_id": 1,
-            "name": "manual_rich_topology_v2",
+            "name": "manual_rich_topology_v4",
             "description": (
                 "Hand-authored rich topology for room-branch comparison: "
-                "start, enemy, key, big-key, bomb resource, complex puzzle, item, stair, combat puzzle, boss door, boss, goal."
+                "start, enemy, key, big-key, bomb resource, complex puzzle, item, stair, combat puzzle, boss door, boss, goal. "
+                "The boss gauntlet is strictly normalized so the boss room has only the boss door as predecessor, "
+                "and the progression graph is now a clean DAG so room-layout batching is not degraded by a synthetic cycle."
             ),
         }
     )
@@ -75,7 +86,7 @@ def build_manual_rich_topology_graph() -> nx.DiGraph:
         {"id": 0, "label": "START", "type": "START", "pos": (0, 0), "is_start": True},
         {"id": 1, "label": "ENEMY", "type": "ENEMY", "pos": (0, 1), "has_enemy": True, "enemy_count": 2},
         {"id": 2, "label": "KEY", "type": "KEY", "pos": (0, 2), "has_key": True, "key_id": 1},
-        {"id": 3, "label": "BIG_KEY", "type": "BIG_KEY", "pos": (0, 3), "has_key": True, "key_id": 2},
+        {"id": 3, "label": "BIG_KEY", "type": "BIG_KEY", "pos": (0, 3), "has_boss_key": True, "key_id": 2},
         {"id": 4, "label": "RESOURCE_FARM", "type": "RESOURCE_FARM", "pos": (1, 0), "drops_resource": "BOMB"},
         {"id": 5, "label": "COMPLEX_PUZZLE", "type": "COMPLEX_PUZZLE", "pos": (1, 1), "has_puzzle": True, "difficulty_rating": "HARD"},
         {"id": 6, "label": "ITEM", "type": "ITEM", "pos": (1, 2), "has_item": True, "item_type": "BOMB"},
@@ -113,7 +124,6 @@ def build_manual_rich_topology_graph() -> nx.DiGraph:
     _add_edge(5, 8, "path")
     _add_edge(8, 9, "path")
     _add_edge(6, 9, "item_gate", item_required="BOMB")
-    _add_edge(9, 10, "path")
     _add_edge(7, 10, "boss_locked", key_required=2)
     _add_edge(10, 11, "path")
 
@@ -130,6 +140,8 @@ def _write_graph_summary(graph: nx.Graph, out_dir: Path) -> None:
     summary = {
         "num_nodes": int(graph.number_of_nodes()),
         "num_edges": int(graph.number_of_edges()),
+        "is_directed": bool(graph.is_directed()),
+        "is_dag": bool(nx.is_directed_acyclic_graph(graph)) if graph.is_directed() else False,
         "nodes": [
             {
                 "id": int(node_id),
@@ -158,6 +170,13 @@ def _write_graph_summary(graph: nx.Graph, out_dir: Path) -> None:
         ],
     }
     (out_dir / "graph_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+
+
+def _build_search_algorithm_comparison_payload(summaries: Dict[str, Any]) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {}
+    for variant_name, summary in summaries.items():
+        payload[str(variant_name)] = build_validation_search_stats_payload(summary.get("validation", {}))
+    return payload
 
 
 def _save_manual_graph_layout_png(graph: nx.Graph, out_path: Path) -> None:
@@ -288,22 +307,14 @@ def _build_comparison_sheet(
             image.close()
 
 
-def _pairwise_compare(output_dir: Path) -> Dict[str, str]:
-    variants = {
-        "diffusion": output_dir / "diffusion_cfg3_logic0_steps50",
-        "fast_sampler": output_dir / "fast_cfg3_logic0_steps4",
-        "masked_room": output_dir / "masked_room_full",
-    }
-    pairs = {
-        "diffusion_vs_fast_sampler": ("diffusion", "fast_sampler"),
-        "diffusion_vs_masked_room": ("diffusion", "masked_room"),
-        "fast_sampler_vs_masked_room": ("fast_sampler", "masked_room"),
-    }
+def _pairwise_compare(output_dir: Path, variant_names: List[str]) -> Dict[str, str]:
     outputs: Dict[str, str] = {}
-    for pair_name, (baseline_name, candidate_name) in pairs.items():
+    labels = {name: VARIANT_LABELS.get(name, str(name)) for name in variant_names}
+    for baseline_name, candidate_name in itertools.combinations(variant_names, 2):
+        pair_name = f"{labels[baseline_name]}_vs_{labels[candidate_name]}"
         summary_path = compare_variant_dirs(
-            variants[baseline_name],
-            variants[candidate_name],
+            output_dir / baseline_name,
+            output_dir / candidate_name,
             output_dir / "comparisons" / pair_name,
         )
         outputs[pair_name] = str(summary_path)
@@ -320,6 +331,10 @@ def _write_report(
     def _metric_line(name: str, payload: Dict[str, Any]) -> str:
         metrics = payload.get("metrics", {})
         layout = payload.get("layout", {})
+        validation = payload.get("validation", {})
+        astar_grid = validation.get("astar_grid", {}) if isinstance(validation, dict) else {}
+        softlock = validation.get("softlock_check", {}) if isinstance(validation, dict) else {}
+        cbs_balanced = validation.get("cbs_balanced", {}) if isinstance(validation, dict) else {}
         layout_metric_name = str(layout.get("primary_quality_metric_name") or "layout_quality")
         layout_metric_value = float(layout.get("primary_quality_metric_value", 0.0) or 0.0)
         return (
@@ -328,9 +343,18 @@ def _write_report(
             f"total_tiles_repaired={int(metrics.get('total_tiles_repaired', 0))}, "
             f"overwrite={float(metrics.get('avg_final_graph_marker_overwrite_rate', 0.0)):.3f}, "
             f"post_overlay_anchor_error={float(metrics.get('avg_final_post_overlay_semantic_anchor_error', 0.0)):.3f}, "
-            f"{layout_metric_name}={layout_metric_value:.3f}"
+            f"{layout_metric_name}={layout_metric_value:.3f}, "
+            f"astar_solvable={bool(astar_grid.get('solvable', False))}, "
+            f"softlock_safe={bool(softlock.get('is_safe', False))}, "
+            f"cbs_success={bool(cbs_balanced.get('success', False))}, "
+            f"cbs_confusion_ratio={float(cbs_balanced.get('confusion_ratio_vs_astar', float('inf'))):.3f}"
         )
 
+    pairwise_lines = (
+        [f"- `{name}`: `{path}`" for name, path in comparison_outputs.items()]
+        if comparison_outputs
+        else ["- none"]
+    )
     lines = [
         "# Manual Rich Topology Comparison",
         "",
@@ -347,13 +371,11 @@ def _write_report(
         "",
         "## Variants",
         "",
-        _metric_line("diffusion_cfg3_logic0_steps50", summaries["diffusion_cfg3_logic0_steps50"]),
-        _metric_line("fast_cfg3_logic0_steps4", summaries["fast_cfg3_logic0_steps4"]),
-        _metric_line("masked_room_full", summaries["masked_room_full"]),
+        *(_metric_line(name, summaries[name]) for name in summaries.keys()),
         "",
         "## Pairwise Room Diff Audits",
         "",
-        *(f"- `{name}`: `{path}`" for name, path in comparison_outputs.items()),
+        *pairwise_lines,
         "",
         "## Key Artifacts",
         "",
@@ -361,6 +383,7 @@ def _write_report(
         f"- mission graph PNG: `{output_dir / 'mission_graph_layout.png'}`",
         f"- graph summary: `{output_dir / 'graph_summary.json'}`",
         f"- overall summary: `{output_dir / 'summary.json'}`",
+        f"- search algorithm comparison: `{output_dir / 'search_algorithm_comparison.json'}`",
         f"- dungeon alignment comparison: `{output_dir / 'dungeon_alignment_comparison.png'}`",
         f"- rooms comparison: `{output_dir / 'rooms_sheet_comparison.png'}`",
         "",
@@ -379,8 +402,41 @@ def parse_args() -> argparse.Namespace:
         help="Optional path to a user-authored mission_graph.json. If omitted, the built-in rich topology template is used.",
     )
     parser.add_argument("--seed", type=int, default=20260406)
+    parser.add_argument(
+        "--variants",
+        type=str,
+        default="diffusion_cfg3_logic0_steps50,fast_cfg3_logic0_steps4,masked_room_full",
+        help="Comma-separated subset of variants to export. Supports resume-friendly one-branch runs.",
+    )
+    parser.add_argument(
+        "--reuse-existing-variants",
+        action="store_true",
+        help="Reuse existing per-variant summary.json files instead of regenerating those variants.",
+    )
     add_generation_override_args(parser)
     return parser.parse_args()
+
+
+def _parse_variant_names(raw: str) -> List[str]:
+    requested = [part.strip() for part in str(raw).split(",") if part.strip()]
+    if not requested:
+        raise ValueError("--variants resolved to an empty set.")
+    unsupported = [name for name in requested if name not in VARIANT_LABELS]
+    if unsupported:
+        supported = ", ".join(sorted(VARIANT_LABELS))
+        raise ValueError(f"Unsupported manual-compare variant(s): {unsupported}. Supported: {supported}")
+    ordered_unique: List[str] = []
+    seen = set()
+    for name in requested:
+        if name not in seen:
+            ordered_unique.append(name)
+            seen.add(name)
+    return ordered_unique
+
+
+def _load_variant_summary(output_dir: Path, variant_name: str) -> Dict[str, Any]:
+    summary_path = output_dir / str(variant_name) / "summary.json"
+    return json.loads(summary_path.read_text(encoding="utf-8"))
 
 
 def run_from_args(args: argparse.Namespace) -> Dict[str, str]:
@@ -391,6 +447,7 @@ def run_from_args(args: argparse.Namespace) -> Dict[str, str]:
     graph = _load_mission_graph(args.mission_graph) if args.mission_graph is not None else build_manual_rich_topology_graph()
     generation_overrides = generation_overrides_from_namespace(args)
     graph_source = str(args.mission_graph) if args.mission_graph is not None else "built_in_manual_rich_topology"
+    variant_names = _parse_variant_names(args.variants)
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     (args.output_dir / "mission_graph.json").write_text(
@@ -401,70 +458,84 @@ def run_from_args(args: argparse.Namespace) -> Dict[str, str]:
     _save_manual_graph_layout_png(graph, args.output_dir / "mission_graph_layout.png")
     print(
         f"[topology-compare-manual] run_dir={run_dir} graph={graph_source} "
-        f"seed={int(args.seed)} overrides={generation_overrides}",
+        f"seed={int(args.seed)} variants={variant_names} overrides={generation_overrides}",
         flush=True,
     )
 
-    summaries = {
-        "diffusion_cfg3_logic0_steps50": export_variant(
-            run_dir=run_dir,
-            mission_graph=copy.deepcopy(graph),
-            variant_name="diffusion_cfg3_logic0_steps50",
-            out_dir=args.output_dir,
-            guidance_scale=3.0,
-            logic_guidance_scale=0.0,
-            num_diffusion_steps=50,
-            use_fast_sampling=False,
-            seed=int(args.seed),
-            generation_overrides=generation_overrides,
-        ),
-        "fast_cfg3_logic0_steps4": export_variant(
-            run_dir=run_dir,
-            mission_graph=copy.deepcopy(graph),
-            variant_name="fast_cfg3_logic0_steps4",
-            out_dir=args.output_dir,
-            guidance_scale=3.0,
-            logic_guidance_scale=0.0,
-            num_diffusion_steps=4,
-            use_fast_sampling=True,
-            seed=int(args.seed),
-            generation_overrides=generation_overrides,
-        ),
-        "masked_room_full": export_masked_variant(
-            run_dir=run_dir,
-            mission_graph=copy.deepcopy(graph),
-            variant_name="masked_room_full",
-            out_dir=args.output_dir,
-            seed=int(args.seed),
-            generation_overrides=generation_overrides,
-        ),
-    }
+    summaries: Dict[str, Any] = {}
+    for variant_name in variant_names:
+        summary_path = args.output_dir / variant_name / "summary.json"
+        if bool(args.reuse_existing_variants) and summary_path.exists():
+            print(f"[topology-compare-manual] reusing {summary_path}", flush=True)
+            summaries[variant_name] = _load_variant_summary(args.output_dir, variant_name)
+            continue
+        if variant_name == "diffusion_cfg3_logic0_steps50":
+            summaries[variant_name] = export_variant(
+                run_dir=run_dir,
+                mission_graph=copy.deepcopy(graph),
+                variant_name=variant_name,
+                out_dir=args.output_dir,
+                guidance_scale=3.0,
+                logic_guidance_scale=0.0,
+                num_diffusion_steps=50,
+                use_fast_sampling=False,
+                seed=int(args.seed),
+                generation_overrides=generation_overrides,
+            )
+        elif variant_name == "fast_cfg3_logic0_steps4":
+            summaries[variant_name] = export_variant(
+                run_dir=run_dir,
+                mission_graph=copy.deepcopy(graph),
+                variant_name=variant_name,
+                out_dir=args.output_dir,
+                guidance_scale=3.0,
+                logic_guidance_scale=0.0,
+                num_diffusion_steps=4,
+                use_fast_sampling=True,
+                seed=int(args.seed),
+                generation_overrides=generation_overrides,
+            )
+        elif variant_name == "masked_room_full":
+            summaries[variant_name] = export_masked_variant(
+                run_dir=run_dir,
+                mission_graph=copy.deepcopy(graph),
+                variant_name=variant_name,
+                out_dir=args.output_dir,
+                seed=int(args.seed),
+                generation_overrides=generation_overrides,
+            )
+        else:
+            raise ValueError(f"Unhandled variant: {variant_name}")
     summary_payload = {
         "generation_overrides": generation_overrides,
         "variants": summaries,
     }
     (args.output_dir / "summary.json").write_text(json.dumps(summary_payload, indent=2), encoding="utf-8")
-
-    _build_comparison_sheet(
-        variant_paths={
-            "diffusion": args.output_dir / "diffusion_cfg3_logic0_steps50" / "dungeon_grid_alignment.png",
-            "fast_sampler": args.output_dir / "fast_cfg3_logic0_steps4" / "dungeon_grid_alignment.png",
-            "masked_room": args.output_dir / "masked_room_full" / "dungeon_grid_alignment.png",
-        },
-        filename="dungeon_grid_alignment.png",
-        out_path=args.output_dir / "dungeon_alignment_comparison.png",
-    )
-    _build_comparison_sheet(
-        variant_paths={
-            "diffusion": args.output_dir / "diffusion_cfg3_logic0_steps50" / "rooms_sheet_stylized.png",
-            "fast_sampler": args.output_dir / "fast_cfg3_logic0_steps4" / "rooms_sheet_stylized.png",
-            "masked_room": args.output_dir / "masked_room_full" / "rooms_sheet_stylized.png",
-        },
-        filename="rooms_sheet_stylized.png",
-        out_path=args.output_dir / "rooms_sheet_comparison.png",
+    search_algorithm_payload = _build_search_algorithm_comparison_payload(summaries)
+    (args.output_dir / "search_algorithm_comparison.json").write_text(
+        json.dumps(search_algorithm_payload, indent=2),
+        encoding="utf-8",
     )
 
-    comparison_outputs = _pairwise_compare(args.output_dir)
+    if len(variant_names) >= 2:
+        _build_comparison_sheet(
+            variant_paths={
+                VARIANT_LABELS[name]: args.output_dir / name / "dungeon_grid_alignment.png"
+                for name in variant_names
+            },
+            filename="dungeon_grid_alignment.png",
+            out_path=args.output_dir / "dungeon_alignment_comparison.png",
+        )
+        _build_comparison_sheet(
+            variant_paths={
+                VARIANT_LABELS[name]: args.output_dir / name / "rooms_sheet_stylized.png"
+                for name in variant_names
+            },
+            filename="rooms_sheet_stylized.png",
+            out_path=args.output_dir / "rooms_sheet_comparison.png",
+        )
+
+    comparison_outputs = _pairwise_compare(args.output_dir, variant_names) if len(variant_names) >= 2 else {}
     _write_report(
         output_dir=args.output_dir,
         summaries=summaries,

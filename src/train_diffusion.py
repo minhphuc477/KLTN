@@ -52,6 +52,8 @@ from src.pipeline.graph_features import (
 from src.pipeline.room_topology_conditioning import (
     DEFAULT_SEMANTIC_PUZZLE_OFFSET,
     DEFAULT_SEMANTIC_ROLE_PRIOR_STRENGTH,
+    apply_puzzle_structure_control_to_conditioning,
+    apply_puzzle_structure_dropout_batch,
     build_topology_anchor_policy_metadata,
 )
 from src.config_system import merge_config, seed_everything
@@ -144,6 +146,7 @@ class DiffusionTrainingConfig:
         spatial_graph_gate_init: float = -2.0,
         spatial_topology_gate_init: float = -2.0,
         use_teacher_forced_neighbor_latents: bool = True,
+        puzzle_structure_dropout_prob: float = 0.35,
         use_current_node_distance_features: bool = True,
         current_node_distance_max: int = 8,
         room_topology_channels: int = ROOM_TOPOLOGY_CHANNEL_COUNT,
@@ -328,6 +331,7 @@ class DiffusionTrainingConfig:
         self.spatial_graph_gate_init = float(spatial_graph_gate_init)
         self.spatial_topology_gate_init = float(spatial_topology_gate_init)
         self.use_teacher_forced_neighbor_latents = bool(use_teacher_forced_neighbor_latents)
+        self.puzzle_structure_dropout_prob = float(max(0.0, min(1.0, puzzle_structure_dropout_prob)))
         self.use_current_node_distance_features = bool(use_current_node_distance_features)
         self.current_node_distance_max = int(max(1, current_node_distance_max))
         self.room_topology_channels = int(max(1, room_topology_channels))
@@ -479,6 +483,7 @@ def diffusion_training_kwargs_from_resolved_config(
         "spatial_graph_gate_init": stage["spatial_graph_gate_init"],
         "spatial_topology_gate_init": stage["spatial_topology_gate_init"],
         "use_teacher_forced_neighbor_latents": stage["use_teacher_forced_neighbor_latents"],
+        "puzzle_structure_dropout_prob": stage.get("puzzle_structure_dropout_prob", 0.35),
         "use_current_node_distance_features": stage["use_current_node_distance_features"],
         "current_node_distance_max": stage["current_node_distance_max"],
         "room_topology_channels": stage["room_topology_channels"],
@@ -665,6 +670,10 @@ def _legacy_diffusion_overrides_from_args(args: argparse.Namespace) -> Dict[str,
     _set(
         "use_teacher_forced_neighbor_latents",
         getattr(args, "use_teacher_forced_neighbor_latents", None),
+    )
+    _set(
+        "puzzle_structure_dropout_prob",
+        getattr(args, "puzzle_structure_dropout_prob", None),
     )
     _set(
         "use_current_node_distance_features",
@@ -1180,8 +1189,15 @@ class DiffusionTrainer:
                             f"Expected a single-sample global token batch, got shape {tuple(c_global.shape)}."
                         )
                     c_global = c_global.squeeze(0)
-                return torch.cat([room_anchor, c_global], dim=0)
-            return condition_out
+                condition_out = torch.cat([room_anchor, c_global], dim=0)
+            conditioning_out = condition_out
+            if float(getattr(self.config, "puzzle_structure_dropout_prob", 0.0)) > 0.0:
+                conditioning_out = apply_puzzle_structure_control_to_conditioning(
+                    conditioning_out,
+                    puzzle_structure_enabled=bool(graph_dict.get("puzzle_room_structure_enabled", True)),
+                    graph_conditioning_mode=self.config.graph_conditioning_mode,
+                )
+            return conditioning_out
 
         c_global = self.condition_encoder.encode_global_only(
             node_features, edge_index,
@@ -1196,10 +1212,24 @@ class DiffusionTrainer:
                 boundary_constraints=torch.zeros(1, 8, device=self.device, dtype=torch.float32),
                 position=torch.zeros(1, 2, device=self.device, dtype=torch.float32),
             )
-            return torch.cat([default_anchor, c_global], dim=0)
+            conditioning_out = torch.cat([default_anchor, c_global], dim=0)
+            if float(getattr(self.config, "puzzle_structure_dropout_prob", 0.0)) > 0.0:
+                conditioning_out = apply_puzzle_structure_control_to_conditioning(
+                    conditioning_out,
+                    puzzle_structure_enabled=bool(graph_dict.get("puzzle_room_structure_enabled", True)),
+                    graph_conditioning_mode=self.config.graph_conditioning_mode,
+                )
+            return conditioning_out
 
         # Pooled baseline.
-        return c_global.mean(dim=0, keepdim=True)
+        conditioning_out = c_global.mean(dim=0, keepdim=True)
+        if float(getattr(self.config, "puzzle_structure_dropout_prob", 0.0)) > 0.0:
+            conditioning_out = apply_puzzle_structure_control_to_conditioning(
+                conditioning_out,
+                puzzle_structure_enabled=bool(graph_dict.get("puzzle_room_structure_enabled", True)),
+                graph_conditioning_mode=self.config.graph_conditioning_mode,
+            )
+        return conditioning_out
 
     def _normalize_diffusion_graph_sample(self, graph_dict: dict) -> Dict[str, torch.Tensor]:
         """Prepare one graph sample for diffusion spatial/topological conditioning."""
@@ -1842,6 +1872,13 @@ class DiffusionTrainer:
             else:
                 real_maps = batch_data
                 graph_list = None
+            if graph_list is not None and float(getattr(self.config, "puzzle_structure_dropout_prob", 0.0)) > 0.0:
+                real_maps, graph_list = apply_puzzle_structure_dropout_batch(
+                    real_maps,
+                    graph_list,
+                    num_classes=int(self.config.num_classes),
+                    dropout_prob=float(self.config.puzzle_structure_dropout_prob),
+                )
             real_maps = real_maps.to(self.device)
             
             # === Build conditioning from REAL graph data ===
@@ -2503,6 +2540,7 @@ def main():
     parser.add_argument('--spatial-graph-gate-init', type=float, default=None)
     parser.add_argument('--spatial-topology-gate-init', type=float, default=None)
     parser.add_argument('--use-teacher-forced-neighbor-latents', action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument('--puzzle-structure-dropout-prob', type=float, default=None)
     parser.add_argument('--use-current-node-distance-features', action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument('--current-node-distance-max', type=int, default=None)
     parser.add_argument('--logic-topology-trace-weight', type=float, default=None)

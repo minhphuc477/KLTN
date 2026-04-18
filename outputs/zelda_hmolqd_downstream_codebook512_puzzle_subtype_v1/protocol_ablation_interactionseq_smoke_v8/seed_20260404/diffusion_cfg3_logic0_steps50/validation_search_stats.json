@@ -1,0 +1,195 @@
+{
+  "search_suite_version": "2026-04-15.validation_search_suite_v2",
+  "search_algorithms": {
+    "search_suite_version": "2026-04-15.validation_search_suite_v2",
+    "tile_state_space": {
+      "astar": {
+        "success": true,
+        "path_length": 90,
+        "states_explored": 75463,
+        "time_sec": 6.416954999993322,
+        "algorithm": "A*",
+        "validation_role": "oracle",
+        "rules_profile": "vglc_strict",
+        "allow_diagonals": false,
+        "timeout_limit_states": 200000,
+        "failure_reason": "",
+        "oracle_status": "solved",
+        "time_taken_ms": 6322.012200020254,
+        "states_pruned_dominated": 2,
+        "max_queue_size": 48098,
+        "path_ratio_vs_astar": 1.0,
+        "states_ratio_vs_astar": 1.0
+      },
+      "bfs": {
+        "success": true,
+        "path_length": 90,
+        "states_explored": 787,
+        "time_sec": 0.05628150000120513,
+        "algorithm": "BFS",
+        "validation_role": "comparison",
+        "rules_profile": "vglc_strict",
+        "allow_diagonals": false,
+        "timeout_limit_states": 50000,
+        "failure_reason": "",
+        "solver_status": "solved",
+        "time_taken_ms": 55.79139999463223,
+        "states_pruned_dominated": 2,
+        "max_queue_size": 336,
+        "path_ratio_vs_astar": 1.0,
+        "states_ratio_vs_astar": 0.010428951936710706
+      },
+      "dijkstra": {
+        "success": true,
+        "path_length": 90,
+        "states_explored": 787,
+        "time_sec": 0.04400810002698563,
+        "algorithm": "Dijkstra",
+        "validation_role": "comparison",
+        "rules_profile": "vglc_strict",
+        "allow_diagonals": false,
+        "timeout_limit_states": 50000,
+        "failure_reason": "",
+        "solver_status": "solved",
+        "time_taken_ms": 43.447300005936995,
+        "states_pruned_dominated": 2,
+        "max_queue_size": 336,
+        "path_ratio_vs_astar": 1.0,
+        "states_ratio_vs_astar": 0.010428951936710706
+      },
+      "greedy": {
+        "success": true,
+        "path_length": 90,
+        "states_explored": 787,
+        "time_sec": 0.04503039998235181,
+        "algorithm": "Greedy",
+        "validation_role": "comparison",
+        "rules_profile": "vglc_strict",
+        "allow_diagonals": false,
+        "timeout_limit_states": 50000,
+        "failure_reason": "",
+        "solver_status": "solved",
+        "time_taken_ms": 44.61370001081377,
+        "states_pruned_dominated": 2,
+        "max_queue_size": 336,
+        "path_ratio_vs_astar": 1.0,
+        "states_ratio_vs_astar": 0.010428951936710706
+      },
+      "dstar_lite": {
+        "success": true,
+        "path_length": 90,
+        "states_explored": 75463,
+        "time_sec": 55.612710299988976,
+        "algorithm": "D* Lite (fallback: A*)",
+        "validation_role": "comparison",
+        "rules_profile": "vglc_strict",
+        "allow_diagonals": false,
+        "timeout_limit_states": 100000,
+        "fallback_used": true,
+        "replans": 0,
+        "intended_use": "incremental_replanning",
+        "independent_oracle": false,
+        "path_ratio_vs_astar": 1.0,
+        "states_ratio_vs_astar": 1.0
+      },
+      "dfs_iddfs": {
+        "success": false,
+        "path_length": 0,
+        "states_explored": 114011,
+        "time_sec": 3.4230414999765344,
+        "algorithm": "DFS/IDDFS",
+        "validation_role": "comparison",
+        "rules_profile": "vglc_strict",
+        "allow_diagonals": false,
+        "timeout_limit_states": 100000,
+        "max_depth_reached": 19,
+        "backtrack_count": 244503,
+        "cycle_detections": 0,
+        "use_iddfs": true,
+        "path_ratio_vs_astar": null,
+        "states_ratio_vs_astar": null
+      },
+      "bidirectional_astar": {
+        "success": true,
+        "path_length": 90,
+        "states_explored": 75463,
+        "time_sec": 6.365565499989316,
+        "algorithm": "Bidirectional A* (fallback: A*)",
+        "validation_role": "comparison",
+        "rules_profile": "vglc_strict",
+        "allow_diagonals": false,
+        "timeout_limit_states": 100000,
+        "fallback_used": true,
+        "meeting_point": null,
+        "collision_checks": 0,
+        "intended_use": "comparison_search",
+        "independent_oracle": false,
+        "path_ratio_vs_astar": 1.0,
+        "states_ratio_vs_astar": 1.0
+      }
+    },
+    "agreement": {
+      "astar_success": true,
+      "bfs_matches_astar_path_length": true,
+      "dijkstra_matches_astar_path_length": true,
+      "greedy_suboptimality_vs_astar": 1.0,
+      "all_algorithms_solved": false
+    },
+    "excluded_algorithms": {
+      "parallel_astar": "Excluded from canonical export validation because multiprocessing adds high runtime overhead and non-trivial platform variance while targeting the same optimality contract as A*.",
+      "multi_goal": "Excluded because end-to-end dungeon validation here is single-goal START->TRIFORCE, not multi-goal routing.",
+      "key_economy_validator": "Excluded because it validates graph-level key economy, not tile/grid playability.",
+      "solver_comparison": "Excluded because it is a benchmark harness, not an independent solver."
+    },
+    "notes": {
+      "oracle": "A* remains the hard grid-level oracle in this suite.",
+      "behavioral_probe": "CBS is reported separately because it is a bounded-rational behavior probe, not the hard correctness oracle."
+    }
+  },
+  "hard_oracle": {
+    "astar_grid": {
+      "solvable": true,
+      "is_valid_syntax": true,
+      "path_length": 90,
+      "reachability": 0.06867283950617284,
+      "backtracking_score": 0.011111111111111112,
+      "error_message": ""
+    },
+    "graph_progression": {
+      "solvable": true,
+      "path_length": 7,
+      "states_explored": 11,
+      "failure_reason": "",
+      "goal_gauntlet_valid": true,
+      "goal_gauntlet_errors": [],
+      "virtual_nodes_removed": 0
+    },
+    "softlock_check": {
+      "is_safe": true,
+      "issues": []
+    }
+  },
+  "behavioral_probe": {
+    "cbs_balanced": {
+      "seed": 123,
+      "success": true,
+      "path_length": 196,
+      "states_explored": 195,
+      "confusion_ratio_vs_astar": 2.1777777777777776,
+      "confusion_index": 0.08888888888888889,
+      "navigation_entropy": 1.8392233344609858,
+      "room_entropy": 7.447593071144973,
+      "cognitive_load": 1.0886295379012012,
+      "aha_latency": 5,
+      "deliberation_events": 0,
+      "budget_exhaustion_events": 0,
+      "peak_frustration": 0.5696132483724817,
+      "affordance_reactivations": 5,
+      "affordance_guided_steps": 56,
+      "inventory_change_events": 2,
+      "focus_switches": 3,
+      "focus_guided_steps": 131,
+      "status": "success"
+    }
+  }
+}

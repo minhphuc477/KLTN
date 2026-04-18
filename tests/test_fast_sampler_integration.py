@@ -169,6 +169,43 @@ def test_pipeline_casts_fast_sampled_latent_to_vqvae_decode_dtype(monkeypatch):
     assert result.room_grid.shape == (16, 11)
 
 
+def test_pipeline_retries_vqvae_decode_on_stream_mismatch(monkeypatch):
+    pipeline = NeuralSymbolicDungeonPipeline(device="cpu", enable_logging=False)
+    latent = torch.zeros((1, int(pipeline.diffusion.latent_dim), 4, 3), dtype=torch.float32)
+    calls = {"count": 0, "sync": 0}
+
+    def _decode(z):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise RuntimeError("cuDNN error: CUDNN_STATUS_BAD_PARAM_STREAM_MISMATCH")
+        return torch.zeros((z.shape[0], pipeline.vqvae.num_classes, 16, 11), dtype=z.dtype, device=z.device)
+
+    def _sync():
+        calls["sync"] += 1
+
+    monkeypatch.setattr(pipeline.vqvae, "decode", _decode)
+    monkeypatch.setattr(pipeline, "_synchronize_cuda_device", _sync)
+
+    logits = pipeline._decode_latent_with_vqvae(latent)
+
+    assert tuple(logits.shape) == (1, pipeline.vqvae.num_classes, 16, 11)
+    assert calls["count"] == 2
+    assert calls["sync"] == 1
+
+
+def test_pipeline_stacks_room_topology_maps_without_collapsing_batch_into_channels():
+    pipeline = object.__new__(NeuralSymbolicDungeonPipeline)
+    pipeline.device = torch.device("cpu")
+    topo_a = torch.zeros((1, 54, 16, 11), dtype=torch.float32)
+    topo_b = torch.ones((54, 16, 11), dtype=torch.float32)
+
+    stacked = NeuralSymbolicDungeonPipeline._stack_room_topology_maps(pipeline, [topo_a, topo_b])
+
+    assert tuple(stacked.shape) == (2, 54, 16, 11)
+    assert torch.allclose(stacked[0], topo_a.squeeze(0))
+    assert torch.allclose(stacked[1], topo_b)
+
+
 def test_pipeline_fast_sampler_clamps_cfg_and_disables_logic_guidance(monkeypatch):
     pipeline = NeuralSymbolicDungeonPipeline(device="cpu", enable_logging=False)
     mission_graph = nx.DiGraph()

@@ -1,0 +1,12 @@
+{
+  "variant_name": "fast_cfg3_logic0_steps4",
+  "stage": "complete",
+  "seed": 20260414,
+  "guidance_scale": 3.0,
+  "logic_guidance_scale": 0.0,
+  "num_diffusion_steps": 4,
+  "use_fast_sampling": true,
+  "generation_time_sec": 137.76117515563965,
+  "room_count": 12,
+  "summary_path": "outputs\\zelda_hmolqd_downstream_puzzle_structure_control_v1\\protocol_manual_compare_puzzle_control_v3\\fast_cfg3_logic0_steps4\\summary.json"
+}

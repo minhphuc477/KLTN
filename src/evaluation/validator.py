@@ -43,6 +43,10 @@ class ValidationState:
     position: int                   # Current graph node
     keys_held: int = 0              # Number of keys in inventory
     keys_collected: Set[int] = field(default_factory=set)  # Node IDs where keys collected
+    items_collected: Set[int] = field(default_factory=set)  # Non-key progression items already consumed
+    switches_activated: Set[int] = field(default_factory=set)  # Puzzle/switch nodes already cleared
+    has_boss_key: bool = False
+    has_item: bool = False
     doors_opened: Set[Tuple[int, int]] = field(default_factory=set)  # Opened door edges
     path: List[int] = field(default_factory=list)  # Path taken
     
@@ -51,6 +55,10 @@ class ValidationState:
             position=self.position,
             keys_held=self.keys_held,
             keys_collected=self.keys_collected.copy(),
+            items_collected=self.items_collected.copy(),
+            switches_activated=self.switches_activated.copy(),
+            has_boss_key=self.has_boss_key,
+            has_item=self.has_item,
             doors_opened=self.doors_opened.copy(),
             path=self.path.copy(),
         )
@@ -60,6 +68,10 @@ class ValidationState:
             self.position,
             self.keys_held,
             frozenset(self.keys_collected),
+            frozenset(self.items_collected),
+            frozenset(self.switches_activated),
+            self.has_boss_key,
+            self.has_item,
             frozenset(self.doors_opened),
         ))
     
@@ -69,6 +81,10 @@ class ValidationState:
         return (self.position == other.position and
                 self.keys_held == other.keys_held and
                 self.keys_collected == other.keys_collected and
+                self.items_collected == other.items_collected and
+                self.switches_activated == other.switches_activated and
+                self.has_boss_key == other.has_boss_key and
+                self.has_item == other.has_item and
                 self.doors_opened == other.doors_opened)
 
 
@@ -133,6 +149,7 @@ class AgentSimulator:
         # Derived per-graph state
         self.key_nodes: Set[int] = set()
         self.item_nodes: Dict[int, str] = {}
+        self.switch_nodes: Set[int] = set()
         self.start_node: Optional[int] = None
         self.goal_node: Optional[int] = None
 
@@ -143,19 +160,45 @@ class AgentSimulator:
         self.graph = graph
         self.key_nodes.clear()
         self.item_nodes.clear()
+        self.switch_nodes.clear()
         self.start_node = None
         self.goal_node = None
 
         for node_id, data in graph.nodes(data=True):
             label = data.get('label', '')
             label_parts = [p.strip() for p in label.split(',')] if label else []
+            lowered_parts = {part.lower() for part in label_parts}
+            node_type = str(data.get('type', '')).strip().lower()
+            is_boss_key_node = (
+                'K' in label_parts
+                or bool(data.get('has_boss_key', False))
+                or node_type in {'boss_key', 'big_key'}
+            )
+            is_item_node = (
+                'I' in label_parts
+                or bool(data.get('has_item', False))
+                or node_type in {'item', 'key_item', 'macro_item'}
+            )
 
-            if 'k' in label_parts or data.get('has_key', False):
+            if (('k' in label_parts) or bool(data.get('has_key', False))) and not is_boss_key_node:
                 self.key_nodes.add(node_id)
-            if 'K' in label_parts or data.get('has_boss_key', False):
+            if is_boss_key_node:
                 self.item_nodes[node_id] = 'boss_key'
-            if 'I' in label_parts or data.get('has_item', False):
+            if is_item_node:
                 self.item_nodes[node_id] = 'key_item'
+            if (
+                'switch' in lowered_parts
+                or 'puzzle' in lowered_parts
+                or node_type in {
+                    'switch',
+                    'puzzle',
+                    'tutorial_puzzle',
+                    'combat_puzzle',
+                    'complex_puzzle',
+                }
+                or bool(data.get('has_puzzle', False))
+            ):
+                self.switch_nodes.add(node_id)
             if 's' in label_parts or data.get('is_start', False):
                 self.start_node = node_id
             if 't' in label_parts or data.get('has_triforce', False):
@@ -183,7 +226,7 @@ class AgentSimulator:
             return False, state, 'none'
         
         edge_label = edge_data.get('label', '')
-        edge_type = edge_data.get('edge_type', EDGE_TYPE_MAP.get(edge_label, 'open'))
+        edge_type = str(edge_data.get('edge_type', EDGE_TYPE_MAP.get(edge_label, 'open'))).strip().lower()
         edge_id = (from_node, to_node)
         
         new_state = state.copy()
@@ -195,7 +238,7 @@ class AgentSimulator:
             return True, new_state, 'open'
         
         # Handle different edge types
-        if edge_type in ('open', ''):
+        if edge_type in ('open', '', 'path'):
             return True, new_state, 'open'
         
         if edge_type in ('key_locked', 'k'):
@@ -212,24 +255,60 @@ class AgentSimulator:
             
             return False, state, 'key_locked'
         
-        if edge_type in ('bombable', 'b'):
+        if edge_type in ('bombable', 'b', 'bomb'):
             # Assume infinite bombs
             if edge_id not in state.doors_opened:
                 new_state.doors_opened.add(edge_id)
                 new_state.doors_opened.add((to_node, from_node))
             return True, new_state, 'bombable'
+
+        if edge_type in ('boss_locked', 'boss'):
+            if edge_id in state.doors_opened:
+                return True, new_state, 'boss_locked'
+            if state.has_boss_key:
+                new_state.doors_opened.add(edge_id)
+                new_state.doors_opened.add((to_node, from_node))
+                return True, new_state, 'boss_locked'
+            return False, state, 'boss_locked'
+
+        if edge_type in ('item_locked', 'item_gate'):
+            if edge_id in state.doors_opened:
+                return True, new_state, 'item_gate'
+            item_required = str(edge_data.get('item_required', '')).strip().upper()
+            if state.has_item or item_required in {'', 'NONE'}:
+                new_state.doors_opened.add(edge_id)
+                new_state.doors_opened.add((to_node, from_node))
+                return True, new_state, 'item_gate'
+            return False, state, 'item_gate'
+
+        if edge_type in ('switch', 'switch_locked', 'state_block', 'on_off_gate', 'shutter'):
+            required_switches = {
+                int(node_id)
+                for node_id in edge_data.get('switches_required', []) or []
+                if isinstance(node_id, (int, np.integer))
+            }
+            if required_switches:
+                if required_switches.issubset(state.switches_activated):
+                    return True, new_state, edge_type
+                return False, state, edge_type
+            if state.switches_activated:
+                return True, new_state, edge_type
+            return False, state, edge_type
         
         if edge_type in ('soft_locked', 'l'):
             # One-way passage, always traversable forward
             return True, new_state, 'soft_locked'
+
+        if edge_type in ('one_way',):
+            return True, new_state, 'one_way'
         
         if edge_type in ('stair', 's'):
             # Teleport/stair, always traversable
             return True, new_state, 'stair'
         
-        # Unknown edge type - be conservative
+        # Unknown edge type - do not silently flatten progression semantics.
         logger.warning(f"Unknown edge type: {edge_type}")
-        return True, new_state, edge_type
+        return False, state, edge_type
     
     def collect_items(self, node_id: int, state: ValidationState) -> ValidationState:
         """Collect any items at the current node."""
@@ -239,6 +318,17 @@ class AgentSimulator:
         if node_id in self.key_nodes and node_id not in state.keys_collected:
             new_state.keys_held += 1
             new_state.keys_collected.add(node_id)
+
+        if node_id in self.item_nodes and node_id not in state.items_collected:
+            item_kind = self.item_nodes[node_id]
+            if item_kind == 'boss_key':
+                new_state.has_boss_key = True
+            elif item_kind == 'key_item':
+                new_state.has_item = True
+            new_state.items_collected.add(node_id)
+
+        if node_id in self.switch_nodes:
+            new_state.switches_activated.add(node_id)
         
         return new_state
     

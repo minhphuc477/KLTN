@@ -3,11 +3,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from dataclasses import asdict
 from pathlib import Path
 from typing import List
 
 import pandas as pd
+
+# Ensure repository root is importable when script is executed directly.
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from scripts.run_ablation_study import AblationStudy, ExperimentConfig
 

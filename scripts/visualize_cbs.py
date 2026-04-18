@@ -44,6 +44,7 @@ except ImportError:
     print("Warning: matplotlib not available. Install with: pip install matplotlib")
 
 from src.core.definitions import SEMANTIC_PALETTE
+from src.evaluation.pcbs_validation import prepare_dungeon_grid_for_validation
 from src.zelda_data.zelda_core import ZeldaDungeonAdapter
 from src.simulation.validator import StateSpaceAStar, ZeldaLogicEnv
 from src.simulation.cognitive_bounded_search import (
@@ -121,12 +122,10 @@ def run_cbs_for_visualization(
     adapter = ZeldaDungeonAdapter('Data/The Legend of Zelda')
     dungeon = adapter.load_dungeon(dungeon_num, variant=variant)
     stitched = adapter.stitch_dungeon(dungeon)
-    grid = stitched.global_grid.copy()
-    start = stitched.start_global
-    goal = stitched.triforce_global
-    
-    if start is None or goal is None:
-        raise ValueError(f"Dungeon {dungeon_num} v{variant} missing start/goal")
+    prepared = prepare_dungeon_grid_for_validation(stitched)
+    grid = prepared.grid.copy()
+    start = prepared.start
+    goal = prepared.goal
     
     # Run A* for comparison
     env_astar = ZeldaLogicEnv(semantic_grid=grid)

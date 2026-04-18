@@ -115,7 +115,7 @@ def _solve_in_subprocess(grid, start_pos, goal_pos, algorithm_idx, feature_flags
                 else:
                     result['message'] = f'CBS ({persona}) found no solution (explored {states} states)'
 
-            elif algorithm_idx in {0, 1, 2, 3}:
+            elif algorithm_idx in {0, 1, 2, 3, 4, 5, 6}:
                 from src.simulation import GameStateSearchConfig, SearchRepresentation, run_game_state_solver
 
                 try:
@@ -129,6 +129,8 @@ def _solve_in_subprocess(grid, start_pos, goal_pos, algorithm_idx, feature_flags
                         allow_diagonals=bool(priority_options.get('allow_diagonals', False)),
                         rules_profile=str(priority_options.get('rules_profile', 'vglc_strict')),
                         representation=rep_mode,
+                        max_depth=int(priority_options.get('max_depth', 500)),
+                        use_iddfs=bool(priority_options.get('use_iddfs', True)),
                     )
                 except (AttributeError, RuntimeError, ValueError, TypeError):
                     config = GameStateSearchConfig()
@@ -152,92 +154,11 @@ def _solve_in_subprocess(grid, start_pos, goal_pos, algorithm_idx, feature_flags
                             'algorithm': algo_label,
                             'representation': config.representation.value,
                             'rules_profile': str(config.rules_profile),
+                            **dict(search_result.metadata or {}),
                         },
                     })
                 else:
                     result['message'] = f'{algo_label} found no solution (explored {nodes} states)'
-
-            elif algorithm_idx == 4:
-                from src.simulation.dstar_lite import DStarLiteSolver
-
-                dstar = DStarLiteSolver(env, heuristic_mode='balanced')
-                start_state = env.state.copy()
-                ok, path, nodes = dstar.solve(start_state)
-
-                if ok:
-                    display_path = _convert_diagonal_to_4dir(path, grid=grid_arr) if path else path
-                    algo_label = 'D* Lite (fallback: A*)' if getattr(dstar, 'used_fallback', False) else 'D* Lite'
-                    result.update({
-                        'success': True,
-                        'path': display_path,
-                        'teleports': 0,
-                        'solver_result': {
-                            'nodes': nodes,
-                            'original_path_len': len(path) if path else 0,
-                            'algorithm': algo_label,
-                            'replans': dstar.replans_count,
-                        },
-                    })
-                else:
-                    result['message'] = f'D* Lite found no solution (explored {nodes} states)'
-
-            elif algorithm_idx == 5:
-                from src.simulation.state_space_dfs import StateSpaceDFS
-
-                dfs = StateSpaceDFS(
-                    env,
-                    timeout=100000,
-                    max_depth=500,
-                    allow_diagonals=priority_options.get('allow_diagonals', False),
-                    use_iddfs=True,
-                )
-                ok, path, nodes = dfs.solve()
-
-                if ok:
-                    display_path = _convert_diagonal_to_4dir(path, grid=grid_arr) if path else path
-                    result.update({
-                        'success': True,
-                        'path': display_path,
-                        'teleports': 0,
-                        'solver_result': {
-                            'nodes': nodes,
-                            'original_path_len': len(path) if path else 0,
-                            'algorithm': 'DFS/IDDFS',
-                            'max_depth': dfs.metrics.max_depth_reached,
-                            'backtracks': dfs.metrics.backtrack_count,
-                        },
-                    })
-                else:
-                    result['message'] = f'DFS/IDDFS found no solution (explored {nodes} states)'
-
-            elif algorithm_idx == 6:
-                from src.simulation.bidirectional_astar import BidirectionalAStar
-
-                bidir = BidirectionalAStar(
-                    env,
-                    timeout=100000,
-                    allow_diagonals=priority_options.get('allow_diagonals', False),
-                    heuristic_mode='balanced',
-                )
-                ok, path, nodes = bidir.solve()
-
-                if ok:
-                    display_path = _convert_diagonal_to_4dir(path, grid=grid_arr) if path else path
-                    algo_label = 'Bidirectional A* (fallback: A*)' if getattr(bidir, 'used_fallback', False) else 'Bidirectional A*'
-                    result.update({
-                        'success': True,
-                        'path': display_path,
-                        'teleports': 0,
-                        'solver_result': {
-                            'nodes': nodes,
-                            'original_path_len': len(path) if path else 0,
-                            'algorithm': algo_label,
-                            'meeting_point': bidir.meeting_point,
-                            'collision_checks': bidir.collision_checks,
-                        },
-                    })
-                else:
-                    result['message'] = f'Bidirectional A* found no solution (explored {nodes} states)'
 
             else:
                 ssa = StateSpaceAStar(env, priority_options=priority_options)

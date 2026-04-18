@@ -17,7 +17,7 @@ import heapq
 import logging
 import numpy as np
 import networkx as nx
-from typing import Dict, List, Tuple, Optional, Set, Any, FrozenSet
+from typing import Dict, List, Tuple, Optional, Set, Any, FrozenSet, Mapping
 from dataclasses import dataclass, field
 from collections import defaultdict, deque
 from enum import IntEnum
@@ -176,6 +176,7 @@ class GameState:
     collected_items: Set[Tuple[int, int]] = field(default_factory=set)
     pushed_blocks: Set[Tuple[Tuple[int, int], Tuple[int, int]]] = field(default_factory=set)  # (from_pos, to_pos)
     defeated_enemies: Set[Tuple[int, int]] = field(default_factory=set)
+    completed_puzzle_stages: Set[Tuple[str, int]] = field(default_factory=set)
     current_floor: int = 0  # NEW: Multi-floor dungeon support
 
     # Backward-compatible property: has_bomb -> bomb_count > 0
@@ -204,6 +205,7 @@ class GameState:
             frozenset(self.collected_items),
             frozenset(self.pushed_blocks),
             frozenset(self.defeated_enemies),
+            frozenset(self.completed_puzzle_stages),
             self.current_floor  # Include floor in hash
         ))
     
@@ -220,6 +222,7 @@ class GameState:
             self.collected_items == other.collected_items and
             self.pushed_blocks == other.pushed_blocks and
             self.defeated_enemies == other.defeated_enemies and
+            self.completed_puzzle_stages == other.completed_puzzle_stages and
             self.current_floor == other.current_floor
         )
     
@@ -235,6 +238,7 @@ class GameState:
             # Use set() to safely copy both set and frozenset types
             pushed_blocks=set(self.pushed_blocks),
             defeated_enemies=set(self.defeated_enemies),
+            completed_puzzle_stages=set(self.completed_puzzle_stages),
             current_floor=self.current_floor
         )
 
@@ -449,6 +453,10 @@ def dominates(state_a: GameState, state_b: GameState) -> bool:
     # Defeated enemies: required for strict-original shutter-door semantics.
     if not state_a.defeated_enemies.issuperset(state_b.defeated_enemies):
         return False
+
+    # Puzzle progression: A must have completed at least the stages B has.
+    if not state_a.completed_puzzle_stages.issuperset(state_b.completed_puzzle_stages):
+        return False
     
     # All checks passed: A dominates B
     return True
@@ -499,6 +507,10 @@ class ValidationResult:
     logical_errors: List[str]
     path: List[Tuple[int, int]] = field(default_factory=list)
     error_message: str = ""
+    solver_used: str = "astar"
+    primary_solver_solved: Optional[bool] = None
+    primary_solver_error: str = ""
+    states_explored: int = 0
     
     def to_dict(self) -> Dict:
         return {
@@ -616,6 +628,7 @@ class ZeldaLogicEnv:
     def __init__(self, semantic_grid: np.ndarray, render_mode: bool = False, 
                  graph=None, room_to_node=None, room_positions=None,
                  node_to_room=None,
+                 room_puzzle_metadata: Optional[Mapping[str, Any]] = None,
                  solver_options: Optional['SolverOptions'] = None):
         """
         Initialize the environment.
@@ -627,6 +640,7 @@ class ZeldaLogicEnv:
             room_to_node: Optional mapping of room positions to graph nodes
             room_positions: Optional mapping of room positions to grid offsets
             node_to_room: Optional mapping of graph nodes to room positions (includes virtual nodes)
+            room_puzzle_metadata: Optional stitched puzzle plan payload
             solver_options: Optional SolverOptions for configurable starting inventory
         """
         self.original_grid = np.array(semantic_grid, dtype=np.int64)
@@ -645,6 +659,12 @@ class ZeldaLogicEnv:
         self.room_to_node = room_to_node
         self.room_positions = room_positions
         self.node_to_room = node_to_room  # Includes virtual node mappings
+        self.room_puzzle_metadata = dict(room_puzzle_metadata or {})
+        self._puzzle_plans: Dict[str, Dict[str, Any]] = {}
+        self._puzzle_stage_lookup: Dict[Tuple[int, int], List[Dict[str, Any]]] = defaultdict(list)
+        self._puzzle_door_lookup: Dict[Tuple[int, int], str] = {}
+        self._puzzle_stage_counts: Dict[str, int] = {}
+        self._build_puzzle_plan_cache()
 
         # Cache room-level enemy positions for strict-original shutter logic.
         self._pos_room_cache: Dict[Tuple[int, int], Optional[Tuple[int, int]]] = {}
@@ -747,6 +767,148 @@ class ZeldaLogicEnv:
         if not room_enemies:
             return True
         return room_enemies.issubset(set(state.defeated_enemies))
+
+    def _build_puzzle_plan_cache(self) -> None:
+        """Normalize stitched puzzle-plan metadata into fast lookup tables."""
+        self._puzzle_plans = {}
+        self._puzzle_stage_lookup = defaultdict(list)
+        self._puzzle_door_lookup = {}
+        self._puzzle_stage_counts = {}
+
+        payload = dict(self.room_puzzle_metadata or {})
+        raw_plans = payload.get("plans", payload)
+        if not isinstance(raw_plans, Mapping):
+            return
+
+        for raw_plan_id, raw_plan in raw_plans.items():
+            if not isinstance(raw_plan, Mapping):
+                continue
+            plan_id = str(raw_plan.get("plan_id", raw_plan_id))
+            normalized_stages: List[Dict[str, Any]] = []
+            for stage in list(raw_plan.get("stage_sequence", []) or []):
+                if not isinstance(stage, Mapping):
+                    continue
+                anchor = stage.get("global_anchor", stage.get("anchor", stage.get("local_anchor")))
+                if not isinstance(anchor, (list, tuple)) or len(anchor) != 2:
+                    continue
+                stage_index = int(stage.get("stage_index", len(normalized_stages)))
+                normalized = {
+                    "plan_id": plan_id,
+                    "stage_index": stage_index,
+                    "name": str(stage.get("name", "")),
+                    "kind": str(stage.get("kind", "step_on_puzzle")),
+                    "anchor": (int(anchor[0]), int(anchor[1])),
+                    "trigger_tile_id": (
+                        int(stage.get("trigger_tile_id"))
+                        if stage.get("trigger_tile_id") is not None
+                        else None
+                    ),
+                }
+                normalized_stages.append(normalized)
+                self._puzzle_stage_lookup[normalized["anchor"]].append(normalized)
+
+            self._puzzle_plans[plan_id] = {
+                **dict(raw_plan),
+                "plan_id": plan_id,
+                "stage_sequence": normalized_stages,
+            }
+            self._puzzle_stage_counts[plan_id] = len(normalized_stages)
+
+            for door in list(raw_plan.get("controlled_doors_global", raw_plan.get("controlled_doors", [])) or []):
+                if not isinstance(door, (list, tuple)) or len(door) != 2:
+                    continue
+                self._puzzle_door_lookup[(int(door[0]), int(door[1]))] = plan_id
+
+    def _prior_puzzle_stages_complete(self, state: GameState, plan_id: str, stage_index: int) -> bool:
+        for prior_idx in range(int(stage_index)):
+            if (str(plan_id), int(prior_idx)) not in state.completed_puzzle_stages:
+                return False
+        return True
+
+    def _is_puzzle_plan_complete(self, state: GameState, plan_id: str) -> bool:
+        total = int(self._puzzle_stage_counts.get(str(plan_id), 0))
+        if total <= 0:
+            return True
+        for stage_index in range(total):
+            if (str(plan_id), int(stage_index)) not in state.completed_puzzle_stages:
+                return False
+        return True
+
+    def _complete_puzzle_stage(
+        self,
+        state: GameState,
+        *,
+        plan_id: str,
+        stage_index: int,
+    ) -> None:
+        state.completed_puzzle_stages = set(state.completed_puzzle_stages) | {
+            (str(plan_id), int(stage_index))
+        }
+
+    def _update_puzzle_stage_progress(
+        self,
+        state: GameState,
+        *,
+        target_pos: Tuple[int, int],
+        target_tile: int,
+        pushed_block_to: Optional[Tuple[int, int]] = None,
+    ) -> GameState:
+        """Advance any staged puzzle conditions satisfied by the new state."""
+        anchors_to_check: List[Tuple[int, int]] = [tuple(target_pos)]
+        if pushed_block_to is not None:
+            anchors_to_check.append((int(pushed_block_to[0]), int(pushed_block_to[1])))
+
+        for anchor in anchors_to_check:
+            for stage in list(self._puzzle_stage_lookup.get(anchor, []) or []):
+                plan_id = str(stage.get("plan_id", ""))
+                stage_index = int(stage.get("stage_index", 0))
+                if (plan_id, stage_index) in state.completed_puzzle_stages:
+                    continue
+                if not self._prior_puzzle_stages_complete(state, plan_id, stage_index):
+                    continue
+
+                kind = str(stage.get("kind", "step_on_puzzle")).strip().lower()
+                trigger_tile_id = stage.get("trigger_tile_id")
+                matched = False
+                if kind == "collect_key":
+                    matched = (
+                        anchor == tuple(target_pos)
+                        and int(target_tile) in {SEMANTIC_PALETTE['KEY_SMALL'], SEMANTIC_PALETTE['KEY_BOSS']}
+                    )
+                elif kind == "collect_item":
+                    matched = (
+                        anchor == tuple(target_pos)
+                        and int(target_tile) in {SEMANTIC_PALETTE['KEY_ITEM'], SEMANTIC_PALETTE['ITEM_MINOR'], SEMANTIC_PALETTE['STAIR']}
+                    )
+                elif kind == "defeat_enemy":
+                    matched = (
+                        anchor == tuple(target_pos)
+                        and int(target_tile) in {SEMANTIC_PALETTE['ENEMY'], SEMANTIC_PALETTE['BOSS']}
+                    )
+                elif kind == "push_block_to_switch":
+                    matched = pushed_block_to is not None and tuple(anchor) == tuple(pushed_block_to)
+                else:
+                    matched = anchor == tuple(target_pos)
+                    if trigger_tile_id is not None:
+                        matched = matched and int(target_tile) == int(trigger_tile_id)
+
+                if matched:
+                    self._complete_puzzle_stage(state, plan_id=plan_id, stage_index=stage_index)
+
+        return state
+
+    def _can_pass_puzzle_door(self, state: GameState, target_pos: Tuple[int, int]) -> bool:
+        """Return True when a puzzle door is open under the stitched puzzle plan."""
+        if target_pos in state.opened_doors:
+            return True
+
+        plan_id = self._puzzle_door_lookup.get(tuple(target_pos))
+        if plan_id is not None:
+            return self._is_puzzle_plan_complete(state, plan_id)
+
+        if self.strict_original_mode and not self._can_pass_soft_door(state, target_pos):
+            return False
+        return True
 
     def _can_pass_soft_door(self, state: GameState, target_pos: Tuple[int, int]) -> bool:
         """
@@ -865,7 +1027,7 @@ class ZeldaLogicEnv:
         if target_tile in WALKABLE_IDS:
             new_state.position = target_pos
 
-            if target_tile in {SEMANTIC_PALETTE['ENEMY'], SEMANTIC_PALETTE['BOSS']}:
+            if self.strict_original_mode and target_tile in {SEMANTIC_PALETTE['ENEMY'], SEMANTIC_PALETTE['BOSS']}:
                 new_state.defeated_enemies = self.state.defeated_enemies | {target_pos}
             
             # Handle item pickup
@@ -875,6 +1037,12 @@ class ZeldaLogicEnv:
                 )
                 reward += pickup_reward
                 info.update(pickup_info)
+
+            new_state = self._update_puzzle_stage_progress(
+                new_state,
+                target_pos=target_pos,
+                target_tile=int(target_tile),
+            )
             
             return True, new_state, reward, info
         
@@ -919,10 +1087,15 @@ class ZeldaLogicEnv:
                 return False, self.state, 0.0, {'msg': 'Need boss key'}
         
         if target_tile == SEMANTIC_PALETTE['DOOR_PUZZLE']:
-            # Strict-original mode: shutter/puzzle doors require room clear.
-            if self.strict_original_mode and not self._can_pass_soft_door(new_state, target_pos):
-                return False, self.state, 0.0, {'msg': 'Puzzle door closed - clear room first'}
+            if not self._can_pass_puzzle_door(new_state, target_pos):
+                return False, self.state, 0.0, {'msg': 'Puzzle door closed - staged puzzle incomplete'}
+            new_state.opened_doors.add(target_pos)
             new_state.position = target_pos
+            new_state = self._update_puzzle_stage_progress(
+                new_state,
+                target_pos=target_pos,
+                target_tile=int(target_tile),
+            )
             return True, new_state, 0.0, {'msg': 'Passed puzzle door'}
         
         # Default: allow movement
@@ -988,7 +1161,7 @@ class ZeldaLogicEnv:
                         if self.state.has_boss_key or (nr, nc) in self.state.opened_doors:
                             valid.append(int(action))
                     elif tile == SEMANTIC_PALETTE['DOOR_PUZZLE']:
-                        if (not self.strict_original_mode) or self._can_pass_soft_door(self.state, (nr, nc)):
+                        if self._can_pass_puzzle_door(self.state, (nr, nc)):
                             valid.append(int(action))
                     else:
                         valid.append(int(action))
@@ -1084,7 +1257,7 @@ class ZeldaLogicEnv:
         
         # Walkable tiles - free movement
         if target_tile in WALKABLE_IDS:
-            if target_tile in {SEMANTIC_PALETTE['ENEMY'], SEMANTIC_PALETTE['BOSS']}:
+            if self.strict_original_mode and target_tile in {SEMANTIC_PALETTE['ENEMY'], SEMANTIC_PALETTE['BOSS']}:
                 new_state.defeated_enemies = state.defeated_enemies | {target_pos}
             # Handle item pickup (add to collected_items)
             if target_tile in PICKUP_IDS:
@@ -1100,7 +1273,11 @@ class ZeldaLogicEnv:
                 elif target_tile == SEMANTIC_PALETTE['ITEM_MINOR']:
                     # ITEM_MINOR represents bomb pickups in VGLC Zelda dungeons
                     new_state.bomb_count = state.bomb_count + 4  # Consumable: add 4 bombs
-            
+            new_state = self._update_puzzle_stage_progress(
+                new_state,
+                target_pos=target_pos,
+                target_tile=int(target_tile),
+            )
             return True, new_state
         
         # Conditional tiles - require inventory items
@@ -1125,9 +1302,14 @@ class ZeldaLogicEnv:
             return False, state
         
         if target_tile == SEMANTIC_PALETTE['DOOR_PUZZLE']:
-            # Strict-original mode: shutter/puzzle doors require room clear.
-            if self.strict_original_mode and not self._can_pass_soft_door(state, target_pos):
+            if not self._can_pass_puzzle_door(state, target_pos):
                 return False, state
+            new_state.opened_doors = state.opened_doors | {target_pos}
+            new_state = self._update_puzzle_stage_progress(
+                new_state,
+                target_pos=target_pos,
+                target_tile=int(target_tile),
+            )
             return True, new_state
         
         if target_tile == SEMANTIC_PALETTE['DOOR_OPEN']:
@@ -1165,6 +1347,12 @@ class ZeldaLogicEnv:
             if push_dest_tile in WALKABLE_IDS and not dest_has_block:
                 # Can push - record in pushed_blocks
                 new_state.pushed_blocks = state.pushed_blocks | {(target_pos, (push_dest_r, push_dest_c))}
+                new_state = self._update_puzzle_stage_progress(
+                    new_state,
+                    target_pos=target_pos,
+                    target_tile=int(target_tile),
+                    pushed_block_to=(int(push_dest_r), int(push_dest_c)),
+                )
                 return True, new_state
             else:
                 return False, state
@@ -2064,12 +2252,22 @@ class StateSpaceAStar:
                 elif et == 'boss_locked':
                     if not nbk:
                         continue
+                elif et == 'item_locked':
+                    if not ni:
+                        continue
+                elif et == 'switch':
+                    if self.strict_original_mode:
+                        current_room = self.env.get_room_for_position(src)
+                        if not self.env.is_room_cleared(current_room, current_state):
+                            continue
                 elif et == 'soft_locked':
                     # Must check directed edge
                     src_nd = pos_to_node.get(src)
                     dst_nd = pos_to_node.get(dst)
                     if src_nd is not None and dst_nd is not None and not G.has_edge(src_nd, dst_nd):
                         continue
+                elif et not in ('open', 'stair'):
+                    continue
 
                 # Collect items at destination
                 dt = grid[dst[0], dst[1]]
@@ -2300,7 +2498,7 @@ class StateSpaceAStar:
                     if not new_item:
                         continue
                 else:
-                    pass  # Unknown → allow
+                    continue
 
                 # Get neighbor room and check if it's physical
                 neighbor_room = n2r.get(neighbor)
@@ -2334,6 +2532,11 @@ class StateSpaceAStar:
                                 if not tbk: can = False
                             elif vet == 'item_locked':
                                 if not ti: can = False
+                            elif vet == 'switch':
+                                if self.strict_original_mode:
+                                    current_room = self.env.get_room_for_position(state.position)
+                                    if not self.env.is_room_cleared(current_room, state):
+                                        can = False
                             elif vet == 'soft_locked':
                                 if not G.has_edge(vn, vn2):
                                     can = False
@@ -2342,6 +2545,8 @@ class StateSpaceAStar:
                                     ett = self._edge_type_from_data(edd)
                                     if ett != 'soft_locked':
                                         can = False
+                            elif vet not in ('open', 'stair'):
+                                can = False
                             if not can:
                                 continue
                             v_visited.add(vn2)
@@ -2623,6 +2828,7 @@ class StateSpaceAStar:
                         current_state.opened_doors.issubset(best.opened_doors) and
                         current_state.collected_items.issubset(best.collected_items) and
                         current_state.defeated_enemies.issubset(best.defeated_enemies) and
+                        current_state.completed_puzzle_stages.issubset(best.completed_puzzle_stages) and
                         current_g >= best_g):  # CRITICAL: Check g-score
                         # Check if strictly dominated (at least one dimension strictly worse OR same inventory but worse g)
                         if (current_state.keys < best.keys or 
@@ -2632,6 +2838,7 @@ class StateSpaceAStar:
                             len(current_state.opened_doors) < len(best.opened_doors) or
                             len(current_state.collected_items) < len(best.collected_items) or
                             len(current_state.defeated_enemies) < len(best.defeated_enemies) or
+                            len(current_state.completed_puzzle_stages) < len(best.completed_puzzle_stages) or
                             (current_state.keys == best.keys and
                              current_state.bomb_count == best.bomb_count and
                              current_state.has_boss_key == best.has_boss_key and
@@ -2639,6 +2846,7 @@ class StateSpaceAStar:
                              len(current_state.opened_doors) == len(best.opened_doors) and
                              len(current_state.collected_items) == len(best.collected_items) and
                              len(current_state.defeated_enemies) == len(best.defeated_enemies) and
+                             len(current_state.completed_puzzle_stages) == len(best.completed_puzzle_stages) and
                              current_g > best_g)):  # Same inventory but worse g
                             is_dominated = True
             
@@ -2667,11 +2875,13 @@ class StateSpaceAStar:
                     int(current_state.has_item) >= int(best.has_item) and
                     current_state.opened_doors.issuperset(best.opened_doors) and
                     current_state.collected_items.issuperset(best.collected_items) and
-                    current_state.defeated_enemies.issuperset(best.defeated_enemies)):
+                    current_state.defeated_enemies.issuperset(best.defeated_enemies) and
+                    current_state.completed_puzzle_stages.issuperset(best.completed_puzzle_stages)):
                     # Current state dominates or equals best in inventory
                     if (current_state.keys > best.keys or
                         len(current_state.opened_doors) > len(best.opened_doors) or
                         len(current_state.collected_items) > len(best.collected_items) or
+                        len(current_state.completed_puzzle_stages) > len(best.completed_puzzle_stages) or
                         current_state.bomb_count > best.bomb_count or
                         int(current_state.has_boss_key) > int(best.has_boss_key) or
                         int(current_state.has_item) > int(best.has_item) or
@@ -2958,9 +3168,19 @@ class StateSpaceAStar:
         # Priority queue
         start_state = self.env.state.copy()
         start_h = self._heuristic(start_state)
-        start_g = 0
-        
-        open_set = [(start_h, 0, hash(start_state), start_g, start_state, [start_state.position])]
+        start_g = 0.0
+        if self.search_mode == 'bfs':
+            start_f = 0.0
+        elif self.search_mode == 'dijkstra':
+            start_f = start_g
+        elif self.search_mode == 'greedy':
+            start_f = start_h
+        elif self.enable_ara:
+            start_f = start_g + self.ara_weight * start_h
+        else:
+            start_f = start_g + start_h
+
+        open_set = [(start_f, 0, hash(start_state), start_g, start_state, [start_state.position])]
         heapq.heapify(open_set)
         
         closed_set = set()
@@ -3009,6 +3229,7 @@ class StateSpaceAStar:
                     current_state.opened_doors.issubset(best.opened_doors) and
                     current_state.collected_items.issubset(best.collected_items) and
                     current_state.defeated_enemies.issubset(best.defeated_enemies) and
+                    current_state.completed_puzzle_stages.issubset(best.completed_puzzle_stages) and
                     current_g >= best_g):
                     if (current_state.keys < best.keys or 
                         current_state.bomb_count < best.bomb_count or
@@ -3017,6 +3238,7 @@ class StateSpaceAStar:
                         len(current_state.opened_doors) < len(best.opened_doors) or
                         len(current_state.collected_items) < len(best.collected_items) or
                         len(current_state.defeated_enemies) < len(best.defeated_enemies) or
+                        len(current_state.completed_puzzle_stages) < len(best.completed_puzzle_stages) or
                         (current_state.keys == best.keys and
                          current_state.bomb_count == best.bomb_count and
                          current_state.has_boss_key == best.has_boss_key and
@@ -3024,6 +3246,7 @@ class StateSpaceAStar:
                          len(current_state.opened_doors) == len(best.opened_doors) and
                          len(current_state.collected_items) == len(best.collected_items) and
                          len(current_state.defeated_enemies) == len(best.defeated_enemies) and
+                         len(current_state.completed_puzzle_stages) == len(best.completed_puzzle_stages) and
                          current_g > best_g)):
                         is_dominated = True
             
@@ -3045,11 +3268,13 @@ class StateSpaceAStar:
                     int(current_state.has_item) >= int(best.has_item) and
                     current_state.opened_doors.issuperset(best.opened_doors) and
                     current_state.collected_items.issuperset(best.collected_items) and
-                    current_state.defeated_enemies.issuperset(best.defeated_enemies)):
+                    current_state.defeated_enemies.issuperset(best.defeated_enemies) and
+                    current_state.completed_puzzle_stages.issuperset(best.completed_puzzle_stages)):
                     if (current_state.keys > best.keys or
                         len(current_state.opened_doors) > len(best.opened_doors) or
                         len(current_state.collected_items) > len(best.collected_items) or
                         len(current_state.defeated_enemies) > len(best.defeated_enemies) or
+                        len(current_state.completed_puzzle_stages) > len(best.completed_puzzle_stages) or
                         current_state.bomb_count > best.bomb_count or
                         int(current_state.has_boss_key) > int(best.has_boss_key) or
                         int(current_state.has_item) > int(best.has_item) or
@@ -3169,15 +3394,27 @@ class StateSpaceAStar:
                 if new_hash in closed_set:
                     continue
                 
-                move_cost = self._get_movement_cost(target_tile, target_pos, current_state)
-                g_score = current_g + move_cost * base_cost
+                if self.search_mode == 'bfs':
+                    g_score = float(len(path))
+                else:
+                    move_cost = self._get_movement_cost(target_tile, target_pos, current_state)
+                    g_score = current_g + move_cost * base_cost
                 
                 if new_hash in g_scores and g_score >= g_scores[new_hash]:
                     continue
                 
                 g_scores[new_hash] = g_score
                 h_score = self._heuristic(new_state)
-                f_score = g_score + (self.ara_weight * h_score if self.enable_ara else h_score)
+                if self.search_mode == 'bfs':
+                    f_score = float(len(path))
+                elif self.search_mode == 'dijkstra':
+                    f_score = g_score
+                elif self.search_mode == 'greedy':
+                    f_score = h_score
+                elif self.enable_ara:
+                    f_score = g_score + self.ara_weight * h_score
+                else:
+                    f_score = g_score + h_score
                 new_path = path + [new_state.position]
                 
                 heapq.heappush(open_set, (f_score, counter, new_hash, g_score, new_state, new_path))
@@ -3584,31 +3821,30 @@ class StateSpaceAStar:
         - item_locked: Requires KEY_ITEM (ladder/raft)
         - switch: Puzzle-activated door (simplified: always passable)
         """
-        if edge_type == 'soft_locked':
+        normalized = str(edge_type or '').strip().lower()
+
+        if normalized in ('soft_locked', 'one_way'):
             if self.strict_original_mode:
                 current_room = self.env.get_room_for_position(state.position)
                 return self.env.is_room_cleared(current_room, state)
             return True
-        if edge_type in ('open', 'stair'):
+        if normalized in ('open', 'path', 'stair'):
             return True
-        elif edge_type == 'bombable':
+        elif normalized == 'bombable':
             return state.bomb_count > 0
-        elif edge_type == 'key_locked':
+        elif normalized in ('key_locked', 'locked'):
             return state.keys > 0
-        elif edge_type == 'boss_locked':
+        elif normalized == 'boss_locked':
             return state.has_boss_key
-        elif edge_type == 'item_locked':
+        elif normalized in ('item_locked', 'item_gate'):
             return state.has_item  # Requires KEY_ITEM (ladder/raft)
-        elif edge_type == 'switch':
+        elif normalized in ('switch', 'switch_locked', 'state_block', 'on_off_gate', 'shutter', 'puzzle'):
             # Strict-original mode: model switch/puzzle gates as room-clear shutters.
             if self.strict_original_mode:
                 current_room = self.env.get_room_for_position(state.position)
                 return self.env.is_room_cleared(current_room, state)
             return True
-        # Unknown edge type handling: fail-closed in strict VGLC profile.
-        if self.vglc_strict_mode:
-            return False
-        return True
+        return False
     
     def _get_graph_warp_destinations(self, current_pos: Tuple[int, int], 
                                       state: GameState) -> List[Tuple[Tuple[int, int], int, str]]:
@@ -4151,7 +4387,13 @@ class ZeldaValidator:
     
     def validate_single(self, semantic_grid: np.ndarray, 
                        render: bool = False,
-                       persona_mode: str = "balanced") -> ValidationResult:
+                       persona_mode: str = "balanced",
+                       graph=None,
+                       room_to_node=None,
+                       room_positions=None,
+                       node_to_room=None,
+                       room_puzzle_metadata: Optional[Mapping[str, Any]] = None,
+                       solver_timeout: int = 200000) -> ValidationResult:
         """
         Validate a single map.
         
@@ -4178,13 +4420,75 @@ class ZeldaValidator:
                 error_message="; ".join(errors)
             )
         
-        # Step 2: Create Environment
-        env = ZeldaLogicEnv(semantic_grid, render_mode=render)
-        
-        # Step 3: Run A* Solver
-        solver = StateSpaceAStar(env, heuristic_mode=persona_mode)
-        success, path, states_explored = solver.solve()
-        
+        env_kwargs = {
+            "render_mode": render,
+            "graph": graph,
+            "room_to_node": room_to_node,
+            "room_positions": room_positions,
+            "node_to_room": node_to_room,
+            "room_puzzle_metadata": room_puzzle_metadata,
+        }
+        graph_guided_primary = bool(graph is not None and room_to_node and room_positions)
+
+        def _run_solver(search_mode: str) -> Tuple[bool, List[Tuple[int, int]], SolverDiagnostics]:
+            local_env = ZeldaLogicEnv(semantic_grid, **env_kwargs)
+            try:
+                use_hybrid_frontend = bool(search_mode == "astar" and graph_guided_primary)
+                priority_options = {
+                    "allow_diagonals": False,
+                    "representation": "hybrid" if use_hybrid_frontend else "tile",
+                    "rules_profile": "vglc_strict",
+                    "enable_hierarchical": bool(use_hybrid_frontend),
+                }
+                solver = StateSpaceAStar(
+                    local_env,
+                    timeout=int(max(1, solver_timeout)),
+                    heuristic_mode=persona_mode,
+                    priority_options=priority_options,
+                    search_mode=search_mode,
+                )
+                if use_hybrid_frontend:
+                    success_i, path_i, states_i = solver.solve()
+                    diagnostics_i = SolverDiagnostics(
+                        success=bool(success_i),
+                        states_explored=int(states_i or 0),
+                        failure_reason=(
+                            ""
+                            if bool(success_i)
+                            else (
+                                f"Timeout: explored {int(states_i or 0):,} states (limit: {int(max(1, solver_timeout)):,})"
+                                if int(states_i or 0) >= int(max(1, solver_timeout))
+                                else "No path: graph-guided A* did not reach goal"
+                            )
+                        ),
+                        path_length=int(len(path_i or [])),
+                    )
+                else:
+                    success_i, path_i, diagnostics_i = solver.solve_with_diagnostics()
+                return bool(success_i), list(path_i or []), diagnostics_i
+            finally:
+                try:
+                    local_env.close()
+                except Exception:
+                    pass
+
+        # Step 2: Run primary A* oracle.
+        success, path, diagnostics = _run_solver("astar")
+        primary_failure = str(getattr(diagnostics, "failure_reason", "") or "")
+        primary_states = int(getattr(diagnostics, "states_explored", 0) or 0)
+        solver_used = "hybrid_astar" if graph_guided_primary else "astar"
+
+        # Step 3: Exact fallback. Stateful puzzle mechanics increased
+        # path-dependence, so use uniform-cost search as the completeness
+        # preserving fallback when heuristic A* underperforms.
+        if not success:
+            fallback_success, fallback_path, fallback_diagnostics = _run_solver("dijkstra")
+            if fallback_success:
+                success = True
+                path = fallback_path
+                diagnostics = fallback_diagnostics
+                solver_used = "dijkstra_fallback"
+
         if not success:
             return ValidationResult(
                 is_solvable=False,
@@ -4192,21 +4496,32 @@ class ZeldaValidator:
                 reachability=0.0,
                 path_length=0,
                 backtracking_score=0.0,
-                logical_errors=["A* solver failed to find path"],
-                error_message=f"No solution found after exploring {states_explored} states"
+                logical_errors=["Exact tile-state oracle failed to find path"],
+                error_message=f"No solution found after exploring {primary_states} states",
+                solver_used=solver_used,
+                primary_solver_solved=False,
+                primary_solver_error=primary_failure,
+                states_explored=int(getattr(diagnostics, "states_explored", 0) or 0),
             )
-        
-        # Step 4: Calculate Metrics
-        reachability = MetricsEngine.calculate_reachability(env, path)
-        backtracking = MetricsEngine.calculate_backtracking(path)
-        logical_errors = MetricsEngine.find_logical_errors(env, path)
-        
-        # Step 5: Render if requested
-        if render:
-            self._visualize_solution(env, path)
-        
-        env.close()
-        
+
+        # Step 4: Recreate environment for metrics/rendering on the winning path.
+        env = ZeldaLogicEnv(semantic_grid, **env_kwargs)
+        try:
+            reachability = MetricsEngine.calculate_reachability(env, path)
+            backtracking = MetricsEngine.calculate_backtracking(path)
+            logical_errors = MetricsEngine.find_logical_errors(env, path)
+
+            if solver_used != "astar" and primary_failure:
+                logical_errors = list(logical_errors) + [
+                    f"primary_astar_failed: {primary_failure}",
+                    "exact_fallback_solver_used: dijkstra",
+                ]
+
+            if render:
+                self._visualize_solution(env, path)
+        finally:
+            env.close()
+
         return ValidationResult(
             is_solvable=True,
             is_valid_syntax=True,
@@ -4214,7 +4529,11 @@ class ZeldaValidator:
             path_length=len(path),
             backtracking_score=backtracking,
             logical_errors=logical_errors,
-            path=path
+            path=path,
+            solver_used=solver_used,
+            primary_solver_solved=bool(solver_used in {"astar", "hybrid_astar"}),
+            primary_solver_error=primary_failure if solver_used != "astar" else "",
+            states_explored=int(getattr(diagnostics, "states_explored", 0) or 0),
         )
     
     def check_soft_locks(
@@ -4330,7 +4649,9 @@ class ZeldaValidator:
     def check_soft_locks_deterministic(self, semantic_grid: np.ndarray,
                                         graph=None, room_to_node=None,
                                         room_positions=None,
-                                        node_to_room=None) -> Tuple[bool, List[str]]:
+                                        node_to_room=None,
+                                        room_puzzle_metadata: Optional[Mapping[str, Any]] = None,
+                                        solver_timeout: int = 200000) -> Tuple[bool, List[str]]:
         """Deterministic soft-lock detection via reverse reachability.
 
         Unlike :meth:`check_soft_locks` which uses random sampling,
@@ -4352,11 +4673,20 @@ class ZeldaValidator:
             semantic_grid, render_mode=False,
             graph=graph, room_to_node=room_to_node,
             room_positions=room_positions, node_to_room=node_to_room,
+            room_puzzle_metadata=room_puzzle_metadata,
         )
         if env.goal_pos is None or env.start_pos is None:
             return False, ['No start or goal position defined']
 
-        solver = StateSpaceAStar(env, timeout=500000)
+        solver = StateSpaceAStar(
+            env,
+            timeout=int(max(1, solver_timeout)),
+            priority_options={
+                "allow_diagonals": False,
+                "representation": "tile",
+                "rules_profile": "vglc_strict",
+            },
+        )
         traps = solver.find_proven_traps()
 
         descriptions: List[str] = []

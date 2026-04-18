@@ -1,0 +1,26 @@
+{
+  "saved_at_utc": "2026-04-18T04:17:49+00:00",
+  "seed": 42,
+  "git_commit": "52c240ae8816cd595c3b1cd915dc30b0f5bfdc82",
+  "command": [
+    "main.py",
+    "train",
+    "--config",
+    "configs\\zelda_hmolqd.yaml",
+    "--stage",
+    "masked_room",
+    "--output-dir",
+    "outputs\\zelda_hmolqd_puzzlecookbook_pdrop035_v1",
+    "--masked-room-puzzle-structure-dropout-prob",
+    "0.35",
+    "--seed",
+    "42",
+    "--no-auto-resume",
+    "--verbose"
+  ],
+  "dataset_schema_profile": "zelda_v1",
+  "dataset_schema_lock": "zelda_v1: num_classes=44, room_shape=16x11, node_feature_dim=14, edge_feature_dim=16, tpe_dim=8",
+  "python": "3.13.7 (tags/v3.13.7:bcee1c3, Aug 14 2025, 14:15:11) [MSC v.1944 64 bit (AMD64)]",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "torch_version": "2.6.0+cu124"
+}

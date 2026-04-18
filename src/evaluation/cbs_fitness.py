@@ -38,12 +38,46 @@ def _compute_graph_cognitive_proxy(
             'is_proxy': 1.0,
         }
 
+    def _has_semantic(node_data: Dict[str, Any], *tokens: str) -> bool:
+        label_tokens = {
+            str(part).strip().lower()
+            for part in str(node_data.get('label', '')).split(',')
+            if str(part).strip()
+        }
+        node_type = str(node_data.get('type', '')).strip().lower()
+        semantics = set(label_tokens)
+        if node_type:
+            semantics.add(node_type)
+        if bool(node_data.get('is_start', False)):
+            semantics.add('start')
+        if bool(node_data.get('is_goal', False) or node_data.get('has_triforce', False) or node_data.get('is_triforce', False)):
+            semantics.add('goal')
+            semantics.add('triforce')
+        return any(token in semantics for token in tokens)
+
     # Ensure directed reachability is judged on directed graph semantics.
     dg = graph if graph.is_directed() else nx.DiGraph(graph)
 
-    # Heuristic start/goal selection by in/out-degree extrema.
-    start = min(dg.nodes(), key=lambda node: (dg.in_degree(node), str(node)))
-    goal = max(dg.nodes(), key=lambda node: (dg.out_degree(node), str(node)))
+    explicit_starts = [
+        node for node, data in dg.nodes(data=True)
+        if _has_semantic(data, 'start', 's')
+    ]
+    explicit_goals = [
+        node for node, data in dg.nodes(data=True)
+        if _has_semantic(data, 'goal', 'triforce', 't')
+    ]
+
+    # Prefer explicit semantics when present; fall back to degree extrema only for legacy graphs.
+    start = (
+        min(explicit_starts, key=str)
+        if explicit_starts
+        else min(dg.nodes(), key=lambda node: (dg.in_degree(node), str(node)))
+    )
+    goal = (
+        min(explicit_goals, key=str)
+        if explicit_goals
+        else max(dg.nodes(), key=lambda node: (dg.out_degree(node), str(node)))
+    )
 
     try:
         shortest = nx.shortest_path_length(dg, source=start, target=goal)

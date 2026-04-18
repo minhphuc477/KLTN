@@ -19,7 +19,7 @@ Key Concepts:
 
 import heapq
 import logging
-from typing import Dict, List, Tuple, Optional, Set
+from typing import Dict, Iterable, List, Optional, Set, Tuple
 from dataclasses import dataclass, field
 from .validator import GameState, ACTION_DELTAS, SEMANTIC_PALETTE
 
@@ -49,16 +49,26 @@ class DStarLiteSolver:
     - Replan after change: O(M log N) where M = affected states
     """
     
-    def __init__(self, env, heuristic_mode: str = "balanced"):
+    def __init__(
+        self,
+        env,
+        heuristic_mode: str = "balanced",
+        timeout: int = 100000,
+        allow_diagonals: bool = False,
+    ):
         """
         Initialize D* Lite solver.
         
         Args:
             env: ZeldaLogicEnv instance
             heuristic_mode: Heuristic type (balanced/speedrunner/completionist)
+            timeout: Approximate maximum state/update budget before fallback
+            allow_diagonals: Whether diagonal transitions are legal
         """
         self.env = env
         self.heuristic_mode = heuristic_mode
+        self.timeout = int(timeout)
+        self.allow_diagonals = bool(allow_diagonals)
         
         # Core D* Lite data structures
         self.g_scores: Dict[int, float] = {}  # g(s) values
@@ -78,6 +88,13 @@ class DStarLiteSolver:
         # Current path
         self.current_path: List[Tuple[int, int]] = []
         self.path_index = 0
+
+    def _iter_action_deltas(self) -> Iterable[Tuple[int, int]]:
+        """Yield move deltas consistent with the configured movement policy."""
+        for action, (dr, dc) in ACTION_DELTAS.items():
+            if not self.allow_diagonals and abs(int(dr)) + abs(int(dc)) == 2:
+                continue
+            yield (int(dr), int(dc))
     
     def calculate_key(self, state: GameState, state_hash: int) -> DStarKey:
         """
@@ -124,7 +141,7 @@ class DStarLiteSolver:
             
             # CRITICAL FIX: Get proper predecessor states using environment's movement logic
             # We need to find all states that can reach this state in ONE move
-            for _action, (dr, dc) in ACTION_DELTAS.items():
+            for dr, dc in self._iter_action_deltas():
                 pred_r = state.position[0] - dr
                 pred_c = state.position[1] - dc
                 
@@ -184,7 +201,7 @@ class DStarLiteSolver:
         goal_hash = hash(goal_state)
         
         iterations = 0
-        max_iterations = 100000
+        max_iterations = max(10_000, int(self.timeout) * 20)
         
         while iterations < max_iterations:
             # Clean lazy-deleted entries from open set
@@ -269,7 +286,13 @@ class DStarLiteSolver:
                 from .validator import StateSpaceAStar
                 logger.warning("D* Lite primary search failed; falling back to StateSpaceAStar")
                 self.used_fallback = True
-                fallback = StateSpaceAStar(self.env, heuristic_mode=self.heuristic_mode)
+                fallback = StateSpaceAStar(
+                    self.env,
+                    timeout=max(int(self.timeout), 50_000),
+                    heuristic_mode=self.heuristic_mode,
+                    priority_options={"allow_diagonals": bool(self.allow_diagonals)},
+                    search_mode="astar",
+                )
                 fallback_success, fallback_path, fallback_nodes = fallback.solve()
 
                 # If locked doors exist but the fallback path ignores them, attempt a
@@ -514,7 +537,7 @@ class DStarLiteSolver:
         """Get all valid successor states using proper state transition logic."""
         successors = []
         
-        for _action, (dr, dc) in ACTION_DELTAS.items():
+        for dr, dc in self._iter_action_deltas():
             new_r = state.position[0] + dr
             new_c = state.position[1] + dc
             

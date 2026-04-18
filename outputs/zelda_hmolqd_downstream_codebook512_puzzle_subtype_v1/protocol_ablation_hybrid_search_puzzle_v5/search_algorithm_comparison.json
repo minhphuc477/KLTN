@@ -1,0 +1,1137 @@
+{
+  "diffusion_cfg3_logic0_steps50": {
+    "search_suite_version": "2026-04-15.validation_search_suite_v2",
+    "tile_state_space": {
+      "astar": {
+        "success_rate": 1.0,
+        "independent_success_rate": 1.0,
+        "fallback_rate": 0.0,
+        "avg_path_length": 90.0,
+        "avg_states_explored": 86965.66666666667,
+        "avg_time_sec": 5.901596766666141,
+        "avg_path_ratio_vs_astar": 1.0,
+        "avg_states_ratio_vs_astar": 1.0
+      },
+      "bfs": {
+        "success_rate": 0.0,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 50000.0,
+        "avg_time_sec": 2.6572781999978665,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "dijkstra": {
+        "success_rate": 0.0,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 50000.0,
+        "avg_time_sec": 3.431086166667228,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "greedy": {
+        "success_rate": 0.0,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 50000.0,
+        "avg_time_sec": 3.058267899999919,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "dstar_lite": {
+        "success_rate": 1.0,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 1.0,
+        "avg_path_length": 90.0,
+        "avg_states_explored": 86965.66666666667,
+        "avg_time_sec": 51.84490096666559,
+        "avg_path_ratio_vs_astar": 1.0,
+        "avg_states_ratio_vs_astar": 1.0
+      },
+      "dfs_iddfs": {
+        "success_rate": 0.0,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 110238.66666666667,
+        "avg_time_sec": 2.6343582333356608,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "bidirectional_astar": {
+        "success_rate": 1.0,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 1.0,
+        "avg_path_length": 90.0,
+        "avg_states_explored": 86965.66666666667,
+        "avg_time_sec": 5.9633444000016125,
+        "avg_path_ratio_vs_astar": 1.0,
+        "avg_states_ratio_vs_astar": 1.0
+      }
+    },
+    "agreement": {
+      "astar_success": 1.0,
+      "bfs_matches_astar_path_length": 0.0,
+      "dijkstra_matches_astar_path_length": 0.0,
+      "all_algorithms_solved": 0.0
+    },
+    "behavioral_probe": {
+      "cbs_balanced": {
+        "success_rate": 0.6666666666666666,
+        "avg_path_length": 6201.666666666667,
+        "avg_states_explored": 6200.666666666667,
+        "avg_confusion_ratio_vs_astar": 9.488888888888889,
+        "avg_confusion_index": 40.175661969748425,
+        "avg_navigation_entropy": 1.827349528350301,
+        "avg_cognitive_load": 0.20895853349077473
+      }
+    },
+    "oracle_stack": {
+      "astar_grid_solvable_rate": 1.0,
+      "softlock_safe_rate": 1.0,
+      "goal_gauntlet_valid_rate": 1.0
+    },
+    "excluded_algorithms": {
+      "parallel_astar": "Excluded from canonical export validation because multiprocessing adds high runtime overhead and non-trivial platform variance while targeting the same optimality contract as A*.",
+      "multi_goal": "Excluded because end-to-end dungeon validation here is single-goal START->TRIFORCE, not multi-goal routing.",
+      "key_economy_validator": "Excluded because it validates graph-level key economy, not tile/grid playability.",
+      "solver_comparison": "Excluded because it is a benchmark harness, not an independent solver."
+    }
+  },
+  "fast_cfg3_logic0_steps4": {
+    "search_suite_version": "2026-04-15.validation_search_suite_v2",
+    "tile_state_space": {
+      "astar": {
+        "success_rate": 0.6666666666666666,
+        "independent_success_rate": 0.6666666666666666,
+        "fallback_rate": 0.0,
+        "avg_path_length": 60.0,
+        "avg_states_explored": 91360.33333333333,
+        "avg_time_sec": 6.686269033334004,
+        "avg_path_ratio_vs_astar": 1.0,
+        "avg_states_ratio_vs_astar": 1.0
+      },
+      "bfs": {
+        "success_rate": 0.0,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 50000.0,
+        "avg_time_sec": 2.6132354333312833,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "dijkstra": {
+        "success_rate": 0.0,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 50000.0,
+        "avg_time_sec": 3.6638848333313945,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "greedy": {
+        "success_rate": 0.0,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 50000.0,
+        "avg_time_sec": 2.906784733335371,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "dstar_lite": {
+        "success_rate": 0.6666666666666666,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 1.0,
+        "avg_path_length": 60.0,
+        "avg_states_explored": 58027.0,
+        "avg_time_sec": 34.87036483333213,
+        "avg_path_ratio_vs_astar": 1.0,
+        "avg_states_ratio_vs_astar": 1.0
+      },
+      "dfs_iddfs": {
+        "success_rate": 0.0,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 109906.0,
+        "avg_time_sec": 2.695654533332951,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "bidirectional_astar": {
+        "success_rate": 0.6666666666666666,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 1.0,
+        "avg_path_length": 60.0,
+        "avg_states_explored": 58027.0,
+        "avg_time_sec": 3.922384299997551,
+        "avg_path_ratio_vs_astar": 1.0,
+        "avg_states_ratio_vs_astar": 1.0
+      }
+    },
+    "agreement": {
+      "astar_success": 0.6666666666666666,
+      "bfs_matches_astar_path_length": 0.0,
+      "dijkstra_matches_astar_path_length": 0.0,
+      "all_algorithms_solved": 0.0
+    },
+    "behavioral_probe": {
+      "cbs_balanced": {
+        "success_rate": 0.6666666666666666,
+        "avg_path_length": 5859.666666666667,
+        "avg_states_explored": 5858.666666666667,
+        "avg_confusion_ratio_vs_astar": 3.7888888888888888,
+        "avg_confusion_index": 118.15925536881419,
+        "avg_navigation_entropy": 1.945945012132574,
+        "avg_cognitive_load": 0.5450472690815032
+      }
+    },
+    "oracle_stack": {
+      "astar_grid_solvable_rate": 0.6666666666666666,
+      "softlock_safe_rate": 1.0,
+      "goal_gauntlet_valid_rate": 1.0
+    },
+    "excluded_algorithms": {
+      "parallel_astar": "Excluded from canonical export validation because multiprocessing adds high runtime overhead and non-trivial platform variance while targeting the same optimality contract as A*.",
+      "multi_goal": "Excluded because end-to-end dungeon validation here is single-goal START->TRIFORCE, not multi-goal routing.",
+      "key_economy_validator": "Excluded because it validates graph-level key economy, not tile/grid playability.",
+      "solver_comparison": "Excluded because it is a benchmark harness, not an independent solver."
+    }
+  },
+  "masked_room_full": {
+    "search_suite_version": "2026-04-15.validation_search_suite_v2",
+    "tile_state_space": {
+      "astar": {
+        "success_rate": 1.0,
+        "independent_success_rate": 1.0,
+        "fallback_rate": 0.0,
+        "avg_path_length": 90.66666666666667,
+        "avg_states_explored": 89568.66666666667,
+        "avg_time_sec": 5.976121633335424,
+        "avg_path_ratio_vs_astar": 1.0,
+        "avg_states_ratio_vs_astar": 1.0
+      },
+      "bfs": {
+        "success_rate": 0.0,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 50000.0,
+        "avg_time_sec": 2.6210374666649536,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "dijkstra": {
+        "success_rate": 0.0,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 50000.0,
+        "avg_time_sec": 3.5452691333315065,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "greedy": {
+        "success_rate": 0.0,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 50000.0,
+        "avg_time_sec": 2.838088466669433,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "dstar_lite": {
+        "success_rate": 0.3333333333333333,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 1.0,
+        "avg_path_length": 30.0,
+        "avg_states_explored": 72611.33333333333,
+        "avg_time_sec": 19.001842766665504,
+        "avg_path_ratio_vs_astar": 1.0,
+        "avg_states_ratio_vs_astar": 1.0
+      },
+      "dfs_iddfs": {
+        "success_rate": 0.0,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 111084.33333333333,
+        "avg_time_sec": 2.7525350999979614,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "bidirectional_astar": {
+        "success_rate": 0.3333333333333333,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 1.0,
+        "avg_path_length": 30.0,
+        "avg_states_explored": 72611.33333333333,
+        "avg_time_sec": 5.251234399998793,
+        "avg_path_ratio_vs_astar": 1.0,
+        "avg_states_ratio_vs_astar": 1.0
+      }
+    },
+    "agreement": {
+      "astar_success": 1.0,
+      "bfs_matches_astar_path_length": 0.0,
+      "dijkstra_matches_astar_path_length": 0.0,
+      "all_algorithms_solved": 0.0
+    },
+    "behavioral_probe": {
+      "cbs_balanced": {
+        "success_rate": 1.0,
+        "avg_path_length": 2480.6666666666665,
+        "avg_states_explored": 2479.6666666666665,
+        "avg_confusion_ratio_vs_astar": 27.412238325281805,
+        "avg_confusion_index": 17.312327667838286,
+        "avg_navigation_entropy": 1.9661708504491424,
+        "avg_cognitive_load": 0.3127742865114388
+      }
+    },
+    "oracle_stack": {
+      "astar_grid_solvable_rate": 1.0,
+      "softlock_safe_rate": 1.0,
+      "goal_gauntlet_valid_rate": 1.0
+    },
+    "excluded_algorithms": {
+      "parallel_astar": "Excluded from canonical export validation because multiprocessing adds high runtime overhead and non-trivial platform variance while targeting the same optimality contract as A*.",
+      "multi_goal": "Excluded because end-to-end dungeon validation here is single-goal START->TRIFORCE, not multi-goal routing.",
+      "key_economy_validator": "Excluded because it validates graph-level key economy, not tile/grid playability.",
+      "solver_comparison": "Excluded because it is a benchmark harness, not an independent solver."
+    }
+  },
+  "fast_cfg3_logic0_steps4_no_fallback": {
+    "search_suite_version": "2026-04-15.validation_search_suite_v2",
+    "tile_state_space": {
+      "astar": {
+        "success_rate": 1.0,
+        "independent_success_rate": 1.0,
+        "fallback_rate": 0.0,
+        "avg_path_length": 90.0,
+        "avg_states_explored": 80789.66666666667,
+        "avg_time_sec": 5.451946200000141,
+        "avg_path_ratio_vs_astar": 1.0,
+        "avg_states_ratio_vs_astar": 1.0
+      },
+      "bfs": {
+        "success_rate": 0.0,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 50000.0,
+        "avg_time_sec": 2.7340120666631265,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "dijkstra": {
+        "success_rate": 0.0,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 50000.0,
+        "avg_time_sec": 3.7091079333331436,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "greedy": {
+        "success_rate": 0.0,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 50000.0,
+        "avg_time_sec": 3.180151266664325,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "dstar_lite": {
+        "success_rate": 1.0,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 1.0,
+        "avg_path_length": 90.0,
+        "avg_states_explored": 80789.66666666667,
+        "avg_time_sec": 45.74189830000008,
+        "avg_path_ratio_vs_astar": 1.0,
+        "avg_states_ratio_vs_astar": 1.0
+      },
+      "dfs_iddfs": {
+        "success_rate": 0.0,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 114011.0,
+        "avg_time_sec": 2.793614966663881,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "bidirectional_astar": {
+        "success_rate": 1.0,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 1.0,
+        "avg_path_length": 90.0,
+        "avg_states_explored": 80789.66666666667,
+        "avg_time_sec": 5.739027133335185,
+        "avg_path_ratio_vs_astar": 1.0,
+        "avg_states_ratio_vs_astar": 1.0
+      }
+    },
+    "agreement": {
+      "astar_success": 1.0,
+      "bfs_matches_astar_path_length": 0.0,
+      "dijkstra_matches_astar_path_length": 0.0,
+      "all_algorithms_solved": 0.0
+    },
+    "behavioral_probe": {
+      "cbs_balanced": {
+        "success_rate": 1.0,
+        "avg_path_length": 412.0,
+        "avg_states_explored": 411.0,
+        "avg_confusion_ratio_vs_astar": 4.5777777777777775,
+        "avg_confusion_index": 2.051851851851852,
+        "avg_navigation_entropy": 1.966379394770149,
+        "avg_cognitive_load": 0.31104200129539356
+      }
+    },
+    "oracle_stack": {
+      "astar_grid_solvable_rate": 1.0,
+      "softlock_safe_rate": 1.0,
+      "goal_gauntlet_valid_rate": 1.0
+    },
+    "excluded_algorithms": {
+      "parallel_astar": "Excluded from canonical export validation because multiprocessing adds high runtime overhead and non-trivial platform variance while targeting the same optimality contract as A*.",
+      "multi_goal": "Excluded because end-to-end dungeon validation here is single-goal START->TRIFORCE, not multi-goal routing.",
+      "key_economy_validator": "Excluded because it validates graph-level key economy, not tile/grid playability.",
+      "solver_comparison": "Excluded because it is a benchmark harness, not an independent solver."
+    }
+  },
+  "masked_room_full_no_fallback": {
+    "search_suite_version": "2026-04-15.validation_search_suite_v2",
+    "tile_state_space": {
+      "astar": {
+        "success_rate": 0.0,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 200000.0,
+        "avg_time_sec": 14.392246866666634,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "bfs": {
+        "success_rate": 0.0,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 50000.0,
+        "avg_time_sec": 3.118644899999102,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "dijkstra": {
+        "success_rate": 0.0,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 50000.0,
+        "avg_time_sec": 3.937739433335082,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "greedy": {
+        "success_rate": 0.0,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 50000.0,
+        "avg_time_sec": 3.2863318333329516,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "dstar_lite": {
+        "success_rate": 0.0,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 1.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 100000.0,
+        "avg_time_sec": 7.516692433334053,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "dfs_iddfs": {
+        "success_rate": 0.0,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 110532.0,
+        "avg_time_sec": 2.95930483333359,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "bidirectional_astar": {
+        "success_rate": 0.0,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 1.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 100000.0,
+        "avg_time_sec": 7.585204433332062,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      }
+    },
+    "agreement": {
+      "astar_success": 0.0,
+      "bfs_matches_astar_path_length": 0.0,
+      "dijkstra_matches_astar_path_length": 0.0,
+      "all_algorithms_solved": 0.0
+    },
+    "behavioral_probe": {
+      "cbs_balanced": {
+        "success_rate": 0.0,
+        "avg_path_length": 16897.0,
+        "avg_states_explored": 16896.0,
+        "avg_confusion_ratio_vs_astar": NaN,
+        "avg_confusion_index": 154.0183486238532,
+        "avg_navigation_entropy": 1.9999707250178609,
+        "avg_cognitive_load": 0.15462775484357286
+      }
+    },
+    "oracle_stack": {
+      "astar_grid_solvable_rate": 0.6666666666666666,
+      "softlock_safe_rate": 1.0,
+      "goal_gauntlet_valid_rate": 1.0
+    },
+    "excluded_algorithms": {
+      "parallel_astar": "Excluded from canonical export validation because multiprocessing adds high runtime overhead and non-trivial platform variance while targeting the same optimality contract as A*.",
+      "multi_goal": "Excluded because end-to-end dungeon validation here is single-goal START->TRIFORCE, not multi-goal routing.",
+      "key_economy_validator": "Excluded because it validates graph-level key economy, not tile/grid playability.",
+      "solver_comparison": "Excluded because it is a benchmark harness, not an independent solver."
+    }
+  },
+  "diffusion_cfg3_logic0_steps50_pure_neural": {
+    "search_suite_version": "2026-04-15.validation_search_suite_v2",
+    "tile_state_space": {
+      "astar": {
+        "success_rate": 0.3333333333333333,
+        "independent_success_rate": 0.3333333333333333,
+        "fallback_rate": 0.0,
+        "avg_path_length": 29.333333333333332,
+        "avg_states_explored": 67443.0,
+        "avg_time_sec": 5.146715199999259,
+        "avg_path_ratio_vs_astar": 1.0,
+        "avg_states_ratio_vs_astar": 1.0
+      },
+      "bfs": {
+        "success_rate": 0.0,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 33333.333333333336,
+        "avg_time_sec": 1.7299080333323218,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "dijkstra": {
+        "success_rate": 0.0,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 33333.333333333336,
+        "avg_time_sec": 2.3933509333316274,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "greedy": {
+        "success_rate": 0.0,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 33333.333333333336,
+        "avg_time_sec": 2.0531257999973604,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "dstar_lite": {
+        "success_rate": 0.3333333333333333,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 1.0,
+        "avg_path_length": 29.333333333333332,
+        "avg_states_explored": 34109.666666666664,
+        "avg_time_sec": 16.54216223333545,
+        "avg_path_ratio_vs_astar": 1.0,
+        "avg_states_ratio_vs_astar": 1.0
+      },
+      "dfs_iddfs": {
+        "success_rate": 0.0,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 72235.0,
+        "avg_time_sec": 1.7514941666692418,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "bidirectional_astar": {
+        "success_rate": 0.3333333333333333,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 0.6666666666666666,
+        "avg_path_length": 29.333333333333332,
+        "avg_states_explored": 34109.666666666664,
+        "avg_time_sec": 2.3979989666646966,
+        "avg_path_ratio_vs_astar": 1.0,
+        "avg_states_ratio_vs_astar": 1.0
+      }
+    },
+    "agreement": {
+      "astar_success": 0.3333333333333333,
+      "bfs_matches_astar_path_length": 0.0,
+      "dijkstra_matches_astar_path_length": 0.0,
+      "all_algorithms_solved": 0.0
+    },
+    "behavioral_probe": {
+      "cbs_balanced": {
+        "success_rate": 0.3333333333333333,
+        "avg_path_length": 5724.333333333333,
+        "avg_states_explored": 5723.666666666667,
+        "avg_confusion_ratio_vs_astar": NaN,
+        "avg_confusion_index": 36.91263616557734,
+        "avg_navigation_entropy": 1.2445338279385663,
+        "avg_cognitive_load": 0.10408055949606937
+      }
+    },
+    "oracle_stack": {
+      "astar_grid_solvable_rate": 0.0,
+      "softlock_safe_rate": 0.6666666666666666,
+      "goal_gauntlet_valid_rate": 1.0
+    },
+    "excluded_algorithms": {
+      "parallel_astar": "Excluded from canonical export validation because multiprocessing adds high runtime overhead and non-trivial platform variance while targeting the same optimality contract as A*.",
+      "multi_goal": "Excluded because end-to-end dungeon validation here is single-goal START->TRIFORCE, not multi-goal routing.",
+      "key_economy_validator": "Excluded because it validates graph-level key economy, not tile/grid playability.",
+      "solver_comparison": "Excluded because it is a benchmark harness, not an independent solver."
+    }
+  },
+  "fast_cfg3_logic0_steps4_pure_neural_no_fallback": {
+    "search_suite_version": "2026-04-15.validation_search_suite_v2",
+    "tile_state_space": {
+      "astar": {
+        "success_rate": 0.3333333333333333,
+        "independent_success_rate": 0.3333333333333333,
+        "fallback_rate": 0.0,
+        "avg_path_length": 29.333333333333332,
+        "avg_states_explored": 99509.0,
+        "avg_time_sec": 7.95043123333259,
+        "avg_path_ratio_vs_astar": 1.0,
+        "avg_states_ratio_vs_astar": 1.0
+      },
+      "bfs": {
+        "success_rate": 0.0,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 33333.333333333336,
+        "avg_time_sec": 1.7997727666637122,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "dijkstra": {
+        "success_rate": 0.0,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 33333.333333333336,
+        "avg_time_sec": 2.611762466663398,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "greedy": {
+        "success_rate": 0.0,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 33333.333333333336,
+        "avg_time_sec": 2.210121333334731,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "dstar_lite": {
+        "success_rate": 0.3333333333333333,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 1.0,
+        "avg_path_length": 29.333333333333332,
+        "avg_states_explored": 66175.66666666667,
+        "avg_time_sec": 22.61241123333457,
+        "avg_path_ratio_vs_astar": 1.0,
+        "avg_states_ratio_vs_astar": 1.0
+      },
+      "dfs_iddfs": {
+        "success_rate": 0.0,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 75953.66666666667,
+        "avg_time_sec": 1.8282548333299928,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "bidirectional_astar": {
+        "success_rate": 0.3333333333333333,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 0.6666666666666666,
+        "avg_path_length": 29.333333333333332,
+        "avg_states_explored": 66175.66666666667,
+        "avg_time_sec": 4.919833966666677,
+        "avg_path_ratio_vs_astar": 1.0,
+        "avg_states_ratio_vs_astar": 1.0
+      }
+    },
+    "agreement": {
+      "astar_success": 0.3333333333333333,
+      "bfs_matches_astar_path_length": 0.0,
+      "dijkstra_matches_astar_path_length": 0.0,
+      "all_algorithms_solved": 0.0
+    },
+    "behavioral_probe": {
+      "cbs_balanced": {
+        "success_rate": 0.3333333333333333,
+        "avg_path_length": 5782.333333333333,
+        "avg_states_explored": 5781.666666666667,
+        "avg_confusion_ratio_vs_astar": 5.113636363636363,
+        "avg_confusion_index": 50.7249649859944,
+        "avg_navigation_entropy": 1.289250914097195,
+        "avg_cognitive_load": 0.3630512016235989
+      }
+    },
+    "oracle_stack": {
+      "astar_grid_solvable_rate": 0.3333333333333333,
+      "softlock_safe_rate": 0.6666666666666666,
+      "goal_gauntlet_valid_rate": 1.0
+    },
+    "excluded_algorithms": {
+      "parallel_astar": "Excluded from canonical export validation because multiprocessing adds high runtime overhead and non-trivial platform variance while targeting the same optimality contract as A*.",
+      "multi_goal": "Excluded because end-to-end dungeon validation here is single-goal START->TRIFORCE, not multi-goal routing.",
+      "key_economy_validator": "Excluded because it validates graph-level key economy, not tile/grid playability.",
+      "solver_comparison": "Excluded because it is a benchmark harness, not an independent solver."
+    }
+  },
+  "masked_room_full_pure_neural_no_fallback": {
+    "search_suite_version": "2026-04-15.validation_search_suite_v2",
+    "tile_state_space": {
+      "astar": {
+        "success_rate": 0.3333333333333333,
+        "independent_success_rate": 0.3333333333333333,
+        "fallback_rate": 0.0,
+        "avg_path_length": 29.333333333333332,
+        "avg_states_explored": 171567.66666666666,
+        "avg_time_sec": 12.946993933333337,
+        "avg_path_ratio_vs_astar": 1.0,
+        "avg_states_ratio_vs_astar": 1.0
+      },
+      "bfs": {
+        "success_rate": 0.0,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 50000.0,
+        "avg_time_sec": 2.9351278666654252,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "dijkstra": {
+        "success_rate": 0.0,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 50000.0,
+        "avg_time_sec": 3.936814500001977,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "greedy": {
+        "success_rate": 0.0,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 50000.0,
+        "avg_time_sec": 3.3797271000003093,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "dstar_lite": {
+        "success_rate": 0.0,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 1.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 100000.0,
+        "avg_time_sec": 7.53068259999903,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "dfs_iddfs": {
+        "success_rate": 0.0,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 110532.0,
+        "avg_time_sec": 2.9550973666652376,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "bidirectional_astar": {
+        "success_rate": 0.0,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 1.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 100000.0,
+        "avg_time_sec": 7.60331329999705,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      }
+    },
+    "agreement": {
+      "astar_success": 0.3333333333333333,
+      "bfs_matches_astar_path_length": 0.0,
+      "dijkstra_matches_astar_path_length": 0.0,
+      "all_algorithms_solved": 0.0
+    },
+    "behavioral_probe": {
+      "cbs_balanced": {
+        "success_rate": 0.3333333333333333,
+        "avg_path_length": 11428.0,
+        "avg_states_explored": 11427.0,
+        "avg_confusion_ratio_vs_astar": 5.568181818181818,
+        "avg_confusion_index": 114.84960647833726,
+        "avg_navigation_entropy": 1.775313283822137,
+        "avg_cognitive_load": 0.8215403927564547
+      }
+    },
+    "oracle_stack": {
+      "astar_grid_solvable_rate": 0.3333333333333333,
+      "softlock_safe_rate": 1.0,
+      "goal_gauntlet_valid_rate": 1.0
+    },
+    "excluded_algorithms": {
+      "parallel_astar": "Excluded from canonical export validation because multiprocessing adds high runtime overhead and non-trivial platform variance while targeting the same optimality contract as A*.",
+      "multi_goal": "Excluded because end-to-end dungeon validation here is single-goal START->TRIFORCE, not multi-goal routing.",
+      "key_economy_validator": "Excluded because it validates graph-level key economy, not tile/grid playability.",
+      "solver_comparison": "Excluded because it is a benchmark harness, not an independent solver."
+    }
+  },
+  "diffusion_cfg3_logic0_steps50_no_puzzle": {
+    "search_suite_version": "2026-04-15.validation_search_suite_v2",
+    "tile_state_space": {
+      "astar": {
+        "success_rate": 1.0,
+        "independent_success_rate": 1.0,
+        "fallback_rate": 0.0,
+        "avg_path_length": 90.0,
+        "avg_states_explored": 14988.666666666666,
+        "avg_time_sec": 1.053274233333165,
+        "avg_path_ratio_vs_astar": 1.0,
+        "avg_states_ratio_vs_astar": 1.0
+      },
+      "bfs": {
+        "success_rate": 0.0,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 50000.0,
+        "avg_time_sec": 2.2361358333340227,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "dijkstra": {
+        "success_rate": 0.0,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 50000.0,
+        "avg_time_sec": 3.0760739000009685,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "greedy": {
+        "success_rate": 0.3333333333333333,
+        "independent_success_rate": 0.3333333333333333,
+        "fallback_rate": 0.0,
+        "avg_path_length": 65.33333333333333,
+        "avg_states_explored": 37000.0,
+        "avg_time_sec": 2.247733399999561,
+        "avg_path_ratio_vs_astar": 2.1777777777777776,
+        "avg_states_ratio_vs_astar": 5.365853658536586
+      },
+      "dstar_lite": {
+        "success_rate": 1.0,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 1.0,
+        "avg_path_length": 90.0,
+        "avg_states_explored": 14988.666666666666,
+        "avg_time_sec": 26.018137500000496,
+        "avg_path_ratio_vs_astar": 1.0,
+        "avg_states_ratio_vs_astar": 1.0
+      },
+      "dfs_iddfs": {
+        "success_rate": 0.0,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 110238.66666666667,
+        "avg_time_sec": 2.671263566665099,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "bidirectional_astar": {
+        "success_rate": 1.0,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 1.0,
+        "avg_path_length": 90.0,
+        "avg_states_explored": 14988.666666666666,
+        "avg_time_sec": 1.1979162000012973,
+        "avg_path_ratio_vs_astar": 1.0,
+        "avg_states_ratio_vs_astar": 1.0
+      }
+    },
+    "agreement": {
+      "astar_success": 1.0,
+      "bfs_matches_astar_path_length": 0.0,
+      "dijkstra_matches_astar_path_length": 0.0,
+      "all_algorithms_solved": 0.0,
+      "greedy_suboptimality_vs_astar": 2.1777777777777776
+    },
+    "behavioral_probe": {
+      "cbs_balanced": {
+        "success_rate": 0.6666666666666666,
+        "avg_path_length": 6201.666666666667,
+        "avg_states_explored": 6200.666666666667,
+        "avg_confusion_ratio_vs_astar": 9.488888888888889,
+        "avg_confusion_index": 40.175661969748425,
+        "avg_navigation_entropy": 1.827349528350301,
+        "avg_cognitive_load": 0.20895853349077473
+      }
+    },
+    "oracle_stack": {
+      "astar_grid_solvable_rate": 1.0,
+      "softlock_safe_rate": 1.0,
+      "goal_gauntlet_valid_rate": 1.0
+    },
+    "excluded_algorithms": {
+      "parallel_astar": "Excluded from canonical export validation because multiprocessing adds high runtime overhead and non-trivial platform variance while targeting the same optimality contract as A*.",
+      "multi_goal": "Excluded because end-to-end dungeon validation here is single-goal START->TRIFORCE, not multi-goal routing.",
+      "key_economy_validator": "Excluded because it validates graph-level key economy, not tile/grid playability.",
+      "solver_comparison": "Excluded because it is a benchmark harness, not an independent solver."
+    }
+  },
+  "fast_cfg3_logic0_steps4_no_puzzle": {
+    "search_suite_version": "2026-04-15.validation_search_suite_v2",
+    "tile_state_space": {
+      "astar": {
+        "success_rate": 1.0,
+        "independent_success_rate": 1.0,
+        "fallback_rate": 0.0,
+        "avg_path_length": 90.0,
+        "avg_states_explored": 34931.0,
+        "avg_time_sec": 2.2022075666682213,
+        "avg_path_ratio_vs_astar": 1.0,
+        "avg_states_ratio_vs_astar": 1.0
+      },
+      "bfs": {
+        "success_rate": 0.0,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 50000.0,
+        "avg_time_sec": 2.371377166666207,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "dijkstra": {
+        "success_rate": 0.0,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 50000.0,
+        "avg_time_sec": 3.236983566666216,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "greedy": {
+        "success_rate": 0.6666666666666666,
+        "independent_success_rate": 0.6666666666666666,
+        "fallback_rate": 0.0,
+        "avg_path_length": 122.66666666666667,
+        "avg_states_explored": 33560.333333333336,
+        "avg_time_sec": 1.8590841333304222,
+        "avg_path_ratio_vs_astar": 2.0444444444444443,
+        "avg_states_ratio_vs_astar": 13.415344614842235
+      },
+      "dstar_lite": {
+        "success_rate": 0.6666666666666666,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 1.0,
+        "avg_path_length": 60.0,
+        "avg_states_explored": 34571.666666666664,
+        "avg_time_sec": 3.4427348666722537,
+        "avg_path_ratio_vs_astar": 1.0,
+        "avg_states_ratio_vs_astar": 1.0
+      },
+      "dfs_iddfs": {
+        "success_rate": 0.0,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 109789.66666666667,
+        "avg_time_sec": 2.681267499998891,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "bidirectional_astar": {
+        "success_rate": 0.6666666666666666,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 1.0,
+        "avg_path_length": 60.0,
+        "avg_states_explored": 34571.666666666664,
+        "avg_time_sec": 2.3977754333318444,
+        "avg_path_ratio_vs_astar": 1.0,
+        "avg_states_ratio_vs_astar": 1.0
+      }
+    },
+    "agreement": {
+      "astar_success": 1.0,
+      "bfs_matches_astar_path_length": 0.0,
+      "dijkstra_matches_astar_path_length": 0.0,
+      "greedy_suboptimality_vs_astar": 2.0444444444444443,
+      "all_algorithms_solved": 0.0
+    },
+    "behavioral_probe": {
+      "cbs_balanced": {
+        "success_rate": 0.6666666666666666,
+        "avg_path_length": 5854.333333333333,
+        "avg_states_explored": 5853.333333333333,
+        "avg_confusion_ratio_vs_astar": 3.7,
+        "avg_confusion_index": 118.09087114489562,
+        "avg_navigation_entropy": 1.946156252582358,
+        "avg_cognitive_load": 0.5449434343023123
+      }
+    },
+    "oracle_stack": {
+      "astar_grid_solvable_rate": 1.0,
+      "softlock_safe_rate": 1.0,
+      "goal_gauntlet_valid_rate": 1.0
+    },
+    "excluded_algorithms": {
+      "parallel_astar": "Excluded from canonical export validation because multiprocessing adds high runtime overhead and non-trivial platform variance while targeting the same optimality contract as A*.",
+      "multi_goal": "Excluded because end-to-end dungeon validation here is single-goal START->TRIFORCE, not multi-goal routing.",
+      "key_economy_validator": "Excluded because it validates graph-level key economy, not tile/grid playability.",
+      "solver_comparison": "Excluded because it is a benchmark harness, not an independent solver."
+    }
+  },
+  "masked_room_full_no_puzzle": {
+    "search_suite_version": "2026-04-15.validation_search_suite_v2",
+    "tile_state_space": {
+      "astar": {
+        "success_rate": 1.0,
+        "independent_success_rate": 1.0,
+        "fallback_rate": 0.0,
+        "avg_path_length": 90.66666666666667,
+        "avg_states_explored": 6900.333333333333,
+        "avg_time_sec": 0.3800740666653534,
+        "avg_path_ratio_vs_astar": 1.0,
+        "avg_states_ratio_vs_astar": 1.0
+      },
+      "bfs": {
+        "success_rate": 0.0,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 50000.0,
+        "avg_time_sec": 2.6362878999983272,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "dijkstra": {
+        "success_rate": 0.0,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 50000.0,
+        "avg_time_sec": 3.386605633335421,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "greedy": {
+        "success_rate": 0.0,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 50000.0,
+        "avg_time_sec": 3.0730384000004656,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "dstar_lite": {
+        "success_rate": 1.0,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 1.0,
+        "avg_path_length": 90.66666666666667,
+        "avg_states_explored": 6900.333333333333,
+        "avg_time_sec": 39.71676879999965,
+        "avg_path_ratio_vs_astar": 1.0,
+        "avg_states_ratio_vs_astar": 1.0
+      },
+      "dfs_iddfs": {
+        "success_rate": 0.0,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 0.0,
+        "avg_path_length": 0.0,
+        "avg_states_explored": 111084.33333333333,
+        "avg_time_sec": 2.6485538000027495,
+        "avg_path_ratio_vs_astar": null,
+        "avg_states_ratio_vs_astar": null
+      },
+      "bidirectional_astar": {
+        "success_rate": 1.0,
+        "independent_success_rate": 0.0,
+        "fallback_rate": 1.0,
+        "avg_path_length": 90.66666666666667,
+        "avg_states_explored": 6900.333333333333,
+        "avg_time_sec": 0.589947866666383,
+        "avg_path_ratio_vs_astar": 1.0,
+        "avg_states_ratio_vs_astar": 1.0
+      }
+    },
+    "agreement": {
+      "astar_success": 1.0,
+      "bfs_matches_astar_path_length": 0.0,
+      "dijkstra_matches_astar_path_length": 0.0,
+      "all_algorithms_solved": 0.0
+    },
+    "behavioral_probe": {
+      "cbs_balanced": {
+        "success_rate": 1.0,
+        "avg_path_length": 1824.6666666666667,
+        "avg_states_explored": 1823.6666666666667,
+        "avg_confusion_ratio_vs_astar": 20.154106280193236,
+        "avg_confusion_index": 11.500626686996986,
+        "avg_navigation_entropy": 1.9935979675772952,
+        "avg_cognitive_load": 0.3118640554051042
+      }
+    },
+    "oracle_stack": {
+      "astar_grid_solvable_rate": 1.0,
+      "softlock_safe_rate": 1.0,
+      "goal_gauntlet_valid_rate": 1.0
+    },
+    "excluded_algorithms": {
+      "parallel_astar": "Excluded from canonical export validation because multiprocessing adds high runtime overhead and non-trivial platform variance while targeting the same optimality contract as A*.",
+      "multi_goal": "Excluded because end-to-end dungeon validation here is single-goal START->TRIFORCE, not multi-goal routing.",
+      "key_economy_validator": "Excluded because it validates graph-level key economy, not tile/grid playability.",
+      "solver_comparison": "Excluded because it is a benchmark harness, not an independent solver."
+    }
+  }
+}

@@ -279,13 +279,24 @@ def _build_topology_compare_manual_parser(subparsers: argparse._SubParsersAction
         help="Optional path to a user-authored mission_graph.json. If omitted, the built-in rich manual topology is used.",
     )
     compare_parser.add_argument("--seed", type=int, default=20260406)
+    compare_parser.add_argument(
+        "--variants",
+        type=str,
+        default="diffusion_cfg3_logic0_steps50,fast_cfg3_logic0_steps4,masked_room_full",
+        help="Comma-separated subset of manual-comparison variants to run.",
+    )
+    compare_parser.add_argument(
+        "--reuse-existing-variants",
+        action="store_true",
+        help="Reuse existing per-variant summary.json files when present.",
+    )
     add_generation_export_override_args(compare_parser)
 
 
 def _build_topology_fixed_graph_audit_parser(subparsers: argparse._SubParsersAction) -> None:
     fixed_parser = subparsers.add_parser(
         "topology-audit-fixed-graph",
-        help="Re-run diffusion / fast-sampler on one fixed mission graph across multiple seeds.",
+        help="Re-run diffusion / fast-sampler / masked-room on one fixed mission graph across multiple seeds.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     fixed_parser.add_argument("--run-dir", type=Path, required=True)
@@ -302,6 +313,16 @@ def _build_topology_fixed_graph_audit_parser(subparsers: argparse._SubParsersAct
         nargs="+",
         default=[20260404, 20260405, 20260406],
         help="Seeds to audit on the same fixed mission graph.",
+    )
+    fixed_parser.add_argument(
+        "--include-no-fallback-ablations",
+        action="store_true",
+        help="Also export strict no-fallback and pure-neural no-overlay variants for branch-audit runs.",
+    )
+    fixed_parser.add_argument(
+        "--include-puzzle-ablations",
+        action="store_true",
+        help="Also export puzzle-off variants with puzzle_room_scaffold_enabled=False.",
     )
     add_generation_export_override_args(fixed_parser)
 

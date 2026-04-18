@@ -1,6 +1,6 @@
 # KLTN Documentation Index
 
-Last updated: 2026-04-15
+Last updated: 2026-04-17
 
 This is the canonical navigation page for `docs/`. The goal is simple:
 
@@ -27,6 +27,16 @@ This is the canonical navigation page for `docs/`. The goal is simple:
   [`DOWNSTREAM_CODEBOOK512_PUZZLE_SUBTYPE_PROTOCOL_RESULTS_2026_04_15.md`](DOWNSTREAM_CODEBOOK512_PUZZLE_SUBTYPE_PROTOCOL_RESULTS_2026_04_15.md)
 - Auxiliary-branch / hybrid-vs-neural decision audit:
   [`AUXILIARY_BRANCH_AND_NEURAL_SEMANTICS_AUDIT_2026_04_15.md`](AUXILIARY_BRANCH_AND_NEURAL_SEMANTICS_AUDIT_2026_04_15.md)
+- Playability evaluation / CBS research note:
+  [`PLAYABILITY_EVALUATION_AND_CBS_RESEARCH_2026_04_16.md`](PLAYABILITY_EVALUATION_AND_CBS_RESEARCH_2026_04_16.md)
+- Reviewer-2 novelty / claim audit for P-CBS:
+  [`PCBS_REVIEWER2_NOVELTY_AUDIT_2026_04_17.md`](PCBS_REVIEWER2_NOVELTY_AUDIT_2026_04_17.md)
+- P-CBS affordance-memory upgrade and component-ablation note:
+  [`PCBS_AFFORDANCE_MEMORY_AND_ABLATION_2026_04_17.md`](PCBS_AFFORDANCE_MEMORY_AND_ABLATION_2026_04_17.md)
+- Latest end-to-end protocol status / production-branch decision:
+  [`FINAL_PROTOCOL_AND_PLAYABILITY_STATUS_2026_04_17.md`](FINAL_PROTOCOL_AND_PLAYABILITY_STATUS_2026_04_17.md)
+- Final architecture verdict, ablation synthesis, and exact training/eval commands:
+  [`FINAL_ABLATION_AND_ARCHITECTURE_VERDICT_2026_04_17.md`](FINAL_ABLATION_AND_ARCHITECTURE_VERDICT_2026_04_17.md)
 - Latest VQ-VAE audit and recommendation:
   [`VQVAE_RESEARCH_AUDIT_2026_04_10.md`](VQVAE_RESEARCH_AUDIT_2026_04_10.md)
 - Broad architecture research audit:

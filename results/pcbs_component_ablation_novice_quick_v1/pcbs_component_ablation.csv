@@ -1,0 +1,6 @@
+map_id,ablation,persona,success,path_length,states_explored,confusion_index,navigation_entropy,cognitive_load,aha_latency,deliberation_events,budget_exhaustion_events,peak_frustration,affordance_reactivations,affordance_guided_steps,inventory_change_events,oracle_status,oracle_success,confusion_ratio,solver_status,time_ms
+D1_v1,full,novice,0,10001,10000,59.9817,1.094,0.0,0,5000,4994,1.3595,0,0,0,timeout,0,nan,timeout,10614.442
+D1_v1,no_revisit,novice,0,10001,10000,60.7346,1.1029,0.0,0,4999,4992,1.4103,0,0,0,timeout,0,nan,timeout,10401.772
+D1_v1,no_uncertainty,novice,0,10001,10000,43.6473,1.1616,0.0,0,5000,4994,1.5345,0,6,1,timeout,0,nan,timeout,10942.16
+D1_v1,no_deliberation,novice,0,10001,10000,59.9817,1.0928,0.0,0,0,0,1.3665,0,0,0,timeout,0,nan,timeout,6216.465
+D1_v1,no_affordance,novice,0,10001,10000,59.9817,1.094,0.0,0,5000,4994,1.3595,0,0,0,timeout,0,nan,timeout,10368.211

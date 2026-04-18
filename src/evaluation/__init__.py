@@ -36,6 +36,12 @@ from .cbs_fitness import (
     compute_cbs_fitness,
     cbs_loss_term,
 )
+from .pcbs_validation import (
+    PreparedValidationDungeon,
+    prepare_dungeon_grid_for_validation,
+    evaluate_astar_vs_pcbs,
+    build_ieee_markdown_table,
+)
 
 _BENCHMARK_EXPORTS = [
     'GraphDescriptor',
@@ -81,6 +87,11 @@ __all__ = [
     # CBS Fitness
     'compute_cbs_fitness',
     'cbs_loss_term',
+    # Validation handoff / P-CBS evaluation
+    'PreparedValidationDungeon',
+    'prepare_dungeon_grid_for_validation',
+    'evaluate_astar_vs_pcbs',
+    'build_ieee_markdown_table',
     # Benchmark suite (lazy-loaded)
     *_BENCHMARK_EXPORTS,
 ]

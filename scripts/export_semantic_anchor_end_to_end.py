@@ -38,12 +38,19 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from scripts.run_fast_sampler_visual_audit import (
     _resolve_vqvae_checkpoint,
+    _resolve_export_device,
+    _resolve_export_execution_kwargs,
+    _generate_dungeon_with_oom_backoff,
     add_generation_override_args,
+    build_validation_context_from_generation_result,
     build_pipeline,
+    _compute_generation_validation,
+    build_validation_search_stats_payload,
     export_variant,
     generation_overrides_from_namespace,
     _generation_policy_summary,
     save_grid_png,
+    save_grid_json,
     save_grid_txt,
     save_rooms_sheet,
     save_stylized_grid_png,
@@ -80,12 +87,14 @@ def build_masked_room_pipeline(
     run_dir: Path,
     *,
     generation_overrides: Dict[str, Any] | None = None,
+    device_override: str | None = None,
 ) -> NeuralSymbolicDungeonPipeline:
     resolved = json.loads((run_dir / "resolved_config.json").read_text(encoding="utf-8"))
     if generation_overrides:
         generation = resolved.setdefault("generation", {})
         for key, value in generation_overrides.items():
             generation[str(key)] = value
+    export_device = str(device_override).strip().lower() if device_override else _resolve_export_device(resolved)
     pipeline_kwargs = pipeline_kwargs_from_resolved_config(resolved)
     vqvae_checkpoint = _resolve_vqvae_checkpoint(run_dir)
     masked_room_checkpoint = _resolve_masked_room_checkpoint(run_dir)
@@ -103,7 +112,7 @@ def build_masked_room_pipeline(
         diffusion_checkpoint=str(diffusion_checkpoint) if diffusion_checkpoint.exists() else None,
         condition_encoder_checkpoint=str(masked_room_checkpoint),
         logic_net_checkpoint=str(diffusion_checkpoint) if diffusion_checkpoint.exists() else None,
-        device="auto",
+        device=export_device,
         enable_logging=False,
         **pipeline_kwargs,
     )
@@ -118,14 +127,20 @@ def export_masked_variant(
     seed: int,
     generation_overrides: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
-    pipeline = build_masked_room_pipeline(run_dir, generation_overrides=generation_overrides)
-    pipeline.runtime_diagnostics = {}
-    result = pipeline.generate_dungeon(
-        mission_graph=copy.deepcopy(mission_graph),
-        generate_topology=False,
-        apply_repair=True,
-        enable_map_elites=False,
-        seed=int(seed),
+    execution_kwargs = _resolve_export_execution_kwargs()
+    pipeline, result, generation_execution = _generate_dungeon_with_oom_backoff(
+        pipeline_builder=build_masked_room_pipeline,
+        run_dir=run_dir,
+        mission_graph=mission_graph,
+        generation_overrides=generation_overrides,
+        execution_kwargs=execution_kwargs,
+        status_writer=lambda *_args, **_kwargs: None,
+        generation_kwargs={
+            "generate_topology": False,
+            "apply_repair": True,
+            "enable_map_elites": False,
+            "seed": int(seed),
+        },
     )
 
     variant_dir = out_dir / variant_name
@@ -143,6 +158,7 @@ def export_masked_variant(
 
     dungeon_grid = np.asarray(result.dungeon_grid, dtype=np.int32)
     save_grid_png(dungeon_grid, variant_dir / "dungeon_grid.png", tile_px=16, crop_void=False)
+    save_grid_json(dungeon_grid, variant_dir / "dungeon_grid_ids.json")
     preview = save_grid_txt(dungeon_grid, variant_dir / "dungeon_grid.txt")
     (variant_dir / "preview.txt").write_text(preview, encoding="utf-8")
     save_stylized_grid_png(dungeon_grid, variant_dir / "dungeon_grid_stylized.png", tile_px=20, crop_void=True)
@@ -155,18 +171,34 @@ def export_masked_variant(
         variant_dir=variant_dir,
         tile_px=20,
     )
+    result_metrics = dict(result.metrics)
+    generation_time_sec = float(result.generation_time)
+    runtime_diagnostics = dict(pipeline.runtime_diagnostics)
+    topology_anchor_policy = _generation_policy_summary(pipeline)
+    validation_context = build_validation_context_from_generation_result(result)
+    del room_grids
+    del pipeline
+    del result
+    _release_torch_memory()
+    validation = _compute_generation_validation(
+        dungeon_grid=dungeon_grid,
+        mission_graph=mission_graph,
+        **validation_context,
+    )
 
     summary = {
         "name": variant_name,
         "room_generator_mode": "discrete_masked",
+        "generation_overrides_applied": dict(generation_overrides or {}),
+        "generation_execution": generation_execution,
         "metrics": {
-            **dict(result.metrics),
-            "generation_time_sec": float(result.generation_time),
+            **result_metrics,
+            "generation_time_sec": generation_time_sec,
         },
-        "runtime_diagnostics": dict(pipeline.runtime_diagnostics),
-        "topology_anchor_policy": _generation_policy_summary(pipeline),
+        "runtime_diagnostics": runtime_diagnostics,
+        "topology_anchor_policy": topology_anchor_policy,
         "semantic_metrics": {
-            key: dict(result.metrics).get(key)
+            key: result_metrics.get(key)
             for key in (
                 "total_graph_marker_expected",
                 "total_graph_marker_overwrites",
@@ -187,10 +219,13 @@ def export_masked_variant(
             "primary_quality_metric_value": layout_payload.get("primary_quality_metric_value"),
             **dict(layout_payload.get("layout_quality", {})),
         },
+        "validation": validation,
     }
     (variant_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
-    del result
-    del pipeline
+    (variant_dir / "validation_search_stats.json").write_text(
+        json.dumps(build_validation_search_stats_payload(summary.get("validation", {})), indent=2),
+        encoding="utf-8",
+    )
     _release_torch_memory()
     return summary
 

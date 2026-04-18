@@ -329,29 +329,29 @@ Cách tổ chức này cho phép mô hình duy trì quan hệ khóa -- chìa, k�
 Từ đó, khóa luận khẳng định tính khả thi của hướng tiếp cận graph-first kết hợp latent diffusion và sửa lỗi ký hiệu cho bài toán tạo sinh dungeon Zelda trong bối cảnh dữ liệu hạn chế.
 
 \vspace{0.25cm}
-\noindent\textbf{Từ khóa:} sinh nội dung thủ tục, dungeon Zelda, topology-first, VQ-VAE, latent diffusion, sửa lỗi ký hiệu, quality-diversity.
+\noindent\textbf{Từ khóa:} sinh nội dung thủ tục, dungeon Zelda, graph-first, VQ-VAE, latent diffusion, sửa lỗi ký hiệu, quality-diversity.
 }
 
 \newcommand{\AbstractENPage}{
 \clearpage
 \chapter*{Abstract}
 \addcontentsline{toc}{chapter}{Abstract}
-This thesis investigates dungeon generation for \textit{The Legend of Zelda} through a hybrid neural-symbolic framework that separates mission topology from room synthesis. Rather than generating an entire level in a single step, the proposed system first constructs a mission graph that encodes progression, locks, branches, and target structure, and then generates each room in a semantic latent space before applying symbolic post-processing to repair residual inconsistencies. The architecture combines seven components: data preprocessing, evolutionary topology search, a semantic VQ-VAE, a dual-stream condition encoder, latent diffusion, logic guidance, symbolic repair, and a quality-diversity evaluation layer.
+This thesis investigates dungeon generation for \textit{The Legend of Zelda} through a hybrid neural-symbolic framework that separates mission-graph planning from room synthesis. Rather than generating an entire level in a single step, the proposed system first constructs a mission graph that encodes progression, locks, branches, and target structure, and then generates each room in a semantic latent space before applying symbolic post-processing to repair residual inconsistencies. The architecture combines seven components: data preprocessing, evolutionary graph search, a semantic VQ-VAE, a dual-stream condition encoder, latent diffusion, logic guidance, symbolic repair, and a quality-diversity evaluation layer.
 
 \par
-This factorization is designed to preserve solvability and structural validity while still allowing diverse room layouts and controllable game progression. The thesis evaluates the system through fixed-seed ablations, matched-budget comparisons, and topology-scale tests in order to isolate the contribution of each block. The experimental protocol focuses on structural correctness, playability, robustness, and behavioral diversity rather than on visual fidelity alone.
+This factorization is designed to preserve solvability and structural validity while still allowing diverse room layouts and controllable game progression. The thesis evaluates the system through fixed-seed ablations, matched-budget comparisons, and graph-scale tests in order to isolate the contribution of each block. The experimental protocol focuses on structural correctness, playability, robustness, and behavioral diversity rather than on visual fidelity alone.
 
 \par
 Overall, the results indicate that the hybrid design provides a practical compromise between global control and local generative flexibility for Zelda-style dungeon generation. More broadly, the work shows that combining graph-first planning, latent generative modeling, and symbolic repair is a viable research direction for procedural content generation under limited data.
 
 \vspace{0.25cm}
-\noindent\textbf{Keywords:} procedural content generation, Zelda dungeon generation, topology-first design, VQ-VAE, latent diffusion, symbolic repair, quality-diversity.
+\noindent\textbf{Keywords:} procedural content generation, Zelda dungeon generation, graph-first design, VQ-VAE, latent diffusion, symbolic repair, quality-diversity.
 }
 
 \newcommand{\AbbreviationsPage}{
 \clearpage
-\chapter*{Danh sách từ viết tắt (List of Abbreviations)}
-\addcontentsline{toc}{chapter}{Danh sách từ viết tắt (List of Abbreviations)}
+\chapter*{Danh sách từ viết tắt}
+\addcontentsline{toc}{chapter}{Danh sách từ viết tắt}
 \begingroup
 \fontsize{11.5pt}{15pt}\selectfont
 \renewcommand{\arraystretch}{1.08}
@@ -393,7 +393,7 @@ WFC & Wave Function Collapse \\
 \begin{longtable}{p{0.31\textwidth}p{0.59\textwidth}}
 \textbf{Thuật ngữ} & \textbf{Định nghĩa ngắn gọn} \\
 \hline
-Topology-first generation & Chiến lược sinh nội dung theo thứ tự: xây dựng cấu trúc đồ thị nhiệm vụ (mission topology) trước, sau đó mới sinh chi tiết phòng. \\
+Graph-first generation & Chiến lược sinh theo hai bước: (1) sinh đồ thị nhiệm vụ và ràng buộc tiến trình trước; (2) sinh bố cục/hình học phòng để hiện thực hóa cấu trúc đó. \\
 Mission graph & Đồ thị mô tả các phòng/nút nhiệm vụ và quan hệ kết nối, điều kiện mở khóa trong dungeon. \\
 Room layout & Bố cục tile bên trong một phòng, thể hiện tường, cửa, vật cản, thực thể và đường đi. \\
 Latent space & Không gian biểu diễn nén dùng để mã hóa đặc trưng ngữ nghĩa của phòng trước khi sinh mẫu mới. \\
@@ -405,7 +405,19 @@ Logic guidance & Thành phần hướng dẫn quá trình sinh dựa trên luậ
 Symbolic repair & Bước hậu xử lý dùng luật ký hiệu để sửa các lỗi cấu trúc hoặc tiến trình còn sót lại. \\
 Solvability & Mức độ mà dungeon có thể được hoàn thành theo luật chơi và trạng thái vật phẩm hợp lệ. \\
 Validity & Mức độ tuân thủ của dungeon đối với các ràng buộc hình học, kết nối và tiến trình nhiệm vụ. \\
-Quality-Diversity (QD) & Họ phương pháp tối ưu đồng thời chất lượng nghiệm và độ đa dạng nghiệm trong không gian hành vi. \\
+Quality-Diversity (QD) & Nhóm phương pháp tối ưu đồng thời chất lượng nghiệm và độ đa dạng của nghiệm trong không gian hành vi. \\
+Behavior space & Không gian do các bộ mô tả xác định, dùng để phân bố và so sánh nghiệm trong bài toán QD. \\
+Behavior descriptor & Bộ mô tả hành vi của một nghiệm; thường là vector đặc trưng dùng để định vị nghiệm trong behavior space. \\
+Archive & Kho lưu trữ QD giữ lại nghiệm tốt nhất ở mỗi ô của behavior space. \\
+Elite & Nghiệm tốt nhất đang đại diện cho một ô trong archive. \\
+MAP-Elites & Thuật toán QD lấp đầy archive bằng elite tốt nhất cho từng ô descriptor. \\
+Coverage & Tỷ lệ ô archive đã có ít nhất một elite. \\
+QD-score & Chỉ số tổng hợp phản ánh đồng thời chất lượng nghiệm và mức độ phủ archive. \\
+CVT archive & Archive dựa trên Centroidal Voronoi Tessellation để chia behavior space thành các ô gần đều. \\
+CVT-emitter & Cơ chế phát sinh nghiệm mới dựa trên CVT archive, dùng các elite hiện có để dẫn hướng khám phá. \\
+Search-based PCG & Nhóm phương pháp dùng thuật toán tìm kiếm để tối ưu hoặc khám phá không gian nội dung ứng viên. \\
+State-space search & Tìm kiếm trên không gian trạng thái chơi để kiểm tra đường đi, khả giải và thứ tự mở khóa. \\
+Constraint solving & Bài toán tìm nghiệm thỏa toàn bộ ràng buộc hình học và ràng buộc lối chơi. \\
 Ablation study & Thiết kế thực nghiệm tắt/bật từng thành phần để định lượng đóng góp của mỗi mô-đun. \\
 Reproducibility & Khả năng tái lập kết quả thực nghiệm dưới cùng cấu hình, seed và dữ liệu đầu vào. \\
 \end{longtable}
@@ -449,30 +461,30 @@ Reproducibility & Khả năng tái lập kết quả thực nghiệm dưới cù
 Chương này mở đầu luận văn bằng cách trình bày bối cảnh, động cơ và mục tiêu nghiên cứu. Nội dung chương cũng xác định phạm vi, câu hỏi nghiên cứu và các đóng góp chính, làm cơ sở cho phần nền tảng lý thuyết và phương pháp ở các chương tiếp theo.
 
 \section{Lý do chọn đề tài}
-Trong phát triển trò chơi hiện đại, nhu cầu mở rộng nội dung với chi phí hợp lý khiến sinh nội dung thủ tục (Procedural Content Generation -- PCG) trở thành một hướng nghiên cứu có ý nghĩa thực tiễn rõ rệt \cite{togelius2011pcg}. Tuy nhiên, với bài toán dungeon, giá trị của hệ sinh không chỉ nằm ở số lượng mẫu tạo ra mà còn ở mức độ bảo toàn tiến trình nhiệm vụ và khả năng chơi được trong điều kiện ràng buộc cụ thể \cite{dormans2011missionspaces,summerville2016vglc}.
+Trong phát triển trò chơi hiện đại, nhu cầu mở rộng nội dung với chi phí hợp lý khiến sinh nội dung thủ tục (Procedural Content Generation -- PCG) trở thành một hướng nghiên cứu có ý nghĩa thực tiễn rõ rệt \cite{togelius2011pcg}. Tuy nhiên, với bài toán dungeon, giá trị của hệ tạo sinh không chỉ nằm ở số lượng mẫu tạo ra mà còn ở mức độ bảo toàn tiến trình nhiệm vụ và khả năng chơi được \cite{dormans2011missionspaces,mota2021dungeon,summerville2018pcgml}.
 
-Đối với \textit{The Legend of Zelda}, dungeon là một cấu trúc nhiệm vụ có logic nội tại, trong đó quan hệ giữa cửa, khóa, chìa và mục tiêu phải nhất quán từ đầu đến cuối. Nếu hình thái phòng được tạo ra tốt về bề mặt nhưng không tương thích với đồ thị nhiệm vụ, người chơi có thể rơi vào trạng thái bế tắc hoặc hoàn thành theo cách trái với thiết kế. Trong nhóm công trình cùng miền Zelda, các tiếp cận tiến hóa đã cho thấy tiềm năng tạo dungeon có thể chơi được và đã được kiểm chứng trên người chơi thật \cite{mota2021dungeon}; tuy nhiên, bài toán cân bằng giữa tính đúng đắn tiến trình, chất lượng bố cục và độ đa dạng vẫn còn mở. Trong bối cảnh đó, các tiếp cận thuần học máy thường mạnh ở khả năng học mẫu cục bộ nhưng khó đảm bảo ràng buộc toàn cục, còn các tiếp cận thuần ký hiệu lại kiểm soát tốt tiến trình nhưng hạn chế về độ phong phú hình thái \cite{hu2020graph2plan,shabani2023housediffusion}. Khoảng trống này là lý do trực tiếp để luận văn lựa chọn kiến trúc lai nơ-ron -- ký hiệu nhằm dung hòa năng lực tạo mẫu và năng lực kiểm soát.
+Đối với \textit{The Legend of Zelda}, dungeon là một cấu trúc nhiệm vụ có logic nội tại, trong đó quan hệ giữa cửa, khóa, chìa và mục tiêu phải nhất quán từ đầu đến cuối. Nếu hình thái phòng tốt về bề mặt nhưng lệch khỏi đồ thị nhiệm vụ, người chơi có thể rơi vào bế tắc hoặc đi lệch thiết kế. Các tiếp cận tiến hóa trong miền này cho thấy dungeon có thể chơi được, nhưng bài toán cân bằng giữa tính đúng đắn tiến trình, chất lượng bố cục và độ đa dạng vẫn còn mở \cite{mota2021dungeon}. Trong khi đó, các tiếp cận học máy cho cấu trúc có điều kiện thường mạnh ở học mẫu cục bộ nhưng vẫn cần cơ chế điều kiện hóa hoặc hậu kiểm để giữ ràng buộc toàn cục \cite{khalifa2020pcgrl,shabani2023housediffusion,inoue2023layoutdm,karth2021wfc,rodriguez2019bootstrapping}. Khoảng trống này là lý do trực tiếp để luận văn lựa chọn kiến trúc lai nơ-ron -- ký hiệu nhằm dung hòa năng lực tạo mẫu và năng lực kiểm soát.
 
 \section{Mục tiêu nghiên cứu}
-Mục tiêu tổng quát của luận văn là xây dựng và kiểm chứng một hệ thống tạo sinh dungeon Zelda có khả năng cân bằng ba yêu cầu thường xung đột nhau: tính hợp lệ của gameplay, chất lượng cấu trúc phòng và độ đa dạng nội dung trong điều kiện dữ liệu huấn luyện giới hạn.
+Mục tiêu tổng quát của luận văn là xây dựng và kiểm chứng một hệ thống tạo sinh dungeon Zelda có khả năng cân bằng ba yêu cầu thường xung đột nhau: tính hợp lệ của lối chơi, chất lượng cấu trúc phòng và độ đa dạng nội dung trong điều kiện dữ liệu huấn luyện giới hạn.
 
-Để đạt mục tiêu này, nghiên cứu tổ chức quy trình tạo sinh theo hướng \textit{topology-first}, nghĩa là xác lập cấu trúc nhiệm vụ trước khi sinh chi tiết phòng. Trên nền cấu trúc đồ thị nhiệm vụ đó, luận văn phát triển khối tạo phòng trong không gian tiềm ẩn rời rạc bằng VQ-VAE kết hợp diffusion có điều kiện để tăng độ ổn định của mẫu sinh và giữ được ngữ nghĩa tile \cite{oord2017vqvae,ho2020ddpm,song2021ddim}. Song song với thành phần sinh, hệ thống được tích hợp cơ chế hướng dẫn logic và sửa lỗi ký hiệu nhằm giảm sai lệch về đường đi, quan hệ khóa -- chìa và thứ tự tiến trình. Toàn bộ kiến trúc được đánh giá bằng thực nghiệm đối chứng theo hướng ablation để làm rõ đóng góp của từng thành phần và mức đánh đổi giữa chất lượng với đa dạng. Bên cạnh đó, nghiên cứu đặt mục tiêu đánh giá matched-budget giữa các phương pháp sinh đồ thị nhiệm vụ và kiểm tra khả năng khái quát theo các chế độ in-distribution, OOD-small, OOD-large. Kỳ vọng thực nghiệm là nâng tỉ lệ dungeon hợp lệ, duy trì khả năng giải được ở mức cao và hạn chế hiện tượng lặp mẫu.
+Để đạt mục tiêu trên, luận văn tổ chức pipeline theo nguyên tắc ưu tiên cấu trúc nhiệm vụ: xác lập đồ thị nhiệm vụ trước, sau đó mới sinh chi tiết phòng. Trên nền đồ thị này, hệ thống phát triển khối sinh phòng trong không gian tiềm ẩn rời rạc bằng VQ-VAE kết hợp diffusion có điều kiện nhằm tăng độ ổn định của mẫu sinh và giữ ngữ nghĩa ở mức tile \cite{oord2017vqvae,ho2020ddpm,song2021ddim}. Song song với khối sinh, kiến trúc tích hợp cơ chế hướng dẫn logic và sửa lỗi ký hiệu để giảm sai lệch về đường đi, quan hệ khóa -- chìa và thứ tự tiến trình. Toàn bộ hệ được đánh giá bằng thực nghiệm đối chứng theo hướng phân tích đóng góp thành phần để làm rõ vai trò từng khối và mức đánh đổi giữa chất lượng với độ đa dạng. Bên cạnh đó, nghiên cứu đặt mục tiêu so sánh công bằng giữa các phương pháp sinh đồ thị nhiệm vụ dưới cùng ngân sách tính toán, đồng thời kiểm tra khả năng khái quát trong và ngoài phân phối khi quy mô phòng thay đổi. Kỳ vọng thực nghiệm là tăng tỉ lệ dungeon hợp lệ, duy trì khả năng giải ở mức cao và hạn chế hiện tượng lặp mẫu.
 
 \section{Đối tượng và phạm vi nghiên cứu}
-Đối tượng nghiên cứu của luận văn là bài toán tạo sinh dungeon Zelda từ đồ thị nhiệm vụ và bố cục phòng dạng lưới tile. Phạm vi nghiên cứu được giới hạn trong miền dữ liệu Zelda cùng các ràng buộc gameplay cốt lõi, bao gồm kết nối phòng, quan hệ khóa -- chìa và điều kiện hoàn thành nhiệm vụ.
+Đối tượng nghiên cứu của luận văn là bài toán tạo sinh dungeon Zelda từ đồ thị nhiệm vụ và bố cục phòng dạng lưới tile. Phạm vi nghiên cứu được giới hạn trong miền dữ liệu Zelda cùng các ràng buộc lối chơi cốt lõi, bao gồm kết nối phòng, quan hệ khóa -- chìa và điều kiện hoàn thành nhiệm vụ.
 
-Về mặt kỹ thuật, luận văn tập trung vào chuỗi xử lý lai nơ-ron -- ký hiệu gồm bốn lớp chính: sinh cấu trúc đồ thị nhiệm vụ, sinh phòng có điều kiện ngữ nghĩa trong không gian tiềm ẩn, hậu kiểm tra logic và sửa lỗi ký hiệu. Về mặt đánh giá, nghiên cứu ưu tiên các chỉ số định lượng liên quan đến tính hợp lệ, khả năng giải được, chất lượng và đa dạng. Luận văn không triển khai khảo sát người dùng quy mô lớn; thay vào đó, nghiên cứu chuẩn hóa bộ dữ liệu đánh giá mù (blinded packet) để phục vụ bước đánh giá người dùng ở giai đoạn mở rộng.
+Về mặt kỹ thuật, luận văn tập trung vào chuỗi xử lý lai nơ-ron -- ký hiệu gồm bốn lớp chính: sinh cấu trúc đồ thị nhiệm vụ, sinh phòng có điều kiện ngữ nghĩa trong không gian tiềm ẩn, kiểm tra hậu kỳ logic và sửa lỗi ký hiệu. Về mặt đánh giá, nghiên cứu ưu tiên các chỉ số định lượng liên quan đến tính hợp lệ, khả năng giải được, chất lượng và đa dạng. Luận văn không triển khai khảo sát người dùng quy mô lớn; thay vào đó, nghiên cứu chuẩn hóa bộ dữ liệu đánh giá mù để phục vụ bước đánh giá người dùng ở giai đoạn mở rộng.
 
 \section{Phương pháp nghiên cứu}
-Luận văn sử dụng phương pháp nghiên cứu hỗn hợp, kết hợp giữa tổng quan tài liệu, thiết kế hệ thống và thực nghiệm định lượng. Ở bước đầu, các hướng nghiên cứu then chốt trong PCG, PCGML, sinh đồ thị nhiệm vụ, diffusion trong không gian tiềm ẩn và hệ lai nơ-ron -- ký hiệu được hệ thống hóa để xác định cơ sở lý thuyết và khoảng trống nghiên cứu \cite{togelius2011pcg,khalifa2020pcgrl,rombach2022ldm}.
+Luận văn áp dụng phương pháp nghiên cứu hỗn hợp, kết hợp tổng quan tài liệu, thiết kế hệ thống và thực nghiệm định lượng. Ở giai đoạn đầu, các hướng nghiên cứu then chốt trong PCG, PCGML, sinh đồ thị nhiệm vụ, diffusion trong không gian tiềm ẩn và hệ lai nơ-ron -- ký hiệu được hệ thống hóa để xác lập nền tảng lý thuyết và nhận diện khoảng trống nghiên cứu \cite{togelius2011pcg,khalifa2020pcgrl,rombach2022ldm}.
 
-Từ nền tảng đó, kiến trúc được thiết kế theo hướng mô-đun hóa, làm rõ vai trò của từng khối và giảm phụ thuộc chéo để thuận lợi cho kiểm chứng thành phần. Hệ thống sau thiết kế được hiện thực thành quy trình đầu-cuối trên mã nguồn luận văn với cấu hình có kiểm soát nhằm bảo đảm khả năng tái lập. Ở lớp đánh giá, nghiên cứu sử dụng giao thức fixed-seed, so sánh matched-budget và phân tích theo miền OOD để kiểm tra tính ổn định khi thay đổi quy mô đồ thị nhiệm vụ. Ở lớp suy luận thống kê, luận văn dùng paired bootstrap để ước lượng khoảng tin cậy 95\% \cite{efron1994bootstrap}, kiểm định hoán vị dấu theo cặp để ước lượng p-value, và hiệu chỉnh đa kiểm định theo Benjamini-Hochberg FDR \cite{benjamini1995fdr}. Cuối cùng, nghiên cứu phân tích kết quả trên các nhóm chỉ số hợp lệ, giải được, chất lượng và đa dạng để rút ra kết luận thực chứng.
+Từ nền tảng đó, kiến trúc được thiết kế theo hướng mô-đun để tách rõ vai trò từng khối và giảm phụ thuộc chéo, qua đó thuận lợi cho kiểm chứng thành phần. Hệ thống sau thiết kế được hiện thực thành pipeline đầu-cuối trên mã nguồn luận văn với cấu hình kiểm soát nhằm bảo đảm khả năng tái lập. Về đánh giá, nghiên cứu sử dụng giao thức cố định hạt giống ngẫu nhiên, so sánh dưới cùng ngân sách tính toán và phân tích ngoài phân phối để kiểm tra độ ổn định khi quy mô đồ thị nhiệm vụ thay đổi. Về suy luận thống kê, luận văn dùng bootstrap theo cặp để ước lượng khoảng tin cậy 95\% \cite{efron1994bootstrap}, kiểm định hoán vị dấu theo cặp để ước lượng giá trị p, và hiệu chỉnh đa kiểm định theo Benjamini-Hochberg \cite{benjamini1995fdr}. Cuối cùng, các kết quả được phân tích theo nhóm chỉ số hợp lệ, giải được, chất lượng và đa dạng để rút ra kết luận thực chứng.
 
 \section{Câu hỏi nghiên cứu}
-Từ mục tiêu và phạm vi nghiên cứu đã nêu, luận văn tập trung trả lời bốn vấn đề cốt lõi theo hướng định lượng. Trước hết, nghiên cứu kiểm định liệu chiến lược \textit{topology-first} có cải thiện đồng thời tính hợp lệ gameplay và chất lượng tạo phòng so với cấu hình không tách tầng hay không. Tiếp theo, luận văn phân tích thành phần nào giữ vai trò chi phối trong pipeline đề xuất, bao gồm sinh cấu trúc đồ thị nhiệm vụ (topology evolution), VQ-VAE, diffusion có điều kiện theo đồ thị, cơ chế hướng dẫn logic và sửa lỗi ký hiệu. Một vấn đề quan trọng khác là mức độ đóng góp thực sự của hậu kiểm tra và sửa lỗi ký hiệu đối với độ tin cậy của dungeon trong bối cảnh dữ liệu nhỏ. Cuối cùng, nghiên cứu làm rõ liệu lợi thế của phương pháp đề xuất còn được duy trì khi so sánh matched-budget với các baseline sinh đồ thị nhiệm vụ và khi chuyển sang các miền OOD theo số lượng phòng hay không.
+Từ mục tiêu và phạm vi đã xác định, luận văn tập trung vào bốn câu hỏi định lượng cốt lõi. (1) Chiến lược ưu tiên cấu trúc nhiệm vụ có giúp cải thiện đồng thời tính hợp lệ gameplay và chất lượng tạo phòng so với cấu hình không tách tầng hay không? (2) Thành phần nào đóng góp chi phối trong pipeline đề xuất, gồm sinh cấu trúc đồ thị nhiệm vụ, VQ-VAE, diffusion có điều kiện theo đồ thị, hướng dẫn logic và sửa lỗi ký hiệu? (3) Mức đóng góp thực tế của hậu kiểm tra và sửa lỗi ký hiệu đối với độ tin cậy của dungeon trong bối cảnh dữ liệu nhỏ là bao nhiêu? (4) Lợi thế của phương pháp đề xuất có còn được duy trì khi so sánh dưới cùng ngân sách tính toán với các mốc sinh đồ thị nhiệm vụ và khi chuyển sang các trường hợp ngoài phân phối theo số lượng phòng hay không?
 
 \section{Đóng góp của luận văn}
-Đóng góp của luận văn thể hiện trên cả phương diện kiến trúc, hiện thực hệ thống và đánh giá thực nghiệm. Trên phương diện kiến trúc, nghiên cứu đề xuất mô hình lai nơ-ron -- ký hiệu có phân tầng rõ giữa lớp nhiệm vụ và lớp tạo phòng, qua đó tăng khả năng kiểm soát tiến trình gameplay. Trên phương diện hiện thực, luận văn xây dựng khối tạo phòng trong không gian tiềm ẩn rời rạc có điều kiện ngữ nghĩa và tích hợp cơ chế hướng dẫn logic cùng sửa lỗi ký hiệu để nâng cao tỉ lệ dungeon hợp lệ, giải được. Trên phương diện thực nghiệm, nghiên cứu thiết kế giao thức gồm fixed-seed ablation có kiểm định thống kê, so sánh matched-budget giữa các phương pháp sinh đồ thị nhiệm vụ, đánh giá OOD scaling theo quy mô phòng, và chuẩn hóa bộ blinded packet cho bước đánh giá người dùng mở rộng.
+Đóng góp của luận văn trải trên ba phương diện: kiến trúc, hiện thực hệ thống và đánh giá thực nghiệm. Ở phương diện kiến trúc, nghiên cứu đề xuất mô hình lai nơ-ron -- ký hiệu có phân tầng rõ giữa lớp nhiệm vụ và lớp tạo phòng, qua đó tăng khả năng kiểm soát tiến trình lối chơi. Ở phương diện hiện thực, luận văn xây dựng khối sinh phòng trong không gian tiềm ẩn rời rạc có điều kiện ngữ nghĩa, đồng thời tích hợp hướng dẫn logic và sửa lỗi ký hiệu để nâng tỉ lệ dungeon hợp lệ, giải được. Ở phương diện thực nghiệm, nghiên cứu thiết kế giao thức gồm phân tích đóng góp thành phần với hạt giống cố định và kiểm định thống kê, so sánh dưới cùng ngân sách tính toán giữa các phương pháp sinh đồ thị nhiệm vụ, đánh giá ngoài phân phối theo quy mô phòng, và chuẩn hóa bộ dữ liệu đánh giá mù cho bước đánh giá người dùng mở rộng.
 
 \section{Bố cục luận văn}
 Phần còn lại của khóa luận được tổ chức thành bốn chương. Chương 2 trình bày tổng quan nghiên cứu và cơ sở lý thuyết, đồng thời xác định khoảng trống mà đề tài hướng tới. Chương 3 mô tả chi tiết kiến trúc đề xuất, luồng dữ liệu và cách hiện thực các mô-đun trong hệ thống. Chương 4 trình bày thiết kế thực nghiệm, giao thức đánh giá, kết quả định lượng và phần thảo luận. Chương 5 tổng kết các đóng góp chính, nêu hạn chế và đề xuất hướng phát triển tiếp theo.
@@ -486,59 +498,68 @@ Phần này tổng hợp các nền tảng cốt lõi làm cơ sở cho kiến t
 \subsection{Sinh nội dung thủ tục trong trò chơi}
 Trong nghiên cứu sinh nội dung thủ tục (PCG), ba hướng tiếp cận được dùng nhiều nhất là dựa trên luật, dựa trên tìm kiếm và dựa trên học máy tạo sinh \cite{togelius2011pcg,khalifa2020pcgrl,shaker2016pcgbook}. Mỗi hướng có thế mạnh riêng: phương pháp dựa trên luật thuận lợi cho kiểm soát ràng buộc, phương pháp tìm kiếm phù hợp với tối ưu đa mục tiêu, còn phương pháp học máy mạnh ở khả năng học mẫu không gian phức tạp từ dữ liệu.
 
-Ở nhánh học máy cho PCG, tổng quan PCGML của Summerville et al. cho thấy bài toán không chỉ nằm ở sinh mẫu mới mà còn ở khả năng sửa lỗi, phân tích nội dung và làm việc trong điều kiện dữ liệu nhỏ \cite{summerville2018pcgml}. Nhận định này đặc biệt phù hợp với miền Zelda, nơi ràng buộc gameplay khiến chất lượng dữ liệu và cách biểu diễn có ảnh hưởng trực tiếp đến độ tin cậy của đầu ra.
+Ở nhánh học máy cho PCG, tổng quan PCGML cho thấy bài toán không chỉ nằm ở sinh mẫu mới mà còn ở khả năng sửa lỗi, phân tích nội dung và làm việc trong điều kiện dữ liệu nhỏ \cite{summerville2018pcgml}. Nhận định này đặc biệt phù hợp với miền Zelda, nơi ràng buộc lối chơi khiến chất lượng dữ liệu và cách biểu diễn có ảnh hưởng trực tiếp đến độ tin cậy của đầu ra.
 
-Với dungeon Zelda, chất lượng không thể chỉ đánh giá bằng hình thức bản đồ. Một hệ tạo sinh phù hợp phải đồng thời bảo đảm logic tiến trình nhiệm vụ, khả năng hoàn thành theo luật chơi, và chất lượng bố cục ở mức tile \cite{summerville2016vglc}. Vì vậy, mục tiêu không chỉ là "sinh được nhiều mẫu" mà là "sinh được mẫu hợp lệ và có giá trị gameplay".
+Với dungeon Zelda, chất lượng không thể chỉ đánh giá bằng hình thức bản đồ. Một hệ tạo sinh phù hợp phải đồng thời bảo đảm logic tiến trình nhiệm vụ, khả năng hoàn thành theo luật chơi, và chất lượng bố cục ở mức tile \cite{dormans2011missionspaces,mota2021dungeon,summerville2018pcgml}. Vì vậy, mục tiêu không chỉ là "sinh được nhiều mẫu" mà là "sinh được mẫu hợp lệ và có giá trị lối chơi".
 
 \subsection{Biểu diễn rời rạc và sinh trong không gian tiềm ẩn}
 Với dữ liệu phòng ở dạng lưới tile và từ vựng hữu hạn, biểu diễn rời rạc bằng VQ-VAE là lựa chọn phù hợp để học mã ngữ nghĩa \cite{oord2017vqvae}. Về nền tảng, cách xây dựng latent và tối ưu hóa mục tiêu tái tạo-khái quát hóa kế thừa trực tiếp từ khung học biểu diễn trong các giáo trình học máy hiện đại \cite{goodfellow2016deeplearning,bishop2006prml}. Cách làm này nén thông tin cấu trúc vào không gian tiềm ẩn gọn hơn, từ đó giảm độ khó cho mô-đun sinh phía sau và tăng tính ổn định khi dữ liệu huấn luyện không lớn.
 
 Trên biểu diễn latent rời rạc, diffusion đóng vai trò bộ sinh chính để tạo mẫu có chất lượng cục bộ tốt và đa dạng hình thái \cite{ho2020ddpm,song2021ddim,rombach2022ldm}. So với sinh trực tiếp trên lưới tile gốc, cách tiếp cận này thường thuận lợi hơn khi cần giữ latent gọn và gắn điều kiện ngữ nghĩa.
 
-Bên cạnh diffusion trong không gian liên tục, hướng diffusion rời rạc cũng đáng chú ý vì làm việc trực tiếp trên token/categorical state. D3PM cho thấy lựa chọn ma trận chuyển trạng thái và cơ chế nhiễu rời rạc có ảnh hưởng rõ đến chất lượng sinh mẫu \cite{austin2021d3pm}. Trên các bài toán bố cục có ràng buộc, LayoutDM tiếp tục chỉ ra rằng diffusion rời rạc kết hợp cơ chế tiêm điều kiện ở pha suy luận có thể nâng đáng kể khả năng kiểm soát cấu trúc đầu ra \cite{inoue2023layoutdm}.
+Bên cạnh diffusion trong không gian liên tục, hướng diffusion rời rạc cũng đáng chú ý vì làm việc trực tiếp trên các mã rời rạc và trạng thái phân loại. D3PM cho thấy lựa chọn ma trận chuyển trạng thái và cơ chế nhiễu rời rạc có ảnh hưởng rõ đến chất lượng sinh mẫu \cite{austin2021d3pm}. Trên các bài toán bố cục có ràng buộc, LayoutDM tiếp tục chỉ ra rằng diffusion rời rạc kết hợp cơ chế tiêm điều kiện ở pha suy luận có thể nâng đáng kể khả năng kiểm soát cấu trúc đầu ra \cite{inoue2023layoutdm}.
+Ở cùng trục rời rạc, MaskGIT cho thấy chiến lược dự đoán mã bị che theo nhiều vòng lặp có thể rút ngắn đáng kể thời gian giải mã so với cơ chế tự hồi quy tuần tự, đồng thời vẫn giữ chất lượng cấu trúc cạnh tranh ở miền hình ảnh \cite{chang2022maskgit}. Kết quả này có ý nghĩa tham chiếu trực tiếp cho các nhánh sinh có che trong bài toán sinh phòng.
 
 \subsection{Điều kiện hóa theo đồ thị nhiệm vụ}
 Trong bài toán dungeon, ngữ cảnh phải được xét đồng thời ở hai tầng: cục bộ (liên kết biên, quan hệ phòng kề) và toàn cục (vai trò của phòng trong đồ thị nhiệm vụ). Nếu chỉ dùng thông tin cục bộ, mô hình có thể tạo ra phòng "đẹp" nhưng lệch với tiến trình nhiệm vụ tổng thể.
 
-Vì vậy, cơ chế điều kiện hóa đa nguồn và attention từ đồ thị sang lưới là lựa chọn được nhiều công trình liên quan hậu thuẫn \cite{park2019spade,hu2020graph2plan,rampasek2022gps}. Hướng này có thể giúp giảm tình trạng đúng hình thức nhưng sai chức năng, đồng thời tăng tính nhất quán gameplay giữa các phòng trong cùng một dungeon.
+Vì vậy, cơ chế điều kiện hóa đa nguồn cùng cơ chế attention chuyển thông tin từ đồ thị sang lưới là lựa chọn được nhiều công trình liên quan củng cố \cite{park2019spade,hu2020graph2plan,rampasek2022gps}. Hướng này có thể giúp giảm tình trạng đúng hình thức nhưng sai chức năng, đồng thời tăng tính nhất quán lối chơi giữa các phòng trong cùng một dungeon.
 
 \subsection{Khung khái niệm và chuẩn hóa thuật ngữ}
-Bên cạnh nhóm bài báo gốc, Chương 2 còn tham chiếu các giáo trình và tài liệu nền tảng để chuẩn hóa khung khái niệm, thuật ngữ và cách diễn giải. Ở trục PCG, giáo trình của Shaker, Togelius và Nelson cung cấp hệ quy chiếu nhất quán cho các chiến lược rule-based, search-based và data-driven khi đánh giá hệ tạo sinh \cite{shaker2016pcgbook}. Ở trục học máy, các giáo trình kinh điển về học biểu diễn và mô hình xác suất giúp cố định cách hiểu về latent space, regularization và đánh đổi giữa khớp dữ liệu với khả năng khái quát hóa \cite{goodfellow2016deeplearning,bishop2006prml}. Việc kết hợp hai lớp nguồn này giúp phần cơ sở lý thuyết vừa bám sát các công trình hiện đại, vừa giữ được nền tảng phương pháp luận ổn định cho các chương sau.
+Bên cạnh nhóm bài báo gốc, Chương 2 còn tham chiếu các giáo trình và tài liệu nền tảng để chuẩn hóa khung khái niệm, thuật ngữ và cách diễn giải. Ở trục PCG, giáo trình của Shaker, Togelius và Nelson cung cấp hệ quy chiếu nhất quán cho các chiến lược dựa trên luật, dựa trên tìm kiếm và dựa trên dữ liệu khi đánh giá hệ tạo sinh \cite{shaker2016pcgbook}. Ở trục học máy, các giáo trình kinh điển về học biểu diễn và mô hình xác suất giúp cố định cách hiểu về không gian tiềm ẩn, điều chuẩn và đánh đổi giữa khớp dữ liệu với khả năng khái quát hóa \cite{goodfellow2016deeplearning,bishop2006prml}. Việc kết hợp hai lớp nguồn này giúp phần cơ sở lý thuyết vừa bám sát các công trình hiện đại, vừa giữ được nền tảng phương pháp luận ổn định cho các chương sau.
 
 \subsection{Tiêu chí phân tích và đánh giá}
-Đối với hệ lai nơ-ron -- ký hiệu, phần lý thuyết không dừng ở việc mô tả mô hình sinh mà còn cần chỉ ra cách đọc kết quả. Các công trình liên quan thường xem xét đồng thời tính hợp lệ cấu trúc, khả năng chơi được, độ đa dạng, độ ổn định khi thay đổi ngân sách và mức độ bền vững trước nhiễu hoặc dịch chuyển miền dữ liệu. Với dungeon Zelda, các tiêu chí này đặc biệt quan trọng vì một mẫu có thể nhìn hợp lý ở mức cục bộ nhưng vẫn thất bại ở mức tiến trình nhiệm vụ hoặc tạo ra các nghẽn đường đi khó sửa. Cách nhìn theo nhiều trục này là nền tảng để luận văn lựa chọn các phép so sánh phù hợp ở chương thực nghiệm, thay vì chỉ dựa vào một chỉ số đơn lẻ.
+Đối với hệ lai nơ-ron -- ký hiệu, phần lý thuyết không dừng ở việc mô tả mô hình sinh mà còn cần chỉ ra cách đọc kết quả. Các công trình liên quan thường xem xét đồng thời tính hợp lệ cấu trúc, khả năng chơi được, độ đa dạng, độ ổn định khi thay đổi ngân sách và mức độ bền vững trước nhiễu hoặc dịch chuyển miền dữ liệu \cite{mouret2015mapelites,vassiliades2017cvt,mota2021dungeon}. Với dungeon Zelda, các tiêu chí này đặc biệt quan trọng vì một mẫu có thể nhìn hợp lý ở mức cục bộ nhưng vẫn thất bại ở mức tiến trình nhiệm vụ hoặc tạo ra các nghẽn đường đi khó sửa \cite{summerville2018pcgml,rodriguez2019bootstrapping}. Cách nhìn theo nhiều trục này là nền tảng để luận văn lựa chọn các phép so sánh phù hợp ở chương thực nghiệm, thay vì chỉ dựa vào một chỉ số đơn lẻ.
 
 \section{Tổng quan công trình liên quan}
-Phần này hệ thống các hướng nghiên cứu gần với bài toán của luận văn theo ba trục chính: đồ thị nhiệm vụ (mission graph), PCGML cấp phòng và hệ lai nơ-ron -- ký hiệu. Qua đó, luận văn chỉ ra điểm mạnh, giới hạn và mức độ phù hợp của từng hướng đối với dungeon Zelda.
+Phần này hệ thống các hướng nghiên cứu gần với bài toán của luận văn theo bốn trục chính: đồ thị nhiệm vụ, PCGML cấp phòng, tăng tốc suy luận/sinh rời rạc theo mã, và hệ lai nơ-ron -- ký hiệu. Qua đó, luận văn chỉ ra điểm mạnh, giới hạn và mức độ phù hợp của từng hướng đối với dungeon Zelda.
 
 \subsection{Hướng đồ thị nhiệm vụ và PCG dựa trên tìm kiếm}
-Các nghiên cứu theo hướng đồ thị nhiệm vụ (mission graph), mission-space và graph grammar cho thấy ưu điểm rõ rệt của việc mô hình hóa tiến trình nhiệm vụ trước, rồi mới hiện thực hóa hình học phòng \cite{dormans2011missionspaces}. Cách tổ chức này giúp ràng buộc gameplay được đưa vào sớm, thay vì xử lý hậu kỳ khi lỗi đã xuất hiện trên toàn bản đồ.
+Các nghiên cứu theo hướng đồ thị nhiệm vụ, mission-space và graph grammar cho thấy ưu điểm rõ rệt của việc mô hình hóa tiến trình nhiệm vụ trước, rồi mới hiện thực hóa hình học phòng \cite{dormans2011missionspaces}. Cách tổ chức này giúp ràng buộc lối chơi được đưa vào sớm, thay vì xử lý hậu kỳ khi lỗi đã xuất hiện trên toàn bản đồ.
 
-Trong cùng mạch nghiên cứu, các phương pháp PCG dựa trên tìm kiếm, đặc biệt là nhóm quality-diversity như MAP-Elites và CVT-MAP-Elites, cho phép tối ưu đồng thời chất lượng và độ đa dạng \cite{mouret2015mapelites,vassiliades2017cvt,fontaine2020cma}. Điều này đặc biệt phù hợp với bài toán sinh dungeon, nơi mục tiêu không chỉ là tìm một nghiệm tốt nhất mà là xây dựng một tập nghiệm phong phú nhưng vẫn chơi được. Ở miền Zelda cụ thể, kết quả của Pereira et al. cũng củng cố hướng đánh giá theo tiến trình khóa-cổng và chỉ số tuyến tính/độ dư đường đi thay vì chỉ kiểm tra khả giải nhị phân \cite{mota2021dungeon}.
+Ở nhánh sinh quest riêng, các công trình từ phân tích cấu trúc quest trong MMORPG, sinh quest bằng planning, grammar, mixed-initiative và NLP gần đây cho thấy nhiệm vụ có thể được tạo từ biểu diễn cấu trúc, quy tắc hoặc ngôn ngữ tự nhiên \cite{doran2011questgen,breault2021conan,alnassar2021questgram,alnassar2023questville,prins2023storyworld}. Tuy nhiên, các hệ này chủ yếu dừng ở mức chuỗi nhiệm vụ hoặc tương tác NPC, chưa giải quyết đồng thời hình học dungeon, đồ thị nhiệm vụ và sửa lỗi ký hiệu trong một pipeline thống nhất.
+
+Trong cùng mạch nghiên cứu, các phương pháp PCG dựa trên tìm kiếm, đặc biệt là nhóm chất lượng-đa dạng như MAP-Elites và CVT-MAP-Elites, cho phép tối ưu đồng thời chất lượng và độ đa dạng \cite{pugh2016quality,mouret2015mapelites,vassiliades2017cvt,fontaine2020cma}. Điều này đặc biệt phù hợp với bài toán sinh dungeon, nơi mục tiêu không chỉ là tìm một nghiệm tốt nhất mà là xây dựng một tập nghiệm phong phú nhưng vẫn chơi được. Ở miền Zelda cụ thể, một nghiên cứu thực nghiệm cho thấy nên đánh giá theo tiến trình khóa-cổng và các chỉ số tuyến tính/độ dư đường đi thay vì chỉ kiểm tra khả giải nhị phân \cite{mota2021dungeon}.
+
+\subsection{Thuật toán tìm kiếm để kiểm tra và giải dungeon}
+Bên cạnh tìm kiếm dùng để sinh nội dung, trong bài toán dungeon còn có một nhánh tìm kiếm khác phục vụ kiểm tra và giải trạng thái chơi. Ở nhánh này, thuật toán không tối ưu hình thái phòng mà duyệt không gian trạng thái của người chơi, vật phẩm và ràng buộc khóa -- chìa để kiểm tra xem từ trạng thái khởi đầu có thể đi tới mục tiêu hay không, đồng thời phát hiện các cấu hình dẫn tới bế tắc hoặc thứ tự mở khóa không hợp lệ. Về bản chất, đây là bài toán đi tới đích và thỏa ràng buộc hơn là sinh nội dung thuần túy.
+
+Trong thực hành PCG, các cơ chế kiểm tra này thường xuất hiện dưới dạng duyệt trạng thái, kiểm tra đường đi khả dụng hoặc giải ràng buộc cục bộ để loại bỏ cấu hình mâu thuẫn. WFC là một ví dụ tiêu biểu khi được diễn giải như một bài toán thỏa ràng buộc trong miền tile, còn các quy trình lai nơ-ron -- ký hiệu thường dùng một lớp tìm kiếm/xác minh ở hậu kiểm để xác nhận hoặc sửa lại nghiệm do mô hình sinh tạo ra \cite{karth2021wfc,rodriguez2019bootstrapping}. Vì vậy, nếu phân biệt theo vai trò, tìm kiếm cho sinh dungeon thuộc lớp tối ưu hóa không gian nội dung; còn tìm kiếm cho giải dungeon thuộc lớp kiểm tra tính khả giải, hậu kiểm và sửa lỗi.
 
 \subsection{Hướng sinh đồ thị học sâu và diffusion rời rạc}
-Ngoài các tiếp cận grammar và evolutionary search, hướng sinh đồ thị học sâu gần đây tập trung vào mô hình hóa trực tiếp phân bố trên đồ thị có nhãn nút/cạnh. Graphormer cho thấy các thiên kiến cấu trúc như khoảng cách đường đi ngắn nhất, centrality và edge-aware bias có tác động rõ rệt đến chất lượng biểu diễn đồ thị \cite{ying2021graphormer}. Trên nhánh tạo sinh, DiGress mở rộng diffusion sang không gian đồ thị rời rạc và được xem như một baseline tham chiếu quan trọng cho bài toán sinh đồ thị có thuộc tính phân loại \cite{vignac2023digress}.
+Ngoài các tiếp cận grammar và tiến hóa tìm kiếm, hướng sinh đồ thị học sâu gần đây tập trung vào mô hình hóa trực tiếp phân bố trên đồ thị có nhãn nút/cạnh. Graphormer cho thấy các thiên kiến cấu trúc như khoảng cách đường đi ngắn nhất, độ trung tâm và thiên kiến theo cạnh có tác động rõ rệt đến chất lượng biểu diễn đồ thị \cite{ying2021graphormer}. Trên nhánh tạo sinh, DiGress mở rộng diffusion sang không gian đồ thị rời rạc và được xem như một mốc so sánh quan trọng cho bài toán sinh đồ thị có thuộc tính phân loại \cite{vignac2023digress}.
 
 Ở mức phương pháp tổng quát hơn, D3PM cung cấp nền tảng lý thuyết quan trọng cho diffusion trên không gian rời rạc và giúp lý giải vì sao các thiết kế chuyển trạng thái khác nhau có thể tạo ra chất lượng sinh mẫu khác nhau ngay cả khi cùng khung huấn luyện \cite{austin2021d3pm}. Điều này có giá trị tham chiếu trực tiếp khi đánh giá các biến thể sinh cấu trúc đồ thị nhiệm vụ bằng mô hình học.
 
-Đối với luận văn này, nhóm công trình trên có vai trò chuẩn đối sánh phương pháp: chúng giúp định vị rõ điểm mạnh/yếu giữa ``sinh cấu trúc đồ thị nhiệm vụ bằng grammar + search'' và ``sinh cấu trúc đồ thị nhiệm vụ bằng learned graph generator'' trong cùng một ngân sách thực nghiệm. Vì vậy, Chương 4 sẽ sử dụng chúng như mốc tham chiếu khi thảo luận mức cạnh tranh của Block I theo matched-budget.
+Đối với luận văn này, nhóm công trình trên có vai trò chuẩn đối sánh phương pháp: chúng giúp định vị rõ điểm mạnh/yếu giữa ``sinh cấu trúc đồ thị nhiệm vụ bằng grammar kết hợp tìm kiếm'' và ``sinh cấu trúc đồ thị nhiệm vụ bằng mô hình học đồ thị'' trong cùng một ngân sách thực nghiệm. Vì vậy, Chương 4 sẽ sử dụng chúng như mốc tham chiếu khi thảo luận mức cạnh tranh của Khối I theo tiêu chí cùng ngân sách tính toán.
 
 \subsection{Hướng PCGML ở cấp độ phòng}
-Các công trình PCGML gần đây, trong đó có các biến thể diffusion cho dữ liệu hạn chế, đã báo cáo kết quả hứa hẹn ở bài toán sinh phòng cục bộ \cite{khalifa2020pcgrl,shabani2023housediffusion}. Nhìn chung, các mô hình này có xu hướng học được mẫu hình không gian và tạo ra bố cục đa dạng.
+Ở cấp phòng, các công trình gần đây từ PCGRL đến diffusion cho dữ liệu hạn chế đã báo cáo kết quả hứa hẹn ở bài toán sinh cục bộ \cite{khalifa2020pcgrl,shabani2023housediffusion}. Tổng quan PCGML cũng chỉ ra các vấn đề kéo dài như khan hiếm dữ liệu, khó đồng bộ nhiều lớp ngữ nghĩa và khó chuyển giao phong cách giữa miền dữ liệu khác nhau \cite{summerville2018pcgml}. Dù các mô hình có kiểm soát ràng buộc như HouseDiffusion và LayoutDM cho thấy tiềm năng rõ rệt, chất lượng hình học vẫn chưa đồng nghĩa với tính đúng tiến trình lối chơi \cite{shabani2023housediffusion,inoue2023layoutdm}. Vì vậy, chất lượng cục bộ chưa đủ để thay thế một lớp điều phối cấu trúc ở mức cao hơn.
 
-Tổng quan PCGML cũng chỉ ra các vấn đề kéo dài như khan hiếm dữ liệu, khó đồng bộ nhiều lớp ngữ nghĩa và khó chuyển giao phong cách giữa miền dữ liệu khác nhau \cite{summerville2018pcgml}. Các nghiên cứu gần đây ở miền bố cục có điều kiện như HouseDiffusion và LayoutDM cho thấy tiềm năng của mô hình sinh có kiểm soát ràng buộc, nhưng cũng nhấn mạnh rằng chất lượng hình học chưa đồng nghĩa với tính đúng tiến trình gameplay \cite{shabani2023housediffusion,inoue2023layoutdm}.
+\subsection{Hướng tăng tốc suy luận và sinh rời rạc theo mã}
+Khi chuyển từ mô hình có chất lượng cao sang mô hình có thể chạy nhanh trong thời gian chạy, nhóm công trình về nhất quán hóa và chưng cất quỹ đạo suy luận trở thành tham chiếu quan trọng. Consistency Models cho thấy có thể học ánh xạ nhiễu-to-dữ liệu với số bước lấy mẫu rất ít mà vẫn giữ chất lượng cạnh tranh trên các bộ chuẩn thị giác \cite{song2023consistency}. Trên nền latent diffusion, Latent Consistency Models tiếp tục chứng minh hướng lấy mẫu ít bước ở không gian tiềm ẩn có thể đạt đánh đổi tốt giữa tốc độ và độ trung thực \cite{luo2023lcm}.
 
-Tuy vậy, nhiều thiết lập ở cấp độ phòng vẫn chưa xử lý đầy đủ quan hệ tiến trình giữa nhiều phòng trong một dungeon hoàn chỉnh. Nói cách khác, chất lượng cục bộ chưa tự động kéo theo tính đúng đắn toàn cục. Hạn chế này cho thấy cần một lớp điều phối cấu trúc ở mức cao hơn, thay vì chỉ tăng năng lực bộ sinh phòng.
+Song song với nhánh nhất quán hóa, các mô hình sinh mã theo cơ chế tinh chỉnh lặp theo mặt nạ như MaskGIT cho thấy một hướng tăng tốc khác: thay vì giải mã tuần tự toàn bộ chuỗi mã, mô hình cập nhật song song các vị trí chưa chắc chắn qua nhiều vòng lặp \cite{chang2022maskgit}. Với luận văn này, nhóm công trình trên có vai trò chuẩn tham chiếu cho hai nhánh nhanh/có che ở tầng sinh phòng, đồng thời cung cấp tiêu chí rõ ràng để phân tích đánh đổi chất lượng-tốc độ ở Chương 4.
 
 \subsection{Hướng lai nơ-ron -- ký hiệu}
-Trong bối cảnh PCG, hướng lai nơ-ron -- ký hiệu được quan tâm vì kết hợp được hai năng lực bổ sung nhau: khả năng học mẫu linh hoạt của mô hình nơ-ron và khả năng kiểm soát ràng buộc của thành phần ký hiệu \cite{rodriguez2019bootstrapping,dormans2011missionspaces}. Với các bài toán có ràng buộc gameplay mạnh như Zelda, hướng này đặc biệt phù hợp.
+Trong bối cảnh PCG, hướng lai nơ-ron -- ký hiệu được quan tâm vì kết hợp được hai năng lực bổ sung nhau: khả năng học mẫu linh hoạt của mô hình nơ-ron và khả năng kiểm soát ràng buộc của thành phần ký hiệu \cite{rodriguez2019bootstrapping,dormans2011missionspaces}. Với các bài toán có ràng buộc lối chơi mạnh như Zelda, hướng này đặc biệt phù hợp.
 
-Trong thực hành, hậu kiểm tra và sửa lỗi ký hiệu không chỉ là bước xử lý tình huống mà còn là một cơ chế quan trọng để nâng độ tin cậy của toàn quy trình; đặc biệt khi kết hợp với các bộ ràng buộc và thủ tục sửa cục bộ như WFC \cite{karth2021wfc,rodriguez2019bootstrapping}.
+Trong thực hành, kiểm tra hậu kỳ và sửa lỗi ký hiệu không chỉ là bước xử lý tình huống mà còn là một cơ chế quan trọng để nâng độ tin cậy của toàn quy trình; đặc biệt khi kết hợp với các bộ ràng buộc và thủ tục sửa cục bộ như WFC \cite{karth2021wfc,rodriguez2019bootstrapping}.
 
 \section{Khoảng trống nghiên cứu}
-Từ các công trình đã khảo sát, có thể rút ra bốn khoảng trống chính. Thứ nhất, nhiều phương pháp hiện có chỉ tối ưu tốt một phía: hoặc kiểm soát tiến trình nhưng hạn chế độ giàu hình thái, hoặc sinh được phòng đa dạng nhưng chưa bảo toàn đầy đủ logic toàn cục của dungeon. Thứ hai, các công trình ở cấp độ phòng thường chưa giải quyết trọn vẹn quan hệ phụ thuộc giữa nhiều phòng trong cùng một mission graph, nên chất lượng cục bộ chưa tự động chuyển thành tính đúng đắn toàn cục. Thứ ba, bằng chứng so sánh giữa các hệ lai còn thiếu nhất quán vì khác nhau về ngân sách tính toán, phạm vi dữ liệu và cách đo lường. Thứ tư, nhiều pipeline chưa nêu rõ vai trò của từng lớp từ đồ thị nhiệm vụ, mô hình sinh phòng đến lớp hậu kiểm tra, khiến việc tái lập và diễn giải kết quả trở nên khó khăn.
+Tổng hợp các công trình đã khảo sát cho thấy bốn vấn đề lặp lại khá nhất quán trong bài toán sinh dungeon và quest. Thứ nhất, nhiều phương pháp vẫn nghiêng về một trong hai cực: либо kiểm soát logic toàn cục khá tốt nhưng làm nghèo đa dạng hình thái, либо sinh được bố cục cục bộ phong phú nhưng chưa bảo toàn đầy đủ tính nhất quán của toàn dungeon \cite{togelius2011pcg,summerville2018pcgml,mouret2015mapelites,vassiliades2017cvt}. Thứ hai, các mô hình ở cấp phòng hoặc cấp đoạn thường không tự động bảo toàn quan hệ phụ thuộc giữa nhiều phòng trong cùng một mission graph, nên chất lượng cục bộ chưa đủ để suy ra tính đúng đắn toàn cục \cite{dormans2011missionspaces,rodriguez2019bootstrapping,karth2021wfc}. Thứ ba, so sánh giữa các hệ lai còn thiếu nhất quán do khác nhau về ngân sách tính toán, phạm vi dữ liệu và giao thức đánh giá, khiến kết luận về ưu thế tương đối giữa các phương pháp khó khái quát \cite{summerville2018pcgml,mouret2015mapelites,vassiliades2017cvt,fontaine2020cma}. Thứ tư, nhiều pipeline chưa mô tả thật rõ vai trò của từng lớp từ đồ thị nhiệm vụ, mô hình sinh phòng đến lớp hậu kiểm tra, làm cho việc tái lập và diễn giải kết quả bị hạn chế \cite{rodriguez2019bootstrapping,karth2021wfc}.
 
-Những khoảng trống này cho thấy cần một kiến trúc topology-first, trong đó đồ thị nhiệm vụ giữ vai trò điều phối toàn cục, mô hình sinh trong không gian tiềm ẩn xử lý chi tiết cục bộ, và lớp sửa lỗi ký hiệu bảo toàn tính chơi được của đầu ra. Theo hướng đó, luận văn không thay thế hoàn toàn các hướng search-based hay PCGML hiện có, mà kết hợp những ưu điểm của chúng trong một pipeline phân tầng có thể kiểm chứng, nhằm ưu tiên tính nhất quán của gameplay trước khi tối ưu độ phong phú hình thái.
+Từ các khoảng trống đó, luận văn rút ra nhu cầu cho một kiến trúc phân tầng và có thể kiểm chứng, trong đó quest graph giữ vai trò điều phối cấu trúc toàn cục, mô hình sinh trong không gian latent xử lý chi tiết cục bộ, và lớp sửa lỗi ký hiệu bảo toàn khả năng chơi được trước khi tối ưu thêm cho độ đa dạng hình thái. Cách tiếp cận này phù hợp với tinh thần của search-based PCG, PCGML và quality-diversity: ưu tiên nhất quán của gameplay trước, rồi mới mở rộng sang đa dạng và phong phú hình thái sau \cite{togelius2011pcg,summerville2018pcgml,khalifa2020pcgrl,mouret2015mapelites,vassiliades2017cvt}.
 
 \section{Kết luận chương}
 Chương 2 đã trình bày nền tảng lý thuyết, tổng quan các hướng nghiên cứu liên quan và xác định khoảng trống mà luận văn hướng tới giải quyết. Trên cơ sở đó, Chương 3 sẽ trình bày chi tiết kiến trúc đề xuất, luồng dữ liệu giữa các khối chức năng và cách hiện thực trong mã nguồn.
@@ -547,11 +568,11 @@ Chương 2 đã trình bày nền tảng lý thuyết, tổng quan các hướng
 Chương này trình bày phương pháp đề xuất theo đúng hiện thực trong mã nguồn, nhằm mô tả nhất quán từ quyết định thiết kế đến cơ chế vận hành của hệ thống. Trọng tâm của chương là đặc tả kiến trúc, các đại lượng được tối ưu, luồng tín hiệu điều kiện giữa các khối và các ràng buộc an toàn giúp duy trì chất lượng đầu ra trong bối cảnh dữ liệu huấn luyện hạn chế.
 
 \section{Mục tiêu và phạm vi chương}
-Phương pháp được xây dựng để xử lý đồng thời hai mục tiêu: bảo toàn tiến trình gameplay ở mức toàn dungeon và duy trì chất lượng hình học ở mức từng phòng. Ở góc độ triển khai, hệ thống tuân theo quy trình \emph{topology-first}: đồ thị nhiệm vụ được xác lập trước, sau đó mới sinh phòng có điều kiện theo đồ thị, rồi áp lớp hậu kiểm tra ký hiệu để khôi phục và duy trì ràng buộc gameplay. Cách tách tầng này phù hợp với hướng mission-space và nhóm phương pháp lai neural-symbolic trong PCG \cite{dormans2011missionspaces,rodriguez2019bootstrapping}.
+Phương pháp được xây dựng để giải đồng thời hai yêu cầu: bảo toàn tiến trình gameplay ở mức toàn dungeon và duy trì chất lượng hình học ở mức từng phòng. Về triển khai, hệ thống tuân theo quy trình \emph{graph-first}: xác lập đồ thị nhiệm vụ trước, sinh phòng có điều kiện theo đồ thị sau, rồi áp lớp hậu kiểm tra ký hiệu để khôi phục và duy trì ràng buộc gameplay. Cách tách tầng này phù hợp với hướng mission-space và nhóm phương pháp lai neural-symbolic trong PCG \cite{dormans2011missionspaces,rodriguez2019bootstrapping}.
 
-Phạm vi chương tập trung vào các nhánh nằm trên đường chạy chính của huấn luyện và suy luận, gồm: sinh cấu trúc đồ thị nhiệm vụ bằng tiến hóa, mã hóa điều kiện hai luồng, khuếch tán trong không gian tiềm ẩn, cơ chế hướng dẫn logic và sửa lỗi ký hiệu. Các biến thể thử nghiệm ngoài đường chạy chính không được đưa vào đặc tả nhằm bảo toàn tính tái lập và tính kiểm chứng của phương pháp.
+Phạm vi chương chỉ bao gồm các nhánh thuộc đường chạy chính của huấn luyện và suy luận: sinh cấu trúc đồ thị nhiệm vụ bằng tiến hóa, mã hóa điều kiện hai luồng, khuếch tán trong không gian tiềm ẩn, hướng dẫn logic và sửa lỗi ký hiệu. Các biến thể ngoài đường chạy chính không được đặc tả trong chương này để giữ tính tái lập và khả năng kiểm chứng của phương pháp.
 
-Để mạch trình bày rõ ràng, Chương 3 được tổ chức theo bốn lớp: (i) kiến trúc tổng thể và hợp đồng dữ liệu, (ii) thiết kế chi tiết từng khối, (iii) thuật toán vận hành huấn luyện/suy luận, và (iv) cấu hình triển khai -- tái lập. Cấu trúc này giúp tách bạch giữa phần ``vì sao thiết kế như vậy'' và phần ``cách hệ thống thực thi trong mã nguồn''.
+Để mạch trình bày nhất quán, Chương 3 được tổ chức theo bốn lớp: (i) kiến trúc tổng thể và hợp đồng dữ liệu, (ii) thiết kế chi tiết từng khối, (iii) thuật toán vận hành huấn luyện/suy luận, và (iv) cấu hình triển khai -- tái lập. Cấu trúc này giúp tách rõ phần lập luận thiết kế và phần hiện thực trong mã nguồn.
 
 \paragraph{Bảng ký hiệu cốt lõi cho Chương 3.}
 Để giảm tải chuyển ngữ cảnh giữa các mục, Bảng~\ref{tab:core_notation_ch3} gom các ký hiệu được dùng lặp lại trong phần phương pháp.
@@ -564,34 +585,36 @@ Phạm vi chương tập trung vào các nhánh nằm trên đường chạy ch�
 \toprule
 Ký hiệu & Ý nghĩa \\
 \midrule
-$\mathcal{A}$ & Architecture graph ở mức hệ thống (khối xử lý và luồng dữ liệu). \\
-$G$ & Mission graph ở mức nội dung dungeon (tiến trình nhiệm vụ, lock--key, nhánh, mục tiêu). \\
+$\mathcal{A}$ & Đồ thị kiến trúc ở mức hệ thống (khối xử lý và luồng dữ liệu). \\
+$G$ & Đồ thị nhiệm vụ ở mức nội dung dungeon (tiến trình nhiệm vụ, lock--key, nhánh, mục tiêu). \\
 $x_i$ & Lưới tile của phòng $i$ trong không gian rời rạc $16\times 11$. \\
 $z_i$ & Biểu diễn latent của phòng $i$ trong không gian liên tục do VQ-VAE mã hóa. \\
-$c_i$ & Vector điều kiện graph-to-room của phòng $i$ sau khi hợp nhất nhánh cục bộ và toàn cục. \\
+$c_i$ & Vector điều kiện từ đồ thị sang phòng của phòng $i$ sau khi hợp nhất nhánh cục bộ và toàn cục. \\
 $D$ & Dungeon đầu ra sau bước ghép phòng và hậu kiểm tra ký hiệu. \\
-$(f,v,\phi)$ & Bộ chẩn đoán cá thể topology gồm fitness, mức vi phạm ràng buộc và cờ khả thi. \\
+$(f,v,\phi)$ & Bộ chẩn đoán cá thể đồ thị gồm fitness, mức vi phạm ràng buộc và cờ khả thi. \\
 $\mathcal{L}_{\mathrm{diff}},\mathcal{L}_{\mathrm{logic}}$ & Thành phần mất mát chính trong huấn luyện diffusion có điều kiện và hướng dẫn logic. \\
-$\mathbb{I}_{\mathrm{fallback}}$ & Biến chỉ thị kích hoạt teacher fallback trong suy luận phòng. \\
+$\mathbb{I}_{\mathrm{fallback}}$ & Biến chỉ thị kích hoạt cơ chế quay về mô hình giáo viên (fallback) trong suy luận phòng. \\
+$U(a)$ & Hàm tiện ích dùng trong P-CBS để xếp hạng trạng thái-kế tiếp ở tầng xác nhận hành vi giới hạn nhận thức. \\
+$\mathrm{CGR}$ & Tỉ lệ \emph{cognitive gap}: phần trăm trường hợp oracle cứng giải được nhưng P-CBS thất bại. \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 \section{Kiến trúc tổng thể và hợp đồng dữ liệu}
 
-\subsection{Phân biệt architecture graph và mission graph}
+\subsection{Phân biệt đồ thị kiến trúc và đồ thị nhiệm vụ}
 Để tránh nhập nhằng thuật ngữ, chương này dùng song song hai lớp đồ thị có vai trò khác nhau:
 \begin{equation}
 \mathcal{A}=(V_{\mathcal{A}},E_{\mathcal{A}}),
 \qquad
 G=(V_G,E_G).
 \end{equation}
-Trong đó $\mathcal{A}$ là \emph{architecture graph} ở mức hệ thống (nút là các khối xử lý, cạnh là luồng dữ liệu/chỉ đạo), còn $G$ là \emph{mission graph} ở mức nội dung dungeon (nút là phòng/trạng thái nhiệm vụ, cạnh là quan hệ tiến trình gameplay) \cite{dormans2011missionspaces}. Khối I có thể sinh mới $G$ bằng tiến hóa; các khối còn lại nhận $G$ để điều kiện hóa sinh phòng, sửa lỗi, và đánh giá chất lượng.
+Trong đó $\mathcal{A}$ là \emph{đồ thị kiến trúc} ở mức hệ thống (nút là các khối xử lý, cạnh là luồng dữ liệu/chỉ đạo), còn $G$ là \emph{đồ thị nhiệm vụ} ở mức nội dung dungeon (nút là phòng/trạng thái nhiệm vụ, cạnh là quan hệ tiến trình gameplay) \cite{dormans2011missionspaces}. Khối I có thể sinh mới $G$ bằng tiến hóa; các khối còn lại nhận $G$ để điều kiện hóa sinh phòng, sửa lỗi, và đánh giá chất lượng.
 
 \paragraph{Quy ước thuật ngữ cho Chương 3.}
-Trong luận văn này, thuật ngữ ``topology'' được dùng theo nghĩa ``cấu trúc đồ thị nhiệm vụ'' trong mission-space PCG: bao gồm cấu trúc liên thông và các quan hệ tiến trình có ràng buộc (lock--key, item-gate, switch-state, boss gate) \cite{dormans2011missionspaces,mota2021dungeon,togelius2011pcg}. Khi chỉ phân tích hình thái đồ thị (số nút/cạnh, hệ số phân nhánh, chu trình, phân lớp topo), văn bản dùng cụm ``sinh cấu trúc đồ thị'' (topology generation) như tên rút gọn \cite{kahn1962topological}. Khi phân tích thứ tự mở tiến trình và điều kiện vượt ải, văn bản dùng ``ngữ nghĩa tiến trình'' (progression semantics) hoặc ``ràng buộc tiến trình nhiệm vụ'' (mission progression constraints) để chỉ rõ đây là lớp ngữ nghĩa gameplay vượt ra ngoài nghĩa topology hẹp của lý thuyết đồ thị \cite{dormans2011missionspaces,mota2021dungeon}. Vì vậy, cách gọi đầy đủ cho Khối I trong ngữ cảnh phương pháp là ``sinh cấu trúc và ngữ nghĩa tiến trình của đồ thị nhiệm vụ'', còn ``topology generation'' chỉ dùng ở các đoạn mô tả thuần hình thái cấu trúc.
+Trong luận văn này, thuật ngữ ``graph'' được dùng theo nghĩa ``đồ thị nhiệm vụ'' trong mission-space PCG: bao gồm cấu trúc liên thông và các quan hệ tiến trình có ràng buộc (lock--key, item-gate, switch-state, boss gate) \cite{dormans2011missionspaces,mota2021dungeon,togelius2011pcg}. Khi chỉ phân tích hình thái đồ thị (số nút/cạnh, hệ số phân nhánh, chu trình, phân lớp topo), văn bản dùng cụm ``sinh cấu trúc đồ thị'' (graph generation) như tên rút gọn \cite{kahn1962topological}. Khi phân tích thứ tự mở tiến trình và điều kiện vượt ải, văn bản dùng ``ngữ nghĩa tiến trình'' (progression semantics) hoặc ``ràng buộc tiến trình nhiệm vụ'' (mission progression constraints) để chỉ rõ đây là lớp ngữ nghĩa gameplay vượt ra ngoài nghĩa đồ thị hẹp của lý thuyết đồ thị \cite{dormans2011missionspaces,mota2021dungeon}. Vì vậy, cách gọi đầy đủ cho Khối I trong ngữ cảnh phương pháp là ``sinh cấu trúc và ngữ nghĩa tiến trình của đồ thị nhiệm vụ'', còn ``graph generation'' chỉ dùng ở các đoạn mô tả thuần hình thái cấu trúc.
 
-\subsection{Mô hình kiến trúc đồ thị (architecture graph) 7 khối}
+\subsection{Mô hình đồ thị kiến trúc 7 khối}
 Để đặc tả kiến trúc ở mức cấu trúc, ta mô hình hóa pipeline bằng một đồ thị có hướng:
 \begin{equation}
 \mathcal{A}=(V_{\mathcal{A}},E_{\mathcal{A}}),
@@ -618,14 +641,14 @@ với $E_{\text{core}}$ là các luồng bắt buộc trên đường chạy ch�
   \node[io] (graphin) at (0,0) {Đồ thị nhiệm vụ\\(đầu vào/sinh mới)};
   \node[block] (b1) at (2.65,0) {Khối I\\Sinh cấu trúc\\đồ thị};
   \node[block] (b3) at (5.30,0) {Khối III\\Mã hóa điều kiện\\hai luồng};
-  \node[block] (b4) at (7.95,0) {Khối IV\\Khuếch tán latent\\teacher, fast, masked};
-  \node[post] (b6) at (10.60,0) {Khối VI\\Sửa lỗi ký hiệu\\WFC và plan mask};
+  \node[block] (b4) at (7.95,0) {Khối IV\\Khuếch tán latent\\các chế độ giáo viên, nhanh và che khuất};
+  \node[post] (b6) at (10.60,0) {Khối VI\\Sửa lỗi ký hiệu\\WFC và mặt nạ kế hoạch};
   \node[io] (out) at (13.25,0) {Dungeon sau ghép\\và chỉ số đánh giá};
 
   \node[io] (roomdata) at (5.30,-2.65) {Lưới phòng\\(dữ liệu huấn luyện)};
   \node[block] (b2) at (7.95,-2.65) {Khối II\\VQ-VAE\\mã hóa và giải mã};
   \node[guide] (b5) at (10.60,-2.65) {Khối V\\Hướng dẫn logic\\bằng gradient};
-  \node[post] (b7) at (13.25,-2.65) {Khối VII\\MAP-Elites\\đánh giá chất lượng-đa dạng};
+  \node[post] (b7) at (13.25,-2.65) {Khối VII\\oracle cứng, P-CBS\\và đánh giá QD};
 
   \draw[arr] (graphin) -- (b1);
   \draw[arr] (b1) -- (b3);
@@ -640,11 +663,11 @@ với $E_{\text{core}}$ là các luồng bắt buộc trên đường chạy ch�
   \draw[arr] (b6.south) -- (b7.north);
   \draw[arr, dashed] (b7.north) -- (out.south);
 \end{tikzpicture}
-\caption{Kiến trúc 7 khối của quy trình sinh topology-first neural-symbolic. Mũi tên nét đứt biểu diễn các nhánh hướng dẫn logic và đánh giá tùy cấu hình.}
+\caption{Kiến trúc 7 khối của quy trình sinh nơ-ron--ký hiệu theo hướng graph-first. Mũi tên nét đứt biểu diễn các nhánh hướng dẫn logic và đánh giá tùy cấu hình.}
 \label{fig:architecture_7blocks}
 \end{figure}
 
-Trong phân rã chức năng, Khối I chịu trách nhiệm prior topology của $G$; Khối II chuẩn hóa không gian latent; Khối III hợp nhất điều kiện cục bộ-toàn cục theo graph; Khối IV thực hiện lấy mẫu khuếch tán; Khối V bổ sung ràng buộc logic khả vi; Khối VI phục hồi ràng buộc ký hiệu ở tầng tile; và Khối VII đánh giá quality-diversity ở tầng dungeon. Cách tách khối này tạo ra giao diện rõ ràng cho ablation theo thành phần ở Chương 4.
+Trong phân rã chức năng, Khối I chịu trách nhiệm tiên nghiệm cấu trúc đồ thị của $G$; Khối II chuẩn hóa không gian latent; Khối III hợp nhất điều kiện cục bộ-toàn cục theo đồ thị; Khối IV thực hiện lấy mẫu khuếch tán; Khối V bổ sung ràng buộc logic khả vi; Khối VI phục hồi ràng buộc ký hiệu ở tầng tile; và Khối VII thực hiện xác nhận hậu sinh theo ba vai trò bổ sung: oracle cơ học cứng, xác nhận hành vi giới hạn nhận thức P-CBS và đánh giá chất lượng-đa dạng ở mức dungeon. Cách tách khối này tạo ra giao diện rõ ràng cho phân tích loại trừ theo thành phần ở Chương 4.
 
 \subsection{Ma trận hợp đồng dữ liệu theo khối}
 Để bảo đảm truy vết được trách nhiệm của từng khối trong đường chạy chính, Bảng~\ref{tab:block_contract_matrix} tóm tắt hợp đồng vào-ra, cơ chế chặn lỗi và chỉ số giám sát tương ứng.
@@ -660,13 +683,13 @@ Khối & Hợp đồng vào-ra cốt lõi & Cơ chế chặn lỗi/chuyển tr�
 Khối & Hợp đồng vào-ra cốt lõi & Cơ chế chặn lỗi/chuyển trạng thái & Mục tiêu hoặc chỉ số chính \\
 \midrule
 \endhead
-$B_1$ & Vào: luật, seed, profile ràng buộc. Ra: mission graph khả thi $G$ và descriptor topology/progression. & Chọn nghiệm khả thi-ưu tiên; hậu kiểm tra liên thông, start-goal, virtual node. & Fitness đa mục tiêu, mức vi phạm $v$, cờ khả thi $\phi$. \\
+$B_1$ & Vào: luật, seed, hồ sơ ràng buộc. Ra: đồ thị nhiệm vụ khả thi $G$ và bộ mô tả cấu trúc/tiến trình. & Chọn nghiệm khả thi-ưu tiên; hậu kiểm tra liên thông, start-goal, virtual node. & Fitness đa mục tiêu, mức vi phạm $v$, cờ khả thi $\phi$. \\
 $B_2$ & Vào: lưới phòng rời rạc. Ra: latent $z$ và giải mã tile. & Kiểm tra shape chuẩn, bỏ batch non-finite. & $\mathcal{L}_{\mathrm{recon}}$, $\mathcal{L}_{\mathrm{VQ}}$, tỷ lệ tile hiếm. \\
-$B_3$ & Vào: $(X,E_{idx},E_f,\mathrm{TPE})$ cùng latent lân cận. Ra: điều kiện phòng $c_i$. & Kiểm tra schema tensor và fail-fast khi sai kích thước. & Độ ổn định điều kiện hóa theo room layer, lỗi schema bằng 0. \\
-$B_4$ & Vào: $z_t$, timestep $t$, điều kiện $c$. Ra: latent mẫu và dự đoán nhiễu/vận tốc. & Kẹp CFG theo miền distillation, Min-SNR weighting, clipping gradient. & $\mathcal{L}_{\mathrm{diff}}$, tốc độ mẫu sinh, tỷ lệ fallback. \\
+$B_3$ & Vào: $(X,E_{idx},E_f,\mathrm{TPE})$ cùng latent lân cận. Ra: điều kiện phòng $c_i$. & Kiểm tra lược đồ tensor và dừng sớm khi sai kích thước. & Độ ổn định điều kiện hóa theo lớp phòng, lỗi lược đồ bằng 0. \\
+$B_4$ & Vào: $z_t$, timestep $t$, điều kiện $c$. Ra: latent mẫu và dự đoán nhiễu/vận tốc. & Kẹp CFG theo miền chưng cất, trọng số Min-SNR, cắt gradient. & $\mathcal{L}_{\mathrm{diff}}$, tốc độ mẫu sinh, tỷ lệ quay về mô hình giáo viên. \\
 $B_5$ & Vào: latent trung gian và plan trace. Ra: gradient logic và $\mathcal{L}_{\mathrm{logic}}$. & Warmup theo epoch; tắt logic khi thành phần không khả dụng. & Grid reach, trace consistency, anchor consistency. \\
-$B_6$ & Vào: lưới nơ-ron, plan mask, marker đồ thị. Ra: lưới phòng đã sửa và hợp lệ biên-cửa. & Enforce boundary shell, WFC-guided repair, giới hạn số vòng sửa. & Repair rate, số lỗi cửa/đảo, hợp lệ kích thước phòng. \\
-$B_7$ & Vào: dungeon đã ghép và tín hiệu hợp lệ. Ra: cập nhật archive QD và metrics hậu sinh. & Chỉ thêm vào archive khi dungeon giải được; suy giảm mềm khi thành phần tắt. & Coverage, QD-score, linearity/leniency/progression complexity. \\
+$B_6$ & Vào: lưới nơ-ron, mặt nạ kế hoạch, marker đồ thị. Ra: lưới phòng đã sửa và hợp lệ biên-cửa. & Ép biên, sửa có dẫn dắt bởi WFC, giới hạn số vòng sửa. & Repair rate, số lỗi cửa/đảo, hợp lệ kích thước phòng. \\
+$B_7$ & Vào: dungeon đã ghép và hợp đồng validation đã chuẩn hóa. Ra: phán quyết oracle, chỉ số P-CBS, cập nhật kho QD và thống kê hậu sinh. & Chuẩn hóa lưới ghép, loại bỏ token ngoài bảng từ điển/VOID nội suy, ép đúng một start-goal, chỉ thêm vào kho khi oracle cứng giải được. & Hard-solvable rate, cognitive-gap rate, navigation entropy/confusion, coverage, QD-score. \\
 \bottomrule
 \end{longtable}
 
@@ -677,14 +700,14 @@ D = \mathcal{S}\Big(\{\,\mathcal{R}(\mathcal{N}(C_i, G_i))\,\}_{i=1}^{N}\Big),
 \end{equation}
 trong đó $\mathcal{N}$ là khối sinh phòng nơ-ron có điều kiện, $\mathcal{R}$ là khối sửa lỗi ký hiệu theo ràng buộc cục bộ, và $\mathcal{S}$ là khối ghép phòng để tạo bản đồ toàn cục.
 
-Trong thực thi, quy trình gồm ba lớp xử lý nối tiếp. Ở lớp đồ thị, hệ thống hoặc nhận đồ thị nhiệm vụ từ đầu vào hoặc tự sinh cấu trúc đồ thị nhiệm vụ bằng evolutionary search, rồi chuẩn hóa thứ tự nút để cố định ánh xạ giữa định danh phòng và chỉ số nút. Ở lớp phòng, các phòng được sinh theo lớp topo của đồ thị có hướng \cite{kahn1962topological}, sau đó nhóm theo latent shape để batch hóa mà không phá phụ thuộc predecessor. Ở lớp hậu xử lý, đầu ra neural được kiểm tra và sửa cục bộ theo plan mask trước khi ghép dungeon, nhờ đó tính nhất quán tiến trình được bảo toàn khi chuyển từ mức phòng sang mức toàn bản đồ.
+Trong thực thi, quy trình gồm ba lớp xử lý nối tiếp. Ở lớp đồ thị, hệ thống hoặc nhận đồ thị nhiệm vụ từ đầu vào hoặc tự sinh cấu trúc đồ thị nhiệm vụ bằng tìm kiếm tiến hóa, rồi chuẩn hóa thứ tự nút để cố định ánh xạ giữa định danh phòng và chỉ số nút. Ở lớp phòng, các phòng được sinh theo lớp topo của đồ thị có hướng \cite{kahn1962topological}, sau đó nhóm theo dạng latent để gom lô mà không phá phụ thuộc tiền nhiệm. Ở lớp hậu xử lý, đầu ra nơ-ron được kiểm tra và sửa cục bộ theo mặt nạ kế hoạch trước khi ghép dungeon, nhờ đó tính nhất quán tiến trình được bảo toàn khi chuyển từ mức phòng sang mức toàn bản đồ.
 
 \subsection{Biểu diễn dữ liệu và schema đầu vào}
-Đồ thị nhiệm vụ được biểu diễn dưới hai dạng: vô hướng để duy trì liên thông toàn cục và có hướng để mô tả phụ thuộc tiến trình. Từ đồ thị này, hệ thống trích xuất tensor đặc trưng nút 14 chiều, đặc trưng cạnh 16 chiều và topological positional encoding 8 chiều. Không gian phòng sử dụng lưới rời rạc $16\times 11$ với 44 lớp tile; sau đó Khối II ánh xạ sang latent chuẩn $64\times 4\times 3$ thông qua VQ-VAE \cite{oord2017vqvae}. Thiết kế ở mức latent giúp diffusion học phân bố ổn định hơn trong thiết lập dữ liệu phòng quy mô nhỏ, đồng thời vẫn duy trì khả năng can thiệp ký hiệu ở tầng tile \cite{rombach2022ldm}.
+Đồ thị nhiệm vụ được biểu diễn dưới hai dạng: vô hướng để duy trì liên thông toàn cục và có hướng để mô tả phụ thuộc tiến trình. Từ đồ thị này, hệ thống trích xuất tensor đặc trưng nút 14 chiều, đặc trưng cạnh 16 chiều và mã hóa vị trí topo 8 chiều. Không gian phòng sử dụng lưới rời rạc $16\times 11$ với 44 lớp tile; sau đó Khối II ánh xạ sang latent chuẩn hóa $64\times 4\times 3$ thông qua VQ-VAE \cite{oord2017vqvae}. Thiết kế ở mức latent giúp diffusion học phân bố ổn định hơn trong thiết lập dữ liệu phòng quy mô nhỏ, đồng thời vẫn duy trì khả năng can thiệp ký hiệu ở tầng tile \cite{rombach2022ldm}.
 Chi tiết cơ chế hợp nhất điều kiện cục bộ-toàn cục của Khối III được trình bày riêng trong Mục 3.3 để tách bạch lớp hợp đồng dữ liệu và lớp thiết kế thuật toán của từng khối.
 
 \subsection{Tiền xử lý dữ liệu và chính sách chia tập}
-Về tiền xử lý, pipeline chuẩn hóa dữ liệu về cùng một hợp đồng hình học-ngữ nghĩa trước khi huấn luyện: phòng được đưa về kích thước chuẩn $16\times 11$, tile id được ánh xạ vào từ vựng 44 lớp, và các kênh điều kiện theo biên/hàng xóm được dựng đồng nhất với schema ở Mục 3.2.5. Cùng lúc, dữ liệu đồ thị được chuẩn hóa thứ tự nút để tránh lệch chỉ số giữa pha huấn luyện và pha suy luận.
+Về tiền xử lý, quy trình chuẩn hóa dữ liệu về cùng một hợp đồng hình học-ngữ nghĩa trước khi huấn luyện: phòng được đưa về kích thước chuẩn $16\times 11$, tile id được ánh xạ vào từ vựng 44 lớp, và các kênh điều kiện theo biên/hàng xóm được dựng đồng nhất với lược đồ ở Mục 3.2.5. Cùng lúc, dữ liệu đồ thị được chuẩn hóa thứ tự nút để tránh lệch chỉ số giữa pha huấn luyện và pha suy luận.
 
 Để hạn chế rò rỉ thông tin giữa các tập, giao thức chia tập tuân thủ tính rời nhau theo nguồn dữ liệu:
 \begin{equation}
@@ -738,17 +761,17 @@ Các vi phạm shape tại các điểm này được phát hiện sớm bằng 
 \subsection{Nguyên tắc lựa chọn thiết kế giữa các phương án thay thế}
 Để làm rõ phần ``vì sao chọn thiết kế này'', luận văn dùng năm nguyên tắc xuyên suốt khi quyết định kiến trúc:
 \begin{enumerate}[label=(\roman*)]
-  \item \textbf{Tách topology và hình học phòng:} ưu tiên kiểm soát tiến trình gameplay ở cấp đồ thị trước khi tối ưu chi tiết hình học ở cấp phòng.
+  \item \textbf{Tách đồ thị nhiệm vụ và hình học phòng:} ưu tiên kiểm soát tiến trình gameplay ở cấp đồ thị trước khi tối ưu chi tiết hình học ở cấp phòng.
   \item \textbf{Rời rạc hóa latent trước khi khuếch tán:} chọn VQ-VAE để nén ngữ nghĩa tile vào codebook ổn định, giảm độ khó cho khối diffusion trong thiết lập dữ liệu nhỏ.
   \item \textbf{Điều kiện hóa hai luồng cục bộ-toàn cục:} giữ đồng thời tín hiệu lân cận trực tiếp và vai trò phòng ở cấp dungeon để giảm xung đột biên-cửa.
   \item \textbf{Ổn định hóa huấn luyện hơn là tối ưu ngắn hạn:} dùng Min-SNR, warmup logic và kẹp CFG theo miền distillation để tránh nhiễu gradient ở giai đoạn đầu.
-  \item \textbf{An toàn suy luận theo lớp phòng thủ:} cho phép sampler nhanh hoạt động, nhưng luôn đặt hậu kiểm tra ký hiệu và teacher fallback làm tầng bảo hiểm cuối.
+  \item \textbf{An toàn suy luận theo lớp phòng thủ:} cho phép sampler nhanh hoạt động, nhưng luôn đặt hậu kiểm tra ký hiệu và cơ chế quay về mô hình giáo viên làm tầng bảo hiểm cuối.
 \end{enumerate}
 
 Năm nguyên tắc này cũng là cơ sở để thiết kế ablation ở Chương 4: mỗi nguyên tắc tương ứng một hoặc nhiều cờ bật/tắt độc lập, nhờ đó có thể ước lượng đóng góp biên của từng lớp quyết định kiến trúc.
 
-\subsection{Mô hình sinh mission graph (Khối I): cấu trúc và tiến trình}
-Khối I sử dụng bộ sinh mission graph tiến hóa dựa trên grammar, trong đó genotype là chuỗi luật và phenotype là đồ thị nhiệm vụ. Ở lớp mô tả hình thái (node/edge count, branching, cycles), mục này dùng cụm ``sinh cấu trúc đồ thị'' (topology generation); ở lớp ràng buộc khóa-cổng-vật phẩm-thứ tự vượt ải, mục này dùng ``ngữ nghĩa tiến trình'' (progression semantics) hoặc ``ràng buộc tiến trình nhiệm vụ'' (mission progression constraints) \cite{dormans2011missionspaces,mota2021dungeon,kahn1962topological}. Trong đối sánh với hướng học thuần đồ thị, DiGress là baseline quan trọng cho sinh đồ thị rời rạc có nhãn nút/cạnh \cite{vignac2023digress}. Hàm thích nghi kết hợp độ khớp với đường cong mục tiêu (tension/difficulty), tính khả thi ràng buộc và các descriptor cấu trúc để tránh hội tụ sớm vào một kiểu đồ thị duy nhất. Trong cấu hình vận hành, không gian luật được mở rộng cùng cơ chế phối trộn chuyển trạng thái để cân bằng giữa prior kiểu Zelda và yêu cầu đa dạng cấu trúc, phù hợp với tinh thần quality-diversity của MAP-Elites/CVT \cite{mouret2015mapelites,vassiliades2017cvt,fontaine2020cma}.
+\subsection{Mô hình sinh đồ thị nhiệm vụ (Khối I): cấu trúc và tiến trình}
+Khối I sử dụng bộ sinh đồ thị nhiệm vụ tiến hóa dựa trên grammar, trong đó genotype là chuỗi luật và phenotype là đồ thị nhiệm vụ. Khi mô tả hình thái của đồ thị, chẳng hạn số nút, số cạnh, mức phân nhánh và số chu trình, luận văn dùng nhóm chỉ số sinh cấu trúc đồ thị; khi mô tả các quan hệ khóa-cổng-vật phẩm-thứ tự vượt ải, luận văn dùng nhóm chỉ số ngữ nghĩa tiến trình hoặc ràng buộc tiến trình nhiệm vụ \cite{dormans2011missionspaces,mota2021dungeon,kahn1962topological}. Trong đối sánh với hướng học thuần đồ thị, DiGress là baseline quan trọng cho sinh đồ thị rời rạc có nhãn nút/cạnh \cite{vignac2023digress}. Hàm thích nghi kết hợp độ khớp với đường cong mục tiêu (tension/difficulty), tính khả thi của ràng buộc và các đặc trưng cấu trúc, nhờ đó tránh việc quần thể sớm hội tụ về một kiểu đồ thị duy nhất. Trong cấu hình vận hành, không gian luật được mở rộng cùng cơ chế phối trộn chuyển trạng thái để cân bằng giữa giả định thiết kế kiểu Zelda và yêu cầu đa dạng cấu trúc, phù hợp với tinh thần chất lượng-đa dạng của MAP-Elites/CVT \cite{mouret2015mapelites,vassiliades2017cvt,fontaine2020cma}.
 
 \subsubsection{Cơ chế chọn nghiệm và áp lực ràng buộc}
 Để làm tường minh lớp sinh cấu trúc đồ thị nhiệm vụ, ta mô hình hóa mỗi cá thể bằng bộ ba: chuỗi luật (genome), đồ thị sinh ra (phenotype), và bộ chẩn đoán khả thi. Cụ thể:
@@ -763,11 +786,11 @@ Trong bước chọn nghiệm, bộ sinh dùng thứ tự khả thi-ưu tiên ki
 \begin{equation}
 \kappa(i)=\big(\mathbf{1}[\neg\phi_i],\,(1-\phi_i)\,v_i,\,-f_i,\,\varepsilon_i\big),
 \end{equation}
-với $\varepsilon_i$ là lỗi realism topology. Cá thể có khóa từ điển nhỏ hơn sẽ được ưu tiên trong tournament và survivor selection, nên quần thể khả thi luôn được xếp trước quần thể không khả thi.
+với $\varepsilon_i$ là lỗi realism của cấu trúc đồ thị. Cá thể có khóa từ điển nhỏ hơn sẽ được ưu tiên trong tournament và survivor selection, nên quần thể khả thi luôn được xếp trước quần thể không khả thi.
 
 \begin{algorithm}[htbp]
-\caption{Sinh cấu trúc đồ thị nhiệm vụ bằng GA/CVT-emitter với chọn nghiệm khả thi-ưu tiên}
-\label{alg:topology_evolution_feasible_first}
+\caption{Sinh đồ thị nhiệm vụ bằng GA hoặc CVT-emitter với ưu tiên nghiệm khả thi}
+\label{alg:graph_evolution_feasible_first}
 \begin{algorithmic}[1]
 \Require Mục tiêu đường cong $\tau$, cấu hình $(P,G,L)$, chiến lược $s\in\{\text{GA},\text{CVT-emitter}\}$
 \Ensure Đồ thị nhiệm vụ $\mathcal{G}^{\star}$
@@ -775,31 +798,31 @@ với $\varepsilon_i$ là lỗi realism topology. Cá thể có khóa từ đi�
   \State $B \gets P\cdot G$ \Comment{ngân sách đánh giá}
   \State Khởi tạo CVT archive
   \For{$e=1$ đến $B$}
-    \State Phát genome từ emitter (init random hoặc archive-guided)
+    \State Phát sinh một genome từ emitter (khởi tạo ngẫu nhiên hoặc dẫn hướng từ archive)
     \State $\mathcal{G}\gets\textsc{Execute}(g)$; $(f,v,\phi)\gets\textsc{EvaluateGraph}(\mathcal{G})$
-    \State Cập nhật archive và best theo khóa $\kappa$
+    \State Cập nhật archive và cá thể tốt nhất theo khóa $\kappa$
   \EndFor
 \Else
   \State Khởi tạo quần thể ban đầu kích thước $P$
   \For{$t=1$ đến $G$}
     \State Đánh giá toàn bộ quần thể: \textsc{Execute} $\rightarrow$ \textsc{EvaluateGraph}
     \If{$\max f \ge 0.95$}
-      \State \textbf{break} \Comment{dừng sớm hội tụ}
+      \State \textbf{break} \Comment{dừng sớm khi đã hội tụ}
     \EndIf
-    \State Sinh offspring bằng tournament, crossover, mutation thích nghi
+    \State Sinh thế hệ con bằng tournament selection, lai ghép và đột biến thích nghi
     \State Đánh giá offspring
-    \State Chọn sống sót $(\mu+\lambda)$ theo khả thi-ưu tiên
+    \State Chọn cá thể sống sót theo quy tắc khả thi-ưu tiên trong mô hình $(\mu+\lambda)$
   \EndFor
 \EndIf
-\State Hậu xử lý đồ thị tốt nhất: sửa tiến trình, lọc virtual node, kiểm tra hợp lệ topology
+\State Hậu xử lý đồ thị tốt nhất: sửa tiến trình, lọc virtual node, kiểm tra hợp lệ cấu trúc đồ thị
 \State \Return $\mathcal{G}^{\star}$
 \end{algorithmic}
 \end{algorithm}
 
-Thuật toán \ref{alg:topology_evolution_feasible_first} là mô hình sinh cấu trúc đồ thị nhiệm vụ tường minh của Chương 3: vừa tối ưu mục tiêu chất lượng, vừa đảm bảo cơ chế áp lực ràng buộc xuyên suốt từ lúc áp luật grammar, đánh giá cá thể, đến bước chọn sống sót và hậu kiểm tra đầu ra.
+Thuật toán \ref{alg:graph_evolution_feasible_first} tóm tắt cách Khối I vận hành trong thực tế: mục tiêu chất lượng được tối ưu đồng thời với áp lực ràng buộc xuyên suốt từ lúc áp luật grammar, đánh giá cá thể, chọn sống sót cho đến hậu kiểm đầu ra.
 
 \paragraph{Tiêu chí tính đúng, điều kiện dừng và độ phức tạp.}
-Với ký hiệu $n=|V|$, $m=|E|$, $P$ là kích thước quần thể, $G$ là số thế hệ và $L$ là độ dài genome, tính đúng của thuật toán được bảo đảm nhờ chuỗi kiểm soát ràng buộc theo ba lớp: dynamic action mask và hard safety cap ở pha tạo phenotype, cờ khả thi $\phi=\mathbf{1}[v\le 10^{-9}]$ ở pha đánh giá ràng buộc, và hậu kiểm tra hợp lệ topology (liên thông, start/goal, độ dài đường đi tối thiểu, hợp lệ boss-goal, loại virtual node) trước khi trả đồ thị cuối. Quá trình tìm kiếm dừng khi nhánh GA chạy đủ $G$ thế hệ hoặc đạt ngưỡng hội tụ của fitness tốt nhất ($\ge 0.95$), còn nhánh CVT-emitter dừng khi dùng hết ngân sách $P\cdot G$. Từ các thành phần chi phí thực thi, đánh giá và chọn lọc, độ phức tạp được chặn trên bởi:
+Gọi $n=|V|$, $m=|E|$, $P$ là kích thước quần thể, $G$ là số thế hệ và $L$ là độ dài genome. Tính đúng của thuật toán được bảo đảm bởi ba lớp kiểm soát ràng buộc: cơ chế chặn các hành động không hợp lệ theo trạng thái hiện tại ở pha tạo phenotype; cờ khả thi $\phi=\mathbf{1}[v\le 10^{-9}]$ ở pha đánh giá; và hậu kiểm tra tính hợp lệ của cấu trúc đồ thị (liên thông, start/goal, độ dài đường đi tối thiểu, hợp lệ boss-goal, loại virtual node) trước khi trả kết quả cuối. Quá trình tìm kiếm dừng khi nhánh GA chạy đủ $G$ thế hệ hoặc đạt ngưỡng hội tụ fitness tốt nhất ($\ge 0.95$), còn nhánh CVT-emitter dừng khi dùng hết ngân sách $P\cdot G$. Từ chi phí thực thi, đánh giá và chọn lọc, độ phức tạp được chặn trên bởi:
 \begin{equation}
 \mathcal{O}\!\left(PG\,(C_{\text{exec}}+C_{\text{eval}})+PG\log P\right)
 \end{equation}
@@ -810,21 +833,20 @@ cho nhánh GA, và
 cho nhánh CVT-emitter.
 
 \subsection{Khối mã hóa điều kiện graph-to-room (Khối III)}
-Khối III thực hiện ánh xạ từ ngữ cảnh đồ thị nhiệm vụ sang vector điều kiện cho từng phòng đích. Với phòng $i$, bộ điều kiện hai luồng được viết:
+Khối III ánh xạ ngữ cảnh đồ thị nhiệm vụ sang vector điều kiện cho từng phòng đích. Với phòng $i$, bộ điều kiện được xây từ hai nguồn: ngữ cảnh cục bộ và ngữ cảnh toàn cục.
 \begin{align}
 c_i^{\text{local}} &= f_{\text{local}}\big([z_{N}, z_{S}, z_{E}, z_{W}, b_i, p_i]\big),\\
 H &= \mathrm{GNN}(G; X, E, \mathrm{TPE}), \quad c_i^{\text{global}} = H_i,\\
 c_i &= \mathrm{Attn}(q=c_i^{\text{local}}, K=H, V=H) + f_{\text{fuse}}\big([c_i^{\text{local}}, c_i^{\text{global}}]\big).
 \end{align}
-Trong đó $z_{N,S,E,W}$ là latent của các phòng lân cận theo bốn hướng, $b_i$ là ràng buộc biên và $p_i$ là đặc trưng vị trí phòng. Nhánh toàn cục hỗ trợ nhiều biến thể GNN; cấu hình mặc định ưu tiên GPS cho bài toán đồ thị có tín hiệu toàn cục mạnh \cite{rampasek2022gps}. Ngoài ra, các thiên kiến cấu trúc kiểu Graphormer (khoảng cách đường đi ngắn nhất và structural bias theo quan hệ cạnh) cũng là cơ sở lý thuyết để củng cố lớp mã hóa đồ thị trong khối này \cite{ying2021graphormer}. Tầng attention đóng vai trò căn chỉnh thông tin toàn cục vào ngữ cảnh cục bộ của từng phòng, từ đó giảm mâu thuẫn giữa ràng buộc biên và vai trò gameplay ở cấp dungeon.
+Trong đó $z_{N,S,E,W}$ là latent của các phòng lân cận theo bốn hướng, $b_i$ là ràng buộc biên và $p_i$ là đặc trưng vị trí phòng. Nhánh toàn cục hỗ trợ nhiều biến thể GNN; cấu hình mặc định ưu tiên GPS cho bài toán đồ thị có tín hiệu toàn cục mạnh \cite{rampasek2022gps}. Ngoài ra, các thiên kiến cấu trúc theo kiểu Graphormer, như khoảng cách đường đi ngắn nhất và độ lệch cấu trúc theo quan hệ cạnh, cũng là cơ sở lý thuyết để củng cố lớp mã hóa đồ thị trong khối này \cite{ying2021graphormer}. Tầng attention đóng vai trò căn chỉnh thông tin toàn cục với ngữ cảnh cục bộ của từng phòng, từ đó giảm mâu thuẫn giữa ràng buộc biên và vai trò gameplay trong toàn bộ dungeon.
 
-\subsection{Khối sinh nơ-ron: VQ-VAE (Khối II) và latent diffusion (Khối IV)}
-Khối II đóng vai trò cầu nối giữa không gian tile rời rạc và không gian latent liên tục, còn Khối IV học quá trình khử nhiễu có điều kiện trên latent theo khung DDPM/DDIM \cite{ho2020ddpm,song2021ddim}. Ở pha suy luận, mô hình sử dụng classifier-free guidance (CFG), tương ứng với:
+\subsection{Khối sinh nơ-ron: VQ-VAE (Khối II) và khuếch tán tiềm ẩn (Khối IV)}
+Khối II đóng vai trò cầu nối giữa không gian tile rời rạc và không gian latent liên tục, còn Khối IV học quá trình khử nhiễu có điều kiện trên latent theo khung DDPM/DDIM \cite{ho2020ddpm,song2021ddim}. Ở pha suy luận, mô hình sử dụng classifier-free guidance (CFG), với hệ số guidance $s_t$ thay đổi theo lịch chạy và được giữ trong miền đã hiệu chỉnh khi dùng bộ lấy mẫu nhanh \cite{ho2022cfg}. Trong hiện thực mã nguồn, nhánh lấy mẫu rút gọn luôn bị giới hạn bởi miền CFG đã được hiệu chỉnh nên không thể đẩy hệ số guidance vượt quá ngưỡng an toàn.
 \begin{equation}
 \tilde{\epsilon}_{\theta}(x_t,t,c)=\epsilon_{\theta}(x_t,t,\varnothing)
 + s_t\Big(\epsilon_{\theta}(x_t,t,c)-\epsilon_{\theta}(x_t,t,\varnothing)\Big),
 \end{equation}
-trong đó $s_t$ là hệ số guidance theo lịch runtime và được kẹp trong miền hợp lệ của teacher khi chạy fast sampler \cite{ho2022cfg}. Cơ chế này nhất quán với mã nguồn: nhánh student không được phép dùng mức CFG vượt quá miền đã distill.
 
 Ở pha huấn luyện, diffusion loss được tái trọng số theo Min-SNR để giảm lệch trọng số giữa các timestep:
 \begin{equation}
@@ -835,34 +857,34 @@ w_t = \frac{\min(\mathrm{SNR}_t,\gamma)}{\mathrm{SNR}_t+\varepsilon}, \qquad
 với $y_t$ là nhiễu mục tiêu (hoặc vận tốc $v$ khi bật v-prediction) và $\gamma$ là ngưỡng Min-SNR \cite{hang2023minsnr}.
 
 \subsection{Khối hướng dẫn logic và sửa lỗi ký hiệu (Khối V--VI)}
-Khối V đưa tín hiệu logic vào huấn luyện theo cơ chế \emph{warmup} nhằm tránh gây nhiễu khi mô hình chưa ổn định:
+Khối V bổ sung tín hiệu logic vào huấn luyện theo cơ chế \emph{warmup} nhằm tránh gây nhiễu khi mô hình chưa ổn định:
 \begin{equation}
 \mathcal{L}_{\text{total}} = \alpha_{\text{visual}}\mathcal{L}_{\text{diff}} +
 \mathbf{1}[e \ge e_{\text{warmup}}] \, \alpha_{\text{logic}}\mathcal{L}_{\text{logic}}.
 \end{equation}
-Ở suy luận DDIM-style, guidance logic tác động trực tiếp lên dự đoán nhiễu:
+Trong suy luận theo kiểu DDIM, guidance logic tác động trực tiếp lên dự đoán nhiễu:
 \begin{equation}
 \hat{\epsilon}^{\,'}_\theta = \hat{\epsilon}_\theta + \sqrt{1-\bar{\alpha}_t}\,\nabla_{x_t}\mathcal{L}_{\text{logic}},
 \end{equation}
 rồi mới cập nhật lại $\hat{x}_0$. Cách viết này phản ánh đúng thao tác trong Khối IV khi logic guidance được bật.
 
-Sau giải mã, Khối VI xử lý phòng theo chuỗi chuẩn hóa: cleanup, sửa biên và repair có điều kiện theo plan mask. Thành phần WFC-guided inpaint được dùng như cơ chế sửa cục bộ khi phát hiện vùng vi phạm ràng buộc \cite{karth2021wfc}. Do plan mask được suy từ semantics của đồ thị (vai trò phòng, cửa bắt buộc, quan hệ incoming/outgoing), quá trình sửa lỗi không chỉ cải thiện hình học mà còn khôi phục tính đúng đắn của tiến trình gameplay.
+Sau giải mã, Khối VI xử lý phòng theo chuỗi chuẩn hóa gồm làm sạch dữ liệu, ép biên và sửa cục bộ có điều kiện theo mặt nạ kế hoạch. Thành phần inpainting có dẫn dắt bởi WFC được dùng như cơ chế sửa cục bộ khi phát hiện vùng vi phạm ràng buộc \cite{karth2021wfc}. Vì mặt nạ kế hoạch được suy ra từ ngữ nghĩa đồ thị (vai trò phòng, cửa bắt buộc, quan hệ vào/ra), bước sửa lỗi không chỉ cải thiện hình học mà còn phục hồi tính đúng của tiến trình gameplay.
 
-Thuật toán này được thiết kế để bảo toàn tính nhất quán giữa tầng nơ-ron và tầng ký hiệu: đầu vào là lưới nơ-ron cùng ngữ cảnh đồ thị phòng, đầu ra là lưới đã chuẩn hóa ngữ nghĩa, thỏa ràng buộc biên-cửa và giữ khả giải cục bộ. Trật tự xử lý được cố định theo chuỗi chuẩn hóa $\rightarrow$ ép biên $\rightarrow$ sửa có phản hồi theo plan mask $\rightarrow$ phủ marker đồ thị $\rightarrow$ kiểm tra hợp lệ, nhờ đó mọi biến đổi đều có thể truy vết và kiểm chứng.
+Mục tiêu của thuật toán là giữ nhất quán giữa tầng nơ-ron và tầng ký hiệu: đầu vào là lưới nơ-ron cùng ngữ cảnh đồ thị phòng, đầu ra là lưới đã chuẩn hóa ngữ nghĩa, thỏa ràng buộc biên-cửa và bảo toàn khả giải cục bộ. Trình tự xử lý được cố định theo chuỗi chuẩn hóa $\rightarrow$ ép biên $\rightarrow$ sửa có phản hồi theo mặt nạ kế hoạch $\rightarrow$ phủ marker đồ thị $\rightarrow$ kiểm tra hợp lệ, nhờ đó mọi thay đổi đều có thể truy vết và kiểm chứng.
 
 \begin{algorithm}[htbp]
 \caption{Sửa phòng có phản hồi ký hiệu ở tầng hậu xử lý}
 \label{alg:room_repair_feedback}
 \begin{algorithmic}[1]
-\Require Neural grid $x_i^{\text{neural}}$, graph phòng $G_i$, start-goal $(s_i,g_i)$
+\Require Lưới nơ-ron đầu vào $x_i^{\text{neural}}$, đồ thị phòng $G_i$, cặp start-goal $(s_i,g_i)$
 \Ensure Grid cuối $x_i^{\text{final}}$ thỏa ràng buộc biên và đường đi
 \State $x_i^{\text{final}} \gets \textsc{SanitizeSemanticIds}(x_i^{\text{neural}})$
 \State $x_i^{\text{final}} \gets \textsc{StripVolatileSemantics}(x_i^{\text{final}}, G_i)$
 \State $x_i^{\text{final}} \gets \textsc{EnforceBoundaryShell}(x_i^{\text{final}}, G_i)$
 \State $m_i \gets \textsc{BuildRoomPlanTrace}(G_i,s_i,g_i)$
-\If{bật chế độ sửa hậu kỳ}
+\If{cơ chế sửa hậu kỳ được kích hoạt}
   \State $x_i^{\text{cand}} \gets \textsc{RepairRoomWithFeedback}(x_i^{\text{final}}, m_i)$
-  \If{repair thành công}
+  \If{bước sửa tạo ra cấu hình hợp lệ}
     \State $x_i^{\text{final}} \gets x_i^{\text{cand}}$
   \EndIf
 \EndIf
@@ -872,21 +894,71 @@ Thuật toán này được thiết kế để bảo toàn tính nhất quán gi
 \end{algorithmic}
 \end{algorithm}
 
-Thuật toán \ref{alg:room_repair_feedback} là cầu nối giữa chất lượng thị giác và tính đúng gameplay: nếu không có lớp này, sai lệch cục bộ về cửa, biên hoặc đường đi sẽ lan sang bước ghép dungeon và làm giảm độ tin cậy của đánh giá toàn cục.
+Thuật toán \ref{alg:room_repair_feedback} là lớp nối giữa chất lượng hình học và tính đúng gameplay. Nếu thiếu lớp này, các sai lệch cục bộ về cửa, biên hoặc đường đi có thể lan sang bước ghép dungeon và làm giảm độ tin cậy của đánh giá toàn cục.
 
 \paragraph{Tiêu chí tính đúng, điều kiện dừng và độ phức tạp.}
 Ở tầng sửa hậu kỳ, tính đúng của đầu ra phòng được bảo đảm khi đồng thời giữ đúng kích thước phòng, thỏa hợp đồng biên-cửa theo ngữ cảnh đồ thị, và không làm suy giảm khả giải cục bộ sau bước repair cùng overlay marker. Thuật toán dừng khi hoàn tất chuỗi thao tác chuẩn hóa hữu hạn; riêng nhánh repair bị chặn trên bởi số vòng thử theo cấu hình runtime. Do đó, độ phức tạp theo phòng là:
 \begin{equation}
 \mathcal{O}\!\left(HW + R\,C_{\text{rep}}(H,W)\right),
 \end{equation}
+Trong phiên bản cuối của P-CBS, hai số hạng $\xi$ và $\zeta$ mô hình hóa \emph{progression-affordance memory}: tác tử có thể nhớ lại một cửa khóa, bombable gate hay puzzle anchor đã quan sát trước đó sau khi inventory thay đổi, đồng thời vẫn bị phạt nếu affordance đó không còn được hỗ trợ tốt bởi bộ nhớ làm việc.
 với $R$ là số vòng repair thực thi.
+
+\subsection{Khối xác nhận hậu sinh: oracle cứng, P-CBS và giao thức bàn giao validation (Khối VII)}
+Khối VII là điểm chốt của pipeline sau khi các phòng đã được ghép thành dungeon hoàn chỉnh. Ở đây luận văn tách rõ hai lớp xác nhận có vai trò khác nhau thay vì dùng một bộ giải duy nhất cho mọi mục tiêu: (i) \emph{oracle cứng} để quyết định tính đúng cơ học của dungeon, và (ii) \emph{Persona-Driven Cognitive Bounded Search (P-CBS)} để đo mức ma sát nhận thức của các persona người chơi. Cách tách này phù hợp với thực hành trong automated playtesting: các procedural persona cổ điển chủ yếu dùng MCTS hoặc RL để mô phỏng lối chơi, trong khi các bộ giải trạng thái tối ưu được dùng để kiểm tra tính beatable/solvable về mặt cơ học \cite{holmgard2018proceduralpersonas,ariyurek2023beyondpersonas}. Đối với bài toán dungeon nhiều điều kiện, oracle cứng của luận văn được cố định là tổ hợp \emph{A* trên lưới + graph progression validator + kiểm tra soft-lock quyết định}; còn P-CBS được dùng như lớp đo hành vi giới hạn nhận thức, không thay thế oracle cứng.
+
+\paragraph{Hợp đồng bàn giao lưới ghép trước validation.}
+Để tránh việc mô-đun validator nhận đầu vào khác chuẩn so với mô tả học thuật, lưới ghép phải đi qua một bước chuẩn hóa tường minh tương ứng với thủ tục \texttt{PrepareValidationGrid} trong mã nguồn. Bước này thực hiện bốn thao tác hữu hạn: ép kiểu về ma trận số nguyên hai chiều, ánh xạ mọi token ngoài bảng từ điển semantic về tile hợp lệ, lấp các vùng \texttt{VOID} kín không nối với biên ngoài, và chuẩn hóa đúng một cặp \texttt{START}/\texttt{TRIFORCE}. Viết gọn:
+\begin{equation}
+D^{\star}=\Pi_{\mathrm{valid}}\!\left(D\right),
+\end{equation}
+trong đó $\Pi_{\mathrm{valid}}$ là phép chiếu từ lưới ghép thô sang miền hợp lệ của bộ từ vựng tile và ràng buộc terminal. Cơ chế này giải quyết trực tiếp lớp lỗi \emph{VOID leak} hoặc \emph{unmapped semantic token} vốn có thể làm sai lệch phán quyết validator nếu mỗi script tự xử lý ad hoc.
+
+\paragraph{Oracle cứng cho tính đúng cơ học.}
+Sau chuẩn hóa, oracle cứng chỉ công nhận dungeon là hợp lệ khi đồng thời thỏa ba điều kiện:
+\begin{equation}
+\phi_{\mathrm{hard}}(D^{\star})=
+\mathbf{1}\!\left[
+\phi_{\mathrm{A*}}(D^{\star}) \land
+\phi_{\mathrm{prog}}(G,D^{\star}) \land
+\phi_{\mathrm{softlock}}(D^{\star})
+\right].
+\end{equation}
+Ở đây $\phi_{\mathrm{A*}}$ kiểm tra khả năng đi từ start đến goal trong lưới ghép, $\phi_{\mathrm{prog}}$ kiểm tra tiến trình khóa--cổng--vật phẩm theo đồ thị nhiệm vụ, còn $\phi_{\mathrm{softlock}}$ loại các trường hợp tồn tại ngõ cụt không hồi phục. Việc giữ oracle này ở dạng chính xác giúp luận văn không đánh đồng ``agent người-like thất bại'' với ``dungeon không chơi được''.
+
+\paragraph{P-CBS như bộ xác nhận hành vi giới hạn nhận thức.}
+Khác với procedural persona kiểu MCTS và các mô hình đường đi có bản đồ nhận thức chủ yếu mô phỏng định tính sự quên/nhầm hướng \cite{holmgard2018proceduralpersonas,rahmani2022humanlikepath,dubey2022cognitivepath}, P-CBS được hiện thực như một tìm kiếm heuristic trên không gian trạng thái tăng cường bởi bộ nhớ làm việc, độ tin cậy tri giác và ngân sách cân nhắc. Đóng góp được luận văn bảo vệ ở đây là một \emph{validator persona-driven tích hợp vào pipeline sinh dungeon}, không phải một họ thuật toán tối ưu tổng quát mới nhằm thay thế A* trong mọi miền bài toán. Với một hành động $a$, hàm tiện ích dùng để xếp hạng nút kế là:
+\begin{equation}
+\begin{aligned}
+U(a)=\;&\alpha \,\Delta g+\beta \,\mathrm{info\_gain}
+-\gamma \,\mathrm{risk}
+-\rho \,\mathrm{revisit} \\
+&-\psi \,\mathrm{complexity}
+-\omega \,\mathrm{conditional\_uncertainty}
++\eta \,\mathrm{frontier} \\
+&+\xi \,\mathrm{affordance\_resume}
+-\zeta \,\mathrm{affordance\_forgetting}.
+\end{aligned}
+\end{equation}
+Hai hạng tử cốt lõi làm nên khác biệt của P-CBS là $\rho$ và $\omega$: $\mathrm{revisit}$ phạt việc quay lại ô đã đi qua dưới điều kiện bộ nhớ làm việc hữu hạn, còn $\mathrm{conditional\_uncertainty}$ phạt việc đi vào các cấu trúc có điều kiện như cửa khóa, bombable gate, puzzle marker khi niềm tin cục bộ và inventory chưa đủ mạnh. Cách mô hình hóa này gần với khung bounded/resource-rational planning ở mức ý tưởng \cite{callaway2022cognitiveresources,lancia2023inforl}, nhưng được hiện thực trực tiếp ở tầng quyết định node expansion của bộ giải dungeon thay vì ở tầng policy học sâu hay meta-reasoning tổng quát.
+
+\paragraph{Persona và chỉ số nhận thức.}
+P-CBS cho phép thay trọng số theo persona mà không thay đổi hợp đồng đầu vào của validator. Ví dụ, \emph{speedrunner} dùng trọng số thấp cho $\rho,\psi,\omega$ và ưu tiên $\Delta g$; trong khi \emph{novice} dùng trọng số cao hơn cho nguy cơ chiến đấu, độ phức tạp và bất định có điều kiện. Từ quỹ đạo đã sinh, hệ thống trích xuất các chỉ số hành vi như navigation entropy, tổng số revisits, và \emph{aha-latency} (độ trễ trước khi persona vượt được vùng puzzle sau chuỗi do dự/lạc hướng):
+\begin{equation}
+H_{\mathrm{nav}}=-\sum_{v\in \mathcal{V}_{\mathrm{path}}} p(v)\log_2 p(v),
+\qquad
+\mathrm{CGR}=
+\frac{\sum_{j=1}^{M}\mathbf{1}\!\left[\phi_{\mathrm{hard}}(D_j^{\star})=1 \land \phi_{\mathrm{pcbs}}(D_j^{\star})=0\right]}
+{\sum_{j=1}^{M}\mathbf{1}\!\left[\phi_{\mathrm{hard}}(D_j^{\star})=1\right]},
+\end{equation}
+trong đó $H_{\mathrm{nav}}$ là entropy điều hướng và $\mathrm{CGR}$ là \emph{cognitive gap rate}. Với thiết kế này, Chương 4 có thể đánh giá riêng: dungeon có đúng cơ học hay không, và nếu đúng cơ học thì persona nào còn bị lạc, sợ rủi ro hay bị chậm ở các vùng puzzle.
 
 \section{Thuật toán huấn luyện và suy luận trong mã nguồn}
 
 \subsection{Huấn luyện theo giai đoạn}
-Huấn luyện được tổ chức theo chuỗi VQ-VAE $\rightarrow$ Diffusion $\rightarrow$ Fast Sampler $\rightarrow$ Masked Room, mỗi giai đoạn có checkpoint riêng để phục vụ resume và ablation. Trong giai đoạn diffusion, mỗi batch được xử lý theo các bước: mã hóa room thật sang latent thật, dựng điều kiện graph-to-room đúng schema, tính \(\mathcal{L}_{\text{diff}}\) với Min-SNR weighting, sau đó cộng logic loss theo lịch warmup. Các cơ chế an toàn như bỏ qua batch non-finite, gradient clipping và EMA được duy trì trong vòng lặp chính để hạn chế lỗi tối ưu hóa lan truyền theo thời gian huấn luyện.
+Huấn luyện được tổ chức theo chuỗi VQ-VAE $\rightarrow$ Diffusion $\rightarrow$ Fast Sampler $\rightarrow$ Masked Room, mỗi giai đoạn có điểm kiểm tra riêng để phục vụ tiếp tục huấn luyện và phân tích loại trừ. Trong giai đoạn diffusion, mỗi batch được xử lý theo các bước: mã hóa room thật sang latent thật, dựng điều kiện từ đồ thị sang phòng đúng lược đồ, tính \(\mathcal{L}_{\text{diff}}\) với trọng số Min-SNR, sau đó cộng logic loss theo lịch warmup. Các cơ chế an toàn như bỏ qua batch không hữu hạn, cắt gradient và EMA được duy trì trong vòng lặp chính để hạn chế lỗi tối ưu hóa lan truyền theo thời gian huấn luyện.
 
-Ở mức hiện thực, scheduler và checkpoint stage giữ vai trò neo để chuyển pha huấn luyện mà không làm đứt mạch tối ưu hóa. Khi kết hợp với kiểm tra non-finite, gradient clipping và EMA, vòng lặp huấn luyện giữ được cả độ ổn định số học lẫn khả năng truy vết khi resume thí nghiệm.
+Ở mức hiện thực, bộ lập lịch và điểm kiểm tra theo giai đoạn giữ vai trò neo để chuyển pha huấn luyện mà không làm đứt mạch tối ưu hóa. Khi kết hợp với kiểm tra không hữu hạn, cắt gradient và EMA, vòng lặp huấn luyện giữ được cả độ ổn định số học lẫn khả năng truy vết khi tiếp tục thí nghiệm.
 
 Để mã giả có tính học thuật và dễ đối chiếu, luận văn theo quy ước trình bày thường gặp trong các bài báo gốc về diffusion và graph diffusion: tách rõ nhánh train/sampling, nêu tường minh input-output, và đặt tên bước theo hành động thuật toán ở mức trừu tượng (ví dụ: lấy mẫu, gom batch, cập nhật) thay vì dùng trực tiếp tên hàm triển khai trong mã nguồn \cite{ho2020ddpm,song2021ddim,vignac2023digress,mouret2015mapelites}.
 
@@ -920,7 +992,7 @@ Huấn luyện được tổ chức theo chuỗi VQ-VAE $\rightarrow$ Diffusion 
 
 Theo nghĩa phương pháp luận, Thuật toán \ref{alg:train_epoch_diffusion} hiện thực trực tiếp nguyên tắc ``ổn định trước, ràng buộc sau'': tín hiệu logic được đưa vào có kiểm soát để tránh làm lệch gradient ở giai đoạn mô hình chưa hội tụ đủ.
 
-Trong mã nguồn, hai bước gom batch điều kiện và gom batch đồ thị được hiện thực bằng các helper đóng gói tensor tương ứng trong luồng huấn luyện diffusion.
+Trong mã nguồn, hai bước gom lô điều kiện và gom lô đồ thị được hiện thực bằng các hàm hỗ trợ đóng gói tensor tương ứng trong luồng huấn luyện diffusion.
 
 \paragraph{Tiêu chí tính đúng, điều kiện dừng và độ phức tạp.}
 Ở bước cập nhật tham số, tính đúng được bảo đảm khi vòng lặp huấn luyện duy trì đồng thời ba bất biến vận hành: hàm mất mát và gradient luôn hữu hạn trên từng mini-batch, tensor điều kiện graph-to-room luôn tuân thủ đúng schema dữ liệu đã đặc tả, và thành phần $\mathcal{L}_{\text{logic}}$ chỉ được kích hoạt sau ngưỡng warmup $e_{\text{warmup}}$. Quá trình lặp dừng một cách tự nhiên khi đã duyệt hết dataloader trong một epoch, tương đương $|\mathcal{D}|$ bước cập nhật. Với mô hình chi phí theo batch, độ phức tạp xấp xỉ:
@@ -930,7 +1002,7 @@ Trong mã nguồn, hai bước gom batch điều kiện và gom batch đồ th�
 trong đó $C_{\text{diff}}$ là hạng chi phối.
 
 \subsection{Suy luận nhiều phòng và cơ chế fallback}
-Suy luận dungeon được tổ chức theo ba mức: mức đồ thị, mức lớp phụ thuộc và mức phòng. Ở mức đồ thị, hệ thống chuẩn hóa cấu trúc đồ thị nhiệm vụ và xây dựng ngữ cảnh đồ thị. Ở mức lớp phụ thuộc, các phòng được sắp theo độ sâu topo \cite{kahn1962topological} rồi batch theo latent shape để giữ phụ thuộc logic và tận dụng song song hóa. Ở mức phòng, điều kiện được dựng từ hàng xóm đã sinh, latent được lấy mẫu theo chế độ teacher/fast/masked, sau đó giải mã qua VQ-VAE và áp lớp sửa ký hiệu trước khi trả kết quả.
+Trong luận văn này, mô hình giáo viên (teacher) là mô hình diffusion đầy đủ, được huấn luyện ở chế độ chuẩn và giữ vai trò nguồn tham chiếu có chất lượng cao nhất; các nhánh fast và masked là các biến thể suy luận rút gọn được chưng cất từ mô hình này để giảm chi phí. Fallback được hiểu là cơ chế an toàn tự động chuyển từ các nhánh sinh rút gọn sang mô hình giáo viên khi số chỉ số vi phạm vượt ngưỡng thiết kế, nhằm tái sinh lại phòng với cấu hình ổn định hơn. Quy trình suy luận dungeon được tổ chức theo ba mức: mức đồ thị, mức lớp phụ thuộc và mức phòng. Ở mức đồ thị, hệ thống chuẩn hóa đồ thị nhiệm vụ và dựng ngữ cảnh toàn cục. Ở mức lớp phụ thuộc, các phòng được sắp theo độ sâu topo \cite{kahn1962topological} rồi gom theo nhóm latent để vừa giữ quan hệ phụ thuộc, vừa khai thác song song hóa. Ở mức phòng, điều kiện được tạo từ các phòng lân cận đã sinh; latent được lấy mẫu theo một trong ba chế độ thực thi, sau đó giải mã qua VQ-VAE và được hiệu chỉnh ký hiệu trước khi trả kết quả.
 
 \begin{figure}[htbp]
 \centering
@@ -945,11 +1017,11 @@ Suy luận dungeon được tổ chức theo ba mức: mức đồ thị, mức 
 ]
   \node[flowstep] (in) {Đầu vào phòng $i$: latent lân cận, ngữ cảnh đồ thị, ràng buộc biên, seed};
   \node[flowstep, below=of in] (cond) {Tạo điều kiện $c_i$ từ nhánh cục bộ và nhánh toàn cục GNN};
-  \node[flowstep, below=of cond] (sample) {Lấy mẫu latent theo chế độ teacher, fast hoặc masked};
+  \node[flowstep, below=of cond] (sample) {Lấy mẫu latent theo một trong ba chế độ: mô hình giáo viên đầy đủ, lấy mẫu nhanh hoặc che khuất};
   \node[flowstep, below=of sample] (decode) {Giải mã VQ-VAE $\rightarrow$ lưới nơ-ron, chuẩn hóa ngữ nghĩa, ép vỏ biên};
-  \node[flowstep, below=of decode] (repair) {Sửa cục bộ theo plan mask và WFC-guided inpaint (nếu bật)};
-  \node[decision, below=7mm of repair] (fallback) {Kích hoạt quay về teacher?\\(theo ngưỡng vi phạm)};
-  \node[flowstep, below left=7mm and 14mm of fallback] (teacher) {Sinh lại bằng full diffusion teacher\\và tắt fallback đệ quy fast/masked};
+  \node[flowstep, below=of decode] (repair) {Sửa cục bộ theo mặt nạ kế hoạch và inpainting có dẫn dắt bởi WFC (nếu cơ chế này được kích hoạt)};
+  \node[decision, below=7mm of repair] (fallback) {Kích hoạt quay về mô hình giáo viên đầy đủ?\\(theo ngưỡng vi phạm)};
+  \node[flowstep, below left=7mm and 14mm of fallback] (teacher) {Sinh lại bằng mô hình giáo viên đầy đủ\\và tắt cơ chế quay về đệ quy ở các nhánh rút gọn};
   \node[flowstep, below right=7mm and 14mm of fallback] (ret) {Trả về kết quả sinh phòng\\lưới, latent, chỉ số};
 
   \draw[arr] (in) -- (cond);
@@ -962,7 +1034,7 @@ Suy luận dungeon được tổ chức theo ba mức: mức đồ thị, mức 
   \draw[arr] (teacher) -- (ret);
 \end{tikzpicture}
 }
-\caption{Luồng nội bộ của quy trình sinh phòng, bao gồm sửa lỗi ký hiệu và cơ chế teacher fallback.}
+\caption{Luồng nội bộ của quy trình sinh phòng, bao gồm bước hiệu chỉnh ký hiệu và cơ chế quay về mô hình giáo viên.}
 \label{fig:room_generation_flow}
 \end{figure}
 
@@ -975,17 +1047,17 @@ Suy luận dungeon được tổ chức theo ba mức: mức đồ thị, mức 
   box/.style={draw, rounded corners=2pt, fill=gray!10, align=center, minimum width=8.2cm, minimum height=0.9cm},
   arr/.style={->, line width=0.75pt}
 ]
-  \node[box] (l0) {Topological layers từ đồ thị vật lý};
-  \node[box, below=of l0] (l1) {Gom phòng theo bucket latent shape trong từng layer};
-  \node[box, below=of l1] (l2) {Ước lượng safe chunk theo bộ nhớ và kích thước yêu cầu};
-  \node[box, below=of l2] (l3) {Sinh batch phòng cho từng chunk độc lập};
-  \node[box, below=of l3] (l4) {Cập nhật latent đã sinh và truyền điều kiện cho layer kế};
+  \node[box] (l0) {Các lớp topo từ đồ thị vật lý};
+  \node[box, below=of l0] (l1) {Gom phòng theo nhóm latent trong từng lớp};
+  \node[box, below=of l1] (l2) {Ước lượng mảnh an toàn theo bộ nhớ và kích thước yêu cầu};
+  \node[box, below=of l2] (l3) {Sinh lô phòng cho từng mảnh độc lập};
+  \node[box, below=of l3] (l4) {Cập nhật latent đã sinh và truyền điều kiện cho lớp kế};
   \draw[arr] (l0) -- (l1);
   \draw[arr] (l1) -- (l2);
   \draw[arr] (l2) -- (l3);
   \draw[arr] (l3) -- (l4);
 \end{tikzpicture}
-\caption{Luồng lập lịch sinh phòng theo lớp phụ thuộc và bucket latent shape.}
+\caption{Luồng lập lịch sinh phòng theo lớp phụ thuộc và nhóm latent.}
 \label{fig:layer_bucket_scheduler}
 \end{figure}
 
@@ -995,7 +1067,7 @@ Suy luận dungeon được tổ chức theo ba mức: mức đồ thị, mức 
 \begin{algorithmic}[1]
 \Require Đầu vào đã chuẩn bị $(G_{phys}, C)$, cấu hình sinh phòng
 \Ensure Tập kết quả phòng $\mathcal{R}$, latent phòng và chẩn đoán batch
-\If{bật chế độ batch phòng độc lập và $G_{phys}$ có hướng}
+\If{chế độ batch phòng độc lập được kích hoạt và $G_{phys}$ có hướng}
   \State $\mathcal{L} \gets \textsc{TopologicalGenerationLayers}(G_{phys})$
   \ForAll{layer $\ell \in \mathcal{L}$}
     \State $\mathcal{B} \gets \textsc{BucketByLatentShape}(\ell)$
@@ -1018,10 +1090,10 @@ Suy luận dungeon được tổ chức theo ba mức: mức đồ thị, mức 
 \end{algorithmic}
 \end{algorithm}
 
-Bài toán sinh đa phòng được mô hình hóa như bài toán lập lịch có phụ thuộc thứ tự, do đó thuật toán tách xử lý theo topological layer để bảo toàn quan hệ tiền nhiệm-hậu nhiệm. Trong từng lớp, các phòng được gom theo latent shape và chia chunk an toàn theo giới hạn bộ nhớ để tăng mức song song hóa mà không vi phạm ràng buộc logic. Nhánh tuần tự cho kích thước không chuẩn bảo đảm tính tương thích của pipeline.
+Bài toán sinh đa phòng được mô hình hóa như bài toán lập lịch có phụ thuộc thứ tự, do đó thuật toán tách xử lý theo lớp topo để bảo toàn quan hệ tiền nhiệm-hậu nhiệm. Trong từng lớp, các phòng được gom theo dạng latent và chia mảnh an toàn theo giới hạn bộ nhớ để tăng mức song song hóa mà không vi phạm ràng buộc logic. Nhánh tuần tự cho kích thước không chuẩn bảo đảm tính tương thích của quy trình.
 
 \paragraph{Tiêu chí tính đúng, điều kiện dừng và độ phức tạp.}
-Đối với lập lịch đa phòng, tính đúng được bảo đảm vì trật tự topological layer bảo toàn phụ thuộc predecessor $\rightarrow$ successor, cơ chế bucket theo latent shape tránh trộn batch khác hình dạng, và các phòng không đúng kích thước chuẩn được chuyển sang nhánh tuần tự để giữ hợp đồng tensor. Thuật toán dừng khi đã duyệt hết tập layer, bucket và chunk trong mỗi bucket. Vì vậy, chi phí phần lập lịch là:
+Đối với lập lịch đa phòng, tính đúng được bảo đảm vì trật tự lớp topo bảo toàn phụ thuộc tiền nhiệm $\rightarrow$ hậu nhiệm, cơ chế gom theo dạng latent tránh trộn lô khác hình dạng, và các phòng không đúng kích thước chuẩn được chuyển sang nhánh tuần tự để giữ hợp đồng tensor. Thuật toán dừng khi đã duyệt hết tập lớp, nhóm và mảnh trong mỗi nhóm. Vì vậy, chi phí phần lập lịch là:
 \begin{equation}
 \mathcal{O}(n+m)+\mathcal{O}(N),
 \end{equation}
@@ -1032,17 +1104,17 @@ và tổng chi phí sinh phòng là:
 với $k_b$ là safe chunk size của bucket $b$.
 
 \begin{algorithm}[htbp]
-\caption{Suy luận dungeon theo cơ chế topology-first}
-\label{alg:generate_dungeon_topology_first}
+\caption{Suy luận dungeon theo cơ chế graph-first}
+\label{alg:generate_dungeon_graph_first}
 \begin{algorithmic}[1]
 \Require Đồ thị nhiệm vụ tùy chọn $G$, siêu tham số suy luận $\Theta$
 \Ensure Dungeon $D$, tập phòng $\mathcal{R}$, metrics $\mathcal{M}$
-\If{$G=\varnothing$ và bật chế độ sinh cấu trúc đồ thị}
-  \State $G \gets \textsc{EvolutionaryTopologyGenerator}(\Theta_{\text{topology}})$
+\If{$G=\varnothing$ và chế độ sinh cấu trúc đồ thị được bật}
+  \State $G \gets \textsc{EvolutionaryMissionGraphGenerator}(\Theta_{\text{graph}})$
 \EndIf
 \State $G_{\text{phys}} \gets \textsc{FilterVirtualNodes}(G)$
 \State $C \gets \textsc{PrepareGraphContext}(G_{\text{phys}})$
-\State Chia các phòng theo topological layer và bucket latent shape
+\State Chia các phòng theo lớp topo và nhóm latent
 \ForAll{bucket phòng độc lập}
   \State Sinh batch phòng bằng \textsc{GenerateRoomBatch}$(C,\Theta)$
   \State Cập nhật latent đã sinh để cấp điều kiện cho lớp kế
@@ -1055,28 +1127,28 @@ với $k_b$ là safe chunk size của bucket $b$.
 \end{algorithmic}
 \end{algorithm}
 
-Thuật toán điều phối toàn bộ pipeline topology-first từ khâu chuẩn bị đồ thị đến ghép dungeon và đánh giá chất lượng. Cách tổ chức theo các pha có hợp đồng dữ liệu rõ ràng giúp kiểm soát sai lệch xuyên tầng, đồng thời hỗ trợ ablation và kiểm thử thành phần một cách hệ thống. Vì vậy, tính đúng đắn được bảo toàn ở cả cấp phòng lẫn cấp dungeon.
+Thuật toán điều phối toàn bộ pipeline graph-first từ khâu chuẩn bị đồ thị đến ghép dungeon và đánh giá chất lượng. Cách tổ chức theo các pha có hợp đồng dữ liệu rõ ràng giúp kiểm soát sai lệch xuyên tầng, đồng thời hỗ trợ ablation và kiểm thử thành phần một cách hệ thống. Vì vậy, tính đúng đắn được bảo toàn ở cả cấp phòng lẫn cấp dungeon.
 
 \paragraph{Tiêu chí tính đúng, điều kiện dừng và độ phức tạp.}
-Ở cấp pipeline, tính đúng đòi hỏi đồ thị sinh mới (khi không có đầu vào) phải qua kiểm tra topology trước khi sử dụng, các phòng phải được sinh theo lớp phụ thuộc và ghép trên đồ thị vật lý đã lọc virtual node, đồng thời các chỉ số hậu kỳ phải tách rõ tầng phòng và tầng dungeon. Quy trình dừng sau khi hoàn tất hữu hạn các pha chuẩn bị đồ thị, sinh phòng theo bucket/chunk, ghép dungeon và (tùy chọn) đánh giá QD. Theo đó, độ phức tạp tổng thể có thể viết:
+Ở cấp pipeline, tính đúng đòi hỏi đồ thị sinh mới (khi không có đầu vào) phải qua kiểm tra cấu trúc đồ thị trước khi sử dụng, các phòng phải được sinh theo lớp phụ thuộc và ghép trên đồ thị vật lý đã lọc virtual node, đồng thời các chỉ số hậu kỳ phải tách rõ tầng phòng và tầng dungeon. Quy trình dừng sau khi hoàn tất hữu hạn các pha chuẩn bị đồ thị, sinh phòng theo bucket/chunk, ghép dungeon và (tùy chọn) đánh giá QD. Theo đó, độ phức tạp tổng thể có thể viết:
 \begin{equation}
-\mathcal{O}\!\left(C_{\text{topology}} + C_{\text{rooms}} + C_{\text{stitch}} + C_{\text{eval}}\right),
+\mathcal{O}\!\left(C_{\text{graph}} + C_{\text{rooms}} + C_{\text{stitch}} + C_{\text{eval}}\right),
 \end{equation}
-trong đó $C_{\text{topology}}$ được cho bởi Thuật toán \ref{alg:topology_evolution_feasible_first}.
+trong đó $C_{\text{graph}}$ được cho bởi Thuật toán \ref{alg:graph_evolution_feasible_first}.
 
-\subsubsection{Luồng suy luận một phòng và luật fallback}
-Ở mức vi mô, một phòng được xử lý theo chuỗi dựng điều kiện $\rightarrow$ lấy mẫu latent $\rightarrow$ giải mã $\rightarrow$ repair. Luật fallback đóng vai trò cơ chế an toàn để chuyển từ nhánh sampler nhanh về teacher khi chỉ số vi phạm vượt ngưỡng thiết kế.
+\subsubsection{Luồng suy luận một phòng và cơ chế quay về mô hình giáo viên}
+Ở mức vi mô, một phòng được xử lý theo chuỗi dựng điều kiện $\rightarrow$ lấy mẫu latent $\rightarrow$ giải mã $\rightarrow$ sửa cục bộ. Cơ chế quay về mô hình giáo viên đóng vai trò lớp an toàn, cho phép chuyển từ nhánh lấy mẫu nhanh sang nhánh chuẩn khi chỉ số vi phạm vượt ngưỡng thiết kế.
 
 \begin{algorithm}[htbp]
-\caption{Sinh một phòng với cơ chế teacher fallback}
+\caption{Sinh một phòng với cơ chế quay về mô hình giáo viên}
 \label{alg:generate_room_fallback}
 \begin{algorithmic}[1]
 \Require Điều kiện phòng $(z_N,z_S,z_E,z_W,b_i,p_i,G_i)$, cấu hình sampler
 \Ensure Kết quả sinh phòng cho phòng $i$
 \State $c_i \gets \textsc{ComputeRoomCondition}(z_{\cdot},b_i,p_i,G_i)$
-\If{mode = masked rời rạc}
+\If{chế độ suy luận là masked rời rạc}
   \State $z_i,\ell_i \gets \textsc{MaskedRoomSample}(c_i,G_i)$
-\ElsIf{mode = categorical}
+\ElsIf{chế độ suy luận là categorical}
   \State $z_i,\ell_i \gets \textsc{CategoricalCodebookSample}(c_i)$
 \Else
   \State $z_i \gets \textsc{DiffusionSample}(c_i,G_i,\text{CFG},\text{logic guidance})$
@@ -1084,22 +1156,22 @@ trong đó $C_{\text{topology}}$ được cho bởi Thuật toán \ref{alg:topol
 \EndIf
 \State $x_i^{\text{neural}} \gets \arg\max\ell_i$
 \State $x_i^{\text{final}} \gets \textsc{RepairAndBoundaryEnforce}(x_i^{\text{neural}},G_i)$
-\If{\textsc{ShouldRetryRoomWithTeacher}$(x_i^{\text{final}},\text{metrics})$}
-  \State Sinh lại với full diffusion teacher và tắt fallback đệ quy
+\If{cần quay về mô hình giáo viên}
+  \State Sinh lại bằng mô hình giáo viên đầy đủ và vô hiệu hóa cơ chế quay về lồng nhau
 \EndIf
-\State \Return result$(x_i^{\text{final}}, z_i, \text{metrics})$
+\State \Return kết quả $(x_i^{\text{final}}, z_i, \text{metrics})$
 \end{algorithmic}
 \end{algorithm}
 
-Cơ chế này cân bằng chi phí suy luận và độ tin cậy cấu trúc bằng cách cho phép các nhánh lấy mẫu nhanh hoạt động dưới giám sát hậu kiểm. Phòng được sinh theo chuỗi điều kiện $\rightarrow$ lấy mẫu latent $\rightarrow$ giải mã $\rightarrow$ sửa cục bộ; sau đó bộ chỉ số vi phạm quyết định có kích hoạt teacher fallback hay không. Thiết kế hậu kiểm này bảo đảm các trường hợp vượt ngưỡng rủi ro được tái sinh bằng cấu hình an toàn hơn.
+Cơ chế này cân bằng chi phí suy luận và độ tin cậy cấu trúc bằng cách cho phép các nhánh lấy mẫu nhanh hoạt động dưới giám sát hậu kiểm. Phòng được sinh theo chuỗi điều kiện $\rightarrow$ lấy mẫu latent $\rightarrow$ giải mã $\rightarrow$ sửa cục bộ; sau đó bộ chỉ số vi phạm quyết định có kích hoạt cơ chế quay về mô hình giáo viên hay không. Thiết kế hậu kiểm này bảo đảm các trường hợp vượt ngưỡng rủi ro được tái sinh bằng cấu hình an toàn hơn.
 
 \paragraph{Tiêu chí tính đúng, điều kiện dừng và độ phức tạp.}
-Ở cấp một phòng, tính đúng được duy trì vì đầu ra luôn đi qua hậu kiểm tra biên/repair, còn fallback chỉ kích hoạt khi chỉ số vi phạm vượt ngưỡng và khi đó chuyển sang teacher để khôi phục độ tin cậy. Quy trình dừng sau một lượt sinh chính và tối đa một lượt retry teacher (tắt fallback đệ quy), nên số vòng lặp luôn hữu hạn. Do đó, độ phức tạp theo phòng là:
+Ở cấp một phòng, tính đúng được duy trì vì đầu ra luôn đi qua hậu kiểm tra biên/sửa lỗi, còn cơ chế quay về mô hình giáo viên chỉ kích hoạt khi chỉ số vi phạm vượt ngưỡng và khi đó chuyển sang nhánh an toàn hơn để khôi phục độ tin cậy. Quy trình dừng sau một lượt sinh chính và tối đa một lượt thử lại bằng mô hình giáo viên (không đệ quy), nên số vòng lặp luôn hữu hạn. Do đó, độ phức tạp theo phòng là:
 \begin{equation}
 \mathcal{O}\!\left(C_{\text{sample}} + C_{\text{decode}} + C_{\text{repair}} + \mathbb{I}_{\text{fb}}\,C_{\text{teacher}}\right).
 \end{equation}
 
-Để hạn chế rủi ro nhiễu cấu trúc từ các nhánh suy luận chi phí thấp hơn teacher, quy trình áp dụng luật fallback tường minh. Với một phòng $r$, cờ fallback được viết gọn như sau:
+Để hạn chế rủi ro nhiễu cấu trúc từ các nhánh suy luận chi phí thấp hơn mô hình giáo viên, quy trình áp dụng một luật quay về tường minh. Với một phòng $r$, cờ quay về được viết gọn như sau:
 \begin{equation}
 \mathbb{I}_{\text{fallback}}(r)=\mathbf{1}\Big[
 \begin{aligned}
@@ -1109,22 +1181,406 @@ Cơ chế này cân bằng chi phí suy luận và độ tin cậy cấu trúc b
 \end{aligned}
 \Big].
 \end{equation}
-Khi điều kiện này đúng, phòng được sinh lại bằng full diffusion teacher. Cơ chế này thể hiện nguyên tắc vận hành của hệ thống: ưu tiên độ tin cậy đầu ra hơn lợi ích tốc độ cục bộ của từng sampler.
+Khi điều kiện này đúng, phòng được sinh lại bằng mô hình diffusion đầy đủ ở vai trò teacher. Cơ chế này cho thấy hệ thống ưu tiên độ tin cậy của đầu ra hơn lợi ích tốc độ cục bộ của từng bộ lấy mẫu.
 
 \subsection{Đánh giá sau sinh và chỉ số vận hành}
-Sau khi ghép phòng, hệ thống triển khai hai tầng đánh giá bổ sung. Tầng thứ nhất đưa dungeon hợp lệ vào MAP-Elites và trích xuất các chỉ số như linearity, leniency, progression/topology complexity, path length. Tầng thứ hai ước lượng khả giải ở cấp dungeon từ tập phòng đã sinh, tách biệt với loss huấn luyện ở cấp phòng.
+Sau khi ghép phòng, hệ thống không đưa trực tiếp lưới ghép vào bộ giải mà luôn đi qua một \emph{validation handoff contract}. Cụ thể, thủ tục \texttt{PrepareValidationGrid} chuẩn hóa shape, ép semantic ID về palette chuẩn, loại \texttt{VOID} kín và chuẩn hóa duy nhất một cặp start-goal. Chỉ sau bước này dungeon mới được chuyển sang hai tầng kiểm chứng sau sinh: oracle cứng và P-CBS. MAP-Elites và LogicNet vẫn được giữ lại, nhưng với vai trò bổ trợ: MAP-Elites đo chất lượng--đa dạng ở mức dungeon, còn LogicNet đóng vai trò tín hiệu chẩn đoán cấp phòng thay vì quyết định cuối cùng về tính playable.
 
-Các chỉ số tổng hợp vận hành được ghi trực tiếp vào biến chỉ số ở cuối hàm sinh dungeon, trong đó có:
+Các chỉ số tổng hợp vận hành được ghi trực tiếp ở cuối đường sinh dungeon, trong đó có:
 \begin{equation}
 \mathrm{repair\_rate}=\frac{1}{N}\sum_{i=1}^{N} r_i,
 \qquad
-\mathrm{solvability\_score}=\frac{1}{N_{eval}}\sum_{i=1}^{N_{eval}} \mathrm{grid\_reach}_i.
+\mathrm{hard\_solvable\_rate}=\frac{1}{M}\sum_{j=1}^{M}\phi_{\mathrm{hard}}(D_j^{\star}),
 \end{equation}
-trong đó $r_i=1$ nếu phòng $i$ có sửa lỗi và $r_i=0$ nếu không có sửa lỗi. Việc tách chỉ số theo tầng như trên giúp phân biệt rõ lỗi sinh phòng cục bộ, lỗi ghép dungeon và lỗi tiến trình ở cấp đồ thị.
+\begin{equation}
+\mathrm{pcbs\_success\_rate}=\frac{1}{M}\sum_{j=1}^{M}\phi_{\mathrm{pcbs}}(D_j^{\star}),
+\qquad
+\mathrm{CGR}=
+\frac{
+\sum_{j=1}^{M}\mathbf{1}\!\left[\phi_{\mathrm{hard}}(D_j^{\star})=1 \land \phi_{\mathrm{pcbs}}(D_j^{\star})=0\right]
+}{
+\sum_{j=1}^{M}\mathbf{1}\!\left[\phi_{\mathrm{hard}}(D_j^{\star})=1\right]
+}.
+\end{equation}
+Ở đây $r_i=1$ nếu phòng $i$ có sửa lỗi; $\phi_{\mathrm{hard}}$ là phán quyết của oracle cơ học; còn $\phi_{\mathrm{pcbs}}$ là kết quả của persona P-CBS đã chọn. Việc tách chỉ số như trên giúp phân biệt ba lớp lỗi: lỗi hình học phòng, lỗi tiến trình cơ học của toàn dungeon, và lỗi ma sát nhận thức chỉ lộ ra khi dùng persona giới hạn nhận thức.
 
 \begin{algorithm}[htbp]
-\caption{Đánh giá dungeon sau ghép (MAP-Elites + LogicNet)}
+\caption{Đánh giá dungeon sau ghép với hợp đồng validation, oracle cứng và P-CBS}
 \label{alg:post_generation_evaluation}
+\begin{algorithmic}[1]
+\Require Dungeon đã ghép $D$, tập phòng $\mathcal{R}$, đồ thị vật lý $G_{phys}$, tập persona $\mathcal{P}$
+\Ensure Phán quyết oracle, chỉ số P-CBS, chỉ số QD và danh sách phòng lỗi
+\State $D^{\star},info_{\mathrm{handoff}} \gets \textsc{PrepareValidationGrid}(D)$
+\State $s_{\mathrm{hard}} \gets \textsc{HardOracle}(D^{\star}, G_{phys})$
+\If{$s_{\mathrm{hard}}$ giải được}
+  \ForAll{$p \in \mathcal{P}$}
+    \State $m_p \gets \textsc{RunPCBS}(D^{\star}, p)$
+  \EndFor
+  \If{bật MAP-Elites và thành phần MAP-Elites khả dụng}
+    \State \textsc{MapElitesAddDungeon}$(D^{\star}, s_{\mathrm{hard}}, G_{phys})$
+    \State Trích xuất các chỉ số QD từ $D^{\star}$
+  \EndIf
+\EndIf
+\If{LogicNet khả dụng}
+  \ForAll{phòng $r_i \in \mathcal{R}$ có latent}
+    \State $(\ell_i,info_i) \gets \textsc{LogicNet}(z_i)$
+    \State Cộng dồn chỉ số chẩn đoán và ghi phòng lỗi nếu dưới ngưỡng
+  \EndFor
+\EndIf
+\State \Return $info_{\mathrm{handoff}}, s_{\mathrm{hard}}, \{m_p\}_{p\in\mathcal{P}}$ cùng các chỉ số đánh giá và danh sách phòng lỗi
+\end{algorithmic}
+\end{algorithm}
+
+Đánh giá hậu sinh vì vậy được phân tầng theo đúng vai trò của từng thành phần. Oracle cứng trả lời câu hỏi ``dungeon có đúng cơ học hay không''; P-CBS trả lời câu hỏi ``dungeon này gây nhầm lẫn hay chậm trễ cho persona nào''; MAP-Elites trả lời câu hỏi ``nghiệm đó nằm ở đâu trong không gian chất lượng--đa dạng''; còn LogicNet tiếp tục đóng vai trò chẩn đoán nội bộ ở mức phòng. Cách tách này giúp các ablation ở Chương 4 không còn trộn lẫn lỗi cơ học với lỗi hành vi.
+
+\paragraph{Tiêu chí tính đúng, điều kiện dừng và độ phức tạp.}
+Ở tầng đánh giá hậu sinh, dungeon chỉ được đưa vào archive sau khi oracle cứng xác nhận khả giải; P-CBS chỉ chạy trên lưới đã qua hợp đồng validation để tránh nhiễu do token sai chuẩn; còn LogicNet được cộng dồn trên tập phòng có latent như một kênh chẩn đoán riêng. Quy trình dừng khi hoàn tất chuỗi hữu hạn gồm chuẩn hóa lưới ghép, oracle cứng, duyệt persona và duyệt danh sách phòng có latent. Vì vậy, độ phức tạp là:
+\begin{equation}
+\mathcal{O}\!\left(
+C_{\mathrm{handoff}}(D)+
+C_{\mathrm{hard}}(D,G)+
+|\mathcal{P}|\,C_{\mathrm{pcbs}}(D)+
+N_z\,C_{\mathrm{logicnet}}+
+C_{\mathrm{archive}}
+\right).
+\end{equation}
+
+\subsection{Giả định vận hành, chế độ lỗi và biện pháp giảm thiểu}
+\paragraph{Giả định vận hành.}
+Mô tả phương pháp trong chương này dựa trên ba giả định vận hành cơ bản: (i) đồ thị vật lý sau khi lọc nút ảo vẫn liên thông và có cặp start-goal hợp lệ, (ii) phòng đầu vào/đầu ra tuân thủ hợp đồng kích thước và từ vựng tile, và (iii) lưới ghép trước validator luôn đi qua bước chuẩn hóa validation handoff để loại token ngoài bảng từ điển và chuẩn hóa terminal. Viết gọn:
+\begin{equation}
+\mathrm{Connected}(G_{\mathrm{phys}})=1,\qquad s,g\in V_{G_{\mathrm{phys}}},\ s\neq g,
+\end{equation}
+\begin{equation}
+x_i\in\{0,\ldots,43\}^{16\times 11},\qquad
+r_d\le h_d\ \ (d\in\{N,S,E,W\}).
+\end{equation}
+Các giả định này không thay cho đánh giá thực nghiệm, nhưng giúp xác định rõ miền hiệu lực của các thuật toán ở Mục 3.4.
+
+\paragraph{Chế độ lỗi và giảm thiểu.}
+Bảng~\ref{tab:failure_modes_ch3} tóm tắt các lỗi vận hành thường gặp và cơ chế giảm thiểu tương ứng trong pipeline.
+
+\begin{table}[H]
+\centering
+\caption{Các chế độ lỗi chính và cơ chế giảm thiểu trong đường chạy Chương 3}
+\label{tab:failure_modes_ch3}
+\begin{tabular}{>{\raggedright\arraybackslash}p{3.0cm} >{\raggedright\arraybackslash}p{4.7cm} >{\raggedright\arraybackslash}p{5.1cm}}
+\toprule
+Nhóm lỗi & Biểu hiện quan sát được & Cơ chế giảm thiểu trong pipeline \\
+\midrule
+Sai schema tensor & Lỗi shape ở conditioning hoặc batch diffusion. & Fail-fast tại điểm vào khối $B_3/B_4$, kiểm tra kiểu-kích thước trước khi lấy mẫu. \\
+Đồ thị không khả thi & Đồ thị vi phạm ràng buộc tiến trình hoặc không đạt điều kiện hậu kiểm. & Chọn nghiệm khả thi-ưu tiên, phạt vi phạm mềm, hậu kiểm tra trước khi ghép phòng. \\
+Nhiễu cấu trúc từ bộ lấy mẫu nhanh & Xuất hiện island, lỗi cửa, hoặc overwrite cao ở chế độ masked. & Luật quay về mô hình giáo viên theo ngưỡng vi phạm, đồng thời chặn quay về đệ quy. \\
+Lệch biên-cửa sau giải mã & Cửa bắt buộc mất hoặc biên ngoài không kín. & Ép lớp biên, sửa theo mặt nạ kế hoạch, inpainting có dẫn dắt bởi WFC. \\
+Rò rỉ \texttt{VOID}/token ngoài bảng từ điển & Lưới ghép chứa ô không hợp lệ hoặc \texttt{VOID} kín làm sai phán quyết validator. & Bắt buộc chạy \texttt{PrepareValidationGrid}: ánh xạ lại semantic ID, lấp \texttt{VOID} kín, chuẩn hóa đúng một start-goal. \\
+Suy giảm thành phần phụ trợ & LogicNet, MAP-Elites hoặc nhánh P-CBS tạm không khả dụng ở một số cấu hình ablation. & Chạy suy giảm có kiểm soát: giữ oracle cứng làm chuẩn tối thiểu, tách rõ chỉ số nào bị vô hiệu hóa. \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Cấu hình triển khai và khả năng tái lập}
+Cấu hình chuẩn được quản lý tập trung trong bộ tham số thí nghiệm, trong đó các tham số lõi như kích thước phòng, số lớp tile, số chiều latent, hệ số CFG, số bước diffusion và cờ bật/tắt repair đều được khai báo tường minh. Cơ chế seed được đồng bộ cho các thành phần sinh ngẫu nhiên chính của hệ thống; trong thiết lập phân tán, mỗi worker dùng seed lệch theo chỉ số tiến trình để tách luồng ngẫu nhiên nhưng vẫn bảo toàn khả năng truy vết. Hệ điểm kiểm tra được tổ chức theo giai đoạn, lưu kèm siêu dữ liệu kiến trúc và trạng thái huấn luyện, đồng thời dùng cơ chế lưu an toàn để giảm nguy cơ hỏng điểm kiểm tra trong các phiên chạy dài.
+
+Về tiêu chí dừng, tầng cấu trúc đồ thị nhiệm vụ có thể dừng sớm khi fitness hội tụ; tầng diffusion dừng theo số epoch cấu hình và chọn điểm kiểm tra theo chỉ số xác thực; tầng suy luận dừng theo số phòng cùng giới hạn số vòng sửa lỗi. Cách tổ chức này tạo ra đường chạy nhất quán giữa huấn luyện và suy luận, đồng thời giữ chi phí tính toán trong ngưỡng phù hợp với quy mô dữ liệu hiện có.
+
+\section{Ánh xạ nội dung phương pháp vào luồng hiện thực}
+Để bảo đảm Chương 3 bám sát trật tự vận hành của hệ thống, các nội dung được ánh xạ theo bốn cụm chức năng: Mục 3.2.1--3.2.3 làm rõ hai lớp đồ thị và ma trận hợp đồng khối; Mục 3.2.4--3.2.7 chốt luồng dữ liệu, tiền xử lý và bất biến vận hành; Mục 3.3 trình bày nguyên tắc chọn thiết kế và đặc tả thuật toán từng khối; Mục 3.4 mô tả quy trình huấn luyện/suy luận kèm giả định vận hành và chế độ lỗi; Mục 3.5 tổng hợp cấu hình triển khai và tái lập. Cách phân tách này giúp người đọc lần theo mạch từ lập luận thiết kế đến hành vi thực thi mà không phải chuyển ngữ cảnh đột ngột giữa các tầng.
+
+Ở mức kiểm chứng, cấu trúc này cũng tạo điều kiện cho phân tích loại trừ theo từng khối: tiên nghiệm cấu trúc đồ thị (Khối I), điều kiện hóa (Khối III), diffusion (Khối IV), hướng dẫn logic (Khối V), sửa lỗi ký hiệu (Khối VI) và lớp xác nhận hậu sinh gồm oracle cứng, P-CBS và QD (Khối VII). Nhờ đó, phần phương pháp vừa giữ được tính diễn giải học thuật, vừa duy trì tính khả kiểm trong mã nguồn.
+
+\section{Liên kết với thiết kế thực nghiệm Chương 4}
+Thiết kế phương pháp trong chương này chuyển thẳng thành các trục kiểm chứng của Chương 4. Vì mỗi khối có giao diện rõ ràng và cờ bật/tắt độc lập, thí nghiệm phân tích loại trừ có thể ước lượng minh bạch đóng góp biên của hướng dẫn logic, tiên nghiệm cấu trúc đồ thị, sửa lỗi ký hiệu, cơ chế quay về mô hình giáo viên và lớp xác nhận hành vi P-CBS. Việc đặt các nhánh giáo viên, nhanh và che khuất trong cùng một quy trình, kèm cơ chế kẹp guidance theo miền chưng cất, giúp so sánh công bằng hơn dưới cùng ngân sách vận hành. Đồng thời, chuẩn hóa seed, điểm kiểm tra và ghi log cho phép triển khai đồng thời ba nhóm kiểm chứng: oracle cơ học, persona-benchmark và đánh giá OOD/thống kê theo cặp (bootstrap và FDR) với độ lặp lại cao \cite{efron1994bootstrap,benjamini1995fdr}.
+
+\section{Tóm tắt chương}
+Chương 3 đã đặc tả đầy đủ quy trình nơ-ron--ký hiệu theo hướng lấy đồ thị làm trung tâm ở mức triển khai: từ biểu diễn dữ liệu, cơ chế điều kiện hóa từ đồ thị sang phòng, công thức huấn luyện/suy luận của diffusion, đến các lớp sửa lỗi, hợp đồng bàn giao validation và lớp xác nhận hậu sinh gồm oracle cứng, P-CBS và QD. Điểm cốt lõi của phương pháp là tách trách nhiệm theo tầng nhưng liên kết bằng một hợp đồng dữ liệu thống nhất; nhờ đó hệ thống vừa kiểm soát được tiến trình toàn cục, vừa duy trì chất lượng hình học ở mức cục bộ và đo được ma sát nhận thức ở mức persona. Trên nền đặc tả này, Chương 4 có cơ sở để đánh giá định lượng đóng góp của từng thành phần trong các thiết lập cùng ngân sách và OOD.
+
+\chapter{Kết quả thực nghiệm và thảo luận}
+Chương này trình bày kế hoạch thực nghiệm và khung phân tích kết quả theo đúng các trục kiểm chứng đã thiết kế ở Chương 1 và Chương 3. Nội dung được tổ chức theo mạch: mục tiêu kiểm chứng \rightarrow thiết kế giao thức \rightarrow kết quả định lượng \rightarrow thảo luận cơ chế và giới hạn.
+
+\section{Mục tiêu kiểm chứng và câu hỏi thực nghiệm}
+Phần này đặt lại các câu hỏi nghiên cứu ở dạng kiểm chứng thực nghiệm để làm rõ tiêu chí đánh giá thành công của phương pháp:
+\begin{enumerate}[label=(RQ\arabic*)]
+  \item Cấu hình nơ-ron--ký hiệu lấy đồ thị làm trung tâm (graph-first) có cải thiện đồng thời tính hợp lệ gameplay, khả năng giải được và chất lượng phòng so với các cấu hình đối chứng hay không?
+  \item Đóng góp biên của từng khối (prior cấu trúc đồ thị, conditioning, diffusion, logic guidance, symbolic repair, cơ chế quay về) có ý nghĩa thống kê hay không?
+  \item Khi bị ràng buộc cùng ngân sách đánh giá, phương pháp đề xuất có giữ lợi thế so với các cấu hình đối chứng sinh đồ thị nhiệm vụ hay không?
+  \item Hiệu năng có duy trì ổn định trên các kịch bản OOD-small và OOD-large theo quy mô số phòng hay không?
+\end{enumerate}
+
+Trong phần trình bày dưới đây, mỗi câu hỏi được gắn với một nhóm chỉ số riêng để tránh đánh giá cảm tính. RQ1 được kiểm tra bằng feasible\_rate, constraint\_valid\_rate, repair\_rate, generation\_time\_sec và các chỉ số khả giải; RQ2 dùng paired bootstrap và kiểm định hoán vị dấu theo cặp trên các metric chính; RQ3 đọc theo matched-budget cùng số lần đánh giá; RQ4 xem chênh lệch khi chuyển từ ID sang OOD-small/OOD-large. Nhờ vậy, các kết luận ở cuối chương có thể truy ngược về đúng thước đo mà nó phụ thuộc.
+
+\section{Thiết kế thực nghiệm}
+\subsection{Thiết lập tái lập và môi trường thực nghiệm}
+Mục này nêu chi tiết phần cứng/phần mềm, phiên bản thư viện, seed, chiến lược checkpoint và logging. Các cấu hình được cố định để bảo đảm mỗi thí nghiệm có thể chạy lại và đối chiếu trực tiếp.
+
+Để bảo đảm tái lập, toàn bộ luồng đánh giá giữ nguyên seed, checkpoint và cấu hình sinh trong mỗi lần chạy. Mỗi mẫu sinh đều ghi nhận thời gian sinh end-to-end, số tile phải sửa, số marker đồ thị bị ghi đè và các chẩn đoán hậu kiểm, nhờ đó kết quả không chỉ phản ánh chất lượng đầu ra mà còn phản ánh chi phí vận hành thực. Với các so sánh nội bộ, topology và vị trí phòng được giữ cố định để giảm nhiễu do thay đổi đầu vào.
+
+\subsection{Dữ liệu và kịch bản đánh giá}
+Mục này mô tả tập huấn luyện/kiểm định và cách dựng các kịch bản đánh giá ID, OOD-small, OOD-large. Phần này cũng chốt nguyên tắc không rò rỉ dữ liệu giữa các split ở cấp mission graph.
+
+Việc chia tập tuân thủ nguyên tắc rời nhau theo nguồn mission graph, nhờ đó các mẫu cùng xuất xứ không bao giờ rơi vào hai split khác nhau. Kịch bản ID phản ánh phân phối huấn luyện; OOD-small giảm số phòng hoặc độ sâu đường đi; OOD-large tăng quy mô và nhánh rẽ để đo khả năng giữ cấu trúc khi ngoại suy. Cách dựng kịch bản này giúp tách rõ lỗi do ghi nhớ dữ liệu và lỗi do yếu mô hình.
+
+\subsection{Baseline và cấu hình so sánh}
+Mục này liệt kê các baseline theo từng tầng (graph generation, room generation, repair), cùng các cấu hình ablation bật/tắt khối trong pipeline đề xuất để so sánh công bằng.
+
+Ở tầng sinh mission graph, bộ so sánh chuẩn gồm RANDOM, ES, GA, MAP\_ELITES và FULL; ở tầng sinh phòng, ba nhánh diffusion\_cfg3\_logic0\_steps50, fast\_cfg3\_logic0\_steps4 và masked\_room\_full cho phép tách riêng ảnh hưởng của số bước lấy mẫu và cơ chế hậu xử lý. Ở tầng sửa lỗi, ablation FULL / COND\_NO\_TPE / COND\_WEAK\_GRAPH cho thấy tác động của TPE và cross-attention trên cùng topology. Cách tổ chức này đảm bảo mỗi baseline trả lời một câu hỏi khác nhau thay vì chồng lấn trách nhiệm.
+
+\subsection{Chỉ số đánh giá và suy luận thống kê}
+Mục này đặc tả bộ chỉ số chính: hợp lệ, giải được, chất lượng, đa dạng, repair rate, fallback rate và chi phí suy luận. Suy luận thống kê dùng paired bootstrap, kiểm định hoán vị dấu theo cặp và hiệu chỉnh Benjamini-Hochberg FDR.
+
+Các chỉ số được đọc theo bốn lớp: hợp lệ và khả giải, hình thái và tiến trình, đa dạng, và chi phí. Với chỉ số điều kiện theo loại cửa/cổng, khi topology không có loại gate tương ứng thì giá trị nên được hiểu là 1.0 có điều kiện, không phải là ưu thế mô hình. Phần đa dạng nên dựa trên coverage, QD-score, novelty và graph edit distance; phần chi phí phải tính end-to-end, vì thời gian sinh không chỉ nằm ở sampler mà còn ở repair, overlay và kiểm tra hậu kỳ.
+
+\subsection{Giao thức thí nghiệm}
+Mục này mô tả ba nhánh thí nghiệm lõi:
+\begin{enumerate}[label=(\alph*)]
+  \item Fixed-seed ablation theo khối chức năng.
+  \item Matched-budget benchmark giữa các phương pháp sinh đồ thị nhiệm vụ.
+  \item OOD scaling theo quy mô dungeon và số phòng.
+\end{enumerate}
+
+Ba nhánh thí nghiệm lõi bổ sung cho nhau. Fixed-seed ablation giữ topology và seed cố định để nhìn đúng ảnh hưởng của từng khối; matched-budget benchmark khóa số lần đánh giá để so sánh công bằng giữa các chiến lược search; OOD scaling thay đổi quy mô dungeon trong khi giữ nguyên miền logic để xem hệ có còn ổn định hay không. Mỗi nhánh nên được báo cáo với khoảng tin cậy bootstrap để tránh kết luận dựa vào một lần chạy đơn lẻ.
+
+\section{Kết quả định lượng}
+\subsection{Kết quả tổng thể so với baseline}
+Trình bày bảng kết quả chính và so sánh định lượng giữa phương pháp đề xuất với các baseline theo từng nhóm chỉ số.
+
+Trong so sánh topology thủ công có semantic content rõ và vị trí phòng cố định, diffusion\_cfg3\_logic0\_steps50 đạt repair\_rate = 1.000 với 378 tile được sửa trong 52.99 giây. fast\_cfg3\_logic0\_steps4 vẫn đạt repair\_rate = 1.000 nhưng mất 100.54 giây và sửa 584 tile, còn masked\_room\_full đạt repair\_rate = 0.833 trong 137.83 giây với 581 tile được sửa. So sánh pairwise cho thấy fast so với diffusion tạo ra 130 tile thay đổi, còn masked so với fast tạo ra 146 tile thay đổi; các chuyển đổi structure\_to\_floor chiếm ưu thế. Trên bộ chạy này, nhánh diffusion là cấu hình cân bằng nhất giữa chi phí và mức can thiệp, còn masked room là nhánh tốn kém và can thiệp sâu nhất.
+
+\subsection{Kết quả ablation theo khối pipeline}
+Phân tích mức suy giảm khi tắt từng thành phần để lượng hóa đóng góp biên và chỉ ra các khối ảnh hưởng mạnh nhất tới độ tin cậy gameplay.
+
+Trong smoke test scale12, FULL, COND\_NO\_TPE và COND\_WEAK\_GRAPH đều giữ success\_rate = 1.0 và constraint\_valid\_rate = 1.0, tức là việc làm yếu conditioning không phá vỡ tính hợp lệ nhị phân trên topology cố định này. Tuy nhiên, COND\_WEAK\_GRAPH làm generation\_time\_sec tăng từ 20.89 giây lên 39.18 giây, và kiểm định đi kèm cho thấy chênh lệch này có ý nghĩa sau hiệu chỉnh BH-FDR. Trước lớp overlay, mức khớp marker đồ thị chỉ đạt 0.7083 và sai số semantic anchor trung bình là 7.875; sau overlay, khớp marker trở về 1.0. Điều này cho thấy khối sửa ký hiệu không chỉ là bước làm đẹp đầu ra mà là lớp phục hồi ngữ nghĩa bắt buộc. Vì repair\_rate trong smoke test này bằng 0.0, biến động quan sát được chủ yếu phản ánh chi phí và độ ổn định marker chứ không phải tải sửa tile.
+
+\subsection{Kết quả matched-budget ở tầng đồ thị nhiệm vụ}
+So sánh công bằng theo cùng ngân sách đánh giá để làm rõ ưu/nhược của GA, CVT/CMA-emitter và cấu hình đề xuất trong chất lượng-đa dạng.
+
+Ở tầng mission graph, matched-budget comparison nên được đọc như một bài kiểm tra hiệu quả của chiến lược tìm kiếm khi số lần đánh giá được cố định. RANDOM đóng vai trò ngưỡng dưới, ES cho biết lợi ích của mutation-only search, GA bổ sung crossover để khai thác vùng lời giải, còn MAP\_ELITES và FULL kiểm tra khả năng giữ coverage và chất lượng descriptor trong cùng ngân sách. Với protocol này, việc báo cáo không chỉ giá trị trung bình mà cả khoảng tin cậy và p-value là cần thiết, vì chất lượng-đa dạng thường thể hiện ở hình dạng phân bố chứ không chỉ ở một điểm tối ưu đơn lẻ.
+
+\subsection{Kết quả OOD theo quy mô dungeon}
+Báo cáo mức biến động chỉ số khi chuyển từ ID sang OOD-small/OOD-large, đồng thời chỉ ra thành phần nào giúp hệ giữ ổn định tốt hơn.
+
+Khi chuyển sang OOD-small và OOD-large, điều cần quan sát không chỉ là điểm số giảm bao nhiêu mà là hình thái suy giảm. OOD-small thường làm lộ mức phụ thuộc vào dữ liệu huấn luyện ở các nhánh path, gate và branch, còn OOD-large thử khả năng duy trì hợp đồng dữ liệu khi số phòng và độ sâu tiến trình tăng. Một hệ thống thật sự ổn định sẽ để độ giải được và chỉ số hợp lệ giảm chậm hơn chi phí sinh tăng, đồng thời giữ sửa lỗi và quay về trong ngưỡng chấp nhận được. Vì vậy, OOD là nơi kiểm tra trực tiếp giá trị của phép tách lấy đồ thị làm trung tâm, thay vì chỉ kiểm tra năng lực tái tạo phòng.
+
+\subsection{Độ tin cậy vận hành và chi phí}
+Phân tích repair rate, fallback rate, lỗi hậu kiểm và thời gian suy luận để đánh giá đánh đổi giữa độ tin cậy và chi phí tính toán.
+
+Độ tin cậy vận hành phải đọc cùng chi phí chứ không đọc tách rời. Ở bộ so sánh nội bộ, diffusion không chỉ nhanh nhất mà còn đạt repair\_rate cao nhất, trong khi fast sampler không tự động nhanh hơn do phần repair và overlay chiếm tỉ trọng đáng kể; masked\_room\_full vừa chậm nhất vừa có repair\_rate thấp hơn. Khoảng cách giữa pre-overlay và post-overlay graph-marker exact match từ 0.7083 lên 1.0 cho thấy lớp symbolic overlay là điểm khóa để giữ nhất quán ngữ nghĩa cuối cùng. Nói cách khác, kết quả đầu ra chỉ nên được xem là hoàn tất sau khi đi qua cả sửa tile, khôi phục marker và kiểm tra hợp lệ cuối.
+
+\section{Thảo luận}
+\subsection{Giải thích cơ chế cải thiện}
+Liên hệ trực tiếp kết quả thực nghiệm với cơ chế phương pháp của Chương 3 để giải thích vì sao pipeline đạt cải thiện hoặc suy giảm trong từng thiết lập.
+
+Những cải thiện quan sát được chủ yếu xuất phát từ việc tách rõ hai tầng trách nhiệm: tầng đồ thị giữ tiến trình, tầng phòng giữ hình học. Khi một nhánh làm yếu conditioning hoặc bỏ bớt tín hiệu graph, hệ vẫn còn có thể sinh ra mẫu hợp lệ trên topology cố định, nhưng thời gian tăng và lớp hậu xử lý phải làm việc nhiều hơn. Ngược lại, semantic overlay làm giảm sai lệch marker từ 29.2\% xuống 0\%, nên đây không phải bước tùy chọn mà là cơ chế phục hồi ngữ nghĩa.
+
+\subsection{Đánh đổi chất lượng, đa dạng và chi phí}
+Thảo luận các điểm đánh đổi khi thay đổi cấu hình bộ lấy mẫu, mức hướng dẫn logic và chính sách quay về, từ đó đề xuất cấu hình khuyến nghị cho từng mục tiêu sử dụng.
+
+Điểm đánh đổi lớn nhất nằm ở chỗ số bước lấy mẫu thấp không đồng nghĩa với throughput cao hơn nếu repair và overlay chiếm ưu thế. Vì vậy, tốc độ nên được đo end-to-end trên toàn pipeline, không chỉ trên sampler. Trong cấu hình hiện tại, diffusion là điểm cân bằng tốt nhất; fast sampler phù hợp khi muốn rút ngắn pha sinh nhưng vẫn chấp nhận chi phí hậu xử lý; masked room nên được dùng như nhánh dự phòng khi cần inpainting có định hướng mạnh.
+
+\subsection{Mối đe dọa tính hiệu lực và giới hạn}
+Nêu các nguồn sai lệch tiềm tàng (độ nhỏ dữ liệu, phụ thuộc seed, giới hạn benchmark, phụ thuộc bộ ràng buộc) và phạm vi mà kết luận thực nghiệm có thể khái quát.
+
+Hạn chế lớn nhất của bộ kết quả hiện có là phần lớn vẫn là kiểm chứng nội bộ trên topology cố định hoặc smoke test quy mô nhỏ. Điều đó giúp đọc cơ chế rất rõ nhưng chưa đủ để khẳng định ưu thế tổng quát trên mọi miền topology. Ngoài ra, matched-budget ngoại sinh với các baseline công bố rộng hơn vẫn là bước cần làm trước khi đưa ra tuyên bố cạnh tranh ở mức SOTA. Kết luận ở chương này vì thế nên hiểu là xác nhận tính khả thi và độ ổn định cục bộ, không phải là đóng dấu cuối cùng cho toàn bộ hướng nghiên cứu.
+
+\section{Tóm tắt chương}
+Chương 4 tổng hợp kết quả kiểm chứng theo bốn trục: hiệu năng tổng thể, đóng góp thành phần, công bằng ngân sách và khả năng khái quát OOD. Các kết quả này là cơ sở trực tiếp cho phần kết luận, giới hạn và định hướng mở rộng ở Chương 5.
+
+\chapter{Kết luận và hướng phát triển}
+Chương này tổng kết những đóng góp chính của luận văn, chỉ ra các giới hạn còn lại và nêu các hướng phát triển gần nhất. Cách trình bày đi từ kết quả đạt được sang các điểm còn mở để giữ ranh giới rõ giữa phần đã kiểm chứng và phần cần tiếp tục nghiên cứu.
+
+\section{Tổng kết đóng góp}
+Luận văn đã xây dựng một pipeline sinh dungeon theo hướng graph-first neural-symbolic, trong đó đồ thị nhiệm vụ giữ vai trò neo cho tiến trình còn mô hình sinh phòng đảm nhận hình học cục bộ. Điểm quan trọng không chỉ nằm ở việc tách hai tầng, mà còn ở cách hai tầng này được nối với nhau bằng điều kiện hóa hai luồng, khử nhiễu trong không gian latent, sửa lỗi ký hiệu và cơ chế quay về mô hình giáo viên khi đầu ra vượt ngưỡng rủi ro.
+
+Trên các so sánh nội bộ đã có, cấu hình diffusion\_cfg3\_logic0\_steps50 cho thấy điểm cân bằng tốt giữa chi phí và mức can thiệp, còn symbolic overlay là bước bắt buộc để phục hồi marker đồ thị từ mức khớp trước overlay 0.7083 lên 1.0. Kết quả này củng cố luận điểm rằng chất lượng dungeon không nên được hiểu như đầu ra của một bộ sinh duy nhất, mà là kết quả của một chuỗi các lớp kiểm soát từ đồ thị đến phòng rồi đến hậu kiểm.
+
+Về mặt phương pháp, luận văn cũng đã chuẩn hóa được cách đọc các chỉ số đánh giá theo từng tầng: hợp lệ và khả giải ở mức dungeon, độ ổn định và chi phí ở mức suy luận, cùng coverage và QD-score ở mức archive. Nhờ đó, phần thực nghiệm không còn bị dàn trải theo kiểu mô tả trực giác, mà có thể truy hồi về các câu hỏi nghiên cứu và các bất biến hệ thống đã đặt ra từ đầu.
+
+\section{Hạn chế của nghiên cứu}
+Hạn chế rõ nhất của luận văn hiện tại là phần lớn kết quả vẫn nằm trong phạm vi kiểm chứng nội bộ, với một số topology thủ công hoặc smoke test quy mô nhỏ. Điều này rất hữu ích để đọc cơ chế và so sánh cục bộ giữa các nhánh, nhưng chưa đủ để khẳng định ưu thế tổng quát trên mọi miền đồ thị nhiệm vụ hoặc mọi kiểu dungeon.
+
+Ngoài ra, matched-budget ngoại sinh với các baseline công bố rộng hơn vẫn chưa phải là phần trung tâm của bộ kết quả hiện có. Nói cách khác, luận văn hiện có bằng chứng mạnh hơn cho tính khả thi của kiến trúc và cho tác động của từng khối, nhưng bằng chứng cạnh tranh ở mức SOTA vẫn cần một vòng benchmark rộng hơn, đặc biệt là với các bộ so sánh ngoài hệ sinh nội bộ.
+
+Một giới hạn thực dụng khác là chi phí hậu xử lý vẫn chiếm tỉ trọng đáng kể trong một số cấu hình. Kết quả đo cho thấy việc rút ngắn số bước lấy mẫu không tự động làm giảm thời gian end-to-end nếu repair và overlay vẫn phải làm nhiều việc. Do đó, các kết luận về tốc độ trong luận văn này luôn phải đọc cùng toàn bộ pipeline, không nên tách sampler ra khỏi chuỗi xử lý cuối.
+
+\section{Hướng phát triển}
+Hướng phát triển gần nhất là hoàn thiện bộ benchmark theo chuẩn matched-budget bên ngoài, đặc biệt là ánh xạ sang các bài toán và công cụ chuẩn trong pcg\_benchmark để có thể so sánh trực tiếp với các baseline công bố rộng hơn. Ở tầng mission graph, cần chạy đầy đủ RANDOM, ES, GA, MAP\_ELITES và FULL trên cùng ngân sách; ở tầng phòng, cần mở rộng so sánh với các baseline sinh/phục hồi phòng để tách rõ đóng góp của khuếch tán trong latent và sửa lỗi ký hiệu.
+
+Một hướng khác là mở rộng không gian mô tả và archive cho quality-diversity, đặc biệt là các descriptor liên quan đến độ sâu tiến trình, phân nhánh hữu ích, độ dài đường đi và độ dư tài nguyên. Khi đó, QD không chỉ đóng vai trò đánh giá hậu kỳ mà có thể trở thành mục tiêu tối ưu trực tiếp cho một nhánh của pipeline, nhất là khi kết hợp với CVT/CMA-emitter ở khối sinh mission graph.
+
+Về mặt nghiên cứu người dùng và đánh giá chất lượng chơi, luận văn nên được nối tiếp bằng quan sát người chơi hoặc ít nhất là các proxy hành vi mạnh hơn so với pass/fail của solver. Điều này đặc biệt quan trọng vì một dungeon chơi được chưa chắc đã đủ tốt về nhịp độ, cảm giác khám phá hoặc độ phong phú của trải nghiệm.
+
+Cuối cùng, nếu tiếp tục phát triển thành hệ thống hoàn chỉnh hơn, nên chuẩn hóa lại toàn bộ luồng báo cáo và sinh bảng thống kê để các kết quả ablation, matched-budget và OOD được tạo tự động từ cùng một pipeline. Khi đó, luận văn không chỉ có một kiến trúc tốt hơn mà còn có một quy trình thực nghiệm dễ tái lập và dễ cập nhật hơn trong các vòng nghiên cứu tiếp theo.
+
+\clearpage
+\appendix
+\chapter*{PHỤ LỤC}
+\addcontentsline{toc}{chapter}{PHỤ LỤC}
+\setcounter{section}{0}
+\setcounter{subsection}{0}
+\renewcommand{\thesection}{\Alph{section}}
+\renewcommand{\thesubsection}{\thesection.\arabic{subsection}}
+
+Phụ lục được tổ chức theo bốn phần theo đúng mạch đọc của luận văn: khung ký hiệu và mô hình chi phí, các thuật toán bổ trợ, chứng minh độ phức tạp, và các phép tính minh họa. Trong phần thuật toán bổ trợ, hai thuật toán đầu xử lý dữ liệu và kiểm tra đầu vào; bốn thuật toán sau mô tả các khối hậu xử lý, điều phối và đánh giá còn lại của pipeline.
+
+\section{Khung ký hiệu và mô hình chi phí}
+\label{app:cost_model}
+
+\subsection{Ký hiệu sử dụng trong phụ lục}
+Ngoài các ký hiệu đã nêu ở Chương 3, phụ lục dùng thêm các đại lượng dưới đây để tường minh hóa phép đếm chi phí:
+\begin{equation}
+C_{\text{enc}},\; C_{\text{diff}},\; C_{\text{logic}},\; C_{\text{batch}},\; C_{\text{teacher}},\; C_{\text{archive}},\; C_{\text{validate}}.
+\end{equation}
+Mỗi đại lượng biểu thị chi phí thời gian của một khối chức năng tương ứng trong một lần gọi ở mức trừu tượng thuật toán.
+
+\subsection{Mô hình chi phí chuẩn hóa}
+Phân tích trong phụ lục dùng mô hình chi phí chuẩn hóa theo số phép toán sơ cấp và số lần gọi khối xử lý. Mô hình này phục vụ so sánh thứ bậc tăng trưởng giữa các thuật toán, không thay thế đo thời gian chạy trên phần cứng cụ thể.
+
+\section{Thuật toán bổ trợ trong phụ lục}
+\label{app:supplementary_algorithms}
+
+Phần này ghi lại các thuật toán phụ trợ được rút gọn từ phần phương pháp chính, chủ yếu gồm các bước tiền xử lý, chia tập và kiểm tra hợp lệ-khả giải. Các thuật toán cốt lõi dựa trên tìm kiếm đã được mô tả ở Chương 3; phụ lục chỉ giữ lại các bước hỗ trợ thường đi kèm để tiện tra cứu.
+
+\subsection{Tiền xử lý dữ liệu và chia tập theo nguồn}
+\begin{algorithm}[htbp]
+\caption{Tiền xử lý dữ liệu và chia tập theo nguồn}
+\label{alg:preprocess_data_split}
+\begin{algorithmic}[1]
+\Require Tập dữ liệu thô $\mathcal{D}_{\text{raw}}$, tỉ lệ $({\rho}_{\text{train}},{\rho}_{\text{val}},{\rho}_{\text{test}})$, seed $s$
+\Ensure Tập đã chuẩn hóa $\mathcal{D}_{\text{train}},\mathcal{D}_{\text{val}},\mathcal{D}_{\text{test}}$ và ánh xạ nguồn--split
+\State Chuẩn hóa kích thước phòng về $16\times 11$
+\State Ánh xạ tile id vào từ vựng 44 lớp
+\State Chuẩn hóa thứ tự nút đồ thị nhiệm vụ
+\State Gom các mẫu theo $\mathrm{src}(\cdot)$
+\State Xáo trộn thứ tự các nguồn bằng seed $s$
+\ForAll{nguồn $u$}
+  \State Gán toàn bộ mẫu của $u$ vào đúng một split theo tỉ lệ đã cho
+\EndFor
+\State Loại bỏ mẫu sai schema hoặc không hữu hạn
+\State Đồng bộ split giữa các mẫu cùng nguồn
+\State \Return $\mathcal{D}_{\text{train}},\mathcal{D}_{\text{val}},\mathcal{D}_{\text{test}}$
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Kiểm tra hợp lệ và khả giải dungeon}
+\begin{algorithm}[htbp]
+\caption{Kiểm tra hợp lệ và khả giải dungeon trước khi đưa vào archive}
+\label{alg:dungeon_validity_solvability}
+\begin{algorithmic}[1]
+\Require Dungeon đã ghép $D$, đồ thị vật lý $G_{\mathrm{phys}}$, cặp start-goal $(s,g)$
+\Ensure Cờ hợp lệ $v$, cờ khả giải $u$, và bộ chẩn đoán $\mathcal{I}$
+\State $v \gets 1$, $u \gets 0$, $\mathcal{I} \gets \varnothing$
+\State Kiểm tra kích thước phòng, biên ngoài, và tính nhất quán cửa-biên
+\If{không thỏa}
+  \State $v \gets 0$
+  \State Ghi chẩn đoán lỗi hình học vào $\mathcal{I}$
+  \State \Return $v,u,\mathcal{I}$
+\EndIf
+\State Kiểm tra liên thông trên $G_{\mathrm{phys}}$ và trên lưới ghép
+\If{không liên thông}
+  \State $v \gets 0$
+  \State Ghi chẩn đoán lỗi liên thông vào $\mathcal{I}$
+  \State \Return $v,u,\mathcal{I}$
+\EndIf
+\State Kiểm tra reachability từ $s$ đến $g$
+\State Kiểm tra các ràng buộc khóa--cổng, vật phẩm và boss gate nếu có
+\If{mọi kiểm tra đều đạt}
+  \State $u \gets 1$
+\Else
+  \State Ghi chẩn đoán lỗi tiến trình vào $\mathcal{I}$
+\EndIf
+\State \Return $v,u,\mathcal{I}$
+\end{algorithmic}
+\end{algorithm}
+
+Bốn thuật toán dưới đây bổ sung các khối hậu xử lý và điều phối còn lại của pipeline; chúng được giữ ở phụ lục để người đọc có thể tra cứu nhanh mà không phải quay lại toàn bộ phần phương pháp.
+
+\subsection{Sửa phòng có phản hồi ký hiệu}
+\begin{algorithm}[htbp]
+\caption{Sửa phòng có phản hồi ký hiệu ở tầng hậu xử lý}
+\label{alg:app_room_repair_feedback}
+\begin{algorithmic}[1]
+\Require Lưới nơ-ron đầu vào $x_i^{\text{neural}}$, đồ thị phòng $G_i$, cặp start-goal $(s_i,g_i)$
+\Ensure Grid cuối $x_i^{\text{final}}$ thỏa ràng buộc biên và đường đi
+\State $x_i^{\text{final}} \gets \textsc{SanitizeSemanticIds}(x_i^{\text{neural}})$
+\State $x_i^{\text{final}} \gets \textsc{StripVolatileSemantics}(x_i^{\text{final}}, G_i)$
+\State $x_i^{\text{final}} \gets \textsc{EnforceBoundaryShell}(x_i^{\text{final}}, G_i)$
+\State $m_i \gets \textsc{BuildRoomPlanTrace}(G_i,s_i,g_i)$
+\If{cơ chế sửa hậu kỳ được kích hoạt}
+  \State $x_i^{\text{cand}} \gets \textsc{RepairRoomWithFeedback}(x_i^{\text{final}}, m_i)$
+  \If{bước sửa tạo ra cấu hình hợp lệ}
+    \State $x_i^{\text{final}} \gets x_i^{\text{cand}}$
+  \EndIf
+\EndIf
+\State $x_i^{\text{final}} \gets \textsc{OverlayGraphMarkers}(x_i^{\text{final}}, G_i)$
+\State \textsc{ValidateRoomDimensions}$(x_i^{\text{final}})$
+\State \Return $x_i^{\text{final}}$
+\end{algorithmic}
+\end{algorithm}
+
+Thuật toán này đóng vai trò cầu nối giữa chất lượng hình học và tính đúng gameplay ở cấp phòng.
+
+\subsection{Lập lịch sinh phòng theo lớp phụ thuộc}
+\begin{algorithm}[htbp]
+\caption{Lập lịch sinh phòng theo lớp phụ thuộc}
+\label{alg:app_layer_bucket_scheduler}
+\begin{algorithmic}[1]
+\Require Đầu vào đã chuẩn bị $(G_{phys}, C)$, cấu hình sinh phòng
+\Ensure Tập kết quả phòng $\mathcal{R}$, latent phòng và chẩn đoán batch
+\If{chế độ batch phòng độc lập được kích hoạt và $G_{phys}$ có hướng}
+  \State $\mathcal{L} \gets \textsc{TopologicalGenerationLayers}(G_{phys})$
+  \ForAll{layer $\ell \in \mathcal{L}$}
+    \State $\mathcal{B} \gets \textsc{BucketByLatentShape}(\ell)$
+    \ForAll{bucket $b \in \mathcal{B}$}
+      \If{kích thước phòng không chuẩn $(16,11)$}
+        \State Sinh tuần tự từng phòng trong $b$
+      \Else
+        \State $k \gets \textsc{EstimateSafeBatchSize}(b,k_{\max})$
+        \ForAll{chunk độc lập kích thước $k$ trong $b$}
+          \State $\mathcal{R}_{chunk} \gets \textsc{GenerateRoomBatch}(chunk, C)$
+          \State Cập nhật $\mathcal{R}$ và latent đã sinh
+        \EndFor
+      \EndIf
+    \EndFor
+  \EndFor
+\Else
+  \State Sinh tuần tự theo thứ tự nút ổn định
+\EndIf
+\State \Return $\mathcal{R}$, latent phòng, chẩn đoán batch
+\end{algorithmic}
+\end{algorithm}
+
+Thuật toán này điều phối việc sinh nhiều phòng theo lớp topo và nhóm latent, nhờ đó bảo toàn các phụ thuộc logic giữa các phòng.
+
+\subsection{Sinh một phòng với cơ chế quay về mô hình giáo viên}
+\begin{algorithm}[htbp]
+\caption{Sinh một phòng với cơ chế quay về mô hình giáo viên}
+\label{alg:app_generate_room_fallback}
+\begin{algorithmic}[1]
+\Require Điều kiện phòng $(z_N,z_S,z_E,z_W,b_i,p_i,G_i)$, cấu hình sampler
+\Ensure Kết quả sinh phòng cho phòng $i$
+\State $c_i \gets \textsc{ComputeRoomCondition}(z_{\cdot},b_i,p_i,G_i)$
+\If{chế độ suy luận là masked rời rạc}
+  \State $z_i,\ell_i \gets \textsc{MaskedRoomSample}(c_i,G_i)$
+\ElsIf{chế độ suy luận là categorical}
+  \State $z_i,\ell_i \gets \textsc{CategoricalCodebookSample}(c_i)$
+\Else
+  \State $z_i \gets \textsc{DiffusionSample}(c_i,G_i,\text{CFG},\text{logic guidance})$
+  \State $\ell_i \gets \textsc{VQVAE.decode}(z_i)$
+\EndIf
+\State $x_i^{\text{neural}} \gets \arg\max\ell_i$
+\State $x_i^{\text{final}} \gets \textsc{RepairAndBoundaryEnforce}(x_i^{\text{neural}},G_i)$
+\If{cần quay về mô hình giáo viên}
+  \State Sinh lại bằng mô hình giáo viên đầy đủ và vô hiệu hóa cơ chế quay về lồng nhau
+\EndIf
+\State \Return kết quả $(x_i^{\text{final}}, z_i, \text{metrics})$
+\end{algorithmic}
+\end{algorithm}
+
+Thuật toán này đóng vai trò lớp an toàn cho nhánh lấy mẫu nhanh ở cấp một phòng.
+
+\subsection{Đánh giá dungeon sau ghép}
+\begin{algorithm}[htbp]
+\caption{Đánh giá dungeon sau ghép (MAP-Elites + LogicNet)}
+\label{alg:app_post_generation_evaluation}
 \begin{algorithmic}[1]
 \Require Dungeon đã ghép $D$, tập phòng $\mathcal{R}$, đồ thị vật lý $G_{phys}$
 \Ensure Chỉ số QD, khả giải và danh sách phòng lỗi
@@ -1145,148 +1601,9 @@ trong đó $r_i=1$ nếu phòng $i$ có sửa lỗi và $r_i=0$ nếu không có
 \end{algorithmic}
 \end{algorithm}
 
-Đánh giá hậu sinh được phân tầng để tách bạch chất lượng cấu trúc toàn dungeon và khả giải ở cấp phòng. MAP-Elites cung cấp góc nhìn quality-diversity ở mức archive, trong khi LogicNet lượng hóa tín hiệu khả giải từ latent từng phòng. Cách tách điều kiện theo thành phần khả dụng giúp quy trình vẫn ổn định trong các thiết lập ablation mà không làm mất tính so sánh.
+Thuật toán này chốt vòng đánh giá hậu sinh ở cấp dungeon và cấp phòng.
 
-\paragraph{Tiêu chí tính đúng, điều kiện dừng và độ phức tạp.}
-Ở tầng đánh giá hậu sinh, tính đúng yêu cầu dungeon chỉ được thêm vào MAP-Elites sau khi qua kiểm tra hợp lệ tổng thể và có trạng thái giải được; đồng thời ở tầng phòng, điểm LogicNet được tích lũy theo từng phòng có latent để phát hiện phòng lỗi một cách nhất quán. Quy trình dừng khi kết thúc hai vòng lặp hữu hạn gồm kiểm tra dungeon tổng thể và duyệt danh sách phòng hợp lệ để chấm logic. Vì vậy, độ phức tạp là:
-\begin{equation}
-\mathcal{O}\!\left(C_{\text{validate}}(D) + N_z\,C_{\text{logicnet}} + C_{\text{archive}}\right).
-\end{equation}
-
-\subsection{Giả định vận hành, chế độ lỗi và biện pháp giảm thiểu}
-\paragraph{Giả định vận hành.}
-Mô tả phương pháp trong chương này dựa trên ba giả định vận hành cơ bản: (i) đồ thị vật lý sau khi lọc nút ảo vẫn liên thông và có cặp start-goal hợp lệ, (ii) phòng đầu vào/đầu ra tuân thủ hợp đồng kích thước và từ vựng tile, và (iii) kênh điều kiện biên-cửa được dựng nhất quán với quan hệ hàng xóm. Viết gọn:
-\begin{equation}
-\mathrm{Connected}(G_{\mathrm{phys}})=1,\qquad s,g\in V_{G_{\mathrm{phys}}},\ s\neq g,
-\end{equation}
-\begin{equation}
-x_i\in\{0,\ldots,43\}^{16\times 11},\qquad
-r_d\le h_d\ \ (d\in\{N,S,E,W\}).
-\end{equation}
-Các giả định này không thay thế đánh giá thực nghiệm, nhưng giúp xác định rõ miền hiệu lực của các thuật toán ở Mục 3.4.
-
-\paragraph{Chế độ lỗi và giảm thiểu.}
-Bảng~\ref{tab:failure_modes_ch3} tổng hợp các lỗi vận hành thường gặp và cơ chế giảm thiểu đã cài trong pipeline.
-
-\begin{table}[H]
-\centering
-\caption{Các chế độ lỗi chính và cơ chế giảm thiểu trong đường chạy Chương 3}
-\label{tab:failure_modes_ch3}
-\begin{tabular}{>{\raggedright\arraybackslash}p{3.0cm} >{\raggedright\arraybackslash}p{4.7cm} >{\raggedright\arraybackslash}p{5.1cm}}
-\toprule
-Nhóm lỗi & Biểu hiện quan sát được & Cơ chế giảm thiểu trong pipeline \\
-\midrule
-Sai schema tensor & Lỗi shape ở conditioning hoặc batch diffusion. & Fail-fast tại điểm vào khối $B_3/B_4$, kiểm tra kiểu-kích thước trước khi lấy mẫu. \\
-Topology không khả thi & Đồ thị vi phạm ràng buộc tiến trình hoặc không đạt điều kiện hậu kiểm. & Chọn nghiệm khả thi-ưu tiên, phạt vi phạm mềm, hậu kiểm tra trước khi ghép phòng. \\
-Nhiễu cấu trúc từ sampler nhanh & Xuất hiện island, lỗi cửa, hoặc overwrite cao ở masked mode. & Luật teacher fallback theo ngưỡng vi phạm, đồng thời chặn fallback đệ quy. \\
-Lệch biên-cửa sau giải mã & Cửa bắt buộc mất hoặc biên ngoài không kín. & Enforce boundary shell, plan mask repair, WFC-guided inpaint. \\
-Suy giảm thành phần phụ trợ & LogicNet hoặc MAP-Elites tạm không khả dụng ở một số cấu hình ablation. & Chạy suy giảm có kiểm soát: giữ đường chạy chính, tách rõ chỉ số bị vô hiệu hóa. \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\section{Cấu hình triển khai và khả năng tái lập}
-Cấu hình chuẩn được quản lý tập trung trong bộ tham số thí nghiệm, trong đó các tham số lõi như kích thước phòng, số lớp tile, latent dimension, CFG scale, số bước diffusion và cờ bật/tắt repair đều được khai báo tường minh. Cơ chế seed được đồng bộ cho các thành phần sinh ngẫu nhiên chính của hệ thống; trong thiết lập phân tán, mỗi worker dùng seed lệch theo chỉ số tiến trình để tách luồng ngẫu nhiên nhưng vẫn bảo toàn khả năng truy vết. Hệ checkpoint được tổ chức theo stage, lưu kèm metadata kiến trúc và trạng thái huấn luyện, đồng thời dùng cơ chế lưu an toàn để giảm nguy cơ hỏng checkpoint trong các phiên chạy dài.
-
-Về tiêu chí dừng, tầng cấu trúc đồ thị nhiệm vụ có thể dừng sớm khi fitness hội tụ; tầng diffusion dừng theo số epoch cấu hình và chọn checkpoint theo validation metric; tầng suy luận dừng theo số phòng cùng giới hạn số vòng repair. Cách tổ chức này tạo ra đường chạy nhất quán giữa huấn luyện và suy luận, đồng thời giữ chi phí tính toán trong ngưỡng phù hợp với quy mô dữ liệu hiện có.
-
-\section{Ánh xạ nội dung phương pháp vào luồng hiện thực}
-Để bảo đảm cấu trúc Chương 3 nhất quán với trật tự vận hành của hệ thống, các mục được ánh xạ theo bốn cụm chức năng: Mục 3.2.1--3.2.3 làm rõ hai lớp đồ thị cùng ma trận hợp đồng khối, Mục 3.2.4--3.2.7 chốt luồng dữ liệu, tiền xử lý và bất biến vận hành; Mục 3.3 nêu nguyên tắc chọn thiết kế rồi đặc tả thuật toán từng khối; Mục 3.4 mô tả quy trình huấn luyện/suy luận kèm giả định vận hành và chế độ lỗi; và Mục 3.5 chốt lớp cấu hình -- tái lập. Cách phân tách này giúp người đọc truy vết từ thiết kế khái niệm đến hành vi thực thi mà không phải chuyển ngữ cảnh giữa các tầng.
-
-Ở mức kiểm chứng, cùng một cấu trúc trên cũng tạo điều kiện cho phân tích ablation theo khối: topology prior (Khối I), conditioning (Khối III), diffusion (Khối IV), logic guidance (Khối V), symbolic repair (Khối VI) và quality-diversity evaluation (Khối VII). Do đó, phần phương pháp giữ được cả tính diễn giải học thuật và tính khả kiểm trong mã nguồn.
-
-\section{Liên kết với thiết kế thực nghiệm Chương 4}
-Thiết kế phương pháp trong chương này tạo ra trực tiếp các trục kiểm chứng của Chương 4. Do từng khối có giao diện rõ ràng và cờ bật/tắt độc lập, thí nghiệm ablation có thể ước lượng minh bạch đóng góp biên của logic guidance, topology prior, symbolic repair và teacher fallback. Việc đặt các nhánh teacher, fast và masked trong cùng một quy trình với cơ chế kẹp guidance theo miền distillation giúp so sánh matched-budget công bằng hơn ở cấp độ vận hành. Đồng thời, chuẩn hóa seed, checkpoint và logging cho phép triển khai đánh giá OOD cùng suy luận thống kê theo cặp (bootstrap và FDR) với độ lặp lại cao \cite{efron1994bootstrap,benjamini1995fdr}.
-
-\section{Tóm tắt chương}
-Chương 3 đã đặc tả đầy đủ quy trình topology-first neural-symbolic ở mức triển khai: từ biểu diễn dữ liệu, cơ chế điều kiện hóa graph-to-room, công thức huấn luyện/suy luận của diffusion, đến các lớp repair và fallback nhằm bảo toàn tính hợp lệ gameplay. Điểm cốt lõi của phương pháp là phân tách trách nhiệm theo tầng nhưng liên kết bằng hợp đồng dữ liệu thống nhất; nhờ đó hệ thống vừa kiểm soát được tiến trình toàn cục, vừa duy trì chất lượng hình học ở mức cục bộ. Trên nền đặc tả này, Chương 4 có thể đánh giá định lượng đóng góp của từng thành phần trong các thiết lập matched-budget và OOD.
-
-\chapter{Kết quả thực nghiệm và thảo luận}
-Chương này trình bày kế hoạch thực nghiệm và khung phân tích kết quả theo đúng các trục kiểm chứng đã thiết kế ở Chương 1 và Chương 3. Nội dung được tổ chức theo mạch: mục tiêu kiểm chứng \rightarrow thiết kế giao thức \rightarrow kết quả định lượng \rightarrow thảo luận cơ chế và giới hạn.
-
-\section{Mục tiêu kiểm chứng và câu hỏi thực nghiệm}
-Phần này đặt lại các câu hỏi nghiên cứu ở dạng kiểm chứng thực nghiệm để làm rõ tiêu chí đánh giá thành công của phương pháp:
-\begin{enumerate}[label=(RQ\arabic*)]
-  \item Cấu hình \textit{topology-first neural-symbolic} có cải thiện đồng thời tính hợp lệ gameplay, khả năng giải được và chất lượng phòng so với các cấu hình đối chứng hay không?
-  \item Đóng góp biên của từng khối (topology prior, conditioning, diffusion, logic guidance, symbolic repair, fallback) có ý nghĩa thống kê hay không?
-  \item Khi bị ràng buộc cùng ngân sách đánh giá, phương pháp đề xuất có giữ lợi thế so với các baseline sinh đồ thị nhiệm vụ hay không?
-  \item Hiệu năng có duy trì ổn định trên các kịch bản OOD-small và OOD-large theo quy mô số phòng hay không?
-\end{enumerate}
-
-\section{Thiết kế thực nghiệm}
-\subsection{Thiết lập tái lập và môi trường thực nghiệm}
-Mục này nêu chi tiết phần cứng/phần mềm, phiên bản thư viện, seed, chiến lược checkpoint và logging. Các cấu hình được cố định để bảo đảm mỗi thí nghiệm có thể chạy lại và đối chiếu trực tiếp.
-
-\subsection{Dữ liệu và kịch bản đánh giá}
-Mục này mô tả tập huấn luyện/kiểm định và cách dựng các kịch bản đánh giá ID, OOD-small, OOD-large. Phần này cũng chốt nguyên tắc không rò rỉ dữ liệu giữa các split ở cấp mission graph.
-
-\subsection{Baseline và cấu hình so sánh}
-Mục này liệt kê các baseline theo từng tầng (topology, room generation, repair), cùng các cấu hình ablation bật/tắt khối trong pipeline đề xuất để so sánh công bằng.
-
-\subsection{Chỉ số đánh giá và suy luận thống kê}
-Mục này đặc tả bộ chỉ số chính: hợp lệ, giải được, chất lượng, đa dạng, repair rate, fallback rate và chi phí suy luận. Suy luận thống kê dùng paired bootstrap, kiểm định hoán vị dấu theo cặp và hiệu chỉnh Benjamini-Hochberg FDR.
-
-\subsection{Giao thức thí nghiệm}
-Mục này mô tả ba nhánh thí nghiệm lõi:
-\begin{enumerate}[label=(\alph*)]
-  \item Fixed-seed ablation theo khối chức năng.
-  \item Matched-budget benchmark giữa các phương pháp sinh đồ thị nhiệm vụ.
-  \item OOD scaling theo quy mô dungeon và số phòng.
-\end{enumerate}
-
-\section{Kết quả định lượng}
-\subsection{Kết quả tổng thể so với baseline}
-Trình bày bảng kết quả chính và so sánh định lượng giữa phương pháp đề xuất với các baseline theo từng nhóm chỉ số.
-
-\subsection{Kết quả ablation theo khối pipeline}
-Phân tích mức suy giảm khi tắt từng thành phần để lượng hóa đóng góp biên và chỉ ra các khối ảnh hưởng mạnh nhất tới độ tin cậy gameplay.
-
-\subsection{Kết quả matched-budget ở tầng đồ thị nhiệm vụ}
-So sánh công bằng theo cùng ngân sách đánh giá để làm rõ ưu/nhược của GA, CVT/CMA-emitter và cấu hình đề xuất trong chất lượng-đa dạng.
-
-\subsection{Kết quả OOD theo quy mô dungeon}
-Báo cáo mức biến động chỉ số khi chuyển từ ID sang OOD-small/OOD-large, đồng thời chỉ ra thành phần nào giúp hệ giữ ổn định tốt hơn.
-
-\subsection{Độ tin cậy vận hành và chi phí}
-Phân tích repair rate, fallback rate, lỗi hậu kiểm và thời gian suy luận để đánh giá đánh đổi giữa độ tin cậy và chi phí tính toán.
-
-\section{Thảo luận}
-\subsection{Giải thích cơ chế cải thiện}
-Liên hệ trực tiếp kết quả thực nghiệm với cơ chế phương pháp của Chương 3 để giải thích vì sao pipeline đạt cải thiện hoặc suy giảm trong từng thiết lập.
-
-\subsection{Đánh đổi chất lượng, đa dạng và chi phí}
-Thảo luận các điểm đánh đổi khi thay đổi cấu hình sampler, mức logic guidance và chính sách fallback, từ đó đề xuất cấu hình khuyến nghị cho từng mục tiêu sử dụng.
-
-\subsection{Mối đe dọa tính hiệu lực và giới hạn}
-Nêu các nguồn sai lệch tiềm tàng (độ nhỏ dữ liệu, phụ thuộc seed, giới hạn benchmark, phụ thuộc bộ ràng buộc) và phạm vi mà kết luận thực nghiệm có thể khái quát.
-
-\section{Tóm tắt chương}
-Chương 4 tổng hợp kết quả kiểm chứng theo bốn trục: hiệu năng tổng thể, đóng góp thành phần, công bằng ngân sách và khả năng khái quát OOD. Các kết quả này là cơ sở trực tiếp cho phần kết luận, giới hạn và định hướng mở rộng ở Chương 5.
-
-\chapter{Kết luận và hướng phát triển}
-Tổng kết đóng góp và đề xuất mở rộng.
-
-\appendix
-\chapter*{PHỤ LỤC}
-\addcontentsline{toc}{chapter}{PHỤ LỤC}
-\setcounter{section}{0}
-\setcounter{subsection}{0}
-\renewcommand{\thesection}{\Alph{section}}
-\renewcommand{\thesubsection}{\thesection.\arabic{subsection}}
-
-\section{Khung ký hiệu và mô hình chi phí}
-\label{app:cost_model}
-
-\subsection{Ký hiệu sử dụng trong phụ lục}
-Ngoài các ký hiệu đã nêu ở Chương 3, phụ lục dùng thêm các đại lượng sau để tường minh hóa phép đếm chi phí:
-\begin{equation}
-C_{\text{enc}},\; C_{\text{diff}},\; C_{\text{logic}},\; C_{\text{batch}},\; C_{\text{teacher}},\; C_{\text{archive}},\; C_{\text{validate}}.
-\end{equation}
-Trong đó mỗi đại lượng biểu thị chi phí thời gian của một khối chức năng tương ứng trong một lần gọi ở mức trừu tượng thuật toán.
-
-\subsection{Mô hình chi phí chuẩn hóa}
-Phân tích trong phụ lục dùng mô hình chi phí chuẩn hóa theo số phép toán sơ cấp và số lần gọi khối xử lý. Mô hình này nhằm so sánh thứ bậc tăng trưởng giữa các thuật toán, không thay cho đo thời gian chạy trên phần cứng cụ thể.
-
+\FloatBarrier
 \section{Chứng minh độ phức tạp}
 \label{app:complexity_proofs}
 
@@ -1302,7 +1619,7 @@ Mỗi nút được đưa vào và lấy ra khỏi hàng đợi đúng một l�
 
 \subsection{Mệnh đề cho sinh cấu trúc đồ thị tiến hóa}
 \paragraph{Mệnh đề B.2 (nhánh GA).}
-Với kích thước quần thể $P$ và số thế hệ $G$, chi phí cận trên của Thuật toán \ref{alg:topology_evolution_feasible_first} ở nhánh GA là
+Với kích thước quần thể $P$ và số thế hệ $G$, chi phí cận trên của Thuật toán \ref{alg:graph_evolution_feasible_first} ở nhánh GA là
 \begin{equation}
 T_{\text{GA}}=\mathcal{O}\!\left(PG\,(C_{\text{exec}}+C_{\text{eval}})+PG\log P\right).
 \end{equation}
@@ -1343,14 +1660,14 @@ T_{\text{epoch}}=\mathcal{O}\!\left(|\mathcal{D}|\cdot\left(C_{\text{enc}}+C_{\t
 Mỗi batch thực hiện đúng một vòng mã hóa điều kiện, một vòng tính loss diffusion, có thể cộng thêm logic loss, rồi bước cập nhật tham số. Cộng tuyến tính theo số batch cho ra biểu thức trên.
 \end{proof}
 
-\subsection{Mệnh đề cho suy luận một phòng với teacher fallback}
+\subsection{Mệnh đề cho suy luận một phòng với cơ chế quay về mô hình giáo viên}
 \paragraph{Mệnh đề B.6.}
-Do cơ chế fallback bị chặn tối đa một lần thử lại, chi phí mỗi phòng có cận trên hữu hạn:
+Do cơ chế quay về mô hình giáo viên chỉ cho phép tối đa một lần thử lại, chi phí mỗi phòng có cận trên hữu hạn:
 \begin{equation}
 T_{\text{room}}\le C_{\text{cond}}+C_{\text{sample}}+C_{\text{decode}}+C_{\text{repair}}+\mathbb{I}_{\text{fb}}\left(C_{\text{teacher}}+C_{\text{decode}}+C_{\text{repair}}\right).
 \end{equation}
 \begin{proof}
-Thuật toán có đúng một lượt sinh chính; khi vi phạm ngưỡng thì kích hoạt thêm một lượt teacher và tắt đệ quy fallback. Số lượt bổ sung vì thế bị chặn trên bởi 1, suy ra cận trên hữu hạn như công thức.
+Thuật toán chỉ thực hiện một lượt sinh chính; nếu vi phạm ngưỡng thì tối đa thêm một lượt sinh lại bằng mô hình giáo viên đầy đủ. Vì không có gọi lồng nhau nên số lượt bổ sung bị chặn trên bởi 1, từ đó suy ra cận trên hữu hạn như công thức.
 \end{proof}
 
 \subsection{Mệnh đề cho đánh giá hậu kỳ sau ghép dungeon}
@@ -1363,6 +1680,7 @@ T_{\text{post}}=\mathcal{O}\!\left(C_{\text{validate}}(D)+N_zC_{\text{logicnet}}
 Khối kiểm tra tổng thể gọi một lần trên dungeon đã ghép; khối chấm logic duyệt tuyến tính theo $N_z$ phòng có latent; phần cập nhật archive được gom vào $C_{\text{archive}}$. Tổng ba hạng cho cận trên yêu cầu.
 \end{proof}
 
+\FloatBarrier
 \section{Phép tính minh họa cho độ phức tạp thực toán}
 \label{app:numeric_complexity_examples}
 
@@ -1405,7 +1723,7 @@ PG\log_2P=5120\times \log_2(64)=5120\times 6=30720.
 \end{equation}
 Kết quả này minh họa vì sao hạng $PG\log P$ có thể đáng kể khi $P$ tăng.
 
-\subsection{Ví dụ 4: kỳ vọng chi phí khi có fallback}
+\subsection{Ví dụ 4: kỳ vọng chi phí khi có cơ chế quay về mô hình giáo viên}
 Đặt
 \begin{equation}
 T_0=C_{\text{cond}}+C_{\text{sample}}+C_{\text{decode}}+C_{\text{repair}},
@@ -1420,7 +1738,7 @@ Ví dụ minh họa với $T_0=14$, $\Delta=12$, $p_{\text{fb}}=0.25$:
 \begin{equation}
 \mathbb{E}[T_{\text{room}}]=14+0.25\times 12=17.
 \end{equation}
-Điều này cho thấy teacher fallback làm tăng chi phí kỳ vọng theo tuyến tính với xác suất kích hoạt, đổi lại cải thiện biên an toàn chất lượng đầu ra.
+Điều này cho thấy chi phí kỳ vọng tăng tuyến tính theo xác suất kích hoạt, nhưng đổi lại hệ thống có biên an toàn chất lượng tốt hơn.
 
 \clearpage
 \renewcommand{\bibname}{Tài liệu tham khảo}

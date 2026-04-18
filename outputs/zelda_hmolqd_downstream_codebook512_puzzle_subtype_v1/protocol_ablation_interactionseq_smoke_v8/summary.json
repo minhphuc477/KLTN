@@ -1,0 +1,1988 @@
+{
+  "run_dir": "outputs\\zelda_hmolqd_downstream_codebook512_puzzle_subtype_v1",
+  "mission_graph": "built_in_manual_rich_topology",
+  "seeds": [
+    20260404
+  ],
+  "generation_overrides": {},
+  "per_seed": [
+    {
+      "seed": 20260404,
+      "variants": {
+        "diffusion_cfg3_logic0_steps50": {
+          "name": "diffusion_cfg3_logic0_steps50",
+          "guidance_scale": 3.0,
+          "logic_guidance_scale": 0.0,
+          "num_diffusion_steps": 50,
+          "use_fast_sampling": false,
+          "generation_overrides_applied": {},
+          "diffusion_inference_checkpoint_state_key": "ema_diffusion_state_dict",
+          "diffusion_training_cfg_scale": 3.0,
+          "metrics": {
+            "num_rooms": 12,
+            "total_tiles_repaired": 312,
+            "repair_rate": 0.9166666666666666,
+            "dungeon_shape": [
+              64,
+              44
+            ],
+            "generation_time_sec": 40.21329426765442,
+            "batch_generation_diagnostics": [
+              {
+                "layer_index": 0,
+                "latent_shape_chw": [
+                  64,
+                  4,
+                  3
+                ],
+                "target_room_size_hw": [
+                  16,
+                  11
+                ],
+                "bucket_room_count": 1,
+                "requested_batch_size": 8,
+                "safe_chunk_size": 8,
+                "cuda_free_mb": 2113.7000007629395
+              },
+              {
+                "layer_index": 0,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 0,
+                "actual_chunk_size": 1
+              },
+              {
+                "layer_index": 1,
+                "latent_shape_chw": [
+                  64,
+                  4,
+                  3
+                ],
+                "target_room_size_hw": [
+                  16,
+                  11
+                ],
+                "bucket_room_count": 2,
+                "requested_batch_size": 8,
+                "safe_chunk_size": 8,
+                "cuda_free_mb": 2089.7000007629395
+              },
+              {
+                "layer_index": 1,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 0,
+                "actual_chunk_size": 2
+              },
+              {
+                "layer_index": 2,
+                "latent_shape_chw": [
+                  64,
+                  4,
+                  3
+                ],
+                "target_room_size_hw": [
+                  16,
+                  11
+                ],
+                "bucket_room_count": 2,
+                "requested_batch_size": 8,
+                "safe_chunk_size": 8,
+                "cuda_free_mb": 2089.7000007629395
+              },
+              {
+                "layer_index": 2,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 0,
+                "actual_chunk_size": 2
+              },
+              {
+                "layer_index": 3,
+                "latent_shape_chw": [
+                  64,
+                  4,
+                  3
+                ],
+                "target_room_size_hw": [
+                  16,
+                  11
+                ],
+                "bucket_room_count": 3,
+                "requested_batch_size": 8,
+                "safe_chunk_size": 8,
+                "cuda_free_mb": 2089.7000007629395
+              },
+              {
+                "layer_index": 3,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 0,
+                "actual_chunk_size": 3
+              },
+              {
+                "layer_index": 4,
+                "latent_shape_chw": [
+                  64,
+                  4,
+                  3
+                ],
+                "target_room_size_hw": [
+                  16,
+                  11
+                ],
+                "bucket_room_count": 2,
+                "requested_batch_size": 8,
+                "safe_chunk_size": 8,
+                "cuda_free_mb": 2089.7000007629395
+              },
+              {
+                "layer_index": 4,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 0,
+                "actual_chunk_size": 2
+              },
+              {
+                "layer_index": 5,
+                "latent_shape_chw": [
+                  64,
+                  4,
+                  3
+                ],
+                "target_room_size_hw": [
+                  16,
+                  11
+                ],
+                "bucket_room_count": 1,
+                "requested_batch_size": 8,
+                "safe_chunk_size": 8,
+                "cuda_free_mb": 2089.7000007629395
+              },
+              {
+                "layer_index": 5,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 0,
+                "actual_chunk_size": 1
+              },
+              {
+                "layer_index": 6,
+                "latent_shape_chw": [
+                  64,
+                  4,
+                  3
+                ],
+                "target_room_size_hw": [
+                  16,
+                  11
+                ],
+                "bucket_room_count": 1,
+                "requested_batch_size": 8,
+                "safe_chunk_size": 8,
+                "cuda_free_mb": 2089.7000007629395
+              },
+              {
+                "layer_index": 6,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 0,
+                "actual_chunk_size": 1
+              }
+            ],
+            "total_graph_marker_expected": 11.0,
+            "total_graph_marker_overwrites": 2.0,
+            "avg_neural_graph_marker_exact_match_rate": 0.9166666666666666,
+            "avg_final_pre_overlay_graph_marker_exact_match_rate": 0.8333333333333334,
+            "avg_final_post_overlay_graph_marker_exact_match_rate": 1.0,
+            "avg_final_graph_marker_overwrite_rate": 0.16666666666666666,
+            "avg_neural_semantic_anchor_error": 2.25,
+            "avg_final_pre_overlay_semantic_anchor_error": 4.5,
+            "avg_final_post_overlay_semantic_anchor_error": 0.0
+          },
+          "runtime_diagnostics": {
+            "topology_door_tiles_forced": 12,
+            "semantic_constrained_decode_applied": 10,
+            "neural_graph_semantic_hints_salvaged": 10,
+            "neural_structural_artifacts_stripped": 12,
+            "repair_room_semantics_stripped": 7,
+            "repair_graph_semantic_hints_salvaged": 9,
+            "repair_structural_artifacts_stripped": 7,
+            "wfc_feedback_attempts": 12,
+            "neural_boundary_shell_enforced": 12,
+            "final_boundary_shell_enforced": 12,
+            "neural_post_boundary_graph_semantic_hints_salvaged": 10,
+            "final_post_boundary_graph_semantic_hints_salvaged": 9,
+            "neural_room_semantics_stripped": 1,
+            "repair_invalid_tile_ids_sanitized": 2,
+            "puzzle_room_scaffold_applied": 2,
+            "puzzle_room_scaffold_hub": 1,
+            "puzzle_room_scaffold_gate_switch": 1,
+            "puzzle_room_scaffold_novelty_selected": 2,
+            "puzzle_room_contract_valid": 2,
+            "puzzle_room_interaction_valid": 2,
+            "puzzle_room_sequence_valid": 3,
+            "puzzle_room_contract_invalid": 1,
+            "puzzle_room_contract_gate_skipped": 1,
+            "puzzle_room_interaction_invalid": 1,
+            "puzzle_room_scaffold_combat": 1,
+            "puzzle_room_scaffold_gate_combat": 1
+          },
+          "topology_anchor_policy": {
+            "topology_anchor_policy_version": "2026-04-11.semantic_anchor_v8_puzzle_subtype_channels",
+            "semantic_role_prior_strength": 0.15,
+            "symbolic_max_repair_attempts": 5,
+            "symbolic_repair_margin": 2,
+            "symbolic_adjacency_threshold": 0.01,
+            "semantic_anchor_threshold": 0.5,
+            "semantic_puzzle_offset": 2,
+            "semantic_constrained_decoding_enabled": true,
+            "semantic_marker_logit_bias": 10000.0,
+            "semantic_marker_suppression_bias": 100.0,
+            "puzzle_room_scaffold_enabled": true,
+            "puzzle_room_structure_enabled": true,
+            "puzzle_room_scaffold_min_structure_tiles": 10,
+            "puzzle_room_archetype_mode": "auto",
+            "puzzle_room_branch_density": 0.75,
+            "puzzle_room_block_budget": 28,
+            "puzzle_room_preserve_route_margin": 0,
+            "puzzle_room_switch_pocket_depth": 3,
+            "puzzle_room_resource_bypass_offset": 2,
+            "puzzle_room_key_pocket_depth": 3,
+            "puzzle_room_item_slot_depth": 3,
+            "puzzle_room_toggle_corridor_offset": 2,
+            "puzzle_room_novelty_enabled": true,
+            "puzzle_room_candidate_count": 4,
+            "puzzle_room_novelty_weight": 0.45,
+            "puzzle_room_min_quality_gain": 0.5,
+            "validator_plan_max_states": 512,
+            "deterministic_graph_marker_overlay_enabled": true,
+            "fast_sampler_teacher_fallback_enabled": true,
+            "masked_room_teacher_fallback_enabled": true,
+            "masked_room_sampling_temperature": 1.0,
+            "masked_room_sampling_schedule": "cosine",
+            "masked_room_sampling_stochastic": true,
+            "masked_room_corrector_steps": 1,
+            "masked_room_corrector_mask_ratio": 0.1
+          },
+          "semantic_metrics": {
+            "total_graph_marker_expected": 11.0,
+            "total_graph_marker_overwrites": 2.0,
+            "avg_neural_graph_marker_exact_match_rate": 0.9166666666666666,
+            "avg_final_pre_overlay_graph_marker_exact_match_rate": 0.8333333333333334,
+            "avg_final_post_overlay_graph_marker_exact_match_rate": 1.0,
+            "avg_final_graph_marker_overwrite_rate": 0.16666666666666666,
+            "avg_neural_semantic_anchor_error": 2.25,
+            "avg_final_pre_overlay_semantic_anchor_error": 4.5,
+            "avg_final_post_overlay_semantic_anchor_error": 0.0
+          },
+          "cleanup_totals": {
+            "neural_invalid_door_tiles_removed": 16,
+            "neural_interior_obstacle_tiles_removed": 81,
+            "neural_interior_obstacle_components_removed": 48,
+            "repair_invalid_door_tiles_removed": 159,
+            "repair_interior_obstacle_tiles_removed": 44,
+            "repair_interior_obstacle_components_removed": 39
+          },
+          "tile_hist": {
+            "2": 753,
+            "1": 1215,
+            "3": 38,
+            "15": 70,
+            "21": 1,
+            "20": 2,
+            "30": 1,
+            "31": 1,
+            "11": 5,
+            "12": 5,
+            "13": 10,
+            "32": 1,
+            "43": 2,
+            "0": 704,
+            "14": 5,
+            "23": 1,
+            "42": 1,
+            "22": 1
+          },
+          "room_hashes": {
+            "0": "5428c06b5e9cca62",
+            "1": "51cf1270954c93f5",
+            "2": "53eb97d20af86799",
+            "3": "b49e19875b763e54",
+            "4": "d3d6385a2bda6fcd",
+            "5": "ef70fb4ca77fa5a4",
+            "6": "fb77ca7657d30b5a",
+            "7": "8e8efcffe10c747a",
+            "8": "7357509d2b48d625",
+            "9": "1f2092a4f4dcf295",
+            "10": "242508567ef2f85c",
+            "11": "5b6dd79885ed2e3e"
+          },
+          "layout": {
+            "room_count": 12.0,
+            "primary_quality_metric_name": "graph_edge_slot_adjacency_rate",
+            "primary_quality_metric_value": 1.0,
+            "graph_slot_match_rate": 1.0,
+            "graph_position_coverage_rate": 1.0,
+            "graph_preferred_position_duplicate_rate": 0.0,
+            "graph_slot_preference_mean_distance": 0.0,
+            "graph_slot_preference_max_distance": 0.0,
+            "graph_edge_slot_adjacency_rate": 1.0,
+            "graph_edge_slot_mean_distance": 1.0,
+            "graph_edge_slot_mean_excess_distance": 0.0,
+            "graph_edge_slot_max_distance": 1.0,
+            "graph_edge_count_evaluated": 14.0
+          },
+          "validation": {
+            "astar_grid": {
+              "solvable": true,
+              "is_valid_syntax": true,
+              "path_length": 90,
+              "reachability": 0.06867283950617284,
+              "backtracking_score": 0.011111111111111112,
+              "error_message": ""
+            },
+            "softlock_check": {
+              "is_safe": true,
+              "issues": []
+            },
+            "search_algorithms": {
+              "search_suite_version": "2026-04-15.validation_search_suite_v2",
+              "tile_state_space": {
+                "astar": {
+                  "success": true,
+                  "path_length": 90,
+                  "states_explored": 75463,
+                  "time_sec": 6.416954999993322,
+                  "algorithm": "A*",
+                  "validation_role": "oracle",
+                  "rules_profile": "vglc_strict",
+                  "allow_diagonals": false,
+                  "timeout_limit_states": 200000,
+                  "failure_reason": "",
+                  "oracle_status": "solved",
+                  "time_taken_ms": 6322.012200020254,
+                  "states_pruned_dominated": 2,
+                  "max_queue_size": 48098,
+                  "path_ratio_vs_astar": 1.0,
+                  "states_ratio_vs_astar": 1.0
+                },
+                "bfs": {
+                  "success": true,
+                  "path_length": 90,
+                  "states_explored": 787,
+                  "time_sec": 0.05628150000120513,
+                  "algorithm": "BFS",
+                  "validation_role": "comparison",
+                  "rules_profile": "vglc_strict",
+                  "allow_diagonals": false,
+                  "timeout_limit_states": 50000,
+                  "failure_reason": "",
+                  "solver_status": "solved",
+                  "time_taken_ms": 55.79139999463223,
+                  "states_pruned_dominated": 2,
+                  "max_queue_size": 336,
+                  "path_ratio_vs_astar": 1.0,
+                  "states_ratio_vs_astar": 0.010428951936710706
+                },
+                "dijkstra": {
+                  "success": true,
+                  "path_length": 90,
+                  "states_explored": 787,
+                  "time_sec": 0.04400810002698563,
+                  "algorithm": "Dijkstra",
+                  "validation_role": "comparison",
+                  "rules_profile": "vglc_strict",
+                  "allow_diagonals": false,
+                  "timeout_limit_states": 50000,
+                  "failure_reason": "",
+                  "solver_status": "solved",
+                  "time_taken_ms": 43.447300005936995,
+                  "states_pruned_dominated": 2,
+                  "max_queue_size": 336,
+                  "path_ratio_vs_astar": 1.0,
+                  "states_ratio_vs_astar": 0.010428951936710706
+                },
+                "greedy": {
+                  "success": true,
+                  "path_length": 90,
+                  "states_explored": 787,
+                  "time_sec": 0.04503039998235181,
+                  "algorithm": "Greedy",
+                  "validation_role": "comparison",
+                  "rules_profile": "vglc_strict",
+                  "allow_diagonals": false,
+                  "timeout_limit_states": 50000,
+                  "failure_reason": "",
+                  "solver_status": "solved",
+                  "time_taken_ms": 44.61370001081377,
+                  "states_pruned_dominated": 2,
+                  "max_queue_size": 336,
+                  "path_ratio_vs_astar": 1.0,
+                  "states_ratio_vs_astar": 0.010428951936710706
+                },
+                "dstar_lite": {
+                  "success": true,
+                  "path_length": 90,
+                  "states_explored": 75463,
+                  "time_sec": 55.612710299988976,
+                  "algorithm": "D* Lite (fallback: A*)",
+                  "validation_role": "comparison",
+                  "rules_profile": "vglc_strict",
+                  "allow_diagonals": false,
+                  "timeout_limit_states": 100000,
+                  "fallback_used": true,
+                  "replans": 0,
+                  "intended_use": "incremental_replanning",
+                  "independent_oracle": false,
+                  "path_ratio_vs_astar": 1.0,
+                  "states_ratio_vs_astar": 1.0
+                },
+                "dfs_iddfs": {
+                  "success": false,
+                  "path_length": 0,
+                  "states_explored": 114011,
+                  "time_sec": 3.4230414999765344,
+                  "algorithm": "DFS/IDDFS",
+                  "validation_role": "comparison",
+                  "rules_profile": "vglc_strict",
+                  "allow_diagonals": false,
+                  "timeout_limit_states": 100000,
+                  "max_depth_reached": 19,
+                  "backtrack_count": 244503,
+                  "cycle_detections": 0,
+                  "use_iddfs": true,
+                  "path_ratio_vs_astar": null,
+                  "states_ratio_vs_astar": null
+                },
+                "bidirectional_astar": {
+                  "success": true,
+                  "path_length": 90,
+                  "states_explored": 75463,
+                  "time_sec": 6.365565499989316,
+                  "algorithm": "Bidirectional A* (fallback: A*)",
+                  "validation_role": "comparison",
+                  "rules_profile": "vglc_strict",
+                  "allow_diagonals": false,
+                  "timeout_limit_states": 100000,
+                  "fallback_used": true,
+                  "meeting_point": null,
+                  "collision_checks": 0,
+                  "intended_use": "comparison_search",
+                  "independent_oracle": false,
+                  "path_ratio_vs_astar": 1.0,
+                  "states_ratio_vs_astar": 1.0
+                }
+              },
+              "agreement": {
+                "astar_success": true,
+                "bfs_matches_astar_path_length": true,
+                "dijkstra_matches_astar_path_length": true,
+                "greedy_suboptimality_vs_astar": 1.0,
+                "all_algorithms_solved": false
+              },
+              "excluded_algorithms": {
+                "parallel_astar": "Excluded from canonical export validation because multiprocessing adds high runtime overhead and non-trivial platform variance while targeting the same optimality contract as A*.",
+                "multi_goal": "Excluded because end-to-end dungeon validation here is single-goal START->TRIFORCE, not multi-goal routing.",
+                "key_economy_validator": "Excluded because it validates graph-level key economy, not tile/grid playability.",
+                "solver_comparison": "Excluded because it is a benchmark harness, not an independent solver."
+              },
+              "notes": {
+                "oracle": "A* remains the hard grid-level oracle in this suite.",
+                "behavioral_probe": "CBS is reported separately because it is a bounded-rational behavior probe, not the hard correctness oracle."
+              }
+            },
+            "cbs_balanced": {
+              "seed": 123,
+              "success": true,
+              "path_length": 196,
+              "states_explored": 195,
+              "confusion_ratio_vs_astar": 2.1777777777777776,
+              "confusion_index": 0.08888888888888889,
+              "navigation_entropy": 1.8392233344609858,
+              "room_entropy": 7.447593071144973,
+              "cognitive_load": 1.0886295379012012,
+              "aha_latency": 5,
+              "deliberation_events": 0,
+              "budget_exhaustion_events": 0,
+              "peak_frustration": 0.5696132483724817,
+              "affordance_reactivations": 5,
+              "affordance_guided_steps": 56,
+              "inventory_change_events": 2,
+              "focus_switches": 3,
+              "focus_guided_steps": 131,
+              "status": "success"
+            },
+            "graph_progression": {
+              "solvable": true,
+              "path_length": 7,
+              "states_explored": 11,
+              "failure_reason": "",
+              "goal_gauntlet_valid": true,
+              "goal_gauntlet_errors": [],
+              "virtual_nodes_removed": 0
+            },
+            "available": true
+          }
+        },
+        "fast_cfg3_logic0_steps4": {
+          "name": "fast_cfg3_logic0_steps4",
+          "guidance_scale": 3.0,
+          "logic_guidance_scale": 0.0,
+          "num_diffusion_steps": 4,
+          "use_fast_sampling": true,
+          "generation_overrides_applied": {},
+          "diffusion_inference_checkpoint_state_key": "ema_diffusion_state_dict",
+          "diffusion_training_cfg_scale": 3.0,
+          "metrics": {
+            "num_rooms": 12,
+            "total_tiles_repaired": 471,
+            "repair_rate": 0.9166666666666666,
+            "dungeon_shape": [
+              64,
+              44
+            ],
+            "generation_time_sec": 78.50329160690308,
+            "batch_generation_diagnostics": [
+              {
+                "layer_index": 0,
+                "latent_shape_chw": [
+                  64,
+                  4,
+                  3
+                ],
+                "target_room_size_hw": [
+                  16,
+                  11
+                ],
+                "bucket_room_count": 1,
+                "requested_batch_size": 8,
+                "safe_chunk_size": 8,
+                "cuda_free_mb": 2081.7000007629395
+              },
+              {
+                "layer_index": 0,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 0,
+                "actual_chunk_size": 1
+              },
+              {
+                "layer_index": 1,
+                "latent_shape_chw": [
+                  64,
+                  4,
+                  3
+                ],
+                "target_room_size_hw": [
+                  16,
+                  11
+                ],
+                "bucket_room_count": 2,
+                "requested_batch_size": 8,
+                "safe_chunk_size": 8,
+                "cuda_free_mb": 2081.7000007629395
+              },
+              {
+                "layer_index": 1,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 0,
+                "actual_chunk_size": 2
+              },
+              {
+                "layer_index": 2,
+                "latent_shape_chw": [
+                  64,
+                  4,
+                  3
+                ],
+                "target_room_size_hw": [
+                  16,
+                  11
+                ],
+                "bucket_room_count": 2,
+                "requested_batch_size": 8,
+                "safe_chunk_size": 8,
+                "cuda_free_mb": 2081.7000007629395
+              },
+              {
+                "layer_index": 2,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 0,
+                "actual_chunk_size": 2
+              },
+              {
+                "layer_index": 3,
+                "latent_shape_chw": [
+                  64,
+                  4,
+                  3
+                ],
+                "target_room_size_hw": [
+                  16,
+                  11
+                ],
+                "bucket_room_count": 3,
+                "requested_batch_size": 8,
+                "safe_chunk_size": 8,
+                "cuda_free_mb": 2081.7000007629395
+              },
+              {
+                "layer_index": 3,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 0,
+                "actual_chunk_size": 3
+              },
+              {
+                "layer_index": 4,
+                "latent_shape_chw": [
+                  64,
+                  4,
+                  3
+                ],
+                "target_room_size_hw": [
+                  16,
+                  11
+                ],
+                "bucket_room_count": 2,
+                "requested_batch_size": 8,
+                "safe_chunk_size": 8,
+                "cuda_free_mb": 2081.7000007629395
+              },
+              {
+                "layer_index": 4,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 0,
+                "actual_chunk_size": 2
+              },
+              {
+                "layer_index": 5,
+                "latent_shape_chw": [
+                  64,
+                  4,
+                  3
+                ],
+                "target_room_size_hw": [
+                  16,
+                  11
+                ],
+                "bucket_room_count": 1,
+                "requested_batch_size": 8,
+                "safe_chunk_size": 8,
+                "cuda_free_mb": 2081.7000007629395
+              },
+              {
+                "layer_index": 5,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 0,
+                "actual_chunk_size": 1
+              },
+              {
+                "layer_index": 6,
+                "latent_shape_chw": [
+                  64,
+                  4,
+                  3
+                ],
+                "target_room_size_hw": [
+                  16,
+                  11
+                ],
+                "bucket_room_count": 1,
+                "requested_batch_size": 8,
+                "safe_chunk_size": 8,
+                "cuda_free_mb": 2081.7000007629395
+              },
+              {
+                "layer_index": 6,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 0,
+                "actual_chunk_size": 1
+              }
+            ],
+            "total_graph_marker_expected": 11.0,
+            "total_graph_marker_overwrites": 4.0,
+            "avg_neural_graph_marker_exact_match_rate": 0.9166666666666666,
+            "avg_final_pre_overlay_graph_marker_exact_match_rate": 0.6666666666666666,
+            "avg_final_post_overlay_graph_marker_exact_match_rate": 1.0,
+            "avg_final_graph_marker_overwrite_rate": 0.3333333333333333,
+            "avg_neural_semantic_anchor_error": 2.25,
+            "avg_final_pre_overlay_semantic_anchor_error": 9.0,
+            "avg_final_post_overlay_semantic_anchor_error": 0.0
+          },
+          "runtime_diagnostics": {
+            "fast_sampling_used": 7,
+            "topology_door_tiles_forced": 22,
+            "semantic_constrained_decode_applied": 19,
+            "neural_graph_semantic_hints_salvaged": 19,
+            "neural_structural_artifacts_stripped": 22,
+            "repair_room_semantics_stripped": 15,
+            "repair_structural_artifacts_stripped": 15,
+            "wfc_feedback_attempts": 22,
+            "neural_boundary_shell_enforced": 22,
+            "final_boundary_shell_enforced": 22,
+            "neural_post_boundary_graph_semantic_hints_salvaged": 19,
+            "fast_sampler_teacher_fallback": 10,
+            "repair_graph_semantic_hints_salvaged": 14,
+            "final_post_boundary_graph_semantic_hints_salvaged": 14,
+            "boundary_latent_masking_applied": 9,
+            "neural_invalid_tile_ids_sanitized": 6,
+            "neural_room_semantics_stripped": 3,
+            "puzzle_room_scaffold_applied": 2,
+            "puzzle_room_scaffold_hub": 2,
+            "puzzle_room_scaffold_gate_switch": 2,
+            "puzzle_room_scaffold_novelty_selected": 2,
+            "puzzle_room_contract_valid": 2,
+            "puzzle_room_interaction_valid": 3,
+            "puzzle_room_sequence_valid": 4,
+            "puzzle_room_contract_invalid": 3,
+            "puzzle_room_contract_gate_skipped": 3,
+            "puzzle_room_interaction_invalid": 2,
+            "puzzle_room_sequence_invalid": 1
+          },
+          "topology_anchor_policy": {
+            "topology_anchor_policy_version": "2026-04-11.semantic_anchor_v8_puzzle_subtype_channels",
+            "semantic_role_prior_strength": 0.15,
+            "symbolic_max_repair_attempts": 5,
+            "symbolic_repair_margin": 2,
+            "symbolic_adjacency_threshold": 0.01,
+            "semantic_anchor_threshold": 0.5,
+            "semantic_puzzle_offset": 2,
+            "semantic_constrained_decoding_enabled": true,
+            "semantic_marker_logit_bias": 10000.0,
+            "semantic_marker_suppression_bias": 100.0,
+            "puzzle_room_scaffold_enabled": true,
+            "puzzle_room_structure_enabled": true,
+            "puzzle_room_scaffold_min_structure_tiles": 10,
+            "puzzle_room_archetype_mode": "auto",
+            "puzzle_room_branch_density": 0.75,
+            "puzzle_room_block_budget": 28,
+            "puzzle_room_preserve_route_margin": 0,
+            "puzzle_room_switch_pocket_depth": 3,
+            "puzzle_room_resource_bypass_offset": 2,
+            "puzzle_room_key_pocket_depth": 3,
+            "puzzle_room_item_slot_depth": 3,
+            "puzzle_room_toggle_corridor_offset": 2,
+            "puzzle_room_novelty_enabled": true,
+            "puzzle_room_candidate_count": 4,
+            "puzzle_room_novelty_weight": 0.45,
+            "puzzle_room_min_quality_gain": 0.5,
+            "validator_plan_max_states": 512,
+            "deterministic_graph_marker_overlay_enabled": true,
+            "fast_sampler_teacher_fallback_enabled": true,
+            "masked_room_teacher_fallback_enabled": true,
+            "masked_room_sampling_temperature": 1.0,
+            "masked_room_sampling_schedule": "cosine",
+            "masked_room_sampling_stochastic": true,
+            "masked_room_corrector_steps": 1,
+            "masked_room_corrector_mask_ratio": 0.1
+          },
+          "semantic_metrics": {
+            "total_graph_marker_expected": 11.0,
+            "total_graph_marker_overwrites": 4.0,
+            "avg_neural_graph_marker_exact_match_rate": 0.9166666666666666,
+            "avg_final_pre_overlay_graph_marker_exact_match_rate": 0.6666666666666666,
+            "avg_final_post_overlay_graph_marker_exact_match_rate": 1.0,
+            "avg_final_graph_marker_overwrite_rate": 0.3333333333333333,
+            "avg_neural_semantic_anchor_error": 2.25,
+            "avg_final_pre_overlay_semantic_anchor_error": 9.0,
+            "avg_final_post_overlay_semantic_anchor_error": 0.0
+          },
+          "cleanup_totals": {
+            "neural_invalid_door_tiles_removed": 152,
+            "neural_interior_obstacle_tiles_removed": 42,
+            "neural_interior_obstacle_components_removed": 32,
+            "repair_invalid_door_tiles_removed": 218,
+            "repair_interior_obstacle_tiles_removed": 60,
+            "repair_interior_obstacle_components_removed": 55
+          },
+          "tile_hist": {
+            "2": 707,
+            "1": 1262,
+            "15": 70,
+            "21": 1,
+            "20": 2,
+            "30": 1,
+            "31": 1,
+            "11": 5,
+            "12": 5,
+            "13": 10,
+            "3": 37,
+            "32": 1,
+            "43": 2,
+            "0": 704,
+            "14": 5,
+            "23": 1,
+            "42": 1,
+            "22": 1
+          },
+          "room_hashes": {
+            "0": "5428c06b5e9cca62",
+            "1": "9fb24ed83c019442",
+            "2": "a58f44faf5dad735",
+            "3": "ac0890397702bb82",
+            "4": "f54bf6288a56afd3",
+            "5": "836c9851745ac936",
+            "6": "fb77ca7657d30b5a",
+            "7": "00050ed0de0515b5",
+            "8": "58bacd790e2b22df",
+            "9": "d40b02e76e53a5e5",
+            "10": "1c6e55b9f10d4423",
+            "11": "61efd3d0f1af0f7f"
+          },
+          "layout": {
+            "room_count": 12.0,
+            "primary_quality_metric_name": "graph_edge_slot_adjacency_rate",
+            "primary_quality_metric_value": 1.0,
+            "graph_slot_match_rate": 1.0,
+            "graph_position_coverage_rate": 1.0,
+            "graph_preferred_position_duplicate_rate": 0.0,
+            "graph_slot_preference_mean_distance": 0.0,
+            "graph_slot_preference_max_distance": 0.0,
+            "graph_edge_slot_adjacency_rate": 1.0,
+            "graph_edge_slot_mean_distance": 1.0,
+            "graph_edge_slot_mean_excess_distance": 0.0,
+            "graph_edge_slot_max_distance": 1.0,
+            "graph_edge_count_evaluated": 14.0
+          },
+          "validation": {
+            "astar_grid": {
+              "solvable": true,
+              "is_valid_syntax": true,
+              "path_length": 90,
+              "reachability": 0.06626954579300075,
+              "backtracking_score": 0.011111111111111112,
+              "error_message": ""
+            },
+            "softlock_check": {
+              "is_safe": true,
+              "issues": []
+            },
+            "search_algorithms": {
+              "search_suite_version": "2026-04-15.validation_search_suite_v2",
+              "tile_state_space": {
+                "astar": {
+                  "success": true,
+                  "path_length": 90,
+                  "states_explored": 59564,
+                  "time_sec": 4.378362600022228,
+                  "algorithm": "A*",
+                  "validation_role": "oracle",
+                  "rules_profile": "vglc_strict",
+                  "allow_diagonals": false,
+                  "timeout_limit_states": 200000,
+                  "failure_reason": "",
+                  "oracle_status": "solved",
+                  "time_taken_ms": 4334.925100003602,
+                  "states_pruned_dominated": 1,
+                  "max_queue_size": 27359,
+                  "path_ratio_vs_astar": 1.0,
+                  "states_ratio_vs_astar": 1.0
+                },
+                "bfs": {
+                  "success": true,
+                  "path_length": 90,
+                  "states_explored": 923,
+                  "time_sec": 0.073806100001093,
+                  "algorithm": "BFS",
+                  "validation_role": "comparison",
+                  "rules_profile": "vglc_strict",
+                  "allow_diagonals": false,
+                  "timeout_limit_states": 50000,
+                  "failure_reason": "",
+                  "solver_status": "solved",
+                  "time_taken_ms": 72.78569997288287,
+                  "states_pruned_dominated": 1,
+                  "max_queue_size": 639,
+                  "path_ratio_vs_astar": 1.0,
+                  "states_ratio_vs_astar": 0.015495937143240884
+                },
+                "dijkstra": {
+                  "success": true,
+                  "path_length": 90,
+                  "states_explored": 923,
+                  "time_sec": 0.07998569999472238,
+                  "algorithm": "Dijkstra",
+                  "validation_role": "comparison",
+                  "rules_profile": "vglc_strict",
+                  "allow_diagonals": false,
+                  "timeout_limit_states": 50000,
+                  "failure_reason": "",
+                  "solver_status": "solved",
+                  "time_taken_ms": 78.47229999606498,
+                  "states_pruned_dominated": 1,
+                  "max_queue_size": 639,
+                  "path_ratio_vs_astar": 1.0,
+                  "states_ratio_vs_astar": 0.015495937143240884
+                },
+                "greedy": {
+                  "success": true,
+                  "path_length": 90,
+                  "states_explored": 923,
+                  "time_sec": 0.06952940000337549,
+                  "algorithm": "Greedy",
+                  "validation_role": "comparison",
+                  "rules_profile": "vglc_strict",
+                  "allow_diagonals": false,
+                  "timeout_limit_states": 50000,
+                  "failure_reason": "",
+                  "solver_status": "solved",
+                  "time_taken_ms": 68.6950999952387,
+                  "states_pruned_dominated": 1,
+                  "max_queue_size": 639,
+                  "path_ratio_vs_astar": 1.0,
+                  "states_ratio_vs_astar": 0.015495937143240884
+                },
+                "dstar_lite": {
+                  "success": true,
+                  "path_length": 90,
+                  "states_explored": 59564,
+                  "time_sec": 46.74944479999249,
+                  "algorithm": "D* Lite (fallback: A*)",
+                  "validation_role": "comparison",
+                  "rules_profile": "vglc_strict",
+                  "allow_diagonals": false,
+                  "timeout_limit_states": 100000,
+                  "fallback_used": true,
+                  "replans": 0,
+                  "intended_use": "incremental_replanning",
+                  "independent_oracle": false,
+                  "path_ratio_vs_astar": 1.0,
+                  "states_ratio_vs_astar": 1.0
+                },
+                "dfs_iddfs": {
+                  "success": false,
+                  "path_length": 0,
+                  "states_explored": 114011,
+                  "time_sec": 3.4513772999926005,
+                  "algorithm": "DFS/IDDFS",
+                  "validation_role": "comparison",
+                  "rules_profile": "vglc_strict",
+                  "allow_diagonals": false,
+                  "timeout_limit_states": 100000,
+                  "max_depth_reached": 19,
+                  "backtrack_count": 244503,
+                  "cycle_detections": 0,
+                  "use_iddfs": true,
+                  "path_ratio_vs_astar": null,
+                  "states_ratio_vs_astar": null
+                },
+                "bidirectional_astar": {
+                  "success": true,
+                  "path_length": 90,
+                  "states_explored": 59564,
+                  "time_sec": 4.816743400006089,
+                  "algorithm": "Bidirectional A* (fallback: A*)",
+                  "validation_role": "comparison",
+                  "rules_profile": "vglc_strict",
+                  "allow_diagonals": false,
+                  "timeout_limit_states": 100000,
+                  "fallback_used": true,
+                  "meeting_point": null,
+                  "collision_checks": 0,
+                  "intended_use": "comparison_search",
+                  "independent_oracle": false,
+                  "path_ratio_vs_astar": 1.0,
+                  "states_ratio_vs_astar": 1.0
+                }
+              },
+              "agreement": {
+                "astar_success": true,
+                "bfs_matches_astar_path_length": true,
+                "dijkstra_matches_astar_path_length": true,
+                "greedy_suboptimality_vs_astar": 1.0,
+                "all_algorithms_solved": false
+              },
+              "excluded_algorithms": {
+                "parallel_astar": "Excluded from canonical export validation because multiprocessing adds high runtime overhead and non-trivial platform variance while targeting the same optimality contract as A*.",
+                "multi_goal": "Excluded because end-to-end dungeon validation here is single-goal START->TRIFORCE, not multi-goal routing.",
+                "key_economy_validator": "Excluded because it validates graph-level key economy, not tile/grid playability.",
+                "solver_comparison": "Excluded because it is a benchmark harness, not an independent solver."
+              },
+              "notes": {
+                "oracle": "A* remains the hard grid-level oracle in this suite.",
+                "behavioral_probe": "CBS is reported separately because it is a bounded-rational behavior probe, not the hard correctness oracle."
+              }
+            },
+            "cbs_balanced": {
+              "seed": 123,
+              "success": true,
+              "path_length": 292,
+              "states_explored": 291,
+              "confusion_ratio_vs_astar": 3.2444444444444445,
+              "confusion_index": 0.32727272727272727,
+              "navigation_entropy": 1.9338106965065955,
+              "room_entropy": 7.591733946032672,
+              "cognitive_load": 1.0870752980920402,
+              "aha_latency": 6,
+              "deliberation_events": 4,
+              "budget_exhaustion_events": 0,
+              "peak_frustration": 0.8636613732602344,
+              "affordance_reactivations": 5,
+              "affordance_guided_steps": 56,
+              "inventory_change_events": 2,
+              "focus_switches": 3,
+              "focus_guided_steps": 179,
+              "status": "success"
+            },
+            "graph_progression": {
+              "solvable": true,
+              "path_length": 7,
+              "states_explored": 11,
+              "failure_reason": "",
+              "goal_gauntlet_valid": true,
+              "goal_gauntlet_errors": [],
+              "virtual_nodes_removed": 0
+            },
+            "available": true
+          }
+        },
+        "masked_room_full": {
+          "name": "masked_room_full",
+          "room_generator_mode": "discrete_masked",
+          "generation_overrides_applied": {},
+          "metrics": {
+            "num_rooms": 12,
+            "total_tiles_repaired": 410,
+            "repair_rate": 0.6666666666666666,
+            "dungeon_shape": [
+              64,
+              44
+            ],
+            "generation_time_sec": 47.97677731513977,
+            "batch_generation_diagnostics": [
+              {
+                "layer_index": 0,
+                "latent_shape_chw": [
+                  48,
+                  16,
+                  11
+                ],
+                "target_room_size_hw": [
+                  16,
+                  11
+                ],
+                "bucket_room_count": 1,
+                "requested_batch_size": 8,
+                "safe_chunk_size": 8,
+                "cuda_free_mb": 2219.7000007629395
+              },
+              {
+                "layer_index": 0,
+                "bucket_key": "(48, 16, 11, 16, 11)",
+                "chunk_start": 0,
+                "actual_chunk_size": 1
+              },
+              {
+                "layer_index": 1,
+                "latent_shape_chw": [
+                  64,
+                  4,
+                  3
+                ],
+                "target_room_size_hw": [
+                  16,
+                  11
+                ],
+                "bucket_room_count": 2,
+                "requested_batch_size": 8,
+                "safe_chunk_size": 8,
+                "cuda_free_mb": 2217.7000007629395
+              },
+              {
+                "layer_index": 1,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 0,
+                "actual_chunk_size": 2
+              },
+              {
+                "layer_index": 2,
+                "latent_shape_chw": [
+                  64,
+                  4,
+                  3
+                ],
+                "target_room_size_hw": [
+                  16,
+                  11
+                ],
+                "bucket_room_count": 2,
+                "requested_batch_size": 8,
+                "safe_chunk_size": 8,
+                "cuda_free_mb": 2217.7000007629395
+              },
+              {
+                "layer_index": 2,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 0,
+                "actual_chunk_size": 2
+              },
+              {
+                "layer_index": 3,
+                "latent_shape_chw": [
+                  64,
+                  4,
+                  3
+                ],
+                "target_room_size_hw": [
+                  16,
+                  11
+                ],
+                "bucket_room_count": 3,
+                "requested_batch_size": 8,
+                "safe_chunk_size": 8,
+                "cuda_free_mb": 2217.7000007629395
+              },
+              {
+                "layer_index": 3,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 0,
+                "actual_chunk_size": 3
+              },
+              {
+                "layer_index": 4,
+                "latent_shape_chw": [
+                  64,
+                  4,
+                  3
+                ],
+                "target_room_size_hw": [
+                  16,
+                  11
+                ],
+                "bucket_room_count": 2,
+                "requested_batch_size": 8,
+                "safe_chunk_size": 8,
+                "cuda_free_mb": 2217.7000007629395
+              },
+              {
+                "layer_index": 4,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 0,
+                "actual_chunk_size": 2
+              },
+              {
+                "layer_index": 5,
+                "latent_shape_chw": [
+                  64,
+                  4,
+                  3
+                ],
+                "target_room_size_hw": [
+                  16,
+                  11
+                ],
+                "bucket_room_count": 1,
+                "requested_batch_size": 8,
+                "safe_chunk_size": 8,
+                "cuda_free_mb": 2217.7000007629395
+              },
+              {
+                "layer_index": 5,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 0,
+                "actual_chunk_size": 1
+              },
+              {
+                "layer_index": 6,
+                "latent_shape_chw": [
+                  64,
+                  4,
+                  3
+                ],
+                "target_room_size_hw": [
+                  16,
+                  11
+                ],
+                "bucket_room_count": 1,
+                "requested_batch_size": 8,
+                "safe_chunk_size": 8,
+                "cuda_free_mb": 2217.7000007629395
+              },
+              {
+                "layer_index": 6,
+                "bucket_key": "(64, 4, 3, 16, 11)",
+                "chunk_start": 0,
+                "actual_chunk_size": 1
+              }
+            ],
+            "total_graph_marker_expected": 11.0,
+            "total_graph_marker_overwrites": 2.0,
+            "avg_neural_graph_marker_exact_match_rate": 1.0,
+            "avg_final_pre_overlay_graph_marker_exact_match_rate": 0.8333333333333334,
+            "avg_final_post_overlay_graph_marker_exact_match_rate": 1.0,
+            "avg_final_graph_marker_overwrite_rate": 0.16666666666666666,
+            "avg_neural_semantic_anchor_error": 0.0,
+            "avg_final_pre_overlay_semantic_anchor_error": 4.5,
+            "avg_final_post_overlay_semantic_anchor_error": 0.0
+          },
+          "runtime_diagnostics": {
+            "semantic_constrained_decode_applied": 16,
+            "neural_graph_semantic_hints_salvaged": 13,
+            "repair_graph_semantic_hints_salvaged": 12,
+            "wfc_feedback_attempts": 19,
+            "neural_boundary_shell_enforced": 19,
+            "final_boundary_shell_enforced": 19,
+            "neural_post_boundary_graph_semantic_hints_salvaged": 13,
+            "final_post_boundary_graph_semantic_hints_salvaged": 12,
+            "masked_room_teacher_fallback": 7,
+            "boundary_latent_masking_applied": 7,
+            "topology_door_tiles_forced": 7,
+            "neural_invalid_tile_ids_sanitized": 5,
+            "neural_structural_artifacts_stripped": 7,
+            "repair_room_semantics_stripped": 7,
+            "repair_structural_artifacts_stripped": 5,
+            "neural_room_semantics_stripped": 3,
+            "puzzle_room_scaffold_applied": 3,
+            "puzzle_room_scaffold_hub": 2,
+            "puzzle_room_scaffold_gate_switch": 2,
+            "puzzle_room_scaffold_novelty_selected": 3,
+            "puzzle_room_contract_valid": 3,
+            "puzzle_room_interaction_valid": 3,
+            "puzzle_room_sequence_valid": 4,
+            "puzzle_room_contract_invalid": 1,
+            "puzzle_room_contract_gate_skipped": 1,
+            "puzzle_room_interaction_invalid": 1,
+            "puzzle_room_scaffold_combat": 1,
+            "puzzle_room_scaffold_gate_combat": 1
+          },
+          "topology_anchor_policy": {
+            "topology_anchor_policy_version": "2026-04-11.semantic_anchor_v8_puzzle_subtype_channels",
+            "semantic_role_prior_strength": 0.15,
+            "symbolic_max_repair_attempts": 5,
+            "symbolic_repair_margin": 2,
+            "symbolic_adjacency_threshold": 0.01,
+            "semantic_anchor_threshold": 0.5,
+            "semantic_puzzle_offset": 2,
+            "semantic_constrained_decoding_enabled": true,
+            "semantic_marker_logit_bias": 10000.0,
+            "semantic_marker_suppression_bias": 100.0,
+            "puzzle_room_scaffold_enabled": true,
+            "puzzle_room_structure_enabled": true,
+            "puzzle_room_scaffold_min_structure_tiles": 10,
+            "puzzle_room_archetype_mode": "auto",
+            "puzzle_room_branch_density": 0.75,
+            "puzzle_room_block_budget": 28,
+            "puzzle_room_preserve_route_margin": 0,
+            "puzzle_room_switch_pocket_depth": 3,
+            "puzzle_room_resource_bypass_offset": 2,
+            "puzzle_room_key_pocket_depth": 3,
+            "puzzle_room_item_slot_depth": 3,
+            "puzzle_room_toggle_corridor_offset": 2,
+            "puzzle_room_novelty_enabled": true,
+            "puzzle_room_candidate_count": 4,
+            "puzzle_room_novelty_weight": 0.45,
+            "puzzle_room_min_quality_gain": 0.5,
+            "validator_plan_max_states": 512,
+            "deterministic_graph_marker_overlay_enabled": true,
+            "fast_sampler_teacher_fallback_enabled": true,
+            "masked_room_teacher_fallback_enabled": true,
+            "masked_room_sampling_temperature": 1.0,
+            "masked_room_sampling_schedule": "cosine",
+            "masked_room_sampling_stochastic": true,
+            "masked_room_corrector_steps": 1,
+            "masked_room_corrector_mask_ratio": 0.1
+          },
+          "semantic_metrics": {
+            "total_graph_marker_expected": 11.0,
+            "total_graph_marker_overwrites": 2.0,
+            "avg_neural_graph_marker_exact_match_rate": 1.0,
+            "avg_final_pre_overlay_graph_marker_exact_match_rate": 0.8333333333333334,
+            "avg_final_post_overlay_graph_marker_exact_match_rate": 1.0,
+            "avg_final_graph_marker_overwrite_rate": 0.16666666666666666,
+            "avg_neural_semantic_anchor_error": 0.0,
+            "avg_final_pre_overlay_semantic_anchor_error": 4.5,
+            "avg_final_post_overlay_semantic_anchor_error": 0.0
+          },
+          "tile_hist": {
+            "2": 729,
+            "1": 1247,
+            "15": 70,
+            "21": 1,
+            "20": 2,
+            "30": 1,
+            "31": 1,
+            "11": 5,
+            "12": 5,
+            "13": 10,
+            "3": 30,
+            "32": 1,
+            "43": 2,
+            "0": 704,
+            "14": 5,
+            "23": 1,
+            "42": 1,
+            "22": 1
+          },
+          "room_hashes": {
+            "0": "b9db8b904447afdb",
+            "1": "ba561c88f3e40005",
+            "2": "1da7e6601f931da3",
+            "3": "ac0890397702bb82",
+            "4": "f54bf6288a56afd3",
+            "5": "c53145651feca202",
+            "6": "3b846ddca7abfadb",
+            "7": "572a515061ca614e",
+            "8": "a8471f09958574f8",
+            "9": "f61d4077ef9dbee6",
+            "10": "242508567ef2f85c",
+            "11": "06236cee8fc3e96d"
+          },
+          "layout": {
+            "room_count": 12.0,
+            "primary_quality_metric_name": "graph_edge_slot_adjacency_rate",
+            "primary_quality_metric_value": 1.0,
+            "graph_slot_match_rate": 1.0,
+            "graph_position_coverage_rate": 1.0,
+            "graph_preferred_position_duplicate_rate": 0.0,
+            "graph_slot_preference_mean_distance": 0.0,
+            "graph_slot_preference_max_distance": 0.0,
+            "graph_edge_slot_adjacency_rate": 1.0,
+            "graph_edge_slot_mean_distance": 1.0,
+            "graph_edge_slot_mean_excess_distance": 0.0,
+            "graph_edge_slot_max_distance": 1.0,
+            "graph_edge_count_evaluated": 14.0
+          },
+          "validation": {
+            "astar_grid": {
+              "solvable": true,
+              "is_valid_syntax": true,
+              "path_length": 90,
+              "reachability": 0.06701807228915663,
+              "backtracking_score": 0.011111111111111112,
+              "error_message": ""
+            },
+            "softlock_check": {
+              "is_safe": true,
+              "issues": []
+            },
+            "search_algorithms": {
+              "search_suite_version": "2026-04-15.validation_search_suite_v2",
+              "tile_state_space": {
+                "astar": {
+                  "success": true,
+                  "path_length": 90,
+                  "states_explored": 59382,
+                  "time_sec": 4.163078599987784,
+                  "algorithm": "A*",
+                  "validation_role": "oracle",
+                  "rules_profile": "vglc_strict",
+                  "allow_diagonals": false,
+                  "timeout_limit_states": 200000,
+                  "failure_reason": "",
+                  "oracle_status": "solved",
+                  "time_taken_ms": 4123.083000013139,
+                  "states_pruned_dominated": 1,
+                  "max_queue_size": 25783,
+                  "path_ratio_vs_astar": 1.0,
+                  "states_ratio_vs_astar": 1.0
+                },
+                "bfs": {
+                  "success": true,
+                  "path_length": 90,
+                  "states_explored": 768,
+                  "time_sec": 0.050080599990906194,
+                  "algorithm": "BFS",
+                  "validation_role": "comparison",
+                  "rules_profile": "vglc_strict",
+                  "allow_diagonals": false,
+                  "timeout_limit_states": 50000,
+                  "failure_reason": "",
+                  "solver_status": "solved",
+                  "time_taken_ms": 49.59040001267567,
+                  "states_pruned_dominated": 1,
+                  "max_queue_size": 307,
+                  "path_ratio_vs_astar": 1.0,
+                  "states_ratio_vs_astar": 0.012933212084470042
+                },
+                "dijkstra": {
+                  "success": true,
+                  "path_length": 90,
+                  "states_explored": 768,
+                  "time_sec": 0.04643379998742603,
+                  "algorithm": "Dijkstra",
+                  "validation_role": "comparison",
+                  "rules_profile": "vglc_strict",
+                  "allow_diagonals": false,
+                  "timeout_limit_states": 50000,
+                  "failure_reason": "",
+                  "solver_status": "solved",
+                  "time_taken_ms": 45.77460000291467,
+                  "states_pruned_dominated": 1,
+                  "max_queue_size": 307,
+                  "path_ratio_vs_astar": 1.0,
+                  "states_ratio_vs_astar": 0.012933212084470042
+                },
+                "greedy": {
+                  "success": true,
+                  "path_length": 90,
+                  "states_explored": 768,
+                  "time_sec": 0.05702209999435581,
+                  "algorithm": "Greedy",
+                  "validation_role": "comparison",
+                  "rules_profile": "vglc_strict",
+                  "allow_diagonals": false,
+                  "timeout_limit_states": 50000,
+                  "failure_reason": "",
+                  "solver_status": "solved",
+                  "time_taken_ms": 56.48030000156723,
+                  "states_pruned_dominated": 1,
+                  "max_queue_size": 307,
+                  "path_ratio_vs_astar": 1.0,
+                  "states_ratio_vs_astar": 0.012933212084470042
+                },
+                "dstar_lite": {
+                  "success": true,
+                  "path_length": 90,
+                  "states_explored": 59382,
+                  "time_sec": 81.68503530000453,
+                  "algorithm": "D* Lite (fallback: A*)",
+                  "validation_role": "comparison",
+                  "rules_profile": "vglc_strict",
+                  "allow_diagonals": false,
+                  "timeout_limit_states": 100000,
+                  "fallback_used": true,
+                  "replans": 0,
+                  "intended_use": "incremental_replanning",
+                  "independent_oracle": false,
+                  "path_ratio_vs_astar": 1.0,
+                  "states_ratio_vs_astar": 1.0
+                },
+                "dfs_iddfs": {
+                  "success": false,
+                  "path_length": 0,
+                  "states_explored": 109621,
+                  "time_sec": 8.313919699983671,
+                  "algorithm": "DFS/IDDFS",
+                  "validation_role": "comparison",
+                  "rules_profile": "vglc_strict",
+                  "allow_diagonals": false,
+                  "timeout_limit_states": 100000,
+                  "max_depth_reached": 19,
+                  "backtrack_count": 239226,
+                  "cycle_detections": 0,
+                  "use_iddfs": true,
+                  "path_ratio_vs_astar": null,
+                  "states_ratio_vs_astar": null
+                },
+                "bidirectional_astar": {
+                  "success": true,
+                  "path_length": 90,
+                  "states_explored": 59382,
+                  "time_sec": 12.034006599977147,
+                  "algorithm": "Bidirectional A* (fallback: A*)",
+                  "validation_role": "comparison",
+                  "rules_profile": "vglc_strict",
+                  "allow_diagonals": false,
+                  "timeout_limit_states": 100000,
+                  "fallback_used": true,
+                  "meeting_point": null,
+                  "collision_checks": 0,
+                  "intended_use": "comparison_search",
+                  "independent_oracle": false,
+                  "path_ratio_vs_astar": 1.0,
+                  "states_ratio_vs_astar": 1.0
+                }
+              },
+              "agreement": {
+                "astar_success": true,
+                "bfs_matches_astar_path_length": true,
+                "dijkstra_matches_astar_path_length": true,
+                "greedy_suboptimality_vs_astar": 1.0,
+                "all_algorithms_solved": false
+              },
+              "excluded_algorithms": {
+                "parallel_astar": "Excluded from canonical export validation because multiprocessing adds high runtime overhead and non-trivial platform variance while targeting the same optimality contract as A*.",
+                "multi_goal": "Excluded because end-to-end dungeon validation here is single-goal START->TRIFORCE, not multi-goal routing.",
+                "key_economy_validator": "Excluded because it validates graph-level key economy, not tile/grid playability.",
+                "solver_comparison": "Excluded because it is a benchmark harness, not an independent solver."
+              },
+              "notes": {
+                "oracle": "A* remains the hard grid-level oracle in this suite.",
+                "behavioral_probe": "CBS is reported separately because it is a bounded-rational behavior probe, not the hard correctness oracle."
+              }
+            },
+            "cbs_balanced": {
+              "seed": 123,
+              "success": false,
+              "path_length": 16897,
+              "states_explored": 16896,
+              "confusion_ratio_vs_astar": Infinity,
+              "confusion_index": 132.04724409448818,
+              "navigation_entropy": 1.4827867021782069,
+              "room_entropy": 1.4157438477650754,
+              "cognitive_load": 0.9625095928055528,
+              "aha_latency": 0,
+              "deliberation_events": 0,
+              "budget_exhaustion_events": 0,
+              "peak_frustration": 0.896458333625,
+              "affordance_reactivations": 5,
+              "affordance_guided_steps": 8400,
+              "inventory_change_events": 1,
+              "focus_switches": 1,
+              "focus_guided_steps": 8460,
+              "status": "budget_exhausted"
+            },
+            "graph_progression": {
+              "solvable": true,
+              "path_length": 7,
+              "states_explored": 11,
+              "failure_reason": "",
+              "goal_gauntlet_valid": true,
+              "goal_gauntlet_errors": [],
+              "virtual_nodes_removed": 0
+            },
+            "available": true
+          }
+        }
+      }
+    }
+  ],
+  "aggregate": {
+    "diffusion_cfg3_logic0_steps50": {
+      "num_runs": 1,
+      "avg_repair_rate": 0.9166666666666666,
+      "median_repair_rate": 0.9166666666666666,
+      "avg_total_tiles_repaired": 312.0,
+      "median_total_tiles_repaired": 312.0,
+      "avg_generation_time_sec": 40.21329426765442,
+      "median_generation_time_sec": 40.21329426765442,
+      "avg_neural_graph_marker_exact_match_rate": 0.9166666666666666,
+      "median_neural_graph_marker_exact_match_rate": 0.9166666666666666,
+      "avg_final_pre_overlay_graph_marker_exact_match_rate": 0.8333333333333334,
+      "median_final_pre_overlay_graph_marker_exact_match_rate": 0.8333333333333334,
+      "avg_final_post_overlay_graph_marker_exact_match_rate": 1.0,
+      "median_final_post_overlay_graph_marker_exact_match_rate": 1.0,
+      "avg_final_graph_marker_overwrite_rate": 0.16666666666666666,
+      "median_final_graph_marker_overwrite_rate": 0.16666666666666666,
+      "avg_neural_semantic_anchor_error": 2.25,
+      "median_neural_semantic_anchor_error": 2.25,
+      "avg_final_pre_overlay_semantic_anchor_error": 4.5,
+      "median_final_pre_overlay_semantic_anchor_error": 4.5,
+      "avg_final_post_overlay_semantic_anchor_error": 0.0,
+      "median_final_post_overlay_semantic_anchor_error": 0.0,
+      "astar_grid_solvable_rate": 1.0,
+      "softlock_safe_rate": 1.0,
+      "cbs_success_rate": 1.0,
+      "avg_cbs_confusion_ratio_vs_astar": 2.1777777777777776,
+      "avg_cbs_cognitive_load": 1.0886295379012012,
+      "avg_cbs_deliberation_events": 0.0,
+      "avg_cbs_budget_exhaustion_events": 0.0,
+      "avg_cbs_peak_frustration": 0.5696132483724817,
+      "avg_cbs_affordance_reactivations": 5.0,
+      "avg_cbs_affordance_guided_steps": 56.0,
+      "avg_cbs_inventory_change_events": 2.0,
+      "avg_cbs_focus_switches": 3.0,
+      "avg_cbs_focus_guided_steps": 131.0,
+      "goal_gauntlet_valid_rate": 1.0,
+      "unique_layout_count": 1,
+      "all_layouts_identical": true,
+      "search_algorithm_aggregate": {
+        "search_suite_version": "2026-04-15.validation_search_suite_v2",
+        "tile_state_space": {
+          "astar": {
+            "success_rate": 1.0,
+            "independent_success_rate": 1.0,
+            "fallback_rate": 0.0,
+            "avg_path_length": 90.0,
+            "avg_states_explored": 75463.0,
+            "avg_time_sec": 6.416954999993322,
+            "avg_path_ratio_vs_astar": 1.0,
+            "avg_states_ratio_vs_astar": 1.0
+          },
+          "bfs": {
+            "success_rate": 1.0,
+            "independent_success_rate": 1.0,
+            "fallback_rate": 0.0,
+            "avg_path_length": 90.0,
+            "avg_states_explored": 787.0,
+            "avg_time_sec": 0.05628150000120513,
+            "avg_path_ratio_vs_astar": 1.0,
+            "avg_states_ratio_vs_astar": 0.010428951936710706
+          },
+          "dijkstra": {
+            "success_rate": 1.0,
+            "independent_success_rate": 1.0,
+            "fallback_rate": 0.0,
+            "avg_path_length": 90.0,
+            "avg_states_explored": 787.0,
+            "avg_time_sec": 0.04400810002698563,
+            "avg_path_ratio_vs_astar": 1.0,
+            "avg_states_ratio_vs_astar": 0.010428951936710706
+          },
+          "greedy": {
+            "success_rate": 1.0,
+            "independent_success_rate": 1.0,
+            "fallback_rate": 0.0,
+            "avg_path_length": 90.0,
+            "avg_states_explored": 787.0,
+            "avg_time_sec": 0.04503039998235181,
+            "avg_path_ratio_vs_astar": 1.0,
+            "avg_states_ratio_vs_astar": 0.010428951936710706
+          },
+          "dstar_lite": {
+            "success_rate": 1.0,
+            "independent_success_rate": 0.0,
+            "fallback_rate": 1.0,
+            "avg_path_length": 90.0,
+            "avg_states_explored": 75463.0,
+            "avg_time_sec": 55.612710299988976,
+            "avg_path_ratio_vs_astar": 1.0,
+            "avg_states_ratio_vs_astar": 1.0
+          },
+          "dfs_iddfs": {
+            "success_rate": 0.0,
+            "independent_success_rate": 0.0,
+            "fallback_rate": 0.0,
+            "avg_path_length": 0.0,
+            "avg_states_explored": 114011.0,
+            "avg_time_sec": 3.4230414999765344,
+            "avg_path_ratio_vs_astar": null,
+            "avg_states_ratio_vs_astar": null
+          },
+          "bidirectional_astar": {
+            "success_rate": 1.0,
+            "independent_success_rate": 0.0,
+            "fallback_rate": 1.0,
+            "avg_path_length": 90.0,
+            "avg_states_explored": 75463.0,
+            "avg_time_sec": 6.365565499989316,
+            "avg_path_ratio_vs_astar": 1.0,
+            "avg_states_ratio_vs_astar": 1.0
+          }
+        },
+        "agreement": {
+          "astar_success": 1.0,
+          "bfs_matches_astar_path_length": 1.0,
+          "dijkstra_matches_astar_path_length": 1.0,
+          "greedy_suboptimality_vs_astar": 1.0,
+          "all_algorithms_solved": 0.0
+        },
+        "behavioral_probe": {
+          "cbs_balanced": {
+            "success_rate": 1.0,
+            "avg_path_length": 196.0,
+            "avg_states_explored": 195.0,
+            "avg_confusion_ratio_vs_astar": 2.1777777777777776,
+            "avg_confusion_index": 0.08888888888888889,
+            "avg_navigation_entropy": 1.8392233344609858,
+            "avg_cognitive_load": 1.0886295379012012,
+            "avg_deliberation_events": 0.0,
+            "avg_budget_exhaustion_events": 0.0,
+            "avg_peak_frustration": 0.5696132483724817,
+            "avg_affordance_reactivations": 5.0,
+            "avg_affordance_guided_steps": 56.0,
+            "avg_inventory_change_events": 2.0,
+            "avg_focus_switches": 3.0,
+            "avg_focus_guided_steps": 131.0
+          }
+        },
+        "oracle_stack": {
+          "astar_grid_solvable_rate": 1.0,
+          "softlock_safe_rate": 1.0,
+          "goal_gauntlet_valid_rate": 1.0
+        },
+        "excluded_algorithms": {
+          "parallel_astar": "Excluded from canonical export validation because multiprocessing adds high runtime overhead and non-trivial platform variance while targeting the same optimality contract as A*.",
+          "multi_goal": "Excluded because end-to-end dungeon validation here is single-goal START->TRIFORCE, not multi-goal routing.",
+          "key_economy_validator": "Excluded because it validates graph-level key economy, not tile/grid playability.",
+          "solver_comparison": "Excluded because it is a benchmark harness, not an independent solver."
+        }
+      }
+    },
+    "fast_cfg3_logic0_steps4": {
+      "num_runs": 1,
+      "avg_repair_rate": 0.9166666666666666,
+      "median_repair_rate": 0.9166666666666666,
+      "avg_total_tiles_repaired": 471.0,
+      "median_total_tiles_repaired": 471.0,
+      "avg_generation_time_sec": 78.50329160690308,
+      "median_generation_time_sec": 78.50329160690308,
+      "avg_neural_graph_marker_exact_match_rate": 0.9166666666666666,
+      "median_neural_graph_marker_exact_match_rate": 0.9166666666666666,
+      "avg_final_pre_overlay_graph_marker_exact_match_rate": 0.6666666666666666,
+      "median_final_pre_overlay_graph_marker_exact_match_rate": 0.6666666666666666,
+      "avg_final_post_overlay_graph_marker_exact_match_rate": 1.0,
+      "median_final_post_overlay_graph_marker_exact_match_rate": 1.0,
+      "avg_final_graph_marker_overwrite_rate": 0.3333333333333333,
+      "median_final_graph_marker_overwrite_rate": 0.3333333333333333,
+      "avg_neural_semantic_anchor_error": 2.25,
+      "median_neural_semantic_anchor_error": 2.25,
+      "avg_final_pre_overlay_semantic_anchor_error": 9.0,
+      "median_final_pre_overlay_semantic_anchor_error": 9.0,
+      "avg_final_post_overlay_semantic_anchor_error": 0.0,
+      "median_final_post_overlay_semantic_anchor_error": 0.0,
+      "astar_grid_solvable_rate": 1.0,
+      "softlock_safe_rate": 1.0,
+      "cbs_success_rate": 1.0,
+      "avg_cbs_confusion_ratio_vs_astar": 3.2444444444444445,
+      "avg_cbs_cognitive_load": 1.0870752980920402,
+      "avg_cbs_deliberation_events": 4.0,
+      "avg_cbs_budget_exhaustion_events": 0.0,
+      "avg_cbs_peak_frustration": 0.8636613732602344,
+      "avg_cbs_affordance_reactivations": 5.0,
+      "avg_cbs_affordance_guided_steps": 56.0,
+      "avg_cbs_inventory_change_events": 2.0,
+      "avg_cbs_focus_switches": 3.0,
+      "avg_cbs_focus_guided_steps": 179.0,
+      "goal_gauntlet_valid_rate": 1.0,
+      "unique_layout_count": 1,
+      "all_layouts_identical": true,
+      "search_algorithm_aggregate": {
+        "search_suite_version": "2026-04-15.validation_search_suite_v2",
+        "tile_state_space": {
+          "astar": {
+            "success_rate": 1.0,
+            "independent_success_rate": 1.0,
+            "fallback_rate": 0.0,
+            "avg_path_length": 90.0,
+            "avg_states_explored": 59564.0,
+            "avg_time_sec": 4.378362600022228,
+            "avg_path_ratio_vs_astar": 1.0,
+            "avg_states_ratio_vs_astar": 1.0
+          },
+          "bfs": {
+            "success_rate": 1.0,
+            "independent_success_rate": 1.0,
+            "fallback_rate": 0.0,
+            "avg_path_length": 90.0,
+            "avg_states_explored": 923.0,
+            "avg_time_sec": 0.073806100001093,
+            "avg_path_ratio_vs_astar": 1.0,
+            "avg_states_ratio_vs_astar": 0.015495937143240884
+          },
+          "dijkstra": {
+            "success_rate": 1.0,
+            "independent_success_rate": 1.0,
+            "fallback_rate": 0.0,
+            "avg_path_length": 90.0,
+            "avg_states_explored": 923.0,
+            "avg_time_sec": 0.07998569999472238,
+            "avg_path_ratio_vs_astar": 1.0,
+            "avg_states_ratio_vs_astar": 0.015495937143240884
+          },
+          "greedy": {
+            "success_rate": 1.0,
+            "independent_success_rate": 1.0,
+            "fallback_rate": 0.0,
+            "avg_path_length": 90.0,
+            "avg_states_explored": 923.0,
+            "avg_time_sec": 0.06952940000337549,
+            "avg_path_ratio_vs_astar": 1.0,
+            "avg_states_ratio_vs_astar": 0.015495937143240884
+          },
+          "dstar_lite": {
+            "success_rate": 1.0,
+            "independent_success_rate": 0.0,
+            "fallback_rate": 1.0,
+            "avg_path_length": 90.0,
+            "avg_states_explored": 59564.0,
+            "avg_time_sec": 46.74944479999249,
+            "avg_path_ratio_vs_astar": 1.0,
+            "avg_states_ratio_vs_astar": 1.0
+          },
+          "dfs_iddfs": {
+            "success_rate": 0.0,
+            "independent_success_rate": 0.0,
+            "fallback_rate": 0.0,
+            "avg_path_length": 0.0,
+            "avg_states_explored": 114011.0,
+            "avg_time_sec": 3.4513772999926005,
+            "avg_path_ratio_vs_astar": null,
+            "avg_states_ratio_vs_astar": null
+          },
+          "bidirectional_astar": {
+            "success_rate": 1.0,
+            "independent_success_rate": 0.0,
+            "fallback_rate": 1.0,
+            "avg_path_length": 90.0,
+            "avg_states_explored": 59564.0,
+            "avg_time_sec": 4.816743400006089,
+            "avg_path_ratio_vs_astar": 1.0,
+            "avg_states_ratio_vs_astar": 1.0
+          }
+        },
+        "agreement": {
+          "astar_success": 1.0,
+          "bfs_matches_astar_path_length": 1.0,
+          "dijkstra_matches_astar_path_length": 1.0,
+          "greedy_suboptimality_vs_astar": 1.0,
+          "all_algorithms_solved": 0.0
+        },
+        "behavioral_probe": {
+          "cbs_balanced": {
+            "success_rate": 1.0,
+            "avg_path_length": 292.0,
+            "avg_states_explored": 291.0,
+            "avg_confusion_ratio_vs_astar": 3.2444444444444445,
+            "avg_confusion_index": 0.32727272727272727,
+            "avg_navigation_entropy": 1.9338106965065955,
+            "avg_cognitive_load": 1.0870752980920402,
+            "avg_deliberation_events": 4.0,
+            "avg_budget_exhaustion_events": 0.0,
+            "avg_peak_frustration": 0.8636613732602344,
+            "avg_affordance_reactivations": 5.0,
+            "avg_affordance_guided_steps": 56.0,
+            "avg_inventory_change_events": 2.0,
+            "avg_focus_switches": 3.0,
+            "avg_focus_guided_steps": 179.0
+          }
+        },
+        "oracle_stack": {
+          "astar_grid_solvable_rate": 1.0,
+          "softlock_safe_rate": 1.0,
+          "goal_gauntlet_valid_rate": 1.0
+        },
+        "excluded_algorithms": {
+          "parallel_astar": "Excluded from canonical export validation because multiprocessing adds high runtime overhead and non-trivial platform variance while targeting the same optimality contract as A*.",
+          "multi_goal": "Excluded because end-to-end dungeon validation here is single-goal START->TRIFORCE, not multi-goal routing.",
+          "key_economy_validator": "Excluded because it validates graph-level key economy, not tile/grid playability.",
+          "solver_comparison": "Excluded because it is a benchmark harness, not an independent solver."
+        }
+      }
+    },
+    "masked_room_full": {
+      "num_runs": 1,
+      "avg_repair_rate": 0.6666666666666666,
+      "median_repair_rate": 0.6666666666666666,
+      "avg_total_tiles_repaired": 410.0,
+      "median_total_tiles_repaired": 410.0,
+      "avg_generation_time_sec": 47.97677731513977,
+      "median_generation_time_sec": 47.97677731513977,
+      "avg_neural_graph_marker_exact_match_rate": 1.0,
+      "median_neural_graph_marker_exact_match_rate": 1.0,
+      "avg_final_pre_overlay_graph_marker_exact_match_rate": 0.8333333333333334,
+      "median_final_pre_overlay_graph_marker_exact_match_rate": 0.8333333333333334,
+      "avg_final_post_overlay_graph_marker_exact_match_rate": 1.0,
+      "median_final_post_overlay_graph_marker_exact_match_rate": 1.0,
+      "avg_final_graph_marker_overwrite_rate": 0.16666666666666666,
+      "median_final_graph_marker_overwrite_rate": 0.16666666666666666,
+      "avg_neural_semantic_anchor_error": 0.0,
+      "median_neural_semantic_anchor_error": 0.0,
+      "avg_final_pre_overlay_semantic_anchor_error": 4.5,
+      "median_final_pre_overlay_semantic_anchor_error": 4.5,
+      "avg_final_post_overlay_semantic_anchor_error": 0.0,
+      "median_final_post_overlay_semantic_anchor_error": 0.0,
+      "astar_grid_solvable_rate": 1.0,
+      "softlock_safe_rate": 1.0,
+      "cbs_success_rate": 0.0,
+      "avg_cbs_confusion_ratio_vs_astar": NaN,
+      "avg_cbs_cognitive_load": 0.9625095928055528,
+      "avg_cbs_deliberation_events": 0.0,
+      "avg_cbs_budget_exhaustion_events": 0.0,
+      "avg_cbs_peak_frustration": 0.896458333625,
+      "avg_cbs_affordance_reactivations": 5.0,
+      "avg_cbs_affordance_guided_steps": 8400.0,
+      "avg_cbs_inventory_change_events": 1.0,
+      "avg_cbs_focus_switches": 1.0,
+      "avg_cbs_focus_guided_steps": 8460.0,
+      "goal_gauntlet_valid_rate": 1.0,
+      "unique_layout_count": 1,
+      "all_layouts_identical": true,
+      "search_algorithm_aggregate": {
+        "search_suite_version": "2026-04-15.validation_search_suite_v2",
+        "tile_state_space": {
+          "astar": {
+            "success_rate": 1.0,
+            "independent_success_rate": 1.0,
+            "fallback_rate": 0.0,
+            "avg_path_length": 90.0,
+            "avg_states_explored": 59382.0,
+            "avg_time_sec": 4.163078599987784,
+            "avg_path_ratio_vs_astar": 1.0,
+            "avg_states_ratio_vs_astar": 1.0
+          },
+          "bfs": {
+            "success_rate": 1.0,
+            "independent_success_rate": 1.0,
+            "fallback_rate": 0.0,
+            "avg_path_length": 90.0,
+            "avg_states_explored": 768.0,
+            "avg_time_sec": 0.050080599990906194,
+            "avg_path_ratio_vs_astar": 1.0,
+            "avg_states_ratio_vs_astar": 0.012933212084470042
+          },
+          "dijkstra": {
+            "success_rate": 1.0,
+            "independent_success_rate": 1.0,
+            "fallback_rate": 0.0,
+            "avg_path_length": 90.0,
+            "avg_states_explored": 768.0,
+            "avg_time_sec": 0.04643379998742603,
+            "avg_path_ratio_vs_astar": 1.0,
+            "avg_states_ratio_vs_astar": 0.012933212084470042
+          },
+          "greedy": {
+            "success_rate": 1.0,
+            "independent_success_rate": 1.0,
+            "fallback_rate": 0.0,
+            "avg_path_length": 90.0,
+            "avg_states_explored": 768.0,
+            "avg_time_sec": 0.05702209999435581,
+            "avg_path_ratio_vs_astar": 1.0,
+            "avg_states_ratio_vs_astar": 0.012933212084470042
+          },
+          "dstar_lite": {
+            "success_rate": 1.0,
+            "independent_success_rate": 0.0,
+            "fallback_rate": 1.0,
+            "avg_path_length": 90.0,
+            "avg_states_explored": 59382.0,
+            "avg_time_sec": 81.68503530000453,
+            "avg_path_ratio_vs_astar": 1.0,
+            "avg_states_ratio_vs_astar": 1.0
+          },
+          "dfs_iddfs": {
+            "success_rate": 0.0,
+            "independent_success_rate": 0.0,
+            "fallback_rate": 0.0,
+            "avg_path_length": 0.0,
+            "avg_states_explored": 109621.0,
+            "avg_time_sec": 8.313919699983671,
+            "avg_path_ratio_vs_astar": null,
+            "avg_states_ratio_vs_astar": null
+          },
+          "bidirectional_astar": {
+            "success_rate": 1.0,
+            "independent_success_rate": 0.0,
+            "fallback_rate": 1.0,
+            "avg_path_length": 90.0,
+            "avg_states_explored": 59382.0,
+            "avg_time_sec": 12.034006599977147,
+            "avg_path_ratio_vs_astar": 1.0,
+            "avg_states_ratio_vs_astar": 1.0
+          }
+        },
+        "agreement": {
+          "astar_success": 1.0,
+          "bfs_matches_astar_path_length": 1.0,
+          "dijkstra_matches_astar_path_length": 1.0,
+          "greedy_suboptimality_vs_astar": 1.0,
+          "all_algorithms_solved": 0.0
+        },
+        "behavioral_probe": {
+          "cbs_balanced": {
+            "success_rate": 0.0,
+            "avg_path_length": 16897.0,
+            "avg_states_explored": 16896.0,
+            "avg_confusion_ratio_vs_astar": NaN,
+            "avg_confusion_index": 132.04724409448818,
+            "avg_navigation_entropy": 1.4827867021782069,
+            "avg_cognitive_load": 0.9625095928055528,
+            "avg_deliberation_events": 0.0,
+            "avg_budget_exhaustion_events": 0.0,
+            "avg_peak_frustration": 0.896458333625,
+            "avg_affordance_reactivations": 5.0,
+            "avg_affordance_guided_steps": 8400.0,
+            "avg_inventory_change_events": 1.0,
+            "avg_focus_switches": 1.0,
+            "avg_focus_guided_steps": 8460.0
+          }
+        },
+        "oracle_stack": {
+          "astar_grid_solvable_rate": 1.0,
+          "softlock_safe_rate": 1.0,
+          "goal_gauntlet_valid_rate": 1.0
+        },
+        "excluded_algorithms": {
+          "parallel_astar": "Excluded from canonical export validation because multiprocessing adds high runtime overhead and non-trivial platform variance while targeting the same optimality contract as A*.",
+          "multi_goal": "Excluded because end-to-end dungeon validation here is single-goal START->TRIFORCE, not multi-goal routing.",
+          "key_economy_validator": "Excluded because it validates graph-level key economy, not tile/grid playability.",
+          "solver_comparison": "Excluded because it is a benchmark harness, not an independent solver."
+        }
+      }
+    }
+  }
+}

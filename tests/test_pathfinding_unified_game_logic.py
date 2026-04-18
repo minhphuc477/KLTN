@@ -300,6 +300,98 @@ class TestUnifiedGameLogic:
                 print(f"⚠ {name}: Complex test timed out (expected for non-heuristic solvers)")
 
 
+    def test_stateful_puzzle_door_requires_multi_step_sequence(self):
+        """Test: DOOR_PUZZLE stays locked until key -> item -> puzzle stages are completed."""
+        grid = np.full((5, 8), SEMANTIC_PALETTE['WALL'], dtype=np.int64)
+        grid[2, 1:7] = SEMANTIC_PALETTE['FLOOR']
+        grid[2, 1] = SEMANTIC_PALETTE['START']
+        grid[2, 2] = SEMANTIC_PALETTE['KEY_SMALL']
+        grid[2, 3] = SEMANTIC_PALETTE['KEY_ITEM']
+        grid[2, 4] = SEMANTIC_PALETTE['PUZZLE']
+        grid[2, 5] = SEMANTIC_PALETTE['DOOR_PUZZLE']
+        grid[2, 6] = SEMANTIC_PALETTE['TRIFORCE']
+
+        puzzle_metadata = {
+            "version": "stateful_v1",
+            "plans": {
+                "room_0": {
+                    "plan_id": "room_0",
+                    "controlled_doors_global": [[2, 5]],
+                    "stage_sequence": [
+                        {"stage_index": 0, "name": "key", "kind": "collect_key", "global_anchor": [2, 2], "trigger_tile_id": int(SEMANTIC_PALETTE['KEY_SMALL'])},
+                        {"stage_index": 1, "name": "item", "kind": "collect_item", "global_anchor": [2, 3], "trigger_tile_id": int(SEMANTIC_PALETTE['KEY_ITEM'])},
+                        {"stage_index": 2, "name": "puzzle", "kind": "step_on_puzzle", "global_anchor": [2, 4], "trigger_tile_id": int(SEMANTIC_PALETTE['PUZZLE'])},
+                    ],
+                }
+            },
+        }
+
+        for solver_class, name in [
+            (StateSpaceAStar, 'A*'),
+            (lambda env: DStarLiteSolver(env), 'D* Lite'),
+            (lambda env: StateSpaceDFS(env, max_depth=128), 'DFS'),
+        ]:
+            env = ZeldaLogicEnv(grid, room_puzzle_metadata=puzzle_metadata)
+            solver = solver_class(env)
+
+            if name == 'D* Lite':
+                success, path, _ = solver.solve(env.state.copy())
+            elif hasattr(solver, 'solve'):
+                success, path, _ = solver.solve()
+            else:
+                success, path, _ = solver.solve_with_diagnostics()
+
+            assert success, f"{name} failed staged puzzle dungeon"
+            assert (2, 2) in path, f"{name} skipped key stage"
+            assert (2, 3) in path, f"{name} skipped item stage"
+            assert (2, 4) in path, f"{name} skipped puzzle stage"
+            assert (2, 5) in path, f"{name} did not pass puzzle door after stages"
+
+    def test_push_block_stage_unlocks_puzzle_door(self):
+        """Test: pushing a block onto the declared switch anchor completes a staged puzzle."""
+        grid = np.full((6, 8), SEMANTIC_PALETTE['WALL'], dtype=np.int64)
+        grid[3, 1:7] = SEMANTIC_PALETTE['FLOOR']
+        grid[2, 2:5] = SEMANTIC_PALETTE['FLOOR']
+        grid[3, 1] = SEMANTIC_PALETTE['START']
+        grid[2, 3] = SEMANTIC_PALETTE['BLOCK']
+        grid[3, 5] = SEMANTIC_PALETTE['DOOR_PUZZLE']
+        grid[3, 6] = SEMANTIC_PALETTE['TRIFORCE']
+
+        puzzle_metadata = {
+            "version": "stateful_v1",
+            "plans": {
+                "room_0": {
+                    "plan_id": "room_0",
+                    "controlled_doors_global": [[3, 5]],
+                    "stage_sequence": [
+                        {"stage_index": 0, "name": "puzzle", "kind": "push_block_to_switch", "global_anchor": [2, 4]},
+                    ],
+                }
+            },
+        }
+
+        env = ZeldaLogicEnv(grid, room_puzzle_metadata=puzzle_metadata)
+        state = env.state.copy()
+
+        blocked, _ = env._try_move_pure(state, (3, 5), int(grid[3, 5]))
+        assert not blocked
+
+        ok, state = env._try_move_pure(state, (3, 2), int(grid[3, 2]))
+        assert ok
+        ok, state = env._try_move_pure(state, (2, 2), int(grid[2, 2]))
+        assert ok
+        ok, state = env._try_move_pure(state, (2, 3), int(grid[2, 3]))
+        assert ok
+        assert ('room_0', 0) in state.completed_puzzle_stages
+
+        ok, state = env._try_move_pure(state, (3, 3), int(grid[3, 3]))
+        assert ok
+        ok, state = env._try_move_pure(state, (3, 4), int(grid[3, 4]))
+        assert ok
+        ok, state = env._try_move_pure(state, (3, 5), int(grid[3, 5]))
+        assert ok
+
+
 if __name__ == "__main__":
     # Run tests
     test = TestUnifiedGameLogic()

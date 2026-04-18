@@ -1,0 +1,59 @@
+{
+  "tile_state_space": {
+    "astar": {
+      "success": false,
+      "path_length": 0,
+      "states_explored": 200000,
+      "time_sec": 13.320688299998437,
+      "algorithm": "A*",
+      "rules_profile": "vglc_strict",
+      "allow_diagonals": false,
+      "timeout_limit_states": 200000,
+      "path_ratio_vs_astar": null,
+      "states_ratio_vs_astar": null
+    },
+    "bfs": {
+      "success": false,
+      "path_length": 0,
+      "states_explored": 50000,
+      "time_sec": 2.1944554000001517,
+      "algorithm": "BFS",
+      "rules_profile": "vglc_strict",
+      "allow_diagonals": false,
+      "timeout_limit_states": 50000,
+      "path_ratio_vs_astar": null,
+      "states_ratio_vs_astar": null
+    },
+    "dijkstra": {
+      "success": false,
+      "path_length": 0,
+      "states_explored": 50000,
+      "time_sec": 3.112628200000472,
+      "algorithm": "Dijkstra",
+      "rules_profile": "vglc_strict",
+      "allow_diagonals": false,
+      "timeout_limit_states": 50000,
+      "path_ratio_vs_astar": null,
+      "states_ratio_vs_astar": null
+    },
+    "greedy": {
+      "success": false,
+      "path_length": 0,
+      "states_explored": 50000,
+      "time_sec": 2.9818364000020665,
+      "algorithm": "Greedy",
+      "rules_profile": "vglc_strict",
+      "allow_diagonals": false,
+      "timeout_limit_states": 50000,
+      "path_ratio_vs_astar": null,
+      "states_ratio_vs_astar": null
+    }
+  },
+  "agreement": {
+    "astar_success": false,
+    "bfs_matches_astar_path_length": false,
+    "dijkstra_matches_astar_path_length": false,
+    "greedy_suboptimality_vs_astar": null,
+    "all_algorithms_solved": false
+  }
+}

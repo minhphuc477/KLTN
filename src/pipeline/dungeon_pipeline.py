@@ -40,8 +40,9 @@ Usage:
 
 import json
 import logging
+from collections import deque
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional, Any, Set, Mapping
+from typing import Dict, List, Tuple, Optional, Any, Set, Mapping, Sequence
 from dataclasses import dataclass, field
 
 import torch
@@ -121,6 +122,7 @@ from src.pipeline.room_topology_conditioning import (
     DEFAULT_SEMANTIC_ROLE_PRIOR_STRENGTH,
     ROOM_TOPOLOGY_CHANNEL_COUNT,
     TOPOLOGY_ANCHOR_POLICY_VERSION,
+    apply_puzzle_structure_control_to_conditioning,
     build_room_semantic_anchor_points,
     build_semantic_room_plan_trace,
     build_room_topology_condition_map,
@@ -235,6 +237,7 @@ class RoomGenerationResult:
     repair_mask: Optional[np.ndarray] = None  # (16, 11) bool mask
     room_plan_mask: Optional[np.ndarray] = None  # (16, 11) float/bool traversability prior
     neural_probs: Optional[np.ndarray] = None  # (44, 16, 11) pre-repair tile probabilities
+    puzzle_metadata: Dict[str, Any] = field(default_factory=dict)
     metrics: Dict[str, float] = field(default_factory=dict)
 
 
@@ -247,6 +250,8 @@ class DungeonGenerationResult:
     metrics: Dict[str, Any]
     map_elites_score: Optional[Dict[str, float]] = None
     generation_time: float = 0.0
+    stitched_layout: Optional[StitchedRoomLayout] = None
+    puzzle_metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -338,6 +343,7 @@ class NeuralSymbolicDungeonPipeline:
         default_semantic_marker_logit_bias: float = 10000.0,
         default_semantic_marker_suppression_bias: float = 100.0,
         default_puzzle_room_scaffold_enabled: bool = True,
+        default_puzzle_room_structure_enabled: bool = True,
         default_puzzle_room_scaffold_min_structure_tiles: int = 10,
         default_puzzle_room_archetype_mode: str = "auto",
         default_puzzle_room_branch_density: float = 0.75,
@@ -351,6 +357,7 @@ class NeuralSymbolicDungeonPipeline:
         default_puzzle_room_novelty_enabled: bool = True,
         default_puzzle_room_candidate_count: int = 4,
         default_puzzle_room_novelty_weight: float = 0.45,
+        default_puzzle_room_min_quality_gain: float = 0.5,
         default_validator_plan_max_states: int = DEFAULT_VALIDATOR_PLAN_MAX_STATES,
         default_deterministic_graph_marker_overlay_enabled: bool = True,
         default_fast_sampler_teacher_fallback_enabled: bool = True,
@@ -446,6 +453,7 @@ class NeuralSymbolicDungeonPipeline:
             max(0.0, float(default_semantic_marker_suppression_bias))
         )
         self.default_puzzle_room_scaffold_enabled = bool(default_puzzle_room_scaffold_enabled)
+        self.default_puzzle_room_structure_enabled = bool(default_puzzle_room_structure_enabled)
         self.default_puzzle_room_scaffold_min_structure_tiles = int(
             max(0, int(default_puzzle_room_scaffold_min_structure_tiles))
         )
@@ -482,6 +490,9 @@ class NeuralSymbolicDungeonPipeline:
         self.default_puzzle_room_novelty_weight = float(
             max(0.0, min(2.0, float(default_puzzle_room_novelty_weight)))
         )
+        self.default_puzzle_room_min_quality_gain = float(
+            max(0.0, min(10.0, float(default_puzzle_room_min_quality_gain)))
+        )
         self.default_validator_plan_max_states = int(max(32, int(default_validator_plan_max_states)))
         self.default_deterministic_graph_marker_overlay_enabled = bool(
             default_deterministic_graph_marker_overlay_enabled
@@ -508,6 +519,12 @@ class NeuralSymbolicDungeonPipeline:
         self.diffusion_fallback_config = dict(diffusion_fallback_config or {})
         self.logic_net_fallback_config = dict(logic_net_fallback_config or {})
         self.masked_room_fallback_config = dict(masked_room_fallback_config or {})
+        self.diffusion_puzzle_structure_condition_enabled = bool(
+            float(self.diffusion_fallback_config.get("puzzle_structure_dropout_prob", 0.0)) > 0.0
+        )
+        self.masked_room_puzzle_structure_condition_enabled = bool(
+            float(self.masked_room_fallback_config.get("puzzle_structure_dropout_prob", 0.0)) > 0.0
+        )
         default_curve = topology_default_target_curve
         if default_curve is None:
             default_curve = [0.2, 0.4, 0.6, 0.8, 1.0]
@@ -1191,6 +1208,9 @@ class NeuralSymbolicDungeonPipeline:
             "inference_checkpoint_state_key",
             str(locals().get("checkpoint_state_key", "random_init")),
         )
+        self.diffusion_puzzle_structure_condition_enabled = bool(
+            float(checkpoint_config.get("puzzle_structure_dropout_prob", fallback_config.get("puzzle_structure_dropout_prob", 0.0))) > 0.0
+        )
         
         if checkpoint_path and Path(checkpoint_path).exists():
             if not isinstance(checkpoint_state, dict):
@@ -1396,6 +1416,9 @@ class NeuralSymbolicDungeonPipeline:
                 checkpoint_config.get("room_topology_channels", fallback_config.get("room_topology_channels", ROOM_TOPOLOGY_CHANNEL_COUNT))
             ),
         ).to(self.device)
+        self.masked_room_puzzle_structure_condition_enabled = bool(
+            float(checkpoint_config.get("puzzle_structure_dropout_prob", fallback_config.get("puzzle_structure_dropout_prob", 0.0))) > 0.0
+        )
 
         if checkpoint_path and Path(checkpoint_path).exists():
             assert checkpoint is not None
@@ -1493,6 +1516,7 @@ class NeuralSymbolicDungeonPipeline:
         grid: np.ndarray,
         *,
         fallback_grid: Optional[np.ndarray] = None,
+        strip_void: bool = False,
     ) -> Tuple[np.ndarray, int, List[int]]:
         """
         Clamp/repair semantic IDs to the canonical palette.
@@ -1502,6 +1526,8 @@ class NeuralSymbolicDungeonPipeline:
         """
         out = np.asarray(grid, dtype=np.int32).copy()
         invalid_mask = ~np.isin(out, self._valid_semantic_tile_ids_np)
+        if bool(strip_void):
+            invalid_mask |= out == int(TileID.VOID)
         invalid_count = int(np.sum(invalid_mask))
         invalid_ids: List[int] = []
         if invalid_count <= 0:
@@ -1512,6 +1538,8 @@ class NeuralSymbolicDungeonPipeline:
         if fallback_grid is not None and np.shape(fallback_grid) == np.shape(out):
             fb = np.asarray(fallback_grid, dtype=np.int32)
             fb_invalid = ~np.isin(fb, self._valid_semantic_tile_ids_np)
+            if bool(strip_void):
+                fb_invalid |= fb == int(TileID.VOID)
             if bool(np.any(fb_invalid)):
                 fb = fb.copy()
                 fb[fb_invalid] = floor_id
@@ -1519,6 +1547,44 @@ class NeuralSymbolicDungeonPipeline:
         else:
             out[invalid_mask] = floor_id
         return out, invalid_count, invalid_ids
+
+    def _strip_room_void_tiles(
+        self,
+        grid: np.ndarray,
+    ) -> Tuple[np.ndarray, Dict[str, int]]:
+        """
+        Remove VOID tiles from a generated room grid.
+
+        Room-local semantic tensors should never retain stitched-world VOID.
+        If VOID survives decoding or repair, exported rooms can show black
+        holes inside otherwise valid geometry. Boundary VOID becomes WALL;
+        interior VOID becomes FLOOR.
+        """
+        out = np.asarray(grid, dtype=np.int32).copy()
+        void_mask = out == int(TileID.VOID)
+        total_void = int(np.sum(void_mask))
+        if total_void <= 0:
+            return out, {
+                "boundary_void_tiles_removed": 0,
+                "interior_void_tiles_removed": 0,
+            }
+
+        boundary_mask = np.zeros_like(out, dtype=bool)
+        boundary_mask[0, :] = True
+        boundary_mask[ROOM_HEIGHT - 1, :] = True
+        boundary_mask[:, 0] = True
+        boundary_mask[:, ROOM_WIDTH - 1] = True
+
+        boundary_void_mask = void_mask & boundary_mask
+        interior_void_mask = void_mask & ~boundary_mask
+        if bool(np.any(boundary_void_mask)):
+            out[boundary_void_mask] = int(TileID.WALL)
+        if bool(np.any(interior_void_mask)):
+            out[interior_void_mask] = int(TileID.FLOOR)
+        return out, {
+            "boundary_void_tiles_removed": int(np.sum(boundary_void_mask)),
+            "interior_void_tiles_removed": int(np.sum(interior_void_mask)),
+        }
 
     def _strip_volatile_room_semantics(
         self,
@@ -1606,7 +1672,7 @@ class NeuralSymbolicDungeonPipeline:
 
         try:
             preview_grid = logits.argmax(dim=1).detach().cpu().numpy()[0]
-            preview_grid, _, _ = self._sanitize_semantic_grid(preview_grid)
+            preview_grid, _, _ = self._sanitize_semantic_grid(preview_grid, strip_void=True)
             preview_grid[np.isin(preview_grid, self._volatile_room_semantic_tile_ids_np)] = int(
                 SEMANTIC_PALETTE.get("FLOOR", 1)
             )
@@ -1879,6 +1945,67 @@ class NeuralSymbolicDungeonPipeline:
             "interior_obstacle_components_removed": int(interior_obstacle_components_removed),
         }
 
+    def _strip_room_block_structure(
+        self,
+        grid: np.ndarray,
+        *,
+        graph: Optional[nx.Graph],
+        room_id: Any,
+    ) -> Tuple[np.ndarray, Dict[str, int]]:
+        """
+        Strip interior BLOCK tiles for strict no-puzzle ablations.
+
+        Disabling the runtime puzzle scaffold alone does not guarantee a true
+        no-puzzle export because learned decode noise can still leave interior
+        brown BLOCK tiles behind. This helper enforces the stronger ablation
+        contract by removing those tiles deterministically.
+        """
+        out = np.asarray(grid, dtype=np.int32).copy()
+        block_id = int(TileID.BLOCK)
+        floor_id = int(TileID.FLOOR)
+        block_mask = out == block_id
+        removed_tiles = int(np.sum(block_mask))
+        if removed_tiles <= 0:
+            return out, {
+                "applied": 0,
+                "block_tiles_removed": 0,
+                "block_components_removed": 0,
+            }
+
+        visited = np.zeros_like(block_mask, dtype=bool)
+        removed_components = 0
+        for row in range(ROOM_HEIGHT):
+            for col in range(ROOM_WIDTH):
+                if not bool(block_mask[row, col]) or bool(visited[row, col]):
+                    continue
+                removed_components += 1
+                stack: List[Tuple[int, int]] = [(row, col)]
+                visited[row, col] = True
+                while stack:
+                    cur_r, cur_c = stack.pop()
+                    for d_r, d_c in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                        next_r = cur_r + d_r
+                        next_c = cur_c + d_c
+                        if not (0 <= next_r < ROOM_HEIGHT and 0 <= next_c < ROOM_WIDTH):
+                            continue
+                        if not bool(block_mask[next_r, next_c]) or bool(visited[next_r, next_c]):
+                            continue
+                        visited[next_r, next_c] = True
+                        stack.append((next_r, next_c))
+
+        out[block_mask] = floor_id
+        logger.debug(
+            "Room %s stripped %d BLOCK tiles across %d components for strict no-puzzle cleanup.",
+            room_id,
+            removed_tiles,
+            removed_components,
+        )
+        return out, {
+            "applied": 1,
+            "block_tiles_removed": int(removed_tiles),
+            "block_components_removed": int(removed_components),
+        }
+
     @staticmethod
     def _dilate_room_mask(mask: np.ndarray, radius: int = 1) -> np.ndarray:
         """Lightweight 4-neighbour dilation for room-scale boolean masks."""
@@ -1919,6 +2046,7 @@ class NeuralSymbolicDungeonPipeline:
         gate_family: str,
         variant_spec: Optional[Mapping[str, Any]] = None,
         stateful_anchor: Optional[Tuple[int, int]],
+        interaction_sequence: Optional[Sequence[Tuple[str, Tuple[int, int]]]] = None,
         flow_is_horizontal: bool,
         source_anchor: Tuple[int, int],
         destination_anchor: Tuple[int, int],
@@ -2207,7 +2335,173 @@ class NeuralSymbolicDungeonPipeline:
         if role_flags.get("has_puzzle", False):
             mask[max(1, puzzle[0] - 1): min(ROOM_HEIGHT - 1, puzzle[0] + 2), max(1, puzzle[1] - 1): min(ROOM_WIDTH - 1, puzzle[1] + 2)] = True
 
+        sequence = list(interaction_sequence or [])
+        if len(sequence) >= 2:
+            ordered_points: List[Tuple[int, int]] = [source]
+            ordered_points.extend(self._clamp_room_coord(anchor) for _name, anchor in sequence)
+            ordered_points.append(destination)
+            _add_polyline(ordered_points)
+            for _name, anchor in sequence:
+                seq_r, seq_c = self._clamp_room_coord(anchor)
+                mask[
+                    max(1, seq_r - 1): min(ROOM_HEIGHT - 1, seq_r + 2),
+                    max(1, seq_c - 1): min(ROOM_WIDTH - 1, seq_c + 2),
+                ] = True
+
         return mask
+
+    def _resolve_puzzle_interaction_sequence(
+        self,
+        *,
+        archetype: str,
+        gate_family: str,
+        role_flags: Mapping[str, bool],
+        semantic_anchors: Mapping[str, Tuple[int, int]],
+    ) -> List[Tuple[str, Tuple[int, int]]]:
+        """
+        Resolve a staged in-room interaction sequence for complex puzzle rooms.
+
+        This is intentionally a lightweight constructive grammar. It does not
+        simulate a full state machine, but it gives the room generator a
+        progression order across local anchors such as key, item, puzzle, and
+        enemy instead of treating every puzzle room as a single interaction.
+        """
+        archetype = str(archetype or "serpentine").strip().lower()
+        gate_family = str(gate_family or "generic").strip().lower()
+        flags = {str(key): bool(value) for key, value in dict(role_flags or {}).items()}
+        anchors = {
+            str(name): self._clamp_room_coord(coord)
+            for name, coord in dict(semantic_anchors or {}).items()
+            if coord is not None
+        }
+        sequence: List[Tuple[str, Tuple[int, int]]] = []
+        seen: Set[str] = set()
+
+        def _add(name: str) -> None:
+            key = str(name)
+            if key in seen:
+                return
+            anchor = anchors.get(key)
+            if anchor is None:
+                return
+            sequence.append((key, anchor))
+            seen.add(key)
+
+        multi_step_room = bool(flags.get("is_complex_puzzle", False))
+        multi_step_room = multi_step_room or archetype in {"hub", "combat"}
+        multi_step_room = multi_step_room or sum(
+            int(flags.get(name, False))
+            for name in ("has_key", "has_item", "has_enemy", "has_puzzle")
+        ) >= 3
+        if multi_step_room:
+            for name, flag_key in (
+                ("key", "has_key"),
+                ("item", "has_item"),
+                ("puzzle", "has_puzzle"),
+                ("enemy", "has_enemy"),
+                ("boss", "has_boss"),
+            ):
+                if bool(flags.get(flag_key, False)):
+                    _add(name)
+            return list(sequence)
+
+        if gate_family == "key":
+            _add("key")
+            _add("puzzle")
+        elif gate_family == "item_unlock":
+            _add("item")
+            _add("puzzle")
+        elif gate_family in {"switch", "toggle", "bombable"}:
+            _add("puzzle")
+        elif gate_family == "combat":
+            if flags.get("has_puzzle", False):
+                _add("puzzle")
+            _add("enemy")
+
+        return list(sequence)
+
+    def _evaluate_puzzle_candidate_interaction_sequence(
+        self,
+        *,
+        grid: np.ndarray,
+        route_mask: np.ndarray,
+        source_anchor: Tuple[int, int],
+        destination_anchor: Tuple[int, int],
+        interaction_sequence: Sequence[Tuple[str, Tuple[int, int]]],
+    ) -> Dict[str, Any]:
+        """
+        Validate simple staged room progression across multiple local anchors.
+
+        This remains a room-local proxy for multi-step puzzle structure. A
+        candidate is rewarded when the reserved route actually visits the
+        intermediate anchors and when each consecutive stage is walkably
+        connectable in the final geometry.
+        """
+        sequence = [
+            (str(name), self._clamp_room_coord(anchor))
+            for name, anchor in list(interaction_sequence or [])
+            if anchor is not None
+        ]
+        if len(sequence) <= 1:
+            return {
+                "required": 0,
+                "valid": 1,
+                "score": 0.0,
+                "failure_reasons": [],
+                "sequence_length": int(len(sequence)),
+                "route_anchor_coverage": 1.0 if sequence else 0.0,
+                "pairwise_path_ratio": 1.0,
+                "sequence_names": [name for name, _anchor in sequence],
+            }
+
+        walkable = self._build_room_walkable_mask(grid)
+        route_arr = np.asarray(route_mask, dtype=bool)
+
+        covered = 0
+        for _name, anchor in sequence:
+            anchor_r, anchor_c = anchor
+            route_r0 = max(0, anchor_r - 1)
+            route_r1 = min(ROOM_HEIGHT, anchor_r + 2)
+            route_c0 = max(0, anchor_c - 1)
+            route_c1 = min(ROOM_WIDTH, anchor_c + 2)
+            if bool(np.any(route_arr[route_r0:route_r1, route_c0:route_c1])):
+                covered += 1
+        route_anchor_coverage = float(covered) / float(max(1, len(sequence)))
+
+        path_nodes: List[Tuple[int, int]] = [self._clamp_room_coord(source_anchor)]
+        path_nodes.extend(anchor for _name, anchor in sequence)
+        path_nodes.append(self._clamp_room_coord(destination_anchor))
+        pairwise_success = 0
+        pairwise_total = max(0, len(path_nodes) - 1)
+        for start, goal in zip(path_nodes, path_nodes[1:]):
+            if self._shortest_room_path(walkable, start, goal):
+                pairwise_success += 1
+        pairwise_path_ratio = float(pairwise_success) / float(max(1, pairwise_total))
+
+        failure_reasons: List[str] = []
+        if route_anchor_coverage < 1.0:
+            failure_reasons.append("incomplete_sequence_route")
+        if pairwise_path_ratio < 1.0:
+            failure_reasons.append("broken_sequence_connectivity")
+
+        score = 0.0
+        score += 0.90 * route_anchor_coverage
+        score += 0.70 * pairwise_path_ratio
+        score += 0.20 * float(min(1.0, float(len(sequence) - 1) / 3.0))
+        valid = int(len(failure_reasons) == 0)
+        if not valid:
+            score -= 1.75 + (0.10 * len(failure_reasons))
+
+        return {
+            "required": 1,
+            "valid": int(valid),
+            "score": float(score),
+            "failure_reasons": list(failure_reasons),
+            "sequence_length": int(len(sequence)),
+            "route_anchor_coverage": float(route_anchor_coverage),
+            "pairwise_path_ratio": float(pairwise_path_ratio),
+            "sequence_names": [name for name, _anchor in sequence],
+        }
 
     def _select_puzzle_room_scaffold_archetype(
         self,
@@ -2399,6 +2693,499 @@ class NeuralSymbolicDungeonPipeline:
             "quadrants": quadrants,
         }
 
+    @staticmethod
+    def _build_room_walkable_mask(grid: np.ndarray) -> np.ndarray:
+        """Return walkable cells for room-local structural scoring."""
+        grid_arr = np.asarray(grid, dtype=np.int32)
+        blocked = np.isin(
+            grid_arr,
+            np.array([int(TileID.WALL), int(TileID.BLOCK)], dtype=np.int32),
+        )
+        return ~blocked
+
+    @staticmethod
+    def _count_room_path_turns(path: List[Tuple[int, int]]) -> int:
+        """Count Manhattan direction changes along a discrete room path."""
+        if len(path) < 3:
+            return 0
+        turns = 0
+        prev_delta: Optional[Tuple[int, int]] = None
+        for prev, cur in zip(path, path[1:]):
+            delta = (int(cur[0]) - int(prev[0]), int(cur[1]) - int(prev[1]))
+            if prev_delta is not None and delta != prev_delta:
+                turns += 1
+            prev_delta = delta
+        return int(turns)
+
+    def _nearest_walkable_room_coord(
+        self,
+        walkable: np.ndarray,
+        anchor: Tuple[int, int],
+    ) -> Optional[Tuple[int, int]]:
+        """Project an anchor onto the nearest walkable room tile."""
+        mask = np.asarray(walkable, dtype=bool)
+        if mask.shape != (ROOM_HEIGHT, ROOM_WIDTH):
+            return None
+        target_r, target_c = self._clamp_room_coord(anchor)
+        if bool(mask[target_r, target_c]):
+            return (int(target_r), int(target_c))
+
+        visited = np.zeros_like(mask, dtype=bool)
+        queue: deque[Tuple[int, int]] = deque([(int(target_r), int(target_c))])
+        visited[target_r, target_c] = True
+        while queue:
+            row, col = queue.popleft()
+            for d_row, d_col in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                next_row = row + d_row
+                next_col = col + d_col
+                if not (0 <= next_row < ROOM_HEIGHT and 0 <= next_col < ROOM_WIDTH):
+                    continue
+                if bool(visited[next_row, next_col]):
+                    continue
+                if bool(mask[next_row, next_col]):
+                    return (int(next_row), int(next_col))
+                visited[next_row, next_col] = True
+                queue.append((int(next_row), int(next_col)))
+        return None
+
+    def _shortest_room_path(
+        self,
+        walkable: np.ndarray,
+        start: Tuple[int, int],
+        goal: Tuple[int, int],
+    ) -> List[Tuple[int, int]]:
+        """Compute a room-local 4-neighbour shortest path."""
+        mask = np.asarray(walkable, dtype=bool)
+        if mask.shape != (ROOM_HEIGHT, ROOM_WIDTH):
+            return []
+        start_cell = self._nearest_walkable_room_coord(mask, start)
+        goal_cell = self._nearest_walkable_room_coord(mask, goal)
+        if start_cell is None or goal_cell is None:
+            return []
+        if start_cell == goal_cell:
+            return [start_cell]
+
+        queue: deque[Tuple[int, int]] = deque([start_cell])
+        parents: Dict[Tuple[int, int], Optional[Tuple[int, int]]] = {start_cell: None}
+        while queue:
+            row, col = queue.popleft()
+            for d_row, d_col in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                next_row = row + d_row
+                next_col = col + d_col
+                next_cell = (int(next_row), int(next_col))
+                if not (0 <= next_row < ROOM_HEIGHT and 0 <= next_col < ROOM_WIDTH):
+                    continue
+                if not bool(mask[next_row, next_col]) or next_cell in parents:
+                    continue
+                parents[next_cell] = (int(row), int(col))
+                if next_cell == goal_cell:
+                    queue.clear()
+                    break
+                queue.append(next_cell)
+
+        if goal_cell not in parents:
+            return []
+        path: List[Tuple[int, int]] = []
+        cursor: Optional[Tuple[int, int]] = goal_cell
+        while cursor is not None:
+            path.append((int(cursor[0]), int(cursor[1])))
+            cursor = parents[cursor]
+        path.reverse()
+        return path
+
+    def _evaluate_puzzle_candidate_route_quality(
+        self,
+        *,
+        grid: np.ndarray,
+        source_anchor: Tuple[int, int],
+        destination_anchor: Tuple[int, int],
+        stateful_anchor: Optional[Tuple[int, int]],
+        route_mask: np.ndarray,
+        gate_family: str,
+        baseline_path_length: Optional[int],
+    ) -> Dict[str, Any]:
+        """
+        Score puzzle readability from the actual walkable route, not novelty alone.
+
+        The scaffold should not just be different; it should create a readable
+        route with a visible detour or stateful pocket that matches the edge
+        semantics implied by the topology.
+        """
+        walkable = self._build_room_walkable_mask(grid)
+        path = self._shortest_room_path(walkable, source_anchor, destination_anchor)
+        if not path:
+            return {
+                "path_exists": 0,
+                "path_length": 0,
+                "turn_count": 0,
+                "route_overlap_ratio": 0.0,
+                "detour_gain": 0.0,
+                "stateful_distance_to_path": None,
+                "stateful_via_path_length": None,
+                "stateful_branch_gain": None,
+                "stateful_on_path": 0,
+                "score": -4.0,
+            }
+
+        path_length = max(0, len(path) - 1)
+        turn_count = self._count_room_path_turns(path)
+        route_arr = np.asarray(route_mask, dtype=bool)
+        route_overlap_ratio = (
+            float(np.mean([1.0 if bool(route_arr[row, col]) else 0.0 for row, col in path]))
+            if path else 0.0
+        )
+
+        reference_path_length = (
+            int(baseline_path_length)
+            if baseline_path_length is not None and int(baseline_path_length) > 0
+            else int(path_length)
+        )
+        detour_gain = max(0.0, float(path_length - reference_path_length))
+
+        stateful_distance_to_path: Optional[int] = None
+        stateful_via_path_length: Optional[int] = None
+        stateful_branch_gain: Optional[float] = None
+        stateful_on_path = 0
+        stateful_required = gate_family in {"switch", "toggle", "bombable", "item_unlock", "key"}
+
+        if stateful_anchor is not None:
+            projected_stateful = self._nearest_walkable_room_coord(walkable, stateful_anchor)
+            if projected_stateful is not None:
+                stateful_distance_to_path = int(
+                    min(
+                        abs(int(projected_stateful[0]) - int(cell[0])) + abs(int(projected_stateful[1]) - int(cell[1]))
+                        for cell in path
+                    )
+                )
+                stateful_on_path = int(stateful_distance_to_path == 0)
+                source_to_stateful = self._shortest_room_path(walkable, source_anchor, projected_stateful)
+                stateful_to_goal = self._shortest_room_path(walkable, projected_stateful, destination_anchor)
+                if source_to_stateful and stateful_to_goal:
+                    stateful_via_path_length = max(0, len(source_to_stateful) - 1) + max(0, len(stateful_to_goal) - 1)
+                    stateful_branch_gain = float(max(0, stateful_via_path_length - path_length))
+
+        route_quality_score = 0.0
+        route_quality_score += 1.20 * float(max(0.0, min(1.0, route_overlap_ratio)))
+        route_quality_score += 0.85 * float(min(1.0, detour_gain / 6.0))
+        route_quality_score += 0.40 * float(min(1.0, turn_count / 4.0))
+
+        if path_length > reference_path_length + 18:
+            route_quality_score -= 0.35
+
+        if stateful_required:
+            if stateful_distance_to_path is None:
+                route_quality_score -= 1.15
+            else:
+                proximity_score = max(0.0, 1.0 - (float(stateful_distance_to_path) / 5.0))
+                route_quality_score += 1.10 * proximity_score
+
+                desired_low = 0.0 if gate_family in {"switch", "toggle"} else 1.0
+                desired_high = 4.0 if gate_family in {"switch", "toggle"} else 6.0
+                branch_gain = float(stateful_branch_gain or 0.0)
+                if desired_low <= branch_gain <= desired_high:
+                    route_quality_score += 0.60
+                elif branch_gain < desired_low:
+                    route_quality_score += max(0.0, 0.60 - (0.35 * (desired_low - branch_gain)))
+                else:
+                    route_quality_score += max(0.0, 0.60 - (0.10 * (branch_gain - desired_high)))
+
+        return {
+            "path_exists": 1,
+            "path_length": int(path_length),
+            "turn_count": int(turn_count),
+            "route_overlap_ratio": float(route_overlap_ratio),
+            "detour_gain": float(detour_gain),
+            "stateful_distance_to_path": (
+                int(stateful_distance_to_path) if stateful_distance_to_path is not None else None
+            ),
+            "stateful_via_path_length": (
+                int(stateful_via_path_length) if stateful_via_path_length is not None else None
+            ),
+            "stateful_branch_gain": (
+                float(stateful_branch_gain) if stateful_branch_gain is not None else None
+            ),
+            "stateful_on_path": int(stateful_on_path),
+            "score": float(route_quality_score),
+        }
+
+    def _evaluate_puzzle_candidate_contract(
+        self,
+        *,
+        grid: np.ndarray,
+        gate_family: str,
+        source_anchor: Tuple[int, int],
+        destination_anchor: Tuple[int, int],
+        stateful_anchor: Optional[Tuple[int, int]],
+        route_quality: Mapping[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Validate that a puzzle scaffold expresses a readable local interaction contract.
+
+        The scaffold should do more than add clutter. For stateful gate families,
+        the room should expose a walkable interaction pocket near the stateful
+        anchor, frame it with some local structure, and keep it legibly connected
+        to the main route according to the intended gate semantics.
+        """
+        gate_family = str(gate_family or "generic").strip().lower()
+        walkable = self._build_room_walkable_mask(grid)
+        stateful_required = gate_family in {"switch", "toggle", "bombable", "item_unlock", "key", "combat"}
+        projected_stateful: Optional[Tuple[int, int]] = None
+        if stateful_anchor is not None:
+            projected_stateful = self._nearest_walkable_room_coord(walkable, stateful_anchor)
+
+        pocket_floor_tiles = 0
+        frame_block_tiles = 0
+        anchor_adjacent_walkable = 0
+        if projected_stateful is not None:
+            anchor_r, anchor_c = self._clamp_room_coord(projected_stateful)
+            for row in range(max(1, anchor_r - 1), min(ROOM_HEIGHT - 1, anchor_r + 2)):
+                for col in range(max(1, anchor_c - 1), min(ROOM_WIDTH - 1, anchor_c + 2)):
+                    if bool(walkable[row, col]):
+                        pocket_floor_tiles += 1
+            for d_r, d_c in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                next_r = anchor_r + d_r
+                next_c = anchor_c + d_c
+                if 0 <= next_r < ROOM_HEIGHT and 0 <= next_c < ROOM_WIDTH and bool(walkable[next_r, next_c]):
+                    anchor_adjacent_walkable += 1
+            for row in range(max(1, anchor_r - 2), min(ROOM_HEIGHT - 1, anchor_r + 3)):
+                for col in range(max(1, anchor_c - 2), min(ROOM_WIDTH - 1, anchor_c + 3)):
+                    if abs(row - anchor_r) <= 1 and abs(col - anchor_c) <= 1:
+                        continue
+                    if int(grid[row, col]) in {int(TileID.BLOCK), int(TileID.WALL)}:
+                        frame_block_tiles += 1
+
+        path_exists = int(route_quality.get("path_exists", 0) or 0)
+        stateful_distance = route_quality.get("stateful_distance_to_path", None)
+        stateful_branch_gain = float(route_quality.get("stateful_branch_gain", 0.0) or 0.0)
+
+        failure_reasons: List[str] = []
+        if path_exists <= 0:
+            failure_reasons.append("no_path")
+        if stateful_required:
+            if projected_stateful is None:
+                failure_reasons.append("missing_stateful_anchor")
+            if pocket_floor_tiles < 5:
+                failure_reasons.append("weak_stateful_pocket")
+            if anchor_adjacent_walkable < 1:
+                failure_reasons.append("sealed_stateful_anchor")
+            if gate_family in {"switch", "toggle", "combat", "key"}:
+                min_frame_blocks = 2 if gate_family == "combat" else 4
+                if frame_block_tiles < min_frame_blocks:
+                    failure_reasons.append("weak_local_structure")
+            if stateful_distance is None or int(stateful_distance) > 3:
+                failure_reasons.append("stateful_anchor_too_far")
+            if gate_family in {"key"} and stateful_branch_gain < 1.0:
+                failure_reasons.append("missing_stateful_detour")
+
+        contract_score = 0.0
+        contract_score += 0.30 if path_exists > 0 else -1.50
+        contract_score += 0.25 if projected_stateful is not None else -0.80
+        contract_score += 0.35 * float(min(1.0, pocket_floor_tiles / 6.0))
+        contract_score += 0.35 * float(min(1.0, frame_block_tiles / 6.0))
+        contract_score += 0.20 * float(min(1.0, anchor_adjacent_walkable / 2.0))
+        if stateful_distance is not None:
+            contract_score += 0.25 * float(max(0.0, 1.0 - (float(stateful_distance) / 4.0)))
+        if gate_family in {"item_unlock", "key", "bombable"}:
+            contract_score += 0.25 * float(min(1.0, stateful_branch_gain / 2.0))
+        valid = int(len(failure_reasons) == 0)
+        if not valid:
+            contract_score -= 1.5 + (0.10 * len(failure_reasons))
+
+        return {
+            "valid": int(valid),
+            "score": float(contract_score),
+            "failure_reasons": list(failure_reasons),
+            "stateful_anchor_present": int(projected_stateful is not None),
+            "projected_stateful_anchor": (
+                [int(projected_stateful[0]), int(projected_stateful[1])]
+                if projected_stateful is not None else None
+            ),
+            "pocket_floor_tiles": int(pocket_floor_tiles),
+            "frame_block_tiles": int(frame_block_tiles),
+            "anchor_adjacent_walkable": int(anchor_adjacent_walkable),
+            "stateful_distance_to_path": (
+                int(stateful_distance) if stateful_distance is not None else None
+            ),
+            "stateful_branch_gain": float(stateful_branch_gain),
+        }
+
+    def _evaluate_puzzle_candidate_interaction_geometry(
+        self,
+        *,
+        grid: np.ndarray,
+        gate_family: str,
+        source_anchor: Tuple[int, int],
+        destination_anchor: Tuple[int, int],
+        stateful_anchor: Optional[Tuple[int, int]],
+        route_mask: np.ndarray,
+        route_quality: Mapping[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Evaluate whether a candidate exposes a readable local interaction grammar.
+
+        The constructive scaffold should not only add obstacles. For stateful
+        gate families, the candidate should imply a concrete local action:
+
+        - `switch` / `toggle`: a push-style interaction near the state anchor
+        - `bombable`: a visible seam/barrier with a bypassed route
+        - `item_unlock` / `key`: a gated alcove or pocket around the anchor
+
+        This remains a local structural proxy, not a full causal simulator, but
+        it is much closer to puzzle intent than generic block density.
+        """
+        gate_family = str(gate_family or "generic").strip().lower()
+        interaction_required = gate_family in {"switch", "toggle", "bombable", "item_unlock", "key"}
+        walkable = self._build_room_walkable_mask(grid)
+        projected_stateful = (
+            self._nearest_walkable_room_coord(walkable, stateful_anchor)
+            if stateful_anchor is not None
+            else None
+        )
+        if not interaction_required:
+            return {
+                "valid": 1,
+                "score": 0.0,
+                "failure_reasons": [],
+                "required": 0,
+                "projected_stateful_anchor": (
+                    [int(projected_stateful[0]), int(projected_stateful[1])]
+                    if projected_stateful is not None
+                    else None
+                ),
+                "push_slot_count": 0,
+                "anchor_openings": 0,
+                "local_block_tiles": 0,
+                "barrier_axis_tiles": 0,
+                "route_divergence": 0.0,
+            }
+
+        failure_reasons: List[str] = []
+        if projected_stateful is None:
+            return {
+                "valid": 0,
+                "score": -2.0,
+                "failure_reasons": ["missing_stateful_anchor"],
+                "required": 1,
+                "projected_stateful_anchor": None,
+                "push_slot_count": 0,
+                "anchor_openings": 0,
+                "local_block_tiles": 0,
+                "barrier_axis_tiles": 0,
+                "route_divergence": 0.0,
+            }
+
+        anchor_r, anchor_c = self._clamp_room_coord(projected_stateful)
+        route_arr = np.asarray(route_mask, dtype=bool)
+        block_like = np.isin(
+            np.asarray(grid, dtype=np.int32),
+            np.array([int(TileID.BLOCK), int(TileID.WALL)], dtype=np.int32),
+        )
+        flow_is_horizontal = abs(int(destination_anchor[1]) - int(source_anchor[1])) >= abs(
+            int(destination_anchor[0]) - int(source_anchor[0])
+        )
+
+        anchor_openings = 0
+        for d_r, d_c in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            next_r = anchor_r + d_r
+            next_c = anchor_c + d_c
+            if 0 <= next_r < ROOM_HEIGHT and 0 <= next_c < ROOM_WIDTH and bool(walkable[next_r, next_c]):
+                anchor_openings += 1
+
+        local_block_tiles = 0
+        for row in range(max(1, anchor_r - 2), min(ROOM_HEIGHT - 1, anchor_r + 3)):
+            for col in range(max(1, anchor_c - 2), min(ROOM_WIDTH - 1, anchor_c + 3)):
+                if bool(block_like[row, col]):
+                    local_block_tiles += 1
+
+        barrier_axis_tiles = 0
+        if flow_is_horizontal:
+            for row in range(max(1, anchor_r - 2), min(ROOM_HEIGHT - 1, anchor_r + 3)):
+                if bool(block_like[row, anchor_c]):
+                    barrier_axis_tiles += 1
+        else:
+            for col in range(max(1, anchor_c - 2), min(ROOM_WIDTH - 1, anchor_c + 3)):
+                if bool(block_like[anchor_r, col]):
+                    barrier_axis_tiles += 1
+
+        push_slot_count = 0
+        seen_push_blocks: Set[Tuple[int, int]] = set()
+        for row in range(max(1, anchor_r - 3), min(ROOM_HEIGHT - 1, anchor_r + 4)):
+            for col in range(max(1, anchor_c - 3), min(ROOM_WIDTH - 1, anchor_c + 4)):
+                if int(grid[row, col]) != int(TileID.BLOCK):
+                    continue
+                for d_r, d_c in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                    push_dest_r = row + d_r
+                    push_dest_c = col + d_c
+                    player_r = row - d_r
+                    player_c = col - d_c
+                    if not (
+                        1 <= push_dest_r < ROOM_HEIGHT - 1
+                        and 1 <= push_dest_c < ROOM_WIDTH - 1
+                        and 1 <= player_r < ROOM_HEIGHT - 1
+                        and 1 <= player_c < ROOM_WIDTH - 1
+                    ):
+                        continue
+                    if not bool(walkable[push_dest_r, push_dest_c]):
+                        continue
+                    if not bool(walkable[player_r, player_c]):
+                        continue
+                    route_r0 = max(0, min(player_r, push_dest_r) - 1)
+                    route_r1 = min(ROOM_HEIGHT, max(player_r, push_dest_r) + 2)
+                    route_c0 = max(0, min(player_c, push_dest_c) - 1)
+                    route_c1 = min(ROOM_WIDTH, max(player_c, push_dest_c) + 2)
+                    if not bool(np.any(route_arr[route_r0:route_r1, route_c0:route_c1])):
+                        continue
+                    seen_push_blocks.add((int(row), int(col)))
+                    break
+        push_slot_count = int(len(seen_push_blocks))
+
+        route_overlap_ratio = float(route_quality.get("route_overlap_ratio", 1.0) or 1.0)
+        route_divergence = float(max(0.0, 1.0 - route_overlap_ratio))
+        stateful_branch_gain = float(route_quality.get("stateful_branch_gain", 0.0) or 0.0)
+
+        score = 0.0
+        score += 0.25 * float(min(1.0, local_block_tiles / 5.0))
+        score += 0.20 * float(min(1.0, barrier_axis_tiles / 3.0))
+
+        if gate_family in {"switch", "toggle"}:
+            score += 0.70 * float(min(1.0, push_slot_count / 1.0))
+            if push_slot_count < 1:
+                failure_reasons.append("missing_push_interaction")
+            if local_block_tiles < 3:
+                failure_reasons.append("weak_interaction_geometry")
+            if gate_family == "toggle":
+                score += 0.20 * float(min(1.0, barrier_axis_tiles / 2.0))
+        elif gate_family == "bombable":
+            score += 0.70 * float(min(1.0, route_divergence / 0.20))
+            if barrier_axis_tiles < 1 and local_block_tiles < 3:
+                failure_reasons.append("weak_bomb_seam")
+            if route_divergence < 0.10:
+                failure_reasons.append("missing_bypass_divergence")
+        elif gate_family in {"item_unlock", "key"}:
+            if local_block_tiles < 4:
+                failure_reasons.append("weak_alcove_frame")
+            if gate_family == "key" and stateful_branch_gain < 1.0:
+                failure_reasons.append("missing_key_detour")
+            score += 0.45 * float(min(1.0, local_block_tiles / 6.0))
+            score += 0.30 * float(max(0.0, 1.0 - (abs(anchor_openings - 1) / 2.0)))
+
+        valid = int(len(failure_reasons) == 0)
+        if not valid:
+            score -= 1.75 + (0.10 * len(failure_reasons))
+
+        return {
+            "valid": int(valid),
+            "score": float(score),
+            "failure_reasons": list(failure_reasons),
+            "required": 1,
+            "projected_stateful_anchor": [int(anchor_r), int(anchor_c)],
+            "push_slot_count": int(push_slot_count),
+            "anchor_openings": int(anchor_openings),
+            "local_block_tiles": int(local_block_tiles),
+            "barrier_axis_tiles": int(barrier_axis_tiles),
+            "route_divergence": float(route_divergence),
+        }
+
     def _puzzle_descriptor_distance(
         self,
         left: Mapping[str, Any],
@@ -2459,17 +3246,46 @@ class NeuralSymbolicDungeonPipeline:
             float(descriptor.get("row_coverage", 0)) / float(max(1, ROOM_HEIGHT - 2))
             + float(descriptor.get("col_coverage", 0)) / float(max(1, ROOM_WIDTH - 2))
         )
+        route_quality_score = float(stats.get("route_quality_score", 0.0) or 0.0)
+        contract_score = float(stats.get("contract_score", 0.0) or 0.0)
+        contract_valid = int(stats.get("contract_valid", 0) or 0)
+        interaction_score = float(stats.get("interaction_score", 0.0) or 0.0)
+        interaction_valid = int(stats.get("interaction_valid", 0) or 0)
+        interaction_sequence_score = float(stats.get("interaction_sequence_score", 0.0) or 0.0)
+        interaction_sequence_valid = int(stats.get("interaction_sequence_valid", 0) or 0)
+        interaction_sequence_required = int(stats.get("interaction_sequence_required", 0) or 0)
+        density_ratio = float(stats.get("tiles_added", 0)) / float(max(1, block_budget))
+        optional_segments_applied = int(stats.get("optional_segments_applied", 0) or 0)
+        route_overlap_ratio = float(stats.get("route_quality_overlap_ratio", 0.0) or 0.0)
+        detour_gain = float(stats.get("route_quality_detour_gain", 0.0) or 0.0)
+        stateful_branch_gain = float(stats.get("route_quality_stateful_branch_gain", 0.0) or 0.0)
+        gate_family = str(descriptor.get("gate_family", "") or "")
+
+        clutter_penalty = max(0.0, density_ratio - 0.55) * 1.5
+        clutter_penalty += max(0, optional_segments_applied - 1) * 0.18
+        if route_overlap_ratio > 0.90 and detour_gain < 1.0:
+            clutter_penalty += 0.45
+        if gate_family in {"switch", "toggle", "item_unlock", "key"} and stateful_branch_gain <= 0.0:
+            clutter_penalty += 0.60
 
         tie_break = float(
             stable_seed_offset((room_id, str(descriptor.get("variant_name", ""))), modulo=1000)
         ) / 1000.0
         return float(
             structural_score
-            + (novelty_weight * novelty_score)
+            + route_quality_score
+            + contract_score
+            + interaction_score
+            + interaction_sequence_score
+            + (min(0.25, novelty_weight) * novelty_score)
             + unseen_family_variant_bonus
             - (1.05 if repeat_family_variant else 0.0)
             - (0.30 * float(same_variant_count))
             - (0.10 * float(same_family_count))
+            - clutter_penalty
+            - (2.25 if contract_valid <= 0 else 0.0)
+            - (2.50 if interaction_valid <= 0 and gate_family in {"switch", "toggle", "bombable", "item_unlock", "key"} else 0.0)
+            - (2.10 if interaction_sequence_required > 0 and interaction_sequence_valid <= 0 else 0.0)
             + (tie_break * 1e-3)
         )
 
@@ -2992,6 +3808,12 @@ class NeuralSymbolicDungeonPipeline:
         else:
             stateful_anchor_name = "puzzle" if "puzzle" in semantic_anchors else None
         stateful_anchor = semantic_anchors.get(stateful_anchor_name) if stateful_anchor_name is not None else None
+        interaction_sequence = self._resolve_puzzle_interaction_sequence(
+            archetype=archetype,
+            gate_family=gate_family,
+            role_flags=role_flags,
+            semantic_anchors=semantic_anchors,
+        )
         variant_specs = self._build_puzzle_room_variant_specs(
             archetype=archetype,
             gate_family=gate_family,
@@ -2999,6 +3821,20 @@ class NeuralSymbolicDungeonPipeline:
         variant_cache = getattr(self, "_puzzle_variant_cache", None)
         cached_variant = variant_cache.get(room_id) if isinstance(variant_cache, dict) else None
         base_grid = out.copy()
+        baseline_path_metrics = self._evaluate_puzzle_candidate_route_quality(
+            grid=base_grid,
+            source_anchor=source_anchor,
+            destination_anchor=destination_anchor,
+            stateful_anchor=stateful_anchor,
+            route_mask=route_mask,
+            gate_family=gate_family,
+            baseline_path_length=None,
+        )
+        baseline_path_length = (
+            int(baseline_path_metrics.get("path_length", 0))
+            if int(baseline_path_metrics.get("path_exists", 0) or 0) > 0
+            else None
+        )
 
         def _mark_reserved(route_mask_candidate: np.ndarray) -> np.ndarray:
             reserved_candidate = (
@@ -3034,6 +3870,7 @@ class NeuralSymbolicDungeonPipeline:
                 gate_family=gate_family,
                 variant_spec=variant_spec,
                 stateful_anchor=stateful_anchor,
+                interaction_sequence=interaction_sequence,
                 flow_is_horizontal=flow_is_horizontal,
                 source_anchor=source_anchor,
                 destination_anchor=destination_anchor,
@@ -3087,9 +3924,196 @@ class NeuralSymbolicDungeonPipeline:
                         budget_remaining -= 1
                 return int(added)
 
+            def _apply_anchor_template(
+                *,
+                anchor: Optional[Tuple[int, int]],
+                open_toward: Tuple[int, int],
+            ) -> Tuple[int, int]:
+                """
+                Force a small readable puzzle pocket around the interaction anchor.
+
+                This is the local grammar layer: before generic stochastic
+                scaffold lines are added, stabilize the interaction site as a
+                floor pocket framed by blocks with one intentional opening.
+                """
+                if anchor is None:
+                    return 0, 0
+                anchor_r, anchor_c = self._clamp_room_coord(anchor)
+                open_r, open_c = self._clamp_room_coord(open_toward)
+
+                pocket_tiles_forced = 0
+                frame_tiles_added = 0
+                row_start = max(2, int(anchor_r) - 1)
+                row_end = min(ROOM_HEIGHT - 3, int(anchor_r) + 1)
+                col_start = max(2, int(anchor_c) - 1)
+                col_end = min(ROOM_WIDTH - 3, int(anchor_c) + 1)
+
+                for row in range(row_start, row_end + 1):
+                    for col in range(col_start, col_end + 1):
+                        if int(candidate_grid[row, col]) != floor_id:
+                            candidate_grid[row, col] = floor_id
+                            pocket_tiles_forced += 1
+                        reserved_candidate[row, col] = True
+
+                delta_r = int(open_r) - int(anchor_r)
+                delta_c = int(open_c) - int(anchor_c)
+                if abs(delta_c) >= abs(delta_r):
+                    opening_side = "E" if delta_c >= 0 else "W"
+                else:
+                    opening_side = "S" if delta_r >= 0 else "N"
+
+                frame_cells: List[Tuple[int, int]] = []
+                for row in range(row_start - 1, row_end + 2):
+                    for col in range(col_start - 1, col_end + 2):
+                        if not (2 <= row <= ROOM_HEIGHT - 3 and 2 <= col <= ROOM_WIDTH - 3):
+                            continue
+                        on_border = row in {row_start - 1, row_end + 1} or col in {col_start - 1, col_end + 1}
+                        if not on_border:
+                            continue
+                        if opening_side == "N" and row == row_start - 1 and col == int(anchor_c):
+                            continue
+                        if opening_side == "S" and row == row_end + 1 and col == int(anchor_c):
+                            continue
+                        if opening_side == "W" and col == col_start - 1 and row == int(anchor_r):
+                            continue
+                        if opening_side == "E" and col == col_end + 1 and row == int(anchor_r):
+                            continue
+                        frame_cells.append((int(row), int(col)))
+
+                frame_tiles_added += _paint_block_line(frame_cells)
+                return int(pocket_tiles_forced), int(frame_tiles_added)
+
+            def _place_push_block_prop() -> int:
+                """
+                Add one isolated BLOCK near the interaction zone.
+
+                The scaffold already builds blocking structure, but dense bars
+                often read as generic noise instead of an intentional pushable
+                block puzzle. This helper adds a single readable BLOCK prop near
+                the planned route when the local geometry supports a valid push
+                interaction.
+                """
+                nonlocal budget_remaining
+                if budget_remaining <= 0:
+                    return 0
+                if gate_family not in {"switch", "toggle", "key", "item_unlock", "generic"} and archetype not in {
+                    "hub",
+                    "serpentine",
+                }:
+                    return 0
+
+                anchor_r, anchor_c = (
+                    self._clamp_room_coord(stateful_anchor)
+                    if stateful_anchor is not None
+                    else self._clamp_room_coord(puzzle_anchor)
+                )
+                puzzle_r, puzzle_c = self._clamp_room_coord(puzzle_anchor)
+                candidate_slots: List[Tuple[int, int]] = []
+                if flow_is_horizontal:
+                    candidate_slots.extend(
+                        [
+                            (anchor_r - 1, anchor_c - 2),
+                            (anchor_r + 1, anchor_c - 2),
+                            (anchor_r - 1, anchor_c + 2),
+                            (anchor_r + 1, anchor_c + 2),
+                            (puzzle_r - 2, puzzle_c - 1),
+                            (puzzle_r + 2, puzzle_c + 1),
+                        ]
+                    )
+                else:
+                    candidate_slots.extend(
+                        [
+                            (anchor_r - 2, anchor_c - 1),
+                            (anchor_r - 2, anchor_c + 1),
+                            (anchor_r + 2, anchor_c - 1),
+                            (anchor_r + 2, anchor_c + 1),
+                            (puzzle_r - 1, puzzle_c - 2),
+                            (puzzle_r + 1, puzzle_c + 2),
+                        ]
+                    )
+
+                seen_slots: Set[Tuple[int, int]] = set()
+                for raw_row, raw_col in candidate_slots:
+                    row, col = self._clamp_room_coord((raw_row, raw_col))
+                    slot = (int(row), int(col))
+                    if slot in seen_slots:
+                        continue
+                    seen_slots.add(slot)
+                    if not _can_place(int(row), int(col)):
+                        continue
+                    if bool(route_mask_candidate[int(row), int(col)]):
+                        continue
+
+                    route_r0 = max(0, int(row) - 1)
+                    route_r1 = min(ROOM_HEIGHT, int(row) + 2)
+                    route_c0 = max(0, int(col) - 1)
+                    route_c1 = min(ROOM_WIDTH, int(col) + 2)
+                    if not bool(np.any(route_mask_candidate[route_r0:route_r1, route_c0:route_c1])):
+                        continue
+
+                    for d_r, d_c in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                        push_dest_r = int(row) + d_r
+                        push_dest_c = int(col) + d_c
+                        player_r = int(row) - d_r
+                        player_c = int(col) - d_c
+                        if not (
+                            1 <= push_dest_r < ROOM_HEIGHT - 1
+                            and 1 <= push_dest_c < ROOM_WIDTH - 1
+                            and 1 <= player_r < ROOM_HEIGHT - 1
+                            and 1 <= player_c < ROOM_WIDTH - 1
+                        ):
+                            continue
+                        if bool(reserved_candidate[player_r, player_c]):
+                            continue
+                        if int(candidate_grid[push_dest_r, push_dest_c]) != floor_id:
+                            continue
+                        if int(candidate_grid[player_r, player_c]) != floor_id:
+                            continue
+                        candidate_grid[int(row), int(col)] = block_id
+                        budget_remaining -= 1
+                        return 1
+
+                fallback_slots: List[Tuple[int, int]] = []
+                if flow_is_horizontal:
+                    fallback_slots.extend(
+                        [
+                            (anchor_r, anchor_c - 3),
+                            (anchor_r, anchor_c + 3),
+                            (anchor_r - 2, anchor_c),
+                            (anchor_r + 2, anchor_c),
+                        ]
+                    )
+                else:
+                    fallback_slots.extend(
+                        [
+                            (anchor_r - 3, anchor_c),
+                            (anchor_r + 3, anchor_c),
+                            (anchor_r, anchor_c - 2),
+                            (anchor_r, anchor_c + 2),
+                        ]
+                    )
+
+                for raw_row, raw_col in fallback_slots:
+                    row, col = self._clamp_room_coord((raw_row, raw_col))
+                    if not _can_place(int(row), int(col)):
+                        continue
+                    if bool(route_mask_candidate[int(row), int(col)]):
+                        continue
+                    route_r0 = max(0, int(row) - 1)
+                    route_r1 = min(ROOM_HEIGHT, int(row) + 2)
+                    route_c0 = max(0, int(col) - 1)
+                    route_c1 = min(ROOM_WIDTH, int(col) + 2)
+                    if not bool(np.any(route_mask_candidate[route_r0:route_r1, route_c0:route_c1])):
+                        continue
+                    candidate_grid[int(row), int(col)] = block_id
+                    budget_remaining -= 1
+                    return 1
+                return 0
+
             segments_added = 0
             tiles_added = 0
             optional_segments_applied = 0
+            pocket_tiles_forced = 0
             required_segments, optional_segments = self._build_puzzle_room_segments(
                 archetype=archetype,
                 gate_family=gate_family,
@@ -3098,6 +4122,17 @@ class NeuralSymbolicDungeonPipeline:
                 flow_is_horizontal=flow_is_horizontal,
                 puzzle_anchor=puzzle_anchor,
             )
+
+            grammar_anchor = stateful_anchor if stateful_anchor is not None else puzzle_anchor
+            if gate_family in {"switch", "toggle", "bombable", "item_unlock", "key"}:
+                forced_floor_tiles, anchor_frame_tiles = _apply_anchor_template(
+                    anchor=grammar_anchor,
+                    open_toward=source_anchor,
+                )
+                pocket_tiles_forced += int(forced_floor_tiles)
+                if anchor_frame_tiles > 0:
+                    segments_added += 1
+                    tiles_added += int(anchor_frame_tiles)
 
             for segment in required_segments:
                 added = _paint_block_line(segment)
@@ -3116,10 +4151,15 @@ class NeuralSymbolicDungeonPipeline:
                     optional_segments_applied += 1
                     tiles_added += added
 
+            push_block_props_added = int(_place_push_block_prop())
+            tiles_added += int(push_block_props_added)
+
             candidate_stats: Dict[str, Any] = {
                 "applied": int(tiles_added > 0),
                 "tiles_added": int(tiles_added),
                 "segments_added": int(segments_added),
+                "pocket_floor_tiles_forced": int(pocket_tiles_forced),
+                "push_block_props_added": int(push_block_props_added),
                 "optional_segments_requested": int(optional_quota),
                 "optional_segments_applied": int(optional_segments_applied),
                 "route_template_used": int(route_template_used),
@@ -3134,6 +4174,127 @@ class NeuralSymbolicDungeonPipeline:
                 "profile_block_budget": int(block_budget),
                 "profile_preserve_route_margin": int(preserve_margin),
             }
+            route_quality = self._evaluate_puzzle_candidate_route_quality(
+                grid=candidate_grid,
+                source_anchor=source_anchor,
+                destination_anchor=destination_anchor,
+                stateful_anchor=stateful_anchor,
+                route_mask=route_mask_candidate,
+                gate_family=gate_family,
+                baseline_path_length=baseline_path_length,
+            )
+            contract = self._evaluate_puzzle_candidate_contract(
+                grid=candidate_grid,
+                gate_family=gate_family,
+                source_anchor=source_anchor,
+                destination_anchor=destination_anchor,
+                stateful_anchor=stateful_anchor,
+                route_quality=route_quality,
+            )
+            interaction = self._evaluate_puzzle_candidate_interaction_geometry(
+                grid=candidate_grid,
+                gate_family=gate_family,
+                source_anchor=source_anchor,
+                destination_anchor=destination_anchor,
+                stateful_anchor=stateful_anchor,
+                route_mask=route_mask_candidate,
+                route_quality=route_quality,
+            )
+            sequence_eval = self._evaluate_puzzle_candidate_interaction_sequence(
+                grid=candidate_grid,
+                route_mask=route_mask_candidate,
+                source_anchor=source_anchor,
+                destination_anchor=destination_anchor,
+                interaction_sequence=interaction_sequence,
+            )
+            candidate_stats["route_quality_score"] = float(route_quality.get("score", 0.0) or 0.0)
+            candidate_stats["route_quality_path_exists"] = int(route_quality.get("path_exists", 0) or 0)
+            candidate_stats["route_quality_path_length"] = int(route_quality.get("path_length", 0) or 0)
+            candidate_stats["route_quality_turn_count"] = int(route_quality.get("turn_count", 0) or 0)
+            candidate_stats["route_quality_overlap_ratio"] = float(
+                route_quality.get("route_overlap_ratio", 0.0) or 0.0
+            )
+            candidate_stats["route_quality_detour_gain"] = float(
+                route_quality.get("detour_gain", 0.0) or 0.0
+            )
+            candidate_stats["route_quality_stateful_distance_to_path"] = route_quality.get(
+                "stateful_distance_to_path",
+                None,
+            )
+            candidate_stats["route_quality_stateful_via_path_length"] = route_quality.get(
+                "stateful_via_path_length",
+                None,
+            )
+            candidate_stats["route_quality_stateful_branch_gain"] = route_quality.get(
+                "stateful_branch_gain",
+                None,
+            )
+            candidate_stats["route_quality_stateful_on_path"] = int(
+                route_quality.get("stateful_on_path", 0) or 0
+            )
+            candidate_stats["contract_valid"] = int(contract.get("valid", 0) or 0)
+            candidate_stats["contract_score"] = float(contract.get("score", 0.0) or 0.0)
+            candidate_stats["contract_failure_reasons"] = list(contract.get("failure_reasons", []) or [])
+            candidate_stats["contract_stateful_anchor_present"] = int(
+                contract.get("stateful_anchor_present", 0) or 0
+            )
+            candidate_stats["contract_projected_stateful_anchor"] = contract.get(
+                "projected_stateful_anchor",
+                None,
+            )
+            candidate_stats["contract_pocket_floor_tiles"] = int(
+                contract.get("pocket_floor_tiles", 0) or 0
+            )
+            candidate_stats["contract_frame_block_tiles"] = int(
+                contract.get("frame_block_tiles", 0) or 0
+            )
+            candidate_stats["contract_anchor_adjacent_walkable"] = int(
+                contract.get("anchor_adjacent_walkable", 0) or 0
+            )
+            candidate_stats["interaction_valid"] = int(interaction.get("valid", 0) or 0)
+            candidate_stats["interaction_score"] = float(interaction.get("score", 0.0) or 0.0)
+            candidate_stats["interaction_failure_reasons"] = list(
+                interaction.get("failure_reasons", []) or []
+            )
+            candidate_stats["interaction_push_slot_count"] = int(
+                interaction.get("push_slot_count", 0) or 0
+            )
+            candidate_stats["interaction_anchor_openings"] = int(
+                interaction.get("anchor_openings", 0) or 0
+            )
+            candidate_stats["interaction_local_block_tiles"] = int(
+                interaction.get("local_block_tiles", 0) or 0
+            )
+            candidate_stats["interaction_barrier_axis_tiles"] = int(
+                interaction.get("barrier_axis_tiles", 0) or 0
+            )
+            candidate_stats["interaction_route_divergence"] = float(
+                interaction.get("route_divergence", 0.0) or 0.0
+            )
+            candidate_stats["interaction_sequence_valid"] = int(
+                sequence_eval.get("valid", 0) or 0
+            )
+            candidate_stats["interaction_sequence_score"] = float(
+                sequence_eval.get("score", 0.0) or 0.0
+            )
+            candidate_stats["interaction_sequence_required"] = int(
+                sequence_eval.get("required", 0) or 0
+            )
+            candidate_stats["interaction_sequence_length"] = int(
+                sequence_eval.get("sequence_length", 0) or 0
+            )
+            candidate_stats["interaction_sequence_route_anchor_coverage"] = float(
+                sequence_eval.get("route_anchor_coverage", 0.0) or 0.0
+            )
+            candidate_stats["interaction_sequence_pairwise_path_ratio"] = float(
+                sequence_eval.get("pairwise_path_ratio", 0.0) or 0.0
+            )
+            candidate_stats["interaction_sequence_names"] = list(
+                sequence_eval.get("sequence_names", []) or []
+            )
+            candidate_stats["interaction_sequence_failure_reasons"] = list(
+                sequence_eval.get("failure_reasons", []) or []
+            )
             descriptor = self._summarize_puzzle_candidate_descriptor(
                 grid=candidate_grid,
                 stats=candidate_stats,
@@ -3153,6 +4314,8 @@ class NeuralSymbolicDungeonPipeline:
             "applied": 0,
             "tiles_added": 0,
             "segments_added": 0,
+            "pocket_floor_tiles_forced": 0,
+            "push_block_props_added": 0,
             "optional_segments_requested": 0,
             "optional_segments_applied": 0,
             "route_template_used": 0,
@@ -3168,7 +4331,135 @@ class NeuralSymbolicDungeonPipeline:
             "profile_preserve_route_margin": int(preserve_margin),
             "novelty_descriptor": {},
             "novelty_score": 0.0,
+            "route_quality_score": float(baseline_path_metrics.get("score", 0.0) or 0.0),
+            "route_quality_path_exists": int(baseline_path_metrics.get("path_exists", 0) or 0),
+            "route_quality_path_length": int(baseline_path_metrics.get("path_length", 0) or 0),
+            "route_quality_turn_count": int(baseline_path_metrics.get("turn_count", 0) or 0),
+            "route_quality_overlap_ratio": float(
+                baseline_path_metrics.get("route_overlap_ratio", 0.0) or 0.0
+            ),
+            "route_quality_detour_gain": float(
+                baseline_path_metrics.get("detour_gain", 0.0) or 0.0
+            ),
+            "route_quality_stateful_distance_to_path": baseline_path_metrics.get(
+                "stateful_distance_to_path",
+                None,
+            ),
+            "route_quality_stateful_via_path_length": baseline_path_metrics.get(
+                "stateful_via_path_length",
+                None,
+            ),
+            "route_quality_stateful_branch_gain": baseline_path_metrics.get(
+                "stateful_branch_gain",
+                None,
+            ),
+            "route_quality_stateful_on_path": int(
+                baseline_path_metrics.get("stateful_on_path", 0) or 0
+            ),
         }
+        baseline_contract = self._evaluate_puzzle_candidate_contract(
+            grid=base_grid,
+            gate_family=gate_family,
+            source_anchor=source_anchor,
+            destination_anchor=destination_anchor,
+            stateful_anchor=stateful_anchor,
+            route_quality=baseline_path_metrics,
+        )
+        baseline_interaction = self._evaluate_puzzle_candidate_interaction_geometry(
+            grid=base_grid,
+            gate_family=gate_family,
+            source_anchor=source_anchor,
+            destination_anchor=destination_anchor,
+            stateful_anchor=stateful_anchor,
+            route_mask=route_mask,
+            route_quality=baseline_path_metrics,
+        )
+        baseline_sequence = self._evaluate_puzzle_candidate_interaction_sequence(
+            grid=base_grid,
+            route_mask=route_mask,
+            source_anchor=source_anchor,
+            destination_anchor=destination_anchor,
+            interaction_sequence=interaction_sequence,
+        )
+        selected_stats["contract_valid"] = int(baseline_contract.get("valid", 0) or 0)
+        selected_stats["contract_score"] = float(baseline_contract.get("score", 0.0) or 0.0)
+        selected_stats["contract_failure_reasons"] = list(
+            baseline_contract.get("failure_reasons", []) or []
+        )
+        selected_stats["contract_stateful_anchor_present"] = int(
+            baseline_contract.get("stateful_anchor_present", 0) or 0
+        )
+        selected_stats["contract_projected_stateful_anchor"] = baseline_contract.get(
+            "projected_stateful_anchor",
+            None,
+        )
+        selected_stats["contract_pocket_floor_tiles"] = int(
+            baseline_contract.get("pocket_floor_tiles", 0) or 0
+        )
+        selected_stats["contract_frame_block_tiles"] = int(
+            baseline_contract.get("frame_block_tiles", 0) or 0
+        )
+        selected_stats["contract_anchor_adjacent_walkable"] = int(
+            baseline_contract.get("anchor_adjacent_walkable", 0) or 0
+        )
+        selected_stats["interaction_valid"] = int(baseline_interaction.get("valid", 0) or 0)
+        selected_stats["interaction_score"] = float(baseline_interaction.get("score", 0.0) or 0.0)
+        selected_stats["interaction_failure_reasons"] = list(
+            baseline_interaction.get("failure_reasons", []) or []
+        )
+        selected_stats["interaction_push_slot_count"] = int(
+            baseline_interaction.get("push_slot_count", 0) or 0
+        )
+        selected_stats["interaction_anchor_openings"] = int(
+            baseline_interaction.get("anchor_openings", 0) or 0
+        )
+        selected_stats["interaction_local_block_tiles"] = int(
+            baseline_interaction.get("local_block_tiles", 0) or 0
+        )
+        selected_stats["interaction_barrier_axis_tiles"] = int(
+            baseline_interaction.get("barrier_axis_tiles", 0) or 0
+        )
+        selected_stats["interaction_route_divergence"] = float(
+            baseline_interaction.get("route_divergence", 0.0) or 0.0
+        )
+        selected_stats["interaction_sequence_valid"] = int(
+            baseline_sequence.get("valid", 0) or 0
+        )
+        selected_stats["interaction_sequence_score"] = float(
+            baseline_sequence.get("score", 0.0) or 0.0
+        )
+        selected_stats["interaction_sequence_required"] = int(
+            baseline_sequence.get("required", 0) or 0
+        )
+        selected_stats["interaction_sequence_length"] = int(
+            baseline_sequence.get("sequence_length", 0) or 0
+        )
+        selected_stats["interaction_sequence_route_anchor_coverage"] = float(
+            baseline_sequence.get("route_anchor_coverage", 0.0) or 0.0
+        )
+        selected_stats["interaction_sequence_pairwise_path_ratio"] = float(
+            baseline_sequence.get("pairwise_path_ratio", 0.0) or 0.0
+        )
+        selected_stats["interaction_sequence_names"] = list(
+            baseline_sequence.get("sequence_names", []) or []
+        )
+        selected_stats["interaction_sequence_failure_reasons"] = list(
+            baseline_sequence.get("failure_reasons", []) or []
+        )
+        baseline_descriptor = self._summarize_puzzle_candidate_descriptor(
+            grid=base_grid,
+            stats=selected_stats,
+        )
+        selected_stats["novelty_descriptor"] = baseline_descriptor
+        baseline_selection_score = float(
+            self._score_puzzle_candidate(
+                descriptor=baseline_descriptor,
+                stats=selected_stats,
+                room_id=room_id,
+            )
+        )
+        selected_stats["selection_score"] = baseline_selection_score
+        baseline_stats = dict(selected_stats)
         selected_score = float("-inf")
 
         if not variant_specs:
@@ -3188,6 +4479,60 @@ class NeuralSymbolicDungeonPipeline:
                     selected_stats = candidate_stats
                     if isinstance(variant_cache, dict):
                         variant_cache[room_id] = dict(variant_spec)
+
+        min_quality_gain = float(
+            max(0.0, float(getattr(self, "default_puzzle_room_min_quality_gain", 0.5)))
+        )
+        contract_required = gate_family in {"switch", "toggle", "item_unlock", "key", "combat"}
+        interaction_required = gate_family in {"switch", "toggle", "bombable", "item_unlock", "key"}
+        sequence_required = int(selected_stats.get("interaction_sequence_required", 0) or 0) > 0
+        if contract_required and int(selected_stats.get("contract_valid", 0) or 0) <= 0:
+            selected_grid = base_grid
+            selected_stats = dict(baseline_stats)
+            selected_stats["selection_score"] = float(baseline_selection_score)
+            selected_stats["quality_gate_skipped"] = 0
+            selected_stats["contract_gate_skipped"] = 1
+            selected_stats["interaction_gate_skipped"] = 0
+            selected_stats["sequence_gate_skipped"] = 0
+            stats.update(selected_stats)
+            return selected_grid, stats
+        if interaction_required and int(selected_stats.get("interaction_valid", 0) or 0) <= 0:
+            selected_grid = base_grid
+            selected_stats = dict(baseline_stats)
+            selected_stats["selection_score"] = float(baseline_selection_score)
+            selected_stats["quality_gate_skipped"] = 0
+            selected_stats["contract_gate_skipped"] = 0
+            selected_stats["interaction_gate_skipped"] = 1
+            selected_stats["sequence_gate_skipped"] = 0
+            stats.update(selected_stats)
+            return selected_grid, stats
+        if sequence_required and int(selected_stats.get("interaction_sequence_valid", 0) or 0) <= 0:
+            selected_grid = base_grid
+            selected_stats = dict(baseline_stats)
+            selected_stats["selection_score"] = float(baseline_selection_score)
+            selected_stats["quality_gate_skipped"] = 0
+            selected_stats["contract_gate_skipped"] = 0
+            selected_stats["interaction_gate_skipped"] = 0
+            selected_stats["sequence_gate_skipped"] = 1
+            stats.update(selected_stats)
+            return selected_grid, stats
+
+        if (
+            float(selected_stats.get("selection_score", float("-inf")))
+            < (baseline_selection_score + min_quality_gain)
+        ):
+            selected_grid = base_grid
+            selected_stats = dict(baseline_stats)
+            selected_stats["selection_score"] = float(baseline_selection_score)
+            selected_stats["quality_gate_skipped"] = 1
+            selected_stats["contract_gate_skipped"] = 0
+            selected_stats["interaction_gate_skipped"] = 0
+            selected_stats["sequence_gate_skipped"] = 0
+        else:
+            selected_stats["quality_gate_skipped"] = 0
+            selected_stats["contract_gate_skipped"] = 0
+            selected_stats["interaction_gate_skipped"] = 0
+            selected_stats["sequence_gate_skipped"] = 0
 
         stats.update(selected_stats)
         return selected_grid, stats
@@ -3421,6 +4766,102 @@ class NeuralSymbolicDungeonPipeline:
 
         return markers
 
+    def _build_room_graph_marker_preferences(
+        self,
+        *,
+        graph: Optional[nx.Graph],
+        room_id: Any,
+        start_goal: Optional[Tuple[Tuple[int, int], Tuple[int, int]]] = None,
+    ) -> Dict[int, Tuple[int, int]]:
+        """
+        Build gate-aware preferred semantic slots for deterministic room markers.
+
+        Generic room-role anchors are often too weak for puzzle readability:
+        the scaffold may create a clear key pocket or item alcove while the
+        overlay still drops the marker near the room center. This helper keeps
+        marker placement aligned with the same gate-family semantics used by the
+        constructive scaffold.
+        """
+        if start_goal is None:
+            start_goal = self._extract_room_start_goal(graph, room_id) if isinstance(graph, nx.Graph) else None
+        start_coord, goal_coord = start_goal if start_goal is not None else (
+            (ROOM_HEIGHT // 2, 0),
+            (ROOM_HEIGHT // 2, ROOM_WIDTH - 1),
+        )
+        attrs = dict(graph.nodes[room_id]) if isinstance(graph, nx.Graph) and room_id in graph else {}
+        role_flags = self._room_role_flags(attrs)
+        semantics = self._extract_room_topology_semantics(graph, room_id) if isinstance(graph, nx.Graph) and room_id in graph else {
+            "required_doors": {},
+            "incoming_dirs": set(),
+            "outgoing_dirs": set(),
+        }
+        semantic_anchors = build_room_semantic_anchor_points(
+            room_shape=(ROOM_HEIGHT, ROOM_WIDTH),
+            start=start_coord,
+            goal=goal_coord,
+            required_doors=semantics["required_doors"],
+            incoming_dirs=semantics["incoming_dirs"],
+            outgoing_dirs=semantics["outgoing_dirs"],
+            room_role_flags=role_flags,
+            semantic_puzzle_offset=self.default_semantic_puzzle_offset,
+        )
+        node_type = str(
+            attrs.get("type", attrs.get("node_type", attrs.get("room_type", ""))) or ""
+        ).strip().lower()
+        gate_family = self._classify_puzzle_gate_family(
+            role_flags=role_flags,
+            semantics=semantics,
+            node_type=node_type,
+        )
+        if gate_family in {"switch", "toggle", "bombable"}:
+            stateful_anchor_name = "puzzle" if "puzzle" in semantic_anchors else None
+        elif gate_family == "item_unlock":
+            stateful_anchor_name = "item" if "item" in semantic_anchors else ("puzzle" if "puzzle" in semantic_anchors else None)
+        elif gate_family == "key":
+            stateful_anchor_name = "key" if "key" in semantic_anchors else None
+        elif gate_family == "combat":
+            stateful_anchor_name = "enemy" if "enemy" in semantic_anchors else None
+        else:
+            stateful_anchor_name = "puzzle" if "puzzle" in semantic_anchors else None
+        stateful_anchor = self._clamp_room_coord(semantic_anchors.get(stateful_anchor_name)) if stateful_anchor_name and semantic_anchors.get(stateful_anchor_name) is not None else None
+        puzzle_anchor = self._clamp_room_coord(semantic_anchors.get("puzzle", (max(1, ROOM_HEIGHT // 2 - 2), ROOM_WIDTH // 2)))
+        enemy_anchor = self._clamp_room_coord(semantic_anchors.get("enemy", (ROOM_HEIGHT // 2 - 2, ROOM_WIDTH // 2)))
+        item_anchor = self._clamp_room_coord(semantic_anchors.get("item", (min(ROOM_HEIGHT - 2, ROOM_HEIGHT // 2 + 2), ROOM_WIDTH // 2)))
+        key_anchor = self._clamp_room_coord(semantic_anchors.get("key", (ROOM_HEIGHT // 2, max(1, ROOM_WIDTH // 2 - 2))))
+        boss_anchor = self._clamp_room_coord(semantic_anchors.get("boss", (ROOM_HEIGHT // 2, ROOM_WIDTH // 2)))
+
+        preferred_positions: Dict[int, Tuple[int, int]] = {
+            int(TileID.START): self._clamp_room_coord(semantic_anchors.get("start", start_coord)),
+            int(TileID.TRIFORCE): self._clamp_room_coord(semantic_anchors.get("goal", goal_coord)),
+            int(TileID.BOSS): boss_anchor,
+            int(TileID.ENEMY): enemy_anchor,
+            int(TileID.KEY_SMALL): key_anchor,
+            int(TileID.KEY_BOSS): key_anchor,
+            int(TileID.KEY_ITEM): item_anchor,
+            int(TileID.ITEM_MINOR): item_anchor,
+            int(TileID.STAIR): item_anchor,
+            int(TileID.PUZZLE): puzzle_anchor,
+        }
+
+        if stateful_anchor is not None:
+            if gate_family == "key":
+                preferred_positions[int(TileID.KEY_SMALL)] = stateful_anchor
+                preferred_positions[int(TileID.KEY_BOSS)] = stateful_anchor
+                preferred_positions[int(TileID.PUZZLE)] = puzzle_anchor
+            elif gate_family == "item_unlock":
+                preferred_positions[int(TileID.KEY_ITEM)] = stateful_anchor
+                preferred_positions[int(TileID.ITEM_MINOR)] = stateful_anchor
+                preferred_positions[int(TileID.STAIR)] = stateful_anchor
+                preferred_positions[int(TileID.PUZZLE)] = puzzle_anchor
+            elif gate_family in {"switch", "toggle", "bombable"}:
+                preferred_positions[int(TileID.PUZZLE)] = stateful_anchor
+            elif gate_family == "combat":
+                preferred_positions[int(TileID.ENEMY)] = stateful_anchor
+                if role_flags.get("has_puzzle", False):
+                    preferred_positions[int(TileID.PUZZLE)] = puzzle_anchor
+
+        return preferred_positions
+
     def _find_room_graph_marker_slot(
         self,
         grid: np.ndarray,
@@ -3543,18 +4984,11 @@ class NeuralSymbolicDungeonPipeline:
             room_role_flags=role_flags,
             semantic_puzzle_offset=self.default_semantic_puzzle_offset,
         )
-        preferred_positions: Dict[int, Tuple[int, int]] = {
-            int(TileID.START): self._clamp_room_coord(semantic_anchors.get("start", start_coord)),
-            int(TileID.TRIFORCE): self._clamp_room_coord(semantic_anchors.get("goal", goal_coord)),
-            int(TileID.BOSS): self._clamp_room_coord(semantic_anchors.get("boss", (ROOM_HEIGHT // 2, ROOM_WIDTH // 2))),
-            int(TileID.ENEMY): self._clamp_room_coord(semantic_anchors.get("enemy", (ROOM_HEIGHT // 2 - 2, ROOM_WIDTH // 2))),
-            int(TileID.KEY_SMALL): self._clamp_room_coord(semantic_anchors.get("key", (ROOM_HEIGHT // 2, max(1, ROOM_WIDTH // 2 - 2)))),
-            int(TileID.KEY_BOSS): self._clamp_room_coord(semantic_anchors.get("key", (ROOM_HEIGHT // 2, ROOM_WIDTH // 2))),
-            int(TileID.KEY_ITEM): self._clamp_room_coord(semantic_anchors.get("item", (ROOM_HEIGHT // 2, min(ROOM_WIDTH - 2, ROOM_WIDTH // 2 + 2)))),
-            int(TileID.ITEM_MINOR): self._clamp_room_coord(semantic_anchors.get("item", (min(ROOM_HEIGHT - 2, ROOM_HEIGHT // 2 + 2), ROOM_WIDTH // 2))),
-            int(TileID.STAIR): self._clamp_room_coord(semantic_anchors.get("item", (min(ROOM_HEIGHT - 2, ROOM_HEIGHT // 2 + 2), ROOM_WIDTH // 2))),
-            int(TileID.PUZZLE): self._clamp_room_coord(semantic_anchors.get("puzzle", (max(1, ROOM_HEIGHT // 2 - 2), ROOM_WIDTH // 2))),
-        }
+        preferred_positions = self._build_room_graph_marker_preferences(
+            graph=graph,
+            room_id=room_id,
+            start_goal=(start_coord, goal_coord),
+        )
 
         occupied: Set[Tuple[int, int]] = set()
         placed: List[int] = []
@@ -3616,18 +5050,11 @@ class NeuralSymbolicDungeonPipeline:
             room_role_flags=role_flags,
             semantic_puzzle_offset=self.default_semantic_puzzle_offset,
         )
-        preferred_positions: Dict[int, Tuple[int, int]] = {
-            int(TileID.START): self._clamp_room_coord(semantic_anchors.get("start", start_coord)),
-            int(TileID.TRIFORCE): self._clamp_room_coord(semantic_anchors.get("goal", goal_coord)),
-            int(TileID.BOSS): self._clamp_room_coord(semantic_anchors.get("boss", (ROOM_HEIGHT // 2, ROOM_WIDTH // 2))),
-            int(TileID.ENEMY): self._clamp_room_coord(semantic_anchors.get("enemy", (ROOM_HEIGHT // 2 - 2, ROOM_WIDTH // 2))),
-            int(TileID.KEY_SMALL): self._clamp_room_coord(semantic_anchors.get("key", (ROOM_HEIGHT // 2, max(1, ROOM_WIDTH // 2 - 2)))),
-            int(TileID.KEY_BOSS): self._clamp_room_coord(semantic_anchors.get("key", (ROOM_HEIGHT // 2, ROOM_WIDTH // 2))),
-            int(TileID.KEY_ITEM): self._clamp_room_coord(semantic_anchors.get("item", (ROOM_HEIGHT // 2, min(ROOM_WIDTH - 2, ROOM_WIDTH // 2 + 2)))),
-            int(TileID.ITEM_MINOR): self._clamp_room_coord(semantic_anchors.get("item", (min(ROOM_HEIGHT - 2, ROOM_HEIGHT // 2 + 2), ROOM_WIDTH // 2))),
-            int(TileID.STAIR): self._clamp_room_coord(semantic_anchors.get("item", (min(ROOM_HEIGHT - 2, ROOM_HEIGHT // 2 + 2), ROOM_WIDTH // 2))),
-            int(TileID.PUZZLE): self._clamp_room_coord(semantic_anchors.get("puzzle", (max(1, ROOM_HEIGHT // 2 - 2), ROOM_WIDTH // 2))),
-        }
+        preferred_positions = self._build_room_graph_marker_preferences(
+            graph=graph,
+            room_id=room_id,
+            start_goal=(start_coord, goal_coord),
+        )
 
         occupied: Set[Tuple[int, int]] = set()
         placements: List[Tuple[int, Tuple[int, int]]] = []
@@ -3642,6 +5069,214 @@ class NeuralSymbolicDungeonPipeline:
             occupied.add(slot)
             placements.append((int(tile_id), slot))
         return placements
+
+    def _build_room_puzzle_metadata(
+        self,
+        *,
+        grid: np.ndarray,
+        graph: Optional[nx.Graph],
+        room_id: Any,
+        start_goal: Optional[Tuple[Tuple[int, int], Tuple[int, int]]] = None,
+        marker_plan: Optional[Sequence[Tuple[int, Tuple[int, int]]]] = None,
+        scaffold_stats: Optional[Mapping[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Build a structured room-local puzzle plan for validator-side state machines.
+
+        The room scaffold already knows the intended local progression order.
+        This helper serializes that order into explicit stateful stages so the
+        stitched validator can enforce multi-step mechanics instead of treating
+        puzzle rooms as purely visual clutter.
+        """
+        if not isinstance(graph, nx.Graph) or room_id not in graph:
+            return {}
+
+        room_grid = np.asarray(grid, dtype=np.int32)
+        attrs = dict(graph.nodes[room_id])
+        role_flags = self._room_role_flags(attrs)
+        semantics = self._extract_room_topology_semantics(graph, room_id)
+        node_type = str(
+            attrs.get("type", attrs.get("node_type", attrs.get("room_type", ""))) or ""
+        ).strip().lower()
+        if start_goal is None:
+            start_goal = self._extract_room_start_goal(graph, room_id)
+        start_coord, goal_coord = start_goal if start_goal is not None else (
+            (ROOM_HEIGHT // 2, 0),
+            (ROOM_HEIGHT // 2, ROOM_WIDTH - 1),
+        )
+        semantic_anchors = build_room_semantic_anchor_points(
+            room_shape=(ROOM_HEIGHT, ROOM_WIDTH),
+            start=start_coord,
+            goal=goal_coord,
+            required_doors=semantics["required_doors"],
+            incoming_dirs=semantics["incoming_dirs"],
+            outgoing_dirs=semantics["outgoing_dirs"],
+            room_role_flags=role_flags,
+            semantic_puzzle_offset=self.default_semantic_puzzle_offset,
+        )
+        gate_family = str(
+            (scaffold_stats or {}).get(
+                "gate_family",
+                self._classify_puzzle_gate_family(
+                    role_flags=role_flags,
+                    semantics=semantics,
+                    node_type=node_type,
+                ),
+            )
+            or "generic"
+        ).strip().lower()
+        archetype = str(
+            (scaffold_stats or {}).get(
+                "archetype",
+                self._select_puzzle_room_scaffold_archetype(
+                    role_flags=role_flags,
+                    semantics=semantics,
+                    node_type=node_type,
+                ),
+            )
+            or "serpentine"
+        ).strip().lower()
+        interaction_sequence = self._resolve_puzzle_interaction_sequence(
+            archetype=archetype,
+            gate_family=gate_family,
+            role_flags=role_flags,
+            semantic_anchors=semantic_anchors,
+        )
+        door_rows, door_cols = np.where(room_grid == int(TileID.DOOR_PUZZLE))
+        controlled_doors_local = [
+            [int(row), int(col)]
+            for row, col in zip(door_rows.tolist(), door_cols.tolist())
+        ]
+        if not interaction_sequence and controlled_doors_local:
+            fallback_anchor = self._clamp_room_coord(
+                semantic_anchors.get("puzzle", semantic_anchors.get("goal", goal_coord))
+            )
+            interaction_sequence = [("puzzle", fallback_anchor)]
+        if not interaction_sequence and not controlled_doors_local:
+            return {}
+
+        marker_slots: Dict[int, List[Tuple[int, int]]] = {}
+        for tile_id, slot in list(marker_plan or []):
+            marker_slots.setdefault(int(tile_id), []).append(self._clamp_room_coord(slot))
+
+        def _resolve_anchor(
+            name: str,
+            fallback: Tuple[int, int],
+        ) -> Tuple[Tuple[int, int], Optional[int]]:
+            normalized = str(name).strip().lower()
+            if normalized == "key":
+                candidates = [int(TileID.KEY_SMALL), int(TileID.KEY_BOSS)]
+            elif normalized == "item":
+                candidates = [int(TileID.KEY_ITEM), int(TileID.ITEM_MINOR), int(TileID.STAIR)]
+            elif normalized == "puzzle":
+                candidates = [int(TileID.PUZZLE)]
+            elif normalized == "enemy":
+                candidates = [int(TileID.ENEMY), int(TileID.BOSS)]
+            elif normalized == "boss":
+                candidates = [int(TileID.BOSS)]
+            else:
+                candidates = []
+            for tile_id in candidates:
+                if marker_slots.get(int(tile_id)):
+                    return marker_slots[int(tile_id)][0], int(tile_id)
+            return self._clamp_room_coord(fallback), None
+
+        def _stage_kind(name: str) -> str:
+            normalized = str(name).strip().lower()
+            if normalized == "key":
+                return "collect_key"
+            if normalized == "item":
+                return "collect_item"
+            if normalized in {"enemy", "boss"}:
+                return "defeat_enemy"
+            if normalized == "puzzle" and gate_family in {"switch", "toggle"}:
+                return "push_block_to_switch"
+            return "step_on_puzzle"
+
+        stage_sequence: List[Dict[str, Any]] = []
+        for stage_index, (name, anchor) in enumerate(interaction_sequence):
+            resolved_anchor, tile_id = _resolve_anchor(str(name), anchor)
+            stage_sequence.append(
+                {
+                    "stage_index": int(stage_index),
+                    "name": str(name),
+                    "kind": _stage_kind(str(name)),
+                    "local_anchor": [int(resolved_anchor[0]), int(resolved_anchor[1])],
+                    "trigger_tile_id": int(tile_id) if tile_id is not None else None,
+                }
+            )
+
+        return {
+            "plan_id": f"room_{room_id}",
+            "room_id": room_id,
+            "gate_family": str(gate_family),
+            "archetype": str(archetype),
+            "sequence_required": bool(int((scaffold_stats or {}).get("interaction_sequence_required", 0) or 0) > 0),
+            "sequence_valid": bool(int((scaffold_stats or {}).get("interaction_sequence_valid", 0) or 0) > 0),
+            "interaction_valid": bool(int((scaffold_stats or {}).get("interaction_valid", 0) or 0) > 0),
+            "contract_valid": bool(int((scaffold_stats or {}).get("contract_valid", 0) or 0) > 0),
+            "controlled_doors_local": list(controlled_doors_local),
+            "stage_sequence": stage_sequence,
+        }
+
+    def _globalize_room_puzzle_metadata(
+        self,
+        *,
+        rooms: Mapping[Any, RoomGenerationResult],
+        stitched_layout: Optional[StitchedRoomLayout],
+    ) -> Dict[str, Any]:
+        """Lift room-local puzzle plans into stitched global coordinates."""
+        if stitched_layout is None:
+            return {"version": "stateful_v1", "plans": {}, "room_to_plan": {}}
+
+        plans: Dict[str, Dict[str, Any]] = {}
+        room_to_plan: Dict[str, str] = {}
+        for room_id, room in dict(rooms or {}).items():
+            local_meta = dict(getattr(room, "puzzle_metadata", {}) or {})
+            if not local_meta:
+                continue
+            offset = stitched_layout.room_offsets.get(room_id)
+            if offset is None:
+                continue
+            offset_r, offset_c = int(offset[0]), int(offset[1])
+            plan_id = str(local_meta.get("plan_id", f"room_{room_id}"))
+            room_to_plan[str(room_id)] = str(plan_id)
+
+            global_stages: List[Dict[str, Any]] = []
+            for raw_stage in list(local_meta.get("stage_sequence", []) or []):
+                local_anchor = raw_stage.get("local_anchor")
+                if not isinstance(local_anchor, (list, tuple)) or len(local_anchor) != 2:
+                    continue
+                local_r, local_c = int(local_anchor[0]), int(local_anchor[1])
+                global_stages.append(
+                    {
+                        **dict(raw_stage),
+                        "local_anchor": [local_r, local_c],
+                        "global_anchor": [offset_r + local_r, offset_c + local_c],
+                    }
+                )
+
+            global_doors: List[List[int]] = []
+            for local_door in list(local_meta.get("controlled_doors_local", []) or []):
+                if not isinstance(local_door, (list, tuple)) or len(local_door) != 2:
+                    continue
+                door_r, door_c = int(local_door[0]), int(local_door[1])
+                global_doors.append([offset_r + door_r, offset_c + door_c])
+
+            plans[str(plan_id)] = {
+                **local_meta,
+                "plan_id": str(plan_id),
+                "room_id": room_id,
+                "room_offset": [offset_r, offset_c],
+                "stage_sequence": global_stages,
+                "controlled_doors_global": global_doors,
+            }
+
+        return {
+            "version": "stateful_v1",
+            "plans": plans,
+            "room_to_plan": room_to_plan,
+        }
 
     def _measure_room_graph_marker_alignment(
         self,
@@ -3856,7 +5491,15 @@ class NeuralSymbolicDungeonPipeline:
                     f"Condition encoding failed in strict mode: {e}"
                 ) from e
             logger.warning(f"Condition encoding failed: {e}, using zero condition")
-            condition = torch.zeros(1, condition_dim, device=self.device)
+            if self.use_graph_node_cross_attention:
+                num_nodes = 0
+                node_features = graph_context.get("node_features")
+                if isinstance(node_features, torch.Tensor) and node_features.dim() >= 2:
+                    num_nodes = int(node_features.shape[0])
+                required_seq_len = max(1, num_nodes + 1)
+                condition = torch.zeros(1, required_seq_len, condition_dim, device=self.device)
+            else:
+                condition = torch.zeros(1, condition_dim, device=self.device)
             node_tokens = None
 
         if self.use_graph_node_cross_attention and isinstance(node_tokens, torch.Tensor):
@@ -3867,6 +5510,32 @@ class NeuralSymbolicDungeonPipeline:
             except (AttributeError, RuntimeError, ValueError, TypeError) as e:
                 self._bump_diagnostic("graph_node_cross_attention_fallback")
                 logger.debug("Falling back to single conditioning vector: %s", e)
+
+        puzzle_structure_condition_enabled = (
+            self.masked_room_puzzle_structure_condition_enabled
+            if self.room_generator_mode == "discrete_masked"
+            else self.diffusion_puzzle_structure_condition_enabled
+        )
+        if puzzle_structure_condition_enabled and isinstance(condition, torch.Tensor):
+            if condition.dim() == 3 and int(condition.shape[0]) == 1:
+                condition = apply_puzzle_structure_control_to_conditioning(
+                    condition.squeeze(0),
+                    puzzle_structure_enabled=bool(graph_context.get("puzzle_room_structure_enabled", True)),
+                    graph_conditioning_mode="node_sequence",
+                ).unsqueeze(0)
+            elif condition.dim() == 2:
+                if bool(self.use_graph_node_cross_attention):
+                    condition = apply_puzzle_structure_control_to_conditioning(
+                        condition,
+                        puzzle_structure_enabled=bool(graph_context.get("puzzle_room_structure_enabled", True)),
+                        graph_conditioning_mode="node_sequence",
+                    ).unsqueeze(0)
+                else:
+                    condition = apply_puzzle_structure_control_to_conditioning(
+                        condition,
+                        puzzle_structure_enabled=bool(graph_context.get("puzzle_room_structure_enabled", True)),
+                        graph_conditioning_mode="pooled",
+                    )
 
         return condition
 
@@ -3958,9 +5627,40 @@ class NeuralSymbolicDungeonPipeline:
             target_device = self.device
             target_dtype = latent.dtype
 
-        if latent.device == target_device and latent.dtype == target_dtype:
-            return latent
-        return latent.to(device=target_device, dtype=target_dtype)
+        prepared = latent.contiguous()
+        if prepared.device == target_device and prepared.dtype == target_dtype:
+            return prepared
+        return prepared.to(device=target_device, dtype=target_dtype)
+
+    def _synchronize_cuda_device(self) -> None:
+        """Conservatively drain queued CUDA work before cross-branch fallback handoffs."""
+        if not torch.cuda.is_available():
+            return
+        device = self.device if isinstance(self.device, torch.device) else torch.device(self.device)
+        if device.type != "cuda":
+            return
+        try:
+            torch.cuda.synchronize(device)
+        except Exception:
+            logger.debug("CUDA synchronize skipped during room-generation fallback handoff.", exc_info=True)
+
+    def _decode_latent_with_vqvae(self, latent: torch.Tensor) -> torch.Tensor:
+        """Decode a latent with a defensive retry for rare cuDNN stream-handoff failures."""
+        prepared = self._cast_latent_for_vqvae_decode(latent)
+        try:
+            return self.vqvae.decode(prepared)
+        except RuntimeError as exc:
+            message = str(exc)
+            if "stream_mismatch" not in message.lower() and "stream mismatch" not in message.lower():
+                raise
+            self._bump_diagnostic("vqvae_decode_stream_mismatch_retry")
+            logger.warning(
+                "VQ-VAE decode hit a CUDA stream mismatch; synchronizing device and retrying with cuDNN disabled."
+            )
+            self._synchronize_cuda_device()
+            safe_latent = prepared.detach().clone().contiguous()
+            with torch.backends.cudnn.flags(enabled=False):
+                return self.vqvae.decode(safe_latent)
 
     def _estimate_safe_batch_size(
         self,
@@ -3987,6 +5687,52 @@ class NeuralSymbolicDungeonPipeline:
             return 1
         safe = max(1, int(usable // bytes_per_sample))
         return max(1, min(requested, safe))
+
+    def _stack_room_topology_maps(
+        self,
+        topology_maps: Sequence[torch.Tensor],
+    ) -> torch.Tensor:
+        """Normalize per-room topology maps to a batched [B,C,H,W] tensor."""
+        stacked: List[torch.Tensor] = []
+        for topo in topology_maps:
+            if not isinstance(topo, torch.Tensor):
+                raise TypeError(f"room_topology_map must be a tensor, got {type(topo).__name__}")
+            tensor = topo.to(self.device, dtype=torch.float32)
+            if tensor.dim() == 4:
+                if int(tensor.shape[0]) != 1:
+                    raise ValueError(
+                        f"Per-room room_topology_map must have batch size 1 when rank-4, got {tuple(tensor.shape)}."
+                    )
+                tensor = tensor.squeeze(0)
+            elif tensor.dim() != 3:
+                raise ValueError(
+                    f"Per-room room_topology_map must have shape [1,C,H,W] or [C,H,W], got {tuple(tensor.shape)}."
+                )
+            stacked.append(tensor.contiguous())
+        if not stacked:
+            raise ValueError("Cannot batch room_topology_map for an empty room set.")
+        return torch.stack(stacked, dim=0)
+
+    @staticmethod
+    def _slice_graph_guidance_batch(graph_ctx: Dict[str, Any], batch_index: int) -> Dict[str, Any]:
+        """Slice a batched graph-guidance payload down to one room/sample."""
+        sliced: Dict[str, Any] = {}
+        for key, value in graph_ctx.items():
+            if not isinstance(value, torch.Tensor):
+                sliced[key] = value
+                continue
+            if value.dim() >= 1 and int(value.shape[0]) > batch_index:
+                if key == "edge_index" and value.dim() == 2:
+                    sliced[key] = value
+                elif key == "node_features" and value.dim() == 2:
+                    sliced[key] = value
+                elif key == "edge_features" and value.dim() == 2:
+                    sliced[key] = value
+                else:
+                    sliced[key] = value[batch_index:batch_index + 1]
+            else:
+                sliced[key] = value
+        return sliced
 
     def _bucket_room_ids_by_latent_shape(
         self,
@@ -4109,9 +5855,8 @@ class NeuralSymbolicDungeonPipeline:
                 [inp['boundary_constraints'].to(self.device, dtype=torch.float32) for inp in per_room_inputs],
                 dim=0,
             ),
-            'room_topology_map': torch.cat(
-                [inp['graph_context']['room_topology_map'] for inp in per_room_inputs],
-                dim=0,
+            'room_topology_map': self._stack_room_topology_maps(
+                [inp['graph_context']['room_topology_map'] for inp in per_room_inputs]
             ),
         }
         if self.use_current_node_distance_features:
@@ -4256,16 +6001,17 @@ class NeuralSymbolicDungeonPipeline:
                             band=1,
                         )
                         if has_boundary_constraints:
+                            room_graph_guidance = self._slice_graph_guidance_batch(graph_ctx_for_guidance, i)
                             z_batch[i:i + 1] = self.diffusion.inpaint(
                                 x_0=z_ref,
                                 mask=boundary_edit_mask,
                                 context=condition_batch[i:i + 1],
-                                graph_data=graph_ctx_for_guidance,
+                                graph_data=room_graph_guidance,
                                 num_steps=max(8, int(num_diffusion_steps) // 2),
                             )
                     except (AttributeError, RuntimeError, ValueError, TypeError):
                         continue
-            logits_batch = self.vqvae.decode(self._cast_latent_for_vqvae_decode(z_batch))
+            logits_batch = self._decode_latent_with_vqvae(z_batch)
 
         out: Dict[Any, RoomGenerationResult] = {}
         for i, inp in enumerate(per_room_inputs):
@@ -4591,7 +6337,7 @@ class NeuralSymbolicDungeonPipeline:
                     logger.debug("Boundary latent masking skipped due to error: %s", e)
 
             # BLOCK II: VQ-VAE Decoding
-            logits = self.vqvae.decode(self._cast_latent_for_vqvae_decode(z_latent))  # (1, 44, 16, 11)
+            logits = self._decode_latent_with_vqvae(z_latent)  # (1, 44, 16, 11)
         validate_tensor_contract(
             logits,
             BlockShapeContract(
@@ -4670,7 +6416,10 @@ class NeuralSymbolicDungeonPipeline:
             neural_grid = sampled_tokens.detach().cpu().numpy()[0].astype(np.int32, copy=False)
         else:
             neural_grid = logits.argmax(dim=1).detach().cpu().numpy()[0]  # (16, 11)
-        neural_grid, neural_invalid_count, neural_invalid_ids = self._sanitize_semantic_grid(neural_grid)
+        neural_grid, neural_invalid_count, neural_invalid_ids = self._sanitize_semantic_grid(
+            neural_grid,
+            strip_void=True,
+        )
         if neural_invalid_count > 0:
             self._bump_diagnostic("neural_invalid_tile_ids_sanitized")
             logger.warning(
@@ -4758,6 +6507,16 @@ class NeuralSymbolicDungeonPipeline:
             "existing_structure_tiles": 0,
             "planned_route_pixels": 0,
         }
+        neural_no_puzzle_structure_cleanup = {
+            "applied": 0,
+            "block_tiles_removed": 0,
+            "block_components_removed": 0,
+        }
+        final_no_puzzle_structure_cleanup = {
+            "applied": 0,
+            "block_tiles_removed": 0,
+            "block_components_removed": 0,
+        }
         repaired_structural_cleanup = {
             "invalid_door_tiles_removed": 0,
             "interior_obstacle_tiles_removed": 0,
@@ -4811,6 +6570,7 @@ class NeuralSymbolicDungeonPipeline:
                     repaired_grid, repaired_invalid_count, repaired_invalid_ids = self._sanitize_semantic_grid(
                         repaired_grid,
                         fallback_grid=neural_grid,
+                        strip_void=True,
                     )
                     if repaired_invalid_count > 0:
                         self._bump_diagnostic("repair_invalid_tile_ids_sanitized")
@@ -4953,6 +6713,23 @@ class NeuralSymbolicDungeonPipeline:
                 final_post_boundary_preserved_ids,
             )
 
+        neural_grid, neural_void_cleanup = self._strip_room_void_tiles(neural_grid)
+        final_grid, final_void_cleanup = self._strip_room_void_tiles(final_grid)
+        if any(int(v) > 0 for v in neural_void_cleanup.values()):
+            self._bump_diagnostic("neural_void_tiles_stripped")
+            logger.debug(
+                "Room %s stripped VOID tiles from neural output: %s",
+                room_id,
+                neural_void_cleanup,
+            )
+        if any(int(v) > 0 for v in final_void_cleanup.values()):
+            self._bump_diagnostic("final_void_tiles_stripped")
+            logger.debug(
+                "Room %s stripped VOID tiles from final output: %s",
+                room_id,
+                final_void_cleanup,
+            )
+
         neural_grid, neural_puzzle_scaffold = self._apply_puzzle_room_scaffold(
             neural_grid,
             graph=mission_graph_for_room,
@@ -4986,6 +6763,40 @@ class NeuralSymbolicDungeonPipeline:
                 room_id,
                 final_puzzle_scaffold,
             )
+        if int(final_puzzle_scaffold.get("contract_valid", 0) or 0) > 0:
+            self._bump_diagnostic("puzzle_room_contract_valid")
+        elif str(final_puzzle_scaffold.get("gate_family", "")).strip():
+            self._bump_diagnostic("puzzle_room_contract_invalid")
+        if int(final_puzzle_scaffold.get("contract_gate_skipped", 0) or 0) > 0:
+            self._bump_diagnostic("puzzle_room_contract_gate_skipped")
+        if int(final_puzzle_scaffold.get("interaction_valid", 0) or 0) > 0:
+            self._bump_diagnostic("puzzle_room_interaction_valid")
+        elif str(final_puzzle_scaffold.get("gate_family", "")).strip():
+            self._bump_diagnostic("puzzle_room_interaction_invalid")
+        if int(final_puzzle_scaffold.get("interaction_gate_skipped", 0) or 0) > 0:
+            self._bump_diagnostic("puzzle_room_interaction_gate_skipped")
+        if int(final_puzzle_scaffold.get("interaction_sequence_valid", 0) or 0) > 0:
+            self._bump_diagnostic("puzzle_room_sequence_valid")
+        elif int(final_puzzle_scaffold.get("interaction_sequence_required", 0) or 0) > 0:
+            self._bump_diagnostic("puzzle_room_sequence_invalid")
+        if int(final_puzzle_scaffold.get("sequence_gate_skipped", 0) or 0) > 0:
+            self._bump_diagnostic("puzzle_room_sequence_gate_skipped")
+        if int(final_puzzle_scaffold.get("quality_gate_skipped", 0) or 0) > 0:
+            self._bump_diagnostic("puzzle_room_quality_gate_skipped")
+
+        if not bool(self.default_puzzle_room_structure_enabled):
+            neural_grid, neural_no_puzzle_structure_cleanup = self._strip_room_block_structure(
+                neural_grid,
+                graph=mission_graph_for_room,
+                room_id=room_id,
+            )
+            final_grid, final_no_puzzle_structure_cleanup = self._strip_room_block_structure(
+                final_grid,
+                graph=mission_graph_for_room,
+                room_id=room_id,
+            )
+            if int(final_no_puzzle_structure_cleanup.get("applied", 0)) > 0:
+                self._bump_diagnostic("no_puzzle_block_structure_stripped")
 
         neural_pre_marker_grid = np.asarray(neural_grid, dtype=np.int32).copy()
         final_pre_marker_grid = np.asarray(final_grid, dtype=np.int32).copy()
@@ -5050,6 +6861,14 @@ class NeuralSymbolicDungeonPipeline:
         )
         final_marker_expected = max(1, len(final_marker_plan))
         final_marker_overwrite_rate = float(final_marker_overwrites) / float(final_marker_expected)
+        room_puzzle_metadata = self._build_room_puzzle_metadata(
+            grid=final_grid,
+            graph=mission_graph_for_room,
+            room_id=room_id,
+            start_goal=overlay_start_goal,
+            marker_plan=final_marker_plan,
+            scaffold_stats=final_puzzle_scaffold,
+        )
 
         # VGLC Compliance: Validate room dimensions
         valid_dims, dim_msg = validate_room_dimensions(final_grid)
@@ -5084,12 +6903,16 @@ class NeuralSymbolicDungeonPipeline:
             'neural_invalid_door_tiles_removed': int(neural_structural_cleanup['invalid_door_tiles_removed']),
             'neural_interior_obstacle_tiles_removed': int(neural_structural_cleanup['interior_obstacle_tiles_removed']),
             'neural_interior_obstacle_components_removed': int(neural_structural_cleanup['interior_obstacle_components_removed']),
+            'neural_boundary_void_tiles_removed': int(neural_void_cleanup['boundary_void_tiles_removed']),
+            'neural_interior_void_tiles_removed': int(neural_void_cleanup['interior_void_tiles_removed']),
             'neural_boundary_wall_tiles_forced': int(neural_boundary_shell['boundary_wall_tiles_forced']),
             'neural_boundary_door_tiles_forced': int(neural_boundary_shell['boundary_door_tiles_forced']),
             'neural_interior_door_apron_tiles_forced': int(neural_boundary_shell['interior_door_apron_tiles_forced']),
             'repair_invalid_door_tiles_removed': int(repaired_structural_cleanup['invalid_door_tiles_removed']),
             'repair_interior_obstacle_tiles_removed': int(repaired_structural_cleanup['interior_obstacle_tiles_removed']),
             'repair_interior_obstacle_components_removed': int(repaired_structural_cleanup['interior_obstacle_components_removed']),
+            'final_boundary_void_tiles_removed': int(final_void_cleanup['boundary_void_tiles_removed']),
+            'final_interior_void_tiles_removed': int(final_void_cleanup['interior_void_tiles_removed']),
             'repair_boundary_wall_tiles_forced': int(repaired_boundary_shell['boundary_wall_tiles_forced']),
             'repair_boundary_door_tiles_forced': int(repaired_boundary_shell['boundary_door_tiles_forced']),
             'repair_interior_door_apron_tiles_forced': int(repaired_boundary_shell['interior_door_apron_tiles_forced']),
@@ -5105,6 +6928,16 @@ class NeuralSymbolicDungeonPipeline:
             'neural_puzzle_scaffold_variant_name': str(neural_puzzle_scaffold.get('variant_name', '') or ''),
             'neural_puzzle_scaffold_variant_style': str(neural_puzzle_scaffold.get('variant_style', '') or ''),
             'neural_puzzle_scaffold_variant_side_bias': int(neural_puzzle_scaffold.get('variant_side_bias', 0) or 0),
+            'neural_puzzle_scaffold_interaction_valid': int(neural_puzzle_scaffold.get('interaction_valid', 0) or 0),
+            'neural_puzzle_scaffold_interaction_score': float(neural_puzzle_scaffold.get('interaction_score', 0.0) or 0.0),
+            'neural_puzzle_scaffold_interaction_push_slot_count': int(neural_puzzle_scaffold.get('interaction_push_slot_count', 0) or 0),
+            'neural_puzzle_scaffold_interaction_barrier_axis_tiles': int(neural_puzzle_scaffold.get('interaction_barrier_axis_tiles', 0) or 0),
+            'neural_puzzle_scaffold_interaction_route_divergence': float(neural_puzzle_scaffold.get('interaction_route_divergence', 0.0) or 0.0),
+            'neural_puzzle_scaffold_interaction_sequence_valid': int(neural_puzzle_scaffold.get('interaction_sequence_valid', 0) or 0),
+            'neural_puzzle_scaffold_interaction_sequence_score': float(neural_puzzle_scaffold.get('interaction_sequence_score', 0.0) or 0.0),
+            'neural_puzzle_scaffold_interaction_sequence_length': int(neural_puzzle_scaffold.get('interaction_sequence_length', 0) or 0),
+            'neural_puzzle_scaffold_interaction_sequence_route_anchor_coverage': float(neural_puzzle_scaffold.get('interaction_sequence_route_anchor_coverage', 0.0) or 0.0),
+            'neural_puzzle_scaffold_interaction_sequence_pairwise_path_ratio': float(neural_puzzle_scaffold.get('interaction_sequence_pairwise_path_ratio', 0.0) or 0.0),
             'final_puzzle_scaffold_applied': int(final_puzzle_scaffold['applied']),
             'final_puzzle_scaffold_tiles_added': int(final_puzzle_scaffold['tiles_added']),
             'final_puzzle_scaffold_segments_added': int(final_puzzle_scaffold['segments_added']),
@@ -5117,6 +6950,24 @@ class NeuralSymbolicDungeonPipeline:
             'final_puzzle_scaffold_variant_name': str(final_puzzle_scaffold.get('variant_name', '') or ''),
             'final_puzzle_scaffold_variant_style': str(final_puzzle_scaffold.get('variant_style', '') or ''),
             'final_puzzle_scaffold_variant_side_bias': int(final_puzzle_scaffold.get('variant_side_bias', 0) or 0),
+            'final_puzzle_scaffold_interaction_valid': int(final_puzzle_scaffold.get('interaction_valid', 0) or 0),
+            'final_puzzle_scaffold_interaction_score': float(final_puzzle_scaffold.get('interaction_score', 0.0) or 0.0),
+            'final_puzzle_scaffold_interaction_push_slot_count': int(final_puzzle_scaffold.get('interaction_push_slot_count', 0) or 0),
+            'final_puzzle_scaffold_interaction_barrier_axis_tiles': int(final_puzzle_scaffold.get('interaction_barrier_axis_tiles', 0) or 0),
+            'final_puzzle_scaffold_interaction_route_divergence': float(final_puzzle_scaffold.get('interaction_route_divergence', 0.0) or 0.0),
+            'final_puzzle_scaffold_interaction_sequence_valid': int(final_puzzle_scaffold.get('interaction_sequence_valid', 0) or 0),
+            'final_puzzle_scaffold_interaction_sequence_score': float(final_puzzle_scaffold.get('interaction_sequence_score', 0.0) or 0.0),
+            'final_puzzle_scaffold_interaction_sequence_length': int(final_puzzle_scaffold.get('interaction_sequence_length', 0) or 0),
+            'final_puzzle_scaffold_interaction_sequence_route_anchor_coverage': float(final_puzzle_scaffold.get('interaction_sequence_route_anchor_coverage', 0.0) or 0.0),
+            'final_puzzle_scaffold_interaction_sequence_pairwise_path_ratio': float(final_puzzle_scaffold.get('interaction_sequence_pairwise_path_ratio', 0.0) or 0.0),
+            'puzzle_plan_stage_count': int(len(list(room_puzzle_metadata.get('stage_sequence', []) or []))),
+            'puzzle_plan_controlled_door_count': int(len(list(room_puzzle_metadata.get('controlled_doors_local', []) or []))),
+            'neural_no_puzzle_structure_cleanup_applied': int(neural_no_puzzle_structure_cleanup.get('applied', 0)),
+            'neural_no_puzzle_block_tiles_removed': int(neural_no_puzzle_structure_cleanup.get('block_tiles_removed', 0)),
+            'neural_no_puzzle_block_components_removed': int(neural_no_puzzle_structure_cleanup.get('block_components_removed', 0)),
+            'final_no_puzzle_structure_cleanup_applied': int(final_no_puzzle_structure_cleanup.get('applied', 0)),
+            'final_no_puzzle_block_tiles_removed': int(final_no_puzzle_structure_cleanup.get('block_tiles_removed', 0)),
+            'final_no_puzzle_block_components_removed': int(final_no_puzzle_structure_cleanup.get('block_components_removed', 0)),
             'neural_graph_markers_placed': int(neural_marker_count),
             'final_graph_markers_placed': int(final_marker_count),
             'final_graph_marker_overwrites': int(final_marker_overwrites),
@@ -5177,6 +7028,11 @@ class NeuralSymbolicDungeonPipeline:
                 room_id,
                 teacher_fallback_source.replace("_", "-"),
             )
+            if teacher_fallback_source == "masked_room":
+                # The masked generator and diffusion teacher can use different CUDA kernels and
+                # work queues. Flush queued masked-room work before the recursive teacher rerun
+                # so VQ-VAE decode always sees tensors on a consistent stream.
+                self._synchronize_cuda_device()
             teacher_result = self.generate_room(
                 neighbor_latents=neighbor_latents,
                 graph_context=graph_context,
@@ -5213,6 +7069,7 @@ class NeuralSymbolicDungeonPipeline:
             repair_mask=repair_mask,
             room_plan_mask=room_plan_mask,
             neural_probs=neural_probs,
+            puzzle_metadata=room_puzzle_metadata,
             metrics=metrics,
         )
 
@@ -5584,23 +7441,95 @@ class NeuralSymbolicDungeonPipeline:
                                 'actual_chunk_size': int(len(batch_room_ids)),
                             }
                         )
-                        batch_results = self._generate_room_batch(
-                            room_ids=batch_room_ids,
-                            mission_graph_physical=mission_graph_physical,
-                            graph_data=graph_data,
-                            generated_rooms=rooms,
-                            room_latents=room_latents,
-                            guidance_scale=guidance_scale,
-                            logic_guidance_scale=logic_guidance_scale,
-                            num_diffusion_steps=num_diffusion_steps,
-                            use_fast_sampling=use_fast_sampling,
-                            latent_sampler=latent_sampler,
-                            categorical_codebook_size=categorical_codebook_size,
-                            apply_repair=apply_repair,
-                            seed=seed,
-                            layer_offset=offset,
-                            latent_shape_chw=latent_shape_chw,
-                        )
+                        try:
+                            batch_results = self._generate_room_batch(
+                                room_ids=batch_room_ids,
+                                mission_graph_physical=mission_graph_physical,
+                                graph_data=graph_data,
+                                generated_rooms=rooms,
+                                room_latents=room_latents,
+                                guidance_scale=guidance_scale,
+                                logic_guidance_scale=logic_guidance_scale,
+                                num_diffusion_steps=num_diffusion_steps,
+                                use_fast_sampling=use_fast_sampling,
+                                latent_sampler=latent_sampler,
+                                categorical_codebook_size=categorical_codebook_size,
+                                apply_repair=apply_repair,
+                                seed=seed,
+                                layer_offset=offset,
+                                latent_shape_chw=latent_shape_chw,
+                            )
+                        except (RuntimeError, ValueError) as exc:
+                            self._bump_diagnostic("batched_room_generation_fallback")
+                            logger.warning(
+                                "Batched room generation failed for chunk %s at layer %d; falling back to sequential generation. Error: %s",
+                                batch_room_ids,
+                                int(layer_idx),
+                                exc,
+                            )
+                            if torch.cuda.is_available():
+                                self._synchronize_cuda_device()
+                                try:
+                                    torch.cuda.empty_cache()
+                                except Exception:
+                                    logger.debug("torch.cuda.empty_cache() skipped after batch failure.", exc_info=True)
+                            batch_runtime_diagnostics.append(
+                                {
+                                    'layer_index': int(layer_idx),
+                                    'bucket_key': str(bucket_key),
+                                    'chunk_start': int(k),
+                                    'actual_chunk_size': int(len(batch_room_ids)),
+                                    'sequential_fallback_after_batch_error': 1,
+                                    'batch_error': str(exc),
+                                }
+                            )
+                            batch_results = {}
+                            for seq_offset, room_id in enumerate(batch_room_ids):
+                                idx = offset + seq_offset
+                                neighbor_latents = self._get_neighbor_latents(
+                                    room_id, mission_graph_physical, room_latents
+                                )
+                                reference_room_maps = (
+                                    self._get_neighbor_reference_room_maps(room_id, mission_graph_physical, rooms)
+                                    if bool(getattr(self.condition_encoder, "use_reference_room_maps", False))
+                                    else None
+                                )
+                                start_goal = self._extract_room_start_goal(mission_graph_physical, room_id)
+                                boundary_constraints = self._build_room_boundary_constraints(
+                                    graph=mission_graph_physical,
+                                    room_id=room_id,
+                                )
+                                room_position = self._build_room_position_tensor(
+                                    graph=mission_graph_physical,
+                                    room_id=room_id,
+                                    fallback_order_index=idx,
+                                )
+                                room_seed = None
+                                if seed is not None:
+                                    room_seed = int(seed) + int(_stable_node_seed_offset(room_id))
+                                room_graph_context = self._build_room_graph_context(
+                                    graph_data=graph_data,
+                                    mission_graph=mission_graph_physical,
+                                    room_id=room_id,
+                                    start_goal=start_goal,
+                                )
+                                batch_results[room_id] = self.generate_room(
+                                    neighbor_latents=neighbor_latents,
+                                    graph_context=room_graph_context,
+                                    room_id=room_id,
+                                    boundary_constraints=boundary_constraints,
+                                    position=room_position,
+                                    reference_room_maps=reference_room_maps,
+                                    guidance_scale=guidance_scale,
+                                    logic_guidance_scale=logic_guidance_scale,
+                                    num_diffusion_steps=num_diffusion_steps,
+                                    use_fast_sampling=use_fast_sampling,
+                                    latent_sampler=latent_sampler,
+                                    categorical_codebook_size=categorical_codebook_size,
+                                    apply_repair=apply_repair,
+                                    start_goal_coords=start_goal,
+                                    seed=room_seed,
+                                )
                         for room_id in batch_room_ids:
                             room_result = batch_results[room_id]
                             rooms[room_id] = room_result
@@ -5940,7 +7869,12 @@ class NeuralSymbolicDungeonPipeline:
             max_batch_size=max_batch_size,
         )
 
-        dungeon_grid = self.stitch_rooms(room_set.rooms, prepared.mission_graph_physical)
+        stitched_layout = self.stitch_room_layout(room_set.rooms, prepared.mission_graph_physical)
+        dungeon_grid = np.asarray(stitched_layout.dungeon_grid, dtype=np.int32)
+        puzzle_metadata = self._globalize_room_puzzle_metadata(
+            rooms=room_set.rooms,
+            stitched_layout=stitched_layout,
+        )
         map_elites_score = self.evaluate_generated_dungeon(
             dungeon_grid,
             prepared.mission_graph_physical,
@@ -5963,6 +7897,13 @@ class NeuralSymbolicDungeonPipeline:
             'dungeon_shape': dungeon_grid.shape,
             'generation_time_sec': generation_time,
             'batch_generation_diagnostics': room_set.batch_runtime_diagnostics,
+            'puzzle_plan_count': int(len(dict(puzzle_metadata.get('plans', {}) or {}))),
+            'puzzle_stage_count': int(
+                sum(
+                    len(list(dict(plan or {}).get('stage_sequence', []) or []))
+                    for plan in dict(puzzle_metadata.get('plans', {}) or {}).values()
+                )
+            ),
             **alignment_metrics,
         }
         
@@ -5976,6 +7917,8 @@ class NeuralSymbolicDungeonPipeline:
             metrics=metrics,
             map_elites_score=map_elites_score,
             generation_time=generation_time,
+            stitched_layout=stitched_layout,
+            puzzle_metadata=puzzle_metadata,
         )
 
     @torch.no_grad()
@@ -6010,10 +7953,12 @@ class NeuralSymbolicDungeonPipeline:
                 room_grid = fit_room_grid(room_value.room_grid)
                 neural_grid = fit_room_grid(room_value.neural_grid)
                 latent = room_value.latent.detach().cpu() if isinstance(room_value.latent, torch.Tensor) else torch.empty(0)
+                puzzle_metadata = dict(room_value.puzzle_metadata or {})
             else:
                 room_grid = fit_room_grid(room_value)
                 neural_grid = room_grid.copy()
                 latent = torch.empty(0)
+                puzzle_metadata = {}
 
             room_plan_mask = None
             repaired_grid = room_grid.copy()
@@ -6044,6 +7989,7 @@ class NeuralSymbolicDungeonPipeline:
                 repair_mask=None,
                 room_plan_mask=room_plan_mask,
                 neural_probs=None,
+                puzzle_metadata=puzzle_metadata,
                 metrics={
                     "room_id": room_id,
                     "was_repaired": bool(was_repaired),
@@ -6052,7 +7998,12 @@ class NeuralSymbolicDungeonPipeline:
                 },
             )
 
-        dungeon_grid = self.stitch_rooms(normalized_rooms, mission_graph)
+        stitched_layout = self.stitch_room_layout(normalized_rooms, mission_graph)
+        dungeon_grid = np.asarray(stitched_layout.dungeon_grid, dtype=np.int32)
+        puzzle_metadata = self._globalize_room_puzzle_metadata(
+            rooms=normalized_rooms,
+            stitched_layout=stitched_layout,
+        )
         map_elites_score = self.evaluate_generated_dungeon(
             dungeon_grid,
             mission_graph,
@@ -6066,6 +8017,7 @@ class NeuralSymbolicDungeonPipeline:
             ),
             "dungeon_shape": dungeon_grid.shape,
             "symbolic_only": True,
+            "puzzle_plan_count": int(len(dict(puzzle_metadata.get("plans", {}) or {}))),
         }
         return DungeonGenerationResult(
             dungeon_grid=dungeon_grid,
@@ -6074,6 +8026,8 @@ class NeuralSymbolicDungeonPipeline:
             metrics=metrics,
             map_elites_score=map_elites_score,
             generation_time=0.0,
+            stitched_layout=stitched_layout,
+            puzzle_metadata=puzzle_metadata,
         )
     
     def _prepare_graph_context(self, graph: nx.Graph, use_tpe: bool = True) -> Dict[str, Any]:
@@ -6488,38 +8442,38 @@ class NeuralSymbolicDungeonPipeline:
 
         if role_flags.get("is_tutorial_puzzle", False):
             archetype = "gate"
-            branch_density = min(branch_density, 0.35)
-            block_budget = min(block_budget, 14)
+            branch_density = min(branch_density, 0.25)
+            block_budget = min(block_budget, 10)
         elif role_flags.get("is_combat_puzzle", False):
             archetype = "combat"
-            branch_density = min(branch_density, 0.45)
-            block_budget = min(block_budget, 18)
+            branch_density = min(branch_density, 0.30)
+            block_budget = min(block_budget, 12)
         elif role_flags.get("is_complex_puzzle", False):
             if archetype not in {"hub", "serpentine"}:
                 archetype = "hub" if required_door_count >= 3 else "serpentine"
-            branch_density = max(branch_density, 0.9)
-            block_budget = max(block_budget, 34)
+            branch_density = max(branch_density, 0.70)
+            block_budget = max(block_budget, 26)
         elif gate_family in {"switch", "toggle"}:
             archetype = "gate"
-            branch_density = max(branch_density, 0.7)
-            block_budget = max(block_budget, 24)
+            branch_density = max(branch_density, 0.50)
+            block_budget = max(block_budget, 18)
         elif gate_family in {"bombable", "item_unlock", "key"} and archetype not in {"hub", "combat"}:
             archetype = "gate"
             if gate_family == "key":
-                branch_density = max(branch_density, 0.55)
-                block_budget = max(block_budget, 20)
+                branch_density = max(branch_density, 0.40)
+                block_budget = max(block_budget, 15)
             elif gate_family == "item_unlock":
-                branch_density = max(branch_density, 0.6)
-                block_budget = max(block_budget, 22)
+                branch_density = max(branch_density, 0.42)
+                block_budget = max(block_budget, 16)
             else:
-                branch_density = max(branch_density, 0.65)
-                block_budget = max(block_budget, 24)
+                branch_density = max(branch_density, 0.45)
+                block_budget = max(block_budget, 17)
         elif node_type in {"item", "protection_item", "minor_item", "treasure", "stair", "stairs_up", "stairs_down", "warp"}:
             archetype = "island"
-            branch_density = min(max(branch_density, 0.55), 0.8)
-            block_budget = max(block_budget, 22)
+            branch_density = min(max(branch_density, 0.40), 0.65)
+            block_budget = max(block_budget, 16)
         elif difficulty_rating == "MODERATE" and archetype == "serpentine":
-            branch_density = min(max(branch_density, 0.6), 0.8)
+            branch_density = min(max(branch_density, 0.45), 0.65)
 
         return {
             "archetype": str(archetype),
@@ -6609,6 +8563,10 @@ class NeuralSymbolicDungeonPipeline:
             start_goal = self._extract_room_start_goal(graph, room_id)
         start, goal = start_goal if start_goal is not None else (None, None)
         semantics = self._extract_room_topology_semantics(graph, room_id)
+        budget = self._resolve_validator_plan_state_budget(
+            attrs=attrs,
+            semantics=semantics,
+        )
         return build_semantic_room_plan_trace(
             np.asarray(room_grid, dtype=np.int32),
             start=start,
@@ -6618,8 +8576,62 @@ class NeuralSymbolicDungeonPipeline:
             outgoing_dirs=semantics["outgoing_dirs"],
             edge_constraint_tokens=semantics["edge_constraints"],
             room_role_flags=self._room_role_flags(attrs),
-            validator_plan_max_states=self.default_validator_plan_max_states,
+            validator_plan_max_states=budget,
         ).astype(np.float32, copy=False)
+
+    def _resolve_validator_plan_state_budget(
+        self,
+        *,
+        attrs: Mapping[str, Any],
+        semantics: Mapping[str, Any],
+    ) -> int:
+        """
+        Adapt the room-local validator plan budget to semantic complexity.
+
+        A single tiny cap for every room is too brittle for richer puzzle rooms,
+        but a truly unbounded local planner is not acceptable in this pipeline
+        because it can explode memory/runtime during export. We therefore scale
+        the budget with room complexity while keeping a hard cap.
+        """
+        base_budget = int(max(32, int(getattr(self, "default_validator_plan_max_states", DEFAULT_VALIDATOR_PLAN_MAX_STATES))))
+        role_flags = self._room_role_flags(dict(attrs))
+        active_roles = sum(1 for enabled in role_flags.values() if bool(enabled))
+        required_doors = sum(
+            1 for enabled in dict(semantics.get("required_doors", {})).values()
+            if bool(enabled)
+        )
+        distinct_tokens: Set[str] = set()
+        for token_set in dict(semantics.get("edge_constraints", {})).values():
+            distinct_tokens.update(str(token).strip().lower() for token in set(token_set or set()))
+        complex_gate_tokens = {
+            "switch",
+            "switch_locked",
+            "state_block",
+            "on_off_gate",
+            "toggle",
+            "bombable",
+            "item_gate",
+            "item_locked",
+            "key_locked",
+            "boss_locked",
+            "combat",
+        }
+        complexity_score = int(active_roles)
+        complexity_score += max(0, int(required_doors) - 2)
+        complexity_score += int(len(distinct_tokens))
+        if bool(distinct_tokens & complex_gate_tokens):
+            complexity_score += 2
+        if bool(role_flags.get("has_puzzle", False)):
+            complexity_score += 1
+        if bool(role_flags.get("has_enemy", False)):
+            complexity_score += 1
+
+        if complexity_score <= 0:
+            return base_budget
+
+        complexity_multiplier = 1.0 + min(3.0, 0.2 * float(complexity_score))
+        hard_cap = max(base_budget, min(4096, int(base_budget * 4)))
+        return int(max(base_budget, min(hard_cap, round(base_budget * complexity_multiplier))))
 
     def _build_room_topology_condition_tensor(
         self,
@@ -6644,6 +8656,10 @@ class NeuralSymbolicDungeonPipeline:
             start_goal = self._extract_room_start_goal(graph, room_id)
         start, goal = start_goal if start_goal is not None else (None, None)
         semantics = self._extract_room_topology_semantics(graph, room_id)
+        budget = self._resolve_validator_plan_state_budget(
+            attrs=attrs,
+            semantics=semantics,
+        )
 
         topo_np = build_room_topology_condition_map(
             start=start,
@@ -6655,7 +8671,7 @@ class NeuralSymbolicDungeonPipeline:
             room_role_flags=self._room_role_flags(attrs),
             semantic_role_prior_strength=self.default_semantic_role_prior_strength,
             semantic_puzzle_offset=self.default_semantic_puzzle_offset,
-            validator_plan_max_states=self.default_validator_plan_max_states,
+            validator_plan_max_states=budget,
         )
         return torch.from_numpy(topo_np).unsqueeze(0).to(device=self.device, dtype=torch.float32)
 
@@ -6716,6 +8732,7 @@ class NeuralSymbolicDungeonPipeline:
             'has_room_anchor': True,
             'mission_graph': mission_graph,
             'current_node_idx': current_node_idx,
+            'puzzle_room_structure_enabled': bool(self.default_puzzle_room_structure_enabled),
             **({'current_node_distance': current_node_distance} if self.use_current_node_distance_features else {}),
             **({'style_id': int(style_id)} if style_id is not None else {}),
             'room_topology_map': self._build_room_topology_condition_tensor(
@@ -7237,6 +9254,10 @@ def generation_runtime_kwargs_from_resolved_config(config: Dict[str, Any]) -> Di
             "puzzle_room_scaffold_enabled",
             True,
         ),
+        "default_puzzle_room_structure_enabled": stage.get(
+            "puzzle_room_structure_enabled",
+            True,
+        ),
         "default_puzzle_room_scaffold_min_structure_tiles": stage.get(
             "puzzle_room_scaffold_min_structure_tiles",
             10,
@@ -7288,6 +9309,10 @@ def generation_runtime_kwargs_from_resolved_config(config: Dict[str, Any]) -> Di
         "default_puzzle_room_novelty_weight": stage.get(
             "puzzle_room_novelty_weight",
             0.45,
+        ),
+        "default_puzzle_room_min_quality_gain": stage.get(
+            "puzzle_room_min_quality_gain",
+            0.5,
         ),
         "default_validator_plan_max_states": stage.get(
             "validator_plan_max_states",
@@ -7404,6 +9429,7 @@ def pipeline_kwargs_from_resolved_config(config: Dict[str, Any]) -> Dict[str, An
                 "spatial_graph_gate_init": diffusion["spatial_graph_gate_init"],
                 "spatial_topology_gate_init": diffusion["spatial_topology_gate_init"],
                 "room_topology_channels": diffusion["room_topology_channels"],
+                "puzzle_structure_dropout_prob": diffusion.get("puzzle_structure_dropout_prob", 0.0),
             },
             "logic_net_fallback_config": {
                 "latent_dim": diffusion["latent_dim"],
@@ -7427,6 +9453,7 @@ def pipeline_kwargs_from_resolved_config(config: Dict[str, Any]) -> Dict[str, An
                 "unet_num_heads": masked_room["unet_num_heads"],
                 "unet_dropout": masked_room["unet_dropout"],
                 "room_topology_channels": masked_room["room_topology_channels"],
+                "puzzle_structure_dropout_prob": masked_room.get("puzzle_structure_dropout_prob", 0.0),
             },
         }
     )
