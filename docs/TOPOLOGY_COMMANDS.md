@@ -143,7 +143,8 @@ Validation interpretation:
 
 - `summary.json` carries the end-to-end aggregate metrics
 - `search_algorithm_comparison.json` carries the canonical validation solver stack
-- the hard oracle is `A* + graph progression + softlock`
+- the report-facing hard oracle is `graph_guided_oracle + graph progression + softlock`
+- monolithic stitched tile-state `A*` is retained as a stricter stress probe
 - CBS is a bounded-rational probe, not the correctness oracle
 
 ## 4. Automatic topology + end-to-end export

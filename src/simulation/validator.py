@@ -130,6 +130,35 @@ EDGE_TYPE_MAP = {
     '': 'open',  # Default for unlabeled edges
 }
 
+
+def _graph_node_role_tokens(node_data: Mapping[str, Any]) -> Set[str]:
+    """Normalize node role hints from heterogeneous graph schemas."""
+    tokens: Set[str] = set()
+    for key in ("type", "label", "node_type", "stage"):
+        raw = str(node_data.get(key, "") or "").strip().lower()
+        if raw:
+            tokens.add(raw)
+    contents = node_data.get("contents", ())
+    if isinstance(contents, (list, tuple, set, frozenset)):
+        for item in contents:
+            raw = str(item or "").strip().lower()
+            if raw:
+                tokens.add(raw)
+    return tokens
+
+
+def _is_graph_start_node(node_data: Mapping[str, Any]) -> bool:
+    if bool(node_data.get("is_start", False)):
+        return True
+    return "start" in _graph_node_role_tokens(node_data)
+
+
+def _is_graph_goal_node(node_data: Mapping[str, Any]) -> bool:
+    if bool(node_data.get("has_triforce", False)) or bool(node_data.get("has_goal", False)):
+        return True
+    tokens = _graph_node_role_tokens(node_data)
+    return bool(tokens & {"goal", "triforce"})
+
 # Action enumeration
 class Action(IntEnum):
     UP = 0
@@ -4958,15 +4987,17 @@ class GraphGuidedValidator:
         
         logger.debug("Normalized %d rooms to %d integer IDs", len(rooms), len(existing_room_ids))
         
-        # Step 1: Find START and TRIFORCE nodes from graph
+        # Step 1: Find START and goal nodes from graph.
+        # Accept both the older explicit flags and the repo's current
+        # START/GOAL typed mission-graph schema used by topology generation.
         start_node = None
         triforce_node = None
         
         for node_id in graph.nodes():
             node_data = graph.nodes[node_id]
-            if node_data.get('is_start', False):
+            if _is_graph_start_node(node_data):
                 start_node = node_id
-            if node_data.get('has_triforce', False):
+            if _is_graph_goal_node(node_data):
                 triforce_node = node_id
         
         if start_node is None or triforce_node is None:
@@ -5141,7 +5172,8 @@ class GraphGuidedValidator:
         
         logger.debug("Edge-type validation: normalized %d rooms to %d IDs", len(rooms), len(existing_room_ids))
         
-        # Find START and TRIFORCE
+        # Find START and goal nodes. Accept both explicit flags and the
+        # topology generator's START/GOAL typed schema.
         start_node = None
         triforce_node = None
         key_nodes = []
@@ -5149,9 +5181,9 @@ class GraphGuidedValidator:
         
         for node_id in graph.nodes():
             node_data = graph.nodes[node_id]
-            if node_data.get('is_start', False):
+            if _is_graph_start_node(node_data):
                 start_node = node_id
-            if node_data.get('has_triforce', False):
+            if _is_graph_goal_node(node_data):
                 triforce_node = node_id
             if node_data.get('has_key', False):
                 key_nodes.append(node_id)

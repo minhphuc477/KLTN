@@ -25,16 +25,17 @@ class GameStateAlgorithmSpec:
     key: str
     label: str
     validation_role: str = "comparison"
+    canonical_use: str = "comparison"
 
 
 GAME_STATE_ALGORITHM_SPECS: Tuple[GameStateAlgorithmSpec, ...] = (
-    GameStateAlgorithmSpec(index=0, key="astar", label="A*", validation_role="oracle"),
-    GameStateAlgorithmSpec(index=1, key="bfs", label="BFS"),
-    GameStateAlgorithmSpec(index=2, key="dijkstra", label="Dijkstra"),
-    GameStateAlgorithmSpec(index=3, key="greedy", label="Greedy"),
-    GameStateAlgorithmSpec(index=4, key="dstar_lite", label="D* Lite"),
-    GameStateAlgorithmSpec(index=5, key="dfs_iddfs", label="DFS/IDDFS"),
-    GameStateAlgorithmSpec(index=6, key="bidirectional_astar", label="Bidirectional A*"),
+    GameStateAlgorithmSpec(index=0, key="astar", label="A*", validation_role="oracle", canonical_use="hard_oracle"),
+    GameStateAlgorithmSpec(index=1, key="bfs", label="BFS", canonical_use="exact_baseline"),
+    GameStateAlgorithmSpec(index=2, key="dijkstra", label="Dijkstra", canonical_use="exact_fallback"),
+    GameStateAlgorithmSpec(index=3, key="greedy", label="Greedy", canonical_use="heuristic_baseline"),
+    GameStateAlgorithmSpec(index=4, key="dstar_lite", label="D* Lite", validation_role="replanning", canonical_use="incremental_replanning"),
+    GameStateAlgorithmSpec(index=5, key="dfs_iddfs", label="DFS/IDDFS", canonical_use="exhaustive_probe"),
+    GameStateAlgorithmSpec(index=6, key="bidirectional_astar", label="Bidirectional A*", canonical_use="comparison"),
 )
 
 SUPPORTED_GAME_STATE_ALGORITHMS: Dict[int, str] = {

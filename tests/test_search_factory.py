@@ -38,6 +38,9 @@ def test_search_factory_exposes_canonical_validation_registry():
         "bidirectional_astar",
     ]
     assert specs[0].validation_role == "oracle"
+    assert specs[0].canonical_use == "hard_oracle"
+    assert specs[4].validation_role == "replanning"
+    assert specs[4].canonical_use == "incremental_replanning"
 
 
 def test_search_factory_runs_advanced_algorithms_on_simple_grid():

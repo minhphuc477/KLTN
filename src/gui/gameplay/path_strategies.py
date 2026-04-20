@@ -415,7 +415,7 @@ def smart_grid_path(
         return False, [], 0
 
     if alg == 4:
-        logger.info("D* Lite selected - using incremental replanning")
+        logger.info("D* Lite selected - using incremental replanning probe (falls back to A* if needed)")
         try:
             from src.simulation.dstar_lite import DStarLiteSolver
 
@@ -428,9 +428,9 @@ def smart_grid_path(
                 algo_label = "D* Lite (fallback: A*)" if getattr(solver, "used_fallback", False) else "D* Lite"
                 logger.info(f"{algo_label} succeeded: path_len={len(display_path)}, nodes={nodes_explored}")
                 return True, display_path, 0
-            logger.warning("D* Lite failed, falling back to A*")
+            logger.warning("D* Lite replanning probe failed, falling back to A*")
         except (ImportError, AttributeError, RuntimeError, ValueError, TypeError) as e:
-            logger.error(f"D* Lite error: {e}, falling back to A*")
+            logger.error(f"D* Lite replanning probe error: {e}, falling back to A*")
 
     def heuristic(a, b):
         if gui.feature_flags.get("ml_heuristic", False) and getattr(gui, "_ml_heuristic", None):

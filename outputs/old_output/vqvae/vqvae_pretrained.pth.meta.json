@@ -1,0 +1,57 @@
+{
+  "format_version": "1.0",
+  "model_type": "vqvae",
+  "checkpoint_file": "vqvae_pretrained.pth",
+  "saved_at_utc": "2026-04-09T22:04:10Z",
+  "file_size_bytes": 70754211,
+  "file_size_human": "67.5 MB",
+  "architecture": {
+    "num_classes": 44,
+    "latent_dim": 64,
+    "hidden_dim": 96,
+    "codebook_size": 512,
+    "commitment_cost": 0.25,
+    "rare_tile_weight": 5.0,
+    "use_ema": true,
+    "use_coordconv": true,
+    "mrf_penalty_weight": 0.05,
+    "num_res_blocks": 2,
+    "encoder_channel_mult": [
+      1,
+      2,
+      4
+    ],
+    "decoder_channel_mult": [
+      4,
+      2,
+      1
+    ],
+    "dead_code_reset_interval": 100,
+    "dead_code_threshold": 0.05,
+    "dead_code_warmup_steps": 500,
+    "protect_active_codes_during_reset": true,
+    "max_dead_code_resets_per_event": 16,
+    "room_level": true
+  },
+  "extra": {
+    "epoch": 285,
+    "loss": 0.00012196181760549894,
+    "accuracy": 1.0,
+    "eval_split": "val",
+    "best_metric_name": "val_loss",
+    "best_metric_value": 0.00017621585528596975,
+    "val_loss": 0.00017621585528596975,
+    "val_recon_loss": 0.00011556045108325937,
+    "val_illegal_adjacency_penalty": 0.0012131080971963665,
+    "val_accuracy": 1.0,
+    "val_perplexity": 42.55523729324341,
+    "codebook_size": 512.0,
+    "codebook_active_codes": 512.0,
+    "codebook_active_codes_gt_1e4": 512.0,
+    "codebook_utilization": 1.0,
+    "codebook_usage_entropy": 6.1096601486206055,
+    "codebook_usage_entropy_normalized": 0.9793751553257639,
+    "ema_live_codes": 476.0,
+    "ema_live_rate": 0.9296875
+  }
+}

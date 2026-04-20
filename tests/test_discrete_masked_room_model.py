@@ -708,6 +708,47 @@ def test_masked_room_trainer_passes_explicit_style_id_into_condition_encoder():
     assert trainer.condition_encoder.captured_style_id == 3
 
 
+def test_masked_room_trainer_appends_stage_tokens_when_enabled():
+    trainer = MaskedRoomTrainer.__new__(MaskedRoomTrainer)
+    trainer.device = torch.device("cpu")
+    trainer.config = type(
+        "Cfg",
+        (),
+        {
+            "graph_conditioning_mode": "node_sequence",
+            "condition_use_reference_room_maps": False,
+            "use_current_node_distance_features": True,
+            "current_node_distance_max": 8,
+            "puzzle_stage_conditioning_enabled": True,
+            "puzzle_stage_token_scale": 0.20,
+        },
+    )()
+    trainer.condition_encoder = _DummyMaskedConditionEncoder(output_dim=8)
+
+    graph_dict = {
+        "node_features": torch.randn(2, 6),
+        "edge_index": torch.tensor([[0], [1]], dtype=torch.long),
+        "edge_attr": torch.tensor([0], dtype=torch.long),
+        "tpe": torch.randn(2, 8),
+        "boundary_constraints": torch.zeros(8, dtype=torch.float32),
+        "room_position": torch.tensor([1.0, 2.0], dtype=torch.float32),
+        "current_node_idx": 0,
+        "puzzle_stage_condition": {
+            "gate_family": "key",
+            "sequence_required": True,
+            "controlled_doors": ["E"],
+            "stage_sequence": [
+                {"stage_index": 0, "kind": "collect_key", "local_anchor": [5, 4]},
+                {"stage_index": 1, "kind": "reach_exit", "local_anchor": [5, 9]},
+            ],
+        },
+    }
+
+    encoded = MaskedRoomTrainer._encode_graph_conditioning(trainer, graph_dict)
+
+    assert tuple(encoded.shape) == (5, 8)
+
+
 def test_masked_room_resume_checkpoint_round_trip(tmp_path):
     config = MaskedRoomTrainingConfig(
         device="cpu",

@@ -304,6 +304,7 @@ def test_prepare_graph_context_and_room_graph_context_include_spatial_topology(p
     assert tuple(graph_data["node_positions"].shape) == (2, 2)
     assert room_graph_context["has_room_anchor"] is True
     assert "room_topology_map" in room_graph_context
+    assert "puzzle_stage_condition" in room_graph_context
     topo = room_graph_context["room_topology_map"]
     assert tuple(topo.shape) == (
         1,
@@ -312,6 +313,7 @@ def test_prepare_graph_context_and_room_graph_context_include_spatial_topology(p
         ROOM_WIDTH,
     )
     assert float(topo[:, 5:11].sum().item()) > 0.0
+    assert room_graph_context["puzzle_stage_condition"]["sequence_required"] is True
 
 
 def test_validate_dungeon_without_map_elites_returns_none():

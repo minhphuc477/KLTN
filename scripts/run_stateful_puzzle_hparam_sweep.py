@@ -94,6 +94,18 @@ def _load_summary(path: Path) -> Dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _json_sanitize(value: Any) -> Any:
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {str(k): _json_sanitize(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_json_sanitize(v) for v in value]
+    if isinstance(value, tuple):
+        return [_json_sanitize(v) for v in value]
+    return value
+
+
 def _profile_score(summary: Mapping[str, Any]) -> float:
     metrics = summary.get("metrics", {}) if isinstance(summary, Mapping) else {}
     validation = summary.get("validation", {}) if isinstance(summary, Mapping) else {}
@@ -258,9 +270,15 @@ def main() -> None:
         "raw_summaries": summaries,
         "best_profile": rows[0]["profile"] if rows else None,
     }
+    payload = _json_sanitize(payload)
     (args.output_dir / "summary.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
     (args.output_dir / "report.md").write_text(_build_report(rows), encoding="utf-8")
-    print(json.dumps({"output": str(args.output_dir / "summary.json"), "best_profile": payload["best_profile"]}, indent=2))
+    print(
+        json.dumps(
+            _json_sanitize({"output": str(args.output_dir / "summary.json"), "best_profile": payload["best_profile"]}),
+            indent=2,
+        )
+    )
 
 
 if __name__ == "__main__":

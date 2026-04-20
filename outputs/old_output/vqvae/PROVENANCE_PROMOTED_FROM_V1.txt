@@ -1,0 +1,18 @@
+Promoted artifact note
+Date: 2026-04-18
+
+This v2 checkpoint was produced by promoting the thesis-safe v1 checkpoint file,
+not by retraining.
+
+Source:
+outputs/vqvae_ablation_codebook512_v1/checkpoints/vqvae/vqvae_pretrained.pth
+
+Target:
+outputs/vqvae_ablation_codebook512_v2/checkpoints/vqvae/vqvae_pretrained.pth
+
+SHA256:
+60896C6EF3F2AFA78C17A4FE5ABD20D77C37DB0352C911EB2A2CF02B2437FEC1
+
+Rationale:
+- Restore compatibility with commands and scripts that expect a v2 path.
+- Keep claim boundaries honest: this does not imply new training evidence.

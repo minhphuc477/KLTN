@@ -730,6 +730,7 @@ class SemanticVQVAE(nn.Module):
         num_res_blocks: int = 2,
         commitment_cost: float = 0.25,
         rare_tile_weight: float = 5.0,
+        use_codebook: bool = True,
         use_ema: bool = True,
         use_coordconv: bool = True,
         mrf_penalty_weight: float = 0.05,
@@ -747,7 +748,8 @@ class SemanticVQVAE(nn.Module):
             codebook_size = int(num_embeddings)
         
         self.num_classes = num_classes
-        self.codebook_size = codebook_size
+        self.use_codebook = bool(use_codebook)
+        self.codebook_size = int(codebook_size) if self.use_codebook else 0
         self.latent_dim = latent_dim
         self.rare_tile_weight = rare_tile_weight
         self.mrf_penalty_weight = float(max(0.0, mrf_penalty_weight))
@@ -764,18 +766,21 @@ class SemanticVQVAE(nn.Module):
             use_coordconv=bool(use_coordconv),
         )
         
-        # Vector Quantizer
-        self.quantizer = VectorQuantizer(
-            num_embeddings=codebook_size,
-            embedding_dim=latent_dim,
-            commitment_cost=commitment_cost,
-            use_ema=use_ema,
-            dead_code_reset_interval=dead_code_reset_interval,
-            dead_code_threshold=dead_code_threshold,
-            dead_code_warmup_steps=dead_code_warmup_steps,
-            protect_active_codes_during_reset=protect_active_codes_during_reset,
-            max_dead_code_resets_per_event=max_dead_code_resets_per_event,
-        )
+        # Vector Quantizer (optional for the no-codebook baseline)
+        if self.use_codebook:
+            self.quantizer = VectorQuantizer(
+                num_embeddings=codebook_size,
+                embedding_dim=latent_dim,
+                commitment_cost=commitment_cost,
+                use_ema=use_ema,
+                dead_code_reset_interval=dead_code_reset_interval,
+                dead_code_threshold=dead_code_threshold,
+                dead_code_warmup_steps=dead_code_warmup_steps,
+                protect_active_codes_during_reset=protect_active_codes_during_reset,
+                max_dead_code_resets_per_event=max_dead_code_resets_per_event,
+            )
+        else:
+            self.quantizer = None
         
         # Decoder
         self.decoder = Decoder(
@@ -835,6 +840,9 @@ class SemanticVQVAE(nn.Module):
 
         return m
 
+    def _empty_indices(self, batch_size: int, height: int, width: int, device: torch.device) -> Tensor:
+        return torch.zeros((batch_size, height, width), dtype=torch.long, device=device)
+
     def _illegal_adjacency_penalty(self, recon_logits: Tensor) -> Tensor:
         """
         Differentiable soft penalty over 3x3 neighborhood illegal adjacencies.
@@ -876,14 +884,23 @@ class SemanticVQVAE(nn.Module):
             indices: Codebook indices [B, H', W']
         """
         z_e = self.encoder(x)
-        z_q, _, indices = self.quantizer(z_e)
-        return z_q, indices
+        if self.use_codebook:
+            z_q, _, indices = self.quantizer(z_e)
+            return z_q, indices
+
+        indices = self._empty_indices(z_e.shape[0], z_e.shape[2], z_e.shape[3], z_e.device)
+        return z_e, indices
 
     def quantize(self, z_e: Tensor | Tuple[Tensor, Any]) -> Tuple[Tensor, Tensor, Tensor]:
         """Backward-compatible quantize helper returning (z_q, vq_loss, indices)."""
         if isinstance(z_e, (tuple, list)):
             z_e = z_e[0]
-        return self.quantizer(z_e)
+        if self.use_codebook:
+            return self.quantizer(z_e)
+
+        indices = self._empty_indices(z_e.shape[0], z_e.shape[2], z_e.shape[3], z_e.device)
+        zero_loss = torch.zeros((), device=z_e.device, dtype=z_e.dtype)
+        return z_e, zero_loss, indices
     
     def decode(
         self, 
@@ -922,6 +939,8 @@ class SemanticVQVAE(nn.Module):
         Returns:
             Output logits [B, C, H, W]
         """
+        if not self.use_codebook or self.quantizer is None:
+            raise RuntimeError("decode_indices is only available when use_codebook=True.")
         z_q = self.quantizer.encode_indices(indices)  # [B, H', W', D]
         z_q = z_q.permute(0, 3, 1, 2).contiguous()   # [B, D, H', W']
         return self.decode(z_q, target_size)
@@ -946,8 +965,18 @@ class SemanticVQVAE(nn.Module):
         # Encode
         z_e = self.encoder(x)
         
-        # Quantize
-        z_q, indices, vq_losses = self.quantizer(z_e, return_info=True)
+        # Quantize or bypass codebook for the no-codebook baseline
+        if self.use_codebook:
+            z_q, indices, vq_losses = self.quantizer(z_e, return_info=True)
+        else:
+            z_q = z_e
+            indices = self._empty_indices(z_e.shape[0], z_e.shape[2], z_e.shape[3], z_e.device)
+            zero = torch.zeros((), device=z_e.device, dtype=z_e.dtype)
+            vq_losses = {
+                'vq_loss': zero,
+                'commitment_loss': zero,
+                'perplexity': zero,
+            }
         
         # Decode
         recon = self.decoder(z_q, target_size=input_size)
@@ -1021,10 +1050,14 @@ class SemanticVQVAE(nn.Module):
     
     def get_codebook(self) -> Tensor:
         """Get the learned codebook embeddings."""
+        if not self.use_codebook or self.quantizer is None:
+            raise RuntimeError("get_codebook is only available when use_codebook=True.")
         return self.quantizer.embedding.weight.data
     
     def get_codebook_usage(self) -> Tensor:
         """Get codebook usage statistics."""
+        if not self.use_codebook or self.quantizer is None:
+            raise RuntimeError("get_codebook_usage is only available when use_codebook=True.")
         return self.quantizer.get_codebook_usage()
 
 
@@ -1137,6 +1170,7 @@ def create_vqvae(
     num_classes: int = 44,
     codebook_size: int = 512,
     latent_dim: int = 64,
+    use_codebook: bool = True,
     **kwargs,
 ) -> SemanticVQVAE:
     """
@@ -1155,5 +1189,6 @@ def create_vqvae(
         num_classes=num_classes,
         codebook_size=codebook_size,
         latent_dim=latent_dim,
+        use_codebook=use_codebook,
         **kwargs,
     )

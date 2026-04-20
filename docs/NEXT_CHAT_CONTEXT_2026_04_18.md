@@ -71,6 +71,27 @@ Main implementation files already patched:
 - `src/evaluation/pcbs_validation.py`
 - `scripts/run_fast_sampler_visual_audit.py`
 
+New on 2026-04-18 / 2026-04-19:
+
+- a `learned staged-puzzle conditioning path` now exists in code
+- shared `puzzle_stage_condition` metadata is built in:
+  - `src/pipeline/room_topology_conditioning.py`
+  - `src/zelda_data/zelda_loader.py`
+- diffusion / masked-room conditioning can now append ordered stage tokens
+- room-topology priors can optionally inject ordered stage traces
+- diffusion / masked-room / fast-sampler training now also have an explicit
+  `puzzle-stage semantics head`
+  - supervised on gate family, sequence-required flag, stage count, and ordered
+    stage slots from generated room logits
+
+Important boundary:
+
+- this closes the `code gap`
+- it does **not** close the `evidence gap`
+- all current checkpoints, including `stageconditioned_v1`, are outdated for
+  any claim about `learned multi-step puzzle semantics` until retrained with
+  the new staged-puzzle flags and semantic-loss branch
+
 ## P-CBS Status
 
 Thesis-safe novelty claim:

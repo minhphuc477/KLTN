@@ -860,8 +860,28 @@ với $y_t$ là nhiễu mục tiêu (hoặc vận tốc $v$ khi bật v-predicti
 Khối V bổ sung tín hiệu logic vào huấn luyện theo cơ chế \emph{warmup} nhằm tránh gây nhiễu khi mô hình chưa ổn định:
 \begin{equation}
 \mathcal{L}_{\text{total}} = \alpha_{\text{visual}}\mathcal{L}_{\text{diff}} +
-\mathbf{1}[e \ge e_{\text{warmup}}] \, \alpha_{\text{logic}}\mathcal{L}_{\text{logic}}.
+\mathbf{1}[e \ge e_{\text{warmup}}] \, \alpha_{\text{logic}}\mathcal{L}_{\text{logic}} +
+\lambda_{\text{stage}}\mathcal{L}_{\text{stage}}.
 \end{equation}
+Ở nhánh tăng cường cho puzzle nhiều bước, $\lambda_{\text{stage}}$ là trọng số của
+mất mát ngữ nghĩa stage được bật có điều kiện. Hạng tử này chỉ hoạt động khi
+batch hiện tại thật sự mang metadata \texttt{puzzle\_stage\_condition} và cấu hình
+huấn luyện bật supervision tương ứng; nếu không, $\lambda_{\text{stage}}=0$.
+Trong triển khai hiện tại, semantic head phụ trợ dự đoán trực tiếp từ room logits
+đã giải mã bốn thuộc tính: họ cổng (\emph{gate family}), cờ
+\emph{sequence-required}, số stage hữu hiệu, và chuỗi stage có thứ tự. Viết gọn:
+\begin{equation}
+\mathcal{L}_{\text{stage}} =
+\mathcal{L}_{\text{gate}} +
+\mathcal{L}_{\text{seq}} +
+\mathcal{L}_{\text{count}} +
+\mathcal{L}_{\text{slot}},
+\end{equation}
+trong đó $\mathcal{L}_{\text{slot}}$ chỉ được cộng trên các vị trí stage hợp lệ
+thực sự tồn tại trong chuỗi mục tiêu. Cấu trúc này biến nhánh diffusion từ
+``được điều kiện hóa bởi stage'' sang ``bị ràng buộc phải tái tạo ngữ nghĩa stage
+đúng thứ tự'' ở ngay tầng logit.
+
 Trong suy luận theo kiểu DDIM, guidance logic tác động trực tiếp lên dự đoán nhiễu:
 \begin{equation}
 \hat{\epsilon}^{\,'}_\theta = \hat{\epsilon}_\theta + \sqrt{1-\bar{\alpha}_t}\,\nabla_{x_t}\mathcal{L}_{\text{logic}},
@@ -904,8 +924,33 @@ Thuật toán \ref{alg:room_repair_feedback} là lớp nối giữa chất lư�
 Trong phiên bản cuối của P-CBS, hai số hạng $\xi$ và $\zeta$ mô hình hóa \emph{progression-affordance memory}: tác tử có thể nhớ lại một cửa khóa, bombable gate hay puzzle anchor đã quan sát trước đó sau khi inventory thay đổi, đồng thời vẫn bị phạt nếu affordance đó không còn được hỗ trợ tốt bởi bộ nhớ làm việc.
 với $R$ là số vòng repair thực thi.
 
+\paragraph{Ngữ pháp puzzle trạng thái nhiều bước ở tầng hậu xử lý.}
+Phiên bản hiện tại của Khối VI không còn xem ``puzzle room'' như một phòng có
+vài vật cản ngẫu nhiên quanh marker ngữ nghĩa. Thay vào đó, tầng hậu xử lý duy
+trì một \emph{puzzle plan} hữu hạn cho từng phòng stateful, trong đó mỗi phòng
+được gắn một chuỗi stage có thứ tự như \texttt{collect\_key},
+\texttt{collect\_item}, \texttt{step\_on\_puzzle} hoặc
+\texttt{push\_block\_to\_switch}. Các stage này được sinh từ ngữ nghĩa cạnh và
+vai trò phòng trong đồ thị nhiệm vụ, sau đó được chuẩn hóa thành metadata dùng
+chung cho cả bộ sinh lẫn validator. Vì vậy, một cửa \texttt{DOOR\_PUZZLE}
+không còn chỉ phụ thuộc vào hình dạng cục bộ của phòng, mà phụ thuộc vào việc
+chuỗi stage tương ứng đã hoàn tất trong trạng thái chơi hay chưa. Thiết kế này
+đưa hệ thống từ ``trang trí puzzle'' sang ``puzzle có tiến trình trạng thái''
+theo hướng hybrid: ngữ pháp và validator chịu trách nhiệm tính đúng, còn mô
+hình nơ-ron chịu trách nhiệm hình học và bề mặt thị giác của phòng.
+
+Trong phiên bản tăng cường gần nhất, cùng metadata stage này còn được dùng ở
+pha huấn luyện như một tín hiệu giám sát tường minh. Cụ thể, nhánh nghiên cứu
+\texttt{stageconditioned\_semantics\_v2} không chỉ nhận stage token và stage
+trace như đầu vào điều kiện hóa, mà còn dùng semantic head phụ trợ để buộc
+room logits sau giải mã dự đoán đúng \emph{gate family}, \emph{sequence-required},
+\emph{stage count} và thứ tự các \emph{stage slots}. Điều này làm cho tuyên bố
+``learned multi-step puzzle semantics'' có cơ sở mô hình học rõ ràng hơn so với
+phiên bản chỉ có hybrid grammar ở runtime. Tuy nhiên, vì các checkpoint cũ không
+có hạng mất mát này, chúng không được dùng như bằng chứng cho tuyên bố trên.
+
 \subsection{Khối xác nhận hậu sinh: oracle cứng, P-CBS và giao thức bàn giao validation (Khối VII)}
-Khối VII là điểm chốt của pipeline sau khi các phòng đã được ghép thành dungeon hoàn chỉnh. Ở đây luận văn tách rõ hai lớp xác nhận có vai trò khác nhau thay vì dùng một bộ giải duy nhất cho mọi mục tiêu: (i) \emph{oracle cứng} để quyết định tính đúng cơ học của dungeon, và (ii) \emph{Persona-Driven Cognitive Bounded Search (P-CBS)} để đo mức ma sát nhận thức của các persona người chơi. Cách tách này phù hợp với thực hành trong automated playtesting: các procedural persona cổ điển chủ yếu dùng MCTS hoặc RL để mô phỏng lối chơi, trong khi các bộ giải trạng thái tối ưu được dùng để kiểm tra tính beatable/solvable về mặt cơ học \cite{holmgard2018proceduralpersonas,ariyurek2023beyondpersonas}. Đối với bài toán dungeon nhiều điều kiện, oracle cứng của luận văn được cố định là tổ hợp \emph{A* trên lưới + graph progression validator + kiểm tra soft-lock quyết định}; còn P-CBS được dùng như lớp đo hành vi giới hạn nhận thức, không thay thế oracle cứng.
+Khối VII là điểm chốt của pipeline sau khi các phòng đã được ghép thành dungeon hoàn chỉnh. Ở đây luận văn tách rõ hai lớp xác nhận có vai trò khác nhau thay vì dùng một bộ giải duy nhất cho mọi mục tiêu: (i) \emph{oracle cứng} để quyết định tính đúng cơ học của dungeon, và (ii) \emph{Persona-Driven Cognitive Bounded Search (P-CBS)} để đo mức ma sát nhận thức của các persona người chơi. Cách tách này phù hợp với thực hành trong automated playtesting: các procedural persona cổ điển chủ yếu dùng MCTS hoặc RL để mô phỏng lối chơi, trong khi các bộ giải trạng thái tối ưu được dùng để kiểm tra tính beatable/solvable về mặt cơ học \cite{holmgard2018proceduralpersonas,ariyurek2023beyondpersonas}. Trong phiên bản hiện tại của hệ thống, oracle cứng được báo cáo theo \emph{hybrid mechanical contract}: \emph{graph-guided room oracle + graph progression validator + kiểm tra soft-lock quyết định}. Phép kiểm A* nguyên khối trên lưới ghép vẫn được giữ lại, nhưng với vai trò \emph{stress probe} nghiêm ngặt hơn vì trên lát cắt puzzle nhiều trạng thái hiện tại nó thường chạm ngưỡng timeout trước khi phủ hết không gian trạng thái.
 
 \paragraph{Hợp đồng bàn giao lưới ghép trước validation.}
 Để tránh việc mô-đun validator nhận đầu vào khác chuẩn so với mô tả học thuật, lưới ghép phải đi qua một bước chuẩn hóa tường minh tương ứng với thủ tục \texttt{PrepareValidationGrid} trong mã nguồn. Bước này thực hiện bốn thao tác hữu hạn: ép kiểu về ma trận số nguyên hai chiều, ánh xạ mọi token ngoài bảng từ điển semantic về tile hợp lệ, lấp các vùng \texttt{VOID} kín không nối với biên ngoài, và chuẩn hóa đúng một cặp \texttt{START}/\texttt{TRIFORCE}. Viết gọn:
@@ -919,12 +964,12 @@ Sau chuẩn hóa, oracle cứng chỉ công nhận dungeon là hợp lệ khi đ
 \begin{equation}
 \phi_{\mathrm{hard}}(D^{\star})=
 \mathbf{1}\!\left[
-\phi_{\mathrm{A*}}(D^{\star}) \land
+\phi_{\mathrm{guided}}(G,D^{\star}) \land
 \phi_{\mathrm{prog}}(G,D^{\star}) \land
 \phi_{\mathrm{softlock}}(D^{\star})
 \right].
 \end{equation}
-Ở đây $\phi_{\mathrm{A*}}$ kiểm tra khả năng đi từ start đến goal trong lưới ghép, $\phi_{\mathrm{prog}}$ kiểm tra tiến trình khóa--cổng--vật phẩm theo đồ thị nhiệm vụ, còn $\phi_{\mathrm{softlock}}$ loại các trường hợp tồn tại ngõ cụt không hồi phục. Việc giữ oracle này ở dạng chính xác giúp luận văn không đánh đồng ``agent người-like thất bại'' với ``dungeon không chơi được''.
+Ở đây $\phi_{\mathrm{guided}}$ kiểm tra rằng đường tiến trình khả thi trong đồ thị nhiệm vụ thật sự đi qua các phòng đã ghép và còn traversable ở mức room-level; $\phi_{\mathrm{prog}}$ kiểm tra tiến trình khóa--cổng--vật phẩm theo đồ thị nhiệm vụ; còn $\phi_{\mathrm{softlock}}$ loại các trường hợp tồn tại ngõ cụt không hồi phục. Phép kiểm A* nguyên khối trên lưới ghép vẫn được ghi nhận riêng như một kiểm tra nghiêm ngặt hơn, nhưng không còn là cổng pass/fail duy nhất của báo cáo. Cách viết này phản ánh đúng kiến trúc graph-first hybrid hiện tại và tránh đánh đồng ``A* timeout trên lưới ghép'' với ``dungeon không chơi được''.
 
 \paragraph{P-CBS như bộ xác nhận hành vi giới hạn nhận thức.}
 Khác với procedural persona kiểu MCTS và các mô hình đường đi có bản đồ nhận thức chủ yếu mô phỏng định tính sự quên/nhầm hướng \cite{holmgard2018proceduralpersonas,rahmani2022humanlikepath,dubey2022cognitivepath}, P-CBS được hiện thực như một tìm kiếm heuristic trên không gian trạng thái tăng cường bởi bộ nhớ làm việc, độ tin cậy tri giác và ngân sách cân nhắc. Đóng góp được luận văn bảo vệ ở đây là một \emph{validator persona-driven tích hợp vào pipeline sinh dungeon}, không phải một họ thuật toán tối ưu tổng quát mới nhằm thay thế A* trong mọi miền bài toán. Với một hành động $a$, hàm tiện ích dùng để xếp hạng nút kế là:
@@ -979,7 +1024,12 @@ Huấn luyện được tổ chức theo chuỗi VQ-VAE $\rightarrow$ Diffusion 
   \Else
     \State $\mathcal{L}_{\text{logic}} \gets 0$
   \EndIf
-  \State $\mathcal{L}_{\text{total}} \gets \alpha_{\text{visual}}\mathcal{L}_{\text{diff}} + \alpha_{\text{logic}}\mathcal{L}_{\text{logic}}$
+  \If{semantic supervision cho puzzle stage được bật}
+    \State Giải mã logits phòng dự đoán và tính $\mathcal{L}_{\text{stage}}$
+  \Else
+    \State $\mathcal{L}_{\text{stage}} \gets 0$
+  \EndIf
+  \State $\mathcal{L}_{\text{total}} \gets \alpha_{\text{visual}}\mathcal{L}_{\text{diff}} + \alpha_{\text{logic}}\mathcal{L}_{\text{logic}} + \lambda_{\text{stage}}\mathcal{L}_{\text{stage}}$
   \If{$\mathcal{L}_{\text{total}}$ hoặc gradient không hữu hạn}
     \State Bỏ qua batch hiện tại, tăng bộ đếm non-finite, tiếp tục batch kế
     \State \textbf{continue}
@@ -995,9 +1045,9 @@ Theo nghĩa phương pháp luận, Thuật toán \ref{alg:train_epoch_diffusion}
 Trong mã nguồn, hai bước gom lô điều kiện và gom lô đồ thị được hiện thực bằng các hàm hỗ trợ đóng gói tensor tương ứng trong luồng huấn luyện diffusion.
 
 \paragraph{Tiêu chí tính đúng, điều kiện dừng và độ phức tạp.}
-Ở bước cập nhật tham số, tính đúng được bảo đảm khi vòng lặp huấn luyện duy trì đồng thời ba bất biến vận hành: hàm mất mát và gradient luôn hữu hạn trên từng mini-batch, tensor điều kiện graph-to-room luôn tuân thủ đúng schema dữ liệu đã đặc tả, và thành phần $\mathcal{L}_{\text{logic}}$ chỉ được kích hoạt sau ngưỡng warmup $e_{\text{warmup}}$. Quá trình lặp dừng một cách tự nhiên khi đã duyệt hết dataloader trong một epoch, tương đương $|\mathcal{D}|$ bước cập nhật. Với mô hình chi phí theo batch, độ phức tạp xấp xỉ:
+Ở bước cập nhật tham số, tính đúng được bảo đảm khi vòng lặp huấn luyện duy trì đồng thời bốn bất biến vận hành: hàm mất mát và gradient luôn hữu hạn trên từng mini-batch, tensor điều kiện graph-to-room luôn tuân thủ đúng schema dữ liệu đã đặc tả, thành phần $\mathcal{L}_{\text{logic}}$ chỉ được kích hoạt sau ngưỡng warmup $e_{\text{warmup}}$, và thành phần $\mathcal{L}_{\text{stage}}$ chỉ được cộng khi batch có metadata stage hợp lệ. Quá trình lặp dừng một cách tự nhiên khi đã duyệt hết dataloader trong một epoch, tương đương $|\mathcal{D}|$ bước cập nhật. Với mô hình chi phí theo batch, độ phức tạp xấp xỉ:
 \begin{equation}
-\mathcal{O}\!\left(|\mathcal{D}|\cdot\left(C_{\text{enc}} + C_{\text{diff}} + \mathbb{I}_{\text{logic}}C_{\text{logic}}\right)\right),
+\mathcal{O}\!\left(|\mathcal{D}|\cdot\left(C_{\text{enc}} + C_{\text{diff}} + \mathbb{I}_{\text{logic}}C_{\text{logic}} + \mathbb{I}_{\text{stage}}C_{\text{stage}}\right)\right),
 \end{equation}
 trong đó $C_{\text{diff}}$ là hạng chi phối.
 
@@ -1340,6 +1390,34 @@ Mục này mô tả ba nhánh thí nghiệm lõi:
 Ba nhánh thí nghiệm lõi bổ sung cho nhau. Fixed-seed ablation giữ topology và seed cố định để nhìn đúng ảnh hưởng của từng khối; matched-budget benchmark khóa số lần đánh giá để so sánh công bằng giữa các chiến lược search; OOD scaling thay đổi quy mô dungeon trong khi giữ nguyên miền logic để xem hệ có còn ổn định hay không. Mỗi nhánh nên được báo cáo với khoảng tin cậy bootstrap để tránh kết luận dựa vào một lần chạy đơn lẻ.
 
 \section{Kết quả định lượng}
+\subsection{Kết quả huấn luyện VQ-VAE nền tảng}
+Sáu cấu hình VQ-VAE được huấn luyện trên cùng ngân sách 300 epoch để tách riêng ảnh hưởng của ba nhóm yếu tố: kích thước codebook, độ rộng hidden layer, và hai thành phần kiến trúc CoordConv/MRF. Khi đọc kết quả, cần phân biệt giữa hai khía cạnh: chất lượng hội tụ tại epoch tốt nhất và độ ổn định của mô hình về cuối quá trình huấn luyện. Bảng dưới đây tóm tắt các chỉ số này; với hai cột loss, giá trị càng thấp càng tốt, còn perplexity cao hơn cho thấy codebook được khai thác đa dạng hơn. Các giá trị tốt nhất theo từng cột được in đậm. Đồng thời, tất cả các run đều đạt codebook utilization 100\%, nên khác biệt quan sát được chủ yếu phản ánh năng lực tối ưu hóa chứ không phải hiện tượng collapse của latent.
+
+\begin{table}[H]
+\centering
+\small
+\setlength{\tabcolsep}{4pt}
+\renewcommand{\arraystretch}{1.08}
+\caption{So sánh sáu cấu hình VQ-VAE trên cùng lịch huấn luyện 300 epoch}
+\label{tab:vqvae_ablation_results}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{@{}lccccc@{}}
+\toprule
+Cấu hình & Epoch tốt nhất & Val loss tốt nhất & Val loss cuối & Perplexity tốt nhất & Sử dụng codebook \\
+\midrule
+Cơ sở & 294 & \textbf{6.93e-5} & \textbf{1.05e-4} & 40.48 & 100\% \\
+Codebook 128 & 161 & 8.82e-5 & 6.90e-4 & 35.89 & 100\% \\
+Codebook 512 & 241 & 2.52e-3 & 5.63e-3 & \textbf{42.34} & 100\% \\
+Hidden 64 & 119 & 7.47e-5 & 1.26e-4 & 40.79 & 100\% \\
+Bỏ CoordConv & 203 & 3.19e-3 & 6.14e-3 & 39.95 & 100\% \\
+Bỏ MRF & 187 & 2.34e-4 & 5.08e-3 & 40.57 & 100\% \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
+Kết quả cho thấy baseline là cấu hình cân bằng nhất: vừa đạt val loss thấp nhất, vừa giữ khoảng cách giữa giá trị tốt nhất và giá trị cuối ở mức nhỏ, nên quá trình hội tụ ổn định hơn so với các biến thể ablation. Hai biến thể hidden 64 và codebook 128 có chất lượng khá gần baseline nhưng không tạo ra cải thiện rõ rệt. Ngược lại, codebook 512 và đặc biệt là việc bỏ CoordConv làm chất lượng hội tụ giảm đáng kể; bỏ MRF cũng làm val loss cuối tăng lên rõ rệt, dù giá trị tốt nhất vẫn còn chấp nhận được. Từ góc nhìn này, CoordConv và MRF là hai thành phần có đóng góp rõ ràng nhất cho độ ổn định của tiền huấn luyện.
+
 \subsection{Kết quả tổng thể so với baseline}
 Trình bày bảng kết quả chính và so sánh định lượng giữa phương pháp đề xuất với các baseline theo từng nhóm chỉ số.
 
@@ -1739,6 +1817,12 @@ Ví dụ minh họa với $T_0=14$, $\Delta=12$, $p_{\text{fb}}=0.25$:
 \mathbb{E}[T_{\text{room}}]=14+0.25\times 12=17.
 \end{equation}
 Điều này cho thấy chi phí kỳ vọng tăng tuyến tính theo xác suất kích hoạt, nhưng đổi lại hệ thống có biên an toàn chất lượng tốt hơn.
+
+\subsection{Kiểm tra định tính nhánh latent liên tục}
+\label{app:latent_visual_check}
+Để xác nhận rằng nhánh diffusion có thể sử dụng trực tiếp một checkpoint Gaussian VAE mà không làm thay đổi pipeline chính, tôi thực hiện một lần chạy smoke ngắn trên checkpoint Gaussian VAE và một lần chạy đối chứng trên checkpoint VQ-VAE cùng cấu hình. Cả hai lần chạy đều sinh ra cặp tệp \texttt{sample\_0000.txt} và \texttt{sample\_0000.png} trong thư mục \texttt{visual\_previews} tương ứng, cho thấy hook tải checkpoint và xuất preview hoạt động đúng cho cả hai loại latent.
+
+Về mặt quan sát định tính, preview từ Gaussian VAE thường trông đều và đối xứng hơn vì latent liên tục cùng thành phần KL có xu hướng làm mượt các dao động cục bộ; ngược lại, preview từ VQ-VAE thường giữ lại nhiều biến thiên rời rạc hơn nên nhìn “bận” hơn. Tuy nhiên, đây chỉ là một mẫu smoke duy nhất và chỉ nên được hiểu như phép kiểm tra tương thích, không phải bằng chứng rằng một mô hình vượt trội hơn mô hình kia trong luận văn.
 
 \clearpage
 \renewcommand{\bibname}{Tài liệu tham khảo}

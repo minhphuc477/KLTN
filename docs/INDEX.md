@@ -1,6 +1,6 @@
 # KLTN Documentation Index
 
-Last updated: 2026-04-17
+Last updated: 2026-04-18
 
 This is the canonical navigation page for `docs/`. The goal is simple:
 
@@ -25,6 +25,18 @@ This is the canonical navigation page for `docs/`. The goal is simple:
   [`TOPOLOGY_COMMANDS.md`](TOPOLOGY_COMMANDS.md)
 - Latest downstream protocol judgment:
   [`DOWNSTREAM_CODEBOOK512_PUZZLE_SUBTYPE_PROTOCOL_RESULTS_2026_04_15.md`](DOWNSTREAM_CODEBOOK512_PUZZLE_SUBTYPE_PROTOCOL_RESULTS_2026_04_15.md)
+- End-to-end evaluation coverage, metric gaps, and latest literature-aligned audit:
+  [`END_TO_END_EVALUATION_PROTOCOL_GAP_AUDIT_2026_04_18.md`](END_TO_END_EVALUATION_PROTOCOL_GAP_AUDIT_2026_04_18.md)
+- Search-algorithm audit and recommendation for the current validator stack:
+  [`SEARCH_ALGORITHM_AUDIT_AND_RECOMMENDATION_2026_04_18.md`](SEARCH_ALGORITHM_AUDIT_AND_RECOMMENDATION_2026_04_18.md)
+- Production finalization review and minimum remaining finish plan:
+  [`PRODUCTION_FINALIZATION_REVIEW_2026_04_18.md`](PRODUCTION_FINALIZATION_REVIEW_2026_04_18.md)
+- Full training / ablation / evaluation command book:
+  [`FULL_TRAINING_ABLATION_AND_EVAL_COMMAND_BOOK_2026_04_18.md`](FULL_TRAINING_ABLATION_AND_EVAL_COMMAND_BOOK_2026_04_18.md)
+- Learned staged-puzzle conditioning upgrade and claim boundary:
+  [`LEARNED_STAGE_PUZZLE_SEMANTICS_UPGRADE_2026_04_18.md`](LEARNED_STAGE_PUZZLE_SEMANTICS_UPGRADE_2026_04_18.md)
+- Artifact / checkpoint status, stale-output alerts, and retraining alerts:
+  [`ARTIFACT_AND_CHECKPOINT_STATUS_2026_04_18.md`](ARTIFACT_AND_CHECKPOINT_STATUS_2026_04_18.md)
 - Auxiliary-branch / hybrid-vs-neural decision audit:
   [`AUXILIARY_BRANCH_AND_NEURAL_SEMANTICS_AUDIT_2026_04_15.md`](AUXILIARY_BRANCH_AND_NEURAL_SEMANTICS_AUDIT_2026_04_15.md)
 - Playability evaluation / CBS research note:
@@ -37,6 +49,8 @@ This is the canonical navigation page for `docs/`. The goal is simple:
   [`FINAL_PROTOCOL_AND_PLAYABILITY_STATUS_2026_04_17.md`](FINAL_PROTOCOL_AND_PLAYABILITY_STATUS_2026_04_17.md)
 - Final architecture verdict, ablation synthesis, and exact training/eval commands:
   [`FINAL_ABLATION_AND_ARCHITECTURE_VERDICT_2026_04_17.md`](FINAL_ABLATION_AND_ARCHITECTURE_VERDICT_2026_04_17.md)
+- New-chat handoff context:
+  [`NEXT_CHAT_CONTEXT_2026_04_18.md`](NEXT_CHAT_CONTEXT_2026_04_18.md)
 - Latest VQ-VAE audit and recommendation:
   [`VQVAE_RESEARCH_AUDIT_2026_04_10.md`](VQVAE_RESEARCH_AUDIT_2026_04_10.md)
 - Broad architecture research audit:

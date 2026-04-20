@@ -61,6 +61,7 @@ from src.core import (
     ROOM_HEIGHT,
     ROOM_WIDTH,
 )
+from src.core.gaussian_vae import create_gaussian_vae
 from src.core.definitions import (
     DOOR_POSITIONS,
     GRAPH_EDGE_FEATURE_DIM,
@@ -117,12 +118,16 @@ from src.pipeline.room_stitching import (
     solve_component_strict_adjacency,
 )
 from src.pipeline.room_topology_conditioning import (
+    DEFAULT_PUZZLE_STAGE_TOKEN_SCALE,
+    DEFAULT_PUZZLE_STAGE_TRACE_DECAY,
     DEFAULT_VALIDATOR_PLAN_MAX_STATES,
     DEFAULT_SEMANTIC_PUZZLE_OFFSET,
     DEFAULT_SEMANTIC_ROLE_PRIOR_STRENGTH,
     ROOM_TOPOLOGY_CHANNEL_COUNT,
     TOPOLOGY_ANCHOR_POLICY_VERSION,
+    apply_puzzle_stage_control_to_conditioning,
     apply_puzzle_structure_control_to_conditioning,
+    build_puzzle_stage_condition_metadata,
     build_room_semantic_anchor_points,
     build_semantic_room_plan_trace,
     build_room_topology_condition_map,
@@ -359,6 +364,8 @@ class NeuralSymbolicDungeonPipeline:
         default_puzzle_room_novelty_weight: float = 0.45,
         default_puzzle_room_min_quality_gain: float = 0.5,
         default_validator_plan_max_states: int = DEFAULT_VALIDATOR_PLAN_MAX_STATES,
+        default_puzzle_stage_topology_enabled: bool = False,
+        default_puzzle_stage_trace_decay: float = DEFAULT_PUZZLE_STAGE_TRACE_DECAY,
         default_deterministic_graph_marker_overlay_enabled: bool = True,
         default_fast_sampler_teacher_fallback_enabled: bool = True,
         default_masked_room_teacher_fallback_enabled: bool = True,
@@ -494,6 +501,10 @@ class NeuralSymbolicDungeonPipeline:
             max(0.0, min(10.0, float(default_puzzle_room_min_quality_gain)))
         )
         self.default_validator_plan_max_states = int(max(32, int(default_validator_plan_max_states)))
+        self.default_puzzle_stage_topology_enabled = bool(default_puzzle_stage_topology_enabled)
+        self.default_puzzle_stage_trace_decay = float(
+            max(0.05, min(1.0, float(default_puzzle_stage_trace_decay)))
+        )
         self.default_deterministic_graph_marker_overlay_enabled = bool(
             default_deterministic_graph_marker_overlay_enabled
         )
@@ -522,8 +533,20 @@ class NeuralSymbolicDungeonPipeline:
         self.diffusion_puzzle_structure_condition_enabled = bool(
             float(self.diffusion_fallback_config.get("puzzle_structure_dropout_prob", 0.0)) > 0.0
         )
+        self.diffusion_puzzle_stage_condition_enabled = bool(
+            self.diffusion_fallback_config.get("puzzle_stage_conditioning_enabled", False)
+        )
+        self.diffusion_puzzle_stage_token_scale = float(
+            max(0.0, float(self.diffusion_fallback_config.get("puzzle_stage_token_scale", DEFAULT_PUZZLE_STAGE_TOKEN_SCALE)))
+        )
         self.masked_room_puzzle_structure_condition_enabled = bool(
             float(self.masked_room_fallback_config.get("puzzle_structure_dropout_prob", 0.0)) > 0.0
+        )
+        self.masked_room_puzzle_stage_condition_enabled = bool(
+            self.masked_room_fallback_config.get("puzzle_stage_conditioning_enabled", False)
+        )
+        self.masked_room_puzzle_stage_token_scale = float(
+            max(0.0, float(self.masked_room_fallback_config.get("puzzle_stage_token_scale", DEFAULT_PUZZLE_STAGE_TOKEN_SCALE)))
         )
         default_curve = topology_default_target_curve
         if default_curve is None:
@@ -863,13 +886,14 @@ class NeuralSymbolicDungeonPipeline:
                 "but this pipeline was initialized without them."
             )
     
-    def _load_vqvae(self, checkpoint_path: Optional[str]) -> SemanticVQVAE:
-        """Load or create VQ-VAE model."""
+    def _load_vqvae(self, checkpoint_path: Optional[str]) -> Any:
+        """Load or create the latent autoencoder used by room generation."""
         use_coordconv = True
         checkpoint: Optional[Dict[str, Any]] = None
         state_dict: Optional[Dict[str, Any]] = None
         metadata: Dict[str, Any] = {}
         checkpoint_config: Dict[str, Any] = {}
+        model_type = "vqvae"
         num_classes = int(np.max(self._valid_semantic_tile_ids_np)) + 1
         latent_dim = 64
         codebook_size = 512
@@ -878,20 +902,23 @@ class NeuralSymbolicDungeonPipeline:
             checkpoint, metadata = self._load_checkpoint_and_metadata(
                 checkpoint_path,
                 "vqvae",
-                accepted_model_types=("diffusion",),
+                accepted_model_types=("diffusion", "gaussian_vae", "gaussian_vae_resume"),
             )
+            model_type = str(metadata.get("model_type", "vqvae")).strip().lower()
             if isinstance(checkpoint, dict):
                 checkpoint_config = self._extract_checkpoint_config(checkpoint)
-                declared_model_type = str(metadata.get("model_type", "")).strip().lower()
-                explicit_vq_state = checkpoint.get("vqvae_state_dict")
-                is_composite_generation_checkpoint = any(
-                    isinstance(checkpoint.get(key), dict)
-                    for key in ("diffusion_state_dict", "condition_encoder_state_dict", "logic_net_state_dict")
-                )
-                if isinstance(explicit_vq_state, dict):
-                    state_dict = explicit_vq_state
-                elif declared_model_type not in {"diffusion"} and not is_composite_generation_checkpoint:
-                    state_dict = self._extract_checkpoint_state_dict(checkpoint)
+                if "gaussian" in model_type:
+                    state_dict = self._extract_checkpoint_state_dict(checkpoint, "model_state_dict")
+                else:
+                    explicit_vq_state = checkpoint.get("vqvae_state_dict")
+                    is_composite_generation_checkpoint = any(
+                        isinstance(checkpoint.get(key), dict)
+                        for key in ("diffusion_state_dict", "condition_encoder_state_dict", "logic_net_state_dict")
+                    )
+                    if isinstance(explicit_vq_state, dict):
+                        state_dict = explicit_vq_state
+                    elif model_type not in {"diffusion"} and not is_composite_generation_checkpoint:
+                        state_dict = self._extract_checkpoint_state_dict(checkpoint)
             architecture = metadata.get("architecture", {}) if isinstance(metadata, dict) else {}
             num_classes = int(
                 checkpoint_config.get(
@@ -901,10 +928,36 @@ class NeuralSymbolicDungeonPipeline:
             )
             latent_dim = int(checkpoint_config.get("latent_dim", latent_dim))
             latent_dim = int(architecture.get("latent_dim", latent_dim))
-            codebook_size = int(checkpoint_config.get("codebook_size", codebook_size))
-            codebook_size = int(architecture.get("codebook_size", codebook_size))
             use_coordconv = bool(checkpoint_config.get("use_coordconv", use_coordconv))
             use_coordconv = bool(architecture.get("use_coordconv", use_coordconv))
+            if "gaussian" in model_type:
+                hidden_dim = int(architecture.get("hidden_dim", checkpoint_config.get("hidden_dim", hidden_dim)))
+                model = create_gaussian_vae(
+                    num_classes=num_classes,
+                    latent_dim=latent_dim,
+                    hidden_dim=hidden_dim,
+                    rare_tile_weight=float(checkpoint_config.get("rare_tile_weight", architecture.get("rare_tile_weight", 5.0))),
+                    kl_weight=float(checkpoint_config.get("kl_weight", architecture.get("kl_weight", 1.0))),
+                    use_coordconv=use_coordconv,
+                    mrf_penalty_weight=float(checkpoint_config.get("mrf_penalty_weight", architecture.get("mrf_penalty_weight", 0.05))),
+                ).to(self.device)
+                if isinstance(state_dict, dict):
+                    incompatible = model.load_state_dict(state_dict, strict=False)
+                    missing = [str(k) for k in getattr(incompatible, 'missing_keys', [])]
+                    unexpected = [str(k) for k in getattr(incompatible, 'unexpected_keys', [])]
+                    if missing or unexpected:
+                        logger.warning(
+                            "Gaussian VAE checkpoint key mismatch. missing=%s unexpected=%s",
+                            missing,
+                            unexpected,
+                        )
+                else:
+                    model.load_state_dict(checkpoint)
+                logger.info(f"Loaded Gaussian VAE from {checkpoint_path}")
+                return model
+
+            codebook_size = int(checkpoint_config.get("codebook_size", codebook_size))
+            codebook_size = int(architecture.get("codebook_size", codebook_size))
             # Backward compatibility: older checkpoints may use plain Conv2d
             # keys (encoder.conv_in.weight) while newer CoordConv checkpoints
             # use encoder.conv_in.conv.weight.
@@ -1211,6 +1264,23 @@ class NeuralSymbolicDungeonPipeline:
         self.diffusion_puzzle_structure_condition_enabled = bool(
             float(checkpoint_config.get("puzzle_structure_dropout_prob", fallback_config.get("puzzle_structure_dropout_prob", 0.0))) > 0.0
         )
+        self.diffusion_puzzle_stage_condition_enabled = bool(
+            checkpoint_config.get(
+                "puzzle_stage_conditioning_enabled",
+                fallback_config.get("puzzle_stage_conditioning_enabled", False),
+            )
+        )
+        self.diffusion_puzzle_stage_token_scale = float(
+            max(
+                0.0,
+                float(
+                    checkpoint_config.get(
+                        "puzzle_stage_token_scale",
+                        fallback_config.get("puzzle_stage_token_scale", DEFAULT_PUZZLE_STAGE_TOKEN_SCALE),
+                    )
+                ),
+            )
+        )
         
         if checkpoint_path and Path(checkpoint_path).exists():
             if not isinstance(checkpoint_state, dict):
@@ -1418,6 +1488,23 @@ class NeuralSymbolicDungeonPipeline:
         ).to(self.device)
         self.masked_room_puzzle_structure_condition_enabled = bool(
             float(checkpoint_config.get("puzzle_structure_dropout_prob", fallback_config.get("puzzle_structure_dropout_prob", 0.0))) > 0.0
+        )
+        self.masked_room_puzzle_stage_condition_enabled = bool(
+            checkpoint_config.get(
+                "puzzle_stage_conditioning_enabled",
+                fallback_config.get("puzzle_stage_conditioning_enabled", False),
+            )
+        )
+        self.masked_room_puzzle_stage_token_scale = float(
+            max(
+                0.0,
+                float(
+                    checkpoint_config.get(
+                        "puzzle_stage_token_scale",
+                        fallback_config.get("puzzle_stage_token_scale", DEFAULT_PUZZLE_STAGE_TOKEN_SCALE),
+                    )
+                ),
+            )
         )
 
         if checkpoint_path and Path(checkpoint_path).exists():
@@ -5536,6 +5623,39 @@ class NeuralSymbolicDungeonPipeline:
                         puzzle_structure_enabled=bool(graph_context.get("puzzle_room_structure_enabled", True)),
                         graph_conditioning_mode="pooled",
                     )
+        puzzle_stage_condition_enabled = (
+            self.masked_room_puzzle_stage_condition_enabled
+            if self.room_generator_mode == "discrete_masked"
+            else self.diffusion_puzzle_stage_condition_enabled
+        )
+        puzzle_stage_token_scale = (
+            self.masked_room_puzzle_stage_token_scale
+            if self.room_generator_mode == "discrete_masked"
+            else self.diffusion_puzzle_stage_token_scale
+        )
+        if puzzle_stage_condition_enabled and isinstance(condition, torch.Tensor):
+            if condition.dim() == 3 and int(condition.shape[0]) == 1:
+                condition = apply_puzzle_stage_control_to_conditioning(
+                    condition.squeeze(0),
+                    puzzle_stage_condition=graph_context.get("puzzle_stage_condition"),
+                    graph_conditioning_mode="node_sequence",
+                    scale=float(puzzle_stage_token_scale),
+                ).unsqueeze(0)
+            elif condition.dim() == 2:
+                if bool(self.use_graph_node_cross_attention):
+                    condition = apply_puzzle_stage_control_to_conditioning(
+                        condition,
+                        puzzle_stage_condition=graph_context.get("puzzle_stage_condition"),
+                        graph_conditioning_mode="node_sequence",
+                        scale=float(puzzle_stage_token_scale),
+                    ).unsqueeze(0)
+                else:
+                    condition = apply_puzzle_stage_control_to_conditioning(
+                        condition,
+                        puzzle_stage_condition=graph_context.get("puzzle_stage_condition"),
+                        graph_conditioning_mode="pooled",
+                        scale=float(puzzle_stage_token_scale),
+                    )
 
         return condition
 
@@ -8672,6 +8792,8 @@ class NeuralSymbolicDungeonPipeline:
             semantic_role_prior_strength=self.default_semantic_role_prior_strength,
             semantic_puzzle_offset=self.default_semantic_puzzle_offset,
             validator_plan_max_states=budget,
+            puzzle_stage_topology_enabled=self.default_puzzle_stage_topology_enabled,
+            puzzle_stage_trace_decay=self.default_puzzle_stage_trace_decay,
         )
         return torch.from_numpy(topo_np).unsqueeze(0).to(device=self.device, dtype=torch.float32)
 
@@ -8722,6 +8844,28 @@ class NeuralSymbolicDungeonPipeline:
             dtype=torch.float32,
             max_distance=self.current_node_distance_max,
         )
+        attrs = dict(mission_graph.nodes[room_id]) if room_id in mission_graph.nodes else {}
+        semantics = self._extract_room_topology_semantics(mission_graph, room_id)
+        room_role_flags = self._room_role_flags(attrs)
+        budget = self._resolve_validator_plan_state_budget(
+            attrs=attrs,
+            semantics=semantics,
+        )
+        puzzle_stage_condition = build_puzzle_stage_condition_metadata(
+            room_shape=(ROOM_HEIGHT, ROOM_WIDTH),
+            start=start_goal[0] if start_goal is not None else None,
+            goal=start_goal[1] if start_goal is not None else None,
+            required_doors=semantics["required_doors"],
+            incoming_dirs=semantics["incoming_dirs"],
+            outgoing_dirs=semantics["outgoing_dirs"],
+            edge_constraint_tokens=semantics["edge_constraints"],
+            room_role_flags=room_role_flags,
+            validator_plan_max_states=budget,
+            semantic_puzzle_offset=self.default_semantic_puzzle_offset,
+            stage_trace_decay=self.default_puzzle_stage_trace_decay,
+        )
+        serialized_stage_condition = dict(puzzle_stage_condition)
+        serialized_stage_condition.pop("stage_trace_mask", None)
         return {
             'node_features': graph_data.get('node_features'),
             'edge_index': graph_data.get('edge_index'),
@@ -8733,6 +8877,7 @@ class NeuralSymbolicDungeonPipeline:
             'mission_graph': mission_graph,
             'current_node_idx': current_node_idx,
             'puzzle_room_structure_enabled': bool(self.default_puzzle_room_structure_enabled),
+            'puzzle_stage_condition': serialized_stage_condition,
             **({'current_node_distance': current_node_distance} if self.use_current_node_distance_features else {}),
             **({'style_id': int(style_id)} if style_id is not None else {}),
             'room_topology_map': self._build_room_topology_condition_tensor(
@@ -9318,6 +9463,14 @@ def generation_runtime_kwargs_from_resolved_config(config: Dict[str, Any]) -> Di
             "validator_plan_max_states",
             DEFAULT_VALIDATOR_PLAN_MAX_STATES,
         ),
+        "default_puzzle_stage_topology_enabled": stage.get(
+            "puzzle_stage_topology_enabled",
+            False,
+        ),
+        "default_puzzle_stage_trace_decay": stage.get(
+            "puzzle_stage_trace_decay",
+            DEFAULT_PUZZLE_STAGE_TRACE_DECAY,
+        ),
         "default_deterministic_graph_marker_overlay_enabled": stage.get(
             "deterministic_graph_marker_overlay_enabled",
             True,
@@ -9430,6 +9583,8 @@ def pipeline_kwargs_from_resolved_config(config: Dict[str, Any]) -> Dict[str, An
                 "spatial_topology_gate_init": diffusion["spatial_topology_gate_init"],
                 "room_topology_channels": diffusion["room_topology_channels"],
                 "puzzle_structure_dropout_prob": diffusion.get("puzzle_structure_dropout_prob", 0.0),
+                "puzzle_stage_conditioning_enabled": diffusion.get("puzzle_stage_conditioning_enabled", False),
+                "puzzle_stage_token_scale": diffusion.get("puzzle_stage_token_scale", DEFAULT_PUZZLE_STAGE_TOKEN_SCALE),
             },
             "logic_net_fallback_config": {
                 "latent_dim": diffusion["latent_dim"],
@@ -9454,6 +9609,8 @@ def pipeline_kwargs_from_resolved_config(config: Dict[str, Any]) -> Dict[str, An
                 "unet_dropout": masked_room["unet_dropout"],
                 "room_topology_channels": masked_room["room_topology_channels"],
                 "puzzle_structure_dropout_prob": masked_room.get("puzzle_structure_dropout_prob", 0.0),
+                "puzzle_stage_conditioning_enabled": masked_room.get("puzzle_stage_conditioning_enabled", False),
+                "puzzle_stage_token_scale": masked_room.get("puzzle_stage_token_scale", DEFAULT_PUZZLE_STAGE_TOKEN_SCALE),
             },
         }
     )

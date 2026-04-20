@@ -30,12 +30,19 @@ from src.optimization.lcm_lora import (
     save_fast_sampler_checkpoint,
 )
 from src.pipeline.room_topology_conditioning import (
+    DEFAULT_PUZZLE_STAGE_TOKEN_SCALE,
+    DEFAULT_PUZZLE_STAGE_TRACE_DECAY,
     DEFAULT_SEMANTIC_PUZZLE_OFFSET,
     DEFAULT_SEMANTIC_ROLE_PRIOR_STRENGTH,
     apply_puzzle_structure_control_to_conditioning,
     apply_puzzle_structure_dropout_batch,
     build_topology_anchor_policy_metadata,
     build_topology_loss_focus_map,
+)
+from src.core.puzzle_stage_semantics import (
+    DEFAULT_PUZZLE_STAGE_MAX_SEQUENCE_LENGTH,
+    DEFAULT_PUZZLE_STAGE_SEMANTICS_HIDDEN_DIM,
+    PuzzleStageSemanticsHead,
 )
 from src.train_diffusion import DiffusionTrainer, DiffusionTrainingConfig
 from src.train_vqvae import split_dataset_for_vqvae_validation
@@ -73,6 +80,13 @@ class FastSamplerTrainingConfig:
         semantic_role_prior_strength: float = DEFAULT_SEMANTIC_ROLE_PRIOR_STRENGTH,
         semantic_puzzle_offset: int = DEFAULT_SEMANTIC_PUZZLE_OFFSET,
         puzzle_structure_dropout_prob: float = 0.35,
+        puzzle_stage_conditioning_enabled: bool = False,
+        puzzle_stage_token_scale: float = DEFAULT_PUZZLE_STAGE_TOKEN_SCALE,
+        puzzle_stage_topology_enabled: bool = False,
+        puzzle_stage_trace_decay: float = DEFAULT_PUZZLE_STAGE_TRACE_DECAY,
+        puzzle_stage_semantics_loss_weight: float = 0.0,
+        puzzle_stage_semantics_hidden_dim: int = DEFAULT_PUZZLE_STAGE_SEMANTICS_HIDDEN_DIM,
+        puzzle_stage_semantics_max_sequence_length: int = DEFAULT_PUZZLE_STAGE_MAX_SEQUENCE_LENGTH,
         epochs: int = 10,
         learning_rate: float = 1e-4,
         optimizer_weight_decay: float = 1e-4,
@@ -117,6 +131,13 @@ class FastSamplerTrainingConfig:
         self.semantic_role_prior_strength = float(max(0.0, min(1.0, semantic_role_prior_strength)))
         self.semantic_puzzle_offset = int(max(0, semantic_puzzle_offset))
         self.puzzle_structure_dropout_prob = float(max(0.0, min(1.0, puzzle_structure_dropout_prob)))
+        self.puzzle_stage_conditioning_enabled = bool(puzzle_stage_conditioning_enabled)
+        self.puzzle_stage_token_scale = float(max(0.0, puzzle_stage_token_scale))
+        self.puzzle_stage_topology_enabled = bool(puzzle_stage_topology_enabled)
+        self.puzzle_stage_trace_decay = float(max(0.05, min(1.0, puzzle_stage_trace_decay)))
+        self.puzzle_stage_semantics_loss_weight = float(max(0.0, puzzle_stage_semantics_loss_weight))
+        self.puzzle_stage_semantics_hidden_dim = int(max(16, puzzle_stage_semantics_hidden_dim))
+        self.puzzle_stage_semantics_max_sequence_length = int(max(1, puzzle_stage_semantics_max_sequence_length))
         self.epochs = 1 if quick else int(epochs)
         self.learning_rate = float(learning_rate)
         self.optimizer_weight_decay = float(max(0.0, optimizer_weight_decay))
@@ -137,11 +158,12 @@ class FastSamplerTrainingConfig:
             "val_loss",
             "val_decode_ce_loss",
             "val_topology_decode_ce_loss",
+            "val_puzzle_stage_semantic_loss",
             "train_loss",
         }:
             raise ValueError(
                 "best_checkpoint_metric must be 'val_loss', 'val_decode_ce_loss', "
-                "'val_topology_decode_ce_loss', or 'train_loss'."
+                "'val_topology_decode_ce_loss', 'val_puzzle_stage_semantic_loss', or 'train_loss'."
             )
         self.save_every = int(max(1, save_every))
         self.keep_last = int(max(0, keep_last))
@@ -190,6 +212,19 @@ def fast_sampler_training_kwargs_from_resolved_config(config: Dict[str, Any]) ->
         "semantic_role_prior_strength": config["generation"]["semantic_role_prior_strength"],
         "semantic_puzzle_offset": config["generation"]["semantic_puzzle_offset"],
         "puzzle_structure_dropout_prob": stage.get("puzzle_structure_dropout_prob", 0.35),
+        "puzzle_stage_conditioning_enabled": stage.get("puzzle_stage_conditioning_enabled", False),
+        "puzzle_stage_token_scale": stage.get("puzzle_stage_token_scale", DEFAULT_PUZZLE_STAGE_TOKEN_SCALE),
+        "puzzle_stage_topology_enabled": stage.get("puzzle_stage_topology_enabled", False),
+        "puzzle_stage_trace_decay": stage.get("puzzle_stage_trace_decay", DEFAULT_PUZZLE_STAGE_TRACE_DECAY),
+        "puzzle_stage_semantics_loss_weight": stage.get("puzzle_stage_semantics_loss_weight", 0.0),
+        "puzzle_stage_semantics_hidden_dim": stage.get(
+            "puzzle_stage_semantics_hidden_dim",
+            DEFAULT_PUZZLE_STAGE_SEMANTICS_HIDDEN_DIM,
+        ),
+        "puzzle_stage_semantics_max_sequence_length": stage.get(
+            "puzzle_stage_semantics_max_sequence_length",
+            DEFAULT_PUZZLE_STAGE_MAX_SEQUENCE_LENGTH,
+        ),
         "epochs": stage["epochs"],
         "learning_rate": stage["learning_rate"],
         "optimizer_weight_decay": stage["optimizer_weight_decay"],
@@ -234,6 +269,16 @@ def _legacy_fast_sampler_overrides_from_args(args: argparse.Namespace) -> Dict[s
     _set("batch_size", getattr(args, "batch_size", None))
     _set("use_vglc", getattr(args, "use_vglc", None))
     _set("puzzle_structure_dropout_prob", getattr(args, "puzzle_structure_dropout_prob", None))
+    _set("puzzle_stage_conditioning_enabled", getattr(args, "puzzle_stage_conditioning_enabled", None))
+    _set("puzzle_stage_token_scale", getattr(args, "puzzle_stage_token_scale", None))
+    _set("puzzle_stage_topology_enabled", getattr(args, "puzzle_stage_topology_enabled", None))
+    _set("puzzle_stage_trace_decay", getattr(args, "puzzle_stage_trace_decay", None))
+    _set("puzzle_stage_semantics_loss_weight", getattr(args, "puzzle_stage_semantics_loss_weight", None))
+    _set("puzzle_stage_semantics_hidden_dim", getattr(args, "puzzle_stage_semantics_hidden_dim", None))
+    _set(
+        "puzzle_stage_semantics_max_sequence_length",
+        getattr(args, "puzzle_stage_semantics_max_sequence_length", None),
+    )
     _set("epochs", getattr(args, "epochs", None))
     _set("learning_rate", getattr(args, "lr", None))
     _set("num_inference_steps", getattr(args, "num_inference_steps", None))
@@ -302,14 +347,27 @@ class ConsistencyLoRATrainer:
         )
         freeze_non_lora_parameters(self.student)
         self.student.train()
+        self.puzzle_stage_semantics_head = PuzzleStageSemanticsHead(
+            num_tile_classes=int(self.base_bundle.vqvae.num_classes),
+            hidden_dim=int(getattr(self.config, "puzzle_stage_semantics_hidden_dim", DEFAULT_PUZZLE_STAGE_SEMANTICS_HIDDEN_DIM)),
+            max_sequence_length=int(
+                getattr(
+                    self.config,
+                    "puzzle_stage_semantics_max_sequence_length",
+                    DEFAULT_PUZZLE_STAGE_MAX_SEQUENCE_LENGTH,
+                )
+            ),
+        ).to(self.device)
 
         self.optimizer = optim.AdamW(
-            [p for p in self.student.parameters() if p.requires_grad],
+            [p for p in self.student.parameters() if p.requires_grad]
+            + list(self.puzzle_stage_semantics_head.parameters()),
             lr=self.config.learning_rate,
             weight_decay=self.config.optimizer_weight_decay,
         )
         self.global_step = 0
-        self.epoch = 0
+        # Keep -1 until the outer training loop assigns the first epoch index.
+        self.epoch = -1
 
         self.target_timesteps = self._build_target_timestep_schedule()
 
@@ -426,6 +484,36 @@ class ConsistencyLoRATrainer:
             dilation=int(getattr(self.config, "topology_focus_dilation", 1)),
         )
 
+    def _puzzle_stage_semantic_loss(
+        self,
+        *,
+        tile_logits: Optional[torch.Tensor],
+        graph_list: Optional[List[dict]],
+    ) -> tuple[torch.Tensor, Dict[str, float]]:
+        if (
+            tile_logits is None
+            or not isinstance(tile_logits, torch.Tensor)
+            or tile_logits.numel() <= 0
+            or not graph_list
+            or float(getattr(self.config, "puzzle_stage_semantics_loss_weight", 0.0)) <= 0.0
+        ):
+            zero = torch.zeros((), device=self.device, dtype=torch.float32)
+            return zero, {
+                "puzzle_stage_semantic_loss": 0.0,
+                "puzzle_stage_gate_loss": 0.0,
+                "puzzle_stage_sequence_loss": 0.0,
+                "puzzle_stage_count_loss": 0.0,
+                "puzzle_stage_slot_loss": 0.0,
+                "puzzle_stage_gate_acc": 0.0,
+                "puzzle_stage_sequence_acc": 0.0,
+                "puzzle_stage_count_acc": 0.0,
+                "puzzle_stage_slot_acc": 0.0,
+            }
+        return self.puzzle_stage_semantics_head.compute_loss(
+            tile_logits,
+            [graph_dict.get("puzzle_stage_condition") if isinstance(graph_dict, dict) else {} for graph_dict in graph_list],
+        )
+
     def distill_step(
         self,
         real_maps: torch.Tensor,
@@ -453,6 +541,19 @@ class ConsistencyLoRATrainer:
         pred_loss = F.mse_loss(student_pred, teacher_pred)
         decode_ce_loss = torch.zeros((), device=self.device, dtype=student_x0.dtype)
         topology_decode_ce_loss = torch.zeros((), device=self.device, dtype=student_x0.dtype)
+        puzzle_stage_semantic_loss = torch.zeros((), device=self.device, dtype=student_x0.dtype)
+        puzzle_stage_semantic_metrics: Dict[str, float] = {
+            "puzzle_stage_semantic_loss": 0.0,
+            "puzzle_stage_gate_loss": 0.0,
+            "puzzle_stage_sequence_loss": 0.0,
+            "puzzle_stage_count_loss": 0.0,
+            "puzzle_stage_slot_loss": 0.0,
+            "puzzle_stage_gate_acc": 0.0,
+            "puzzle_stage_sequence_acc": 0.0,
+            "puzzle_stage_count_acc": 0.0,
+            "puzzle_stage_slot_acc": 0.0,
+        }
+        student_logits = None
         if self.config.decode_alignment_weight > 0.0:
             target_tiles = self._room_tile_targets(real_maps)
             student_logits = self.base_bundle.vqvae.decode(student_x0)
@@ -470,11 +571,18 @@ class ConsistencyLoRATrainer:
                 ce_map = F.cross_entropy(student_logits, target_tiles, reduction="none")
                 denom = focus_map.sum().clamp(min=1.0)
                 topology_decode_ce_loss = (ce_map * focus_map).sum() / denom
+        if student_logits is None and float(getattr(self.config, "puzzle_stage_semantics_loss_weight", 0.0)) > 0.0:
+            student_logits = self.base_bundle.vqvae.decode(student_x0)
+        puzzle_stage_semantic_loss, puzzle_stage_semantic_metrics = self._puzzle_stage_semantic_loss(
+            tile_logits=student_logits,
+            graph_list=graph_list,
+        )
         loss = (
             x0_loss
             + (self.config.prediction_loss_weight * pred_loss)
             + (self.config.decode_alignment_weight * decode_ce_loss)
             + (self.config.topology_alignment_weight * topology_decode_ce_loss)
+            + (float(getattr(self.config, "puzzle_stage_semantics_loss_weight", 0.0)) * puzzle_stage_semantic_loss)
         )
 
         self.optimizer.zero_grad(set_to_none=True)
@@ -493,6 +601,7 @@ class ConsistencyLoRATrainer:
             "prediction_loss": float(pred_loss.item()),
             "decode_ce_loss": float(decode_ce_loss.item()),
             "topology_decode_ce_loss": float(topology_decode_ce_loss.item()),
+            **puzzle_stage_semantic_metrics,
         }
 
     @torch.no_grad()
@@ -510,6 +619,9 @@ class ConsistencyLoRATrainer:
             "val_prediction_loss": 0.0,
             "val_decode_ce_loss": 0.0,
             "val_topology_decode_ce_loss": 0.0,
+            "val_puzzle_stage_semantic_loss": 0.0,
+            "val_puzzle_stage_gate_acc": 0.0,
+            "val_puzzle_stage_slot_acc": 0.0,
         }
         count = 0
         for batch_idx, batch_data in enumerate(dataloader):
@@ -569,6 +681,13 @@ class ConsistencyLoRATrainer:
         pred_loss = F.mse_loss(student_pred, teacher_pred)
         decode_ce_loss = torch.zeros((), device=self.device, dtype=student_x0.dtype)
         topology_decode_ce_loss = torch.zeros((), device=self.device, dtype=student_x0.dtype)
+        puzzle_stage_semantic_loss = torch.zeros((), device=self.device, dtype=student_x0.dtype)
+        puzzle_stage_semantic_metrics: Dict[str, float] = {
+            "puzzle_stage_semantic_loss": 0.0,
+            "puzzle_stage_gate_acc": 0.0,
+            "puzzle_stage_slot_acc": 0.0,
+        }
+        student_logits = None
         if self.config.decode_alignment_weight > 0.0:
             target_tiles = self._room_tile_targets(real_maps)
             student_logits = self.base_bundle.vqvae.decode(student_x0)
@@ -586,11 +705,23 @@ class ConsistencyLoRATrainer:
                 ce_map = F.cross_entropy(student_logits, target_tiles, reduction="none")
                 denom = focus_map.sum().clamp(min=1.0)
                 topology_decode_ce_loss = (ce_map * focus_map).sum() / denom
+        if student_logits is None and float(getattr(self.config, "puzzle_stage_semantics_loss_weight", 0.0)) > 0.0:
+            student_logits = self.base_bundle.vqvae.decode(student_x0)
+        puzzle_stage_semantic_loss, semantic_metrics_full = self._puzzle_stage_semantic_loss(
+            tile_logits=student_logits,
+            graph_list=graph_list,
+        )
+        puzzle_stage_semantic_metrics.update({
+            "puzzle_stage_semantic_loss": semantic_metrics_full.get("puzzle_stage_semantic_loss", 0.0),
+            "puzzle_stage_gate_acc": semantic_metrics_full.get("puzzle_stage_gate_acc", 0.0),
+            "puzzle_stage_slot_acc": semantic_metrics_full.get("puzzle_stage_slot_acc", 0.0),
+        })
         loss = (
             x0_loss
             + (self.config.prediction_loss_weight * pred_loss)
             + (self.config.decode_alignment_weight * decode_ce_loss)
             + (self.config.topology_alignment_weight * topology_decode_ce_loss)
+            + (float(getattr(self.config, "puzzle_stage_semantics_loss_weight", 0.0)) * puzzle_stage_semantic_loss)
         )
         return {
             "val_loss": float(loss.item()),
@@ -598,6 +729,9 @@ class ConsistencyLoRATrainer:
             "val_prediction_loss": float(pred_loss.item()),
             "val_decode_ce_loss": float(decode_ce_loss.item()),
             "val_topology_decode_ce_loss": float(topology_decode_ce_loss.item()),
+            "val_puzzle_stage_semantic_loss": float(puzzle_stage_semantic_metrics["puzzle_stage_semantic_loss"]),
+            "val_puzzle_stage_gate_acc": float(puzzle_stage_semantic_metrics["puzzle_stage_gate_acc"]),
+            "val_puzzle_stage_slot_acc": float(puzzle_stage_semantic_metrics["puzzle_stage_slot_acc"]),
         }
 
     def save_checkpoint(self, path: str, metrics: Optional[Dict[str, Any]] = None) -> None:
@@ -644,6 +778,7 @@ class ConsistencyLoRATrainer:
             "epoch": int(self.epoch),
             "global_step": int(self.global_step),
             "lora_state_dict": extract_lora_state_dict(self.student),
+            "puzzle_stage_semantics_head_state_dict": self.puzzle_stage_semantics_head.state_dict(),
             "optimizer_state_dict": self.optimizer.state_dict(),
             "config": self.config.to_dict(),
             "metrics": dict(metrics or {}),
@@ -679,7 +814,7 @@ class ConsistencyLoRATrainer:
                 "global_step": int(self.global_step),
                 "base_diffusion_checkpoint": str(self.config.base_diffusion_checkpoint),
                 "checkpoint_kind": "resume",
-                "contains": ["lora", "optimizer"],
+                "contains": ["lora", "puzzle_stage_semantics_head", "optimizer"],
                 "topology_anchor_policy": dict(topology_anchor_policy),
             },
         )
@@ -696,6 +831,8 @@ class ConsistencyLoRATrainer:
         if not isinstance(lora_state, dict):
             raise ValueError(f"Invalid fast-sampler resume checkpoint at {path!r}: missing lora_state_dict.")
         load_lora_state_dict(self.student, lora_state, strict=True)
+        if "puzzle_stage_semantics_head_state_dict" in payload:
+            self.puzzle_stage_semantics_head.load_state_dict(payload["puzzle_stage_semantics_head_state_dict"])
         if "optimizer_state_dict" in payload:
             self.optimizer.load_state_dict(payload["optimizer_state_dict"])
         self.epoch = int(payload.get("epoch", 0))
@@ -722,6 +859,8 @@ def _create_fast_sampler_dataloaders(
         topology_supervision_mode=config.topology_supervision_mode,
         semantic_role_prior_strength=config.semantic_role_prior_strength,
         semantic_puzzle_offset=config.semantic_puzzle_offset,
+        puzzle_stage_topology_enabled=config.puzzle_stage_topology_enabled,
+        puzzle_stage_trace_decay=config.puzzle_stage_trace_decay,
     )
     dataset = base_loader.dataset
     train_dataset, val_dataset = split_dataset_for_vqvae_validation(
@@ -759,6 +898,8 @@ def _resolve_fast_sampler_best_metric_name(config: FastSamplerTrainingConfig) ->
         return "val_topology_decode_ce_loss"
     if config.best_checkpoint_metric == "val_decode_ce_loss":
         return "val_decode_ce_loss"
+    if config.best_checkpoint_metric == "val_puzzle_stage_semantic_loss":
+        return "val_puzzle_stage_semantic_loss"
     return "val_loss"
 
 
@@ -1008,6 +1149,13 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--use-vglc", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--puzzle-structure-dropout-prob", type=float, default=None)
+    parser.add_argument("--puzzle-stage-conditioning-enabled", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--puzzle-stage-token-scale", type=float, default=None)
+    parser.add_argument("--puzzle-stage-topology-enabled", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--puzzle-stage-trace-decay", type=float, default=None)
+    parser.add_argument("--puzzle-stage-semantics-loss-weight", type=float, default=None)
+    parser.add_argument("--puzzle-stage-semantics-hidden-dim", type=int, default=None)
+    parser.add_argument("--puzzle-stage-semantics-max-sequence-length", type=int, default=None)
     parser.add_argument("--epochs", type=int, default=None)
     parser.add_argument("--lr", type=float, default=None)
     parser.add_argument("--num-inference-steps", type=int, default=None)
@@ -1023,7 +1171,7 @@ def main() -> None:
     parser.add_argument(
         "--best-checkpoint-metric",
         type=str,
-        choices=("val_loss", "val_decode_ce_loss", "val_topology_decode_ce_loss", "train_loss"),
+        choices=("val_loss", "val_decode_ce_loss", "val_topology_decode_ce_loss", "val_puzzle_stage_semantic_loss", "train_loss"),
         default=None,
     )
     parser.add_argument("--save-every", type=int, default=None)

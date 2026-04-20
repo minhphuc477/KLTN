@@ -21,10 +21,18 @@ from src.core.discrete_masked_model import (
     DiscreteMaskedRoomModel,
     create_discrete_masked_model,
 )
+from src.core.puzzle_stage_semantics import (
+    DEFAULT_PUZZLE_STAGE_MAX_SEQUENCE_LENGTH,
+    DEFAULT_PUZZLE_STAGE_SEMANTICS_HIDDEN_DIM,
+    PuzzleStageSemanticsHead,
+)
 from src.pipeline.room_topology_conditioning import (
+    DEFAULT_PUZZLE_STAGE_TOKEN_SCALE,
+    DEFAULT_PUZZLE_STAGE_TRACE_DECAY,
     DEFAULT_SEMANTIC_ANCHOR_THRESHOLD,
     DEFAULT_SEMANTIC_PUZZLE_OFFSET,
     DEFAULT_SEMANTIC_ROLE_PRIOR_STRENGTH,
+    apply_puzzle_stage_control_to_conditioning,
     apply_puzzle_structure_control_to_conditioning,
     apply_puzzle_structure_dropout_batch,
     build_topology_anchor_policy_metadata,
@@ -114,6 +122,13 @@ class MaskedRoomTrainingConfig:
         semantic_role_prior_strength: float = DEFAULT_SEMANTIC_ROLE_PRIOR_STRENGTH,
         semantic_puzzle_offset: int = DEFAULT_SEMANTIC_PUZZLE_OFFSET,
         puzzle_structure_dropout_prob: float = 0.35,
+        puzzle_stage_conditioning_enabled: bool = False,
+        puzzle_stage_token_scale: float = DEFAULT_PUZZLE_STAGE_TOKEN_SCALE,
+        puzzle_stage_topology_enabled: bool = False,
+        puzzle_stage_trace_decay: float = DEFAULT_PUZZLE_STAGE_TRACE_DECAY,
+        puzzle_stage_semantics_loss_weight: float = 0.0,
+        puzzle_stage_semantics_hidden_dim: int = DEFAULT_PUZZLE_STAGE_SEMANTICS_HIDDEN_DIM,
+        puzzle_stage_semantics_max_sequence_length: int = DEFAULT_PUZZLE_STAGE_MAX_SEQUENCE_LENGTH,
         checkpoint_dir: str = "./checkpoints/masked_room",
         save_every: int = 10,
         keep_last: int = 2,
@@ -220,6 +235,13 @@ class MaskedRoomTrainingConfig:
         self.semantic_role_prior_strength = float(max(0.0, min(1.0, semantic_role_prior_strength)))
         self.semantic_puzzle_offset = int(max(0, semantic_puzzle_offset))
         self.puzzle_structure_dropout_prob = float(max(0.0, min(1.0, puzzle_structure_dropout_prob)))
+        self.puzzle_stage_conditioning_enabled = bool(puzzle_stage_conditioning_enabled)
+        self.puzzle_stage_token_scale = float(max(0.0, puzzle_stage_token_scale))
+        self.puzzle_stage_topology_enabled = bool(puzzle_stage_topology_enabled)
+        self.puzzle_stage_trace_decay = float(max(0.05, min(1.0, puzzle_stage_trace_decay)))
+        self.puzzle_stage_semantics_loss_weight = float(max(0.0, puzzle_stage_semantics_loss_weight))
+        self.puzzle_stage_semantics_hidden_dim = int(max(16, puzzle_stage_semantics_hidden_dim))
+        self.puzzle_stage_semantics_max_sequence_length = int(max(1, puzzle_stage_semantics_max_sequence_length))
         self.checkpoint_dir = str(checkpoint_dir)
         self.save_every = int(save_every)
         self.keep_last = int(max(0, keep_last))
@@ -264,9 +286,9 @@ class MaskedRoomTrainingConfig:
                 "min_mask_ratio must be <= max_mask_ratio. "
                 f"Got {self.min_mask_ratio} > {self.max_mask_ratio}."
             )
-        if self.best_checkpoint_metric not in {"val_loss", "val_topology_focus_loss", "train_loss"}:
+        if self.best_checkpoint_metric not in {"val_loss", "val_topology_focus_loss", "val_puzzle_stage_semantic_loss", "train_loss"}:
             raise ValueError(
-                "best_checkpoint_metric must be 'val_loss', 'val_topology_focus_loss', or 'train_loss'."
+                "best_checkpoint_metric must be 'val_loss', 'val_topology_focus_loss', 'val_puzzle_stage_semantic_loss', or 'train_loss'."
             )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -337,6 +359,19 @@ def masked_room_training_kwargs_from_resolved_config(config: Dict[str, Any]) -> 
         "semantic_role_prior_strength": config["generation"]["semantic_role_prior_strength"],
         "semantic_puzzle_offset": config["generation"]["semantic_puzzle_offset"],
         "puzzle_structure_dropout_prob": stage.get("puzzle_structure_dropout_prob", 0.35),
+        "puzzle_stage_conditioning_enabled": stage.get("puzzle_stage_conditioning_enabled", False),
+        "puzzle_stage_token_scale": stage.get("puzzle_stage_token_scale", DEFAULT_PUZZLE_STAGE_TOKEN_SCALE),
+        "puzzle_stage_topology_enabled": stage.get("puzzle_stage_topology_enabled", False),
+        "puzzle_stage_trace_decay": stage.get("puzzle_stage_trace_decay", DEFAULT_PUZZLE_STAGE_TRACE_DECAY),
+        "puzzle_stage_semantics_loss_weight": stage.get("puzzle_stage_semantics_loss_weight", 0.0),
+        "puzzle_stage_semantics_hidden_dim": stage.get(
+            "puzzle_stage_semantics_hidden_dim",
+            DEFAULT_PUZZLE_STAGE_SEMANTICS_HIDDEN_DIM,
+        ),
+        "puzzle_stage_semantics_max_sequence_length": stage.get(
+            "puzzle_stage_semantics_max_sequence_length",
+            DEFAULT_PUZZLE_STAGE_MAX_SEQUENCE_LENGTH,
+        ),
         "semantic_anchor_threshold": config["generation"]["semantic_anchor_threshold"],
         "checkpoint_dir": stage["checkpoint_dir"],
         "save_every": stage["save_every"],
@@ -406,6 +441,16 @@ def _legacy_masked_room_overrides_from_args(args: argparse.Namespace) -> Dict[st
     _set("validation_max_batches", getattr(args, "validation_max_batches", None))
     _set("best_checkpoint_metric", getattr(args, "best_checkpoint_metric", None))
     _set("puzzle_structure_dropout_prob", getattr(args, "puzzle_structure_dropout_prob", None))
+    _set("puzzle_stage_conditioning_enabled", getattr(args, "puzzle_stage_conditioning_enabled", None))
+    _set("puzzle_stage_token_scale", getattr(args, "puzzle_stage_token_scale", None))
+    _set("puzzle_stage_topology_enabled", getattr(args, "puzzle_stage_topology_enabled", None))
+    _set("puzzle_stage_trace_decay", getattr(args, "puzzle_stage_trace_decay", None))
+    _set("puzzle_stage_semantics_loss_weight", getattr(args, "puzzle_stage_semantics_loss_weight", None))
+    _set("puzzle_stage_semantics_hidden_dim", getattr(args, "puzzle_stage_semantics_hidden_dim", None))
+    _set(
+        "puzzle_stage_semantics_max_sequence_length",
+        getattr(args, "puzzle_stage_semantics_max_sequence_length", None),
+    )
     _set("checkpoint_dir", getattr(args, "checkpoint_dir", None))
     _set("save_every", getattr(args, "save_every", None))
     _set("keep_last", getattr(args, "keep_last", None))
@@ -452,7 +497,15 @@ def _create_masked_room_dataloaders(
         topology_supervision_mode=config.topology_supervision_mode,
         semantic_role_prior_strength=config.semantic_role_prior_strength,
         semantic_puzzle_offset=config.semantic_puzzle_offset,
+        puzzle_stage_topology_enabled=config.puzzle_stage_topology_enabled,
+        puzzle_stage_trace_decay=config.puzzle_stage_trace_decay,
     )
+    try:
+        base_loader_batches = int(len(base_loader))
+    except Exception:
+        base_loader_batches = -1
+    if base_loader_batches == 0:
+        return base_loader, base_loader, "train", 0, 0
     dataset = base_loader.dataset
     train_dataset, val_dataset = split_dataset_for_vqvae_validation(
         dataset,
@@ -487,6 +540,8 @@ def _resolve_masked_room_best_metric_name(config: MaskedRoomTrainingConfig) -> s
         return "train_loss"
     if config.best_checkpoint_metric == "val_topology_focus_loss":
         return "val_topology_focus_loss"
+    if config.best_checkpoint_metric == "val_puzzle_stage_semantic_loss":
+        return "val_puzzle_stage_semantic_loss"
     return "val_loss"
 
 
@@ -535,8 +590,21 @@ class MaskedRoomTrainer:
             reference_embedding_dim=config.condition_reference_embedding_dim,
             reference_hidden_dim=config.condition_reference_hidden_dim,
         )).to(self.device)
+        self.puzzle_stage_semantics_head = PuzzleStageSemanticsHead(
+            num_tile_classes=int(config.num_classes),
+            hidden_dim=int(getattr(config, "puzzle_stage_semantics_hidden_dim", DEFAULT_PUZZLE_STAGE_SEMANTICS_HIDDEN_DIM)),
+            max_sequence_length=int(
+                getattr(
+                    config,
+                    "puzzle_stage_semantics_max_sequence_length",
+                    DEFAULT_PUZZLE_STAGE_MAX_SEQUENCE_LENGTH,
+                )
+            ),
+        ).to(self.device)
         self.optimizer = optim.AdamW(
-            list(self.model.parameters()) + list(self.condition_encoder.parameters()),
+            list(self.model.parameters())
+            + list(self.condition_encoder.parameters())
+            + list(self.puzzle_stage_semantics_head.parameters()),
             lr=config.learning_rate,
             weight_decay=config.optimizer_weight_decay,
         )
@@ -546,7 +614,8 @@ class MaskedRoomTrainer:
             eta_min=config.scheduler_eta_min,
         )
         self.global_step = 0
-        self.epoch = 0
+        # Keep -1 until the outer training loop assigns the first epoch index.
+        self.epoch = -1
 
     @staticmethod
     def _to_token_ids(real_maps: torch.Tensor, num_classes: int) -> torch.Tensor:
@@ -686,6 +755,13 @@ class MaskedRoomTrainer:
                     puzzle_structure_enabled=bool(graph_dict.get("puzzle_room_structure_enabled", True)),
                     graph_conditioning_mode=self.config.graph_conditioning_mode,
                 )
+            if bool(getattr(self.config, "puzzle_stage_conditioning_enabled", False)):
+                conditioning_out = apply_puzzle_stage_control_to_conditioning(
+                    conditioning_out,
+                    puzzle_stage_condition=graph_dict.get("puzzle_stage_condition"),
+                    graph_conditioning_mode=self.config.graph_conditioning_mode,
+                    scale=float(getattr(self.config, "puzzle_stage_token_scale", DEFAULT_PUZZLE_STAGE_TOKEN_SCALE)),
+                )
             return conditioning_out
 
         c_global = self.condition_encoder.encode_global_only(
@@ -709,6 +785,13 @@ class MaskedRoomTrainer:
                     puzzle_structure_enabled=bool(graph_dict.get("puzzle_room_structure_enabled", True)),
                     graph_conditioning_mode=self.config.graph_conditioning_mode,
                 )
+            if bool(getattr(self.config, "puzzle_stage_conditioning_enabled", False)):
+                conditioning_out = apply_puzzle_stage_control_to_conditioning(
+                    conditioning_out,
+                    puzzle_stage_condition=graph_dict.get("puzzle_stage_condition"),
+                    graph_conditioning_mode=self.config.graph_conditioning_mode,
+                    scale=float(getattr(self.config, "puzzle_stage_token_scale", DEFAULT_PUZZLE_STAGE_TOKEN_SCALE)),
+                )
             return conditioning_out
         conditioning_out = c_global.mean(dim=0, keepdim=True)
         if float(getattr(self.config, "puzzle_structure_dropout_prob", 0.0)) > 0.0:
@@ -716,6 +799,13 @@ class MaskedRoomTrainer:
                 conditioning_out,
                 puzzle_structure_enabled=bool(graph_dict.get("puzzle_room_structure_enabled", True)),
                 graph_conditioning_mode=self.config.graph_conditioning_mode,
+            )
+        if bool(getattr(self.config, "puzzle_stage_conditioning_enabled", False)):
+            conditioning_out = apply_puzzle_stage_control_to_conditioning(
+                conditioning_out,
+                puzzle_stage_condition=graph_dict.get("puzzle_stage_condition"),
+                graph_conditioning_mode=self.config.graph_conditioning_mode,
+                scale=float(getattr(self.config, "puzzle_stage_token_scale", DEFAULT_PUZZLE_STAGE_TOKEN_SCALE)),
             )
         return conditioning_out
 
@@ -882,27 +972,68 @@ class MaskedRoomTrainer:
                 trace_weight=float(getattr(self.config, "topology_trace_weight", 0.75)),
                 dilation=int(getattr(self.config, "topology_focus_dilation", 1)),
             )
-        loss, metrics = self.model.training_loss(
-            token_ids,
-            conditioning,
-            graph_data=graph_batch,
-            fixed_tokens=fixed_tokens,
-            fixed_mask=fixed_mask,
-            min_mask_ratio=self.config.min_mask_ratio,
-            max_mask_ratio=self.config.max_mask_ratio,
-            topology_focus_map=topology_focus_map,
-            topology_alignment_weight=float(getattr(self.config, "topology_alignment_weight", 0.0)),
+        need_puzzle_stage_semantics = bool(
+            graph_list and float(getattr(self.config, "puzzle_stage_semantics_loss_weight", 0.0)) > 0.0
         )
+        if need_puzzle_stage_semantics:
+            loss, metrics, aux = self.model.training_loss(
+                token_ids,
+                conditioning,
+                graph_data=graph_batch,
+                fixed_tokens=fixed_tokens,
+                fixed_mask=fixed_mask,
+                min_mask_ratio=self.config.min_mask_ratio,
+                max_mask_ratio=self.config.max_mask_ratio,
+                topology_focus_map=topology_focus_map,
+                topology_alignment_weight=float(getattr(self.config, "topology_alignment_weight", 0.0)),
+                return_aux=True,
+            )
+        else:
+            loss, metrics = self.model.training_loss(
+                token_ids,
+                conditioning,
+                graph_data=graph_batch,
+                fixed_tokens=fixed_tokens,
+                fixed_mask=fixed_mask,
+                min_mask_ratio=self.config.min_mask_ratio,
+                max_mask_ratio=self.config.max_mask_ratio,
+                topology_focus_map=topology_focus_map,
+                topology_alignment_weight=float(getattr(self.config, "topology_alignment_weight", 0.0)),
+            )
+            aux = {}
+        puzzle_stage_semantic_loss = torch.zeros((), device=self.device, dtype=loss.dtype)
+        puzzle_stage_semantic_metrics: Dict[str, float] = {
+            "puzzle_stage_semantic_loss": 0.0,
+            "puzzle_stage_gate_loss": 0.0,
+            "puzzle_stage_sequence_loss": 0.0,
+            "puzzle_stage_count_loss": 0.0,
+            "puzzle_stage_slot_loss": 0.0,
+            "puzzle_stage_gate_acc": 0.0,
+            "puzzle_stage_sequence_acc": 0.0,
+            "puzzle_stage_count_acc": 0.0,
+            "puzzle_stage_slot_acc": 0.0,
+        }
+        if need_puzzle_stage_semantics and isinstance(aux.get("logits"), torch.Tensor):
+            puzzle_stage_semantic_loss, puzzle_stage_semantic_metrics = self.puzzle_stage_semantics_head.compute_loss(
+                aux["logits"],
+                [graph_dict.get("puzzle_stage_condition") if isinstance(graph_dict, dict) else {} for graph_dict in graph_list],
+            )
+        total_loss = loss + float(getattr(self.config, "puzzle_stage_semantics_loss_weight", 0.0)) * puzzle_stage_semantic_loss
         if train:
             self.optimizer.zero_grad()
-            loss.backward()
+            total_loss.backward()
             if self.config.grad_clip_norm > 0:
                 torch.nn.utils.clip_grad_norm_(
-                    list(self.model.parameters()) + list(self.condition_encoder.parameters()),
+                    list(self.model.parameters())
+                    + list(self.condition_encoder.parameters())
+                    + list(self.puzzle_stage_semantics_head.parameters()),
                     max_norm=self.config.grad_clip_norm,
                 )
             self.optimizer.step()
             self.global_step += 1
+        metrics = dict(metrics)
+        metrics["loss"] = float(total_loss.detach().item())
+        metrics.update(puzzle_stage_semantic_metrics)
         return metrics
 
     def _build_resume_checkpoint_payload(self, metrics: Dict[str, Any]) -> Dict[str, Any]:
@@ -917,6 +1048,7 @@ class MaskedRoomTrainer:
             "global_step": int(self.global_step),
             "model_state_dict": self.model.state_dict(),
             "condition_encoder_state_dict": self.condition_encoder.state_dict(),
+            "puzzle_stage_semantics_head_state_dict": self.puzzle_stage_semantics_head.state_dict(),
             "optimizer_state_dict": self.optimizer.state_dict(),
             "scheduler_state_dict": self.scheduler.state_dict(),
             "config": self.config.to_dict(),
@@ -938,6 +1070,7 @@ class MaskedRoomTrainer:
             "global_step": int(self.global_step),
             "model_state_dict": self.model.state_dict(),
             "condition_encoder_state_dict": self.condition_encoder.state_dict(),
+            "puzzle_stage_semantics_head_state_dict": self.puzzle_stage_semantics_head.state_dict(),
             "config": self.config.to_dict(),
             "metrics": dict(metrics),
             "metadata": {
@@ -954,10 +1087,10 @@ class MaskedRoomTrainer:
         atomic_torch_save(payload, path)
         checkpoint_kind = "resume" if include_optimizer else "inference"
         contains = (
-            ["model", "condition_encoder", "optimizer", "scheduler"]
-            if include_optimizer
-            else ["model", "condition_encoder"]
-        )
+                ["model", "condition_encoder", "puzzle_stage_semantics_head", "optimizer", "scheduler"]
+                if include_optimizer
+                else ["model", "condition_encoder", "puzzle_stage_semantics_head"]
+            )
         write_checkpoint_metadata(
             path,
             model_type="masked_room_resume" if include_optimizer else "masked_room_model",
@@ -1012,6 +1145,8 @@ class MaskedRoomTrainer:
         checkpoint = torch.load(path, map_location=self.device, weights_only=False)
         self.model.load_state_dict(checkpoint["model_state_dict"])
         self.condition_encoder.load_state_dict(checkpoint["condition_encoder_state_dict"])
+        if "puzzle_stage_semantics_head_state_dict" in checkpoint:
+            self.puzzle_stage_semantics_head.load_state_dict(checkpoint["puzzle_stage_semantics_head_state_dict"])
         if "optimizer_state_dict" in checkpoint:
             self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
         if "scheduler_state_dict" in checkpoint:
@@ -1037,6 +1172,7 @@ def train_masked_room(config: MaskedRoomTrainingConfig) -> MaskedRoomTrainer:
         param_groups={
             "masked_room_model": count_parameters(trainer.model, trainable_only=True),
             "condition_encoder": count_parameters(trainer.condition_encoder, trainable_only=True),
+            "puzzle_stage_semantics_head": count_parameters(trainer.puzzle_stage_semantics_head, trainable_only=True),
         },
         recommended_config="configs/zelda_hmolqd_masked_small.yaml",
         capacity_knobs=(
@@ -1096,6 +1232,7 @@ def train_masked_room(config: MaskedRoomTrainingConfig) -> MaskedRoomTrainer:
         trainer.epoch = int(epoch)
         trainer.model.train()
         trainer.condition_encoder.train()
+        trainer.puzzle_stage_semantics_head.train()
         train_sum = {
             "loss": 0.0,
             "base_loss": 0.0,
@@ -1103,6 +1240,15 @@ def train_masked_room(config: MaskedRoomTrainingConfig) -> MaskedRoomTrainer:
             "masked_fraction": 0.0,
             "topology_focus_loss": 0.0,
             "topology_focus_fraction": 0.0,
+            "puzzle_stage_semantic_loss": 0.0,
+            "puzzle_stage_gate_loss": 0.0,
+            "puzzle_stage_sequence_loss": 0.0,
+            "puzzle_stage_count_loss": 0.0,
+            "puzzle_stage_slot_loss": 0.0,
+            "puzzle_stage_gate_acc": 0.0,
+            "puzzle_stage_sequence_acc": 0.0,
+            "puzzle_stage_count_acc": 0.0,
+            "puzzle_stage_slot_acc": 0.0,
         }
         train_batches = 0
         for batch in train_loader:
@@ -1121,6 +1267,7 @@ def train_masked_room(config: MaskedRoomTrainingConfig) -> MaskedRoomTrainer:
 
         trainer.model.eval()
         trainer.condition_encoder.eval()
+        trainer.puzzle_stage_semantics_head.eval()
         val_sum = {
             "val_loss": 0.0,
             "val_base_loss": 0.0,
@@ -1128,6 +1275,15 @@ def train_masked_room(config: MaskedRoomTrainingConfig) -> MaskedRoomTrainer:
             "val_masked_fraction": 0.0,
             "val_topology_focus_loss": 0.0,
             "val_topology_focus_fraction": 0.0,
+            "val_puzzle_stage_semantic_loss": 0.0,
+            "val_puzzle_stage_gate_loss": 0.0,
+            "val_puzzle_stage_sequence_loss": 0.0,
+            "val_puzzle_stage_count_loss": 0.0,
+            "val_puzzle_stage_slot_loss": 0.0,
+            "val_puzzle_stage_gate_acc": 0.0,
+            "val_puzzle_stage_sequence_acc": 0.0,
+            "val_puzzle_stage_count_acc": 0.0,
+            "val_puzzle_stage_slot_acc": 0.0,
         }
         val_batches = 0
         with torch.no_grad():
@@ -1140,11 +1296,26 @@ def train_masked_room(config: MaskedRoomTrainingConfig) -> MaskedRoomTrainer:
                 val_sum["val_masked_fraction"] += float(metrics["masked_fraction"])
                 val_sum["val_topology_focus_loss"] += float(metrics.get("topology_focus_loss", 0.0))
                 val_sum["val_topology_focus_fraction"] += float(metrics.get("topology_focus_fraction", 0.0))
+                val_sum["val_puzzle_stage_semantic_loss"] += float(metrics.get("puzzle_stage_semantic_loss", 0.0))
+                val_sum["val_puzzle_stage_gate_loss"] += float(metrics.get("puzzle_stage_gate_loss", 0.0))
+                val_sum["val_puzzle_stage_sequence_loss"] += float(metrics.get("puzzle_stage_sequence_loss", 0.0))
+                val_sum["val_puzzle_stage_count_loss"] += float(metrics.get("puzzle_stage_count_loss", 0.0))
+                val_sum["val_puzzle_stage_slot_loss"] += float(metrics.get("puzzle_stage_slot_loss", 0.0))
+                val_sum["val_puzzle_stage_gate_acc"] += float(metrics.get("puzzle_stage_gate_acc", 0.0))
+                val_sum["val_puzzle_stage_sequence_acc"] += float(metrics.get("puzzle_stage_sequence_acc", 0.0))
+                val_sum["val_puzzle_stage_count_acc"] += float(metrics.get("puzzle_stage_count_acc", 0.0))
+                val_sum["val_puzzle_stage_slot_acc"] += float(metrics.get("puzzle_stage_slot_acc", 0.0))
                 val_batches += 1
                 if batch_idx + 1 >= int(getattr(config, "validation_max_batches", 16)):
                     break
 
-        trainer.scheduler.step()
+        if train_batches > 0:
+            trainer.scheduler.step()
+        else:
+            logger.warning(
+                "Skipping masked-room scheduler step for epoch %d because no train batches were processed.",
+                epoch,
+            )
         epoch_metrics = {
             "epoch": epoch,
             "eval_split": eval_split_name,
@@ -1263,10 +1434,17 @@ def main() -> None:
     parser.add_argument(
         "--best-checkpoint-metric",
         type=str,
-        choices=["val_loss", "val_topology_focus_loss", "train_loss"],
+        choices=["val_loss", "val_topology_focus_loss", "val_puzzle_stage_semantic_loss", "train_loss"],
         default=None,
     )
     parser.add_argument("--puzzle-structure-dropout-prob", type=float, default=None)
+    parser.add_argument("--puzzle-stage-conditioning-enabled", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--puzzle-stage-token-scale", type=float, default=None)
+    parser.add_argument("--puzzle-stage-topology-enabled", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--puzzle-stage-trace-decay", type=float, default=None)
+    parser.add_argument("--puzzle-stage-semantics-loss-weight", type=float, default=None)
+    parser.add_argument("--puzzle-stage-semantics-hidden-dim", type=int, default=None)
+    parser.add_argument("--puzzle-stage-semantics-max-sequence-length", type=int, default=None)
     parser.add_argument("--checkpoint-dir", type=str, default=None)
     parser.add_argument("--save-every", type=int, default=None)
     parser.add_argument("--keep-last", type=int, default=None)

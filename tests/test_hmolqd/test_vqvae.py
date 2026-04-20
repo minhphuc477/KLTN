@@ -230,6 +230,35 @@ class TestSemanticVQVAE:
         recon = model.decode(z_quantized)
         
         assert recon.shape == x.shape
+
+    def test_vqvae_no_codebook_forward(self):
+        """Test plain autoencoder mode with the codebook disabled."""
+        from src.core.vqvae import SemanticVQVAE
+
+        model = SemanticVQVAE(
+            num_tile_classes=44,
+            latent_dim=32,
+            num_embeddings=64,
+            hidden_dims=[16, 32],
+            use_codebook=False,
+        )
+
+        x = torch.randn(2, 44, 16, 11)
+
+        recon, vq_loss, losses = model(x)
+
+        assert recon.shape == x.shape
+        assert vq_loss.ndim == 0
+        assert torch.isclose(vq_loss, torch.zeros_like(vq_loss))
+        assert torch.isclose(losses["perplexity"], torch.zeros_like(losses["perplexity"]))
+
+        z = model.encode(x)
+        z_quantized, quant_loss, indices = model.quantize(z)
+
+        assert z_quantized.shape == z[0].shape
+        assert quant_loss.ndim == 0
+        assert torch.isclose(quant_loss, torch.zeros_like(quant_loss))
+        assert indices.shape[-2:] == z[1].shape[-2:]
     
     def test_vqvae_loss_computation(self):
         """Test loss computation."""

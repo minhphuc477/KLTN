@@ -17,7 +17,7 @@ It answers four questions:
 ## Bottom-Line Verdict
 
 `P-CBS` is **not** defensibly a brand-new universal search family on the level of
-`A*`, `D* Lite`, or MAPF `Conflict-Based Search`.
+`A*`, `D* Lite`, or MAPF `Conflict-Based Search`![1776488807823](image/PCBS_REVIEWER2_NOVELTY_AUDIT_2026_04_17/1776488807823.png).
 
 It is defensibly a **moderately novel bounded-rational persona validator for
 dungeon PCG**, especially when framed as a system contribution:

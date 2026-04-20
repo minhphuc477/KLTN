@@ -1,0 +1,221 @@
+{
+  "search_suite_version": "2026-04-15.validation_search_suite_v2",
+  "search_algorithms": {
+    "search_suite_version": "2026-04-15.validation_search_suite_v2",
+    "mode": "full",
+    "tile_state_space": {
+      "astar": {
+        "success": false,
+        "path_length": 0,
+        "states_explored": 394240,
+        "time_sec": 37.09776189999684,
+        "algorithm": "A*",
+        "validation_role": "oracle",
+        "rules_profile": "vglc_strict",
+        "allow_diagonals": false,
+        "timeout_limit_states": 394240,
+        "failure_reason": "Timeout: explored 394,240 states (limit: 394,240)",
+        "oracle_status": "timeout",
+        "time_taken_ms": 36405.48670000135,
+        "states_pruned_dominated": 1,
+        "max_queue_size": 305409,
+        "path_ratio_vs_astar": null,
+        "states_ratio_vs_astar": null
+      },
+      "bfs": {
+        "success": false,
+        "path_length": 0,
+        "states_explored": 98560,
+        "time_sec": 7.5522787000008975,
+        "algorithm": "BFS",
+        "validation_role": "comparison",
+        "rules_profile": "vglc_strict",
+        "allow_diagonals": false,
+        "timeout_limit_states": 98560,
+        "failure_reason": "Timeout: explored 98,560 states (limit: 98,560)",
+        "solver_status": "timeout",
+        "time_taken_ms": 7374.611500003084,
+        "states_pruned_dominated": 4,
+        "max_queue_size": 81676,
+        "path_ratio_vs_astar": null,
+        "states_ratio_vs_astar": null
+      },
+      "dijkstra": {
+        "success": false,
+        "path_length": 0,
+        "states_explored": 98560,
+        "time_sec": 9.75874610000028,
+        "algorithm": "Dijkstra",
+        "validation_role": "comparison",
+        "rules_profile": "vglc_strict",
+        "allow_diagonals": false,
+        "timeout_limit_states": 98560,
+        "failure_reason": "Timeout: explored 98,560 states (limit: 98,560)",
+        "solver_status": "timeout",
+        "time_taken_ms": 9589.198400004534,
+        "states_pruned_dominated": 0,
+        "max_queue_size": 81682,
+        "path_ratio_vs_astar": null,
+        "states_ratio_vs_astar": null
+      },
+      "greedy": {
+        "success": false,
+        "path_length": 0,
+        "states_explored": 98560,
+        "time_sec": 6.321384899994882,
+        "algorithm": "Greedy",
+        "validation_role": "comparison",
+        "rules_profile": "vglc_strict",
+        "allow_diagonals": false,
+        "timeout_limit_states": 98560,
+        "failure_reason": "Timeout: explored 98,560 states (limit: 98,560)",
+        "solver_status": "timeout",
+        "time_taken_ms": 6281.167599998298,
+        "states_pruned_dominated": 917,
+        "max_queue_size": 6386,
+        "path_ratio_vs_astar": null,
+        "states_ratio_vs_astar": null
+      },
+      "dstar_lite": {
+        "success": false,
+        "path_length": 0,
+        "states_explored": 147840,
+        "time_sec": 14.889027199998964,
+        "algorithm": "D* Lite (fallback: A*)",
+        "validation_role": "comparison",
+        "rules_profile": "vglc_strict",
+        "allow_diagonals": false,
+        "timeout_limit_states": 147840,
+        "fallback_used": true,
+        "replans": 0,
+        "intended_use": "incremental_replanning",
+        "independent_oracle": false,
+        "path_ratio_vs_astar": null,
+        "states_ratio_vs_astar": null
+      },
+      "dfs_iddfs": {
+        "success": false,
+        "path_length": 0,
+        "states_explored": 151391,
+        "time_sec": 4.953276199994434,
+        "algorithm": "DFS/IDDFS",
+        "validation_role": "comparison",
+        "rules_profile": "vglc_strict",
+        "allow_diagonals": false,
+        "timeout_limit_states": 147840,
+        "max_depth_reached": 19,
+        "backtrack_count": 347368,
+        "cycle_detections": 0,
+        "use_iddfs": true,
+        "path_ratio_vs_astar": null,
+        "states_ratio_vs_astar": null
+      },
+      "bidirectional_astar": {
+        "success": false,
+        "path_length": 0,
+        "states_explored": 147840,
+        "time_sec": 14.236602100005257,
+        "algorithm": "Bidirectional A* (fallback: A*)",
+        "validation_role": "comparison",
+        "rules_profile": "vglc_strict",
+        "allow_diagonals": false,
+        "timeout_limit_states": 147840,
+        "fallback_used": true,
+        "meeting_point": null,
+        "collision_checks": 0,
+        "intended_use": "comparison_search",
+        "independent_oracle": false,
+        "path_ratio_vs_astar": null,
+        "states_ratio_vs_astar": null
+      }
+    },
+    "agreement": {
+      "astar_success": false,
+      "bfs_matches_astar_path_length": false,
+      "dijkstra_matches_astar_path_length": false,
+      "greedy_suboptimality_vs_astar": null,
+      "all_algorithms_solved": false
+    },
+    "excluded_algorithms": {
+      "parallel_astar": "Excluded from canonical export validation because multiprocessing adds high runtime overhead and non-trivial platform variance while targeting the same optimality contract as A*.",
+      "multi_goal": "Excluded because end-to-end dungeon validation here is single-goal START->TRIFORCE, not multi-goal routing.",
+      "key_economy_validator": "Excluded because it validates graph-level key economy, not tile/grid playability.",
+      "solver_comparison": "Excluded because it is a benchmark harness, not an independent solver."
+    },
+    "omitted_by_mode": [],
+    "notes": {
+      "oracle": "A* remains the hard grid-level oracle in this suite.",
+      "behavioral_probe": "CBS is reported separately because it is a bounded-rational behavior probe, not the hard correctness oracle."
+    }
+  },
+  "hard_oracle": {
+    "astar_grid": {
+      "solvable": false,
+      "is_valid_syntax": true,
+      "path_length": 0,
+      "reachability": 0.0,
+      "backtracking_score": 0.0,
+      "error_message": "No solution found after exploring 197120 states",
+      "solver_used": "hybrid_astar",
+      "primary_solver_solved": false,
+      "primary_solver_error": "Timeout: explored 197,120 states (limit: 197,120)",
+      "states_explored": 197120
+    },
+    "graph_guided_oracle": {
+      "solvable": false,
+      "graph_path": [],
+      "subgraph_path": [],
+      "missing_rooms": [],
+      "connectivity_score": 0.0,
+      "error_message": "No START or TRIFORCE node found in graph",
+      "room_traversable_count": 0,
+      "room_validation_count": 0
+    },
+    "graph_progression": {
+      "solvable": false,
+      "path_length": 0,
+      "states_explored": 0,
+      "failure_reason": "No start node defined",
+      "goal_gauntlet_valid": true,
+      "goal_gauntlet_errors": [],
+      "virtual_nodes_removed": 0
+    },
+    "softlock_check": {
+      "is_safe": false,
+      "issues": [
+        "1558 grid-level trap tile(s), e.g. [(0, 26), (0, 27), (0, 28), (0, 29), (1, 26)]"
+      ]
+    },
+    "mechanical_contract": {
+      "tile_oracle_solved": false,
+      "graph_guided_solved": false,
+      "graph_progression_solved": false,
+      "goal_gauntlet_valid": true,
+      "softlock_safe": false,
+      "hybrid_oracle_pass": false
+    }
+  },
+  "behavioral_probe": {
+    "cbs_balanced": {
+      "seed": 123,
+      "success": false,
+      "path_length": 36961,
+      "states_explored": 36960,
+      "confusion_ratio_vs_astar": Infinity,
+      "confusion_index": 696.377358490566,
+      "navigation_entropy": 1.9999982352298462,
+      "room_entropy": 1.5235528137168488,
+      "cognitive_load": 1.1252832044575676,
+      "aha_latency": 36905,
+      "deliberation_events": 0,
+      "budget_exhaustion_events": 0,
+      "peak_frustration": 0.8382796174808329,
+      "affordance_reactivations": 5,
+      "affordance_guided_steps": 18456,
+      "inventory_change_events": 1,
+      "focus_switches": 0,
+      "focus_guided_steps": 18496,
+      "status": "budget_exhausted"
+    }
+  }
+}

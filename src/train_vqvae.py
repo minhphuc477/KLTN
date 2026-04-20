@@ -82,6 +82,7 @@ def vqvae_training_kwargs_from_resolved_config(config: Dict[str, Any]) -> Dict[s
         "num_classes": dataset["num_classes"],
         "commitment_cost": stage["commitment_cost"],
         "rare_tile_weight": stage["rare_tile_weight"],
+        "use_codebook": stage.get("use_codebook", True),
         "use_ema": stage["use_ema"],
         "use_coordconv": stage["use_coordconv"],
         "mrf_penalty_weight": stage["mrf_penalty_weight"],
@@ -131,6 +132,7 @@ def _default_vqvae_training_kwargs() -> Dict[str, Any]:
         "num_classes": 44,
         "commitment_cost": 0.25,
         "rare_tile_weight": 5.0,
+        "use_codebook": True,
         "use_ema": True,
         "use_coordconv": True,
         "mrf_penalty_weight": 0.05,
@@ -187,6 +189,7 @@ def _legacy_vqvae_overrides_from_args(args: argparse.Namespace) -> Dict[str, Any
     _set("num_classes", getattr(args, "num_classes", None))
     _set("commitment_cost", getattr(args, "commitment_cost", None))
     _set("rare_tile_weight", getattr(args, "rare_tile_weight", None))
+    _set("use_codebook", getattr(args, "use_codebook", None))
     _set("use_ema", getattr(args, "use_ema", None))
     _set("use_coordconv", getattr(args, "use_coordconv", None))
     _set("mrf_penalty_weight", getattr(args, "mrf_penalty_weight", None))
@@ -448,6 +451,7 @@ def train_vqvae(args):
         hidden_dim=int(getattr(args, "hidden_dim", 128)),
         commitment_cost=float(getattr(args, "commitment_cost", 0.25)),
         rare_tile_weight=float(getattr(args, "rare_tile_weight", 5.0)),
+        use_codebook=bool(getattr(args, "use_codebook", True)),
         use_ema=bool(getattr(args, "use_ema", True)),
         use_coordconv=bool(args.use_coordconv),
         mrf_penalty_weight=float(args.mrf_penalty_weight),
@@ -515,6 +519,10 @@ def train_vqvae(args):
     # ------------------------------------------------------------------
     save_dir = Path(args.save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
+
+    use_codebook = bool(getattr(args, "use_codebook", True))
+    checkpoint_model_type = "vqvae" if use_codebook else "autoencoder"
+    checkpoint_resume_type = f"{checkpoint_model_type}_resume"
 
     history = []
 
@@ -633,12 +641,13 @@ def train_vqvae(args):
             atomic_torch_save(best_payload, str(save_path))
             write_checkpoint_metadata(
                 str(save_path),
-                model_type="vqvae",
+                model_type=checkpoint_model_type,
                 architecture={
                     "num_classes": int(num_classes),
                     "latent_dim": int(args.latent_dim),
                     "hidden_dim": int(getattr(args, "hidden_dim", 128)),
                     "codebook_size": int(args.codebook_size),
+                    "use_codebook": bool(use_codebook),
                     "commitment_cost": float(getattr(args, "commitment_cost", 0.25)),
                     "rare_tile_weight": float(getattr(args, "rare_tile_weight", 5.0)),
                     "use_ema": bool(getattr(args, "use_ema", True)),
@@ -686,12 +695,13 @@ def train_vqvae(args):
         atomic_torch_save(resume_payload, str(latest_resume))
         write_checkpoint_metadata(
             str(latest_resume),
-            model_type="vqvae_resume",
+            model_type=checkpoint_resume_type,
             architecture={
                 "num_classes": int(num_classes),
                 "latent_dim": int(args.latent_dim),
                 "hidden_dim": int(getattr(args, "hidden_dim", 128)),
                 "codebook_size": int(args.codebook_size),
+                "use_codebook": bool(use_codebook),
                 "commitment_cost": float(getattr(args, "commitment_cost", 0.25)),
                 "rare_tile_weight": float(getattr(args, "rare_tile_weight", 5.0)),
                 "use_ema": bool(getattr(args, "use_ema", True)),
@@ -727,12 +737,13 @@ def train_vqvae(args):
             atomic_torch_save(resume_payload, str(periodic))
             write_checkpoint_metadata(
                 str(periodic),
-                model_type="vqvae_resume",
+                model_type=checkpoint_resume_type,
                 architecture={
                     "num_classes": int(num_classes),
                     "latent_dim": int(args.latent_dim),
                     "hidden_dim": int(getattr(args, "hidden_dim", 128)),
                     "codebook_size": int(args.codebook_size),
+                    "use_codebook": bool(use_codebook),
                     "commitment_cost": float(getattr(args, "commitment_cost", 0.25)),
                     "rare_tile_weight": float(getattr(args, "rare_tile_weight", 5.0)),
                     "use_ema": bool(getattr(args, "use_ema", True)),
@@ -809,6 +820,8 @@ def main():
     parser.add_argument("--num-classes", type=int, default=None)
     parser.add_argument("--commitment-cost", type=float, default=None)
     parser.add_argument("--rare-tile-weight", type=float, default=None)
+    parser.add_argument("--use-codebook", action=argparse.BooleanOptionalAction, default=None,
+                        help="Enable the VQ codebook. Disable this to train a plain autoencoder baseline.")
     parser.add_argument("--use-ema", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--use-coordconv", action=argparse.BooleanOptionalAction, default=None,
                         help="Use CoordConv in first VQ-VAE encoder layer.")

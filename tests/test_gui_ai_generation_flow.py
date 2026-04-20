@@ -1,4 +1,5 @@
-﻿import threading
+﻿import json
+import threading
 from pathlib import Path
 
 import numpy as np
@@ -178,6 +179,32 @@ def test_resolve_vqvae_checkpoint_prefers_stage_sibling_pretrain_for_diffusion_c
     resolved = generation_pipeline._resolve_vqvae_checkpoint_for_generation(diffusion_ckpt)
 
     assert resolved == stage_vqvae
+
+
+def test_resolve_vqvae_checkpoint_prefers_metadata_latent_checkpoint_for_gaussian_diffusion(tmp_path):
+    diffusion_ckpt = tmp_path / "checkpoints" / "diffusion" / "best_model.pth"
+    gaussian_ckpt = tmp_path / "checkpoints" / "gaussian_vae" / "gaussian_vae_pretrained.pth"
+    gaussian_resume = gaussian_ckpt.with_name("latest_resume.pth")
+    diffusion_ckpt.parent.mkdir(parents=True)
+    gaussian_ckpt.parent.mkdir(parents=True)
+
+    torch.save({"diffusion_state_dict": {"weight": torch.tensor(1.0)}}, diffusion_ckpt)
+    torch.save({"model_state_dict": {"weight": torch.tensor(2.0)}}, gaussian_ckpt)
+    torch.save({"model_state_dict": {"weight": torch.tensor(3.0)}}, gaussian_resume)
+    diffusion_ckpt.with_suffix(".pth.meta.json").write_text(
+        json.dumps(
+            {
+                "format_version": "1.0",
+                "model_type": "diffusion",
+                "extra": {"vqvae_checkpoint": str(gaussian_ckpt), "latent_autoencoder_model_type": "gaussian_vae"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    resolved = generation_pipeline._resolve_vqvae_checkpoint_for_generation(diffusion_ckpt)
+
+    assert resolved == gaussian_ckpt
 
 
 def test_generate_dungeon_with_pipeline_uses_canonical_roomwise_generation():

@@ -512,7 +512,8 @@ class DiscreteMaskedRoomModel(nn.Module):
         max_mask_ratio: float = 0.90,
         topology_focus_map: Optional[Tensor] = None,
         topology_alignment_weight: float = 0.0,
-    ) -> Tuple[Tensor, Dict[str, float]]:
+        return_aux: bool = False,
+    ) -> Tuple[Tensor, Dict[str, float]] | Tuple[Tensor, Dict[str, float], Dict[str, Tensor]]:
         target = target_tokens.long()
         if target.dim() == 2:
             target = target.unsqueeze(0)
@@ -582,6 +583,13 @@ class DiscreteMaskedRoomModel(nn.Module):
             "topology_focus_loss": float(topology_focus_loss.item()),
             "topology_focus_fraction": float(topology_focus_fraction.item()),
         }
+        if return_aux:
+            return loss, metrics, {
+                "logits": logits,
+                "train_mask": train_mask,
+                "masked_tokens": masked_tokens,
+                "step": step,
+            }
         return loss, metrics
 
     @torch.no_grad()

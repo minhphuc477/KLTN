@@ -91,6 +91,11 @@ def _summarize_protocol_variants(aggregate: Mapping[str, Any]) -> Dict[str, Dict
             "avg_final_graph_marker_overwrite_rate": _safe_float(
                 payload_dict.get("avg_final_graph_marker_overwrite_rate", 0.0)
             ),
+            "avg_room_unique_ratio": _safe_optional_float(payload_dict.get("avg_room_unique_ratio")),
+            "avg_room_pairwise_ncd_mean": _safe_optional_float(payload_dict.get("avg_room_pairwise_ncd_mean")),
+            "avg_room_nearest_reference_ncd_mean": _safe_optional_float(
+                payload_dict.get("avg_room_nearest_reference_ncd_mean")
+            ),
             "avg_final_pre_overlay_semantic_anchor_error": _safe_float(
                 payload_dict.get("avg_final_pre_overlay_semantic_anchor_error", 0.0)
             ),
@@ -127,9 +132,18 @@ def _render_markdown(report: Mapping[str, Any]) -> str:
     for variant_name, payload in report["fixed_graph_protocol"]["variants"].items():
         cbs_confusion = payload["avg_cbs_confusion_ratio_vs_astar"]
         cbs_confusion_str = f"{cbs_confusion:.4f}" if isinstance(cbs_confusion, (int, float)) else "n/a"
+        room_unique_ratio = payload["avg_room_unique_ratio"]
+        room_unique_ratio_str = f"{room_unique_ratio:.4f}" if isinstance(room_unique_ratio, (int, float)) else "n/a"
+        room_pairwise_ncd = payload["avg_room_pairwise_ncd_mean"]
+        room_pairwise_ncd_str = f"{room_pairwise_ncd:.4f}" if isinstance(room_pairwise_ncd, (int, float)) else "n/a"
+        room_reference_ncd = payload["avg_room_nearest_reference_ncd_mean"]
+        room_reference_ncd_str = f"{room_reference_ncd:.4f}" if isinstance(room_reference_ncd, (int, float)) else "n/a"
         lines.append(
             f"- `{variant_name}`: repair={payload['avg_repair_rate']:.4f}, "
                 f"overwrite={payload['avg_final_graph_marker_overwrite_rate']:.4f}, "
+                f"room_unique={room_unique_ratio_str}, "
+                f"room_pairwise_ncd={room_pairwise_ncd_str}, "
+                f"room_ref_ncd={room_reference_ncd_str}, "
                 f"pre_anchor={payload['avg_final_pre_overlay_semantic_anchor_error']:.4f}, "
                 f"post_anchor={payload['avg_final_post_overlay_semantic_anchor_error']:.4f}, "
                 f"A*={payload['astar_grid_solvable_rate']:.4f}, "

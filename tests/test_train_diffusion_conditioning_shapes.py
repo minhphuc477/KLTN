@@ -474,6 +474,37 @@ def test_encode_graph_conditioning_prepends_default_anchor_for_plain_graph_sampl
     assert trainer.condition_encoder.encode_global_only_calls == 1
 
 
+def test_encode_graph_conditioning_appends_stage_tokens_when_enabled():
+    trainer = DiffusionTrainer.__new__(DiffusionTrainer)
+    trainer.config = SimpleNamespace(
+        graph_conditioning_mode="node_sequence",
+        context_dim=8,
+        condition_use_reference_room_maps=False,
+        puzzle_stage_conditioning_enabled=True,
+        puzzle_stage_token_scale=0.20,
+    )
+    trainer.device = torch.device("cpu")
+    trainer.condition_encoder = _DummyRoomAwareConditionEncoder(output_dim=8)
+    trainer.encode_to_latent = lambda room_map: torch.full((1, 4, 2, 2), 1.0, dtype=torch.float32)
+
+    graph_dict = _make_room_condition_graph_dict(
+        puzzle_stage_condition={
+            "gate_family": "switch",
+            "sequence_required": True,
+            "controlled_doors": ["E"],
+            "stage_sequence": [
+                {"stage_index": 0, "kind": "push_block_to_switch", "local_anchor": [5, 5]},
+                {"stage_index": 1, "kind": "reach_exit", "local_anchor": [5, 9]},
+            ],
+        },
+    )
+
+    encoded = DiffusionTrainer._encode_graph_conditioning(trainer, graph_dict)
+
+    assert tuple(encoded.shape) == (5, 8)
+    assert not torch.allclose(encoded[-1], encoded[-2])
+
+
 def test_get_dummy_conditioning_returns_deterministic_null_conditioning():
     trainer = DiffusionTrainer.__new__(DiffusionTrainer)
     trainer.config = SimpleNamespace(graph_conditioning_mode="node_sequence", context_dim=8)

@@ -201,6 +201,36 @@ def _aggregate_variant(entries: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
         1.0 if bool(entry.get("validation", {}).get("mechanical_contract", {}).get("hybrid_oracle_pass", False)) else 0.0
         for entry in entries
     ]
+    room_unique_ratios = [
+        float(entry.get("end_to_end_evaluation", {}).get("room_unique_ratio"))
+        for entry in entries
+        if entry.get("end_to_end_evaluation", {}).get("room_unique_ratio") is not None
+        and math.isfinite(float(entry.get("end_to_end_evaluation", {}).get("room_unique_ratio")))
+    ]
+    room_pairwise_ncd_means = [
+        float(entry.get("end_to_end_evaluation", {}).get("room_pairwise_ncd", {}).get("mean"))
+        for entry in entries
+        if entry.get("end_to_end_evaluation", {}).get("room_pairwise_ncd", {}).get("mean") is not None
+        and math.isfinite(float(entry.get("end_to_end_evaluation", {}).get("room_pairwise_ncd", {}).get("mean")))
+    ]
+    room_reference_ncd_means = [
+        float(entry.get("end_to_end_evaluation", {}).get("room_nearest_reference_ncd", {}).get("mean"))
+        for entry in entries
+        if entry.get("end_to_end_evaluation", {}).get("room_nearest_reference_ncd", {}).get("mean") is not None
+        and math.isfinite(float(entry.get("end_to_end_evaluation", {}).get("room_nearest_reference_ncd", {}).get("mean")))
+    ]
+    room_symbol_entropy_means = [
+        float(entry.get("end_to_end_evaluation", {}).get("room_symbol_entropy_mean"))
+        for entry in entries
+        if entry.get("end_to_end_evaluation", {}).get("room_symbol_entropy_mean") is not None
+        and math.isfinite(float(entry.get("end_to_end_evaluation", {}).get("room_symbol_entropy_mean")))
+    ]
+    dungeon_symbol_entropy = [
+        float(entry.get("end_to_end_evaluation", {}).get("dungeon_symbol_entropy_non_void"))
+        for entry in entries
+        if entry.get("end_to_end_evaluation", {}).get("dungeon_symbol_entropy_non_void") is not None
+        and math.isfinite(float(entry.get("end_to_end_evaluation", {}).get("dungeon_symbol_entropy_non_void")))
+    ]
     room_hash_signatures = [
         "|".join(f"{room_id}:{digest}" for room_id, digest in sorted(entry["room_hashes"].items()))
         for entry in entries
@@ -333,6 +363,11 @@ def _aggregate_variant(entries: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
         "avg_cbs_focus_switches": _safe_mean(cbs_focus_switches),
         "avg_cbs_focus_guided_steps": _safe_mean(cbs_focus_guided_steps),
         "goal_gauntlet_valid_rate": _safe_mean(goal_gauntlet_valid),
+        "avg_room_unique_ratio": _safe_mean_or_none(room_unique_ratios),
+        "avg_room_pairwise_ncd_mean": _safe_mean_or_none(room_pairwise_ncd_means),
+        "avg_room_nearest_reference_ncd_mean": _safe_mean_or_none(room_reference_ncd_means),
+        "avg_room_symbol_entropy_mean": _safe_mean_or_none(room_symbol_entropy_means),
+        "avg_dungeon_symbol_entropy_non_void": _safe_mean_or_none(dungeon_symbol_entropy),
         "unique_layout_count": len(set(room_hash_signatures)),
         "all_layouts_identical": len(set(room_hash_signatures)) == 1,
         "search_algorithm_aggregate": search_algorithm_aggregate,

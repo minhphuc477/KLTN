@@ -18,6 +18,7 @@ from src.pipeline.room_topology_conditioning import (
     _state_key,
     _room_local_state_search,
     _initial_state_for_sequence,
+    build_puzzle_stage_condition_metadata,
     apply_puzzle_structure_control_to_conditioning,
     apply_puzzle_structure_dropout_batch,
     build_topology_loss_focus_map,
@@ -169,6 +170,74 @@ def test_room_graph_sample_exposes_puzzle_structure_flag():
     assert sample["has_puzzle"] is True
     assert sample["puzzle_room_structure_enabled"] is True
     assert infer_puzzle_room_structure_enabled(room_grid, {"has_puzzle": True}) is True
+
+
+def test_room_graph_sample_emits_ordered_puzzle_stage_condition():
+    graph = nx.DiGraph()
+    graph.add_node(10, label="p", type="puzzle", has_puzzle=True)
+    graph.add_node(20, label="g", is_triforce=True, has_goal=True)
+    graph.add_edge(10, 20, edge_type="switch_locked", label="switch")
+
+    room_grid = np.full((ROOM_HEIGHT, ROOM_WIDTH), int(SEMANTIC_PALETTE["FLOOR"]), dtype=np.int32)
+    room_grid[ROOM_HEIGHT // 2, ROOM_WIDTH // 2] = int(SEMANTIC_PALETTE["PUZZLE"])
+    puzzle_room = SimpleNamespace(
+        semantic_grid=room_grid,
+        doors={"N": False, "S": False, "E": True, "W": True},
+        has_boss=False,
+        has_triforce=False,
+        is_start=False,
+        graph_node_id=10,
+        node_label="p",
+    )
+    goal_room = SimpleNamespace(
+        semantic_grid=np.full((ROOM_HEIGHT, ROOM_WIDTH), int(SEMANTIC_PALETTE["FLOOR"]), dtype=np.int32),
+        doors={"N": False, "S": False, "E": False, "W": True},
+        has_boss=False,
+        has_triforce=True,
+        is_start=False,
+        graph_node_id=20,
+        node_label="g",
+    )
+    dungeon = SimpleNamespace(graph=graph, rooms={(0, 0): puzzle_room, (0, 1): goal_room})
+
+    base_graph = _extract_graph_from_dungeon(dungeon)
+    sample = _build_room_graph_sample(
+        dungeon,
+        (0, 0),
+        puzzle_room,
+        base_graph,
+        puzzle_stage_topology_enabled=True,
+    )
+
+    stage_condition = sample["puzzle_stage_condition"]
+    assert stage_condition["sequence_required"] is True
+    assert stage_condition["gate_family"] == "switch"
+    assert len(stage_condition["stage_sequence"]) >= 1
+    assert stage_condition["stage_sequence"][0]["kind"] == "push_block_to_switch"
+
+
+def test_build_puzzle_stage_condition_metadata_builds_weighted_stage_trace():
+    room_grid = np.full((ROOM_HEIGHT, ROOM_WIDTH), int(SEMANTIC_PALETTE["FLOOR"]), dtype=np.int32)
+    room_grid[ROOM_HEIGHT // 2, ROOM_WIDTH // 2] = int(SEMANTIC_PALETTE["PUZZLE"])
+    metadata = build_puzzle_stage_condition_metadata(
+        room_shape=(ROOM_HEIGHT, ROOM_WIDTH),
+        start=(ROOM_HEIGHT // 2, 1),
+        goal=(ROOM_HEIGHT // 2, ROOM_WIDTH - 2),
+        required_doors={"W": True, "E": True},
+        incoming_dirs={"W"},
+        outgoing_dirs={"E"},
+        edge_constraint_tokens={"E": {"switch_locked"}},
+        room_role_flags={"has_puzzle": True},
+        room_grid=room_grid,
+        stage_trace_decay=0.5,
+    )
+
+    trace = metadata["stage_trace_mask"]
+    assert metadata["gate_family"] == "switch"
+    assert metadata["sequence_required"] is True
+    assert len(metadata["stage_sequence"]) >= 1
+    assert trace.shape == (ROOM_HEIGHT, ROOM_WIDTH)
+    assert float(trace.max()) > 0.0
 
 
 def test_apply_puzzle_structure_dropout_batch_strips_blocks_and_flips_flag():

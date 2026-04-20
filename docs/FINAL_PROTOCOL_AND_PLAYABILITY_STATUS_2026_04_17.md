@@ -51,7 +51,8 @@ Do **not** replace bounded validation with one unlimited `CBS/CBD` solver.
 
 Use a two-layer contract instead:
 
-- hard oracle: `A* + graph progression validator + soft-lock checker`
+- report-facing hard oracle: `graph_guided_oracle + graph progression validator + soft-lock checker`
+- stricter stress probe: monolithic stitched tile-state `A*`
 - behavioral probe: `CBS+` (`CognitiveBoundedSearch`)
 
 Why:
@@ -73,6 +74,9 @@ Current codebase improvements that now apply to future exports:
   enemies, keys, items, and puzzle markers
 - puzzle scaffold adds a readable local push-block prop near interaction zones
   instead of only generic block clutter
+- puzzle scaffold now supports staged multi-step puzzle plans with validator-side
+  progression gating for ordered `key/item/puzzle -> DOOR_PUZZLE` and
+  push-block-to-switch unlocks
 - room-local validator planning now uses a bounded but complexity-adaptive state
   budget instead of one fixed cap for every room
 

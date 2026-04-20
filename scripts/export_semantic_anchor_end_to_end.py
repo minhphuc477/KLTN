@@ -37,7 +37,9 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from scripts.run_fast_sampler_visual_audit import (
+    _json_sanitize,
     _resolve_vqvae_checkpoint,
+    _resolve_dataset_data_root,
     _resolve_export_device,
     _resolve_export_execution_kwargs,
     _generate_dungeon_with_oom_backoff,
@@ -56,6 +58,11 @@ from scripts.run_fast_sampler_visual_audit import (
     save_stylized_grid_png,
     save_stylized_rooms_sheet,
     write_room_layout_artifacts,
+)
+from src.evaluation.end_to_end_level_metrics import (
+    DEFAULT_REFERENCE_ROOM_LIMIT,
+    compute_end_to_end_structural_metrics,
+    load_reference_room_texts,
 )
 from src.pipeline.dungeon_pipeline import NeuralSymbolicDungeonPipeline, pipeline_kwargs_from_resolved_config
 
@@ -146,12 +153,14 @@ def export_masked_variant(
     variant_dir = out_dir / variant_name
     rooms_dir = variant_dir / "rooms"
     room_grids: Dict[int, np.ndarray] = {}
+    room_texts: Dict[int, str] = {}
     room_hashes: Dict[str, str] = {}
 
     for room_id, room in sorted(result.rooms.items(), key=lambda kv: int(kv[0])):
         grid = np.asarray(room.room_grid, dtype=np.int32)
         room_grids[int(room_id)] = grid
         room_text = save_grid_txt(grid, rooms_dir / f"room_{room_id}.txt")
+        room_texts[int(room_id)] = room_text
         room_hashes[str(room_id)] = hashlib.sha256(room_text.encode("utf-8")).hexdigest()[:16]
         save_grid_png(grid, rooms_dir / f"room_{room_id}.png", tile_px=20)
         save_stylized_grid_png(grid, rooms_dir / f"room_{room_id}_stylized.png", tile_px=20, crop_void=False)
@@ -176,7 +185,17 @@ def export_masked_variant(
     runtime_diagnostics = dict(pipeline.runtime_diagnostics)
     topology_anchor_policy = _generation_policy_summary(pipeline)
     validation_context = build_validation_context_from_generation_result(result)
+    reference_room_texts = load_reference_room_texts(
+        str(_resolve_dataset_data_root(run_dir)),
+        max_rooms=DEFAULT_REFERENCE_ROOM_LIMIT,
+    )
+    end_to_end_evaluation = compute_end_to_end_structural_metrics(
+        room_texts=room_texts,
+        dungeon_text=preview,
+        reference_room_texts=reference_room_texts,
+    )
     del room_grids
+    del room_texts
     del pipeline
     del result
     _release_torch_memory()
@@ -213,6 +232,7 @@ def export_masked_variant(
         },
         "tile_hist": {str(int(k)): int(v) for k, v in Counter(int(v) for v in dungeon_grid.ravel()).items()},
         "room_hashes": room_hashes,
+        "end_to_end_evaluation": end_to_end_evaluation,
         "layout": {
             "room_count": int(layout_payload.get("room_count", 0)),
             "primary_quality_metric_name": layout_payload.get("primary_quality_metric_name"),
@@ -221,9 +241,10 @@ def export_masked_variant(
         },
         "validation": validation,
     }
+    summary = _json_sanitize(summary)
     (variant_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     (variant_dir / "validation_search_stats.json").write_text(
-        json.dumps(build_validation_search_stats_payload(summary.get("validation", {})), indent=2),
+        json.dumps(_json_sanitize(build_validation_search_stats_payload(summary.get("validation", {}))), indent=2),
         encoding="utf-8",
     )
     _release_torch_memory()
@@ -269,7 +290,7 @@ def main() -> None:
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     (args.output_dir / "mission_graph.json").write_text(
-        json.dumps(json_graph.node_link_data(mission_graph, edges="links"), indent=2),
+        json.dumps(_json_sanitize(json_graph.node_link_data(mission_graph, edges="links")), indent=2),
         encoding="utf-8",
     )
     _emit_progress(f"wrote mission graph: {args.output_dir / 'mission_graph.json'}")
@@ -324,10 +345,12 @@ def main() -> None:
     _release_torch_memory()
     (args.output_dir / "summary.json").write_text(
         json.dumps(
-            {
-                "generation_overrides": generation_overrides,
-                "variants": summaries,
-            },
+            _json_sanitize(
+                {
+                    "generation_overrides": generation_overrides,
+                    "variants": summaries,
+                }
+            ),
             indent=2,
         ),
         encoding="utf-8",

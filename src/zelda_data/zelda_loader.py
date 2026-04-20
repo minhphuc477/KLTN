@@ -68,9 +68,11 @@ from src.pipeline.graph_features import (
     extract_node_feature_vector,
 )
 from src.pipeline.room_topology_conditioning import (
+    DEFAULT_PUZZLE_STAGE_TRACE_DECAY,
     DEFAULT_SEMANTIC_PUZZLE_OFFSET,
     DEFAULT_SEMANTIC_ROLE_PRIOR_STRENGTH,
     ROOM_TOPOLOGY_CHANNEL_COUNT,
+    build_puzzle_stage_condition_metadata,
     build_room_topology_condition_map,
     build_semantic_room_plan_trace,
     infer_puzzle_room_structure_enabled,
@@ -479,6 +481,8 @@ def _build_room_graph_sample(
     topology_supervision_mode: str = "runtime_aligned",
     semantic_role_prior_strength: float = DEFAULT_SEMANTIC_ROLE_PRIOR_STRENGTH,
     semantic_puzzle_offset: int = DEFAULT_SEMANTIC_PUZZLE_OFFSET,
+    puzzle_stage_topology_enabled: bool = False,
+    puzzle_stage_trace_decay: float = DEFAULT_PUZZLE_STAGE_TRACE_DECAY,
 ) -> dict:
     """Build one room-level graph-conditioning sample aligned with inference."""
     graph = getattr(dungeon, "graph", None)
@@ -540,6 +544,30 @@ def _build_room_graph_sample(
             room_role_flags=role_flags,
         )
 
+    room_grid_for_structure = getattr(room, "semantic_grid", None)
+    if room_grid_for_structure is None:
+        room_grid_for_structure = getattr(room, "grid", np.zeros((ROOM_HEIGHT, ROOM_WIDTH), dtype=np.int32))
+    room_grid_for_structure = np.asarray(room_grid_for_structure, dtype=np.int32)
+    puzzle_stage_condition = build_puzzle_stage_condition_metadata(
+        room_shape=(ROOM_HEIGHT, ROOM_WIDTH),
+        start=start,
+        goal=goal,
+        required_doors=required_doors,
+        incoming_dirs=incoming_dirs,
+        outgoing_dirs=outgoing_dirs,
+        edge_constraint_tokens=_edge_constraint_tokens_by_direction(dungeon, room_position, graph_node_id),
+        room_role_flags=role_flags,
+        room_grid=room_grid_for_structure,
+        semantic_puzzle_offset=int(max(0, semantic_puzzle_offset)),
+        stage_trace_decay=float(puzzle_stage_trace_decay),
+    )
+    if bool(puzzle_stage_topology_enabled):
+        stage_trace = puzzle_stage_condition.get("stage_trace_mask")
+        if isinstance(stage_trace, np.ndarray) and stage_trace.shape == (ROOM_HEIGHT, ROOM_WIDTH) and bool(np.any(stage_trace > 0)):
+            traversability_trace = stage_trace.astype(np.float32, copy=False)
+    serialized_stage_condition = dict(puzzle_stage_condition)
+    serialized_stage_condition.pop("stage_trace_mask", None)
+
     room_topology_map = build_room_topology_condition_map(
         room_shape=(ROOM_HEIGHT, ROOM_WIDTH),
         start=start,
@@ -550,12 +578,11 @@ def _build_room_graph_sample(
         traversability_trace=traversability_trace,
         semantic_role_prior_strength=float(semantic_role_prior_strength),
         semantic_puzzle_offset=int(max(0, semantic_puzzle_offset)),
+        puzzle_stage_topology_enabled=bool(puzzle_stage_topology_enabled),
+        puzzle_stage_trace_decay=float(puzzle_stage_trace_decay),
     )
-    room_grid_for_structure = getattr(room, "semantic_grid", None)
-    if room_grid_for_structure is None:
-        room_grid_for_structure = getattr(room, "grid", np.zeros((ROOM_HEIGHT, ROOM_WIDTH), dtype=np.int32))
     puzzle_room_structure_enabled = infer_puzzle_room_structure_enabled(
-        np.asarray(room_grid_for_structure, dtype=np.int32),
+        room_grid_for_structure,
         role_flags,
     )
 
@@ -593,6 +620,7 @@ def _build_room_graph_sample(
         'topology_supervision_mode': supervision_mode,
         'has_puzzle': bool(role_flags.get("has_puzzle", False)),
         'puzzle_room_structure_enabled': bool(puzzle_room_structure_enabled),
+        'puzzle_stage_condition': serialized_stage_condition,
         **({'style_id': int(style_id)} if style_id is not None else {}),
     }
 
@@ -863,6 +891,8 @@ class ZeldaRoomDataset(Dataset):
         topology_supervision_mode: str = "runtime_aligned",
         semantic_role_prior_strength: float = DEFAULT_SEMANTIC_ROLE_PRIOR_STRENGTH,
         semantic_puzzle_offset: int = DEFAULT_SEMANTIC_PUZZLE_OFFSET,
+        puzzle_stage_topology_enabled: bool = False,
+        puzzle_stage_trace_decay: float = DEFAULT_PUZZLE_STAGE_TRACE_DECAY,
     ):
         self.transform = transform
         self.normalize = normalize
@@ -872,6 +902,8 @@ class ZeldaRoomDataset(Dataset):
         self.topology_supervision_mode = str(topology_supervision_mode).strip().lower()
         self.semantic_role_prior_strength = float(max(0.0, min(1.0, semantic_role_prior_strength)))
         self.semantic_puzzle_offset = int(max(0, semantic_puzzle_offset))
+        self.puzzle_stage_topology_enabled = bool(puzzle_stage_topology_enabled)
+        self.puzzle_stage_trace_decay = float(max(0.05, min(1.0, puzzle_stage_trace_decay)))
         self.rooms = []
         self.graphs = [] if load_graphs else None
         if self.topology_supervision_mode not in {"runtime_aligned", "oracle_room_grid"}:
@@ -909,6 +941,8 @@ class ZeldaRoomDataset(Dataset):
                                         topology_supervision_mode=self.topology_supervision_mode,
                                         semantic_role_prior_strength=self.semantic_role_prior_strength,
                                         semantic_puzzle_offset=self.semantic_puzzle_offset,
+                                        puzzle_stage_topology_enabled=self.puzzle_stage_topology_enabled,
+                                        puzzle_stage_trace_decay=self.puzzle_stage_trace_decay,
                                     )
                                 )
                 except (AttributeError, RuntimeError, ValueError, TypeError) as e:
@@ -965,6 +999,7 @@ class ZeldaRoomDataset(Dataset):
                 'puzzle_room_structure_enabled': bool(
                     graph.get('puzzle_room_structure_enabled', graph.get('has_puzzle', False))
                 ),
+                'puzzle_stage_condition': dict(graph.get('puzzle_stage_condition', {})),
                 **({'style_id': int(graph.get('style_id'))} if graph.get('style_id', None) is not None else {}),
             }
 
@@ -1031,6 +1066,8 @@ def create_dataloader(
     topology_supervision_mode: str = "runtime_aligned",
     semantic_role_prior_strength: float = DEFAULT_SEMANTIC_ROLE_PRIOR_STRENGTH,
     semantic_puzzle_offset: int = DEFAULT_SEMANTIC_PUZZLE_OFFSET,
+    puzzle_stage_topology_enabled: bool = False,
+    puzzle_stage_trace_decay: float = DEFAULT_PUZZLE_STAGE_TRACE_DECAY,
     sampler: Optional[Sampler] = None,
     return_sampler: bool = False,
 ) -> DataLoader:
@@ -1071,6 +1108,8 @@ def create_dataloader(
             topology_supervision_mode=topology_supervision_mode,
             semantic_role_prior_strength=semantic_role_prior_strength,
             semantic_puzzle_offset=semantic_puzzle_offset,
+            puzzle_stage_topology_enabled=puzzle_stage_topology_enabled,
+            puzzle_stage_trace_decay=puzzle_stage_trace_decay,
         )
     else:
         dataset = ZeldaDungeonDataset(

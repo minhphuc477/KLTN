@@ -1,6 +1,6 @@
 # Current Architecture
 
-Last updated: 2026-04-15
+Last updated: 2026-04-19
 
 This is the concise, code-aligned description of the current stack. Use this
 file as the canonical architecture reference. Older deep-dive notes remain in
@@ -9,13 +9,16 @@ file as the canonical architecture reference. Older deep-dive notes remain in
 ## System Summary
 
 The project is a `graph-first hybrid neural-symbolic Zelda dungeon generator`.
-The current production path is:
+The current thesis-safe path is:
 
 1. build or accept a mission graph
 2. generate room layouts with the diffusion branch under graph conditioning
-3. enforce mission-critical semantics with constrained decode, overlay, and
-   repair
-4. stitch the rooms into a full dungeon and export metrics/artifacts
+3. enforce mission-critical semantics with constrained decode, overlay, repair,
+   and hybrid stateful puzzle grammar
+4. stitch the rooms into a full dungeon
+5. run the hybrid mechanical contract
+6. run `P-CBS` as the bounded-rational behavioral probe
+7. export metrics/artifacts
 
 Fast sampler and masked-room still exist, but they remain research branches.
 
@@ -59,9 +62,14 @@ Mission graph
   -> diffusion / fast sampler / masked-room branch
   -> VQ-VAE decode to semantic room grid
   -> structural cleanup + semantic constrained decode
+  -> hybrid stateful puzzle grammar / interaction-sequence enforcement
   -> deterministic graph-marker overlay
   -> symbolic repair / fallback
-  -> stitched dungeon + reports
+  -> stitched dungeon
+  -> validation handoff contract
+  -> hybrid mechanical contract
+  -> P-CBS
+  -> reports
 ```
 
 ## Current Canonical Config
@@ -76,7 +84,8 @@ Current important defaults:
 | Dataset schema | `zelda_v1`, `44` classes, `16x11` rooms |
 | Topology anchor policy | `2026-04-11.semantic_anchor_v8_puzzle_subtype_channels` |
 | Room-topology channels | `54` |
-| Canonical VQ-VAE config | `hidden_dim=96`, `codebook_size=256`, `latent_dim=64` |
+| Canonical VQ-VAE YAML default | `hidden_dim=96`, `codebook_size=256`, `latent_dim=64` |
+| Strongest tested tokenizer checkpoint | `codebook512` |
 | Canonical diffusion config | `model_channels=96`, `condition_hidden_dim=192`, `condition_gnn_type=gps` |
 | Canonical masked-room config | `hidden_dim=48`, `condition_gnn_type=gcn`, `room_topology_channels=54` |
 | Generation defaults | constrained decode `on`, deterministic marker overlay `on`, repair `on`, puzzle scaffold `on`, puzzle novelty search `on` |
@@ -133,6 +142,40 @@ using one generic obstacle template.
 Current evidence still says diffusion is the only branch that should be treated
 as the production baseline.
 
+## Learned Stage Semantics
+
+The repo now has an explicit `trainable ordered puzzle-stage semantics path`.
+
+It is implemented in two layers, not only in runtime grammar:
+
+- loader/runtime build ordered `puzzle_stage_condition` metadata from the same
+  validator-aware room semantics
+- diffusion and masked-room conditioning can append deterministic stage tokens
+- room-topology priors can optionally rasterize ordered stage traces
+- diffusion, masked-room, and fast-sampler training now also have an auxiliary
+  learned `puzzle-stage semantics head`
+  - it predicts gate family
+  - sequence-required flag
+  - stage count
+  - ordered stage slots
+  - from generated room logits during training
+
+Important boundary:
+
+- this stronger path is implemented in code
+- it is `off by default`
+- old checkpoints did **not** learn it
+- the older `stageconditioned_v1` branch used token/trace conditioning only and
+  is now outdated for the stronger claim
+- any claim about `learned multi-step puzzle semantics` now requires retraining
+  with:
+  - `diffusion.puzzle_stage_conditioning_enabled=true`
+  - `diffusion.puzzle_stage_semantics_loss_weight>0`
+  - `masked_room.puzzle_stage_conditioning_enabled=true`
+  - `masked_room.puzzle_stage_semantics_loss_weight>0`
+  - optionally `fast_sampler.puzzle_stage_conditioning_enabled=true`
+  - optionally `fast_sampler.puzzle_stage_semantics_loss_weight>0`
+
 ## Validation Contract
 
 Protocol exports now carry explicit validation/search artifacts instead of only
@@ -142,16 +185,40 @@ tile-cleanup metrics:
 - root-level `search_algorithm_comparison.json` for manual compare and fixed-graph audits
 - graph progression / goal-gauntlet checks alongside grid A* and CBS
 
-Validation roles are now explicit:
+Validation roles are now explicit.
 
-- hard oracle: grid A* + graph progression validator + softlock check
+- report-facing hard oracle: hybrid mechanical contract
+  - graph-guided room oracle
+  - graph progression validator
+  - deterministic softlock check
+- stricter stress probe: monolithic stitched tile-state `A*`
 - comparison solvers: BFS, Dijkstra, Greedy, D* Lite, DFS/IDDFS, Bidirectional A*
-- behavioral probe: CBS (`CognitiveBoundedSearch`)
+- behavioral probe: `P-CBS` / `CognitiveBoundedSearch`
 - excluded from canonical export comparison: `parallel_astar`, `multi_goal`,
   `key_economy_validator`, and `solver_comparison`
 
-This makes the repo's "playable" claim depend on observable search evidence,
-not only on visual quality or repair counts.
+This makes the repo's "playable" claim depend on observable search evidence and
+the current patched stateful-puzzle contract, not only on visual quality or
+repair counts.
+
+Current protocol exports also expose an end-to-end structural evaluation layer
+at the stitched room-grid level:
+
+- `room_unique_ratio`
+- `room_pairwise_ncd`
+- `room_nearest_reference_ncd`
+- room / dungeon symbol entropy
+
+These do not replace the topology benchmark descriptors. They complement them so
+the final exported dungeons have a report-facing diversity/novelty signal, not
+only graph-level expressivity metrics.
+
+Important clarification:
+
+- monolithic stitched tile-state `A*` is still useful and is still reported
+- on the current stateful multi-step puzzle slice it times out often enough
+  that it should be treated as a harsher stress probe, not the only
+  report-facing pass/fail gate
 
 ## Checkpoint and Reproducibility Contract
 
@@ -177,6 +244,12 @@ not by private hardcoded script defaults.
   [`TOPOLOGY_COMMANDS.md`](TOPOLOGY_COMMANDS.md)
 - Latest downstream protocol judgment:
   [`DOWNSTREAM_CODEBOOK512_PUZZLE_SUBTYPE_PROTOCOL_RESULTS_2026_04_15.md`](DOWNSTREAM_CODEBOOK512_PUZZLE_SUBTYPE_PROTOCOL_RESULTS_2026_04_15.md)
+- Current artifact / checkpoint status and retraining alerts:
+  [`ARTIFACT_AND_CHECKPOINT_STATUS_2026_04_18.md`](ARTIFACT_AND_CHECKPOINT_STATUS_2026_04_18.md)
+- Final production/finalization review and remaining required runs:
+  [`PRODUCTION_FINALIZATION_REVIEW_2026_04_18.md`](PRODUCTION_FINALIZATION_REVIEW_2026_04_18.md)
+- Current chat handoff context:
+  [`NEXT_CHAT_CONTEXT_2026_04_18.md`](NEXT_CHAT_CONTEXT_2026_04_18.md)
 - Auxiliary-branch / neural-semantics research decision:
   [`AUXILIARY_BRANCH_AND_NEURAL_SEMANTICS_AUDIT_2026_04_15.md`](AUXILIARY_BRANCH_AND_NEURAL_SEMANTICS_AUDIT_2026_04_15.md)
 - Playability-evaluation / CBS research note:

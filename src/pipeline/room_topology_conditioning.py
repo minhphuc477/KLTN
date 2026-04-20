@@ -122,6 +122,30 @@ DEFAULT_SEMANTIC_ANCHOR_THRESHOLD = 0.5
 DEFAULT_SEMANTIC_PUZZLE_OFFSET = 2
 DEFAULT_VALIDATOR_PLAN_MAX_STATES = 512
 DEFAULT_PUZZLE_STRUCTURE_TOKEN_SCALE = 0.25
+DEFAULT_PUZZLE_STAGE_TOKEN_SCALE = 0.20
+DEFAULT_PUZZLE_STAGE_TRACE_DECAY = 0.75
+
+_PUZZLE_STAGE_KIND_IDS = {
+    "collect_key": 0,
+    "collect_item": 1,
+    "defeat_enemy": 2,
+    "push_block_to_switch": 3,
+    "step_on_puzzle": 4,
+    "reach_exit": 5,
+}
+_PUZZLE_STAGE_GATE_FAMILY_IDS = {
+    "generic": 0,
+    "key": 1,
+    "item_unlock": 2,
+    "switch": 3,
+    "toggle": 4,
+    "bombable": 5,
+    "combat": 6,
+}
+
+# Public aliases for shared supervision / reporting modules.
+PUZZLE_STAGE_KIND_IDS = dict(_PUZZLE_STAGE_KIND_IDS)
+PUZZLE_STAGE_GATE_FAMILY_IDS = dict(_PUZZLE_STAGE_GATE_FAMILY_IDS)
 
 
 def build_topology_anchor_policy_metadata(
@@ -231,6 +255,147 @@ def apply_puzzle_structure_control_to_conditioning(
     if mode == "node_sequence":
         return torch.cat([conditioning, token], dim=0)
     return conditioning + token
+
+
+def _classify_puzzle_stage_gate_family(
+    edge_constraint_tokens: Optional[Mapping[str, Set[str]]],
+    room_role_flags: Optional[Mapping[str, bool]],
+) -> str:
+    normalized_tokens = {
+        str(token).strip().lower()
+        for tokens in dict(edge_constraint_tokens or {}).values()
+        for token in set(tokens or set())
+    }
+    role_flags = {str(key): bool(value) for key, value in dict(room_role_flags or {}).items()}
+
+    if normalized_tokens & {"switch", "switch_locked"}:
+        return "switch"
+    if normalized_tokens & {"on_off_gate", "state_block"}:
+        return "toggle"
+    if "bombable" in normalized_tokens:
+        return "bombable"
+    if normalized_tokens & {"item_locked", "item_gate"}:
+        return "item_unlock"
+    if normalized_tokens & {"key_locked", "locked", "boss_locked"}:
+        return "key"
+    if role_flags.get("has_boss", False) or role_flags.get("has_enemy", False):
+        return "combat"
+    return "generic"
+
+
+def _sequence_anchor_to_stage_kind(anchor_name: str, gate_family: str) -> str:
+    normalized = str(anchor_name).strip().lower()
+    if normalized == "key":
+        return "collect_key"
+    if normalized == "item":
+        return "collect_item"
+    if normalized in {"enemy", "boss"}:
+        return "defeat_enemy"
+    if normalized == "puzzle":
+        if str(gate_family or "generic").strip().lower() in {"switch", "toggle"}:
+            return "push_block_to_switch"
+        return "step_on_puzzle"
+    return "reach_exit"
+
+
+def _build_puzzle_stage_tokens(
+    *,
+    stage_sequence: Sequence[Mapping[str, Any]],
+    gate_family: str,
+    sequence_required: bool,
+    controlled_door_count: int,
+    feature_dim: int,
+    device: torch.device,
+    dtype: torch.dtype,
+    scale: float,
+) -> Optional[torch.Tensor]:
+    if feature_dim <= 0:
+        return None
+    stages = list(stage_sequence or [])
+    if not stages:
+        return None
+
+    gate_id = int(_PUZZLE_STAGE_GATE_FAMILY_IDS.get(str(gate_family or "generic").strip().lower(), 0))
+    gate_norm = -1.0 + 2.0 * (gate_id / max(1, len(_PUZZLE_STAGE_GATE_FAMILY_IDS) - 1))
+    total_stages = max(1, len(stages))
+    door_norm = min(1.0, float(max(0, controlled_door_count)) / 4.0)
+    required_sign = 1.0 if bool(sequence_required) else -1.0
+
+    tokens: List[torch.Tensor] = []
+    for stage in stages:
+        kind = str(stage.get("kind", "step_on_puzzle")).strip().lower()
+        kind_id = int(_PUZZLE_STAGE_KIND_IDS.get(kind, _PUZZLE_STAGE_KIND_IDS["step_on_puzzle"]))
+        kind_norm = -1.0 + 2.0 * (kind_id / max(1, len(_PUZZLE_STAGE_KIND_IDS) - 1))
+        stage_index = int(stage.get("stage_index", len(tokens)))
+        stage_progress = float(stage_index) / max(1, total_stages - 1) if total_stages > 1 else 0.0
+        anchor = stage.get("local_anchor", stage.get("anchor", [ROOM_HEIGHT // 2, ROOM_WIDTH // 2]))
+        try:
+            row = float(anchor[0]) / max(1, ROOM_HEIGHT - 1)
+            col = float(anchor[1]) / max(1, ROOM_WIDTH - 1)
+        except Exception:
+            row = 0.5
+            col = 0.5
+        base = torch.tensor(
+            [
+                kind_norm,
+                -1.0 + 2.0 * stage_progress,
+                -1.0 + 2.0 * (float(total_stages - 1) / 5.0),
+                -1.0 + 2.0 * row,
+                -1.0 + 2.0 * col,
+                gate_norm,
+                required_sign,
+                -1.0 + 2.0 * door_norm,
+            ],
+            device=device,
+            dtype=dtype,
+        )
+        repeat = (int(feature_dim) + int(base.numel()) - 1) // int(base.numel())
+        token = base.repeat(repeat)[: int(feature_dim)]
+        tokens.append(token.unsqueeze(0) * float(scale))
+    return torch.cat(tokens, dim=0)
+
+
+def apply_puzzle_stage_control_to_conditioning(
+    conditioning: torch.Tensor,
+    *,
+    puzzle_stage_condition: Optional[Mapping[str, Any]],
+    graph_conditioning_mode: str,
+    scale: float = DEFAULT_PUZZLE_STAGE_TOKEN_SCALE,
+) -> torch.Tensor:
+    """
+    Append deterministic stage-sequence control tokens for learned puzzle plans.
+
+    This keeps the conditioner parameter shapes unchanged while giving retrained
+    models explicit access to ordered multi-step puzzle structure.
+    """
+    if not isinstance(conditioning, torch.Tensor) or conditioning.dim() != 2:
+        return conditioning
+    if int(conditioning.shape[-1]) <= 0:
+        return conditioning
+
+    payload = dict(puzzle_stage_condition or {})
+    stage_sequence = list(payload.get("stage_sequence", []) or [])
+    if not stage_sequence:
+        return conditioning
+
+    stage_tokens = _build_puzzle_stage_tokens(
+        stage_sequence=stage_sequence,
+        gate_family=str(payload.get("gate_family", "generic") or "generic"),
+        sequence_required=bool(payload.get("sequence_required", False)),
+        controlled_door_count=int(len(list(payload.get("controlled_doors", []) or []))),
+        feature_dim=int(conditioning.shape[-1]),
+        device=conditioning.device,
+        dtype=conditioning.dtype,
+        scale=float(scale),
+    )
+    if stage_tokens is None:
+        return conditioning
+
+    mode = str(graph_conditioning_mode or "node_sequence").strip().lower()
+    if mode == "node_sequence":
+        return torch.cat([conditioning, stage_tokens], dim=0)
+    pooled_stage = stage_tokens.mean(dim=0, keepdim=True)
+    return conditioning + pooled_stage
 
 
 def apply_puzzle_structure_dropout_batch(
@@ -1171,6 +1336,155 @@ def _build_synthetic_topology_trace_grid(
     return grid
 
 
+def build_puzzle_stage_condition_metadata(
+    *,
+    room_shape: Tuple[int, int] = (ROOM_HEIGHT, ROOM_WIDTH),
+    start: Optional[Tuple[int, int]] = None,
+    goal: Optional[Tuple[int, int]] = None,
+    required_doors: Optional[Mapping[str, bool]] = None,
+    incoming_dirs: Optional[Set[str]] = None,
+    outgoing_dirs: Optional[Set[str]] = None,
+    edge_constraint_tokens: Optional[Mapping[str, Set[str]]] = None,
+    room_role_flags: Optional[Mapping[str, bool]] = None,
+    anchors: Optional[Mapping[str, Tuple[int, int]]] = None,
+    room_grid: Optional[np.ndarray] = None,
+    validator_plan_max_states: int = DEFAULT_VALIDATOR_PLAN_MAX_STATES,
+    semantic_puzzle_offset: int = DEFAULT_SEMANTIC_PUZZLE_OFFSET,
+    stage_trace_decay: float = DEFAULT_PUZZLE_STAGE_TRACE_DECAY,
+) -> Dict[str, Any]:
+    """
+    Build ordered puzzle-stage metadata from shared validator semantics.
+
+    This is the train/runtime bridge for learned multi-step puzzle semantics.
+    It reuses the same ordered-room reasoning used by the hybrid validator
+    rather than inventing a second puzzle-specification path.
+    """
+    h, w = int(room_shape[0]), int(room_shape[1])
+    role_flags = {str(key): bool(value) for key, value in dict(room_role_flags or {}).items()}
+    required_doors = {str(direction): bool(value) for direction, value in dict(required_doors or {}).items()}
+    incoming_dirs = set(incoming_dirs or set())
+    outgoing_dirs = set(outgoing_dirs or set())
+    normalized_tokens = {
+        str(direction): {str(token).strip().lower() for token in tokens}
+        for direction, tokens in dict(edge_constraint_tokens or {}).items()
+    }
+    semantic_anchors = {
+        str(name): _clamp_point(point, (h, w))
+        for name, point in dict(anchors or {}).items()
+    }
+    if not semantic_anchors:
+        semantic_anchors = build_room_semantic_anchor_points(
+            room_shape=(h, w),
+            start=start,
+            goal=goal,
+            required_doors=required_doors,
+            incoming_dirs=incoming_dirs,
+            outgoing_dirs=outgoing_dirs,
+            room_role_flags=role_flags,
+            semantic_puzzle_offset=int(max(0, semantic_puzzle_offset)),
+        )
+    else:
+        if start is not None:
+            semantic_anchors.setdefault("start", _clamp_point(start, (h, w)))
+        if goal is not None:
+            semantic_anchors.setdefault("goal", _clamp_point(goal, (h, w)))
+
+    sequences = _build_validator_sequences(
+        anchors=semantic_anchors,
+        incoming_dirs=incoming_dirs,
+        outgoing_dirs=outgoing_dirs,
+        required_doors=required_doors,
+        edge_constraint_tokens=normalized_tokens,
+        room_role_flags=role_flags,
+    )
+    if not sequences:
+        return {}
+
+    meaningful_sequences = [
+        sequence
+        for sequence in sequences
+        if any(str(name) in {"key", "item", "enemy", "boss", "puzzle", "goal"} for name in sequence[1:])
+    ]
+    ranked_sequences = meaningful_sequences or sequences
+    canonical_sequence = max(
+        ranked_sequences,
+        key=lambda sequence: (
+            sum(
+                1
+                for name in sequence
+                if str(name) in {"key", "item", "enemy", "boss", "puzzle", "goal"}
+            ),
+            len(sequence),
+        ),
+    )
+
+    gate_family = _classify_puzzle_stage_gate_family(normalized_tokens, role_flags)
+    stage_sequence: List[Dict[str, Any]] = []
+    for stage_index, name in enumerate(canonical_sequence[1:]):
+        anchor = semantic_anchors.get(str(name))
+        if anchor is None:
+            continue
+        stage_sequence.append(
+            {
+                "stage_index": int(stage_index),
+                "name": str(name),
+                "kind": _sequence_anchor_to_stage_kind(str(name), gate_family),
+                "local_anchor": [int(anchor[0]), int(anchor[1])],
+            }
+        )
+
+    controlled_doors = [
+        str(direction)
+        for direction, tokens in normalized_tokens.items()
+        if tokens & _GATED_EDGE_TYPES
+    ]
+    sequence_required = bool(stage_sequence) and (
+        bool(controlled_doors)
+        or any(str(stage.get("kind", "")) != "reach_exit" for stage in stage_sequence)
+    )
+
+    stage_trace_mask = np.zeros((h, w), dtype=np.float32)
+    if stage_sequence:
+        trace_grid = np.asarray(room_grid, dtype=np.int32) if room_grid is not None else _build_synthetic_topology_trace_grid(
+            room_shape=(h, w),
+            semantic_anchors=semantic_anchors,
+            required_doors=required_doors,
+            room_role_flags=role_flags,
+        )
+        start_anchor = semantic_anchors.get(canonical_sequence[0]) if canonical_sequence else None
+        if start_anchor is not None:
+            env = ZeldaLogicEnv(trace_grid, render_mode=False)
+            state = _initial_state_for_sequence(trace_grid, start_anchor, canonical_sequence, normalized_tokens)
+            decay = float(max(0.05, min(1.0, stage_trace_decay)))
+            for stage in stage_sequence:
+                goal_anchor = tuple(stage["local_anchor"])
+                result = _room_local_state_search(
+                    env,
+                    state,
+                    goal_anchor,
+                    max_states=int(validator_plan_max_states),
+                )
+                if result is None:
+                    continue
+                path, state = result
+                weight = float(decay ** int(stage["stage_index"]))
+                for row, col in path:
+                    stage_trace_mask[int(row), int(col)] = max(
+                        float(stage_trace_mask[int(row), int(col)]),
+                        weight,
+                    )
+
+    return {
+        "gate_family": str(gate_family),
+        "sequence_required": bool(sequence_required),
+        "controlled_doors": list(controlled_doors),
+        "canonical_sequence": [str(name) for name in canonical_sequence],
+        "stage_sequence": stage_sequence,
+        "stage_trace_mask": stage_trace_mask,
+        "sequence_count": int(len(sequences)),
+    }
+
+
 def build_room_topology_condition_map(
     *,
     room_shape: Tuple[int, int] = (ROOM_HEIGHT, ROOM_WIDTH),
@@ -1185,6 +1499,8 @@ def build_room_topology_condition_map(
     semantic_role_prior_strength: float = DEFAULT_SEMANTIC_ROLE_PRIOR_STRENGTH,
     semantic_puzzle_offset: int = DEFAULT_SEMANTIC_PUZZLE_OFFSET,
     validator_plan_max_states: int = DEFAULT_VALIDATOR_PLAN_MAX_STATES,
+    puzzle_stage_topology_enabled: bool = False,
+    puzzle_stage_trace_decay: float = DEFAULT_PUZZLE_STAGE_TRACE_DECAY,
 ) -> np.ndarray:
     """
     Build a dense [C, H, W] topology prior for a single room.
@@ -1227,6 +1543,26 @@ def build_room_topology_condition_map(
         str(direction): {str(token).strip().lower() for token in tokens}
         for direction, tokens in dict(edge_constraint_tokens or {}).items()
     }
+    stage_metadata: Dict[str, Any] = {}
+    if bool(puzzle_stage_topology_enabled):
+        stage_metadata = build_puzzle_stage_condition_metadata(
+            room_shape=(h, w),
+            start=start,
+            goal=goal,
+            required_doors=required_doors,
+            incoming_dirs=set(incoming_dirs or set()),
+            outgoing_dirs=set(outgoing_dirs or set()),
+            edge_constraint_tokens=edge_constraint_tokens,
+            room_role_flags=role_flags,
+            anchors=semantic_anchors,
+            validator_plan_max_states=int(validator_plan_max_states),
+            semantic_puzzle_offset=int(max(0, semantic_puzzle_offset)),
+            stage_trace_decay=float(puzzle_stage_trace_decay),
+        )
+        stage_trace = stage_metadata.get("stage_trace_mask")
+        if isinstance(stage_trace, np.ndarray) and stage_trace.shape == (h, w) and bool(np.any(stage_trace > 0)):
+            trace_source = stage_trace.astype(np.float32, copy=False)
+            use_trace = True
 
     if not use_trace and _room_requires_validator_plan(
         edge_constraint_tokens=edge_constraint_tokens,

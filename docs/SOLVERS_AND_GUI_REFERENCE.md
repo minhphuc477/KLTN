@@ -119,6 +119,12 @@ Implementation highlights:
 - Supports replan API (`replan`, `needs_replan`)
 - If primary search fails, falls back to `StateSpaceAStar` for correctness
 
+Important role boundary:
+
+- `D* Lite` is not the canonical report-facing hard oracle for this repo
+- it is kept as an incremental replanning probe / GUI dynamic-search option
+- canonical correctness still relies on `A*` plus the hybrid oracle stack
+
 ### 3.6 DFS/IDDFS
 
 Implementation highlights:
@@ -168,6 +174,16 @@ Canonical export validation uses:
 - hard oracle: `A*`, graph progression validation, softlock check
 - comparison solvers: `BFS`, `Dijkstra`, `Greedy`, `D* Lite`, `DFS/IDDFS`, `Bidirectional A*`
 - behavioral probe: `CognitiveBoundedSearch`
+
+More precise search roles in current code:
+
+- `A*`: `hard_oracle`
+- `BFS`: `exact_baseline`
+- `Dijkstra`: `exact_fallback`
+- `Greedy`: `heuristic_baseline`
+- `D* Lite`: `incremental_replanning`
+- `DFS/IDDFS`: `exhaustive_probe`
+- `Bidirectional A*`: `comparison`
 
 ## 5. GUI Features
 

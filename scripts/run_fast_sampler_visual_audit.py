@@ -53,6 +53,11 @@ from src.pipeline.room_stitching import (
     build_stitched_room_layout,
     compute_layout_quality_metrics,
 )
+from src.evaluation.end_to_end_level_metrics import (
+    DEFAULT_REFERENCE_ROOM_LIMIT,
+    compute_end_to_end_structural_metrics,
+    load_reference_room_texts,
+)
 from src.simulation.search_factory import (
     VALIDATION_EXCLUDED_ALGORITHMS,
     iter_game_state_algorithm_specs,
@@ -60,6 +65,28 @@ from src.simulation.search_factory import (
 
 
 VALIDATION_SEARCH_SUITE_VERSION = "2026-04-15.validation_search_suite_v2"
+
+
+def _json_sanitize(value: Any) -> Any:
+    """Recursively replace non-finite numerics with JSON-safe nulls."""
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {str(k): _json_sanitize(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_json_sanitize(v) for v in value]
+    if isinstance(value, tuple):
+        return [_json_sanitize(v) for v in value]
+    return value
+
+
+def _resolve_dataset_data_root(run_dir: Path) -> Path:
+    resolved = json.loads((run_dir / "resolved_config.json").read_text(encoding="utf-8"))
+    dataset_cfg = dict(resolved.get("dataset", {}))
+    data_root = Path(str(dataset_cfg.get("data_dir", "Data/The Legend of Zelda")))
+    if not data_root.is_absolute():
+        data_root = PROJECT_ROOT / data_root
+    return data_root
 
 
 def _resolve_export_device(resolved: Mapping[str, Any]) -> str:
@@ -640,6 +667,7 @@ def _compute_generation_validation(
             ],
             "notes": {
                 "oracle": "A* remains the hard grid-level oracle in this suite.",
+                "replanning": "D* Lite is reported as an incremental replanning probe, not the primary static correctness oracle.",
                 "behavioral_probe": "CBS is reported separately because it is a bounded-rational behavior probe, not the hard correctness oracle.",
             },
         }
@@ -682,6 +710,7 @@ def _compute_generation_validation(
                     "time_sec": elapsed,
                     "algorithm": str(result.algorithm),
                     "validation_role": str(spec.validation_role),
+                    "canonical_use": str(spec.canonical_use),
                     "rules_profile": "vglc_strict",
                     "allow_diagonals": False,
                     "timeout_limit_states": int(timeout),
@@ -702,6 +731,7 @@ def _compute_generation_validation(
                     "time_sec": elapsed,
                     "algorithm": str(algorithm_name).upper(),
                     "validation_role": str(spec.validation_role),
+                    "canonical_use": str(spec.canonical_use),
                     "rules_profile": "vglc_strict",
                     "allow_diagonals": False,
                     "timeout_limit_states": int(timeout),
@@ -1752,7 +1782,7 @@ def export_variant(
             "use_fast_sampling": bool(use_fast_sampling),
         }
         payload.update({str(k): v for k, v in extra.items()})
-        status_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        status_path.write_text(json.dumps(_json_sanitize(payload), indent=2), encoding="utf-8")
 
     execution_kwargs = _resolve_export_execution_kwargs()
     pipeline, result, generation_execution = _generate_dungeon_with_oom_backoff(
@@ -1856,6 +1886,15 @@ def export_variant(
         getattr(pipeline.diffusion, "training_cfg_scale", float("nan"))
     )
     tile_hist = {str(int(k)): int(v) for k, v in Counter(int(v) for v in dungeon_grid.ravel()).items()}
+    reference_room_texts = load_reference_room_texts(
+        str(_resolve_dataset_data_root(run_dir)),
+        max_rooms=DEFAULT_REFERENCE_ROOM_LIMIT,
+    )
+    end_to_end_evaluation = compute_end_to_end_structural_metrics(
+        room_texts=room_texts,
+        dungeon_text=dungeon_preview,
+        reference_room_texts=reference_room_texts,
+    )
 
     _write_status(
         "preparing_validation",
@@ -1911,6 +1950,7 @@ def export_variant(
         "cleanup_totals": cleanup_totals,
         "tile_hist": tile_hist,
         "room_hashes": room_hashes,
+        "end_to_end_evaluation": end_to_end_evaluation,
         "layout": {
             "room_count": int(layout_payload.get("room_count", 0)),
             "primary_quality_metric_name": layout_payload.get("primary_quality_metric_name"),
@@ -1919,9 +1959,10 @@ def export_variant(
         },
         "validation": validation,
     }
+    summary = _json_sanitize(summary)
     (variant_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     (variant_dir / "validation_search_stats.json").write_text(
-        json.dumps(build_validation_search_stats_payload(summary.get("validation", {})), indent=2),
+        json.dumps(_json_sanitize(build_validation_search_stats_payload(summary.get("validation", {}))), indent=2),
         encoding="utf-8",
     )
     _write_status(
@@ -1971,7 +2012,7 @@ def main() -> None:
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     (args.output_dir / "mission_graph.json").write_text(
-        json.dumps(json_graph.node_link_data(mission_graph, edges="links"), indent=2),
+        json.dumps(_json_sanitize(json_graph.node_link_data(mission_graph, edges="links")), indent=2),
         encoding="utf-8",
     )
 
@@ -2035,8 +2076,9 @@ def main() -> None:
             == by_name["diffusion_cfg3_logic0_steps50"]["room_hashes"]
         ),
     }
+    post = _json_sanitize(post)
     (args.output_dir / "summary.json").write_text(json.dumps(post, indent=2), encoding="utf-8")
-    print(json.dumps({"output": str(args.output_dir / "summary.json")}, indent=2))
+    print(json.dumps(_json_sanitize({"output": str(args.output_dir / "summary.json")}), indent=2))
 
 
 if __name__ == "__main__":

@@ -1,14 +1,18 @@
 import pytest
 import networkx as nx
+import numpy as np
 
 from scripts.run_fixed_graph_multi_seed_audit import _aggregate_variant
 from scripts.run_fast_sampler_visual_audit import (
+    _json_sanitize as _audit_json_sanitize,
     build_validation_context_from_generation_result,
     build_validation_search_stats_payload,
 )
+from scripts.run_stateful_puzzle_hparam_sweep import _json_sanitize as _sweep_json_sanitize
 from scripts.run_stateful_puzzle_hparam_sweep import _profile_score
 from src.pipeline.dungeon_pipeline import DungeonGenerationResult, NeuralSymbolicDungeonPipeline
 from src.pipeline.room_stitching import StitchedRoomLayout
+from src.simulation.validator import GraphGuidedValidator
 
 
 def test_room_alignment_aggregation_includes_post_overlay_semantic_error():
@@ -90,6 +94,13 @@ def test_fixed_graph_audit_aggregate_tracks_post_overlay_semantic_error():
                     },
                 },
             },
+            "end_to_end_evaluation": {
+                "room_unique_ratio": 1.0,
+                "room_pairwise_ncd": {"mean": 0.15},
+                "room_nearest_reference_ncd": {"mean": 0.10},
+                "room_symbol_entropy_mean": 1.2,
+                "dungeon_symbol_entropy_non_void": 1.4,
+            },
             "room_hashes": {"0": "aaa"},
         },
         {
@@ -135,6 +146,13 @@ def test_fixed_graph_audit_aggregate_tracks_post_overlay_semantic_error():
                     },
                 },
             },
+            "end_to_end_evaluation": {
+                "room_unique_ratio": 0.5,
+                "room_pairwise_ncd": {"mean": 0.30},
+                "room_nearest_reference_ncd": {"mean": 0.18},
+                "room_symbol_entropy_mean": 1.0,
+                "dungeon_symbol_entropy_non_void": 1.1,
+            },
             "room_hashes": {"0": "bbb"},
         },
     ]
@@ -144,6 +162,11 @@ def test_fixed_graph_audit_aggregate_tracks_post_overlay_semantic_error():
     assert aggregate["avg_repair_rate"] == pytest.approx(0.75)
     assert aggregate["avg_final_post_overlay_graph_marker_exact_match_rate"] == pytest.approx(1.0)
     assert aggregate["avg_final_post_overlay_semantic_anchor_error"] == pytest.approx(0.25)
+    assert aggregate["avg_room_unique_ratio"] == pytest.approx(0.75)
+    assert aggregate["avg_room_pairwise_ncd_mean"] == pytest.approx(0.225)
+    assert aggregate["avg_room_nearest_reference_ncd_mean"] == pytest.approx(0.14)
+    assert aggregate["avg_room_symbol_entropy_mean"] == pytest.approx(1.1)
+    assert aggregate["avg_dungeon_symbol_entropy_non_void"] == pytest.approx(1.25)
     assert aggregate["unique_layout_count"] == 2
     assert aggregate["graph_guided_oracle_solvable_rate"] == pytest.approx(0.5)
     assert aggregate["hybrid_oracle_pass_rate"] == pytest.approx(0.5)
@@ -205,6 +228,64 @@ def test_stateful_puzzle_profile_score_stays_finite_when_cbs_confusion_is_infini
     )
 
     assert score == pytest.approx(127.05)
+
+
+def test_stateful_puzzle_summary_json_sanitizes_non_finite_payloads():
+    payload = {
+        "raw_summaries": {
+            "baseline_default": {
+                "validation": {
+                    "cbs_balanced": {
+                        "confusion_ratio_vs_astar": float("inf"),
+                    }
+                }
+            }
+        }
+    }
+
+    sanitized = _sweep_json_sanitize(payload)
+
+    assert sanitized["raw_summaries"]["baseline_default"]["validation"]["cbs_balanced"]["confusion_ratio_vs_astar"] is None
+
+
+def test_export_summary_json_sanitizes_non_finite_payloads():
+    payload = {
+        "validation": {
+            "cbs_balanced": {
+                "confusion_ratio_vs_astar": float("inf"),
+            }
+        }
+    }
+
+    sanitized = _audit_json_sanitize(payload)
+
+    assert sanitized["validation"]["cbs_balanced"]["confusion_ratio_vs_astar"] is None
+
+
+def test_graph_guided_validator_accepts_goal_typed_nodes():
+    graph = nx.DiGraph()
+    graph.add_node(0, type="START", label="START")
+    graph.add_node(1, type="GOAL", label="GOAL")
+    graph.add_edge(0, 1)
+
+    class _Room:
+        def __init__(self):
+            self.grid = np.array([[1]], dtype=int)
+
+    dungeon_data = type(
+        "DungeonDataStub",
+        (),
+        {
+            "graph": graph,
+            "rooms": {"0": _Room(), "1": _Room()},
+        },
+    )()
+
+    result = GraphGuidedValidator().validate_dungeon_with_graph(dungeon_data)
+
+    assert result.is_solvable is True
+    assert result.start_node == 0
+    assert result.triforce_node == 1
 
 
 def test_validation_context_uses_stitched_slot_keys_for_puzzle_metadata():

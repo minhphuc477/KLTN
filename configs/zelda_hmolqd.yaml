@@ -114,6 +114,13 @@ diffusion:
   spatial_topology_gate_init: -2.0  # type=float, default=-2.0
   use_teacher_forced_neighbor_latents: true  # type=bool, default=true, valid={true,false}; enables real-neighbor local conditioning during room-level training
   puzzle_structure_dropout_prob: 0.35  # type=float, default=0.35, valid=0..1; train-only paired augmentation rate for puzzle rooms so the teacher learns explicit puzzle-on / puzzle-off control without changing VQ-VAE
+  puzzle_stage_conditioning_enabled: false  # type=bool, default=false, valid={true,false}; enable only for the staged-puzzle retrain because it appends ordered multi-step puzzle tokens to conditioning
+  puzzle_stage_token_scale: 0.20  # type=float, default=0.20, valid=0..2; deterministic token amplitude for ordered puzzle-stage conditioning
+  puzzle_stage_topology_enabled: false  # type=bool, default=false, valid={true,false}; inject ordered stage traces into room_topology_map during staged-puzzle training
+  puzzle_stage_trace_decay: 0.75  # type=float, default=0.75, valid=0.05..1; later puzzle stages receive lower traversability prior intensity
+  puzzle_stage_semantics_loss_weight: 0.0  # type=float, default=0.0, valid=0..10; auxiliary learned stage-semantics loss over decoded room logits
+  puzzle_stage_semantics_hidden_dim: 96  # type=int, default=96, valid=16..512; hidden width of the learned puzzle-stage semantics head
+  puzzle_stage_semantics_max_sequence_length: 6  # type=int, default=6, valid=1..12; maximum ordered puzzle stages supervised per room
   use_current_node_distance_features: true  # type=bool, default=true, valid={true,false}; adds current-room distance encoding to Block III/IV graph conditioning
   current_node_distance_max: 8  # type=int, default=8, valid>=1; clip/normalize graph distances beyond this radius
   room_topology_channels: 54  # type=int, default=54, valid>=1
@@ -204,6 +211,8 @@ generation:
   puzzle_room_novelty_weight: 0.45  # type=float, default=0.45, valid=0..2; strength of the novelty term when ranking valid puzzle scaffold candidates
   puzzle_room_min_quality_gain: 0.5  # type=float, default=0.5, valid=0..10; minimum score gain a scaffolded puzzle room must achieve over the cleaned no-scaffold room before we keep the scaffold
   validator_plan_max_states: 512  # type=int, default=512, valid=32..4096; cap room-local validator search used for topology priors so complex puzzle/key rooms fall back to the geometric trace instead of stalling generation
+  puzzle_stage_topology_enabled: false  # type=bool, default=false, valid={true,false}; enable only with retrained stage-conditioned checkpoints because it changes runtime topology priors toward ordered multi-step puzzle traces
+  puzzle_stage_trace_decay: 0.75  # type=float, default=0.75, valid=0.05..1; decay applied when rasterizing ordered puzzle stages into runtime topology priors
   deterministic_graph_marker_overlay_enabled: true  # type=bool, default=true, valid={true,false}; keep enabled for the production hybrid path, disable only for purely-neural semantic ablations
   fast_sampler_teacher_fallback_enabled: true  # type=bool, default=true, valid={true,false}; lets runtime guardrails reroute bad fast-sampler rooms to the teacher
   masked_room_teacher_fallback_enabled: true  # type=bool, default=true, valid={true,false}; protects production exports by rerouting obviously noisy masked-room outputs to the diffusion teacher
@@ -227,6 +236,13 @@ fast_sampler:
   decode_alignment_weight: 0.25  # type=float, default=0.25, valid>=0; add decoded-room CE supervision so few-step latent matching stays aligned with actual tile outputs
   topology_alignment_weight: 0.25  # type=float, default=0.25, valid>=0; extra CE pressure on topology-critical pixels so fast-sampler distillation cares about anchors, doors, gates, and puzzle-route structure
   puzzle_structure_dropout_prob: 0.35  # type=float, default=0.35, valid=0..1; train-only paired augmentation rate for puzzle rooms so the student learns the explicit puzzle-room-structure control instead of inheriting only the teacher prior
+  puzzle_stage_conditioning_enabled: false  # type=bool, default=false, valid={true,false}; expect ordered stage tokens only when distilling from a diffusion teacher retrained with staged puzzle semantics
+  puzzle_stage_token_scale: 0.20  # type=float, default=0.20, valid=0..2; deterministic ordered stage token amplitude during fast-sampler distillation
+  puzzle_stage_topology_enabled: false  # type=bool, default=false, valid={true,false}; inject ordered stage traces into topology priors for the staged-puzzle fast-sampler branch
+  puzzle_stage_trace_decay: 0.75  # type=float, default=0.75, valid=0.05..1; later puzzle stages receive lower trace intensity during distillation
+  puzzle_stage_semantics_loss_weight: 0.0  # type=float, default=0.0, valid=0..10; auxiliary learned stage-semantics loss over decoded student room logits
+  puzzle_stage_semantics_hidden_dim: 96  # type=int, default=96, valid=16..512; hidden width of the fast-sampler puzzle-stage semantics head
+  puzzle_stage_semantics_max_sequence_length: 6  # type=int, default=6, valid=1..12; maximum ordered puzzle stages supervised per room during distillation
   topology_marker_weight: 2.0  # type=float, default=2.0, valid>=0; relative emphasis for sparse topology markers, door slots, and typed gates inside the fast-sampler focus map
   topology_trace_weight: 0.75  # type=float, default=0.75, valid>=0; relative emphasis for traversability-trace pixels inside the fast-sampler focus map
   topology_focus_dilation: 1  # type=int, default=1, valid>=0; lightly dilate sparse topology focus regions so nearby pixels contribute to the fast-sampler topology loss
@@ -276,6 +292,13 @@ masked_room:
   max_mask_ratio: 0.85  # type=float, default=0.85, valid=0..1; must be >= min_mask_ratio
   topology_alignment_weight: 0.25  # type=float, default=0.25, valid>=0; extra masked-token CE pressure on topology-critical pixels so masked-room training learns anchors, doors, gates, and puzzle-route structure more explicitly
   puzzle_structure_dropout_prob: 0.35  # type=float, default=0.35, valid=0..1; train-only paired augmentation rate for puzzle rooms so masked-room learns puzzle-on / puzzle-off room structure explicitly
+  puzzle_stage_conditioning_enabled: false  # type=bool, default=false, valid={true,false}; append ordered puzzle-stage tokens to masked-room conditioning for the staged-puzzle retrain only
+  puzzle_stage_token_scale: 0.20  # type=float, default=0.20, valid=0..2; deterministic ordered stage token amplitude during masked-room training
+  puzzle_stage_topology_enabled: false  # type=bool, default=false, valid={true,false}; inject ordered stage traces into topology priors for masked-room staged-puzzle training
+  puzzle_stage_trace_decay: 0.75  # type=float, default=0.75, valid=0.05..1; later puzzle stages receive lower topology-trace intensity
+  puzzle_stage_semantics_loss_weight: 0.0  # type=float, default=0.0, valid=0..10; auxiliary learned stage-semantics loss over masked-room logits
+  puzzle_stage_semantics_hidden_dim: 96  # type=int, default=96, valid=16..512; hidden width of the masked-room puzzle-stage semantics head
+  puzzle_stage_semantics_max_sequence_length: 6  # type=int, default=6, valid=1..12; maximum ordered puzzle stages supervised per room
   topology_marker_weight: 2.0  # type=float, default=2.0, valid>=0; relative emphasis for sparse topology markers, door slots, and typed gates inside the masked-room focus map
   topology_trace_weight: 0.75  # type=float, default=0.75, valid>=0; relative emphasis for traversability-trace pixels inside the masked-room focus map
   topology_focus_dilation: 1  # type=int, default=1, valid>=0; lightly dilate sparse topology focus regions so nearby pixels contribute to the masked-room topology loss
