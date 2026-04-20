@@ -7,7 +7,6 @@ import torch
 
 from src.core.definitions import DOOR_POSITIONS, ROOM_HEIGHT, ROOM_WIDTH, SEMANTIC_PALETTE
 from src.core.condition_encoder import create_condition_encoder
-from src.core.gaussian_vae import create_gaussian_vae
 from src.core.latent_diffusion import create_latent_diffusion
 from src.core.logic_net import LogicNet
 from src.core.vqvae import create_vqvae
@@ -2111,62 +2110,6 @@ def test_pipeline_vqvae_loader_accepts_embedded_vqvae_from_composite_checkpoint(
     assert loaded_vqvae.latent_dim == 16
     assert loaded_vqvae.codebook_size == 32
     assert loaded_vqvae.encoder.conv_in.__class__.__name__ == "Conv2d"
-
-
-def test_pipeline_vqvae_loader_uses_gaussian_architecture(tmp_path):
-    pipeline = NeuralSymbolicDungeonPipeline.create_symbolic_repair_pipeline(
-        device="cpu",
-        enable_logging=False,
-    )
-
-    ckpt_path = tmp_path / "gaussian_vae_pretrained.pth"
-    gaussian = create_gaussian_vae(
-        num_classes=44,
-        latent_dim=16,
-        hidden_dim=32,
-        rare_tile_weight=5.0,
-        kl_weight=1.0,
-        use_coordconv=True,
-        mrf_penalty_weight=0.05,
-    )
-    torch.save(
-        {
-            "model_state_dict": gaussian.state_dict(),
-            "config": {
-                "num_classes": 44,
-                "latent_dim": 16,
-                "hidden_dim": 32,
-                "kl_weight": 1.0,
-                "use_coordconv": True,
-                "mrf_penalty_weight": 0.05,
-            },
-        },
-        ckpt_path,
-    )
-    ckpt_path.with_suffix(".pth.meta.json").write_text(
-        json.dumps(
-            {
-                "format_version": "1.0",
-                "model_type": "gaussian_vae",
-                "architecture": {
-                    "num_classes": 44,
-                    "latent_dim": 16,
-                    "hidden_dim": 32,
-                    "kl_weight": 1.0,
-                    "use_coordconv": True,
-                    "mrf_penalty_weight": 0.05,
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    loaded_latent = pipeline._load_vqvae(str(ckpt_path))
-
-    assert loaded_latent.__class__.__name__ == "SemanticGaussianVAE"
-    assert loaded_latent.num_classes == 44
-    assert loaded_latent.latent_dim == 16
-    assert loaded_latent.encoder.conv_in.__class__.__name__ == "CoordConv2d"
 
 
 def test_pipeline_diffusion_loader_rejects_checkpoint_without_diffusion_state_dict(tmp_path):

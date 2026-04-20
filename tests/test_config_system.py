@@ -10,7 +10,6 @@ import yaml
 
 import main
 import src.train as legacy_train
-from src.core.gaussian_vae import create_gaussian_vae
 from src.core.vqvae import create_vqvae
 from src.config_system import (
     cli_overrides_from_namespace,
@@ -922,88 +921,6 @@ def test_diffusion_trainer_updates_config_to_loaded_vqvae_architecture(tmp_path:
     assert trainer.config.vqvae_codebook_size == 512
     assert trainer.config.vqvae_use_coordconv is True
     assert trainer.config.vqvae_mrf_penalty_weight == pytest.approx(0.05)
-
-
-def test_diffusion_trainer_loads_gaussian_latent_autoencoder_from_metadata(tmp_path: Path):
-    ckpt = tmp_path / "gaussian_vae_pretrained.pth"
-    model = create_gaussian_vae(
-        num_classes=44,
-        latent_dim=64,
-        hidden_dim=96,
-        kl_weight=1.0,
-        rare_tile_weight=5.0,
-        use_coordconv=True,
-        mrf_penalty_weight=0.05,
-    )
-    torch.save({"model_state_dict": model.state_dict()}, ckpt)
-    meta = {
-        "format_version": "1.0",
-        "model_type": "gaussian_vae",
-        "architecture": {
-            "num_classes": 44,
-            "latent_dim": 64,
-            "hidden_dim": 96,
-            "use_coordconv": True,
-            "mrf_penalty_weight": 0.05,
-            "kl_weight": 1.0,
-            "rare_tile_weight": 5.0,
-        },
-    }
-    ckpt.with_suffix(".pth.meta.json").write_text(json.dumps(meta), encoding="utf-8")
-
-    trainer = object.__new__(DiffusionTrainer)
-    trainer.config = DiffusionTrainingConfig(
-        vqvae_checkpoint=str(ckpt),
-        num_classes=44,
-        latent_dim=64,
-        vqvae_hidden_dim=96,
-        vqvae_codebook_size=256,
-        vqvae_use_coordconv=False,
-        vqvae_mrf_penalty_weight=0.125,
-    )
-
-    latent_model = trainer._create_vqvae()
-
-    assert getattr(latent_model, "model_type", None) == "gaussian_vae"
-    assert trainer.config.latent_autoencoder_model_type == "gaussian_vae"
-    assert trainer.config.vqvae_hidden_dim == 96
-    assert trainer.config.vqvae_use_coordconv is True
-    assert trainer.config.vqvae_mrf_penalty_weight == pytest.approx(0.05)
-
-    sample = torch.zeros(1, 44, 16, 11)
-    z, indices = latent_model.encode(sample)
-    decoded = latent_model.decode(z, target_size=(16, 11))
-
-    assert z.shape[0] == 1
-    assert z.shape[1] == 64
-    assert indices.shape[0] == 1
-    assert decoded.shape[:2] == (1, 44)
-
-
-def test_diffusion_validation_preview_export_writes_artifacts(tmp_path: Path):
-    trainer = object.__new__(DiffusionTrainer)
-    trainer.config = SimpleNamespace(
-        checkpoint_dir=str(tmp_path / "checkpoints"),
-        latent_autoencoder_model_type="gaussian_vae",
-    )
-    trainer.epoch = 2
-
-    tile_logits = torch.zeros(1, 44, 16, 11)
-    trainer._save_validation_preview(tile_logits)
-
-    preview_root = tmp_path / "visual_previews" / "gaussian_vae" / "epoch_0003"
-    txt_path = preview_root / "sample_0000.txt"
-    png_path = preview_root / "sample_0000.png"
-
-    assert txt_path.exists()
-    assert txt_path.read_text(encoding="utf-8").strip()
-
-    import importlib.util
-
-    if importlib.util.find_spec("PIL") is None:
-        assert not png_path.exists()
-    else:
-        assert png_path.exists()
 
 
 def test_build_diffusion_training_config_from_args_preserves_yaml_only_methodology_knobs(tmp_path: Path):

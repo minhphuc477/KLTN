@@ -240,24 +240,6 @@ def _resolve_vqvae_checkpoint_for_generation(checkpoint_path: Path):
     """Prefer an embedded VQ-VAE, otherwise fall back to sibling pretrain weights."""
     import torch
 
-    metadata_path = Path(f"{checkpoint_path}.meta.json")
-    if metadata_path.exists():
-        try:
-            with open(metadata_path, "r", encoding="utf-8") as f:
-                metadata = json.load(f)
-            extra = metadata.get("extra", {}) if isinstance(metadata, dict) else {}
-            latent_checkpoint = extra.get("vqvae_checkpoint")
-            if isinstance(latent_checkpoint, str) and latent_checkpoint.strip():
-                candidate = Path(latent_checkpoint)
-                if str(extra.get("latent_autoencoder_model_type", "")).strip().lower() == "gaussian_vae":
-                    latest_resume = candidate.with_name("latest_resume.pth")
-                if candidate.exists():
-                    return candidate
-                if str(extra.get("latent_autoencoder_model_type", "")).strip().lower() == "gaussian_vae" and latest_resume.exists():
-                    return latest_resume
-        except (AttributeError, RuntimeError, ValueError, TypeError, OSError, json.JSONDecodeError):
-            pass
-
     candidate_paths = [
         checkpoint_path.parent / "vqvae_pretrained.pth",
         checkpoint_path.parent.parent / "vqvae" / "vqvae_pretrained.pth",
