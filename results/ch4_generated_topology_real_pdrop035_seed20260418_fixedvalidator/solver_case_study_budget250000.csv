@@ -1,0 +1,17 @@
+context,key,label,success,path_length,states_explored,time_sec,notes
+full,graph_guided_oracle,Graph-guided oracle,1,5,5,0.0,"room path=[0, 2, 3, 4, 1]"
+full,astar,A*,0,0,250000,20.8892,"Timeout: explored 250,000 states (limit: 250,000)"
+full,bfs,BFS,0,0,250000,17.6419,"Timeout: explored 250,000 states (limit: 250,000)"
+full,dijkstra,Dijkstra,0,0,250000,22.3525,"Timeout: explored 250,000 states (limit: 250,000)"
+full,greedy,Greedy,0,0,250000,22.3277,"Timeout: explored 250,000 states (limit: 250,000)"
+full,dstar_lite,D* Lite,0,0,250000,21.9622,Fallback to A* engaged.
+full,dfs_iddfs,DFS/IDDFS,0,0,253737,8.9107,
+full,bidirectional_astar,Bidirectional A*,1,84,692,0.0288,
+full,pcbs_balanced,P-CBS (balanced),1,364,363,0.6963,confusion_index=0.379
+grid_only,astar,A*,1,84,245004,21.5657,solved
+grid_only,bfs,BFS,0,0,250000,16.0078,"Timeout: explored 250,000 states (limit: 250,000)"
+grid_only,dijkstra,Dijkstra,0,0,250000,21.5763,"Timeout: explored 250,000 states (limit: 250,000)"
+grid_only,greedy,Greedy,1,84,31437,2.8213,solved
+grid_only,dstar_lite,D* Lite,1,84,245004,28.4218,Fallback to A* engaged.
+grid_only,dfs_iddfs,DFS/IDDFS,0,0,253737,8.9334,
+grid_only,bidirectional_astar,Bidirectional A*,1,84,692,0.0208,

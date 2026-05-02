@@ -51,6 +51,28 @@ NODE_STYLE: Dict[str, Dict[str, Any]] = {
     "UNKNOWN": {"color": "#8c564b", "shape": "o"},
 }
 
+NODE_DISPLAY_NAME: Dict[str, str] = {
+    "START": "Start",
+    "GOAL": "Goal",
+    "KEY": "Key",
+    "BIG_KEY": "Big Key",
+    "LOCK": "Lock",
+    "BOSS_DOOR": "Boss Door",
+    "BOSS": "Boss",
+    "MINI_BOSS": "Mini Boss",
+    "ENEMY": "Enemy",
+    "PUZZLE": "Puzzle",
+    "TUTORIAL_PUZZLE": "Tutorial Puzzle",
+    "COMBAT_PUZZLE": "Combat Puzzle",
+    "COMPLEX_PUZZLE": "Complex Puzzle",
+    "ITEM": "Item",
+    "SWITCH": "Switch",
+    "EMPTY": "Empty",
+    "STAIRS_DOWN": "Stairs Down",
+    "STAIRS_UP": "Stairs Up",
+    "UNKNOWN": "Room",
+}
+
 EDGE_STYLE: Dict[str, Dict[str, Any]] = {
     "PATH": {"color": "#9aa0a6", "width": 1.6, "style": "solid"},
     "LOCKED": {"color": "#d62728", "width": 2.0, "style": "solid"},
@@ -143,6 +165,8 @@ def _classify_node(attrs: Dict[str, Any]) -> str:
         return "PUZZLE"
     if "item" in tokens:
         return "ITEM"
+    if "switch" in tokens:
+        return "SWITCH"
     if "empty" in tokens:
         return "EMPTY"
     return "UNKNOWN"
@@ -235,14 +259,20 @@ def _draw_one_graph(
     G: nx.Graph,
     title: str,
     seed: int,
+    *,
+    label_mode: str = "minimal",
+    node_scale: float = 1.0,
+    title_fontsize: int = 9,
+    show_metrics: bool = True,
 ) -> None:
-    ax.set_title(title, fontsize=9, pad=8)
+    ax.set_title(title, fontsize=title_fontsize, pad=8)
     ax.set_axis_off()
     if G.number_of_nodes() == 0:
         return
 
     is_directed = bool(G.is_directed())
     pos = _progression_layout(G, seed=seed)
+    center = np.mean(np.asarray(list(pos.values()), dtype=np.float64), axis=0)
 
     for edge_class, style in EDGE_STYLE.items():
         edgelist = []
@@ -298,36 +328,115 @@ def _draw_one_graph(
             nodelist=nodes,
             node_color=style["color"],
             node_shape=style["shape"],
-            node_size=300 if node_class not in {"START", "GOAL"} else 420,
+            node_size=(320 if node_class not in {"START", "GOAL"} else 440) * float(node_scale),
             linewidths=0.7,
             edgecolors="#1f2937",
             ax=ax,
             alpha=0.95,
         )
 
-    # Label only important nodes to keep figure readable.
-    labels: Dict[Any, str] = {}
-    for n, attrs in G.nodes(data=True):
-        cls = _classify_node(attrs)
-        if cls in {"START", "GOAL", "KEY", "LOCK"}:
-            labels[n] = f"{n}:{cls[0]}"
-    nx.draw_networkx_labels(G, pos=pos, labels=labels, font_size=7, font_color="#111827", ax=ax)
+    if label_mode == "minimal":
+        labels: Dict[Any, str] = {}
+        for n, attrs in G.nodes(data=True):
+            cls = _classify_node(attrs)
+            if cls in {"START", "GOAL"}:
+                labels[n] = cls[0]
+            elif cls in {"KEY", "LOCK"}:
+                labels[n] = cls[0]
+        if labels:
+            nx.draw_networkx_labels(
+                G,
+                pos=pos,
+                labels=labels,
+                font_size=max(6, int(7 * float(node_scale))),
+                font_weight="bold",
+                font_color="#111827",
+                ax=ax,
+            )
+    elif label_mode == "readable":
+        for node_id, attrs in G.nodes(data=True):
+            node_class = _classify_node(attrs)
+            raw_type = str(attrs.get("type", attrs.get("label", "")) or "").strip().upper()
+            display = NODE_DISPLAY_NAME.get(raw_type, NODE_DISPLAY_NAME.get(node_class, node_class.title()))
+            text = display.replace(" ", "\n") if len(display) > 10 else display
+            point = np.asarray(pos[node_id], dtype=np.float64)
+            offset = point - center
+            norm = float(np.linalg.norm(offset))
+            if norm < 1e-6:
+                direction = np.asarray([0.0, 1.0], dtype=np.float64)
+            else:
+                direction = offset / norm
+            label_xy = point + direction * (0.12 + 0.05 * float(node_scale))
+            ha = "left" if direction[0] >= 0.12 else ("right" if direction[0] <= -0.12 else "center")
+            va = "bottom" if direction[1] >= 0.12 else ("top" if direction[1] <= -0.12 else "center")
+            ax.text(
+                float(label_xy[0]),
+                float(label_xy[1]),
+                text,
+                fontsize=max(7, int(8 * float(node_scale))),
+                fontweight="semibold",
+                color="#111827",
+                ha=ha,
+                va=va,
+                bbox={
+                    "boxstyle": "round,pad=0.22",
+                    "facecolor": "#ffffff",
+                    "edgecolor": "#d1d5db",
+                    "alpha": 0.92,
+                },
+                zorder=6,
+            )
 
     desc = extract_graph_descriptor(G, grammar=None)
-    metrics = (
-        f"n={desc.num_nodes} e={desc.num_edges} p={desc.path_length}\n"
-        f"lin={desc.linearity:.2f} topo={desc.topology_complexity:.2f}"
+    if show_metrics:
+        metrics = (
+            f"n={desc.num_nodes}  e={desc.num_edges}  p={desc.path_length}\n"
+            f"lin={desc.linearity:.2f}  topo={desc.topology_complexity:.2f}"
+        )
+        ax.text(
+            0.02,
+            0.02,
+            metrics,
+            transform=ax.transAxes,
+            fontsize=7,
+            va="bottom",
+            ha="left",
+            bbox={"boxstyle": "round,pad=0.25", "facecolor": "#ffffff", "alpha": 0.84, "edgecolor": "#d1d5db"},
+        )
+
+
+def save_single_graph_figure(
+    graph: nx.Graph,
+    out_path: Path,
+    *,
+    seed: int = 42,
+    title: str = "Mission Graph",
+) -> Dict[str, Any]:
+    fig, ax = plt.subplots(1, 1, figsize=(8.2, 6.4), dpi=220)
+    _draw_one_graph(
+        ax,
+        graph,
+        title=title,
+        seed=seed,
+        label_mode="readable",
+        node_scale=1.22,
+        title_fontsize=13,
+        show_metrics=True,
     )
-    ax.text(
-        0.02,
-        0.02,
-        metrics,
-        transform=ax.transAxes,
-        fontsize=7,
-        va="bottom",
-        ha="left",
-        bbox={"boxstyle": "round,pad=0.25", "facecolor": "#ffffff", "alpha": 0.8, "edgecolor": "#d1d5db"},
-    )
+    fig.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, bbox_inches="tight")
+    plt.close(fig)
+    desc = extract_graph_descriptor(graph, grammar=None)
+    return {
+        "num_nodes": int(desc.num_nodes),
+        "num_edges": int(desc.num_edges),
+        "path_length": int(desc.path_length),
+        "linearity": float(desc.linearity),
+        "leniency": float(desc.leniency),
+        "progression_complexity": float(desc.progression_complexity),
+        "topology_complexity": float(desc.topology_complexity),
+    }
 
 
 def _save_gallery(
@@ -341,9 +450,12 @@ def _save_gallery(
     if not chosen:
         return []
 
-    cols = min(4, max(1, int(math.ceil(math.sqrt(len(chosen))))))
+    if len(chosen) <= 9:
+        cols = min(3, max(1, int(math.ceil(math.sqrt(len(chosen))))))
+    else:
+        cols = min(4, max(1, int(math.ceil(math.sqrt(len(chosen))))))
     rows = int(math.ceil(len(chosen) / cols))
-    fig, axes = plt.subplots(rows, cols, figsize=(cols * 4.6, rows * 3.8), dpi=170)
+    fig, axes = plt.subplots(rows, cols, figsize=(cols * 4.8, rows * 4.25), dpi=170)
     axes_list = np.array(axes).reshape(-1)
 
     metadata: List[Dict[str, Any]] = []
@@ -366,12 +478,16 @@ def _save_gallery(
             G,
             title=f"{title_prefix} {idx + 1}",
             seed=seed + idx,
+            label_mode="minimal",
+            node_scale=1.0,
+            title_fontsize=11,
+            show_metrics=True,
         )
 
     for idx in range(len(chosen), len(axes_list)):
         axes_list[idx].set_axis_off()
 
-    fig.suptitle(f"{title_prefix} Gallery", fontsize=13, y=0.995)
+    fig.suptitle(f"{title_prefix} Graph Gallery", fontsize=15, y=0.995)
     node_handles = [
         Line2D(
             [0],
@@ -406,7 +522,7 @@ def _save_gallery(
         handles=node_handles + edge_handles,
         loc="lower center",
         ncol=7,
-        fontsize=7,
+        fontsize=8,
         frameon=True,
         bbox_to_anchor=(0.5, -0.01),
     )
@@ -425,61 +541,69 @@ def _save_descriptor_scatter(
     gen_desc = [extract_graph_descriptor(g, grammar=None) for g in generated]
     ref_desc = [extract_graph_descriptor(g, grammar=None) for g in reference]
 
-    fig, axes = plt.subplots(1, 2, figsize=(11.5, 4.8), dpi=180)
+    fig, axes = plt.subplots(1, 2, figsize=(13.2, 5.4), dpi=220)
     ax0, ax1 = axes
 
     ax0.scatter(
         [d.linearity for d in ref_desc],
         [d.leniency for d in ref_desc],
         c="#2563eb",
-        label="reference",
-        alpha=0.75,
-        s=28,
+        label="Reference",
+        alpha=0.7,
+        s=48,
+        edgecolors="white",
+        linewidth=0.5,
     )
     ax0.scatter(
         [d.linearity for d in gen_desc],
         [d.leniency for d in gen_desc],
         c="#dc2626",
-        label="generated",
-        alpha=0.75,
-        s=28,
+        label="Generated",
+        alpha=0.7,
+        s=48,
+        edgecolors="white",
+        linewidth=0.5,
     )
-    ax0.set_title("Linearity vs Leniency")
-    ax0.set_xlim(0.0, 1.0)
-    ax0.set_ylim(0.0, 1.0)
-    ax0.set_xlabel("linearity")
-    ax0.set_ylabel("leniency")
-    ax0.grid(alpha=0.2)
-    ax0.legend(loc="best", fontsize=8)
+    ax0.set_title("Linearity vs Leniency", fontsize=12, fontweight="bold", pad=10)
+    ax0.set_xlim(-0.05, 1.05)
+    ax0.set_ylim(-0.05, 1.05)
+    ax0.set_xlabel("Linearity", fontsize=11)
+    ax0.set_ylabel("Leniency", fontsize=11)
+    ax0.grid(alpha=0.25, linestyle="--")
+    ax0.legend(loc="best", fontsize=10, framealpha=0.95)
 
     ax1.scatter(
         [d.progression_complexity for d in ref_desc],
         [d.topology_complexity for d in ref_desc],
         c="#2563eb",
-        label="reference",
-        alpha=0.75,
-        s=28,
+        label="Reference",
+        alpha=0.7,
+        s=48,
+        edgecolors="white",
+        linewidth=0.5,
     )
     ax1.scatter(
         [d.progression_complexity for d in gen_desc],
         [d.topology_complexity for d in gen_desc],
         c="#dc2626",
-        label="generated",
-        alpha=0.75,
-        s=28,
+        label="Generated",
+        alpha=0.7,
+        s=48,
+        edgecolors="white",
+        linewidth=0.5,
     )
-    ax1.set_title("Progression vs Topology Complexity")
-    ax1.set_xlim(0.0, 1.0)
-    ax1.set_ylim(0.0, 1.0)
-    ax1.set_xlabel("progression_complexity")
-    ax1.set_ylabel("topology_complexity")
-    ax1.grid(alpha=0.2)
-    ax1.legend(loc="best", fontsize=8)
+    ax1.set_title("Progression vs Topology Complexity", fontsize=12, fontweight="bold", pad=10)
+    ax1.set_xlim(-0.05, 1.05)
+    ax1.set_ylim(-0.05, 1.05)
+    ax1.set_xlabel("Progression Complexity", fontsize=11)
+    ax1.set_ylabel("Topology Complexity", fontsize=11)
+    ax1.grid(alpha=0.25, linestyle="--")
+    ax1.legend(loc="best", fontsize=10, framealpha=0.95)
 
-    fig.suptitle("Block I Descriptor Distribution")
+    fig.suptitle("Block I Descriptor Distribution: Generated vs Reference", fontsize=14, fontweight="bold", y=0.98)
     fig.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path, bbox_inches="tight")
+    fig.savefig(out_path, bbox_inches="tight", dpi=220)
     plt.close(fig)
 
     def _mean(values: Iterable[float]) -> float:
@@ -502,7 +626,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Visualize generated vs reference Block I topology graphs.")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--num-generated", type=int, default=12)
-    parser.add_argument("--num-show", type=int, default=12)
+    parser.add_argument("--num-show", type=int, default=9)
     parser.add_argument("--reference-limit", type=int, default=18)
     parser.add_argument("--population-size", type=int, default=24)
     parser.add_argument("--generations", type=int, default=24)

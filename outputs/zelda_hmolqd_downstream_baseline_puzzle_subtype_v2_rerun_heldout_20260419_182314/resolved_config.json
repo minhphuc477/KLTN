@@ -1,12 +1,12 @@
 {
   "training": {
-    "stage": "diffusion"
+    "stage": "masked_room"
   },
   "runtime": {
     "experiment_name": "zelda_hmolqd",
-    "output_dir": "outputs\\\\zelda_hmolqd_downstream_baseline_puzzle_subtype_v2_rerun_heldout_20260419_182314",
+    "output_dir": "outputs\\zelda_hmolqd_downstream_baseline_puzzle_subtype_v2_rerun_heldout_20260419_182314",
     "log_file": "training.log",
-    "device": "cpu",
+    "device": "auto",
     "seed": 42,
     "verbose": true,
     "quick": false,
@@ -75,7 +75,7 @@
   },
   "diffusion": {
     "checkpoint_dir": "outputs\\zelda_hmolqd_downstream_baseline_puzzle_subtype_v2_rerun_heldout_20260419_182314\\checkpoints\\diffusion",
-    "vqvae_checkpoint": "outputs\\\\vqvae_audit_baseline_v2\\\\checkpoints\\\\vqvae\\\\vqvae_pretrained.pth",
+    "vqvae_checkpoint": null,
     "epochs": 100,
     "learning_rate": 0.0001,
     "optimizer_weight_decay": 1e-05,

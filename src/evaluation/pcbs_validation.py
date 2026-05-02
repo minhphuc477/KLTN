@@ -307,6 +307,7 @@ def evaluate_astar_vs_pcbs(
             "navigation_entropy": float(pcbs_metrics.navigation_entropy),
             "total_revisits": int(total_revisits),
             "aha_latency": int(pcbs_metrics.aha_latency),
+            "goal_sighting_latency": int(pcbs_metrics.aha_latency),
             "puzzle_stall_steps": int(puzzle_stall_steps),
             "confusion_index": float(pcbs_metrics.confusion_index),
             "cognitive_load": float(pcbs_metrics.cognitive_load),
@@ -355,13 +356,13 @@ def build_ieee_markdown_table(result: Mapping[str, Any], *, map_name: str = "Gen
             round(float(pcbs.get("path_efficiency_ratio", 0.0)), 3),
             int(pcbs.get("total_revisits", 0)),
             round(float(pcbs.get("navigation_entropy", 0.0)), 3),
-            int(pcbs.get("aha_latency", 0)),
+            int(pcbs.get("goal_sighting_latency", pcbs.get("aha_latency", 0))),
             str(comparison.get("pcbs_status") or pcbs.get("status") or ""),
         ),
     ]
 
     lines = [
-        f"| Map | Solver | Solved | Path Length | PER | Total Revisits | Navigation Entropy | Aha-Latency | Status |",
+        f"| Map | Solver | Solved | Path Length | PER | Total Revisits | Navigation Entropy | Goal-Sighting Latency | Status |",
         "|---|---|---:|---:|---:|---:|---:|---:|---|",
     ]
     for solver, solved, path_len, per, revisits, nav_entropy, aha_latency, status in rows:

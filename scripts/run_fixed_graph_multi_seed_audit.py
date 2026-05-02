@@ -55,6 +55,14 @@ def _safe_mean_or_none(values: Sequence[float]) -> float | None:
     return float(statistics.fmean(values)) if values else None
 
 
+def _safe_optional_float(value: Any) -> float | None:
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    return result if math.isfinite(result) else None
+
+
 def _json_sanitize(value: Any) -> Any:
     if isinstance(value, float):
         return value if math.isfinite(value) else None
@@ -145,9 +153,13 @@ def _aggregate_variant(entries: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
         for entry in entries
     ]
     cbs_confusion_ratios = [
-        float(entry.get("validation", {}).get("cbs_balanced", {}).get("confusion_ratio_vs_astar", float("inf")))
+        confusion_ratio
         for entry in entries
-        if math.isfinite(float(entry.get("validation", {}).get("cbs_balanced", {}).get("confusion_ratio_vs_astar", float("inf"))))
+        if (
+            confusion_ratio := _safe_optional_float(
+                entry.get("validation", {}).get("cbs_balanced", {}).get("confusion_ratio_vs_astar")
+            )
+        ) is not None
     ]
     cbs_confusion_index = [
         float(entry.get("validation", {}).get("cbs_balanced", {}).get("confusion_index", 0.0) or 0.0)
@@ -202,34 +214,49 @@ def _aggregate_variant(entries: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
         for entry in entries
     ]
     room_unique_ratios = [
-        float(entry.get("end_to_end_evaluation", {}).get("room_unique_ratio"))
+        room_unique_ratio
         for entry in entries
-        if entry.get("end_to_end_evaluation", {}).get("room_unique_ratio") is not None
-        and math.isfinite(float(entry.get("end_to_end_evaluation", {}).get("room_unique_ratio")))
+        if (
+            room_unique_ratio := _safe_optional_float(
+                entry.get("end_to_end_evaluation", {}).get("room_unique_ratio")
+            )
+        ) is not None
     ]
     room_pairwise_ncd_means = [
-        float(entry.get("end_to_end_evaluation", {}).get("room_pairwise_ncd", {}).get("mean"))
+        room_pairwise_ncd_mean
         for entry in entries
-        if entry.get("end_to_end_evaluation", {}).get("room_pairwise_ncd", {}).get("mean") is not None
-        and math.isfinite(float(entry.get("end_to_end_evaluation", {}).get("room_pairwise_ncd", {}).get("mean")))
+        if (
+            room_pairwise_ncd_mean := _safe_optional_float(
+                entry.get("end_to_end_evaluation", {}).get("room_pairwise_ncd", {}).get("mean")
+            )
+        ) is not None
     ]
     room_reference_ncd_means = [
-        float(entry.get("end_to_end_evaluation", {}).get("room_nearest_reference_ncd", {}).get("mean"))
+        room_reference_ncd_mean
         for entry in entries
-        if entry.get("end_to_end_evaluation", {}).get("room_nearest_reference_ncd", {}).get("mean") is not None
-        and math.isfinite(float(entry.get("end_to_end_evaluation", {}).get("room_nearest_reference_ncd", {}).get("mean")))
+        if (
+            room_reference_ncd_mean := _safe_optional_float(
+                entry.get("end_to_end_evaluation", {}).get("room_nearest_reference_ncd", {}).get("mean")
+            )
+        ) is not None
     ]
     room_symbol_entropy_means = [
-        float(entry.get("end_to_end_evaluation", {}).get("room_symbol_entropy_mean"))
+        room_symbol_entropy_mean
         for entry in entries
-        if entry.get("end_to_end_evaluation", {}).get("room_symbol_entropy_mean") is not None
-        and math.isfinite(float(entry.get("end_to_end_evaluation", {}).get("room_symbol_entropy_mean")))
+        if (
+            room_symbol_entropy_mean := _safe_optional_float(
+                entry.get("end_to_end_evaluation", {}).get("room_symbol_entropy_mean")
+            )
+        ) is not None
     ]
     dungeon_symbol_entropy = [
-        float(entry.get("end_to_end_evaluation", {}).get("dungeon_symbol_entropy_non_void"))
+        dungeon_symbol_entropy_non_void
         for entry in entries
-        if entry.get("end_to_end_evaluation", {}).get("dungeon_symbol_entropy_non_void") is not None
-        and math.isfinite(float(entry.get("end_to_end_evaluation", {}).get("dungeon_symbol_entropy_non_void")))
+        if (
+            dungeon_symbol_entropy_non_void := _safe_optional_float(
+                entry.get("end_to_end_evaluation", {}).get("dungeon_symbol_entropy_non_void")
+            )
+        ) is not None
     ]
     room_hash_signatures = [
         "|".join(f"{room_id}:{digest}" for room_id, digest in sorted(entry["room_hashes"].items()))
@@ -272,17 +299,19 @@ def _aggregate_variant(entries: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
             bucket["path_length"].append(float(result.get("path_length", 0.0) or 0.0))
             bucket["states_explored"].append(float(result.get("states_explored", 0.0) or 0.0))
             bucket["time_sec"].append(float(result.get("time_sec", 0.0) or 0.0))
-            path_ratio = result.get("path_ratio_vs_astar")
-            if path_ratio is not None and math.isfinite(float(path_ratio)):
-                bucket["path_ratio_vs_astar"].append(float(path_ratio))
-            states_ratio = result.get("states_ratio_vs_astar")
-            if states_ratio is not None and math.isfinite(float(states_ratio)):
-                bucket["states_ratio_vs_astar"].append(float(states_ratio))
+            path_ratio = _safe_optional_float(result.get("path_ratio_vs_astar"))
+            if path_ratio is not None:
+                bucket["path_ratio_vs_astar"].append(path_ratio)
+            states_ratio = _safe_optional_float(result.get("states_ratio_vs_astar"))
+            if states_ratio is not None:
+                bucket["states_ratio_vs_astar"].append(states_ratio)
         for agreement_name, value in dict(suite.get("agreement", {})).items():
             if isinstance(value, bool):
                 agreement_buckets.setdefault(str(agreement_name), []).append(1.0 if value else 0.0)
-            elif value is not None and math.isfinite(float(value)):
-                agreement_buckets.setdefault(str(agreement_name), []).append(float(value))
+            else:
+                numeric_value = _safe_optional_float(value)
+                if numeric_value is not None:
+                    agreement_buckets.setdefault(str(agreement_name), []).append(numeric_value)
 
     for algorithm_name, bucket in algorithm_buckets.items():
         search_algorithm_aggregate["tile_state_space"][algorithm_name] = {

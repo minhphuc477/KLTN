@@ -37,6 +37,28 @@ logger = logging.getLogger(__name__)
 # DATA STRUCTURES
 # ============================================================================
 
+
+def _is_start_node(data: Dict[str, Any], label_parts: List[str]) -> bool:
+    """Accept both legacy `s` labels and current START-typed mission-graph nodes."""
+    node_type = str(data.get("type", "")).strip().lower()
+    return (
+        "s" in label_parts
+        or bool(data.get("is_start", False))
+        or node_type in {"start", "start_pointer"}
+    )
+
+
+def _is_goal_node(data: Dict[str, Any], label_parts: List[str]) -> bool:
+    """Accept both legacy `t` labels and current GOAL-typed mission-graph nodes."""
+    node_type = str(data.get("type", "")).strip().lower()
+    return (
+        "t" in label_parts
+        or bool(data.get("has_triforce", False))
+        or bool(data.get("is_goal", False))
+        or bool(data.get("has_goal", False))
+        or node_type in {"goal", "triforce"}
+    )
+
 @dataclass
 class ValidationState:
     """State for validation pathfinding."""
@@ -199,9 +221,9 @@ class AgentSimulator:
                 or bool(data.get('has_puzzle', False))
             ):
                 self.switch_nodes.add(node_id)
-            if 's' in label_parts or data.get('is_start', False):
+            if _is_start_node(data, label_parts):
                 self.start_node = node_id
-            if 't' in label_parts or data.get('has_triforce', False):
+            if _is_goal_node(data, label_parts):
                 self.goal_node = node_id
     
     def can_traverse(

@@ -1,0 +1,12 @@
+{
+  "variant_name": "diffusion_cfg3_logic0_steps50",
+  "stage": "complete",
+  "seed": 42,
+  "guidance_scale": 3.0,
+  "logic_guidance_scale": 0.0,
+  "num_diffusion_steps": 50,
+  "use_fast_sampling": false,
+  "generation_time_sec": 28.09329128265381,
+  "room_count": 16,
+  "summary_path": "results\\ch4_full_pipeline_real\\diffusion_cfg3_logic0_steps50\\summary.json"
+}

@@ -13,7 +13,7 @@ runtime:
   checkpoint_storage_warning_fraction: 0.8
   checkpoint_storage_cleanup_enabled: true
   checkpoint_storage_cleanup_target_fraction: 0.6
-  resume: null
+  resume: outputs\zelda_hmolqd_puzzlecookbook_baseline_pdrop015_v1\checkpoints\diffusion\latest_resume.pth
 distributed:
   enabled: false
   backend: nccl
@@ -110,7 +110,7 @@ diffusion:
   spatial_graph_gate_init: -2.0
   spatial_topology_gate_init: -2.0
   use_teacher_forced_neighbor_latents: true
-  puzzle_structure_dropout_prob: 0.15
+  puzzle_structure_dropout_prob: 0.35
   puzzle_stage_conditioning_enabled: false
   puzzle_stage_token_scale: 0.2
   puzzle_stage_topology_enabled: false
@@ -227,7 +227,7 @@ generation:
   masked_room_corrector_mask_ratio: 0.1
 fast_sampler:
   checkpoint_dir: outputs\zelda_hmolqd_puzzlecookbook_baseline_pdrop015_v1\checkpoints\fast_sampler
-  base_diffusion_checkpoint: null
+  base_diffusion_checkpoint: outputs\zelda_hmolqd_puzzlecookbook_baseline_pdrop015_v1\checkpoints\diffusion\best_model.pth
   epochs: 10
   learning_rate: 0.0001
   optimizer_weight_decay: 0.0001
@@ -238,7 +238,7 @@ fast_sampler:
   prediction_loss_weight: 0.25
   decode_alignment_weight: 0.25
   topology_alignment_weight: 0.25
-  puzzle_structure_dropout_prob: 0.35
+  puzzle_structure_dropout_prob: 0.15
   puzzle_stage_conditioning_enabled: false
   puzzle_stage_token_scale: 0.2
   puzzle_stage_topology_enabled: false

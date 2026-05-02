@@ -1,10 +1,10 @@
 training:
-  stage: diffusion
+  stage: masked_room
 runtime:
   experiment_name: zelda_hmolqd
-  output_dir: outputs\\zelda_hmolqd_downstream_codebook512_puzzle_subtype_v2_rerun_heldout_20260419_182314
+  output_dir: outputs\zelda_hmolqd_downstream_codebook512_puzzle_subtype_v2_rerun_heldout_20260419_182314
   log_file: training.log
-  device: cpu
+  device: auto
   seed: 42
   verbose: true
   quick: false
@@ -69,7 +69,7 @@ vqvae:
   best_checkpoint_metric: val_loss
 diffusion:
   checkpoint_dir: outputs\zelda_hmolqd_downstream_codebook512_puzzle_subtype_v2_rerun_heldout_20260419_182314\checkpoints\diffusion
-  vqvae_checkpoint: outputs\\vqvae_ablation_codebook512_v2\\checkpoints\\vqvae\\vqvae_pretrained.pth
+  vqvae_checkpoint: null
   epochs: 100
   learning_rate: 0.0001
   optimizer_weight_decay: 1.0e-05

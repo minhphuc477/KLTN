@@ -171,6 +171,24 @@ class TestExternalValidator:
         assert hasattr(result, 'is_solvable')
         assert result.is_solvable == True
 
+    def test_validate_graph_accepts_typed_start_goal_nodes(self):
+        """Graph validator should honor START/GOAL node types from Block I exports."""
+        from src.evaluation.validator import ExternalValidator
+
+        validator = ExternalValidator()
+
+        graph = nx.DiGraph()
+        graph.add_node(0, label="START", type="START")
+        graph.add_node(1, label="ENEMY", type="ENEMY")
+        graph.add_node(2, label="GOAL", type="GOAL")
+        graph.add_edge(0, 1, edge_type="open")
+        graph.add_edge(1, 2, edge_type="open")
+
+        result = validator.validate(graph)
+
+        assert result.is_solvable is True
+        assert result.path_length >= 2
+
 
 class TestCBSFitnessProxy:
     """Tests for graph-proxy CBS fitness semantics."""

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import inspect
 import json
 import logging
 from pathlib import Path
@@ -59,6 +60,16 @@ from src.utils.checkpoint import (
 from src.zelda_data.zelda_loader import create_dataloader, graph_collate_fn
 
 logger = logging.getLogger(__name__)
+
+
+def _filter_constructor_kwargs(constructor: Any, raw_config: Dict[str, Any]) -> Dict[str, Any]:
+    """Keep only kwargs accepted by a config constructor when loading older/newer checkpoints."""
+    accepted_names = {
+        name
+        for name, param in inspect.signature(constructor).parameters.items()
+        if name != "self" and param.kind in {param.POSITIONAL_OR_KEYWORD, param.KEYWORD_ONLY}
+    }
+    return {key: value for key, value in raw_config.items() if key in accepted_names}
 
 
 class FastSamplerTrainingConfig:
@@ -377,7 +388,18 @@ class ConsistencyLoRATrainer:
         if not isinstance(base_cfg_raw, dict):
             raise ValueError(f"Base diffusion checkpoint {checkpoint_path!r} is missing config metadata.")
 
-        cfg_kwargs = dict(base_cfg_raw)
+        cfg_kwargs = _filter_constructor_kwargs(DiffusionTrainingConfig.__init__, base_cfg_raw)
+        ignored_keys = sorted(set(base_cfg_raw) - set(cfg_kwargs))
+        if ignored_keys:
+            preview = ", ".join(ignored_keys[:8])
+            if len(ignored_keys) > 8:
+                preview = f"{preview}, ..."
+            logger.info(
+                "Ignoring %d unsupported diffusion config keys from %s: %s",
+                len(ignored_keys),
+                checkpoint_path,
+                preview,
+            )
         cfg_kwargs["data_dir"] = self.config.data_dir or cfg_kwargs.get("data_dir", "Data/The Legend of Zelda")
         cfg_kwargs["batch_size"] = int(self.config.batch_size)
         cfg_kwargs["room_level"] = bool(self.config.room_level)
@@ -636,7 +658,7 @@ class ConsistencyLoRATrainer:
                 eval_seed=eval_seed,
             )
             for key, value in step_metrics.items():
-                metrics[key] += float(value)
+                metrics[key] = metrics.get(key, 0.0) + float(value)
             count += 1
             if max_batches is not None and count >= int(max_batches):
                 break
@@ -1064,7 +1086,7 @@ def train_fast_sampler(config: FastSamplerTrainingConfig) -> ConsistencyLoRATrai
                 )
             step_metrics = trainer.distill_step(real_maps, graph_list)
             for key, value in step_metrics.items():
-                running[key] += float(value)
+                running[key] = running.get(key, 0.0) + float(value)
             count += 1
             if batch_idx % 10 == 0:
                 logger.debug(
@@ -1105,6 +1127,8 @@ def train_fast_sampler(config: FastSamplerTrainingConfig) -> ConsistencyLoRATrai
             current_metric_value = float(val_metrics["val_topology_decode_ce_loss"])
         elif best_metric_name == "val_decode_ce_loss":
             current_metric_value = float(val_metrics["val_decode_ce_loss"])
+        elif best_metric_name == "val_puzzle_stage_semantic_loss":
+            current_metric_value = float(val_metrics["val_puzzle_stage_semantic_loss"])
         elif best_metric_name == "val_loss":
             current_metric_value = float(val_metrics["val_loss"])
         else:

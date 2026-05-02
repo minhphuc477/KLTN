@@ -30,6 +30,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 import networkx as nx
 import numpy as np
+import yaml
 from PIL import Image, ImageDraw
 from networkx.readwrite import json_graph
 
@@ -80,8 +81,30 @@ def _json_sanitize(value: Any) -> Any:
     return value
 
 
+def _load_resolved_config(run_dir: Path) -> Dict[str, Any]:
+    json_path = run_dir / "resolved_config.json"
+    if json_path.exists():
+        raw_json = json_path.read_text(encoding="utf-8")
+        try:
+            payload = json.loads(raw_json)
+            if isinstance(payload, dict):
+                return payload
+        except json.JSONDecodeError:
+            pass
+
+    yaml_path = run_dir / "resolved_config.yaml"
+    if yaml_path.exists():
+        payload = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+        if isinstance(payload, dict):
+            return payload
+
+    raise FileNotFoundError(
+        f"Could not load a valid resolved config from {json_path} or {yaml_path}."
+    )
+
+
 def _resolve_dataset_data_root(run_dir: Path) -> Path:
-    resolved = json.loads((run_dir / "resolved_config.json").read_text(encoding="utf-8"))
+    resolved = _load_resolved_config(run_dir)
     dataset_cfg = dict(resolved.get("dataset", {}))
     data_root = Path(str(dataset_cfg.get("data_dir", "Data/The Legend of Zelda")))
     if not data_root.is_absolute():
@@ -1643,7 +1666,7 @@ def build_pipeline(
     generation_overrides: Optional[Mapping[str, Any]] = None,
     device_override: Optional[str] = None,
 ) -> NeuralSymbolicDungeonPipeline:
-    resolved = json.loads((run_dir / "resolved_config.json").read_text(encoding="utf-8"))
+    resolved = _load_resolved_config(run_dir)
     resolved = _apply_generation_overrides(resolved, generation_overrides)
     export_device = str(device_override).strip().lower() if device_override else _resolve_export_device(resolved)
     pipeline_kwargs = pipeline_kwargs_from_resolved_config(resolved)

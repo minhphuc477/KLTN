@@ -48,7 +48,7 @@ ARCHITECTURE OVERVIEW:
     â”‚  â€¢ Confusion Index = revisits / unique_visits                        â”‚
     â”‚  â€¢ Navigation Entropy = -Î£ p(dir) log p(dir)                         â”‚
     â”‚  â€¢ Cognitive Load = memory_size Ã— confidence_variance                â”‚
-    â”‚  â€¢ Aha Latency = time_see_goal - time_reach_goal                     â”‚
+    â”‚  â€¢ Goal-Sighting Latency = time_see_goal - time_reach_goal          â”‚
     â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
 
 INTEGRATION:
@@ -63,7 +63,7 @@ INTEGRATION:
     print(metrics.confusion_index)      # How lost the agent got
     print(metrics.navigation_entropy)   # Decision randomness
     print(metrics.cognitive_load)       # Mental effort estimate
-    print(metrics.aha_latency)          # Discovery-to-completion time
+    print(metrics.aha_latency)          # Goal-sighting-to-completion time
 
 VERSION: 1.0.0
 """
@@ -132,9 +132,10 @@ class CBSMetrics:
                        Formula: (memory_items / capacity) Ã— (1 + ÏƒÂ²_confidence)
                        Range: [0, âˆž), typical [0.1, 2.0]
                        
-        aha_latency: Steps between first seeing the goal and reaching it.
-                    Low = efficient path exploitation
-                    High = poor spatial memory or suboptimal routing
+        aha_latency: Legacy internal name for goal-sighting latency:
+                    steps between first seeing the goal and reaching it.
+                    Low = efficient path exploitation.
+                    High = poor spatial memory or suboptimal routing.
                     
         unique_tiles_visited: Number of distinct positions explored
         
@@ -206,6 +207,7 @@ class CBSMetrics:
             'navigation_entropy': round(self.navigation_entropy, 4),
             'cognitive_load': round(self.cognitive_load, 4),
             'aha_latency': self.aha_latency,
+            'goal_sighting_latency': self.aha_latency,
             'unique_tiles_visited': self.unique_tiles_visited,
             'total_steps': self.total_steps,
             'peak_memory_usage': self.peak_memory_usage,
@@ -236,7 +238,7 @@ class CBSMetrics:
 â•‘ Confusion Index:     {self.confusion_index:>8.3f}  (revisits/unique, low=good)     â•‘
 â•‘ Navigation Entropy:  {self.navigation_entropy:>8.3f}  (bits, 0=linear, 2=random)   â•‘
 â•‘ Cognitive Load:      {self.cognitive_load:>8.3f}  (memoryÃ—uncertainty)            â•‘
-â•‘ Aha Latency:         {self.aha_latency:>8d}  steps (seeâ†’reach goal)             â•‘
+â•‘ Goal-Sighting Lat.:  {self.aha_latency:>8d}  steps (seeâ†’reach goal)             â•‘
 â• â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•£
 â•‘ Unique Tiles:        {self.unique_tiles_visited:>8d}  â”‚ Total Steps: {self.total_steps:>8d}          â•‘
 â•‘ Exploration Eff:     {self.exploration_efficiency:>8.3f}  â”‚ Peak Memory: {self.peak_memory_usage:>8d}          â•‘

@@ -1854,12 +1854,12 @@ class DiffusionTrainer:
         total_epochs = int(getattr(self.config, "epochs", self.epoch + 1))
         self._estimated_total_steps = max(1, total_epochs * len(dataloader))
         
-        include_logic = self.epoch >= self.config.warmup_epochs
+        include_logic = self.epoch > self.config.warmup_epochs
         if sampler is not None and hasattr(sampler, "set_epoch"):
             sampler.set_epoch(int(self.epoch))
         logger.info(
             "Train epoch %d/%d: logic_loss_%s (warmup_epochs=%d)",
-            int(self.epoch + 1),
+            int(self.epoch),
             total_epochs,
             "enabled" if include_logic and self.config.alpha_logic > 0 else "disabled",
             int(self.config.warmup_epochs),
@@ -2058,7 +2058,7 @@ class DiffusionTrainer:
                 'val_skipped_nonfinite': float(skipped_nonfinite),
             }
 
-        include_logic = self.epoch >= self.config.warmup_epochs and self.config.alpha_logic > 0
+        include_logic = self.epoch > self.config.warmup_epochs and self.config.alpha_logic > 0
         val_diffusion_loss = total_diffusion_loss / max(num_diffusion_eval, 1)
         val_logic_loss = total_logic_loss / max(num_generated_eval, 1)
         val_total_loss = compute_teacher_validation_total_loss(
@@ -2174,10 +2174,32 @@ class DiffusionTrainer:
         self.condition_encoder.load_state_dict(checkpoint['condition_encoder_state_dict'])
         if 'logic_net_state_dict' in checkpoint:
             self.logic_net.load_state_dict(checkpoint['logic_net_state_dict'])
+        optimizer_state_loaded = False
         if 'optimizer_state_dict' in checkpoint:
-            self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            try:
+                self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+                optimizer_state_loaded = True
+            except ValueError as exc:
+                logger.warning(
+                    "Skipping optimizer state from %s because it is incompatible with the current trainer: %s",
+                    path,
+                    exc,
+                )
         if 'scheduler_state_dict' in checkpoint:
-            self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+            try:
+                self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+            except ValueError as exc:
+                reason = (
+                    "optimizer state was not restored"
+                    if not optimizer_state_loaded
+                    else "the scheduler state is incompatible with the current trainer"
+                )
+                logger.warning(
+                    "Skipping scheduler state from %s because %s: %s",
+                    path,
+                    reason,
+                    exc,
+                )
         
         # Re-wire LogicNet into guidance after loading
         self.diffusion.guidance.logic_net = self.logic_net
@@ -2352,7 +2374,7 @@ def train_diffusion(config: DiffusionTrainingConfig) -> DiffusionTrainer:
                 best_solvability = float(latest_metrics.get("best_solvability", latest_metrics.get("val_solvability", 0.0)))
                 best_teacher_loss = float(latest_metrics.get("best_teacher_loss", latest_metrics.get("val_total_loss", float("inf"))))
 
-        for epoch in range(int(getattr(trainer, "epoch", -1)) + 1, config.epochs):
+        for epoch in range(int(getattr(trainer, "epoch", 0)) + 1, config.epochs + 1):
             trainer.epoch = int(epoch)
             train_metrics = trainer.train_epoch(train_loader, sampler=train_sampler)
             maybe_barrier(distributed_context)
@@ -2374,19 +2396,19 @@ def train_diffusion(config: DiffusionTrainingConfig) -> DiffusionTrainer:
                 metrics_logger.log(metrics)
 
                 logger.info(
-                    f"Epoch {epoch+1}/{config.epochs}: "
+                    f"Epoch {epoch}/{config.epochs}: "
                     f"loss={train_metrics['loss']:.4f}, "
                     f"diffusion={train_metrics['diffusion_loss']:.4f}, "
                     f"val_diffusion_loss={val_metrics.get('val_diffusion_loss', float('inf')):.4f}, "
                     f"val_logic_loss={val_metrics.get('val_logic_loss', 0.0):.4f}, "
                     f"val_total_loss={val_metrics.get('val_total_loss', float('inf')):.4f}, "
                     f"val_solvability_proxy={val_metrics.get('val_solvability_proxy', val_metrics['val_solvability']):.4f}, "
-                    f"logic_loss_{'enabled' if epoch >= config.warmup_epochs and config.alpha_logic > 0 else 'disabled'}"
+                    f"logic_loss_{'enabled' if epoch > config.warmup_epochs and config.alpha_logic > 0 else 'disabled'}"
                 )
 
-                if (epoch + 1) % config.save_every == 0:
+                if epoch % config.save_every == 0:
                     trainer.save_checkpoint(
-                        str(checkpoint_dir / f"resume_epoch_{epoch+1:04d}.pth"),
+                        str(checkpoint_dir / f"resume_epoch_{epoch:04d}.pth"),
                         metrics,
                         include_optimizer=True,
                     )

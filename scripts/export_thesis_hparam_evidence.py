@@ -107,14 +107,14 @@ DIFFUSION_RUNS: List[DiffusionRunSpec] = [
     DiffusionRunSpec(
         run_id="baseline_branch_diffusion",
         label="Baseline branch diffusion",
-        output_dir="outputs/zelda_hmolqd_downstream_baseline_puzzle_subtype_v2",
+        output_dir="outputs/zelda_hmolqd_downstream_baseline_puzzle_subtype_v2_rerun_heldout_20260419_182314",
         tokenizer_label="Baseline VQ-VAE",
         tokenizer_codebook_size=256,
     ),
     DiffusionRunSpec(
         run_id="codebook512_branch_diffusion",
         label="Codebook-512 branch diffusion",
-        output_dir="outputs/zelda_hmolqd_downstream_codebook512_puzzle_subtype_v2",
+        output_dir="outputs/zelda_hmolqd_downstream_codebook512_puzzle_subtype_v2_rerun_heldout_20260419_182314",
         tokenizer_label="Codebook-512 VQ-VAE",
         tokenizer_codebook_size=512,
     ),

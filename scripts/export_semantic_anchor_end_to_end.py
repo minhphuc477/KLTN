@@ -38,6 +38,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from scripts.run_fast_sampler_visual_audit import (
     _json_sanitize,
+    _load_resolved_config,
     _resolve_vqvae_checkpoint,
     _resolve_dataset_data_root,
     _resolve_export_device,
@@ -96,7 +97,7 @@ def build_masked_room_pipeline(
     generation_overrides: Dict[str, Any] | None = None,
     device_override: str | None = None,
 ) -> NeuralSymbolicDungeonPipeline:
-    resolved = json.loads((run_dir / "resolved_config.json").read_text(encoding="utf-8"))
+    resolved = _load_resolved_config(run_dir)
     if generation_overrides:
         generation = resolved.setdefault("generation", {})
         for key, value in generation_overrides.items():

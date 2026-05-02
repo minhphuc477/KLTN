@@ -1,0 +1,12 @@
+{
+  "variant_name": "fast_cfg3_logic0_steps4",
+  "stage": "complete",
+  "seed": 20260418,
+  "guidance_scale": 3.0,
+  "logic_guidance_scale": 0.0,
+  "num_diffusion_steps": 4,
+  "use_fast_sampling": true,
+  "generation_time_sec": 68.26091074943542,
+  "room_count": 12,
+  "summary_path": "results\\ch4_generated_topology_real_pdrop035_seed20260418_fixedvalidator\\fast_cfg3_logic0_steps4\\summary.json"
+}
