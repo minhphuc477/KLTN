@@ -97,8 +97,10 @@ def test_run_solver_comparison_starts_background_thread_and_populates_results():
     assert not gui.solver_comparison_thread.is_alive()
 
     assert isinstance(gui.solver_comparison_results, list)
-    assert len(gui.solver_comparison_results) == 14
+    assert len(gui.solver_comparison_results) == 16
     assert any(item["name"] == "A*" and item["success"] for item in gui.solver_comparison_results)
+    assert any(item["name"] == "P-CBS (Completionist)" for item in gui.solver_comparison_results)
+    assert any(item["name"] == "P-CBS (Novice)" for item in gui.solver_comparison_results)
     a_star_row = next(item for item in gui.solver_comparison_results if item["name"] == "A*")
     assert a_star_row.get("fallback_used") is False
     assert gui.show_solver_comparison_overlay is True

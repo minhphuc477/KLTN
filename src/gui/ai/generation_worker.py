@@ -6,7 +6,7 @@ import os
 from src.gui.ai.generation_pipeline import (
     apply_mission_graph_constraints,
     apply_mixed_initiative_constraints,
-    apply_generated_dungeon,
+    build_generated_dungeon_payload,
     ensure_mission_graph_editor_draft,
     generate_dungeon_with_pipeline,
     generate_mission_graph,
@@ -18,15 +18,26 @@ from src.gui.ai.generation_pipeline import (
 
 def run_ai_generation_worker(gui, logger):
     """Execute the full AI generation pipeline from a background worker thread."""
+    def _finish_failure(message):
+        gui.ai_gen_result = {"success": False, "error": str(message), "message": str(message)}
+        gui.ai_gen_done = True
+
     try:
         import random as _random
         import numpy as np
         import torch
 
-        checkpoint_path = resolve_checkpoint_path()
+        gui_checkpoint_path = getattr(gui, "ai_checkpoint_path", None)
+        checkpoint_path = (
+            resolve_checkpoint_path(gui_checkpoint_path)
+            if gui_checkpoint_path
+            else resolve_checkpoint_path()
+        )
         if not checkpoint_path.exists():
-            gui._set_message("No AI checkpoint found - train first!")
+            message = "No AI checkpoint found - train first!"
+            gui._set_message(message)
             logger.warning("Checkpoint not found: %s", checkpoint_path)
+            _finish_failure(message)
             return
 
         strict_checkpoint_mode = str(os.environ.get("KLTN_STRICT_CHECKPOINTS", "")).strip().lower() in {
@@ -128,8 +139,7 @@ def run_ai_generation_worker(gui, logger):
             logger=logger,
         )
 
-        applied = apply_generated_dungeon(
-            gui=gui,
+        applied = build_generated_dungeon_payload(
             tile_grid=tile_grid,
             seed=seed,
             num_nodes=num_nodes,
@@ -145,22 +155,37 @@ def run_ai_generation_worker(gui, logger):
             applied["width"],
             applied["unique_tiles"],
         )
+        result_message = applied["message"]
+        clear_mixed_constraints = False
         if (
             applied_constraints.get("boss_applied")
             or applied_constraints.get("lock_applied")
             or applied_constraints.get("key_applied")
         ):
-            gui._set_message(
+            result_message = (
                 "AI dungeon generated with mixed-initiative constraints "
                 f"(boss={applied_constraints.get('boss_applied')}, "
                 f"lock={applied_constraints.get('lock_applied')}, "
                 f"key={applied_constraints.get('key_applied')})"
             )
-            gui.ai_constraint_boss_norm = None
-            gui.ai_constraint_lock_norm = None
-            gui.ai_constraint_key_norm = None
-        gui.ai_mission_graph_draft = copy.deepcopy(mission_graph)
+            clear_mixed_constraints = True
+        gui.ai_gen_result = {
+            "success": True,
+            "grid": tile_grid,
+            "name": applied["name"],
+            "message": result_message,
+            "num_nodes": num_nodes,
+            "num_edges": num_edges,
+            "height": applied["height"],
+            "width": applied["width"],
+            "unique_tiles": applied["unique_tiles"],
+            "clear_mixed_constraints": clear_mixed_constraints,
+            "mission_graph_draft": copy.deepcopy(mission_graph),
+        }
+        gui.ai_gen_done = True
     except (AttributeError, RuntimeError, ValueError, TypeError, ImportError, OSError) as exc:
         logger.exception("AI generation failed: %s", exc)
-        gui._set_message(f"AI generation failed: {exc}")
+        message = f"AI generation failed: {exc}"
+        gui._set_message(message)
+        _finish_failure(message)
 

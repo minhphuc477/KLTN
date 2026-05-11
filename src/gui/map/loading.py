@@ -243,7 +243,8 @@ def load_current_map(
     except (AttributeError, RuntimeError, ValueError, TypeError):
         pass
 
-    try:
-        gui._start_preview_for_current_map()
-    except (AttributeError, RuntimeError, ValueError, TypeError):
-        logger.exception("Failed to start preview for current map")
+    if getattr(gui, "auto_start_preview", False) and os_module.environ.get("KLTN_DISABLE_PREVIEW") != "1":
+        try:
+            gui._start_preview_for_current_map()
+        except (AttributeError, RuntimeError, ValueError, TypeError):
+            logger.exception("Failed to start preview for current map")

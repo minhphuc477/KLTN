@@ -91,18 +91,20 @@ def run_solver_comparison(
 
             if "CBS" in name:
                 try:
-                    from src.simulation.cognitive_bounded_search import CognitiveBoundedSearch
+                    from src.simulation.cognitive_bounded_search import PersonaDrivenCognitiveBoundedSearch
 
                     persona_map = {
-                        "CBS (Balanced)": "balanced",
-                        "CBS (Explorer)": "explorer",
-                        "CBS (Cautious)": "cautious",
-                        "CBS (Forgetful)": "forgetful",
-                        "CBS (Speedrunner)": "speedrunner",
-                        "CBS (Greedy)": "greedy",
+                        "P-CBS (Balanced)": "balanced",
+                        "P-CBS (Explorer)": "explorer",
+                        "P-CBS (Cautious)": "cautious",
+                        "P-CBS (Forgetful)": "forgetful",
+                        "P-CBS (Speedrunner)": "speedrunner",
+                        "P-CBS (Greedy)": "greedy",
+                        "P-CBS (Completionist)": "completionist",
+                        "P-CBS (Novice)": "novice",
                     }
                     persona = persona_map.get(name, "balanced")
-                    cbs = CognitiveBoundedSearch(gui.env, persona=persona, timeout=100000)
+                    cbs = PersonaDrivenCognitiveBoundedSearch(gui.env, persona=persona, timeout=100000)
                     ok, path, states, metrics = cbs.solve()
                     elapsed = (time_module.time() - start_t) * 1000
                     if ok:

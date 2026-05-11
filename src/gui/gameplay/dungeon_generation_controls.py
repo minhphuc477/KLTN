@@ -56,6 +56,6 @@ def generate_dungeon(gui: Any, logger: Any) -> None:
     except ImportError as exc:
         logger.warning("Dungeon generator not available: %s", exc)
         gui._set_message("Dungeon generator module not found")
-    except (AttributeError, RuntimeError, ValueError, TypeError):
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         logger.exception("Failed to generate dungeon: %s", exc)
         gui._set_message(f"Generation failed: {str(exc)}")

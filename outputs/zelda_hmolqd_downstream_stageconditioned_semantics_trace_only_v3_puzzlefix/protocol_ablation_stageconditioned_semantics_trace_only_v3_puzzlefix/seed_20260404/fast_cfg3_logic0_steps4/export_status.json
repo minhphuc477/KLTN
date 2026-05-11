@@ -1,0 +1,12 @@
+{
+  "variant_name": "fast_cfg3_logic0_steps4",
+  "stage": "complete",
+  "seed": 20260404,
+  "guidance_scale": 3.0,
+  "logic_guidance_scale": 0.0,
+  "num_diffusion_steps": 4,
+  "use_fast_sampling": true,
+  "generation_time_sec": 87.20862364768982,
+  "room_count": 12,
+  "summary_path": "outputs\\zelda_hmolqd_downstream_stageconditioned_semantics_trace_only_v3_puzzlefix\\protocol_ablation_stageconditioned_semantics_trace_only_v3_puzzlefix\\seed_20260404\\fast_cfg3_logic0_steps4\\summary.json"
+}

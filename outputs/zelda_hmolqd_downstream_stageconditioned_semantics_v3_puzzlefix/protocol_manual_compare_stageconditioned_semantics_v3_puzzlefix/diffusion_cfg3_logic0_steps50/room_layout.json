@@ -1,0 +1,552 @@
+{
+  "room_count": 19,
+  "layout_quality": {
+    "room_count": 19.0,
+    "graph_slot_match_rate": 0.0,
+    "graph_position_coverage_rate": 1.0,
+    "graph_preferred_position_duplicate_rate": 0.5263157894736842,
+    "graph_slot_preference_mean_distance": 4.578947368421052,
+    "graph_slot_preference_max_distance": 8.0,
+    "graph_edge_slot_adjacency_rate": 0.9,
+    "graph_edge_slot_mean_distance": 1.15,
+    "graph_edge_slot_mean_excess_distance": 0.15,
+    "graph_edge_slot_max_distance": 3.0,
+    "graph_edge_count_evaluated": 20.0
+  },
+  "primary_quality_metric_name": "graph_edge_slot_adjacency_rate",
+  "primary_quality_metric_value": 0.9,
+  "rooms": [
+    {
+      "room_id": 0,
+      "label": "START",
+      "type": "START",
+      "graph_pos": [
+        0,
+        0
+      ],
+      "slot_position": [
+        6,
+        1
+      ],
+      "room_offset": [
+        96,
+        11
+      ],
+      "bbox": [
+        11,
+        96,
+        21,
+        111
+      ],
+      "center": [
+        103,
+        16
+      ],
+      "slot_matches_graph_pos": false
+    },
+    {
+      "room_id": 1,
+      "label": "GOAL",
+      "type": "GOAL",
+      "graph_pos": [
+        5,
+        5
+      ],
+      "slot_position": [
+        4,
+        0
+      ],
+      "room_offset": [
+        64,
+        0
+      ],
+      "bbox": [
+        0,
+        64,
+        10,
+        79
+      ],
+      "center": [
+        71,
+        5
+      ],
+      "slot_matches_graph_pos": false
+    },
+    {
+      "room_id": 2,
+      "label": "BOSS_DOOR",
+      "type": "BOSS_DOOR",
+      "graph_pos": [
+        3,
+        5
+      ],
+      "slot_position": [
+        6,
+        0
+      ],
+      "room_offset": [
+        96,
+        0
+      ],
+      "bbox": [
+        0,
+        96,
+        10,
+        111
+      ],
+      "center": [
+        103,
+        5
+      ],
+      "slot_matches_graph_pos": false
+    },
+    {
+      "room_id": 3,
+      "label": "BOSS",
+      "type": "BOSS",
+      "graph_pos": [
+        4,
+        5
+      ],
+      "slot_position": [
+        5,
+        0
+      ],
+      "room_offset": [
+        80,
+        0
+      ],
+      "bbox": [
+        0,
+        80,
+        10,
+        95
+      ],
+      "center": [
+        87,
+        5
+      ],
+      "slot_matches_graph_pos": false
+    },
+    {
+      "room_id": 4,
+      "label": "BIG_KEY",
+      "type": "BIG_KEY",
+      "graph_pos": [
+        0,
+        1
+      ],
+      "slot_position": [
+        5,
+        1
+      ],
+      "room_offset": [
+        80,
+        11
+      ],
+      "bbox": [
+        11,
+        80,
+        21,
+        95
+      ],
+      "center": [
+        87,
+        16
+      ],
+      "slot_matches_graph_pos": false
+    },
+    {
+      "room_id": 5,
+      "label": "STAIRS_DOWN",
+      "type": "STAIRS_DOWN",
+      "graph_pos": [
+        0,
+        1
+      ],
+      "slot_position": [
+        4,
+        1
+      ],
+      "room_offset": [
+        64,
+        11
+      ],
+      "bbox": [
+        11,
+        64,
+        21,
+        79
+      ],
+      "center": [
+        71,
+        16
+      ],
+      "slot_matches_graph_pos": false
+    },
+    {
+      "room_id": 6,
+      "label": "STAIRS_UP",
+      "type": "STAIRS_UP",
+      "graph_pos": [
+        0,
+        1
+      ],
+      "slot_position": [
+        3,
+        1
+      ],
+      "room_offset": [
+        48,
+        11
+      ],
+      "bbox": [
+        11,
+        48,
+        21,
+        63
+      ],
+      "center": [
+        55,
+        16
+      ],
+      "slot_matches_graph_pos": false
+    },
+    {
+      "room_id": 7,
+      "label": "PUZZLE",
+      "type": "PUZZLE",
+      "graph_pos": [
+        2,
+        1
+      ],
+      "slot_position": [
+        5,
+        2
+      ],
+      "room_offset": [
+        80,
+        22
+      ],
+      "bbox": [
+        22,
+        80,
+        32,
+        95
+      ],
+      "center": [
+        87,
+        27
+      ],
+      "slot_matches_graph_pos": false
+    },
+    {
+      "room_id": 8,
+      "label": "SWITCH",
+      "type": "SWITCH",
+      "graph_pos": [
+        5,
+        5
+      ],
+      "slot_position": [
+        1,
+        3
+      ],
+      "room_offset": [
+        16,
+        33
+      ],
+      "bbox": [
+        33,
+        16,
+        43,
+        31
+      ],
+      "center": [
+        23,
+        38
+      ],
+      "slot_matches_graph_pos": false
+    },
+    {
+      "room_id": 9,
+      "label": "SWITCH",
+      "type": "SWITCH",
+      "graph_pos": [
+        5,
+        5
+      ],
+      "slot_position": [
+        0,
+        3
+      ],
+      "room_offset": [
+        0,
+        33
+      ],
+      "bbox": [
+        33,
+        0,
+        43,
+        15
+      ],
+      "center": [
+        7,
+        38
+      ],
+      "slot_matches_graph_pos": false
+    },
+    {
+      "room_id": 10,
+      "label": "SWITCH",
+      "type": "SWITCH",
+      "graph_pos": [
+        5,
+        5
+      ],
+      "slot_position": [
+        1,
+        4
+      ],
+      "room_offset": [
+        16,
+        44
+      ],
+      "bbox": [
+        44,
+        16,
+        54,
+        31
+      ],
+      "center": [
+        23,
+        49
+      ],
+      "slot_matches_graph_pos": false
+    },
+    {
+      "room_id": 11,
+      "label": "SWITCH",
+      "type": "SWITCH",
+      "graph_pos": [
+        0,
+        1
+      ],
+      "slot_position": [
+        2,
+        1
+      ],
+      "room_offset": [
+        32,
+        11
+      ],
+      "bbox": [
+        11,
+        32,
+        21,
+        47
+      ],
+      "center": [
+        39,
+        16
+      ],
+      "slot_matches_graph_pos": false
+    },
+    {
+      "room_id": 12,
+      "label": "ITEM",
+      "type": "ITEM",
+      "graph_pos": [
+        2,
+        1
+      ],
+      "slot_position": [
+        4,
+        2
+      ],
+      "room_offset": [
+        64,
+        22
+      ],
+      "bbox": [
+        22,
+        64,
+        32,
+        79
+      ],
+      "center": [
+        71,
+        27
+      ],
+      "slot_matches_graph_pos": false
+    },
+    {
+      "room_id": 13,
+      "label": "TUTORIAL_PUZZLE",
+      "type": "TUTORIAL_PUZZLE",
+      "graph_pos": [
+        3,
+        1
+      ],
+      "slot_position": [
+        2,
+        2
+      ],
+      "room_offset": [
+        32,
+        22
+      ],
+      "bbox": [
+        22,
+        32,
+        32,
+        47
+      ],
+      "center": [
+        39,
+        27
+      ],
+      "slot_matches_graph_pos": false
+    },
+    {
+      "room_id": 14,
+      "label": "ARENA",
+      "type": "ARENA",
+      "graph_pos": [
+        4,
+        1
+      ],
+      "slot_position": [
+        1,
+        2
+      ],
+      "room_offset": [
+        16,
+        22
+      ],
+      "bbox": [
+        22,
+        16,
+        32,
+        31
+      ],
+      "center": [
+        23,
+        27
+      ],
+      "slot_matches_graph_pos": false
+    },
+    {
+      "room_id": 15,
+      "label": "COMPLEX_PUZZLE",
+      "type": "COMPLEX_PUZZLE",
+      "graph_pos": [
+        5,
+        1
+      ],
+      "slot_position": [
+        0,
+        2
+      ],
+      "room_offset": [
+        0,
+        22
+      ],
+      "bbox": [
+        22,
+        0,
+        32,
+        15
+      ],
+      "center": [
+        7,
+        27
+      ],
+      "slot_matches_graph_pos": false
+    },
+    {
+      "room_id": 16,
+      "label": "TUTORIAL_PUZZLE",
+      "type": "TUTORIAL_PUZZLE",
+      "graph_pos": [
+        3,
+        1
+      ],
+      "slot_position": [
+        3,
+        2
+      ],
+      "room_offset": [
+        48,
+        22
+      ],
+      "bbox": [
+        22,
+        48,
+        32,
+        63
+      ],
+      "center": [
+        55,
+        27
+      ],
+      "slot_matches_graph_pos": false
+    },
+    {
+      "room_id": 17,
+      "label": "COMBAT_PUZZLE",
+      "type": "COMBAT_PUZZLE",
+      "graph_pos": [
+        4,
+        1
+      ],
+      "slot_position": [
+        3,
+        3
+      ],
+      "room_offset": [
+        48,
+        33
+      ],
+      "bbox": [
+        33,
+        48,
+        43,
+        63
+      ],
+      "center": [
+        55,
+        38
+      ],
+      "slot_matches_graph_pos": false
+    },
+    {
+      "room_id": 18,
+      "label": "COMPLEX_PUZZLE",
+      "type": "COMPLEX_PUZZLE",
+      "graph_pos": [
+        5,
+        1
+      ],
+      "slot_position": [
+        2,
+        3
+      ],
+      "room_offset": [
+        32,
+        33
+      ],
+      "bbox": [
+        33,
+        32,
+        43,
+        47
+      ],
+      "center": [
+        39,
+        38
+      ],
+      "slot_matches_graph_pos": false
+    }
+  ]
+}

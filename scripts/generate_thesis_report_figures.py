@@ -476,6 +476,97 @@ def plot_pcbs_persona_ablation() -> None:
     _save(fig, "pcbs_persona_ablation_heatmap.png")
 
 
+def plot_matched_budget_ablation_comparison() -> None:
+    random_n64_path = ROOT / "results" / "random_baseline_matched_n64" / "matched_budget_report.json"
+    random_n96_path = ROOT / "results" / "random_baseline_matched_n96" / "matched_budget_report.json"
+    paired_path = ROOT / "results" / "paired_seed_ablation" / "paired_seed_ablation_report.json"
+
+    if not random_n64_path.exists() or not random_n96_path.exists() or not paired_path.exists():
+        return
+
+    random_n64 = _load_json(random_n64_path)["summary"][0]
+    random_n96 = _load_json(random_n96_path)["summary"][0]
+    paired = _load_json(paired_path)["sections"]["paired_seeds_statistical_test"]["results"]
+
+    rows = [
+        {
+            "label": "Random n64",
+            "fitness": float(random_n64["fitness"]),
+            "coverage": float(random_n64["map_elites_coverage"]),
+            "color": "#9ca3af",
+        },
+        {
+            "label": "MAP-Elites n64",
+            "fitness": float(paired["mean_fitness_n64"]),
+            "coverage": float(random_n64["map_elites_coverage"]),
+            "color": "#2ca02c",
+        },
+        {
+            "label": "Random n96",
+            "fitness": float(random_n96["fitness"]),
+            "coverage": float(random_n96["map_elites_coverage"]),
+            "color": "#b0b7bf",
+        },
+        {
+            "label": "MAP-Elites n96",
+            "fitness": float(paired["mean_fitness_n96"]),
+            "coverage": float(random_n96["map_elites_coverage"]),
+            "color": "#1f77b4",
+        },
+    ]
+
+    labels = [row["label"] for row in rows]
+    fitness = np.asarray([row["fitness"] for row in rows], dtype=float)
+    coverage = np.asarray([row["coverage"] for row in rows], dtype=float)
+    colors = [row["color"] for row in rows]
+
+    fig, axes = plt.subplots(1, 2, figsize=(11.4, 4.2))
+
+    x = np.arange(len(rows))
+    bars = axes[0].bar(x, fitness, color=colors, width=0.7)
+    axes[0].set_xticks(x)
+    axes[0].set_xticklabels(labels, rotation=16, ha="right")
+    axes[0].set_ylabel("Mean fitness")
+    axes[0].set_title("Matched-budget fitness")
+    axes[0].grid(axis="y", alpha=0.25, linestyle="--")
+    for bar, value in zip(bars, fitness):
+        axes[0].text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height() + 0.004,
+            f"{value:.3f}",
+            ha="center",
+            va="bottom",
+            fontsize=8,
+        )
+
+    bars = axes[1].bar(x, coverage * 100.0, color=colors, width=0.7)
+    axes[1].set_xticks(x)
+    axes[1].set_xticklabels(labels, rotation=16, ha="right")
+    axes[1].set_ylabel("Archive coverage (%)")
+    axes[1].set_title("Matched-budget coverage")
+    axes[1].grid(axis="y", alpha=0.25, linestyle="--")
+    for bar, value in zip(bars, coverage):
+        axes[1].text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height() + 0.1,
+            f"{value*100:.1f}%",
+            ha="center",
+            va="bottom",
+            fontsize=8,
+        )
+
+    fig.suptitle("Random baseline vs. MAP-Elites under matched budgets", fontsize=14)
+    fig.text(
+        0.5,
+        0.02,
+        f"n=128 paired comparison: p={paired['p_value']:.4f}, d={paired['cohens_d']:.3f}, improvement={paired['percent_improvement']:.2f}%",
+        ha="center",
+        fontsize=9,
+    )
+
+    _save(fig, "matched_budget_random_vs_map_elites.png")
+
+
 def main() -> None:
     _ensure_out_dir()
     plot_vqvae_overview()
@@ -483,6 +574,7 @@ def main() -> None:
     plot_mission_graph_matched_budget()
     plot_topology_robustness()
     plot_pcbs_persona_ablation()
+    plot_matched_budget_ablation_comparison()
     print(f"Wrote figures to {OUT_DIR}")
 
 

@@ -5,6 +5,53 @@ from __future__ import annotations
 from typing import Any
 
 
+def _level_options(gui: Any) -> list[str]:
+    """Return user-facing level names for the level selector."""
+    names = list(getattr(gui, "map_names", []) or [])
+    count = len(getattr(gui, "maps", []) or [])
+    if len(names) < count:
+        names.extend(f"Level {idx + 1}" for idx in range(len(names), count))
+    if not names:
+        names = ["Level 1"]
+    return [str(name) for name in names]
+
+
+def _checkbox_labels(advanced_gui: bool) -> list[tuple[str, str]]:
+    """Return checkbox state fields and labels for the current GUI mode."""
+    if advanced_gui:
+        return [
+            ("solver_comparison", "Solver Comparison"),
+            ("parallel_search", "Parallel Search"),
+            ("multi_goal", "Multi-Goal Pathfinding"),
+            ("ml_heuristic", "ML Heuristic"),
+            ("dstar_lite", "D* Lite Replanning"),
+            ("show_heatmap", "Show Heatmap Overlay"),
+            ("show_path", "Show Path Overlay"),
+            ("show_map_elites", "Show MAP-Elites Overlay"),
+            ("show_topology", "Show Topology Overlay"),
+            ("show_topology_legend", "Topology Legend (details)"),
+            ("show_minimap", "Show Minimap"),
+            ("diagonal_movement", "Diagonal Movement"),
+            ("use_jps", "Use Jump Point Search (JPS)"),
+            ("show_jps_overlay", "Show JPS Overlay"),
+            ("speedrun_mode", "Speedrun Mode"),
+            ("strict_original_mode", "Strict Original LoZ Rules"),
+            ("dynamic_difficulty", "Dynamic Difficulty"),
+            ("force_grid", "Force Grid Solver"),
+            ("enable_prechecks", "Enable Prechecks (fast checks before solve)"),
+            ("auto_prune_on_precheck", "Auto-Prune Dead-Ends on Precheck"),
+            ("priority_tie_break", "Priority: Tie-Break by Locks"),
+            ("priority_key_boost", "Priority: Key-Pickup Boost"),
+            ("enable_ara", "Enable ARA* (weighted A*)"),
+            ("persist_dropdown_on_select", "Keep dropdown open after select"),
+        ]
+    return [
+        ("show_path", "Show Solution Path"),
+        ("show_minimap", "Show Mini Map"),
+        ("show_topology", "Show Room Graph"),
+    ]
+
+
 def update_control_panel_positions(
     gui: Any,
     pygame: Any,
@@ -77,15 +124,40 @@ def update_control_panel_positions(
     if panel_width <= collapsed_width + 8:
         return
 
+    level_options = _level_options(gui)
+    advanced_gui = bool(getattr(gui, "advanced_gui", False))
+    checkbox_labels = _checkbox_labels(advanced_gui)
+    feature_signature = tuple(
+        (flag_name, bool(getattr(gui, "feature_flags", {}).get(flag_name, False)))
+        for flag_name, _label in checkbox_labels
+    )
+    panel_signature = (
+        advanced_gui,
+        tuple(level_options),
+        int(getattr(gui, "current_map_idx", 0)),
+        tuple(zoom_labels),
+        tuple(difficulty_names),
+        tuple(algorithm_names),
+        feature_signature,
+        int(getattr(gui, "zoom_level_idx", 0)),
+        int(getattr(gui, "difficulty_idx", 0)),
+        int(getattr(gui, "algorithm_idx", 0)),
+        int(getattr(gui, "current_preset_idx", 0)),
+        str(getattr(gui, "search_representation", "hybrid")),
+        str(getattr(gui, "ara_weight", "1.0")),
+    )
     widgets_exist = hasattr(gui, "widget_manager") and gui.widget_manager and len(gui.widget_manager.widgets) > 0
-    if widgets_exist:
+    signature_changed = getattr(gui, "_control_panel_widget_signature", None) != panel_signature
+    if widgets_exist and not signature_changed:
         gui._reposition_widgets(panel_x, panel_y)
         return
 
     saved_dropdown_state = None
     if hasattr(gui, "widget_manager") and gui.widget_manager:
-        saved_dropdown_state = gui.widget_manager.snapshot_dropdown_state()
+        if not signature_changed:
+            saved_dropdown_state = gui.widget_manager.snapshot_dropdown_state()
         gui.widget_manager.widgets.clear()
+    gui._control_panel_widget_signature = panel_signature
 
     margin_left = 12
     margin_top = 48
@@ -95,33 +167,6 @@ def update_control_panel_positions(
 
     y_offset = panel_y + margin_top
     x_offset = panel_x + margin_left
-
-    checkbox_labels = [
-        ("solver_comparison", "Solver Comparison"),
-        ("parallel_search", "Parallel Search"),
-        ("multi_goal", "Multi-Goal Pathfinding"),
-        ("ml_heuristic", "ML Heuristic"),
-        ("dstar_lite", "D* Lite Replanning"),
-        ("show_heatmap", "Show Heatmap Overlay"),
-        ("show_path", "Show Path Overlay"),
-        ("show_map_elites", "Show MAP-Elites Overlay"),
-        ("show_topology", "Show Topology Overlay"),
-        ("show_topology_legend", "Topology Legend (details)"),
-        ("show_minimap", "Show Minimap"),
-        ("diagonal_movement", "Diagonal Movement"),
-        ("use_jps", "Use Jump Point Search (JPS)"),
-        ("show_jps_overlay", "Show JPS Overlay"),
-        ("speedrun_mode", "Speedrun Mode"),
-        ("strict_original_mode", "Strict Original LoZ Rules"),
-        ("dynamic_difficulty", "Dynamic Difficulty"),
-        ("force_grid", "Force Grid Solver"),
-        ("enable_prechecks", "Enable Prechecks (fast checks before solve)"),
-        ("auto_prune_on_precheck", "Auto-Prune Dead-Ends on Precheck"),
-        ("priority_tie_break", "Priority: Tie-Break by Locks"),
-        ("priority_key_boost", "Priority: Key-Pickup Boost"),
-        ("enable_ara", "Enable ARA* (weighted A*)"),
-        ("persist_dropdown_on_select", "Keep dropdown open after select"),
-    ]
 
     for flag_name, label in checkbox_labels:
         checkbox = checkbox_widget_cls(
@@ -135,16 +180,29 @@ def update_control_panel_positions(
 
     y_offset += section_gap
 
-    floor_dropdown = dropdown_widget_cls(
+    level_selected = max(0, min(int(getattr(gui, "current_map_idx", 0)), len(level_options) - 1))
+    level_dropdown = dropdown_widget_cls(
         (x_offset, y_offset),
-        "Floor",
-        ["Floor 1", "Floor 2", "Floor 3"],
-        selected=gui.current_floor - 1,
+        "Level",
+        level_options,
+        selected=level_selected,
         keep_open_on_select=gui.feature_flags.get("persist_dropdown_on_select", False),
     )
-    setattr(floor_dropdown, "control_name", "floor")
-    gui.widget_manager.add_widget(floor_dropdown)
+    setattr(level_dropdown, "control_name", "level")
+    gui.widget_manager.add_widget(level_dropdown)
     y_offset += dropdown_spacing
+
+    if advanced_gui:
+        floor_dropdown = dropdown_widget_cls(
+            (x_offset, y_offset),
+            "Floor",
+            ["Floor 1", "Floor 2", "Floor 3"],
+            selected=gui.current_floor - 1,
+            keep_open_on_select=gui.feature_flags.get("persist_dropdown_on_select", False),
+        )
+        setattr(floor_dropdown, "control_name", "floor")
+        gui.widget_manager.add_widget(floor_dropdown)
+        y_offset += dropdown_spacing
 
     zoom_dropdown = dropdown_widget_cls(
         (x_offset, y_offset),
@@ -157,47 +215,48 @@ def update_control_panel_positions(
     gui.widget_manager.add_widget(zoom_dropdown)
     y_offset += dropdown_spacing
 
-    ara_options = ["1.0", "1.25", "1.5", "2.0"]
-    try:
-        ara_value = float(getattr(gui, "ara_weight", 1.0))
-        ara_selected = min(
-            range(len(ara_options)),
-            key=lambda idx: abs(float(ara_options[idx]) - ara_value),
+    if advanced_gui:
+        ara_options = ["1.0", "1.25", "1.5", "2.0"]
+        try:
+            ara_value = float(getattr(gui, "ara_weight", 1.0))
+            ara_selected = min(
+                range(len(ara_options)),
+                key=lambda idx: abs(float(ara_options[idx]) - ara_value),
+            )
+        except (AttributeError, RuntimeError, ValueError, TypeError):
+            ara_selected = 0
+        ara_dropdown = dropdown_widget_cls(
+            (x_offset, y_offset),
+            "ARA* weight",
+            ara_options,
+            selected=ara_selected,
+            keep_open_on_select=gui.feature_flags.get("persist_dropdown_on_select", False),
         )
-    except (AttributeError, RuntimeError, ValueError, TypeError):
-        ara_selected = 0
-    ara_dropdown = dropdown_widget_cls(
-        (x_offset, y_offset),
-        "ARA* weight",
-        ara_options,
-        selected=ara_selected,
-        keep_open_on_select=gui.feature_flags.get("persist_dropdown_on_select", False),
-    )
-    setattr(ara_dropdown, "control_name", "ara_weight")
-    gui.widget_manager.add_widget(ara_dropdown)
-    y_offset += dropdown_spacing
+        setattr(ara_dropdown, "control_name", "ara_weight")
+        gui.widget_manager.add_widget(ara_dropdown)
+        y_offset += dropdown_spacing
 
-    difficulty_dropdown = dropdown_widget_cls(
-        (x_offset, y_offset),
-        "Difficulty",
-        difficulty_names,
-        selected=gui.difficulty_idx,
-        keep_open_on_select=gui.feature_flags.get("persist_dropdown_on_select", False),
-    )
-    setattr(difficulty_dropdown, "control_name", "difficulty")
-    gui.widget_manager.add_widget(difficulty_dropdown)
-    y_offset += dropdown_spacing
+        difficulty_dropdown = dropdown_widget_cls(
+            (x_offset, y_offset),
+            "Difficulty",
+            difficulty_names,
+            selected=gui.difficulty_idx,
+            keep_open_on_select=gui.feature_flags.get("persist_dropdown_on_select", False),
+        )
+        setattr(difficulty_dropdown, "control_name", "difficulty")
+        gui.widget_manager.add_widget(difficulty_dropdown)
+        y_offset += dropdown_spacing
 
-    presets_dropdown = dropdown_widget_cls(
-        (x_offset, y_offset),
-        "Presets",
-        gui.presets,
-        selected=gui.current_preset_idx,
-        keep_open_on_select=gui.feature_flags.get("persist_dropdown_on_select", False),
-    )
-    setattr(presets_dropdown, "control_name", "presets")
-    gui.widget_manager.add_widget(presets_dropdown)
-    y_offset += dropdown_spacing
+        presets_dropdown = dropdown_widget_cls(
+            (x_offset, y_offset),
+            "Presets",
+            gui.presets,
+            selected=gui.current_preset_idx,
+            keep_open_on_select=gui.feature_flags.get("persist_dropdown_on_select", False),
+        )
+        setattr(presets_dropdown, "control_name", "presets")
+        gui.widget_manager.add_widget(presets_dropdown)
+        y_offset += dropdown_spacing
 
     algorithm_dropdown = dropdown_widget_cls(
         (x_offset, y_offset),
@@ -210,31 +269,32 @@ def update_control_panel_positions(
     gui.widget_manager.add_widget(algorithm_dropdown)
     y_offset += dropdown_spacing
 
-    rep_options = ["Hybrid (Graph+Tile)", "Tile Only", "Graph Only"]
-    rep_to_idx = {"hybrid": 0, "tile": 1, "graph": 2}
-    rep_selected = rep_to_idx.get(str(getattr(gui, "search_representation", "hybrid")).lower(), 0)
-    representation_dropdown = dropdown_widget_cls(
-        (x_offset, y_offset),
-        "Search Space",
-        rep_options,
-        selected=rep_selected,
-        keep_open_on_select=gui.feature_flags.get("persist_dropdown_on_select", False),
-    )
-    setattr(representation_dropdown, "control_name", "representation")
-    gui.widget_manager.add_widget(representation_dropdown)
-    y_offset += dropdown_spacing
+    if advanced_gui:
+        rep_options = ["Hybrid (Graph+Tile)", "Tile Only", "Graph Only"]
+        rep_to_idx = {"hybrid": 0, "tile": 1, "graph": 2}
+        rep_selected = rep_to_idx.get(str(getattr(gui, "search_representation", "hybrid")).lower(), 0)
+        representation_dropdown = dropdown_widget_cls(
+            (x_offset, y_offset),
+            "Search Space",
+            rep_options,
+            selected=rep_selected,
+            keep_open_on_select=gui.feature_flags.get("persist_dropdown_on_select", False),
+        )
+        setattr(representation_dropdown, "control_name", "representation")
+        gui.widget_manager.add_widget(representation_dropdown)
+        y_offset += dropdown_spacing
 
-    threshold_dropdown = dropdown_widget_cls(
-        (x_offset, y_offset),
-        "Apply Threshold",
-        ["0.70", "0.75", "0.80", "0.85", "0.90"],
-        selected=3,
-        keep_open_on_select=gui.feature_flags.get("persist_dropdown_on_select", False),
-    )
-    setattr(threshold_dropdown, "control_name", "match_threshold")
-    gui.widget_manager.add_widget(threshold_dropdown)
-    gui.match_apply_threshold = float(threshold_dropdown.options[threshold_dropdown.selected])
-    y_offset += dropdown_spacing
+        threshold_dropdown = dropdown_widget_cls(
+            (x_offset, y_offset),
+            "Apply Threshold",
+            ["0.70", "0.75", "0.80", "0.85", "0.90"],
+            selected=3,
+            keep_open_on_select=gui.feature_flags.get("persist_dropdown_on_select", False),
+        )
+        setattr(threshold_dropdown, "control_name", "match_threshold")
+        gui.widget_manager.add_widget(threshold_dropdown)
+        gui.match_apply_threshold = float(threshold_dropdown.options[threshold_dropdown.selected])
+        y_offset += dropdown_spacing
 
     y_offset += section_gap
 
@@ -250,29 +310,41 @@ def update_control_panel_positions(
     button_h_spacing = 8
     button_v_spacing = 8
 
-    primary_buttons = [
-        ("Start Auto-Solve", gui._start_auto_solve),
-        ("Stop", gui._stop_auto_solve),
-        ("Generate Dungeon", gui._generate_dungeon),
-        ("AI Generate", gui._generate_ai_dungeon),
-        ("Reset", gui._reset_map),
-    ]
+    if advanced_gui:
+        primary_buttons = [
+            ("Start Auto-Solve", gui._start_auto_solve),
+            ("Stop", gui._stop_auto_solve),
+            ("Generate Dungeon", gui._generate_dungeon),
+            ("Load Model", gui._load_ai_model),
+            ("AI Generate", gui._generate_ai_dungeon),
+            ("Reset", gui._reset_map),
+        ]
 
-    secondary_buttons = [
-        ("Path Preview", gui._show_path_preview),
-        ("Clear Path", gui._clear_path),
-        ("Export Route", gui._export_route),
-        ("Load Route", gui._load_route),
-        ("Open Temp Folder", gui._open_temp_folder),
-        ("Delete Temp Files", gui._delete_temp_files),
-        ("Export Topology", gui._export_topology),
-        ("Compare Solvers", gui._run_solver_comparison),
-        ("Match Missing Nodes", gui._match_missing_nodes),
-        ("Apply Tentative Matches", gui._apply_tentative_matches),
-        ("Undo Last Match", gui._undo_last_match),
-        ("Undo Prune", gui._undo_prune),
-        ("Run MAP-Elites", gui._start_map_elites),
-    ]
+        secondary_buttons = [
+            ("Path Preview", gui._show_path_preview),
+            ("Clear Path", gui._clear_path),
+            ("Export Route", gui._export_route),
+            ("Load Route", gui._load_route),
+            ("Open Temp Folder", gui._open_temp_folder),
+            ("Delete Temp Files", gui._delete_temp_files),
+            ("Export Topology", gui._export_topology),
+            ("Compare Solvers", gui._run_solver_comparison),
+            ("Match Missing Nodes", gui._match_missing_nodes),
+            ("Apply Tentative Matches", gui._apply_tentative_matches),
+            ("Undo Last Match", gui._undo_last_match),
+            ("Undo Prune", gui._undo_prune),
+            ("Run MAP-Elites", gui._start_map_elites),
+        ]
+    else:
+        primary_buttons = [
+            ("Solve Level", gui._start_auto_solve),
+            ("Stop", gui._stop_auto_solve),
+            ("Reset Level", gui._reset_map),
+            ("Load Model", gui._load_ai_model),
+            ("Generate Level", gui._generate_level),
+            ("Clear Path", gui._clear_path),
+        ]
+        secondary_buttons = []
 
     button_start_y = y_offset
     for i, (label, callback) in enumerate(primary_buttons):
@@ -290,7 +362,8 @@ def update_control_panel_positions(
         )
         gui.widget_manager.add_widget(button)
 
-    y_offset = button_start_y + (len(primary_buttons) // buttons_per_row) * (button_height + button_v_spacing) + 12
+    primary_rows = (len(primary_buttons) + buttons_per_row - 1) // buttons_per_row
+    y_offset = button_start_y + primary_rows * (button_height + button_v_spacing) + 12
 
     for i, (label, callback) in enumerate(secondary_buttons):
         row = i // buttons_per_row
@@ -323,7 +396,11 @@ def update_control_panel_positions(
             top = panel_y
 
         bottoms = []
-        if hasattr(w, "dropdown_rect") and getattr(w, "dropdown_rect") is not None:
+        if (
+            getattr(w, "is_open", False)
+            and hasattr(w, "dropdown_rect")
+            and getattr(w, "dropdown_rect") is not None
+        ):
             try:
                 bottoms.append(int(getattr(w, "dropdown_rect").bottom))
             except (AttributeError, RuntimeError, ValueError, TypeError):
@@ -685,7 +762,8 @@ def render_control_panel(
     header_height = gui.font.get_height() + 12
     header_surf = pygame.Surface((panel_width, header_height), pygame.SRCALPHA)
     pygame.draw.rect(header_surf, (35, 40, 55, 230), pygame.Rect(0, 0, panel_width, header_height), border_radius=0)
-    features_title = gui.font.render("FEATURES", True, (100, 200, 100))
+    title = "ADVANCED" if getattr(gui, "advanced_gui", False) else "SOLVE LEVEL"
+    features_title = gui.font.render(title, True, (100, 200, 100))
     header_surf.blit(features_title, (12, (header_height - gui.font.get_height()) // 2))
     panel_surf.blit(header_surf, (0, 0))
 

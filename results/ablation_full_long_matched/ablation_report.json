@@ -1,0 +1,54 @@
+{
+  "configs": [
+    {
+      "name": "FULL",
+      "use_evolution": true,
+      "random_topology": false,
+      "use_wfc": true,
+      "pure_wfc": false,
+      "logic_guidance_scale": 1.0,
+      "latent_sampler": "diffusion",
+      "categorical_codebook_size": null,
+      "use_tpe": true,
+      "disable_graph_node_cross_attention": false,
+      "topology_refinement_mode": "gat2",
+      "room_generator_mode": "latent_diffusion",
+      "use_reference_room_maps": null
+    }
+  ],
+  "seeds": [
+    42,
+    43,
+    44,
+    45
+  ],
+  "summary": [
+    {
+      "config": "FULL",
+      "n": 4,
+      "success_rate": 1.0,
+      "solvability_rate": 0.5,
+      "confusion_ratio": 1.9006892230576442,
+      "confusion_index": 2641.114072690768,
+      "path_optimal": 0.26670476525408826,
+      "tile_prior_kl": 1.164142500445284,
+      "graph_edit_distance": 0.11383971291866027,
+      "generation_time_sec": 279.89013200998306,
+      "novelty": 0.06691474047290939,
+      "reconstruction_error": 0.15909090909090912,
+      "constraint_valid_rate": 1.0,
+      "room_repair_rate": 0.8795454545454546,
+      "tiles_repaired": 95.5,
+      "topology_representable_edge_rate": 0.6458333333333334,
+      "topology_edge_connection_recall": 0.10416666666666666,
+      "topology_phantom_connection_rate": 0.0,
+      "topology_preservation_score": 0.4375,
+      "directed_representable_edge_rate": 0.1882591093117409,
+      "directed_edge_realization_rate": 0.0,
+      "directed_directionality_leak_rate": 0.0,
+      "directed_edge_preservation_score": 0.0,
+      "diversity": 0.07008871774919938
+    }
+  ],
+  "significance": []
+}

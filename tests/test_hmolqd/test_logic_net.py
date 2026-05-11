@@ -234,6 +234,44 @@ class TestLogicNet:
         assert torch.isfinite(info["topology_anchor_loss"])
         assert torch.allclose(loss, expected, atol=1e-6, rtol=1e-5)
 
+    def test_logicnet_global_graph_loss_depends_on_current_room_latent(self):
+        """Mission-graph reachability should have a gradient path through room passability."""
+        from src.core.logic_net import LogicNet
+
+        logic_net = LogicNet(
+            latent_dim=64,
+            num_classes=44,
+            num_iterations=4,
+            global_reach_weight=1.0,
+            global_room_weight=0.25,
+        )
+
+        z = torch.randn(1, 64, 4, 3, requires_grad=True)
+        node_features = torch.zeros(3, 6, dtype=torch.float32)
+        node_features[2, 3] = 1.0  # target/triforce node
+        edge_index = torch.tensor([[0, 1], [1, 2]], dtype=torch.long)
+        edge_features = torch.zeros(2, 8, dtype=torch.float32)
+
+        loss, info = logic_net(
+            z,
+            graph_data={
+                "node_features": node_features,
+                "edge_index": edge_index,
+                "edge_features": edge_features,
+                "current_node_idx": torch.tensor([1], dtype=torch.long),
+                "start_node_id": 0,
+            },
+        )
+        loss.backward()
+
+        assert loss.ndim == 0
+        assert torch.isfinite(loss)
+        assert torch.isfinite(info["global_logic_loss"])
+        assert torch.isfinite(info["graph_reach_loss"])
+        assert "global_graph_reachability" in info
+        assert z.grad is not None
+        assert float(z.grad.abs().sum().item()) > 0.0
+
     def test_logicnet_resolves_typed_gate_channels_as_door_anchors(self):
         """Typed gate-only topology maps should still register as doorway anchors."""
         from src.core.logic_net import LogicNet

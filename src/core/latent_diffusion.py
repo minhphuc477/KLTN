@@ -1161,14 +1161,104 @@ class GradientGuidance(nn.Module):
         else:
             boundary_constraints = None
 
+        graph_passthrough: Dict[str, Any] = {}
+
+        graph_scope = graph_data.get("graph_scope")
+        if isinstance(graph_scope, str):
+            graph_passthrough["graph_scope"] = graph_scope
+
+        node_features = graph_data.get("node_features")
+        if isinstance(node_features, torch.Tensor):
+            nf = node_features.detach()
+            if nf.dim() not in {2, 3}:
+                logger.warning(
+                    "Gradient guidance: node_features must have shape [N,F] or [B,N,F], got %s; ignoring node features.",
+                    tuple(nf.shape),
+                )
+            else:
+                node_count = int(nf.shape[0] if nf.dim() == 2 else nf.shape[1])
+                if node_count > self.max_graph_nodes:
+                    logger.warning(
+                        "Gradient guidance: graph too large (%d nodes > %d cap); disabling edge-index graph guidance.",
+                        node_count,
+                        self.max_graph_nodes,
+                    )
+                else:
+                    if target_device is None:
+                        target_device = nf.device
+                    if target_dtype is None:
+                        target_dtype = nf.dtype if torch.is_floating_point(nf) else torch.float32
+                    graph_passthrough["node_features"] = nf.to(device=target_device, dtype=target_dtype)
+
+        edge_index = graph_data.get("edge_index")
+        if isinstance(edge_index, torch.Tensor):
+            ei = edge_index.detach()
+            if ei.dim() not in {2, 3} or int(ei.shape[-2]) != 2:
+                logger.warning(
+                    "Gradient guidance: edge_index must have shape [2,E] or [B,2,E], got %s; ignoring edge index.",
+                    tuple(ei.shape),
+                )
+            elif target_device is not None:
+                graph_passthrough["edge_index"] = ei.to(device=target_device, dtype=torch.long)
+            else:
+                target_device = ei.device
+                graph_passthrough["edge_index"] = ei.to(dtype=torch.long)
+
+        node_mask = graph_data.get("node_mask")
+        if isinstance(node_mask, torch.Tensor):
+            nm = node_mask.detach()
+            if nm.dim() not in {1, 2}:
+                logger.warning(
+                    "Gradient guidance: node_mask must have shape [N] or [B,N], got %s; ignoring node mask.",
+                    tuple(nm.shape),
+                )
+            else:
+                graph_passthrough["node_mask"] = nm.to(device=target_device or nm.device, dtype=torch.float32).clamp_(0.0, 1.0)
+
+        edge_features = graph_data.get("edge_features")
+        if isinstance(edge_features, torch.Tensor):
+            ef = edge_features.detach()
+            if ef.dim() not in {2, 3}:
+                logger.warning(
+                    "Gradient guidance: edge_features must have shape [E,F] or [B,E,F], got %s; ignoring edge features.",
+                    tuple(ef.shape),
+                )
+            else:
+                graph_passthrough["edge_features"] = ef.to(device=target_device or ef.device, dtype=target_dtype or torch.float32)
+
+        edge_attr = graph_data.get("edge_attr")
+        if isinstance(edge_attr, torch.Tensor):
+            ea = edge_attr.detach()
+            if ea.dim() not in {1, 2}:
+                logger.warning(
+                    "Gradient guidance: edge_attr must have shape [E] or [B,E], got %s; ignoring edge labels.",
+                    tuple(ea.shape),
+                )
+            else:
+                graph_passthrough["edge_attr"] = ea.to(device=target_device or ea.device, dtype=torch.long)
+
+        for key in ("current_node_idx", "start_node_id", "start_idx", "target_idx"):
+            value = graph_data.get(key)
+            if isinstance(value, torch.Tensor):
+                graph_passthrough[key] = value.detach().to(device=target_device or value.device, dtype=torch.long)
+            elif value is not None:
+                graph_passthrough[key] = value
+
         adjacency = graph_data.get("adjacency")
         edge_weights = graph_data.get("edge_weights")
 
-        # No graph adjacency and no room-topology context => nothing to sanitize.
-        if adjacency is None and edge_weights is None and room_topology_map is None and boundary_constraints is None:
+        # No graph adjacency, edge-index graph, or room-topology context => nothing to sanitize.
+        if (
+            adjacency is None
+            and edge_weights is None
+            and room_topology_map is None
+            and boundary_constraints is None
+            and "edge_index" not in graph_passthrough
+            and "node_features" not in graph_passthrough
+        ):
             return None
 
-        sanitized: Dict[str, Any] = {}
+        sanitized: Dict[str, Any] = dict(graph_passthrough)
         if room_topology_map is not None:
             sanitized["room_topology_map"] = room_topology_map
         if boundary_constraints is not None:

@@ -4025,6 +4025,11 @@ class EvolutionaryTopologyGenerator:
         repaired.graph["generation_stats"] = copy.deepcopy(graph.graph.get("generation_stats", {}))
         stats = repaired.graph.setdefault("generation_stats", {})
         protected_goal_types = {"GOAL", "BOSS", "BOSS_DOOR"}
+        protected_goal_nodes = {
+            node_id
+            for node_id, attrs in repaired.nodes(data=True)
+            if str(attrs.get("type", attrs.get("label", ""))).strip().upper() in protected_goal_types
+        }
 
         def _node_type(node_id: Any) -> str:
             attrs = repaired.nodes.get(node_id, {})
@@ -4038,8 +4043,8 @@ class EvolutionaryTopologyGenerator:
             return (0.0, 0.0, 0.0)
 
         def _candidate_nodes(component: set[Any]) -> List[Any]:
-            preferred = [node_id for node_id in component if _node_type(node_id) not in protected_goal_types]
-            return preferred if preferred else list(component)
+            preferred = [node_id for node_id in component if node_id not in protected_goal_nodes]
+            return preferred if preferred else [node_id for node_id in component if node_id not in protected_goal_nodes]
 
         def _distance(node_a: Any, node_b: Any) -> float:
             ax, ay, az = _position(node_a)
@@ -4072,6 +4077,9 @@ class EvolutionaryTopologyGenerator:
                 continue
 
             source, target = best_pair
+            if source in protected_goal_nodes or target in protected_goal_nodes:
+                main_component.update(other_component)
+                continue
             edge_attrs = {
                 "label": EdgeType.PATH.name.lower(),
                 "edge_type": EdgeType.PATH.name,

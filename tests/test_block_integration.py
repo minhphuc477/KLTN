@@ -405,6 +405,59 @@ def test_block_iv_gradient_guidance_accepts_room_topology_without_graph_adjacenc
     assert captured["boundary_constraints"].requires_grad is False
 
 
+def test_block_iv_gradient_guidance_preserves_edge_index_graph_context():
+    """Edge-index mission graphs should reach LogicNet guidance even without adjacency matrices."""
+    from src.core.latent_diffusion import GradientGuidance
+
+    class _GraphOnlyLogicNet(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.captured_graph_data = None
+
+        def forward(self, x_t, graph_data=None):
+            self.captured_graph_data = graph_data
+            assert graph_data is not None
+            assert "adjacency" not in graph_data
+            assert tuple(graph_data["edge_index"].shape) == (2, 2)
+            assert tuple(graph_data["node_features"].shape) == (3, 6)
+            assert tuple(graph_data["edge_features"].shape) == (2, 8)
+            assert graph_data["current_node_idx"].dtype == torch.long
+            assert graph_data["start_node_id"].dtype == torch.long
+            return x_t.flatten(1).mean(dim=1)
+
+    logic_net = _GraphOnlyLogicNet()
+    guidance = GradientGuidance(
+        logic_net=logic_net,
+        guidance_scale=0.5,
+        clamp_magnitude=10.0,
+        schedule_enabled=False,
+        max_graph_nodes=8,
+        max_guidance_elements=1024,
+    )
+
+    x_t = torch.randn(1, 4, 3, 3)
+    graph_data = {
+        "graph_scope": "room",
+        "node_features": torch.randn(3, 6, dtype=torch.float32, requires_grad=True),
+        "edge_index": torch.tensor([[0, 1], [1, 2]], dtype=torch.long),
+        "edge_features": torch.zeros(2, 8, dtype=torch.float32, requires_grad=True),
+        "current_node_idx": torch.tensor([1], dtype=torch.long),
+        "start_node_id": torch.tensor(0, dtype=torch.long),
+        "target_idx": torch.tensor(2, dtype=torch.long),
+    }
+
+    grad = guidance.compute_guidance(x_t, graph_data)
+
+    assert grad.shape == x_t.shape
+    assert torch.isfinite(grad).all()
+    assert float(grad.abs().sum().item()) > 0.0
+    captured = logic_net.captured_graph_data
+    assert captured is not None
+    assert captured["graph_scope"] == "room"
+    assert captured["node_features"].requires_grad is False
+    assert captured["edge_features"].requires_grad is False
+
+
 def test_block_iv_topology_aware_cross_attention_sequence_context():
     """Block IV: sequence context path with topology-aware cross-attention refinement."""
     from src.core.latent_diffusion import create_latent_diffusion

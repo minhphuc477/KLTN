@@ -360,6 +360,25 @@ def handle_ai_generation_completion(gui):
         gui.current_map_idx = len(gui.maps) - 1
         gui._load_current_map()
         gui._center_view()
-        gui._set_message("AI generation complete", 3.0)
+        if getattr(gui, "effects", None):
+            try:
+                gui.effects.clear()
+            except (AttributeError, RuntimeError, ValueError, TypeError):
+                pass
+        gui.step_count = 0
+        gui.auto_path = []
+        gui.auto_mode = False
+        if res.get("clear_mixed_constraints"):
+            gui.ai_constraint_boss_norm = None
+            gui.ai_constraint_lock_norm = None
+            gui.ai_constraint_key_norm = None
+        if res.get("mission_graph_draft") is not None:
+            gui.ai_mission_graph_draft = res["mission_graph_draft"]
+        gui._set_message(res.get("message", "AI generation complete"), 3.0)
     else:
-        gui._set_message("AI generation failed", 3.0)
+        message = "AI generation failed"
+        if res and res.get("message"):
+            message = res["message"]
+        elif res and res.get("error"):
+            message = f"AI generation failed: {res['error']}"
+        gui._set_message(message, 3.0)

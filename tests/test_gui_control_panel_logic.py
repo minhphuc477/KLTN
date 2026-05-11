@@ -19,6 +19,7 @@ def test_labels_and_fallbacks():
     assert zoom_label(3) == "100%"
     assert difficulty_label(2) == "Hard"
     assert algorithm_label(0) == "A*"
+    assert algorithm_label(14) == "P-CBS (Novice)"
     assert difficulty_label(99) == "Difficulty 99"
     assert algorithm_label(99) == "Algorithm 99"
 

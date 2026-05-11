@@ -46,6 +46,10 @@ def test_build_priority_options():
     assert opts["enable_ara"] is True
     assert opts["ara_weight"] == 1.5
     assert opts["representation"] == "hybrid"
+    assert opts["allow_diagonals"] is False
+
+    flags["diagonal_movement"] = True
+    opts = build_priority_options(flags, ara_weight=1.5, search_representation="hybrid")
     assert opts["allow_diagonals"] is True
 
 

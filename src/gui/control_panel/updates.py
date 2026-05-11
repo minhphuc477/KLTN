@@ -25,18 +25,21 @@ def apply_checkbox_widget_update(gui: Any, widget: Any, logger: Any) -> None:
     old_value = gui.feature_flags.get(widget.flag_name, False)
     gui.feature_flags[widget.flag_name] = widget.checked
     logger.info("Feature flag set: %s=%s", widget.flag_name, widget.checked)
+    changed = old_value != widget.checked
 
-    if widget.flag_name == "show_heatmap" and old_value != widget.checked:
+    if widget.flag_name == "show_heatmap" and changed:
         gui.show_heatmap = widget.checked
         if gui.renderer:
             gui.renderer.show_heatmap = widget.checked
         gui._set_message(f"Heatmap: {'ON' if widget.checked else 'OFF'}")
-    elif widget.flag_name == "show_path" and old_value != widget.checked:
+    elif widget.flag_name == "show_path" and changed:
         gui._set_message(f"Path overlay: {'ON' if widget.checked else 'OFF'}", 1.5)
-    elif widget.flag_name == "show_minimap":
+    elif widget.flag_name == "show_minimap" and (
+        changed or bool(getattr(gui, "show_minimap", False)) != bool(widget.checked)
+    ):
         gui.show_minimap = widget.checked
         gui._set_message(f"Minimap: {'ON' if widget.checked else 'OFF'}")
-    elif widget.flag_name == "show_topology" and old_value != widget.checked:
+    elif widget.flag_name == "show_topology" and changed:
         gui.show_topology = widget.checked
         if widget.checked:
             current = gui.maps[gui.current_map_idx]
@@ -67,9 +70,18 @@ def apply_dropdown_widget_update(gui: Any, widget: Any, logger: Any) -> None:
                 gui._load_assets()
                 gui._center_view()
                 gui.message = f"Zoom: {zoom_label(gui.zoom_level_idx)}"
+    elif widget.control_name == "level":
+        apply_level_dropdown_update(gui, widget, logger)
+    elif widget.control_name == "floor":
+        old_floor = int(getattr(gui, "current_floor", 1))
+        gui.current_floor = int(getattr(widget, "selected", 0)) + 1
+        if old_floor != gui.current_floor:
+            gui._set_message(f"Floor: {gui.current_floor}", 1.2)
     elif widget.control_name == "difficulty":
+        old_difficulty = gui.difficulty_idx
         gui.difficulty_idx = widget.selected
-        gui.message = f"Difficulty: {difficulty_label(gui.difficulty_idx)}"
+        if old_difficulty != gui.difficulty_idx:
+            gui.message = f"Difficulty: {difficulty_label(gui.difficulty_idx)}"
     elif widget.control_name == "algorithm":
         apply_algorithm_dropdown_update(gui, widget, logger)
     elif widget.control_name == "representation":
@@ -80,8 +92,10 @@ def apply_dropdown_widget_update(gui: Any, widget: Any, logger: Any) -> None:
     elif widget.control_name == "ara_weight":
         try:
             selected_val = widget.options[widget.selected]
+            old_weight = float(getattr(gui, "ara_weight", 1.0))
             gui.ara_weight = float(selected_val)
-            gui._set_message(f"ARA* weight: {gui.ara_weight:g}", 1.2)
+            if old_weight != gui.ara_weight:
+                gui._set_message(f"ARA* weight: {gui.ara_weight:g}", 1.2)
         except (AttributeError, RuntimeError, ValueError, TypeError):
             gui.ara_weight = 1.0
     elif widget.control_name == "presets":
@@ -91,6 +105,60 @@ def apply_dropdown_widget_update(gui: Any, widget: Any, logger: Any) -> None:
             preset_name = gui.presets[gui.current_preset_idx]
             apply_preset_feature_flags(gui.feature_flags, preset_name)
             gui._set_message(f"Preset applied: {preset_name}")
+    elif widget.control_name == "match_threshold":
+        try:
+            selected_val = widget.options[widget.selected]
+            old_threshold = float(getattr(gui, "match_apply_threshold", 0.85))
+            gui.match_apply_threshold = float(selected_val)
+            if old_threshold != gui.match_apply_threshold:
+                gui._set_message(f"Match threshold: {gui.match_apply_threshold:.2f}", 1.2)
+        except (AttributeError, RuntimeError, ValueError, TypeError):
+            gui.match_apply_threshold = 0.85
+
+
+def apply_level_dropdown_update(gui: Any, widget: Any, logger: Any) -> None:
+    """Switch to the selected loaded/generated level and reset solve state."""
+    maps = list(getattr(gui, "maps", []) or [])
+    if not maps:
+        return
+
+    selected = max(0, min(int(getattr(widget, "selected", 0)), len(maps) - 1))
+    old_idx = int(getattr(gui, "current_map_idx", 0))
+    if selected == old_idx:
+        return
+
+    if getattr(gui, "solver_proc", None):
+        try:
+            gui.solver_proc.terminate()
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+            logger.warning("LEVEL: Failed to terminate solver process: %s", exc)
+    if getattr(gui, "preview_proc", None):
+        try:
+            gui.preview_proc.terminate()
+        except (AttributeError, RuntimeError, ValueError, TypeError):
+            pass
+    if hasattr(gui, "preview_thread"):
+        gui.preview_thread = None
+
+    if hasattr(gui, "_clear_solver_state"):
+        gui._clear_solver_state(reason="level changed")
+
+    gui.current_map_idx = selected
+    gui._load_current_map()
+    gui._center_view()
+
+    if getattr(gui, "effects", None):
+        try:
+            gui.effects.clear()
+        except (AttributeError, RuntimeError, ValueError, TypeError):
+            pass
+    gui.step_count = 0
+    gui.auto_path = []
+    gui.auto_mode = False
+
+    names = list(getattr(gui, "map_names", []) or [])
+    level_name = names[selected] if selected < len(names) else f"Level {selected + 1}"
+    gui._set_message(f"Loaded {level_name} (press SPACE or Solve Level)", 2.5)
 
 
 def apply_algorithm_dropdown_update(gui: Any, widget: Any, logger: Any) -> None:

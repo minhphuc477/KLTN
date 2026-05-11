@@ -117,12 +117,14 @@ from src.pipeline.room_stitching import (
     solve_component_strict_adjacency,
 )
 from src.pipeline.room_topology_conditioning import (
+    DEFAULT_PUZZLE_STAGE_TRACE_DECAY,
     DEFAULT_VALIDATOR_PLAN_MAX_STATES,
     DEFAULT_SEMANTIC_PUZZLE_OFFSET,
     DEFAULT_SEMANTIC_ROLE_PRIOR_STRENGTH,
     ROOM_TOPOLOGY_CHANNEL_COUNT,
     TOPOLOGY_ANCHOR_POLICY_VERSION,
     apply_puzzle_structure_control_to_conditioning,
+    build_puzzle_stage_condition_metadata,
     build_room_semantic_anchor_points,
     build_semantic_room_plan_trace,
     build_room_topology_condition_map,
@@ -359,6 +361,8 @@ class NeuralSymbolicDungeonPipeline:
         default_puzzle_room_novelty_weight: float = 0.45,
         default_puzzle_room_min_quality_gain: float = 0.5,
         default_validator_plan_max_states: int = DEFAULT_VALIDATOR_PLAN_MAX_STATES,
+        default_puzzle_stage_topology_enabled: bool = False,
+        default_puzzle_stage_trace_decay: float = DEFAULT_PUZZLE_STAGE_TRACE_DECAY,
         default_deterministic_graph_marker_overlay_enabled: bool = True,
         default_fast_sampler_teacher_fallback_enabled: bool = True,
         default_masked_room_teacher_fallback_enabled: bool = True,
@@ -494,6 +498,10 @@ class NeuralSymbolicDungeonPipeline:
             max(0.0, min(10.0, float(default_puzzle_room_min_quality_gain)))
         )
         self.default_validator_plan_max_states = int(max(32, int(default_validator_plan_max_states)))
+        self.default_puzzle_stage_topology_enabled = bool(default_puzzle_stage_topology_enabled)
+        self.default_puzzle_stage_trace_decay = float(
+            max(0.05, min(1.0, float(default_puzzle_stage_trace_decay)))
+        )
         self.default_deterministic_graph_marker_overlay_enabled = bool(
             default_deterministic_graph_marker_overlay_enabled
         )
@@ -1316,6 +1324,8 @@ class NeuralSymbolicDungeonPipeline:
             num_iterations=int(fallback_config.get("num_logic_iterations", 20)),
             topology_trace_weight=float(fallback_config.get("logic_topology_trace_weight", 0.25)),
             topology_anchor_weight=float(fallback_config.get("logic_topology_anchor_weight", 0.25)),
+            global_reach_weight=float(fallback_config.get("logic_global_reach_weight", 1.0)),
+            global_room_weight=float(fallback_config.get("logic_global_room_weight", 0.25)),
         ).to(self.device)
         
         if checkpoint_path and Path(checkpoint_path).exists():
@@ -1336,6 +1346,8 @@ class NeuralSymbolicDungeonPipeline:
                 num_iterations=int(checkpoint_config.get("num_logic_iterations", 20)),
                 topology_trace_weight=float(checkpoint_config.get("logic_topology_trace_weight", 0.25)),
                 topology_anchor_weight=float(checkpoint_config.get("logic_topology_anchor_weight", 0.25)),
+                global_reach_weight=float(checkpoint_config.get("logic_global_reach_weight", 1.0)),
+                global_room_weight=float(checkpoint_config.get("logic_global_room_weight", 0.25)),
             ).to(self.device)
             if isinstance(checkpoint_state, dict):
                 model.load_state_dict(checkpoint_state)
@@ -7642,7 +7654,7 @@ class NeuralSymbolicDungeonPipeline:
         self,
         rooms: Dict[Any, 'RoomGenerationResult'],
         mission_graph_physical: nx.Graph,
-    ) -> Dict[str, float]:
+    ) -> Dict[str, Any]:
         """
         Evaluate dungeon-level solvability using LogicNet at the correct scope.
         
@@ -7659,24 +7671,75 @@ class NeuralSymbolicDungeonPipeline:
             Dict with solvability_score, graph_reach_loss, lock_loss, and
             failing_rooms (list of room IDs where local solvability failed)
         """
-        result: Dict[str, float] = {
+        result: Dict[str, Any] = {
             'solvability_score': 0.0,
+            'room_solvability_score': 0.0,
             'graph_reach_loss': 0.0,
             'lock_loss': 0.0,
+            'global_logic_loss': 0.0,
         }
         failing_rooms: List[Any] = []
         
         if self.logic_net is None:
             logger.debug("evaluate_dungeon_solvability skipped: no logic_net component")
             return result
-        
+
+        graph_context = self._prepare_graph_context(mission_graph_physical, use_tpe=True)
+        node_to_idx = dict(graph_context.get('node_to_idx', {}) or {})
+
+        def _first_matching_node(*keys: str) -> Optional[Any]:
+            for node_id, attrs in mission_graph_physical.nodes(data=True):
+                if any(coerce_bool(dict(attrs).get(key)) for key in keys):
+                    return node_id
+            return None
+
+        start_node = get_physical_start_node(mission_graph_physical)
+        if start_node is None or start_node not in node_to_idx:
+            start_node = _first_matching_node("is_start", "is_entry")
+        if start_node is None or start_node not in node_to_idx:
+            start_node = next(iter(node_to_idx.keys()), None)
+        start_idx = int(node_to_idx.get(start_node, 0)) if start_node is not None else 0
+
+        target_node = _first_matching_node("has_triforce", "is_triforce", "is_goal")
+        target_idx = int(node_to_idx.get(target_node, -1)) if target_node is not None else -1
+
+        dungeon_latents: List[torch.Tensor] = []
+        current_node_indices: List[int] = []
+        evaluated_room_ids: List[Any] = []
+        reference_shape: Optional[Tuple[int, ...]] = None
+
         # Evaluate per-room walkability via LogicNet (grid-level only)
         total_grid_reach = 0.0
         num_rooms = 0
         for room_id, room_result in rooms.items():
             if room_result.latent is None:
                 continue
-            z = room_result.latent.to(self.device)
+            z = room_result.latent
+            if not isinstance(z, torch.Tensor) or z.numel() == 0:
+                continue
+            z = z.to(self.device)
+            if z.dim() == 3:
+                z = z.unsqueeze(0)
+            if z.dim() != 4:
+                logger.debug("Room %s solvability eval skipped: latent shape %s is not rank-4", room_id, tuple(z.shape))
+                continue
+            if reference_shape is None:
+                reference_shape = tuple(z.shape[1:])
+            elif tuple(z.shape[1:]) != reference_shape:
+                logger.debug(
+                    "Room %s solvability eval skipped: latent shape %s does not match %s",
+                    room_id,
+                    tuple(z.shape[1:]),
+                    reference_shape,
+                )
+                continue
+
+            node_idx = node_to_idx.get(room_id)
+            if node_idx is not None:
+                dungeon_latents.append(z[:1])
+                current_node_indices.append(int(node_idx))
+                evaluated_room_ids.append(room_id)
+
             try:
                 loss, info = self.logic_net(z, graph_data=None)
                 grid_reach = float(info.get('grid_reachability', 0.0))
@@ -7689,15 +7752,61 @@ class NeuralSymbolicDungeonPipeline:
                 failing_rooms.append(room_id)
         
         if num_rooms > 0:
-            result['solvability_score'] = total_grid_reach / num_rooms
+            result['room_solvability_score'] = total_grid_reach / num_rooms
+
+        if dungeon_latents:
+            z_dungeon = torch.cat(dungeon_latents, dim=0)
+            graph_data = {
+                'graph_scope': 'dungeon',
+                'node_features': graph_context.get('node_features'),
+                'edge_index': graph_context.get('edge_index'),
+                'edge_features': graph_context.get('edge_features'),
+                'tpe': graph_context.get('tpe'),
+                'node_positions': graph_context.get('node_positions'),
+                'node_mask': graph_context.get('node_mask'),
+                'current_node_idx': torch.tensor(current_node_indices, device=self.device, dtype=torch.long),
+                'start_node_id': int(start_idx),
+                'target_idx': int(target_idx),
+            }
+            try:
+                global_loss, global_info = self.logic_net(z_dungeon, graph_data=graph_data)
+                global_logic_loss = global_info.get('global_logic_loss', global_loss)
+                if isinstance(global_logic_loss, torch.Tensor):
+                    global_logic_loss_value = float(global_logic_loss.detach().mean().item())
+                else:
+                    global_logic_loss_value = float(global_logic_loss)
+
+                reachability_value = global_info.get('global_graph_reachability')
+                if isinstance(reachability_value, torch.Tensor):
+                    graph_score = float(reachability_value.detach().mean().item())
+                elif reachability_value is not None:
+                    graph_score = float(reachability_value)
+                else:
+                    graph_score = float(torch.exp(torch.tensor(-max(0.0, global_logic_loss_value))).item())
+
+                result.update({
+                    'solvability_score': max(0.0, min(1.0, graph_score)),
+                    'graph_reach_loss': float(global_info.get('graph_reach_loss', global_info.get('global_graph_reach_loss', 0.0))) if not isinstance(global_info.get('graph_reach_loss'), torch.Tensor) else float(global_info['graph_reach_loss'].detach().mean().item()),
+                    'lock_loss': float(global_info.get('lock_loss', 0.0)) if not isinstance(global_info.get('lock_loss'), torch.Tensor) else float(global_info['lock_loss'].detach().mean().item()),
+                    'global_logic_loss': global_logic_loss_value,
+                    'global_loss_score': float(torch.exp(torch.tensor(-max(0.0, global_logic_loss_value))).item()),
+                    'global_room_passability': float(global_info.get('global_room_passability', 0.0)) if not isinstance(global_info.get('global_room_passability'), torch.Tensor) else float(global_info['global_room_passability'].detach().mean().item()),
+                    'global_num_rooms_scored': float(len(evaluated_room_ids)),
+                })
+            except (RuntimeError, ValueError) as e:
+                logger.debug("Dungeon-scope LogicNet solvability eval failed: %s", e)
+                result['solvability_score'] = result['room_solvability_score']
+        else:
+            result['solvability_score'] = result['room_solvability_score']
         
         result['failing_rooms'] = failing_rooms  # type: ignore[assignment]
         result['num_rooms_evaluated'] = float(num_rooms)
         result['num_failing'] = float(len(failing_rooms))
         
         logger.info(
-            "Dungeon solvability: %.3f (%d/%d rooms passing)",
+            "Dungeon solvability: %.3f global, %.3f room-local (%d/%d rooms passing)",
             result['solvability_score'],
+            result['room_solvability_score'],
             num_rooms - len(failing_rooms),
             num_rooms,
         )
@@ -7880,6 +7989,14 @@ class NeuralSymbolicDungeonPipeline:
             prepared.mission_graph_physical,
             enable_map_elites=enable_map_elites,
         )
+        try:
+            logic_solvability = self.evaluate_dungeon_solvability(
+                room_set.rooms,
+                prepared.mission_graph_physical,
+            )
+        except (RuntimeError, ValueError, TypeError) as exc:
+            logger.debug("LogicNet dungeon solvability metrics failed: %s", exc)
+            logic_solvability = {}
         
         # Compute overall metrics
         generation_time = time.time() - start_time
@@ -7904,6 +8021,12 @@ class NeuralSymbolicDungeonPipeline:
                     for plan in dict(puzzle_metadata.get('plans', {}) or {}).values()
                 )
             ),
+            'logicnet_dungeon_solvability': float(logic_solvability.get('solvability_score', 0.0)),
+            'logicnet_room_solvability': float(logic_solvability.get('room_solvability_score', 0.0)),
+            'logicnet_graph_reach_loss': float(logic_solvability.get('graph_reach_loss', 0.0)),
+            'logicnet_lock_loss': float(logic_solvability.get('lock_loss', 0.0)),
+            'logicnet_global_logic_loss': float(logic_solvability.get('global_logic_loss', 0.0)),
+            'logicnet_num_failing_rooms': float(logic_solvability.get('num_failing', 0.0)),
             **alignment_metrics,
         }
         
@@ -8009,6 +8132,11 @@ class NeuralSymbolicDungeonPipeline:
             mission_graph,
             enable_map_elites=enable_map_elites,
         )
+        try:
+            logic_solvability = self.evaluate_dungeon_solvability(normalized_rooms, mission_graph)
+        except (RuntimeError, ValueError, TypeError) as exc:
+            logger.debug("LogicNet symbolic dungeon solvability metrics failed: %s", exc)
+            logic_solvability = {}
         metrics = {
             "num_rooms": len(normalized_rooms),
             "total_tiles_repaired": sum(r.metrics.get("tiles_changed", 0) for r in normalized_rooms.values()),
@@ -8018,6 +8146,12 @@ class NeuralSymbolicDungeonPipeline:
             "dungeon_shape": dungeon_grid.shape,
             "symbolic_only": True,
             "puzzle_plan_count": int(len(dict(puzzle_metadata.get("plans", {}) or {}))),
+            "logicnet_dungeon_solvability": float(logic_solvability.get("solvability_score", 0.0)),
+            "logicnet_room_solvability": float(logic_solvability.get("room_solvability_score", 0.0)),
+            "logicnet_graph_reach_loss": float(logic_solvability.get("graph_reach_loss", 0.0)),
+            "logicnet_lock_loss": float(logic_solvability.get("lock_loss", 0.0)),
+            "logicnet_global_logic_loss": float(logic_solvability.get("global_logic_loss", 0.0)),
+            "logicnet_num_failing_rooms": float(logic_solvability.get("num_failing", 0.0)),
         }
         return DungeonGenerationResult(
             dungeon_grid=dungeon_grid,
@@ -8672,6 +8806,8 @@ class NeuralSymbolicDungeonPipeline:
             semantic_role_prior_strength=self.default_semantic_role_prior_strength,
             semantic_puzzle_offset=self.default_semantic_puzzle_offset,
             validator_plan_max_states=budget,
+            puzzle_stage_topology_enabled=self.default_puzzle_stage_topology_enabled,
+            puzzle_stage_trace_decay=self.default_puzzle_stage_trace_decay,
         )
         return torch.from_numpy(topo_np).unsqueeze(0).to(device=self.device, dtype=torch.float32)
 
@@ -8712,7 +8848,30 @@ class NeuralSymbolicDungeonPipeline:
         start_goal: Optional[Tuple[Tuple[int, int], Tuple[int, int]]] = None,
     ) -> Dict[str, Any]:
         """Build per-room graph context shared by condition encoding and diffusion."""
-        current_node_idx = graph_data.get('node_to_idx', {}).get(room_id, 0)
+        node_to_idx = dict(graph_data.get('node_to_idx', {}) or {})
+        current_node_idx = node_to_idx.get(room_id, 0)
+        start_node = get_physical_start_node(mission_graph)
+        if start_node is None or start_node not in node_to_idx:
+            start_node = next(
+                (
+                    node_id
+                    for node_id, attrs in mission_graph.nodes(data=True)
+                    if coerce_bool(dict(attrs).get("is_start")) or coerce_bool(dict(attrs).get("is_entry"))
+                ),
+                None,
+            )
+        target_node = next(
+            (
+                node_id
+                for node_id, attrs in mission_graph.nodes(data=True)
+                if (
+                    coerce_bool(dict(attrs).get("has_triforce"))
+                    or coerce_bool(dict(attrs).get("is_triforce"))
+                    or coerce_bool(dict(attrs).get("is_goal"))
+                )
+            ),
+            None,
+        )
         style_id = self._extract_explicit_style_id(mission_graph, room_id=room_id)
         current_node_distance = compute_current_node_distance_features(
             graph_data.get('edge_index'),
@@ -8722,7 +8881,39 @@ class NeuralSymbolicDungeonPipeline:
             dtype=torch.float32,
             max_distance=self.current_node_distance_max,
         )
+        attrs = dict(mission_graph.nodes[room_id]) if room_id in mission_graph else {}
+        if start_goal is None:
+            start_goal = self._extract_room_start_goal(mission_graph, room_id)
+        start, goal = start_goal if start_goal is not None else (None, None)
+        semantics = (
+            self._extract_room_topology_semantics(mission_graph, room_id)
+            if room_id in mission_graph
+            else {
+                "required_doors": {},
+                "incoming_dirs": set(),
+                "outgoing_dirs": set(),
+                "edge_constraints": {},
+            }
+        )
+        budget = self._resolve_validator_plan_state_budget(
+            attrs=attrs,
+            semantics=semantics,
+        )
+        puzzle_stage_condition = build_puzzle_stage_condition_metadata(
+            room_shape=(ROOM_HEIGHT, ROOM_WIDTH),
+            start=start,
+            goal=goal,
+            required_doors=semantics["required_doors"],
+            incoming_dirs=semantics["incoming_dirs"],
+            outgoing_dirs=semantics["outgoing_dirs"],
+            edge_constraint_tokens=semantics["edge_constraints"],
+            room_role_flags=self._room_role_flags(attrs),
+            validator_plan_max_states=budget,
+            semantic_puzzle_offset=self.default_semantic_puzzle_offset,
+            stage_trace_decay=self.default_puzzle_stage_trace_decay,
+        )
         return {
+            'graph_scope': 'room',
             'node_features': graph_data.get('node_features'),
             'edge_index': graph_data.get('edge_index'),
             'edge_features': graph_data.get('edge_features'),
@@ -8732,7 +8923,10 @@ class NeuralSymbolicDungeonPipeline:
             'has_room_anchor': True,
             'mission_graph': mission_graph,
             'current_node_idx': current_node_idx,
+            'start_node_id': int(node_to_idx.get(start_node, 0)) if start_node is not None else 0,
+            'target_idx': int(node_to_idx.get(target_node, -1)) if target_node is not None else -1,
             'puzzle_room_structure_enabled': bool(self.default_puzzle_room_structure_enabled),
+            'puzzle_stage_condition': puzzle_stage_condition,
             **({'current_node_distance': current_node_distance} if self.use_current_node_distance_features else {}),
             **({'style_id': int(style_id)} if style_id is not None else {}),
             'room_topology_map': self._build_room_topology_condition_tensor(
@@ -9318,6 +9512,14 @@ def generation_runtime_kwargs_from_resolved_config(config: Dict[str, Any]) -> Di
             "validator_plan_max_states",
             DEFAULT_VALIDATOR_PLAN_MAX_STATES,
         ),
+        "default_puzzle_stage_topology_enabled": stage.get(
+            "puzzle_stage_topology_enabled",
+            False,
+        ),
+        "default_puzzle_stage_trace_decay": stage.get(
+            "puzzle_stage_trace_decay",
+            DEFAULT_PUZZLE_STAGE_TRACE_DECAY,
+        ),
         "default_deterministic_graph_marker_overlay_enabled": stage.get(
             "deterministic_graph_marker_overlay_enabled",
             True,
@@ -9437,6 +9639,8 @@ def pipeline_kwargs_from_resolved_config(config: Dict[str, Any]) -> Dict[str, An
                 "num_logic_iterations": diffusion["num_logic_iterations"],
                 "logic_topology_trace_weight": diffusion["logic_topology_trace_weight"],
                 "logic_topology_anchor_weight": diffusion["logic_topology_anchor_weight"],
+                "logic_global_reach_weight": diffusion.get("logic_global_reach_weight", 1.0),
+                "logic_global_room_weight": diffusion.get("logic_global_room_weight", 0.25),
             },
             "masked_room_fallback_config": {
                 "num_classes": config["dataset"]["num_classes"],

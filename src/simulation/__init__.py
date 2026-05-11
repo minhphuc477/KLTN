@@ -34,6 +34,7 @@ from .validator import (
 # Re-export Cognitive Bounded Search (CBS) components
 from .cognitive_bounded_search import (
     CognitiveBoundedSearch,
+    PersonaDrivenCognitiveBoundedSearch,
     CBSMetrics,
     BeliefMap,
     VisionSystem,
@@ -54,6 +55,7 @@ from .cognitive_bounded_search import (
     ItemSeekingHeuristic,
     # Convenience functions
     solve_with_cbs,
+    solve_with_pcbs,
     compare_personas,
 )
 
@@ -86,6 +88,7 @@ __all__ = [
     'WATER_IDS',
     # Cognitive Bounded Search (CBS)
     'CognitiveBoundedSearch',
+    'PersonaDrivenCognitiveBoundedSearch',
     'CBSMetrics',
     'BeliefMap',
     'VisionSystem',
@@ -104,6 +107,7 @@ __all__ = [
     'GoalSeekingHeuristic',
     'ItemSeekingHeuristic',
     'solve_with_cbs',
+    'solve_with_pcbs',
     'compare_personas',
     # Advanced solvers
     'DStarLiteSolver',

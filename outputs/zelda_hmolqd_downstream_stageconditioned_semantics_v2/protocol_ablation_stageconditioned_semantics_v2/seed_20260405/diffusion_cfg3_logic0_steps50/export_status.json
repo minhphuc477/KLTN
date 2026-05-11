@@ -1,0 +1,12 @@
+{
+  "variant_name": "diffusion_cfg3_logic0_steps50",
+  "stage": "complete",
+  "seed": 20260405,
+  "guidance_scale": 3.0,
+  "logic_guidance_scale": 0.0,
+  "num_diffusion_steps": 50,
+  "use_fast_sampling": false,
+  "generation_time_sec": 52.894734144210815,
+  "room_count": 12,
+  "summary_path": "outputs\\zelda_hmolqd_downstream_stageconditioned_semantics_v2\\protocol_ablation_stageconditioned_semantics_v2\\seed_20260405\\diffusion_cfg3_logic0_steps50\\summary.json"
+}

@@ -77,15 +77,17 @@ def _solve_in_subprocess(grid, start_pos, goal_pos, algorithm_idx, feature_flags
             10: 'forgetful',
             11: 'speedrunner',
             12: 'greedy',
+            13: 'completionist',
+            14: 'novice',
         }
 
         try:
             if algorithm_idx in cbs_personas:
-                from src.simulation.cognitive_bounded_search import CognitiveBoundedSearch
+                from src.simulation.cognitive_bounded_search import PersonaDrivenCognitiveBoundedSearch
 
                 persona = cbs_personas[algorithm_idx]
-                logger.info('Using CBS with persona=%s', persona)
-                cbs = CognitiveBoundedSearch(env, persona=persona, timeout=100000)
+                logger.info('Using P-CBS with persona=%s', persona)
+                cbs = PersonaDrivenCognitiveBoundedSearch(env, persona=persona, timeout=100000)
                 ok, path, states, metrics = cbs.solve()
 
                 if ok:
@@ -108,12 +110,13 @@ def _solve_in_subprocess(grid, start_pos, goal_pos, algorithm_idx, feature_flags
                         'solver_result': {
                             'nodes': states,
                             'original_path_len': len(path) if path else 0,
+                            'algorithm': 'P-CBS',
                             'cbs_metrics': cbs_metrics,
                             'persona': persona,
                         },
                     })
                 else:
-                    result['message'] = f'CBS ({persona}) found no solution (explored {states} states)'
+                    result['message'] = f'P-CBS ({persona}) found no solution (explored {states} states)'
 
             elif algorithm_idx in {0, 1, 2, 3, 4, 5, 6}:
                 from src.simulation import GameStateSearchConfig, SearchRepresentation, run_game_state_solver

@@ -316,9 +316,9 @@ def render_sidebar_status_message_metrics_controls(
 
     controls = [
         "Arrows Move",
-        "SPACE Auto-solve",
-        "R     Reset map",
-        "N/P   Next/Prev",
+        "SPACE Solve level",
+        "R     Reset level",
+        "N/P   Next/Prev level",
         "+/-   Zoom",
         "0     Reset zoom",
         "C     Center view",

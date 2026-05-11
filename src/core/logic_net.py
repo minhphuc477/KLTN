@@ -715,6 +715,8 @@ class LogicNet(nn.Module):
         lock_weight: float = 0.5,
         topology_trace_weight: float = 0.25,
         topology_anchor_weight: float = 0.25,
+        global_reach_weight: float = 1.0,
+        global_room_weight: float = 0.25,
         # --- Phase 1D: Temperature annealing (Jang et al., 2017) ---
         initial_temperature: float = 1.0,
         final_temperature: float = 0.05,
@@ -729,6 +731,8 @@ class LogicNet(nn.Module):
         self.lock_weight = lock_weight
         self.topology_trace_weight = float(max(0.0, topology_trace_weight))
         self.topology_anchor_weight = float(max(0.0, topology_anchor_weight))
+        self.global_reach_weight = float(max(0.0, global_reach_weight))
+        self.global_room_weight = float(max(0.0, global_room_weight))
         
         # --- Phase 1D: Temperature annealing state ---
         self.initial_temperature = initial_temperature
@@ -959,6 +963,442 @@ class LogicNet(nn.Module):
             targets["trace_target"] = trace_target
 
         return targets
+
+    @staticmethod
+    def _coerce_optional_int(value: Any) -> Optional[int]:
+        if value is None:
+            return None
+        if isinstance(value, torch.Tensor):
+            if value.numel() == 0:
+                return None
+            value = value.detach().flatten()[0].item()
+        try:
+            return int(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+    @staticmethod
+    def _select_batch_value(value: Any, batch_idx: int) -> Any:
+        """Select one item from an optionally batched graph tensor/list."""
+        if isinstance(value, torch.Tensor):
+            if value.dim() == 0:
+                return value
+            if value.dim() >= 1 and int(value.shape[0]) > batch_idx:
+                return value[batch_idx]
+            return value
+        if isinstance(value, (list, tuple)) and len(value) > batch_idx:
+            return value[batch_idx]
+        return value
+
+    @staticmethod
+    def _current_indices_for_graph(
+        current_node_idx: Any,
+        *,
+        batch_size: int,
+        node_count: int,
+        device: torch.device,
+    ) -> Tensor:
+        if isinstance(current_node_idx, torch.Tensor):
+            indices = current_node_idx.detach().to(device=device, dtype=torch.long).flatten()
+        elif isinstance(current_node_idx, (list, tuple)):
+            indices = torch.tensor([int(v) for v in current_node_idx], device=device, dtype=torch.long)
+        elif current_node_idx is None:
+            if int(batch_size) == int(node_count):
+                indices = torch.arange(node_count, device=device, dtype=torch.long)
+            else:
+                indices = torch.zeros(batch_size, device=device, dtype=torch.long)
+        else:
+            indices = torch.full((batch_size,), int(current_node_idx), device=device, dtype=torch.long)
+
+        if indices.numel() == 1 and batch_size > 1:
+            indices = indices.expand(batch_size)
+        if indices.numel() < batch_size:
+            pad = torch.zeros(batch_size - int(indices.numel()), device=device, dtype=torch.long)
+            indices = torch.cat([indices, pad], dim=0)
+        indices = indices[:batch_size]
+        return indices.clamp(0, max(0, int(node_count) - 1))
+
+    @staticmethod
+    def _infer_target_idx(
+        node_features: Optional[Tensor],
+        explicit_target_idx: Any,
+        *,
+        node_count: int,
+    ) -> Optional[int]:
+        target_idx = LogicNet._coerce_optional_int(explicit_target_idx)
+        if target_idx is not None and 0 <= target_idx < node_count:
+            return target_idx
+        if isinstance(node_features, torch.Tensor) and node_features.dim() == 2 and node_features.shape[1] > 3:
+            hits = torch.nonzero(node_features[:, 3] > 0.5, as_tuple=False).flatten()
+            if hits.numel() > 0:
+                return int(hits[0].item())
+        return None
+
+    @staticmethod
+    def _edge_feature_penalty(edge_features: Optional[Tensor], edge_attr: Optional[Tensor], num_edges: int) -> Optional[Tensor]:
+        penalty: Optional[Tensor] = None
+        if isinstance(edge_features, torch.Tensor) and edge_features.numel() > 0:
+            ef = edge_features
+            if ef.dim() == 1:
+                ef = ef.unsqueeze(-1)
+            ef = ef[:num_edges].float()
+            penalty = torch.zeros(num_edges, device=ef.device, dtype=ef.dtype)
+            if ef.shape[1] > 1:
+                penalty = penalty + ef[:, 1].clamp(0.0, 1.0) * 1.0  # key lock
+            if ef.shape[1] > 2:
+                penalty = penalty + ef[:, 2].clamp(0.0, 1.0) * 0.5  # bomb
+            if ef.shape[1] > 3:
+                penalty = penalty + ef[:, 3].clamp(0.0, 1.0) * 0.25  # soft/one-way
+            if ef.shape[1] > 4:
+                penalty = penalty + ef[:, 4].clamp(0.0, 1.0) * 2.0  # boss lock
+            if ef.shape[1] > 5:
+                penalty = penalty + ef[:, 5].clamp(0.0, 1.0) * 1.0  # item lock
+            if ef.shape[1] > 7:
+                penalty = penalty + ef[:, 7].clamp(0.0, 1.0) * 0.5  # switch/state
+
+        if isinstance(edge_attr, torch.Tensor) and edge_attr.numel() > 0:
+            attr = edge_attr[:num_edges].to(dtype=torch.long)
+            attr_penalty = torch.zeros(num_edges, device=attr.device, dtype=torch.float32)
+            attr_penalty = attr_penalty + (attr == 1).float() * 1.0
+            attr_penalty = attr_penalty + (attr == 2).float() * 0.5
+            attr_penalty = attr_penalty + (attr == 3).float() * 0.25
+            attr_penalty = attr_penalty + (attr == 4).float() * 2.0
+            attr_penalty = attr_penalty + (attr == 5).float() * 1.0
+            attr_penalty = attr_penalty + (attr == 7).float() * 0.5
+            penalty = attr_penalty if penalty is None else torch.maximum(penalty.to(attr_penalty.device), attr_penalty)
+
+        return penalty
+
+    def _build_adjacency_and_weights(
+        self,
+        *,
+        node_count: int,
+        device: torch.device,
+        dtype: torch.dtype,
+        edge_index: Optional[Tensor] = None,
+        adjacency: Optional[Tensor] = None,
+        edge_weights: Optional[Tensor] = None,
+        edge_features: Optional[Tensor] = None,
+        edge_attr: Optional[Tensor] = None,
+        node_passability: Optional[Tensor] = None,
+    ) -> Tuple[Optional[Tensor], Optional[Tensor]]:
+        n = int(max(0, node_count))
+        if n <= 0:
+            return None, None
+
+        if isinstance(adjacency, torch.Tensor):
+            adj = adjacency.to(device=device, dtype=dtype)
+            if adj.dim() != 2 or adj.shape[0] != adj.shape[1]:
+                return None, None
+            adj = (adj[:n, :n] > 0).to(dtype=dtype)
+            weights = (
+                edge_weights.to(device=device, dtype=dtype)[:n, :n]
+                if isinstance(edge_weights, torch.Tensor) and edge_weights.shape == adjacency.shape
+                else adj.clone()
+            )
+        else:
+            adj = torch.zeros(n, n, device=device, dtype=dtype)
+            weights = torch.zeros(n, n, device=device, dtype=dtype)
+            if not isinstance(edge_index, torch.Tensor) or edge_index.dim() != 2 or int(edge_index.shape[0]) != 2:
+                return None, None
+            if edge_index.numel() > 0:
+                src = edge_index[0].to(device=device, dtype=torch.long)
+                dst = edge_index[1].to(device=device, dtype=torch.long)
+                valid = (src >= 0) & (src < n) & (dst >= 0) & (dst < n)
+                src = src[valid]
+                dst = dst[valid]
+                if src.numel() > 0:
+                    num_edges = int(src.numel())
+                    adj[src, dst] = 1.0
+                    base = torch.ones(num_edges, device=device, dtype=dtype)
+                    feature_penalty = self._edge_feature_penalty(
+                        edge_features.to(device=device) if isinstance(edge_features, torch.Tensor) else None,
+                        edge_attr.to(device=device) if isinstance(edge_attr, torch.Tensor) else None,
+                        num_edges,
+                    )
+                    if feature_penalty is not None:
+                        base = base + feature_penalty.to(device=device, dtype=dtype)
+                    weights[src, dst] = base
+
+        if node_passability is not None:
+            node_pass = node_passability.to(device=device, dtype=dtype).flatten()[:n].clamp(0.0, 1.0)
+            if node_pass.numel() < n:
+                node_pass = F.pad(node_pass, (0, n - int(node_pass.numel())), value=1.0)
+            entry_penalty = (1.0 - node_pass).view(1, n) * float(self.graph_pathfinder.inf_distance)
+            weights = torch.where(adj > 0, weights + entry_penalty, weights)
+
+        return adj, weights
+
+    def _room_passability_from_local_scores(
+        self,
+        *,
+        walkability: Tensor,
+        grid_reach_scores: Tensor,
+        trace_target: Optional[Tensor],
+        anchor_target: Optional[Tensor],
+    ) -> Tensor:
+        terms = [grid_reach_scores.view(walkability.shape[0]).clamp(0.0, 1.0)]
+        if trace_target is not None:
+            mass = trace_target.sum(dim=(1, 2, 3)).clamp_min(1e-6)
+            terms.append(((walkability * trace_target).sum(dim=(1, 2, 3)) / mass).clamp(0.0, 1.0))
+        if anchor_target is not None:
+            mass = anchor_target.sum(dim=(1, 2, 3)).clamp_min(1e-6)
+            terms.append(((walkability * anchor_target).sum(dim=(1, 2, 3)) / mass).clamp(0.0, 1.0))
+        return torch.stack(terms, dim=0).mean(dim=0).clamp(0.0, 1.0)
+
+    def _compute_one_global_graph_loss(
+        self,
+        *,
+        node_count: int,
+        edge_index: Optional[Tensor],
+        adjacency: Optional[Tensor],
+        edge_weights: Optional[Tensor],
+        edge_features: Optional[Tensor],
+        edge_attr: Optional[Tensor],
+        node_features: Optional[Tensor],
+        node_mask: Optional[Tensor],
+        start_idx: Any,
+        target_idx: Any,
+        key_lock_pairs: Any,
+        current_node_idx: Any,
+        room_passability: Tensor,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> Tuple[Tensor, Tensor, Tensor, Dict[str, Any]]:
+        zero = torch.tensor(0.0, device=device, dtype=dtype)
+        n = int(max(0, node_count))
+        if n <= 0:
+            return zero, zero, zero, {}
+
+        if isinstance(node_mask, torch.Tensor):
+            mask = node_mask.to(device=device, dtype=torch.bool).flatten()
+            if mask.numel() >= n:
+                n = int(mask[:n].sum().item())
+        if n <= 0:
+            return zero, zero, zero, {}
+
+        room_pass = room_passability.to(device=device, dtype=dtype).flatten()
+        current_indices = self._current_indices_for_graph(
+            current_node_idx,
+            batch_size=int(room_pass.numel()),
+            node_count=n,
+            device=device,
+        )
+        node_passability = torch.ones(n, device=device, dtype=dtype)
+        node_passability = node_passability.index_copy(0, current_indices, room_pass[: current_indices.numel()])
+
+        adj, weights = self._build_adjacency_and_weights(
+            node_count=n,
+            device=device,
+            dtype=dtype,
+            edge_index=edge_index,
+            adjacency=adjacency,
+            edge_weights=edge_weights,
+            edge_features=edge_features,
+            edge_attr=edge_attr,
+            node_passability=node_passability,
+        )
+        if adj is None or weights is None:
+            return zero, zero, zero, {}
+
+        start = self._coerce_optional_int(start_idx)
+        if start is None or start < 0 or start >= n:
+            start = 0
+        source_mask = torch.zeros(n, device=device, dtype=dtype)
+        source_mask[start] = 1.0
+
+        distances = self.graph_pathfinder(adj, weights, source_mask)
+        target = self._infer_target_idx(node_features, target_idx, node_count=n)
+        graph_reach_loss = zero
+        graph_reach_score = torch.tensor(0.0, device=device, dtype=dtype)
+        if target is not None:
+            target_mask = torch.zeros(n, device=device, dtype=dtype)
+            target_mask[target] = 1.0
+            graph_reach_score, graph_reach_loss = self.reachability(
+                distances,
+                target_mask,
+                return_loss=True,
+            )
+            if isinstance(graph_reach_score, torch.Tensor) and graph_reach_score.numel() != 1:
+                graph_reach_score = graph_reach_score.mean()
+
+        pairs: List[Tuple[int, int]] = []
+        if isinstance(key_lock_pairs, (list, tuple)):
+            for pair in key_lock_pairs:
+                if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+                    continue
+                k = self._coerce_optional_int(pair[0])
+                l = self._coerce_optional_int(pair[1])
+                if k is not None and l is not None and 0 <= k < n and 0 <= l < n:
+                    pairs.append((k, l))
+        if not pairs and isinstance(node_features, torch.Tensor) and node_features.dim() == 2 and node_features.shape[1] > 1:
+            key_nodes = torch.nonzero(node_features[:n, 1] > 0.5, as_tuple=False).flatten().tolist()
+            locked_targets: List[int] = []
+            if isinstance(edge_features, torch.Tensor) and isinstance(edge_index, torch.Tensor) and edge_index.numel() > 0:
+                ef = edge_features
+                if ef.dim() == 1:
+                    ef = ef.unsqueeze(-1)
+                if ef.shape[1] > 1:
+                    locked = torch.nonzero(ef[:, 1] > 0.5, as_tuple=False).flatten()
+                    for edge_i in locked.tolist():
+                        if edge_i < edge_index.shape[1]:
+                            dst = int(edge_index[1, edge_i].item())
+                            if 0 <= dst < n:
+                                locked_targets.append(dst)
+            for key_node, lock_node in zip(key_nodes, sorted(set(locked_targets))):
+                pairs.append((int(key_node), int(lock_node)))
+
+        lock_loss = zero
+        lock_info: Dict[str, Any] = {}
+        if pairs:
+            key_mask = torch.zeros(n, device=device, dtype=dtype)
+            lock_mask = torch.zeros(n, device=device, dtype=dtype)
+            for key_idx, lock_idx in pairs:
+                key_mask[key_idx] = 1.0
+                lock_mask[lock_idx] = 1.0
+            lock_loss, lock_info = self.key_lock(distances, key_mask, lock_mask, pairs)
+
+        room_loss = (1.0 - room_pass[: current_indices.numel()].clamp(0.0, 1.0)).mean()
+        total = (
+            self.global_reach_weight * graph_reach_loss
+            + self.lock_weight * lock_loss
+            + self.global_room_weight * room_loss
+        )
+        info = {
+            "global_graph_distances": distances,
+            "global_graph_reachability": graph_reach_score,
+            "global_room_passability": room_pass.mean(),
+            "global_room_loss": room_loss,
+            "global_num_key_lock_pairs": float(len(pairs)),
+            **lock_info,
+        }
+        return total, graph_reach_loss, lock_loss, info
+
+    def _compute_global_graph_losses(
+        self,
+        graph_data: Optional[Any],
+        *,
+        room_passability: Tensor,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> Tuple[Tensor, Tensor, Tensor, Dict[str, Any]]:
+        zero = torch.tensor(0.0, device=device, dtype=dtype)
+        if not isinstance(graph_data, dict):
+            return zero, zero, zero, {}
+
+        adjacency = graph_data.get("adjacency")
+        edge_index = graph_data.get("edge_index")
+        node_features = graph_data.get("node_features")
+        node_mask = graph_data.get("node_mask")
+        graph_scope = str(graph_data.get("graph_scope", "") or "").strip().lower()
+
+        if isinstance(adjacency, torch.Tensor) and adjacency.dim() == 2:
+            n = int(adjacency.shape[0])
+            node_feats = node_features.to(device=device, dtype=dtype) if isinstance(node_features, torch.Tensor) and node_features.dim() == 2 else None
+            return self._compute_one_global_graph_loss(
+                node_count=n,
+                edge_index=None,
+                adjacency=adjacency.to(device=device, dtype=dtype),
+                edge_weights=graph_data.get("edge_weights"),
+                edge_features=graph_data.get("edge_features"),
+                edge_attr=graph_data.get("edge_attr"),
+                node_features=node_feats,
+                node_mask=node_mask if isinstance(node_mask, torch.Tensor) else None,
+                start_idx=graph_data.get("start_idx", graph_data.get("start_node_id", 0)),
+                target_idx=graph_data.get("target_idx"),
+                key_lock_pairs=graph_data.get("key_lock_pairs", []),
+                current_node_idx=graph_data.get("current_node_idx"),
+                room_passability=room_passability,
+                device=device,
+                dtype=dtype,
+            )
+
+        if not isinstance(edge_index, torch.Tensor):
+            return zero, zero, zero, {}
+
+        # Dungeon-scope: one graph with many room latents in z's batch dimension.
+        if edge_index.dim() == 2 and (
+            graph_scope == "dungeon"
+            or (
+                isinstance(graph_data.get("current_node_idx"), torch.Tensor)
+                and graph_data["current_node_idx"].numel() == room_passability.numel()
+                and isinstance(node_features, torch.Tensor)
+                and node_features.dim() == 2
+            )
+        ):
+            n = int(node_features.shape[0]) if isinstance(node_features, torch.Tensor) and node_features.dim() == 2 else int(room_passability.numel())
+            return self._compute_one_global_graph_loss(
+                node_count=n,
+                edge_index=edge_index.to(device=device, dtype=torch.long),
+                adjacency=None,
+                edge_weights=None,
+                edge_features=graph_data.get("edge_features"),
+                edge_attr=graph_data.get("edge_attr"),
+                node_features=node_features.to(device=device, dtype=dtype) if isinstance(node_features, torch.Tensor) else None,
+                node_mask=node_mask if isinstance(node_mask, torch.Tensor) else None,
+                start_idx=graph_data.get("start_idx", graph_data.get("start_node_id", 0)),
+                target_idx=graph_data.get("target_idx"),
+                key_lock_pairs=graph_data.get("key_lock_pairs", []),
+                current_node_idx=graph_data.get("current_node_idx"),
+                room_passability=room_passability,
+                device=device,
+                dtype=dtype,
+            )
+
+        # Batched room-scope: each item has its own graph and one current room.
+        if edge_index.dim() != 3:
+            return zero, zero, zero, {}
+
+        losses: List[Tensor] = []
+        reach_losses: List[Tensor] = []
+        lock_losses: List[Tensor] = []
+        infos: List[Dict[str, Any]] = []
+        batch_size = min(int(edge_index.shape[0]), int(room_passability.numel()))
+        for bi in range(batch_size):
+            nf_i = self._select_batch_value(node_features, bi)
+            if not isinstance(nf_i, torch.Tensor) or nf_i.dim() != 2:
+                continue
+            nm_i = self._select_batch_value(node_mask, bi)
+            ei_i = edge_index[bi].to(device=device, dtype=torch.long)
+            ef_i = self._select_batch_value(graph_data.get("edge_features"), bi)
+            ea_i = self._select_batch_value(graph_data.get("edge_attr"), bi)
+            total_i, reach_i, lock_i, info_i = self._compute_one_global_graph_loss(
+                node_count=int(nf_i.shape[0]),
+                edge_index=ei_i,
+                adjacency=None,
+                edge_weights=None,
+                edge_features=ef_i if isinstance(ef_i, torch.Tensor) else None,
+                edge_attr=ea_i if isinstance(ea_i, torch.Tensor) else None,
+                node_features=nf_i.to(device=device, dtype=dtype),
+                node_mask=nm_i if isinstance(nm_i, torch.Tensor) else None,
+                start_idx=self._select_batch_value(graph_data.get("start_node_id", graph_data.get("start_idx", 0)), bi),
+                target_idx=self._select_batch_value(graph_data.get("target_idx"), bi),
+                key_lock_pairs=self._select_batch_value(graph_data.get("key_lock_pairs", []), bi),
+                current_node_idx=self._select_batch_value(graph_data.get("current_node_idx"), bi),
+                room_passability=room_passability[bi:bi + 1],
+                device=device,
+                dtype=dtype,
+            )
+            losses.append(total_i)
+            reach_losses.append(reach_i)
+            lock_losses.append(lock_i)
+            infos.append(info_i)
+
+        if not losses:
+            return zero, zero, zero, {}
+        merged_info: Dict[str, Any] = {
+            "global_graph_count": float(len(losses)),
+            "global_room_passability": room_passability[:batch_size].mean(),
+        }
+        scalar_keys = ("global_graph_reachability", "global_room_loss", "global_num_key_lock_pairs")
+        for key in scalar_keys:
+            values = [info[key] for info in infos if key in info]
+            if values:
+                if isinstance(values[0], torch.Tensor):
+                    merged_info[key] = torch.stack([v if v.dim() == 0 else v.mean() for v in values]).mean()
+                else:
+                    merged_info[key] = float(sum(float(v) for v in values) / len(values))
+        return torch.stack(losses).mean(), torch.stack(reach_losses).mean(), torch.stack(lock_losses).mean(), merged_info
     
     def update_temperature(self, progress: float):
         """
@@ -1109,93 +1549,39 @@ class LogicNet(nn.Module):
                 ((1.0 - walkability) * anchor_target).sum(dim=(1, 2, 3)) / anchor_mass
             ).mean()
         
-        # 4. Graph-level pathfinding (if graph data provided)
-        graph_reach_loss = torch.tensor(0.0, device=device)
-        lock_loss = torch.tensor(0.0, device=device)
-        
-        if graph_data is not None:
-            adjacency = graph_data.get('adjacency')
-            edge_weights = graph_data.get('edge_weights')
-            start_idx = graph_data.get('start_idx', 0)
-            target_idx = graph_data.get('target_idx')
-            key_lock_pairs = graph_data.get('key_lock_pairs', [])
+        # 4. Graph-level pathfinding. Room predictions are lifted to node
+        # passability, then used as differentiable entry costs on the mission
+        # graph. This gives dungeon-scope reachability and key-lock losses a
+        # real gradient path back to the room latents in z.
+        room_passability = self._room_passability_from_local_scores(
+            walkability=walkability,
+            grid_reach_scores=grid_reach_scores,
+            trace_target=trace_target,
+            anchor_target=anchor_target,
+        )
+        graph_total_loss, graph_reach_loss, lock_loss, global_info = self._compute_global_graph_losses(
+            graph_data,
+            room_passability=room_passability,
+            device=device,
+            dtype=walkability.dtype,
+        )
 
-            if adjacency is not None:
-                if not isinstance(adjacency, torch.Tensor) or adjacency.ndim != 2:
-                    raise ValueError("LogicNet graph_data['adjacency'] must be a rank-2 tensor [N,N].")
-                if adjacency.shape[0] != adjacency.shape[1]:
-                    raise ValueError(
-                        f"LogicNet graph_data['adjacency'] must be square, got {tuple(adjacency.shape)}."
-                    )
-            if edge_weights is not None:
-                if not isinstance(edge_weights, torch.Tensor):
-                    raise ValueError("LogicNet graph_data['edge_weights'] must be a tensor when provided.")
-                if adjacency is not None and edge_weights.shape != adjacency.shape:
-                    raise ValueError(
-                        "LogicNet graph_data['edge_weights'] must match adjacency shape."
-                    )
-            
-            if adjacency is not None and edge_weights is not None:
-                N = adjacency.shape[0]
-                
-                # Create source mask for start node
-                source_mask = torch.zeros(N, device=device)
-                source_mask[start_idx] = 1.0
-                
-                # Compute graph distances
-                graph_distances = self.graph_pathfinder(
-                    adjacency,
-                    edge_weights,
-                    source_mask,
-                )
-                info['graph_distances'] = graph_distances
-                
-                # Target reachability
-                if target_idx is not None:
-                    target_mask = torch.zeros(N, device=device)
-                    target_mask[target_idx] = 1.0
-                    _, graph_reach_loss = self.reachability(
-                        graph_distances,
-                        target_mask,
-                        return_loss=True,
-                    )
-                
-                # Key-lock dependencies
-                if key_lock_pairs:
-                    key_mask = torch.zeros(N, device=device)
-                    lock_mask = torch.zeros(N, device=device)
-                    for k, l in key_lock_pairs:
-                        key_mask[k] = 1.0
-                        lock_mask[l] = 1.0
-                    
-                    lock_loss, lock_info = self.key_lock(
-                        graph_distances,
-                        key_mask,
-                        lock_mask,
-                        key_lock_pairs,
-                    )
-                    info.update(lock_info)
-        
         # 5. Combine losses
-        # ARCHITECTURAL FIX: Only include grid_reach_loss in training loss.
-        # graph_reach_loss and lock_loss operate on ground-truth adjacency/edge_weights
-        # from the conditioning context, NOT derived from z. A single room's z [B, 64, 4, 3]
-        # cannot encode inter-room key-lock ordering, so these losses provide zero useful
-        # gradient to the diffusion model. They are still computed and returned in `info`
-        # for diagnostic/evaluation purposes.
-        # Graph-level solvability is enforced at the dungeon-sequence level via
-        # evaluate_dungeon_solvability() in the pipeline.
         loss = (
             self.reach_weight * grid_reach_loss
             + self.topology_trace_weight * topology_trace_loss
             + self.topology_anchor_weight * topology_anchor_loss
+            + graph_total_loss
         )
 
         info['grid_reach_loss'] = grid_reach_loss
-        info['graph_reach_loss'] = graph_reach_loss  # diagnostic only, not in loss
-        info['lock_loss'] = lock_loss                 # diagnostic only, not in loss
+        info['graph_reach_loss'] = graph_reach_loss
+        info['lock_loss'] = lock_loss
+        info['global_logic_loss'] = graph_total_loss
+        info['room_passability'] = room_passability.mean()
         info['topology_trace_loss'] = topology_trace_loss
         info['topology_anchor_loss'] = topology_anchor_loss
+        info.update(global_info)
         info['total_loss'] = loss
         
         return loss, info

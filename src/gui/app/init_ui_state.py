@@ -17,6 +17,7 @@ def initialize_ui_control_state(*, gui: Any, pygame: Any, widgets_available: boo
     gui.toast_notifications = []
     gui.debug_overlay_enabled = False
     gui.debug_click_log = []
+    gui.advanced_gui = os_module.environ.get("KLTN_ADVANCED_GUI", "0") == "1"
 
     gui.keys_held = {
         pygame.K_UP: False,
@@ -40,6 +41,8 @@ def initialize_ui_control_state(*, gui: Any, pygame: Any, widgets_available: boo
     gui.ai_constraint_boss_norm = None
     gui.ai_constraint_lock_norm = None
     gui.ai_constraint_key_norm = None
+    checkpoint_override = str(os_module.environ.get("KLTN_CHECKPOINT_PATH", "")).strip()
+    gui.ai_checkpoint_path = checkpoint_override or None
 
     gui.collected_items = []
     gui.collected_positions = set()
@@ -134,4 +137,5 @@ def initialize_ui_control_state(*, gui: Any, pygame: Any, widgets_available: boo
     gui.message_duration = 3.0
 
     gui.preview_on_next_solver_result = False
+    gui.auto_start_preview = os_module.environ.get("KLTN_AUTO_START_PREVIEW", "0") == "1"
     gui.auto_start_solver = os_module.environ.get("KLTN_AUTO_START_SOLVER", "1") != "0"

@@ -34,7 +34,7 @@ def build_priority_options(
         "enable_ara": feature_flags.get("enable_ara", False),
         "ara_weight": float(ara_weight),
         "representation": str(search_representation),
-        "allow_diagonals": True,
+        "allow_diagonals": bool(feature_flags.get("diagonal_movement", False)),
     }
 
 

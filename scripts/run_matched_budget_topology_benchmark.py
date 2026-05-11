@@ -27,6 +27,8 @@ from src.evaluation.benchmark_suite import (
     load_vglc_reference_graphs,
     run_block_i_benchmark,
 )
+from src.evaluation.map_elites import EliteArchive, LinearityLeniencyExtractor
+from src.evaluation.validator import ExternalValidator
 from src.generation.evolutionary_director import (
     EvolutionaryTopologyGenerator,
     GraphGrammarExecutor,
@@ -462,6 +464,7 @@ def _build_summary_row(method: str, sub: pd.DataFrame, payload: Dict[str, Any]) 
     expressive = dict(payload.get("expressive_range", {}))
     generated = dict(payload.get("generated_descriptor_means", {}))
     reference = dict(payload.get("reference_comparison", {}))
+    archive = dict(payload.get("archive_metrics", {}))
     return {
         "method": method,
         "n": int(len(sub)),
@@ -512,12 +515,36 @@ def _build_summary_row(method: str, sub: pd.DataFrame, payload: Dict[str, Any]) 
         "graph_edit_distance": _safe_mean(sub, "graph_edit_distance"),
         "generation_time_sec": _safe_mean(sub, "generation_time_sec"),
         "evaluations_used": _safe_mean(sub, "evaluations_used"),
+        "map_elites_coverage": float(archive.get("coverage", 0.0)),
+        "map_elites_qd_score": float(archive.get("qd_score", 0.0)),
+        "map_elites_mean_fitness": float(archive.get("mean_fitness", 0.0)),
+        "map_elites_feature_diversity": float(archive.get("feature_diversity", 0.0)),
+        "map_elites_num_elites": float(archive.get("num_elites", 0.0)),
         "fidelity_js_divergence": float(reference.get("fidelity_js_divergence", 0.0)),
         "expressive_overlap_reference": float(reference.get("expressive_overlap_reference", 0.0)),
         "coverage_linearity_leniency": float(expressive.get("coverage_linearity_leniency", 0.0)),
         "coverage_progression_topology": float(expressive.get("coverage_progression_topology", 0.0)),
         "coverage_redundancy_articulation": float(expressive.get("coverage_redundancy_articulation", 0.0)),
         "coverage_branch_secret": float(expressive.get("coverage_branch_secret", 0.0)),
+    }
+
+
+def _evaluate_archive_metrics(graphs: Sequence[nx.Graph]) -> Dict[str, float]:
+    extractor = LinearityLeniencyExtractor()
+    archive = EliteArchive(feature_dims=2, cells_per_dim=10)
+    validator = ExternalValidator()
+
+    for graph in graphs:
+        fitness = 1.0 if validator.validate(graph).is_solvable else 0.0
+        archive.add(solution=graph, fitness=fitness, features=extractor.extract(graph))
+
+    stats = archive.get_stats()
+    return {
+        "coverage": float(stats.coverage),
+        "qd_score": float(stats.total_fitness),
+        "mean_fitness": float(stats.mean_fitness),
+        "feature_diversity": float(stats.feature_diversity),
+        "num_elites": float(stats.num_elites),
     }
 
 
@@ -727,6 +754,7 @@ def main() -> int:
         sub = raw_df[raw_df["method"] == method]
         bench = run_block_i_benchmark(generated_graphs=gen_by_method[method], reference_graphs=refs, generation_times=time_by_method[method])
         payload = asdict(bench)
+        payload["archive_metrics"] = _evaluate_archive_metrics(gen_by_method[method])
         benchmark_payload_by_method[method] = payload
         summary_rows.append(_build_summary_row(method=method, sub=sub, payload=payload))
     summary_df = pd.DataFrame(summary_rows)
@@ -859,6 +887,11 @@ def main() -> int:
             "secret_content_discoverability_rate",
             "coverage_redundancy_articulation",
             "coverage_branch_secret",
+            "map_elites_coverage",
+            "map_elites_qd_score",
+            "map_elites_mean_fitness",
+            "map_elites_feature_diversity",
+            "map_elites_num_elites",
         ],
     )
 

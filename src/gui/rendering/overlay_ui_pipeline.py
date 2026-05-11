@@ -107,7 +107,7 @@ def render_preview_layer(
             gui.sidebar_start_button_rect = start_rect
             gui.sidebar_dismiss_button_rect = dismiss_rect
 
-            start_text = small.render("Start Auto-Solve", True, (255, 255, 255))
+            start_text = small.render("Solve Level", True, (255, 255, 255))
             dismiss_text = small.render("Dismiss", True, (255, 255, 255))
             gui.screen.blit(start_text, (start_rect.x + 8, start_rect.y + 4))
             gui.screen.blit(dismiss_text, (dismiss_rect.x + 6, dismiss_rect.y + 4))

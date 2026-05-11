@@ -1,0 +1,89 @@
+{
+  "output_dir": "results\\presentation_assets_20260508",
+  "vqvae_checkpoint": "outputs\\vqvae_ablation_codebook512_v2\\checkpoints\\vqvae\\vqvae_pretrained.pth",
+  "figures": {
+    "codebook_mosaic": {
+      "path": "results\\presentation_assets_20260508\\vqvae_codebook_prototypes.png",
+      "source": "outputs\\vqvae_ablation_codebook512_v2\\checkpoints\\vqvae\\vqvae_pretrained.pth",
+      "dataset_rooms": 459,
+      "latent_shape": [
+        4,
+        3
+      ],
+      "active_codes": 497,
+      "selected_codes": [
+        150,
+        182,
+        254,
+        330,
+        303,
+        18,
+        199,
+        48,
+        461,
+        432,
+        192,
+        334,
+        112,
+        458,
+        480,
+        342,
+        231,
+        332,
+        316,
+        42,
+        207,
+        147,
+        197,
+        299,
+        75,
+        433,
+        440,
+        385,
+        413,
+        121,
+        95,
+        472
+      ],
+      "note": "This is a real usage atlas, not a decoded single-code prototype; each panel shows a real encoded room patch."
+    },
+    "reconstruction_pairs": {
+      "path": "results\\presentation_assets_20260508\\vqvae_reconstruction_real_vs_recon.png",
+      "mean_tile_accuracy": 1.0,
+      "source": "outputs\\vqvae_ablation_codebook512_v2\\checkpoints\\vqvae\\vqvae_pretrained.pth"
+    },
+    "diffusion_progression": {
+      "path": "results\\presentation_assets_20260508\\diffusion_latent_progression.png",
+      "source": "src.core.latent_diffusion.get_noise_schedule + VQ-VAE decoder",
+      "sample_output": "results\\thesis_ch4_evals\\branch_compare_pdrop035\\pdrop035\\diffusion_cfg3_logic0_steps50\\dungeon_grid_stylized.png",
+      "note": "Latent panels visualize state types in the diffusion schedule. They do not claim to be saved reverse-sampler intermediates."
+    },
+    "architecture": {
+      "dual_stream_png": "results\\presentation_assets_20260508\\dual_stream_conditioning_flow.png",
+      "repo_flow_png": "results\\presentation_assets_20260508\\repo_architecture_flow.png",
+      "mermaid": "results\\presentation_assets_20260508\\dual_stream_diffusion_flow.mmd"
+    },
+    "solvability_logicnet": {
+      "path": "results\\presentation_assets_20260508\\solvability_logicnet_comparison.png",
+      "logic_on_source": "results\\old_result\\ablation_core_quick_v3\\ablation_summary.csv",
+      "logic_off_source": "results\\old_result\\ablation_core_quick_part2_v1\\ablation_summary.csv",
+      "excluded_reference_branch_source": "results\\room_branch_benchmark_pdrop035_quick\\room_branch_summary.csv",
+      "note": "No matched LogicNet ON/OFF benchmark was found; the figure is an evidence audit using quick ablation rows."
+    },
+    "symbolic_repair": {
+      "path": "results\\presentation_assets_20260508\\symbolic_repair_before_after.png",
+      "before_failure_count": 1,
+      "after_failure_count": 0,
+      "success": true
+    },
+    "map_elites_behavior_space": {
+      "path": "results\\presentation_assets_20260508\\map_elites_behavior_space.png",
+      "source": "results\\map_elites_full_n64\\matched_budget_raw.csv",
+      "rows": 64
+    },
+    "generated_branch_examples": {
+      "path": "results\\presentation_assets_20260508\\generated_branch_examples.png",
+      "source": "results\\thesis_ch4_evals\\chapter4_eval_rows.csv"
+    }
+  }
+}

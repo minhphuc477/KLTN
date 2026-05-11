@@ -42,6 +42,14 @@ def handle_global_keydown_shortcuts(
             logger.exception("Failed to toggle overlays")
         return True
 
+    if event.key == pygame_module.K_F12 and (pygame_module.key.get_mods() & pygame_module.KMOD_SHIFT):
+        gui.debug_control_panel = not getattr(gui, "debug_control_panel", False)
+        if gui.debug_control_panel:
+            gui._set_message("Control panel debug ON (Shift+F12)")
+        else:
+            gui._set_message("Control panel debug OFF")
+        return True
+
     if event.key == pygame_module.K_F12:
         gui.debug_overlay_enabled = not getattr(gui, "debug_overlay_enabled", False)
         if gui.debug_overlay_enabled:
@@ -64,14 +72,6 @@ def handle_global_keydown_shortcuts(
             gui._set_message("Forced focus/ungrab (F)")
         except (AttributeError, RuntimeError, ValueError, TypeError):
             pass
-        return True
-
-    if event.key == pygame_module.K_F12 and (pygame_module.key.get_mods() & pygame_module.KMOD_SHIFT):
-        gui.debug_control_panel = not getattr(gui, "debug_control_panel", False)
-        if gui.debug_control_panel:
-            gui._set_message("Control panel debug ON (Shift+F12)")
-        else:
-            gui._set_message("Control panel debug OFF")
         return True
 
     if event.key in (pygame_module.K_PAGEUP, pygame_module.K_PAGEDOWN):
@@ -292,17 +292,49 @@ def handle_keydown_event(
     elif event.key in gui.keys_held and not gui.auto_mode:
         gui.keys_held[event.key] = True
         gui.move_timer = 0.0
+        if not bool(getattr(event, "repeat", False)):
+            allow_diagonal = bool(getattr(gui, "feature_flags", {}).get("diagonal_movement", False))
+            action = None
+            if allow_diagonal and event.key == pygame_module.K_UP and gui.keys_held.get(pygame_module.K_LEFT):
+                action = action_enum.UP_LEFT
+            elif allow_diagonal and event.key == pygame_module.K_UP and gui.keys_held.get(pygame_module.K_RIGHT):
+                action = action_enum.UP_RIGHT
+            elif allow_diagonal and event.key == pygame_module.K_DOWN and gui.keys_held.get(pygame_module.K_LEFT):
+                action = action_enum.DOWN_LEFT
+            elif allow_diagonal and event.key == pygame_module.K_DOWN and gui.keys_held.get(pygame_module.K_RIGHT):
+                action = action_enum.DOWN_RIGHT
+            elif allow_diagonal and event.key == pygame_module.K_LEFT and gui.keys_held.get(pygame_module.K_UP):
+                action = action_enum.UP_LEFT
+            elif allow_diagonal and event.key == pygame_module.K_LEFT and gui.keys_held.get(pygame_module.K_DOWN):
+                action = action_enum.DOWN_LEFT
+            elif allow_diagonal and event.key == pygame_module.K_RIGHT and gui.keys_held.get(pygame_module.K_UP):
+                action = action_enum.UP_RIGHT
+            elif allow_diagonal and event.key == pygame_module.K_RIGHT and gui.keys_held.get(pygame_module.K_DOWN):
+                action = action_enum.DOWN_RIGHT
+            elif event.key == pygame_module.K_UP:
+                action = action_enum.UP
+            elif event.key == pygame_module.K_DOWN:
+                action = action_enum.DOWN
+            elif event.key == pygame_module.K_LEFT:
+                action = action_enum.LEFT
+            elif event.key == pygame_module.K_RIGHT:
+                action = action_enum.RIGHT
+
+            if action is not None:
+                gui._manual_step(action)
+                gui._center_on_player()
 
     elif not gui.auto_mode:
         keys = pygame_module.key.get_pressed()
         action = None
-        if keys[pygame_module.K_UP] and keys[pygame_module.K_LEFT]:
+        allow_diagonal = bool(getattr(gui, "feature_flags", {}).get("diagonal_movement", False))
+        if allow_diagonal and keys[pygame_module.K_UP] and keys[pygame_module.K_LEFT]:
             action = action_enum.UP_LEFT
-        elif keys[pygame_module.K_UP] and keys[pygame_module.K_RIGHT]:
+        elif allow_diagonal and keys[pygame_module.K_UP] and keys[pygame_module.K_RIGHT]:
             action = action_enum.UP_RIGHT
-        elif keys[pygame_module.K_DOWN] and keys[pygame_module.K_LEFT]:
+        elif allow_diagonal and keys[pygame_module.K_DOWN] and keys[pygame_module.K_LEFT]:
             action = action_enum.DOWN_LEFT
-        elif keys[pygame_module.K_DOWN] and keys[pygame_module.K_RIGHT]:
+        elif allow_diagonal and keys[pygame_module.K_DOWN] and keys[pygame_module.K_RIGHT]:
             action = action_enum.DOWN_RIGHT
         elif keys[pygame_module.K_UP]:
             action = action_enum.UP

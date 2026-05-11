@@ -5,7 +5,8 @@ import numpy as np
 import torch
 
 from src import generate as generation_cli
-from src.gui.ai.ai_generation_controls import start_ai_dungeon_generation
+from src.gui.ai.ai_generation_controls import generate_level, start_ai_dungeon_generation
+from src.gui.app.run_completion_handlers import handle_ai_generation_completion
 from src.gui import ai_generation_worker
 from src.gui.ai import generation_pipeline
 
@@ -24,8 +25,50 @@ class _DummyGUI:
         return None
 
 
+class _CompletionGUI:
+    def __init__(self, result):
+        self.ai_gen_done = True
+        self.ai_gen_result = result
+        self.maps = []
+        self.map_names = []
+        self.current_map_idx = 0
+        self.effects = []
+        self.step_count = 5
+        self.auto_path = [(1, 1)]
+        self.auto_mode = True
+        self.ai_constraint_boss_norm = (0.5, 0.5)
+        self.ai_constraint_lock_norm = (0.2, 0.2)
+        self.ai_constraint_key_norm = (0.8, 0.8)
+        self.ai_mission_graph_draft = None
+        self.loaded = 0
+        self.centered = False
+        self.messages = []
+
+    def _load_current_map(self):
+        self.loaded += 1
+
+    def _center_view(self):
+        self.centered = True
+
+    def _set_message(self, message, duration=3.0):
+        self.messages.append((message, duration))
+
+
+class _Logger:
+    def info(self, *_args, **_kwargs):
+        return None
+
+    def warning(self, *_args, **_kwargs):
+        return None
+
+    def exception(self, *_args, **_kwargs):
+        return None
+
+
 def test_start_ai_generation_sets_thread_and_message():
     gui = _DummyGUI()
+    gui.ai_gen_done = False
+    gui.ai_gen_result = None
     start_ai_dungeon_generation(gui, threading)
 
     assert gui.ai_gen_thread is not None
@@ -35,6 +78,85 @@ def test_start_ai_generation_sets_thread_and_message():
     assert gui.messages[-1][0] == "AI generation started (background)"
 
 
+def test_start_ai_generation_preserves_pending_result():
+    gui = _DummyGUI()
+
+    start_ai_dungeon_generation(gui, threading)
+
+    assert gui.ai_gen_thread is None
+    assert gui.ai_gen_result is not None
+    assert gui.ai_gen_done is True
+    assert gui.messages[-1][0] == "AI generation result pending"
+
+
+def test_generate_level_uses_loaded_checkpoint(tmp_path):
+    gui = _DummyGUI()
+    gui.ai_gen_done = False
+    gui.ai_gen_result = None
+    checkpoint = tmp_path / "gui_model.pth"
+    checkpoint.write_bytes(b"checkpoint")
+    gui.ai_checkpoint_path = str(checkpoint)
+
+    generate_level(gui, threading, _Logger())
+    gui.ai_gen_thread.join(timeout=1.0)
+
+    assert gui.ai_gen_thread is not None
+    assert gui.messages[-1][0] == "AI generation started (background)"
+
+
+def test_generate_level_reports_stale_loaded_checkpoint(tmp_path):
+    gui = _DummyGUI()
+    gui.ai_checkpoint_path = str(tmp_path / "missing_model.pth")
+
+    generate_level(gui, threading, _Logger())
+
+    assert gui.ai_gen_thread is None
+    assert "Loaded AI model not found" in gui.messages[-1][0]
+
+
+def test_generate_level_falls_back_to_procedural_without_checkpoint():
+    gui = _DummyGUI()
+    gui.generated_procedural = False
+    gui._generate_dungeon = lambda: setattr(gui, "generated_procedural", True)
+
+    generate_level(gui, threading, _Logger())
+
+    assert gui.generated_procedural is True
+
+
+def test_handle_ai_generation_completion_applies_worker_payload_on_main_thread():
+    grid = np.zeros((16, 11), dtype=np.int32)
+    graph = object()
+    gui = _CompletionGUI(
+        {
+            "success": True,
+            "grid": grid,
+            "name": "AI Test",
+            "message": "AI done",
+            "clear_mixed_constraints": True,
+            "mission_graph_draft": graph,
+        }
+    )
+
+    handle_ai_generation_completion(gui)
+
+    assert gui.ai_gen_done is False
+    assert gui.ai_gen_result is None
+    assert len(gui.maps) == 1
+    assert gui.maps[0] is grid
+    assert gui.map_names == ["AI Test"]
+    assert gui.loaded == 1
+    assert gui.centered is True
+    assert gui.step_count == 0
+    assert gui.auto_path == []
+    assert gui.auto_mode is False
+    assert gui.ai_constraint_boss_norm is None
+    assert gui.ai_constraint_lock_norm is None
+    assert gui.ai_constraint_key_norm is None
+    assert gui.ai_mission_graph_draft is graph
+    assert gui.messages[-1][0] == "AI done"
+
+
 def test_worker_reports_missing_checkpoint(monkeypatch):
     gui = _DummyGUI()
 
@@ -42,13 +164,6 @@ def test_worker_reports_missing_checkpoint(monkeypatch):
         return Path("__definitely_missing_checkpoint__.pth")
 
     monkeypatch.setattr(ai_generation_worker, "resolve_checkpoint_path", _missing_checkpoint)
-
-    class _Logger:
-        def warning(self, *_args, **_kwargs):
-            return None
-
-        def exception(self, *_args, **_kwargs):
-            return None
 
     ai_generation_worker.run_ai_generation_worker(gui, _Logger())
 
@@ -61,6 +176,21 @@ def test_resolve_checkpoint_path_honors_env_override(monkeypatch):
     resolved = generation_pipeline.resolve_checkpoint_path()
 
     assert resolved.name == "custom_model.pth"
+
+
+def test_resolve_checkpoint_path_honors_explicit_path(monkeypatch):
+    monkeypatch.setenv("KLTN_CHECKPOINT_PATH", "checkpoints/env_model.pth")
+    resolved = generation_pipeline.resolve_checkpoint_path("checkpoints/gui_model.pth")
+
+    assert resolved.name == "gui_model.pth"
+
+
+def test_resolve_checkpoint_path_defaults_to_repo_checkpoints(monkeypatch):
+    monkeypatch.delenv("KLTN_CHECKPOINT_PATH", raising=False)
+    resolved = generation_pipeline.resolve_checkpoint_path()
+    expected = Path(generation_pipeline.__file__).resolve().parents[3] / "checkpoints" / "final_model.pth"
+
+    assert resolved == expected
 
 
 def test_generate_mission_graph_is_deterministic_with_seed():

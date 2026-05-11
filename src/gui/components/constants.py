@@ -8,12 +8,14 @@ GUI_ALGORITHM_NAMES = [
     "D* Lite",
     "DFS/IDDFS",
     "Bidirectional A*",
-    "CBS (Balanced)",
-    "CBS (Explorer)",
-    "CBS (Cautious)",
-    "CBS (Forgetful)",
-    "CBS (Speedrunner)",
-    "CBS (Greedy)",
+    "P-CBS (Balanced)",
+    "P-CBS (Explorer)",
+    "P-CBS (Cautious)",
+    "P-CBS (Forgetful)",
+    "P-CBS (Speedrunner)",
+    "P-CBS (Greedy)",
+    "P-CBS (Completionist)",
+    "P-CBS (Novice)",
 ]
 
 GUI_PRESETS = ["Debugging", "Fast Approx", "Optimal", "Speedrun"]

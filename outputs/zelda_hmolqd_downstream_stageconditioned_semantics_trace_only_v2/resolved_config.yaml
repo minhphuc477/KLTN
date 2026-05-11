@@ -1,5 +1,5 @@
 training:
-  stage: diffusion
+  stage: masked_room
 runtime:
   experiment_name: zelda_hmolqd
   output_dir: outputs\zelda_hmolqd_downstream_stageconditioned_semantics_trace_only_v2
@@ -69,7 +69,7 @@ vqvae:
   best_checkpoint_metric: val_loss
 diffusion:
   checkpoint_dir: outputs\zelda_hmolqd_downstream_stageconditioned_semantics_trace_only_v2\checkpoints\diffusion
-  vqvae_checkpoint: outputs\vqvae_ablation_codebook512_v2\checkpoints\vqvae\vqvae_pretrained.pth
+  vqvae_checkpoint: null
   epochs: 100
   learning_rate: 0.0001
   optimizer_weight_decay: 1.0e-05
@@ -113,9 +113,9 @@ diffusion:
   puzzle_structure_dropout_prob: 0.35
   puzzle_stage_conditioning_enabled: false
   puzzle_stage_token_scale: 0.2
-  puzzle_stage_topology_enabled: true
+  puzzle_stage_topology_enabled: false
   puzzle_stage_trace_decay: 0.75
-  puzzle_stage_semantics_loss_weight: 0.25
+  puzzle_stage_semantics_loss_weight: 0.0
   puzzle_stage_semantics_hidden_dim: 96
   puzzle_stage_semantics_max_sequence_length: 6
   use_current_node_distance_features: true
@@ -298,9 +298,9 @@ masked_room:
   max_mask_ratio: 0.85
   topology_alignment_weight: 0.25
   puzzle_structure_dropout_prob: 0.35
-  puzzle_stage_conditioning_enabled: false
-  puzzle_stage_token_scale: 0.2
-  puzzle_stage_topology_enabled: false
+  puzzle_stage_conditioning_enabled: true
+  puzzle_stage_token_scale: 0.0
+  puzzle_stage_topology_enabled: true
   puzzle_stage_trace_decay: 0.75
   puzzle_stage_semantics_loss_weight: 0.0
   puzzle_stage_semantics_hidden_dim: 96

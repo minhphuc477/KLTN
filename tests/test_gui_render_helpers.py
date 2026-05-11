@@ -121,7 +121,7 @@ def test_render_solver_comparison_overlay_renders_rows():
     results = [
         {"name": "A*", "success": True, "path_len": 12, "nodes": 44, "time_ms": 9},
         {
-            "name": "CBS (Balanced)",
+            "name": "P-CBS (Balanced)",
             "success": True,
             "path_len": 14,
             "confusion": 0.3,

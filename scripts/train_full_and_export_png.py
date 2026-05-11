@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -94,6 +95,7 @@ def train_from_scratch(
         str(condition_gnn_type),
         "--topology-refinement-mode",
         str(topology_refinement_mode),
+        "--no-auto-resume",
     ]
     _run(diffusion_cmd)
 
@@ -153,6 +155,8 @@ def split_component_checkpoints(final_ckpt: Path, out_dir: Path) -> Dict[str, Pa
     out_dir.mkdir(parents=True, exist_ok=True)
     ckpt = torch.load(final_ckpt, map_location="cpu")
 
+    vqvae_source = out_dir / "vqvae_pretrained.pth"
+
     mapping = {
         "vqvae_best.pth": ckpt.get("vqvae_state_dict"),
         "diffusion_best.pth": ckpt.get("diffusion_state_dict"),
@@ -162,10 +166,17 @@ def split_component_checkpoints(final_ckpt: Path, out_dir: Path) -> Dict[str, Pa
 
     out_paths: Dict[str, Path] = {}
     for name, state in mapping.items():
-        if state is None:
-            raise KeyError(f"Missing state in combined checkpoint: {name}")
         path = out_dir / name
-        torch.save({"model_state_dict": state}, path)
+        if state is None:
+            if name == "vqvae_best.pth" and vqvae_source.exists():
+                shutil.copy2(vqvae_source, path)
+                meta_source = Path(f"{vqvae_source}.meta.json")
+                if meta_source.exists():
+                    shutil.copy2(meta_source, Path(f"{path}.meta.json"))
+            else:
+                raise KeyError(f"Missing state in combined checkpoint: {name}")
+        else:
+            torch.save({"model_state_dict": state}, path)
         out_paths[name] = path
 
     return out_paths
@@ -294,12 +305,14 @@ def generate_and_export(
     masked_room_checkpoint: Optional[Path],
     fast_sampling_checkpoint: Optional[Path],
     use_fast_sampling: bool,
+    enable_map_elites: bool = False,
+    device: str = "auto",
 ) -> None:
     from src.pipeline.dungeon_pipeline import create_pipeline
 
     pipeline = create_pipeline(
         checkpoint_dir=str(checkpoint_dir),
-        device="auto",
+        device=device,
         diffusion_cfg_schedule_mode=diffusion_cfg_schedule_mode,
         diffusion_cfg_schedule_min_scale=diffusion_cfg_schedule_min_scale,
         diffusion_cfg_schedule_power=diffusion_cfg_schedule_power,
@@ -322,7 +335,7 @@ def generate_and_export(
         num_diffusion_steps=int(num_diffusion_steps),
         use_fast_sampling=bool(use_fast_sampling),
         apply_repair=True,
-        enable_map_elites=True,
+        enable_map_elites=bool(enable_map_elites),
     )
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -376,6 +389,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--masked-steps", type=int, default=8)
     p.add_argument("--room-generator-mode", type=str, default="latent_diffusion")
     p.add_argument("--use-fast-sampling", action="store_true")
+    p.add_argument("--enable-map-elites", action="store_true")
+    p.add_argument("--device", type=str, default="auto")
     p.add_argument("--skip-train", action="store_true")
     return p.parse_args()
 
@@ -436,6 +451,8 @@ def main() -> None:
         masked_room_checkpoint=masked_room_checkpoint,
         fast_sampling_checkpoint=fast_sampler_checkpoint,
         use_fast_sampling=bool(args.use_fast_sampling),
+        enable_map_elites=bool(args.enable_map_elites),
+        device=str(args.device),
     )
 
     print("[DONE] Outputs:")

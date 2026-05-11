@@ -7,6 +7,12 @@ __pycache__/
 
 # Pytest cache
 .pytest_cache/
+.pytest_tmp*/
+pytest_basetemp*/
+tmp_pytest*/
+tmpapgwsida/
+artifacts/pytest_tmp*/
+outputs/pytest_tmp*/
 
 # Virtual environments
 .venv/

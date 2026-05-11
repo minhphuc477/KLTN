@@ -848,15 +848,16 @@ với $E_{\text{core}}$ là các luồng bắt buộc trên đường chạy ch�
 
 \begin{figure}[H]
 \centering
-\resizebox{0.82\linewidth}{!}{%
+\resizebox{0.92\linewidth}{!}{%
 \begin{tikzpicture}[
   font=\tiny,
   >=Latex,
-  io/.style={draw, rounded corners=2pt, fill=gray!15, align=center, text width=3.2cm, minimum height=1.1cm, inner sep=3pt, font=\tiny},
-  block/.style={draw, rounded corners=2pt, fill=blue!14, align=center, text width=3.2cm, minimum height=1.1cm, inner sep=3pt, font=\tiny},
-  latent/.style={draw, rounded corners=2pt, fill=violet!16, align=center, text width=3.2cm, minimum height=1.1cm, inner sep=3pt, font=\tiny},
-  guide/.style={draw, rounded corners=2pt, fill=orange!15, align=center, text width=3.2cm, minimum height=1.1cm, inner sep=3pt, font=\tiny},
-  post/.style={draw, rounded corners=2pt, fill=green!15, align=center, text width=3.2cm, minimum height=1.1cm, inner sep=3pt, font=\tiny},
+  io/.style={draw, rounded corners=2pt, fill=gray!15, align=center, text width=3.45cm, minimum height=1.1cm, inner sep=3pt, font=\tiny},
+  block/.style={draw, rounded corners=2pt, fill=blue!14, align=center, text width=3.45cm, minimum height=1.1cm, inner sep=3pt, font=\tiny},
+  latent/.style={draw, rounded corners=2pt, fill=violet!16, align=center, text width=3.45cm, minimum height=1.1cm, inner sep=3pt, font=\tiny},
+  guide/.style={draw, rounded corners=2pt, fill=orange!15, align=center, text width=3.45cm, minimum height=1.1cm, inner sep=3pt, font=\tiny},
+  post/.style={draw, rounded corners=2pt, fill=green!15, align=center, text width=3.45cm, minimum height=1.1cm, inner sep=3pt, font=\tiny},
+  archive/.style={draw, rounded corners=2pt, fill=teal!13, align=center, text width=3.45cm, minimum height=1.1cm, inner sep=3pt, font=\tiny},
   core_arr/.style={->, line width=1.5pt, color=black!60, line cap=round},
   branch_arr/.style={->, line width=1.0pt, color=black!65},
   opt_arr/.style={->, line width=0.8pt, color=black!50, dashed}
@@ -864,18 +865,19 @@ với $E_{\text{core}}$ là các luồng bắt buộc trên đường chạy ch�
   % Core pipeline (vertical center) - compact spacing
   \node[io] (graphin) at (0,0) {Đồ thị nhiệm vụ\\(đầu vào hoặc\\do Khối I sinh mới)};
   \node[block] (b1) at (0,-2.2) {\textbf{Khối I}\\Sinh \& chuẩn hóa\\đồ thị nhiệm vụ};
-  \node[latent] (b3) at (0,-4.4) {\textbf{Khối III}\\Mã hóa điều kiện\\đồ thị $\to$ phòng};
+  \node[latent] (b3) at (0,-4.4) {\textbf{Khối III}\\Mã hóa điều kiện\\cục bộ + toàn cục};
   \node[block] (b4) at (0,-6.6) {\textbf{Khối IV}\\Sinh phòng latent\\bằng khuếch tán};
   \node[post] (b6) at (0,-8.8) {\textbf{Khối VI}\\Repair, phủ marker\\và ghép dungeon};
-  \node[post] (b7) at (0,-11.0) {\textbf{Khối VII}\\Kiểm tra cơ học\\P-CBS \& đánh giá QD};
+  \node[post] (b7) at (0,-11.0) {\textbf{Khối VII}\\Hard validation, P-CBS\\và đánh giá QD};
   \node[io] (out) at (0,-13.2) {Dungeon hoàn chỉnh\\và bộ chẩn đoán cuối};
 
   % Left branch: representation learning
   \node[io] (roomdata) at (-4.5,-4.4) {Lưới phòng\\đã đối sánh\\(dữ liệu huấn tập)};
-  \node[latent] (b2) at (-4.5,-6.6) {\textbf{Khối II}\\VQ-VAE ngữ nghĩa\\mã hóa \& giải mã};
+  \node[latent] (b2) at (-4.8,-6.6) {\textbf{Khối II}\\VQ-VAE ngữ nghĩa\\encode/decode latent};
 
   % Right branch: logic guidance
-  \node[guide] (b5) at (4.5,-6.6) {\textbf{Khối V}\\LogicNet\\hướng dẫn logic\\(tùy chọn)};
+  \node[guide] (b5) at (4.8,-6.6) {\textbf{Khối V}\\LogicNet\\hướng dẫn logic\\(tùy chọn)};
+  \node[archive] (qdarchive) at (4.8,-11.0) {Kho MAP-Elites/QD\\coverage, QD-score\\và novelty};
 
   % Main core pipeline arrows
   \draw[core_arr] (graphin.south) -- (b1.north);
@@ -884,6 +886,7 @@ với $E_{\text{core}}$ là các luồng bắt buộc trên đường chạy ch�
   \draw[core_arr] (b4.south) -- (b6.north);
   \draw[core_arr] (b6.south) -- (b7.north);
   \draw[core_arr] (b7.south) -- (out.north);
+  \draw[opt_arr, bend left=28] (graphin.east) to (b3.east);
 
   % Left branch (supporting data flow)
   \draw[branch_arr] (roomdata.south) -- (b2.north);
@@ -892,22 +895,23 @@ với $E_{\text{core}}$ là các luồng bắt buộc trên đường chạy ch�
 
   % Right branch (optional logic signal)
   \draw[opt_arr] (b5.west) -- (b4.east);
+  \draw[branch_arr] (b7.east) -- (qdarchive.west);
 
   % Label for flow types
   \node[anchor=north west, font=\scriptsize, inner sep=1pt] at (-4.5, -14.0) {
-    Mũi tên dày: đường chạy chính (bắt buộc) $|$ Mũi tên mảnh: nhánh hỗ trợ $|$ Mũi tên đứt: tín hiệu tùy chọn
+    Mũi tên dày: luồng lõi $|$ Mũi tên mảnh: nhánh hỗ trợ/kho QD $|$ Mũi tên đứt: bypass hoặc logic tùy chọn
   };
 \end{tikzpicture}
 }
-\caption{Kiến trúc bảy khối của quy trình sinh lai nơ-ron. Mũi tên dày ở giữa là đường chạy lõi (bắt buộc) từ đồ thị nhiệm vụ đến dungeon hoàn chỉnh; mũi tên mảnh trái là dữ liệu huấn tập; mũi tên đứt phải là tín hiệu logic tùy chọn.}
+\caption{Kiến trúc bảy khối của quy trình sinh lai nơ-ron. Mũi tên dày là luồng lõi từ đồ thị nhiệm vụ đến dungeon hoàn chỉnh; mũi tên mảnh là nhánh hỗ trợ và cập nhật kho MAP-Elites/QD; mũi tên đứt là bypass khi đồ thị nhiệm vụ được cung cấp sẵn hoặc tín hiệu logic tùy chọn.}
 \label{fig:architecture_7blocks}
 \end{figure}
 
 Trong phân rã chức năng, Khối I không chỉ sinh mà còn chuẩn hóa và hậu kiểm đồ thị nhiệm vụ trước khi giao cho các tầng sau; Khối II học không gian mã rời rạc bằng VQ-VAE; Khối III hợp nhất điều kiện cục bộ và toàn cục theo đồ thị; Khối IV lấy mẫu trong không gian tiềm ẩn; Khối V bổ sung tín hiệu logic khả vi khi được bật; Khối VI đảm nhiệm repair ký hiệu, phủ marker và ghép dungeon; còn Khối VII chốt vòng kiểm tra đúng luật chơi, thẩm định theo persona bằng P-CBS và cập nhật các chỉ số chất lượng--đa dạng ở mức dungeon. Cách tách khối này tạo ra ranh giới đủ rõ để Chương 4 có thể đo đóng góp biên của từng thành phần.
 
-Đối chiếu với hiện thực hệ thống cho thấy ánh xạ bảy khối ở Hình~\ref{fig:architecture_7blocks} là nhất quán với đường chạy chuẩn trong mã nguồn: Khối I sinh và hợp lệ hóa mission graph, Khối II học biểu diễn rời rạc bằng VQ-VAE, Khối III mã hóa điều kiện đồ thị-phòng, Khối IV sinh latent bằng khuếch tán, Khối V cung cấp tín hiệu logic khả vi, Khối VI thực hiện symbolic repair cùng các bước phủ marker/ghép dungeon, và Khối VII đảm nhiệm kiểm tra cơ học cùng thẩm định P-CBS. Các thành phần vận hành phụ trợ được tách riêng và không dùng làm cơ sở cho tuyên bố định lượng.
+Đối chiếu với hiện thực hệ thống cho thấy ánh xạ bảy khối ở Hình~\ref{fig:architecture_7blocks} là nhất quán với đường chạy chuẩn trong mã nguồn: Khối I sinh và hợp lệ hóa mission graph, Khối II học biểu diễn rời rạc bằng VQ-VAE, Khối III hợp nhất điều kiện cục bộ và toàn cục theo đồ thị, Khối IV sinh latent bằng khuếch tán, Khối V cung cấp tín hiệu logic khả vi, Khối VI thực hiện symbolic repair cùng các bước phủ marker/ghép dungeon, và Khối VII đảm nhiệm kiểm tra cơ học, thẩm định P-CBS và cập nhật kho MAP-Elites/QD. Các thành phần vận hành phụ trợ được tách riêng và không dùng làm cơ sở cho tuyên bố định lượng.
 
-Quan trọng hơn, Hình~\ref{fig:architecture_7blocks} cũng làm rõ ranh giới giữa các luồng vận hành. Đường trên là luồng bắt buộc khi hệ thống tạo một dungeon mới: nhận hoặc sinh đồ thị nhiệm vụ, tạo điều kiện từ đồ thị sang phòng, lấy mẫu latent, sửa lỗi ký hiệu rồi mới ghép dungeon để đánh giá. Đường dưới gom các thành phần nền và hậu sinh: dữ liệu phòng dùng để học biểu diễn ở Khối II; Khối II cung cấp không gian latent cho Khối IV ở cả huấn luyện lẫn suy luận; Khối V chỉ xuất hiện khi bật hướng dẫn logic; còn Khối VII chỉ được gọi sau khi dungeon đã ghép xong. Nhờ vậy, sơ đồ không chỉ cho biết thứ tự các khối mà còn cho thấy khối nào thuộc luồng lõi, khối nào là nhánh hỗ trợ hoặc hậu kiểm.
+Quan trọng hơn, Hình~\ref{fig:architecture_7blocks} cũng làm rõ ranh giới giữa các luồng vận hành. Đường lõi là luồng bắt buộc khi hệ thống tạo một dungeon mới: nhận hoặc sinh đồ thị nhiệm vụ, tạo điều kiện từ đồ thị sang phòng, lấy mẫu latent, sửa lỗi ký hiệu rồi mới ghép dungeon để đánh giá. Đường dưới gom các thành phần nền và hậu sinh: dữ liệu phòng dùng để học biểu diễn ở Khối II; Khối II cung cấp không gian latent cho Khối IV ở cả huấn luyện lẫn suy luận; Khối V chỉ xuất hiện khi bật hướng dẫn logic; còn Khối VII chỉ được gọi sau khi dungeon đã ghép xong và chỉ cập nhật kho QD khi mẫu vượt qua điều kiện kiểm tra. Nhờ vậy, sơ đồ không chỉ cho biết thứ tự các khối mà còn cho thấy khối nào thuộc luồng lõi, khối nào là nhánh hỗ trợ hoặc hậu kiểm.
 
 \subsection{Ma trận đầu vào, đầu ra và kiểm soát lỗi theo khối}
 Để truy vết được trách nhiệm của từng khối trong đường chạy chính, Bảng~\ref{tab:block_contract_matrix} tóm tắt đầu vào, đầu ra, bước kiểm soát lỗi và nhóm chỉ số giám sát tương ứng.

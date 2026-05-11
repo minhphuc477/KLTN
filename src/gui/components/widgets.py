@@ -241,8 +241,8 @@ class DropdownWidget(BaseWidget):
         
         # Calculate dropdown menu rect
         option_height = 24
-        # Increase max height to 360 to accommodate up to 15 options (13 algorithms + room for future additions)
-        max_dropdown_height = 360
+        # Enough room for the 18 built-in Zelda variants while still bounding popups.
+        max_dropdown_height = 480
         self.dropdown_rect = pygame.Rect(
             pos[0], pos[1] + 30,
             180, min(len(options) * option_height, max_dropdown_height)
@@ -277,7 +277,7 @@ class DropdownWidget(BaseWidget):
         self._pos = value
         self.rect = pygame.Rect(value[0], value[1], 180, 28)
         option_height = 24
-        max_dropdown_height = 360  # Match increased max from __init__
+        max_dropdown_height = 480  # Match increased max from __init__
         self.dropdown_rect = pygame.Rect(
             value[0], value[1] + 30,
             180, min(len(self.options) * option_height, max_dropdown_height)

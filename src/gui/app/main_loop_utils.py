@@ -129,20 +129,26 @@ def run_continuous_movement_tick(gui, pygame_module, action_enum):
         return
 
     gui.move_timer = 0.0
-    if gui.keys_held[pygame_module.K_UP] and gui.keys_held[pygame_module.K_LEFT]:
-        gui._manual_step(action_enum.UP_LEFT)
-    elif gui.keys_held[pygame_module.K_UP] and gui.keys_held[pygame_module.K_RIGHT]:
-        gui._manual_step(action_enum.UP_RIGHT)
-    elif gui.keys_held[pygame_module.K_DOWN] and gui.keys_held[pygame_module.K_LEFT]:
-        gui._manual_step(action_enum.DOWN_LEFT)
-    elif gui.keys_held[pygame_module.K_DOWN] and gui.keys_held[pygame_module.K_RIGHT]:
-        gui._manual_step(action_enum.DOWN_RIGHT)
+    allow_diagonal = bool(getattr(gui, "feature_flags", {}).get("diagonal_movement", False))
+    action = None
+    if allow_diagonal and gui.keys_held[pygame_module.K_UP] and gui.keys_held[pygame_module.K_LEFT]:
+        action = action_enum.UP_LEFT
+    elif allow_diagonal and gui.keys_held[pygame_module.K_UP] and gui.keys_held[pygame_module.K_RIGHT]:
+        action = action_enum.UP_RIGHT
+    elif allow_diagonal and gui.keys_held[pygame_module.K_DOWN] and gui.keys_held[pygame_module.K_LEFT]:
+        action = action_enum.DOWN_LEFT
+    elif allow_diagonal and gui.keys_held[pygame_module.K_DOWN] and gui.keys_held[pygame_module.K_RIGHT]:
+        action = action_enum.DOWN_RIGHT
     elif gui.keys_held[pygame_module.K_UP]:
-        gui._manual_step(action_enum.UP)
+        action = action_enum.UP
     elif gui.keys_held[pygame_module.K_DOWN]:
-        gui._manual_step(action_enum.DOWN)
+        action = action_enum.DOWN
     elif gui.keys_held[pygame_module.K_LEFT]:
-        gui._manual_step(action_enum.LEFT)
+        action = action_enum.LEFT
     elif gui.keys_held[pygame_module.K_RIGHT]:
-        gui._manual_step(action_enum.RIGHT)
+        action = action_enum.RIGHT
+
+    if action is not None:
+        gui._manual_step(action)
+        gui._center_on_player()
 

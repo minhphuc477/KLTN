@@ -12,13 +12,16 @@ from src.pipeline.dungeon_pipeline import pipeline_kwargs_from_resolved_config
 from src.pipeline.spatial_utils import normalize_node_id, stable_node_sort_key
 
 
-def resolve_checkpoint_path():
-    """Resolve checkpoint path, allowing an explicit environment override."""
+def resolve_checkpoint_path(explicit_path=None):
+    """Resolve checkpoint path, allowing an explicit argument or environment override."""
+    if explicit_path:
+        return Path(explicit_path).expanduser().resolve()
+
     override = str(os.environ.get("KLTN_CHECKPOINT_PATH", "")).strip()
     if override:
         return Path(override).expanduser().resolve()
 
-    repo_root = Path(__file__).resolve().parents[2]
+    repo_root = Path(__file__).resolve().parents[3]
     return repo_root / "checkpoints" / "final_model.pth"
 
 
@@ -468,13 +471,27 @@ def refine_and_fix_terminals(tile_grid, np_module, logger):
     return tile_grid
 
 
-def apply_generated_dungeon(gui, tile_grid, seed, num_nodes, num_edges, np_module):
-    """Apply a generated grid to GUI state exactly like legacy in-method flow."""
+def build_generated_dungeon_payload(tile_grid, seed, num_nodes, num_edges, np_module):
+    """Build metadata for a generated dungeon without mutating GUI state."""
     height, width = tile_grid.shape
     dungeon_name = f"AI #{seed} ({num_nodes}rm {height}x{width})"
+    return {
+        "height": height,
+        "width": width,
+        "unique_tiles": len(np_module.unique(tile_grid)),
+        "name": dungeon_name,
+        "num_nodes": num_nodes,
+        "num_edges": num_edges,
+        "message": f"AI dungeon generated: {num_nodes} rooms, {height}x{width} tiles, seed={seed}",
+    }
+
+
+def apply_generated_dungeon(gui, tile_grid, seed, num_nodes, num_edges, np_module):
+    """Apply a generated grid to GUI state exactly like legacy in-method flow."""
+    payload = build_generated_dungeon_payload(tile_grid, seed, num_nodes, num_edges, np_module)
 
     gui.maps.append(tile_grid)
-    gui.map_names.append(dungeon_name)
+    gui.map_names.append(payload["name"])
     gui.current_map_idx = len(gui.maps) - 1
     gui._load_current_map()
     gui._center_view()
@@ -485,15 +502,8 @@ def apply_generated_dungeon(gui, tile_grid, seed, num_nodes, num_edges, np_modul
     gui.auto_path = []
     gui.auto_mode = False
 
-    gui._set_message(f"AI dungeon generated: {num_nodes} rooms, {height}x{width} tiles, seed={seed}")
-    return {
-        "height": height,
-        "width": width,
-        "unique_tiles": len(np_module.unique(tile_grid)),
-        "name": dungeon_name,
-        "num_nodes": num_nodes,
-        "num_edges": num_edges,
-    }
+    gui._set_message(payload["message"])
+    return payload
 
 
 def apply_mixed_initiative_constraints(tile_grid, constraints, np_module, logger):

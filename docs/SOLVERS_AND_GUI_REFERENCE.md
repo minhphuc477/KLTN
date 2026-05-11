@@ -60,12 +60,14 @@ Transitions are validated by environment logic (`_try_move_pure`), so door/key/b
 | 4 | D* Lite | `DStarLiteSolver` |
 | 5 | DFS/IDDFS | `StateSpaceDFS(use_iddfs=True)` |
 | 6 | Bidirectional A* | `BidirectionalAStar` |
-| 7 | CBS (Balanced) | `CognitiveBoundedSearch(persona="balanced")` |
-| 8 | CBS (Explorer) | `CognitiveBoundedSearch(persona="explorer")` |
-| 9 | CBS (Cautious) | `CognitiveBoundedSearch(persona="cautious")` |
-| 10 | CBS (Forgetful) | `CognitiveBoundedSearch(persona="forgetful")` |
-| 11 | CBS (Speedrunner) | `CognitiveBoundedSearch(persona="speedrunner")` |
-| 12 | CBS (Greedy) | `CognitiveBoundedSearch(persona="greedy")` |
+| 7 | P-CBS (Balanced) | `PersonaDrivenCognitiveBoundedSearch(persona="balanced")` |
+| 8 | P-CBS (Explorer) | `PersonaDrivenCognitiveBoundedSearch(persona="explorer")` |
+| 9 | P-CBS (Cautious) | `PersonaDrivenCognitiveBoundedSearch(persona="cautious")` |
+| 10 | P-CBS (Forgetful) | `PersonaDrivenCognitiveBoundedSearch(persona="forgetful")` |
+| 11 | P-CBS (Speedrunner) | `PersonaDrivenCognitiveBoundedSearch(persona="speedrunner")` |
+| 12 | P-CBS (Greedy) | `PersonaDrivenCognitiveBoundedSearch(persona="greedy")` |
+| 13 | P-CBS (Completionist) | `PersonaDrivenCognitiveBoundedSearch(persona="completionist")` |
+| 14 | P-CBS (Novice) | `PersonaDrivenCognitiveBoundedSearch(persona="novice")` |
 
 ### 3.2 Core Search Formulas
 
@@ -202,7 +204,7 @@ More precise search roles in current code:
 | `show_topology` | Show Topology Overlay | Renders graph nodes/edges over map | Implemented |
 | `show_topology_legend` | Topology Legend (details) | Renders topology legend/details | Implemented |
 | `show_minimap` | Show Minimap | Toggles minimap render and click-to-jump | Implemented |
-| `diagonal_movement` | Diagonal Movement | Used in quick grid planner | Partial (not dominant in subprocess solver pipeline) |
+| `diagonal_movement` | Diagonal Movement | Allows diagonal manual movement and passes diagonal permission to solver requests | Implemented |
 | `use_jps` | Use Jump Point Search (JPS) | Enables JPS attempt in quick grid planner | Partial |
 | `show_jps_overlay` | Show JPS Overlay | Draws jump segments/points if trace available | Implemented |
 | `speedrun_mode` | Speedrun Mode | Set by presets | Not wired (behavioral logic) |
@@ -219,12 +221,12 @@ More precise search roles in current code:
 
 | Dropdown | Options | Behavior | Status |
 |---|---|---|---|
-| Floor | Floor 1/2/3 | UI value only | Not wired |
+| Level | Generated level list | Loads the selected map into the play/solve view | Implemented |
 | Zoom | 25%-200% | Applies map zoom and redraw | Implemented |
 | ARA* weight | 1.0/1.25/1.5/2.0 | Used when `enable_ara` is enabled | Implemented |
 | Difficulty | Easy/Medium/Hard/Expert | UI message only | Partial |
 | Presets | Debugging/Fast Approx/Optimal/Speedrun/... | Batch-updates selected flags | Implemented |
-| Solver | 13 algorithms | Controls subprocess dispatch algorithm index | Implemented |
+| Solver | 15 algorithms | Controls subprocess dispatch algorithm index, including P-CBS personas | Implemented |
 | Search Space | Hybrid/Tile/Graph | Sets representation for game-state solver wrappers | Implemented |
 | Apply Threshold | 0.70-0.90 | Used by topology match apply actions | Implemented |
 
@@ -232,11 +234,11 @@ More precise search roles in current code:
 
 | Button | Behavior | Status |
 |---|---|---|
-| Start Auto-Solve | Launches background solver process | Implemented |
+| Solve Level | Launches background solver process for the selected level | Implemented |
 | Stop | Stops auto animation and clears path view state | Implemented |
-| Generate Dungeon | Procedural generator (non-AI) | Implemented |
+| Generate Level | Procedural generator (non-AI) | Implemented |
 | AI Generate | Background neural pipeline generation | Implemented |
-| Reset | Reloads current map and resets state | Implemented |
+| Reset Level | Reloads current map and resets state | Implemented |
 | Path Preview | Opens preview or triggers solve then preview | Implemented |
 | Clear Path | Clears current planned/animated path | Implemented |
 | Export Route | Saves JSON route to repo export folder | Implemented |

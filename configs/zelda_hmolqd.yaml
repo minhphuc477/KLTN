@@ -134,6 +134,8 @@ diffusion:
   num_logic_iterations: 30  # type=int, default=30, valid>=1
   logic_topology_trace_weight: 0.25  # type=float, default=0.25, valid>=0; extra LogicNet pressure on mission-conditioned traversability traces
   logic_topology_anchor_weight: 0.25  # type=float, default=0.25, valid>=0; extra LogicNet pressure on start/goal/door anchor walkability
+  logic_global_reach_weight: 1.0  # type=float, default=1.0, valid>=0; dungeon-level LogicNet mission-graph reachability pressure
+  logic_global_room_weight: 0.25  # type=float, default=0.25, valid>=0; room-passability-to-node-cost pressure for global LogicNet
   guidance_scale: 1.0  # type=float, default=1.0, valid>=0
   guidance_clamp_magnitude: 1.0  # type=float, default=1.0, valid>=0
   guidance_relative_norm_cap: 0.25  # type=float, default=0.25, valid>=0

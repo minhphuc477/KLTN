@@ -95,7 +95,7 @@ def test_draw_tooltip_renders_box_and_text():
 
 
 def test_render_tooltips_for_button_label():
-    widget = _ButtonWidget("Start Auto-Solve")
+    widget = _ButtonWidget("Solve Level")
     gui = _make_gui_with_widget(widget)
     surface = _Surface()
 

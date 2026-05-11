@@ -28,6 +28,7 @@ Controls:
 import os
 import time
 import math
+import argparse
 import logging
 import threading
 import numpy as np
@@ -209,6 +210,8 @@ from src.gui.orchestration.runtime.route_orchestration import (
 )
 from src.gui.orchestration.gameplay.control_actions_orchestration import (
     clear_path as _clear_path_orchestration_helper,
+    generate_level as _generate_level_orchestration_helper,
+    select_ai_model_checkpoint as _select_ai_model_checkpoint_orchestration_helper,
     reset_map as _reset_map_orchestration_helper,
     run_ai_dungeon_generation_worker as _run_ai_dungeon_generation_worker_orchestration_helper,
     show_path_preview as _show_path_preview_orchestration_helper,
@@ -434,6 +437,7 @@ except ImportError:
 
     _visual_fallbacks = get_visualization_fallbacks(
         pygame_available=PYGAME_AVAILABLE,
+        pygame_module=pygame,
     )
     ZeldaRenderer = _visual_fallbacks["ZeldaRenderer"]
     EffectManager = _visual_fallbacks["EffectManager"]
@@ -1022,6 +1026,19 @@ class ZeldaGUI:
             gui=self,
         )
 
+    def _load_ai_model(self):
+        """Select the checkpoint used by model-backed level generation."""
+        _select_ai_model_checkpoint_orchestration_helper(
+            gui=self,
+            logger=logger,
+        )
+
+    def _generate_level(self):
+        """Generate a new level, using the loaded AI model when one is selected."""
+        _generate_level_orchestration_helper(
+            gui=self,
+            logger=logger,
+        )
 
     def _generate_ai_dungeon_worker(self):
         """Background worker entry point for AI generation pipeline."""
@@ -2116,8 +2133,27 @@ def load_maps_from_adapter():
     )
 
 
-def main():
+def main(argv: Optional[List[str]] = None):
     """Main entry point."""
+    parser = argparse.ArgumentParser(description="Run the ZAVE GUI.")
+    parser.add_argument(
+        "--checkpoint",
+        "--ai-checkpoint",
+        dest="checkpoint",
+        default=None,
+        help="Path to an AI generation checkpoint used by Load Model / Generate Level.",
+    )
+    parser.add_argument(
+        "--strict-checkpoints",
+        action="store_true",
+        help="Fail instead of falling back when checkpoint metadata or files are missing.",
+    )
+    args = parser.parse_args(argv)
+    if args.checkpoint:
+        os.environ["KLTN_CHECKPOINT_PATH"] = str(Path(args.checkpoint).expanduser().resolve())
+    if args.strict_checkpoints:
+        os.environ["KLTN_STRICT_CHECKPOINTS"] = "1"
+
     _run_main_entry_orchestration_helper(
         pygame_available=PYGAME_AVAILABLE,
         load_maps_fn=load_maps_from_adapter,

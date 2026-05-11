@@ -168,6 +168,11 @@ def _assert_batched_graph_sequence(
     assert tuple(graph_data["current_node_distance"].shape) == (2, 5, 4)
     assert tuple(graph_data["node_mask"].shape) == (2, 5)
     assert tuple(graph_data["edge_index"].shape[:2]) == (2, 2)
+    assert tuple(graph_data["edge_features"].shape[:2]) == (2, 3)
+    assert tuple(graph_data["edge_attr"].shape) == (2, 3)
+    assert tuple(graph_data["current_node_idx"].shape) == (2,)
+    assert tuple(graph_data["start_node_id"].shape) == (2,)
+    assert tuple(graph_data["target_idx"].shape) == (2,)
     assert torch.allclose(graph_data["node_positions"][0, :3], graph_list[0]["node_positions"])
     assert torch.allclose(graph_data["tpe"][1, :5], graph_list[1]["tpe"])
 
@@ -575,8 +580,13 @@ def test_train_epoch_and_validate_pass_batched_room_topology_into_logicnet():
     assert trainer.last_train_diffusion_graph_data is not None
     assert tuple(trainer.last_train_logic_graph_data["room_topology_map"].shape) == (2, ROOM_TOPOLOGY_CHANNEL_COUNT, ROOM_HEIGHT, ROOM_WIDTH)
     assert tuple(trainer.last_train_logic_graph_data["boundary_constraints"].shape) == (2, 8)
+    assert tuple(trainer.last_train_logic_graph_data["edge_features"].shape[:2]) == (2, 3)
+    assert tuple(trainer.last_train_logic_graph_data["current_node_idx"].shape) == (2,)
+    assert tuple(trainer.last_train_logic_graph_data["start_node_id"].shape) == (2,)
     assert tuple(trainer.logic_net.last_graph_data["room_topology_map"].shape) == (2, ROOM_TOPOLOGY_CHANNEL_COUNT, ROOM_HEIGHT, ROOM_WIDTH)
     assert tuple(trainer.logic_net.last_graph_data["boundary_constraints"].shape) == (2, 8)
+    assert tuple(trainer.logic_net.last_graph_data["edge_features"].shape[:2]) == (2, 3)
+    assert tuple(trainer.logic_net.last_graph_data["current_node_idx"].shape) == (2,)
 
 
 def test_normalize_diffusion_graph_sample_uses_rwse_fallback_for_missing_tpe_and_positions():

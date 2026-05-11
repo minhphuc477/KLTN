@@ -1,6 +1,10 @@
 ﻿from src.gui.common.fallbacks import get_visualization_fallbacks, get_widget_fallbacks
 
 
+import importlib
+import sys
+
+
 class _FakeSurface:
     def __init__(self, size):
         self._size = size
@@ -72,4 +76,27 @@ def test_widget_fallbacks_manager_basic_flow():
     assert manager.handle_mouse_down((0, 0), 1) is False
     assert manager.handle_mouse_up((0, 0), 1) is False
     assert manager.snapshot_dropdown_state() == {}
+
+
+def test_gui_runner_import_uses_visualization_fallback_when_optional_imports_fail():
+    class BlockVisualizationImports:
+        def find_spec(self, fullname, path=None, target=None):
+            if fullname.startswith("src.visualization"):
+                raise ImportError("forced missing visualization dependency")
+            return None
+
+    for name in list(sys.modules):
+        if name == "gui_runner" or name.startswith("src.visualization"):
+            sys.modules.pop(name, None)
+
+    blocker = BlockVisualizationImports()
+    sys.meta_path.insert(0, blocker)
+    try:
+        module = importlib.import_module("gui_runner")
+    finally:
+        sys.meta_path.remove(blocker)
+        sys.modules.pop("gui_runner", None)
+
+    assert module.VISUALIZATION_AVAILABLE is False
+    assert module.ZeldaRenderer(16).tile_size == 16
 

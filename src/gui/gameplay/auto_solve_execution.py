@@ -51,7 +51,7 @@ def execute_auto_solve(gui: Any, path: Any, solver_result: Any, teleports: int, 
 
     if solver_result and "cbs_metrics" in solver_result:
         gui.last_solver_metrics = {
-            "name": f"CBS ({solver_result.get('persona', 'unknown')})",
+            "name": f"P-CBS ({solver_result.get('persona', 'unknown')})",
             "nodes": solver_result.get("nodes", 0),
             "path_len": len(path),
             "cbs": solver_result["cbs_metrics"],
@@ -80,11 +80,11 @@ def execute_auto_solve(gui: Any, path: Any, solver_result: Any, teleports: int, 
     if solver_result and "cbs_metrics" in solver_result:
         cbs = solver_result["cbs_metrics"]
         persona = solver_result.get("persona", "unknown")
-        base_msg = f"CBS ({persona.title()}): {len(path)} steps"
+        base_msg = f"P-CBS ({persona.title()}): {len(path)} steps"
         metrics_msg = f"Confusion: {cbs['confusion_index']:.2f} | Cognitive Load: {cbs['cognitive_load']:.2f}"
         gui.message = f"{base_msg} | {metrics_msg}"
         toast_msg = (
-            f"CBS ({persona.title()}) completed | "
+            f"P-CBS ({persona.title()}) completed | "
             f"Confusion: {cbs['confusion_index']:.2f} | Entropy: {cbs['navigation_entropy']:.2f}"
         )
         gui._show_toast(toast_msg, duration=4.0, toast_type="success")

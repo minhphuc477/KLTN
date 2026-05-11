@@ -50,8 +50,10 @@ from src.pipeline.graph_features import (
     compute_rwse_features,
 )
 from src.pipeline.room_topology_conditioning import (
+    DEFAULT_PUZZLE_STAGE_TOKEN_SCALE,
     DEFAULT_SEMANTIC_PUZZLE_OFFSET,
     DEFAULT_SEMANTIC_ROLE_PRIOR_STRENGTH,
+    apply_puzzle_stage_control_to_conditioning,
     apply_puzzle_structure_control_to_conditioning,
     apply_puzzle_structure_dropout_batch,
     build_topology_anchor_policy_metadata,
@@ -165,6 +167,8 @@ class DiffusionTrainingConfig:
         num_logic_iterations: int = 30,
         logic_topology_trace_weight: float = 0.25,
         logic_topology_anchor_weight: float = 0.25,
+        logic_global_reach_weight: float = 1.0,
+        logic_global_room_weight: float = 0.25,
         guidance_scale: float = 1.0,
         guidance_clamp_magnitude: float = 1.0,
         guidance_relative_norm_cap: float = 0.25,
@@ -353,6 +357,8 @@ class DiffusionTrainingConfig:
         self.num_logic_iterations = num_logic_iterations
         self.logic_topology_trace_weight = float(max(0.0, logic_topology_trace_weight))
         self.logic_topology_anchor_weight = float(max(0.0, logic_topology_anchor_weight))
+        self.logic_global_reach_weight = float(max(0.0, logic_global_reach_weight))
+        self.logic_global_room_weight = float(max(0.0, logic_global_room_weight))
         self.guidance_scale = guidance_scale
         self.guidance_clamp_magnitude = float(max(0.0, guidance_clamp_magnitude))
         self.guidance_relative_norm_cap = float(max(0.0, guidance_relative_norm_cap))
@@ -500,6 +506,8 @@ def diffusion_training_kwargs_from_resolved_config(
         "num_logic_iterations": stage["num_logic_iterations"],
         "logic_topology_trace_weight": stage["logic_topology_trace_weight"],
         "logic_topology_anchor_weight": stage["logic_topology_anchor_weight"],
+        "logic_global_reach_weight": stage.get("logic_global_reach_weight", 1.0),
+        "logic_global_room_weight": stage.get("logic_global_room_weight", 0.25),
         "guidance_scale": stage["guidance_scale"],
         "guidance_clamp_magnitude": stage["guidance_clamp_magnitude"],
         "guidance_relative_norm_cap": stage["guidance_relative_norm_cap"],
@@ -683,6 +691,8 @@ def _legacy_diffusion_overrides_from_args(args: argparse.Namespace) -> Dict[str,
     _set("guidance_scale", getattr(args, "guidance_scale", None))
     _set("logic_topology_trace_weight", getattr(args, "logic_topology_trace_weight", None))
     _set("logic_topology_anchor_weight", getattr(args, "logic_topology_anchor_weight", None))
+    _set("logic_global_reach_weight", getattr(args, "logic_global_reach_weight", None))
+    _set("logic_global_room_weight", getattr(args, "logic_global_room_weight", None))
     _set("checkpoint_dir", getattr(args, "checkpoint_dir", None))
     _set("keep_last", getattr(args, "keep_last", None))
     _set("auto_resume", getattr(args, "auto_resume", None))
@@ -941,6 +951,8 @@ class DiffusionTrainer:
             num_iterations=self.config.num_logic_iterations,
             topology_trace_weight=self.config.logic_topology_trace_weight,
             topology_anchor_weight=self.config.logic_topology_anchor_weight,
+            global_reach_weight=self.config.logic_global_reach_weight,
+            global_room_weight=self.config.logic_global_room_weight,
         )
     
     def encode_to_latent(self, x: torch.Tensor) -> torch.Tensor:
@@ -1197,6 +1209,13 @@ class DiffusionTrainer:
                     puzzle_structure_enabled=bool(graph_dict.get("puzzle_room_structure_enabled", True)),
                     graph_conditioning_mode=self.config.graph_conditioning_mode,
                 )
+            if bool(getattr(self.config, "puzzle_stage_conditioning_enabled", False)):
+                conditioning_out = apply_puzzle_stage_control_to_conditioning(
+                    conditioning_out,
+                    puzzle_stage_condition=graph_dict.get("puzzle_stage_condition"),
+                    graph_conditioning_mode=self.config.graph_conditioning_mode,
+                    scale=float(getattr(self.config, "puzzle_stage_token_scale", DEFAULT_PUZZLE_STAGE_TOKEN_SCALE)),
+                )
             return conditioning_out
 
         c_global = self.condition_encoder.encode_global_only(
@@ -1219,6 +1238,13 @@ class DiffusionTrainer:
                     puzzle_structure_enabled=bool(graph_dict.get("puzzle_room_structure_enabled", True)),
                     graph_conditioning_mode=self.config.graph_conditioning_mode,
                 )
+            if bool(getattr(self.config, "puzzle_stage_conditioning_enabled", False)):
+                conditioning_out = apply_puzzle_stage_control_to_conditioning(
+                    conditioning_out,
+                    puzzle_stage_condition=graph_dict.get("puzzle_stage_condition"),
+                    graph_conditioning_mode=self.config.graph_conditioning_mode,
+                    scale=float(getattr(self.config, "puzzle_stage_token_scale", DEFAULT_PUZZLE_STAGE_TOKEN_SCALE)),
+                )
             return conditioning_out
 
         # Pooled baseline.
@@ -1228,6 +1254,13 @@ class DiffusionTrainer:
                 conditioning_out,
                 puzzle_structure_enabled=bool(graph_dict.get("puzzle_room_structure_enabled", True)),
                 graph_conditioning_mode=self.config.graph_conditioning_mode,
+            )
+        if bool(getattr(self.config, "puzzle_stage_conditioning_enabled", False)):
+            conditioning_out = apply_puzzle_stage_control_to_conditioning(
+                conditioning_out,
+                puzzle_stage_condition=graph_dict.get("puzzle_stage_condition"),
+                graph_conditioning_mode=self.config.graph_conditioning_mode,
+                scale=float(getattr(self.config, "puzzle_stage_token_scale", DEFAULT_PUZZLE_STAGE_TOKEN_SCALE)),
             )
         return conditioning_out
 
@@ -1247,7 +1280,56 @@ class DiffusionTrainer:
             raise ValueError(f"edge_index must have shape [2, E], got {tuple(edge_index.shape)}")
 
         num_nodes = int(node_features.shape[0])
+        num_edges = int(edge_index.shape[1])
         current_node_idx = graph_dict.get("current_node_idx")
+        if isinstance(current_node_idx, torch.Tensor):
+            current_node_idx = int(current_node_idx.detach().flatten()[0].item()) if current_node_idx.numel() else 0
+        elif current_node_idx is not None:
+            current_node_idx = int(current_node_idx)
+
+        start_node_id = graph_dict.get("start_node_id", graph_dict.get("start_idx", -1))
+        if isinstance(start_node_id, torch.Tensor):
+            start_node_id = int(start_node_id.detach().flatten()[0].item()) if start_node_id.numel() else -1
+        elif start_node_id is not None:
+            start_node_id = int(start_node_id)
+        else:
+            start_node_id = -1
+
+        target_idx = graph_dict.get("target_idx")
+        if isinstance(target_idx, torch.Tensor):
+            target_idx = int(target_idx.detach().flatten()[0].item()) if target_idx.numel() else -1
+        elif target_idx is not None:
+            target_idx = int(target_idx)
+        elif node_features.shape[1] > 3:
+            target_hits = torch.nonzero(node_features[:, 3] > 0.5, as_tuple=False).flatten()
+            target_idx = int(target_hits[0].item()) if target_hits.numel() else -1
+        else:
+            target_idx = -1
+
+        edge_features = self._encode_edge_features(graph_dict)
+        edge_feature_dim = int(max(1, getattr(self.config, "edge_feature_dim", GRAPH_EDGE_FEATURE_DIM)))
+        if not isinstance(edge_features, torch.Tensor):
+            edge_features = torch.zeros(num_edges, edge_feature_dim, device=self.device, dtype=torch.float32)
+        else:
+            if edge_features.dim() == 1:
+                edge_features = edge_features.unsqueeze(-1)
+            if edge_features.dim() != 2:
+                raise ValueError(f"edge_features must have shape [E,F], got {tuple(edge_features.shape)}")
+            aligned = torch.zeros(num_edges, max(edge_feature_dim, int(edge_features.shape[1])), device=self.device, dtype=torch.float32)
+            rows = min(num_edges, int(edge_features.shape[0]))
+            cols = min(int(aligned.shape[1]), int(edge_features.shape[1]))
+            if rows > 0 and cols > 0:
+                aligned[:rows, :cols] = edge_features[:rows, :cols].to(self.device, dtype=torch.float32)
+            edge_features = aligned
+
+        edge_attr = graph_dict.get("edge_attr")
+        if not isinstance(edge_attr, torch.Tensor):
+            edge_attr = torch.tensor(edge_attr, dtype=torch.long) if edge_attr is not None else torch.zeros(0, dtype=torch.long)
+        edge_attr = edge_attr.to(self.device, dtype=torch.long).flatten()
+        if edge_attr.numel() < num_edges:
+            edge_attr = F.pad(edge_attr, (0, num_edges - int(edge_attr.numel())), value=0)
+        edge_attr = edge_attr[:num_edges]
+
         tpe = align_nodewise_tensor(
             graph_dict.get("tpe"),
             num_nodes=num_nodes,
@@ -1344,10 +1426,15 @@ class DiffusionTrainer:
         return {
             "node_features": node_features,
             "edge_index": edge_index,
+            "edge_features": edge_features,
+            "edge_attr": edge_attr,
             "tpe": tpe,
             "current_node_distance": current_node_distance,
             "node_positions": node_positions,
             "node_mask": node_mask,
+            "current_node_idx": int(current_node_idx) if current_node_idx is not None else 0,
+            "start_node_id": int(start_node_id),
+            "target_idx": int(target_idx),
             "has_room_anchor": has_room_anchor,
             **({"boundary_constraints": boundary_constraints} if isinstance(boundary_constraints, torch.Tensor) else {}),
             **({"room_topology_map": room_topology_map} if isinstance(room_topology_map, torch.Tensor) else {}),
@@ -1373,6 +1460,10 @@ class DiffusionTrainer:
         )
         pos_dim = max(int(sample["node_positions"].shape[1]) if sample["node_positions"].dim() == 2 else 0 for sample in samples)
         max_edges = max(int(sample["edge_index"].shape[1]) if sample["edge_index"].dim() == 2 else 0 for sample in samples)
+        edge_feat_dim = max(
+            int(sample["edge_features"].shape[1]) if sample["edge_features"].dim() == 2 else 0
+            for sample in samples
+        )
 
         node_features_batch = torch.zeros(len(samples), max_nodes, max(1, feat_dim), device=self.device, dtype=torch.float32)
         tpe_batch = torch.zeros(len(samples), max_nodes, max(1, tpe_dim), device=self.device, dtype=torch.float32)
@@ -1380,6 +1471,11 @@ class DiffusionTrainer:
         node_positions_batch = torch.zeros(len(samples), max_nodes, max(1, pos_dim), device=self.device, dtype=torch.float32)
         node_mask_batch = torch.zeros(len(samples), max_nodes, device=self.device, dtype=torch.float32)
         edge_index_batch = torch.full((len(samples), 2, max_edges), -1, device=self.device, dtype=torch.long)
+        edge_features_batch = torch.zeros(len(samples), max_edges, max(1, edge_feat_dim), device=self.device, dtype=torch.float32)
+        edge_attr_batch = torch.full((len(samples), max_edges), -1, device=self.device, dtype=torch.long)
+        current_node_idx_batch = torch.zeros(len(samples), device=self.device, dtype=torch.long)
+        start_node_id_batch = torch.full((len(samples),), -1, device=self.device, dtype=torch.long)
+        target_idx_batch = torch.full((len(samples),), -1, device=self.device, dtype=torch.long)
 
         topo_maps = []
         has_topology = [("room_topology_map" in sample) for sample in samples]
@@ -1412,6 +1508,12 @@ class DiffusionTrainer:
             num_edges = int(sample["edge_index"].shape[1]) if sample["edge_index"].dim() == 2 else 0
             if num_edges > 0:
                 edge_index_batch[i, :, :num_edges] = sample["edge_index"]
+                edge_features_batch[i, :num_edges, : sample["edge_features"].shape[1]] = sample["edge_features"]
+                edge_attr_batch[i, :num_edges] = sample["edge_attr"]
+
+            current_node_idx_batch[i] = int(sample.get("current_node_idx", 0))
+            start_node_id_batch[i] = int(sample.get("start_node_id", -1))
+            target_idx_batch[i] = int(sample.get("target_idx", -1))
 
             if can_stack_topology:
                 topo = sample["room_topology_map"]
@@ -1439,10 +1541,16 @@ class DiffusionTrainer:
         batch_graph = {
             "node_features": node_features_batch,
             "edge_index": edge_index_batch,
+            "edge_features": edge_features_batch,
+            "edge_attr": edge_attr_batch,
             "tpe": tpe_batch,
             "current_node_distance": current_node_distance_batch,
             "node_positions": node_positions_batch,
             "node_mask": node_mask_batch,
+            "current_node_idx": current_node_idx_batch,
+            "start_node_id": start_node_id_batch,
+            "target_idx": target_idx_batch,
+            "graph_scope": "room_batch",
             "has_room_anchor": bool(self.config.graph_conditioning_mode == "node_sequence") or (
                 bool(next(iter(anchor_flags))) if anchor_flags else False
             ),
@@ -1854,7 +1962,7 @@ class DiffusionTrainer:
         total_epochs = int(getattr(self.config, "epochs", self.epoch + 1))
         self._estimated_total_steps = max(1, total_epochs * len(dataloader))
         
-        include_logic = self.epoch > self.config.warmup_epochs
+        include_logic = self.epoch >= self.config.warmup_epochs
         if sampler is not None and hasattr(sampler, "set_epoch"):
             sampler.set_epoch(int(self.epoch))
         logger.info(
@@ -2058,7 +2166,7 @@ class DiffusionTrainer:
                 'val_skipped_nonfinite': float(skipped_nonfinite),
             }
 
-        include_logic = self.epoch > self.config.warmup_epochs and self.config.alpha_logic > 0
+        include_logic = self.epoch >= self.config.warmup_epochs and self.config.alpha_logic > 0
         val_diffusion_loss = total_diffusion_loss / max(num_diffusion_eval, 1)
         val_logic_loss = total_logic_loss / max(num_generated_eval, 1)
         val_total_loss = compute_teacher_validation_total_loss(
@@ -2403,7 +2511,7 @@ def train_diffusion(config: DiffusionTrainingConfig) -> DiffusionTrainer:
                     f"val_logic_loss={val_metrics.get('val_logic_loss', 0.0):.4f}, "
                     f"val_total_loss={val_metrics.get('val_total_loss', float('inf')):.4f}, "
                     f"val_solvability_proxy={val_metrics.get('val_solvability_proxy', val_metrics['val_solvability']):.4f}, "
-                    f"logic_loss_{'enabled' if epoch > config.warmup_epochs and config.alpha_logic > 0 else 'disabled'}"
+                    f"logic_loss_{'enabled' if epoch >= config.warmup_epochs and config.alpha_logic > 0 else 'disabled'}"
                 )
 
                 if epoch % config.save_every == 0:
@@ -2567,6 +2675,8 @@ def main():
     parser.add_argument('--current-node-distance-max', type=int, default=None)
     parser.add_argument('--logic-topology-trace-weight', type=float, default=None)
     parser.add_argument('--logic-topology-anchor-weight', type=float, default=None)
+    parser.add_argument('--logic-global-reach-weight', type=float, default=None)
+    parser.add_argument('--logic-global-room-weight', type=float, default=None)
     parser.add_argument('--guidance-scale', type=float, default=None)
     parser.add_argument('--checkpoint-dir', type=str, default=None)
     parser.add_argument('--keep-last', type=int, default=None)
