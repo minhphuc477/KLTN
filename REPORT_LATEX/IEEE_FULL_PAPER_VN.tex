@@ -29,6 +29,8 @@
 \usepackage{amsmath}
 \usepackage{amsthm}
 \usepackage{graphicx}
+% Allow filenames with spaces and multiple dots in \includegraphics
+\usepackage{grffile}
 \usepackage{booktabs}
 \usepackage{multirow}
 \usepackage{array}
@@ -846,66 +848,16 @@ với $E_{\text{core}}$ là các luồng bắt buộc trên đường chạy ch�
 
 Ở mức hiện thực, trục định lượng của khóa luận bám theo đường chạy chính gồm bảy khối chức năng của hệ thống. Luồng này nối liền các bước thích nghi dữ liệu, sinh đồ thị nhiệm vụ, VQ-VAE ngữ nghĩa, mã hóa điều kiện, khuếch tán tiềm ẩn, LogicNet, symbolic refiner và tầng hậu kiểm. Một số tiện ích triển khai bổ sung như làm mịn mép ghép, kiểm tra va chạm, ghi demo hay giải thích quyết định chỉ đóng vai trò hỗ trợ vận hành; chúng không được dùng làm cơ sở cho các tuyên bố định lượng ở Chương~4. Cách neo mô tả như vậy giúp Chương~3 bám đúng hiện thực của hệ thống, đồng thời giữ cho Chương~4 chỉ phản ánh những thành phần thật sự đi vào giao thức thực nghiệm chính.
 
-\begin{figure}[H]
+\clearpage
+\begin{figure}[p]
 \centering
-\resizebox{0.92\linewidth}{!}{%
-\begin{tikzpicture}[
-  font=\tiny,
-  >=Latex,
-  io/.style={draw, rounded corners=2pt, fill=gray!15, align=center, text width=3.45cm, minimum height=1.1cm, inner sep=3pt, font=\tiny},
-  block/.style={draw, rounded corners=2pt, fill=blue!14, align=center, text width=3.45cm, minimum height=1.1cm, inner sep=3pt, font=\tiny},
-  latent/.style={draw, rounded corners=2pt, fill=violet!16, align=center, text width=3.45cm, minimum height=1.1cm, inner sep=3pt, font=\tiny},
-  guide/.style={draw, rounded corners=2pt, fill=orange!15, align=center, text width=3.45cm, minimum height=1.1cm, inner sep=3pt, font=\tiny},
-  post/.style={draw, rounded corners=2pt, fill=green!15, align=center, text width=3.45cm, minimum height=1.1cm, inner sep=3pt, font=\tiny},
-  archive/.style={draw, rounded corners=2pt, fill=teal!13, align=center, text width=3.45cm, minimum height=1.1cm, inner sep=3pt, font=\tiny},
-  core_arr/.style={->, line width=1.5pt, color=black!60, line cap=round},
-  branch_arr/.style={->, line width=1.0pt, color=black!65},
-  opt_arr/.style={->, line width=0.8pt, color=black!50, dashed}
-]
-  % Core pipeline (vertical center) - compact spacing
-  \node[io] (graphin) at (0,0) {Đồ thị nhiệm vụ\\(đầu vào hoặc\\do Khối I sinh mới)};
-  \node[block] (b1) at (0,-2.2) {\textbf{Khối I}\\Sinh \& chuẩn hóa\\đồ thị nhiệm vụ};
-  \node[latent] (b3) at (0,-4.4) {\textbf{Khối III}\\Mã hóa điều kiện\\cục bộ + toàn cục};
-  \node[block] (b4) at (0,-6.6) {\textbf{Khối IV}\\Sinh phòng latent\\bằng khuếch tán};
-  \node[post] (b6) at (0,-8.8) {\textbf{Khối VI}\\Repair, phủ marker\\và ghép dungeon};
-  \node[post] (b7) at (0,-11.0) {\textbf{Khối VII}\\Hard validation, P-CBS\\và đánh giá QD};
-  \node[io] (out) at (0,-13.2) {Dungeon hoàn chỉnh\\và bộ chẩn đoán cuối};
-
-  % Left branch: representation learning
-  \node[io] (roomdata) at (-4.5,-4.4) {Lưới phòng\\đã đối sánh\\(dữ liệu huấn tập)};
-  \node[latent] (b2) at (-4.8,-6.6) {\textbf{Khối II}\\VQ-VAE ngữ nghĩa\\encode/decode latent};
-
-  % Right branch: logic guidance
-  \node[guide] (b5) at (4.8,-6.6) {\textbf{Khối V}\\LogicNet\\hướng dẫn logic\\(tùy chọn)};
-  \node[archive] (qdarchive) at (4.8,-11.0) {Kho MAP-Elites/QD\\coverage, QD-score\\và novelty};
-
-  % Main core pipeline arrows
-  \draw[core_arr] (graphin.south) -- (b1.north);
-  \draw[core_arr] (b1.south) -- (b3.north);
-  \draw[core_arr] (b3.south) -- (b4.north);
-  \draw[core_arr] (b4.south) -- (b6.north);
-  \draw[core_arr] (b6.south) -- (b7.north);
-  \draw[core_arr] (b7.south) -- (out.north);
-  \draw[opt_arr, bend left=28] (graphin.east) to (b3.east);
-
-  % Left branch (supporting data flow)
-  \draw[branch_arr] (roomdata.south) -- (b2.north);
-  \draw[branch_arr, bend left=25] (roomdata.east) to (b3.west);
-  \draw[branch_arr, bend right=20] (b2.east) to (b4.west);
-
-  % Right branch (optional logic signal)
-  \draw[opt_arr] (b5.west) -- (b4.east);
-  \draw[branch_arr] (b7.east) -- (qdarchive.west);
-
-  % Label for flow types
-  \node[anchor=north west, font=\scriptsize, inner sep=1pt] at (-4.5, -14.0) {
-    Mũi tên dày: luồng lõi $|$ Mũi tên mảnh: nhánh hỗ trợ/kho QD $|$ Mũi tên đứt: bypass hoặc logic tùy chọn
-  };
-\end{tikzpicture}
+\rotatebox{90}{%
+  \includegraphics[height=1\linewidth,width=1\textheight,keepaspectratio]{\detokenize{../docs/image/ARCHITECTURE/7-Block Neural-Symbolic Pipeline_page-0001.jpg}}%
 }
-\caption{Kiến trúc bảy khối của quy trình sinh lai nơ-ron. Mũi tên dày là luồng lõi từ đồ thị nhiệm vụ đến dungeon hoàn chỉnh; mũi tên mảnh là nhánh hỗ trợ và cập nhật kho MAP-Elites/QD; mũi tên đứt là bypass khi đồ thị nhiệm vụ được cung cấp sẵn hoặc tín hiệu logic tùy chọn.}
+\caption{Kiến trúc bảy khối của quy trình sinh lai nơ-ron}
 \label{fig:architecture_7blocks}
 \end{figure}
+\clearpage
 
 Trong phân rã chức năng, Khối I không chỉ sinh mà còn chuẩn hóa và hậu kiểm đồ thị nhiệm vụ trước khi giao cho các tầng sau; Khối II học không gian mã rời rạc bằng VQ-VAE; Khối III hợp nhất điều kiện cục bộ và toàn cục theo đồ thị; Khối IV lấy mẫu trong không gian tiềm ẩn; Khối V bổ sung tín hiệu logic khả vi khi được bật; Khối VI đảm nhiệm repair ký hiệu, phủ marker và ghép dungeon; còn Khối VII chốt vòng kiểm tra đúng luật chơi, thẩm định theo persona bằng P-CBS và cập nhật các chỉ số chất lượng--đa dạng ở mức dungeon. Cách tách khối này tạo ra ranh giới đủ rõ để Chương 4 có thể đo đóng góp biên của từng thành phần.
 

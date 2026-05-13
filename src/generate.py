@@ -288,12 +288,12 @@ class DungeonValidator:
 
 
 # =============================================================================
-# WFC REPAIR (Uses Block VII SymbolicRefiner)
+# WFC REPAIR (Uses Block VI SymbolicRefiner)
 # =============================================================================
 
 class WFCRepair:
     """
-    Wrapper around Block VII SymbolicRefiner for dungeon repair.
+    Wrapper around Block VI SymbolicRefiner for dungeon repair.
     
     Uses full WFC with constraint propagation, learned tile stats,
     and A*-based path analysis.
@@ -311,7 +311,7 @@ class WFCRepair:
         goal: Optional[Tuple[int, int]] = None,
     ) -> torch.Tensor:
         """
-        Attempt to repair an invalid dungeon using Block VII SymbolicRefiner.
+        Attempt to repair an invalid dungeon using Block VI SymbolicRefiner.
         """
         if isinstance(dungeon_map, torch.Tensor):
             grid = dungeon_map.cpu().squeeze().numpy().copy().astype(int)

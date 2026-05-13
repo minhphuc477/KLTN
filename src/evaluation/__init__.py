@@ -2,7 +2,7 @@
 H-MOLQD Evaluation Module
 =========================
 
-Block VI: External Validator & MAP-Elites
+Block VII: External Validator & MAP-Elites
 - Agent simulation for solvability verification
 - MAP-Elites quality diversity archive
 - Expressive range analysis

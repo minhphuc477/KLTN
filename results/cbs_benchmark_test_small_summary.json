@@ -1,0 +1,52 @@
+{
+  "total_maps": 1,
+  "astar": {
+    "success_rate": 1.0,
+    "avg_path_length": 55.0,
+    "avg_states": 29591.0,
+    "solved_maps": 1,
+    "timeout_maps": 0,
+    "no_path_maps": 0,
+    "invalid_maps": 0
+  },
+  "cbs": {
+    "balanced": {
+      "success_rate": 1.0,
+      "success_rate_given_oracle_solved": 1.0,
+      "cognitive_gap_rate_given_oracle_solved": 0.0,
+      "avg_path_length": 71.0,
+      "avg_confusion_ratio": 1.291,
+      "avg_confusion_index": 0.0,
+      "avg_replans": 18.0,
+      "avg_backtrack_loops": 0.0,
+      "avg_deliberation_events": 5.0,
+      "avg_budget_exhaustion_events": 0.0,
+      "avg_peak_frustration": 0.571,
+      "avg_affordance_reactivations": 0.0,
+      "avg_affordance_guided_steps": 0.0,
+      "avg_inventory_change_events": 0.0,
+      "avg_focus_switches": 0.0,
+      "avg_focus_guided_steps": 62.0,
+      "oracle_solved_maps": 1
+    },
+    "explorer": {
+      "success_rate": 1.0,
+      "success_rate_given_oracle_solved": 1.0,
+      "cognitive_gap_rate_given_oracle_solved": 0.0,
+      "avg_path_length": 97.0,
+      "avg_confusion_ratio": 1.764,
+      "avg_confusion_index": 0.09,
+      "avg_replans": 36.0,
+      "avg_backtrack_loops": 4.0,
+      "avg_deliberation_events": 1.0,
+      "avg_budget_exhaustion_events": 0.0,
+      "avg_peak_frustration": 0.553,
+      "avg_affordance_reactivations": 0.0,
+      "avg_affordance_guided_steps": 0.0,
+      "avg_inventory_change_events": 0.0,
+      "avg_focus_switches": 0.0,
+      "avg_focus_guided_steps": 75.0,
+      "oracle_solved_maps": 1
+    }
+  }
+}

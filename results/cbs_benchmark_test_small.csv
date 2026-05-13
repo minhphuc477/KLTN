@@ -1,0 +1,4 @@
+map_id,solver,persona,success,path_length,steps,states_explored,PER,entropy_final,room_entropy,replans,confusion_events,backtrack_loops,keys_collected,doors_opened,confusion_index,cognitive_load,aha_latency,info_gain_total,timeout_flag,solver_status,failure_reason,time_ms,deliberation_events,budget_exhaustion_events,peak_frustration,final_deliberation_budget,affordance_reactivations,affordance_guided_steps,inventory_change_events,focus_switches,focus_guided_steps,oracle_status,oracle_failure_reason,confusion_ratio
+D2_v1,A*,optimal,1,55,55,29591,0.982,0.0,0.0,0,0,0,0,0,0.0,0.0,0,0.0,0,solved,,2618.313,0,0,0.0,0.0,0,0,0,0,0,solved,,1.0
+D2_v1,CBS+,balanced,1,71,71,70,0.761,5482.029,6.15,18,0,0,0,0,0.0,0.95,5,1.0,0,solved,,146.271,5,0,0.571,8.5,0,0,0,0,62,solved,,1.291
+D2_v1,CBS+,explorer,1,97,97,96,0.557,5492.601,6.435,36,0,4,0,0,0.09,0.958,5,0.918,0,solved,,179.555,1,0,0.553,8.5,0,0,0,0,75,solved,,1.764

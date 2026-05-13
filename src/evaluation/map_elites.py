@@ -1,5 +1,5 @@
 """
-H-MOLQD Block VI: MAP-Elites Quality Diversity
+H-MOLQD Block VII: MAP-Elites Quality Diversity
 ===============================================
 
 Quality Diversity Optimization for Zelda Dungeon Generation.

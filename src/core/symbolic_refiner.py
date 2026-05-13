@@ -1,6 +1,6 @@
 """
-H-MOLQD Block VII: Symbolic Refiner with Wave Function Collapse
-===============================================================
+H-MOLQD Block VI: Symbolic Refiner with Wave Function Collapse
+==============================================================
 
 Neuro-symbolic repair module for fixing unsolvable dungeons.
 
@@ -1069,7 +1069,7 @@ class ConstraintPropagator:
                     continue
                 if grid[nr, nc] not in walkable:
                     continue
-                
+                    
                 visited.add((nr, nc))
                 parent[(nr, nc)] = (r, c)
                 queue.append((nr, nc))
@@ -1083,7 +1083,7 @@ class ConstraintPropagator:
 
 class SymbolicRefiner:
     """
-    H-MOLQD Block VII: Symbolic Refiner.
+    H-MOLQD Block VI: Symbolic Refiner.
     
     Neuro-symbolic repair module that fixes unsolvable dungeons
     using Wave Function Collapse regeneration.
