@@ -43,6 +43,7 @@ def _checkbox_labels(advanced_gui: bool) -> list[tuple[str, str]]:
             ("priority_tie_break", "Priority: Tie-Break by Locks"),
             ("priority_key_boost", "Priority: Key-Pickup Boost"),
             ("enable_ara", "Enable ARA* (weighted A*)"),
+            ("allow_replay_teleports", "Allow Loaded Route Teleports"),
             ("persist_dropdown_on_select", "Keep dropdown open after select"),
         ]
     return [
@@ -145,6 +146,7 @@ def update_control_panel_positions(
         int(getattr(gui, "current_preset_idx", 0)),
         str(getattr(gui, "search_representation", "hybrid")),
         str(getattr(gui, "ara_weight", "1.0")),
+        str(getattr(gui, "match_apply_threshold", "0.85")),
     )
     widgets_exist = hasattr(gui, "widget_manager") and gui.widget_manager and len(gui.widget_manager.widgets) > 0
     signature_changed = getattr(gui, "_control_panel_widget_signature", None) != panel_signature
@@ -284,11 +286,20 @@ def update_control_panel_positions(
         gui.widget_manager.add_widget(representation_dropdown)
         y_offset += dropdown_spacing
 
+        threshold_options = ["0.70", "0.75", "0.80", "0.85", "0.90"]
+        try:
+            threshold_value = float(getattr(gui, "match_apply_threshold", 0.85))
+            threshold_selected = min(
+                range(len(threshold_options)),
+                key=lambda idx: abs(float(threshold_options[idx]) - threshold_value),
+            )
+        except (AttributeError, RuntimeError, ValueError, TypeError):
+            threshold_selected = 3
         threshold_dropdown = dropdown_widget_cls(
             (x_offset, y_offset),
             "Apply Threshold",
-            ["0.70", "0.75", "0.80", "0.85", "0.90"],
-            selected=3,
+            threshold_options,
+            selected=threshold_selected,
             keep_open_on_select=gui.feature_flags.get("persist_dropdown_on_select", False),
         )
         setattr(threshold_dropdown, "control_name", "match_threshold")
@@ -304,24 +315,26 @@ def update_control_panel_positions(
     except (AttributeError, RuntimeError, ValueError, TypeError):
         pass
 
-    button_width = 125
     button_height = 30
     buttons_per_row = 2
     button_h_spacing = 8
     button_v_spacing = 8
+    button_width = max(125, int((panel_width - margin_left * 2 - button_h_spacing) // buttons_per_row))
 
     if advanced_gui:
         primary_buttons = [
             ("Start Auto-Solve", gui._start_auto_solve),
             ("Stop", gui._stop_auto_solve),
             ("Generate Dungeon", gui._generate_dungeon),
-            ("Load Model", gui._load_ai_model),
             ("AI Generate", gui._generate_ai_dungeon),
+            ("Load Model", gui._load_ai_model),
             ("Reset", gui._reset_map),
         ]
 
         secondary_buttons = [
             ("Path Preview", gui._show_path_preview),
+            ("Import Level", gui._import_level),
+            ("Export Map", gui._export_map),
             ("Clear Path", gui._clear_path),
             ("Export Route", gui._export_route),
             ("Load Route", gui._load_route),
@@ -343,6 +356,8 @@ def update_control_panel_positions(
             ("Load Model", gui._load_ai_model),
             ("Generate Level", gui._generate_level),
             ("Clear Path", gui._clear_path),
+            ("Import Level", gui._import_level),
+            ("Export Map", gui._export_map),
         ]
         secondary_buttons = []
 
@@ -462,11 +477,15 @@ def reposition_widgets(
     dropdown_idx = 0
     button_idx = 0
 
-    button_width = 125
     button_height = 30
     buttons_per_row = 2
     button_h_spacing = 8
     button_v_spacing = 8
+    try:
+        panel_width = int(getattr(gui, "control_panel_rect", None).width)
+    except (AttributeError, RuntimeError, ValueError, TypeError):
+        panel_width = int(getattr(gui, "control_panel_width_current", 360))
+    button_width = max(125, int((panel_width - margin_left * 2 - button_h_spacing) // buttons_per_row))
 
     for widget in gui.widget_manager.widgets:
         if isinstance(widget, checkbox_widget_cls):

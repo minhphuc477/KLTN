@@ -1,5 +1,0 @@
-config,seed,success,solvable,confusion_ratio,confusion_index,path_optimal,tile_prior_kl,graph_edit_distance,generation_time_sec,novelty,reconstruction_error,constraint_valid,room_repair_rate,tiles_repaired,topology_representable_edge_rate,topology_edge_connection_recall,topology_phantom_connection_rate,topology_preservation_score,error
-FULL,900,True,False,,0.0,0.0,13.436736072835105,0.2278409090909091,23.701300621032715,0.02291370253718647,0.0,1.0,0.0,0.0,0.3333333333333333,1.0,0.0,0.7,
-FULL,901,True,False,,0.0,0.0,13.727501186595513,0.21034090909090908,20.305108070373535,0.02567285223496412,0.0,1.0,0.0,0.0,0.2222222222222222,1.0,0.0,0.65,
-FULL,902,True,False,,0.0,0.0,13.830662412449545,0.2124242424242424,19.46410632133484,0.1641883498787598,0.0,1.0,0.0,0.0,0.1111111111111111,1.0,0.0,0.6,
-FULL,903,True,False,,0.0,0.0,13.643031824346656,0.26284090909090907,20.061135053634644,0.06277164120250185,0.0,1.0,0.0,0.0,0.3333333333333333,1.0,0.0,0.7,

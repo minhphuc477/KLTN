@@ -1,6 +1,7 @@
 """Auto-step and stop helpers for GUI auto-solve execution."""
 
-from typing import Any
+from collections import deque
+from typing import Any, Optional
 
 from src.core.definitions import SEMANTIC_PALETTE
 
@@ -38,6 +39,156 @@ def _refresh_inventory_if_needed(gui: Any) -> None:
         pass
     finally:
         gui.inventory_needs_refresh = False
+
+
+def _is_cardinal_neighbor(current: tuple, target: tuple) -> bool:
+    """Return True when target is one 4-directional move from current."""
+    return abs(target[0] - current[0]) + abs(target[1] - current[1]) == 1
+
+
+def _grid_shape(grid: Any) -> Optional[tuple]:
+    if grid is None:
+        return None
+    shape = getattr(grid, "shape", None)
+    if shape is not None and len(shape) >= 2:
+        return int(shape[0]), int(shape[1])
+    try:
+        return len(grid), len(grid[0])
+    except (TypeError, IndexError):
+        return None
+
+
+def _grid_tile(grid: Any, pos: tuple) -> int:
+    try:
+        return int(grid[pos[0], pos[1]])
+    except TypeError:
+        return int(grid[pos[0]][pos[1]])
+
+
+def _find_contiguous_replay_segment(gui: Any, current: tuple, target: tuple) -> Optional[list]:
+    """Find a real 4-directional state-valid path to replace a non-adjacent replay step."""
+    grid = getattr(getattr(gui, "env", None), "grid", None)
+    shape = _grid_shape(grid)
+    if not shape:
+        return None
+
+    height, width = shape
+    if not (0 <= current[0] < height and 0 <= current[1] < width):
+        return None
+    if not (0 <= target[0] < height and 0 <= target[1] < width):
+        return None
+
+    if not hasattr(getattr(gui, "env", None), "try_move_pure"):
+        try:
+            from src.simulation.validator import BLOCKING_IDS, WATER_IDS
+
+            blocked_ids = {int(v) for v in (BLOCKING_IDS | WATER_IDS)}
+        except ImportError:
+            blocked_ids = {
+                int(SEMANTIC_PALETTE["VOID"]),
+                int(SEMANTIC_PALETTE["WALL"]),
+                int(SEMANTIC_PALETTE["BLOCK"]),
+                int(SEMANTIC_PALETTE["ELEMENT"]),
+            }
+
+        queue = deque([current])
+        parents = {current: None}
+        while queue:
+            pos = queue.popleft()
+            if pos == target:
+                path = []
+                cursor = target
+                while cursor is not None:
+                    path.append(cursor)
+                    cursor = parents[cursor]
+                return list(reversed(path))
+            for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                npos = (pos[0] + dr, pos[1] + dc)
+                if npos in parents:
+                    continue
+                if not (0 <= npos[0] < height and 0 <= npos[1] < width):
+                    continue
+                try:
+                    if _grid_tile(grid, npos) in blocked_ids:
+                        continue
+                except (IndexError, TypeError, ValueError):
+                    continue
+                parents[npos] = pos
+                queue.append(npos)
+        return None
+
+    start_state = getattr(getattr(gui, "env", None), "state", None)
+    if start_state is None:
+        return None
+
+    try:
+        start_state = start_state.copy()
+        start_state.position = current
+    except (AttributeError, RuntimeError, ValueError, TypeError):
+        return None
+
+    queue = deque([start_state])
+    parents = {start_state: None}
+    max_expansions = max(4096, min(30000, height * width * 16))
+    expansions = 0
+    while queue:
+        state = queue.popleft()
+        pos = state.position
+        if pos == target:
+            path = []
+            cursor = state
+            while cursor is not None:
+                path.append(cursor.position)
+                cursor = parents[cursor]
+            return list(reversed(path))
+
+        expansions += 1
+        if expansions >= max_expansions:
+            return None
+
+        for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+            npos = (pos[0] + dr, pos[1] + dc)
+            if not (0 <= npos[0] < height and 0 <= npos[1] < width):
+                continue
+            try:
+                can_move, next_state = gui.env.try_move_pure(state, npos, _grid_tile(grid, npos))
+            except (AttributeError, RuntimeError, ValueError, TypeError, IndexError):
+                continue
+            if not can_move:
+                continue
+            if next_state in parents:
+                continue
+            parents[next_state] = state
+            queue.append(next_state)
+
+    return None
+
+
+def _splice_contiguous_replay_segment(
+    gui: Any,
+    logger: Any,
+    current: tuple,
+    target: tuple,
+) -> bool:
+    """Replace the active non-adjacent path node with adjacent replay nodes."""
+    segment = _find_contiguous_replay_segment(gui, current, target)
+    if not segment or len(segment) < 2:
+        return False
+
+    idx = int(getattr(gui, "auto_step_idx", 0))
+    path = list(getattr(gui, "auto_path", []) or [])
+    gui.auto_path = path[:idx] + segment[1:] + path[idx + 1 :]
+    logger.info(
+        "Auto-solve replay expanded non-adjacent transition %s -> %s into %d grid steps",
+        current,
+        target,
+        len(segment) - 1,
+    )
+    try:
+        gui._set_message("Expanded solver shortcut into grid steps")
+    except (AttributeError, RuntimeError, ValueError, TypeError):
+        pass
+    return True
 
 
 def _maybe_replan_dstar(gui: Any, logger: Any) -> None:
@@ -134,6 +285,72 @@ def _validate_and_apply_teleport(
     gui._set_message(f"Teleport! {current} -> {target}")
     gui.status_message = "Teleporting..."
     return True
+
+
+def _conditional_door_ids() -> set:
+    return {
+        int(SEMANTIC_PALETTE["DOOR_LOCKED"]),
+        int(SEMANTIC_PALETTE["DOOR_BOMB"]),
+        int(SEMANTIC_PALETTE["DOOR_BOSS"]),
+        int(SEMANTIC_PALETTE["DOOR_PUZZLE"]),
+    }
+
+
+def _recover_completed_door_interaction(
+    gui: Any,
+    logger: Any,
+    old_state: Any,
+    current: tuple,
+    target: tuple,
+    target_tile: int,
+) -> bool:
+    """Finish entering a door when replay consumed inventory but stayed in place."""
+    state = getattr(getattr(gui, "env", None), "state", None)
+    if state is None or getattr(state, "position", None) != current:
+        return False
+
+    target_tile_id = int(target_tile)
+    opened_doors = set(getattr(state, "opened_doors", set()) or set())
+    inventory_used = (
+        int(getattr(state, "keys", 0)) < int(getattr(old_state, "keys", 0))
+        or int(getattr(state, "bomb_count", 0)) < int(getattr(old_state, "bomb_count", 0))
+        or (
+            bool(getattr(old_state, "has_boss_key", False))
+            and not bool(getattr(state, "has_boss_key", False))
+        )
+    )
+    door_was_opened = target in opened_doors or target_tile_id == int(SEMANTIC_PALETTE["DOOR_OPEN"])
+    if target_tile_id not in _conditional_door_ids() and not door_was_opened:
+        return False
+    if not inventory_used and not door_was_opened:
+        return False
+
+    open_id = int(SEMANTIC_PALETTE["DOOR_OPEN"])
+    try:
+        gui.env.grid[target[0], target[1]] = open_id
+    except (AttributeError, RuntimeError, ValueError, TypeError, IndexError):
+        pass
+
+    try:
+        move_state = state.copy()
+    except (AttributeError, RuntimeError, ValueError, TypeError):
+        move_state = state
+    try:
+        move_state.position = target
+        if hasattr(move_state, "opened_doors"):
+            move_state.opened_doors = set(getattr(move_state, "opened_doors", set()) or set()) | {target}
+        gui.env.state = move_state
+        logger.info(
+            "Auto-solve replay recovered opened-door desync: %s -> %s (tile=%s)",
+            current,
+            target,
+            target_tile_id,
+        )
+        gui.status_message = "Door entered"
+        return True
+    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+        logger.warning("Door interaction recovery failed for %s -> %s: %s", current, target, exc)
+        return False
 
 
 def _post_move_updates(
@@ -262,36 +479,58 @@ def auto_step(
 
         _refresh_inventory_if_needed(gui)
 
-        if abs(dr) > 1 or abs(dc) > 1:
-            old_state = _snapshot_state(gui, game_state_cls)
-            if not _validate_and_apply_teleport(gui, logger, current, target):
+        if current == target:
+            gui.status_message = "Realigning path..."
+            return
+
+        if not _is_cardinal_neighbor(current, target):
+            if _splice_contiguous_replay_segment(gui, logger, current, target):
+                target = gui.auto_path[gui.auto_step_idx]
+                dr = target[0] - current[0]
+                dc = target[1] - current[1]
+            elif bool(getattr(gui, "feature_flags", {}).get("allow_replay_teleports", False)):
+                old_state = _snapshot_state(gui, game_state_cls)
+                if not _validate_and_apply_teleport(gui, logger, current, target):
+                    return
+
+                gui._track_item_collection(old_state, gui.env.state)
+                gui._track_item_usage(old_state, gui.env.state)
+                try:
+                    gui._sync_inventory_counters()
+                except (AttributeError, RuntimeError, ValueError, TypeError):
+                    pass
+
+                if gui.renderer:
+                    try:
+                        gui.renderer.set_agent_position(target[0], target[1], immediate=True)
+                    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+                        logger.warning("Renderer update failed: %s", exc)
+
+                if gui.effects:
+                    try:
+                        gui.effects.add_effect(ripple_effect_cls(target, (100, 200, 255)))
+                    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+                        logger.warning("Effect creation failed: %s", exc)
+
+                if target == gui.env.goal_pos:
+                    gui.env.won = True
+                    gui.env.done = True
+                    gui.auto_mode = False
+                    gui._set_message("AUTO-SOLVE: Victory!")
+                    gui.status_message = "Victory!"
+                return
+            else:
+                gui._show_error(
+                    f"Auto-solve path contains a non-adjacent transition without a grid route: {current} -> {target}"
+                )
+                _stop_auto_local(gui, logger, "non-adjacent replay transition")
+                gui.status_message = "Replay path invalid"
                 return
 
-            gui._track_item_collection(old_state, gui.env.state)
-            gui._track_item_usage(old_state, gui.env.state)
-            try:
-                gui._sync_inventory_counters()
-            except (AttributeError, RuntimeError, ValueError, TypeError):
-                pass
-
-            if gui.renderer:
-                try:
-                    gui.renderer.set_agent_position(target[0], target[1], immediate=True)
-                except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
-                    logger.warning("Renderer update failed: %s", exc)
-
-            if gui.effects:
-                try:
-                    gui.effects.add_effect(ripple_effect_cls(target, (100, 200, 255)))
-                except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
-                    logger.warning("Effect creation failed: %s", exc)
-
-            if target == gui.env.goal_pos:
-                gui.env.won = True
-                gui.env.done = True
-                gui.auto_mode = False
-                gui._set_message("AUTO-SOLVE: Victory!")
-                gui.status_message = "Victory!"
+        if not _is_cardinal_neighbor(current, target):
+            gui._show_error(f"Auto-solve path is not a 4-directional move: {current} -> {target}")
+            _stop_auto_local(gui, logger, "invalid replay move")
+            gui.status_message = "Replay path invalid"
             return
 
         old_state = _snapshot_state(gui, game_state_cls)
@@ -317,6 +556,7 @@ def auto_step(
             target,
             current,
         )
+        target_tile_before_step = _grid_tile(gui.env.grid, target)
         _state, _reward, done, _info = gui.env.step(int(action))
         logger.debug(
             "_auto_step: env.step returned info=%r, new_pos=%s, env.keys=%s",
@@ -328,28 +568,53 @@ def auto_step(
         new_pos = gui.env.state.position
 
         if not done and new_pos != target:
-            retries = int(getattr(gui, "_auto_stuck_retries", 0)) + 1
-            gui._auto_stuck_retries = retries
-            logger.warning("_auto_step: blocked or desynced move (expected=%s, actual=%s, retry=%d)", target, new_pos, retries)
-
-            gui.auto_step_idx = max(0, gui.auto_step_idx - 1)
-
-            if new_pos != current:
-                try:
-                    realign_idx = gui.auto_path.index(new_pos, gui.auto_step_idx)
-                    gui.auto_step_idx = realign_idx
-                    gui._auto_stuck_retries = 0
-                    logger.info("_auto_step: path realigned to index=%d at pos=%s", realign_idx, new_pos)
-                except ValueError:
-                    logger.debug("_auto_step: could not realign path for pos=%s", new_pos)
-
-            if retries >= 3:
-                gui._show_error("Auto-solve path blocked; stopping")
-                _stop_auto_local(gui, logger, "path blocked")
-                gui.status_message = "Blocked"
+            if _recover_completed_door_interaction(
+                gui,
+                logger,
+                old_state,
+                current,
+                target,
+                target_tile_before_step,
+            ):
+                new_pos = gui.env.state.position
+                done = bool(getattr(gui.env, "done", done))
             else:
-                gui.status_message = "Retrying move..."
-            return
+                retries = int(getattr(gui, "_auto_stuck_retries", 0)) + 1
+                gui._auto_stuck_retries = retries
+                try:
+                    current_tile = _grid_tile(gui.env.grid, current)
+                    retry_target_tile = _grid_tile(gui.env.grid, target)
+                except (AttributeError, RuntimeError, ValueError, TypeError, IndexError):
+                    current_tile = "?"
+                    retry_target_tile = "?"
+                logger.warning(
+                    "_auto_step: blocked or desynced move (expected=%s, actual=%s, retry=%d, target_tile=%s, current_tile=%s, info=%r)",
+                    target,
+                    new_pos,
+                    retries,
+                    retry_target_tile,
+                    current_tile,
+                    _info,
+                )
+
+                gui.auto_step_idx = max(0, gui.auto_step_idx - 1)
+
+                if new_pos != current:
+                    try:
+                        realign_idx = gui.auto_path.index(new_pos, gui.auto_step_idx)
+                        gui.auto_step_idx = realign_idx
+                        gui._auto_stuck_retries = 0
+                        logger.info("_auto_step: path realigned to index=%d at pos=%s", realign_idx, new_pos)
+                    except ValueError:
+                        logger.debug("_auto_step: could not realign path for pos=%s", new_pos)
+
+                if retries >= 3:
+                    gui._show_error("Auto-solve path blocked; stopping")
+                    _stop_auto_local(gui, logger, "path blocked")
+                    gui.status_message = "Blocked"
+                else:
+                    gui.status_message = "Retrying move..."
+                return
 
         gui._auto_stuck_retries = 0
         gui.step_count += 1

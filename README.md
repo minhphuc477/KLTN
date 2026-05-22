@@ -83,18 +83,24 @@ python main.py --dungeon 1 --export dungeon_data.npz
 # Launch visualization environment
 python gui_runner.py
 
+# Demo-ready launch with the Chapter 4 real generated artifact and live P-CBS solve
+python gui_runner.py --advanced --load-txt examples\gui_demo_hard_real_model_level.txt --solver-algorithm 7 --solver-timeout 900
+
+# In the GUI, press T to show the inferred topology overlay, then SPACE to solve live.
+
 # Optional deterministic GUI AI generation seed
 set KLTN_AI_SEED=42
 
-# Optional checkpoint override for GUI AI generation
-set KLTN_CHECKPOINT_PATH=checkpoints\final_model.pth
+# GUI AI generation auto-discovers the preferred trained output checkpoint.
+# Optional checkpoint override for GUI AI generation:
+set KLTN_CHECKPOINT_PATH=outputs\zelda_hmolqd_downstream_stageconditioned_semantics_v3_puzzlefix\checkpoints\diffusion\best_model.pth
 
 # Optional hardening: require checkpoint metadata sidecars for GUI AI generation
 set KLTN_STRICT_CHECKPOINTS=1
 
 # Controls:
 # Arrow keys: Manual movement
-# SPACE: Auto-solve with A*
+# SPACE: Auto-solve with the selected solver
 # R: Reset dungeon
 # H: Toggle heatmap overlay
 # ESC: Exit

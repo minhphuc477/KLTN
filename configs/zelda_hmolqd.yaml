@@ -41,6 +41,9 @@ dataset:
   normalize: true  # type=bool, default=true, valid={true,false}
   room_level: true  # type=bool, default=true, valid={true,false}
   load_graphs: true  # type=bool, default=true, valid={true,false}
+  train_dungeons: [1, 2, 3, 4, 5, 6, 7, 8]  # type=list[int], default=[1..8]; fixed train/internal-val split at dungeon granularity
+  test_dungeons: [9]  # type=list[int], default=[9]; held out completely for final unseen evaluation
+  variants: [1, 2]  # type=list[int], default=[1,2]; keep both Quest variants inside each selected dungeon split
   topology_supervision_mode: runtime_aligned  # type=str, default=runtime_aligned, valid={runtime_aligned,oracle_room_grid}; keep train-time room-topology priors aligned with inference instead of leaking target-room geometry
   min_samples_per_epoch: 64  # type=int, default=64, valid>=1; VQ-VAE effective epoch floor
   num_classes: 44  # type=int, default=44, valid={44}; current semantic palette size
@@ -85,6 +88,7 @@ diffusion:
   grad_clip_norm: 1.0  # type=float, default=1.0, valid>=0
   save_every: 10  # type=int, default=10, valid>=1
   keep_last: 2  # type=int, default=2, valid>=0; number of retained full-resume checkpoints besides latest_resume/best/final
+  validation_fraction: 0.1  # type=float, default=0.1, valid=0..0.5; internal validation split drawn only from train_dungeons, never from Dungeon 9
   latent_dim: 64  # type=int, default=64, valid>=1
   model_channels: 96  # type=int, default=128, valid>=8; recommended small-data-balanced setting for the current Zelda corpus
   context_dim: 256  # type=int, default=256, valid>=8

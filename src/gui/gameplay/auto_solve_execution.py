@@ -80,7 +80,11 @@ def execute_auto_solve(gui: Any, path: Any, solver_result: Any, teleports: int, 
     if solver_result and "cbs_metrics" in solver_result:
         cbs = solver_result["cbs_metrics"]
         persona = solver_result.get("persona", "unknown")
-        base_msg = f"P-CBS ({persona.title()}): {len(path)} steps"
+        trace_len = int(solver_result.get("trajectory_len", solver_result.get("original_path_len", 0)) or 0)
+        if trace_len and trace_len != len(path):
+            base_msg = f"P-CBS ({persona.title()}): {len(path)} replay steps ({trace_len} trace)"
+        else:
+            base_msg = f"P-CBS ({persona.title()}): {len(path)} steps"
         metrics_msg = f"Confusion: {cbs['confusion_index']:.2f} | Cognitive Load: {cbs['cognitive_load']:.2f}"
         gui.message = f"{base_msg} | {metrics_msg}"
         toast_msg = (
@@ -128,14 +132,41 @@ def execute_auto_solve_from_preview(gui: Any, logger: Any) -> None:
     gui.path_preview_dialog = None
     gui.preview_overlay_visible = False
 
+    solver_result = None
     if preview_dialog and getattr(preview_dialog, "solver_result", None):
-        gui.solver_result = preview_dialog.solver_result
+        solver_result = preview_dialog.solver_result
+        gui.solver_result = solver_result
+    else:
+        solver_result = getattr(gui, "solver_result", None)
 
-    if preview_dialog:
-        base_msg = f"Auto-solve started! Path: {len(gui.auto_path)} steps"
+    base_msg = f"Auto-solve started! Path: {len(gui.auto_path)} steps"
+    if solver_result and "cbs_metrics" in solver_result:
+        cbs = solver_result["cbs_metrics"]
+        persona = solver_result.get("persona", "unknown")
+        gui.last_solver_metrics = {
+            "name": f"P-CBS ({persona})",
+            "nodes": solver_result.get("nodes", 0),
+            "path_len": len(gui.auto_path),
+            "cbs": cbs,
+        }
+        trace_len = int(solver_result.get("trajectory_len", solver_result.get("original_path_len", 0)) or 0)
+        if trace_len and trace_len != len(gui.auto_path):
+            pcbs_path_text = f"{len(gui.auto_path)} replay steps ({trace_len} trace)"
+        else:
+            pcbs_path_text = f"{len(gui.auto_path)} steps"
+        gui.message = (
+            f"P-CBS ({persona.title()}): {pcbs_path_text} | "
+            f"Confusion: {cbs['confusion_index']:.2f} | Cognitive Load: {cbs['cognitive_load']:.2f}"
+        )
+        gui._show_toast(
+            f"P-CBS ({persona.title()}) route started | Entropy: {cbs['navigation_entropy']:.2f}",
+            duration=4.0,
+            toast_type="success",
+        )
+    elif preview_dialog:
         if items_text:
             gui.message = f"{base_msg} | Items: {items_text}"
         else:
             gui.message = base_msg
     else:
-        gui.message = "Auto-solve started!"
+        gui.message = base_msg

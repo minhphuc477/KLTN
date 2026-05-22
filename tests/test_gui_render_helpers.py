@@ -1,5 +1,8 @@
 ﻿from types import SimpleNamespace
 
+import numpy as np
+
+from src.core.definitions import ROOM_HEIGHT, ROOM_WIDTH, SEMANTIC_PALETTE
 from src.gui.rendering.render_helpers import (
     default_topology_semantics,
     render_solver_comparison_overlay,
@@ -105,6 +108,28 @@ def test_render_topology_overlay_draws_graph_without_exception():
     render_topology_overlay(
         surface=surface,
         current=current,
+        tile_size=16,
+        view_offset_x=0,
+        view_offset_y=0,
+        pygame=pygame,
+    )
+
+    assert len(pygame.draw.lines) >= 1
+    assert len(pygame.draw.circles) >= 2
+
+
+def test_render_topology_overlay_infers_nodes_for_plain_imported_grid():
+    pygame = _FakePygame()
+    surface = _FakeSurface((500, 500))
+    grid = np.full((ROOM_HEIGHT, ROOM_WIDTH * 2), SEMANTIC_PALETTE["WALL"], dtype=np.int32)
+    grid[1:-1, 1 : ROOM_WIDTH - 1] = SEMANTIC_PALETTE["FLOOR"]
+    grid[1:-1, ROOM_WIDTH + 1 : -1] = SEMANTIC_PALETTE["FLOOR"]
+    grid[ROOM_HEIGHT // 2, ROOM_WIDTH - 1] = SEMANTIC_PALETTE["DOOR_LOCKED"]
+    grid[ROOM_HEIGHT // 2, ROOM_WIDTH] = SEMANTIC_PALETTE["FLOOR"]
+
+    render_topology_overlay(
+        surface=surface,
+        current=grid,
         tile_size=16,
         view_offset_x=0,
         view_offset_y=0,

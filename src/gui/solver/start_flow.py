@@ -28,6 +28,20 @@ def start_auto_solve(gui: Any, logger: Any, debug_sync_solver: bool) -> None:
         getattr(gui, "auto_start_solver", None),
     )
 
+    if (
+        getattr(gui, "auto_path", None)
+        and not getattr(gui, "auto_mode", False)
+        and getattr(gui, "loaded_route_source", None)
+        and getattr(gui, "use_preloaded_route_on_solve", False)
+    ):
+        logger.info(
+            "SOLVER: Starting preloaded route instead of recomputing solver path (source=%s, len=%d)",
+            getattr(gui, "loaded_route_source", None),
+            len(getattr(gui, "auto_path", []) or []),
+        )
+        gui._execute_auto_solve_from_preview()
+        return
+
     if not gui._prepare_active_solver_for_new_start():
         return
 

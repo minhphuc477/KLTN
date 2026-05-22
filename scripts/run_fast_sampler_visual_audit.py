@@ -1901,6 +1901,15 @@ def export_variant(
     room_count = int(len(result.rooms))
     validation_context = build_validation_context_from_generation_result(result)
     runtime_diagnostics = dict(pipeline.runtime_diagnostics)
+    guidance_module = getattr(getattr(pipeline, "diffusion", None), "guidance", None)
+    if guidance_module is not None:
+        runtime_diagnostics["gradient_guidance"] = {
+            "logic_net_configured": bool(getattr(guidance_module, "logic_net", None) is not None),
+            "guidance_scale": float(getattr(guidance_module, "guidance_scale", 0.0) or 0.0),
+            "failure_count": int(getattr(guidance_module, "failure_count", 0) or 0),
+            "last_failure_type": getattr(guidance_module, "last_failure_type", None),
+            "last_failure_message": getattr(guidance_module, "last_failure_message", None),
+        }
     topology_anchor_policy = _generation_policy_summary(pipeline)
     diffusion_inference_checkpoint_state_key = str(
         getattr(pipeline.diffusion, "inference_checkpoint_state_key", "unknown")

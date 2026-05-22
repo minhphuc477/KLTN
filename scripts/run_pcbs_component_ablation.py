@@ -135,6 +135,7 @@ def run_ablation(
         "persona",
         "success",
         "path_length",
+        "trajectory_length",
         "states_explored",
         "confusion_index",
         "navigation_entropy",
@@ -181,9 +182,11 @@ def run_ablation(
                 success, path, states, metrics = solver.solve()
                 elapsed_ms = (time.perf_counter() - started) * 1000.0
                 solver_status = "solved" if success else ("timeout" if int(states) >= int(timeout_pcbs) else "failed")
+                trajectory_length = int(len(path))
+                solution_path_length = trajectory_length if bool(success) else 0
                 confusion_ratio = confusion_ratio_vs_oracle(
                     int(oracle["path_length"]),
-                    int(len(path)),
+                    solution_path_length,
                     oracle_status=str(oracle["status"]),
                     candidate_success=bool(success),
                 )
@@ -192,7 +195,8 @@ def run_ablation(
                     "ablation": str(ablation_name),
                     "persona": str(persona),
                     "success": int(success),
-                    "path_length": int(len(path)),
+                    "path_length": int(solution_path_length),
+                    "trajectory_length": int(trajectory_length),
                     "states_explored": int(states),
                     "confusion_index": round(float(metrics.confusion_index), 4),
                     "navigation_entropy": round(float(metrics.navigation_entropy), 4),
@@ -216,7 +220,8 @@ def run_ablation(
                 if verbose:
                     ratio_text = f"{float(confusion_ratio):.2f}" if np.isfinite(confusion_ratio) else "n/a"
                     print(
-                        f"{map_id} {ablation_name}: status={solver_status} path={len(path)} "
+                        f"{map_id} {ablation_name}: status={solver_status} path={solution_path_length} "
+                        f"trajectory={trajectory_length} "
                         f"states={states} confusion_ratio={ratio_text}"
                     )
 

@@ -30,7 +30,7 @@ PROJECT_ROOT = Path(__file__).parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.zelda_data.zelda_loader import create_dataloader, extract_start_goal
+from src.zelda_data.zelda_loader import create_dataloader, extract_start_goal, graph_collate_fn
 from src.core.latent_diffusion import LatentDiffusionModel, create_latent_diffusion
 from src.core.vqvae import SemanticVQVAE as VQVAE, create_vqvae
 from src.core.condition_encoder import DualStreamConditionEncoder, create_condition_encoder
@@ -109,6 +109,9 @@ class DiffusionTrainingConfig:
         normalize: bool = True,
         use_vglc: bool = True,
         room_level: bool = True,
+        train_dungeon_ids: Optional[List[int]] = None,
+        test_dungeon_ids: Optional[List[int]] = None,
+        variants: Optional[List[int]] = None,
         num_classes: int = 44,
         node_feature_dim: int = GRAPH_NODE_FEATURE_DIM,
         edge_feature_dim: int = GRAPH_EDGE_FEATURE_DIM,
@@ -173,7 +176,7 @@ class DiffusionTrainingConfig:
         guidance_clamp_magnitude: float = 1.0,
         guidance_relative_norm_cap: float = 0.25,
         guidance_schedule_enabled: bool = True,
-        guidance_active_fraction: float = 0.30,
+        guidance_active_fraction: float = 1.0,
         guidance_decay_power: float = 1.0,
         guidance_max_graph_nodes: int = 512,
         guidance_max_key_lock_pairs: int = 2048,
@@ -195,6 +198,7 @@ class DiffusionTrainingConfig:
         grad_clip_norm: float = 1.0,
         validation_num_samples: int = 8,
         validation_num_diffusion_samples: int = 64,
+        validation_fraction: float = 0.1,
         
         # Checkpointing
         checkpoint_dir: str = "./checkpoints",
@@ -227,6 +231,9 @@ class DiffusionTrainingConfig:
         self.normalize = bool(normalize)
         self.use_vglc = use_vglc
         self.room_level = bool(room_level)
+        self.train_dungeon_ids = [int(v) for v in (train_dungeon_ids if train_dungeon_ids is not None else list(range(1, 9)))]
+        self.test_dungeon_ids = [int(v) for v in (test_dungeon_ids if test_dungeon_ids is not None else [9])]
+        self.variants = [int(v) for v in (variants if variants is not None else [1, 2])]
         self.num_classes = int(num_classes)
         self.node_feature_dim = int(max(1, node_feature_dim))
         self.edge_feature_dim = int(max(1, edge_feature_dim))
@@ -396,6 +403,7 @@ class DiffusionTrainingConfig:
         self.grad_clip_norm = float(max(0.0, grad_clip_norm))
         self.validation_num_samples = int(max(1, validation_num_samples))
         self.validation_num_diffusion_samples = int(max(1, validation_num_diffusion_samples))
+        self.validation_fraction = float(max(0.0, min(0.5, validation_fraction)))
         
         self.checkpoint_dir = checkpoint_dir
         self.save_every = save_every
@@ -454,6 +462,9 @@ def diffusion_training_kwargs_from_resolved_config(
         "normalize": dataset["normalize"],
         "use_vglc": dataset["use_vglc"],
         "room_level": dataset["room_level"],
+        "train_dungeon_ids": dataset.get("train_dungeons", list(range(1, 9))),
+        "test_dungeon_ids": dataset.get("test_dungeons", [9]),
+        "variants": dataset.get("variants", [1, 2]),
         "num_classes": dataset["num_classes"],
         "node_feature_dim": dataset["node_feature_dim"],
         "edge_feature_dim": dataset["edge_feature_dim"],
@@ -532,6 +543,7 @@ def diffusion_training_kwargs_from_resolved_config(
         "grad_clip_norm": stage["grad_clip_norm"],
         "validation_num_samples": stage["validation_num_samples"],
         "validation_num_diffusion_samples": stage["validation_num_diffusion_samples"],
+        "validation_fraction": stage.get("validation_fraction", 0.1),
         "checkpoint_dir": stage["checkpoint_dir"],
         "save_every": stage["save_every"],
         "keep_last": stage["keep_last"],
@@ -628,6 +640,9 @@ def _legacy_diffusion_overrides_from_args(args: argparse.Namespace) -> Dict[str,
     _set("data_dir", getattr(args, "data_dir", None))
     _set("batch_size", getattr(args, "batch_size", None))
     _set("room_level", getattr(args, "room_level", None))
+    _set("train_dungeon_ids", getattr(args, "train_dungeon_ids", None))
+    _set("test_dungeon_ids", getattr(args, "test_dungeon_ids", None))
+    _set("variants", getattr(args, "variants", None))
     _set("epochs", getattr(args, "epochs", None))
     _set("learning_rate", getattr(args, "lr", None))
     _set("model_channels", getattr(args, "model_channels", None))
@@ -2315,7 +2330,7 @@ class DiffusionTrainer:
         self.diffusion.guidance.clamp_magnitude = float(getattr(self.config, "guidance_clamp_magnitude", 1.0))
         self.diffusion.guidance.relative_norm_cap = float(getattr(self.config, "guidance_relative_norm_cap", 0.25))
         self.diffusion.guidance.schedule_enabled = bool(getattr(self.config, "guidance_schedule_enabled", True))
-        self.diffusion.guidance.active_fraction = float(getattr(self.config, "guidance_active_fraction", 0.30))
+        self.diffusion.guidance.active_fraction = float(getattr(self.config, "guidance_active_fraction", 1.0))
         self.diffusion.guidance.decay_power = float(getattr(self.config, "guidance_decay_power", 1.0))
         self.diffusion.guidance.max_graph_nodes = int(getattr(self.config, "guidance_max_graph_nodes", 512))
         self.diffusion.guidance.max_key_lock_pairs = int(getattr(self.config, "guidance_max_key_lock_pairs", 2048))
@@ -2345,10 +2360,10 @@ def train_diffusion(config: DiffusionTrainingConfig) -> DiffusionTrainer:
     )
 
     try:
-        train_loader_plain = create_dataloader(
+        base_loader = create_dataloader(
             config.data_dir,
             batch_size=config.batch_size,
-            shuffle=config.shuffle_train,
+            shuffle=False,
             num_workers=config.num_workers,
             pin_memory=config.pin_memory,
             drop_last=config.drop_last,
@@ -2361,59 +2376,60 @@ def train_diffusion(config: DiffusionTrainingConfig) -> DiffusionTrainer:
             topology_supervision_mode=config.topology_supervision_mode,
             semantic_role_prior_strength=config.semantic_role_prior_strength,
             semantic_puzzle_offset=config.semantic_puzzle_offset,
+            dungeon_ids=config.train_dungeon_ids,
+            variants=config.variants,
+        )
+        base_dataset = base_loader.dataset
+        from src.train_vqvae import split_dataset_for_vqvae_validation
+        train_dataset, val_dataset = split_dataset_for_vqvae_validation(
+            base_dataset,
+            validation_fraction=float(getattr(config, "validation_fraction", 0.0)),
+            seed=int(getattr(config, "seed", 42)),
         )
         train_sampler = make_distributed_sampler(
-            train_loader_plain.dataset,
+            train_dataset,
             context=distributed_context,
             shuffle=config.shuffle_train,
             drop_last=config.drop_last,
             seed=int(getattr(config, "seed", 42)),
         )
-        train_loader = create_dataloader(
-            config.data_dir,
+        train_loader = DataLoader(
+            train_dataset,
             batch_size=config.batch_size,
-            shuffle=config.shuffle_train,
+            shuffle=(bool(config.shuffle_train) if train_sampler is None else False),
+            sampler=train_sampler,
             num_workers=config.num_workers,
             pin_memory=config.pin_memory,
             drop_last=config.drop_last,
-            use_vglc=config.use_vglc,
-            normalize=config.normalize,
-            room_level=config.room_level,
-            load_graphs=True,
-            sampler=train_sampler,
-            node_feature_dim=config.node_feature_dim,
-            edge_feature_dim=config.edge_feature_dim,
-            topology_supervision_mode=config.topology_supervision_mode,
-            semantic_role_prior_strength=config.semantic_role_prior_strength,
-            semantic_puzzle_offset=config.semantic_puzzle_offset,
+            collate_fn=graph_collate_fn,
         )
 
         val_loader = None
         if distributed_context.is_main_process:
-            val_loader = create_dataloader(
-                config.data_dir,
+            eval_source = val_dataset if val_dataset is not None else train_dataset
+            val_loader = DataLoader(
+                eval_source,
                 batch_size=config.batch_size,
-                shuffle=config.shuffle_val,
+                shuffle=bool(config.shuffle_val),
                 num_workers=config.num_workers,
                 pin_memory=config.pin_memory,
-                drop_last=config.drop_last,
-                use_vglc=config.use_vglc,
-                normalize=config.normalize,
-                room_level=config.room_level,
-                load_graphs=True,
-                node_feature_dim=config.node_feature_dim,
-                edge_feature_dim=config.edge_feature_dim,
-                topology_supervision_mode=config.topology_supervision_mode,
-                semantic_role_prior_strength=config.semantic_role_prior_strength,
-                semantic_puzzle_offset=config.semantic_puzzle_offset,
+                drop_last=False,
+                collate_fn=graph_collate_fn,
             )
 
         sample_kind = "rooms" if config.room_level else "dungeons"
         logger.info(
-            "Training samples: %d %s%s",
-            len(train_loader.dataset),
+            "Training samples: %d %s | internal_val=%d | final_test_dungeons=%s%s",
+            len(train_dataset),
             sample_kind,
+            len(val_dataset) if val_dataset is not None else 0,
+            list(getattr(config, "test_dungeon_ids", [9])),
             f" (world_size={distributed_context.world_size})" if distributed_context.enabled else "",
+        )
+        logger.info(
+            "Diffusion corpus split: train/internal-val dungeons=%s variants=%s",
+            list(getattr(config, "train_dungeon_ids", list(range(1, 9)))),
+            list(getattr(config, "variants", [1, 2])),
         )
 
         trainer = DiffusionTrainer(config, distributed_context=distributed_context)
@@ -2428,7 +2444,7 @@ def train_diffusion(config: DiffusionTrainingConfig) -> DiffusionTrainer:
             log_capacity_guardrails(
                 logger,
                 stage_name="Diffusion trainer",
-                dataset_size=len(train_loader.dataset),
+                dataset_size=len(train_dataset),
                 param_groups={
                     "diffusion_plus_guidance": diffusion_trainable,
                     "condition_encoder": condition_trainable,

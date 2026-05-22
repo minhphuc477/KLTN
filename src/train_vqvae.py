@@ -104,6 +104,9 @@ def vqvae_training_kwargs_from_resolved_config(config: Dict[str, Any]) -> Dict[s
         "use_vglc": dataset["use_vglc"],
         "normalize": dataset["normalize"],
         "room_level": dataset["room_level"],
+        "train_dungeon_ids": dataset.get("train_dungeons", list(range(1, 9))),
+        "test_dungeon_ids": dataset.get("test_dungeons", [9]),
+        "variants": dataset.get("variants", [1, 2]),
         "seed": runtime["seed"],
         "auto_resume": runtime["auto_resume"],
         "checkpoint_storage_budget_gb": runtime["checkpoint_storage_budget_gb"],
@@ -154,6 +157,9 @@ def _default_vqvae_training_kwargs() -> Dict[str, Any]:
         "use_vglc": True,
         "normalize": True,
         "room_level": True,
+        "train_dungeon_ids": list(range(1, 9)),
+        "test_dungeon_ids": [9],
+        "variants": [1, 2],
         "seed": None,
         "auto_resume": True,
         "checkpoint_storage_budget_gb": None,
@@ -211,6 +217,9 @@ def _legacy_vqvae_overrides_from_args(args: argparse.Namespace) -> Dict[str, Any
     _set("use_vglc", getattr(args, "use_vglc", None))
     _set("normalize", getattr(args, "normalize", None))
     _set("room_level", getattr(args, "room_level", None))
+    _set("train_dungeon_ids", getattr(args, "train_dungeon_ids", None))
+    _set("test_dungeon_ids", getattr(args, "test_dungeon_ids", None))
+    _set("variants", getattr(args, "variants", None))
     _set("seed", getattr(args, "seed", None))
     _set("auto_resume", getattr(args, "auto_resume", None))
     _set("checkpoint_storage_budget_gb", getattr(args, "checkpoint_storage_budget_gb", None))
@@ -389,6 +398,8 @@ def train_vqvae(args):
         normalize=bool(getattr(args, "normalize", True)),
         room_level=room_level,
         load_graphs=False,
+        dungeon_ids=getattr(args, "train_dungeon_ids", list(range(1, 9))),
+        variants=getattr(args, "variants", [1, 2]),
     )
     dataset = base_loader.dataset
     train_dataset, val_dataset = split_dataset_for_vqvae_validation(
@@ -398,6 +409,12 @@ def train_vqvae(args):
     )
     sample_kind = "rooms" if room_level else "dungeons"
     logger.info("Dataset: %d %s", len(dataset), sample_kind)
+    logger.info(
+        "VQ-VAE corpus split: train/internal-val dungeons=%s variants=%s | final test dungeons=%s",
+        list(getattr(args, "train_dungeon_ids", list(range(1, 9))) or []),
+        list(getattr(args, "variants", [1, 2]) or []),
+        list(getattr(args, "test_dungeon_ids", [9]) or []),
+    )
 
     if len(dataset) == 0:
         logger.error("No %s samples found! Check --data-dir path.", sample_kind)
@@ -888,4 +905,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

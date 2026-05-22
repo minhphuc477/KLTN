@@ -265,6 +265,8 @@ def extract_node_feature_vector(
 ) -> torch.Tensor:
     """Extract node feature vector for the active conditioning schema."""
     tokens = parse_label_tokens(attrs.get("label"))
+    raw_type = str(attrs.get("type", attrs.get("node_type", attrs.get("room_type", ""))) or "").strip().lower()
+    role_tokens = set(tokens) | set(parse_label_tokens(raw_type))
 
     def _as_nonneg_int(value: Any) -> int:
         try:
@@ -280,57 +282,60 @@ def extract_node_feature_vector(
     has_enemy = (
         coerce_bool(attrs.get("has_enemy"))
         or (enemy_hint > 0)
-        or "e" in tokens
-        or "enemy" in tokens
-        or "b" in tokens
-        or "boss" in tokens
+        or "e" in role_tokens
+        or "enemy" in role_tokens
+        or "b" in role_tokens
+        or "boss" in role_tokens
     )
     has_key = (
         coerce_bool(attrs.get("has_key"))
         or (key_hint > 0)
-        or "k" in tokens
-        or "key" in tokens
-        or "small_key" in tokens
-        or "key_small" in tokens
+        or "k" in role_tokens
+        or "key" in role_tokens
+        or "small_key" in role_tokens
+        or "key_small" in role_tokens
     )
     has_item = (
         coerce_bool(attrs.get("has_item"))
         or coerce_bool(attrs.get("has_macro_item"))
         or coerce_bool(attrs.get("has_minor_item"))
         or (item_hint > 0)
-        or "i" in tokens
-        or "item" in tokens
-        or "macro_item" in tokens
-        or "minor_item" in tokens
-        or "key_item" in tokens
-        or "m" in tokens
-        or "treasure" in tokens
+        or "i" in role_tokens
+        or "item" in role_tokens
+        or "macro_item" in role_tokens
+        or "minor_item" in role_tokens
+        or "key_item" in role_tokens
+        or "m" in role_tokens
+        or "treasure" in role_tokens
     )
     has_triforce = (
         coerce_bool(attrs.get("has_triforce"))
         or coerce_bool(attrs.get("is_triforce"))
         or coerce_bool(attrs.get("is_goal"))
-        or "t" in tokens
-        or "triforce" in tokens
-        or "goal" in tokens
+        or raw_type in {"goal", "triforce"}
+        or "t" in role_tokens
+        or "triforce" in role_tokens
+        or "goal" in role_tokens
     )
     has_boss = (
         coerce_bool(attrs.get("has_boss"))
         or coerce_bool(attrs.get("is_boss"))
-        or "b" in tokens
-        or "boss" in tokens
+        or "b" in role_tokens
+        or "boss" in role_tokens
     )
     has_puzzle = (
         coerce_bool(attrs.get("has_puzzle"))
         or (puzzle_hint > 0)
-        or "p" in tokens
-        or "puzzle" in tokens
+        or "p" in role_tokens
+        or "puzzle" in role_tokens
     )
     is_start = (
         coerce_bool(attrs.get("is_start"))
         or coerce_bool(attrs.get("is_entry"))
-        or "s" in tokens
-        or "start" in tokens
+        or raw_type in {"start", "entry"}
+        or "s" in role_tokens
+        or "start" in role_tokens
+        or "entry" in role_tokens
     )
     difficulty = coerce_difficulty(attrs.get("difficulty", attrs.get("difficulty_rating", 0.5)))
 

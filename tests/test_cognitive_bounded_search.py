@@ -490,6 +490,59 @@ class TestCBS:
         assert metrics.unique_tiles_visited > 0
         assert metrics.confusion_index >= 0
         assert metrics.navigation_entropy >= 0
+
+    def test_room_metrics_aggregate_tiles_into_canonical_rooms(self):
+        """P-CBS room metrics should not treat every text-grid character as a room."""
+        grid = np.full((16, 22), SEMANTIC_PALETTE['WALL'], dtype=np.int64)
+        grid[1, 1:21] = SEMANTIC_PALETTE['FLOOR']
+        grid[1, 1] = SEMANTIC_PALETTE['START']
+        grid[1, 20] = SEMANTIC_PALETTE['TRIFORCE']
+
+        env = ZeldaLogicEnv(semantic_grid=grid)
+        cbs = CognitiveBoundedSearch(env, persona=AgentPersona.SPEEDRUNNER, timeout=500, seed=42)
+
+        success, path, _states, metrics = cbs.solve()
+
+        assert success
+        assert metrics.total_steps == len(path)
+        assert metrics.unique_tiles_visited > metrics.unique_rooms_visited
+        assert metrics.unique_rooms_visited == 2
+        assert set(metrics.room_visit_counts) == {(0, 0), (0, 1)}
+        assert metrics.total_room_visits == metrics.total_steps
+        assert metrics.room_entropy > 0
+
+    def test_hybrid_pcbs_considers_room_graph_transitions(self):
+        """Hybrid P-CBS should expose graph room transitions as candidates."""
+        from types import SimpleNamespace
+
+        import networkx as nx
+
+        grid = np.full((16, 22), SEMANTIC_PALETTE['WALL'], dtype=np.int64)
+        grid[1, 1] = SEMANTIC_PALETTE['START']
+        grid[1, 2] = SEMANTIC_PALETTE['STAIR']
+        grid[1, 12] = SEMANTIC_PALETTE['STAIR']
+        grid[1, 20] = SEMANTIC_PALETTE['TRIFORCE']
+
+        graph = nx.DiGraph()
+        graph.add_edge(0, 1, label='stair')
+        env = ZeldaLogicEnv(
+            semantic_grid=grid,
+            graph=graph,
+            room_to_node={(0, 0): 0, (0, 1): 1},
+            room_positions={(0, 0): (0, 0), (0, 1): (0, 11)},
+            node_to_room={0: (0, 0), 1: (0, 1)},
+        )
+        state = env.state.copy()
+        state.position = (1, 2)
+        cbs = CognitiveBoundedSearch(env, persona=AgentPersona.SPEEDRUNNER, timeout=100, seed=42)
+
+        candidates = cbs._get_graph_transition_candidates(
+            SimpleNamespace(game_state=state),
+            grid,
+            [],
+        )
+
+        assert ((1, 12), SEMANTIC_PALETTE['STAIR']) in candidates
     
     def test_persona_affects_behavior(self, grid_with_enemies):
         """Test different personas produce different paths."""

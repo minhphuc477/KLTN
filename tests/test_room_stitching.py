@@ -146,6 +146,35 @@ def test_spatial_utils_carve_room_connection_delegates_to_shared_bbox_connector(
     assert np.all(grid[boundary_rows, ROOM_WIDTH] == locked)
 
 
+def test_adjacent_bbox_connector_opens_interior_aprons():
+    wall = int(SEMANTIC_PALETTE["WALL"])
+    floor = int(SEMANTIC_PALETTE["FLOOR"])
+    door_open = int(SEMANTIC_PALETTE["DOOR_OPEN"])
+    start = int(SEMANTIC_PALETTE["START"])
+    start_col = ROOM_WIDTH // 2
+
+    grid = np.full((ROOM_HEIGHT * 2, ROOM_WIDTH), floor, dtype=np.int32)
+    grid[ROOM_HEIGHT - 2, :] = wall
+    grid[ROOM_HEIGHT + 1, :] = wall
+    grid[ROOM_HEIGHT + 1, start_col] = start
+
+    carve_room_connection_between_bboxes(
+        grid,
+        (0, 0, ROOM_WIDTH - 1, ROOM_HEIGHT - 1),
+        (0, ROOM_HEIGHT, ROOM_WIDTH - 1, ROOM_HEIGHT * 2 - 1),
+        has_reverse_edge=True,
+        fill_tile=int(SEMANTIC_PALETTE["VOID"]),
+    )
+
+    boundary_cols = np.where(grid[ROOM_HEIGHT - 1, :] == door_open)[0]
+    assert len(boundary_cols) > 0
+    assert np.all(grid[ROOM_HEIGHT, boundary_cols] == door_open)
+    assert np.all(grid[ROOM_HEIGHT - 2, boundary_cols] == floor)
+    assert int(grid[ROOM_HEIGHT + 1, start_col]) == start
+    non_marker_cols = [int(col) for col in boundary_cols if int(col) != start_col]
+    assert np.all(grid[ROOM_HEIGHT + 1, non_marker_cols] == floor)
+
+
 def test_non_adjacent_bbox_connector_walls_off_relaxed_corridor():
     void_id = int(SEMANTIC_PALETTE["VOID"])
     wall_id = int(SEMANTIC_PALETTE["WALL"])

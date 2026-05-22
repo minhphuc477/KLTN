@@ -93,6 +93,7 @@ def render_frame(
         semantic_palette=semantic_palette,
         math_module=math_module,
         time_module=time_module,
+        pygame=pygame,
     )
 
     try:

@@ -35,6 +35,8 @@ def build_priority_options(
         "ara_weight": float(ara_weight),
         "representation": str(search_representation),
         "allow_diagonals": bool(feature_flags.get("diagonal_movement", False)),
+        "max_depth": 2000,
+        "use_iddfs": False,
     }
 
 

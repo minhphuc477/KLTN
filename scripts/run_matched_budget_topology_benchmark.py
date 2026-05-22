@@ -50,6 +50,11 @@ class SearchResult:
     feasible: bool
     constraint_violation: float
     evaluations_used: int
+    qd_internal_coverage: float = 0.0
+    qd_internal_qd_score: float = 0.0
+    qd_internal_mean_fitness: float = 0.0
+    qd_internal_feature_diversity: float = 0.0
+    qd_internal_num_elites: float = 0.0
 
 
 @dataclass
@@ -322,6 +327,7 @@ def _run_map_elites(
     stats = generator.get_statistics()
     generations_run = int(max(0, stats.get("generations_run", gens)))
     evaluations_used = int(pop * max(1, generations_run))
+    qd_stats = dict(stats.get("qd_final_archive_stats", {}))
 
     return SearchResult(
         graph=graph,
@@ -330,6 +336,11 @@ def _run_map_elites(
         feasible=bool(ev.get("feasible", False)),
         constraint_violation=float(ev.get("constraint_violation", 1.0)),
         evaluations_used=max(1, evaluations_used),
+        qd_internal_coverage=float(qd_stats.get("coverage", 0.0)),
+        qd_internal_qd_score=float(qd_stats.get("qd_score", 0.0)),
+        qd_internal_mean_fitness=float(qd_stats.get("mean_fitness", 0.0)),
+        qd_internal_feature_diversity=float(qd_stats.get("feature_diversity", 0.0)),
+        qd_internal_num_elites=float(qd_stats.get("num_elites", 0.0)),
     )
 
 def _paired_bootstrap_ci(deltas: np.ndarray, n_boot: int = 2000, alpha: float = 0.05, seed: int = 0) -> Tuple[float, float]:
@@ -520,6 +531,11 @@ def _build_summary_row(method: str, sub: pd.DataFrame, payload: Dict[str, Any]) 
         "map_elites_mean_fitness": float(archive.get("mean_fitness", 0.0)),
         "map_elites_feature_diversity": float(archive.get("feature_diversity", 0.0)),
         "map_elites_num_elites": float(archive.get("num_elites", 0.0)),
+        "map_elites_internal_coverage": _safe_mean(sub, "qd_internal_coverage"),
+        "map_elites_internal_qd_score": _safe_mean(sub, "qd_internal_qd_score"),
+        "map_elites_internal_mean_fitness": _safe_mean(sub, "qd_internal_mean_fitness"),
+        "map_elites_internal_feature_diversity": _safe_mean(sub, "qd_internal_feature_diversity"),
+        "map_elites_internal_num_elites": _safe_mean(sub, "qd_internal_num_elites"),
         "fidelity_js_divergence": float(reference.get("fidelity_js_divergence", 0.0)),
         "expressive_overlap_reference": float(reference.get("expressive_overlap_reference", 0.0)),
         "coverage_linearity_leniency": float(expressive.get("coverage_linearity_leniency", 0.0)),
@@ -700,6 +716,11 @@ def main() -> int:
                     "generation_time_sec": float(result.generation_time_sec),
                     "eval_budget": int(args.eval_budget),
                     "evaluations_used": int(result.evaluations_used),
+                    "qd_internal_coverage": float(result.qd_internal_coverage),
+                    "qd_internal_qd_score": float(result.qd_internal_qd_score),
+                    "qd_internal_mean_fitness": float(result.qd_internal_mean_fitness),
+                    "qd_internal_feature_diversity": float(result.qd_internal_feature_diversity),
+                    "qd_internal_num_elites": float(result.qd_internal_num_elites),
                     "fitness": float(result.fitness),
                     "feasible_search": float(1.0 if result.feasible else 0.0),
                     "feasible_operational": float(
@@ -892,6 +913,11 @@ def main() -> int:
             "map_elites_mean_fitness",
             "map_elites_feature_diversity",
             "map_elites_num_elites",
+            "map_elites_internal_coverage",
+            "map_elites_internal_qd_score",
+            "map_elites_internal_mean_fitness",
+            "map_elites_internal_feature_diversity",
+            "map_elites_internal_num_elites",
         ],
     )
 

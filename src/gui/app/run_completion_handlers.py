@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
+import logging
+from pathlib import Path
+
 from src.gui.components.constants import GUI_ALGORITHM_NAMES
+from src.gui.gameplay.import_export_controls import import_txt_level
+
+
+logger = logging.getLogger(__name__)
 
 
 def handle_parallel_search_completion(gui, logger, path_preview_dialog_cls):
@@ -346,6 +353,31 @@ def handle_solver_process_completion(
         gui._clear_solver_state(reason="solver completed/failed")
 
 
+def _apply_ai_completion_metadata(gui, res):
+    if res.get("clear_mixed_constraints"):
+        gui.ai_constraint_boss_norm = None
+        gui.ai_constraint_lock_norm = None
+        gui.ai_constraint_key_norm = None
+    if res.get("mission_graph_draft") is not None:
+        gui.ai_mission_graph_draft = res["mission_graph_draft"]
+
+
+def _apply_ai_grid_directly(gui, res):
+    gui.maps.append(res["grid"])
+    gui.map_names.append(res.get("name", "AI Generated"))
+    gui.current_map_idx = len(gui.maps) - 1
+    gui._load_current_map()
+    gui._center_view()
+    if getattr(gui, "effects", None):
+        try:
+            gui.effects.clear()
+        except (AttributeError, RuntimeError, ValueError, TypeError):
+            pass
+    gui.step_count = 0
+    gui.auto_path = []
+    gui.auto_mode = False
+
+
 def handle_ai_generation_completion(gui):
     """Apply finished AI-generation worker result on the main thread."""
     if not getattr(gui, "ai_gen_done", False):
@@ -354,27 +386,27 @@ def handle_ai_generation_completion(gui):
     res = getattr(gui, "ai_gen_result", None)
     gui.ai_gen_done = False
     gui.ai_gen_result = None
+    gui.ai_gen_thread = None
     if res and res.get("success") and res.get("grid") is not None:
-        gui.maps.append(res["grid"])
-        gui.map_names.append(res.get("name", "AI Generated"))
-        gui.current_map_idx = len(gui.maps) - 1
-        gui._load_current_map()
-        gui._center_view()
-        if getattr(gui, "effects", None):
+        imported_from_txt = False
+        generated_txt_path = res.get("generated_txt_path")
+        if generated_txt_path:
             try:
-                gui.effects.clear()
-            except (AttributeError, RuntimeError, ValueError, TypeError):
-                pass
-        gui.step_count = 0
-        gui.auto_path = []
-        gui.auto_mode = False
-        if res.get("clear_mixed_constraints"):
-            gui.ai_constraint_boss_norm = None
-            gui.ai_constraint_lock_norm = None
-            gui.ai_constraint_key_norm = None
-        if res.get("mission_graph_draft") is not None:
-            gui.ai_mission_graph_draft = res["mission_graph_draft"]
-        gui._set_message(res.get("message", "AI generation complete"), 3.0)
+                imported_from_txt = import_txt_level(gui, str(generated_txt_path), logger_obj=logger)
+                if imported_from_txt and getattr(gui, "map_names", None):
+                    gui.map_names[gui.current_map_idx] = res.get("name", Path(generated_txt_path).stem)
+            except (AttributeError, RuntimeError, ValueError, TypeError, OSError) as exc:
+                logger.warning("Failed to auto-import generated TXT %s: %s", generated_txt_path, exc)
+                imported_from_txt = False
+
+        if not imported_from_txt:
+            _apply_ai_grid_directly(gui, res)
+
+        _apply_ai_completion_metadata(gui, res)
+        message = res.get("message", "AI generation complete")
+        if imported_from_txt:
+            message = f"{message}; loaded {Path(generated_txt_path).name}"
+        gui._set_message(message, 3.0)
     else:
         message = "AI generation failed"
         if res and res.get("message"):

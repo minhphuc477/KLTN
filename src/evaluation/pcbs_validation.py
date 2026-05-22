@@ -283,11 +283,13 @@ def evaluate_astar_vs_pcbs(
     if not pcbs_success:
         pcbs_status = "budget_exhausted" if int(pcbs_states) >= int(timeout_pcbs) else "failed"
 
+    pcbs_trajectory_length = int(len(pcbs_path))
+    pcbs_solution_length = pcbs_trajectory_length if bool(pcbs_success) else 0
     total_revisits = max(0, int(pcbs_metrics.total_steps) - int(pcbs_metrics.unique_tiles_visited))
     puzzle_stall_steps = _count_puzzle_stall_steps(grid, pcbs_path, goal)
     confusion_ratio = confusion_ratio_vs_oracle(
         int(oracle["path_length"]),
-        int(len(pcbs_path)),
+        pcbs_solution_length,
         oracle_status=str(oracle["status"]),
         candidate_success=bool(pcbs_success),
     )
@@ -301,10 +303,13 @@ def evaluate_astar_vs_pcbs(
         "pcbs": {
             "persona": str(persona),
             "success": bool(pcbs_success),
-            "path_length": int(len(pcbs_path)),
+            "path_length": int(pcbs_solution_length),
+            "trajectory_length": int(pcbs_trajectory_length),
             "states_explored": int(pcbs_states),
-            "path_efficiency_ratio": path_efficiency_ratio(int(len(pcbs_path)), manhattan),
+            "path_efficiency_ratio": path_efficiency_ratio(pcbs_solution_length, manhattan),
             "navigation_entropy": float(pcbs_metrics.navigation_entropy),
+            "room_entropy": float(pcbs_metrics.room_entropy),
+            "unique_rooms_visited": int(getattr(pcbs_metrics, "unique_rooms_visited", 0) or 0),
             "total_revisits": int(total_revisits),
             "aha_latency": int(pcbs_metrics.aha_latency),
             "goal_sighting_latency": int(pcbs_metrics.aha_latency),

@@ -5855,14 +5855,28 @@ class NeuralSymbolicDungeonPipeline:
             dims = [int(cond.dim()) for cond in batch_conditions]
             raise ValueError(f"Inconsistent condition tensor ranks inside batch: {dims}")
         condition_batch = torch.cat(batch_conditions, dim=0)
+        first_room_graph_context = per_room_inputs[0]['graph_context']
 
         graph_ctx_for_guidance = {
+            'graph_scope': 'dungeon',
             'node_features': graph_data.get('node_features'),
             'edge_index': graph_data.get('edge_index'),
             'edge_features': graph_data.get('edge_features'),
             'tpe': graph_data.get('tpe'),
             'node_positions': graph_data.get('node_positions'),
             'node_mask': graph_data.get('node_mask'),
+            'start_node_id': graph_data.get(
+                'start_node_id',
+                first_room_graph_context.get('start_node_id', 0),
+            ),
+            'target_idx': graph_data.get(
+                'target_idx',
+                first_room_graph_context.get('target_idx', -1),
+            ),
+            'key_lock_pairs': graph_data.get(
+                'key_lock_pairs',
+                first_room_graph_context.get('key_lock_pairs', []),
+            ),
             'boundary_constraints': torch.cat(
                 [inp['boundary_constraints'].to(self.device, dtype=torch.float32) for inp in per_room_inputs],
                 dim=0,
@@ -5871,6 +5885,21 @@ class NeuralSymbolicDungeonPipeline:
                 [inp['graph_context']['room_topology_map'] for inp in per_room_inputs]
             ),
         }
+
+        # Map each sampled room latent back to its dungeon graph node.
+        node_to_idx = graph_data.get('node_to_idx')
+        if isinstance(node_to_idx, dict) and room_ids:
+            current_node_idx_batch = []
+            for room_id in room_ids:
+                idx = node_to_idx.get(room_id, -1)
+                current_node_idx_batch.append(int(idx))
+            if all(idx >= 0 for idx in current_node_idx_batch):
+                graph_ctx_for_guidance['current_node_idx'] = torch.tensor(
+                    current_node_idx_batch,
+                    device=self.device,
+                    dtype=torch.long,
+                )
+
         if self.use_current_node_distance_features:
             current_node_distance_batch: List[torch.Tensor] = []
             for inp in per_room_inputs:
@@ -7689,7 +7718,13 @@ class NeuralSymbolicDungeonPipeline:
 
         def _first_matching_node(*keys: str) -> Optional[Any]:
             for node_id, attrs in mission_graph_physical.nodes(data=True):
-                if any(coerce_bool(dict(attrs).get(key)) for key in keys):
+                attrs_dict = dict(attrs)
+                role_flags = self._room_role_flags(attrs_dict)
+                if any(coerce_bool(attrs_dict.get(key)) for key in keys):
+                    return node_id
+                if {"is_start", "is_entry"} & set(keys) and role_flags.get("is_start", False):
+                    return node_id
+                if {"has_triforce", "is_triforce", "is_goal"} & set(keys) and role_flags.get("has_goal", False):
                     return node_id
             return None
 
@@ -8190,6 +8225,8 @@ class NeuralSymbolicDungeonPipeline:
                 'node_mask': empty_mask,
                 'node_order': [],
                 'node_to_idx': {},
+                'start_node_id': -1,
+                'target_idx': -1,
             }
 
         # Deterministic order is required so room_id -> node_idx stays stable.
@@ -8250,6 +8287,25 @@ class NeuralSymbolicDungeonPipeline:
         else:
             tpe = torch.zeros(num_nodes, 8, device=self.device, dtype=torch.float32)
 
+        start_node = get_physical_start_node(graph)
+        if start_node is None or start_node not in node_to_idx:
+            start_node = next(
+                (
+                    node_id
+                    for node_id in node_order
+                    if self._room_role_flags(dict(graph.nodes[node_id])).get("is_start", False)
+                ),
+                None,
+            )
+        target_node = next(
+            (
+                node_id
+                for node_id in node_order
+                if self._room_role_flags(dict(graph.nodes[node_id])).get("has_goal", False)
+            ),
+            None,
+        )
+
         return {
             'node_features': node_features,
             'edge_index': edge_index,
@@ -8259,6 +8315,8 @@ class NeuralSymbolicDungeonPipeline:
             'node_mask': torch.ones(num_nodes, device=self.device, dtype=torch.float32),
             'node_order': node_order,
             'node_to_idx': node_to_idx,
+            'start_node_id': int(node_to_idx.get(start_node, 0)) if start_node is not None else 0,
+            'target_idx': int(node_to_idx.get(target_node, -1)) if target_node is not None else -1,
         }
     
     def _get_neighbor_latents(
@@ -8517,19 +8575,20 @@ class NeuralSymbolicDungeonPipeline:
         """Extract high-level room-role booleans from graph node metadata."""
         tokens = self._parse_label_tokens(attrs.get("label"))
         raw_type = str(attrs.get("type", attrs.get("node_type", attrs.get("room_type", ""))) or "").strip().lower()
+        role_tokens = set(tokens) | set(self._parse_label_tokens(raw_type))
         difficulty_rating = str(attrs.get("difficulty_rating", "") or "").strip().upper()
 
         def _hint(name: str, *aliases: str) -> bool:
             return self._coerce_bool(attrs.get(name)) or any(self._coerce_bool(attrs.get(alias)) for alias in aliases)
 
         return {
-            "is_start": _hint("is_start", "is_entry") or "start" in tokens,
-            "has_enemy": _hint("has_enemy") or "e" in tokens or "enemy" in tokens,
-            "has_key": _hint("has_key") or "k" in tokens or "key" in tokens,
-            "has_item": _hint("has_item", "has_macro_item", "has_minor_item") or "i" in tokens or "item" in tokens or "treasure" in tokens,
-            "has_goal": _hint("has_triforce", "is_triforce", "is_goal") or "t" in tokens or "goal" in tokens or "triforce" in tokens,
-            "has_boss": _hint("has_boss", "is_boss") or "b" in tokens or "boss" in tokens,
-            "has_puzzle": _hint("has_puzzle") or "p" in tokens or "puzzle" in tokens or raw_type in {"switch", "puzzle", "tutorial_puzzle", "combat_puzzle", "complex_puzzle"} or "puzzle" in raw_type,
+            "is_start": _hint("is_start", "is_entry") or raw_type in {"start", "entry"} or "start" in role_tokens or "entry" in role_tokens,
+            "has_enemy": _hint("has_enemy") or "e" in role_tokens or "enemy" in role_tokens,
+            "has_key": _hint("has_key") or "k" in role_tokens or "key" in role_tokens,
+            "has_item": _hint("has_item", "has_macro_item", "has_minor_item") or "i" in role_tokens or "item" in role_tokens or "treasure" in role_tokens,
+            "has_goal": _hint("has_triforce", "is_triforce", "is_goal") or raw_type in {"goal", "triforce"} or "t" in role_tokens or "goal" in role_tokens or "triforce" in role_tokens,
+            "has_boss": _hint("has_boss", "is_boss") or "b" in role_tokens or "boss" in role_tokens,
+            "has_puzzle": _hint("has_puzzle") or "p" in role_tokens or "puzzle" in role_tokens or raw_type in {"switch", "puzzle", "tutorial_puzzle", "combat_puzzle", "complex_puzzle"} or "puzzle" in raw_type,
             "is_tutorial_puzzle": bool(_hint("is_tutorial") or raw_type == "tutorial_puzzle" or difficulty_rating == "SAFE"),
             "is_combat_puzzle": bool(raw_type == "combat_puzzle"),
             "is_complex_puzzle": bool(raw_type == "complex_puzzle" or difficulty_rating in {"HARD", "EXTREME"}),
@@ -8856,7 +8915,7 @@ class NeuralSymbolicDungeonPipeline:
                 (
                     node_id
                     for node_id, attrs in mission_graph.nodes(data=True)
-                    if coerce_bool(dict(attrs).get("is_start")) or coerce_bool(dict(attrs).get("is_entry"))
+                    if self._room_role_flags(dict(attrs)).get("is_start", False)
                 ),
                 None,
             )
@@ -8864,11 +8923,7 @@ class NeuralSymbolicDungeonPipeline:
             (
                 node_id
                 for node_id, attrs in mission_graph.nodes(data=True)
-                if (
-                    coerce_bool(dict(attrs).get("has_triforce"))
-                    or coerce_bool(dict(attrs).get("is_triforce"))
-                    or coerce_bool(dict(attrs).get("is_goal"))
-                )
+                if self._room_role_flags(dict(attrs)).get("has_goal", False)
             ),
             None,
         )

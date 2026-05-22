@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from src.core.definitions import ROOM_HEIGHT, ROOM_WIDTH, SEMANTIC_PALETTE
+
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +37,127 @@ def default_topology_semantics() -> dict:
     }
 
 
+def _as_grid(current: Any):
+    grid = getattr(current, "global_grid", current)
+    if grid is None:
+        return None
+    shape = getattr(grid, "shape", None)
+    if shape is not None and len(shape) >= 2:
+        return grid
+    return None
+
+
+def _grid_tile(grid: Any, row: int, col: int) -> int:
+    try:
+        return int(grid[row, col])
+    except TypeError:
+        return int(grid[row][col])
+
+
+def _infer_topology_from_grid(current: Any) -> tuple[dict, list]:
+    """Infer room nodes/edges for imported stitched grids without graph metadata."""
+    grid = _as_grid(current)
+    if grid is None:
+        return {}, []
+
+    height, width = int(grid.shape[0]), int(grid.shape[1])
+    void_id = int(SEMANTIC_PALETTE["VOID"])
+    wall_id = int(SEMANTIC_PALETTE["WALL"])
+    walkable_ids = {
+        int(SEMANTIC_PALETTE["FLOOR"]),
+        int(SEMANTIC_PALETTE["DOOR_OPEN"]),
+        int(SEMANTIC_PALETTE["DOOR_SOFT"]),
+        int(SEMANTIC_PALETTE["DOOR_LOCKED"]),
+        int(SEMANTIC_PALETTE["DOOR_BOMB"]),
+        int(SEMANTIC_PALETTE["DOOR_BOSS"]),
+        int(SEMANTIC_PALETTE["DOOR_PUZZLE"]),
+        int(SEMANTIC_PALETTE["START"]),
+        int(SEMANTIC_PALETTE["TRIFORCE"]),
+        int(SEMANTIC_PALETTE["KEY_SMALL"]),
+        int(SEMANTIC_PALETTE["KEY_BOSS"]),
+        int(SEMANTIC_PALETTE["KEY_ITEM"]),
+        int(SEMANTIC_PALETTE["ITEM_MINOR"]),
+        int(SEMANTIC_PALETTE["ELEMENT_FLOOR"]),
+        int(SEMANTIC_PALETTE["STAIR"]),
+        int(SEMANTIC_PALETTE["ENEMY"]),
+        int(SEMANTIC_PALETTE["BOSS"]),
+        int(SEMANTIC_PALETTE["PUZZLE"]),
+    }
+    door_type_by_id = {
+        int(SEMANTIC_PALETTE["DOOR_LOCKED"]): "key_locked",
+        int(SEMANTIC_PALETTE["DOOR_BOMB"]): "bombable",
+        int(SEMANTIC_PALETTE["DOOR_BOSS"]): "boss_locked",
+        int(SEMANTIC_PALETTE["DOOR_PUZZLE"]): "puzzle_locked",
+        int(SEMANTIC_PALETTE["DOOR_SOFT"]): "soft_locked",
+        int(SEMANTIC_PALETTE["STAIR"]): "stair",
+    }
+
+    nodes = {}
+    room_rows = (height + ROOM_HEIGHT - 1) // ROOM_HEIGHT
+    room_cols = (width + ROOM_WIDTH - 1) // ROOM_WIDTH
+    for room_row in range(room_rows):
+        for room_col in range(room_cols):
+            row0 = room_row * ROOM_HEIGHT
+            col0 = room_col * ROOM_WIDTH
+            row1 = min(height, row0 + ROOM_HEIGHT)
+            col1 = min(width, col0 + ROOM_WIDTH)
+            non_empty = 0
+            passable = 0
+            for row in range(row0, row1):
+                for col in range(col0, col1):
+                    tile = _grid_tile(grid, row, col)
+                    if tile not in {void_id, wall_id}:
+                        non_empty += 1
+                    if tile in walkable_ids:
+                        passable += 1
+            if non_empty > 0 or passable > 0:
+                nodes[(room_row, room_col)] = {
+                    "center": ((row0 + row1 - 1) / 2.0, (col0 + col1 - 1) / 2.0),
+                    "bounds": (row0, col0, row1, col1),
+                }
+
+    edges = []
+    seen = set()
+    for room_pos, meta in nodes.items():
+        room_row, room_col = room_pos
+        for neighbor in ((room_row, room_col + 1), (room_row + 1, room_col)):
+            if neighbor not in nodes:
+                continue
+            edge_key = tuple(sorted((room_pos, neighbor)))
+            if edge_key in seen:
+                continue
+            seen.add(edge_key)
+
+            r0, c0, r1, c1 = meta["bounds"]
+            nr0, nc0, nr1, nc1 = nodes[neighbor]["bounds"]
+            edge_type = "open"
+            connected = False
+            if neighbor[0] == room_row:
+                left_col = c1 - 1
+                right_col = nc0
+                for row in range(max(r0, nr0), min(r1, nr1)):
+                    lt = _grid_tile(grid, row, left_col)
+                    rt = _grid_tile(grid, row, right_col)
+                    if lt in walkable_ids or rt in walkable_ids:
+                        connected = True
+                        edge_type = door_type_by_id.get(lt, door_type_by_id.get(rt, "open"))
+                        break
+            else:
+                top_row = r1 - 1
+                bottom_row = nr0
+                for col in range(max(c0, nc0), min(c1, nc1)):
+                    tt = _grid_tile(grid, top_row, col)
+                    bt = _grid_tile(grid, bottom_row, col)
+                    if tt in walkable_ids or bt in walkable_ids:
+                        connected = True
+                        edge_type = door_type_by_id.get(tt, door_type_by_id.get(bt, "open"))
+                        break
+            if connected:
+                edges.append((room_pos, neighbor, {"edge_type": edge_type, "inferred": True}))
+
+    return nodes, edges
+
+
 def render_topology_overlay(
     *,
     surface: Any,
@@ -46,8 +169,6 @@ def render_topology_overlay(
 ) -> None:
     """Draw topology nodes/edges for the current stitched dungeon map."""
     graph = getattr(current, "graph", None)
-    if not graph:
-        return
 
     room_positions = getattr(current, "room_positions", {})
     room_to_node = getattr(current, "room_to_node", {})
@@ -60,36 +181,48 @@ def render_topology_overlay(
 
     node_pos = {}
     unmatched_nodes = 0
-    for node in graph.nodes():
-        room_pos = node_to_room.get(node)
-        if room_pos is None:
-            unmatched_nodes += 1
-            continue
-        rp = room_positions.get(room_pos)
-        if not rp:
-            unmatched_nodes += 1
-            continue
-        ry, rx = rp
-        cx = rx * tile_size + tile_size * 0.5 - view_offset_x
-        cy = ry * tile_size + tile_size * 0.5 - view_offset_y
-        node_pos[node] = (cx, cy)
+    inferred_edges = []
+    if graph:
+        for node in graph.nodes():
+            room_pos = node_to_room.get(node)
+            if room_pos is None:
+                unmatched_nodes += 1
+                continue
+            rp = room_positions.get(room_pos)
+            if not rp:
+                unmatched_nodes += 1
+                continue
+            ry, rx = rp
+            cx = (rx + ROOM_WIDTH / 2.0) * tile_size - view_offset_x
+            cy = (ry + ROOM_HEIGHT / 2.0) * tile_size - view_offset_y
+            node_pos[node] = (cx, cy)
+    else:
+        inferred_nodes, inferred_edges = _infer_topology_from_grid(current)
+        for node, meta in inferred_nodes.items():
+            center_row, center_col = meta["center"]
+            cx = (center_col + 0.5) * tile_size - view_offset_x
+            cy = (center_row + 0.5) * tile_size - view_offset_y
+            node_pos[node] = (cx, cy)
 
     edge_colors = {
         "open": (100, 255, 100, 180),
         "key_locked": (255, 220, 100, 200),
         "bombable": (255, 150, 50, 200),
+        "boss_locked": (255, 90, 90, 210),
+        "puzzle_locked": (190, 100, 255, 200),
         "soft_locked": (180, 100, 255, 180),
         "stair": (100, 200, 255, 200),
     }
     default_edge_color = (150, 150, 200, 150)
 
     target_surface = overlay if overlay else surface
-    for u, v, data in graph.edges(data=True):
+    edge_iter = graph.edges(data=True) if graph else inferred_edges
+    for u, v, data in edge_iter:
         if u not in node_pos or v not in node_pos:
             continue
         x1, y1 = node_pos[u]
         x2, y2 = node_pos[v]
-        edge_type = data.get("type", "open") if data else "open"
+        edge_type = data.get("edge_type", data.get("type", "open")) if data else "open"
         color = edge_colors.get(edge_type, default_edge_color)
         try:
             pygame.draw.line(target_surface, color[:3], (int(x1), int(y1)), (int(x2), int(y2)), 3)
@@ -106,7 +239,8 @@ def render_topology_overlay(
         pygame.draw.circle(target_surface, (80, 120, 200), (int(cx), int(cy)), node_radius)
         pygame.draw.circle(target_surface, (150, 200, 255), (int(cx), int(cy)), node_radius, 2)
         try:
-            label = font.render(str(node), True, (255, 255, 255))
+            label_text = f"{node[0]},{node[1]}" if isinstance(node, tuple) else str(node)
+            label = font.render(label_text, True, (255, 255, 255))
             lx = int(cx - label.get_width() / 2)
             ly = int(cy - label.get_height() / 2)
             target_surface.blit(label, (lx, ly))
@@ -160,7 +294,14 @@ def render_solver_comparison_overlay(
     for row in results:
         if "CBS" in row["name"] and "confusion" in row:
             line1 = f"{row['name'][:15]:15} {str(row.get('success', False))[:5]:5} Len:{row.get('path_len', 0):<4}"
-            line2 = f"  Confusion:{row.get('confusion', 0):.2f} Load:{row.get('cog_load', 0):.2f} {int(row.get('time_ms', 0))}ms"
+            raw_len = int(row.get("trajectory_len", 0) or 0)
+            if raw_len and raw_len != int(row.get("path_len", 0) or 0):
+                line1 += f" Raw:{raw_len:<4}"
+            line2 = (
+                f"  Confusion:{row.get('confusion', 0):.2f} "
+                f"Rooms:{int(row.get('unique_rooms', 0) or 0)} "
+                f"Load:{row.get('cog_load', 0):.2f} {int(row.get('time_ms', 0))}ms"
+            )
             color = (200, 255, 200) if row.get("success") else (255, 150, 150)
             surface.blit(small.render(line1, True, color), (box_rect.x + 6, y))
             surface.blit(small.render(line2, True, (180, 180, 255)), (box_rect.x + 6, y + 11))

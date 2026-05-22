@@ -1,4 +1,0 @@
-This provisional report is superseded by:
-results\logicnet_vs_no_logic_explicit_ckpt_quick_20260508\corrected_logicnet_vs_no_logic_report.md
-
-Reason: the earlier comparison reused separate result folders without checkpoint provenance.

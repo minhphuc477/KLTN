@@ -1,4 +1,4 @@
-﻿"""Worker orchestration for AI dungeon generation."""
+"""Worker orchestration for AI dungeon generation."""
 
 import copy
 import os
@@ -13,7 +13,128 @@ from src.gui.ai.generation_pipeline import (
     load_canonical_generation_pipeline,
     mission_graph_to_gnn_input,
     resolve_checkpoint_path,
+    save_generated_dungeon_txt,
 )
+
+
+_PIPELINE_CACHE_ENV_KEYS = (
+    "KLTN_GUI_FAST_GENERATION",
+    "KLTN_GUI_USE_FAST_SAMPLING",
+    "KLTN_GUI_DIFFUSION_STEPS",
+    "KLTN_GUI_FAST_SAMPLER_CHECKPOINT",
+    "KLTN_FAST_SAMPLER_CHECKPOINT",
+)
+
+
+def _resolve_generation_device(torch_module, logger):
+    device_name = str(os.environ.get("KLTN_AI_DEVICE", "auto") or "auto").strip().lower()
+    if device_name in {"", "auto"}:
+        return torch_module.device("cuda" if torch_module.cuda.is_available() else "cpu")
+    try:
+        return torch_module.device(device_name)
+    except (RuntimeError, ValueError, TypeError) as exc:
+        logger.warning("Invalid KLTN_AI_DEVICE=%r; falling back to CPU: %s", device_name, exc)
+        return torch_module.device("cpu")
+
+
+def _pipeline_cache_key(checkpoint_path, device, strict_checkpoint_mode, *, use_fast_sampler=False):
+    speed_signature = tuple(os.environ.get(name, "") for name in _PIPELINE_CACHE_ENV_KEYS)
+    return (
+        str(checkpoint_path),
+        str(device),
+        bool(strict_checkpoint_mode),
+        speed_signature,
+        bool(use_fast_sampler),
+    )
+
+
+def _bounded_optional_int(value, *, min_value, max_value, default=None):
+    if value is None or str(value).strip() == "":
+        return default
+    try:
+        return max(int(min_value), min(int(max_value), int(value)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _effective_generation_config(gui):
+    """Return sanitized AI generation settings from GUI state."""
+    config = getattr(gui, "ai_generation_config", None)
+    config = dict(config) if isinstance(config, dict) else {}
+
+    num_rooms = _bounded_optional_int(
+        config.get("num_rooms", getattr(gui, "ai_num_rooms", None)),
+        min_value=5,
+        max_value=24,
+        default=None,
+    )
+    max_keys = _bounded_optional_int(
+        config.get("max_keys", getattr(gui, "ai_max_keys", 3)),
+        min_value=0,
+        max_value=8,
+        default=3,
+    )
+    diffusion_steps = _bounded_optional_int(
+        config.get("diffusion_steps", getattr(gui, "ai_diffusion_steps", 50)),
+        min_value=8,
+        max_value=100,
+        default=50,
+    )
+    difficulty = str(config.get("difficulty", getattr(gui, "ai_difficulty", "HARD")) or "HARD").upper()
+    seed = config.get("seed", getattr(gui, "ai_seed", None))
+    use_fast_sampler = bool(config.get("use_fast_sampler", getattr(gui, "ai_use_fast_sampler", False)))
+    return {
+        "num_rooms": num_rooms,
+        "max_keys": max_keys,
+        "difficulty": difficulty,
+        "seed": seed,
+        "diffusion_steps": diffusion_steps,
+        "use_fast_sampler": use_fast_sampler,
+    }
+
+
+def _set_pipeline_eval(pipeline) -> None:
+    for attr_name in ("vqvae", "diffusion", "condition_encoder", "logic_net"):
+        model = getattr(pipeline, attr_name, None)
+        if hasattr(model, "eval"):
+            model.eval()
+
+
+def load_or_reuse_gui_generation_pipeline(
+    *,
+    gui,
+    checkpoint_path,
+    device,
+    logger,
+    strict_checkpoint_mode,
+):
+    """Reuse an already-loaded GUI pipeline when the checkpoint/options match."""
+    generation_config = _effective_generation_config(gui)
+    use_fast_sampler = bool(generation_config.get("use_fast_sampler", False))
+    cache_key = _pipeline_cache_key(
+        checkpoint_path,
+        device,
+        strict_checkpoint_mode,
+        use_fast_sampler=use_fast_sampler,
+    )
+    cache = getattr(gui, "_ai_generation_pipeline_cache", None)
+    if isinstance(cache, dict) and cache.get("key") == cache_key and cache.get("pipeline") is not None:
+        logger.info("AI Generation: reusing cached model pipeline for %s", checkpoint_path)
+        return cache["pipeline"]
+
+    pipeline = load_canonical_generation_pipeline(
+        checkpoint_path=checkpoint_path,
+        device=device,
+        logger=logger,
+        strict_checkpoint_mode=strict_checkpoint_mode,
+        gui_fast_mode=use_fast_sampler,
+    )
+    _set_pipeline_eval(pipeline)
+    try:
+        gui._ai_generation_pipeline_cache = {"key": cache_key, "pipeline": pipeline}
+    except (AttributeError, RuntimeError, ValueError, TypeError):
+        pass
+    return pipeline
 
 
 def run_ai_generation_worker(gui, logger):
@@ -65,19 +186,41 @@ def run_ai_generation_worker(gui, logger):
 
         gui._set_message("Generating mission graph...")
         logger.info("AI Generation: Loading checkpoint from %s", checkpoint_path)
-        device = torch.device("cpu")
+        device = _resolve_generation_device(torch, logger)
+        logger.info("AI Generation: using device %s", device)
 
         if getattr(gui, "ai_mission_graph_editor_enabled", False):
             ensure_mission_graph_editor_draft(gui, _random, logger=logger)
 
         draft_graph = getattr(gui, "ai_mission_graph_draft", None)
-        if draft_graph is not None:
+        demo_comprehensive = str(os.environ.get("KLTN_DEMO_COMPREHENSIVE", "")).strip() == "1"
+        generation_config = _effective_generation_config(gui)
+        config_seed = generation_config.get("seed")
+        if config_seed is not None:
+            try:
+                configured_seed = int(config_seed)
+            except (TypeError, ValueError):
+                logger.warning("Ignoring invalid AI config seed=%r", config_seed)
+
+        if demo_comprehensive:
+            from src.gui.ai.generation_pipeline import generate_comprehensive_demo_graph
+            mission_data = generate_comprehensive_demo_graph(seed=configured_seed)
+            mission_graph = mission_data["mission_graph"]
+            seed = mission_data["seed"]
+            gui._set_message("Generating comprehensive demo graph...")
+        elif draft_graph is not None:
             mission_graph = copy.deepcopy(draft_graph)
             seed = int(getattr(gui, "ai_mission_graph_seed", configured_seed or 0) or 0)
             mission_data = mission_graph_to_gnn_input(mission_graph)
             mission_data["seed"] = seed
         else:
-            mission_data = generate_mission_graph(_random, seed=configured_seed)
+            mission_data = generate_mission_graph(
+                _random,
+                seed=configured_seed,
+                num_rooms=generation_config.get("num_rooms"),
+                difficulty=generation_config.get("difficulty", "HARD"),
+                max_keys=generation_config.get("max_keys", 3),
+            )
             mission_graph = mission_data["mission_graph"]
             seed = mission_data["seed"]
 
@@ -111,7 +254,8 @@ def run_ai_generation_worker(gui, logger):
             )
 
         gui._set_message("Loading AI model...")
-        pipeline = load_canonical_generation_pipeline(
+        pipeline = load_or_reuse_gui_generation_pipeline(
+            gui=gui,
             checkpoint_path=checkpoint_path,
             device=device,
             logger=logger,
@@ -119,6 +263,17 @@ def run_ai_generation_worker(gui, logger):
         )
 
         gui._set_message("Generating rooms with canonical pipeline...")
+        try:
+            pipeline.default_use_fast_sampling = bool(generation_config.get("use_fast_sampler", False))
+            pipeline.default_num_diffusion_steps = int(generation_config.get("diffusion_steps") or 50)
+            if not bool(generation_config.get("use_fast_sampler", False)):
+                pipeline.default_latent_sampler = "diffusion"
+                logger.info(
+                    "AI Generation: using canonical diffusion sampler (%d steps, fast sampler disabled)",
+                    int(pipeline.default_num_diffusion_steps),
+                )
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+            logger.warning("Failed to apply GUI generation sampler config: %s", exc)
         dungeon_result = generate_dungeon_with_pipeline(
             pipeline=pipeline,
             mission_graph=mission_graph,
@@ -146,6 +301,21 @@ def run_ai_generation_worker(gui, logger):
             num_edges=num_edges,
             np_module=np,
         )
+        generated_txt_info = None
+        try:
+            generated_txt_info = save_generated_dungeon_txt(
+                tile_grid=tile_grid,
+                seed=seed,
+                num_nodes=num_nodes,
+                num_edges=num_edges,
+                checkpoint_path=checkpoint_path,
+                export_dir=getattr(gui, "ai_generated_level_export_dir", None),
+                np_module=np,
+            )
+            logger.info("AI dungeon TXT exported to %s", generated_txt_info["txt_path"])
+        except (OSError, ValueError, TypeError) as exc:
+            logger.warning("Failed to export generated AI dungeon TXT: %s", exc)
+
         logger.info(
             "AI dungeon complete: seed=%d, graph=%dN/%dE, grid=%dx%d, unique_tiles=%d",
             seed,
@@ -181,6 +351,21 @@ def run_ai_generation_worker(gui, logger):
             "unique_tiles": applied["unique_tiles"],
             "clear_mixed_constraints": clear_mixed_constraints,
             "mission_graph_draft": copy.deepcopy(mission_graph),
+            "generated_txt_path": (
+                None if generated_txt_info is None else str(generated_txt_info["txt_path"])
+            ),
+            "generated_latest_txt_path": (
+                None if generated_txt_info is None else str(generated_txt_info["latest_txt_path"])
+            ),
+            "generated_png_path": (
+                None if generated_txt_info is None else str(generated_txt_info.get("png_path"))
+            ),
+            "generated_latest_png_path": (
+                None if generated_txt_info is None else str(generated_txt_info.get("latest_png_path"))
+            ),
+            "generated_metadata_path": (
+                None if generated_txt_info is None else str(generated_txt_info["metadata_path"])
+            ),
         }
         gui.ai_gen_done = True
     except (AttributeError, RuntimeError, ValueError, TypeError, ImportError, OSError) as exc:

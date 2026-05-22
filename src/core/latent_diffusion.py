@@ -30,6 +30,7 @@ Architecture:
 
 import math
 import logging
+import os
 from typing import Any, Dict, List, Tuple, Optional
 
 import torch
@@ -1062,7 +1063,7 @@ class GradientGuidance(nn.Module):
         clamp_magnitude: float = 1.0,
         relative_norm_cap: float = 0.25,
         schedule_enabled: bool = True,
-        active_fraction: float = 0.30,
+        active_fraction: float = 1.0,
         decay_power: float = 1.0,
         max_graph_nodes: int = 512,
         max_key_lock_pairs: int = 2048,
@@ -1081,6 +1082,9 @@ class GradientGuidance(nn.Module):
         self.max_guidance_elements = int(max(1, int(max_guidance_elements)))
         self._missing_logic_net_warning_emitted = False
         self._warning_counts: Dict[str, int] = {}
+        self.failure_count = 0
+        self.last_failure_type: Optional[str] = None
+        self.last_failure_message: Optional[str] = None
 
     def _warn_rate_limited(self, key: str, message: str, *args: Any) -> None:
         """Rate-limit repeated guidance warnings to keep logs readable."""
@@ -1369,7 +1373,7 @@ class GradientGuidance(nn.Module):
         return loss
 
     def _scheduled_scale(self, *, t: Optional[int], num_timesteps: Optional[int]) -> float:
-        """Scale guidance by reverse-step progress to reduce late-step compute pressure."""
+        """Scale LogicNet guidance toward the cleaner end of the reverse process."""
         if (not self.schedule_enabled) or t is None or num_timesteps is None or num_timesteps <= 1:
             return float(self.guidance_scale)
 
@@ -1377,9 +1381,10 @@ class GradientGuidance(nn.Module):
         # Reverse progress: 0 at first denoise step, 1 at final step.
         reverse_progress = float(total - int(t)) / float(total)
         active = float(self.active_fraction)
-        if reverse_progress >= active:
+        active_start = 1.0 - active
+        if reverse_progress < active_start:
             return 0.0
-        phase = 1.0 - (reverse_progress / max(active, 1e-8))
+        phase = (reverse_progress - active_start) / max(active, 1e-8)
         return float(self.guidance_scale) * float(max(0.0, phase) ** self.decay_power)
     
     def compute_guidance(
@@ -1400,15 +1405,26 @@ class GradientGuidance(nn.Module):
         Returns:
             Gradient tensor [B, C, H, W]
         """
+        # DEBUG LOGGING
+        _debug_guidance = int(os.environ.get('KLTN_DEBUG_GUIDANCE', 0)) > 0
+        if _debug_guidance:
+            logger.info(f"[GUIDANCE] compute_guidance called: logic_net={self.logic_net is not None}, guidance_scale={self.guidance_scale}, t={t}")
+
         if self.logic_net is None:
             if (not self._missing_logic_net_warning_emitted) and float(self.guidance_scale) > 0.0:
                 logger.warning(
                     "Gradient guidance requested but no LogicNet is configured; skipping guidance."
                 )
                 self._missing_logic_net_warning_emitted = True
+            if _debug_guidance:
+                logger.info("[GUIDANCE] LogicNet is None, returning zero guidance")
             return torch.zeros_like(x_t)
         scaled_gamma = self._scheduled_scale(t=t, num_timesteps=num_timesteps)
+        if _debug_guidance:
+            logger.info(f"[GUIDANCE] scaled_gamma={scaled_gamma}")
         if scaled_gamma <= 0.0:
+            if _debug_guidance:
+                logger.info(f"[GUIDANCE] scaled_gamma <= 0, returning zero guidance")
             return torch.zeros_like(x_t)
         if int(x_t.numel()) > self.max_guidance_elements:
             logger.warning(
@@ -1418,31 +1434,50 @@ class GradientGuidance(nn.Module):
             )
             return torch.zeros_like(x_t)
         
-        # Use torch.enable_grad() so autograd works even inside @torch.no_grad() sampling
+        input_dtype = x_t.dtype
+        logic_dtype = torch.float32
+        try:
+            logic_ref = next(self.logic_net.parameters(), None)
+            if logic_ref is None:
+                logic_ref = next(self.logic_net.buffers(), None)
+            if logic_ref is not None and torch.is_floating_point(logic_ref):
+                logic_dtype = logic_ref.dtype
+        except (AttributeError, StopIteration, TypeError):
+            logic_dtype = torch.float32
+
+        # Use torch.enable_grad() so autograd works even inside @torch.no_grad() sampling.
+        # The sampler may run in FP16 while LogicNet is stored in FP32; guidance is
+        # computed in the LogicNet dtype and cast back to the sampler dtype at return.
         try:
             safe_graph_data = self._sanitize_graph_data(
                 graph_data,
                 device=x_t.device,
-                dtype=(x_t.dtype if torch.is_floating_point(x_t) else torch.float32),
+                dtype=logic_dtype,
             )
             with torch.enable_grad():
                 # Enable gradient computation for x_t
-                x_t_grad = x_t.detach().requires_grad_(True)
+                x_t_grad = x_t.detach().to(dtype=logic_dtype).requires_grad_(True)
 
                 # Compute LogicNet loss (supports tuple or tensor return modes).
                 logic_out = self.logic_net(x_t_grad, safe_graph_data)
                 loss = self._extract_logic_loss(logic_out)
+                if _debug_guidance:
+                    logger.info(f"[GUIDANCE] LogicNet loss={float(loss) if loss is not None else 'None'}")
                 if loss is None:
                     self._warn_rate_limited(
                         "invalid_loss",
                         "Gradient guidance: LogicNet returned invalid loss; skipping guidance step.",
                     )
+                    if _debug_guidance:
+                        logger.info("[GUIDANCE] Invalid loss, returning zero guidance")
                     return torch.zeros_like(x_t)
                 if not bool(torch.isfinite(loss).all()):
                     self._warn_rate_limited(
                         "nonfinite_loss",
                         "Gradient guidance: non-finite loss detected; skipping guidance step.",
                     )
+                    if _debug_guidance:
+                        logger.info(f"[GUIDANCE] Non-finite loss {loss}, returning zero guidance")
                     return torch.zeros_like(x_t)
 
                 # Compute gradient
@@ -1452,11 +1487,22 @@ class GradientGuidance(nn.Module):
                     create_graph=False,
                     retain_graph=False,
                 )[0]
+
+                # DEBUG: Log gradient statistics before clamping
+                if _debug_guidance:
+                    grad_norm_raw = grad.view(grad.shape[0], -1).norm(dim=1)
+                    logger.info(f"[GUIDANCE] grad_norm (before clamp): min={grad_norm_raw.min():.6f}, max={grad_norm_raw.max():.6f}, mean={grad_norm_raw.mean():.6f}")
         except (AttributeError, RuntimeError, ValueError, TypeError) as e:
+            self.failure_count += 1
+            self.last_failure_type = type(e).__name__
+            self.last_failure_message = str(e)
+            if int(os.environ.get("KLTN_GUIDANCE_RAISE_ERRORS", "0") or "0") > 0:
+                raise
             self._warn_rate_limited(
                 "guidance_failure",
-                "Gradient guidance failed (%s); continuing without guidance.",
+                "Gradient guidance failed (%s: %s); continuing without guidance.",
                 type(e).__name__,
+                str(e),
             )
             return torch.zeros_like(x_t)
         
@@ -1469,14 +1515,20 @@ class GradientGuidance(nn.Module):
 
         guidance = float(scaled_gamma) * grad
         if self.relative_norm_cap > 0:
-            ref_norm = x_t.detach().view(x_t.shape[0], -1).norm(dim=1)
+            ref_norm = x_t.detach().to(dtype=guidance.dtype).view(x_t.shape[0], -1).norm(dim=1)
             ref_norm = ref_norm.view(x_t.shape[0], *([1] * (x_t.dim() - 1)))
             guidance_norm = guidance.view(guidance.shape[0], -1).norm(dim=1)
             guidance_norm = guidance_norm.view(guidance.shape[0], *([1] * (guidance.dim() - 1)))
             max_guidance_norm = torch.clamp(ref_norm * self.relative_norm_cap, min=1e-8)
             guidance = guidance * torch.clamp(max_guidance_norm / (guidance_norm + 1e-8), max=1.0)
 
-        return guidance
+        # DEBUG: Log final guidance
+        if _debug_guidance:
+            guidance_norm_final = guidance.view(guidance.shape[0], -1).norm(dim=1)
+            guidance_is_nonzero = (guidance_norm_final > 1e-8).sum().item()
+            logger.info(f"[GUIDANCE] final_guidance_norm: min={guidance_norm_final.min():.6f}, max={guidance_norm_final.max():.6f}, nonzero_samples={guidance_is_nonzero}/{guidance.shape[0]}")
+
+        return guidance.to(dtype=input_dtype)
     
     def apply_guidance(
         self,
@@ -2132,26 +2184,26 @@ class LatentDiffusionModel(nn.Module):
         graph_data: Optional[Dict[str, Tensor]] = None,
     ) -> Tuple[Tensor, Tensor]:
         """
-        Apply LogicNet guidance to a DDIM-style score/noise parameterization.
+        Apply LogicNet guidance to a DDIM-style clean-latent prediction.
 
-        Dhariwal & Nichol (NeurIPS 2021) formulate guidance in score space.
-        For epsilon-parameterized diffusion this corresponds to adjusting the
-        predicted noise and then recomputing x_0 from the same timestep.
+        LogicNet is trained/evaluated on clean VQ-VAE latents, not noisy x_t.
+        Guiding pred_x0 directly keeps the symbolic gradient aligned with the
+        object it scores, then pred_noise is recomputed for the DDIM update.
         """
         if self.guidance.logic_net is None or self.guidance.guidance_scale <= 0:
             return pred_x0, pred_noise
 
         guidance_grad = self.guidance.compute_guidance(
-            x_t,
+            pred_x0,
             graph_data,
             t=int(t),
             num_timesteps=int(self.num_timesteps),
         )
-        sqrt_one_minus_alpha_t = self.sqrt_one_minus_alphas_cumprod[t]
-        pred_noise = pred_noise + sqrt_one_minus_alpha_t * guidance_grad
         sqrt_alpha_t = self.sqrt_alphas_cumprod[t]
-        pred_x0 = (x_t - sqrt_one_minus_alpha_t * pred_noise) / torch.clamp(sqrt_alpha_t, min=1e-8)
-        pred_x0 = torch.clamp(pred_x0, -1.0, 1.0)
+        sqrt_one_minus_alpha_t = self.sqrt_one_minus_alphas_cumprod[t]
+        pred_x0 = torch.clamp(pred_x0 - guidance_grad, -1.0, 1.0)
+        if float(sqrt_one_minus_alpha_t.detach().abs().item()) > 1e-8:
+            pred_noise = (x_t - sqrt_alpha_t * pred_x0) / torch.clamp(sqrt_one_minus_alpha_t, min=1e-8)
         return pred_x0, pred_noise
     
     def p_mean_variance(

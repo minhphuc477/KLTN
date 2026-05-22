@@ -1,4 +1,4 @@
-﻿"""
+"""
 GUI Runner for ZAVE (Zelda AI Validation Environment)
 ====================================================
 
@@ -216,6 +216,10 @@ from src.gui.orchestration.gameplay.control_actions_orchestration import (
     run_ai_dungeon_generation_worker as _run_ai_dungeon_generation_worker_orchestration_helper,
     show_path_preview as _show_path_preview_orchestration_helper,
     start_ai_dungeon_generation as _start_ai_dungeon_generation_orchestration_helper,
+)
+from src.gui.orchestration.gameplay.import_export_orchestration import (
+    import_txt_level as _import_txt_level_orchestration_helper,
+    export_current_map as _export_current_map_orchestration_helper,
 )
 from src.gui.orchestration.gameplay.dungeon_generation_orchestration import (
     generate_dungeon as _generate_dungeon_orchestration_helper,
@@ -759,6 +763,7 @@ class ZeldaGUI:
             gui=self,
             old_state=old_state,
             new_state=new_state,
+            time_module=time,
             logger=logger,
             pop_effect_cls=PopEffect,
             item_collection_effect_cls=ItemCollectionEffect,
@@ -770,6 +775,7 @@ class ZeldaGUI:
             gui=self,
             old_state=old_state,
             new_state=new_state,
+            time_module=time,
             logger=logger,
             item_usage_effect_cls=ItemUsageEffect,
         )
@@ -1011,6 +1017,33 @@ class ZeldaGUI:
         """Stop auto-solve and clear visual state."""
         _stop_auto_solve_orchestration_helper(
             gui=self,
+        )
+
+    def _import_level(self):
+        """Open a file dialog to import a .txt level."""
+        # Note: the control panel logic expects _import_level to take no arguments
+        from src.gui.orchestration.gameplay.import_export_orchestration import open_import_dialog
+        open_import_dialog(gui=self, logger=logger)
+
+    def _import_txt_level(self, filepath):
+        """Import a numeric .txt level from a known path."""
+        return _import_txt_level_orchestration_helper(
+            gui=self,
+            filepath=filepath,
+            logger=logger,
+        )
+
+    def _export_map(self):
+        """Open a file dialog to export the current .txt level."""
+        from src.gui.orchestration.gameplay.import_export_orchestration import open_export_dialog
+        open_export_dialog(gui=self, logger=logger)
+
+    def _export_current_map(self, filepath):
+        """Export the current semantic grid to a known path."""
+        return _export_current_map_orchestration_helper(
+            gui=self,
+            filepath=filepath,
+            logger=logger,
         )
     
     def _generate_dungeon(self):
@@ -1963,6 +1996,7 @@ class ZeldaGUI:
             action_deltas=ACTION_DELTAS,
             pop_effect_cls=PopEffect,
             flash_effect_cls=FlashEffect,
+            time_module=time,
         )
     
     def _render_path_GUARANTEED(self, surface):
@@ -2148,11 +2182,61 @@ def main(argv: Optional[List[str]] = None):
         action="store_true",
         help="Fail instead of falling back when checkpoint metadata or files are missing.",
     )
+    parser.add_argument(
+        "--demo-comprehensive",
+        action="store_true",
+        help="Force the AI generation pipeline to generate a comprehensive demo map showing all mechanics.",
+    )
+    parser.add_argument(
+        "--advanced",
+        action="store_true",
+        help="Start in Advanced GUI mode (unlocks all overlays, solvers, and controls).",
+    )
+    parser.add_argument(
+        "--load-txt",
+        dest="load_txt",
+        default=None,
+        help="Path to a .txt file containing a full-level stitch to load on startup.",
+    )
+    parser.add_argument(
+        "--load-route-json",
+        "--load-route",
+        dest="load_route_json",
+        default=None,
+        help="Path to a route JSON file to preview on startup after loading the level.",
+    )
+    parser.add_argument(
+        "--solver-algorithm",
+        dest="solver_algorithm",
+        type=int,
+        default=None,
+        help="Initial solver algorithm index. Example: 7 selects P-CBS (Balanced).",
+    )
+    parser.add_argument(
+        "--solver-timeout",
+        dest="solver_timeout",
+        type=float,
+        default=None,
+        help="Wall-clock solver timeout in seconds for GUI subprocess runs.",
+    )
     args = parser.parse_args(argv)
     if args.checkpoint:
         os.environ["KLTN_CHECKPOINT_PATH"] = str(Path(args.checkpoint).expanduser().resolve())
     if args.strict_checkpoints:
         os.environ["KLTN_STRICT_CHECKPOINTS"] = "1"
+    if args.demo_comprehensive:
+        os.environ["KLTN_DEMO_COMPREHENSIVE"] = "1"
+    if args.advanced:
+        os.environ["KLTN_ADVANCED_GUI"] = "1"
+    if args.load_txt:
+        os.environ["KLTN_LOAD_TXT"] = str(Path(args.load_txt).expanduser().resolve())
+    if args.load_route_json:
+        os.environ["KLTN_LOAD_ROUTE_JSON"] = str(Path(args.load_route_json).expanduser().resolve())
+        os.environ["KLTN_USE_PRELOADED_ROUTE_ON_SOLVE"] = "1"
+    if getattr(args, "solver_algorithm", None) is not None:
+        os.environ["KLTN_SOLVER_ALGORITHM_IDX"] = str(int(args.solver_algorithm))
+    if getattr(args, "solver_timeout", None) is not None:
+        os.environ["KLTN_SOLVER_TIMEOUT"] = str(float(args.solver_timeout))
 
     _run_main_entry_orchestration_helper(
         pygame_available=PYGAME_AVAILABLE,

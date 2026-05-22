@@ -19,7 +19,7 @@ References:
 import os
 import logging
 import numpy as np
-from typing import Optional, Callable, Tuple, Union, Any, Dict, List, Set
+from typing import Optional, Callable, Tuple, Union, Any, Dict, List, Set, Iterable
 from pathlib import Path
 
 import torch
@@ -80,6 +80,7 @@ from src.pipeline.room_topology_conditioning import (
 )
 from src.pipeline.spatial_utils import clamp_room_coord, parse_room_coord
 from src.utils.style_tokens import iter_style_metadata_candidates, resolve_style_token_id
+from src.zelda_data.splits import normalize_dungeon_ids, normalize_variants
 VGLC_AVAILABLE = True
 logger.info("VGLC adapter available via zelda_core")
 
@@ -663,6 +664,8 @@ class ZeldaDungeonDataset(Dataset):
         load_graphs: bool = False,  # NEW: Load graph data for dual-stream
         node_feature_dim: int = GRAPH_NODE_FEATURE_DIM,
         edge_feature_dim: int = GRAPH_EDGE_FEATURE_DIM,
+        dungeon_ids: Optional[Iterable[int]] = None,
+        variants: Optional[Iterable[int]] = None,
     ):
         self.data_dir = Path(data_dir)
         self.transform = transform
@@ -673,6 +676,9 @@ class ZeldaDungeonDataset(Dataset):
         self.load_graphs = load_graphs
         self.node_feature_dim = int(max(1, node_feature_dim))
         self.edge_feature_dim = int(max(1, edge_feature_dim))
+        self.dungeon_ids = normalize_dungeon_ids(dungeon_ids)
+        self.variants = normalize_variants(variants)
+        self.sample_metadata: List[Dict[str, Any]] = []
         
         # Track max dimensions for padding
         self.max_h = 0
@@ -710,13 +716,21 @@ class ZeldaDungeonDataset(Dataset):
         # Load all dungeons via adapter
         adapter = ZeldaDungeonAdapter(str(self.data_dir))
         
-        for dungeon_num in range(1, 10):  # Dungeons 1-9
-            for variant in [1, 2]:  # Two quest variants
+        dungeon_iter = self.dungeon_ids if self.dungeon_ids is not None else range(1, 10)
+        for dungeon_num in dungeon_iter:  # Dungeons 1-9
+            for variant in self.variants:  # Two quest variants
                 try:
                     dungeon = adapter.load_dungeon(dungeon_num, variant)
                     stitched = adapter.stitch_dungeon(dungeon)
                     grid = stitched.global_grid
                     self.samples.append(grid.astype(np.float32))
+                    self.sample_metadata.append(
+                        {
+                            "dungeon_num": int(dungeon_num),
+                            "variant": int(variant),
+                            "dungeon_id": f"tloz{int(dungeon_num)}_{int(variant)}",
+                        }
+                    )
                     
                     # Extract graph if load_graphs is enabled
                     if self.load_graphs:
@@ -893,6 +907,8 @@ class ZeldaRoomDataset(Dataset):
         semantic_puzzle_offset: int = DEFAULT_SEMANTIC_PUZZLE_OFFSET,
         puzzle_stage_topology_enabled: bool = False,
         puzzle_stage_trace_decay: float = DEFAULT_PUZZLE_STAGE_TRACE_DECAY,
+        dungeon_ids: Optional[Iterable[int]] = None,
+        variants: Optional[Iterable[int]] = None,
     ):
         self.transform = transform
         self.normalize = normalize
@@ -904,8 +920,11 @@ class ZeldaRoomDataset(Dataset):
         self.semantic_puzzle_offset = int(max(0, semantic_puzzle_offset))
         self.puzzle_stage_topology_enabled = bool(puzzle_stage_topology_enabled)
         self.puzzle_stage_trace_decay = float(max(0.05, min(1.0, puzzle_stage_trace_decay)))
+        self.dungeon_ids = normalize_dungeon_ids(dungeon_ids)
+        self.variants = normalize_variants(variants)
         self.rooms = []
         self.graphs = [] if load_graphs else None
+        self.sample_metadata: List[Dict[str, Any]] = []
         if self.topology_supervision_mode not in {"runtime_aligned", "oracle_room_grid"}:
             raise ValueError(
                 "topology_supervision_mode must be 'runtime_aligned' or 'oracle_room_grid'."
@@ -916,8 +935,9 @@ class ZeldaRoomDataset(Dataset):
         
         adapter = ZeldaDungeonAdapter(str(data_dir))
         
-        for dungeon_num in range(1, 10):
-            for variant in [1, 2]:
+        dungeon_iter = self.dungeon_ids if self.dungeon_ids is not None else range(1, 10)
+        for dungeon_num in dungeon_iter:
+            for variant in self.variants:
                 try:
                     dungeon = adapter.load_dungeon(dungeon_num, variant)
                     dungeon_graph = _extract_graph_from_dungeon(
@@ -931,6 +951,14 @@ class ZeldaRoomDataset(Dataset):
                             grid = getattr(room, 'grid', None)
                         if grid is not None:
                             self.rooms.append(grid.astype(np.float32))
+                            self.sample_metadata.append(
+                                {
+                                    "dungeon_num": int(dungeon_num),
+                                    "variant": int(variant),
+                                    "dungeon_id": f"tloz{int(dungeon_num)}_{int(variant)}",
+                                    "room_coord": tuple(coord) if isinstance(coord, tuple) else coord,
+                                }
+                            )
                             if self.graphs is not None and dungeon_graph is not None:
                                 self.graphs.append(
                                     _build_room_graph_sample(
@@ -1070,6 +1098,8 @@ def create_dataloader(
     puzzle_stage_trace_decay: float = DEFAULT_PUZZLE_STAGE_TRACE_DECAY,
     sampler: Optional[Sampler] = None,
     return_sampler: bool = False,
+    dungeon_ids: Optional[Iterable[int]] = None,
+    variants: Optional[Iterable[int]] = None,
 ) -> DataLoader:
     """
     Create a DataLoader for Zelda dungeon training.
@@ -1110,6 +1140,8 @@ def create_dataloader(
             semantic_puzzle_offset=semantic_puzzle_offset,
             puzzle_stage_topology_enabled=puzzle_stage_topology_enabled,
             puzzle_stage_trace_decay=puzzle_stage_trace_decay,
+            dungeon_ids=dungeon_ids,
+            variants=variants,
         )
     else:
         dataset = ZeldaDungeonDataset(
@@ -1121,6 +1153,8 @@ def create_dataloader(
             load_graphs=load_graphs,
             node_feature_dim=node_feature_dim,
             edge_feature_dim=edge_feature_dim,
+            dungeon_ids=dungeon_ids,
+            variants=variants,
         )
     
     dataloader = DataLoader(

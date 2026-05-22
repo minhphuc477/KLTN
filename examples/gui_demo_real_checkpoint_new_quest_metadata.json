@@ -1,0 +1,652 @@
+{
+  "artifacts": {
+    "level_txt": "F:\\KLTN\\examples\\gui_demo_real_checkpoint_new_quest_level.txt",
+    "metadata_json": "F:\\KLTN\\examples\\gui_demo_real_checkpoint_new_quest_metadata.json",
+    "preview_png": "F:\\KLTN\\outputs\\gui_demo_real_checkpoint_new_quest_level.png",
+    "route_json": "F:\\KLTN\\examples\\gui_demo_real_checkpoint_new_quest_route.json"
+  },
+  "best_discovered_checkpoint": "F:\\KLTN\\outputs\\zelda_hmolqd_downstream_stageconditioned_semantics_v3_puzzlefix\\checkpoints\\diffusion\\best_model.pth",
+  "checkpoint": "F:\\KLTN\\outputs\\zelda_hmolqd_downstream_stageconditioned_semantics_v3_puzzlefix\\checkpoints\\diffusion\\best_model.pth",
+  "created_by": "scripts/generate_gui_real_checkpoint_demo.py",
+  "created_mode": "real_checkpoint_direct_no_showcase_overlay",
+  "entity_counts": {
+    "BLOCK": 23,
+    "DOOR_BOSS": 5,
+    "DOOR_LOCKED": 5,
+    "DOOR_OPEN": 25,
+    "DOOR_PUZZLE": 10,
+    "DOOR_SOFT": 25,
+    "ENEMY": 2,
+    "FLOOR": 763,
+    "KEY": 1,
+    "KEY_BOSS": 1,
+    "KEY_ITEM": 1,
+    "PUZZLE": 1,
+    "START": 1,
+    "TRIFORCE": 1,
+    "VOID": 176,
+    "WALL": 544
+  },
+  "generation_metrics": {
+    "avg_final_graph_marker_overwrite_rate": 0.25,
+    "avg_final_post_overlay_graph_marker_exact_match_rate": 1.0,
+    "avg_final_post_overlay_semantic_anchor_error": 0.0,
+    "avg_final_pre_overlay_graph_marker_exact_match_rate": 0.75,
+    "avg_final_pre_overlay_semantic_anchor_error": 6.75,
+    "avg_neural_graph_marker_exact_match_rate": 0.875,
+    "avg_neural_semantic_anchor_error": 3.375,
+    "batch_generation_diagnostics": [
+      {
+        "bucket_room_count": 8,
+        "cuda_free_mb": NaN,
+        "latent_shape_chw": [
+          64,
+          4,
+          3
+        ],
+        "layer_index": 0,
+        "requested_batch_size": 8,
+        "safe_chunk_size": 8,
+        "target_room_size_hw": [
+          16,
+          11
+        ]
+      },
+      {
+        "actual_chunk_size": 8,
+        "bucket_key": "(64, 4, 3, 16, 11)",
+        "chunk_start": 0,
+        "layer_index": 0
+      }
+    ],
+    "dungeon_shape": [
+      48,
+      33
+    ],
+    "generation_time_sec": 10.189066886901855,
+    "logicnet_dungeon_solvability": 0.46208620071411133,
+    "logicnet_global_logic_loss": 0.7084103226661682,
+    "logicnet_graph_reach_loss": 0.6935099363327026,
+    "logicnet_lock_loss": 0.0,
+    "logicnet_num_failing_rooms": 0.0,
+    "logicnet_room_solvability": 0.9403985217213631,
+    "num_rooms": 8,
+    "puzzle_plan_count": 4,
+    "puzzle_stage_count": 4,
+    "repair_rate": 1.0,
+    "total_graph_marker_expected": 8.0,
+    "total_graph_marker_overwrites": 2.0,
+    "total_tiles_repaired": 173
+  },
+  "generation_time_sec": 10.189066886901855,
+  "graph_mode": "comprehensive",
+  "layout_map": {
+    "0": [
+      0,
+      0,
+      10,
+      15
+    ],
+    "1": [
+      11,
+      0,
+      21,
+      15
+    ],
+    "2": [
+      22,
+      0,
+      32,
+      15
+    ],
+    "3": [
+      0,
+      16,
+      10,
+      31
+    ],
+    "4": [
+      11,
+      16,
+      21,
+      31
+    ],
+    "5": [
+      22,
+      16,
+      32,
+      31
+    ],
+    "6": [
+      0,
+      32,
+      10,
+      47
+    ],
+    "7": [
+      11,
+      32,
+      21,
+      47
+    ]
+  },
+  "mission_graph": {
+    "edges": [
+      {
+        "item_required": null,
+        "key_required": null,
+        "source": 7,
+        "switch_id": null,
+        "target": 4,
+        "type": "PATH"
+      },
+      {
+        "item_required": null,
+        "key_required": null,
+        "source": 4,
+        "switch_id": null,
+        "target": 3,
+        "type": "LOCKED"
+      },
+      {
+        "item_required": null,
+        "key_required": null,
+        "source": 3,
+        "switch_id": null,
+        "target": 6,
+        "type": "PATH"
+      },
+      {
+        "item_required": "BOMB",
+        "key_required": null,
+        "source": 4,
+        "switch_id": null,
+        "target": 5,
+        "type": "ITEM_GATE"
+      },
+      {
+        "item_required": null,
+        "key_required": null,
+        "source": 5,
+        "switch_id": null,
+        "target": 2,
+        "type": "ONE_WAY"
+      },
+      {
+        "item_required": null,
+        "key_required": null,
+        "source": 2,
+        "switch_id": null,
+        "target": 1,
+        "type": "ON_OFF_GATE"
+      },
+      {
+        "item_required": null,
+        "key_required": null,
+        "source": 1,
+        "switch_id": null,
+        "target": 0,
+        "type": "BOSS_LOCKED"
+      }
+    ],
+    "nodes": {
+      "0": {
+        "difficulty": 1.0,
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "type": "GOAL"
+      },
+      "1": {
+        "difficulty": 0.7,
+        "position": [
+          0,
+          1,
+          0
+        ],
+        "type": "BOSS_DOOR"
+      },
+      "2": {
+        "difficulty": 0.5,
+        "position": [
+          0,
+          2,
+          0
+        ],
+        "type": "PUZZLE"
+      },
+      "3": {
+        "difficulty": 0.8,
+        "position": [
+          1,
+          0,
+          0
+        ],
+        "type": "ENEMY"
+      },
+      "4": {
+        "difficulty": 0.3,
+        "position": [
+          1,
+          1,
+          0
+        ],
+        "type": "KEY"
+      },
+      "5": {
+        "difficulty": 0.6,
+        "position": [
+          1,
+          2,
+          0
+        ],
+        "type": "BIG_KEY"
+      },
+      "6": {
+        "difficulty": 0.4,
+        "position": [
+          2,
+          0,
+          0
+        ],
+        "type": "ITEM"
+      },
+      "7": {
+        "difficulty": 0.1,
+        "position": [
+          2,
+          1,
+          0
+        ],
+        "type": "START"
+      }
+    }
+  },
+  "name": "gui_demo_real_checkpoint_new_quest",
+  "rooms": 8,
+  "seed": 20260520,
+  "shape": [
+    48,
+    33
+  ],
+  "validation": {
+    "algorithms": {
+      "0": {
+        "message": null,
+        "name": "A*",
+        "path_length": 65,
+        "solver_algorithm": "A*",
+        "states_explored": 19734,
+        "success": true,
+        "time_sec": 1.4881,
+        "visited_rooms": 6
+      },
+      "1": {
+        "message": "BFS found no solution (explored 200000 states)",
+        "name": "BFS",
+        "path_length": 0,
+        "solver_algorithm": null,
+        "states_explored": 0,
+        "success": false,
+        "time_sec": 14.9046,
+        "visited_rooms": 0
+      },
+      "2": {
+        "message": "Dijkstra found no solution (explored 200000 states)",
+        "name": "Dijkstra",
+        "path_length": 0,
+        "solver_algorithm": null,
+        "states_explored": 0,
+        "success": false,
+        "time_sec": 19.52,
+        "visited_rooms": 0
+      },
+      "3": {
+        "message": "Greedy found no solution (explored 200000 states)",
+        "name": "Greedy",
+        "path_length": 0,
+        "solver_algorithm": null,
+        "states_explored": 0,
+        "success": false,
+        "time_sec": 12.1929,
+        "visited_rooms": 0
+      },
+      "4": {
+        "message": null,
+        "name": "D* Lite",
+        "path_length": 65,
+        "solver_algorithm": "D* Lite (fallback: A*)",
+        "states_explored": 19734,
+        "success": true,
+        "time_sec": 7.0578,
+        "visited_rooms": 6
+      },
+      "5": {
+        "message": "DFS/IDDFS found no solution (explored 203716 states)",
+        "name": "DFS/IDDFS",
+        "path_length": 0,
+        "solver_algorithm": null,
+        "states_explored": 0,
+        "success": false,
+        "time_sec": 5.8453,
+        "visited_rooms": 0
+      },
+      "6": {
+        "message": null,
+        "name": "Bidirectional A*",
+        "path_length": 65,
+        "solver_algorithm": "Bidirectional A* (fallback: A*)",
+        "states_explored": 19734,
+        "success": true,
+        "time_sec": 2.0462,
+        "visited_rooms": 6
+      }
+    },
+    "all_success": false,
+    "best_route": {
+      "algorithm": "A*",
+      "algorithm_idx": 0,
+      "message": null,
+      "name": "A*",
+      "path": [
+        [
+          40,
+          12
+        ],
+        [
+          40,
+          13
+        ],
+        [
+          39,
+          13
+        ],
+        [
+          38,
+          13
+        ],
+        [
+          37,
+          13
+        ],
+        [
+          36,
+          13
+        ],
+        [
+          35,
+          13
+        ],
+        [
+          34,
+          13
+        ],
+        [
+          34,
+          14
+        ],
+        [
+          34,
+          15
+        ],
+        [
+          33,
+          15
+        ],
+        [
+          32,
+          15
+        ],
+        [
+          31,
+          15
+        ],
+        [
+          30,
+          15
+        ],
+        [
+          29,
+          15
+        ],
+        [
+          28,
+          15
+        ],
+        [
+          27,
+          15
+        ],
+        [
+          26,
+          15
+        ],
+        [
+          25,
+          15
+        ],
+        [
+          25,
+          16
+        ],
+        [
+          24,
+          16
+        ],
+        [
+          24,
+          17
+        ],
+        [
+          24,
+          18
+        ],
+        [
+          24,
+          19
+        ],
+        [
+          24,
+          20
+        ],
+        [
+          24,
+          21
+        ],
+        [
+          24,
+          22
+        ],
+        [
+          24,
+          23
+        ],
+        [
+          24,
+          24
+        ],
+        [
+          24,
+          25
+        ],
+        [
+          24,
+          26
+        ],
+        [
+          23,
+          26
+        ],
+        [
+          22,
+          26
+        ],
+        [
+          21,
+          26
+        ],
+        [
+          20,
+          26
+        ],
+        [
+          19,
+          26
+        ],
+        [
+          18,
+          26
+        ],
+        [
+          17,
+          26
+        ],
+        [
+          16,
+          26
+        ],
+        [
+          15,
+          26
+        ],
+        [
+          14,
+          26
+        ],
+        [
+          13,
+          26
+        ],
+        [
+          12,
+          26
+        ],
+        [
+          11,
+          26
+        ],
+        [
+          10,
+          26
+        ],
+        [
+          10,
+          25
+        ],
+        [
+          9,
+          25
+        ],
+        [
+          8,
+          25
+        ],
+        [
+          8,
+          24
+        ],
+        [
+          8,
+          23
+        ],
+        [
+          8,
+          22
+        ],
+        [
+          8,
+          21
+        ],
+        [
+          8,
+          20
+        ],
+        [
+          8,
+          19
+        ],
+        [
+          8,
+          18
+        ],
+        [
+          8,
+          17
+        ],
+        [
+          8,
+          16
+        ],
+        [
+          8,
+          15
+        ],
+        [
+          8,
+          14
+        ],
+        [
+          8,
+          13
+        ],
+        [
+          8,
+          12
+        ],
+        [
+          8,
+          11
+        ],
+        [
+          8,
+          10
+        ],
+        [
+          8,
+          9
+        ],
+        [
+          8,
+          8
+        ]
+      ],
+      "path_length": 65,
+      "solver_algorithm": "A*",
+      "states_explored": 19734,
+      "success": true,
+      "time_sec": 1.4881,
+      "visited_rooms": 6
+    },
+    "goal": [
+      8,
+      8
+    ],
+    "start": [
+      40,
+      12
+    ],
+    "success": true
+  },
+  "validation_preparation": {
+    "duplicate_goal_tiles_removed": 0,
+    "duplicate_start_tiles_removed": 0,
+    "enclosed_void_tiles_filled": 0,
+    "exterior_void_tiles_retained": 176,
+    "goal": [
+      8,
+      8
+    ],
+    "grid_shape": [
+      48,
+      33
+    ],
+    "invalid_tile_count": 0,
+    "invalid_tile_ids": [],
+    "start": [
+      40,
+      12
+    ]
+  }
+}

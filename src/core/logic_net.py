@@ -1316,17 +1316,23 @@ class LogicNet(nn.Module):
         if not isinstance(edge_index, torch.Tensor):
             return zero, zero, zero, {}
 
-        # Dungeon-scope: one graph with many room latents in z's batch dimension.
-        if edge_index.dim() == 2 and (
-            graph_scope == "dungeon"
-            or (
-                isinstance(graph_data.get("current_node_idx"), torch.Tensor)
-                and graph_data["current_node_idx"].numel() == room_passability.numel()
-                and isinstance(node_features, torch.Tensor)
-                and node_features.dim() == 2
-            )
-        ):
-            n = int(node_features.shape[0]) if isinstance(node_features, torch.Tensor) and node_features.dim() == 2 else int(room_passability.numel())
+        current_node_idx = graph_data.get("current_node_idx")
+        room_batch = int(room_passability.numel())
+        if isinstance(current_node_idx, torch.Tensor):
+            idx_shape_valid = int(current_node_idx.numel()) == room_batch
+        elif isinstance(current_node_idx, (list, tuple)):
+            idx_shape_valid = len(current_node_idx) == room_batch
+        else:
+            idx_shape_valid = current_node_idx is not None and room_batch == 1
+
+        if edge_index.dim() == 2 and isinstance(node_features, torch.Tensor) and node_features.dim() == 2:
+            n = int(node_features.shape[0])
+            full_node_batch = room_batch == n
+            if graph_scope == "dungeon":
+                if not (idx_shape_valid or full_node_batch):
+                    return zero, zero, zero, {}
+            elif not idx_shape_valid:
+                return zero, zero, zero, {}
             return self._compute_one_global_graph_loss(
                 node_count=n,
                 edge_index=edge_index.to(device=device, dtype=torch.long),
@@ -1339,7 +1345,7 @@ class LogicNet(nn.Module):
                 start_idx=graph_data.get("start_idx", graph_data.get("start_node_id", 0)),
                 target_idx=graph_data.get("target_idx"),
                 key_lock_pairs=graph_data.get("key_lock_pairs", []),
-                current_node_idx=graph_data.get("current_node_idx"),
+                current_node_idx=current_node_idx,
                 room_passability=room_passability,
                 device=device,
                 dtype=dtype,

@@ -1,6 +1,7 @@
 """Core AI-generation pipeline helpers extracted from gui_runner."""
 
 import copy
+from datetime import datetime
 import json
 import os
 import random
@@ -12,6 +13,57 @@ from src.pipeline.dungeon_pipeline import pipeline_kwargs_from_resolved_config
 from src.pipeline.spatial_utils import normalize_node_id, stable_node_sort_key
 
 
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[3]
+
+
+def _truthy_env(name: str) -> bool:
+    return str(os.environ.get(name, "")).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return bool(default)
+    value = str(raw).strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    return bool(default)
+
+
+def _env_int(name: str, default: int, *, min_value: int = 1) -> int:
+    raw = os.environ.get(name)
+    if raw is None or str(raw).strip() == "":
+        return int(default)
+    try:
+        return max(int(min_value), int(raw))
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def discover_best_output_checkpoint(repo_root: Path | None = None):
+    """Return the preferred trained GUI-generation checkpoint from outputs/."""
+    if _truthy_env("KLTN_DISABLE_OUTPUT_CHECKPOINT_DISCOVERY"):
+        return None
+
+    root = Path(repo_root) if repo_root is not None else _repo_root()
+    # Ordered by demo suitability: the first entry has a validated solved
+    # full-level artifact in outputs and matching checkpoint metadata.
+    candidate_relpaths = [
+        "outputs/zelda_hmolqd_downstream_stageconditioned_semantics_v3_puzzlefix/checkpoints/diffusion/best_model.pth",
+        "outputs/dungeon9_holdout_full_retrain_20260515/checkpoints/diffusion/best_model.pth",
+        "outputs/zelda_hmolqd_downstream_global_logicnet_v4_global_logicnet/checkpoints/diffusion/best_model.pth",
+        "outputs/zelda_hmolqd_downstream_stageconditioned_semantics_v2/checkpoints/diffusion/best_model.pth",
+    ]
+    for relpath in candidate_relpaths:
+        candidate = (root / relpath).resolve()
+        if candidate.exists():
+            return candidate
+    return None
+
+
 def resolve_checkpoint_path(explicit_path=None):
     """Resolve checkpoint path, allowing an explicit argument or environment override."""
     if explicit_path:
@@ -21,8 +73,75 @@ def resolve_checkpoint_path(explicit_path=None):
     if override:
         return Path(override).expanduser().resolve()
 
-    repo_root = Path(__file__).resolve().parents[3]
+    discovered = discover_best_output_checkpoint()
+    if discovered is not None:
+        return discovered
+
+    repo_root = _repo_root()
     return repo_root / "checkpoints" / "final_model.pth"
+
+
+def _candidate_checkpoint_files(directory: Path, names: tuple[str, ...]):
+    for name in names:
+        candidate = directory / name
+        if candidate.exists():
+            return candidate.resolve()
+    return None
+
+
+def resolve_fast_sampler_checkpoint_for_generation(
+    checkpoint_path: Path,
+    resolved_config: dict | None = None,
+):
+    """Find a trained fast-sampler adapter that belongs to a diffusion checkpoint."""
+    for env_name in ("KLTN_GUI_FAST_SAMPLER_CHECKPOINT", "KLTN_FAST_SAMPLER_CHECKPOINT"):
+        override = str(os.environ.get(env_name, "")).strip()
+        if override:
+            candidate = Path(override).expanduser()
+            if not candidate.is_absolute():
+                candidate = _repo_root() / candidate
+            if candidate.exists():
+                return candidate.resolve()
+
+    names = (
+        "fast_sampler_best.pth",
+        "best_model.pth",
+        "latest_resume.pth",
+        "fast_sampler_final.pth",
+    )
+    search_dirs: list[Path] = []
+    if isinstance(resolved_config, dict):
+        checkpoint_dir = (
+            resolved_config.get("fast_sampler", {}).get("checkpoint_dir")
+            if isinstance(resolved_config.get("fast_sampler"), dict)
+            else None
+        )
+        if checkpoint_dir:
+            configured = Path(str(checkpoint_dir)).expanduser()
+            if not configured.is_absolute():
+                configured = _repo_root() / configured
+            search_dirs.append(configured)
+
+    search_dirs.extend(
+        [
+            checkpoint_path.parent.parent / "fast_sampler",
+            checkpoint_path.parent / "fast_sampler",
+            checkpoint_path.parent.parent.parent / "fast_sampler",
+        ]
+    )
+
+    seen: set[Path] = set()
+    for directory in search_dirs:
+        directory = directory.resolve()
+        if directory in seen:
+            continue
+        seen.add(directory)
+        if not directory.exists():
+            continue
+        candidate = _candidate_checkpoint_files(directory, names)
+        if candidate is not None:
+            return candidate
+    return None
 
 
 def _load_checkpoint_metadata(checkpoint_path: Path):
@@ -202,7 +321,15 @@ def ensure_mission_graph_editor_draft(gui, random_module, logger=None):
     except (TypeError, ValueError):
         configured_seed = None
 
-    mission_data = generate_mission_graph(random_module, seed=configured_seed)
+    config = getattr(gui, "ai_generation_config", None)
+    config = dict(config) if isinstance(config, dict) else {}
+    mission_data = generate_mission_graph(
+        random_module,
+        seed=configured_seed,
+        num_rooms=config.get("num_rooms", getattr(gui, "ai_num_rooms", None)),
+        difficulty=config.get("difficulty", getattr(gui, "ai_difficulty", "MEDIUM")),
+        max_keys=config.get("max_keys", getattr(gui, "ai_max_keys", 2)),
+    )
     gui.ai_mission_graph_draft = copy.deepcopy(mission_data["mission_graph"])
     gui.ai_mission_graph_seed = int(mission_data["seed"])
     gui.ai_mission_graph_layout = _compute_editor_layout(gui.ai_mission_graph_draft)
@@ -214,10 +341,9 @@ def ensure_mission_graph_editor_draft(gui, random_module, logger=None):
             int(mission_data["num_edges"]),
         )
 
-
-def generate_mission_graph(random_module, *, seed=None, num_rooms=None):
+def generate_mission_graph(random_module, *, seed=None, num_rooms=None, difficulty="MEDIUM", max_keys=2):
     """Generate a medium-difficulty mission graph and return metadata."""
-    from src.generation.grammar import MissionGrammar, Difficulty as GrammarDifficulty, graph_to_gnn_input
+    from src.generation.grammar import MissionGrammar, Difficulty as GrammarDifficulty
 
     if seed is None:
         chosen_seed = int(random_module.randint(0, 999999))
@@ -227,15 +353,114 @@ def generate_mission_graph(random_module, *, seed=None, num_rooms=None):
         chosen_seed = int(seed)
         room_count = int(deterministic_rng.randint(5, 10)) if num_rooms is None else int(num_rooms)
 
-    room_count = max(5, min(10, int(room_count)))
-    grammar = MissionGrammar(seed=chosen_seed)
-    mission_graph = grammar.generate(
-        difficulty=GrammarDifficulty.MEDIUM,
-        num_rooms=room_count,
-        max_keys=2,
+    room_count = max(5, min(24, int(room_count)))
+    try:
+        max_keys = max(0, min(8, int(max_keys)))
+    except (TypeError, ValueError):
+        max_keys = 2
+
+    if isinstance(difficulty, GrammarDifficulty):
+        grammar_difficulty = difficulty
+    else:
+        difficulty_text = str(difficulty or "MEDIUM").strip().upper()
+        difficulty_lookup = {
+            "1": GrammarDifficulty.EASY,
+            "EASY": GrammarDifficulty.EASY,
+            "2": GrammarDifficulty.MEDIUM,
+            "MEDIUM": GrammarDifficulty.MEDIUM,
+            "3": GrammarDifficulty.HARD,
+            "HARD": GrammarDifficulty.HARD,
+            "4": GrammarDifficulty.EXPERT,
+            "EXPERT": GrammarDifficulty.EXPERT,
+        }
+        grammar_difficulty = difficulty_lookup.get(difficulty_text, GrammarDifficulty.MEDIUM)
+
+    def _generate_once(candidate_seed: int, internal_room_count: int):
+        grammar = MissionGrammar(seed=int(candidate_seed))
+        mission_graph = grammar.generate(
+            difficulty=grammar_difficulty,
+            num_rooms=int(internal_room_count),
+            max_keys=max_keys,
+        )
+        out = mission_graph_to_gnn_input(mission_graph)
+        out["seed"] = int(candidate_seed)
+        out["base_seed"] = chosen_seed
+        out["requested_num_rooms"] = room_count
+        out["internal_num_rooms"] = int(internal_room_count)
+        out["difficulty"] = grammar_difficulty.name
+        out["max_keys"] = max_keys
+        return out
+
+    if num_rooms is None:
+        return _generate_once(chosen_seed, room_count)
+
+    internal_counts = sorted(
+        range(max(5, room_count - 6), room_count + 1),
+        key=lambda value: (abs(int(value) - room_count), -int(value)),
     )
-    out = mission_graph_to_gnn_input(mission_graph)
-    out["seed"] = chosen_seed
+    seed_candidates = [chosen_seed + offset for offset in range(8)]
+
+    best = None
+    best_score = None
+    for candidate_seed in seed_candidates:
+        for internal_room_count in internal_counts:
+            candidate = _generate_once(candidate_seed, internal_room_count)
+            actual = int(candidate["num_nodes"])
+            score = (
+                abs(actual - room_count),
+                1 if actual > room_count else 0,
+                abs(int(internal_room_count) - room_count),
+                abs(int(candidate_seed) - chosen_seed),
+            )
+            if best is None or score < best_score:
+                best = candidate
+                best_score = score
+            if actual == room_count:
+                return candidate
+
+    return best
+
+
+def generate_comprehensive_demo_graph(seed=None):
+    """Generate a hardcoded 3x3 comprehensive demo graph that guarantees all mechanics."""
+    from src.generation.grammar import MissionGraph, MissionNode, NodeType, EdgeType
+
+    graph = MissionGraph()
+
+    # R7: Start
+    graph.add_node(MissionNode(id=7, node_type=NodeType.START, position=(2, 1, 0), difficulty=0.1))
+
+    # R4: Hub with Small Key
+    graph.add_node(MissionNode(id=4, node_type=NodeType.KEY, position=(1, 1, 0), difficulty=0.3))
+    graph.add_edge(7, 4, EdgeType.PATH)
+
+    # R3: Enemy Gauntlet
+    graph.add_node(MissionNode(id=3, node_type=NodeType.ENEMY, position=(1, 0, 0), difficulty=0.8, enemy_count_hint=4))
+    graph.add_edge(4, 3, EdgeType.LOCKED) # Small key required
+
+    # R6: Bomb Item
+    graph.add_node(MissionNode(id=6, node_type=NodeType.ITEM, position=(2, 0, 0), difficulty=0.4, item_type="BOMB"))
+    graph.add_edge(3, 6, EdgeType.PATH)
+
+    # R5: Water Hazard + Boss Key
+    graph.add_node(MissionNode(id=5, node_type=NodeType.BIG_KEY, position=(1, 2, 0), difficulty=0.6))
+    graph.add_edge(4, 5, EdgeType.ITEM_GATE, item_required="BOMB")
+
+    # R2: Puzzle
+    graph.add_node(MissionNode(id=2, node_type=NodeType.PUZZLE, position=(0, 2, 0), difficulty=0.5))
+    graph.add_edge(5, 2, EdgeType.ONE_WAY) # Soft drop
+
+    # R1: Pre-boss / Switch Door
+    graph.add_node(MissionNode(id=1, node_type=NodeType.BOSS_DOOR, position=(0, 1, 0), difficulty=0.7))
+    graph.add_edge(2, 1, EdgeType.ON_OFF_GATE) # Requires puzzle solved
+
+    # R0: Boss and Goal
+    graph.add_node(MissionNode(id=0, node_type=NodeType.GOAL, position=(0, 0, 0), difficulty=1.0, enemy_count_hint=2))
+    graph.add_edge(1, 0, EdgeType.BOSS_LOCKED) # Requires Boss Key
+
+    graph.sanitize()
+    out = mission_graph_to_gnn_input(graph)
+    out["seed"] = 42 if seed is None else int(seed)
     return out
 
 
@@ -243,7 +468,23 @@ def _resolve_vqvae_checkpoint_for_generation(checkpoint_path: Path):
     """Prefer an embedded VQ-VAE, otherwise fall back to sibling pretrain weights."""
     import torch
 
+    repo_root = _repo_root()
+    metadata, _metadata_path = _load_checkpoint_metadata(checkpoint_path)
+    metadata_vqvae = None
+    if isinstance(metadata, dict):
+        extra = metadata.get("extra", {})
+        if isinstance(extra, dict):
+            metadata_vqvae = extra.get("vqvae_checkpoint")
+
+    metadata_candidates = []
+    if metadata_vqvae:
+        candidate = Path(str(metadata_vqvae)).expanduser()
+        if not candidate.is_absolute():
+            candidate = repo_root / candidate
+        metadata_candidates.append(candidate.resolve())
+
     candidate_paths = [
+        *metadata_candidates,
         checkpoint_path.parent / "vqvae_pretrained.pth",
         checkpoint_path.parent.parent / "vqvae" / "vqvae_pretrained.pth",
         checkpoint_path.parent.parent / "vqvae" / "latest_resume.pth",
@@ -274,6 +515,7 @@ def load_canonical_generation_pipeline(
     device,
     logger,
     strict_checkpoint_mode=False,
+    gui_fast_mode=False,
 ):
     """Construct the canonical room-wise neural-symbolic generation pipeline."""
     from src.pipeline.dungeon_pipeline import NeuralSymbolicDungeonPipeline
@@ -286,6 +528,29 @@ def load_canonical_generation_pipeline(
         if isinstance(resolved_config, dict)
         else {}
     )
+    if bool(gui_fast_mode) and _env_bool("KLTN_GUI_FAST_GENERATION", True):
+        fast_sampler_checkpoint = resolve_fast_sampler_checkpoint_for_generation(
+            checkpoint_path,
+            resolved_config if isinstance(resolved_config, dict) else None,
+        )
+        if fast_sampler_checkpoint is not None:
+            pipeline_kwargs["fast_sampling_checkpoint"] = str(fast_sampler_checkpoint)
+            pipeline_kwargs["default_use_fast_sampling"] = _env_bool("KLTN_GUI_USE_FAST_SAMPLING", True)
+            logger.info("GUI fast generation: using fast-sampler checkpoint %s", fast_sampler_checkpoint)
+        elif _env_bool("KLTN_GUI_USE_FAST_SAMPLING", False):
+            pipeline_kwargs["default_use_fast_sampling"] = True
+
+        if "KLTN_GUI_DIFFUSION_STEPS" in os.environ:
+            pipeline_kwargs["default_num_diffusion_steps"] = _env_int(
+                "KLTN_GUI_DIFFUSION_STEPS",
+                int(pipeline_kwargs.get("default_num_diffusion_steps", 50)),
+            )
+        elif fast_sampler_checkpoint is None:
+            pipeline_kwargs["default_num_diffusion_steps"] = min(
+                int(pipeline_kwargs.get("default_num_diffusion_steps", 50)),
+                16,
+            )
+
     pipeline = NeuralSymbolicDungeonPipeline(
         vqvae_checkpoint=str(vqvae_checkpoint),
         diffusion_checkpoint=str(checkpoint_path),
@@ -483,6 +748,66 @@ def build_generated_dungeon_payload(tile_grid, seed, num_nodes, num_edges, np_mo
         "num_nodes": num_nodes,
         "num_edges": num_edges,
         "message": f"AI dungeon generated: {num_nodes} rooms, {height}x{width} tiles, seed={seed}",
+    }
+
+
+def save_generated_dungeon_txt(
+    *,
+    tile_grid,
+    seed,
+    num_nodes,
+    num_edges,
+    checkpoint_path=None,
+    export_dir=None,
+    np_module=None,
+):
+    """Persist a generated dungeon as TXT and PNG files and return the written paths."""
+    np_module = np_module or __import__("numpy")
+    grid = np_module.asarray(tile_grid, dtype=np_module.int32)
+    height, width = grid.shape
+    root = Path(export_dir) if export_dir else Path(os.environ.get("KLTN_AI_EXPORT_DIR", "") or "")
+    if str(root).strip() in {"", "."} and not export_dir and not os.environ.get("KLTN_AI_EXPORT_DIR"):
+        root = _repo_root() / "exports" / "generated_levels"
+    root = root.expanduser().resolve()
+    root.mkdir(parents=True, exist_ok=True)
+
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_seed = "none" if seed is None else str(int(seed))
+    txt_path = root / f"gui_ai_generated_seed{safe_seed}_{height}x{width}_{stamp}.txt"
+    latest_path = root / "gui_ai_generated_latest.txt"
+    np_module.savetxt(str(txt_path), grid, fmt="%d")
+    np_module.savetxt(str(latest_path), grid, fmt="%d")
+
+    png_path = txt_path.with_suffix(".png")
+    latest_png_path = latest_path.with_suffix(".png")
+    from src.gui.rendering.level_image_export import save_level_grid_png
+
+    save_level_grid_png(grid, png_path, np_module=np_module)
+    save_level_grid_png(grid, latest_png_path, np_module=np_module)
+
+    metadata = {
+        "seed": None if seed is None else int(seed),
+        "num_nodes": int(num_nodes),
+        "num_edges": int(num_edges),
+        "height": int(height),
+        "width": int(width),
+        "checkpoint_path": None if checkpoint_path is None else str(checkpoint_path),
+        "txt_path": str(txt_path),
+        "latest_txt_path": str(latest_path),
+        "png_path": str(png_path),
+        "latest_png_path": str(latest_png_path),
+    }
+    metadata_path = txt_path.with_suffix(".metadata.json")
+    latest_metadata_path = latest_path.with_suffix(".metadata.json")
+    metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+    latest_metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+    return {
+        "txt_path": txt_path,
+        "latest_txt_path": latest_path,
+        "png_path": png_path,
+        "latest_png_path": latest_png_path,
+        "metadata_path": metadata_path,
+        "latest_metadata_path": latest_metadata_path,
     }
 
 

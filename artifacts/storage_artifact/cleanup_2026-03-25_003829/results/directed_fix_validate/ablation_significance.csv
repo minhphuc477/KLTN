@@ -1,4 +1,0 @@
-config,metric,n_pairs,delta_mean_cfg_minus_full,delta_ci_low,delta_ci_high,p_value,effect_size_d,p_value_bh_fdr,significant_fdr_0_05
-COND_WEAK_GRAPH,solvable,4,0.0,0.0,0.0,1.0,0.0,1.0,False
-COND_WEAK_GRAPH,path_optimal,4,0.0,0.0,0.0,1.0,0.0,1.0,False
-COND_WEAK_GRAPH,generation_time_sec,4,-0.038617074489593506,-0.1208043098449707,0.016437172889709473,0.6415896025993502,-0.5172221886241622,1.0,False

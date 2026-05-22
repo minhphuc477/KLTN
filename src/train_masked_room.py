@@ -72,6 +72,9 @@ class MaskedRoomTrainingConfig:
         shuffle_train: bool = True,
         shuffle_val: bool = False,
         normalize: bool = True,
+        train_dungeon_ids: Optional[List[int]] = None,
+        test_dungeon_ids: Optional[List[int]] = None,
+        variants: Optional[List[int]] = None,
         num_classes: int = 44,
         latent_dim: int = 64,
         node_feature_dim: int = GRAPH_NODE_FEATURE_DIM,
@@ -151,6 +154,9 @@ class MaskedRoomTrainingConfig:
         self.shuffle_train = bool(shuffle_train)
         self.shuffle_val = bool(shuffle_val)
         self.normalize = bool(normalize)
+        self.train_dungeon_ids = [int(v) for v in (train_dungeon_ids if train_dungeon_ids is not None else list(range(1, 9)))]
+        self.test_dungeon_ids = [int(v) for v in (test_dungeon_ids if test_dungeon_ids is not None else [9])]
+        self.variants = [int(v) for v in (variants if variants is not None else [1, 2])]
         self.num_classes = int(max(1, num_classes))
         self.latent_dim = int(max(1, latent_dim))
         self.node_feature_dim = int(max(1, node_feature_dim))
@@ -309,6 +315,9 @@ def masked_room_training_kwargs_from_resolved_config(config: Dict[str, Any]) -> 
         "shuffle_train": dataset["shuffle_train"],
         "shuffle_val": dataset["shuffle_val"],
         "normalize": dataset["normalize"],
+        "train_dungeon_ids": dataset.get("train_dungeons", list(range(1, 9))),
+        "test_dungeon_ids": dataset.get("test_dungeons", [9]),
+        "variants": dataset.get("variants", [1, 2]),
         "num_classes": dataset["num_classes"],
         "latent_dim": config["vqvae"]["latent_dim"],
         "node_feature_dim": dataset["node_feature_dim"],
@@ -400,6 +409,9 @@ def _legacy_masked_room_overrides_from_args(args: argparse.Namespace) -> Dict[st
 
     _set("data_dir", getattr(args, "data_dir", None))
     _set("batch_size", getattr(args, "batch_size", None))
+    _set("train_dungeon_ids", getattr(args, "train_dungeon_ids", None))
+    _set("test_dungeon_ids", getattr(args, "test_dungeon_ids", None))
+    _set("variants", getattr(args, "variants", None))
     _set("epochs", getattr(args, "epochs", None))
     _set("learning_rate", getattr(args, "lr", None))
     _set("num_classes", getattr(args, "num_classes", None))
@@ -499,6 +511,8 @@ def _create_masked_room_dataloaders(
         semantic_puzzle_offset=config.semantic_puzzle_offset,
         puzzle_stage_topology_enabled=config.puzzle_stage_topology_enabled,
         puzzle_stage_trace_decay=config.puzzle_stage_trace_decay,
+        dungeon_ids=config.train_dungeon_ids,
+        variants=config.variants,
     )
     try:
         base_loader_batches = int(len(base_loader))
@@ -1196,10 +1210,11 @@ def train_masked_room(config: MaskedRoomTrainingConfig) -> MaskedRoomTrainer:
     best_metric_value = float("inf")
     epoch_metrics: Dict[str, Any] = {}
     logger.info(
-        "Masked-room split: train=%d rooms | %s=%d rooms | best_metric=%s",
+        "Masked-room split: train=%d rooms | %s=%d rooms | final_test_dungeons=%s | best_metric=%s",
         int(train_size),
         eval_split_name,
         int(eval_size),
+        list(getattr(config, "test_dungeon_ids", [9])),
         best_metric_name,
     )
     resume_path = resolve_resume_checkpoint(

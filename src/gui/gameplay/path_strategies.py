@@ -407,7 +407,7 @@ def smart_grid_path(
 
     alg = getattr(gui, "algorithm_idx", 0)
 
-    full_solver_algorithms = {5, 6, 7, 8, 9, 10, 11, 12}
+    full_solver_algorithms = {5, 6, 7, 8, 9, 10, 11, 12, 13, 14}
     if alg in full_solver_algorithms:
         alg_name_fn = getattr(gui, "_algorithm_name", lambda idx: f"Algorithm {idx}")
         alg_name = alg_name_fn(alg)

@@ -44,7 +44,7 @@ def apply_checkbox_widget_update(gui: Any, widget: Any, logger: Any) -> None:
         if widget.checked:
             current = gui.maps[gui.current_map_idx]
             if not hasattr(current, "graph") or not current.graph:
-                gui._set_message("Topology not available for this map", 3.0)
+                gui._set_message("Topology overlay: ON (inferred from stitched grid)", 2.5)
             else:
                 gui._set_message("Topology overlay: ON", 2.0)
         else:
@@ -52,6 +52,9 @@ def apply_checkbox_widget_update(gui: Any, widget: Any, logger: Any) -> None:
     elif widget.flag_name == "show_topology_legend" and old_value != widget.checked:
         gui.show_topology_legend = widget.checked
         gui._set_message(f"Topology legend: {'ON' if widget.checked else 'OFF'}", 1.8)
+    elif widget.flag_name == "force_grid" and changed:
+        gui.force_grid_algorithm = bool(widget.checked)
+        gui._set_message(f"Force grid solver: {'ON' if widget.checked else 'OFF'}", 1.5)
 
 
 def apply_dropdown_widget_update(gui: Any, widget: Any, logger: Any) -> None:

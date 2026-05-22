@@ -21,6 +21,12 @@ env/
 
 # Generated outputs
 output/
+outputs/
+results/
+exports/
+tmp/
+tmp*/
+artifacts/
 *.pkl
 *.pth
 validation_report.json
@@ -43,7 +49,7 @@ build/
 # Logs
 *.log
 
-# LaTeX generated artifacts
+# LaTeX generated artifacts (build only from REPORT_LATEX/)
 REPORT_LATEX/*.aux
 REPORT_LATEX/*.bbl
 REPORT_LATEX/*.blg
@@ -51,6 +57,15 @@ REPORT_LATEX/*.lof
 REPORT_LATEX/*.lot
 REPORT_LATEX/*.out
 REPORT_LATEX/*.toc
+REPORT_LATEX/*.pdf
+/IEEE_FULL_PAPER_VN.aux
+/IEEE_FULL_PAPER_VN.bbl
+/IEEE_FULL_PAPER_VN.blg
+/IEEE_FULL_PAPER_VN.lof
+/IEEE_FULL_PAPER_VN.lot
+/IEEE_FULL_PAPER_VN.out
+/IEEE_FULL_PAPER_VN.toc
+/IEEE_FULL_PAPER_VN.pdf
 
 # Jupyter checkpoints
 .ipynb_checkpoints/

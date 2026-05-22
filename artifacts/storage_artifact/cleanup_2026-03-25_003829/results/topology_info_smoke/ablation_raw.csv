@@ -1,2 +1,0 @@
-config,seed,success,solvable,confusion_ratio,confusion_index,path_optimal,tile_prior_kl,graph_edit_distance,generation_time_sec,novelty,reconstruction_error,constraint_valid,room_repair_rate,tiles_repaired,topology_representable_edge_rate,topology_edge_connection_recall,topology_phantom_connection_rate,topology_preservation_score,error
-FULL,321,True,False,,0.0,0.0,13.582111728048627,0.19100267379679145,11.93871283531189,0.16112441023314342,0.0,1.0,0.0,0.0,0.2222222222222222,1.0,0.0,0.65,

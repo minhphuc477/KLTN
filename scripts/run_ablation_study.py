@@ -2,7 +2,7 @@
 Thesis-grade ablation runner with fixed-seed paired comparisons.
 
 Implements:
-1) Core ablations: FULL vs NO_EVOLUTION / NO_WFC / NO_LOGIC
+1) Core ablations: FULL vs NO_EVOLUTION / NO_GRAPH / NO_WFC / NO_LOGIC
     + RANDOM_TOPOLOGY / PURE_WFC
 2) Requested sweeps:
    - VQ codebook size (128/512/2048) via categorical codebook cap
@@ -1208,6 +1208,12 @@ def build_experiment_set(include_extended: bool = True) -> List[ExperimentConfig
         ExperimentConfig(name="TOPO_LIGHTWEIGHT", topology_refinement_mode="lightweight"),
         ExperimentConfig(name="NO_EVOLUTION", use_evolution=False),
         ExperimentConfig(name="RANDOM_TOPOLOGY", use_evolution=False, random_topology=True),
+        ExperimentConfig(
+            name="NO_GRAPH",
+            use_tpe=False,
+            disable_graph_node_cross_attention=True,
+            topology_refinement_mode="none",
+        ),
         ExperimentConfig(name="NO_WFC", use_wfc=False),
         ExperimentConfig(name="NO_LOGIC", logic_guidance_scale=0.0),
         ExperimentConfig(name="PURE_WFC", use_evolution=True, pure_wfc=True, use_wfc=False, logic_guidance_scale=0.0),

@@ -125,6 +125,8 @@ def _make_gui(*, advanced=False):
     gui._undo_last_match = lambda: None
     gui._undo_prune = lambda: None
     gui._start_map_elites = lambda: None
+    gui._import_level = lambda: None
+    gui._export_map = lambda: None
     return gui
 
 
@@ -154,7 +156,7 @@ def test_default_control_panel_is_demo_focused_with_level_selector():
     assert checkbox_labels == ["Show Solution Path", "Show Mini Map", "Show Room Graph"]
     assert dropdown_names == ["level", "zoom", "algorithm"]
     assert "Generated Level" in gui.widget_manager.widgets[3].options
-    assert button_labels == ["Solve Level", "Stop", "Reset Level", "Load Model", "Generate Level", "Clear Path"]
+    assert button_labels == ["Solve Level", "Stop", "Reset Level", "Load Model", "Generate Level", "Clear Path", "Import Level", "Export Map"]
     assert "AI Generate" not in button_labels
 
 
@@ -162,11 +164,72 @@ def test_advanced_control_panel_keeps_research_tools_available():
     gui = _make_gui(advanced=True)
     _build(gui)
 
-    labels = [w.label for w in gui.widget_manager.widgets]
-    assert "Solver Comparison" in labels
-    assert "Load Model" in labels
-    assert "AI Generate" in labels
-    assert "Apply Threshold" in labels
+    checkbox_labels = [w.label for w in gui.widget_manager.widgets if isinstance(w, DummyCheckbox)]
+    dropdown_names = [w.control_name for w in gui.widget_manager.widgets if isinstance(w, DummyDropdown)]
+    button_labels = [w.label for w in gui.widget_manager.widgets if isinstance(w, DummyButton)]
+
+    assert checkbox_labels == [
+        "Solver Comparison",
+        "Parallel Search",
+        "Multi-Goal Pathfinding",
+        "ML Heuristic",
+        "D* Lite Replanning",
+        "Show Heatmap Overlay",
+        "Show Path Overlay",
+        "Show MAP-Elites Overlay",
+        "Show Topology Overlay",
+        "Topology Legend (details)",
+        "Show Minimap",
+        "Diagonal Movement",
+        "Use Jump Point Search (JPS)",
+        "Show JPS Overlay",
+        "Speedrun Mode",
+        "Strict Original LoZ Rules",
+        "Dynamic Difficulty",
+        "Force Grid Solver",
+        "Enable Prechecks (fast checks before solve)",
+        "Auto-Prune Dead-Ends on Precheck",
+        "Priority: Tie-Break by Locks",
+        "Priority: Key-Pickup Boost",
+        "Enable ARA* (weighted A*)",
+        "Allow Loaded Route Teleports",
+        "Keep dropdown open after select",
+    ]
+    assert dropdown_names == [
+        "level",
+        "floor",
+        "zoom",
+        "ara_weight",
+        "difficulty",
+        "presets",
+        "algorithm",
+        "representation",
+        "match_threshold",
+    ]
+    assert button_labels == [
+        "Start Auto-Solve",
+        "Stop",
+        "Generate Dungeon",
+        "AI Generate",
+        "Load Model",
+        "Reset",
+        "Path Preview",
+        "Import Level",
+        "Export Map",
+        "Clear Path",
+        "Export Route",
+        "Load Route",
+        "Open Temp Folder",
+        "Delete Temp Files",
+        "Export Topology",
+        "Compare Solvers",
+        "Match Missing Nodes",
+        "Apply Tentative Matches",
+        "Undo Last Match",
+        "Undo Prune",
+        "Run MAP-Elites",
+    ]
+    assert gui.control_panel_can_scroll is True
 
 
 def test_control_panel_rebuilds_when_feature_flags_change():

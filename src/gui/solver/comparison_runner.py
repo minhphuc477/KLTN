@@ -1,8 +1,10 @@
 """Helpers for background solver-comparison execution in GUI."""
 
+import os
 from typing import Any
 
 from src.gui.components.constants import GUI_ALGORITHM_NAMES
+from src.gui.solver.pcbs_route import compress_pcbs_route_for_replay
 
 
 def set_last_solver_metrics(gui: Any, name: str, nodes: int, time_ms: float, path_len: int) -> None:
@@ -104,24 +106,58 @@ def run_solver_comparison(
                         "P-CBS (Novice)": "novice",
                     }
                     persona = persona_map.get(name, "balanced")
-                    cbs = PersonaDrivenCognitiveBoundedSearch(gui.env, persona=persona, timeout=100000)
+                    try:
+                        pcbs_timeout = int(os.environ.get("KLTN_PCBS_COMPARE_TIMEOUT", os.environ.get("KLTN_PCBS_TIMEOUT", "8000")))
+                    except (AttributeError, RuntimeError, ValueError, TypeError):
+                        pcbs_timeout = 8000
+                    default_seed_by_persona = {
+                        "balanced": 123,
+                        "explorer": 123,
+                        "cautious": 0,
+                        "forgetful": 123,
+                        "speedrunner": 123,
+                        "greedy": 123,
+                        "completionist": 42,
+                        "novice": 42,
+                    }
+                    try:
+                        pcbs_seed = int(os.environ.get("KLTN_PCBS_SEED", default_seed_by_persona.get(persona, 123)))
+                    except (AttributeError, RuntimeError, ValueError, TypeError):
+                        pcbs_seed = int(default_seed_by_persona.get(persona, 123))
+
+                    cbs = PersonaDrivenCognitiveBoundedSearch(
+                        gui.env,
+                        persona=persona,
+                        timeout=pcbs_timeout,
+                        seed=pcbs_seed,
+                        representation=str(getattr(gui, "search_representation", "hybrid") or "hybrid"),
+                    )
                     ok, path, states, metrics = cbs.solve()
                     elapsed = (time_module.time() - start_t) * 1000
                     if ok:
+                        replay_path, route_stats = compress_pcbs_route_for_replay(
+                            grid=getattr(gui.env, "original_grid", None),
+                            path=path,
+                            solver_options=getattr(gui.env, "solver_options", None),
+                        )
                         results.append(
                             {
                                 "name": name,
                                 "success": True,
-                                "path_len": len(path),
+                                "path_len": len(replay_path),
+                                "trajectory_len": len(path),
+                                "loops_removed": int(route_stats.get("loops_removed", 0) or 0),
                                 "nodes": states,
                                 "time_ms": elapsed,
                                 "confusion": round(metrics.confusion_index, 3),
+                                "room_entropy": round(metrics.room_entropy, 3),
+                                "unique_rooms": int(metrics.unique_rooms_visited),
                                 "cog_load": round(metrics.cognitive_load, 3),
                                 "fallback_used": False,
                             }
                         )
                         if not gui.last_solver_metrics:
-                            gui._set_last_solver_metrics(name, states, elapsed, len(path))
+                            gui._set_last_solver_metrics(name, states, elapsed, len(replay_path))
                     else:
                         results.append(
                             {

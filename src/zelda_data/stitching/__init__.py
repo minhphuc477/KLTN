@@ -17,6 +17,7 @@ from src.zelda_data.stitching.connectivity import (
     connect_doors,
     ensure_room_connectivity,
     find_floor_near_door,
+    seal_stitched_dungeon_boundaries,
 )
 from src.zelda_data.stitching.compaction import compact_rooms
 
@@ -34,4 +35,5 @@ __all__ = [
     "find_boundary_doors",
     "place_entities_from_graph",
     "place_items_from_graph",
+    "seal_stitched_dungeon_boundaries",
 ]

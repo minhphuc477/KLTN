@@ -42,27 +42,13 @@ def manual_step(
 
     gui.step_count += 1
 
-    if gui.env.state.keys > old_keys:
-        keys_gained = gui.env.state.keys - old_keys
-        gui.keys_collected += keys_gained
-        if gui.effects:
-            gui.effects.add_effect(pop_effect_cls(new_pos, (255, 215, 0)))
-        gui.item_pickup_times["key"] = time_module.time()
-        gui.message = f"Key collected! ({gui.keys_collected}/{gui.total_keys}, {gui.env.state.keys} held)"
-
-    if gui.env.state.bomb_count > old_bombs:
-        gui.bombs_collected += 1
-        if gui.effects:
-            gui.effects.add_effect(pop_effect_cls(new_pos, (200, 80, 80)))
-        gui.item_pickup_times["bomb"] = time_module.time()
-        gui.message = f"Bombs acquired! ({gui.env.state.bomb_count} held)"
-
-    if gui.env.state.has_boss_key and not old_boss_key:
-        gui.boss_keys_collected += 1
-        if gui.effects:
-            gui.effects.add_effect(flash_effect_cls(new_pos, (180, 40, 180), 0.5))
-        gui.item_pickup_times["boss_key"] = time_module.time()
-        gui.message = f"BOSS KEY acquired! ({gui.boss_keys_collected}/{gui.total_boss_keys})"
+    # Use the canonical tracking pipeline (same as auto-step) so that
+    # collected_items, collected_positions, item_type_map, and effects
+    # are all updated consistently.
+    try:
+        gui._track_item_collection(old_state, gui.env.state)
+    except (AttributeError, RuntimeError, ValueError, TypeError):
+        pass
 
     try:
         gui._track_item_usage(old_state, gui.env.state)
@@ -72,11 +58,11 @@ def manual_step(
     if gui.modern_hud:
         gui.modern_hud.update_game_state(
             keys=gui.env.state.keys,
-            bombs=1 if gui.env.state.has_bomb else 0,
+            bombs=gui.env.state.bomb_count,
             has_boss_key=gui.env.state.has_boss_key,
             position=new_pos,
             steps=gui.step_count,
-            message=gui.message,
+            message=getattr(gui, "message", ""),
         )
         if hasattr(gui.modern_hud, "keys_used"):
             gui.modern_hud.keys_used = getattr(gui, "keys_used", 0)

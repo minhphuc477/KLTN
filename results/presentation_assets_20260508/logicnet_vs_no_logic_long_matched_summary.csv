@@ -1,8 +1,0 @@
-metric,value
-seeds,42;43;44;45
-full_rate,0.5
-no_rate,0.5
-both_true,2
-both_false,2
-full_only,0
-no_only,0

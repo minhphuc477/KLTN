@@ -107,11 +107,42 @@ def handle_global_keydown_shortcuts(
         if gui.show_topology:
             cur = gui.maps[gui.current_map_idx]
             if not hasattr(cur, "graph") or not cur.graph:
-                gui._set_message("Topology not available for this map", 3.0)
+                gui._set_message("Topology overlay: ON (inferred from stitched grid)", 2.5)
             else:
                 gui._set_message("Topology overlay: ON", 2.0)
         else:
             gui._set_message("Topology overlay: OFF", 1.2)
+        return True
+
+    # --- Import TXT level (I key) ---
+    if event.key == pygame_module.K_i:
+        try:
+            gui._import_level()
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+            logger.exception("Import level shortcut failed: %s", exc)
+            gui._set_message("Import failed")
+        return True
+
+    # --- Export current map (Ctrl+S) ---
+    if event.key == pygame_module.K_s and (pygame_module.key.get_mods() & pygame_module.KMOD_CTRL):
+        try:
+            gui._export_map()
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+            logger.exception("Export map shortcut failed: %s", exc)
+            gui._set_message("Export failed")
+        return True
+
+    # --- Toggle Advanced GUI (Ctrl+A) ---
+    if event.key == pygame_module.K_a and (pygame_module.key.get_mods() & pygame_module.KMOD_CTRL):
+        gui.advanced_gui = not getattr(gui, "advanced_gui", False)
+        # Force control panel rebuild by clearing the widget signature
+        gui._control_panel_widget_signature = None
+        mode = "ADVANCED" if gui.advanced_gui else "SIMPLE"
+        gui._set_message(f"GUI mode: {mode} (Ctrl+A)")
+        try:
+            gui._show_toast(f"Switched to {mode} mode", 2.0, "success")
+        except (AttributeError, RuntimeError, ValueError, TypeError):
+            pass
         return True
 
     return False

@@ -3263,6 +3263,11 @@ class EvolutionaryTopologyGenerator:
         self.diversity_history: List[float] = []
         self.feasible_ratio_history: List[float] = []
         self.avg_violation_history: List[float] = []
+        self.qd_coverage_history: List[float] = []
+        self.qd_qd_score_history: List[float] = []
+        self.qd_mean_fitness_history: List[float] = []
+        self.qd_num_elites_history: List[float] = []
+        self.qd_final_archive_stats: Dict[str, float] = {}
         
         # Rule ID bounds (skip StartRule at index 0)
         self.min_rule_id = 1
@@ -5563,6 +5568,20 @@ class EvolutionaryTopologyGenerator:
             if ((eval_idx + 1) % max(1, int(self.population_size)) == 0) or (eval_idx == total_evaluations - 1):
                 generation_counter += 1
                 archive_stats = archive.get_stats()
+                qd_stats = {
+                    "coverage": float(archive_stats.coverage),
+                    "qd_score": float(archive_stats.total_fitness),
+                    "mean_fitness": float(archive_stats.mean_fitness),
+                    "max_fitness": float(archive_stats.max_fitness),
+                    "min_fitness": float(archive_stats.min_fitness),
+                    "num_elites": float(archive_stats.num_elites),
+                    "feature_diversity": float(archive_stats.feature_diversity),
+                }
+                self.qd_final_archive_stats = qd_stats
+                self.qd_coverage_history.append(qd_stats["coverage"])
+                self.qd_qd_score_history.append(qd_stats["qd_score"])
+                self.qd_mean_fitness_history.append(qd_stats["mean_fitness"])
+                self.qd_num_elites_history.append(qd_stats["num_elites"])
                 if batch:
                     self._adapt_global_rule_prior_from_population(batch)
                     self.best_fitness_history.append(float(max(x.fitness for x in batch)))
@@ -5839,6 +5858,11 @@ class EvolutionaryTopologyGenerator:
             'diversity_history': self.diversity_history,
             'feasible_ratio_history': self.feasible_ratio_history,
             'avg_violation_history': self.avg_violation_history,
+            'qd_coverage_history': self.qd_coverage_history,
+            'qd_qd_score_history': self.qd_qd_score_history,
+            'qd_mean_fitness_history': self.qd_mean_fitness_history,
+            'qd_num_elites_history': self.qd_num_elites_history,
+            'qd_final_archive_stats': self.qd_final_archive_stats,
             'final_best_fitness': self.best_fitness_history[-1] if self.best_fitness_history else 0.0,
             'generations_run': len(self.best_fitness_history),
             'converged': self.best_fitness_history[-1] >= 0.95 if self.best_fitness_history else False,

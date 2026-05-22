@@ -114,6 +114,29 @@ def connect_doors(
             if reciprocal and pos > neighbor:
                 continue
 
+    # Seal ALL room border tiles BEFORE carving connections.
+    seal_stitched_dungeon_boundaries(
+        grid=grid,
+        rooms=rooms,
+        semantic_palette=semantic_palette,
+        room_height=room_height,
+        room_width=room_width,
+    )
+
+    # NOW carve the real connections on top of the sealed borders.
+    for pos, room in rooms.items():
+        for direction, (delta, reverse_direction) in directions.items():
+            if not room.doors.get(direction):
+                continue
+
+            neighbor = (pos[0] + delta[0], pos[1] + delta[1])
+            if neighbor not in rooms:
+                continue
+
+            reciprocal = bool(rooms[neighbor].doors.get(reverse_direction))
+            if reciprocal and pos > neighbor:
+                continue
+
             carve_room_connection_between_bboxes(
                 grid,
                 _room_bbox(pos),
@@ -130,6 +153,42 @@ def connect_doors(
         room_height=room_height,
         room_width=room_width,
     )
+
+
+def seal_stitched_dungeon_boundaries(
+    grid: np.ndarray,
+    rooms: Dict[RoomPos, Any],
+    semantic_palette: Dict[str, int],
+    room_height: int,
+    room_width: int,
+) -> None:
+    """Seal ALL room border tiles with walls.
+
+    This must run BEFORE carving connections so that every border tile
+    from the original room data is replaced with WALL.  The subsequent
+    carving step then writes the correct DOOR tiles at the precise
+    connection points, overwriting these walls.
+    """
+    wall_id = int(semantic_palette["WALL"])
+    H, W = grid.shape
+
+    for pos, room in rooms.items():
+        row, col = pos
+        y0 = row * room_height
+        x0 = col * room_width
+
+        border_specs = [
+            ("N", [y0], range(x0, x0 + room_width)),
+            ("S", [y0 + room_height - 1], range(x0, x0 + room_width)),
+            ("W", range(y0, y0 + room_height), [x0]),
+            ("E", range(y0, y0 + room_height), [x0 + room_width - 1]),
+        ]
+
+        for _dir, b_rows, b_cols in border_specs:
+            for r in b_rows:
+                for c in b_cols:
+                    if 0 <= r < H and 0 <= c < W:
+                        grid[r, c] = wall_id
 
 
 def find_floor_near_door(

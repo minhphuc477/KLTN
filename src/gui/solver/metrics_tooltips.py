@@ -10,6 +10,8 @@ def format_cbs_metrics_tooltip(cbs_metrics: dict) -> str:
         f"Cognitive Load: {cbs_metrics['cognitive_load']:.3f}",
         f"Goal-Sighting Latency: {goal_latency} steps",
         f"Unique Tiles: {cbs_metrics['unique_tiles']}",
+        f"Unique Rooms: {cbs_metrics.get('unique_rooms', 0)}",
+        f"Room Entropy: {cbs_metrics.get('room_entropy', 0.0):.3f}",
         f"Peak Memory: {cbs_metrics['peak_memory']} items",
         f"Replans: {cbs_metrics['replans']}",
         f"Confusion Events: {cbs_metrics['confusion_events']}",

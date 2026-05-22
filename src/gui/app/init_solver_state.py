@@ -91,6 +91,10 @@ def initialize_solver_execution_state(*, gui: Any, threading_module: Any) -> Non
     gui.parallel_search_done = False
     gui.parallel_search_result = None
 
+    gui.ai_gen_thread = None
+    gui.ai_gen_done = False
+    gui.ai_gen_result = None
+
     gui._precheck_snapshot = None
 
     gui.agent_visual_pos = None

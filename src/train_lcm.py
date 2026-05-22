@@ -87,6 +87,9 @@ class FastSamplerTrainingConfig:
         use_vglc: bool = True,
         normalize: bool = True,
         room_level: bool = True,
+        train_dungeon_ids: Optional[List[int]] = None,
+        test_dungeon_ids: Optional[List[int]] = None,
+        variants: Optional[List[int]] = None,
         topology_supervision_mode: str = "runtime_aligned",
         semantic_role_prior_strength: float = DEFAULT_SEMANTIC_ROLE_PRIOR_STRENGTH,
         semantic_puzzle_offset: int = DEFAULT_SEMANTIC_PUZZLE_OFFSET,
@@ -138,6 +141,9 @@ class FastSamplerTrainingConfig:
         self.use_vglc = bool(use_vglc)
         self.normalize = bool(normalize)
         self.room_level = bool(room_level)
+        self.train_dungeon_ids = [int(v) for v in (train_dungeon_ids if train_dungeon_ids is not None else list(range(1, 9)))]
+        self.test_dungeon_ids = [int(v) for v in (test_dungeon_ids if test_dungeon_ids is not None else [9])]
+        self.variants = [int(v) for v in (variants if variants is not None else [1, 2])]
         self.topology_supervision_mode = str(topology_supervision_mode).strip().lower()
         self.semantic_role_prior_strength = float(max(0.0, min(1.0, semantic_role_prior_strength)))
         self.semantic_puzzle_offset = int(max(0, semantic_puzzle_offset))
@@ -219,6 +225,9 @@ def fast_sampler_training_kwargs_from_resolved_config(config: Dict[str, Any]) ->
         "use_vglc": dataset["use_vglc"],
         "normalize": dataset["normalize"],
         "room_level": dataset["room_level"],
+        "train_dungeon_ids": dataset.get("train_dungeons", list(range(1, 9))),
+        "test_dungeon_ids": dataset.get("test_dungeons", [9]),
+        "variants": dataset.get("variants", [1, 2]),
         "topology_supervision_mode": dataset["topology_supervision_mode"],
         "semantic_role_prior_strength": config["generation"]["semantic_role_prior_strength"],
         "semantic_puzzle_offset": config["generation"]["semantic_puzzle_offset"],
@@ -279,6 +288,9 @@ def _legacy_fast_sampler_overrides_from_args(args: argparse.Namespace) -> Dict[s
     _set("data_dir", getattr(args, "data_dir", None))
     _set("batch_size", getattr(args, "batch_size", None))
     _set("use_vglc", getattr(args, "use_vglc", None))
+    _set("train_dungeon_ids", getattr(args, "train_dungeon_ids", None))
+    _set("test_dungeon_ids", getattr(args, "test_dungeon_ids", None))
+    _set("variants", getattr(args, "variants", None))
     _set("puzzle_structure_dropout_prob", getattr(args, "puzzle_structure_dropout_prob", None))
     _set("puzzle_stage_conditioning_enabled", getattr(args, "puzzle_stage_conditioning_enabled", None))
     _set("puzzle_stage_token_scale", getattr(args, "puzzle_stage_token_scale", None))
@@ -883,6 +895,8 @@ def _create_fast_sampler_dataloaders(
         semantic_puzzle_offset=config.semantic_puzzle_offset,
         puzzle_stage_topology_enabled=config.puzzle_stage_topology_enabled,
         puzzle_stage_trace_decay=config.puzzle_stage_trace_decay,
+        dungeon_ids=config.train_dungeon_ids,
+        variants=config.variants,
     )
     dataset = base_loader.dataset
     train_dataset, val_dataset = split_dataset_for_vqvae_validation(
@@ -1040,10 +1054,11 @@ def train_fast_sampler(config: FastSamplerTrainingConfig) -> ConsistencyLoRATrai
     best_metric_value = float("inf")
     metrics: Dict[str, Any] = {}
     logger.info(
-        "Fast sampler split: train=%d rooms | %s=%d rooms | best_metric=%s",
+        "Fast sampler split: train=%d rooms | %s=%d rooms | final_test_dungeons=%s | best_metric=%s",
         int(train_size),
         eval_split_name,
         int(eval_size),
+        list(getattr(config, "test_dungeon_ids", [9])),
         best_metric_name,
     )
     resume_path = resolve_resume_checkpoint(

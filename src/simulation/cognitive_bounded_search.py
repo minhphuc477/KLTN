@@ -77,7 +77,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import (
-    Dict, List, Tuple, Optional, Set, Any, 
+    Any, Dict, Hashable, List, Tuple, Optional, Set,
     TYPE_CHECKING
 )
 from collections import deque, defaultdict
@@ -92,6 +92,8 @@ logger = logging.getLogger(__name__)
 
 # Import tile constants from canonical source
 from src.core.definitions import (
+    ROOM_HEIGHT,
+    ROOM_WIDTH,
     SEMANTIC_PALETTE
 )
 
@@ -99,7 +101,8 @@ from src.core.definitions import (
 from src.simulation.validator import (
     WALKABLE_IDS, BLOCKING_IDS, CONDITIONAL_IDS, 
     PICKUP_IDS, Action, ACTION_DELTAS,
-    GameState as _GameState
+    GameState as _GameState,
+    StateSpaceAStar,
 )
 
 
@@ -180,6 +183,8 @@ class CBSMetrics:
     
     # Paper metrics (CBS+ Paper Section 4)
     room_entropy: float = 0.0  # Navigational entropy H = -Î£ p(room) Ã— logâ‚‚(p(room))
+    unique_rooms_visited: int = 0
+    total_room_visits: int = 0
     deliberation_events: int = 0
     budget_exhaustion_events: int = 0
     peak_frustration: float = 0.0
@@ -191,7 +196,7 @@ class CBSMetrics:
     focus_guided_steps: int = 0
     
     # Per-room metrics for detailed analysis
-    room_visit_counts: Dict[Tuple[int, int], int] = field(default_factory=dict)
+    room_visit_counts: Dict[Hashable, int] = field(default_factory=dict)
     direction_distribution: Dict[str, int] = field(default_factory=dict)
     memory_timeline: List[int] = field(default_factory=list)
     
@@ -218,6 +223,8 @@ class CBSMetrics:
             'room_visit_counts': dict(self.room_visit_counts),
             'direction_distribution': dict(self.direction_distribution),
             'room_entropy': round(self.room_entropy, 4),
+            'unique_rooms_visited': int(self.unique_rooms_visited),
+            'total_room_visits': int(self.total_room_visits),
             'deliberation_events': self.deliberation_events,
             'budget_exhaustion_events': self.budget_exhaustion_events,
             'peak_frustration': round(self.peak_frustration, 4),
@@ -1907,7 +1914,8 @@ class CognitiveBoundedSearch:
         persona: AgentPersona | str = AgentPersona.BALANCED,
         timeout: int = 100000,
         seed: Optional[int] = None,
-        custom_config: Optional[PersonaConfig] = None
+        custom_config: Optional[PersonaConfig] = None,
+        representation: str = "hybrid",
     ):
         """
         Initialize CBS solver.
@@ -1918,6 +1926,7 @@ class CognitiveBoundedSearch:
             timeout: Maximum steps before giving up
             seed: Random seed for reproducibility
             custom_config: Optional custom PersonaConfig
+            representation: Search abstraction hint: tile, graph, or hybrid
         """
         self.env = env
         self.timeout = timeout
@@ -1937,6 +1946,10 @@ class CognitiveBoundedSearch:
         
         # Alias for compatibility
         self.persona_config = self.config
+        rep_raw = str(representation or "hybrid").strip().lower()
+        if rep_raw not in {"tile", "graph", "hybrid"}:
+            rep_raw = "hybrid"
+        self.representation = rep_raw
         
         # Initialize cognitive components
         grid_shape = (env.height, env.width)
@@ -1952,6 +1965,15 @@ class CognitiveBoundedSearch:
             radius=self.config.vision_radius,
             cone_angle=self.config.vision_cone,
             enable_occlusion=True
+        )
+        self._transition_helper = StateSpaceAStar(
+            env,
+            timeout=max(1, int(timeout)),
+            priority_options={
+                "representation": self.representation,
+                "rules_profile": str(getattr(env, "rules_profile", "vglc_strict") or "vglc_strict"),
+                "allow_diagonals": False,
+            },
         )
         
         # Initialize heuristics
@@ -1972,6 +1994,7 @@ class CognitiveBoundedSearch:
         # Metrics tracking
         self._direction_counts: Dict[str, int] = defaultdict(int)
         self._visit_counts: Dict[Tuple[int, int], int] = defaultdict(int)
+        self._room_visit_counts: Dict[Any, int] = defaultdict(int)
         self._goal_first_seen: int = -1
         self._decisions_made: int = 0
         self._suboptimal_decisions: int = 0
@@ -2002,6 +2025,7 @@ class CognitiveBoundedSearch:
         # Reset run-specific metric accumulators to avoid cross-run leakage.
         self._direction_counts.clear()
         self._visit_counts.clear()
+        self._room_visit_counts.clear()
         self._goal_first_seen = -1
         self._decisions_made = 0
         self._suboptimal_decisions = 0
@@ -2039,7 +2063,7 @@ class CognitiveBoundedSearch:
         states_explored = 0
 
         # Include starting position in visit/memory traces for entropy/load metrics.
-        self._visit_counts[cog_state.game_state.position] += 1
+        self._record_visit(cog_state.game_state.position)
         self._memory_timeline.append(len(self.memory.items))
         
         grid = self.env.original_grid
@@ -2189,7 +2213,7 @@ class CognitiveBoundedSearch:
             self._refresh_active_focus(cog_state, force=inventory_changed)
             
             # Track visits
-            self._visit_counts[best_pos] += 1
+            self._record_visit(best_pos)
             self._memory_timeline.append(len(self.memory.items))
             
             path.append(best_pos)
@@ -2198,6 +2222,31 @@ class CognitiveBoundedSearch:
         # Timeout or stuck
         metrics = self._compute_metrics(path, cog_state)
         return False, path, states_explored, metrics
+
+    def _room_key_for_position(self, position: Tuple[int, int]) -> Any:
+        """
+        Map a global tile coordinate to the room abstraction used by P-CBS metrics.
+
+        Replay and local movement remain tile-level, but cognitive summary
+        metrics should aggregate over rooms. Prefer explicit stitched-dungeon
+        room metadata, then fall back to canonical 16x11 Zelda room slots.
+        """
+        pos = (int(position[0]), int(position[1]))
+        try:
+            room = self.env.get_room_for_position(pos)
+        except (AttributeError, RuntimeError, ValueError, TypeError):
+            room = None
+        if room is not None:
+            if isinstance(room, (tuple, list)) and len(room) >= 2:
+                return (int(room[0]), int(room[1]))
+            return room
+        return (pos[0] // max(1, int(ROOM_HEIGHT)), pos[1] // max(1, int(ROOM_WIDTH)))
+
+    def _record_visit(self, position: Tuple[int, int]) -> None:
+        """Track both replay-level tile visits and cognition-level room visits."""
+        pos = (int(position[0]), int(position[1]))
+        self._visit_counts[pos] += 1
+        self._room_visit_counts[self._room_key_for_position(pos)] += 1
     
     def _perceive(self, cog_state: CognitiveState, grid: np.ndarray) -> None:
         """
@@ -2299,7 +2348,119 @@ class CognitiveBoundedSearch:
             # Check if move is possible
             if self._can_move_to(cog_state.game_state, new_pos, tile_type):
                 candidates.append((new_pos, tile_type))
+
+        candidates.extend(self._get_graph_transition_candidates(cog_state, grid, candidates))
         
+        return candidates
+
+    def _is_at_room_boundary(self, position: Tuple[int, int]) -> bool:
+        """Return True when a position is close enough to a room edge to transition."""
+        room_positions = getattr(self.env, "room_positions", None)
+        if not room_positions:
+            return False
+        room = self._room_key_for_position(position)
+        if room not in room_positions:
+            return False
+        r_off, c_off = room_positions[room]
+        local_r = int(position[0]) - int(r_off)
+        local_c = int(position[1]) - int(c_off)
+        return (
+            local_r <= 1
+            or local_r >= int(ROOM_HEIGHT) - 2
+            or local_c <= 1
+            or local_c >= int(ROOM_WIDTH) - 2
+        )
+
+    def _get_graph_transition_candidates(
+        self,
+        cog_state: CognitiveState,
+        grid: np.ndarray,
+        existing_candidates: List[Tuple[Tuple[int, int], int]],
+    ) -> List[Tuple[Tuple[int, int], int]]:
+        """
+        Add room-graph transitions when the current position is a valid doorway/stair.
+
+        P-CBS still outputs replayable tile positions, but in hybrid/graph mode
+        it should use the same room connectivity as the hard solvers instead of
+        treating the stitched text grid as the whole world.
+        """
+        if self.representation == "tile":
+            return []
+        if not getattr(self.env, "graph", None) or not getattr(self.env, "room_to_node", None):
+            return []
+
+        state = cog_state.game_state
+        current_pos = tuple(int(v) for v in state.position)
+        current_tile = int(grid[current_pos[0], current_pos[1]])
+        is_stair = current_tile == int(SEMANTIC_PALETTE["STAIR"])
+        is_door = current_tile in {
+            int(SEMANTIC_PALETTE["DOOR_OPEN"]),
+            int(SEMANTIC_PALETTE["DOOR_SOFT"]),
+            int(SEMANTIC_PALETTE["DOOR_LOCKED"]),
+            int(SEMANTIC_PALETTE["DOOR_BOMB"]),
+            int(SEMANTIC_PALETTE["DOOR_BOSS"]),
+        }
+
+        strict_original = bool(getattr(self.env, "strict_original_mode", False))
+        vglc_strict = bool(getattr(self.env, "vglc_strict_mode", False))
+        if strict_original:
+            can_transition = is_stair
+        elif vglc_strict:
+            can_transition = is_stair or is_door
+        else:
+            can_transition = is_stair or is_door or self._is_at_room_boundary(current_pos)
+
+        transition_positions: List[Tuple[int, int]] = []
+        if is_stair:
+            try:
+                transition_positions.extend(self._transition_helper.get_stair_destinations(current_pos))
+            except (AttributeError, RuntimeError, ValueError, TypeError):
+                pass
+
+        if can_transition and not strict_original:
+            try:
+                transition_positions.extend(
+                    pos
+                    for pos, _cost, _edge_type in self._transition_helper.get_controlled_virtual_destinations(
+                        current_pos,
+                        state,
+                    )
+                )
+            except (AttributeError, RuntimeError, ValueError, TypeError):
+                pass
+            try:
+                transition_positions.extend(
+                    pos
+                    for pos, _cost, _edge_type in self._transition_helper.get_graph_warp_destinations(
+                        current_pos,
+                        state,
+                    )
+                )
+            except (AttributeError, RuntimeError, ValueError, TypeError):
+                pass
+
+        if not transition_positions:
+            return []
+
+        seen = {tuple(pos) for pos, _tile in existing_candidates}
+        height, width = grid.shape
+        candidates: List[Tuple[Tuple[int, int], int]] = []
+        for raw_pos in transition_positions:
+            pos = (int(raw_pos[0]), int(raw_pos[1]))
+            if pos in seen or pos == current_pos:
+                continue
+            if not (0 <= pos[0] < height and 0 <= pos[1] < width):
+                continue
+            tile = int(grid[pos[0], pos[1]])
+            try:
+                can_move, _new_state = self.env.try_move_pure(state, pos, tile)
+            except (AttributeError, RuntimeError, ValueError, TypeError):
+                can_move, _new_state = self._try_move(state, pos, tile)
+            if not can_move:
+                continue
+            seen.add(pos)
+            candidates.append((pos, tile))
+
         return candidates
 
     def _plan_short_horizon(
@@ -2411,7 +2572,11 @@ class CognitiveBoundedSearch:
                 logger.debug("MissionGrammar-assisted subgoal generation unavailable; using belief-map fallback: %s", exc)
 
         # 4) Frontier (observed but unvisited)
-        for pos in list(self.belief_map.get_frontier()):
+        current = tuple(int(v) for v in cog_state.game_state.position)
+        for pos in sorted(
+            self.belief_map.get_frontier(),
+            key=lambda p: (abs(int(p[0]) - current[0]) + abs(int(p[1]) - current[1]), int(p[0]), int(p[1])),
+        ):
             if len(candidates) >= num:
                 break
             if pos not in candidates:
@@ -2420,7 +2585,15 @@ class CognitiveBoundedSearch:
         # 5) Fill with nearest unknown tiles if still short
         if len(candidates) < num:
             # search nearby tiles ranking by low confidence
-            low_conf = sorted(self.belief_map.known_tiles.items(), key=lambda kv: kv[1].confidence)
+            low_conf = sorted(
+                self.belief_map.known_tiles.items(),
+                key=lambda kv: (
+                    float(kv[1].confidence),
+                    abs(int(kv[0][0]) - current[0]) + abs(int(kv[0][1]) - current[1]),
+                    int(kv[0][0]),
+                    int(kv[0][1]),
+                ),
+            )
             for pos, obs in low_conf:
                 if pos not in candidates:
                     candidates.append(pos)
@@ -3174,9 +3347,12 @@ class CognitiveBoundedSearch:
         # Navigation entropy (direction-based)
         nav_entropy = self._compute_entropy(dict(self._direction_counts))
         
-        # Room/Tile Navigational Entropy (CBS Paper Formula D)
+        # Room-level navigational entropy (CBS Paper Formula D)
         # H = -Î£ p(room) Ã— logâ‚‚(p(room)) where p(room) = visits(room) / total_visits
-        room_entropy = self._compute_room_entropy(dict(self._visit_counts))
+        room_visit_counts = dict(self._room_visit_counts)
+        room_entropy = self._compute_room_entropy(room_visit_counts)
+        unique_rooms = len(room_visit_counts)
+        total_room_visits = int(sum(room_visit_counts.values()))
         
         # Cognitive load
         conf_var = self.belief_map.compute_confidence_variance()
@@ -3211,6 +3387,8 @@ class CognitiveBoundedSearch:
             path_length=total_steps,
             belief_entropy_final=belief_entropy,
             room_entropy=room_entropy,
+            unique_rooms_visited=unique_rooms,
+            total_room_visits=total_room_visits,
             deliberation_events=self._deliberation_events,
             budget_exhaustion_events=self._budget_exhaustion_events,
             peak_frustration=float(self._peak_frustration),
@@ -3220,7 +3398,7 @@ class CognitiveBoundedSearch:
             inventory_change_events=self._inventory_change_events,
             focus_switches=self._focus_switches,
             focus_guided_steps=self._focus_guided_steps,
-            room_visit_counts=dict(self._visit_counts),
+            room_visit_counts=room_visit_counts,
             direction_distribution=dict(self._direction_counts),
             memory_timeline=list(self._memory_timeline),
         )
@@ -3278,9 +3456,9 @@ class CognitiveBoundedSearch:
         
         return entropy
 
-    def _compute_room_entropy(self, visit_counts: Dict[Tuple[int, int], int]) -> float:
+    def _compute_room_entropy(self, visit_counts: Dict[Hashable, int]) -> float:
         """
-        Compute navigational entropy from the tile-visit distribution.
+        Compute navigational entropy from the room-visit distribution.
 
         This stays in the base class because both the legacy `CBS` name and the
         thesis-facing `P-CBS` alias use the same bounded-rational metrics.
@@ -3344,13 +3522,20 @@ def solve_with_pcbs(
     grid: np.ndarray,
     persona: str = 'balanced',
     timeout: int = 100000,
-    seed: Optional[int] = None
+    seed: Optional[int] = None,
+    representation: str = 'hybrid',
 ) -> Tuple[bool, List[Tuple[int, int]], int, CBSMetrics]:
     """Convenience wrapper exposing the thesis-facing P-CBS name."""
     from src.simulation.validator import ZeldaLogicEnv
 
     env = ZeldaLogicEnv(semantic_grid=grid)
-    pcbs = PersonaDrivenCognitiveBoundedSearch(env, persona=persona, timeout=timeout, seed=seed)
+    pcbs = PersonaDrivenCognitiveBoundedSearch(
+        env,
+        persona=persona,
+        timeout=timeout,
+        seed=seed,
+        representation=representation,
+    )
     return pcbs.solve()
 
 

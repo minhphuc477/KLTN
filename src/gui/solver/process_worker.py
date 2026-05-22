@@ -81,27 +81,98 @@ def _solve_in_subprocess(grid, start_pos, goal_pos, algorithm_idx, feature_flags
             14: 'novice',
         }
 
+        def _int_option(name, default):
+            raw = priority_options.get(name, os.environ.get(f'KLTN_{name.upper()}', default))
+            try:
+                return int(raw)
+            except (AttributeError, RuntimeError, ValueError, TypeError):
+                return int(default)
+
+        def _optional_int_option(name, default):
+            raw = priority_options.get(name, os.environ.get(f'KLTN_{name.upper()}', default))
+            if raw is None:
+                return None
+            raw_text = str(raw).strip().lower()
+            if raw_text in {'', 'none', 'random'}:
+                return None
+            try:
+                return int(raw)
+            except (AttributeError, RuntimeError, ValueError, TypeError):
+                return int(default) if default is not None else None
+
         try:
             if algorithm_idx in cbs_personas:
                 from src.simulation.cognitive_bounded_search import PersonaDrivenCognitiveBoundedSearch
+                from src.gui.solver.pcbs_route import compress_pcbs_route_for_replay
 
                 persona = cbs_personas[algorithm_idx]
-                logger.info('Using P-CBS with persona=%s', persona)
-                cbs = PersonaDrivenCognitiveBoundedSearch(env, persona=persona, timeout=100000)
+                default_seed_by_persona = {
+                    'balanced': 123,
+                    'explorer': 123,
+                    'cautious': 0,
+                    'forgetful': 123,
+                    'speedrunner': 123,
+                    'greedy': 123,
+                    'completionist': 42,
+                    'novice': 42,
+                }
+                pcbs_timeout = _int_option('pcbs_timeout', priority_options.get('timeout', 25000))
+                pcbs_seed = _optional_int_option(
+                    'pcbs_seed',
+                    priority_options.get('seed', default_seed_by_persona.get(persona, 123)),
+                )
+                route_mode = str(
+                    priority_options.get('pcbs_route_mode', os.environ.get('KLTN_PCBS_ROUTE_MODE', 'solution'))
+                    or 'solution'
+                ).strip().lower()
+                pcbs_representation = str(priority_options.get('representation', 'hybrid') or 'hybrid').strip().lower()
+                logger.info(
+                    'Using P-CBS with persona=%s timeout=%s seed=%s route_mode=%s representation=%s',
+                    persona,
+                    pcbs_timeout,
+                    pcbs_seed,
+                    route_mode,
+                    pcbs_representation,
+                )
+                cbs = PersonaDrivenCognitiveBoundedSearch(
+                    env,
+                    persona=persona,
+                    timeout=pcbs_timeout,
+                    seed=pcbs_seed,
+                    representation=pcbs_representation,
+                )
                 ok, path, states, metrics = cbs.solve()
 
                 if ok:
-                    display_path = _convert_diagonal_to_4dir(path, grid=grid_arr) if path else path
+                    route_stats = {
+                        'raw_trajectory_len': len(path) if path else 0,
+                        'display_path_len': len(path) if path else 0,
+                        'loops_removed': 0,
+                        'compressed': False,
+                    }
+                    replay_path = path
+                    if route_mode not in {'trace', 'trajectory', 'raw'}:
+                        replay_path, route_stats = compress_pcbs_route_for_replay(
+                            grid=grid_arr,
+                            path=path,
+                            solver_options=solver_options,
+                        )
+                        if route_stats.get('compression_error'):
+                            logger.warning('P-CBS route compression skipped: %s', route_stats['compression_error'])
+                    display_path = _convert_diagonal_to_4dir(replay_path, grid=grid_arr) if replay_path else replay_path
                     cbs_metrics = {
                         'confusion_index': round(metrics.confusion_index, 3),
                         'navigation_entropy': round(metrics.navigation_entropy, 3),
                         'cognitive_load': round(metrics.cognitive_load, 3),
                         'aha_latency': metrics.aha_latency,
                         'unique_tiles': metrics.unique_tiles_visited,
+                        'unique_rooms': metrics.unique_rooms_visited,
+                        'room_entropy': round(metrics.room_entropy, 3),
                         'total_steps': metrics.total_steps,
                         'peak_memory': metrics.peak_memory_usage,
                         'replans': metrics.replans,
                         'confusion_events': metrics.confusion_events,
+                        'backtrack_loops': metrics.backtrack_loops,
                     }
                     result.update({
                         'success': True,
@@ -110,9 +181,17 @@ def _solve_in_subprocess(grid, start_pos, goal_pos, algorithm_idx, feature_flags
                         'solver_result': {
                             'nodes': states,
                             'original_path_len': len(path) if path else 0,
+                            'trajectory_len': len(path) if path else 0,
+                            'display_path_len': len(display_path) if display_path else 0,
                             'algorithm': 'P-CBS',
                             'cbs_metrics': cbs_metrics,
                             'persona': persona,
+                            'representation': pcbs_representation,
+                            'pcbs_timeout': pcbs_timeout,
+                            'pcbs_seed': pcbs_seed,
+                            'pcbs_route_mode': route_mode,
+                            'pcbs_route_compressed': bool(route_stats.get('compressed', False)),
+                            'pcbs_loops_removed': int(route_stats.get('loops_removed', 0) or 0),
                         },
                     })
                 else:

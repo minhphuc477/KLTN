@@ -1,4 +1,5 @@
 ﻿import threading
+import json
 from pathlib import Path
 
 import numpy as np
@@ -157,18 +158,135 @@ def test_handle_ai_generation_completion_applies_worker_payload_on_main_thread()
     assert gui.messages[-1][0] == "AI done"
 
 
+def test_handle_ai_generation_completion_auto_imports_generated_txt(tmp_path):
+    grid = np.arange(12, dtype=np.int32).reshape(3, 4)
+    txt_path = tmp_path / "generated_level.txt"
+    np.savetxt(txt_path, grid, fmt="%d")
+    graph = object()
+    gui = _CompletionGUI(
+        {
+            "success": True,
+            "grid": np.zeros((3, 4), dtype=np.int32),
+            "name": "AI TXT",
+            "message": "AI txt done",
+            "generated_txt_path": str(txt_path),
+            "clear_mixed_constraints": True,
+            "mission_graph_draft": graph,
+        }
+    )
+
+    handle_ai_generation_completion(gui)
+
+    assert gui.ai_gen_done is False
+    assert gui.ai_gen_result is None
+    assert len(gui.maps) == 1
+    assert np.array_equal(gui.maps[0], grid)
+    assert gui.map_names == ["AI TXT"]
+    assert gui.loaded == 1
+    assert gui.centered is True
+    assert gui.auto_path == []
+    assert gui.auto_mode is False
+    assert gui.ai_constraint_boss_norm is None
+    assert gui.ai_constraint_lock_norm is None
+    assert gui.ai_constraint_key_norm is None
+    assert gui.ai_mission_graph_draft is graph
+    assert "loaded generated_level.txt" in gui.messages[-1][0]
+
+
 def test_worker_reports_missing_checkpoint(monkeypatch):
     gui = _DummyGUI()
-
-    def _missing_checkpoint():
-        return Path("__definitely_missing_checkpoint__.pth")
-
-    monkeypatch.setattr(ai_generation_worker, "resolve_checkpoint_path", _missing_checkpoint)
+    gui.ai_checkpoint_path = str(Path("__definitely_missing_checkpoint__.pth"))
 
     ai_generation_worker.run_ai_generation_worker(gui, _Logger())
 
     assert gui.messages
     assert gui.messages[-1][0] == "No AI checkpoint found - train first!"
+
+
+def test_save_generated_dungeon_txt_writes_unique_and_latest_files(tmp_path):
+    grid = np.arange(20, dtype=np.int32).reshape(4, 5)
+
+    written = generation_pipeline.save_generated_dungeon_txt(
+        tile_grid=grid,
+        seed=123,
+        num_nodes=2,
+        num_edges=1,
+        checkpoint_path="checkpoint.pth",
+        export_dir=tmp_path,
+        np_module=np,
+    )
+
+    assert written["txt_path"].exists()
+    assert written["latest_txt_path"].exists()
+    assert written["png_path"].exists()
+    assert written["latest_png_path"].exists()
+    assert written["metadata_path"].exists()
+    assert np.array_equal(np.loadtxt(written["txt_path"], dtype=np.int32), grid)
+    assert np.array_equal(np.loadtxt(written["latest_txt_path"], dtype=np.int32), grid)
+    metadata = json.loads(written["metadata_path"].read_text(encoding="utf-8"))
+    assert Path(metadata["png_path"]).exists()
+    assert Path(metadata["latest_png_path"]).exists()
+
+
+def test_load_or_reuse_gui_generation_pipeline_uses_cache(monkeypatch, tmp_path):
+    checkpoint = tmp_path / "model.pth"
+    checkpoint.write_bytes(b"checkpoint")
+    calls = []
+
+    class _GUI:
+        pass
+
+    def _fake_loader(**kwargs):
+        calls.append(kwargs)
+        return {"pipeline": len(calls)}
+
+    monkeypatch.setattr("src.gui.ai.generation_worker.load_canonical_generation_pipeline", _fake_loader)
+    gui = _GUI()
+
+    first = ai_generation_worker.load_or_reuse_gui_generation_pipeline(
+        gui=gui,
+        checkpoint_path=checkpoint,
+        device=torch.device("cpu"),
+        logger=_Logger(),
+        strict_checkpoint_mode=False,
+    )
+    second = ai_generation_worker.load_or_reuse_gui_generation_pipeline(
+        gui=gui,
+        checkpoint_path=checkpoint,
+        device=torch.device("cpu"),
+        logger=_Logger(),
+        strict_checkpoint_mode=False,
+    )
+
+    assert first is second
+    assert len(calls) == 1
+    assert calls[0]["gui_fast_mode"] is False
+
+
+def test_load_or_reuse_gui_generation_pipeline_can_opt_into_fast_sampler(monkeypatch, tmp_path):
+    checkpoint = tmp_path / "model.pth"
+    checkpoint.write_bytes(b"checkpoint")
+    calls = []
+
+    class _GUI:
+        ai_use_fast_sampler = True
+
+    def _fake_loader(**kwargs):
+        calls.append(kwargs)
+        return {"pipeline": len(calls)}
+
+    monkeypatch.setattr("src.gui.ai.generation_worker.load_canonical_generation_pipeline", _fake_loader)
+    gui = _GUI()
+
+    ai_generation_worker.load_or_reuse_gui_generation_pipeline(
+        gui=gui,
+        checkpoint_path=checkpoint,
+        device=torch.device("cpu"),
+        logger=_Logger(),
+        strict_checkpoint_mode=False,
+    )
+
+    assert calls[0]["gui_fast_mode"] is True
 
 
 def test_resolve_checkpoint_path_honors_env_override(monkeypatch):
@@ -185,12 +303,27 @@ def test_resolve_checkpoint_path_honors_explicit_path(monkeypatch):
     assert resolved.name == "gui_model.pth"
 
 
-def test_resolve_checkpoint_path_defaults_to_repo_checkpoints(monkeypatch):
+def test_resolve_checkpoint_path_defaults_to_repo_checkpoints_when_discovery_disabled(monkeypatch):
     monkeypatch.delenv("KLTN_CHECKPOINT_PATH", raising=False)
+    monkeypatch.setenv("KLTN_DISABLE_OUTPUT_CHECKPOINT_DISCOVERY", "1")
     resolved = generation_pipeline.resolve_checkpoint_path()
     expected = Path(generation_pipeline.__file__).resolve().parents[3] / "checkpoints" / "final_model.pth"
 
     assert resolved == expected
+
+
+def test_resolve_checkpoint_path_prefers_discovered_output_checkpoint(monkeypatch):
+    monkeypatch.delenv("KLTN_CHECKPOINT_PATH", raising=False)
+    monkeypatch.delenv("KLTN_DISABLE_OUTPUT_CHECKPOINT_DISCOVERY", raising=False)
+
+    discovered = generation_pipeline.discover_best_output_checkpoint()
+    resolved = generation_pipeline.resolve_checkpoint_path()
+
+    if discovered is None:
+        expected = Path(generation_pipeline.__file__).resolve().parents[3] / "checkpoints" / "final_model.pth"
+        assert resolved == expected
+    else:
+        assert resolved == discovered
 
 
 def test_generate_mission_graph_is_deterministic_with_seed():
@@ -204,6 +337,23 @@ def test_generate_mission_graph_is_deterministic_with_seed():
     assert data_b["seed"] == fixed_seed
     assert data_a["num_nodes"] == data_b["num_nodes"]
     assert data_a["num_edges"] == data_b["num_edges"]
+
+
+def test_generate_mission_graph_honors_requested_node_count_when_possible():
+    import random
+
+    data = generation_pipeline.generate_mission_graph(
+        random,
+        seed=112,
+        num_rooms=12,
+        difficulty="HARD",
+        max_keys=3,
+    )
+
+    assert data["requested_num_rooms"] == 12
+    assert data["num_nodes"] == 12
+    assert data["difficulty"] == "HARD"
+    assert data["max_keys"] == 3
 
 
 def test_compute_editor_layout_preserves_string_node_ids():
@@ -308,6 +458,31 @@ def test_resolve_vqvae_checkpoint_prefers_stage_sibling_pretrain_for_diffusion_c
     resolved = generation_pipeline._resolve_vqvae_checkpoint_for_generation(diffusion_ckpt)
 
     assert resolved == stage_vqvae
+
+
+def test_resolve_vqvae_checkpoint_prefers_metadata_declared_pretrain(tmp_path):
+    checkpoint_dir = tmp_path / "run" / "checkpoints" / "diffusion"
+    checkpoint_dir.mkdir(parents=True)
+    diffusion_ckpt = checkpoint_dir / "best_model.pth"
+    declared_vqvae = tmp_path / "tokenizer" / "vqvae_pretrained.pth"
+    declared_vqvae.parent.mkdir(parents=True)
+
+    torch.save({"diffusion_state_dict": {"weight": torch.tensor(1.0)}}, diffusion_ckpt)
+    torch.save({"model_state_dict": {"weight": torch.tensor(2.0)}}, declared_vqvae)
+    diffusion_ckpt.with_name(f"{diffusion_ckpt.name}.meta.json").write_text(
+        json.dumps(
+            {
+                "model_type": "diffusion",
+                "architecture": {},
+                "extra": {"vqvae_checkpoint": str(declared_vqvae)},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    resolved = generation_pipeline._resolve_vqvae_checkpoint_for_generation(diffusion_ckpt)
+
+    assert resolved == declared_vqvae.resolve()
 
 
 def test_generate_dungeon_with_pipeline_uses_canonical_roomwise_generation():

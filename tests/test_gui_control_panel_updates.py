@@ -60,6 +60,7 @@ class DummyGui:
         self.show_minimap = False
         self.show_topology = False
         self.show_topology_legend = False
+        self.force_grid_algorithm = False
         self.renderer = DummyRenderer()
         self.maps = [DummyMap(graph={"ok": True})]
         self.map_names = ["One"]
@@ -133,6 +134,17 @@ def test_apply_checkbox_widget_update_unchanged_minimap_does_not_emit_message():
     apply_checkbox_widget_update(gui, widget, logger=DummyLogger())
 
     assert gui.messages == []
+
+
+def test_apply_checkbox_widget_update_force_grid_updates_runtime_switch():
+    gui = DummyGui()
+    widget = CheckboxWidget("force_grid", True)
+
+    apply_checkbox_widget_update(gui, widget, logger=DummyLogger())
+
+    assert gui.feature_flags["force_grid"] is True
+    assert gui.force_grid_algorithm is True
+    assert gui.messages[-1][0] == "Force grid solver: ON"
 
 
 def test_apply_dropdown_widget_update_zoom_reloads_assets_and_centers():

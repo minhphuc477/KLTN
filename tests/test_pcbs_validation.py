@@ -74,6 +74,8 @@ def test_evaluate_astar_vs_pcbs_emits_paper_metrics_and_markdown() -> None:
     assert "pcbs" in result
     assert "comparison" in result
     assert "puzzle_stall_steps" in result["pcbs"]
+    assert "room_entropy" in result["pcbs"]
+    assert "unique_rooms_visited" in result["pcbs"]
     assert result["pcbs"]["status"] in {"success", "failed", "budget_exhausted"}
     assert result["comparison"]["pcbs_status"] == result["pcbs"]["status"]
     assert "affordance_reactivations" in result["pcbs"]
@@ -81,3 +83,24 @@ def test_evaluate_astar_vs_pcbs_emits_paper_metrics_and_markdown() -> None:
     assert "| Map | Solver |" in table
     assert "P-CBS (novice)" in table
     json.dumps(result)
+
+
+def test_evaluate_astar_vs_pcbs_separates_failed_trajectory_from_solution_path() -> None:
+    grid = np.array(
+        [
+            [2, 2, 2, 2, 2],
+            [2, 21, 43, 22, 2],
+            [2, 1, 1, 1, 2],
+            [2, 1, 1, 1, 2],
+            [2, 2, 2, 2, 2],
+        ],
+        dtype=np.int32,
+    )
+
+    result = evaluate_astar_vs_pcbs(grid, persona="novice", timeout_astar=500, timeout_pcbs=1, seed=7)
+
+    assert result["oracle"]["success"] is True
+    assert result["pcbs"]["success"] is False
+    assert result["pcbs"]["path_length"] == 0
+    assert result["pcbs"]["trajectory_length"] >= 1
+    assert result["pcbs"]["path_efficiency_ratio"] == 0.0

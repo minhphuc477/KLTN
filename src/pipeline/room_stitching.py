@@ -532,14 +532,17 @@ def _connector_tiles(
 ) -> Tuple[int, int]:
     floor_id = int(SEMANTIC_PALETTE.get("FLOOR", 1))
     wall_id = int(SEMANTIC_PALETTE.get("WALL", 2))
+    # Default connection tile is DOOR_OPEN so that the seal-then-carve
+    # approach can always distinguish carved connections from stray floor.
+    door_open_id = int(SEMANTIC_PALETTE.get("DOOR_OPEN", floor_id))
 
     data = edge_data or {}
     label = str(data.get("label", "") or "")
     edge_type = str(data.get("edge_type", data.get("type", "")) or "")
     edge_tokens = set(parse_edge_type_tokens(label=label, edge_type=edge_type))
 
-    src_tile = floor_id
-    dst_tile = floor_id
+    src_tile = door_open_id
+    dst_tile = door_open_id
 
     if {"key_locked", "locked"}.intersection(edge_tokens):
         src_tile = int(SEMANTIC_PALETTE.get("DOOR_LOCKED", floor_id))
@@ -557,7 +560,7 @@ def _connector_tiles(
     if (not has_reverse_edge) or {"soft_locked", "one_way", "shutter"}.intersection(edge_tokens):
         src_tile = int(SEMANTIC_PALETTE.get("DOOR_SOFT", src_tile))
         if dst_tile == wall_id:
-            dst_tile = floor_id
+            dst_tile = door_open_id
 
     return src_tile, dst_tile
 
@@ -607,6 +610,18 @@ def carve_room_connection_between_bboxes(
 ) -> None:
     """Carve a connection between two stitched room bounding boxes."""
     floor_id = int(SEMANTIC_PALETTE.get("FLOOR", 1))
+    apron_replace_tiles = {
+        int(fill_tile),
+        int(TileID.WALL),
+        int(TileID.BLOCK),
+        int(TileID.ELEMENT),
+        int(TileID.DOOR_OPEN),
+        int(TileID.DOOR_LOCKED),
+        int(TileID.DOOR_BOMB),
+        int(TileID.DOOR_PUZZLE),
+        int(TileID.DOOR_BOSS),
+        int(TileID.DOOR_SOFT),
+    }
     tile_resolver = connector_tile_resolver or _connector_tiles
     src_tile, dst_tile = tile_resolver(edge_data, has_reverse_edge)
 
@@ -621,6 +636,12 @@ def carve_room_connection_between_bboxes(
         stop = min(high, center + half_span)
         return range(start, stop + 1)
 
+    def _open_apron_cell(row: int, col: int) -> None:
+        if not (0 <= row < global_grid.shape[0] and 0 <= col < global_grid.shape[1]):
+            return
+        if int(global_grid[row, col]) in apron_replace_tiles:
+            global_grid[row, col] = floor_id
+
     if src_x_max + 1 == dst_x_min or dst_x_max + 1 == src_x_min:
         row_low = max(src_y_min + 1, dst_y_min + 1)
         row_high = min(src_y_max - 1, dst_y_max - 1)
@@ -630,8 +651,20 @@ def carve_room_connection_between_bboxes(
         if row_low <= row_high:
             center = (row_low + row_high) // 2
             for row in _stroke(center, row_low, row_high):
-                global_grid[row, src_x_max if src_x_max < dst_x_min else src_x_min] = src_tile
-                global_grid[row, dst_x_min if src_x_max < dst_x_min else dst_x_max] = dst_tile
+                if src_x_max < dst_x_min:
+                    src_boundary = src_x_max
+                    dst_boundary = dst_x_min
+                    src_apron = src_x_max - 1
+                    dst_apron = dst_x_min + 1
+                else:
+                    src_boundary = src_x_min
+                    dst_boundary = dst_x_max
+                    src_apron = src_x_min + 1
+                    dst_apron = dst_x_max - 1
+                global_grid[row, src_boundary] = src_tile
+                global_grid[row, dst_boundary] = dst_tile
+                _open_apron_cell(row, src_apron)
+                _open_apron_cell(row, dst_apron)
             return
 
     if src_y_max + 1 == dst_y_min or dst_y_max + 1 == src_y_min:
@@ -643,8 +676,20 @@ def carve_room_connection_between_bboxes(
         if col_low <= col_high:
             center = (col_low + col_high) // 2
             for col in _stroke(center, col_low, col_high):
-                global_grid[src_y_max if src_y_max < dst_y_min else src_y_min, col] = src_tile
-                global_grid[dst_y_min if src_y_max < dst_y_min else dst_y_max, col] = dst_tile
+                if src_y_max < dst_y_min:
+                    src_boundary = src_y_max
+                    dst_boundary = dst_y_min
+                    src_apron = src_y_max - 1
+                    dst_apron = dst_y_min + 1
+                else:
+                    src_boundary = src_y_min
+                    dst_boundary = dst_y_max
+                    src_apron = src_y_min + 1
+                    dst_apron = dst_y_max - 1
+                global_grid[src_boundary, col] = src_tile
+                global_grid[dst_boundary, col] = dst_tile
+                _open_apron_cell(src_apron, col)
+                _open_apron_cell(dst_apron, col)
             return
 
     src_r, src_c = _bbox_center_row_col(src_bbox)
@@ -761,6 +806,44 @@ def carve_room_connection_between_bboxes(
     )
 
 
+def seal_boundary_walls(
+    dungeon_grid: np.ndarray,
+    layout_map: Mapping[Any, Tuple[int, int, int, int]],
+    graph: nx.Graph,
+    slot_positions: Mapping[Any, Tuple[int, int]],
+    *,
+    fill_tile: int = 0,
+) -> None:
+    """Seal ALL room border tiles with walls.
+
+    This must run BEFORE ``carve_room_connection_between_bboxes`` so that
+    every border tile from the original AI-generated room grids is replaced
+    with WALL.  The subsequent carving step then writes the correct DOOR
+    tiles at the precise connection points, overwriting these walls.
+
+    This two-pass approach (seal-then-carve) is simpler and more robust
+    than trying to distinguish "real" carved doors from stray AI-generated
+    door tiles after the fact.
+    """
+    wall_id = int(TileID.WALL)
+    H, W = dungeon_grid.shape
+
+    border_specs = [
+        ("N", lambda b: ([b[1]], range(b[0], b[2] + 1))),
+        ("S", lambda b: ([b[3]], range(b[0], b[2] + 1))),
+        ("W", lambda b: (range(b[1], b[3] + 1), [b[0]])),
+        ("E", lambda b: (range(b[1], b[3] + 1), [b[2]])),
+    ]
+
+    for room_id, bbox in layout_map.items():
+        for _dir, range_fn in border_specs:
+            rows, cols = range_fn(bbox)
+            for row in rows:
+                for col in cols:
+                    if 0 <= row < H and 0 <= col < W:
+                        dungeon_grid[row, col] = wall_id
+
+
 def build_stitched_room_layout(
     rooms: Mapping[Any, Any],
     graph: nx.Graph,
@@ -803,6 +886,17 @@ def build_stitched_room_layout(
     stitched = build_room_canvas_from_slots(
         room_grids=room_grids,
         slot_positions=slot_positions,
+        fill_tile=int(fill_tile),
+    )
+
+    # Seal ALL room border tiles with walls BEFORE carving connections.
+    # This ensures stray floor/door tiles from AI-generated room grids
+    # are replaced, then carving writes correct DOOR tiles on top.
+    seal_boundary_walls(
+        stitched.dungeon_grid,
+        stitched.layout_map,
+        graph,
+        slot_positions,
         fill_tile=int(fill_tile),
     )
 
