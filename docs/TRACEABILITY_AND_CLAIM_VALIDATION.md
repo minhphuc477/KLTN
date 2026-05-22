@@ -60,8 +60,7 @@ It also validates the external reviewer statement describing the system as a 3-t
 
 - Current reality:
   - In `run_ablation_study.py`, `NO_EVOLUTION` uses direct `MissionGrammar.generate(...)`, not pure random graph sampling.
-- Action if needed:
-  - Add a new `RANDOM_TOPOLOGY` config for a strict random baseline.
+  - `RANDOM_TOPOLOGY` is now the strict random-topology baseline; it should be reported separately from `NO_EVOLUTION`.
 
 ## Validation of the Provided Reviewer Statement
 
@@ -87,8 +86,8 @@ Overall verdict: MOSTLY VALID, with 3 important precision fixes.
 | Disable evolution and compare pacing control | HIGH | `NO_EVOLUTION` already exists (grammar direct generation, not random) |
 | Representation ablation (diffusion vs categorical/codebook sweeps) | HIGH | `LATENT_DIFFUSION`, `LATENT_CATEGORICAL`, `VQ_CODEBOOK_*` already implemented |
 | Bridge ablation (WFC off) | HIGH | `NO_WFC` exists via `apply_repair=False` |
-| Heuristic ablation (pure WFC baseline) | MEDIUM | Need an explicit config that bypasses neural priors and runs standalone WFC generation |
-| Random topology baseline for Tier-1 proof | MEDIUM | Requires adding `RANDOM_TOPOLOGY` config path |
+| Heuristic ablation (pure WFC baseline) | HIGH | `PURE_WFC` bypasses neural priors and uses standalone Weighted Bayesian WFC rooms over the matched topology |
+| Random topology baseline for Tier-1 proof | HIGH | `RANDOM_TOPOLOGY` exists as a strict start-to-goal random DAG baseline distinct from `NO_EVOLUTION` |
 
 ## Recommended Defense-Safe One-Liner
 

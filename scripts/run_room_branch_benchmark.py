@@ -15,12 +15,18 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.run_ablation_study import AblationStudy, ExperimentConfig
+from scripts.run_ablation_study import AblationStudy, ExperimentConfig, _json_sanitize
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run a focused matched-budget benchmark for the room-generation branch.")
-    parser.add_argument("--output", type=Path, default=Path("results") / "room_branch_benchmark")
+    parser.add_argument("--output", "--output-dir", dest="output", type=Path, default=Path("results") / "room_branch_benchmark")
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="Optional resolved/training YAML whose pipeline defaults should seed the benchmark runtime.",
+    )
     parser.add_argument("--data-root", type=Path, default=Path("Data") / "The Legend of Zelda")
     parser.add_argument("--num-samples", type=int, default=8)
     parser.add_argument("--seed", type=int, default=42)
@@ -75,6 +81,7 @@ def main() -> int:
         cbs_timeout=int(args.cbs_timeout),
         evolution_population=int(args.evolution_population),
         evolution_generations=int(args.evolution_generations),
+        config_path=args.config,
         vqvae_checkpoint=args.vqvae_checkpoint,
         diffusion_checkpoint=args.diffusion_checkpoint,
         masked_room_checkpoint=args.masked_room_checkpoint,
@@ -107,7 +114,7 @@ def main() -> int:
             "It is an internal matched-budget benchmark harness, not a substitute for external layout-baseline comparisons.",
         ],
     }
-    json_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    json_path.write_text(json.dumps(_json_sanitize(payload), indent=2, allow_nan=False), encoding="utf-8")
 
     lines = [
         "# Room Branch Benchmark",

@@ -1,7 +1,15 @@
+import json
+
 import pytest
 import networkx as nx
 import numpy as np
 
+from scripts.run_ablation_study import (
+    ExperimentConfig,
+    _json_sanitize,
+    build_ablation_plan,
+    build_experiment_set,
+)
 from scripts.run_fixed_graph_multi_seed_audit import _aggregate_variant
 from scripts.run_fast_sampler_visual_audit import (
     _json_sanitize as _audit_json_sanitize,
@@ -13,6 +21,45 @@ from scripts.run_stateful_puzzle_hparam_sweep import _profile_score
 from src.pipeline.dungeon_pipeline import DungeonGenerationResult, NeuralSymbolicDungeonPipeline
 from src.pipeline.room_stitching import StitchedRoomLayout
 from src.simulation.validator import GraphGuidedValidator
+
+
+def test_ablation_core_plan_documents_random_and_pure_wfc_baselines():
+    configs = build_experiment_set(include_extended=False)
+    plan = build_ablation_plan(
+        configs=configs,
+        seeds=[42, 43],
+        target_curve=[0.2, 0.5, 0.8],
+        num_rooms=8,
+        diffusion_steps=5,
+        cbs_timeout=1000,
+        evolution_population=6,
+        evolution_generations=4,
+    )
+
+    experiments = {entry["name"]: entry for entry in plan["experiments"]}
+
+    assert experiments["RANDOM_TOPOLOGY"]["tier"] == "block_i"
+    assert "strict topology null" in " ".join(plan["claim_boundaries"])
+    assert experiments["PURE_WFC"]["component"] == "standalone symbolic generator"
+    assert "topology_preservation_score" in plan["metrics"]
+
+
+def test_ablation_json_sanitize_outputs_strict_json_values():
+    payload = {
+        "nan": float("nan"),
+        "inf": float("inf"),
+        "np_float": np.float32(1.25),
+        "array": np.array([1, np.nan]),
+        "config": ExperimentConfig(name="SMOKE"),
+    }
+
+    sanitized = _json_sanitize(payload)
+
+    assert sanitized["nan"] is None
+    assert sanitized["inf"] is None
+    assert sanitized["np_float"] == pytest.approx(1.25)
+    assert sanitized["array"] == [1, None]
+    assert json.dumps(sanitized, allow_nan=False)
 
 
 def test_room_alignment_aggregation_includes_post_overlay_semantic_error():

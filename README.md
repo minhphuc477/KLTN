@@ -266,6 +266,7 @@ Use this checklist to pre-empt common reviewer attacks with reproducible artifac
 python scripts/test_grammar_rules.py
 
 # Attack 2 (Evidence): run fixed-seed ablations and benchmark outputs
+python scripts/run_ablation_study.py --plan-only --core-only --output results/ablation_plan_preview
 python scripts/run_ablation_study.py --num-samples 50 --output results/ablation
 python -m src.evaluation.benchmark_suite --num-generated 100
 

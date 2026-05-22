@@ -19,9 +19,10 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import math
 import sys
 import time
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, is_dataclass
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -129,6 +130,111 @@ class ExperimentConfig:
     topology_refinement_mode: str = "gat2"  # none | lightweight | gat2
     room_generator_mode: str = "latent_diffusion"  # latent_diffusion | discrete_masked
     use_reference_room_maps: Optional[bool] = None
+
+
+PRIMARY_ABLATION_METRICS: Tuple[str, ...] = (
+    "solvable",
+    "confusion_ratio",
+    "confusion_index",
+    "path_optimal",
+    "tile_prior_kl",
+    "graph_edit_distance",
+    "generation_time_sec",
+    "novelty",
+    "reconstruction_error",
+    "constraint_valid",
+    "room_repair_rate",
+    "topology_preservation_score",
+    "directed_edge_preservation_score",
+)
+
+
+ABLATION_DESIGN_NOTES: Dict[str, Dict[str, str]] = {
+    "FULL": {
+        "tier": "full_stack",
+        "component": "canonical hybrid stack",
+        "comparison": "reference condition for paired seed deltas",
+        "isolates": "none; all enabled production components",
+        "interpretation": "Use as the denominator for component-necessity and runtime tradeoff claims.",
+    },
+    "TOPO_LIGHTWEIGHT": {
+        "tier": "block_iv",
+        "component": "topology-aware attention refinement",
+        "comparison": "FULL",
+        "isolates": "weaker topology refinement while keeping topology, neural generation, LogicNet, and WFC on",
+        "interpretation": "Tests whether the heavier graph refinement path is justified over a cheaper topology signal.",
+    },
+    "NO_EVOLUTION": {
+        "tier": "block_i",
+        "component": "evolutionary topology search",
+        "comparison": "FULL",
+        "isolates": "direct grammar generation with no evolutionary optimization",
+        "interpretation": "Separates grammar validity from search pressure toward the target tension curve.",
+    },
+    "RANDOM_TOPOLOGY": {
+        "tier": "block_i",
+        "component": "topology prior",
+        "comparison": "FULL and NO_EVOLUTION",
+        "isolates": "a seeded start-to-goal random DAG baseline with no grammar/evolution objective",
+        "interpretation": "Strict null for topology realism and controllability; should not be conflated with NO_EVOLUTION.",
+    },
+    "NO_GRAPH": {
+        "tier": "block_iii_iv",
+        "component": "graph conditioning",
+        "comparison": "FULL",
+        "isolates": "graph-token cross-attention, TPE, and topology refinement disabled together",
+        "interpretation": "Measures whether room generation depends on mission-graph context beyond local priors.",
+    },
+    "NO_WFC": {
+        "tier": "block_vi",
+        "component": "symbolic WFC repair",
+        "comparison": "FULL",
+        "isolates": "post-neural symbolic repair disabled",
+        "interpretation": "Tests whether symbolic repair is necessary for playable and topology-consistent room layouts.",
+    },
+    "NO_LOGIC": {
+        "tier": "block_v",
+        "component": "LogicNet guidance",
+        "comparison": "FULL",
+        "isolates": "logic-guidance scale set to zero while keeping graph conditioning and WFC",
+        "interpretation": "Tests whether runtime logic gradients add value beyond WFC and graph-conditioned decoding.",
+    },
+    "PURE_WFC": {
+        "tier": "block_vi",
+        "component": "standalone symbolic generator",
+        "comparison": "FULL and NO_WFC",
+        "isolates": "weighted WFC rooms stitched over the same generated topology, bypassing neural priors",
+        "interpretation": "Heuristic-only baseline for showing that WFC repair is not a full replacement for the neural branch.",
+    },
+    "LATENT_DIFFUSION": {
+        "tier": "block_iv",
+        "component": "latent diffusion sampler",
+        "comparison": "LATENT_CATEGORICAL and FULL",
+        "isolates": "continuous denoising sampler under the same graph and repair stack",
+        "interpretation": "Reference room-generation sampler for representation comparisons.",
+    },
+    "LATENT_CATEGORICAL": {
+        "tier": "block_iv",
+        "component": "categorical latent sampler",
+        "comparison": "LATENT_DIFFUSION",
+        "isolates": "categorical/codebook sampling without DDPM-style denoising",
+        "interpretation": "Tests whether the diffusion process itself improves quality over direct latent-code sampling.",
+    },
+    "COND_NO_TPE": {
+        "tier": "block_iii",
+        "component": "topological positional encoding",
+        "comparison": "FULL",
+        "isolates": "TPE disabled while retaining graph-token conditioning",
+        "interpretation": "Measures whether relative graph-position signals matter beyond node attributes.",
+    },
+    "COND_WEAK_GRAPH": {
+        "tier": "block_iii_iv",
+        "component": "weak graph conditioning",
+        "comparison": "FULL and COND_NO_TPE",
+        "isolates": "TPE disabled and graph-node cross-attention removed",
+        "interpretation": "Intermediate condition between full graph conditioning and fully graph-free generation.",
+    },
+}
 
 
 def _tile_distribution(grids: Sequence[np.ndarray]) -> Dict[int, float]:
@@ -516,6 +622,153 @@ def _benjamini_hochberg(p_values: Sequence[float]) -> List[float]:
     return [float(v) for v in out.tolist()]
 
 
+def _json_sanitize(value: Any) -> Any:
+    """Convert numpy/pandas scalars and non-finite floats to strict JSON values."""
+    if value is None:
+        return None
+    if isinstance(value, (bool, str, int)):
+        return value
+    if isinstance(value, (np.bool_,)):
+        return bool(value)
+    if isinstance(value, (np.integer,)):
+        return int(value)
+    if isinstance(value, (float, np.floating)):
+        as_float = float(value)
+        return as_float if math.isfinite(as_float) else None
+    if isinstance(value, np.ndarray):
+        return [_json_sanitize(v) for v in value.tolist()]
+    if is_dataclass(value) and not isinstance(value, type):
+        return _json_sanitize(asdict(value))
+    if isinstance(value, dict):
+        return {str(k): _json_sanitize(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_sanitize(v) for v in value]
+    return value
+
+
+def _design_notes_for_config(cfg: ExperimentConfig) -> Dict[str, Any]:
+    notes = dict(ABLATION_DESIGN_NOTES.get(cfg.name, {}))
+    if not notes:
+        if cfg.name.startswith("VQ_CODEBOOK_"):
+            notes = {
+                "tier": "block_ii",
+                "component": "VQ codebook capacity",
+                "comparison": "FULL and other VQ_CODEBOOK variants",
+                "isolates": "categorical sampler codebook cap while keeping the rest of the stack matched",
+                "interpretation": "Screens tokenizer capacity effects on reconstruction, diversity, and solvability proxies.",
+            }
+        elif cfg.name.startswith("LOGIC_G_"):
+            notes = {
+                "tier": "block_v",
+                "component": "LogicNet guidance scale",
+                "comparison": "FULL and NO_LOGIC",
+                "isolates": "runtime logic-guidance strength",
+                "interpretation": "Identifies whether guidance has a useful range or destabilizes decoding.",
+            }
+        else:
+            notes = {
+                "tier": "unspecified",
+                "component": "custom ablation",
+                "comparison": "FULL",
+                "isolates": "configuration-defined difference",
+                "interpretation": "Inspect paired deltas and confidence intervals before making a claim.",
+            }
+
+    return {
+        "name": cfg.name,
+        "tier": notes["tier"],
+        "component": notes["component"],
+        "comparison": notes["comparison"],
+        "isolates": notes["isolates"],
+        "primary_metrics": list(PRIMARY_ABLATION_METRICS),
+        "interpretation": notes["interpretation"],
+        "config": asdict(cfg),
+    }
+
+
+def build_ablation_plan(
+    *,
+    configs: Sequence[ExperimentConfig],
+    seeds: Sequence[int],
+    target_curve: Sequence[float],
+    num_rooms: int,
+    diffusion_steps: int,
+    cbs_timeout: int,
+    evolution_population: int,
+    evolution_generations: int,
+    config_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """Return a reproducible ablation-study plan without executing generation."""
+    return {
+        "protocol": "fixed_seed_paired_ablation",
+        "design_goal": (
+            "Estimate component necessity by changing one interpretable subsystem at a time "
+            "where possible, using shared seeds and paired significance tests against FULL."
+        ),
+        "config_path": str(config_path) if config_path is not None else None,
+        "seeds": [int(s) for s in seeds],
+        "runtime_budget": {
+            "num_rooms": int(num_rooms),
+            "target_curve": [float(v) for v in target_curve],
+            "diffusion_steps": int(diffusion_steps),
+            "cbs_timeout": int(cbs_timeout),
+            "evolution_population": int(evolution_population),
+            "evolution_generations": int(evolution_generations),
+        },
+        "paired_statistics": {
+            "baseline": "FULL",
+            "confidence_interval": "paired bootstrap over seed deltas",
+            "p_value": "random-sign permutation over paired seed deltas",
+            "multiple_comparison_control": "Benjamini-Hochberg FDR over exported p-values",
+        },
+        "metrics": list(PRIMARY_ABLATION_METRICS),
+        "experiments": [_design_notes_for_config(cfg) for cfg in configs],
+        "claim_boundaries": [
+            "RANDOM_TOPOLOGY is the strict topology null; NO_EVOLUTION is direct grammar generation.",
+            "PURE_WFC bypasses neural room priors and is a heuristic-only baseline, not a repair ablation.",
+            "Single-seed or quick-profile results are screening evidence; thesis claims should use paired multi-seed runs.",
+        ],
+    }
+
+
+def _format_ablation_plan_markdown(plan: Dict[str, Any]) -> str:
+    lines = [
+        "# Ablation Study Plan",
+        "",
+        f"Protocol: `{plan['protocol']}`",
+        "",
+        plan["design_goal"],
+        "",
+        "## Runtime Budget",
+        "",
+    ]
+    for key, value in plan["runtime_budget"].items():
+        lines.append(f"- `{key}`: {value}")
+
+    lines.extend(["", "## Paired Statistics", ""])
+    for key, value in plan["paired_statistics"].items():
+        lines.append(f"- `{key}`: {value}")
+
+    lines.extend(["", "## Experiments", ""])
+    for exp in plan["experiments"]:
+        lines.extend(
+            [
+                f"### {exp['name']}",
+                f"- Tier: `{exp['tier']}`",
+                f"- Component: {exp['component']}",
+                f"- Comparison: {exp['comparison']}",
+                f"- Isolates: {exp['isolates']}",
+                f"- Interpretation: {exp['interpretation']}",
+                "",
+            ]
+        )
+
+    lines.extend(["## Claim Boundaries", ""])
+    for item in plan["claim_boundaries"]:
+        lines.append(f"- {item}")
+    return "\n".join(lines)
+
+
 class AblationStudy:
     def __init__(
         self,
@@ -528,6 +781,7 @@ class AblationStudy:
         cbs_timeout: int,
         evolution_population: int,
         evolution_generations: int,
+        config_path: Optional[Path] = None,
         vqvae_checkpoint: Optional[str] = None,
         diffusion_checkpoint: Optional[str] = None,
         masked_room_checkpoint: Optional[str] = None,
@@ -539,6 +793,7 @@ class AblationStudy:
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         self.data_root = data_root
+        self.config_path = Path(config_path) if config_path is not None else None
         self.num_rooms = int(num_rooms)
         self.target_curve = list(float(v) for v in target_curve)
         self.diffusion_steps = int(diffusion_steps)
@@ -555,6 +810,7 @@ class AblationStudy:
         )
         self.max_runtime_sec = float(max_runtime_sec) if max_runtime_sec is not None else None
         self.resolved_config = _load_pipeline_resolved_config(
+            str(self.config_path) if self.config_path is not None else None,
             self.diffusion_checkpoint,
             self.masked_room_checkpoint,
             self.logic_net_checkpoint,
@@ -1165,24 +1421,54 @@ class AblationStudy:
         sig_path = self.output_dir / "ablation_significance.csv"
         json_path = self.output_dir / "ablation_report.json"
         md_path = self.output_dir / "ablation_report.md"
+        plan_json_path = self.output_dir / "ablation_plan.json"
+        plan_md_path = self.output_dir / "ablation_plan.md"
 
         raw_df.to_csv(raw_path, index=False)
         summary_df.to_csv(summary_path, index=False)
         sig_df.to_csv(sig_path, index=False)
 
+        plan = build_ablation_plan(
+            configs=configs,
+            seeds=seeds,
+            target_curve=self.target_curve,
+            num_rooms=self.num_rooms,
+            diffusion_steps=self.diffusion_steps,
+            cbs_timeout=self.cbs_timeout,
+            evolution_population=self.evolution_population,
+            evolution_generations=self.evolution_generations,
+            config_path=self.config_path,
+        )
+        plan_json_path.write_text(
+            json.dumps(_json_sanitize(plan), indent=2, allow_nan=False),
+            encoding="utf-8",
+        )
+        plan_md_path.write_text(_format_ablation_plan_markdown(plan), encoding="utf-8")
+
         payload = {
+            "plan": plan,
             "configs": [asdict(c) for c in configs],
             "seeds": list(int(s) for s in seeds),
             "summary": summary_df.to_dict(orient="records"),
             "significance": sig_df.to_dict(orient="records"),
         }
-        json_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        json_path.write_text(
+            json.dumps(_json_sanitize(payload), indent=2, allow_nan=False),
+            encoding="utf-8",
+        )
 
         lines = [
             "# Ablation Study Report",
             "",
             "## Configurations",
         ]
+        lines.extend(
+            [
+                "",
+                "Study design is exported separately as `ablation_plan.md` and `ablation_plan.json`.",
+                "",
+            ]
+        )
         for cfg in configs:
             lines.append(f"- `{cfg.name}`: {asdict(cfg)}")
         lines.extend(
@@ -1239,7 +1525,13 @@ def build_experiment_set(include_extended: bool = True) -> List[ExperimentConfig
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run fixed-seed thesis ablation protocol.")
-    parser.add_argument("--output", type=Path, default=Path("results/ablation"))
+    parser.add_argument("--output", "--output-dir", dest="output", type=Path, default=Path("results/ablation"))
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="Optional resolved/training YAML whose pipeline defaults should seed the ablation runtime.",
+    )
     parser.add_argument("--data-root", type=Path, default=Path("Data") / "The Legend of Zelda")
     parser.add_argument("--num-samples", type=int, default=8, help="Seeds per configuration")
     parser.add_argument("--seed", type=int, default=42, help="Base seed for fixed-seed protocol")
@@ -1264,6 +1556,11 @@ def parse_args() -> argparse.Namespace:
         "--quick",
         action="store_true",
         help="Use a tractable quick profile for iterative thesis experiments.",
+    )
+    parser.add_argument(
+        "--plan-only",
+        action="store_true",
+        help="Write ablation_plan.json/md and exit without running generation.",
     )
     parser.add_argument(
         "--kaggle-t4x2",
@@ -1326,9 +1623,34 @@ def main() -> int:
             raise ValueError("No matching configs after --configs filtering.")
 
     seeds = [int(args.seed) + i for i in range(int(args.num_samples))]
+    if args.plan_only:
+        args.output.mkdir(parents=True, exist_ok=True)
+        plan = build_ablation_plan(
+            configs=configs,
+            seeds=seeds,
+            target_curve=target_curve,
+            num_rooms=args.num_rooms,
+            diffusion_steps=args.diffusion_steps,
+            cbs_timeout=args.cbs_timeout,
+            evolution_population=args.evolution_population,
+            evolution_generations=args.evolution_generations,
+            config_path=args.config,
+        )
+        (args.output / "ablation_plan.json").write_text(
+            json.dumps(_json_sanitize(plan), indent=2, allow_nan=False),
+            encoding="utf-8",
+        )
+        (args.output / "ablation_plan.md").write_text(
+            _format_ablation_plan_markdown(plan),
+            encoding="utf-8",
+        )
+        logger.info("Ablation plan written to %s", args.output)
+        return 0
+
     study = AblationStudy(
         output_dir=args.output,
         data_root=args.data_root,
+        config_path=args.config,
         num_rooms=args.num_rooms,
         target_curve=target_curve,
         diffusion_steps=args.diffusion_steps,
