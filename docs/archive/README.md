@@ -7,6 +7,7 @@ current repository state.
 ## Current Archive Buckets
 
 - [2026-q1/](2026-q1/README.md) - February to March 2026 architecture notes and fit studies
+- [2026-q2/](2026-q2/README.md) - superseded April-to-June 2026 protocol stubs and dated notes
 
 ## Canonical Current Docs
 

@@ -40,6 +40,7 @@ Usage:
 
 import json
 import logging
+import time
 from collections import deque
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Any, Set, Mapping, Sequence
@@ -51,6 +52,7 @@ import networkx as nx
 
 from src.core import (
     SemanticVQVAE,
+    create_vqvae,
     DualStreamConditionEncoder,
     LatentDiffusionModel,
     DiscreteMaskedRoomModel,
@@ -871,7 +873,7 @@ class NeuralSymbolicDungeonPipeline:
                 "but this pipeline was initialized without them."
             )
     
-    def _load_vqvae(self, checkpoint_path: Optional[str]) -> SemanticVQVAE:
+    def _load_vqvae(self, checkpoint_path: Optional[str]) -> torch.nn.Module:
         """Load or create VQ-VAE model."""
         use_coordconv = True
         checkpoint: Optional[Dict[str, Any]] = None
@@ -879,8 +881,11 @@ class NeuralSymbolicDungeonPipeline:
         metadata: Dict[str, Any] = {}
         checkpoint_config: Dict[str, Any] = {}
         num_classes = int(np.max(self._valid_semantic_tile_ids_np)) + 1
+        architecture_name = "vqvae"
         latent_dim = 64
         codebook_size = 512
+        top_codebook_size: Optional[int] = None
+        top_latent_dim: Optional[int] = None
         hidden_dim = 128
         if checkpoint_path and Path(checkpoint_path).exists():
             checkpoint, metadata = self._load_checkpoint_and_metadata(
@@ -901,16 +906,33 @@ class NeuralSymbolicDungeonPipeline:
                 elif declared_model_type not in {"diffusion"} and not is_composite_generation_checkpoint:
                     state_dict = self._extract_checkpoint_state_dict(checkpoint)
             architecture = metadata.get("architecture", {}) if isinstance(metadata, dict) else {}
-            num_classes = int(
-                checkpoint_config.get(
-                    "num_classes",
-                    architecture.get("num_classes", num_classes),
+            if isinstance(architecture, dict):
+                architecture_name = str(
+                    checkpoint_config.get(
+                        "architecture",
+                        architecture.get("architecture", architecture.get("vqvae_architecture", architecture_name)),
+                    )
+                    or architecture_name
                 )
-            )
+            else:
+                architecture = {}
+            num_classes = int(checkpoint_config.get("num_classes", architecture.get("num_classes", num_classes)))
             latent_dim = int(checkpoint_config.get("latent_dim", latent_dim))
             latent_dim = int(architecture.get("latent_dim", latent_dim))
             codebook_size = int(checkpoint_config.get("codebook_size", codebook_size))
             codebook_size = int(architecture.get("codebook_size", codebook_size))
+            top_codebook_candidate = checkpoint_config.get(
+                "top_codebook_size",
+                architecture.get("top_codebook_size", architecture.get("vqvae_top_codebook_size", None)),
+            )
+            top_latent_candidate = checkpoint_config.get(
+                "top_latent_dim",
+                architecture.get("top_latent_dim", architecture.get("vqvae_top_latent_dim", None)),
+            )
+            if top_codebook_candidate is not None:
+                top_codebook_size = int(top_codebook_candidate)
+            if top_latent_candidate is not None:
+                top_latent_dim = int(top_latent_candidate)
             use_coordconv = bool(checkpoint_config.get("use_coordconv", use_coordconv))
             use_coordconv = bool(architecture.get("use_coordconv", use_coordconv))
             # Backward compatibility: older checkpoints may use plain Conv2d
@@ -926,11 +948,14 @@ class NeuralSymbolicDungeonPipeline:
                 if isinstance(conv_weight, torch.Tensor) and conv_weight.dim() == 4:
                     hidden_dim = int(max(1, int(conv_weight.shape[0])))
 
-        model = SemanticVQVAE(
+        model = create_vqvae(
+            architecture=architecture_name,
             num_classes=num_classes,
             codebook_size=codebook_size,
             latent_dim=latent_dim,
             hidden_dim=hidden_dim,
+            top_codebook_size=top_codebook_size,
+            top_latent_dim=top_latent_dim,
             use_coordconv=use_coordconv,
         ).to(self.device)
         
@@ -6524,6 +6549,7 @@ class NeuralSymbolicDungeonPipeline:
         repaired_semantic_strip_ids: List[int] = []
         repaired_semantic_preserved_count = 0
         repaired_semantic_preserved_ids: List[int] = []
+        repair_time_sec = 0.0
         neural_boundary_shell = {
             "boundary_wall_tiles_forced": 0,
             "boundary_door_tiles_forced": 0,
@@ -6570,6 +6596,7 @@ class NeuralSymbolicDungeonPipeline:
         
         if apply_repair and start_goal_coords is not None:
             start, goal = normalized_start_goal if normalized_start_goal is not None else self._normalize_start_goal_coords(start_goal_coords)
+            repair_started_at = time.perf_counter()
             try:
                 if isinstance(mission_graph_for_room, nx.Graph) and room_id in mission_graph_for_room:
                     room_plan_mask = self._build_room_plan_trace(
@@ -6678,6 +6705,8 @@ class NeuralSymbolicDungeonPipeline:
             except (AttributeError, RuntimeError, ValueError, TypeError) as e:
                 self._bump_diagnostic("room_repair_exception")
                 logger.error(f"Room {room_id}: Repair error: {e}")
+            finally:
+                repair_time_sec = float(time.perf_counter() - repair_started_at)
         elif start_goal_coords is not None:
             start, goal = normalized_start_goal if normalized_start_goal is not None else self._normalize_start_goal_coords(start_goal_coords)
             try:
@@ -6934,6 +6963,8 @@ class NeuralSymbolicDungeonPipeline:
             'room_id': room_id,
             'neural_grid_entropy': entropy_val,
             'was_repaired': was_repaired,
+            'repair_count': int(bool(was_repaired)),
+            'repair_time_sec': float(repair_time_sec),
             'tiles_changed': int(np.sum(repair_mask)) if repair_mask is not None else 0,
             'neural_invalid_tile_ids': int(neural_invalid_count),
             'repair_invalid_tile_ids': int(repaired_invalid_count),
@@ -8040,6 +8071,8 @@ class NeuralSymbolicDungeonPipeline:
         alignment_metrics = self._aggregate_room_alignment_metrics(room_metric_dicts)
         metrics = {
             'num_rooms': num_rooms_generated,
+            'repair_count': int(sum(int(r.metrics.get('repair_count', int(bool(r.was_repaired)))) for r in room_set.rooms.values())),
+            'repair_time_sec': float(sum(float(r.metrics.get('repair_time_sec', 0.0)) for r in room_set.rooms.values())),
             'total_tiles_repaired': sum(r.metrics.get('tiles_changed', 0) for r in room_set.rooms.values()),
             'repair_rate': (
                 sum(r.was_repaired for r in room_set.rooms.values()) / max(1, num_rooms_generated)

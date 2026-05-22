@@ -120,6 +120,9 @@ class DiffusionTrainingConfig:
         vqvae_checkpoint: Optional[str] = None,
         vqvae_hidden_dim: int = 96,
         vqvae_codebook_size: int = 256,
+        vqvae_architecture: str = "vqvae",
+        vqvae_top_codebook_size: Optional[int] = None,
+        vqvae_top_latent_dim: Optional[int] = None,
         vqvae_use_coordconv: bool = True,
         vqvae_mrf_penalty_weight: float = 0.05,
         
@@ -241,6 +244,13 @@ class DiffusionTrainingConfig:
         self.vqvae_checkpoint = vqvae_checkpoint
         self.vqvae_hidden_dim = int(max(8, vqvae_hidden_dim))
         self.vqvae_codebook_size = int(max(8, vqvae_codebook_size))
+        self.vqvae_architecture = str(vqvae_architecture or "vqvae")
+        self.vqvae_top_codebook_size = (
+            None if vqvae_top_codebook_size is None else int(max(8, vqvae_top_codebook_size))
+        )
+        self.vqvae_top_latent_dim = (
+            None if vqvae_top_latent_dim is None else int(max(1, vqvae_top_latent_dim))
+        )
         self.vqvae_use_coordconv = bool(vqvae_use_coordconv)
         self.vqvae_mrf_penalty_weight = float(max(0.0, vqvae_mrf_penalty_weight))
         
@@ -491,6 +501,9 @@ def diffusion_training_kwargs_from_resolved_config(
         "vqvae_checkpoint": ckpt_path,
         "vqvae_hidden_dim": vqvae_stage["hidden_dim"],
         "vqvae_codebook_size": vqvae_stage["codebook_size"],
+        "vqvae_architecture": vqvae_stage["architecture"],
+        "vqvae_top_codebook_size": vqvae_stage["top_codebook_size"],
+        "vqvae_top_latent_dim": vqvae_stage["top_latent_dim"],
         "vqvae_use_coordconv": vqvae_stage["use_coordconv"],
         "vqvae_mrf_penalty_weight": vqvae_stage["mrf_penalty_weight"],
         "latent_dim": stage["latent_dim"],
@@ -603,8 +616,11 @@ def _resolve_vqvae_architecture(
     latent_dim: int,
     hidden_dim: int,
     codebook_size: int,
-    use_coordconv: bool,
-    mrf_penalty_weight: float,
+    architecture: str = "vqvae",
+    top_codebook_size: Optional[int] = None,
+    top_latent_dim: Optional[int] = None,
+    use_coordconv: bool = True,
+    mrf_penalty_weight: float = 0.05,
 ) -> Dict[str, Any]:
     """
     Resolve the VQ-VAE architecture from config first, then checkpoint metadata.
@@ -613,10 +629,13 @@ def _resolve_vqvae_architecture(
     from historical diffusion defaults.
     """
     resolved: Dict[str, Any] = {
+        "architecture": str(architecture or "vqvae"),
         "num_classes": int(num_classes),
         "latent_dim": int(latent_dim),
         "hidden_dim": int(hidden_dim),
         "codebook_size": int(codebook_size),
+        "top_codebook_size": top_codebook_size,
+        "top_latent_dim": top_latent_dim,
         "use_coordconv": bool(use_coordconv),
         "mrf_penalty_weight": float(mrf_penalty_weight),
     }
@@ -628,10 +647,13 @@ def _resolve_vqvae_architecture(
     architecture = metadata.get("architecture", {}) if isinstance(metadata, dict) else {}
     if isinstance(architecture, dict):
         for key in (
+            "architecture",
             "num_classes",
             "latent_dim",
             "hidden_dim",
             "codebook_size",
+            "top_codebook_size",
+            "top_latent_dim",
             "use_coordconv",
             "mrf_penalty_weight",
         ):
@@ -639,10 +661,17 @@ def _resolve_vqvae_architecture(
                 resolved[key] = architecture[key]
 
     return {
+        "architecture": str(resolved.get("architecture", "vqvae")),
         "num_classes": int(resolved["num_classes"]),
         "latent_dim": int(resolved["latent_dim"]),
         "hidden_dim": int(resolved["hidden_dim"]),
         "codebook_size": int(resolved["codebook_size"]),
+        "top_codebook_size": (
+            None if resolved.get("top_codebook_size") is None else int(resolved["top_codebook_size"])
+        ),
+        "top_latent_dim": (
+            None if resolved.get("top_latent_dim") is None else int(resolved["top_latent_dim"])
+        ),
         "use_coordconv": bool(resolved["use_coordconv"]),
         "mrf_penalty_weight": float(resolved["mrf_penalty_weight"]),
     }
@@ -877,18 +906,27 @@ class DiffusionTrainer:
             latent_dim=self.config.latent_dim,
             hidden_dim=self.config.vqvae_hidden_dim,
             codebook_size=self.config.vqvae_codebook_size,
+            architecture=self.config.vqvae_architecture,
+            top_codebook_size=self.config.vqvae_top_codebook_size,
+            top_latent_dim=self.config.vqvae_top_latent_dim,
             use_coordconv=self.config.vqvae_use_coordconv,
             mrf_penalty_weight=self.config.vqvae_mrf_penalty_weight,
         )
         self.config.vqvae_hidden_dim = int(vqvae_arch["hidden_dim"])
         self.config.vqvae_codebook_size = int(vqvae_arch["codebook_size"])
+        self.config.vqvae_architecture = str(vqvae_arch["architecture"])
+        self.config.vqvae_top_codebook_size = vqvae_arch.get("top_codebook_size")
+        self.config.vqvae_top_latent_dim = vqvae_arch.get("top_latent_dim")
         self.config.vqvae_use_coordconv = bool(vqvae_arch["use_coordconv"])
         self.config.vqvae_mrf_penalty_weight = float(vqvae_arch["mrf_penalty_weight"])
         vqvae = create_vqvae(
+            architecture=vqvae_arch["architecture"],
             num_classes=vqvae_arch["num_classes"],
             latent_dim=vqvae_arch["latent_dim"],
             hidden_dim=vqvae_arch["hidden_dim"],
             codebook_size=vqvae_arch["codebook_size"],
+            top_codebook_size=vqvae_arch.get("top_codebook_size"),
+            top_latent_dim=vqvae_arch.get("top_latent_dim"),
             use_coordconv=vqvae_arch["use_coordconv"],
             mrf_penalty_weight=vqvae_arch["mrf_penalty_weight"],
         )
@@ -897,8 +935,9 @@ class DiffusionTrainer:
             checkpoint = torch.load(self.config.vqvae_checkpoint, map_location='cpu')
             vqvae.load_state_dict(checkpoint['model_state_dict'])
             logger.info(
-                "Loaded VQ-VAE from %s with architecture num_classes=%d latent_dim=%d hidden_dim=%d codebook_size=%d",
+                "Loaded VQ-VAE from %s with architecture=%s num_classes=%d latent_dim=%d hidden_dim=%d codebook_size=%d",
                 self.config.vqvae_checkpoint,
+                vqvae_arch["architecture"],
                 vqvae_arch["num_classes"],
                 vqvae_arch["latent_dim"],
                 vqvae_arch["hidden_dim"],
@@ -2270,6 +2309,9 @@ class DiffusionTrainer:
                 "num_classes": int(self.config.num_classes),
                 "vqvae_hidden_dim": int(self.config.vqvae_hidden_dim),
                 "vqvae_codebook_size": int(self.config.vqvae_codebook_size),
+                "vqvae_architecture": str(getattr(self.config, "vqvae_architecture", "vqvae")),
+                "vqvae_top_codebook_size": getattr(self.config, "vqvae_top_codebook_size", None),
+                "vqvae_top_latent_dim": getattr(self.config, "vqvae_top_latent_dim", None),
                 "vqvae_use_coordconv": bool(self.config.vqvae_use_coordconv),
             },
             extra={

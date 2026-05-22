@@ -65,6 +65,9 @@ vqvae:
   latent_dim: 64  # type=int, default=64, valid>=1
   hidden_dim: 96  # type=int, default=96, valid>=8; reduced canonical width keeps the full stack intact but avoids the small-data VQ capacity warning
   codebook_size: 256  # type=int, default=256, valid>=8; reduced canonical codebook better matches the tiny Zelda room corpus and cuts dead-code churn
+  architecture: vqvae  # type=str, default=vqvae, valid={vqvae,vqvae2}; vqvae2 enables a hierarchical top/bottom codebook ablation
+  top_codebook_size: null  # type=int|null, default=null, valid>=8; only active for architecture=vqvae2
+  top_latent_dim: null  # type=int|null, default=null, valid>=1; only active for architecture=vqvae2
   commitment_cost: 0.25  # type=float, default=0.25, valid>=0
   rare_tile_weight: 5.0  # type=float, default=5.0, valid>=1
   use_ema: true  # type=bool, default=true, valid={true,false}

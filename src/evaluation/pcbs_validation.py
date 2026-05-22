@@ -226,6 +226,77 @@ def _count_puzzle_stall_steps(grid: np.ndarray, path: Iterable[GridPos], goal: G
     return stall_steps
 
 
+def compute_pcbs_readability_metrics(
+    *,
+    oracle: Mapping[str, Any],
+    pcbs_success: bool,
+    pcbs_solution_length: int,
+    pcbs_trajectory_length: int,
+    pcbs_states: int,
+    timeout_pcbs: int,
+    pcbs_metrics: Any,
+    puzzle_stall_steps: int,
+) -> Dict[str, Any]:
+    """
+    Derive report-facing P-CBS calibration metrics.
+
+    The raw P-CBS fields remain available; these derived fields make tables
+    easier to compare across maps/personas by separating optimal solvability
+    from bounded-rationality effort.
+    """
+    oracle_success = bool(oracle.get("success", False))
+    oracle_path_length = int(oracle.get("path_length", 0) or 0)
+    path_delta: Optional[int] = None
+    if oracle_success and bool(pcbs_success) and oracle_path_length > 0:
+        path_delta = int(pcbs_solution_length) - int(oracle_path_length)
+
+    total_steps = max(1, int(getattr(pcbs_metrics, "total_steps", pcbs_trajectory_length) or pcbs_trajectory_length))
+    unique_tiles = max(1, int(getattr(pcbs_metrics, "unique_tiles_visited", 1) or 1))
+    revisit_rate = max(0.0, float(total_steps - unique_tiles) / float(max(1, total_steps)))
+    normalized_confusion = float(np.clip(float(getattr(pcbs_metrics, "confusion_index", 0.0) or 0.0) / 3.0, 0.0, 1.0))
+    normalized_entropy = float(np.clip(float(getattr(pcbs_metrics, "navigation_entropy", 0.0) or 0.0) / 2.0, 0.0, 1.0))
+    normalized_load = float(np.clip(float(getattr(pcbs_metrics, "cognitive_load", 0.0) or 0.0) / 2.5, 0.0, 1.0))
+    budget_fraction = float(np.clip(float(pcbs_states) / float(max(1, int(timeout_pcbs))), 0.0, 1.0))
+    stall_fraction = float(np.clip(float(puzzle_stall_steps) / float(max(1, pcbs_trajectory_length)), 0.0, 1.0))
+
+    bounded_rationality_index = float(
+        np.clip(
+            (0.24 * normalized_confusion)
+            + (0.18 * normalized_entropy)
+            + (0.22 * normalized_load)
+            + (0.20 * budget_fraction)
+            + (0.16 * stall_fraction),
+            0.0,
+            1.0,
+        )
+    )
+    if oracle_success and not bool(pcbs_success):
+        bounded_rationality_index = float(np.clip(bounded_rationality_index + 0.20, 0.0, 1.0))
+    cognitive_effort_index = float(
+        np.clip(
+            (0.30 * normalized_load)
+            + (0.24 * normalized_confusion)
+            + (0.20 * revisit_rate)
+            + (0.16 * budget_fraction)
+            + (0.10 * stall_fraction),
+            0.0,
+            1.0,
+        )
+    )
+    readability_score = float(np.clip(1.0 - bounded_rationality_index, 0.0, 1.0))
+
+    return {
+        "oracle_pcbs_path_delta": path_delta,
+        "bounded_rationality_index": bounded_rationality_index,
+        "readability_score": readability_score,
+        "cognitive_effort_index": cognitive_effort_index,
+        "state_budget_fraction": budget_fraction,
+        "revisit_rate": revisit_rate,
+        "puzzle_stall_fraction": stall_fraction,
+        "oracle_solved_but_pcbs_failed": bool(oracle_success and not bool(pcbs_success)),
+    }
+
+
 def _extract_validation_env_kwargs(source: Any) -> Dict[str, Any]:
     """Best-effort extraction of stitched puzzle metadata from pipeline outputs."""
     graph = getattr(source, "mission_graph", None)
@@ -293,6 +364,16 @@ def evaluate_astar_vs_pcbs(
         oracle_status=str(oracle["status"]),
         candidate_success=bool(pcbs_success),
     )
+    readability_metrics = compute_pcbs_readability_metrics(
+        oracle=oracle,
+        pcbs_success=bool(pcbs_success),
+        pcbs_solution_length=pcbs_solution_length,
+        pcbs_trajectory_length=pcbs_trajectory_length,
+        pcbs_states=int(pcbs_states),
+        timeout_pcbs=int(timeout_pcbs),
+        pcbs_metrics=pcbs_metrics,
+        puzzle_stall_steps=puzzle_stall_steps,
+    )
 
     return {
         "validation_handoff": prepared.diagnostics,
@@ -302,6 +383,8 @@ def evaluate_astar_vs_pcbs(
         },
         "pcbs": {
             "persona": str(persona),
+            "seed": int(seed),
+            "timeout": int(timeout_pcbs),
             "success": bool(pcbs_success),
             "path_length": int(pcbs_solution_length),
             "trajectory_length": int(pcbs_trajectory_length),
@@ -325,6 +408,7 @@ def evaluate_astar_vs_pcbs(
             "inventory_change_events": int(getattr(pcbs_metrics, "inventory_change_events", 0) or 0),
             "focus_switches": int(getattr(pcbs_metrics, "focus_switches", 0) or 0),
             "focus_guided_steps": int(getattr(pcbs_metrics, "focus_guided_steps", 0) or 0),
+            **readability_metrics,
             "metrics": _json_ready(pcbs_metrics.to_dict()),
         },
         "comparison": {
@@ -334,6 +418,10 @@ def evaluate_astar_vs_pcbs(
             "pcbs_status": pcbs_status,
             "cognitive_gap": bool(oracle["success"] and not pcbs_success),
             "confusion_ratio_vs_oracle": float(confusion_ratio) if np.isfinite(confusion_ratio) else None,
+            "oracle_pcbs_path_delta": readability_metrics["oracle_pcbs_path_delta"],
+            "bounded_rationality_index": float(readability_metrics["bounded_rationality_index"]),
+            "readability_score": float(readability_metrics["readability_score"]),
+            "cognitive_effort_index": float(readability_metrics["cognitive_effort_index"]),
         },
     }
 
@@ -382,6 +470,7 @@ def build_ieee_markdown_table(result: Mapping[str, Any], *, map_name: str = "Gen
 __all__ = [
     "PreparedValidationDungeon",
     "prepare_dungeon_grid_for_validation",
+    "compute_pcbs_readability_metrics",
     "evaluate_astar_vs_pcbs",
     "build_ieee_markdown_table",
 ]

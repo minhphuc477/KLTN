@@ -348,6 +348,46 @@ class TestVQVAETrainingHelpers:
         assert "codebook_usage_entropy" in metrics
         assert "ema_live_codes" in metrics
 
+    def test_vqvae2_forward_and_hierarchical_codebook_health(self):
+        """Hierarchical VQ-VAE-2 should keep the downstream VQ-VAE interface."""
+        from src.core.vqvae import create_vqvae
+        from src.train_vqvae import compute_vqvae_codebook_health
+
+        model = create_vqvae(
+            architecture="vqvae2",
+            num_classes=44,
+            latent_dim=8,
+            hidden_dim=8,
+            codebook_size=8,
+            top_codebook_size=8,
+            top_latent_dim=8,
+        )
+        batch = torch.zeros(2, 44, 16, 11)
+        batch[:, 1, :, :] = 1.0
+
+        recon, vq_loss, losses = model(batch)
+        z_q, indices = model.encode(batch)
+        decoded = model.decode_indices(indices)
+
+        assert recon.shape == batch.shape
+        assert decoded.shape == batch.shape
+        assert z_q.shape[1] == 8
+        assert indices.shape[-2:] == z_q.shape[-2:]
+        assert vq_loss.ndim == 0
+        assert "top_vq_loss" in losses
+        assert "bottom_vq_loss" in losses
+
+        model.top_quantizer.codebook_usage.zero_()
+        model.top_quantizer.codebook_usage[:2] = torch.tensor([1.0, 0.5])
+        model.bottom_quantizer.codebook_usage.zero_()
+        model.bottom_quantizer.codebook_usage[:4] = torch.tensor([1.0, 0.5, 0.25, 0.125])
+        metrics = compute_vqvae_codebook_health(model)
+
+        assert metrics["codebook_levels"] == 2.0
+        assert metrics["top_codebook_utilization"] == pytest.approx(2.0 / 8.0)
+        assert metrics["bottom_codebook_utilization"] == pytest.approx(4.0 / 8.0)
+        assert metrics["codebook_utilization"] == pytest.approx(6.0 / 16.0)
+
 
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

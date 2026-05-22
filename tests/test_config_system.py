@@ -337,6 +337,9 @@ def test_stage_helpers_forward_checkpoint_retention_and_resume_defaults():
     assert vqvae_kwargs["resume"] is None
     assert diffusion_kwargs["vqvae_hidden_dim"] == resolved["vqvae"]["hidden_dim"]
     assert diffusion_kwargs["vqvae_codebook_size"] == resolved["vqvae"]["codebook_size"]
+    assert diffusion_kwargs["vqvae_architecture"] == resolved["vqvae"]["architecture"]
+    assert diffusion_kwargs["vqvae_top_codebook_size"] == resolved["vqvae"]["top_codebook_size"]
+    assert diffusion_kwargs["vqvae_top_latent_dim"] == resolved["vqvae"]["top_latent_dim"]
     assert diffusion_kwargs["vqvae_use_coordconv"] == resolved["vqvae"]["use_coordconv"]
     assert diffusion_kwargs["vqvae_mrf_penalty_weight"] == pytest.approx(resolved["vqvae"]["mrf_penalty_weight"])
     assert diffusion_kwargs["validation_num_samples"] == 8
@@ -853,10 +856,13 @@ def test_diffusion_vqvae_architecture_resolves_from_checkpoint_metadata(tmp_path
         "format_version": "1.0",
         "model_type": "vqvae",
         "architecture": {
+            "architecture": "vqvae2",
             "num_classes": 44,
             "latent_dim": 64,
             "hidden_dim": 96,
             "codebook_size": 256,
+            "top_codebook_size": 128,
+            "top_latent_dim": 32,
             "use_coordconv": False,
             "mrf_penalty_weight": 0.125,
         },
@@ -875,6 +881,9 @@ def test_diffusion_vqvae_architecture_resolves_from_checkpoint_metadata(tmp_path
 
     assert resolved["hidden_dim"] == 96
     assert resolved["codebook_size"] == 256
+    assert resolved["architecture"] == "vqvae2"
+    assert resolved["top_codebook_size"] == 128
+    assert resolved["top_latent_dim"] == 32
     assert resolved["use_coordconv"] is False
     assert resolved["mrf_penalty_weight"] == pytest.approx(0.125)
 

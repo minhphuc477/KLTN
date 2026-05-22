@@ -1053,12 +1053,290 @@ class SemanticVQVAE(nn.Module):
         if not self.use_codebook or self.quantizer is None:
             raise RuntimeError("get_codebook is only available when use_codebook=True.")
         return self.quantizer.embedding.weight.data
-    
+
     def get_codebook_usage(self) -> Tensor:
         """Get codebook usage statistics."""
         if not self.use_codebook or self.quantizer is None:
             raise RuntimeError("get_codebook_usage is only available when use_codebook=True.")
         return self.quantizer.get_codebook_usage()
+
+
+class SemanticVQVAE2(nn.Module):
+    """
+    Two-level hierarchical VQ-VAE for room grids.
+
+    This follows the VQ-VAE-2 ablation idea: a coarse top codebook captures
+    global room structure, while a bottom codebook captures local tile detail.
+    For downstream compatibility with the existing latent-diffusion branch,
+    encode() returns a single fused latent tensor with the same channel width as
+    `SemanticVQVAE`.
+    """
+
+    RARE_TILES = SemanticVQVAE.RARE_TILES
+
+    def __init__(
+        self,
+        num_classes: int = 44,
+        num_tile_classes: Optional[int] = None,
+        codebook_size: int = 512,
+        top_codebook_size: Optional[int] = None,
+        num_embeddings: Optional[int] = None,
+        latent_dim: int = 64,
+        top_latent_dim: Optional[int] = None,
+        hidden_dim: int = 128,
+        hidden_dims: Optional[List[int]] = None,
+        num_res_blocks: int = 2,
+        commitment_cost: float = 0.25,
+        rare_tile_weight: float = 5.0,
+        use_codebook: bool = True,
+        use_ema: bool = True,
+        use_coordconv: bool = True,
+        mrf_penalty_weight: float = 0.05,
+        dead_code_reset_interval: int = 100,
+        dead_code_threshold: float = 0.05,
+        dead_code_warmup_steps: int = 500,
+        protect_active_codes_during_reset: bool = True,
+        max_dead_code_resets_per_event: int = 16,
+    ):
+        super().__init__()
+
+        if num_tile_classes is not None:
+            num_classes = int(num_tile_classes)
+        if num_embeddings is not None:
+            codebook_size = int(num_embeddings)
+        if top_codebook_size is None:
+            top_codebook_size = max(8, int(codebook_size) // 2)
+        if top_latent_dim is None:
+            top_latent_dim = int(latent_dim)
+
+        self.num_classes = int(num_classes)
+        self.use_codebook = bool(use_codebook)
+        self.codebook_size = int(codebook_size) if self.use_codebook else 0
+        self.top_codebook_size = int(top_codebook_size) if self.use_codebook else 0
+        self.latent_dim = int(latent_dim)
+        self.top_latent_dim = int(top_latent_dim)
+        self.rare_tile_weight = float(rare_tile_weight)
+        self.mrf_penalty_weight = float(max(0.0, mrf_penalty_weight))
+
+        self.encoder = Encoder(
+            in_channels=self.num_classes,
+            hidden_channels=hidden_dim,
+            latent_channels=self.latent_dim,
+            hidden_dims=hidden_dims,
+            latent_dim=self.latent_dim,
+            num_res_blocks=num_res_blocks,
+            channel_mult=(1, 2, 4),
+            use_coordconv=bool(use_coordconv),
+        )
+        self.top_encoder = nn.Sequential(
+            ResidualBlock(self.latent_dim, self.latent_dim),
+            nn.Conv2d(self.latent_dim, self.top_latent_dim, kernel_size=3, stride=2, padding=1),
+        )
+        self.top_context_proj = nn.Conv2d(self.top_latent_dim, self.latent_dim, kernel_size=1)
+        self.bottom_condition_proj = nn.Conv2d(self.latent_dim * 2, self.latent_dim, kernel_size=1)
+        self.fusion = nn.Sequential(
+            nn.Conv2d(self.latent_dim * 2, self.latent_dim, kernel_size=1),
+            ResidualBlock(self.latent_dim, self.latent_dim),
+        )
+
+        if self.use_codebook:
+            self.top_quantizer = VectorQuantizer(
+                num_embeddings=int(top_codebook_size),
+                embedding_dim=self.top_latent_dim,
+                commitment_cost=commitment_cost,
+                use_ema=use_ema,
+                dead_code_reset_interval=dead_code_reset_interval,
+                dead_code_threshold=dead_code_threshold,
+                dead_code_warmup_steps=dead_code_warmup_steps,
+                protect_active_codes_during_reset=protect_active_codes_during_reset,
+                max_dead_code_resets_per_event=max_dead_code_resets_per_event,
+            )
+            self.bottom_quantizer = VectorQuantizer(
+                num_embeddings=int(codebook_size),
+                embedding_dim=self.latent_dim,
+                commitment_cost=commitment_cost,
+                use_ema=use_ema,
+                dead_code_reset_interval=dead_code_reset_interval,
+                dead_code_threshold=dead_code_threshold,
+                dead_code_warmup_steps=dead_code_warmup_steps,
+                protect_active_codes_during_reset=protect_active_codes_during_reset,
+                max_dead_code_resets_per_event=max_dead_code_resets_per_event,
+            )
+            # Compatibility for code paths that expect `model.quantizer`.
+            self.quantizer = self.bottom_quantizer
+        else:
+            self.top_quantizer = None
+            self.bottom_quantizer = None
+            self.quantizer = None
+
+        self.decoder = Decoder(
+            out_channels=self.num_classes,
+            hidden_channels=hidden_dim,
+            latent_channels=self.latent_dim,
+            hidden_dims=hidden_dims,
+            latent_dim=self.latent_dim,
+            num_res_blocks=num_res_blocks,
+            channel_mult=(4, 2, 1),
+        )
+        self.register_buffer("tile_weights", self._build_tile_weights())
+        self.register_buffer("illegal_adjacency_matrix", self._build_illegal_adjacency_matrix())
+
+    def _build_tile_weights(self) -> Tensor:
+        weights = torch.ones(self.num_classes)
+        for tile_id in self.RARE_TILES:
+            if tile_id < self.num_classes:
+                weights[tile_id] = self.rare_tile_weight
+        return weights
+
+    def _build_illegal_adjacency_matrix(self) -> Tensor:
+        helper = SemanticVQVAE(
+            num_classes=self.num_classes,
+            codebook_size=max(8, self.codebook_size or 8),
+            latent_dim=self.latent_dim,
+            use_codebook=False,
+        )
+        return helper._build_illegal_adjacency_matrix()
+
+    def _empty_indices(self, batch_size: int, height: int, width: int, device: torch.device) -> Tensor:
+        return torch.zeros((batch_size, height, width), dtype=torch.long, device=device)
+
+    def _illegal_adjacency_penalty(self, recon_logits: Tensor) -> Tensor:
+        probs = F.softmax(recon_logits, dim=1)
+        illegal = self.illegal_adjacency_matrix.to(dtype=probs.dtype, device=probs.device)
+        shifts = [
+            (-1, -1), (-1, 0), (-1, 1),
+            (0, -1),           (0, 1),
+            (1, -1),  (1, 0),  (1, 1),
+        ]
+        total = torch.tensor(0.0, device=probs.device, dtype=probs.dtype)
+        padded = F.pad(probs, (1, 1, 1, 1), mode="constant", value=0.0)
+        h = probs.shape[2]
+        w = probs.shape[3]
+        for dy, dx in shifts:
+            y0 = 1 + dy
+            x0 = 1 + dx
+            neighbor = padded[:, :, y0:y0 + h, x0:x0 + w]
+            pair_score = torch.einsum("bchw,cd,bdhw->bhw", probs, illegal, neighbor)
+            total = total + pair_score.mean()
+        return total / float(len(shifts))
+
+    def _weighted_reconstruction_loss(self, recon: Tensor, target: Tensor) -> Tensor:
+        if target.shape[1] == self.num_classes:
+            target_idx = target.argmax(dim=1)
+        else:
+            target_idx = target.squeeze(1)
+        weights = self.tile_weights[target_idx]
+        loss = F.cross_entropy(recon, target_idx, reduction="none")
+        return (loss * weights).mean()
+
+    def _encode_hierarchy(self, x: Tensor) -> Tuple[Tensor, Tensor, Tensor, Dict[str, Tensor]]:
+        bottom_e = self.encoder(x)
+        top_e = self.top_encoder(bottom_e)
+
+        if self.use_codebook:
+            top_z, top_indices, top_losses = self.top_quantizer(top_e, return_info=True)
+        else:
+            top_z = top_e
+            top_indices = self._empty_indices(top_e.shape[0], top_e.shape[2], top_e.shape[3], top_e.device)
+            zero = torch.zeros((), device=top_e.device, dtype=top_e.dtype)
+            top_losses = {"vq_loss": zero, "commitment_loss": zero, "perplexity": zero}
+
+        top_context = self.top_context_proj(top_z)
+        top_context = F.interpolate(top_context, size=bottom_e.shape[-2:], mode="nearest")
+        bottom_e_conditioned = self.bottom_condition_proj(torch.cat([bottom_e, top_context], dim=1))
+
+        if self.use_codebook:
+            bottom_z, bottom_indices, bottom_losses = self.bottom_quantizer(bottom_e_conditioned, return_info=True)
+        else:
+            bottom_z = bottom_e_conditioned
+            bottom_indices = self._empty_indices(
+                bottom_e_conditioned.shape[0],
+                bottom_e_conditioned.shape[2],
+                bottom_e_conditioned.shape[3],
+                bottom_e_conditioned.device,
+            )
+            zero = torch.zeros((), device=bottom_e_conditioned.device, dtype=bottom_e_conditioned.dtype)
+            bottom_losses = {"vq_loss": zero, "commitment_loss": zero, "perplexity": zero}
+
+        fused = self.fusion(torch.cat([bottom_z, top_context], dim=1))
+        losses = {
+            "top_vq_loss": top_losses["vq_loss"],
+            "bottom_vq_loss": bottom_losses["vq_loss"],
+            "vq_loss": top_losses["vq_loss"] + bottom_losses["vq_loss"],
+            "top_commitment_loss": top_losses.get("commitment_loss", torch.zeros_like(top_losses["vq_loss"])),
+            "bottom_commitment_loss": bottom_losses.get("commitment_loss", torch.zeros_like(bottom_losses["vq_loss"])),
+            "top_perplexity": top_losses["perplexity"],
+            "bottom_perplexity": bottom_losses["perplexity"],
+            "perplexity": 0.5 * (top_losses["perplexity"] + bottom_losses["perplexity"]),
+        }
+        return fused, bottom_indices, top_indices, losses
+
+    def encode(self, x: Tensor) -> Tuple[Tensor, Tensor]:
+        z_q, bottom_indices, _top_indices, _losses = self._encode_hierarchy(x)
+        return z_q, bottom_indices
+
+    def quantize(self, z_e: Tensor | Tuple[Tensor, Any]) -> Tuple[Tensor, Tensor, Tensor]:
+        if isinstance(z_e, (tuple, list)):
+            z_e = z_e[0]
+        if self.use_codebook and self.bottom_quantizer is not None:
+            return self.bottom_quantizer(z_e)
+        indices = self._empty_indices(z_e.shape[0], z_e.shape[2], z_e.shape[3], z_e.device)
+        zero_loss = torch.zeros((), device=z_e.device, dtype=z_e.dtype)
+        return z_e, zero_loss, indices
+
+    def decode(self, z_q: Tensor, target_size: Optional[Tuple[int, int]] = None) -> Tensor:
+        if target_size is None:
+            target_size = (ROOM_HEIGHT, ROOM_WIDTH)
+        else:
+            target_size = normalize_room_shape(target_size)
+        return self.decoder(z_q, target_size)
+
+    def decode_indices(self, indices: Tensor, target_size: Optional[Tuple[int, int]] = None) -> Tensor:
+        if not self.use_codebook or self.bottom_quantizer is None:
+            raise RuntimeError("decode_indices is only available when use_codebook=True.")
+        z_q = self.bottom_quantizer.encode_indices(indices).permute(0, 3, 1, 2).contiguous()
+        return self.decode(z_q, target_size)
+
+    def forward_with_losses(self, x: Tensor) -> Tuple[Tensor, Tensor, Dict[str, Tensor]]:
+        input_size = (x.shape[2], x.shape[3])
+        z_q, bottom_indices, top_indices, losses = self._encode_hierarchy(x)
+        recon = self.decoder(z_q, target_size=input_size)
+        recon_loss = self._weighted_reconstruction_loss(recon, x)
+        illegal_penalty = self._illegal_adjacency_penalty(recon)
+        losses = dict(losses)
+        losses["recon_loss"] = recon_loss
+        losses["illegal_adjacency_penalty"] = illegal_penalty
+        losses["top_indices"] = top_indices
+        losses["total_loss"] = recon_loss + losses["vq_loss"] + (self.mrf_penalty_weight * illegal_penalty)
+        return recon, bottom_indices, losses
+
+    def forward(self, x: Tensor) -> Tuple[Tensor, Tensor, Dict[str, Tensor]]:
+        recon, indices, losses = self.forward_with_losses(x)
+        losses = dict(losses)
+        losses["indices"] = indices
+        return recon, losses["vq_loss"], losses
+
+    def compute_loss(self, x: Tensor) -> Dict[str, Tensor]:
+        _, _, losses = self.forward_with_losses(x)
+        return losses
+
+    def get_codebook(self) -> Tensor:
+        if not self.use_codebook or self.bottom_quantizer is None:
+            raise RuntimeError("get_codebook is only available when use_codebook=True.")
+        return self.bottom_quantizer.embedding.weight.data
+
+    def get_codebook_usage(self) -> Tensor:
+        if not self.use_codebook or self.bottom_quantizer is None:
+            raise RuntimeError("get_codebook_usage is only available when use_codebook=True.")
+        return self.bottom_quantizer.get_codebook_usage()
+
+    def get_hierarchical_codebook_usage(self) -> Dict[str, Tensor]:
+        if not self.use_codebook or self.bottom_quantizer is None or self.top_quantizer is None:
+            return {}
+        return {
+            "bottom": self.bottom_quantizer.get_codebook_usage(),
+            "top": self.top_quantizer.get_codebook_usage(),
+        }
 
 
 # ============================================================================
@@ -1171,8 +1449,9 @@ def create_vqvae(
     codebook_size: int = 512,
     latent_dim: int = 64,
     use_codebook: bool = True,
+    architecture: str = "vqvae",
     **kwargs,
-) -> SemanticVQVAE:
+) -> SemanticVQVAE | SemanticVQVAE2:
     """
     Create a Semantic VQ-VAE model.
     
@@ -1185,6 +1464,23 @@ def create_vqvae(
     Returns:
         SemanticVQVAE model
     """
+    model_variant = kwargs.pop("model_variant", None)
+    top_codebook_size = kwargs.pop("top_codebook_size", None)
+    top_latent_dim = kwargs.pop("top_latent_dim", None)
+    arch_source = model_variant if model_variant is not None else architecture
+    arch = str(arch_source or "vqvae").strip().lower().replace("-", "")
+    if arch in {"vqvae2", "vqvaeii", "hierarchical", "hierarchicalvqvae"}:
+        return SemanticVQVAE2(
+            num_classes=num_classes,
+            codebook_size=codebook_size,
+            latent_dim=latent_dim,
+            use_codebook=use_codebook,
+            top_codebook_size=top_codebook_size,
+            top_latent_dim=top_latent_dim,
+            **kwargs,
+        )
+    if arch not in {"vqvae", "semanticvqvae", "single"}:
+        raise ValueError(f"Unsupported VQ-VAE architecture {architecture!r}. Expected 'vqvae' or 'vqvae2'.")
     return SemanticVQVAE(
         num_classes=num_classes,
         codebook_size=codebook_size,

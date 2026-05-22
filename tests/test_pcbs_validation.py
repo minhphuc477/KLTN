@@ -80,6 +80,10 @@ def test_evaluate_astar_vs_pcbs_emits_paper_metrics_and_markdown() -> None:
     assert result["comparison"]["pcbs_status"] == result["pcbs"]["status"]
     assert "affordance_reactivations" in result["pcbs"]
     assert "inventory_change_events" in result["pcbs"]
+    assert "bounded_rationality_index" in result["pcbs"]
+    assert "readability_score" in result["pcbs"]
+    assert "cognitive_effort_index" in result["pcbs"]
+    assert "oracle_pcbs_path_delta" in result["comparison"]
     assert "| Map | Solver |" in table
     assert "P-CBS (novice)" in table
     json.dumps(result)

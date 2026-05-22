@@ -24,6 +24,7 @@ $env:KLTN_EXPORT_MAX_BATCH_SIZE='1'
 ## 1.1 Protocol Alerts
 
 - The completed six-run `VQ-VAE` ablation currently supports `codebook_size=256`, `hidden_dim=96`, `latent_dim=64`, `coordconv=on`, and `mrf_penalty_weight=0.05` as the best-tested tokenizer setting by held-out validation loss.
+- Designer-controllability and compute/sample-efficiency commands are maintained in `docs\DESIGNER_CONTROLLABILITY_AND_COMPUTE_PROTOCOL.md`.
 - `codebook512` remains a valid downstream comparison branch, but it is not the best tokenizer by the completed `VQ-VAE` evidence.
 - `diffusion.validation_fraction=0.1` is now part of the canonical config, so new `main.py train --stage diffusion` launches use a real held-out split for checkpoint selection.
 - Any diffusion run started before the 2026-04-19 held-out-validation patch must be treated as interim only for thesis purposes and rerun before final Chapter 4 claims.
@@ -306,7 +307,61 @@ python scripts\run_ablation_study.py `
   --vqvae-checkpoint outputs\vqvae_ablation_codebook512_v2\checkpoints\vqvae\vqvae_pretrained.pth
 ```
 
-### 6.5 Room branch benchmark
+### 6.5 VQ-VAE-2 tokenizer ablation
+
+```powershell
+python src\train_vqvae.py `
+  --config configs\zelda_hmolqd.yaml `
+  --architecture vqvae2 `
+  --top-codebook-size 128 `
+  --top-latent-dim 64 `
+  --output-dir outputs\vqvae2_hierarchical_v1
+```
+
+### 6.6 Conditioning, LogicNet, and repair matrix
+
+Plan-only:
+
+```powershell
+python scripts\run_conditioning_logicnet_repair_ablation.py `
+  --output results\conditioning_logicnet_repair_ablation
+```
+
+Execute later:
+
+```powershell
+python scripts\run_conditioning_logicnet_repair_ablation.py `
+  --execute `
+  --config configs\zelda_hmolqd.yaml `
+  --output results\conditioning_logicnet_repair_ablation `
+  --seeds 42,43,44 `
+  --vqvae-checkpoint outputs\vqvae2_hierarchical_v1\checkpoints\vqvae\vqvae_pretrained.pth `
+  --diffusion-checkpoint outputs\YOUR_DIFFUSION_RUN\checkpoints\diffusion\best_model.pth `
+  --logic-net-checkpoint outputs\YOUR_DIFFUSION_RUN\checkpoints\diffusion\best_model.pth
+```
+
+### 6.7 Designer controllability proof
+
+```powershell
+python scripts\run_designer_controllability_proof.py `
+  --execute `
+  --output results\designer_controllability_proof `
+  --methods FULL_GA,FULL_CVT,CORE_GA `
+  --samples-per-target 8 `
+  --population-size 32 `
+  --generations 40 `
+  --seed 42
+```
+
+### 6.8 Compute and sample-efficiency consolidation
+
+```powershell
+python scripts\consolidate_compute_sample_efficiency.py `
+  --roots outputs results `
+  --output results\compute_sample_efficiency
+```
+
+### 6.9 Room branch benchmark
 
 ```powershell
 python scripts\run_room_branch_benchmark.py `
@@ -316,7 +371,7 @@ python scripts\run_room_branch_benchmark.py `
   --quick
 ```
 
-### 6.6 Matched-budget topology baseline
+### 6.10 Matched-budget topology baseline
 
 ```powershell
 python scripts\run_matched_budget_topology_benchmark.py `
@@ -325,7 +380,7 @@ python scripts\run_matched_budget_topology_benchmark.py `
   --seed 42
 ```
 
-### 6.7 P-CBS component ablations
+### 6.11 P-CBS component ablations
 
 ```powershell
 python scripts\run_pcbs_component_ablation.py --levels 1,2,3 --persona balanced --output-dir results\pcbs_component_ablation_balanced_l123_v4
@@ -333,7 +388,7 @@ python scripts\run_pcbs_component_ablation.py --levels 1,2,3 --persona explorer 
 python scripts\run_pcbs_component_ablation.py --levels 1,2,3 --persona novice --output-dir results\pcbs_component_ablation_novice_l123_v1
 ```
 
-### 6.8 Full persona benchmark
+### 6.12 Full persona benchmark
 
 ```powershell
 python scripts\run_cbs_benchmarks.py `

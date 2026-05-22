@@ -1568,6 +1568,11 @@ class TensionCurveEvaluator:
         self.target_path_length = float(max(0.0, float(provided_targets.get("path_length", 0.0))))
         self.target_num_nodes = float(max(0.0, float(provided_targets.get("num_nodes", 0.0))))
         self.target_num_edges = float(max(0.0, float(provided_targets.get("num_edges", 0.0))))
+        self.target_key_count = float(max(0.0, float(provided_targets.get("key_count", 0.0))))
+        self.target_lock_count = float(max(0.0, float(provided_targets.get("lock_count", 0.0))))
+        self.exact_keylock_targets_enabled = bool(
+            ("key_count" in provided_targets) or ("lock_count" in provided_targets)
+        )
         self.target_cycle_density = float(
             np.clip(
                 float(
@@ -1786,6 +1791,21 @@ class TensionCurveEvaluator:
         t = max(1e-6, float(tol))
         err = abs(float(value) - float(target))
         return float(np.clip(1.0 - (err / t), 0.0, 1.0))
+
+    @staticmethod
+    def _score_count_target(value: float, target: float) -> float:
+        """Relative exact-count score for raw designer controls."""
+        if float(target) <= 0.0:
+            return 1.0
+        err = abs(float(value) - float(target)) / max(1.0, abs(float(target)))
+        return float(np.clip(1.0 - err, 0.0, 1.0))
+
+    @staticmethod
+    def _count_target_gap(value: float, target: float) -> float:
+        """Relative count gap used by feasibility penalties."""
+        if float(target) <= 0.0:
+            return 0.0
+        return float(np.clip(abs(float(value) - float(target)) / max(1.0, abs(float(target))), 0.0, 2.0))
 
     @staticmethod
     def _normalized_error(value: float, target: float, *, floor: float = 0.05) -> float:
@@ -2550,6 +2570,25 @@ class TensionCurveEvaluator:
             self.target_gating_density,
             tol=0.10,
         )
+        key_count_score = self._score_count_target(
+            descriptor_metrics.get("key_count", 0.0),
+            self.target_key_count,
+        )
+        lock_count_score = self._score_count_target(
+            descriptor_metrics.get("lock_count", 0.0),
+            self.target_lock_count,
+        )
+        key_count_gap = self._count_target_gap(
+            descriptor_metrics.get("key_count", 0.0),
+            self.target_key_count,
+        )
+        lock_count_gap = self._count_target_gap(
+            descriptor_metrics.get("lock_count", 0.0),
+            self.target_lock_count,
+        )
+        keylock_exact_score = float(np.clip(0.50 * key_count_score + 0.50 * lock_count_score, 0.0, 1.0))
+        if bool(self.exact_keylock_targets_enabled):
+            descriptor_score = float(np.clip((0.85 * descriptor_score) + (0.15 * keylock_exact_score), 0.0, 1.0))
         if self.target_num_nodes > 0.0:
             node_count_score = 1.0 - min(
                 abs(float(node_count) - float(self.target_num_nodes)) / float(max(1.0, self.target_num_nodes)),
@@ -2584,6 +2623,10 @@ class TensionCurveEvaluator:
             0.0,
             1.0,
         ))
+        if bool(self.exact_keylock_targets_enabled):
+            structural_objective_score = float(
+                np.clip((0.90 * structural_objective_score) + (0.10 * keylock_exact_score), 0.0, 1.0)
+            )
         under_target_gap = self._under_target_gap(descriptor_metrics)
         linearity_under_gap = max(
             0.0,
@@ -2631,6 +2674,14 @@ class TensionCurveEvaluator:
         descriptor_metrics["path_depth_ratio_score"] = float(path_depth_ratio_score)
         descriptor_metrics["directionality_score"] = float(directionality_score)
         descriptor_metrics["gating_density_score"] = float(gating_density_score)
+        descriptor_metrics["target_key_count"] = float(self.target_key_count)
+        descriptor_metrics["target_lock_count"] = float(self.target_lock_count)
+        descriptor_metrics["key_count_score"] = float(key_count_score)
+        descriptor_metrics["lock_count_score"] = float(lock_count_score)
+        descriptor_metrics["key_count_gap"] = float(key_count_gap)
+        descriptor_metrics["lock_count_gap"] = float(lock_count_gap)
+        descriptor_metrics["keylock_exact_score"] = float(keylock_exact_score)
+        descriptor_metrics["exact_keylock_targets_enabled"] = float(bool(self.exact_keylock_targets_enabled))
         descriptor_metrics["node_count_score"] = float(node_count_score)
         descriptor_metrics["edge_count_score"] = float(edge_count_score)
         descriptor_metrics["under_target_gap"] = float(under_target_gap)
@@ -2784,6 +2835,16 @@ class TensionCurveEvaluator:
                     3.0,
                 )
             )
+            if bool(self.exact_keylock_targets_enabled):
+                violation = float(
+                    np.clip(
+                        violation
+                        + (0.30 * key_count_gap)
+                        + (0.34 * lock_count_gap),
+                        0.0,
+                        3.0,
+                    )
+                )
         if not pareto_result.pareto_feasible:
             violation = float(
                 np.clip(

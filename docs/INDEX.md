@@ -1,93 +1,85 @@
 # KLTN Documentation Index
 
-Last updated: 2026-04-18
+Last updated: 2026-05-23
 
-This is the canonical navigation page for `docs/`. The goal is simple:
-
-- one short list of current docs
-- no duplicate "current" protocol notes
-- older deep dives kept only when they add unique detail
+This is the canonical navigation page for `docs/`. Top-level files should be
+current references, executable protocols, or stable thesis/report materials.
+Superseded notes belong under `docs/archive/`.
 
 ## Start Here
 
 1. [`../README.md`](../README.md)
 2. [`../ARCHITECTURE_DIAGRAMS.md`](../ARCHITECTURE_DIAGRAMS.md)
 3. [`CURRENT_ARCHITECTURE.md`](CURRENT_ARCHITECTURE.md)
-4. [`TOPOLOGY_COMMANDS.md`](TOPOLOGY_COMMANDS.md)
+4. [`TRACEABILITY_AND_CLAIM_VALIDATION.md`](TRACEABILITY_AND_CLAIM_VALIDATION.md)
+5. [`FULL_TRAINING_ABLATION_AND_EVAL_COMMAND_BOOK_2026_04_18.md`](FULL_TRAINING_ABLATION_AND_EVAL_COMMAND_BOOK_2026_04_18.md)
 
-## Current Canonical Docs
+## Current Protocols
 
-- Architecture and pipeline:
-  [`CURRENT_ARCHITECTURE.md`](CURRENT_ARCHITECTURE.md)
-- Report-writing rationale, block choices, ablations, and complexity:
-  [`CANONICAL_MODEL_RATIONALE_ABLATION_AND_COMPLEXITY_GUIDE.md`](CANONICAL_MODEL_RATIONALE_ABLATION_AND_COMPLEXITY_GUIDE.md)
-- Topology CLI, manual mission graphs, and fixed-graph audits:
-  [`TOPOLOGY_COMMANDS.md`](TOPOLOGY_COMMANDS.md)
-- Latest downstream protocol judgment:
-  [`DOWNSTREAM_CODEBOOK512_PUZZLE_SUBTYPE_PROTOCOL_RESULTS_2026_04_15.md`](DOWNSTREAM_CODEBOOK512_PUZZLE_SUBTYPE_PROTOCOL_RESULTS_2026_04_15.md)
-- End-to-end evaluation coverage, metric gaps, and latest literature-aligned audit:
+- Designer controllability and compute/sample-efficiency:
+  [`DESIGNER_CONTROLLABILITY_AND_COMPUTE_PROTOCOL.md`](DESIGNER_CONTROLLABILITY_AND_COMPUTE_PROTOCOL.md)
+- VQ-VAE-2, conditioning, LogicNet, repair, and P-CBS ablation protocol:
+  [`VQVAE2_LOGICNET_REPAIR_ABLATION_PROTOCOL_2026_05_23.md`](VQVAE2_LOGICNET_REPAIR_ABLATION_PROTOCOL_2026_05_23.md)
+- End-to-end evaluation gaps and latest evidence requirements:
   [`END_TO_END_EVALUATION_PROTOCOL_GAP_AUDIT_2026_04_18.md`](END_TO_END_EVALUATION_PROTOCOL_GAP_AUDIT_2026_04_18.md)
-- Search-algorithm audit and recommendation for the current validator stack:
-  [`SEARCH_ALGORITHM_AUDIT_AND_RECOMMENDATION_2026_04_18.md`](SEARCH_ALGORITHM_AUDIT_AND_RECOMMENDATION_2026_04_18.md)
-- Production finalization review and minimum remaining finish plan:
-  [`PRODUCTION_FINALIZATION_REVIEW_2026_04_18.md`](PRODUCTION_FINALIZATION_REVIEW_2026_04_18.md)
-- Full training / ablation / evaluation command book:
-  [`FULL_TRAINING_ABLATION_AND_EVAL_COMMAND_BOOK_2026_04_18.md`](FULL_TRAINING_ABLATION_AND_EVAL_COMMAND_BOOK_2026_04_18.md)
-- Learned staged-puzzle conditioning upgrade and claim boundary:
-  [`LEARNED_STAGE_PUZZLE_SEMANTICS_UPGRADE_2026_04_18.md`](LEARNED_STAGE_PUZZLE_SEMANTICS_UPGRADE_2026_04_18.md)
-- Artifact / checkpoint status, stale-output alerts, and retraining alerts:
-  [`ARTIFACT_AND_CHECKPOINT_STATUS_2026_04_18.md`](ARTIFACT_AND_CHECKPOINT_STATUS_2026_04_18.md)
-- Auxiliary-branch / hybrid-vs-neural decision audit:
-  [`AUXILIARY_BRANCH_AND_NEURAL_SEMANTICS_AUDIT_2026_04_15.md`](AUXILIARY_BRANCH_AND_NEURAL_SEMANTICS_AUDIT_2026_04_15.md)
-- Playability evaluation / CBS research note:
-  [`PLAYABILITY_EVALUATION_AND_CBS_RESEARCH_2026_04_16.md`](PLAYABILITY_EVALUATION_AND_CBS_RESEARCH_2026_04_16.md)
-- Reviewer-2 novelty / claim audit for P-CBS:
-  [`PCBS_REVIEWER2_NOVELTY_AUDIT_2026_04_17.md`](PCBS_REVIEWER2_NOVELTY_AUDIT_2026_04_17.md)
-- P-CBS affordance-memory upgrade and component-ablation note:
-  [`PCBS_AFFORDANCE_MEMORY_AND_ABLATION_2026_04_17.md`](PCBS_AFFORDANCE_MEMORY_AND_ABLATION_2026_04_17.md)
-- Latest end-to-end protocol status / production-branch decision:
-  [`FINAL_PROTOCOL_AND_PLAYABILITY_STATUS_2026_04_17.md`](FINAL_PROTOCOL_AND_PLAYABILITY_STATUS_2026_04_17.md)
-- Final architecture verdict, ablation synthesis, and exact training/eval commands:
+- Matched-budget benchmark:
+  [`MATCHED_BUDGET_BENCHMARK_PROTOCOL.md`](MATCHED_BUDGET_BENCHMARK_PROTOCOL.md)
+- OOD scaling and blinded evaluation:
+  [`OOD_SCALING_AND_BLINDED_EVAL_PROTOCOL.md`](OOD_SCALING_AND_BLINDED_EVAL_PROTOCOL.md)
+- PCG benchmark and external comparison:
+  [`SOTA_COMPARISON_AND_BENCHMARKS.md`](SOTA_COMPARISON_AND_BENCHMARKS.md)
+
+## Architecture And Rationale
+
+- Live block map:
+  [`CURRENT_ARCHITECTURE.md`](CURRENT_ARCHITECTURE.md)
+- Report-writing rationale, ablations, and complexity:
+  [`CANONICAL_MODEL_RATIONALE_ABLATION_AND_COMPLEXITY_GUIDE.md`](CANONICAL_MODEL_RATIONALE_ABLATION_AND_COMPLEXITY_GUIDE.md)
+- Latest block-by-block gap audit:
+  [`BLOCK_ARCHITECTURE_GAP_AUDIT_2026_05_23.md`](BLOCK_ARCHITECTURE_GAP_AUDIT_2026_05_23.md)
+- Final architecture verdict and evidence boundary:
   [`FINAL_ABLATION_AND_ARCHITECTURE_VERDICT_2026_04_17.md`](FINAL_ABLATION_AND_ARCHITECTURE_VERDICT_2026_04_17.md)
-- New-chat handoff context:
-  [`NEXT_CHAT_CONTEXT_2026_04_18.md`](NEXT_CHAT_CONTEXT_2026_04_18.md)
-- Latest VQ-VAE audit and recommendation:
+- Production finalization review:
+  [`PRODUCTION_FINALIZATION_REVIEW_2026_04_18.md`](PRODUCTION_FINALIZATION_REVIEW_2026_04_18.md)
+
+## Block References
+
+- Block I topology commands:
+  [`TOPOLOGY_COMMANDS.md`](TOPOLOGY_COMMANDS.md)
+- VQ-VAE audit:
   [`VQVAE_RESEARCH_AUDIT_2026_04_10.md`](VQVAE_RESEARCH_AUDIT_2026_04_10.md)
-- Broad architecture research audit:
-  [`ARCHITECTURE_RESEARCH_AUDIT_2026_03_31.md`](ARCHITECTURE_RESEARCH_AUDIT_2026_03_31.md)
-- Topology-signal follow-up audit:
-  [`ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md`](ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md)
-- Stateful puzzle audit:
+- Stateful puzzle architecture audit:
   [`STATEFUL_PUZZLE_ARCHITECTURE_AUDIT_2026_04_09.md`](STATEFUL_PUZZLE_ARCHITECTURE_AUDIT_2026_04_09.md)
-
-## Benchmark And Evaluation Protocols
-
-- [`MATCHED_BUDGET_BENCHMARK_PROTOCOL.md`](MATCHED_BUDGET_BENCHMARK_PROTOCOL.md)
-- [`OOD_SCALING_AND_BLINDED_EVAL_PROTOCOL.md`](OOD_SCALING_AND_BLINDED_EVAL_PROTOCOL.md)
-- [`SOTA_COMPARISON_AND_BENCHMARKS.md`](SOTA_COMPARISON_AND_BENCHMARKS.md)
+- Learned staged-puzzle semantics:
+  [`LEARNED_STAGE_PUZZLE_SEMANTICS_UPGRADE_2026_04_18.md`](LEARNED_STAGE_PUZZLE_SEMANTICS_UPGRADE_2026_04_18.md)
+- Search algorithm audit:
+  [`SEARCH_ALGORITHM_AUDIT_AND_RECOMMENDATION_2026_04_18.md`](SEARCH_ALGORITHM_AUDIT_AND_RECOMMENDATION_2026_04_18.md)
+- P-CBS novelty and component notes:
+  [`PCBS_REVIEWER2_NOVELTY_AUDIT_2026_04_17.md`](PCBS_REVIEWER2_NOVELTY_AUDIT_2026_04_17.md),
+  [`PCBS_AFFORDANCE_MEMORY_AND_ABLATION_2026_04_17.md`](PCBS_AFFORDANCE_MEMORY_AND_ABLATION_2026_04_17.md)
 
 ## Reference Docs
 
 - [`BLOCK_IO_REFERENCE.md`](BLOCK_IO_REFERENCE.md)
 - [`GRAMMAR_REFERENCE.md`](GRAMMAR_REFERENCE.md)
 - [`SOLVERS_AND_GUI_REFERENCE.md`](SOLVERS_AND_GUI_REFERENCE.md)
-- [`TRACEABILITY_AND_CLAIM_VALIDATION.md`](TRACEABILITY_AND_CLAIM_VALIDATION.md)
 - [`VGLC_COMPLIANCE_GUIDE.md`](VGLC_COMPLIANCE_GUIDE.md)
 - [`ZELDA_SOLVER_DOCUMENTATION.md`](ZELDA_SOLVER_DOCUMENTATION.md)
 
-## Consolidated / Superseded Docs
+## Status And Handoff
 
-These files are kept as stable links, but their content has been merged into a
-newer canonical doc:
-
-- [`BLOCK_BY_BLOCK_ARCHITECTURE_AND_IMPLEMENTATION_AUDIT.md`](BLOCK_BY_BLOCK_ARCHITECTURE_AND_IMPLEMENTATION_AUDIT.md)
-  -> use [`CURRENT_ARCHITECTURE.md`](CURRENT_ARCHITECTURE.md)
-- [`VQVAE_PROTOCOL_RESULTS_2026_04_10.md`](VQVAE_PROTOCOL_RESULTS_2026_04_10.md)
-  -> use [`VQVAE_RESEARCH_AUDIT_2026_04_10.md`](VQVAE_RESEARCH_AUDIT_2026_04_10.md)
-- [`DOWNSTREAM_CODEBOOK512_PROTOCOL_RESULTS_2026_04_11.md`](DOWNSTREAM_CODEBOOK512_PROTOCOL_RESULTS_2026_04_11.md)
-  -> use [`DOWNSTREAM_CODEBOOK512_PUZZLE_SUBTYPE_PROTOCOL_RESULTS_2026_04_15.md`](DOWNSTREAM_CODEBOOK512_PUZZLE_SUBTYPE_PROTOCOL_RESULTS_2026_04_15.md)
+- Artifact/checkpoint status:
+  [`ARTIFACT_AND_CHECKPOINT_STATUS_2026_04_18.md`](ARTIFACT_AND_CHECKPOINT_STATUS_2026_04_18.md)
+- Latest protocol status:
+  [`FINAL_PROTOCOL_AND_PLAYABILITY_STATUS_2026_04_17.md`](FINAL_PROTOCOL_AND_PLAYABILITY_STATUS_2026_04_17.md)
+- New-chat handoff context:
+  [`NEXT_CHAT_CONTEXT_2026_04_18.md`](NEXT_CHAT_CONTEXT_2026_04_18.md)
 
 ## Archive
 
 - [`archive/README.md`](archive/README.md)
 - [`archive/2026-q1/README.md`](archive/2026-q1/README.md)
+- [`archive/2026-q2/README.md`](archive/2026-q2/README.md)
+
+Cleanup note: two empty LogicNet audit placeholders from 2026-05-13 were
+deleted. Three stable-link stubs were moved to `archive/2026-q2/`.

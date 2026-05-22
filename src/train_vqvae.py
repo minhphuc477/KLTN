@@ -17,6 +17,7 @@ import argparse
 import logging
 import json
 import random
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict
@@ -31,7 +32,7 @@ PROJECT_ROOT = Path(__file__).parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.core.vqvae import create_vqvae, VQVAETrainer
+from src.core.vqvae import VectorQuantizer, create_vqvae, VQVAETrainer
 from src.config_system import merge_config, seed_everything
 from src.utils.model_capacity import count_parameters, log_capacity_guardrails
 from src.zelda_data.zelda_loader import create_dataloader
@@ -79,6 +80,9 @@ def vqvae_training_kwargs_from_resolved_config(config: Dict[str, Any]) -> Dict[s
         "latent_dim": stage["latent_dim"],
         "hidden_dim": stage["hidden_dim"],
         "codebook_size": stage["codebook_size"],
+        "architecture": stage.get("architecture", "vqvae"),
+        "top_codebook_size": stage.get("top_codebook_size", None),
+        "top_latent_dim": stage.get("top_latent_dim", None),
         "num_classes": dataset["num_classes"],
         "commitment_cost": stage["commitment_cost"],
         "rare_tile_weight": stage["rare_tile_weight"],
@@ -132,6 +136,9 @@ def _default_vqvae_training_kwargs() -> Dict[str, Any]:
         "latent_dim": 64,
         "hidden_dim": 128,
         "codebook_size": 512,
+        "architecture": "vqvae",
+        "top_codebook_size": None,
+        "top_latent_dim": None,
         "num_classes": 44,
         "commitment_cost": 0.25,
         "rare_tile_weight": 5.0,
@@ -192,6 +199,9 @@ def _legacy_vqvae_overrides_from_args(args: argparse.Namespace) -> Dict[str, Any
     _set("latent_dim", getattr(args, "latent_dim", None))
     _set("hidden_dim", getattr(args, "hidden_dim", None))
     _set("codebook_size", getattr(args, "codebook_size", None))
+    _set("architecture", getattr(args, "architecture", None))
+    _set("top_codebook_size", getattr(args, "top_codebook_size", None))
+    _set("top_latent_dim", getattr(args, "top_latent_dim", None))
     _set("num_classes", getattr(args, "num_classes", None))
     _set("commitment_cost", getattr(args, "commitment_cost", None))
     _set("rare_tile_weight", getattr(args, "rare_tile_weight", None))
@@ -276,12 +286,7 @@ def split_dataset_for_vqvae_validation(
     return train_subset, val_subset
 
 
-def compute_vqvae_codebook_health(model: torch.nn.Module) -> Dict[str, float]:
-    """Summarize codebook activity for logging/metadata."""
-    quantizer = getattr(model, "quantizer", None)
-    if quantizer is None:
-        return {}
-
+def _codebook_health_for_quantizer(quantizer: VectorQuantizer, *, prefix: str = "") -> Dict[str, float]:
     usage = getattr(quantizer, "codebook_usage", None)
     if usage is None:
         return {}
@@ -303,13 +308,14 @@ def compute_vqvae_codebook_health(model: torch.nn.Module) -> Dict[str, float]:
         if num_codes > 1:
             normalized_entropy = float(usage_entropy / np.log(float(num_codes)))
 
+    p = f"{prefix}_" if prefix else ""
     metrics: Dict[str, float] = {
-        "codebook_size": float(num_codes),
-        "codebook_active_codes": float(active_codes),
-        "codebook_active_codes_gt_1e4": float(active_codes_gt_1e4),
-        "codebook_utilization": float(active_codes_gt_1e4 / max(1, num_codes)),
-        "codebook_usage_entropy": float(usage_entropy),
-        "codebook_usage_entropy_normalized": float(normalized_entropy),
+        f"{p}codebook_size": float(num_codes),
+        f"{p}codebook_active_codes": float(active_codes),
+        f"{p}codebook_active_codes_gt_1e4": float(active_codes_gt_1e4),
+        f"{p}codebook_utilization": float(active_codes_gt_1e4 / max(1, num_codes)),
+        f"{p}codebook_usage_entropy": float(usage_entropy),
+        f"{p}codebook_usage_entropy_normalized": float(normalized_entropy),
     }
 
     ema_cluster_size = getattr(quantizer, "ema_cluster_size", None)
@@ -317,9 +323,48 @@ def compute_vqvae_codebook_health(model: torch.nn.Module) -> Dict[str, float]:
     if ema_cluster_size is not None and dead_threshold is not None:
         ema_tensor = ema_cluster_size.detach().float().cpu()
         ema_live_codes = int((ema_tensor >= float(dead_threshold)).sum().item())
-        metrics["ema_live_codes"] = float(ema_live_codes)
-        metrics["ema_live_rate"] = float(ema_live_codes / max(1, num_codes))
+        metrics[f"{p}ema_live_codes"] = float(ema_live_codes)
+        metrics[f"{p}ema_live_rate"] = float(ema_live_codes / max(1, num_codes))
 
+    return metrics
+
+
+def compute_vqvae_codebook_health(model: torch.nn.Module) -> Dict[str, float]:
+    """Summarize codebook activity for single-level and hierarchical tokenizers."""
+    quantizers: Dict[str, VectorQuantizer] = {}
+    for name, module in model.named_modules():
+        if isinstance(module, VectorQuantizer):
+            clean_name = name.replace("_quantizer", "").replace(".", "_")
+            if clean_name == "quantizer":
+                clean_name = "main"
+            quantizers.setdefault(clean_name, module)
+
+    if not quantizers:
+        return {}
+
+    metrics: Dict[str, float] = {}
+    utilization_values: list[float] = []
+    size_values: list[float] = []
+    active_values: list[float] = []
+    for name, quantizer in sorted(quantizers.items()):
+        prefixed = _codebook_health_for_quantizer(quantizer, prefix=name if len(quantizers) > 1 else "")
+        metrics.update(prefixed)
+        util_key = f"{name}_codebook_utilization" if len(quantizers) > 1 else "codebook_utilization"
+        size_key = f"{name}_codebook_size" if len(quantizers) > 1 else "codebook_size"
+        active_key = f"{name}_codebook_active_codes_gt_1e4" if len(quantizers) > 1 else "codebook_active_codes_gt_1e4"
+        if util_key in prefixed:
+            utilization_values.append(float(prefixed[util_key]))
+        if size_key in prefixed:
+            size_values.append(float(prefixed[size_key]))
+        if active_key in prefixed:
+            active_values.append(float(prefixed[active_key]))
+
+    if len(quantizers) > 1:
+        metrics["codebook_size"] = float(sum(size_values))
+        metrics["codebook_active_codes_gt_1e4"] = float(sum(active_values))
+        metrics["codebook_utilization"] = float(sum(active_values) / max(1.0, sum(size_values)))
+        metrics["codebook_utilization_mean_by_level"] = float(np.mean(utilization_values)) if utilization_values else 0.0
+        metrics["codebook_levels"] = float(len(quantizers))
     return metrics
 
 
@@ -365,6 +410,7 @@ def train_vqvae(args):
     """Full VQ-VAE pre-training loop."""
 
     args.epochs = 2 if bool(getattr(args, "quick", False)) else int(args.epochs)
+    run_started_at = time.time()
 
     if args.seed is not None:
         resolved_seed = seed_everything(int(args.seed))
@@ -465,6 +511,9 @@ def train_vqvae(args):
         num_classes=int(getattr(args, "num_classes", 44)),
         codebook_size=args.codebook_size,
         latent_dim=args.latent_dim,
+        architecture=str(getattr(args, "architecture", "vqvae")),
+        top_codebook_size=getattr(args, "top_codebook_size", None),
+        top_latent_dim=getattr(args, "top_latent_dim", None),
         hidden_dim=int(getattr(args, "hidden_dim", 128)),
         commitment_cost=float(getattr(args, "commitment_cost", 0.25)),
         rare_tile_weight=float(getattr(args, "rare_tile_weight", 5.0)),
@@ -538,12 +587,16 @@ def train_vqvae(args):
     save_dir.mkdir(parents=True, exist_ok=True)
 
     use_codebook = bool(getattr(args, "use_codebook", True))
-    checkpoint_model_type = "vqvae" if use_codebook else "autoencoder"
+    architecture_name = str(getattr(args, "architecture", "vqvae") or "vqvae").strip().lower()
+    checkpoint_model_type = architecture_name if use_codebook else "autoencoder"
     checkpoint_resume_type = f"{checkpoint_model_type}_resume"
 
     history = []
+    best_epoch: int | None = None
+    best_checkpoint_path: Path | None = None
 
     for epoch in range(start_epoch, args.epochs):
+        epoch_started_at = time.time()
         model.train()
         epoch_metrics = {
             "loss": 0.0,
@@ -619,6 +672,8 @@ def train_vqvae(args):
 
         codebook_metrics = compute_vqvae_codebook_health(model)
         epoch_metrics.update(codebook_metrics)
+        epoch_metrics["epoch_runtime_sec"] = float(time.time() - epoch_started_at)
+        epoch_metrics["wall_time_sec"] = float(time.time() - run_started_at)
 
         checkpoint_metric_name = str(getattr(args, "best_checkpoint_metric", "val_loss"))
         if checkpoint_metric_name == "val_loss" and eval_split_name == "val":
@@ -645,7 +700,9 @@ def train_vqvae(args):
         if checkpoint_metric_value < best_metric_value:
             best_metric_name = checkpoint_metric_name
             best_metric_value = checkpoint_metric_value
+            best_epoch = int(epoch + 1)
             save_path = save_dir / "vqvae_pretrained.pth"
+            best_checkpoint_path = save_path
             best_payload = {
                 "epoch": epoch,
                 "model_state_dict": model.state_dict(),
@@ -654,16 +711,24 @@ def train_vqvae(args):
                 "perplexity": float(eval_metrics["perplexity"]),
                 "best_metric_name": str(best_metric_name),
                 "best_metric_value": float(best_metric_value),
+                "architecture": str(architecture_name),
             }
             atomic_torch_save(best_payload, str(save_path))
             write_checkpoint_metadata(
                 str(save_path),
                 model_type=checkpoint_model_type,
                 architecture={
+                    "architecture": str(architecture_name),
                     "num_classes": int(num_classes),
                     "latent_dim": int(args.latent_dim),
                     "hidden_dim": int(getattr(args, "hidden_dim", 128)),
                     "codebook_size": int(args.codebook_size),
+                    "top_codebook_size": (
+                        None if getattr(args, "top_codebook_size", None) is None else int(args.top_codebook_size)
+                    ),
+                    "top_latent_dim": (
+                        None if getattr(args, "top_latent_dim", None) is None else int(args.top_latent_dim)
+                    ),
                     "use_codebook": bool(use_codebook),
                     "commitment_cost": float(getattr(args, "commitment_cost", 0.25)),
                     "rare_tile_weight": float(getattr(args, "rare_tile_weight", 5.0)),
@@ -682,12 +747,16 @@ def train_vqvae(args):
                 },
                 extra={
                     "epoch": int(epoch + 1),
+                    "best_epoch": int(best_epoch),
+                    "epoch_to_best": int(max(0, int(best_epoch) - int(start_epoch))),
+                    "wall_time_sec": float(epoch_metrics["wall_time_sec"]),
+                    "epoch_runtime_sec": float(epoch_metrics["epoch_runtime_sec"]),
                     "loss": float(epoch_metrics["loss"]),
                     "accuracy": float(eval_metrics["accuracy"]),
                     "eval_split": eval_split_name,
                     "best_metric_name": str(best_metric_name),
                     "best_metric_value": float(best_metric_value),
-                    **{key: value for key, value in epoch_metrics.items() if key.startswith("val_") or key.startswith("train_eval_") or key.startswith("codebook_") or key.startswith("ema_")},
+                    **{key: value for key, value in epoch_metrics.items() if key.startswith("val_") or key.startswith("train_eval_") or key.startswith("codebook_") or key.startswith("ema_") or key.startswith("top_codebook_") or key.startswith("bottom_codebook_") or key.startswith("top_ema_") or key.startswith("bottom_ema_")},
                 },
             )
             log_checkpoint_artifact(
@@ -714,10 +783,17 @@ def train_vqvae(args):
             str(latest_resume),
             model_type=checkpoint_resume_type,
             architecture={
+                "architecture": str(architecture_name),
                 "num_classes": int(num_classes),
                 "latent_dim": int(args.latent_dim),
                 "hidden_dim": int(getattr(args, "hidden_dim", 128)),
                 "codebook_size": int(args.codebook_size),
+                "top_codebook_size": (
+                    None if getattr(args, "top_codebook_size", None) is None else int(args.top_codebook_size)
+                ),
+                "top_latent_dim": (
+                    None if getattr(args, "top_latent_dim", None) is None else int(args.top_latent_dim)
+                ),
                 "use_codebook": bool(use_codebook),
                 "commitment_cost": float(getattr(args, "commitment_cost", 0.25)),
                 "rare_tile_weight": float(getattr(args, "rare_tile_weight", 5.0)),
@@ -737,10 +813,14 @@ def train_vqvae(args):
             extra={
                 "epoch": int(epoch + 1),
                 "checkpoint_kind": "latest_resume",
+                "best_epoch": "" if best_epoch is None else int(best_epoch),
+                "epoch_to_best": "" if best_epoch is None else int(max(0, int(best_epoch) - int(start_epoch))),
+                "wall_time_sec": float(epoch_metrics["wall_time_sec"]),
+                "epoch_runtime_sec": float(epoch_metrics["epoch_runtime_sec"]),
                 "eval_split": eval_split_name,
                 "best_metric_name": str(best_metric_name),
                 "best_metric_value": float(best_metric_value),
-                **{key: value for key, value in epoch_metrics.items() if key.startswith("val_") or key.startswith("train_eval_") or key.startswith("codebook_") or key.startswith("ema_")},
+                **{key: value for key, value in epoch_metrics.items() if key.startswith("val_") or key.startswith("train_eval_") or key.startswith("codebook_") or key.startswith("ema_") or key.startswith("top_codebook_") or key.startswith("bottom_codebook_") or key.startswith("top_ema_") or key.startswith("bottom_ema_")},
             },
         )
         log_checkpoint_artifact(
@@ -756,10 +836,17 @@ def train_vqvae(args):
                 str(periodic),
                 model_type=checkpoint_resume_type,
                 architecture={
+                    "architecture": str(architecture_name),
                     "num_classes": int(num_classes),
                     "latent_dim": int(args.latent_dim),
                     "hidden_dim": int(getattr(args, "hidden_dim", 128)),
                     "codebook_size": int(args.codebook_size),
+                    "top_codebook_size": (
+                        None if getattr(args, "top_codebook_size", None) is None else int(args.top_codebook_size)
+                    ),
+                    "top_latent_dim": (
+                        None if getattr(args, "top_latent_dim", None) is None else int(args.top_latent_dim)
+                    ),
                     "use_codebook": bool(use_codebook),
                     "commitment_cost": float(getattr(args, "commitment_cost", 0.25)),
                     "rare_tile_weight": float(getattr(args, "rare_tile_weight", 5.0)),
@@ -780,10 +867,14 @@ def train_vqvae(args):
                     "epoch": int(epoch + 1),
                     "loss": float(epoch_metrics["loss"]),
                     "checkpoint_kind": "retained_resume",
+                    "best_epoch": "" if best_epoch is None else int(best_epoch),
+                    "epoch_to_best": "" if best_epoch is None else int(max(0, int(best_epoch) - int(start_epoch))),
+                    "wall_time_sec": float(epoch_metrics["wall_time_sec"]),
+                    "epoch_runtime_sec": float(epoch_metrics["epoch_runtime_sec"]),
                     "eval_split": eval_split_name,
                     "best_metric_name": str(best_metric_name),
                     "best_metric_value": float(best_metric_value),
-                    **{key: value for key, value in epoch_metrics.items() if key.startswith("val_") or key.startswith("train_eval_") or key.startswith("codebook_") or key.startswith("ema_")},
+                    **{key: value for key, value in epoch_metrics.items() if key.startswith("val_") or key.startswith("train_eval_") or key.startswith("codebook_") or key.startswith("ema_") or key.startswith("top_codebook_") or key.startswith("bottom_codebook_") or key.startswith("top_ema_") or key.startswith("bottom_ema_")},
                 },
             )
             log_checkpoint_artifact(
@@ -813,6 +904,39 @@ def train_vqvae(args):
         json.dump(history, f, indent=2)
     logger.info(f"Training history saved to {hist_path}")
     logger.info("Best %s: %.4f", best_metric_name, best_metric_value)
+    final_runtime_sec = float(time.time() - run_started_at)
+    final_epoch = int(history[-1]["epoch"]) if history else int(start_epoch)
+    if best_epoch is None and history:
+        best_epoch = final_epoch
+    best_checkpoint_path = best_checkpoint_path or (save_dir / "vqvae_pretrained.pth")
+    checkpoint_size_bytes = 0
+    if best_checkpoint_path.exists():
+        checkpoint_size_bytes = int(best_checkpoint_path.stat().st_size)
+    latest_metrics = dict(history[-1]) if history else {}
+    summary = {
+        "architecture": str(architecture_name),
+        "runtime_sec": final_runtime_sec,
+        "wall_time_sec": final_runtime_sec,
+        "epochs_completed": int(max(0, final_epoch - start_epoch)),
+        "best_epoch": "" if best_epoch is None else int(best_epoch),
+        "epoch_to_best": "" if best_epoch is None else int(max(0, int(best_epoch) - int(start_epoch))),
+        "best_metric_name": str(best_metric_name),
+        "best_metric_value": float(best_metric_value),
+        "val_loss": latest_metrics.get("val_loss", ""),
+        "train_loss": latest_metrics.get("loss", ""),
+        "codebook_utilization": latest_metrics.get("codebook_utilization", ""),
+        "codebook_active_codes_gt_1e4": latest_metrics.get("codebook_active_codes_gt_1e4", ""),
+        "codebook_size": latest_metrics.get("codebook_size", ""),
+        "checkpoint_path": str(best_checkpoint_path),
+        "checkpoint_size_bytes": int(checkpoint_size_bytes),
+        "checkpoint_size_mb": float(checkpoint_size_bytes / (1024.0 * 1024.0)),
+    }
+    for key, value in latest_metrics.items():
+        if str(key).startswith(("top_codebook_", "bottom_codebook_", "top_ema_", "bottom_ema_")):
+            summary[key] = value
+    summary_path = save_dir / "vqvae_run_summary.json"
+    summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    logger.info("Run summary saved to %s", summary_path)
 
     return model
 
@@ -834,6 +958,12 @@ def main():
     parser.add_argument("--latent-dim", type=int, default=None)
     parser.add_argument("--hidden-dim", type=int, default=None)
     parser.add_argument("--codebook-size", type=int, default=None)
+    parser.add_argument("--architecture", type=str, choices=("vqvae", "vqvae2"), default=None,
+                        help="Tokenizer architecture. vqvae2 enables a two-level hierarchical codebook.")
+    parser.add_argument("--top-codebook-size", type=int, default=None,
+                        help="Top-level codebook size for --architecture vqvae2.")
+    parser.add_argument("--top-latent-dim", type=int, default=None,
+                        help="Top-level latent width for --architecture vqvae2.")
     parser.add_argument("--num-classes", type=int, default=None)
     parser.add_argument("--commitment-cost", type=float, default=None)
     parser.add_argument("--rare-tile-weight", type=float, default=None)
