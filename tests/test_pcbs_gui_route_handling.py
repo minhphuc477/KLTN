@@ -3,6 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 from src.gui.gameplay.path_strategies import smart_grid_path
 from src.gui.runtime.route_payload import apply_loaded_route_data
@@ -13,6 +14,18 @@ from src.simulation.validator import Action, ZeldaLogicEnv
 
 HARD_DEMO_GRID = Path("examples/gui_demo_hard_real_model_level.txt")
 HARD_DEMO_ROUTE = Path("examples/gui_demo_hard_real_model_route.json")
+
+
+def _load_hard_demo_grid():
+    if not HARD_DEMO_GRID.exists():
+        pytest.skip(f"demo artifact is not present in the cleaned repo: {HARD_DEMO_GRID}")
+    return np.loadtxt(HARD_DEMO_GRID, dtype=np.int32)
+
+
+def _load_hard_demo_route():
+    if not HARD_DEMO_ROUTE.exists():
+        pytest.skip(f"demo artifact is not present in the cleaned repo: {HARD_DEMO_ROUTE}")
+    return json.loads(HARD_DEMO_ROUTE.read_text(encoding="utf-8"))
 
 
 def _replay_to_done(grid, path):
@@ -32,8 +45,8 @@ def _replay_to_done(grid, path):
 
 
 def test_pcbs_route_compression_removes_only_replay_safe_loops():
-    grid = np.loadtxt(HARD_DEMO_GRID, dtype=np.int32)
-    route_data = json.loads(HARD_DEMO_ROUTE.read_text(encoding="utf-8"))
+    grid = _load_hard_demo_grid()
+    route_data = _load_hard_demo_route()
     raw_path = [tuple(point) for point in route_data["path"]]
 
     compressed, stats = compress_pcbs_route_for_replay(grid=grid, path=raw_path)
@@ -46,7 +59,7 @@ def test_pcbs_route_compression_removes_only_replay_safe_loops():
 
 
 def test_process_worker_pcbs_returns_short_replay_path_with_raw_trace_metrics():
-    grid = np.loadtxt(HARD_DEMO_GRID, dtype=np.int32)
+    grid = _load_hard_demo_grid()
     start = tuple(int(v) for v in np.argwhere(grid == 21)[0])
     goal = tuple(int(v) for v in np.argwhere(grid == 22)[0])
 
@@ -81,8 +94,8 @@ def test_process_worker_pcbs_returns_short_replay_path_with_raw_trace_metrics():
 
 
 def test_loaded_pcbs_route_is_compressed_when_environment_is_available():
-    grid = np.loadtxt(HARD_DEMO_GRID, dtype=np.int32)
-    route_data = json.loads(HARD_DEMO_ROUTE.read_text(encoding="utf-8"))
+    grid = _load_hard_demo_grid()
+    route_data = _load_hard_demo_route()
     gui = SimpleNamespace(
         env=ZeldaLogicEnv(grid),
         auto_path=[],
@@ -135,7 +148,7 @@ def test_completionist_and_novice_skip_quick_grid_path():
 
 
 def test_gui_pcbs_default_persona_seeds_solve_non_balanced_demo_routes():
-    grid = np.loadtxt(HARD_DEMO_GRID, dtype=np.int32)
+    grid = _load_hard_demo_grid()
     start = tuple(int(v) for v in np.argwhere(grid == 21)[0])
     goal = tuple(int(v) for v in np.argwhere(grid == 22)[0])
     expected_seed = {

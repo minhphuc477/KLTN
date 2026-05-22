@@ -14,7 +14,7 @@ from src.generation.grammar import (
 )
 
 
-def test_basic_generation():
+def _basic_generation():
     """Test basic graph generation."""
     print("=" * 60)
     print("TEST 1: Basic Generation")
@@ -42,6 +42,10 @@ def test_basic_generation():
     print(f"âœ“ Lock-key ordering valid: {valid}")
     
     return graph
+
+
+def test_basic_generation():
+    _basic_generation()
 
 
 def test_individual_rules():
@@ -234,7 +238,7 @@ if __name__ == '__main__':
     
     try:
         # Run tests
-        graph = test_basic_generation()
+        graph = _basic_generation()
         test_individual_rules()
         test_node_types()
         test_edge_types()

@@ -1,9 +1,9 @@
 """CLI: extract visual levels (tiles -> per-room grids + overlays)
 
 Example:
-  python scripts/extract_visual_levels.py \
-    --templates Data/tileset/Dungeon\ Tileset.png \
-    --input Data/The\ Legend\ of\ Zelda/Original/tloz1_1.png \
+  python scripts/extract_visual_levels.py ^
+    --templates "Data/tileset/Dungeon Tileset.png" ^
+    --input "Data/The Legend of Zelda/Original/tloz1_1.png" ^
     --out-dir artifacts/visual_extracts --visualize
 
 Outputs (per input image):

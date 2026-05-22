@@ -808,11 +808,12 @@ class ConsistencyLoRATrainer:
                 getattr(self.config, "topology_supervision_mode", "runtime_aligned")
             ),
         )
+        puzzle_stage_head = getattr(self, "puzzle_stage_semantics_head", None)
+        contains = ["lora", "optimizer"]
         payload = {
             "epoch": int(self.epoch),
             "global_step": int(self.global_step),
             "lora_state_dict": extract_lora_state_dict(self.student),
-            "puzzle_stage_semantics_head_state_dict": self.puzzle_stage_semantics_head.state_dict(),
             "optimizer_state_dict": self.optimizer.state_dict(),
             "config": self.config.to_dict(),
             "metrics": dict(metrics or {}),
@@ -830,6 +831,9 @@ class ConsistencyLoRATrainer:
                 "target_modules": [str(t) for t in DEFAULT_LORA_TARGETS],
             },
         }
+        if puzzle_stage_head is not None:
+            payload["puzzle_stage_semantics_head_state_dict"] = puzzle_stage_head.state_dict()
+            contains.insert(1, "puzzle_stage_semantics_head")
         atomic_torch_save(payload, path)
         write_checkpoint_metadata(
             path,
@@ -848,7 +852,7 @@ class ConsistencyLoRATrainer:
                 "global_step": int(self.global_step),
                 "base_diffusion_checkpoint": str(self.config.base_diffusion_checkpoint),
                 "checkpoint_kind": "resume",
-                "contains": ["lora", "puzzle_stage_semantics_head", "optimizer"],
+                "contains": contains,
                 "topology_anchor_policy": dict(topology_anchor_policy),
             },
         )
@@ -866,7 +870,14 @@ class ConsistencyLoRATrainer:
             raise ValueError(f"Invalid fast-sampler resume checkpoint at {path!r}: missing lora_state_dict.")
         load_lora_state_dict(self.student, lora_state, strict=True)
         if "puzzle_stage_semantics_head_state_dict" in payload:
-            self.puzzle_stage_semantics_head.load_state_dict(payload["puzzle_stage_semantics_head_state_dict"])
+            puzzle_stage_head = getattr(self, "puzzle_stage_semantics_head", None)
+            if puzzle_stage_head is not None:
+                puzzle_stage_head.load_state_dict(payload["puzzle_stage_semantics_head_state_dict"])
+            else:
+                logger.warning(
+                    "Fast-sampler checkpoint contains puzzle-stage semantics weights, "
+                    "but this trainer has no puzzle_stage_semantics_head; skipping that state."
+                )
         if "optimizer_state_dict" in payload:
             self.optimizer.load_state_dict(payload["optimizer_state_dict"])
         self.epoch = int(payload.get("epoch", 0))

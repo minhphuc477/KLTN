@@ -26,7 +26,7 @@ from src.core.latent_diffusion import create_latent_diffusion
 from src.core.logic_net import LogicNet
 from src.core.condition_encoder import create_condition_encoder
 
-def test_guidance_application():
+def _run_guidance_application() -> bool:
     """Test if LogicNet guidance is applied during sampling."""
     
     print("\n" + "="*70)
@@ -117,7 +117,11 @@ def test_guidance_application():
             print("        - guidance_scale=0.0 doesn't produce zero gradients (scale not working)")
         return False
 
-def test_full_pipeline_guidance():
+def test_guidance_application():
+    assert _run_guidance_application() is True
+
+
+def _run_full_pipeline_guidance() -> bool:
     """Test guidance through a full ddim_sample call."""
     
     print("\n" + "="*70)
@@ -177,9 +181,13 @@ def test_full_pipeline_guidance():
         traceback.print_exc()
         return False
 
+def test_full_pipeline_guidance():
+    assert _run_full_pipeline_guidance() is True
+
+
 if __name__ == "__main__":
-    test1_pass = test_guidance_application()
-    test2_pass = test_full_pipeline_guidance()
+    test1_pass = _run_guidance_application()
+    test2_pass = _run_full_pipeline_guidance()
     
     print("\n" + "="*70)
     print("SUMMARY")

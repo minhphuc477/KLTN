@@ -3619,6 +3619,7 @@ class EvolutionaryTopologyGenerator:
 
         logger.debug("Applying VGLC compliance: filtering virtual nodes...")
         best_networkx_physical = filter_virtual_nodes(best_networkx)
+        best_networkx_physical = self._enforce_output_node_cap(best_networkx_physical)
         best_networkx_physical = self._repair_output_connectivity(best_networkx_physical)
 
         topology_report = validate_topology(best_networkx_physical)
@@ -3630,6 +3631,93 @@ class EvolutionaryTopologyGenerator:
         if directed_output:
             return best_networkx_physical
         return best_networkx_physical.to_undirected()
+
+    def _enforce_output_node_cap(self, graph: nx.Graph) -> nx.Graph:
+        """Final safety pass for repairs that add nodes after evolutionary capping."""
+        hard_cap = int(max(int(self.max_nodes) + 2, int(self.max_nodes * 1.5)))
+        if graph.number_of_nodes() <= hard_cap:
+            return graph
+
+        repaired = graph.copy()
+        repaired.graph["generation_stats"] = copy.deepcopy(graph.graph.get("generation_stats", {}))
+        protected_types = {
+            "START",
+            "GOAL",
+            "BOSS",
+            "BOSS_DOOR",
+            "BIG_KEY",
+            "KEY",
+            "SWITCH",
+            "MULTI_LOCK",
+        }
+        removal_priority = {
+            "EMPTY": 0,
+            "TREASURE": 1,
+            "SECRET": 2,
+            "ENEMY": 3,
+            "ARENA": 4,
+            "ITEM": 5,
+            "TUTORIAL_PUZZLE": 6,
+            "COMBAT_PUZZLE": 7,
+            "COMPLEX_PUZZLE": 8,
+        }
+
+        def _node_type(node_id: Any) -> str:
+            attrs = repaired.nodes.get(node_id, {})
+            return str(attrs.get("type", attrs.get("label", "")) or "").strip().upper()
+
+        def _sort_key(node_id: Any) -> Tuple[int, int, str]:
+            node_type = _node_type(node_id)
+            degree = int(repaired.to_undirected().degree(node_id))
+            return (removal_priority.get(node_type, 20), degree, str(node_id))
+
+        def _anchors_connected(candidate: nx.Graph) -> bool:
+            undirected = candidate.to_undirected()
+            start_nodes = [node for node, attrs in candidate.nodes(data=True) if str(attrs.get("type", "")).upper() == "START"]
+            goal_nodes = [node for node, attrs in candidate.nodes(data=True) if str(attrs.get("type", "")).upper() == "GOAL"]
+            if start_nodes and goal_nodes and not nx.has_path(undirected, start_nodes[0], goal_nodes[0]):
+                return False
+            return True
+
+        removed_nodes = 0
+        while repaired.number_of_nodes() > hard_cap:
+            candidates = [
+                node_id
+                for node_id in repaired.nodes
+                if _node_type(node_id) not in protected_types
+            ]
+            if not candidates:
+                break
+
+            removed_this_round = False
+            for node_id in sorted(candidates, key=_sort_key):
+                candidate = repaired.copy()
+                candidate.remove_node(node_id)
+                if candidate.number_of_nodes() > 1 and not _anchors_connected(candidate):
+                    continue
+                repaired = candidate
+                removed_nodes += 1
+                removed_this_round = True
+                break
+
+            if not removed_this_round:
+                break
+
+        if removed_nodes:
+            stats = repaired.graph.setdefault("generation_stats", {})
+            stats["node_cap_pruned_nodes"] = int(stats.get("node_cap_pruned_nodes", 0)) + int(removed_nodes)
+            logger.info(
+                "Pruned %d non-critical output nodes to enforce hard node cap=%d",
+                removed_nodes,
+                hard_cap,
+            )
+        if repaired.number_of_nodes() > hard_cap:
+            logger.warning(
+                "Unable to fully enforce hard node cap=%d without removing protected progression nodes; output has %d nodes",
+                hard_cap,
+                repaired.number_of_nodes(),
+            )
+        return repaired
 
     def _repair_pedagogical_progression(
         self,

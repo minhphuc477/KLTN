@@ -35,6 +35,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import numpy as np
 import networkx as nx
 import argparse
+import pytest
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +59,7 @@ from src.simulation.key_economy_validator import (
 # TEST 1: WEIGHTED BAYESIAN WFC - DISTRIBUTION PRESERVATION
 # ============================================================================
 
-def test_weighted_wfc_distribution_preservation(verbose: bool = False):
+def _weighted_wfc_distribution_preservation(verbose: bool = False):
     """
     Test that Weighted Bayesian WFC preserves VQ-VAE tile distribution.
     
@@ -151,7 +152,11 @@ def test_weighted_wfc_distribution_preservation(verbose: bool = False):
 # TEST 2: WEIGHTED DIFFICULTY METRICS - COGNITIVE VS TEDIOUS
 # ============================================================================
 
-def test_difficulty_metrics_separation(verbose: bool = False):
+def test_weighted_wfc_distribution_preservation():
+    assert _weighted_wfc_distribution_preservation(verbose=False) is True
+
+
+def _difficulty_metrics_separation(verbose: bool = False):
     """
     Test that difficulty metrics properly separate cognitive vs tedious.
     
@@ -246,7 +251,14 @@ def test_difficulty_metrics_separation(verbose: bool = False):
 # TEST 3: KEY ECONOMY VALIDATOR - SOFT-LOCK PREVENTION
 # ============================================================================
 
-def test_key_economy_all_topologies(verbose: bool = False):
+def test_difficulty_metrics_separation():
+    result = _difficulty_metrics_separation(verbose=False)
+    if result is None:
+        pytest.skip("DifficultyCalculator is not available for this API shape.")
+    assert result is True
+
+
+def _key_economy_all_topologies(verbose: bool = False):
     """
     Test key economy validator on all topology types.
     
@@ -364,6 +376,10 @@ def test_key_economy_all_topologies(verbose: bool = False):
         return False
 
 
+def test_key_economy_all_topologies():
+    assert _key_economy_all_topologies(verbose=False) is True
+
+
 # ============================================================================
 # MASTER TEST RUNNER
 # ============================================================================
@@ -386,7 +402,7 @@ def run_all_tests(verbose: bool = False, quick: bool = False):
     
     # Test 1: Weighted WFC
     try:
-        results['weighted_wfc'] = test_weighted_wfc_distribution_preservation(verbose)
+        results['weighted_wfc'] = _weighted_wfc_distribution_preservation(verbose)
     except (AttributeError, RuntimeError, ValueError, TypeError) as e:
         print(f"\nâŒ Test 1 crashed: {e}")
         results['weighted_wfc'] = False
@@ -396,7 +412,7 @@ def run_all_tests(verbose: bool = False, quick: bool = False):
     
     # Test 2: Difficulty Metrics
     try:
-        results['difficulty_metrics'] = test_difficulty_metrics_separation(verbose)
+        results['difficulty_metrics'] = _difficulty_metrics_separation(verbose)
     except (AttributeError, RuntimeError, ValueError, TypeError) as e:
         print(f"\nâŒ Test 2 crashed: {e}")
         results['difficulty_metrics'] = False
@@ -407,7 +423,7 @@ def run_all_tests(verbose: bool = False, quick: bool = False):
     # Test 3: Key Economy
     if not quick:  # Skip in quick mode as it's more complex
         try:
-            results['key_economy'] = test_key_economy_all_topologies(verbose)
+            results['key_economy'] = _key_economy_all_topologies(verbose)
         except (AttributeError, RuntimeError, ValueError, TypeError) as e:
             print(f"\nâŒ Test 3 crashed: {e}")
             results['key_economy'] = False

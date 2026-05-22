@@ -92,6 +92,68 @@ class PlayerState:
         )
 
 
+def _normalized_node_role(attrs: Dict) -> str:
+    return str(
+        attrs.get("type")
+        or attrs.get("label")
+        or attrs.get("node_type")
+        or attrs.get("role")
+        or ""
+    ).strip().upper()
+
+
+def _select_start_goal_nodes(graph: nx.DiGraph) -> Tuple[Optional[int], Optional[int]]:
+    """Select explicit START/GOAL markers first, then fall back to graph shape."""
+    marked_starts = [
+        node for node, attrs in graph.nodes(data=True)
+        if "START" in _normalized_node_role(attrs)
+    ]
+    marked_goals = [
+        node for node, attrs in graph.nodes(data=True)
+        if "GOAL" in _normalized_node_role(attrs)
+    ]
+    start_candidates = marked_starts or [node for node in graph.nodes() if graph.in_degree(node) == 0]
+    if not start_candidates:
+        return None, None
+    start_node = sorted(start_candidates, key=lambda node: (type(node).__name__, str(node)))[0]
+
+    goal_candidates = marked_goals or [node for node in graph.nodes() if graph.out_degree(node) == 0]
+    if not goal_candidates:
+        return start_node, None
+
+    def _goal_rank(node: int) -> Tuple[int, int, str, str]:
+        try:
+            distance = int(nx.shortest_path_length(graph, start_node, node))
+        except nx.NetworkXException:
+            distance = -1
+        return (distance, int(graph.in_degree(node)), type(node).__name__, str(node))
+
+    return start_node, max(goal_candidates, key=_goal_rank)
+
+
+def _edge_is_reversible(edge_data: Dict) -> bool:
+    edge_type = str(edge_data.get("edge_type", edge_data.get("type", ""))).strip().lower()
+    lock_type = str(edge_data.get("lock_type", "open")).strip().lower()
+    if edge_data.get("is_window") or edge_type in {"visual_link", "one_way"} or lock_type == "one_way":
+        return False
+    return lock_type in {"open", "locked", "key_locked", "bomb", "boss", ""}
+
+
+def _iter_accessible_neighbor_edges(graph: nx.DiGraph, node: int):
+    """Yield outgoing edges plus reversible incoming traversable edges."""
+    seen: Set[int] = set()
+    for neighbor in graph.successors(node):
+        edge_data = graph.get_edge_data(node, neighbor, {}) or {}
+        seen.add(neighbor)
+        yield neighbor, edge_data
+    for predecessor in graph.predecessors(node):
+        if predecessor in seen:
+            continue
+        edge_data = graph.get_edge_data(predecessor, node, {}) or {}
+        if _edge_is_reversible(edge_data):
+            yield predecessor, edge_data
+
+
 @dataclass
 class KeyEconomyResult:
     """Result of key economy validation."""
@@ -177,8 +239,7 @@ class GreedyPlayer:
                     return path[1]
                 return goal_node
             
-            for neighbor in self.graph.neighbors(node):
-                edge_data = self.graph.get_edge_data(node, neighbor, {})
+            for neighbor, edge_data in _iter_accessible_neighbor_edges(self.graph, node):
                 if not self._can_traverse_edge(curr_state, edge_data):
                     continue
                 
@@ -296,8 +357,7 @@ class AdversarialPlayer:
         """
         accessible_neighbors = []
         
-        for neighbor in self.graph.neighbors(state.current_node):
-            edge_data = self.graph.get_edge_data(state.current_node, neighbor, {})
+        for neighbor, edge_data in _iter_accessible_neighbor_edges(self.graph, state.current_node):
             if not self._can_traverse_edge(state, edge_data):
                 continue
             
@@ -328,9 +388,32 @@ class AdversarialPlayer:
         
         if not accessible_neighbors:
             return None
-        
-        accessible_neighbors.sort()
-        return accessible_neighbors[0][-1]
+
+        unvisited_moves = [entry for entry in accessible_neighbors if entry[0] in {0, 1}]
+        if unvisited_moves:
+            unvisited_moves.sort()
+            return unvisited_moves[0][-1]
+
+        return self._find_next_goal_directed_move(state, goal_node)
+
+    def _find_next_goal_directed_move(
+        self,
+        state: PlayerState,
+        goal_node: int,
+    ) -> Optional[int]:
+        """Backtrack toward the goal once optional reachable space is exhausted."""
+        queue = deque([(state.current_node, [state.current_node])])
+        visited = {state.current_node}
+        while queue:
+            node, path = queue.popleft()
+            if node == goal_node:
+                return path[1] if len(path) > 1 else goal_node
+            for neighbor, edge_data in _iter_accessible_neighbor_edges(self.graph, node):
+                if neighbor in visited or not self._can_traverse_edge(state, edge_data):
+                    continue
+                visited.add(neighbor)
+                queue.append((neighbor, path + [neighbor]))
+        return None
     
     def _can_traverse_edge(self, state: PlayerState, edge_data: Dict) -> bool:
         """Check if player can traverse edge."""
@@ -373,6 +456,7 @@ class MissionGraphAnalyzer:
     
     def __init__(self, mission_graph: nx.DiGraph):
         self.graph = mission_graph
+        self.start_node, self.goal_node = _select_start_goal_nodes(mission_graph)
         self.topology = self._classify_topology()
         self.critical_path = self._find_critical_path()
     
@@ -401,19 +485,12 @@ class MissionGraphAnalyzer:
         
         Critical path = nodes required to reach goal
         """
-        # Find start and goal nodes
-        start_nodes = [n for n in self.graph.nodes() if self.graph.in_degree(n) == 0]
-        goal_nodes = [n for n in self.graph.nodes() if self.graph.out_degree(n) == 0]
-        
-        if not start_nodes or not goal_nodes:
+        if self.start_node is None or self.goal_node is None:
             return set(self.graph.nodes())
-        
-        start = start_nodes[0]
-        goal = goal_nodes[0]
-        
+
         # All nodes on any path from start to goal
         try:
-            all_paths = list(nx.all_simple_paths(self.graph, start, goal))
+            all_paths = list(nx.all_simple_paths(self.graph, self.start_node, self.goal_node))
             if all_paths:
                 # Union of all paths
                 critical = set()
@@ -510,11 +587,9 @@ class KeyEconomyValidator:
         Returns:
             KeyEconomyResult with full analysis
         """
-        # Find start and goal
-        start_nodes = [n for n in self.graph.nodes() if self.graph.in_degree(n) == 0]
-        goal_nodes = [n for n in self.graph.nodes() if self.graph.out_degree(n) == 0]
-        
-        if not start_nodes or not goal_nodes:
+        start_node, goal_node = _select_start_goal_nodes(self.graph)
+
+        if start_node is None or goal_node is None:
             logger.warning("No start or goal node found")
             return KeyEconomyResult(
                 is_valid=False,
@@ -524,9 +599,6 @@ class KeyEconomyValidator:
                 key_surplus={},
                 soft_lock_nodes=[]
             )
-        
-        start_node = start_nodes[0]
-        goal_node = goal_nodes[0]
         
         # Test greedy player
         greedy_player = GreedyPlayer(self.graph)
