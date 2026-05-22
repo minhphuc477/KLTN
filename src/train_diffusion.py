@@ -438,6 +438,26 @@ class DiffusionTrainingConfig:
     def to_dict(self) -> Dict[str, Any]:
         return {k: v for k, v in self.__dict__.items() if not k.startswith('_')}
 
+    @classmethod
+    def from_dict(cls, payload: Dict[str, Any]) -> "DiffusionTrainingConfig":
+        """Build a training config from either resolved global YAML or flat kwargs."""
+        if not isinstance(payload, dict):
+            raise TypeError(f"DiffusionTrainingConfig.from_dict expects a dict, got {type(payload).__name__}.")
+
+        if {"dataset", "diffusion", "runtime", "distributed"}.issubset(payload):
+            resolved = merge_config(cli_overrides=payload)
+            kwargs = diffusion_training_kwargs_from_resolved_config(resolved)
+            return cls(**kwargs)
+
+        allowed = set(cls().__dict__.keys())
+        return cls(**{key: value for key, value in payload.items() if key in allowed})
+
+    def __getitem__(self, key: str) -> Any:
+        return getattr(self, key)
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        setattr(self, key, value)
+
 
 def diffusion_training_kwargs_from_resolved_config(
     config: Dict[str, Any],
@@ -790,6 +810,7 @@ class DiffusionTrainer:
         # Initialize models
         self.vqvae = vqvae or self._create_vqvae()
         self.diffusion = diffusion or self._create_diffusion()
+        self.model = self.diffusion
         self.condition_encoder = condition_encoder or self._create_condition_encoder()
         self.logic_net = logic_net or self._create_logic_net()
         
