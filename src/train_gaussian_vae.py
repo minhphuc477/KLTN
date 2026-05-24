@@ -35,6 +35,7 @@ from src.utils.checkpoint import (
     resolve_resume_checkpoint,
     write_checkpoint_metadata,
 )
+from src.utils.data_loading import dataloader_runtime_kwargs
 from src.utils.model_capacity import count_parameters, log_capacity_guardrails
 from src.zelda_data.zelda_loader import create_dataloader
 
@@ -331,9 +332,11 @@ def train_gaussian_vae(args):
         train_dataset,
         batch_size=args.batch_size,
         sampler=sampler,
-        num_workers=int(getattr(args, "num_workers", 0)),
-        pin_memory=bool(getattr(args, "pin_memory", torch.cuda.is_available())),
         drop_last=bool(getattr(args, "drop_last", True)),
+        **dataloader_runtime_kwargs(
+            num_workers=int(getattr(args, "num_workers", 0)),
+            pin_memory=bool(getattr(args, "pin_memory", torch.cuda.is_available())),
+        ),
     )
     eval_source = val_dataset if val_dataset is not None else train_dataset
     eval_split_name = "val" if val_dataset is not None else "train"
@@ -341,9 +344,11 @@ def train_gaussian_vae(args):
         eval_source,
         batch_size=args.batch_size,
         shuffle=False,
-        num_workers=int(getattr(args, "num_workers", 0)),
-        pin_memory=bool(getattr(args, "pin_memory", torch.cuda.is_available())),
         drop_last=False,
+        **dataloader_runtime_kwargs(
+            num_workers=int(getattr(args, "num_workers", 0)),
+            pin_memory=bool(getattr(args, "pin_memory", torch.cuda.is_available())),
+        ),
     )
     logger.info("Effective samples/epoch: %d, batches/epoch: %d", effective_size, len(dataloader))
     logger.info(

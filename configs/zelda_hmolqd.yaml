@@ -162,6 +162,8 @@ diffusion:
   ema_decay: 0.9999  # type=float, default=0.9999, valid=0..0.999999
   validation_num_samples: 8  # type=int, default=8, valid>=1; generated-sample validation budget for logic/solvability
   validation_num_diffusion_samples: 64  # type=int, default=64, valid>=1; real-latent validation budget for denoising teacher quality
+  latent_cache_enabled: true  # type=bool, default=true, valid={true,false}; cache frozen VQ-VAE room latents during diffusion training to avoid repeated Block-II encoding
+  latent_cache_max_items: 4096  # type=int, default=4096, valid>=0; bounded in-memory entries for real-room and teacher-forced neighbor latents
 
 topology:
   default_target_curve: [0.2, 0.4, 0.6, 0.8, 1.0]  # type=list[float], default=[0.2,0.4,0.6,0.8,1.0], valid=0..1; default Block I difficulty/tension target

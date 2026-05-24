@@ -57,6 +57,7 @@ from src.utils.checkpoint import (
     resolve_resume_checkpoint,
     write_checkpoint_metadata,
 )
+from src.utils.data_loading import dataloader_runtime_kwargs
 from src.zelda_data.zelda_loader import create_dataloader, graph_collate_fn
 
 logger = logging.getLogger(__name__)
@@ -919,10 +920,9 @@ def _create_fast_sampler_dataloaders(
         train_dataset,
         batch_size=config.batch_size,
         shuffle=config.shuffle_train,
-        num_workers=config.num_workers,
-        pin_memory=config.pin_memory,
         drop_last=config.drop_last,
         collate_fn=graph_collate_fn,
+        **dataloader_runtime_kwargs(num_workers=config.num_workers, pin_memory=config.pin_memory),
     )
     eval_source = val_dataset if val_dataset is not None else train_dataset
     eval_split_name = "val" if val_dataset is not None else "train"
@@ -930,10 +930,9 @@ def _create_fast_sampler_dataloaders(
         eval_source,
         batch_size=config.batch_size,
         shuffle=False,
-        num_workers=config.num_workers,
-        pin_memory=config.pin_memory,
         drop_last=False,
         collate_fn=graph_collate_fn,
+        **dataloader_runtime_kwargs(num_workers=config.num_workers, pin_memory=config.pin_memory),
     )
     return train_loader, val_loader, eval_split_name, len(train_dataset), len(eval_source)
 

@@ -241,6 +241,8 @@ CONFIG_FIELDS: List[ConfigField] = [
     ConfigField("diffusion.ema_decay", float, 0.9999, "EMA decay for diffusion weights.", min_value=0.0, max_value=0.999999),
     ConfigField("diffusion.validation_num_samples", int, 8, "Generated-sample validation count for logic/solvability metrics.", min_value=1),
     ConfigField("diffusion.validation_num_diffusion_samples", int, 64, "Validation sample count for denoising loss on real latents.", min_value=1),
+    ConfigField("diffusion.latent_cache_enabled", bool, True, "Cache frozen VQ-VAE latents during diffusion training so repeated room and neighbor maps do not rerun Block II encoding."),
+    ConfigField("diffusion.latent_cache_max_items", int, 4096, "Maximum in-memory frozen-latent cache entries for diffusion training. 0 disables caching.", min_value=0),
     ConfigField("topology.default_target_curve", list, [0.2, 0.4, 0.6, 0.8, 1.0], "Default target difficulty/tension curve for evolutionary topology generation.", sequence_item_type=float, min_value=0.0, max_value=1.0),
     ConfigField("topology.num_rooms", int, 8, "Default room budget for generated topologies.", min_value=1),
     ConfigField("topology.population_size", int, 50, "Default evolutionary population size for Block I.", min_value=1),

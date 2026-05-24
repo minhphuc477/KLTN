@@ -7,6 +7,7 @@ import torch
 
 from src.core.definitions import GRAPH_EDGE_FEATURE_DIM, ROOM_HEIGHT, ROOM_TOPOLOGY_CHANNEL_COUNT, ROOM_WIDTH
 from src.train_diffusion import DiffusionTrainer
+from src.utils.frozen_latent_cache import FrozenLatentCache
 
 EMPTY_NEIGHBORS = {"N": None, "S": None, "E": None, "W": None}
 
@@ -54,6 +55,17 @@ class _DummyLogicNet(torch.nn.Module):
     def forward(self, z_latent, graph_data=None):
         self.last_graph_data = graph_data
         return torch.tensor(0.25, dtype=torch.float32), {}
+
+
+class _CountingVQVAE:
+    def __init__(self):
+        self.num_classes = 44
+        self.encode_calls = 0
+
+    def encode(self, x_onehot):
+        self.encode_calls += 1
+        latent_value = x_onehot.mean(dim=(1, 2, 3), keepdim=True)
+        return latent_value.expand(-1, 4, 2, 2).contiguous(), torch.zeros(x_onehot.shape[0], dtype=torch.long)
 
 
 class _TinyModule(torch.nn.Module):
@@ -519,6 +531,31 @@ def test_get_dummy_conditioning_returns_deterministic_null_conditioning():
 
     assert tuple(conditioning.shape) == (3, 1, 8)
     assert torch.count_nonzero(conditioning) == 0
+
+
+def test_encode_to_latent_reuses_frozen_vqvae_cache_for_repeated_maps():
+    trainer = DiffusionTrainer.__new__(DiffusionTrainer)
+    trainer.device = torch.device("cpu")
+    trainer.config = SimpleNamespace(
+        latent_cache_enabled=True,
+        latent_cache_max_items=8,
+        vqvae_checkpoint="stub-vqvae.pth",
+        vqvae_architecture="vqvae2",
+        num_classes=44,
+    )
+    trainer.vqvae = _CountingVQVAE()
+    trainer._latent_cache = FrozenLatentCache(enabled=True, max_items=8)
+
+    maps = torch.zeros((2, 1, ROOM_HEIGHT, ROOM_WIDTH), dtype=torch.float32)
+    maps[1] = 0.5
+
+    first = DiffusionTrainer.encode_to_latent(trainer, maps)
+    second = DiffusionTrainer.encode_to_latent(trainer, maps)
+
+    assert tuple(first.shape) == (2, 4, 2, 2)
+    assert torch.allclose(first, second)
+    assert trainer.vqvae.encode_calls == 1
+    assert trainer._latent_cache.hits == 2
 
 
 def test_stack_diffusion_graph_batch_canonicalizes_mixed_anchor_semantics():

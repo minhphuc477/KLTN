@@ -57,6 +57,15 @@ LOGIC_DELTA_METRICS = (
 )
 
 
+PIPELINE_CACHE_FIELDS = (
+    "conditioning",
+    "device",
+    "vqvae_checkpoint",
+    "diffusion_checkpoint",
+    "logic_net_checkpoint",
+)
+
+
 @dataclass(frozen=True)
 class VariantSpec:
     name: str
@@ -173,6 +182,45 @@ def pipeline_kwargs_for_variant(
     kwargs["default_puzzle_stage_topology_enabled"] = variant.conditioning != "no_stage_tokens"
     kwargs["default_apply_repair"] = bool(variant.repair_enabled)
     return kwargs
+
+
+def pipeline_cache_key(
+    variant: VariantSpec,
+    checkpoints: Mapping[str, Optional[str]],
+    *,
+    device: str,
+) -> Tuple[Any, ...]:
+    """Return the fields that require a distinct initialized pipeline.
+
+    Repair and LogicNet guidance are passed per generation call. Keeping them
+    out of this key avoids reloading the same neural checkpoints for every
+    repair/logic ON-OFF cell while still isolating conditioning modes that alter
+    constructor-level graph/stage behavior.
+    """
+    return (
+        str(variant.conditioning),
+        str(device),
+        checkpoints.get("vqvae_checkpoint"),
+        checkpoints.get("diffusion_checkpoint"),
+        checkpoints.get("logic_net_checkpoint"),
+    )
+
+
+def get_or_create_pipeline(
+    cache: Dict[Tuple[Any, ...], NeuralSymbolicDungeonPipeline],
+    *,
+    resolved_config: Mapping[str, Any],
+    checkpoints: Mapping[str, Optional[str]],
+    variant: VariantSpec,
+    device: str,
+) -> NeuralSymbolicDungeonPipeline:
+    key = pipeline_cache_key(variant, checkpoints, device=device)
+    pipeline = cache.get(key)
+    if pipeline is None:
+        kwargs = pipeline_kwargs_for_variant(resolved_config, checkpoints, variant)
+        pipeline = NeuralSymbolicDungeonPipeline(device=str(device), **kwargs)
+        cache[key] = pipeline
+    return pipeline
 
 
 def _semantic_counts(grid: Any) -> Dict[str, int]:
@@ -435,12 +483,18 @@ def write_plan(
     checkpoints: Mapping[str, Optional[str]],
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
+    device = str(getattr(args, "device", "auto"))
+    pipeline_upper_bound = len(
+        {pipeline_cache_key(variant, checkpoints, device=device) for variant in variants}
+    )
     payload = {
         "protocol": "conditioning_logicnet_repair_ablation",
         "mode": "execute" if bool(args.execute) else "plan_only",
         "seeds": _parse_seeds(args.seeds),
         "variants": [asdict(variant) for variant in variants],
         "checkpoints": dict(checkpoints),
+        "pipeline_cache_fields": list(PIPELINE_CACHE_FIELDS),
+        "pipeline_initialization_upper_bound": int(pipeline_upper_bound),
         "required_outputs": [
             "conditioning_logicnet_repair_rows.csv",
             "conditioning_logicnet_repair_summary.csv",
@@ -450,6 +504,10 @@ def write_plan(
             "visual_sheet_manifest.json",
         ],
         "semantics_contract": "Report pre-repair and post-repair A*/P-CBS validity, semantic counts, repair count, repair time, and LogicNet metrics separately.",
+        "execution_optimization": (
+            "Pipelines are cached by conditioning/device/checkpoints. Repair and LogicNet ON-OFF cells reuse "
+            "the same initialized model stack because they are runtime generation parameters."
+        ),
     }
     (output_dir / "conditioning_logicnet_repair_plan.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
     lines = [
@@ -460,6 +518,7 @@ def write_plan(
         f"- mode: `{payload['mode']}`",
         f"- seeds: `{', '.join(str(seed) for seed in payload['seeds'])}`",
         f"- variants: `{len(variants)}`",
+        f"- initialized pipeline upper bound: `{pipeline_upper_bound}`",
         "",
         "| Variant | Conditioning | Repair | LogicNet | Notes |",
         "|---|---|---:|---:|---|",
@@ -499,10 +558,16 @@ def execute_protocol(
     topology_kwargs = topology_generation_kwargs_from_resolved_config(resolved)
     rows: List[Dict[str, Any]] = []
     visual_grids: List[Tuple[str, np.ndarray]] = []
+    pipeline_cache: Dict[Tuple[Any, ...], NeuralSymbolicDungeonPipeline] = {}
     for seed in _parse_seeds(args.seeds):
         for variant in variants:
-            kwargs = pipeline_kwargs_for_variant(resolved, resolved_checkpoints, variant)
-            pipeline = NeuralSymbolicDungeonPipeline(device=str(args.device), **kwargs)
+            pipeline = get_or_create_pipeline(
+                pipeline_cache,
+                resolved_config=resolved,
+                checkpoints=resolved_checkpoints,
+                variant=variant,
+                device=str(args.device),
+            )
             started = time.perf_counter()
             result = pipeline.generate_dungeon(
                 generate_topology=True,
@@ -519,6 +584,7 @@ def execute_protocol(
                 max_batch_size=int(args.max_batch_size),
             )
             result.metrics["ablation_wall_time_sec"] = float(time.perf_counter() - started)
+            result.metrics["ablation_pipeline_cache_size"] = int(len(pipeline_cache))
             pre_result, pre_grid = _pre_repair_result(pipeline, result)
             pre_eval, pre_error = _safe_evaluate(
                 pre_result,

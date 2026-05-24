@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 from scripts.run_conditioning_logicnet_repair_ablation import (
     build_experiment_matrix,
     build_logic_delta_rows,
+    pipeline_cache_key,
     summarize_rows,
     validate_execute_checkpoints,
     write_plan,
@@ -19,6 +21,40 @@ def test_conditioning_logicnet_repair_matrix_is_complete():
     assert "full__repair_on__logic_on" in names
     assert "no_graph_tokens__repair_off__logic_off" in names
     assert "no_stage_tokens__repair_on__logic_off" in names
+
+
+def test_pipeline_cache_key_reuses_runtime_only_logic_and_repair_variants():
+    variants = {variant.name: variant for variant in build_experiment_matrix()}
+    checkpoints = {
+        "vqvae_checkpoint": "vqvae.pth",
+        "diffusion_checkpoint": "diffusion.pth",
+        "logic_net_checkpoint": "logic.pth",
+    }
+
+    full_off = pipeline_cache_key(
+        variants["full__repair_off__logic_off"],
+        checkpoints,
+        device="cuda",
+    )
+    full_on = pipeline_cache_key(
+        variants["full__repair_on__logic_on"],
+        checkpoints,
+        device="cuda",
+    )
+    no_stage = pipeline_cache_key(
+        variants["no_stage_tokens__repair_on__logic_on"],
+        checkpoints,
+        device="cuda",
+    )
+    no_graph = pipeline_cache_key(
+        variants["no_graph_tokens__repair_on__logic_on"],
+        checkpoints,
+        device="cuda",
+    )
+
+    assert full_off == full_on
+    assert full_off != no_stage
+    assert full_off != no_graph
 
 
 def test_conditioning_logicnet_summary_separates_pre_post_validity():
@@ -111,3 +147,12 @@ def test_conditioning_logicnet_plan_is_plan_only(tmp_path):
 
     assert (tmp_path / "conditioning_logicnet_repair_plan.json").exists()
     assert (tmp_path / "conditioning_logicnet_repair_plan.md").exists()
+    payload = json.loads((tmp_path / "conditioning_logicnet_repair_plan.json").read_text(encoding="utf-8"))
+    assert payload["pipeline_initialization_upper_bound"] == 1
+    assert payload["pipeline_cache_fields"] == [
+        "conditioning",
+        "device",
+        "vqvae_checkpoint",
+        "diffusion_checkpoint",
+        "logic_net_checkpoint",
+    ]

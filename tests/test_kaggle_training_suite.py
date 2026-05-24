@@ -63,3 +63,42 @@ def test_kaggle_artifact_manifest_packages_summaries_and_final_checkpoints(tmp_p
     assert "downstream/run/checkpoints/diffusion/checkpoint_epoch_1.pth" not in packaged
     assert "downstream/run/checkpoints/diffusion/checkpoint_epoch_1.pth" in checkpoints
     assert manifest["summary_files"][0]["summary"]["epoch_to_best"] == 1
+
+
+def test_kaggle_kernel_env_mapping_and_metadata_template():
+    mod = _load_script_module("kaggle/hmolqd_training_suite/kaggle_kernel.py", "kaggle_kernel_test")
+    args = mod.parse_args(
+        [
+            "--profile",
+            "t4x2",
+            "--tokenizers",
+            "vqvae vqvae2",
+            "--branches",
+            "stage_full stage_loss010",
+            "--data-dir",
+            "/kaggle/input/zelda",
+            "--out-root",
+            "/kaggle/working/out",
+            "--quick",
+            "--skip-fast-sampler",
+        ]
+    )
+    env = mod.build_suite_env(args, base_env={})
+
+    assert env["PROFILE"] == "t4x2"
+    assert env["TOKENIZERS"] == "vqvae vqvae2"
+    assert env["BRANCHES"] == "stage_full stage_loss010"
+    assert env["DATA_DIR"] == "/kaggle/input/zelda"
+    assert env["OUT_ROOT"] == "/kaggle/working/out"
+    assert env["QUICK"] == "1"
+    assert env["RUN_FAST_SAMPLER"] == "0"
+    assert "RUN_DIFFUSION" not in env
+
+    metadata = json.loads(
+        (REPO_ROOT / "kaggle" / "hmolqd_training_suite" / "kernel-metadata.template.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert metadata["code_file"] == "kaggle_kernel.py"
+    assert metadata["enable_gpu"] is True
+    assert metadata["kernel_type"] == "script"

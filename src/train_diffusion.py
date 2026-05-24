@@ -84,6 +84,8 @@ from src.utils.model_capacity import (
     format_parameter_count,
     log_capacity_guardrails,
 )
+from src.utils.data_loading import dataloader_runtime_kwargs
+from src.utils.frozen_latent_cache import FrozenLatentCache
 
 logger = logging.getLogger(__name__)
 CARDINAL_DIRECTIONS = ("N", "S", "E", "W")
@@ -202,6 +204,8 @@ class DiffusionTrainingConfig:
         validation_num_samples: int = 8,
         validation_num_diffusion_samples: int = 64,
         validation_fraction: float = 0.1,
+        latent_cache_enabled: bool = True,
+        latent_cache_max_items: int = 4096,
         
         # Checkpointing
         checkpoint_dir: str = "./checkpoints",
@@ -414,6 +418,8 @@ class DiffusionTrainingConfig:
         self.validation_num_samples = int(max(1, validation_num_samples))
         self.validation_num_diffusion_samples = int(max(1, validation_num_diffusion_samples))
         self.validation_fraction = float(max(0.0, min(0.5, validation_fraction)))
+        self.latent_cache_enabled = bool(latent_cache_enabled)
+        self.latent_cache_max_items = int(max(0, latent_cache_max_items))
         
         self.checkpoint_dir = checkpoint_dir
         self.save_every = save_every
@@ -577,6 +583,8 @@ def diffusion_training_kwargs_from_resolved_config(
         "validation_num_samples": stage["validation_num_samples"],
         "validation_num_diffusion_samples": stage["validation_num_diffusion_samples"],
         "validation_fraction": stage.get("validation_fraction", 0.1),
+        "latent_cache_enabled": stage.get("latent_cache_enabled", True),
+        "latent_cache_max_items": stage.get("latent_cache_max_items", 4096),
         "checkpoint_dir": stage["checkpoint_dir"],
         "save_every": stage["save_every"],
         "keep_last": stage["keep_last"],
@@ -757,6 +765,8 @@ def _legacy_diffusion_overrides_from_args(args: argparse.Namespace) -> Dict[str,
     _set("logic_topology_anchor_weight", getattr(args, "logic_topology_anchor_weight", None))
     _set("logic_global_reach_weight", getattr(args, "logic_global_reach_weight", None))
     _set("logic_global_room_weight", getattr(args, "logic_global_room_weight", None))
+    _set("latent_cache_enabled", getattr(args, "latent_cache_enabled", None))
+    _set("latent_cache_max_items", getattr(args, "latent_cache_max_items", None))
     _set("checkpoint_dir", getattr(args, "checkpoint_dir", None))
     _set("keep_last", getattr(args, "keep_last", None))
     _set("auto_resume", getattr(args, "auto_resume", None))
@@ -897,6 +907,10 @@ class DiffusionTrainer:
         for param in self.ema_diffusion.parameters():
             param.requires_grad = False
         self.ema_decay = float(config.ema_decay)
+        self._latent_cache = FrozenLatentCache(
+            enabled=bool(getattr(config, "latent_cache_enabled", True)),
+            max_items=int(getattr(config, "latent_cache_max_items", 4096)),
+        )
     
     def _create_vqvae(self) -> VQVAE:
         """Create or load VQ-VAE."""
@@ -1030,7 +1044,7 @@ class DiffusionTrainer:
             global_room_weight=self.config.logic_global_room_weight,
         )
     
-    def encode_to_latent(self, x: torch.Tensor) -> torch.Tensor:
+    def _encode_to_latent_uncached(self, x: torch.Tensor) -> torch.Tensor:
         """
         Encode images to VQ-VAE latent space.
         
@@ -1066,6 +1080,64 @@ class DiffusionTrainer:
             # encode() returns (z_q, indices) â€” 2 values, not 3
             z_q, _indices = self.vqvae.encode(x_onehot)
         return z_q
+
+    def _latent_cache_key(self, x: torch.Tensor) -> Optional[Tuple[Any, ...]]:
+        """Build a stable key for one frozen-tokenizer input map."""
+        namespace = (
+            str(getattr(self.config, "vqvae_checkpoint", "") or ""),
+            str(getattr(self.config, "vqvae_architecture", "vqvae")),
+            int(getattr(self.config, "num_classes", 44)),
+        )
+        return self._latent_cache.key_for_tensor(x, namespace=namespace)
+
+    def _cache_get_latent(self, key: Optional[Tuple[Any, ...]]) -> Optional[torch.Tensor]:
+        cache = getattr(self, "_latent_cache", None)
+        if not isinstance(cache, FrozenLatentCache):
+            cache = FrozenLatentCache(
+                enabled=bool(getattr(self.config, "latent_cache_enabled", True)),
+                max_items=int(getattr(self.config, "latent_cache_max_items", 4096)),
+            )
+            self._latent_cache = cache
+        return cache.get(key, device=self.device)
+
+    def _cache_put_latent(self, key: Optional[Tuple[Any, ...]], latent: torch.Tensor) -> None:
+        cache = getattr(self, "_latent_cache", None)
+        if not isinstance(cache, FrozenLatentCache):
+            cache = FrozenLatentCache(
+                enabled=bool(getattr(self.config, "latent_cache_enabled", True)),
+                max_items=int(getattr(self.config, "latent_cache_max_items", 4096)),
+            )
+            self._latent_cache = cache
+        cache.put(key, latent)
+
+    def encode_to_latent(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Encode images to VQ-VAE latent space.
+
+        The VQ-VAE is frozen during diffusion training, so repeated room maps
+        can reuse in-memory latents across epochs and neighbor-conditioning
+        calls without changing gradients through Block IV.
+        """
+        with torch.no_grad():
+            if x.dim() != 4:
+                raise ValueError(f"Expected rank-4 map tensor [B,C,H,W], got {tuple(x.shape)}.")
+            keys = [self._latent_cache_key(sample.unsqueeze(0)) for sample in x]
+            cached_latents: List[Optional[torch.Tensor]] = [self._cache_get_latent(key) for key in keys]
+            missing_indices = [index for index, latent in enumerate(cached_latents) if latent is None]
+            if not missing_indices:
+                return torch.cat([latent for latent in cached_latents if latent is not None], dim=0)
+
+            missing_maps = torch.cat([x[index : index + 1] for index in missing_indices], dim=0)
+            encoded_missing = self._encode_to_latent_uncached(missing_maps)
+            for offset, index in enumerate(missing_indices):
+                latent = encoded_missing[offset : offset + 1].detach()
+                self._cache_put_latent(keys[index], latent)
+                cached_latents[index] = latent
+
+            return torch.cat(
+                [latent.to(self.device, non_blocking=True) for latent in cached_latents if latent is not None],
+                dim=0,
+            )
     
     def decode_from_latent(self, z: torch.Tensor) -> torch.Tensor:
         """
@@ -2121,7 +2193,12 @@ class DiffusionTrainer:
             average=False,
         )
         total_batches = float(max(1.0, reduced.pop("num_batches", float(num_batches))))
-        return {k: float(v) / total_batches for k, v in reduced.items()}
+        epoch_metrics = {k: float(v) / total_batches for k, v in reduced.items()}
+        cache = getattr(self, "_latent_cache", None)
+        if isinstance(cache, FrozenLatentCache) and cache.total_lookups > 0:
+            epoch_metrics["latent_cache_hit_rate"] = float(cache.hit_rate)
+            epoch_metrics["latent_cache_size"] = float(len(cache))
+        return epoch_metrics
     
     @torch.no_grad()
     def validate(
@@ -2461,10 +2538,9 @@ def train_diffusion(config: DiffusionTrainingConfig) -> DiffusionTrainer:
             batch_size=config.batch_size,
             shuffle=(bool(config.shuffle_train) if train_sampler is None else False),
             sampler=train_sampler,
-            num_workers=config.num_workers,
-            pin_memory=config.pin_memory,
             drop_last=config.drop_last,
             collate_fn=graph_collate_fn,
+            **dataloader_runtime_kwargs(num_workers=config.num_workers, pin_memory=config.pin_memory),
         )
 
         val_loader = None
@@ -2474,10 +2550,9 @@ def train_diffusion(config: DiffusionTrainingConfig) -> DiffusionTrainer:
                 eval_source,
                 batch_size=config.batch_size,
                 shuffle=bool(config.shuffle_val),
-                num_workers=config.num_workers,
-                pin_memory=config.pin_memory,
                 drop_last=False,
                 collate_fn=graph_collate_fn,
+                **dataloader_runtime_kwargs(num_workers=config.num_workers, pin_memory=config.pin_memory),
             )
 
         sample_kind = "rooms" if config.room_level else "dungeons"
@@ -2757,6 +2832,8 @@ def main():
     parser.add_argument('--logic-global-reach-weight', type=float, default=None)
     parser.add_argument('--logic-global-room-weight', type=float, default=None)
     parser.add_argument('--guidance-scale', type=float, default=None)
+    parser.add_argument('--latent-cache-enabled', action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument('--latent-cache-max-items', type=int, default=None)
     parser.add_argument('--checkpoint-dir', type=str, default=None)
     parser.add_argument('--keep-last', type=int, default=None)
     parser.add_argument('--auto-resume', action=argparse.BooleanOptionalAction, default=None)

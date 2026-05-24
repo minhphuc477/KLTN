@@ -22,6 +22,7 @@ RUN_ARTIFACT_COLLECTION="${RUN_ARTIFACT_COLLECTION:-1}"
 SINGLE_GPU_DEVICE="${SINGLE_GPU_DEVICE:-0}"
 MASTER_PORT="${MASTER_PORT:-29500}"
 QUICK="${QUICK:-0}"
+VQVAE_CHECKPOINT_ROOT="${VQVAE_CHECKPOINT_ROOT:-}"
 
 VQVAE_EPOCHS="${VQVAE_EPOCHS:-}"
 DIFFUSION_EPOCHS="${DIFFUSION_EPOCHS:-}"
@@ -73,6 +74,46 @@ if [[ "${PROFILE}" == "t4x2" && "${GPU_COUNT}" -lt 2 ]]; then
   echo "[warn] PROFILE=t4x2 requested but fewer than two CUDA devices are visible; falling back to p100/single GPU."
   PROFILE="p100"
 fi
+
+"${PYTHON}" - "${OUT_ROOT}/artifacts/run_environment.json" "${PROFILE}" "${GPU_INFO}" "${TOKENIZERS}" "${BRANCHES}" "${BASE_CONFIG}" "${DATA_DIR}" <<'PY'
+import json
+import platform
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+out_path = Path(sys.argv[1])
+profile = sys.argv[2]
+gpu_info_raw = sys.argv[3]
+try:
+    gpu_info = json.loads(gpu_info_raw)
+except Exception:
+    gpu_info = {"raw": gpu_info_raw}
+payload = {
+    "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+    "profile": profile,
+    "gpu_info": gpu_info,
+    "tokenizers": sys.argv[4].split(),
+    "branches": sys.argv[5].split(),
+    "base_config": sys.argv[6],
+    "data_dir": sys.argv[7],
+    "python": sys.version,
+    "platform": platform.platform(),
+}
+try:
+    import torch
+    payload["torch"] = {
+        "version": getattr(torch, "__version__", None),
+        "cuda_available": bool(torch.cuda.is_available()),
+        "cuda_version": getattr(torch.version, "cuda", None),
+        "device_count": int(torch.cuda.device_count()) if torch.cuda.is_available() else 0,
+    }
+except Exception as exc:
+    payload["torch"] = {"error": repr(exc)}
+out_path.parent.mkdir(parents=True, exist_ok=True)
+out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+print(f"[env] wrote {out_path}")
+PY
 
 make_config() {
   local output="$1"
@@ -183,7 +224,11 @@ for tokenizer in ${TOKENIZERS}; do
     train_stage_single_gpu "${tokenizer_config}" vqvae | tee "${OUT_ROOT}/logs/${tokenizer}_vqvae.log"
   fi
 
-  vqvae_checkpoint="${tokenizer_dir}/checkpoints/vqvae/vqvae_pretrained.pth"
+  if [[ -n "${VQVAE_CHECKPOINT_ROOT}" ]]; then
+    vqvae_checkpoint="${VQVAE_CHECKPOINT_ROOT}/${tokenizer}/checkpoints/vqvae/vqvae_pretrained.pth"
+  else
+    vqvae_checkpoint="${tokenizer_dir}/checkpoints/vqvae/vqvae_pretrained.pth"
+  fi
   if [[ ! -f "${vqvae_checkpoint}" ]]; then
     echo "[error] missing tokenizer checkpoint: ${vqvae_checkpoint}" >&2
     exit 1

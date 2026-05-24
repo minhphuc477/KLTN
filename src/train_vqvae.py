@@ -34,6 +34,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from src.core.vqvae import VectorQuantizer, create_vqvae, VQVAETrainer
 from src.config_system import merge_config, seed_everything
+from src.utils.data_loading import dataloader_runtime_kwargs
 from src.utils.model_capacity import count_parameters, log_capacity_guardrails
 from src.zelda_data.zelda_loader import create_dataloader
 from src.utils.checkpoint import (
@@ -478,9 +479,11 @@ def train_vqvae(args):
         train_dataset,
         batch_size=args.batch_size,
         sampler=sampler,
-        num_workers=int(getattr(args, "num_workers", 0)),
-        pin_memory=bool(getattr(args, "pin_memory", torch.cuda.is_available())),
         drop_last=bool(getattr(args, "drop_last", True)),
+        **dataloader_runtime_kwargs(
+            num_workers=int(getattr(args, "num_workers", 0)),
+            pin_memory=bool(getattr(args, "pin_memory", torch.cuda.is_available())),
+        ),
     )
     eval_source = val_dataset if val_dataset is not None else train_dataset
     eval_split_name = "val" if val_dataset is not None else "train"
@@ -488,9 +491,11 @@ def train_vqvae(args):
         eval_source,
         batch_size=args.batch_size,
         shuffle=False,
-        num_workers=int(getattr(args, "num_workers", 0)),
-        pin_memory=bool(getattr(args, "pin_memory", torch.cuda.is_available())),
         drop_last=False,
+        **dataloader_runtime_kwargs(
+            num_workers=int(getattr(args, "num_workers", 0)),
+            pin_memory=bool(getattr(args, "pin_memory", torch.cuda.is_available())),
+        ),
     )
     logger.info(f"Effective samples/epoch: {effective_size}, "
                 f"batches/epoch: {len(dataloader)}")

@@ -54,6 +54,7 @@ from src.utils.checkpoint import (
     resolve_resume_checkpoint,
     write_checkpoint_metadata,
 )
+from src.utils.data_loading import dataloader_runtime_kwargs
 from src.utils.model_capacity import count_parameters, log_capacity_guardrails
 from src.zelda_data.zelda_loader import create_dataloader, graph_collate_fn
 from src.train_vqvae import split_dataset_for_vqvae_validation
@@ -530,10 +531,9 @@ def _create_masked_room_dataloaders(
         train_dataset,
         batch_size=config.batch_size,
         shuffle=config.shuffle_train,
-        num_workers=config.num_workers,
-        pin_memory=config.pin_memory,
         drop_last=config.drop_last,
         collate_fn=graph_collate_fn,
+        **dataloader_runtime_kwargs(num_workers=config.num_workers, pin_memory=config.pin_memory),
     )
     eval_source = val_dataset if val_dataset is not None else train_dataset
     eval_split_name = "val" if val_dataset is not None else "train"
@@ -541,10 +541,9 @@ def _create_masked_room_dataloaders(
         eval_source,
         batch_size=config.batch_size,
         shuffle=False,
-        num_workers=config.num_workers,
-        pin_memory=config.pin_memory,
         drop_last=False,
         collate_fn=graph_collate_fn,
+        **dataloader_runtime_kwargs(num_workers=config.num_workers, pin_memory=config.pin_memory),
     )
     return train_loader, val_loader, eval_split_name, len(train_dataset), len(eval_source)
 

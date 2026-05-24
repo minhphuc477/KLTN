@@ -89,6 +89,7 @@ Current important defaults:
 | Canonical diffusion config | `model_channels=96`, `condition_hidden_dim=192`, `condition_gnn_type=gps` |
 | Canonical masked-room config | `hidden_dim=48`, `condition_gnn_type=gcn`, `room_topology_channels=54` |
 | Generation defaults | constrained decode `on`, deterministic marker overlay `on`, repair `on`, puzzle scaffold `on`, puzzle novelty search `on` |
+| Diffusion/fast-sampler training efficiency | frozen VQ-VAE latent cache `on`, `4096` max entries |
 
 Important distinction:
 
@@ -141,6 +142,24 @@ using one generic obstacle template.
 
 Current evidence still says diffusion is the only branch that should be treated
 as the production baseline.
+
+## Model-Block Efficiency Boundary
+
+The current training bottleneck is not only U-Net attention. The production
+path already uses PyTorch SDPA where available and has a linear graph-attention
+option for larger graph contexts. On this Zelda corpus, the more concrete
+repeat cost is frozen Block-II encoding inside downstream training:
+
+- Block IV diffusion revisits the same room maps for many epochs.
+- Block IV-B fast-sampler distillation reuses `DiffusionTrainer` as its frozen
+  teacher bundle, so it inherits the same tokenizer path.
+- teacher-forced neighbor maps also pass through the frozen VQ-VAE.
+
+The code now caches frozen VQ-VAE latents during downstream training. This does
+not cache trainable Block-III graph conditioning, LogicNet predicted-latent
+losses, or Block-VI repair, because those either need gradients, depend on
+runtime choices, or are correctness checks rather than repeated frozen
+preprocessing.
 
 ## Learned Stage Semantics
 
