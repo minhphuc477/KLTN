@@ -4,7 +4,9 @@ from types import SimpleNamespace
 
 from scripts.run_conditioning_logicnet_repair_ablation import (
     build_experiment_matrix,
+    build_logic_delta_rows,
     summarize_rows,
+    validate_execute_checkpoints,
     write_plan,
 )
 
@@ -44,6 +46,61 @@ def test_conditioning_logicnet_summary_separates_pre_post_validity():
     assert summary[0]["pre_oracle_valid_rate"] == 0.0
     assert summary[0]["post_oracle_valid_rate"] == 1.0
     assert summary[0]["repair_count_mean"] == 2.0
+
+
+def test_conditioning_logicnet_delta_rows_are_paired_by_seed_condition_and_repair():
+    rows = [
+        {
+            "variant": "full__repair_on__logic_off",
+            "conditioning": "full",
+            "repair_enabled": True,
+            "logic_enabled": False,
+            "seed": 7,
+            "pre_oracle_solved": False,
+            "post_oracle_solved": True,
+            "post_readability_score": 0.50,
+            "logicnet_dungeon_solvability": 0.40,
+        },
+        {
+            "variant": "full__repair_on__logic_on",
+            "conditioning": "full",
+            "repair_enabled": True,
+            "logic_enabled": True,
+            "seed": 7,
+            "pre_oracle_solved": True,
+            "post_oracle_solved": True,
+            "post_readability_score": 0.75,
+            "logicnet_dungeon_solvability": 0.90,
+        },
+    ]
+
+    deltas = build_logic_delta_rows(rows)
+
+    assert len(deltas) == 1
+    assert deltas[0]["pre_oracle_solved_delta_on_minus_off"] == 1.0
+    assert deltas[0]["post_readability_score_delta_on_minus_off"] == 0.25
+    assert deltas[0]["logicnet_dungeon_solvability_delta_on_minus_off"] == 0.5
+
+
+def test_conditioning_logicnet_execute_requires_checkpoints_unless_explicitly_allowed():
+    variants = build_experiment_matrix()
+
+    try:
+        validate_execute_checkpoints(
+            {"vqvae_checkpoint": None, "diffusion_checkpoint": None, "logic_net_checkpoint": None},
+            variants,
+        )
+    except FileNotFoundError as exc:
+        assert "Missing" in str(exc)
+        assert "vqvae_checkpoint" in str(exc)
+    else:
+        raise AssertionError("Missing checkpoints should fail execute validation")
+
+    validate_execute_checkpoints(
+        {"vqvae_checkpoint": None, "diffusion_checkpoint": None, "logic_net_checkpoint": None},
+        variants,
+        allow_random_fallback=True,
+    )
 
 
 def test_conditioning_logicnet_plan_is_plan_only(tmp_path):

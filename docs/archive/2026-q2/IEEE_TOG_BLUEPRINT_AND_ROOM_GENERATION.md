@@ -33,7 +33,7 @@ Suggested publications to cite:
 - Fontaine et al. (2020), CMA-ME improvements for QD.
 
 Repo evidence summary already compiled in:
-- [docs/SOTA_COMPARISON_AND_BENCHMARKS.md](SOTA_COMPARISON_AND_BENCHMARKS.md)
+- [docs/SOTA_COMPARISON_AND_BENCHMARKS.md](../../SOTA_COMPARISON_AND_BENCHMARKS.md)
 
 ### 3. Proposed Architecture (Method)
 
@@ -127,7 +127,7 @@ Conceptual output tensor shape is room-height x room-width x vocabulary-size for
 
 ## 3) Practical Submission Checklist
 
-- Fix manuscript to a single canonical architecture story from [docs/INDEX.md](INDEX.md).
-- Use one benchmark protocol and report template from [docs/SOTA_COMPARISON_AND_BENCHMARKS.md](SOTA_COMPARISON_AND_BENCHMARKS.md).
+- Fix manuscript to a single canonical architecture story from [docs/INDEX.md](../../INDEX.md).
+- Use one benchmark protocol and report template from [docs/SOTA_COMPARISON_AND_BENCHMARKS.md](../../SOTA_COMPARISON_AND_BENCHMARKS.md).
 - Include ablation table + expressive range figure + robustness probe table.
 - Explicitly separate deterministic guarantees from learned style priors in claims.

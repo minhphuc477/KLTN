@@ -1759,8 +1759,9 @@ def convert_dungeon_to_dungeondata(dungeon: Dungeon) -> DungeonData:
 if __name__ == "__main__":
     import argparse
     logging.basicConfig(level=logging.INFO)
+    default_data_root = Path(__file__).resolve().parents[2] / "Data" / "The Legend of Zelda"
     p = argparse.ArgumentParser()
-    p.add_argument("--data-root", default=r"C:\Users\MPhuc\Desktop\KLTN\Data\The Legend of Zelda")
+    p.add_argument("--data-root", default=str(default_data_root))
     p.add_argument("--no-variants", action="store_true", help="Only run variant 1")
     args = p.parse_args()
     logger.info("Testing dungeons at %s", args.data_root)

@@ -9,13 +9,13 @@ that used:
 
 Run directory:
 
-- [outputs/zelda_hmolqd_downstream_codebook512_puzzle_subtype_v1](../outputs/zelda_hmolqd_downstream_codebook512_puzzle_subtype_v1)
+- `outputs/zelda_hmolqd_downstream_codebook512_puzzle_subtype_v1`
 
 Primary final exports:
 
-- [manual compare v2 summary](../outputs/zelda_hmolqd_downstream_codebook512_puzzle_subtype_v1/protocol_manual_compare_default_v2/summary.json)
-- [manual compare v2 report](../outputs/zelda_hmolqd_downstream_codebook512_puzzle_subtype_v1/protocol_manual_compare_default_v2/report.md)
-- [fixed-graph audit v2 summary](../outputs/zelda_hmolqd_downstream_codebook512_puzzle_subtype_v1/protocol_ablation_hybrid_default_v2/summary.json)
+- `outputs/zelda_hmolqd_downstream_codebook512_puzzle_subtype_v1/protocol_manual_compare_default_v2/summary.json`
+- `outputs/zelda_hmolqd_downstream_codebook512_puzzle_subtype_v1/protocol_manual_compare_default_v2/report.md`
+- `outputs/zelda_hmolqd_downstream_codebook512_puzzle_subtype_v1/protocol_ablation_hybrid_default_v2/summary.json`
 
 ## Protocol Performed
 

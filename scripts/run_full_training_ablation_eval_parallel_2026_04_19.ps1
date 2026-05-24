@@ -1,5 +1,5 @@
 param(
-    [string]$RepoRoot = "F:\KLTN",
+    [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path,
     [string]$GpuIds = "0,1",
     [int]$VqvaeParallelJobs = 6,
     [string]$CurrentOutputFolder = "outputs\zelda_hmolqd_downstream_stageconditioned_semantics_v2",

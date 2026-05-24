@@ -23,8 +23,10 @@ Important note:
 - this document explains the `design rationale`
 - [`CURRENT_ARCHITECTURE.md`](CURRENT_ARCHITECTURE.md) owns the exact live
   implementation snapshot
-- the latest downstream experimental result is in
-  [`DOWNSTREAM_CODEBOOK512_PUZZLE_SUBTYPE_PROTOCOL_RESULTS_2026_04_15.md`](DOWNSTREAM_CODEBOOK512_PUZZLE_SUBTYPE_PROTOCOL_RESULTS_2026_04_15.md)
+- the latest VQ-VAE-2, LogicNet, repair, and ablation protocol is in
+  [`VQVAE2_LOGICNET_REPAIR_ABLATION_PROTOCOL_2026_05_23.md`](VQVAE2_LOGICNET_REPAIR_ABLATION_PROTOCOL_2026_05_23.md)
+- the older codebook512 downstream result snapshot is archived at
+  [`archive/2026-q2/DOWNSTREAM_CODEBOOK512_PUZZLE_SUBTYPE_PROTOCOL_RESULTS_2026_04_15.md`](archive/2026-q2/DOWNSTREAM_CODEBOOK512_PUZZLE_SUBTYPE_PROTOCOL_RESULTS_2026_04_15.md)
 - the canonical YAML still keeps a conservative `codebook_size=256`, while the
   latest downstream experiment used an explicit external `codebook512`
   checkpoint
@@ -34,8 +36,8 @@ It should be read together with:
 
 - [`CURRENT_ARCHITECTURE.md`](CURRENT_ARCHITECTURE.md)
 - [`BLOCK_IO_REFERENCE.md`](BLOCK_IO_REFERENCE.md)
-- [`ARCHITECTURE_RESEARCH_AUDIT_2026_03_31.md`](ARCHITECTURE_RESEARCH_AUDIT_2026_03_31.md)
-- [`ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md`](ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md)
+- [`archive/2026-q2/ARCHITECTURE_RESEARCH_AUDIT_2026_03_31.md`](archive/2026-q2/ARCHITECTURE_RESEARCH_AUDIT_2026_03_31.md)
+- [`archive/2026-q2/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md`](archive/2026-q2/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md)
 
 ## 1. Executive Summary
 
@@ -49,8 +51,10 @@ It is not a single monolithic network. Instead, it is a staged architecture:
 3. `Block III` encodes graph context and local room context.
 4. `Block IV` generates room latents with a diffusion teacher.
 5. `Block IV-B` distills a faster few-step sampler from the diffusion teacher.
-6. `Block V` provides a discrete masked-room alternative branch.
-7. `Block VI` repairs invalid structure and overlays graph-owned semantics.
+6. The masked-room branch provides a discrete auxiliary room generator.
+7. `Block V` provides LogicNet guidance and differentiable validity pressure.
+8. `Block VI` repairs invalid structure and overlays graph-owned semantics.
+9. `Block VII` evaluates solvability, behavior, and quality-diversity metrics.
 
 This factorization was chosen because the Zelda corpus is small. Literature on
 structured generation and game-PCG consistently suggests that when data is
@@ -131,11 +135,13 @@ flowchart TD
     B --> C[Block III: dual-stream condition encoder]
     C --> D[Block IV: latent diffusion teacher]
     D --> E[Block IV-B: fast sampler distillation]
-    C --> F[Block V: masked-room branch]
+    C --> F[Auxiliary masked-room branch]
+    D --> L[Block V: LogicNet guidance]
     D --> G[Block VI: symbolic repair and semantic overlay]
     E --> G
     F --> G
     G --> H[stitched dungeon render/export]
+    H --> I[Block VII: validation and QD metrics]
 ```
 
 ### 3.2 Canonical blocks and responsibilities
@@ -147,8 +153,10 @@ flowchart TD
 | Block III | [`src/core/condition_encoder.py`](../src/core/condition_encoder.py) | Encode graph context, local context, and reference rooms | conditioning tokens/features |
 | Block IV | [`src/core/latent_diffusion.py`](../src/core/latent_diffusion.py) | Generate room latents under graph/topology conditioning | latent room sample |
 | Block IV-B | [`src/train_lcm.py`](../src/train_lcm.py), [`src/optimization/lcm_lora.py`](../src/optimization/lcm_lora.py) | Distill a few-step fast sampler from the teacher | LoRA student adapters |
-| Block V | [`src/core/discrete_masked_model.py`](../src/core/discrete_masked_model.py) | Parallel discrete alternative room generator | discrete room tokens |
+| Auxiliary | [`src/core/discrete_masked_model.py`](../src/core/discrete_masked_model.py), [`src/train_masked_room.py`](../src/train_masked_room.py) | Parallel discrete alternative room generator | discrete room tokens |
+| Block V | [`src/core/logic_net.py`](../src/core/logic_net.py), [`src/core/latent_diffusion.py`](../src/core/latent_diffusion.py) | Differentiable logic guidance and validity pressure | logic losses / guidance gradients |
 | Block VI | [`src/pipeline/dungeon_pipeline.py`](../src/pipeline/dungeon_pipeline.py), `src/pipeline/room_stitching.py` | Repair, marker placement, stitching, export | full dungeon grid |
+| Block VII | `src/evaluation/*`, `src/simulation/*` | Mechanical validation, P-CBS, and QD metrics | reports / metrics |
 
 ## 4. Detailed Block-By-Block Analysis
 
@@ -448,7 +456,7 @@ Because a speed-up layer should not be allowed to silently lower overall system
 quality when the teacher is available. The fallback is therefore a practical
 quality guard, not a theoretical ideal.
 
-## 4.6 Block V - Masked-Room Branch
+## 4.6 Auxiliary Branch - Masked-Room Generator
 
 ### What it contains
 

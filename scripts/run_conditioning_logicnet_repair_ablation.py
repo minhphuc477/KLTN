@@ -39,6 +39,24 @@ from src.pipeline.dungeon_pipeline import (  # noqa: E402
 from src.zelda_data.vglc_utils import filter_virtual_nodes  # noqa: E402
 
 
+REQUIRED_CHECKPOINT_KEYS = ("vqvae_checkpoint", "diffusion_checkpoint")
+LOGIC_DELTA_METRICS = (
+    "pre_oracle_solved",
+    "post_oracle_solved",
+    "pre_pcbs_solved",
+    "post_pcbs_solved",
+    "pre_readability_score",
+    "post_readability_score",
+    "pre_bounded_rationality_index",
+    "post_bounded_rationality_index",
+    "pre_cognitive_effort_index",
+    "post_cognitive_effort_index",
+    "logicnet_dungeon_solvability",
+    "logicnet_room_solvability",
+    "generation_time_sec",
+)
+
+
 @dataclass(frozen=True)
 class VariantSpec:
     name: str
@@ -85,6 +103,21 @@ def _existing_or_none(path: Optional[str | Path]) -> Optional[str]:
     return str(candidate) if candidate.exists() else None
 
 
+def _json_ready(value: Any) -> Any:
+    """Convert numpy/scalar/path values into JSON-safe Python primitives."""
+    if isinstance(value, dict):
+        return {str(key): _json_ready(inner) for key, inner in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_ready(item) for item in value]
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    return value
+
+
 def resolve_checkpoints(args: argparse.Namespace, resolved_config: Mapping[str, Any]) -> Dict[str, Optional[str]]:
     output_dir = Path(str(resolved_config["runtime"]["output_dir"]))
     vqvae = (
@@ -99,6 +132,27 @@ def resolve_checkpoints(args: argparse.Namespace, resolved_config: Mapping[str, 
         "diffusion_checkpoint": _existing_or_none(diffusion),
         "logic_net_checkpoint": _existing_or_none(logic),
     }
+
+
+def validate_execute_checkpoints(
+    checkpoints: Mapping[str, Optional[str]],
+    variants: Sequence[VariantSpec],
+    *,
+    allow_random_fallback: bool = False,
+) -> None:
+    """Prevent accidental expensive runs with randomly initialized components."""
+    if bool(allow_random_fallback):
+        return
+    required = list(REQUIRED_CHECKPOINT_KEYS)
+    if any(variant.logic_enabled for variant in variants):
+        required.append("logic_net_checkpoint")
+    missing = [key for key in required if not checkpoints.get(key)]
+    if missing:
+        details = ", ".join(missing)
+        raise FileNotFoundError(
+            "Cannot execute conditioning/LogicNet/repair ablation without trained checkpoints. "
+            f"Missing: {details}. Pass explicit checkpoint paths or use --allow-random-fallback for a code-only smoke run."
+        )
 
 
 def pipeline_kwargs_for_variant(
@@ -151,6 +205,11 @@ def _flatten_eval(prefix: str, result: Mapping[str, Any]) -> Dict[str, Any]:
         f"{prefix}_cognitive_effort_index": float(comparison.get("cognitive_effort_index", 0.0) or 0.0),
         f"{prefix}_confusion_ratio_vs_oracle": comparison.get("confusion_ratio_vs_oracle"),
         f"{prefix}_oracle_pcbs_path_delta": comparison.get("oracle_pcbs_path_delta"),
+        f"{prefix}_pcbs_outcome_class": str(comparison.get("pcbs_outcome_class", "")),
+        f"{prefix}_pcbs_calibration_bucket": str(comparison.get("pcbs_calibration_bucket", "")),
+        f"{prefix}_pcbs_failure_driver": str(comparison.get("pcbs_failure_driver", "")),
+        f"{prefix}_pcbs_dominant_pressure": str(comparison.get("pcbs_dominant_pressure", "")),
+        f"{prefix}_pcbs_dominant_pressure_value": comparison.get("pcbs_dominant_pressure_value"),
     }
 
 
@@ -184,7 +243,8 @@ def _pre_repair_result(
         )
     layout = pipeline.stitch_room_layout(pre_rooms, physical_graph)
     pre_grid = np.asarray(layout.dungeon_grid, dtype=np.int32)
-    return replace(result, dungeon_grid=pre_grid, rooms=pre_rooms, stitched_layout=layout), pre_grid
+    # Avoid leaking post-repair room puzzle metadata into the pre-repair oracle.
+    return replace(result, dungeon_grid=pre_grid, rooms=pre_rooms, stitched_layout=layout, puzzle_metadata={}), pre_grid
 
 
 def _row_for_result(
@@ -207,7 +267,7 @@ def _row_for_result(
         "logic_enabled": bool(variant.logic_enabled),
         "seed": int(seed),
         "notes": variant.notes,
-        "generation_time_sec": float(result.generation_time),
+        "generation_time_sec": float(result.metrics.get("ablation_wall_time_sec", result.generation_time) or 0.0),
         "repair_count": int(result.metrics.get("repair_count", 0) or 0),
         "repair_time_sec": float(result.metrics.get("repair_time_sec", 0.0) or 0.0),
         "total_tiles_repaired": int(result.metrics.get("total_tiles_repaired", 0) or 0),
@@ -229,6 +289,9 @@ def _row_for_result(
 
 def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    if not rows:
+        path.write_text("", encoding="utf-8")
+        return
     keys = sorted({str(key) for row in rows for key in row.keys()})
     with path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=keys)
@@ -281,6 +344,43 @@ def summarize_rows(rows: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
             }
         )
     return summary
+
+
+def build_logic_delta_rows(rows: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+    """Build paired LogicNet ON-OFF deltas for identical seed/condition/repair rows."""
+    groups: Dict[Tuple[str, bool, int], Dict[bool, Mapping[str, Any]]] = {}
+    for row in rows:
+        key = (
+            str(row.get("conditioning")),
+            bool(row.get("repair_enabled")),
+            int(row.get("seed", 0) or 0),
+        )
+        groups.setdefault(key, {})[bool(row.get("logic_enabled"))] = row
+
+    out: List[Dict[str, Any]] = []
+    for (conditioning, repair_enabled, seed), paired in sorted(groups.items()):
+        if True not in paired or False not in paired:
+            continue
+        on_row = paired[True]
+        off_row = paired[False]
+        delta: Dict[str, Any] = {
+            "conditioning": conditioning,
+            "repair_enabled": bool(repair_enabled),
+            "seed": int(seed),
+            "logic_on_variant": str(on_row.get("variant", "")),
+            "logic_off_variant": str(off_row.get("variant", "")),
+        }
+        for metric in LOGIC_DELTA_METRICS:
+            try:
+                on_value = float(on_row.get(metric, 0.0) or 0.0)
+                off_value = float(off_row.get(metric, 0.0) or 0.0)
+            except (TypeError, ValueError):
+                continue
+            delta[f"{metric}_logic_on"] = on_value
+            delta[f"{metric}_logic_off"] = off_value
+            delta[f"{metric}_delta_on_minus_off"] = on_value - off_value
+        out.append(delta)
+    return out
 
 
 def _save_visuals(output_dir: Path, rows: Sequence[Mapping[str, Any]], grids: Sequence[Tuple[str, np.ndarray]], *, tile_px: int) -> None:
@@ -345,6 +445,7 @@ def write_plan(
             "conditioning_logicnet_repair_rows.csv",
             "conditioning_logicnet_repair_summary.csv",
             "conditioning_logicnet_repair_payload.json",
+            "conditioning_logicnet_repair_logic_deltas.csv",
             "visual_sheet.png",
             "visual_sheet_manifest.json",
         ],
@@ -381,17 +482,28 @@ def write_plan(
     (output_dir / "conditioning_logicnet_repair_plan.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def execute_protocol(args: argparse.Namespace, variants: Sequence[VariantSpec]) -> Tuple[List[Dict[str, Any]], List[Tuple[str, np.ndarray]]]:
-    resolved = merge_config(yaml_path=str(args.config))
-    checkpoints = resolve_checkpoints(args, resolved)
+def execute_protocol(
+    args: argparse.Namespace,
+    variants: Sequence[VariantSpec],
+    *,
+    resolved_config: Optional[Mapping[str, Any]] = None,
+    checkpoints: Optional[Mapping[str, Optional[str]]] = None,
+) -> Tuple[List[Dict[str, Any]], List[Tuple[str, np.ndarray]]]:
+    resolved = dict(resolved_config or merge_config(yaml_path=str(args.config)))
+    resolved_checkpoints = dict(checkpoints or resolve_checkpoints(args, resolved))
+    validate_execute_checkpoints(
+        resolved_checkpoints,
+        variants,
+        allow_random_fallback=bool(getattr(args, "allow_random_fallback", False)),
+    )
     topology_kwargs = topology_generation_kwargs_from_resolved_config(resolved)
     rows: List[Dict[str, Any]] = []
     visual_grids: List[Tuple[str, np.ndarray]] = []
     for seed in _parse_seeds(args.seeds):
         for variant in variants:
-            kwargs = pipeline_kwargs_for_variant(resolved, checkpoints, variant)
+            kwargs = pipeline_kwargs_for_variant(resolved, resolved_checkpoints, variant)
             pipeline = NeuralSymbolicDungeonPipeline(device=str(args.device), **kwargs)
-            started = time.time()
+            started = time.perf_counter()
             result = pipeline.generate_dungeon(
                 generate_topology=True,
                 seed=int(seed),
@@ -406,7 +518,7 @@ def execute_protocol(args: argparse.Namespace, variants: Sequence[VariantSpec]) 
                 batch_independent_rooms=not bool(args.disable_batch_independent_rooms),
                 max_batch_size=int(args.max_batch_size),
             )
-            result.metrics["ablation_wall_time_sec"] = float(time.time() - started)
+            result.metrics["ablation_wall_time_sec"] = float(time.perf_counter() - started)
             pre_result, pre_grid = _pre_repair_result(pipeline, result)
             pre_eval, pre_error = _safe_evaluate(
                 pre_result,
@@ -460,7 +572,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--timeout-pcbs", type=int, default=50000)
     parser.add_argument("--max-batch-size", type=int, default=8)
     parser.add_argument("--disable-batch-independent-rooms", action="store_true")
-    parser.add_argument("--write-visual-sheet", action="store_true", default=True)
+    parser.add_argument(
+        "--write-visual-sheet",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Write pre/post PNG tiles and a combined visual sheet.",
+    )
+    parser.add_argument(
+        "--allow-random-fallback",
+        action="store_true",
+        help="Allow execution when trained checkpoints are missing. Intended only for code-path smoke tests.",
+    )
     parser.add_argument("--tile-px", type=int, default=8)
     parser.add_argument("--quick", action="store_true", help="Plan or execute a one-seed smoke subset.")
     return parser.parse_args()
@@ -486,17 +608,23 @@ def main() -> int:
         print(f"Wrote conditioning/LogicNet/repair ablation plan to {args.output}")
         return 0
 
-    rows, visual_grids = execute_protocol(args, variants)
+    rows, visual_grids = execute_protocol(args, variants, resolved_config=resolved, checkpoints=checkpoints)
     summary = summarize_rows(rows)
+    logic_deltas = build_logic_delta_rows(rows)
     _write_csv(args.output / "conditioning_logicnet_repair_rows.csv", rows)
     _write_csv(args.output / "conditioning_logicnet_repair_summary.csv", summary)
+    _write_csv(args.output / "conditioning_logicnet_repair_logic_deltas.csv", logic_deltas)
     payload = {
         "rows": rows,
         "summary": summary,
+        "logic_deltas": logic_deltas,
         "variants": [asdict(variant) for variant in variants],
         "checkpoints": checkpoints,
     }
-    (args.output / "conditioning_logicnet_repair_payload.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    (args.output / "conditioning_logicnet_repair_payload.json").write_text(
+        json.dumps(_json_ready(payload), indent=2),
+        encoding="utf-8",
+    )
     if bool(args.write_visual_sheet):
         _save_visuals(args.output, rows, visual_grids, tile_px=int(args.tile_px))
     print(f"Wrote conditioning/LogicNet/repair ablation outputs to {args.output}")

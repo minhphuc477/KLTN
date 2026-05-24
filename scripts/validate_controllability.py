@@ -7,7 +7,7 @@ This addresses the thesis defense concern: "How do you prove users actually cont
 Target: Pearson r > 0.7 for "responsive" system classification.
 
 Usage:
-    python scripts/test_controllability.py --num-samples 20 --output results/controllability
+    python scripts/validate_controllability.py --num-samples 20 --output results/controllability
 """
 
 import argparse
@@ -311,7 +311,7 @@ class ControllabilityTest:
         # Calculate overall correlation
         overall_r, _ = self._safe_pearson(all_targets, all_actuals)
         overall_r2 = overall_r ** 2 if not math.isnan(overall_r) else float('nan')
-        ax.text(0.05, 0.95, f'Overall r = {overall_r:.3f}\nrÂ² = {overall_r2:.3f}', 
+        ax.text(0.05, 0.95, f'Overall r = {overall_r:.3f}\nr^2 = {overall_r2:.3f}', 
                 transform=ax.transAxes, verticalalignment='top',
                 bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
         

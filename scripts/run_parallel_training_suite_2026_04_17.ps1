@@ -13,7 +13,7 @@ param(
         "puzzle-cookbook-aux"
     )]
     [string]$Phase = "vqvae",
-    [string]$RepoRoot = "F:\KLTN",
+    [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path,
     [string]$GpuIds = "0",
     [int]$CpuThreads = 4,
     [int]$MaxParallelJobs = 0,

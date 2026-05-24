@@ -68,7 +68,7 @@ The older `examples\gui_demo_validated_level.txt` is still useful as a quick har
 From the repository root:
 
 ```powershell
-cd F:\KLTN
+cd <repo root>
 python gui_runner.py --advanced --load-txt examples\gui_demo_hard_real_model_level.txt --solver-algorithm 7 --solver-timeout 900
 ```
 
@@ -100,7 +100,7 @@ Use this order when presenting so the demo shows the pipeline rather than a bori
 Use this when you want to show the model producing a new level during the demo:
 
 ```powershell
-cd F:\KLTN
+cd <repo root>
 $env:KLTN_AI_SEED="20260405"
 python gui_runner.py --advanced
 ```

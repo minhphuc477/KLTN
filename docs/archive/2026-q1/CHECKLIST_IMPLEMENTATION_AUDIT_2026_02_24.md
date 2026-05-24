@@ -34,7 +34,7 @@ This audit maps requested items to current code status after the latest implemen
 | Item | Status | Evidence |
 |---|---|---|
 | Integrate with fitness function evaluation | Implemented | Genome-level fitness + optional per-rule marginal credit decomposition are both available (`src/generation/evolutionary_director.py`, `scripts/analyze_rule_marginal_credit.py`). |
-| Add visualization dashboard (tension curves, pacing graphs) | Partial | Controllability/curve plotting scripts exist (`scripts/test_controllability.py:220`), but no unified interactive dashboard module. |
+| Add visualization dashboard (tension curves, pacing graphs) | Partial | Controllability/curve plotting scripts exist (`scripts/validate_controllability.py`), but no unified interactive dashboard module. |
 | Implement rule conflict detection system | Implemented | `scripts/detect_rule_conflicts.py:66`. |
 | Create difficulty progression analysis | Implemented | `src/evaluation/difficulty_calculator.py:263` and `scripts/validate_difficulty_and_style.py:229`. |
 | Add playtest data collection hooks | Implemented | `src/utils/playtest_telemetry.py:52`, `src/visualization/replay_engine.py:255`. |

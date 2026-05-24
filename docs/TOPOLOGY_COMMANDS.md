@@ -7,11 +7,7 @@ Canonical command guide for:
 3. rerunning one fixed topology across multiple seeds,
 4. exporting one generated topology through the trained room generators.
 
-All commands assume the project root is:
-
-```powershell
-F:\KLTN
-```
+Run all commands from the repository root.
 
 ## 1. Block I topology graph galleries
 

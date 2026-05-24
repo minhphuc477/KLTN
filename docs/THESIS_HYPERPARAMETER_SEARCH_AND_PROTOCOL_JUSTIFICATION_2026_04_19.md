@@ -12,8 +12,8 @@ search strategy, and evaluation protocol used by the current H-MOLQD stack:
 
 The local empirical evidence currently available is summarized in:
 
-- [`results/thesis_hparam_evidence_2026_04_19.md`](../results/thesis_hparam_evidence_2026_04_19.md)
-- [`results/thesis_hparam_evidence_2026_04_19.json`](../results/thesis_hparam_evidence_2026_04_19.json)
+- `results/thesis_hparam_evidence_2026_04_19.md`
+- `results/thesis_hparam_evidence_2026_04_19.json`
 
 ## Strict Status Before Writing Chapter 4
 

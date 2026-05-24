@@ -1,6 +1,6 @@
 # Current Architecture
 
-Last updated: 2026-04-19
+Last updated: 2026-05-24
 
 This is the concise, code-aligned description of the current stack. Use this
 file as the canonical architecture reference. Older deep-dive notes remain in
@@ -85,7 +85,7 @@ Current important defaults:
 | Topology anchor policy | `2026-04-11.semantic_anchor_v8_puzzle_subtype_channels` |
 | Room-topology channels | `54` |
 | Canonical VQ-VAE YAML default | `hidden_dim=96`, `codebook_size=256`, `latent_dim=64` |
-| Strongest tested tokenizer checkpoint | `codebook512` |
+| Best-tested tokenizer by held-out VQ-VAE validation loss | `codebook256` |
 | Canonical diffusion config | `model_channels=96`, `condition_hidden_dim=192`, `condition_gnn_type=gps` |
 | Canonical masked-room config | `hidden_dim=48`, `condition_gnn_type=gcn`, `room_topology_channels=54` |
 | Generation defaults | constrained decode `on`, deterministic marker overlay `on`, repair `on`, puzzle scaffold `on`, puzzle novelty search `on` |
@@ -93,13 +93,13 @@ Current important defaults:
 Important distinction:
 
 - the `canonical YAML` still uses a `256`-entry VQ-VAE
-- the latest verified downstream experimental branch used an external
+- the latest verified downstream experimental branch used an explicit external
   `codebook512` VQ-VAE checkpoint during downstream training/inference
 
 That distinction is intentional. The codebase supports both:
 
 - stable canonical defaults in `configs/zelda_hmolqd.yaml`
-- stronger experimental branches via explicit checkpoint handoff
+- high-capacity downstream comparison branches via explicit checkpoint handoff
 
 ## Conditioned Semantics
 
@@ -242,17 +242,16 @@ not by private hardcoded script defaults.
   [`CANONICAL_MODEL_RATIONALE_ABLATION_AND_COMPLEXITY_GUIDE.md`](CANONICAL_MODEL_RATIONALE_ABLATION_AND_COMPLEXITY_GUIDE.md)
 - Topology commands and manual graph workflows:
   [`TOPOLOGY_COMMANDS.md`](TOPOLOGY_COMMANDS.md)
-- Latest downstream protocol judgment:
-  [`DOWNSTREAM_CODEBOOK512_PUZZLE_SUBTYPE_PROTOCOL_RESULTS_2026_04_15.md`](DOWNSTREAM_CODEBOOK512_PUZZLE_SUBTYPE_PROTOCOL_RESULTS_2026_04_15.md)
+- Current VQ-VAE-2, LogicNet, repair, and ablation protocol:
+  [`VQVAE2_LOGICNET_REPAIR_ABLATION_PROTOCOL_2026_05_23.md`](VQVAE2_LOGICNET_REPAIR_ABLATION_PROTOCOL_2026_05_23.md)
 - Current artifact / checkpoint status and retraining alerts:
   [`ARTIFACT_AND_CHECKPOINT_STATUS_2026_04_18.md`](ARTIFACT_AND_CHECKPOINT_STATUS_2026_04_18.md)
 - Final production/finalization review and remaining required runs:
   [`PRODUCTION_FINALIZATION_REVIEW_2026_04_18.md`](PRODUCTION_FINALIZATION_REVIEW_2026_04_18.md)
 - Current chat handoff context:
   [`NEXT_CHAT_CONTEXT_2026_04_18.md`](NEXT_CHAT_CONTEXT_2026_04_18.md)
-- Auxiliary-branch / neural-semantics research decision:
-  [`AUXILIARY_BRANCH_AND_NEURAL_SEMANTICS_AUDIT_2026_04_15.md`](AUXILIARY_BRANCH_AND_NEURAL_SEMANTICS_AUDIT_2026_04_15.md)
-- Playability-evaluation / CBS research note:
-  [`PLAYABILITY_EVALUATION_AND_CBS_RESEARCH_2026_04_16.md`](PLAYABILITY_EVALUATION_AND_CBS_RESEARCH_2026_04_16.md)
+- Archived auxiliary/neural-semantics and playability provenance notes:
+  [`archive/2026-q2/AUXILIARY_BRANCH_AND_NEURAL_SEMANTICS_AUDIT_2026_04_15.md`](archive/2026-q2/AUXILIARY_BRANCH_AND_NEURAL_SEMANTICS_AUDIT_2026_04_15.md),
+  [`archive/2026-q2/PLAYABILITY_EVALUATION_AND_CBS_RESEARCH_2026_04_16.md`](archive/2026-q2/PLAYABILITY_EVALUATION_AND_CBS_RESEARCH_2026_04_16.md)
 - Latest VQ-VAE audit:
   [`VQVAE_RESEARCH_AUDIT_2026_04_10.md`](VQVAE_RESEARCH_AUDIT_2026_04_10.md)

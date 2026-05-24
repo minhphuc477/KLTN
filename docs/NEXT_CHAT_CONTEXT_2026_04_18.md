@@ -5,7 +5,7 @@ current `H-MOLQD` state.
 
 ## Project
 
-Repo root: `F:\KLTN`
+Repo root: current checkout root.
 
 Goal: finalize a thesis-grade Zelda dungeon generator with:
 

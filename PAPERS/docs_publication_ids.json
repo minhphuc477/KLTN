@@ -1,4 +1,4 @@
-{
+﻿{
   "total_occurrences": 84,
   "unique_publication_ids": 35,
   "items": [
@@ -61,7 +61,7 @@
       "id": "1711.00937",
       "occurrences": [
         {
-          "file": "docs/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md",
+          "file": "docs/archive/2026-q2/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md",
           "line": 584
         },
         {
@@ -121,15 +121,15 @@
       "id": "1910.01603",
       "occurrences": [
         {
-          "file": "docs/ARCHITECTURE_RESEARCH_AUDIT_2026_03_31.md",
+          "file": "docs/archive/2026-q2/ARCHITECTURE_RESEARCH_AUDIT_2026_03_31.md",
           "line": 508
         },
         {
-          "file": "docs/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md",
+          "file": "docs/archive/2026-q2/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md",
           "line": 72
         },
         {
-          "file": "docs/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md",
+          "file": "docs/archive/2026-q2/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md",
           "line": 593
         },
         {
@@ -195,11 +195,11 @@
       "id": "2004.13204",
       "occurrences": [
         {
-          "file": "docs/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md",
+          "file": "docs/archive/2026-q2/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md",
           "line": 68
         },
         {
-          "file": "docs/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md",
+          "file": "docs/archive/2026-q2/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md",
           "line": 591
         },
         {
@@ -221,7 +221,7 @@
       "id": "2006.11239",
       "occurrences": [
         {
-          "file": "docs/ARCHITECTURE_RESEARCH_AUDIT_2026_03_31.md",
+          "file": "docs/archive/2026-q2/ARCHITECTURE_RESEARCH_AUDIT_2026_03_31.md",
           "line": 499
         },
         {
@@ -263,11 +263,11 @@
       "id": "2106.05234",
       "occurrences": [
         {
-          "file": "docs/ARCHITECTURE_RESEARCH_AUDIT_2026_03_31.md",
+          "file": "docs/archive/2026-q2/ARCHITECTURE_RESEARCH_AUDIT_2026_03_31.md",
           "line": 510
         },
         {
-          "file": "docs/TOPOLOGY_GRAPH_RESEARCH_AUDIT_2026_03_31.md",
+          "file": "docs/archive/2026-q2/TOPOLOGY_GRAPH_RESEARCH_AUDIT_2026_03_31.md",
           "line": 47
         }
       ]
@@ -277,11 +277,11 @@
       "id": "2112.10752",
       "occurrences": [
         {
-          "file": "docs/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md",
+          "file": "docs/archive/2026-q2/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md",
           "line": 52
         },
         {
-          "file": "docs/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md",
+          "file": "docs/archive/2026-q2/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md",
           "line": 585
         },
         {
@@ -299,11 +299,11 @@
       "id": "2202.04200",
       "occurrences": [
         {
-          "file": "docs/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md",
+          "file": "docs/archive/2026-q2/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md",
           "line": 64
         },
         {
-          "file": "docs/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md",
+          "file": "docs/archive/2026-q2/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md",
           "line": 589
         },
         {
@@ -321,11 +321,11 @@
       "id": "2205.12454",
       "occurrences": [
         {
-          "file": "docs/ARCHITECTURE_RESEARCH_AUDIT_DIFFUSION_CONDITIONING_ADDENDUM_2026_03_31.md",
+          "file": "docs/archive/2026-q2/ARCHITECTURE_RESEARCH_AUDIT_DIFFUSION_CONDITIONING_ADDENDUM_2026_03_31.md",
           "line": 328
         },
         {
-          "file": "docs/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md",
+          "file": "docs/archive/2026-q2/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md",
           "line": 590
         },
         {
@@ -337,7 +337,7 @@
           "line": 589
         },
         {
-          "file": "docs/TOPOLOGY_GRAPH_RESEARCH_AUDIT_2026_03_31.md",
+          "file": "docs/archive/2026-q2/TOPOLOGY_GRAPH_RESEARCH_AUDIT_2026_03_31.md",
           "line": 51
         }
       ]
@@ -347,11 +347,11 @@
       "id": "2207.12598",
       "occurrences": [
         {
-          "file": "docs/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md",
+          "file": "docs/archive/2026-q2/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md",
           "line": 55
         },
         {
-          "file": "docs/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md",
+          "file": "docs/archive/2026-q2/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md",
           "line": 586
         },
         {
@@ -365,7 +365,7 @@
       "id": "2209.14734",
       "occurrences": [
         {
-          "file": "docs/ARCHITECTURE_RESEARCH_AUDIT_DIFFUSION_CONDITIONING_ADDENDUM_2026_03_31.md",
+          "file": "docs/archive/2026-q2/ARCHITECTURE_RESEARCH_AUDIT_DIFFUSION_CONDITIONING_ADDENDUM_2026_03_31.md",
           "line": 330
         }
       ]
@@ -375,11 +375,11 @@
       "id": "2211.13287",
       "occurrences": [
         {
-          "file": "docs/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md",
+          "file": "docs/archive/2026-q2/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md",
           "line": 69
         },
         {
-          "file": "docs/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md",
+          "file": "docs/archive/2026-q2/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md",
           "line": 592
         },
         {
@@ -401,11 +401,11 @@
       "id": "2303.01469",
       "occurrences": [
         {
-          "file": "docs/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md",
+          "file": "docs/archive/2026-q2/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md",
           "line": 61
         },
         {
-          "file": "docs/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md",
+          "file": "docs/archive/2026-q2/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md",
           "line": 588
         }
       ]
@@ -429,11 +429,11 @@
       "id": "2303.09556",
       "occurrences": [
         {
-          "file": "docs/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md",
+          "file": "docs/archive/2026-q2/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md",
           "line": 58
         },
         {
-          "file": "docs/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md",
+          "file": "docs/archive/2026-q2/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md",
           "line": 587
         },
         {
@@ -495,11 +495,11 @@
       "id": "2507.00184",
       "occurrences": [
         {
-          "file": "docs/ARCHITECTURE_POSITIONING_AND_ATTENTION_NOTES_2026_04_02.md",
+          "file": "docs/archive/2026-q2/ARCHITECTURE_POSITIONING_AND_ATTENTION_NOTES_2026_04_02.md",
           "line": 16
         },
         {
-          "file": "docs/ARCHITECTURE_RESEARCH_AUDIT_DIFFUSION_CONDITIONING_ADDENDUM_2026_03_31.md",
+          "file": "docs/archive/2026-q2/ARCHITECTURE_RESEARCH_AUDIT_DIFFUSION_CONDITIONING_ADDENDUM_2026_03_31.md",
           "line": 322
         }
       ]
@@ -509,7 +509,7 @@
       "id": "10.1109/CVPR52688.2022.01103",
       "occurrences": [
         {
-          "file": "docs/ARCHITECTURE_RESEARCH_AUDIT_DIFFUSION_CONDITIONING_ADDENDUM_2026_03_31.md",
+          "file": "docs/archive/2026-q2/ARCHITECTURE_RESEARCH_AUDIT_DIFFUSION_CONDITIONING_ADDENDUM_2026_03_31.md",
           "line": 325
         }
       ]
@@ -543,7 +543,7 @@
       "id": "10.1609/aaai.v38i9.28865",
       "occurrences": [
         {
-          "file": "docs/ARCHITECTURE_RESEARCH_AUDIT_DIFFUSION_CONDITIONING_ADDENDUM_2026_03_31.md",
+          "file": "docs/archive/2026-q2/ARCHITECTURE_RESEARCH_AUDIT_DIFFUSION_CONDITIONING_ADDENDUM_2026_03_31.md",
           "line": 324
         }
       ]

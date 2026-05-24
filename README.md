@@ -263,7 +263,7 @@ Use this checklist to pre-empt common reviewer attacks with reproducible artifac
 
 ```bash
 # Attack 1 (Topology realism): verify cycle and soft-gate rules exist
-python scripts/test_grammar_rules.py
+python -m pytest tests/test_grammar_rules.py
 
 # Attack 2 (Evidence): run fixed-seed ablations and benchmark outputs
 python scripts/run_ablation_study.py --plan-only --core-only --output results/ablation_plan_preview
@@ -290,8 +290,9 @@ Expected evidence artifacts:
 - **Canonical Model Rationale**: `docs/CANONICAL_MODEL_RATIONALE_ABLATION_AND_COMPLEXITY_GUIDE.md`
 - **Claim Traceability**: `docs/TRACEABILITY_AND_CLAIM_VALIDATION.md`
 - **Architecture & Benchmarks**: `docs/SOTA_COMPARISON_AND_BENCHMARKS.md`
-- **Latest Downstream Protocol**: `docs/DOWNSTREAM_CODEBOOK512_PUZZLE_SUBTYPE_PROTOCOL_RESULTS_2026_04_15.md`
-- **Paper Blueprint + Room Block**: `docs/IEEE_TOG_BLUEPRINT_AND_ROOM_GENERATION.md`
+- **Full Training/Ablation Runbook**: `docs/FULL_TRAINING_ABLATION_AND_EVAL_COMMAND_BOOK_2026_04_18.md`
+- **VQ-VAE-2 / LogicNet / Repair Protocol**: `docs/VQVAE2_LOGICNET_REPAIR_ABLATION_PROTOCOL_2026_05_23.md`
+- **Kaggle Training Suite**: `docs/KAGGLE_T4_X2_TRAINING.md`
 - **Solver + GUI Reference**: `docs/SOLVERS_AND_GUI_REFERENCE.md`
 - **VGLC Compliance Guide**: `docs/VGLC_COMPLIANCE_GUIDE.md`
 - **Archived Snapshot Notes**: `docs/archive/README.md`

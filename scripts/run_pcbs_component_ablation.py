@@ -19,6 +19,7 @@ import json
 import math
 import sys
 import time
+from collections import Counter
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
@@ -28,7 +29,12 @@ import numpy as np
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.evaluation.pcbs_validation import prepare_dungeon_grid_for_validation
+from src.evaluation.pcbs_validation import (
+    classify_pcbs_outcome,
+    compute_pcbs_readability_metrics,
+    count_pcbs_puzzle_stall_steps,
+    prepare_dungeon_grid_for_validation,
+)
 from src.evaluation.search_benchmark_utils import confusion_ratio_vs_oracle, run_astar_oracle
 from src.simulation.cognitive_bounded_search import AgentPersona, CognitiveBoundedSearch, PersonaConfig
 from src.simulation.validator import ZeldaLogicEnv
@@ -95,8 +101,8 @@ def _build_markdown(summary: Dict[str, Any], *, persona: str) -> str:
     lines = [
         f"# P-CBS Component Ablation ({persona})",
         "",
-        "| Variant | Success % | Oracle-Cond. Success % | Oracle Solved | CGR | Confusion | Nav Entropy | Cog Load | Aha | Delib | Budget Exhaust | Peak Frustration | Focus Switches | Affordance Reactivations |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| Variant | Success % | Oracle-Cond. Success % | Oracle Solved | CGR | Readability | Effort | Dominant Outcome | Confusion | Nav Entropy | Cog Load | Aha | Delib | Budget Exhaust | Peak Frustration | Focus Switches | Affordance Reactivations |",
+        "|---|---:|---:|---:|---:|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for variant, stats in summary["variants"].items():
         success_oracle = stats["success_rate_given_oracle_solved"]
@@ -105,7 +111,9 @@ def _build_markdown(summary: Dict[str, Any], *, persona: str) -> str:
         cgr_text = f"{cgr*100:.1f}" if cgr is not None else "n/a"
         lines.append(
             f"| {variant} | {stats['success_rate']*100:.1f} | {success_oracle_text} | "
-            f"{stats['oracle_solved_maps']} | {cgr_text} | {stats['avg_confusion_index']:.3f} | "
+            f"{stats['oracle_solved_maps']} | {cgr_text} | {stats['avg_readability_score']:.3f} | "
+            f"{stats['avg_cognitive_effort_index']:.3f} | "
+            f"{stats['dominant_outcome_class']} | {stats['avg_confusion_index']:.3f} | "
             f"{stats['avg_navigation_entropy']:.3f} | {stats['avg_cognitive_load']:.3f} | "
             f"{stats['avg_aha_latency']:.1f} | {stats['avg_deliberation_events']:.1f} | "
             f"{stats['avg_budget_exhaustion_events']:.1f} | {stats['avg_peak_frustration']:.3f} | "
@@ -149,6 +157,15 @@ def run_ablation(
         "inventory_change_events",
         "focus_switches",
         "focus_guided_steps",
+        "puzzle_stall_steps",
+        "bounded_rationality_index",
+        "readability_score",
+        "cognitive_effort_index",
+        "pcbs_outcome_class",
+        "pcbs_calibration_bucket",
+        "pcbs_failure_driver",
+        "pcbs_dominant_pressure",
+        "pcbs_dominant_pressure_value",
         "oracle_status",
         "oracle_success",
         "confusion_ratio",
@@ -190,6 +207,28 @@ def run_ablation(
                     oracle_status=str(oracle["status"]),
                     candidate_success=bool(success),
                 )
+                puzzle_stall_steps = count_pcbs_puzzle_stall_steps(grid, path, prepared.goal)
+                readability_metrics = compute_pcbs_readability_metrics(
+                    oracle=oracle,
+                    pcbs_success=bool(success),
+                    pcbs_solution_length=solution_path_length,
+                    pcbs_trajectory_length=trajectory_length,
+                    pcbs_states=int(states),
+                    timeout_pcbs=int(timeout_pcbs),
+                    pcbs_metrics=metrics,
+                    puzzle_stall_steps=int(puzzle_stall_steps),
+                )
+                outcome_metrics = classify_pcbs_outcome(
+                    oracle=oracle,
+                    pcbs_success=bool(success),
+                    pcbs_solution_length=solution_path_length,
+                    pcbs_trajectory_length=trajectory_length,
+                    pcbs_states=int(states),
+                    timeout_pcbs=int(timeout_pcbs),
+                    pcbs_metrics=metrics,
+                    readability_metrics=readability_metrics,
+                    puzzle_stall_steps=int(puzzle_stall_steps),
+                )
                 row = {
                     "map_id": map_id,
                     "ablation": str(ablation_name),
@@ -210,6 +249,15 @@ def run_ablation(
                     "inventory_change_events": int(getattr(metrics, "inventory_change_events", 0) or 0),
                     "focus_switches": int(getattr(metrics, "focus_switches", 0) or 0),
                     "focus_guided_steps": int(getattr(metrics, "focus_guided_steps", 0) or 0),
+                    "puzzle_stall_steps": int(puzzle_stall_steps),
+                    "bounded_rationality_index": round(float(readability_metrics["bounded_rationality_index"]), 4),
+                    "readability_score": round(float(readability_metrics["readability_score"]), 4),
+                    "cognitive_effort_index": round(float(readability_metrics["cognitive_effort_index"]), 4),
+                    "pcbs_outcome_class": str(outcome_metrics["pcbs_outcome_class"]),
+                    "pcbs_calibration_bucket": str(outcome_metrics["pcbs_calibration_bucket"]),
+                    "pcbs_failure_driver": str(outcome_metrics["pcbs_failure_driver"]),
+                    "pcbs_dominant_pressure": str(outcome_metrics["pcbs_dominant_pressure"]),
+                    "pcbs_dominant_pressure_value": round(float(outcome_metrics["pcbs_dominant_pressure_value"]), 4),
                     "oracle_status": str(oracle["status"]),
                     "oracle_success": int(bool(oracle["success"])),
                     "confusion_ratio": round(float(confusion_ratio), 4) if np.isfinite(confusion_ratio) else float("nan"),
@@ -245,15 +293,23 @@ def summarize(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
             len(oracle_conditioned_success) / len(oracle_solved_rows)
             if oracle_solved_rows else None
         )
+        outcome_counts = Counter(str(row.get("pcbs_outcome_class", "")) for row in variant_rows)
+        dominant_outcome = outcome_counts.most_common(1)[0][0] if outcome_counts else ""
         summary["variants"][variant] = {
             "success_rate": len(successful) / max(1, len(variant_rows)),
             "success_rate_given_oracle_solved": success_given_oracle,
             "cognitive_gap_rate_given_oracle_solved": (1.0 - success_given_oracle) if success_given_oracle is not None else None,
             "oracle_solved_maps": len(oracle_solved_rows),
+            "outcome_class_counts": dict(outcome_counts),
+            "dominant_outcome_class": dominant_outcome,
             "avg_path_length": float(np.mean([row["path_length"] for row in successful])) if successful else 0.0,
             "avg_confusion_index": float(np.mean([row["confusion_index"] for row in variant_rows])) if variant_rows else 0.0,
             "avg_navigation_entropy": float(np.mean([row["navigation_entropy"] for row in variant_rows])) if variant_rows else 0.0,
             "avg_cognitive_load": float(np.mean([row["cognitive_load"] for row in variant_rows])) if variant_rows else 0.0,
+            "avg_bounded_rationality_index": float(np.mean([row["bounded_rationality_index"] for row in variant_rows])) if variant_rows else 0.0,
+            "avg_readability_score": float(np.mean([row["readability_score"] for row in variant_rows])) if variant_rows else 0.0,
+            "avg_cognitive_effort_index": float(np.mean([row["cognitive_effort_index"] for row in variant_rows])) if variant_rows else 0.0,
+            "avg_puzzle_stall_steps": float(np.mean([row["puzzle_stall_steps"] for row in variant_rows])) if variant_rows else 0.0,
             "avg_aha_latency": float(np.mean([row["aha_latency"] for row in variant_rows])) if variant_rows else 0.0,
             "avg_deliberation_events": float(np.mean([row["deliberation_events"] for row in variant_rows])) if variant_rows else 0.0,
             "avg_budget_exhaustion_events": float(np.mean([row["budget_exhaustion_events"] for row in variant_rows])) if variant_rows else 0.0,
@@ -289,6 +345,9 @@ def main() -> int:
     dungeon_nums = [1] if args.quick else [int(token.strip()) for token in args.levels.split(",") if token.strip()]
     variants = [1] if args.quick else [int(token.strip()) for token in args.variants.split(",") if token.strip()]
     ablations = [token.strip() for token in args.ablations.split(",") if token.strip()]
+    if args.quick:
+        args.timeout_astar = min(int(args.timeout_astar), 5000)
+        args.timeout_pcbs = min(int(args.timeout_pcbs), 1000)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 

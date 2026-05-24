@@ -1,7 +1,7 @@
 # Sequential queue for stageconditioned semantics ablation variants
 # Runs diffusion -> fast_sampler -> masked_room for each variant sequentially.
 
-$repoRoot = "F:\KLTN"
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 Set-Location $repoRoot
 $env:PYTORCH_CUDA_ALLOC_CONF='max_split_size_mb:128'
 $env:KLTN_EXPORT_SEQUENTIAL='1'

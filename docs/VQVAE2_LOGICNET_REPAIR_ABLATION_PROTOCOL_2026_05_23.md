@@ -1,6 +1,6 @@
 # VQ-VAE-2 LogicNet Repair Ablation Protocol
 
-Last updated: 2026-05-23
+Last updated: 2026-05-24
 
 This protocol records the new experiment wiring added after reading the local
 architecture and current literature. It is code-first: all heavy experiments are
@@ -47,9 +47,13 @@ Sources:
 - `scripts/run_conditioning_logicnet_repair_ablation.py`
   - defines the full conditioning/LogicNet/repair paired matrix
 - `src/evaluation/pcbs_validation.py`
-  - adds readability, bounded-rationality, effort, and oracle/P-CBS delta fields
+  - adds readability, bounded-rationality, effort, outcome-class, failure-driver,
+    and oracle/P-CBS delta fields
 - `src/pipeline/dungeon_pipeline.py`
   - records `repair_count` and `repair_time_sec`
+- `scripts/check_training_hyperparameters.py`
+  - writes a static/probed config preflight report for batch counts and
+    hyperparameter contracts before long runs
 
 ## VQ-VAE-2 Training Commands
 
@@ -119,6 +123,7 @@ Outputs:
 
 - `conditioning_logicnet_repair_rows.csv`
 - `conditioning_logicnet_repair_summary.csv`
+- `conditioning_logicnet_repair_logic_deltas.csv`
 - `conditioning_logicnet_repair_payload.json`
 - `visual_sheet.png`
 - `visual_sheet_manifest.json`
@@ -134,7 +139,16 @@ Required reported fields:
 - repair time
 - total tiles repaired
 - LogicNet dungeon and room solvability
+- paired LogicNet ON/OFF deltas by seed, conditioning mode, and repair mode
 - readability / bounded-rationality / cognitive-effort indices
+- P-CBS outcome class, calibration bucket, dominant pressure, and failure driver
+
+Safety:
+
+- execution requires trained VQ-VAE, diffusion, and LogicNet checkpoints by
+  default
+- `--allow-random-fallback` exists only for code-path smoke tests
+- use `--no-write-visual-sheet` to skip PNG generation during large batch runs
 
 ## LogicNet Improvement Target
 
@@ -157,6 +171,10 @@ P-CBS now reports:
 - `readability_score`
 - `cognitive_effort_index`
 - `oracle_pcbs_path_delta`
+- `pcbs_outcome_class`
+- `pcbs_calibration_bucket`
+- `pcbs_failure_driver`
+- `pcbs_dominant_pressure`
 - seed and timeout
 
 These are derived fields for reporting. The raw P-CBS metrics remain in the

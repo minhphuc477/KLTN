@@ -11,12 +11,12 @@ Scope:
 
 Canonical code touched in this pass:
 
-- [`src/train_lcm.py`](../src/train_lcm.py)
-- [`src/train_masked_room.py`](../src/train_masked_room.py)
-- [`src/core/discrete_masked_model.py`](../src/core/discrete_masked_model.py)
-- [`src/optimization/lcm_lora.py`](../src/optimization/lcm_lora.py)
-- [`src/pipeline/room_topology_conditioning.py`](../src/pipeline/room_topology_conditioning.py)
-- [`configs/zelda_hmolqd.yaml`](../configs/zelda_hmolqd.yaml)
+- [`src/train_lcm.py`](../../../src/train_lcm.py)
+- [`src/train_masked_room.py`](../../../src/train_masked_room.py)
+- [`src/core/discrete_masked_model.py`](../../../src/core/discrete_masked_model.py)
+- [`src/optimization/lcm_lora.py`](../../../src/optimization/lcm_lora.py)
+- [`src/pipeline/room_topology_conditioning.py`](../../../src/pipeline/room_topology_conditioning.py)
+- [`configs/zelda_hmolqd.yaml`](../../../configs/zelda_hmolqd.yaml)
 
 This document is the concise research-backed answer to one question:
 
@@ -186,8 +186,8 @@ small-data caution zone:
 
 See:
 
-- [`CANONICAL_MODEL_RATIONALE_ABLATION_AND_COMPLEXITY_GUIDE.md`](CANONICAL_MODEL_RATIONALE_ABLATION_AND_COMPLEXITY_GUIDE.md)
-- [`STATEFUL_PUZZLE_ARCHITECTURE_AUDIT_2026_04_09.md`](STATEFUL_PUZZLE_ARCHITECTURE_AUDIT_2026_04_09.md)
+- [`../../CANONICAL_MODEL_RATIONALE_ABLATION_AND_COMPLEXITY_GUIDE.md`](../../CANONICAL_MODEL_RATIONALE_ABLATION_AND_COMPLEXITY_GUIDE.md)
+- [`../../STATEFUL_PUZZLE_ARCHITECTURE_AUDIT_2026_04_09.md`](../../STATEFUL_PUZZLE_ARCHITECTURE_AUDIT_2026_04_09.md)
 
 Implication:
 

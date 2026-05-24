@@ -1,13 +1,13 @@
 # Full Training, Ablation, and Evaluation Command Book
 
-Last updated: 2026-04-19
+Last updated: 2026-05-24
 
 This is the practical runbook for rebuilding the repo from scratch and
 reproducing the main ablations. It is intentionally operational.
 
 ## 1. Environment Assumptions
 
-- repo root: `F:\KLTN`
+- run commands from the repository root
 - shell: `PowerShell`
 - CUDA GPU available
 - dataset root: `Data\The Legend of Zelda`
@@ -31,6 +31,19 @@ $env:KLTN_EXPORT_MAX_BATCH_SIZE='1'
 - Thesis-facing hyperparameter rationale and the current empirical summary are maintained in:
   - `docs\THESIS_HYPERPARAMETER_SEARCH_AND_PROTOCOL_JUSTIFICATION_2026_04_19.md`
   - `results\thesis_hparam_evidence_2026_04_19.md`
+- Run the preflight checker before long training launches:
+
+```powershell
+python scripts\check_training_hyperparameters.py `
+  --config configs\zelda_hmolqd.yaml `
+  --output results\training_hyperparameter_check `
+  --probe-data
+```
+
+The checker writes JSON/CSV/Markdown reports and fails on hard issues such as
+zero train batches, CUDA requested when unavailable, latent-dimension mismatch,
+invalid attention-head divisibility, and runtime sampling steps exceeding the
+trained diffusion timestep count.
 
 ## 2. Recommended Search Strategy For Training / Eval
 
@@ -339,6 +352,10 @@ python scripts\run_conditioning_logicnet_repair_ablation.py `
   --diffusion-checkpoint outputs\YOUR_DIFFUSION_RUN\checkpoints\diffusion\best_model.pth `
   --logic-net-checkpoint outputs\YOUR_DIFFUSION_RUN\checkpoints\diffusion\best_model.pth
 ```
+
+The runner writes `conditioning_logicnet_repair_logic_deltas.csv` for paired
+LogicNet ON/OFF deltas. It refuses to execute without trained checkpoints unless
+`--allow-random-fallback` is passed for a code-only smoke run.
 
 ### 6.7 Designer controllability proof
 

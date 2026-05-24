@@ -5,8 +5,8 @@ Runs reproducible checks and emits:
 - Markdown checklist report
 
 Usage:
-    f:/KLTN/.venv/Scripts/python.exe scripts/score_topology_stack_rubric.py
-    f:/KLTN/.venv/Scripts/python.exe scripts/score_topology_stack_rubric.py --output-dir results/topology_rubric
+    python scripts/score_topology_stack_rubric.py
+    python scripts/score_topology_stack_rubric.py --output-dir results/topology_rubric
 """
 
 from __future__ import annotations

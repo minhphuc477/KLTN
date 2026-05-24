@@ -1,5 +1,16 @@
 # H-MOLQD Kaggle Training
 
+Current full-stack shell workflow:
+
+```bash
+cd /kaggle/working/KLTN
+bash kaggle/hmolqd_training_suite/run_kaggle_training_suite.sh
+```
+
+Use the folder [`hmolqd_training_suite/`](hmolqd_training_suite/) for current
+VQ-VAE/VQ-VAE-2, diffusion, fast-sampler, and masked-room training. The notebook
+below is kept as a legacy single-notebook workflow.
+
 Production-ready Kaggle notebook for training the H-MOLQD dungeon generator with robust checkpoint management.
 
 ## 📋 Table of Contents

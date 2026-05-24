@@ -29,7 +29,7 @@ VGLC Files ──→ [Block I] ──→ Rooms + Graph
                        │
                ┌───────┴───────┐
                ↓               ↓
-          [Block II]      [Block VII]
+          [Block II]      [Block VI]
            Decode        SymbolicRefiner
                │               │
                └───────┬───────┘
@@ -37,8 +37,8 @@ VGLC Files ──→ [Block I] ──→ Rooms + Graph
                Refined Room Grid
                        │
                        ↓
-                  [Block VI]
-                  MAP-Elites
+                  [Block VII]
+             Validation / MAP-Elites
                        │
                        ↓
               Diverse Elite Archive
@@ -425,7 +425,7 @@ Effect: Gradients from logic constraints become sharper over training.
 
 ---
 
-## Block VI — MAP-Elites (Quality-Diversity)
+## Block VII — MAP-Elites (Quality-Diversity)
 
 **File:** `src/evaluation/map_elites.py` (994 lines)
 **Purpose:** Maintain a diverse archive of high-quality dungeon solutions.
@@ -524,7 +524,7 @@ class DiversityMetrics:
 
 ---
 
-## Block VII — Symbolic Refiner (WFC Repair)
+## Block VI — Symbolic Refiner (WFC Repair)
 
 **File:** `src/core/symbolic_refiner.py` (1233 lines)
 **Purpose:** Fix structural violations in generated rooms using Wave Function Collapse.
@@ -704,7 +704,7 @@ Phase 3 (> 2×warmup):           Complex 5-12 node graphs with branching
 |-------|---------|
 | `LatentDiffusionWrapper` | Wraps VQ-VAE + Diffusion + CondEncoder for end-to-end sampling |
 | `DungeonValidator` | Wraps LogicNet + A* for structural validation |
-| `WFCRepair` | Wraps Block VII SymbolicRefiner for post-generation repair |
+| `WFCRepair` | Wraps Block VI SymbolicRefiner for post-generation repair |
 
 ### `LatentDiffusionWrapper.sample()`
 ```
@@ -726,8 +726,8 @@ Flow:
 4. Decode to tile logits via VQ-VAE              [Block II]
 5. Argmax → room_grid [B, H, W]
 6. Validate with LogicNet                        [Block V]
-7. Repair if needed via SymbolicRefiner          [Block VII]
-8. Add to MAP-Elites archive                     [Block VI]
+7. Repair if needed via SymbolicRefiner          [Block VI]
+8. Add to MAP-Elites archive                     [Block VII]
 ```
 
 ---
@@ -761,8 +761,8 @@ Flow:
 | III — CondEncoder | `src/core/condition_encoder.py` | `create_condition_encoder(latent_dim, output_dim)` |
 | IV — Diffusion | `src/core/latent_diffusion.py` | `create_latent_diffusion(latent_dim, context_dim, ...)` |
 | V — LogicNet | `src/core/logic_net.py` | `LogicNet(latent_dim, num_classes, num_iterations)` |
-| VI — MAP-Elites | `src/evaluation/map_elites.py` | `create_map_elites(feature_type, fitness_fn, ...)` |
-| VII — Refiner | `src/core/symbolic_refiner.py` | `create_symbolic_refiner(tile_types, max_repair_attempts, learned_stats)` |
+| VI — Refiner | `src/core/symbolic_refiner.py` | `create_symbolic_refiner(tile_types, max_repair_attempts, learned_stats)` |
+| VII — MAP-Elites / validation | `src/evaluation/map_elites.py`, `src/simulation/*` | `create_map_elites(feature_type, fitness_fn, ...)` |
 
 ### Supporting Files
 | File | Purpose |

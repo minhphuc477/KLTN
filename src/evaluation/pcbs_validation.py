@@ -226,6 +226,11 @@ def _count_puzzle_stall_steps(grid: np.ndarray, path: Iterable[GridPos], goal: G
     return stall_steps
 
 
+def count_pcbs_puzzle_stall_steps(grid: np.ndarray, path: Iterable[GridPos], goal: GridPos) -> int:
+    """Public wrapper for P-CBS puzzle-stall reporting."""
+    return _count_puzzle_stall_steps(grid, path, goal)
+
+
 def compute_pcbs_readability_metrics(
     *,
     oracle: Mapping[str, Any],
@@ -294,6 +299,108 @@ def compute_pcbs_readability_metrics(
         "revisit_rate": revisit_rate,
         "puzzle_stall_fraction": stall_fraction,
         "oracle_solved_but_pcbs_failed": bool(oracle_success and not bool(pcbs_success)),
+    }
+
+
+def classify_pcbs_outcome(
+    *,
+    oracle: Mapping[str, Any],
+    pcbs_success: bool,
+    pcbs_solution_length: int,
+    pcbs_trajectory_length: int,
+    pcbs_states: int,
+    timeout_pcbs: int,
+    pcbs_metrics: Any,
+    readability_metrics: Mapping[str, Any],
+    puzzle_stall_steps: int,
+) -> Dict[str, Any]:
+    """
+    Classify the P-CBS result for paper tables.
+
+    The class is intentionally descriptive rather than causal: it separates
+    hard invalidity from bounded-rational failure and names the dominant
+    pressure that made the run costly.
+    """
+    oracle_success = bool(oracle.get("success", False))
+    oracle_path_length = int(oracle.get("path_length", 0) or 0)
+    timeout = max(1, int(timeout_pcbs))
+    states = max(0, int(pcbs_states))
+    trajectory_length = max(1, int(pcbs_trajectory_length))
+
+    confusion = float(getattr(pcbs_metrics, "confusion_index", 0.0) or 0.0)
+    entropy = float(getattr(pcbs_metrics, "navigation_entropy", 0.0) or 0.0)
+    load = float(getattr(pcbs_metrics, "cognitive_load", 0.0) or 0.0)
+    budget_exhaustion_events = int(getattr(pcbs_metrics, "budget_exhaustion_events", 0) or 0)
+    affordance_reactivations = int(getattr(pcbs_metrics, "affordance_reactivations", 0) or 0)
+    focus_switches = int(getattr(pcbs_metrics, "focus_switches", 0) or 0)
+
+    pressures = {
+        "confusion": float(np.clip(confusion / 3.0, 0.0, 1.0)),
+        "navigation_entropy": float(np.clip(entropy / 2.0, 0.0, 1.0)),
+        "cognitive_load": float(np.clip(load / 2.5, 0.0, 1.0)),
+        "state_budget": float(np.clip(states / float(timeout), 0.0, 1.0)),
+        "puzzle_stall": float(np.clip(float(puzzle_stall_steps) / float(trajectory_length), 0.0, 1.0)),
+        "affordance_reactivation": float(np.clip(affordance_reactivations / 3.0, 0.0, 1.0)),
+        "focus_switching": float(np.clip(focus_switches / 6.0, 0.0, 1.0)),
+    }
+    dominant_pressure, dominant_value = max(pressures.items(), key=lambda item: item[1])
+
+    bounded_index = float(readability_metrics.get("bounded_rationality_index", 0.0) or 0.0)
+    path_delta = readability_metrics.get("oracle_pcbs_path_delta")
+    path_delta_value = None if path_delta is None else int(path_delta)
+
+    if not oracle_success:
+        outcome_class = "oracle_unsolved"
+        calibration_bucket = "hard_invalid"
+        failure_driver = "hard_oracle_failure"
+    elif bool(pcbs_success):
+        if oracle_path_length > 0 and path_delta_value is not None:
+            relative_delta = path_delta_value / float(max(1, oracle_path_length))
+        else:
+            relative_delta = 0.0
+        if relative_delta <= 0.10 and bounded_index < 0.35:
+            outcome_class = "bounded_success_near_oracle"
+            calibration_bucket = "readable"
+            failure_driver = "none"
+        elif relative_delta <= 0.50 and bounded_index < 0.65:
+            outcome_class = "bounded_success_costly"
+            calibration_bucket = "readable_but_costly"
+            failure_driver = dominant_pressure
+        else:
+            outcome_class = "bounded_success_high_cost"
+            calibration_bucket = "readable_but_costly"
+            failure_driver = dominant_pressure
+    else:
+        calibration_bucket = "bounded_gap"
+        if states >= timeout or budget_exhaustion_events > 0:
+            outcome_class = "bounded_budget_exhausted"
+            failure_driver = "state_budget"
+        elif int(puzzle_stall_steps) > 0 or pressures["affordance_reactivation"] >= 0.34:
+            outcome_class = "puzzle_readability_failure"
+            failure_driver = "puzzle_stall" if int(puzzle_stall_steps) > 0 else "affordance_reactivation"
+        elif pressures["confusion"] >= 0.50 or pressures["navigation_entropy"] >= 0.75:
+            outcome_class = "navigation_confusion_failure"
+            failure_driver = "confusion" if pressures["confusion"] >= pressures["navigation_entropy"] else "navigation_entropy"
+        elif pressures["cognitive_load"] >= 0.50:
+            outcome_class = "cognitive_load_failure"
+            failure_driver = "cognitive_load"
+        else:
+            outcome_class = "bounded_failure_unclassified"
+            failure_driver = dominant_pressure
+
+    return {
+        "pcbs_outcome_class": outcome_class,
+        "pcbs_calibration_bucket": calibration_bucket,
+        "pcbs_failure_driver": failure_driver,
+        "pcbs_dominant_pressure": dominant_pressure,
+        "pcbs_dominant_pressure_value": float(dominant_value),
+        "pcbs_pressure_confusion": pressures["confusion"],
+        "pcbs_pressure_navigation_entropy": pressures["navigation_entropy"],
+        "pcbs_pressure_cognitive_load": pressures["cognitive_load"],
+        "pcbs_pressure_state_budget": pressures["state_budget"],
+        "pcbs_pressure_puzzle_stall": pressures["puzzle_stall"],
+        "pcbs_pressure_affordance_reactivation": pressures["affordance_reactivation"],
+        "pcbs_pressure_focus_switching": pressures["focus_switching"],
     }
 
 
@@ -374,6 +481,18 @@ def evaluate_astar_vs_pcbs(
         pcbs_metrics=pcbs_metrics,
         puzzle_stall_steps=puzzle_stall_steps,
     )
+    outcome_metrics = classify_pcbs_outcome(
+        oracle=oracle,
+        pcbs_success=bool(pcbs_success),
+        pcbs_solution_length=pcbs_solution_length,
+        pcbs_trajectory_length=pcbs_trajectory_length,
+        pcbs_states=int(pcbs_states),
+        timeout_pcbs=int(timeout_pcbs),
+        pcbs_metrics=pcbs_metrics,
+        readability_metrics=readability_metrics,
+        puzzle_stall_steps=puzzle_stall_steps,
+    )
+    pcbs_report_metrics = {**readability_metrics, **outcome_metrics}
 
     return {
         "validation_handoff": prepared.diagnostics,
@@ -408,7 +527,7 @@ def evaluate_astar_vs_pcbs(
             "inventory_change_events": int(getattr(pcbs_metrics, "inventory_change_events", 0) or 0),
             "focus_switches": int(getattr(pcbs_metrics, "focus_switches", 0) or 0),
             "focus_guided_steps": int(getattr(pcbs_metrics, "focus_guided_steps", 0) or 0),
-            **readability_metrics,
+            **pcbs_report_metrics,
             "metrics": _json_ready(pcbs_metrics.to_dict()),
         },
         "comparison": {
@@ -422,6 +541,11 @@ def evaluate_astar_vs_pcbs(
             "bounded_rationality_index": float(readability_metrics["bounded_rationality_index"]),
             "readability_score": float(readability_metrics["readability_score"]),
             "cognitive_effort_index": float(readability_metrics["cognitive_effort_index"]),
+            "pcbs_outcome_class": str(outcome_metrics["pcbs_outcome_class"]),
+            "pcbs_calibration_bucket": str(outcome_metrics["pcbs_calibration_bucket"]),
+            "pcbs_failure_driver": str(outcome_metrics["pcbs_failure_driver"]),
+            "pcbs_dominant_pressure": str(outcome_metrics["pcbs_dominant_pressure"]),
+            "pcbs_dominant_pressure_value": float(outcome_metrics["pcbs_dominant_pressure_value"]),
         },
     }
 
@@ -441,6 +565,8 @@ def build_ieee_markdown_table(result: Mapping[str, Any], *, map_name: str = "Gen
             0.0,
             0,
             str(oracle.get("status", "")),
+            "hard_oracle",
+            "none",
         ),
         (
             f"P-CBS ({pcbs.get('persona', 'novice')})",
@@ -451,18 +577,20 @@ def build_ieee_markdown_table(result: Mapping[str, Any], *, map_name: str = "Gen
             round(float(pcbs.get("navigation_entropy", 0.0)), 3),
             int(pcbs.get("goal_sighting_latency", pcbs.get("aha_latency", 0))),
             str(comparison.get("pcbs_status") or pcbs.get("status") or ""),
+            str(comparison.get("pcbs_outcome_class") or pcbs.get("pcbs_outcome_class") or ""),
+            str(comparison.get("pcbs_failure_driver") or pcbs.get("pcbs_failure_driver") or ""),
         ),
     ]
 
     lines = [
-        f"| Map | Solver | Solved | Path Length | PER | Total Revisits | Navigation Entropy | Goal-Sighting Latency | Status |",
-        "|---|---|---:|---:|---:|---:|---:|---:|---|",
+        f"| Map | Solver | Solved | Path Length | PER | Total Revisits | Navigation Entropy | Goal-Sighting Latency | Status | Outcome | Driver |",
+        "|---|---|---:|---:|---:|---:|---:|---:|---|---|---|",
     ]
-    for solver, solved, path_len, per, revisits, nav_entropy, aha_latency, status in rows:
+    for solver, solved, path_len, per, revisits, nav_entropy, aha_latency, status, outcome, driver in rows:
         lines.append(
             f"| {map_name} | {solver} | {int(bool(solved))} | {int(path_len)} | "
             f"{float(per):.3f} | {int(revisits)} | {float(nav_entropy):.3f} | "
-            f"{int(aha_latency)} | {status} |"
+            f"{int(aha_latency)} | {status} | {outcome} | {driver} |"
         )
     return "\n".join(lines)
 
@@ -470,7 +598,9 @@ def build_ieee_markdown_table(result: Mapping[str, Any], *, map_name: str = "Gen
 __all__ = [
     "PreparedValidationDungeon",
     "prepare_dungeon_grid_for_validation",
+    "count_pcbs_puzzle_stall_steps",
     "compute_pcbs_readability_metrics",
+    "classify_pcbs_outcome",
     "evaluate_astar_vs_pcbs",
     "build_ieee_markdown_table",
 ]

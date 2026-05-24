@@ -5,11 +5,11 @@ Integration Tests for Advanced Production Rules
 Comprehensive test suite for all 10 advanced dungeon generation rules.
 
 Run with: 
-    cd F:/KLTN
+    cd <repo root>
     python -m pytest tests/test_advanced_rules_integration.py -v
     
 Or standalone:
-    cd F:/KLTN
+    cd <repo root>
     python tests/test_advanced_rules_integration.py
 """
 # pyright: reportPrivateUsage=false

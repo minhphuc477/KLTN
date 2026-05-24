@@ -64,7 +64,7 @@ Why:
 
 Research note:
 
-- `docs/PLAYABILITY_EVALUATION_AND_CBS_RESEARCH_2026_04_16.md`
+- `docs/archive/2026-q2/PLAYABILITY_EVALUATION_AND_CBS_RESEARCH_2026_04_16.md`
 
 ## Code Improvements Applied
 

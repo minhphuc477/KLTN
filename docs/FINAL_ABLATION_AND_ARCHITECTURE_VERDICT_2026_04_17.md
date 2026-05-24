@@ -1,4 +1,4 @@
-# Final Ablation And Architecture Verdict
+﻿# Final Ablation And Architecture Verdict
 
 Last updated: 2026-04-18
 
@@ -704,9 +704,9 @@ python scripts\run_pcg_benchmark_alignment.py `
 Independent VQ-VAE runs can be launched in parallel like this:
 
 ```powershell
-Start-Process powershell -ArgumentList '-NoExit','-Command','Set-Location "F:\KLTN"; python -m src.train_vqvae --config configs\zelda_hmolqd.yaml --save-dir outputs\vqvae_ablation_codebook128_v2\checkpoints\vqvae --data-dir "Data\The Legend of Zelda" --epochs 300 --hidden-dim 96 --latent-dim 64 --codebook-size 128 --use-coordconv --mrf-penalty-weight 0.05 --validation-fraction 0.1 --validation-max-batches 16 --best-checkpoint-metric val_loss --seed 42'
-Start-Process powershell -ArgumentList '-NoExit','-Command','Set-Location "F:\KLTN"; python -m src.train_vqvae --config configs\zelda_hmolqd.yaml --save-dir outputs\vqvae_ablation_codebook512_v2\checkpoints\vqvae --data-dir "Data\The Legend of Zelda" --epochs 300 --hidden-dim 96 --latent-dim 64 --codebook-size 512 --use-coordconv --mrf-penalty-weight 0.05 --validation-fraction 0.1 --validation-max-batches 16 --best-checkpoint-metric val_loss --seed 42'
-Start-Process powershell -ArgumentList '-NoExit','-Command','Set-Location "F:\KLTN"; python -m src.train_vqvae --config configs\zelda_hmolqd.yaml --save-dir outputs\vqvae_ablation_hidden64_v2\checkpoints\vqvae --data-dir "Data\The Legend of Zelda" --epochs 300 --hidden-dim 64 --latent-dim 64 --codebook-size 256 --use-coordconv --mrf-penalty-weight 0.05 --validation-fraction 0.1 --validation-max-batches 16 --best-checkpoint-metric val_loss --seed 42'
+Start-Process powershell -ArgumentList '-NoExit','-Command','Set-Location "<repo root>"; python -m src.train_vqvae --config configs\zelda_hmolqd.yaml --save-dir outputs\vqvae_ablation_codebook128_v2\checkpoints\vqvae --data-dir "Data\The Legend of Zelda" --epochs 300 --hidden-dim 96 --latent-dim 64 --codebook-size 128 --use-coordconv --mrf-penalty-weight 0.05 --validation-fraction 0.1 --validation-max-batches 16 --best-checkpoint-metric val_loss --seed 42'
+Start-Process powershell -ArgumentList '-NoExit','-Command','Set-Location "<repo root>"; python -m src.train_vqvae --config configs\zelda_hmolqd.yaml --save-dir outputs\vqvae_ablation_codebook512_v2\checkpoints\vqvae --data-dir "Data\The Legend of Zelda" --epochs 300 --hidden-dim 96 --latent-dim 64 --codebook-size 512 --use-coordconv --mrf-penalty-weight 0.05 --validation-fraction 0.1 --validation-max-batches 16 --best-checkpoint-metric val_loss --seed 42'
+Start-Process powershell -ArgumentList '-NoExit','-Command','Set-Location "<repo root>"; python -m src.train_vqvae --config configs\zelda_hmolqd.yaml --save-dir outputs\vqvae_ablation_hidden64_v2\checkpoints\vqvae --data-dir "Data\The Legend of Zelda" --epochs 300 --hidden-dim 64 --latent-dim 64 --codebook-size 256 --use-coordconv --mrf-penalty-weight 0.05 --validation-fraction 0.1 --validation-max-batches 16 --best-checkpoint-metric val_loss --seed 42'
 ```
 
 After diffusion finishes for a downstream branch, fast sampler and masked-room

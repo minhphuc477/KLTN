@@ -1,5 +1,5 @@
 param(
-    [string]$RepoRoot = "F:\KLTN",
+    [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path,
     [string]$Python = "python",
     [string]$Suffix = "v4_global_logicnet",
     [string[]]$Branches = @("full", "tokens_only", "trace_only", "loss010", "loss050"),

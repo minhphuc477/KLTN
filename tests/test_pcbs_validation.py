@@ -83,8 +83,19 @@ def test_evaluate_astar_vs_pcbs_emits_paper_metrics_and_markdown() -> None:
     assert "bounded_rationality_index" in result["pcbs"]
     assert "readability_score" in result["pcbs"]
     assert "cognitive_effort_index" in result["pcbs"]
+    assert "pcbs_outcome_class" in result["pcbs"]
+    assert "pcbs_failure_driver" in result["pcbs"]
+    assert "pcbs_dominant_pressure" in result["pcbs"]
+    assert result["pcbs"]["pcbs_calibration_bucket"] in {
+        "readable",
+        "readable_but_costly",
+        "bounded_gap",
+        "hard_invalid",
+    }
+    assert "pcbs_outcome_class" in result["comparison"]
     assert "oracle_pcbs_path_delta" in result["comparison"]
     assert "| Map | Solver |" in table
+    assert "Outcome" in table
     assert "P-CBS (novice)" in table
     json.dumps(result)
 
@@ -108,3 +119,11 @@ def test_evaluate_astar_vs_pcbs_separates_failed_trajectory_from_solution_path()
     assert result["pcbs"]["path_length"] == 0
     assert result["pcbs"]["trajectory_length"] >= 1
     assert result["pcbs"]["path_efficiency_ratio"] == 0.0
+    assert result["pcbs"]["pcbs_calibration_bucket"] == "bounded_gap"
+    assert result["pcbs"]["pcbs_outcome_class"] in {
+        "bounded_budget_exhausted",
+        "puzzle_readability_failure",
+        "navigation_confusion_failure",
+        "cognitive_load_failure",
+        "bounded_failure_unclassified",
+    }

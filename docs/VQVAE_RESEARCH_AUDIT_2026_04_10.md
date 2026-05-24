@@ -22,9 +22,9 @@ The current evidence says the main quality bottlenecks are still downstream in B
 Latest linked outcomes:
 
 - tokenizer-side result summary:
-  [`VQVAE_PROTOCOL_RESULTS_2026_04_10.md`](VQVAE_PROTOCOL_RESULTS_2026_04_10.md)
+  [`archive/2026-q2/VQVAE_PROTOCOL_RESULTS_2026_04_10.md`](archive/2026-q2/VQVAE_PROTOCOL_RESULTS_2026_04_10.md)
 - downstream follow-up with puzzle-subtype conditioning:
-  [`DOWNSTREAM_CODEBOOK512_PUZZLE_SUBTYPE_PROTOCOL_RESULTS_2026_04_15.md`](DOWNSTREAM_CODEBOOK512_PUZZLE_SUBTYPE_PROTOCOL_RESULTS_2026_04_15.md)
+  [`archive/2026-q2/DOWNSTREAM_CODEBOOK512_PUZZLE_SUBTYPE_PROTOCOL_RESULTS_2026_04_15.md`](archive/2026-q2/DOWNSTREAM_CODEBOOK512_PUZZLE_SUBTYPE_PROTOCOL_RESULTS_2026_04_15.md)
 
 ## Scope
 

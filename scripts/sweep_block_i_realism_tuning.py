@@ -1,8 +1,8 @@
 """Reproducible sweep for Block-I realism tuning coefficients.
 
 Usage:
-    f:/KLTN/.venv/Scripts/python.exe scripts/sweep_block_i_realism_tuning.py
-    f:/KLTN/.venv/Scripts/python.exe scripts/sweep_block_i_realism_tuning.py --num-generated 24 --seed 42
+    python scripts/sweep_block_i_realism_tuning.py
+    python scripts/sweep_block_i_realism_tuning.py --num-generated 24 --seed 42
 """
 
 from __future__ import annotations

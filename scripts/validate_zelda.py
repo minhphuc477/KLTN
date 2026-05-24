@@ -52,6 +52,7 @@ from src.simulation.validator import (
 )
 
 # DungeonStitcher and StitchedDungeon are already imported from zelda_core.py
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 class ZeldaValidationPipeline:
@@ -70,7 +71,7 @@ class ZeldaValidationPipeline:
             output_dir: Path for output reports and processed data
         """
         if data_root is None:
-            data_root = Path(__file__).parent / "Data" / "The Legend of Zelda"
+            data_root = PROJECT_ROOT / "Data" / "The Legend of Zelda"
         
         self.data_root = Path(data_root)
         self.output_dir = Path(output_dir) if output_dir else Path(__file__).parent / "output"

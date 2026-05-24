@@ -87,8 +87,7 @@ Supported variants:
 
 Explorer quick ablation on `D1_v1`:
 
-- artifact:
-  [report.md](../results/pcbs_component_ablation_explorer_quick_v1/report.md)
+- artifact path: `results/pcbs_component_ablation_explorer_quick_v1/report.md`
 - full `P-CBS` solved with path length `574`
 - `no_affordance` still solved, but path length degraded to `846`
 - `no_affordance` also increased confusion, deliberation, budget exhaustion, and
@@ -96,8 +95,7 @@ Explorer quick ablation on `D1_v1`:
 
 Novice quick ablation on `D1_v1`:
 
-- artifact:
-  [report.md](../results/pcbs_component_ablation_novice_quick_v1/report.md)
+- artifact path: `results/pcbs_component_ablation_novice_quick_v1/report.md`
 - all variants timed out under the bounded budget
 - removing revisit or uncertainty terms still changes confusion/frustration
   statistics, which is useful for thesis-facing sensitivity analysis

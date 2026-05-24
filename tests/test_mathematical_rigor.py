@@ -10,19 +10,19 @@ Tests all three mathematical rigor fixes:
 Validation Criteria:
 --------------------
 1. Weighted WFC: KL-divergence < 0.5 nats
-2. Difficulty Metrics: Cognitive â‰  Tedious, Fun prediction works
+2. Difficulty Metrics: Cognitive != Tedious, Fun prediction works
 3. Key Economy: Both greedy + adversarial players pass
 4. Style Token: Palette consistency > 0.8
 
 Usage:
 ------
-    python scripts/test_mathematical_rigor.py --verbose
+    python tests/test_mathematical_rigor.py --verbose
     
     # Quick sanity check
-    python scripts/test_mathematical_rigor.py --quick
+    python tests/test_mathematical_rigor.py --quick
     
     # Full validation with all topology types
-    python scripts/test_mathematical_rigor.py --all-topologies
+    python tests/test_mathematical_rigor.py --all-topologies
 """
 
 import sys
@@ -133,7 +133,7 @@ def _weighted_wfc_distribution_preservation(verbose: bool = False):
             generated_freq = count / total
             expected_freq = tile_priors[tile_id].frequency
             diff = abs(generated_freq - expected_freq)
-            status = "âœ“" if diff < 0.25 else "âœ—"  # Lenient for WFC constraints
+            status = "[OK]" if diff < 0.25 else "[FAIL]"  # Lenient for WFC constraints
             print(f"  {status} Tile {tile_id}: expected={expected_freq:.3f}, "
                   f"generated={generated_freq:.3f}, diff={diff:.3f}")
     
@@ -141,10 +141,10 @@ def _weighted_wfc_distribution_preservation(verbose: bool = False):
     
     # Validation (realistic threshold for constrained WFC)
     if kl_div < 2.5:
-        print("âœ… PASS: Distribution reasonably preserved (KL < 2.5)")
+        print("[PASS] Distribution reasonably preserved (KL < 2.5)")
         return True
     else:
-        print(f"âŒ FAIL: Distribution NOT preserved (KL={kl_div:.4f} >= 2.5)")
+        print(f"[FAIL] Distribution NOT preserved (KL={kl_div:.4f} >= 2.5)")
         return False
 
 
@@ -170,7 +170,7 @@ def _difficulty_metrics_separation(verbose: bool = False):
     print("="*80)
     
     if DifficultyCalculator is None:
-        print("âš ï¸  SKIP: DifficultyCalculator not available")
+        print("[SKIP] DifficultyCalculator not available")
         return None
     
     calc = DifficultyCalculator()  # Use default weights
@@ -196,7 +196,7 @@ def _difficulty_metrics_separation(verbose: bool = False):
     except (AttributeError, RuntimeError, ValueError, TypeError) as e:
         if verbose:
             print(f"  Difficulty calculation: {e}")
-        print("âš ï¸  SKIP: Difficulty calculator compute() unavailable for this API shape")
+        print("[SKIP] Difficulty calculator compute() unavailable for this API shape")
         return None
     
     # Test Case 2: High Tedious (enemy spam dungeon)
@@ -219,7 +219,7 @@ def _difficulty_metrics_separation(verbose: bool = False):
     except (AttributeError, RuntimeError, ValueError, TypeError) as e:
         if verbose:
             print(f"  Difficulty calculation: {e}")
-        print("âš ï¸  SKIP: Difficulty calculator failed on comparison scenario")
+        print("[SKIP] Difficulty calculator failed on comparison scenario")
         return None
     
     # Real validation: component-level separation checks.
@@ -236,14 +236,14 @@ def _difficulty_metrics_separation(verbose: bool = False):
 
     print("\nValidation:")
     for name, ok in checks.items():
-        status = "âœ“" if ok else "âœ—"
+        status = "[OK]" if ok else "[FAIL]"
         print(f"  {status} {name}")
 
     if all(checks.values()):
-        print("âœ… PASS: Difficulty metrics show expected component separation")
+        print("[PASS] Difficulty metrics show expected component separation")
         return True
 
-    print("âŒ FAIL: Difficulty metrics did not separate scenarios as expected")
+    print("[FAIL] Difficulty metrics did not separate scenarios as expected")
     return False
 
 
@@ -300,7 +300,7 @@ def _key_economy_all_topologies(verbose: bool = False):
         print(f"  Adversarial solvable: {result_linear.adversarial_solvable}")
         print(f"  Key surplus: {result_linear.key_surplus}")
     
-    status_msg = "âœ… PASS" if results['linear'] else "âŒ FAIL (framework needs tuning)"
+    status_msg = "[PASS]" if results['linear'] else "[FAIL] framework needs tuning"
     print(f"  Linear topology: {status_msg}")
     
     # Test 3.2: Tree topology (branching)
@@ -329,7 +329,7 @@ def _key_economy_all_topologies(verbose: bool = False):
         print(f"  Greedy solvable: {result_tree.greedy_solvable}")
         print(f"  Adversarial solvable: {result_tree.adversarial_solvable}")
     
-    print(f"  Tree topology: {'âœ… PASS' if result_tree.is_valid else 'âŒ FAIL'}")
+    print(f"  Tree topology: {'[PASS]' if result_tree.is_valid else '[FAIL]'}")
     
     # Test 3.3: Diamond topology (converging paths)
     print("\nTest 3.3: Diamond Topology")
@@ -358,21 +358,21 @@ def _key_economy_all_topologies(verbose: bool = False):
         print(f"  Greedy solvable: {result_diamond.greedy_solvable}")
         print(f"  Adversarial solvable: {result_diamond.adversarial_solvable}")
     
-    print(f"  Diamond topology: {'âœ… PASS' if result_diamond.is_valid else 'âŒ FAIL'}")
+    print(f"  Diamond topology: {'[PASS]' if result_diamond.is_valid else '[FAIL]'}")
     
     # Overall validation
     print("\nOverall Key Economy Validation:")
     all_passed = all(results.values())
     
     for topology, passed in results.items():
-        status = "âœ…" if passed else "âŒ"
+        status = "[OK]" if passed else "[FAIL]"
         print(f"  {status} {topology.capitalize()} topology")
     
     if all_passed:
-        print("\nâœ… PASS: All topologies validated (no soft-locks)")
+        print("\n[PASS] All topologies validated (no soft-locks)")
         return True
     else:
-        print("\nâŒ FAIL: Some topologies have soft-locks")
+        print("\n[FAIL] Some topologies have soft-locks")
         return False
 
 
@@ -404,7 +404,7 @@ def run_all_tests(verbose: bool = False, quick: bool = False):
     try:
         results['weighted_wfc'] = _weighted_wfc_distribution_preservation(verbose)
     except (AttributeError, RuntimeError, ValueError, TypeError) as e:
-        print(f"\nâŒ Test 1 crashed: {e}")
+        print(f"\n[FAIL] Test 1 crashed: {e}")
         results['weighted_wfc'] = False
         if verbose:
             import traceback
@@ -414,7 +414,7 @@ def run_all_tests(verbose: bool = False, quick: bool = False):
     try:
         results['difficulty_metrics'] = _difficulty_metrics_separation(verbose)
     except (AttributeError, RuntimeError, ValueError, TypeError) as e:
-        print(f"\nâŒ Test 2 crashed: {e}")
+        print(f"\n[FAIL] Test 2 crashed: {e}")
         results['difficulty_metrics'] = False
         if verbose:
             import traceback
@@ -425,7 +425,7 @@ def run_all_tests(verbose: bool = False, quick: bool = False):
         try:
             results['key_economy'] = _key_economy_all_topologies(verbose)
         except (AttributeError, RuntimeError, ValueError, TypeError) as e:
-            print(f"\nâŒ Test 3 crashed: {e}")
+            print(f"\n[FAIL] Test 3 crashed: {e}")
             results['key_economy'] = False
             if verbose:
                 import traceback
@@ -438,11 +438,11 @@ def run_all_tests(verbose: bool = False, quick: bool = False):
     
     for test_name, passed in results.items():
         if passed is True:
-            status = "âœ… PASS"
+            status = "[PASS]"
         elif passed is False:
-            status = "âŒ FAIL"
+            status = "[FAIL]"
         else:
-            status = "âš ï¸  SKIP"
+            status = "[SKIP]"
         print(f"{status}  {test_name.replace('_', ' ').title()}")
     
     failed_count = sum(1 for p in results.values() if p is False)
@@ -451,12 +451,12 @@ def run_all_tests(verbose: bool = False, quick: bool = False):
     all_passed = failed_count == 0 and passed_count > 0
     
     if all_passed:
-        print("\nâœ… ALL TESTS PASSED - Mathematical rigor validated!")
+        print("\n[PASS] ALL TESTS PASSED - Mathematical rigor validated!")
         return 0
     else:
-        print(f"\nâŒ {failed_count}/{len(results)} TESTS FAILED")
+        print(f"\n[FAIL] {failed_count}/{len(results)} TESTS FAILED")
         if skipped_count > 0:
-            print(f"âš ï¸  {skipped_count}/{len(results)} TESTS SKIPPED")
+            print(f"[SKIP] {skipped_count}/{len(results)} TESTS SKIPPED")
         return 1
 
 

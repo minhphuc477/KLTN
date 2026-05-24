@@ -685,7 +685,7 @@ if __name__ == '__main__':
     
     # Load a test dungeon
     from pathlib import Path
-    data_root = Path(__file__).resolve().parent / 'Data' / 'The Legend of Zelda'
+    data_root = Path(__file__).resolve().parents[1] / 'Data' / 'The Legend of Zelda'
     adapter = ZeldaDungeonAdapter(data_root)
     
     # Try dungeon 1 (simplest)

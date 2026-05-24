@@ -2,8 +2,8 @@
 
 This addendum updates the existing architecture audits in:
 
-- `docs/ARCHITECTURE_RESEARCH_AUDIT_2026_03_31.md`
-- `docs/TOPOLOGY_GRAPH_RESEARCH_AUDIT_2026_03_31.md`
+- `ARCHITECTURE_RESEARCH_AUDIT_2026_03_31.md`
+- `TOPOLOGY_GRAPH_RESEARCH_AUDIT_2026_03_31.md`
 
 It focuses on what changed after reviewing recent diffusion-for-PCG and prompt-free conditioning papers, then re-checking the current implementation. The important conclusion is unchanged: keep topology generation explicit and constraint-driven, and improve the room generator's local conditioning rather than replacing Block I with a monolithic diffusion model.
 
