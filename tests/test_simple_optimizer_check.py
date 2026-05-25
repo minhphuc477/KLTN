@@ -29,7 +29,7 @@ def test_logicnet_params_are_in_standalone_optimizer():
     assert _param_ids(logic_net) <= _optimizer_param_ids(optimizer)
 
 
-def test_logicnet_params_are_in_diffusion_optimizer_after_assignment():
+def test_logicnet_params_are_added_explicitly_for_diffusion_optimizer():
     logic_net = LogicNet(latent_dim=64, num_classes=44)
     diffusion = create_latent_diffusion(
         latent_dim=64,
@@ -38,7 +38,10 @@ def test_logicnet_params_are_in_diffusion_optimizer_after_assignment():
     )
     diffusion.guidance.logic_net = logic_net
 
-    optimizer = torch.optim.AdamW(list(diffusion.parameters()), lr=0.001)
+    optimizer = torch.optim.AdamW(
+        list(diffusion.parameters()) + list(logic_net.parameters()),
+        lr=0.001,
+    )
 
-    assert _param_ids(logic_net) <= _param_ids(diffusion)
+    assert _param_ids(logic_net).isdisjoint(_param_ids(diffusion))
     assert _param_ids(logic_net) <= _optimizer_param_ids(optimizer)

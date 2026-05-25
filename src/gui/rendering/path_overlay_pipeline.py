@@ -23,7 +23,7 @@ def render_planned_path_overlay(
 
     if gui._path_render_log_counter % 120 == 1:
         logger.debug(
-            "DEBUG_RENDER: show_path=%s, auto_path=%s, len=%d, auto_mode=%s, preview_visible=%s",
+            "PATH_RENDER_TRACE: show_path=%s, auto_path=%s, len=%d, auto_mode=%s, preview_visible=%s",
             show_path,
             bool(gui.auto_path),
             len(gui.auto_path) if gui.auto_path else 0,
@@ -32,7 +32,7 @@ def render_planned_path_overlay(
         )
         if gui.auto_path and len(gui.auto_path) > 0:
             logger.debug(
-                "DEBUG_RENDER: Path first=%s, last=%s, step_idx=%d, view_offset=(%d,%d)",
+                "PATH_RENDER_TRACE: Path first=%s, last=%s, step_idx=%d, view_offset=(%d,%d)",
                 gui.auto_path[0],
                 gui.auto_path[-1],
                 getattr(gui, "auto_step_idx", 0),

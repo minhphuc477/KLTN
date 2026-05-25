@@ -15,8 +15,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 import math
 import logging
+import pickle
+from pathlib import Path
 import numpy as np
-from typing import Dict, Tuple, Optional, Any, List, Iterable
+from typing import Dict, Tuple, Optional, Any, List, Iterable, Union
 
 import networkx as nx
 
@@ -25,18 +27,18 @@ from src.core.definitions import SEMANTIC_PALETTE, parse_edge_type_tokens
 
 try:
     from src.zelda_data.zelda_core import DungeonSolver
-except Exception:
+except ImportError:
     DungeonSolver = None
 
 try:
     from src.simulation.validator import ZeldaValidator
-except Exception:
+except ImportError:
     ZeldaValidator = None
 
 try:
     # Reuse richer QD archive implementation as an auxiliary backend.
     from src.evaluation.map_elites import CVTEliteArchive
-except Exception:
+except ImportError:
     CVTEliteArchive = None
 
 logger = logging.getLogger(__name__)
@@ -61,12 +63,17 @@ class MAPElitesEvaluator:
         enable_advanced_archive: bool = True,
         descriptor_mode: str = 'hybrid',
         seed: Optional[int] = None,
+        archive_path: Optional[Union[str, Path]] = None,
+        load_existing_archive: bool = False,
+        autosave_archive: bool = False,
     ):
         self.resolution = int(resolution)
         self.grid: Dict[Tuple[int, int], BinEntry] = {}
         self.tie_breaker = tie_breaker
         self.descriptor_mode = str(descriptor_mode).strip().lower()
         self.rng = np.random.default_rng(seed)
+        self.archive_path = Path(archive_path) if archive_path is not None else None
+        self.autosave_archive = bool(autosave_archive)
 
         # Optional CVT archive (from src.evaluation.map_elites) to keep
         # grid-based and research-grade QD tracking aligned.
@@ -84,6 +91,14 @@ class MAPElitesEvaluator:
             except (AttributeError, RuntimeError, ValueError, TypeError) as e:
                 logger.warning("Advanced CVT archive unavailable, using legacy grid archive only: %s", e)
                 self._advanced_archive = None
+
+        if load_existing_archive:
+            if self.archive_path is None:
+                raise ValueError("load_existing_archive=True requires archive_path.")
+            if self.archive_path.exists():
+                self.load_archive(self.archive_path)
+            else:
+                logger.info("MAP-Elites archive path does not exist yet: %s", self.archive_path)
 
     def calculate_linearity(self, path_len: int, playable_area: int) -> float:
         # Proxy linearity from fraction of traversed space.
@@ -183,7 +198,8 @@ class MAPElitesEvaluator:
                 'gating_density': gating_density,
                 'topology_complexity': topology_complexity,
             }
-        except Exception:
+        except (AttributeError, RuntimeError, ValueError, TypeError, nx.NetworkXException) as exc:
+            logger.debug("Failed to extract graph topology metrics: %s", exc)
             return {
                 'branching_factor': 0.0,
                 'cycle_density': 0.0,
@@ -304,6 +320,12 @@ class MAPElitesEvaluator:
             except (AttributeError, RuntimeError, ValueError, TypeError) as e:
                 logger.debug("Advanced archive add failed: %s", e)
 
+        if self.autosave_archive and self.archive_path is not None:
+            try:
+                self.save_archive(self.archive_path)
+            except (AttributeError, OSError, pickle.PickleError, TypeError, ValueError) as e:
+                logger.warning("Failed to autosave MAP-Elites archive to %s: %s", self.archive_path, e)
+
     def occupancy_grid(self) -> np.ndarray:
         arr = np.zeros((self.resolution, self.resolution), dtype=np.uint8)
         for (x, y) in self.grid.keys():
@@ -318,6 +340,58 @@ class MAPElitesEvaluator:
         self.grid.clear()
         if self._advanced_archive is not None:
             self._advanced_archive.clear()
+
+    def _archive_payload(self) -> Dict[str, Any]:
+        return {
+            'version': 1,
+            'resolution': int(self.resolution),
+            'tie_breaker': str(self.tie_breaker),
+            'descriptor_mode': str(self.descriptor_mode),
+            'grid': dict(self.grid),
+            'advanced_archive': self._advanced_archive,
+        }
+
+    def save_archive(self, filepath: Optional[Union[str, Path]] = None) -> Path:
+        """Persist the current archive for reproducible warm starts."""
+        path = Path(filepath) if filepath is not None else self.archive_path
+        if path is None:
+            raise ValueError("save_archive requires filepath or evaluator.archive_path.")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open('wb') as f:
+            pickle.dump(self._archive_payload(), f, protocol=pickle.HIGHEST_PROTOCOL)
+        return path
+
+    def load_archive(self, filepath: Optional[Union[str, Path]] = None) -> None:
+        """Load a previously persisted archive into this evaluator."""
+        path = Path(filepath) if filepath is not None else self.archive_path
+        if path is None:
+            raise ValueError("load_archive requires filepath or evaluator.archive_path.")
+        with path.open('rb') as f:
+            payload = pickle.load(f)
+        if not isinstance(payload, dict):
+            raise ValueError(f"Invalid MAP-Elites archive payload in {path}")
+
+        payload_resolution = int(payload.get('resolution', self.resolution))
+        if payload_resolution != self.resolution:
+            raise ValueError(
+                f"Archive resolution mismatch: file has {payload_resolution}, "
+                f"evaluator uses {self.resolution}."
+            )
+
+        grid = payload.get('grid', {})
+        if not isinstance(grid, dict):
+            raise ValueError(f"Invalid MAP-Elites grid payload in {path}")
+        self.grid = {
+            (int(key[0]), int(key[1])): value
+            for key, value in grid.items()
+            if isinstance(key, tuple) and len(key) == 2 and isinstance(value, BinEntry)
+        }
+        self.tie_breaker = str(payload.get('tie_breaker', self.tie_breaker))
+        self.descriptor_mode = str(payload.get('descriptor_mode', self.descriptor_mode)).strip().lower()
+
+        advanced_archive = payload.get('advanced_archive')
+        if advanced_archive is not None:
+            self._advanced_archive = advanced_archive
 
     def advanced_archive_stats(self) -> Optional[Dict[str, float]]:
         """Return auxiliary CVT archive stats if enabled."""
@@ -361,7 +435,16 @@ def _quick_solver_result_from_grid(grid: np.ndarray) -> Dict[str, Any]:
     }
 
 
-def run_map_elites_on_maps(maps: List[Any], resolution: int = 20, tie_breaker: str = 'path_length', solver: Optional[Any] = None) -> Tuple[MAPElitesEvaluator, np.ndarray]:
+def run_map_elites_on_maps(
+    maps: List[Any],
+    resolution: int = 20,
+    tie_breaker: str = 'path_length',
+    solver: Optional[Any] = None,
+    archive_path: Optional[Union[str, Path]] = None,
+    load_existing_archive: bool = False,
+    autosave_archive: bool = False,
+    enable_advanced_archive: bool = True,
+) -> Tuple[MAPElitesEvaluator, np.ndarray]:
     """Run MAP-Elites on a provided list of dungeon-like objects.
 
     Returns a tuple (evaluator, occupancy_grid) where occupancy_grid is a
@@ -370,7 +453,14 @@ def run_map_elites_on_maps(maps: List[Any], resolution: int = 20, tie_breaker: s
     if solver is None:
         solver = DungeonSolver() if DungeonSolver is not None else None
 
-    evaluator = MAPElitesEvaluator(resolution=resolution, tie_breaker=tie_breaker)
+    evaluator = MAPElitesEvaluator(
+        resolution=resolution,
+        tie_breaker=tie_breaker,
+        enable_advanced_archive=enable_advanced_archive,
+        archive_path=archive_path,
+        load_existing_archive=load_existing_archive,
+        autosave_archive=autosave_archive,
+    )
 
     for d in maps:
         grid = _get_grid_from_dungeon(d)

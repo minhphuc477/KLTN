@@ -1,60 +1,33 @@
 import yaml
-import torch
 from src.train_diffusion import DiffusionTrainingConfig, DiffusionTrainer
-from src.core.logic_net import LogicNet
+
 
 def test_logicnet_optimizer():
-    # 1. Load config
     with open("configs/zelda_hmolqd.yaml", "r") as f:
         config_dict = yaml.safe_load(f)
-    
-    # 2. Convert to config object
-    config = DiffusionTrainingConfig.from_dict(config_dict)
-    
-    # Force stage to logicnet just in case
-    config["stage"] = "logicnet"
-    
-    # 2. Create Trainer
-    print("Initializing DiffusionTrainer...")
-    trainer = DiffusionTrainer(config)
-    
-    model = trainer.model
-    optimizer = trainer.optimizer
-    
-    # 3. Check LogicNet
-    if not hasattr(model.guidance, "logic_net") or model.guidance.logic_net is None:
-        print("ERROR: logic_net not found in model.guidance")
-        return
 
-    logic_net = model.guidance.logic_net
+    config = DiffusionTrainingConfig.from_dict(config_dict)
+    config["stage"] = "logicnet"
+    trainer = DiffusionTrainer(config)
+
+    assert hasattr(trainer.model.guidance, "logic_net")
+    assert trainer.model.guidance.logic_net is trainer.logic_net
+    assert "logic_net" not in getattr(trainer.model.guidance, "_modules", {})
+    assert not any("guidance.logic_net" in key for key in trainer.diffusion.state_dict())
+
+    logic_net = trainer.logic_net
     logic_net_params = list(logic_net.parameters())
-    num_logic_params = len(logic_net_params)
-    total_logic_elements = sum(p.numel() for p in logic_net_params)
-    
-    print(f"LogicNet parameter blocks: {num_logic_params}")
-    print(f"LogicNet total elements: {total_logic_elements}")
-    
-    # Check requires_grad
-    requires_grad_count = sum(1 for p in logic_net_params if p.requires_grad)
-    print(f"LogicNet params with requires_grad=True: {requires_grad_count} / {num_logic_params}")
-    
-    # Check optimizer
-    opt_param_ids = set()
-    for group in optimizer.param_groups:
-        for p in group['params']:
-            opt_param_ids.add(id(p))
-    
-    logic_param_ids = set(id(p) for p in logic_net_params)
-    overlap = logic_param_ids.intersection(opt_param_ids)
-    
-    print(f"LogicNet params found in Optimizer: {len(overlap)} / {num_logic_params}")
-    
-    if len(overlap) == 0:
-        print("FAILURE: LogicNet parameters are MISSING from the optimizer.")
-    elif len(overlap) < num_logic_params:
-        print("PARTIAL FAILURE: Only some LogicNet parameters are in the optimizer.")
-    else:
-        print("SUCCESS: All LogicNet parameters are in the optimizer.")
+    optimizer_param_ids = {
+        id(param)
+        for group in trainer.optimizer.param_groups
+        for param in group["params"]
+    }
+    group_names = {group.get("name") for group in trainer.optimizer.param_groups}
+
+    assert logic_net_params
+    assert {"diffusion", "condition_encoder", "logic_net"} <= group_names
+    assert all(param.requires_grad for param in logic_net_params)
+    assert {id(param) for param in logic_net_params} <= optimizer_param_ids
 
 if __name__ == "__main__":
     test_logicnet_optimizer()

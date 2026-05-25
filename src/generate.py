@@ -106,10 +106,35 @@ class DungeonValidator:
         self,
         use_external: bool = True,
         logic_iterations: int = 30,
+        logic_net_checkpoint: Optional[str] = None,
     ):
         self.use_external = use_external and VALIDATOR_AVAILABLE
         # Use Block V LogicNet for differentiable solvability
         self.logic_net = LogicNet(num_iterations=logic_iterations)
+        self.logic_net_checkpoint_loaded = False
+        if logic_net_checkpoint:
+            self._load_logic_net_checkpoint(logic_net_checkpoint)
+
+    def _load_logic_net_checkpoint(self, checkpoint_path: str) -> None:
+        """Load LogicNet weights for latent/probability solvability checks."""
+        path = Path(checkpoint_path)
+        if not path.exists():
+            logger.warning("LogicNet checkpoint not found for DungeonValidator: %s", path)
+            return
+        checkpoint = torch.load(path, map_location="cpu")
+        state = None
+        if isinstance(checkpoint, dict):
+            for key in ("logic_net_state_dict", "state_dict", "model_state_dict"):
+                candidate = checkpoint.get(key)
+                if isinstance(candidate, dict):
+                    state = candidate
+                    break
+            if state is None and any(isinstance(v, torch.Tensor) for v in checkpoint.values()):
+                state = checkpoint
+        if not isinstance(state, dict):
+            raise ValueError(f"LogicNet checkpoint at {checkpoint_path!r} does not contain a state_dict")
+        self.logic_net.load_state_dict(state)
+        self.logic_net_checkpoint_loaded = True
     
     def check_solvability(
         self,
@@ -136,25 +161,36 @@ class DungeonValidator:
         else:
             grid = dungeon_map
         
-        H, W = grid.shape
-        
-        # Find start/goal if not provided
-        if start is None:
-            start = self._find_tile(grid, 'START', default=(2, 2))
-        if goal is None:
-            goal = self._find_tile(grid, 'TRIFORCE', default=(H-3, W-3))
+        grid_array = np.asarray(grid)
+        if grid_array.ndim < 2:
+            raise ValueError(f"Expected at least 2D dungeon data, got shape={tuple(grid_array.shape)}.")
+        H, W = grid_array.shape[-2:]
         
         # Use external validator if requested and available
         if use_ground_truth and self.use_external:
+            if grid_array.ndim != 2:
+                raise ValueError("Ground-truth validation requires a 2D semantic grid.")
+            if start is None:
+                start = self._find_tile(grid_array, 'START', default=(2, 2))
+            if goal is None:
+                goal = self._find_tile(grid_array, 'TRIFORCE', default=(H-3, W-3))
             return self._check_with_astar(grid, start, goal)
 
         # Canonical generation returns stitched semantic ID grids, not VQ latents.
         # Route those through a direct grid-space reachability check instead of
         # feeding them into the room-level LogicNet latent head.
         if self._is_semantic_grid_input(dungeon_map):
+            if start is None:
+                start = self._find_tile(grid_array, 'START', default=(2, 2))
+            if goal is None:
+                goal = self._find_tile(grid_array, 'TRIFORCE', default=(H-3, W-3))
             return self._check_with_grid_bfs(grid, start, goal)
 
         # Use LogicNet only for latent / tile-probability tensors.
+        if start is None:
+            start = (0, 0)
+        if goal is None:
+            goal = (max(0, H - 1), max(0, W - 1))
         return self._check_with_logic_net(dungeon_map, start, goal)
 
     def _is_semantic_grid_input(self, dungeon_map: Any) -> bool:
@@ -179,6 +215,13 @@ class DungeonValidator:
         threshold: float = 0.5,
     ) -> bool:
         """Check solvability using Block V LogicNet."""
+        if not self.logic_net_checkpoint_loaded:
+            logger.warning(
+                "LogicNet latent/probability solvability check requested without a LogicNet checkpoint; "
+                "returning False instead of using random weights."
+            )
+            return False
+
         # Accept tensor-like inputs for robustness in caller code paths.
         if not isinstance(dungeon_map, torch.Tensor):
             dungeon_map = torch.as_tensor(dungeon_map, dtype=torch.float32)

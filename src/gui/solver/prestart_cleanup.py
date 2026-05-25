@@ -15,19 +15,19 @@ def cleanup_preview_before_solver_start(gui: Any, logger: Any, os_module: Any) -
 
         if preview_alive:
             logger.info(
-                "DEBUG_SOLVER: Terminating existing preview process pid=%s",
+                "SOLVER_PREVIEW: Terminating existing preview process pid=%s",
                 getattr(preview_proc, "pid", None),
             )
             try:
                 preview_proc.terminate()
             except (AttributeError, RuntimeError, ValueError, TypeError):
-                logger.exception("DEBUG_SOLVER: Failed to terminate preview process")
+                logger.exception("SOLVER_PREVIEW: Failed to terminate preview process")
             try:
                 preview_proc.join(timeout=0.2)
             except (AttributeError, RuntimeError, ValueError, TypeError):
                 pass
     except (AttributeError, RuntimeError, ValueError, TypeError):
-        logger.exception("DEBUG_SOLVER: Error while stopping preview process")
+        logger.exception("SOLVER_PREVIEW: Error while stopping preview process")
 
     try:
         out_file = getattr(gui, "preview_outfile", None)

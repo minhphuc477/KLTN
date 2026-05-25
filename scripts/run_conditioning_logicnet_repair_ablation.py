@@ -6,7 +6,7 @@ ready. The run matrix separates:
 - full conditioning vs no graph tokens vs no stage tokens
 - repair disabled vs enabled
 - LogicNet guidance disabled vs enabled
-- pre-repair vs post-repair semantics and validity
+- raw diffusion vs cleaned pre-WFC vs post-WFC semantics and validity
 """
 
 from __future__ import annotations
@@ -41,14 +41,19 @@ from src.zelda_data.vglc_utils import filter_virtual_nodes  # noqa: E402
 
 REQUIRED_CHECKPOINT_KEYS = ("vqvae_checkpoint", "diffusion_checkpoint")
 LOGIC_DELTA_METRICS = (
+    "raw_oracle_solved",
     "pre_oracle_solved",
     "post_oracle_solved",
+    "raw_pcbs_solved",
     "pre_pcbs_solved",
     "post_pcbs_solved",
+    "raw_readability_score",
     "pre_readability_score",
     "post_readability_score",
+    "raw_bounded_rationality_index",
     "pre_bounded_rationality_index",
     "post_bounded_rationality_index",
+    "raw_cognitive_effort_index",
     "pre_cognitive_effort_index",
     "post_cognitive_effort_index",
     "logicnet_dungeon_solvability",
@@ -275,24 +280,63 @@ def _safe_evaluate(source: Any, *, persona: str, timeout_astar: int, timeout_pcb
         return {}, {"error_type": type(exc).__name__, "error": str(exc)}
 
 
+def _stage_result(
+    pipeline: NeuralSymbolicDungeonPipeline,
+    result: DungeonGenerationResult,
+    *,
+    grid_attr: str,
+    clear_puzzle_metadata: bool,
+) -> Tuple[DungeonGenerationResult, np.ndarray]:
+    physical_graph = filter_virtual_nodes(result.mission_graph)
+    stage_rooms: Dict[Any, RoomGenerationResult] = {}
+    for room_id, room in result.rooms.items():
+        source_grid = getattr(room, grid_attr, None)
+        stage_grid = np.asarray(source_grid if source_grid is not None else room.room_grid, dtype=np.int32)
+        stage_rooms[room_id] = replace(
+            room,
+            room_grid=stage_grid,
+            was_repaired=False,
+            repair_mask=None,
+            puzzle_metadata={} if bool(clear_puzzle_metadata) else room.puzzle_metadata,
+        )
+    layout = pipeline.stitch_room_layout(stage_rooms, physical_graph)
+    stage_grid = np.asarray(layout.dungeon_grid, dtype=np.int32)
+    # Avoid leaking post-repair room puzzle metadata into non-final oracles.
+    puzzle_metadata = {} if bool(clear_puzzle_metadata) else result.puzzle_metadata
+    return (
+        replace(
+            result,
+            dungeon_grid=stage_grid,
+            rooms=stage_rooms,
+            stitched_layout=layout,
+            puzzle_metadata=puzzle_metadata,
+        ),
+        stage_grid,
+    )
+
+
+def _raw_diffusion_result(
+    pipeline: NeuralSymbolicDungeonPipeline,
+    result: DungeonGenerationResult,
+) -> Tuple[DungeonGenerationResult, np.ndarray]:
+    return _stage_result(
+        pipeline,
+        result,
+        grid_attr="raw_neural_grid",
+        clear_puzzle_metadata=True,
+    )
+
+
 def _pre_repair_result(
     pipeline: NeuralSymbolicDungeonPipeline,
     result: DungeonGenerationResult,
 ) -> Tuple[DungeonGenerationResult, np.ndarray]:
-    physical_graph = filter_virtual_nodes(result.mission_graph)
-    pre_rooms: Dict[Any, RoomGenerationResult] = {}
-    for room_id, room in result.rooms.items():
-        pre_grid = np.asarray(room.neural_grid if room.neural_grid is not None else room.room_grid, dtype=np.int32)
-        pre_rooms[room_id] = replace(
-            room,
-            room_grid=pre_grid,
-            was_repaired=False,
-            repair_mask=None,
-        )
-    layout = pipeline.stitch_room_layout(pre_rooms, physical_graph)
-    pre_grid = np.asarray(layout.dungeon_grid, dtype=np.int32)
-    # Avoid leaking post-repair room puzzle metadata into the pre-repair oracle.
-    return replace(result, dungeon_grid=pre_grid, rooms=pre_rooms, stitched_layout=layout, puzzle_metadata={}), pre_grid
+    return _stage_result(
+        pipeline,
+        result,
+        grid_attr="neural_grid",
+        clear_puzzle_metadata=True,
+    )
 
 
 def _row_for_result(
@@ -300,12 +344,16 @@ def _row_for_result(
     variant: VariantSpec,
     seed: int,
     result: DungeonGenerationResult,
+    raw_result: DungeonGenerationResult,
     pre_result: DungeonGenerationResult,
+    raw_eval: Mapping[str, Any],
     pre_eval: Mapping[str, Any],
     post_eval: Mapping[str, Any],
+    raw_eval_error: Mapping[str, Any],
     pre_eval_error: Mapping[str, Any],
     post_eval_error: Mapping[str, Any],
 ) -> Dict[str, Any]:
+    raw_counts = _semantic_counts(raw_result.dungeon_grid)
     pre_counts = _semantic_counts(pre_result.dungeon_grid)
     post_counts = _semantic_counts(result.dungeon_grid)
     row: Dict[str, Any] = {
@@ -320,16 +368,31 @@ def _row_for_result(
         "repair_time_sec": float(result.metrics.get("repair_time_sec", 0.0) or 0.0),
         "total_tiles_repaired": int(result.metrics.get("total_tiles_repaired", 0) or 0),
         "repair_rate": float(result.metrics.get("repair_rate", 0.0) or 0.0),
+        "raw_invalid_tile_ids": int(
+            sum(int(room.metrics.get("neural_invalid_tile_ids", 0) or 0) for room in result.rooms.values())
+        ),
+        "raw_to_cleaned_tiles_changed": int(
+            sum(int(room.metrics.get("raw_neural_to_cleaned_tiles_changed", 0) or 0) for room in result.rooms.values())
+        ),
+        "raw_to_final_tiles_changed": int(
+            sum(int(room.metrics.get("raw_neural_to_final_tiles_changed", 0) or 0) for room in result.rooms.values())
+        ),
         "logicnet_dungeon_solvability": float(result.metrics.get("logicnet_dungeon_solvability", 0.0) or 0.0),
         "logicnet_room_solvability": float(result.metrics.get("logicnet_room_solvability", 0.0) or 0.0),
+        "raw_eval_error_type": str(raw_eval_error.get("error_type", "")),
         "pre_eval_error_type": str(pre_eval_error.get("error_type", "")),
         "post_eval_error_type": str(post_eval_error.get("error_type", "")),
     }
+    for key, value in raw_counts.items():
+        row[f"raw_{key}"] = int(value)
     for key, value in pre_counts.items():
         row[f"pre_{key}"] = int(value)
+        row[f"cleaned_delta_{key}"] = int(value) - int(raw_counts.get(key, 0))
     for key, value in post_counts.items():
         row[f"post_{key}"] = int(value)
         row[f"delta_{key}"] = int(value) - int(pre_counts.get(key, 0))
+        row[f"total_delta_{key}"] = int(value) - int(raw_counts.get(key, 0))
+    row.update(_flatten_eval("raw", raw_eval))
     row.update(_flatten_eval("pre", pre_eval))
     row.update(_flatten_eval("post", post_eval))
     return row
@@ -368,16 +431,37 @@ def summarize_rows(rows: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
 
     summary: List[Dict[str, Any]] = []
     for (conditioning, repair_enabled, logic_enabled), group in sorted(groups.items()):
+        raw_oracle_valid_rate = _mean(row.get("raw_oracle_solved", False) for row in group)
+        pre_oracle_valid_rate = _mean(row.get("pre_oracle_solved", False) for row in group)
+        post_oracle_valid_rate = _mean(row.get("post_oracle_solved", False) for row in group)
+        raw_solved_post_failed_rate = _mean(
+            bool(row.get("raw_oracle_solved", False)) and not bool(row.get("post_oracle_solved", False))
+            for row in group
+        )
+        raw_failed_post_solved_rate = _mean(
+            (not bool(row.get("raw_oracle_solved", False))) and bool(row.get("post_oracle_solved", False))
+            for row in group
+        )
         summary.append(
             {
                 "conditioning": conditioning,
                 "repair_enabled": bool(repair_enabled),
                 "logic_enabled": bool(logic_enabled),
                 "n": int(len(group)),
-                "pre_oracle_valid_rate": _mean(row.get("pre_oracle_solved", False) for row in group),
-                "post_oracle_valid_rate": _mean(row.get("post_oracle_solved", False) for row in group),
+                "raw_oracle_valid_rate": raw_oracle_valid_rate,
+                "pre_oracle_valid_rate": pre_oracle_valid_rate,
+                "post_oracle_valid_rate": post_oracle_valid_rate,
+                "raw_solvability_rate_without_fix": raw_oracle_valid_rate,
+                "pre_repair_solvability_rate": pre_oracle_valid_rate,
+                "post_solvability_rate": post_oracle_valid_rate,
+                "wfc_destroyed_raw_solution_rate": raw_solved_post_failed_rate,
+                "repair_recovered_raw_failure_rate": raw_failed_post_solved_rate,
+                "raw_pcbs_valid_rate": _mean(row.get("raw_pcbs_solved", False) for row in group),
                 "pre_pcbs_valid_rate": _mean(row.get("pre_pcbs_solved", False) for row in group),
                 "post_pcbs_valid_rate": _mean(row.get("post_pcbs_solved", False) for row in group),
+                "raw_invalid_tile_ids_mean": _mean(row.get("raw_invalid_tile_ids", 0) for row in group),
+                "raw_to_cleaned_tiles_changed_mean": _mean(row.get("raw_to_cleaned_tiles_changed", 0) for row in group),
+                "raw_to_final_tiles_changed_mean": _mean(row.get("raw_to_final_tiles_changed", 0) for row in group),
                 "repair_count_mean": _mean(row.get("repair_count", 0) for row in group),
                 "repair_time_sec_mean": _mean(row.get("repair_time_sec", 0.0) for row in group),
                 "total_tiles_repaired_mean": _mean(row.get("total_tiles_repaired", 0) for row in group),
@@ -568,6 +652,7 @@ def execute_protocol(
                 variant=variant,
                 device=str(args.device),
             )
+            pipeline.runtime_diagnostics = {}
             started = time.perf_counter()
             result = pipeline.generate_dungeon(
                 generate_topology=True,
@@ -585,7 +670,15 @@ def execute_protocol(
             )
             result.metrics["ablation_wall_time_sec"] = float(time.perf_counter() - started)
             result.metrics["ablation_pipeline_cache_size"] = int(len(pipeline_cache))
+            raw_result, raw_grid = _raw_diffusion_result(pipeline, result)
             pre_result, pre_grid = _pre_repair_result(pipeline, result)
+            raw_eval, raw_error = _safe_evaluate(
+                raw_result,
+                persona=str(args.persona),
+                timeout_astar=int(args.timeout_astar),
+                timeout_pcbs=int(args.timeout_pcbs),
+                seed=int(seed),
+            )
             pre_eval, pre_error = _safe_evaluate(
                 pre_result,
                 persona=str(args.persona),
@@ -604,14 +697,18 @@ def execute_protocol(
                 variant=variant,
                 seed=int(seed),
                 result=result,
+                raw_result=raw_result,
                 pre_result=pre_result,
+                raw_eval=raw_eval,
                 pre_eval=pre_eval,
                 post_eval=post_eval,
+                raw_eval_error=raw_error,
                 pre_eval_error=pre_error,
                 post_eval_error=post_error,
             )
             rows.append(row)
             if bool(args.write_visual_sheet):
+                visual_grids.append((f"{variant.name} seed={seed} raw", raw_grid))
                 visual_grids.append((f"{variant.name} seed={seed} pre", pre_grid))
                 visual_grids.append((f"{variant.name} seed={seed} post", np.asarray(result.dungeon_grid, dtype=np.int32)))
             _write_csv(args.output / "conditioning_logicnet_repair_rows.partial.csv", rows)

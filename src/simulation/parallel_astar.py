@@ -35,6 +35,7 @@ from .validator import (
     PICKUP_IDS,
     PUSHABLE_IDS,
     WATER_IDS,
+    game_state_key,
 )
 
 logger = logging.getLogger(__name__)
@@ -204,21 +205,21 @@ def _parallel_astar_worker(
         g_scores = {}
 
         # Start from the same initial frontier in each worker.
-        start_hash = hash(start_state)
-        g_scores[start_hash] = 0
+        start_key = game_state_key(start_state)
+        g_scores[start_key] = 0
         f_score = _heuristic_local(start_state, goal_pos)
-        heapq.heappush(open_set, (f_score, counter, start_hash, start_state, [start_state.position]))
+        heapq.heappush(open_set, (f_score, counter, start_key, start_state, [start_state.position]))
         counter += 1
 
         while open_set and not termination_flag.is_set():
-            _, _, state_hash, current_state, path = heapq.heappop(open_set)
+            _, _, state_key, current_state, path = heapq.heappop(open_set)
 
             # Skip if already globally explored.
-            if state_hash in shared_closed:
+            if state_key in shared_closed:
                 continue
 
             # Claim this state globally.
-            shared_closed[state_hash] = True
+            shared_closed[state_key] = True
             states_explored += 1
 
             # Goal check.
@@ -256,17 +257,17 @@ def _parallel_astar_worker(
                 if not can_move:
                     continue
 
-                new_hash = hash(new_state)
-                if new_hash in shared_closed:
+                new_key = game_state_key(new_state)
+                if new_key in shared_closed:
                     continue
 
-                g_score = g_scores.get(state_hash, 0) + 1
-                if new_hash in g_scores and g_score >= g_scores[new_hash]:
+                g_score = g_scores.get(state_key, 0) + 1
+                if new_key in g_scores and g_score >= g_scores[new_key]:
                     continue
 
-                g_scores[new_hash] = g_score
+                g_scores[new_key] = g_score
                 f_score = g_score + _heuristic_local(new_state, goal_pos)
-                heapq.heappush(open_set, (f_score, counter, new_hash, new_state, path + [new_state.position]))
+                heapq.heappush(open_set, (f_score, counter, new_key, new_state, path + [new_state.position]))
                 counter += 1
     except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         # Worker crashed before producing a result; include reason for diagnosis.

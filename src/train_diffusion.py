@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any, Tuple, List
 
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader
@@ -867,23 +868,15 @@ class DiffusionTrainer:
         # --- Wire LogicNet into diffusion model's GradientGuidance ---
         # This enables gradient guidance during sampling: at each denoising
         # step, âˆ‡_{x_t}L_logic nudges the sample toward solvable configs.
-        self.diffusion.guidance.logic_net = self.logic_net
-        self.diffusion.guidance.guidance_scale = config.guidance_scale
-        self.diffusion.guidance.clamp_magnitude = float(config.guidance_clamp_magnitude)
-        self.diffusion.guidance.relative_norm_cap = float(config.guidance_relative_norm_cap)
-        self.diffusion.guidance.schedule_enabled = bool(config.guidance_schedule_enabled)
-        self.diffusion.guidance.active_fraction = float(config.guidance_active_fraction)
-        self.diffusion.guidance.decay_power = float(config.guidance_decay_power)
-        self.diffusion.guidance.max_graph_nodes = int(config.guidance_max_graph_nodes)
-        self.diffusion.guidance.max_key_lock_pairs = int(config.guidance_max_key_lock_pairs)
-        self.diffusion.guidance.max_guidance_elements = int(config.guidance_max_guidance_elements)
+        self._configure_guidance()
         
-        # Setup optimizer: train diffusion + condition encoder
-        # Note: LogicNet is now a submodule of diffusion.guidance, so its
-        # parameters are already included in self.diffusion.parameters().
+        # Setup optimizer: train diffusion + condition encoder + LogicNet.
         self.optimizer = optim.AdamW(
-            list(self.diffusion.parameters()) + 
-            list(self.condition_encoder.parameters()),
+            [
+                {"name": "diffusion", "params": list(self.diffusion.parameters())},
+                {"name": "condition_encoder", "params": list(self.condition_encoder.parameters())},
+                {"name": "logic_net", "params": list(self.logic_net.parameters())},
+            ],
             lr=config.learning_rate,
             weight_decay=config.optimizer_weight_decay,
         )
@@ -903,6 +896,7 @@ class DiffusionTrainer:
         # --- Phase 4A: EMA model weights ---
         import copy
         self.ema_diffusion = copy.deepcopy(self.diffusion)
+        self._configure_guidance(self.ema_diffusion)
         self.ema_diffusion.eval()
         for param in self.ema_diffusion.parameters():
             param.requires_grad = False
@@ -911,6 +905,27 @@ class DiffusionTrainer:
             enabled=bool(getattr(config, "latent_cache_enabled", True)),
             max_items=int(getattr(config, "latent_cache_max_items", 4096)),
         )
+
+    def _configure_guidance(self, diffusion: Optional[nn.Module] = None) -> None:
+        """Wire current LogicNet and config values into gradient guidance."""
+        target = self.diffusion if diffusion is None else diffusion
+        guidance = target.guidance
+        if isinstance(getattr(type(guidance), "logic_net", None), property):
+            guidance.logic_net = self.logic_net
+        else:
+            object.__setattr__(guidance, "logic_net", self.logic_net)
+        modules = getattr(guidance, "_modules", None)
+        if isinstance(modules, dict):
+            modules.pop("logic_net", None)
+        guidance.guidance_scale = float(getattr(self.config, "guidance_scale", 1.0))
+        guidance.clamp_magnitude = float(getattr(self.config, "guidance_clamp_magnitude", 1.0))
+        guidance.relative_norm_cap = float(getattr(self.config, "guidance_relative_norm_cap", 0.25))
+        guidance.schedule_enabled = bool(getattr(self.config, "guidance_schedule_enabled", True))
+        guidance.active_fraction = float(getattr(self.config, "guidance_active_fraction", 1.0))
+        guidance.decay_power = float(getattr(self.config, "guidance_decay_power", 1.0))
+        guidance.max_graph_nodes = int(getattr(self.config, "guidance_max_graph_nodes", 512))
+        guidance.max_key_lock_pairs = int(getattr(self.config, "guidance_max_key_lock_pairs", 2048))
+        guidance.max_guidance_elements = int(getattr(self.config, "guidance_max_guidance_elements", 2_000_000))
     
     def _create_vqvae(self) -> VQVAE:
         """Create or load VQ-VAE."""
@@ -1847,6 +1862,25 @@ class DiffusionTrainer:
             return bool(torch.isfinite(state_dict).all())
         return True
 
+    @staticmethod
+    def _strip_embedded_guidance_logic_net_state(state_dict: Any) -> Tuple[Any, int]:
+        """Drop legacy LogicNet weights that were nested inside diffusion guidance."""
+        if not isinstance(state_dict, dict):
+            return state_dict, 0
+
+        prefix = "guidance.logic_net."
+        kept_items = []
+        removed = 0
+        for key, value in state_dict.items():
+            if str(key).startswith(prefix):
+                removed += 1
+                continue
+            kept_items.append((key, value))
+
+        if removed == 0:
+            return state_dict, 0
+        return dict(kept_items), removed
+
     def _warn_nonfinite(self, key: str, message: str, *args: Any) -> None:
         """Rate-limit repeated non-finite warnings so logs stay readable."""
         counts = getattr(self, "_nonfinite_warning_counts", None)
@@ -2418,6 +2452,18 @@ class DiffusionTrainer:
     def load_checkpoint(self, path: str):
         """Load training checkpoint."""
         checkpoint = torch.load(path, map_location=self.device, weights_only=False)
+        for key in ('diffusion_state_dict', 'ema_diffusion_state_dict'):
+            if key in checkpoint:
+                checkpoint[key], removed = self._strip_embedded_guidance_logic_net_state(checkpoint[key])
+                if removed:
+                    logger.warning(
+                        "Stripped %d legacy guidance.logic_net.* tensor(s) from `%s` while loading %s; "
+                        "using `logic_net_state_dict` as the LogicNet source of truth.",
+                        int(removed),
+                        key,
+                        path,
+                    )
+
         for key in (
             'diffusion_state_dict',
             'ema_diffusion_state_dict',
@@ -2465,17 +2511,9 @@ class DiffusionTrainer:
                 )
         
         # Re-wire LogicNet into guidance after loading
-        self.diffusion.guidance.logic_net = self.logic_net
-        self.diffusion.guidance.guidance_scale = float(getattr(self.config, "guidance_scale", 1.0))
-        self.diffusion.guidance.clamp_magnitude = float(getattr(self.config, "guidance_clamp_magnitude", 1.0))
-        self.diffusion.guidance.relative_norm_cap = float(getattr(self.config, "guidance_relative_norm_cap", 0.25))
-        self.diffusion.guidance.schedule_enabled = bool(getattr(self.config, "guidance_schedule_enabled", True))
-        self.diffusion.guidance.active_fraction = float(getattr(self.config, "guidance_active_fraction", 1.0))
-        self.diffusion.guidance.decay_power = float(getattr(self.config, "guidance_decay_power", 1.0))
-        self.diffusion.guidance.max_graph_nodes = int(getattr(self.config, "guidance_max_graph_nodes", 512))
-        self.diffusion.guidance.max_key_lock_pairs = int(getattr(self.config, "guidance_max_key_lock_pairs", 2048))
-        self.diffusion.guidance.max_guidance_elements = int(getattr(self.config, "guidance_max_guidance_elements", 2_000_000))
-        
+        self._configure_guidance()
+        self._configure_guidance(self.ema_diffusion)
+
         logger.info(f"Loaded checkpoint from {path} (epoch {self.epoch})")
 
 
@@ -2576,7 +2614,7 @@ def train_diffusion(config: DiffusionTrainingConfig) -> DiffusionTrainer:
             condition_trainable = count_parameters(trainer.condition_encoder, trainable_only=True)
             logic_subset = count_parameters(trainer.logic_net, trainable_only=True)
             logger.info(
-                "Diffusion guidance subset (already included in diffusion total): logic_net=%s.",
+                "LogicNet guidance parameters are optimized separately: logic_net=%s.",
                 format_parameter_count(logic_subset),
             )
             log_capacity_guardrails(
@@ -2584,8 +2622,9 @@ def train_diffusion(config: DiffusionTrainingConfig) -> DiffusionTrainer:
                 stage_name="Diffusion trainer",
                 dataset_size=len(train_dataset),
                 param_groups={
-                    "diffusion_plus_guidance": diffusion_trainable,
+                    "diffusion": diffusion_trainable,
                     "condition_encoder": condition_trainable,
+                    "logic_net": logic_subset,
                 },
                 recommended_config="configs/zelda_hmolqd.yaml",
                 capacity_knobs=(

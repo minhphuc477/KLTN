@@ -26,6 +26,8 @@ WALKABLE_IDS = {
     SEMANTIC_PALETTE["PUZZLE"],
 }
 
+MIN_WALKABLE_NON_VOID_RATIO = 0.20
+
 
 class SanityChecker:
     """Pre-validation checks for map structural validity."""
@@ -53,7 +55,7 @@ class SanityChecker:
         total_cells = self.height * self.width
         non_void_cells = total_cells - void_count
 
-        if non_void_cells > 0 and walkable_count < 0.05 * non_void_cells:
+        if non_void_cells > 0 and walkable_count < MIN_WALKABLE_NON_VOID_RATIO * non_void_cells:
             errors.append(
                 f"Map is mostly blocked ({walkable_count}/{non_void_cells} walkable, excluding void)"
             )

@@ -5,6 +5,7 @@ import networkx as nx
 import numpy as np
 
 from scripts.run_ablation_study import (
+    AblationStudy,
     ExperimentConfig,
     _json_sanitize,
     build_ablation_plan,
@@ -60,6 +61,72 @@ def test_ablation_json_sanitize_outputs_strict_json_values():
     assert sanitized["np_float"] == pytest.approx(1.25)
     assert sanitized["array"] == [1, None]
     assert json.dumps(sanitized, allow_nan=False)
+
+
+def test_ablation_summary_separates_failure_rate_from_conditional_solvability():
+    study = AblationStudy.__new__(AblationStudy)
+    study.max_runtime_sec = None
+    rows = {
+        ("FULL", 1): {
+            "config": "FULL",
+            "seed": 1,
+            "success": True,
+            "solvable": True,
+            "confusion_ratio": 0.0,
+            "confusion_index": 0.0,
+            "path_optimal": 1.0,
+            "tile_prior_kl": 0.0,
+            "graph_edit_distance": 0.0,
+            "generation_time_sec": 1.0,
+            "novelty": 0.0,
+            "reconstruction_error": 0.0,
+            "constraint_valid": 1.0,
+            "room_repair_rate": 0.0,
+            "tiles_repaired": 0.0,
+            "topology_representable_edge_rate": 1.0,
+            "topology_edge_connection_recall": 1.0,
+            "topology_phantom_connection_rate": 0.0,
+            "topology_preservation_score": 1.0,
+            "directed_representable_edge_rate": 1.0,
+            "directed_edge_realization_rate": 1.0,
+            "directed_directionality_leak_rate": 0.0,
+            "directed_edge_preservation_score": 1.0,
+        },
+        ("FULL", 2): {
+            "config": "FULL",
+            "seed": 2,
+            "success": False,
+            "solvable": False,
+            "confusion_ratio": np.nan,
+            "confusion_index": np.nan,
+            "path_optimal": 0.0,
+            "tile_prior_kl": np.nan,
+            "graph_edit_distance": np.nan,
+            "generation_time_sec": 0.5,
+            "novelty": np.nan,
+            "reconstruction_error": np.nan,
+            "constraint_valid": np.nan,
+            "room_repair_rate": np.nan,
+            "tiles_repaired": np.nan,
+            "topology_representable_edge_rate": np.nan,
+            "topology_edge_connection_recall": np.nan,
+            "topology_phantom_connection_rate": np.nan,
+            "topology_preservation_score": np.nan,
+            "directed_representable_edge_rate": np.nan,
+            "directed_edge_realization_rate": np.nan,
+            "directed_directionality_leak_rate": np.nan,
+            "directed_edge_preservation_score": np.nan,
+        },
+    }
+    study._run_single = lambda cfg, seed: dict(rows[(cfg.name, seed)])
+
+    _raw, summary = study.run(configs=[ExperimentConfig(name="FULL")], seeds=[1, 2])
+    full = summary.iloc[0].to_dict()
+
+    assert full["success_rate"] == pytest.approx(0.5)
+    assert full["failure_rate"] == pytest.approx(0.5)
+    assert full["solvability_rate"] == pytest.approx(0.5)
+    assert full["solvability_rate_successful_generations"] == pytest.approx(1.0)
 
 
 def test_room_alignment_aggregation_includes_post_overlay_semantic_error():

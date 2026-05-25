@@ -45,6 +45,17 @@ class StateSpaceGraphSolverCore:
             elif "i" in parts:
                 self.item_rooms[node_id] = "minor_item"
 
+    @staticmethod
+    def _state_key(node: int, state: Any) -> Tuple[Any, ...]:
+        """Immutable graph-search key; avoids storing raw state hash values."""
+        return (
+            node,
+            int(getattr(state, "keys_held", 0) or 0),
+            frozenset(getattr(state, "keys_collected", set()) or set()),
+            frozenset(getattr(state, "doors_opened", set()) or set()),
+            frozenset(getattr(state, "items_collected", set()) or set()),
+        )
+
     def can_traverse_edge(self, from_node: int, to_node: int, state: Any) -> Tuple[bool, Any, str]:
         """Check edge traversability and apply inventory/state effects."""
         edge_data = self.graph.get_edge_data(from_node, to_node)
@@ -131,7 +142,7 @@ class StateSpaceGraphSolverCore:
 
         visited = {}
         queue = deque([(start_node, initial_state, [start_node], [])])
-        visited[(start_node, hash(initial_state))] = True
+        visited[self._state_key(start_node, initial_state)] = True
 
         keys_available_max = 0
 
@@ -161,7 +172,7 @@ class StateSpaceGraphSolverCore:
 
                 new_state = self.collect_room_items(neighbor, new_state)
 
-                state_key = (neighbor, hash(new_state))
+                state_key = self._state_key(neighbor, new_state)
                 if state_key in visited:
                     continue
 

@@ -29,9 +29,11 @@ import random
 import logging
 import math
 import re
+import pickle
+from pathlib import Path
 from typing import List, Tuple, Optional, Dict, Set, Any, Sequence
 from dataclasses import dataclass, field
-from collections import defaultdict
+from collections import defaultdict, deque
 import copy
 
 import numpy as np
@@ -3034,10 +3036,10 @@ class TensionCurveEvaluator:
             return [start_id]
 
         visited = {start_id}
-        queue: List[Tuple[Any, List[Any]]] = [(start_id, [start_id])]
+        queue = deque([(start_id, [start_id])])
 
         while queue:
-            current, path = queue.pop(0)
+            current, path = queue.popleft()
             for neighbor in adjacency.get(current, []):
                 if neighbor in visited:
                     continue
@@ -3177,6 +3179,9 @@ class EvolutionaryTopologyGenerator:
         qd_archive_cells: int = 128,
         qd_init_random_fraction: float = 0.35,
         qd_emitter_mutation_rate: float = 0.18,
+        qd_archive_path: Optional[str] = None,
+        qd_load_archive: bool = False,
+        qd_autosave_archive: bool = False,
         max_lock_key_rules: int = 3,
         realism_tuning: Optional[Dict[str, float]] = None,
         enable_rule_credit_assignment: bool = False,
@@ -3210,6 +3215,12 @@ class EvolutionaryTopologyGenerator:
             qd_init_random_fraction: Bootstrap fraction sampled uniformly
                 before archive emitters dominate.
             qd_emitter_mutation_rate: Mutation rate for emitter offspring.
+            qd_archive_path: Optional persisted CVT archive path for warm
+                starts and reproducible QD continuation.
+            qd_load_archive: If True, load qd_archive_path before CVT search
+                when the file exists.
+            qd_autosave_archive: If True, save qd_archive_path after each
+                completed generation and at the end of CVT search.
             max_lock_key_rules: Soft cap on InsertLockKey rule applications
                 permitted during genome execution.
             enforce_generation_constraints: If True, reject rule outcomes that
@@ -3244,6 +3255,9 @@ class EvolutionaryTopologyGenerator:
         self.qd_archive_cells = int(max(32, qd_archive_cells))
         self.qd_init_random_fraction = float(np.clip(float(qd_init_random_fraction), 0.05, 0.95))
         self.qd_emitter_mutation_rate = float(np.clip(float(qd_emitter_mutation_rate), 0.01, 0.95))
+        self.qd_archive_path = Path(qd_archive_path) if qd_archive_path else None
+        self.qd_load_archive = bool(qd_load_archive)
+        self.qd_autosave_archive = bool(qd_autosave_archive)
         self.max_lock_key_rules = int(max(0, max_lock_key_rules))
         self.realism_tuning = self._merge_realism_tuning(realism_tuning)
         self.enable_rule_credit_assignment = bool(enable_rule_credit_assignment)
@@ -5659,6 +5673,76 @@ class EvolutionaryTopologyGenerator:
         # 3) Exploration emitter: restart from global prior.
         return self._sample_weighted_genome()
 
+    def _new_qd_archive(self) -> Any:
+        """Create a CVT archive using the generator's configured descriptor space."""
+        if CVTEliteArchive is None:
+            raise RuntimeError("CVTEliteArchive is unavailable")
+        return CVTEliteArchive(
+            num_cells=int(self.qd_archive_cells),
+            feature_dims=4,
+            feature_ranges=[(0.0, 1.0)] * 4,
+            num_cvt_samples=max(1024, int(self.qd_archive_cells) * 24),
+            seed=(None if self.seed is None else int(self.seed) + 17),
+        )
+
+    def _load_qd_archive_or_new(self) -> Any:
+        """Load a persisted CVT archive when requested, otherwise create a fresh one."""
+        archive = self._new_qd_archive()
+        if not self.qd_load_archive:
+            return archive
+        if self.qd_archive_path is None:
+            raise ValueError("qd_load_archive=True requires qd_archive_path.")
+        if not self.qd_archive_path.exists():
+            logger.info("QD archive path does not exist yet: %s", self.qd_archive_path)
+            return archive
+
+        with self.qd_archive_path.open("rb") as f:
+            payload = pickle.load(f)
+        loaded_archive = payload.get("archive") if isinstance(payload, dict) else payload
+        if loaded_archive is None:
+            raise ValueError(f"Invalid QD archive payload in {self.qd_archive_path}")
+        if int(getattr(loaded_archive, "num_cells", self.qd_archive_cells)) != int(self.qd_archive_cells):
+            raise ValueError(
+                f"QD archive cell mismatch: file has {getattr(loaded_archive, 'num_cells', 'unknown')}, "
+                f"generator uses {self.qd_archive_cells}."
+            )
+        if int(getattr(loaded_archive, "feature_dims", 4)) != 4:
+            raise ValueError("QD archive feature dimension mismatch; expected 4D topology descriptors.")
+        logger.info(
+            "Loaded QD archive from %s (%d elites)",
+            self.qd_archive_path,
+            len(getattr(loaded_archive, "archive", {}) or {}),
+        )
+        return loaded_archive
+
+    def _save_qd_archive(self, archive: Any) -> None:
+        """Best-effort persistence for CVT archives used by topology QD search."""
+        if self.qd_archive_path is None:
+            return
+        try:
+            self.qd_archive_path.parent.mkdir(parents=True, exist_ok=True)
+            stats = archive.get_stats()
+            payload = {
+                "version": 1,
+                "archive": archive,
+                "stats": {
+                    "coverage": float(stats.coverage),
+                    "qd_score": float(stats.total_fitness),
+                    "mean_fitness": float(stats.mean_fitness),
+                    "num_elites": int(stats.num_elites),
+                    "feature_diversity": float(stats.feature_diversity),
+                },
+                "config": {
+                    "qd_archive_cells": int(self.qd_archive_cells),
+                    "feature_dims": 4,
+                    "seed": self.seed,
+                },
+            }
+            with self.qd_archive_path.open("wb") as f:
+                pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
+        except (AttributeError, OSError, pickle.PickleError, TypeError, ValueError) as exc:
+            logger.warning("Failed to persist QD archive to %s: %s", self.qd_archive_path, exc)
+
     def _evolve_cvt_emitter(self, *, directed_output: bool = False) -> nx.Graph:
         """
         Runtime QD strategy using a CVT archive + simple emitters.
@@ -5671,13 +5755,7 @@ class EvolutionaryTopologyGenerator:
         logger.info("Starting CVT-emitter search...")
         total_evaluations = max(1, int(self.population_size) * max(1, int(self.generations)))
         init_random = max(8, int(round(self.qd_init_random_fraction * float(total_evaluations))))
-        archive = CVTEliteArchive(
-            num_cells=int(self.qd_archive_cells),
-            feature_dims=4,
-            feature_ranges=[(0.0, 1.0)] * 4,
-            num_cvt_samples=max(1024, int(self.qd_archive_cells) * 24),
-            seed=(None if self.seed is None else int(self.seed) + 17),
-        )
+        archive = self._load_qd_archive_or_new()
 
         best: Optional[Individual] = None
         batch: List[Individual] = []
@@ -5746,9 +5824,13 @@ class EvolutionaryTopologyGenerator:
                     self.avg_violation_history.append(1.0)
                 self.diversity_history.append(float(archive_stats.feature_diversity))
                 batch = []
+                if self.qd_autosave_archive:
+                    self._save_qd_archive(archive)
 
         if best is None or best.phenotype is None:
             raise RuntimeError("CVT-emitter search produced no valid individual")
+
+        self._save_qd_archive(archive)
 
         logger.info(
             "CVT-emitter complete. Best fitness: %.4f, Graph: %d nodes, %d edges",

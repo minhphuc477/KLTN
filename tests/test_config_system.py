@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import inspect
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -18,6 +19,7 @@ from src.config_system import (
     merge_config,
 )
 from src.pipeline import (
+    NeuralSymbolicDungeonPipeline,
     generation_runtime_kwargs_from_resolved_config,
     pipeline_kwargs_from_resolved_config,
     topology_generation_kwargs_from_resolved_config,
@@ -1158,6 +1160,9 @@ def test_topology_helper_preserves_yaml_generation_knobs(tmp_path: Path):
                 "qd_archive_cells": 160,
                 "qd_init_random_fraction": 0.25,
                 "qd_emitter_mutation_rate": 0.27,
+                "qd_archive_path": "results/topology_qd.pkl",
+                "qd_load_archive": True,
+                "qd_autosave_archive": True,
                 "max_lock_key_rules": 2,
                 "enable_rule_credit_assignment": True,
                 "enforce_generation_constraints": True,
@@ -1182,10 +1187,25 @@ def test_topology_helper_preserves_yaml_generation_knobs(tmp_path: Path):
     assert kwargs["qd_archive_cells"] == 160
     assert kwargs["qd_init_random_fraction"] == pytest.approx(0.25)
     assert kwargs["qd_emitter_mutation_rate"] == pytest.approx(0.27)
+    assert kwargs["qd_archive_path"] == "results/topology_qd.pkl"
+    assert kwargs["qd_load_archive"] is True
+    assert kwargs["qd_autosave_archive"] is True
     assert kwargs["max_lock_key_rules"] == 2
     assert kwargs["enable_rule_credit_assignment"] is True
     assert kwargs["enforce_generation_constraints"] is True
     assert kwargs["allow_candidate_repairs"] is True
+
+
+def test_pipeline_config_kwargs_match_pipeline_constructor_surface():
+    resolved = merge_config(yaml_path=None, cli_overrides=None)
+    kwargs = pipeline_kwargs_from_resolved_config(resolved)
+    signature = inspect.signature(NeuralSymbolicDungeonPipeline.__init__)
+    accepted = set(signature.parameters) - {"self"}
+
+    unknown = sorted(set(kwargs) - accepted)
+
+    assert unknown == []
+    assert len(kwargs) >= 80
 
 
 def test_fast_sampler_stage_inherits_shared_yaml_runtime_and_dataset_settings(tmp_path: Path):

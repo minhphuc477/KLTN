@@ -78,7 +78,7 @@ def run_auto_step_tick(gui, logger, frame_count):
     """Advance auto-solve timer and execute one step when the threshold is met."""
     if frame_count % 60 == 0:
         logger.debug(
-            "DEBUG_ANIM: frame=%d auto_mode=%s env.done=%s auto_path_len=%d auto_step_idx=%s",
+            "ANIM_TRACE: frame=%d auto_mode=%s env.done=%s auto_path_len=%d auto_step_idx=%s",
             frame_count,
             getattr(gui, "auto_mode", None),
             getattr(gui.env, "done", None) if gui.env else None,
@@ -108,7 +108,7 @@ def run_auto_step_tick(gui, logger, frame_count):
 
     gui.auto_step_timer = 0.0
     logger.debug(
-        "DEBUG_ANIM: Calling _auto_step() at frame=%d, step_idx=%d/%d",
+        "ANIM_TRACE: Calling _auto_step() at frame=%d, step_idx=%d/%d",
         frame_count,
         gui.auto_step_idx,
         len(gui.auto_path) if gui.auto_path else 0,

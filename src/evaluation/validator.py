@@ -18,6 +18,7 @@ Integration with existing KLTN pathfinding:
 """
 
 import logging
+from collections import deque
 from typing import Dict, List, Tuple, Optional, Set, Any
 from dataclasses import dataclass, field
 import heapq
@@ -185,6 +186,12 @@ class AgentSimulator:
         self.switch_nodes.clear()
         self.start_node = None
         self.goal_node = None
+        self._heuristic_goal: Optional[int] = None
+        self._heuristic_distances: Dict[int, int] = {}
+        try:
+            self._undirected_graph = graph.to_undirected(as_view=True)
+        except TypeError:
+            self._undirected_graph = graph.to_undirected()
 
         for node_id, data in graph.nodes(data=True):
             label = data.get('label', '')
@@ -225,6 +232,20 @@ class AgentSimulator:
                 self.start_node = node_id
             if _is_goal_node(data, label_parts):
                 self.goal_node = node_id
+
+    @staticmethod
+    def _state_key(state: ValidationState) -> Tuple[Any, ...]:
+        """Immutable search key; set/dict equality now handles hash collisions."""
+        return (
+            state.position,
+            state.keys_held,
+            frozenset(state.keys_collected),
+            frozenset(state.items_collected),
+            frozenset(state.switches_activated),
+            state.has_boss_key,
+            state.has_item,
+            frozenset(state.doors_opened),
+        )
     
     def can_traverse(
         self,
@@ -356,14 +377,17 @@ class AgentSimulator:
     
     def heuristic(self, node: int, goal: int) -> float:
         """A* heuristic (node distance estimate)."""
-        # Simple: shortest path length in unweighted graph
-        try:
-            return nx.shortest_path_length(
-                self.graph.to_undirected(),
-                node, goal
-            )
-        except (nx.NetworkXNoPath, nx.NodeNotFound):
+        if self._heuristic_goal != goal:
+            self._heuristic_goal = goal
+            try:
+                self._heuristic_distances = dict(
+                    nx.single_source_shortest_path_length(self._undirected_graph, goal)
+                )
+            except (nx.NetworkXNoPath, nx.NodeNotFound):
+                self._heuristic_distances = {}
+        if node not in self._heuristic_distances:
             return float('inf')
+        return float(self._heuristic_distances[node])
     
     def find_path(
         self,
@@ -382,8 +406,8 @@ class AgentSimulator:
         Returns:
             ValidationResult with path and metrics
         """
-        start = start_node or self.start_node
-        goal = goal_node or self.goal_node
+        start = self.start_node if start_node is None else start_node
+        goal = self.goal_node if goal_node is None else goal_node
         
         if start is None:
             return ValidationResult(
@@ -410,10 +434,10 @@ class AgentSimulator:
         while open_set and states_explored < max_states:
             _, g_cost, _, current = heapq.heappop(open_set)
             
-            state_hash = hash(current)
-            if state_hash in visited:
+            state_key = self._state_key(current)
+            if state_key in visited:
                 continue
-            visited.add(state_hash)
+            visited.add(state_key)
             states_explored += 1
             
             # Check if goal reached
@@ -445,8 +469,8 @@ class AgentSimulator:
                 new_state.path = current.path + [neighbor]
                 new_state = self.collect_items(neighbor, new_state)
                 
-                new_hash = hash(new_state)
-                if new_hash in visited:
+                new_key = self._state_key(new_state)
+                if new_key in visited:
                     continue
                 
                 # Add to open set
@@ -554,17 +578,17 @@ class SolvabilityChecker:
             (all_reachable, unreachable_nodes)
         """
         simulator = AgentSimulator(graph=graph)
-        start = start_node or simulator.start_node
+        start = simulator.start_node if start_node is None else start_node
         
         if start is None:
             return False, set(graph.nodes())
         
         # BFS from start
         reachable = {start}
-        queue = [start]
+        queue = deque([start])
         
         while queue:
-            node = queue.pop(0)
+            node = queue.popleft()
             for neighbor in graph.neighbors(node):
                 if neighbor not in reachable:
                     reachable.add(neighbor)

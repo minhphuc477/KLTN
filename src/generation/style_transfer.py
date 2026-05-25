@@ -245,8 +245,26 @@ class StyleTransferEngine:
         # Model is optional; deterministic theme mapping remains available.
         self.style_model = None
         self._fallback_theme_manager = ThemeManager()
+        self.last_transfer_metadata: Dict[str, Any] = {
+            "requested_method": None,
+            "method": None,
+            "neural_model_used": False,
+            "fallback_reason": None,
+        }
+        self._warned_missing_style_model = False
         if model_path:
             self._load_model(model_path)
+
+    def _record_transfer_metadata(self, **metadata: Any) -> None:
+        self.last_transfer_metadata = {
+            "requested_method": metadata.get("requested_method"),
+            "method": metadata.get("method"),
+            "neural_model_used": bool(metadata.get("neural_model_used", False)),
+            "fallback_reason": metadata.get("fallback_reason"),
+            "preserve_edges": metadata.get("preserve_edges"),
+            "theme_name": metadata.get("theme_name"),
+            "semantic_shape": metadata.get("semantic_shape"),
+        }
     
     def _load_model(self, model_path: str):
         """Load pre-trained style transfer model."""
@@ -316,9 +334,6 @@ class StyleTransferEngine:
         """
         H, W = semantic_grid.shape
         
-        # For now, implement simple palette mapping
-        # In production, use neural style transfer model
-        
         visual_grid = np.zeros((H, W, 3), dtype=np.uint8)
         
         for r in range(H):
@@ -346,7 +361,15 @@ class StyleTransferEngine:
                 else:
                     # Default to black
                     visual_grid[r, c] = (0, 0, 0)
-        
+        self._record_transfer_metadata(
+            requested_method="theme_mapping",
+            method="theme_palette_mapping",
+            neural_model_used=False,
+            fallback_reason=None,
+            preserve_edges=None,
+            theme_name=theme_config.theme_name,
+            semantic_shape=(int(H), int(W)),
+        )
         return visual_grid
     
     def transfer_style_neural(
@@ -367,12 +390,29 @@ class StyleTransferEngine:
             (H, W, 3) RGB styled image
         """
         if self.style_model is None:
-            logger.warning("Style model unavailable; using theme-mapped fallback rendering")
+            if not self._warned_missing_style_model:
+                logger.warning("Style model unavailable; using explicit theme-mapped fallback rendering")
+                self._warned_missing_style_model = True
             theme_config = self._fallback_theme_manager.get_current_theme()
-            return self.apply_theme(semantic_grid, theme_config)
+            styled = self.apply_theme(semantic_grid, theme_config)
+            self._record_transfer_metadata(
+                requested_method="neural_style_transfer",
+                method="theme_palette_mapping",
+                neural_model_used=False,
+                fallback_reason="style_model_unavailable",
+                preserve_edges=bool(preserve_edges),
+                theme_name=theme_config.theme_name,
+                semantic_shape=tuple(int(v) for v in semantic_grid.shape),
+            )
+            return styled
         
         # Convert to tensor
         semantic_tensor = torch.from_numpy(semantic_grid).long().unsqueeze(0).to(self.device)
+        style_tensor = torch.as_tensor(theme_embedding, dtype=torch.float32, device=self.device)
+        if style_tensor.ndim != 1:
+            raise ValueError(
+                f"theme_embedding must be a 1D style vector, got shape {tuple(style_tensor.shape)}."
+            )
         
         # Extract edge map if preserving structure
         if preserve_edges:
@@ -386,12 +426,22 @@ class StyleTransferEngine:
             styled_output = self.style_model(
                 semantic=semantic_tensor,
                 edges=edge_tensor,
-                style=theme_embedding.unsqueeze(0).to(self.device)
+                style=style_tensor.unsqueeze(0)
             )
         
         # Convert back to numpy
         styled_image = styled_output.squeeze(0).permute(1, 2, 0).cpu().numpy()
         styled_image = (styled_image * 255).clip(0, 255).astype(np.uint8)
+
+        self._record_transfer_metadata(
+            requested_method="neural_style_transfer",
+            method="neural_style_model",
+            neural_model_used=True,
+            fallback_reason=None,
+            preserve_edges=bool(preserve_edges),
+            theme_name=None,
+            semantic_shape=tuple(int(v) for v in semantic_grid.shape),
+        )
         
         return styled_image
     

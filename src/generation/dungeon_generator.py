@@ -23,6 +23,7 @@ import numpy as np
 from typing import List, Tuple, Optional
 from dataclasses import dataclass
 from enum import Enum
+from collections import deque
 from src.core.definitions import SEMANTIC_PALETTE, semantic_to_vglc_char
 
 logger = logging.getLogger(__name__)
@@ -271,14 +272,14 @@ class DungeonGenerator:
         root = BSPNode(0, 0, self.width, self.height)
         
         # Split recursively
-        split_queue = [root]
+        split_queue = deque([root])
         max_splits = 20  # Limit depth
         
         for _ in range(max_splits):
             if not split_queue:
                 break
             
-            node = split_queue.pop(0)
+            node = split_queue.popleft()
             
             if node.split(rng=self.rng):
                 if node.left:

@@ -451,6 +451,9 @@ def test_prepare_dungeon_generation_uses_pipeline_topology_defaults(monkeypatch)
         topology_qd_archive_cells=160,
         topology_qd_init_random_fraction=0.25,
         topology_qd_emitter_mutation_rate=0.27,
+        topology_qd_archive_path="results/topology_qd.pkl",
+        topology_qd_load_archive=True,
+        topology_qd_autosave_archive=True,
         topology_max_lock_key_rules=2,
         topology_enable_rule_credit_assignment=True,
         topology_enforce_generation_constraints=True,
@@ -477,6 +480,9 @@ def test_prepare_dungeon_generation_uses_pipeline_topology_defaults(monkeypatch)
     assert captured["qd_archive_cells"] == 160
     assert captured["qd_init_random_fraction"] == pytest.approx(0.25)
     assert captured["qd_emitter_mutation_rate"] == pytest.approx(0.27)
+    assert captured["qd_archive_path"] == "results/topology_qd.pkl"
+    assert captured["qd_load_archive"] is True
+    assert captured["qd_autosave_archive"] is True
     assert captured["max_lock_key_rules"] == 2
     assert captured["enable_rule_credit_assignment"] is True
     assert captured["enforce_generation_constraints"] is True
@@ -1026,7 +1032,7 @@ def test_stitch_room_layout_supports_variable_room_sizes(pipeline):
 # =============================================================================
 
 def test_logic_guidance_effect(pipeline, neighbor_latents, graph_context):
-    """Test that LogicNet guidance affects generation."""
+    """Randomly initialized LogicNet must not steer runtime generation."""
     # Without guidance
     result_no_guidance = pipeline.generate_room(
         neighbor_latents=neighbor_latents,
@@ -1038,7 +1044,9 @@ def test_logic_guidance_effect(pipeline, neighbor_latents, graph_context):
         seed=42
     )
     
-    # With guidance
+    pipeline.runtime_diagnostics = {}
+
+    # Guidance is requested, but this test pipeline has no LogicNet checkpoint.
     result_with_guidance = pipeline.generate_room(
         neighbor_latents=neighbor_latents,
         graph_context=graph_context,
@@ -1049,17 +1057,9 @@ def test_logic_guidance_effect(pipeline, neighbor_latents, graph_context):
         seed=42
     )
     
-    # Grids should be different (guidance changes trajectory)
-    # Note: Due to randomness, this test might occasionally fail
-    different = not np.array_equal(
-        result_no_guidance.neural_grid,
-        result_with_guidance.neural_grid
-    )
-    
-    if different:
-        print("✓ LogicNet guidance changes generation (as expected)")
-    else:
-        print("⚠ LogicNet guidance had no visible effect (may need more steps)")
+    assert np.array_equal(result_no_guidance.neural_grid, result_with_guidance.neural_grid)
+    assert pipeline.runtime_diagnostics["logic_guidance_disabled_untrained_logic_net"] >= 1
+    assert pipeline.diffusion.guidance.logic_net is None
 
 
 # =============================================================================

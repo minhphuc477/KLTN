@@ -68,8 +68,13 @@ from enum import Enum, auto
 from collections import defaultdict, deque
 import math
 
-import torch
-from torch import Tensor
+try:
+    import torch
+    from torch import Tensor
+except ImportError:
+    torch = None
+    Tensor = Any
+
 from src.generation.grammar_validators import (
     validate_skill_chains,
     validate_battery_reachability,
@@ -77,6 +82,16 @@ from src.generation.grammar_validators import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _require_torch() -> Any:
+    """Return torch or raise a targeted error for optional tensor exporters."""
+    if torch is None:
+        raise RuntimeError(
+            "PyTorch is required for MissionGraph tensor export. Install torch "
+            "or use the symbolic grammar APIs that return Python data structures."
+        )
+    return torch
 
 # ============================================================================
 # LAYOUT CONSTANTS
@@ -523,6 +538,7 @@ class MissionGraph:
             edge_index: [2, num_edges] edge connections
             node_features: [num_nodes, feature_dim] node features
         """
+        torch_mod = _require_torch()
         node_ids, id_to_idx = self._node_index_map()
 
         # Build edge index
@@ -535,9 +551,9 @@ class MissionGraph:
             targets.append(id_to_idx[edge.target])
 
         if sources:
-            edge_index = torch.tensor([sources, targets], dtype=torch.long)
+            edge_index = torch_mod.tensor([sources, targets], dtype=torch_mod.long)
         else:
-            edge_index = torch.zeros((2, 0), dtype=torch.long)
+            edge_index = torch_mod.zeros((2, 0), dtype=torch_mod.long)
         
         # Build node features
         features = []
@@ -545,18 +561,19 @@ class MissionGraph:
             features.append(self.nodes[nid].to_feature_vector())
 
         if features:
-            node_features = torch.tensor(features, dtype=torch.float32)
+            node_features = torch_mod.tensor(features, dtype=torch_mod.float32)
         else:
             feature_dim = len(NodeType) + 14
-            node_features = torch.zeros((0, feature_dim), dtype=torch.float32)
+            node_features = torch_mod.zeros((0, feature_dim), dtype=torch_mod.float32)
         
         return edge_index, node_features
     
     def to_adjacency_matrix(self) -> Tensor:
         """Convert to adjacency matrix."""
+        torch_mod = _require_torch()
         node_ids, id_to_idx = self._node_index_map()
         n = len(node_ids)
-        adj = torch.zeros(n, n)
+        adj = torch_mod.zeros(n, n)
         
         for edge in self.edges:
             if edge.source not in id_to_idx or edge.target not in id_to_idx:
@@ -583,11 +600,12 @@ class MissionGraph:
         Returns:
             [num_nodes, 8] TPE features
         """
+        torch_mod = _require_torch()
         n = len(self.nodes)
         node_ids = sorted(self.nodes.keys())
         id_to_idx = {nid: i for i, nid in enumerate(node_ids)}
         
-        tpe = torch.zeros(n, 8)
+        tpe = torch_mod.zeros(n, 8)
         
         # Get start and goal
         start = self.get_start_node()

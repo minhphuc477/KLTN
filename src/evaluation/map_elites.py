@@ -222,7 +222,7 @@ class LinearityLeniencyExtractor(FeatureExtractor):
         try:
             path = nx.shortest_path(undirected, start, goal)
             nodes_on_path = len(path)
-        except:
+        except (nx.NetworkXNoPath, nx.NodeNotFound):
             nodes_on_path = 1
         
         total_nodes = graph.number_of_nodes()
@@ -509,23 +509,22 @@ class DiversityMetrics:
         """
         elites = self.archive.get_all_elites()
         if len(elites) < 2:
-            return 1.0
+            return 0.0
         
-        # Compute pairwise distances in feature space
-        features = np.array([e.features for e in elites])
-        
-        # Mean pairwise distance
-        distances = []
-        for i in range(len(features)):
-            for j in range(i + 1, len(features)):
-                dist = np.linalg.norm(features[i] - features[j])
-                distances.append(dist)
-        
-        if not distances:
-            return 1.0
-        
+        features = np.asarray([e.features for e in elites], dtype=np.float64)
+        if features.shape[0] < 2:
+            return 0.0
+
+        # Vectorized upper-triangle pairwise distances; avoids the Python O(n^2)
+        # nested loop while preserving the same metric.
+        diffs = features[:, None, :] - features[None, :, :]
+        distance_matrix = np.linalg.norm(diffs, axis=-1)
+        distances = distance_matrix[np.triu_indices(features.shape[0], k=1)]
+
         # Uniformity: coefficient of variation (lower = more uniform)
         mean_dist = np.mean(distances)
+        if mean_dist <= 1e-8:
+            return 0.0
         std_dist = np.std(distances)
         cv = std_dist / (mean_dist + 1e-8)
         

@@ -314,6 +314,41 @@ def test_block_iv_gradient_guidance_sanitizes_graph_data_and_vector_loss():
     assert float(captured["edge_weights"][2, 1].item()) == 0.0
 
 
+def test_block_iv_gradient_guidance_objective_mode_controls_sign():
+    """Loss guidance descends the objective; reward guidance ascends it."""
+    from src.core.latent_diffusion import GradientGuidance
+
+    class _LinearObjective(torch.nn.Module):
+        def forward(self, x_t, graph_data=None):
+            _ = graph_data
+            return x_t.flatten(1).sum(dim=1)
+
+    x_t = torch.ones(1, 1, 1, 1)
+    predicted_mean = torch.zeros_like(x_t)
+
+    loss_guidance = GradientGuidance(
+        logic_net=_LinearObjective(),
+        guidance_scale=1.0,
+        clamp_magnitude=0.0,
+        relative_norm_cap=0.0,
+        schedule_enabled=False,
+        max_guidance_elements=16,
+        objective_mode="loss",
+    )
+    reward_guidance = GradientGuidance(
+        logic_net=_LinearObjective(),
+        guidance_scale=1.0,
+        clamp_magnitude=0.0,
+        relative_norm_cap=0.0,
+        schedule_enabled=False,
+        max_guidance_elements=16,
+        objective_mode="reward",
+    )
+
+    assert torch.allclose(loss_guidance.apply_guidance(predicted_mean, x_t), torch.full_like(x_t, -1.0))
+    assert torch.allclose(reward_guidance.apply_guidance(predicted_mean, x_t), torch.full_like(x_t, 1.0))
+
+
 def test_block_iv_gradient_guidance_skips_oversized_latents():
     """Block IV: guidance should skip expensive autograd when latent size exceeds cap."""
     from src.core.latent_diffusion import GradientGuidance

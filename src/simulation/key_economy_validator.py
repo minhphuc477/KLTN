@@ -499,7 +499,7 @@ class MissionGraphAnalyzer:
                 return critical
             else:
                 return set(self.graph.nodes())
-        except:
+        except nx.NetworkXException:
             return set(self.graph.nodes())
     
     def analyze_key_economy(self) -> Dict[str, int]:

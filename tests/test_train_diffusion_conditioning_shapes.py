@@ -68,6 +68,54 @@ class _CountingVQVAE:
         return latent_value.expand(-1, 4, 2, 2).contiguous(), torch.zeros(x_onehot.shape[0], dtype=torch.long)
 
 
+def test_configure_guidance_wires_logic_net_and_sampling_limits():
+    trainer = DiffusionTrainer.__new__(DiffusionTrainer)
+    trainer.logic_net = object()
+    trainer.diffusion = SimpleNamespace(guidance=SimpleNamespace())
+    trainer.config = SimpleNamespace(
+        guidance_scale=1.75,
+        guidance_clamp_magnitude=0.5,
+        guidance_relative_norm_cap=0.125,
+        guidance_schedule_enabled=False,
+        guidance_active_fraction=0.6,
+        guidance_decay_power=2.0,
+        guidance_max_graph_nodes=64,
+        guidance_max_key_lock_pairs=128,
+        guidance_max_guidance_elements=4096,
+    )
+
+    DiffusionTrainer._configure_guidance(trainer)
+
+    guidance = trainer.diffusion.guidance
+    assert guidance.logic_net is trainer.logic_net
+    assert guidance.guidance_scale == pytest.approx(1.75)
+    assert guidance.clamp_magnitude == pytest.approx(0.5)
+    assert guidance.relative_norm_cap == pytest.approx(0.125)
+    assert guidance.schedule_enabled is False
+    assert guidance.active_fraction == pytest.approx(0.6)
+    assert guidance.decay_power == pytest.approx(2.0)
+    assert guidance.max_graph_nodes == 64
+    assert guidance.max_key_lock_pairs == 128
+    assert guidance.max_guidance_elements == 4096
+
+
+def test_configure_guidance_does_not_register_logic_net_inside_diffusion_state():
+    guidance = torch.nn.Module()
+    diffusion = torch.nn.Module()
+    diffusion.guidance = guidance
+    logic_net = torch.nn.Linear(2, 2)
+    trainer = DiffusionTrainer.__new__(DiffusionTrainer)
+    trainer.logic_net = logic_net
+    trainer.diffusion = diffusion
+    trainer.config = SimpleNamespace()
+
+    DiffusionTrainer._configure_guidance(trainer)
+
+    assert guidance.logic_net is logic_net
+    assert "logic_net" not in guidance._modules
+    assert not any("logic_net" in key for key in diffusion.state_dict())
+
+
 class _TinyModule(torch.nn.Module):
     def __init__(self):
         super().__init__()
@@ -767,3 +815,52 @@ def test_validate_skips_nonfinite_generated_samples():
 def test_state_dict_is_finite_rejects_nan_weights():
     state_dict = {"weight": torch.tensor([1.0, float("nan")])}
     assert DiffusionTrainer._state_dict_is_finite(state_dict) is False
+
+
+def test_load_checkpoint_strips_legacy_embedded_guidance_logicnet_state(tmp_path):
+    class _TinyDiffusion(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.core = torch.nn.Linear(2, 2)
+            self.guidance = torch.nn.Module()
+
+    trainer = DiffusionTrainer.__new__(DiffusionTrainer)
+    trainer.device = torch.device("cpu")
+    trainer.config = SimpleNamespace()
+    trainer.diffusion = _TinyDiffusion()
+    trainer.ema_diffusion = _TinyDiffusion()
+    trainer.condition_encoder = torch.nn.Linear(2, 2)
+    trainer.logic_net = torch.nn.Linear(2, 2)
+    trainer.optimizer = torch.optim.SGD(
+        list(trainer.diffusion.parameters())
+        + list(trainer.condition_encoder.parameters())
+        + list(trainer.logic_net.parameters()),
+        lr=1e-3,
+    )
+    trainer.scheduler = SimpleNamespace(load_state_dict=lambda _state: None)
+
+    diffusion_state = dict(trainer.diffusion.state_dict())
+    ema_state = dict(trainer.ema_diffusion.state_dict())
+    diffusion_state["guidance.logic_net.weight"] = torch.ones_like(trainer.logic_net.weight)
+    ema_state["guidance.logic_net.bias"] = torch.ones_like(trainer.logic_net.bias)
+
+    path = tmp_path / "legacy_logicnet_embedded.pth"
+    torch.save(
+        {
+            "epoch": 2,
+            "global_step": 17,
+            "diffusion_state_dict": diffusion_state,
+            "ema_diffusion_state_dict": ema_state,
+            "condition_encoder_state_dict": trainer.condition_encoder.state_dict(),
+            "logic_net_state_dict": trainer.logic_net.state_dict(),
+        },
+        path,
+    )
+
+    DiffusionTrainer.load_checkpoint(trainer, str(path))
+
+    assert trainer.epoch == 2
+    assert trainer.global_step == 17
+    assert trainer.diffusion.guidance.logic_net is trainer.logic_net
+    assert trainer.ema_diffusion.guidance.logic_net is trainer.logic_net
+    assert "logic_net" not in trainer.diffusion.guidance._modules

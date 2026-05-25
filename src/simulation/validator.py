@@ -272,6 +272,23 @@ class GameState:
         )
 
 
+def game_state_key(state: GameState) -> Tuple[Any, ...]:
+    """Immutable value key for search maps; safe under Python hash collisions."""
+    return (
+        state.position,
+        state.keys,
+        state.bomb_count,
+        state.has_boss_key,
+        state.has_item,
+        frozenset(state.opened_doors),
+        frozenset(state.collected_items),
+        frozenset(state.pushed_blocks),
+        frozenset(state.defeated_enemies),
+        frozenset(state.completed_puzzle_stages),
+        state.current_floor,
+    )
+
+
 # ==========================================
 # BITSET-OPTIMIZED GAME STATE (10× FASTER HASHING)
 # ==========================================
@@ -1789,6 +1806,11 @@ class StateSpaceAStar:
         self._abstract_plan_rooms: Optional[Dict] = None
         self._abstract_plan_avg_cost: float = 15.0
 
+    @staticmethod
+    def _state_key(state: GameState) -> Tuple[Any, ...]:
+        """Immutable key for closed/g-score maps; equality handles hash collisions."""
+        return game_state_key(state)
+
     def _edge_constraints_from_data(self, edge_data: Optional[Dict[str, Any]]) -> List[str]:
         """Return canonical edge constraints from edge attributes."""
         return edge_constraints_from_data(edge_data)
@@ -2787,9 +2809,10 @@ class StateSpaceAStar:
         self._best_at_pos = {}
         self._best_g_at_pos = {}  # Track best g-score at each position
         
-        # Priority queue: (f_score, counter, state_hash, g_score, state, path)
-        # FIXED: Store g_score in heap to avoid dict lookups
+        # Priority queue: (f_score, counter, hash_hint, g_score, state, path).
+        # hash_hint is only heap metadata; closed/g-score maps use full keys.
         start_state = self.env.state.copy()
+        start_key = self._state_key(start_state)
         start_h = self._heuristic(start_state)
         start_g = 0
         
@@ -2803,11 +2826,11 @@ class StateSpaceAStar:
         else:
             start_f = start_g + start_h  # A*: f = g + h
         
-        open_set = [(start_f, 0, hash(start_state), start_g, start_state, [start_state.position])]
+        open_set = [(start_f, 0, 0, start_g, start_state, [start_state.position])]
         heapq.heapify(open_set)
         
         closed_set = set()
-        g_scores = {hash(start_state): 0}
+        g_scores = {start_key: 0}
         
         states_explored = 0
         counter = 1  # Tie-breaker for heap
@@ -2820,22 +2843,23 @@ class StateSpaceAStar:
         while open_set and states_explored < self.timeout:
             entry: Any = heapq.heappop(open_set)
             # Support both simple and priority tuple formats
-            # Simple: (f, counter, state_hash, g, state, path) - 6 elements
-            # Priority: (priority_tuple, state_hash, g, state, path) - 5 elements, first is tuple
+            # Simple: (f, counter, hash_hint, g, state, path) - 6 elements
+            # Priority: (priority_tuple, hash_hint, g, state, path) - 5 elements, first is tuple
             if len(entry) == 6:
-                # Simple format: (f, counter, state_hash, g, state, path)
-                _, _, state_hash, current_g, current_state, path = entry
+                # Simple format: (f, counter, hash_hint, g, state, path)
+                _, _, _hash_hint, current_g, current_state, path = entry
             elif len(entry) == 5 and isinstance(entry[0], tuple):
-                # Priority tuple format: (priority_tuple, state_hash, g, state, path)
-                _priority, state_hash, current_g, current_state, path = entry
+                # Priority tuple format: (priority_tuple, hash_hint, g, state, path)
+                _priority, _hash_hint, current_g, current_state, path = entry
             elif len(entry) == 5:
-                # Old format without g: (f, counter, state_hash, state, path)
-                _, _, state_hash, current_state, path = entry
-                current_g = g_scores.get(state_hash, 0)
+                # Old format without g: (f, counter, hash_hint, state, path)
+                _, _, _hash_hint, current_state, path = entry
+                current_g = g_scores.get(self._state_key(current_state), 0)
             else:
                 # Unknown format - skip
                 continue
-            if state_hash in closed_set:
+            current_key = self._state_key(current_state)
+            if current_key in closed_set:
                 continue
             
             # STATE DOMINATION PRUNING: Skip states strictly worse than visited states at same position
@@ -2921,7 +2945,7 @@ class StateSpaceAStar:
                     self._best_at_pos[state_bucket] = current_state
                     self._best_g_at_pos[state_bucket] = current_g
             
-            closed_set.add(state_hash)
+            closed_set.add(current_key)
             states_explored += 1
             
             # Check win condition
@@ -3078,15 +3102,13 @@ class StateSpaceAStar:
                 if not can_move:
                     continue
                 
-                new_hash = hash(new_state)
+                new_key = self._state_key(new_state)
                 
-                if new_hash in closed_set:
+                if new_key in closed_set:
                     continue
                 
                 # COMBAT-AWARE COST CALCULATION
-                # Instead of g_score = g_scores[state_hash] + 1 (all moves cost 1),
-                # we now use variable cost based on tile type
-                # FIXED: Use current_g from heap entry instead of dict lookup
+                # Use variable cost based on tile type and current_g from the heap.
                 if self.search_mode == 'bfs':
                     # True BFS over full game state: each transition has unit depth cost.
                     # (Inventory/doors/items are still modeled in state transitions.)
@@ -3095,10 +3117,10 @@ class StateSpaceAStar:
                     move_cost = self._get_movement_cost(target_tile, target_pos, current_state)
                     g_score = current_g + move_cost * base_cost
                 
-                if new_hash in g_scores and g_score >= g_scores[new_hash]:
+                if new_key in g_scores and g_score >= g_scores[new_key]:
                     continue
                 
-                g_scores[new_hash] = g_score
+                g_scores[new_key] = g_score
                 h_score = self._heuristic(new_state)
                 # Compute f based on search mode
                 if self.search_mode == 'bfs':
@@ -3142,10 +3164,10 @@ class StateSpaceAStar:
                     # priority tuple: lower is better
                     # FIXED: Include g_score in heap entry
                     priority = (f_score, locked_needed if self.tie_break else 0, -keys_held if self.key_boost else 0, boost, counter)
-                    heapq.heappush(open_set, (priority, new_hash, g_score, new_state, new_path))
+                    heapq.heappush(open_set, (priority, counter, g_score, new_state, new_path))
                 else:
                     # FIXED: Include g_score in heap entry
-                    heapq.heappush(open_set, (f_score, counter, new_hash, g_score, new_state, new_path))
+                    heapq.heappush(open_set, (f_score, counter, counter, g_score, new_state, new_path))
                 counter += 1
         
         # PERFORMANCE LOGGING: Report pruning statistics
@@ -3196,6 +3218,7 @@ class StateSpaceAStar:
         
         # Priority queue
         start_state = self.env.state.copy()
+        start_key = self._state_key(start_state)
         start_h = self._heuristic(start_state)
         start_g = 0.0
         if self.search_mode == 'bfs':
@@ -3209,11 +3232,11 @@ class StateSpaceAStar:
         else:
             start_f = start_g + start_h
 
-        open_set = [(start_f, 0, hash(start_state), start_g, start_state, [start_state.position])]
+        open_set = [(start_f, 0, 0, start_g, start_state, [start_state.position])]
         heapq.heapify(open_set)
         
         closed_set = set()
-        g_scores = {hash(start_state): 0}
+        g_scores = {start_key: 0.0}
         
         states_explored = 0
         counter = 1
@@ -3232,16 +3255,17 @@ class StateSpaceAStar:
             
             # Parse entry format
             if len(entry) == 6:
-                _, _, state_hash, current_g, current_state, path = entry
+                _, _, _hash_hint, current_g, current_state, path = entry
             elif len(entry) == 5 and isinstance(entry[0], tuple):
-                _priority, state_hash, current_g, current_state, path = entry
+                _priority, _hash_hint, current_g, current_state, path = entry
             elif len(entry) == 5:
-                _, _, state_hash, current_state, path = entry
-                current_g = g_scores.get(state_hash, 0)
+                _, _, _hash_hint, current_state, path = entry
+                current_g = g_scores.get(self._state_key(current_state), 0.0)
             else:
                 continue
             
-            if state_hash in closed_set:
+            current_key = self._state_key(current_state)
+            if current_key in closed_set:
                 continue
             
             # Dominance pruning (same logic as solve())
@@ -3311,7 +3335,7 @@ class StateSpaceAStar:
                         self._best_at_pos[state_bucket] = current_state
                         self._best_g_at_pos[state_bucket] = current_g
             
-            closed_set.add(state_hash)
+            closed_set.add(current_key)
             states_explored += 1
             final_state = current_state
             
@@ -3419,8 +3443,8 @@ class StateSpaceAStar:
                 if not can_move:
                     continue
                 
-                new_hash = hash(new_state)
-                if new_hash in closed_set:
+                new_key = self._state_key(new_state)
+                if new_key in closed_set:
                     continue
                 
                 if self.search_mode == 'bfs':
@@ -3429,10 +3453,10 @@ class StateSpaceAStar:
                     move_cost = self._get_movement_cost(target_tile, target_pos, current_state)
                     g_score = current_g + move_cost * base_cost
                 
-                if new_hash in g_scores and g_score >= g_scores[new_hash]:
+                if new_key in g_scores and g_score >= g_scores[new_key]:
                     continue
                 
-                g_scores[new_hash] = g_score
+                g_scores[new_key] = g_score
                 h_score = self._heuristic(new_state)
                 if self.search_mode == 'bfs':
                     f_score = float(len(path))
@@ -3446,7 +3470,7 @@ class StateSpaceAStar:
                     f_score = g_score + h_score
                 new_path = path + [new_state.position]
                 
-                heapq.heappush(open_set, (f_score, counter, new_hash, g_score, new_state, new_path))
+                heapq.heappush(open_set, (f_score, counter, counter, g_score, new_state, new_path))
                 counter += 1
         
         # Search failed - determine reason
@@ -3668,14 +3692,14 @@ class StateSpaceAStar:
         
         # Initialize queue with immediate successors
         # Format: (node, distance, most_restrictive_edge_type, went_through_virtual)
-        node_queue = []
+        node_queue = deque()
         for neighbor in self.env.graph.successors(current_node):
             edge_data = self.env.graph.get_edge_data(current_node, neighbor, {}) or {}
             edge_type = self._edge_type_from_data(edge_data)
             node_queue.append((neighbor, 1, edge_type, False))
         
         while node_queue:
-            neighbor_node, distance, edge_type, went_through_virtual = node_queue.pop(0)
+            neighbor_node, distance, edge_type, went_through_virtual = node_queue.popleft()
             
             if neighbor_node in visited_nodes:
                 continue
@@ -3795,10 +3819,10 @@ class StateSpaceAStar:
             # BFS through virtual nodes to find all reachable physical rooms
             # Exclude the current node to avoid trivial loops back to self
             virtual_visited = {neighbor, current_node}
-            virtual_queue = [(neighbor, edge_type)]
+            virtual_queue = deque([(neighbor, edge_type)])
             
             while virtual_queue:
-                v_node, accumulated_type = virtual_queue.pop(0)
+                v_node, accumulated_type = virtual_queue.popleft()
                 
                 for exit_node in self.env.graph.successors(v_node):
                     if exit_node in virtual_visited:

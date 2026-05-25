@@ -28,6 +28,22 @@ from src.simulation.validator import CONDITIONAL_IDS, ZeldaLogicEnv
 
 GridPos = Tuple[int, int]
 
+PCBS_READABILITY_WEIGHT_SOURCE = "hand_tuned_heuristic_v1"
+PCBS_BOUNDED_RATIONALITY_WEIGHTS: Dict[str, float] = {
+    "confusion": 0.24,
+    "navigation_entropy": 0.18,
+    "cognitive_load": 0.22,
+    "state_budget": 0.20,
+    "puzzle_stall": 0.16,
+}
+PCBS_COGNITIVE_EFFORT_WEIGHTS: Dict[str, float] = {
+    "cognitive_load": 0.30,
+    "confusion": 0.24,
+    "revisit_rate": 0.20,
+    "state_budget": 0.16,
+    "puzzle_stall": 0.10,
+}
+
 
 @dataclass
 class PreparedValidationDungeon:
@@ -266,11 +282,11 @@ def compute_pcbs_readability_metrics(
 
     bounded_rationality_index = float(
         np.clip(
-            (0.24 * normalized_confusion)
-            + (0.18 * normalized_entropy)
-            + (0.22 * normalized_load)
-            + (0.20 * budget_fraction)
-            + (0.16 * stall_fraction),
+            (PCBS_BOUNDED_RATIONALITY_WEIGHTS["confusion"] * normalized_confusion)
+            + (PCBS_BOUNDED_RATIONALITY_WEIGHTS["navigation_entropy"] * normalized_entropy)
+            + (PCBS_BOUNDED_RATIONALITY_WEIGHTS["cognitive_load"] * normalized_load)
+            + (PCBS_BOUNDED_RATIONALITY_WEIGHTS["state_budget"] * budget_fraction)
+            + (PCBS_BOUNDED_RATIONALITY_WEIGHTS["puzzle_stall"] * stall_fraction),
             0.0,
             1.0,
         )
@@ -279,11 +295,11 @@ def compute_pcbs_readability_metrics(
         bounded_rationality_index = float(np.clip(bounded_rationality_index + 0.20, 0.0, 1.0))
     cognitive_effort_index = float(
         np.clip(
-            (0.30 * normalized_load)
-            + (0.24 * normalized_confusion)
-            + (0.20 * revisit_rate)
-            + (0.16 * budget_fraction)
-            + (0.10 * stall_fraction),
+            (PCBS_COGNITIVE_EFFORT_WEIGHTS["cognitive_load"] * normalized_load)
+            + (PCBS_COGNITIVE_EFFORT_WEIGHTS["confusion"] * normalized_confusion)
+            + (PCBS_COGNITIVE_EFFORT_WEIGHTS["revisit_rate"] * revisit_rate)
+            + (PCBS_COGNITIVE_EFFORT_WEIGHTS["state_budget"] * budget_fraction)
+            + (PCBS_COGNITIVE_EFFORT_WEIGHTS["puzzle_stall"] * stall_fraction),
             0.0,
             1.0,
         )
@@ -298,6 +314,9 @@ def compute_pcbs_readability_metrics(
         "state_budget_fraction": budget_fraction,
         "revisit_rate": revisit_rate,
         "puzzle_stall_fraction": stall_fraction,
+        "weight_source": PCBS_READABILITY_WEIGHT_SOURCE,
+        "bounded_rationality_weights": dict(PCBS_BOUNDED_RATIONALITY_WEIGHTS),
+        "cognitive_effort_weights": dict(PCBS_COGNITIVE_EFFORT_WEIGHTS),
         "oracle_solved_but_pcbs_failed": bool(oracle_success and not bool(pcbs_success)),
     }
 
@@ -599,6 +618,9 @@ __all__ = [
     "PreparedValidationDungeon",
     "prepare_dungeon_grid_for_validation",
     "count_pcbs_puzzle_stall_steps",
+    "PCBS_READABILITY_WEIGHT_SOURCE",
+    "PCBS_BOUNDED_RATIONALITY_WEIGHTS",
+    "PCBS_COGNITIVE_EFFORT_WEIGHTS",
     "compute_pcbs_readability_metrics",
     "classify_pcbs_outcome",
     "evaluate_astar_vs_pcbs",

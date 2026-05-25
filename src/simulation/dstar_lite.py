@@ -19,9 +19,9 @@ Key Concepts:
 
 import heapq
 import logging
-from typing import Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 from dataclasses import dataclass, field
-from .validator import GameState, ACTION_DELTAS, SEMANTIC_PALETTE
+from .validator import GameState, ACTION_DELTAS, SEMANTIC_PALETTE, game_state_key
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +31,7 @@ class DStarKey:
     """Priority queue key for D* Lite."""
     k1: float  # min(g, rhs) + h
     k2: float  # min(g, rhs)
-    state_hash: int = field(compare=False)
+    state_hash: Any = field(compare=False)
     state: GameState = field(compare=False)
 
 
@@ -71,10 +71,10 @@ class DStarLiteSolver:
         self.allow_diagonals = bool(allow_diagonals)
         
         # Core D* Lite data structures
-        self.g_scores: Dict[int, float] = {}  # g(s) values
-        self.rhs_scores: Dict[int, float] = {}  # rhs(s) values
+        self.g_scores: Dict[Any, float] = {}  # g(s) values
+        self.rhs_scores: Dict[Any, float] = {}  # rhs(s) values
         self.open_set: List[DStarKey] = []  # Priority queue
-        self.open_set_hashes: Set[int] = set()  # Fast membership check
+        self.open_set_hashes: Set[Any] = set()  # Fast membership check
         
         # Environment change detection
         self.last_opened_doors: Set[Tuple[int, int]] = set()
@@ -162,7 +162,7 @@ class DStarLiteSolver:
                 if not can_reach:
                     continue
                 
-                pred_hash = hash(pred_state)
+                pred_hash = game_state_key(pred_state)
                 pred_g = self.g_scores.get(pred_hash, float('inf'))
                 if pred_g < float('inf'):
                     cost = self._get_edge_cost(pred_state, state)
@@ -198,7 +198,7 @@ class DStarLiteSolver:
             return False
         
         goal_state = GameState(position=self.env.goal_pos)
-        goal_hash = hash(goal_state)
+        goal_hash = game_state_key(goal_state)
         
         iterations = 0
         max_iterations = max(10_000, int(self.timeout) * 20)
@@ -237,7 +237,7 @@ class DStarLiteSolver:
                 
                 # Update all successors
                 for successor_state in self._get_successors(state):
-                    successor_hash = hash(successor_state)
+                    successor_hash = game_state_key(successor_state)
                     self.update_vertex(successor_state, successor_hash)
             else:
                 # Locally underconsistent - set g to infinity
@@ -246,7 +246,7 @@ class DStarLiteSolver:
                 # Update vertex and all successors
                 self.update_vertex(state, state_hash)
                 for successor_state in self._get_successors(state):
-                    successor_hash = hash(successor_state)
+                    successor_hash = game_state_key(successor_state)
                     self.update_vertex(successor_state, successor_hash)
             
             iterations += 1
@@ -271,7 +271,7 @@ class DStarLiteSolver:
         self.used_fallback = False
         
         # Initialize start
-        start_hash = hash(start_state)
+        start_hash = game_state_key(start_state)
         self.rhs_scores[start_hash] = 0
         self.update_vertex(start_state, start_hash)
         
@@ -354,7 +354,7 @@ class DStarLiteSolver:
                 if 0 <= neighbor_pos[0] < self.env.height and 0 <= neighbor_pos[1] < self.env.width:
                     neighbor_state = current_state.copy()
                     neighbor_state.position = neighbor_pos
-                    self.update_vertex(neighbor_state, hash(neighbor_state))
+                    self.update_vertex(neighbor_state, game_state_key(neighbor_state))
         
         # Recompute shortest path
         success = self.compute_shortest_path()
@@ -387,7 +387,7 @@ class DStarLiteSolver:
             if current.position == self.env.goal_pos:
                 break
             
-            current_hash = hash(current)
+            current_hash = game_state_key(current)
             if current_hash in visited:
                 break
             visited.add(current_hash)
@@ -397,7 +397,7 @@ class DStarLiteSolver:
             best_g = float('inf')
             
             for successor in self._get_successors(current):
-                successor_hash = hash(successor)
+                successor_hash = game_state_key(successor)
                 g = self.g_scores.get(successor_hash, float('inf'))
                 if g < best_g:
                     best_g = g
@@ -491,8 +491,8 @@ class DStarLiteSolver:
 
         open_heap: List[Tuple[float, float, int, GameState, List[Tuple[int, int]]]] = []
         counter = 0
-        start_hash = hash(start_state)
-        best_g: Dict[int, float] = {start_hash: 0.0}
+        start_hash = game_state_key(start_state)
+        best_g: Dict[Any, float] = {start_hash: 0.0}
         heapq.heappush(
             open_heap,
             (float(h(start_state.position)), 0.0, counter, start_state, [start_state.position]),
@@ -501,7 +501,7 @@ class DStarLiteSolver:
         expansions = 0
         while open_heap and expansions < max_expansions:
             _f, g, _cnt, current, path = heapq.heappop(open_heap)
-            current_hash = hash(current)
+            current_hash = game_state_key(current)
             if g > best_g.get(current_hash, float('inf')):
                 continue
 
@@ -521,7 +521,7 @@ class DStarLiteSolver:
                 if not can_move:
                     continue
 
-                nxt_hash = hash(nxt)
+                nxt_hash = game_state_key(nxt)
                 g2 = g + 1.0
                 if g2 >= best_g.get(nxt_hash, float('inf')):
                     continue

@@ -456,6 +456,20 @@ class TestDiversityMetrics:
         assert qd_score == 0.5 + 0.7 + 0.9
         assert 0 <= uniformity <= 1
 
+    def test_uniformity_detects_collapsed_identical_features(self):
+        """Identical feature vectors are mode collapse, not perfect uniformity."""
+        from src.evaluation.map_elites import EliteArchive, DiversityMetrics
+
+        archive = EliteArchive(
+            feature_dims=2,
+            cells_per_dim=10,
+        )
+
+        archive.add("a", 0.5, (0.5, 0.5))
+        archive.add("b", 0.7, (0.5, 0.5))
+
+        assert DiversityMetrics(archive).uniformity() == 0.0
+
 
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

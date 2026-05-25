@@ -2058,6 +2058,8 @@ def test_pipeline_loaders_accept_composite_diffusion_checkpoint_metadata(tmp_pat
     assert loaded_logic_net.graph_pathfinder.num_iterations == 7
     assert loaded_logic_net.topology_trace_weight == pytest.approx(0.6)
     assert loaded_logic_net.topology_anchor_weight == pytest.approx(0.4)
+    assert getattr(loaded_logic_net, "_hmolqd_checkpoint_loaded") is True
+    assert pipeline.logic_net_checkpoint_loaded is True
 
 
 def test_pipeline_vqvae_loader_accepts_embedded_vqvae_from_composite_checkpoint(tmp_path):

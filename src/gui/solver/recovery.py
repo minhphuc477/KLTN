@@ -11,7 +11,7 @@ def log_active_solver_state(gui: Any, logger: Any, os_module: Any, time_module: 
     except (AttributeError, RuntimeError, ValueError, TypeError):
         proc_alive = "N/A"
 
-    logger.warning("DEBUG_SOLVER: Solver state dump:")
+    logger.warning("SOLVER_RECOVERY: Solver state dump:")
     logger.warning("  solver_running=%s", getattr(gui, "solver_running", None))
     logger.warning("  solver_done=%s", getattr(gui, "solver_done", None))
     logger.warning(
@@ -57,21 +57,21 @@ def compute_solver_timeout_seconds(
 def terminate_hung_solver_process(proc: Any, logger: Any) -> None:
     """Best-effort terminate then kill a hung solver process."""
     try:
-        logger.warning("DEBUG_SOLVER: Terminating hung process pid=%s", getattr(proc, "pid", "N/A"))
+        logger.warning("SOLVER_RECOVERY: Terminating hung process pid=%s", getattr(proc, "pid", "N/A"))
         proc.terminate()
         proc.join(timeout=1.0)
         if proc.is_alive():
-            logger.error("DEBUG_SOLVER: Process still alive after terminate, trying kill")
+            logger.error("SOLVER_RECOVERY: Process still alive after terminate, trying kill")
             proc.kill()
             proc.join(timeout=0.5)
     except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
-        logger.exception("DEBUG_SOLVER: Failed to terminate hung process: %s", exc)
+        logger.exception("SOLVER_RECOVERY: Failed to terminate hung process: %s", exc)
 
 
 def force_solver_recovery_state(gui: Any, recovery_reason: str, logger: Any) -> None:
     """Force solver-related state into clean idle values."""
-    logger.error("DEBUG_SOLVER: RECOVERY TRIGGERED - %s", recovery_reason)
-    logger.error("DEBUG_SOLVER: Force-cleaning stuck solver state")
+    logger.error("SOLVER_RECOVERY: RECOVERY TRIGGERED - %s", recovery_reason)
+    logger.error("SOLVER_RECOVERY: Force-cleaning stuck solver state")
     gui.solver_running = False
     gui.solver_proc = None
     gui.solver_thread = None
@@ -99,7 +99,7 @@ def prepare_active_solver_for_new_start(
         return True
 
     gui._set_message("Solver already running", 1.5)
-    logger.warning("DEBUG_SOLVER: Solver already running - evaluating recovery gate")
+    logger.warning("SOLVER_RECOVERY: Solver already running - evaluating recovery gate")
     log_active_state()
 
     proc = getattr(gui, "solver_proc", None)
@@ -129,8 +129,8 @@ def prepare_active_solver_for_new_start(
 
     if needs_recovery:
         force_recovery_state(recovery_reason)
-        logger.info("DEBUG_SOLVER: Recovery complete - retrying solver start")
+        logger.info("SOLVER_RECOVERY: Recovery complete - retrying solver start")
         return True
 
-    logger.warning("DEBUG_SOLVER: Solver legitimately running (age=%.1fs < %.1fs timeout)", solver_age, solver_timeout)
+    logger.warning("SOLVER_RECOVERY: Solver legitimately running (age=%.1fs < %.1fs timeout)", solver_age, solver_timeout)
     return False

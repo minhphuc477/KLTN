@@ -103,6 +103,7 @@ from src.simulation.validator import (
     PICKUP_IDS, Action, ACTION_DELTAS,
     GameState as _GameState,
     StateSpaceAStar,
+    game_state_key,
 )
 
 
@@ -846,19 +847,20 @@ class VisionSystem:
     ) -> None:
         """Add tiles behind an occluding wall to the shadow set."""
         dr, dc = direction
-        # Normalize to unit direction
+        # Normalize to unit direction.
         dist = math.sqrt(dr*dr + dc*dc)
         if dist == 0:
             return
-        
-        # Step sizes (approximate)
+
         step_r = dr / dist
         step_c = dc / dist
-        
-        # Cast ray beyond the wall
-        for mult in range(2, self.radius + 2):
-            shadow_r = origin[0] + int(round(step_r * mult * dist))
-            shadow_c = origin[1] + int(round(step_c * mult * dist))
+
+        # Continue the ray from the blocker.  The previous implementation used
+        # step * mult * dist, which simplifies back to the original wall offset
+        # multiplied by mult and skips valid shadow cells for non-unit diagonals.
+        for extra in range(1, self.radius + 1):
+            shadow_r = origin[0] + int(round(step_r * (dist + extra)))
+            shadow_c = origin[1] + int(round(step_c * (dist + extra)))
             if 0 <= shadow_r < height and 0 <= shadow_c < width:
                 occluded.add((shadow_r, shadow_c))
     
@@ -2510,10 +2512,10 @@ class CognitiveBoundedSearch:
                     moved, new_state = self._try_move(state, new_pos, tile)
                     if not moved:
                         continue
-                    h = hash(new_state)
-                    if h in visited:
+                    state_key = game_state_key(new_state)
+                    if state_key in visited:
                         continue
-                    visited.add(h)
+                    visited.add(state_key)
                     q.append((new_state, path + [new_pos]))
             depth += 1
 

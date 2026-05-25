@@ -1284,12 +1284,17 @@ class AblationStudy:
         summary_rows: List[Dict[str, Any]] = []
         for cfg in configs:
             sub = df[df["config"] == cfg.name]
+            successful = sub[sub["success"].astype(bool)] if len(sub) > 0 else sub
             summary_rows.append(
                 {
                     "config": cfg.name,
                     "n": int(len(sub)),
                     "success_rate": float(sub["success"].mean()) if len(sub) > 0 else 0.0,
+                    "failure_rate": float(1.0 - sub["success"].mean()) if len(sub) > 0 else 0.0,
                     "solvability_rate": float(sub["solvable"].mean()) if len(sub) > 0 else 0.0,
+                    "solvability_rate_successful_generations": (
+                        float(successful["solvable"].mean()) if len(successful) > 0 else 0.0
+                    ),
                     "confusion_ratio": float(sub["confusion_ratio"].mean(skipna=True)) if len(sub) > 0 else float("nan"),
                     "confusion_index": float(sub["confusion_index"].mean(skipna=True)) if len(sub) > 0 else float("nan"),
                     "path_optimal": float(sub["path_optimal"].mean(skipna=True)) if len(sub) > 0 else 0.0,

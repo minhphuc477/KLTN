@@ -26,7 +26,7 @@ from dataclasses import dataclass
 
 from .validator import (
     GameState, ZeldaLogicEnv, SolverDiagnostics,
-    SEMANTIC_PALETTE, BLOCKING_IDS
+    SEMANTIC_PALETTE, BLOCKING_IDS, game_state_key,
 )
 
 logger = logging.getLogger(__name__)
@@ -158,7 +158,7 @@ class StateSpaceDFS:
         logger.debug(f'IDDFS exhausted: max_depth={self.max_depth}, states={total_states}')
         return False, [], total_states
     
-    def _dfs_recursive(self, state: GameState, visited: Set[int], 
+    def _dfs_recursive(self, state: GameState, visited: Set[Tuple],
                       path: List[Tuple[int, int]], depth: int, 
                       depth_limit: int) -> Tuple[bool, List[Tuple[int, int]]]:
         """
@@ -166,7 +166,7 @@ class StateSpaceDFS:
         
         Args:
             state: Current game state
-            visited: Set of visited state hashes
+            visited: Set of visited immutable state keys
             path: Current path (positions)
             depth: Current depth in search tree
             depth_limit: Maximum depth for this iteration
@@ -181,14 +181,14 @@ class StateSpaceDFS:
         if self.states_explored >= self.timeout:
             return False, []
         
-        state_hash = hash(state)
+        state_key = game_state_key(state)
         
         # Cycle detection
-        if state_hash in visited:
+        if state_key in visited:
             self.metrics.cycle_detections += 1
             return False, []
         
-        visited.add(state_hash)
+        visited.add(state_key)
         self.states_explored += 1
         
         # Track depth metrics
@@ -205,8 +205,8 @@ class StateSpaceDFS:
         
         # Try each successor
         for next_state in successors:
-            next_hash = hash(next_state)
-            if next_hash in visited:
+            next_key = game_state_key(next_state)
+            if next_key in visited:
                 continue
             
             new_path = path + [next_state.position]
@@ -221,7 +221,7 @@ class StateSpaceDFS:
                 self.metrics.backtrack_count += 1
         
         # Dead end - backtrack
-        visited.remove(state_hash)
+        visited.remove(state_key)
         return False, []
     
     def _solve_iterative_dfs(self) -> Tuple[bool, List[Tuple[int, int]], int]:
@@ -249,14 +249,14 @@ class StateSpaceDFS:
             if depth >= self.max_depth:
                 continue
             
-            state_hash = hash(state)
+            state_key = game_state_key(state)
             
             # Cycle detection
-            if state_hash in visited:
+            if state_key in visited:
                 self.metrics.cycle_detections += 1
                 continue
             
-            visited.add(state_hash)
+            visited.add(state_key)
             self.states_explored += 1
             
             # Track depth metrics
@@ -272,8 +272,8 @@ class StateSpaceDFS:
             # Generate and push successors (reverse order for left-to-right exploration)
             successors = self._get_successors(state)
             for next_state in reversed(successors):
-                next_hash = hash(next_state)
-                if next_hash not in visited:
+                next_key = game_state_key(next_state)
+                if next_key not in visited:
                     new_path = path + [next_state.position]
                     stack.append((next_state, new_path, depth + 1))
         

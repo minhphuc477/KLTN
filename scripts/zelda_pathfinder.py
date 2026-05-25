@@ -30,6 +30,20 @@ from src.zelda_data.zelda_core import (
 )
 
 
+def _inventory_key(inventory: InventoryState) -> Tuple:
+    """Immutable inventory key; avoids storing raw hash values in search maps."""
+    return (
+        inventory.keys_held,
+        frozenset(inventory.keys_collected),
+        frozenset(inventory.doors_opened),
+        frozenset(inventory.items_collected),
+    )
+
+
+def _search_state_key(state: "SearchState") -> Tuple:
+    return (state.room, _inventory_key(state.inventory))
+
+
 # ==========================================
 # SEARCH STATE DEFINITION
 # ==========================================
@@ -64,8 +78,8 @@ class SearchState:
         return self.g_cost > other.g_cost
     
     def __hash__(self):
-        """Hash for visited set: (room, inventory_hash)"""
-        return hash((self.room, hash(self.inventory)))
+        """Hash compatible with equality; search maps store the full key."""
+        return hash(_search_state_key(self))
     
     def __eq__(self, other):
         """Equality check for visited set."""
@@ -185,7 +199,7 @@ class ZeldaPathfinder:
         counter = 0  # Tie-breaker for heap
         heapq.heappush(open_set, (initial_state.f_cost(), counter, initial_state))
         
-        # Visited: (room, inventory_hash) -> best g_cost
+        # Visited: (room, immutable inventory key) -> best g_cost
         visited: Dict[Tuple, int] = {}
         
         # Statistics
@@ -207,13 +221,12 @@ class ZeldaPathfinder:
                 elapsed = time.time() - start_time
                 return self._reconstruct_solution(current_state, elapsed)
             
-            # Get state hash for visited check
-            state_hash = (current_state.room, hash(current_state.inventory))
+            state_key = _search_state_key(current_state)
             
             # Skip if we've found a better path to this state
-            if state_hash in visited and visited[state_hash] <= current_state.g_cost:
+            if state_key in visited and visited[state_key] <= current_state.g_cost:
                 continue
-            visited[state_hash] = current_state.g_cost
+            visited[state_key] = current_state.g_cost
             
             # Expand neighbors
             successors = self._expand_state(current_state)

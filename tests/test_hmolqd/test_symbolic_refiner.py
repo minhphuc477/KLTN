@@ -309,6 +309,23 @@ class TestSymbolicRefiner:
 
         assert isinstance(success, bool)
         assert np.all(repaired[8, :] == TileType.FLOOR.value)
+
+    def test_repair_room_seed_makes_wfc_reproducible(self):
+        """Seeded repair should not depend on NumPy's global random state."""
+        from src.core.symbolic_refiner import SymbolicRefiner, TileType
+
+        refiner = SymbolicRefiner(max_repair_attempts=3)
+        grid = np.full((16, 11), TileType.WALL.value)
+        grid[1, 1] = TileType.START.value
+        grid[14, 9] = TileType.TRIFORCE.value
+
+        np.random.seed(1)
+        repaired_a, success_a = refiner.repair_room(grid, start=(1, 1), goal=(14, 9), seed=123)
+        np.random.seed(999)
+        repaired_b, success_b = refiner.repair_room(grid, start=(1, 1), goal=(14, 9), seed=123)
+
+        assert success_a == success_b
+        assert np.array_equal(repaired_a, repaired_b)
     
     def test_analyze_failures(self):
         """Test failure analysis."""

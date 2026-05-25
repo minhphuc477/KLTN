@@ -18,6 +18,7 @@ import logging
 
 from src.core.definitions import SEMANTIC_PALETTE
 from src.generation.evolutionary_director import (
+    CVTEliteArchive,
     EvolutionaryTopologyGenerator,
     GraphGrammarExecutor
 )
@@ -46,6 +47,46 @@ class TestTopologyGeneratorMaxNodes:
         )
         
         assert generator.max_nodes == 15
+
+    def test_cvt_emitter_archive_persistence_round_trips(self, tmp_path):
+        """Topology QD archives should be reusable across runs."""
+        if CVTEliteArchive is None:
+            pytest.skip("CVTEliteArchive unavailable")
+
+        archive_path = tmp_path / "topology_qd_archive.pkl"
+        generator = EvolutionaryTopologyGenerator(
+            target_curve=[0.2, 0.5, 0.8],
+            population_size=2,
+            generations=1,
+            search_strategy="cvt_emitter",
+            qd_archive_cells=32,
+            qd_archive_path=str(archive_path),
+            seed=7,
+        )
+        archive = generator._new_qd_archive()
+        archive.add(
+            solution=[0, 1, 2],
+            fitness=0.8,
+            features=(0.1, 0.2, 0.3, 0.4),
+            metadata={"source": "unit-test"},
+        )
+        generator._save_qd_archive(archive)
+
+        loaded_generator = EvolutionaryTopologyGenerator(
+            target_curve=[0.2, 0.5, 0.8],
+            population_size=2,
+            generations=1,
+            search_strategy="cvt_emitter",
+            qd_archive_cells=32,
+            qd_archive_path=str(archive_path),
+            qd_load_archive=True,
+            seed=7,
+        )
+        loaded = loaded_generator._load_qd_archive_or_new()
+
+        assert archive_path.exists()
+        assert len(loaded.get_all_elites()) == 1
+        assert loaded.get_all_elites()[0].solution == [0, 1, 2]
     
     def test_max_nodes_enforced_during_evolution(self):
         """Verify max_nodes is enforced during graph generation."""

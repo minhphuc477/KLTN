@@ -186,7 +186,7 @@ class SelfAttention(nn.Module):
 
 class CrossAttention(nn.Module):
     """Cross-attention for conditioning injection."""
-    
+
     def __init__(
         self, 
         query_dim: int, 
@@ -1045,8 +1045,9 @@ class GradientGuidance(nn.Module):
     """
     Gradient guidance module for diffusion sampling.
     
-    At each denoising step, computes gradient of LogicNet loss
-    and adjusts the predicted mean accordingly:
+    At each denoising step, computes gradient of a LogicNet objective
+    and adjusts the predicted mean accordingly. By default the objective is a
+    loss, so guidance performs gradient descent:
     
         x̂_{t-1} = μ_θ(x_t) - γ∇_{x_t}L_logic
     
@@ -1054,8 +1055,22 @@ class GradientGuidance(nn.Module):
         logic_net: LogicNet module (Block V)
         guidance_scale: Scale factor γ for gradients
         clamp_magnitude: Maximum gradient magnitude
+        objective_mode: "loss" minimizes the LogicNet output; "reward" maximizes it
     """
     
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name == "logic_net":
+            object.__setattr__(self, "_logic_net_ref", value)
+            modules = self.__dict__.get("_modules")
+            if isinstance(modules, dict):
+                modules.pop("logic_net", None)
+            return
+        super().__setattr__(name, value)
+
+    @property
+    def logic_net(self) -> Optional[nn.Module]:
+        return getattr(self, "_logic_net_ref", None)
+
     def __init__(
         self,
         logic_net: Optional[nn.Module] = None,
@@ -1068,6 +1083,7 @@ class GradientGuidance(nn.Module):
         max_graph_nodes: int = 512,
         max_key_lock_pairs: int = 2048,
         max_guidance_elements: int = 2_000_000,
+        objective_mode: str = "loss",
     ):
         super().__init__()
         self.logic_net = logic_net
@@ -1080,6 +1096,11 @@ class GradientGuidance(nn.Module):
         self.max_graph_nodes = int(max(1, int(max_graph_nodes)))
         self.max_key_lock_pairs = int(max(0, int(max_key_lock_pairs)))
         self.max_guidance_elements = int(max(1, int(max_guidance_elements)))
+        self.objective_mode = str(objective_mode).strip().lower()
+        if self.objective_mode not in {"loss", "reward"}:
+            raise ValueError(
+                f"objective_mode must be 'loss' or 'reward', got {objective_mode!r}."
+            )
         self._missing_logic_net_warning_emitted = False
         self._warning_counts: Dict[str, int] = {}
         self.failure_count = 0
@@ -1513,7 +1534,8 @@ class GradientGuidance(nn.Module):
             grad_norm = grad_norm.view(grad.shape[0], *([1] * (grad.dim() - 1)))
             grad = grad * torch.clamp(self.clamp_magnitude / (grad_norm + 1e-8), max=1.0)
 
-        guidance = float(scaled_gamma) * grad
+        guidance_direction = 1.0 if self.objective_mode == "loss" else -1.0
+        guidance = float(scaled_gamma) * float(guidance_direction) * grad
         if self.relative_norm_cap > 0:
             ref_norm = x_t.detach().to(dtype=guidance.dtype).view(x_t.shape[0], -1).norm(dim=1)
             ref_norm = ref_norm.view(x_t.shape[0], *([1] * (x_t.dim() - 1)))

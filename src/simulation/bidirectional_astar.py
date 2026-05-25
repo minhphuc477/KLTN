@@ -26,11 +26,12 @@ Critical Challenge: Backward Search in State-Space Graphs
 
 import heapq
 import logging
-from typing import Dict, List, Tuple, Optional
+from typing import Any, Dict, List, Tuple, Optional
 from dataclasses import dataclass, field
 
 from .validator import (
-    GameState, ZeldaLogicEnv, SEMANTIC_PALETTE, WALKABLE_IDS, BLOCKING_IDS, PICKUP_IDS
+    GameState, ZeldaLogicEnv, SEMANTIC_PALETTE, WALKABLE_IDS, BLOCKING_IDS,
+    PICKUP_IDS, game_state_key,
 )
 
 logger = logging.getLogger(__name__)
@@ -98,14 +99,14 @@ class BidirectionalAStar:
         self.forward_open: List[Tuple] = []  # Priority queue
         self.backward_open: List[Tuple] = []  # Priority queue
         
-        self.forward_closed: Dict[int, SearchNode] = {}  # hash -> node
-        self.backward_closed: Dict[int, SearchNode] = {}  # hash -> node
+        self.forward_closed: Dict[Any, SearchNode] = {}  # state key -> node
+        self.backward_closed: Dict[Any, SearchNode] = {}  # state key -> node
         # Position indexes to avoid O(|closed|) scans during collision checks.
         self.forward_closed_by_pos: Dict[Tuple[int, int], List[SearchNode]] = {}
         self.backward_closed_by_pos: Dict[Tuple[int, int], List[SearchNode]] = {}
         
-        self.forward_g_scores: Dict[int, float] = {}
-        self.backward_g_scores: Dict[int, float] = {}
+        self.forward_g_scores: Dict[Any, float] = {}
+        self.backward_g_scores: Dict[Any, float] = {}
         
         # Statistics
         self.states_explored = 0
@@ -150,7 +151,7 @@ class BidirectionalAStar:
             path=[start_state.position]
         )
         
-        start_hash = hash(start_state)
+        start_hash = game_state_key(start_state)
         self.forward_g_scores[start_hash] = 0
         heapq.heappush(self.forward_open, (start_node.f_score, 0, start_hash, start_node))
         
@@ -164,7 +165,7 @@ class BidirectionalAStar:
             path=[goal_state.position]
         )
         
-        goal_hash = hash(goal_state)
+        goal_hash = game_state_key(goal_state)
         self.backward_g_scores[goal_hash] = 0
         heapq.heappush(self.backward_open, (goal_node.f_score, 0, goal_hash, goal_node))
         
@@ -348,7 +349,7 @@ class BidirectionalAStar:
         
         # Expand successors
         for next_state in self._get_forward_successors(current_node.state):
-            next_hash = hash(next_state)
+            next_hash = game_state_key(next_state)
             
             if next_hash in self.forward_closed:
                 continue
@@ -421,7 +422,7 @@ class BidirectionalAStar:
         
         # Expand predecessors (reversed actions)
         for prev_state in self._get_backward_predecessors(current_node.state):
-            prev_hash = hash(prev_state)
+            prev_hash = game_state_key(prev_state)
             
             if prev_hash in self.backward_closed:
                 continue

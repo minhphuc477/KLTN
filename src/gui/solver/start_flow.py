@@ -6,6 +6,7 @@ from typing import Any
 def start_auto_solve(gui: Any, logger: Any, debug_sync_solver: bool) -> None:
     """Start auto-solve mode using state-space solver with inventory tracking."""
     alg_idx, rep_mode, ara_weight = gui._sync_solver_dropdown_settings()
+    debug_solver_flow = bool(getattr(gui, "debug_solver_flow", False))
     logger.info(
         "SOLVER_FIX: Synced settings from dropdowns -> alg_idx=%d, representation=%s, ara_weight=%.2f",
         alg_idx,
@@ -14,19 +15,20 @@ def start_auto_solve(gui: Any, logger: Any, debug_sync_solver: bool) -> None:
     )
 
     alg_name = gui._algorithm_name(alg_idx)
-    logger.info("DEBUG_SOLVER: _start_auto_solve() called")
-    logger.info("  Algorithm: %s (idx=%d)", alg_name, alg_idx)
-    logger.info(
-        "  Search representation: %s, ara_weight=%.2f",
-        gui.search_representation,
-        gui.ara_weight,
-    )
-    logger.info(
-        "DEBUG_SOLVER: solver_running=%s, auto_mode=%s, auto_start_solver=%s",
-        getattr(gui, "solver_running", None),
-        getattr(gui, "auto_mode", None),
-        getattr(gui, "auto_start_solver", None),
-    )
+    if debug_solver_flow:
+        logger.info("SOLVER_FLOW: _start_auto_solve() called")
+        logger.info("SOLVER_FLOW: Algorithm: %s (idx=%d)", alg_name, alg_idx)
+        logger.info(
+            "SOLVER_FLOW: Search representation: %s, ara_weight=%.2f",
+            gui.search_representation,
+            gui.ara_weight,
+        )
+        logger.info(
+            "SOLVER_FLOW: solver_running=%s, auto_mode=%s, auto_start_solver=%s",
+            getattr(gui, "solver_running", None),
+            getattr(gui, "auto_mode", None),
+            getattr(gui, "auto_start_solver", None),
+        )
 
     if (
         getattr(gui, "auto_path", None)
@@ -55,17 +57,19 @@ def start_auto_solve(gui: Any, logger: Any, debug_sync_solver: bool) -> None:
 
     gui._cleanup_preview_before_solver_start()
     gui._reset_solver_visual_state_before_start()
-    logger.info("DEBUG_SOLVER: Cleared previous state, solver_done=False")
+    if debug_solver_flow:
+        logger.info("SOLVER_FLOW: Cleared previous state, solver_done=False")
 
     if debug_sync_solver:
-        logger.warning("DEBUG_SOLVER: Running solver SYNCHRONOUSLY (blocking)")
+        logger.warning("SYNC_SOLVER: Running solver synchronously (blocking)")
         gui._run_solver_sync(algorithm_idx=alg_idx)
         return
 
     gui._set_message("Starting solver in background...", 2.0)
     try:
         gui._schedule_solver(algorithm_idx=alg_idx)
-        logger.info("DEBUG_SOLVER: _schedule_solver() completed without exception")
+        if debug_solver_flow:
+            logger.info("SOLVER_FLOW: _schedule_solver() completed without exception")
     except (AttributeError, RuntimeError, ValueError, TypeError):
         logger.exception("Failed to schedule solver")
         gui._set_message("Failed to start solver", 3.0)

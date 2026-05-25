@@ -585,3 +585,10 @@ def test_dungeon_validator_uses_grid_bfs_for_semantic_dungeon_maps():
 
     assert validator.check_solvability(dungeon_map) is True
 
+
+def test_dungeon_validator_does_not_use_random_logicnet_for_latent_maps():
+    validator = generation_cli.DungeonValidator(use_external=False)
+    latent_like = torch.zeros((1, 64, 4, 3), dtype=torch.float32)
+
+    assert validator.check_solvability(latent_like) is False
+    assert validator.logic_net_checkpoint_loaded is False

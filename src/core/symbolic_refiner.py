@@ -778,6 +778,7 @@ class WaveFunctionCollapse:
         adjacency: Optional[Dict[int, Set[int]]] = None,
         tile_weights: Optional[Dict[int, float]] = None,
         max_iterations: int = 10000,
+        rng: Optional[np.random.Generator] = None,
     ):
         """
         Args:
@@ -789,6 +790,7 @@ class WaveFunctionCollapse:
         self.tile_types = tile_types
         self.adjacency = adjacency or DEFAULT_ADJACENCY
         self.max_iterations = max_iterations
+        self.rng = rng if rng is not None else np.random.default_rng()
         
         # Phase 3B: Learned tile weights for non-uniform initialization
         if tile_weights is not None:
@@ -903,7 +905,7 @@ class WaveFunctionCollapse:
         valid_probs = probs[probs > 0]
         valid_probs /= valid_probs.sum()
         
-        tile_idx = np.random.choice(
+        tile_idx = self.rng.choice(
             len(options),
             p=valid_probs,
         )
@@ -1120,6 +1122,7 @@ class SymbolicRefiner:
         max_repair_attempts: int = 5,
         margin: int = 2,
         adjacency_threshold: float = 0.01,
+        seed: Optional[int] = None,
     ):
         """
         Args:
@@ -1139,6 +1142,8 @@ class SymbolicRefiner:
         self.max_repair_attempts = max_repair_attempts
         self.learned_stats = learned_stats
         self.adjacency_threshold = float(adjacency_threshold)
+        self._rng_seed = None if seed is None else int(seed)
+        self._rng = np.random.default_rng(self._rng_seed)
         self._adjacency_override = (
             {int(src): set(int(dst) for dst in neighbors) for src, neighbors in adjacency.items()}
             if adjacency is not None
@@ -1154,6 +1159,13 @@ class SymbolicRefiner:
         self.constraint_propagator = ConstraintPropagator()
         self.last_repair_diagnostics: Dict[str, Any] = {}
         self.refresh_learned_rules()
+
+    def set_seed(self, seed: Optional[int]) -> None:
+        """Reset WFC sampling RNG for reproducible repair runs."""
+        self._rng_seed = None if seed is None else int(seed)
+        self._rng = np.random.default_rng(self._rng_seed)
+        if hasattr(self, "wfc"):
+            self.wfc.rng = self._rng
 
     def _resolve_effective_rules(self) -> Tuple[Dict[int, Set[int]], Optional[Dict[int, float]]]:
         """Resolve the active adjacency/weight configuration for WFC repair."""
@@ -1193,6 +1205,7 @@ class SymbolicRefiner:
             tile_types=self.tile_types,
             adjacency=effective_adjacency,
             tile_weights=effective_weights,
+            rng=self._rng,
         )
         self.constraint_propagator = ConstraintPropagator(
             adjacency=effective_adjacency
@@ -1206,6 +1219,7 @@ class SymbolicRefiner:
         feedback_callback: Optional[Callable[[np.ndarray, np.ndarray, Tuple[int, int], Tuple[int, int], int], np.ndarray]] = None,
         max_feedback_rounds: int = 2,
         required_floor_mask: Optional[np.ndarray] = None,
+        seed: Optional[int] = None,
     ) -> Tuple[np.ndarray, bool, Dict[str, Any]]:
         """
         Repair a room and optionally call a neural feedback callback on WFC dead-ends.
@@ -1213,6 +1227,8 @@ class SymbolicRefiner:
         The callback receives (current_grid, dead_end_mask, start, goal, attempt)
         and must return a patched room grid of identical shape.
         """
+        if seed is not None:
+            self.set_seed(seed)
         self.refresh_learned_rules()
         current_grid = grid.copy()
         start = _normalize_grid_coord(start, current_grid.shape[:2], field_name="start")
@@ -1351,6 +1367,7 @@ class SymbolicRefiner:
         goal: Tuple[int, int],
         *,
         required_floor_mask: Optional[np.ndarray] = None,
+        seed: Optional[int] = None,
     ) -> Tuple[np.ndarray, bool]:
         """
         Repair a room grid to ensure solvability.
@@ -1370,6 +1387,7 @@ class SymbolicRefiner:
             feedback_callback=None,
             max_feedback_rounds=0,
             required_floor_mask=required_floor_mask,
+            seed=seed,
         )
         self.last_repair_diagnostics = diagnostics
         return repaired, success
@@ -1482,6 +1500,7 @@ def create_symbolic_refiner(
     tile_types: Optional[List[int]] = None,
     max_repair_attempts: int = 5,
     learned_stats: Optional[LearnedTileStatistics] = None,
+    seed: Optional[int] = None,
 ) -> SymbolicRefiner:
     """
     Create a SymbolicRefiner instance.
@@ -1498,6 +1517,7 @@ def create_symbolic_refiner(
         tile_types=tile_types,
         max_repair_attempts=max_repair_attempts,
         learned_stats=learned_stats,
+        seed=seed,
     )
 
 
@@ -1505,6 +1525,7 @@ def quick_repair(
     grid: np.ndarray,
     start: Tuple[int, int],
     goal: Tuple[int, int],
+    seed: Optional[int] = None,
 ) -> Tuple[np.ndarray, bool]:
     """
     Quick repair function for a single room.
@@ -1517,5 +1538,5 @@ def quick_repair(
     Returns:
         (repaired_grid, success)
     """
-    refiner = create_symbolic_refiner()
-    return refiner.repair_room(grid, start, goal)
+    refiner = create_symbolic_refiner(seed=seed)
+    return refiner.repair_room(grid, start, goal, seed=seed)

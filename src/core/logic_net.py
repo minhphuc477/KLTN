@@ -40,31 +40,10 @@ from torch import Tensor
 from src.core.definitions import (
     DOOR_POSITIONS,
     ROOM_HEIGHT,
+    ROOM_TOPOLOGY_CHANNELS,
     ROOM_TOPOLOGY_DIRECTIONAL_CHANNEL_GROUPS,
     ROOM_WIDTH,
 )
-try:
-    from src.pipeline.room_topology_conditioning import ROOM_TOPOLOGY_CHANNELS
-except Exception:
-    ROOM_TOPOLOGY_CHANNELS = {
-        "traversability": 0,
-        "start": 1,
-        "goal": 2,
-        "door_n": 3,
-        "door_s": 4,
-        "door_e": 5,
-        "door_w": 6,
-        "gated_n": 7,
-        "gated_s": 8,
-        "gated_e": 9,
-        "gated_w": 10,
-    }
-    ROOM_TOPOLOGY_DIRECTIONAL_CHANNEL_GROUPS = {
-        "N": ("door_n", "gated_n"),
-        "S": ("door_s", "gated_s"),
-        "E": ("door_e", "gated_e"),
-        "W": ("door_w", "gated_w"),
-    }
 
 logger = logging.getLogger(__name__)
 

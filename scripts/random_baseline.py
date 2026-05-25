@@ -34,6 +34,7 @@ from src.evaluation.benchmark_suite import (
     load_vglc_reference_graphs,
 )
 from src.evaluation.map_elites import EliteArchive, LinearityLeniencyExtractor
+from src.evaluation.validator import ExternalValidator
 from src.generation.evolutionary_director import (
     EvolutionaryTopologyGenerator,
     TensionCurveEvaluator,
@@ -55,6 +56,9 @@ class RandomBaselineResult:
     mean_coverage_random: float
     std_coverage_random: float
     mean_qd_score_random: float
+    solvability_rate_random: float = 0.0
+    num_elites_random: int = 0
+    feature_diversity_random: float = 0.0
     description: str = "Random generation with no optimization"
 
 
@@ -74,6 +78,7 @@ def generate_random_topologies(
     random.seed(seed)
     
     grammar = MissionGrammar(seed=seed)
+    validator = ExternalValidator()
     
     topologies = []
     
@@ -85,12 +90,14 @@ def generate_random_topologies(
             if mission_graph is not None:
                 graph = mission_graph_to_networkx(mission_graph, directed=True)
                 if graph is not None and graph.number_of_nodes() > 0:
-                    # Assign random fitness instead of optimization fitness.
-                    random_fitness = float(np.random.uniform(0, 1))
+                    validation = validator.validate(graph)
+                    topology_valid = bool(validate_topology(graph).is_valid)
+                    random_fitness = float(validation.is_solvable) + (0.25 if topology_valid else 0.0)
 
                     topologies.append({
                         "graph": graph,
                         "fitness": random_fitness,
+                        "solvable": bool(validation.is_solvable),
                         "is_random": True,
                     })
         except Exception as e:
@@ -158,7 +165,10 @@ def run_random_baseline_with_archive(
             mean_coverage_random=stats_obj.coverage,
             std_coverage_random=0,  # Single run
             mean_qd_score_random=stats_obj.total_fitness,
-            description="Random generation: no optimization, random fitness assignment",
+            solvability_rate_random=float(np.mean([topo.get("solvable", False) for topo in topologies])),
+            num_elites_random=int(stats_obj.num_elites),
+            feature_diversity_random=float(stats_obj.feature_diversity),
+            description="Random generation: no optimization, validator-grounded fitness",
         )
         
     except Exception as e:

@@ -63,10 +63,15 @@ def test_conditioning_logicnet_summary_separates_pre_post_validity():
             "conditioning": "full",
             "repair_enabled": True,
             "logic_enabled": True,
+            "raw_oracle_solved": False,
             "pre_oracle_solved": False,
             "post_oracle_solved": True,
+            "raw_pcbs_solved": False,
             "pre_pcbs_solved": False,
             "post_pcbs_solved": True,
+            "raw_invalid_tile_ids": 4,
+            "raw_to_cleaned_tiles_changed": 5,
+            "raw_to_final_tiles_changed": 17,
             "repair_count": 2,
             "repair_time_sec": 0.25,
             "total_tiles_repaired": 12,
@@ -80,7 +85,16 @@ def test_conditioning_logicnet_summary_separates_pre_post_validity():
     summary = summarize_rows(rows)
 
     assert summary[0]["pre_oracle_valid_rate"] == 0.0
+    assert summary[0]["raw_oracle_valid_rate"] == 0.0
     assert summary[0]["post_oracle_valid_rate"] == 1.0
+    assert summary[0]["raw_solvability_rate_without_fix"] == 0.0
+    assert summary[0]["pre_repair_solvability_rate"] == 0.0
+    assert summary[0]["post_solvability_rate"] == 1.0
+    assert summary[0]["wfc_destroyed_raw_solution_rate"] == 0.0
+    assert summary[0]["repair_recovered_raw_failure_rate"] == 1.0
+    assert summary[0]["raw_invalid_tile_ids_mean"] == 4.0
+    assert summary[0]["raw_to_cleaned_tiles_changed_mean"] == 5.0
+    assert summary[0]["raw_to_final_tiles_changed_mean"] == 17.0
     assert summary[0]["repair_count_mean"] == 2.0
 
 
@@ -92,6 +106,7 @@ def test_conditioning_logicnet_delta_rows_are_paired_by_seed_condition_and_repai
             "repair_enabled": True,
             "logic_enabled": False,
             "seed": 7,
+            "raw_oracle_solved": False,
             "pre_oracle_solved": False,
             "post_oracle_solved": True,
             "post_readability_score": 0.50,
@@ -103,6 +118,7 @@ def test_conditioning_logicnet_delta_rows_are_paired_by_seed_condition_and_repai
             "repair_enabled": True,
             "logic_enabled": True,
             "seed": 7,
+            "raw_oracle_solved": False,
             "pre_oracle_solved": True,
             "post_oracle_solved": True,
             "post_readability_score": 0.75,
@@ -113,6 +129,7 @@ def test_conditioning_logicnet_delta_rows_are_paired_by_seed_condition_and_repai
     deltas = build_logic_delta_rows(rows)
 
     assert len(deltas) == 1
+    assert deltas[0]["raw_oracle_solved_delta_on_minus_off"] == 0.0
     assert deltas[0]["pre_oracle_solved_delta_on_minus_off"] == 1.0
     assert deltas[0]["post_readability_score_delta_on_minus_off"] == 0.25
     assert deltas[0]["logicnet_dungeon_solvability_delta_on_minus_off"] == 0.5

@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections import deque
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -68,9 +69,9 @@ def _find_path(adjacency: Dict[int, List[int]], start_id: int, goal_id: int) -> 
     if start_id == goal_id:
         return [start_id]
     visited = {start_id}
-    queue: List[Tuple[int, List[int]]] = [(start_id, [start_id])]
+    queue = deque([(start_id, [start_id])])
     while queue:
-        current, path = queue.pop(0)
+        current, path = queue.popleft()
         for nxt in adjacency.get(current, []):
             if nxt in visited:
                 continue

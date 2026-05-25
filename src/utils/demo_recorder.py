@@ -395,7 +395,7 @@ class DemoRecorder:
             # Try to load font, fall back to default
             try:
                 font = ImageFont.truetype("arial.ttf", self.config.font_size)
-            except:
+            except OSError:
                 font = ImageFont.load_default()
             
             # Draw block name (top-left)
@@ -431,7 +431,7 @@ class DemoRecorder:
             
             try:
                 font = ImageFont.truetype("arial.ttf", self.config.font_size)
-            except:
+            except OSError:
                 font = ImageFont.load_default()
             
             # Title

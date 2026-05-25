@@ -24,7 +24,7 @@ import logging
 from typing import Dict, List, Tuple
 from dataclasses import dataclass
 from collections import deque
-from .validator import GameState, ZeldaLogicEnv, ACTION_DELTAS, SEMANTIC_PALETTE
+from .validator import GameState, ZeldaLogicEnv, ACTION_DELTAS, SEMANTIC_PALETTE, game_state_key
 
 logger = logging.getLogger(__name__)
 
@@ -137,7 +137,7 @@ class SolverComparison:
         
         # BFS implementation
         queue = deque([(start_state, [start_state.position])])
-        visited = {hash(start_state)}
+        visited = {game_state_key(start_state)}
         states_explored = 0
         
         while queue and (time.time() - start_time) < max_time:
@@ -173,9 +173,9 @@ class SolverComparison:
                 if not can_move:
                     continue
                 
-                new_hash = hash(new_state)
-                if new_hash not in visited:
-                    visited.add(new_hash)
+                new_key = game_state_key(new_state)
+                if new_key not in visited:
+                    visited.add(new_key)
                     queue.append((new_state, path + [target_pos]))
         
         elapsed = time.time() - start_time
@@ -187,7 +187,7 @@ class SolverComparison:
         
         # Priority queue: (cost, counter, state, path)
         open_set = [(0, 0, start_state, [start_state.position])]
-        g_scores = {hash(start_state): 0}
+        g_scores = {game_state_key(start_state): 0}
         visited = set()
         counter = 1
         states_explored = 0
@@ -195,11 +195,11 @@ class SolverComparison:
         while open_set and (time.time() - start_time) < max_time:
             cost, _, current_state, path = heapq.heappop(open_set)
             
-            state_hash = hash(current_state)
-            if state_hash in visited:
+            state_key = game_state_key(current_state)
+            if state_key in visited:
                 continue
             
-            visited.add(state_hash)
+            visited.add(state_key)
             states_explored += 1
             
             # Check goal
@@ -231,16 +231,16 @@ class SolverComparison:
                 if not can_move:
                     continue
                 
-                new_hash = hash(new_state)
-                if new_hash in visited:
+                new_key = game_state_key(new_state)
+                if new_key in visited:
                     continue
                 
                 new_cost = cost + 1  # Uniform cost
                 
-                if new_hash in g_scores and new_cost >= g_scores[new_hash]:
+                if new_key in g_scores and new_cost >= g_scores[new_key]:
                     continue
                 
-                g_scores[new_hash] = new_cost
+                g_scores[new_key] = new_cost
                 heapq.heappush(open_set, (new_cost, counter, new_state, path + [target_pos]))
                 counter += 1
         
@@ -261,11 +261,11 @@ class SolverComparison:
         while open_set and (time.time() - start_time) < max_time:
             _, _, current_state, path = heapq.heappop(open_set)
             
-            state_hash = hash(current_state)
-            if state_hash in visited:
+            state_key = game_state_key(current_state)
+            if state_key in visited:
                 continue
             
-            visited.add(state_hash)
+            visited.add(state_key)
             states_explored += 1
             
             # Check goal
@@ -297,8 +297,8 @@ class SolverComparison:
                 if not can_move:
                     continue
                 
-                new_hash = hash(new_state)
-                if new_hash in visited:
+                new_key = game_state_key(new_state)
+                if new_key in visited:
                     continue
                 
                 h = self._heuristic(new_state)

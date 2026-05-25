@@ -106,6 +106,38 @@ def grid_with_enemies():
 # BELIEF MAP TESTS
 # ==============================================================================
 
+class TestVisionSystem:
+    """Tests for limited vision and occlusion."""
+
+    def test_diagonal_offset_wall_occludes_cells_on_same_line_of_sight(self):
+        grid = np.full((8, 8), SEMANTIC_PALETTE["FLOOR"], dtype=np.int64)
+        origin = (2, 2)
+        blocker = (4, 3)  # Non-axis-aligned offset from origin.
+        hidden = (5, 3)
+        grid[blocker] = SEMANTIC_PALETTE["WALL"]
+
+        vision = VisionSystem(radius=5, cone_angle=360, enable_occlusion=True)
+
+        visible = vision.get_visible_tiles(origin, (1, 0), grid)
+
+        assert blocker in visible
+        assert hidden not in visible
+
+    def test_diagonal_offset_wall_does_not_hide_unrelated_side_tile(self):
+        grid = np.full((8, 8), SEMANTIC_PALETTE["FLOOR"], dtype=np.int64)
+        origin = (2, 2)
+        blocker = (4, 3)
+        side_tile = (5, 4)
+        grid[blocker] = SEMANTIC_PALETTE["WALL"]
+
+        vision = VisionSystem(radius=5, cone_angle=360, enable_occlusion=True)
+
+        visible = vision.get_visible_tiles(origin, (1, 0), grid)
+
+        assert blocker in visible
+        assert side_tile in visible
+
+
 class TestBeliefMap:
     """Tests for BeliefMap epistemic state."""
     

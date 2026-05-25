@@ -192,7 +192,7 @@ def compute_statistical_significance(
     results_n96: Dict[int, PerSeedResult],
 ) -> Dict[str, Any]:
     """
-    Compute Welch's t-test and Cohen's d for paired seeds.
+    Compute a paired-samples t-test and Cohen's d for paired seeds.
     """
     
     # Extract fitness for paired seeds
@@ -200,35 +200,74 @@ def compute_statistical_significance(
     
     if len(paired_seeds) < 2:
         logger.warning(f"Insufficient paired seeds: {len(paired_seeds)}")
-        return {}
+        fitness_n64 = [float(results_n64[s].fitness) for s in paired_seeds]
+        fitness_n96 = [float(results_n96[s].fitness) for s in paired_seeds]
+        return {
+            "test_type": "paired_samples_t_test",
+            "paired_seeds": len(paired_seeds),
+            "seeds_list": paired_seeds,
+            "insufficient_data": True,
+            "statistical_significance": "INSUFFICIENT_DATA",
+            "reason": "At least two matched seeds are required for a paired-samples t-test.",
+            "mean_fitness_n64": float(np.mean(fitness_n64)) if fitness_n64 else 0.0,
+            "mean_fitness_n96": float(np.mean(fitness_n96)) if fitness_n96 else 0.0,
+            "mean_difference": (
+                float(np.mean([results_n96[s].fitness - results_n64[s].fitness for s in paired_seeds]))
+                if paired_seeds
+                else 0.0
+            ),
+            "percent_improvement": 0.0,
+            "t_statistic": None,
+            "p_value": 1.0,
+            "cohens_d": None,
+            "cohens_d_interpretation": "undefined (insufficient paired seeds)",
+            "ci_lower": 0.0,
+            "ci_upper": 0.0,
+            "per_seed_deltas": {
+                s: float(results_n96[s].fitness - results_n64[s].fitness)
+                for s in paired_seeds
+            },
+        }
     
-    fitness_n64 = np.array([results_n64[s].fitness for s in paired_seeds])
-    fitness_n96 = np.array([results_n96[s].fitness for s in paired_seeds])
+    fitness_n64 = np.array([results_n64[s].fitness for s in paired_seeds], dtype=float)
+    fitness_n96 = np.array([results_n96[s].fitness for s in paired_seeds], dtype=float)
     
     deltas = fitness_n96 - fitness_n64
     
-    # Paired t-test (more appropriate than Welch's for paired samples with small n)
-    t_stat, p_value = stats.ttest_rel(fitness_n96, fitness_n64)
-    
     # Cohen's d (paired samples: d = mean(delta) / std(delta))
-    mean_diff = np.mean(deltas)
-    std_diff = np.std(deltas, ddof=1)
-    cohens_d = mean_diff / std_diff if std_diff > 0 else 0
-    
-    # 95% CI for mean difference
+    mean_diff = float(np.mean(deltas))
+    std_diff = float(np.std(deltas, ddof=1))
     n = len(paired_seeds)
-    se = std_diff / np.sqrt(n) if std_diff > 0 else 0
-    t_crit = stats.t.ppf(0.975, n - 1)  # two-tailed
-    ci_lower = mean_diff - t_crit * se
-    ci_upper = mean_diff + t_crit * se
+    eps = np.finfo(float).eps
+    if std_diff <= eps:
+        t_stat = None
+        p_value = 1.0 if abs(mean_diff) <= eps else 0.0
+        cohens_d = None
+        ci_lower = ci_upper = mean_diff
+        effect_size_interpretation = (
+            "undefined (zero paired-difference variance)"
+            if abs(mean_diff) > eps
+            else "negligible"
+        )
+    else:
+        t_stat, p_value = stats.ttest_rel(fitness_n96, fitness_n64)
+        cohens_d = mean_diff / std_diff
+
+        # 95% CI for mean difference
+        se = std_diff / np.sqrt(n)
+        t_crit = stats.t.ppf(0.975, n - 1)  # two-tailed
+        ci_lower = mean_diff - t_crit * se
+        ci_upper = mean_diff + t_crit * se
+        effect_size_interpretation = _interpret_cohens_d(cohens_d)
     
     # Percent improvement
     pct_improvement = (mean_diff / np.mean(fitness_n64) * 100) if np.mean(fitness_n64) > 0 else 0
     
     return {
-        "test_type": "Paired samples t-test (Wilcoxon signed-rank if non-normal)",
+        "test_type": "paired_samples_t_test",
         "paired_seeds": len(paired_seeds),
         "seeds_list": sorted(paired_seeds),
+        "insufficient_data": False,
         "mean_fitness_n64": float(np.mean(fitness_n64)),
         "std_fitness_n64": float(np.std(fitness_n64, ddof=1)),
         "mean_fitness_n96": float(np.mean(fitness_n96)),
@@ -236,15 +275,19 @@ def compute_statistical_significance(
         "mean_difference": float(mean_diff),
         "std_difference": float(std_diff),
         "percent_improvement": float(pct_improvement),
-        "t_statistic": float(t_stat),
+        "t_statistic": None if t_stat is None else float(t_stat),
         "p_value": float(p_value),
-        "cohens_d": float(cohens_d),
-        "cohens_d_interpretation": _interpret_cohens_d(cohens_d),
+        "cohens_d": None if cohens_d is None else float(cohens_d),
+        "cohens_d_interpretation": effect_size_interpretation,
         "ci_lower": float(ci_lower),
         "ci_upper": float(ci_upper),
-        "effect_size_interpretation": _interpret_cohens_d(cohens_d),
+        "effect_size_interpretation": effect_size_interpretation,
         "statistical_significance": "YES (p < 0.05)" if p_value < 0.05 else "NO (p >= 0.05)",
-        "practical_significance": "YES (d > 0.5)" if abs(cohens_d) > 0.5 else "NO (d <= 0.5)",
+        "practical_significance": (
+            "UNDEFINED (zero paired-difference variance)"
+            if cohens_d is None
+            else ("YES (d > 0.5)" if abs(cohens_d) > 0.5 else "NO (d <= 0.5)")
+        ),
         "per_seed_deltas": {s: float(d) for s, d in zip(paired_seeds, deltas)},
         "per_seed_fitnesses_n64": {s: float(fitness_n64[i]) for i, s in enumerate(paired_seeds)},
         "per_seed_fitnesses_n96": {s: float(fitness_n96[i]) for i, s in enumerate(paired_seeds)},
@@ -262,6 +305,18 @@ def _interpret_cohens_d(d: float) -> str:
         return "medium"
     else:
         return "large"
+
+
+def _safe_pearson_corr(x: np.ndarray, y: np.ndarray) -> float:
+    """Return a finite Pearson correlation, or 0.0 when it is undefined."""
+    x_arr = np.asarray(x, dtype=float)
+    y_arr = np.asarray(y, dtype=float)
+    if x_arr.size < 2 or y_arr.size < 2 or x_arr.size != y_arr.size:
+        return 0.0
+    if np.std(x_arr) <= np.finfo(float).eps or np.std(y_arr) <= np.finfo(float).eps:
+        return 0.0
+    corr = float(np.corrcoef(x_arr, y_arr)[0, 1])
+    return corr if np.isfinite(corr) else 0.0
 
 
 def compute_coverage_convergence(
@@ -308,10 +363,10 @@ def compute_qd_decomposition(
         feature_divs = np.array([r.feature_diversity for r in results.values()])
         gen_times = np.array([r.generation_time_sec for r in results.values()])
         
-        # Correlations
-        corr_elite_qd = np.corrcoef(elite_counts, qd_scores)[0, 1] if len(elite_counts) > 1 else 0
-        corr_div_qd = np.corrcoef(feature_divs, qd_scores)[0, 1] if len(feature_divs) > 1 else 0
-        corr_time_qd = np.corrcoef(gen_times, qd_scores)[0, 1] if len(gen_times) > 1 else 0
+        # Correlations are undefined for one seed or constant vectors.
+        corr_elite_qd = _safe_pearson_corr(elite_counts, qd_scores)
+        corr_div_qd = _safe_pearson_corr(feature_divs, qd_scores)
+        corr_time_qd = _safe_pearson_corr(gen_times, qd_scores)
         
         decomp[config_name] = {
             "mean_elite_count": float(np.mean(elite_counts)),
@@ -348,6 +403,12 @@ def generate_report(
     
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    cohens_d = statistical_test.get("cohens_d")
+    effect_size_summary = (
+        "Cohen's d = undefined"
+        if cohens_d is None
+        else f"Cohen's d = {cohens_d:.3f}"
+    )
     
     report = {
         "title": "Paired-Seed Ablation Statistical Validation Report",
@@ -356,12 +417,12 @@ def generate_report(
             "num_paired_seeds": statistical_test.get("paired_seeds", 0),
             "fitness_improvement": f"{statistical_test.get('percent_improvement', 0):.2f}%",
             "statistical_significance": statistical_test.get("statistical_significance", "UNKNOWN"),
-            "effect_size": f"Cohen's d = {statistical_test.get('cohens_d', 0):.3f}",
+            "effect_size": effect_size_summary,
             "practical_significance": statistical_test.get("practical_significance", "UNKNOWN"),
         },
         "sections": {
             "paired_seeds_statistical_test": {
-                "description": "Welch's paired t-test comparing n64 vs n96 on identical seeds",
+                "description": "Paired-samples t-test comparing n64 vs n96 on identical seeds",
                 "results": statistical_test,
             },
             "coverage_convergence": {
@@ -512,10 +573,15 @@ def main():
         logger.info(f"    Mean n64 fitness: {statistical_test.get('mean_fitness_n64', 0):.4f}")
         logger.info(f"    Mean n96 fitness: {statistical_test.get('mean_fitness_n96', 0):.4f}")
         logger.info(f"    Improvement: {statistical_test.get('mean_difference', 0):.4f} ({statistical_test.get('percent_improvement', 0):.2f}%)")
-        logger.info(f"    t-statistic: {statistical_test.get('t_statistic', 0):.4f}")
+        t_stat = statistical_test.get("t_statistic")
+        logger.info(f"    t-statistic: {'undefined' if t_stat is None else f'{t_stat:.4f}'}")
         logger.info(f"    p-value: {statistical_test.get('p_value', 0):.6f}")
         logger.info(f"    Result: {statistical_test.get('statistical_significance', 'UNKNOWN')}")
-        logger.info(f"    Cohen's d: {statistical_test.get('cohens_d', 0):.3f} ({statistical_test.get('cohens_d_interpretation', 'N/A')})")
+        cohens_d = statistical_test.get("cohens_d")
+        if cohens_d is None:
+            logger.info(f"    Cohen's d: undefined ({statistical_test.get('cohens_d_interpretation', 'N/A')})")
+        else:
+            logger.info(f"    Cohen's d: {cohens_d:.3f} ({statistical_test.get('cohens_d_interpretation', 'N/A')})")
         logger.info(f"    95% CI: [{statistical_test.get('ci_lower', 0):.4f}, {statistical_test.get('ci_upper', 0):.4f}]")
     
     logger.info(f"\n✓ Coverage Convergence:")

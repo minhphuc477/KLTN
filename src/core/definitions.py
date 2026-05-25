@@ -95,8 +95,36 @@ SEMANTIC_PALETTE: Dict[str, int] = {
     'PUZZLE': TileID.PUZZLE,
 }
 
-# Reverse lookup for debugging
-ID_TO_NAME: Dict[int, str] = {v: k for k, v in SEMANTIC_PALETTE.items()}
+# Canonical reverse lookup for debugging and reports.  SEMANTIC_PALETTE keeps
+# aliases for backward compatibility, so build the reverse map from explicit
+# canonical names instead of letting aliases such as KEY/ITEM overwrite them.
+_CANONICAL_TILE_NAMES: Tuple[str, ...] = (
+    'VOID',
+    'FLOOR',
+    'WALL',
+    'BLOCK',
+    'DOOR_OPEN',
+    'DOOR_LOCKED',
+    'DOOR_BOMB',
+    'DOOR_PUZZLE',
+    'DOOR_BOSS',
+    'DOOR_SOFT',
+    'ENEMY',
+    'START',
+    'TRIFORCE',
+    'BOSS',
+    'KEY_SMALL',
+    'KEY_BOSS',
+    'KEY_ITEM',
+    'ITEM_MINOR',
+    'ELEMENT',
+    'ELEMENT_FLOOR',
+    'STAIR',
+    'PUZZLE',
+)
+ID_TO_NAME: Dict[int, str] = {
+    int(SEMANTIC_PALETTE[name]): name for name in _CANONICAL_TILE_NAMES
+}
 
 # ==========================================
 # CHARACTER MAPPINGS (VGLC Format)
@@ -123,6 +151,23 @@ CHAR_TO_SEMANTIC: Dict[str, int] = {
     's': TileID.STAIR,
     'D': TileID.DOOR_OPEN,      # Default door (type determined by graph)
     'd': TileID.DOOR_OPEN,
+    # Extended round-trip symbols for generated semantic grids.  Raw VGLC room
+    # files usually store START/GOAL/items in graph metadata; generated outputs
+    # need explicit symbols so save -> load does not erase entities.
+    'A': TileID.START,
+    'a': TileID.START,
+    'T': TileID.TRIFORCE,
+    't': TileID.TRIFORCE,
+    'K': TileID.KEY_SMALL,
+    'k': TileID.KEY_SMALL,
+    'Q': TileID.KEY_BOSS,
+    'q': TileID.KEY_BOSS,
+    'J': TileID.KEY_ITEM,
+    'j': TileID.KEY_ITEM,
+    'C': TileID.ITEM_MINOR,
+    'c': TileID.ITEM_MINOR,
+    'Z': TileID.BOSS,
+    'z': TileID.BOSS,
 }
 
 # Canonical semantic->character export mapping for VGLC-style text outputs.
@@ -140,13 +185,13 @@ SEMANTIC_TO_CHAR: Dict[int, str] = {
     int(TileID.DOOR_BOSS): "D",
     int(TileID.DOOR_SOFT): "D",
     int(TileID.ENEMY): "M",
-    int(TileID.START): "F",
-    int(TileID.TRIFORCE): "F",
-    int(TileID.BOSS): "M",
-    int(TileID.KEY_SMALL): "F",
-    int(TileID.KEY_BOSS): "F",
-    int(TileID.KEY_ITEM): "F",
-    int(TileID.ITEM_MINOR): "F",
+    int(TileID.START): "A",
+    int(TileID.TRIFORCE): "T",
+    int(TileID.BOSS): "Z",
+    int(TileID.KEY_SMALL): "K",
+    int(TileID.KEY_BOSS): "Q",
+    int(TileID.KEY_ITEM): "J",
+    int(TileID.ITEM_MINOR): "C",
     int(TileID.ELEMENT): "P",
     int(TileID.ELEMENT_FLOOR): "O",
     int(TileID.STAIR): "S",
@@ -154,7 +199,10 @@ SEMANTIC_TO_CHAR: Dict[int, str] = {
 }
 
 # Characters that represent walkable tiles
-WALKABLE_CHARS: Set[str] = {'F', 'f', '.', 'O', 'o', 'D', 'd', 'S', 's'}
+WALKABLE_CHARS: Set[str] = {
+    'F', 'f', '.', 'O', 'o', 'D', 'd', 'S', 's',
+    'A', 'a', 'T', 't', 'K', 'k', 'Q', 'q', 'J', 'j', 'C', 'c', 'Z', 'z',
+}
 
 # Characters that represent walls/obstacles
 WALL_CHARS: Set[str] = {'W', 'w', 'B', 'b', 'I', 'i', 'P', 'p'}
