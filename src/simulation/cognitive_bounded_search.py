@@ -350,6 +350,8 @@ class BeliefMap:
         
         # Core storage: position -> TileObservation
         self.known_tiles: Dict[Tuple[int, int], TileObservation] = {}
+        self._unknown_entropy = 1.0
+        self._total_entropy = float(self.height * self.width) * self._unknown_entropy
         
         # Statistics for cognitive metrics
         self.total_observations = 0
@@ -359,9 +361,35 @@ class BeliefMap:
     def reset(self) -> None:
         """Clear all accumulated beliefs and run-local statistics."""
         self.known_tiles.clear()
+        self._total_entropy = float(self.height * self.width) * self._unknown_entropy
         self.total_observations = 0
         self.revisit_count = 0
         self.unique_visits.clear()
+
+    def _in_bounds(self, position: Tuple[int, int]) -> bool:
+        """Return True when a position contributes to grid-level metrics."""
+        return 0 <= position[0] < self.height and 0 <= position[1] < self.width
+
+    @staticmethod
+    def _entropy_from_confidence(confidence: float) -> float:
+        """Binary entropy used by tile-level uncertainty metrics."""
+        eps = 1e-6
+        conf = min(1.0 - eps, max(eps, float(confidence)))
+        return float(-conf * math.log2(conf) - (1 - conf) * math.log2(1 - conf))
+
+    def _entropy_for_position(self, position: Tuple[int, int]) -> float:
+        if not self._in_bounds(position):
+            return 0.0
+        obs = self.known_tiles.get(position)
+        if obs is None or obs.knowledge == TileKnowledge.UNKNOWN:
+            return self._unknown_entropy
+        return self._entropy_from_confidence(obs.confidence)
+
+    def _update_total_entropy(self, position: Tuple[int, int], previous_entropy: float) -> None:
+        """Adjust cached entropy after one tile observation changes."""
+        if not self._in_bounds(position):
+            return
+        self._total_entropy += self._entropy_for_position(position) - previous_entropy
     
     def observe(
         self,
@@ -380,6 +408,7 @@ class BeliefMap:
             is_visit: True if agent is physically at this position
         """
         self.total_observations += 1
+        previous_entropy = self._entropy_for_position(position)
         
         if position in self.known_tiles:
             obs = self.known_tiles[position]
@@ -405,6 +434,7 @@ class BeliefMap:
         
         if is_visit:
             self.unique_visits.add(position)
+        self._update_total_entropy(position, previous_entropy)
     
     def get_tile_with_confidence(self, position: Tuple[int, int]) -> Tuple[int, float]:
         """
@@ -433,6 +463,8 @@ class BeliefMap:
         as P(tile==tile_type). When a new observation arrives we update
         confidence using likelihoods P(obs|true).
         """
+        previous_entropy = self._entropy_for_position(position)
+
         # If we've seen this position before, update posterior
         if position in self.known_tiles:
             obs = self.known_tiles[position]
@@ -478,6 +510,7 @@ class BeliefMap:
             )
             if is_visit:
                 self.unique_visits.add(position)
+        self._update_total_entropy(position, previous_entropy)
 
     def expected_info_gain(
         self,
@@ -572,7 +605,8 @@ class BeliefMap:
             decay_rate: Optional override for decay rate
         """
         rate = decay_rate if decay_rate is not None else self.decay_rate
-        for _pos, obs in self.known_tiles.items():
+        for pos, obs in self.known_tiles.items():
+            previous_entropy = self._entropy_for_position(pos)
             if obs.confidence > 0:
                 obs.confidence *= rate
                 # Downgrade knowledge if confidence too low
@@ -580,6 +614,7 @@ class BeliefMap:
                     obs.knowledge = TileKnowledge.GLIMPSED
                 if obs.confidence < 0.1:
                     obs.knowledge = TileKnowledge.UNKNOWN
+            self._update_total_entropy(pos, previous_entropy)
     
     def get_unexplored_neighbors(self, position: Tuple[int, int]) -> List[Tuple[int, int]]:
         """Get adjacent positions that haven't been visited."""
@@ -670,20 +705,11 @@ class BeliefMap:
         else:
             conf = float(obs.confidence)
 
-        eps = 1e-6
-        conf = min(1.0 - eps, max(eps, conf))
-
-        # Binary entropy: H(p) = -p*log2(p) - (1-p)*log2(1-p)
-        entropy = -conf * math.log2(conf) - (1 - conf) * math.log2(1 - conf)
-        return float(entropy)
+        return self._entropy_from_confidence(conf)
     
     def compute_total_entropy(self) -> float:
-        """Compute total entropy across all tiles."""
-        total = 0.0
-        for r in range(self.height):
-            for c in range(self.width):
-                total += self.compute_entropy(r, c)
-        return total
+        """Return cached total entropy across all tiles."""
+        return float(max(0.0, self._total_entropy))
     
     def to_grid(self, include_confidence: bool = False) -> np.ndarray:
         """
@@ -837,6 +863,34 @@ class VisionSystem:
         
         return visible
     
+    @staticmethod
+    def _bresenham_line(
+        start: Tuple[int, int],
+        end: Tuple[int, int],
+    ) -> List[Tuple[int, int]]:
+        """Return integer grid cells on the line from start to end."""
+        r0, c0 = start
+        r1, c1 = end
+        dr = abs(r1 - r0)
+        dc = abs(c1 - c0)
+        step_r = 1 if r0 < r1 else -1
+        step_c = 1 if c0 < c1 else -1
+        err = dr - dc
+
+        cells: List[Tuple[int, int]] = []
+        while True:
+            cells.append((r0, c0))
+            if r0 == r1 and c0 == c1:
+                break
+            err2 = 2 * err
+            if err2 > -dc:
+                err -= dc
+                r0 += step_r
+            if err2 < dr:
+                err += dr
+                c0 += step_c
+        return cells
+
     def _cast_shadow(
         self,
         origin: Tuple[int, int],
@@ -847,22 +901,30 @@ class VisionSystem:
     ) -> None:
         """Add tiles behind an occluding wall to the shadow set."""
         dr, dc = direction
-        # Normalize to unit direction.
-        dist = math.sqrt(dr*dr + dc*dc)
-        if dist == 0:
+        if dr == 0 and dc == 0:
+            return
+        dist = math.sqrt(dr * dr + dc * dc)
+        if dist <= 0:
             return
 
-        step_r = dr / dist
-        step_c = dc / dist
+        multiplier = max(2, int(math.ceil(self.radius / dist)) + 1)
+        end = (origin[0] + dr * multiplier, origin[1] + dc * multiplier)
+        blocker = (origin[0] + dr, origin[1] + dc)
+        radius_sq = self.radius * self.radius
+        seen_blocker = False
 
-        # Continue the ray from the blocker.  The previous implementation used
-        # step * mult * dist, which simplifies back to the original wall offset
-        # multiplied by mult and skips valid shadow cells for non-unit diagonals.
-        for extra in range(1, self.radius + 1):
-            shadow_r = origin[0] + int(round(step_r * (dist + extra)))
-            shadow_c = origin[1] + int(round(step_c * (dist + extra)))
-            if 0 <= shadow_r < height and 0 <= shadow_c < width:
-                occluded.add((shadow_r, shadow_c))
+        for cell in self._bresenham_line(origin, end):
+            if cell == blocker:
+                seen_blocker = True
+                continue
+            if not seen_blocker:
+                continue
+            rel_r = cell[0] - origin[0]
+            rel_c = cell[1] - origin[1]
+            if rel_r * rel_r + rel_c * rel_c > radius_sq:
+                break
+            if 0 <= cell[0] < height and 0 <= cell[1] < width:
+                occluded.add(cell)
     
     def get_360_visible_tiles(
         self,

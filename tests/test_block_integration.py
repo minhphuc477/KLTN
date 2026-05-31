@@ -331,6 +331,7 @@ def test_block_iv_gradient_guidance_objective_mode_controls_sign():
         guidance_scale=1.0,
         clamp_magnitude=0.0,
         relative_norm_cap=0.0,
+        mean_relative_norm_cap=0.0,
         schedule_enabled=False,
         max_guidance_elements=16,
         objective_mode="loss",
@@ -340,6 +341,7 @@ def test_block_iv_gradient_guidance_objective_mode_controls_sign():
         guidance_scale=1.0,
         clamp_magnitude=0.0,
         relative_norm_cap=0.0,
+        mean_relative_norm_cap=0.0,
         schedule_enabled=False,
         max_guidance_elements=16,
         objective_mode="reward",
@@ -347,6 +349,35 @@ def test_block_iv_gradient_guidance_objective_mode_controls_sign():
 
     assert torch.allclose(loss_guidance.apply_guidance(predicted_mean, x_t), torch.full_like(x_t, -1.0))
     assert torch.allclose(reward_guidance.apply_guidance(predicted_mean, x_t), torch.full_like(x_t, 1.0))
+
+
+def test_block_iv_gradient_guidance_caps_update_against_predicted_mean():
+    """Apply-time cap should prevent guidance from dominating the denoiser mean."""
+    from src.core.latent_diffusion import GradientGuidance
+
+    class _LargeGradObjective(torch.nn.Module):
+        def forward(self, x_t, graph_data=None):
+            _ = graph_data
+            return (x_t * 1000.0).flatten(1).sum(dim=1)
+
+    guidance = GradientGuidance(
+        logic_net=_LargeGradObjective(),
+        guidance_scale=1.0,
+        clamp_magnitude=0.0,
+        relative_norm_cap=0.0,
+        mean_relative_norm_cap=0.25,
+        mean_norm_floor_fraction=0.0,
+        schedule_enabled=False,
+        max_guidance_elements=1024,
+    )
+
+    x_t = torch.ones(1, 2, 2, 2)
+    predicted_mean = torch.full_like(x_t, 2.0)
+    guided = guidance.apply_guidance(predicted_mean, x_t)
+
+    update_norm = (predicted_mean - guided).view(1, -1).norm(dim=1)
+    mean_norm = predicted_mean.view(1, -1).norm(dim=1)
+    assert torch.all(update_norm <= mean_norm * 0.25 + 1e-5)
 
 
 def test_block_iv_gradient_guidance_skips_oversized_latents():

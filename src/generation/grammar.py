@@ -62,17 +62,15 @@ Usage:
 
 import random
 import logging
-from typing import ClassVar, Dict, List, Tuple, Optional, Set, Any
+from typing import TYPE_CHECKING, ClassVar, Dict, List, Tuple, Optional, Set, Any
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from collections import defaultdict, deque
 import math
 
-try:
-    import torch
+if TYPE_CHECKING:
     from torch import Tensor
-except ImportError:
-    torch = None
+else:
     Tensor = Any
 
 from src.generation.grammar_validators import (
@@ -84,14 +82,19 @@ from src.generation.grammar_validators import (
 logger = logging.getLogger(__name__)
 
 
-def _require_torch() -> Any:
-    """Return torch or raise a targeted error for optional tensor exporters."""
-    if torch is None:
-        raise RuntimeError(
-            "PyTorch is required for MissionGraph tensor export. Install torch "
-            "or use the symbolic grammar APIs that return Python data structures."
-        )
-    return torch
+def _require_torch_adapters() -> Any:
+    """Return optional torch adapters or raise a targeted dependency error."""
+    try:
+        from src.generation import grammar_torch_adapters
+    except ImportError as exc:
+        if getattr(exc, "name", None) == "torch":
+            raise RuntimeError(
+                "PyTorch is required for MissionGraph tensor export. Install torch "
+                "or use the symbolic grammar APIs that return Python data structures."
+            ) from exc
+        raise
+    return grammar_torch_adapters
+
 
 # ============================================================================
 # LAYOUT CONSTANTS
@@ -538,53 +541,13 @@ class MissionGraph:
             edge_index: [2, num_edges] edge connections
             node_features: [num_nodes, feature_dim] node features
         """
-        torch_mod = _require_torch()
-        node_ids, id_to_idx = self._node_index_map()
-
-        # Build edge index
-        sources = []
-        targets = []
-        for edge in self.edges:
-            if edge.source not in id_to_idx or edge.target not in id_to_idx:
-                continue
-            sources.append(id_to_idx[edge.source])
-            targets.append(id_to_idx[edge.target])
-
-        if sources:
-            edge_index = torch_mod.tensor([sources, targets], dtype=torch_mod.long)
-        else:
-            edge_index = torch_mod.zeros((2, 0), dtype=torch_mod.long)
-        
-        # Build node features
-        features = []
-        for nid in node_ids:
-            features.append(self.nodes[nid].to_feature_vector())
-
-        if features:
-            node_features = torch_mod.tensor(features, dtype=torch_mod.float32)
-        else:
-            feature_dim = len(NodeType) + 14
-            node_features = torch_mod.zeros((0, feature_dim), dtype=torch_mod.float32)
-        
-        return edge_index, node_features
+        adapters = _require_torch_adapters()
+        return adapters.mission_graph_to_tensor(self)
     
     def to_adjacency_matrix(self) -> Tensor:
         """Convert to adjacency matrix."""
-        torch_mod = _require_torch()
-        node_ids, id_to_idx = self._node_index_map()
-        n = len(node_ids)
-        adj = torch_mod.zeros(n, n)
-        
-        for edge in self.edges:
-            if edge.source not in id_to_idx or edge.target not in id_to_idx:
-                continue
-            src_idx = id_to_idx[edge.source]
-            tgt_idx = id_to_idx[edge.target]
-            adj[src_idx, tgt_idx] = 1.0
-            if edge.edge_type in self.BIDIRECTIONAL_EDGE_TYPES:  # Bidirectional
-                adj[tgt_idx, src_idx] = 1.0
-        
-        return adj
+        adapters = _require_torch_adapters()
+        return adapters.mission_graph_to_adjacency_matrix(self)
     
     def compute_tpe(self) -> Tensor:
         """
@@ -600,57 +563,8 @@ class MissionGraph:
         Returns:
             [num_nodes, 8] TPE features
         """
-        torch_mod = _require_torch()
-        n = len(self.nodes)
-        node_ids = sorted(self.nodes.keys())
-        id_to_idx = {nid: i for i, nid in enumerate(node_ids)}
-        
-        tpe = torch_mod.zeros(n, 8)
-        
-        # Get start and goal
-        start = self.get_start_node()
-        goal = self.get_goal_node()
-        
-        start_id = start.id if start else (node_ids[0] if node_ids else 0)
-        goal_id = goal.id if goal else (node_ids[-1] if node_ids else 0)
-        
-        # Compute BFS distances from start
-        dist_from_start = self._bfs_distances(start_id)
-        
-        # Compute BFS distances from goal (reverse)
-        dist_to_goal = self._bfs_distances(
-            goal_id,
-            adjacency=self._build_reverse_adjacency(),
-        )
-        
-        max_dist = max([*dist_from_start.values(), 1])
-        
-        for nid in node_ids:
-            idx = id_to_idx[nid]
-            
-            # Distance features (normalized)
-            tpe[idx, 0] = dist_from_start.get(nid, max_dist) / max_dist
-            tpe[idx, 1] = dist_to_goal.get(nid, max_dist) / max_dist
-            
-            # Degree
-            degree = len(self._adjacency.get(nid, []))
-            tpe[idx, 2] = min(degree / 4.0, 1.0)
-            
-            # Is on critical path
-            if start and goal:
-                on_path = (dist_from_start.get(nid, float('inf')) + 
-                          dist_to_goal.get(nid, float('inf')) ==
-                          dist_from_start.get(goal_id, float('inf')))
-                tpe[idx, 3] = 1.0 if on_path else 0.0
-            
-            # Node type indicators
-            node = self.nodes[nid]
-            tpe[idx, 4] = 1.0 if node.node_type == NodeType.KEY else 0.0
-            tpe[idx, 5] = 1.0 if node.node_type == NodeType.LOCK else 0.0
-            tpe[idx, 6] = node.difficulty
-            tpe[idx, 7] = 1.0 if node.key_id is not None else 0.0
-        
-        return tpe
+        adapters = _require_torch_adapters()
+        return adapters.mission_graph_compute_tpe(self)
     
     def _build_reverse_adjacency(self) -> Dict[int, List[int]]:
         """Build reverse traversal adjacency that respects directed edge semantics."""
@@ -2901,16 +2815,8 @@ def graph_to_gnn_input(
             - tpe: [N, 8] topological encoding
             - current_node: int
     """
-    edge_index, node_features = graph.to_tensor()
-    tpe = graph.compute_tpe()
-    
-    return {
-        'edge_index': edge_index,
-        'node_features': node_features,
-        'tpe': tpe,
-        'current_node': current_node_idx or 0,
-        'adjacency': graph.to_adjacency_matrix(),
-    }
+    adapters = _require_torch_adapters()
+    return adapters.graph_to_gnn_input(graph, current_node_idx=current_node_idx)
 
 
 # ============================================================================

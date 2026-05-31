@@ -12,6 +12,10 @@ from typing import TYPE_CHECKING, Any
 
 __all__ = [
     "NeuralSymbolicDungeonPipeline",
+    "PipelineConfig",
+    "ModelConfig",
+    "SamplerConfig",
+    "GraphConfig",
     "MissingPipelineComponentError",
     "NeuralGenerationComponents",
     "SymbolicGenerationComponents",
@@ -31,6 +35,13 @@ __all__ = [
 _DUNGEON_PIPELINE_EXPORTS = {
     "NeuralSymbolicDungeonPipeline",
     "create_pipeline",
+}
+
+_PIPELINE_CONFIG_EXPORTS = {
+    "PipelineConfig",
+    "ModelConfig",
+    "SamplerConfig",
+    "GraphConfig",
 }
 
 _CONFIG_BRIDGE_EXPORTS = {
@@ -56,6 +67,12 @@ if TYPE_CHECKING:
         NeuralSymbolicDungeonPipeline,
         create_pipeline,
     )
+    from src.pipeline.config import (
+        GraphConfig,
+        ModelConfig,
+        PipelineConfig,
+        SamplerConfig,
+    )
     from src.pipeline.config_bridge import (
         topology_generation_kwargs_from_resolved_config,
         generation_runtime_kwargs_from_resolved_config,
@@ -76,6 +93,11 @@ if TYPE_CHECKING:
 
 
 def __getattr__(name: str) -> Any:
+    if name in _PIPELINE_CONFIG_EXPORTS:
+        module = import_module("src.pipeline.config")
+        value = getattr(module, name)
+        globals()[name] = value
+        return value
     if name in _PIPELINE_TYPE_EXPORTS:
         module = import_module("src.pipeline.types")
         value = getattr(module, name)

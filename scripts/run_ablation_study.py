@@ -123,6 +123,7 @@ class ExperimentConfig:
     use_wfc: bool = True
     pure_wfc: bool = False
     logic_guidance_scale: float = 1.0
+    logic_guidance_active_fraction: Optional[float] = None
     latent_sampler: str = "diffusion"  # diffusion | categorical
     categorical_codebook_size: Optional[int] = None
     use_tpe: bool = True
@@ -665,6 +666,14 @@ def _design_notes_for_config(cfg: ExperimentConfig) -> Dict[str, Any]:
                 "isolates": "runtime logic-guidance strength",
                 "interpretation": "Identifies whether guidance has a useful range or destabilizes decoding.",
             }
+        elif cfg.name.startswith("LOGIC_ACTIVE_"):
+            notes = {
+                "tier": "block_v",
+                "component": "LogicNet guidance timing",
+                "comparison": "FULL and NO_LOGIC",
+                "isolates": "fraction of reverse diffusion timesteps receiving logic guidance",
+                "interpretation": "Tests whether late-timestep guidance stabilizes samples better than full-trajectory guidance.",
+            }
         else:
             notes = {
                 "tier": "unspecified",
@@ -1092,6 +1101,9 @@ class AblationStudy:
             original_graph_token_flag = bool(getattr(pipeline, "use_graph_node_cross_attention", True))
             original_topology_mode = str(getattr(pipeline.diffusion, "get_topology_refinement_mode", lambda: "gat2")())
             original_reference_flag = bool(getattr(getattr(pipeline, "condition_encoder", None), "use_reference_room_maps", False))
+            original_guidance_active_fraction = float(
+                getattr(getattr(pipeline.diffusion, "guidance", object()), "active_fraction", 1.0)
+            )
             pipeline.use_graph_node_cross_attention = not bool(cfg.disable_graph_node_cross_attention)
             if cfg.use_reference_room_maps is not None and getattr(pipeline, "condition_encoder", None) is not None:
                 reference_encoder = getattr(pipeline.condition_encoder, "reference_room_encoder", None)
@@ -1105,6 +1117,10 @@ class AblationStudy:
                 pipeline.diffusion.set_topology_refinement_mode(cfg.topology_refinement_mode)
             except (AttributeError, RuntimeError, ValueError, TypeError) as e:
                 logger.debug("Topology refinement mode switch unavailable, keeping default: %s", e)
+            if cfg.logic_guidance_active_fraction is not None:
+                pipeline.diffusion.guidance.active_fraction = float(
+                    max(0.05, min(1.0, float(cfg.logic_guidance_active_fraction)))
+                )
 
             if bool(cfg.pure_wfc):
                 result = self._generate_dungeon_pure_wfc(
@@ -1138,6 +1154,7 @@ class AblationStudy:
                 pipeline.diffusion.set_topology_refinement_mode(original_topology_mode)
             except (AttributeError, RuntimeError, ValueError, TypeError):
                 pass
+            pipeline.diffusion.guidance.active_fraction = original_guidance_active_fraction
 
             grid = np.asarray(result.dungeon_grid, dtype=np.int32)
             graph = result.mission_graph
@@ -1249,8 +1266,9 @@ class AblationStudy:
                         pipeline.diffusion.set_topology_refinement_mode(original_topology_mode)
                     except (AttributeError, RuntimeError, ValueError, TypeError):
                         pass
-            except Exception:
-                pass
+                    pipeline.diffusion.guidance.active_fraction = original_guidance_active_fraction
+            except (AttributeError, RuntimeError, ValueError, TypeError) as restore_error:
+                logger.debug("Failed to restore ablation runner state after error: %s", restore_error)
         return row
 
     def run(self, configs: Sequence[ExperimentConfig], seeds: Sequence[int]) -> Tuple[pd.DataFrame, pd.DataFrame]:
@@ -1524,6 +1542,9 @@ def build_experiment_set(include_extended: bool = True) -> List[ExperimentConfig
         ExperimentConfig(name="LOGIC_G_0.50", logic_guidance_scale=0.50),
         ExperimentConfig(name="LOGIC_G_1.50", logic_guidance_scale=1.50),
         ExperimentConfig(name="LOGIC_G_2.00", logic_guidance_scale=2.00),
+        ExperimentConfig(name="LOGIC_ACTIVE_0.25", logic_guidance_active_fraction=0.25),
+        ExperimentConfig(name="LOGIC_ACTIVE_0.50", logic_guidance_active_fraction=0.50),
+        ExperimentConfig(name="LOGIC_ACTIVE_0.75", logic_guidance_active_fraction=0.75),
     ]
     return core + extended
 

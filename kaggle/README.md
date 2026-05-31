@@ -8,6 +8,7 @@ The older notebooks are kept under [`legacy/`](legacy/) for provenance only.
 In a Kaggle notebook cell after the repo is available at `/kaggle/working/KLTN`:
 
 ```bash
+%%bash
 cd /kaggle/working/KLTN
 bash kaggle/hmolqd_training_suite/run_kaggle_training_suite.sh
 ```
@@ -15,12 +16,38 @@ bash kaggle/hmolqd_training_suite/run_kaggle_training_suite.sh
 The suite auto-detects visible GPUs, prefers the dual-T4 profile when two CUDA
 devices are available, and falls back to a single-GPU profile otherwise.
 
+To run training plus the thesis evidence matrix:
+
+```bash
+%%bash
+cd /kaggle/working/KLTN
+bash kaggle/hmolqd_training_suite/run_kaggle_full_research_suite.sh
+```
+
+To run only the post-training evidence matrix after checkpoints exist:
+
+```bash
+%%bash
+cd /kaggle/working/KLTN
+bash kaggle/hmolqd_training_suite/run_kaggle_research_suite.sh
+```
+
 Useful smoke run:
 
 ```bash
+%%bash
 cd /kaggle/working/KLTN
 QUICK=1 TOKENIZERS="vqvae2" BRANCHES="stage_full" \
   bash kaggle/hmolqd_training_suite/run_kaggle_training_suite.sh
+```
+
+Useful full smoke run:
+
+```bash
+%%bash
+cd /kaggle/working/KLTN
+QUICK=1 TOKENIZERS="vqvae2" BRANCHES="stage_full" \
+  bash kaggle/hmolqd_training_suite/run_kaggle_full_research_suite.sh
 ```
 
 ## Kaggle API Script Kernel
@@ -42,6 +69,8 @@ The script entrypoint is
 If it is launched without the full repo present, it clones the repo into
 `/kaggle/working/KLTN` before running the shell suite. Attach the Zelda dataset
 or set `DATA_DIR`/`--data-dir` to the dataset path exposed by Kaggle.
+Use `--mode training`, `--mode evidence`, or `--mode full` to select which
+suite the kernel entrypoint runs.
 
 ## Legacy Notebooks
 

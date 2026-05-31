@@ -45,6 +45,25 @@ def test_ablation_core_plan_documents_random_and_pure_wfc_baselines():
     assert "topology_preservation_score" in plan["metrics"]
 
 
+def test_ablation_extended_plan_documents_logic_guidance_timing_sweep():
+    configs = build_experiment_set(include_extended=True)
+    plan = build_ablation_plan(
+        configs=configs,
+        seeds=[42],
+        target_curve=[0.2, 0.5, 0.8],
+        num_rooms=8,
+        diffusion_steps=5,
+        cbs_timeout=1000,
+        evolution_population=6,
+        evolution_generations=4,
+    )
+
+    experiments = {entry["name"]: entry for entry in plan["experiments"]}
+
+    assert experiments["LOGIC_ACTIVE_0.25"]["component"] == "LogicNet guidance timing"
+    assert experiments["LOGIC_ACTIVE_0.25"]["config"]["logic_guidance_active_fraction"] == pytest.approx(0.25)
+
+
 def test_ablation_json_sanitize_outputs_strict_json_values():
     payload = {
         "nan": float("nan"),

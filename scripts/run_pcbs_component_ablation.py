@@ -132,9 +132,10 @@ def run_ablation(
     timeout_pcbs: int,
     seed: int,
     out_csv: Path,
+    data_root: str,
     verbose: bool,
 ) -> List[Dict[str, Any]]:
-    adapter = ZeldaDungeonAdapter("Data/The Legend of Zelda")
+    adapter = ZeldaDungeonAdapter(str(data_root))
     out_csv.parent.mkdir(parents=True, exist_ok=True)
 
     headers = [
@@ -337,6 +338,7 @@ def main() -> int:
     parser.add_argument("--timeout-astar", type=int, default=200000, help="A* timeout")
     parser.add_argument("--timeout-pcbs", type=int, default=50000, help="P-CBS timeout")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    parser.add_argument("--data-root", type=str, default="Data/The Legend of Zelda", help="Dataset root")
     parser.add_argument("--output-dir", type=str, default="results/pcbs_component_ablation", help="Output directory")
     parser.add_argument("--quick", action="store_true", help="Quick smoke run on D1_v1")
     parser.add_argument("--quiet", action="store_true", help="Suppress progress output")
@@ -360,6 +362,7 @@ def main() -> int:
         timeout_pcbs=int(args.timeout_pcbs),
         seed=int(args.seed),
         out_csv=output_dir / "pcbs_component_ablation.csv",
+        data_root=str(args.data_root),
         verbose=not args.quiet,
     )
     summary = summarize(rows)

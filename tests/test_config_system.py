@@ -20,6 +20,7 @@ from src.config_system import (
 )
 from src.pipeline import (
     NeuralSymbolicDungeonPipeline,
+    PipelineConfig,
     generation_runtime_kwargs_from_resolved_config,
     pipeline_kwargs_from_resolved_config,
     topology_generation_kwargs_from_resolved_config,
@@ -1200,12 +1201,28 @@ def test_pipeline_config_kwargs_match_pipeline_constructor_surface():
     resolved = merge_config(yaml_path=None, cli_overrides=None)
     kwargs = pipeline_kwargs_from_resolved_config(resolved)
     signature = inspect.signature(NeuralSymbolicDungeonPipeline.__init__)
-    accepted = set(signature.parameters) - {"self"}
+    params = list(signature.parameters)
 
-    unknown = sorted(set(kwargs) - accepted)
-
+    assert params == ["self", "config"]
+    config = PipelineConfig.from_kwargs(**kwargs)
+    flattened = config.to_runtime_kwargs()
+    unknown = sorted(set(kwargs) - set(flattened))
     assert unknown == []
     assert len(kwargs) >= 80
+
+
+def test_pipeline_config_legacy_aliases_delegate_to_runtime_names():
+    config = PipelineConfig.from_legacy_kwargs(device="cpu", default_num_diffusion_steps=7)
+
+    assert config.to_legacy_kwargs() == config.to_runtime_kwargs()
+    assert config.to_runtime_kwargs()["device"] == "cpu"
+    assert config.to_runtime_kwargs()["default_num_diffusion_steps"] == 7
+
+
+def test_pipeline_facade_is_not_legacy_subclass():
+    repo_root = Path(__file__).resolve().parents[1]
+    assert not (repo_root / "src" / "pipeline" / "legacy_dungeon_pipeline.py").exists()
+    assert NeuralSymbolicDungeonPipeline.__mro__ == (NeuralSymbolicDungeonPipeline, object)
 
 
 def test_fast_sampler_stage_inherits_shared_yaml_runtime_and_dataset_settings(tmp_path: Path):

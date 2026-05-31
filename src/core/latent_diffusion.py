@@ -1055,6 +1055,8 @@ class GradientGuidance(nn.Module):
         logic_net: LogicNet module (Block V)
         guidance_scale: Scale factor γ for gradients
         clamp_magnitude: Maximum gradient magnitude
+        relative_norm_cap: Maximum guidance norm relative to x_t norm
+        mean_relative_norm_cap: Maximum applied guidance norm relative to predicted mean norm
         objective_mode: "loss" minimizes the LogicNet output; "reward" maximizes it
     """
     
@@ -1077,6 +1079,8 @@ class GradientGuidance(nn.Module):
         guidance_scale: float = 1.0,
         clamp_magnitude: float = 1.0,
         relative_norm_cap: float = 0.25,
+        mean_relative_norm_cap: float = 2.0,
+        mean_norm_floor_fraction: float = 0.02,
         schedule_enabled: bool = True,
         active_fraction: float = 1.0,
         decay_power: float = 1.0,
@@ -1090,6 +1094,8 @@ class GradientGuidance(nn.Module):
         self.guidance_scale = guidance_scale
         self.clamp_magnitude = clamp_magnitude
         self.relative_norm_cap = float(max(0.0, float(relative_norm_cap)))
+        self.mean_relative_norm_cap = float(max(0.0, float(mean_relative_norm_cap)))
+        self.mean_norm_floor_fraction = float(max(0.0, float(mean_norm_floor_fraction)))
         self.schedule_enabled = bool(schedule_enabled)
         self.active_fraction = float(max(0.05, min(1.0, float(active_fraction))))
         self.decay_power = float(max(0.25, float(decay_power)))
@@ -1551,6 +1557,34 @@ class GradientGuidance(nn.Module):
             logger.info(f"[GUIDANCE] final_guidance_norm: min={guidance_norm_final.min():.6f}, max={guidance_norm_final.max():.6f}, nonzero_samples={guidance_is_nonzero}/{guidance.shape[0]}")
 
         return guidance.to(dtype=input_dtype)
+
+    def _cap_guidance_to_predicted_mean(
+        self,
+        guidance: Tensor,
+        predicted_mean: Tensor,
+        x_t: Tensor,
+    ) -> Tensor:
+        """Limit the final mean update so guidance cannot dominate denoising."""
+        if self.mean_relative_norm_cap <= 0:
+            return guidance
+
+        guidance_norm = guidance.view(guidance.shape[0], -1).norm(dim=1)
+        guidance_norm = guidance_norm.view(guidance.shape[0], *([1] * (guidance.dim() - 1)))
+
+        mean_norm = predicted_mean.detach().to(dtype=guidance.dtype).view(
+            predicted_mean.shape[0], -1
+        ).norm(dim=1)
+        mean_norm = mean_norm.view(predicted_mean.shape[0], *([1] * (predicted_mean.dim() - 1)))
+        max_guidance_norm = mean_norm * self.mean_relative_norm_cap
+
+        if self.mean_norm_floor_fraction > 0:
+            latent_norm = x_t.detach().to(dtype=guidance.dtype).view(x_t.shape[0], -1).norm(dim=1)
+            latent_norm = latent_norm.view(x_t.shape[0], *([1] * (x_t.dim() - 1)))
+            floor_norm = latent_norm * self.mean_norm_floor_fraction
+            max_guidance_norm = torch.maximum(max_guidance_norm, floor_norm)
+
+        max_guidance_norm = torch.clamp(max_guidance_norm, min=1e-8)
+        return guidance * torch.clamp(max_guidance_norm / (guidance_norm + 1e-8), max=1.0)
     
     def apply_guidance(
         self,
@@ -1578,6 +1612,7 @@ class GradientGuidance(nn.Module):
             t=t,
             num_timesteps=num_timesteps,
         )
+        guidance = self._cap_guidance_to_predicted_mean(guidance, predicted_mean, x_t)
         return predicted_mean - guidance
 
 
@@ -1657,9 +1692,6 @@ class LatentDiffusionModel(nn.Module):
         self.num_timesteps = num_timesteps
         self.cfg_dropout_prob = cfg_dropout_prob
         self.cfg_scale = cfg_scale
-        self.cfg_schedule_mode = "constant"
-        self.cfg_schedule_min_scale = 1.0
-        self.cfg_schedule_power = 1.0
         self.prediction_type = prediction_type
         self.min_snr_gamma = min_snr_gamma
         self.attention_mode = str(attention_mode).strip().lower()

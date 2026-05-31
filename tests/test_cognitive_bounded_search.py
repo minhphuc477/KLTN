@@ -106,7 +106,7 @@ def grid_with_enemies():
 # BELIEF MAP TESTS
 # ==============================================================================
 
-class TestVisionSystem:
+class TestVisionSystemOcclusionRegression:
     """Tests for limited vision and occlusion."""
 
     def test_diagonal_offset_wall_occludes_cells_on_same_line_of_sight(self):
@@ -189,6 +189,23 @@ class TestBeliefMap:
 
         after = belief.expected_info_gain((5, 5), vision, grid=grid, direction=(0, 1))
         assert after < before
+
+    def test_total_entropy_cache_matches_tile_entropy_sum(self):
+        """Cached total entropy should match the previous full-grid computation."""
+        floor = SEMANTIC_PALETTE['FLOOR']
+        wall = SEMANTIC_PALETTE['WALL']
+        belief = BeliefMap(grid_shape=(4, 4), decay_rate=0.5)
+
+        belief.observe((1, 1), floor, current_step=0, is_visit=False)
+        belief.bayes_update((2, 2), wall, current_step=1, obs_accuracy=0.95, is_visit=True)
+        belief.apply_decay(current_step=2)
+
+        expected = sum(
+            belief.compute_entropy(r, c)
+            for r in range(belief.height)
+            for c in range(belief.width)
+        )
+        assert belief.compute_total_entropy() == pytest.approx(expected)
     
     def test_confidence_decay(self):
         """Test memory decay reduces confidence over time."""

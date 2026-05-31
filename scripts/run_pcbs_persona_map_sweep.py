@@ -249,6 +249,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--timeout-astar", type=int, default=200000)
     parser.add_argument("--timeout-pcbs", type=int, default=50000)
     parser.add_argument("--seed", type=int, default=20260514)
+    parser.add_argument("--data-root", type=str, default="Data/The Legend of Zelda")
     parser.add_argument("--output-dir", type=Path, default=Path("results/pcbs_persona_map_sweep"))
     parser.add_argument("--oracle-solved-only", action="store_true")
     parser.add_argument("--quiet", action="store_true")
@@ -259,7 +260,7 @@ def main() -> int:
     args = parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
     rows_path = args.output_dir / "pcbs_persona_map_sweep.csv"
-    adapter = ZeldaDungeonAdapter("Data/The Legend of Zelda")
+    adapter = ZeldaDungeonAdapter(str(args.data_root))
     levels = _ints(args.levels)
     variants = _ints(args.variants)
     personas = _tokens(args.personas)

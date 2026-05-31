@@ -12,7 +12,11 @@ as the fallback when only one GPU is visible.
 
 ## Notebook Cell
 
+Kaggle notebooks execute Python cells by default. Use `%%bash` as the first
+line of the cell. Do not paste a bare `bash ...` command into a Python cell.
+
 ```bash
+%%bash
 cd /kaggle/working/KLTN
 bash kaggle/hmolqd_training_suite/run_kaggle_training_suite.sh
 ```
@@ -24,6 +28,22 @@ Default behavior:
 - runs the `stage_full` branch
 - writes outputs to `/kaggle/working/hmolqd_training_suite`
 - records `artifacts/run_environment.json`
+
+To train and then run the full research evidence suite:
+
+```bash
+%%bash
+cd /kaggle/working/KLTN
+bash kaggle/hmolqd_training_suite/run_kaggle_full_research_suite.sh
+```
+
+To run only the post-training evidence suite:
+
+```bash
+%%bash
+cd /kaggle/working/KLTN
+bash kaggle/hmolqd_training_suite/run_kaggle_research_suite.sh
+```
 
 ## Kaggle API Kernel
 
@@ -46,6 +66,8 @@ for the run.
 VQ-VAE-2 full stack:
 
 ```bash
+%%bash
+cd /kaggle/working/KLTN
 TOKENIZERS="vqvae2" BRANCHES="stage_full" \
   bash kaggle/hmolqd_training_suite/run_kaggle_training_suite.sh
 ```
@@ -53,6 +75,8 @@ TOKENIZERS="vqvae2" BRANCHES="stage_full" \
 Tokenizer ablation only:
 
 ```bash
+%%bash
+cd /kaggle/working/KLTN
 TOKENIZERS="vqvae vqvae2" \
 RUN_DIFFUSION=0 RUN_FAST_SAMPLER=0 RUN_MASKED_ROOM=0 \
   bash kaggle/hmolqd_training_suite/run_kaggle_training_suite.sh
@@ -61,6 +85,8 @@ RUN_DIFFUSION=0 RUN_FAST_SAMPLER=0 RUN_MASKED_ROOM=0 \
 Stage-conditioning ablation:
 
 ```bash
+%%bash
+cd /kaggle/working/KLTN
 TOKENIZERS="vqvae2" \
 BRANCHES="stage_full stage_tokens_only stage_trace_only stage_loss010 stage_loss050" \
   bash kaggle/hmolqd_training_suite/run_kaggle_training_suite.sh
@@ -69,9 +95,49 @@ BRANCHES="stage_full stage_tokens_only stage_trace_only stage_loss010 stage_loss
 Smoke check:
 
 ```bash
+%%bash
+cd /kaggle/working/KLTN
 QUICK=1 TOKENIZERS="vqvae2" BRANCHES="stage_full" \
   bash kaggle/hmolqd_training_suite/run_kaggle_training_suite.sh
 ```
+
+Full smoke check, including evidence scripts:
+
+```bash
+%%bash
+cd /kaggle/working/KLTN
+QUICK=1 TOKENIZERS="vqvae2" BRANCHES="stage_full" \
+  bash kaggle/hmolqd_training_suite/run_kaggle_full_research_suite.sh
+```
+
+## Research Evidence Suite
+
+The evidence suite fills the currently missing execution layer. It runs:
+
+- conditioning / LogicNet / repair ablation
+- fixed-graph multi-seed protocol
+- generated-graph full-pipeline evaluation
+- core component ablation
+- random, matched-budget, and PCG Benchmark-alignment baselines
+- OOD scaling and blinded-eval packet generation
+- designer controllability proof
+- P-CBS persona and component ablations
+- compute/sample-efficiency consolidation
+
+Outputs are written under:
+
+```text
+/kaggle/working/hmolqd_training_suite/research/
+```
+
+The packaged zip is:
+
+```text
+/kaggle/working/hmolqd_training_suite/artifacts/hmolqd_kaggle_research_artifacts.zip
+```
+
+Detailed controls and required thesis artifacts are documented in
+[`KAGGLE_RESEARCH_EVIDENCE_RUNBOOK.md`](KAGGLE_RESEARCH_EVIDENCE_RUNBOOK.md).
 
 ## Notes
 
