@@ -8,7 +8,8 @@ cd "${REPO_ROOT}"
 PYTHON="${PYTHON:-python}"
 BASE_CONFIG="${BASE_CONFIG:-configs/zelda_hmolqd.yaml}"
 DATA_DIR="${DATA_DIR:-Data/The Legend of Zelda}"
-OUT_ROOT="${OUT_ROOT:-/kaggle/working/hmolqd_training_suite}"
+KAGGLE_OUTPUTS_ROOT="${KAGGLE_OUTPUTS_ROOT:-/kaggle/working/kaggle_outputs}"
+OUT_ROOT="${OUT_ROOT:-${KAGGLE_OUTPUTS_ROOT}/hmolqd_training_suite}"
 TOKENIZERS="${TOKENIZERS:-vqvae2}"
 BRANCHES="${BRANCHES:-stage_full}"
 SEED="${SEED:-42}"
@@ -23,8 +24,28 @@ RESULT_ROOT="${RESULT_ROOT:-${OUT_ROOT}/research}"
 LOG_DIR="${RESULT_ROOT}/logs"
 ARTIFACT_DIR="${OUT_ROOT}/artifacts"
 
-VQVAE_CHECKPOINT="${VQVAE_CHECKPOINT:-${OUT_ROOT}/tokenizers/${PRIMARY_TOKENIZER}/checkpoints/vqvae/vqvae_pretrained.pth}"
-DIFFUSION_CHECKPOINT="${DIFFUSION_CHECKPOINT:-${RUN_DIR}/checkpoints/diffusion/best_model.pth}"
+first_existing_checkpoint() {
+  local fallback="$1"
+  shift
+  local candidate
+  for candidate in "$fallback" "$@"; do
+    if [[ -f "${candidate}" ]]; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done
+  printf '%s\n' "${fallback}"
+}
+
+VQVAE_CHECKPOINT="${VQVAE_CHECKPOINT:-$(first_existing_checkpoint \
+  "${OUT_ROOT}/tokenizers/${PRIMARY_TOKENIZER}/checkpoints/vqvae/vqvae_pretrained.pth" \
+  "${OUT_ROOT}/tokenizers/${PRIMARY_TOKENIZER}/checkpoints/vqvae/best_model.pth" \
+  "${OUT_ROOT}/tokenizers/${PRIMARY_TOKENIZER}/checkpoints/vqvae/final_model.pth" \
+  "${OUT_ROOT}/tokenizers/${PRIMARY_TOKENIZER}/vqvae_pretrained.pth")}"
+DIFFUSION_CHECKPOINT="${DIFFUSION_CHECKPOINT:-$(first_existing_checkpoint \
+  "${RUN_DIR}/checkpoints/diffusion/best_model.pth" \
+  "${RUN_DIR}/checkpoints/diffusion/final_model.pth" \
+  "${RUN_DIR}/checkpoints/diffusion/diffusion_pretrained.pth")}"
 if [[ -n "${LOGIC_NET_CHECKPOINT:-}" ]]; then
   LOGIC_CHECKPOINT="${LOGIC_NET_CHECKPOINT}"
 elif [[ -f "${RUN_DIR}/checkpoints/diffusion/best_logic_model.pth" ]]; then
@@ -32,8 +53,17 @@ elif [[ -f "${RUN_DIR}/checkpoints/diffusion/best_logic_model.pth" ]]; then
 else
   LOGIC_CHECKPOINT="${DIFFUSION_CHECKPOINT}"
 fi
-MASKED_ROOM_CHECKPOINT="${MASKED_ROOM_CHECKPOINT:-${RUN_DIR}/checkpoints/masked_room/masked_room_best.pth}"
-FAST_SAMPLER_CHECKPOINT="${FAST_SAMPLER_CHECKPOINT:-${RUN_DIR}/checkpoints/fast_sampler/fast_sampler_best.pth}"
+MASKED_ROOM_CHECKPOINT="${MASKED_ROOM_CHECKPOINT:-$(first_existing_checkpoint \
+  "${RUN_DIR}/checkpoints/masked_room/masked_room_best.pth" \
+  "${RUN_DIR}/checkpoints/masked_room/best_model.pth" \
+  "${RUN_DIR}/checkpoints/masked_room/masked_room_final.pth" \
+  "${RUN_DIR}/checkpoints/masked_room/final_model.pth")}"
+FAST_SAMPLER_CHECKPOINT="${FAST_SAMPLER_CHECKPOINT:-$(first_existing_checkpoint \
+  "${RUN_DIR}/checkpoints/fast_sampler/fast_sampler_best.pth" \
+  "${RUN_DIR}/checkpoints/fast_sampler/best_model.pth" \
+  "${RUN_DIR}/checkpoints/fast_sampler/fast_sampler_best_reselected.pth" \
+  "${RUN_DIR}/checkpoints/fast_sampler/fast_sampler_final.pth" \
+  "${RUN_DIR}/checkpoints/fast_sampler/final_model.pth")}"
 
 RUN_CONDITIONING_LOGICNET_REPAIR="${RUN_CONDITIONING_LOGICNET_REPAIR:-1}"
 RUN_FIXED_GRAPH="${RUN_FIXED_GRAPH:-1}"
@@ -46,6 +76,8 @@ RUN_OOD_BLINDED="${RUN_OOD_BLINDED:-1}"
 RUN_DESIGNER_CONTROLLABILITY="${RUN_DESIGNER_CONTROLLABILITY:-1}"
 RUN_PCBS_SWEEP="${RUN_PCBS_SWEEP:-1}"
 RUN_PCBS_COMPONENT_ABLATION="${RUN_PCBS_COMPONENT_ABLATION:-1}"
+RUN_PCBS_TELEMETRY_CALIBRATION="${RUN_PCBS_TELEMETRY_CALIBRATION:-0}"
+PCBS_TELEMETRY_PATHS="${PCBS_TELEMETRY_PATHS:-}"
 RUN_PROTOCOL_COMPARE="${RUN_PROTOCOL_COMPARE:-1}"
 RUN_COMPUTE_CONSOLIDATION="${RUN_COMPUTE_CONSOLIDATION:-1}"
 RUN_ARTIFACT_COLLECTION="${RUN_ARTIFACT_COLLECTION:-1}"
@@ -94,7 +126,7 @@ if [[ -z "${GENERATED_GRAPH_VARIANTS}" ]]; then
   fi
 fi
 
-mkdir -p "${RESULT_ROOT}" "${LOG_DIR}" "${ARTIFACT_DIR}"
+mkdir -p "${KAGGLE_OUTPUTS_ROOT}" "${RESULT_ROOT}" "${LOG_DIR}" "${ARTIFACT_DIR}"
 
 require_file() {
   local path="$1"
@@ -148,6 +180,7 @@ payload = {
     "timestamp_utc": datetime.now(timezone.utc).isoformat(),
     "repo_root": r"${REPO_ROOT}",
     "out_root": r"${OUT_ROOT}",
+    "kaggle_outputs_root": r"${KAGGLE_OUTPUTS_ROOT}",
     "result_root": r"${RESULT_ROOT}",
     "run_dir": r"${RUN_DIR}",
     "run_config": r"${RUN_CONFIG}",
@@ -175,13 +208,14 @@ payload = {
         "timeout_astar": int("${TIMEOUT_ASTAR}"),
         "timeout_pcbs": int("${TIMEOUT_PCBS}"),
         "generated_graph_variants": r"${GENERATED_GRAPH_VARIANTS}",
+        "pcbs_telemetry_paths": r"${PCBS_TELEMETRY_PATHS}",
     },
     "python": sys.version,
     "platform": platform.platform(),
     "env_flags": {
         key: os.environ.get(key)
         for key in sorted(os.environ)
-        if key.startswith("RUN_") or key in {"PROFILE", "TOKENIZERS", "BRANCHES", "QUICK"}
+        if key.startswith("RUN_") or key in {"PROFILE", "TOKENIZERS", "BRANCHES", "QUICK", "PCBS_TELEMETRY_PATHS"}
     },
 }
 try:
@@ -402,6 +436,27 @@ if [[ "${RUN_PCBS_COMPONENT_ABLATION}" == "1" ]]; then
     pcbs_component_args+=(--quick)
   fi
   run_step pcbs_component_ablation "${pcbs_component_args[@]}"
+fi
+
+if [[ "${RUN_PCBS_TELEMETRY_CALIBRATION}" == "1" ]]; then
+  if [[ -z "${PCBS_TELEMETRY_PATHS}" ]]; then
+    echo "[missing] PCBS_TELEMETRY_PATHS is required when RUN_PCBS_TELEMETRY_CALIBRATION=1" >&2
+    exit 1
+  fi
+  pcbs_calibration_args=(
+    "${PYTHON}" scripts/calibrate_pcbs_personas_from_telemetry.py
+    --output-dir "${RESULT_ROOT}/pcbs_telemetry_calibration"
+    --personas "${PCBS_PERSONAS}"
+    --telemetry
+  )
+  # shellcheck disable=SC2206
+  pcbs_telemetry_array=(${PCBS_TELEMETRY_PATHS})
+  pcbs_calibration_args+=("${pcbs_telemetry_array[@]}")
+  sweep_csv="${RESULT_ROOT}/pcbs_persona_map_sweep/pcbs_persona_map_sweep.csv"
+  if [[ -f "${sweep_csv}" ]]; then
+    pcbs_calibration_args+=(--pcbs-sweep-csv "${sweep_csv}")
+  fi
+  run_step pcbs_telemetry_calibration "${pcbs_calibration_args[@]}"
 fi
 
 if [[ "${RUN_PROTOCOL_COMPARE}" == "1" ]]; then

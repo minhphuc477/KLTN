@@ -112,7 +112,7 @@ class NeuralSymbolicDungeonPipeline(metaclass=_PipelineFacadeMeta):
         self.assembler = DungeonAssembler(self)
         from src.pipeline.runtime import initialize_pipeline
 
-        initialize_pipeline(self, **config.to_runtime_kwargs())
+        initialize_pipeline(self, config=config)
 
     @staticmethod
     def from_kwargs(**kwargs: Any) -> "NeuralSymbolicDungeonPipeline":

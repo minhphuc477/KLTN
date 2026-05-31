@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import logging
 import math
 import sys
 import time
@@ -31,6 +32,7 @@ from src.simulation.search_base import GameStateSearchConfig, SearchRepresentati
 from src.simulation.search_factory import iter_game_state_algorithm_specs, run_game_state_solver
 from src.simulation.validator import ZeldaLogicEnv
 
+logger = logging.getLogger(__name__)
 
 SOLVER_TITLE_MAP: Dict[str, str] = {
     "graph_guided_oracle": "Graph-Guided Oracle",
@@ -153,7 +155,7 @@ def _run_tile_state_suite(
             try:
                 env.close()
             except Exception:
-                pass
+                logger.debug("Failed to close game-state solver environment.", exc_info=True)
         elapsed = float(time.perf_counter() - started)
         row = {
             "key": str(spec.key),
@@ -178,7 +180,7 @@ def _run_tile_state_suite(
             try:
                 env_cbs.close()
             except Exception:
-                pass
+                logger.debug("Failed to close P-CBS environment.", exc_info=True)
         payload["solvers"]["pcbs_balanced"] = {
             "key": "pcbs_balanced",
             "label": "P-CBS (balanced)",

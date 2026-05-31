@@ -29,6 +29,8 @@ from src.zelda_data.zelda_core import (
     SEMANTIC_PALETTE, ValidationMode
 )
 
+LOCKED_EDGE_TYPES = frozenset({"key_locked", "boss_locked", "bombable"})
+
 
 def _inventory_key(inventory: InventoryState) -> Tuple:
     """Immutable inventory key; avoids storing raw hash values in search maps."""
@@ -651,7 +653,7 @@ class ZeldaPathfinder:
         # Identify locked doors from graph edges
         for node_from, node_to, attrs in self.graph.edges(data=True):
             edge_type = attrs.get('edge_type', 'open')
-            if edge_type in ['key_locked', 'boss_locked', 'bombable']:
+            if edge_type in LOCKED_EDGE_TYPES:
                 room_from = self.node_to_room.get(node_from)
                 room_to = self.node_to_room.get(node_to)
                 if room_from and room_to:

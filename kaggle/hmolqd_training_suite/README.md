@@ -29,7 +29,7 @@ Default behavior:
 - tokenizer: `vqvae2`
 - branch: `stage_full`
 - stages: VQ-VAE/VQ-VAE-2, diffusion, fast-sampler, masked-room
-- output root: `/kaggle/working/hmolqd_training_suite`
+- output root: `/kaggle/working/kaggle_outputs/hmolqd_training_suite`
 
 To train and then run the full thesis evidence suite:
 
@@ -47,6 +47,15 @@ cd /kaggle/working/KLTN
 bash kaggle/hmolqd_training_suite/run_kaggle_research_suite.sh
 ```
 
+To run the full tokenizer x stage-branch ablation matrix and then execute the
+evidence suite for every trained branch:
+
+```bash
+%%bash
+cd /kaggle/working/KLTN
+bash kaggle/hmolqd_training_suite/run_kaggle_all_ablations.sh
+```
+
 ## Kaggle API Script Kernel
 
 This folder can also be pushed as a Kaggle script kernel. Copy
@@ -62,7 +71,8 @@ kaggle kernels push \
 
 `kaggle_kernel.py` is the script entrypoint. If the full repo is not already
 present in the Kaggle working directory, it clones the repo before launching the
-selected suite. Use `--mode training`, `--mode evidence`, or `--mode full`.
+selected suite. Use `--mode training`, `--mode evidence`, `--mode full`, or
+`--mode all_ablations`.
 
 ## Recommended Paper Runs
 
@@ -118,10 +128,31 @@ BRANCHES="stage_full" \
 bash kaggle/hmolqd_training_suite/run_kaggle_full_research_suite.sh
 ```
 
+All ablations, including both tokenizers and all stage-conditioning branches:
+
+```bash
+%%bash
+cd /kaggle/working/KLTN
+TOKENIZERS="vqvae vqvae2" \
+BRANCHES="stage_full stage_tokens_only stage_trace_only stage_loss010 stage_loss050" \
+bash kaggle/hmolqd_training_suite/run_kaggle_all_ablations.sh
+```
+
+`run_kaggle_all_ablations.sh` is strict by default:
+
+- `FORCE_FULL_SUITE=1`: forces VQ-VAE, diffusion, fast-sampler, masked-room,
+  and all evidence switches on.
+- `QUICK=0`: ignores inherited quick-mode settings unless
+  `FORCE_FULL_SUITE=0`.
+- `STRICT_CHECKPOINTS=1`: fails the run if any required final/best checkpoint
+  is missing.
+
 ## Important Environment Variables
 
 - `DATA_DIR`: dataset root, default `Data/The Legend of Zelda`
-- `OUT_ROOT`: output root, default `/kaggle/working/hmolqd_training_suite`
+- `KAGGLE_OUTPUTS_ROOT`: parent output root, default `/kaggle/working/kaggle_outputs`
+- `OUT_ROOT`: suite output root, default
+  `/kaggle/working/kaggle_outputs/hmolqd_training_suite`
 - `PROFILE`: `auto`, `t4x2`, `p100`, or `cpu`
 - `TOKENIZERS`: space-separated `vqvae` and/or `vqvae2`
 - `BRANCHES`: space-separated `base`, `stage_full`, `stage_tokens_only`,
@@ -129,22 +160,31 @@ bash kaggle/hmolqd_training_suite/run_kaggle_full_research_suite.sh
 - `VQVAE_EPOCHS`, `DIFFUSION_EPOCHS`, `FAST_SAMPLER_EPOCHS`,
   `MASKED_ROOM_EPOCHS`: optional epoch overrides
 - `BATCH_SIZE`: optional global batch override
-- `VQVAE_CHECKPOINT_ROOT`: optional existing tokenizer root with
-  `<root>/<tokenizer>/checkpoints/vqvae/vqvae_pretrained.pth`
+- `VQVAE_CHECKPOINT_ROOT`: optional existing tokenizer root. The runner checks
+  common VQ-VAE names such as
+  `<root>/<tokenizer>/checkpoints/vqvae/vqvae_pretrained.pth`,
+  `best_model.pth`, and `final_model.pth`.
 - `RUN_VQVAE`, `RUN_DIFFUSION`, `RUN_FAST_SAMPLER`, `RUN_MASKED_ROOM`: set to
   `0` to skip a stage
 - `RUN_CONDITIONING_LOGICNET_REPAIR`, `RUN_FIXED_GRAPH`,
   `RUN_GENERATED_GRAPH`, `RUN_ABLATION_STUDY`, `RUN_MATCHED_BUDGET`,
   `RUN_PCG_BENCHMARK`, `RUN_OOD_BLINDED`, `RUN_DESIGNER_CONTROLLABILITY`,
-  `RUN_PCBS_SWEEP`, `RUN_PCBS_COMPONENT_ABLATION`: evidence-suite section
-  switches; set to `0` to skip a section
+  `RUN_PCBS_SWEEP`, `RUN_PCBS_COMPONENT_ABLATION`,
+  `RUN_PCBS_TELEMETRY_CALIBRATION`: evidence-suite section switches; set to
+  `0` to skip a section
+- `PCBS_TELEMETRY_PATHS`: space-separated local telemetry files/directories
+  used when `RUN_PCBS_TELEMETRY_CALIBRATION=1`
+- `FORCE_FULL_SUITE`: all-ablation runner only; default `1`, forces every
+  train/evidence stage on and disables quick mode
+- `STRICT_CHECKPOINTS`: all-ablation runner only; default `1`, audits required
+  final/best checkpoints and exits non-zero when any are missing
 
 ## Outputs
 
 The suite writes separate folders:
 
 ```text
-/kaggle/working/hmolqd_training_suite/
+/kaggle/working/kaggle_outputs/hmolqd_training_suite/
   configs/
   tokenizers/
   downstream/
@@ -158,10 +198,17 @@ checkpoint sizes. `artifacts/hmolqd_kaggle_<profile>_artifacts.zip` contains
 the manifest, configs, logs, metadata, and best/final checkpoints.
 `artifacts/run_environment.json` records the selected profile, GPU inventory,
 Python/PyTorch versions, tokenizers, branches, config, and data root.
+`artifacts/tokenizer_checkpoints.tsv` records the resolved tokenizer checkpoint
+path passed to downstream stages.
+`artifacts/checkpoint_completeness.json` and
+`artifacts/checkpoint_completeness.tsv` record the required checkpoint audit.
 
 The evidence suite writes `research/research_suite_manifest.json`,
 `research/steps.tsv`, per-experiment result folders, and
 `artifacts/hmolqd_kaggle_research_artifacts.zip`.
+When telemetry calibration is enabled it also writes
+`research/pcbs_telemetry_calibration/pcbs_persona_overrides.json` and a compact
+calibration report.
 
 See [`../../docs/KAGGLE_RESEARCH_EVIDENCE_RUNBOOK.md`](../../docs/KAGGLE_RESEARCH_EVIDENCE_RUNBOOK.md)
 for the full experiment matrix and artifact checklist.

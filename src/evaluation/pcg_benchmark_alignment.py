@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import logging
 import os
 import sys
 from collections import deque
@@ -33,6 +34,7 @@ from src.core.definitions import parse_node_label_tokens
 from src.pipeline.spatial_utils import get_node_grid_position, stable_node_sort_key
 from src.utils.stable_seed import stable_seed_offset
 
+logger = logging.getLogger(__name__)
 
 PCG_ZELDA_TILE_WALL = 0
 PCG_ZELDA_TILE_EMPTY = 1
@@ -415,12 +417,12 @@ def _main_progression_nodes(graph: nx.Graph, start: Any, key: Any, goal: Any) ->
     nodes: set[Any] = {start, key, goal}
     try:
         nodes.update(nx.shortest_path(U, start, key))
-    except Exception:
-        pass
+    except nx.NetworkXException:
+        logger.debug("No PCG benchmark path from start to key.", exc_info=True)
     try:
         nodes.update(nx.shortest_path(U, key, goal))
-    except Exception:
-        pass
+    except nx.NetworkXException:
+        logger.debug("No PCG benchmark path from key to goal.", exc_info=True)
     return nodes
 
 

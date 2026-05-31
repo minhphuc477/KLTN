@@ -9,6 +9,8 @@ import numpy as np
 
 from src.core.definitions import parse_edge_type_tokens, parse_node_label_tokens
 
+LOCKED_EDGE_WEIGHT_TYPES = frozenset({"locked", "bombable", "boss_locked", "soft_locked"})
+
 
 class MLFeatureExtractor:
     """Extract ML-ready features from dungeon topology graphs."""
@@ -31,7 +33,7 @@ class MLFeatureExtractor:
             idx_u, idx_v = node_to_idx[u], node_to_idx[v]
 
             edge_type = data.get("edge_type", "open")
-            weight = 0.5 if edge_type in ["locked", "bombable", "boss_locked", "soft_locked"] else 1.0
+            weight = 0.5 if edge_type in LOCKED_EDGE_WEIGHT_TYPES else 1.0
 
             adj[idx_u, idx_v] = weight
             adj[idx_v, idx_u] = weight

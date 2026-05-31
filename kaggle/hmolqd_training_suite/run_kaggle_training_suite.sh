@@ -8,7 +8,8 @@ cd "${REPO_ROOT}"
 PYTHON="${PYTHON:-python}"
 BASE_CONFIG="${BASE_CONFIG:-configs/zelda_hmolqd.yaml}"
 DATA_DIR="${DATA_DIR:-Data/The Legend of Zelda}"
-OUT_ROOT="${OUT_ROOT:-/kaggle/working/hmolqd_training_suite}"
+KAGGLE_OUTPUTS_ROOT="${KAGGLE_OUTPUTS_ROOT:-/kaggle/working/kaggle_outputs}"
+OUT_ROOT="${OUT_ROOT:-${KAGGLE_OUTPUTS_ROOT}/hmolqd_training_suite}"
 PROFILE="${PROFILE:-auto}"
 TOKENIZERS="${TOKENIZERS:-vqvae2}"
 BRANCHES="${BRANCHES:-stage_full}"
@@ -33,7 +34,7 @@ BATCH_SIZE="${BATCH_SIZE:-}"
 export PYTHONUNBUFFERED=1
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-max_split_size_mb:128}"
 
-mkdir -p "${OUT_ROOT}/configs" "${OUT_ROOT}/logs" "${OUT_ROOT}/tokenizers" "${OUT_ROOT}/downstream" "${OUT_ROOT}/artifacts"
+mkdir -p "${KAGGLE_OUTPUTS_ROOT}" "${OUT_ROOT}/configs" "${OUT_ROOT}/logs" "${OUT_ROOT}/tokenizers" "${OUT_ROOT}/downstream" "${OUT_ROOT}/artifacts"
 
 GPU_INFO="$(${PYTHON} - <<'PY'
 import json
@@ -75,7 +76,7 @@ if [[ "${PROFILE}" == "t4x2" && "${GPU_COUNT}" -lt 2 ]]; then
   PROFILE="p100"
 fi
 
-"${PYTHON}" - "${OUT_ROOT}/artifacts/run_environment.json" "${PROFILE}" "${GPU_INFO}" "${TOKENIZERS}" "${BRANCHES}" "${BASE_CONFIG}" "${DATA_DIR}" <<'PY'
+"${PYTHON}" - "${OUT_ROOT}/artifacts/run_environment.json" "${PROFILE}" "${GPU_INFO}" "${TOKENIZERS}" "${BRANCHES}" "${BASE_CONFIG}" "${DATA_DIR}" "${KAGGLE_OUTPUTS_ROOT}" <<'PY'
 import json
 import platform
 import sys
@@ -97,6 +98,7 @@ payload = {
     "branches": sys.argv[5].split(),
     "base_config": sys.argv[6],
     "data_dir": sys.argv[7],
+    "kaggle_outputs_root": sys.argv[8],
     "python": sys.version,
     "platform": platform.platform(),
 }
@@ -214,6 +216,37 @@ train_diffusion() {
   fi
 }
 
+find_first_checkpoint() {
+  local candidate
+  for candidate in "$@"; do
+    if [[ -f "${candidate}" ]]; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+diagnose_missing_checkpoint() {
+  local label="$1"
+  local root="$2"
+  shift 2
+  echo "[error] missing ${label}" >&2
+  echo "[error] searched candidates:" >&2
+  local candidate
+  for candidate in "$@"; do
+    echo "        ${candidate}" >&2
+  done
+  echo "[error] checkpoint-like files found under ${root}:" >&2
+  find "${root}" -maxdepth 6 -type f \( -name '*.pth' -o -name '*.pt' -o -name '*.ckpt' -o -name '*summary*.json' -o -name 'resolved_config.yaml' \) -print >&2 || true
+}
+
+record_tokenizer_checkpoint() {
+  local tokenizer="$1"
+  local checkpoint="$2"
+  printf "%s\t%s\t%s\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${tokenizer}" "${checkpoint}" >> "${OUT_ROOT}/artifacts/tokenizer_checkpoints.tsv"
+}
+
 for tokenizer in ${TOKENIZERS}; do
   tokenizer_dir="${OUT_ROOT}/tokenizers/${tokenizer}"
   tokenizer_config="${OUT_ROOT}/configs/${tokenizer}_tokenizer.yaml"
@@ -225,14 +258,30 @@ for tokenizer in ${TOKENIZERS}; do
   fi
 
   if [[ -n "${VQVAE_CHECKPOINT_ROOT}" ]]; then
-    vqvae_checkpoint="${VQVAE_CHECKPOINT_ROOT}/${tokenizer}/checkpoints/vqvae/vqvae_pretrained.pth"
+    vqvae_candidates=(
+      "${VQVAE_CHECKPOINT_ROOT}/${tokenizer}/checkpoints/vqvae/vqvae_pretrained.pth"
+      "${VQVAE_CHECKPOINT_ROOT}/${tokenizer}/checkpoints/vqvae/best_model.pth"
+      "${VQVAE_CHECKPOINT_ROOT}/${tokenizer}/checkpoints/vqvae/final_model.pth"
+      "${VQVAE_CHECKPOINT_ROOT}/${tokenizer}/vqvae_pretrained.pth"
+      "${VQVAE_CHECKPOINT_ROOT}/checkpoints/vqvae/vqvae_pretrained.pth"
+      "${VQVAE_CHECKPOINT_ROOT}/vqvae_pretrained.pth"
+    )
+    checkpoint_search_root="${VQVAE_CHECKPOINT_ROOT}"
   else
-    vqvae_checkpoint="${tokenizer_dir}/checkpoints/vqvae/vqvae_pretrained.pth"
+    vqvae_candidates=(
+      "${tokenizer_dir}/checkpoints/vqvae/vqvae_pretrained.pth"
+      "${tokenizer_dir}/checkpoints/vqvae/best_model.pth"
+      "${tokenizer_dir}/checkpoints/vqvae/final_model.pth"
+      "${tokenizer_dir}/vqvae_pretrained.pth"
+    )
+    checkpoint_search_root="${tokenizer_dir}"
   fi
-  if [[ ! -f "${vqvae_checkpoint}" ]]; then
-    echo "[error] missing tokenizer checkpoint: ${vqvae_checkpoint}" >&2
+  if ! vqvae_checkpoint="$(find_first_checkpoint "${vqvae_candidates[@]}")"; then
+    diagnose_missing_checkpoint "tokenizer checkpoint for ${tokenizer}" "${checkpoint_search_root}" "${vqvae_candidates[@]}"
     exit 1
   fi
+  echo "[checkpoint] tokenizer=${tokenizer} vqvae=${vqvae_checkpoint}"
+  record_tokenizer_checkpoint "${tokenizer}" "${vqvae_checkpoint}"
 
   for branch in ${BRANCHES}; do
     run_name="${tokenizer}_${branch}"

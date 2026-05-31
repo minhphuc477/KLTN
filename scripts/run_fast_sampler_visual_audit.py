@@ -20,6 +20,7 @@ import copy
 import gc
 import hashlib
 import json
+import logging
 import math
 import os
 import sys
@@ -33,6 +34,8 @@ import numpy as np
 import yaml
 from PIL import Image, ImageDraw
 from networkx.readwrite import json_graph
+
+logger = logging.getLogger(__name__)
 
 try:
     import torch
@@ -764,7 +767,7 @@ def _compute_generation_validation(
                 try:
                     env.close()
                 except Exception:
-                    pass
+                    logger.debug("Failed to close search-suite environment.", exc_info=True)
 
             suite["tile_state_space"][algorithm_name] = entry
             if algorithm_name == "astar":
@@ -904,7 +907,7 @@ def _compute_generation_validation(
             try:
                 env_cbs.close()
             except Exception:
-                pass
+                logger.debug("Failed to close C-BS validation environment.", exc_info=True)
 
         optimal_path_length = int(getattr(grid_result, "path_length", 0) or 0)
         cbs_path_length = int(len(cbs_path or []))
@@ -1231,7 +1234,7 @@ def save_room_alignment_overlay(
             text_bbox = draw.textbbox((label_x, label_y), label)
             draw.rectangle(text_bbox, fill=(245, 245, 245), outline=color)
         except Exception:
-            pass
+            logger.debug("Failed to draw room label background.", exc_info=True)
         draw.text((label_x, label_y), label, fill=(12, 16, 24))
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1766,7 +1769,7 @@ def _generate_dungeon_with_oom_backoff(
                 try:
                     del pipeline
                 except Exception:
-                    pass
+                    logger.debug("Failed to release pipeline reference after OOM.", exc_info=True)
             _release_torch_memory()
             continue
     if last_exc is not None:

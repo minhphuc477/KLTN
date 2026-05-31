@@ -29,7 +29,32 @@ from src.pipeline.types import (
 
 logger = logging.getLogger(__name__)
 
-def initialize_pipeline(
+
+def initialize_pipeline(pipeline, config=None, **legacy_kwargs):
+    """
+    Initialize a pipeline instance from a grouped PipelineConfig.
+
+    Flat keyword arguments are still accepted as a compatibility path, but the
+    public runtime entrypoint no longer exposes the former 100+ parameter
+    signature.
+    """
+    from src.pipeline.config import PipelineConfig
+
+    if config is not None and legacy_kwargs:
+        raise ValueError("Pass either config or legacy keyword overrides, not both.")
+    if config is None:
+        config = PipelineConfig.from_kwargs(**legacy_kwargs)
+    elif isinstance(config, dict):
+        config = PipelineConfig.from_kwargs(**config)
+    elif not isinstance(config, PipelineConfig):
+        raise TypeError(
+            "initialize_pipeline config must be a PipelineConfig, a flat kwargs dict, "
+            f"or omitted; got {type(config).__name__}."
+        )
+    return _initialize_pipeline_from_flat_kwargs(pipeline, **config.to_runtime_kwargs())
+
+
+def _initialize_pipeline_from_flat_kwargs(
     pipeline,
     vqvae_checkpoint: Optional[str] = None,
     diffusion_checkpoint: Optional[str] = None,

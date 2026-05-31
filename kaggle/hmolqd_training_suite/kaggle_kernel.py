@@ -41,9 +41,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--out-root", default=None)
     parser.add_argument(
         "--mode",
-        choices=("training", "evidence", "full"),
+        choices=("training", "evidence", "full", "all_ablations"),
         default=os.environ.get("KAGGLE_SUITE_MODE", "training"),
-        help="Run only training, only post-training evidence, or train plus evidence.",
+        help="Run training, evidence, train plus evidence, or the full tokenizer/branch ablation matrix.",
     )
     parser.add_argument("--quick", action="store_true")
     parser.add_argument("--skip-vqvae", action="store_true")
@@ -107,6 +107,7 @@ def main(argv: list[str] | None = None) -> int:
         "training": "run_kaggle_training_suite.sh",
         "evidence": "run_kaggle_research_suite.sh",
         "full": "run_kaggle_full_research_suite.sh",
+        "all_ablations": "run_kaggle_all_ablations.sh",
     }[str(args.mode)]
     suite_script = repo_root / "kaggle" / "hmolqd_training_suite" / script_name
     if not suite_script.is_file():

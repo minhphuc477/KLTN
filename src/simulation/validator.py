@@ -4523,7 +4523,7 @@ class ZeldaValidator:
                 try:
                     local_env.close()
                 except Exception:
-                    pass
+                    logger.debug("Failed to close local validation environment.", exc_info=True)
 
         # Step 2: Run primary A* oracle.
         success, path, diagnostics = _run_solver("astar")

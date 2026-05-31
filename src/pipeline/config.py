@@ -237,9 +237,12 @@ class PipelineConfig:
         return replace(self, **changes)
 
 
+TopologyConfig = GraphConfig
+
 __all__ = [
     "PipelineConfig",
     "ModelConfig",
     "SamplerConfig",
     "GraphConfig",
+    "TopologyConfig",
 ]

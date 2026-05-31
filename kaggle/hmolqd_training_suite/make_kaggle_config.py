@@ -20,6 +20,7 @@ from src.config_system import merge_config, validate_config
 
 
 STAGE_SECTIONS = ("diffusion", "fast_sampler", "masked_room")
+CHECKPOINT_SECTIONS = ("vqvae", "diffusion", "fast_sampler", "masked_room")
 
 
 def _set(config: dict[str, Any], dotted_path: str, value: Any) -> None:
@@ -145,6 +146,9 @@ def main() -> int:
 
     _set(config, "runtime.experiment_name", args.experiment_name)
     _set(config, "runtime.output_dir", str(args.output_dir))
+    checkpoint_root = args.output_dir / "checkpoints"
+    for section in CHECKPOINT_SECTIONS:
+        _set(config, f"{section}.checkpoint_dir", str(checkpoint_root / section))
     _set(config, "runtime.device", "cuda" if args.profile != "cpu" else "cpu")
     _set(config, "runtime.seed", int(args.seed))
     _set(config, "runtime.verbose", True)
@@ -184,6 +188,11 @@ def main() -> int:
         "tokenizer": args.tokenizer,
         "branch": args.branch,
         "output_dir": str(config["runtime"]["output_dir"]),
+        "checkpoint_dirs": {
+            section: str(config[section]["checkpoint_dir"])
+            for section in CHECKPOINT_SECTIONS
+            if section in config and "checkpoint_dir" in config[section]
+        },
         "data_dir": str(config["dataset"]["data_dir"]),
         "vqvae_checkpoint": config["diffusion"]["vqvae_checkpoint"],
         "batch_size": config["dataset"]["batch_size"],

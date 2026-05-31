@@ -26,7 +26,7 @@ Default behavior:
 - auto-detects `t4x2`, single-GPU, or CPU profile
 - trains `vqvae2`
 - runs the `stage_full` branch
-- writes outputs to `/kaggle/working/hmolqd_training_suite`
+- writes outputs to `/kaggle/working/kaggle_outputs/hmolqd_training_suite`
 - records `artifacts/run_environment.json`
 
 To train and then run the full research evidence suite:
@@ -43,6 +43,15 @@ To run only the post-training evidence suite:
 %%bash
 cd /kaggle/working/KLTN
 bash kaggle/hmolqd_training_suite/run_kaggle_research_suite.sh
+```
+
+To run every packaged tokenizer and stage-conditioning ablation locally inside
+the Kaggle environment:
+
+```bash
+%%bash
+cd /kaggle/working/KLTN
+bash kaggle/hmolqd_training_suite/run_kaggle_all_ablations.sh
 ```
 
 ## Kaggle API Kernel
@@ -110,6 +119,20 @@ QUICK=1 TOKENIZERS="vqvae2" BRANCHES="stage_full" \
   bash kaggle/hmolqd_training_suite/run_kaggle_full_research_suite.sh
 ```
 
+Full ablation matrix:
+
+```bash
+%%bash
+cd /kaggle/working/KLTN
+TOKENIZERS="vqvae vqvae2" \
+BRANCHES="stage_full stage_tokens_only stage_trace_only stage_loss010 stage_loss050" \
+  bash kaggle/hmolqd_training_suite/run_kaggle_all_ablations.sh
+```
+
+The all-ablation runner defaults to `FORCE_FULL_SUITE=1` and
+`STRICT_CHECKPOINTS=1`, so inherited skip flags are overridden, quick mode is
+disabled, and the run fails if any required checkpoint is missing.
+
 ## Research Evidence Suite
 
 The evidence suite fills the currently missing execution layer. It runs:
@@ -127,14 +150,18 @@ The evidence suite fills the currently missing execution layer. It runs:
 Outputs are written under:
 
 ```text
-/kaggle/working/hmolqd_training_suite/research/
+/kaggle/working/kaggle_outputs/hmolqd_training_suite/research/
 ```
 
 The packaged zip is:
 
 ```text
-/kaggle/working/hmolqd_training_suite/artifacts/hmolqd_kaggle_research_artifacts.zip
+/kaggle/working/kaggle_outputs/hmolqd_training_suite/artifacts/hmolqd_kaggle_research_artifacts.zip
 ```
+
+The strict all-ablation path also writes
+`artifacts/checkpoint_completeness.json` and
+`artifacts/checkpoint_completeness.tsv`.
 
 Detailed controls and required thesis artifacts are documented in
 [`KAGGLE_RESEARCH_EVIDENCE_RUNBOOK.md`](KAGGLE_RESEARCH_EVIDENCE_RUNBOOK.md).

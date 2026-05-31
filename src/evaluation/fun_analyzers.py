@@ -14,6 +14,8 @@ from src.evaluation.fun_types import (
     PacingMetrics,
 )
 
+SECRET_EDGE_TYPES = frozenset({"soft_locked", "hidden", "secret"})
+
 
 class FrustrationAnalyzer:
     """Quantifies sources of player frustration."""
@@ -146,7 +148,7 @@ class ExplorabilityAnalyzer:
         secret_count = 0
         for _, _, data in mission_graph.edges(data=True):
             edge_type = data.get("type", "")
-            if edge_type in ["soft_locked", "hidden", "secret"]:
+            if edge_type in SECRET_EDGE_TYPES:
                 secret_count += 1
         return secret_count
 

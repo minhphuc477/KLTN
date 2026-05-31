@@ -13,6 +13,7 @@ import argparse
 import copy
 import csv
 import json
+import logging
 import math
 import statistics
 import sys
@@ -24,6 +25,8 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 import networkx as nx
 import numpy as np
 import torch
+
+logger = logging.getLogger(__name__)
 
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
@@ -281,8 +284,8 @@ def run_eval(args: argparse.Namespace) -> Dict[str, Any]:
         pipeline.use_graph_node_cross_attention = bool(cfg.use_graph)
         try:
             pipeline.diffusion.set_topology_refinement_mode(str(cfg.topology_refinement_mode))
-        except Exception:
-            pass
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            logger.debug("Unable to set topology refinement mode for %s.", cfg.name, exc_info=True)
 
         for variant in variants:
             dungeon = adapter.load_dungeon(9, int(variant))

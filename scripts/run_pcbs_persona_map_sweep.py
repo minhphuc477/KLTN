@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import logging
 import math
 import statistics
 import sys
@@ -29,6 +30,8 @@ from src.evaluation.search_benchmark_utils import confusion_ratio_vs_oracle, run
 from src.simulation.cognitive_bounded_search import CognitiveBoundedSearch
 from src.simulation.validator import ZeldaLogicEnv
 from src.zelda_data.zelda_core import ZeldaDungeonAdapter
+
+logger = logging.getLogger(__name__)
 
 
 def _tokens(raw: str) -> List[str]:
@@ -130,7 +133,7 @@ def _row_for_persona(
         try:
             env.close()
         except Exception:
-            pass
+            logger.debug("Failed to close P-CBS sweep environment.", exc_info=True)
     elapsed_ms = (time.perf_counter() - started) * 1000.0
     pcbs_status = "solved" if success else ("timeout" if int(states) >= int(timeout_pcbs) else "failed")
     pcbs_trajectory_length = int(len(path or []))
@@ -285,7 +288,7 @@ def main() -> int:
                     try:
                         oracle_env.close()
                     except Exception:
-                        pass
+                        logger.debug("Failed to close A* oracle environment.", exc_info=True)
                 if args.oracle_solved_only and not bool(oracle.get("success", False)):
                     if not args.quiet:
                         print(f"[skip] {map_id}: oracle_status={oracle.get('status')}", flush=True)

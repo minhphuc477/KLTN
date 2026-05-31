@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -62,8 +63,15 @@ from src.train_vqvae import split_dataset_for_vqvae_validation
 logger = logging.getLogger(__name__)
 
 
+@dataclass(init=False)
 class MaskedRoomTrainingConfig:
     def __init__(
+        self,
+        **kwargs: Any,
+    ):
+        self._init_from_values(**kwargs)
+
+    def _init_from_values(
         self,
         data_dir: str = "Data/The Legend of Zelda",
         batch_size: int = 8,

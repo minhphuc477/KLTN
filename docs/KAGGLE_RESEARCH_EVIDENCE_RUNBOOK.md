@@ -27,8 +27,8 @@ Default behavior:
 - trains `vqvae2` on the `stage_full` branch
 - trains diffusion, fast sampler, and masked-room branches
 - runs the evidence suite against the trained branch
-- writes results under `/kaggle/working/hmolqd_training_suite/research`
-- packages artifacts under `/kaggle/working/hmolqd_training_suite/artifacts`
+- writes results under `/kaggle/working/kaggle_outputs/hmolqd_training_suite/research`
+- packages artifacts under `/kaggle/working/kaggle_outputs/hmolqd_training_suite/artifacts`
 
 ## Evidence Suite Only
 
@@ -61,7 +61,7 @@ The runner infers:
 The evidence suite creates:
 
 ```text
-/kaggle/working/hmolqd_training_suite/research/
+/kaggle/working/kaggle_outputs/hmolqd_training_suite/research/
   research_suite_manifest.json
   steps.tsv
   logs/
@@ -76,14 +76,17 @@ The evidence suite creates:
   designer_controllability/
   pcbs_persona_map_sweep/
   pcbs_component_ablation/
+  pcbs_telemetry_calibration/        # optional: requires telemetry paths
   protocol_to_baselines/
   compute_sample_efficiency/
+  ../artifacts/checkpoint_completeness.json
+  ../artifacts/checkpoint_completeness.tsv
 ```
 
 The final zip is:
 
 ```text
-/kaggle/working/hmolqd_training_suite/artifacts/hmolqd_kaggle_research_artifacts.zip
+/kaggle/working/kaggle_outputs/hmolqd_training_suite/artifacts/hmolqd_kaggle_research_artifacts.zip
 ```
 
 ## Fast Smoke Run
@@ -118,11 +121,13 @@ For a broader model-selection run:
 cd /kaggle/working/KLTN
 TOKENIZERS="vqvae vqvae2" \
 BRANCHES="stage_full stage_tokens_only stage_trace_only stage_loss010 stage_loss050" \
-bash kaggle/hmolqd_training_suite/run_kaggle_full_research_suite.sh
+bash kaggle/hmolqd_training_suite/run_kaggle_all_ablations.sh
 ```
 
 That run is expensive. Use it only when Kaggle timeout and storage budget are
 sufficient.
+The all-ablation runner forces every training/evidence stage on by default and
+writes `artifacts/checkpoint_completeness.json` as a strict checkpoint audit.
 
 ## Main Evidence Switches
 
@@ -139,6 +144,7 @@ Set any of these to `0` to skip a section:
 - `RUN_DESIGNER_CONTROLLABILITY`
 - `RUN_PCBS_SWEEP`
 - `RUN_PCBS_COMPONENT_ABLATION`
+- `RUN_PCBS_TELEMETRY_CALIBRATION` requires `PCBS_TELEMETRY_PATHS`
 - `RUN_PROTOCOL_COMPARE`
 - `RUN_COMPUTE_CONSOLIDATION`
 
@@ -168,7 +174,10 @@ set is:
 6. `pcg_benchmark_alignment/pcg_benchmark_alignment_report.json`
 7. `ood_blinded_eval/blinded/rating_sheet.csv`
 8. `pcbs_persona_map_sweep/summary.json`
-9. `compute_sample_efficiency/compute_sample_efficiency_report.md`
+9. Optional telemetry calibration:
+   `pcbs_telemetry_calibration/pcbs_persona_overrides.json` and
+   `pcbs_telemetry_calibration/pcbs_calibration_report.md`
+10. `compute_sample_efficiency/compute_sample_efficiency_report.md`
 
 If an experiment fails, rerun with:
 

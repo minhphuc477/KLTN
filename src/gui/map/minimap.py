@@ -7,6 +7,20 @@ from typing import Any, Tuple
 from src.core.definitions import SEMANTIC_PALETTE
 from src.pipeline.spatial_utils import normalize_node_id, stable_node_sort_key
 
+MINIMAP_KEY_TILE_IDS = frozenset(
+    {
+        SEMANTIC_PALETTE["KEY_SMALL"],
+        SEMANTIC_PALETTE["KEY_BOSS"],
+    }
+)
+MINIMAP_DOOR_TILE_IDS = frozenset(
+    {
+        SEMANTIC_PALETTE["DOOR_LOCKED"],
+        SEMANTIC_PALETTE["DOOR_BOMB"],
+        SEMANTIC_PALETTE["DOOR_BOSS"],
+    }
+)
+
 
 def render_minimap(gui: Any, pygame: Any) -> None:
     """Render small dungeon overview map in bottom-right corner."""
@@ -97,13 +111,9 @@ def render_minimap(gui: Any, pygame: Any) -> None:
                     color = (80, 180, 80)
                 elif tile_id == SEMANTIC_PALETTE["TRIFORCE"]:
                     color = (255, 215, 0)
-                elif tile_id in [SEMANTIC_PALETTE["KEY_SMALL"], SEMANTIC_PALETTE["KEY_BOSS"]]:
+                elif tile_id in MINIMAP_KEY_TILE_IDS:
                     color = (255, 200, 50)
-                elif tile_id in [
-                    SEMANTIC_PALETTE["DOOR_LOCKED"],
-                    SEMANTIC_PALETTE["DOOR_BOMB"],
-                    SEMANTIC_PALETTE["DOOR_BOSS"],
-                ]:
+                elif tile_id in MINIMAP_DOOR_TILE_IDS:
                     color = (180, 100, 50)
                 elif tile_id == SEMANTIC_PALETTE["STAIR"]:
                     color = (100, 150, 255)

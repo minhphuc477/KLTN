@@ -17,6 +17,7 @@ import argparse
 import json
 import logging
 import math
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Dict, Any, Tuple, List
 
@@ -96,10 +97,17 @@ CARDINAL_DIRECTIONS = ("N", "S", "E", "W")
 # TRAINING CONFIGURATION
 # =============================================================================
 
+@dataclass(init=False)
 class DiffusionTrainingConfig:
     """Training configuration for latent diffusion."""
-    
+
     def __init__(
+        self,
+        **kwargs: Any,
+    ):
+        self._init_from_values(**kwargs)
+
+    def _init_from_values(
         self,
         # Data
         data_dir: str = "Data/The Legend of Zelda",
