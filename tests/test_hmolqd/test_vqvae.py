@@ -114,6 +114,36 @@ class TestVectorQuantizer:
         changed = (~torch.isclose(quantizer.embedding.weight, before)).any(dim=1).sum().item()
         assert changed == 3
 
+    def test_ema_quantizer_clamps_smoothed_cluster_denominator(self):
+        """Dead-code EMA normalization should not create NaN/Inf embeddings."""
+        from src.core.vqvae import VectorQuantizer
+
+        quantizer = VectorQuantizer(
+            num_embeddings=4,
+            embedding_dim=3,
+            use_ema=True,
+            epsilon=1e-5,
+            dead_code_reset_interval=1000,
+        )
+        quantizer.train()
+        quantizer.ema_cluster_size.zero_()
+        quantizer.ema_embedding_sum.fill_(1.0)
+
+        z_e = torch.zeros(1, 3, 1, 1)
+        quantizer(z_e)
+
+        assert torch.isfinite(quantizer.embedding.weight).all()
+
+    def test_quantizer_deepcopy_recreates_update_lock(self):
+        """The thread lock must not make the quantizer uncopyable."""
+        import copy
+        from src.core.vqvae import VectorQuantizer
+
+        quantizer = VectorQuantizer(num_embeddings=4, embedding_dim=3)
+        copied = copy.deepcopy(quantizer)
+
+        assert copied._codebook_update_lock is not quantizer._codebook_update_lock
+
 
 class TestEncoder:
     """Tests for VQ-VAE Encoder."""

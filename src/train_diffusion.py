@@ -69,10 +69,12 @@ from src.utils.checkpoint import (
     log_checkpoint_artifact,
     prune_checkpoints,
     resolve_resume_checkpoint,
+    safe_torch_load,
     write_checkpoint_metadata,
 )
 from src.utils.distributed import (
     DistributedContext,
+    average_module_parameters,
     average_gradients,
     destroy_distributed,
     initialize_distributed,
@@ -330,6 +332,12 @@ class DiffusionTrainingConfig:
         self.condition_num_gnn_layers = int(max(1, condition_num_gnn_layers))
         self.condition_num_attention_heads = int(max(1, condition_num_attention_heads))
         self.condition_dropout = float(max(0.0, min(1.0, condition_dropout)))
+        if self.condition_hidden_dim % self.condition_num_attention_heads != 0:
+            raise ValueError(
+                "condition_hidden_dim must be divisible by condition_num_attention_heads; "
+                f"got condition_hidden_dim={self.condition_hidden_dim}, "
+                f"condition_num_attention_heads={self.condition_num_attention_heads}."
+            )
         gnn_type = str(condition_gnn_type).strip().lower()
         if gnn_type not in {"gcn", "gat", "sage", "gps"}:
             raise ValueError(
@@ -650,6 +658,93 @@ def _load_checkpoint_metadata_sidecar(checkpoint_path: str | Path) -> Dict[str, 
         return {}
 
 
+def _coerce_optional_int(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    return int(value)
+
+
+def _validate_vqvae_checkpoint_metadata(
+    checkpoint_path: str | Path,
+    *,
+    metadata: Dict[str, Any],
+    expected: Dict[str, Any],
+) -> None:
+    """Fail fast when a frozen VQ-VAE checkpoint does not match diffusion config."""
+    architecture = metadata.get("architecture", {}) if isinstance(metadata, dict) else {}
+    if not isinstance(architecture, dict) or not architecture:
+        return
+
+    int_fields = (
+        "num_classes",
+        "latent_dim",
+        "hidden_dim",
+        "codebook_size",
+        "top_codebook_size",
+        "top_latent_dim",
+    )
+    for key in int_fields:
+        if key not in architecture or architecture[key] is None:
+            continue
+        actual = int(architecture[key])
+        expected_value = _coerce_optional_int(expected.get(key))
+        if expected_value is not None and actual != expected_value:
+            raise ValueError(
+                f"VQ-VAE checkpoint {checkpoint_path} metadata mismatch for {key}: "
+                f"checkpoint={actual}, config={expected_value}. Update the diffusion config "
+                "to match the frozen VQ-VAE before training."
+            )
+
+    bool_fields = ("use_coordconv",)
+    for key in bool_fields:
+        if key not in architecture or architecture[key] is None:
+            continue
+        actual_bool = bool(architecture[key])
+        expected_bool = bool(expected.get(key))
+        if actual_bool != expected_bool:
+            raise ValueError(
+                f"VQ-VAE checkpoint {checkpoint_path} metadata mismatch for {key}: "
+                f"checkpoint={actual_bool}, config={expected_bool}."
+            )
+
+    if "architecture" in architecture and architecture["architecture"] is not None:
+        actual_arch = str(architecture["architecture"]).strip().lower()
+        expected_arch = str(expected.get("architecture", "vqvae")).strip().lower()
+        if actual_arch != expected_arch:
+            raise ValueError(
+                f"VQ-VAE checkpoint {checkpoint_path} metadata mismatch for architecture: "
+                f"checkpoint={actual_arch!r}, config={expected_arch!r}."
+            )
+
+
+def _validate_vqvae_checkpoint_state(
+    checkpoint_path: str | Path,
+    checkpoint: Dict[str, Any],
+    *,
+    expected_codebook_size: int,
+) -> None:
+    """Infer codebook size from old checkpoints without sidecars when possible."""
+    state = checkpoint.get("model_state_dict") if isinstance(checkpoint, dict) else None
+    if not isinstance(state, dict):
+        return
+    candidate_keys = (
+        "quantizer.embedding.weight",
+        "bottom_quantizer.embedding.weight",
+    )
+    for key in candidate_keys:
+        value = state.get(key)
+        if isinstance(value, torch.Tensor) and value.dim() >= 1:
+            actual = int(value.shape[0])
+            expected = int(expected_codebook_size)
+            if actual != expected:
+                raise ValueError(
+                    f"VQ-VAE checkpoint {checkpoint_path} codebook size mismatch: "
+                    f"checkpoint={actual}, config={expected}. Update vqvae_codebook_size "
+                    "or choose the matching frozen VQ-VAE checkpoint."
+                )
+            return
+
+
 def _resolve_vqvae_architecture(
     checkpoint_path: Optional[str],
     *,
@@ -663,12 +758,7 @@ def _resolve_vqvae_architecture(
     use_coordconv: bool = True,
     mrf_penalty_weight: float = 0.05,
 ) -> Dict[str, Any]:
-    """
-    Resolve the VQ-VAE architecture from config first, then checkpoint metadata.
-
-    This keeps stage handoffs compatible when the trained VQ-VAE shape differs
-    from historical diffusion defaults.
-    """
+    """Resolve the VQ-VAE architecture and reject checkpoint/config drift."""
     resolved: Dict[str, Any] = {
         "architecture": str(architecture or "vqvae"),
         "num_classes": int(num_classes),
@@ -685,6 +775,7 @@ def _resolve_vqvae_architecture(
 
     checkpoint = Path(checkpoint_path)
     metadata = _load_checkpoint_metadata_sidecar(checkpoint)
+    _validate_vqvae_checkpoint_metadata(checkpoint, metadata=metadata, expected=resolved)
     architecture = metadata.get("architecture", {}) if isinstance(metadata, dict) else {}
     if isinstance(architecture, dict):
         for key in (
@@ -1014,7 +1105,12 @@ class DiffusionTrainer:
         )
         
         if self.config.vqvae_checkpoint:
-            checkpoint = torch.load(self.config.vqvae_checkpoint, map_location='cpu')
+            checkpoint = safe_torch_load(self.config.vqvae_checkpoint, map_location='cpu')
+            _validate_vqvae_checkpoint_state(
+                self.config.vqvae_checkpoint,
+                checkpoint,
+                expected_codebook_size=int(self.config.vqvae_codebook_size),
+            )
             vqvae.load_state_dict(checkpoint['model_state_dict'])
             logger.info(
                 "Loaded VQ-VAE from %s with architecture=%s num_classes=%d latent_dim=%d hidden_dim=%d codebook_size=%d",
@@ -1309,6 +1405,28 @@ class DiffusionTrainer:
 
         # epsilon-prediction: x0 = (x_t - sqrt(1-alpha_bar_t) * eps) / sqrt(alpha_bar_t)
         return (x_t - sqrt_one_minus_alpha_t * prediction) / (sqrt_alpha_t + 1e-8)
+
+    def _decode_latent_for_logic(self, latent: torch.Tensor) -> torch.Tensor:
+        """
+        Decode a predicted clean latent into tile logits for LogicNet.
+
+        LogicNet pathfinding operates on walkability probabilities derived from
+        tile space. Passing raw continuous VQ latents into that loss makes the
+        clamp/softmax semantics arbitrary, so predicted-latent training routes
+        through the frozen VQ-VAE decoder while preserving gradients to the
+        diffusion denoiser.
+        """
+        if not hasattr(self.vqvae, "decode"):
+            raise TypeError("Configured VQ-VAE does not expose decode(); cannot compute decoded logic loss.")
+        tile_logits = self.vqvae.decode(latent, target_size=(ROOM_HEIGHT, ROOM_WIDTH))
+        if not isinstance(tile_logits, torch.Tensor) or tile_logits.dim() != 4:
+            raise ValueError(f"VQ-VAE decode must return [B,C,H,W] logits, got {type(tile_logits).__name__}.")
+        if int(tile_logits.shape[1]) != int(self.config.num_classes):
+            raise ValueError(
+                f"Decoded VQ-VAE logits have {int(tile_logits.shape[1])} channels, "
+                f"expected num_classes={int(self.config.num_classes)}."
+            )
+        return tile_logits
     
     def _encode_graph_conditioning(
         self,
@@ -1891,6 +2009,10 @@ class DiffusionTrainer:
             for p_ema, p in zip(self.ema_diffusion.parameters(),
                                 self.diffusion.parameters()):
                 p_ema.data.mul_(self.ema_decay).add_(p.data, alpha=1.0 - self.ema_decay)
+        average_module_parameters(
+            self.ema_diffusion,
+            context=getattr(self, "distributed_context", None),
+        )
 
     @staticmethod
     def _tensor_is_finite(value: Any) -> bool:
@@ -2101,9 +2223,11 @@ class DiffusionTrainer:
                     )
                     pred_x0_logic = None
 
-                # Pass predicted latent to LogicNet for graph-level pathfinding loss.
+                # Decode predicted x0 before LogicNet so pathfinding sees tile
+                # logits/walkability rather than arbitrary continuous latents.
                 if pred_x0_logic is not None:
-                    logic_loss, _logic_info = self.logic_net(pred_x0_logic, graph_data=logic_graph_data)
+                    pred_tile_logits = self._decode_latent_for_logic(pred_x0_logic)
+                    logic_loss, _logic_info = self.logic_net(pred_tile_logits, graph_data=logic_graph_data)
 
             if self._tensor_is_finite(logic_loss):
                 if isinstance(logic_loss, torch.Tensor) and logic_loss.numel() != 1:

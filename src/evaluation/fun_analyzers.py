@@ -166,7 +166,7 @@ class ExplorabilityAnalyzer:
     def _count_secrets(self, mission_graph: nx.Graph) -> int:
         secret_count = 0
         for _, _, data in mission_graph.edges(data=True):
-            edge_type = data.get("type", "")
+            edge_type = data.get("edge_type", data.get("type", ""))
             if edge_type in SECRET_EDGE_TYPES:
                 secret_count += 1
         return secret_count

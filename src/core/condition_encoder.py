@@ -134,6 +134,45 @@ class LocalStreamEncoder(nn.Module):
         # Learnable null token for missing neighbors
         self.null_token = nn.Parameter(torch.zeros(latent_dim))
         nn.init.normal_(self.null_token, std=0.02)
+
+    def _pool_neighbor_latent(self, latent: Tensor, direction: str) -> Tensor:
+        """Pool the neighbor edge that faces the current room."""
+        if latent.dim() <= 2:
+            return latent
+
+        direction = str(direction).upper()
+        channel_first = latent.dim() == 4 and int(latent.shape[1]) == self.latent_dim
+        channel_last = latent.dim() == 4 and int(latent.shape[-1]) == self.latent_dim
+
+        if channel_first:
+            # Neighbor N touches this room with its south edge; S with north;
+            # E with west; W with east.
+            if direction == "N":
+                edge = latent[:, :, -1, :]
+            elif direction == "S":
+                edge = latent[:, :, 0, :]
+            elif direction == "E":
+                edge = latent[:, :, :, 0]
+            elif direction == "W":
+                edge = latent[:, :, :, -1]
+            else:
+                edge = latent.flatten(2)
+            return edge.mean(dim=-1)
+
+        if channel_last:
+            if direction == "N":
+                edge = latent[:, -1, :, :]
+            elif direction == "S":
+                edge = latent[:, 0, :, :]
+            elif direction == "E":
+                edge = latent[:, :, 0, :]
+            elif direction == "W":
+                edge = latent[:, :, -1, :]
+            else:
+                edge = latent.flatten(1, -2)
+            return edge.mean(dim=1)
+
+        return latent.flatten(1, -2).mean(dim=1)
     
     def forward(
         self,
@@ -165,9 +204,9 @@ class LocalStreamEncoder(nn.Module):
                 # Use null token
                 latent = self.null_token.unsqueeze(0).expand(batch_size, -1)
             
-            # Pool spatial dimensions if needed
+            # Pool the boundary-facing edge of spatial latents if needed.
             if latent.dim() > 2:
-                latent = latent.mean(dim=[-2, -1])  # Global average pooling
+                latent = self._pool_neighbor_latent(latent, direction)
             
             encoded = self.neighbor_encoders[direction](latent)
             neighbor_features.append(encoded)
@@ -305,7 +344,7 @@ class ReferenceRoomMapEncoder(nn.Module):
 class FallbackGNN(nn.Module):
     """
     Simple fallback GNN when torch_geometric is not available.
-    Uses basic message passing with adjacency matrix.
+    Uses sparse edge-index message passing.
     """
     
     def __init__(
@@ -336,29 +375,46 @@ class FallbackGNN(nn.Module):
     def forward(
         self,
         node_features: Tensor,
-        adjacency: Tensor,
+        edge_index: Tensor,
     ) -> Tensor:
         """
         Forward pass.
         
         Args:
             node_features: [N, node_dim]
-            adjacency: [N, N] adjacency matrix
+            edge_index: [2, E] sparse edge indices
             
         Returns:
             Node embeddings [N, output_dim]
         """
         h = self.input_proj(node_features)
-        
-        # Symmetric degree normalization: D^{-1/2} A D^{-1/2} (Kipf & Welling 2017)
-        # Prevents feature magnitude explosion on high-degree nodes.
-        degree = adjacency.sum(dim=-1, keepdim=True).clamp_min(1.0)
-        deg_inv_sqrt = degree.pow(-0.5)
-        adjacency_norm = adjacency * deg_inv_sqrt * deg_inv_sqrt.transpose(-2, -1)
-        
+
+        num_nodes = int(node_features.shape[0])
+        if edge_index is None or edge_index.numel() == 0:
+            src = torch.empty(0, dtype=torch.long, device=node_features.device)
+            dst = torch.empty(0, dtype=torch.long, device=node_features.device)
+            norm = torch.empty(0, dtype=h.dtype, device=h.device)
+        else:
+            edge_index = edge_index.to(device=node_features.device, dtype=torch.long)
+            src = torch.cat([edge_index[0], edge_index[1]], dim=0)
+            dst = torch.cat([edge_index[1], edge_index[0]], dim=0)
+            valid = (
+                (src >= 0)
+                & (src < num_nodes)
+                & (dst >= 0)
+                & (dst < num_nodes)
+            )
+            src = src[valid]
+            dst = dst[valid]
+            degree = torch.zeros(num_nodes, device=h.device, dtype=h.dtype)
+            degree.index_add_(0, dst, torch.ones_like(dst, dtype=h.dtype))
+            deg_inv_sqrt = degree.clamp_min(1.0).pow(-0.5)
+            norm = deg_inv_sqrt[src] * deg_inv_sqrt[dst]
+
         for layer in self.layers:
-            # Aggregate neighbor features (degree-normalized)
-            neighbor_sum = torch.matmul(adjacency_norm, h)
+            neighbor_sum = torch.zeros_like(h)
+            if src.numel() > 0:
+                neighbor_sum.index_add_(0, dst, h[src] * norm.unsqueeze(-1))
             # Concatenate self and neighbor
             combined = torch.cat([h, neighbor_sum], dim=-1)
             h = layer(combined) + h  # Residual
@@ -766,12 +822,7 @@ class GlobalStreamEncoder(nn.Module):
         elif self.gnn_type == "gps":
             h = self._forward_gps(node_features, edge_index, edge_features)
         else:
-            # Build adjacency matrix from edge_index
-            N = node_features.shape[0]
-            adj = torch.zeros(N, N, device=node_features.device)
-            if edge_index.numel() > 0:
-                adj[edge_index[0], edge_index[1]] = 1.0
-            h = self.gnn(node_features, adj)
+            h = self.gnn(node_features, edge_index)
         
         aux_features = torch.zeros(h.shape[0], self.hidden_dim, device=h.device, dtype=h.dtype)
         if tpe is not None:

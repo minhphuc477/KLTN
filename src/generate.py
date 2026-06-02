@@ -46,6 +46,7 @@ from src.gui.ai.generation_pipeline import (
     load_canonical_generation_pipeline,
 )
 from src.pipeline.dungeon_pipeline import NeuralSymbolicDungeonPipeline, pipeline_kwargs_from_resolved_config
+from src.utils.checkpoint import safe_torch_load
 
 logger = logging.getLogger(__name__)
 
@@ -121,7 +122,7 @@ class DungeonValidator:
         if not path.exists():
             logger.warning("LogicNet checkpoint not found for DungeonValidator: %s", path)
             return
-        checkpoint = torch.load(path, map_location="cpu")
+        checkpoint = safe_torch_load(path, map_location="cpu")
         state = None
         if isinstance(checkpoint, dict):
             for key in ("logic_net_state_dict", "state_dict", "model_state_dict"):

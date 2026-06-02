@@ -31,6 +31,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.core.definitions import semantic_to_vglc_char
+from src.utils.checkpoint import safe_torch_load
 
 
 def _run(cmd: list[str]) -> None:
@@ -153,7 +154,7 @@ def train_from_scratch(
 
 def split_component_checkpoints(final_ckpt: Path, out_dir: Path) -> Dict[str, Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
-    ckpt = torch.load(final_ckpt, map_location="cpu")
+    ckpt = safe_torch_load(final_ckpt, map_location="cpu")
 
     vqvae_source = out_dir / "vqvae_pretrained.pth"
 

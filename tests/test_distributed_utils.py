@@ -6,6 +6,7 @@ from torch.utils.data.distributed import DistributedSampler
 
 from src.utils.distributed import (
     DistributedContext,
+    average_module_parameters,
     build_torchrun_command,
     make_distributed_sampler,
 )
@@ -45,3 +46,13 @@ def test_make_distributed_sampler_returns_sampler_when_world_size_exceeds_one():
     assert isinstance(sampler, DistributedSampler)
     assert sampler.num_replicas == 2
     assert sampler.rank == 1
+
+
+def test_average_module_parameters_noops_without_distributed_context():
+    module = torch.nn.Linear(2, 2)
+    before = {key: value.detach().clone() for key, value in module.state_dict().items()}
+
+    average_module_parameters(module, context=DistributedContext(enabled=False))
+
+    for key, value in module.state_dict().items():
+        assert torch.allclose(value, before[key])

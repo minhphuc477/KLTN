@@ -50,6 +50,97 @@ def test_semantic_export_preserves_entity_tiles_roundtrip():
     assert ID_TO_NAME[int(TileID.ITEM_MINOR)] == "ITEM_MINOR"
 
 
+def test_semantic_export_preserves_puzzle_vs_element_roundtrip():
+    grid = np.asarray(
+        [[int(TileID.ELEMENT), int(TileID.PUZZLE), int(TileID.ELEMENT_FLOOR)]],
+        dtype=np.int32,
+    )
+
+    line = semantic_grid_to_vglc_lines(grid)[0]
+    restored = np.asarray([[int(CHAR_TO_SEMANTIC[ch]) for ch in line]], dtype=np.int32)
+
+    assert SEMANTIC_TO_CHAR[int(TileID.ELEMENT)] != SEMANTIC_TO_CHAR[int(TileID.PUZZLE)]
+    assert line == "PXO"
+    assert restored.tolist() == grid.tolist()
+
+
+def test_pipeline_checkpoint_loader_requests_weights_only(monkeypatch, tmp_path):
+    import torch
+    from src.pipeline.runtime import _load_checkpoint_and_metadata
+
+    calls = []
+
+    def fake_load(path, **kwargs):
+        calls.append((path, kwargs))
+        return {"model_state_dict": {}}
+
+    monkeypatch.setattr(torch, "load", fake_load)
+    checkpoint_path = tmp_path / "checkpoint.pth"
+
+    checkpoint, metadata = _load_checkpoint_and_metadata(
+        SimpleNamespace(device="cpu", strict_checkpoint_mode=False),
+        str(checkpoint_path),
+        "test-model",
+    )
+
+    assert checkpoint == {"model_state_dict": {}}
+    assert metadata == {}
+    assert calls[0][1]["weights_only"] is True
+
+
+def test_src_ml_logicnet_exports_canonical_block_v_logicnet():
+    from src.core.logic_net import LogicNet as CoreLogicNet
+    from src.ml.logic_net import LegacyLogicNet, LogicNet as MlLogicNet
+
+    assert MlLogicNet is CoreLogicNet
+    assert LegacyLogicNet is not CoreLogicNet
+
+
+def test_local_stream_pools_boundary_facing_neighbor_edges():
+    import torch
+    from src.core.condition_encoder import LocalStreamEncoder
+
+    encoder = LocalStreamEncoder(latent_dim=1, hidden_dim=4, output_dim=4)
+    latent = torch.arange(12, dtype=torch.float32).view(1, 1, 3, 4)
+
+    assert encoder._pool_neighbor_latent(latent, "N").item() == torch.tensor([8, 9, 10, 11], dtype=torch.float32).mean().item()
+    assert encoder._pool_neighbor_latent(latent, "S").item() == torch.tensor([0, 1, 2, 3], dtype=torch.float32).mean().item()
+    assert encoder._pool_neighbor_latent(latent, "E").item() == torch.tensor([0, 4, 8], dtype=torch.float32).mean().item()
+    assert encoder._pool_neighbor_latent(latent, "W").item() == torch.tensor([3, 7, 11], dtype=torch.float32).mean().item()
+
+
+def test_fallback_gnn_uses_sparse_edge_index_and_handles_isolated_nodes():
+    import torch
+    from src.core.condition_encoder import FallbackGNN
+
+    gnn = FallbackGNN(node_dim=3, hidden_dim=5, output_dim=7, num_layers=1)
+    node_features = torch.randn(4, 3)
+    edge_index = torch.tensor([[0, 1], [1, 2]], dtype=torch.long)
+
+    out = gnn(node_features, edge_index)
+
+    assert out.shape == (4, 7)
+    assert torch.isfinite(out).all()
+
+
+def test_dataset_split_manifest_records_hashes_and_split(tmp_path):
+    from scripts.lock_dataset_split import build_manifest
+
+    data_root = tmp_path / "zelda"
+    (data_root / "Processed").mkdir(parents=True)
+    (data_root / "Processed" / "tloz1_1.txt").write_bytes(b"abc\n")
+    (data_root / "Original").mkdir()
+    (data_root / "Original" / "source.txt").write_text("source\n", encoding="utf-8")
+
+    manifest = build_manifest(data_root, train_dungeon_ids=[1, 2], test_dungeon_ids=[9])
+
+    assert manifest["split"]["train_dungeon_ids"] == [1, 2]
+    assert manifest["split"]["test_dungeon_ids"] == [9]
+    assert manifest["file_count"] == 2
+    by_path = {record["path"]: record for record in manifest["files"]}
+    assert by_path["Processed/tloz1_1.txt"]["sha256"] == "edeaaff3f1774ad2888673770c6d64097e391bc362d7d6fb34982ddf0efd18cb"
+
+
 def test_logicnet_uses_canonical_room_topology_channel_schema():
     assert LOGICNET_ROOM_TOPOLOGY_CHANNELS == ROOM_TOPOLOGY_CHANNELS
     assert len(LOGICNET_ROOM_TOPOLOGY_CHANNELS) > 11

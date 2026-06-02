@@ -1610,10 +1610,17 @@ class LogicNet(nn.Module):
         
         info = {}
         
-        # 1. Classify latent tiles, then lift to room resolution before
-        #    walkability/pathfinding so door constraints align with VGLC rooms.
-        latent_tile_logits = self.tile_classifier(z)
-        tile_logits = self._project_tile_logits_to_room(latent_tile_logits)
+        # 1. Resolve tile logits before walkability/pathfinding. Diffusion
+        # training can pass decoder logits directly; raw continuous latents
+        # still go through the learned classifier fallback.
+        if int(z.shape[1]) == int(self.num_classes):
+            latent_tile_logits = z
+            tile_logits = self._project_tile_logits_to_room(z)
+            info["logic_input_space"] = "tile_logits"
+        else:
+            latent_tile_logits = self.tile_classifier(z)
+            tile_logits = self._project_tile_logits_to_room(latent_tile_logits)
+            info["logic_input_space"] = "latent"
         info['latent_tile_logits'] = latent_tile_logits
         info['tile_logits'] = tile_logits
 

@@ -329,6 +329,17 @@ class TestFunMetrics:
 
         assert FrustrationAnalyzer()._compute_goal_clarity(graph, {}) == 0.0
 
+    def test_explorability_counts_canonical_secret_edge_type(self):
+        """Secret-edge scoring should honor the repo's canonical edge_type attribute."""
+        from src.evaluation.fun_analyzers import ExplorabilityAnalyzer
+
+        graph = nx.Graph()
+        graph.add_edge(0, 1, edge_type="secret")
+        graph.add_edge(1, 2, type="hidden")
+        graph.add_edge(2, 3, edge_type="open")
+
+        assert ExplorabilityAnalyzer()._count_secrets(graph) == 2
+
 
 class TestEliteArchive:
     """Tests for Elite Archive."""

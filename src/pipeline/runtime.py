@@ -26,6 +26,7 @@ from src.pipeline.types import (
     PipelineComponentFactory,
     PipelineComponents,
 )
+from src.utils.checkpoint import safe_torch_load
 
 logger = logging.getLogger(__name__)
 
@@ -441,7 +442,7 @@ def _load_checkpoint_and_metadata(
     accepted_model_types: Optional[Tuple[str, ...]] = None,
 ) -> Tuple[dict, dict]:
     """Load checkpoint and optional sidecar metadata for strict validation."""
-    checkpoint = torch.load(checkpoint_path, map_location=pipeline.device)
+    checkpoint = safe_torch_load(checkpoint_path, map_location=pipeline.device)
     metadata_path = Path(f"{checkpoint_path}.meta.json")
     metadata: dict = {}
     if metadata_path.exists():

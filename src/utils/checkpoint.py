@@ -32,6 +32,23 @@ logger = logging.getLogger(__name__)
 LATEST_RESUME_FILENAME = "latest_resume.pth"
 
 
+def safe_torch_load(
+    path: str | Path,
+    *,
+    map_location: Any = "cpu",
+    weights_only: bool = True,
+) -> Any:
+    """Load a PyTorch checkpoint with restricted unpickling when available."""
+    try:
+        return torch.load(path, map_location=map_location, weights_only=weights_only)
+    except TypeError:
+        if weights_only:
+            logger.warning(
+                "Installed PyTorch does not support weights_only=True; falling back to legacy torch.load."
+            )
+        return torch.load(path, map_location=map_location)
+
+
 def format_bytes(num_bytes: int) -> str:
     """Format a byte count into a compact human-readable string."""
     size = float(max(0, int(num_bytes)))
@@ -422,7 +439,7 @@ class CheckpointManager:
         
         # Load checkpoint
         map_location = device if device else 'cpu'
-        checkpoint = torch.load(filepath, map_location=map_location)
+        checkpoint = safe_torch_load(filepath, map_location=map_location)
         
         # Load model state
         model.load_state_dict(checkpoint['model_state_dict'])

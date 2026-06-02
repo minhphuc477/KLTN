@@ -92,9 +92,6 @@ class SoftBellmanFord(nn.Module):
                 [0.707, 1.0, 0.707]
             ])
         
-        # Normalize kernel
-        kernel = kernel / kernel.sum()
-        
         # Register as buffer (not a parameter, but moves with device)
         self.register_buffer(
             'kernel',
@@ -156,7 +153,7 @@ class SoftBellmanFord(nn.Module):
         return torch.stack(goal_values)
 
 
-class LogicNet(nn.Module):
+class LegacyLogicNet(nn.Module):
     """
     LogicNet: Neural module for differentiable dungeon solvability.
     
@@ -174,7 +171,7 @@ class LogicNet(nn.Module):
         learnable_threshold: Whether to learn walkability threshold
         
     Example:
-        >>> logic_net = LogicNet(num_iterations=30)
+        >>> logic_net = LegacyLogicNet(num_iterations=30)
         >>> prob_map = torch.rand(4, 1, 16, 11)  # Batch of 4 rooms
         >>> starts = [(2, 2)] * 4
         >>> goals = [(14, 9)] * 4
@@ -720,7 +717,7 @@ def combined_logic_loss(
     solvability_weight: float = 1.0,
     tortuosity_weight: float = 0.3,
     target_tortuosity: float = 1.5,
-    logic_net: Optional['LogicNet'] = None,
+    logic_net: Optional[nn.Module] = None,
 ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
     """
     Combined loss for solvability + path quality.
@@ -739,13 +736,30 @@ def combined_logic_loss(
     Returns:
         (total_loss, loss_dict) where loss_dict contains individual terms
     """
-    # Create LogicNet if not provided
+    # Solvability. When no explicit model is supplied, route through the
+    # canonical Block V differentiable pathfinder instead of instantiating the
+    # legacy reachability-flow module.
     if logic_net is None:
-        logic_net = LogicNet(num_iterations=30)
-        logic_net = logic_net.to(probability_map.device)
-    
-    # Solvability
-    solvability_scores = logic_net(probability_map, start_coords, goal_coords)
+        from src.core.logic_net import DifferentiablePathfinder, ReachabilityScorer
+
+        if probability_map.dim() != 4 or int(probability_map.shape[1]) != 1:
+            raise ValueError(f"probability_map must be [B,1,H,W], got {tuple(probability_map.shape)}.")
+        B, _C, H, W = probability_map.shape
+        start_mask = torch.zeros(B, H, W, device=probability_map.device, dtype=probability_map.dtype)
+        goal_mask = torch.zeros_like(start_mask)
+        for i, ((sr, sc), (gr, gc)) in enumerate(zip(start_coords, goal_coords)):
+            start_mask[i, max(0, min(int(sr), H - 1)), max(0, min(int(sc), W - 1))] = 1.0
+            goal_mask[i, max(0, min(int(gr), H - 1)), max(0, min(int(gc), W - 1))] = 1.0
+        pathfinder = DifferentiablePathfinder(num_iterations=30).to(probability_map.device)
+        scorer = ReachabilityScorer().to(probability_map.device)
+        distances = pathfinder(
+            probability_map[:, 0].clamp(0.0, 1.0),
+            torch.ones_like(probability_map[:, 0]),
+            start_mask,
+        )
+        solvability_scores = scorer(distances.view(B, -1), goal_mask.view(B, -1))
+    else:
+        solvability_scores = logic_net(probability_map, start_coords, goal_coords)
     solv_loss = solvability_loss(solvability_scores)
     
     # Tortuosity
@@ -766,6 +780,12 @@ def combined_logic_loss(
     return total_loss, loss_dict
 
 
+# Public compatibility alias: Block V's canonical implementation lives in
+# src.core.logic_net. Keep the legacy grid module available for tortuosity
+# helpers, but prevent accidental `src.ml.logic_net.LogicNet` divergence.
+from src.core.logic_net import LogicNet as LogicNet  # noqa: E402
+
+
 # =============================================================================
 # CLI FOR TESTING
 # =============================================================================
@@ -776,7 +796,7 @@ if __name__ == '__main__':
     # Test LogicNet
     print("Testing LogicNet...")
     
-    logic_net = LogicNet(num_iterations=30)
+    logic_net = LegacyLogicNet(num_iterations=30)
     
     # Create test grid: mostly walkable with some walls
     B, H, W = 4, 16, 11

@@ -324,7 +324,9 @@ class HeuristicTrainer:
         if not TORCH_AVAILABLE:
             raise ImportError("PyTorch required")
         
-        checkpoint = torch.load(path)
+        from src.utils.checkpoint import safe_torch_load
+
+        checkpoint = safe_torch_load(path, map_location="cpu")
         model = HeuristicNetwork(
             checkpoint['map_height'],
             checkpoint['map_width']

@@ -26,6 +26,7 @@ from enum import Enum
 from pathlib import Path
 import json
 import logging
+from src.utils.checkpoint import safe_torch_load
 
 logger = logging.getLogger(__name__)
 
@@ -286,7 +287,7 @@ class StyleTransferEngine:
 
         # 2) Fallback: try regular torch checkpoint/module.
         try:
-            checkpoint = torch.load(model_file, map_location=self.device)
+            checkpoint = safe_torch_load(model_file, map_location=self.device)
         except (AttributeError, RuntimeError, ValueError, TypeError) as e:
             logger.warning("Failed to load style model checkpoint: %s", e)
             return

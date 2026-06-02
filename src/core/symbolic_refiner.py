@@ -42,7 +42,7 @@ import heapq
 from collections import defaultdict, deque
 
 import numpy as np
-from src.core.definitions import SEMANTIC_PALETTE
+from src.core.definitions import SEMANTIC_PALETTE, parse_edge_type_tokens, parse_node_label_tokens
 
 try:
     import networkx as nx
@@ -300,6 +300,51 @@ class PathAnalyzer:
         """
         self.walkable_tiles = walkable_tiles or _WALKABLE_TILES
         self.walkable_tiles = set(int(v) for v in self.walkable_tiles) | CANONICAL_WALKABLE_IDS
+
+    @staticmethod
+    def _node_label_tokens(node_data: Dict[str, Any]) -> Set[str]:
+        tokens: Set[str] = set()
+        for key in ("label", "type", "node_type", "content"):
+            value = node_data.get(key)
+            if value is not None:
+                raw = str(value).strip()
+                tokens.add(raw)
+                tokens.add(raw.lower())
+                tokens.update(parse_node_label_tokens(raw))
+        return tokens
+
+    @classmethod
+    def _node_has_boss_key(cls, node_data: Dict[str, Any]) -> bool:
+        tokens = cls._node_label_tokens(node_data)
+        return (
+            "K" in tokens
+            or "boss_key" in tokens
+            or "big_key" in tokens
+            or bool(node_data.get("has_boss_key", False))
+            or bool(node_data.get("is_boss_key", False))
+        )
+
+    @classmethod
+    def _node_has_small_key(cls, node_data: Dict[str, Any]) -> bool:
+        tokens = cls._node_label_tokens(node_data)
+        return (
+            not cls._node_has_boss_key(node_data)
+            and (
+                "k" in tokens
+                or "key" in tokens
+                or "small_key" in tokens
+                or bool(node_data.get("has_key", False))
+            )
+        )
+
+    @staticmethod
+    def _edge_type_tokens(edge_data: Dict[str, Any]) -> Set[str]:
+        return set(
+            parse_edge_type_tokens(
+                label=str(edge_data.get("label", "") or ""),
+                edge_type=str(edge_data.get("edge_type", edge_data.get("type", "")) or ""),
+            )
+        )
     
     def analyze_grid(
         self,
@@ -397,19 +442,22 @@ class PathAnalyzer:
         
         # Analyze path for missing keys
         keys_available = 0
+        has_boss_key = False
         for i, node in enumerate(path):
             # Count keys at node
             node_data = graph.nodes[node]
-            if 'k' in node_data.get('label', '').split(','):
+            if self._node_has_small_key(dict(node_data)):
                 keys_available += 1
+            if self._node_has_boss_key(dict(node_data)):
+                has_boss_key = True
             
             # Check edges for locks
             if i < len(path) - 1:
                 next_node = path[i + 1]
                 edge_data = graph.edges[node, next_node]
-                edge_type = edge_data.get('edge_type', edge_data.get('label', ''))
+                edge_types = self._edge_type_tokens(dict(edge_data))
                 
-                if edge_type in ('key_locked', 'k'):
+                if edge_types.intersection({'key_locked', 'locked', 'k'}):
                     if keys_available <= 0:
                         failures.append(FailurePoint(
                             position=(node, next_node),
@@ -418,6 +466,13 @@ class PathAnalyzer:
                         ))
                     else:
                         keys_available -= 1
+                if edge_types.intersection({'boss_locked', 'K'}):
+                    if not has_boss_key:
+                        failures.append(FailurePoint(
+                            position=(node, next_node),
+                            failure_type='missing_boss_key',
+                            required_item='boss_key',
+                        ))
         
         return failures
     
@@ -579,21 +634,20 @@ class EntropyReset:
         iterations: int = 1,
     ) -> np.ndarray:
         """Expand mask by morphological dilation."""
-        expanded = mask.copy()
-        h, w = mask.shape
-        
-        for _ in range(iterations):
-            new_mask = expanded.copy()
-            for y in range(h):
-                for x in range(w):
-                    if expanded[y, x]:
-                        for dy, dx in [(0, 1), (1, 0), (0, -1), (-1, 0)]:
-                            ny, nx = y + dy, x + dx
-                            if 0 <= nx < w and 0 <= ny < h:
-                                new_mask[ny, nx] = True
-            expanded = new_mask
-        
-        return expanded
+        if iterations <= 0:
+            return mask.copy()
+
+        from scipy.ndimage import binary_dilation
+
+        structure = np.array(
+            [
+                [False, True, False],
+                [True, True, True],
+                [False, True, False],
+            ],
+            dtype=bool,
+        )
+        return binary_dilation(mask, structure=structure, iterations=int(iterations)).astype(bool)
 
 
 # ============================================================================

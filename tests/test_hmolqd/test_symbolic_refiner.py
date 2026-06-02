@@ -55,6 +55,40 @@ class TestPathAnalyzer:
 
         assert failures == []
 
+    def test_analyze_graph_requires_boss_key_before_boss_locked_edge(self):
+        """Boss-locked graph edges should fail unless the boss key was collected earlier."""
+        import networkx as nx
+        from src.core.symbolic_refiner import PathAnalyzer
+
+        analyzer = PathAnalyzer()
+        graph = nx.DiGraph()
+        graph.add_node(0, label="s")
+        graph.add_node(1, label="")
+        graph.add_node(2, label="t")
+        graph.add_edge(0, 1, edge_type="open")
+        graph.add_edge(1, 2, edge_type="boss_locked")
+
+        failures = analyzer.analyze_graph(graph, 0, 2)
+
+        assert any(f.failure_type == "missing_boss_key" for f in failures)
+
+    def test_analyze_graph_accepts_boss_key_collected_before_boss_locked_edge(self):
+        """Compact K boss-key labels should unlock later boss-locked graph edges."""
+        import networkx as nx
+        from src.core.symbolic_refiner import PathAnalyzer
+
+        analyzer = PathAnalyzer()
+        graph = nx.DiGraph()
+        graph.add_node(0, label="s")
+        graph.add_node(1, label="K")
+        graph.add_node(2, label="t")
+        graph.add_edge(0, 1, edge_type="open")
+        graph.add_edge(1, 2, edge_type="boss_locked")
+
+        failures = analyzer.analyze_graph(graph, 0, 2)
+
+        assert not any(f.failure_type == "missing_boss_key" for f in failures)
+
 
 class TestEntropyReset:
     """Tests for entropy reset mask creation."""

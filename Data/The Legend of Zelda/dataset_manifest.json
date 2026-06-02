@@ -1,0 +1,489 @@
+{
+  "data_root": "Data/The Legend of Zelda",
+  "dataset": "VGLC The Legend of Zelda",
+  "file_count": 93,
+  "files": [
+    {
+      "path": "Graph PreProcessing/LoZ 1.pdf",
+      "sha256": "1a0d49012017dabd2b85092cdb3d267144f038db5973717c2e8e7570b61effbe",
+      "size_bytes": 503474
+    },
+    {
+      "path": "Graph PreProcessing/LoZ 2.pdf",
+      "sha256": "d08f129b98403c7824de04463e8b834a4f5116a962d58d9663d0554ff412049d",
+      "size_bytes": 548073
+    },
+    {
+      "path": "Graph PreProcessing/LoZ 3.pdf",
+      "sha256": "e1273c7d2e87d6fa0a38dcd1952e305c18be3a3512100c44f348831859649394",
+      "size_bytes": 504048
+    },
+    {
+      "path": "Graph PreProcessing/LoZ 4.pdf",
+      "sha256": "62e6c6ace4254cff75285421a2fec251346539fb5e9faf107efa8da01ddb68eb",
+      "size_bytes": 548409
+    },
+    {
+      "path": "Graph PreProcessing/LoZ 5.pdf",
+      "sha256": "23f63fde640bb230486b1cbbadb5eb30fbf7811ef206f7ddf544398a02ff41d2",
+      "size_bytes": 560868
+    },
+    {
+      "path": "Graph PreProcessing/LoZ 6.pdf",
+      "sha256": "9142a4bc5bef27b1e97b64cbb60386f08ccc0a216f8126c388b51f2c96090767",
+      "size_bytes": 720130
+    },
+    {
+      "path": "Graph PreProcessing/LoZ 7.pdf",
+      "sha256": "47474699e0c1d80f7d1510b40204e086426015e9352e0c1963dbb6ba4d3cdeeb",
+      "size_bytes": 961451
+    },
+    {
+      "path": "Graph PreProcessing/LoZ 8.pdf",
+      "sha256": "00f9f7b01078e957063804f08b0018344736d8a90a9c693f9b531aa08180291a",
+      "size_bytes": 665115
+    },
+    {
+      "path": "Graph PreProcessing/LoZ 9.pdf",
+      "sha256": "39432dc391d4a8cfb8d07729094c61f97f6f001507335625e608652f0eef7142",
+      "size_bytes": 1432777
+    },
+    {
+      "path": "Graph PreProcessing/LoZ2 1.pdf",
+      "sha256": "96775b371ee70ce212e79fea861a173d1da9e6ff92873e06df92c76a5a9f14b7",
+      "size_bytes": 463266
+    },
+    {
+      "path": "Graph PreProcessing/LoZ2 2.pdf",
+      "sha256": "c7e14610a5713cef428ea8b5b19d06e48167e4573fcf8606f415da3b2e814f57",
+      "size_bytes": 570030
+    },
+    {
+      "path": "Graph PreProcessing/LoZ2 3.pdf",
+      "sha256": "8fa83a5c341e90a2dcb689d8bfc64cb1bd6120882dd3396a492f0da5f7e209ba",
+      "size_bytes": 355561
+    },
+    {
+      "path": "Graph PreProcessing/LoZ2 4.pdf",
+      "sha256": "eac79f5a1f9e4e9b4847310759ee729732a38205d75c23c03d5a791e159c05da",
+      "size_bytes": 726203
+    },
+    {
+      "path": "Graph PreProcessing/LoZ2 5.pdf",
+      "sha256": "299085f0167939b7d588cbe9700e11445f8b363a8fc472189f7dee279965e0cb",
+      "size_bytes": 504031
+    },
+    {
+      "path": "Graph PreProcessing/LoZ2 6.pdf",
+      "sha256": "bee9b236eb963ef316c9bd8c3d388cd1343f2fca8fb8a7a6d448607a430952ac",
+      "size_bytes": 655486
+    },
+    {
+      "path": "Graph PreProcessing/LoZ2 7.pdf",
+      "sha256": "ae8a083cda6c83b3e6ac649981a1d6b6df4086b989d5536dfc698f09e4d38fec",
+      "size_bytes": 862151
+    },
+    {
+      "path": "Graph PreProcessing/LoZ2 8.pdf",
+      "sha256": "e3c4e6085a584776e03b1a37972c4db37462f88955e3920dfeddda5f24c87ca8",
+      "size_bytes": 1195188
+    },
+    {
+      "path": "Graph PreProcessing/LoZ2 9.pdf",
+      "sha256": "1b50d0cdfab6704b0f6750ca250fe154463fdd5a5b14b17d0cebcb2e02ecbc2a",
+      "size_bytes": 1378279
+    },
+    {
+      "path": "Graph Processed/LoZ2_1.dot",
+      "sha256": "9342d32a4b8ed9f35cbd02bae853a48f1952532d966ea8dce4015d5aa0969658",
+      "size_bytes": 928
+    },
+    {
+      "path": "Graph Processed/LoZ2_1.svg",
+      "sha256": "2cfe31231489aa716b983fedba6c30327bb22feadef164b782733ff96d701115",
+      "size_bytes": 16425
+    },
+    {
+      "path": "Graph Processed/LoZ2_2.dot",
+      "sha256": "1419e3ff75ec90f33a084e72739d0c500721d95a45877387f84e429053059dcd",
+      "size_bytes": 1452
+    },
+    {
+      "path": "Graph Processed/LoZ2_2.svg",
+      "sha256": "8d528daad1ce3a43ee3671b97cfa5130fd82791744fcede7926136614ee79c3f",
+      "size_bytes": 26115
+    },
+    {
+      "path": "Graph Processed/LoZ2_3.dot",
+      "sha256": "0a1ea729aee0733db4adf10e7d5d90d67e8450059f9c2016e88959ea77c16c39",
+      "size_bytes": 650
+    },
+    {
+      "path": "Graph Processed/LoZ2_3.svg",
+      "sha256": "af53e9a8252117417eb761c30d2627ce490c84c75b7357abb769979bee0e8c7e",
+      "size_bytes": 11372
+    },
+    {
+      "path": "Graph Processed/LoZ2_4.dot",
+      "sha256": "9a17e0e27f1156c78c1f26d5c0dc894f01160606e8ea04a74076f39e306bf7b7",
+      "size_bytes": 2307
+    },
+    {
+      "path": "Graph Processed/LoZ2_4.svg",
+      "sha256": "77e03b980e68896a4a2c659935a19b642cee9470759565cf773d53bd61e01b0f",
+      "size_bytes": 40205
+    },
+    {
+      "path": "Graph Processed/LoZ2_5.dot",
+      "sha256": "da8aaad3775ed323f209696c884e8738cfd0aaec779753e48c1ce4167e7ef4d0",
+      "size_bytes": 1059
+    },
+    {
+      "path": "Graph Processed/LoZ2_5.svg",
+      "sha256": "eedbf4396af9ac457bc1d75d85de50e83ac62c673baf88c82d73d6e455c8ca20",
+      "size_bytes": 17696
+    },
+    {
+      "path": "Graph Processed/LoZ2_6.dot",
+      "sha256": "c6fb5f0acc949d46d12c40e8262c26f2077c877b4e59424cedf8f3f5433e6ad0",
+      "size_bytes": 1927
+    },
+    {
+      "path": "Graph Processed/LoZ2_6.svg",
+      "sha256": "6deff22521a2ac0a7367baeb9a514d0281a79941c21734c6c01bd1a7b9815700",
+      "size_bytes": 34491
+    },
+    {
+      "path": "Graph Processed/LoZ2_7.dot",
+      "sha256": "85251d1071c7772d52fedf2bc528aeb08d298ef7df37e031f58b719800385d4b",
+      "size_bytes": 1818
+    },
+    {
+      "path": "Graph Processed/LoZ2_7.svg",
+      "sha256": "c303918565ffdd7a532ba29455f9d448188c61b05c351e8bea8a179260a0f159",
+      "size_bytes": 31593
+    },
+    {
+      "path": "Graph Processed/LoZ2_8.dot",
+      "sha256": "43ffb0e75fe5b18a150c95942f7021a96c4454d13ff7f64eeaa5ff230877a86a",
+      "size_bytes": 2245
+    },
+    {
+      "path": "Graph Processed/LoZ2_8.svg",
+      "sha256": "0e92767fd9ea9fe7984939f550d5541a5a1248d001857598ed5640efea656e39",
+      "size_bytes": 39108
+    },
+    {
+      "path": "Graph Processed/LoZ2_9.dot",
+      "sha256": "85f6126c715fbfc397d71cb43b711e165b880b3daa8eaff347b8f3ab070688fb",
+      "size_bytes": 4524
+    },
+    {
+      "path": "Graph Processed/LoZ2_9.svg",
+      "sha256": "22a328bfadea0fcf82a75a815358265cd3840891a8f48892c758ea371ba8ae3a",
+      "size_bytes": 78555
+    },
+    {
+      "path": "Graph Processed/LoZ_1.dot",
+      "sha256": "321b65bf5586c9c0d4ff58d4c46860582d1a2405553e6a1f85e5116f2a0af235",
+      "size_bytes": 1147
+    },
+    {
+      "path": "Graph Processed/LoZ_1.svg",
+      "sha256": "3b91ab8bdb59a0ce2164dbcd875a9ff49efaf8572fdea1caad3b45f4c4d07a4c",
+      "size_bytes": 20521
+    },
+    {
+      "path": "Graph Processed/LoZ_2.dot",
+      "sha256": "deefb7182ec21a6bba62738b3a9b095c749ca90d36eab8eac95ce26847463673",
+      "size_bytes": 1301
+    },
+    {
+      "path": "Graph Processed/LoZ_2.svg",
+      "sha256": "caa3658d513d2e66b8466c3a5f0a2f730966ae0cdf55a86d00d8bcd80ce3e0de",
+      "size_bytes": 23740
+    },
+    {
+      "path": "Graph Processed/LoZ_3.dot",
+      "sha256": "da3beec48e931a09e2e455f886ea9f3f2f3e37f7b8fb35a0dce0884092d4271e",
+      "size_bytes": 1250
+    },
+    {
+      "path": "Graph Processed/LoZ_3.svg",
+      "sha256": "8950d941d4a6affa604a1010c5f39a3e44b1c19652c25bb6a8f88d6a2e465020",
+      "size_bytes": 21821
+    },
+    {
+      "path": "Graph Processed/LoZ_4.dot",
+      "sha256": "1f9f7f546ae07b8ecc4492e6bf3ef984fc1ff3d9228a26e21425b9e13e854d78",
+      "size_bytes": 1725
+    },
+    {
+      "path": "Graph Processed/LoZ_4.svg",
+      "sha256": "93c9f31c8a0c2e05c69436cbdaea8371a1edc235b27a95cafdfcbfa2e92e8c0d",
+      "size_bytes": 31097
+    },
+    {
+      "path": "Graph Processed/LoZ_5.dot",
+      "sha256": "27f94451ebba2bd57444d86a5bf4512270a3325ede0dc44c6287cd1090f51b9e",
+      "size_bytes": 1562
+    },
+    {
+      "path": "Graph Processed/LoZ_5.svg",
+      "sha256": "b73636037a90455fefa4a4cf9222ddffebc692c1df9000e33523ff13170be057",
+      "size_bytes": 28600
+    },
+    {
+      "path": "Graph Processed/LoZ_6.dot",
+      "sha256": "4c63c896630bd7f4a4fb169414064bff14aacd89bad2457cafed32c467ff5c28",
+      "size_bytes": 1664
+    },
+    {
+      "path": "Graph Processed/LoZ_6.svg",
+      "sha256": "a6e2f47c0e115d2d890a9481a0ed9fefe34191f2e733ccbbd5d073a18ac4b5e5",
+      "size_bytes": 29793
+    },
+    {
+      "path": "Graph Processed/LoZ_7.dot",
+      "sha256": "d949f405f6373b5f563a751d36fb7c68cb5951d95a4d98972072000c8c3c1c09",
+      "size_bytes": 2230
+    },
+    {
+      "path": "Graph Processed/LoZ_7.svg",
+      "sha256": "c7687102acf3cd4b3b2d5fb2a0847912a9ca4e477f9103df3f05b8dd2e74b179",
+      "size_bytes": 40001
+    },
+    {
+      "path": "Graph Processed/LoZ_8.dot",
+      "sha256": "15c50d87403b1bd20034f20b4f0634fa3f208b8c290ea601663fd05890c9997c",
+      "size_bytes": 1707
+    },
+    {
+      "path": "Graph Processed/LoZ_8.svg",
+      "sha256": "a5fa97bccf7b71c61d2f1397ba049ad2e8e0182515b3ece6d3c746bef3f38006",
+      "size_bytes": 29945
+    },
+    {
+      "path": "Graph Processed/LoZ_9.dot",
+      "sha256": "d6eec879007db31801338fe70b27f0cebebb55d2d53b99a6fbab7f759274aa47",
+      "size_bytes": 4122
+    },
+    {
+      "path": "Graph Processed/LoZ_9.svg",
+      "sha256": "7324992860a0bd4e003ef5bb26c8e3bbb720fac99616328b83027bf1e7d7d2bc",
+      "size_bytes": 76172
+    },
+    {
+      "path": "Original/source.txt",
+      "sha256": "d6fb377eac55c8b94e7e49d8a5d08686208789caaa82b134a76e316f1efbbc65",
+      "size_bytes": 29
+    },
+    {
+      "path": "Original/tloz1_1.png",
+      "sha256": "a9bfc792b4fbe9980bacaca0c731defa7437bd2120cd1a29cda3a82e339f1e91",
+      "size_bytes": 64236
+    },
+    {
+      "path": "Original/tloz1_2.png",
+      "sha256": "75a3cc2c47b1fa26646e8975981a38d155fb51655e8b328b899115bbcdbad835",
+      "size_bytes": 74325
+    },
+    {
+      "path": "Original/tloz2_1.png",
+      "sha256": "70f0c9cd021e07304ed226c5272193ebf5aafebdf73d86eff3799eb55df4690c",
+      "size_bytes": 71767
+    },
+    {
+      "path": "Original/tloz2_2.png",
+      "sha256": "faa94447e8708adc69a46d70e910a35fff48aa3a17cf8a5125f1d573944611d0",
+      "size_bytes": 71722
+    },
+    {
+      "path": "Original/tloz3_1.png",
+      "sha256": "ee0404e5595dd3d021072a93580bdc8b5d8095659d62fa2908796db6c7b98c1c",
+      "size_bytes": 65565
+    },
+    {
+      "path": "Original/tloz3_2.png",
+      "sha256": "dbadf2ec4241f97639453a11f70811aa8eaa6acec6ce47166d6f5ee659473bf8",
+      "size_bytes": 55731
+    },
+    {
+      "path": "Original/tloz4_1.png",
+      "sha256": "35f24388ef67c7592090de44451db2cec7f72bbcd6063c5965553008d9925ac4",
+      "size_bytes": 72289
+    },
+    {
+      "path": "Original/tloz4_2.png",
+      "sha256": "91aba074b892ae13c6d499895e5084cf532a27634702279c27f2d28745fcbe42",
+      "size_bytes": 94284
+    },
+    {
+      "path": "Original/tloz5_1.png",
+      "sha256": "7b25fd73cf2db1a42dbffc8b2e7b81a0e0b74563fe4b9ea779fba85edf168c0b",
+      "size_bytes": 77344
+    },
+    {
+      "path": "Original/tloz5_2.png",
+      "sha256": "ab924c1e819494b21dfb892bdf810731af3e8bbb7df974e6a1f5c1996d086b81",
+      "size_bytes": 65638
+    },
+    {
+      "path": "Original/tloz6_1.png",
+      "sha256": "e6bd68b9b4b8f281bc6747b7489772d2f0e33de7645c818af73aba7343d06202",
+      "size_bytes": 85682
+    },
+    {
+      "path": "Original/tloz6_2.png",
+      "sha256": "2e8fe9efe9611917a39e967166f9f715e0a9a93c1ffa67ff2147c4283e2c1659",
+      "size_bytes": 84365
+    },
+    {
+      "path": "Original/tloz7_1.png",
+      "sha256": "6ad383b103233b88bf0acadbc0af0a78f178c09d4e675762e13518ae4187e141",
+      "size_bytes": 104593
+    },
+    {
+      "path": "Original/tloz7_2.png",
+      "sha256": "ba494f22ca3f6673265c9886fa9e7d907fee8f968a6b9a6d4671a14b3467cc57",
+      "size_bytes": 90090
+    },
+    {
+      "path": "Original/tloz8_1.png",
+      "sha256": "410017c4958c2207846652db4ccc6b28840c440de3690fe7aaba2eca88324ea1",
+      "size_bytes": 86368
+    },
+    {
+      "path": "Original/tloz8_2.png",
+      "sha256": "42af0b3c1e83445ffd3f703fe63b1a1ce52bb1b81ecf2a8385036cf293130a9d",
+      "size_bytes": 120051
+    },
+    {
+      "path": "Original/tloz9_1.png",
+      "sha256": "0ffe32376eb2ea008b396851f8e91f07f4a7d271541a20a17180814c95bf93be",
+      "size_bytes": 142506
+    },
+    {
+      "path": "Original/tloz9_2.png",
+      "sha256": "b16fd9559b4bdd8809998418341c0a3a30266d9c1445289abc5da8354bfd4f6c",
+      "size_bytes": 129001
+    },
+    {
+      "path": "Processed/README.txt",
+      "sha256": "b73e745a84f6db6fac07de401b9e151cc70ac6bf17f44e2a09d081637505e913",
+      "size_bytes": 169
+    },
+    {
+      "path": "Processed/tloz1_1.txt",
+      "sha256": "387587d8b5e21854cb0787073f260330bc503c81f63e9d75065e30eea0dc3654",
+      "size_bytes": 6528
+    },
+    {
+      "path": "Processed/tloz1_2.txt",
+      "sha256": "4153cb8bb95b44982d9608efd63df3a1ab94803c1c7c6987bd560919e9733ebf",
+      "size_bytes": 2880
+    },
+    {
+      "path": "Processed/tloz2_1.txt",
+      "sha256": "21ea6b5cce38ac5d3b5fc6cf234ba94fe708fafbe14fec34aa298fbfdb58864c",
+      "size_bytes": 5760
+    },
+    {
+      "path": "Processed/tloz2_2.txt",
+      "sha256": "0379887660128d4f90a45c03594bd2dbfa690af5a1dca3a6c2a0783f7ecd1dad",
+      "size_bytes": 4320
+    },
+    {
+      "path": "Processed/tloz3_1.txt",
+      "sha256": "5b848e2492cb8fc5528e185a756423a8b029cc7c0935fd9f7a83b6178566832f",
+      "size_bytes": 5440
+    },
+    {
+      "path": "Processed/tloz3_2.txt",
+      "sha256": "49da3a12e996121a4369de0c7af179982da84e23fd7f0cc46f63aabadd960e62",
+      "size_bytes": 5056
+    },
+    {
+      "path": "Processed/tloz4_1.txt",
+      "sha256": "dfa5c3de73ce869d5d31407475e42a75b960aeaaa9c9ab9649c686a22f4b284c",
+      "size_bytes": 5760
+    },
+    {
+      "path": "Processed/tloz4_2.txt",
+      "sha256": "ae8232edb9b23845fce403ba62af1878bddde8edbf59176af35d843793214bd7",
+      "size_bytes": 5760
+    },
+    {
+      "path": "Processed/tloz5_1.txt",
+      "sha256": "f8d497eecad5011e8f217e786b72ba557671d78beeb970936cde278d13889684",
+      "size_bytes": 5760
+    },
+    {
+      "path": "Processed/tloz5_2.txt",
+      "sha256": "33daa1945822d9993a67eff31a15958269189f1131bac6cdea9b97921239176a",
+      "size_bytes": 4320
+    },
+    {
+      "path": "Processed/tloz6_1.txt",
+      "sha256": "2cd13e28d34b406c2f777ec7dc9bb30a3a1e0019e895aa090785e3e9983fcbd5",
+      "size_bytes": 8640
+    },
+    {
+      "path": "Processed/tloz6_2.txt",
+      "sha256": "64e07766117dd5346b4fdc66cc0e60b644f8a6fbabe0dea1856733ae7348a664",
+      "size_bytes": 8640
+    },
+    {
+      "path": "Processed/tloz7_1.txt",
+      "sha256": "4a9d301838801d3e3f1ef535d0c5b2669a6013b03d11fc43416e381ed3e781a3",
+      "size_bytes": 8640
+    },
+    {
+      "path": "Processed/tloz7_2.txt",
+      "sha256": "0e8f811370371b0d78615ee5d923214fb8407c23921e4971cd1f296ffab5fad0",
+      "size_bytes": 8848
+    },
+    {
+      "path": "Processed/tloz8_1.txt",
+      "sha256": "c44a13f76401210b6e8985fe6b01120a3397c4e4e83c9a2482712d9c6a3f43b6",
+      "size_bytes": 7200
+    },
+    {
+      "path": "Processed/tloz8_2.txt",
+      "sha256": "8508ac513d88a70e2da1ca59ec599ccafc43b1b2d311d32ce08d6ac350871a3d",
+      "size_bytes": 11520
+    },
+    {
+      "path": "Processed/tloz9_1.txt",
+      "sha256": "1f1cd3eda4345d14093e7b783b146dab3cb319dd3ae9829750735b5ca97dc9ca",
+      "size_bytes": 11520
+    },
+    {
+      "path": "Processed/tloz9_2.txt",
+      "sha256": "1aa795f2ee0702a869a2c2984d0a283971139fa2eaf658189836ba5eb9690e3d",
+      "size_bytes": 11520
+    },
+    {
+      "path": "zelda.json",
+      "sha256": "5e9e259dbbfe6a5c631b684c22636731aa730de96b1a53b9d6162cc002486fde",
+      "size_bytes": 684
+    }
+  ],
+  "generated_at_utc": "2026-06-02T19:00:54.708338+00:00",
+  "schema_version": "1.0",
+  "split": {
+    "test_dungeon_ids": [
+      9
+    ],
+    "train_dungeon_ids": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8
+    ]
+  }
+}

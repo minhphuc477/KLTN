@@ -30,7 +30,12 @@ import torch
 import torch.nn as nn
 
 from src.pipeline.room_topology_conditioning import build_topology_anchor_policy_metadata
-from src.utils.checkpoint import atomic_torch_save, log_checkpoint_artifact, write_checkpoint_metadata
+from src.utils.checkpoint import (
+    atomic_torch_save,
+    log_checkpoint_artifact,
+    safe_torch_load,
+    write_checkpoint_metadata,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -265,7 +270,7 @@ def save_fast_sampler_checkpoint(
 
 
 def load_fast_sampler_checkpoint(path: str) -> Tuple[Dict[str, torch.Tensor], FastSamplerCheckpointInfo]:
-    payload = torch.load(path, map_location="cpu", weights_only=False)
+    payload = safe_torch_load(path, map_location="cpu")
     if not isinstance(payload, dict) or "lora_state_dict" not in payload or "metadata" not in payload:
         raise ValueError(f"Invalid fast-sampler checkpoint format at {path!r}.")
     metadata = payload["metadata"]

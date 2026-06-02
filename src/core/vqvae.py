@@ -31,6 +31,7 @@ Architecture:
 
 import logging
 import math
+import threading
 from typing import Dict, List, Tuple, Optional, Any, Sequence
 
 import torch
@@ -144,6 +145,16 @@ class VectorQuantizer(nn.Module):
         self._dead_code_warmup_steps = int(max(0, dead_code_warmup_steps))
         self._protect_active_codes_during_reset = bool(protect_active_codes_during_reset)
         self._max_dead_code_resets_per_event = int(max(0, max_dead_code_resets_per_event))
+        self._codebook_update_lock = threading.RLock()
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state.pop("_codebook_update_lock", None)
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        self._codebook_update_lock = threading.RLock()
     
     def forward(
         self,
@@ -227,9 +238,9 @@ class VectorQuantizer(nn.Module):
         losses['perplexity'] = perplexity
         
         # Update usage statistics in both train and eval so monitoring reflects
-        # the most recent workload. Dead-code resets remain training-only via
-        # _ema_update above.
-        with torch.no_grad():
+        # the most recent workload. Guard this with the same lock as EMA
+        # updates because eval hooks can run concurrently with training.
+        with self._codebook_update_lock, torch.no_grad():
             batch_usage = torch.bincount(
                 indices, minlength=self.num_embeddings
             ).to(device=self.codebook_usage.device, dtype=self.codebook_usage.dtype)
@@ -250,7 +261,7 @@ class VectorQuantizer(nn.Module):
     
     def _ema_update(self, z_flat: Tensor, indices: Tensor):
         """Update codebook using exponential moving average (DDP-safe)."""
-        with torch.no_grad():
+        with self._codebook_update_lock, torch.no_grad():
             encodings = F.one_hot(indices, self.num_embeddings).float()
             
             # Update cluster sizes
@@ -283,6 +294,7 @@ class VectorQuantizer(nn.Module):
                 (self.ema_cluster_size + self.epsilon)
                 / (n + self.num_embeddings * self.epsilon) * n
             )
+            cluster_size_smoothed = cluster_size_smoothed.clamp(min=self.epsilon)
             
             # Update embeddings
             self.embedding.weight.data = (
@@ -305,7 +317,7 @@ class VectorQuantizer(nn.Module):
         DDP-safe: replacement vectors are determined on rank-0 and
         broadcast to all replicas.
         """
-        with torch.no_grad():
+        with self._codebook_update_lock, torch.no_grad():
             if self._reset_counter < self._dead_code_warmup_steps:
                 return
 

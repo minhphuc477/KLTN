@@ -11,6 +11,7 @@ from src.config_system import load_resolved_config_for_artifact
 from src.pipeline.block_contracts import BlockContractError, validate_checkpoint_metadata
 from src.pipeline.dungeon_pipeline import pipeline_kwargs_from_resolved_config
 from src.pipeline.spatial_utils import normalize_node_id, stable_node_sort_key
+from src.utils.checkpoint import safe_torch_load
 
 
 def _repo_root() -> Path:
@@ -466,8 +467,6 @@ def generate_comprehensive_demo_graph(seed=None):
 
 def _resolve_vqvae_checkpoint_for_generation(checkpoint_path: Path):
     """Prefer an embedded VQ-VAE, otherwise fall back to sibling pretrain weights."""
-    import torch
-
     repo_root = _repo_root()
     metadata, _metadata_path = _load_checkpoint_metadata(checkpoint_path)
     metadata_vqvae = None
@@ -490,7 +489,7 @@ def _resolve_vqvae_checkpoint_for_generation(checkpoint_path: Path):
         checkpoint_path.parent.parent / "vqvae" / "latest_resume.pth",
     ]
     try:
-        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+        checkpoint = safe_torch_load(checkpoint_path, map_location="cpu")
     except (AttributeError, RuntimeError, ValueError, TypeError, OSError):
         checkpoint = None
 

@@ -68,6 +68,27 @@ class _CountingVQVAE:
         return latent_value.expand(-1, 4, 2, 2).contiguous(), torch.zeros(x_onehot.shape[0], dtype=torch.long)
 
 
+class _DecodeTrackingVQVAE:
+    def __init__(self):
+        self.decode_calls = 0
+        self.last_latent_requires_grad = None
+
+    def decode(self, latent, target_size=None):
+        self.decode_calls += 1
+        self.last_latent_requires_grad = bool(latent.requires_grad)
+        batch_size = int(latent.shape[0])
+        height, width = target_size or (ROOM_HEIGHT, ROOM_WIDTH)
+        base = latent.mean(dim=1, keepdim=True)
+        logits = torch.zeros(batch_size, 44, height, width, device=latent.device, dtype=latent.dtype)
+        logits[:, 1:2] = torch.nn.functional.interpolate(
+            base,
+            size=(height, width),
+            mode="bilinear",
+            align_corners=False,
+        )
+        return logits
+
+
 def test_configure_guidance_wires_logic_net_and_sampling_limits():
     trainer = DiffusionTrainer.__new__(DiffusionTrainer)
     trainer.logic_net = object()
@@ -134,6 +155,33 @@ class _DummyTrainingLossModule(_TinyModule):
     def training_loss(self, z_0, conditioning, graph_data=None):
         _ = (z_0, conditioning, graph_data)
         return torch.tensor(self.loss_value, dtype=torch.float32)
+
+
+class _TinyDiffusionWithDenoiser(_DummyTrainingLossModule):
+    def __init__(self):
+        super().__init__(0.25)
+        self.num_timesteps = 4
+        self.prediction_type = "epsilon"
+        class _KwargDenoiser(torch.nn.Conv2d):
+            def forward(self, x, t, context, **kwargs):
+                _ = (t, context, kwargs)
+                return super().forward(x)
+
+        self.denoiser = _KwargDenoiser(4, 4, kernel_size=1)
+        self.register_buffer("sqrt_alphas_cumprod", torch.ones(4))
+        self.register_buffer("sqrt_one_minus_alphas_cumprod", torch.full((4,), 0.1))
+
+    def q_sample(self, z_0, t, noise):
+        _ = t
+        return z_0 + 0.1 * noise
+
+    def _extract_context_topology(self, conditioning, graph_data):
+        _ = (conditioning, graph_data)
+        return None, None
+
+    def _extract_spatial_graph_context(self, conditioning, graph_data):
+        _ = (conditioning, graph_data)
+        return None
 
 
 class _DummyRoomAwareConditionEncoder:
@@ -793,6 +841,63 @@ def test_train_step_skips_nonfinite_diffusion_loss():
     assert metrics["skipped_nonfinite_batch"] == pytest.approx(1.0)
     assert metrics["loss"] == pytest.approx(0.0)
     assert trainer.global_step == 1
+
+
+def test_train_step_predicted_latent_decodes_to_tile_logits_for_logic_loss():
+    class _ShapeRecordingLogicNet(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.scale = torch.nn.Parameter(torch.tensor(1.0))
+            self.last_shape = None
+
+        def forward(self, z_input, graph_data=None):
+            _ = graph_data
+            self.last_shape = tuple(z_input.shape)
+            return z_input[:, 1].mean() * self.scale, {}
+
+    trainer = DiffusionTrainer.__new__(DiffusionTrainer)
+    trainer.device = torch.device("cpu")
+    trainer.config = SimpleNamespace(
+        num_classes=44,
+        alpha_visual=1.0,
+        alpha_logic=0.1,
+        logic_loss_mode="predicted_latent",
+        logic_net_enabled=True,
+        grad_clip_norm=1.0,
+        epochs=1,
+        learning_rate=1e-3,
+        global_lr_warmup_epochs=0,
+        logic_lr_warmup_epochs=0,
+        logic_net_trainable=True,
+    )
+    trainer.diffusion = _TinyDiffusionWithDenoiser()
+    trainer.condition_encoder = _TinyModule()
+    trainer.logic_net = _ShapeRecordingLogicNet()
+    trainer.vqvae = _DecodeTrackingVQVAE()
+    trainer.ema_diffusion = _DummyEvalModel()
+    trainer.optimizer = torch.optim.SGD(
+        list(trainer.diffusion.parameters())
+        + list(trainer.condition_encoder.parameters())
+        + list(trainer.logic_net.parameters()),
+        lr=1e-3,
+    )
+    trainer.global_step = 0
+    trainer._nonfinite_warning_counts = {}
+    trainer.encode_to_latent = lambda real_maps: torch.zeros(
+        (real_maps.shape[0], 4, 2, 2),
+        dtype=torch.float32,
+    )
+    trainer.get_dummy_conditioning = lambda batch_size: torch.zeros((batch_size, 1, 8), dtype=torch.float32)
+
+    metrics = DiffusionTrainer.train_step(
+        trainer,
+        torch.zeros((2, 1, ROOM_HEIGHT, ROOM_WIDTH), dtype=torch.float32),
+    )
+
+    assert metrics.get("skipped_nonfinite_batch", 0.0) == pytest.approx(0.0)
+    assert trainer.vqvae.decode_calls == 1
+    assert trainer.vqvae.last_latent_requires_grad is True
+    assert trainer.logic_net.last_shape == (2, 44, ROOM_HEIGHT, ROOM_WIDTH)
 
 
 def test_validate_skips_nonfinite_generated_samples():

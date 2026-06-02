@@ -931,12 +931,8 @@ def test_diffusion_trainer_updates_config_to_loaded_vqvae_architecture(tmp_path:
         vqvae_mrf_penalty_weight=0.125,
     )
 
-    vqvae = trainer._create_vqvae()
-
-    assert vqvae.codebook_size == 512
-    assert trainer.config.vqvae_codebook_size == 512
-    assert trainer.config.vqvae_use_coordconv is True
-    assert trainer.config.vqvae_mrf_penalty_weight == pytest.approx(0.05)
+    with pytest.raises(ValueError, match="metadata mismatch for codebook_size"):
+        trainer._create_vqvae()
 
 
 def test_build_diffusion_training_config_from_args_preserves_yaml_only_methodology_knobs(tmp_path: Path):

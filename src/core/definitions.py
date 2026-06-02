@@ -143,6 +143,8 @@ CHAR_TO_SEMANTIC: Dict[str, int] = {
     'm': TileID.ENEMY,
     'P': TileID.ELEMENT,
     'p': TileID.ELEMENT,
+    'X': TileID.PUZZLE,
+    'x': TileID.PUZZLE,
     'O': TileID.ELEMENT_FLOOR,  # Element+Floor (walkable)
     'o': TileID.ELEMENT_FLOOR,
     'I': TileID.ELEMENT,        # Element+Block (not walkable)
@@ -195,12 +197,12 @@ SEMANTIC_TO_CHAR: Dict[int, str] = {
     int(TileID.ELEMENT): "P",
     int(TileID.ELEMENT_FLOOR): "O",
     int(TileID.STAIR): "S",
-    int(TileID.PUZZLE): "P",
+    int(TileID.PUZZLE): "X",
 }
 
 # Characters that represent walkable tiles
 WALKABLE_CHARS: Set[str] = {
-    'F', 'f', '.', 'O', 'o', 'D', 'd', 'S', 's',
+    'F', 'f', '.', 'O', 'o', 'D', 'd', 'S', 's', 'X', 'x',
     'A', 'a', 'T', 't', 'K', 'k', 'Q', 'q', 'J', 'j', 'C', 'c', 'Z', 'z',
 }
 

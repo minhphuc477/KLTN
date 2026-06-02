@@ -23,9 +23,97 @@ from src.core.definitions import (
     ROOM_TOPOLOGY_CHANNELS,
     ROOM_WIDTH,
 )
-from src.core.latent_diffusion import UNetDenoiser
 
 logger = logging.getLogger(__name__)
+
+
+class MaskedTokenTransformerBackbone(nn.Module):
+    """Bidirectional MaskGIT-style backbone for masked token prediction."""
+
+    def __init__(
+        self,
+        *,
+        hidden_dim: int,
+        context_dim: int,
+        num_steps: int,
+        num_layers: int,
+        num_heads: int,
+        dropout: float,
+        room_topology_channels: int,
+    ):
+        super().__init__()
+        self.hidden_dim = int(hidden_dim)
+        num_heads = int(max(1, num_heads))
+        if self.hidden_dim % num_heads != 0:
+            raise ValueError(
+                f"hidden_dim={self.hidden_dim} must be divisible by num_heads={num_heads} "
+                "for the masked-token transformer backbone."
+            )
+        self.context_proj = nn.Linear(int(context_dim), self.hidden_dim)
+        self.step_embedding = nn.Embedding(int(max(1, num_steps)), self.hidden_dim)
+        self.room_topology_proj = nn.Conv2d(int(room_topology_channels), self.hidden_dim, kernel_size=1)
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=self.hidden_dim,
+            nhead=num_heads,
+            dim_feedforward=max(self.hidden_dim * 4, self.hidden_dim),
+            dropout=float(max(0.0, min(1.0, dropout))),
+            activation="gelu",
+            batch_first=True,
+            norm_first=True,
+        )
+        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=int(max(1, num_layers)))
+        self.norm = nn.LayerNorm(self.hidden_dim)
+
+    def _context_tokens(self, context: Tensor) -> Tensor:
+        if context.dim() == 2:
+            context = context.unsqueeze(1)
+        if context.dim() != 3:
+            raise ValueError(f"context must be [B,C] or [B,N,C], got {tuple(context.shape)}.")
+        return self.context_proj(context)
+
+    def _topology_bias(self, graph_data: Optional[Dict[str, Tensor]], *, batch_size: int, device: torch.device) -> Optional[Tensor]:
+        if not isinstance(graph_data, dict):
+            return None
+        topo = graph_data.get("room_topology_map")
+        if not isinstance(topo, torch.Tensor):
+            return None
+        topo = topo.to(device=device, dtype=self.room_topology_proj.weight.dtype)
+        if topo.dim() == 3:
+            topo = topo.unsqueeze(0)
+        if int(topo.shape[0]) == 1 and batch_size > 1:
+            topo = topo.expand(batch_size, -1, -1, -1)
+        if tuple(topo.shape[0:1]) != (batch_size,) or tuple(topo.shape[-2:]) != (ROOM_HEIGHT, ROOM_WIDTH):
+            raise ValueError(
+                f"room_topology_map must match [B,C,{ROOM_HEIGHT},{ROOM_WIDTH}], got {tuple(topo.shape)}."
+            )
+        return self.room_topology_proj(topo)
+
+    def forward(
+        self,
+        x: Tensor,
+        step: Tensor,
+        context: Tensor,
+        *,
+        graph_data: Optional[Dict[str, Tensor]] = None,
+    ) -> Tensor:
+        if x.dim() != 4:
+            raise ValueError(f"x must be [B,C,H,W], got {tuple(x.shape)}.")
+        batch_size, channels, height, width = x.shape
+        if channels != self.hidden_dim:
+            raise ValueError(f"x has {channels} channels, expected hidden_dim={self.hidden_dim}.")
+
+        topo_bias = self._topology_bias(graph_data, batch_size=batch_size, device=x.device)
+        if topo_bias is not None:
+            x = x + topo_bias.to(dtype=x.dtype)
+
+        step = step.to(device=x.device, dtype=torch.long).clamp(min=0, max=self.step_embedding.num_embeddings - 1)
+        x = x + self.step_embedding(step)[:, :, None, None].to(dtype=x.dtype)
+        room_tokens = x.flatten(2).transpose(1, 2)
+        context_tokens = self._context_tokens(context).to(device=x.device, dtype=x.dtype)
+        sequence = torch.cat([context_tokens, room_tokens], dim=1)
+        encoded = self.encoder(sequence)
+        encoded_room = self.norm(encoded[:, context_tokens.shape[1]:])
+        return encoded_room.transpose(1, 2).reshape(batch_size, self.hidden_dim, height, width)
 
 
 class DiscreteMaskedRoomModel(nn.Module):
@@ -77,23 +165,24 @@ class DiscreteMaskedRoomModel(nn.Module):
         )
         nn.init.normal_(self.position_embedding, mean=0.0, std=0.02)
 
-        self.denoiser = UNetDenoiser(
-            in_channels=self.hidden_dim,
-            out_channels=self.hidden_dim,
-            model_channels=model_channels,
+        _ = (
+            model_channels,
+            attention_mode,
+            topology_conditioning_mode,
+            hedgehog_feature_dim,
+            graph_auto_linear_attention_nodes,
+            spatial_graph_gate_init,
+            spatial_topology_gate_init,
+            unet_attention_resolutions,
+        )
+        self.backbone = MaskedTokenTransformerBackbone(
+            hidden_dim=self.hidden_dim,
             context_dim=context_dim,
-            channel_mult=tuple(int(v) for v in unet_channel_mult),
-            num_res_blocks=int(unet_num_res_blocks),
-            attention_resolutions=tuple(int(v) for v in unet_attention_resolutions),
+            num_steps=self.default_num_steps,
+            num_layers=max(1, int(unet_num_res_blocks) * max(1, len(tuple(unet_channel_mult)))),
             num_heads=int(unet_num_heads),
             dropout=float(unet_dropout),
-            attention_mode=attention_mode,
-            hedgehog_feature_dim=hedgehog_feature_dim,
-            topology_map_channels=room_topology_channels,
-            topology_conditioning_mode=topology_conditioning_mode,
-            auto_linear_attention_nodes=int(graph_auto_linear_attention_nodes),
-            graph_gate_init=float(spatial_graph_gate_init),
-            topology_gate_init=float(spatial_topology_gate_init),
+            room_topology_channels=room_topology_channels,
         )
         self.classifier = nn.Conv2d(self.hidden_dim, self.num_classes, kernel_size=1)
 
@@ -485,15 +574,13 @@ class DiscreteMaskedRoomModel(nn.Module):
         if tokens.dim() != 3:
             raise ValueError(f"tokens must be [B,H,W], got {tuple(tokens.shape)}")
         x = self._embed_tokens(tokens)
-        context_edge_index, context_node_mask = self._extract_context_topology(context, graph_data)
-        spatial_graph_data = self._extract_spatial_graph_context(context, graph_data)
-        hidden = self.denoiser(
+        _context_edge_index, _context_node_mask = self._extract_context_topology(context, graph_data)
+        _spatial_graph_data = self._extract_spatial_graph_context(context, graph_data)
+        hidden = self.backbone(
             x,
             step,
             context,
-            context_edge_index=context_edge_index,
-            context_node_mask=context_node_mask,
-            spatial_graph_data=spatial_graph_data,
+            graph_data=graph_data,
         )
         logits = self.classifier(hidden)
         if return_hidden:

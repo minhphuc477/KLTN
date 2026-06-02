@@ -33,6 +33,7 @@ from scripts.run_fast_sampler_visual_audit import _draw_stylized_tile, _tile_col
 from src.core.definitions import ROOM_HEIGHT, ROOM_WIDTH, SEMANTIC_PALETTE
 from src.core.latent_diffusion import get_noise_schedule
 from src.core.symbolic_refiner import PathAnalyzer
+from src.utils.checkpoint import safe_torch_load
 from src.core.vqvae import create_vqvae
 from src.train_vqvae import grids_to_onehot
 from src.zelda_data.zelda_loader import ZeldaRoomDataset
@@ -141,7 +142,7 @@ def _load_vqvae(checkpoint_path: Path) -> torch.nn.Module:
         mrf_penalty_weight=float(arch.get("mrf_penalty_weight", 0.05)),
         num_res_blocks=int(arch.get("num_res_blocks", 2)),
     )
-    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    checkpoint = safe_torch_load(checkpoint_path, map_location="cpu")
     state_dict = checkpoint.get("model_state_dict", checkpoint)
     model.load_state_dict(state_dict, strict=True)
     model.eval()

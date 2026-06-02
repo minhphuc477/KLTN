@@ -221,6 +221,24 @@ def average_gradients(
             param.grad.data.div_(float(context.world_size))
 
 
+def average_module_parameters(
+    module: torch.nn.Module,
+    *,
+    context: Optional[DistributedContext],
+) -> None:
+    """Average module parameters and buffers across distributed ranks."""
+    if context is None or not context.enabled or int(context.world_size) <= 1:
+        return
+
+    with torch.no_grad():
+        for tensor in list(module.parameters()) + list(module.buffers()):
+            if tensor.data.is_floating_point() or tensor.data.is_complex():
+                dist.all_reduce(tensor.data, op=dist.ReduceOp.SUM)
+                tensor.data.div_(float(context.world_size))
+            else:
+                dist.broadcast(tensor.data, src=0)
+
+
 def reduce_scalar_metrics(
     metrics: Dict[str, float],
     *,
