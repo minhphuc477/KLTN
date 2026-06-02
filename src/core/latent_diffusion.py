@@ -124,9 +124,9 @@ class TimestepEmbedding(nn.Module):
             embedding = F.pad(embedding, (0, 1), mode='constant')
 
         first_linear = self.mlp[0]
-        target_dtype = getattr(first_linear, "weight", None)
-        if isinstance(target_dtype, torch.Tensor):
-            embedding = embedding.to(dtype=target_dtype.dtype)
+        weight = getattr(first_linear, "weight", None)
+        if isinstance(weight, torch.Tensor):
+            embedding = embedding.to(dtype=weight.dtype)
 
         return self.mlp(embedding)
 
@@ -162,6 +162,7 @@ class SelfAttention(nn.Module):
         Returns:
             [B, H*W, C]
         """
+        residual = x
         B, N, C = x.shape
         
         x = self.norm(x)
@@ -181,7 +182,7 @@ class SelfAttention(nn.Module):
             attn = attn.softmax(dim=-1)
             attn = self.dropout(attn)
             out = (attn @ v).transpose(1, 2).reshape(B, N, C)
-        return self.proj(out)
+        return residual + self.proj(out)
 
 
 class CrossAttention(nn.Module):
@@ -596,8 +597,8 @@ class AttentionBlock(nn.Module):
         # Flatten spatial dims
         x_flat = x.view(B, C, -1).permute(0, 2, 1)  # [B, H*W, C]
         
-        # Self-attention
-        x_flat = x_flat + self.self_attn(x_flat)
+        # Self-attention (SelfAttention owns its Pre-LN residual).
+        x_flat = self.self_attn(x_flat)
         
         cross_context = context
         cross_edge_index = context_edge_index
@@ -744,7 +745,7 @@ class UpBlock(nn.Module):
         self,
         in_channels: int,
         out_channels: int,
-        skip_channels: int,
+        skip_channels: int | Tuple[int, ...] | List[int],
         time_dim: int,
         context_dim: int,
         num_heads: int = 8,
@@ -770,9 +771,19 @@ class UpBlock(nn.Module):
         self.res_blocks = nn.ModuleList()
         self.attn_blocks = nn.ModuleList()
         
-        for i in range(num_res_blocks):
+        if isinstance(skip_channels, int):
+            skip_channels_per_block = [int(skip_channels)] * int(num_res_blocks)
+        else:
+            skip_channels_per_block = [int(ch) for ch in skip_channels]
+            if len(skip_channels_per_block) != int(num_res_blocks):
+                raise ValueError(
+                    "UpBlock skip_channels sequence must match num_res_blocks; "
+                    f"got {len(skip_channels_per_block)} skip widths for {num_res_blocks} blocks."
+                )
+
+        for i, skip_ch in enumerate(skip_channels_per_block):
             # Every ResBlock receives a skip connection (concat on channel dim)
-            in_ch = (in_channels if i == 0 else out_channels) + skip_channels
+            in_ch = (in_channels if i == 0 else out_channels) + skip_ch
             self.res_blocks.append(ResBlock(in_ch, out_channels, time_dim, dropout=dropout))
             
             if has_attention:
@@ -888,6 +899,7 @@ class UNetDenoiser(nn.Module):
         # Build encoder
         self.down_blocks = nn.ModuleList()
         channels = [model_channels]
+        skip_channel_stack: List[int] = []
         
         for i, mult in enumerate(channel_mult):
             out_ch = model_channels * mult
@@ -913,6 +925,7 @@ class UNetDenoiser(nn.Module):
                 topology_gate_init=topology_gate_init,
             ))
             channels.append(out_ch)
+            skip_channel_stack.extend([out_ch] * int(num_res_blocks))
         
         # Bottleneck
         mid_ch = channels[-1]
@@ -935,15 +948,22 @@ class UNetDenoiser(nn.Module):
         # Build decoder
         self.up_blocks = nn.ModuleList()
         
+        current_ch = mid_ch
+        decoder_skip_stack = list(skip_channel_stack)
         for i, mult in enumerate(reversed(channel_mult)):
             out_ch = model_channels * mult
             has_attn = (len(channel_mult) - 1 - i) in attention_resolutions
             upsample = i > 0
-            
-            skip_ch = out_ch  # Simplified skip connection
+
+            if len(decoder_skip_stack) < int(num_res_blocks):
+                raise ValueError(
+                    "UNetDenoiser decoder requested more skip connections than the encoder produced. "
+                    f"remaining={len(decoder_skip_stack)}, required={num_res_blocks}."
+                )
+            skip_ch = [decoder_skip_stack.pop() for _ in range(int(num_res_blocks))]
             
             self.up_blocks.append(UpBlock(
-                in_channels=channels[-1],
+                in_channels=current_ch,
                 out_channels=out_ch,
                 skip_channels=skip_ch,
                 time_dim=time_dim,
@@ -961,11 +981,11 @@ class UNetDenoiser(nn.Module):
                 graph_gate_init=graph_gate_init,
                 topology_gate_init=topology_gate_init,
             ))
-            channels.append(out_ch)
+            current_ch = out_ch
         
         # Output projection
-        self.output_norm = nn.GroupNorm(ResBlock.num_groups(model_channels), model_channels)
-        self.output_proj = nn.Conv2d(model_channels, out_channels, 3, padding=1)
+        self.output_norm = nn.GroupNorm(ResBlock.num_groups(current_ch), current_ch)
+        self.output_proj = nn.Conv2d(current_ch, out_channels, 3, padding=1)
     
     def forward(
         self, 
@@ -1758,6 +1778,28 @@ class LatentDiffusionModel(nn.Module):
         posterior_variance = betas * (1.0 - alphas_cumprod_prev) / (1.0 - alphas_cumprod)
         self.register_buffer('posterior_variance', posterior_variance)
         self.register_buffer('posterior_log_variance', torch.log(torch.clamp(posterior_variance, min=1e-20)))
+        self._compiled_for_inference = False
+
+    def compile_for_inference(self, *, mode: str = "reduce-overhead") -> bool:
+        """
+        Compile the denoiser with `torch.compile` when the local PyTorch build supports it.
+
+        This is intentionally opt-in because compilation can be slow on first use
+        and some CPU/CUDA combinations still have unsupported graph fragments.
+        """
+        compile_fn = getattr(torch, "compile", None)
+        if compile_fn is None:
+            logger.warning("torch.compile is unavailable in this PyTorch build; inference compile skipped.")
+            return False
+        if self._compiled_for_inference:
+            return True
+        try:
+            self.denoiser = compile_fn(self.denoiser, mode=mode)
+        except (RuntimeError, TypeError, ValueError) as exc:
+            logger.warning("torch.compile failed for latent diffusion denoiser; continuing uncompiled: %s", exc)
+            return False
+        self._compiled_for_inference = True
+        return True
 
     def set_cfg_schedule(
         self,

@@ -117,9 +117,20 @@ class TestKeyLockChecker:
         key_probs = torch.tensor([0.9, 0.8, 0.7])  # 3 keys
         lock_probs = torch.tensor([0.9, 0.8])      # 2 locks
         
-        score = checker(key_probs, lock_probs)
+        score = checker(key_probs, lock_probs, mode="legacy_probability")
         
         assert 0 <= score <= 1
+
+    def test_checker_requires_explicit_legacy_probability_mode(self):
+        """Ambiguous two-vector calls must not silently bypass distance checks."""
+        from src.core.logic_net import KeyLockChecker
+
+        checker = KeyLockChecker()
+        key_probs = torch.tensor([0.9, 0.8, 0.7])
+        lock_probs = torch.tensor([0.9, 0.8, 0.1])
+
+        with pytest.raises(ValueError, match="Ambiguous two-tensor"):
+            checker(key_probs, lock_probs)
 
 
 class TestLogicNet:
@@ -333,7 +344,7 @@ class TestWalkabilityPredictor:
         tiles = torch.zeros(1, 44, 16, 11)
         tiles[0, 1, :, :] = 1.0  # All floor
         
-        walkability = predictor(tiles)
+        walkability = predictor(tiles, is_probs=True)
         
         assert walkability.shape == (1, 16, 11)
         # Floor should be walkable

@@ -1,4 +1,7 @@
-.github
+.github/*
+!.github/workflows/
+!.github/workflows/*.yml
+!.github/workflows/*.yaml
 
 # Python bytecode
 __pycache__/

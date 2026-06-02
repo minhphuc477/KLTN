@@ -351,6 +351,9 @@ class GraphToGridCrossAttention(nn.Module):
         self.auto_linear_attention_nodes = int(max(0, int(auto_linear_attention_nodes)))
         self.allow_legacy_argument_swap = bool(allow_legacy_argument_swap)
         self._large_graph_fallback_warning_emitted = False
+        self.capture_attention_maps = False
+        self.last_attention_weights: Optional[Tensor] = None
+        self.last_attention_grid_shape: Optional[Tuple[int, int]] = None
 
         # Grid position encoding
         self.grid_pe = SinusoidalPositionEncoding2D(grid_dim)
@@ -414,6 +417,39 @@ class GraphToGridCrossAttention(nn.Module):
                 f"Invalid attention_mode={mode!r}. Expected 'softmax' or 'linear_hedgehog'."
             )
         self.attention_mode = normalized
+
+    def set_attention_capture(self, enabled: bool = True) -> None:
+        """Enable or disable storage of the latest softmax attention map."""
+        self.capture_attention_maps = bool(enabled)
+        if not self.capture_attention_maps:
+            self.last_attention_weights = None
+            self.last_attention_grid_shape = None
+
+    def get_last_attention_map(self, reduce_heads: str = "mean") -> Optional[Tensor]:
+        """
+        Return the latest captured attention as [B, H, W, N] or [B, heads, H, W, N].
+
+        Attention maps are populated only when set_attention_capture(True) is active
+        and the module runs in softmax mode.
+        """
+        if self.last_attention_weights is None or self.last_attention_grid_shape is None:
+            return None
+        weights = self.last_attention_weights
+        height, width = self.last_attention_grid_shape
+        mode = str(reduce_heads).strip().lower()
+        if mode in {"none", "heads", "per_head", "per-head"}:
+            return weights.reshape(
+                weights.shape[0],
+                weights.shape[1],
+                int(height),
+                int(width),
+                weights.shape[-1],
+            )
+        if mode == "mean":
+            return weights.mean(dim=1).reshape(weights.shape[0], int(height), int(width), weights.shape[-1])
+        if mode == "max":
+            return weights.max(dim=1).values.reshape(weights.shape[0], int(height), int(width), weights.shape[-1])
+        raise ValueError("reduce_heads must be 'mean', 'max', or 'none'.")
 
     def _compute_degree_features(
         self,
@@ -521,6 +557,8 @@ class GraphToGridCrossAttention(nn.Module):
             edge_index = None
 
         B, C, H, W = grid_features.shape
+        self.last_attention_weights = None
+        self.last_attention_grid_shape = None
         if graph_nodes.dim() != 3:
             raise ValueError(
                 f"GraphToGridCrossAttention graph_nodes must have shape [B, N, D], got {tuple(graph_nodes.shape)}."
@@ -665,6 +703,10 @@ class GraphToGridCrossAttention(nn.Module):
             attention_mode = "linear_hedgehog"
 
         if attention_mode == "linear_hedgehog":
+            if self.capture_attention_maps:
+                logger.debug(
+                    "Attention capture requested, but linear_hedgehog mode does not expose node-wise softmax maps."
+                )
             attn_output = hedgehog_linear_attention(
                 Q,
                 K,
@@ -686,7 +728,7 @@ class GraphToGridCrossAttention(nn.Module):
             if node_mask is not None:
                 attn_bias = attn_bias.masked_fill(node_mask[:, None, None, :] == 0, float('-inf'))
 
-            if HAS_SDPA:
+            if HAS_SDPA and not self.capture_attention_maps:
                 attn_output = F.scaled_dot_product_attention(
                     Q,
                     K,
@@ -699,6 +741,13 @@ class GraphToGridCrossAttention(nn.Module):
                 attn_scores = torch.matmul(Q, K.transpose(-2, -1)) * self.scale
                 attn_scores = attn_scores + attn_bias
                 attn_weights = F.softmax(attn_scores, dim=-1)
+                if self.capture_attention_maps:
+                    captured = torch.nan_to_num(attn_weights.detach(), nan=0.0, posinf=0.0, neginf=0.0)
+                    if valid_rows is not None and not torch.all(valid_rows):
+                        captured = captured.clone()
+                        captured[~valid_rows] = 0.0
+                    self.last_attention_weights = captured.cpu()
+                    self.last_attention_grid_shape = (int(H), int(W))
                 attn_weights = self.dropout(attn_weights)
                 attn_output = torch.matmul(attn_weights, V)
             if valid_rows is not None and not torch.all(valid_rows):

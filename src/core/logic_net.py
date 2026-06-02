@@ -69,7 +69,9 @@ def soft_min(x: Tensor, dim: Optional[int] = None, temperature: float = 1.0) -> 
         Soft minimum values
     """
     reduce_dim = int(dim) if dim is not None else -1
-    return -temperature * torch.logsumexp(-x / temperature, dim=reduce_dim)
+    tau = max(float(temperature), 1e-6)
+    x = torch.nan_to_num(x, nan=0.0, posinf=1e6, neginf=-1e6)
+    return -tau * torch.logsumexp(-x / tau, dim=reduce_dim)
 
 
 def soft_max(x: Tensor, dim: Optional[int] = None, temperature: float = 1.0) -> Tensor:
@@ -195,6 +197,7 @@ class DifferentiablePathfinder(nn.Module):
             for _ in range(self.num_iterations):
                 # Non-wrapping neighbor shifts (avoid torch.roll border wrap-around).
                 inf = float(self.inf_distance)
+                dist = torch.nan_to_num(dist, nan=inf, posinf=inf, neginf=-inf).clamp(-inf, inf)
                 up = torch.full_like(dist, inf)
                 down = torch.full_like(dist, inf)
                 left = torch.full_like(dist, inf)
@@ -204,11 +207,13 @@ class DifferentiablePathfinder(nn.Module):
                 left[:, :, 1:] = dist[:, :, :-1]
                 right[:, :, :-1] = dist[:, :, 1:]
                 candidates = torch.stack([dist, up + 1.0, down + 1.0, left + 1.0, right + 1.0], dim=0)
+                candidates = candidates.clamp(-inf, inf)
                 relaxed = soft_min(candidates, dim=0, temperature=max(self.temperature, 1e-4))
                 # Penalize non-walkable cells while preserving gradients through walkability.
-                dist = relaxed + (1.0 - walkability) * float(self.inf_distance)
+                dist = relaxed.clamp(-inf, inf) + (1.0 - walkability) * float(self.inf_distance)
                 # Keep start cells fixed at zero distance.
                 dist = dist * (1.0 - start) + torch.zeros_like(dist) * start
+                dist = dist.clamp(-inf, inf)
 
             return dist
 
@@ -244,21 +249,33 @@ class DifferentiablePathfinder(nn.Module):
             adjacency > 0,
             edge_weights,
             torch.full_like(edge_weights, self.inf_distance),
-        )
+        ).clamp(-float(self.inf_distance), float(self.inf_distance))
         
         # Bellman-Ford iterations
         for _ in range(self.num_iterations):
+            distances = torch.nan_to_num(
+                distances,
+                nan=float(self.inf_distance),
+                posinf=float(self.inf_distance),
+                neginf=-float(self.inf_distance),
+            ).clamp(-float(self.inf_distance), float(self.inf_distance))
             # For each node, compute distance through each neighbor
             # candidate[v] = min_{u} (distances[u] + weight[u,v])
             
             # distances[u] + weight[u,v] for all u, v
-            candidates = distances.unsqueeze(1) + effective_weights  # [N, N]
+            candidates = (distances.unsqueeze(1) + effective_weights).clamp(
+                -float(self.inf_distance),
+                float(self.inf_distance),
+            )  # [N, N]
             
             # Soft-min over incoming edges
             new_distances = soft_min(candidates, dim=0, temperature=self.temperature)
             
             # Keep better of current and new
-            distances = torch.minimum(distances, new_distances)
+            distances = torch.minimum(distances, new_distances).clamp(
+                -float(self.inf_distance),
+                float(self.inf_distance),
+            )
         
         return distances
 
@@ -336,6 +353,77 @@ class ConvolutionalPathfinder(nn.Module):
             distances = distances + (1 - walkability) * 100.0
         
         return distances
+
+
+class SoftBellmanFordGridPathfinder(nn.Module):
+    """
+    Explicit soft Bellman-Ford room pathfinder for ablations.
+
+    This shares the graph pathfinder's relaxation rule but applies it to the
+    4-neighborhood room grid, making the pathfinding inductive bias auditable
+    against the learned convolutional approximation.
+    """
+
+    WALKABLE_IDS = [1, 10, 11, 12, 13, 14, 15, 42]
+
+    def __init__(
+        self,
+        num_iterations: int = 20,
+        temperature: float = 0.1,
+        num_classes: int = 44,
+    ):
+        super().__init__()
+        self.num_classes = int(max(1, num_classes))
+        self.pathfinder = DifferentiablePathfinder(
+            num_iterations=num_iterations,
+            temperature=temperature,
+        )
+
+        walkability = torch.zeros(self.num_classes)
+        for tile_id in self.WALKABLE_IDS:
+            if tile_id < self.num_classes:
+                walkability[tile_id] = 1.0
+        self.register_buffer("walkability_weights", walkability)
+
+    def _derive_walkability(self, room_grid: Tensor) -> Tensor:
+        if room_grid.dim() != 4:
+            raise ValueError(f"room_grid must be [B,C,H,W], got {tuple(room_grid.shape)}.")
+        if int(room_grid.shape[1]) == 1:
+            return torch.sigmoid(room_grid[:, :1])
+        if int(room_grid.shape[1]) != self.num_classes:
+            raise ValueError(
+                f"SoftBellmanFordGridPathfinder expected {self.num_classes} tile channels, "
+                f"got {int(room_grid.shape[1])}."
+            )
+        probs = F.softmax(room_grid, dim=1)
+        walkability = torch.einsum("bchw,c->bhw", probs, self.walkability_weights)
+        return walkability.unsqueeze(1)
+
+    def forward(
+        self,
+        room_grid: Tensor,
+        source_mask: Tensor,
+        walkability: Optional[Tensor] = None,
+    ) -> Tensor:
+        if source_mask.dim() != 4 or int(source_mask.shape[1]) != 1:
+            raise ValueError(f"source_mask must be [B,1,H,W], got {tuple(source_mask.shape)}.")
+        if walkability is None:
+            walkability = self._derive_walkability(room_grid)
+        if walkability.dim() != 4 or int(walkability.shape[1]) != 1:
+            raise ValueError(f"walkability must be [B,1,H,W], got {tuple(walkability.shape)}.")
+        if walkability.shape[0] != source_mask.shape[0] or walkability.shape[-2:] != source_mask.shape[-2:]:
+            raise ValueError(
+                f"walkability/source shape mismatch: walkability={tuple(walkability.shape)}, "
+                f"source_mask={tuple(source_mask.shape)}."
+            )
+
+        goal = torch.zeros_like(source_mask[:, 0])
+        distances = self.pathfinder(
+            walkability[:, 0].clamp(0.0, 1.0),
+            source_mask[:, 0].clamp(0.0, 1.0),
+            goal,
+        )
+        return distances.unsqueeze(1)
 
 
 # ============================================================================
@@ -461,11 +549,13 @@ class KeyLockChecker(nn.Module):
         self,
         margin: float = 1.0,
         temperature: float = 0.1,
+        legacy_probability_mode: bool = False,
     ):
         super().__init__()
         
         self.margin = margin
         self.temperature = temperature
+        self.legacy_probability_mode = bool(legacy_probability_mode)
     
     def forward(
         self,
@@ -473,6 +563,7 @@ class KeyLockChecker(nn.Module):
         key_nodes: Tensor,
         lock_nodes: Optional[Tensor] = None,
         key_lock_pairs: Optional[List[Tuple[int, int]]] = None,
+        mode: Optional[str] = None,
     ) -> Any:
         """
         Check key-lock dependencies.
@@ -487,9 +578,17 @@ class KeyLockChecker(nn.Module):
             loss: Scalar dependency violation loss
             info: Dict with per-pair violation info
         """
-        # Backward-compatible simple mode:
-        # checker(key_probs, lock_probs) -> scalar score in [0, 1]
+        # Explicit legacy probability mode:
+        # checker(key_probs, lock_probs, mode="legacy_probability") -> score in [0, 1]
         if lock_nodes is None and key_lock_pairs is None and distances.ndim == 1 and key_nodes.ndim == 1:
+            requested_mode = str(mode or "").strip().lower()
+            legacy_requested = requested_mode in {"legacy", "legacy_probability", "probability"}
+            if not (legacy_requested or self.legacy_probability_mode):
+                raise ValueError(
+                    "Ambiguous two-tensor KeyLockChecker call. Pass lock_nodes/key_lock_pairs for "
+                    "distance-based checking, or mode='legacy_probability' for the old "
+                    "checker(key_probs, lock_probs) score."
+                )
             key_mean = distances.mean() if distances.numel() > 0 else torch.tensor(0.0, device=distances.device)
             lock_mean = key_nodes.mean() if key_nodes.numel() > 0 else torch.tensor(0.0, device=distances.device)
             return torch.sigmoid(key_mean - lock_mean)
@@ -605,7 +704,7 @@ class WalkabilityPredictor(nn.Module):
         
         self.register_buffer('walkability_weights', walkability)
     
-    def forward(self, tile_logits: Tensor) -> Tensor:
+    def forward(self, tile_logits: Tensor, *, is_probs: Optional[bool] = None) -> Tensor:
         """
         Predict walkability from tile logits.
         
@@ -615,20 +714,25 @@ class WalkabilityPredictor(nn.Module):
         Returns:
             walkability: [B, 1, H, W] soft walkability mask
         """
-        # If caller already provides a normalized categorical distribution,
-        # use it directly; otherwise convert logits with softmax.
-        if (
-            torch.all(tile_logits >= 0)
-            and torch.all(tile_logits <= 1)
-            and torch.allclose(
-                tile_logits.sum(dim=1),
-                torch.ones_like(tile_logits[:, :1, :, :]).squeeze(1),
-                atol=1e-4,
-            )
-        ):
+        # Prefer an explicit contract. The legacy heuristic is retained only
+        # when callers omit is_probs.
+        if is_probs is True:
             probs = tile_logits
-        else:
+        elif is_probs is False:
             probs = F.softmax(tile_logits, dim=1)
+        else:
+            if (
+                torch.all(tile_logits >= 0)
+                and torch.all(tile_logits <= 1)
+                and torch.allclose(
+                    tile_logits.sum(dim=1),
+                    torch.ones_like(tile_logits[:, :1, :, :]).squeeze(1),
+                    atol=1e-4,
+                )
+            ):
+                probs = tile_logits
+            else:
+                probs = F.softmax(tile_logits, dim=1)
         
         # Weighted sum with walkability
         walkability = torch.einsum(
@@ -696,6 +800,7 @@ class LogicNet(nn.Module):
         topology_anchor_weight: float = 0.25,
         global_reach_weight: float = 1.0,
         global_room_weight: float = 0.25,
+        grid_pathfinder_type: str = "cnn",
         # --- Phase 1D: Temperature annealing (Jang et al., 2017) ---
         initial_temperature: float = 1.0,
         final_temperature: float = 0.05,
@@ -712,6 +817,11 @@ class LogicNet(nn.Module):
         self.topology_anchor_weight = float(max(0.0, topology_anchor_weight))
         self.global_reach_weight = float(max(0.0, global_reach_weight))
         self.global_room_weight = float(max(0.0, global_room_weight))
+        self.grid_pathfinder_type = str(grid_pathfinder_type).strip().lower()
+        if self.grid_pathfinder_type in {"bellman-ford", "soft_bellman_ford", "soft-bellman-ford"}:
+            self.grid_pathfinder_type = "bellman_ford"
+        if self.grid_pathfinder_type not in {"cnn", "bellman_ford"}:
+            raise ValueError("grid_pathfinder_type must be 'cnn' or 'bellman_ford'.")
         
         # --- Phase 1D: Temperature annealing state ---
         self.initial_temperature = initial_temperature
@@ -730,11 +840,18 @@ class LogicNet(nn.Module):
         self.walkability = WalkabilityPredictor(num_classes=num_classes, keep_channel_dim=True)
         
         # Grid-level pathfinder
-        self.grid_pathfinder = ConvolutionalPathfinder(
-            num_layers=10,
-            hidden_dim=32,
-            input_channels=num_classes,
-        )
+        if self.grid_pathfinder_type == "bellman_ford":
+            self.grid_pathfinder = SoftBellmanFordGridPathfinder(
+                num_iterations=num_iterations,
+                temperature=temperature,
+                num_classes=num_classes,
+            )
+        else:
+            self.grid_pathfinder = ConvolutionalPathfinder(
+                num_layers=10,
+                hidden_dim=32,
+                input_channels=num_classes,
+            )
         
         # Graph-level pathfinder
         self.graph_pathfinder = DifferentiablePathfinder(
@@ -1409,6 +1526,10 @@ class LogicNet(nn.Module):
         self.graph_pathfinder.temperature = tau
         self.reachability.temperature = tau
         self.key_lock.temperature = tau
+
+    def anneal_temperature(self, step_fraction: float):
+        """Alias used by training scripts and experiment protocols."""
+        self.update_temperature(step_fraction)
     
     def forward(
         self,
@@ -1454,12 +1575,12 @@ class LogicNet(nn.Module):
             # tile_classifier if needed.
             if z.shape[1] == self.num_classes:
                 # z is already tile probs/logits — use directly
-                walkability = self.walkability(z).squeeze(1)
+                walkability = self.walkability(z, is_probs=None).squeeze(1)
             else:
                 # z is latent codes — classify first, then lift to room size
                 tile_logits = self.tile_classifier(z)
                 tile_logits = self._project_tile_logits_to_room(tile_logits)
-                walkability = self.walkability(tile_logits).squeeze(1)
+                walkability = self.walkability(tile_logits, is_probs=False).squeeze(1)
             distances = self.graph_pathfinder(walkability, start_mask, goal)
             reach_scores = self.reachability(distances, goal)
 
@@ -1482,7 +1603,7 @@ class LogicNet(nn.Module):
         info['tile_logits'] = tile_logits
 
         # 2. Predict walkability
-        walkability = self.walkability(tile_logits)
+        walkability = self.walkability(tile_logits, is_probs=False)
         info['walkability'] = walkability
 
         # 3. Compute within-room pathability

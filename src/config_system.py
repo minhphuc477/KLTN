@@ -217,6 +217,11 @@ CONFIG_FIELDS: List[ConfigField] = [
     ConfigField("diffusion.cfg_schedule_power", float, 1.0, "Classifier-free guidance schedule power.", min_value=1e-6),
     ConfigField("diffusion.prediction_type", str, "epsilon", "Diffusion target parameterization.", choices=("epsilon", "v")),
     ConfigField("diffusion.min_snr_gamma", float, 5.0, "Min-SNR-gamma training weight.", min_value=0.0),
+    ConfigField("diffusion.logic_net_enabled", bool, True, "Enable LogicNet loss, validation scoring, and gradient guidance."),
+    ConfigField("diffusion.logic_net_trainable", bool, True, "Optimize LogicNet parameters jointly with diffusion when LogicNet is enabled."),
+    ConfigField("diffusion.logic_learning_rate", float, None, "Optional LogicNet-specific optimizer learning rate. Null reuses diffusion.learning_rate.", min_value=1e-8, allow_none=True),
+    ConfigField("diffusion.logic_lr_warmup_epochs", int, 5, "Epochs used to linearly warm up only the LogicNet optimizer group.", min_value=0),
+    ConfigField("diffusion.logic_grid_pathfinder", str, "cnn", "Grid-level LogicNet pathfinder ablation.", choices=("cnn", "bellman_ford")),
     ConfigField("diffusion.num_logic_iterations", int, 30, "LogicNet message-passing iterations.", min_value=1),
     ConfigField("diffusion.logic_topology_trace_weight", float, 0.25, "Additional LogicNet weight on room-topology traversability traces.", min_value=0.0),
     ConfigField("diffusion.logic_topology_anchor_weight", float, 0.25, "Additional LogicNet weight on start/goal/door anchor walkability.", min_value=0.0),
@@ -592,6 +597,9 @@ def validate_config(config: Dict[str, Any]) -> Dict[str, Any]:
             f"Got diffusion.latent_dim={validated['diffusion']['latent_dim']} and "
             f"vqvae.latent_dim={validated['vqvae']['latent_dim']}."
         )
+
+    if not bool(validated["diffusion"]["logic_net_enabled"]):
+        validated["diffusion"]["logic_net_trainable"] = False
 
     expected_topology_channels = int(ROOM_TOPOLOGY_CHANNEL_COUNT)
     if int(validated["diffusion"]["room_topology_channels"]) != expected_topology_channels:

@@ -42,6 +42,12 @@ from .pcbs_validation import (
     evaluate_astar_vs_pcbs,
     build_ieee_markdown_table,
 )
+from .tile_distribution import (
+    TilePatternDistributionResult,
+    compare_tile_pattern_distributions,
+    iter_tile_patterns,
+    tile_pattern_counts,
+)
 
 _BENCHMARK_EXPORTS = [
     'GraphDescriptor',
@@ -92,6 +98,11 @@ __all__ = [
     'prepare_dungeon_grid_for_validation',
     'evaluate_astar_vs_pcbs',
     'build_ieee_markdown_table',
+    # Discrete tile distribution realism metrics
+    'TilePatternDistributionResult',
+    'compare_tile_pattern_distributions',
+    'iter_tile_patterns',
+    'tile_pattern_counts',
     # Benchmark suite (lazy-loaded)
     *_BENCHMARK_EXPORTS,
 ]

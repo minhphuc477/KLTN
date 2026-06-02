@@ -227,15 +227,16 @@ class VectorQuantizer(nn.Module):
         perplexity = torch.exp(-torch.sum(avg_probs * torch.log(avg_probs + 1e-10)))
         losses['perplexity'] = perplexity
         
-        # Update usage statistics (EMA-tracked, not forever-accumulating)
-        if self.training:
-            with torch.no_grad():
-                batch_usage = torch.bincount(
-                    indices, minlength=self.num_embeddings
-                ).float()
-                # EMA decay prevents stale early-training bias from
-                # blocking dead-code resets in long training runs.
-                self.codebook_usage = 0.99 * self.codebook_usage + 0.01 * batch_usage
+        # Update usage statistics in both train and eval so monitoring reflects
+        # the most recent workload. Dead-code resets remain training-only via
+        # _ema_update above.
+        with torch.no_grad():
+            batch_usage = torch.bincount(
+                indices, minlength=self.num_embeddings
+            ).to(device=self.codebook_usage.device, dtype=self.codebook_usage.dtype)
+            # EMA decay prevents stale early-training bias from blocking
+            # diagnostics in long training or large inference runs.
+            self.codebook_usage.mul_(0.99).add_(batch_usage, alpha=0.01)
         
         # Reshape indices
         indices = indices.view(B, H, W)
@@ -567,7 +568,7 @@ class Encoder(nn.Module):
         h = self.conv_in(x)
         
         for block in self.down_blocks:
-            for layer in list(block.children()):
+            for layer in block:
                 h = layer(h)
         
         h = self.norm_out(h)
@@ -660,7 +661,7 @@ class Decoder(nn.Module):
         h = self.conv_in(z)
         
         for block in self.up_blocks:
-            for layer in list(block.children()):
+            for layer in block:
                 h = layer(h)
         
         h = self.norm_out(h)

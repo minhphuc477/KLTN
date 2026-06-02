@@ -181,6 +181,11 @@ class DiffusionTrainingConfig:
         min_snr_gamma: float = 5.0,
         
         # LogicNet
+        logic_net_enabled: bool = True,
+        logic_net_trainable: bool = True,
+        logic_learning_rate: Optional[float] = None,
+        logic_lr_warmup_epochs: int = 5,
+        logic_grid_pathfinder: str = "cnn",
         num_logic_iterations: int = 30,
         logic_topology_trace_weight: float = 0.25,
         logic_topology_anchor_weight: float = 0.25,
@@ -384,12 +389,23 @@ class DiffusionTrainingConfig:
         self.prediction_type = str(prediction_type).strip().lower()
         self.min_snr_gamma = float(max(0.0, min_snr_gamma))
         
+        self.logic_net_enabled = bool(logic_net_enabled)
+        self.logic_net_trainable = bool(logic_net_trainable) and self.logic_net_enabled
+        self.logic_learning_rate = (
+            None if logic_learning_rate is None else float(max(1e-8, logic_learning_rate))
+        )
+        self.logic_lr_warmup_epochs = int(max(0, logic_lr_warmup_epochs))
+        self.logic_grid_pathfinder = str(logic_grid_pathfinder).strip().lower()
+        if self.logic_grid_pathfinder in {"bellman-ford", "soft_bellman_ford", "soft-bellman-ford"}:
+            self.logic_grid_pathfinder = "bellman_ford"
+        if self.logic_grid_pathfinder not in {"cnn", "bellman_ford"}:
+            raise ValueError("logic_grid_pathfinder must be 'cnn' or 'bellman_ford'.")
         self.num_logic_iterations = num_logic_iterations
         self.logic_topology_trace_weight = float(max(0.0, logic_topology_trace_weight))
         self.logic_topology_anchor_weight = float(max(0.0, logic_topology_anchor_weight))
         self.logic_global_reach_weight = float(max(0.0, logic_global_reach_weight))
         self.logic_global_room_weight = float(max(0.0, logic_global_room_weight))
-        self.guidance_scale = guidance_scale
+        self.guidance_scale = guidance_scale if self.logic_net_enabled else 0.0
         self.guidance_clamp_magnitude = float(max(0.0, guidance_clamp_magnitude))
         self.guidance_relative_norm_cap = float(max(0.0, guidance_relative_norm_cap))
         self.guidance_schedule_enabled = bool(guidance_schedule_enabled)
@@ -403,7 +419,7 @@ class DiffusionTrainingConfig:
         self.learning_rate = learning_rate
         self.optimizer_weight_decay = float(max(0.0, optimizer_weight_decay))
         self.alpha_visual = alpha_visual
-        self.alpha_logic = alpha_logic
+        self.alpha_logic = alpha_logic if self.logic_net_enabled else 0.0
         mode = str(logic_loss_mode).strip().lower()
         if mode not in {"predicted_latent", "detached_real"}:
             raise ValueError(
@@ -562,6 +578,11 @@ def diffusion_training_kwargs_from_resolved_config(
         "cfg_schedule_power": stage["cfg_schedule_power"],
         "prediction_type": stage["prediction_type"],
         "min_snr_gamma": stage["min_snr_gamma"],
+        "logic_net_enabled": stage["logic_net_enabled"],
+        "logic_net_trainable": stage["logic_net_trainable"],
+        "logic_learning_rate": stage["logic_learning_rate"],
+        "logic_lr_warmup_epochs": stage["logic_lr_warmup_epochs"],
+        "logic_grid_pathfinder": stage["logic_grid_pathfinder"],
         "num_logic_iterations": stage["num_logic_iterations"],
         "logic_topology_trace_weight": stage["logic_topology_trace_weight"],
         "logic_topology_anchor_weight": stage["logic_topology_anchor_weight"],
@@ -769,6 +790,11 @@ def _legacy_diffusion_overrides_from_args(args: argparse.Namespace) -> Dict[str,
         getattr(args, "use_current_node_distance_features", None),
     )
     _set("current_node_distance_max", getattr(args, "current_node_distance_max", None))
+    _set("logic_net_enabled", getattr(args, "logic_net_enabled", None))
+    _set("logic_net_trainable", getattr(args, "logic_net_trainable", None))
+    _set("logic_learning_rate", getattr(args, "logic_learning_rate", None))
+    _set("logic_lr_warmup_epochs", getattr(args, "logic_lr_warmup_epochs", None))
+    _set("logic_grid_pathfinder", getattr(args, "logic_grid_pathfinder", None))
     _set("guidance_scale", getattr(args, "guidance_scale", None))
     _set("logic_topology_trace_weight", getattr(args, "logic_topology_trace_weight", None))
     _set("logic_topology_anchor_weight", getattr(args, "logic_topology_anchor_weight", None))
@@ -872,22 +898,34 @@ class DiffusionTrainer:
         self.vqvae.eval()
         for param in self.vqvae.parameters():
             param.requires_grad = False
+
+        if not bool(getattr(config, "logic_net_trainable", True)):
+            self.logic_net.eval()
+            for param in self.logic_net.parameters():
+                param.requires_grad = False
         
         # --- Wire LogicNet into diffusion model's GradientGuidance ---
         # This enables gradient guidance during sampling: at each denoising
         # step, âˆ‡_{x_t}L_logic nudges the sample toward solvable configs.
         self._configure_guidance()
         
-        # Setup optimizer: train diffusion + condition encoder + LogicNet.
+        optimizer_groups = [
+            {"name": "diffusion", "params": list(self.diffusion.parameters())},
+            {"name": "condition_encoder", "params": list(self.condition_encoder.parameters())},
+        ]
+        if bool(getattr(config, "logic_net_trainable", True)):
+            logic_group = {"name": "logic_net", "params": list(self.logic_net.parameters())}
+            if getattr(config, "logic_learning_rate", None) is not None:
+                logic_group["lr"] = float(config.logic_learning_rate)
+            optimizer_groups.append(logic_group)
+
         self.optimizer = optim.AdamW(
-            [
-                {"name": "diffusion", "params": list(self.diffusion.parameters())},
-                {"name": "condition_encoder", "params": list(self.condition_encoder.parameters())},
-                {"name": "logic_net", "params": list(self.logic_net.parameters())},
-            ],
+            optimizer_groups,
             lr=config.learning_rate,
             weight_decay=config.optimizer_weight_decay,
         )
+        for group in self.optimizer.param_groups:
+            group.setdefault("base_lr", float(group.get("lr", config.learning_rate)))
         
         # Scheduler
         self.scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
@@ -918,14 +956,15 @@ class DiffusionTrainer:
         """Wire current LogicNet and config values into gradient guidance."""
         target = self.diffusion if diffusion is None else diffusion
         guidance = target.guidance
+        logic_enabled = bool(getattr(self.config, "logic_net_enabled", True))
         if isinstance(getattr(type(guidance), "logic_net", None), property):
-            guidance.logic_net = self.logic_net
+            guidance.logic_net = self.logic_net if logic_enabled else None
         else:
-            object.__setattr__(guidance, "logic_net", self.logic_net)
+            object.__setattr__(guidance, "logic_net", self.logic_net if logic_enabled else None)
         modules = getattr(guidance, "_modules", None)
         if isinstance(modules, dict):
             modules.pop("logic_net", None)
-        guidance.guidance_scale = float(getattr(self.config, "guidance_scale", 1.0))
+        guidance.guidance_scale = float(getattr(self.config, "guidance_scale", 1.0)) if logic_enabled else 0.0
         guidance.clamp_magnitude = float(getattr(self.config, "guidance_clamp_magnitude", 1.0))
         guidance.relative_norm_cap = float(getattr(self.config, "guidance_relative_norm_cap", 0.25))
         guidance.schedule_enabled = bool(getattr(self.config, "guidance_schedule_enabled", True))
@@ -1061,6 +1100,7 @@ class DiffusionTrainer:
             latent_dim=self.config.latent_dim,
             num_classes=self.config.num_classes,
             num_iterations=self.config.num_logic_iterations,
+            grid_pathfinder_type=self.config.logic_grid_pathfinder,
             topology_trace_weight=self.config.logic_topology_trace_weight,
             topology_anchor_weight=self.config.logic_topology_anchor_weight,
             global_reach_weight=self.config.logic_global_reach_weight,
@@ -1907,13 +1947,32 @@ class DiffusionTrainer:
 
     def _gradients_are_finite(self) -> bool:
         """Check trainable diffusion/condition-encoder gradients before stepping."""
-        for module in (self.diffusion, self.condition_encoder):
+        modules = [self.diffusion, self.condition_encoder]
+        if bool(getattr(self.config, "logic_net_trainable", True)):
+            modules.append(self.logic_net)
+        for module in modules:
             for param in module.parameters():
                 if param.grad is None:
                     continue
                 if not bool(torch.isfinite(param.grad).all()):
                     return False
         return True
+
+    def _apply_logic_lr_warmup(self) -> None:
+        """Warm up only the LogicNet optimizer group during early joint training."""
+        if not bool(getattr(self.config, "logic_net_trainable", True)):
+            return
+        warmup_epochs = int(max(0, getattr(self.config, "logic_lr_warmup_epochs", 0)))
+        if warmup_epochs <= 0:
+            return
+        total_steps = max(1, int(getattr(self, "_estimated_total_steps", 1)))
+        total_epochs = max(1, int(getattr(self.config, "epochs", 1)))
+        warmup_steps = max(1, int(total_steps * min(1.0, warmup_epochs / total_epochs)))
+        scale = min(1.0, max(1, int(self.global_step) + 1) / float(warmup_steps))
+        for group in self.optimizer.param_groups:
+            if group.get("name") != "logic_net":
+                continue
+            group["lr"] = float(group.get("base_lr", group.get("lr", self.config.learning_rate))) * scale
     
     def train_step(
         self,
@@ -1980,7 +2039,8 @@ class DiffusionTrainer:
         logic_loss = torch.tensor(0.0, device=self.device)
         solvability_proxy = torch.tensor(0.0, device=self.device)
         
-        if include_logic_loss and self.config.alpha_logic > 0:
+        logic_enabled = bool(getattr(self.config, "logic_net_enabled", True))
+        if logic_enabled and include_logic_loss and self.config.alpha_logic > 0:
             if self.config.logic_loss_mode == "detached_real":
                 # Legacy baseline: logic regularization on real latent only.
                 z_for_logic = z_0.detach().requires_grad_(True)
@@ -2060,8 +2120,11 @@ class DiffusionTrainer:
         # Backward
         self.optimizer.zero_grad(set_to_none=True)
         total_loss.backward()
+        modules_for_average = [self.diffusion, self.condition_encoder]
+        if bool(getattr(self.config, "logic_net_trainable", True)):
+            modules_for_average.append(self.logic_net)
         average_gradients(
-            (self.diffusion, self.condition_encoder),
+            tuple(modules_for_average),
             context=getattr(self, "distributed_context", None),
         )
         if not self._gradients_are_finite():
@@ -2103,6 +2166,7 @@ class DiffusionTrainer:
                     'logic_loss_mode_predicted': 1.0 if self.config.logic_loss_mode == 'predicted_latent' else 0.0,
                     'skipped_nonfinite_batch': 1.0,
                 }
+        self._apply_logic_lr_warmup()
         self.optimizer.step()
         
         # --- Phase 4A: Update EMA model weights ---
@@ -2110,11 +2174,11 @@ class DiffusionTrainer:
         
         # --- Phase 1D: Anneal LogicNet temperature ---
         # Use estimated total steps from config instead of hardcoded epochs*100
-        if hasattr(self.logic_net, 'update_temperature'):
+        if logic_enabled and hasattr(self.logic_net, 'anneal_temperature'):
             default_total_steps = max(1, int(getattr(self.config, "epochs", 1)) * 100)
             estimated_total_steps = max(1, getattr(self, '_estimated_total_steps', default_total_steps))
             progress = min(1.0, self.global_step / estimated_total_steps)
-            self.logic_net.update_temperature(progress)
+            self.logic_net.anneal_temperature(progress)
         
         self.global_step += 1
         
@@ -2151,7 +2215,7 @@ class DiffusionTrainer:
         total_epochs = int(getattr(self.config, "epochs", self.epoch + 1))
         self._estimated_total_steps = max(1, total_epochs * len(dataloader))
         
-        include_logic = self.epoch >= self.config.warmup_epochs
+        include_logic = bool(getattr(self.config, "logic_net_enabled", True)) and self.epoch >= self.config.warmup_epochs
         if sampler is not None and hasattr(sampler, "set_epoch"):
             sampler.set_epoch(int(self.epoch))
         logger.info(
@@ -2260,7 +2324,8 @@ class DiffusionTrainer:
         num_diffusion_eval = 0
         total_logic_loss = 0.0
         total_solvability_proxy = 0.0
-        num_generated_eval = 0
+        logic_eval_enabled = bool(getattr(self.config, "logic_net_enabled", True))
+        num_generated_eval = 0 if logic_eval_enabled else int(num_samples)
         skipped_nonfinite = 0
 
         for batch_data in dataloader:
@@ -2317,7 +2382,7 @@ class DiffusionTrainer:
                         "Diffusion validation: non-finite denoising loss detected; skipping this validation batch.",
                     )
 
-            if num_generated_eval < int(num_samples):
+            if logic_eval_enabled and num_generated_eval < int(num_samples):
                 # Generate samples using EMA model
                 z_gen = eval_model.sample(conditioning, shape=z_0.shape, graph_data=diffusion_graph_data)
                 if not self._tensor_is_finite(z_gen):
@@ -2360,7 +2425,11 @@ class DiffusionTrainer:
                 'val_skipped_nonfinite': float(skipped_nonfinite),
             }
 
-        include_logic = self.epoch >= self.config.warmup_epochs and self.config.alpha_logic > 0
+        include_logic = (
+            bool(getattr(self.config, "logic_net_enabled", True))
+            and self.epoch >= self.config.warmup_epochs
+            and self.config.alpha_logic > 0
+        )
         val_diffusion_loss = total_diffusion_loss / max(num_diffusion_eval, 1)
         val_logic_loss = total_logic_loss / max(num_generated_eval, 1)
         val_total_loss = compute_teacher_validation_total_loss(
@@ -2381,7 +2450,7 @@ class DiffusionTrainer:
         }
     
     def _build_resume_checkpoint_payload(self, metrics: Optional[Dict] = None) -> Dict[str, Any]:
-        return {
+        payload = {
             'epoch': self.epoch,
             'global_step': self.global_step,
             'diffusion_state_dict': self.diffusion.state_dict(),
@@ -2395,9 +2464,12 @@ class DiffusionTrainer:
             # Store schedule/prediction type for inference consistency
             'schedule_type': self.config.schedule_type,
         }
+        if bool(getattr(self.config, "logic_net_enabled", True)):
+            payload['logic_net_state_dict'] = self.logic_net.state_dict()
+        return payload
 
     def _build_inference_checkpoint_payload(self, metrics: Optional[Dict] = None) -> Dict[str, Any]:
-        return {
+        payload = {
             'epoch': self.epoch,
             'global_step': self.global_step,
             'diffusion_state_dict': self.diffusion.state_dict(),
@@ -2408,6 +2480,9 @@ class DiffusionTrainer:
             'metrics': metrics,
             'schedule_type': self.config.schedule_type,
         }
+        if bool(getattr(self.config, "logic_net_enabled", True)):
+            payload['logic_net_state_dict'] = self.logic_net.state_dict()
+        return payload
 
     def save_checkpoint(self, path: str, metrics: Optional[Dict] = None, *, include_optimizer: bool = True):
         """Save training or inference checkpoint."""
@@ -2438,9 +2513,16 @@ class DiffusionTrainer:
                 "global_step": int(self.global_step),
                 "checkpoint_kind": "resume" if include_optimizer else "inference",
                 "contains": (
-                    ["diffusion", "ema_diffusion", "condition_encoder", "logic_net", "optimizer", "scheduler"]
+                    (
+                        ["diffusion", "ema_diffusion", "condition_encoder"]
+                        + (["logic_net"] if bool(getattr(self.config, "logic_net_enabled", True)) else [])
+                        + ["optimizer", "scheduler"]
+                    )
                     if include_optimizer
-                    else ["diffusion", "ema_diffusion", "condition_encoder", "logic_net"]
+                    else (
+                        ["diffusion", "ema_diffusion", "condition_encoder"]
+                        + (["logic_net"] if bool(getattr(self.config, "logic_net_enabled", True)) else [])
+                    )
                 ),
                 "vqvae_checkpoint": str(getattr(self.config, "vqvae_checkpoint", "") or ""),
                 "topology_anchor_policy": build_topology_anchor_policy_metadata(
@@ -2874,6 +2956,29 @@ def main():
     parser.add_argument('--puzzle-structure-dropout-prob', type=float, default=None)
     parser.add_argument('--use-current-node-distance-features', action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument('--current-node-distance-max', type=int, default=None)
+    parser.add_argument(
+        '--logic-net-enabled',
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help='Enable LogicNet loss/guidance during diffusion training and validation.',
+    )
+    parser.add_argument(
+        '--disable-logic-net',
+        dest='logic_net_enabled',
+        action='store_false',
+        default=None,
+        help='Train a clean no-LogicNet diffusion ablation checkpoint.',
+    )
+    parser.add_argument('--logic-net-trainable', action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument('--logic-learning-rate', type=float, default=None)
+    parser.add_argument('--logic-lr-warmup-epochs', type=int, default=None)
+    parser.add_argument(
+        '--logic-grid-pathfinder',
+        type=str,
+        default=None,
+        choices=['cnn', 'bellman_ford', 'bellman-ford', 'soft_bellman_ford', 'soft-bellman-ford'],
+        help='Grid-level LogicNet pathfinder ablation: learned CNN or explicit soft Bellman-Ford.',
+    )
     parser.add_argument('--logic-topology-trace-weight', type=float, default=None)
     parser.add_argument('--logic-topology-anchor-weight', type=float, default=None)
     parser.add_argument('--logic-global-reach-weight', type=float, default=None)

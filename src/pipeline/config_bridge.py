@@ -282,6 +282,7 @@ def pipeline_kwargs_from_resolved_config(config: Dict[str, Any]) -> Dict[str, An
                 "latent_dim": diffusion["latent_dim"],
                 "num_classes": config["dataset"]["num_classes"],
                 "num_logic_iterations": diffusion["num_logic_iterations"],
+                "logic_grid_pathfinder": diffusion.get("logic_grid_pathfinder", "cnn"),
                 "logic_topology_trace_weight": diffusion["logic_topology_trace_weight"],
                 "logic_topology_anchor_weight": diffusion["logic_topology_anchor_weight"],
                 "logic_global_reach_weight": diffusion.get("logic_global_reach_weight", 1.0),

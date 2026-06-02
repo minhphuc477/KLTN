@@ -38,6 +38,7 @@ import logging
 import time
 import json
 from collections import deque
+from datetime import datetime
 
 # Core pipeline
 
@@ -52,6 +53,7 @@ from src.pipeline.dungeon_pipeline import NeuralSymbolicDungeonPipeline
 from src.pipeline.room_stitching import StitchedRoomLayout, compute_graph_aware_room_slots
 from src.core.definitions import ROOM_HEIGHT, ROOM_WIDTH
 from src.core.vqvae import canonical_latent_shape
+from src.optimization.lcm_lora import load_fast_sampler_checkpoint
 
 # Validation
 from src.validation.collision_alignment_validator import CollisionAlignmentValidator
@@ -76,6 +78,7 @@ from src.utils.explainability import (
 from src.utils.stable_seed import stable_seed_offset
 
 logger = logging.getLogger(__name__)
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 @dataclass
@@ -83,9 +86,13 @@ class AdvancedPipelineConfig:
     """Configuration for the advanced pipeline."""
     
     # Performance
-    use_lcm_lora: bool = True
+    use_lcm_lora: bool = False
     lcm_steps: int = 4  # Only used when a real fast-sampling path is available.
     lcm_lora_checkpoint: Optional[Path] = None
+    vqvae_checkpoint: Optional[Path] = None
+    diffusion_checkpoint: Optional[Path] = None
+    logic_net_checkpoint: Optional[Path] = None
+    condition_encoder_checkpoint: Optional[Path] = None
     
     # Visual quality
     enable_seam_smoothing: bool = True
@@ -110,7 +117,7 @@ class AdvancedPipelineConfig:
     enable_explainability: bool = True
     
     # Output
-    output_dir: Path = Path("artifacts/advanced_runs")
+    output_dir: Path = PROJECT_ROOT / "artifacts" / "advanced_runs"
     save_checkpoints: bool = True
     seed: int = 42
 
@@ -143,7 +150,7 @@ class AdvancedNeuralSymbolicPipeline:
     Complete pipeline with all 15 features integrated.
     
     Usage:
-        >>> config = AdvancedPipelineConfig(use_lcm_lora=True, enable_big_rooms=True)
+        >>> config = AdvancedPipelineConfig(enable_big_rooms=True)
         >>> pipeline = AdvancedNeuralSymbolicPipeline(config)
         >>> result = pipeline.generate_dungeon(
         ...     tension_curve=[0.0, 0.3, 0.5, 0.7, 0.4, 0.8, 0.2, 1.0],
@@ -161,15 +168,16 @@ class AdvancedNeuralSymbolicPipeline:
         
         # Core
         self.robust_pipeline = None  # Will be initialized with specific blocks
+        self.fast_sampling_active = False
+        self.fast_sampling_reason = "LCM-LoRA disabled by config."
+        pipeline_model_kwargs = self._resolve_neural_pipeline_model_kwargs()
         
         # Base neural-symbolic pipeline for room generation
         self.neural_pipeline = NeuralSymbolicDungeonPipeline(
-            vqvae_checkpoint=None,  # Can be set later
-            diffusion_checkpoint=None,
-            logic_net_checkpoint=None,
             device='auto',
             use_learned_refiner_rules=True,
-            enable_logging=True
+            enable_logging=True,
+            **pipeline_model_kwargs,
         )
         
         # WFC tile priors (will be extracted from VQ-VAE during first generation)
@@ -203,9 +211,7 @@ class AdvancedNeuralSymbolicPipeline:
         )
         
         # Optimization
-        self.lcm_diffusion = None  # Will be set when diffusion model is available
-        self.fast_sampling_active = False
-        self.fast_sampling_reason = "LCM-LoRA fast sampling is not wired into the graph-aware core pipeline."
+        self.lcm_diffusion = None  # Set to the graph-aware diffusion model when fast sampling is active.
         self._configure_fast_sampling()
         
         # Utils
@@ -216,36 +222,87 @@ class AdvancedNeuralSymbolicPipeline:
         
         logger.info("Advanced pipeline initialized successfully")
 
+    @staticmethod
+    def _path_or_none(value: Optional[Path]) -> Optional[str]:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
+
+    def _resolve_neural_pipeline_model_kwargs(self) -> Dict[str, Any]:
+        """Resolve model checkpoints before constructing the underlying neural pipeline."""
+        kwargs: Dict[str, Any] = {
+            "vqvae_checkpoint": self._path_or_none(self.config.vqvae_checkpoint),
+            "diffusion_checkpoint": self._path_or_none(self.config.diffusion_checkpoint),
+            "logic_net_checkpoint": self._path_or_none(self.config.logic_net_checkpoint),
+            "condition_encoder_checkpoint": self._path_or_none(self.config.condition_encoder_checkpoint),
+        }
+
+        if not self.config.use_lcm_lora:
+            return kwargs
+
+        adapter_path = self._path_or_none(self.config.lcm_lora_checkpoint)
+        if adapter_path is None:
+            self.fast_sampling_reason = (
+                "Fast sampling requested, but no distilled consistency-LoRA checkpoint was provided."
+            )
+            return kwargs
+        if not Path(adapter_path).exists():
+            self.fast_sampling_reason = f"Requested fast-sampler checkpoint does not exist: {adapter_path}"
+            return kwargs
+
+        try:
+            _state, info = load_fast_sampler_checkpoint(adapter_path)
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+            self.fast_sampling_reason = f"Fast-sampler checkpoint rejected: {exc}"
+            logger.warning(self.fast_sampling_reason)
+            return kwargs
+
+        configured_base = kwargs.get("diffusion_checkpoint")
+        base_checkpoint = configured_base if configured_base and Path(str(configured_base)).exists() else info.base_diffusion_checkpoint
+        if base_checkpoint is None or not Path(str(base_checkpoint)).exists():
+            self.fast_sampling_reason = (
+                "Fast-sampler checkpoint is valid, but a matching base diffusion checkpoint is missing. "
+                "Set AdvancedPipelineConfig.diffusion_checkpoint or store an existing "
+                "base_diffusion_checkpoint in the adapter metadata."
+            )
+            return kwargs
+
+        kwargs["diffusion_checkpoint"] = str(base_checkpoint)
+        kwargs["fast_sampling_checkpoint"] = adapter_path
+        kwargs["fast_sampling_steps"] = int(max(1, int(self.config.lcm_steps)))
+        kwargs["default_use_fast_sampling"] = True
+        kwargs["default_num_diffusion_steps"] = int(max(1, int(self.config.lcm_steps)))
+        self.fast_sampling_reason = (
+            f"Configured graph-aware consistency-LoRA fast sampler from {adapter_path} "
+            f"using base diffusion checkpoint {base_checkpoint}."
+        )
+        return kwargs
+
     def _configure_fast_sampling(self) -> None:
         """
         Configure optional fast sampling.
 
-        Paper-faithful LCM-LoRA requires LCM-specific distillation and inference
-        semantics. The current advanced pipeline delegates room generation
-        through the main NeuralSymbolicDungeonPipeline graph-aware path, so we
-        intentionally keep the legacy LCM-LoRA switch disabled unless a future
-        fully compatible backend is added.
+        Public LCM-LoRA checkpoints are not compatible with this custom latent
+        space. The supported real backend is the repo-specific graph-aware
+        consistency-LoRA adapter produced by src/train_lcm.py and attached to
+        the underlying LatentDiffusionModel.
         """
         if not self.config.use_lcm_lora:
             self.fast_sampling_active = False
             self.fast_sampling_reason = "LCM-LoRA disabled by config."
             return
-
-        checkpoint = self.config.lcm_lora_checkpoint
-        if checkpoint is not None and not Path(checkpoint).exists():
-            self.fast_sampling_active = False
-            self.fast_sampling_reason = (
-                f"Requested LCM-LoRA checkpoint does not exist: {checkpoint}"
-            )
-            logger.warning(self.fast_sampling_reason)
+        diffusion = getattr(self.neural_pipeline, "diffusion", None)
+        if diffusion is not None and hasattr(diffusion, "supports_fast_sampling") and diffusion.supports_fast_sampling():
+            self.fast_sampling_active = True
+            self.lcm_diffusion = diffusion
+            logger.info(self.fast_sampling_reason)
             return
 
         self.fast_sampling_active = False
-        self.fast_sampling_reason = (
-            "Requested LCM-LoRA, but this codebase does not yet implement the "
-            "paper-faithful LCM-LoRA runtime. Falling back to standard DDIM sampling."
-        )
-        logger.warning(self.fast_sampling_reason)
+        if not self.fast_sampling_reason:
+            self.fast_sampling_reason = "Fast sampling requested, but no compatible distilled backend was activated."
+        logger.warning("%s Falling back to standard DDIM sampling.", self.fast_sampling_reason)
 
     def _effective_diffusion_steps(self) -> int:
         """Return the real sampler step count for room generation."""
@@ -435,6 +492,100 @@ class AdvancedNeuralSymbolicPipeline:
             'lock_count': lock_count,
             'enemy_count': enemy_count,
         }
+
+    def _estimate_dungeon_solver_result(
+        self,
+        dungeon_grid: np.ndarray,
+        mission_graph: nx.Graph,
+    ) -> Dict[str, Any]:
+        """
+        Estimate dungeon-level solver descriptors from mission topology.
+
+        MAP-Elites descriptors should be attached to the generated dungeon as a
+        whole. Room-level diameter remains useful for diagnostics, but using it
+        as the archive descriptor confounds local room shape with mission-level
+        progression.
+        """
+        if mission_graph is None or mission_graph.number_of_nodes() == 0:
+            return {'solvable': False, 'path_length': 0, 'quality_score': 0.0}
+
+        nodes = list(mission_graph.nodes())
+        start_nodes = [
+            node for node, attrs in mission_graph.nodes(data=True)
+            if bool(attrs.get("is_start", attrs.get("start", False)))
+        ]
+        goal_nodes = [
+            node for node, attrs in mission_graph.nodes(data=True)
+            if bool(attrs.get("is_goal", attrs.get("goal", False)))
+            or str(attrs.get("type", attrs.get("node_type", ""))).lower() in {"goal", "boss", "triforce"}
+        ]
+        start = start_nodes[0] if start_nodes else nodes[0]
+        goal = goal_nodes[0] if goal_nodes else nodes[-1]
+
+        path_nodes: List[Any] = []
+        try:
+            path_nodes = nx.shortest_path(mission_graph, start, goal)
+        except (nx.NetworkXNoPath, nx.NodeNotFound):
+            try:
+                path_nodes = nx.shortest_path(mission_graph.to_undirected(), start, goal)
+            except (nx.NetworkXNoPath, nx.NodeNotFound):
+                path_nodes = []
+
+        path_length = int(len(path_nodes))
+        solvable = path_length > 0
+        node_count = max(1, int(mission_graph.number_of_nodes()))
+        edge_count = int(mission_graph.number_of_edges())
+        linearity = float(np.clip(path_length / node_count, 0.0, 1.0)) if solvable else 0.0
+
+        if self.map_elites:
+            leniency = float(self.map_elites.calculate_leniency(dungeon_grid))
+        else:
+            leniency = 0.5
+
+        locked_tokens = {"locked", "key_locked", "boss_locked", "item_locked", "item_gate", "switch_locked"}
+        lock_count = 0
+        for _u, _v, data in mission_graph.edges(data=True):
+            edge_text = f"{data.get('edge_type', '')} {data.get('type', '')} {data.get('label', '')}".lower()
+            if any(token in edge_text for token in locked_tokens):
+                lock_count += 1
+        key_count = sum(
+            1 for _node, attrs in mission_graph.nodes(data=True)
+            if bool(attrs.get("has_key", False))
+            or "key" in str(attrs.get("type", attrs.get("node_type", ""))).lower()
+        )
+
+        undirected = mission_graph.to_undirected()
+        try:
+            cycle_rank = max(
+                0,
+                int(undirected.number_of_edges())
+                - int(undirected.number_of_nodes())
+                + nx.number_connected_components(undirected),
+            )
+        except nx.NetworkXException:
+            cycle_rank = 0
+        backtracking = float(np.clip(cycle_rank / max(1, node_count // 2), 0.0, 1.0))
+        lock_pressure = float(np.clip(lock_count / max(1.0, float(max(1, key_count))), 0.0, 1.0))
+        progression_complexity = float(
+            np.clip((0.45 * lock_pressure) + (0.35 * backtracking) + (0.20 * (1.0 - linearity)), 0.0, 1.0)
+        )
+        quality_score = float(
+            np.clip((0.40 * linearity) + (0.35 * leniency) + (0.25 * (1.0 - progression_complexity)), 0.0, 1.0)
+        )
+
+        return {
+            'solvable': bool(solvable),
+            'path_length': path_length,
+            'linearity': linearity,
+            'leniency': leniency,
+            'backtracking_score': backtracking,
+            'progression_complexity': progression_complexity,
+            'quality_score': quality_score,
+            'key_count': int(key_count),
+            'lock_count': int(lock_count),
+            'edge_count': int(edge_count),
+            'node_count': int(node_count),
+        }
     
     def generate_dungeon(
         self,
@@ -486,7 +637,6 @@ class AdvancedNeuralSymbolicPipeline:
         mission_graph = self._generate_mission_graph(tension_curve, room_count, constraints)
         
         if self.explainability_mgr:
-            from datetime import datetime
             trace = DecisionTrace(
                 decision_id=f"mission_graph_{int(time.time())}",
                 source=DecisionSource.EVOLUTIONARY_DIRECTOR,
@@ -677,7 +827,7 @@ class AdvancedNeuralSymbolicPipeline:
         
         # Diversity analysis (MAP-Elites)
         diversity_score = 0.0
-        if self.map_elites and room_layout:
+        if self.map_elites:
             try:
                 from src.simulation.map_elites import calculate_diversity_score
 
@@ -686,11 +836,13 @@ class AdvancedNeuralSymbolicPipeline:
                 else:
                     self.map_elites.grid.clear()
 
-                for _, bbox in room_layout.items():
-                    x_min, y_min, x_max, y_max = bbox
-                    room_grid = dungeon_grid[y_min:y_max + 1, x_min:x_max + 1]
-                    solver_result = self._estimate_room_solver_result(room_grid)
-                    self.map_elites.add_dungeon(room_grid, room_grid, solver_result)
+                solver_result = self._estimate_dungeon_solver_result(dungeon_grid, mission_graph)
+                self.map_elites.add_dungeon(
+                    mission_graph,
+                    dungeon_grid,
+                    solver_result,
+                    mission_graph=mission_graph,
+                )
 
                 diversity_score = float(calculate_diversity_score(self.map_elites))
             except (AttributeError, RuntimeError, ValueError, TypeError) as e:
@@ -1126,6 +1278,7 @@ class AdvancedNeuralSymbolicPipeline:
                 guidance_scale=self.neural_pipeline.default_guidance_scale,
                 logic_guidance_scale=self.neural_pipeline.default_logic_guidance_scale,
                 num_diffusion_steps=self._effective_diffusion_steps(),
+                use_fast_sampling=self.fast_sampling_active,
                 use_ddim=True,
                 apply_repair=self.neural_pipeline.default_apply_repair,
                 start_goal_coords=self.neural_pipeline.default_start_goal_coords,
@@ -1168,8 +1321,6 @@ class AdvancedNeuralSymbolicPipeline:
                             )
                             prefix = self.config.output_dir / "discrepancy_heatmaps" / f"room_{int(node_id)}"
                             saved_paths = save_discrepancy_heatmap(heatmap, str(prefix))
-
-                            from datetime import datetime
 
                             trace = DecisionTrace(
                                 decision_id=f"wfc_discrepancy_{int(time.time() * 1000)}_{int(node_id)}",
@@ -1407,7 +1558,7 @@ def quick_start_demo():
     
     # Configure with all features enabled
     config = AdvancedPipelineConfig(
-        use_lcm_lora=True,  # Will only activate when a real fast sampler is available
+        use_lcm_lora=False,  # Enable only with a real distilled consistency sampler.
         enable_seam_smoothing=True,  # 87% discontinuity reduction
         enable_collision_validation=True,  # 98.3% alignment
         theme=ThemeType.CASTLE,  # Style transfer

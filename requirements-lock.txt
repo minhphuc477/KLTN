@@ -1,0 +1,19 @@
+﻿# H-MOLQD locked dependency snapshot
+# Generated from the active environment for project/test/train dependencies.
+
+accelerate==1.12.0
+h5py==3.16.0
+matplotlib==3.10.7
+networkx==3.5
+numpy==2.4.1
+opencv-python==4.13.0.90
+pillow==11.3.0
+pydot==4.0.1
+pytest==9.0.2
+scipy==1.16.2
+seaborn==0.13.2
+torch==2.6.0+cu124
+torch-geometric==2.7.0
+torchvision==0.21.0+cu124
+tqdm==4.67.1
+typing_extensions==4.15.0
