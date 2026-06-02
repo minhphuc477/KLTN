@@ -78,6 +78,7 @@ def vqvae_training_kwargs_from_resolved_config(config: Dict[str, Any]) -> Dict[s
         "lr": stage["learning_rate"],
         "weight_decay": stage["weight_decay"],
         "grad_clip_norm": stage["grad_clip_norm"],
+        "scheduler_eta_min": stage["scheduler_eta_min"],
         "latent_dim": stage["latent_dim"],
         "hidden_dim": stage["hidden_dim"],
         "codebook_size": stage["codebook_size"],
@@ -134,6 +135,7 @@ def _default_vqvae_training_kwargs() -> Dict[str, Any]:
         "lr": 3e-4,
         "weight_decay": 1e-5,
         "grad_clip_norm": 1.0,
+        "scheduler_eta_min": 1e-6,
         "latent_dim": 64,
         "hidden_dim": 96,
         "codebook_size": 256,
@@ -197,6 +199,7 @@ def _legacy_vqvae_overrides_from_args(args: argparse.Namespace) -> Dict[str, Any
     _set("lr", getattr(args, "lr", None))
     _set("weight_decay", getattr(args, "weight_decay", None))
     _set("grad_clip_norm", getattr(args, "grad_clip_norm", None))
+    _set("scheduler_eta_min", getattr(args, "scheduler_eta_min", None))
     _set("latent_dim", getattr(args, "latent_dim", None))
     _set("hidden_dim", getattr(args, "hidden_dim", None))
     _set("codebook_size", getattr(args, "codebook_size", None))
@@ -551,6 +554,11 @@ def train_vqvae(args):
         weight_decay=float(getattr(args, "weight_decay", 1e-5)),
         grad_clip_norm=float(getattr(args, "grad_clip_norm", 1.0)),
     )
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        trainer.optimizer,
+        T_max=max(1, int(args.epochs)),
+        eta_min=float(getattr(args, "scheduler_eta_min", 1e-6)),
+    )
 
     # ------------------------------------------------------------------
     # Checkpoint resume
@@ -567,6 +575,8 @@ def train_vqvae(args):
         model.load_state_dict(ckpt["model_state_dict"])
         if "optimizer_state_dict" in ckpt:
             trainer.optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+        if "scheduler_state_dict" in ckpt:
+            scheduler.load_state_dict(ckpt["scheduler_state_dict"])
         start_epoch = ckpt.get("epoch", 0) + 1
         best_metric_name = str(
             ckpt.get(
@@ -677,6 +687,8 @@ def train_vqvae(args):
 
         codebook_metrics = compute_vqvae_codebook_health(model)
         epoch_metrics.update(codebook_metrics)
+        scheduler.step()
+        epoch_metrics["learning_rate"] = float(trainer.optimizer.param_groups[0]["lr"])
         epoch_metrics["epoch_runtime_sec"] = float(time.time() - epoch_started_at)
         epoch_metrics["wall_time_sec"] = float(time.time() - run_started_at)
 
@@ -711,6 +723,8 @@ def train_vqvae(args):
             best_payload = {
                 "epoch": epoch,
                 "model_state_dict": model.state_dict(),
+                "optimizer_state_dict": trainer.optimizer.state_dict(),
+                "scheduler_state_dict": scheduler.state_dict(),
                 "loss": float(epoch_metrics["loss"]),
                 "accuracy": float(eval_metrics["accuracy"]),
                 "perplexity": float(eval_metrics["perplexity"]),
@@ -776,6 +790,7 @@ def train_vqvae(args):
             "epoch": epoch,
             "model_state_dict": model.state_dict(),
             "optimizer_state_dict": trainer.optimizer.state_dict(),
+            "scheduler_state_dict": scheduler.state_dict(),
             "loss": float(epoch_metrics["loss"]),
             "best_loss": float(best_metric_value),
             "best_metric_name": str(best_metric_name),
@@ -960,6 +975,7 @@ def main():
     parser.add_argument("--lr", type=float, default=None)
     parser.add_argument("--weight-decay", type=float, default=None)
     parser.add_argument("--grad-clip-norm", type=float, default=None)
+    parser.add_argument("--scheduler-eta-min", type=float, default=None)
     parser.add_argument("--latent-dim", type=int, default=None)
     parser.add_argument("--hidden-dim", type=int, default=None)
     parser.add_argument("--codebook-size", type=int, default=None)

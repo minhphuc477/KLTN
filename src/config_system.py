@@ -141,6 +141,7 @@ CONFIG_FIELDS: List[ConfigField] = [
     ConfigField("vqvae.learning_rate", float, 3e-4, "VQ-VAE learning rate.", min_value=1e-8),
     ConfigField("vqvae.weight_decay", float, 1e-5, "VQ-VAE optimizer weight decay.", min_value=0.0),
     ConfigField("vqvae.grad_clip_norm", float, 1.0, "VQ-VAE gradient clipping norm.", min_value=0.0),
+    ConfigField("vqvae.scheduler_eta_min", float, 1e-6, "VQ-VAE cosine scheduler minimum learning rate.", min_value=0.0),
     ConfigField("vqvae.save_every", int, 50, "VQ-VAE checkpoint interval.", min_value=1),
     ConfigField("vqvae.keep_last", int, 2, "Number of retained full-resume VQ-VAE checkpoints besides latest_resume/best.", min_value=0),
     ConfigField("vqvae.latent_dim", int, 64, "VQ-VAE latent width.", min_value=1),
@@ -167,6 +168,7 @@ CONFIG_FIELDS: List[ConfigField] = [
     ConfigField("diffusion.epochs", int, 100, "Diffusion training epochs.", min_value=1),
     ConfigField("diffusion.learning_rate", float, 1e-4, "Diffusion optimizer learning rate.", min_value=1e-8),
     ConfigField("diffusion.optimizer_weight_decay", float, 1e-5, "Diffusion optimizer weight decay.", min_value=0.0),
+    ConfigField("diffusion.global_lr_warmup_epochs", int, 0, "Optional LR warmup applied to all diffusion optimizer groups.", min_value=0),
     ConfigField("diffusion.grad_clip_norm", float, 1.0, "Diffusion gradient clipping norm.", min_value=0.0),
     ConfigField("diffusion.save_every", int, 10, "Diffusion checkpoint interval.", min_value=1),
     ConfigField("diffusion.keep_last", int, 2, "Number of retained full-resume diffusion checkpoints besides latest_resume/best/final.", min_value=0),
@@ -394,7 +396,7 @@ CONFIG_FIELDS: List[ConfigField] = [
     ConfigField("masked_room.topology_focus_dilation", int, 1, "4-neighbour dilation radius applied to the masked-room topology focus map so sparse anchor pixels influence a small local neighborhood.", min_value=0),
     ConfigField("masked_room.validation_fraction", float, 0.1, "Held-out validation fraction for masked-room model selection. Set to 0 to disable a validation split and fall back to train_loss.", min_value=0.0, max_value=0.5),
     ConfigField("masked_room.validation_max_batches", int, 16, "Maximum number of mini-batches evaluated on the masked-room validation split each epoch.", min_value=1),
-    ConfigField("masked_room.best_checkpoint_metric", str, "val_loss", "Metric used to select the best masked-room checkpoint. Falls back to train_loss when no validation split exists.", choices=("val_loss", "val_topology_focus_loss", "train_loss")),
+    ConfigField("masked_room.best_checkpoint_metric", str, "val_loss", "Metric used to select the best masked-room checkpoint. Falls back to train_loss when no validation split exists.", choices=("val_loss", "val_topology_focus_loss", "val_puzzle_stage_semantic_loss", "train_loss")),
     ConfigField("masked_room.room_topology_channels", int, ROOM_TOPOLOGY_CHANNEL_COUNT, "Masked-room topology-channel count.", min_value=1),
 ]
 
@@ -600,6 +602,8 @@ def validate_config(config: Dict[str, Any]) -> Dict[str, Any]:
 
     if not bool(validated["diffusion"]["logic_net_enabled"]):
         validated["diffusion"]["logic_net_trainable"] = False
+        validated["diffusion"]["guidance_scale"] = 0.0
+        validated["diffusion"]["alpha_logic"] = 0.0
 
     expected_topology_channels = int(ROOM_TOPOLOGY_CHANNEL_COUNT)
     if int(validated["diffusion"]["room_topology_channels"]) != expected_topology_channels:
@@ -740,7 +744,13 @@ def merge_config(
     merged = _deep_merge(defaults, yaml_config)
     if cli_overrides:
         merged = _deep_merge(merged, cli_overrides)
-    return validate_config(merged)
+    validated = validate_config(merged)
+    # Keep the existing path-aware validation as the source of normalized
+    # values, then enforce the Pydantic v2 section schema at runtime.
+    from src.pipeline.config_schema import HMOLQDConfigSchema
+
+    HMOLQDConfigSchema.model_validate(validated)
+    return validated
 
 
 def cli_overrides_from_namespace(namespace: Any) -> Dict[str, Any]:

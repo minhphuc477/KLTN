@@ -2,11 +2,42 @@
 
 from __future__ import annotations
 
-from ._shared import *
+import copy
+import logging
+import math
+import pickle
+import random
+from collections import defaultdict
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
+
+import networkx as nx
+import numpy as np
+
+from src.generation.grammar import (
+    AddArenaRule,
+    AddEntangledBranchesRule,
+    AddGatekeeperRule,
+    AddHazardGateRule,
+    AddItemGateRule,
+    AddMultiLockRule,
+    AddSkillChainRule,
+    MissionGrammar,
+    MissionGraph,
+    MissionNode,
+    NodeType,
+    EdgeType,
+    PruneDeadEndRule,
+)
+from src.zelda_data.vglc_utils import filter_virtual_nodes, validate_topology
+
+from ._shared import CVTEliteArchive, DEFAULT_REALISM_TUNING, DEFAULT_ZELDA_TRANSITIONS
 from .converters import mission_graph_to_networkx, networkx_to_mission_graph
 from .evaluator import TensionCurveEvaluator
 from .executor import GraphGrammarExecutor
 from .individual import Individual
+
+logger = logging.getLogger(__name__)
 
 class EvolutionaryTopologyGenerator:
     """
@@ -537,6 +568,13 @@ class EvolutionaryTopologyGenerator:
 
     def _finalize_graph_output(self, graph: MissionGraph, *, directed_output: bool) -> nx.Graph:
         """Convert phenotype graph to validated output graph."""
+        pre_repair_graph = copy.deepcopy(graph)
+        pre_repair_eval: Dict[str, Any] = {}
+        try:
+            pre_repair_eval = dict(self.evaluator.evaluate_graph(pre_repair_graph))
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+            logger.debug("Pre-repair phenotype evaluation failed during finalization: %s", exc)
+
         constraint_grammar = getattr(getattr(self, "executor", None), "_constraint_grammar", None)
         if constraint_grammar is not None:
             graph = copy.deepcopy(graph)
@@ -550,6 +588,23 @@ class EvolutionaryTopologyGenerator:
             graph = self._repair_gate_economy(graph, constraint_grammar=constraint_grammar)
             graph = constraint_grammar.ensure_anchor_nodes(graph)
             graph.sanitize()
+
+        try:
+            post_repair_eval = dict(self.evaluator.evaluate_graph(graph))
+            graph.ensure_generation_stats_defaults()
+            graph.generation_stats["final_repair_evaluation"] = {
+                "pre_fitness": float(pre_repair_eval.get("fitness", 0.0)),
+                "post_fitness": float(post_repair_eval.get("fitness", 0.0)),
+                "fitness_delta": float(post_repair_eval.get("fitness", 0.0))
+                - float(pre_repair_eval.get("fitness", 0.0)),
+                "pre_feasible": bool(pre_repair_eval.get("feasible", False)),
+                "post_feasible": bool(post_repair_eval.get("feasible", False)),
+                "pre_constraint_violation": float(pre_repair_eval.get("constraint_violation", 0.0)),
+                "post_constraint_violation": float(post_repair_eval.get("constraint_violation", 0.0)),
+            }
+            setattr(self, "last_final_repair_evaluation", dict(graph.generation_stats["final_repair_evaluation"]))
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+            logger.debug("Post-repair phenotype evaluation failed during finalization: %s", exc)
 
         best_networkx = mission_graph_to_networkx(graph, directed=True)
 
@@ -2955,6 +3010,7 @@ class EvolutionaryTopologyGenerator:
             'qd_mean_fitness_history': self.qd_mean_fitness_history,
             'qd_num_elites_history': self.qd_num_elites_history,
             'qd_final_archive_stats': self.qd_final_archive_stats,
+            'final_repair_evaluation': dict(getattr(self, "last_final_repair_evaluation", {})),
             'final_best_fitness': self.best_fitness_history[-1] if self.best_fitness_history else 0.0,
             'generations_run': len(self.best_fitness_history),
             'converged': self.best_fitness_history[-1] >= 0.95 if self.best_fitness_history else False,

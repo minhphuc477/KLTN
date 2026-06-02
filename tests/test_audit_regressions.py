@@ -1,12 +1,21 @@
+from pathlib import Path
+
 import numpy as np
 import torch
+from types import SimpleNamespace
+
+import pytest
+from pydantic import ValidationError
 
 from src.config_system import merge_config
 from src.core.graph_grid_attention import GraphToGridCrossAttention
-from src.core.latent_diffusion import create_latent_diffusion
+from src.core.latent_diffusion import ResBlock, create_latent_diffusion
 from src.core.logic_net import LogicNet, SoftBellmanFordGridPathfinder
 from src.evaluation import compare_tile_pattern_distributions
+from src.pipeline.config_schema import validate_config_payload
+from src.pipeline.evaluation import evaluate_generated_dungeon
 from src.train_diffusion import DiffusionTrainingConfig
+from src.utils.attention_visualization import save_attention_map_images
 
 
 def test_graph_to_grid_attention_can_capture_softmax_maps():
@@ -51,6 +60,8 @@ def test_logic_net_supports_explicit_bellman_ford_grid_pathfinder():
     distances = logic_net.grid_pathfinder(room_grid, source_mask)
     assert distances.shape == (1, 1, 16, 11)
     assert torch.isfinite(distances).all()
+    assert distances[0, 0, 8, 5].item() == 0.0
+    assert distances[0, 0, 0, 0].item() > distances[0, 0, 8, 5].item()
 
 
 def test_disable_logic_net_config_zeroes_guidance_and_logic_loss():
@@ -83,6 +94,22 @@ def test_config_system_disabling_logic_net_forces_non_trainable():
     assert config["diffusion"]["logic_grid_pathfinder"] == "bellman_ford"
 
 
+def test_pydantic_config_schema_rejects_invalid_diffusion_choice():
+    with pytest.raises(ValidationError):
+        validate_config_payload({"diffusion": {"logic_grid_pathfinder": "invalid"}})
+
+
+def test_pydantic_config_schema_returns_cross_field_normalization():
+    config = validate_config_payload(
+        {"diffusion": {"logic_net_enabled": False, "logic_net_trainable": True}}
+    )
+
+    assert config["diffusion"]["logic_net_enabled"] is False
+    assert config["diffusion"]["logic_net_trainable"] is False
+    assert config["diffusion"]["guidance_scale"] == 0.0
+    assert config["diffusion"]["alpha_logic"] == 0.0
+
+
 def test_tile_pattern_distribution_identical_samples_have_zero_js():
     reference = [np.array([[1, 1, 2], [1, 2, 2], [3, 3, 2]], dtype=np.int64)]
     generated = [reference[0].copy()]
@@ -92,6 +119,50 @@ def test_tile_pattern_distribution_identical_samples_have_zero_js():
     assert result.js_divergence == 0.0
     assert result.total_variation == 0.0
     assert result.pattern_coverage == 1.0
+
+
+def test_pipeline_evaluation_reports_tile_pattern_distribution_without_map_elites():
+    grid = np.array([[1, 1, 2], [1, 2, 2], [3, 3, 2]], dtype=np.int64)
+    pipeline = SimpleNamespace(
+        map_elites=None,
+        evaluation_reference_rooms=[grid.copy()],
+        tile_pattern_size=2,
+    )
+
+    result = evaluate_generated_dungeon(
+        pipeline,
+        dungeon_grid=grid.copy(),
+        mission_graph_physical=SimpleNamespace(),
+        enable_map_elites=False,
+    )
+
+    assert result is not None
+    assert result["tile_pattern_js_divergence"] == 0.0
+    assert result["tile_pattern_coverage"] == 1.0
+
+
+def test_attention_visualization_saves_numpy_and_heatmap_artifacts(tmp_path):
+    attention = torch.tensor(
+        [[[[0.75, 0.25], [0.50, 0.50]], [[0.25, 0.75], [0.10, 0.90]]]],
+        dtype=torch.float32,
+    )
+
+    result = save_attention_map_images(
+        attention,
+        tmp_path,
+        prefix="graph_attention",
+        node_labels=["start", "goal"],
+    )
+
+    assert Path(result["npy"]).exists()
+    assert result["shape"] == (1, 2, 2, 2)
+    assert len(result["pngs"]) == 2
+    assert all(Path(path).exists() for path in result["pngs"])
+
+
+def test_resblock_groupnorm_selection_supports_tiny_channel_widths():
+    assert ResBlock.num_groups(3) == 3
+    assert ResBlock.num_groups(1) == 1
 
 
 def test_latent_diffusion_compile_for_inference_is_opt_in(monkeypatch):

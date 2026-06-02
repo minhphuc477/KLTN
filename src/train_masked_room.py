@@ -666,7 +666,7 @@ class MaskedRoomTrainer:
         edge_attr = edge_attr.to(device)
         if edge_attr.numel() == 0:
             return None
-        num_edge_types = int(max(1, edge_features.shape[1])) if isinstance(edge_features, torch.Tensor) else GRAPH_EDGE_FEATURE_DIM
+        num_edge_types = GRAPH_EDGE_FEATURE_DIM
         return F.one_hot(edge_attr.clamp(0, num_edge_types - 1), num_classes=num_edge_types).float()
 
     def _stack_conditioning_vectors(self, cond_vectors: List[torch.Tensor]) -> torch.Tensor:
@@ -1366,6 +1366,8 @@ def train_masked_room(config: MaskedRoomTrainingConfig) -> MaskedRoomTrainer:
             )
         if best_metric_name == "val_topology_focus_loss":
             current_metric_value = float(epoch_metrics["val_topology_focus_loss"])
+        elif best_metric_name == "val_puzzle_stage_semantic_loss":
+            current_metric_value = float(epoch_metrics["val_puzzle_stage_semantic_loss"])
         elif best_metric_name == "val_loss":
             current_metric_value = float(epoch_metrics["val_loss"])
         else:

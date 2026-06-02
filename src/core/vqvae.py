@@ -197,26 +197,25 @@ class VectorQuantizer(nn.Module):
         # Compute losses
         losses = {}
         
-        if self.training:
-            if self.use_ema:
+        if self.use_ema:
+            if self.training:
                 # EMA codebook update
                 self._ema_update(z_flat, indices)
-                
-                # Only commitment loss (codebook is updated via EMA)
-                commitment_loss = F.mse_loss(z_e, z_q.detach())
-                losses['commitment_loss'] = self.commitment_cost * commitment_loss
-                losses['vq_loss'] = losses['commitment_loss']
-            else:
-                # Standard VQ-VAE loss
-                codebook_loss = F.mse_loss(z_q, z_e.detach())
-                commitment_loss = F.mse_loss(z_e, z_q.detach())
-                
-                losses['codebook_loss'] = codebook_loss
-                losses['commitment_loss'] = self.commitment_cost * commitment_loss
-                losses['vq_loss'] = codebook_loss + losses['commitment_loss']
+
+            # EMA updates stay training-only, but validation still reports the
+            # same commitment objective so train_loss and val_loss are comparable.
+            commitment_loss = F.mse_loss(z_e, z_q.detach())
+            losses['commitment_loss'] = self.commitment_cost * commitment_loss
+            losses['vq_loss'] = losses['commitment_loss']
         else:
-            losses['vq_loss'] = torch.tensor(0.0, device=z_e.device)
-            losses['commitment_loss'] = torch.tensor(0.0, device=z_e.device)
+            # Standard VQ-VAE loss does not mutate codebook state, so both
+            # terms are meaningful during training and validation.
+            codebook_loss = F.mse_loss(z_q, z_e.detach())
+            commitment_loss = F.mse_loss(z_e, z_q.detach())
+
+            losses['codebook_loss'] = codebook_loss
+            losses['commitment_loss'] = self.commitment_cost * commitment_loss
+            losses['vq_loss'] = codebook_loss + losses['commitment_loss']
         
         # Straight-through estimator
         z_q = z_e + (z_q - z_e).detach()
@@ -1424,8 +1423,7 @@ class VQVAETrainer:
         """Evaluation step."""
         self.model.eval()
         
-        recon, _, _ = self.model(batch)
-        losses = self.model.compute_loss(batch)
+        recon, _, losses = self.model.forward_with_losses(batch)
         
         # Compute accuracy
         pred = recon.argmax(dim=1)

@@ -995,6 +995,11 @@ class CrossAttentionFusion(nn.Module):
         
         # Output projection
         self.output_proj = nn.Linear(output_dim, output_dim)
+        self.residual_proj = (
+            nn.Identity()
+            if local_dim == output_dim
+            else nn.Linear(local_dim, output_dim)
+        )
         
         # Layer norm and dropout
         self.layer_norm = nn.LayerNorm(output_dim)
@@ -1069,7 +1074,7 @@ class CrossAttentionFusion(nn.Module):
         attn_output = self.output_proj(attn_output)
         
         # Add & Norm
-        c_out = self.layer_norm(c_local + attn_output)
+        c_out = self.layer_norm(self.residual_proj(c_local) + attn_output)
         
         # FFN + Add & Norm
         c_out = self.ffn_norm(c_out + self.ffn(c_out))

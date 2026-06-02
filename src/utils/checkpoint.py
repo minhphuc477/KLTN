@@ -583,6 +583,32 @@ class MetricsLogger:
         # Create timestamped log file
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.log_file = self.log_dir / f"{experiment_name}_{timestamp}.json"
+        self._wandb_run = self._initialize_wandb()
+
+    def _initialize_wandb(self) -> Optional[Any]:
+        """Start optional W&B tracking while keeping JSON logging authoritative."""
+        enabled = str(os.environ.get("HMOLQD_WANDB_ENABLED", "")).strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        if not enabled:
+            return None
+        try:
+            import wandb
+
+            return wandb.init(
+                project=os.environ.get("HMOLQD_WANDB_PROJECT", "kltn-hmolqd"),
+                entity=os.environ.get("HMOLQD_WANDB_ENTITY") or None,
+                group=os.environ.get("HMOLQD_WANDB_GROUP") or None,
+                name=self.experiment_name,
+                dir=str(self.log_dir),
+                reinit=True,
+            )
+        except (ImportError, RuntimeError, ValueError, TypeError) as exc:
+            logger.warning("W&B tracking disabled; JSON metrics remain active: %s", exc)
+            return None
     
     def log(self, metrics: Dict[str, Any], step: Optional[int] = None) -> None:
         """
@@ -597,6 +623,16 @@ class MetricsLogger:
         
         metrics['timestamp'] = datetime.now().isoformat()
         self.metrics_history.append(metrics)
+        if self._wandb_run is not None:
+            try:
+                wandb_metrics = {
+                    key: value
+                    for key, value in metrics.items()
+                    if key != "timestamp" and isinstance(value, (int, float, bool))
+                }
+                self._wandb_run.log(wandb_metrics, step=step)
+            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+                logger.warning("W&B metric forwarding failed; continuing with JSON logs: %s", exc)
         
         # Auto-save periodically
         if len(self.metrics_history) % 10 == 0:

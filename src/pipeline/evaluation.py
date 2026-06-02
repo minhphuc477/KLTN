@@ -11,11 +11,40 @@ import numpy as np
 import torch
 
 from src.core import ROOM_HEIGHT, ROOM_WIDTH, SEMANTIC_PALETTE
+from src.evaluation.tile_distribution import compare_tile_pattern_distributions
 from src.pipeline.spatial_utils import coerce_bool, fit_room_grid
 from src.pipeline.types import DungeonGenerationResult, MissingPipelineComponentError, RoomGenerationResult
 from src.zelda_data.vglc_utils import get_physical_start_node
 
 logger = logging.getLogger(__name__)
+
+
+def _reference_room_grids_for_distribution(pipeline) -> List[np.ndarray]:
+    """Return optional reference grids configured on the pipeline for realism metrics."""
+    for attr_name in (
+        "evaluation_reference_rooms",
+        "reference_room_grids",
+        "reference_rooms",
+        "vglc_reference_rooms",
+    ):
+        value = getattr(pipeline, attr_name, None)
+        if value is None:
+            continue
+        if isinstance(value, dict):
+            candidates = value.values()
+        else:
+            candidates = value
+        grids: List[np.ndarray] = []
+        try:
+            for item in candidates:
+                array = np.asarray(item)
+                if array.ndim == 2:
+                    grids.append(array.astype(np.int64, copy=False))
+        except TypeError:
+            continue
+        if grids:
+            return grids
+    return []
 
 def repair_room(
     pipeline,
@@ -57,39 +86,62 @@ def evaluate_generated_dungeon(
     mission_graph_physical: nx.Graph,
     *,
     enable_map_elites: bool = True,
-) -> Optional[Dict[str, float]]:
+) -> Optional[Dict[str, Any]]:
     """
     Evaluate a stitched dungeon grid with MAP-Elites when available.
 
     Returns `None` when evaluation is disabled or not applicable.
     """
-    if not enable_map_elites or pipeline.map_elites is None:
+    map_elites = getattr(pipeline, "map_elites", None)
+    map_elites_available = bool(enable_map_elites and map_elites is not None)
+    reference_rooms = _reference_room_grids_for_distribution(pipeline)
+    if not map_elites_available and not reference_rooms:
         return None
 
-    map_elites_score = None
-    try:
-        solver_result = pipeline._validate_dungeon(dungeon_grid)
-        if solver_result and solver_result.get('solvable'):
-            pipeline.map_elites.add_dungeon(
-                dungeon=dungeon_grid,
-                grid=dungeon_grid,
-                solver_result=solver_result,
-                mission_graph=mission_graph_physical,
-            )
-            map_elites_score = {
+    map_elites_score: Dict[str, Any] = {}
+    if map_elites_available:
+        try:
+            solver_result = pipeline._validate_dungeon(dungeon_grid)
+            if solver_result and solver_result.get('solvable'):
+                map_elites.add_dungeon(
+                    dungeon=dungeon_grid,
+                    grid=dungeon_grid,
+                    solver_result=solver_result,
+                    mission_graph=mission_graph_physical,
+                )
+                map_elites_score.update({
                 'linearity': solver_result.get('linearity', 0.0),
                 'leniency': solver_result.get('leniency', 0.0),
                 'progression_complexity': solver_result.get('progression_complexity', 0.0),
                 'topology_complexity': solver_result.get('topology_complexity', 0.0),
                 'path_length': solver_result.get('path_length', 0),
-            }
-            if hasattr(pipeline.map_elites, 'advanced_archive_stats'):
-                advanced_stats = pipeline.map_elites.advanced_archive_stats()
-                if advanced_stats is not None:
-                    map_elites_score['advanced_archive'] = advanced_stats
-    except (AttributeError, RuntimeError, ValueError, TypeError) as e:
-        logger.warning(f"MAP-Elites evaluation failed: {e}")
-    return map_elites_score
+                })
+                if hasattr(map_elites, 'advanced_archive_stats'):
+                    advanced_stats = map_elites.advanced_archive_stats()
+                    if advanced_stats is not None:
+                        map_elites_score['advanced_archive'] = advanced_stats
+        except (AttributeError, RuntimeError, ValueError, TypeError) as e:
+            logger.warning(f"MAP-Elites evaluation failed: {e}")
+
+    if reference_rooms:
+        try:
+            tile_metrics = compare_tile_pattern_distributions(
+                generated_grids=[np.asarray(dungeon_grid, dtype=np.int64)],
+                reference_grids=reference_rooms,
+                pattern_size=int(max(1, int(getattr(pipeline, "tile_pattern_size", 2)))),
+            ).to_dict()
+            map_elites_score["tile_pattern_distribution"] = tile_metrics
+            map_elites_score.update(
+                {
+                    "tile_pattern_js_divergence": float(tile_metrics["js_divergence"]),
+                    "tile_pattern_total_variation": float(tile_metrics["total_variation"]),
+                    "tile_pattern_coverage": float(tile_metrics["pattern_coverage"]),
+                }
+            )
+        except (RuntimeError, ValueError, TypeError) as e:
+            logger.warning("Tile-pattern distribution evaluation failed: %s", e)
+
+    return map_elites_score or None
 
 
 def evaluate_dungeon_solvability(

@@ -60,6 +60,7 @@ vqvae:
   learning_rate: 0.0003  # type=float, default=3e-4, valid>0
   weight_decay: 0.00001  # type=float, default=1e-5, valid>=0
   grad_clip_norm: 1.0  # type=float, default=1.0, valid>=0
+  scheduler_eta_min: 0.000001  # type=float, default=1e-6, valid>=0
   save_every: 50  # type=int, default=50, valid>=1
   keep_last: 2  # type=int, default=2, valid>=0; number of retained full-resume checkpoints besides latest_resume/best
   latent_dim: 64  # type=int, default=64, valid>=1
@@ -88,6 +89,7 @@ diffusion:
   epochs: 100  # type=int, default=100, valid>=1
   learning_rate: 0.0001  # type=float, default=1e-4, valid>0
   optimizer_weight_decay: 0.00001  # type=float, default=1e-5, valid>=0
+  global_lr_warmup_epochs: 0  # type=int, default=0, valid>=0; optional warmup for all diffusion optimizer groups
   grad_clip_norm: 1.0  # type=float, default=1.0, valid>=0
   save_every: 10  # type=int, default=10, valid>=1
   keep_last: 2  # type=int, default=2, valid>=0; number of retained full-resume checkpoints besides latest_resume/best/final

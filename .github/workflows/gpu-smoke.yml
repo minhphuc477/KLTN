@@ -1,0 +1,30 @@
+name: GPU smoke
+
+on:
+  workflow_dispatch:
+
+jobs:
+  cuda-smoke:
+    runs-on: [self-hosted, gpu]
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[test]"
+
+      - name: Report CUDA runtime
+        run: python -c "import torch; print({'torch': torch.__version__, 'cuda_available': torch.cuda.is_available(), 'cuda_version': torch.version.cuda, 'device_count': torch.cuda.device_count()})"
+
+      - name: Run CUDA smoke tests
+        run: python -m pytest tests/test_cuda_smoke.py -q

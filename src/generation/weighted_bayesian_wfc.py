@@ -244,7 +244,13 @@ class WeightedBayesianWFC:
                 return False
 
             # Step 2: Bayesian collapse (weighted by priors + adjacency)
-            tile_id = self._bayesian_collapse(row, col)
+            try:
+                tile_id = self._bayesian_collapse(row, col)
+            except ValueError:
+                self._diag_contradictions += 1
+                if not self._resolve_contradiction():
+                    return False
+                continue
 
             # Step 3: Save decision point and update grid
             self._push_decision_snapshot(row, col, tile_id)
@@ -385,7 +391,7 @@ class WeightedBayesianWFC:
         if len(probs) == 0:
             return 0.0
         
-        return -np.sum(probs * np.log(probs + 1e-10))
+        return float(-np.sum(probs * np.log(probs)))
     
     def _bayesian_collapse(self, row: int, col: int) -> int:
         """
@@ -399,8 +405,12 @@ class WeightedBayesianWFC:
         # Apply adjacency constraints (already propagated in superposition)
         # Probs already include both VQ-VAE priors and adjacency constraints
         
-        # Normalize
-        probs /= (np.sum(probs) + 1e-10)
+        # Normalize. A zero-support cell is a contradiction, not a sampling
+        # distribution that can be repaired with an epsilon denominator.
+        total = float(np.sum(probs))
+        if total <= 0.0:
+            raise ValueError(f"Cannot collapse zero-support cell ({row}, {col}).")
+        probs /= total
         
         # Sample weighted by probabilities
         tile_idx = int(self.rng.choice(self.num_tiles, p=probs))
@@ -415,49 +425,68 @@ class WeightedBayesianWFC:
         For each neighbor, update its tile probabilities based on adjacency
         compatibility with the collapsed tile.
         """
-        prior = self.tile_priors[tile_id]
-        
-        # BUGFIX: Direction represents which direction the neighbor is FROM the collapsed cell
-        # Directions: N, S, E, W
-        neighbors = [
-            (row - 1, col, 'N'),  # North neighbor (above collapsed cell)
-            (row + 1, col, 'S'),  # South neighbor (below collapsed cell)
-            (row, col + 1, 'E'),  # East neighbor (right of collapsed cell)
-            (row, col - 1, 'W'),  # West neighbor (left of collapsed cell)
-        ]
-        
-        for nr, nc, direction in neighbors:
-            if not (0 <= nr < self.height and 0 <= nc < self.width):
-                continue
-            if self.collapsed_mask[nr, nc]:
-                continue
-            
-            # Update neighbor probabilities based on adjacency
-            for i, neighbor_tile_id in enumerate(self.tile_ids):
-                # Adjacency compatibility
-                adjacency_prob = prior.get_adjacency_probability(neighbor_tile_id, direction)
-                
-                if adjacency_prob == 0.0:
-                    # Hard constraint: incompatible tiles
-                    self.superposition[nr, nc, i] = 0.0
-                else:
-                    # Soft constraint: weight by adjacency probability
-                    self.superposition[nr, nc, i] *= (adjacency_prob ** self.config.adjacency_weight)
-            
-            # Renormalize neighbor distribution
-            if not self._normalize_cell(
-                nr,
-                nc,
-                allow_reset=not self.config.enable_backtracking,
-            ):
+        queue: List[Tuple[int, int]] = [(row, col)]
+        processed_soft_edges = set()
+
+        while queue:
+            source_row, source_col = queue.pop(0)
+            source_probs = self.superposition[source_row, source_col, :]
+            source_indices = np.flatnonzero(source_probs > 0.0)
+            if len(source_indices) == 0:
                 return False
+
+            neighbors = [
+                (source_row - 1, source_col, 'N'),
+                (source_row + 1, source_col, 'S'),
+                (source_row, source_col + 1, 'E'),
+                (source_row, source_col - 1, 'W'),
+            ]
+
+            for nr, nc, direction in neighbors:
+                if not (0 <= nr < self.height and 0 <= nc < self.width):
+                    continue
+
+                compatibility = np.zeros(self.num_tiles, dtype=np.float32)
+                for source_idx in source_indices:
+                    source_tile_id = self.tile_ids[int(source_idx)]
+                    prior = self.tile_priors[source_tile_id]
+                    for neighbor_idx, neighbor_tile_id in enumerate(self.tile_ids):
+                        compatibility[neighbor_idx] = max(
+                            compatibility[neighbor_idx],
+                            float(prior.get_adjacency_probability(neighbor_tile_id, direction)),
+                        )
+
+                if self.collapsed_mask[nr, nc]:
+                    neighbor_idx = self._tile_to_index[int(self.grid[nr, nc])]
+                    if compatibility[neighbor_idx] <= 0.0:
+                        return False
+                    continue
+
+                previous = self.superposition[nr, nc, :].copy()
+                self.superposition[nr, nc, compatibility <= 0.0] = 0.0
+
+                # A collapsed source contributes a single Bayesian likelihood
+                # factor. Uncollapsed sources only perform AC-3 support pruning
+                # so cyclic queue revisits cannot repeatedly shrink weights.
+                edge_key = (source_row, source_col, nr, nc)
+                if self.collapsed_mask[source_row, source_col] and edge_key not in processed_soft_edges:
+                    supported = compatibility > 0.0
+                    self.superposition[nr, nc, supported] *= (
+                        compatibility[supported] ** self.config.adjacency_weight
+                    )
+                    processed_soft_edges.add(edge_key)
+
+                if not self._normalize_cell(nr, nc, allow_reset=False):
+                    return False
+                if not np.allclose(previous, self.superposition[nr, nc, :], rtol=1e-6, atol=1e-8):
+                    queue.append((nr, nc))
         return True
     
     def _normalize_cell(
         self,
         row: int,
         col: int,
-        allow_reset: bool = True,
+        allow_reset: bool = False,
     ) -> bool:
         """Normalize probability distribution for a single cell."""
         total = np.sum(self.superposition[row, col, :])

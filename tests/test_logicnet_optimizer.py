@@ -28,6 +28,10 @@ def test_logicnet_optimizer():
     assert {"diffusion", "condition_encoder", "logic_net"} <= group_names
     assert all(param.requires_grad for param in logic_net_params)
     assert {id(param) for param in logic_net_params} <= optimizer_param_ids
+    assert trainer._estimated_total_steps > 1
+
+    logic_group = next(group for group in trainer.optimizer.param_groups if group.get("name") == "logic_net")
+    assert logic_group["lr"] < logic_group["base_lr"]
 
 if __name__ == "__main__":
     test_logicnet_optimizer()

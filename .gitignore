@@ -5,14 +5,17 @@
 
 # Python bytecode
 __pycache__/
+**/__pycache__/
 *.py[cod]
 *.pyc
 
 # Pytest cache
 .pytest_cache/
+.pytest_tmp_*/
 .pytest_tmp*/
 pytest_basetemp*/
 tmp_pytest*/
+tmp_pytest_codex/
 tmpapgwsida/
 artifacts/pytest_tmp*/
 outputs/pytest_tmp*/
@@ -29,6 +32,7 @@ results/
 exports/
 tmp/
 tmp*/
+tmp_*/
 artifacts/
 *.pkl
 *.pth

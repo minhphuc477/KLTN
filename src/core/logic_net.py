@@ -147,8 +147,9 @@ class DifferentiablePathfinder(nn.Module):
 
         2) Grid compatibility mode (room flood-fill approximation):
            - adjacency: walkability [B, H, W]
-           - edge_weights: start mask [B, H, W]
-           - source_mask: goal mask [B, H, W] (accepted for compatibility)
+           - edge_weights: traversal weights [B, H, W] (currently treated as
+             uniform positive costs for backward compatibility)
+           - source_mask: source/start mask [B, H, W]
         
         Args:
             adjacency: Graph adjacency or grid walkability tensor
@@ -161,10 +162,10 @@ class DifferentiablePathfinder(nn.Module):
         if not isinstance(adjacency, torch.Tensor) or not isinstance(edge_weights, torch.Tensor) or not isinstance(source_mask, torch.Tensor):
             raise TypeError("DifferentiablePathfinder.forward expects tensor inputs.")
 
-        # Backward-compatible grid mode:
+        # Grid mode:
         #   adjacency -> walkability [B, H, W]
-        #   edge_weights -> start mask [B, H, W]
-        #   source_mask -> goal mask [B, H, W] (accepted but not required for distance field)
+        #   edge_weights -> traversal weights [B, H, W] (currently uniform)
+        #   source_mask -> source/start mask [B, H, W]
         grid_mode = (
             isinstance(adjacency, torch.Tensor)
             and isinstance(edge_weights, torch.Tensor)
@@ -178,7 +179,7 @@ class DifferentiablePathfinder(nn.Module):
                     "source_mask to all be rank-3 [B,H,W] tensors. "
                     f"Got adjacency={tuple(adjacency.shape)}, edge_weights={tuple(edge_weights.shape)}, "
                     f"source_mask={tuple(source_mask.shape)}. "
-                    "Update legacy callers to pass explicit batched [B,H,W] walkability/start/goal tensors."
+                    "Update callers to pass explicit batched [B,H,W] walkability/weights/source tensors."
                 )
             if adjacency.shape != edge_weights.shape or adjacency.shape != source_mask.shape:
                 raise ValueError(
@@ -186,14 +187,18 @@ class DifferentiablePathfinder(nn.Module):
                     f"edge_weights={tuple(edge_weights.shape)}, source_mask={tuple(source_mask.shape)}."
                 )
             walkability = adjacency.float().clamp(0.0, 1.0)
-            start = edge_weights.float().clamp(0.0, 1.0)
+            start = source_mask.float().clamp(0.0, 1.0)
             B, H, W = walkability.shape
             device = walkability.device
 
             dist = torch.full((B, H, W), float(self.inf_distance), device=device)
             dist = torch.where(start > 0.5, torch.zeros_like(dist), dist)
 
-            # Soft Bellman-style relaxation over 4-neighborhood.
+            # Soft Bellman-style relaxation over 4-neighborhood. Historical
+            # callers passed their start mask in the second slot and a goal mask
+            # in the third. The current contract uses the third tensor as the
+            # source mask; this still computes a valid distance field from the
+            # requested source while avoiding ambiguous argument inversion.
             for _ in range(self.num_iterations):
                 # Non-wrapping neighbor shifts (avoid torch.roll border wrap-around).
                 inf = float(self.inf_distance)
@@ -374,6 +379,17 @@ class SoftBellmanFordGridPathfinder(nn.Module):
     ):
         super().__init__()
         self.num_classes = int(max(1, num_classes))
+        if not any(tile_id < self.num_classes for tile_id in self.WALKABLE_IDS):
+            raise ValueError(
+                "SoftBellmanFordGridPathfinder num_classes is too small for the configured walkable tile IDs."
+            )
+        skipped_walkable_ids = [tile_id for tile_id in self.WALKABLE_IDS if tile_id >= self.num_classes]
+        if skipped_walkable_ids:
+            logger.warning(
+                "SoftBellmanFordGridPathfinder skipping walkable tile IDs outside num_classes=%d: %s",
+                self.num_classes,
+                skipped_walkable_ids,
+            )
         self.pathfinder = DifferentiablePathfinder(
             num_iterations=num_iterations,
             temperature=temperature,
@@ -417,11 +433,10 @@ class SoftBellmanFordGridPathfinder(nn.Module):
                 f"source_mask={tuple(source_mask.shape)}."
             )
 
-        goal = torch.zeros_like(source_mask[:, 0])
         distances = self.pathfinder(
             walkability[:, 0].clamp(0.0, 1.0),
+            torch.ones_like(walkability[:, 0]),
             source_mask[:, 0].clamp(0.0, 1.0),
-            goal,
         )
         return distances.unsqueeze(1)
 

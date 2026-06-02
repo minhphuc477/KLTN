@@ -1,6 +1,6 @@
 # KLTN Documentation Index
 
-Last updated: 2026-05-24
+Last updated: 2026-06-02
 
 This is the canonical navigation page for `docs/`. Top-level files should be
 current references, executable protocols, or stable thesis/report materials.
@@ -34,6 +34,8 @@ Superseded notes belong under `docs/archive/`.
   [`OOD_SCALING_AND_BLINDED_EVAL_PROTOCOL.md`](OOD_SCALING_AND_BLINDED_EVAL_PROTOCOL.md)
 - PCG benchmark and external comparison:
   [`SOTA_COMPARISON_AND_BENCHMARKS.md`](SOTA_COMPARISON_AND_BENCHMARKS.md)
+- CNN versus Bellman-Ford LogicNet ablation:
+  [`pathfinder_ablation_protocol.md`](pathfinder_ablation_protocol.md)
 
 ## Architecture And Rationale
 
@@ -70,6 +72,10 @@ Superseded notes belong under `docs/archive/`.
 ## Reference Docs
 
 - [`BLOCK_IO_REFERENCE.md`](BLOCK_IO_REFERENCE.md)
+- [`architecture_audit_research_notes.md`](architecture_audit_research_notes.md)
+- [`experiment_tracking.md`](experiment_tracking.md)
+- [`gpu_validation.md`](gpu_validation.md)
+- [`reproducibility_versioning.md`](reproducibility_versioning.md)
 - [`GRAMMAR_REFERENCE.md`](GRAMMAR_REFERENCE.md)
 - [`SOLVERS_AND_GUI_REFERENCE.md`](SOLVERS_AND_GUI_REFERENCE.md)
 - [`GUI_RUNNER_DEMO_TUTORIAL.md`](GUI_RUNNER_DEMO_TUTORIAL.md)

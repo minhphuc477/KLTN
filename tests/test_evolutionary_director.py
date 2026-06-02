@@ -16,6 +16,7 @@ Run: pytest tests/test_evolutionary_director.py -v
 import sys
 from pathlib import Path
 import networkx as nx
+import pytest
 
 # Add project root to path
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -277,6 +278,7 @@ class TestEvolutionaryDirector:
         assert graph.number_of_nodes() > 0
         assert nx.is_connected(graph)
     
+    @pytest.mark.timeout(180)
     def test_long_curve(self):
         """Test long target curve."""
         target = [i / 20.0 for i in range(20)]

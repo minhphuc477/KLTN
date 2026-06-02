@@ -21,6 +21,18 @@ still required.
   https://arxiv.org/abs/2310.04378, and "LCM-LoRA",
   https://arxiv.org/abs/2311.05556. Song et al. provide the broader
   consistency-model basis at https://arxiv.org/abs/2303.01469.
+- WFC should preserve recursively propagated constraint supports, not only
+  one-hop neighbor updates: Karth and Smith, "WaveFunctionCollapse is
+  Constraint Solving in the Wild",
+  https://www.pcgworkshop.com/archive/karth2017wavefunctioncollapse.pdf.
+- MAP-Elites archives elites by user-selected dimensions of phenotypic
+  variation: Mouret and Clune, "Illuminating Search Spaces by Mapping Elites",
+  https://arxiv.org/abs/1504.04909.
+- Pydantic v2 models validate input through `model_validate()` and can forbid
+  extra fields through model configuration:
+  https://docs.pydantic.dev/latest/concepts/models/.
+- `pytest-timeout` supports a global configured timeout:
+  https://pypi.org/project/pytest-timeout/.
 
 ## Implementation Implications
 
@@ -37,3 +49,8 @@ still required.
 - Tile-pattern distribution metrics were added as a discrete corpus comparison
   primitive; they are intended to supplement, not replace, human playtests and
   solver-based validation.
+- Weighted WFC now treats zero-support cells as contradictions and recursively
+  propagates support reductions instead of restoring an unconstrained prior.
+- Topology generation records the pre/post repair fitness and feasibility
+  shift so exported phenotypes can be analyzed separately from pre-repair
+  individuals.

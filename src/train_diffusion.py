@@ -205,6 +205,7 @@ class DiffusionTrainingConfig:
         epochs: int = 100,
         learning_rate: float = 1e-4,
         optimizer_weight_decay: float = 1e-5,
+        global_lr_warmup_epochs: int = 0,
         alpha_visual: float = 1.0,   # Diffusion loss weight
         alpha_logic: float = 0.1,     # Solvability loss weight
         logic_loss_mode: str = "predicted_latent",  # predicted_latent | detached_real
@@ -418,6 +419,7 @@ class DiffusionTrainingConfig:
         self.epochs = epochs if not quick else 2
         self.learning_rate = learning_rate
         self.optimizer_weight_decay = float(max(0.0, optimizer_weight_decay))
+        self.global_lr_warmup_epochs = int(max(0, global_lr_warmup_epochs))
         self.alpha_visual = alpha_visual
         self.alpha_logic = alpha_logic if self.logic_net_enabled else 0.0
         mode = str(logic_loss_mode).strip().lower()
@@ -600,6 +602,7 @@ def diffusion_training_kwargs_from_resolved_config(
         "epochs": stage["epochs"],
         "learning_rate": stage["learning_rate"],
         "optimizer_weight_decay": stage["optimizer_weight_decay"],
+        "global_lr_warmup_epochs": stage["global_lr_warmup_epochs"],
         "alpha_visual": stage["alpha_visual"],
         "alpha_logic": stage["alpha_logic"],
         "logic_loss_mode": stage["logic_loss_mode"],
@@ -795,6 +798,7 @@ def _legacy_diffusion_overrides_from_args(args: argparse.Namespace) -> Dict[str,
     _set("logic_learning_rate", getattr(args, "logic_learning_rate", None))
     _set("logic_lr_warmup_epochs", getattr(args, "logic_lr_warmup_epochs", None))
     _set("logic_grid_pathfinder", getattr(args, "logic_grid_pathfinder", None))
+    _set("global_lr_warmup_epochs", getattr(args, "global_lr_warmup_epochs", None))
     _set("guidance_scale", getattr(args, "guidance_scale", None))
     _set("logic_topology_trace_weight", getattr(args, "logic_topology_trace_weight", None))
     _set("logic_topology_anchor_weight", getattr(args, "logic_topology_anchor_weight", None))
@@ -938,6 +942,8 @@ class DiffusionTrainer:
         # Metrics tracking
         self.epoch = 0
         self.global_step = 0
+        self._estimated_total_steps = self._default_estimated_total_steps()
+        self._apply_lr_warmup(completed_steps=0)
         
         # --- Phase 4A: EMA model weights ---
         import copy
@@ -1958,21 +1964,37 @@ class DiffusionTrainer:
                     return False
         return True
 
-    def _apply_logic_lr_warmup(self) -> None:
-        """Warm up only the LogicNet optimizer group during early joint training."""
-        if not bool(getattr(self.config, "logic_net_trainable", True)):
-            return
-        warmup_epochs = int(max(0, getattr(self.config, "logic_lr_warmup_epochs", 0)))
+    def _default_estimated_total_steps(self) -> int:
+        """Fallback schedule length used before a dataloader length is known."""
+        total_epochs = int(max(1, int(getattr(self.config, "epochs", 1))))
+        fallback_steps_per_epoch = int(max(1, int(getattr(self.config, "estimated_steps_per_epoch", 100))))
+        return int(max(1, total_epochs * fallback_steps_per_epoch))
+
+    def _warmup_scale(self, warmup_epochs: int, completed_steps: int) -> float:
         if warmup_epochs <= 0:
-            return
+            return 1.0
         total_steps = max(1, int(getattr(self, "_estimated_total_steps", 1)))
         total_epochs = max(1, int(getattr(self.config, "epochs", 1)))
         warmup_steps = max(1, int(total_steps * min(1.0, warmup_epochs / total_epochs)))
-        scale = min(1.0, max(1, int(self.global_step) + 1) / float(warmup_steps))
+        return min(1.0, max(1, int(completed_steps) + 1) / float(warmup_steps))
+
+    def _apply_lr_warmup(self, *, completed_steps: Optional[int] = None) -> None:
+        """Set optimizer-group learning rates for the next optimizer step."""
+        step_index = int(self.global_step if completed_steps is None else completed_steps)
+        global_scale = self._warmup_scale(
+            int(max(0, getattr(self.config, "global_lr_warmup_epochs", 0))),
+            step_index,
+        )
+        logic_scale = self._warmup_scale(
+            int(max(0, getattr(self.config, "logic_lr_warmup_epochs", 0))),
+            step_index,
+        ) if bool(getattr(self.config, "logic_net_trainable", True)) else 1.0
         for group in self.optimizer.param_groups:
-            if group.get("name") != "logic_net":
-                continue
-            group["lr"] = float(group.get("base_lr", group.get("lr", self.config.learning_rate))) * scale
+            base_lr = float(group.get("base_lr", group.get("lr", self.config.learning_rate)))
+            scale = global_scale
+            if group.get("name") == "logic_net":
+                scale = min(scale, logic_scale)
+            group["lr"] = base_lr * scale
     
     def train_step(
         self,
@@ -2166,12 +2188,14 @@ class DiffusionTrainer:
                     'logic_loss_mode_predicted': 1.0 if self.config.logic_loss_mode == 'predicted_latent' else 0.0,
                     'skipped_nonfinite_batch': 1.0,
                 }
-        self._apply_logic_lr_warmup()
         self.optimizer.step()
         
         # --- Phase 4A: Update EMA model weights ---
         self._update_ema()
-        
+
+        self.global_step += 1
+        self._apply_lr_warmup(completed_steps=self.global_step)
+
         # --- Phase 1D: Anneal LogicNet temperature ---
         # Use estimated total steps from config instead of hardcoded epochs*100
         if logic_enabled and hasattr(self.logic_net, 'anneal_temperature'):
@@ -2179,8 +2203,6 @@ class DiffusionTrainer:
             estimated_total_steps = max(1, getattr(self, '_estimated_total_steps', default_total_steps))
             progress = min(1.0, self.global_step / estimated_total_steps)
             self.logic_net.anneal_temperature(progress)
-        
-        self.global_step += 1
         
         return {
             'loss': total_loss.item(),
@@ -2972,6 +2994,7 @@ def main():
     parser.add_argument('--logic-net-trainable', action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument('--logic-learning-rate', type=float, default=None)
     parser.add_argument('--logic-lr-warmup-epochs', type=int, default=None)
+    parser.add_argument('--global-lr-warmup-epochs', type=int, default=None)
     parser.add_argument(
         '--logic-grid-pathfinder',
         type=str,

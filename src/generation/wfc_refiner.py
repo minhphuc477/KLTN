@@ -171,7 +171,10 @@ class CausalWFC:
         for (r, c), tile_id in fixed_tiles.items():
             if 0 <= r < self.height and 0 <= c < self.width:
                 self._collapse_cell(r, c, tile_id)
-                self._propagate(r, c)
+                self._update_game_state(r, c, tile_id)
+                if not self._propagate(r, c):
+                    self.last_contradiction = (int(r), int(c))
+                    self.contradictions += 1
     
     def generate(
         self,
@@ -238,7 +241,13 @@ class CausalWFC:
                     continue
             
             # Propagate constraints
-            self._propagate(cell.row, cell.col)
+            if not self._propagate(cell.row, cell.col):
+                self.contradictions += 1
+                self.last_contradiction = (int(cell.row), int(cell.col))
+                if not self._backtrack():
+                    logger.error("Cannot resolve propagated contradiction")
+                    self._handle_dead_end_feedback()
+                    break
         
         # Convert to numpy array
         return self._to_numpy()
@@ -402,24 +411,28 @@ class CausalWFC:
         if tile.tile_type == TileType.DOOR_LOCKED:
             self.game_state.place_lock((row, col))
     
-    def _propagate(self, start_row: int, start_col: int) -> None:
-        """Propagate constraints from collapsed cell."""
+    def _propagate(self, start_row: int, start_col: int) -> bool:
+        """Propagate adjacency supports recursively until arc consistency stabilizes."""
         stack = [(start_row, start_col)]
-        visited = set()
         
         while stack:
             r, c = stack.pop()
-            
-            if (r, c) in visited:
-                continue
-            visited.add((r, c))
-            
             current = self.grid[r][c]
-            if not current.is_collapsed:
-                continue
-            
-            current_tile = self.tile_set.get_tile(current.collapsed_tile)
-            if current_tile is None:
+            current_tile_ids = (
+                {int(current.collapsed_tile)}
+                if current.is_collapsed
+                else set(current.possibilities)
+            )
+            if not current_tile_ids:
+                self.last_contradiction = (int(r), int(c))
+                return False
+
+            current_tiles = [
+                tile
+                for tile_id in current_tile_ids
+                if (tile := self.tile_set.get_tile(tile_id)) is not None
+            ]
+            if not current_tiles:
                 continue
             
             # Check neighbors
@@ -435,19 +448,30 @@ class CausalWFC:
                     continue
                 
                 neighbor = self.grid[nr][nc]
+
+                # A neighboring tile remains possible if at least one current
+                # possibility supports it in this direction.
+                allowed: Set[int] = set()
+                for current_tile in current_tiles:
+                    allowed.update(current_tile.adjacency.get(direction, set()))
+
                 if neighbor.is_collapsed:
+                    if int(neighbor.collapsed_tile) not in allowed:
+                        self.last_contradiction = (int(nr), int(nc))
+                        return False
                     continue
-                
-                # Get allowed tiles based on adjacency
-                allowed = current_tile.adjacency.get(direction, set())
                 
                 # Constrain neighbor possibilities
                 old_size = len(neighbor.possibilities)
                 neighbor.possibilities &= allowed
+                if not neighbor.possibilities:
+                    self.last_contradiction = (int(nr), int(nc))
+                    return False
                 
                 # If changed, add to stack
                 if len(neighbor.possibilities) < old_size:
                     stack.append((nr, nc))
+        return True
     
     def _backtrack(self) -> bool:
         """Attempt to backtrack on contradiction."""
@@ -462,24 +486,31 @@ class CausalWFC:
         # Remove last collapsed cell
         r, c = self.collapse_order.pop()
         cell = self.grid[r][c]
+        banned_tile = cell.collapsed_tile
         
-        # Remove from placement order
-        if self.game_state.placement_order:
-            self.game_state.placement_order.pop()
-        
-        # Undo game state changes
-        tile = self.tile_set.get_tile(cell.collapsed_tile)
-        if tile and tile.constraint.provides_key:
-            self.game_state.keys_collected = max(0, self.game_state.keys_collected - 1)
-            if self.game_state.key_positions:
-                self.game_state.key_positions.pop()
-        
-        # Reset cell
-        all_tiles = self.tile_set.get_all_tile_ids()
-        cell.collapsed_tile = None
-        cell.possibilities = set(all_tiles)
+        retained_placements = list(self.game_state.placement_order[:-1])
+        self._rebuild_from_placements(retained_placements)
+        cell = self.grid[r][c]
+        if banned_tile is not None:
+            cell.possibilities.discard(int(banned_tile))
         
         return True
+
+    def _rebuild_from_placements(self, placements: List[Tuple[int, int, int]]) -> None:
+        """Recompute constraints and game state after removing a failed decision."""
+        all_tiles = self.tile_set.get_all_tile_ids()
+        self.grid = [
+            [Cell(row=r, col=c, possibilities=set(all_tiles)) for c in range(self.width)]
+            for r in range(self.height)
+        ]
+        self.game_state = GameState()
+        self.collapse_order = []
+
+        for row, col, tile_id in placements:
+            self._collapse_cell(int(row), int(col), int(tile_id))
+            self._update_game_state(int(row), int(col), int(tile_id))
+            if not self._propagate(int(row), int(col)):
+                break
 
     def _build_dead_end_mask(self, center_rc: Tuple[int, int]) -> np.ndarray:
         """Build local contradiction mask around a dead-end center cell."""

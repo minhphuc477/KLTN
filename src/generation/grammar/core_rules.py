@@ -263,11 +263,27 @@ class InsertLockKeyRule(ProductionRule):
                         if edge.edge_type == EdgeType.PATH:
                             lock_candidates.append((edge_idx, edge))
 
-        # Fallback when no strict "after-key" path edge is available.
+        # Fallback to forward descendants of the key only. Using an arbitrary
+        # PATH edge here can place a lock before its provider and violate the
+        # rule's causal contract.
         if not lock_candidates:
+            forward = graph.get_forward_adjacency_map()
+            reachable_after_key = {key_id}
+            queue = deque([key_id])
+            while queue:
+                current = queue.popleft()
+                for neighbor in forward.get(current, []):
+                    if neighbor not in reachable_after_key:
+                        reachable_after_key.add(neighbor)
+                        queue.append(neighbor)
             lock_candidates = [
                 (i, e) for i, e in enumerate(graph.edges)
-                if e.edge_type == EdgeType.PATH and e.source != key_id and e.target != key_id
+                if (
+                    e.edge_type == EdgeType.PATH
+                    and e.source in reachable_after_key
+                    and e.source != key_id
+                    and e.target != key_id
+                )
             ]
         
         if lock_candidates:
@@ -327,15 +343,12 @@ class InsertLockKeyRule(ProductionRule):
         node_b: int,
     ) -> Optional[int]:
         """
-        Find a PATH edge index connecting two adjacent nodes, in either direction.
+        Find a forward PATH edge index connecting two adjacent nodes.
         """
         for idx, edge in enumerate(graph.edges):
             if edge.edge_type != EdgeType.PATH:
                 continue
-            if (
-                (edge.source == node_a and edge.target == node_b) or
-                (edge.source == node_b and edge.target == node_a)
-            ):
+            if edge.source == node_a and edge.target == node_b:
                 return idx
         return None
     

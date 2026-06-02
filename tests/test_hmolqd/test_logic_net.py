@@ -45,7 +45,7 @@ class TestDifferentiablePathfinder:
         goal = torch.zeros(1, 16, 11)
         goal[0, 15, 10] = 1.0
         
-        distances = pathfinder(walkability, start, goal)
+        distances = pathfinder(walkability, torch.ones_like(walkability), start)
         
         assert distances.shape == (1, 16, 11)
         # Goal should have small distance

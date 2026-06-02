@@ -507,17 +507,19 @@ class MissionGrammar:
                 )
             return False
 
-        goal_neighbors = list(dict.fromkeys(graph._adjacency.get(goal.id, [])))
-        if len(goal_neighbors) != 1:
+        goal_predecessors = list(dict.fromkeys(
+            edge.source for edge in graph.edges if edge.target == goal.id
+        ))
+        if len(goal_predecessors) != 1:
             if log_failures:
                 logger.warning(
-                    "Goal gauntlet validation failed: GOAL %s has neighbors %s (expected exactly one boss neighbor)",
+                    "Goal gauntlet validation failed: GOAL %s has predecessors %s (expected exactly one boss predecessor)",
                     goal.id,
-                    goal_neighbors,
+                    goal_predecessors,
                 )
             return False
 
-        boss_id = goal_neighbors[0]
+        boss_id = goal_predecessors[0]
         boss = graph.nodes.get(boss_id)
         if boss is None or boss.node_type != NodeType.BOSS:
             if log_failures:
@@ -735,7 +737,13 @@ class MissionGrammar:
             if edge.target == goal.id:
                 repairs += 1
                 continue
-            if edge.source in {boss_door.id, boss_node.id} or edge.target in {boss_door.id, boss_node.id}:
+            if edge.source == boss_node.id or edge.target == boss_node.id:
+                repairs += 1
+                continue
+            if edge.source == boss_door.id:
+                repairs += 1
+                continue
+            if edge.target == boss_door.id and edge.source in {goal.id, boss_node.id, boss_door.id}:
                 repairs += 1
                 continue
             retained_edges.append(edge)
@@ -1013,7 +1021,7 @@ class MissionGrammar:
         while queue:
             current = queue.popleft()
             
-            for neighbor in graph._adjacency.get(current, []):
+            for neighbor in graph.get_forward_adjacency_map().get(current, []):
                 if neighbor in visited or neighbor in exclude:
                     continue
                 
@@ -1042,7 +1050,7 @@ class MissionGrammar:
         while queue:
             current = queue.popleft()
 
-            for neighbor in graph._adjacency.get(current, []):
+            for neighbor in graph.get_forward_adjacency_map().get(current, []):
                 if (current, neighbor) in exclude_edges:
                     continue
                 if neighbor in visited:
