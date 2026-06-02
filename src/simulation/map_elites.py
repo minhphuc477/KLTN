@@ -13,6 +13,7 @@ from the GUI (optional plotting via matplotlib when available).
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 import math
 import logging
 import pickle
@@ -23,7 +24,11 @@ from typing import Dict, Tuple, Optional, Any, List, Iterable, Union
 import networkx as nx
 
 # Import from canonical source
-from src.core.definitions import SEMANTIC_PALETTE, parse_edge_type_tokens
+from src.core.definitions import (
+    SEMANTIC_PALETTE,
+    parse_edge_type_tokens,
+    parse_node_label_tokens,
+)
 
 try:
     from src.zelda_data.zelda_core import DungeonSolver
@@ -149,7 +154,6 @@ class MAPElitesEvaluator:
                 'gating_density': 0.0,
                 'topology_complexity': 0.0,
             }
-
         try:
             n_nodes = int(mission_graph.number_of_nodes())
             n_edges = int(mission_graph.number_of_edges())
@@ -207,6 +211,107 @@ class MAPElitesEvaluator:
                 'topology_complexity': 0.0,
             }
 
+    @staticmethod
+    def _node_tokens(data: Dict[str, Any]) -> set[str]:
+        tokens = set(parse_node_label_tokens(str(data.get('label', '') or '')))
+        node_type = str(data.get('type', '') or '').strip().lower()
+        if node_type:
+            tokens.add(node_type)
+        if data.get('is_start'):
+            tokens.update({'s', 'start'})
+        if data.get('is_goal') or data.get('is_triforce'):
+            tokens.update({'t', 'goal', 'triforce'})
+        return tokens
+
+    def _extract_graph_behavior_metrics(self, mission_graph: Optional[nx.Graph]) -> Dict[str, float]:
+        """Extract dungeon-level descriptors from the macro mission graph."""
+        if mission_graph is None or mission_graph.number_of_nodes() == 0:
+            return {}
+
+        try:
+            nodes = list(mission_graph.nodes())
+            n_nodes = len(nodes)
+            start = None
+            goal = None
+            key_count = 0
+            enemy_count = 0
+            for node, data in mission_graph.nodes(data=True):
+                tokens = self._node_tokens(dict(data))
+                if start is None and ({'s', 'start'} & tokens):
+                    start = node
+                if goal is None and ({'t', 'goal', 'triforce'} & tokens):
+                    goal = node
+                if 'k' in tokens or ('key' in tokens and 'boss_key' not in tokens):
+                    key_count += max(1, int(data.get('key_count_hint', data.get('key_count', 0)) or 0))
+                if {'e', 'enemy', 'boss', 'mini_boss'} & tokens or data.get('has_enemy'):
+                    enemy_count += max(1, int(data.get('enemy_count_hint', data.get('enemy_count', 0)) or 0))
+
+            start = nodes[0] if start is None else start
+            goal = nodes[-1] if goal is None else goal
+            undirected = mission_graph.to_undirected()
+            critical_path = nx.shortest_path(undirected, source=start, target=goal)
+            critical_path_length = max(0, len(critical_path) - 1)
+            critical_path_ratio = self._clip01(len(critical_path) / max(1, n_nodes))
+
+            locked_types = set(self._iter_locked_edge_types())
+            lock_count = 0
+            for _, _, data in mission_graph.edges(data=True):
+                edge_tokens = parse_edge_type_tokens(
+                    label=str(data.get('label', '') or ''),
+                    edge_type=str(data.get('edge_type', data.get('type', '')) or ''),
+                )
+                if any(token in locked_types for token in edge_tokens):
+                    lock_count += 1
+
+            if lock_count == 0:
+                graph_leniency = 1.0
+            else:
+                graph_leniency = self._clip01(key_count / max(1, lock_count))
+
+            difficulty_curve = []
+            for node in critical_path:
+                data = mission_graph.nodes[node]
+                difficulty_curve.append(
+                    float(
+                        data.get(
+                            'difficulty',
+                            data.get('difficulty_rating', data.get('tension_value', 0.0)),
+                        )
+                        or 0.0
+                    )
+                )
+            difficulty_progression = 0.0
+            if len(difficulty_curve) >= 2:
+                steps = np.diff(np.asarray(difficulty_curve, dtype=np.float64))
+                nondecreasing_fraction = float(np.mean(steps >= -1e-9))
+                positive_rise = self._clip01(max(0.0, difficulty_curve[-1] - difficulty_curve[0]))
+                difficulty_progression = self._clip01(
+                    (0.65 * nondecreasing_fraction) + (0.35 * positive_rise)
+                )
+
+            topology = self._extract_graph_topology_metrics(mission_graph)
+            progression_complexity = self._clip01(
+                (0.35 * topology['gating_density'])
+                + (0.25 * topology['branching_factor'])
+                + (0.20 * critical_path_ratio)
+                + (0.20 * difficulty_progression)
+            )
+            return {
+                'graph_linearity': critical_path_ratio,
+                'graph_leniency': graph_leniency,
+                'graph_progression_complexity': progression_complexity,
+                'critical_path_length': float(critical_path_length),
+                'critical_path_ratio': critical_path_ratio,
+                'global_difficulty_progression': difficulty_progression,
+                'graph_key_count': float(key_count),
+                'graph_lock_count': float(lock_count),
+                'graph_enemy_count': float(enemy_count),
+                **topology,
+            }
+        except (AttributeError, RuntimeError, ValueError, TypeError, nx.NetworkXException) as exc:
+            logger.debug("Failed to extract graph behavior metrics: %s", exc)
+            return {}
+
     def _build_behavior_descriptor(
         self,
         grid: np.ndarray,
@@ -247,11 +352,19 @@ class MAPElitesEvaluator:
             (0.40 * lock_pressure) + (0.30 * backtracking) + (0.20 * path_pressure) + (0.10 * enemy_pressure)
         )
 
-        topology_metrics = self._extract_graph_topology_metrics(mission_graph)
-        topology_complexity = self._clip01(topology_metrics.get('topology_complexity', density))
-
-        if self.descriptor_mode == 'legacy':
-            # Preserve old behavior for ablations.
+        graph_metrics = self._extract_graph_behavior_metrics(mission_graph)
+        graph_descriptor_used = bool(graph_metrics) and self.descriptor_mode != 'legacy'
+        if graph_descriptor_used:
+            linearity = self._clip01(graph_metrics['graph_linearity'])
+            leniency = self._clip01(graph_metrics['graph_leniency'])
+            progression_complexity = self._clip01(graph_metrics['graph_progression_complexity'])
+            topology_complexity = self._clip01(graph_metrics['topology_complexity'])
+            key_count = int(graph_metrics['graph_key_count'])
+            lock_count = int(graph_metrics['graph_lock_count'])
+            enemy_count = int(graph_metrics['graph_enemy_count'])
+        else:
+            # Preserve the former stitched-grid descriptors for explicit legacy
+            # ablations and for callers that genuinely have no mission graph.
             topology_complexity = density
 
         features = (linearity, leniency, progression_complexity, topology_complexity)
@@ -266,8 +379,9 @@ class MAPElitesEvaluator:
             'key_count': float(key_count),
             'lock_count': float(lock_count),
             'enemy_count': float(enemy_count),
+            'graph_descriptor_used': float(graph_descriptor_used),
         }
-        metrics.update(topology_metrics)
+        metrics.update(graph_metrics)
         return features, metrics
 
     def add_dungeon(
@@ -276,10 +390,10 @@ class MAPElitesEvaluator:
         grid: np.ndarray,
         solver_result: Dict[str, Any],
         mission_graph: Optional[nx.Graph] = None,
-    ) -> None:
+    ) -> Optional[Dict[str, float]]:
         # solver_result expected to contain 'solvable' and 'path_length' when solvable
         if not solver_result or not solver_result.get('solvable', False):
-            return
+            return None
 
         path_len = int(solver_result.get('path_length', 0))
         features, descriptor_metrics = self._build_behavior_descriptor(
@@ -325,6 +439,7 @@ class MAPElitesEvaluator:
                 self.save_archive(self.archive_path)
             except (AttributeError, OSError, pickle.PickleError, TypeError, ValueError) as e:
                 logger.warning("Failed to autosave MAP-Elites archive to %s: %s", self.archive_path, e)
+        return descriptor_metrics
 
     def occupancy_grid(self) -> np.ndarray:
         arr = np.zeros((self.resolution, self.resolution), dtype=np.uint8)
@@ -359,6 +474,52 @@ class MAPElitesEvaluator:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open('wb') as f:
             pickle.dump(self._archive_payload(), f, protocol=pickle.HIGHEST_PROTOCOL)
+        return path
+
+    def export_archive_json(self, filepath: Union[str, Path]) -> Path:
+        """Export a portable, analysis-only JSON snapshot without pickled solutions."""
+        path = Path(filepath)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        elites: List[Dict[str, Any]] = []
+        if self._advanced_archive is not None:
+            for elite in self._advanced_archive.get_all_elites():
+                elites.append(
+                    {
+                        'cell': list(elite.cell),
+                        'fitness': float(elite.fitness),
+                        'features': [float(value) for value in elite.features],
+                        'metrics': dict(elite.metadata or {}),
+                    }
+                )
+        else:
+            for (x, y), entry in self.grid.items():
+                metrics = dict(entry.metrics)
+                elites.append(
+                    {
+                        'cell': [int(x), int(y)],
+                        'fitness': float(entry.score),
+                        'features': [
+                            float(metrics.get('linearity', 0.0)),
+                            float(metrics.get('leniency', 0.0)),
+                            float(metrics.get('progression_complexity', 0.0)),
+                            float(metrics.get('topology_complexity', 0.0)),
+                        ],
+                        'metrics': metrics,
+                    }
+                )
+        payload = {
+            'version': 1,
+            'descriptor_mode': str(self.descriptor_mode),
+            'descriptor_names': [
+                'linearity',
+                'leniency',
+                'progression_complexity',
+                'topology_complexity',
+            ],
+            'elites': elites,
+            'advanced_archive_stats': self.advanced_archive_stats(),
+        }
+        path.write_text(json.dumps(payload, indent=2), encoding='utf-8')
         return path
 
     def load_archive(self, filepath: Optional[Union[str, Path]] = None) -> None:
@@ -423,6 +584,17 @@ def _get_grid_from_dungeon(dungeon) -> Optional[np.ndarray]:
     return None
 
 
+def _get_mission_graph_from_dungeon(dungeon: Any) -> Optional[nx.Graph]:
+    """Extract an embedded macro mission graph from common dungeon wrappers."""
+    if isinstance(dungeon, nx.Graph):
+        return dungeon
+    for attr in ('mission_graph_physical', 'mission_graph', 'graph'):
+        candidate = getattr(dungeon, attr, None)
+        if isinstance(candidate, nx.Graph):
+            return candidate
+    return None
+
+
 def _quick_solver_result_from_grid(grid: np.ndarray) -> Dict[str, Any]:
     """Deterministic fallback when no solver is available."""
     floor_id = int(SEMANTIC_PALETTE['FLOOR']) if SEMANTIC_PALETTE else 1
@@ -444,6 +616,7 @@ def run_map_elites_on_maps(
     load_existing_archive: bool = False,
     autosave_archive: bool = False,
     enable_advanced_archive: bool = True,
+    descriptor_mode: str = 'hybrid',
 ) -> Tuple[MAPElitesEvaluator, np.ndarray]:
     """Run MAP-Elites on a provided list of dungeon-like objects.
 
@@ -457,6 +630,7 @@ def run_map_elites_on_maps(
         resolution=resolution,
         tie_breaker=tie_breaker,
         enable_advanced_archive=enable_advanced_archive,
+        descriptor_mode=descriptor_mode,
         archive_path=archive_path,
         load_existing_archive=load_existing_archive,
         autosave_archive=autosave_archive,
@@ -494,7 +668,12 @@ def run_map_elites_on_maps(
             logger.debug("Solver failed in run_map_elites_on_maps, using fallback: %s", e)
             solver_result = _quick_solver_result_from_grid(np.asarray(grid))
 
-        evaluator.add_dungeon(d, grid, solver_result)
+        evaluator.add_dungeon(
+            d,
+            grid,
+            solver_result,
+            mission_graph=_get_mission_graph_from_dungeon(d),
+        )
 
     occ = evaluator.occupancy_grid()
     return evaluator, occ

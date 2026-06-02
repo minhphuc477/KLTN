@@ -98,6 +98,8 @@ Current code:
 
 - `src/core/vqvae.py`
 - `src/train_vqvae.py`
+- `src/core/gaussian_vae.py`
+- `src/train_gaussian_vae.py`
 - `tests/test_hmolqd/test_vqvae.py`
 
 What exists:
@@ -106,6 +108,8 @@ What exists:
 - VQ-VAE-2 hierarchical tokenizer ablation path
 - CoordConv and local-structure prior ablations
 - held-out validation support in current training commands
+- continuous Gaussian-VAE baseline with resumable cosine learning-rate
+  scheduling
 
 Missing or weak:
 
@@ -154,6 +158,7 @@ Current code:
 - `src/core/latent_diffusion.py`
 - `src/core/discrete_masked_model.py`
 - `src/train_diffusion.py`
+- `src/train_lcm.py`
 - `src/train_masked_room.py`
 
 What exists:
@@ -161,6 +166,8 @@ What exists:
 - latent diffusion branch
 - masked-room branch
 - fast-sampler branch
+- graph-aware trajectory consistency distillation with a frozen diffusion ODE
+  teacher and EMA target student
 - downstream branch command book
 
 Missing or weak:
@@ -251,11 +258,17 @@ What exists:
 - OOD/blinded packet builder
 - P-CBS behavioral validator
 - telemetry collector
+- dungeon-level runtime MAP-Elites descriptors when a mission graph is present
+- standalone 2D/4D QD archive heatmap analyzer
+- synthetic metroidvania-style structural OOD neural probe
+- consent-marked human telemetry provenance validator
 
 Missing or weak:
 
 - completed latest-branch human study
 - P-CBS calibration against human traces
+- checkpoint-backed execution of the synthetic structural OOD probe
+- final archive heatmaps from the publication MAP-Elites/CVT run
 - consolidated compute/sample-efficiency table
 - final external baseline table
 
@@ -263,6 +276,8 @@ Needed experiment/artifact:
 
 - run the blinded packet workflow and collect ratings.
 - use telemetry to calibrate P-CBS personas.
+- follow `docs/HUMAN_PLAYTEST_AND_OOD_QD_PROTOCOL.md` for the human telemetry,
+  trained OOD, and QD archive commands.
 - run `scripts/consolidate_compute_sample_efficiency.py`.
 
 ## Final Missing List
@@ -280,3 +295,30 @@ Architectural change probably needed only if experiments fail:
 
 - room semantics may need stronger pre-repair supervision if ablations show the
   repair/overlay layer is doing most of the semantic work.
+
+Implemented after the Revision 4 audit:
+
+- fast-sampler training now advances a frozen diffusion teacher across adjacent
+  DDIM trajectory points, supervises the online LoRA student from a lower-noise
+  EMA target student, resumes both online and EMA adapter state, and exports the
+  EMA target adapter for deployment.
+- Gaussian-VAE training now uses resumable epoch-level `CosineAnnealingLR`.
+- runtime MAP-Elites descriptors are already dungeon-level when a mission graph
+  is available; the remaining QD work is execution and publication analysis.
+
+Implemented after the pacing and validator follow-up audit:
+
+- tension smoothing now edge-pads before convolution, preserving final boss
+  peaks instead of suppressing boundary rooms.
+- goal clarity uses excess decision branching and room-level goal density; a
+  single goal no longer collapses the frustration signal to zero.
+- difficulty progression requires actual upward movement. Flat maps and
+  underspecified one-room inputs no longer receive positive sequence credit.
+- push-block validation resolves moved-block occupancy from state, including
+  vacated static block origins. Sequential validation, parallel A*, and P-CBS
+  now share the canonical transition semantics.
+- advanced pipeline fun evaluation now follows a resolved graph route, passes
+  the NetworkX graph required by the evaluator, and preserves boss, goal,
+  puzzle, lock, reward, and recovery inputs.
+- final rooms marked as both boss and triforce remain boss arenas for entity
+  spawning, so boss tension is represented in evaluation.

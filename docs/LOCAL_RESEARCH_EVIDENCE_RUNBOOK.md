@@ -80,8 +80,12 @@ Report:
 Collect local playtest telemetry with `src.utils.playtest_telemetry.PlaytestTelemetryCollector`, then calibrate:
 
 ```bash
+python scripts/validate_human_playtest_telemetry.py \
+  --telemetry results/playtest/human \
+  --output results/playtest/human_playtest_manifest.json
+
 python scripts/calibrate_pcbs_personas_from_telemetry.py \
-  --telemetry results/playtest \
+  --telemetry results/playtest/human \
   --pcbs-sweep-csv results/pcbs_persona_map_sweep/pcbs_persona_map_sweep.csv \
   --output-dir results/pcbs_telemetry_calibration
 ```
@@ -95,6 +99,10 @@ Outputs:
 
 Use `pcbs_persona_overrides.json` as the empirical calibration artifact for thesis/paper claims. The built-in persona constants should be described as priors; calibrated overrides are the telemetry-backed values.
 
+Use `PlaytestTelemetryCollector.start_human_session(...)` for recruited
+participants. Synthetic, replay-only, and simulated traces do not count as
+human evidence. See `docs/HUMAN_PLAYTEST_AND_OOD_QD_PROTOCOL.md`.
+
 ## 7. Minimum Evidence Bundle For The Paper
 
 Store these files under one timestamped result directory:
@@ -105,4 +113,3 @@ Store these files under one timestamped result directory:
 - P-CBS persona sweep CSV/JSON/Markdown.
 - P-CBS component ablation CSV/JSON/Markdown.
 - Telemetry calibration report and overrides.
-

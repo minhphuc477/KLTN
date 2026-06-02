@@ -324,6 +324,7 @@ CONFIG_FIELDS: List[ConfigField] = [
     ConfigField("fast_sampler.optimizer_weight_decay", float, 1e-4, "Fast-sampler optimizer weight decay.", min_value=0.0),
     ConfigField("fast_sampler.grad_clip_norm", float, 1.0, "Fast-sampler gradient clipping norm.", min_value=0.0),
     ConfigField("fast_sampler.num_inference_steps", int, 4, "Target inference steps for distillation.", min_value=1),
+    ConfigField("fast_sampler.ema_decay", float, 0.95, "EMA decay for the lower-noise consistency target student.", min_value=0.0, max_value=0.999999),
     ConfigField("fast_sampler.lora_rank", int, 8, "LoRA rank.", min_value=1),
     ConfigField("fast_sampler.lora_alpha", float, 8.0, "LoRA alpha.", min_value=0.0),
     ConfigField("fast_sampler.prediction_loss_weight", float, 0.25, "Weight on student-vs-teacher prediction loss.", min_value=0.0),

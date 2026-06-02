@@ -586,13 +586,13 @@ def create_room_semantics_from_graph(
         if is_start:
             return 'start'
 
-        is_goal = bool(attrs.get('is_goal') or attrs.get('is_triforce')) or ('t' in label_tokens) or ('triforce' in label_tokens)
-        if is_goal:
-            return 'safe'
-
         is_boss = bool(attrs.get('is_boss')) or (raw_type == 'boss') or ('b' in label_tokens) or ('boss' in label_tokens)
         if is_boss:
             return 'boss'
+
+        is_goal = bool(attrs.get('is_goal') or attrs.get('is_triforce')) or ('t' in label_tokens) or ('triforce' in label_tokens)
+        if is_goal:
+            return 'safe'
 
         if raw_type in {'enemy', 'arena', 'mini_boss', 'miniboss'} or 'e' in label_tokens or 'enemy' in label_tokens:
             return 'combat'

@@ -249,7 +249,7 @@ class TestFunMetrics:
         assert late_metrics.pacing.peak_placement > flat_metrics.pacing.peak_placement
 
     def test_pacing_handles_empty_path(self):
-        """Empty path should return safe fallback pacing metrics."""
+        """Empty path should not receive a positive pacing score."""
         from src.evaluation.fun_metrics import FunMetricsEvaluator
 
         evaluator = FunMetricsEvaluator()
@@ -264,7 +264,70 @@ class TestFunMetrics:
 
         assert metrics.pacing.tension_variance == 0.0
         assert metrics.pacing.rest_areas == 0
-        assert 0.0 <= metrics.pacing.pacing_score <= 1.0
+        assert metrics.pacing.pacing_score == 0.0
+        assert metrics.flow.flow_score == 0.0
+
+    def test_pacing_smoothing_preserves_boss_boundary_peak(self):
+        """Edge padding should prevent the final boss tension from being halved."""
+        from src.evaluation.fun_analyzers import PacingAnalyzer
+
+        curve = PacingAnalyzer()._compute_tension_curve(
+            solution_path=[0, 1, 2],
+            room_contents={0: {}, 1: {}, 2: {"boss": True}},
+        )
+
+        assert curve.tolist() == pytest.approx([0.0, 0.25, 0.75])
+
+    def test_flat_difficulty_curve_does_not_score_as_progression(self):
+        """A sequence of empty rooms must not receive perfect flow progression."""
+        from src.evaluation.fun_analyzers import FlowAnalyzer
+
+        score = FlowAnalyzer()._compute_difficulty_progression(
+            solution_path=[0, 1, 2],
+            room_contents={0: {}, 1: {}, 2: {}},
+        )
+
+        assert score == 0.0
+
+    def test_single_room_inputs_do_not_receive_sequence_metric_credit(self):
+        """Flow and pacing require a sequence with at least two rooms."""
+        from src.evaluation.fun_analyzers import FlowAnalyzer, PacingAnalyzer
+
+        assert FlowAnalyzer()._compute_difficulty_progression([0], {0: {"boss": True}}) == 0.0
+        pacing = PacingAnalyzer().analyze(nx.DiGraph(), [0], {0: {"boss": True}})
+        assert pacing.pacing_score == 0.0
+
+    def test_goal_clarity_retains_branching_penalty_with_single_boss(self):
+        """One final boss should not erase confusion from a highly branching layout."""
+        from src.evaluation.fun_analyzers import FrustrationAnalyzer
+
+        graph = nx.Graph()
+        graph.add_edges_from(
+            [
+                (0, 1),
+                (0, 2),
+                (0, 3),
+                (0, 4),
+                (1, 5),
+                (1, 6),
+                (1, 7),
+            ]
+        )
+
+        score = FrustrationAnalyzer()._compute_goal_clarity(
+            graph,
+            {7: {"boss": True, "goal": True}},
+        )
+
+        assert score > 0.0
+
+    def test_linear_corridor_does_not_count_as_branching_confusion(self):
+        """Degree-two corridor nodes should not be treated as confusing choices."""
+        from src.evaluation.fun_analyzers import FrustrationAnalyzer
+
+        graph = nx.path_graph(5)
+
+        assert FrustrationAnalyzer()._compute_goal_clarity(graph, {}) == 0.0
 
 
 class TestEliteArchive:

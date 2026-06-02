@@ -92,6 +92,35 @@ class PlaytestTelemetryCollector:
         )
         self._start_time = time.time()
 
+    def start_human_session(
+        self,
+        session_id: str,
+        *,
+        participant_id: str,
+        study_id: str,
+        consent_recorded: bool,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Start a pseudonymous human-playtest session with explicit provenance."""
+        participant = str(participant_id).strip()
+        study = str(study_id).strip()
+        if not participant:
+            raise ValueError("participant_id must be a non-empty pseudonymous identifier.")
+        if not study:
+            raise ValueError("study_id must be non-empty.")
+        if not consent_recorded:
+            raise ValueError("Human telemetry collection requires recorded consent.")
+        human_context = dict(context or {})
+        human_context.update(
+            {
+                "evidence_source": "human_playtest",
+                "participant_id": participant,
+                "study_id": study,
+                "consent_recorded": True,
+            }
+        )
+        self.start_session(session_id, context=human_context)
+
     def log_event(
         self,
         event_type: str,

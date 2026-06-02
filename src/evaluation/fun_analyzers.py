@@ -87,13 +87,31 @@ class FrustrationAnalyzer:
         return dead_ends
 
     def _compute_goal_clarity(self, mission_graph: nx.Graph, room_contents: Dict[int, Dict]) -> float:
-        avg_degree = sum(dict(mission_graph.degree()).values()) / max(len(mission_graph.nodes), 1)
-        branching_confusion = min(avg_degree / 4.0, 1.0)
+        graph_nodes = set(mission_graph.nodes)
+        if not graph_nodes:
+            return 0.0
 
-        goal_rooms = [
-            node for node, content in room_contents.items() if content.get("goal", False) or content.get("boss", False)
-        ]
-        goal_visibility = 1.0 if goal_rooms else 0.5
+        if mission_graph.is_directed():
+            # A single forward choice is progression, not confusion.
+            excess_choices = [
+                min(max(int(mission_graph.out_degree(node)) - 1, 0) / 3.0, 1.0)
+                for node in graph_nodes
+            ]
+        else:
+            # Degree-two corridors are similarly unambiguous in undirected maps.
+            excess_choices = [
+                min(max(int(mission_graph.degree(node)) - 2, 0) / 2.0, 1.0)
+                for node in graph_nodes
+            ]
+        branching_confusion = float(np.mean(excess_choices))
+
+        goal_rooms = {
+            node for node in graph_nodes
+            if room_contents.get(node, {}).get("goal", False)
+            or room_contents.get(node, {}).get("boss", False)
+        }
+        # A single final boss must not erase the layout-level branching signal.
+        goal_visibility = min(len(goal_rooms) / max(len(graph_nodes), 1), 1.0)
         return branching_confusion * (1.0 - goal_visibility)
 
     def _compute_empty_room_ratio(self, room_contents: Dict[int, Dict]) -> float:
@@ -126,7 +144,8 @@ class ExplorabilityAnalyzer:
         room_contents: Dict[int, Dict],
     ) -> ExplorabilityMetrics:
         total_rooms = len(mission_graph.nodes)
-        optional_rooms = total_rooms - len(critical_path)
+        graph_nodes = set(mission_graph.nodes)
+        optional_rooms = max(0, total_rooms - len(set(critical_path) & graph_nodes))
         optional_ratio = optional_rooms / max(total_rooms, 1)
         secret_count = self._count_secrets(mission_graph)
         reward_density = self._compute_reward_density(room_contents)
@@ -192,7 +211,7 @@ class FlowAnalyzer:
 
     def _compute_difficulty_progression(self, solution_path: List[int], room_contents: Dict[int, Dict]) -> float:
         if len(solution_path) < 2:
-            return 1.0
+            return 0.0
 
         difficulties = []
         for room in solution_path:
@@ -200,8 +219,10 @@ class FlowAnalyzer:
             difficulty = self._calculate_weighted_difficulty(content)
             difficulties.append(difficulty)
 
-        increases = sum(1 for i in range(len(difficulties) - 1) if difficulties[i + 1] >= difficulties[i])
-        return increases / max(len(difficulties) - 1, 1)
+        deltas = np.diff(np.asarray(difficulties, dtype=np.float32))
+        progressive_steps = int(np.count_nonzero(deltas > 1e-6))
+        regressive_steps = int(np.count_nonzero(deltas < -1e-6))
+        return float(np.clip((progressive_steps - regressive_steps) / max(len(deltas), 1), 0.0, 1.0))
 
     def _calculate_weighted_difficulty(self, room_content: Dict) -> float:
         enemy_count = room_content.get("enemies", 0)
@@ -256,7 +277,7 @@ class FlowAnalyzer:
             difficulties.append(difficulty)
 
         if not difficulties:
-            return 0.5
+            return 0.0
 
         avg_difficulty = np.mean(difficulties)
         ideal = 2.5
@@ -283,7 +304,7 @@ class PacingAnalyzer:
                 tension_variance=0.0,
                 peak_placement=self.target_peak_position,
                 rest_areas=0,
-                pacing_score=0.5,
+                pacing_score=0.0,
             )
 
         if tension_curve.size == 1:
@@ -291,7 +312,7 @@ class PacingAnalyzer:
                 tension_variance=0.0,
                 peak_placement=1.0,
                 rest_areas=int(tension_curve[0] < 0.35),
-                pacing_score=float(0.6 + 0.4 * tension_curve[0]),
+                pacing_score=0.0,
             )
 
         first_diff = np.diff(tension_curve)
@@ -367,7 +388,7 @@ class PacingAnalyzer:
 
         if curve.size >= 3:
             kernel = np.array([0.25, 0.5, 0.25], dtype=np.float32)
-            curve = np.convolve(curve, kernel, mode="same")
+            curve = np.convolve(np.pad(curve, (1, 1), mode="edge"), kernel, mode="valid")
             curve = np.clip(curve, 0.0, 1.0)
 
         return curve

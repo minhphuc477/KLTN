@@ -107,6 +107,7 @@ class FastSamplerTrainingConfig:
         optimizer_weight_decay: float = 1e-4,
         grad_clip_norm: float = 1.0,
         num_inference_steps: int = 4,
+        ema_decay: float = 0.95,
         lora_rank: int = 8,
         lora_alpha: float = 8.0,
         prediction_loss_weight: float = 0.25,
@@ -161,6 +162,7 @@ class FastSamplerTrainingConfig:
         self.optimizer_weight_decay = float(max(0.0, optimizer_weight_decay))
         self.grad_clip_norm = float(max(0.0, grad_clip_norm))
         self.num_inference_steps = int(max(1, num_inference_steps))
+        self.ema_decay = float(max(0.0, min(0.999999, ema_decay)))
         self.lora_rank = int(max(1, lora_rank))
         self.lora_alpha = float(lora_alpha)
         self.prediction_loss_weight = float(max(0.0, prediction_loss_weight))
@@ -251,6 +253,7 @@ def fast_sampler_training_kwargs_from_resolved_config(config: Dict[str, Any]) ->
         "optimizer_weight_decay": stage["optimizer_weight_decay"],
         "grad_clip_norm": stage["grad_clip_norm"],
         "num_inference_steps": stage["num_inference_steps"],
+        "ema_decay": stage.get("ema_decay", 0.95),
         "lora_rank": stage["lora_rank"],
         "lora_alpha": stage["lora_alpha"],
         "prediction_loss_weight": stage["prediction_loss_weight"],
@@ -306,6 +309,7 @@ def _legacy_fast_sampler_overrides_from_args(args: argparse.Namespace) -> Dict[s
     _set("epochs", getattr(args, "epochs", None))
     _set("learning_rate", getattr(args, "lr", None))
     _set("num_inference_steps", getattr(args, "num_inference_steps", None))
+    _set("ema_decay", getattr(args, "ema_decay", None))
     _set("lora_rank", getattr(args, "lora_rank", None))
     _set("lora_alpha", getattr(args, "lora_alpha", None))
     _set("decode_alignment_weight", getattr(args, "decode_alignment_weight", None))
@@ -358,11 +362,11 @@ class ConsistencyLoRATrainer:
         self.config = config
         self.device = torch.device(config.device)
         self.base_bundle = self._load_base_bundle(config.base_diffusion_checkpoint)
-        self.teacher = copy.deepcopy(self.base_bundle.ema_diffusion).to(self.device).eval()
-        for param in self.teacher.parameters():
+        self.ode_teacher = copy.deepcopy(self.base_bundle.ema_diffusion).to(self.device).eval()
+        for param in self.ode_teacher.parameters():
             param.requires_grad = False
 
-        self.student = copy.deepcopy(self.teacher).to(self.device)
+        self.student = copy.deepcopy(self.ode_teacher).to(self.device)
         inject_lora_into_model(
             self.student.denoiser,
             rank=self.config.lora_rank,
@@ -371,6 +375,9 @@ class ConsistencyLoRATrainer:
         )
         freeze_non_lora_parameters(self.student)
         self.student.train()
+        self.teacher = copy.deepcopy(self.student).to(self.device).eval()
+        for param in self.teacher.parameters():
+            param.requires_grad = False
         self.puzzle_stage_semantics_head = PuzzleStageSemanticsHead(
             num_tile_classes=int(self.base_bundle.vqvae.num_classes),
             hidden_dim=int(getattr(self.config, "puzzle_stage_semantics_hidden_dim", DEFAULT_PUZZLE_STAGE_SEMANTICS_HIDDEN_DIM)),
@@ -434,9 +441,15 @@ class ConsistencyLoRATrainer:
         return bundle
 
     def _build_target_timestep_schedule(self) -> torch.Tensor:
-        num_train = int(self.teacher.num_timesteps)
+        num_train = int(self.ode_teacher.num_timesteps)
         steps = int(self.config.num_inference_steps)
-        return torch.linspace(num_train - 1, 0, steps).long().to(self.device)
+        if num_train < 2:
+            raise ValueError("Fast-sampler distillation requires at least two diffusion timesteps.")
+        schedule = torch.linspace(num_train - 1, 0, steps + 1).round().long()
+        schedule = torch.unique_consecutive(schedule)
+        if len(schedule) < 2:
+            raise ValueError("Fast-sampler timestep schedule must contain at least one trajectory segment.")
+        return schedule.to(self.device)
 
     def _room_tile_targets(self, real_maps: torch.Tensor) -> torch.Tensor:
         num_classes = int(self.base_bundle.vqvae.num_classes)
@@ -450,23 +463,53 @@ class ConsistencyLoRATrainer:
             f"expected 1 or {num_classes}."
         )
 
-    def _sample_batch_timesteps(self, batch_size: int) -> torch.Tensor:
-        idx = torch.randint(0, len(self.target_timesteps), (batch_size,), device=self.device)
-        return self.target_timesteps[idx]
+    def _sample_batch_timestep_pairs(self, batch_size: int) -> tuple[torch.Tensor, torch.Tensor]:
+        idx = torch.randint(0, len(self.target_timesteps) - 1, (batch_size,), device=self.device)
+        return self.target_timesteps[idx], self.target_timesteps[idx + 1]
 
-    def _sample_batch_timesteps_deterministic(
+    def _sample_batch_timestep_pairs_deterministic(
         self,
         batch_size: int,
         *,
         generator: torch.Generator,
-    ) -> torch.Tensor:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         idx = torch.randint(
             0,
-            len(self.target_timesteps),
+            len(self.target_timesteps) - 1,
             (batch_size,),
             generator=generator,
         )
-        return self.target_timesteps[idx.to(device=self.device)]
+        idx = idx.to(device=self.device)
+        return self.target_timesteps[idx], self.target_timesteps[idx + 1]
+
+    @torch.no_grad()
+    def _teacher_ddim_step(
+        self,
+        pred_x0: torch.Tensor,
+        pred_noise: torch.Tensor,
+        t_previous: torch.Tensor,
+    ) -> torch.Tensor:
+        alpha_previous = self.ode_teacher.alphas_cumprod[t_previous].to(
+            device=pred_x0.device,
+            dtype=pred_x0.dtype,
+        )
+        while alpha_previous.dim() < pred_x0.dim():
+            alpha_previous = alpha_previous.unsqueeze(-1)
+        return alpha_previous.sqrt() * pred_x0 + (1.0 - alpha_previous).sqrt() * pred_noise
+
+    @torch.no_grad()
+    def _update_teacher_ema(self) -> None:
+        decay = float(self.config.ema_decay)
+        student_params = dict(self.student.named_parameters())
+        teacher_params = dict(self.teacher.named_parameters())
+        if student_params.keys() != teacher_params.keys():
+            raise RuntimeError("EMA target and online student parameters do not match.")
+        for name, teacher_param in teacher_params.items():
+            student_param = student_params[name].detach()
+            if torch.is_floating_point(teacher_param):
+                teacher_param.mul_(decay).add_(student_param, alpha=1.0 - decay)
+            else:
+                teacher_param.copy_(student_param)
 
     def _build_conditioning(
         self,
@@ -559,13 +602,30 @@ class ConsistencyLoRATrainer:
         conditioning, diffusion_graph_data = self._build_conditioning(graph_list, batch_size)
         z_0 = self.base_bundle.encode_to_latent(real_maps)
 
-        t = self._sample_batch_timesteps(batch_size)
+        t, t_previous = self._sample_batch_timestep_pairs(batch_size)
         noise = torch.randn_like(z_0)
-        x_t = self.teacher.q_sample(z_0, t, noise)
+        x_t = self.ode_teacher.q_sample(z_0, t, noise)
 
         with torch.no_grad():
-            teacher_pred = self.teacher._predict_noise_cfg(x_t, t, conditioning, graph_data=diffusion_graph_data)
-            teacher_x0, _teacher_noise = self.teacher._convert_prediction(teacher_pred, x_t, t)
+            ode_teacher_pred = self.ode_teacher._predict_noise_cfg(
+                x_t,
+                t,
+                conditioning,
+                graph_data=diffusion_graph_data,
+            )
+            ode_teacher_x0, ode_teacher_noise = self.ode_teacher._convert_prediction(ode_teacher_pred, x_t, t)
+            x_previous = self._teacher_ddim_step(ode_teacher_x0, ode_teacher_noise, t_previous)
+            teacher_pred = self.teacher._predict_noise_cfg(
+                x_previous,
+                t_previous,
+                conditioning,
+                graph_data=diffusion_graph_data,
+            )
+            teacher_x0, _teacher_noise = self.teacher._convert_prediction(
+                teacher_pred,
+                x_previous,
+                t_previous,
+            )
             teacher_x0 = torch.clamp(teacher_x0, -1.0, 1.0)
 
         student_pred = self.student._predict_noise_cfg(x_t, t, conditioning, graph_data=diffusion_graph_data)
@@ -573,7 +633,7 @@ class ConsistencyLoRATrainer:
         student_x0 = torch.clamp(student_x0, -1.0, 1.0)
 
         x0_loss = F.mse_loss(student_x0, teacher_x0)
-        pred_loss = F.mse_loss(student_pred, teacher_pred)
+        pred_loss = F.mse_loss(student_pred, ode_teacher_pred)
         decode_ce_loss = torch.zeros((), device=self.device, dtype=student_x0.dtype)
         topology_decode_ce_loss = torch.zeros((), device=self.device, dtype=student_x0.dtype)
         puzzle_stage_semantic_loss = torch.zeros((), device=self.device, dtype=student_x0.dtype)
@@ -628,6 +688,7 @@ class ConsistencyLoRATrainer:
                 max_norm=self.config.grad_clip_norm,
             )
         self.optimizer.step()
+        self._update_teacher_ema()
         self.global_step += 1
 
         return {
@@ -692,20 +753,33 @@ class ConsistencyLoRATrainer:
         conditioning, diffusion_graph_data = self._build_conditioning(graph_list, batch_size)
         z_0 = self.base_bundle.encode_to_latent(real_maps)
         if eval_seed is None:
-            t = self._sample_batch_timesteps(batch_size)
+            t, t_previous = self._sample_batch_timestep_pairs(batch_size)
             noise = torch.randn_like(z_0)
         else:
             generator = torch.Generator(device="cpu").manual_seed(int(eval_seed) + int(batch_index))
-            t = self._sample_batch_timesteps_deterministic(batch_size, generator=generator)
+            t, t_previous = self._sample_batch_timestep_pairs_deterministic(batch_size, generator=generator)
             noise = torch.randn(
                 tuple(z_0.shape),
                 generator=generator,
                 dtype=torch.float32,
             ).to(device=self.device, dtype=z_0.dtype)
-        x_t = self.teacher.q_sample(z_0, t, noise)
+        x_t = self.ode_teacher.q_sample(z_0, t, noise)
 
-        teacher_pred = self.teacher._predict_noise_cfg(x_t, t, conditioning, graph_data=diffusion_graph_data)
-        teacher_x0, _ = self.teacher._convert_prediction(teacher_pred, x_t, t)
+        ode_teacher_pred = self.ode_teacher._predict_noise_cfg(
+            x_t,
+            t,
+            conditioning,
+            graph_data=diffusion_graph_data,
+        )
+        ode_teacher_x0, ode_teacher_noise = self.ode_teacher._convert_prediction(ode_teacher_pred, x_t, t)
+        x_previous = self._teacher_ddim_step(ode_teacher_x0, ode_teacher_noise, t_previous)
+        teacher_pred = self.teacher._predict_noise_cfg(
+            x_previous,
+            t_previous,
+            conditioning,
+            graph_data=diffusion_graph_data,
+        )
+        teacher_x0, _ = self.teacher._convert_prediction(teacher_pred, x_previous, t_previous)
         teacher_x0 = torch.clamp(teacher_x0, -1.0, 1.0)
 
         student_pred = self.student._predict_noise_cfg(x_t, t, conditioning, graph_data=diffusion_graph_data)
@@ -713,7 +787,7 @@ class ConsistencyLoRATrainer:
         student_x0 = torch.clamp(student_x0, -1.0, 1.0)
 
         x0_loss = F.mse_loss(student_x0, teacher_x0)
-        pred_loss = F.mse_loss(student_pred, teacher_pred)
+        pred_loss = F.mse_loss(student_pred, ode_teacher_pred)
         decode_ce_loss = torch.zeros((), device=self.device, dtype=student_x0.dtype)
         topology_decode_ce_loss = torch.zeros((), device=self.device, dtype=student_x0.dtype)
         puzzle_stage_semantic_loss = torch.zeros((), device=self.device, dtype=student_x0.dtype)
@@ -772,11 +846,15 @@ class ConsistencyLoRATrainer:
     def save_checkpoint(self, path: str, metrics: Optional[Dict[str, Any]] = None) -> None:
         save_fast_sampler_checkpoint(
             path,
-            lora_state_dict=extract_lora_state_dict(self.student),
+            lora_state_dict=extract_lora_state_dict(self.teacher),
             base_diffusion_checkpoint=self.config.base_diffusion_checkpoint,
             num_inference_steps=self.config.num_inference_steps,
             lora_rank=self.config.lora_rank,
             lora_alpha=self.config.lora_alpha,
+            ema_decay=self.config.ema_decay,
+            target_update="ema",
+            distillation_objective="trajectory_consistency",
+            adapter_export="ema_target",
             target_modules=DEFAULT_LORA_TARGETS,
             metrics=metrics,
             distillation_type="consistency_lora",
@@ -810,11 +888,12 @@ class ConsistencyLoRATrainer:
             ),
         )
         puzzle_stage_head = getattr(self, "puzzle_stage_semantics_head", None)
-        contains = ["lora", "optimizer"]
+        contains = ["lora", "ema_target_lora", "optimizer"]
         payload = {
             "epoch": int(self.epoch),
             "global_step": int(self.global_step),
             "lora_state_dict": extract_lora_state_dict(self.student),
+            "ema_target_lora_state_dict": extract_lora_state_dict(self.teacher),
             "optimizer_state_dict": self.optimizer.state_dict(),
             "config": self.config.to_dict(),
             "metrics": dict(metrics or {}),
@@ -824,6 +903,10 @@ class ConsistencyLoRATrainer:
                 "num_inference_steps": int(self.config.num_inference_steps),
                 "lora_rank": int(self.config.lora_rank),
                 "lora_alpha": float(self.config.lora_alpha),
+                "ema_decay": float(self.config.ema_decay),
+                "target_update": "ema",
+                "distillation_objective": "trajectory_consistency",
+                "adapter_export": "ema_target",
                 "topology_alignment_weight": float(getattr(self.config, "topology_alignment_weight", 0.0)),
                 "topology_marker_weight": float(getattr(self.config, "topology_marker_weight", 2.0)),
                 "topology_trace_weight": float(getattr(self.config, "topology_trace_weight", 0.75)),
@@ -843,6 +926,10 @@ class ConsistencyLoRATrainer:
                 "distillation_type": "consistency_lora",
                 "num_inference_steps": int(self.config.num_inference_steps),
                 "lora_rank": int(self.config.lora_rank),
+                "ema_decay": float(self.config.ema_decay),
+                "target_update": "ema",
+                "distillation_objective": "trajectory_consistency",
+                "adapter_export": "ema_target",
                 "topology_alignment_weight": float(getattr(self.config, "topology_alignment_weight", 0.0)),
                 "topology_marker_weight": float(getattr(self.config, "topology_marker_weight", 2.0)),
                 "topology_trace_weight": float(getattr(self.config, "topology_trace_weight", 0.75)),
@@ -870,6 +957,10 @@ class ConsistencyLoRATrainer:
         if not isinstance(lora_state, dict):
             raise ValueError(f"Invalid fast-sampler resume checkpoint at {path!r}: missing lora_state_dict.")
         load_lora_state_dict(self.student, lora_state, strict=True)
+        target_lora_state = payload.get("ema_target_lora_state_dict", lora_state)
+        if not isinstance(target_lora_state, dict):
+            raise ValueError(f"Invalid fast-sampler resume checkpoint at {path!r}: invalid ema_target_lora_state_dict.")
+        load_lora_state_dict(self.teacher, target_lora_state, strict=True)
         if "puzzle_stage_semantics_head_state_dict" in payload:
             puzzle_stage_head = getattr(self, "puzzle_stage_semantics_head", None)
             if puzzle_stage_head is not None:
@@ -1208,6 +1299,7 @@ def main() -> None:
     parser.add_argument("--epochs", type=int, default=None)
     parser.add_argument("--lr", type=float, default=None)
     parser.add_argument("--num-inference-steps", type=int, default=None)
+    parser.add_argument("--ema-decay", type=float, default=None)
     parser.add_argument("--lora-rank", type=int, default=None)
     parser.add_argument("--lora-alpha", type=float, default=None)
     parser.add_argument("--decode-alignment-weight", type=float, default=None)

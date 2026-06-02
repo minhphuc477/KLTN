@@ -134,6 +134,24 @@ def test_create_room_semantics_accepts_string_node_ids():
     assert abs(float(semantics.difficulty) - 0.85) < 1e-9
 
 
+def test_create_room_semantics_keeps_final_boss_classification_when_goal_is_present():
+    """A final room can be both the triforce goal and the boss arena."""
+    semantics = create_room_semantics_from_graph(
+        mission_graph={
+            "nodes": {
+                "final": {
+                    "type": "boss",
+                    "is_boss": True,
+                    "is_triforce": True,
+                }
+            }
+        },
+        node_id="final",
+    )
+
+    assert semantics.room_type == "boss"
+
+
 def test_spawn_all_entities_uses_stable_room_seeds_for_string_node_ids(monkeypatch):
     recorded = []
 

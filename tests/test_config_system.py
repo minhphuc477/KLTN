@@ -161,6 +161,7 @@ def test_default_config_uses_small_data_recommended_room_model_profile():
     assert resolved["vqvae"]["best_checkpoint_metric"] == "val_loss"
     assert resolved["diffusion"]["keep_last"] == 2
     assert resolved["fast_sampler"]["keep_last"] == 2
+    assert resolved["fast_sampler"]["ema_decay"] == pytest.approx(0.95)
     assert resolved["fast_sampler"]["decode_alignment_weight"] == pytest.approx(0.25)
     assert resolved["fast_sampler"]["topology_alignment_weight"] == pytest.approx(0.25)
     assert resolved["fast_sampler"]["topology_marker_weight"] == pytest.approx(2.0)
@@ -311,6 +312,7 @@ def test_stage_helpers_forward_checkpoint_retention_and_resume_defaults():
     assert diffusion_kwargs["latent_cache_enabled"] is True
     assert diffusion_kwargs["latent_cache_max_items"] == 4096
     assert fast_sampler_kwargs["keep_last"] == 2
+    assert fast_sampler_kwargs["ema_decay"] == pytest.approx(0.95)
     assert fast_sampler_kwargs["auto_resume"] is True
     assert fast_sampler_kwargs["resume_checkpoint"] is None
     assert fast_sampler_kwargs["checkpoint_storage_budget_gb"] is None

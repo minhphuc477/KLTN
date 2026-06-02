@@ -95,6 +95,7 @@ def gaussian_vae_training_kwargs_from_resolved_config(config: Dict[str, Any]) ->
         "epochs": stage["epochs"],
         "batch_size": dataset["batch_size"],
         "lr": stage["learning_rate"],
+        "scheduler_eta_min": stage["scheduler_eta_min"],
         "weight_decay": stage["weight_decay"],
         "grad_clip_norm": stage["grad_clip_norm"],
         "latent_dim": stage["latent_dim"],
@@ -137,6 +138,7 @@ def _default_gaussian_vae_training_kwargs() -> Dict[str, Any]:
         "epochs": 300,
         "batch_size": 4,
         "lr": 3e-4,
+        "scheduler_eta_min": 1e-6,
         "weight_decay": 1e-5,
         "grad_clip_norm": 1.0,
         "latent_dim": 64,
@@ -185,6 +187,7 @@ def _legacy_gaussian_vae_overrides_from_args(args: argparse.Namespace) -> Dict[s
     _set("epochs", getattr(args, "epochs", None))
     _set("batch_size", getattr(args, "batch_size", None))
     _set("lr", getattr(args, "lr", None))
+    _set("scheduler_eta_min", getattr(args, "scheduler_eta_min", None))
     _set("weight_decay", getattr(args, "weight_decay", None))
     _set("grad_clip_norm", getattr(args, "grad_clip_norm", None))
     _set("latent_dim", getattr(args, "latent_dim", None))
@@ -274,6 +277,20 @@ def evaluate_gaussian_vae_loader(
         totals[key] /= max(1, batches)
     totals["batches"] = float(batches)
     return totals
+
+
+def build_gaussian_vae_scheduler(
+    trainer: GaussianVAETrainer,
+    *,
+    epochs: int,
+    eta_min: float,
+) -> torch.optim.lr_scheduler.CosineAnnealingLR:
+    """Create the resumable epoch-level cosine scheduler for Gaussian-VAE training."""
+    return torch.optim.lr_scheduler.CosineAnnealingLR(
+        trainer.optimizer,
+        T_max=max(1, int(epochs)),
+        eta_min=float(max(0.0, eta_min)),
+    )
 
 
 def train_gaussian_vae(args):
@@ -389,6 +406,11 @@ def train_gaussian_vae(args):
         weight_decay=float(getattr(args, "weight_decay", 1e-5)),
         grad_clip_norm=float(getattr(args, "grad_clip_norm", 1.0)),
     )
+    scheduler = build_gaussian_vae_scheduler(
+        trainer,
+        epochs=args.epochs,
+        eta_min=float(getattr(args, "scheduler_eta_min", 1e-6)),
+    )
 
     start_epoch = 0
     resume_path = resolve_resume_checkpoint(
@@ -402,6 +424,8 @@ def train_gaussian_vae(args):
         model.load_state_dict(ckpt["model_state_dict"])
         if "optimizer_state_dict" in ckpt:
             trainer.optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+        if "scheduler_state_dict" in ckpt:
+            scheduler.load_state_dict(ckpt["scheduler_state_dict"])
         start_epoch = ckpt.get("epoch", 0) + 1
         best_metric_name = str(
             ckpt.get(
@@ -505,6 +529,9 @@ def train_gaussian_vae(args):
             epoch_metrics["train_eval_illegal_adjacency_penalty"] = float(eval_metrics["illegal_adjacency_penalty"])
             epoch_metrics["train_eval_accuracy"] = float(eval_metrics["accuracy"])
 
+        scheduler.step()
+        epoch_metrics["learning_rate"] = float(trainer.optimizer.param_groups[0]["lr"])
+
         checkpoint_metric_name = str(getattr(args, "best_checkpoint_metric", "val_loss"))
         if checkpoint_metric_name == "val_loss" and eval_split_name == "val":
             checkpoint_metric_value = float(epoch_metrics["val_loss"])
@@ -537,6 +564,8 @@ def train_gaussian_vae(args):
             best_payload = {
                 "epoch": epoch,
                 "model_state_dict": model.state_dict(),
+                "optimizer_state_dict": trainer.optimizer.state_dict(),
+                "scheduler_state_dict": scheduler.state_dict(),
                 "loss": float(epoch_metrics["loss"]),
                 "accuracy": float(eval_metrics["accuracy"]),
                 "kl_loss": float(eval_metrics["kl_loss"]),
@@ -560,6 +589,8 @@ def train_gaussian_vae(args):
                     "encoder_channel_mult": [1, 2, 4],
                     "decoder_channel_mult": [4, 2, 1],
                     "room_level": bool(room_level),
+                    "scheduler": "CosineAnnealingLR",
+                    "scheduler_eta_min": float(getattr(args, "scheduler_eta_min", 1e-6)),
                 },
                 extra={
                     "epoch": int(epoch + 1),
@@ -586,6 +617,7 @@ def train_gaussian_vae(args):
             "epoch": epoch,
             "model_state_dict": model.state_dict(),
             "optimizer_state_dict": trainer.optimizer.state_dict(),
+            "scheduler_state_dict": scheduler.state_dict(),
             "loss": float(epoch_metrics["loss"]),
             "best_loss": float(best_metric_value),
             "best_metric_name": str(best_metric_name),
@@ -610,6 +642,8 @@ def train_gaussian_vae(args):
                 "encoder_channel_mult": [1, 2, 4],
                 "decoder_channel_mult": [4, 2, 1],
                 "room_level": bool(room_level),
+                "scheduler": "CosineAnnealingLR",
+                "scheduler_eta_min": float(getattr(args, "scheduler_eta_min", 1e-6)),
             },
             extra={
                 "epoch": int(epoch + 1),
@@ -650,6 +684,8 @@ def train_gaussian_vae(args):
                     "encoder_channel_mult": [1, 2, 4],
                     "decoder_channel_mult": [4, 2, 1],
                     "room_level": bool(room_level),
+                    "scheduler": "CosineAnnealingLR",
+                    "scheduler_eta_min": float(getattr(args, "scheduler_eta_min", 1e-6)),
                 },
                 extra={
                     "epoch": int(epoch + 1),
@@ -707,6 +743,7 @@ def main():
     parser.add_argument("--epochs", type=int, default=None)
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--lr", type=float, default=None)
+    parser.add_argument("--scheduler-eta-min", type=float, default=None)
     parser.add_argument("--weight-decay", type=float, default=None)
     parser.add_argument("--grad-clip-norm", type=float, default=None)
     parser.add_argument("--latent-dim", type=int, default=None)

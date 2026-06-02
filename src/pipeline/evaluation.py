@@ -103,18 +103,19 @@ def evaluate_generated_dungeon(
         try:
             solver_result = pipeline._validate_dungeon(dungeon_grid)
             if solver_result and solver_result.get('solvable'):
-                map_elites.add_dungeon(
+                descriptor_metrics = map_elites.add_dungeon(
                     dungeon=dungeon_grid,
                     grid=dungeon_grid,
                     solver_result=solver_result,
                     mission_graph=mission_graph_physical,
                 )
+                descriptor_metrics = descriptor_metrics or {}
                 map_elites_score.update({
-                'linearity': solver_result.get('linearity', 0.0),
-                'leniency': solver_result.get('leniency', 0.0),
-                'progression_complexity': solver_result.get('progression_complexity', 0.0),
-                'topology_complexity': solver_result.get('topology_complexity', 0.0),
-                'path_length': solver_result.get('path_length', 0),
+                'linearity': descriptor_metrics.get('linearity', solver_result.get('linearity', 0.0)),
+                'leniency': descriptor_metrics.get('leniency', solver_result.get('leniency', 0.0)),
+                'progression_complexity': descriptor_metrics.get('progression_complexity', 0.0),
+                'topology_complexity': descriptor_metrics.get('topology_complexity', 0.0),
+                'path_length': descriptor_metrics.get('path_length', solver_result.get('path_length', 0)),
                 })
                 if hasattr(map_elites, 'advanced_archive_stats'):
                     advanced_stats = map_elites.advanced_archive_stats()

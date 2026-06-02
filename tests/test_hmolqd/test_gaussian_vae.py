@@ -84,3 +84,26 @@ class TestGaussianVAETrainingHelpers:
         assert len(val_a) == 4
         assert list(train_a.indices) == list(train_b.indices)
         assert list(val_a.indices) == list(val_b.indices)
+
+    def test_cosine_scheduler_decays_and_restores_state(self):
+        from src.core.gaussian_vae import GaussianVAETrainer, SemanticGaussianVAE
+        from src.train_gaussian_vae import build_gaussian_vae_scheduler
+
+        model = SemanticGaussianVAE(
+            num_tile_classes=44,
+            latent_dim=16,
+            hidden_dim=16,
+        )
+        trainer = GaussianVAETrainer(model, learning_rate=1e-3)
+        scheduler = build_gaussian_vae_scheduler(trainer, epochs=4, eta_min=1e-5)
+
+        initial_lr = trainer.optimizer.param_groups[0]["lr"]
+        trainer.optimizer.step()
+        scheduler.step()
+        decayed_lr = trainer.optimizer.param_groups[0]["lr"]
+
+        restored = build_gaussian_vae_scheduler(trainer, epochs=4, eta_min=1e-5)
+        restored.load_state_dict(scheduler.state_dict())
+
+        assert decayed_lr < initial_lr
+        assert restored.state_dict()["last_epoch"] == scheduler.state_dict()["last_epoch"]

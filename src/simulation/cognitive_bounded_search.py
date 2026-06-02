@@ -2673,6 +2673,11 @@ class CognitiveBoundedSearch:
         tile_type: int
     ) -> bool:
         """Check if a move is valid."""
+        canonical_move = getattr(self.env, "try_move_pure", None)
+        if callable(canonical_move):
+            can_move, _ = canonical_move(game_state, target_pos, int(tile_type))
+            return bool(can_move)
+
         if tile_type in BLOCKING_IDS:
             return False
         
@@ -2766,6 +2771,10 @@ class CognitiveBoundedSearch:
         tile_type: int
     ) -> Tuple[bool, _GameState]:
         """Execute a move and return new game state."""
+        canonical_move = getattr(self.env, "try_move_pure", None)
+        if callable(canonical_move):
+            return canonical_move(game_state, target_pos, int(tile_type))
+
         new_state = game_state.copy()
         
         # Handle conditional tiles

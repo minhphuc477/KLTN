@@ -51,7 +51,7 @@ from src.generation.global_state import GlobalStateManager, GlobalStateType
 from src.generation.weighted_bayesian_wfc import WeightedBayesianWFC, extract_tile_priors_from_vqvae, WeightedBayesianWFCConfig
 from src.pipeline.dungeon_pipeline import NeuralSymbolicDungeonPipeline
 from src.pipeline.room_stitching import StitchedRoomLayout, compute_graph_aware_room_slots
-from src.core.definitions import ROOM_HEIGHT, ROOM_WIDTH
+from src.core.definitions import ROOM_HEIGHT, ROOM_WIDTH, parse_node_label_tokens
 from src.core.vqvae import canonical_latent_shape
 from src.optimization.lcm_lora import load_fast_sampler_checkpoint
 
@@ -509,28 +509,7 @@ class AdvancedNeuralSymbolicPipeline:
         if mission_graph is None or mission_graph.number_of_nodes() == 0:
             return {'solvable': False, 'path_length': 0, 'quality_score': 0.0}
 
-        nodes = list(mission_graph.nodes())
-        start_nodes = [
-            node for node, attrs in mission_graph.nodes(data=True)
-            if bool(attrs.get("is_start", attrs.get("start", False)))
-        ]
-        goal_nodes = [
-            node for node, attrs in mission_graph.nodes(data=True)
-            if bool(attrs.get("is_goal", attrs.get("goal", False)))
-            or str(attrs.get("type", attrs.get("node_type", ""))).lower() in {"goal", "boss", "triforce"}
-        ]
-        start = start_nodes[0] if start_nodes else nodes[0]
-        goal = goal_nodes[0] if goal_nodes else nodes[-1]
-
-        path_nodes: List[Any] = []
-        try:
-            path_nodes = nx.shortest_path(mission_graph, start, goal)
-        except (nx.NetworkXNoPath, nx.NodeNotFound):
-            try:
-                path_nodes = nx.shortest_path(mission_graph.to_undirected(), start, goal)
-            except (nx.NetworkXNoPath, nx.NodeNotFound):
-                path_nodes = []
-
+        path_nodes = self._resolve_mission_solution_path(mission_graph)
         path_length = int(len(path_nodes))
         solvable = path_length > 0
         node_count = max(1, int(mission_graph.number_of_nodes()))
@@ -586,6 +565,101 @@ class AdvancedNeuralSymbolicPipeline:
             'edge_count': int(edge_count),
             'node_count': int(node_count),
         }
+
+    @staticmethod
+    def _resolve_mission_solution_path(mission_graph: nx.Graph) -> List[Any]:
+        """Resolve a stable start-to-goal route instead of relying on node insertion order."""
+        if mission_graph is None or mission_graph.number_of_nodes() == 0:
+            return []
+
+        nodes = list(mission_graph.nodes())
+
+        def role_tokens(attrs: Dict[str, Any]) -> Set[str]:
+            tokens = set(parse_node_label_tokens(str(attrs.get("label", "") or "")))
+            for key in ("type", "node_type"):
+                raw = str(attrs.get(key, "") or "").strip().lower()
+                if raw:
+                    tokens.add(raw)
+            return tokens
+
+        start_nodes = [
+            node for node, attrs in mission_graph.nodes(data=True)
+            if bool(attrs.get("is_start", attrs.get("start", False)))
+            or bool(role_tokens(attrs) & {"s", "start"})
+        ]
+        goal_nodes = [
+            node for node, attrs in mission_graph.nodes(data=True)
+            if bool(
+                attrs.get("is_goal", attrs.get("goal", False))
+                or attrs.get("has_goal", False)
+                or attrs.get("is_triforce", False)
+                or attrs.get("has_triforce", False)
+                or attrs.get("is_boss", False)
+            )
+            or bool(role_tokens(attrs) & {"t", "goal", "boss", "triforce"})
+        ]
+        start = start_nodes[0] if start_nodes else nodes[0]
+        goal = goal_nodes[0] if goal_nodes else nodes[-1]
+
+        try:
+            return list(nx.shortest_path(mission_graph, start, goal))
+        except (nx.NetworkXNoPath, nx.NodeNotFound):
+            try:
+                return list(nx.shortest_path(mission_graph.to_undirected(), start, goal))
+            except (nx.NetworkXNoPath, nx.NodeNotFound):
+                return []
+
+    @staticmethod
+    def _build_fun_room_contents(mission_graph: nx.Graph, entities: List[Any]) -> Dict[Any, Dict[str, Any]]:
+        """Project graph semantics and spawned entities into analyzer inputs."""
+        contents: Dict[Any, Dict[str, Any]] = {}
+        lock_tokens = {"locked", "key_locked", "boss_locked", "item_locked", "item_gate", "switch_locked"}
+
+        for node_id, attrs in mission_graph.nodes(data=True):
+            entity_values = [
+                str(entity.entity_type.value).lower()
+                for entity in entities
+                if entity.room_id == node_id
+            ]
+            room_type = str(attrs.get("type", attrs.get("node_type", "")) or "").strip().lower()
+            label_tokens = set(parse_node_label_tokens(str(attrs.get("label", "") or "")))
+
+            if mission_graph.is_directed():
+                edge_data = [data for _, _, data in mission_graph.in_edges(node_id, data=True)]
+            else:
+                edge_data = [data for _, _, data in mission_graph.edges(node_id, data=True)]
+            lock_count = sum(
+                1
+                for data in edge_data
+                if any(
+                    token in f"{data.get('edge_type', '')} {data.get('type', '')} {data.get('label', '')}".lower()
+                    for token in lock_tokens
+                )
+            )
+
+            is_boss = bool(attrs.get("is_boss", False)) or room_type == "boss" or "boss" in label_tokens
+            is_goal = bool(
+                attrs.get("is_goal", attrs.get("goal", False))
+                or attrs.get("has_goal", False)
+                or attrs.get("is_triforce", False)
+                or attrs.get("has_triforce", False)
+            ) or bool(label_tokens & {"t", "goal", "triforce"})
+
+            contents[node_id] = {
+                "enemies": sum(value.startswith("enemy") for value in entity_values),
+                "keys": sum("key" in value for value in entity_values),
+                "items": sum(value.startswith("item") for value in entity_values),
+                "treasures": sum(value == "chest" for value in entity_values),
+                "health_pickups": sum(value == "health_potion" for value in entity_values),
+                "puzzles": int(bool(attrs.get("has_puzzle", False)) or "puzzle" in room_type),
+                "locks": int(lock_count),
+                "boss": bool(is_boss),
+                "goal": bool(is_goal),
+                "safe_room": bool(attrs.get("is_safe", False)) or room_type in {"safe", "start"},
+                "path_length": int(attrs.get("path_length", 20)),
+            }
+
+        return contents
     
     def generate_dungeon(
         self,
@@ -803,18 +877,12 @@ class AdvancedNeuralSymbolicPipeline:
         eval_start = time.time()
         if self.fun_evaluator:
             # Prepare data for fun metrics evaluation
-            solution_path = list(mission_graph.nodes())
-            room_contents = {}
-            for node_id in mission_graph.nodes():
-                room_contents[node_id] = {
-                    'enemies': sum(1 for e in entities if e.room_id == node_id and 'enemy' in e.entity_type.value),
-                    'keys': sum(1 for e in entities if e.room_id == node_id and 'key' in e.entity_type.value),
-                    'items': sum(1 for e in entities if e.room_id == node_id and 'item' in e.entity_type.value)
-                }
+            solution_path = self._resolve_mission_solution_path(mission_graph)
+            room_contents = self._build_fun_room_contents(mission_graph, entities)
             critical_path = set(solution_path)
             
             fun_metrics = self.fun_evaluator.evaluate(
-                mission_graph=mission_graph_dict,
+                mission_graph=mission_graph,
                 solution_path=solution_path,
                 room_contents=room_contents,
                 critical_path=critical_path

@@ -192,6 +192,10 @@ def save_fast_sampler_checkpoint(
     target_modules: Iterable[str] = DEFAULT_LORA_TARGETS,
     metrics: Optional[Dict[str, Any]] = None,
     distillation_type: str = "consistency_lora",
+    ema_decay: Optional[float] = None,
+    target_update: Optional[str] = None,
+    distillation_objective: Optional[str] = None,
+    adapter_export: Optional[str] = None,
     topology_alignment_weight: float = 0.0,
     topology_marker_weight: float = 2.0,
     topology_trace_weight: float = 0.75,
@@ -207,6 +211,12 @@ def save_fast_sampler_checkpoint(
             "lora_rank": int(max(1, lora_rank)),
             "lora_alpha": float(lora_alpha),
             "target_modules": [str(t) for t in target_modules],
+            "ema_decay": None if ema_decay is None else float(ema_decay),
+            "target_update": None if target_update is None else str(target_update),
+            "distillation_objective": (
+                None if distillation_objective is None else str(distillation_objective)
+            ),
+            "adapter_export": None if adapter_export is None else str(adapter_export),
             "topology_alignment_weight": float(max(0.0, topology_alignment_weight)),
             "topology_marker_weight": float(max(0.0, topology_marker_weight)),
             "topology_trace_weight": float(max(0.0, topology_trace_weight)),
@@ -226,6 +236,12 @@ def save_fast_sampler_checkpoint(
             "distillation_type": str(distillation_type),
             "num_inference_steps": int(max(1, num_inference_steps)),
             "lora_rank": int(max(1, lora_rank)),
+            "ema_decay": None if ema_decay is None else float(ema_decay),
+            "target_update": None if target_update is None else str(target_update),
+            "distillation_objective": (
+                None if distillation_objective is None else str(distillation_objective)
+            ),
+            "adapter_export": None if adapter_export is None else str(adapter_export),
             "topology_alignment_weight": float(max(0.0, topology_alignment_weight)),
             "topology_marker_weight": float(max(0.0, topology_marker_weight)),
             "topology_trace_weight": float(max(0.0, topology_trace_weight)),

@@ -36,6 +36,8 @@ from .validator import (
     PUSHABLE_IDS,
     WATER_IDS,
     game_state_key,
+    is_push_destination_available,
+    was_block_vacated,
 )
 
 logger = logging.getLogger(__name__)
@@ -87,10 +89,6 @@ def _try_move_local(
         return True, new_state
 
     for from_pos, to_pos in state.pushed_blocks:
-        if from_pos == target_pos:
-            return True, new_state
-
-    for from_pos, to_pos in state.pushed_blocks:
         if to_pos == target_pos:
             if int(grid[target_pos[0], target_pos[1]]) == SEMANTIC_PALETTE['TRIFORCE']:
                 return True, new_state
@@ -104,17 +102,20 @@ def _try_move_local(
                 return False, state
 
             push_dest_tile = int(grid[push_dest_r, push_dest_c])
-            dest_has_block = any(tp == (push_dest_r, push_dest_c) for (_, tp) in state.pushed_blocks)
-            if push_dest_tile in WALKABLE_IDS and not dest_has_block:
+            push_dest = (push_dest_r, push_dest_c)
+            if is_push_destination_available(state, push_dest, push_dest_tile):
                 new_pushed = set()
                 for fp, tp in state.pushed_blocks:
                     if tp == target_pos:
-                        new_pushed.add((from_pos, (push_dest_r, push_dest_c)))
+                        new_pushed.add((fp, push_dest))
                     else:
                         new_pushed.add((fp, tp))
                 new_state.pushed_blocks = new_pushed
                 return True, new_state
             return False, state
+
+    if was_block_vacated(state, target_pos):
+        return True, new_state
 
     if target_tile in WALKABLE_IDS:
         if target_tile in PICKUP_IDS:
@@ -163,9 +164,9 @@ def _try_move_local(
             return False, state
 
         push_dest_tile = int(grid[push_dest_r, push_dest_c])
-        dest_has_block = any(tp == (push_dest_r, push_dest_c) for (_, tp) in state.pushed_blocks)
-        if push_dest_tile in WALKABLE_IDS and not dest_has_block:
-            new_state.pushed_blocks = state.pushed_blocks | {(target_pos, (push_dest_r, push_dest_c))}
+        push_dest = (push_dest_r, push_dest_c)
+        if is_push_destination_available(state, push_dest, push_dest_tile):
+            new_state.pushed_blocks = state.pushed_blocks | {(target_pos, push_dest)}
             return True, new_state
         return False, state
 

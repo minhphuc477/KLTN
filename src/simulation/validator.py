@@ -289,6 +289,24 @@ def game_state_key(state: GameState) -> Tuple[Any, ...]:
     )
 
 
+def has_pushed_block_at(state: GameState, pos: Tuple[int, int]) -> bool:
+    """Return whether a dynamically moved block currently occupies ``pos``."""
+    return any(to_pos == pos for _, to_pos in state.pushed_blocks)
+
+
+def was_block_vacated(state: GameState, pos: Tuple[int, int]) -> bool:
+    """Return whether the static block originally at ``pos`` has moved away."""
+    return any(from_pos == pos for from_pos, _ in state.pushed_blocks)
+
+
+def is_push_destination_available(state: GameState, pos: Tuple[int, int], static_tile: int) -> bool:
+    """Check dynamic block occupancy before falling back to the immutable grid."""
+    return (
+        not has_pushed_block_at(state, pos)
+        and (int(static_tile) in WALKABLE_IDS or was_block_vacated(state, pos))
+    )
+
+
 # ==========================================
 # BITSET-OPTIMIZED GAME STATE (10× FASTER HASHING)
 # ==========================================
@@ -1255,15 +1273,8 @@ class ZeldaLogicEnv:
             # Item already collected, treat as floor
             return True, new_state
         
-        # CRITICAL FIX: Check if a block was pushed FROM this position
-        # If so, the position is now empty (treat as floor)
-        for (from_pos, to_pos) in state.pushed_blocks:
-            if from_pos == target_pos:
-                # Block was pushed away from here - position is now empty floor
-                return True, new_state
-        
-        # CRITICAL FIX 2: Check if a block was pushed TO this position
-        # If so, we need to handle it as a BLOCK (pushable), not as floor
+        # Dynamic occupancy wins over the immutable grid. A block may currently
+        # occupy the original position vacated by another block.
         for (from_pos, to_pos) in state.pushed_blocks:
             if to_pos == target_pos:
                 # Allow stepping onto goal even if a pushed block occupies it.
@@ -1283,16 +1294,16 @@ class ZeldaLogicEnv:
                 
                 # Check destination - but also check if another block is there!
                 push_dest_tile = self.grid[push_dest_r, push_dest_c]
-                dest_has_block = any(tp == (push_dest_r, push_dest_c) for (_, tp) in state.pushed_blocks)
-                
-                if push_dest_tile in WALKABLE_IDS and not dest_has_block:
+                push_dest = (push_dest_r, push_dest_c)
+
+                if is_push_destination_available(state, push_dest, int(push_dest_tile)):
                     # Can push - update pushed_blocks
                     # CRITICAL: Preserve ORIGINAL from_pos to keep track of empty positions!
                     new_pushed = set()
                     for (fp, tp) in state.pushed_blocks:
                         if tp == target_pos:
                             # Keep original from_pos, update destination to new position
-                            new_pushed.add((from_pos, (push_dest_r, push_dest_c)))
+                            new_pushed.add((fp, push_dest))
                         else:
                             new_pushed.add((fp, tp))
                     # Use set (not frozenset) to maintain consistency with GameState.copy()
@@ -1300,6 +1311,10 @@ class ZeldaLogicEnv:
                     return True, new_state
                 else:
                     return False, state  # Can't push
+
+        # A static block origin is floor after its block has moved away.
+        if was_block_vacated(state, target_pos):
+            return True, new_state
         
         # Walkable tiles - free movement
         if target_tile in WALKABLE_IDS:
@@ -1387,12 +1402,11 @@ class ZeldaLogicEnv:
             # Check if destination is walkable
             push_dest_tile = self.grid[push_dest_r, push_dest_c]
             
-            # Also check if another block was pushed to destination
-            dest_has_block = any(tp == (push_dest_r, push_dest_c) for (_, tp) in state.pushed_blocks)
-            
-            if push_dest_tile in WALKABLE_IDS and not dest_has_block:
+            push_dest = (push_dest_r, push_dest_c)
+
+            if is_push_destination_available(state, push_dest, int(push_dest_tile)):
                 # Can push - record in pushed_blocks
-                new_state.pushed_blocks = state.pushed_blocks | {(target_pos, (push_dest_r, push_dest_c))}
+                new_state.pushed_blocks = state.pushed_blocks | {(target_pos, push_dest)}
                 new_state = self._update_puzzle_stage_progress(
                     new_state,
                     target_pos=target_pos,

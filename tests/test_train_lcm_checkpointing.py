@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+import copy
 import json
 
 import torch
@@ -58,10 +59,14 @@ def test_fast_sampler_resume_checkpoint_round_trip(tmp_path):
 
     trainer = ConsistencyLoRATrainer.__new__(ConsistencyLoRATrainer)
     trainer.student = student
+    trainer.teacher = copy.deepcopy(student)
+    for param in trainer.teacher.parameters():
+        param.requires_grad = False
     trainer.device = torch.device("cpu")
     trainer.config = _FastSamplerTestConfig(
         base_diffusion_checkpoint="base_diffusion.pth",
         num_inference_steps=4,
+        ema_decay=0.95,
         lora_rank=2,
         lora_alpha=4.0,
     )
@@ -80,9 +85,12 @@ def test_fast_sampler_resume_checkpoint_round_trip(tmp_path):
 
     payload = torch.load(resume_path, map_location="cpu", weights_only=False)
     assert "optimizer_state_dict" in payload
+    assert "ema_target_lora_state_dict" in payload
     assert payload["epoch"] == 5
     assert payload["global_step"] == 21
     assert payload["metadata"]["num_inference_steps"] == 4
+    assert payload["metadata"]["target_update"] == "ema"
+    assert payload["metadata"]["distillation_objective"] == "trajectory_consistency"
     assert payload["metadata"]["topology_anchor_policy"]["version"]
 
     with torch.no_grad():
@@ -95,6 +103,81 @@ def test_fast_sampler_resume_checkpoint_round_trip(tmp_path):
     assert trainer.epoch == 5
     assert trainer.global_step == 21
     assert torch.allclose(tracked_param, original)
+
+
+def test_fast_sampler_ema_target_updates_from_online_student():
+    student = _TinyStudent()
+    inject_lora_into_model(
+        student.denoiser,
+        rank=2,
+        alpha=4.0,
+        target_modules=DEFAULT_LORA_TARGETS,
+    )
+    freeze_non_lora_parameters(student)
+
+    trainer = ConsistencyLoRATrainer.__new__(ConsistencyLoRATrainer)
+    trainer.student = student
+    trainer.teacher = copy.deepcopy(student)
+    trainer.config = _FastSamplerTestConfig(ema_decay=0.75)
+
+    student_param = next(p for name, p in trainer.student.named_parameters() if ".lora." in name)
+    teacher_param = next(p for name, p in trainer.teacher.named_parameters() if ".lora." in name)
+    with torch.no_grad():
+        student_param.fill_(4.0)
+        teacher_param.zero_()
+
+    trainer._update_teacher_ema()
+
+    assert torch.allclose(teacher_param, torch.ones_like(teacher_param))
+
+
+def test_fast_sampler_timestep_pairs_always_advance_to_lower_noise():
+    trainer = ConsistencyLoRATrainer.__new__(ConsistencyLoRATrainer)
+    trainer.device = torch.device("cpu")
+    trainer.target_timesteps = torch.tensor([999, 749, 500, 250, 0])
+
+    current, previous = trainer._sample_batch_timestep_pairs(128)
+
+    assert current.shape == previous.shape == (128,)
+    assert torch.all(current > previous)
+
+
+def test_fast_sampler_deployable_adapter_exports_ema_target(monkeypatch):
+    student = _TinyStudent()
+    inject_lora_into_model(
+        student.denoiser,
+        rank=2,
+        alpha=4.0,
+        target_modules=DEFAULT_LORA_TARGETS,
+    )
+    freeze_non_lora_parameters(student)
+
+    trainer = ConsistencyLoRATrainer.__new__(ConsistencyLoRATrainer)
+    trainer.student = student
+    trainer.teacher = copy.deepcopy(student)
+    trainer.config = _FastSamplerTestConfig(
+        base_diffusion_checkpoint="base_diffusion.pth",
+        num_inference_steps=4,
+        ema_decay=0.95,
+        lora_rank=2,
+        lora_alpha=4.0,
+    )
+    with torch.no_grad():
+        for name, target_param in trainer.teacher.named_parameters():
+            if ".lora." in name:
+                target_param.fill_(3.0)
+
+    captured = {}
+    monkeypatch.setattr("src.train_lcm.save_fast_sampler_checkpoint", lambda path, **kwargs: captured.update(kwargs))
+
+    trainer.save_checkpoint("unused.pth")
+
+    assert captured["lora_state_dict"]
+    assert all(
+        torch.allclose(param, torch.full_like(param, 3.0))
+        for param in captured["lora_state_dict"].values()
+    )
+    assert captured["adapter_export"] == "ema_target"
 
 
 def test_injected_lora_matches_wrapped_linear_device_and_dtype():

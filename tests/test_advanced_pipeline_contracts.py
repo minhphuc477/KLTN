@@ -146,3 +146,40 @@ def test_advanced_pipeline_reports_no_lcm_speedup_without_real_backend():
     pipeline = AdvancedNeuralSymbolicPipeline(_make_test_config())
 
     assert pipeline._compute_reported_lcm_speedup(room_count=8, gen_time=12.0) == 1.0
+
+
+def test_advanced_pipeline_fun_evaluation_resolves_graph_route_not_insertion_order():
+    """Pacing should follow the mission path even when nodes were inserted out of order."""
+    graph = nx.DiGraph()
+    graph.add_node(2, is_boss=True, is_triforce=True)
+    graph.add_node(0, is_start=True)
+    graph.add_node(1)
+    graph.add_edge(0, 1, edge_type="open")
+    graph.add_edge(1, 2, edge_type="boss_locked")
+
+    assert AdvancedNeuralSymbolicPipeline._resolve_mission_solution_path(graph) == [0, 1, 2]
+
+
+def test_advanced_pipeline_fun_contents_preserve_graph_and_entity_semantics():
+    """Analyzer inputs should retain boss, goal, puzzle, lock, health, and treasure signals."""
+    graph = nx.DiGraph()
+    graph.add_node(0, type="start", is_start=True)
+    graph.add_node(1, type="puzzle", has_puzzle=True)
+    graph.add_node(2, type="boss", is_boss=True, is_triforce=True)
+    graph.add_edge(0, 1, edge_type="open")
+    graph.add_edge(1, 2, edge_type="boss_locked")
+    entities = [
+        SimpleNamespace(room_id=2, entity_type=SimpleNamespace(value="enemy_boss")),
+        SimpleNamespace(room_id=2, entity_type=SimpleNamespace(value="health_potion")),
+        SimpleNamespace(room_id=2, entity_type=SimpleNamespace(value="chest")),
+    ]
+
+    contents = AdvancedNeuralSymbolicPipeline._build_fun_room_contents(graph, entities)
+
+    assert contents[1]["puzzles"] == 1
+    assert contents[2]["boss"] is True
+    assert contents[2]["goal"] is True
+    assert contents[2]["locks"] == 1
+    assert contents[2]["enemies"] == 1
+    assert contents[2]["health_pickups"] == 1
+    assert contents[2]["treasures"] == 1
