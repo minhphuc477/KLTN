@@ -1464,6 +1464,7 @@ class GradientGuidance(nn.Module):
         *,
         t: Optional[int] = None,
         num_timesteps: Optional[int] = None,
+        scale_multiplier: float = 1.0,
     ) -> Tensor:
         """
         Compute guidance gradient from LogicNet.
@@ -1490,6 +1491,10 @@ class GradientGuidance(nn.Module):
                 logger.info("[GUIDANCE] LogicNet is None, returning zero guidance")
             return torch.zeros_like(x_t)
         scaled_gamma = self._scheduled_scale(t=t, num_timesteps=num_timesteps)
+        try:
+            scaled_gamma *= float(scale_multiplier)
+        except (TypeError, ValueError, OverflowError):
+            scaled_gamma = 0.0
         if _debug_guidance:
             logger.info(f"[GUIDANCE] scaled_gamma={scaled_gamma}")
         if scaled_gamma <= 0.0:
@@ -2360,6 +2365,7 @@ class LatentDiffusionModel(nn.Module):
             graph_data,
             t=int(t),
             num_timesteps=int(self.num_timesteps),
+            scale_multiplier=self._guidance_timestep_scale(int(t)),
         )
         sqrt_alpha_t = self.sqrt_alphas_cumprod[t]
         sqrt_one_minus_alpha_t = self.sqrt_one_minus_alphas_cumprod[t]
@@ -2378,6 +2384,33 @@ class LatentDiffusionModel(nn.Module):
             logic_net.update_temperature(sqrt_alpha)
         except (AttributeError, RuntimeError, ValueError, TypeError):
             logger.debug("Skipping timestep-synced LogicNet temperature update", exc_info=True)
+
+    def _guidance_timestep_scale(self, t: int) -> float:
+        """DPS-style scale: guidance is weak at high noise and strong near clean x0."""
+        try:
+            return float(self.sqrt_alphas_cumprod[int(t)].detach().clamp(0.0, 1.0).item())
+        except (AttributeError, RuntimeError, ValueError, TypeError):
+            return 1.0
+
+    def _q_posterior_from_pred_x0(
+        self,
+        pred_x0: Tensor,
+        x_t: Tensor,
+        t: Tensor,
+    ) -> Tuple[Tensor, Tensor, Tensor]:
+        """Compute q(x_{t-1} | x_t, pred_x0) posterior parameters."""
+        alpha_t = self.alphas[t][:, None, None, None]
+        alpha_cumprod_t = self.alphas_cumprod[t][:, None, None, None]
+        alpha_cumprod_prev_t = self.alphas_cumprod_prev[t][:, None, None, None]
+        beta_t = self.betas[t][:, None, None, None]
+
+        posterior_mean = (
+            torch.sqrt(alpha_cumprod_prev_t) * beta_t / (1.0 - alpha_cumprod_t) * pred_x0
+            + torch.sqrt(alpha_t) * (1.0 - alpha_cumprod_prev_t) / (1.0 - alpha_cumprod_t) * x_t
+        )
+        posterior_variance = self.posterior_variance[t][:, None, None, None]
+        posterior_log_variance = self.posterior_log_variance[t][:, None, None, None]
+        return posterior_mean, posterior_variance, posterior_log_variance
     
     def p_mean_variance(
         self,
@@ -2406,21 +2439,7 @@ class LatentDiffusionModel(nn.Module):
         if clip_denoised:
             pred_x0 = torch.clamp(pred_x0, -1.0, 1.0)
         
-        # Compute posterior mean
-        alpha_t = self.alphas[t][:, None, None, None]
-        alpha_cumprod_t = self.alphas_cumprod[t][:, None, None, None]
-        alpha_cumprod_prev_t = self.alphas_cumprod_prev[t][:, None, None, None]
-        beta_t = self.betas[t][:, None, None, None]
-        
-        posterior_mean = (
-            torch.sqrt(alpha_cumprod_prev_t) * beta_t / (1.0 - alpha_cumprod_t) * pred_x0
-            + torch.sqrt(alpha_t) * (1.0 - alpha_cumprod_prev_t) / (1.0 - alpha_cumprod_t) * x_t
-        )
-        
-        posterior_variance = self.posterior_variance[t][:, None, None, None]
-        posterior_log_variance = self.posterior_log_variance[t][:, None, None, None]
-        
-        return posterior_mean, posterior_variance, posterior_log_variance
+        return self._q_posterior_from_pred_x0(pred_x0, x_t, t)
     
     @torch.no_grad()
     def p_sample(
@@ -2439,24 +2458,27 @@ class LatentDiffusionModel(nn.Module):
         B = x_t.shape[0]
         t_tensor = torch.full((B,), t, device=x_t.device, dtype=torch.long)
         
-        # Get mean and variance
-        mean, variance, _ = self.p_mean_variance(
-            x_t, t_tensor, context, graph_data=graph_data,
-            cached_topology=cached_topology, cached_spatial=cached_spatial,
+        prediction = self._predict_noise_cfg(
+            x_t,
+            t_tensor,
+            context,
+            graph_data=graph_data,
+            cached_topology=cached_topology,
+            cached_spatial=cached_spatial,
+        )
+        pred_x0, pred_noise = self._convert_prediction(prediction, x_t, t_tensor)
+        pred_x0 = torch.clamp(pred_x0, -1.0, 1.0)
+        pred_x0, _pred_noise = self._apply_logic_guidance_to_prediction(
+            x_t=x_t,
+            pred_x0=pred_x0,
+            pred_noise=pred_noise,
+            t=int(t),
+            graph_data=graph_data,
         )
         
-        # Apply variance-scaled gradient guidance (Dhariwal & Nichol 2021 Eq. 10):
-        # μ̃ = μ - s·Σ·∇L_logic (gradient descent on logic loss)
-        # Scaling by variance ensures consistent guidance strength across timesteps.
-        if self.guidance.logic_net is not None and self.guidance.guidance_scale > 0:
-            self._sync_logic_temperature_to_timestep(int(t))
-            guidance_grad = self.guidance.compute_guidance(
-                x_t,
-                graph_data,
-                t=int(t),
-                num_timesteps=int(self.num_timesteps),
-            )
-            mean = mean - variance * guidance_grad
+        # DDPM and DDIM both guide the predicted clean latent, then rebuild the
+        # posterior from that guided pred_x0.
+        mean, variance, _ = self._q_posterior_from_pred_x0(pred_x0, x_t, t_tensor)
         
         # Add noise (except at t=0)
         noise = torch.randn_like(x_t) if t > 0 else torch.zeros_like(x_t)

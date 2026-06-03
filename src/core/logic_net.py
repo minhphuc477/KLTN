@@ -664,6 +664,38 @@ class KeyLockChecker(nn.Module):
         return loss, info
 
 
+class SemanticEdgeEncoder(nn.Module):
+    """Learnable traversal penalties for graph edge labels."""
+
+    def __init__(self, num_edge_types: int = 16):
+        super().__init__()
+        base = torch.zeros(num_edge_types, dtype=torch.float32)
+        defaults = {
+            1: 1.0,   # key lock
+            2: 0.5,   # bomb
+            3: 0.25,  # soft/one-way
+            4: 2.0,   # boss lock
+            5: 1.0,   # item lock
+            7: 0.5,   # switch/state
+        }
+        for idx, value in defaults.items():
+            if idx < num_edge_types:
+                base[idx] = float(value)
+        self.register_buffer("base_penalty", base)
+        self.residual_logits = nn.Parameter(torch.zeros(num_edge_types, dtype=torch.float32))
+
+    def forward(self, edge_attr: Tensor) -> Tensor:
+        attr = edge_attr.to(dtype=torch.long).clamp(0, int(self.base_penalty.numel()) - 1)
+        residual = F.softplus(self.residual_logits) - F.softplus(
+            torch.zeros((), device=self.residual_logits.device, dtype=self.residual_logits.dtype)
+        )
+        penalties = (
+            self.base_penalty.to(device=edge_attr.device, dtype=residual.dtype)
+            + residual.to(device=edge_attr.device)
+        ).clamp_min(0.0)
+        return penalties.index_select(0, attr.flatten()).view_as(attr).to(dtype=torch.float32)
+
+
 # ============================================================================
 # TILE CLASSIFIER
 # ============================================================================
@@ -900,6 +932,7 @@ class LogicNet(nn.Module):
             num_iterations=num_iterations,
             temperature=temperature,
         )
+        self.semantic_edge_encoder = SemanticEdgeEncoder()
         
         # Reachability scoring
         self.reachability = ReachabilityScorer(
@@ -1172,8 +1205,12 @@ class LogicNet(nn.Module):
                 return int(hits[0].item())
         return None
 
-    @staticmethod
-    def _edge_feature_penalty(edge_features: Optional[Tensor], edge_attr: Optional[Tensor], num_edges: int) -> Optional[Tensor]:
+    def _edge_feature_penalty(
+        self,
+        edge_features: Optional[Tensor],
+        edge_attr: Optional[Tensor],
+        num_edges: int,
+    ) -> Optional[Tensor]:
         penalty: Optional[Tensor] = None
         if isinstance(edge_features, torch.Tensor) and edge_features.numel() > 0:
             ef = edge_features
@@ -1196,13 +1233,7 @@ class LogicNet(nn.Module):
 
         if isinstance(edge_attr, torch.Tensor) and edge_attr.numel() > 0:
             attr = edge_attr[:num_edges].to(dtype=torch.long)
-            attr_penalty = torch.zeros(num_edges, device=attr.device, dtype=torch.float32)
-            attr_penalty = attr_penalty + (attr == 1).float() * 1.0
-            attr_penalty = attr_penalty + (attr == 2).float() * 0.5
-            attr_penalty = attr_penalty + (attr == 3).float() * 0.25
-            attr_penalty = attr_penalty + (attr == 4).float() * 2.0
-            attr_penalty = attr_penalty + (attr == 5).float() * 1.0
-            attr_penalty = attr_penalty + (attr == 7).float() * 0.5
+            attr_penalty = self.semantic_edge_encoder(attr)
             penalty = attr_penalty if penalty is None else torch.maximum(penalty.to(attr_penalty.device), attr_penalty)
 
         return penalty
@@ -1249,9 +1280,23 @@ class LogicNet(nn.Module):
                     num_edges = int(src.numel())
                     adj[src, dst] = 1.0
                     base = torch.ones(num_edges, device=device, dtype=dtype)
+                    edge_features_valid = None
+                    if isinstance(edge_features, torch.Tensor):
+                        ef = edge_features.to(device=device)
+                        if ef.dim() >= 1 and int(ef.shape[0]) == int(valid.numel()):
+                            edge_features_valid = ef[valid]
+                        else:
+                            edge_features_valid = ef
+                    edge_attr_valid = None
+                    if isinstance(edge_attr, torch.Tensor):
+                        ea = edge_attr.to(device=device)
+                        if ea.dim() >= 1 and int(ea.shape[0]) == int(valid.numel()):
+                            edge_attr_valid = ea[valid]
+                        else:
+                            edge_attr_valid = ea
                     feature_penalty = self._edge_feature_penalty(
-                        edge_features.to(device=device) if isinstance(edge_features, torch.Tensor) else None,
-                        edge_attr.to(device=device) if isinstance(edge_attr, torch.Tensor) else None,
+                        edge_features_valid,
+                        edge_attr_valid,
                         num_edges,
                     )
                     if feature_penalty is not None:

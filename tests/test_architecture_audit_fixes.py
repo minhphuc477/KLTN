@@ -98,7 +98,7 @@ def test_inpaint_schedule_starts_at_noise_level_and_preserves_previous_timestep(
     assert recorded_q == [5, 2, 0]
 
 
-def test_p_sample_applies_logic_guidance_as_gradient_descent(monkeypatch):
+def test_p_sample_guides_pred_x0_before_rebuilding_posterior(monkeypatch):
     model = create_latent_diffusion(
         latent_dim=4,
         model_channels=8,
@@ -107,27 +107,37 @@ def test_p_sample_applies_logic_guidance_as_gradient_descent(monkeypatch):
     )
     model.guidance.logic_net = object()
     model.guidance.guidance_scale = 1.0
+    seen = {}
 
-    def _fake_p_mean_variance(x_t, t, context, **kwargs):
-        mean = torch.zeros_like(x_t)
-        variance = torch.full_like(x_t, 2.0)
-        log_variance = torch.zeros_like(x_t)
-        return mean, variance, log_variance
+    def _fake_predict_noise_cfg(x_t, t, context, **kwargs):
+        return torch.zeros_like(x_t)
+
+    def _fake_convert_prediction(prediction, x_t, t):
+        return torch.zeros_like(x_t), torch.zeros_like(x_t)
 
     def _fake_compute_guidance(x_t, graph_data=None, **kwargs):
+        seen["guidance_input"] = x_t.detach().clone()
+        seen["scale_multiplier"] = kwargs.get("scale_multiplier")
         return torch.ones_like(x_t)
 
-    monkeypatch.setattr(model, "p_mean_variance", _fake_p_mean_variance)
-    monkeypatch.setattr(model.guidance, "compute_guidance", _fake_compute_guidance)
+    def _fake_q_posterior_from_pred_x0(pred_x0, x_t, t):
+        seen["posterior_pred_x0"] = pred_x0.detach().clone()
+        return pred_x0, torch.zeros_like(pred_x0), torch.zeros_like(pred_x0)
 
-    x_t = torch.randn(1, 4, 2, 2)
+    monkeypatch.setattr(model, "_predict_noise_cfg", _fake_predict_noise_cfg)
+    monkeypatch.setattr(model, "_convert_prediction", _fake_convert_prediction)
+    monkeypatch.setattr(model.guidance, "compute_guidance", _fake_compute_guidance)
+    monkeypatch.setattr(model, "_q_posterior_from_pred_x0", _fake_q_posterior_from_pred_x0)
+
+    x_t = torch.full((1, 4, 2, 2), 7.0)
     context = torch.zeros(1, 8)
 
     out = model.p_sample(x_t, t=0, context=context)
 
-    # With zero sampler noise at t=0, the guided step should be:
-    # mean - variance * grad = 0 - 2 * 1 = -2.
-    assert torch.allclose(out, torch.full_like(out, -2.0))
+    assert torch.allclose(seen["guidance_input"], torch.zeros_like(x_t))
+    assert seen["scale_multiplier"] == pytest.approx(model._guidance_timestep_scale(0))
+    assert torch.allclose(seen["posterior_pred_x0"], torch.full_like(x_t, -1.0))
+    assert torch.allclose(out, torch.full_like(out, -1.0))
 
 
 def test_generate_room_constrained_decode_uses_exact_door_type():
