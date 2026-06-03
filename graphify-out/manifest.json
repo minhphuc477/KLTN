@@ -1,7 +1,7 @@
 {
   "F:\\KLTN\\.codex\\hooks.json": {
-    "mtime": 1780507351.2456822,
-    "ast_hash": "5ebef3dd159986e465ab65e4014107ec",
+    "mtime": 1780507576.9990294,
+    "ast_hash": "73b0825126c0530654b32b475e428206",
     "semantic_hash": ""
   },
   "F:\\KLTN\\.venv-1\\Scripts\\activate.ps1": {
@@ -930,13 +930,13 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\core\\latent_diffusion.py": {
-    "mtime": 1780474624.9216905,
-    "ast_hash": "db071e6f2e83a2f0f3e2daf47c5cbaa7",
+    "mtime": 1780507961.977563,
+    "ast_hash": "bf00cc06e981b42f1f7b7328a9fb79f4",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\core\\logic_net.py": {
-    "mtime": 1780484138.4952857,
-    "ast_hash": "31adfa19d37bc3050ca3879b17f67ce3",
+    "mtime": 1780508083.850247,
+    "ast_hash": "598380ff10a02f7297dbe7a3e1fe9fce",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\core\\puzzle_stage_semantics.py": {
@@ -2385,8 +2385,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\pipeline\\graph_features.py": {
-    "mtime": 1778763853.925331,
-    "ast_hash": "87d751c823871a2012b7058616d1596e",
+    "mtime": 1780508401.1339474,
+    "ast_hash": "fe5acbbcde66be8b9c723e97f24faff3",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\pipeline\\models\\__init__.py": {
@@ -2565,8 +2565,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\train_diffusion.py": {
-    "mtime": 1780484969.1335304,
-    "ast_hash": "0f6f5cd7a1f529646ebdec7b1c969bfe",
+    "mtime": 1780508584.3126953,
+    "ast_hash": "2936e37dd829d3f7b089e0d7b59f222c",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\train_gaussian_vae.py": {
@@ -2925,8 +2925,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\zelda_data\\zelda_loader.py": {
-    "mtime": 1778823172.9669082,
-    "ast_hash": "feac77b3a3371bf01a98768e6de0ec54",
+    "mtime": 1780508701.738879,
+    "ast_hash": "1d2f026d42a013bc2b38782f967f2b13",
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_advanced_pathfinding.py": {
@@ -2945,8 +2945,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_architecture_audit_fixes.py": {
-    "mtime": 1780469430.9806976,
-    "ast_hash": "b246918e0c0a7720aefce9b31745d0bd",
+    "mtime": 1780508377.3225143,
+    "ast_hash": "c6ec72012cb10e231ccd116c5aa8a1e0",
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_audit_regressions.py": {
@@ -3460,13 +3460,13 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_logicnet_fixes.py": {
-    "mtime": 1780477121.906326,
-    "ast_hash": "3d9d77fe3c33ed62232569b6a57c5e66",
+    "mtime": 1780508118.237687,
+    "ast_hash": "229e0cef3adcba54ea30193bf0b3f31c",
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_logicnet_gradient_flow.py": {
-    "mtime": 1780484357.7127633,
-    "ast_hash": "2208031e927a2eabe3c6f2f352ba457c",
+    "mtime": 1780508349.9801126,
+    "ast_hash": "cb3125d8ae1ec94be6f6e12b3c715a0d",
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_logicnet_optimizer.py": {
@@ -3675,8 +3675,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_zelda_loader_graph_conditioning.py": {
-    "mtime": 1776506404.9292753,
-    "ast_hash": "eded75b7e3d07c32412d8f356a923753",
+    "mtime": 1780508778.207571,
+    "ast_hash": "c7af4b9d5fd03f699a6767032e32a69b",
     "semantic_hash": ""
   },
   "F:\\KLTN\\.github\\workflows\\ci.yml": {
@@ -3690,8 +3690,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\AGENTS.md": {
-    "mtime": 1780507351.228035,
-    "ast_hash": "752aa83aa64361ac32860f882dcff932",
+    "mtime": 1780507586.6595972,
+    "ast_hash": "221042e25b8d5dd956157fe529a56aae",
     "semantic_hash": ""
   },
   "F:\\KLTN\\ARCHITECTURE_DIAGRAMS.md": {
@@ -4075,8 +4075,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\docs\\architecture_audit_research_notes.md": {
-    "mtime": 1780485173.5543408,
-    "ast_hash": "4ce4ec25ff73e7a2af965d5bbea6c828",
+    "mtime": 1780509310.1525195,
+    "ast_hash": "b7ff9947310401dc8603938cf3ecabda",
     "semantic_hash": ""
   },
   "F:\\KLTN\\docs\\archive\\2026-q1\\ARCHITECTURE_RESEARCH_JUDGMENT_2026_02_24.md": {
@@ -5197,6 +5197,11 @@
   "F:\\KLTN\\docs\\image\\ARCHITECTURE\\NEW_KLTN.svg": {
     "mtime": 1778523429.993427,
     "ast_hash": "5efa116e26a22d8a8fa7a4155e017fcf",
+    "semantic_hash": ""
+  },
+  "F:\\KLTN\\src\\utils\\gradient_probe.py": {
+    "mtime": 1780508336.4286013,
+    "ast_hash": "4e3a14ef8e88108998108a10773a968b",
     "semantic_hash": ""
   }
 }

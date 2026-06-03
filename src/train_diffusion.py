@@ -160,6 +160,7 @@ class DiffusionTrainingConfig:
         condition_reference_tile_vocab_size: int = 44,
         condition_reference_embedding_dim: int = 32,
         condition_reference_hidden_dim: int = 64,
+        condition_use_rrwp_edge_features: bool = True,
         num_timesteps: int = 1000,
         schedule_type: str = "cosine",
         topology_refinement_mode: str = "gat2",  # none | lightweight | gat2
@@ -355,6 +356,7 @@ class DiffusionTrainingConfig:
         self.condition_reference_tile_vocab_size = int(max(2, condition_reference_tile_vocab_size))
         self.condition_reference_embedding_dim = int(max(4, condition_reference_embedding_dim))
         self.condition_reference_hidden_dim = int(max(4, condition_reference_hidden_dim))
+        self.condition_use_rrwp_edge_features = bool(condition_use_rrwp_edge_features)
         self.num_timesteps = num_timesteps
         self.schedule_type = schedule_type
         trm = str(topology_refinement_mode).strip().lower()
@@ -413,8 +415,10 @@ class DiffusionTrainingConfig:
         self.logic_grid_pathfinder = str(logic_grid_pathfinder).strip().lower()
         if self.logic_grid_pathfinder in {"bellman-ford", "soft_bellman_ford", "soft-bellman-ford"}:
             self.logic_grid_pathfinder = "bellman_ford"
-        if self.logic_grid_pathfinder not in {"cnn", "bellman_ford"}:
-            raise ValueError("logic_grid_pathfinder must be 'cnn' or 'bellman_ford'.")
+        if self.logic_grid_pathfinder in {"value_iteration", "value-iteration"}:
+            self.logic_grid_pathfinder = "vin"
+        if self.logic_grid_pathfinder not in {"cnn", "bellman_ford", "vin"}:
+            raise ValueError("logic_grid_pathfinder must be 'cnn', 'bellman_ford', or 'vin'.")
         self.num_logic_iterations = num_logic_iterations
         self.logic_topology_trace_weight = float(max(0.0, logic_topology_trace_weight))
         self.logic_topology_anchor_weight = float(max(0.0, logic_topology_anchor_weight))
@@ -573,6 +577,7 @@ def diffusion_training_kwargs_from_resolved_config(
         "condition_reference_tile_vocab_size": stage["condition_reference_tile_vocab_size"],
         "condition_reference_embedding_dim": stage["condition_reference_embedding_dim"],
         "condition_reference_hidden_dim": stage["condition_reference_hidden_dim"],
+        "condition_use_rrwp_edge_features": stage.get("condition_use_rrwp_edge_features", True),
         "num_timesteps": stage["num_timesteps"],
         "schedule_type": stage["schedule_type"],
         "topology_refinement_mode": stage["topology_refinement_mode"],
@@ -870,6 +875,10 @@ def _legacy_diffusion_overrides_from_args(args: argparse.Namespace) -> Dict[str,
     _set(
         "condition_reference_hidden_dim",
         getattr(args, "condition_reference_hidden_dim", None),
+    )
+    _set(
+        "condition_use_rrwp_edge_features",
+        getattr(args, "condition_use_rrwp_edge_features", None),
     )
     _set("vqvae_hidden_dim", getattr(args, "vqvae_hidden_dim", None))
     _set("vqvae_codebook_size", getattr(args, "vqvae_codebook_size", None))
@@ -1186,6 +1195,7 @@ class DiffusionTrainer:
             reference_num_tile_types=self.config.condition_reference_tile_vocab_size,
             reference_embedding_dim=self.config.condition_reference_embedding_dim,
             reference_hidden_dim=self.config.condition_reference_hidden_dim,
+            use_rrwp_edge_features=self.config.condition_use_rrwp_edge_features,
         )
 
     def _stack_conditioning_vectors(self, cond_vectors: List[torch.Tensor]) -> torch.Tensor:
@@ -3315,6 +3325,7 @@ def main():
     parser.add_argument('--condition-reference-tile-vocab-size', type=int, default=None)
     parser.add_argument('--condition-reference-embedding-dim', type=int, default=None)
     parser.add_argument('--condition-reference-hidden-dim', type=int, default=None)
+    parser.add_argument('--condition-use-rrwp-edge-features', action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument('--vqvae-hidden-dim', type=int, default=None)
     parser.add_argument('--vqvae-codebook-size', type=int, default=None)
     parser.add_argument('--vqvae-use-coordconv', action=argparse.BooleanOptionalAction, default=None)
@@ -3369,8 +3380,8 @@ def main():
         '--logic-grid-pathfinder',
         type=str,
         default=None,
-        choices=['cnn', 'bellman_ford', 'bellman-ford', 'soft_bellman_ford', 'soft-bellman-ford'],
-        help='Grid-level LogicNet pathfinder ablation: learned CNN or explicit soft Bellman-Ford.',
+        choices=['cnn', 'bellman_ford', 'bellman-ford', 'soft_bellman_ford', 'soft-bellman-ford', 'vin', 'value_iteration', 'value-iteration'],
+        help='Grid-level LogicNet pathfinder ablation: learned CNN, explicit soft Bellman-Ford, or VIN.',
     )
     parser.add_argument('--logic-topology-trace-weight', type=float, default=None)
     parser.add_argument('--logic-topology-anchor-weight', type=float, default=None)

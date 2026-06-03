@@ -979,8 +979,8 @@ def main():
     parser.add_argument("--latent-dim", type=int, default=None)
     parser.add_argument("--hidden-dim", type=int, default=None)
     parser.add_argument("--codebook-size", type=int, default=None)
-    parser.add_argument("--architecture", type=str, choices=("vqvae", "vqvae2"), default=None,
-                        help="Tokenizer architecture. vqvae2 enables a two-level hierarchical codebook.")
+    parser.add_argument("--architecture", type=str, choices=("vqvae", "vqvae2", "fsq"), default=None,
+                        help="Tokenizer architecture. vqvae2 enables a two-level codebook; fsq enables finite scalar quantization.")
     parser.add_argument("--top-codebook-size", type=int, default=None,
                         help="Top-level codebook size for --architecture vqvae2.")
     parser.add_argument("--top-latent-dim", type=int, default=None,

@@ -452,6 +452,7 @@ class GlobalStreamEncoder(nn.Module):
         dropout: float = 0.1,
         use_current_node_distance_features: bool = True,
         current_node_distance_dim: int = 4,
+        use_rrwp_edge_features: bool = False,
     ):
         super().__init__()
 
@@ -460,6 +461,7 @@ class GlobalStreamEncoder(nn.Module):
         self.hidden_dim = hidden_dim
         self.output_dim = output_dim
         self.use_current_node_distance_features = bool(use_current_node_distance_features)
+        self.use_rrwp_edge_features = bool(use_rrwp_edge_features)
         self.current_node_distance_dim = int(max(1, current_node_distance_dim))
         self.gnn_type = str(gnn_type).strip().lower()
         if self.gnn_type not in {"gcn", "gat", "sage", "gps"}:
@@ -495,6 +497,7 @@ class GlobalStreamEncoder(nn.Module):
         
         # TPE (Topological Positional Encoding) projection
         self.tpe_proj = nn.Linear(int(GRAPH_TPE_DIM), hidden_dim)
+        self.edge_rrwp_proj = nn.Linear(int(GRAPH_TPE_DIM), hidden_dim) if self.use_rrwp_edge_features else None
         self.current_node_distance_proj = nn.Linear(self.current_node_distance_dim, hidden_dim)
         self.current_node_distance_gate = nn.Parameter(torch.tensor(0.0))
 
@@ -740,6 +743,41 @@ class GlobalStreamEncoder(nn.Module):
             tensor = aligned
         return tensor
 
+    def _prepare_edge_rrwp(
+        self,
+        edge_rrwp: Optional[Tensor],
+        edge_index: Tensor,
+        *,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> Optional[Tensor]:
+        """Normalize RRWP edge features to [E, GRAPH_TPE_DIM]."""
+        if not self.use_rrwp_edge_features or edge_rrwp is None:
+            return None
+        tensor = edge_rrwp.to(device=device, dtype=dtype)
+        if tensor.dim() == 1:
+            tensor = tensor.unsqueeze(-1)
+        if tensor.dim() != 2:
+            raise ValueError(f"edge_rrwp must be 2D [E,D], got shape {tuple(tensor.shape)}")
+
+        num_edges = int(edge_index.shape[1]) if edge_index.dim() == 2 and edge_index.shape[0] == 2 else 0
+        expected_dim = int(GRAPH_TPE_DIM)
+        if int(tensor.shape[0]) != num_edges or int(tensor.shape[1]) != expected_dim:
+            self._warn_once(
+                f"edge_rrwp:{tuple(tensor.shape)}->{(num_edges, expected_dim)}",
+                (
+                    f"edge_rrwp shape mismatch: got {tuple(tensor.shape)}, expected {(num_edges, expected_dim)}. "
+                    "Applying automatic pad/truncate."
+                ),
+            )
+            aligned = torch.zeros(num_edges, expected_dim, device=device, dtype=dtype)
+            rows = min(num_edges, int(tensor.shape[0]))
+            cols = min(expected_dim, int(tensor.shape[1]))
+            if rows > 0 and cols > 0:
+                aligned[:rows, :cols] = tensor[:rows, :cols]
+            tensor = aligned
+        return tensor
+
     def _prepare_current_node_distance(
         self,
         current_node_distance: Optional[Tensor],
@@ -783,6 +821,7 @@ class GlobalStreamEncoder(nn.Module):
         node_features: Tensor,
         edge_index: Tensor,
         edge_features: Optional[Tensor] = None,
+        edge_rrwp: Optional[Tensor] = None,
         tpe: Optional[Tensor] = None,
         current_node_distance: Optional[Tensor] = None,
         batch_idx: Optional[Tensor] = None,
@@ -804,6 +843,12 @@ class GlobalStreamEncoder(nn.Module):
         """
         node_features = self._prepare_node_features(node_features)
         edge_features = self._prepare_edge_features(edge_features, edge_index)
+        edge_rrwp = self._prepare_edge_rrwp(
+            edge_rrwp,
+            edge_index,
+            device=node_features.device,
+            dtype=node_features.dtype,
+        )
         tpe = self._prepare_tpe(
             tpe,
             num_nodes=int(node_features.shape[0]),
@@ -818,9 +863,9 @@ class GlobalStreamEncoder(nn.Module):
         )
 
         if self.use_torch_geometric:
-            h = self._forward_torch_geometric(node_features, edge_index, edge_features)
+            h = self._forward_torch_geometric(node_features, edge_index, edge_features, edge_rrwp)
         elif self.gnn_type == "gps":
-            h = self._forward_gps(node_features, edge_index, edge_features)
+            h = self._forward_gps(node_features, edge_index, edge_features, edge_rrwp)
         else:
             h = self.gnn(node_features, edge_index)
         
@@ -845,6 +890,7 @@ class GlobalStreamEncoder(nn.Module):
         node_features: Tensor,
         edge_index: Tensor,
         edge_features: Optional[Tensor] = None,
+        edge_rrwp: Optional[Tensor] = None,
     ) -> Tensor:
         """
         Forward using torch_geometric layers.
@@ -858,6 +904,9 @@ class GlobalStreamEncoder(nn.Module):
         edge_attr = None
         if edge_features is not None and hasattr(self, 'edge_encoder'):
             edge_attr = self.edge_encoder(edge_features)
+        if edge_rrwp is not None and self.edge_rrwp_proj is not None:
+            rrwp_attr = self.edge_rrwp_proj(edge_rrwp)
+            edge_attr = rrwp_attr if edge_attr is None else edge_attr + rrwp_attr
         
         for layer, norm in zip(self.gnn_layers, self.layer_norms):
             if edge_attr is not None and isinstance(layer, GATv2Conv):
@@ -874,6 +923,7 @@ class GlobalStreamEncoder(nn.Module):
         node_features: Tensor,
         edge_index: Tensor,
         edge_features: Optional[Tensor] = None,
+        edge_rrwp: Optional[Tensor] = None,
     ) -> Tensor:
         """
         Forward through a GraphGPS-style encoder.
@@ -884,6 +934,9 @@ class GlobalStreamEncoder(nn.Module):
         """
         h = self.node_encoder(node_features)
         edge_attr = self.edge_encoder(edge_features) if edge_features is not None else None
+        if edge_rrwp is not None and self.edge_rrwp_proj is not None:
+            rrwp_attr = self.edge_rrwp_proj(edge_rrwp)
+            edge_attr = rrwp_attr if edge_attr is None else edge_attr + rrwp_attr
 
         for layer in self.gps_layers:
             h = layer(h, edge_index=edge_index, edge_attr=edge_attr)
@@ -1200,6 +1253,7 @@ class DualStreamConditionEncoder(nn.Module):
         reference_num_tile_types: int = 44,
         reference_embedding_dim: int = 32,
         reference_hidden_dim: int = 64,
+        use_rrwp_edge_features: bool = False,
     ):
         super().__init__()
         
@@ -1225,6 +1279,7 @@ class DualStreamConditionEncoder(nn.Module):
             gnn_type=gnn_type,
             dropout=dropout,
             use_current_node_distance_features=use_current_node_distance_features,
+            use_rrwp_edge_features=use_rrwp_edge_features,
         )
         
         # GLOBAL STYLE TOKEN (Theme Consistency)
@@ -1280,6 +1335,7 @@ class DualStreamConditionEncoder(nn.Module):
         node_features: Tensor,
         edge_index: Tensor,
         edge_features: Optional[Tensor] = None,
+        edge_rrwp: Optional[Tensor] = None,
         tpe: Optional[Tensor] = None,
         current_node_distance: Optional[Tensor] = None,
         current_node_idx: Optional[int] = None,
@@ -1327,6 +1383,7 @@ class DualStreamConditionEncoder(nn.Module):
             node_features,
             edge_index,
             edge_features=edge_features,
+            edge_rrwp=edge_rrwp,
             tpe=tpe,
             current_node_distance=current_node_distance,
             node_idx=None,
@@ -1411,6 +1468,7 @@ class DualStreamConditionEncoder(nn.Module):
         node_features: Tensor,
         edge_index: Tensor,
         edge_features: Optional[Tensor] = None,
+        edge_rrwp: Optional[Tensor] = None,
         tpe: Optional[Tensor] = None,
         current_node_distance: Optional[Tensor] = None,
     ) -> Tensor:
@@ -1419,6 +1477,7 @@ class DualStreamConditionEncoder(nn.Module):
             node_features,
             edge_index,
             edge_features=edge_features,
+            edge_rrwp=edge_rrwp,
             tpe=tpe,
             current_node_distance=current_node_distance,
         )

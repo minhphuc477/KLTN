@@ -32,7 +32,7 @@ Architecture:
 import logging
 import math
 import threading
-from typing import Dict, List, Tuple, Optional, Any, Sequence
+from typing import Dict, Iterable, List, Tuple, Optional, Any, Sequence
 
 import torch
 import torch.nn as nn
@@ -389,6 +389,129 @@ class VectorQuantizer(nn.Module):
     def encode_indices(self, indices: Tensor) -> Tensor:
         """Convert indices to embeddings."""
         return self.embedding(indices)
+
+
+class FSQuantizer(nn.Module):
+    """
+    Finite Scalar Quantization ablation for VQ-VAE-style tokenizers.
+
+    FSQ replaces a learned nearest-neighbor codebook with bounded scalar
+    rounding per latent dimension. Optional 1x1 projections keep the public
+    VQ-VAE latent interface unchanged while exposing implicit code indices for
+    utilization diagnostics.
+    """
+
+    def __init__(
+        self,
+        embedding_dim: int = 64,
+        levels: Optional[Iterable[int]] = None,
+        num_dims: Optional[int] = None,
+    ) -> None:
+        super().__init__()
+        levels_list = [int(v) for v in (levels if levels is not None else [4, 4, 4, 4])]
+        if not levels_list or any(v < 2 for v in levels_list):
+            raise ValueError("FSQuantizer levels must be a non-empty sequence of integers >= 2.")
+        if num_dims is not None:
+            target_dims = int(max(1, num_dims))
+            if len(levels_list) < target_dims:
+                repeats = int(math.ceil(target_dims / len(levels_list)))
+                levels_list = (levels_list * repeats)[:target_dims]
+            elif len(levels_list) > target_dims:
+                levels_list = levels_list[:target_dims]
+
+        self.embedding_dim = int(max(1, embedding_dim))
+        self.num_dims = int(len(levels_list))
+        self.num_embeddings = int(math.prod(levels_list))
+        self.use_ema = False
+
+        self.pre_proj = (
+            nn.Identity()
+            if self.num_dims == self.embedding_dim
+            else nn.Conv2d(self.embedding_dim, self.num_dims, kernel_size=1)
+        )
+        self.post_proj = (
+            nn.Identity()
+            if self.num_dims == self.embedding_dim
+            else nn.Conv2d(self.num_dims, self.embedding_dim, kernel_size=1)
+        )
+        self.register_buffer("levels", torch.tensor(levels_list, dtype=torch.float32))
+        self.register_buffer("basis", self._build_basis(levels_list))
+        self.register_buffer("codebook_usage", torch.zeros(self.num_embeddings))
+
+    @staticmethod
+    def _build_basis(levels: List[int]) -> Tensor:
+        basis: List[int] = []
+        running = 1
+        for level in levels:
+            basis.append(running)
+            running *= int(level)
+        return torch.tensor(basis, dtype=torch.long)
+
+    def _round_ste(self, bounded: Tensor) -> Tuple[Tensor, Tensor]:
+        levels = self.levels.to(device=bounded.device, dtype=bounded.dtype).view(1, -1, 1, 1)
+        scaled = (bounded + 1.0) * 0.5 * (levels - 1.0)
+        rounded = torch.round(scaled).clamp(0.0, levels - 1.0)
+        quantized = (rounded / (levels - 1.0)) * 2.0 - 1.0
+        return bounded + (quantized - bounded).detach(), rounded.to(dtype=torch.long)
+
+    def _indices_from_digits(self, digits: Tensor) -> Tensor:
+        basis = self.basis.to(device=digits.device).view(1, -1, 1, 1)
+        return (digits * basis).sum(dim=1).to(dtype=torch.long)
+
+    def forward(
+        self,
+        z_e: Tensor,
+        return_info: bool = False,
+    ) -> Tuple[Tensor, Tensor, Tensor] | Tuple[Tensor, Tensor, Dict[str, Tensor]]:
+        channel_first = bool(z_e.dim() == 4 and z_e.shape[1] == self.embedding_dim)
+        if channel_first:
+            z_in = z_e
+        else:
+            if z_e.dim() != 4 or z_e.shape[-1] != self.embedding_dim:
+                raise ValueError(
+                    f"FSQuantizer expected [B,D,H,W] or [B,H,W,D] with D={self.embedding_dim}, got {tuple(z_e.shape)}."
+                )
+            z_in = z_e.permute(0, 3, 1, 2).contiguous()
+
+        z_low = self.pre_proj(z_in)
+        bounded = torch.tanh(z_low)
+        z_q_low, digits = self._round_ste(bounded)
+        z_q = self.post_proj(z_q_low)
+        indices = self._indices_from_digits(digits)
+
+        with torch.no_grad():
+            batch_usage = torch.bincount(
+                indices.reshape(-1),
+                minlength=self.num_embeddings,
+            ).to(device=self.codebook_usage.device, dtype=self.codebook_usage.dtype)
+            self.codebook_usage.mul_(0.99).add_(batch_usage, alpha=0.01)
+
+        encodings = F.one_hot(indices.reshape(-1), self.num_embeddings).float()
+        avg_probs = encodings.mean(dim=0)
+        perplexity = torch.exp(-torch.sum(avg_probs * torch.log(avg_probs + 1e-10)))
+        zero = torch.zeros((), device=z_q.device, dtype=z_q.dtype)
+        losses = {
+            "vq_loss": zero,
+            "commitment_loss": zero,
+            "perplexity": perplexity,
+            "fsq_loss": zero,
+        }
+
+        if not channel_first:
+            z_q = z_q.permute(0, 2, 3, 1).contiguous()
+
+        if return_info:
+            return z_q, indices, losses
+        return z_q, losses["vq_loss"], indices
+
+    def encode_indices(self, indices: Tensor) -> Tensor:
+        raise RuntimeError("FSQ has an implicit projected code space; decode_indices is not supported.")
+
+    def get_codebook_usage(self) -> Tensor:
+        total = self.codebook_usage.sum()
+        if total > 0:
+            return self.codebook_usage / total
+        return self.codebook_usage
 
 
 # ============================================================================
@@ -780,17 +903,27 @@ class SemanticVQVAE(nn.Module):
         
         # Vector Quantizer (optional for the no-codebook baseline)
         if self.use_codebook:
-            self.quantizer = VectorQuantizer(
-                num_embeddings=codebook_size,
-                embedding_dim=latent_dim,
-                commitment_cost=commitment_cost,
-                use_ema=use_ema,
-                dead_code_reset_interval=dead_code_reset_interval,
-                dead_code_threshold=dead_code_threshold,
-                dead_code_warmup_steps=dead_code_warmup_steps,
-                protect_active_codes_during_reset=protect_active_codes_during_reset,
-                max_dead_code_resets_per_event=max_dead_code_resets_per_event,
-            )
+            if self.quantizer_type == "fsq":
+                self.quantizer = FSQuantizer(
+                    embedding_dim=latent_dim,
+                    levels=fsq_levels,
+                    num_dims=fsq_num_dims,
+                )
+                self.codebook_size = int(self.quantizer.num_embeddings)
+            elif self.quantizer_type in {"vq", "vector", "vector_quantizer"}:
+                self.quantizer = VectorQuantizer(
+                    num_embeddings=codebook_size,
+                    embedding_dim=latent_dim,
+                    commitment_cost=commitment_cost,
+                    use_ema=use_ema,
+                    dead_code_reset_interval=dead_code_reset_interval,
+                    dead_code_threshold=dead_code_threshold,
+                    dead_code_warmup_steps=dead_code_warmup_steps,
+                    protect_active_codes_during_reset=protect_active_codes_during_reset,
+                    max_dead_code_resets_per_event=max_dead_code_resets_per_event,
+                )
+            else:
+                raise ValueError("quantizer_type must be 'vq' or 'fsq'.")
         else:
             self.quantizer = None
         
@@ -1064,6 +1197,8 @@ class SemanticVQVAE(nn.Module):
         """Get the learned codebook embeddings."""
         if not self.use_codebook or self.quantizer is None:
             raise RuntimeError("get_codebook is only available when use_codebook=True.")
+        if not hasattr(self.quantizer, "embedding"):
+            raise RuntimeError("FSQ uses an implicit scalar codebook; get_codebook is not available.")
         return self.quantizer.embedding.weight.data
 
     def get_codebook_usage(self) -> Tensor:
@@ -1101,6 +1236,9 @@ class SemanticVQVAE2(nn.Module):
         commitment_cost: float = 0.25,
         rare_tile_weight: float = 5.0,
         use_codebook: bool = True,
+        quantizer_type: str = "vq",
+        fsq_levels: Optional[Iterable[int]] = None,
+        fsq_num_dims: Optional[int] = None,
         use_ema: bool = True,
         use_coordconv: bool = True,
         mrf_penalty_weight: float = 0.05,
@@ -1129,6 +1267,7 @@ class SemanticVQVAE2(nn.Module):
         self.top_latent_dim = int(top_latent_dim)
         self.rare_tile_weight = float(rare_tile_weight)
         self.mrf_penalty_weight = float(max(0.0, mrf_penalty_weight))
+        self.quantizer_type = str(quantizer_type or "vq").strip().lower()
 
         self.encoder = Encoder(
             in_channels=self.num_classes,
@@ -1480,6 +1619,15 @@ def create_vqvae(
     top_latent_dim = kwargs.pop("top_latent_dim", None)
     arch_source = model_variant if model_variant is not None else architecture
     arch = str(arch_source or "vqvae").strip().lower().replace("-", "")
+    if arch in {"fsq", "semanticfsq", "fsqvae", "fsqvqvae"}:
+        return SemanticVQVAE(
+            num_classes=num_classes,
+            codebook_size=codebook_size,
+            latent_dim=latent_dim,
+            use_codebook=use_codebook,
+            quantizer_type="fsq",
+            **kwargs,
+        )
     if arch in {"vqvae2", "vqvaeii", "hierarchical", "hierarchicalvqvae"}:
         return SemanticVQVAE2(
             num_classes=num_classes,
@@ -1491,7 +1639,7 @@ def create_vqvae(
             **kwargs,
         )
     if arch not in {"vqvae", "semanticvqvae", "single"}:
-        raise ValueError(f"Unsupported VQ-VAE architecture {architecture!r}. Expected 'vqvae' or 'vqvae2'.")
+        raise ValueError(f"Unsupported VQ-VAE architecture {architecture!r}. Expected 'vqvae', 'vqvae2', or 'fsq'.")
     return SemanticVQVAE(
         num_classes=num_classes,
         codebook_size=codebook_size,

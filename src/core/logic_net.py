@@ -469,6 +469,108 @@ class SoftBellmanFordGridPathfinder(nn.Module):
         return distances.unsqueeze(1)
 
 
+class ValueIterationGridPathfinder(nn.Module):
+    """
+    Learnable value-iteration room pathfinder ablation.
+
+    The module keeps the same distance-field contract as the fixed
+    SoftBellmanFordGridPathfinder, but learns the local transition kernel used
+    to propagate value estimates. This makes VIN a measurable ablation instead
+    of overloading the fixed Bellman-Ford path.
+    """
+
+    WALKABLE_IDS = CANONICAL_LOGIC_WALKABLE_IDS
+
+    def __init__(
+        self,
+        num_iterations: int = 20,
+        temperature: float = 0.1,
+        num_classes: int = 44,
+        num_actions: int = 4,
+    ) -> None:
+        super().__init__()
+        self.num_iterations = int(max(1, num_iterations))
+        self.temperature = float(max(1e-4, temperature))
+        self.num_classes = int(max(1, num_classes))
+        self.num_actions = int(max(1, num_actions))
+
+        self.reward_proj = nn.Sequential(
+            nn.Conv2d(self.num_classes + 2, 32, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(32, 1, kernel_size=1),
+        )
+        self.transition = nn.Conv2d(
+            2,
+            self.num_actions,
+            kernel_size=3,
+            padding=1,
+            bias=False,
+        )
+        with torch.no_grad():
+            self.transition.weight.zero_()
+            centers = [
+                (0, 1),  # north reads value above
+                (2, 1),  # south
+                (1, 0),  # west
+                (1, 2),  # east
+            ]
+            for action, (row, col) in enumerate(centers[: self.num_actions]):
+                self.transition.weight[action, 1, row, col] = 1.0
+
+        walkability = torch.zeros(self.num_classes)
+        for tile_id in self.WALKABLE_IDS:
+            if tile_id < self.num_classes:
+                walkability[tile_id] = 1.0
+        self.register_buffer("walkability_weights", walkability)
+
+    def _derive_walkability(self, room_grid: Tensor) -> Tensor:
+        if room_grid.dim() != 4:
+            raise ValueError(f"room_grid must be [B,C,H,W], got {tuple(room_grid.shape)}.")
+        if int(room_grid.shape[1]) == 1:
+            return torch.sigmoid(room_grid[:, :1])
+        if int(room_grid.shape[1]) != self.num_classes:
+            raise ValueError(
+                f"ValueIterationGridPathfinder expected {self.num_classes} tile channels, got {int(room_grid.shape[1])}."
+            )
+        probs = F.softmax(room_grid, dim=1)
+        walkability = torch.einsum("bchw,c->bhw", probs, self.walkability_weights)
+        return walkability.unsqueeze(1)
+
+    def forward(
+        self,
+        room_grid: Tensor,
+        source_mask: Tensor,
+        walkability: Optional[Tensor] = None,
+    ) -> Tensor:
+        if source_mask.dim() != 4 or int(source_mask.shape[1]) != 1:
+            raise ValueError(f"source_mask must be [B,1,H,W], got {tuple(source_mask.shape)}.")
+        if walkability is None:
+            walkability = self._derive_walkability(room_grid)
+        if walkability.dim() != 4 or int(walkability.shape[1]) != 1:
+            raise ValueError(f"walkability must be [B,1,H,W], got {tuple(walkability.shape)}.")
+
+        tile_probs = (
+            F.softmax(room_grid, dim=1)
+            if int(room_grid.shape[1]) == self.num_classes
+            else room_grid.expand(-1, self.num_classes, -1, -1)
+        )
+        walk = walkability.clamp(0.0, 1.0)
+        source = source_mask.clamp(0.0, 1.0)
+        reward = self.reward_proj(torch.cat([tile_probs, walk, source], dim=1))
+        reward = reward + 5.0 * source - 5.0 * (1.0 - walk)
+
+        value = torch.zeros_like(source)
+        for _ in range(self.num_iterations):
+            q_values = self.transition(torch.cat([reward, value], dim=1))
+            updated = soft_max(q_values, dim=1, temperature=max(self.temperature, 1e-4)).unsqueeze(1)
+            value = torch.maximum(value, reward + updated)
+            value = value * (1.0 - source) + reward * source
+
+        value = value - value.amin(dim=(2, 3), keepdim=True)
+        value = value / value.amax(dim=(2, 3), keepdim=True).clamp_min(1e-6)
+        return (1.0 - value) * 50.0
+
+
 # ============================================================================
 # REACHABILITY SCORER
 # ============================================================================
@@ -894,8 +996,10 @@ class LogicNet(nn.Module):
         self.grid_pathfinder_type = str(grid_pathfinder_type).strip().lower()
         if self.grid_pathfinder_type in {"bellman-ford", "soft_bellman_ford", "soft-bellman-ford"}:
             self.grid_pathfinder_type = "bellman_ford"
-        if self.grid_pathfinder_type not in {"cnn", "bellman_ford"}:
-            raise ValueError("grid_pathfinder_type must be 'cnn' or 'bellman_ford'.")
+        if self.grid_pathfinder_type in {"value_iteration", "value-iteration"}:
+            self.grid_pathfinder_type = "vin"
+        if self.grid_pathfinder_type not in {"cnn", "bellman_ford", "vin"}:
+            raise ValueError("grid_pathfinder_type must be 'cnn', 'bellman_ford', or 'vin'.")
         
         # --- Phase 1D: Temperature annealing state ---
         self.initial_temperature = initial_temperature
@@ -916,6 +1020,12 @@ class LogicNet(nn.Module):
         # Grid-level pathfinder
         if self.grid_pathfinder_type == "bellman_ford":
             self.grid_pathfinder = SoftBellmanFordGridPathfinder(
+                num_iterations=num_iterations,
+                temperature=temperature,
+                num_classes=num_classes,
+            )
+        elif self.grid_pathfinder_type == "vin":
+            self.grid_pathfinder = ValueIterationGridPathfinder(
                 num_iterations=num_iterations,
                 temperature=temperature,
                 num_classes=num_classes,
