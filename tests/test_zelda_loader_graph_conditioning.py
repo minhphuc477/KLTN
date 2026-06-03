@@ -32,6 +32,7 @@ from src.pipeline.room_topology_conditioning import (
 )
 from src.simulation.validator import GameState, ZeldaLogicEnv
 from src.zelda_data.zelda_loader import (
+    DungeonBatchSampler,
     ZeldaDungeonDataset,
     _build_room_graph_sample,
     _extract_graph_from_dungeon,
@@ -87,6 +88,26 @@ def test_compute_rrwp_edge_features_preserves_edge_order_and_invalid_rows():
     assert rrwp[0, 0].item() == pytest.approx(0.5)
     assert rrwp[1].sum().item() == pytest.approx(0.0)
     assert rrwp[2, 0].item() == pytest.approx(0.5)
+
+
+def test_dungeon_batch_sampler_groups_room_samples_by_dungeon_variant():
+    class _Dataset(torch.utils.data.Dataset):
+        sample_metadata = [
+            {"dungeon_id": "d1_v1", "current_node_idx": 1},
+            {"dungeon_id": "d2_v1", "current_node_idx": 0},
+            {"dungeon_id": "d1_v1", "current_node_idx": 0},
+        ]
+
+        def __len__(self):
+            return len(self.sample_metadata)
+
+        def __getitem__(self, idx):
+            return idx
+
+    sampler = DungeonBatchSampler.from_dataset(_Dataset(), shuffle=False)
+    batches = list(iter(sampler))
+
+    assert batches == [[2, 0], [1]]
 
 
 def test_room_graph_sample_builds_room_topology_from_dataset_graph():

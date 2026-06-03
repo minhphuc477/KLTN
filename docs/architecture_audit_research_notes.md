@@ -262,6 +262,28 @@ still required.
   Min-SNR verification. FSQ, GraphGPS, VIN, WFC pseudo-labels, PAG, flow
   matching, RLHF fine-tuning, hierarchical VQ-VAE, and DiT remain ablation
   work rather than unconditional defaults.
+- Harsh-review v4 pass converts several previously unwired claims into
+  measurable code paths. `architecture="fsq"` now builds a finite-scalar
+  tokenizer ablation with implicit scalar codes, zero commitment/codebook
+  losses, STE gradients, and code-usage/perplexity diagnostics. This is an
+  ablation option, not a silent replacement for the default VQ tokenizer.
+- `logic_grid_pathfinder="vin"` now selects a learnable Value Iteration
+  Network-style grid pathfinder. The default remains Bellman-Ford because VIN
+  changes inductive bias and must earn its place in the ablation table, but the
+  code path is now real and differentiable.
+- RRWP is now consumed by the graph conditioner. `edge_rrwp` is projected into
+  hidden edge attributes and added to semantic edge features for GPS/GAT-style
+  message passing, so RRWP no longer exists only as an unused side tensor.
+- Room-level diffusion training now supports `dungeon_batch_mode=True`.
+  `DungeonBatchSampler` groups all rooms from one dungeon variant, and the
+  trainer collapses complete room batches into `graph_scope="dungeon"` graph
+  data with one current-node index per room. This gives the global graph loss a
+  full node-passability vector instead of random rooms from unrelated dungeons.
+- WFC pseudo-label distillation is now opt-in through `alpha_wfc_pseudo`.
+  The trainer builds batch priors, pins only high-confidence predicted cells,
+  lets WFC fill/repair uncertain cells, and adds cross-entropy to the repaired
+  pseudo-target. This keeps the self-training loop measurable and avoids a
+  placebo full-grid seed that would simply return the original prediction.
 
 ## Validation Commands
 
@@ -278,5 +300,8 @@ still required.
 - Revision 4 focused regression: `python -m pytest tests/test_logicnet_gradient_flow.py tests/test_audit_regressions.py::test_logic_net_defaults_to_bellman_ford_grid_pathfinder tests/test_train_diffusion_conditioning_shapes.py::test_validate_reports_hard_solvability_from_decoded_samples tests/test_config_system.py::test_diffusion_helper_preserves_yaml_only_methodology_knobs -q` passed with 8 tests.
 - H-MOLQD upgrade focused regression: `python -m pytest tests/test_architecture_audit_fixes.py::test_p_sample_guides_pred_x0_before_rebuilding_posterior tests/test_architecture_audit_fixes.py::test_min_snr_gamma_defaults_to_five_and_clamps_snr_weights tests/test_logicnet_fixes.py::test_semantic_edge_encoder_defaults_and_receives_gradients tests/test_logicnet_fixes.py::test_logicnet_edge_attr_penalties_follow_valid_edge_filter tests/test_logicnet_gradient_flow.py::test_gradient_probe_records_logicnet_module_gradients tests/test_zelda_loader_graph_conditioning.py::test_dungeon_dataset_getitem_preserves_spatial_graph_fields tests/test_zelda_loader_graph_conditioning.py::test_compute_rrwp_edge_features_preserves_edge_order_and_invalid_rows -q` passed with 7 tests.
 - H-MOLQD upgrade broad targeted regression: `python -m pytest tests/test_architecture_audit_fixes.py tests/test_logicnet_fixes.py tests/test_logicnet_gradient_flow.py tests/test_zelda_loader_graph_conditioning.py tests/test_train_diffusion_conditioning_shapes.py tests/test_ml_components.py tests/test_config_system.py -q` passed with 209 tests.
+- Harsh-review v4 compile check: `python -m py_compile src/core/vqvae.py src/core/logic_net.py src/core/condition_encoder.py src/zelda_data/zelda_loader.py src/train_diffusion.py src/config_system.py src/pipeline/config_bridge.py tests/test_hmolqd/test_vqvae.py tests/test_logicnet_fixes.py tests/test_ml_components.py tests/test_zelda_loader_graph_conditioning.py tests/test_train_diffusion_conditioning_shapes.py`.
+- Harsh-review v4 focused regression: `python -m pytest tests/test_hmolqd/test_vqvae.py::TestFSQuantizer tests/test_logicnet_fixes.py::test_vin_pathfinder_is_selectable_and_backpropagates tests/test_ml_components.py::test_global_stream_encoder_rrwp_changes_gps_edge_messages tests/test_zelda_loader_graph_conditioning.py::test_dungeon_batch_sampler_groups_room_samples_by_dungeon_variant tests/test_train_diffusion_conditioning_shapes.py::test_try_stack_dungeon_scope_graph_batch_collapses_full_room_set tests/test_train_diffusion_conditioning_shapes.py::test_wfc_pseudo_label_loss_is_opt_in_and_backpropagates -q` passed with 7 tests.
+- Harsh-review v4 broad targeted regression: `python -m pytest tests/test_hmolqd/test_vqvae.py tests/test_logicnet_fixes.py tests/test_logicnet_gradient_flow.py tests/test_ml_components.py tests/test_zelda_loader_graph_conditioning.py tests/test_train_diffusion_conditioning_shapes.py tests/test_config_system.py -q` passed with 179 tests.
 - Revision 4 smoke checks: `python experiments/logicnet_ablation.py --base-config configs/zelda_hmolqd.yaml --output-dir results/tmp_logicnet_ablation_smoke --epochs 1 --validation-samples 1 --validation-diffusion-samples 1 --quick` wrote a manifest, and `python experiments/gradient_magnitude_probe.py --output results/tmp_logicnet_gradient_probe.json --batch-size 1 --height 4 --width 4 --latent-dim 8 --hidden-dim 16 --num-iterations 3` recorded nonzero latent, tile-classifier, tile-logit, and walkability gradients.
 - Revision 4 broad regression: `python -m pytest tests/test_audit_regressions.py tests/test_architecture_audit_fixes.py tests/test_logicnet_fixes.py tests/test_logicnet_gradient_flow.py tests/test_train_diffusion_conditioning_shapes.py tests/test_hmolqd/test_symbolic_refiner.py tests/test_hmolqd/test_gaussian_vae.py tests/test_ml_components.py tests/test_config_system.py -q` passed with 224 tests.

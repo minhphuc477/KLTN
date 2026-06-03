@@ -14,6 +14,7 @@ Usage:
 
 import sys
 import argparse
+import inspect
 import json
 import logging
 import math
@@ -21,6 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Dict, Any, Tuple, List
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -32,7 +34,7 @@ PROJECT_ROOT = Path(__file__).parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.zelda_data.zelda_loader import create_dataloader, extract_start_goal, graph_collate_fn
+from src.zelda_data.zelda_loader import DungeonBatchSampler, create_dataloader, extract_start_goal, graph_collate_fn
 from src.core.latent_diffusion import LatentDiffusionModel, create_latent_diffusion
 from src.core.vqvae import SemanticVQVAE as VQVAE, create_vqvae
 from src.core.condition_encoder import DualStreamConditionEncoder, create_condition_encoder
@@ -74,6 +76,11 @@ from src.utils.checkpoint import (
     resolve_resume_checkpoint,
     safe_torch_load,
     write_checkpoint_metadata,
+)
+from src.generation.weighted_bayesian_wfc import (
+    TilePrior,
+    WeightedBayesianWFCConfig,
+    integrate_weighted_wfc_into_pipeline,
 )
 from src.utils.distributed import (
     DistributedContext,
@@ -125,6 +132,7 @@ class DiffusionTrainingConfig:
         normalize: bool = True,
         use_vglc: bool = True,
         room_level: bool = True,
+        dungeon_batch_mode: bool = True,
         train_dungeon_ids: Optional[List[int]] = None,
         test_dungeon_ids: Optional[List[int]] = None,
         variants: Optional[List[int]] = None,
@@ -215,6 +223,9 @@ class DiffusionTrainingConfig:
         alpha_visual: float = 1.0,   # Diffusion loss weight
         alpha_logic: float = 0.1,     # Solvability loss weight
         alpha_logic_tile: float = 0.05,  # Supervised LogicNet tile-classifier loss weight
+        alpha_wfc_pseudo: float = 0.0,
+        wfc_pseudo_max_samples: int = 2,
+        wfc_pseudo_confidence_threshold: float = 0.75,
         min_logic_tile_accuracy_for_guidance: float = 0.4,
         graph_spatial_alignment_weight: float = 0.0,
         logic_loss_mode: str = "predicted_latent",  # predicted_latent | detached_real
@@ -262,6 +273,7 @@ class DiffusionTrainingConfig:
         self.normalize = bool(normalize)
         self.use_vglc = use_vglc
         self.room_level = bool(room_level)
+        self.dungeon_batch_mode = bool(dungeon_batch_mode)
         self.train_dungeon_ids = [int(v) for v in (train_dungeon_ids if train_dungeon_ids is not None else list(range(1, 9)))]
         self.test_dungeon_ids = [int(v) for v in (test_dungeon_ids if test_dungeon_ids is not None else [9])]
         self.variants = [int(v) for v in (variants if variants is not None else [1, 2])]
@@ -441,6 +453,9 @@ class DiffusionTrainingConfig:
         self.alpha_visual = alpha_visual
         self.alpha_logic = alpha_logic if self.logic_net_enabled else 0.0
         self.alpha_logic_tile = float(max(0.0, alpha_logic_tile)) if self.logic_net_enabled else 0.0
+        self.alpha_wfc_pseudo = float(max(0.0, alpha_wfc_pseudo)) if self.logic_net_enabled else 0.0
+        self.wfc_pseudo_max_samples = int(max(0, wfc_pseudo_max_samples))
+        self.wfc_pseudo_confidence_threshold = float(max(0.0, min(1.0, wfc_pseudo_confidence_threshold)))
         self.min_logic_tile_accuracy_for_guidance = float(max(0.0, min_logic_tile_accuracy_for_guidance))
         self.graph_spatial_alignment_weight = float(max(0.0, graph_spatial_alignment_weight))
         mode = str(logic_loss_mode).strip().lower()
@@ -546,6 +561,7 @@ def diffusion_training_kwargs_from_resolved_config(
         "normalize": dataset["normalize"],
         "use_vglc": dataset["use_vglc"],
         "room_level": dataset["room_level"],
+        "dungeon_batch_mode": dataset.get("dungeon_batch_mode", True),
         "train_dungeon_ids": dataset.get("train_dungeons", list(range(1, 9))),
         "test_dungeon_ids": dataset.get("test_dungeons", [9]),
         "variants": dataset.get("variants", [1, 2]),
@@ -628,6 +644,9 @@ def diffusion_training_kwargs_from_resolved_config(
         "alpha_visual": stage["alpha_visual"],
         "alpha_logic": stage["alpha_logic"],
         "alpha_logic_tile": stage.get("alpha_logic_tile", 0.05),
+        "alpha_wfc_pseudo": stage.get("alpha_wfc_pseudo", 0.0),
+        "wfc_pseudo_max_samples": stage.get("wfc_pseudo_max_samples", 2),
+        "wfc_pseudo_confidence_threshold": stage.get("wfc_pseudo_confidence_threshold", 0.75),
         "min_logic_tile_accuracy_for_guidance": stage.get("min_logic_tile_accuracy_for_guidance", 0.4),
         "graph_spatial_alignment_weight": stage.get("graph_spatial_alignment_weight", 0.0),
         "logic_loss_mode": stage["logic_loss_mode"],
@@ -837,6 +856,7 @@ def _legacy_diffusion_overrides_from_args(args: argparse.Namespace) -> Dict[str,
     _set("data_dir", getattr(args, "data_dir", None))
     _set("batch_size", getattr(args, "batch_size", None))
     _set("room_level", getattr(args, "room_level", None))
+    _set("dungeon_batch_mode", getattr(args, "dungeon_batch_mode", None))
     _set("train_dungeon_ids", getattr(args, "train_dungeon_ids", None))
     _set("test_dungeon_ids", getattr(args, "test_dungeon_ids", None))
     _set("variants", getattr(args, "variants", None))
@@ -855,6 +875,9 @@ def _legacy_diffusion_overrides_from_args(args: argparse.Namespace) -> Dict[str,
     _set("unet_dropout", getattr(args, "unet_dropout", None))
     _set("alpha_logic", getattr(args, "alpha_logic", None))
     _set("alpha_logic_tile", getattr(args, "alpha_logic_tile", None))
+    _set("alpha_wfc_pseudo", getattr(args, "alpha_wfc_pseudo", None))
+    _set("wfc_pseudo_max_samples", getattr(args, "wfc_pseudo_max_samples", None))
+    _set("wfc_pseudo_confidence_threshold", getattr(args, "wfc_pseudo_confidence_threshold", None))
     _set("min_logic_tile_accuracy_for_guidance", getattr(args, "min_logic_tile_accuracy_for_guidance", None))
     _set("graph_spatial_alignment_weight", getattr(args, "graph_spatial_alignment_weight", None))
     _set("logic_loss_mode", getattr(args, "logic_loss_mode", None))
@@ -1367,6 +1390,19 @@ class DiffusionTrainer:
         return F.one_hot(
             edge_attr_clamped, num_classes=num_edge_types
         ).float()
+
+    @staticmethod
+    def _call_supports_keyword(callable_obj: Any, keyword: str) -> bool:
+        """Return whether a callable can accept a keyword without invoking it."""
+        target = getattr(callable_obj, "forward", callable_obj)
+        try:
+            signature = inspect.signature(target)
+        except (TypeError, ValueError):
+            return True
+        for parameter in signature.parameters.values():
+            if parameter.kind == inspect.Parameter.VAR_KEYWORD:
+                return True
+        return keyword in signature.parameters
     
     def get_dummy_conditioning(self, batch_size: int) -> torch.Tensor:
         """
@@ -1563,6 +1599,17 @@ class DiffusionTrainer:
         edge_index = graph_dict['edge_index'].to(self.device)
         
         edge_features = self._encode_edge_features(graph_dict)
+        edge_rrwp = graph_dict.get("edge_rrwp")
+        if not isinstance(edge_rrwp, torch.Tensor):
+            edge_rrwp = compute_rrwp_edge_features(
+                edge_index,
+                int(node_features.shape[0]),
+                steps=int(GRAPH_TPE_DIM),
+                device=self.device,
+                dtype=torch.float32,
+            )
+        else:
+            edge_rrwp = edge_rrwp.to(self.device, dtype=torch.float32)
         tpe = align_nodewise_tensor(
             graph_dict.get("tpe"),
             num_nodes=int(node_features.shape[0]),
@@ -1621,20 +1668,23 @@ class DiffusionTrainer:
                 if bool(getattr(self.config, "condition_use_reference_room_maps", False))
                 else None
             )
-            condition_out = self.condition_encoder(
-                neighbor_latents=neighbor_latents,
-                boundary_constraints=boundary_constraints,
-                position=room_position,
-                node_features=node_features,
-                edge_index=edge_index,
-                edge_features=edge_features,
-                tpe=tpe,
-                current_node_distance=current_node_distance,
-                current_node_idx=int(current_node_idx) if current_node_idx is not None else None,
-                reference_room_maps=reference_room_maps,
-                style_id=style_id,
-                return_global_tokens=self.config.graph_conditioning_mode == "node_sequence",
-            )
+            condition_kwargs = {
+                "neighbor_latents": neighbor_latents,
+                "boundary_constraints": boundary_constraints,
+                "position": room_position,
+                "node_features": node_features,
+                "edge_index": edge_index,
+                "edge_features": edge_features,
+                "tpe": tpe,
+                "current_node_distance": current_node_distance,
+                "current_node_idx": int(current_node_idx) if current_node_idx is not None else None,
+                "reference_room_maps": reference_room_maps,
+                "style_id": style_id,
+                "return_global_tokens": self.config.graph_conditioning_mode == "node_sequence",
+            }
+            if self._call_supports_keyword(self.condition_encoder, "edge_rrwp"):
+                condition_kwargs["edge_rrwp"] = edge_rrwp
+            condition_out = self.condition_encoder(**condition_kwargs)
             if self.config.graph_conditioning_mode == "node_sequence":
                 if not isinstance(condition_out, tuple) or len(condition_out) != 2:
                     raise ValueError(
@@ -1665,12 +1715,15 @@ class DiffusionTrainer:
                 )
             return conditioning_out
 
-        c_global = self.condition_encoder.encode_global_only(
-            node_features, edge_index,
-            edge_features=edge_features,
-            tpe=tpe,
-            current_node_distance=current_node_distance,
-        )
+        global_kwargs = {
+            "edge_features": edge_features,
+            "tpe": tpe,
+            "current_node_distance": current_node_distance,
+        }
+        encode_global = self.condition_encoder.encode_global_only
+        if self._call_supports_keyword(encode_global, "edge_rrwp"):
+            global_kwargs["edge_rrwp"] = edge_rrwp
+        c_global = encode_global(node_features, edge_index, **global_kwargs)
 
         if self.config.graph_conditioning_mode == "node_sequence":
             default_anchor = self.condition_encoder.encode_local_only(
@@ -1915,6 +1968,10 @@ class DiffusionTrainer:
         if not graph_list:
             return None
 
+        dungeon_graph = self._try_stack_dungeon_scope_graph_batch(graph_list)
+        if dungeon_graph is not None:
+            return dungeon_graph
+
         samples = [self._normalize_diffusion_graph_sample(graph_dict) for graph_dict in graph_list]
         if not samples:
             return None
@@ -2037,6 +2094,76 @@ class DiffusionTrainer:
         if boundary_batch is not None:
             batch_graph["boundary_constraints"] = boundary_batch
         return batch_graph
+
+    def _try_stack_dungeon_scope_graph_batch(self, graph_list: List[dict]) -> Optional[Dict[str, torch.Tensor]]:
+        """
+        Collapse a room batch from one dungeon into one mission graph.
+
+        Returns None when the batch is mixed or incomplete, falling back to the
+        legacy per-room graph list path.
+        """
+        if not graph_list:
+            return None
+        node_counts = [int(g.get("num_nodes", 0)) for g in graph_list]
+        if not node_counts or min(node_counts) <= 0 or len(set(node_counts)) != 1:
+            return None
+        num_nodes = node_counts[0]
+        if len(graph_list) != num_nodes:
+            return None
+
+        first = graph_list[0]
+        first_node_map = dict(first.get("node_to_idx", {}))
+        current_indices: List[int] = []
+        for graph in graph_list:
+            if dict(graph.get("node_to_idx", {})) != first_node_map:
+                return None
+            current = graph.get("current_node_idx")
+            if isinstance(current, torch.Tensor):
+                current = int(current.detach().flatten()[0].item()) if current.numel() else -1
+            elif current is None:
+                return None
+            else:
+                current = int(current)
+            current_indices.append(current)
+        if sorted(current_indices) != list(range(num_nodes)):
+            return None
+
+        sample = self._normalize_diffusion_graph_sample(first)
+        topo_maps: List[torch.Tensor] = []
+        boundary_rows: List[torch.Tensor] = []
+        for graph in graph_list:
+            normalized = self._normalize_diffusion_graph_sample(graph)
+            topo = normalized.get("room_topology_map")
+            boundary = normalized.get("boundary_constraints")
+            if isinstance(topo, torch.Tensor):
+                topo_maps.append(topo.unsqueeze(0) if topo.dim() == 3 else topo)
+            if isinstance(boundary, torch.Tensor):
+                boundary_rows.append(boundary.reshape(1, -1))
+
+        node_mask = sample.get("node_mask")
+        if not isinstance(node_mask, torch.Tensor):
+            node_mask = torch.ones(num_nodes, device=self.device, dtype=torch.float32)
+        batch_graph = {
+            "node_features": sample["node_features"],
+            "edge_index": sample["edge_index"],
+            "edge_features": sample["edge_features"],
+            "edge_rrwp": sample["edge_rrwp"],
+            "edge_attr": sample["edge_attr"],
+            "tpe": sample["tpe"],
+            "current_node_distance": sample["current_node_distance"],
+            "node_positions": sample["node_positions"],
+            "node_mask": node_mask,
+            "current_node_idx": torch.tensor(current_indices, device=self.device, dtype=torch.long),
+            "start_node_id": torch.tensor(int(sample.get("start_node_id", -1)), device=self.device, dtype=torch.long),
+            "target_idx": torch.tensor(int(sample.get("target_idx", -1)), device=self.device, dtype=torch.long),
+            "graph_scope": "dungeon",
+            "has_room_anchor": bool(self.config.graph_conditioning_mode == "node_sequence") or bool(sample.get("has_room_anchor", False)),
+        }
+        if topo_maps and len(topo_maps) == len(graph_list):
+            batch_graph["room_topology_map"] = torch.cat(topo_maps, dim=0)
+        if boundary_rows and len(boundary_rows) == len(graph_list):
+            batch_graph["boundary_constraints"] = torch.cat(boundary_rows, dim=0)
+        return batch_graph
     
     def _build_logic_graph_data(
         self,
@@ -2146,6 +2273,86 @@ class DiffusionTrainer:
         if not isinstance(logic_loss, torch.Tensor):
             logic_loss = torch.tensor(float(logic_loss), dtype=torch.float32)
         return torch.exp(-logic_loss.detach().clamp_min(0.0))
+
+    def _tile_grid_from_maps(self, maps: torch.Tensor) -> torch.Tensor:
+        """Convert normalized room maps or logits/probs to integer tile IDs."""
+        if maps.dim() != 4:
+            raise ValueError(f"maps must be [B,C,H,W], got {tuple(maps.shape)}")
+        if int(maps.shape[1]) == 1:
+            scale = float(max(1, int(getattr(self.config, "num_classes", 44)) - 1))
+            return (maps[:, 0].detach() * scale).round().long().clamp(0, int(scale))
+        return maps.detach().argmax(dim=1).long()
+
+    def _build_wfc_tile_priors(self, real_maps: torch.Tensor) -> Dict[int, TilePrior]:
+        """Build lightweight tile-frequency priors from the current real batch."""
+        tile_ids = self._tile_grid_from_maps(real_maps).detach().cpu().numpy().astype(np.int64)
+        values, counts = np.unique(tile_ids, return_counts=True)
+        total = float(max(1, int(counts.sum())))
+        return {
+            int(tile_id): TilePrior(tile_id=int(tile_id), frequency=float(count) / total)
+            for tile_id, count in zip(values.tolist(), counts.tolist())
+        }
+
+    def _wfc_pseudo_label_loss(
+        self,
+        pred_tile_logits: torch.Tensor,
+        real_maps: torch.Tensor,
+    ) -> Tuple[torch.Tensor, float]:
+        """
+        Distill WFC-repaired pseudo targets into predicted tile logits.
+
+        WFC is non-differentiable here; gradients flow from cross-entropy on
+        current logits to repaired tile labels. The loss is opt-in through
+        alpha_wfc_pseudo.
+        """
+        zero = torch.zeros((), device=pred_tile_logits.device, dtype=pred_tile_logits.dtype)
+        if float(getattr(self.config, "alpha_wfc_pseudo", 0.0)) <= 0.0:
+            return zero, 0.0
+        max_samples = int(getattr(self.config, "wfc_pseudo_max_samples", 0))
+        if max_samples <= 0 or pred_tile_logits.numel() == 0:
+            return zero, 0.0
+
+        priors = self._build_wfc_tile_priors(real_maps)
+        if not priors:
+            return zero, 0.0
+
+        with torch.no_grad():
+            probs = F.softmax(pred_tile_logits.detach(), dim=1)
+            confidence, pred_ids = probs.max(dim=1)
+            threshold = float(getattr(self.config, "wfc_pseudo_confidence_threshold", 0.75))
+            repair_targets: List[torch.Tensor] = []
+            limit = min(int(pred_tile_logits.shape[0]), max_samples)
+            wfc_config = WeightedBayesianWFCConfig(
+                use_vqvae_priors=True,
+                max_iterations=max(128, ROOM_HEIGHT * ROOM_WIDTH * 4),
+                max_backtracks=32,
+                max_restarts=1,
+            )
+            for sample_idx in range(limit):
+                seed_grid = pred_ids[sample_idx].detach().cpu().numpy().astype(np.int64)
+                confident = confidence[sample_idx].detach().cpu().numpy() >= threshold
+                partial_seed = np.where(confident, seed_grid, -1).astype(np.int64)
+                try:
+                    repaired = integrate_weighted_wfc_into_pipeline(
+                        partial_seed,
+                        priors,
+                        seed=int(getattr(self.config, "seed", 42)) + int(self.global_step) + sample_idx,
+                        config=wfc_config,
+                    )["grid"]
+                except (RuntimeError, ValueError, TypeError, KeyError):
+                    continue
+                target = torch.as_tensor(
+                    repaired,
+                    device=pred_tile_logits.device,
+                    dtype=torch.long,
+                ).clamp(0, int(getattr(self.config, "num_classes", 44)) - 1)
+                repair_targets.append(target)
+
+        if not repair_targets:
+            return zero, 0.0
+        target_batch = torch.stack(repair_targets, dim=0)
+        logits = pred_tile_logits[: target_batch.shape[0]]
+        return F.cross_entropy(logits, target_batch), float(target_batch.shape[0])
     
     def _update_ema(self):
         """
@@ -2330,6 +2537,8 @@ class DiffusionTrainer:
                 'diffusion_loss': 0.0,
                 'logic_loss': 0.0,
                 'logic_tile_loss': 0.0,
+                'wfc_pseudo_loss': 0.0,
+                'wfc_pseudo_samples': 0.0,
                 'logic_tile_accuracy': 0.0,
                 'solvability_proxy': 0.0,
                 'solvability': 0.0,
@@ -2343,6 +2552,8 @@ class DiffusionTrainer:
         # logic gradients flow into diffusion + condition encoder.
         logic_loss = torch.tensor(0.0, device=self.device)
         logic_tile_loss = torch.tensor(0.0, device=self.device)
+        wfc_pseudo_loss = torch.tensor(0.0, device=self.device)
+        wfc_pseudo_samples = 0.0
         logic_tile_accuracy = torch.tensor(0.0, device=self.device)
         solvability_proxy = torch.tensor(0.0, device=self.device)
         
@@ -2398,6 +2609,10 @@ class DiffusionTrainer:
                 if pred_x0_logic is not None:
                     pred_tile_logits = self._decode_latent_for_logic(pred_x0_logic)
                     logic_loss, _logic_info = self.logic_net(pred_tile_logits, graph_data=logic_graph_data)
+                    wfc_pseudo_loss, wfc_pseudo_samples = self._wfc_pseudo_label_loss(
+                        pred_tile_logits,
+                        real_maps,
+                    )
 
             if self._tensor_is_finite(logic_loss):
                 if isinstance(logic_loss, torch.Tensor) and logic_loss.numel() != 1:
@@ -2416,6 +2631,7 @@ class DiffusionTrainer:
             self.config.alpha_visual * diffusion_loss + 
             self.config.alpha_logic * logic_loss
             + float(getattr(self.config, "alpha_logic_tile", 0.0)) * logic_tile_loss
+            + float(getattr(self.config, "alpha_wfc_pseudo", 0.0)) * wfc_pseudo_loss
         )
         if not self._tensor_is_finite(total_loss):
             self.optimizer.zero_grad(set_to_none=True)
@@ -2429,6 +2645,8 @@ class DiffusionTrainer:
                 'diffusion_loss': float(diffusion_loss.detach().item()) if self._tensor_is_finite(diffusion_loss) else 0.0,
                 'logic_loss': 0.0,
                 'logic_tile_loss': 0.0,
+                'wfc_pseudo_loss': 0.0,
+                'wfc_pseudo_samples': 0.0,
                 'logic_tile_accuracy': 0.0,
                 'solvability_proxy': 0.0,
                 'solvability': 0.0,
@@ -2458,6 +2676,8 @@ class DiffusionTrainer:
                 'diffusion_loss': float(diffusion_loss.detach().item()),
                 'logic_loss': float(logic_loss.detach().item()) if self._tensor_is_finite(logic_loss) else 0.0,
                 'logic_tile_loss': float(logic_tile_loss.detach().item()) if self._tensor_is_finite(logic_tile_loss) else 0.0,
+                'wfc_pseudo_loss': float(wfc_pseudo_loss.detach().item()) if self._tensor_is_finite(wfc_pseudo_loss) else 0.0,
+                'wfc_pseudo_samples': float(wfc_pseudo_samples),
                 'logic_tile_accuracy': float(logic_tile_accuracy.detach().item()) if self._tensor_is_finite(logic_tile_accuracy) else 0.0,
                 'solvability_proxy': float(solvability_proxy.detach().item()) if self._tensor_is_finite(solvability_proxy) else 0.0,
                 'solvability': float(solvability_proxy.detach().item()) if self._tensor_is_finite(solvability_proxy) else 0.0,
@@ -2485,6 +2705,8 @@ class DiffusionTrainer:
                     'diffusion_loss': float(diffusion_loss.detach().item()),
                     'logic_loss': float(logic_loss.detach().item()) if self._tensor_is_finite(logic_loss) else 0.0,
                     'logic_tile_loss': float(logic_tile_loss.detach().item()) if self._tensor_is_finite(logic_tile_loss) else 0.0,
+                    'wfc_pseudo_loss': float(wfc_pseudo_loss.detach().item()) if self._tensor_is_finite(wfc_pseudo_loss) else 0.0,
+                    'wfc_pseudo_samples': float(wfc_pseudo_samples),
                     'logic_tile_accuracy': float(logic_tile_accuracy.detach().item()) if self._tensor_is_finite(logic_tile_accuracy) else 0.0,
                     'solvability_proxy': float(solvability_proxy.detach().item()) if self._tensor_is_finite(solvability_proxy) else 0.0,
                     'solvability': float(solvability_proxy.detach().item()) if self._tensor_is_finite(solvability_proxy) else 0.0,
@@ -2512,6 +2734,8 @@ class DiffusionTrainer:
             'diffusion_loss': diffusion_loss.item(),
             'logic_loss': logic_loss.item(),
             'logic_tile_loss': logic_tile_loss.item(),
+            'wfc_pseudo_loss': wfc_pseudo_loss.item(),
+            'wfc_pseudo_samples': float(wfc_pseudo_samples),
             'logic_tile_accuracy': logic_tile_accuracy.item(),
             'solvability_proxy': solvability_proxy.item(),
             'solvability': solvability_proxy.item(),
@@ -2540,6 +2764,8 @@ class DiffusionTrainer:
             'diffusion_loss': 0,
             'logic_loss': 0,
             'logic_tile_loss': 0,
+            'wfc_pseudo_loss': 0,
+            'wfc_pseudo_samples': 0,
             'logic_tile_accuracy': 0,
             'solvability_proxy': 0,
             'solvability': 0,
@@ -3053,34 +3279,67 @@ def train_diffusion(config: DiffusionTrainingConfig) -> DiffusionTrainer:
             validation_fraction=float(getattr(config, "validation_fraction", 0.0)),
             seed=int(getattr(config, "seed", 42)),
         )
-        train_sampler = make_distributed_sampler(
-            train_dataset,
-            context=distributed_context,
-            shuffle=config.shuffle_train,
-            drop_last=config.drop_last,
-            seed=int(getattr(config, "seed", 42)),
+        use_dungeon_batch_mode = (
+            bool(getattr(config, "dungeon_batch_mode", True))
+            and bool(getattr(config, "room_level", True))
+            and not bool(getattr(distributed_context, "enabled", False))
         )
-        train_loader = DataLoader(
-            train_dataset,
-            batch_size=config.batch_size,
-            shuffle=(bool(config.shuffle_train) if train_sampler is None else False),
-            sampler=train_sampler,
-            drop_last=config.drop_last,
-            collate_fn=graph_collate_fn,
-            **dataloader_runtime_kwargs(num_workers=config.num_workers, pin_memory=config.pin_memory),
-        )
+        if use_dungeon_batch_mode:
+            train_sampler = DungeonBatchSampler.from_dataset(
+                train_dataset,
+                shuffle=config.shuffle_train,
+                drop_last=False,
+                seed=int(getattr(config, "seed", 42)),
+            )
+            train_loader = DataLoader(
+                train_dataset,
+                batch_sampler=train_sampler,
+                collate_fn=graph_collate_fn,
+                **dataloader_runtime_kwargs(num_workers=config.num_workers, pin_memory=config.pin_memory),
+            )
+        else:
+            train_sampler = make_distributed_sampler(
+                train_dataset,
+                context=distributed_context,
+                shuffle=config.shuffle_train,
+                drop_last=config.drop_last,
+                seed=int(getattr(config, "seed", 42)),
+            )
+            train_loader = DataLoader(
+                train_dataset,
+                batch_size=config.batch_size,
+                shuffle=(bool(config.shuffle_train) if train_sampler is None else False),
+                sampler=train_sampler,
+                drop_last=config.drop_last,
+                collate_fn=graph_collate_fn,
+                **dataloader_runtime_kwargs(num_workers=config.num_workers, pin_memory=config.pin_memory),
+            )
 
         val_loader = None
         if distributed_context.is_main_process:
             eval_source = val_dataset if val_dataset is not None else train_dataset
-            val_loader = DataLoader(
-                eval_source,
-                batch_size=config.batch_size,
-                shuffle=bool(config.shuffle_val),
-                drop_last=False,
-                collate_fn=graph_collate_fn,
-                **dataloader_runtime_kwargs(num_workers=config.num_workers, pin_memory=config.pin_memory),
-            )
+            if use_dungeon_batch_mode:
+                val_batch_sampler = DungeonBatchSampler.from_dataset(
+                    eval_source,
+                    shuffle=bool(config.shuffle_val),
+                    drop_last=False,
+                    seed=int(getattr(config, "seed", 42)) + 10_000,
+                )
+                val_loader = DataLoader(
+                    eval_source,
+                    batch_sampler=val_batch_sampler,
+                    collate_fn=graph_collate_fn,
+                    **dataloader_runtime_kwargs(num_workers=config.num_workers, pin_memory=config.pin_memory),
+                )
+            else:
+                val_loader = DataLoader(
+                    eval_source,
+                    batch_size=config.batch_size,
+                    shuffle=bool(config.shuffle_val),
+                    drop_last=False,
+                    collate_fn=graph_collate_fn,
+                    **dataloader_runtime_kwargs(num_workers=config.num_workers, pin_memory=config.pin_memory),
+                )
 
         sample_kind = "rooms" if config.room_level else "dungeons"
         logger.info(
@@ -3287,6 +3546,8 @@ def main():
     parser.add_argument('--room-level', dest='room_level', action='store_true', help='Train the diffusion model on individual room samples.')
     parser.add_argument('--dungeon-level', dest='room_level', action='store_false', help='Train the diffusion model on whole-dungeon samples.')
     parser.set_defaults(room_level=None)
+    parser.add_argument('--dungeon-batch-mode', action=argparse.BooleanOptionalAction, default=None,
+                        help='For room-level training, batch all rooms from one dungeon variant so global graph loss receives full node passability.')
     parser.add_argument('--epochs', type=int, default=None)
     parser.add_argument('--lr', type=float, default=None)
     parser.add_argument('--model-channels', type=int, default=None)
@@ -3298,6 +3559,9 @@ def main():
     parser.add_argument('--unet-dropout', type=float, default=None)
     parser.add_argument('--alpha-logic', type=float, default=None)
     parser.add_argument('--alpha-logic-tile', type=float, default=None)
+    parser.add_argument('--alpha-wfc-pseudo', type=float, default=None)
+    parser.add_argument('--wfc-pseudo-max-samples', type=int, default=None)
+    parser.add_argument('--wfc-pseudo-confidence-threshold', type=float, default=None)
     parser.add_argument('--min-logic-tile-accuracy-for-guidance', type=float, default=None)
     parser.add_argument('--graph-spatial-alignment-weight', type=float, default=None)
     parser.add_argument(

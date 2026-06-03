@@ -145,6 +145,44 @@ class TestVectorQuantizer:
         assert copied._codebook_update_lock is not quantizer._codebook_update_lock
 
 
+class TestFSQuantizer:
+    def test_fsq_quantizer_forward_indices_and_gradients(self):
+        from src.core.vqvae import FSQuantizer
+
+        quantizer = FSQuantizer(embedding_dim=8, levels=[4, 4, 4, 4])
+        x = torch.randn(2, 8, 3, 4, requires_grad=True)
+
+        quantized, indices, losses = quantizer(x, return_info=True)
+        loss = quantized.mean() + losses["vq_loss"]
+        loss.backward()
+
+        assert tuple(quantized.shape) == tuple(x.shape)
+        assert tuple(indices.shape) == (2, 3, 4)
+        assert losses["vq_loss"].item() == pytest.approx(0.0)
+        assert losses["commitment_loss"].item() == pytest.approx(0.0)
+        assert quantizer.num_embeddings == 256
+        assert x.grad is not None
+        assert x.grad.abs().sum().item() > 0.0
+
+    def test_create_vqvae_fsq_architecture_round_trip(self):
+        from src.core.vqvae import FSQuantizer, create_vqvae
+
+        model = create_vqvae(
+            num_classes=5,
+            codebook_size=256,
+            latent_dim=8,
+            hidden_dim=16,
+            architecture="fsq",
+        )
+        x = torch.zeros(1, 5, 16, 11)
+        x[:, 1] = 1.0
+        recon, _vq_loss, losses = model(x)
+
+        assert isinstance(model.quantizer, FSQuantizer)
+        assert tuple(recon.shape) == (1, 5, 16, 11)
+        assert losses["vq_loss"].item() == pytest.approx(0.0)
+
+
 class TestEncoder:
     """Tests for VQ-VAE Encoder."""
     

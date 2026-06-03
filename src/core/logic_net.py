@@ -568,7 +568,9 @@ class ValueIterationGridPathfinder(nn.Module):
 
         value = value - value.amin(dim=(2, 3), keepdim=True)
         value = value / value.amax(dim=(2, 3), keepdim=True).clamp_min(1e-6)
-        return (1.0 - value) * 50.0
+        semantic_walkability = torch.einsum("bchw,c->bhw", tile_probs, self.walkability_weights).unsqueeze(1)
+        semantic_cost = (1.0 - semantic_walkability.clamp(0.0, 1.0)) * 5.0
+        return (1.0 - value) * 50.0 + semantic_cost
 
 
 # ============================================================================

@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from src.core.definitions import GRAPH_EDGE_FEATURE_DIM, ROOM_HEIGHT, ROOM_TOPOLOGY_CHANNEL_COUNT, ROOM_WIDTH, SEMANTIC_PALETTE
+from src.core.definitions import GRAPH_EDGE_FEATURE_DIM, GRAPH_TPE_DIM, ROOM_HEIGHT, ROOM_TOPOLOGY_CHANNEL_COUNT, ROOM_WIDTH, SEMANTIC_PALETTE
 from src.core.latent_diffusion import create_latent_diffusion
 from src.core.logic_net import LogicNet
 from src.core.vqvae import create_vqvae
@@ -503,6 +503,82 @@ def test_encode_edge_features_falls_back_to_schema_width_one_hot():
     assert torch.allclose(encoded.sum(dim=1), torch.ones(3))
     assert float(encoded[1, 7]) == 1.0
     assert float(encoded[2, GRAPH_EDGE_FEATURE_DIM - 1]) == 1.0
+
+
+def test_try_stack_dungeon_scope_graph_batch_collapses_full_room_set():
+    trainer = DiffusionTrainer.__new__(DiffusionTrainer)
+    trainer.device = torch.device("cpu")
+    trainer.config = SimpleNamespace(
+        edge_feature_dim=GRAPH_EDGE_FEATURE_DIM,
+        current_node_distance_max=8,
+        graph_conditioning_mode="node_sequence",
+    )
+
+    node_features = torch.zeros(3, 6)
+    node_features[2, 3] = 1.0
+    edge_index = torch.tensor([[0, 1], [1, 2]], dtype=torch.long)
+    base = {
+        "node_features": node_features,
+        "edge_index": edge_index,
+        "edge_features": torch.zeros(2, GRAPH_EDGE_FEATURE_DIM),
+        "edge_attr": torch.tensor([0, 1], dtype=torch.long),
+        "edge_rrwp": torch.zeros(2, GRAPH_TPE_DIM),
+        "tpe": torch.zeros(3, GRAPH_TPE_DIM),
+        "node_positions": torch.zeros(3, 2),
+        "node_mask": torch.ones(3),
+        "num_nodes": 3,
+        "num_edges": 2,
+        "start_node_id": 0,
+        "target_idx": 2,
+        "node_to_idx": {"a": 0, "b": 1, "c": 2},
+        "room_topology_map": torch.zeros(ROOM_TOPOLOGY_CHANNEL_COUNT, ROOM_HEIGHT, ROOM_WIDTH),
+        "boundary_constraints": torch.zeros(8),
+    }
+    graph_list = []
+    for idx in (0, 1, 2):
+        item = dict(base)
+        item["current_node_idx"] = idx
+        graph_list.append(item)
+
+    graph_data = DiffusionTrainer._try_stack_dungeon_scope_graph_batch(trainer, graph_list)
+
+    assert graph_data is not None
+    assert graph_data["graph_scope"] == "dungeon"
+    assert tuple(graph_data["node_features"].shape) == (3, 6)
+    assert graph_data["current_node_idx"].tolist() == [0, 1, 2]
+    assert tuple(graph_data["room_topology_map"].shape) == (
+        3,
+        ROOM_TOPOLOGY_CHANNEL_COUNT,
+        ROOM_HEIGHT,
+        ROOM_WIDTH,
+    )
+
+
+def test_wfc_pseudo_label_loss_is_opt_in_and_backpropagates():
+    trainer = DiffusionTrainer.__new__(DiffusionTrainer)
+    trainer.device = torch.device("cpu")
+    trainer.global_step = 0
+    trainer.config = SimpleNamespace(
+        alpha_wfc_pseudo=1.0,
+        wfc_pseudo_max_samples=1,
+        wfc_pseudo_confidence_threshold=0.99,
+        num_classes=5,
+        seed=123,
+    )
+    pred_tile_logits = torch.randn(1, 5, ROOM_HEIGHT, ROOM_WIDTH, requires_grad=True)
+    real_maps = torch.zeros(1, 1, ROOM_HEIGHT, ROOM_WIDTH)
+
+    loss, sample_count = DiffusionTrainer._wfc_pseudo_label_loss(
+        trainer,
+        pred_tile_logits,
+        real_maps,
+    )
+    loss.backward()
+
+    assert sample_count == pytest.approx(1.0)
+    assert loss.item() >= 0.0
+    assert pred_tile_logits.grad is not None
+    assert pred_tile_logits.grad.abs().sum().item() > 0.0
 
 
 def test_train_epoch_node_sequence_conditioning_is_batched_and_padded():

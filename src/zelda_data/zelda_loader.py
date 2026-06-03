@@ -1083,6 +1083,83 @@ def graph_collate_fn(batch):
         return torch.stack(batch)
 
 
+class DungeonBatchSampler(Sampler[List[int]]):
+    """
+    Batch sampler that yields all room samples from one dungeon variant.
+
+    Room-level diffusion needs this when training dungeon-scope graph losses:
+    the batch dimension must correspond to the graph's node set, not to random
+    rooms sampled from unrelated dungeons.
+    """
+
+    def __init__(
+        self,
+        groups: List[List[int]],
+        *,
+        shuffle: bool = True,
+        drop_last: bool = False,
+        seed: int = 42,
+    ) -> None:
+        self.groups = [list(group) for group in groups if group]
+        self.shuffle = bool(shuffle)
+        self.drop_last = bool(drop_last)
+        self.seed = int(seed)
+        self.epoch = 0
+
+    @classmethod
+    def from_dataset(
+        cls,
+        dataset: Dataset,
+        *,
+        shuffle: bool = True,
+        drop_last: bool = False,
+        seed: int = 42,
+    ) -> "DungeonBatchSampler":
+        base_dataset = getattr(dataset, "dataset", dataset)
+        subset_indices = list(getattr(dataset, "indices", range(len(base_dataset))))
+        metadata = getattr(base_dataset, "sample_metadata", None)
+        if metadata is None:
+            raise ValueError("DungeonBatchSampler requires dataset.sample_metadata.")
+
+        grouped: Dict[Any, List[Tuple[int, int]]] = {}
+        for local_idx, base_idx in enumerate(subset_indices):
+            if int(base_idx) >= len(metadata):
+                continue
+            meta = dict(metadata[int(base_idx)])
+            key = meta.get("dungeon_id")
+            if key is None:
+                key = (meta.get("dungeon_num"), meta.get("variant"))
+            order = int(meta.get("current_node_idx", local_idx)) if str(meta.get("current_node_idx", "")).strip() else local_idx
+            grouped.setdefault(key, []).append((order, local_idx))
+
+        groups = [
+            [local_idx for _order, local_idx in sorted(items, key=lambda item: item[0])]
+            for _key, items in sorted(grouped.items(), key=lambda item: str(item[0]))
+        ]
+        return cls(groups, shuffle=shuffle, drop_last=drop_last, seed=seed)
+
+    def set_epoch(self, epoch: int) -> None:
+        self.epoch = int(epoch)
+
+    def __iter__(self):
+        order = list(range(len(self.groups)))
+        if self.shuffle:
+            generator = torch.Generator()
+            generator.manual_seed(self.seed + self.epoch)
+            perm = torch.randperm(len(order), generator=generator).tolist()
+            order = [order[i] for i in perm]
+        for group_idx in order:
+            group = self.groups[group_idx]
+            if self.drop_last and not group:
+                continue
+            yield list(group)
+
+    def __len__(self) -> int:
+        if self.drop_last:
+            return sum(1 for group in self.groups if group)
+        return len(self.groups)
+
+
 # =============================================================================
 # DATALOADER FACTORY
 # =============================================================================
@@ -1108,6 +1185,7 @@ def create_dataloader(
     puzzle_stage_topology_enabled: bool = False,
     puzzle_stage_trace_decay: float = DEFAULT_PUZZLE_STAGE_TRACE_DECAY,
     sampler: Optional[Sampler] = None,
+    dungeon_batch_mode: bool = False,
     return_sampler: bool = False,
     dungeon_ids: Optional[Iterable[int]] = None,
     variants: Optional[Iterable[int]] = None,
@@ -1168,16 +1246,35 @@ def create_dataloader(
             variants=variants,
         )
     
-    dataloader = DataLoader(
-        dataset,
-        batch_size=batch_size,
-        shuffle=(bool(shuffle) if sampler is None else False),
-        sampler=sampler,
-        num_workers=num_workers,
-        pin_memory=torch.cuda.is_available() if pin_memory is None else bool(pin_memory),
-        drop_last=bool(drop_last),
-        collate_fn=graph_collate_fn if load_graphs else None,
-    )
+    batch_sampler = None
+    if bool(dungeon_batch_mode):
+        if sampler is not None:
+            raise ValueError("dungeon_batch_mode cannot be combined with sampler.")
+        if not room_level:
+            raise ValueError("dungeon_batch_mode is only valid for room_level datasets.")
+        batch_sampler = DungeonBatchSampler.from_dataset(
+            dataset,
+            shuffle=shuffle,
+            drop_last=drop_last,
+        )
+
+    dataloader_kwargs = {
+        "num_workers": num_workers,
+        "pin_memory": torch.cuda.is_available() if pin_memory is None else bool(pin_memory),
+        "collate_fn": graph_collate_fn if load_graphs else None,
+    }
+    if batch_sampler is not None:
+        dataloader = DataLoader(dataset, batch_sampler=batch_sampler, **dataloader_kwargs)
+        sampler = batch_sampler
+    else:
+        dataloader = DataLoader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=(bool(shuffle) if sampler is None else False),
+            sampler=sampler,
+            drop_last=bool(drop_last),
+            **dataloader_kwargs,
+        )
     if return_sampler:
         return dataloader, sampler
     return dataloader

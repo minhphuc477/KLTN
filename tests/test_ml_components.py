@@ -917,6 +917,50 @@ class TestIntegration:
         assert output.shape == grid_features.shape
 
 
+def test_global_stream_encoder_rrwp_changes_gps_edge_messages():
+    from src.core.condition_encoder import GlobalStreamEncoder
+    from src.core.definitions import GRAPH_TPE_DIM
+
+    encoder = GlobalStreamEncoder(
+        node_feature_dim=4,
+        edge_feature_dim=3,
+        hidden_dim=16,
+        output_dim=8,
+        num_layers=1,
+        gnn_type="gps",
+        num_heads=4,
+        dropout=0.0,
+        use_rrwp_edge_features=True,
+    )
+    encoder.eval()
+    node_features = torch.randn(3, 4)
+    edge_index = torch.tensor([[0, 1, 2], [1, 2, 0]], dtype=torch.long)
+    edge_features = torch.zeros(3, 3)
+    tpe = torch.zeros(3, GRAPH_TPE_DIM)
+    edge_rrwp_zero = torch.zeros(3, GRAPH_TPE_DIM)
+    edge_rrwp_nonzero = torch.zeros(3, GRAPH_TPE_DIM)
+    edge_rrwp_nonzero[:, 0] = torch.tensor([0.25, 0.5, 0.75])
+
+    with torch.no_grad():
+        out_zero = encoder(
+            node_features,
+            edge_index,
+            edge_features=edge_features,
+            edge_rrwp=edge_rrwp_zero,
+            tpe=tpe,
+        )
+        out_nonzero = encoder(
+            node_features,
+            edge_index,
+            edge_features=edge_features,
+            edge_rrwp=edge_rrwp_nonzero,
+            tpe=tpe,
+        )
+
+    assert tuple(out_zero.shape) == (3, 8)
+    assert not torch.allclose(out_zero, out_nonzero)
+
+
 # ============================================================================
 # MAIN
 # ============================================================================

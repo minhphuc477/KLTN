@@ -450,7 +450,7 @@ class FSQuantizer(nn.Module):
     def _round_ste(self, bounded: Tensor) -> Tuple[Tensor, Tensor]:
         levels = self.levels.to(device=bounded.device, dtype=bounded.dtype).view(1, -1, 1, 1)
         scaled = (bounded + 1.0) * 0.5 * (levels - 1.0)
-        rounded = torch.round(scaled).clamp(0.0, levels - 1.0)
+        rounded = torch.minimum(torch.round(scaled).clamp_min(0.0), levels - 1.0)
         quantized = (rounded / (levels - 1.0)) * 2.0 - 1.0
         return bounded + (quantized - bounded).detach(), rounded.to(dtype=torch.long)
 
@@ -866,6 +866,9 @@ class SemanticVQVAE(nn.Module):
         commitment_cost: float = 0.25,
         rare_tile_weight: float = 5.0,
         use_codebook: bool = True,
+        quantizer_type: str = "vq",
+        fsq_levels: Optional[Iterable[int]] = None,
+        fsq_num_dims: Optional[int] = None,
         use_ema: bool = True,
         use_coordconv: bool = True,
         mrf_penalty_weight: float = 0.05,
@@ -888,6 +891,7 @@ class SemanticVQVAE(nn.Module):
         self.latent_dim = latent_dim
         self.rare_tile_weight = rare_tile_weight
         self.mrf_penalty_weight = float(max(0.0, mrf_penalty_weight))
+        self.quantizer_type = str(quantizer_type or "vq").strip().lower()
         
         # Encoder
         self.encoder = Encoder(
