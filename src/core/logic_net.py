@@ -43,9 +43,37 @@ from src.core.definitions import (
     ROOM_TOPOLOGY_CHANNELS,
     ROOM_TOPOLOGY_DIRECTIONAL_CHANNEL_GROUPS,
     ROOM_WIDTH,
+    SEMANTIC_PALETTE,
 )
 
 logger = logging.getLogger(__name__)
+
+CANONICAL_LOGIC_WALKABLE_IDS = sorted(
+    {
+        int(SEMANTIC_PALETTE[name])
+        for name in (
+            "FLOOR",
+            "DOOR_OPEN",
+            "DOOR_LOCKED",
+            "DOOR_BOMB",
+            "DOOR_PUZZLE",
+            "DOOR_BOSS",
+            "DOOR_SOFT",
+            "START",
+            "TRIFORCE",
+            "KEY_SMALL",
+            "KEY_BOSS",
+            "KEY_ITEM",
+            "ITEM_MINOR",
+            "ELEMENT_FLOOR",
+            "STAIR",
+            "ENEMY",
+            "BOSS",
+            "PUZZLE",
+        )
+        if name in SEMANTIC_PALETTE
+    }
+)
 
 
 # ============================================================================
@@ -369,7 +397,7 @@ class SoftBellmanFordGridPathfinder(nn.Module):
     against the learned convolutional approximation.
     """
 
-    WALKABLE_IDS = [1, 10, 11, 12, 13, 14, 15, 42]
+    WALKABLE_IDS = CANONICAL_LOGIC_WALKABLE_IDS
 
     def __init__(
         self,
@@ -613,23 +641,23 @@ class KeyLockChecker(nn.Module):
         if key_lock_pairs is None:
             key_lock_pairs = []
 
-        violations = []
-        
-        for key_idx, lock_idx in key_lock_pairs:
-            key_dist = distances[key_idx]
-            lock_dist = distances[lock_idx]
-            
-            # Violation if key is farther than lock + margin
-            violation = F.relu(key_dist - lock_dist + self.margin)
-            violations.append(violation)
-        
-        if violations:
-            loss = torch.stack(violations).mean()
+        valid_pairs = [
+            (int(key_idx), int(lock_idx))
+            for key_idx, lock_idx in key_lock_pairs
+            if 0 <= int(key_idx) < int(distances.shape[0]) and 0 <= int(lock_idx) < int(distances.shape[0])
+        ]
+        if valid_pairs:
+            pair_tensor = torch.tensor(valid_pairs, device=distances.device, dtype=torch.long)
+            key_dists = distances.index_select(0, pair_tensor[:, 0])
+            lock_dists = distances.index_select(0, pair_tensor[:, 1])
+            violations_t = F.relu(key_dists - lock_dists + self.margin)
+            loss = violations_t.mean()
         else:
-            loss = torch.tensor(0.0, device=distances.device)
+            violations_t = torch.empty(0, device=distances.device, dtype=distances.dtype)
+            loss = torch.tensor(0.0, device=distances.device, dtype=distances.dtype)
         
         info = {
-            'num_violations': sum(1 for v in violations if v > 0),
+            'num_violations': int((violations_t > 0).sum().detach().item()),
             'total_violation': loss,
         }
         
@@ -701,8 +729,7 @@ class WalkabilityPredictor(nn.Module):
     Non-walkable: WALL, BLOCK, VOID
     """
     
-    # Walkable tile IDs (from definitions.py)
-    WALKABLE_IDS = [1, 10, 11, 12, 13, 14, 15, 42]  # FLOOR, DOORs, STAIR
+    WALKABLE_IDS = CANONICAL_LOGIC_WALKABLE_IDS
     
     def __init__(self, num_classes: int = 44, num_tile_classes: Optional[int] = None, keep_channel_dim: bool = False):
         super().__init__()
@@ -815,7 +842,7 @@ class LogicNet(nn.Module):
         topology_anchor_weight: float = 0.25,
         global_reach_weight: float = 1.0,
         global_room_weight: float = 0.25,
-        grid_pathfinder_type: str = "cnn",
+        grid_pathfinder_type: str = "bellman_ford",
         # --- Phase 1D: Temperature annealing (Jang et al., 2017) ---
         initial_temperature: float = 1.0,
         final_temperature: float = 0.05,
@@ -1289,6 +1316,12 @@ class LogicNet(nn.Module):
             return zero, zero, zero, {}
 
         room_pass = room_passability.to(device=device, dtype=dtype).flatten()
+        if room_pass.numel() != n and current_node_idx is None:
+            return zero, zero, zero, {
+                "global_graph_skipped": "room_passability_node_count_mismatch",
+                "global_graph_room_passability_count": float(room_pass.numel()),
+                "global_graph_node_count": float(n),
+            }
         current_indices = self._current_indices_for_graph(
             current_node_idx,
             batch_size=int(room_pass.numel()),
@@ -1405,6 +1438,12 @@ class LogicNet(nn.Module):
 
         if isinstance(adjacency, torch.Tensor) and adjacency.dim() == 2:
             n = int(adjacency.shape[0])
+            if graph_scope == "dungeon" and int(room_passability.numel()) != n:
+                return zero, zero, zero, {
+                    "global_graph_skipped": "dungeon_scope_requires_full_room_passability",
+                    "global_graph_room_passability_count": float(room_passability.numel()),
+                    "global_graph_node_count": float(n),
+                }
             node_feats = node_features.to(device=device, dtype=dtype) if isinstance(node_features, torch.Tensor) and node_features.dim() == 2 else None
             return self._compute_one_global_graph_loss(
                 node_count=n,
@@ -1440,8 +1479,12 @@ class LogicNet(nn.Module):
             n = int(node_features.shape[0])
             full_node_batch = room_batch == n
             if graph_scope == "dungeon":
-                if not (idx_shape_valid or full_node_batch):
-                    return zero, zero, zero, {}
+                if not full_node_batch:
+                    return zero, zero, zero, {
+                        "global_graph_skipped": "dungeon_scope_requires_full_room_passability",
+                        "global_graph_room_passability_count": float(room_batch),
+                        "global_graph_node_count": float(n),
+                    }
             elif not idx_shape_valid:
                 return zero, zero, zero, {}
             return self._compute_one_global_graph_loss(

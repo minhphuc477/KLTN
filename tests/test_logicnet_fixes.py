@@ -10,7 +10,8 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.core.latent_diffusion import GradientGuidance
-from src.core.logic_net import LogicNet
+from src.core.definitions import SEMANTIC_PALETTE
+from src.core.logic_net import LogicNet, SoftBellmanFordGridPathfinder, WalkabilityPredictor
 from src.pipeline.graph_features import extract_node_feature_vector
 from src.pipeline.spatial_utils import parse_label_tokens
 
@@ -46,6 +47,35 @@ def test_logicnet_gradient_magnitude():
     loss_scalar.backward()
     grad_norm = z.grad.norm().item() if z.grad is not None else 0.0
     assert grad_norm > 1e-6
+
+
+def test_logicnet_walkable_ids_derive_from_semantic_palette():
+    expected = {
+        int(SEMANTIC_PALETTE[name])
+        for name in (
+            "FLOOR",
+            "DOOR_OPEN",
+            "DOOR_LOCKED",
+            "DOOR_BOMB",
+            "DOOR_PUZZLE",
+            "DOOR_BOSS",
+            "DOOR_SOFT",
+            "START",
+            "TRIFORCE",
+            "KEY_SMALL",
+            "KEY_BOSS",
+            "KEY_ITEM",
+            "ITEM_MINOR",
+            "ELEMENT_FLOOR",
+            "STAIR",
+            "ENEMY",
+            "BOSS",
+            "PUZZLE",
+        )
+    }
+
+    assert set(WalkabilityPredictor.WALKABLE_IDS) == expected
+    assert set(SoftBellmanFordGridPathfinder.WALKABLE_IDS) == expected
 
 
 def test_logicnet_guidance_schedule_is_late_process_active():
@@ -119,6 +149,31 @@ def test_logicnet_global_room_passability_preserves_index_copy_gradient():
 
     assert grad is not None
     assert torch.isfinite(grad).all()
+
+
+def test_logicnet_skips_dungeon_scope_graph_loss_without_full_node_passability():
+    logic_net = LogicNet(latent_dim=4, num_tile_classes=5)
+    room_passability = torch.tensor([0.25, 0.5], requires_grad=True)
+    graph_data = {
+        "graph_scope": "dungeon",
+        "edge_index": torch.tensor([[0, 1], [1, 2]], dtype=torch.long),
+        "node_features": torch.zeros(4, 4),
+        "start_idx": 0,
+        "target_idx": 3,
+        "current_node_idx": torch.tensor([0, 1]),
+    }
+
+    total, reach, lock, info = logic_net._compute_global_graph_losses(
+        graph_data,
+        room_passability=room_passability,
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+    )
+
+    assert total.item() == pytest.approx(0.0)
+    assert reach.item() == pytest.approx(0.0)
+    assert lock.item() == pytest.approx(0.0)
+    assert info["global_graph_skipped"] == "dungeon_scope_requires_full_room_passability"
 
 
 def test_graph_feature_roles_include_type_fields():

@@ -90,6 +90,20 @@ still required.
   static shortest path. This matches the general BFS/state-augmentation pattern
   for inventory-constrained planning:
   https://www.redblobgames.com/pathfinding/a-star/introduction.html.
+- VQ-VAE decoding should use discrete codebook latents, not arbitrary
+  continuous predictions, when measuring decoder-visible tile semantics. The
+  VQ-VAE paper introduces discrete vector-quantized latents and uses
+  straight-through gradient estimation around the quantization step:
+  https://arxiv.org/abs/1711.00937.
+- Differentiable planning losses are defensible only when they expose a real
+  backpropagated path from map logits to the upstream network. Value Iteration
+  Networks provide the grid-planning precedent, and Neural Bellman-Ford
+  Networks provide a path-relaxation graph precedent:
+  https://arxiv.org/abs/1602.02867 and https://arxiv.org/abs/2106.06935.
+- Hard solvability remains a validation metric, not a training surrogate. A*
+  style minimum-cost path search is the classic hard pathfinding check for
+  confirming generated grids after sampling:
+  https://doi.org/10.1109/TSSC.1968.300136.
 
 ## Implementation Implications
 
@@ -171,6 +185,45 @@ still required.
   reach, no global room lift, no spatial alignment, and no logic-grid-reach
   variants. These files are intended to be run with identical seeds and
   Dungeon 9 holdout reporting.
+- Revision 3 fixes route predicted clean latents through the frozen VQ-VAE
+  quantizer before decoder-based LogicNet supervision. This keeps the decoder
+  on the codebook manifold while retaining straight-through gradients to the
+  diffusion denoiser.
+- Dungeon-scope global graph loss now requires one room-passability value per
+  graph node. Room-level batches that only provide current-room passability no
+  longer pretend missing dungeon rooms are fully passable; the graph loss
+  returns zero with an explicit `global_graph_skipped` reason. Full dungeon
+  batching remains the correct long-term architecture for training the global
+  graph objective.
+- `WalkabilityPredictor` and `SoftBellmanFordGridPathfinder` now derive their
+  walkable tile IDs from `SEMANTIC_PALETTE`, matching the canonical symbolic
+  palette instead of maintaining separate hardcoded lists.
+- Validation now reports `val_logic_tile_accuracy`. Validation sampling also
+  suppresses LogicNet guidance for a batch when tile-classifier accuracy is
+  below `min_logic_tile_accuracy_for_guidance`, restoring the model guidance
+  scale immediately after that sample call.
+- LogicNet parameters are now included in `grad_clip_norm` when
+  `logic_net_trainable=True`, and the key-lock dependency checker uses a
+  vectorized pair tensor instead of a Python loop over scalar violations.
+- Revision 4 makes the Bellman-Ford grid pathfinder the default LogicNet path,
+  while retaining `cnn` as an ablation option. This makes the default training
+  signal an explicit differentiable reachability calculation instead of a
+  learned black-box proxy.
+- Diffusion validation now emits `val_grid_reach_loss`,
+  `val_graph_reach_loss`, and `val_hard_solvability` alongside
+  `val_logic_tile_accuracy`. Hard solvability is computed from quantized
+  VQ-VAE-decoded sampled logits through the symbolic `PathAnalyzer`, keeping
+  solver evidence separate from differentiable losses.
+- `tests/test_logicnet_gradient_flow.py` now verifies that grid losses
+  backpropagate to the latent tensor for both Bellman-Ford and CNN pathfinders,
+  that graph losses backpropagate to room passability, and that palette-derived
+  walkability and temperature annealing remain stable.
+- `experiments/logicnet_ablation.py` writes reproducible baseline, tile-only,
+  and full Bellman-Ford LogicNet configs with the proof metrics recorded in the
+  manifest. `experiments/gradient_magnitude_probe.py` records gradient
+  magnitudes for latent inputs, tile logits, walkability, and tile-classifier
+  parameters so the "neural architecture works" claim has direct signal-flow
+  evidence before long training runs.
 
 ## Validation Commands
 
@@ -181,3 +234,9 @@ still required.
 - `python scripts/train_logicnet_tile_classifier.py --help`
 - `python scripts/generate_logic_loss_ablation_manifest.py --help`
 - Final broad regression: `python -m pytest tests/test_audit_regressions.py tests/test_architecture_audit_fixes.py tests/test_logicnet_fixes.py tests/test_train_diffusion_conditioning_shapes.py tests/test_hmolqd/test_symbolic_refiner.py tests/test_hmolqd/test_gaussian_vae.py tests/test_ml_components.py tests/test_config_system.py -q` passed with 212 tests.
+- Revision 3 focused regression: `python -m pytest tests/test_logicnet_fixes.py tests/test_train_diffusion_conditioning_shapes.py::test_decode_latent_for_logic_quantizes_before_vqvae_decode tests/test_train_diffusion_conditioning_shapes.py::test_train_step_predicted_latent_decodes_to_tile_logits_for_logic_loss tests/test_train_diffusion_conditioning_shapes.py::test_train_step_trains_logicnet_tile_classifier_when_enabled tests/test_train_diffusion_conditioning_shapes.py::test_validate_reports_logic_tile_accuracy tests/test_train_diffusion_conditioning_shapes.py::test_validate_suppresses_sampling_guidance_when_tile_accuracy_below_gate tests/test_config_system.py::test_diffusion_helper_preserves_yaml_only_methodology_knobs tests/test_audit_regressions.py::test_pydantic_config_schema_returns_cross_field_normalization -q` passed with 15 tests.
+- Revision 3 broad regression: `python -m pytest tests/test_audit_regressions.py tests/test_architecture_audit_fixes.py tests/test_logicnet_fixes.py tests/test_train_diffusion_conditioning_shapes.py tests/test_hmolqd/test_symbolic_refiner.py tests/test_hmolqd/test_gaussian_vae.py tests/test_ml_components.py tests/test_config_system.py -q` passed with 217 tests.
+- Revision 4 compile check: `python -m py_compile src/train_diffusion.py src/core/logic_net.py src/config_system.py src/pipeline/config_bridge.py src/pipeline/models/model_manager.py experiments/logicnet_ablation.py experiments/gradient_magnitude_probe.py tests/test_logicnet_gradient_flow.py tests/test_train_diffusion_conditioning_shapes.py tests/test_audit_regressions.py tests/test_config_system.py`.
+- Revision 4 focused regression: `python -m pytest tests/test_logicnet_gradient_flow.py tests/test_audit_regressions.py::test_logic_net_defaults_to_bellman_ford_grid_pathfinder tests/test_train_diffusion_conditioning_shapes.py::test_validate_reports_hard_solvability_from_decoded_samples tests/test_config_system.py::test_diffusion_helper_preserves_yaml_only_methodology_knobs -q` passed with 8 tests.
+- Revision 4 smoke checks: `python experiments/logicnet_ablation.py --base-config configs/zelda_hmolqd.yaml --output-dir results/tmp_logicnet_ablation_smoke --epochs 1 --validation-samples 1 --validation-diffusion-samples 1 --quick` wrote a manifest, and `python experiments/gradient_magnitude_probe.py --output results/tmp_logicnet_gradient_probe.json --batch-size 1 --height 4 --width 4 --latent-dim 8 --hidden-dim 16 --num-iterations 3` recorded nonzero latent, tile-classifier, tile-logit, and walkability gradients.
+- Revision 4 broad regression: `python -m pytest tests/test_audit_regressions.py tests/test_architecture_audit_fixes.py tests/test_logicnet_fixes.py tests/test_logicnet_gradient_flow.py tests/test_train_diffusion_conditioning_shapes.py tests/test_hmolqd/test_symbolic_refiner.py tests/test_hmolqd/test_gaussian_vae.py tests/test_ml_components.py tests/test_config_system.py -q` passed with 224 tests.

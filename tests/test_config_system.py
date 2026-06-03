@@ -853,7 +853,9 @@ def test_diffusion_helper_preserves_yaml_only_methodology_knobs(tmp_path: Path):
     assert kwargs["condition_reference_hidden_dim"] == 48
     assert kwargs["logic_topology_trace_weight"] == pytest.approx(0.6)
     assert kwargs["logic_topology_anchor_weight"] == pytest.approx(0.3)
+    assert kwargs["logic_grid_pathfinder"] == "bellman_ford"
     assert kwargs["alpha_logic_tile"] == pytest.approx(0.05)
+    assert kwargs["min_logic_tile_accuracy_for_guidance"] == pytest.approx(0.4)
     assert kwargs["graph_spatial_alignment_weight"] == pytest.approx(0.0)
     assert kwargs["seed"] == 42
 

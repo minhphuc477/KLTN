@@ -42,6 +42,7 @@ from src.core.definitions import (
     ROOM_HEIGHT,
     ROOM_TOPOLOGY_CHANNEL_COUNT,
     ROOM_WIDTH,
+    SEMANTIC_PALETTE,
 )
 # Use Block V LogicNet (with temperature annealing), not legacy src.ml.logic_net
 from src.core.logic_net import LogicNet
@@ -187,7 +188,7 @@ class DiffusionTrainingConfig:
         logic_net_trainable: bool = True,
         logic_learning_rate: Optional[float] = None,
         logic_lr_warmup_epochs: int = 5,
-        logic_grid_pathfinder: str = "cnn",
+        logic_grid_pathfinder: str = "bellman_ford",
         num_logic_iterations: int = 30,
         logic_topology_trace_weight: float = 0.25,
         logic_topology_anchor_weight: float = 0.25,
@@ -211,6 +212,7 @@ class DiffusionTrainingConfig:
         alpha_visual: float = 1.0,   # Diffusion loss weight
         alpha_logic: float = 0.1,     # Solvability loss weight
         alpha_logic_tile: float = 0.05,  # Supervised LogicNet tile-classifier loss weight
+        min_logic_tile_accuracy_for_guidance: float = 0.4,
         graph_spatial_alignment_weight: float = 0.0,
         logic_loss_mode: str = "predicted_latent",  # predicted_latent | detached_real
         graph_conditioning_mode: str = "node_sequence",  # node_sequence | pooled
@@ -433,6 +435,7 @@ class DiffusionTrainingConfig:
         self.alpha_visual = alpha_visual
         self.alpha_logic = alpha_logic if self.logic_net_enabled else 0.0
         self.alpha_logic_tile = float(max(0.0, alpha_logic_tile)) if self.logic_net_enabled else 0.0
+        self.min_logic_tile_accuracy_for_guidance = float(max(0.0, min_logic_tile_accuracy_for_guidance))
         self.graph_spatial_alignment_weight = float(max(0.0, graph_spatial_alignment_weight))
         mode = str(logic_loss_mode).strip().lower()
         if mode not in {"predicted_latent", "detached_real"}:
@@ -618,6 +621,7 @@ def diffusion_training_kwargs_from_resolved_config(
         "alpha_visual": stage["alpha_visual"],
         "alpha_logic": stage["alpha_logic"],
         "alpha_logic_tile": stage.get("alpha_logic_tile", 0.05),
+        "min_logic_tile_accuracy_for_guidance": stage.get("min_logic_tile_accuracy_for_guidance", 0.4),
         "graph_spatial_alignment_weight": stage.get("graph_spatial_alignment_weight", 0.0),
         "logic_loss_mode": stage["logic_loss_mode"],
         "graph_conditioning_mode": stage["graph_conditioning_mode"],
@@ -844,6 +848,7 @@ def _legacy_diffusion_overrides_from_args(args: argparse.Namespace) -> Dict[str,
     _set("unet_dropout", getattr(args, "unet_dropout", None))
     _set("alpha_logic", getattr(args, "alpha_logic", None))
     _set("alpha_logic_tile", getattr(args, "alpha_logic_tile", None))
+    _set("min_logic_tile_accuracy_for_guidance", getattr(args, "min_logic_tile_accuracy_for_guidance", None))
     _set("graph_spatial_alignment_weight", getattr(args, "graph_spatial_alignment_weight", None))
     _set("logic_loss_mode", getattr(args, "logic_loss_mode", None))
     _set("graph_conditioning_mode", getattr(args, "graph_conditioning_mode", None))
@@ -1420,12 +1425,25 @@ class DiffusionTrainer:
         LogicNet pathfinding operates on walkability probabilities derived from
         tile space. Passing raw continuous VQ latents into that loss makes the
         clamp/softmax semantics arbitrary, so predicted-latent training routes
-        through the frozen VQ-VAE decoder while preserving gradients to the
-        diffusion denoiser.
+        through the frozen VQ-VAE codebook and decoder while preserving
+        straight-through gradients to the diffusion denoiser.
         """
         if not hasattr(self.vqvae, "decode"):
             raise TypeError("Configured VQ-VAE does not expose decode(); cannot compute decoded logic loss.")
-        tile_logits = self.vqvae.decode(latent, target_size=(ROOM_HEIGHT, ROOM_WIDTH))
+        decode_latent = latent
+        quantize = getattr(self.vqvae, "quantize", None)
+        if callable(quantize):
+            quantized = quantize(latent)
+            if isinstance(quantized, (tuple, list)) and quantized:
+                decode_latent = quantized[0]
+            elif isinstance(quantized, torch.Tensor):
+                decode_latent = quantized
+            if not isinstance(decode_latent, torch.Tensor) or decode_latent.shape != latent.shape:
+                raise ValueError(
+                    "VQ-VAE quantize() must return a quantized latent tensor matching "
+                    f"{tuple(latent.shape)}, got {type(decode_latent).__name__}."
+                )
+        tile_logits = self.vqvae.decode(decode_latent, target_size=(ROOM_HEIGHT, ROOM_WIDTH))
         if not isinstance(tile_logits, torch.Tensor) or tile_logits.dim() != 4:
             raise ValueError(f"VQ-VAE decode must return [B,C,H,W] logits, got {type(tile_logits).__name__}.")
         if int(tile_logits.shape[1]) != int(self.config.num_classes):
@@ -1453,6 +1471,63 @@ class DiffusionTrainer:
             else:
                 targets = torch.round(targets)
         return targets.to(device=self.device, dtype=torch.long).clamp(0, int(self.config.num_classes) - 1)
+
+    def _compute_hard_solvability(self, decoded_logits: torch.Tensor) -> float:
+        """Symbolically check generated room grids for a start-to-goal/exit path."""
+        if not isinstance(decoded_logits, torch.Tensor) or decoded_logits.dim() != 4:
+            return 0.0
+        try:
+            from src.core.symbolic_refiner import PathAnalyzer
+        except Exception as exc:
+            logger.debug("Hard solvability skipped: PathAnalyzer unavailable: %s", exc)
+            return 0.0
+
+        analyzer = PathAnalyzer()
+        tile_maps = decoded_logits.argmax(dim=1).detach().cpu()
+        walkable_ids = set(int(v) for v in getattr(analyzer, "walkable_tiles", set()))
+        start_id = int(SEMANTIC_PALETTE.get("START", 0))
+        goal_ids = {
+            int(SEMANTIC_PALETTE.get(name, -1))
+            for name in ("TRIFORCE", "DOOR_OPEN", "DOOR_LOCKED", "DOOR_BOMB", "DOOR_PUZZLE", "DOOR_BOSS", "DOOR_SOFT", "STAIR")
+        }
+        solved = 0
+        total = int(tile_maps.shape[0])
+        for tile_map_t in tile_maps:
+            grid = tile_map_t.numpy()
+            start_hits = torch.nonzero(tile_map_t == start_id, as_tuple=False)
+            if start_hits.numel() > 0:
+                start = tuple(int(v) for v in start_hits[0].tolist())
+            else:
+                walkable_hits = torch.nonzero(
+                    torch.isin(tile_map_t, torch.tensor(sorted(walkable_ids), dtype=tile_map_t.dtype)),
+                    as_tuple=False,
+                )
+                if walkable_hits.numel() == 0:
+                    continue
+                start = tuple(int(v) for v in walkable_hits[0].tolist())
+
+            goal_positions = []
+            for goal_id in goal_ids:
+                if goal_id < 0:
+                    continue
+                hits = torch.nonzero(tile_map_t == goal_id, as_tuple=False)
+                goal_positions.extend(tuple(int(v) for v in hit.tolist()) for hit in hits)
+            if not goal_positions:
+                height, width = tile_map_t.shape
+                border_mask = torch.zeros_like(tile_map_t, dtype=torch.bool)
+                border_mask[0, :] = True
+                border_mask[-1, :] = True
+                border_mask[:, 0] = True
+                border_mask[:, -1] = True
+                walkable_tensor = torch.tensor(sorted(walkable_ids), dtype=tile_map_t.dtype)
+                border_walkable = border_mask & torch.isin(tile_map_t, walkable_tensor)
+                goal_positions = [
+                    tuple(int(v) for v in hit.tolist())
+                    for hit in torch.nonzero(border_walkable, as_tuple=False)
+                ]
+            if any(analyzer.analyze_grid(grid, start=start, goal=goal) == [] for goal in goal_positions):
+                solved += 1
+        return float(solved / max(1, total))
     
     def _encode_graph_conditioning(
         self,
@@ -1994,9 +2069,15 @@ class DiffusionTrainer:
         # Lock targets: rooms behind key-locked edges
         lock_targets = set()
         if edge_index.numel() > 0 and edge_attr is not None:
-            for e in range(edge_index.shape[1]):
-                if edge_attr[e].item() == 1:  # key_locked
-                    lock_targets.add(edge_index[1, e].item())
+            edge_attr_dev = edge_attr.to(self.device) if isinstance(edge_attr, torch.Tensor) else torch.tensor(edge_attr, device=self.device)
+            num_edges = min(int(edge_attr_dev.numel()), int(edge_index.shape[1]))
+            if num_edges > 0:
+                locked_edge_indices = torch.nonzero(edge_attr_dev[:num_edges] == 1, as_tuple=False).flatten()
+                if locked_edge_indices.numel() > 0:
+                    lock_targets.update(
+                        int(value)
+                        for value in edge_index_dev[1, locked_edge_indices].detach().cpu().tolist()
+                    )
         
         # Pair keys to locks (simple: pair by order)
         lock_list = sorted(lock_targets)
@@ -2343,9 +2424,11 @@ class DiffusionTrainer:
             }
         grad_clip_norm = float(max(0.0, float(getattr(self.config, "grad_clip_norm", 1.0))))
         if grad_clip_norm > 0:
+            clip_params = list(self.diffusion.parameters()) + list(self.condition_encoder.parameters())
+            if bool(getattr(self.config, "logic_net_trainable", True)):
+                clip_params += list(self.logic_net.parameters())
             grad_norm = torch.nn.utils.clip_grad_norm_(
-                list(self.diffusion.parameters()) +
-                list(self.condition_encoder.parameters()),
+                clip_params,
                 max_norm=grad_clip_norm
             )
             if not self._tensor_is_finite(grad_norm):
@@ -2534,9 +2617,17 @@ class DiffusionTrainer:
         num_diffusion_eval = 0
         total_logic_loss = 0.0
         total_solvability_proxy = 0.0
+        total_grid_reach_loss = 0.0
+        total_graph_reach_loss = 0.0
+        total_hard_solvability = 0.0
+        num_logic_metric_eval = 0
+        num_hard_solvability_eval = 0
+        total_logic_tile_accuracy = 0.0
+        num_logic_tile_eval = 0
         logic_eval_enabled = bool(getattr(self.config, "logic_net_enabled", True))
         num_generated_eval = 0 if logic_eval_enabled else int(num_samples)
         skipped_nonfinite = 0
+        guidance_suppressed_low_tile_accuracy = 0
 
         for batch_data in dataloader:
             # Handle (images, graph_list) from graph_collate_fn
@@ -2579,6 +2670,21 @@ class DiffusionTrainer:
             # Encode real maps to get latent shape
             z_0 = self.encode_to_latent(real_maps)
 
+            batch_logic_tile_accuracy: Optional[float] = None
+            if logic_eval_enabled and hasattr(self.logic_net, "tile_classifier"):
+                try:
+                    tile_targets = self._tile_targets_from_maps(real_maps)
+                    tile_logits = self.logic_net.tile_classifier(z_0.detach())
+                    if hasattr(self.logic_net, "_project_tile_logits_to_room"):
+                        tile_logits = self.logic_net._project_tile_logits_to_room(tile_logits)
+                    tile_accuracy = (tile_logits.argmax(dim=1) == tile_targets).float().mean()
+                    if self._tensor_is_finite(tile_accuracy):
+                        batch_logic_tile_accuracy = float(tile_accuracy.detach().item())
+                        total_logic_tile_accuracy += batch_logic_tile_accuracy * batch_size
+                        num_logic_tile_eval += batch_size
+                except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+                    logger.debug("LogicNet tile-classifier validation failed; omitting tile accuracy: %s", exc)
+
             if num_diffusion_eval < int(num_diffusion_samples):
                 diffusion_loss = eval_model.training_loss(z_0, conditioning, graph_data=diffusion_graph_data)
                 if self._tensor_is_finite(diffusion_loss):
@@ -2594,7 +2700,22 @@ class DiffusionTrainer:
 
             if logic_eval_enabled and num_generated_eval < int(num_samples):
                 # Generate samples using EMA model
-                z_gen = eval_model.sample(conditioning, shape=z_0.shape, graph_data=diffusion_graph_data)
+                guidance_module = getattr(eval_model, "guidance", None)
+                old_guidance_scale = getattr(guidance_module, "guidance_scale", None)
+                suppress_guidance = (
+                    batch_logic_tile_accuracy is not None
+                    and float(getattr(self.config, "min_logic_tile_accuracy_for_guidance", 0.0)) > 0.0
+                    and batch_logic_tile_accuracy < float(getattr(self.config, "min_logic_tile_accuracy_for_guidance", 0.0))
+                    and old_guidance_scale is not None
+                )
+                if suppress_guidance:
+                    guidance_suppressed_low_tile_accuracy += int(batch_size)
+                    guidance_module.guidance_scale = 0.0
+                try:
+                    z_gen = eval_model.sample(conditioning, shape=z_0.shape, graph_data=diffusion_graph_data)
+                finally:
+                    if suppress_guidance:
+                        guidance_module.guidance_scale = old_guidance_scale
                 if not self._tensor_is_finite(z_gen):
                     skipped_nonfinite += int(batch_size)
                     self._warn_nonfinite(
@@ -2620,6 +2741,22 @@ class DiffusionTrainer:
                         solvability_proxy = float(self._logic_loss_to_solvability_proxy(logic_loss).item())
                         total_logic_loss += float(logic_loss.item()) * generated_batch
                         total_solvability_proxy += solvability_proxy * generated_batch
+                        if isinstance(_logic_info, dict):
+                            grid_loss = _logic_info.get("grid_reach_loss")
+                            graph_loss = _logic_info.get("graph_reach_loss")
+                            if self._tensor_is_finite(grid_loss):
+                                total_grid_reach_loss += float(torch.as_tensor(grid_loss).detach().mean().item()) * generated_batch
+                            if self._tensor_is_finite(graph_loss):
+                                total_graph_reach_loss += float(torch.as_tensor(graph_loss).detach().mean().item()) * generated_batch
+                            num_logic_metric_eval += generated_batch
+                        if hasattr(self, "vqvae") and hasattr(self.vqvae, "decode"):
+                            try:
+                                decoded = self._decode_latent_for_logic(z_gen)
+                                hard_solvability = self._compute_hard_solvability(decoded)
+                                total_hard_solvability += hard_solvability * generated_batch
+                                num_hard_solvability_eval += generated_batch
+                            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+                                logger.debug("Hard solvability validation failed; omitting metric: %s", exc)
                         num_generated_eval += generated_batch
 
             if num_generated_eval >= int(num_samples) and num_diffusion_eval >= int(num_diffusion_samples):
@@ -2632,6 +2769,11 @@ class DiffusionTrainer:
                 'val_total_loss': float("inf"),
                 'val_solvability_proxy': 0.0,
                 'val_solvability': 0.0,
+                'val_logic_tile_accuracy': total_logic_tile_accuracy / max(num_logic_tile_eval, 1),
+                'val_grid_reach_loss': total_grid_reach_loss / max(num_logic_metric_eval, 1),
+                'val_graph_reach_loss': total_graph_reach_loss / max(num_logic_metric_eval, 1),
+                'val_hard_solvability': total_hard_solvability / max(num_hard_solvability_eval, 1),
+                'val_logic_guidance_suppressed_low_tile_accuracy': float(guidance_suppressed_low_tile_accuracy),
                 'val_skipped_nonfinite': float(skipped_nonfinite),
             }
 
@@ -2656,6 +2798,11 @@ class DiffusionTrainer:
             'val_total_loss': val_total_loss,
             'val_solvability_proxy': total_solvability_proxy / max(num_generated_eval, 1),
             'val_solvability': total_solvability_proxy / max(num_generated_eval, 1),
+            'val_logic_tile_accuracy': total_logic_tile_accuracy / max(num_logic_tile_eval, 1),
+            'val_grid_reach_loss': total_grid_reach_loss / max(num_logic_metric_eval, 1),
+            'val_graph_reach_loss': total_graph_reach_loss / max(num_logic_metric_eval, 1),
+            'val_hard_solvability': total_hard_solvability / max(num_hard_solvability_eval, 1),
+            'val_logic_guidance_suppressed_low_tile_accuracy': float(guidance_suppressed_low_tile_accuracy),
             'val_skipped_nonfinite': float(skipped_nonfinite),
         }
     
@@ -3109,6 +3256,7 @@ def main():
     parser.add_argument('--unet-dropout', type=float, default=None)
     parser.add_argument('--alpha-logic', type=float, default=None)
     parser.add_argument('--alpha-logic-tile', type=float, default=None)
+    parser.add_argument('--min-logic-tile-accuracy-for-guidance', type=float, default=None)
     parser.add_argument('--graph-spatial-alignment-weight', type=float, default=None)
     parser.add_argument(
         '--logic-loss-mode',

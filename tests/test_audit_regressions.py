@@ -102,6 +102,13 @@ def test_logic_net_supports_explicit_bellman_ford_grid_pathfinder():
     assert distances[0, 0, 0, 0].item() > distances[0, 0, 8, 5].item()
 
 
+def test_logic_net_defaults_to_bellman_ford_grid_pathfinder():
+    logic_net = LogicNet(latent_dim=8, hidden_dim=16, num_classes=44, num_iterations=3)
+
+    assert logic_net.grid_pathfinder_type == "bellman_ford"
+    assert isinstance(logic_net.grid_pathfinder, SoftBellmanFordGridPathfinder)
+
+
 def test_disable_logic_net_config_zeroes_guidance_and_logic_loss():
     config = DiffusionTrainingConfig(
         logic_net_enabled=False,
@@ -146,6 +153,7 @@ def test_pydantic_config_schema_returns_cross_field_normalization():
     assert config["diffusion"]["logic_net_trainable"] is False
     assert config["diffusion"]["guidance_scale"] == 0.0
     assert config["diffusion"]["alpha_logic"] == 0.0
+    assert config["diffusion"]["alpha_logic_tile"] == 0.0
 
 
 def test_tile_pattern_distribution_identical_samples_have_zero_js():

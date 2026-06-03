@@ -284,10 +284,26 @@ def test_gui_real_full_pipeline_pdrop035_demo_solves_live_with_pcbs_balanced():
     )
     path = result.get("path") or []
     visited_rooms = {(int(r) // 16, int(c) // 11) for r, c in path}
+    solver_result = result["solver_result"]
 
     assert result["success"] is True, result
-    assert len(path) == 164
+    assert len(path) == solver_result["display_path_len"]
+    assert len(path) < solver_result["trajectory_len"]
     assert len(visited_rooms) >= 6
-    assert result["solver_result"]["algorithm"] == "P-CBS"
-    assert result["solver_result"]["trajectory_len"] == 208
-    assert result["solver_result"]["pcbs_route_compressed"] is True
+    assert solver_result["algorithm"] == "P-CBS"
+    assert solver_result["pcbs_route_compressed"] is True
+    assert solver_result["pcbs_loops_removed"] == solver_result["trajectory_len"] - len(path)
+
+    action_for_delta = {
+        (-1, 0): Action.UP,
+        (1, 0): Action.DOWN,
+        (0, -1): Action.LEFT,
+        (0, 1): Action.RIGHT,
+    }
+    env = ZeldaLogicEnv(grid)
+    assert env.state.position == path[0]
+    for current, target in zip(path, path[1:]):
+        delta = (target[0] - current[0], target[1] - current[1])
+        env.step(action_for_delta[delta])
+        assert env.state.position == target
+    assert env.done is True

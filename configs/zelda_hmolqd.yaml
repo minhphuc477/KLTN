@@ -144,7 +144,7 @@ diffusion:
   logic_net_trainable: true  # type=bool, default=true, valid={true,false}; freeze LogicNet while retaining guidance/eval when false
   logic_learning_rate: null  # type=float|null, default=null, valid>=1e-8; optional LogicNet-specific LR
   logic_lr_warmup_epochs: 5  # type=int, default=5, valid>=0; linearly warm up only the LogicNet optimizer group
-  logic_grid_pathfinder: cnn  # type=str, default=cnn, valid={cnn,bellman_ford}; grid-pathfinder ablation
+  logic_grid_pathfinder: bellman_ford  # type=str, default=bellman_ford, valid={cnn,bellman_ford}; grid-pathfinder ablation
   num_logic_iterations: 30  # type=int, default=30, valid>=1
   logic_topology_trace_weight: 0.25  # type=float, default=0.25, valid>=0; extra LogicNet pressure on mission-conditioned traversability traces
   logic_topology_anchor_weight: 0.25  # type=float, default=0.25, valid>=0; extra LogicNet pressure on start/goal/door anchor walkability

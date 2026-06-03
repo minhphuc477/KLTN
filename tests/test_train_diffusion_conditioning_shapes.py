@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from src.core.definitions import GRAPH_EDGE_FEATURE_DIM, ROOM_HEIGHT, ROOM_TOPOLOGY_CHANNEL_COUNT, ROOM_WIDTH
+from src.core.definitions import GRAPH_EDGE_FEATURE_DIM, ROOM_HEIGHT, ROOM_TOPOLOGY_CHANNEL_COUNT, ROOM_WIDTH, SEMANTIC_PALETTE
 from src.core.latent_diffusion import create_latent_diffusion
 from src.core.logic_net import LogicNet
 from src.core.vqvae import create_vqvae
@@ -90,6 +90,24 @@ class _DecodeTrackingVQVAE:
             align_corners=False,
         )
         return logits
+
+
+class _QuantizeTrackingVQVAE(_DecodeTrackingVQVAE):
+    def __init__(self):
+        super().__init__()
+        self.quantize_calls = 0
+        self.last_quantize_input_requires_grad = None
+
+    def quantize(self, latent):
+        self.quantize_calls += 1
+        self.last_quantize_input_requires_grad = bool(latent.requires_grad)
+        return latent + (latent.round() - latent).detach(), torch.zeros((), dtype=latent.dtype), torch.zeros(
+            latent.shape[0],
+            latent.shape[2],
+            latent.shape[3],
+            dtype=torch.long,
+            device=latent.device,
+        )
 
 
 def test_configure_guidance_wires_logic_net_and_sampling_limits():
@@ -997,6 +1015,24 @@ def test_train_step_predicted_latent_decodes_to_tile_logits_for_logic_loss():
     assert trainer.logic_net.last_shape == (2, 44, ROOM_HEIGHT, ROOM_WIDTH)
 
 
+def test_decode_latent_for_logic_quantizes_before_vqvae_decode():
+    trainer = DiffusionTrainer.__new__(DiffusionTrainer)
+    trainer.config = SimpleNamespace(num_classes=44)
+    trainer.vqvae = _QuantizeTrackingVQVAE()
+    latent = torch.randn(2, 4, 2, 2, requires_grad=True)
+
+    logits = DiffusionTrainer._decode_latent_for_logic(trainer, latent)
+    loss = logits[:, 1].mean()
+    loss.backward()
+
+    assert trainer.vqvae.quantize_calls == 1
+    assert trainer.vqvae.decode_calls == 1
+    assert trainer.vqvae.last_quantize_input_requires_grad is True
+    assert trainer.vqvae.last_latent_requires_grad is True
+    assert latent.grad is not None
+    assert torch.isfinite(latent.grad).all()
+
+
 def test_train_step_trains_logicnet_tile_classifier_when_enabled():
     class _TileClassifierLogicNet(torch.nn.Module):
         def __init__(self):
@@ -1076,6 +1112,84 @@ def test_validate_skips_nonfinite_generated_samples():
     assert metrics["val_total_loss"] == pytest.approx(float("inf"))
     assert metrics["val_solvability"] == pytest.approx(0.0)
     assert metrics["val_skipped_nonfinite"] == pytest.approx(4.0)
+
+
+def test_validate_reports_logic_tile_accuracy():
+    class _PerfectTileLogicNet(_DummyLogicNet):
+        def __init__(self):
+            super().__init__()
+            self.tile_classifier = torch.nn.Conv2d(4, 44, kernel_size=1)
+
+        def _project_tile_logits_to_room(self, logits):
+            batch_size = int(logits.shape[0])
+            projected = torch.zeros(batch_size, 44, ROOM_HEIGHT, ROOM_WIDTH)
+            projected[:, 0] = 10.0
+            return projected
+
+    trainer = _make_stub_trainer(context_dim=8)
+    trainer.config.num_classes = 44
+    trainer.logic_net = _PerfectTileLogicNet()
+    trainer.encode_to_latent = lambda real_maps: torch.zeros((real_maps.shape[0], 4, 2, 2), dtype=torch.float32)
+    batch = torch.zeros((2, 1, ROOM_HEIGHT, ROOM_WIDTH), dtype=torch.float32)
+
+    metrics = DiffusionTrainer.validate(trainer, [batch], num_samples=2, num_diffusion_samples=2)
+
+    assert metrics["val_logic_tile_accuracy"] == pytest.approx(1.0)
+
+
+def test_validate_suppresses_sampling_guidance_when_tile_accuracy_below_gate():
+    class _WrongTileLogicNet(_DummyLogicNet):
+        def __init__(self):
+            super().__init__()
+            self.tile_classifier = torch.nn.Conv2d(4, 44, kernel_size=1)
+
+        def _project_tile_logits_to_room(self, logits):
+            batch_size = int(logits.shape[0])
+            projected = torch.zeros(batch_size, 44, ROOM_HEIGHT, ROOM_WIDTH)
+            projected[:, 1] = 10.0
+            return projected
+
+    trainer = _make_stub_trainer(context_dim=8)
+    trainer.config.num_classes = 44
+    trainer.config.min_logic_tile_accuracy_for_guidance = 0.4
+    trainer.logic_net = _WrongTileLogicNet()
+    trainer.encode_to_latent = lambda real_maps: torch.zeros((real_maps.shape[0], 4, 2, 2), dtype=torch.float32)
+    trainer.ema_diffusion.guidance = SimpleNamespace(guidance_scale=1.5)
+    batch = torch.zeros((2, 1, ROOM_HEIGHT, ROOM_WIDTH), dtype=torch.float32)
+
+    metrics = DiffusionTrainer.validate(trainer, [batch], num_samples=2, num_diffusion_samples=2)
+
+    assert metrics["val_logic_tile_accuracy"] == pytest.approx(0.0)
+    assert metrics["val_logic_guidance_suppressed_low_tile_accuracy"] == pytest.approx(2.0)
+    assert trainer.ema_diffusion.guidance.guidance_scale == pytest.approx(1.5)
+
+
+def test_validate_reports_hard_solvability_from_decoded_samples():
+    class _SolvableDecodeVQVAE:
+        def decode(self, latent, target_size=None):
+            batch_size = int(latent.shape[0])
+            height, width = target_size or (ROOM_HEIGHT, ROOM_WIDTH)
+            logits = torch.zeros(batch_size, 44, height, width)
+            logits[:, int(SEMANTIC_PALETTE["WALL"])] = 5.0
+            row = height // 2
+            logits[:, :, row, :] = 0.0
+            logits[:, int(SEMANTIC_PALETTE["FLOOR"]), row, :] = 5.0
+            logits[:, :, row, 1] = 0.0
+            logits[:, int(SEMANTIC_PALETTE["START"]), row, 1] = 6.0
+            logits[:, :, row, width - 1] = 0.0
+            logits[:, int(SEMANTIC_PALETTE["DOOR_OPEN"]), row, width - 1] = 6.0
+            return logits
+
+    trainer = _make_stub_trainer(context_dim=8)
+    trainer.config.num_classes = 44
+    trainer.vqvae = _SolvableDecodeVQVAE()
+    batch = torch.zeros((2, 1, ROOM_HEIGHT, ROOM_WIDTH), dtype=torch.float32)
+
+    metrics = DiffusionTrainer.validate(trainer, [batch], num_samples=2, num_diffusion_samples=2)
+
+    assert metrics["val_hard_solvability"] == pytest.approx(1.0)
+    assert "val_grid_reach_loss" in metrics
+    assert "val_graph_reach_loss" in metrics
 
 
 def test_state_dict_is_finite_rejects_nan_weights():

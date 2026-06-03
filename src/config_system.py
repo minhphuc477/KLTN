@@ -223,7 +223,7 @@ CONFIG_FIELDS: List[ConfigField] = [
     ConfigField("diffusion.logic_net_trainable", bool, True, "Optimize LogicNet parameters jointly with diffusion when LogicNet is enabled."),
     ConfigField("diffusion.logic_learning_rate", float, None, "Optional LogicNet-specific optimizer learning rate. Null reuses diffusion.learning_rate.", min_value=1e-8, allow_none=True),
     ConfigField("diffusion.logic_lr_warmup_epochs", int, 5, "Epochs used to linearly warm up only the LogicNet optimizer group.", min_value=0),
-    ConfigField("diffusion.logic_grid_pathfinder", str, "cnn", "Grid-level LogicNet pathfinder ablation.", choices=("cnn", "bellman_ford")),
+    ConfigField("diffusion.logic_grid_pathfinder", str, "bellman_ford", "Grid-level LogicNet pathfinder ablation.", choices=("cnn", "bellman_ford")),
     ConfigField("diffusion.num_logic_iterations", int, 30, "LogicNet message-passing iterations.", min_value=1),
     ConfigField("diffusion.logic_topology_trace_weight", float, 0.25, "Additional LogicNet weight on room-topology traversability traces.", min_value=0.0),
     ConfigField("diffusion.logic_topology_anchor_weight", float, 0.25, "Additional LogicNet weight on start/goal/door anchor walkability.", min_value=0.0),
@@ -241,6 +241,7 @@ CONFIG_FIELDS: List[ConfigField] = [
     ConfigField("diffusion.alpha_visual", float, 1.0, "Diffusion reconstruction loss coefficient.", min_value=0.0),
     ConfigField("diffusion.alpha_logic", float, 0.1, "Logic regularization coefficient.", min_value=0.0),
     ConfigField("diffusion.alpha_logic_tile", float, 0.05, "Supervised LogicNet tile-classifier loss coefficient.", min_value=0.0),
+    ConfigField("diffusion.min_logic_tile_accuracy_for_guidance", float, 0.4, "Minimum validation tile-classifier accuracy before LogicNet sampling guidance is trusted.", min_value=0.0),
     ConfigField("diffusion.graph_spatial_alignment_weight", float, 0.0, "Graph-node to grid-position attention alignment coefficient.", min_value=0.0),
     ConfigField("diffusion.logic_loss_mode", str, "predicted_latent", "Logic loss target mode.", choices=("predicted_latent", "detached_real")),
     ConfigField("diffusion.warmup_epochs", int, 5, "Epochs before enabling logic loss.", min_value=0),
@@ -607,6 +608,7 @@ def validate_config(config: Dict[str, Any]) -> Dict[str, Any]:
         validated["diffusion"]["logic_net_trainable"] = False
         validated["diffusion"]["guidance_scale"] = 0.0
         validated["diffusion"]["alpha_logic"] = 0.0
+        validated["diffusion"]["alpha_logic_tile"] = 0.0
 
     expected_topology_channels = int(ROOM_TOPOLOGY_CHANNEL_COUNT)
     if int(validated["diffusion"]["room_topology_channels"]) != expected_topology_channels:
