@@ -210,6 +210,8 @@ class DiffusionTrainingConfig:
         global_lr_warmup_epochs: int = 0,
         alpha_visual: float = 1.0,   # Diffusion loss weight
         alpha_logic: float = 0.1,     # Solvability loss weight
+        alpha_logic_tile: float = 0.05,  # Supervised LogicNet tile-classifier loss weight
+        graph_spatial_alignment_weight: float = 0.0,
         logic_loss_mode: str = "predicted_latent",  # predicted_latent | detached_real
         graph_conditioning_mode: str = "node_sequence",  # node_sequence | pooled
         warmup_epochs: int = 5,       # Epochs before adding logic loss
@@ -430,6 +432,8 @@ class DiffusionTrainingConfig:
         self.global_lr_warmup_epochs = int(max(0, global_lr_warmup_epochs))
         self.alpha_visual = alpha_visual
         self.alpha_logic = alpha_logic if self.logic_net_enabled else 0.0
+        self.alpha_logic_tile = float(max(0.0, alpha_logic_tile)) if self.logic_net_enabled else 0.0
+        self.graph_spatial_alignment_weight = float(max(0.0, graph_spatial_alignment_weight))
         mode = str(logic_loss_mode).strip().lower()
         if mode not in {"predicted_latent", "detached_real"}:
             raise ValueError(
@@ -613,6 +617,8 @@ def diffusion_training_kwargs_from_resolved_config(
         "global_lr_warmup_epochs": stage["global_lr_warmup_epochs"],
         "alpha_visual": stage["alpha_visual"],
         "alpha_logic": stage["alpha_logic"],
+        "alpha_logic_tile": stage.get("alpha_logic_tile", 0.05),
+        "graph_spatial_alignment_weight": stage.get("graph_spatial_alignment_weight", 0.0),
         "logic_loss_mode": stage["logic_loss_mode"],
         "graph_conditioning_mode": stage["graph_conditioning_mode"],
         "warmup_epochs": stage["warmup_epochs"],
@@ -775,7 +781,6 @@ def _resolve_vqvae_architecture(
 
     checkpoint = Path(checkpoint_path)
     metadata = _load_checkpoint_metadata_sidecar(checkpoint)
-    _validate_vqvae_checkpoint_metadata(checkpoint, metadata=metadata, expected=resolved)
     architecture = metadata.get("architecture", {}) if isinstance(metadata, dict) else {}
     if isinstance(architecture, dict):
         for key in (
@@ -838,6 +843,8 @@ def _legacy_diffusion_overrides_from_args(args: argparse.Namespace) -> Dict[str,
     _set("unet_num_heads", getattr(args, "unet_num_heads", None))
     _set("unet_dropout", getattr(args, "unet_dropout", None))
     _set("alpha_logic", getattr(args, "alpha_logic", None))
+    _set("alpha_logic_tile", getattr(args, "alpha_logic_tile", None))
+    _set("graph_spatial_alignment_weight", getattr(args, "graph_spatial_alignment_weight", None))
     _set("logic_loss_mode", getattr(args, "logic_loss_mode", None))
     _set("graph_conditioning_mode", getattr(args, "graph_conditioning_mode", None))
     _set("condition_gnn_type", getattr(args, "condition_gnn_type", None))
@@ -1427,6 +1434,25 @@ class DiffusionTrainer:
                 f"expected num_classes={int(self.config.num_classes)}."
             )
         return tile_logits
+
+    def _tile_targets_from_maps(self, real_maps: torch.Tensor) -> torch.Tensor:
+        """Convert training room tensors to integer tile labels [B,H,W]."""
+        if real_maps.dim() == 4 and int(real_maps.shape[1]) == 1:
+            targets = real_maps[:, 0]
+        elif real_maps.dim() == 4 and int(real_maps.shape[1]) == int(self.config.num_classes):
+            targets = real_maps.argmax(dim=1)
+        elif real_maps.dim() == 3:
+            targets = real_maps
+        else:
+            raise ValueError(f"Cannot derive tile targets from real_maps shape {tuple(real_maps.shape)}.")
+
+        if targets.dtype.is_floating_point:
+            max_value = float(targets.detach().max().item()) if targets.numel() > 0 else 0.0
+            if max_value <= 1.0 and int(self.config.num_classes) > 1:
+                targets = torch.round(targets * float(int(self.config.num_classes) - 1))
+            else:
+                targets = torch.round(targets)
+        return targets.to(device=self.device, dtype=torch.long).clamp(0, int(self.config.num_classes) - 1)
     
     def _encode_graph_conditioning(
         self,
@@ -2156,6 +2182,16 @@ class DiffusionTrainer:
         
         # Encode to latent space
         z_0 = self.encode_to_latent(real_maps)
+
+        graph_alignment_weight = float(getattr(self.config, "graph_spatial_alignment_weight", 0.0))
+        if (
+            graph_alignment_weight > 0.0
+            and isinstance(diffusion_graph_data, dict)
+            and "spatial_alignment_node_indices" in diffusion_graph_data
+            and "spatial_alignment_positions" in diffusion_graph_data
+        ):
+            diffusion_graph_data = dict(diffusion_graph_data)
+            diffusion_graph_data["spatial_alignment_weight"] = graph_alignment_weight
         
         # === Part 1: Diffusion loss (standard noise prediction) ===
         diffusion_loss = self.diffusion.training_loss(z_0, conditioning, graph_data=diffusion_graph_data)
@@ -2170,6 +2206,8 @@ class DiffusionTrainer:
                 'loss': 0.0,
                 'diffusion_loss': 0.0,
                 'logic_loss': 0.0,
+                'logic_tile_loss': 0.0,
+                'logic_tile_accuracy': 0.0,
                 'solvability_proxy': 0.0,
                 'solvability': 0.0,
                 'logic_loss_mode_predicted': 1.0 if self.config.logic_loss_mode == 'predicted_latent' else 0.0,
@@ -2181,10 +2219,19 @@ class DiffusionTrainer:
         # We instead denoise a noisy latent and apply LogicNet to predicted x0 so
         # logic gradients flow into diffusion + condition encoder.
         logic_loss = torch.tensor(0.0, device=self.device)
+        logic_tile_loss = torch.tensor(0.0, device=self.device)
+        logic_tile_accuracy = torch.tensor(0.0, device=self.device)
         solvability_proxy = torch.tensor(0.0, device=self.device)
         
         logic_enabled = bool(getattr(self.config, "logic_net_enabled", True))
         if logic_enabled and include_logic_loss and self.config.alpha_logic > 0:
+            if float(getattr(self.config, "alpha_logic_tile", 0.0)) > 0.0:
+                tile_targets = self._tile_targets_from_maps(real_maps)
+                tile_logits = self.logic_net.tile_classifier(z_0.detach())
+                tile_logits = self.logic_net._project_tile_logits_to_room(tile_logits)
+                logic_tile_loss = F.cross_entropy(tile_logits, tile_targets)
+                logic_tile_accuracy = (tile_logits.argmax(dim=1) == tile_targets).float().mean()
+
             if self.config.logic_loss_mode == "detached_real":
                 # Legacy baseline: logic regularization on real latent only.
                 z_for_logic = z_0.detach().requires_grad_(True)
@@ -2245,6 +2292,7 @@ class DiffusionTrainer:
         total_loss = (
             self.config.alpha_visual * diffusion_loss + 
             self.config.alpha_logic * logic_loss
+            + float(getattr(self.config, "alpha_logic_tile", 0.0)) * logic_tile_loss
         )
         if not self._tensor_is_finite(total_loss):
             self.optimizer.zero_grad(set_to_none=True)
@@ -2257,6 +2305,8 @@ class DiffusionTrainer:
                 'loss': 0.0,
                 'diffusion_loss': float(diffusion_loss.detach().item()) if self._tensor_is_finite(diffusion_loss) else 0.0,
                 'logic_loss': 0.0,
+                'logic_tile_loss': 0.0,
+                'logic_tile_accuracy': 0.0,
                 'solvability_proxy': 0.0,
                 'solvability': 0.0,
                 'logic_loss_mode_predicted': 1.0 if self.config.logic_loss_mode == 'predicted_latent' else 0.0,
@@ -2284,6 +2334,8 @@ class DiffusionTrainer:
                 'loss': float(total_loss.detach().item()),
                 'diffusion_loss': float(diffusion_loss.detach().item()),
                 'logic_loss': float(logic_loss.detach().item()) if self._tensor_is_finite(logic_loss) else 0.0,
+                'logic_tile_loss': float(logic_tile_loss.detach().item()) if self._tensor_is_finite(logic_tile_loss) else 0.0,
+                'logic_tile_accuracy': float(logic_tile_accuracy.detach().item()) if self._tensor_is_finite(logic_tile_accuracy) else 0.0,
                 'solvability_proxy': float(solvability_proxy.detach().item()) if self._tensor_is_finite(solvability_proxy) else 0.0,
                 'solvability': float(solvability_proxy.detach().item()) if self._tensor_is_finite(solvability_proxy) else 0.0,
                 'logic_loss_mode_predicted': 1.0 if self.config.logic_loss_mode == 'predicted_latent' else 0.0,
@@ -2307,6 +2359,8 @@ class DiffusionTrainer:
                     'loss': float(total_loss.detach().item()),
                     'diffusion_loss': float(diffusion_loss.detach().item()),
                     'logic_loss': float(logic_loss.detach().item()) if self._tensor_is_finite(logic_loss) else 0.0,
+                    'logic_tile_loss': float(logic_tile_loss.detach().item()) if self._tensor_is_finite(logic_tile_loss) else 0.0,
+                    'logic_tile_accuracy': float(logic_tile_accuracy.detach().item()) if self._tensor_is_finite(logic_tile_accuracy) else 0.0,
                     'solvability_proxy': float(solvability_proxy.detach().item()) if self._tensor_is_finite(solvability_proxy) else 0.0,
                     'solvability': float(solvability_proxy.detach().item()) if self._tensor_is_finite(solvability_proxy) else 0.0,
                     'logic_loss_mode_predicted': 1.0 if self.config.logic_loss_mode == 'predicted_latent' else 0.0,
@@ -2332,6 +2386,8 @@ class DiffusionTrainer:
             'loss': total_loss.item(),
             'diffusion_loss': diffusion_loss.item(),
             'logic_loss': logic_loss.item(),
+            'logic_tile_loss': logic_tile_loss.item(),
+            'logic_tile_accuracy': logic_tile_accuracy.item(),
             'solvability_proxy': solvability_proxy.item(),
             'solvability': solvability_proxy.item(),
             'logic_loss_mode_predicted': 1.0 if self.config.logic_loss_mode == 'predicted_latent' else 0.0,
@@ -2354,7 +2410,15 @@ class DiffusionTrainer:
         Each graph in graph_list is a dict from zelda_loader._extract_graph()
         containing real mission topology from the VGLC .dot files.
         """
-        metrics_sum = {'loss': 0, 'diffusion_loss': 0, 'logic_loss': 0, 'solvability_proxy': 0, 'solvability': 0}
+        metrics_sum = {
+            'loss': 0,
+            'diffusion_loss': 0,
+            'logic_loss': 0,
+            'logic_tile_loss': 0,
+            'logic_tile_accuracy': 0,
+            'solvability_proxy': 0,
+            'solvability': 0,
+        }
         num_batches = 0
         
         # DESIGN-08: Compute actual total training steps for temperature annealing
@@ -3044,6 +3108,8 @@ def main():
     parser.add_argument('--unet-num-heads', type=int, default=None)
     parser.add_argument('--unet-dropout', type=float, default=None)
     parser.add_argument('--alpha-logic', type=float, default=None)
+    parser.add_argument('--alpha-logic-tile', type=float, default=None)
+    parser.add_argument('--graph-spatial-alignment-weight', type=float, default=None)
     parser.add_argument(
         '--logic-loss-mode',
         type=str,

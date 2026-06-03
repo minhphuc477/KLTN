@@ -101,6 +101,24 @@ class TestTortuosityLoss:
         assert 'tortuosity_loss' in loss_dict
         assert 'mean_solvability' in loss_dict
         assert total_loss.ndim == 0  # Scalar
+
+    def test_combined_logic_loss_reuses_default_pathfinder_helpers(self):
+        """Default helper modules should be cached instead of allocated per call."""
+        import src.ml.logic_net as logic_mod
+        from src.ml.logic_net import combined_logic_loss
+
+        logic_mod._COMBINED_LOGIC_HELPER_CACHE.clear()
+        prob_map = torch.rand(1, 1, 8, 8)
+        starts = [(1, 1)]
+        goals = [(6, 6)]
+
+        combined_logic_loss(prob_map, starts, goals)
+        first_helpers = next(iter(logic_mod._COMBINED_LOGIC_HELPER_CACHE.values()))
+        combined_logic_loss(prob_map, starts, goals)
+        second_helpers = next(iter(logic_mod._COMBINED_LOGIC_HELPER_CACHE.values()))
+
+        assert first_helpers[0] is second_helpers[0]
+        assert first_helpers[1] is second_helpers[1]
     
     def test_straight_path_penalty(self):
         """Test that straight paths get penalized."""
@@ -213,6 +231,45 @@ class TestGraphGridAttention:
         
         assert grid_features.grad is not None
         assert graph_nodes.grad is not None
+
+    def test_spatial_alignment_loss_backpropagates_through_attention(self):
+        """Captured attention used for alignment must remain differentiable."""
+        from src.core.graph_grid_attention import GraphToGridCrossAttention
+
+        module = GraphToGridCrossAttention(
+            grid_dim=32,
+            graph_dim=48,
+            num_heads=4,
+            attention_mode="softmax",
+        )
+        module.set_attention_capture(True)
+        grid_features = torch.randn(2, 32, 4, 4, requires_grad=True)
+        graph_nodes = torch.randn(2, 3, 48, requires_grad=True)
+        _ = module(grid_features, graph_nodes)
+
+        node_indices = torch.tensor([[0, 1], [1, 2]], dtype=torch.long)
+        target_positions = torch.tensor(
+            [[[0, 0], [3, 3]], [[1, 1], [2, 2]]],
+            dtype=torch.float32,
+        )
+        loss = module.spatial_alignment_loss(node_indices, target_positions)
+        loss.backward()
+
+        assert loss.requires_grad
+        assert module.q_proj.weight.grad is not None
+        assert module.k_proj.weight.grad is not None
+        assert torch.isfinite(module.q_proj.weight.grad).all()
+
+    def test_spatial_alignment_loss_requires_captured_softmax_maps(self):
+        """Alignment should fail loudly when capture/softmax attention is absent."""
+        from src.core.graph_grid_attention import GraphToGridCrossAttention
+
+        module = GraphToGridCrossAttention(grid_dim=32, graph_dim=48, num_heads=4)
+        with pytest.raises(RuntimeError, match="set_attention_capture"):
+            module.spatial_alignment_loss(
+                torch.zeros(1, 1, dtype=torch.long),
+                torch.zeros(1, 1, 2),
+            )
     
     def test_enhanced_attention_block(self):
         """Test EnhancedAttentionBlock with graph and context modes."""

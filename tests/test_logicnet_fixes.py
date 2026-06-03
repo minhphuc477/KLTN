@@ -58,6 +58,69 @@ def test_logicnet_guidance_schedule_is_late_process_active():
     assert guidance._scheduled_scale(t=0, num_timesteps=1000) == pytest.approx(1.0)
 
 
+def test_logicnet_temperature_updates_grid_pathfinder():
+    logic_net = LogicNet(
+        latent_dim=4,
+        num_tile_classes=5,
+        grid_pathfinder_type="bellman_ford",
+        initial_temperature=1.0,
+        final_temperature=0.1,
+    )
+
+    logic_net.update_temperature(1.0)
+
+    assert logic_net.graph_pathfinder.temperature == pytest.approx(0.1)
+    assert logic_net.grid_pathfinder.pathfinder.temperature == pytest.approx(0.1)
+
+
+def test_logicnet_without_topology_uses_single_cell_source_not_all_doors():
+    logic_net = LogicNet(latent_dim=4, num_tile_classes=5)
+    z = torch.zeros(2, 5, 16, 11)
+    z[:, 1] = 8.0
+
+    loss, info = logic_net(z, graph_data=None)
+
+    assert loss.ndim == 0
+    assert info["source_mask_mode"] == "single_walkable_cell"
+    source_mask = logic_net._create_single_cell_source_mask(info["walkability"])
+    assert torch.allclose(source_mask.sum(dim=(1, 2, 3)), torch.ones(2))
+
+
+def test_logicnet_global_room_passability_preserves_index_copy_gradient():
+    logic_net = LogicNet(latent_dim=4, num_tile_classes=5)
+    room_passability = torch.tensor([0.25], requires_grad=True)
+    graph_data = {
+        "adjacency": torch.tensor([[0.0, 1.0], [0.0, 0.0]]),
+        "edge_weights": torch.tensor([[0.0, 1.0], [0.0, 0.0]]),
+        "node_features": torch.zeros(2, 4),
+        "start_idx": 0,
+        "target_idx": 1,
+        "current_node_idx": 0,
+    }
+
+    total, _reach, _lock, _info = logic_net._compute_one_global_graph_loss(
+        node_count=2,
+        edge_index=None,
+        adjacency=graph_data["adjacency"],
+        edge_weights=graph_data["edge_weights"],
+        edge_features=None,
+        edge_attr=None,
+        node_features=graph_data["node_features"],
+        node_mask=None,
+        start_idx=0,
+        target_idx=1,
+        key_lock_pairs=[],
+        current_node_idx=0,
+        room_passability=room_passability,
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+    )
+    grad = torch.autograd.grad(total, room_passability, allow_unused=False)[0]
+
+    assert grad is not None
+    assert torch.isfinite(grad).all()
+
+
 def test_graph_feature_roles_include_type_fields():
     """Mission graphs that use type/room_type START/GOAL should still feed LogicNet roles."""
 

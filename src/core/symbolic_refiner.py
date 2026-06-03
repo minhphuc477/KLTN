@@ -37,7 +37,7 @@ Convergence:
 import logging
 from typing import Dict, List, Tuple, Optional, Set, Any, Callable
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import IntEnum
 import heapq
 from collections import defaultdict, deque
 
@@ -57,30 +57,30 @@ logger = logging.getLogger(__name__)
 # TILE DEFINITIONS
 # ============================================================================
 
-class TileType(Enum):
+class TileType(IntEnum):
     """Tile types for WFC — aligned with canonical TileID from definitions.py."""
-    VOID = 0        # Impassable
-    FLOOR = 1       # Walkable
-    WALL = 2        # Solid
-    BLOCK = 3       # Pushable/decorative block
-    DOOR_OPEN = 10  # Open passage
-    DOOR_LOCKED = 11  # Key-locked door
-    DOOR_BOMB = 12  # Bombable wall
-    DOOR_PUZZLE = 13  # Puzzle/switch door
-    DOOR_BOSS = 14  # Boss key door
-    DOOR_SOFT = 15  # Soft-locked (one-way) door
-    ENEMY = 20      # Monster
-    START = 21      # Starting position
-    TRIFORCE = 22   # Goal
-    BOSS = 23       # Boss enemy
-    KEY_SMALL = 30  # Small key
-    KEY_BOSS = 31   # Boss key
-    KEY_ITEM = 32   # Key item
-    ITEM_MINOR = 33 # Minor collectible
-    ELEMENT = 40    # Hazard element
-    ELEMENT_FLOOR = 41  # Walkable element
-    STAIR = 42      # Stairs
-    PUZZLE = 43     # Puzzle element
+    VOID = int(SEMANTIC_PALETTE["VOID"])
+    FLOOR = int(SEMANTIC_PALETTE["FLOOR"])
+    WALL = int(SEMANTIC_PALETTE["WALL"])
+    BLOCK = int(SEMANTIC_PALETTE["BLOCK"])
+    DOOR_OPEN = int(SEMANTIC_PALETTE["DOOR_OPEN"])
+    DOOR_LOCKED = int(SEMANTIC_PALETTE["DOOR_LOCKED"])
+    DOOR_BOMB = int(SEMANTIC_PALETTE["DOOR_BOMB"])
+    DOOR_PUZZLE = int(SEMANTIC_PALETTE["DOOR_PUZZLE"])
+    DOOR_BOSS = int(SEMANTIC_PALETTE["DOOR_BOSS"])
+    DOOR_SOFT = int(SEMANTIC_PALETTE["DOOR_SOFT"])
+    ENEMY = int(SEMANTIC_PALETTE["ENEMY"])
+    START = int(SEMANTIC_PALETTE["START"])
+    TRIFORCE = int(SEMANTIC_PALETTE["TRIFORCE"])
+    BOSS = int(SEMANTIC_PALETTE["BOSS"])
+    KEY_SMALL = int(SEMANTIC_PALETTE["KEY_SMALL"])
+    KEY_BOSS = int(SEMANTIC_PALETTE["KEY_BOSS"])
+    KEY_ITEM = int(SEMANTIC_PALETTE["KEY_ITEM"])
+    ITEM_MINOR = int(SEMANTIC_PALETTE["ITEM_MINOR"])
+    ELEMENT = int(SEMANTIC_PALETTE["ELEMENT"])
+    ELEMENT_FLOOR = int(SEMANTIC_PALETTE["ELEMENT_FLOOR"])
+    STAIR = int(SEMANTIC_PALETTE["STAIR"])
+    PUZZLE = int(SEMANTIC_PALETTE["PUZZLE"])
 
 
 # Walkable tile set (canonical, derives from definitions.py TileID)
@@ -112,8 +112,20 @@ _ENTITY_TILES: Set[int] = {
     TileType.PUZZLE.value,
 }
 
+_SELF_ADJACENT_TILES: Set[int] = {
+    TileType.VOID.value,
+    TileType.FLOOR.value,
+    TileType.WALL.value,
+    TileType.BLOCK.value,
+    TileType.ELEMENT.value,
+    TileType.ELEMENT_FLOOR.value,
+}
 
-def _symmetrize_adjacency(adjacency: Dict[int, Set[int]]) -> Dict[int, Set[int]]:
+def _symmetrize_adjacency(
+    adjacency: Dict[int, Set[int]],
+    *,
+    self_adjacent_tiles: Optional[Set[int]] = None,
+) -> Dict[int, Set[int]]:
     """
     Make compatibility bidirectional for this orientation-free tile vocabulary.
 
@@ -122,14 +134,21 @@ def _symmetrize_adjacency(adjacency: Dict[int, Set[int]]) -> Dict[int, Set[int]]
     both directions. Thresholding learned frequencies or hand-written tables can
     otherwise introduce order-dependent contradictions inside the greedy WFC loop.
     """
-    symmetric: Dict[int, Set[int]] = {
-        int(src): {int(dst) for dst in neighbors} | {int(src)}
-        for src, neighbors in dict(adjacency).items()
-    }
+    allowed_self = set(_SELF_ADJACENT_TILES if self_adjacent_tiles is None else self_adjacent_tiles)
+    symmetric: Dict[int, Set[int]] = {}
+    for src, neighbors in dict(adjacency).items():
+        src_i = int(src)
+        values = {int(dst) for dst in neighbors}
+        if src_i in allowed_self:
+            values.add(src_i)
+        else:
+            values.discard(src_i)
+        symmetric[src_i] = values
 
     for src, neighbors in list(symmetric.items()):
         for dst in set(neighbors):
-            symmetric.setdefault(int(dst), {int(dst)}).add(int(src))
+            dst_i = int(dst)
+            symmetric.setdefault(dst_i, {dst_i} if dst_i in allowed_self else set()).add(int(src))
 
     return {int(src): set(sorted(int(dst) for dst in neighbors)) for src, neighbors in symmetric.items()}
 
@@ -260,14 +279,18 @@ class WFCState:
     tile_types: List[int]                   # Available tile types
     adjacency: Dict[int, Set[int]]          # Compatibility rules
     
-    def entropy(self, x: int, y: int) -> float:
-        """Compute entropy at cell. NOTE: x=column, y=row (grid is [row, col])."""
-        probs = self.grid[y, x]
+    def entropy_at(self, row: int, col: int) -> float:
+        """Compute entropy at a row-major grid cell."""
+        probs = self.grid[row, col]
         # Filter out zeros for log
         probs = probs[probs > 0]
         if len(probs) == 0:
             return 0.0
         return -np.sum(probs * np.log2(probs + 1e-10))
+
+    def entropy(self, x: int, y: int) -> float:
+        """Deprecated compatibility wrapper; use entropy_at(row, col)."""
+        return self.entropy_at(row=y, col=x)
     
     def is_collapsed(self, x: int, y: int) -> bool:
         """Check if cell is collapsed. NOTE: x=column, y=row."""
@@ -429,51 +452,93 @@ class PathAnalyzer:
             ))
             return failures
         
-        # Check for key-lock requirements
-        try:
-            path = nx.shortest_path(graph, start_node, goal_node)
-        except nx.NetworkXNoPath:
-            failures.append(FailurePoint(
-                position=(start_node, goal_node),
-                failure_type='no_path',
-                required_item=None,
-            ))
-            return failures
-        
-        # Analyze path for missing keys
-        keys_available = 0
-        has_boss_key = False
-        for i, node in enumerate(path):
-            # Count keys at node
-            node_data = graph.nodes[node]
-            if self._node_has_small_key(dict(node_data)):
-                keys_available += 1
-            if self._node_has_boss_key(dict(node_data)):
-                has_boss_key = True
-            
-            # Check edges for locks
-            if i < len(path) - 1:
-                next_node = path[i + 1]
-                edge_data = graph.edges[node, next_node]
-                edge_types = self._edge_type_tokens(dict(edge_data))
-                
-                if edge_types.intersection({'key_locked', 'locked', 'k'}):
-                    if keys_available <= 0:
-                        failures.append(FailurePoint(
-                            position=(node, next_node),
-                            failure_type='missing_key',
-                            required_item='key',
-                        ))
-                    else:
-                        keys_available -= 1
-                if edge_types.intersection({'boss_locked', 'K'}):
-                    if not has_boss_key:
-                        failures.append(FailurePoint(
-                            position=(node, next_node),
-                            failure_type='missing_boss_key',
-                            required_item='boss_key',
-                        ))
-        
+        if self._inventory_path_exists(graph, start_node, goal_node):
+            return []
+
+        return self._inventory_failure_points(graph, start_node)
+
+    def _collect_node_inventory(self, graph: 'nx.DiGraph', node: Any, keys: int, has_boss_key: bool) -> Tuple[int, bool]:
+        node_data = dict(graph.nodes[node])
+        if self._node_has_small_key(node_data):
+            keys += 1
+        if self._node_has_boss_key(node_data):
+            has_boss_key = True
+        return keys, has_boss_key
+
+    def _edge_requirements(self, edge_data: Dict[str, Any]) -> Tuple[bool, bool]:
+        edge_types = self._edge_type_tokens(edge_data)
+        needs_key = bool(edge_types.intersection({'key_locked', 'locked', 'k'}))
+        needs_boss_key = bool(edge_types.intersection({'boss_locked', 'K'}))
+        return needs_key, needs_boss_key
+
+    def _inventory_path_exists(self, graph: 'nx.DiGraph', start_node: Any, goal_node: Any) -> bool:
+        start_keys, start_boss = self._collect_node_inventory(graph, start_node, 0, False)
+        queue: deque[Tuple[Any, int, bool]] = deque([(start_node, start_keys, start_boss)])
+        visited: Set[Tuple[Any, int, bool]] = set()
+        max_small_keys = max(0, sum(1 for node in graph.nodes if self._node_has_small_key(dict(graph.nodes[node]))))
+
+        while queue:
+            node, keys, has_boss_key = queue.popleft()
+            state = (node, min(keys, max_small_keys), bool(has_boss_key))
+            if state in visited:
+                continue
+            visited.add(state)
+            if node == goal_node:
+                return True
+
+            for next_node in graph.successors(node):
+                edge_data = dict(graph.edges[node, next_node])
+                needs_key, needs_boss_key = self._edge_requirements(edge_data)
+                if needs_boss_key and not has_boss_key:
+                    continue
+                next_keys = keys
+                if needs_key:
+                    if next_keys <= 0:
+                        continue
+                    next_keys -= 1
+                next_keys, next_boss = self._collect_node_inventory(graph, next_node, next_keys, has_boss_key)
+                queue.append((next_node, min(next_keys, max_small_keys), next_boss))
+
+        return False
+
+    def _inventory_failure_points(self, graph: 'nx.DiGraph', start_node: Any) -> List[FailurePoint]:
+        failures: List[FailurePoint] = []
+        start_keys, start_boss = self._collect_node_inventory(graph, start_node, 0, False)
+        queue: deque[Tuple[Any, int, bool]] = deque([(start_node, start_keys, start_boss)])
+        visited: Set[Tuple[Any, int, bool]] = set()
+        seen_failures: Set[Tuple[Any, Any, str]] = set()
+        max_small_keys = max(0, sum(1 for node in graph.nodes if self._node_has_small_key(dict(graph.nodes[node]))))
+
+        while queue:
+            node, keys, has_boss_key = queue.popleft()
+            state = (node, min(keys, max_small_keys), bool(has_boss_key))
+            if state in visited:
+                continue
+            visited.add(state)
+
+            for next_node in graph.successors(node):
+                edge_data = dict(graph.edges[node, next_node])
+                needs_key, needs_boss_key = self._edge_requirements(edge_data)
+                if needs_boss_key and not has_boss_key:
+                    key = (node, next_node, "missing_boss_key")
+                    if key not in seen_failures:
+                        failures.append(FailurePoint((node, next_node), "missing_boss_key", "boss_key"))
+                        seen_failures.add(key)
+                    continue
+                next_keys = keys
+                if needs_key:
+                    if next_keys <= 0:
+                        key = (node, next_node, "missing_key")
+                        if key not in seen_failures:
+                            failures.append(FailurePoint((node, next_node), "missing_key", "key"))
+                            seen_failures.add(key)
+                        continue
+                    next_keys -= 1
+                next_keys, next_boss = self._collect_node_inventory(graph, next_node, next_keys, has_boss_key)
+                queue.append((next_node, min(next_keys, max_small_keys), next_boss))
+
+        if not failures:
+            failures.append(FailurePoint((start_node, None), "no_path", None))
         return failures
     
     def _astar(
@@ -919,7 +984,7 @@ class WaveFunctionCollapse:
             for y in range(h):
                 for x in range(w):
                     if not state.is_collapsed(x, y):
-                        entropy = state.entropy(x, y)
+                        entropy = state.entropy_at(y, x)
                         if entropy < min_entropy:
                             min_entropy = entropy
                             min_cell = (x, y)

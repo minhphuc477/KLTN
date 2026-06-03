@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import math
+import warnings
 from typing import Any, Dict, Optional, Sequence, Tuple
 
 import torch
@@ -165,16 +166,27 @@ class DiscreteMaskedRoomModel(nn.Module):
         )
         nn.init.normal_(self.position_embedding, mean=0.0, std=0.02)
 
-        _ = (
-            model_channels,
-            attention_mode,
-            topology_conditioning_mode,
-            hedgehog_feature_dim,
-            graph_auto_linear_attention_nodes,
-            spatial_graph_gate_init,
-            spatial_topology_gate_init,
-            unet_attention_resolutions,
-        )
+        ignored_legacy_args = {
+            "model_channels": (model_channels, 64),
+            "attention_mode": (attention_mode, "softmax"),
+            "topology_conditioning_mode": (topology_conditioning_mode, "additive"),
+            "hedgehog_feature_dim": (hedgehog_feature_dim, 32),
+            "graph_auto_linear_attention_nodes": (graph_auto_linear_attention_nodes, 128),
+            "spatial_graph_gate_init": (spatial_graph_gate_init, -2.0),
+            "spatial_topology_gate_init": (spatial_topology_gate_init, -2.0),
+            "unet_attention_resolutions": (tuple(unet_attention_resolutions), (0, 1)),
+        }
+        changed_legacy_args = [
+            name for name, (value, default) in ignored_legacy_args.items()
+            if value != default
+        ]
+        if changed_legacy_args:
+            warnings.warn(
+                "DiscreteMaskedRoomModel now uses MaskedTokenTransformerBackbone; "
+                f"legacy U-Net arguments have no effect: {', '.join(changed_legacy_args)}.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         self.backbone = MaskedTokenTransformerBackbone(
             hidden_dim=self.hidden_dim,
             context_dim=context_dim,

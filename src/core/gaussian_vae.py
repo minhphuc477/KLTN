@@ -20,7 +20,7 @@ import torch.nn.functional as F
 from torch import Tensor
 
 from src.core.definitions import ROOM_HEIGHT, ROOM_WIDTH, TileID, normalize_room_shape
-from src.core.vqvae import Decoder, Encoder
+from src.core.vqvae import Decoder, Encoder, canonical_latent_shape
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +53,7 @@ class SemanticGaussianVAE(nn.Module):
         self.kl_weight = float(kl_weight)
         self.rare_tile_weight = float(rare_tile_weight)
         self.mrf_penalty_weight = float(max(0.0, mrf_penalty_weight))
+        self.latent_spatial_shape = canonical_latent_shape((ROOM_HEIGHT, ROOM_WIDTH), channel_mult=(1, 2, 4))
 
         # Encode into twice the latent width so we can split mu/logvar.
         self.encoder = Encoder(
@@ -210,8 +211,7 @@ class SemanticGaussianVAE(nn.Module):
             device = next(self.parameters()).device
 
         if spatial_size is None:
-            dummy = torch.zeros(1, self.num_classes, ROOM_HEIGHT, ROOM_WIDTH, device=device)
-            latent_height, latent_width = self.encode(dummy)[0].shape[-2:]
+            latent_height, latent_width = self.latent_spatial_shape
         else:
             latent_height, latent_width = normalize_room_shape(spatial_size)
 

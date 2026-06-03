@@ -118,7 +118,6 @@ def build_latent_edit_mask(
     return torch.clamp(resized, 0.0, 1.0)
 
 
-@torch.no_grad()
 def wfc_guided_inpaint_room(
     current_grid: np.ndarray,
     dead_end_mask: np.ndarray,
@@ -150,7 +149,8 @@ def wfc_guided_inpaint_room(
     one_hot = np.eye(int(num_classes), dtype=np.float32)[grid_int]
     x_0 = torch.from_numpy(one_hot).to(device).permute(2, 0, 1).unsqueeze(0).contiguous()
 
-    z_0, _ = vqvae.encode(x_0)
+    with torch.no_grad():
+        z_0, _ = vqvae.encode(x_0)
     latent_h, latent_w = int(z_0.shape[2]), int(z_0.shape[3])
     latent_mask = build_latent_edit_mask(
         mask_bool,
@@ -170,7 +170,8 @@ def wfc_guided_inpaint_room(
         num_steps=max(8, int(num_diffusion_steps)),
         noise_strength=0.5,  # Higher noise for dead-end repair (full regeneration of broken regions)
     )
-    logits = vqvae.decode(z_inpaint)
+    with torch.no_grad():
+        logits = vqvae.decode(z_inpaint)
     inpainted_grid = logits.argmax(dim=1).detach().cpu().numpy()[0]
 
     keep = ~mask_bool

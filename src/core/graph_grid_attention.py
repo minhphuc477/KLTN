@@ -353,6 +353,7 @@ class GraphToGridCrossAttention(nn.Module):
         self._large_graph_fallback_warning_emitted = False
         self.capture_attention_maps = False
         self.last_attention_weights: Optional[Tensor] = None
+        self.last_attention_weights_for_loss: Optional[Tensor] = None
         self.last_attention_grid_shape: Optional[Tuple[int, int]] = None
 
         # Grid position encoding
@@ -423,6 +424,7 @@ class GraphToGridCrossAttention(nn.Module):
         self.capture_attention_maps = bool(enabled)
         if not self.capture_attention_maps:
             self.last_attention_weights = None
+            self.last_attention_weights_for_loss = None
             self.last_attention_grid_shape = None
 
     def get_last_attention_map(self, reduce_heads: str = "mean") -> Optional[Tensor]:
@@ -450,6 +452,68 @@ class GraphToGridCrossAttention(nn.Module):
         if mode == "max":
             return weights.max(dim=1).values.reshape(weights.shape[0], int(height), int(width), weights.shape[-1])
         raise ValueError("reduce_heads must be 'mean', 'max', or 'none'.")
+
+    def spatial_alignment_loss(
+        self,
+        node_indices: Tensor,
+        target_positions: Tensor,
+        valid_mask: Optional[Tensor] = None,
+        *,
+        reduce_heads: str = "mean",
+        eps: float = 1e-8,
+    ) -> Tensor:
+        """
+        Penalize graph-to-grid attention that misses known node locations.
+
+        Args:
+            node_indices: [B, M] graph-node ids to supervise.
+            target_positions: [B, M, 2] row/col grid positions at the latest
+                attention resolution. Floating inputs are rounded.
+            valid_mask: optional [B, M] mask for padded supervision targets.
+            reduce_heads: mean or max head reduction before gathering.
+        """
+        weights = self.last_attention_weights_for_loss
+        if weights is None or self.last_attention_grid_shape is None:
+            raise RuntimeError(
+                "spatial_alignment_loss requires set_attention_capture(True) and a softmax forward pass first."
+            )
+        if node_indices.dim() != 2:
+            raise ValueError(f"node_indices must have shape [B, M], got {tuple(node_indices.shape)}.")
+        if target_positions.dim() != 3 or int(target_positions.shape[-1]) != 2:
+            raise ValueError(
+                f"target_positions must have shape [B, M, 2], got {tuple(target_positions.shape)}."
+            )
+        if int(node_indices.shape[0]) != int(weights.shape[0]) or int(target_positions.shape[0]) != int(weights.shape[0]):
+            raise ValueError("spatial alignment batch size must match the last captured attention batch.")
+        if int(node_indices.shape[1]) != int(target_positions.shape[1]):
+            raise ValueError("node_indices and target_positions must have the same target count.")
+
+        height, width = self.last_attention_grid_shape
+        mode = str(reduce_heads).strip().lower()
+        if mode == "mean":
+            attn = weights.mean(dim=1).reshape(weights.shape[0], int(height), int(width), weights.shape[-1])
+        elif mode == "max":
+            attn = weights.max(dim=1).values.reshape(weights.shape[0], int(height), int(width), weights.shape[-1])
+        else:
+            raise ValueError("reduce_heads must be 'mean' or 'max' for spatial_alignment_loss.")
+
+        bsz, target_count = node_indices.shape
+        rows = target_positions[..., 0].round().long().clamp(0, int(height) - 1)
+        cols = target_positions[..., 1].round().long().clamp(0, int(width) - 1)
+        nodes = node_indices.long().clamp(0, int(attn.shape[-1]) - 1)
+        batch_idx = torch.arange(bsz, device=attn.device).view(bsz, 1).expand(bsz, target_count)
+        gathered = attn[batch_idx, rows.to(attn.device), cols.to(attn.device), nodes.to(attn.device)]
+
+        if valid_mask is None:
+            valid = torch.ones_like(gathered, dtype=torch.bool)
+        else:
+            if valid_mask.shape != node_indices.shape:
+                raise ValueError(f"valid_mask must have shape {tuple(node_indices.shape)}, got {tuple(valid_mask.shape)}.")
+            valid = valid_mask.to(device=attn.device, dtype=torch.bool)
+        valid = valid & torch.isfinite(gathered)
+        if not bool(valid.any()):
+            return gathered.sum() * 0.0
+        return -torch.log(gathered.clamp_min(float(eps)))[valid].mean()
 
     def _compute_degree_features(
         self,
@@ -558,6 +622,7 @@ class GraphToGridCrossAttention(nn.Module):
 
         B, C, H, W = grid_features.shape
         self.last_attention_weights = None
+        self.last_attention_weights_for_loss = None
         self.last_attention_grid_shape = None
         if graph_nodes.dim() != 3:
             raise ValueError(
@@ -742,10 +807,13 @@ class GraphToGridCrossAttention(nn.Module):
                 attn_scores = attn_scores + attn_bias
                 attn_weights = F.softmax(attn_scores, dim=-1)
                 if self.capture_attention_maps:
-                    captured = torch.nan_to_num(attn_weights.detach(), nan=0.0, posinf=0.0, neginf=0.0)
+                    loss_weights = torch.nan_to_num(attn_weights, nan=0.0, posinf=0.0, neginf=0.0)
+                    captured = loss_weights.detach()
                     if valid_rows is not None and not torch.all(valid_rows):
-                        captured = captured.clone()
-                        captured[~valid_rows] = 0.0
+                        loss_weights = loss_weights.clone()
+                        loss_weights[~valid_rows] = 0.0
+                        captured = loss_weights.detach()
+                    self.last_attention_weights_for_loss = loss_weights
                     self.last_attention_weights = captured.cpu()
                     self.last_attention_grid_shape = (int(H), int(W))
                 attn_weights = self.dropout(attn_weights)
@@ -886,6 +954,26 @@ class SpatialGraphConditioner(nn.Module):
 
     def set_attention_mode(self, mode: str) -> None:
         self.graph_cross_attn.set_attention_mode(mode)
+
+    def set_attention_capture(self, enabled: bool = True) -> None:
+        self.graph_cross_attn.set_attention_capture(enabled)
+
+    def spatial_alignment_loss(
+        self,
+        node_indices: Tensor,
+        target_positions: Tensor,
+        valid_mask: Optional[Tensor] = None,
+        *,
+        reduce_heads: str = "mean",
+        eps: float = 1e-8,
+    ) -> Tensor:
+        return self.graph_cross_attn.spatial_alignment_loss(
+            node_indices,
+            target_positions,
+            valid_mask=valid_mask,
+            reduce_heads=reduce_heads,
+            eps=eps,
+        )
 
     def forward(
         self,

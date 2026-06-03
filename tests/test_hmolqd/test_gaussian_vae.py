@@ -44,6 +44,25 @@ class TestSemanticGaussianVAE:
 
         assert sample.shape == (3, 44, 16, 11)
 
+    def test_sample_prior_uses_static_latent_shape_without_dummy_encode(self, monkeypatch):
+        from src.core.gaussian_vae import SemanticGaussianVAE
+
+        model = SemanticGaussianVAE(
+            num_tile_classes=44,
+            latent_dim=16,
+            hidden_dim=16,
+        )
+
+        monkeypatch.setattr(
+            model,
+            "encode",
+            lambda _x: (_ for _ in ()).throw(AssertionError("sample_prior should not call encode")),
+        )
+
+        sample = model.sample_prior(batch_size=1)
+
+        assert sample.shape == (1, 44, 16, 11)
+
 
 class TestGaussianVAETrainer:
     def test_trainer_step(self):

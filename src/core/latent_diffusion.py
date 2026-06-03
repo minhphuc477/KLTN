@@ -277,6 +277,77 @@ class CrossAttention(nn.Module):
         inv_sqrt = deg.pow(-0.5)
         return inv_sqrt[:, None] * adj * inv_sqrt[None, :]
 
+    def _batched_normalized_adjacency(
+        self,
+        *,
+        batch_size: int,
+        seq_len: int,
+        edge_index: Tensor,
+        node_mask: Optional[Tensor],
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> Tuple[Tensor, Tensor]:
+        """Build dense [B,L,L] normalized adjacency and valid-node mask without per-sample loops."""
+        if node_mask is None:
+            valid = torch.ones(batch_size, seq_len, device=device, dtype=torch.bool)
+        else:
+            valid = node_mask.to(device=device, dtype=torch.bool)
+            if valid.dim() == 1:
+                valid = valid.unsqueeze(0)
+            if int(valid.shape[0]) == 1 and batch_size > 1:
+                valid = valid.expand(batch_size, -1)
+            if int(valid.shape[0]) != batch_size:
+                raise ValueError(
+                    f"CrossAttention node_mask batch size {int(valid.shape[0])} does not match context batch {batch_size}."
+                )
+            if int(valid.shape[1]) > seq_len:
+                valid = valid[:, :seq_len]
+            elif int(valid.shape[1]) < seq_len:
+                valid = F.pad(valid, (0, seq_len - int(valid.shape[1])), value=False)
+
+        adj = torch.zeros(batch_size, seq_len, seq_len, device=device, dtype=dtype)
+        eye = torch.eye(seq_len, device=device, dtype=dtype).unsqueeze(0)
+        valid_pair = valid[:, :, None] & valid[:, None, :]
+
+        if edge_index.dim() == 2:
+            ei = edge_index.to(device=device, dtype=torch.long)
+            if int(ei.shape[0]) != 2:
+                raise ValueError(f"CrossAttention edge_index must have first dimension 2, got {tuple(ei.shape)}.")
+            if ei.numel() > 0:
+                src = ei[0].clamp(0, max(0, seq_len - 1))
+                dst = ei[1].clamp(0, max(0, seq_len - 1))
+                edge_valid = valid[:, src] & valid[:, dst]
+                batch_idx = torch.arange(batch_size, device=device).unsqueeze(1).expand(-1, src.numel())
+                adj[batch_idx[edge_valid], src.unsqueeze(0).expand(batch_size, -1)[edge_valid], dst.unsqueeze(0).expand(batch_size, -1)[edge_valid]] = 1.0
+                adj[batch_idx[edge_valid], dst.unsqueeze(0).expand(batch_size, -1)[edge_valid], src.unsqueeze(0).expand(batch_size, -1)[edge_valid]] = 1.0
+        elif edge_index.dim() == 3:
+            ei = edge_index.to(device=device, dtype=torch.long)
+            if int(ei.shape[1]) != 2:
+                raise ValueError(f"CrossAttention edge_index must have shape [B,2,E], got {tuple(ei.shape)}.")
+            if int(ei.shape[0]) == 1 and batch_size > 1:
+                ei = ei.expand(batch_size, -1, -1)
+            if int(ei.shape[0]) != batch_size:
+                raise ValueError(
+                    f"CrossAttention edge_index batch size {int(ei.shape[0])} does not match context batch {batch_size}."
+                )
+            if ei.numel() > 0:
+                src = ei[:, 0].clamp(0, max(0, seq_len - 1))
+                dst = ei[:, 1].clamp(0, max(0, seq_len - 1))
+                edge_valid = valid.gather(1, src) & valid.gather(1, dst)
+                batch_idx = torch.arange(batch_size, device=device).unsqueeze(1).expand_as(src)
+                adj[batch_idx[edge_valid], src[edge_valid], dst[edge_valid]] = 1.0
+                adj[batch_idx[edge_valid], dst[edge_valid], src[edge_valid]] = 1.0
+        else:
+            raise ValueError(
+                f"CrossAttention edge_index must have shape [2,E] or [B,2,E], got {tuple(edge_index.shape)}."
+            )
+
+        adj = (adj + eye).masked_fill(~valid_pair, 0.0)
+        deg = adj.sum(dim=-1).clamp(min=1.0)
+        inv_sqrt = deg.pow(-0.5)
+        norm_adj = inv_sqrt[:, :, None] * adj * inv_sqrt[:, None, :]
+        return norm_adj, valid
+
     def _refine_context_topology(
         self,
         context: Tensor,
@@ -300,87 +371,39 @@ class CrossAttention(nn.Module):
         if node_mask is not None and node_mask.dim() == 2 and node_mask.shape[0] == 1 and bsz > 1:
             node_mask = node_mask.expand(bsz, -1)
 
-        outputs: List[Tensor] = []
-        for bi in range(bsz):
-            xb = refined[bi]
-            if node_mask is not None and node_mask.dim() == 2 and bi < node_mask.shape[0]:
-                valid = node_mask[bi].to(dtype=torch.bool)
-                if valid.shape[0] > seq_len:
-                    valid = valid[:seq_len]
-                elif valid.shape[0] < seq_len:
-                    valid = F.pad(valid, (0, seq_len - valid.shape[0]), value=False)
-            else:
-                valid = torch.ones(seq_len, device=xb.device, dtype=torch.bool)
+        norm_adj, valid = self._batched_normalized_adjacency(
+            batch_size=bsz,
+            seq_len=seq_len,
+            edge_index=edge_index,
+            node_mask=node_mask,
+            device=context.device,
+            dtype=context.dtype,
+        )
+        h = refined
+        if self.topology_refinement_mode == "lightweight":
+            neigh = torch.bmm(norm_adj, h)
+            update = F.gelu(self.topology_light_self(h) + self.topology_light_neigh(neigh))
+            h = h + self.dropout(update)
+        else:
+            attn_mask = norm_adj > 0.0
+            for q_lin, k_lin, v_lin, o_lin in zip(
+                self.topology_gat_q,
+                self.topology_gat_k,
+                self.topology_gat_v,
+                self.topology_gat_o,
+            ):
+                q = q_lin(h)
+                k = k_lin(h)
+                v = v_lin(h)
+                scores = torch.bmm(q, k.transpose(1, 2)) / (q.shape[-1] ** 0.5)
+                scores = scores.masked_fill(~attn_mask, float("-inf"))
+                attn = torch.softmax(scores, dim=-1)
+                attn = torch.nan_to_num(attn, nan=0.0, posinf=0.0, neginf=0.0)
+                attn = self.dropout(attn)
+                update = o_lin(torch.bmm(attn, v))
+                h = h + self.dropout(F.gelu(update))
 
-            valid_idx = torch.nonzero(valid, as_tuple=False).flatten()
-            valid_count = int(valid_idx.numel())
-
-            if valid_count <= 0:
-                outputs.append(xb)
-                continue
-
-            if edge_index.dim() == 3:
-                if edge_index.shape[0] == bsz:
-                    ei = edge_index[bi]
-                elif edge_index.shape[0] == 1:
-                    ei = edge_index[0]
-                else:
-                    ei = edge_index[min(bi, edge_index.shape[0] - 1)]
-            else:
-                ei = edge_index
-
-            # Restrict message passing to valid tokens while preserving padded slots.
-            valid_x = xb.index_select(0, valid_idx)
-
-            if ei.numel() > 0:
-                src = ei[0].long()
-                dst = ei[1].long()
-                in_bounds = (src >= 0) & (src < seq_len) & (dst >= 0) & (dst < seq_len)
-                src = src[in_bounds]
-                dst = dst[in_bounds]
-
-                local_map = torch.full((seq_len,), -1, device=xb.device, dtype=torch.long)
-                local_map[valid_idx] = torch.arange(valid_count, device=xb.device, dtype=torch.long)
-                src_local = local_map[src]
-                dst_local = local_map[dst]
-                keep = (src_local >= 0) & (dst_local >= 0)
-                if bool(keep.any()):
-                    ei_local = torch.stack([src_local[keep], dst_local[keep]], dim=0)
-                else:
-                    ei_local = torch.empty((2, 0), device=xb.device, dtype=torch.long)
-            else:
-                ei_local = torch.empty((2, 0), device=xb.device, dtype=torch.long)
-
-            norm_adj = self._normalize_adjacency(valid_count, ei_local, device=valid_x.device, dtype=valid_x.dtype)
-
-            h = valid_x
-            if self.topology_refinement_mode == "lightweight":
-                neigh = norm_adj @ h
-                update = F.gelu(self.topology_light_self(h) + self.topology_light_neigh(neigh))
-                h = h + self.dropout(update)
-            else:
-                attn_mask = norm_adj > 0.0
-                for q_lin, k_lin, v_lin, o_lin in zip(
-                    self.topology_gat_q,
-                    self.topology_gat_k,
-                    self.topology_gat_v,
-                    self.topology_gat_o,
-                ):
-                    q = q_lin(h)
-                    k = k_lin(h)
-                    v = v_lin(h)
-                    scores = (q @ k.transpose(0, 1)) / (q.shape[-1] ** 0.5)
-                    scores = scores.masked_fill(~attn_mask, float("-inf"))
-                    attn = torch.softmax(scores, dim=-1)
-                    attn = self.dropout(attn)
-                    update = o_lin(attn @ v)
-                    h = h + self.dropout(F.gelu(update))
-
-            full = xb.clone()
-            full[valid_idx] = h
-            outputs.append(full)
-
-        return torch.stack(outputs, dim=0)
+        return torch.where(valid[:, :, None], h, refined)
     
     def forward(
         self,
@@ -1879,6 +1902,47 @@ class LatentDiffusionModel(nn.Module):
         self.attention_mode = normalized
         return updated
 
+    def set_spatial_attention_capture(self, enabled: bool = True) -> int:
+        """Enable differentiable graph-grid attention capture in every spatial conditioner."""
+        updated = 0
+        for module in self.modules():
+            if isinstance(module, SpatialGraphConditioner):
+                module.set_attention_capture(enabled)
+                updated += 1
+        return updated
+
+    def spatial_alignment_loss(
+        self,
+        node_indices: Tensor,
+        target_positions: Tensor,
+        valid_mask: Optional[Tensor] = None,
+        *,
+        reduce_heads: str = "mean",
+        eps: float = 1e-8,
+    ) -> Tensor:
+        """Aggregate spatial graph-node alignment losses from captured conditioner maps."""
+        losses: List[Tensor] = []
+        for module in self.modules():
+            if not isinstance(module, SpatialGraphConditioner):
+                continue
+            graph_attn = module.graph_cross_attn
+            if graph_attn.last_attention_weights_for_loss is None:
+                continue
+            losses.append(
+                module.spatial_alignment_loss(
+                    node_indices,
+                    target_positions,
+                    valid_mask=valid_mask,
+                    reduce_heads=reduce_heads,
+                    eps=eps,
+                )
+            )
+        if not losses:
+            raise RuntimeError(
+                "Spatial alignment loss was requested, but no SpatialGraphConditioner captured softmax attention maps."
+            )
+        return torch.stack(losses).mean()
+
     def get_attention_mode(self) -> str:
         """Get current attention kernel from first CrossAttention layer."""
         for module in self.modules():
@@ -2289,6 +2353,8 @@ class LatentDiffusionModel(nn.Module):
         if self.guidance.logic_net is None or self.guidance.guidance_scale <= 0:
             return pred_x0, pred_noise
 
+        self._sync_logic_temperature_to_timestep(int(t))
+
         guidance_grad = self.guidance.compute_guidance(
             pred_x0,
             graph_data,
@@ -2301,6 +2367,17 @@ class LatentDiffusionModel(nn.Module):
         if float(sqrt_one_minus_alpha_t.detach().abs().item()) > 1e-8:
             pred_noise = (x_t - sqrt_alpha_t * pred_x0) / torch.clamp(sqrt_one_minus_alpha_t, min=1e-8)
         return pred_x0, pred_noise
+
+    def _sync_logic_temperature_to_timestep(self, t: int) -> None:
+        """Anneal LogicNet sharpness from soft at high noise to sharp near x0."""
+        logic_net = self.guidance.logic_net
+        if logic_net is None or not hasattr(logic_net, "update_temperature"):
+            return
+        try:
+            sqrt_alpha = float(self.sqrt_alphas_cumprod[int(t)].detach().clamp(0.0, 1.0).item())
+            logic_net.update_temperature(sqrt_alpha)
+        except (AttributeError, RuntimeError, ValueError, TypeError):
+            logger.debug("Skipping timestep-synced LogicNet temperature update", exc_info=True)
     
     def p_mean_variance(
         self,
@@ -2372,6 +2449,7 @@ class LatentDiffusionModel(nn.Module):
         # μ̃ = μ - s·Σ·∇L_logic (gradient descent on logic loss)
         # Scaling by variance ensures consistent guidance strength across timesteps.
         if self.guidance.logic_net is not None and self.guidance.guidance_scale > 0:
+            self._sync_logic_temperature_to_timestep(int(t))
             guidance_grad = self.guidance.compute_guidance(
                 x_t,
                 graph_data,
@@ -2785,17 +2863,45 @@ class LatentDiffusionModel(nn.Module):
         # Get noisy samples
         x_t = self.q_sample(x_0, t, noise)
         
+        alignment_weight = 0.0
+        alignment_node_indices = None
+        alignment_positions = None
+        alignment_valid_mask = None
+        if isinstance(graph_data, dict):
+            alignment_weight = float(graph_data.get("spatial_alignment_weight", 0.0) or 0.0)
+            alignment_node_indices = graph_data.get("spatial_alignment_node_indices")
+            alignment_positions = graph_data.get("spatial_alignment_positions")
+            alignment_valid_mask = graph_data.get("spatial_alignment_valid_mask")
+        use_spatial_alignment = (
+            alignment_weight > 0.0
+            and isinstance(alignment_node_indices, torch.Tensor)
+            and isinstance(alignment_positions, torch.Tensor)
+        )
+
+        if use_spatial_alignment:
+            updated = self.set_spatial_attention_capture(True)
+            if updated <= 0:
+                raise RuntimeError("Spatial alignment was requested, but the denoiser has no SpatialGraphConditioner modules.")
+
         # Predict
         context_edge_index, context_node_mask = self._extract_context_topology(context, graph_data)
         spatial_graph_data = self._extract_spatial_graph_context(context, graph_data)
-        prediction = self.denoiser(
-            x_t,
-            t,
-            context,
-            context_edge_index=context_edge_index,
-            context_node_mask=context_node_mask,
-            spatial_graph_data=spatial_graph_data,
-        )
+        try:
+            prediction = self.denoiser(
+                x_t,
+                t,
+                context,
+                context_edge_index=context_edge_index,
+                context_node_mask=context_node_mask,
+                spatial_graph_data=spatial_graph_data,
+            )
+        except Exception:
+            if use_spatial_alignment:
+                self.set_spatial_attention_capture(False)
+            raise
+        finally:
+            if not use_spatial_alignment:
+                self.set_spatial_attention_capture(False)
         
         # --- Phase 1C: Build target based on prediction_type ---
         if self.prediction_type == 'v':
@@ -2818,6 +2924,20 @@ class LatentDiffusionModel(nn.Module):
             per_sample_loss = per_sample_loss * min_snr_weight
         
         loss = per_sample_loss.mean()
+        if use_spatial_alignment:
+            try:
+                alignment_loss = self.spatial_alignment_loss(
+                    alignment_node_indices.to(device=device),
+                    alignment_positions.to(device=device),
+                    valid_mask=(
+                        alignment_valid_mask.to(device=device)
+                        if isinstance(alignment_valid_mask, torch.Tensor)
+                        else None
+                    ),
+                )
+                loss = loss + float(alignment_weight) * alignment_loss
+            finally:
+                self.set_spatial_attention_capture(False)
         
         return loss
 

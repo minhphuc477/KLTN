@@ -89,6 +89,46 @@ class TestPathAnalyzer:
 
         assert not any(f.failure_type == "missing_boss_key" for f in failures)
 
+    def test_analyze_graph_consumes_small_keys_across_locked_edges(self):
+        """One collected small key should not open two later locked edges."""
+        import networkx as nx
+        from src.core.symbolic_refiner import PathAnalyzer
+
+        analyzer = PathAnalyzer()
+        graph = nx.DiGraph()
+        graph.add_node(0, label="s")
+        graph.add_node(1, label="key")
+        graph.add_node(2, label="")
+        graph.add_node(3, label="t")
+        graph.add_edge(0, 1, edge_type="open")
+        graph.add_edge(1, 2, edge_type="locked")
+        graph.add_edge(2, 3, edge_type="locked")
+
+        failures = analyzer.analyze_graph(graph, 0, 3)
+
+        assert any(f.failure_type == "missing_key" for f in failures)
+
+    def test_analyze_graph_accepts_path_with_enough_small_keys(self):
+        """Two small keys should open two later locked edges in inventory order."""
+        import networkx as nx
+        from src.core.symbolic_refiner import PathAnalyzer
+
+        analyzer = PathAnalyzer()
+        graph = nx.DiGraph()
+        graph.add_node(0, label="s")
+        graph.add_node(1, label="key")
+        graph.add_node(2, label="small_key")
+        graph.add_node(3, label="")
+        graph.add_node(4, label="t")
+        graph.add_edge(0, 1, edge_type="open")
+        graph.add_edge(1, 2, edge_type="open")
+        graph.add_edge(2, 3, edge_type="locked")
+        graph.add_edge(3, 4, edge_type="locked")
+
+        failures = analyzer.analyze_graph(graph, 0, 4)
+
+        assert failures == []
+
 
 class TestEntropyReset:
     """Tests for entropy reset mask creation."""
@@ -408,6 +448,29 @@ class TestWFCState:
         # Entropy of uniform distribution over 2 items
         expected = 1.0  # log2(2) = 1
         assert abs(entropy - expected) < 0.1
+
+    def test_entropy_at_uses_row_col_order(self):
+        from src.core.symbolic_refiner import WFCState
+
+        grid = np.zeros((2, 3, 2), dtype=np.float32)
+        grid[:, :, :] = [1.0, 0.0]
+        grid[1, 2, :] = [0.5, 0.5]
+        state = WFCState(
+            grid=grid,
+            collapsed=np.zeros((2, 3), dtype=bool),
+            tile_types=[0, 1],
+            adjacency={},
+        )
+
+        assert state.entropy_at(1, 2) == pytest.approx(1.0)
+        assert state.entropy_at(0, 1) == pytest.approx(0.0)
+
+    def test_default_adjacency_does_not_force_entity_self_adjacency(self):
+        from src.core.symbolic_refiner import DEFAULT_ADJACENCY, TileType
+
+        assert TileType.FLOOR.value in DEFAULT_ADJACENCY[TileType.FLOOR.value]
+        assert TileType.START.value not in DEFAULT_ADJACENCY[TileType.START.value]
+        assert TileType.TRIFORCE.value not in DEFAULT_ADJACENCY[TileType.TRIFORCE.value]
     
     def test_get_options(self):
         """Test getting tile options."""

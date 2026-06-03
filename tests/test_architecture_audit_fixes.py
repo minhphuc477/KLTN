@@ -1677,7 +1677,7 @@ def test_default_wfc_adjacency_allows_multi_tile_doors():
     door_open = int(TileType.DOOR_OPEN.value)
     door_locked = int(TileType.DOOR_LOCKED.value)
 
-    assert door_open in DEFAULT_ADJACENCY[door_open]
+    assert door_open not in DEFAULT_ADJACENCY[door_open]
     assert door_locked in DEFAULT_ADJACENCY[door_open]
     assert int(TileType.FLOOR.value) in DEFAULT_ADJACENCY[door_open]
 

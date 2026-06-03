@@ -853,6 +853,8 @@ def test_diffusion_helper_preserves_yaml_only_methodology_knobs(tmp_path: Path):
     assert kwargs["condition_reference_hidden_dim"] == 48
     assert kwargs["logic_topology_trace_weight"] == pytest.approx(0.6)
     assert kwargs["logic_topology_anchor_weight"] == pytest.approx(0.3)
+    assert kwargs["alpha_logic_tile"] == pytest.approx(0.05)
+    assert kwargs["graph_spatial_alignment_weight"] == pytest.approx(0.0)
     assert kwargs["seed"] == 42
 
 
@@ -931,8 +933,12 @@ def test_diffusion_trainer_updates_config_to_loaded_vqvae_architecture(tmp_path:
         vqvae_mrf_penalty_weight=0.125,
     )
 
-    with pytest.raises(ValueError, match="metadata mismatch for codebook_size"):
-        trainer._create_vqvae()
+    loaded = trainer._create_vqvae()
+
+    assert loaded is not None
+    assert trainer.config.vqvae_codebook_size == 512
+    assert trainer.config.vqvae_use_coordconv is True
+    assert trainer.config.vqvae_mrf_penalty_weight == pytest.approx(0.05)
 
 
 def test_build_diffusion_training_config_from_args_preserves_yaml_only_methodology_knobs(tmp_path: Path):

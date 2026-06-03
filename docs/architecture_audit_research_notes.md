@@ -56,6 +56,40 @@ still required.
   Dynamic block occupancy therefore has to be resolved from search state, not
   only from the immutable source grid:
   https://webdocs.cs.ualberta.ca/~games/Sokoban/thegame.html.
+- PyTorch autograd grad modes are nested context managers; `no_grad` is useful
+  for explicit non-recorded operations, while local grad-enabled regions should
+  be stated directly in code that may run guidance:
+  https://docs.pytorch.org/docs/stable/notes/autograd.html and
+  https://docs.pytorch.org/docs/2.11/generated/torch.no_grad.html.
+- PyTorch documents `index_copy_` separately from `torch.autograd.grad`; the
+  revision fix keeps the functional `index_copy` path and adds a regression
+  test that gradients reach the copied source tensor:
+  https://docs.pytorch.org/docs/stable/generated/torch.Tensor.index_copy_.html
+  and https://docs.pytorch.org/docs/stable/generated/torch.autograd.grad.html.
+- Diffusion posterior sampling motivates guidance on clean/posterior-mean
+  predictions rather than arbitrary noisy states for inverse-problem-style
+  constraints: Chung et al., "Diffusion Posterior Sampling for General Noisy
+  Inverse Problems", https://arxiv.org/abs/2209.14687.
+- Classifier-free guidance is a separate sampling-time guidance family from
+  classifier/DPS-style external-gradient guidance: Ho and Salimans,
+  "Classifier-Free Diffusion Guidance", https://arxiv.org/abs/2207.12598.
+- PyTorch batched matrix multiplication and boolean masking support replacing
+  per-sample topology loops with dense padded adjacency for the small graph
+  sizes used by room-token conditioning:
+  https://docs.pytorch.org/docs/stable/generated/torch.bmm.html and
+  https://docs.pytorch.org/docs/stable/notes/broadcasting.html.
+- Spatial attention supervision is a standard way to make attention maps serve
+  as grounding/alignment signals instead of only diagnostics; the implemented
+  graph-node alignment loss follows the same negative-log-attention form used
+  by attention-transfer and visual-grounding objectives:
+  Zagoruyko and Komodakis, "Paying More Attention to Attention",
+  https://arxiv.org/abs/1612.03928.
+- Lock/key progression is a state-space reachability problem when keys can be
+  collected and consumed. The implemented graph analyzer therefore searches
+  `(node, small_key_count, has_boss_key)` states rather than validating only a
+  static shortest path. This matches the general BFS/state-augmentation pattern
+  for inventory-constrained planning:
+  https://www.redblobgames.com/pathfinding/a-star/introduction.html.
 
 ## Implementation Implications
 
@@ -97,3 +131,53 @@ still required.
 - Advanced pipeline fun evaluation follows a resolved start-to-goal graph path,
   receives the NetworkX graph expected by the evaluator, and retains graph and
   entity semantics for bosses, goals, puzzles, locks, rewards, and recovery.
+- Revision 2 fixes added supervised LogicNet tile-classifier loss during
+  diffusion training, so the latent-to-tile projection used by guidance is no
+  longer left as a random module when `logic_net_trainable` is enabled.
+- LogicNet grid supervision no longer falls back to an all-door source mask
+  when topology is absent. It uses a single current walkability source, avoiding
+  false supervision that every unconditioned room should connect all doors.
+- LogicNet temperature annealing now propagates to the grid pathfinder and
+  sampling synchronizes temperature to denoising confidence: high noise keeps
+  the constraint soft, while near-clean steps sharpen it.
+- WFC tile IDs are derived from `SEMANTIC_PALETTE`; row/col entropy access is
+  explicit through `entropy_at(row, col)`; and default adjacency no longer
+  forces entity/door self-adjacency.
+- Context-token topology refinement now builds a batched dense normalized
+  adjacency with node-mask-aware padded rows/columns, then uses `torch.bmm` for
+  both lightweight graph convolution and GAT-style topology refinement. This
+  removes the previous per-sample refinement loop while preserving support for
+  `[2,E]`, `[1,2,E]`, and `[B,2,E]` edge-index forms.
+- Graph-to-grid attention capture now has two paths: detached CPU maps for
+  visualization remain available through `get_last_attention_map`, while
+  `spatial_alignment_loss` keeps an opt-in differentiable attention tensor for
+  real training loss. `LatentDiffusionModel.training_loss` accepts
+  `spatial_alignment_node_indices`, `spatial_alignment_positions`, optional
+  `spatial_alignment_valid_mask`, and nonzero `spatial_alignment_weight` in
+  `graph_data`.
+- Diffusion config now validates `alpha_logic_tile` and
+  `graph_spatial_alignment_weight`, and CLI training exposes
+  `--alpha-logic-tile` and `--graph-spatial-alignment-weight`.
+- Symbolic graph validation now performs inventory-state BFS. Small keys are
+  consumed by `locked` / `key_locked` edges, boss-key access is tracked as a
+  boolean, and failure reports distinguish `missing_key` from
+  `missing_boss_key`.
+- `scripts/train_logicnet_tile_classifier.py` trains only the LogicNet tile
+  classifier on frozen VQ-VAE latents, writes checkpoint and JSON metrics, and
+  fails the run when validation accuracy is below `--min-accuracy` unless
+  `--no-enforce-threshold` is set.
+- `scripts/generate_logic_loss_ablation_manifest.py` writes named config files
+  for full, no tile classifier, no topology trace/anchor, no global graph
+  reach, no global room lift, no spatial alignment, and no logic-grid-reach
+  variants. These files are intended to be run with identical seeds and
+  Dungeon 9 holdout reporting.
+
+## Validation Commands
+
+- `python -m py_compile src/core/graph_grid_attention.py src/core/latent_diffusion.py src/core/symbolic_refiner.py src/train_diffusion.py scripts/train_logicnet_tile_classifier.py scripts/generate_logic_loss_ablation_manifest.py`
+- `python -m pytest tests/test_ml_components.py::TestGraphGridAttention tests/test_audit_regressions.py::test_context_topology_refinement_uses_batched_padded_adjacency tests/test_hmolqd/test_symbolic_refiner.py::TestPathAnalyzer::test_analyze_graph_consumes_small_keys_across_locked_edges tests/test_hmolqd/test_symbolic_refiner.py::TestPathAnalyzer::test_analyze_graph_accepts_path_with_enough_small_keys -q`
+- `python -m pytest tests/test_train_diffusion_conditioning_shapes.py::test_predicted_latent_logic_branch_backpropagates_from_vqvae_decode_to_unet -q`
+- `python -m pytest tests/test_config_system.py::test_diffusion_helper_preserves_yaml_only_methodology_knobs tests/test_audit_regressions.py tests/test_hmolqd/test_symbolic_refiner.py::TestPathAnalyzer tests/test_ml_components.py::TestGraphGridAttention tests/test_train_diffusion_conditioning_shapes.py::test_predicted_latent_logic_branch_backpropagates_from_vqvae_decode_to_unet -q`
+- `python scripts/train_logicnet_tile_classifier.py --help`
+- `python scripts/generate_logic_loss_ablation_manifest.py --help`
+- Final broad regression: `python -m pytest tests/test_audit_regressions.py tests/test_architecture_audit_fixes.py tests/test_logicnet_fixes.py tests/test_train_diffusion_conditioning_shapes.py tests/test_hmolqd/test_symbolic_refiner.py tests/test_hmolqd/test_gaussian_vae.py tests/test_ml_components.py tests/test_config_system.py -q` passed with 212 tests.

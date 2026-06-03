@@ -9,7 +9,7 @@ from pydantic import ValidationError
 
 from src.config_system import merge_config
 from src.core.graph_grid_attention import GraphToGridCrossAttention
-from src.core.latent_diffusion import ResBlock, create_latent_diffusion
+from src.core.latent_diffusion import CrossAttention, ResBlock, create_latent_diffusion
 from src.core.logic_net import LogicNet, SoftBellmanFordGridPathfinder
 from src.evaluation import compare_tile_pattern_distributions
 from src.pipeline.config_schema import validate_config_payload
@@ -38,6 +38,44 @@ def test_graph_to_grid_attention_can_capture_softmax_maps():
     assert attention is not None
     assert attention.shape == (1, 4, 3, 5)
     assert torch.allclose(attention.sum(dim=-1), torch.ones(1, 4, 3), atol=1e-5)
+
+
+def test_context_topology_refinement_uses_batched_padded_adjacency():
+    attention = CrossAttention(
+        query_dim=8,
+        context_dim=8,
+        num_heads=2,
+        topology_refinement_mode="lightweight",
+    )
+    context = torch.randn(2, 4, 8)
+    edge_index = torch.tensor(
+        [
+            [[0, 1, 2], [1, 2, 3]],
+            [[0, 1, -1], [1, 0, -1]],
+        ],
+        dtype=torch.long,
+    )
+    node_mask = torch.tensor([[1, 1, 1, 1], [1, 1, 0, 0]], dtype=torch.float32)
+
+    refined = attention._refine_context_topology(
+        context,
+        edge_index=edge_index,
+        node_mask=node_mask,
+    )
+
+    assert refined.shape == context.shape
+    assert torch.isfinite(refined).all()
+    norm_adj, valid = attention._batched_normalized_adjacency(
+        batch_size=2,
+        seq_len=4,
+        edge_index=edge_index,
+        node_mask=node_mask,
+        device=context.device,
+        dtype=context.dtype,
+    )
+    assert valid.tolist() == [[True, True, True, True], [True, True, False, False]]
+    assert torch.all(norm_adj[1, 2:] == 0)
+    assert torch.all(norm_adj[1, :, 2:] == 0)
 
 
 def test_logic_net_supports_explicit_bellman_ford_grid_pathfinder():

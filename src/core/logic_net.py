@@ -1541,6 +1541,11 @@ class LogicNet(nn.Module):
         self.graph_pathfinder.temperature = tau
         self.reachability.temperature = tau
         self.key_lock.temperature = tau
+        if hasattr(self.grid_pathfinder, "temperature"):
+            self.grid_pathfinder.temperature = tau
+        nested_pathfinder = getattr(self.grid_pathfinder, "pathfinder", None)
+        if nested_pathfinder is not None and hasattr(nested_pathfinder, "temperature"):
+            nested_pathfinder.temperature = tau
 
     def anneal_temperature(self, step_fraction: float):
         """Alias used by training scripts and experiment protocols."""
@@ -1637,7 +1642,10 @@ class LogicNet(nn.Module):
         )
         source_mask = room_logic_targets.get("source_mask")
         if source_mask is None:
-            source_mask = self._create_door_source_mask(B, device)
+            source_mask = self._create_single_cell_source_mask(walkability)
+            info["source_mask_mode"] = "single_walkable_cell"
+        else:
+            info["source_mask_mode"] = "topology"
 
         grid_distances = self.grid_pathfinder(
             tile_logits,
@@ -1736,6 +1744,18 @@ class LogicNet(nn.Module):
                 if row_end >= row_start:
                     mask[:, :, row_start:row_end + 1, col] = 1.0
 
+        return mask
+
+    def _create_single_cell_source_mask(self, walkability: Tensor) -> Tensor:
+        """Create one source per sample from the currently most-walkable cell."""
+        if walkability.dim() != 4 or int(walkability.shape[1]) != 1:
+            raise ValueError(f"walkability must be [B,1,H,W], got {tuple(walkability.shape)}.")
+        B, _C, H, W = walkability.shape
+        flat_idx = walkability.detach().view(B, -1).argmax(dim=1)
+        mask = torch.zeros(B, 1, H, W, device=walkability.device, dtype=walkability.dtype)
+        rows = flat_idx // W
+        cols = flat_idx % W
+        mask[torch.arange(B, device=walkability.device), 0, rows, cols] = 1.0
         return mask
     
     def get_gradient(

@@ -6,6 +6,9 @@ import pytest
 import torch
 
 from src.core.definitions import GRAPH_EDGE_FEATURE_DIM, ROOM_HEIGHT, ROOM_TOPOLOGY_CHANNEL_COUNT, ROOM_WIDTH
+from src.core.latent_diffusion import create_latent_diffusion
+from src.core.logic_net import LogicNet
+from src.core.vqvae import create_vqvae
 from src.train_diffusion import DiffusionTrainer
 from src.utils.frozen_latent_cache import FrozenLatentCache
 
@@ -135,6 +138,100 @@ def test_configure_guidance_does_not_register_logic_net_inside_diffusion_state()
     assert guidance.logic_net is logic_net
     assert "logic_net" not in guidance._modules
     assert not any("logic_net" in key for key in diffusion.state_dict())
+
+
+def test_predicted_latent_logic_branch_backpropagates_from_vqvae_decode_to_unet():
+    torch.manual_seed(7)
+    trainer = DiffusionTrainer.__new__(DiffusionTrainer)
+    trainer.device = torch.device("cpu")
+    trainer.config = SimpleNamespace(
+        num_classes=44,
+        latent_dim=4,
+        alpha_visual=1.0,
+        alpha_logic=0.1,
+        alpha_logic_tile=0.0,
+        logic_net_enabled=True,
+        logic_net_trainable=True,
+        logic_loss_mode="predicted_latent",
+        grad_clip_norm=0.0,
+        latent_cache_enabled=False,
+        latent_cache_max_items=0,
+        graph_spatial_alignment_weight=0.0,
+        epochs=1,
+        learning_rate=1e-3,
+    )
+    trainer.vqvae = create_vqvae(
+        num_classes=44,
+        latent_dim=4,
+        hidden_dim=8,
+        codebook_size=8,
+        use_coordconv=False,
+    )
+    trainer.vqvae.eval()
+    for param in trainer.vqvae.parameters():
+        param.requires_grad = False
+    trainer.diffusion = create_latent_diffusion(
+        latent_dim=4,
+        context_dim=8,
+        num_timesteps=4,
+        model_channels=8,
+        unet_channel_mult=(1,),
+        unet_num_res_blocks=1,
+        unet_attention_resolutions=(),
+        unet_num_heads=1,
+        cfg_dropout_prob=0.0,
+        room_topology_channels=ROOM_TOPOLOGY_CHANNEL_COUNT,
+        min_snr_gamma=0.0,
+    )
+    trainer.model = trainer.diffusion
+    trainer.condition_encoder = torch.nn.Linear(1, 1)
+    trainer.logic_net = LogicNet(latent_dim=4, hidden_dim=8, num_classes=44, num_iterations=2)
+    trainer.optimizer = torch.optim.AdamW(
+        list(trainer.diffusion.parameters())
+        + list(trainer.condition_encoder.parameters())
+        + list(trainer.logic_net.parameters()),
+        lr=1e-3,
+    )
+    for group in trainer.optimizer.param_groups:
+        group.setdefault("base_lr", 1e-3)
+    trainer.ema_diffusion = create_latent_diffusion(
+        latent_dim=4,
+        context_dim=8,
+        num_timesteps=4,
+        model_channels=8,
+        unet_channel_mult=(1,),
+        unet_num_res_blocks=1,
+        unet_attention_resolutions=(),
+        unet_num_heads=1,
+        cfg_dropout_prob=0.0,
+        room_topology_channels=ROOM_TOPOLOGY_CHANNEL_COUNT,
+        min_snr_gamma=0.0,
+    )
+    trainer.ema_decay = 0.0
+    trainer.global_step = 0
+    trainer._estimated_total_steps = 1
+    trainer._latent_cache = FrozenLatentCache(enabled=False, max_items=0)
+    trainer.distributed_context = None
+    trainer._nonfinite_warning_counts = {}
+
+    real_maps = torch.randint(0, 44, (1, 1, ROOM_HEIGHT, ROOM_WIDTH), dtype=torch.float32)
+    conditioning = torch.zeros(1, 8)
+
+    metrics = DiffusionTrainer.train_step(
+        trainer,
+        real_maps,
+        conditioning=conditioning,
+        include_logic_loss=True,
+    )
+
+    unet_grad_norm = sum(
+        float(param.grad.detach().abs().sum().item())
+        for param in trainer.diffusion.denoiser.parameters()
+        if param.grad is not None
+    )
+    assert float(metrics.get("skipped_nonfinite_batch", 0.0)) == 0.0
+    assert metrics["logic_loss"] >= 0.0
+    assert unet_grad_norm > 0.0
 
 
 class _TinyModule(torch.nn.Module):
@@ -898,6 +995,70 @@ def test_train_step_predicted_latent_decodes_to_tile_logits_for_logic_loss():
     assert trainer.vqvae.decode_calls == 1
     assert trainer.vqvae.last_latent_requires_grad is True
     assert trainer.logic_net.last_shape == (2, 44, ROOM_HEIGHT, ROOM_WIDTH)
+
+
+def test_train_step_trains_logicnet_tile_classifier_when_enabled():
+    class _TileClassifierLogicNet(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.tile_classifier = torch.nn.Conv2d(4, 44, kernel_size=1)
+            self.last_loss_input_shape = None
+
+        def _project_tile_logits_to_room(self, logits):
+            return torch.nn.functional.interpolate(
+                logits,
+                size=(ROOM_HEIGHT, ROOM_WIDTH),
+                mode="bilinear",
+                align_corners=False,
+            )
+
+        def forward(self, z_input, graph_data=None):
+            _ = graph_data
+            self.last_loss_input_shape = tuple(z_input.shape)
+            return z_input[:, 1].mean(), {}
+
+    trainer = DiffusionTrainer.__new__(DiffusionTrainer)
+    trainer.device = torch.device("cpu")
+    trainer.config = SimpleNamespace(
+        num_classes=44,
+        alpha_visual=1.0,
+        alpha_logic=0.1,
+        alpha_logic_tile=0.5,
+        logic_loss_mode="predicted_latent",
+        logic_net_enabled=True,
+        grad_clip_norm=1.0,
+        epochs=1,
+        learning_rate=1e-3,
+        global_lr_warmup_epochs=0,
+        logic_lr_warmup_epochs=0,
+        logic_net_trainable=True,
+    )
+    trainer.diffusion = _TinyDiffusionWithDenoiser()
+    trainer.condition_encoder = _TinyModule()
+    trainer.logic_net = _TileClassifierLogicNet()
+    trainer.vqvae = _DecodeTrackingVQVAE()
+    trainer.ema_diffusion = _DummyEvalModel()
+    trainer.optimizer = torch.optim.SGD(
+        list(trainer.diffusion.parameters())
+        + list(trainer.condition_encoder.parameters())
+        + list(trainer.logic_net.parameters()),
+        lr=1e-3,
+    )
+    trainer.global_step = 0
+    trainer._nonfinite_warning_counts = {}
+    trainer.encode_to_latent = lambda real_maps: torch.zeros(
+        (real_maps.shape[0], 4, 2, 2),
+        dtype=torch.float32,
+    )
+    trainer.get_dummy_conditioning = lambda batch_size: torch.zeros((batch_size, 1, 8), dtype=torch.float32)
+    maps = torch.zeros((2, 1, ROOM_HEIGHT, ROOM_WIDTH), dtype=torch.float32)
+    maps[:, :, 2:6, 2:6] = 1.0 / 43.0
+
+    metrics = DiffusionTrainer.train_step(trainer, maps)
+
+    assert metrics["logic_tile_loss"] > 0.0
+    assert 0.0 <= metrics["logic_tile_accuracy"] <= 1.0
+    assert trainer.logic_net.tile_classifier.weight.grad is not None
 
 
 def test_validate_skips_nonfinite_generated_samples():

@@ -36,6 +36,26 @@ import torch.nn.functional as F
 
 logger = logging.getLogger(__name__)
 
+_COMBINED_LOGIC_HELPER_CACHE: Dict[Tuple[str, Optional[int], torch.dtype, int], Tuple[nn.Module, nn.Module]] = {}
+
+
+def _get_combined_logic_helpers(
+    *,
+    device: torch.device,
+    dtype: torch.dtype,
+    num_iterations: int,
+) -> Tuple[nn.Module, nn.Module]:
+    from src.core.logic_net import DifferentiablePathfinder, ReachabilityScorer
+
+    key = (device.type, device.index, dtype, int(num_iterations))
+    helpers = _COMBINED_LOGIC_HELPER_CACHE.get(key)
+    if helpers is None:
+        pathfinder = DifferentiablePathfinder(num_iterations=int(num_iterations)).to(device=device)
+        scorer = ReachabilityScorer().to(device=device)
+        helpers = (pathfinder, scorer)
+        _COMBINED_LOGIC_HELPER_CACHE[key] = helpers
+    return helpers
+
 
 class SoftBellmanFord(nn.Module):
     """
@@ -315,7 +335,7 @@ class InventoryAwareLogicNet(nn.Module):
             [0.0, 1.0, 0.0]
         ]).unsqueeze(0).unsqueeze(0)
         
-        self.register_buffer('kernel', cardinal_kernel / 4.0)
+        self.register_buffer('kernel', cardinal_kernel)
         
         # Learnable gate for locked doors (how much keys "unlock")
         self.key_gate = nn.Parameter(torch.tensor(0.8))
@@ -485,7 +505,7 @@ class DifferentiableTortuosity(nn.Module):
             [1.0, 0.0, 1.0],
             [0.0, 1.0, 0.0]
         ]).unsqueeze(0).unsqueeze(0)
-        self.register_buffer('kernel', cardinal_kernel / 4.0)
+        self.register_buffer('kernel', cardinal_kernel)
     
     def compute_soft_path_length(
         self,
@@ -718,6 +738,8 @@ def combined_logic_loss(
     tortuosity_weight: float = 0.3,
     target_tortuosity: float = 1.5,
     logic_net: Optional[nn.Module] = None,
+    pathfinder: Optional[nn.Module] = None,
+    reachability_scorer: Optional[nn.Module] = None,
 ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
     """
     Combined loss for solvability + path quality.
@@ -740,8 +762,6 @@ def combined_logic_loss(
     # canonical Block V differentiable pathfinder instead of instantiating the
     # legacy reachability-flow module.
     if logic_net is None:
-        from src.core.logic_net import DifferentiablePathfinder, ReachabilityScorer
-
         if probability_map.dim() != 4 or int(probability_map.shape[1]) != 1:
             raise ValueError(f"probability_map must be [B,1,H,W], got {tuple(probability_map.shape)}.")
         B, _C, H, W = probability_map.shape
@@ -750,14 +770,20 @@ def combined_logic_loss(
         for i, ((sr, sc), (gr, gc)) in enumerate(zip(start_coords, goal_coords)):
             start_mask[i, max(0, min(int(sr), H - 1)), max(0, min(int(sc), W - 1))] = 1.0
             goal_mask[i, max(0, min(int(gr), H - 1)), max(0, min(int(gc), W - 1))] = 1.0
-        pathfinder = DifferentiablePathfinder(num_iterations=30).to(probability_map.device)
-        scorer = ReachabilityScorer().to(probability_map.device)
+        if pathfinder is None or reachability_scorer is None:
+            cached_pathfinder, cached_scorer = _get_combined_logic_helpers(
+                device=probability_map.device,
+                dtype=probability_map.dtype,
+                num_iterations=30,
+            )
+            pathfinder = cached_pathfinder if pathfinder is None else pathfinder
+            reachability_scorer = cached_scorer if reachability_scorer is None else reachability_scorer
         distances = pathfinder(
             probability_map[:, 0].clamp(0.0, 1.0),
             torch.ones_like(probability_map[:, 0]),
             start_mask,
         )
-        solvability_scores = scorer(distances.view(B, -1), goal_mask.view(B, -1))
+        solvability_scores = reachability_scorer(distances.view(B, -1), goal_mask.view(B, -1))
     else:
         solvability_scores = logic_net(probability_map, start_coords, goal_coords)
     solv_loss = solvability_loss(solvability_scores)
