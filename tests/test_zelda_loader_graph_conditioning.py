@@ -2,16 +2,19 @@ from types import SimpleNamespace
 
 import networkx as nx
 import numpy as np
+import pytest
 import torch
 
 from src.core.definitions import (
     GRAPH_EDGE_FEATURE_DIM,
     GRAPH_NODE_FEATURE_DIM,
+    GRAPH_TPE_DIM,
     ROOM_HEIGHT,
     ROOM_TOPOLOGY_CHANNEL_COUNT,
     ROOM_WIDTH,
     SEMANTIC_PALETTE,
 )
+from src.pipeline.graph_features import compute_rrwp_edge_features
 from src.pipeline.spatial_utils import fit_room_grid
 from src.pipeline.room_topology_conditioning import (
     ROOM_TOPOLOGY_CHANNELS,
@@ -60,12 +63,30 @@ def test_dungeon_dataset_getitem_preserves_spatial_graph_fields():
 
     assert "tpe" in graph
     assert "edge_features" in graph
+    assert "edge_rrwp" in graph
     assert "node_positions" in graph
     assert tuple(graph["node_features"].shape) == (2, GRAPH_NODE_FEATURE_DIM)
     assert tuple(graph["edge_features"].shape) == (1, GRAPH_EDGE_FEATURE_DIM)
+    assert tuple(graph["edge_rrwp"].shape) == (1, GRAPH_TPE_DIM)
     assert tuple(graph["tpe"].shape) == (2, 8)
     assert tuple(graph["node_positions"].shape) == (2, 2)
     assert graph["node_to_idx"] == {10: 0, 20: 1}
+
+
+def test_compute_rrwp_edge_features_preserves_edge_order_and_invalid_rows():
+    edge_index = torch.tensor([[0, 99, 1], [1, 0, 2]], dtype=torch.long)
+
+    rrwp = compute_rrwp_edge_features(
+        edge_index,
+        num_nodes=3,
+        steps=2,
+        device=torch.device("cpu"),
+    )
+
+    assert tuple(rrwp.shape) == (3, 2)
+    assert rrwp[0, 0].item() == pytest.approx(0.5)
+    assert rrwp[1].sum().item() == pytest.approx(0.0)
+    assert rrwp[2, 0].item() == pytest.approx(0.5)
 
 
 def test_room_graph_sample_builds_room_topology_from_dataset_graph():

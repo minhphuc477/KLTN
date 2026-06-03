@@ -140,6 +140,23 @@ def test_p_sample_guides_pred_x0_before_rebuilding_posterior(monkeypatch):
     assert torch.allclose(out, torch.full_like(out, -1.0))
 
 
+def test_min_snr_gamma_defaults_to_five_and_clamps_snr_weights():
+    model = create_latent_diffusion(
+        latent_dim=4,
+        model_channels=8,
+        context_dim=8,
+        num_timesteps=10,
+    )
+
+    t = torch.arange(0, model.num_timesteps, dtype=torch.long)
+    snr = model.alphas_cumprod[t] / (1.0 - model.alphas_cumprod[t] + 1e-8)
+    weights = torch.clamp(snr, max=model.min_snr_gamma) / (snr + 1e-8)
+
+    assert model.min_snr_gamma == pytest.approx(5.0)
+    assert torch.all(weights <= 1.0 + 1e-6)
+    assert float(weights[0].item()) < float(weights[-1].item())
+
+
 def test_generate_room_constrained_decode_uses_exact_door_type():
     pipeline = NeuralSymbolicDungeonPipeline(
         device="cpu",

@@ -104,6 +104,25 @@ still required.
   style minimum-cost path search is the classic hard pathfinding check for
   confirming generated grids after sampling:
   https://doi.org/10.1109/TSSC.1968.300136.
+- Graphify was installed as `graphifyy` and the repo graph was generated with
+  AST-only indexing so future architecture work can query local code structure:
+  https://github.com/safishamsi/graphify.
+- Min-SNR diffusion weighting uses the recommended gamma clamp from Hang et al.,
+  "Efficient Diffusion Training via Min-SNR Weighting Strategy",
+  https://arxiv.org/abs/2303.09556.
+- Relative random-walk positional features provide edge-level pairwise walk
+  information, unlike node-local RWSE-only summaries. This matches the RRWP
+  motivation in GRIT: Ma et al., "Graph Recurrent Neural Networks are More
+  Powerful Than Transformers", https://arxiv.org/abs/2305.17589.
+- Full GraphGPS replacement remains an ablation item because it changes model
+  capacity and training behavior rather than fixing a semantic bug:
+  Rampasek et al., "Recipe for a General, Powerful, Scalable Graph Transformer",
+  https://arxiv.org/abs/2205.12454.
+- FSQ, VIN pathfinding, hierarchical codebooks, and flow/DiT backbones remain
+  research-track changes because each trades capacity, inductive bias, or
+  training dynamics and therefore needs an ablation table before becoming the
+  default. See FSQ at https://arxiv.org/abs/2309.15505 and VIN at
+  https://arxiv.org/abs/1602.02867.
 
 ## Implementation Implications
 
@@ -224,6 +243,25 @@ still required.
   magnitudes for latent inputs, tile logits, walkability, and tile-classifier
   parameters so the "neural architecture works" claim has direct signal-flow
   evidence before long training runs.
+- H-MOLQD upgrade pass adds Graphify repo indexing (`python -m graphify`),
+  verifies Min-SNR gamma defaults to 5.0, guides DDPM/DDIM through predicted
+  clean latents with adaptive sqrt-alpha scaling, and keeps GradientProbe
+  available for LogicNet backward-signal inspection.
+- LogicNet edge semantics are now handled by a learnable
+  `SemanticEdgeEncoder`. The graph-loss path also filters `edge_attr` /
+  `edge_features` with the same valid-edge mask as `edge_index`, fixing a
+  silent edge-label misalignment bug when invalid endpoints are removed.
+- Zelda graph extraction and diffusion graph batching now carry
+  `edge_rrwp: [E, GRAPH_TPE_DIM]` relative random-walk features. The current
+  pass exposes these features without overwriting existing semantic edge
+  feature slots; encoder consumption should be ablated against the current
+  graph conditioning path.
+- Straight-upgrade items implemented in this pass are production fixes:
+  predicted-clean guidance, adaptive guidance scale, semantic edge costs,
+  RRWP feature plumbing, GradientProbe diagnostics, Graphify integration, and
+  Min-SNR verification. FSQ, GraphGPS, VIN, WFC pseudo-labels, PAG, flow
+  matching, RLHF fine-tuning, hierarchical VQ-VAE, and DiT remain ablation
+  work rather than unconditional defaults.
 
 ## Validation Commands
 
@@ -238,5 +276,7 @@ still required.
 - Revision 3 broad regression: `python -m pytest tests/test_audit_regressions.py tests/test_architecture_audit_fixes.py tests/test_logicnet_fixes.py tests/test_train_diffusion_conditioning_shapes.py tests/test_hmolqd/test_symbolic_refiner.py tests/test_hmolqd/test_gaussian_vae.py tests/test_ml_components.py tests/test_config_system.py -q` passed with 217 tests.
 - Revision 4 compile check: `python -m py_compile src/train_diffusion.py src/core/logic_net.py src/config_system.py src/pipeline/config_bridge.py src/pipeline/models/model_manager.py experiments/logicnet_ablation.py experiments/gradient_magnitude_probe.py tests/test_logicnet_gradient_flow.py tests/test_train_diffusion_conditioning_shapes.py tests/test_audit_regressions.py tests/test_config_system.py`.
 - Revision 4 focused regression: `python -m pytest tests/test_logicnet_gradient_flow.py tests/test_audit_regressions.py::test_logic_net_defaults_to_bellman_ford_grid_pathfinder tests/test_train_diffusion_conditioning_shapes.py::test_validate_reports_hard_solvability_from_decoded_samples tests/test_config_system.py::test_diffusion_helper_preserves_yaml_only_methodology_knobs -q` passed with 8 tests.
+- H-MOLQD upgrade focused regression: `python -m pytest tests/test_architecture_audit_fixes.py::test_p_sample_guides_pred_x0_before_rebuilding_posterior tests/test_architecture_audit_fixes.py::test_min_snr_gamma_defaults_to_five_and_clamps_snr_weights tests/test_logicnet_fixes.py::test_semantic_edge_encoder_defaults_and_receives_gradients tests/test_logicnet_fixes.py::test_logicnet_edge_attr_penalties_follow_valid_edge_filter tests/test_logicnet_gradient_flow.py::test_gradient_probe_records_logicnet_module_gradients tests/test_zelda_loader_graph_conditioning.py::test_dungeon_dataset_getitem_preserves_spatial_graph_fields tests/test_zelda_loader_graph_conditioning.py::test_compute_rrwp_edge_features_preserves_edge_order_and_invalid_rows -q` passed with 7 tests.
+- H-MOLQD upgrade broad targeted regression: `python -m pytest tests/test_architecture_audit_fixes.py tests/test_logicnet_fixes.py tests/test_logicnet_gradient_flow.py tests/test_zelda_loader_graph_conditioning.py tests/test_train_diffusion_conditioning_shapes.py tests/test_ml_components.py tests/test_config_system.py -q` passed with 209 tests.
 - Revision 4 smoke checks: `python experiments/logicnet_ablation.py --base-config configs/zelda_hmolqd.yaml --output-dir results/tmp_logicnet_ablation_smoke --epochs 1 --validation-samples 1 --validation-diffusion-samples 1 --quick` wrote a manifest, and `python experiments/gradient_magnitude_probe.py --output results/tmp_logicnet_gradient_probe.json --batch-size 1 --height 4 --width 4 --latent-dim 8 --hidden-dim 16 --num-iterations 3` recorded nonzero latent, tile-classifier, tile-logit, and walkability gradients.
 - Revision 4 broad regression: `python -m pytest tests/test_audit_regressions.py tests/test_architecture_audit_fixes.py tests/test_logicnet_fixes.py tests/test_logicnet_gradient_flow.py tests/test_train_diffusion_conditioning_shapes.py tests/test_hmolqd/test_symbolic_refiner.py tests/test_hmolqd/test_gaussian_vae.py tests/test_ml_components.py tests/test_config_system.py -q` passed with 224 tests.

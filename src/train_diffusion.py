@@ -39,6 +39,7 @@ from src.core.condition_encoder import DualStreamConditionEncoder, create_condit
 from src.core.definitions import (
     GRAPH_EDGE_FEATURE_DIM,
     GRAPH_NODE_FEATURE_DIM,
+    GRAPH_TPE_DIM,
     ROOM_HEIGHT,
     ROOM_TOPOLOGY_CHANNEL_COUNT,
     ROOM_WIDTH,
@@ -50,6 +51,7 @@ from src.pipeline.graph_features import (
     align_nodewise_tensor,
     build_default_node_positions,
     compute_current_node_distance_features,
+    compute_rrwp_edge_features,
     compute_rwse_features,
 )
 from src.pipeline.room_topology_conditioning import (
@@ -1765,6 +1767,28 @@ class DiffusionTrainer:
             edge_attr = F.pad(edge_attr, (0, num_edges - int(edge_attr.numel())), value=0)
         edge_attr = edge_attr[:num_edges]
 
+        edge_rrwp = graph_dict.get("edge_rrwp")
+        if isinstance(edge_rrwp, torch.Tensor):
+            edge_rrwp = edge_rrwp.to(self.device, dtype=torch.float32)
+            if edge_rrwp.dim() == 1:
+                edge_rrwp = edge_rrwp.unsqueeze(-1)
+            if edge_rrwp.dim() != 2:
+                raise ValueError(f"edge_rrwp must have shape [E,F], got {tuple(edge_rrwp.shape)}")
+            aligned_rrwp = torch.zeros(num_edges, int(GRAPH_TPE_DIM), device=self.device, dtype=torch.float32)
+            rows = min(num_edges, int(edge_rrwp.shape[0]))
+            cols = min(int(GRAPH_TPE_DIM), int(edge_rrwp.shape[1]))
+            if rows > 0 and cols > 0:
+                aligned_rrwp[:rows, :cols] = edge_rrwp[:rows, :cols]
+            edge_rrwp = aligned_rrwp
+        else:
+            edge_rrwp = compute_rrwp_edge_features(
+                edge_index,
+                num_nodes,
+                steps=int(GRAPH_TPE_DIM),
+                device=self.device,
+                dtype=torch.float32,
+            )
+
         tpe = align_nodewise_tensor(
             graph_dict.get("tpe"),
             num_nodes=num_nodes,
@@ -1863,6 +1887,7 @@ class DiffusionTrainer:
             "edge_index": edge_index,
             "edge_features": edge_features,
             "edge_attr": edge_attr,
+            "edge_rrwp": edge_rrwp,
             "tpe": tpe,
             "current_node_distance": current_node_distance,
             "node_positions": node_positions,
@@ -1899,6 +1924,10 @@ class DiffusionTrainer:
             int(sample["edge_features"].shape[1]) if sample["edge_features"].dim() == 2 else 0
             for sample in samples
         )
+        edge_rrwp_dim = max(
+            int(sample["edge_rrwp"].shape[1]) if sample["edge_rrwp"].dim() == 2 else 0
+            for sample in samples
+        )
 
         node_features_batch = torch.zeros(len(samples), max_nodes, max(1, feat_dim), device=self.device, dtype=torch.float32)
         tpe_batch = torch.zeros(len(samples), max_nodes, max(1, tpe_dim), device=self.device, dtype=torch.float32)
@@ -1907,6 +1936,7 @@ class DiffusionTrainer:
         node_mask_batch = torch.zeros(len(samples), max_nodes, device=self.device, dtype=torch.float32)
         edge_index_batch = torch.full((len(samples), 2, max_edges), -1, device=self.device, dtype=torch.long)
         edge_features_batch = torch.zeros(len(samples), max_edges, max(1, edge_feat_dim), device=self.device, dtype=torch.float32)
+        edge_rrwp_batch = torch.zeros(len(samples), max_edges, max(1, edge_rrwp_dim), device=self.device, dtype=torch.float32)
         edge_attr_batch = torch.full((len(samples), max_edges), -1, device=self.device, dtype=torch.long)
         current_node_idx_batch = torch.zeros(len(samples), device=self.device, dtype=torch.long)
         start_node_id_batch = torch.full((len(samples),), -1, device=self.device, dtype=torch.long)
@@ -1944,6 +1974,7 @@ class DiffusionTrainer:
             if num_edges > 0:
                 edge_index_batch[i, :, :num_edges] = sample["edge_index"]
                 edge_features_batch[i, :num_edges, : sample["edge_features"].shape[1]] = sample["edge_features"]
+                edge_rrwp_batch[i, :num_edges, : sample["edge_rrwp"].shape[1]] = sample["edge_rrwp"]
                 edge_attr_batch[i, :num_edges] = sample["edge_attr"]
 
             current_node_idx_batch[i] = int(sample.get("current_node_idx", 0))
@@ -1977,6 +2008,7 @@ class DiffusionTrainer:
             "node_features": node_features_batch,
             "edge_index": edge_index_batch,
             "edge_features": edge_features_batch,
+            "edge_rrwp": edge_rrwp_batch,
             "edge_attr": edge_attr_batch,
             "tpe": tpe_batch,
             "current_node_distance": current_node_distance_batch,

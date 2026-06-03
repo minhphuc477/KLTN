@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.core.latent_diffusion import GradientGuidance
 from src.core.definitions import SEMANTIC_PALETTE
-from src.core.logic_net import LogicNet, SoftBellmanFordGridPathfinder, WalkabilityPredictor
+from src.core.logic_net import LogicNet, SemanticEdgeEncoder, SoftBellmanFordGridPathfinder, WalkabilityPredictor
 from src.pipeline.graph_features import extract_node_feature_vector
 from src.pipeline.spatial_utils import parse_label_tokens
 
@@ -149,6 +149,38 @@ def test_logicnet_global_room_passability_preserves_index_copy_gradient():
 
     assert grad is not None
     assert torch.isfinite(grad).all()
+
+
+def test_semantic_edge_encoder_defaults_and_receives_gradients():
+    encoder = SemanticEdgeEncoder(num_edge_types=8)
+    edge_attr = torch.tensor([0, 1, 2, 4, 7], dtype=torch.long)
+
+    penalties = encoder(edge_attr)
+    penalties.sum().backward()
+
+    assert penalties.tolist() == pytest.approx([0.0, 1.0, 0.5, 2.0, 0.5])
+    assert encoder.residual_logits.grad is not None
+    assert encoder.residual_logits.grad.abs().sum().item() > 0.0
+
+
+def test_logicnet_edge_attr_penalties_follow_valid_edge_filter():
+    logic_net = LogicNet(latent_dim=4, num_tile_classes=5)
+    edge_index = torch.tensor([[0, 99, 1], [1, 2, 2]], dtype=torch.long)
+    edge_attr = torch.tensor([1, 4, 2], dtype=torch.long)
+
+    adj, weights = logic_net._build_adjacency_and_weights(
+        node_count=3,
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+        edge_index=edge_index,
+        edge_attr=edge_attr,
+    )
+
+    assert adj[0, 1].item() == pytest.approx(1.0)
+    assert adj[1, 2].item() == pytest.approx(1.0)
+    assert weights[0, 1].item() == pytest.approx(2.0)
+    assert weights[1, 2].item() == pytest.approx(1.5)
+    assert weights[0, 2].item() == pytest.approx(0.0)
 
 
 def test_logicnet_skips_dungeon_scope_graph_loss_without_full_node_passability():

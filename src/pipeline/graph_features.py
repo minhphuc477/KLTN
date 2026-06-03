@@ -100,6 +100,43 @@ def compute_rwse_features(
     return rwse
 
 
+def compute_rrwp_edge_features(
+    edge_index: torch.Tensor,
+    num_nodes: int,
+    *,
+    steps: int = 8,
+    device: torch.device,
+    dtype: torch.dtype = torch.float32,
+) -> torch.Tensor:
+    """Compute relative random-walk probabilities for each directed edge [E, steps]."""
+    k = max(1, int(steps))
+    if not isinstance(edge_index, torch.Tensor) or edge_index.dim() != 2 or int(edge_index.shape[0]) != 2:
+        return torch.zeros((0, k), device=device, dtype=dtype)
+
+    edge_count = int(edge_index.shape[1])
+    rrwp = torch.zeros((edge_count, k), device=device, dtype=dtype)
+    n = max(0, int(num_nodes))
+    if n == 0 or edge_count == 0:
+        return rrwp
+
+    src_all = edge_index[0].to(device=device, dtype=torch.long)
+    dst_all = edge_index[1].to(device=device, dtype=torch.long)
+    valid = (src_all >= 0) & (src_all < n) & (dst_all >= 0) & (dst_all < n)
+    if not bool(valid.any()):
+        return rrwp
+
+    adjacency = torch.zeros((n, n), device=device, dtype=dtype)
+    adjacency[src_all[valid], dst_all[valid]] = 1.0
+    adjacency = adjacency + torch.eye(n, device=device, dtype=dtype)
+    transition = adjacency / adjacency.sum(dim=1, keepdim=True).clamp(min=1.0)
+
+    walk = transition
+    for step_idx in range(k):
+        rrwp[valid, step_idx] = walk[src_all[valid], dst_all[valid]]
+        walk = walk @ transition
+    return rrwp
+
+
 def _single_source_graph_distances(
     adjacency: List[List[int]],
     source_idx: int,

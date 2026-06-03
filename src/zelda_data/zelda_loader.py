@@ -63,6 +63,7 @@ from src.core.definitions import (
 )
 from src.core.condition_encoder import build_boundary_constraints
 from src.pipeline.graph_features import (
+    compute_rrwp_edge_features,
     compute_tpe_features,
     encode_edge_feature_vector,
     extract_node_feature_vector,
@@ -272,6 +273,12 @@ def _extract_graph_from_dungeon(
     edge_attr_arr = np.array(edge_attrs, dtype=np.int64) if edge_attrs else np.zeros((0,), dtype=np.int64)
     edge_features_arr = np.array(edge_features_list, dtype=np.float32) if edge_features_list else np.zeros((0, int(max(1, edge_feature_dim))), dtype=np.float32)
     node_positions_arr = np.array(node_positions, dtype=np.float32) if node_positions else np.zeros((0, 2), dtype=np.float32)
+    edge_rrwp_tensor = compute_rrwp_edge_features(
+        torch.tensor(edge_index_arr, dtype=torch.long),
+        num_nodes=len(nodes),
+        steps=int(GRAPH_TPE_DIM),
+        device=torch.device("cpu"),
+    )
 
     filtered_nodes = [node_id for node_id in sorted(graph.nodes()) if node_id in node_id_to_idx]
     tpe_tensor = compute_tpe_features(
@@ -289,6 +296,7 @@ def _extract_graph_from_dungeon(
         'edge_index': edge_index_arr,
         'edge_attr': edge_attr_arr,
         'edge_features': edge_features_arr,
+        'edge_rrwp': edge_rrwp_tensor.cpu().numpy().astype(np.float32),
         'tpe': tpe_tensor.cpu().numpy().astype(np.float32),
         'node_positions': node_positions_arr,
         'num_nodes': len(nodes),
@@ -607,6 +615,7 @@ def _build_room_graph_sample(
         'edge_index': base_graph['edge_index'],
         'edge_attr': base_graph.get('edge_attr', np.zeros((0,), dtype=np.int64)),
         'edge_features': base_graph.get('edge_features', np.zeros((0, GRAPH_EDGE_FEATURE_DIM), dtype=np.float32)),
+        'edge_rrwp': base_graph.get('edge_rrwp', np.zeros((base_graph.get('num_edges', 0), GRAPH_TPE_DIM), dtype=np.float32)),
         'tpe': base_graph.get('tpe', np.zeros((base_graph.get('num_nodes', 0), GRAPH_TPE_DIM), dtype=np.float32)),
         'node_positions': base_graph.get('node_positions', np.zeros((base_graph.get('num_nodes', 0), 2), dtype=np.float32)),
         'num_nodes': int(base_graph.get('num_nodes', 0)),
@@ -819,6 +828,7 @@ class ZeldaDungeonDataset(Dataset):
                 'edge_index': torch.tensor(graph['edge_index'], dtype=torch.long),
                 'edge_attr': torch.tensor(graph.get('edge_attr', np.zeros((0,), dtype=np.int64)), dtype=torch.long),
                 'edge_features': torch.tensor(graph.get('edge_features', np.zeros((0, edge_feature_dim), dtype=np.float32)), dtype=torch.float32),
+                'edge_rrwp': torch.tensor(graph.get('edge_rrwp', np.zeros((int(graph.get('num_edges', 0)), GRAPH_TPE_DIM), dtype=np.float32)), dtype=torch.float32),
                 'tpe': torch.tensor(graph.get('tpe', np.zeros((0, GRAPH_TPE_DIM), dtype=np.float32)), dtype=torch.float32),
                 'node_positions': torch.tensor(graph.get('node_positions', np.zeros((0, 2), dtype=np.float32)), dtype=torch.float32),
                 'num_nodes': graph['num_nodes'],
@@ -1012,6 +1022,7 @@ class ZeldaRoomDataset(Dataset):
                 'edge_index': torch.tensor(graph['edge_index'], dtype=torch.long),
                 'edge_attr': torch.tensor(graph.get('edge_attr', np.zeros((0,), dtype=np.int64)), dtype=torch.long),
                 'edge_features': torch.tensor(graph.get('edge_features', np.zeros((0, edge_feature_dim), dtype=np.float32)), dtype=torch.float32),
+                'edge_rrwp': torch.tensor(graph.get('edge_rrwp', np.zeros((int(graph.get('num_edges', 0)), GRAPH_TPE_DIM), dtype=np.float32)), dtype=torch.float32),
                 'tpe': torch.tensor(graph.get('tpe', np.zeros((0, GRAPH_TPE_DIM), dtype=np.float32)), dtype=torch.float32),
                 'node_positions': torch.tensor(graph.get('node_positions', np.zeros((0, 2), dtype=np.float32)), dtype=torch.float32),
                 'room_topology_map': torch.tensor(graph.get('room_topology_map', np.zeros((ROOM_TOPOLOGY_CHANNEL_COUNT, ROOM_HEIGHT, ROOM_WIDTH), dtype=np.float32)), dtype=torch.float32),

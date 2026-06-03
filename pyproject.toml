@@ -35,6 +35,9 @@ train = [
     "accelerate>=0.20.0",
     "wandb>=0.15.0",
 ]
+graph = [
+    "graphifyy>=0.8.30",
+]
 
 [tool.setuptools.packages.find]
 where = ["."]

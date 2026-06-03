@@ -5,6 +5,7 @@ import torch
 
 from src.core.definitions import SEMANTIC_PALETTE
 from src.core.logic_net import LogicNet, WalkabilityPredictor
+from src.utils.gradient_probe import GradientProbe
 
 
 @pytest.mark.parametrize("pathfinder", ["bellman_ford", "cnn"])
@@ -85,3 +86,15 @@ def test_temperature_annealing_is_monotone_decreasing():
     assert temps == sorted(temps, reverse=True)
     assert temps[0] == pytest.approx(2.0)
     assert temps[-1] == pytest.approx(0.05)
+
+
+def test_gradient_probe_records_logicnet_module_gradients():
+    net = LogicNet(latent_dim=8, num_classes=44, hidden_dim=16, num_iterations=3)
+    z = torch.randn(1, 8, 4, 4, requires_grad=True)
+
+    with GradientProbe.for_logicnet(net) as probe:
+        loss, _info = net(z, graph_data=None)
+        loss.backward()
+
+    assert any(name.startswith("grad/logicnet/tile_classifier") for name in probe.last_stats)
+    assert any(value > 0 for value in probe.last_stats.values())
