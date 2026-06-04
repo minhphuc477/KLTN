@@ -98,6 +98,9 @@ def _initialize_pipeline_from_flat_kwargs(
     default_use_topological_positional_encoding: bool = True,
     default_apply_repair: bool = True,
     default_use_neural_guided_repair: bool = True,
+    default_use_neural_repair_feedback: bool = True,
+    default_repair_inpaint_noise_strength: float = 0.5,
+    default_repair_inpaint_guidance_scale_multiplier: float = 1.0,
     default_enable_map_elites: bool = False,
     default_start_goal_coords: Optional[Tuple[Tuple[int, int], Tuple[int, int]]] = ((1, 5), (14, 5)),
     default_semantic_role_prior_strength: float = DEFAULT_SEMANTIC_ROLE_PRIOR_STRENGTH,
@@ -204,6 +207,9 @@ def _initialize_pipeline_from_flat_kwargs(
     pipeline.default_use_topological_positional_encoding = bool(default_use_topological_positional_encoding)
     pipeline.default_apply_repair = bool(default_apply_repair)
     pipeline.default_use_neural_guided_repair = bool(default_use_neural_guided_repair)
+    pipeline.default_use_neural_repair_feedback = bool(default_use_neural_repair_feedback)
+    pipeline.default_repair_inpaint_noise_strength = float(max(0.0, min(1.0, default_repair_inpaint_noise_strength)))
+    pipeline.default_repair_inpaint_guidance_scale_multiplier = float(max(0.0, default_repair_inpaint_guidance_scale_multiplier))
     pipeline.default_enable_map_elites = bool(default_enable_map_elites)
     pipeline.default_start_goal_coords = (
         None

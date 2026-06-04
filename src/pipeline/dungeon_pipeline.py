@@ -630,6 +630,9 @@ class NeuralSymbolicDungeonPipeline(metaclass=_PipelineFacadeMeta):
     def _build_latent_edit_mask(self, *args: Any, **kwargs: Any) -> Any:
         return self._room_processing_helper("_build_latent_edit_mask", *args, **kwargs)
 
+    def _logicnet_guided_inpaint_room(self, *args: Any, **kwargs: Any) -> Any:
+        return self._room_processing_helper("_logicnet_guided_inpaint_room", *args, **kwargs)
+
     def _wfc_guided_inpaint_room(self, *args: Any, **kwargs: Any) -> Any:
         return self._room_processing_helper("_wfc_guided_inpaint_room", *args, **kwargs)
 

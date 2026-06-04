@@ -1,4 +1,4 @@
-"""Helper utilities for WFC-guided and boundary-constrained diffusion inpainting."""
+"""Helper utilities for LogicNet-guided and boundary-constrained diffusion inpainting."""
 
 from __future__ import annotations
 
@@ -118,7 +118,7 @@ def build_latent_edit_mask(
     return torch.clamp(resized, 0.0, 1.0)
 
 
-def wfc_guided_inpaint_room(
+def logicnet_guided_inpaint_room(
     current_grid: np.ndarray,
     dead_end_mask: np.ndarray,
     condition: torch.Tensor,
@@ -130,8 +130,17 @@ def wfc_guided_inpaint_room(
     vqvae: Any,
     diffusion: Any,
     num_classes: int = 44,
+    noise_strength: float = 0.5,
+    guidance_scale_multiplier: float = 1.0,
 ) -> np.ndarray:
-    """Regenerate only dead-end regions in latent space and merge back."""
+    """
+    Regenerate contradiction regions with latent diffusion inpainting.
+
+    The symbolic repair stage supplies the dead-end mask. The neural fallback
+    encodes the partially repaired room, runs diffusion.inpaint() on the masked
+    latent cells, and lets the diffusion model's configured LogicNet guidance
+    shape the regenerated region.
+    """
     grid_int = np.asarray(current_grid, dtype=np.int64)
     if grid_int.ndim != 2:
         raise ValueError(f"current_grid must be 2D, got shape={tuple(grid_int.shape)}")
@@ -162,14 +171,22 @@ def wfc_guided_inpaint_room(
     if seed is not None:
         torch.manual_seed(int(seed))
 
-    z_inpaint = diffusion.inpaint(
-        x_0=z_0,
-        mask=latent_mask,
-        context=condition,
-        graph_data=graph_data,
-        num_steps=max(8, int(num_diffusion_steps)),
-        noise_strength=0.5,  # Higher noise for dead-end repair (full regeneration of broken regions)
-    )
+    guidance_module = getattr(diffusion, "guidance", None)
+    old_guidance_scale = getattr(guidance_module, "guidance_scale", None)
+    if old_guidance_scale is not None:
+        guidance_module.guidance_scale = float(old_guidance_scale) * float(max(0.0, guidance_scale_multiplier))
+    try:
+        z_inpaint = diffusion.inpaint(
+            x_0=z_0,
+            mask=latent_mask,
+            context=condition,
+            graph_data=graph_data,
+            num_steps=max(8, int(num_diffusion_steps)),
+            noise_strength=float(max(0.0, min(1.0, noise_strength))),
+        )
+    finally:
+        if old_guidance_scale is not None:
+            guidance_module.guidance_scale = old_guidance_scale
     with torch.no_grad():
         logits = vqvae.decode(z_inpaint)
     inpainted_grid = logits.argmax(dim=1).detach().cpu().numpy()[0]
@@ -178,3 +195,8 @@ def wfc_guided_inpaint_room(
     merged = inpainted_grid.copy()
     merged[keep] = grid_int[keep]
     return merged.astype(np.int32, copy=False)
+
+
+def wfc_guided_inpaint_room(*args: Any, **kwargs: Any) -> np.ndarray:
+    """Backward-compatible alias for logicnet_guided_inpaint_room."""
+    return logicnet_guided_inpaint_room(*args, **kwargs)

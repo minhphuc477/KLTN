@@ -15,7 +15,7 @@ from src.core import ROOM_HEIGHT, ROOM_WIDTH, SEMANTIC_PALETTE
 from src.core.definitions import DOOR_POSITIONS, TileID, parse_edge_type_tokens
 from src.core.vqvae import canonical_latent_shape
 from src.pipeline.block_contracts import BlockShapeContract, validate_feature_dims, validate_tensor_contract
-from src.pipeline.repair_feedback import build_latent_edit_mask, build_neighbor_boundary_inpaint_inputs, wfc_guided_inpaint_room
+from src.pipeline.repair_feedback import build_latent_edit_mask, build_neighbor_boundary_inpaint_inputs, logicnet_guided_inpaint_room
 from src.pipeline.room_topology_conditioning import (
     apply_puzzle_structure_control_to_conditioning,
     build_room_semantic_anchor_points,
@@ -3975,7 +3975,7 @@ def _build_latent_edit_mask(
     )
 
 
-def _wfc_guided_inpaint_room(
+def _logicnet_guided_inpaint_room(
     pipeline,
     current_grid: np.ndarray,
     dead_end_mask: np.ndarray,
@@ -3983,10 +3983,12 @@ def _wfc_guided_inpaint_room(
     graph_data: Optional[Dict[str, Any]],
     num_diffusion_steps: int,
     seed: Optional[int] = None,
+    noise_strength: float = 0.5,
+    guidance_scale_multiplier: float = 1.0,
 ) -> np.ndarray:
     """Compatibility wrapper around extracted feedback helper."""
-    pipeline._require_room_generation_components("_wfc_guided_inpaint_room")
-    return wfc_guided_inpaint_room(
+    pipeline._require_room_generation_components("_logicnet_guided_inpaint_room")
+    return logicnet_guided_inpaint_room(
         current_grid=current_grid,
         dead_end_mask=dead_end_mask,
         condition=condition,
@@ -3997,7 +3999,18 @@ def _wfc_guided_inpaint_room(
         vqvae=pipeline.vqvae,
         diffusion=pipeline.diffusion,
         num_classes=int(getattr(pipeline.vqvae, "num_classes", int(np.max(pipeline._valid_semantic_tile_ids_np)) + 1)),
+        noise_strength=noise_strength,
+        guidance_scale_multiplier=guidance_scale_multiplier,
     )
+
+
+def _wfc_guided_inpaint_room(
+    pipeline,
+    *args: Any,
+    **kwargs: Any,
+) -> np.ndarray:
+    """Backward-compatible alias for _logicnet_guided_inpaint_room."""
+    return _logicnet_guided_inpaint_room(pipeline, *args, **kwargs)
 
 
 def _compute_room_condition(

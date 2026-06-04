@@ -212,6 +212,9 @@ generation:
   use_topological_positional_encoding: true  # type=bool, default=true, valid={true,false}
   apply_repair: true  # type=bool, default=true, valid={true,false}
   use_neural_guided_repair: true  # type=bool, default=true, valid={true,false}; LogicNet walkability/topology guides symbolic repair cost maps and hard floor masks when LogicNet is loaded
+  use_neural_repair_feedback: true  # type=bool, default=true, valid={true,false}; M3 diffusion inpainting feedback for WFC contradiction regions
+  repair_inpaint_noise_strength: 0.5  # type=float, default=0.5, valid=0..1; latent noise strength for contradiction-region inpainting
+  repair_inpaint_guidance_scale_multiplier: 1.0  # type=float, default=1.0, valid>=0; multiplier on LogicNet guidance during M3 repair inpainting
   enable_map_elites: false  # type=bool, default=false, valid={true,false}
   symbolic_max_repair_attempts: 5  # type=int, default=5, valid>=1; maximum post-generation symbolic repair passes per room
   symbolic_repair_margin: 2  # type=int, default=2, valid>=0; local margin used by symbolic repair when patching disconnected structure

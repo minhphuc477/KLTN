@@ -105,3 +105,72 @@ def test_neural_guided_repair_merges_external_mask_and_feedback_callback():
     assert refiner.kwargs["max_feedback_rounds"] == 2
     assert bool(refiner.kwargs["required_floor_mask"][2, 2]) is True
     assert bool(refiner.kwargs["required_floor_mask"][3, 3]) is True
+
+
+def test_neural_feedback_callback_is_controlled_by_m3_flag():
+    class _CallingRefiner(_RecordingRefiner):
+        def repair_room_with_feedback(self, **kwargs):
+            self.kwargs = kwargs
+            callback = kwargs.get("feedback_callback")
+            if callback is not None:
+                callback(
+                    np.asarray(kwargs["grid"]),
+                    np.ones_like(np.asarray(kwargs["grid"]), dtype=bool),
+                    kwargs["start"],
+                    kwargs["goal"],
+                    1,
+                )
+            return np.asarray(kwargs["grid"]).copy(), True, {}
+
+    calls = []
+
+    def _inpaint_callback(**kwargs):
+        calls.append(kwargs)
+        return np.asarray(kwargs["current_grid"]).copy()
+
+    grid = np.zeros((5, 5), dtype=np.int64)
+    tile_logits = torch.randn(1, 4, 5, 5)
+    context = torch.zeros(1, 8)
+
+    disabled = NeuralGuidedRepair(_FakeLogicNet(), _CallingRefiner(), use_neural_feedback=False)
+    _repaired, _success, disabled_diag = disabled.repair_room_with_neural_guidance(
+        grid,
+        start=(0, 0),
+        goal=(4, 4),
+        tile_logits=tile_logits,
+        graph_data={},
+        inpaint_callback=_inpaint_callback,
+        inpaint_context=context,
+        num_diffusion_steps=6,
+        seed=10,
+    )
+    assert disabled_diag["neural_feedback_enabled"] is False
+    assert disabled_diag["neural_feedback_callback_used"] is False
+    assert calls == []
+
+    enabled = NeuralGuidedRepair(
+        _FakeLogicNet(),
+        _CallingRefiner(),
+        use_neural_feedback=True,
+        repair_inpaint_noise_strength=0.25,
+        repair_inpaint_guidance_scale_multiplier=2.0,
+    )
+    _repaired, _success, enabled_diag = enabled.repair_room_with_neural_guidance(
+        grid,
+        start=(0, 0),
+        goal=(4, 4),
+        tile_logits=tile_logits,
+        graph_data={"room": 1},
+        inpaint_callback=_inpaint_callback,
+        inpaint_context=context,
+        num_diffusion_steps=6,
+        seed=10,
+    )
+
+    assert enabled_diag["neural_feedback_enabled"] is True
+    assert enabled_diag["neural_feedback_callback_used"] is True
+    assert len(calls) == 1
+    assert calls[0]["num_diffusion_steps"] == 8
+    assert calls[0]["seed"] == 1011
+    assert calls[0]["noise_strength"] == 0.25
+    assert calls[0]["guidance_scale_multiplier"] == 2.0

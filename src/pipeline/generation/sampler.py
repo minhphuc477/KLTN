@@ -875,22 +875,6 @@ def generate_room(
         except (AttributeError, RuntimeError, ValueError, TypeError):
             room_plan_mask = None
         try:
-            def _feedback_callback(
-                current_grid_cb: np.ndarray,
-                dead_end_mask_cb: np.ndarray,
-                _start_cb: Tuple[int, int],
-                _goal_cb: Tuple[int, int],
-                attempt_idx: int,
-            ) -> np.ndarray:
-                return pipeline._wfc_guided_inpaint_room(
-                    current_grid=current_grid_cb,
-                    dead_end_mask=dead_end_mask_cb,
-                    condition=condition,
-                    graph_data=graph_data,
-                    num_diffusion_steps=max(12, int(num_diffusion_steps) // 2),
-                    seed=(None if seed is None else int(seed) + 1000 + int(attempt_idx)),
-                )
-
             neural_guided_repair = None
             if (
                 bool(getattr(pipeline, "default_use_neural_guided_repair", True))
@@ -900,6 +884,9 @@ def generate_room(
                 neural_guided_repair = NeuralGuidedRepair(
                     logic_net=pipeline.logic_net,
                     refiner=pipeline.refiner,
+                    use_neural_feedback=bool(getattr(pipeline, "default_use_neural_repair_feedback", True)),
+                    repair_inpaint_noise_strength=float(getattr(pipeline, "default_repair_inpaint_noise_strength", 0.5)),
+                    repair_inpaint_guidance_scale_multiplier=float(getattr(pipeline, "default_repair_inpaint_guidance_scale_multiplier", 1.0)),
                 )
 
             if neural_guided_repair is not None:
@@ -911,8 +898,9 @@ def generate_room(
                         tile_logits=logits.detach(),
                         graph_data=graph_data,
                         required_floor_mask=room_plan_mask,
-                        feedback_callback=_feedback_callback,
-                        max_feedback_rounds=2,
+                        inpaint_callback=getattr(pipeline, "_logicnet_guided_inpaint_room", None),
+                        inpaint_context=condition,
+                        num_diffusion_steps=max(12, int(num_diffusion_steps) // 2),
                         seed=seed,
                     )
                     pipeline._bump_diagnostic("neural_guided_repair_used")
@@ -924,8 +912,8 @@ def generate_room(
                         start=start,
                         goal=goal,
                         required_floor_mask=room_plan_mask,
-                        feedback_callback=_feedback_callback,
-                        max_feedback_rounds=2,
+                        feedback_callback=None,
+                        max_feedback_rounds=0,
                         seed=seed,
                     )
             else:
@@ -934,8 +922,8 @@ def generate_room(
                     start=start,
                     goal=goal,
                     required_floor_mask=room_plan_mask,
-                    feedback_callback=_feedback_callback,
-                    max_feedback_rounds=2,
+                    feedback_callback=None,
+                    max_feedback_rounds=0,
                     seed=seed,
                 )
 

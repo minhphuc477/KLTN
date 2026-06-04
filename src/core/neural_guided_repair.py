@@ -35,9 +35,9 @@ class NeuralGuidedRepair:
 
     M1: LogicNet walkability -> symbolic repair cost map.
     M2: LogicNet topology/anchor targets -> hard floor mask.
-    M3: neural feedback is intentionally left as an optional future hook; this
-    class accepts a callback-ready refiner API but does not invent inpainting
-    behavior without a concrete diffusion inpainting implementation.
+    M3: optional neural feedback callback for WFC contradictions. When enabled,
+    contradiction masks are sent to diffusion inpainting, then WFC continues
+    from the neural patch.
     """
 
     def __init__(
@@ -47,17 +47,23 @@ class NeuralGuidedRepair:
         *,
         use_logicnet_cost: bool = True,
         use_logicnet_floor_mask: bool = True,
+        use_neural_feedback: bool = False,
         obstacle_weight: float = 5.0,
         trace_threshold: float = 0.5,
         anchor_threshold: float = 0.3,
+        repair_inpaint_noise_strength: float = 0.5,
+        repair_inpaint_guidance_scale_multiplier: float = 1.0,
     ):
         self.logic_net = logic_net
         self.refiner = refiner
         self.use_logicnet_cost = bool(use_logicnet_cost)
         self.use_logicnet_floor_mask = bool(use_logicnet_floor_mask)
+        self.use_neural_feedback = bool(use_neural_feedback)
         self.obstacle_weight = float(max(0.0, obstacle_weight))
         self.trace_threshold = float(trace_threshold)
         self.anchor_threshold = float(anchor_threshold)
+        self.repair_inpaint_noise_strength = float(max(0.0, min(1.0, repair_inpaint_noise_strength)))
+        self.repair_inpaint_guidance_scale_multiplier = float(max(0.0, repair_inpaint_guidance_scale_multiplier))
 
     @torch.no_grad()
     def get_logicnet_guidance(
@@ -113,9 +119,12 @@ class NeuralGuidedRepair:
         *,
         graph_data: Optional[dict] = None,
         required_floor_mask: Optional[np.ndarray] = None,
+        inpaint_callback: Optional[Any] = None,
+        inpaint_context: Optional[torch.Tensor] = None,
+        num_diffusion_steps: int = 16,
+        seed: Optional[int] = None,
         feedback_callback: Optional[Any] = None,
         max_feedback_rounds: int = 0,
-        seed: Optional[int] = None,
     ) -> Tuple[np.ndarray, bool, Dict[str, Any]]:
         """Repair a room using LogicNet-derived cost and topology constraints."""
         grid_array = np.asarray(grid)
@@ -129,12 +138,24 @@ class NeuralGuidedRepair:
             external_mask = np.asarray(required_floor_mask, dtype=bool)
             if tuple(external_mask.shape[:2]) == tuple(grid_array.shape[:2]):
                 floor_mask = external_mask if floor_mask is None else (floor_mask | external_mask)
+        neural_feedback_callback = self._build_neural_callback(
+            inpaint_callback=inpaint_callback,
+            condition=inpaint_context,
+            graph_data=graph_data,
+            num_diffusion_steps=num_diffusion_steps,
+            seed=seed,
+        )
+        if neural_feedback_callback is None:
+            neural_feedback_callback = feedback_callback
+        effective_feedback_rounds = int(max_feedback_rounds)
+        if neural_feedback_callback is not None and effective_feedback_rounds <= 0:
+            effective_feedback_rounds = 2
         repaired, success, diagnostics = self.refiner.repair_room_with_feedback(
             grid=grid_array,
             start=start,
             goal=goal,
-            feedback_callback=feedback_callback,
-            max_feedback_rounds=max(0, int(max_feedback_rounds)),
+            feedback_callback=neural_feedback_callback,
+            max_feedback_rounds=max(0, effective_feedback_rounds),
             required_floor_mask=floor_mask,
             cost_map=guidance.cost_map,
             seed=seed,
@@ -143,6 +164,8 @@ class NeuralGuidedRepair:
         diagnostics.update(
             {
                 "neural_guidance_used": True,
+                "neural_feedback_enabled": bool(self.use_neural_feedback),
+                "neural_feedback_callback_used": bool(neural_feedback_callback is not None),
                 "logicnet_loss_before_repair": float(guidance.logic_loss),
                 "logicnet_cost_used": bool(guidance.cost_map is not None),
                 "logicnet_floor_mask_pixels": (
@@ -153,6 +176,38 @@ class NeuralGuidedRepair:
             }
         )
         return repaired, bool(success), diagnostics
+
+    def _build_neural_callback(
+        self,
+        *,
+        inpaint_callback: Optional[Any],
+        condition: Optional[torch.Tensor],
+        graph_data: Optional[dict],
+        num_diffusion_steps: int,
+        seed: Optional[int],
+    ) -> Optional[Any]:
+        if not self.use_neural_feedback or not callable(inpaint_callback) or not isinstance(condition, torch.Tensor):
+            return None
+
+        def _callback(
+            current_grid: np.ndarray,
+            dead_end_mask: np.ndarray,
+            _start: Tuple[int, int],
+            _goal: Tuple[int, int],
+            attempt_idx: int,
+        ) -> np.ndarray:
+            return inpaint_callback(
+                current_grid=current_grid,
+                dead_end_mask=dead_end_mask,
+                condition=condition,
+                graph_data=graph_data,
+                num_diffusion_steps=max(8, int(num_diffusion_steps)),
+                seed=(None if seed is None else int(seed) + 1000 + int(attempt_idx)),
+                noise_strength=self.repair_inpaint_noise_strength,
+                guidance_scale_multiplier=self.repair_inpaint_guidance_scale_multiplier,
+            )
+
+        return _callback
 
     def _build_floor_mask(
         self,

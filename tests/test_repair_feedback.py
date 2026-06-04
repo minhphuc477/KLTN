@@ -1,6 +1,12 @@
+import numpy as np
 import torch
 
-from src.pipeline.repair_feedback import build_neighbor_boundary_inpaint_inputs
+from src.pipeline.repair_feedback import (
+    build_latent_edit_mask,
+    build_neighbor_boundary_inpaint_inputs,
+    logicnet_guided_inpaint_room,
+    wfc_guided_inpaint_room,
+)
 
 
 def test_build_neighbor_boundary_inpaint_inputs_preserves_edges():
@@ -63,3 +69,87 @@ def test_build_neighbor_boundary_inpaint_inputs_aligns_batch_and_spatial_shape()
     assert mask.shape == (2, 1, 4, 4)
     assert torch.all(ref[:, :, 0, :] == 7.0)
     assert torch.all(mask[:, :, 0, :] == 0.0)
+
+
+def test_build_latent_edit_mask_downsamples_dead_end_region():
+    mask = np.zeros((4, 4), dtype=bool)
+    mask[0:2, 0:2] = True
+
+    latent_mask = build_latent_edit_mask(
+        mask,
+        latent_h=2,
+        latent_w=2,
+        device=torch.device("cpu"),
+    )
+
+    assert latent_mask.shape == (1, 1, 2, 2)
+    assert latent_mask[0, 0, 0, 0].item() == 1.0
+    assert latent_mask[0, 0, 1, 1].item() == 0.0
+
+
+def test_logicnet_guided_inpaint_room_restores_guidance_scale_and_aliases_old_name():
+    class _FakeVQVAE:
+        num_classes = 3
+
+        def encode(self, x_0):
+            return torch.zeros(1, 2, 2, 2, dtype=x_0.dtype), None
+
+        def decode(self, z):
+            logits = torch.zeros(1, 3, 4, 4, dtype=z.dtype)
+            logits[:, 2] = 5.0
+            return logits
+
+    class _Guidance:
+        def __init__(self):
+            self.guidance_scale = 1.5
+
+    class _FakeDiffusion:
+        def __init__(self):
+            self.guidance = _Guidance()
+            self.seen = None
+
+        def inpaint(self, **kwargs):
+            self.seen = kwargs
+            assert self.guidance.guidance_scale == 3.0
+            return kwargs["x_0"] + 1.0
+
+    diffusion = _FakeDiffusion()
+    grid = np.zeros((4, 4), dtype=np.int32)
+    grid[0, 0] = 1
+    mask = np.zeros((4, 4), dtype=bool)
+    mask[0, 0] = True
+
+    out = logicnet_guided_inpaint_room(
+        current_grid=grid,
+        dead_end_mask=mask,
+        condition=torch.zeros(1, 8),
+        graph_data={},
+        num_diffusion_steps=4,
+        seed=1,
+        device=torch.device("cpu"),
+        vqvae=_FakeVQVAE(),
+        diffusion=diffusion,
+        num_classes=3,
+        noise_strength=0.25,
+        guidance_scale_multiplier=2.0,
+    )
+
+    assert out[0, 0] == 2
+    assert out[1, 1] == 0
+    assert diffusion.guidance.guidance_scale == 1.5
+    assert diffusion.seen["num_steps"] == 8
+    assert diffusion.seen["noise_strength"] == 0.25
+
+    alias_out = wfc_guided_inpaint_room(
+        current_grid=grid,
+        dead_end_mask=np.zeros((4, 4), dtype=bool),
+        condition=torch.zeros(1, 8),
+        graph_data={},
+        num_diffusion_steps=4,
+        seed=None,
+        device=torch.device("cpu"),
+        vqvae=_FakeVQVAE(),
+        diffusion=diffusion,
+        num_classes=3,
+    )
+    assert np.array_equal(alias_out, grid)
