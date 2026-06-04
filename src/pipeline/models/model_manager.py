@@ -311,6 +311,11 @@ def load_diffusion(pipeline, checkpoint_path: Optional[str]) -> LatentDiffusionM
     if checkpoint_path and Path(checkpoint_path).exists():
         checkpoint, _metadata = pipeline._load_checkpoint_and_metadata(checkpoint_path, "diffusion")
         checkpoint_config = pipeline._extract_checkpoint_config(checkpoint)
+        if pipeline.strict_checkpoint_mode and "topology_conditioning_mode" not in checkpoint_config:
+            raise ValueError(
+                "Strict checkpoint mode enabled: diffusion checkpoint config missing required key "
+                "'topology_conditioning_mode'."
+            )
         checkpoint_state_key = "ema_diffusion_state_dict"
         checkpoint_state = pipeline._extract_checkpoint_state_dict(
             checkpoint,
@@ -573,6 +578,11 @@ def load_masked_room_model(
     if checkpoint_path and Path(checkpoint_path).exists():
         checkpoint, _metadata = pipeline._load_checkpoint_and_metadata(checkpoint_path, "masked_room_model")
         checkpoint_config = pipeline._extract_checkpoint_config(checkpoint)
+        if pipeline.strict_checkpoint_mode and "topology_conditioning_mode" not in checkpoint_config:
+            raise ValueError(
+                "Strict checkpoint mode enabled: masked-room checkpoint config missing required key "
+                "'topology_conditioning_mode'."
+            )
         checkpoint_state = pipeline._extract_checkpoint_state_dict(checkpoint)
 
     model = create_discrete_masked_model(

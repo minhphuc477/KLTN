@@ -182,8 +182,8 @@ def compute_current_node_distance_features(
     - [:, 2] normalized directed backward distance (node -> current)
     - [:, 3] current-node indicator
 
-    Unreachable nodes are assigned a distance value of 1.0, which intentionally
-    separates them from nearby nodes while staying numerically stable.
+    Unreachable nodes are assigned a sentinel distance value of -1.0 so they
+    are distinguishable from reachable nodes at the max-distance clip.
     """
     n = max(0, int(num_nodes))
     features = torch.zeros((n, 4), device=device, dtype=dtype)
@@ -223,7 +223,7 @@ def compute_current_node_distance_features(
     backward_dist = _single_source_graph_distances(reverse_adj, anchor)
 
     def _encode_distances(distances: List[int]) -> torch.Tensor:
-        encoded = torch.ones(n, device=device, dtype=dtype)
+        encoded = torch.full((n,), -1.0, device=device, dtype=dtype)
         for node_idx, raw_distance in enumerate(distances):
             if raw_distance < 0:
                 continue

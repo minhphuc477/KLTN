@@ -468,6 +468,11 @@ class GlobalStreamEncoder(nn.Module):
             raise ValueError(
                 f"Unsupported gnn_type={gnn_type!r}. Expected 'gcn', 'gat', 'sage', or 'gps'."
             )
+        if self.use_rrwp_edge_features and self.gnn_type in {"gcn", "sage"}:
+            raise ValueError(
+                "RRWP edge features require gnn_type='gat' or gnn_type='gps'. "
+                f"Got gnn_type={gnn_type!r} with use_rrwp_edge_features=True."
+            )
         self.use_torch_geometric = HAS_TORCH_GEOMETRIC and self.gnn_type != "gps"
         self._warned_shape_mismatches = set()
 

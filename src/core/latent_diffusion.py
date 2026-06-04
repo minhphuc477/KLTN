@@ -1173,6 +1173,13 @@ class DiTDenoiser(nn.Module):
         num_heads: int = 8,
         dropout: float = 0.0,
         mlp_ratio: float = 4.0,
+        attention_mode: str = "softmax",
+        hedgehog_feature_dim: int = 32,
+        topology_map_channels: int = ROOM_TOPOLOGY_CHANNEL_COUNT,
+        topology_conditioning_mode: str = "additive",
+        auto_linear_attention_nodes: int = 128,
+        graph_gate_init: float = -2.0,
+        topology_gate_init: float = -2.0,
     ) -> None:
         super().__init__()
         if int(patch_size) <= 0:
@@ -1197,6 +1204,27 @@ class DiTDenoiser(nn.Module):
         self.time_embed = TimestepEmbedding(self.model_channels)
         self.context_proj = nn.Linear(self.context_dim, self.model_channels)
         self.context_token_proj = nn.Linear(self.context_dim, self.model_channels)
+        self.context_topology_refiner = CrossAttention(
+            self.model_channels,
+            self.model_channels,
+            num_heads=int(num_heads),
+            dropout=float(dropout),
+            attention_mode=attention_mode,
+            hedgehog_feature_dim=hedgehog_feature_dim,
+        )
+        self.spatial_graph_conditioner = SpatialGraphConditioner(
+            grid_dim=self.model_channels,
+            graph_dim=self.context_dim,
+            topology_channels=int(topology_map_channels),
+            topology_conditioning_mode=topology_conditioning_mode,
+            num_heads=int(num_heads),
+            dropout=float(dropout),
+            attention_mode=attention_mode,
+            hedgehog_feature_dim=hedgehog_feature_dim,
+            auto_linear_attention_nodes=int(auto_linear_attention_nodes),
+            graph_gate_init=float(graph_gate_init),
+            topology_gate_init=float(topology_gate_init),
+        )
         self.blocks = nn.ModuleList(
             [
                 DiTBlock(
@@ -1275,7 +1303,6 @@ class DiTDenoiser(nn.Module):
         context_node_mask: Optional[Tensor] = None,
         spatial_graph_data: Optional[Dict[str, Tensor]] = None,
     ) -> Tensor:
-        del context_edge_index, spatial_graph_data
         B, _C, H, W = x.shape
         if H % self.patch_size != 0 or W % self.patch_size != 0:
             raise ValueError(
@@ -1283,12 +1310,29 @@ class DiTDenoiser(nn.Module):
             )
         h = self.patch_embed(x)
         ph, pw = int(h.shape[-2]), int(h.shape[-1])
+        if spatial_graph_data:
+            h = self.spatial_graph_conditioner(
+                h,
+                graph_nodes=spatial_graph_data.get("graph_nodes"),
+                edge_index=spatial_graph_data.get("edge_index"),
+                node_positions=spatial_graph_data.get("node_positions"),
+                node_tpe=spatial_graph_data.get("node_tpe"),
+                current_node_distance=spatial_graph_data.get("current_node_distance"),
+                node_mask=spatial_graph_data.get("node_mask"),
+                room_topology_map=spatial_graph_data.get("room_topology_map"),
+            )
         tokens = h.flatten(2).transpose(1, 2)
         tokens = tokens + self._positional_encoding(ph, pw, tokens.device, tokens.dtype)
 
         pooled_context = self._pool_context(context, node_mask=context_node_mask).to(dtype=tokens.dtype)
         context_tokens, context_key_padding_mask = self._context_tokens(context, node_mask=context_node_mask)
         context_tokens = context_tokens.to(dtype=tokens.dtype)
+        if context_edge_index is not None and int(context_tokens.shape[1]) > 1:
+            context_tokens = self.context_topology_refiner._refine_context_topology(
+                context_tokens,
+                edge_index=context_edge_index,
+                node_mask=context_node_mask,
+            )
         cond = self.time_embed(t).to(dtype=tokens.dtype) + self.context_proj(pooled_context)
         for block in self.blocks:
             tokens = block(
@@ -2000,6 +2044,13 @@ class LatentDiffusionModel(nn.Module):
                 num_heads=int(unet_num_heads),
                 dropout=float(unet_dropout),
                 mlp_ratio=float(dit_mlp_ratio),
+                attention_mode=self.attention_mode,
+                hedgehog_feature_dim=self.hedgehog_feature_dim,
+                topology_map_channels=self.room_topology_channels,
+                topology_conditioning_mode=self.topology_conditioning_mode,
+                auto_linear_attention_nodes=int(graph_auto_linear_attention_nodes),
+                graph_gate_init=float(spatial_graph_gate_init),
+                topology_gate_init=float(spatial_topology_gate_init),
             )
         else:
             self.denoiser = UNetDenoiser(
@@ -3382,8 +3433,8 @@ class LatentDiffusionModel(nn.Module):
         """
         Compute a rectified-flow / conditional flow-matching velocity loss.
 
-        This is an opt-in training ablation. It reuses the existing U-Net
-        conditioner/backbone and trains it to predict the straight-line
+        This is an opt-in training ablation. In production training configs it
+        uses the DiT denoiser backbone and trains it to predict the straight-line
         velocity from clean latent data to Gaussian noise:
 
             x_t = (1 - t) * x_0 + t * eps

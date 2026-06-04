@@ -1310,6 +1310,8 @@ class AdvancedNeuralSymbolicPipeline:
                         room_tensor = room_tensor.clamp(min=0, max=num_classes - 1)
                         room_onehot = F.one_hot(room_tensor, num_classes=num_classes).permute(0, 3, 1, 2).float()
                         z_q, _ = self.neural_pipeline.vqvae.encode(room_onehot)
+                        # Inference is greedy autoregressive assembly: cached neighbor latents are context only,
+                        # not a differentiable cross-room training path.
                         neighbor_latents[node_id] = z_q.detach()
                 except (AttributeError, RuntimeError, ValueError, TypeError) as e:
                     logger.warning(f"Failed to cache latent for room {node_id}: {e}")
