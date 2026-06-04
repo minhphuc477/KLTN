@@ -11,7 +11,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.core.latent_diffusion import GradientGuidance
 from src.core.definitions import SEMANTIC_PALETTE
-from src.core.logic_net import LogicNet, SemanticEdgeEncoder, SoftBellmanFordGridPathfinder, ValueIterationGridPathfinder, WalkabilityPredictor
+from src.core.logic_net import (
+    LogicNet,
+    PerturbAndMAPGridPathfinder,
+    SemanticEdgeEncoder,
+    SoftBellmanFordGridPathfinder,
+    ValueIterationGridPathfinder,
+    WalkabilityPredictor,
+)
 from src.pipeline.graph_features import extract_node_feature_vector
 from src.pipeline.spatial_utils import parse_label_tokens
 
@@ -182,6 +189,28 @@ def test_vin_pathfinder_is_selectable_and_backpropagates():
     distances.mean().backward()
     assert room_logits.grad is not None
     assert room_logits.grad.abs().sum().item() > 0.0
+
+
+def test_perturb_and_map_pathfinder_is_selectable_and_backpropagates():
+    net = LogicNet(
+        latent_dim=8,
+        num_classes=5,
+        num_iterations=3,
+        grid_pathfinder_type="perturb_and_map",
+    )
+    assert net.grid_pathfinder_type == "perturb_and_map"
+    assert isinstance(net.grid_pathfinder, PerturbAndMAPGridPathfinder)
+
+    room_logits = torch.randn(1, 5, 6, 6, requires_grad=True)
+    source = torch.zeros(1, 1, 6, 6)
+    source[:, :, 0, 0] = 1.0
+    walkability = torch.full((1, 1, 6, 6), 0.75, requires_grad=True)
+    distances = net.grid_pathfinder(room_logits, source, walkability)
+    assert tuple(distances.shape) == (1, 1, 6, 6)
+    assert torch.isfinite(distances[:, :, 0, 0]).all()
+    distances.mean().backward()
+    assert walkability.grad is not None
+    assert walkability.grad.abs().sum().item() > 0.0
 
 
 def test_logicnet_edge_attr_penalties_follow_valid_edge_filter():

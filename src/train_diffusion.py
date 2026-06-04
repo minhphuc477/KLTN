@@ -154,11 +154,15 @@ class DiffusionTrainingConfig:
         latent_dim: int = 64,
         model_channels: int = 128,
         context_dim: int = 256,
+        denoiser_backbone: str = "unet",
         unet_channel_mult: Tuple[int, ...] = (1, 2, 4),
         unet_num_res_blocks: int = 2,
         unet_attention_resolutions: Tuple[int, ...] = (1, 2),
         unet_num_heads: int = 8,
         unet_dropout: float = 0.1,
+        dit_depth: int = 4,
+        dit_patch_size: int = 1,
+        dit_mlp_ratio: float = 4.0,
         condition_hidden_dim: int = 256,
         condition_num_gnn_layers: int = 3,
         condition_num_attention_heads: int = 8,
@@ -191,7 +195,9 @@ class DiffusionTrainingConfig:
         cfg_schedule_mode: str = "constant",
         cfg_schedule_min_scale: float = 1.0,
         cfg_schedule_power: float = 1.0,
+        pag_scale: float = 0.0,
         prediction_type: str = "epsilon",
+        diffusion_training_objective: str = "diffusion",
         min_snr_gamma: float = 5.0,
         
         # LogicNet
@@ -297,6 +303,9 @@ class DiffusionTrainingConfig:
         self.latent_dim = latent_dim
         self.model_channels = int(model_channels)
         self.context_dim = int(context_dim)
+        self.denoiser_backbone = str(denoiser_backbone).strip().lower()
+        if self.denoiser_backbone not in {"unet", "dit"}:
+            raise ValueError(f"denoiser_backbone must be 'unet' or 'dit', got {denoiser_backbone!r}.")
 
         def _normalize_int_sequence(
             name: str,
@@ -336,6 +345,9 @@ class DiffusionTrainingConfig:
         )
         self.unet_num_heads = int(max(1, unet_num_heads))
         self.unet_dropout = float(max(0.0, min(1.0, unet_dropout)))
+        self.dit_depth = int(max(1, dit_depth))
+        self.dit_patch_size = int(max(1, dit_patch_size))
+        self.dit_mlp_ratio = float(max(1.0, dit_mlp_ratio))
         if any((self.model_channels * mult) % self.unet_num_heads != 0 for mult in self.unet_channel_mult):
             raise ValueError(
                 "Every attention-enabled U-Net channel width must be divisible by unet_num_heads; "
@@ -415,7 +427,19 @@ class DiffusionTrainingConfig:
         self.cfg_schedule_mode = str(cfg_schedule_mode).strip().lower()
         self.cfg_schedule_min_scale = float(max(0.0, cfg_schedule_min_scale))
         self.cfg_schedule_power = float(max(1e-6, cfg_schedule_power))
+        self.pag_scale = float(max(0.0, pag_scale))
         self.prediction_type = str(prediction_type).strip().lower()
+        self.diffusion_training_objective = str(diffusion_training_objective).strip().lower()
+        if self.diffusion_training_objective not in {"diffusion", "flow_matching"}:
+            raise ValueError(
+                "diffusion_training_objective must be 'diffusion' or 'flow_matching'."
+            )
+        if self.diffusion_training_objective == "flow_matching" and self.denoiser_backbone != "dit":
+            raise ValueError(
+                "diffusion_training_objective='flow_matching' requires denoiser_backbone='dit' "
+                "for trainable architecture ablations. Use LatentDiffusionModel.flow_matching_loss() "
+                "directly only for isolated research probes."
+            )
         self.min_snr_gamma = float(max(0.0, min_snr_gamma))
         
         self.logic_net_enabled = bool(logic_net_enabled)
@@ -429,8 +453,10 @@ class DiffusionTrainingConfig:
             self.logic_grid_pathfinder = "bellman_ford"
         if self.logic_grid_pathfinder in {"value_iteration", "value-iteration"}:
             self.logic_grid_pathfinder = "vin"
-        if self.logic_grid_pathfinder not in {"cnn", "bellman_ford", "vin"}:
-            raise ValueError("logic_grid_pathfinder must be 'cnn', 'bellman_ford', or 'vin'.")
+        if self.logic_grid_pathfinder in {"perturb-and-map", "perturb_map", "pmap"}:
+            self.logic_grid_pathfinder = "perturb_and_map"
+        if self.logic_grid_pathfinder not in {"cnn", "bellman_ford", "vin", "perturb_and_map"}:
+            raise ValueError("logic_grid_pathfinder must be 'cnn', 'bellman_ford', 'vin', or 'perturb_and_map'.")
         self.num_logic_iterations = num_logic_iterations
         self.logic_topology_trace_weight = float(max(0.0, logic_topology_trace_weight))
         self.logic_topology_anchor_weight = float(max(0.0, logic_topology_anchor_weight))
@@ -579,11 +605,15 @@ def diffusion_training_kwargs_from_resolved_config(
         "latent_dim": stage["latent_dim"],
         "model_channels": stage["model_channels"],
         "context_dim": stage["context_dim"],
+        "denoiser_backbone": stage.get("denoiser_backbone", "unet"),
         "unet_channel_mult": tuple(stage["unet_channel_mult"]),
         "unet_num_res_blocks": stage["unet_num_res_blocks"],
         "unet_attention_resolutions": tuple(stage["unet_attention_resolutions"]),
         "unet_num_heads": stage["unet_num_heads"],
         "unet_dropout": stage["unet_dropout"],
+        "dit_depth": stage.get("dit_depth", 4),
+        "dit_patch_size": stage.get("dit_patch_size", 1),
+        "dit_mlp_ratio": stage.get("dit_mlp_ratio", 4.0),
         "condition_hidden_dim": stage["condition_hidden_dim"],
         "condition_num_gnn_layers": stage["condition_num_gnn_layers"],
         "condition_num_attention_heads": stage["condition_num_attention_heads"],
@@ -616,7 +646,9 @@ def diffusion_training_kwargs_from_resolved_config(
         "cfg_schedule_mode": stage["cfg_schedule_mode"],
         "cfg_schedule_min_scale": stage["cfg_schedule_min_scale"],
         "cfg_schedule_power": stage["cfg_schedule_power"],
+        "pag_scale": stage.get("pag_scale", 0.0),
         "prediction_type": stage["prediction_type"],
+        "diffusion_training_objective": stage.get("training_objective", "diffusion"),
         "min_snr_gamma": stage["min_snr_gamma"],
         "logic_net_enabled": stage["logic_net_enabled"],
         "logic_net_trainable": stage["logic_net_trainable"],
@@ -864,6 +896,7 @@ def _legacy_diffusion_overrides_from_args(args: argparse.Namespace) -> Dict[str,
     _set("learning_rate", getattr(args, "lr", None))
     _set("model_channels", getattr(args, "model_channels", None))
     _set("context_dim", getattr(args, "context_dim", None))
+    _set("denoiser_backbone", getattr(args, "denoiser_backbone", None))
     _set("unet_channel_mult", getattr(args, "unet_channel_mult", None), transform=tuple)
     _set("unet_num_res_blocks", getattr(args, "unet_num_res_blocks", None))
     _set(
@@ -873,6 +906,10 @@ def _legacy_diffusion_overrides_from_args(args: argparse.Namespace) -> Dict[str,
     )
     _set("unet_num_heads", getattr(args, "unet_num_heads", None))
     _set("unet_dropout", getattr(args, "unet_dropout", None))
+    _set("dit_depth", getattr(args, "dit_depth", None))
+    _set("dit_patch_size", getattr(args, "dit_patch_size", None))
+    _set("dit_mlp_ratio", getattr(args, "dit_mlp_ratio", None))
+    _set("pag_scale", getattr(args, "pag_scale", None))
     _set("alpha_logic", getattr(args, "alpha_logic", None))
     _set("alpha_logic_tile", getattr(args, "alpha_logic_tile", None))
     _set("alpha_wfc_pseudo", getattr(args, "alpha_wfc_pseudo", None))
@@ -941,6 +978,7 @@ def _legacy_diffusion_overrides_from_args(args: argparse.Namespace) -> Dict[str,
     _set("logic_topology_anchor_weight", getattr(args, "logic_topology_anchor_weight", None))
     _set("logic_global_reach_weight", getattr(args, "logic_global_reach_weight", None))
     _set("logic_global_room_weight", getattr(args, "logic_global_room_weight", None))
+    _set("diffusion_training_objective", getattr(args, "diffusion_training_objective", None))
     _set("latent_cache_enabled", getattr(args, "latent_cache_enabled", None))
     _set("latent_cache_max_items", getattr(args, "latent_cache_max_items", None))
     _set("checkpoint_dir", getattr(args, "checkpoint_dir", None))
@@ -1176,11 +1214,15 @@ class DiffusionTrainer:
             latent_dim=self.config.latent_dim,
             model_channels=self.config.model_channels,
             context_dim=self.config.context_dim,
+            denoiser_backbone=self.config.denoiser_backbone,
             unet_channel_mult=self.config.unet_channel_mult,
             unet_num_res_blocks=self.config.unet_num_res_blocks,
             unet_attention_resolutions=self.config.unet_attention_resolutions,
             unet_num_heads=self.config.unet_num_heads,
             unet_dropout=self.config.unet_dropout,
+            dit_depth=self.config.dit_depth,
+            dit_patch_size=self.config.dit_patch_size,
+            dit_mlp_ratio=self.config.dit_mlp_ratio,
             num_timesteps=self.config.num_timesteps,
             schedule_type=self.config.schedule_type,
             prediction_type=self.config.prediction_type,
@@ -1189,6 +1231,7 @@ class DiffusionTrainer:
             cfg_schedule_mode=self.config.cfg_schedule_mode,
             cfg_schedule_min_scale=self.config.cfg_schedule_min_scale,
             cfg_schedule_power=self.config.cfg_schedule_power,
+            pag_scale=self.config.pag_scale,
             min_snr_gamma=self.config.min_snr_gamma,
             guidance_scale=self.config.guidance_scale,
             topology_refinement_mode=self.config.topology_refinement_mode,
@@ -1465,6 +1508,29 @@ class DiffusionTrainer:
 
         # epsilon-prediction: x0 = (x_t - sqrt(1-alpha_bar_t) * eps) / sqrt(alpha_bar_t)
         return (x_t - sqrt_one_minus_alpha_t * prediction) / (sqrt_alpha_t + 1e-8)
+
+    def _diffusion_objective_loss(
+        self,
+        z_0: torch.Tensor,
+        conditioning: torch.Tensor,
+        graph_data: Optional[Dict[str, torch.Tensor]] = None,
+        *,
+        model: Optional[nn.Module] = None,
+    ) -> torch.Tensor:
+        """Dispatch the configured latent objective without changing callers."""
+        objective = str(getattr(self.config, "diffusion_training_objective", "diffusion")).strip().lower()
+        target_model = model or self.diffusion
+        if objective == "flow_matching":
+            flow_loss = getattr(target_model, "flow_matching_loss", None)
+            if not callable(flow_loss):
+                raise TypeError(
+                    "diffusion_training_objective='flow_matching' requires the diffusion model "
+                    "to implement flow_matching_loss()."
+                )
+            return flow_loss(z_0, conditioning, graph_data=graph_data)
+        if objective != "diffusion":
+            raise ValueError(f"Unsupported diffusion_training_objective={objective!r}.")
+        return target_model.training_loss(z_0, conditioning, graph_data=graph_data)
 
     def _decode_latent_for_logic(self, latent: torch.Tensor) -> torch.Tensor:
         """
@@ -2473,6 +2539,58 @@ class DiffusionTrainer:
             if group.get("name") == "logic_net":
                 scale = min(scale, logic_scale)
             group["lr"] = base_lr * scale
+
+    def _vqvae_codebook_stats(self) -> Dict[str, float]:
+        """Return frozen VQ/FSQ code usage metrics for diffusion logs."""
+        stats: Dict[str, float] = {}
+
+        def add_usage(prefix: str, usage: torch.Tensor) -> None:
+            values = usage.detach().float().view(-1)
+            total_codes = int(values.numel())
+            if total_codes <= 0:
+                return
+            active = values > 0
+            probs = values
+            total = float(probs.sum().item())
+            if total > 0.0:
+                probs = probs / max(total, 1e-12)
+                perplexity = torch.exp(
+                    -(probs.clamp_min(1e-12) * probs.clamp_min(1e-12).log()).sum()
+                )
+                max_usage = float(probs.max().item())
+            else:
+                perplexity = torch.zeros((), device=values.device, dtype=values.dtype)
+                max_usage = 0.0
+            stats[f"{prefix}_active_codes"] = float(active.sum().item())
+            stats[f"{prefix}_total_codes"] = float(total_codes)
+            stats[f"{prefix}_active_fraction"] = float(active.float().mean().item())
+            stats[f"{prefix}_perplexity"] = float(perplexity.item())
+            stats[f"{prefix}_max_usage"] = max_usage
+
+        with torch.no_grad():
+            vqvae = getattr(self, "vqvae", None)
+            if vqvae is None:
+                return stats
+            hierarchical = getattr(vqvae, "get_hierarchical_codebook_usage", None)
+            if callable(hierarchical):
+                try:
+                    payload = hierarchical()
+                except RuntimeError:
+                    payload = None
+                if isinstance(payload, dict):
+                    for name, usage in payload.items():
+                        if isinstance(usage, torch.Tensor):
+                            add_usage(f"vqvae_codebook_{name}", usage)
+                    return stats
+            getter = getattr(vqvae, "get_codebook_usage", None)
+            if callable(getter):
+                try:
+                    usage = getter()
+                except RuntimeError:
+                    usage = None
+                if isinstance(usage, torch.Tensor):
+                    add_usage("vqvae_codebook", usage)
+        return stats
     
     def train_step(
         self,
@@ -2523,8 +2641,8 @@ class DiffusionTrainer:
             diffusion_graph_data = dict(diffusion_graph_data)
             diffusion_graph_data["spatial_alignment_weight"] = graph_alignment_weight
         
-        # === Part 1: Diffusion loss (standard noise prediction) ===
-        diffusion_loss = self.diffusion.training_loss(z_0, conditioning, graph_data=diffusion_graph_data)
+        # === Part 1: Diffusion / flow objective ===
+        diffusion_loss = self._diffusion_objective_loss(z_0, conditioning, diffusion_graph_data)
         if not self._tensor_is_finite(diffusion_loss):
             self.optimizer.zero_grad(set_to_none=True)
             self._warn_nonfinite(
@@ -2532,7 +2650,7 @@ class DiffusionTrainer:
                 "Diffusion training: non-finite diffusion loss detected; skipping optimizer step for this batch.",
             )
             self.global_step += 1
-            return {
+            metrics = {
                 'loss': 0.0,
                 'diffusion_loss': 0.0,
                 'logic_loss': 0.0,
@@ -2545,6 +2663,8 @@ class DiffusionTrainer:
                 'logic_loss_mode_predicted': 1.0 if self.config.logic_loss_mode == 'predicted_latent' else 0.0,
                 'skipped_nonfinite_batch': 1.0,
             }
+            metrics.update(self._vqvae_codebook_stats())
+            return metrics
         
         # === Part 2: LogicNet loss on model-predicted latent WITH graph topology ===
         # IMPORTANT: computing logic loss on detached real z_0 does not train diffusion.
@@ -2640,7 +2760,7 @@ class DiffusionTrainer:
                 "Diffusion training: non-finite total loss detected; skipping optimizer step for this batch.",
             )
             self.global_step += 1
-            return {
+            metrics = {
                 'loss': 0.0,
                 'diffusion_loss': float(diffusion_loss.detach().item()) if self._tensor_is_finite(diffusion_loss) else 0.0,
                 'logic_loss': 0.0,
@@ -2653,6 +2773,8 @@ class DiffusionTrainer:
                 'logic_loss_mode_predicted': 1.0 if self.config.logic_loss_mode == 'predicted_latent' else 0.0,
                 'skipped_nonfinite_batch': 1.0,
             }
+            metrics.update(self._vqvae_codebook_stats())
+            return metrics
         
         # Backward
         self.optimizer.zero_grad(set_to_none=True)
@@ -2671,7 +2793,7 @@ class DiffusionTrainer:
                 "Diffusion training: non-finite gradients detected; skipping optimizer step for this batch.",
             )
             self.global_step += 1
-            return {
+            metrics = {
                 'loss': float(total_loss.detach().item()),
                 'diffusion_loss': float(diffusion_loss.detach().item()),
                 'logic_loss': float(logic_loss.detach().item()) if self._tensor_is_finite(logic_loss) else 0.0,
@@ -2684,6 +2806,8 @@ class DiffusionTrainer:
                 'logic_loss_mode_predicted': 1.0 if self.config.logic_loss_mode == 'predicted_latent' else 0.0,
                 'skipped_nonfinite_batch': 1.0,
             }
+            metrics.update(self._vqvae_codebook_stats())
+            return metrics
         grad_clip_norm = float(max(0.0, float(getattr(self.config, "grad_clip_norm", 1.0))))
         if grad_clip_norm > 0:
             clip_params = list(self.diffusion.parameters()) + list(self.condition_encoder.parameters())
@@ -2700,7 +2824,7 @@ class DiffusionTrainer:
                     "Diffusion training: non-finite gradient norm detected after clipping; skipping optimizer step for this batch.",
                 )
                 self.global_step += 1
-                return {
+                metrics = {
                     'loss': float(total_loss.detach().item()),
                     'diffusion_loss': float(diffusion_loss.detach().item()),
                     'logic_loss': float(logic_loss.detach().item()) if self._tensor_is_finite(logic_loss) else 0.0,
@@ -2713,6 +2837,8 @@ class DiffusionTrainer:
                     'logic_loss_mode_predicted': 1.0 if self.config.logic_loss_mode == 'predicted_latent' else 0.0,
                     'skipped_nonfinite_batch': 1.0,
                 }
+                metrics.update(self._vqvae_codebook_stats())
+                return metrics
         self.optimizer.step()
         
         # --- Phase 4A: Update EMA model weights ---
@@ -2729,7 +2855,7 @@ class DiffusionTrainer:
             progress = min(1.0, self.global_step / estimated_total_steps)
             self.logic_net.anneal_temperature(progress)
         
-        return {
+        metrics = {
             'loss': total_loss.item(),
             'diffusion_loss': diffusion_loss.item(),
             'logic_loss': logic_loss.item(),
@@ -2740,6 +2866,90 @@ class DiffusionTrainer:
             'solvability_proxy': solvability_proxy.item(),
             'solvability': solvability_proxy.item(),
             'logic_loss_mode_predicted': 1.0 if self.config.logic_loss_mode == 'predicted_latent' else 0.0,
+        }
+        metrics.update(self._vqvae_codebook_stats())
+        return metrics
+
+    def dpo_step(
+        self,
+        chosen_maps: torch.Tensor,
+        rejected_maps: torch.Tensor,
+        conditioning: Optional[torch.Tensor] = None,
+        graph_data: Optional[Dict[str, torch.Tensor]] = None,
+        *,
+        rejected_conditioning: Optional[torch.Tensor] = None,
+        rejected_graph_data: Optional[Dict[str, torch.Tensor]] = None,
+        beta: float = 0.1,
+        reference_model: Optional[nn.Module] = None,
+    ) -> Dict[str, float]:
+        """
+        Run one Diffusion-DPO update on preferred/rejected map pairs.
+
+        Preference pairs can be produced by hard symbolic validation, e.g. a
+        solvable dungeon as `chosen_maps` and a broken dungeon as
+        `rejected_maps` under the same graph condition.
+        """
+        self.diffusion.train()
+        self.condition_encoder.train()
+        if conditioning is None:
+            conditioning = self.get_dummy_conditioning(int(chosen_maps.shape[0]))
+        if rejected_conditioning is None:
+            rejected_conditioning = conditioning
+
+        chosen_z = self.encode_to_latent(chosen_maps)
+        rejected_z = self.encode_to_latent(rejected_maps)
+        objective = str(getattr(self.config, "diffusion_training_objective", "diffusion")).strip().lower()
+        ref = reference_model if reference_model is not None else self.ema_diffusion
+        if ref is self.diffusion:
+            ref = None
+
+        loss, dpo_metrics = self.diffusion.diffusion_dpo_loss(
+            chosen_z,
+            rejected_z,
+            conditioning,
+            graph_data=graph_data,
+            rejected_context=rejected_conditioning,
+            rejected_graph_data=rejected_graph_data,
+            reference_model=ref,
+            beta=float(beta),
+            objective=objective,
+        )
+        if not self._tensor_is_finite(loss):
+            self.optimizer.zero_grad(set_to_none=True)
+            self._warn_nonfinite(
+                "dpo_loss",
+                "Diffusion-DPO: non-finite DPO loss detected; skipping optimizer step for this batch.",
+            )
+            self.global_step += 1
+            return {
+                "loss": 0.0,
+                "dpo_loss": 0.0,
+                "dpo_margin": 0.0,
+                "dpo_accuracy": 0.0,
+                "skipped_nonfinite_batch": 1.0,
+            }
+
+        self.optimizer.zero_grad(set_to_none=True)
+        loss.backward()
+        grad_clip = float(getattr(self.config, "grad_clip_norm", 0.0))
+        if grad_clip > 0:
+            torch.nn.utils.clip_grad_norm_(
+                [p for group in self.optimizer.param_groups for p in group["params"] if p.grad is not None],
+                grad_clip,
+            )
+        self.optimizer.step()
+        self._update_ema()
+        self.global_step += 1
+        self._apply_lr_warmup(completed_steps=self.global_step)
+
+        return {
+            "loss": float(loss.detach().item()),
+            "dpo_loss": float(loss.detach().item()),
+            "dpo_margin": float(dpo_metrics["dpo_margin"].item()),
+            "dpo_accuracy": float(dpo_metrics["dpo_accuracy"].item()),
+            "chosen_score": float(dpo_metrics["chosen_score"].item()),
+            "rejected_score": float(dpo_metrics["rejected_score"].item()),
+            "skipped_nonfinite_batch": 0.0,
         }
     
     def _extract_coords_from_maps(self, real_maps: torch.Tensor) -> Tuple[Tuple[int,int], Tuple[int,int]]:
@@ -2954,7 +3164,12 @@ class DiffusionTrainer:
                     logger.debug("LogicNet tile-classifier validation failed; omitting tile accuracy: %s", exc)
 
             if num_diffusion_eval < int(num_diffusion_samples):
-                diffusion_loss = eval_model.training_loss(z_0, conditioning, graph_data=diffusion_graph_data)
+                diffusion_loss = self._diffusion_objective_loss(
+                    z_0,
+                    conditioning,
+                    diffusion_graph_data,
+                    model=eval_model,
+                )
                 if self._tensor_is_finite(diffusion_loss):
                     diffusion_batch = min(batch_size, int(num_diffusion_samples) - num_diffusion_eval)
                     total_diffusion_loss += float(diffusion_loss.item()) * diffusion_batch
@@ -3125,6 +3340,12 @@ class DiffusionTrainer:
                 "context_dim": int(self.config.context_dim),
                 "num_timesteps": int(self.config.num_timesteps),
                 "schedule_type": str(self.config.schedule_type),
+                "diffusion_training_objective": str(getattr(self.config, "diffusion_training_objective", "diffusion")),
+                "denoiser_backbone": str(getattr(self.config, "denoiser_backbone", "unet")),
+                "pag_scale": float(getattr(self.config, "pag_scale", 0.0)),
+                "dit_depth": int(getattr(self.config, "dit_depth", 4)),
+                "dit_patch_size": int(getattr(self.config, "dit_patch_size", 1)),
+                "dit_mlp_ratio": float(getattr(self.config, "dit_mlp_ratio", 4.0)),
                 "num_classes": int(self.config.num_classes),
                 "vqvae_hidden_dim": int(self.config.vqvae_hidden_dim),
                 "vqvae_codebook_size": int(self.config.vqvae_codebook_size),
@@ -3552,11 +3773,16 @@ def main():
     parser.add_argument('--lr', type=float, default=None)
     parser.add_argument('--model-channels', type=int, default=None)
     parser.add_argument('--context-dim', type=int, default=None)
+    parser.add_argument('--denoiser-backbone', type=str, default=None, choices=['unet', 'dit'])
     parser.add_argument('--unet-channel-mult', type=int, nargs='+', default=None)
     parser.add_argument('--unet-num-res-blocks', type=int, default=None)
     parser.add_argument('--unet-attention-resolutions', type=int, nargs='+', default=None)
     parser.add_argument('--unet-num-heads', type=int, default=None)
     parser.add_argument('--unet-dropout', type=float, default=None)
+    parser.add_argument('--dit-depth', type=int, default=None)
+    parser.add_argument('--dit-patch-size', type=int, default=None)
+    parser.add_argument('--dit-mlp-ratio', type=float, default=None)
+    parser.add_argument('--pag-scale', type=float, default=None)
     parser.add_argument('--alpha-logic', type=float, default=None)
     parser.add_argument('--alpha-logic-tile', type=float, default=None)
     parser.add_argument('--alpha-wfc-pseudo', type=float, default=None)
@@ -3644,13 +3870,33 @@ def main():
         '--logic-grid-pathfinder',
         type=str,
         default=None,
-        choices=['cnn', 'bellman_ford', 'bellman-ford', 'soft_bellman_ford', 'soft-bellman-ford', 'vin', 'value_iteration', 'value-iteration'],
-        help='Grid-level LogicNet pathfinder ablation: learned CNN, explicit soft Bellman-Ford, or VIN.',
+        choices=[
+            'cnn',
+            'bellman_ford',
+            'bellman-ford',
+            'soft_bellman_ford',
+            'soft-bellman-ford',
+            'vin',
+            'value_iteration',
+            'value-iteration',
+            'perturb_and_map',
+            'perturb-and-map',
+            'perturb_map',
+            'pmap',
+        ],
+        help='Grid-level LogicNet pathfinder ablation: learned CNN, explicit soft Bellman-Ford, VIN, or Perturb-and-MAP straight-through.',
     )
     parser.add_argument('--logic-topology-trace-weight', type=float, default=None)
     parser.add_argument('--logic-topology-anchor-weight', type=float, default=None)
     parser.add_argument('--logic-global-reach-weight', type=float, default=None)
     parser.add_argument('--logic-global-room-weight', type=float, default=None)
+    parser.add_argument(
+        '--diffusion-training-objective',
+        type=str,
+        default=None,
+        choices=['diffusion', 'flow_matching'],
+        help='Latent training objective ablation. flow_matching trains velocity targets and should be reported separately.',
+    )
     parser.add_argument('--guidance-scale', type=float, default=None)
     parser.add_argument('--latent-cache-enabled', action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument('--latent-cache-max-items', type=int, default=None)

@@ -1,0 +1,14 @@
+# Disable LogicNet losses/guidance for a neural-only diffusion baseline.
+training:
+  stage: diffusion
+
+diffusion:
+  logic_net_enabled: false
+  alpha_logic: 0.0
+  alpha_logic_tile: 0.0
+  logic_topology_trace_weight: 0.0
+  logic_topology_anchor_weight: 0.0
+  logic_global_reach_weight: 0.0
+  logic_global_room_weight: 0.0
+  guidance_scale: 0.0
+

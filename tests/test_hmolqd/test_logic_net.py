@@ -323,10 +323,21 @@ class TestTileClassifier:
         
         features = torch.randn(2, 32, 16, 11)
         
-        probs = classifier(features)
+        logits = classifier(features)
         
+        assert logits.shape == (2, 44, 16, 11)
+        assert not torch.allclose(
+            logits.sum(dim=1),
+            torch.ones_like(logits[:, 0]),
+            atol=1e-5,
+        )
+
+        probs = TileClassifier(
+            in_channels=32,
+            num_classes=44,
+            output_mode="probs",
+        )(features)
         assert probs.shape == (2, 44, 16, 11)
-        # Should sum to 1 along class dim
         sums = probs.sum(dim=1)
         assert torch.allclose(sums, torch.ones_like(sums), atol=1e-5)
 

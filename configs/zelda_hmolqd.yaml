@@ -41,6 +41,7 @@ dataset:
   normalize: true  # type=bool, default=true, valid={true,false}
   room_level: true  # type=bool, default=true, valid={true,false}
   load_graphs: true  # type=bool, default=true, valid={true,false}
+  dungeon_batch_mode: true  # type=bool, default=true, valid={true,false}; group room batches by dungeon variant so global graph conditioning is complete
   train_dungeons: [1, 2, 3, 4, 5, 6, 7, 8]  # type=list[int], default=[1..8]; fixed train/internal-val split at dungeon granularity
   test_dungeons: [9]  # type=list[int], default=[9]; held out completely for final unseen evaluation
   variants: [1, 2]  # type=list[int], default=[1,2]; keep both Quest variants inside each selected dungeon split
@@ -97,16 +98,21 @@ diffusion:
   latent_dim: 64  # type=int, default=64, valid>=1
   model_channels: 96  # type=int, default=128, valid>=8; recommended small-data-balanced setting for the current Zelda corpus
   context_dim: 256  # type=int, default=256, valid>=8
+  denoiser_backbone: unet  # type=str, default=unet, valid={unet,dit}; DiT is a controlled ablation for flow-matching/backbone studies
   unet_channel_mult: [1, 2, 4]  # type=list[int], default=[1,2,4], valid=positive ints; per-level U-Net channel multipliers
   unet_num_res_blocks: 2  # type=int, default=2, valid>=1
   unet_attention_resolutions: [1, 2]  # type=list[int], default=[1,2], valid=level indices into unet_channel_mult
   unet_num_heads: 8  # type=int, default=8, valid>=1; each model_channels*mult must be divisible by this
   unet_dropout: 0.1  # type=float, default=0.1, valid=0..1
+  dit_depth: 4  # type=int, default=4, valid>=1
+  dit_patch_size: 1  # type=int, default=1, valid>=1
+  dit_mlp_ratio: 4.0  # type=float, default=4.0, valid>=1
   condition_hidden_dim: 192  # type=int, default=256, valid>=8; reduced default for small-data stability/cost
   condition_num_gnn_layers: 2  # type=int, default=3, valid>=1; shallower graph stack reduces over-smoothing and compute
   condition_num_attention_heads: 8  # type=int, default=8, valid>=1
   condition_dropout: 0.1  # type=float, default=0.1, valid=0..1
   condition_gnn_type: gps  # type=str, default=gcn, valid={gcn,gat,sage,gps}; GraphGPS-style hybrid graph encoder is the recommended training setting
+  condition_use_rrwp_edge_features: true  # type=bool, default=true, valid={true,false}; explicit RRWP edge-feature ablation switch
   condition_use_reference_room_maps: true  # type=bool, default=false, valid={true,false}; use neighboring room exemplars as a lightweight prompt-free local reference signal
   condition_reference_tile_vocab_size: 44  # type=int, default=44, valid>=2; must match dataset.num_classes when enabled
   condition_reference_embedding_dim: 32  # type=int, default=32, valid>=4
@@ -138,13 +144,15 @@ diffusion:
   cfg_schedule_mode: constant  # type=str, default=constant, valid={constant,linear_decay,cosine_decay}
   cfg_schedule_min_scale: 1.0  # type=float, default=1.0, valid>=0
   cfg_schedule_power: 1.0  # type=float, default=1.0, valid>0
+  pag_scale: 0.0  # type=float, default=0.0, valid>=0; perturbed-attention guidance is inference-only and disabled by default
   prediction_type: epsilon  # type=str, default=epsilon, valid={epsilon,v}
+  training_objective: diffusion  # type=str, default=diffusion, valid={diffusion,flow_matching}; flow_matching requires denoiser_backbone=dit and is not the default sampler path
   min_snr_gamma: 5.0  # type=float, default=5.0, valid>=0
   logic_net_enabled: true  # type=bool, default=true, valid={true,false}; disables LogicNet loss/guidance for clean ablations when false
   logic_net_trainable: true  # type=bool, default=true, valid={true,false}; freeze LogicNet while retaining guidance/eval when false
   logic_learning_rate: null  # type=float|null, default=null, valid>=1e-8; optional LogicNet-specific LR
   logic_lr_warmup_epochs: 5  # type=int, default=5, valid>=0; linearly warm up only the LogicNet optimizer group
-  logic_grid_pathfinder: bellman_ford  # type=str, default=bellman_ford, valid={cnn,bellman_ford}; grid-pathfinder ablation
+  logic_grid_pathfinder: bellman_ford  # type=str, default=bellman_ford, valid={cnn,bellman_ford,vin,perturb_and_map}; grid-pathfinder ablation
   num_logic_iterations: 30  # type=int, default=30, valid>=1
   logic_topology_trace_weight: 0.25  # type=float, default=0.25, valid>=0; extra LogicNet pressure on mission-conditioned traversability traces
   logic_topology_anchor_weight: 0.25  # type=float, default=0.25, valid>=0; extra LogicNet pressure on start/goal/door anchor walkability
@@ -161,6 +169,7 @@ diffusion:
   guidance_max_guidance_elements: 2000000  # type=int, default=2000000, valid>=1
   alpha_visual: 1.0  # type=float, default=1.0, valid>=0
   alpha_logic: 0.1  # type=float, default=0.1, valid>=0
+  alpha_logic_tile: 0.05  # type=float, default=0.05, valid>=0; supervised TileClassifier CE loss on frozen VQ-VAE latents
   logic_loss_mode: predicted_latent  # type=str, default=predicted_latent, valid={predicted_latent,detached_real}
   warmup_epochs: 5  # type=int, default=5, valid>=0
   scheduler_t0: 10  # type=int, default=10, valid>=1

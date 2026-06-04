@@ -36,6 +36,7 @@ from src.zelda_data.zelda_loader import (
     ZeldaDungeonDataset,
     _build_room_graph_sample,
     _extract_graph_from_dungeon,
+    graph_collate_fn,
 )
 
 
@@ -108,6 +109,45 @@ def test_dungeon_batch_sampler_groups_room_samples_by_dungeon_variant():
     batches = list(iter(sampler))
 
     assert batches == [[2, 0], [1]]
+
+
+def test_dungeon_batch_sampler_preserves_graph_fields_in_batches():
+    class _Dataset(torch.utils.data.Dataset):
+        sample_metadata = [
+            {"dungeon_id": "d1_v1", "current_node_idx": 0},
+            {"dungeon_id": "d1_v1", "current_node_idx": 1},
+        ]
+
+        def __len__(self):
+            return len(self.sample_metadata)
+
+        def __getitem__(self, idx):
+            graph = {
+                "node_features": torch.zeros(2, GRAPH_NODE_FEATURE_DIM),
+                "edge_index": torch.tensor([[0], [1]], dtype=torch.long),
+                "edge_features": torch.zeros(1, GRAPH_EDGE_FEATURE_DIM),
+                "edge_rrwp": torch.zeros(1, GRAPH_TPE_DIM),
+                "tpe": torch.zeros(2, GRAPH_TPE_DIM),
+            }
+            room = torch.zeros(1, ROOM_HEIGHT, ROOM_WIDTH)
+            return room, graph
+
+    dataset = _Dataset()
+    loader = torch.utils.data.DataLoader(
+        dataset,
+        batch_sampler=DungeonBatchSampler.from_dataset(dataset, shuffle=False),
+        collate_fn=graph_collate_fn,
+    )
+
+    _rooms, graph_list = next(iter(loader))
+
+    assert len(graph_list) == 2
+    for graph in graph_list:
+        assert graph["edge_index"] is not None
+        assert tuple(graph["edge_index"].shape) == (2, 1)
+        assert tuple(graph["node_features"].shape) == (2, GRAPH_NODE_FEATURE_DIM)
+        assert tuple(graph["edge_rrwp"].shape) == (1, GRAPH_TPE_DIM)
+        assert tuple(graph["tpe"].shape) == (2, GRAPH_TPE_DIM)
 
 
 def test_room_graph_sample_builds_room_topology_from_dataset_graph():

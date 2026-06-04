@@ -48,6 +48,10 @@ from .tile_distribution import (
     iter_tile_patterns,
     tile_pattern_counts,
 )
+from .perturb_and_map import (
+    PerturbAndMAPReachabilityResult,
+    perturb_and_map_reachability,
+)
 
 _BENCHMARK_EXPORTS = [
     'GraphDescriptor',
@@ -103,6 +107,9 @@ __all__ = [
     'compare_tile_pattern_distributions',
     'iter_tile_patterns',
     'tile_pattern_counts',
+    # Perturb-and-MAP hard-solver ablation
+    'PerturbAndMAPReachabilityResult',
+    'perturb_and_map_reachability',
     # Benchmark suite (lazy-loaded)
     *_BENCHMARK_EXPORTS,
 ]

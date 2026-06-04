@@ -154,6 +154,13 @@ class SelfAttention(nn.Module):
         self.qkv = nn.Linear(dim, dim * 3)
         self.proj = nn.Linear(dim, dim)
         self.dropout = nn.Dropout(dropout)
+        self.perturbation_mode = "none"
+
+    def set_perturbation_mode(self, mode: str = "none") -> None:
+        normalized = str(mode).strip().lower()
+        if normalized not in {"none", "identity"}:
+            raise ValueError(f"SelfAttention perturbation mode must be 'none' or 'identity', got {mode!r}.")
+        self.perturbation_mode = normalized
     
     def forward(self, x: Tensor) -> Tensor:
         """
@@ -170,7 +177,9 @@ class SelfAttention(nn.Module):
         qkv = qkv.permute(2, 0, 3, 1, 4)  # [3, B, H, N, D]
         q, k, v = qkv[0], qkv[1], qkv[2]
 
-        if HAS_SDPA:
+        if self.perturbation_mode == "identity":
+            out = v.transpose(1, 2).reshape(B, N, C)
+        elif HAS_SDPA:
             out = F.scaled_dot_product_attention(
                 q,
                 k,
@@ -1080,6 +1089,237 @@ class UNetDenoiser(nn.Module):
         return h
 
 
+class DiTBlock(nn.Module):
+    """DiT transformer block with adaLN-style conditioning."""
+
+    def __init__(
+        self,
+        hidden_dim: int,
+        cond_dim: int,
+        num_heads: int,
+        mlp_ratio: float = 4.0,
+        dropout: float = 0.0,
+    ) -> None:
+        super().__init__()
+        if hidden_dim % num_heads != 0:
+            raise ValueError(f"DiTBlock hidden_dim={hidden_dim} must be divisible by num_heads={num_heads}.")
+        self.norm1 = nn.LayerNorm(hidden_dim, elementwise_affine=False)
+        self.attn = nn.MultiheadAttention(hidden_dim, num_heads, dropout=dropout, batch_first=True)
+        self.norm_cross = nn.LayerNorm(hidden_dim, elementwise_affine=False)
+        self.cross_attn = nn.MultiheadAttention(hidden_dim, num_heads, dropout=dropout, batch_first=True)
+        self.norm2 = nn.LayerNorm(hidden_dim, elementwise_affine=False)
+        mlp_hidden = int(max(hidden_dim, round(hidden_dim * float(mlp_ratio))))
+        self.mlp = nn.Sequential(
+            nn.Linear(hidden_dim, mlp_hidden),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(mlp_hidden, hidden_dim),
+        )
+        self.adaLN = nn.Sequential(nn.SiLU(), nn.Linear(cond_dim, 9 * hidden_dim))
+        self.perturbation_mode = "none"
+
+    def set_perturbation_mode(self, mode: str = "none") -> None:
+        normalized = str(mode).strip().lower()
+        if normalized not in {"none", "identity"}:
+            raise ValueError(f"DiTBlock perturbation mode must be 'none' or 'identity', got {mode!r}.")
+        self.perturbation_mode = normalized
+
+    @staticmethod
+    def _modulate(x: Tensor, shift: Tensor, scale: Tensor) -> Tensor:
+        return x * (1.0 + scale.unsqueeze(1)) + shift.unsqueeze(1)
+
+    def forward(
+        self,
+        x: Tensor,
+        cond: Tensor,
+        context_tokens: Optional[Tensor] = None,
+        context_key_padding_mask: Optional[Tensor] = None,
+    ) -> Tensor:
+        (
+            shift_msa,
+            scale_msa,
+            gate_msa,
+            shift_cross,
+            scale_cross,
+            gate_cross,
+            shift_mlp,
+            scale_mlp,
+            gate_mlp,
+        ) = self.adaLN(cond).chunk(9, dim=-1)
+        attn_in = self._modulate(self.norm1(x), shift_msa, scale_msa)
+        if self.perturbation_mode == "identity":
+            attn_out = attn_in
+        else:
+            attn_out, _ = self.attn(attn_in, attn_in, attn_in, need_weights=False)
+        x = x + torch.sigmoid(gate_msa).unsqueeze(1) * attn_out
+        if context_tokens is not None:
+            cross_in = self._modulate(self.norm_cross(x), shift_cross, scale_cross)
+            cross_out, _ = self.cross_attn(
+                cross_in,
+                context_tokens,
+                context_tokens,
+                key_padding_mask=context_key_padding_mask,
+                need_weights=False,
+            )
+            x = x + torch.sigmoid(gate_cross).unsqueeze(1) * cross_out
+        mlp_in = self._modulate(self.norm2(x), shift_mlp, scale_mlp)
+        x = x + torch.sigmoid(gate_mlp).unsqueeze(1) * self.mlp(mlp_in)
+        return x
+
+
+class DiTDenoiser(nn.Module):
+    """
+    Diffusion Transformer denoiser for flow-matching/diffusion ablations.
+
+    The module patchifies latent feature maps, injects global timestep/context
+    through adaLN, lets latent patches cross-attend to graph/context tokens, and
+    unpatchifies back to the latent tensor shape expected by the trainer.
+    """
+
+    def __init__(
+        self,
+        in_channels: int = 64,
+        model_channels: int = 128,
+        out_channels: int = 64,
+        context_dim: int = 256,
+        depth: int = 4,
+        patch_size: int = 1,
+        num_heads: int = 8,
+        dropout: float = 0.0,
+        mlp_ratio: float = 4.0,
+    ) -> None:
+        super().__init__()
+        if int(patch_size) <= 0:
+            raise ValueError(f"DiTDenoiser patch_size must be > 0, got {patch_size}.")
+        if int(model_channels) % int(num_heads) != 0:
+            raise ValueError(
+                f"DiTDenoiser model_channels={model_channels} must be divisible by num_heads={num_heads}."
+            )
+        self.in_channels = int(in_channels)
+        self.model_channels = int(model_channels)
+        self.out_channels = int(out_channels)
+        self.context_dim = int(context_dim)
+        self.patch_size = int(patch_size)
+        self.depth = int(max(1, depth))
+
+        self.patch_embed = nn.Conv2d(
+            self.in_channels,
+            self.model_channels,
+            kernel_size=self.patch_size,
+            stride=self.patch_size,
+        )
+        self.time_embed = TimestepEmbedding(self.model_channels)
+        self.context_proj = nn.Linear(self.context_dim, self.model_channels)
+        self.context_token_proj = nn.Linear(self.context_dim, self.model_channels)
+        self.blocks = nn.ModuleList(
+            [
+                DiTBlock(
+                    hidden_dim=self.model_channels,
+                    cond_dim=self.model_channels,
+                    num_heads=int(num_heads),
+                    mlp_ratio=float(mlp_ratio),
+                    dropout=float(dropout),
+                )
+                for _ in range(self.depth)
+            ]
+        )
+        self.final_norm = nn.LayerNorm(self.model_channels, elementwise_affine=False)
+        self.final_mod = nn.Sequential(nn.SiLU(), nn.Linear(self.model_channels, 2 * self.model_channels))
+        self.out_proj = nn.Linear(self.model_channels, self.patch_size * self.patch_size * self.out_channels)
+
+    def _pool_context(self, context: Tensor, node_mask: Optional[Tensor] = None) -> Tensor:
+        if context.dim() == 2:
+            return context
+        if context.dim() != 3:
+            raise ValueError(f"DiTDenoiser context must be [B,C] or [B,N,C], got {tuple(context.shape)}.")
+        if node_mask is None:
+            return context.mean(dim=1)
+        mask = node_mask.to(device=context.device, dtype=context.dtype)
+        if mask.dim() == 1:
+            mask = mask.unsqueeze(0)
+        if int(mask.shape[0]) == 1 and int(context.shape[0]) > 1:
+            mask = mask.expand(int(context.shape[0]), -1)
+        if int(mask.shape[1]) != int(context.shape[1]):
+            if int(mask.shape[1]) > int(context.shape[1]):
+                mask = mask[:, : int(context.shape[1])]
+            else:
+                mask = F.pad(mask, (0, int(context.shape[1]) - int(mask.shape[1])), value=0.0)
+        denom = mask.sum(dim=1, keepdim=True).clamp_min(1.0)
+        return (context * mask.unsqueeze(-1)).sum(dim=1) / denom
+
+    def _context_tokens(
+        self,
+        context: Tensor,
+        node_mask: Optional[Tensor] = None,
+    ) -> Tuple[Tensor, Optional[Tensor]]:
+        if context.dim() == 2:
+            tokens = context.unsqueeze(1)
+            return self.context_token_proj(tokens), None
+        if context.dim() != 3:
+            raise ValueError(f"DiTDenoiser context must be [B,C] or [B,N,C], got {tuple(context.shape)}.")
+        mask = None
+        if node_mask is not None:
+            mask = node_mask.to(device=context.device, dtype=torch.bool)
+            if mask.dim() == 1:
+                mask = mask.unsqueeze(0)
+            if int(mask.shape[0]) == 1 and int(context.shape[0]) > 1:
+                mask = mask.expand(int(context.shape[0]), -1)
+            if int(mask.shape[1]) != int(context.shape[1]):
+                if int(mask.shape[1]) > int(context.shape[1]):
+                    mask = mask[:, : int(context.shape[1])]
+                else:
+                    mask = F.pad(mask, (0, int(context.shape[1]) - int(mask.shape[1])), value=False)
+        return self.context_token_proj(context), None if mask is None else ~mask
+
+    def _positional_encoding(self, height: int, width: int, device: torch.device, dtype: torch.dtype) -> Tensor:
+        y = torch.linspace(-1.0, 1.0, height, device=device, dtype=dtype)
+        x = torch.linspace(-1.0, 1.0, width, device=device, dtype=dtype)
+        yy, xx = torch.meshgrid(y, x, indexing="ij")
+        base = torch.stack([yy, xx, torch.sin(math.pi * yy), torch.cos(math.pi * xx)], dim=-1)
+        base = base.reshape(1, height * width, 4)
+        repeat = math.ceil(self.model_channels / 4)
+        return base.repeat(1, 1, repeat)[..., : self.model_channels]
+
+    def forward(
+        self,
+        x: Tensor,
+        t: Tensor,
+        context: Tensor,
+        context_edge_index: Optional[Tensor] = None,
+        context_node_mask: Optional[Tensor] = None,
+        spatial_graph_data: Optional[Dict[str, Tensor]] = None,
+    ) -> Tensor:
+        del context_edge_index, spatial_graph_data
+        B, _C, H, W = x.shape
+        if H % self.patch_size != 0 or W % self.patch_size != 0:
+            raise ValueError(
+                f"DiTDenoiser patch_size={self.patch_size} requires latent H/W divisible by patch size; got {(H, W)}."
+            )
+        h = self.patch_embed(x)
+        ph, pw = int(h.shape[-2]), int(h.shape[-1])
+        tokens = h.flatten(2).transpose(1, 2)
+        tokens = tokens + self._positional_encoding(ph, pw, tokens.device, tokens.dtype)
+
+        pooled_context = self._pool_context(context, node_mask=context_node_mask).to(dtype=tokens.dtype)
+        context_tokens, context_key_padding_mask = self._context_tokens(context, node_mask=context_node_mask)
+        context_tokens = context_tokens.to(dtype=tokens.dtype)
+        cond = self.time_embed(t).to(dtype=tokens.dtype) + self.context_proj(pooled_context)
+        for block in self.blocks:
+            tokens = block(
+                tokens,
+                cond,
+                context_tokens=context_tokens,
+                context_key_padding_mask=context_key_padding_mask,
+            )
+
+        shift, scale = self.final_mod(cond).chunk(2, dim=-1)
+        tokens = self.final_norm(tokens) * (1.0 + scale.unsqueeze(1)) + shift.unsqueeze(1)
+        patches = self.out_proj(tokens)
+        patches = patches.view(B, ph, pw, self.patch_size, self.patch_size, self.out_channels)
+        patches = patches.permute(0, 5, 1, 3, 2, 4).contiguous()
+        return patches.view(B, self.out_channels, H, W)
+
+
 # ============================================================================
 # GRADIENT GUIDANCE
 # ============================================================================
@@ -1715,6 +1955,7 @@ class LatentDiffusionModel(nn.Module):
         cfg_schedule_mode: str = "constant",
         cfg_schedule_min_scale: float = 1.0,
         cfg_schedule_power: float = 1.0,
+        pag_scale: float = 0.0,
         # --- Phase 1C: v-prediction (Salimans & Ho, ICLR 2022) ---
         prediction_type: str = 'epsilon',  # 'epsilon' or 'v'
         # --- Phase 4B: Min-SNR-γ weighting (Hang et al., ICCV 2023) ---
@@ -1724,11 +1965,15 @@ class LatentDiffusionModel(nn.Module):
         hedgehog_feature_dim: int = 32,
         room_topology_channels: int = ROOM_TOPOLOGY_CHANNEL_COUNT,
         topology_conditioning_mode: str = "additive",
+        denoiser_backbone: str = "unet",
         unet_channel_mult: Tuple[int, ...] = (1, 2, 4),
         unet_num_res_blocks: int = 2,
         unet_attention_resolutions: Tuple[int, ...] = (1, 2),
         unet_num_heads: int = 8,
         unet_dropout: float = 0.1,
+        dit_depth: int = 4,
+        dit_patch_size: int = 1,
+        dit_mlp_ratio: float = 4.0,
         graph_auto_linear_attention_nodes: int = 128,
         spatial_graph_gate_init: float = -2.0,
         spatial_topology_gate_init: float = -2.0,
@@ -1740,39 +1985,55 @@ class LatentDiffusionModel(nn.Module):
         self.num_timesteps = num_timesteps
         self.cfg_dropout_prob = cfg_dropout_prob
         self.cfg_scale = cfg_scale
+        self.pag_scale = float(max(0.0, pag_scale))
         self.prediction_type = prediction_type
         self.min_snr_gamma = min_snr_gamma
         self.attention_mode = str(attention_mode).strip().lower()
         self.hedgehog_feature_dim = int(max(4, int(hedgehog_feature_dim)))
         self.room_topology_channels = int(max(1, int(room_topology_channels)))
         self.topology_conditioning_mode = str(topology_conditioning_mode).strip().lower()
+        self.denoiser_backbone = str(denoiser_backbone).strip().lower()
         if self.topology_conditioning_mode not in {"additive", "spade"}:
             raise ValueError(
                 "topology_conditioning_mode must be 'additive' or 'spade'. "
                 f"Got {topology_conditioning_mode!r}."
             )
+        if self.denoiser_backbone not in {"unet", "dit"}:
+            raise ValueError(f"denoiser_backbone must be 'unet' or 'dit', got {denoiser_backbone!r}.")
         self.fast_sampler = None
         self.fast_sampler_checkpoint: Optional[str] = None
         
-        # Denoising U-Net
-        self.denoiser = UNetDenoiser(
-            in_channels=latent_dim,
-            model_channels=model_channels,
-            out_channels=latent_dim,
-            context_dim=context_dim,
-            channel_mult=tuple(int(v) for v in unet_channel_mult),
-            num_res_blocks=int(unet_num_res_blocks),
-            attention_resolutions=tuple(int(v) for v in unet_attention_resolutions),
-            num_heads=int(unet_num_heads),
-            dropout=float(unet_dropout),
-            attention_mode=self.attention_mode,
-            hedgehog_feature_dim=self.hedgehog_feature_dim,
-            topology_map_channels=self.room_topology_channels,
-            topology_conditioning_mode=self.topology_conditioning_mode,
-            auto_linear_attention_nodes=int(graph_auto_linear_attention_nodes),
-            graph_gate_init=float(spatial_graph_gate_init),
-            topology_gate_init=float(spatial_topology_gate_init),
-        )
+        if self.denoiser_backbone == "dit":
+            self.denoiser = DiTDenoiser(
+                in_channels=latent_dim,
+                model_channels=model_channels,
+                out_channels=latent_dim,
+                context_dim=context_dim,
+                depth=int(dit_depth),
+                patch_size=int(dit_patch_size),
+                num_heads=int(unet_num_heads),
+                dropout=float(unet_dropout),
+                mlp_ratio=float(dit_mlp_ratio),
+            )
+        else:
+            self.denoiser = UNetDenoiser(
+                in_channels=latent_dim,
+                model_channels=model_channels,
+                out_channels=latent_dim,
+                context_dim=context_dim,
+                channel_mult=tuple(int(v) for v in unet_channel_mult),
+                num_res_blocks=int(unet_num_res_blocks),
+                attention_resolutions=tuple(int(v) for v in unet_attention_resolutions),
+                num_heads=int(unet_num_heads),
+                dropout=float(unet_dropout),
+                attention_mode=self.attention_mode,
+                hedgehog_feature_dim=self.hedgehog_feature_dim,
+                topology_map_channels=self.room_topology_channels,
+                topology_conditioning_mode=self.topology_conditioning_mode,
+                auto_linear_attention_nodes=int(graph_auto_linear_attention_nodes),
+                graph_gate_init=float(spatial_graph_gate_init),
+                topology_gate_init=float(spatial_topology_gate_init),
+            )
         self.set_topology_refinement_mode(topology_refinement_mode)
         self.set_attention_mode(self.attention_mode)
         self.set_cfg_schedule(
@@ -1905,6 +2166,18 @@ class LatentDiffusionModel(nn.Module):
                     module.set_attention_mode(normalized)
                     updated += 1
         self.attention_mode = normalized
+        return updated
+
+    def set_self_attention_perturbation(self, mode: str = "none") -> int:
+        """Set self-attention perturbation mode for PAG-style inference guidance."""
+        updated = 0
+        for module in self.modules():
+            if isinstance(module, SelfAttention):
+                module.set_perturbation_mode(mode)
+                updated += 1
+            elif isinstance(module, DiTBlock):
+                module.set_perturbation_mode(mode)
+                updated += 1
         return updated
 
     def set_spatial_attention_capture(self, enabled: bool = True) -> int:
@@ -2306,9 +2579,28 @@ class LatentDiffusionModel(nn.Module):
             # Unconditional prediction (zero context)
             pred_uncond = self.denoiser(x_t, t, torch.zeros_like(context))
             # CFG interpolation
-            return pred_uncond + cfg_scale[:, None, None, None] * (pred_cond - pred_uncond)
-        
-        return pred_cond
+            prediction = pred_uncond + cfg_scale[:, None, None, None] * (pred_cond - pred_uncond)
+        else:
+            prediction = pred_cond
+
+        pag_scale = float(getattr(self, "pag_scale", 0.0))
+        if pag_scale > 0.0:
+            updated = self.set_self_attention_perturbation("identity")
+            if updated > 0:
+                try:
+                    pred_perturbed = self.denoiser(
+                        x_t,
+                        t,
+                        context,
+                        context_edge_index=context_edge_index,
+                        context_node_mask=context_node_mask,
+                        spatial_graph_data=spatial_graph_data,
+                    )
+                finally:
+                    self.set_self_attention_perturbation("none")
+                prediction = prediction + pag_scale * (prediction - pred_perturbed)
+
+        return prediction
     
     def _convert_prediction(
         self,
@@ -2963,6 +3255,287 @@ class LatentDiffusionModel(nn.Module):
         
         return loss
 
+    def flow_matching_loss(
+        self,
+        x_0: Tensor,
+        context: Tensor,
+        graph_data: Optional[Dict[str, Tensor]] = None,
+        noise: Optional[Tensor] = None,
+    ) -> Tensor:
+        """
+        Compute a rectified-flow / conditional flow-matching velocity loss.
+
+        This is an opt-in training ablation. It reuses the existing U-Net
+        conditioner/backbone and trains it to predict the straight-line
+        velocity from clean latent data to Gaussian noise:
+
+            x_t = (1 - t) * x_0 + t * eps
+            target = eps - x_0
+
+        The default sampler remains the DDPM/DDIM diffusion path; experiments
+        using this objective should report it separately until a matching ODE
+        sampler is added.
+        """
+        B = x_0.shape[0]
+        device = x_0.device
+        dtype = x_0.dtype
+
+        if noise is None:
+            noise = torch.randn_like(x_0)
+
+        t_cont = torch.rand(B, device=device, dtype=dtype)
+        view_shape = (B,) + (1,) * max(0, x_0.dim() - 1)
+        t_view = t_cont.view(*view_shape)
+        x_t = (1.0 - t_view) * x_0 + t_view * noise
+        # Flow matching is continuous-time. Keep the same sinusoidal embedding
+        # scale as diffusion timesteps, but avoid quantizing t into integer bins.
+        t = t_cont * float(max(1, self.num_timesteps - 1))
+
+        if self.training and self.cfg_dropout_prob > 0:
+            if int(context.shape[0]) != B:
+                raise ValueError(
+                    f"context batch size {int(context.shape[0])} does not match latent batch size {B}."
+                )
+            keep_mask = (torch.rand(B, device=device) > self.cfg_dropout_prob).to(dtype=context.dtype)
+            mask_shape = [B] + [1] * max(0, context.dim() - 1)
+            context = context * keep_mask.view(*mask_shape)
+
+        alignment_weight = 0.0
+        alignment_node_indices = None
+        alignment_positions = None
+        alignment_valid_mask = None
+        if isinstance(graph_data, dict):
+            alignment_weight = float(graph_data.get("spatial_alignment_weight", 0.0) or 0.0)
+            alignment_node_indices = graph_data.get("spatial_alignment_node_indices")
+            alignment_positions = graph_data.get("spatial_alignment_positions")
+            alignment_valid_mask = graph_data.get("spatial_alignment_valid_mask")
+        use_spatial_alignment = (
+            alignment_weight > 0.0
+            and isinstance(alignment_node_indices, torch.Tensor)
+            and isinstance(alignment_positions, torch.Tensor)
+        )
+        if use_spatial_alignment:
+            updated = self.set_spatial_attention_capture(True)
+            if updated <= 0:
+                raise RuntimeError("Spatial alignment was requested, but the denoiser has no SpatialGraphConditioner modules.")
+
+        context_edge_index, context_node_mask = self._extract_context_topology(context, graph_data)
+        spatial_graph_data = self._extract_spatial_graph_context(context, graph_data)
+        try:
+            prediction = self.denoiser(
+                x_t,
+                t,
+                context,
+                context_edge_index=context_edge_index,
+                context_node_mask=context_node_mask,
+                spatial_graph_data=spatial_graph_data,
+            )
+        except Exception:
+            if use_spatial_alignment:
+                self.set_spatial_attention_capture(False)
+            raise
+        finally:
+            if not use_spatial_alignment:
+                self.set_spatial_attention_capture(False)
+        target = noise - x_0
+        loss = F.mse_loss(prediction, target)
+        if use_spatial_alignment:
+            try:
+                alignment_loss = self.spatial_alignment_loss(
+                    alignment_node_indices.to(device=device),
+                    alignment_positions.to(device=device),
+                    valid_mask=(
+                        alignment_valid_mask.to(device=device)
+                        if isinstance(alignment_valid_mask, torch.Tensor)
+                        else None
+                    ),
+                )
+                loss = loss + float(alignment_weight) * alignment_loss
+            finally:
+                self.set_spatial_attention_capture(False)
+        return loss
+
+    def denoising_preference_score(
+        self,
+        x_0: Tensor,
+        context: Tensor,
+        graph_data: Optional[Dict[str, Tensor]] = None,
+        *,
+        noise: Optional[Tensor] = None,
+        timesteps: Optional[Tensor] = None,
+        objective: str = "diffusion",
+    ) -> Tensor:
+        """
+        Return a per-sample denoising score for preference optimization.
+
+        Scores are negative prediction errors, so higher is better. The method
+        supports both standard diffusion targets and the flow-matching velocity
+        target, making it usable for Diffusion-DPO style pairwise losses.
+        """
+        B = int(x_0.shape[0])
+        device = x_0.device
+        objective = str(objective).strip().lower()
+        if noise is None:
+            noise = torch.randn_like(x_0)
+        if timesteps is None:
+            timesteps = torch.randint(0, self.num_timesteps, (B,), device=device)
+        else:
+            timesteps = timesteps.to(device=device, dtype=torch.long)
+            if timesteps.dim() == 0:
+                timesteps = timesteps.expand(B)
+            if int(timesteps.shape[0]) != B:
+                raise ValueError(f"timesteps batch size {int(timesteps.shape[0])} must match x_0 batch size {B}.")
+
+        if objective == "flow_matching":
+            t_cont = timesteps.to(dtype=x_0.dtype) / float(max(1, self.num_timesteps - 1))
+            t_view = t_cont.view((B,) + (1,) * max(0, x_0.dim() - 1))
+            x_t = (1.0 - t_view) * x_0 + t_view * noise
+            target = noise - x_0
+        elif objective == "diffusion":
+            x_t = self.q_sample(x_0, timesteps, noise)
+            if self.prediction_type == 'v':
+                sqrt_alpha_t = self.sqrt_alphas_cumprod[timesteps][:, None, None, None]
+                sqrt_one_minus_alpha_t = self.sqrt_one_minus_alphas_cumprod[timesteps][:, None, None, None]
+                target = sqrt_alpha_t * noise - sqrt_one_minus_alpha_t * x_0
+            else:
+                target = noise
+        else:
+            raise ValueError(f"objective must be 'diffusion' or 'flow_matching', got {objective!r}.")
+
+        context_edge_index, context_node_mask = self._extract_context_topology(context, graph_data)
+        spatial_graph_data = self._extract_spatial_graph_context(context, graph_data)
+        prediction = self.denoiser(
+            x_t,
+            timesteps,
+            context,
+            context_edge_index=context_edge_index,
+            context_node_mask=context_node_mask,
+            spatial_graph_data=spatial_graph_data,
+        )
+        per_sample_error = F.mse_loss(prediction, target, reduction='none').mean(dim=[1, 2, 3])
+        return -per_sample_error
+
+    def diffusion_dpo_loss(
+        self,
+        chosen_x0: Tensor,
+        rejected_x0: Tensor,
+        context: Tensor,
+        graph_data: Optional[Dict[str, Tensor]] = None,
+        *,
+        rejected_context: Optional[Tensor] = None,
+        rejected_graph_data: Optional[Dict[str, Tensor]] = None,
+        reference_model: Optional["LatentDiffusionModel"] = None,
+        beta: float = 0.1,
+        objective: str = "diffusion",
+        noise: Optional[Tensor] = None,
+        timesteps: Optional[Tensor] = None,
+    ) -> Tuple[Tensor, Dict[str, Tensor]]:
+        """
+        Pairwise Diffusion-DPO loss for solver/human preference pairs.
+
+        The preferred sample should receive a higher denoising score than the
+        rejected sample relative to an optional frozen reference model.
+        """
+        if chosen_x0.shape != rejected_x0.shape:
+            raise ValueError(
+                f"chosen_x0 and rejected_x0 must have the same shape, got {tuple(chosen_x0.shape)} and {tuple(rejected_x0.shape)}."
+            )
+        rejected_context = context if rejected_context is None else rejected_context
+        rejected_graph_data = graph_data if rejected_graph_data is None else rejected_graph_data
+        B = int(chosen_x0.shape[0])
+        if timesteps is None:
+            timesteps = torch.randint(0, self.num_timesteps, (B,), device=chosen_x0.device)
+        else:
+            timesteps = timesteps.to(device=chosen_x0.device, dtype=torch.long)
+        if noise is None:
+            noise = torch.randn_like(chosen_x0)
+
+        chosen_score = self.denoising_preference_score(
+            chosen_x0,
+            context,
+            graph_data,
+            noise=noise,
+            timesteps=timesteps,
+            objective=objective,
+        )
+        rejected_score = self.denoising_preference_score(
+            rejected_x0,
+            rejected_context,
+            rejected_graph_data,
+            noise=noise,
+            timesteps=timesteps,
+            objective=objective,
+        )
+        policy_logit = chosen_score - rejected_score
+
+        if reference_model is not None:
+            with torch.no_grad():
+                ref_chosen = reference_model.denoising_preference_score(
+                    chosen_x0,
+                    context,
+                    graph_data,
+                    noise=noise,
+                    timesteps=timesteps,
+                    objective=objective,
+                )
+                ref_rejected = reference_model.denoising_preference_score(
+                    rejected_x0,
+                    rejected_context,
+                    rejected_graph_data,
+                    noise=noise,
+                    timesteps=timesteps,
+                    objective=objective,
+                )
+            reference_logit = ref_chosen - ref_rejected
+        else:
+            reference_logit = torch.zeros_like(policy_logit)
+
+        margin = policy_logit - reference_logit
+        loss = -F.logsigmoid(float(beta) * margin).mean()
+        metrics = {
+            "dpo_margin": margin.detach().mean(),
+            "dpo_model_margin": policy_logit.detach().mean(),
+            "dpo_reference_margin": reference_logit.detach().mean(),
+            "dpo_accuracy": (margin.detach() > 0).float().mean(),
+            "chosen_score": chosen_score.detach().mean(),
+            "rejected_score": rejected_score.detach().mean(),
+        }
+        return loss, metrics
+
+    def dpo_preference_loss(
+        self,
+        preferred_x0: Tensor,
+        rejected_x0: Tensor,
+        context: Tensor,
+        graph_data: Optional[Dict[str, Tensor]] = None,
+        *,
+        reference_model: Optional["LatentDiffusionModel"] = None,
+        beta: float = 0.1,
+        objective: str = "diffusion",
+        noise: Optional[Tensor] = None,
+        timesteps: Optional[Tensor] = None,
+    ) -> Tuple[Tensor, Dict[str, Tensor]]:
+        """Compatibility wrapper using explicit preferred/rejected naming."""
+        loss, metrics = self.diffusion_dpo_loss(
+            preferred_x0,
+            rejected_x0,
+            context,
+            graph_data=graph_data,
+            reference_model=reference_model,
+            beta=beta,
+            objective=objective,
+            noise=noise,
+            timesteps=timesteps,
+        )
+        renamed = {
+            "dpo_model_margin": metrics["dpo_model_margin"],
+            "dpo_reference_margin": metrics["dpo_reference_margin"],
+            "dpo_accuracy": metrics["dpo_accuracy"],
+            "dpo_preferred_score": metrics["chosen_score"],
+            "dpo_rejected_score": metrics["rejected_score"],
+        }
+        return loss, renamed
+
 
 # ============================================================================
 # CONVENIENCE FUNCTIONS
@@ -2978,13 +3551,18 @@ def create_latent_diffusion(
     cfg_schedule_mode: str = "constant",
     cfg_schedule_min_scale: float = 1.0,
     cfg_schedule_power: float = 1.0,
+    pag_scale: float = 0.0,
     min_snr_gamma: float = 5.0,
     topology_conditioning_mode: str = "additive",
+    denoiser_backbone: str = "unet",
     unet_channel_mult: Tuple[int, ...] = (1, 2, 4),
     unet_num_res_blocks: int = 2,
     unet_attention_resolutions: Tuple[int, ...] = (1, 2),
     unet_num_heads: int = 8,
     unet_dropout: float = 0.1,
+    dit_depth: int = 4,
+    dit_patch_size: int = 1,
+    dit_mlp_ratio: float = 4.0,
     graph_auto_linear_attention_nodes: int = 128,
     spatial_graph_gate_init: float = -2.0,
     spatial_topology_gate_init: float = -2.0,
@@ -3019,13 +3597,18 @@ def create_latent_diffusion(
         cfg_schedule_mode=cfg_schedule_mode,
         cfg_schedule_min_scale=cfg_schedule_min_scale,
         cfg_schedule_power=cfg_schedule_power,
+        pag_scale=pag_scale,
         min_snr_gamma=min_snr_gamma,
         topology_conditioning_mode=topology_conditioning_mode,
+        denoiser_backbone=denoiser_backbone,
         unet_channel_mult=unet_channel_mult,
         unet_num_res_blocks=unet_num_res_blocks,
         unet_attention_resolutions=unet_attention_resolutions,
         unet_num_heads=unet_num_heads,
         unet_dropout=unet_dropout,
+        dit_depth=dit_depth,
+        dit_patch_size=dit_patch_size,
+        dit_mlp_ratio=dit_mlp_ratio,
         graph_auto_linear_attention_nodes=graph_auto_linear_attention_nodes,
         spatial_graph_gate_init=spatial_graph_gate_init,
         spatial_topology_gate_init=spatial_topology_gate_init,

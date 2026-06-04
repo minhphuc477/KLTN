@@ -220,6 +220,16 @@ class TestBeliefMap:
         decayed_confidence = belief.get_confidence((5, 5))
         
         assert decayed_confidence < initial_confidence
+
+    def test_explored_tiles_do_not_decay(self):
+        """Physically visited tiles should remain route knowledge."""
+        belief = BeliefMap(grid_shape=(10, 10), decay_rate=0.1)
+
+        belief.observe((5, 5), SEMANTIC_PALETTE['FLOOR'], current_step=0, is_visit=True)
+        belief.apply_decay(current_step=10)
+
+        assert belief.get_confidence((5, 5)) == pytest.approx(1.0)
+        assert belief.get_knowledge_state((5, 5)) == TileKnowledge.EXPLORED
     
     def test_confusion_index(self):
         """Test confusion index calculation."""

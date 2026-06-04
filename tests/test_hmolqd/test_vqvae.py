@@ -182,6 +182,20 @@ class TestFSQuantizer:
         assert tuple(recon.shape) == (1, 5, 16, 11)
         assert losses["vq_loss"].item() == pytest.approx(0.0)
 
+    def test_fsq_decode_indices_fails_with_clear_error(self):
+        from src.core.vqvae import create_vqvae
+
+        model = create_vqvae(
+            num_classes=5,
+            codebook_size=256,
+            latent_dim=8,
+            hidden_dim=16,
+            architecture="fsq",
+        )
+
+        with pytest.raises(RuntimeError, match="decode_indices is not supported for FSQ"):
+            model.decode_indices(torch.zeros(1, 4, 3, dtype=torch.long))
+
 
 class TestEncoder:
     """Tests for VQ-VAE Encoder."""

@@ -9,7 +9,8 @@ from src.utils.gradient_probe import GradientProbe
 
 
 @pytest.mark.parametrize("pathfinder", ["bellman_ford", "cnn"])
-def test_logicnet_grid_loss_backpropagates_to_latent(pathfinder):
+@pytest.mark.parametrize("latent_shape", [(4, 4), (4, 3)])
+def test_logicnet_grid_loss_backpropagates_to_latent(pathfinder, latent_shape):
     net = LogicNet(
         latent_dim=8,
         num_classes=44,
@@ -17,7 +18,7 @@ def test_logicnet_grid_loss_backpropagates_to_latent(pathfinder):
         num_iterations=3,
         grid_pathfinder_type=pathfinder,
     )
-    z = torch.randn(2, 8, 4, 4, requires_grad=True)
+    z = torch.randn(2, 8, *latent_shape, requires_grad=True)
 
     loss, info = net(z, graph_data=None)
     loss.backward()

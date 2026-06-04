@@ -249,6 +249,9 @@ def test_default_config_uses_small_data_recommended_room_model_profile():
 def test_canonical_yaml_uses_downsized_masked_room_profile():
     resolved = merge_config(yaml_path="configs/zelda_hmolqd.yaml", cli_overrides=None)
 
+    assert resolved["dataset"]["dungeon_batch_mode"] is True
+    assert resolved["diffusion"]["condition_use_rrwp_edge_features"] is True
+    assert resolved["diffusion"]["alpha_logic_tile"] == pytest.approx(0.05)
     assert resolved["diffusion"]["room_topology_channels"] == ROOM_TOPOLOGY_CHANNEL_COUNT
     assert resolved["masked_room"]["room_topology_channels"] == ROOM_TOPOLOGY_CHANNEL_COUNT
     assert resolved["masked_room"]["model_channels"] == 64
@@ -295,6 +298,25 @@ def test_canonical_yaml_uses_downsized_masked_room_profile():
     assert resolved["generation"]["masked_room_sampling_stochastic"] is True
     assert resolved["generation"]["masked_room_corrector_steps"] == 1
     assert resolved["generation"]["masked_room_corrector_mask_ratio"] == pytest.approx(0.1)
+
+
+def test_paper_ablation_configs_validate_and_set_expected_switches():
+    flow = merge_config(yaml_path="configs/ablation_flow_matching.yaml", cli_overrides=None)
+    assert flow["diffusion"]["denoiser_backbone"] == "dit"
+    assert flow["diffusion"]["training_objective"] == "flow_matching"
+
+    no_rrwp = merge_config(yaml_path="configs/ablation_no_rrwp.yaml", cli_overrides=None)
+    assert no_rrwp["diffusion"]["condition_use_rrwp_edge_features"] is False
+
+    no_logic = merge_config(yaml_path="configs/ablation_no_logicnet.yaml", cli_overrides=None)
+    assert no_logic["diffusion"]["logic_net_enabled"] is False
+    assert no_logic["diffusion"]["alpha_logic_tile"] == pytest.approx(0.0)
+
+    no_vin = merge_config(yaml_path="configs/ablation_no_vin.yaml", cli_overrides=None)
+    assert no_vin["diffusion"]["logic_grid_pathfinder"] == "cnn"
+
+    no_fsq = merge_config(yaml_path="configs/ablation_no_fsq.yaml", cli_overrides=None)
+    assert no_fsq["vqvae"]["architecture"] == "vqvae"
 
 
 def test_stage_helpers_forward_checkpoint_retention_and_resume_defaults():

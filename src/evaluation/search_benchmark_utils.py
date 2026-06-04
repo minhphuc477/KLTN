@@ -66,6 +66,32 @@ def confusion_ratio_vs_oracle(
     return float(candidate_len) / float(oracle_len)
 
 
+def normalized_confusion_ratio(
+    oracle_path_length: int,
+    candidate_path_length: int,
+    manhattan_distance: int = 0,
+    *,
+    oracle_status: str = "solved",
+    candidate_success: bool = True,
+) -> float:
+    """
+    Return excess-path confusion normalized by a robust lower bound.
+
+    This avoids treating a 2-step overhead on a tiny dungeon as equivalent to a
+    200-step overhead on a large dungeon. Returns NaN when the oracle/candidate
+    comparison is undefined.
+    """
+    if str(oracle_status) != "solved" or not bool(candidate_success):
+        return float("nan")
+    oracle_len = int(oracle_path_length or 0)
+    candidate_len = int(candidate_path_length or 0)
+    manhattan_i = int(manhattan_distance or 0)
+    if oracle_len <= 0 or candidate_len <= 0:
+        return float("nan")
+    denominator = max(1, oracle_len, manhattan_i)
+    return float(max(0, candidate_len - oracle_len)) / float(denominator)
+
+
 def finite_mean(values: List[Any]) -> float:
     """Average only finite numeric values; return 0.0 when empty."""
     finite: List[float] = []

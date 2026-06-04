@@ -10,8 +10,11 @@ leaks.
 
 from __future__ import annotations
 
+import copy
+import json
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict, fields
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 import numpy as np
@@ -22,13 +25,18 @@ from src.evaluation.search_benchmark_utils import (
     path_efficiency_ratio,
     run_astar_oracle,
 )
-from src.simulation.cognitive_bounded_search import PersonaDrivenCognitiveBoundedSearch
+from src.simulation.cognitive_bounded_search import (
+    AgentPersona,
+    PersonaConfig,
+    PersonaDrivenCognitiveBoundedSearch,
+)
 from src.simulation.validator import CONDITIONAL_IDS, ZeldaLogicEnv
 
 
 GridPos = Tuple[int, int]
 
-PCBS_READABILITY_WEIGHT_SOURCE = "hand_tuned_heuristic_v1"
+PCBS_STRUCTURAL_METRIC_SOURCE = "structural_bounded_rationality_metric_v2"
+PCBS_READABILITY_WEIGHT_SOURCE = PCBS_STRUCTURAL_METRIC_SOURCE
 PCBS_BOUNDED_RATIONALITY_WEIGHTS: Dict[str, float] = {
     "confusion": 0.24,
     "navigation_entropy": 0.18,
@@ -66,6 +74,87 @@ def _json_ready(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         return [_json_ready(item) for item in value]
     return value
+
+
+def _normalize_weight_map(
+    weights: Optional[Mapping[str, Any]],
+    defaults: Mapping[str, float],
+) -> Dict[str, float]:
+    """Return a finite normalized weight map over the default metric keys."""
+    cleaned: Dict[str, float] = {}
+    for key, default in defaults.items():
+        try:
+            value = float((weights or {}).get(key, default))
+        except (TypeError, ValueError):
+            value = float(default)
+        if not np.isfinite(value) or value < 0.0:
+            value = float(default)
+        cleaned[str(key)] = float(value)
+    total = float(sum(cleaned.values()))
+    if total <= 0.0:
+        return dict(defaults)
+    return {key: float(value / total) for key, value in cleaned.items()}
+
+
+def _load_pcbs_calibration_payload(path: Optional[str | Path]) -> Dict[str, Any]:
+    """Load the JSON artifact produced by calibrate_pcbs_personas_from_telemetry.py."""
+    if path is None:
+        return {}
+    calibration_path = Path(path)
+    if not calibration_path.exists():
+        raise FileNotFoundError(calibration_path)
+    payload = json.loads(calibration_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"P-CBS calibration artifact must be a JSON object: {calibration_path}")
+    return payload
+
+
+def _persona_config_from_payload(
+    *,
+    persona: str,
+    payload: Mapping[str, Any],
+) -> Optional[PersonaConfig]:
+    """Materialize a PersonaConfig from a calibration payload when available."""
+    if not payload:
+        return None
+    persona_key = str(persona or "balanced").strip().lower()
+    entry = payload.get(persona_key) or payload.get("observed")
+    if not isinstance(entry, Mapping):
+        return None
+    raw_config = entry.get("calibrated_config")
+    if not isinstance(raw_config, Mapping):
+        raw_config = entry.get("overrides")
+    if not isinstance(raw_config, Mapping):
+        return None
+
+    valid_fields = {field.name for field in fields(PersonaConfig)}
+    try:
+        base_persona = AgentPersona(persona_key)
+    except ValueError:
+        base_persona = AgentPersona.BALANCED
+    base = asdict(PersonaConfig.get_persona(base_persona))
+    for key, value in raw_config.items():
+        if key in valid_fields:
+            base[key] = value
+    return PersonaConfig(**base)
+
+
+def _calibration_weight_payload(
+    payload: Mapping[str, Any],
+) -> Tuple[Optional[Dict[str, float]], Optional[Dict[str, float]], str]:
+    """Extract optional calibrated readability weights from a payload."""
+    if not payload:
+        return None, None, PCBS_STRUCTURAL_METRIC_SOURCE
+    source = str(payload.get("weight_source") or payload.get("source") or "telemetry_calibration_artifact")
+    bounded = payload.get("bounded_rationality_weights")
+    effort = payload.get("cognitive_effort_weights")
+    if isinstance(bounded, Mapping) or isinstance(effort, Mapping):
+        return (
+            _normalize_weight_map(bounded if isinstance(bounded, Mapping) else None, PCBS_BOUNDED_RATIONALITY_WEIGHTS),
+            _normalize_weight_map(effort if isinstance(effort, Mapping) else None, PCBS_COGNITIVE_EFFORT_WEIGHTS),
+            source,
+        )
+    return None, None, source
 
 
 def _coerce_grid(source: Any) -> np.ndarray:
@@ -257,6 +346,9 @@ def compute_pcbs_readability_metrics(
     timeout_pcbs: int,
     pcbs_metrics: Any,
     puzzle_stall_steps: int,
+    bounded_rationality_weights: Optional[Mapping[str, float]] = None,
+    cognitive_effort_weights: Optional[Mapping[str, float]] = None,
+    weight_source: str = PCBS_STRUCTURAL_METRIC_SOURCE,
 ) -> Dict[str, Any]:
     """
     Derive report-facing P-CBS calibration metrics.
@@ -279,14 +371,22 @@ def compute_pcbs_readability_metrics(
     normalized_load = float(np.clip(float(getattr(pcbs_metrics, "cognitive_load", 0.0) or 0.0) / 2.5, 0.0, 1.0))
     budget_fraction = float(np.clip(float(pcbs_states) / float(max(1, int(timeout_pcbs))), 0.0, 1.0))
     stall_fraction = float(np.clip(float(puzzle_stall_steps) / float(max(1, pcbs_trajectory_length)), 0.0, 1.0))
+    bounded_weights = _normalize_weight_map(
+        bounded_rationality_weights,
+        PCBS_BOUNDED_RATIONALITY_WEIGHTS,
+    )
+    effort_weights = _normalize_weight_map(
+        cognitive_effort_weights,
+        PCBS_COGNITIVE_EFFORT_WEIGHTS,
+    )
 
     bounded_rationality_index = float(
         np.clip(
-            (PCBS_BOUNDED_RATIONALITY_WEIGHTS["confusion"] * normalized_confusion)
-            + (PCBS_BOUNDED_RATIONALITY_WEIGHTS["navigation_entropy"] * normalized_entropy)
-            + (PCBS_BOUNDED_RATIONALITY_WEIGHTS["cognitive_load"] * normalized_load)
-            + (PCBS_BOUNDED_RATIONALITY_WEIGHTS["state_budget"] * budget_fraction)
-            + (PCBS_BOUNDED_RATIONALITY_WEIGHTS["puzzle_stall"] * stall_fraction),
+            (bounded_weights["confusion"] * normalized_confusion)
+            + (bounded_weights["navigation_entropy"] * normalized_entropy)
+            + (bounded_weights["cognitive_load"] * normalized_load)
+            + (bounded_weights["state_budget"] * budget_fraction)
+            + (bounded_weights["puzzle_stall"] * stall_fraction),
             0.0,
             1.0,
         )
@@ -295,11 +395,11 @@ def compute_pcbs_readability_metrics(
         bounded_rationality_index = float(np.clip(bounded_rationality_index + 0.20, 0.0, 1.0))
     cognitive_effort_index = float(
         np.clip(
-            (PCBS_COGNITIVE_EFFORT_WEIGHTS["cognitive_load"] * normalized_load)
-            + (PCBS_COGNITIVE_EFFORT_WEIGHTS["confusion"] * normalized_confusion)
-            + (PCBS_COGNITIVE_EFFORT_WEIGHTS["revisit_rate"] * revisit_rate)
-            + (PCBS_COGNITIVE_EFFORT_WEIGHTS["state_budget"] * budget_fraction)
-            + (PCBS_COGNITIVE_EFFORT_WEIGHTS["puzzle_stall"] * stall_fraction),
+            (effort_weights["cognitive_load"] * normalized_load)
+            + (effort_weights["confusion"] * normalized_confusion)
+            + (effort_weights["revisit_rate"] * revisit_rate)
+            + (effort_weights["state_budget"] * budget_fraction)
+            + (effort_weights["puzzle_stall"] * stall_fraction),
             0.0,
             1.0,
         )
@@ -314,9 +414,14 @@ def compute_pcbs_readability_metrics(
         "state_budget_fraction": budget_fraction,
         "revisit_rate": revisit_rate,
         "puzzle_stall_fraction": stall_fraction,
-        "weight_source": PCBS_READABILITY_WEIGHT_SOURCE,
-        "bounded_rationality_weights": dict(PCBS_BOUNDED_RATIONALITY_WEIGHTS),
-        "cognitive_effort_weights": dict(PCBS_COGNITIVE_EFFORT_WEIGHTS),
+        "weight_source": str(weight_source or PCBS_STRUCTURAL_METRIC_SOURCE),
+        "bounded_rationality_weights": dict(bounded_weights),
+        "cognitive_effort_weights": dict(effort_weights),
+        "metric_interpretation": (
+            "structural_bounded_rationality"
+            if str(weight_source or "").startswith("structural_")
+            else "telemetry_calibrated"
+        ),
         "oracle_solved_but_pcbs_failed": bool(oracle_success and not bool(pcbs_success)),
     }
 
@@ -456,6 +561,7 @@ def evaluate_astar_vs_pcbs(
     timeout_astar: int = 200000,
     timeout_pcbs: int = 50000,
     seed: int = 42,
+    calibration_path: Optional[str | Path] = None,
 ) -> Dict[str, Any]:
     """Run the hard oracle and P-CBS on the same sanitized dungeon grid."""
     prepared = prepare_dungeon_grid_for_validation(source)
@@ -464,16 +570,28 @@ def evaluate_astar_vs_pcbs(
     goal = prepared.goal
     manhattan = abs(int(start[0]) - int(goal[0])) + abs(int(start[1]) - int(goal[1]))
     env_kwargs = _extract_validation_env_kwargs(source)
+    calibration_payload = _load_pcbs_calibration_payload(calibration_path)
+    calibrated_config = _persona_config_from_payload(
+        persona=str(persona),
+        payload=calibration_payload,
+    )
+    bounded_weights, effort_weights, metric_weight_source = _calibration_weight_payload(calibration_payload)
+    persona_source = (
+        "telemetry_calibrated_persona"
+        if calibrated_config is not None
+        else "built_in_persona"
+    )
 
-    env_astar = ZeldaLogicEnv(semantic_grid=grid, **env_kwargs)
+    env_astar = ZeldaLogicEnv(semantic_grid=grid.copy(), **copy.deepcopy(env_kwargs))
     oracle = run_astar_oracle(env_astar, timeout=int(timeout_astar))
 
-    env_pcbs = ZeldaLogicEnv(semantic_grid=grid, **env_kwargs)
+    env_pcbs = ZeldaLogicEnv(semantic_grid=grid.copy(), **copy.deepcopy(env_kwargs))
     pcbs = PersonaDrivenCognitiveBoundedSearch(
         env_pcbs,
         persona=str(persona),
         timeout=int(timeout_pcbs),
         seed=seed,
+        custom_config=calibrated_config,
     )
     pcbs_success, pcbs_path, pcbs_states, pcbs_metrics = pcbs.solve()
     pcbs_status = "success"
@@ -499,6 +617,9 @@ def evaluate_astar_vs_pcbs(
         timeout_pcbs=int(timeout_pcbs),
         pcbs_metrics=pcbs_metrics,
         puzzle_stall_steps=puzzle_stall_steps,
+        bounded_rationality_weights=bounded_weights,
+        cognitive_effort_weights=effort_weights,
+        weight_source=metric_weight_source,
     )
     outcome_metrics = classify_pcbs_outcome(
         oracle=oracle,
@@ -521,6 +642,8 @@ def evaluate_astar_vs_pcbs(
         },
         "pcbs": {
             "persona": str(persona),
+            "persona_source": persona_source,
+            "calibration_path": str(calibration_path) if calibration_path is not None else None,
             "seed": int(seed),
             "timeout": int(timeout_pcbs),
             "success": bool(pcbs_success),
@@ -546,6 +669,7 @@ def evaluate_astar_vs_pcbs(
             "inventory_change_events": int(getattr(pcbs_metrics, "inventory_change_events", 0) or 0),
             "focus_switches": int(getattr(pcbs_metrics, "focus_switches", 0) or 0),
             "focus_guided_steps": int(getattr(pcbs_metrics, "focus_guided_steps", 0) or 0),
+            "loop_escape_events": int(getattr(pcbs_metrics, "loop_escape_events", 0) or 0),
             **pcbs_report_metrics,
             "metrics": _json_ready(pcbs_metrics.to_dict()),
         },
@@ -565,6 +689,8 @@ def evaluate_astar_vs_pcbs(
             "pcbs_failure_driver": str(outcome_metrics["pcbs_failure_driver"]),
             "pcbs_dominant_pressure": str(outcome_metrics["pcbs_dominant_pressure"]),
             "pcbs_dominant_pressure_value": float(outcome_metrics["pcbs_dominant_pressure_value"]),
+            "pcbs_persona_source": persona_source,
+            "pcbs_metric_interpretation": str(readability_metrics["metric_interpretation"]),
         },
     }
 

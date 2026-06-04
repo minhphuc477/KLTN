@@ -1090,6 +1090,11 @@ class SemanticVQVAE(nn.Module):
         """
         if not self.use_codebook or self.quantizer is None:
             raise RuntimeError("decode_indices is only available when use_codebook=True.")
+        if isinstance(self.quantizer, FSQuantizer):
+            raise RuntimeError(
+                "decode_indices is not supported for FSQ quantizers because FSQ uses "
+                "an implicit Cartesian code space. Decode quantized latents directly instead."
+            )
         z_q = self.quantizer.encode_indices(indices)  # [B, H', W', D]
         z_q = z_q.permute(0, 3, 1, 2).contiguous()   # [B, D, H', W']
         return self.decode(z_q, target_size)

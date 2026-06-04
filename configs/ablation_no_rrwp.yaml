@@ -1,0 +1,7 @@
+# Disable RRWP edge features while keeping graph conditioning enabled.
+training:
+  stage: diffusion
+
+diffusion:
+  condition_use_rrwp_edge_features: false
+

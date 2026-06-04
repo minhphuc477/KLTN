@@ -8,6 +8,7 @@ from src.core.definitions import SEMANTIC_PALETTE
 from src.evaluation.search_benchmark_utils import (
     confusion_ratio_vs_oracle,
     finite_mean,
+    normalized_confusion_ratio,
     oracle_status_from_outcome,
     path_efficiency_ratio,
     run_astar_oracle,
@@ -41,6 +42,12 @@ def test_confusion_ratio_vs_oracle_returns_nan_when_oracle_not_resolved():
     assert math.isnan(confusion_ratio_vs_oracle(12, 20, oracle_status="timeout", candidate_success=True))
     assert math.isnan(confusion_ratio_vs_oracle(12, 20, oracle_status="solved", candidate_success=False))
     assert confusion_ratio_vs_oracle(10, 15, oracle_status="solved", candidate_success=True) == 1.5
+
+
+def test_normalized_confusion_ratio_uses_excess_path_not_raw_ratio():
+    assert normalized_confusion_ratio(2, 4, 2, oracle_status="solved", candidate_success=True) == 1.0
+    assert normalized_confusion_ratio(200, 400, 2, oracle_status="solved", candidate_success=True) == 1.0
+    assert math.isnan(normalized_confusion_ratio(0, 4, 2, oracle_status="timeout", candidate_success=True))
 
 
 def test_finite_mean_ignores_nan_and_inf():

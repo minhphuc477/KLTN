@@ -73,6 +73,7 @@ from __future__ import annotations
 import math
 import logging
 import random
+import networkx as nx
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum, auto
@@ -195,6 +196,7 @@ class CBSMetrics:
     inventory_change_events: int = 0
     focus_switches: int = 0
     focus_guided_steps: int = 0
+    loop_escape_events: int = 0
     
     # Per-room metrics for detailed analysis
     room_visit_counts: Dict[Hashable, int] = field(default_factory=dict)
@@ -235,6 +237,7 @@ class CBSMetrics:
             'inventory_change_events': self.inventory_change_events,
             'focus_switches': self.focus_switches,
             'focus_guided_steps': self.focus_guided_steps,
+            'loop_escape_events': self.loop_escape_events,
         }
     
     def summary(self) -> str:
@@ -598,7 +601,12 @@ class BeliefMap:
     
     def apply_decay(self, current_step: int = 0, decay_rate: Optional[float] = None) -> None:
         """
-        Apply memory decay to all observations.
+        Apply memory decay to non-visited observations.
+
+        Physically visited tiles are route knowledge, not fragile visual
+        glimpses: once stepped on, they remain explored with full confidence.
+        Unvisited observations still decay, with glimpsed tiles decaying
+        fastest and currently observed tiles decaying more conservatively.
         
         Args:
             current_step: Current timestep (optional, used for time-based decay)
@@ -607,8 +615,17 @@ class BeliefMap:
         rate = decay_rate if decay_rate is not None else self.decay_rate
         for pos, obs in self.known_tiles.items():
             previous_entropy = self._entropy_for_position(pos)
-            if obs.confidence > 0:
-                obs.confidence *= rate
+            if obs.visited or obs.knowledge == TileKnowledge.EXPLORED:
+                obs.confidence = 1.0
+                obs.knowledge = TileKnowledge.EXPLORED
+                obs.visited = True
+            elif obs.confidence > 0:
+                effective_rate = rate
+                if obs.knowledge == TileKnowledge.OBSERVED:
+                    effective_rate = min(1.0, 0.5 * (1.0 + rate))
+                elif obs.knowledge == TileKnowledge.GLIMPSED:
+                    effective_rate = rate * rate
+                obs.confidence *= effective_rate
                 # Downgrade knowledge if confidence too low
                 if obs.confidence < 0.3:
                     obs.knowledge = TileKnowledge.GLIMPSED
@@ -2071,6 +2088,7 @@ class CognitiveBoundedSearch:
         self._inventory_change_events: int = 0
         self._focus_switches: int = 0
         self._focus_guided_steps: int = 0
+        self._loop_escape_events: int = 0
     
     def solve(self) -> Tuple[bool, List[Tuple[int, int]], int, CBSMetrics]:
         """
@@ -2102,6 +2120,7 @@ class CognitiveBoundedSearch:
         self._inventory_change_events = 0
         self._focus_switches = 0
         self._focus_guided_steps = 0
+        self._loop_escape_events = 0
         
         # Validation
         if self.env.goal_pos is None:
@@ -2212,11 +2231,25 @@ class CognitiveBoundedSearch:
             # Sort by score (descending)
             scored.sort(key=lambda x: x[0], reverse=True)
             
+            forced_escape = self._should_force_frontier_escape(path, current_pos)
+
             # Satisficing: accept if best score meets threshold
             best_score, best_pos, best_tile = scored[0]
+
+            if forced_escape:
+                escape_choice = self._select_frontier_escape_candidate(
+                    cog_state,
+                    candidates,
+                    scored,
+                )
+                if escape_choice is not None:
+                    best_score, best_pos, best_tile = escape_choice
+                    self._loop_escape_events += 1
+                else:
+                    forced_escape = False
             
             # Add randomness for tiebreaking
-            if len(scored) > 1:
+            if len(scored) > 1 and not forced_escape:
                 threshold = best_score * self.config.satisficing_threshold
                 acceptable = [s for s in scored if s[0] >= threshold]
                 
@@ -2248,8 +2281,32 @@ class CognitiveBoundedSearch:
             )
             
             if not moved:
-                # Move failed (shouldn't happen with valid candidates)
+                # Belief-driven planning can be wrong; learn from the contact
+                # failure so the same hidden obstacle is not retried silently.
                 logger.warning(f"CBS move failed: {current_pos} -> {best_pos}")
+                self.belief_map.bayes_update(
+                    best_pos,
+                    actual_tile,
+                    step,
+                    obs_accuracy=1.0,
+                    is_visit=False,
+                )
+                if actual_tile in CONDITIONAL_IDS or actual_tile == int(SEMANTIC_PALETTE['PUZZLE']):
+                    self.memory.remember(
+                        MemoryItemType.AFFORDANCE,
+                        best_pos,
+                        step,
+                        data={
+                            'tile_type': int(actual_tile),
+                            'requirement': self._affordance_requirement(int(actual_tile)),
+                        },
+                        salience_boost=0.20,
+                    )
+                cog_state.frustration = min(
+                    2.5,
+                    float(cog_state.frustration) + 0.35 + 0.10 * float(decision_pressure),
+                )
+                self._peak_frustration = max(self._peak_frustration, float(cog_state.frustration))
                 states_explored += 1
                 continue
 
@@ -2585,19 +2642,14 @@ class CognitiveBoundedSearch:
 
     def _generate_subgoals(self, cog_state: CognitiveState, num: int = 5) -> List[Tuple[int, int]]:
         """
-        Generate candidate subgoals using mission grammar and belief map.
+        Generate candidate subgoals from the actual belief/memory state.
 
-        Strategy (compact):
-        - Use MissionGrammar to get desired node types
-        - Map node types to nearest remembered/observed positions
-        - Fallback to frontier (observed-but-unvisited) and unknown tile centers
+        This deliberately avoids synthesizing a fresh MissionGrammar. Short
+        horizon deliberation should target things the agent has actually seen
+        or remembered in the current dungeon.
         """
-        try:
-            from src.generation.grammar import MissionGrammar, NodeType
-        except Exception:
-            MissionGrammar = None
-
         candidates: List[Tuple[int, int]] = []
+        current = tuple(int(v) for v in cog_state.game_state.position)
 
         # 1) Goal if remembered
         goal_mem = self.memory.recall_nearest(cog_state.game_state.position, MemoryItemType.GOAL, cog_state.current_step)
@@ -2612,34 +2664,25 @@ class CognitiveBoundedSearch:
                 break
             candidates.append(it.position)
 
-        # 3) Use grammar to propose types and map to observed positions
-        if MissionGrammar is not None:
-            try:
-                g = MissionGrammar(seed=42)
-                graph = g.generate(num_rooms=6)
-                # Map KEY nodes to observed key tiles
-                for _node in graph.get_nodes_by_type(NodeType.KEY):
-                    # find nearest observed key in belief_map
-                    best = None
-                    bestd = 1e9
-                    for pos, obs in self.belief_map.known_tiles.items():
-                        if obs.tile_type in PICKUP_IDS:
-                            d = abs(pos[0] - cog_state.game_state.position[0]) + abs(pos[1] - cog_state.game_state.position[1])
-                            if d < bestd:
-                                bestd = d
-                                best = pos
-                    if best and best not in candidates:
-                        candidates.append(best)
-                        if len(candidates) >= num:
-                            break
-            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
-                logger.debug("MissionGrammar-assisted subgoal generation unavailable; using belief-map fallback: %s", exc)
+        # 3) Remembered, now-actionable affordances.
+        affordances = [
+            item for item in self.memory.recall(MemoryItemType.AFFORDANCE, cog_state.current_step)
+            if self._is_affordance_satisfied(cog_state.game_state, item)
+        ]
+        for item in sorted(
+            affordances,
+            key=lambda m: self._navigation_distance(current, tuple(int(v) for v in m.position)),
+        ):
+            if len(candidates) >= num:
+                break
+            pos = tuple(int(v) for v in item.position)
+            if pos not in candidates:
+                candidates.append(pos)
 
         # 4) Frontier (observed but unvisited)
-        current = tuple(int(v) for v in cog_state.game_state.position)
         for pos in sorted(
             self.belief_map.get_frontier(),
-            key=lambda p: (abs(int(p[0]) - current[0]) + abs(int(p[1]) - current[1]), int(p[0]), int(p[1])),
+            key=lambda p: (self._navigation_distance(current, p), int(p[0]), int(p[1])),
         ):
             if len(candidates) >= num:
                 break
@@ -2653,7 +2696,7 @@ class CognitiveBoundedSearch:
                 self.belief_map.known_tiles.items(),
                 key=lambda kv: (
                     float(kv[1].confidence),
-                    abs(int(kv[0][0]) - current[0]) + abs(int(kv[0][1]) - current[1]),
+                    self._navigation_distance(current, kv[0]),
                     int(kv[0][0]),
                     int(kv[0][1]),
                 ),
@@ -2665,6 +2708,79 @@ class CognitiveBoundedSearch:
                     break
 
         return candidates
+
+    def _should_force_frontier_escape(
+        self,
+        path: List[Tuple[int, int]],
+        current_pos: Tuple[int, int],
+    ) -> bool:
+        """Detect local cycling strongly enough to override scalar utility."""
+        if len(path) < 6:
+            return False
+        current = tuple(int(v) for v in current_pos)
+        recent = [tuple(int(v) for v in pos) for pos in path[-8:]]
+        if recent.count(current) >= 3:
+            return True
+        if len(recent) >= 4 and recent[-1] == recent[-3] and recent[-2] == recent[-4]:
+            return True
+        return False
+
+    def _select_frontier_escape_candidate(
+        self,
+        cog_state: CognitiveState,
+        candidates: List[Tuple[Tuple[int, int], int]],
+        scored: List[Tuple[float, Tuple[int, int], int]],
+    ) -> Optional[Tuple[float, Tuple[int, int], int]]:
+        """
+        Pick a move that breaks a local loop by heading toward frontier.
+
+        The solver still respects candidate legality. This only changes
+        priority when repeated local cycling has already been observed.
+        """
+        if not candidates:
+            return None
+        current = tuple(int(v) for v in cog_state.game_state.position)
+        frontier = [
+            tuple(int(v) for v in pos)
+            for pos in self.belief_map.get_frontier()
+            if tuple(int(v) for v in pos) != current
+        ]
+        scored_by_pos = {tuple(pos): (score, tuple(pos), tile) for score, pos, tile in scored}
+
+        unvisited = [
+            (pos, tile)
+            for pos, tile in candidates
+            if int(self._visit_counts.get(tuple(pos), 0)) <= 0
+        ]
+        if unvisited:
+            pos, tile = min(
+                unvisited,
+                key=lambda item: (
+                    self._navigation_distance(current, tuple(item[0])),
+                    int(item[0][0]),
+                    int(item[0][1]),
+                ),
+            )
+            score = scored_by_pos.get(tuple(pos), (0.0, tuple(pos), int(tile)))[0]
+            return (float(score), tuple(pos), int(tile))
+
+        if frontier:
+            def frontier_distance(pos: Tuple[int, int]) -> float:
+                return min(self._navigation_distance(tuple(pos), front) for front in frontier)
+
+            pos, tile = min(
+                candidates,
+                key=lambda item: (
+                    frontier_distance(tuple(item[0])),
+                    int(self._visit_counts.get(tuple(item[0]), 0)),
+                    int(item[0][0]),
+                    int(item[0][1]),
+                ),
+            )
+            score = scored_by_pos.get(tuple(pos), (0.0, tuple(pos), int(tile)))[0]
+            return (float(score), tuple(pos), int(tile))
+
+        return None
     
     def _can_move_to(
         self,
@@ -2817,6 +2933,63 @@ class CognitiveBoundedSearch:
         
         new_state.position = target_pos
         return True, new_state
+
+    def _navigation_distance(
+        self,
+        source: Tuple[int, int],
+        target: Tuple[int, int],
+    ) -> float:
+        """
+        Estimate navigation distance with room-graph hops when available.
+
+        Tile Manhattan distance is still the correct fallback for single-room
+        or unannotated grids. In stitched multi-room dungeons, direct Manhattan
+        distance can reward moves toward walls, so cross-room progress uses the
+        mission/room graph plus local offsets.
+        """
+        src = (int(source[0]), int(source[1]))
+        dst = (int(target[0]), int(target[1]))
+        graph = getattr(self.env, "graph", None)
+        room_to_node = getattr(self.env, "room_to_node", None)
+        if graph is None or not room_to_node:
+            return float(abs(src[0] - dst[0]) + abs(src[1] - dst[1]))
+
+        src_room = self._room_key_for_position(src)
+        dst_room = self._room_key_for_position(dst)
+        if src_room == dst_room:
+            return float(abs(src[0] - dst[0]) + abs(src[1] - dst[1]))
+
+        src_node = room_to_node.get(src_room)
+        dst_node = room_to_node.get(dst_room)
+        if src_node is None or dst_node is None:
+            return float(abs(src[0] - dst[0]) + abs(src[1] - dst[1]))
+
+        try:
+            hop_count = nx.shortest_path_length(graph, source=src_node, target=dst_node)
+        except (nx.NetworkXException, TypeError, ValueError):
+            try:
+                hop_count = nx.shortest_path_length(graph.to_undirected(), source=src_node, target=dst_node)
+            except (nx.NetworkXException, AttributeError, TypeError, ValueError):
+                return float(abs(src[0] - dst[0]) + abs(src[1] - dst[1]))
+
+        # Use one room dimension per hop so room transitions dominate local
+        # tile offsets while preserving within-room tie-breaking.
+        local_scale = float(max(1, max(int(ROOM_HEIGHT), int(ROOM_WIDTH))))
+        return float(hop_count) * local_scale
+
+    def _goal_progress(
+        self,
+        current_pos: Tuple[int, int],
+        target_pos: Tuple[int, int],
+    ) -> float:
+        """Normalized progress toward the goal under the active abstraction."""
+        if self.env.goal_pos is None:
+            return 0.0
+        current_dist = self._navigation_distance(current_pos, self.env.goal_pos)
+        target_dist = self._navigation_distance(target_pos, self.env.goal_pos)
+        if current_dist > 0:
+            return float((current_dist - target_dist) / current_dist)
+        return 1.0 if target_dist <= 0 else 0.0
     
     def _score_move(
         self,
@@ -2850,15 +3023,7 @@ class CognitiveBoundedSearch:
 
         # Explicit bounded-rational utility:
         # U = Î±Â·goal_progress + Î²Â·info_gain - Î³Â·risk
-        goal_progress = 0.0
-        if self.env.goal_pos is not None:
-            curr = cog_state.game_state.position
-            current_dist = abs(curr[0] - self.env.goal_pos[0]) + abs(curr[1] - self.env.goal_pos[1])
-            target_dist = abs(target_pos[0] - self.env.goal_pos[0]) + abs(target_pos[1] - self.env.goal_pos[1])
-            if current_dist > 0:
-                goal_progress = (current_dist - target_dist) / current_dist
-            elif target_dist == 0:
-                goal_progress = 1.0
+        goal_progress = self._goal_progress(cog_state.game_state.position, target_pos)
 
         risk = self._estimate_risk(cog_state, target_pos, target_tile)
 
@@ -3471,6 +3636,7 @@ class CognitiveBoundedSearch:
             inventory_change_events=self._inventory_change_events,
             focus_switches=self._focus_switches,
             focus_guided_steps=self._focus_guided_steps,
+            loop_escape_events=self._loop_escape_events,
             room_visit_counts=room_visit_counts,
             direction_distribution=dict(self._direction_counts),
             memory_timeline=list(self._memory_timeline),

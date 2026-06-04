@@ -284,6 +284,44 @@ still required.
   lets WFC fill/repair uncertain cells, and adds cross-entropy to the repaired
   pseudo-target. This keeps the self-training loop measurable and avoids a
   placebo full-grid seed that would simply return the original prediction.
+- Advanced architectural-upgrade review classifies Flow Matching/DiT, PAG, and
+  Perturb-and-MAP A* as ablation work rather than unconditional replacements.
+  Flow Matching is now a real opt-in latent objective via
+  `diffusion.training_objective: flow_matching` /
+  `DiffusionTrainingConfig(diffusion_training_objective="flow_matching")`; it
+  trains a DiT denoiser to predict straight-line velocity targets `eps - x0`.
+  Training config now rejects `flow_matching` unless
+  `diffusion.denoiser_backbone: dit`; the lower-level U-Net loss remains only
+  an isolated research probe. The DDPM/DDIM sampler is intentionally unchanged,
+  and inference warns when a flow-trained checkpoint is loaded until a matching
+  flow ODE sampler is implemented.
+- Perturb-and-MAP A* exists in two explicit roles: an evaluation metric in
+  `src.evaluation.perturb_and_map`, and a training-selectable LogicNet
+  pathfinder via `logic_grid_pathfinder: perturb_and_map`. The core training
+  path is exposed as `src.core.pathfinder_pm.DifferentiablePerturbedAStar` and
+  uses stochastic hard shortest-path solves with a straight-through surrogate
+  gradient over sampled path support; it is useful evidence, but not an exact
+  differentiable A* derivative.
+- DiT and PAG are now implemented as controlled ablations, not defaults.
+  `diffusion.denoiser_backbone: dit` selects a patchified latent DiT denoiser
+  with adaLN timestep/global conditioning plus graph-token cross-attention;
+  U-Net remains default so backbone changes can be measured cleanly.
+  `diffusion.pag_scale` enables inference-only perturbed-attention guidance by
+  comparing the normal denoiser prediction with an identity-self-attention
+  degraded prediction. PAG reaches both U-Net self-attention blocks and DiT
+  self-attention blocks.
+- Perturb-and-MAP is also wired into LogicNet as
+  `logic_grid_pathfinder: perturb_and_map`. Its core implementation uses a
+  hard stochastic shortest-path forward pass with a straight-through surrogate
+  gradient over sampled path support. This makes it a training ablation instead
+  of evaluation-only evidence, but it is explicitly a biased surrogate and
+  should not be described as an exact differentiable A* solver.
+- Diffusion-DPO is available as `LatentDiffusionModel.dpo_preference_loss()`
+  / `diffusion_dpo_loss()` and `DiffusionTrainer.dpo_step()`. The loss compares
+  preferred/rejected latent samples under shared timestep/noise denoising
+  scores, optionally relative to a frozen reference model. Preference-pair
+  dataset construction remains an experiment concern: pairs should be created
+  from hard symbolic validation or human/solver preference labels.
 
 ## Validation Commands
 
@@ -303,5 +341,7 @@ still required.
 - Harsh-review v4 compile check: `python -m py_compile src/core/vqvae.py src/core/logic_net.py src/core/condition_encoder.py src/zelda_data/zelda_loader.py src/train_diffusion.py src/config_system.py src/pipeline/config_bridge.py tests/test_hmolqd/test_vqvae.py tests/test_logicnet_fixes.py tests/test_ml_components.py tests/test_zelda_loader_graph_conditioning.py tests/test_train_diffusion_conditioning_shapes.py`.
 - Harsh-review v4 focused regression: `python -m pytest tests/test_hmolqd/test_vqvae.py::TestFSQuantizer tests/test_logicnet_fixes.py::test_vin_pathfinder_is_selectable_and_backpropagates tests/test_ml_components.py::test_global_stream_encoder_rrwp_changes_gps_edge_messages tests/test_zelda_loader_graph_conditioning.py::test_dungeon_batch_sampler_groups_room_samples_by_dungeon_variant tests/test_train_diffusion_conditioning_shapes.py::test_try_stack_dungeon_scope_graph_batch_collapses_full_room_set tests/test_train_diffusion_conditioning_shapes.py::test_wfc_pseudo_label_loss_is_opt_in_and_backpropagates -q` passed with 7 tests.
 - Harsh-review v4 broad targeted regression: `python -m pytest tests/test_hmolqd/test_vqvae.py tests/test_logicnet_fixes.py tests/test_logicnet_gradient_flow.py tests/test_ml_components.py tests/test_zelda_loader_graph_conditioning.py tests/test_train_diffusion_conditioning_shapes.py tests/test_config_system.py -q` passed with 179 tests.
+- Advanced architecture ablation compile check: `python -m py_compile src/core/latent_diffusion.py src/train_diffusion.py src/config_system.py src/pipeline/config_bridge.py src/pipeline/models/model_manager.py src/evaluation/perturb_and_map.py tests/test_advanced_architecture_ablations.py`.
+- Advanced architecture ablation focused regression: `python -m pytest tests/test_advanced_architecture_ablations.py tests/test_config_system.py::test_stage_helpers_forward_checkpoint_retention_and_resume_defaults -q` passed with 5 tests.
 - Revision 4 smoke checks: `python experiments/logicnet_ablation.py --base-config configs/zelda_hmolqd.yaml --output-dir results/tmp_logicnet_ablation_smoke --epochs 1 --validation-samples 1 --validation-diffusion-samples 1 --quick` wrote a manifest, and `python experiments/gradient_magnitude_probe.py --output results/tmp_logicnet_gradient_probe.json --batch-size 1 --height 4 --width 4 --latent-dim 8 --hidden-dim 16 --num-iterations 3` recorded nonzero latent, tile-classifier, tile-logit, and walkability gradients.
 - Revision 4 broad regression: `python -m pytest tests/test_audit_regressions.py tests/test_architecture_audit_fixes.py tests/test_logicnet_fixes.py tests/test_logicnet_gradient_flow.py tests/test_train_diffusion_conditioning_shapes.py tests/test_hmolqd/test_symbolic_refiner.py tests/test_hmolqd/test_gaussian_vae.py tests/test_ml_components.py tests/test_config_system.py -q` passed with 224 tests.

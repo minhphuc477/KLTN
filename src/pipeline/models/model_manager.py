@@ -340,6 +340,7 @@ def load_diffusion(pipeline, checkpoint_path: Optional[str]) -> LatentDiffusionM
         prediction_type=str(checkpoint_config.get("prediction_type", fallback_config.get("prediction_type", "epsilon"))),
         cfg_dropout_prob=float(checkpoint_config.get("cfg_dropout_prob", fallback_config.get("cfg_dropout_prob", 0.1))),
         cfg_scale=float(checkpoint_config.get("cfg_scale", fallback_config.get("cfg_scale", 3.0))),
+        pag_scale=float(checkpoint_config.get("pag_scale", fallback_config.get("pag_scale", 0.0))),
         cfg_schedule_mode=str(checkpoint_config.get("cfg_schedule_mode", pipeline.diffusion_cfg_schedule_mode)),
         cfg_schedule_min_scale=float(checkpoint_config.get("cfg_schedule_min_scale", pipeline.diffusion_cfg_schedule_min_scale)),
         cfg_schedule_power=float(checkpoint_config.get("cfg_schedule_power", pipeline.diffusion_cfg_schedule_power)),
@@ -351,6 +352,7 @@ def load_diffusion(pipeline, checkpoint_path: Optional[str]) -> LatentDiffusionM
             checkpoint_config.get("topology_conditioning_mode", fallback_config.get("topology_conditioning_mode", "additive"))
         ),
         hedgehog_feature_dim=int(checkpoint_config.get("hedgehog_feature_dim", pipeline.diffusion_hedgehog_feature_dim)),
+        denoiser_backbone=str(checkpoint_config.get("denoiser_backbone", fallback_config.get("denoiser_backbone", "unet"))),
         unet_channel_mult=tuple(checkpoint_config.get("unet_channel_mult", fallback_config.get("unet_channel_mult", (1, 2, 4)))),
         unet_num_res_blocks=int(checkpoint_config.get("unet_num_res_blocks", fallback_config.get("unet_num_res_blocks", 2))),
         unet_attention_resolutions=tuple(
@@ -358,6 +360,9 @@ def load_diffusion(pipeline, checkpoint_path: Optional[str]) -> LatentDiffusionM
         ),
         unet_num_heads=int(checkpoint_config.get("unet_num_heads", fallback_config.get("unet_num_heads", 8))),
         unet_dropout=float(checkpoint_config.get("unet_dropout", fallback_config.get("unet_dropout", 0.1))),
+        dit_depth=int(checkpoint_config.get("dit_depth", fallback_config.get("dit_depth", 4))),
+        dit_patch_size=int(checkpoint_config.get("dit_patch_size", fallback_config.get("dit_patch_size", 1))),
+        dit_mlp_ratio=float(checkpoint_config.get("dit_mlp_ratio", fallback_config.get("dit_mlp_ratio", 4.0))),
         graph_auto_linear_attention_nodes=int(
             checkpoint_config.get(
                 "graph_auto_linear_attention_nodes",
@@ -379,6 +384,18 @@ def load_diffusion(pipeline, checkpoint_path: Optional[str]) -> LatentDiffusionM
         "training_cfg_scale",
         float(checkpoint_config.get("cfg_scale", fallback_config.get("cfg_scale", 3.0))),
     )
+    training_objective = str(
+        checkpoint_config.get(
+            "diffusion_training_objective",
+            checkpoint_config.get("training_objective", fallback_config.get("diffusion_training_objective", "diffusion")),
+        )
+    ).strip().lower()
+    setattr(model, "training_objective", training_objective)
+    if training_objective == "flow_matching":
+        logger.warning(
+            "Loaded a diffusion checkpoint trained with flow_matching. Generation still uses the DDPM/DDIM sampler; "
+            "treat samples as ablation diagnostics until a matching flow ODE sampler is available."
+        )
     setattr(
         model,
         "inference_checkpoint_state_key",

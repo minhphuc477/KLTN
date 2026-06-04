@@ -1,0 +1,7 @@
+# Disable VIN-style grid planning by selecting the CNN grid pathfinder baseline.
+training:
+  stage: diffusion
+
+diffusion:
+  logic_grid_pathfinder: cnn
+

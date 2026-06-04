@@ -127,3 +127,55 @@ def test_evaluate_astar_vs_pcbs_separates_failed_trajectory_from_solution_path()
         "cognitive_load_failure",
         "bounded_failure_unclassified",
     }
+
+
+def test_evaluate_astar_vs_pcbs_uses_calibration_artifact(tmp_path) -> None:
+    grid = np.array(
+        [
+            [2, 2, 2, 2, 2],
+            [2, 21, 43, 22, 2],
+            [2, 1, 1, 1, 2],
+            [2, 1, 1, 1, 2],
+            [2, 2, 2, 2, 2],
+        ],
+        dtype=np.int32,
+    )
+    calibration = {
+        "weight_source": "unit_test_calibrated_weights",
+        "bounded_rationality_weights": {
+            "confusion": 1.0,
+            "navigation_entropy": 0.0,
+            "cognitive_load": 0.0,
+            "state_budget": 0.0,
+            "puzzle_stall": 0.0,
+        },
+        "cognitive_effort_weights": {
+            "cognitive_load": 1.0,
+            "confusion": 0.0,
+            "revisit_rate": 0.0,
+            "state_budget": 0.0,
+            "puzzle_stall": 0.0,
+        },
+        "novice": {
+            "calibrated_config": {
+                "memory_capacity": 9,
+                "memory_decay_rate": 0.99,
+            }
+        },
+    }
+    calibration_path = tmp_path / "pcbs_persona_overrides.json"
+    calibration_path.write_text(json.dumps(calibration), encoding="utf-8")
+
+    result = evaluate_astar_vs_pcbs(
+        grid,
+        persona="novice",
+        timeout_astar=500,
+        timeout_pcbs=200,
+        seed=7,
+        calibration_path=calibration_path,
+    )
+
+    assert result["pcbs"]["persona_source"] == "telemetry_calibrated_persona"
+    assert result["pcbs"]["weight_source"] == "unit_test_calibrated_weights"
+    assert result["pcbs"]["metric_interpretation"] == "telemetry_calibrated"
+    assert result["comparison"]["pcbs_persona_source"] == "telemetry_calibrated_persona"

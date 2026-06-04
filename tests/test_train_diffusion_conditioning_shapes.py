@@ -1173,6 +1173,22 @@ def test_train_step_trains_logicnet_tile_classifier_when_enabled():
     assert trainer.logic_net.tile_classifier.weight.grad is not None
 
 
+def test_vqvae_codebook_stats_reports_usage_metrics():
+    class _UsageVQVAE:
+        def get_codebook_usage(self):
+            return torch.tensor([0.5, 0.5, 0.0, 0.0], dtype=torch.float32)
+
+    trainer = DiffusionTrainer.__new__(DiffusionTrainer)
+    trainer.vqvae = _UsageVQVAE()
+
+    stats = DiffusionTrainer._vqvae_codebook_stats(trainer)
+
+    assert stats["vqvae_codebook_active_codes"] == pytest.approx(2.0)
+    assert stats["vqvae_codebook_total_codes"] == pytest.approx(4.0)
+    assert stats["vqvae_codebook_active_fraction"] == pytest.approx(0.5)
+    assert stats["vqvae_codebook_perplexity"] == pytest.approx(2.0)
+
+
 def test_validate_skips_nonfinite_generated_samples():
     trainer = _make_stub_trainer(context_dim=8)
     trainer.ema_diffusion = _NaNEvalModel()

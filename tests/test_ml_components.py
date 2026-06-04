@@ -961,6 +961,38 @@ def test_global_stream_encoder_rrwp_changes_gps_edge_messages():
     assert not torch.allclose(out_zero, out_nonzero)
 
 
+def test_global_stream_encoder_skips_mismatched_rrwp_rows():
+    from src.core.condition_encoder import GlobalStreamEncoder
+    from src.core.definitions import GRAPH_TPE_DIM
+
+    encoder = GlobalStreamEncoder(
+        node_feature_dim=4,
+        edge_feature_dim=3,
+        hidden_dim=16,
+        output_dim=8,
+        num_layers=1,
+        gnn_type="gps",
+        num_heads=4,
+        dropout=0.0,
+        use_rrwp_edge_features=True,
+    )
+    node_features = torch.randn(3, 4)
+    edge_index = torch.tensor([[0, 1, 2], [1, 2, 0]], dtype=torch.long)
+    edge_features = torch.zeros(3, 3)
+    tpe = torch.zeros(3, GRAPH_TPE_DIM)
+
+    out = encoder(
+        node_features,
+        edge_index,
+        edge_features=edge_features,
+        edge_rrwp=torch.zeros(0, GRAPH_TPE_DIM),
+        tpe=tpe,
+    )
+
+    assert tuple(out.shape) == (3, 8)
+    assert torch.isfinite(out).all()
+
+
 # ============================================================================
 # MAIN
 # ============================================================================

@@ -45,6 +45,7 @@ from src.core.definitions import (
     ROOM_WIDTH,
     SEMANTIC_PALETTE,
 )
+from src.core.pathfinder_pm import perturb_and_map_distance
 
 logger = logging.getLogger(__name__)
 
@@ -146,7 +147,7 @@ class DifferentiablePathfinder(nn.Module):
         num_iterations: int = 20,
         iterations: Optional[int] = None,
         temperature: float = 0.1,
-        inf_distance: float = 100.0,
+        inf_distance: float = 20.0,
     ):
         super().__init__()
 
@@ -156,6 +157,7 @@ class DifferentiablePathfinder(nn.Module):
         self.num_iterations = num_iterations
         self.temperature = temperature
         self.inf_distance = inf_distance
+        self.wall_penalty_scale = min(10.0, max(1.0, float(inf_distance) * 0.5))
     
     def forward(
         self,
@@ -242,8 +244,12 @@ class DifferentiablePathfinder(nn.Module):
                 candidates = torch.stack([dist, up + 1.0, down + 1.0, left + 1.0, right + 1.0], dim=0)
                 candidates = candidates.clamp(-inf, inf)
                 relaxed = soft_min(candidates, dim=0, temperature=max(self.temperature, 1e-4))
-                # Penalize non-walkable cells while preserving gradients through walkability.
-                dist = relaxed.clamp(-inf, inf) + (1.0 - walkability) * float(self.inf_distance)
+                # Penalize non-walkable cells while preserving gradients through
+                # walkability without letting ambiguous wall logits dominate the
+                # path signal. A squared soft barrier has zero slope near fully
+                # walkable cells and bounded slope for uncertain cells.
+                wall_penalty = (1.0 - walkability).clamp(0.0, 1.0).pow(2) * float(self.wall_penalty_scale)
+                dist = relaxed.clamp(-inf, inf) + wall_penalty
                 # Keep start cells fixed at zero distance.
                 dist = dist * (1.0 - start) + torch.zeros_like(dist) * start
                 dist = dist.clamp(-inf, inf)
@@ -573,6 +579,78 @@ class ValueIterationGridPathfinder(nn.Module):
         return (1.0 - value) * 50.0 + semantic_cost
 
 
+class PerturbAndMAPGridPathfinder(nn.Module):
+    """
+    Hard stochastic grid pathfinder with straight-through gradients.
+
+    Forward solves perturbed hard shortest paths over predicted walkability.
+    Backward routes a surrogate gradient through the expected hard-solver
+    support. This is intentionally an ablation path, not a default replacement
+    for the smoother Bellman-Ford teacher.
+    """
+
+    WALKABLE_IDS = CANONICAL_LOGIC_WALKABLE_IDS
+
+    def __init__(
+        self,
+        num_iterations: int = 20,
+        temperature: float = 0.1,
+        num_classes: int = 44,
+        num_samples: Optional[int] = None,
+        obstacle_penalty: float = 8.0,
+    ) -> None:
+        super().__init__()
+        self.num_iterations = int(max(1, num_iterations))
+        self.temperature = float(max(1e-4, temperature))
+        self.num_classes = int(max(1, num_classes))
+        self.num_samples = int(max(1, num_samples if num_samples is not None else min(8, self.num_iterations)))
+        self.obstacle_penalty = float(max(0.0, obstacle_penalty))
+
+        walkability = torch.zeros(self.num_classes)
+        for tile_id in self.WALKABLE_IDS:
+            if tile_id < self.num_classes:
+                walkability[tile_id] = 1.0
+        self.register_buffer("walkability_weights", walkability)
+
+    def _derive_walkability(self, room_grid: Tensor) -> Tensor:
+        if room_grid.dim() != 4:
+            raise ValueError(f"room_grid must be [B,C,H,W], got {tuple(room_grid.shape)}.")
+        if int(room_grid.shape[1]) == 1:
+            return torch.sigmoid(room_grid[:, :1])
+        if int(room_grid.shape[1]) != self.num_classes:
+            raise ValueError(
+                f"PerturbAndMAPGridPathfinder expected {self.num_classes} tile channels, got {int(room_grid.shape[1])}."
+            )
+        probs = F.softmax(room_grid, dim=1)
+        walkability = torch.einsum("bchw,c->bhw", probs, self.walkability_weights)
+        return walkability.unsqueeze(1)
+
+    def forward(
+        self,
+        room_grid: Tensor,
+        source_mask: Tensor,
+        walkability: Optional[Tensor] = None,
+    ) -> Tensor:
+        if source_mask.dim() != 4 or int(source_mask.shape[1]) != 1:
+            raise ValueError(f"source_mask must be [B,1,H,W], got {tuple(source_mask.shape)}.")
+        if walkability is None:
+            walkability = self._derive_walkability(room_grid)
+        if walkability.dim() != 4 or int(walkability.shape[1]) != 1:
+            raise ValueError(f"walkability must be [B,1,H,W], got {tuple(walkability.shape)}.")
+        if walkability.shape != source_mask.shape:
+            raise ValueError(
+                f"walkability/source shape mismatch: walkability={tuple(walkability.shape)}, "
+                f"source_mask={tuple(source_mask.shape)}."
+            )
+        return perturb_and_map_distance(
+            walkability.clamp(0.0, 1.0),
+            source_mask.clamp(0.0, 1.0),
+            num_samples=self.num_samples,
+            noise_scale=self.temperature,
+            obstacle_penalty=self.obstacle_penalty,
+        )
+
+
 # ============================================================================
 # REACHABILITY SCORER
 # ============================================================================
@@ -823,13 +901,15 @@ class TileClassifier(nn.Module):
         in_channels: Optional[int] = None,
         num_classes: int = 44,
         hidden_dim: int = 128,
-        output_mode: str = "probs",
+        output_mode: str = "logits",
     ):
         super().__init__()
 
         if in_channels is not None:
             latent_dim = int(in_channels)
         self.output_mode = str(output_mode).strip().lower()
+        if self.output_mode not in {"logits", "probs"}:
+            raise ValueError(f"TileClassifier output_mode must be 'logits' or 'probs', got {output_mode!r}.")
         
         self.classifier = nn.Sequential(
             nn.Conv2d(latent_dim, hidden_dim, 3, padding=1),
@@ -1000,8 +1080,10 @@ class LogicNet(nn.Module):
             self.grid_pathfinder_type = "bellman_ford"
         if self.grid_pathfinder_type in {"value_iteration", "value-iteration"}:
             self.grid_pathfinder_type = "vin"
-        if self.grid_pathfinder_type not in {"cnn", "bellman_ford", "vin"}:
-            raise ValueError("grid_pathfinder_type must be 'cnn', 'bellman_ford', or 'vin'.")
+        if self.grid_pathfinder_type in {"perturb-and-map", "perturb_map", "pmap"}:
+            self.grid_pathfinder_type = "perturb_and_map"
+        if self.grid_pathfinder_type not in {"cnn", "bellman_ford", "vin", "perturb_and_map"}:
+            raise ValueError("grid_pathfinder_type must be 'cnn', 'bellman_ford', 'vin', or 'perturb_and_map'.")
         
         # --- Phase 1D: Temperature annealing state ---
         self.initial_temperature = initial_temperature
@@ -1028,6 +1110,12 @@ class LogicNet(nn.Module):
             )
         elif self.grid_pathfinder_type == "vin":
             self.grid_pathfinder = ValueIterationGridPathfinder(
+                num_iterations=num_iterations,
+                temperature=temperature,
+                num_classes=num_classes,
+            )
+        elif self.grid_pathfinder_type == "perturb_and_map":
+            self.grid_pathfinder = PerturbAndMAPGridPathfinder(
                 num_iterations=num_iterations,
                 temperature=temperature,
                 num_classes=num_classes,

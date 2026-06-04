@@ -1,0 +1,12 @@
+# DiT + continuous Flow Matching ablation.
+training:
+  stage: diffusion
+
+diffusion:
+  denoiser_backbone: dit
+  training_objective: flow_matching
+  prediction_type: epsilon
+  dit_depth: 4
+  dit_patch_size: 1
+  dit_mlp_ratio: 4.0
+

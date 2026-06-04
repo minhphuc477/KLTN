@@ -7,6 +7,7 @@ from typing import Any, Dict
 import networkx as nx
 import numpy as np
 
+from src.evaluation.search_benchmark_utils import normalized_confusion_ratio
 from src.simulation.cognitive_bounded_search import CognitiveBoundedSearch
 from src.simulation.validator import StateSpaceAStar, ZeldaLogicEnv
 
@@ -29,6 +30,7 @@ def _compute_graph_cognitive_proxy(
             'solvable_astar': False,
             'solvable_cbs': False,
             'confusion_ratio': float('inf'),
+            'normalized_confusion_ratio': float('inf'),
             'path_efficiency': 0.0,
             'room_entropy': 0.0,
             'confusion_index': 0.0,
@@ -102,11 +104,14 @@ def _compute_graph_cognitive_proxy(
         fitness = -10.0
         path_efficiency = 0.0
         cbs_path_len = int(max(1, n))
+        normalized_confusion = float('inf')
     else:
         # Assume bounded agent pays structural overhead over optimal shortest path.
         cbs_path_len = int(max(1, round(shortest * (1.0 + confusion_index))))
         path_efficiency = float(shortest) / float(max(1, cbs_path_len))
-        cr_penalty = (confusion_ratio - float(target_confusion_ratio)) ** 2
+        normalized_confusion = float(max(0, cbs_path_len - shortest)) / float(max(1, shortest))
+        target_normalized = max(0.0, float(target_confusion_ratio) - 1.0)
+        cr_penalty = (normalized_confusion - target_normalized) ** 2
         fitness = 1.0 / (1.0 + cr_penalty)
 
     # Entropy proxy from degree spread (more uniform branching -> higher entropy).
@@ -117,6 +122,7 @@ def _compute_graph_cognitive_proxy(
         'solvable_astar': bool(solvable),
         'solvable_cbs': bool(solvable),
         'confusion_ratio': float(confusion_ratio),
+        'normalized_confusion_ratio': float(normalized_confusion),
         'path_efficiency': float(path_efficiency),
         'room_entropy': float(room_entropy),
         'confusion_index': float(confusion_index),
@@ -160,18 +166,53 @@ def compute_cbs_fitness(
             f"got {type(grid).__name__}"
         )
 
-    env_a = ZeldaLogicEnv(semantic_grid=grid)
+    grid_for_astar = np.array(grid, dtype=np.int64, copy=True)
+    grid_for_pcbs = np.array(grid, dtype=np.int64, copy=True)
+
+    env_a = ZeldaLogicEnv(semantic_grid=grid_for_astar)
     solver_a = StateSpaceAStar(env_a, timeout=astar_timeout)
     success_a, path_a, states_a = solver_a.solve()
+    if success_a and len(path_a) <= 0:
+        return {
+            'fitness': -10.0,
+            'solvable_astar': False,
+            'solvable_cbs': False,
+            'confusion_ratio': float('inf'),
+            'normalized_confusion_ratio': float('inf'),
+            'path_efficiency': 0.0,
+            'exploration_efficiency': 0.0,
+            'room_entropy': 0.0,
+            'confusion_index': 0.0,
+            'astar_path_length': 0,
+            'cbs_path_length': 0,
+            'astar_states': states_a,
+            'is_proxy': 0.0,
+        }
     
-    env_c = ZeldaLogicEnv(semantic_grid=grid.copy())
+    env_c = ZeldaLogicEnv(semantic_grid=grid_for_pcbs)
     cbs = CognitiveBoundedSearch(env_c, persona=persona, timeout=cbs_timeout, seed=seed)
     success_c, path_c, _states_c, metrics = cbs.solve()
     
     # Confusion Ratio
-    astar_steps = len(path_a) if success_a and len(path_a) > 0 else float('inf')
-    cbs_steps = len(path_c) if len(path_c) > 0 else cbs_timeout
-    confusion_ratio = cbs_steps / astar_steps if astar_steps > 0 and astar_steps != float('inf') else float('inf')
+    astar_steps = len(path_a) if success_a and len(path_a) > 0 else 0
+    cbs_steps = len(path_c) if success_c and len(path_c) > 0 else 0
+    raw_cbs_steps = len(path_c) if len(path_c) > 0 else cbs_timeout
+    confusion_ratio = (
+        float(raw_cbs_steps) / float(astar_steps)
+        if astar_steps > 0 and success_c
+        else float('inf')
+    )
+    if env_a.start_pos is not None and env_a.goal_pos is not None:
+        manhattan = abs(int(env_a.start_pos[0]) - int(env_a.goal_pos[0])) + abs(int(env_a.start_pos[1]) - int(env_a.goal_pos[1]))
+    else:
+        manhattan = 0
+    normalized_confusion = normalized_confusion_ratio(
+        astar_steps,
+        cbs_steps,
+        manhattan,
+        oracle_status="solved" if success_a else "failed",
+        candidate_success=bool(success_c),
+    )
     
     # Fitness: penalize deviation from target CR
     # Also penalize unsolvable levels
@@ -180,8 +221,9 @@ def compute_cbs_fitness(
     elif not success_c:
         fitness = -5.0   # Solvable but too hard for humans
     else:
-        # Gaussian penalty around target CR
-        cr_penalty = (confusion_ratio - target_confusion_ratio) ** 2
+        # Penalize normalized excess path length rather than raw CR.
+        target_normalized = max(0.0, float(target_confusion_ratio) - 1.0)
+        cr_penalty = (float(normalized_confusion) - target_normalized) ** 2
         fitness = 1.0 / (1.0 + cr_penalty)
     
     return {
@@ -189,7 +231,13 @@ def compute_cbs_fitness(
         'solvable_astar': success_a,
         'solvable_cbs': success_c,
         'confusion_ratio': confusion_ratio,
-        'path_efficiency': getattr(metrics, 'exploration_efficiency', 0.0),
+        'normalized_confusion_ratio': float(normalized_confusion) if np.isfinite(normalized_confusion) else float('inf'),
+        'path_efficiency': (
+            float(astar_steps) / float(max(1, cbs_steps))
+            if success_a and success_c and cbs_steps > 0
+            else 0.0
+        ),
+        'exploration_efficiency': getattr(metrics, 'exploration_efficiency', 0.0),
         'room_entropy': getattr(metrics, 'room_entropy', 0.0),
         'confusion_index': getattr(metrics, 'confusion_index', 0.0),
         'astar_path_length': len(path_a) if success_a else 0,

@@ -906,7 +906,17 @@ class GlobalStreamEncoder(nn.Module):
             edge_attr = self.edge_encoder(edge_features)
         if edge_rrwp is not None and self.edge_rrwp_proj is not None:
             rrwp_attr = self.edge_rrwp_proj(edge_rrwp)
-            edge_attr = rrwp_attr if edge_attr is None else edge_attr + rrwp_attr
+            if edge_attr is not None and int(rrwp_attr.shape[0]) != int(edge_attr.shape[0]):
+                self._warn_once(
+                    f"edge_rrwp_attr_mismatch:{tuple(rrwp_attr.shape)}!={tuple(edge_attr.shape)}",
+                    (
+                        "Skipping RRWP edge attributes because projected edge_rrwp rows "
+                        f"{int(rrwp_attr.shape[0])} do not match edge_attr rows {int(edge_attr.shape[0])}."
+                    ),
+                )
+                rrwp_attr = None
+            if rrwp_attr is not None:
+                edge_attr = rrwp_attr if edge_attr is None else edge_attr + rrwp_attr
         
         for layer, norm in zip(self.gnn_layers, self.layer_norms):
             if edge_attr is not None and isinstance(layer, GATv2Conv):
@@ -936,7 +946,17 @@ class GlobalStreamEncoder(nn.Module):
         edge_attr = self.edge_encoder(edge_features) if edge_features is not None else None
         if edge_rrwp is not None and self.edge_rrwp_proj is not None:
             rrwp_attr = self.edge_rrwp_proj(edge_rrwp)
-            edge_attr = rrwp_attr if edge_attr is None else edge_attr + rrwp_attr
+            if edge_attr is not None and int(rrwp_attr.shape[0]) != int(edge_attr.shape[0]):
+                self._warn_once(
+                    f"gps_edge_rrwp_attr_mismatch:{tuple(rrwp_attr.shape)}!={tuple(edge_attr.shape)}",
+                    (
+                        "Skipping GPS RRWP edge attributes because projected edge_rrwp rows "
+                        f"{int(rrwp_attr.shape[0])} do not match edge_attr rows {int(edge_attr.shape[0])}."
+                    ),
+                )
+                rrwp_attr = None
+            if rrwp_attr is not None:
+                edge_attr = rrwp_attr if edge_attr is None else edge_attr + rrwp_attr
 
         for layer in self.gps_layers:
             h = layer(h, edge_index=edge_index, edge_attr=edge_attr)
