@@ -235,7 +235,7 @@ CONFIG_FIELDS: List[ConfigField] = [
     ConfigField("diffusion.logic_net_trainable", bool, True, "Optimize LogicNet parameters jointly with diffusion when LogicNet is enabled."),
     ConfigField("diffusion.logic_learning_rate", float, None, "Optional LogicNet-specific optimizer learning rate. Null reuses diffusion.learning_rate.", min_value=1e-8, allow_none=True),
     ConfigField("diffusion.logic_lr_warmup_epochs", int, 5, "Epochs used to linearly warm up only the LogicNet optimizer group.", min_value=0),
-    ConfigField("diffusion.logic_grid_pathfinder", str, "bellman_ford", "Grid-level LogicNet pathfinder ablation.", choices=("cnn", "bellman_ford", "vin", "perturb_and_map")),
+    ConfigField("diffusion.logic_grid_pathfinder", str, "bellman_ford", "Grid-level LogicNet pathfinder ablation.", choices=("cnn", "bellman_ford", "bellman-ford", "soft_bellman_ford", "soft-bellman-ford", "vin", "value_iteration", "value-iteration", "perturb_and_map", "perturb-and-map", "perturb_map", "pmap")),
     ConfigField("diffusion.num_logic_iterations", int, 30, "LogicNet message-passing iterations.", min_value=1),
     ConfigField("diffusion.logic_topology_trace_weight", float, 0.25, "Additional LogicNet weight on room-topology traversability traces.", min_value=0.0),
     ConfigField("diffusion.logic_topology_anchor_weight", float, 0.25, "Additional LogicNet weight on start/goal/door anchor walkability.", min_value=0.0),

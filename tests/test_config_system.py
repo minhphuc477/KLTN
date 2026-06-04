@@ -1197,6 +1197,15 @@ def test_masked_room_helper_preserves_yaml_only_unet_and_mask_schedule_knobs(tmp
     assert kwargs["best_checkpoint_metric"] == "val_topology_focus_loss"
 
 
+def test_pipeline_kwargs_use_valid_masked_room_attention_fallback_for_legacy_configs():
+    resolved = merge_config(yaml_path=None, cli_overrides=None)
+    resolved["masked_room"].pop("attention_mode", None)
+
+    kwargs = pipeline_kwargs_from_resolved_config(resolved)
+
+    assert kwargs["masked_room_fallback_config"]["attention_mode"] == "softmax"
+
+
 def test_reference_room_vocab_size_must_match_dataset_schema_when_enabled(tmp_path: Path):
     cfg_path = tmp_path / "config.yaml"
     _write_yaml(

@@ -54,7 +54,7 @@ def _load_model_from_checkpoint(path: Path, config: DiffusionTrainingConfig) -> 
         spatial_topology_gate_init=config.spatial_topology_gate_init,
         room_topology_channels=config.room_topology_channels,
     )
-    checkpoint = safe_torch_load(str(path), map_location="cpu", weights_only=False)
+    checkpoint = safe_torch_load(str(path), map_location="cpu")
     state = checkpoint.get("ema_diffusion_state_dict") or checkpoint.get("diffusion_state_dict") or checkpoint
     if not isinstance(state, dict):
         raise ValueError(f"Checkpoint {path} does not contain a diffusion state dict.")

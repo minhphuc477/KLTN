@@ -144,6 +144,16 @@ def test_pydantic_config_schema_rejects_invalid_diffusion_choice():
         validate_config_payload({"diffusion": {"logic_grid_pathfinder": "invalid"}})
 
 
+@pytest.mark.parametrize(
+    "pathfinder",
+    ["soft-bellman-ford", "soft_bellman_ford", "perturb-and-map", "value_iteration"],
+)
+def test_pydantic_config_schema_accepts_public_logic_pathfinder_aliases(pathfinder):
+    config = validate_config_payload({"diffusion": {"logic_grid_pathfinder": pathfinder}})
+
+    assert config["diffusion"]["logic_grid_pathfinder"] == pathfinder
+
+
 def test_pydantic_config_schema_returns_cross_field_normalization():
     config = validate_config_payload(
         {"diffusion": {"logic_net_enabled": False, "logic_net_trainable": True}}
