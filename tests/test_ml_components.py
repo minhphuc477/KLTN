@@ -961,6 +961,23 @@ def test_global_stream_encoder_rrwp_changes_gps_edge_messages():
     assert not torch.allclose(out_zero, out_nonzero)
 
 
+@pytest.mark.parametrize("gnn_type", ["gcn", "sage"])
+def test_global_stream_encoder_rejects_rrwp_for_backbones_that_ignore_edge_attributes(gnn_type):
+    from src.core.condition_encoder import GlobalStreamEncoder
+
+    with pytest.raises(ValueError, match="RRWP edge features require"):
+        GlobalStreamEncoder(
+            node_feature_dim=4,
+            edge_feature_dim=3,
+            hidden_dim=16,
+            output_dim=8,
+            num_layers=1,
+            gnn_type=gnn_type,
+            dropout=0.0,
+            use_rrwp_edge_features=True,
+        )
+
+
 def test_global_stream_encoder_skips_mismatched_rrwp_rows():
     from src.core.condition_encoder import GlobalStreamEncoder
     from src.core.definitions import GRAPH_TPE_DIM

@@ -635,6 +635,16 @@ class AttentionBlock(nn.Module):
         cross_context = context
         cross_edge_index = context_edge_index
         cross_node_mask = context_node_mask
+        if spatial_graph_data and context.dim() == 3:
+            graph_nodes = spatial_graph_data.get("graph_nodes")
+            if isinstance(graph_nodes, torch.Tensor) and graph_nodes.dim() == 3:
+                prefix_len = max(0, int(context.shape[1]) - int(graph_nodes.shape[1]))
+                if prefix_len > 0:
+                    cross_context = context[:, :prefix_len, :]
+                else:
+                    cross_context = context.mean(dim=1, keepdim=True)
+                cross_edge_index = None
+                cross_node_mask = None
 
         # Cross-attention with context
         x_flat = x_flat + self.cross_attn(

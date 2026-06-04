@@ -12,6 +12,7 @@ from src.core.logic_net import LogicNet
 from src.core.vqvae import create_vqvae
 from src.core.symbolic_refiner import DEFAULT_ADJACENCY, TileType
 from src.pipeline.dungeon_pipeline import NeuralSymbolicDungeonPipeline, RoomGenerationResult
+from src.pipeline.graph_features import compute_current_node_distance_features
 from src.pipeline.room_stitching import StitchedRoomLayout
 from src.pipeline.room_topology_conditioning import (
     ROOM_TOPOLOGY_CHANNEL_COUNT,
@@ -1835,6 +1836,24 @@ def test_room_graph_context_includes_current_node_distance_features():
     assert float(current_node_distance[current_node_idx, 3]) == 1.0
 
 
+def test_current_node_distance_features_mark_unreachable_nodes_with_sentinel():
+    features = compute_current_node_distance_features(
+        torch.tensor([[0, 1], [1, 2]], dtype=torch.long),
+        4,
+        current_node_idx=1,
+        device=torch.device("cpu"),
+        max_distance=8,
+    )
+
+    assert tuple(features.shape) == (4, 4)
+    assert float(features[1, 0]) == pytest.approx(0.0)
+    assert float(features[2, 1]) == pytest.approx(0.125)
+    assert float(features[0, 2]) == pytest.approx(0.125)
+    assert float(features[3, 0]) == pytest.approx(-1.0)
+    assert float(features[3, 1]) == pytest.approx(-1.0)
+    assert float(features[3, 2]) == pytest.approx(-1.0)
+
+
 def test_room_graph_context_preserves_explicit_numeric_style_id():
     pipeline = NeuralSymbolicDungeonPipeline(
         device="cpu",
@@ -2155,6 +2174,52 @@ def test_pipeline_diffusion_loader_rejects_checkpoint_without_diffusion_state_di
     )
 
     with pytest.raises(ValueError, match="does not contain a loadable state_dict"):
+        pipeline._load_diffusion(str(ckpt_path))
+
+
+def test_strict_diffusion_loader_requires_topology_conditioning_mode(tmp_path):
+    pipeline = NeuralSymbolicDungeonPipeline.create_symbolic_repair_pipeline(
+        device="cpu",
+        enable_logging=False,
+        strict_checkpoint_mode=True,
+    )
+
+    diffusion = create_latent_diffusion(
+        latent_dim=4,
+        context_dim=8,
+        model_channels=8,
+        num_timesteps=10,
+        unet_channel_mult=(1,),
+        unet_num_res_blocks=1,
+        unet_attention_resolutions=(),
+        unet_num_heads=1,
+        room_topology_channels=ROOM_TOPOLOGY_CHANNEL_COUNT,
+    )
+
+    ckpt_path = tmp_path / "missing_topology_mode_diffusion.pth"
+    torch.save(
+        {
+            "diffusion_state_dict": diffusion.state_dict(),
+            "config": {
+                "latent_dim": 4,
+                "context_dim": 8,
+                "num_timesteps": 10,
+                "model_channels": 8,
+                "unet_channel_mult": [1],
+                "unet_num_res_blocks": 1,
+                "unet_attention_resolutions": [],
+                "unet_num_heads": 1,
+                "room_topology_channels": ROOM_TOPOLOGY_CHANNEL_COUNT,
+            },
+        },
+        ckpt_path,
+    )
+    ckpt_path.with_suffix(".pth.meta.json").write_text(
+        json.dumps({"format_version": "1.0", "model_type": "diffusion"}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="topology_conditioning_mode"):
         pipeline._load_diffusion(str(ckpt_path))
 
 

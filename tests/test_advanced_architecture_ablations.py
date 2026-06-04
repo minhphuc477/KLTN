@@ -79,6 +79,90 @@ def test_dit_backbone_flow_matching_loss_is_finite_and_backpropagates():
     assert torch.isfinite(z_0.grad).all()
 
 
+def test_dit_backbone_uses_context_edge_index_for_token_topology():
+    torch.manual_seed(7)
+    model = create_latent_diffusion(
+        latent_dim=8,
+        model_channels=16,
+        context_dim=16,
+        denoiser_backbone="dit",
+        topology_refinement_mode="lightweight",
+        dit_depth=1,
+        dit_patch_size=1,
+        dit_mlp_ratio=2.0,
+        num_timesteps=8,
+        cfg_dropout_prob=0.0,
+        unet_num_heads=4,
+        unet_dropout=0.0,
+    )
+    model.eval()
+    x_t = torch.randn(1, 8, 3, 4)
+    t = torch.tensor([3], dtype=torch.long)
+    context = torch.randn(1, 3, 16)
+    node_mask = torch.ones(1, 3, dtype=torch.bool)
+    edge_chain = torch.tensor([[0, 1], [1, 2]], dtype=torch.long)
+    edge_skip = torch.tensor([[0, 2], [2, 1]], dtype=torch.long)
+
+    with torch.no_grad():
+        out_chain = model.denoiser(
+            x_t,
+            t,
+            context,
+            context_edge_index=edge_chain,
+            context_node_mask=node_mask,
+        )
+        out_skip = model.denoiser(
+            x_t,
+            t,
+            context,
+            context_edge_index=edge_skip,
+            context_node_mask=node_mask,
+        )
+
+    assert tuple(out_chain.shape) == tuple(x_t.shape)
+    assert not torch.allclose(out_chain, out_skip)
+
+
+def test_dit_backbone_uses_spatial_graph_data():
+    torch.manual_seed(11)
+    model = create_latent_diffusion(
+        latent_dim=8,
+        model_channels=16,
+        context_dim=16,
+        denoiser_backbone="dit",
+        dit_depth=1,
+        dit_patch_size=1,
+        dit_mlp_ratio=2.0,
+        num_timesteps=8,
+        cfg_dropout_prob=0.0,
+        unet_num_heads=4,
+        unet_dropout=0.0,
+        room_topology_channels=18,
+    )
+    model.eval()
+    x_t = torch.randn(1, 8, 3, 4)
+    t = torch.tensor([2], dtype=torch.long)
+    context = torch.randn(1, 3, 16)
+    base_spatial = {
+        "graph_nodes": context,
+        "edge_index": torch.tensor([[0, 1], [1, 2]], dtype=torch.long),
+        "node_positions": torch.zeros(1, 3, 2),
+        "node_tpe": torch.zeros(1, 3, 8),
+        "current_node_distance": torch.zeros(1, 3, 4),
+        "node_mask": torch.ones(1, 3, dtype=torch.bool),
+        "room_topology_map": torch.zeros(1, 18, 6, 6),
+    }
+    changed_topology = dict(base_spatial)
+    changed_topology["room_topology_map"] = torch.ones(1, 18, 6, 6)
+
+    with torch.no_grad():
+        out_base = model.denoiser(x_t, t, context, spatial_graph_data=base_spatial)
+        out_topology = model.denoiser(x_t, t, context, spatial_graph_data=changed_topology)
+
+    assert tuple(out_base.shape) == tuple(x_t.shape)
+    assert not torch.allclose(out_base, out_topology)
+
+
 def test_flow_ode_sampler_matches_flow_matching_objective_shape_and_finiteness():
     model = create_latent_diffusion(
         latent_dim=8,
