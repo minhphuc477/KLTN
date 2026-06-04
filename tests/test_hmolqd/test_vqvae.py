@@ -225,6 +225,17 @@ class TestFSQuantizer:
         assert x.grad is not None
         assert x.grad.abs().sum().item() > 0.0
 
+    def test_fsq_bounding_uses_straight_through_gradient_not_tanh_saturation(self):
+        from src.core.vqvae import FSQuantizer
+
+        x = torch.full((1, 4, 2, 2), 20.0, requires_grad=True)
+        bounded = FSQuantizer._bound_ste(x)
+        bounded.sum().backward()
+
+        assert torch.allclose(bounded.detach(), torch.ones_like(bounded))
+        assert x.grad is not None
+        assert torch.allclose(x.grad, torch.ones_like(x.grad))
+
     def test_create_vqvae_fsq_architecture_round_trip(self):
         from src.core.vqvae import FSQuantizer, create_vqvae
 

@@ -3731,7 +3731,7 @@ class DiffusionTrainer:
                 st_path = Path(path).with_suffix('.safetensors')
                 diffusion_state_dict = self.diffusion.state_dict()
                 _save_safetensors(
-                    {'diffusion': {k: v for k, v in diffusion_state_dict.items()}},
+                    {f"diffusion.{k}": v for k, v in diffusion_state_dict.items()},
                     str(st_path),
                 )
                 logger.debug("Saved safetensors sidecar: %s", st_path)

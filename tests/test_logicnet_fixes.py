@@ -207,6 +207,19 @@ def test_logicnet_without_topology_uses_single_cell_source_not_all_doors():
     assert torch.allclose(source_mask.sum(dim=(1, 2, 3)), torch.ones(2))
 
 
+def test_logicnet_fallback_source_mask_is_differentiable():
+    logic_net = LogicNet(latent_dim=4, num_tile_classes=5)
+    walkability = torch.randn(1, 1, 4, 4, requires_grad=True)
+
+    source_mask = logic_net._create_single_cell_source_mask(walkability)
+    source_mask[..., 0, 0].sum().backward()
+
+    assert torch.allclose(source_mask.sum(dim=(1, 2, 3)), torch.ones(1))
+    assert walkability.grad is not None
+    assert torch.isfinite(walkability.grad).all()
+    assert walkability.grad.abs().sum().item() > 0.0
+
+
 def test_logicnet_global_room_passability_preserves_index_copy_gradient():
     logic_net = LogicNet(latent_dim=4, num_tile_classes=5)
     room_passability = torch.tensor([0.25], requires_grad=True)

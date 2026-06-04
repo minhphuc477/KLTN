@@ -714,6 +714,27 @@ class GlobalStreamEncoder(nn.Module):
             feature_name="edge_features",
         )
 
+    def _align_projected_edge_attr(self, edge_attr: Tensor, *, feature_name: str) -> Tensor:
+        """Align projected edge attributes to the GNN edge hidden width."""
+        if edge_attr.dim() != 2:
+            raise ValueError(f"{feature_name} must be [E,D], got {tuple(edge_attr.shape)}.")
+        expected_dim = int(self.hidden_dim)
+        current_dim = int(edge_attr.shape[1])
+        if current_dim == expected_dim:
+            return edge_attr
+        self._warn_once(
+            f"{feature_name}_projected_width:{current_dim}->{expected_dim}",
+            (
+                f"{feature_name} projected width {current_dim} does not match hidden_dim={expected_dim}. "
+                "Aligning width instead of dropping edge-conditioning signal."
+            ),
+        )
+        return self._align_feature_dim(
+            edge_attr,
+            expected_dim=expected_dim,
+            feature_name=feature_name,
+        )
+
     def _prepare_tpe(
         self,
         tpe: Optional[Tensor],
@@ -908,24 +929,21 @@ class GlobalStreamEncoder(nn.Module):
         # Encode edge features if available
         edge_attr = None
         if edge_features is not None and hasattr(self, 'edge_encoder'):
-            edge_attr = self.edge_encoder(edge_features)
+            edge_attr = self._align_projected_edge_attr(
+                self.edge_encoder(edge_features),
+                feature_name="edge_attr",
+            )
         if edge_rrwp is not None and self.edge_rrwp_proj is not None:
-            rrwp_attr = self.edge_rrwp_proj(edge_rrwp)
+            rrwp_attr = self._align_projected_edge_attr(
+                self.edge_rrwp_proj(edge_rrwp),
+                feature_name="edge_rrwp",
+            )
             if edge_attr is not None and int(rrwp_attr.shape[0]) != int(edge_attr.shape[0]):
                 self._warn_once(
                     f"edge_rrwp_attr_mismatch:{tuple(rrwp_attr.shape)}!={tuple(edge_attr.shape)}",
                     (
                         "Skipping RRWP edge attributes because projected edge_rrwp rows "
                         f"{int(rrwp_attr.shape[0])} do not match edge_attr rows {int(edge_attr.shape[0])}."
-                    ),
-                )
-                rrwp_attr = None
-            if edge_attr is not None and rrwp_attr is not None and int(rrwp_attr.shape[1]) != int(edge_attr.shape[1]):
-                self._warn_once(
-                    f"edge_rrwp_attr_width_mismatch:{tuple(rrwp_attr.shape)}!={tuple(edge_attr.shape)}",
-                    (
-                        "Skipping RRWP edge attributes because projected edge_rrwp width "
-                        f"{int(rrwp_attr.shape[1])} does not match edge_attr width {int(edge_attr.shape[1])}."
                     ),
                 )
                 rrwp_attr = None
@@ -958,24 +976,21 @@ class GlobalStreamEncoder(nn.Module):
         inductive bias that the mission-conditioning path relies on.
         """
         h = self.node_encoder(node_features)
-        edge_attr = self.edge_encoder(edge_features) if edge_features is not None else None
+        edge_attr = (
+            self._align_projected_edge_attr(self.edge_encoder(edge_features), feature_name="gps_edge_attr")
+            if edge_features is not None else None
+        )
         if edge_rrwp is not None and self.edge_rrwp_proj is not None:
-            rrwp_attr = self.edge_rrwp_proj(edge_rrwp)
+            rrwp_attr = self._align_projected_edge_attr(
+                self.edge_rrwp_proj(edge_rrwp),
+                feature_name="gps_edge_rrwp",
+            )
             if edge_attr is not None and int(rrwp_attr.shape[0]) != int(edge_attr.shape[0]):
                 self._warn_once(
                     f"gps_edge_rrwp_attr_mismatch:{tuple(rrwp_attr.shape)}!={tuple(edge_attr.shape)}",
                     (
                         "Skipping GPS RRWP edge attributes because projected edge_rrwp rows "
                         f"{int(rrwp_attr.shape[0])} do not match edge_attr rows {int(edge_attr.shape[0])}."
-                    ),
-                )
-                rrwp_attr = None
-            if edge_attr is not None and rrwp_attr is not None and int(rrwp_attr.shape[1]) != int(edge_attr.shape[1]):
-                self._warn_once(
-                    f"gps_edge_rrwp_attr_width_mismatch:{tuple(rrwp_attr.shape)}!={tuple(edge_attr.shape)}",
-                    (
-                        "Skipping GPS RRWP edge attributes because projected edge_rrwp width "
-                        f"{int(rrwp_attr.shape[1])} does not match edge_attr width {int(edge_attr.shape[1])}."
                     ),
                 )
                 rrwp_attr = None

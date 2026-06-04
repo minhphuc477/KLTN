@@ -1368,9 +1368,10 @@ class GradientGuidance(nn.Module):
     """
     Gradient guidance module for diffusion sampling.
     
-    At each denoising step, computes gradient of a LogicNet objective
-    and adjusts the predicted mean accordingly. By default the objective is a
-    loss, so guidance performs gradient descent:
+    At each denoising step, computes gradient of a LogicNet objective on a
+    clean-latent estimate and adjusts the predicted clean latent/mean
+    accordingly. By default the objective is a loss, so guidance performs
+    gradient descent:
     
         x̂_{t-1} = μ_θ(x_t) - γ∇_{x_t}L_logic
     
@@ -1750,7 +1751,9 @@ class GradientGuidance(nn.Module):
         Compute guidance gradient from LogicNet.
         
         Args:
-            x_t: Current noisy latent [B, C, H, W]
+            x_t: Clean-latent estimate [B, C, H, W]. The main samplers pass
+                pred_x0/x0_hat here; do not call this on raw noisy x_t unless
+                deliberately running a legacy diagnostic.
             graph_data: Graph information for LogicNet
             
         Returns:
@@ -1924,7 +1927,11 @@ class GradientGuidance(nn.Module):
         num_timesteps: Optional[int] = None,
     ) -> Tensor:
         """
-        Apply gradient guidance to predicted mean.
+        Apply low-level gradient guidance to predicted mean.
+
+        Main diffusion samplers use `_apply_logic_guidance_to_prediction()`,
+        which first converts model output to a clean pred_x0 estimate. This
+        legacy helper computes guidance on the supplied `x_t` argument.
         
         Args:
             predicted_mean: μ_θ(x_t) from denoiser

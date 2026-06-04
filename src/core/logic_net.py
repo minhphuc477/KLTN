@@ -2119,7 +2119,10 @@ class LogicNet(nn.Module):
         )
         source_mask = room_logic_targets.get("source_mask")
         if source_mask is None:
-            source_mask = self._create_single_cell_source_mask(walkability)
+            source_mask = self._create_single_cell_source_mask(
+                walkability,
+                differentiable=self.grid_pathfinder_type != "perturb_and_map",
+            )
             info["source_mask_mode"] = "single_walkable_cell"
         else:
             info["source_mask_mode"] = "topology"
@@ -2223,12 +2226,25 @@ class LogicNet(nn.Module):
 
         return mask
 
-    def _create_single_cell_source_mask(self, walkability: Tensor) -> Tensor:
-        """Create one source per sample from the currently most-walkable cell."""
+    def _create_single_cell_source_mask(
+        self,
+        walkability: Tensor,
+        *,
+        differentiable: bool = True,
+    ) -> Tensor:
+        """Create one fallback source when topology metadata is unavailable."""
         if walkability.dim() != 4 or int(walkability.shape[1]) != 1:
             raise ValueError(f"walkability must be [B,1,H,W], got {tuple(walkability.shape)}.")
         B, _C, H, W = walkability.shape
-        flat_idx = walkability.detach().view(B, -1).argmax(dim=1)
+        flat_walkability = walkability.view(B, -1)
+        if differentiable:
+            # Keep the fallback differentiable for Bellman-Ford/VIN so the
+            # reachability proxy can still shape the walkability field.
+            return F.softmax(flat_walkability / 0.1, dim=1).view(B, 1, H, W)
+
+        # Perturb-and-MAP samples discrete shortest-path structures and expects
+        # a single anchored source. Use the old hard anchor only for that mode.
+        flat_idx = flat_walkability.detach().argmax(dim=1)
         mask = torch.zeros(B, 1, H, W, device=walkability.device, dtype=walkability.dtype)
         rows = flat_idx // W
         cols = flat_idx % W

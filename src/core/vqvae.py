@@ -461,7 +461,7 @@ class FSQuantizer(nn.Module):
         saturation_penalty_weight: float = 1e-3,
     ) -> None:
         super().__init__()
-        levels_list = [int(v) for v in (levels if levels is not None else [4, 4, 4, 4])]
+        levels_list = [int(v) for v in (levels if levels is not None else [8, 5, 5, 5])]
         if not levels_list or any(v < 2 for v in levels_list):
             raise ValueError("FSQuantizer levels must be a non-empty sequence of integers >= 2.")
         if num_dims is not None:
@@ -508,6 +508,12 @@ class FSQuantizer(nn.Module):
         quantized = (rounded / (levels - 1.0)) * 2.0 - 1.0
         return bounded + (quantized - bounded).detach(), rounded.to(dtype=torch.long)
 
+    @staticmethod
+    def _bound_ste(z: Tensor) -> Tensor:
+        """Clamp FSQ inputs to the finite code range with an identity STE gradient."""
+        clamped = z.clamp(-1.0, 1.0)
+        return z + (clamped - z).detach()
+
     def _indices_from_digits(self, digits: Tensor) -> Tensor:
         basis = self.basis.to(device=digits.device).view(1, -1, 1, 1)
         return (digits * basis).sum(dim=1).to(dtype=torch.long)
@@ -528,7 +534,7 @@ class FSQuantizer(nn.Module):
             z_in = z_e.permute(0, 3, 1, 2).contiguous()
 
         z_low = self.pre_proj(z_in)
-        bounded = torch.tanh(z_low)
+        bounded = self._bound_ste(z_low)
         z_q_low, digits = self._round_ste(bounded)
         z_q = self.post_proj(z_q_low)
         indices = self._indices_from_digits(digits)
@@ -562,7 +568,18 @@ class FSQuantizer(nn.Module):
         return z_q, losses["vq_loss"], indices
 
     def encode_indices(self, indices: Tensor) -> Tensor:
-        raise RuntimeError("FSQ has an implicit projected code space; decode_indices is not supported.")
+        basis_shape = [1] * indices.dim() + [self.num_dims]
+        basis = self.basis.to(indices.device).view(basis_shape)
+        levels = self.levels.to(indices.device).view(basis_shape)
+        
+        indices_expanded = indices.unsqueeze(-1)
+        digits = (indices_expanded // basis) % levels
+        quantized_low = (digits.float() / (levels.float() - 1.0)) * 2.0 - 1.0
+        
+        shape = quantized_low.shape
+        flat = quantized_low.view(-1, self.num_dims, 1, 1)
+        z_q_flat = self.post_proj(flat)
+        return z_q_flat.view(*shape[:-1], self.embedding_dim)
 
     def get_codebook_usage(self) -> Tensor:
         total = self.codebook_usage.sum()
@@ -1169,11 +1186,6 @@ class SemanticVQVAE(nn.Module):
         """
         if not self.use_codebook or self.quantizer is None:
             raise RuntimeError("decode_indices is only available when use_codebook=True.")
-        if isinstance(self.quantizer, FSQuantizer):
-            raise RuntimeError(
-                "decode_indices is not supported for FSQ quantizers because FSQ uses "
-                "an implicit Cartesian code space. Decode quantized latents directly instead."
-            )
         z_q = self.quantizer.encode_indices(indices)  # [B, H', W', D]
         z_q = z_q.permute(0, 3, 1, 2).contiguous()   # [B, D, H', W']
         return self.decode(z_q, target_size)

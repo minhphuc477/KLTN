@@ -137,10 +137,23 @@ currently support the claims. It is not an experimental-results substitute.
 - **VQ EMA warmup:** `VectorQuantizer` has an early-update EMA decay warmup so
   the codebook can move quickly away from random initialization before settling
   into the configured long-horizon decay.
-- **FSQ saturation regularization:** `FSQuantizer` now reports and optimizes a
-  small saturation penalty on pre-`tanh` latents outside the useful scalar
-  quantization range. This keeps the FSQ ablation from silently driving
-  pre-quantization activations into zero-derivative saturation.
+- **FSQ bounded projection:** `FSQuantizer` no longer uses a pre-rounding
+  `tanh` squash. It clamps to the finite scalar range with a straight-through
+  gradient and keeps the saturation penalty as a diagnostic/regularizer for
+  out-of-range activations.
+- **RRWP width mismatch preservation:** GPS/GAT edge RRWP projections are
+  aligned to the hidden edge width instead of being dropped when a projection
+  or checkpoint produces a narrower/wider edge feature tensor. Row-count
+  mismatches are still rejected because they indicate an invalid edge mapping.
+- **LogicNet fallback source gradients:** when topology metadata does not
+  provide a semantic source, Bellman-Ford/VIN modes use a differentiable soft
+  single-source distribution over walkability. Perturb-and-MAP keeps a hard
+  anchored source because its discrete shortest-path estimator requires one.
+- **LogicNet guidance domain:** the main DDPM, DDIM, and flow sampling paths
+  apply LogicNet guidance to a clean-latent estimate (`pred_x0`/`x0_hat`) before
+  rebuilding the posterior or velocity step. The older low-level
+  `GradientGuidance.apply_guidance()` helper is retained as a diagnostic API
+  and should not be used as evidence for the main sampler formulation.
 - **LogicNet unreachable sentinel preservation:** grid and graph soft-min
   Bellman-Ford updates keep nodes/cells at `inf_distance` when every candidate
   is still sentinel-valued. This prevents log-sum-exp from gradually lowering
