@@ -1,0 +1,8 @@
+# Sequential neural + symbolic ablation.
+# Keeps symbolic repair enabled but disables LogicNet-guided repair coupling.
+training:
+  stage: diffusion
+
+generation:
+  apply_repair: true
+  use_neural_guided_repair: false

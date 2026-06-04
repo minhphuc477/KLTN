@@ -12,6 +12,7 @@ import torch
 
 from src.core import ROOM_HEIGHT, ROOM_WIDTH
 from src.core.definitions import DOOR_POSITIONS
+from src.core.neural_guided_repair import NeuralGuidedRepair
 from src.core.vqvae import canonical_latent_shape
 from src.pipeline.block_contracts import BlockShapeContract, validate_tensor_contract
 from src.pipeline.repair_feedback import build_neighbor_boundary_inpaint_inputs
@@ -280,7 +281,19 @@ def generate_room_batch(
                     raise ValueError(
                         f"Mixed latent shapes inside one batch: expected {latent_shape_chw}, got {shape_here}"
                     )
-        if use_fast_sampling and pipeline.diffusion.supports_fast_sampling():
+        training_objective = str(getattr(pipeline.diffusion, "training_objective", "diffusion")).strip().lower()
+        use_flow_ode = training_objective == "flow_matching" and hasattr(pipeline.diffusion, "flow_ode_sample")
+        if use_flow_ode:
+            if use_fast_sampling:
+                pipeline._bump_diagnostic("fast_sampling_unavailable_flow_matching")
+            z_batch = pipeline.diffusion.flow_ode_sample(
+                context=condition_batch,
+                shape=latent_shape,
+                graph_data=graph_ctx_for_guidance,
+                num_steps=max(2, int(num_diffusion_steps)),
+            )
+            pipeline._bump_diagnostic("flow_ode_sampling_used")
+        elif use_fast_sampling and pipeline.diffusion.supports_fast_sampling():
             z_batch = pipeline.diffusion.fast_sample(
                 context=condition_batch,
                 shape=latent_shape,
@@ -584,7 +597,19 @@ def generate_room(
 
         # BLOCK IV: Latent Diffusion Sampling
         logger.debug(f"Room {room_id}: Sampling with {num_diffusion_steps} steps")
-        if use_fast_sampling and pipeline.diffusion.supports_fast_sampling():
+        training_objective = str(getattr(pipeline.diffusion, "training_objective", "diffusion")).strip().lower()
+        use_flow_ode = training_objective == "flow_matching" and hasattr(pipeline.diffusion, "flow_ode_sample")
+        if use_flow_ode:
+            if use_fast_sampling:
+                pipeline._bump_diagnostic("fast_sampling_unavailable_flow_matching")
+            z_latent = pipeline.diffusion.flow_ode_sample(
+                context=condition,
+                shape=latent_shape,
+                graph_data=graph_data,
+                num_steps=max(2, int(num_diffusion_steps)),
+            )
+            pipeline._bump_diagnostic("flow_ode_sampling_used")
+        elif use_fast_sampling and pipeline.diffusion.supports_fast_sampling():
             z_latent = pipeline.diffusion.fast_sample(
                 context=condition,
                 shape=latent_shape,
@@ -866,15 +891,53 @@ def generate_room(
                     seed=(None if seed is None else int(seed) + 1000 + int(attempt_idx)),
                 )
 
-            repaired_grid, success, repair_diag = pipeline.repair_room(
-                grid=neural_grid,
-                start=start,
-                goal=goal,
-                required_floor_mask=room_plan_mask,
-                feedback_callback=_feedback_callback,
-                max_feedback_rounds=2,
-                seed=seed,
-            )
+            neural_guided_repair = None
+            if (
+                bool(getattr(pipeline, "default_use_neural_guided_repair", True))
+                and getattr(pipeline, "logic_net", None) is not None
+                and getattr(pipeline, "refiner", None) is not None
+            ):
+                neural_guided_repair = NeuralGuidedRepair(
+                    logic_net=pipeline.logic_net,
+                    refiner=pipeline.refiner,
+                )
+
+            if neural_guided_repair is not None:
+                try:
+                    repaired_grid, success, repair_diag = neural_guided_repair.repair_room_with_neural_guidance(
+                        grid=neural_grid,
+                        start=start,
+                        goal=goal,
+                        tile_logits=logits.detach(),
+                        graph_data=graph_data,
+                        required_floor_mask=room_plan_mask,
+                        feedback_callback=_feedback_callback,
+                        max_feedback_rounds=2,
+                        seed=seed,
+                    )
+                    pipeline._bump_diagnostic("neural_guided_repair_used")
+                except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+                    pipeline._bump_diagnostic("neural_guided_repair_fallback")
+                    logger.debug("Room %s neural-guided repair failed; falling back to symbolic repair: %s", room_id, exc)
+                    repaired_grid, success, repair_diag = pipeline.repair_room(
+                        grid=neural_grid,
+                        start=start,
+                        goal=goal,
+                        required_floor_mask=room_plan_mask,
+                        feedback_callback=_feedback_callback,
+                        max_feedback_rounds=2,
+                        seed=seed,
+                    )
+            else:
+                repaired_grid, success, repair_diag = pipeline.repair_room(
+                    grid=neural_grid,
+                    start=start,
+                    goal=goal,
+                    required_floor_mask=room_plan_mask,
+                    feedback_callback=_feedback_callback,
+                    max_feedback_rounds=2,
+                    seed=seed,
+                )
 
             if success:
                 repaired_grid_raw = repaired_grid.copy()

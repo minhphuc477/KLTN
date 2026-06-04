@@ -53,6 +53,7 @@ from src.core.logic_net import LogicNet
 from src.core.symbolic_refiner import (
     SymbolicRefiner, create_symbolic_refiner, LearnedTileStatistics
 )
+from src.core.neural_guided_repair import NeuralGuidedRepair, NeuralRepairGuidance
 
 __all__ = [
     # Definitions
@@ -80,4 +81,6 @@ __all__ = [
     'SymbolicRefiner',
     'create_symbolic_refiner',
     'LearnedTileStatistics',
+    'NeuralGuidedRepair',
+    'NeuralRepairGuidance',
 ]

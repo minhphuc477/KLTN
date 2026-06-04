@@ -314,6 +314,29 @@ class TestConstraintPropagator:
 
         assert np.all(fixed_grid[2:8, 4] == TileType.FLOOR.value)
 
+    def test_enforce_connectivity_prefers_low_cost_carve_path(self):
+        """LogicNet-style cost maps should guide symbolic wall carving."""
+        from src.core.symbolic_refiner import ConstraintPropagator, TileType
+
+        propagator = ConstraintPropagator()
+        grid = np.full((5, 5), TileType.WALL.value)
+        walkable = {TileType.FLOOR.value}
+        cost_map = np.full((5, 5), 10.0, dtype=np.float32)
+        cost_map[:, 0] = 1.0
+        cost_map[4, :] = 1.0
+
+        fixed_grid = propagator.enforce_connectivity(
+            grid,
+            start=(0, 0),
+            goal=(4, 4),
+            walkable=walkable,
+            cost_map=cost_map,
+        )
+
+        assert np.all(fixed_grid[:, 0] == TileType.FLOOR.value)
+        assert np.all(fixed_grid[4, :] == TileType.FLOOR.value)
+        assert np.all(fixed_grid[0, 1:4] == TileType.WALL.value)
+
 
 class TestSymbolicRefiner:
     """Tests for complete Symbolic Refiner."""

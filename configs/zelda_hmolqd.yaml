@@ -31,7 +31,7 @@ distributed:
 dataset:
   data_dir: Data/The Legend of Zelda  # type=str, default=Data/The Legend of Zelda, valid=dataset root path
   schema_profile: zelda_v1  # type=str, default=zelda_v1, valid={zelda_v1}; explicit repository schema lock
-  batch_size: 4  # type=int, default=4, valid>=1
+  batch_size: 4  # type=int, default=4, valid>=1; only used when dungeon_batch_mode=false. With dungeon_batch_mode=true, effective batch is all rooms in the sampled dungeon variant
   num_workers: 0  # type=int, default=0, valid>=0
   pin_memory: true  # type=bool, default=true, valid={true,false}
   drop_last: true  # type=bool, default=true, valid={true,false}
@@ -146,7 +146,7 @@ diffusion:
   cfg_schedule_power: 1.0  # type=float, default=1.0, valid>0
   pag_scale: 0.0  # type=float, default=0.0, valid>=0; perturbed-attention guidance is inference-only and disabled by default
   prediction_type: epsilon  # type=str, default=epsilon, valid={epsilon,v}
-  training_objective: diffusion  # type=str, default=diffusion, valid={diffusion,flow_matching}; flow_matching requires denoiser_backbone=dit and is not the default sampler path
+  training_objective: diffusion  # type=str, default=diffusion, valid={diffusion,flow_matching}; flow_matching requires denoiser_backbone=dit and uses the rectified-flow ODE sampler for generated validation
   min_snr_gamma: 5.0  # type=float, default=5.0, valid>=0
   logic_net_enabled: true  # type=bool, default=true, valid={true,false}; disables LogicNet loss/guidance for clean ablations when false
   logic_net_trainable: true  # type=bool, default=true, valid={true,false}; freeze LogicNet while retaining guidance/eval when false
@@ -170,8 +170,10 @@ diffusion:
   alpha_visual: 1.0  # type=float, default=1.0, valid>=0
   alpha_logic: 0.1  # type=float, default=0.1, valid>=0
   alpha_logic_tile: 0.05  # type=float, default=0.05, valid>=0; supervised TileClassifier CE loss on frozen VQ-VAE latents
+  alpha_wfc_pseudo: 0.0  # type=float, default=0.0, valid>=0; disabled by default because WFC pseudo-label distillation is an opt-in repair teacher
   logic_loss_mode: predicted_latent  # type=str, default=predicted_latent, valid={predicted_latent,detached_real}
   warmup_epochs: 5  # type=int, default=5, valid>=0
+  logic_loss_ramp_epochs: 2  # type=int, default=2, valid>=1; linearly ramps alpha_logic after warmup so LogicNet pressure does not destabilize early denoising
   scheduler_t0: 10  # type=int, default=10, valid>=1
   scheduler_t_mult: 2  # type=int, default=2, valid>=1
   scheduler_eta_min: 0.000001  # type=float, default=1e-6, valid>=0
@@ -209,6 +211,7 @@ generation:
   categorical_codebook_size: null  # type=int|null, default=null, valid>=1 when not null
   use_topological_positional_encoding: true  # type=bool, default=true, valid={true,false}
   apply_repair: true  # type=bool, default=true, valid={true,false}
+  use_neural_guided_repair: true  # type=bool, default=true, valid={true,false}; LogicNet walkability/topology guides symbolic repair cost maps and hard floor masks when LogicNet is loaded
   enable_map_elites: false  # type=bool, default=false, valid={true,false}
   symbolic_max_repair_attempts: 5  # type=int, default=5, valid>=1; maximum post-generation symbolic repair passes per room
   symbolic_repair_margin: 2  # type=int, default=2, valid>=0; local margin used by symbolic repair when patching disconnected structure

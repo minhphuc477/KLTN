@@ -635,20 +635,6 @@ class AttentionBlock(nn.Module):
         cross_context = context
         cross_edge_index = context_edge_index
         cross_node_mask = context_node_mask
-        if (
-            spatial_graph_data
-            and isinstance(context, torch.Tensor)
-            and context.dim() == 3
-            and int(context.shape[1]) > 1
-            and isinstance(spatial_graph_data.get("graph_nodes"), torch.Tensor)
-            and int(spatial_graph_data["graph_nodes"].shape[1]) > 0
-        ):
-            # Avoid injecting the same graph-node sequence twice: keep the room
-            # summary token on the generic cross-attention path and let the
-            # dedicated spatial conditioner handle graph-node grounding.
-            cross_context = context[:, :1, :]
-            cross_edge_index = None
-            cross_node_mask = None
 
         # Cross-attention with context
         x_flat = x_flat + self.cross_attn(
@@ -2784,6 +2770,8 @@ class LatentDiffusionModel(nn.Module):
         shape: Tuple[int, ...],
         graph_data: Optional[Dict[str, Tensor]] = None,
         return_intermediates: bool = False,
+        sampler: str = "diffusion",
+        num_steps: Optional[int] = None,
     ) -> Tensor:
         """
         Generate samples via reverse diffusion.
@@ -2793,10 +2781,23 @@ class LatentDiffusionModel(nn.Module):
             shape: Output shape [B, C, H, W]
             graph_data: Graph data for LogicNet guidance
             return_intermediates: Return all intermediate steps
+            sampler: "diffusion" for DDPM or "flow_ode" for rectified-flow ODE
+            num_steps: Optional number of sampler steps
             
         Returns:
             Generated latent codes
         """
+        sampler = str(sampler or "diffusion").strip().lower()
+        if sampler in {"flow", "flow_matching", "flow_ode", "rectified_flow"}:
+            return self.flow_ode_sample(
+                context,
+                shape,
+                graph_data=graph_data,
+                num_steps=num_steps,
+                return_intermediates=return_intermediates,
+            )
+        if sampler not in {"diffusion", "ddpm"}:
+            raise ValueError(f"sampler must be 'diffusion' or 'flow_ode', got {sampler!r}.")
         device = context.device
         _B = context.shape[0]
         
@@ -2823,6 +2824,122 @@ class LatentDiffusionModel(nn.Module):
             if return_intermediates:
                 intermediates.append(x_t)
         
+        if return_intermediates:
+            return x_t, intermediates
+        return x_t
+
+    def _apply_logic_guidance_to_flow_velocity(
+        self,
+        *,
+        x_t: Tensor,
+        velocity: Tensor,
+        t_cont: Tensor,
+        t_index: int,
+        graph_data: Optional[Dict[str, Tensor]] = None,
+    ) -> Tensor:
+        """
+        Apply clean-latent LogicNet guidance to a rectified-flow velocity field.
+
+        For the straight-line path x_t = (1 - t) x0 + t eps and v = eps - x0,
+        the clean estimate is x0_hat = x_t - t v. We guide that clean estimate,
+        then convert back to the velocity required by the reverse ODE.
+        """
+        if self.guidance.logic_net is None or self.guidance.guidance_scale <= 0:
+            return velocity
+        if not torch.any(t_cont > 1e-6):
+            return velocity
+
+        t_view = t_cont.to(device=x_t.device, dtype=x_t.dtype).view(
+            (int(x_t.shape[0]),) + (1,) * max(0, x_t.dim() - 1)
+        )
+        pred_x0 = torch.clamp(x_t - t_view * velocity, -1.0, 1.0)
+        pred_x0_guided, _ = self._apply_logic_guidance_to_prediction(
+            x_t=x_t,
+            pred_x0=pred_x0,
+            pred_noise=velocity,
+            t=int(t_index),
+            graph_data=graph_data,
+        )
+        return torch.where(
+            t_view > 1e-6,
+            (x_t - pred_x0_guided) / t_view.clamp_min(1e-6),
+            velocity,
+        )
+
+    @torch.no_grad()
+    def flow_ode_sample(
+        self,
+        context: Tensor,
+        shape: Tuple[int, ...],
+        graph_data: Optional[Dict[str, Tensor]] = None,
+        num_steps: Optional[int] = None,
+        return_intermediates: bool = False,
+    ) -> Tensor:
+        """
+        Generate latents by integrating the rectified-flow reverse ODE.
+
+        Training uses x_t = (1 - t) x0 + t eps and predicts v = eps - x0.
+        Sampling starts at Gaussian noise at t=1 and integrates
+        dx/dt = v_theta(x_t, t, c) backward to t=0 with explicit Euler steps.
+        """
+        device = context.device
+        batch_size = int(shape[0])
+        steps = int(num_steps if num_steps is not None else self.num_timesteps)
+        steps = max(2, steps)
+
+        cached_topology = self._extract_context_topology(context, graph_data)
+        cached_spatial = self._extract_spatial_graph_context(context, graph_data)
+
+        sample_dtype = self._sampling_dtype()
+        context = self._cast_tensor_for_sampling(context, device=device, dtype=sample_dtype)
+        work_dtype = torch.float32 if sample_dtype in {torch.float16, torch.bfloat16} else sample_dtype
+
+        x_t = torch.randn(shape, device=device, dtype=sample_dtype)
+        intermediates = [x_t] if return_intermediates else None
+
+        schedule = torch.linspace(1.0, 0.0, steps + 1, device=device, dtype=work_dtype)
+        for step_idx in range(steps):
+            t_now = schedule[step_idx]
+            t_next = schedule[step_idx + 1]
+            dt = t_now - t_next
+            t_cont = torch.full((batch_size,), float(t_now.item()), device=device, dtype=work_dtype)
+            t_model = t_cont * float(max(1, self.num_timesteps - 1))
+            t_index = int(round(float(t_model[0].detach().item())))
+            t_index = max(0, min(int(self.num_timesteps) - 1, t_index))
+
+            velocity = self._predict_noise_cfg(
+                x_t,
+                t_model.to(dtype=x_t.dtype),
+                context,
+                graph_data=graph_data,
+                cached_topology=cached_topology,
+                cached_spatial=cached_spatial,
+            )
+            velocity = self._sanitize_sampling_tensor(
+                velocity,
+                fallback=torch.zeros_like(velocity),
+            )
+            velocity = self._apply_logic_guidance_to_flow_velocity(
+                x_t=x_t,
+                velocity=velocity,
+                t_cont=t_cont,
+                t_index=t_index,
+                graph_data=graph_data,
+            )
+            velocity = self._sanitize_sampling_tensor(
+                velocity,
+                fallback=torch.zeros_like(velocity),
+            )
+            x_next = x_t.to(dtype=work_dtype) - dt * velocity.to(dtype=work_dtype)
+            x_next = self._sanitize_sampling_tensor(
+                x_next,
+                fallback=x_t.to(dtype=work_dtype),
+                clamp_range=(-1.0, 1.0),
+            )
+            x_t = x_next.to(dtype=sample_dtype)
+            if return_intermediates:
+                intermediates.append(x_t)
+
         if return_intermediates:
             return x_t, intermediates
         return x_t
@@ -3272,9 +3389,9 @@ class LatentDiffusionModel(nn.Module):
             x_t = (1 - t) * x_0 + t * eps
             target = eps - x_0
 
-        The default sampler remains the DDPM/DDIM diffusion path; experiments
-        using this objective should report it separately until a matching ODE
-        sampler is added.
+        Flow Matching checkpoints should be sampled with flow_ode_sample(),
+        which integrates the learned velocity field from Gaussian noise to the
+        clean latent endpoint.
         """
         B = x_0.shape[0]
         device = x_0.device

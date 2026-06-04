@@ -908,12 +908,19 @@ class SemanticVQVAE(nn.Module):
         # Vector Quantizer (optional for the no-codebook baseline)
         if self.use_codebook:
             if self.quantizer_type == "fsq":
+                requested_codebook_size = int(codebook_size)
                 self.quantizer = FSQuantizer(
                     embedding_dim=latent_dim,
                     levels=fsq_levels,
                     num_dims=fsq_num_dims,
                 )
                 self.codebook_size = int(self.quantizer.num_embeddings)
+                if requested_codebook_size != self.codebook_size:
+                    logger.warning(
+                        "FSQ ignores learned VQ codebook_size=%d; using implicit product(levels)=%d.",
+                        requested_codebook_size,
+                        self.codebook_size,
+                    )
             elif self.quantizer_type in {"vq", "vector", "vector_quantizer"}:
                 self.quantizer = VectorQuantizer(
                     num_embeddings=codebook_size,

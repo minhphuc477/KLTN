@@ -207,6 +207,7 @@ def test_default_config_uses_small_data_recommended_room_model_profile():
     assert resolved["generation"]["logic_guidance_scale"] == pytest.approx(0.0)
     assert resolved["generation"]["num_diffusion_steps"] == 50
     assert resolved["generation"]["apply_repair"] is True
+    assert resolved["generation"]["use_neural_guided_repair"] is True
     assert resolved["generation"]["enable_map_elites"] is False
     assert resolved["generation"]["symbolic_max_repair_attempts"] == 5
     assert resolved["generation"]["symbolic_repair_margin"] == 2
@@ -304,6 +305,7 @@ def test_paper_ablation_configs_validate_and_set_expected_switches():
     flow = merge_config(yaml_path="configs/ablation_flow_matching.yaml", cli_overrides=None)
     assert flow["diffusion"]["denoiser_backbone"] == "dit"
     assert flow["diffusion"]["training_objective"] == "flow_matching"
+    assert flow["diffusion"]["min_snr_gamma"] == pytest.approx(0.0)
 
     no_rrwp = merge_config(yaml_path="configs/ablation_no_rrwp.yaml", cli_overrides=None)
     assert no_rrwp["diffusion"]["condition_use_rrwp_edge_features"] is False
@@ -314,6 +316,22 @@ def test_paper_ablation_configs_validate_and_set_expected_switches():
 
     no_vin = merge_config(yaml_path="configs/ablation_no_vin.yaml", cli_overrides=None)
     assert no_vin["diffusion"]["logic_grid_pathfinder"] == "cnn"
+
+    learnable_pathfinder = merge_config(yaml_path="configs/ablation_vin.yaml", cli_overrides=None)
+    assert learnable_pathfinder["diffusion"]["logic_grid_pathfinder"] == "vin"
+
+    neural_only = merge_config(yaml_path="configs/ablation_neural_only.yaml", cli_overrides=None)
+    assert neural_only["generation"]["apply_repair"] is False
+    assert neural_only["generation"]["use_neural_guided_repair"] is False
+
+    uncoupled = merge_config(yaml_path="configs/ablation_uncoupled_symbolic_repair.yaml", cli_overrides=None)
+    assert uncoupled["generation"]["apply_repair"] is True
+    assert uncoupled["generation"]["use_neural_guided_repair"] is False
+
+    guidance_only = merge_config(yaml_path="configs/ablation_inference_guidance_only.yaml", cli_overrides=None)
+    assert guidance_only["diffusion"]["alpha_logic"] == pytest.approx(0.0)
+    assert guidance_only["diffusion"]["alpha_logic_tile"] == pytest.approx(0.0)
+    assert guidance_only["generation"]["logic_guidance_scale"] == pytest.approx(1.0)
 
     no_fsq = merge_config(yaml_path="configs/ablation_no_fsq.yaml", cli_overrides=None)
     assert no_fsq["vqvae"]["architecture"] == "vqvae"
@@ -379,6 +397,7 @@ def test_stage_helpers_forward_checkpoint_retention_and_resume_defaults():
     assert generation_kwargs["default_guidance_scale"] == pytest.approx(3.0)
     assert generation_kwargs["default_logic_guidance_scale"] == pytest.approx(0.0)
     assert generation_kwargs["default_num_diffusion_steps"] == 50
+    assert generation_kwargs["default_use_neural_guided_repair"] is True
     assert generation_kwargs["symbolic_max_repair_attempts"] == 5
     assert generation_kwargs["symbolic_repair_margin"] == 2
     assert generation_kwargs["symbolic_adjacency_threshold"] == pytest.approx(0.01)

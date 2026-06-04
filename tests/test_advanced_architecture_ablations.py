@@ -79,6 +79,47 @@ def test_dit_backbone_flow_matching_loss_is_finite_and_backpropagates():
     assert torch.isfinite(z_0.grad).all()
 
 
+def test_flow_ode_sampler_matches_flow_matching_objective_shape_and_finiteness():
+    model = create_latent_diffusion(
+        latent_dim=8,
+        model_channels=16,
+        context_dim=16,
+        denoiser_backbone="dit",
+        dit_depth=1,
+        dit_patch_size=1,
+        dit_mlp_ratio=2.0,
+        num_timesteps=8,
+        cfg_dropout_prob=0.0,
+        cfg_scale=1.0,
+        unet_num_heads=4,
+        unet_dropout=0.0,
+    )
+    model.eval()
+    context = torch.randn(2, 4, 16)
+    graph_data = {"node_mask": torch.ones(2, 4, dtype=torch.bool)}
+
+    sample, intermediates = model.flow_ode_sample(
+        context,
+        shape=(2, 8, 3, 4),
+        graph_data=graph_data,
+        num_steps=4,
+        return_intermediates=True,
+    )
+    routed = model.sample(
+        context,
+        shape=(2, 8, 3, 4),
+        graph_data=graph_data,
+        sampler="flow_ode",
+        num_steps=4,
+    )
+
+    assert sample.shape == (2, 8, 3, 4)
+    assert routed.shape == (2, 8, 3, 4)
+    assert len(intermediates) == 5
+    assert torch.isfinite(sample).all()
+    assert torch.isfinite(routed).all()
+
+
 def test_flow_matching_loss_accepts_min_snr_config_without_discrete_timestep_indexing():
     model = create_latent_diffusion(
         latent_dim=8,

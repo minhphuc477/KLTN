@@ -915,6 +915,15 @@ class GlobalStreamEncoder(nn.Module):
                     ),
                 )
                 rrwp_attr = None
+            if edge_attr is not None and rrwp_attr is not None and int(rrwp_attr.shape[1]) != int(edge_attr.shape[1]):
+                self._warn_once(
+                    f"edge_rrwp_attr_width_mismatch:{tuple(rrwp_attr.shape)}!={tuple(edge_attr.shape)}",
+                    (
+                        "Skipping RRWP edge attributes because projected edge_rrwp width "
+                        f"{int(rrwp_attr.shape[1])} does not match edge_attr width {int(edge_attr.shape[1])}."
+                    ),
+                )
+                rrwp_attr = None
             if rrwp_attr is not None:
                 edge_attr = rrwp_attr if edge_attr is None else edge_attr + rrwp_attr
         
@@ -952,6 +961,15 @@ class GlobalStreamEncoder(nn.Module):
                     (
                         "Skipping GPS RRWP edge attributes because projected edge_rrwp rows "
                         f"{int(rrwp_attr.shape[0])} do not match edge_attr rows {int(edge_attr.shape[0])}."
+                    ),
+                )
+                rrwp_attr = None
+            if edge_attr is not None and rrwp_attr is not None and int(rrwp_attr.shape[1]) != int(edge_attr.shape[1]):
+                self._warn_once(
+                    f"gps_edge_rrwp_attr_width_mismatch:{tuple(rrwp_attr.shape)}!={tuple(edge_attr.shape)}",
+                    (
+                        "Skipping GPS RRWP edge attributes because projected edge_rrwp width "
+                        f"{int(rrwp_attr.shape[1])} does not match edge_attr width {int(edge_attr.shape[1])}."
                     ),
                 )
                 rrwp_attr = None

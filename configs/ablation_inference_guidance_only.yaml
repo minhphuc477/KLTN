@@ -1,0 +1,16 @@
+# Inference-guidance-only LogicNet ablation.
+# Disables training-time logic losses while keeping test-time LogicNet gradient
+# guidance available for sampling.
+training:
+  stage: diffusion
+
+diffusion:
+  logic_net_enabled: true
+  logic_net_trainable: false
+  alpha_logic: 0.0
+  alpha_logic_tile: 0.0
+  alpha_wfc_pseudo: 0.0
+  guidance_scale: 1.0
+
+generation:
+  logic_guidance_scale: 1.0

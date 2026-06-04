@@ -475,14 +475,15 @@ class SoftBellmanFordGridPathfinder(nn.Module):
         return distances.unsqueeze(1)
 
 
-class ValueIterationGridPathfinder(nn.Module):
+class LearnableGridPathfinder(nn.Module):
     """
-    Learnable value-iteration room pathfinder ablation.
+    Learnable grid value-propagation pathfinder ablation.
 
     The module keeps the same distance-field contract as the fixed
     SoftBellmanFordGridPathfinder, but learns the local transition kernel used
-    to propagate value estimates. This makes VIN a measurable ablation instead
-    of overloading the fixed Bellman-Ford path.
+    to propagate value estimates. The legacy config name "vin" is retained as
+    a compatibility alias, but reports should describe this as a learnable grid
+    pathfinder unless the full VIN policy head/objective is added.
     """
 
     WALKABLE_IDS = CANONICAL_LOGIC_WALKABLE_IDS
@@ -536,7 +537,7 @@ class ValueIterationGridPathfinder(nn.Module):
             return torch.sigmoid(room_grid[:, :1])
         if int(room_grid.shape[1]) != self.num_classes:
             raise ValueError(
-                f"ValueIterationGridPathfinder expected {self.num_classes} tile channels, got {int(room_grid.shape[1])}."
+                f"LearnableGridPathfinder expected {self.num_classes} tile channels, got {int(room_grid.shape[1])}."
             )
         probs = F.softmax(room_grid, dim=1)
         walkability = torch.einsum("bchw,c->bhw", probs, self.walkability_weights)
@@ -577,6 +578,9 @@ class ValueIterationGridPathfinder(nn.Module):
         semantic_walkability = torch.einsum("bchw,c->bhw", tile_probs, self.walkability_weights).unsqueeze(1)
         semantic_cost = (1.0 - semantic_walkability.clamp(0.0, 1.0)) * 5.0
         return (1.0 - value) * 50.0 + semantic_cost
+
+
+ValueIterationGridPathfinder = LearnableGridPathfinder
 
 
 class PerturbAndMAPGridPathfinder(nn.Module):
@@ -1109,7 +1113,7 @@ class LogicNet(nn.Module):
                 num_classes=num_classes,
             )
         elif self.grid_pathfinder_type == "vin":
-            self.grid_pathfinder = ValueIterationGridPathfinder(
+            self.grid_pathfinder = LearnableGridPathfinder(
                 num_iterations=num_iterations,
                 temperature=temperature,
                 num_classes=num_classes,
@@ -1438,6 +1442,79 @@ class LogicNet(nn.Module):
 
         return penalty
 
+    def _locked_edge_mask(
+        self,
+        *,
+        node_count: int,
+        edge_index: Optional[Tensor],
+        adjacency: Optional[Tensor],
+        edge_features: Optional[Tensor],
+        edge_attr: Optional[Tensor],
+        device: torch.device,
+    ) -> Tensor:
+        """Return a dense [N,N] mask of resource-gated lock edges."""
+        n = int(max(0, node_count))
+        locked = torch.zeros(n, n, device=device, dtype=torch.bool)
+        if n <= 0:
+            return locked
+
+        def _locked_from_features(features: Tensor) -> Tensor:
+            ef = features
+            if ef.dim() == 1:
+                ef = ef.unsqueeze(-1)
+            if ef.shape[-1] <= 1:
+                return torch.zeros(ef.shape[:-1], device=ef.device, dtype=torch.bool)
+            mask = ef[..., 1] > 0.5
+            if ef.shape[-1] > 4:
+                mask = mask | (ef[..., 4] > 0.5)
+            if ef.shape[-1] > 5:
+                mask = mask | (ef[..., 5] > 0.5)
+            return mask
+
+        if isinstance(adjacency, torch.Tensor):
+            if isinstance(edge_features, torch.Tensor) and edge_features.numel() > 0:
+                ef = edge_features.to(device=device)
+                if ef.dim() == 3 and int(ef.shape[0]) >= n and int(ef.shape[1]) >= n:
+                    locked |= _locked_from_features(ef[:n, :n])
+                elif ef.dim() == 2 and int(ef.shape[0]) >= n and int(ef.shape[1]) >= n:
+                    locked |= ef[:n, :n] > 0.5
+            if isinstance(edge_attr, torch.Tensor) and edge_attr.numel() > 0:
+                ea = edge_attr.to(device=device)
+                if ea.dim() == 2 and int(ea.shape[0]) >= n and int(ea.shape[1]) >= n:
+                    locked |= torch.isin(ea[:n, :n].to(dtype=torch.long), torch.tensor([1, 4, 5], device=device))
+            return locked
+
+        if not isinstance(edge_index, torch.Tensor) or edge_index.dim() != 2 or int(edge_index.shape[0]) != 2:
+            return locked
+        if edge_index.numel() <= 0:
+            return locked
+        src_all = edge_index[0].to(device=device, dtype=torch.long)
+        dst_all = edge_index[1].to(device=device, dtype=torch.long)
+        valid = (src_all >= 0) & (src_all < n) & (dst_all >= 0) & (dst_all < n)
+        if not torch.any(valid):
+            return locked
+        src = src_all[valid]
+        dst = dst_all[valid]
+        edge_locked = torch.zeros_like(src, dtype=torch.bool)
+        if isinstance(edge_features, torch.Tensor) and edge_features.numel() > 0:
+            ef = edge_features.to(device=device)
+            if ef.dim() >= 1 and int(ef.shape[0]) == int(valid.numel()):
+                ef = ef[valid]
+            if ef.dim() >= 1 and int(ef.shape[0]) >= int(src.numel()):
+                edge_locked |= _locked_from_features(ef[: int(src.numel())]).flatten().to(device=device)
+        if isinstance(edge_attr, torch.Tensor) and edge_attr.numel() > 0:
+            ea = edge_attr.to(device=device)
+            if ea.dim() >= 1 and int(ea.shape[0]) == int(valid.numel()):
+                ea = ea[valid]
+            if ea.dim() >= 1 and int(ea.shape[0]) >= int(src.numel()):
+                edge_locked |= torch.isin(
+                    ea[: int(src.numel())].flatten().to(dtype=torch.long),
+                    torch.tensor([1, 4, 5], device=device),
+                )
+        if torch.any(edge_locked):
+            locked[src[edge_locked], dst[edge_locked]] = True
+        return locked
+
     def _build_adjacency_and_weights(
         self,
         *,
@@ -1465,6 +1542,33 @@ class LogicNet(nn.Module):
                 if isinstance(edge_weights, torch.Tensor) and edge_weights.shape == adjacency.shape
                 else adj.clone()
             )
+            dense_penalty: Optional[Tensor] = None
+            if isinstance(edge_features, torch.Tensor) and edge_features.numel() > 0:
+                ef = edge_features.to(device=device)
+                if ef.dim() == 3 and int(ef.shape[0]) >= n and int(ef.shape[1]) >= n:
+                    ef = ef[:n, :n].to(dtype=dtype)
+                    dense_penalty = torch.zeros(n, n, device=device, dtype=dtype)
+                    if ef.shape[2] > 1:
+                        dense_penalty = dense_penalty + ef[:, :, 1].clamp(0.0, 1.0) * 1.0
+                    if ef.shape[2] > 2:
+                        dense_penalty = dense_penalty + ef[:, :, 2].clamp(0.0, 1.0) * 0.5
+                    if ef.shape[2] > 3:
+                        dense_penalty = dense_penalty + ef[:, :, 3].clamp(0.0, 1.0) * 0.25
+                    if ef.shape[2] > 4:
+                        dense_penalty = dense_penalty + ef[:, :, 4].clamp(0.0, 1.0) * 2.0
+                    if ef.shape[2] > 5:
+                        dense_penalty = dense_penalty + ef[:, :, 5].clamp(0.0, 1.0) * 1.0
+                    if ef.shape[2] > 7:
+                        dense_penalty = dense_penalty + ef[:, :, 7].clamp(0.0, 1.0) * 0.5
+                elif ef.dim() == 2 and int(ef.shape[0]) >= n and int(ef.shape[1]) >= n:
+                    dense_penalty = ef[:n, :n].to(dtype=dtype).clamp_min(0.0)
+            if isinstance(edge_attr, torch.Tensor) and edge_attr.numel() > 0:
+                ea = edge_attr.to(device=device)
+                if ea.dim() == 2 and int(ea.shape[0]) >= n and int(ea.shape[1]) >= n:
+                    attr_penalty = self.semantic_edge_encoder(ea[:n, :n]).to(device=device, dtype=dtype)
+                    dense_penalty = attr_penalty if dense_penalty is None else torch.maximum(dense_penalty, attr_penalty)
+            if dense_penalty is not None:
+                weights = torch.where(adj > 0, weights + dense_penalty.to(device=device, dtype=dtype) * adj, weights)
         else:
             adj = torch.zeros(n, n, device=device, dtype=dtype)
             weights = torch.zeros(n, n, device=device, dtype=dtype)
@@ -1589,6 +1693,14 @@ class LogicNet(nn.Module):
         )
         if adj is None or weights is None:
             return zero, zero, zero, {}
+        locked_edges = self._locked_edge_mask(
+            node_count=n,
+            edge_index=edge_index,
+            adjacency=adjacency,
+            edge_features=edge_features,
+            edge_attr=edge_attr,
+            device=device,
+        ) & (adj > 0)
 
         start = self._coerce_optional_int(start_idx)
         if start is None or start < 0 or start >= n:
@@ -1645,7 +1757,48 @@ class LogicNet(nn.Module):
             for key_idx, lock_idx in pairs:
                 key_mask[key_idx] = 1.0
                 lock_mask[lock_idx] = 1.0
-            lock_loss, lock_info = self.key_lock(distances, key_mask, lock_mask, pairs)
+            if torch.any(locked_edges):
+                blocked_adj = torch.where(locked_edges, torch.zeros_like(adj), adj)
+                blocked_distances = self.graph_pathfinder(blocked_adj, weights, source_mask)
+                pair_losses: List[Tensor] = []
+                key_scores: List[Tensor] = []
+                lock_scores: List[Tensor] = []
+                for key_idx, lock_idx in pairs:
+                    one_key = torch.zeros(n, device=device, dtype=dtype)
+                    one_key[key_idx] = 1.0
+                    key_score, key_reach_loss = self.reachability(
+                        blocked_distances,
+                        one_key,
+                        return_loss=True,
+                    )
+                    from_key_distances = self.graph_pathfinder(adj, weights, one_key)
+                    one_lock = torch.zeros(n, device=device, dtype=dtype)
+                    one_lock[lock_idx] = 1.0
+                    lock_score, lock_reach_loss = self.reachability(
+                        from_key_distances,
+                        one_lock,
+                        return_loss=True,
+                    )
+                    key_score = key_score.mean() if isinstance(key_score, torch.Tensor) and key_score.numel() != 1 else key_score
+                    lock_score = lock_score.mean() if isinstance(lock_score, torch.Tensor) and lock_score.numel() != 1 else lock_score
+                    pair_losses.append(0.5 * (key_reach_loss + lock_reach_loss))
+                    key_scores.append(key_score)
+                    lock_scores.append(lock_score)
+                pair_loss_t = torch.stack(pair_losses) if pair_losses else torch.empty(0, device=device, dtype=dtype)
+                lock_loss = pair_loss_t.mean() if pair_loss_t.numel() > 0 else zero
+                key_score_t = torch.stack(key_scores) if key_scores else torch.empty(0, device=device, dtype=dtype)
+                lock_score_t = torch.stack(lock_scores) if lock_scores else torch.empty(0, device=device, dtype=dtype)
+                lock_info = {
+                    "num_violations": int((pair_loss_t > 0.25).sum().detach().item()) if pair_loss_t.numel() > 0 else 0,
+                    "total_violation": lock_loss,
+                    "key_lock_mode": "resource_gated",
+                    "locked_edge_count": float(locked_edges.float().sum().detach().item()),
+                    "key_reach_before_lock": key_score_t.mean() if key_score_t.numel() > 0 else zero,
+                    "lock_reach_after_key": lock_score_t.mean() if lock_score_t.numel() > 0 else zero,
+                }
+            else:
+                lock_loss, lock_info = self.key_lock(distances, key_mask, lock_mask, pairs)
+                lock_info["key_lock_mode"] = "distance_ordering"
 
         room_loss = (1.0 - room_pass[: current_indices.numel()].clamp(0.0, 1.0)).mean()
         total = (

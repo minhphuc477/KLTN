@@ -392,9 +392,9 @@ def load_diffusion(pipeline, checkpoint_path: Optional[str]) -> LatentDiffusionM
     ).strip().lower()
     setattr(model, "training_objective", training_objective)
     if training_objective == "flow_matching":
-        logger.warning(
-            "Loaded a diffusion checkpoint trained with flow_matching. Generation still uses the DDPM/DDIM sampler; "
-            "treat samples as ablation diagnostics until a matching flow ODE sampler is available."
+        logger.info(
+            "Loaded a diffusion checkpoint trained with flow_matching; generation will prefer "
+            "LatentDiffusionModel.flow_ode_sample() over DDPM/DDIM sampling."
         )
     setattr(
         model,

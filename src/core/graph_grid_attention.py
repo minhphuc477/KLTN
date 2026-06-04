@@ -33,7 +33,8 @@ Usage:
 """
 
 import logging
-from typing import Tuple, Optional
+import threading
+from typing import Any, Dict, Tuple, Optional
 
 import torch
 import torch.nn as nn
@@ -355,6 +356,7 @@ class GraphToGridCrossAttention(nn.Module):
         self.last_attention_weights: Optional[Tensor] = None
         self.last_attention_weights_for_loss: Optional[Tensor] = None
         self.last_attention_grid_shape: Optional[Tuple[int, int]] = None
+        self._attention_capture_lock = threading.RLock()
 
         # Grid position encoding
         self.grid_pe = SinusoidalPositionEncoding2D(grid_dim)
@@ -411,6 +413,15 @@ class GraphToGridCrossAttention(nn.Module):
         )
         self.set_attention_mode(attention_mode)
 
+    def __getstate__(self) -> Dict[str, Any]:
+        state = self.__dict__.copy()
+        state.pop("_attention_capture_lock", None)
+        return state
+
+    def __setstate__(self, state: Dict[str, Any]) -> None:
+        self.__dict__.update(state)
+        self._attention_capture_lock = threading.RLock()
+
     def set_attention_mode(self, mode: str) -> None:
         normalized = str(mode).strip().lower()
         if normalized not in {"softmax", "linear_hedgehog"}:
@@ -421,11 +432,12 @@ class GraphToGridCrossAttention(nn.Module):
 
     def set_attention_capture(self, enabled: bool = True) -> None:
         """Enable or disable storage of the latest softmax attention map."""
-        self.capture_attention_maps = bool(enabled)
-        if not self.capture_attention_maps:
-            self.last_attention_weights = None
-            self.last_attention_weights_for_loss = None
-            self.last_attention_grid_shape = None
+        with self._attention_capture_lock:
+            self.capture_attention_maps = bool(enabled)
+            if not self.capture_attention_maps:
+                self.last_attention_weights = None
+                self.last_attention_weights_for_loss = None
+                self.last_attention_grid_shape = None
 
     def get_last_attention_map(self, reduce_heads: str = "mean") -> Optional[Tensor]:
         """
@@ -434,10 +446,11 @@ class GraphToGridCrossAttention(nn.Module):
         Attention maps are populated only when set_attention_capture(True) is active
         and the module runs in softmax mode.
         """
-        if self.last_attention_weights is None or self.last_attention_grid_shape is None:
-            return None
-        weights = self.last_attention_weights
-        height, width = self.last_attention_grid_shape
+        with self._attention_capture_lock:
+            if self.last_attention_weights is None or self.last_attention_grid_shape is None:
+                return None
+            weights = self.last_attention_weights
+            height, width = self.last_attention_grid_shape
         mode = str(reduce_heads).strip().lower()
         if mode in {"none", "heads", "per_head", "per-head"}:
             return weights.reshape(
@@ -472,11 +485,13 @@ class GraphToGridCrossAttention(nn.Module):
             valid_mask: optional [B, M] mask for padded supervision targets.
             reduce_heads: mean or max head reduction before gathering.
         """
-        weights = self.last_attention_weights_for_loss
-        if weights is None or self.last_attention_grid_shape is None:
-            raise RuntimeError(
-                "spatial_alignment_loss requires set_attention_capture(True) and a softmax forward pass first."
-            )
+        with self._attention_capture_lock:
+            weights = self.last_attention_weights_for_loss
+            grid_shape = self.last_attention_grid_shape
+            if weights is None or grid_shape is None:
+                raise RuntimeError(
+                    "spatial_alignment_loss requires set_attention_capture(True) and a softmax forward pass first."
+                )
         if node_indices.dim() != 2:
             raise ValueError(f"node_indices must have shape [B, M], got {tuple(node_indices.shape)}.")
         if target_positions.dim() != 3 or int(target_positions.shape[-1]) != 2:
@@ -488,7 +503,7 @@ class GraphToGridCrossAttention(nn.Module):
         if int(node_indices.shape[1]) != int(target_positions.shape[1]):
             raise ValueError("node_indices and target_positions must have the same target count.")
 
-        height, width = self.last_attention_grid_shape
+        height, width = grid_shape
         mode = str(reduce_heads).strip().lower()
         if mode == "mean":
             attn = weights.mean(dim=1).reshape(weights.shape[0], int(height), int(width), weights.shape[-1])
@@ -621,9 +636,10 @@ class GraphToGridCrossAttention(nn.Module):
             edge_index = None
 
         B, C, H, W = grid_features.shape
-        self.last_attention_weights = None
-        self.last_attention_weights_for_loss = None
-        self.last_attention_grid_shape = None
+        with self._attention_capture_lock:
+            self.last_attention_weights = None
+            self.last_attention_weights_for_loss = None
+            self.last_attention_grid_shape = None
         if graph_nodes.dim() != 3:
             raise ValueError(
                 f"GraphToGridCrossAttention graph_nodes must have shape [B, N, D], got {tuple(graph_nodes.shape)}."
@@ -813,9 +829,10 @@ class GraphToGridCrossAttention(nn.Module):
                         loss_weights = loss_weights.clone()
                         loss_weights[~valid_rows] = 0.0
                         captured = loss_weights.detach()
-                    self.last_attention_weights_for_loss = loss_weights
-                    self.last_attention_weights = captured.cpu()
-                    self.last_attention_grid_shape = (int(H), int(W))
+                    with self._attention_capture_lock:
+                        self.last_attention_weights_for_loss = loss_weights
+                        self.last_attention_weights = captured.cpu()
+                        self.last_attention_grid_shape = (int(H), int(W))
                 attn_weights = self.dropout(attn_weights)
                 attn_output = torch.matmul(attn_weights, V)
             if valid_rows is not None and not torch.all(valid_rows):

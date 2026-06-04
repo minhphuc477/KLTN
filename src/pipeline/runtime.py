@@ -97,6 +97,7 @@ def _initialize_pipeline_from_flat_kwargs(
     default_categorical_codebook_size: Optional[int] = None,
     default_use_topological_positional_encoding: bool = True,
     default_apply_repair: bool = True,
+    default_use_neural_guided_repair: bool = True,
     default_enable_map_elites: bool = False,
     default_start_goal_coords: Optional[Tuple[Tuple[int, int], Tuple[int, int]]] = ((1, 5), (14, 5)),
     default_semantic_role_prior_strength: float = DEFAULT_SEMANTIC_ROLE_PRIOR_STRENGTH,
@@ -202,6 +203,7 @@ def _initialize_pipeline_from_flat_kwargs(
     )
     pipeline.default_use_topological_positional_encoding = bool(default_use_topological_positional_encoding)
     pipeline.default_apply_repair = bool(default_apply_repair)
+    pipeline.default_use_neural_guided_repair = bool(default_use_neural_guided_repair)
     pipeline.default_enable_map_elites = bool(default_enable_map_elites)
     pipeline.default_start_goal_coords = (
         None

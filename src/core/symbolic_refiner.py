@@ -374,6 +374,7 @@ class PathAnalyzer:
         grid: np.ndarray,
         start: Tuple[int, int],
         goal: Tuple[int, int],
+        cost_map: Optional[np.ndarray] = None,
     ) -> List[FailurePoint]:
         """
         Analyze pathfinding failures in a room grid.
@@ -391,7 +392,7 @@ class PathAnalyzer:
         failures = []
         
         # Try A* pathfinding
-        path = self._astar(grid, start, goal)
+        path = self._astar(grid, start, goal, cost_map=cost_map)
         
         if path is not None:
             # Path exists, no failures
@@ -546,9 +547,11 @@ class PathAnalyzer:
         grid: np.ndarray,
         start: Tuple[int, int],
         goal: Tuple[int, int],
+        cost_map: Optional[np.ndarray] = None,
     ) -> Optional[List[Tuple[int, int]]]:
         """A* pathfinding using (row, col) coordinates with parent-pointer reconstruction."""
         h, w = grid.shape[:2]
+        costs = self._normalize_cost_map(cost_map, grid.shape[:2])
         
         def heuristic(a, b):
             return abs(a[0] - b[0]) + abs(a[1] - b[1])
@@ -580,7 +583,8 @@ class PathAnalyzer:
                 continue
             
             for next_pos in neighbors(*current):
-                new_g = g + 1
+                step_cost = float(costs[next_pos[0], next_pos[1]]) if costs is not None else 1.0
+                new_g = g + max(1e-6, step_cost)
                 if new_g < g_score.get(next_pos, float('inf')):
                     g_score[next_pos] = new_g
                     parent[next_pos] = current
@@ -588,6 +592,27 @@ class PathAnalyzer:
                     heapq.heappush(open_set, (new_f, new_g, next_pos))
         
         return None
+
+    @staticmethod
+    def _normalize_cost_map(
+        cost_map: Optional[np.ndarray],
+        shape: Tuple[int, int],
+    ) -> Optional[np.ndarray]:
+        """Validate and sanitize an optional row/col cost map."""
+        if not isinstance(cost_map, np.ndarray):
+            return None
+        if tuple(cost_map.shape[:2]) != tuple(shape):
+            logger.warning(
+                "Ignoring symbolic repair cost_map with shape %s; expected %s.",
+                tuple(cost_map.shape),
+                tuple(shape),
+            )
+            return None
+        costs = np.asarray(cost_map, dtype=np.float32)
+        if costs.ndim != 2:
+            logger.warning("Ignoring symbolic repair cost_map with rank %d; expected 2.", costs.ndim)
+            return None
+        return np.nan_to_num(costs, nan=1.0, posinf=1e6, neginf=1.0).clip(1e-6, 1e6)
     
     def _flood_fill(
         self,
@@ -1105,6 +1130,7 @@ class ConstraintPropagator:
         goal: Tuple[int, int],
         walkable: Set[int],
         required_floor_mask: Optional[np.ndarray] = None,
+        cost_map: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """
         Ensure start-goal connectivity.
@@ -1115,6 +1141,7 @@ class ConstraintPropagator:
         goal = _normalize_grid_coord(goal, grid.shape[:2], field_name="goal")
         
         result = grid.copy()
+        costs = PathAnalyzer._normalize_cost_map(cost_map, result.shape)
 
         if isinstance(required_floor_mask, np.ndarray) and required_floor_mask.shape == result.shape:
             floor_id = int(SEMANTIC_PALETTE.get("FLOOR", TileType.FLOOR.value))
@@ -1128,25 +1155,18 @@ class ConstraintPropagator:
         if path is not None:
             return result
 
-        # Create a simple path
+        # Create a path. Prefer neural/symbolic cost-guided carving when a
+        # cost map is provided; otherwise preserve the historical L-shape
+        # fallback for compatibility.
         r0, c0 = start
         r1, c1 = goal
+        carve_path = self._cost_guided_carve(result, start, goal, walkable, costs) if costs is not None else []
+        if not carve_path:
+            carve_path = self._l_shape_path(r0, c0, r1, c1)
 
-        # Move across columns first, then across rows.
-        r, c = r0, c0
-
-        while c != c1:
+        for r, c in carve_path:
             if result[r, c] not in walkable:
                 result[r, c] = TileType.FLOOR.value
-            c += 1 if c1 > c else -1
-
-        while r != r1:
-            if result[r, c] not in walkable:
-                result[r, c] = TileType.FLOOR.value
-            r += 1 if r1 > r else -1
-
-        if result[r, c] not in walkable:
-            result[r, c] = TileType.FLOOR.value
 
         if isinstance(required_floor_mask, np.ndarray) and required_floor_mask.shape == result.shape:
             floor_id = int(SEMANTIC_PALETTE.get("FLOOR", TileType.FLOOR.value))
@@ -1154,6 +1174,75 @@ class ConstraintPropagator:
             needs_floor = constrained & ~np.isin(result, list(walkable))
             result[needs_floor] = floor_id
         return result
+
+    def _l_shape_path(
+        self,
+        r0: int,
+        c0: int,
+        r1: int,
+        c1: int,
+    ) -> List[Tuple[int, int]]:
+        """Historical columns-then-rows carving fallback."""
+        path: List[Tuple[int, int]] = []
+        r, c = int(r0), int(c0)
+        path.append((r, c))
+        while c != c1:
+            c += 1 if c1 > c else -1
+            path.append((r, c))
+        while r != r1:
+            r += 1 if r1 > r else -1
+            path.append((r, c))
+        return path
+
+    def _cost_guided_carve(
+        self,
+        grid: np.ndarray,
+        start: Tuple[int, int],
+        goal: Tuple[int, int],
+        walkable: Set[int],
+        cost_map: Optional[np.ndarray],
+    ) -> List[Tuple[int, int]]:
+        """
+        Dijkstra over all cells using repair costs.
+
+        Unlike _find_path, this may traverse walls because its purpose is to
+        choose which wall cells should be carved. Existing walkable cells get a
+        small discount; non-walkable cells follow the provided LogicNet cost.
+        """
+        if cost_map is None:
+            return []
+        h, w = grid.shape[:2]
+        start = _normalize_grid_coord(start, grid.shape[:2], field_name="start")
+        goal = _normalize_grid_coord(goal, grid.shape[:2], field_name="goal")
+        dist: Dict[Tuple[int, int], float] = {start: 0.0}
+        parent: Dict[Tuple[int, int], Optional[Tuple[int, int]]] = {start: None}
+        queue: List[Tuple[float, Tuple[int, int]]] = [(0.0, start)]
+
+        while queue:
+            cur_dist, (r, c) = heapq.heappop(queue)
+            if cur_dist > dist.get((r, c), float("inf")):
+                continue
+            if (r, c) == goal:
+                path: List[Tuple[int, int]] = []
+                node: Optional[Tuple[int, int]] = goal
+                while node is not None:
+                    path.append(node)
+                    node = parent[node]
+                return list(reversed(path))
+
+            for dr, dc in [(0, 1), (1, 0), (0, -1), (-1, 0)]:
+                nr, nc = r + dr, c + dc
+                if not (0 <= nr < h and 0 <= nc < w):
+                    continue
+                step_cost = float(cost_map[nr, nc])
+                if int(grid[nr, nc]) in walkable:
+                    step_cost *= 0.25
+                new_dist = cur_dist + max(1e-6, step_cost)
+                if new_dist < dist.get((nr, nc), float("inf")):
+                    dist[(nr, nc)] = new_dist
+                    parent[(nr, nc)] = (r, c)
+                    heapq.heappush(queue, (new_dist, (nr, nc)))
+        return []
 
     def _find_path(
         self,
@@ -1338,6 +1427,7 @@ class SymbolicRefiner:
         feedback_callback: Optional[Callable[[np.ndarray, np.ndarray, Tuple[int, int], Tuple[int, int], int], np.ndarray]] = None,
         max_feedback_rounds: int = 2,
         required_floor_mask: Optional[np.ndarray] = None,
+        cost_map: Optional[np.ndarray] = None,
         seed: Optional[int] = None,
     ) -> Tuple[np.ndarray, bool, Dict[str, Any]]:
         """
@@ -1356,6 +1446,7 @@ class SymbolicRefiner:
         floor_mask = None
         if isinstance(required_floor_mask, np.ndarray) and required_floor_mask.shape == current_grid.shape:
             floor_mask = required_floor_mask.astype(bool, copy=False)
+        repair_costs = PathAnalyzer._normalize_cost_map(cost_map, current_grid.shape)
         floor_id = int(SEMANTIC_PALETTE["FLOOR"])
 
         def _apply_required_floor_constraints(grid_in: np.ndarray) -> np.ndarray:
@@ -1386,6 +1477,7 @@ class SymbolicRefiner:
             "feedback_applied": 0,
             "last_dead_end_mask_pixels": 0,
             "required_floor_pixels": int(np.sum(floor_mask)) if floor_mask is not None else 0,
+            "cost_guidance_used": bool(repair_costs is not None),
             "final_failure_count": 0,
         }
 
@@ -1393,7 +1485,7 @@ class SymbolicRefiner:
             diagnostics["attempts"] = int(attempt + 1)
 
             # Analyze failures
-            failures = self.path_analyzer.analyze_grid(current_grid, start, goal)
+            failures = self.path_analyzer.analyze_grid(current_grid, start, goal, cost_map=repair_costs)
 
             if not failures:
                 if floor_mask is not None:
@@ -1408,6 +1500,7 @@ class SymbolicRefiner:
                         goal,
                         walkable,
                         required_floor_mask=floor_mask,
+                        cost_map=repair_costs,
                     )
                 logger.info(f"Room repaired successfully in {attempt + 1} attempts")
                 diagnostics["final_failure_count"] = 0
@@ -1470,11 +1563,12 @@ class SymbolicRefiner:
                 goal,
                 walkable,
                 required_floor_mask=floor_mask,
+                cost_map=repair_costs,
             )
             current_grid = _apply_required_floor_constraints(current_grid)
 
         # Final check.
-        failures = self.path_analyzer.analyze_grid(current_grid, start, goal)
+        failures = self.path_analyzer.analyze_grid(current_grid, start, goal, cost_map=repair_costs)
         diagnostics["final_failure_count"] = int(len(failures))
         self.last_repair_diagnostics = diagnostics
         return current_grid, len(failures) == 0, diagnostics
@@ -1486,6 +1580,7 @@ class SymbolicRefiner:
         goal: Tuple[int, int],
         *,
         required_floor_mask: Optional[np.ndarray] = None,
+        cost_map: Optional[np.ndarray] = None,
         seed: Optional[int] = None,
     ) -> Tuple[np.ndarray, bool]:
         """
@@ -1506,6 +1601,7 @@ class SymbolicRefiner:
             feedback_callback=None,
             max_feedback_rounds=0,
             required_floor_mask=required_floor_mask,
+            cost_map=cost_map,
             seed=seed,
         )
         self.last_repair_diagnostics = diagnostics

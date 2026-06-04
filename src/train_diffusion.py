@@ -237,6 +237,7 @@ class DiffusionTrainingConfig:
         logic_loss_mode: str = "predicted_latent",  # predicted_latent | detached_real
         graph_conditioning_mode: str = "node_sequence",  # node_sequence | pooled
         warmup_epochs: int = 5,       # Epochs before adding logic loss
+        logic_loss_ramp_epochs: int = 2,
         scheduler_t0: int = 10,
         scheduler_t_mult: int = 2,
         scheduler_eta_min: float = 1e-6,
@@ -499,6 +500,7 @@ class DiffusionTrainingConfig:
             )
         self.graph_conditioning_mode = gmode
         self.warmup_epochs = warmup_epochs
+        self.logic_loss_ramp_epochs = int(max(1, logic_loss_ramp_epochs))
         self.scheduler_t0 = int(max(1, scheduler_t0))
         self.scheduler_t_mult = int(max(1, scheduler_t_mult))
         self.scheduler_eta_min = float(max(0.0, scheduler_eta_min))
@@ -684,6 +686,7 @@ def diffusion_training_kwargs_from_resolved_config(
         "logic_loss_mode": stage["logic_loss_mode"],
         "graph_conditioning_mode": stage["graph_conditioning_mode"],
         "warmup_epochs": stage["warmup_epochs"],
+        "logic_loss_ramp_epochs": stage.get("logic_loss_ramp_epochs", 2),
         "scheduler_t0": stage["scheduler_t0"],
         "scheduler_t_mult": stage["scheduler_t_mult"],
         "scheduler_eta_min": stage["scheduler_eta_min"],
@@ -973,6 +976,7 @@ def _legacy_diffusion_overrides_from_args(args: argparse.Namespace) -> Dict[str,
     _set("logic_lr_warmup_epochs", getattr(args, "logic_lr_warmup_epochs", None))
     _set("logic_grid_pathfinder", getattr(args, "logic_grid_pathfinder", None))
     _set("global_lr_warmup_epochs", getattr(args, "global_lr_warmup_epochs", None))
+    _set("logic_loss_ramp_epochs", getattr(args, "logic_loss_ramp_epochs", None))
     _set("guidance_scale", getattr(args, "guidance_scale", None))
     _set("logic_topology_trace_weight", getattr(args, "logic_topology_trace_weight", None))
     _set("logic_topology_anchor_weight", getattr(args, "logic_topology_anchor_weight", None))
@@ -1066,6 +1070,13 @@ class DiffusionTrainer:
         self.model = self.diffusion
         self.condition_encoder = condition_encoder or self._create_condition_encoder()
         self.logic_net = logic_net or self._create_logic_net()
+        diffusion_context_dim = int(getattr(self.diffusion, "context_dim", self.config.context_dim))
+        encoder_output_dim = int(getattr(self.condition_encoder, "output_dim", self.config.context_dim))
+        if diffusion_context_dim != encoder_output_dim:
+            raise ValueError(
+                "context_dim mismatch between diffusion and condition encoder: "
+                f"diffusion={diffusion_context_dim}, condition_encoder={encoder_output_dim}."
+            )
         
         # Move to device
         self.vqvae = self.vqvae.to(self.device)
@@ -1075,8 +1086,7 @@ class DiffusionTrainer:
         
         # Freeze VQ-VAE
         self.vqvae.eval()
-        for param in self.vqvae.parameters():
-            param.requires_grad = False
+        self.vqvae.requires_grad_(False)
 
         if not bool(getattr(config, "logic_net_trainable", True)):
             self.logic_net.eval()
@@ -2540,6 +2550,21 @@ class DiffusionTrainer:
                 scale = min(scale, logic_scale)
             group["lr"] = base_lr * scale
 
+    def _effective_logic_loss_weight(self, include_logic_loss: bool) -> float:
+        """Linearly ramp alpha_logic after the warmup boundary."""
+        if not bool(include_logic_loss):
+            return 0.0
+        base = float(max(0.0, getattr(self.config, "alpha_logic", 0.0)))
+        if base <= 0.0:
+            return 0.0
+        warmup = int(max(0, getattr(self.config, "warmup_epochs", 0)))
+        ramp_epochs = int(max(1, getattr(self.config, "logic_loss_ramp_epochs", 1)))
+        epoch = int(getattr(self, "epoch", 0))
+        if epoch < warmup:
+            return 0.0
+        ramp_step = epoch - warmup + 1
+        return base * min(1.0, float(ramp_step) / float(ramp_epochs))
+
     def _vqvae_codebook_stats(self) -> Dict[str, float]:
         """Return frozen VQ/FSQ code usage metrics for diffusion logs."""
         stats: Dict[str, float] = {}
@@ -2678,14 +2703,17 @@ class DiffusionTrainer:
         solvability_proxy = torch.tensor(0.0, device=self.device)
         
         logic_enabled = bool(getattr(self.config, "logic_net_enabled", True))
-        if logic_enabled and include_logic_loss and self.config.alpha_logic > 0:
-            if float(getattr(self.config, "alpha_logic_tile", 0.0)) > 0.0:
-                tile_targets = self._tile_targets_from_maps(real_maps)
-                tile_logits = self.logic_net.tile_classifier(z_0.detach())
-                tile_logits = self.logic_net._project_tile_logits_to_room(tile_logits)
-                logic_tile_loss = F.cross_entropy(tile_logits, tile_targets)
-                logic_tile_accuracy = (tile_logits.argmax(dim=1) == tile_targets).float().mean()
+        logic_loss_weight = self._effective_logic_loss_weight(include_logic_loss)
+        if logic_enabled and include_logic_loss and float(getattr(self.config, "alpha_logic_tile", 0.0)) > 0.0:
+            tile_targets = self._tile_targets_from_maps(real_maps)
+            # Trains LogicNet.tile_classifier only; z_0.detach() prevents this
+            # auxiliary CE branch from injecting gradients into diffusion.
+            tile_logits = self.logic_net.tile_classifier(z_0.detach())
+            tile_logits = self.logic_net._project_tile_logits_to_room(tile_logits)
+            logic_tile_loss = F.cross_entropy(tile_logits, tile_targets)
+            logic_tile_accuracy = (tile_logits.argmax(dim=1) == tile_targets).float().mean()
 
+        if logic_enabled and logic_loss_weight > 0:
             if self.config.logic_loss_mode == "detached_real":
                 # Legacy baseline: logic regularization on real latent only.
                 z_for_logic = z_0.detach().requires_grad_(True)
@@ -2749,7 +2777,7 @@ class DiffusionTrainer:
         # Combined loss
         total_loss = (
             self.config.alpha_visual * diffusion_loss + 
-            self.config.alpha_logic * logic_loss
+            logic_loss_weight * logic_loss
             + float(getattr(self.config, "alpha_logic_tile", 0.0)) * logic_tile_loss
             + float(getattr(self.config, "alpha_wfc_pseudo", 0.0)) * wfc_pseudo_loss
         )
@@ -2810,14 +2838,13 @@ class DiffusionTrainer:
             return metrics
         grad_clip_norm = float(max(0.0, float(getattr(self.config, "grad_clip_norm", 1.0))))
         if grad_clip_norm > 0:
-            clip_params = list(self.diffusion.parameters()) + list(self.condition_encoder.parameters())
+            grad_norms = [
+                torch.nn.utils.clip_grad_norm_(self.diffusion.parameters(), max_norm=grad_clip_norm),
+                torch.nn.utils.clip_grad_norm_(self.condition_encoder.parameters(), max_norm=grad_clip_norm),
+            ]
             if bool(getattr(self.config, "logic_net_trainable", True)):
-                clip_params += list(self.logic_net.parameters())
-            grad_norm = torch.nn.utils.clip_grad_norm_(
-                clip_params,
-                max_norm=grad_clip_norm
-            )
-            if not self._tensor_is_finite(grad_norm):
+                grad_norms.append(torch.nn.utils.clip_grad_norm_(self.logic_net.parameters(), max_norm=grad_clip_norm))
+            if not all(self._tensor_is_finite(norm) for norm in grad_norms):
                 self.optimizer.zero_grad(set_to_none=True)
                 self._warn_nonfinite(
                     "gradient_norm",
@@ -2933,10 +2960,10 @@ class DiffusionTrainer:
         loss.backward()
         grad_clip = float(getattr(self.config, "grad_clip_norm", 0.0))
         if grad_clip > 0:
-            torch.nn.utils.clip_grad_norm_(
-                [p for group in self.optimizer.param_groups for p in group["params"] if p.grad is not None],
-                grad_clip,
-            )
+            torch.nn.utils.clip_grad_norm_(self.diffusion.parameters(), grad_clip)
+            torch.nn.utils.clip_grad_norm_(self.condition_encoder.parameters(), grad_clip)
+            if bool(getattr(self.config, "logic_net_trainable", True)):
+                torch.nn.utils.clip_grad_norm_(self.logic_net.parameters(), grad_clip)
         self.optimizer.step()
         self._update_ema()
         self.global_step += 1
@@ -3195,7 +3222,16 @@ class DiffusionTrainer:
                     guidance_suppressed_low_tile_accuracy += int(batch_size)
                     guidance_module.guidance_scale = 0.0
                 try:
-                    z_gen = eval_model.sample(conditioning, shape=z_0.shape, graph_data=diffusion_graph_data)
+                    objective = str(getattr(self.config, "diffusion_training_objective", "diffusion")).strip().lower()
+                    if objective == "flow_matching" and hasattr(eval_model, "flow_ode_sample"):
+                        z_gen = eval_model.flow_ode_sample(
+                            conditioning,
+                            shape=z_0.shape,
+                            graph_data=diffusion_graph_data,
+                            num_steps=min(int(getattr(self.config, "num_timesteps", 50)), 50),
+                        )
+                    else:
+                        z_gen = eval_model.sample(conditioning, shape=z_0.shape, graph_data=diffusion_graph_data)
                 finally:
                     if suppress_guidance:
                         guidance_module.guidance_scale = old_guidance_scale
@@ -3866,6 +3902,7 @@ def main():
     parser.add_argument('--logic-learning-rate', type=float, default=None)
     parser.add_argument('--logic-lr-warmup-epochs', type=int, default=None)
     parser.add_argument('--global-lr-warmup-epochs', type=int, default=None)
+    parser.add_argument('--logic-loss-ramp-epochs', type=int, default=None)
     parser.add_argument(
         '--logic-grid-pathfinder',
         type=str,
@@ -3895,7 +3932,7 @@ def main():
         type=str,
         default=None,
         choices=['diffusion', 'flow_matching'],
-        help='Latent training objective ablation. flow_matching trains velocity targets and should be reported separately.',
+        help='Latent training objective ablation. flow_matching requires DiT and validates/generates with the rectified-flow ODE sampler.',
     )
     parser.add_argument('--guidance-scale', type=float, default=None)
     parser.add_argument('--latent-cache-enabled', action=argparse.BooleanOptionalAction, default=None)

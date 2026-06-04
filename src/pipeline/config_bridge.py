@@ -57,6 +57,7 @@ def generation_runtime_kwargs_from_resolved_config(config: Dict[str, Any]) -> Di
         "default_categorical_codebook_size": stage.get("categorical_codebook_size", 256),
         "default_use_topological_positional_encoding": stage.get("use_topological_positional_encoding", True),
         "default_apply_repair": stage.get("apply_repair", True),
+        "default_use_neural_guided_repair": stage.get("use_neural_guided_repair", True),
         "default_enable_map_elites": stage.get("enable_map_elites", False),
         "symbolic_max_repair_attempts": stage.get("symbolic_max_repair_attempts", 5),
         "symbolic_repair_margin": stage.get("symbolic_repair_margin", 2),

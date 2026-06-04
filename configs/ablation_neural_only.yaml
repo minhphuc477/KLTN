@@ -1,0 +1,8 @@
+# Neural-stage-only ablation.
+# Keeps diffusion + LogicNet active and disables runtime symbolic repair.
+training:
+  stage: diffusion
+
+generation:
+  apply_repair: false
+  use_neural_guided_repair: false

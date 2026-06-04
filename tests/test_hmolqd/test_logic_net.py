@@ -133,6 +133,102 @@ class TestKeyLockChecker:
             checker(key_probs, lock_probs)
 
 
+def test_dense_adjacency_preserves_key_lock_edge_penalties():
+    from src.core.logic_net import LogicNet
+
+    logic_net = LogicNet(latent_dim=8, hidden_dim=16, num_classes=44, num_iterations=3)
+    adjacency = torch.tensor(
+        [
+            [0.0, 1.0, 1.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 0.0],
+        ]
+    )
+    edge_features = torch.zeros(3, 3, 8)
+    edge_features[0, 1, 1] = 1.0
+    edge_attr = torch.zeros(3, 3, dtype=torch.long)
+    edge_attr[0, 2] = 4
+
+    adj, weights = logic_net._build_adjacency_and_weights(
+        node_count=3,
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+        adjacency=adjacency,
+        edge_features=edge_features,
+        edge_attr=edge_attr,
+    )
+
+    assert torch.equal(adj, adjacency)
+    assert weights[0, 1].item() > 1.0
+    assert weights[0, 2].item() > weights[0, 1].item()
+
+
+def test_key_lock_checker_uses_resource_gated_reachability_for_cyclic_graphs():
+    from src.core.logic_net import LogicNet
+
+    logic_net = LogicNet(latent_dim=8, hidden_dim=16, num_classes=44, num_iterations=6)
+    room_passability = torch.ones(3)
+
+    edge_index_ok = torch.tensor(
+        [
+            [0, 0, 2, 2],
+            [1, 2, 1, 0],
+        ],
+        dtype=torch.long,
+    )
+    edge_attr_ok = torch.tensor([1, 0, 0, 0], dtype=torch.long)
+    ok_total, _ok_reach, ok_lock, ok_info = logic_net._compute_one_global_graph_loss(
+        node_count=3,
+        edge_index=edge_index_ok,
+        adjacency=None,
+        edge_weights=None,
+        edge_features=None,
+        edge_attr=edge_attr_ok,
+        node_features=None,
+        node_mask=None,
+        start_idx=0,
+        target_idx=None,
+        key_lock_pairs=[(2, 1)],
+        current_node_idx=None,
+        room_passability=room_passability,
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+    )
+
+    edge_index_blocked = torch.tensor(
+        [
+            [0, 1, 2],
+            [1, 2, 0],
+        ],
+        dtype=torch.long,
+    )
+    edge_attr_blocked = torch.tensor([1, 0, 0], dtype=torch.long)
+    blocked_total, _blocked_reach, blocked_lock, blocked_info = logic_net._compute_one_global_graph_loss(
+        node_count=3,
+        edge_index=edge_index_blocked,
+        adjacency=None,
+        edge_weights=None,
+        edge_features=None,
+        edge_attr=edge_attr_blocked,
+        node_features=None,
+        node_mask=None,
+        start_idx=0,
+        target_idx=None,
+        key_lock_pairs=[(2, 1)],
+        current_node_idx=None,
+        room_passability=room_passability,
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+    )
+
+    assert ok_info["key_lock_mode"] == "resource_gated"
+    assert blocked_info["key_lock_mode"] == "resource_gated"
+    assert ok_info["locked_edge_count"] == pytest.approx(1.0)
+    assert torch.isfinite(ok_total)
+    assert torch.isfinite(blocked_total)
+    assert blocked_lock.item() > ok_lock.item()
+
+
 class TestLogicNet:
     """Tests for complete LogicNet module."""
     
