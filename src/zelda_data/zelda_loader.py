@@ -1,4 +1,4 @@
-﻿"""
+"""
 Zelda Dungeon Dataset Loader
 ============================
 
@@ -637,6 +637,23 @@ def _build_room_graph_sample(
 
 
 # =============================================================================
+# D4 DIHEDRAL SYMMETRY AUGMENTATION
+# =============================================================================
+
+class RandomD4Symmetry:
+    """Applies a random D4 dihedral symmetry to a 2D tile grid.
+    The 8 symmetries are: 4 rotations x 2 reflections."""
+    def __call__(self, grid: torch.Tensor) -> torch.Tensor:
+        # grid shape: (C, H, W) or (H, W)
+        k = torch.randint(0, 4, ()).item()  # 0,1,2,3 rotations
+        flip = torch.randint(0, 2, ()).item()  # 0=no flip, 1=flip
+        if flip:
+            grid = torch.flip(grid, dims=[-1])  # horizontal flip
+        grid = torch.rot90(grid, k=k, dims=[-2, -1])
+        return grid
+
+
+# =============================================================================
 # DATASET CLASS
 # =============================================================================
 
@@ -676,6 +693,7 @@ class ZeldaDungeonDataset(Dataset):
         edge_feature_dim: int = GRAPH_EDGE_FEATURE_DIM,
         dungeon_ids: Optional[Iterable[int]] = None,
         variants: Optional[Iterable[int]] = None,
+        augment: bool = False,  # Apply D4 dihedral symmetry augmentation
     ):
         self.data_dir = Path(data_dir)
         self.transform = transform
@@ -683,6 +701,8 @@ class ZeldaDungeonDataset(Dataset):
         self.target_size = target_size
         self.use_vglc = use_vglc and VGLC_AVAILABLE
         self.pad_to_max = pad_to_max
+        self.augment = bool(augment)
+        self._d4_augment = RandomD4Symmetry()
         self.load_graphs = load_graphs
         self.node_feature_dim = int(max(1, node_feature_dim))
         self.edge_feature_dim = int(max(1, edge_feature_dim))
@@ -816,6 +836,10 @@ class ZeldaDungeonDataset(Dataset):
         if self.target_size is not None:
             tensor_map = self._resize(tensor_map, self.target_size)
         
+        # Apply D4 dihedral symmetry augmentation during training
+        if self.augment:
+            tensor_map = self._d4_augment(tensor_map)
+
         # Apply custom transform
         if self.transform:
             tensor_map = self.transform(tensor_map)
@@ -920,10 +944,13 @@ class ZeldaRoomDataset(Dataset):
         puzzle_stage_trace_decay: float = DEFAULT_PUZZLE_STAGE_TRACE_DECAY,
         dungeon_ids: Optional[Iterable[int]] = None,
         variants: Optional[Iterable[int]] = None,
+        augment: bool = False,  # Apply D4 dihedral symmetry augmentation
     ):
         self.transform = transform
         self.normalize = normalize
         self.load_graphs = load_graphs
+        self.augment = bool(augment)
+        self._d4_augment = RandomD4Symmetry()
         self.node_feature_dim = int(max(1, node_feature_dim))
         self.edge_feature_dim = int(max(1, edge_feature_dim))
         self.topology_supervision_mode = str(topology_supervision_mode).strip().lower()
@@ -1002,6 +1029,10 @@ class ZeldaRoomDataset(Dataset):
             NUM_TILE_IDS = 43  # TileID.PUZZLE = 43
             tensor = tensor / NUM_TILE_IDS
         
+        # Apply D4 dihedral symmetry augmentation during training
+        if self.augment:
+            tensor = self._d4_augment(tensor)
+
         if self.transform:
             tensor = self.transform(tensor)
 

@@ -729,9 +729,11 @@ class BidirectionalAStar:
         # Forward path is already in correct order
         forward_path = forward_node.path
         
-        # Backward path is in reverse order (goal → meeting), need to reverse it
-        # Also remove meeting point to avoid duplication
-        backward_path = list(reversed(backward_node.path[1:]))
+        # Backward path is already in forward order (meeting_point → goal)
+        # because backward expansion prepends: [prev_state.position] + current_node.path
+        # So backward_node.path goes: meeting_point → ... → goal
+        # Just skip index 0 (meeting_point already in forward_path) to avoid duplication
+        backward_path = backward_node.path[1:]
         
         # Concatenate
         complete_path = forward_path + backward_path

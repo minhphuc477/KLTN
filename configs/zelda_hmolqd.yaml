@@ -94,6 +94,7 @@ diffusion:
   optimizer_weight_decay: 0.00001  # type=float, default=1e-5, valid>=0
   global_lr_warmup_epochs: 0  # type=int, default=0, valid>=0; optional warmup for all diffusion optimizer groups
   grad_clip_norm: 1.0  # type=float, default=1.0, valid>=0
+  gradient_checkpointing: false  # type=bool, default=false, valid={true,false}; enable activation recomputation to reduce VRAM (slower training)
   save_every: 10  # type=int, default=10, valid>=1
   keep_last: 2  # type=int, default=2, valid>=0; number of retained full-resume checkpoints besides latest_resume/best/final
   validation_fraction: 0.1  # type=float, default=0.1, valid=0..0.5; internal validation split drawn only from train_dungeons, never from Dungeon 9

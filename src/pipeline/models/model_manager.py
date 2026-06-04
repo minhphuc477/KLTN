@@ -187,7 +187,7 @@ def load_condition_encoder(
         )
         checkpoint_state = pipeline._extract_checkpoint_state_dict(
             checkpoint,
-            "condition_encoder_state_dict",
+            candidate_keys=["ema_condition_encoder_state_dict", "condition_encoder_state_dict"],
         )
         checkpoint_config = pipeline._extract_checkpoint_config(checkpoint)
         if isinstance(checkpoint_state, dict):
@@ -528,7 +528,7 @@ def load_logic_net(pipeline, checkpoint_path: Optional[str]) -> LogicNet:
         )
         checkpoint_state = pipeline._extract_checkpoint_state_dict(
             checkpoint,
-            "logic_net_state_dict",
+            candidate_keys=["ema_logic_net_state_dict", "logic_net_state_dict"],
         )
         checkpoint_config = pipeline._extract_checkpoint_config(checkpoint)
         architecture = metadata.get("architecture", {}) if isinstance(metadata, dict) else {}
@@ -584,7 +584,10 @@ def load_masked_room_model(
                 "Strict checkpoint mode enabled: masked-room checkpoint config missing required key "
                 "'topology_conditioning_mode'."
             )
-        checkpoint_state = pipeline._extract_checkpoint_state_dict(checkpoint)
+        checkpoint_state = pipeline._extract_checkpoint_state_dict(
+            checkpoint,
+            candidate_keys=["ema_masked_room_state_dict", "masked_room_state_dict"],
+        )
 
     model = create_discrete_masked_model(
         num_classes=int(

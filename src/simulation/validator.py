@@ -14,6 +14,7 @@ This module provides:
 
 import os
 import heapq
+import math
 import logging
 import numpy as np
 import networkx as nx
@@ -3148,6 +3149,11 @@ class StateSpaceAStar:
                 else:
                     f_score = g_score + h_score  # A*: f = g + h
 
+                # TODO(perf): O(N²) path memory — each expansion copies the entire path
+                # history. Replace with a came_from dict + backtracking reconstruction to
+                # reduce to O(N) memory. Not done here because `path` is used inline for
+                # BFS depth scoring (len(path)) and multiple heap tuple formats, making
+                # a safe refactor non-trivial without broader changes.
                 new_path = path + [new_state.position]
 
                 # Priority tuple construction when priority options enabled
@@ -4294,7 +4300,13 @@ class StateSpaceAStar:
         
         pos = state.position
         goal = self.env.goal_pos
-        manhattan_h = abs(pos[0] - goal[0]) + abs(pos[1] - goal[1])
+        if self.allow_diagonals:
+            # Octile distance: admissible when diagonal moves cost sqrt(2)
+            dx = abs(pos[0] - goal[0])
+            dy = abs(pos[1] - goal[1])
+            manhattan_h = max(dx, dy) + (math.sqrt(2) - 1) * min(dx, dy)
+        else:
+            manhattan_h = abs(pos[0] - goal[0]) + abs(pos[1] - goal[1])
 
         # Track current node and graph-derived lower bounds.
         current_node = None
@@ -4347,65 +4359,6 @@ class StateSpaceAStar:
             lock_h = locked_edges_lb * 20.0
             if lock_h > h:
                 h = lock_h
-
-        # ── UPGRADE 3: Plan-Guided Heuristic ──
-        # If an abstract plan (sequence of room nodes) was extracted from
-        # the room-level solver, use it to tighten the heuristic:
-        #   - On-plan rooms: h += remaining_rooms × avg_room_cost
-        #   - Off-plan rooms: h += small penalty to steer back on-plan
-        # Reference: Holte et al. (2006) – "Hierarchical Heuristic Search
-        #   Revisited", Symposium on Abstraction, Reformulation & Approx.
-        if self._abstract_plan_rooms and current_node is not None:
-            if current_node in self._abstract_plan_rooms:
-                plan_idx = self._abstract_plan_rooms[current_node]
-                remaining = len(self._abstract_plan) - 1 - plan_idx
-                plan_h = remaining * self._abstract_plan_avg_cost
-                if plan_h > h:
-                    h = plan_h
-            else:
-                # Off-plan: add a gentle penalty to encourage re-joining
-                # the plan.  Must NOT be infinity (solver must still explore).
-                h += self._abstract_plan_avg_cost * 0.5
-
-        mode = (self.heuristic_mode or "balanced").lower()
-        door_scale = 0.7 if mode == "speedrunner" else 1.0
-        
-        # PERFORMANCE FIX: Use cached door positions instead of grid scan
-        locked_doors = self._locked_doors_cache
-        boss_doors = self._boss_doors_cache
-        bomb_doors = self._bomb_doors_cache
-        element_tiles = self._element_tiles_cache
-        
-        # Count unvisited locked doors not yet opened
-        unopened_locked = sum(1 for d in locked_doors if d not in state.opened_doors)
-        unopened_boss = sum(1 for d in boss_doors if d not in state.opened_doors)
-        unopened_bomb = sum(1 for d in bomb_doors if d not in state.opened_doors)
-        
-        # Add penalty if we don't have enough keys
-        if unopened_locked > state.keys:
-            h += door_scale * (unopened_locked - state.keys) * 10
-        
-        # Penalty for boss doors without boss key
-        if unopened_boss > 0 and not state.has_boss_key:
-            h += door_scale * 20
-        
-        # MISSING FEATURE FIX: Penalty for bomb doors without bombs
-        if unopened_bomb > 0 and state.bomb_count <= 0:
-            h += door_scale * 15
-        
-        # MISSING FEATURE FIX: Penalty for element/water tiles without ladder (KEY_ITEM)
-        if len(element_tiles) > 0 and not state.has_item:
-            h += door_scale * 15
-
-        if mode == "completionist":
-            remaining_pickups = len([p for p in self.pickup_positions if p not in state.collected_items])
-            h += remaining_pickups * 2
-        elif mode == "speedrunner":
-            h *= 0.9
-        
-        return h
-
-
 # ==========================================
 # MODULE 6: MAIN VALIDATOR
 # ==========================================

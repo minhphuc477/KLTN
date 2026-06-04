@@ -22,8 +22,12 @@ def path_efficiency_ratio(path_length: int, manhattan_distance: int) -> float:
 
     Higher is better: straight-line-optimal paths approach 1.0.
     """
-    path_length_i = int(path_length or 0)
-    manhattan_i = int(manhattan_distance or 0)
+    if path_length is None or not math.isfinite(float(path_length)):
+        return 0.0
+    if manhattan_distance is None or not math.isfinite(float(manhattan_distance)):
+        return 0.0
+    path_length_i = int(path_length)
+    manhattan_i = int(manhattan_distance)
     if path_length_i <= 0 or manhattan_i <= 0:
         return 0.0
     return float(manhattan_i) / float(max(1, path_length_i))
@@ -44,8 +48,12 @@ def confusion_ratio_vs_oracle(
     """
     if str(oracle_status) != "solved" or not bool(candidate_success):
         return float("nan")
-    oracle_len = int(oracle_path_length or 0)
-    candidate_len = int(candidate_path_length or 0)
+    if oracle_path_length is None or not math.isfinite(float(oracle_path_length)):
+        return float("inf")
+    if candidate_path_length is None or not math.isfinite(float(candidate_path_length)):
+        return float("inf")
+    oracle_len = int(oracle_path_length)
+    candidate_len = int(candidate_path_length)
     if oracle_len <= 0 or candidate_len <= 0:
         return float("nan")
     return float(candidate_len) / float(oracle_len)
@@ -68,9 +76,15 @@ def normalized_confusion_ratio(
     """
     if str(oracle_status) != "solved" or not bool(candidate_success):
         return float("nan")
-    oracle_len = int(oracle_path_length or 0)
-    candidate_len = int(candidate_path_length or 0)
-    manhattan_i = int(manhattan_distance or 0)
+    if oracle_path_length is None or not math.isfinite(float(oracle_path_length)):
+        return float("inf")
+    if candidate_path_length is None or not math.isfinite(float(candidate_path_length)):
+        return float("inf")
+    if manhattan_distance is None or not math.isfinite(float(manhattan_distance)):
+        return float("inf")
+    oracle_len = int(oracle_path_length)
+    candidate_len = int(candidate_path_length)
+    manhattan_i = int(manhattan_distance)
     if oracle_len <= 0 or candidate_len <= 0:
         return float("nan")
     denominator = max(1, oracle_len, manhattan_i)

@@ -1,4 +1,4 @@
-﻿"""
+"""
 COGNITIVE BOUNDED SEARCH (CBS) â€” Human-Like Dungeon Navigation
 ================================================================
 
@@ -741,15 +741,19 @@ class BeliefMap:
                         int(tile_id): float(prob) * effective_rate + uniform * decay_mass
                         for tile_id, prob in obs.posterior.items()
                     }
-                    self._sync_observation_from_posterior(obs)
-                # Downgrade knowledge if confidence too low
-                if decayed_confidence < 0.3:
-                    obs.knowledge = TileKnowledge.GLIMPSED
-                    obs.confidence = min(float(obs.confidence), decayed_confidence)
+                # Check forget threshold BEFORE syncing from posterior so that
+                # the decayed confidence (not the posterior floor) controls forgetting.
                 if decayed_confidence < 0.1:
                     obs.knowledge = TileKnowledge.UNKNOWN
                     obs.confidence = 0.0
                     obs.posterior = None
+                else:
+                    # Downgrade knowledge if confidence too low
+                    if decayed_confidence < 0.3:
+                        obs.knowledge = TileKnowledge.GLIMPSED
+                        obs.confidence = min(float(obs.confidence), decayed_confidence)
+                    # Only sync posterior for tiles still in memory
+                    self._sync_observation_from_posterior(obs)
             self._update_total_entropy(pos, previous_entropy)
     
     def get_unexplored_neighbors(self, position: Tuple[int, int]) -> List[Tuple[int, int]]:
@@ -1592,11 +1596,12 @@ class GoalSeekingHeuristic(DecisionHeuristic):
         target_dist = abs(target_pos[0] - remembered_goal[0]) + \
                       abs(target_pos[1] - remembered_goal[1])
         
-        # One-step absolute progress keeps goal pursuit on the same bounded
-        # [-1, 1] scale regardless of long-range distance.
+        # Normalize improvement by ~10 tiles so goal-seeking scores are on the
+        # same [0, 1] scale as CuriosityHeuristic / RecencyHeuristic and remain
+        # competitive at long range.
         if current_dist > 0:
-            improvement = current_dist - target_dist
-            return float(max(-1.0, min(1.0, improvement)))
+            improvement = min(1.0, max(0.0, current_dist - target_dist) / 10.0)
+            return float(improvement)
         return 0.0
 
 
@@ -1637,8 +1642,9 @@ class ItemSeekingHeuristic(DecisionHeuristic):
         target_dist = abs(target_pos[0] - item_pos[0]) + abs(target_pos[1] - item_pos[1])
         
         if current_dist > 0:
-            improvement = float(max(-1.0, min(1.0, current_dist - target_dist)))
-            return improvement * float(item_memory.salience)
+            # Normalize by ~10 tiles (same scale as GoalSeekingHeuristic).
+            improvement = min(1.0, max(0.0, current_dist - target_dist) / 10.0)
+            return float(improvement) * float(item_memory.salience)
         return 0.0
 
 

@@ -104,6 +104,21 @@ from src.utils.frozen_latent_cache import FrozenLatentCache
 logger = logging.getLogger(__name__)
 CARDINAL_DIRECTIONS = ("N", "S", "E", "W")
 
+# ---------------------------------------------------------------------------
+# Optional heavy-path libraries (graceful fallback when not installed)
+# ---------------------------------------------------------------------------
+try:
+    from safetensors.torch import save_file as _save_safetensors
+    _HAS_SAFETENSORS = True
+except ImportError:
+    _HAS_SAFETENSORS = False
+
+try:
+    from accelerate import Accelerator
+    _HAS_ACCELERATE = True
+except ImportError:
+    _HAS_ACCELERATE = False
+    Accelerator = None  # type: ignore[assignment,misc]
 
 # =============================================================================
 # TRAINING CONFIGURATION
@@ -1137,8 +1152,20 @@ class DiffusionTrainer:
         
         # --- Wire LogicNet into diffusion model's GradientGuidance ---
         # This enables gradient guidance during sampling: at each denoising
-        # step, âˆ‡_{x_t}L_logic nudges the sample toward solvable configs.
+        # step, ∇_{x_t}L_logic nudges the sample toward solvable configs.
         self._configure_guidance()
+
+        # --- Gradient checkpointing (reduces VRAM at cost of recompute) ---
+        if getattr(config, 'gradient_checkpointing', False):
+            if hasattr(self.model, 'enable_gradient_checkpointing'):
+                self.model.enable_gradient_checkpointing()
+            elif hasattr(self.model, 'gradient_checkpointing_enable'):
+                self.model.gradient_checkpointing_enable()
+            # For custom UNet/DiT modules, enable torch.utils.checkpoint on attention blocks
+            for module in self.model.modules():
+                if hasattr(module, 'use_checkpoint'):
+                    module.use_checkpoint = True
+            logger.info("Gradient checkpointing enabled on diffusion model.")
         
         optimizer_groups = self._adamw_decay_param_groups(
             "diffusion",
@@ -1170,6 +1197,25 @@ class DiffusionTrainer:
         )
         for group in self.optimizer.param_groups:
             group.setdefault("base_lr", float(group.get("lr", config.learning_rate)))
+
+        # --- Accelerate / AMP integration ---
+        self._accelerator: Optional[Any] = None
+        if _HAS_ACCELERATE:
+            try:
+                mixed_precision = 'fp16' if getattr(config, 'use_amp', False) else 'no'
+                self._accelerator = Accelerator(mixed_precision=mixed_precision)
+                self.model, self.optimizer, self.train_dataloader = (
+                    self._accelerator.prepare(self.model, self.optimizer, [])
+                )
+                self.diffusion = self.model
+                logger.info(
+                    "Accelerate initialized (mixed_precision=%s).", mixed_precision
+                )
+            except Exception as _acc_err:  # noqa: BLE001
+                logger.warning(
+                    "Accelerate init failed (%s); falling back to plain PyTorch.", _acc_err
+                )
+                self._accelerator = None
         
         # Scheduler
         self.scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
@@ -3042,7 +3088,10 @@ class DiffusionTrainer:
         
         # Backward
         self.optimizer.zero_grad(set_to_none=True)
-        total_loss.backward()
+        if self._accelerator is not None:
+            self._accelerator.backward(total_loss)
+        else:
+            total_loss.backward()
         modules_for_average = [self.diffusion, self.condition_encoder]
         if bool(getattr(self.config, "logic_net_trainable", True)):
             modules_for_average.append(self.logic_net)
@@ -3079,12 +3128,20 @@ class DiffusionTrainer:
             return metrics
         grad_clip_norm = float(max(0.0, float(getattr(self.config, "grad_clip_norm", 1.0))))
         if grad_clip_norm > 0:
-            grad_norms = [
-                torch.nn.utils.clip_grad_norm_(self.diffusion.parameters(), max_norm=grad_clip_norm),
-                torch.nn.utils.clip_grad_norm_(self.condition_encoder.parameters(), max_norm=grad_clip_norm),
-            ]
-            if bool(getattr(self.config, "logic_net_trainable", True)):
-                grad_norms.append(torch.nn.utils.clip_grad_norm_(self.logic_net.parameters(), max_norm=grad_clip_norm))
+            if self._accelerator is not None:
+                grad_norms = [
+                    self._accelerator.clip_grad_norm_(self.diffusion.parameters(), max_norm=grad_clip_norm),
+                    self._accelerator.clip_grad_norm_(self.condition_encoder.parameters(), max_norm=grad_clip_norm),
+                ]
+                if bool(getattr(self.config, "logic_net_trainable", True)):
+                    grad_norms.append(self._accelerator.clip_grad_norm_(self.logic_net.parameters(), max_norm=grad_clip_norm))
+            else:
+                grad_norms = [
+                    torch.nn.utils.clip_grad_norm_(self.diffusion.parameters(), max_norm=grad_clip_norm),
+                    torch.nn.utils.clip_grad_norm_(self.condition_encoder.parameters(), max_norm=grad_clip_norm),
+                ]
+                if bool(getattr(self.config, "logic_net_trainable", True)):
+                    grad_norms.append(torch.nn.utils.clip_grad_norm_(self.logic_net.parameters(), max_norm=grad_clip_norm))
             if not all(self._tensor_is_finite(norm) for norm in grad_norms):
                 self.optimizer.zero_grad(set_to_none=True)
                 self._warn_nonfinite(
@@ -3205,13 +3262,22 @@ class DiffusionTrainer:
             }
 
         self.optimizer.zero_grad(set_to_none=True)
-        loss.backward()
+        if self._accelerator is not None:
+            self._accelerator.backward(loss)
+        else:
+            loss.backward()
         grad_clip = float(getattr(self.config, "grad_clip_norm", 0.0))
         if grad_clip > 0:
-            torch.nn.utils.clip_grad_norm_(self.diffusion.parameters(), grad_clip)
-            torch.nn.utils.clip_grad_norm_(self.condition_encoder.parameters(), grad_clip)
-            if bool(getattr(self.config, "logic_net_trainable", True)):
-                torch.nn.utils.clip_grad_norm_(self.logic_net.parameters(), grad_clip)
+            if self._accelerator is not None:
+                self._accelerator.clip_grad_norm_(self.diffusion.parameters(), grad_clip)
+                self._accelerator.clip_grad_norm_(self.condition_encoder.parameters(), grad_clip)
+                if bool(getattr(self.config, "logic_net_trainable", True)):
+                    self._accelerator.clip_grad_norm_(self.logic_net.parameters(), grad_clip)
+            else:
+                torch.nn.utils.clip_grad_norm_(self.diffusion.parameters(), grad_clip)
+                torch.nn.utils.clip_grad_norm_(self.condition_encoder.parameters(), grad_clip)
+                if bool(getattr(self.config, "logic_net_trainable", True)):
+                    torch.nn.utils.clip_grad_norm_(self.logic_net.parameters(), grad_clip)
         self.optimizer.step()
         self._update_ema()
         self.global_step += 1
@@ -3659,6 +3725,18 @@ class DiffusionTrainer:
             else self._build_inference_checkpoint_payload(metrics)
         )
         atomic_torch_save(checkpoint, path)
+        # Also write a safetensors sidecar with the core model weights when available
+        if _HAS_SAFETENSORS:
+            try:
+                st_path = Path(path).with_suffix('.safetensors')
+                diffusion_state_dict = self.diffusion.state_dict()
+                _save_safetensors(
+                    {'diffusion': {k: v for k, v in diffusion_state_dict.items()}},
+                    str(st_path),
+                )
+                logger.debug("Saved safetensors sidecar: %s", st_path)
+            except Exception as _st_err:  # noqa: BLE001
+                logger.warning("safetensors save failed (%s); .pth checkpoint is intact.", _st_err)
         write_checkpoint_metadata(
             path,
             model_type="diffusion_resume" if include_optimizer else "diffusion",

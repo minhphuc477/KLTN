@@ -58,6 +58,7 @@ def _stable_node_seed_offset(node: Any) -> int:
     return stable_seed_offset(node, digest_size=4)
 
 
+@torch.no_grad()
 def generate_room_batch(
     pipeline,
     *,
@@ -122,7 +123,7 @@ def generate_room_batch(
             boundary_constraints=boundary_constraints,
             position=room_position,
         )
-        batch_conditions.append(condition)
+        batch_conditions.append(condition.detach())
         per_room_inputs.append(
             {
                 'batch_index': int(j),
@@ -200,7 +201,7 @@ def generate_room_batch(
             tensor = value.to(pipeline.device, dtype=torch.float32)
             if tensor.dim() == 3 and int(tensor.shape[0]) == 1:
                 tensor = tensor.squeeze(0)
-            current_node_distance_batch.append(tensor)
+            current_node_distance_batch.append(tensor.detach())
         if current_node_distance_batch:
             graph_ctx_for_guidance['current_node_distance'] = torch.stack(
                 current_node_distance_batch,
