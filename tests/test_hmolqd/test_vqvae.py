@@ -31,6 +31,27 @@ class TestVectorQuantizer:
         assert quantized.shape == x.shape
         assert loss.ndim == 0  # Scalar
         assert indices.shape == (2, 8, 8)
+
+    def test_quantizer_requires_explicit_layout_for_ambiguous_rank4_input(self):
+        """Inputs with both possible channel dimensions equal to embedding_dim should not be guessed."""
+        from src.core.vqvae import VectorQuantizer
+
+        quantizer = VectorQuantizer(
+            num_embeddings=16,
+            embedding_dim=8,
+        )
+        ambiguous = torch.randn(2, 8, 4, 8)
+
+        with pytest.raises(ValueError, match="Ambiguous VectorQuantizer input layout"):
+            quantizer(ambiguous)
+
+        quantized_cf, _loss_cf, indices_cf = quantizer(ambiguous, channel_first=True)
+        quantized_cl, _loss_cl, indices_cl = quantizer(ambiguous, channel_first=False)
+
+        assert quantized_cf.shape == ambiguous.shape
+        assert quantized_cl.shape == ambiguous.shape
+        assert tuple(indices_cf.shape) == (2, 4, 8)
+        assert tuple(indices_cl.shape) == (2, 8, 4)
     
     def test_quantizer_codebook_usage(self):
         """Test that codebook is being used."""

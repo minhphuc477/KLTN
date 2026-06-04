@@ -177,8 +177,7 @@ class DifferentiablePathfinder(nn.Module):
 
         2) Grid compatibility mode (room flood-fill approximation):
            - adjacency: walkability [B, H, W]
-           - edge_weights: traversal weights [B, H, W] (currently treated as
-             uniform positive costs for backward compatibility)
+           - edge_weights: traversal weights [B, H, W]
            - source_mask: source/start mask [B, H, W]
         
         Args:
@@ -194,7 +193,7 @@ class DifferentiablePathfinder(nn.Module):
 
         # Grid mode:
         #   adjacency -> walkability [B, H, W]
-        #   edge_weights -> traversal weights [B, H, W] (currently uniform)
+        #   edge_weights -> traversal weights [B, H, W]
         #   source_mask -> source/start mask [B, H, W]
         grid_mode = (
             isinstance(adjacency, torch.Tensor)
@@ -217,6 +216,7 @@ class DifferentiablePathfinder(nn.Module):
                     f"edge_weights={tuple(edge_weights.shape)}, source_mask={tuple(source_mask.shape)}."
                 )
             walkability = adjacency.float().clamp(0.0, 1.0)
+            traversal_cost = edge_weights.float().clamp_min(0.0)
             start = source_mask.float().clamp(0.0, 1.0)
             B, H, W = walkability.shape
             device = walkability.device
@@ -241,15 +241,21 @@ class DifferentiablePathfinder(nn.Module):
                 down[:, :-1, :] = dist[:, 1:, :]
                 left[:, :, 1:] = dist[:, :, :-1]
                 right[:, :, :-1] = dist[:, :, 1:]
-                candidates = torch.stack([dist, up + 1.0, down + 1.0, left + 1.0, right + 1.0], dim=0)
+                wall_cost = (1.0 - walkability).clamp(0.0, 1.0).pow(2) * float(self.wall_penalty_scale)
+                step_cost = traversal_cost + wall_cost
+                candidates = torch.stack(
+                    [
+                        dist,
+                        up + step_cost,
+                        down + step_cost,
+                        left + step_cost,
+                        right + step_cost,
+                    ],
+                    dim=0,
+                )
                 candidates = candidates.clamp(-inf, inf)
                 relaxed = soft_min(candidates, dim=0, temperature=max(self.temperature, 1e-4))
-                # Penalize non-walkable cells while preserving gradients through
-                # walkability without letting ambiguous wall logits dominate the
-                # path signal. A squared soft barrier has zero slope near fully
-                # walkable cells and bounded slope for uncertain cells.
-                wall_penalty = (1.0 - walkability).clamp(0.0, 1.0).pow(2) * float(self.wall_penalty_scale)
-                dist = relaxed.clamp(-inf, inf) + wall_penalty
+                dist = relaxed.clamp(-inf, inf)
                 # Keep start cells fixed at zero distance.
                 dist = dist * (1.0 - start) + torch.zeros_like(dist) * start
                 dist = dist.clamp(-inf, inf)
@@ -310,11 +316,17 @@ class DifferentiablePathfinder(nn.Module):
             # Soft-min over incoming edges
             new_distances = soft_min(candidates, dim=0, temperature=self.temperature)
             
-            # Keep better of current and new
-            distances = torch.minimum(distances, new_distances).clamp(
+            # Softly keep the better of current and new estimates to preserve
+            # gradients after early relaxations have already found a short path.
+            distances = soft_min(
+                torch.stack([distances, new_distances], dim=0),
+                dim=0,
+                temperature=max(self.temperature, 1e-4),
+            ).clamp(
                 -float(self.inf_distance),
                 float(self.inf_distance),
             )
+            distances = torch.where(source_mask.bool(), torch.zeros_like(distances), distances)
         
         return distances
 
@@ -2036,19 +2048,24 @@ class LogicNet(nn.Module):
             # tile_classifier if needed.
             if z.shape[1] == self.num_classes:
                 # z is already tile probs/logits — use directly
-                walkability = self.walkability(z, is_probs=None).squeeze(1)
+                tile_logits = self._project_tile_logits_to_room(z)
+                walkability = self.walkability(tile_logits, is_probs=None)
             else:
                 # z is latent codes — classify first, then lift to room size
                 tile_logits = self.tile_classifier(z)
                 tile_logits = self._project_tile_logits_to_room(tile_logits)
-                walkability = self.walkability(tile_logits, is_probs=False).squeeze(1)
-            distances = self.graph_pathfinder(walkability, start_mask, goal)
-            reach_scores = self.reachability(distances, goal)
+                walkability = self.walkability(tile_logits, is_probs=False)
+            if start_mask.dim() == 3:
+                start_mask = start_mask.unsqueeze(1)
+            if goal.dim() == 3:
+                goal = goal.unsqueeze(1)
+            distances = self.grid_pathfinder(tile_logits, start_mask, walkability)
+            reach_scores = self.reachability(distances.flatten(1), goal.flatten(1))
 
             # Add a direct goal-region walkability term to keep gradients informative
             # in compatibility mode where inputs are already categorical probabilities.
-            goal_mass = goal.sum(dim=(1, 2)).clamp_min(1e-6)
-            goal_walkability = (walkability * goal).sum(dim=(1, 2)) / goal_mass
+            goal_mass = goal.sum(dim=(1, 2, 3)).clamp_min(1e-6)
+            goal_walkability = (walkability * goal).sum(dim=(1, 2, 3)) / goal_mass
             return (reach_scores + goal_walkability) * 0.5
 
         B = z.shape[0]

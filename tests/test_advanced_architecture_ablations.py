@@ -322,6 +322,51 @@ def test_pag_uses_self_attention_perturbation_and_resets_mode():
             assert module.perturbation_mode == "none"
 
 
+def test_pag_uses_conditional_prediction_not_post_cfg_branch(monkeypatch):
+    class _FormulaProbeDenoiser(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.perturbed = False
+
+        def forward(self, _x_t, _t, context, **_kwargs):
+            if self.perturbed:
+                return torch.full((1, 2, 2, 2), 2.0)
+            if torch.count_nonzero(context).item() == 0:
+                return torch.full((1, 2, 2, 2), 10.0)
+            return torch.full((1, 2, 2, 2), 3.0)
+
+    model = create_latent_diffusion(
+        latent_dim=2,
+        model_channels=8,
+        context_dim=4,
+        num_timesteps=8,
+        cfg_dropout_prob=0.0,
+        cfg_scale=2.0,
+        pag_scale=0.5,
+        unet_channel_mult=(1,),
+        unet_num_res_blocks=1,
+        unet_attention_resolutions=(),
+        unet_num_heads=1,
+    )
+    probe = _FormulaProbeDenoiser()
+    model.denoiser = probe
+
+    def _set_perturbation(mode):
+        probe.perturbed = mode == "identity"
+        return 1
+
+    monkeypatch.setattr(model, "set_self_attention_perturbation", _set_perturbation)
+
+    out = model._predict_noise_cfg(
+        torch.zeros(1, 2, 2, 2),
+        torch.tensor([3], dtype=torch.long),
+        torch.ones(1, 4),
+    )
+
+    assert torch.allclose(out, torch.full_like(out, -3.5))
+    assert probe.perturbed is False
+
+
 def test_diffusion_training_config_exposes_flow_matching_ablation():
     resolved = merge_config(yaml_path=None, cli_overrides=None)
     kwargs = diffusion_training_kwargs_from_resolved_config(resolved)

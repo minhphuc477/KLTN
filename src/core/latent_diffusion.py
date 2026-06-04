@@ -1144,7 +1144,7 @@ class DiTBlock(nn.Module):
         ) = self.adaLN(cond).chunk(9, dim=-1)
         attn_in = self._modulate(self.norm1(x), shift_msa, scale_msa)
         if self.perturbation_mode == "identity":
-            attn_out = attn_in
+            attn_out = torch.zeros_like(attn_in)
         else:
             attn_out, _ = self.attn(attn_in, attn_in, attn_in, need_weights=False)
         x = x + torch.sigmoid(gate_msa).unsqueeze(1) * attn_out
@@ -2645,7 +2645,7 @@ class LatentDiffusionModel(nn.Module):
                     )
                 finally:
                     self.set_self_attention_perturbation("none")
-                prediction = prediction + pag_scale * (prediction - pred_perturbed)
+                prediction = prediction + pag_scale * (pred_cond - pred_perturbed)
 
         return prediction
     

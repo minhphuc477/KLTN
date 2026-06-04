@@ -10,8 +10,9 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.core.latent_diffusion import GradientGuidance
-from src.core.definitions import SEMANTIC_PALETTE
+from src.core.definitions import ROOM_HEIGHT, ROOM_WIDTH, SEMANTIC_PALETTE
 from src.core.logic_net import (
+    DifferentiablePathfinder,
     LogicNet,
     PerturbAndMAPGridPathfinder,
     SemanticEdgeEncoder,
@@ -108,6 +109,69 @@ def test_logicnet_temperature_updates_grid_pathfinder():
 
     assert logic_net.graph_pathfinder.temperature == pytest.approx(0.1)
     assert logic_net.grid_pathfinder.pathfinder.temperature == pytest.approx(0.1)
+
+
+def test_differentiable_pathfinder_grid_uses_edge_weights():
+    pathfinder = DifferentiablePathfinder(num_iterations=8, temperature=0.05, inf_distance=20.0)
+    walkability = torch.ones(1, 3, 4)
+    source = torch.zeros(1, 3, 4)
+    source[:, 1, 0] = 1.0
+    unit_cost = torch.ones_like(walkability)
+    high_cost = unit_cost.clone()
+    high_cost[:, 1, 1] = 8.0
+
+    distances_unit = pathfinder(walkability, unit_cost, source)
+    distances_high = pathfinder(walkability, high_cost, source)
+
+    assert distances_high[0, 1, 1] > distances_unit[0, 1, 1] + 1.0
+
+
+def test_differentiable_pathfinder_graph_soft_update_keeps_edge_weight_gradients():
+    pathfinder = DifferentiablePathfinder(num_iterations=3, temperature=0.5, inf_distance=20.0)
+    adjacency = torch.tensor(
+        [
+            [0.0, 1.0, 1.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 0.0],
+        ]
+    )
+    edge_weights = torch.tensor(
+        [
+            [0.0, 1.0, 4.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 0.0],
+        ],
+        requires_grad=True,
+    )
+    source = torch.tensor([1.0, 0.0, 0.0])
+
+    distances = pathfinder(adjacency, edge_weights, source)
+    distances[2].backward()
+
+    assert edge_weights.grad is not None
+    assert torch.isfinite(edge_weights.grad).all()
+    assert float(edge_weights.grad[0, 2].abs().item()) > 0.0
+
+
+def test_logicnet_compatibility_mode_routes_through_grid_pathfinder(monkeypatch):
+    logic_net = LogicNet(latent_dim=4, num_tile_classes=5)
+
+    def _fail_graph_pathfinder(*_args, **_kwargs):
+        raise AssertionError("compatibility mode should not call graph_pathfinder")
+
+    monkeypatch.setattr(logic_net.graph_pathfinder, "forward", _fail_graph_pathfinder)
+
+    tile_logits = torch.zeros(1, 5, ROOM_HEIGHT, ROOM_WIDTH)
+    tile_logits[:, 1] = 8.0
+    start = torch.zeros(1, ROOM_HEIGHT, ROOM_WIDTH)
+    start[:, 0, 0] = 1.0
+    goal = torch.zeros(1, ROOM_HEIGHT, ROOM_WIDTH)
+    goal[:, ROOM_HEIGHT - 1, ROOM_WIDTH - 1] = 1.0
+
+    scores = logic_net(tile_logits, start, goal)
+
+    assert tuple(scores.shape) == (1,)
+    assert torch.isfinite(scores).all()
 
 
 def test_logicnet_without_topology_uses_single_cell_source_not_all_doors():

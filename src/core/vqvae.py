@@ -160,12 +160,16 @@ class VectorQuantizer(nn.Module):
         self,
         z_e: Tensor,
         return_info: bool = False,
+        channel_first: Optional[bool] = None,
     ) -> Tuple[Tensor, Tensor, Tensor] | Tuple[Tensor, Tensor, Dict[str, Tensor]]:
         """
         Quantize continuous latents to discrete codebook entries.
         
         Args:
             z_e: Encoder output [B, D, H, W] or [B, H, W, D]
+            channel_first: Explicitly declare layout for ambiguous rank-4
+                tensors. When omitted, layout is inferred and ambiguous tensors
+                with both channel positions equal to embedding_dim are rejected.
             
         Returns:
             If return_info=False (default):
@@ -177,13 +181,39 @@ class VectorQuantizer(nn.Module):
                 indices: Codebook indices [B, H, W]
                 losses: Dict with 'vq_loss', 'commitment_loss', 'perplexity'
         """
-        # Handle both channel-first and channel-last
-        if z_e.dim() == 4 and z_e.shape[1] == self.embedding_dim:
+        if z_e.dim() != 4:
+            raise ValueError(f"VectorQuantizer expected rank-4 input [B,D,H,W] or [B,H,W,D], got {tuple(z_e.shape)}.")
+        first_is_embedding = int(z_e.shape[1]) == int(self.embedding_dim)
+        last_is_embedding = int(z_e.shape[-1]) == int(self.embedding_dim)
+        if channel_first is None:
+            if first_is_embedding and last_is_embedding:
+                raise ValueError(
+                    "Ambiguous VectorQuantizer input layout: both channel dimension and last dimension "
+                    f"equal embedding_dim={self.embedding_dim}. Pass channel_first=True or False explicitly."
+                )
+            if not first_is_embedding and not last_is_embedding:
+                raise ValueError(
+                    "VectorQuantizer input must be [B,D,H,W] or [B,H,W,D] with D=embedding_dim; "
+                    f"got shape={tuple(z_e.shape)} and embedding_dim={self.embedding_dim}."
+                )
+            channel_first = first_is_embedding
+        else:
+            channel_first = bool(channel_first)
+            if channel_first and not first_is_embedding:
+                raise ValueError(
+                    f"channel_first=True requires z_e.shape[1] == embedding_dim={self.embedding_dim}, "
+                    f"got shape={tuple(z_e.shape)}."
+                )
+            if not channel_first and not last_is_embedding:
+                raise ValueError(
+                    f"channel_first=False requires z_e.shape[-1] == embedding_dim={self.embedding_dim}, "
+                    f"got shape={tuple(z_e.shape)}."
+                )
+
+        # Handle both channel-first and channel-last.
+        if channel_first:
             # [B, D, H, W] -> [B, H, W, D]
             z_e = z_e.permute(0, 2, 3, 1).contiguous()
-            channel_first = True
-        else:
-            channel_first = False
         
         B, H, W, D = z_e.shape
         
