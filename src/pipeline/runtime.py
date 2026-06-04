@@ -91,6 +91,8 @@ def _initialize_pipeline_from_flat_kwargs(
     fast_sampling_steps: int = 4,
     default_guidance_scale: float = 3.0,
     default_logic_guidance_scale: float = 0.0,
+    default_logic_guidance_strategy: str = "late",
+    default_logic_guidance_active_fraction: float = 0.2,
     default_num_diffusion_steps: int = 50,
     default_use_fast_sampling: bool = False,
     default_latent_sampler: str = "diffusion",
@@ -196,6 +198,15 @@ def _initialize_pipeline_from_flat_kwargs(
     pipeline.fast_sampling_steps = int(max(1, int(fast_sampling_steps)))
     pipeline.default_guidance_scale = float(max(0.0, float(default_guidance_scale)))
     pipeline.default_logic_guidance_scale = float(max(0.0, float(default_logic_guidance_scale)))
+    pipeline.default_logic_guidance_strategy = str(default_logic_guidance_strategy or "late").strip().lower()
+    if pipeline.default_logic_guidance_strategy not in {"none", "late", "full"}:
+        raise ValueError(
+            "default_logic_guidance_strategy must be 'none', 'late', or 'full', "
+            f"got {default_logic_guidance_strategy!r}."
+        )
+    pipeline.default_logic_guidance_active_fraction = float(
+        max(0.05, min(1.0, float(default_logic_guidance_active_fraction)))
+    )
     pipeline.default_num_diffusion_steps = int(max(1, int(default_num_diffusion_steps)))
     pipeline.default_use_fast_sampling = bool(default_use_fast_sampling)
     pipeline.default_latent_sampler = str(default_latent_sampler or "diffusion").strip().lower()

@@ -57,6 +57,8 @@ class SamplerConfig:
     room_generator_mode: str = "latent_diffusion"
     default_guidance_scale: float = 3.0
     default_logic_guidance_scale: float = 0.0
+    default_logic_guidance_strategy: str = "late"
+    default_logic_guidance_active_fraction: float = 0.2
     default_num_diffusion_steps: int = 50
     default_use_fast_sampling: bool = False
     default_latent_sampler: str = "diffusion"

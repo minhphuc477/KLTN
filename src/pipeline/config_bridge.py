@@ -51,6 +51,8 @@ def generation_runtime_kwargs_from_resolved_config(config: Dict[str, Any]) -> Di
     return {
         "default_guidance_scale": stage.get("guidance_scale", 3.0),
         "default_logic_guidance_scale": stage.get("logic_guidance_scale", 0.0),
+        "default_logic_guidance_strategy": stage.get("logic_guidance_strategy", "late"),
+        "default_logic_guidance_active_fraction": stage.get("logic_guidance_active_fraction", 0.2),
         "default_num_diffusion_steps": stage.get("num_diffusion_steps", 50),
         "default_use_fast_sampling": stage.get("use_fast_sampling", False),
         "default_latent_sampler": stage.get("latent_sampler", "diffusion"),

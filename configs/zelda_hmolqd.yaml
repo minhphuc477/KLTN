@@ -205,6 +205,8 @@ topology:
 generation:
   guidance_scale: 3.0  # type=float, default=3.0, valid>=0; align runtime CFG with the trained diffusion teacher
   logic_guidance_scale: 0.0  # type=float, default=0.0, valid>=0; keep extra LogicNet gradient guidance opt-in at runtime
+  logic_guidance_strategy: late  # type=str, default=late, valid={none,late,full}; late=final reverse steps only, full=full-trajectory DPPS ablation
+  logic_guidance_active_fraction: 0.2  # type=float, default=0.2, valid=0.05..1.0; active reverse-process fraction for late LogicNet guidance
   num_diffusion_steps: 50  # type=int, default=50, valid>=1
   use_fast_sampling: false  # type=bool, default=false, valid={true,false}
   latent_sampler: diffusion  # type=str, default=diffusion, valid={diffusion,categorical}

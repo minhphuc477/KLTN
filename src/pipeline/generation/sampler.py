@@ -24,6 +24,35 @@ logger = logging.getLogger(__name__)
 DEFAULT_ROOM_LATENT_HW: Tuple[int, int] = canonical_latent_shape((ROOM_HEIGHT, ROOM_WIDTH))
 
 
+def _configure_runtime_logic_guidance(pipeline, logic_guidance_scale: float) -> float:
+    """Apply explicit runtime LogicNet guidance strategy to the diffusion model."""
+    strategy = str(getattr(pipeline, "default_logic_guidance_strategy", "late") or "late").strip().lower()
+    if strategy not in {"none", "late", "full"}:
+        raise ValueError(f"default_logic_guidance_strategy must be 'none', 'late', or 'full', got {strategy!r}.")
+
+    effective_scale = max(0.0, float(logic_guidance_scale))
+    guidance = getattr(getattr(pipeline, "diffusion", None), "guidance", None)
+    if guidance is None:
+        return 0.0
+    if strategy == "none" or effective_scale <= 0.0 or getattr(pipeline, "logic_net", None) is None:
+        guidance.logic_net = None
+        guidance.guidance_scale = 0.0
+        return 0.0
+
+    guidance.logic_net = pipeline.logic_net
+    guidance.guidance_scale = effective_scale
+    guidance.schedule_enabled = True
+    if strategy == "full":
+        guidance.active_fraction = 1.0
+        pipeline._bump_diagnostic("logic_guidance_full_dpps_used")
+    else:
+        guidance.active_fraction = float(
+            max(0.05, min(1.0, float(getattr(pipeline, "default_logic_guidance_active_fraction", 0.2))))
+        )
+        pipeline._bump_diagnostic("logic_guidance_late_dpps_used")
+    return effective_scale
+
+
 def _stable_node_seed_offset(node: Any) -> int:
     """Deterministic integer seed offset for arbitrary node-id types."""
     return stable_seed_offset(node, digest_size=4)
@@ -210,8 +239,7 @@ def generate_room_batch(
             logic_guidance_scale=float(logic_guidance_scale),
         )
         pipeline.diffusion.cfg_scale = float(guidance_scale)
-        pipeline.diffusion.guidance.logic_net = pipeline.logic_net if logic_guidance_scale > 0 else None
-        pipeline.diffusion.guidance.guidance_scale = max(0.0, float(logic_guidance_scale))
+        logic_guidance_scale = _configure_runtime_logic_guidance(pipeline, logic_guidance_scale)
         if hasattr(pipeline.vqvae, "codebook_size"):
             num_embeddings = int(getattr(pipeline.vqvae, "codebook_size"))
         else:
@@ -251,8 +279,7 @@ def generate_room_batch(
             logic_guidance_scale=float(logic_guidance_scale),
         )
         pipeline.diffusion.cfg_scale = float(guidance_scale)
-        pipeline.diffusion.guidance.logic_net = pipeline.logic_net if logic_guidance_scale > 0 else None
-        pipeline.diffusion.guidance.guidance_scale = max(0.0, float(logic_guidance_scale))
+        logic_guidance_scale = _configure_runtime_logic_guidance(pipeline, logic_guidance_scale)
 
         B = len(room_ids)
         if latent_shape_chw is None:
@@ -580,8 +607,7 @@ def generate_room(
             logic_guidance_scale=float(logic_guidance_scale),
         )
         pipeline.diffusion.cfg_scale = float(guidance_scale)
-        pipeline.diffusion.guidance.logic_net = pipeline.logic_net if logic_guidance_scale > 0 else None
-        pipeline.diffusion.guidance.guidance_scale = max(0.0, float(logic_guidance_scale))
+        logic_guidance_scale = _configure_runtime_logic_guidance(pipeline, logic_guidance_scale)
 
         # Infer latent shape from neighbors when possible, otherwise use VQ-VAE spatial downsampling (x4).
         latent_shape = (

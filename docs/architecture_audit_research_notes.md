@@ -160,6 +160,13 @@ ablation ladder pass. Current implementation status:
   LogicNet guidance, full-trajectory LogicNet guidance, and any retrained
   CFG/DFM variant. Report solvability, hard constraint violations,
   distribution distance, and seconds per room separately.
+- Runtime ablation configs now exist for both LogicNet guidance windows:
+  `configs/ablation_inference_guidance_only.yaml` sets
+  `generation.logic_guidance_strategy: late` with a `0.2` reverse-process
+  active fraction, while `configs/ablation_inference_guidance_full_dpps.yaml`
+  sets `generation.logic_guidance_strategy: full`. Use the full variant only
+  as a stress ablation because the noisy-gradient probe showed high-noise
+  relative-gradient explosion.
 
 ## Current Verification Ledger
 
@@ -198,6 +205,8 @@ Latest targeted additions:
 - `python scripts/gradient_probe.py --noise-levels 0,0.5,1.0 --samples-per-level 1 --num-iterations 2 --device cpu`
   completed and emitted JSON probe statistics plus a late-stage guidance
   recommendation.
+- `python -m pytest tests/test_config_system.py tests/test_runtime_logic_guidance_strategy.py tests/test_noisy_logicnet_gradients.py -q`
+  passed with 39 tests.
 
 ## Required Reporting Discipline
 

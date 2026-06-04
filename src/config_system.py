@@ -287,6 +287,8 @@ CONFIG_FIELDS: List[ConfigField] = [
     ConfigField("topology.allow_candidate_repairs", bool, False, "Attempt local repairs when topology generation constraints fail."),
     ConfigField("generation.guidance_scale", float, 3.0, "Default classifier-free guidance scale for runtime generation; matches the distilled/validated teacher regime.", min_value=0.0),
     ConfigField("generation.logic_guidance_scale", float, 0.0, "Default LogicNet guidance scale for runtime generation; extra gradient guidance is opt-in.", min_value=0.0),
+    ConfigField("generation.logic_guidance_strategy", str, "late", "Runtime LogicNet gradient guidance window.", choices=("none", "late", "full")),
+    ConfigField("generation.logic_guidance_active_fraction", float, 0.2, "Reverse-process fraction used when generation.logic_guidance_strategy='late'.", min_value=0.05, max_value=1.0),
     ConfigField("generation.num_diffusion_steps", int, 50, "Default diffusion or masked-token sampling steps for runtime generation.", min_value=1),
     ConfigField("generation.use_fast_sampling", bool, False, "Prefer fast-sampler inference when available during runtime generation."),
     ConfigField("generation.latent_sampler", str, "diffusion", "Default latent sampling backend for runtime generation.", choices=("diffusion", "categorical")),

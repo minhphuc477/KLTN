@@ -1,0 +1,18 @@
+# Full-trajectory LogicNet guidance ablation.
+# This is intentionally separate from the late-stage ablation because noisy
+# LogicNet gradients can dominate early reverse-diffusion states.
+training:
+  stage: diffusion
+
+diffusion:
+  logic_net_enabled: true
+  logic_net_trainable: false
+  alpha_logic: 0.0
+  alpha_logic_tile: 0.0
+  alpha_wfc_pseudo: 0.0
+  guidance_scale: 1.0
+
+generation:
+  logic_guidance_scale: 1.0
+  logic_guidance_strategy: full
+  logic_guidance_active_fraction: 1.0

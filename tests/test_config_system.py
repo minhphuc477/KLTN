@@ -332,6 +332,13 @@ def test_paper_ablation_configs_validate_and_set_expected_switches():
     assert guidance_only["diffusion"]["alpha_logic"] == pytest.approx(0.0)
     assert guidance_only["diffusion"]["alpha_logic_tile"] == pytest.approx(0.0)
     assert guidance_only["generation"]["logic_guidance_scale"] == pytest.approx(1.0)
+    assert guidance_only["generation"]["logic_guidance_strategy"] == "late"
+    assert guidance_only["generation"]["logic_guidance_active_fraction"] == pytest.approx(0.2)
+
+    full_dpps = merge_config(yaml_path="configs/ablation_inference_guidance_full_dpps.yaml", cli_overrides=None)
+    assert full_dpps["generation"]["logic_guidance_scale"] == pytest.approx(1.0)
+    assert full_dpps["generation"]["logic_guidance_strategy"] == "full"
+    assert full_dpps["generation"]["logic_guidance_active_fraction"] == pytest.approx(1.0)
 
     no_fsq = merge_config(yaml_path="configs/ablation_no_fsq.yaml", cli_overrides=None)
     assert no_fsq["vqvae"]["architecture"] == "vqvae"
@@ -396,6 +403,8 @@ def test_stage_helpers_forward_checkpoint_retention_and_resume_defaults():
     pipeline_kwargs = pipeline_kwargs_from_resolved_config(resolved)
     assert generation_kwargs["default_guidance_scale"] == pytest.approx(3.0)
     assert generation_kwargs["default_logic_guidance_scale"] == pytest.approx(0.0)
+    assert generation_kwargs["default_logic_guidance_strategy"] == "late"
+    assert generation_kwargs["default_logic_guidance_active_fraction"] == pytest.approx(0.2)
     assert generation_kwargs["default_num_diffusion_steps"] == 50
     assert generation_kwargs["default_use_neural_guided_repair"] is True
     assert generation_kwargs["symbolic_max_repair_attempts"] == 5

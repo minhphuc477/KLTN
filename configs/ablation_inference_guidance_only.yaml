@@ -14,3 +14,5 @@ diffusion:
 
 generation:
   logic_guidance_scale: 1.0
+  logic_guidance_strategy: late
+  logic_guidance_active_fraction: 0.2
