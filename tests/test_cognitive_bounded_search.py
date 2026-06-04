@@ -230,6 +230,39 @@ class TestBeliefMap:
 
         assert belief.get_confidence((5, 5)) == pytest.approx(1.0)
         assert belief.get_knowledge_state((5, 5)) == TileKnowledge.EXPLORED
+
+    def test_bayes_update_tracks_categorical_posterior(self):
+        """Bayesian belief must retain mass over tile classes, not only current/not-current."""
+        belief = BeliefMap(grid_shape=(10, 10))
+        floor = SEMANTIC_PALETTE['FLOOR']
+        wall = SEMANTIC_PALETTE['WALL']
+
+        belief.bayes_update((4, 4), floor, current_step=0, obs_accuracy=0.9)
+
+        obs = belief.known_tiles[(4, 4)]
+        assert obs.posterior is not None
+        assert sum(obs.posterior.values()) == pytest.approx(1.0)
+        assert obs.posterior[floor] == pytest.approx(0.9, rel=1e-6)
+        assert obs.posterior[wall] > 0.0
+        assert obs.posterior[wall] < obs.posterior[floor]
+
+    def test_repeated_contradictory_observations_switch_map_tile(self):
+        """A categorical posterior should require accumulated contradictory evidence to change MAP."""
+        belief = BeliefMap(grid_shape=(10, 10))
+        floor = SEMANTIC_PALETTE['FLOOR']
+        wall = SEMANTIC_PALETTE['WALL']
+
+        for step in range(3):
+            belief.bayes_update((4, 4), floor, current_step=step, obs_accuracy=0.9)
+        assert belief.get_tile((4, 4)) == floor
+
+        for step in range(3, 7):
+            belief.bayes_update((4, 4), wall, current_step=step, obs_accuracy=0.9)
+
+        assert belief.get_tile((4, 4)) == wall
+        obs = belief.known_tiles[(4, 4)]
+        assert obs.posterior is not None
+        assert obs.posterior[wall] > obs.posterior[floor]
     
     def test_confusion_index(self):
         """Test confusion index calculation."""

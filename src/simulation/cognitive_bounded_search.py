@@ -303,12 +303,14 @@ class TileObservation:
     Attributes:
         tile_type: The semantic ID of the tile (or best guess)
         confidence: Probability that tile_type is correct [0.0, 1.0]
+        posterior: Optional categorical posterior P(tile_type=k | observations)
         last_seen: Timestep when this tile was last observed
         knowledge: Categorical knowledge state
         visited: Whether the agent has physically stepped on this tile
     """
     tile_type: int
     confidence: float = 0.0
+    posterior: Optional[Dict[int, float]] = None
     last_seen: int = -1
     knowledge: TileKnowledge = TileKnowledge.UNKNOWN
     visited: bool = False
@@ -378,6 +380,7 @@ class BeliefMap:
         
         # Core storage: position -> TileObservation
         self.known_tiles: Dict[Tuple[int, int], TileObservation] = {}
+        self.tile_vocabulary: List[int] = sorted({int(v) for v in SEMANTIC_PALETTE.values()})
         self._unknown_entropy = 1.0
         self._total_entropy = float(self.height * self.width) * self._unknown_entropy
         
@@ -405,12 +408,80 @@ class BeliefMap:
         conf = min(1.0 - eps, max(eps, float(confidence)))
         return float(-conf * math.log2(conf) - (1 - conf) * math.log2(1 - conf))
 
+    def _normalize_posterior(self, posterior: Dict[int, float]) -> Dict[int, float]:
+        """Normalize a sparse categorical posterior over semantic tile IDs."""
+        cleaned = {int(k): max(0.0, float(v)) for k, v in posterior.items()}
+        for tile_id in self.tile_vocabulary:
+            cleaned.setdefault(int(tile_id), 0.0)
+        total = sum(cleaned.values())
+        if total <= 0.0:
+            uniform = 1.0 / max(1, len(self.tile_vocabulary))
+            return {int(tile_id): uniform for tile_id in self.tile_vocabulary}
+        return {int(k): float(v) / total for k, v in cleaned.items()}
+
+    def _posterior_from_observation(
+        self,
+        observed_tile: int,
+        obs_accuracy: float,
+        *,
+        is_visit: bool,
+        prior: Optional[Dict[int, float]] = None,
+    ) -> Dict[int, float]:
+        """
+        Categorical Bayes update:
+            p'(z=k) proportional to p(o | z=k) p(z=k)
+
+        False-positive probability is distributed across all non-observed
+        tile classes instead of collapsed into one "not current tile" bucket.
+        """
+        observed_tile = int(observed_tile)
+        if observed_tile not in self.tile_vocabulary:
+            self.tile_vocabulary.append(observed_tile)
+            self.tile_vocabulary.sort()
+        if is_visit:
+            return {int(tile_id): 1.0 if int(tile_id) == observed_tile else 0.0 for tile_id in self.tile_vocabulary}
+
+        accuracy = min(1.0, max(1e-6, float(obs_accuracy)))
+        vocab_size = max(1, len(self.tile_vocabulary))
+        if prior is None:
+            base = 1.0 / float(vocab_size)
+            prior = {int(tile_id): base for tile_id in self.tile_vocabulary}
+        else:
+            prior = self._normalize_posterior(prior)
+
+        false_likelihood = (1.0 - accuracy) / float(max(1, vocab_size - 1))
+        updated = {}
+        for tile_id in self.tile_vocabulary:
+            likelihood = accuracy if int(tile_id) == observed_tile else false_likelihood
+            updated[int(tile_id)] = likelihood * float(prior.get(int(tile_id), 0.0))
+        return self._normalize_posterior(updated)
+
+    def _sync_observation_from_posterior(self, obs: TileObservation) -> None:
+        """Refresh MAP tile/confidence fields from a categorical posterior."""
+        if not obs.posterior:
+            return
+        obs.posterior = self._normalize_posterior(obs.posterior)
+        obs.tile_type, obs.confidence = max(obs.posterior.items(), key=lambda item: item[1])
+        obs.tile_type = int(obs.tile_type)
+        obs.confidence = float(min(1.0, max(0.0, obs.confidence)))
+
+    def _entropy_from_posterior(self, posterior: Optional[Dict[int, float]]) -> float:
+        """Normalized Shannon entropy in [0, 1] for categorical tile belief."""
+        if not posterior:
+            return self._unknown_entropy
+        probs = [max(0.0, float(p)) for p in self._normalize_posterior(posterior).values()]
+        entropy = -sum(p * math.log2(p) for p in probs if p > 0.0)
+        max_entropy = math.log2(max(2, len(probs)))
+        return float(min(1.0, max(0.0, entropy / max_entropy)))
+
     def _entropy_for_position(self, position: Tuple[int, int]) -> float:
         if not self._in_bounds(position):
             return 0.0
         obs = self.known_tiles.get(position)
         if obs is None or obs.knowledge == TileKnowledge.UNKNOWN:
             return self._unknown_entropy
+        if obs.posterior:
+            return self._entropy_from_posterior(obs.posterior)
         return self._entropy_from_confidence(obs.confidence)
 
     def _update_total_entropy(self, position: Tuple[int, int], previous_entropy: float) -> None:
@@ -444,6 +515,13 @@ class BeliefMap:
             # Update observation
             obs.tile_type = tile_type
             obs.confidence = 1.0 if is_visit else max(obs.confidence, 0.8)
+            obs.posterior = self._posterior_from_observation(
+                tile_type,
+                1.0 if is_visit else max(obs.confidence, 0.8),
+                is_visit=is_visit,
+                prior=obs.posterior,
+            )
+            self._sync_observation_from_posterior(obs)
             obs.last_seen = current_step
             obs.knowledge = TileKnowledge.EXPLORED if is_visit else TileKnowledge.OBSERVED
             
@@ -455,6 +533,11 @@ class BeliefMap:
             self.known_tiles[position] = TileObservation(
                 tile_type=tile_type,
                 confidence=1.0 if is_visit else 0.8,
+                posterior=self._posterior_from_observation(
+                    tile_type,
+                    1.0 if is_visit else 0.8,
+                    is_visit=is_visit,
+                ),
                 last_seen=current_step,
                 knowledge=TileKnowledge.EXPLORED if is_visit else TileKnowledge.OBSERVED,
                 visited=is_visit
@@ -485,53 +568,45 @@ class BeliefMap:
         is_visit: bool = False
     ) -> None:
         """
-        Perform a simple Bayesian update for a tile observation.
+        Perform a categorical Bayesian update for a tile observation.
 
         This maintains `tile_type` as the MAP estimate and `confidence`
-        as P(tile==tile_type). When a new observation arrives we update
-        confidence using likelihoods P(obs|true).
+        as P(tile==tile_type). Internally it keeps the full categorical
+        posterior over semantic tile IDs instead of collapsing alternatives
+        into a single "not current tile" bucket.
         """
         previous_entropy = self._entropy_for_position(position)
 
         # If we've seen this position before, update posterior
         if position in self.known_tiles:
             obs = self.known_tiles[position]
-
-            # Prior: probability that currently-believed type is correct
-            prior = obs.confidence
-
-            # If observed matches current belief, likelihood = obs_accuracy
-            if observed_tile == obs.tile_type:
-                likelihood = obs_accuracy
-                false_likelihood = 1.0 - obs_accuracy
-                posterior = (likelihood * prior) / (likelihood * prior + false_likelihood * (1 - prior) + 1e-9)
-                obs.confidence = min(1.0, max(0.0, posterior))
-                obs.last_seen = current_step
-                obs.knowledge = TileKnowledge.EXPLORED if is_visit else TileKnowledge.OBSERVED
-                if is_visit:
-                    obs.visited = True
-                    self.unique_visits.add(position)
-            else:
-                # If observation disagrees, compute probability that observed is true
-                # Treat prior for observed as (1 - prior)
-                prior_obs = 1.0 - prior
-                likelihood = obs_accuracy
-                false_likelihood = 1.0 - obs_accuracy
-                posterior_obs = (likelihood * prior_obs) / (likelihood * prior_obs + false_likelihood * (1 - prior_obs) + 1e-9)
-
-                # Update stored belief to observed tile with its posterior
-                obs.tile_type = observed_tile
-                obs.confidence = min(1.0, max(0.0, posterior_obs))
-                obs.last_seen = current_step
-                obs.knowledge = TileKnowledge.EXPLORED if is_visit else TileKnowledge.OBSERVED
-                obs.visited = obs.visited or is_visit
-                if is_visit:
-                    self.unique_visits.add(position)
+            obs.posterior = self._posterior_from_observation(
+                observed_tile,
+                obs_accuracy,
+                is_visit=is_visit,
+                prior=obs.posterior,
+            )
+            self._sync_observation_from_posterior(obs)
+            obs.last_seen = current_step
+            obs.knowledge = TileKnowledge.EXPLORED if is_visit else TileKnowledge.OBSERVED
+            obs.visited = obs.visited or is_visit
+            if is_visit:
+                obs.confidence = 1.0
+                obs.posterior = self._posterior_from_observation(observed_tile, 1.0, is_visit=True)
+                self._sync_observation_from_posterior(obs)
+                self.unique_visits.add(position)
         else:
             # New observation: initialize with observation accuracy
+            posterior = self._posterior_from_observation(
+                observed_tile,
+                obs_accuracy,
+                is_visit=is_visit,
+            )
+            map_tile, map_confidence = max(posterior.items(), key=lambda item: item[1])
             self.known_tiles[position] = TileObservation(
-                tile_type=observed_tile,
-                confidence=1.0 if is_visit else obs_accuracy,
+                tile_type=int(map_tile),
+                confidence=1.0 if is_visit else float(map_confidence),
+                posterior=posterior,
                 last_seen=current_step,
                 knowledge=TileKnowledge.EXPLORED if is_visit else TileKnowledge.OBSERVED,
                 visited=is_visit,
@@ -642,6 +717,7 @@ class BeliefMap:
             previous_entropy = self._entropy_for_position(pos)
             if obs.visited or obs.knowledge == TileKnowledge.EXPLORED:
                 obs.confidence = 1.0
+                obs.posterior = self._posterior_from_observation(obs.tile_type, 1.0, is_visit=True)
                 obs.knowledge = TileKnowledge.EXPLORED
                 obs.visited = True
             elif obs.confidence > 0:
@@ -651,6 +727,14 @@ class BeliefMap:
                 elif obs.knowledge == TileKnowledge.GLIMPSED:
                     effective_rate = rate * rate
                 obs.confidence *= effective_rate
+                if obs.posterior:
+                    uniform = 1.0 / float(max(1, len(self.tile_vocabulary)))
+                    decay_mass = 1.0 - effective_rate
+                    obs.posterior = {
+                        int(tile_id): float(prob) * effective_rate + uniform * decay_mass
+                        for tile_id, prob in obs.posterior.items()
+                    }
+                    self._sync_observation_from_posterior(obs)
                 # Downgrade knowledge if confidence too low
                 if obs.confidence < 0.3:
                     obs.knowledge = TileKnowledge.GLIMPSED
@@ -744,6 +828,8 @@ class BeliefMap:
         # Unknown tiles should carry high uncertainty, not zero.
         if obs is None or obs.knowledge == TileKnowledge.UNKNOWN:
             conf = 0.5
+        elif obs.posterior:
+            return self._entropy_from_posterior(obs.posterior)
         else:
             conf = float(obs.confidence)
 

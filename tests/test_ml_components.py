@@ -119,6 +119,38 @@ class TestTortuosityLoss:
 
         assert first_helpers[0] is second_helpers[0]
         assert first_helpers[1] is second_helpers[1]
+
+    def test_legacy_soft_bellman_ford_uses_distance_relaxation_and_walls(self):
+        """The legacy compatibility path must not saturate through solid walls."""
+        from src.ml.logic_net import SoftBellmanFord
+
+        pathfinder = SoftBellmanFord(num_iterations=8, temperature=0.5, wall_penalty=20.0)
+        open_map = torch.ones(1, 1, 5, 5)
+        blocked_map = open_map.clone()
+        blocked_map[:, :, :, 2] = 0.0
+
+        start = [(2, 0)]
+        goal = [(2, 4)]
+
+        open_score = pathfinder(open_map, start, goal)
+        blocked_score = pathfinder(blocked_map, start, goal)
+
+        assert open_score.item() > 0.9
+        assert blocked_score.item() < 0.1
+
+    def test_legacy_soft_bellman_ford_backpropagates_to_walkability(self):
+        """Soft distance relaxation should keep a useful gradient to walkability probabilities."""
+        from src.ml.logic_net import SoftBellmanFord
+
+        pathfinder = SoftBellmanFord(num_iterations=8, temperature=1.0, wall_penalty=5.0)
+        prob_map = torch.full((1, 1, 5, 5), 0.8, requires_grad=True)
+
+        score = pathfinder(prob_map, [(2, 0)], [(2, 4)]).mean()
+        score.backward()
+
+        assert prob_map.grad is not None
+        assert torch.isfinite(prob_map.grad).all()
+        assert prob_map.grad.abs().sum().item() > 0.0
     
     def test_straight_path_penalty(self):
         """Test that straight paths get penalized."""

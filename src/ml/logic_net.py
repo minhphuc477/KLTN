@@ -61,28 +61,30 @@ class SoftBellmanFord(nn.Module):
     """
     Soft-Bellman-Ford value iteration for differentiable reachability.
     
-    This module propagates "reachability" values through a grid based on
-    walkability probabilities, providing a differentiable approximation
-    of whether a goal is reachable from a start position.
+    This module relaxes differentiable shortest-path distances through a
+    grid based on walkability probabilities, then maps the goal distance
+    to a solvability score.
     
     NOTE ON FORMULATION:
     --------------------
+    The executable path below follows distance relaxation directly. Older
+    revisions used reachability mass flow, which saturated through multiple
+    paths and was not Bellman-Ford under soft or binary walkability.
+
     The classic Soft Bellman-Ford uses log-sum-exp for softmin:
         d[v] = softmin_{u ∈ neighbors(v)} (d[u] + w(u,v))
         where softmin(x) = -τ * log(Σ exp(-x/τ))
     
-    This implementation uses an equivalent REACHABILITY formulation that is
-    more numerically stable for grid propagation:
+    Historical non-Bellman-Ford formulation removed from the executable path:
         R[v] = clamp(R[v] + Σ R[neighbors] * P[v], 0, 1)
     
-    The reachability formulation computes the probability of reaching
-    a cell from the start, which is equivalent to computing shortest
-    paths when P is binary (0/1 walkability).
+    The implementation below now uses the distance relaxation above.
     
     Args:
         num_iterations: Number of propagation iterations (higher = longer paths)
         connectivity: 4 for cardinal directions, 8 for including diagonals
         temperature: Softmax temperature for soft-max pooling (lower = sharper)
+        wall_penalty: Added traversal cost for non-walkable cells
     """
     
     def __init__(
@@ -90,11 +92,13 @@ class SoftBellmanFord(nn.Module):
         num_iterations: int = 20,
         connectivity: int = 4,
         temperature: float = 1.0,
+        wall_penalty: float = 20.0,
     ):
         super().__init__()
-        self.num_iterations = num_iterations
-        self.connectivity = connectivity
-        self.temperature = temperature
+        self.num_iterations = int(max(1, num_iterations))
+        self.connectivity = int(connectivity)
+        self.temperature = float(max(1e-4, temperature))
+        self.wall_penalty = float(max(1.0, wall_penalty))
         
         # Create convolution kernel for neighbor aggregation
         if connectivity == 4:
@@ -117,6 +121,80 @@ class SoftBellmanFord(nn.Module):
             'kernel',
             kernel.unsqueeze(0).unsqueeze(0)  # (1, 1, 3, 3)
         )
+
+    def _start_mask(
+        self,
+        batch_size: int,
+        height: int,
+        width: int,
+        start_coords: List[Tuple[int, int]],
+        *,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> torch.Tensor:
+        mask = torch.zeros(batch_size, 1, height, width, device=device, dtype=dtype)
+        for i in range(batch_size):
+            sr, sc = start_coords[i]
+            sr = max(0, min(int(sr), height - 1))
+            sc = max(0, min(int(sc), width - 1))
+            mask[i, 0, sr, sc] = 1.0
+        return mask
+
+    def _softmin(self, values: torch.Tensor, dim: int) -> torch.Tensor:
+        return -self.temperature * torch.logsumexp(-values / self.temperature, dim=dim)
+
+    def _neighbor_distances(self, distances: torch.Tensor, inf: float) -> torch.Tensor:
+        up = F.pad(distances[:, :, :-1, :], (0, 0, 1, 0), value=inf)
+        down = F.pad(distances[:, :, 1:, :], (0, 0, 0, 1), value=inf)
+        left = F.pad(distances[:, :, :, :-1], (1, 0, 0, 0), value=inf)
+        right = F.pad(distances[:, :, :, 1:], (0, 1, 0, 0), value=inf)
+        neighbors = [up, down, left, right]
+        if self.connectivity == 8:
+            diagonal_extra = math.sqrt(2.0) - 1.0
+            neighbors.extend(
+                [
+                    F.pad(distances[:, :, :-1, :-1], (1, 0, 1, 0), value=inf) + diagonal_extra,
+                    F.pad(distances[:, :, :-1, 1:], (0, 1, 1, 0), value=inf) + diagonal_extra,
+                    F.pad(distances[:, :, 1:, :-1], (1, 0, 0, 1), value=inf) + diagonal_extra,
+                    F.pad(distances[:, :, 1:, 1:], (0, 1, 0, 1), value=inf) + diagonal_extra,
+                ]
+            )
+        return torch.stack(neighbors, dim=1)
+
+    def distance_map(
+        self,
+        probability_map: torch.Tensor,
+        start_coords: List[Tuple[int, int]],
+    ) -> torch.Tensor:
+        """Return differentiable Soft-Bellman-Ford distance estimates [B,1,H,W]."""
+        if probability_map.ndim != 4 or int(probability_map.shape[1]) != 1:
+            raise ValueError(f"Expected probability_map [B,1,H,W], got {tuple(probability_map.shape)}.")
+        B, _C, H, W = probability_map.shape
+        if len(start_coords) != B:
+            raise ValueError(f"Expected {B} start coordinates, got {len(start_coords)}.")
+
+        probability_map = probability_map.clamp(0.0, 1.0)
+        inf = float(self.wall_penalty * max(1, H + W + self.num_iterations))
+        source = self._start_mask(B, H, W, start_coords, device=probability_map.device, dtype=probability_map.dtype)
+        distances = torch.full_like(probability_map, inf)
+        distances = distances * (1.0 - source)
+        traversal_cost = 1.0 + (1.0 - probability_map) * self.wall_penalty
+
+        for _ in range(self.num_iterations):
+            candidates = self._neighbor_distances(distances, inf) + traversal_cost.unsqueeze(1)
+            best_neighbor = self._softmin(candidates, dim=1)
+            distances = torch.minimum(distances, best_neighbor)
+            distances = distances * (1.0 - source)
+        return distances.clamp(0.0, inf)
+
+    def reachability_map(
+        self,
+        probability_map: torch.Tensor,
+        start_coords: List[Tuple[int, int]],
+    ) -> torch.Tensor:
+        distances = self.distance_map(probability_map, start_coords)
+        threshold = float(self.num_iterations) + 0.5
+        return torch.sigmoid((threshold - distances) / self.temperature)
     
     def forward(
         self,
@@ -141,25 +219,7 @@ class SoftBellmanFord(nn.Module):
         
         B, _C, H, W = probability_map.shape
         
-        # Initialize reachability map with 1.0 at start positions
-        R = torch.zeros_like(probability_map)
-        for i in range(B):
-            sr, sc = start_coords[i]
-            # Clamp to valid range
-            sr = max(0, min(sr, H - 1))
-            sc = max(0, min(sc, W - 1))
-            R[i, 0, sr, sc] = 1.0
-        
-        # Value iteration
-        for _ in range(self.num_iterations):
-            # Aggregate neighbor reachability
-            neighbors = F.conv2d(R, self.kernel, padding=1)
-            
-            # Flow = neighbor reachability * cell walkability
-            incoming_flow = neighbors * probability_map
-            
-            # Update reachability (max of current and incoming)
-            R = torch.clamp(R + incoming_flow, 0.0, 1.0)
+        reachability = self.reachability_map(probability_map, start_coords)
         
         # Extract goal reachability for each batch item
         goal_values = []
@@ -168,7 +228,7 @@ class SoftBellmanFord(nn.Module):
             # Clamp to valid range
             gr = max(0, min(gr, H - 1))
             gc = max(0, min(gc, W - 1))
-            goal_values.append(R[i, 0, gr, gc])
+            goal_values.append(reachability[i, 0, gr, gc])
         
         return torch.stack(goal_values)
 
@@ -285,21 +345,7 @@ class LegacyLogicNet(nn.Module):
         Returns:
             (B, 1, H, W) reachability values
         """
-        B, _C, H, W = probability_map.shape
-        
-        R = torch.zeros_like(probability_map)
-        for i in range(B):
-            sr, sc = start_coords[i]
-            sr = max(0, min(sr, H - 1))
-            sc = max(0, min(sc, W - 1))
-            R[i, 0, sr, sc] = 1.0
-        
-        for _ in range(self.num_iterations):
-            neighbors = F.conv2d(R, self.bellman_ford.kernel, padding=1)
-            incoming_flow = neighbors * probability_map
-            R = torch.clamp(R + incoming_flow, 0.0, 1.0)
-        
-        return R
+        return self.bellman_ford.reachability_map(probability_map, start_coords)
 
 
 class InventoryAwareLogicNet(nn.Module):

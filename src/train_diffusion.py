@@ -3275,7 +3275,7 @@ class DiffusionTrainer:
                             num_logic_metric_eval += generated_batch
                         if hasattr(self, "vqvae") and hasattr(self.vqvae, "decode"):
                             try:
-                                decoded = self._decode_latent_for_logic(z_gen)
+                                decoded = self._decode_latent_for_logic(z_gen[:generated_batch])
                                 hard_solvability = self._compute_hard_solvability(decoded)
                                 total_hard_solvability += hard_solvability * generated_batch
                                 num_hard_solvability_eval += generated_batch

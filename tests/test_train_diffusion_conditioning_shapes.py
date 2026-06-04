@@ -1311,6 +1311,33 @@ def test_validate_reports_hard_solvability_from_decoded_samples():
     assert "val_graph_reach_loss" in metrics
 
 
+def test_validate_hard_solvability_uses_only_counted_generated_samples():
+    class _MixedDecodeVQVAE:
+        def decode(self, latent, target_size=None):
+            batch_size = int(latent.shape[0])
+            height, width = target_size or (ROOM_HEIGHT, ROOM_WIDTH)
+            logits = torch.zeros(batch_size, 44, height, width)
+            logits[:, int(SEMANTIC_PALETTE["WALL"])] = 5.0
+            if batch_size >= 1:
+                row = height // 2
+                logits[0, :, row, :] = 0.0
+                logits[0, int(SEMANTIC_PALETTE["FLOOR"]), row, :] = 5.0
+                logits[0, :, row, 1] = 0.0
+                logits[0, int(SEMANTIC_PALETTE["START"]), row, 1] = 6.0
+                logits[0, :, row, width - 1] = 0.0
+                logits[0, int(SEMANTIC_PALETTE["DOOR_OPEN"]), row, width - 1] = 6.0
+            return logits
+
+    trainer = _make_stub_trainer(context_dim=8)
+    trainer.config.num_classes = 44
+    trainer.vqvae = _MixedDecodeVQVAE()
+    batch = torch.zeros((2, 1, ROOM_HEIGHT, ROOM_WIDTH), dtype=torch.float32)
+
+    metrics = DiffusionTrainer.validate(trainer, [batch], num_samples=1, num_diffusion_samples=1)
+
+    assert metrics["val_hard_solvability"] == pytest.approx(1.0)
+
+
 def test_state_dict_is_finite_rejects_nan_weights():
     state_dict = {"weight": torch.tensor([1.0, float("nan")])}
     assert DiffusionTrainer._state_dict_is_finite(state_dict) is False

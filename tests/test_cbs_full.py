@@ -144,21 +144,23 @@ class TestBayesianBeliefUpdate:
         # Observation should always increase confidence for known tile
         assert posterior_conf >= prior_conf, "Bayes update should not decrease confidence"
 
-    def test_contradictory_observation_decreases_confidence(self, belief_map):
-        """Observing a different tile than believed should adjust belief."""
+    def test_contradictory_observations_change_posterior_after_accumulated_evidence(self, belief_map):
+        """Contradictory observations should update a categorical posterior, not binary-flip immediately."""
         r, c = 2, 2
-        
+
         # First observe as floor
-        belief_map.update(r, c, observed_tile=SEMANTIC_PALETTE['FLOOR'])
-        _conf_after_floor = belief_map.get_confidence(r, c)
-        
-        # Then observe as wall (contradiction)
-        belief_map.update(r, c, observed_tile=SEMANTIC_PALETTE['WALL'])
-        _conf_after_wall = belief_map.get_confidence(r, c)
-        
-        # Belief should have changed - tile type should now be wall
-        assert belief_map.get_tile(r, c) == SEMANTIC_PALETTE['WALL'], \
-            "Tile belief should update to latest observation"
+        for _ in range(3):
+            belief_map.update(r, c, observed_tile=SEMANTIC_PALETTE['FLOOR'])
+        conf_after_floor = belief_map.get_confidence(r, c)
+
+        # Then accumulate wall observations (contradiction)
+        for _ in range(4):
+            belief_map.update(r, c, observed_tile=SEMANTIC_PALETTE['WALL'])
+        conf_after_wall = belief_map.get_confidence(r, c)
+
+        assert belief_map.get_tile(r, c) == SEMANTIC_PALETTE['WALL']
+        assert conf_after_wall > 0.5
+        assert conf_after_wall < conf_after_floor
 
 
 # ============================================================================
