@@ -153,6 +153,34 @@ currently support the claims. It is not an experimental-results substitute.
   durable `DOOR` memory as well as affordance memory, and impossible locked
   doors carry direct risk when the agent lacks the required key, bomb, or boss
   key. This reduces timeout loops caused by memory decay erasing blocked gates.
+- **WFC pseudo-label loss scaling:** WFC repaired pseudo-label CE now enters
+  the training objective as a full-batch mean (`sum CE over repaired samples /
+  BHW`) instead of a mean over only the repaired subset. This prevents a
+  `B/K` gradient amplification when only a few samples are repairable.
+- **WFC pseudo-label metrics:** training now tracks `wfc_pseudo_loss` as the
+  repaired-sample CE averaged over repaired samples, plus
+  `wfc_pseudo_loss_contribution` for the scaled objective contribution and
+  `wfc_pseudo_total_samples` for denominator auditing. Empty-repair batches no
+  longer dilute the reported repaired-sample loss.
+- **AdamW parameter decay:** diffusion training now splits optimizer groups so
+  matrix/tensor weights receive configured weight decay while biases and 1D
+  scale parameters, including norm weights, use `weight_decay=0.0`.
+- **Directed structural metrics:** structural topology analysis now preserves
+  directed dead-end semantics by counting directed sources/sinks instead of
+  collapsing every metric through `to_undirected()`.
+- **CBS graph proxy directionality:** graph-mode CBS fitness no longer converts
+  undirected legacy graphs into bidirectional `DiGraph` objects before using
+  directed out-degree. Directed mission graphs keep out-degree dead-end
+  pressure, and undirected graphs use undirected degree.
+- **Bounded confusion normalization:** normalized confusion ratios are clipped
+  to `[0, 1]` in the shared search-benchmark utility and the graph proxy uses
+  that helper instead of an unbounded hand-rolled formula.
+- **P-CBS heuristic scale:** goal- and item-seeking heuristics now use bounded
+  one-step absolute progress in `[-1, 1]`, so long-distance goal pursuit does
+  not vanish relative to constant curiosity scores.
+- **P-CBS forgetting threshold:** belief decay now applies forgetting
+  thresholds to the decayed confidence before posterior resynchronization, so
+  the posterior's uniform floor cannot make `UNKNOWN` unreachable.
 
 ## Remaining Publication Risks
 

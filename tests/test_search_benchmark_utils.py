@@ -47,6 +47,7 @@ def test_confusion_ratio_vs_oracle_returns_nan_when_oracle_not_resolved():
 def test_normalized_confusion_ratio_uses_excess_path_not_raw_ratio():
     assert normalized_confusion_ratio(2, 4, 2, oracle_status="solved", candidate_success=True) == 1.0
     assert normalized_confusion_ratio(200, 400, 2, oracle_status="solved", candidate_success=True) == 1.0
+    assert normalized_confusion_ratio(1, 100, 1, oracle_status="solved", candidate_success=True) == 1.0
     assert math.isnan(normalized_confusion_ratio(0, 4, 2, oracle_status="timeout", candidate_success=True))
 
 

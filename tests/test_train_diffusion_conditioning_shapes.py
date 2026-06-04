@@ -605,7 +605,7 @@ def test_wfc_pseudo_label_loss_is_opt_in_and_backpropagates():
     pred_tile_logits = torch.randn(1, 5, ROOM_HEIGHT, ROOM_WIDTH, requires_grad=True)
     real_maps = torch.zeros(1, 1, ROOM_HEIGHT, ROOM_WIDTH)
 
-    loss, sample_count = DiffusionTrainer._wfc_pseudo_label_loss(
+    loss, sample_count, repaired_mean = DiffusionTrainer._wfc_pseudo_label_loss(
         trainer,
         pred_tile_logits,
         real_maps,
@@ -614,8 +614,57 @@ def test_wfc_pseudo_label_loss_is_opt_in_and_backpropagates():
 
     assert sample_count == pytest.approx(1.0)
     assert loss.item() >= 0.0
+    assert repaired_mean.item() >= 0.0
     assert pred_tile_logits.grad is not None
     assert pred_tile_logits.grad.abs().sum().item() > 0.0
+
+
+def test_wfc_pseudo_label_loss_scales_subset_by_full_batch(monkeypatch):
+    trainer = DiffusionTrainer.__new__(DiffusionTrainer)
+    trainer.device = torch.device("cpu")
+    trainer.global_step = 0
+    trainer.config = SimpleNamespace(
+        alpha_wfc_pseudo=1.0,
+        wfc_pseudo_max_samples=1,
+        wfc_pseudo_confidence_threshold=0.0,
+        num_classes=5,
+        seed=123,
+    )
+    pred_tile_logits = torch.zeros(4, 5, ROOM_HEIGHT, ROOM_WIDTH, requires_grad=True)
+    real_maps = torch.zeros(4, 1, ROOM_HEIGHT, ROOM_WIDTH)
+
+    monkeypatch.setattr(
+        "src.train_diffusion.integrate_weighted_wfc_into_pipeline",
+        lambda *_args, **_kwargs: {"grid": np.zeros((ROOM_HEIGHT, ROOM_WIDTH), dtype=np.int64)},
+    )
+
+    scaled_loss, sample_count, repaired_mean = DiffusionTrainer._wfc_pseudo_label_loss(
+        trainer,
+        pred_tile_logits,
+        real_maps,
+    )
+
+    assert sample_count == pytest.approx(1.0)
+    assert scaled_loss.item() == pytest.approx(repaired_mean.item() / 4.0)
+
+
+def test_diffusion_adamw_groups_exclude_bias_and_norm_from_weight_decay():
+    module = torch.nn.Sequential(
+        torch.nn.Linear(4, 4),
+        torch.nn.LayerNorm(4),
+    )
+
+    groups = DiffusionTrainer._adamw_decay_param_groups("probe", module, weight_decay=0.1)
+    by_name = {group["name"]: group for group in groups}
+
+    assert by_name["probe_decay"]["weight_decay"] == pytest.approx(0.1)
+    assert by_name["probe_no_decay"]["weight_decay"] == pytest.approx(0.0)
+    decay_ids = {id(param) for param in by_name["probe_decay"]["params"]}
+    no_decay_ids = {id(param) for param in by_name["probe_no_decay"]["params"]}
+    assert id(module[0].weight) in decay_ids
+    assert id(module[0].bias) in no_decay_ids
+    assert id(module[1].weight) in no_decay_ids
+    assert id(module[1].bias) in no_decay_ids
 
 
 def test_train_epoch_node_sequence_conditioning_is_batched_and_padded():

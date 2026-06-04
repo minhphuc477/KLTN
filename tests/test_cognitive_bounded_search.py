@@ -546,6 +546,34 @@ class TestHeuristics:
         
         assert toward_score > away_score
 
+    def test_goal_seeking_scale_does_not_vanish_at_long_distance(self):
+        belief = BeliefMap(grid_shape=(200, 200))
+        memory = WorkingMemory()
+        memory.remember(MemoryItemType.GOAL, (100, 0), current_step=0)
+        goal_seek = GoalSeekingHeuristic(weight=1.0)
+
+        score = goal_seek.score(
+            current_pos=(0, 0),
+            target_pos=(1, 0),
+            target_tile=SEMANTIC_PALETTE['FLOOR'],
+            belief_map=belief,
+            memory=memory,
+            goal_pos=(100, 0),
+            current_step=1,
+        )
+
+        assert score == pytest.approx(1.0)
+
+    def test_belief_decay_can_forget_below_uniform_posterior_floor(self):
+        belief = BeliefMap(grid_shape=(5, 5), decay_rate=0.01)
+        belief.bayes_update((1, 1), SEMANTIC_PALETTE['FLOOR'], current_step=0, obs_accuracy=1.0)
+
+        for step in range(1, 4):
+            belief.apply_decay(current_step=step, decay_rate=0.01)
+
+        assert belief.get_knowledge_state((1, 1)) == TileKnowledge.UNKNOWN
+        assert belief.get_confidence((1, 1)) == pytest.approx(0.0)
+
 
 # ==============================================================================
 # PERSONA TESTS

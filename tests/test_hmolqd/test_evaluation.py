@@ -211,6 +211,34 @@ class TestCBSFitnessProxy:
         assert metrics["solvable_astar"] is True
         assert metrics["astar_path_length"] == 2
 
+    def test_graph_proxy_preserves_directed_dead_end_pressure(self):
+        from src.evaluation.cbs_fitness import compute_cbs_fitness
+
+        graph = nx.DiGraph()
+        graph.add_node(0, label="s")
+        graph.add_node(1, label="")
+        graph.add_node(2, label="t")
+        graph.add_node(3, label="")
+        graph.add_edge(0, 1)
+        graph.add_edge(1, 2)
+        graph.add_edge(1, 3)
+        graph.add_edge(2, 3)
+
+        metrics = compute_cbs_fitness(graph)
+
+        assert metrics["normalized_confusion_ratio"] <= 1.0
+        assert metrics["confusion_index"] > 0.0
+
+    def test_structural_topology_counts_directed_sink_dead_end(self):
+        from src.evaluation.structural_metrics import analyze_structural_topology
+
+        graph = nx.DiGraph()
+        graph.add_edges_from([(0, 1), (2, 1)])
+
+        metrics = analyze_structural_topology(graph)
+
+        assert metrics.dead_end_ratio > 0.0
+
 
 class TestFunMetrics:
     """Tests for fun metrics evaluator (including pacing analyzer)."""

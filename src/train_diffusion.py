@@ -2912,6 +2912,8 @@ class DiffusionTrainer:
                 'logic_loss': 0.0,
                 'logic_tile_loss': 0.0,
                 'wfc_pseudo_loss': 0.0,
+                'wfc_pseudo_loss_sum': 0.0,
+                'wfc_pseudo_loss_contribution': 0.0,
                 'wfc_pseudo_samples': 0.0,
                 'logic_tile_accuracy': 0.0,
                 'solvability_proxy': 0.0,
@@ -3026,6 +3028,8 @@ class DiffusionTrainer:
                 'logic_loss': 0.0,
                 'logic_tile_loss': 0.0,
                 'wfc_pseudo_loss': 0.0,
+                'wfc_pseudo_loss_sum': 0.0,
+                'wfc_pseudo_loss_contribution': 0.0,
                 'wfc_pseudo_samples': 0.0,
                 'logic_tile_accuracy': 0.0,
                 'solvability_proxy': 0.0,
@@ -3058,7 +3062,12 @@ class DiffusionTrainer:
                 'diffusion_loss': float(diffusion_loss.detach().item()),
                 'logic_loss': float(logic_loss.detach().item()) if self._tensor_is_finite(logic_loss) else 0.0,
                 'logic_tile_loss': float(logic_tile_loss.detach().item()) if self._tensor_is_finite(logic_tile_loss) else 0.0,
-                'wfc_pseudo_loss': float(wfc_pseudo_loss.detach().item()) if self._tensor_is_finite(wfc_pseudo_loss) else 0.0,
+                'wfc_pseudo_loss': float(wfc_pseudo_mean_loss.detach().item()) if self._tensor_is_finite(wfc_pseudo_mean_loss) else 0.0,
+                'wfc_pseudo_loss_sum': (
+                    float(wfc_pseudo_mean_loss.detach().item()) * float(wfc_pseudo_samples)
+                    if self._tensor_is_finite(wfc_pseudo_mean_loss) else 0.0
+                ),
+                'wfc_pseudo_loss_contribution': float(wfc_pseudo_loss.detach().item()) if self._tensor_is_finite(wfc_pseudo_loss) else 0.0,
                 'wfc_pseudo_samples': float(wfc_pseudo_samples),
                 'logic_tile_accuracy': float(logic_tile_accuracy.detach().item()) if self._tensor_is_finite(logic_tile_accuracy) else 0.0,
                 'solvability_proxy': float(solvability_proxy.detach().item()) if self._tensor_is_finite(solvability_proxy) else 0.0,
@@ -3088,7 +3097,12 @@ class DiffusionTrainer:
                     'diffusion_loss': float(diffusion_loss.detach().item()),
                     'logic_loss': float(logic_loss.detach().item()) if self._tensor_is_finite(logic_loss) else 0.0,
                     'logic_tile_loss': float(logic_tile_loss.detach().item()) if self._tensor_is_finite(logic_tile_loss) else 0.0,
-                    'wfc_pseudo_loss': float(wfc_pseudo_loss.detach().item()) if self._tensor_is_finite(wfc_pseudo_loss) else 0.0,
+                    'wfc_pseudo_loss': float(wfc_pseudo_mean_loss.detach().item()) if self._tensor_is_finite(wfc_pseudo_mean_loss) else 0.0,
+                    'wfc_pseudo_loss_sum': (
+                        float(wfc_pseudo_mean_loss.detach().item()) * float(wfc_pseudo_samples)
+                        if self._tensor_is_finite(wfc_pseudo_mean_loss) else 0.0
+                    ),
+                    'wfc_pseudo_loss_contribution': float(wfc_pseudo_loss.detach().item()) if self._tensor_is_finite(wfc_pseudo_loss) else 0.0,
                     'wfc_pseudo_samples': float(wfc_pseudo_samples),
                     'logic_tile_accuracy': float(logic_tile_accuracy.detach().item()) if self._tensor_is_finite(logic_tile_accuracy) else 0.0,
                     'solvability_proxy': float(solvability_proxy.detach().item()) if self._tensor_is_finite(solvability_proxy) else 0.0,
@@ -3119,7 +3133,9 @@ class DiffusionTrainer:
             'diffusion_loss': diffusion_loss.item(),
             'logic_loss': logic_loss.item(),
             'logic_tile_loss': logic_tile_loss.item(),
-            'wfc_pseudo_loss': wfc_pseudo_loss.item(),
+            'wfc_pseudo_loss': wfc_pseudo_mean_loss.item(),
+            'wfc_pseudo_loss_sum': float(wfc_pseudo_mean_loss.detach().item()) * float(wfc_pseudo_samples),
+            'wfc_pseudo_loss_contribution': wfc_pseudo_loss.item(),
             'wfc_pseudo_samples': float(wfc_pseudo_samples),
             'logic_tile_accuracy': logic_tile_accuracy.item(),
             'solvability_proxy': solvability_proxy.item(),
@@ -3234,6 +3250,8 @@ class DiffusionTrainer:
             'logic_loss': 0,
             'logic_tile_loss': 0,
             'wfc_pseudo_loss': 0,
+            'wfc_pseudo_loss_sum': 0,
+            'wfc_pseudo_loss_contribution': 0,
             'wfc_pseudo_samples': 0,
             'logic_tile_accuracy': 0,
             'solvability_proxy': 0,
@@ -3329,7 +3347,15 @@ class DiffusionTrainer:
             average=False,
         )
         total_batches = float(max(1.0, reduced.pop("num_batches", float(num_batches))))
+        wfc_loss_sum = float(reduced.pop("wfc_pseudo_loss_sum", 0.0))
+        wfc_sample_total = float(reduced.get("wfc_pseudo_samples", 0.0))
         epoch_metrics = {k: float(v) / total_batches for k, v in reduced.items()}
+        epoch_metrics["wfc_pseudo_loss"] = (
+            wfc_loss_sum / wfc_sample_total
+            if wfc_sample_total > 0.0
+            else 0.0
+        )
+        epoch_metrics["wfc_pseudo_total_samples"] = wfc_sample_total
         cache = getattr(self, "_latent_cache", None)
         if isinstance(cache, FrozenLatentCache) and cache.total_lookups > 0:
             epoch_metrics["latent_cache_hit_rate"] = float(cache.hit_rate)
