@@ -56,6 +56,13 @@ currently support the claims. It is not an experimental-results substitute.
 - **Planning losses:** Value Iteration Networks and Neural Bellman-Ford
   Networks are the relevant differentiable planning precedents:
   https://arxiv.org/abs/1602.02867 and https://arxiv.org/abs/2106.06935.
+- **External PCG baselines:** the implemented comparison baselines now anchor
+  to the PCGML survey (https://arxiv.org/abs/1702.00539), VGLC corpus
+  (https://arxiv.org/abs/1606.07487), MarioGPT/text-to-level LLMs
+  (https://arxiv.org/abs/2302.05981), TOAD-GAN token-level GAN generation
+  (https://arxiv.org/abs/2008.01531), and WFC as constraint solving plus
+  pattern learning (https://doi.org/10.1109/TG.2021.3076368). These are
+  baseline anchors, not evidence that any short local dry-run has converged.
 
 ## Fixed Audit Items
 
@@ -210,6 +217,15 @@ currently support the claims. It is not an experimental-results substitute.
 - **P-CBS forgetting threshold:** belief decay now applies forgetting
   thresholds to the decayed confidence before posterior resynchronization, so
   the posterior's uniform floor cannot make `UNKNOWN` unreachable.
+- **External baseline experiment harness:** `experiments/baselines/` now
+  contains isolated LLM, DCGAN, and overlapping-pattern WFC scripts. All three
+  scripts support `--dry-run`, emit JSON reports, share the same hard-oracle
+  evaluation path, and report terminal injection/normalization rates so
+  standalone room validation does not silently reward generated grids that lack
+  START/TRIFORCE semantics. The LLM baseline trains next-token CE on flattened
+  `[H*W]` room tokens; the GAN baseline uses straight-through Gumbel-Softmax
+  during generator training and reserves `argmax` for `torch.no_grad()`
+  sampling; the WFC baseline is local and dependency-free.
 
 ## Remaining Publication Risks
 
@@ -251,6 +267,11 @@ currently support the claims. It is not an experimental-results substitute.
   claim WFC pseudo-label distillation contributes to training.
 - **Tokenizer SOTA:** FSQ exists as an ablation. LFQ/RVQ are not implemented
   default paths and require new ablation tables before being claimed.
+- **Baseline convergence risk:** the new baseline scripts are reproducibility
+  scaffolds, not finished results. Dry-run reports are smoke tests only. Paper
+  tables require matched sample counts, fixed seeds, identical validation
+  timeout budgets, explicit `--run-pcbs` where P-CBS metrics are claimed, and
+  separate reporting of `terminal_normalization_rate`.
 
 ## Constraint-Guided Generation Protocol
 

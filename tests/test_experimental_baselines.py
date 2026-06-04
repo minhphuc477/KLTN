@@ -50,6 +50,8 @@ def test_canonicalize_generated_grid_injects_terminals_and_json_evaluates() -> N
     assert diagnostics["invalid_tile_count"] == 1
     assert diagnostics["start_injected"] is True
     assert diagnostics["goal_injected"] is True
+    assert diagnostics["duplicate_start_tiles_removed"] == 0
+    assert diagnostics["duplicate_goal_tiles_removed"] == 0
 
     report = evaluate_generated_grids(
         [canonical],
@@ -57,6 +59,7 @@ def test_canonicalize_generated_grid_injects_terminals_and_json_evaluates() -> N
         BaselineEvalConfig(name="unit_test", run_pcbs=False, timeout_astar=200),
     )
     assert report["aggregate"]["num_samples"] == 1
+    assert "terminal_normalization_rate" in report["aggregate"]
     json.dumps(report)
 
 

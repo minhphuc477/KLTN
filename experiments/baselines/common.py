@@ -196,15 +196,17 @@ def canonicalize_generated_grid(
         out[0, 0] = int(TileID.FLOOR)
         out[-1, -1] = int(TileID.FLOOR)
 
+    starts = np.argwhere(out == int(TileID.START))
+    goals = np.argwhere(out == int(TileID.TRIFORCE))
     diagnostics: Dict[str, Any] = {
         "invalid_tile_count": invalid_count,
         "terminal_policy": str(terminal_policy),
         "start_injected": False,
         "goal_injected": False,
+        "duplicate_start_tiles_removed": max(0, int(starts.shape[0]) - 1) if starts.size else 0,
+        "duplicate_goal_tiles_removed": max(0, int(goals.shape[0]) - 1) if goals.size else 0,
     }
     floor_id = int(TileID.FLOOR)
-    starts = np.argwhere(out == int(TileID.START))
-    goals = np.argwhere(out == int(TileID.TRIFORCE))
 
     if starts.size:
         start = (int(starts[0, 0]), int(starts[0, 1]))
@@ -289,12 +291,19 @@ def evaluate_generated_grids(
     astar_solved = 0
     pcbs_solved = 0
     terminal_injected = 0
+    terminal_normalized = 0
     for idx, raw in enumerate(generated):
         canonical, canonical_diag = canonicalize_generated_grid(
             raw,
             terminal_policy=config.terminal_policy,
         )
-        terminal_injected += int(bool(canonical_diag.get("start_injected")) or bool(canonical_diag.get("goal_injected")))
+        injected = bool(canonical_diag.get("start_injected")) or bool(canonical_diag.get("goal_injected"))
+        duplicate_removed = (
+            int(canonical_diag.get("duplicate_start_tiles_removed", 0) or 0)
+            + int(canonical_diag.get("duplicate_goal_tiles_removed", 0) or 0)
+        ) > 0
+        terminal_injected += int(injected)
+        terminal_normalized += int(injected or duplicate_removed)
         try:
             if config.run_pcbs:
                 result = evaluate_astar_vs_pcbs(
@@ -373,6 +382,7 @@ def evaluate_generated_grids(
             "pcbs_solvable_rate": finite_float(pcbs_solved / n) if config.run_pcbs else None,
             "pcbs_evaluated": bool(config.run_pcbs),
             "terminal_injection_rate": finite_float(terminal_injected / n),
+            "terminal_normalization_rate": finite_float(terminal_normalized / n),
             **summarize_diversity(generated, reference),
         },
         "samples": rows,
@@ -384,4 +394,3 @@ def write_json_report(path: str | Path, payload: Mapping[str, Any]) -> Path:
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(json_ready(payload), indent=2), encoding="utf-8")
     return output
-
