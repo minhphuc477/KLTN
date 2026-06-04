@@ -8,6 +8,7 @@ import pytest
 import numpy as np
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 # Ensure src is in path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -632,6 +633,20 @@ class TestCBS:
         
         if key_pos in path and door_pos in path:
             assert path.index(key_pos) < path.index(door_pos)
+
+    def test_impossible_locked_doors_are_high_risk_without_resources(self, simple_grid):
+        env = ZeldaLogicEnv(semantic_grid=simple_grid)
+        cbs = CognitiveBoundedSearch(env, persona=AgentPersona.FORGETFUL, timeout=100, seed=7)
+        game_state = SimpleNamespace(keys=0, bomb_count=0, has_boss_key=False)
+        cog_state = SimpleNamespace(game_state=game_state, current_step=0)
+
+        locked_risk = cbs._estimate_risk(cog_state, (1, 2), SEMANTIC_PALETTE["DOOR_LOCKED"])
+        bomb_risk = cbs._estimate_risk(cog_state, (1, 2), SEMANTIC_PALETTE["DOOR_BOMB"])
+        boss_risk = cbs._estimate_risk(cog_state, (1, 2), SEMANTIC_PALETTE["DOOR_BOSS"])
+
+        assert locked_risk >= 1.0
+        assert bomb_risk >= 1.0
+        assert boss_risk >= 1.0
     
     def test_metrics_computed(self, simple_grid):
         """Test CBS computes cognitive metrics."""

@@ -155,6 +155,28 @@ class TestVectorQuantizer:
 
         assert torch.isfinite(quantizer.embedding.weight).all()
 
+    def test_commitment_loss_sums_embedding_channels_per_token(self):
+        """VQ loss scale should not be diluted by embedding dimension."""
+        from src.core.vqvae import VectorQuantizer
+
+        z_a = torch.ones(1, 2, 3, 4)
+        z_b = torch.zeros_like(z_a)
+
+        assert VectorQuantizer._latent_mse(z_a, z_b).item() == pytest.approx(4.0)
+
+    def test_ema_decay_warmup_uses_fast_early_updates(self):
+        from src.core.vqvae import VectorQuantizer
+
+        quantizer = VectorQuantizer(
+            num_embeddings=4,
+            embedding_dim=2,
+            decay=0.99,
+            ema_decay_warmup_steps=100,
+        )
+        quantizer._ema_update_counter = 1
+
+        assert quantizer._current_ema_decay() < 0.99
+
     def test_quantizer_deepcopy_recreates_update_lock(self):
         """The thread lock must not make the quantizer uncopyable."""
         import copy
@@ -179,9 +201,27 @@ class TestFSQuantizer:
 
         assert tuple(quantized.shape) == tuple(x.shape)
         assert tuple(indices.shape) == (2, 3, 4)
-        assert losses["vq_loss"].item() == pytest.approx(0.0)
+        assert torch.isfinite(losses["vq_loss"])
+        assert losses["vq_loss"].item() >= 0.0
         assert losses["commitment_loss"].item() == pytest.approx(0.0)
         assert quantizer.num_embeddings == 256
+        assert x.grad is not None
+        assert x.grad.abs().sum().item() > 0.0
+
+    def test_fsq_saturation_penalty_pushes_back_on_large_latents(self):
+        from src.core.vqvae import FSQuantizer
+
+        quantizer = FSQuantizer(
+            embedding_dim=4,
+            levels=[4, 4, 4, 4],
+            saturation_penalty_weight=1.0,
+        )
+        x = torch.full((1, 4, 2, 2), 5.0, requires_grad=True)
+
+        _quantized, _indices, losses = quantizer(x, return_info=True)
+        losses["fsq_loss"].backward()
+
+        assert losses["fsq_saturation_loss"].item() > 0.0
         assert x.grad is not None
         assert x.grad.abs().sum().item() > 0.0
 
@@ -201,7 +241,8 @@ class TestFSQuantizer:
 
         assert isinstance(model.quantizer, FSQuantizer)
         assert tuple(recon.shape) == (1, 5, 16, 11)
-        assert losses["vq_loss"].item() == pytest.approx(0.0)
+        assert torch.isfinite(losses["vq_loss"])
+        assert losses["vq_loss"].item() >= 0.0
 
     def test_fsq_decode_indices_fails_with_clear_error(self):
         from src.core.vqvae import create_vqvae

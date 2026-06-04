@@ -2421,6 +2421,14 @@ class CognitiveBoundedSearch:
                     is_visit=False,
                 )
                 if actual_tile in CONDITIONAL_IDS or actual_tile == int(SEMANTIC_PALETTE['PUZZLE']):
+                    if actual_tile in CONDITIONAL_IDS:
+                        self.memory.remember(
+                            MemoryItemType.DOOR,
+                            best_pos,
+                            step,
+                            data={'tile_type': int(actual_tile), 'blocked': True},
+                            salience_boost=0.35,
+                        )
                     self.memory.remember(
                         MemoryItemType.AFFORDANCE,
                         best_pos,
@@ -3239,6 +3247,14 @@ class CognitiveBoundedSearch:
             SEMANTIC_PALETTE['ELEMENT'],
         }:
             risk = max(risk, 1.0)
+
+        tile_id = int(target_tile)
+        if tile_id == int(SEMANTIC_PALETTE['DOOR_LOCKED']) and int(cog_state.game_state.keys) <= 0:
+            risk = max(risk, 1.25)
+        elif tile_id == int(SEMANTIC_PALETTE['DOOR_BOMB']) and int(cog_state.game_state.bomb_count) <= 0:
+            risk = max(risk, 1.25)
+        elif tile_id == int(SEMANTIC_PALETTE['DOOR_BOSS']) and not bool(cog_state.game_state.has_boss_key):
+            risk = max(risk, 1.35)
 
         # Memory-based nearby threat risk
         for threat in self.memory.recall(MemoryItemType.THREAT, cog_state.current_step):

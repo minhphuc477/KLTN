@@ -2,6 +2,7 @@
 
 Last cleaned: 2026-06-04.
 Basic ML engineering pass: 2026-06-05.
+Core math re-audit pass: 2026-06-05.
 
 These notes are a current audit ledger for H-MOLQD, a neuro-symbolic dungeon
 generation system combining VQ-VAE/FSQ latents, graph-conditioned latent
@@ -125,6 +126,33 @@ currently support the claims. It is not an experimental-results substitute.
   `runtime.cudnn_deterministic` are explicit config keys. `seed_everything()`
   now sets `torch.backends.cudnn.benchmark` only when deterministic cuDNN mode
   is disabled.
+- **Flow-matching endpoint loss:** rectified-flow velocity training no longer
+  applies DDPM Min-SNR-gamma weighting. The previous weighting sent the clean
+  endpoint (`t -> 0`) contribution toward zero when `min_snr_gamma > 0`,
+  suppressing velocity learning where the data manifold is visible.
+- **VQ commitment scale:** VQ codebook and commitment losses now sum squared
+  error across latent embedding channels per token before averaging spatial
+  tokens. This keeps the latent commitment term on a comparable per-token scale
+  instead of diluting it by `embedding_dim`.
+- **VQ EMA warmup:** `VectorQuantizer` has an early-update EMA decay warmup so
+  the codebook can move quickly away from random initialization before settling
+  into the configured long-horizon decay.
+- **FSQ saturation regularization:** `FSQuantizer` now reports and optimizes a
+  small saturation penalty on pre-`tanh` latents outside the useful scalar
+  quantization range. This keeps the FSQ ablation from silently driving
+  pre-quantization activations into zero-derivative saturation.
+- **LogicNet unreachable sentinel preservation:** grid and graph soft-min
+  Bellman-Ford updates keep nodes/cells at `inf_distance` when every candidate
+  is still sentinel-valued. This prevents log-sum-exp from gradually lowering
+  unreachable regions into fake reachability.
+- **Isolated graph regression:** GAT graph conditioning is now covered by a
+  one-node zero-edge regression test. Current loaders already emit empty edge
+  tensors rather than `None`, and the encoder must return finite embeddings for
+  isolated rooms.
+- **P-CBS locked-door contact:** failed conditional-door moves now refresh
+  durable `DOOR` memory as well as affordance memory, and impossible locked
+  doors carry direct risk when the agent lacks the required key, bomb, or boss
+  key. This reduces timeout loops caused by memory decay erasing blocked gates.
 
 ## Remaining Publication Risks
 

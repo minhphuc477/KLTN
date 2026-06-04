@@ -44,7 +44,7 @@ def test_flow_matching_loss_is_finite_and_backpropagates():
     assert torch.isfinite(z_0.grad).all()
 
 
-def test_flow_matching_loss_applies_per_sample_continuous_min_snr_weight(monkeypatch):
+def test_flow_matching_loss_ignores_ddpm_min_snr_weighting(monkeypatch):
     class _ZeroDenoiser(torch.nn.Module):
         def forward(self, x, t, context, **_kwargs):
             _ = (t, context)
@@ -76,7 +76,7 @@ def test_flow_matching_loss_applies_per_sample_continuous_min_snr_weight(monkeyp
     loss = model.flow_matching_loss(z_0, context, noise=noise)
 
     assert torch.isfinite(loss)
-    assert float(loss.item()) < 0.75
+    assert loss.item() == pytest.approx(1.0)
 
 
 def test_dit_backbone_flow_matching_loss_is_finite_and_backpropagates():

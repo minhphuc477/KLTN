@@ -254,7 +254,9 @@ class DifferentiablePathfinder(nn.Module):
                     dim=0,
                 )
                 candidates = candidates.clamp(-inf, inf)
+                has_finite_candidate = (candidates < (inf - 1e-6)).any(dim=0)
                 relaxed = soft_min(candidates, dim=0, temperature=max(self.temperature, 1e-4))
+                relaxed = torch.where(has_finite_candidate, relaxed, torch.full_like(relaxed, inf))
                 dist = relaxed.clamp(-inf, inf)
                 # Keep start cells fixed at zero distance.
                 dist = dist * (1.0 - start) + torch.zeros_like(dist) * start
@@ -312,16 +314,29 @@ class DifferentiablePathfinder(nn.Module):
                 -float(self.inf_distance),
                 float(self.inf_distance),
             )  # [N, N]
+            has_finite_candidate = (candidates < (float(self.inf_distance) - 1e-6)).any(dim=0)
             
             # Soft-min over incoming edges
             new_distances = soft_min(candidates, dim=0, temperature=self.temperature)
+            new_distances = torch.where(
+                has_finite_candidate,
+                new_distances,
+                torch.full_like(new_distances, float(self.inf_distance)),
+            )
             
             # Softly keep the better of current and new estimates to preserve
             # gradients after early relaxations have already found a short path.
+            keep_candidates = torch.stack([distances, new_distances], dim=0)
+            keep_has_finite = (keep_candidates < (float(self.inf_distance) - 1e-6)).any(dim=0)
             distances = soft_min(
-                torch.stack([distances, new_distances], dim=0),
+                keep_candidates,
                 dim=0,
                 temperature=max(self.temperature, 1e-4),
+            )
+            distances = torch.where(
+                keep_has_finite,
+                distances,
+                torch.full_like(distances, float(self.inf_distance)),
             ).clamp(
                 -float(self.inf_distance),
                 float(self.inf_distance),

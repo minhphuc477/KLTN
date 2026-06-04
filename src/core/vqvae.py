@@ -109,6 +109,7 @@ class VectorQuantizer(nn.Module):
         dead_code_warmup_steps: int = 500,
         protect_active_codes_during_reset: bool = True,
         max_dead_code_resets_per_event: int = 16,
+        ema_decay_warmup_steps: int = 100,
     ):
         super().__init__()
         
@@ -118,6 +119,7 @@ class VectorQuantizer(nn.Module):
         self.decay = decay
         self.use_ema = use_ema
         self.epsilon = epsilon
+        self.ema_decay_warmup_steps = int(max(0, ema_decay_warmup_steps))
         
         # Codebook embeddings
         self.embedding = nn.Embedding(num_embeddings, embedding_dim)
@@ -145,6 +147,7 @@ class VectorQuantizer(nn.Module):
         self._dead_code_warmup_steps = int(max(0, dead_code_warmup_steps))
         self._protect_active_codes_during_reset = bool(protect_active_codes_during_reset)
         self._max_dead_code_resets_per_event = int(max(0, max_dead_code_resets_per_event))
+        self._ema_update_counter = 0
         self._codebook_update_lock = threading.RLock()
 
     def __getstate__(self):
@@ -154,7 +157,23 @@ class VectorQuantizer(nn.Module):
 
     def __setstate__(self, state):
         self.__dict__.update(state)
+        if "_ema_update_counter" not in self.__dict__:
+            self._ema_update_counter = 0
+        if "ema_decay_warmup_steps" not in self.__dict__:
+            self.ema_decay_warmup_steps = 100
         self._codebook_update_lock = threading.RLock()
+
+    @staticmethod
+    def _latent_mse(z_a: Tensor, z_b: Tensor) -> Tensor:
+        """Average per-token squared error after summing embedding channels."""
+        return (z_a - z_b).pow(2).sum(dim=-1).mean()
+
+    def _current_ema_decay(self) -> float:
+        if self.ema_decay_warmup_steps <= 0:
+            return float(self.decay)
+        step = float(max(1, self._ema_update_counter))
+        warmup_decay = step / float(self.ema_decay_warmup_steps + step)
+        return float(min(float(self.decay), warmup_decay))
     
     def forward(
         self,
@@ -245,14 +264,14 @@ class VectorQuantizer(nn.Module):
 
             # EMA updates stay training-only, but validation still reports the
             # same commitment objective so train_loss and val_loss are comparable.
-            commitment_loss = F.mse_loss(z_e, z_q.detach())
+            commitment_loss = self._latent_mse(z_e, z_q.detach())
             losses['commitment_loss'] = self.commitment_cost * commitment_loss
             losses['vq_loss'] = losses['commitment_loss']
         else:
             # Standard VQ-VAE loss does not mutate codebook state, so both
             # terms are meaningful during training and validation.
-            codebook_loss = F.mse_loss(z_q, z_e.detach())
-            commitment_loss = F.mse_loss(z_e, z_q.detach())
+            codebook_loss = self._latent_mse(z_q, z_e.detach())
+            commitment_loss = self._latent_mse(z_e, z_q.detach())
 
             losses['codebook_loss'] = codebook_loss
             losses['commitment_loss'] = self.commitment_cost * commitment_loss
@@ -308,14 +327,17 @@ class VectorQuantizer(nn.Module):
             except (ImportError, RuntimeError):
                 pass  # single-GPU fallback: no-op
             
+            self._ema_update_counter += 1
+            decay = self._current_ema_decay()
+
             self.ema_cluster_size = (
-                self.decay * self.ema_cluster_size 
-                + (1 - self.decay) * cluster_size
+                decay * self.ema_cluster_size
+                + (1 - decay) * cluster_size
             )
             
             self.ema_embedding_sum = (
-                self.decay * self.ema_embedding_sum
-                + (1 - self.decay) * embedding_sum
+                decay * self.ema_embedding_sum
+                + (1 - decay) * embedding_sum
             )
             
             # Laplace smoothing
@@ -436,6 +458,7 @@ class FSQuantizer(nn.Module):
         embedding_dim: int = 64,
         levels: Optional[Iterable[int]] = None,
         num_dims: Optional[int] = None,
+        saturation_penalty_weight: float = 1e-3,
     ) -> None:
         super().__init__()
         levels_list = [int(v) for v in (levels if levels is not None else [4, 4, 4, 4])]
@@ -453,6 +476,7 @@ class FSQuantizer(nn.Module):
         self.num_dims = int(len(levels_list))
         self.num_embeddings = int(math.prod(levels_list))
         self.use_ema = False
+        self.saturation_penalty_weight = float(max(0.0, saturation_penalty_weight))
 
         self.pre_proj = (
             nn.Identity()
@@ -520,11 +544,14 @@ class FSQuantizer(nn.Module):
         avg_probs = encodings.mean(dim=0)
         perplexity = torch.exp(-torch.sum(avg_probs * torch.log(avg_probs + 1e-10)))
         zero = torch.zeros((), device=z_q.device, dtype=z_q.dtype)
+        saturation_loss = F.relu(z_low.abs() - 1.0).pow(2).mean()
+        fsq_loss = self.saturation_penalty_weight * saturation_loss
         losses = {
-            "vq_loss": zero,
+            "vq_loss": fsq_loss,
             "commitment_loss": zero,
             "perplexity": perplexity,
-            "fsq_loss": zero,
+            "fsq_loss": fsq_loss,
+            "fsq_saturation_loss": saturation_loss,
         }
 
         if not channel_first:
@@ -920,6 +947,7 @@ class SemanticVQVAE(nn.Module):
         dead_code_warmup_steps: int = 500,
         protect_active_codes_during_reset: bool = True,
         max_dead_code_resets_per_event: int = 16,
+        ema_decay_warmup_steps: int = 100,
     ):
         super().__init__()
 
@@ -975,6 +1003,7 @@ class SemanticVQVAE(nn.Module):
                     dead_code_warmup_steps=dead_code_warmup_steps,
                     protect_active_codes_during_reset=protect_active_codes_during_reset,
                     max_dead_code_resets_per_event=max_dead_code_resets_per_event,
+                    ema_decay_warmup_steps=ema_decay_warmup_steps,
                 )
             else:
                 raise ValueError("quantizer_type must be 'vq' or 'fsq'.")

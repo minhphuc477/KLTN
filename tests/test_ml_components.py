@@ -1033,6 +1033,32 @@ def test_global_stream_encoder_gps_global_attention_respects_batch_idx():
     assert not torch.allclose(out_a[2:], out_b[2:])
 
 
+def test_global_stream_encoder_gat_handles_isolated_single_node_graph():
+    from src.core.condition_encoder import GlobalStreamEncoder
+
+    encoder = GlobalStreamEncoder(
+        node_feature_dim=4,
+        edge_feature_dim=3,
+        hidden_dim=16,
+        output_dim=8,
+        num_layers=1,
+        gnn_type="gat",
+        num_heads=4,
+        dropout=0.0,
+    )
+    encoder.eval()
+
+    with torch.no_grad():
+        out = encoder(
+            torch.randn(1, 4),
+            torch.empty(2, 0, dtype=torch.long),
+            edge_features=torch.empty(0, 3),
+        )
+
+    assert tuple(out.shape) == (1, 8)
+    assert torch.isfinite(out).all()
+
+
 def test_dual_stream_encoder_keeps_style_and_reference_features_separate(monkeypatch):
     from src.core.condition_encoder import DualStreamConditionEncoder
 

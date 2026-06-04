@@ -153,6 +153,26 @@ def test_differentiable_pathfinder_graph_soft_update_keeps_edge_weight_gradients
     assert float(edge_weights.grad[0, 2].abs().item()) > 0.0
 
 
+def test_differentiable_pathfinder_preserves_unreachable_inf_sentinel():
+    pathfinder = DifferentiablePathfinder(num_iterations=5, temperature=1.0, inf_distance=20.0)
+
+    walkability = torch.ones(1, 3, 3)
+    traversal_cost = torch.ones_like(walkability)
+    source = torch.zeros_like(walkability)
+    distances = pathfinder(walkability, traversal_cost, source)
+
+    assert torch.allclose(distances, torch.full_like(distances, 20.0))
+
+    adjacency = torch.zeros(3, 3)
+    weights = torch.ones_like(adjacency)
+    graph_source = torch.tensor([1.0, 0.0, 0.0])
+    graph_distances = pathfinder(adjacency, weights, graph_source)
+
+    assert graph_distances[0].item() == pytest.approx(0.0)
+    assert graph_distances[1].item() == pytest.approx(20.0)
+    assert graph_distances[2].item() == pytest.approx(20.0)
+
+
 def test_logicnet_compatibility_mode_routes_through_grid_pathfinder(monkeypatch):
     logic_net = LogicNet(latent_dim=4, num_tile_classes=5)
 
