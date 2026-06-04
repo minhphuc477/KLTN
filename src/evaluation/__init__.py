@@ -52,6 +52,14 @@ from .perturb_and_map import (
     PerturbAndMAPReachabilityResult,
     perturb_and_map_reachability,
 )
+from .pcbs_rl_ablation import (
+    BeliefStateQAgent,
+    RLAblationMetrics,
+    compute_cross_persona_agreement,
+    compute_persona_divergence_from_paths,
+    run_pcbs_rl_alignment_ablation,
+    train_belief_state_q_agent,
+)
 
 _BENCHMARK_EXPORTS = [
     'GraphDescriptor',
@@ -110,6 +118,13 @@ __all__ = [
     # Perturb-and-MAP hard-solver ablation
     'PerturbAndMAPReachabilityResult',
     'perturb_and_map_reachability',
+    # P-CBS release-paper RL ablation
+    'BeliefStateQAgent',
+    'RLAblationMetrics',
+    'compute_cross_persona_agreement',
+    'compute_persona_divergence_from_paths',
+    'run_pcbs_rl_alignment_ablation',
+    'train_belief_state_q_agent',
     # Benchmark suite (lazy-loaded)
     *_BENCHMARK_EXPORTS,
 ]

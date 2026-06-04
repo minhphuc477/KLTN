@@ -408,7 +408,7 @@ class TestPersonaEffects:
         forgetful = PERSONA_CONFIGS.get('forgetful')
         
         if balanced and forgetful:
-            assert forgetful.decay_rate >= balanced.decay_rate, \
+            assert forgetful.memory_decay_rate <= balanced.memory_decay_rate, \
                 "Forgetful should have equal or higher decay rate"
 
     def test_cautious_avoids_enemies(self, small_grid):

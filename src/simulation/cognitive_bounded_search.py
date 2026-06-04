@@ -121,10 +121,10 @@ class CBSMetrics:
     navigation, decision-making under uncertainty, and memory limitations.
     
     Attributes:
-        confusion_index: Ratio of tile revisits to unique tile visits.
+        confusion_index: Entropy-normalized revisit pressure.
                         High values indicate the agent got lost or backtracked.
-                        Formula: revisits / unique_visits
-                        Range: [0, âˆž), optimal â‰ˆ 0, confused > 2.0
+                        Formula: revisits / (unique_visits * log(unique_visits))
+                        Range: [0, âˆž), optimal â‰ˆ 0, random-walk-like â‰ˆ 1
                         
         navigation_entropy: Shannon entropy of direction choices.
                            High = random wandering, Low = directed movement.
@@ -137,7 +137,7 @@ class CBSMetrics:
                        Formula: (memory_items / capacity) Ã— (1 + ÏƒÂ²_confidence)
                        Range: [0, âˆž), typical [0.1, 2.0]
                        
-        aha_latency: Legacy internal name for goal-sighting latency:
+        aha_latency: Legacy internal name for goal exploitation latency:
                     steps between first seeing the goal and reaching it.
                     Low = efficient path exploitation.
                     High = poor spatial memory or suboptimal routing.
@@ -197,14 +197,24 @@ class CBSMetrics:
     focus_switches: int = 0
     focus_guided_steps: int = 0
     loop_escape_events: int = 0
+    memory_pressure_event_rate: float = 0.0
+    behavioral_complexity_index: float = 0.0
+    visit_entropy: float = 0.0
+    linearity_ratio: float = 0.0
+    challenge_score: float = 0.0
+    leniency: float = 0.0
+    persona_divergence: float = 0.0
     
     # Per-room metrics for detailed analysis
     room_visit_counts: Dict[Hashable, int] = field(default_factory=dict)
     direction_distribution: Dict[str, int] = field(default_factory=dict)
     memory_timeline: List[int] = field(default_factory=list)
+    frustration_timeline: List[float] = field(default_factory=list)
     
     def __post_init__(self):
         """Compute derived metrics."""
+        if self.path_length <= 0 and self.total_steps > 0:
+            self.path_length = int(self.total_steps)
         if self.total_steps > 0:
             self.exploration_efficiency = self.unique_tiles_visited / self.total_steps
     
@@ -216,13 +226,19 @@ class CBSMetrics:
             'cognitive_load': round(self.cognitive_load, 4),
             'aha_latency': self.aha_latency,
             'goal_sighting_latency': self.aha_latency,
+            'goal_exploitation_latency': self.aha_latency,
             'unique_tiles_visited': self.unique_tiles_visited,
             'total_steps': self.total_steps,
+            'path_length': self.path_length,
             'peak_memory_usage': self.peak_memory_usage,
             'goal_first_seen_step': self.goal_first_seen_step,
             'decisions_made': self.decisions_made,
             'suboptimal_decisions': self.suboptimal_decisions,
             'exploration_efficiency': round(self.exploration_efficiency, 4),
+            'replans': int(self.replans),
+            'confusion_events': int(self.confusion_events),
+            'backtrack_loops': int(self.backtrack_loops),
+            'belief_entropy_final': round(self.belief_entropy_final, 4),
             'room_visit_counts': dict(self.room_visit_counts),
             'direction_distribution': dict(self.direction_distribution),
             'room_entropy': round(self.room_entropy, 4),
@@ -238,6 +254,15 @@ class CBSMetrics:
             'focus_switches': self.focus_switches,
             'focus_guided_steps': self.focus_guided_steps,
             'loop_escape_events': self.loop_escape_events,
+            'memory_pressure_event_rate': round(self.memory_pressure_event_rate, 4),
+            'behavioral_complexity_index': round(self.behavioral_complexity_index, 4),
+            'visit_entropy': round(self.visit_entropy, 4),
+            'linearity_ratio': round(self.linearity_ratio, 4),
+            'challenge_score': round(self.challenge_score, 4),
+            'leniency': round(self.leniency, 4),
+            'persona_divergence': round(self.persona_divergence, 4),
+            'memory_timeline': list(self.memory_timeline),
+            'frustration_timeline': [round(float(value), 4) for value in self.frustration_timeline],
         }
     
     def summary(self) -> str:
@@ -1565,7 +1590,6 @@ class PersonaConfig:
     name: str
     memory_capacity: int = 7
     memory_decay_rate: float = 0.95
-    decay_rate: float = 0.01  # Exponential decay rate Î» for memory
     vision_radius: int = 5
     vision_accuracy: float = 0.9
     vision_cone: float = 360.0
@@ -1635,6 +1659,7 @@ class PersonaConfig:
                 frustration_sensitivity=0.05,
                 focus_commitment_bonus_weight=0.28,
                 task_switch_penalty_weight=0.12,
+                heuristic_utility_blend=0.0,
             )
         
         elif persona == AgentPersona.EXPLORER:
@@ -1642,7 +1667,6 @@ class PersonaConfig:
                 name="Explorer",
                 memory_capacity=7,
                 memory_decay_rate=0.95,
-                decay_rate=0.01,
                 vision_radius=5,
                 vision_accuracy=0.9,
                 vision_cone=360.0,
@@ -1674,6 +1698,7 @@ class PersonaConfig:
                 frustration_sensitivity=0.10,
                 focus_commitment_bonus_weight=0.0,
                 task_switch_penalty_weight=0.0,
+                heuristic_utility_blend=1.0,
             )
         
         elif persona == AgentPersona.CAUTIOUS:
@@ -1681,7 +1706,6 @@ class PersonaConfig:
                 name="Cautious",
                 memory_capacity=7,
                 memory_decay_rate=0.95,
-                decay_rate=0.01,
                 vision_radius=5,
                 vision_cone=120.0,        # Limited FOV (careful)
                 vision_accuracy=0.92,
@@ -1713,6 +1737,7 @@ class PersonaConfig:
                 frustration_sensitivity=0.30,
                 focus_commitment_bonus_weight=0.16,
                 task_switch_penalty_weight=0.10,
+                heuristic_utility_blend=0.65,
             )
         
         elif persona == AgentPersona.FORGETFUL:
@@ -1720,7 +1745,6 @@ class PersonaConfig:
                 name="Forgetful",
                 memory_capacity=4,        # Cowan's number
                 memory_decay_rate=0.80,   # Fast decay!
-                decay_rate=0.03,          # Î» = 0.03 (faster forgetting)
                 vision_radius=4,          # Poor awareness
                 vision_cone=120.0,
                 vision_accuracy=0.85,
@@ -1752,6 +1776,7 @@ class PersonaConfig:
                 frustration_sensitivity=0.35,
                 focus_commitment_bonus_weight=0.06,
                 task_switch_penalty_weight=0.04,
+                heuristic_utility_blend=0.70,
             )
         
         elif persona == AgentPersona.COMPLETIONIST:
@@ -1759,7 +1784,6 @@ class PersonaConfig:
                 name="Completionist",
                 memory_capacity=10,
                 memory_decay_rate=0.98,
-                decay_rate=0.01,
                 vision_radius=6,
                 vision_accuracy=0.92,
                 vision_cone=360.0,
@@ -1791,6 +1815,7 @@ class PersonaConfig:
                 frustration_sensitivity=0.12,
                 focus_commitment_bonus_weight=0.18,
                 task_switch_penalty_weight=0.05,
+                heuristic_utility_blend=0.85,
             )
 
         elif persona == AgentPersona.NOVICE:
@@ -1798,7 +1823,6 @@ class PersonaConfig:
                 name="Novice",
                 memory_capacity=5,
                 memory_decay_rate=0.86,
-                decay_rate=0.025,
                 vision_radius=4,
                 vision_accuracy=0.86,
                 vision_cone=110.0,
@@ -1830,6 +1854,7 @@ class PersonaConfig:
                 frustration_sensitivity=0.45,
                 focus_commitment_bonus_weight=0.10,
                 task_switch_penalty_weight=0.12,
+                heuristic_utility_blend=0.75,
             )
         
         elif persona == AgentPersona.GREEDY:
@@ -1840,7 +1865,6 @@ class PersonaConfig:
                 name="Greedy (Static)",
                 memory_capacity=7,
                 memory_decay_rate=1.0,   # NO DECAY - Î»=1.0 (Ebbinghaus control)
-                decay_rate=0.0,          # Zero decay rate
                 vision_radius=5,
                 vision_accuracy=0.9,
                 vision_cone=360.0,
@@ -1872,6 +1896,7 @@ class PersonaConfig:
                 frustration_sensitivity=0.05,
                 focus_commitment_bonus_weight=0.22,
                 task_switch_penalty_weight=0.08,
+                heuristic_utility_blend=0.0,
             )
         
         else:  # BALANCED
@@ -1879,7 +1904,6 @@ class PersonaConfig:
                 name="Balanced",
                 memory_capacity=7,
                 memory_decay_rate=0.95,
-                decay_rate=0.01,
                 vision_radius=5,
                 vision_accuracy=0.9,
                 vision_cone=360.0,
@@ -2090,6 +2114,7 @@ class CognitiveBoundedSearch:
         self._decisions_made: int = 0
         self._suboptimal_decisions: int = 0
         self._memory_timeline: List[int] = []
+        self._frustration_timeline: List[float] = []
         self._deliberation_events: int = 0
         self._budget_exhaustion_events: int = 0
         self._peak_frustration: float = 0.0
@@ -2122,6 +2147,7 @@ class CognitiveBoundedSearch:
         self._decisions_made = 0
         self._suboptimal_decisions = 0
         self._memory_timeline = []
+        self._frustration_timeline = []
         self._deliberation_events = 0
         self._budget_exhaustion_events = 0
         self._peak_frustration = 0.0
@@ -2158,6 +2184,7 @@ class CognitiveBoundedSearch:
         # Include starting position in visit/memory traces for entropy/load metrics.
         self._record_visit(cog_state.game_state.position)
         self._memory_timeline.append(len(self.memory.items))
+        self._frustration_timeline.append(float(cog_state.frustration))
         
         grid = self.env.original_grid
         
@@ -2317,6 +2344,7 @@ class CognitiveBoundedSearch:
                     float(cog_state.frustration) + 0.35 + 0.10 * float(decision_pressure),
                 )
                 self._peak_frustration = max(self._peak_frustration, float(cog_state.frustration))
+                self._frustration_timeline.append(float(cog_state.frustration))
                 states_explored += 1
                 continue
 
@@ -2346,6 +2374,7 @@ class CognitiveBoundedSearch:
             # Track visits
             self._record_visit(best_pos)
             self._memory_timeline.append(len(self.memory.items))
+            self._frustration_timeline.append(float(cog_state.frustration))
             
             path.append(best_pos)
             states_explored += 1
@@ -3594,9 +3623,13 @@ class CognitiveBoundedSearch:
         unique_tiles = len(set(path))
         total_steps = len(path)
         
-        # Confusion index
+        # Entropy-normalized confusion index. The old revisits/unique ratio
+        # made large rooms and small rooms look equally confusing for the same
+        # revisit multiplier. This denominator approximates random-walk revisit
+        # pressure over the discovered support.
         revisits = total_steps - unique_tiles
-        confusion_index = revisits / max(1, unique_tiles)
+        expected_revisits = float(unique_tiles) * math.log(float(max(2, unique_tiles)))
+        confusion_index = float(revisits) / max(1.0, expected_revisits)
         
         # Navigation entropy (direction-based)
         nav_entropy = self._compute_entropy(dict(self._direction_counts))
@@ -3623,6 +3656,23 @@ class CognitiveBoundedSearch:
         confusion_events = self._count_confusion_events(path)
         backtrack_loops = self._count_backtrack_loops(path)
         belief_entropy = self.belief_map.compute_total_entropy()
+        memory_pressure_event_rate = float(self._budget_exhaustion_events) / float(max(1, total_steps))
+        deliberation_rate = float(self._deliberation_events) / float(max(1, total_steps))
+        loop_escape_rate = float(self._loop_escape_events) / float(max(1, total_steps))
+        visit_entropy = self._compute_visit_entropy(path)
+        leniency = self._compute_leniency()
+        solved = bool(path and self.env.goal_pos is not None and path[-1] == self.env.goal_pos)
+        challenge_score = 0.0 if solved else 1.0
+        linearity_ratio = self._compute_linearity_ratio(path)
+        behavioral_complexity_index = float(np.clip(
+            0.30 * np.clip(confusion_index, 0.0, 1.0)
+            + 0.25 * np.clip(nav_entropy / 2.0, 0.0, 1.0)
+            + 0.20 * np.clip(cognitive_load / 2.5, 0.0, 1.0)
+            + 0.15 * np.clip(deliberation_rate, 0.0, 1.0)
+            + 0.10 * np.clip(loop_escape_rate, 0.0, 1.0),
+            0.0,
+            1.0,
+        ))
         
         return CBSMetrics(
             confusion_index=confusion_index,
@@ -3653,10 +3703,73 @@ class CognitiveBoundedSearch:
             focus_switches=self._focus_switches,
             focus_guided_steps=self._focus_guided_steps,
             loop_escape_events=self._loop_escape_events,
+            memory_pressure_event_rate=memory_pressure_event_rate,
+            behavioral_complexity_index=behavioral_complexity_index,
+            visit_entropy=visit_entropy,
+            linearity_ratio=linearity_ratio,
+            challenge_score=challenge_score,
+            leniency=leniency,
             room_visit_counts=room_visit_counts,
             direction_distribution=dict(self._direction_counts),
             memory_timeline=list(self._memory_timeline),
+            frustration_timeline=list(self._frustration_timeline),
         )
+
+    def _compute_visit_entropy(self, path: List[Tuple[int, int]]) -> float:
+        """Shannon entropy over visited tile frequencies."""
+        if not path:
+            return 0.0
+        counts: Dict[Tuple[int, int], int] = defaultdict(int)
+        for pos in path:
+            counts[(int(pos[0]), int(pos[1]))] += 1
+        total = float(sum(counts.values()))
+        if total <= 0:
+            return 0.0
+        entropy = 0.0
+        for count in counts.values():
+            p = float(count) / total
+            if p > 0:
+                entropy -= p * math.log2(p)
+        return float(entropy)
+
+    def _compute_leniency(self) -> float:
+        """Fraction of traversable tiles that are not near enemies or locks."""
+        grid = np.asarray(self.env.original_grid)
+        traversable = set(int(x) for x in WALKABLE_IDS) | set(int(x) for x in CONDITIONAL_IDS)
+        enemy_ids = {int(SEMANTIC_PALETTE['ENEMY']), int(SEMANTIC_PALETTE['BOSS'])}
+        lock_ids = {
+            int(SEMANTIC_PALETTE['DOOR_LOCKED']),
+            int(SEMANTIC_PALETTE['DOOR_BOMB']),
+            int(SEMANTIC_PALETTE['DOOR_BOSS']),
+            int(SEMANTIC_PALETTE['DOOR_PUZZLE']),
+        }
+        traversable_positions: List[Tuple[int, int]] = []
+        hazard_positions: List[Tuple[int, int]] = []
+        for rr in range(int(grid.shape[0])):
+            for cc in range(int(grid.shape[1])):
+                tile = int(grid[rr, cc])
+                if tile in traversable:
+                    traversable_positions.append((rr, cc))
+                if tile in enemy_ids or tile in lock_ids:
+                    hazard_positions.append((rr, cc))
+        if not traversable_positions:
+            return 0.0
+        safe_count = 0
+        for rr, cc in traversable_positions:
+            near_hazard = any(abs(rr - hr) + abs(cc - hc) <= 2 for hr, hc in hazard_positions)
+            if not near_hazard:
+                safe_count += 1
+        return float(safe_count) / float(len(traversable_positions))
+
+    def _compute_linearity_ratio(self, path: List[Tuple[int, int]]) -> float:
+        """Agent path length divided by a robust lower bound on optimal length."""
+        if not path or self.env.start_pos is None or self.env.goal_pos is None:
+            return 0.0
+        manhattan = abs(int(self.env.start_pos[0]) - int(self.env.goal_pos[0])) + abs(
+            int(self.env.start_pos[1]) - int(self.env.goal_pos[1])
+        )
+        lower_bound = max(1, int(manhattan) + 1)
+        return float(len(path)) / float(lower_bound)
     
     def _count_replans(self, path: List[Tuple[int, int]]) -> int:
         """Count direction changes (replans) in the path."""

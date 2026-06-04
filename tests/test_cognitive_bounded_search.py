@@ -528,6 +528,24 @@ class TestPersonas:
         assert config.memory_decay_rate <= 0.85
         assert config.random_tiebreaker > 0.2  # More random
 
+    def test_persona_configs_have_paper_specific_blends(self):
+        """The heuristic/utility blend should be an active persona parameter."""
+        blends = {
+            persona: PersonaConfig.get_persona(persona).heuristic_utility_blend
+            for persona in AgentPersona
+        }
+
+        assert blends[AgentPersona.SPEEDRUNNER] == pytest.approx(0.0)
+        assert blends[AgentPersona.GREEDY] == pytest.approx(0.0)
+        assert blends[AgentPersona.EXPLORER] == pytest.approx(1.0)
+        assert len(set(blends.values())) > 3
+
+    def test_persona_config_has_no_dead_decay_rate_field(self):
+        """PersonaConfig should expose only the wired memory_decay_rate."""
+        config = PersonaConfig.get_persona(AgentPersona.BALANCED)
+
+        assert not hasattr(config, 'decay_rate')
+
 
 # ==============================================================================
 # CBS SOLVER TESTS
@@ -767,6 +785,15 @@ class TestCBSMetrics:
         assert 'confusion_index' in d
         assert 'navigation_entropy' in d
         assert d['total_steps'] == 75
+        assert d['path_length'] == 75
+        assert d['goal_exploitation_latency'] == 15
+        assert 'replans' in d
+        assert 'confusion_events' in d
+        assert 'backtrack_loops' in d
+        assert 'belief_entropy_final' in d
+        assert 'memory_pressure_event_rate' in d
+        assert 'behavioral_complexity_index' in d
+        assert 'frustration_timeline' in d
         assert 'affordance_reactivations' in d
         assert 'inventory_change_events' in d
     

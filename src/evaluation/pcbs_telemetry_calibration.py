@@ -345,7 +345,6 @@ def _calibrate_single(
 
     data["memory_capacity"] = int(_clamp(round(base.memory_capacity - 2.0 * bounded_gap), 3, 12))
     data["memory_decay_rate"] = _clamp(base.memory_decay_rate - 0.08 * bounded_gap, 0.70, 1.0)
-    data["decay_rate"] = _clamp(base.decay_rate + 0.025 * bounded_gap, 0.0, 0.08)
     data["vision_radius"] = int(_clamp(round(base.vision_radius - 1.5 * bounded_gap), 3, 12))
     data["vision_accuracy"] = _clamp(base.vision_accuracy - 0.06 * bounded_gap, 0.75, 0.99)
     data["satisficing_threshold"] = _clamp(base.satisficing_threshold - 0.08 * bounded_gap, 0.45, 1.0)
