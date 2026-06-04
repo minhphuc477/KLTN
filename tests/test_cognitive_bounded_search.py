@@ -169,6 +169,15 @@ class TestBeliefMap:
         assert confidence == 0.0
         assert belief.get_knowledge_state((5, 5)) == TileKnowledge.UNKNOWN
 
+    def test_explicit_zero_default_assumption_is_preserved(self):
+        """Tile ID 0 is valid and must not be replaced by the WALL fallback."""
+        belief = BeliefMap(grid_shape=(10, 10), default_assumption=0)
+
+        tile_type, confidence = belief.get_tile_with_confidence((5, 5))
+
+        assert tile_type == 0
+        assert confidence == 0.0
+
     def test_unknown_tile_entropy_is_high(self):
         """Unknown tiles should carry high uncertainty (near 1 bit)."""
         belief = BeliefMap(grid_shape=(10, 10))
@@ -220,6 +229,16 @@ class TestBeliefMap:
         decayed_confidence = belief.get_confidence((5, 5))
         
         assert decayed_confidence < initial_confidence
+
+    def test_decay_rate_override_is_clamped_to_valid_probability(self):
+        """Decay rates outside [0,1] should not increase confidence."""
+        belief = BeliefMap(grid_shape=(10, 10), decay_rate=0.9)
+        belief.observe((5, 5), SEMANTIC_PALETTE['FLOOR'], current_step=0, is_visit=False)
+
+        initial_confidence = belief.get_confidence((5, 5))
+        belief.apply_decay(current_step=1, decay_rate=2.0)
+
+        assert belief.get_confidence((5, 5)) <= initial_confidence
 
     def test_explored_tiles_do_not_decay(self):
         """Physically visited tiles should remain route knowledge."""

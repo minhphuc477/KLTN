@@ -326,7 +326,8 @@ class TileObservation:
         
         time_delta = current_step - self.last_seen
         if time_delta > 0:
-            self.confidence *= (decay_rate ** time_delta)
+            rate = min(1.0, max(0.0, float(decay_rate)))
+            self.confidence *= (rate ** time_delta)
             
             # Downgrade knowledge level if confidence drops
             if self.confidence < 0.3:
@@ -375,8 +376,12 @@ class BeliefMap:
             decay_rate: Per-step confidence decay factor [0, 1]
         """
         self.grid_shape = grid_shape
-        self.default_assumption = default_assumption or SEMANTIC_PALETTE['WALL']
-        self.decay_rate = decay_rate
+        self.default_assumption = (
+            int(default_assumption)
+            if default_assumption is not None
+            else int(SEMANTIC_PALETTE['WALL'])
+        )
+        self.decay_rate = min(1.0, max(0.0, float(decay_rate)))
         
         # Core storage: position -> TileObservation
         self.known_tiles: Dict[Tuple[int, int], TileObservation] = {}
@@ -712,7 +717,8 @@ class BeliefMap:
             current_step: Current timestep (optional, used for time-based decay)
             decay_rate: Optional override for decay rate
         """
-        rate = decay_rate if decay_rate is not None else self.decay_rate
+        raw_rate = decay_rate if decay_rate is not None else self.decay_rate
+        rate = min(1.0, max(0.0, float(raw_rate)))
         for pos, obs in self.known_tiles.items():
             previous_entropy = self._entropy_for_position(pos)
             if obs.visited or obs.knowledge == TileKnowledge.EXPLORED:
