@@ -74,7 +74,8 @@ def normalized_confusion_ratio(
     if oracle_len <= 0 or candidate_len <= 0:
         return float("nan")
     denominator = max(1, oracle_len, manhattan_i)
-    return float(max(0, candidate_len - oracle_len)) / float(denominator)
+    ratio = float(max(0, candidate_len - oracle_len)) / float(denominator)
+    return float(max(0.0, min(1.0, ratio)))
 
 
 def finite_mean(values: List[Any]) -> float:

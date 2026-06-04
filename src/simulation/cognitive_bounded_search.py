@@ -733,6 +733,7 @@ class BeliefMap:
                 elif obs.knowledge == TileKnowledge.GLIMPSED:
                     effective_rate = rate * rate
                 obs.confidence *= effective_rate
+                decayed_confidence = float(obs.confidence)
                 if obs.posterior:
                     uniform = 1.0 / float(max(1, len(self.tile_vocabulary)))
                     decay_mass = 1.0 - effective_rate
@@ -742,10 +743,13 @@ class BeliefMap:
                     }
                     self._sync_observation_from_posterior(obs)
                 # Downgrade knowledge if confidence too low
-                if obs.confidence < 0.3:
+                if decayed_confidence < 0.3:
                     obs.knowledge = TileKnowledge.GLIMPSED
-                if obs.confidence < 0.1:
+                    obs.confidence = min(float(obs.confidence), decayed_confidence)
+                if decayed_confidence < 0.1:
                     obs.knowledge = TileKnowledge.UNKNOWN
+                    obs.confidence = 0.0
+                    obs.posterior = None
             self._update_total_entropy(pos, previous_entropy)
     
     def get_unexplored_neighbors(self, position: Tuple[int, int]) -> List[Tuple[int, int]]:
@@ -1588,10 +1592,11 @@ class GoalSeekingHeuristic(DecisionHeuristic):
         target_dist = abs(target_pos[0] - remembered_goal[0]) + \
                       abs(target_pos[1] - remembered_goal[1])
         
-        # Score positive if moving toward goal
+        # One-step absolute progress keeps goal pursuit on the same bounded
+        # [-1, 1] scale regardless of long-range distance.
         if current_dist > 0:
-            improvement = (current_dist - target_dist) / current_dist
-            return improvement
+            improvement = current_dist - target_dist
+            return float(max(-1.0, min(1.0, improvement)))
         return 0.0
 
 
@@ -1632,7 +1637,8 @@ class ItemSeekingHeuristic(DecisionHeuristic):
         target_dist = abs(target_pos[0] - item_pos[0]) + abs(target_pos[1] - item_pos[1])
         
         if current_dist > 0:
-            return (current_dist - target_dist) / current_dist * item_memory.salience
+            improvement = float(max(-1.0, min(1.0, current_dist - target_dist)))
+            return improvement * float(item_memory.salience)
         return 0.0
 
 

@@ -57,8 +57,10 @@ def _compute_graph_cognitive_proxy(
             semantics.add('triforce')
         return any(token in semantics for token in tokens)
 
-    # Ensure directed reachability is judged on directed graph semantics.
-    dg = graph if graph.is_directed() else nx.DiGraph(graph)
+    # Preserve directed mission semantics when present. For undirected legacy
+    # graphs, do not manufacture a bidirectional DiGraph and then use
+    # out_degree(): that erases terminal/dead-end structure in the proxy.
+    dg = graph
 
     explicit_starts = [
         node for node, data in dg.nodes(data=True)
@@ -93,7 +95,19 @@ def _compute_graph_cognitive_proxy(
     deg_std = float(np.std(degrees)) if degrees else 0.0
 
     # Dead-end pressure and loop pressure proxy human confusion tendencies.
-    dead_ends = float(sum(1 for _n, deg in dg.out_degree() if deg == 0)) / float(max(1, n))
+    if dg.is_directed():
+        dead_count = sum(
+            1
+            for n_id in dg.nodes()
+            if int(dg.out_degree(n_id)) == 0 and not _has_semantic(dict(dg.nodes[n_id]), 'goal', 'triforce', 't')
+        )
+    else:
+        dead_count = sum(
+            1
+            for n_id in dg.nodes()
+            if int(dg.degree(n_id)) <= 1 and not _has_semantic(dict(dg.nodes[n_id]), 'goal', 'triforce', 't')
+        )
+    dead_ends = float(dead_count) / float(max(1, n))
     loop_pressure = max(0.0, float(e - n + 1)) / float(max(1, n))
     branch_pressure = float(np.clip((mean_deg - 1.0) / 3.0, 0.0, 1.0))
 
@@ -109,7 +123,13 @@ def _compute_graph_cognitive_proxy(
         # Assume bounded agent pays structural overhead over optimal shortest path.
         cbs_path_len = int(max(1, round(shortest * (1.0 + confusion_index))))
         path_efficiency = float(shortest) / float(max(1, cbs_path_len))
-        normalized_confusion = float(max(0, cbs_path_len - shortest)) / float(max(1, shortest))
+        normalized_confusion = normalized_confusion_ratio(
+            shortest,
+            cbs_path_len,
+            shortest,
+            oracle_status="solved",
+            candidate_success=True,
+        )
         target_normalized = max(0.0, float(target_confusion_ratio) - 1.0)
         cr_penalty = (normalized_confusion - target_normalized) ** 2
         fitness = 1.0 / (1.0 + cr_penalty)

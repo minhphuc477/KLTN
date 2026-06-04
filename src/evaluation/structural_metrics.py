@@ -59,9 +59,15 @@ def analyze_structural_topology(mission_graph: nx.Graph) -> StructuralTopologyMe
             dead_end_ratio=0.0,
         )
 
-    undirected = mission_graph.to_undirected()
-    n_nodes = float(max(1, undirected.number_of_nodes()))
-    dead_ends = sum(1 for n in undirected.nodes() if int(undirected.degree(n)) <= 1)
+    n_nodes = float(max(1, mission_graph.number_of_nodes()))
+    if mission_graph.is_directed():
+        dead_ends = sum(
+            1
+            for n in mission_graph.nodes()
+            if int(mission_graph.out_degree(n)) == 0 or int(mission_graph.in_degree(n)) == 0
+        )
+    else:
+        dead_ends = sum(1 for n in mission_graph.nodes() if int(mission_graph.degree(n)) <= 1)
 
     return StructuralTopologyMetrics(
         cyclomatic_complexity=compute_cyclomatic_complexity(mission_graph),

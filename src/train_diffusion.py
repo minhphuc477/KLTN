@@ -20,7 +20,7 @@ import logging
 import math
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Dict, Any, Tuple, List
+from typing import Optional, Dict, Any, Tuple, List, Set
 
 import numpy as np
 import torch
@@ -1044,6 +1044,48 @@ class DiffusionTrainer:
     3. LatentDiffusion: Generate dungeons in latent space
     4. LogicNet: Differentiable solvability (gradient guidance)
     """
+
+    @staticmethod
+    def _adamw_decay_param_groups(
+        name: str,
+        module: nn.Module,
+        *,
+        weight_decay: float,
+    ) -> List[Dict[str, Any]]:
+        """Build AdamW groups that exclude biases and 1D scale parameters from decay."""
+        decay_params: List[nn.Parameter] = []
+        no_decay_params: List[nn.Parameter] = []
+        seen: Set[int] = set()
+        for param_name, param in module.named_parameters():
+            if not param.requires_grad:
+                continue
+            param_id = id(param)
+            if param_id in seen:
+                continue
+            seen.add(param_id)
+            if param.ndim <= 1 or param_name.endswith(".bias"):
+                no_decay_params.append(param)
+            else:
+                decay_params.append(param)
+
+        groups: List[Dict[str, Any]] = []
+        if decay_params:
+            groups.append(
+                {
+                    "name": f"{name}_decay",
+                    "params": decay_params,
+                    "weight_decay": float(max(0.0, weight_decay)),
+                }
+            )
+        if no_decay_params:
+            groups.append(
+                {
+                    "name": f"{name}_no_decay",
+                    "params": no_decay_params,
+                    "weight_decay": 0.0,
+                }
+            )
+        return groups
     
     def __init__(
         self,
@@ -1098,20 +1140,33 @@ class DiffusionTrainer:
         # step, âˆ‡_{x_t}L_logic nudges the sample toward solvable configs.
         self._configure_guidance()
         
-        optimizer_groups = [
-            {"name": "diffusion", "params": list(self.diffusion.parameters())},
-            {"name": "condition_encoder", "params": list(self.condition_encoder.parameters())},
-        ]
+        optimizer_groups = self._adamw_decay_param_groups(
+            "diffusion",
+            self.diffusion,
+            weight_decay=float(config.optimizer_weight_decay),
+        )
+        optimizer_groups.extend(
+            self._adamw_decay_param_groups(
+                "condition_encoder",
+                self.condition_encoder,
+                weight_decay=float(config.optimizer_weight_decay),
+            )
+        )
         if bool(getattr(config, "logic_net_trainable", True)):
-            logic_group = {"name": "logic_net", "params": list(self.logic_net.parameters())}
+            logic_groups = self._adamw_decay_param_groups(
+                "logic_net",
+                self.logic_net,
+                weight_decay=float(config.optimizer_weight_decay),
+            )
             if getattr(config, "logic_learning_rate", None) is not None:
-                logic_group["lr"] = float(config.logic_learning_rate)
-            optimizer_groups.append(logic_group)
+                for logic_group in logic_groups:
+                    logic_group["lr"] = float(config.logic_learning_rate)
+            optimizer_groups.extend(logic_groups)
 
         self.optimizer = optim.AdamW(
             optimizer_groups,
             lr=config.learning_rate,
-            weight_decay=config.optimizer_weight_decay,
+            weight_decay=0.0,
         )
         for group in self.optimizer.param_groups:
             group.setdefault("base_lr", float(group.get("lr", config.learning_rate)))
@@ -2545,7 +2600,7 @@ class DiffusionTrainer:
         self,
         pred_tile_logits: torch.Tensor,
         real_maps: torch.Tensor,
-    ) -> Tuple[torch.Tensor, float]:
+    ) -> Tuple[torch.Tensor, float, torch.Tensor]:
         """
         Distill WFC-repaired pseudo targets into predicted tile logits.
 
@@ -2555,14 +2610,14 @@ class DiffusionTrainer:
         """
         zero = torch.zeros((), device=pred_tile_logits.device, dtype=pred_tile_logits.dtype)
         if float(getattr(self.config, "alpha_wfc_pseudo", 0.0)) <= 0.0:
-            return zero, 0.0
+            return zero, 0.0, zero
         max_samples = int(getattr(self.config, "wfc_pseudo_max_samples", 0))
         if max_samples <= 0 or pred_tile_logits.numel() == 0:
-            return zero, 0.0
+            return zero, 0.0, zero
 
         priors = self._build_wfc_tile_priors(real_maps)
         if not priors:
-            return zero, 0.0
+            return zero, 0.0, zero
 
         with torch.no_grad():
             probs = F.softmax(pred_tile_logits.detach(), dim=1)
@@ -2597,10 +2652,14 @@ class DiffusionTrainer:
                 repair_targets.append(target)
 
         if not repair_targets:
-            return zero, 0.0
+            return zero, 0.0, zero
         target_batch = torch.stack(repair_targets, dim=0)
         logits = pred_tile_logits[: target_batch.shape[0]]
-        return F.cross_entropy(logits, target_batch), float(target_batch.shape[0])
+        repaired_mean = F.cross_entropy(logits, target_batch, reduction="mean")
+        full_batch_loss = F.cross_entropy(logits, target_batch, reduction="sum") / float(
+            max(1, int(pred_tile_logits.shape[0]) * int(pred_tile_logits.shape[2]) * int(pred_tile_logits.shape[3]))
+        )
+        return full_batch_loss, float(target_batch.shape[0]), repaired_mean
     
     def _update_ema(self):
         """
@@ -2870,6 +2929,7 @@ class DiffusionTrainer:
         logic_loss = torch.tensor(0.0, device=self.device)
         logic_tile_loss = torch.tensor(0.0, device=self.device)
         wfc_pseudo_loss = torch.tensor(0.0, device=self.device)
+        wfc_pseudo_mean_loss = torch.tensor(0.0, device=self.device)
         wfc_pseudo_samples = 0.0
         logic_tile_accuracy = torch.tensor(0.0, device=self.device)
         solvability_proxy = torch.tensor(0.0, device=self.device)
@@ -2929,7 +2989,7 @@ class DiffusionTrainer:
                 if pred_x0_logic is not None:
                     pred_tile_logits = self._decode_latent_for_logic(pred_x0_logic)
                     logic_loss, _logic_info = self.logic_net(pred_tile_logits, graph_data=logic_graph_data)
-                    wfc_pseudo_loss, wfc_pseudo_samples = self._wfc_pseudo_label_loss(
+                    wfc_pseudo_loss, wfc_pseudo_samples, wfc_pseudo_mean_loss = self._wfc_pseudo_label_loss(
                         pred_tile_logits,
                         real_maps,
                     )
