@@ -148,6 +148,20 @@ def test_dungeon_batch_sampler_preserves_graph_fields_in_batches():
         assert tuple(graph["node_features"].shape) == (2, GRAPH_NODE_FEATURE_DIM)
         assert tuple(graph["edge_rrwp"].shape) == (1, GRAPH_TPE_DIM)
         assert tuple(graph["tpe"].shape) == (2, GRAPH_TPE_DIM)
+        assert tuple(graph["batch_idx"].shape) == (2,)
+        assert torch.equal(graph["batch_idx"], torch.zeros(2, dtype=torch.long))
+
+
+def test_graph_collate_adds_per_graph_batch_idx_without_mutating_source():
+    graph = {
+        "node_features": torch.zeros(3, GRAPH_NODE_FEATURE_DIM),
+        "edge_index": torch.empty(2, 0, dtype=torch.long),
+    }
+
+    _rooms, graph_list = graph_collate_fn([(torch.zeros(1, ROOM_HEIGHT, ROOM_WIDTH), graph)])
+
+    assert "batch_idx" not in graph
+    assert torch.equal(graph_list[0]["batch_idx"], torch.zeros(3, dtype=torch.long))
 
 
 def test_room_graph_sample_builds_room_topology_from_dataset_graph():

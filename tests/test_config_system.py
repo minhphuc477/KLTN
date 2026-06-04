@@ -17,6 +17,7 @@ from src.config_system import (
     find_resolved_config_path,
     load_resolved_config_for_artifact,
     merge_config,
+    seed_everything,
 )
 from src.pipeline import (
     NeuralSymbolicDungeonPipeline,
@@ -150,6 +151,8 @@ def test_default_config_uses_small_data_recommended_room_model_profile():
     resolved = merge_config(yaml_path=None, cli_overrides=None)
 
     assert resolved["runtime"]["auto_resume"] is True
+    assert resolved["runtime"]["cudnn_benchmark"] is True
+    assert resolved["runtime"]["cudnn_deterministic"] is False
     assert resolved["runtime"]["checkpoint_storage_budget_gb"] is None
     assert resolved["runtime"]["checkpoint_storage_warning_fraction"] == pytest.approx(0.8)
     assert resolved["runtime"]["checkpoint_storage_cleanup_enabled"] is True
@@ -167,9 +170,23 @@ def test_default_config_uses_small_data_recommended_room_model_profile():
     assert resolved["fast_sampler"]["topology_marker_weight"] == pytest.approx(2.0)
     assert resolved["fast_sampler"]["topology_trace_weight"] == pytest.approx(0.75)
     assert resolved["fast_sampler"]["topology_focus_dilation"] == 1
+    assert resolved["masked_room"]["topology_alignment_weight"] == pytest.approx(0.25)
+    assert resolved["masked_room"]["topology_marker_weight"] == pytest.approx(2.0)
+    assert resolved["masked_room"]["topology_trace_weight"] == pytest.approx(0.75)
+    assert resolved["masked_room"]["topology_focus_dilation"] == 1
+    assert resolved["masked_room"]["validation_fraction"] == pytest.approx(0.1)
+    assert resolved["masked_room"]["validation_max_batches"] == 16
+    assert resolved["masked_room"]["best_checkpoint_metric"] == "val_loss"
+    assert resolved["masked_room"]["topology_alignment_weight"] == pytest.approx(0.25)
+    assert resolved["masked_room"]["topology_marker_weight"] == pytest.approx(2.0)
+    assert resolved["masked_room"]["topology_trace_weight"] == pytest.approx(0.75)
+    assert resolved["masked_room"]["topology_focus_dilation"] == 1
+    assert resolved["dataset"]["topology_supervision_mode"] == "runtime_aligned"
+    assert resolved["fast_sampler"]["topology_focus_dilation"] == 1
     assert resolved["fast_sampler"]["validation_fraction"] == pytest.approx(0.1)
     assert resolved["fast_sampler"]["validation_max_batches"] == 16
     assert resolved["fast_sampler"]["best_checkpoint_metric"] == "val_decode_ce_loss"
+
     assert resolved["masked_room"]["keep_last"] == 2
     assert resolved["diffusion"]["model_channels"] == 96
     assert resolved["diffusion"]["condition_hidden_dim"] == 192
@@ -190,19 +207,7 @@ def test_default_config_uses_small_data_recommended_room_model_profile():
     assert resolved["fast_sampler"]["topology_alignment_weight"] == pytest.approx(0.25)
     assert resolved["fast_sampler"]["topology_marker_weight"] == pytest.approx(2.0)
     assert resolved["fast_sampler"]["topology_trace_weight"] == pytest.approx(0.75)
-    assert resolved["fast_sampler"]["topology_focus_dilation"] == 1
-    assert resolved["masked_room"]["topology_alignment_weight"] == pytest.approx(0.25)
-    assert resolved["masked_room"]["topology_marker_weight"] == pytest.approx(2.0)
-    assert resolved["masked_room"]["topology_trace_weight"] == pytest.approx(0.75)
-    assert resolved["masked_room"]["topology_focus_dilation"] == 1
-    assert resolved["masked_room"]["validation_fraction"] == pytest.approx(0.1)
-    assert resolved["masked_room"]["validation_max_batches"] == 16
-    assert resolved["masked_room"]["best_checkpoint_metric"] == "val_loss"
-    assert resolved["masked_room"]["topology_alignment_weight"] == pytest.approx(0.25)
-    assert resolved["masked_room"]["topology_marker_weight"] == pytest.approx(2.0)
-    assert resolved["masked_room"]["topology_trace_weight"] == pytest.approx(0.75)
-    assert resolved["masked_room"]["topology_focus_dilation"] == 1
-    assert resolved["dataset"]["topology_supervision_mode"] == "runtime_aligned"
+
     assert resolved["generation"]["guidance_scale"] == pytest.approx(3.0)
     assert resolved["generation"]["logic_guidance_scale"] == pytest.approx(0.0)
     assert resolved["generation"]["num_diffusion_steps"] == 50
@@ -245,6 +250,22 @@ def test_default_config_uses_small_data_recommended_room_model_profile():
     assert resolved["generation"]["masked_room_corrector_mask_ratio"] == pytest.approx(0.1)
     assert resolved["diffusion"]["validation_num_samples"] == 8
     assert resolved["diffusion"]["validation_num_diffusion_samples"] == 64
+
+
+def test_seed_everything_configures_cudnn_benchmark_flags():
+    old_benchmark = torch.backends.cudnn.benchmark
+    old_deterministic = torch.backends.cudnn.deterministic
+    try:
+        seed_everything(123, cudnn_benchmark=True, cudnn_deterministic=False)
+        assert torch.backends.cudnn.benchmark is True
+        assert torch.backends.cudnn.deterministic is False
+
+        seed_everything(123, cudnn_benchmark=True, cudnn_deterministic=True)
+        assert torch.backends.cudnn.benchmark is False
+        assert torch.backends.cudnn.deterministic is True
+    finally:
+        torch.backends.cudnn.benchmark = old_benchmark
+        torch.backends.cudnn.deterministic = old_deterministic
 
 
 def test_canonical_yaml_uses_downsized_masked_room_profile():

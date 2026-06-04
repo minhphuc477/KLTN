@@ -98,6 +98,8 @@ CONFIG_FIELDS: List[ConfigField] = [
     ConfigField("runtime.log_file", str, "training.log", "Training log filename written inside output_dir."),
     ConfigField("runtime.device", str, "auto", "Execution device.", choices=("auto", "cuda", "cpu")),
     ConfigField("runtime.seed", int, 42, "Global random seed.", min_value=0),
+    ConfigField("runtime.cudnn_benchmark", bool, True, "Enable cuDNN convolution autotuning for fixed-size training grids."),
+    ConfigField("runtime.cudnn_deterministic", bool, False, "Force deterministic cuDNN kernels; disables benchmark when true."),
     ConfigField("runtime.verbose", bool, False, "Enable verbose logging."),
     ConfigField("runtime.quick", bool, False, "Shorten training for smoke tests."),
     ConfigField("runtime.auto_resume", bool, True, "Automatically resume from checkpoint_dir/latest_resume.pth when present."),
@@ -828,7 +830,12 @@ def load_resolved_config_for_artifact(start_path: Optional[str | Path]) -> Optio
     raise ValueError(f"Unsupported resolved config format: {resolved_path}")
 
 
-def seed_everything(seed: Optional[int]) -> int:
+def seed_everything(
+    seed: Optional[int],
+    *,
+    cudnn_benchmark: Optional[bool] = None,
+    cudnn_deterministic: Optional[bool] = None,
+) -> int:
     if seed is None:
         seed = 42
     seed = int(seed)
@@ -838,6 +845,13 @@ def seed_everything(seed: Optional[int]) -> int:
         torch.manual_seed(seed)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(seed)
+        if hasattr(torch.backends, "cudnn"):
+            if cudnn_deterministic is not None:
+                torch.backends.cudnn.deterministic = bool(cudnn_deterministic)
+            if cudnn_benchmark is not None:
+                torch.backends.cudnn.benchmark = bool(cudnn_benchmark) and not bool(
+                    torch.backends.cudnn.deterministic
+                )
     return seed
 
 

@@ -11,6 +11,8 @@ runtime:
   log_file: training.log  # type=str, default=training.log, valid=filename relative to output_dir
   device: auto  # type=str, default=auto, valid={auto,cuda,cpu}
   seed: 42  # type=int, default=42, valid>=0
+  cudnn_benchmark: true  # type=bool, default=true, valid={true,false}; cuDNN autotuning for fixed-size room tensors
+  cudnn_deterministic: false  # type=bool, default=false, valid={true,false}; stricter reproducibility, disables benchmark when true
   verbose: false  # type=bool, default=false, valid={true,false}
   quick: false  # type=bool, default=false, valid={true,false}; short smoke-test mode
   auto_resume: true  # type=bool, default=true, valid={true,false}; resume from checkpoint_dir/latest_resume.pth when present

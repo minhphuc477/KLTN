@@ -472,7 +472,11 @@ def run_training_from_args(args: argparse.Namespace) -> None:
 
     rank = int(get_env_rank())
     configure_logging(config, rank=rank)
-    config["runtime"]["seed"] = seed_everything(config["runtime"]["seed"])
+    config["runtime"]["seed"] = seed_everything(
+        config["runtime"]["seed"],
+        cudnn_benchmark=bool(config["runtime"].get("cudnn_benchmark", True)),
+        cudnn_deterministic=bool(config["runtime"].get("cudnn_deterministic", False)),
+    )
     if rank == 0:
         snapshot_paths = save_reproducibility_snapshot(config, argv=sys.argv)
         logger.info("Saved config snapshot to %s", snapshot_paths["resolved_yaml"])

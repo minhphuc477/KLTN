@@ -2,7 +2,19 @@
 
 from __future__ import annotations
 
+import random
 from typing import Any, Dict
+
+import numpy as np
+import torch
+
+
+def seed_dataloader_worker(worker_id: int) -> None:
+    """Seed Python and NumPy RNGs inside a PyTorch DataLoader worker."""
+    _ = worker_id
+    worker_seed = int(torch.initial_seed() % 2**32)
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
 
 
 def dataloader_runtime_kwargs(
@@ -24,6 +36,7 @@ def dataloader_runtime_kwargs(
         "pin_memory": bool(pin_memory),
     }
     if workers > 0:
+        kwargs["worker_init_fn"] = seed_dataloader_worker
         kwargs["persistent_workers"] = True if persistent_workers is None else bool(persistent_workers)
         if prefetch_factor is not None:
             kwargs["prefetch_factor"] = int(max(1, prefetch_factor))

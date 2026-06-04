@@ -24,6 +24,7 @@ from pathlib import Path
 
 import torch
 from torch.utils.data import Dataset, DataLoader, Sampler
+from src.utils.data_loading import seed_dataloader_worker
 
 logger = logging.getLogger(__name__)
 
@@ -1076,7 +1077,14 @@ def graph_collate_fn(batch):
     """
     if isinstance(batch[0], (list, tuple)) and len(batch[0]) == 2:
         images = torch.stack([item[0] for item in batch])
-        graphs = [item[1] for item in batch]
+        graphs = []
+        for item in batch:
+            graph = dict(item[1])
+            if "batch_idx" not in graph:
+                node_features = graph.get("node_features")
+                if isinstance(node_features, torch.Tensor) and node_features.dim() >= 1:
+                    graph["batch_idx"] = torch.zeros(int(node_features.shape[0]), dtype=torch.long)
+            graphs.append(graph)
         return images, graphs
     else:
         # No graph data -- plain image batch
@@ -1262,6 +1270,7 @@ def create_dataloader(
         "num_workers": num_workers,
         "pin_memory": torch.cuda.is_available() if pin_memory is None else bool(pin_memory),
         "collate_fn": graph_collate_fn if load_graphs else None,
+        "worker_init_fn": seed_dataloader_worker if int(num_workers) > 0 else None,
     }
     if batch_sampler is not None:
         dataloader = DataLoader(dataset, batch_sampler=batch_sampler, **dataloader_kwargs)
