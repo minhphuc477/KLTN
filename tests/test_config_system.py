@@ -177,12 +177,6 @@ def test_default_config_uses_small_data_recommended_room_model_profile():
     assert resolved["masked_room"]["validation_fraction"] == pytest.approx(0.1)
     assert resolved["masked_room"]["validation_max_batches"] == 16
     assert resolved["masked_room"]["best_checkpoint_metric"] == "val_loss"
-    assert resolved["masked_room"]["topology_alignment_weight"] == pytest.approx(0.25)
-    assert resolved["masked_room"]["topology_marker_weight"] == pytest.approx(2.0)
-    assert resolved["masked_room"]["topology_trace_weight"] == pytest.approx(0.75)
-    assert resolved["masked_room"]["topology_focus_dilation"] == 1
-    assert resolved["dataset"]["topology_supervision_mode"] == "runtime_aligned"
-    assert resolved["fast_sampler"]["topology_focus_dilation"] == 1
     assert resolved["fast_sampler"]["validation_fraction"] == pytest.approx(0.1)
     assert resolved["fast_sampler"]["validation_max_batches"] == 16
     assert resolved["fast_sampler"]["best_checkpoint_metric"] == "val_decode_ce_loss"

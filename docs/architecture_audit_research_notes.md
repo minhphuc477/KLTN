@@ -1,6 +1,7 @@
 # Architecture Audit Research Notes
 
 Last cleaned: 2026-06-04.
+Basic ML engineering pass: 2026-06-05.
 
 These notes are a current audit ledger for H-MOLQD, a neuro-symbolic dungeon
 generation system combining VQ-VAE/FSQ latents, graph-conditioned latent
@@ -111,6 +112,19 @@ currently support the claims. It is not an experimental-results substitute.
   transpose reversed latent `[H,W]` axes before resizing, and latent edit masks
   transpose only when room-mask aspect is clearly reversed relative to the
   target latent aspect.
+- **DataLoader worker RNG seeding:** shared training dataloader kwargs now add a
+  top-level `worker_init_fn` whenever `num_workers > 0`. The hook derives NumPy
+  and Python `random` seeds from PyTorch's per-worker `torch.initial_seed()`,
+  avoiding repeated external-library RNG streams in multi-process loading.
+- **Per-graph batch assignment metadata:** Zelda graph collation preserves the
+  existing list-of-graphs API but now injects a per-sample all-zero `batch_idx`
+  tensor when graph node features are present. This does not convert the batch
+  into one packed PyG graph; it prevents downstream single-graph encoders from
+  silently defaulting missing batch metadata.
+- **cuDNN runtime flags:** `runtime.cudnn_benchmark` and
+  `runtime.cudnn_deterministic` are explicit config keys. `seed_everything()`
+  now sets `torch.backends.cudnn.benchmark` only when deterministic cuDNN mode
+  is disabled.
 
 ## Remaining Publication Risks
 
@@ -120,6 +134,22 @@ currently support the claims. It is not an experimental-results substitute.
 - **Gradient accumulation:** the main diffusion trainer still lacks a
   first-class gradient-accumulation loop. Low-VRAM ablations need smaller
   batches or a follow-up trainer patch.
+- **AMP / Accelerate:** training still does not have a unified AMP or
+  HuggingFace Accelerate path. Adding this safely requires moving optimizer
+  stepping out of per-batch trainer methods and validating EMA, gradient
+  clipping, distributed reduction, and nonfinite-batch handling together.
+- **Metadata-safe D4 augmentation:** Zelda room tensors have an existing
+  transform hook, but graph metadata includes boundary constraints, neighbor
+  maps, topology maps, and room-position features. Random flips/rotations must
+  rotate all of that metadata consistently before they are enabled for
+  graph-conditioned training.
+- **Gradient checkpointing:** DiT/U-Net activation checkpointing is still a
+  memory-scaling TODO. It should be enabled behind a config flag and tested
+  against dropout/RNG behavior and PAG/attention capture paths.
+- **Safe checkpoint format:** checkpoint loading uses the local
+  `safe_torch_load()` path, but trainer checkpoints are still `.pth` bundles
+  containing optimizer/scheduler state. A `safetensors` migration should be
+  dual-format because optimizer metadata is not tensor-only model weights.
 - **Dead graph helper:** `DiffusionTrainer._build_logic_graph_data()` remains
   private dead code. Either wire it into graph-data construction or remove it
   after confirming no downstream scripts call it.
