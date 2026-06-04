@@ -79,6 +79,32 @@ def test_dit_backbone_flow_matching_loss_is_finite_and_backpropagates():
     assert torch.isfinite(z_0.grad).all()
 
 
+def test_flow_matching_loss_accepts_min_snr_config_without_discrete_timestep_indexing():
+    model = create_latent_diffusion(
+        latent_dim=8,
+        model_channels=16,
+        context_dim=16,
+        denoiser_backbone="dit",
+        dit_depth=1,
+        dit_patch_size=1,
+        dit_mlp_ratio=2.0,
+        num_timesteps=8,
+        min_snr_gamma=5.0,
+        cfg_dropout_prob=0.0,
+        unet_num_heads=4,
+        unet_dropout=0.0,
+    )
+    model.train()
+    z_0 = torch.randn(2, 8, 3, 4, requires_grad=True)
+    context = torch.randn(2, 16)
+
+    loss = model.flow_matching_loss(z_0, context)
+    assert torch.isfinite(loss)
+    loss.backward()
+    assert z_0.grad is not None
+    assert torch.isfinite(z_0.grad).all()
+
+
 def test_dit_cross_attention_uses_graph_tokens_and_masks():
     model = create_latent_diffusion(
         latent_dim=8,

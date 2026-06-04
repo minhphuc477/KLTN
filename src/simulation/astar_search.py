@@ -7,8 +7,8 @@ from __future__ import annotations
 from typing import Any
 
 from src.simulation.search_base import GameStateSearchConfig, GameStateSearchResult
+from src.simulation.search_status import oracle_status_from_outcome
 from src.simulation.validator import StateSpaceAStar
-from src.evaluation.search_benchmark_utils import oracle_status_from_outcome
 
 
 class AStarGameStateSolver:

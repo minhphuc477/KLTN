@@ -984,6 +984,7 @@ class MemoryItem:
         salience: Importance weight [0, 1], higher = more memorable
         created_step: When this memory was created
         last_accessed: When this memory was last used
+        last_decay_step: Last timestep at which passive decay was applied
         data: Additional associated data (tile type, path, etc.)
     """
     item_type: MemoryItemType
@@ -991,6 +992,7 @@ class MemoryItem:
     salience: float = 0.5
     created_step: int = 0
     last_accessed: int = 0
+    last_decay_step: int = 0
     data: Any = None
     
     def __hash__(self):
@@ -1094,6 +1096,7 @@ class WorkingMemory:
                 # Refresh the memory
                 existing.salience = max(existing.salience, salience)
                 existing.last_accessed = current_step
+                existing.last_decay_step = current_step
                 existing.data = data or existing.data
                 self._sort_by_salience()
                 return True
@@ -1105,6 +1108,7 @@ class WorkingMemory:
             salience=salience,
             created_step=current_step,
             last_accessed=current_step,
+            last_decay_step=current_step,
             data=data
         )
         
@@ -1142,6 +1146,7 @@ class WorkingMemory:
         for item in self.items:
             if item_type is None or item.item_type == item_type:
                 item.last_accessed = current_step
+                item.last_decay_step = current_step
                 results.append(item)
         return results
     
@@ -1175,13 +1180,17 @@ class WorkingMemory:
         """
         Apply time-based decay to all memories.
         
-        Items decay based on time since last access.
+        Items decay based on elapsed time since the previous decay/access
+        event. This avoids repeatedly multiplying by the whole age of a memory
+        on every simulation step.
         Memories that fall below threshold are forgotten.
         """
         for item in self.items:
-            time_since_access = current_step - item.last_accessed
-            if time_since_access > 0:
-                item.salience *= (self.decay_rate ** time_since_access)
+            decay_base_step = max(int(item.last_accessed), int(getattr(item, "last_decay_step", item.last_accessed)))
+            elapsed = int(current_step) - decay_base_step
+            if elapsed > 0:
+                item.salience *= (self.decay_rate ** elapsed)
+                item.last_decay_step = int(current_step)
         
         # Remove memories with very low salience
         threshold = 0.05
@@ -1584,6 +1593,7 @@ class PersonaConfig:
     frustration_sensitivity: float = 0.2
     focus_commitment_bonus_weight: float = 0.10
     task_switch_penalty_weight: float = 0.05
+    heuristic_utility_blend: float = 0.5
     
     @classmethod
     def get_persona(cls, persona: AgentPersona) -> 'PersonaConfig':
@@ -3067,24 +3077,30 @@ class CognitiveBoundedSearch:
             revisit_penalty + conditional_uncertainty + affordance_forgetting_penalty + task_switch_penalty + 0.5 * combat_penalty
         )
 
-        utility = (
-            alpha * goal_progress
-            + beta * info_gain
-            - gamma * risk
-            - revisit_weight * revisit_penalty
-            + float(getattr(self.config, 'loot_weight', 0.0)) * loot_value
-            - float(getattr(self.config, 'combat_penalty_weight', 0.0)) * combat_penalty
-            - puzzle_complexity_weight * puzzle_complexity
-            - uncertainty_weight * conditional_uncertainty
-            + float(getattr(self.config, 'frontier_bonus_weight', 0.0)) * frontier_bonus
-            + affordance_bonus_weight * affordance_bonus
-            + focus_commitment_weight * focus_bonus
-            - affordance_forgetting_weight * affordance_forgetting_penalty
-            - task_switch_weight * task_switch_penalty
-            - float(getattr(self.config, 'frustration_sensitivity', 0.0)) * frustration_penalty
-        )
+        utility_terms = [
+            (alpha, goal_progress),
+            (beta, info_gain),
+            (-gamma, risk),
+            (-revisit_weight, revisit_penalty),
+            (float(getattr(self.config, 'loot_weight', 0.0)), loot_value),
+            (-float(getattr(self.config, 'combat_penalty_weight', 0.0)), combat_penalty),
+            (-puzzle_complexity_weight, puzzle_complexity),
+            (-uncertainty_weight, conditional_uncertainty),
+            (float(getattr(self.config, 'frontier_bonus_weight', 0.0)), frontier_bonus),
+            (affordance_bonus_weight, affordance_bonus),
+            (focus_commitment_weight, focus_bonus),
+            (-affordance_forgetting_weight, affordance_forgetting_penalty),
+            (-task_switch_weight, task_switch_penalty),
+            (-float(getattr(self.config, 'frustration_sensitivity', 0.0)), frustration_penalty),
+        ]
+        utility_scale = max(1.0, sum(abs(float(weight)) for weight, _value in utility_terms))
+        utility = sum(float(weight) * float(value) for weight, value in utility_terms) / utility_scale
 
-        return base + utility
+        blend = float(getattr(self.config, 'heuristic_utility_blend', 0.5))
+        blend = min(1.0, max(0.0, blend))
+        if total_weight <= 0:
+            return utility
+        return ((1.0 - blend) * float(base)) + (blend * float(utility))
 
     def _estimate_risk(
         self,

@@ -364,6 +364,32 @@ class TestWorkingMemory:
         # Low-salience item should be forgotten
         assert len(memory.items) <= initial_count
 
+    def test_memory_decay_uses_elapsed_since_last_decay(self):
+        """Repeated decay calls should not reapply the whole memory age."""
+        memory = WorkingMemory(capacity=7, decay_rate=0.5)
+        memory.remember(MemoryItemType.ITEM, (1, 1), current_step=0)
+        initial_salience = memory.items[0].salience
+
+        memory.apply_decay(current_step=2)
+        after_two_steps = memory.items[0].salience
+        memory.apply_decay(current_step=3)
+        after_three_steps = memory.items[0].salience
+
+        assert after_two_steps == pytest.approx(initial_salience * (0.5 ** 2))
+        assert after_three_steps == pytest.approx(initial_salience * (0.5 ** 3))
+
+    def test_recall_resets_memory_decay_baseline(self):
+        """Accessed memories should decay from the access step, not creation."""
+        memory = WorkingMemory(capacity=7, decay_rate=0.5)
+        memory.remember(MemoryItemType.GOAL, (10, 10), current_step=0)
+
+        memory.apply_decay(current_step=1)
+        recalled = memory.recall(MemoryItemType.GOAL, current_step=3)
+        refreshed_salience = recalled[0].salience
+        memory.apply_decay(current_step=4)
+
+        assert memory.items[0].salience == pytest.approx(refreshed_salience * 0.5)
+
 
 # ==============================================================================
 # HEURISTIC TESTS

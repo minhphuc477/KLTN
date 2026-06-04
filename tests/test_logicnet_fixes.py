@@ -213,6 +213,32 @@ def test_perturb_and_map_pathfinder_is_selectable_and_backpropagates():
     assert walkability.grad.abs().sum().item() > 0.0
 
 
+def test_logicnet_perturb_and_map_propagates_to_latents_and_classifier():
+    net = LogicNet(
+        latent_dim=8,
+        num_classes=5,
+        hidden_dim=16,
+        num_iterations=3,
+        grid_pathfinder_type="perturb_and_map",
+    )
+    z = torch.randn(1, 8, 6, 6, requires_grad=True)
+
+    loss, info = net(z, graph_data=None)
+    assert torch.isfinite(loss)
+    assert net.grid_pathfinder_type == "perturb_and_map"
+    assert isinstance(info, dict)
+
+    loss.backward()
+    classifier_grad = sum(
+        float(param.grad.detach().abs().sum().item())
+        for param in net.tile_classifier.parameters()
+        if param.grad is not None
+    )
+    assert z.grad is not None
+    assert z.grad.abs().sum().item() > 0.0
+    assert classifier_grad > 0.0
+
+
 def test_logicnet_edge_attr_penalties_follow_valid_edge_filter():
     logic_net = LogicNet(latent_dim=4, num_tile_classes=5)
     edge_index = torch.tensor([[0, 99, 1], [1, 2, 2]], dtype=torch.long)

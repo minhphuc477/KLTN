@@ -12,23 +12,8 @@ from __future__ import annotations
 import math
 from typing import Any, Dict, List, Tuple
 
+from src.simulation.search_status import oracle_status_from_outcome
 from src.simulation.validator import SolverDiagnostics, StateSpaceAStar
-
-
-def oracle_status_from_outcome(success: bool, failure_reason: str) -> str:
-    """Normalize solver outcomes into a stable status vocabulary."""
-    if bool(success):
-        return "solved"
-    reason = str(failure_reason or "").strip().lower()
-    if not reason:
-        return "failed"
-    if "timeout" in reason:
-        return "timeout"
-    if "no path" in reason:
-        return "no_path"
-    if "no goal" in reason or "no start" in reason:
-        return "invalid_map"
-    return "failed"
 
 
 def path_efficiency_ratio(path_length: int, manhattan_distance: int) -> float:
