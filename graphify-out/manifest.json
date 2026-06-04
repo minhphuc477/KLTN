@@ -930,8 +930,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\core\\latent_diffusion.py": {
-    "mtime": 1780580458.531523,
-    "ast_hash": "03793b84620c507ba2312d51b7d5bab3",
+    "mtime": 1780588976.6819303,
+    "ast_hash": "fc1be24c3b18895b46ea30110781ba62",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\core\\logic_net.py": {
@@ -945,8 +945,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\core\\symbolic_refiner.py": {
-    "mtime": 1780565912.4511714,
-    "ast_hash": "38921e03cc6ca5e3c1d456cae4c64dba",
+    "mtime": 1780588990.7407906,
+    "ast_hash": "274ab4997ccebe74ba51d3cee8945f77",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\core\\vqvae.py": {
@@ -2470,8 +2470,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\simulation\\cognitive_bounded_search.py": {
-    "mtime": 1780587188.4990337,
-    "ast_hash": "b014232d44d6c45831123aa0254ab654",
+    "mtime": 1780588177.537921,
+    "ast_hash": "f63a26c2fb2848913a978b53d1b02458",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\simulation\\demo_maps.py": {
@@ -2975,8 +2975,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_cognitive_bounded_search.py": {
-    "mtime": 1780587211.7696373,
-    "ast_hash": "eff3982095ba066232d5c89eb8e2a431",
+    "mtime": 1780588230.5162075,
+    "ast_hash": "71c60d1be7e286baaa40630fad841f2a",
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_compute_sample_efficiency_consolidation.py": {
@@ -3445,8 +3445,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_hmolqd\\test_symbolic_refiner.py": {
-    "mtime": 1780566004.3802295,
-    "ast_hash": "f874961df2cf1526d80b8a70d5813e5b",
+    "mtime": 1780589281.492865,
+    "ast_hash": "3d4238cdd8105e9ce38528cfcc326fc8",
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_hmolqd\\test_vqvae.py": {
@@ -4075,8 +4075,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\docs\\architecture_audit_research_notes.md": {
-    "mtime": 1780526090.3953743,
-    "ast_hash": "841dac70c208dafd6d6b263b60344787",
+    "mtime": 1780589367.2015665,
+    "ast_hash": "7c8543679561a572351780e27b5aef09",
     "semantic_hash": ""
   },
   "F:\\KLTN\\docs\\archive\\2026-q1\\ARCHITECTURE_RESEARCH_JUDGMENT_2026_02_24.md": {
@@ -5225,8 +5225,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_advanced_architecture_ablations.py": {
-    "mtime": 1780580481.438797,
-    "ast_hash": "2667c8b7fc4e43d17b09bf6f996748e9",
+    "mtime": 1780589078.075987,
+    "ast_hash": "c9890af8ff198912da5cb23f663946a3",
     "semantic_hash": ""
   },
   "F:\\KLTN\\configs\\ablation_flow_matching.yaml": {
@@ -5270,13 +5270,13 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\core\\neural_guided_repair.py": {
-    "mtime": 1780576522.891288,
-    "ast_hash": "f7e785e6fc84fa8c882348d8d207c2c8",
+    "mtime": 1780589005.4984722,
+    "ast_hash": "ac91ac9754579e1ff7db385da75e6bd1",
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_neural_guided_repair.py": {
-    "mtime": 1780576655.2007072,
-    "ast_hash": "63e346ee25474922778d6968e2fcf709",
+    "mtime": 1780589111.6040268,
+    "ast_hash": "5fface1abca5435e65c234b3435feee5",
     "semantic_hash": ""
   },
   "F:\\KLTN\\configs\\ablation_inference_guidance_only.yaml": {

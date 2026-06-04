@@ -44,6 +44,41 @@ def test_flow_matching_loss_is_finite_and_backpropagates():
     assert torch.isfinite(z_0.grad).all()
 
 
+def test_flow_matching_loss_applies_per_sample_continuous_min_snr_weight(monkeypatch):
+    class _ZeroDenoiser(torch.nn.Module):
+        def forward(self, x, t, context, **_kwargs):
+            _ = (t, context)
+            return torch.zeros_like(x)
+
+    model = create_latent_diffusion(
+        latent_dim=4,
+        model_channels=8,
+        context_dim=8,
+        num_timesteps=8,
+        cfg_dropout_prob=0.0,
+        min_snr_gamma=5.0,
+        unet_channel_mult=(1,),
+        unet_num_res_blocks=1,
+        unet_attention_resolutions=(),
+        unet_num_heads=2,
+    )
+    model.denoiser = _ZeroDenoiser()
+
+    def _fixed_rand(*shape, **kwargs):
+        assert shape == (2,)
+        return torch.tensor([0.01, 0.9], device=kwargs.get("device"), dtype=kwargs.get("dtype"))
+
+    monkeypatch.setattr(torch, "rand", _fixed_rand)
+    z_0 = torch.zeros(2, 4, 2, 2, requires_grad=True)
+    noise = torch.ones_like(z_0)
+    context = torch.zeros(2, 8)
+
+    loss = model.flow_matching_loss(z_0, context, noise=noise)
+
+    assert torch.isfinite(loss)
+    assert float(loss.item()) < 0.75
+
+
 def test_dit_backbone_flow_matching_loss_is_finite_and_backpropagates():
     model = create_latent_diffusion(
         latent_dim=8,

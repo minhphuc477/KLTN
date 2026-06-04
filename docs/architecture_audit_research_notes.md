@@ -74,6 +74,16 @@ currently support the claims. It is not an experimental-results substitute.
 - **Neighbor-latent detach:** inference neighbor latents remain detached by
   design and are documented as greedy autoregressive context, not
   differentiable multi-room stitching.
+- **Flow-matching loss weighting:** `flow_matching_loss` now computes
+  per-sample velocity MSE and applies continuous-time Min-SNR weighting before
+  reducing the batch.
+- **Neural repair floor masks:** neural-guided repair now skips LogicNet floor
+  target resolution when `graph_data` is absent and transposes reversed
+  `[W,H]` masks before interpolation.
+- **Symbolic A* cost maps:** LogicNet-derived repair cost maps are clipped to a
+  minimum step cost of `1.0`, preserving Manhattan heuristic admissibility.
+- **WFC required-floor protection:** local WFC reset masks exclude forced floor
+  cells so post-collapse floor overwrites do not violate adjacency constraints.
 
 ## Remaining Publication Risks
 
@@ -110,6 +120,13 @@ Focused suites run during the latest audit pass:
   with 14 tests.
 - `python -m pytest tests/test_hmolqd/test_logic_net.py -q` passed with 17 tests.
 - `git diff --check` passed; only Git line-ending warnings were reported.
+
+Latest targeted additions:
+
+- `python -m pytest tests/test_advanced_architecture_ablations.py::test_flow_matching_loss_applies_per_sample_continuous_min_snr_weight tests/test_neural_guided_repair.py::test_neural_guided_repair_omits_logic_floor_mask_without_graph_data tests/test_neural_guided_repair.py::test_resize_mask_transposes_reversed_spatial_axes -q`
+  passed with 3 tests.
+- `python -m pytest tests/test_hmolqd/test_symbolic_refiner.py::TestPathAnalyzer::test_cost_map_normalization_preserves_astar_admissibility tests/test_hmolqd/test_symbolic_refiner.py::TestSymbolicRefiner::test_repair_room_excludes_required_floor_mask_from_wfc_reset -q`
+  passed with 2 tests.
 
 ## Required Reporting Discipline
 

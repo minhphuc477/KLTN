@@ -215,6 +215,8 @@ class NeuralGuidedRepair:
         graph_data: Optional[dict],
         grid_shape: Tuple[int, int],
     ) -> Optional[np.ndarray]:
+        if graph_data is None:
+            return None
         resolver = getattr(self.logic_net, "_resolve_room_logic_targets", None)
         if not callable(resolver):
             return None
@@ -245,6 +247,8 @@ class NeuralGuidedRepair:
         target_h, target_w = int(grid_shape[0]), int(grid_shape[1])
         if tuple(mask.shape[-2:]) == (target_h, target_w):
             return mask
+        if tuple(mask.shape[-2:]) == (target_w, target_h):
+            return mask.transpose(-1, -2).contiguous()
         return F.interpolate(mask.float(), size=(target_h, target_w), mode="nearest")
 
 

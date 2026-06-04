@@ -42,6 +42,18 @@ class TestPathAnalyzer:
         assert len(failures) > 0
         assert any(f.failure_type == 'disconnected' for f in failures)
 
+    def test_cost_map_normalization_preserves_astar_admissibility(self):
+        """Cost guidance must not allow sub-unit steps with a Manhattan heuristic."""
+        from src.core.symbolic_refiner import PathAnalyzer
+
+        cost_map = np.array([[0.0, 0.5], [np.nan, np.inf]], dtype=np.float32)
+
+        costs = PathAnalyzer._normalize_cost_map(cost_map, (2, 2))
+
+        assert costs is not None
+        assert float(costs.min()) >= 1.0
+        assert float(costs[1, 1]) == pytest.approx(1e6)
+
     def test_analyze_non_square_grid_uses_row_col_coordinates(self):
         """Row/col coordinates should work correctly on non-square grids."""
         from src.core.symbolic_refiner import PathAnalyzer, TileType
@@ -406,6 +418,69 @@ class TestSymbolicRefiner:
 
         assert isinstance(success, bool)
         assert np.all(repaired[8, :] == TileType.FLOOR.value)
+
+    def test_repair_room_excludes_required_floor_mask_from_wfc_reset(self):
+        """Local WFC regeneration must not alter tiles forced by LogicNet floor masks."""
+        from src.core.symbolic_refiner import FailurePoint, SymbolicRefiner, TileType
+
+        class _Analyzer:
+            def __init__(self):
+                self.calls = 0
+
+            def analyze_grid(self, *_args, **_kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    return [
+                        FailurePoint(
+                            position=(8, 5),
+                            failure_type="disconnected",
+                            required_item=None,
+                            blocking_tiles=[(8, 5)],
+                        )
+                    ]
+                return []
+
+        class _EntropyReset:
+            def create_mask(self, shape, _failures):
+                mask = np.zeros(shape, dtype=bool)
+                mask[8, 5] = True
+                mask[8, 6] = True
+                return mask
+
+            def expand_mask(self, mask, iterations=1):
+                _ = iterations
+                return mask
+
+        class _WFC:
+            def __init__(self):
+                self.seen_mask = None
+
+            def initialize_state(self, **kwargs):
+                self.seen_mask = np.asarray(kwargs["mask"], dtype=bool).copy()
+                return kwargs
+
+            def collapse(self, state):
+                return np.asarray(state["initial_grid"]).copy(), True
+
+        refiner = SymbolicRefiner(max_repair_attempts=2)
+        refiner.path_analyzer = _Analyzer()
+        refiner.entropy_reset = _EntropyReset()
+        refiner.wfc = _WFC()
+        refiner.refresh_learned_rules = lambda: None
+        grid = np.full((16, 11), TileType.WALL.value)
+        required = np.zeros((16, 11), dtype=bool)
+        required[8, 5] = True
+
+        _repaired, _success = refiner.repair_room(
+            grid,
+            start=(8, 0),
+            goal=(8, 10),
+            required_floor_mask=required,
+        )
+
+        assert refiner.wfc.seen_mask is not None
+        assert bool(refiner.wfc.seen_mask[8, 5]) is False
+        assert bool(refiner.wfc.seen_mask[8, 6]) is True
 
     def test_repair_room_seed_makes_wfc_reproducible(self):
         """Seeded repair should not depend on NumPy's global random state."""

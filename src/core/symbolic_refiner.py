@@ -584,7 +584,7 @@ class PathAnalyzer:
             
             for next_pos in neighbors(*current):
                 step_cost = float(costs[next_pos[0], next_pos[1]]) if costs is not None else 1.0
-                new_g = g + max(1e-6, step_cost)
+                new_g = g + max(1.0, step_cost)
                 if new_g < g_score.get(next_pos, float('inf')):
                     g_score[next_pos] = new_g
                     parent[next_pos] = current
@@ -612,7 +612,7 @@ class PathAnalyzer:
         if costs.ndim != 2:
             logger.warning("Ignoring symbolic repair cost_map with rank %d; expected 2.", costs.ndim)
             return None
-        return np.nan_to_num(costs, nan=1.0, posinf=1e6, neginf=1.0).clip(1e-6, 1e6)
+        return np.nan_to_num(costs, nan=1.0, posinf=1e6, neginf=1.0).clip(1.0, 1e6)
     
     def _flood_fill(
         self,
@@ -1512,6 +1512,8 @@ class SymbolicRefiner:
             # Create localized reset mask around failure points.
             mask = self.entropy_reset.create_mask(grid.shape[:2], failures)
             mask = self.entropy_reset.expand_mask(mask, iterations=1)
+            if floor_mask is not None:
+                mask = mask & (~floor_mask)
             current_grid = _apply_required_floor_constraints(current_grid)
 
             # Run local WFC repair for masked region.

@@ -3516,7 +3516,15 @@ class LatentDiffusionModel(nn.Module):
             if not use_spatial_alignment:
                 self.set_spatial_attention_capture(False)
         target = noise - x_0
-        loss = F.mse_loss(prediction, target)
+        per_sample_loss = F.mse_loss(prediction, target, reduction="none").mean(dim=[1, 2, 3])
+        if float(self.min_snr_gamma) > 0.0:
+            # Continuous rectified-flow interpolation has signal coefficient
+            # (1 - t) and noise coefficient t. Weight per sample without
+            # quantizing t back into diffusion-buffer indices.
+            snr = ((1.0 - t_cont).pow(2)) / (t_cont.pow(2) + 1e-8)
+            min_snr_weight = torch.clamp(snr, max=float(self.min_snr_gamma)) / (snr + 1e-8)
+            per_sample_loss = per_sample_loss * min_snr_weight.to(dtype=per_sample_loss.dtype)
+        loss = per_sample_loss.mean()
         if use_spatial_alignment:
             try:
                 alignment_loss = self.spatial_alignment_loss(

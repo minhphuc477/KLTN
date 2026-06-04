@@ -42,9 +42,10 @@ class _RecordingRefiner:
 
     def repair_room_with_feedback(self, **kwargs):
         self.kwargs = kwargs
+        floor_mask = kwargs.get("required_floor_mask")
         diagnostics = {
             "cost_guidance_used": kwargs.get("cost_map") is not None,
-            "required_floor_pixels": int(np.sum(kwargs.get("required_floor_mask"))),
+            "required_floor_pixels": int(np.sum(floor_mask)) if floor_mask is not None else 0,
         }
         return np.asarray(kwargs["grid"]).copy(), True, diagnostics
 
@@ -105,6 +106,36 @@ def test_neural_guided_repair_merges_external_mask_and_feedback_callback():
     assert refiner.kwargs["max_feedback_rounds"] == 2
     assert bool(refiner.kwargs["required_floor_mask"][2, 2]) is True
     assert bool(refiner.kwargs["required_floor_mask"][3, 3]) is True
+
+
+def test_neural_guided_repair_omits_logic_floor_mask_without_graph_data():
+    logic_net = _FakeLogicNet()
+    refiner = _RecordingRefiner()
+    repair = NeuralGuidedRepair(logic_net, refiner)
+    grid = np.zeros((5, 5), dtype=np.int64)
+    tile_logits = torch.randn(1, 4, 5, 5)
+
+    _repaired, success, diagnostics = repair.repair_room_with_neural_guidance(
+        grid,
+        start=(0, 0),
+        goal=(4, 4),
+        tile_logits=tile_logits,
+        graph_data=None,
+    )
+
+    assert success is True
+    assert diagnostics["logicnet_floor_mask_pixels"] == 0
+    assert refiner.kwargs["required_floor_mask"] is None
+
+
+def test_resize_mask_transposes_reversed_spatial_axes():
+    mask = torch.zeros(1, 1, 5, 3)
+    mask[:, :, 4, 1] = 1.0
+
+    resized = NeuralGuidedRepair._resize_mask(mask, (3, 5))
+
+    assert tuple(resized.shape) == (1, 1, 3, 5)
+    assert bool(resized[0, 0, 1, 4])
 
 
 def test_neural_feedback_callback_is_controlled_by_m3_flag():
