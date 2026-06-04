@@ -961,6 +961,116 @@ def test_global_stream_encoder_rrwp_changes_gps_edge_messages():
     assert not torch.allclose(out_zero, out_nonzero)
 
 
+def test_global_stream_encoder_gps_global_attention_respects_batch_idx():
+    from src.core.condition_encoder import GlobalStreamEncoder
+
+    torch.manual_seed(0)
+    encoder = GlobalStreamEncoder(
+        node_feature_dim=4,
+        edge_feature_dim=3,
+        hidden_dim=16,
+        output_dim=8,
+        num_layers=1,
+        gnn_type="gps",
+        num_heads=4,
+        dropout=0.0,
+    )
+    encoder.eval()
+    first_graph = torch.randn(2, 4)
+    second_graph_a = torch.zeros(2, 4)
+    second_graph_b = torch.full((2, 4), 100.0)
+    edge_index = torch.empty(2, 0, dtype=torch.long)
+    edge_features = torch.empty(0, 3)
+    batch_idx = torch.tensor([0, 0, 1, 1], dtype=torch.long)
+
+    with torch.no_grad():
+        out_a = encoder(
+            torch.cat([first_graph, second_graph_a], dim=0),
+            edge_index,
+            edge_features=edge_features,
+            batch_idx=batch_idx,
+        )
+        out_b = encoder(
+            torch.cat([first_graph, second_graph_b], dim=0),
+            edge_index,
+            edge_features=edge_features,
+            batch_idx=batch_idx,
+        )
+
+    assert torch.allclose(out_a[:2], out_b[:2], atol=1e-5, rtol=1e-5)
+    assert not torch.allclose(out_a[2:], out_b[2:])
+
+
+def test_dual_stream_encoder_keeps_style_and_reference_features_separate(monkeypatch):
+    from src.core.condition_encoder import DualStreamConditionEncoder
+
+    class _SpyProjection(torch.nn.Module):
+        def __init__(self, output_dim):
+            super().__init__()
+            self.output_dim = int(output_dim)
+            self.seen = None
+
+        def forward(self, x):
+            self.seen = x.detach().clone()
+            return torch.zeros(x.shape[0], self.output_dim, device=x.device, dtype=x.dtype)
+
+    class _ReferenceEncoder(torch.nn.Module):
+        def __init__(self, output_dim):
+            super().__init__()
+            self.output_dim = int(output_dim)
+
+        def forward(self, _maps, *, batch_size, device, dtype):
+            return torch.ones(batch_size, self.output_dim, device=device, dtype=dtype)
+
+    output_dim = 8
+    encoder = DualStreamConditionEncoder(
+        latent_dim=4,
+        node_feature_dim=4,
+        edge_feature_dim=3,
+        hidden_dim=16,
+        output_dim=output_dim,
+        num_gnn_layers=1,
+        gnn_type="gps",
+        num_attention_heads=4,
+        use_reference_room_maps=False,
+    )
+    monkeypatch.setattr(
+        encoder.local_encoder,
+        "forward",
+        lambda *args, **kwargs: torch.zeros(1, output_dim),
+    )
+    monkeypatch.setattr(
+        encoder.global_encoder,
+        "forward",
+        lambda *args, **kwargs: torch.zeros(2, output_dim),
+    )
+    monkeypatch.setattr(
+        encoder.fusion,
+        "forward",
+        lambda _local, _global: torch.zeros(1, output_dim),
+    )
+    encoder.reference_room_encoder = _ReferenceEncoder(output_dim)
+    spy = _SpyProjection(output_dim)
+    encoder.output_proj = spy
+
+    out = encoder(
+        neighbor_latents={"N": None, "S": None, "E": None, "W": None},
+        boundary_constraints=torch.zeros(1, 8),
+        position=torch.zeros(1, 2),
+        node_features=torch.zeros(2, 4),
+        edge_index=torch.empty(2, 0, dtype=torch.long),
+        edge_features=torch.empty(0, 3),
+        current_node_idx=0,
+        style_id=None,
+    )
+
+    assert tuple(out.shape) == (1, output_dim)
+    assert spy.seen is not None
+    assert tuple(spy.seen.shape) == (1, output_dim * 3)
+    assert torch.allclose(spy.seen[:, output_dim:2 * output_dim], torch.zeros(1, output_dim))
+    assert torch.allclose(spy.seen[:, 2 * output_dim:], torch.ones(1, output_dim))
+
+
 @pytest.mark.parametrize("gnn_type", ["gcn", "sage"])
 def test_global_stream_encoder_rejects_rrwp_for_backbones_that_ignore_edge_attributes(gnn_type):
     from src.core.condition_encoder import GlobalStreamEncoder

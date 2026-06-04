@@ -506,12 +506,14 @@ class LearnableGridPathfinder(nn.Module):
         temperature: float = 0.1,
         num_classes: int = 44,
         num_actions: int = 4,
+        inf_distance: float = 20.0,
     ) -> None:
         super().__init__()
         self.num_iterations = int(max(1, num_iterations))
         self.temperature = float(max(1e-4, temperature))
         self.num_classes = int(max(1, num_classes))
         self.num_actions = int(max(1, num_actions))
+        self.inf_distance = float(max(1.0, inf_distance))
 
         self.reward_proj = nn.Sequential(
             nn.Conv2d(self.num_classes + 2, 32, kernel_size=3, padding=1),
@@ -583,13 +585,15 @@ class LearnableGridPathfinder(nn.Module):
             q_values = self.transition(torch.cat([reward, value], dim=1))
             updated = soft_max(q_values, dim=1, temperature=max(self.temperature, 1e-4)).unsqueeze(1)
             value = torch.maximum(value, reward + updated)
-            value = value * (1.0 - source) + reward * source
+            value = value * (1.0 - source)
 
         value = value - value.amin(dim=(2, 3), keepdim=True)
         value = value / value.amax(dim=(2, 3), keepdim=True).clamp_min(1e-6)
         semantic_walkability = torch.einsum("bchw,c->bhw", tile_probs, self.walkability_weights).unsqueeze(1)
         semantic_cost = (1.0 - semantic_walkability.clamp(0.0, 1.0)) * 5.0
-        return (1.0 - value) * 50.0 + semantic_cost
+        distance_scale = max(1.0, self.inf_distance - 5.0)
+        distances = ((1.0 - value) * distance_scale + semantic_cost).clamp(0.0, self.inf_distance)
+        return distances * (1.0 - source)
 
 
 ValueIterationGridPathfinder = LearnableGridPathfinder

@@ -276,6 +276,24 @@ class TestDecoder:
         
         assert x_recon.ndim == 4
         assert x_recon.shape[1] == 44
+        assert tuple(x_recon.shape[-2:]) == (16, 11)
+
+    def test_decoder_native_upsampling_matches_zelda_room_width_without_resize(self):
+        """The decoder should not depend on bilinear resize to correct 12-wide transposed-conv output."""
+        from src.core.vqvae import Decoder
+
+        decoder = Decoder(
+            out_channels=44,
+            hidden_channels=16,
+            latent_channels=8,
+            num_res_blocks=1,
+            channel_mult=(4, 2, 1),
+        )
+        z = torch.randn(1, 8, 4, 3)
+
+        out = decoder(z, target_size=None)
+
+        assert tuple(out.shape[-2:]) == (16, 11)
 
 
 class TestSemanticVQVAE:

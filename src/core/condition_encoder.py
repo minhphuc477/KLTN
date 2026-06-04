@@ -870,7 +870,7 @@ class GlobalStreamEncoder(nn.Module):
         if self.use_torch_geometric:
             h = self._forward_torch_geometric(node_features, edge_index, edge_features, edge_rrwp)
         elif self.gnn_type == "gps":
-            h = self._forward_gps(node_features, edge_index, edge_features, edge_rrwp)
+            h = self._forward_gps(node_features, edge_index, edge_features, edge_rrwp, batch_idx=batch_idx)
         else:
             h = self.gnn(node_features, edge_index)
         
@@ -948,6 +948,7 @@ class GlobalStreamEncoder(nn.Module):
         edge_index: Tensor,
         edge_features: Optional[Tensor] = None,
         edge_rrwp: Optional[Tensor] = None,
+        batch_idx: Optional[Tensor] = None,
     ) -> Tensor:
         """
         Forward through a GraphGPS-style encoder.
@@ -982,7 +983,7 @@ class GlobalStreamEncoder(nn.Module):
                 edge_attr = rrwp_attr if edge_attr is None else edge_attr + rrwp_attr
 
         for layer in self.gps_layers:
-            h = layer(h, edge_index=edge_index, edge_attr=edge_attr)
+            h = layer(h, edge_index=edge_index, edge_attr=edge_attr, batch_idx=batch_idx)
 
         return self.node_output(h)
 
@@ -1075,6 +1076,7 @@ class GPSLayer(nn.Module):
         *,
         edge_index: Tensor,
         edge_attr: Optional[Tensor] = None,
+        batch_idx: Optional[Tensor] = None,
     ) -> Tensor:
         local_in = self.local_norm(h)
         if self.local_gnn is not None:
@@ -1086,9 +1088,26 @@ class GPSLayer(nn.Module):
             local_out = self._fallback_local_message(local_in, edge_index=edge_index, edge_attr=edge_attr)
         h = h + self.dropout(F.gelu(local_out))
 
-        global_in = self.global_norm(h).unsqueeze(0)
-        global_out, _ = self.global_attn(global_in, global_in, global_in, need_weights=False)
-        h = h + self.dropout(global_out.squeeze(0))
+        global_normed = self.global_norm(h)
+        if batch_idx is None:
+            global_in = global_normed.unsqueeze(0)
+            global_out, _ = self.global_attn(global_in, global_in, global_in, need_weights=False)
+            global_out = global_out.squeeze(0)
+        else:
+            if batch_idx.dim() != 1 or int(batch_idx.shape[0]) != int(h.shape[0]):
+                raise ValueError(
+                    f"GPSLayer batch_idx must have shape [N] with N={int(h.shape[0])}, got {tuple(batch_idx.shape)}."
+                )
+            assignments = batch_idx.to(device=h.device, dtype=torch.long)
+            global_out = torch.zeros_like(h)
+            for graph_id in torch.unique(assignments, sorted=True):
+                mask = assignments == graph_id
+                if not bool(torch.any(mask)):
+                    continue
+                seq = global_normed[mask].unsqueeze(0)
+                out, _ = self.global_attn(seq, seq, seq, need_weights=False)
+                global_out[mask] = out.squeeze(0)
+        h = h + self.dropout(global_out)
 
         h = h + self.dropout(self.ffn(self.ffn_norm(h)))
         return h
@@ -1364,9 +1383,10 @@ class DualStreamConditionEncoder(nn.Module):
             dropout=dropout,
         )
         
-        # Final projection (fuses local + global + style)
+        # Final projection keeps style and reference features disentangled for
+        # ablation and gradient attribution.
         self.output_proj = nn.Sequential(
-            nn.Linear(output_dim * 2, output_dim),  # Concatenate c_fused + style
+            nn.Linear(output_dim * 3, output_dim),
             nn.LayerNorm(output_dim),
         )
     
@@ -1381,6 +1401,7 @@ class DualStreamConditionEncoder(nn.Module):
         edge_rrwp: Optional[Tensor] = None,
         tpe: Optional[Tensor] = None,
         current_node_distance: Optional[Tensor] = None,
+        batch_idx: Optional[Tensor] = None,
         current_node_idx: Optional[int] = None,
         reference_room_maps: Optional[Dict[str, Optional[Tensor]]] = None,
         style_id: Optional[Tensor] = None,
@@ -1429,6 +1450,7 @@ class DualStreamConditionEncoder(nn.Module):
             edge_rrwp=edge_rrwp,
             tpe=tpe,
             current_node_distance=current_node_distance,
+            batch_idx=batch_idx,
             node_idx=None,
         )
 
@@ -1486,7 +1508,7 @@ class DualStreamConditionEncoder(nn.Module):
 
         # Final projection: fuse graph-aware room context with the global style token
         # and any discrete reference-room exemplar features.
-        c_combined = torch.cat([c_fused, style_feat + reference_feat], dim=-1)
+        c_combined = torch.cat([c_fused, style_feat, reference_feat], dim=-1)
         c = self.output_proj(c_combined)
 
         if return_global_tokens:
@@ -1514,6 +1536,7 @@ class DualStreamConditionEncoder(nn.Module):
         edge_rrwp: Optional[Tensor] = None,
         tpe: Optional[Tensor] = None,
         current_node_distance: Optional[Tensor] = None,
+        batch_idx: Optional[Tensor] = None,
     ) -> Tensor:
         """Encode only global context (all nodes)."""
         return self.global_encoder(
@@ -1523,6 +1546,7 @@ class DualStreamConditionEncoder(nn.Module):
             edge_rrwp=edge_rrwp,
             tpe=tpe,
             current_node_distance=current_node_distance,
+            batch_idx=batch_idx,
         )
 
 

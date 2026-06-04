@@ -905,8 +905,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\core\\condition_encoder.py": {
-    "mtime": 1780578503.262671,
-    "ast_hash": "9294ddf265cc873690c8e566816b7ce0",
+    "mtime": 1780586324.5751357,
+    "ast_hash": "27770493dc03650eb77360c62077d5ff",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\core\\definitions.py": {
@@ -935,8 +935,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\core\\logic_net.py": {
-    "mtime": 1780580222.2204387,
-    "ast_hash": "dd20057ef49f566169c04dfb9976fc7e",
+    "mtime": 1780585378.4111154,
+    "ast_hash": "0542dcb7aae22099d55f988675eb7c5b",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\core\\puzzle_stage_semantics.py": {
@@ -950,8 +950,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\core\\vqvae.py": {
-    "mtime": 1780580245.6881523,
-    "ast_hash": "a50902af611b3797a601f361d87e4716",
+    "mtime": 1780585149.6635962,
+    "ast_hash": "a4f012a7c0bdda1085bf33f3a94f1122",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\data_processing\\__init__.py": {
@@ -2565,8 +2565,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\train_diffusion.py": {
-    "mtime": 1780574105.757286,
-    "ast_hash": "beb3014379efc7cd79302342a7d25d34",
+    "mtime": 1780586335.2727995,
+    "ast_hash": "c6b19f472d7741ad63d41a9b8e602382",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\train_gaussian_vae.py": {
@@ -3450,8 +3450,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_hmolqd\\test_vqvae.py": {
-    "mtime": 1780580355.6103754,
-    "ast_hash": "0f3a7b6bdd3467559f27e0bd8fff149f",
+    "mtime": 1780585286.5284607,
+    "ast_hash": "38b62057b1bcab24980fc8eacdeeda2d",
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_kaggle_training_suite.py": {
@@ -3460,8 +3460,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_logicnet_fixes.py": {
-    "mtime": 1780580339.5850217,
-    "ast_hash": "130e650c4350f2f768cf26c995ba3115",
+    "mtime": 1780585305.9142044,
+    "ast_hash": "b2ebcb3ccb5eeb071132c031139ce76f",
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_logicnet_gradient_flow.py": {
@@ -3500,8 +3500,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_ml_components.py": {
-    "mtime": 1780578667.8443143,
-    "ast_hash": "9efd696d52a4fcf5447b3df63da566e0",
+    "mtime": 1780585249.670993,
+    "ast_hash": "0308bf0f0518c8e2c27a4d668695795d",
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_model_capacity.py": {
@@ -3625,8 +3625,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_train_diffusion_conditioning_shapes.py": {
-    "mtime": 1780560987.0302384,
-    "ast_hash": "cdc068e4d29cc69763848057f019af86",
+    "mtime": 1780586387.844168,
+    "ast_hash": "ff07537c847a68ec8fb7e9119ef8429a",
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_train_lcm_checkpointing.py": {

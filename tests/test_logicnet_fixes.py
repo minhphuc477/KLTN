@@ -255,6 +255,26 @@ def test_vin_pathfinder_is_selectable_and_backpropagates():
     assert room_logits.grad.abs().sum().item() > 0.0
 
 
+def test_vin_pathfinder_anchors_source_and_matches_bellman_ford_distance_scale():
+    net = LogicNet(
+        latent_dim=8,
+        num_classes=5,
+        num_iterations=3,
+        grid_pathfinder_type="vin",
+    )
+    room_logits = torch.randn(1, 5, 6, 6)
+    source = torch.zeros(1, 1, 6, 6)
+    source[:, :, 2, 3] = 1.0
+    walkability = torch.ones(1, 1, 6, 6)
+
+    distances = net.grid_pathfinder(room_logits, source, walkability)
+
+    assert float(distances[0, 0, 2, 3]) == pytest.approx(0.0, abs=1e-6)
+    assert torch.isfinite(distances).all()
+    assert float(distances.min().item()) >= 0.0
+    assert float(distances.max().item()) <= float(net.graph_pathfinder.inf_distance) + 1e-6
+
+
 def test_perturb_and_map_pathfinder_is_selectable_and_backpropagates():
     net = LogicNet(
         latent_dim=8,

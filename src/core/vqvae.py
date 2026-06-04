@@ -797,11 +797,24 @@ class Decoder(nn.Module):
             
             # Upsample (except last level)
             if i < len(block_channels) - 1:
-                block.append(
-                    nn.ConvTranspose2d(
-                        ch, ch, 4, stride=upsample_factor, padding=1
+                is_final_upsample = i == len(block_channels) - 2
+                if int(upsample_factor) == 2 and is_final_upsample:
+                    block.append(
+                        nn.ConvTranspose2d(
+                            ch,
+                            ch,
+                            kernel_size=3,
+                            stride=2,
+                            padding=1,
+                            output_padding=(1, 0),
+                        )
                     )
-                )
+                else:
+                    block.append(
+                        nn.ConvTranspose2d(
+                            ch, ch, 4, stride=upsample_factor, padding=1
+                        )
+                    )
             
             self.up_blocks.append(block)
         

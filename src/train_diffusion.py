@@ -1724,6 +1724,9 @@ class DiffusionTrainer:
                     max_distance=int(getattr(self.config, "current_node_distance_max", 8)),
                 ),
             )
+        graph_batch_idx = graph_dict.get("batch_idx")
+        if isinstance(graph_batch_idx, torch.Tensor):
+            graph_batch_idx = graph_batch_idx.to(self.device, dtype=torch.long)
         has_room_anchor = bool(graph_dict.get("has_room_anchor", False)) or (
             isinstance(boundary_constraints, torch.Tensor)
             and isinstance(room_position, torch.Tensor)
@@ -1753,6 +1756,7 @@ class DiffusionTrainer:
                 "edge_features": edge_features,
                 "tpe": tpe,
                 "current_node_distance": current_node_distance,
+                "batch_idx": graph_batch_idx,
                 "current_node_idx": int(current_node_idx) if current_node_idx is not None else None,
                 "reference_room_maps": reference_room_maps,
                 "style_id": style_id,
@@ -1795,6 +1799,7 @@ class DiffusionTrainer:
             "edge_features": edge_features,
             "tpe": tpe,
             "current_node_distance": current_node_distance,
+            "batch_idx": graph_batch_idx,
         }
         encode_global = self.condition_encoder.encode_global_only
         if self._call_supports_keyword(encode_global, "edge_rrwp"):
