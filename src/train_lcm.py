@@ -55,9 +55,11 @@ from src.utils.checkpoint import (
     log_checkpoint_artifact,
     prune_checkpoints,
     resolve_resume_checkpoint,
+    safe_torch_load,
     write_checkpoint_metadata,
 )
 from src.utils.data_loading import dataloader_runtime_kwargs
+from src.utils.optimization import adamw_decay_param_groups_for_modules
 from src.zelda_data.zelda_loader import create_dataloader, graph_collate_fn
 
 logger = logging.getLogger(__name__)
@@ -391,10 +393,15 @@ class ConsistencyLoRATrainer:
         ).to(self.device)
 
         self.optimizer = optim.AdamW(
-            [p for p in self.student.parameters() if p.requires_grad]
-            + list(self.puzzle_stage_semantics_head.parameters()),
+            adamw_decay_param_groups_for_modules(
+                (
+                    ("student", self.student),
+                    ("puzzle_stage_semantics_head", self.puzzle_stage_semantics_head),
+                ),
+                weight_decay=float(self.config.optimizer_weight_decay),
+            ),
             lr=self.config.learning_rate,
-            weight_decay=self.config.optimizer_weight_decay,
+            weight_decay=0.0,
         )
         self.global_step = 0
         # Keep -1 until the outer training loop assigns the first epoch index.
@@ -403,7 +410,7 @@ class ConsistencyLoRATrainer:
         self.target_timesteps = self._build_target_timestep_schedule()
 
     def _load_base_bundle(self, checkpoint_path: str) -> DiffusionTrainer:
-        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+        checkpoint = safe_torch_load(checkpoint_path, map_location="cpu")
         base_cfg_raw = checkpoint.get("config", {})
         if not isinstance(base_cfg_raw, dict):
             raise ValueError(f"Base diffusion checkpoint {checkpoint_path!r} is missing config metadata.")
@@ -952,7 +959,7 @@ class ConsistencyLoRATrainer:
         )
 
     def load_checkpoint(self, path: str) -> Dict[str, Any]:
-        payload = torch.load(path, map_location=self.device, weights_only=False)
+        payload = safe_torch_load(path, map_location=self.device)
         lora_state = payload.get("lora_state_dict")
         if not isinstance(lora_state, dict):
             raise ValueError(f"Invalid fast-sampler resume checkpoint at {path!r}: missing lora_state_dict.")

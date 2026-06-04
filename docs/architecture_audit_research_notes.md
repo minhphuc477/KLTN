@@ -154,6 +154,22 @@ currently support the claims. It is not an experimental-results substitute.
   rebuilding the posterior or velocity step. The older low-level
   `GradientGuidance.apply_guidance()` helper is retained as a diagnostic API
   and should not be used as evidence for the main sampler formulation.
+- **FSQ index decoding:** FSQ now works as an implicit scalar codebook in the
+  same `decode_indices()` path used by VQ. Index tokens are decomposed into
+  per-dimension scalar digits, mapped back to quantized values, projected to the
+  public latent width, and decoded without a manual architecture trap.
+- **DPO distributed call path:** `LatentDiffusionModel.forward()` dispatches
+  `forward_mode` values such as `compute_loss` and `dpo_preference_loss`, so
+  DPO fine-tuning can call `model(...)` and trigger DDP/Accelerate hooks. The
+  DPO experiment loop now uses Accelerate for prepare/backward/clip/save while
+  retaining a single-process fallback.
+- **Graph padding masks:** GPS global attention accepts `node_mask` and uses it
+  as a `key_padding_mask`, while cross-attention uses finite masked scores plus
+  post-softmax renormalization. Fully masked graph contexts stay finite instead
+  of producing `softmax(-inf)` NaNs.
+- **Generation RRWP wiring:** generation-time `_prepare_graph_context()` now
+  computes and returns `edge_rrwp`, and room generation forwards both `edge_rrwp`
+  and `node_mask` into the condition encoder.
 - **LogicNet unreachable sentinel preservation:** grid and graph soft-min
   Bellman-Ford updates keep nodes/cells at `inf_distance` when every candidate
   is still sentinel-valued. This prevents log-sum-exp from gradually lowering

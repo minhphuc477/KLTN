@@ -124,6 +124,7 @@ CONFIG_FIELDS: List[ConfigField] = [
     ConfigField("dataset.shuffle_val", bool, False, "Shuffle the validation loader."),
     ConfigField("dataset.use_vglc", bool, True, "Use VGLC-format dataset adapter."),
     ConfigField("dataset.normalize", bool, True, "Normalize room grids to [0,1]."),
+    ConfigField("dataset.grid_augmentation", bool, False, "Enable shape-preserving random grid augmentation for non-graph autoencoder training. Graph-conditioned stages keep this disabled unless graph metadata is transformed in lockstep."),
     ConfigField("dataset.room_level", bool, True, "Train on individual rooms instead of stitched dungeons."),
     ConfigField("dataset.dungeon_batch_mode", bool, True, "For room-level diffusion, batch all rooms from one dungeon variant for global graph loss."),
     ConfigField("dataset.load_graphs", bool, True, "Load graph side-information from dataset."),

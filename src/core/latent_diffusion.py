@@ -444,6 +444,27 @@ class CrossAttention(nn.Module):
         k = self.k(context).reshape(B, -1, self.num_heads, self.head_dim).transpose(1, 2)
         v = self.v(context).reshape(B, -1, self.num_heads, self.head_dim).transpose(1, 2)
 
+        valid_rows = None
+        if node_mask is not None:
+            mask = node_mask
+            if mask.dim() == 1:
+                mask = mask.unsqueeze(0)
+            if mask.shape[0] == 1 and B > 1:
+                mask = mask.expand(B, -1)
+            if mask.dim() != 2:
+                raise ValueError(f"CrossAttention node_mask must have shape [B, L], got {tuple(mask.shape)}.")
+            if int(mask.shape[0]) != B or int(mask.shape[1]) != int(context.shape[1]):
+                raise ValueError(
+                    "CrossAttention node_mask shape "
+                    f"{tuple(mask.shape)} must match [B, L] = ({B}, {int(context.shape[1])})."
+                )
+            mask = mask.to(device=q.device)
+            valid_rows = mask.sum(dim=1) > 0
+            if int(mask.shape[1]) > 0 and not torch.all(valid_rows):
+                mask = mask.clone()
+                mask[~valid_rows, 0] = 1
+            node_mask = mask
+
         if self.attention_mode == "linear_hedgehog":
             out = hedgehog_linear_attention(
                 q,
@@ -453,14 +474,12 @@ class CrossAttention(nn.Module):
                 k_map=self.hedgehog_k,
                 token_mask=node_mask,
             ).transpose(1, 2).reshape(B, N, C)
+            if valid_rows is not None and not torch.all(valid_rows):
+                out = out.clone()
+                out[~valid_rows] = 0.0
         else:
             attn_mask = None
             if node_mask is not None:
-                mask = node_mask
-                if mask.dim() == 1:
-                    mask = mask.unsqueeze(0)
-                if mask.shape[0] == 1 and B > 1:
-                    mask = mask.expand(B, -1)
                 attn_mask = torch.zeros(
                     B,
                     1,
@@ -484,9 +503,17 @@ class CrossAttention(nn.Module):
                 if attn_mask is not None:
                     attn = attn + attn_mask
                 attn = attn.softmax(dim=-1)
+                attn = torch.nan_to_num(attn, nan=0.0, posinf=0.0, neginf=0.0)
                 attn = self.dropout(attn)
                 out = (attn @ v).transpose(1, 2).reshape(B, N, C)
-        return self.proj(out)
+            if valid_rows is not None and not torch.all(valid_rows):
+                out = out.clone()
+                out[~valid_rows] = 0.0
+        out = self.proj(out)
+        if valid_rows is not None and not torch.all(valid_rows):
+            out = out.clone()
+            out[~valid_rows] = 0.0
+        return out
 
 
 # ============================================================================
@@ -3564,6 +3591,30 @@ class LatentDiffusionModel(nn.Module):
         if objective == "diffusion":
             return self.training_loss(x_0, context, graph_data=graph_data)
         raise ValueError(f"Unsupported latent diffusion training_objective={objective!r}.")
+
+    def forward(self, *args: Any, forward_mode: str = "compute_loss", **kwargs: Any) -> Any:
+        """
+        Dispatch model calls through ``nn.Module.__call__``.
+
+        DistributedDataParallel and Accelerate attach synchronization hooks to
+        the module call path. Training scripts that invoke task-specific methods
+        directly can bypass those hooks, so preference fine-tuning and objective
+        ablations should route through this dispatcher.
+        """
+        mode = str(forward_mode).strip().lower()
+        if mode in {"compute_loss", "loss", "training"}:
+            return self.compute_loss(*args, **kwargs)
+        if mode in {"training_loss", "diffusion"}:
+            return self.training_loss(*args, **kwargs)
+        if mode in {"flow_matching_loss", "flow_matching", "flow"}:
+            return self.flow_matching_loss(*args, **kwargs)
+        if mode in {"dpo_preference_loss", "dpo"}:
+            return self.dpo_preference_loss(*args, **kwargs)
+        if mode in {"diffusion_dpo_loss", "dpo_loss"}:
+            return self.diffusion_dpo_loss(*args, **kwargs)
+        if mode in {"denoising_preference_score", "preference_score"}:
+            return self.denoising_preference_score(*args, **kwargs)
+        raise ValueError(f"Unsupported LatentDiffusionModel forward_mode={forward_mode!r}.")
 
     def denoising_preference_score(
         self,

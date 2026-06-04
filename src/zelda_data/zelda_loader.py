@@ -641,11 +641,21 @@ def _build_room_graph_sample(
 # =============================================================================
 
 class RandomD4Symmetry:
-    """Applies a random D4 dihedral symmetry to a 2D tile grid.
-    The 8 symmetries are: 4 rotations x 2 reflections."""
+    """Apply a random shape-preserving dihedral transform to a 2D tile grid.
+
+    Rectangular Zelda rooms are stored as `(ROOM_HEIGHT, ROOM_WIDTH)`. A 90 degree
+    rotation would change that to `(ROOM_WIDTH, ROOM_HEIGHT)` and make DataLoader
+    stacking fail unless every coupled graph/neighbor tensor is rotated too. For
+    rectangular grids, restrict the random rotation to 0 or 180 degrees; square
+    grids still receive the full D4 group.
+    """
     def __call__(self, grid: torch.Tensor) -> torch.Tensor:
         # grid shape: (C, H, W) or (H, W)
-        k = torch.randint(0, 4, ()).item()  # 0,1,2,3 rotations
+        height, width = int(grid.shape[-2]), int(grid.shape[-1])
+        if height == width:
+            k = torch.randint(0, 4, ()).item()  # 0,1,2,3 rotations
+        else:
+            k = int(torch.randint(0, 2, ()).item()) * 2  # keep rectangular shape
         flip = torch.randint(0, 2, ()).item()  # 0=no flip, 1=flip
         if flip:
             grid = torch.flip(grid, dims=[-1])  # horizontal flip
@@ -1228,6 +1238,7 @@ def create_dataloader(
     return_sampler: bool = False,
     dungeon_ids: Optional[Iterable[int]] = None,
     variants: Optional[Iterable[int]] = None,
+    augment: bool = False,
 ) -> DataLoader:
     """
     Create a DataLoader for Zelda dungeon training.
@@ -1242,6 +1253,9 @@ def create_dataloader(
         target_size: Optional (H, W) to resize all dungeons
         transform: Optional transform to apply
         room_level: If True, use ZeldaRoomDataset for individual rooms
+        augment: Apply shape-preserving grid augmentation. This is intentionally
+            disallowed with graph conditioning until graph metadata, boundary
+            constraints, neighbor maps, and topology maps are transformed in lockstep.
         
     Returns:
         PyTorch DataLoader
@@ -1255,6 +1269,12 @@ def create_dataloader(
         >>> for batch in loader:
         ...     print(batch.shape)  # (4, 1, H, W)
     """
+    if bool(augment) and bool(load_graphs):
+        raise ValueError(
+            "augment=True cannot be combined with load_graphs=True until graph "
+            "metadata and directional room-conditioning tensors are transformed "
+            "with the same symmetry as the target grid."
+        )
     if room_level:
         dataset = ZeldaRoomDataset(
             data_dir=data_dir,
@@ -1270,6 +1290,7 @@ def create_dataloader(
             puzzle_stage_trace_decay=puzzle_stage_trace_decay,
             dungeon_ids=dungeon_ids,
             variants=variants,
+            augment=augment,
         )
     else:
         dataset = ZeldaDungeonDataset(
@@ -1283,6 +1304,7 @@ def create_dataloader(
             edge_feature_dim=edge_feature_dim,
             dungeon_ids=dungeon_ids,
             variants=variants,
+            augment=augment,
         )
     
     batch_sampler = None

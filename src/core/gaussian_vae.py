@@ -21,6 +21,7 @@ from torch import Tensor
 
 from src.core.definitions import ROOM_HEIGHT, ROOM_WIDTH, TileID, normalize_room_shape
 from src.core.vqvae import Decoder, Encoder, canonical_latent_shape
+from src.utils.optimization import adamw_decay_param_groups
 
 logger = logging.getLogger(__name__)
 
@@ -235,9 +236,13 @@ class GaussianVAETrainer:
         self.model = model
         self.grad_clip_norm = float(max(0.0, float(grad_clip_norm)))
         self.optimizer = torch.optim.AdamW(
-            model.parameters(),
+            adamw_decay_param_groups(
+                model.named_parameters(),
+                weight_decay=float(weight_decay),
+                base_name="gaussian_vae",
+            ),
             lr=lr,
-            weight_decay=weight_decay,
+            weight_decay=0.0,
         )
 
     def train_step(self, batch: Tensor, return_metrics: bool = False) -> float | Tuple[float, Dict[str, float]]:

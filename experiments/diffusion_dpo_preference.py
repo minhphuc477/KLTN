@@ -18,6 +18,11 @@ from src.core.latent_diffusion import LatentDiffusionModel, create_latent_diffus
 from src.train_diffusion import DiffusionTrainingConfig
 from src.utils.checkpoint import safe_torch_load
 
+try:
+    from accelerate import Accelerator
+except ImportError:  # pragma: no cover - exercised only in minimal envs
+    Accelerator = None  # type: ignore[assignment]
+
 
 def _load_model_from_checkpoint(path: Path, config: DiffusionTrainingConfig) -> LatentDiffusionModel:
     model = create_latent_diffusion(
@@ -57,22 +62,41 @@ def _load_model_from_checkpoint(path: Path, config: DiffusionTrainingConfig) -> 
     return model
 
 
-def _load_preference_payload(path: Path, device: torch.device) -> Dict[str, torch.Tensor]:
-    payload = torch.load(str(path), map_location=device, weights_only=False)
+def _to_device(value: Any, device: torch.device) -> Any:
+    if isinstance(value, torch.Tensor):
+        return value.to(device=device)
+    if isinstance(value, dict):
+        return {key: _to_device(nested, device) for key, nested in value.items()}
+    if isinstance(value, list):
+        return [_to_device(nested, device) for nested in value]
+    if isinstance(value, tuple):
+        return tuple(_to_device(nested, device) for nested in value)
+    return value
+
+
+def _load_preference_payload(path: Path, device: torch.device) -> Dict[str, Any]:
+    payload = safe_torch_load(str(path), map_location=device)
     if not isinstance(payload, dict):
         raise ValueError("Preference payload must be a dict with preferred, rejected, and context tensors.")
     required = {"preferred", "rejected", "context"}
     missing = sorted(required - set(payload))
     if missing:
         raise ValueError(f"Preference payload is missing required keys: {missing}")
-    return {
-        key: value.to(device=device) if isinstance(value, torch.Tensor) else value
-        for key, value in payload.items()
-    }
+    return {key: _to_device(value, device) for key, value in payload.items()}
 
 
 def run_dpo(args: argparse.Namespace) -> Dict[str, float]:
-    device = torch.device(args.device)
+    accelerator = None
+    if Accelerator is not None:
+        accelerator = Accelerator(
+            mixed_precision=None if str(args.mixed_precision).lower() == "no" else str(args.mixed_precision),
+            gradient_accumulation_steps=max(1, int(args.gradient_accumulation_steps)),
+        )
+    device = (
+        accelerator.device
+        if accelerator is not None and str(args.device).strip().lower() == "auto"
+        else torch.device("cuda" if str(args.device).strip().lower() == "auto" and torch.cuda.is_available() else args.device)
+    )
     config = DiffusionTrainingConfig(
         denoiser_backbone=args.denoiser_backbone,
         latent_dim=args.latent_dim,
@@ -96,29 +120,43 @@ def run_dpo(args: argparse.Namespace) -> Dict[str, float]:
 
     payload = _load_preference_payload(Path(args.preference_pairs), device=device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=float(args.learning_rate), weight_decay=float(args.weight_decay))
+    if accelerator is not None:
+        model, optimizer = accelerator.prepare(model, optimizer)
     metrics: Dict[str, float] = {}
     for step in range(int(args.steps)):
-        optimizer.zero_grad(set_to_none=True)
-        loss, aux = model.dpo_preference_loss(
-            payload["preferred"],
-            payload["rejected"],
-            payload["context"],
-            reference_model=reference_model,
-            beta=float(args.beta),
-            graph_data=payload.get("graph_data") if isinstance(payload.get("graph_data"), dict) else None,
-        )
-        loss.backward()
-        if float(args.grad_clip_norm) > 0:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), float(args.grad_clip_norm))
-        optimizer.step()
+        accumulate_ctx = accelerator.accumulate(model) if accelerator is not None else torch.enable_grad()
+        with accumulate_ctx:
+            optimizer.zero_grad(set_to_none=True)
+            loss, aux = model(
+                payload["preferred"],
+                payload["rejected"],
+                payload["context"],
+                reference_model=reference_model,
+                beta=float(args.beta),
+                graph_data=payload.get("graph_data") if isinstance(payload.get("graph_data"), dict) else None,
+                forward_mode="dpo_preference_loss",
+            )
+            if accelerator is not None:
+                accelerator.backward(loss)
+                if float(args.grad_clip_norm) > 0 and accelerator.sync_gradients:
+                    accelerator.clip_grad_norm_(model.parameters(), float(args.grad_clip_norm))
+            else:
+                loss.backward()
+                if float(args.grad_clip_norm) > 0:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), float(args.grad_clip_norm))
+            optimizer.step()
         metrics = {"loss": float(loss.detach().item()), **{k: float(v.detach().item()) for k, v in aux.items()}}
-        if step % max(1, int(args.log_every)) == 0:
+        is_main = bool(accelerator is None or accelerator.is_main_process)
+        if is_main and step % max(1, int(args.log_every)) == 0:
             print({"step": step, **metrics})
 
-    if args.output_checkpoint:
+    if accelerator is not None:
+        accelerator.wait_for_everyone()
+    if args.output_checkpoint and bool(accelerator is None or accelerator.is_main_process):
+        state_dict = accelerator.get_state_dict(model) if accelerator is not None else model.state_dict()
         torch.save(
             {
-                "diffusion_state_dict": model.state_dict(),
+                "diffusion_state_dict": state_dict,
                 "dpo_metrics": metrics,
                 "config": config.to_dict(),
             },
@@ -133,8 +171,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--reference-checkpoint", default=None, help="Frozen reference checkpoint. Defaults to no-reference DPO.")
     parser.add_argument("--preference-pairs", required=True, help=".pt dict with preferred, rejected, context tensors.")
     parser.add_argument("--output-checkpoint", default=None)
-    parser.add_argument("--device", default="cpu")
+    parser.add_argument("--device", default="auto")
     parser.add_argument("--steps", type=int, default=1)
+    parser.add_argument("--gradient-accumulation-steps", type=int, default=1)
+    parser.add_argument("--mixed-precision", choices=["no", "fp16", "bf16"], default="no")
     parser.add_argument("--learning-rate", type=float, default=1e-5)
     parser.add_argument("--weight-decay", type=float, default=0.0)
     parser.add_argument("--grad-clip-norm", type=float, default=1.0)

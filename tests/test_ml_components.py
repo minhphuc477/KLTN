@@ -629,6 +629,31 @@ class TestGraphGridAttention:
         assert seen["node_mask"] is None
         assert seen["spatial_called"] is True
 
+    def test_latent_cross_attention_all_masked_context_is_finite_and_zero(self):
+        from src.core.latent_diffusion import CrossAttention
+
+        module = CrossAttention(query_dim=16, context_dim=8, num_heads=4, dropout=0.0)
+        x = torch.randn(2, 5, 16)
+        context = torch.randn(2, 3, 8)
+        node_mask = torch.tensor([[1, 1, 0], [0, 0, 0]], dtype=torch.bool)
+
+        out = module(x, context, node_mask=node_mask)
+
+        assert torch.isfinite(out).all()
+        assert out.shape == x.shape
+        assert torch.allclose(out[1], torch.zeros_like(out[1]))
+
+    def test_latent_cross_attention_rejects_node_mask_shape_mismatch(self):
+        from src.core.latent_diffusion import CrossAttention
+
+        module = CrossAttention(query_dim=16, context_dim=8, num_heads=4, dropout=0.0)
+        x = torch.randn(2, 5, 16)
+        context = torch.randn(2, 3, 8)
+        node_mask = torch.ones(2, 2, dtype=torch.bool)
+
+        with pytest.raises(ValueError, match="node_mask shape"):
+            module(x, context, node_mask=node_mask)
+
 
 # ============================================================================
 # TEST: MISSION GRAMMAR
@@ -1078,6 +1103,59 @@ def test_global_stream_encoder_gps_global_attention_respects_batch_idx():
 
     assert torch.allclose(out_a[:2], out_b[:2], atol=1e-5, rtol=1e-5)
     assert not torch.allclose(out_a[2:], out_b[2:])
+
+
+def test_gps_layer_global_attention_respects_node_mask():
+    from src.core.condition_encoder import GPSLayer
+
+    torch.manual_seed(0)
+    layer = GPSLayer(hidden_dim=8, num_heads=2, dropout=0.0)
+    layer.eval()
+
+    valid = torch.randn(2, 8)
+    padded_a = torch.zeros(2, 8)
+    padded_b = torch.full((2, 8), 100.0)
+    edge_index = torch.empty(2, 0, dtype=torch.long)
+    batch_idx = torch.zeros(4, dtype=torch.long)
+    node_mask = torch.tensor([1, 1, 0, 0], dtype=torch.bool)
+
+    with torch.no_grad():
+        out_a = layer(
+            torch.cat([valid, padded_a], dim=0),
+            edge_index=edge_index,
+            batch_idx=batch_idx,
+            node_mask=node_mask,
+        )
+        out_b = layer(
+            torch.cat([valid, padded_b], dim=0),
+            edge_index=edge_index,
+            batch_idx=batch_idx,
+            node_mask=node_mask,
+        )
+
+    assert torch.isfinite(out_a).all()
+    assert torch.isfinite(out_b).all()
+    assert torch.allclose(out_a[:2], out_b[:2], atol=1e-5, rtol=1e-5)
+
+
+def test_cross_attention_fusion_all_masked_context_is_finite():
+    from src.core.condition_encoder import CrossAttentionFusion
+
+    module = CrossAttentionFusion(local_dim=4, global_dim=4, output_dim=8, num_heads=2, dropout=0.0)
+    local = torch.randn(2, 4, requires_grad=True)
+    global_tokens = torch.randn(2, 3, 4, requires_grad=True)
+    mask = torch.zeros(2, 3, dtype=torch.bool)
+
+    out = module(local, global_tokens, mask=mask)
+    loss = out.pow(2).mean()
+    loss.backward()
+
+    assert tuple(out.shape) == (2, 8)
+    assert torch.isfinite(out).all()
+    assert local.grad is not None
+    assert torch.isfinite(local.grad).all()
+    assert global_tokens.grad is not None
+    assert torch.isfinite(global_tokens.grad).all()
 
 
 def test_global_stream_encoder_gat_handles_isolated_single_node_graph():

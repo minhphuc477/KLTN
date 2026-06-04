@@ -53,10 +53,12 @@ from src.utils.checkpoint import (
     log_checkpoint_artifact,
     prune_checkpoints,
     resolve_resume_checkpoint,
+    safe_torch_load,
     write_checkpoint_metadata,
 )
 from src.utils.data_loading import dataloader_runtime_kwargs
 from src.utils.model_capacity import count_parameters, log_capacity_guardrails
+from src.utils.optimization import adamw_decay_param_groups_for_modules
 from src.zelda_data.zelda_loader import create_dataloader, graph_collate_fn
 from src.train_vqvae import split_dataset_for_vqvae_validation
 
@@ -623,11 +625,16 @@ class MaskedRoomTrainer:
             ),
         ).to(self.device)
         self.optimizer = optim.AdamW(
-            list(self.model.parameters())
-            + list(self.condition_encoder.parameters())
-            + list(self.puzzle_stage_semantics_head.parameters()),
+            adamw_decay_param_groups_for_modules(
+                (
+                    ("model", self.model),
+                    ("condition_encoder", self.condition_encoder),
+                    ("puzzle_stage_semantics_head", self.puzzle_stage_semantics_head),
+                ),
+                weight_decay=float(config.optimizer_weight_decay),
+            ),
             lr=config.learning_rate,
-            weight_decay=config.optimizer_weight_decay,
+            weight_decay=0.0,
         )
         self.scheduler = optim.lr_scheduler.CosineAnnealingLR(
             self.optimizer,
@@ -748,8 +755,10 @@ class MaskedRoomTrainer:
                 node_features=node_features,
                 edge_index=edge_index,
                 edge_features=edge_features,
+                edge_rrwp=graph_dict.get("edge_rrwp"),
                 tpe=tpe,
                 current_node_distance=current_node_distance,
+                node_mask=graph_dict.get("node_mask"),
                 current_node_idx=int(current_node_idx) if current_node_idx is not None else None,
                 reference_room_maps=reference_room_maps,
                 style_id=style_id,
@@ -789,8 +798,10 @@ class MaskedRoomTrainer:
             node_features,
             edge_index,
             edge_features=edge_features,
+            edge_rrwp=graph_dict.get("edge_rrwp"),
             tpe=tpe,
             current_node_distance=current_node_distance,
+            node_mask=graph_dict.get("node_mask"),
         )
 
         if self.config.graph_conditioning_mode == "node_sequence":
@@ -1163,7 +1174,7 @@ class MaskedRoomTrainer:
         )
 
     def load_checkpoint(self, path: str) -> Dict[str, Any]:
-        checkpoint = torch.load(path, map_location=self.device, weights_only=False)
+        checkpoint = safe_torch_load(path, map_location=self.device)
         self.model.load_state_dict(checkpoint["model_state_dict"])
         self.condition_encoder.load_state_dict(checkpoint["condition_encoder_state_dict"])
         if "puzzle_stage_semantics_head_state_dict" in checkpoint:

@@ -41,6 +41,7 @@ dataset:
   shuffle_val: false  # type=bool, default=false, valid={true,false}
   use_vglc: true  # type=bool, default=true, valid={true,false}
   normalize: true  # type=bool, default=true, valid={true,false}
+  grid_augmentation: false  # type=bool, default=false, valid={true,false}; shape-preserving random flips/180 rotations for non-graph autoencoder training only
   room_level: true  # type=bool, default=true, valid={true,false}
   load_graphs: true  # type=bool, default=true, valid={true,false}
   dungeon_batch_mode: true  # type=bool, default=true, valid={true,false}; group room batches by dungeon variant so global graph conditioning is complete

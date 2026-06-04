@@ -10,10 +10,11 @@ import numpy as np
 import torch
 
 from src.core import ROOM_HEIGHT, ROOM_WIDTH, SEMANTIC_PALETTE
-from src.core.definitions import DOOR_POSITIONS, TileID, parse_edge_type_tokens
+from src.core.definitions import DOOR_POSITIONS, GRAPH_TPE_DIM, TileID, parse_edge_type_tokens
 from src.core.condition_encoder import build_boundary_constraints
 from src.pipeline.graph_features import (
     compute_current_node_distance_features,
+    compute_rrwp_edge_features,
     compute_tpe_features,
     encode_edge_feature_vector,
     extract_node_feature_vector,
@@ -54,6 +55,7 @@ def _prepare_graph_context(pipeline, graph: nx.Graph, use_tpe: bool = True) -> D
         empty_nodes = torch.zeros(0, node_dim, device=pipeline.device, dtype=torch.float32)
         empty_edges = torch.zeros(2, 0, dtype=torch.long, device=pipeline.device)
         empty_edge_feats = torch.zeros(0, edge_dim, device=pipeline.device, dtype=torch.float32)
+        empty_edge_rrwp = torch.zeros(0, int(GRAPH_TPE_DIM), device=pipeline.device, dtype=torch.float32)
         empty_tpe = torch.zeros(0, 8, device=pipeline.device, dtype=torch.float32)
         empty_positions = torch.zeros(0, 2, device=pipeline.device, dtype=torch.float32)
         empty_mask = torch.zeros(0, device=pipeline.device, dtype=torch.float32)
@@ -61,6 +63,7 @@ def _prepare_graph_context(pipeline, graph: nx.Graph, use_tpe: bool = True) -> D
             'node_features': empty_nodes,
             'edge_index': empty_edges,
             'edge_features': empty_edge_feats,
+            'edge_rrwp': empty_edge_rrwp,
             'tpe': empty_tpe,
             'node_positions': empty_positions,
             'node_mask': empty_mask,
@@ -123,6 +126,14 @@ def _prepare_graph_context(pipeline, graph: nx.Graph, use_tpe: bool = True) -> D
         edge_index = torch.zeros(2, 0, dtype=torch.long, device=pipeline.device)
         edge_features = torch.zeros(0, edge_dim, dtype=torch.float32, device=pipeline.device)
 
+    edge_rrwp = compute_rrwp_edge_features(
+        edge_index,
+        num_nodes=num_nodes,
+        steps=int(GRAPH_TPE_DIM),
+        device=pipeline.device,
+        dtype=torch.float32,
+    )
+
     if use_tpe:
         tpe = pipeline._compute_tpe_features(graph, node_order, node_to_idx, node_features)
     else:
@@ -151,6 +162,7 @@ def _prepare_graph_context(pipeline, graph: nx.Graph, use_tpe: bool = True) -> D
         'node_features': node_features,
         'edge_index': edge_index,
         'edge_features': edge_features,
+        'edge_rrwp': edge_rrwp,
         'tpe': tpe,
         'node_positions': node_positions,
         'node_mask': torch.ones(num_nodes, device=pipeline.device, dtype=torch.float32),

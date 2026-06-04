@@ -39,6 +39,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
+from src.utils.optimization import adamw_decay_param_groups
+
 from src.core.definitions import ROOM_HEIGHT, ROOM_WIDTH, TileID, normalize_room_shape
 
 logger = logging.getLogger(__name__)
@@ -1619,9 +1621,13 @@ class VQVAETrainer:
         self.model = model
         self.grad_clip_norm = float(max(0.0, float(grad_clip_norm)))
         self.optimizer = torch.optim.AdamW(
-            model.parameters(),
+            adamw_decay_param_groups(
+                model.named_parameters(),
+                weight_decay=float(weight_decay),
+                base_name="vqvae",
+            ),
             lr=lr,
-            weight_decay=weight_decay,
+            weight_decay=0.0,
         )
     
     def train_step(

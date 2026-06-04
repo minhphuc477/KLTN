@@ -500,6 +500,7 @@ def test_dpo_preference_loss_trains_preferred_over_rejected_pairs():
     noise = torch.randn_like(preferred)
     timesteps = torch.tensor([1, 5], dtype=torch.long)
 
+    rng_state = torch.random.get_rng_state()
     loss, metrics = model.dpo_preference_loss(
         preferred,
         rejected,
@@ -509,15 +510,28 @@ def test_dpo_preference_loss_trains_preferred_over_rejected_pairs():
         noise=noise,
         timesteps=timesteps,
     )
+    torch.random.set_rng_state(rng_state)
+    called_loss, called_metrics = model(
+        preferred,
+        rejected,
+        context,
+        reference_model=reference,
+        beta=0.2,
+        noise=noise,
+        timesteps=timesteps,
+        forward_mode="dpo_preference_loss",
+    )
 
     assert loss.shape == ()
     assert torch.isfinite(loss)
+    assert torch.allclose(called_loss, loss)
     assert set(metrics) >= {
         "dpo_model_margin",
         "dpo_reference_margin",
         "dpo_preferred_score",
         "dpo_rejected_score",
     }
+    assert torch.allclose(called_metrics["dpo_model_margin"], metrics["dpo_model_margin"])
     loss.backward()
     model_grad = sum(
         float(param.grad.detach().abs().sum().item())

@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 import torch
 
-from src.core.definitions import DOOR_POSITIONS, ROOM_HEIGHT, ROOM_WIDTH, SEMANTIC_PALETTE
+from src.core.definitions import DOOR_POSITIONS, GRAPH_TPE_DIM, ROOM_HEIGHT, ROOM_WIDTH, SEMANTIC_PALETTE
 from src.core.condition_encoder import create_condition_encoder
 from src.core.latent_diffusion import create_latent_diffusion
 from src.core.logic_net import LogicNet
@@ -1834,6 +1834,25 @@ def test_room_graph_context_includes_current_node_distance_features():
     assert float(current_node_distance[current_node_idx, 1]) == 0.0
     assert float(current_node_distance[current_node_idx, 2]) == 0.0
     assert float(current_node_distance[current_node_idx, 3]) == 1.0
+
+
+def test_generation_graph_context_includes_rrwp_edge_features():
+    pipeline = NeuralSymbolicDungeonPipeline(
+        device="cpu",
+        enable_logging=False,
+        room_generator_mode="latent_diffusion",
+    )
+
+    mission_graph = nx.DiGraph()
+    mission_graph.add_node(0, is_start=True, pos=(0, 0))
+    mission_graph.add_node(1, is_goal=True, pos=(0, 1))
+    mission_graph.add_edge(0, 1)
+
+    graph_data = pipeline._prepare_graph_context(mission_graph, use_tpe=True)
+
+    assert "edge_rrwp" in graph_data
+    assert tuple(graph_data["edge_rrwp"].shape) == (1, GRAPH_TPE_DIM)
+    assert float(graph_data["edge_rrwp"][0, 0]) == pytest.approx(0.5)
 
 
 def test_current_node_distance_features_mark_unreachable_nodes_with_sentinel():

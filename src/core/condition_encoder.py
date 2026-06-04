@@ -841,6 +841,37 @@ class GlobalStreamEncoder(nn.Module):
                 aligned[:rows, :cols] = tensor[:rows, :cols]
             tensor = aligned
         return tensor
+
+    def _prepare_node_mask(
+        self,
+        node_mask: Optional[Tensor],
+        num_nodes: int,
+        *,
+        device: torch.device,
+    ) -> Optional[Tensor]:
+        """Normalize valid-node masks to bool [N]."""
+        if node_mask is None:
+            return None
+        tensor = node_mask.to(device=device)
+        if tensor.dim() == 2 and int(tensor.shape[0]) == 1:
+            tensor = tensor.squeeze(0)
+        if tensor.dim() != 1:
+            raise ValueError(f"node_mask must be 1D [N] or [1,N], got {tuple(tensor.shape)}.")
+        expected_shape = (int(num_nodes),)
+        if tuple(tensor.shape) != expected_shape:
+            self._warn_once(
+                f"node_mask:{tuple(tensor.shape)}->{expected_shape}",
+                (
+                    f"node_mask shape mismatch: got {tuple(tensor.shape)}, expected {expected_shape}. "
+                    "Applying automatic pad/truncate."
+                ),
+            )
+            aligned = torch.zeros(int(num_nodes), device=device, dtype=torch.bool)
+            rows = min(int(num_nodes), int(tensor.shape[0]))
+            if rows > 0:
+                aligned[:rows] = tensor[:rows].to(dtype=torch.bool)
+            return aligned
+        return tensor.to(dtype=torch.bool)
     
     def forward(
         self,
@@ -851,6 +882,7 @@ class GlobalStreamEncoder(nn.Module):
         tpe: Optional[Tensor] = None,
         current_node_distance: Optional[Tensor] = None,
         batch_idx: Optional[Tensor] = None,
+        node_mask: Optional[Tensor] = None,
         node_idx: Optional[int] = None,
     ) -> Tensor:
         """
@@ -862,6 +894,7 @@ class GlobalStreamEncoder(nn.Module):
             edge_features: [E, edge_feature_dim] edge type features (Phase 3A)
             tpe: [N, 8] topological positional encoding (optional)
             batch_idx: [N] batch assignment for batched graphs
+            node_mask: [N] valid-node mask for padded graph batches
             node_idx: Target node index to return embedding for
             
         Returns:
@@ -887,11 +920,23 @@ class GlobalStreamEncoder(nn.Module):
             device=node_features.device,
             dtype=node_features.dtype,
         )
+        prepared_node_mask = self._prepare_node_mask(
+            node_mask,
+            int(node_features.shape[0]),
+            device=node_features.device,
+        )
 
         if self.use_torch_geometric:
             h = self._forward_torch_geometric(node_features, edge_index, edge_features, edge_rrwp)
         elif self.gnn_type == "gps":
-            h = self._forward_gps(node_features, edge_index, edge_features, edge_rrwp, batch_idx=batch_idx)
+            h = self._forward_gps(
+                node_features,
+                edge_index,
+                edge_features,
+                edge_rrwp,
+                batch_idx=batch_idx,
+                node_mask=prepared_node_mask,
+            )
         else:
             h = self.gnn(node_features, edge_index)
         
@@ -904,6 +949,8 @@ class GlobalStreamEncoder(nn.Module):
                 * self.current_node_distance_proj(current_node_distance)
             )
         h = self.output_proj(torch.cat([h, aux_features], dim=-1))
+        if prepared_node_mask is not None:
+            h = h * prepared_node_mask.to(device=h.device, dtype=h.dtype).unsqueeze(-1)
         
         # Return specific node embedding or all
         if node_idx is not None:
@@ -967,6 +1014,7 @@ class GlobalStreamEncoder(nn.Module):
         edge_features: Optional[Tensor] = None,
         edge_rrwp: Optional[Tensor] = None,
         batch_idx: Optional[Tensor] = None,
+        node_mask: Optional[Tensor] = None,
     ) -> Tensor:
         """
         Forward through a GraphGPS-style encoder.
@@ -998,7 +1046,13 @@ class GlobalStreamEncoder(nn.Module):
                 edge_attr = rrwp_attr if edge_attr is None else edge_attr + rrwp_attr
 
         for layer in self.gps_layers:
-            h = layer(h, edge_index=edge_index, edge_attr=edge_attr, batch_idx=batch_idx)
+            h = layer(
+                h,
+                edge_index=edge_index,
+                edge_attr=edge_attr,
+                batch_idx=batch_idx,
+                node_mask=node_mask,
+            )
 
         return self.node_output(h)
 
@@ -1092,6 +1146,7 @@ class GPSLayer(nn.Module):
         edge_index: Tensor,
         edge_attr: Optional[Tensor] = None,
         batch_idx: Optional[Tensor] = None,
+        node_mask: Optional[Tensor] = None,
     ) -> Tensor:
         local_in = self.local_norm(h)
         if self.local_gnn is not None:
@@ -1104,10 +1159,29 @@ class GPSLayer(nn.Module):
         h = h + self.dropout(F.gelu(local_out))
 
         global_normed = self.global_norm(h)
+        valid_nodes = None
+        if node_mask is not None:
+            if node_mask.dim() != 1 or int(node_mask.shape[0]) != int(h.shape[0]):
+                raise ValueError(
+                    f"GPSLayer node_mask must have shape [N] with N={int(h.shape[0])}, got {tuple(node_mask.shape)}."
+                )
+            valid_nodes = node_mask.to(device=h.device, dtype=torch.bool)
         if batch_idx is None:
-            global_in = global_normed.unsqueeze(0)
-            global_out, _ = self.global_attn(global_in, global_in, global_in, need_weights=False)
-            global_out = global_out.squeeze(0)
+            if valid_nodes is not None and not bool(valid_nodes.any()):
+                global_out = torch.zeros_like(h)
+            else:
+                global_in = global_normed.unsqueeze(0)
+                key_padding_mask = (~valid_nodes).unsqueeze(0) if valid_nodes is not None else None
+                global_out, _ = self.global_attn(
+                    global_in,
+                    global_in,
+                    global_in,
+                    key_padding_mask=key_padding_mask,
+                    need_weights=False,
+                )
+                global_out = global_out.squeeze(0)
+                if valid_nodes is not None:
+                    global_out = global_out * valid_nodes.to(dtype=global_out.dtype).unsqueeze(-1)
         else:
             if batch_idx.dim() != 1 or int(batch_idx.shape[0]) != int(h.shape[0]):
                 raise ValueError(
@@ -1120,8 +1194,21 @@ class GPSLayer(nn.Module):
                 if not bool(torch.any(mask)):
                     continue
                 seq = global_normed[mask].unsqueeze(0)
-                out, _ = self.global_attn(seq, seq, seq, need_weights=False)
-                global_out[mask] = out.squeeze(0)
+                local_valid = valid_nodes[mask] if valid_nodes is not None else None
+                if local_valid is not None and not bool(local_valid.any()):
+                    continue
+                key_padding_mask = (~local_valid).unsqueeze(0) if local_valid is not None else None
+                out, _ = self.global_attn(
+                    seq,
+                    seq,
+                    seq,
+                    key_padding_mask=key_padding_mask,
+                    need_weights=False,
+                )
+                out = out.squeeze(0)
+                if local_valid is not None:
+                    out = out * local_valid.to(dtype=out.dtype).unsqueeze(-1)
+                global_out[mask] = out
         h = h + self.dropout(global_out)
 
         h = h + self.dropout(self.ffn(self.ffn_norm(h)))
@@ -1238,13 +1325,23 @@ class CrossAttentionFusion(nn.Module):
         scale = math.sqrt(self.head_dim)
         attn_scores = torch.matmul(Q, K.transpose(-2, -1)) / scale  # [B, H, 1, N]
         
+        valid_mask = None
         if mask is not None:
-            attn_scores = attn_scores.masked_fill(
-                mask.unsqueeze(1).unsqueeze(2) == 0,
-                float('-inf')
-            )
+            valid_mask = mask.to(device=attn_scores.device, dtype=torch.bool)
+            if valid_mask.dim() == 1:
+                valid_mask = valid_mask.unsqueeze(0).expand(B, -1)
+            if valid_mask.dim() != 2 or int(valid_mask.shape[0]) != B or int(valid_mask.shape[1]) != N:
+                raise ValueError(
+                    f"CrossAttentionFusion mask must have shape [B,N] with B={B}, N={N}; got {tuple(valid_mask.shape)}."
+                )
+            expanded_mask = valid_mask.unsqueeze(1).unsqueeze(2)
+            attn_scores = attn_scores.masked_fill(~expanded_mask, -1.0e4)
         
         attn_weights = F.softmax(attn_scores, dim=-1)
+        if valid_mask is not None:
+            expanded_mask = valid_mask.unsqueeze(1).unsqueeze(2).to(dtype=attn_weights.dtype)
+            attn_weights = attn_weights * expanded_mask
+            attn_weights = attn_weights / attn_weights.sum(dim=-1, keepdim=True).clamp_min(1e-8)
         attn_weights = self.dropout(attn_weights)
         
         # Apply attention to values
@@ -1417,6 +1514,7 @@ class DualStreamConditionEncoder(nn.Module):
         tpe: Optional[Tensor] = None,
         current_node_distance: Optional[Tensor] = None,
         batch_idx: Optional[Tensor] = None,
+        node_mask: Optional[Tensor] = None,
         current_node_idx: Optional[int] = None,
         reference_room_maps: Optional[Dict[str, Optional[Tensor]]] = None,
         style_id: Optional[Tensor] = None,
@@ -1466,12 +1564,25 @@ class DualStreamConditionEncoder(nn.Module):
             tpe=tpe,
             current_node_distance=current_node_distance,
             batch_idx=batch_idx,
+            node_mask=node_mask,
             node_idx=None,
         )
 
         # Ensure global tokens have proper shape for cross-attention.
         if global_tokens.dim() == 2:
             global_tokens = global_tokens.unsqueeze(0).expand(c_local.shape[0], -1, -1)
+
+        global_mask = None
+        if node_mask is not None:
+            global_mask = node_mask.to(device=device, dtype=torch.bool)
+            if global_mask.dim() == 1:
+                global_mask = global_mask.unsqueeze(0).expand(batch_size, -1)
+            elif global_mask.dim() == 2 and int(global_mask.shape[0]) == 1 and batch_size > 1:
+                global_mask = global_mask.expand(batch_size, -1)
+            if global_mask.dim() != 2 or int(global_mask.shape[0]) != batch_size:
+                raise ValueError(
+                    f"node_mask must broadcast to [B,N] with B={batch_size}; got {tuple(global_mask.shape)}."
+                )
 
         if current_node_idx is not None:
             num_tokens = int(global_tokens.shape[1])
@@ -1480,6 +1591,8 @@ class DualStreamConditionEncoder(nn.Module):
                     f"current_node_idx={current_node_idx} is out of range for {num_tokens} graph tokens"
                 )
             c_global = global_tokens[:, current_node_idx:current_node_idx + 1, :]
+            if global_mask is not None:
+                global_mask = global_mask[:, current_node_idx:current_node_idx + 1]
         else:
             c_global = global_tokens
         
@@ -1519,7 +1632,7 @@ class DualStreamConditionEncoder(nn.Module):
             )
         
         # Cross-attention fusion (local queries global with style-augmented keys)
-        c_fused = self.fusion(c_local, c_global)
+        c_fused = self.fusion(c_local, c_global, mask=global_mask)
 
         # Final projection: fuse graph-aware room context with the global style token
         # and any discrete reference-room exemplar features.
@@ -1552,6 +1665,7 @@ class DualStreamConditionEncoder(nn.Module):
         tpe: Optional[Tensor] = None,
         current_node_distance: Optional[Tensor] = None,
         batch_idx: Optional[Tensor] = None,
+        node_mask: Optional[Tensor] = None,
     ) -> Tensor:
         """Encode only global context (all nodes)."""
         return self.global_encoder(
@@ -1562,6 +1676,7 @@ class DualStreamConditionEncoder(nn.Module):
             tpe=tpe,
             current_node_distance=current_node_distance,
             batch_idx=batch_idx,
+            node_mask=node_mask,
         )
 
 

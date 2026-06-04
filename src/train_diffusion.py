@@ -18,6 +18,7 @@ import inspect
 import json
 import logging
 import math
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Dict, Any, Tuple, List, Set
@@ -1200,7 +1201,7 @@ class DiffusionTrainer:
 
         # --- Accelerate / AMP integration ---
         self._accelerator: Optional[Any] = None
-        if _HAS_ACCELERATE:
+        if _HAS_ACCELERATE and not bool(getattr(self.distributed_context, "enabled", False)):
             try:
                 mixed_precision = 'fp16' if getattr(config, 'use_amp', False) else 'no'
                 self._accelerator = Accelerator(mixed_precision=mixed_precision)
@@ -1216,6 +1217,10 @@ class DiffusionTrainer:
                     "Accelerate init failed (%s); falling back to plain PyTorch.", _acc_err
                 )
                 self._accelerator = None
+        elif _HAS_ACCELERATE and bool(getattr(self.distributed_context, "enabled", False)):
+            logger.info(
+                "Skipping Accelerate in torchrun mode; using DistributedSampler plus explicit gradient averaging."
+            )
         
         # Scheduler
         self.scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
@@ -1654,6 +1659,12 @@ class DiffusionTrainer:
             raise ValueError(f"Unsupported diffusion_training_objective={objective!r}.")
         return target_model.training_loss(z_0, conditioning, graph_data=graph_data)
 
+    def _autocast_context(self):
+        """Return the active mixed-precision context, or a no-op context."""
+        if self._accelerator is not None:
+            return self._accelerator.autocast()
+        return nullcontext()
+
     def _decode_latent_for_logic(self, latent: torch.Tensor) -> torch.Tensor:
         """
         Decode a predicted clean latent into tile logits for LogicNet.
@@ -1995,6 +2006,9 @@ class DiffusionTrainer:
         graph_batch_idx = graph_dict.get("batch_idx")
         if isinstance(graph_batch_idx, torch.Tensor):
             graph_batch_idx = graph_batch_idx.to(self.device, dtype=torch.long)
+        graph_node_mask = graph_dict.get("node_mask")
+        if isinstance(graph_node_mask, torch.Tensor):
+            graph_node_mask = graph_node_mask.to(self.device, dtype=torch.float32)
         has_room_anchor = bool(graph_dict.get("has_room_anchor", False)) or (
             isinstance(boundary_constraints, torch.Tensor)
             and isinstance(room_position, torch.Tensor)
@@ -2025,6 +2039,7 @@ class DiffusionTrainer:
                 "tpe": tpe,
                 "current_node_distance": current_node_distance,
                 "batch_idx": graph_batch_idx,
+                "node_mask": graph_node_mask,
                 "current_node_idx": int(current_node_idx) if current_node_idx is not None else None,
                 "reference_room_maps": reference_room_maps,
                 "style_id": style_id,
@@ -2068,6 +2083,7 @@ class DiffusionTrainer:
             "tpe": tpe,
             "current_node_distance": current_node_distance,
             "batch_idx": graph_batch_idx,
+            "node_mask": graph_node_mask,
         }
         encode_global = self.condition_encoder.encode_global_only
         if self._call_supports_keyword(encode_global, "edge_rrwp"):
@@ -2944,7 +2960,8 @@ class DiffusionTrainer:
             diffusion_graph_data["spatial_alignment_weight"] = graph_alignment_weight
         
         # === Part 1: Diffusion / flow objective ===
-        diffusion_loss = self._diffusion_objective_loss(z_0, conditioning, diffusion_graph_data)
+        with self._autocast_context():
+            diffusion_loss = self._diffusion_objective_loss(z_0, conditioning, diffusion_graph_data)
         if not self._tensor_is_finite(diffusion_loss):
             self.optimizer.zero_grad(set_to_none=True)
             self._warn_nonfinite(
@@ -2988,9 +3005,10 @@ class DiffusionTrainer:
             tile_targets = self._tile_targets_from_maps(real_maps)
             # Trains LogicNet.tile_classifier only; z_0.detach() prevents this
             # auxiliary CE branch from injecting gradients into diffusion.
-            tile_logits = self.logic_net.tile_classifier(z_0.detach())
-            tile_logits = self.logic_net._project_tile_logits_to_room(tile_logits)
-            logic_tile_loss = F.cross_entropy(tile_logits, tile_targets)
+            with self._autocast_context():
+                tile_logits = self.logic_net.tile_classifier(z_0.detach())
+                tile_logits = self.logic_net._project_tile_logits_to_room(tile_logits)
+                logic_tile_loss = F.cross_entropy(tile_logits, tile_targets)
             logic_tile_accuracy = (tile_logits.argmax(dim=1) == tile_targets).float().mean()
 
         if logic_enabled and logic_loss_weight > 0:
@@ -3013,34 +3031,35 @@ class DiffusionTrainer:
                     conditioning,
                     diffusion_graph_data,
                 )
-                pred_logic = self.diffusion.denoiser(
-                    x_t_logic,
-                    t_logic,
-                    conditioning,
-                    context_edge_index=context_edge_index,
-                    context_node_mask=context_node_mask,
-                    spatial_graph_data=spatial_graph_data,
-                )
-                pred_x0_logic = self._prediction_to_x0(pred_logic, x_t_logic, t_logic)
-
-                # Keep latent range bounded similarly to sampling path.
-                pred_x0_logic = torch.clamp(pred_x0_logic, -1.0, 1.0)
-                if not self._tensor_is_finite(pred_x0_logic):
-                    self._warn_nonfinite(
-                        "logic_pred_x0",
-                        "Diffusion training: non-finite predicted x0 for logic supervision; disabling logic loss for this batch.",
+                with self._autocast_context():
+                    pred_logic = self.diffusion.denoiser(
+                        x_t_logic,
+                        t_logic,
+                        conditioning,
+                        context_edge_index=context_edge_index,
+                        context_node_mask=context_node_mask,
+                        spatial_graph_data=spatial_graph_data,
                     )
-                    pred_x0_logic = None
+                    pred_x0_logic = self._prediction_to_x0(pred_logic, x_t_logic, t_logic)
 
-                # Decode predicted x0 before LogicNet so pathfinding sees tile
-                # logits/walkability rather than arbitrary continuous latents.
-                if pred_x0_logic is not None:
-                    pred_tile_logits = self._decode_latent_for_logic(pred_x0_logic)
-                    logic_loss, _logic_info = self.logic_net(pred_tile_logits, graph_data=logic_graph_data)
-                    wfc_pseudo_loss, wfc_pseudo_samples, wfc_pseudo_mean_loss = self._wfc_pseudo_label_loss(
-                        pred_tile_logits,
-                        real_maps,
-                    )
+                    # Keep latent range bounded similarly to sampling path.
+                    pred_x0_logic = torch.clamp(pred_x0_logic, -1.0, 1.0)
+                    if not self._tensor_is_finite(pred_x0_logic):
+                        self._warn_nonfinite(
+                            "logic_pred_x0",
+                            "Diffusion training: non-finite predicted x0 for logic supervision; disabling logic loss for this batch.",
+                        )
+                        pred_x0_logic = None
+
+                    # Decode predicted x0 before LogicNet so pathfinding sees tile
+                    # logits/walkability rather than arbitrary continuous latents.
+                    if pred_x0_logic is not None:
+                        pred_tile_logits = self._decode_latent_for_logic(pred_x0_logic)
+                        logic_loss, _logic_info = self.logic_net(pred_tile_logits, graph_data=logic_graph_data)
+                        wfc_pseudo_loss, wfc_pseudo_samples, wfc_pseudo_mean_loss = self._wfc_pseudo_label_loss(
+                            pred_tile_logits,
+                            real_maps,
+                        )
 
             if self._tensor_is_finite(logic_loss):
                 if isinstance(logic_loss, torch.Tensor) and logic_loss.numel() != 1:
@@ -3235,17 +3254,18 @@ class DiffusionTrainer:
         if ref is self.diffusion:
             ref = None
 
-        loss, dpo_metrics = self.diffusion.diffusion_dpo_loss(
-            chosen_z,
-            rejected_z,
-            conditioning,
-            graph_data=graph_data,
-            rejected_context=rejected_conditioning,
-            rejected_graph_data=rejected_graph_data,
-            reference_model=ref,
-            beta=float(beta),
-            objective=objective,
-        )
+        with self._autocast_context():
+            loss, dpo_metrics = self.diffusion.diffusion_dpo_loss(
+                chosen_z,
+                rejected_z,
+                conditioning,
+                graph_data=graph_data,
+                rejected_context=rejected_conditioning,
+                rejected_graph_data=rejected_graph_data,
+                reference_model=ref,
+                beta=float(beta),
+                objective=objective,
+            )
         if not self._tensor_is_finite(loss):
             self.optimizer.zero_grad(set_to_none=True)
             self._warn_nonfinite(
@@ -3792,7 +3812,7 @@ class DiffusionTrainer:
     
     def load_checkpoint(self, path: str):
         """Load training checkpoint."""
-        checkpoint = torch.load(path, map_location=self.device, weights_only=False)
+        checkpoint = safe_torch_load(path, map_location=self.device)
         for key in ('diffusion_state_dict', 'ema_diffusion_state_dict'):
             if key in checkpoint:
                 checkpoint[key], removed = self._strip_embedded_guidance_logic_net_state(checkpoint[key])
@@ -4043,7 +4063,7 @@ def train_diffusion(config: DiffusionTrainingConfig) -> DiffusionTrainer:
         best_teacher_loss = float("inf")
         metrics: Dict[str, float] = {}
         if resume_path is not None:
-            latest_ckpt = torch.load(str(resume_path), map_location="cpu", weights_only=False)
+            latest_ckpt = safe_torch_load(str(resume_path), map_location="cpu")
             latest_metrics = latest_ckpt.get("metrics", {})
             if isinstance(latest_metrics, dict):
                 best_solvability = float(latest_metrics.get("best_solvability", latest_metrics.get("val_solvability", 0.0)))

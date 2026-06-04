@@ -255,7 +255,7 @@ class TestFSQuantizer:
         assert torch.isfinite(losses["vq_loss"])
         assert losses["vq_loss"].item() >= 0.0
 
-    def test_fsq_decode_indices_fails_with_clear_error(self):
+    def test_fsq_decode_indices_round_trips_through_implicit_codebook(self):
         from src.core.vqvae import create_vqvae
 
         model = create_vqvae(
@@ -266,8 +266,10 @@ class TestFSQuantizer:
             architecture="fsq",
         )
 
-        with pytest.raises(RuntimeError, match="decode_indices is not supported for FSQ"):
-            model.decode_indices(torch.zeros(1, 4, 3, dtype=torch.long))
+        logits = model.decode_indices(torch.zeros(1, 4, 3, dtype=torch.long))
+
+        assert tuple(logits.shape) == (1, 5, 16, 11)
+        assert torch.isfinite(logits).all()
 
 
 class TestEncoder:

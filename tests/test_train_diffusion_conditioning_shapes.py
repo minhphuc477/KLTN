@@ -318,6 +318,8 @@ class _DummyRoomAwareConditionEncoder:
         self.captured_current_node_idx = None
         self.captured_current_node_distance = None
         self.captured_batch_idx = None
+        self.captured_node_mask = None
+        self.captured_edge_rrwp = None
         self.captured_return_global_tokens = None
         self.captured_neighbor_latents = None
         self.captured_reference_room_maps = None
@@ -333,9 +335,11 @@ class _DummyRoomAwareConditionEncoder:
         node_features,
         edge_index,
         edge_features=None,
+        edge_rrwp=None,
         tpe=None,
         current_node_distance=None,
         batch_idx=None,
+        node_mask=None,
         current_node_idx=None,
         reference_room_maps=None,
         style_id=None,
@@ -345,6 +349,8 @@ class _DummyRoomAwareConditionEncoder:
         self.captured_current_node_idx = current_node_idx
         self.captured_current_node_distance = current_node_distance
         self.captured_batch_idx = batch_idx
+        self.captured_node_mask = node_mask
+        self.captured_edge_rrwp = edge_rrwp
         self.captured_return_global_tokens = return_global_tokens
         self.captured_neighbor_latents = neighbor_latents
         self.captured_reference_room_maps = reference_room_maps
@@ -360,12 +366,16 @@ class _DummyRoomAwareConditionEncoder:
         node_features,
         edge_index,
         edge_features=None,
+        edge_rrwp=None,
         tpe=None,
         current_node_distance=None,
         batch_idx=None,
+        node_mask=None,
     ):
         _ = (edge_index, edge_features, tpe, current_node_distance, batch_idx)
         self.captured_batch_idx = batch_idx
+        self.captured_node_mask = node_mask
+        self.captured_edge_rrwp = edge_rrwp
         self.encode_global_only_calls += 1
         return torch.full((int(node_features.shape[0]), self.output_dim), 3.0, dtype=torch.float32)
 
@@ -728,6 +738,7 @@ def test_encode_graph_conditioning_prepends_room_anchor_for_room_samples():
         "room_position": torch.tensor([0.0, 1.0], dtype=torch.float32),
         "current_node_idx": 2,
         "batch_idx": torch.tensor([0, 0, 1], dtype=torch.long),
+        "node_mask": torch.tensor([1.0, 1.0, 0.0], dtype=torch.float32),
     }
 
     encoded = DiffusionTrainer._encode_graph_conditioning(trainer, graph_dict)
@@ -742,6 +753,8 @@ def test_encode_graph_conditioning_prepends_room_anchor_for_room_samples():
     assert trainer.condition_encoder.encode_global_only_calls == 0
     assert trainer.condition_encoder.captured_neighbor_latents == EMPTY_NEIGHBORS
     assert torch.equal(trainer.condition_encoder.captured_batch_idx, torch.tensor([0, 0, 1], dtype=torch.long))
+    assert torch.equal(trainer.condition_encoder.captured_node_mask, graph_dict["node_mask"])
+    assert tuple(trainer.condition_encoder.captured_edge_rrwp.shape) == (2, GRAPH_TPE_DIM)
 
 
 def test_encode_graph_conditioning_uses_teacher_forced_neighbor_latents_when_available():
@@ -878,12 +891,14 @@ def test_encode_graph_conditioning_passes_batch_idx_to_global_only_path():
         "edge_attr": torch.tensor([0, 1], dtype=torch.long),
         "tpe": torch.randn(4, 8),
         "batch_idx": torch.tensor([0, 0, 1, 1], dtype=torch.long),
+        "node_mask": torch.tensor([1.0, 1.0, 1.0, 0.0], dtype=torch.float32),
     }
 
     _encoded = DiffusionTrainer._encode_graph_conditioning(trainer, graph_dict)
 
     assert trainer.condition_encoder.encode_global_only_calls == 1
     assert torch.equal(trainer.condition_encoder.captured_batch_idx, graph_dict["batch_idx"])
+    assert torch.equal(trainer.condition_encoder.captured_node_mask, graph_dict["node_mask"])
 
 
 def test_encode_graph_conditioning_appends_stage_tokens_when_enabled():

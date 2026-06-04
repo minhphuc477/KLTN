@@ -33,6 +33,7 @@ from src.utils.checkpoint import (
     log_checkpoint_artifact,
     prune_checkpoints,
     resolve_resume_checkpoint,
+    safe_torch_load,
     write_checkpoint_metadata,
 )
 from src.utils.data_loading import dataloader_runtime_kwargs
@@ -117,6 +118,7 @@ def gaussian_vae_training_kwargs_from_resolved_config(config: Dict[str, Any]) ->
         "drop_last": dataset["drop_last"],
         "use_vglc": dataset["use_vglc"],
         "normalize": dataset["normalize"],
+        "augment": bool(dataset.get("grid_augmentation", False)),
         "room_level": dataset["room_level"],
         "seed": runtime["seed"],
         "auto_resume": runtime["auto_resume"],
@@ -160,6 +162,7 @@ def _default_gaussian_vae_training_kwargs() -> Dict[str, Any]:
         "drop_last": True,
         "use_vglc": True,
         "normalize": True,
+        "augment": False,
         "room_level": True,
         "seed": None,
         "auto_resume": True,
@@ -209,6 +212,7 @@ def _legacy_gaussian_vae_overrides_from_args(args: argparse.Namespace) -> Dict[s
     _set("drop_last", getattr(args, "drop_last", None))
     _set("use_vglc", getattr(args, "use_vglc", None))
     _set("normalize", getattr(args, "normalize", None))
+    _set("augment", getattr(args, "augment", None))
     _set("room_level", getattr(args, "room_level", None))
     _set("seed", getattr(args, "seed", None))
     _set("auto_resume", getattr(args, "auto_resume", None))
@@ -324,6 +328,7 @@ def train_gaussian_vae(args):
         normalize=bool(getattr(args, "normalize", True)),
         room_level=room_level,
         load_graphs=False,
+        augment=bool(getattr(args, "augment", False)),
     )
     dataset = base_loader.dataset
     train_dataset, val_dataset = split_dataset_for_gaussian_vae_validation(
@@ -420,7 +425,7 @@ def train_gaussian_vae(args):
         latest_filename=LATEST_RESUME_FILENAME,
     )
     if resume_path is not None:
-        ckpt = torch.load(str(resume_path), map_location=device, weights_only=False)
+        ckpt = safe_torch_load(str(resume_path), map_location=device)
         model.load_state_dict(ckpt["model_state_dict"])
         if "optimizer_state_dict" in ckpt:
             trainer.optimizer.load_state_dict(ckpt["optimizer_state_dict"])
@@ -775,6 +780,8 @@ def main():
     parser.add_argument("--drop-last", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--use-vglc", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--normalize", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--augment", action=argparse.BooleanOptionalAction, default=None,
+                        help="Apply shape-preserving random grid augmentation for non-graph Gaussian-VAE training.")
     parser.add_argument("--room-level", action=argparse.BooleanOptionalAction, default=None,
                         help="Train on canonical room crops instead of stitched full dungeons.")
     parser.add_argument("--seed", type=int, default=None,
