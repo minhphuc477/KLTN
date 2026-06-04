@@ -78,6 +78,28 @@ def test_context_topology_refinement_uses_batched_padded_adjacency():
     assert torch.all(norm_adj[1, :, 2:] == 0)
 
 
+def test_gat2_topology_refinement_fully_masked_rows_have_finite_backward():
+    attention = CrossAttention(
+        query_dim=8,
+        context_dim=8,
+        num_heads=2,
+        dropout=0.0,
+        topology_refinement_mode="gat2",
+    )
+    x = torch.randn(2, 3, 8, requires_grad=True)
+    context = torch.randn(2, 4, 8, requires_grad=True)
+    edge_index = torch.zeros(2, 0, dtype=torch.long)
+    node_mask = torch.tensor([[1, 1, 1, 1], [0, 0, 0, 0]], dtype=torch.float32)
+
+    out = attention(x, context, edge_index=edge_index, node_mask=node_mask)
+    loss = out.square().mean()
+    loss.backward()
+
+    assert torch.isfinite(out).all()
+    assert x.grad is not None and torch.isfinite(x.grad).all()
+    assert context.grad is not None and torch.isfinite(context.grad).all()
+
+
 def test_logic_net_supports_explicit_bellman_ford_grid_pathfinder():
     logic_net = LogicNet(
         latent_dim=8,

@@ -177,6 +177,20 @@ currently support the claims. It is not an experimental-results substitute.
 - **Generation RRWP wiring:** generation-time `_prepare_graph_context()` now
   computes and returns `edge_rrwp`, and room generation forwards both `edge_rrwp`
   and `node_mask` into the condition encoder.
+- **Room-context RRWP preservation:** `_build_room_graph_context()` now carries
+  `edge_rrwp` through from generation graph data into the per-room conditioning
+  dictionary, so inference does not silently drop RRWP after computing it.
+- **Finite masked attention logits:** graph-conditioning fusion, latent
+  topology refinement, latent cross-attention, and graph-to-grid attention now
+  use large finite mask biases instead of `-inf` on padded nodes. Fully masked
+  graph rows are covered by finite-backward regressions.
+- **Bounded spatial alignment gradients:** graph-to-grid spatial alignment no
+  longer uses `-log(attention.clamp_min(1e-8))`. The loss uses a bounded
+  probability-to-logit BCE surrogate with a `1e-4` floor, preventing missed-node
+  supervision from producing `1e8` local slopes.
+- **EMA VQ codebook optimizer isolation:** EMA quantizers freeze
+  `embedding.weight` and update the codebook with in-place `copy_()` under
+  `torch.no_grad()`, preventing AdamW momentum from competing with EMA updates.
 - **LogicNet unreachable sentinel preservation:** grid and graph soft-min
   Bellman-Ford updates keep nodes/cells at `inf_distance` when every candidate
   is still sentinel-valued. This prevents log-sum-exp from gradually lowering

@@ -774,6 +774,7 @@ def _build_room_graph_context(
         'node_features': graph_data.get('node_features'),
         'edge_index': graph_data.get('edge_index'),
         'edge_features': graph_data.get('edge_features'),
+        'edge_rrwp': graph_data.get('edge_rrwp'),
         'tpe': graph_data.get('tpe'),
         'node_positions': graph_data.get('node_positions'),
         'node_mask': graph_data.get('node_mask'),

@@ -131,6 +131,7 @@ class VectorQuantizer(nn.Module):
         )
         
         if use_ema:
+            self.embedding.requires_grad_(False)
             # EMA cluster counts and sums
             self.register_buffer('ema_cluster_size', torch.zeros(num_embeddings))
             self.register_buffer('ema_embedding_sum', self.embedding.weight.data.clone())
@@ -351,7 +352,7 @@ class VectorQuantizer(nn.Module):
             cluster_size_smoothed = cluster_size_smoothed.clamp(min=self.epsilon)
             
             # Update embeddings
-            self.embedding.weight.data = (
+            self.embedding.weight.data.copy_(
                 self.ema_embedding_sum / cluster_size_smoothed.unsqueeze(1)
             )
             

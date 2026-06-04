@@ -292,6 +292,53 @@ class TestGraphGridAttention:
         assert module.k_proj.weight.grad is not None
         assert torch.isfinite(module.q_proj.weight.grad).all()
 
+    def test_spatial_alignment_loss_caps_missed_attention_gradient(self):
+        """A complete miss should not produce the old -1/1e-8 gradient spike."""
+        from src.core.graph_grid_attention import GraphToGridCrossAttention
+
+        module = GraphToGridCrossAttention(
+            grid_dim=32,
+            graph_dim=48,
+            num_heads=4,
+            attention_mode="softmax",
+        )
+        missed = torch.full((1, 4, 1, 3), 1.0e-8, requires_grad=True)
+        with module._attention_capture_lock:
+            module.last_attention_weights_for_loss = missed
+            module.last_attention_grid_shape = (1, 1)
+
+        loss = module.spatial_alignment_loss(
+            torch.tensor([[2]], dtype=torch.long),
+            torch.tensor([[[0, 0]]], dtype=torch.float32),
+        )
+        loss.backward()
+
+        assert torch.isfinite(loss)
+        assert missed.grad is not None
+        assert torch.isfinite(missed.grad).all()
+        assert float(missed.grad.abs().max()) < 1.0e5
+
+    def test_graph_to_grid_attention_fully_masked_graph_has_finite_backward(self):
+        from src.core.graph_grid_attention import GraphToGridCrossAttention
+
+        module = GraphToGridCrossAttention(
+            grid_dim=16,
+            graph_dim=12,
+            num_heads=4,
+            attention_mode="softmax",
+        )
+        grid_features = torch.randn(2, 16, 3, 3, requires_grad=True)
+        graph_nodes = torch.randn(2, 3, 12, requires_grad=True)
+        node_mask = torch.tensor([[1, 1, 1], [0, 0, 0]], dtype=torch.float32)
+
+        out = module(grid_features, graph_nodes, node_mask=node_mask)
+        loss = out.square().mean()
+        loss.backward()
+
+        assert torch.isfinite(out).all()
+        assert grid_features.grad is not None and torch.isfinite(grid_features.grad).all()
+        assert graph_nodes.grad is not None and torch.isfinite(graph_nodes.grad).all()
+
     def test_spatial_alignment_loss_requires_captured_softmax_maps(self):
         """Alignment should fail loudly when capture/softmax attention is absent."""
         from src.core.graph_grid_attention import GraphToGridCrossAttention

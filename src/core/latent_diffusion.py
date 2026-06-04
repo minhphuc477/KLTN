@@ -405,7 +405,7 @@ class CrossAttention(nn.Module):
                 k = k_lin(h)
                 v = v_lin(h)
                 scores = torch.bmm(q, k.transpose(1, 2)) / (q.shape[-1] ** 0.5)
-                scores = scores.masked_fill(~attn_mask, float("-inf"))
+                scores = scores.masked_fill(~attn_mask, -1.0e4)
                 attn = torch.softmax(scores, dim=-1)
                 attn = torch.nan_to_num(attn, nan=0.0, posinf=0.0, neginf=0.0)
                 attn = self.dropout(attn)
@@ -488,7 +488,7 @@ class CrossAttention(nn.Module):
                     device=q.device,
                     dtype=q.dtype,
                 )
-                attn_mask = attn_mask.masked_fill(mask[:, None, None, :] == 0, float("-inf"))
+                attn_mask = attn_mask.masked_fill(mask[:, None, None, :] == 0, -1.0e4)
 
             if HAS_SDPA:
                 out = F.scaled_dot_product_attention(

@@ -1855,6 +1855,31 @@ def test_generation_graph_context_includes_rrwp_edge_features():
     assert float(graph_data["edge_rrwp"][0, 0]) == pytest.approx(0.5)
 
 
+def test_room_graph_context_forwards_rrwp_edge_features_to_encoder_context():
+    pipeline = NeuralSymbolicDungeonPipeline(
+        device="cpu",
+        enable_logging=False,
+        room_generator_mode="latent_diffusion",
+    )
+
+    mission_graph = nx.DiGraph()
+    mission_graph.add_node(0, is_start=True, pos=(0, 0))
+    mission_graph.add_node(1, is_goal=True, pos=(0, 1))
+    mission_graph.add_edge(0, 1)
+
+    graph_data = pipeline._prepare_graph_context(mission_graph, use_tpe=True)
+    room_graph_context = pipeline._build_room_graph_context(
+        graph_data=graph_data,
+        mission_graph=mission_graph,
+        room_id=1,
+        start_goal=((ROOM_HEIGHT // 2, 0), (ROOM_HEIGHT // 2, ROOM_WIDTH - 1)),
+    )
+
+    assert "edge_rrwp" in room_graph_context
+    assert room_graph_context["edge_rrwp"] is graph_data["edge_rrwp"]
+    assert tuple(room_graph_context["edge_rrwp"].shape) == (1, GRAPH_TPE_DIM)
+
+
 def test_current_node_distance_features_mark_unreachable_nodes_with_sentinel():
     features = compute_current_node_distance_features(
         torch.tensor([[0, 1], [1, 2]], dtype=torch.long),

@@ -528,7 +528,11 @@ class GraphToGridCrossAttention(nn.Module):
         valid = valid & torch.isfinite(gathered)
         if not bool(valid.any()):
             return gathered.sum() * 0.0
-        return -torch.log(gathered.clamp_min(float(eps)))[valid].mean()
+        min_prob = max(float(eps), 1.0e-4)
+        safe_prob = gathered.clamp(min=min_prob, max=1.0 - min_prob)
+        logits = torch.logit(safe_prob)
+        targets = torch.ones_like(logits)
+        return F.binary_cross_entropy_with_logits(logits[valid], targets[valid])
 
     def _compute_degree_features(
         self,
@@ -807,7 +811,7 @@ class GraphToGridCrossAttention(nn.Module):
                 attn_bias = attn_bias + distance_bias.to(dtype=Q.dtype)
 
             if node_mask is not None:
-                attn_bias = attn_bias.masked_fill(node_mask[:, None, None, :] == 0, float('-inf'))
+                attn_bias = attn_bias.masked_fill(node_mask[:, None, None, :] == 0, -1.0e4)
 
             if HAS_SDPA and not self.capture_attention_maps:
                 attn_output = F.scaled_dot_product_attention(

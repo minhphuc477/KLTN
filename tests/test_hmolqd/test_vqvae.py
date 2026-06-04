@@ -155,6 +155,29 @@ class TestVectorQuantizer:
 
         assert torch.isfinite(quantizer.embedding.weight).all()
 
+    def test_ema_quantizer_freezes_codebook_parameter_for_optimizer_safety(self):
+        from src.core.vqvae import VectorQuantizer
+
+        quantizer = VectorQuantizer(
+            num_embeddings=4,
+            embedding_dim=3,
+            use_ema=True,
+            dead_code_reset_interval=1000,
+        )
+        quantizer.train()
+        optimizer = torch.optim.AdamW(quantizer.parameters(), lr=1e-3)
+        z_e = torch.randn(1, 3, 2, 2, requires_grad=True)
+
+        _z_q, loss, _indices = quantizer(z_e)
+        optimizer.zero_grad(set_to_none=True)
+        loss.backward()
+        optimizer.step()
+
+        assert quantizer.embedding.weight.requires_grad is False
+        assert quantizer.embedding.weight.grad is None
+        assert z_e.grad is not None and torch.isfinite(z_e.grad).all()
+        assert quantizer.embedding.weight not in optimizer.state
+
     def test_commitment_loss_sums_embedding_channels_per_token(self):
         """VQ loss scale should not be diluted by embedding dimension."""
         from src.core.vqvae import VectorQuantizer
