@@ -4075,8 +4075,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\docs\\architecture_audit_research_notes.md": {
-    "mtime": 1780591717.8538346,
-    "ast_hash": "0e281f356fb6a4d82b0e4a39a31f6b27",
+    "mtime": 1780592609.529123,
+    "ast_hash": "7672b5c8e53dc82c8d57628b2631cec9",
     "semantic_hash": ""
   },
   "F:\\KLTN\\docs\\archive\\2026-q1\\ARCHITECTURE_RESEARCH_JUDGMENT_2026_02_24.md": {
@@ -5297,6 +5297,16 @@
   "F:\\KLTN\\configs\\ablation_vin.yaml": {
     "mtime": 1780574308.96539,
     "ast_hash": "27ed8601159704e2ea7c2b118d5c797e",
+    "semantic_hash": ""
+  },
+  "F:\\KLTN\\scripts\\gradient_probe.py": {
+    "mtime": 1780592572.6444988,
+    "ast_hash": "491acb6fa0ed433ae6755abeec5c90c0",
+    "semantic_hash": ""
+  },
+  "F:\\KLTN\\tests\\test_noisy_logicnet_gradients.py": {
+    "mtime": 1780592584.2866616,
+    "ast_hash": "10bb0890348b4110202fd7139e1b4986",
     "semantic_hash": ""
   }
 }

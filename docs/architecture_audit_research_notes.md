@@ -137,6 +137,30 @@ currently support the claims. It is not an experimental-results substitute.
 - **Tokenizer SOTA:** FSQ exists as an ablation. LFQ/RVQ are not implemented
   default paths and require new ablation tables before being claimed.
 
+## Constraint-Guided Generation Protocol
+
+DPPS/DPS-style LogicNet guidance is a hypothesis until the gradient probe and
+ablation ladder pass. Current implementation status:
+
+- `scripts/gradient_probe.py` probes LogicNet compatibility-mode gradients on
+  clean semantic room logits corrupted with VP-style Gaussian noise. It reports
+  loss, score, gradient norm, finite rate, relative gradient norm, and
+  walkability statistics by noise level.
+- The first CPU smoke run
+  `python scripts/gradient_probe.py --noise-levels 0,0.5,1.0 --samples-per-level 1 --num-iterations 2 --device cpu`
+  returned finite gradients but relative gradient norms grew from `1.0` at
+  clean input to roughly `4.9e2` at medium noise and `3.1e4` at pure noise.
+  This supports late-stage LogicNet guidance as the first ablation, not
+  full-trajectory DPPS.
+- Before sampler integration, run the probe with the trained LogicNet/VQ-VAE
+  checkpoint path and at least 8 samples per noise level. A stable guidance
+  window should require finite gradients plus bounded relative norms across
+  seeds.
+- Required ablations remain: no guidance, post-hoc WFC repair, late-stage
+  LogicNet guidance, full-trajectory LogicNet guidance, and any retrained
+  CFG/DFM variant. Report solvability, hard constraint violations,
+  distribution distance, and seconds per room separately.
+
 ## Current Verification Ledger
 
 Focused suites run during the latest audit pass:
@@ -167,6 +191,13 @@ Latest targeted additions:
   regressions.
 - `python -m pytest tests/test_neural_guided_repair.py tests/test_train_diffusion_conditioning_shapes.py tests/test_advanced_architecture_ablations.py -q`
   passed with 63 tests.
+- `python -m pytest tests/test_noisy_logicnet_gradients.py -q` passed with 3
+  tests.
+- `python -m pytest tests/test_logicnet_gradient_flow.py tests/test_logicnet_fixes.py -q`
+  passed with 25 tests.
+- `python scripts/gradient_probe.py --noise-levels 0,0.5,1.0 --samples-per-level 1 --num-iterations 2 --device cpu`
+  completed and emitted JSON probe statistics plus a late-stage guidance
+  recommendation.
 
 ## Required Reporting Discipline
 
