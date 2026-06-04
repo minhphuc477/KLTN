@@ -925,13 +925,13 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\core\\graph_grid_attention.py": {
-    "mtime": 1780567470.6768003,
-    "ast_hash": "26a95a180d82dc2a7b8de5ee33491fcd",
+    "mtime": 1780612601.5049424,
+    "ast_hash": "b07eca79f78b498afc5ac6692948db83",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\core\\latent_diffusion.py": {
-    "mtime": 1780609464.634766,
-    "ast_hash": "9d276a1e345249b71d7be7fb8cc85f5a",
+    "mtime": 1780612265.0047486,
+    "ast_hash": "ae612a78fab32661e1fb3a7cc7b10b63",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\core\\logic_net.py": {
@@ -950,8 +950,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\core\\vqvae.py": {
-    "mtime": 1780609560.1479855,
-    "ast_hash": "6e93a1f1b711b201dd2785645dd3b207",
+    "mtime": 1780612265.0199263,
+    "ast_hash": "c61f51d5d4dbdcc939869f4efd362a43",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\data_processing\\__init__.py": {
@@ -2370,8 +2370,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\pipeline\\generation\\graph_context.py": {
-    "mtime": 1780607678.2437756,
-    "ast_hash": "86cd8d03bd4e33d4d0d46f6a0f3a4614",
+    "mtime": 1780612264.9935062,
+    "ast_hash": "e61a7763f6c1fa5b215c60f9a1d18c49",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\pipeline\\generation\\room_processing.py": {
@@ -2945,13 +2945,13 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_architecture_audit_fixes.py": {
-    "mtime": 1780607768.4005537,
-    "ast_hash": "9cb117f3783893f846f35ccb89a568db",
+    "mtime": 1780612360.6350226,
+    "ast_hash": "152a6668d8e54a0bf6234b996720fb68",
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_audit_regressions.py": {
-    "mtime": 1780610667.1282923,
-    "ast_hash": "c21aba72c957f2b4e61417a6d74fd0c9",
+    "mtime": 1780612379.8817203,
+    "ast_hash": "4912a381a20fff27c2a12fef35043eed",
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_block_integration.py": {
@@ -3450,8 +3450,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_hmolqd\\test_vqvae.py": {
-    "mtime": 1780607689.3433697,
-    "ast_hash": "835c9889a240ead2e2c80b9a026d7d05",
+    "mtime": 1780612403.2215474,
+    "ast_hash": "402df5a3385e22c449d83bb68c79d34e",
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_kaggle_training_suite.py": {
@@ -3500,8 +3500,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_ml_components.py": {
-    "mtime": 1780609730.3901775,
-    "ast_hash": "7c0282d80f632caf6ea1778e3c62311e",
+    "mtime": 1780612617.9216292,
+    "ast_hash": "58318cbb37dd2500ab102fb49020209a",
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_model_capacity.py": {
@@ -4075,8 +4075,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\docs\\architecture_audit_research_notes.md": {
-    "mtime": 1780611736.1681714,
-    "ast_hash": "725758c49c93e173a1ac490fe5db5fbb",
+    "mtime": 1780612683.9780295,
+    "ast_hash": "b3e44185f86d4625c6394bc84295c9cd",
     "semantic_hash": ""
   },
   "F:\\KLTN\\docs\\archive\\2026-q1\\ARCHITECTURE_RESEARCH_JUDGMENT_2026_02_24.md": {
