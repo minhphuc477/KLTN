@@ -9,6 +9,22 @@ import torch
 import torch.nn.functional as F
 
 
+def _maybe_transpose_spatial_to_target(tensor: torch.Tensor, target_h: int, target_w: int) -> torch.Tensor:
+    """Transpose [H,W] axes when the source is the exact reversed target shape."""
+    if tensor.dim() < 2:
+        return tensor
+    source_h, source_w = int(tensor.shape[-2]), int(tensor.shape[-1])
+    if source_h == int(target_w) and source_w == int(target_h) and source_h != source_w:
+        return tensor.transpose(-2, -1).contiguous()
+    return tensor
+
+
+def _mask_aspect_error(mask_h: int, mask_w: int, latent_h: int, latent_w: int) -> float:
+    if min(mask_h, mask_w, latent_h, latent_w) <= 0:
+        return float("inf")
+    return abs((float(mask_h) / float(mask_w)) - (float(latent_h) / float(latent_w)))
+
+
 def build_neighbor_boundary_inpaint_inputs(
     base_latent: torch.Tensor,
     neighbor_latents: Dict[str, Optional[torch.Tensor]],
@@ -62,6 +78,7 @@ def build_neighbor_boundary_inpaint_inputs(
         else:
             return None
 
+        n = _maybe_transpose_spatial_to_target(n, h, w)
         if int(n.shape[2]) != int(h) or int(n.shape[3]) != int(w):
             n = F.interpolate(n, size=(h, w), mode="nearest")
 
@@ -109,6 +126,11 @@ def build_latent_edit_mask(
     mask = np.asarray(room_mask, dtype=np.float32)
     if mask.ndim != 2:
         raise ValueError("room_mask must be 2D")
+
+    direct_error = _mask_aspect_error(mask.shape[0], mask.shape[1], latent_h, latent_w)
+    transposed_error = _mask_aspect_error(mask.shape[1], mask.shape[0], latent_h, latent_w)
+    if transposed_error + 1e-6 < direct_error:
+        mask = np.ascontiguousarray(mask.T)
 
     mask_t = torch.from_numpy(mask).to(device).unsqueeze(0).unsqueeze(0)
     k_h = max(1, int(np.ceil(mask.shape[0] / max(1, latent_h))))

@@ -82,8 +82,8 @@ class NeuralGuidedRepair:
             raise ValueError("NeuralGuidedRepair currently repairs one room at a time; expected batch size 1.")
 
         was_training = bool(getattr(self.logic_net, "training", False))
-        self.logic_net.eval()
         try:
+            self.logic_net.eval()
             loss, info = self.logic_net(tile_logits, graph_data=graph_data)
             walkability_t = info.get("walkability")
             if not isinstance(walkability_t, torch.Tensor):

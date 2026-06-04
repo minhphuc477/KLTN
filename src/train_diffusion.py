@@ -1252,6 +1252,7 @@ class DiffusionTrainer:
             spatial_graph_gate_init=self.config.spatial_graph_gate_init,
             spatial_topology_gate_init=self.config.spatial_topology_gate_init,
             room_topology_channels=self.config.room_topology_channels,
+            training_objective=self.config.diffusion_training_objective,
         )
     
     def _create_condition_encoder(self) -> DualStreamConditionEncoder:
@@ -1530,6 +1531,16 @@ class DiffusionTrainer:
         """Dispatch the configured latent objective without changing callers."""
         objective = str(getattr(self.config, "diffusion_training_objective", "diffusion")).strip().lower()
         target_model = model or self.diffusion
+        compute_loss = getattr(target_model, "compute_loss", None)
+        if callable(compute_loss):
+            previous_objective = getattr(target_model, "training_objective", None)
+            if hasattr(target_model, "training_objective"):
+                target_model.training_objective = objective
+            try:
+                return compute_loss(z_0, conditioning, graph_data=graph_data)
+            finally:
+                if previous_objective is not None and hasattr(target_model, "training_objective"):
+                    target_model.training_objective = previous_objective
         if objective == "flow_matching":
             flow_loss = getattr(target_model, "flow_matching_loss", None)
             if not callable(flow_loss):
@@ -1652,6 +1663,162 @@ class DiffusionTrainer:
             if any(analyzer.analyze_grid(grid, start=start, goal=goal) == [] for goal in goal_positions):
                 solved += 1
         return float(solved / max(1, total))
+
+    def _infer_symbolic_repair_endpoints(
+        self,
+        tile_map_t: torch.Tensor,
+    ) -> Optional[Tuple[Tuple[int, int], Tuple[int, int]]]:
+        """Infer start/goal coordinates for validation-time symbolic repair."""
+        try:
+            from src.core.symbolic_refiner import PathAnalyzer
+        except Exception as exc:
+            logger.debug("Validation repair endpoint inference skipped: PathAnalyzer unavailable: %s", exc)
+            return None
+
+        analyzer = PathAnalyzer()
+        walkable_ids = set(int(v) for v in getattr(analyzer, "walkable_tiles", set()))
+        start_id = int(SEMANTIC_PALETTE.get("START", 0))
+        goal_ids = {
+            int(SEMANTIC_PALETTE.get(name, -1))
+            for name in ("TRIFORCE", "DOOR_OPEN", "DOOR_LOCKED", "DOOR_BOMB", "DOOR_PUZZLE", "DOOR_BOSS", "DOOR_SOFT", "STAIR")
+        }
+
+        start_hits = torch.nonzero(tile_map_t == start_id, as_tuple=False)
+        if start_hits.numel() > 0:
+            start = tuple(int(v) for v in start_hits[0].tolist())
+        else:
+            walkable_tensor = torch.tensor(sorted(walkable_ids), dtype=tile_map_t.dtype, device=tile_map_t.device)
+            walkable_hits = torch.nonzero(torch.isin(tile_map_t, walkable_tensor), as_tuple=False)
+            if walkable_hits.numel() == 0:
+                return None
+            start = tuple(int(v) for v in walkable_hits[0].tolist())
+
+        goal_positions: List[Tuple[int, int]] = []
+        for goal_id in goal_ids:
+            if goal_id < 0:
+                continue
+            hits = torch.nonzero(tile_map_t == goal_id, as_tuple=False)
+            goal_positions.extend(tuple(int(v) for v in hit.tolist()) for hit in hits)
+        if not goal_positions:
+            height, width = tile_map_t.shape
+            border_mask = torch.zeros_like(tile_map_t, dtype=torch.bool)
+            border_mask[0, :] = True
+            border_mask[-1, :] = True
+            border_mask[:, 0] = True
+            border_mask[:, -1] = True
+            walkable_tensor = torch.tensor(sorted(walkable_ids), dtype=tile_map_t.dtype, device=tile_map_t.device)
+            border_walkable = border_mask & torch.isin(tile_map_t, walkable_tensor)
+            goal_positions = [
+                tuple(int(v) for v in hit.tolist())
+                for hit in torch.nonzero(border_walkable, as_tuple=False)
+            ]
+        if not goal_positions:
+            return None
+        return start, goal_positions[0]
+
+    def _validation_repairer(self):
+        """Return or lazily construct a validation-time NeuralGuidedRepair wrapper."""
+        repairer = getattr(self, "validation_neural_guided_repair", None)
+        if repairer is not None:
+            return repairer
+        try:
+            from src.core.neural_guided_repair import NeuralGuidedRepair
+            from src.core.symbolic_refiner import SymbolicRefiner
+        except Exception as exc:
+            logger.debug("Validation repair skipped: repair modules unavailable: %s", exc)
+            return None
+        refiner = (
+            getattr(self, "symbolic_refiner", None)
+            or getattr(self, "refiner", None)
+            or SymbolicRefiner(max_repair_attempts=int(getattr(self.config, "validation_repair_attempts", 2)))
+        )
+        repairer = NeuralGuidedRepair(
+            self.logic_net,
+            refiner,
+            use_neural_feedback=False,
+            use_logicnet_cost=bool(getattr(self.config, "validation_repair_use_logicnet_cost", True)),
+            use_logicnet_floor_mask=bool(getattr(self.config, "validation_repair_use_logicnet_floor_mask", True)),
+        )
+        self.validation_neural_guided_repair = repairer
+        return repairer
+
+    def _repair_validation_decoded_logits(
+        self,
+        decoded_logits: torch.Tensor,
+        graph_data: Optional[Dict[str, torch.Tensor]] = None,
+    ) -> Tuple[Optional[torch.Tensor], float]:
+        """Apply the neural-symbolic repair path to decoded validation samples."""
+        if not isinstance(decoded_logits, torch.Tensor) or decoded_logits.dim() != 4:
+            return None, 0.0
+        repairer = self._validation_repairer()
+        if repairer is None:
+            return None, 0.0
+
+        tile_maps = decoded_logits.argmax(dim=1).detach().cpu()
+        repaired_maps: List[torch.Tensor] = []
+        successes = 0
+        for sample_idx, tile_map_t in enumerate(tile_maps):
+            endpoints = self._infer_symbolic_repair_endpoints(tile_map_t)
+            if endpoints is None:
+                repaired_maps.append(tile_map_t.to(dtype=torch.long))
+                continue
+            start, goal = endpoints
+            grid = tile_map_t.numpy().astype(np.int64, copy=False)
+            sample_graph_data = self._select_validation_graph_sample(
+                graph_data,
+                sample_idx=sample_idx,
+                batch_size=int(tile_maps.shape[0]),
+            )
+            try:
+                repaired_grid, success, _diag = repairer.repair_room_with_neural_guidance(
+                    grid,
+                    start=start,
+                    goal=goal,
+                    tile_logits=decoded_logits[sample_idx : sample_idx + 1],
+                    graph_data=sample_graph_data,
+                    max_feedback_rounds=0,
+                )
+                if isinstance(repaired_grid, np.ndarray) and repaired_grid.shape == grid.shape:
+                    repaired_t = torch.as_tensor(repaired_grid, dtype=torch.long)
+                    repaired_maps.append(repaired_t)
+                    successes += int(bool(success))
+                else:
+                    repaired_maps.append(tile_map_t.to(dtype=torch.long))
+            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+                logger.debug("Validation neural-symbolic repair failed for sample %d: %s", sample_idx, exc)
+                repaired_maps.append(tile_map_t.to(dtype=torch.long))
+
+        if not repaired_maps:
+            return None, 0.0
+        repaired_ids = torch.stack(repaired_maps, dim=0).to(device=decoded_logits.device, dtype=torch.long)
+        num_classes = int(getattr(self.config, "num_classes", decoded_logits.shape[1]))
+        repaired_ids = repaired_ids.clamp(0, num_classes - 1)
+        repaired_logits = F.one_hot(repaired_ids, num_classes=num_classes).permute(0, 3, 1, 2).to(
+            device=decoded_logits.device,
+            dtype=decoded_logits.dtype,
+        )
+        return repaired_logits, float(successes / max(1, int(repaired_ids.shape[0])))
+
+    def _select_validation_graph_sample(
+        self,
+        graph_data: Optional[Dict[str, Any]],
+        *,
+        sample_idx: int,
+        batch_size: int,
+    ) -> Optional[Dict[str, Any]]:
+        """Select one room graph from a stacked validation graph batch."""
+        if not isinstance(graph_data, dict):
+            return graph_data
+        if graph_data.get("graph_scope") != "room_batch":
+            return graph_data
+        selected: Dict[str, Any] = {}
+        for key, value in graph_data.items():
+            if isinstance(value, torch.Tensor) and value.dim() > 0 and int(value.shape[0]) == int(batch_size):
+                selected[key] = value[int(sample_idx)]
+            else:
+                selected[key] = value
+        selected["graph_scope"] = "room"
+        return selected
     
     def _encode_graph_conditioning(
         self,
@@ -3130,8 +3297,12 @@ class DiffusionTrainer:
         total_grid_reach_loss = 0.0
         total_graph_reach_loss = 0.0
         total_hard_solvability = 0.0
+        total_hard_solvability_after_repair = 0.0
+        total_logicnet_score_after_repair = 0.0
+        total_validation_repair_success = 0.0
         num_logic_metric_eval = 0
         num_hard_solvability_eval = 0
+        num_repaired_solvability_eval = 0
         total_logic_tile_accuracy = 0.0
         num_logic_tile_eval = 0
         logic_eval_enabled = bool(getattr(self.config, "logic_net_enabled", True))
@@ -3279,6 +3450,29 @@ class DiffusionTrainer:
                                 hard_solvability = self._compute_hard_solvability(decoded)
                                 total_hard_solvability += hard_solvability * generated_batch
                                 num_hard_solvability_eval += generated_batch
+                                repaired_decoded, repair_success_rate = self._repair_validation_decoded_logits(
+                                    decoded,
+                                    graph_data=logic_graph_data,
+                                )
+                                if isinstance(repaired_decoded, torch.Tensor):
+                                    repaired_hard = self._compute_hard_solvability(repaired_decoded)
+                                    total_hard_solvability_after_repair += repaired_hard * generated_batch
+                                    total_validation_repair_success += float(repair_success_rate) * generated_batch
+                                    repaired_maps = (
+                                        repaired_decoded.argmax(dim=1).float()
+                                        / float(max(1, int(self.config.num_classes) - 1))
+                                    ).unsqueeze(1)
+                                    z_repaired = self.encode_to_latent(repaired_maps.to(self.device))
+                                    repaired_logic_loss, _repaired_logic_info = self.logic_net(
+                                        z_repaired,
+                                        graph_data=logic_graph_data,
+                                    )
+                                    if self._tensor_is_finite(repaired_logic_loss):
+                                        repaired_score = float(
+                                            self._logic_loss_to_solvability_proxy(repaired_logic_loss).item()
+                                        )
+                                        total_logicnet_score_after_repair += repaired_score * generated_batch
+                                    num_repaired_solvability_eval += generated_batch
                             except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                                 logger.debug("Hard solvability validation failed; omitting metric: %s", exc)
                         num_generated_eval += generated_batch
@@ -3297,6 +3491,9 @@ class DiffusionTrainer:
                 'val_grid_reach_loss': total_grid_reach_loss / max(num_logic_metric_eval, 1),
                 'val_graph_reach_loss': total_graph_reach_loss / max(num_logic_metric_eval, 1),
                 'val_hard_solvability': total_hard_solvability / max(num_hard_solvability_eval, 1),
+                'val_hard_solvability_after_repair': total_hard_solvability_after_repair / max(num_repaired_solvability_eval, 1),
+                'val_logicnet_score_after_repair': total_logicnet_score_after_repair / max(num_repaired_solvability_eval, 1),
+                'val_neural_repair_success_rate': total_validation_repair_success / max(num_repaired_solvability_eval, 1),
                 'val_logic_guidance_suppressed_low_tile_accuracy': float(guidance_suppressed_low_tile_accuracy),
                 'val_skipped_nonfinite': float(skipped_nonfinite),
             }
@@ -3326,6 +3523,9 @@ class DiffusionTrainer:
             'val_grid_reach_loss': total_grid_reach_loss / max(num_logic_metric_eval, 1),
             'val_graph_reach_loss': total_graph_reach_loss / max(num_logic_metric_eval, 1),
             'val_hard_solvability': total_hard_solvability / max(num_hard_solvability_eval, 1),
+            'val_hard_solvability_after_repair': total_hard_solvability_after_repair / max(num_repaired_solvability_eval, 1),
+            'val_logicnet_score_after_repair': total_logicnet_score_after_repair / max(num_repaired_solvability_eval, 1),
+            'val_neural_repair_success_rate': total_validation_repair_success / max(num_repaired_solvability_eval, 1),
             'val_logic_guidance_suppressed_low_tile_accuracy': float(guidance_suppressed_low_tile_accuracy),
             'val_skipped_nonfinite': float(skipped_nonfinite),
         }

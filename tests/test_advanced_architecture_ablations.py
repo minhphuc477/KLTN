@@ -423,6 +423,50 @@ def test_diffusion_training_config_exposes_flow_matching_ablation():
         DiffusionTrainingConfig(denoiser_backbone="mlp")
 
 
+def test_latent_diffusion_compute_loss_dispatches_configured_objective(monkeypatch):
+    model = create_latent_diffusion(
+        latent_dim=4,
+        model_channels=8,
+        context_dim=8,
+        num_timesteps=8,
+        cfg_dropout_prob=0.0,
+        unet_channel_mult=(1,),
+        unet_num_res_blocks=1,
+        unet_attention_resolutions=(),
+        unet_num_heads=1,
+        training_objective="flow_matching",
+    )
+    assert model.training_objective == "flow_matching"
+
+    calls = []
+    z_0 = torch.randn(1, 4, 2, 2)
+    context = torch.randn(1, 8)
+
+    def _diffusion_loss(*args, **kwargs):
+        calls.append("diffusion")
+        return torch.tensor(2.0)
+
+    def _flow_loss(*args, **kwargs):
+        calls.append("flow")
+        return torch.tensor(3.0)
+
+    monkeypatch.setattr(model, "training_loss", _diffusion_loss)
+    monkeypatch.setattr(model, "flow_matching_loss", _flow_loss)
+
+    loss = model.compute_loss(z_0, context)
+    assert loss.item() == pytest.approx(3.0)
+    assert calls == ["flow"]
+
+    model.training_objective = "diffusion"
+    loss = model.compute_loss(z_0, context)
+    assert loss.item() == pytest.approx(2.0)
+    assert calls == ["flow", "diffusion"]
+
+    model.training_objective = "unknown"
+    with pytest.raises(ValueError, match="training_objective"):
+        model.compute_loss(z_0, context)
+
+
 def test_dpo_preference_loss_trains_preferred_over_rejected_pairs():
     model = create_latent_diffusion(
         latent_dim=8,

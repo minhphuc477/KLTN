@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 import torch
 
 from src.core.neural_guided_repair import NeuralGuidedRepair
@@ -136,6 +137,28 @@ def test_resize_mask_transposes_reversed_spatial_axes():
 
     assert tuple(resized.shape) == (1, 1, 3, 5)
     assert bool(resized[0, 0, 1, 4])
+
+
+def test_logicnet_eval_failure_restores_training_state():
+    class _EvalRaisesLogicNet:
+        training = True
+
+        def eval(self):
+            raise RuntimeError("eval hook failed")
+
+        def train(self):
+            self.training = True
+            self.train_called = True
+            return self
+
+    logic_net = _EvalRaisesLogicNet()
+    repair = NeuralGuidedRepair(logic_net, _RecordingRefiner())
+
+    with pytest.raises(RuntimeError, match="eval hook failed"):
+        repair.get_logicnet_guidance(torch.randn(1, 4, 5, 5), grid_shape=(5, 5), graph_data={})
+
+    assert getattr(logic_net, "train_called", False) is True
+    assert logic_net.training is True
 
 
 def test_neural_feedback_callback_is_controlled_by_m3_flag():

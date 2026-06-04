@@ -338,6 +338,12 @@ def load_diffusion(pipeline, checkpoint_path: Optional[str]) -> LatentDiffusionM
                 getattr(getattr(pipeline, "condition_encoder", None), "output_dim", default_context_dim),
             )
         )
+    training_objective = str(
+        checkpoint_config.get(
+            "diffusion_training_objective",
+            checkpoint_config.get("training_objective", fallback_config.get("diffusion_training_objective", "diffusion")),
+        )
+    ).strip().lower()
     model = LatentDiffusionModel(
         latent_dim=default_latent_dim,
         context_dim=default_context_dim,
@@ -383,18 +389,13 @@ def load_diffusion(pipeline, checkpoint_path: Optional[str]) -> LatentDiffusionM
         room_topology_channels=int(
             checkpoint_config.get("room_topology_channels", fallback_config.get("room_topology_channels", ROOM_TOPOLOGY_CHANNEL_COUNT))
         ),
+        training_objective=training_objective,
     ).to(pipeline.device)
     setattr(
         model,
         "training_cfg_scale",
         float(checkpoint_config.get("cfg_scale", fallback_config.get("cfg_scale", 3.0))),
     )
-    training_objective = str(
-        checkpoint_config.get(
-            "diffusion_training_objective",
-            checkpoint_config.get("training_objective", fallback_config.get("diffusion_training_objective", "diffusion")),
-        )
-    ).strip().lower()
     setattr(model, "training_objective", training_objective)
     if training_objective == "flow_matching":
         logger.info(

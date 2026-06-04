@@ -71,6 +71,22 @@ def test_build_neighbor_boundary_inpaint_inputs_aligns_batch_and_spatial_shape()
     assert torch.all(mask[:, :, 0, :] == 0.0)
 
 
+def test_build_neighbor_boundary_inpaint_inputs_transposes_reversed_neighbor_latents():
+    base = torch.zeros(1, 1, 2, 3)
+    north = torch.arange(6, dtype=torch.float32).view(1, 1, 3, 2)
+
+    ref, mask, has_constraints = build_neighbor_boundary_inpaint_inputs(
+        base_latent=base,
+        neighbor_latents={"N": north, "S": None, "W": None, "E": None},
+        band=1,
+    )
+
+    assert has_constraints is True
+    assert ref.shape == base.shape
+    assert torch.allclose(ref[0, 0, 0], torch.tensor([1.0, 3.0, 5.0]))
+    assert torch.all(mask[:, :, 0, :] == 0.0)
+
+
 def test_build_latent_edit_mask_downsamples_dead_end_region():
     mask = np.zeros((4, 4), dtype=bool)
     mask[0:2, 0:2] = True
@@ -85,6 +101,22 @@ def test_build_latent_edit_mask_downsamples_dead_end_region():
     assert latent_mask.shape == (1, 1, 2, 2)
     assert latent_mask[0, 0, 0, 0].item() == 1.0
     assert latent_mask[0, 0, 1, 1].item() == 0.0
+
+
+def test_build_latent_edit_mask_transposes_reversed_room_mask_aspect():
+    mask = np.zeros((2, 4), dtype=bool)
+    mask[0, 3] = True
+
+    latent_mask = build_latent_edit_mask(
+        mask,
+        latent_h=4,
+        latent_w=2,
+        device=torch.device("cpu"),
+    )
+
+    assert latent_mask.shape == (1, 1, 4, 2)
+    assert latent_mask[0, 0, 3, 0].item() == 1.0
+    assert latent_mask[0, 0, 0, 1].item() == 0.0
 
 
 def test_logicnet_guided_inpaint_room_restores_guidance_scale_and_aliases_old_name():

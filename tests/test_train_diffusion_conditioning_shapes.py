@@ -2,6 +2,7 @@
 
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 import torch
 
@@ -272,6 +273,18 @@ class _DummyTrainingLossModule(_TinyModule):
         return torch.tensor(self.loss_value, dtype=torch.float32)
 
 
+class _ComputeLossModule(_TinyModule):
+    def __init__(self):
+        super().__init__()
+        self.training_objective = "diffusion"
+        self.calls: list[tuple[str, object]] = []
+
+    def compute_loss(self, z_0, conditioning, graph_data=None):
+        _ = (z_0, conditioning)
+        self.calls.append((self.training_objective, graph_data))
+        return torch.tensor(0.75, dtype=torch.float32)
+
+
 class _TinyDiffusionWithDenoiser(_DummyTrainingLossModule):
     def __init__(self):
         super().__init__(0.25)
@@ -471,6 +484,25 @@ def _make_stub_trainer(context_dim: int = 8) -> DiffusionTrainer:
 
     trainer.train_step = _train_step_stub
     return trainer
+
+
+def test_diffusion_objective_loss_delegates_to_model_compute_loss():
+    trainer = DiffusionTrainer.__new__(DiffusionTrainer)
+    trainer.config = SimpleNamespace(diffusion_training_objective="flow_matching")
+    model = _ComputeLossModule()
+    graph_data = {"node_features": torch.zeros(1, 2)}
+
+    loss = DiffusionTrainer._diffusion_objective_loss(
+        trainer,
+        torch.zeros(1, 4, 2, 2),
+        torch.zeros(1, 8),
+        graph_data=graph_data,
+        model=model,
+    )
+
+    assert loss.item() == pytest.approx(0.75)
+    assert model.calls == [("flow_matching", graph_data)]
+    assert model.training_objective == "diffusion"
 
 
 def test_encode_edge_features_prefers_explicit_edge_vectors():
@@ -1336,6 +1368,91 @@ def test_validate_hard_solvability_uses_only_counted_generated_samples():
     metrics = DiffusionTrainer.validate(trainer, [batch], num_samples=1, num_diffusion_samples=1)
 
     assert metrics["val_hard_solvability"] == pytest.approx(1.0)
+
+
+def test_validate_reports_post_repair_solvability_metrics():
+    class _BlockedDecodeVQVAE:
+        def decode(self, latent, target_size=None):
+            batch_size = int(latent.shape[0])
+            height, width = target_size or (ROOM_HEIGHT, ROOM_WIDTH)
+            logits = torch.zeros(batch_size, 44, height, width)
+            logits[:, int(SEMANTIC_PALETTE["WALL"])] = 5.0
+            row = height // 2
+            logits[:, :, row, 1] = 0.0
+            logits[:, int(SEMANTIC_PALETTE["START"]), row, 1] = 6.0
+            logits[:, :, row, width - 1] = 0.0
+            logits[:, int(SEMANTIC_PALETTE["DOOR_OPEN"]), row, width - 1] = 6.0
+            return logits
+
+    class _Repairer:
+        def __init__(self):
+            self.calls = 0
+
+        def repair_room_with_neural_guidance(self, grid, start, goal, tile_logits, **_kwargs):
+            self.calls += 1
+            _ = (start, goal, tile_logits)
+            repaired = np.asarray(grid).copy()
+            row = repaired.shape[0] // 2
+            repaired[row, :] = int(SEMANTIC_PALETTE["FLOOR"])
+            repaired[row, 1] = int(SEMANTIC_PALETTE["START"])
+            repaired[row, repaired.shape[1] - 1] = int(SEMANTIC_PALETTE["DOOR_OPEN"])
+            return repaired, True, {}
+
+    trainer = _make_stub_trainer(context_dim=8)
+    trainer.config.num_classes = 44
+    trainer.vqvae = _BlockedDecodeVQVAE()
+    trainer.validation_neural_guided_repair = _Repairer()
+    batch = torch.zeros((1, 1, ROOM_HEIGHT, ROOM_WIDTH), dtype=torch.float32)
+
+    metrics = DiffusionTrainer.validate(trainer, [batch], num_samples=1, num_diffusion_samples=1)
+
+    assert metrics["val_hard_solvability"] == pytest.approx(0.0)
+    assert metrics["val_hard_solvability_after_repair"] == pytest.approx(1.0)
+    assert metrics["val_neural_repair_success_rate"] == pytest.approx(1.0)
+    assert metrics["val_logicnet_score_after_repair"] > 0.0
+    assert trainer.validation_neural_guided_repair.calls == 1
+
+
+def test_validation_repair_slices_room_batch_graph_data():
+    class _RecordingRepairer:
+        def __init__(self):
+            self.graph_data = None
+
+        def repair_room_with_neural_guidance(self, grid, start, goal, tile_logits, graph_data=None, **_kwargs):
+            _ = (start, goal, tile_logits)
+            self.graph_data = graph_data
+            return np.asarray(grid).copy(), True, {}
+
+    trainer = _make_stub_trainer(context_dim=8)
+    trainer.config.num_classes = 44
+    trainer.validation_neural_guided_repair = _RecordingRepairer()
+
+    logits = torch.zeros(1, 44, ROOM_HEIGHT, ROOM_WIDTH)
+    row = ROOM_HEIGHT // 2
+    logits[:, int(SEMANTIC_PALETTE["WALL"])] = 5.0
+    logits[:, :, row, 1] = 0.0
+    logits[:, int(SEMANTIC_PALETTE["START"]), row, 1] = 6.0
+    logits[:, :, row, ROOM_WIDTH - 1] = 0.0
+    logits[:, int(SEMANTIC_PALETTE["DOOR_OPEN"]), row, ROOM_WIDTH - 1] = 6.0
+
+    graph_data = {
+        "graph_scope": "room_batch",
+        "node_features": torch.zeros(1, 3, 6),
+        "edge_index": torch.full((1, 2, 0), -1, dtype=torch.long),
+        "current_node_idx": torch.tensor([2], dtype=torch.long),
+    }
+
+    repaired, success_rate = DiffusionTrainer._repair_validation_decoded_logits(
+        trainer,
+        logits,
+        graph_data=graph_data,
+    )
+
+    assert repaired is not None
+    assert success_rate == pytest.approx(1.0)
+    assert trainer.validation_neural_guided_repair.graph_data["graph_scope"] == "room"
+    assert tuple(trainer.validation_neural_guided_repair.graph_data["node_features"].shape) == (3, 6)
+    assert int(trainer.validation_neural_guided_repair.graph_data["current_node_idx"].item()) == 2
 
 
 def test_state_dict_is_finite_rejects_nan_weights():

@@ -2017,6 +2017,7 @@ class LatentDiffusionModel(nn.Module):
         graph_auto_linear_attention_nodes: int = 128,
         spatial_graph_gate_init: float = -2.0,
         spatial_topology_gate_init: float = -2.0,
+        training_objective: str = "diffusion",
     ):
         super().__init__()
         
@@ -2033,6 +2034,11 @@ class LatentDiffusionModel(nn.Module):
         self.room_topology_channels = int(max(1, int(room_topology_channels)))
         self.topology_conditioning_mode = str(topology_conditioning_mode).strip().lower()
         self.denoiser_backbone = str(denoiser_backbone).strip().lower()
+        self.training_objective = str(training_objective).strip().lower()
+        if self.training_objective not in {"diffusion", "flow_matching"}:
+            raise ValueError(
+                f"training_objective must be 'diffusion' or 'flow_matching', got {training_objective!r}."
+            )
         if self.topology_conditioning_mode not in {"additive", "spade"}:
             raise ValueError(
                 "topology_conditioning_mode must be 'additive' or 'spade'. "
@@ -3541,6 +3547,21 @@ class LatentDiffusionModel(nn.Module):
                 self.set_spatial_attention_capture(False)
         return loss
 
+    def compute_loss(
+        self,
+        x_0: Tensor,
+        context: Tensor,
+        graph_data: Optional[Dict[str, Tensor]] = None,
+        **kwargs: Any,
+    ) -> Tensor:
+        """Dispatch the configured latent training objective inside the model."""
+        objective = str(getattr(self, "training_objective", "diffusion")).strip().lower()
+        if objective == "flow_matching":
+            return self.flow_matching_loss(x_0, context, graph_data=graph_data, **kwargs)
+        if objective == "diffusion":
+            return self.training_loss(x_0, context, graph_data=graph_data)
+        raise ValueError(f"Unsupported latent diffusion training_objective={objective!r}.")
+
     def denoising_preference_score(
         self,
         x_0: Tensor,
@@ -3752,6 +3773,7 @@ def create_latent_diffusion(
     graph_auto_linear_attention_nodes: int = 128,
     spatial_graph_gate_init: float = -2.0,
     spatial_topology_gate_init: float = -2.0,
+    training_objective: str = "diffusion",
     **kwargs,
 ) -> LatentDiffusionModel:
     """
@@ -3798,5 +3820,6 @@ def create_latent_diffusion(
         graph_auto_linear_attention_nodes=graph_auto_linear_attention_nodes,
         spatial_graph_gate_init=spatial_graph_gate_init,
         spatial_topology_gate_init=spatial_topology_gate_init,
+        training_objective=training_objective,
         **kwargs,
     )
