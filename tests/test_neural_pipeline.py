@@ -1052,6 +1052,50 @@ def test_generate_room_categorical_sampler_does_not_require_diffusion_or_redecod
 
     assert tuple(result.latent.shape) == (1, int(pipeline.vqvae.latent_dim), 4, 3)
     assert result.neural_probs.shape == (44, ROOM_HEIGHT, ROOM_WIDTH)
+    assert "vqvae_exact_decode_time_sec" in result.metrics
+    assert "vqvae_decode_time_sec" not in result.metrics
+    assert "diffusion_sample_time_sec" not in result.metrics
+    assert result.metrics["room_generation_time_sec"] >= 0.0
+
+
+def test_generate_dungeon_reports_stage_timings_for_categorical_without_diffusion(monkeypatch, pipeline, simple_graph):
+    """Dungeon metrics should expose timing ledgers without requiring continuous diffusion."""
+    pipeline.diffusion = None
+    pipeline.default_latent_sampler = "categorical"
+    pipeline.default_fast_sampler_teacher_fallback_enabled = False
+    floor = int(SEMANTIC_PALETTE["FLOOR"])
+
+    def fake_decode_indices(indices):
+        batch = int(indices.shape[0])
+        logits = torch.full((batch, 44, ROOM_HEIGHT, ROOM_WIDTH), -8.0)
+        logits[:, floor, :, :] = 8.0
+        return logits
+
+    monkeypatch.setattr(pipeline.vqvae, "decode_indices", fake_decode_indices)
+    monkeypatch.setattr(
+        pipeline,
+        "_decode_latent_with_vqvae",
+        lambda _latent: (_ for _ in ()).throw(AssertionError("categorical sampler should not re-decode latents")),
+    )
+
+    result = pipeline.generate_dungeon(
+        mission_graph=simple_graph,
+        num_diffusion_steps=1,
+        latent_sampler="categorical",
+        categorical_codebook_size=8,
+        apply_repair=False,
+        enable_map_elites=False,
+        batch_independent_rooms=False,
+        seed=123,
+    )
+
+    stage_timing = result.metrics["stage_timing_sec"]
+    room_stage_timing = result.metrics["room_stage_timing_sec"]
+    assert stage_timing["prepare_dungeon_generation_time_sec"] >= 0.0
+    assert stage_timing["generate_rooms_for_graph_time_sec"] >= 0.0
+    assert stage_timing["stitch_room_layout_time_sec"] >= 0.0
+    assert "vqvae_exact_decode_time_sec" in room_stage_timing
+    assert "diffusion_sample_time_sec" not in room_stage_timing
 
 
 def test_strict_adjacency_placement_preserves_all_edges(pipeline):

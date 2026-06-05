@@ -41,6 +41,45 @@ def _public_pipeline_hook(name: str, fallback: Any) -> Any:
     return getattr(module, name, fallback)
 
 
+def _record_stage_time(stage_times: Dict[str, float], key: str, started_at: float) -> None:
+    """Accumulate wall-clock stage timings in seconds."""
+    stage_times[key] = float(stage_times.get(key, 0.0)) + float(time.perf_counter() - started_at)
+
+
+def _aggregate_room_stage_times(room_metric_dicts: List[Dict[str, Any]]) -> Dict[str, float]:
+    """Sum room-level timing metrics into a compact dungeon-level stage ledger."""
+    timing_prefixes = (
+        "batch_",
+        "boundary_",
+        "categorical_",
+        "condition_",
+        "diffusion_",
+        "masked_",
+        "post_decode_",
+        "precomputed_",
+        "room_generation_",
+        "teacher_fallback_",
+        "vqvae_",
+    )
+    timing_keys = {
+        str(key)
+        for metrics in room_metric_dicts
+        for key in metrics
+        if str(key).endswith("_time_sec")
+        and (str(key).startswith(timing_prefixes) or str(key) == "repair_time_sec")
+    }
+    aggregated: Dict[str, float] = {}
+    for key in sorted(timing_keys):
+        total = 0.0
+        for metrics in room_metric_dicts:
+            try:
+                total += float(metrics.get(key, 0.0) or 0.0)
+            except (TypeError, ValueError):
+                continue
+        aggregated[key] = float(total)
+    return aggregated
+
+
 def _get_topology_generator_class() -> Any:
     return _public_pipeline_hook("EvolutionaryTopologyGenerator", EvolutionaryTopologyGenerator)
 
@@ -736,8 +775,8 @@ def generate_dungeon(
     Returns:
         DungeonGenerationResult with complete dungeon and metrics
     """
-    import time
     start_time = time.time()
+    stage_times: Dict[str, float] = {}
     runtime_diagnostics_before = dict(pipeline.runtime_diagnostics)
     guidance_scale = pipeline.default_guidance_scale if guidance_scale is None else float(guidance_scale)
     logic_guidance_scale = (
@@ -784,6 +823,7 @@ def generate_dungeon(
         )
         enable_map_elites = False
 
+    stage_started_at = time.perf_counter()
     prepared = pipeline.prepare_dungeon_generation(
         mission_graph=mission_graph,
         use_topological_positional_encoding=use_topological_positional_encoding,
@@ -810,7 +850,9 @@ def generate_dungeon(
         allow_candidate_repairs=allow_candidate_repairs,
         seed=seed,
     )
+    _record_stage_time(stage_times, "prepare_dungeon_generation_time_sec", stage_started_at)
 
+    stage_started_at = time.perf_counter()
     room_set = pipeline.generate_rooms_for_graph(
         prepared,
         guidance_scale=guidance_scale,
@@ -824,18 +866,29 @@ def generate_dungeon(
         batch_independent_rooms=batch_independent_rooms,
         max_batch_size=max_batch_size,
     )
+    _record_stage_time(stage_times, "generate_rooms_for_graph_time_sec", stage_started_at)
 
+    stage_started_at = time.perf_counter()
     stitched_layout = pipeline.stitch_room_layout(room_set.rooms, prepared.mission_graph_physical)
     dungeon_grid = np.asarray(stitched_layout.dungeon_grid, dtype=np.int32)
+    _record_stage_time(stage_times, "stitch_room_layout_time_sec", stage_started_at)
+
+    stage_started_at = time.perf_counter()
     puzzle_metadata = pipeline._globalize_room_puzzle_metadata(
         rooms=room_set.rooms,
         stitched_layout=stitched_layout,
     )
+    _record_stage_time(stage_times, "globalize_puzzle_metadata_time_sec", stage_started_at)
+
+    stage_started_at = time.perf_counter()
     map_elites_score = pipeline.evaluate_generated_dungeon(
         dungeon_grid,
         prepared.mission_graph_physical,
         enable_map_elites=enable_map_elites,
     )
+    _record_stage_time(stage_times, "evaluate_generated_dungeon_time_sec", stage_started_at)
+
+    stage_started_at = time.perf_counter()
     try:
         logic_solvability = pipeline.evaluate_dungeon_solvability(
             room_set.rooms,
@@ -844,12 +897,15 @@ def generate_dungeon(
     except (RuntimeError, ValueError, TypeError) as exc:
         logger.debug("LogicNet dungeon solvability metrics failed: %s", exc)
         logic_solvability = {}
+    _record_stage_time(stage_times, "evaluate_dungeon_solvability_time_sec", stage_started_at)
 
     # Compute overall metrics
     generation_time = time.time() - start_time
     num_rooms_generated = len(room_set.rooms)
     room_metric_dicts = [dict(r.metrics) for r in room_set.rooms.values()]
     alignment_metrics = pipeline._aggregate_room_alignment_metrics(room_metric_dicts)
+    room_stage_times = _aggregate_room_stage_times(room_metric_dicts)
+    stage_times["generation_total_time_sec"] = float(generation_time)
     metrics = {
         'num_rooms': num_rooms_generated,
         'repair_count': int(sum(int(r.metrics.get('repair_count', int(bool(r.was_repaired)))) for r in room_set.rooms.values())),
@@ -862,6 +918,8 @@ def generate_dungeon(
         ),
         'dungeon_shape': dungeon_grid.shape,
         'generation_time_sec': generation_time,
+        'stage_timing_sec': dict(stage_times),
+        'room_stage_timing_sec': room_stage_times,
         'batch_generation_diagnostics': room_set.batch_runtime_diagnostics,
         'runtime_diagnostics': dict(pipeline.runtime_diagnostics),
         'runtime_diagnostics_delta': {
