@@ -239,7 +239,7 @@ def demo_realistic_dungeon():
     G.add_edge(6, 7, label="k")     # Boss key door
     G.add_edge(7, 8, label="l")     # Soft-lock (shutters after boss)
     
-    print("\nðŸ“Š Dungeon Statistics:")
+    print("\n[STATS] Dungeon Statistics:")
     print(f"   Total Nodes: {G.number_of_nodes()}")
     print(f"   Edges: {G.number_of_edges()}")
     
@@ -288,7 +288,7 @@ def demo_real_vglc_data():
         try:
             G = nx.DiGraph(nx.drawing.nx_pydot.read_dot(str(level1_graph)))
             
-            print("\nðŸ“Š Level 1 Graph Statistics:")
+            print("\n[STATS] Level 1 Graph Statistics:")
             print(f"   Nodes: {G.number_of_nodes()}")
             print(f"   Edges: {G.number_of_edges()}")
             

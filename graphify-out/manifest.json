@@ -245,8 +245,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\examples\\evolutionary_generation_demo.py": {
-    "mtime": 1774382401.1828759,
-    "ast_hash": "4ae97fdac45bb3744d2dc9156b7abaa7",
+    "mtime": 1780689303.7780087,
+    "ast_hash": "6c6cf82e351a69ecfbc52dcbdb100355",
     "semantic_hash": ""
   },
   "F:\\KLTN\\examples\\gui_demo_real_checkpoint_new_quest_metadata.json": {
@@ -260,18 +260,18 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\examples\\neural_generation_demo.py": {
-    "mtime": 1774382401.1828759,
-    "ast_hash": "aaf3a11d4f3f99d33391bbef05d32f86",
+    "mtime": 1780689303.779241,
+    "ast_hash": "049c0c3161ff89f9ec3efa2739045ed7",
     "semantic_hash": ""
   },
   "F:\\KLTN\\examples\\vglc_compliance_demo.py": {
-    "mtime": 1774382401.1838748,
-    "ast_hash": "70518355295ce7907630cc8280b46543",
+    "mtime": 1780689957.67905,
+    "ast_hash": "67afefabdf518398902f495728ca7828",
     "semantic_hash": ""
   },
   "F:\\KLTN\\examples\\wave3_rules_examples.py": {
-    "mtime": 1774382401.1838748,
-    "ast_hash": "8c2fb2e098fcb70a0bc5aa422d0c0e98",
+    "mtime": 1780689303.7802596,
+    "ast_hash": "f23b29f053bb6b0e61028ff9c10441e4",
     "semantic_hash": ""
   },
   "F:\\KLTN\\experiments\\gradient_magnitude_probe.py": {
@@ -385,8 +385,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\scripts\\build_paired_dataset.py": {
-    "mtime": 1774382401.1925163,
-    "ast_hash": "d00b4b46113f181ef62c5eec454b3dfa",
+    "mtime": 1780689160.0346184,
+    "ast_hash": "2896534c0690502ca9c631fe4606d0eb",
     "semantic_hash": ""
   },
   "F:\\KLTN\\scripts\\calibrate_pcbs_personas_from_telemetry.py": {
@@ -420,8 +420,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\scripts\\comprehensive_qd_analysis.py": {
-    "mtime": 1778411682.792596,
-    "ast_hash": "8625a0570148e36290d2d7307bb871ff",
+    "mtime": 1780689303.7568269,
+    "ast_hash": "6c66a63422b89db3c87856ec9b24ff4c",
     "semantic_hash": ""
   },
   "F:\\KLTN\\scripts\\consolidate_compute_sample_efficiency.py": {
@@ -590,8 +590,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\scripts\\run_benchmark_18_levels.py": {
-    "mtime": 1776369260.152549,
-    "ast_hash": "638e52f7c7db3e38b480e0de31b633ba",
+    "mtime": 1780689160.061275,
+    "ast_hash": "48deef9aef5f1a2805a580b939d26bcf",
     "semantic_hash": ""
   },
   "F:\\KLTN\\scripts\\run_block_i_improvement_experiments.py": {
@@ -650,8 +650,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\scripts\\run_full_benchmark.py": {
-    "mtime": 1776369264.7188234,
-    "ast_hash": "b2a305208e0038b91869563f0daf57f0",
+    "mtime": 1780689160.0628088,
+    "ast_hash": "3d5c25e4fb8d962357f43b7015754be4",
     "semantic_hash": ""
   },
   "F:\\KLTN\\scripts\\run_full_training_ablation_eval_parallel_2026_04_19.ps1": {
@@ -750,8 +750,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\scripts\\score_topology_stack_rubric.py": {
-    "mtime": 1779608905.8719368,
-    "ast_hash": "1d2850f40e1f26e5b75b3bfa2abc7b33",
+    "mtime": 1780689303.7689023,
+    "ast_hash": "c2b45dff014e8e62828a0a34c290e7a3",
     "semantic_hash": ""
   },
   "F:\\KLTN\\scripts\\statistical_validation_and_analysis.py": {
@@ -800,8 +800,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\scripts\\validate_tier2.py": {
-    "mtime": 1774382401.203362,
-    "ast_hash": "d092080f192d3a3a3c0abf774c1969d5",
+    "mtime": 1780689160.0660765,
+    "ast_hash": "52d51d69fadf8e40f8c0fbfa8c9a7eed",
     "semantic_hash": ""
   },
   "F:\\KLTN\\scripts\\validate_training_setup.py": {
@@ -905,8 +905,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\core\\condition_encoder.py": {
-    "mtime": 1780679688.9040375,
-    "ast_hash": "0803cf806c162fb6e7c013f69357ab96",
+    "mtime": 1780689303.6132057,
+    "ast_hash": "33ff45868745df112c6e98c9e5ac17b7",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\core\\definitions.py": {
@@ -915,28 +915,28 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\core\\discrete_masked_model.py": {
-    "mtime": 1780664155.780573,
-    "ast_hash": "bc6b54902bdfdbd23fea14ed50e0c9a8",
+    "mtime": 1780688685.7921288,
+    "ast_hash": "ba13a8317f0097e1eed596e190a3ae4b",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\core\\gaussian_vae.py": {
-    "mtime": 1780609586.2132425,
-    "ast_hash": "c796cba13bf1ac2c847721cec65b1f5b",
+    "mtime": 1780688378.464184,
+    "ast_hash": "5ac807bcd67b7b748d6b175c624a1302",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\core\\graph_grid_attention.py": {
-    "mtime": 1780662834.20585,
-    "ast_hash": "8aa4eee85bd75ef9a3dd939363c5beb2",
+    "mtime": 1780689303.615388,
+    "ast_hash": "870640132d4a9a9cbb3c60826e408aee",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\core\\latent_diffusion.py": {
-    "mtime": 1780676657.0995543,
-    "ast_hash": "71a749bdf6884cef7e20e70c16fad490",
+    "mtime": 1780689303.6177216,
+    "ast_hash": "a9e763c3f7e6236899b25b600e6f766f",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\core\\logic_net.py": {
-    "mtime": 1780650282.262464,
-    "ast_hash": "595d2914287f7cd9ebf7848723ea37b8",
+    "mtime": 1780689303.6193345,
+    "ast_hash": "f7ef429d049f79e5ec92cd5bf0542e37",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\core\\puzzle_stage_semantics.py": {
@@ -945,13 +945,13 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\core\\symbolic_refiner.py": {
-    "mtime": 1780652374.7765892,
-    "ast_hash": "7342bb500d5fcc3d2a992c0dbcaf3bbc",
+    "mtime": 1780689303.6209643,
+    "ast_hash": "4907b446074e2665059fbc44b2bb1b11",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\core\\vqvae.py": {
-    "mtime": 1780649982.3832145,
-    "ast_hash": "1e979fc1d9d49e0c4ee248f8ee5d4b9f",
+    "mtime": 1780689303.6296935,
+    "ast_hash": "8fc5edfda7e26912f11d42eef6f1e5f6",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\data_processing\\__init__.py": {
@@ -960,13 +960,13 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\data_processing\\data_adapter.py": {
-    "mtime": 1774639889.3748205,
-    "ast_hash": "7890cd693cdc32949d01a959cdf54634",
+    "mtime": 1780688361.3809202,
+    "ast_hash": "23b491221e5c07cb507d2e24c0ef7240",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\data_processing\\visual_extractor.py": {
-    "mtime": 1774382401.2143269,
-    "ast_hash": "74c8e395b224e5768e54c1aad9c067be",
+    "mtime": 1780689303.6313076,
+    "ast_hash": "1e7716448dd18ae2254884522580d4e3",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\data_processing\\visual_integration.py": {
@@ -990,8 +990,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\evaluation\\difficulty_calculator.py": {
-    "mtime": 1774382401.2157164,
-    "ast_hash": "88bf5024455353be2dbb96e75d17b126",
+    "mtime": 1780689303.6351173,
+    "ast_hash": "5041641678933de81b6824d1068ded79",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\evaluation\\end_to_end_level_metrics.py": {
@@ -1025,8 +1025,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\evaluation\\map_elites.py": {
-    "mtime": 1779681910.701721,
-    "ast_hash": "5dbbe0fa78f1812d8a23b1c07a53440f",
+    "mtime": 1780689303.6367402,
+    "ast_hash": "cf182ea383994f5bdc8bd5c5d53b189f",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\evaluation\\pcbs_telemetry_calibration.py": {
@@ -1035,8 +1035,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\evaluation\\pcbs_validation.py": {
-    "mtime": 1780527017.9766402,
-    "ast_hash": "3937da5991191719ce25a0847a7e1d64",
+    "mtime": 1780688570.7576058,
+    "ast_hash": "aef45396f32be6d20bcebd48cc2d5835",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\evaluation\\pcg_benchmark_alignment.py": {
@@ -1045,8 +1045,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\evaluation\\search_benchmark_utils.py": {
-    "mtime": 1780598153.8481197,
-    "ast_hash": "9fa53cec43fdf299e89b4495e3f5e931",
+    "mtime": 1780688524.0684135,
+    "ast_hash": "eae982180e760ea26768cbdb245cf54d",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\evaluation\\structural_metrics.py": {
@@ -1105,8 +1105,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\generation\\evolutionary_director\\evaluator.py": {
-    "mtime": 1780241392.6652043,
-    "ast_hash": "6094d98de1e1ad81df049ceb98e36d50",
+    "mtime": 1780689160.0728822,
+    "ast_hash": "21b1373dbcaf221b9f57eb1d41f095fe",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\generation\\evolutionary_director\\executor.py": {
@@ -1115,8 +1115,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\generation\\evolutionary_director\\generator.py": {
-    "mtime": 1780413281.630189,
-    "ast_hash": "7a68fbab2e057a98830dd669b9a4acd5",
+    "mtime": 1780689303.7071495,
+    "ast_hash": "c670ef1a92b60321f947d863f58727df",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\generation\\evolutionary_director\\individual.py": {
@@ -1125,13 +1125,13 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\generation\\evolutionary_director\\utils.py": {
-    "mtime": 1780241392.667551,
-    "ast_hash": "7bebee5f34d253af2f21d05f16e75d43",
+    "mtime": 1780689160.0751765,
+    "ast_hash": "63de574a92ff3831810a1ed7c7f901c2",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\generation\\global_state.py": {
-    "mtime": 1774382401.2233176,
-    "ast_hash": "3cf53da2c793657a83a4e746af284158",
+    "mtime": 1780689303.640952,
+    "ast_hash": "cf0f54e494cd3f5a384a3cc6af04dbc0",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\generation\\grammar\\__init__.py": {
@@ -1140,8 +1140,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\generation\\grammar\\advanced_rules.py": {
-    "mtime": 1780681646.3975782,
-    "ast_hash": "3bda2034f7432127bae6d175ea22c0a5",
+    "mtime": 1780689160.071131,
+    "ast_hash": "cccbfa4439c8898cbeb4af82b6b262ca",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\generation\\grammar\\core_rules.py": {
@@ -1165,8 +1165,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\generation\\grammar_validators.py": {
-    "mtime": 1780683594.6264336,
-    "ast_hash": "0f523b52b32a493304844d05cd1db87f",
+    "mtime": 1780688050.0091257,
+    "ast_hash": "ebf4958c21094263ad337dfec5267ed9",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\generation\\graph_constraint_enforcer.py": {
@@ -1190,8 +1190,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\generation\\style_transfer.py": {
-    "mtime": 1780426375.4198089,
-    "ast_hash": "552819b03e386c434ac2b67a8f5dbb6d",
+    "mtime": 1780689160.0784903,
+    "ast_hash": "cdf0f1d5a3311521fd4658be8455ac50",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\generation\\weighted_bayesian_wfc.py": {
@@ -1200,8 +1200,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\generation\\wfc_refiner.py": {
-    "mtime": 1780413898.367379,
-    "ast_hash": "d82dda5f980e038d2ad0afada2e90e50",
+    "mtime": 1780689160.0741615,
+    "ast_hash": "bb5f405cde7dd25158428c426da7fb96",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\generation\\wfc_types.py": {
@@ -1585,13 +1585,13 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\gui\\gameplay\\generation_config_dialog.py": {
-    "mtime": 1778905553.3827002,
-    "ast_hash": "963845a542a9212b99d4d5ba23ef818b",
+    "mtime": 1780689303.682582,
+    "ast_hash": "f5fe21658dcffda0130d5e761b8d4cd1",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\gui\\gameplay\\import_export_controls.py": {
-    "mtime": 1779303918.7174704,
-    "ast_hash": "bfb7e2447e8720e6cbcb444dd2aaf151",
+    "mtime": 1780689303.683188,
+    "ast_hash": "6f5466f9d84ac36a25102f9ed82a0b57",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\gui\\gameplay\\inventory_manager.py": {
@@ -2310,8 +2310,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\ml\\heuristic_learning.py": {
-    "mtime": 1780426388.1805196,
-    "ast_hash": "547d6ca50a2cb0c44be75d8e8201919c",
+    "mtime": 1780689160.0448341,
+    "ast_hash": "ec6072704195390e40133648ec70cfac",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\ml\\logic_net.py": {
@@ -2380,8 +2380,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\pipeline\\generation\\sampler.py": {
-    "mtime": 1780660546.4032598,
-    "ast_hash": "b05dd36d754afdb027276a74943296e0",
+    "mtime": 1780688823.37469,
+    "ast_hash": "8985fcc404a345153f40fddeeaf58257",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\pipeline\\graph_features.py": {
@@ -2400,8 +2400,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\pipeline\\repair_feedback.py": {
-    "mtime": 1780591574.1291437,
-    "ast_hash": "17bf33199c1aad27caaa17a7a653f46f",
+    "mtime": 1780688789.7022755,
+    "ast_hash": "c5cd987bc0894b11239006e664024b16",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\pipeline\\robust_pipeline.py": {
@@ -2460,8 +2460,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\simulation\\bidirectional_astar.py": {
-    "mtime": 1780683052.700001,
-    "ast_hash": "363158d17bd3baef26816220108935ce",
+    "mtime": 1780689303.6468954,
+    "ast_hash": "942bf2366c6e8b1deda90c95d0a7f9fa",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\simulation\\bidirectional_search.py": {
@@ -2470,8 +2470,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\simulation\\cognitive_bounded_search.py": {
-    "mtime": 1780682932.9647703,
-    "ast_hash": "a415214ae4444076deb8603d52235965",
+    "mtime": 1780689239.0416484,
+    "ast_hash": "a1e6837e488604a3a05f96b616ffc941",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\simulation\\demo_maps.py": {
@@ -2490,8 +2490,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\simulation\\dstar_lite.py": {
-    "mtime": 1780683124.6364636,
-    "ast_hash": "dc4e651a926ffe004aad344bb47c1e07",
+    "mtime": 1780689546.1123016,
+    "ast_hash": "c491d1f21865047ae63c4f5aa20e0ba8",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\simulation\\dstar_search.py": {
@@ -2510,13 +2510,13 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\simulation\\key_economy_validator.py": {
-    "mtime": 1779652784.7891662,
-    "ast_hash": "108fe0ad39d3d2016ba3b2190091360f",
+    "mtime": 1780689303.6505334,
+    "ast_hash": "2ed80ff0c9b2c8d9936fe299c248f727",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\simulation\\map_elites.py": {
-    "mtime": 1780681443.775883,
-    "ast_hash": "04860561e3e769c1980089134a5339df",
+    "mtime": 1780689160.057516,
+    "ast_hash": "dd23b9b3a7a4795ec36eda7e80cec1b8",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\simulation\\multi_goal.py": {
@@ -2525,8 +2525,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\simulation\\parallel_astar.py": {
-    "mtime": 1780423048.7017493,
-    "ast_hash": "7b25fed633f9b784aa2044372d9537e3",
+    "mtime": 1780689160.0601323,
+    "ast_hash": "4983c57ac657adddedde441fac2e9afb",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\simulation\\search_base.py": {
@@ -2540,8 +2540,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\simulation\\solver_comparison.py": {
-    "mtime": 1779653226.6678424,
-    "ast_hash": "920eda75d6f711eb9f203786df7e5d87",
+    "mtime": 1780689160.0643222,
+    "ast_hash": "6ebc3285f7e1d26dd67827db73244796",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\simulation\\state_space_dfs.py": {
@@ -2555,8 +2555,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\simulation\\validator.py": {
-    "mtime": 1780683096.5706358,
-    "ast_hash": "3c0c0968d79d4e9bbce0559214592391",
+    "mtime": 1780689303.653645,
+    "ast_hash": "6e60713b2f8dfb2724e3f26a43287858",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\train.py": {
@@ -2565,8 +2565,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\train_diffusion.py": {
-    "mtime": 1780678499.8282206,
-    "ast_hash": "a8afa9f168bc4e65b54c213dbdb5d3fc",
+    "mtime": 1780689303.610476,
+    "ast_hash": "70bed22b24c3b89001ca132b69a5238a",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\train_gaussian_vae.py": {
@@ -2575,13 +2575,13 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\train_lcm.py": {
-    "mtime": 1780614751.8224866,
-    "ast_hash": "dead92561754bee0163af358b4d30601",
+    "mtime": 1780688866.732266,
+    "ast_hash": "57ffc47ee2d81a7717eff2fed99e7f56",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\train_masked_room.py": {
-    "mtime": 1780664242.3869998,
-    "ast_hash": "0714ed43a91a51f91b49699aee5414dd",
+    "mtime": 1780688762.57007,
+    "ast_hash": "b6ef6cb6ab023565d50bb9077029c0c3",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\train_vqvae.py": {
@@ -2685,8 +2685,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\visualization\\hud.py": {
-    "mtime": 1774382401.3411624,
-    "ast_hash": "0c9820128113ce5af3240fc2eb7f0fc4",
+    "mtime": 1780689303.6589813,
+    "ast_hash": "953beb816992a9547e1d5a7ff1306e3d",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\visualization\\path_preview.py": {
@@ -2700,8 +2700,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\visualization\\replay_engine.py": {
-    "mtime": 1774382401.3431787,
-    "ast_hash": "204323d0c9cbe233116741446ab48b8d",
+    "mtime": 1780689160.053727,
+    "ast_hash": "eb2fbf7dffdc5442bfe6c076474e3879",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\visualization\\validation\\__init__.py": {
@@ -2710,8 +2710,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\visualization\\validation\\collision_alignment_validator.py": {
-    "mtime": 1774382401.33884,
-    "ast_hash": "68baa61bada0eb23c5cf6d71f2abcb16",
+    "mtime": 1780689303.6690679,
+    "ast_hash": "6e325abde7956f39fa4a62654b8a31c6",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\visualization\\voxel_exporter.py": {
@@ -2925,13 +2925,13 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\zelda_data\\zelda_loader.py": {
-    "mtime": 1780609226.4640493,
-    "ast_hash": "4914ffbcb71e9688b0bf447977b6d164",
+    "mtime": 1780688346.4074774,
+    "ast_hash": "319264784a1ff27f89952088abd45b41",
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_advanced_pathfinding.py": {
-    "mtime": 1780683507.8050094,
-    "ast_hash": "733ba260ad7ddab20accc73d30c4824a",
+    "mtime": 1780689390.5975819,
+    "ast_hash": "d67900601617041d81b8b3629df43453",
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_advanced_pipeline_contracts.py": {
@@ -2940,8 +2940,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_advanced_rules_integration.py": {
-    "mtime": 1780681582.6096423,
-    "ast_hash": "61a0a3f439a6ad420eb9b7d4627833ec",
+    "mtime": 1780689303.7155461,
+    "ast_hash": "bd3e03528b7a9323bf88122fc8e5fcf5",
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_architecture_audit_fixes.py": {
@@ -2955,8 +2955,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_block_integration.py": {
-    "mtime": 1780676387.4278388,
-    "ast_hash": "e2c202275c09f6c9f6d147848d6e442e",
+    "mtime": 1780689303.7184875,
+    "ast_hash": "767c0cf28709ee3abc4c1d93d7aab020",
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_cbs_full.py": {
@@ -2975,8 +2975,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_cognitive_bounded_search.py": {
-    "mtime": 1780683401.7824833,
-    "ast_hash": "7fa1073132cf506391de99114e0954d3",
+    "mtime": 1780689364.7720282,
+    "ast_hash": "fdbcd5a235b5d7918d511df750fa46b3",
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_compute_sample_efficiency_consolidation.py": {
@@ -2995,8 +2995,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_critical_review_fixes.py": {
-    "mtime": 1780683778.5744638,
-    "ast_hash": "e8245cb5c388e13b6d289bd56b18a4d2",
+    "mtime": 1780689349.2877214,
+    "ast_hash": "de615388bd02e648b70a7cd4a1265fd5",
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_cuda_smoke.py": {
@@ -3050,8 +3050,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_evolutionary_director.py": {
-    "mtime": 1780415220.246564,
-    "ast_hash": "7ad6850aceff1d5cdd0b5e00304a3a76",
+    "mtime": 1780689303.7231998,
+    "ast_hash": "e2796fe3e3a12f33a4cb31eff8b8c746",
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_explainability_discrepancy.py": {
@@ -3510,8 +3510,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_neural_pipeline.py": {
-    "mtime": 1780649573.2570455,
-    "ast_hash": "a30a841e3164e5f88ac22b5dfd8b0e8d",
+    "mtime": 1780689303.7382693,
+    "ast_hash": "3e20816dd473e68bd2e2654a74a35ef3",
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_pathfinding_unified_game_logic.py": {
@@ -3575,8 +3575,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_search_benchmark_utils.py": {
-    "mtime": 1780596648.5715706,
-    "ast_hash": "605d9d3111e7dfec44826501009e0670",
+    "mtime": 1780689497.2816837,
+    "ast_hash": "6b57d60fcbf00662d932193e500a8cf7",
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_search_factory.py": {
@@ -3650,13 +3650,13 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_vglc_compliance.py": {
-    "mtime": 1776207007.938576,
-    "ast_hash": "18f5042b6325096808f56e6ada58083d",
+    "mtime": 1780689160.0681143,
+    "ast_hash": "249b9df9bfdabae8e4b0f445d8f394e9",
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_wave3_pedagogical_rules.py": {
-    "mtime": 1775592433.95477,
-    "ast_hash": "61e716ff9eddebf84443d1e7492852c6",
+    "mtime": 1780689303.7444775,
+    "ast_hash": "0a6d1866d9043c5a8043e821ec312e65",
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_weighted_bayesian_wfc_diagnostics.py": {
@@ -5220,8 +5220,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\evaluation\\perturb_and_map.py": {
-    "mtime": 1780682954.5949254,
-    "ast_hash": "48242d0b3d91b33378a0c7adc044a18a",
+    "mtime": 1780689303.638926,
+    "ast_hash": "5c99eb9031bd780789bf3646c89c19d7",
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_advanced_architecture_ablations.py": {
@@ -5270,8 +5270,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\core\\neural_guided_repair.py": {
-    "mtime": 1780590260.487559,
-    "ast_hash": "5f530ca4f5e103a2e0bba3c4e0ad820a",
+    "mtime": 1780688318.4628584,
+    "ast_hash": "539afc914595bada16b78e2f693fc155",
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_neural_guided_repair.py": {
