@@ -2204,6 +2204,48 @@ def test_pipeline_vqvae_loader_accepts_embedded_vqvae_from_composite_checkpoint(
     assert loaded_vqvae.encoder.conv_in.__class__.__name__ == "Conv2d"
 
 
+def test_pipeline_vqvae_loader_skips_composite_checkpoint_without_vqvae_state_dict(tmp_path):
+    pipeline = NeuralSymbolicDungeonPipeline.create_symbolic_repair_pipeline(
+        device="cpu",
+        enable_logging=False,
+    )
+
+    ckpt_path = tmp_path / "diffusion_bundle_without_vqvae.pth"
+    torch.save(
+        {
+            "diffusion_state_dict": {"dummy": torch.tensor(1.0)},
+            "config": {
+                "num_classes": 44,
+                "latent_dim": 16,
+                "codebook_size": 32,
+                "use_coordconv": False,
+            },
+        },
+        ckpt_path,
+    )
+    ckpt_path.with_suffix(".pth.meta.json").write_text(
+        json.dumps(
+            {
+                "format_version": "1.0",
+                "model_type": "diffusion",
+                "architecture": {
+                    "num_classes": 44,
+                    "latent_dim": 16,
+                    "codebook_size": 32,
+                    "use_coordconv": False,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded_vqvae = pipeline._load_vqvae(str(ckpt_path))
+
+    assert loaded_vqvae.num_classes == 44
+    assert loaded_vqvae.latent_dim == 16
+    assert loaded_vqvae.codebook_size == 32
+
+
 def test_pipeline_diffusion_loader_rejects_checkpoint_without_diffusion_state_dict(tmp_path):
     pipeline = NeuralSymbolicDungeonPipeline.create_symbolic_repair_pipeline(
         device="cpu",

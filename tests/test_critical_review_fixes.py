@@ -318,7 +318,7 @@ def test_perturb_and_map_astar_uses_min_cost_admissible_heuristic():
         ],
         dtype=np.float32,
     )
-    path = _astar(
+    result = _astar(
         costs,
         np.ones_like(costs, dtype=bool),
         start=(0, 0),
@@ -326,6 +326,8 @@ def test_perturb_and_map_astar_uses_min_cost_admissible_heuristic():
         min_step_cost=0.0001,
     )
 
+    assert result is not None
+    _, path = result
     assert path is not None
     assert (1, 1) in path
     assert (0, 1) not in path

@@ -13,6 +13,8 @@ import numpy as np
 import logging
 from typing import Tuple
 
+import pytest
+
 from src.core.definitions import SEMANTIC_PALETTE
 from src.simulation.validator import GameState, ZeldaLogicEnv, SolverOptions
 from src.simulation.dstar_lite import DStarLiteSolver
@@ -188,6 +190,28 @@ class TestDStarLite:
         # So we just log result without strict assertion
         logger.info(f"D* Lite on complex: success={success}, path_len={len(path) if path else 0}, nodes={nodes}")
 
+    def test_diagonal_heuristic_uses_octile_lower_bound(self):
+        grid = create_simple_dungeon()
+        env = ZeldaLogicEnv(grid)
+        solver = DStarLiteSolver(env, allow_diagonals=True)
+
+        assert solver._heuristic(GameState(position=(1, 1))) == pytest.approx(1.414 * 7, rel=1e-3)
+
+    def test_locked_door_predecessor_restores_consumed_key(self):
+        grid = create_simple_dungeon()
+        env = ZeldaLogicEnv(grid)
+        solver = DStarLiteSolver(env)
+        door_pos = (5, 5)
+        state_at_opened_door = GameState(position=door_pos, keys=0, opened_doors={door_pos})
+
+        candidates = solver._predecessor_state_candidates(
+            state_at_opened_door,
+            pred_pos=(5, 4),
+            target_tile=int(SEMANTIC_PALETTE["DOOR_LOCKED"]),
+        )
+
+        assert any(candidate.keys == 1 and door_pos not in candidate.opened_doors for candidate in candidates)
+
 
 class TestStateSpaceDFS:
     """Test DFS/IDDFS implementations."""
@@ -279,6 +303,25 @@ class TestBidirectionalAStar:
         assert path[-1] == env.goal_pos, "Path doesn't reach goal"
         
         logger.info(f"✓ Bidirectional A*: path_len={len(path)}, nodes={nodes}")
+
+
+    def test_collision_rejects_backward_surplus_keys(self):
+        grid = create_simple_dungeon()
+        env = ZeldaLogicEnv(grid)
+        solver = BidirectionalAStar(env, timeout=100000)
+        forward_node = SearchNode(state=GameState(position=(3, 3), keys=0), g_score=0.0, f_score=0.0)
+        backward_node = SearchNode(state=GameState(position=(3, 3), keys=3), g_score=0.0, f_score=0.0)
+
+        collision = solver._check_approximate_collision(forward_node, [backward_node], is_forward=True)
+
+        assert collision is None
+
+    def test_diagonal_heuristic_uses_octile_lower_bound(self):
+        grid = create_simple_dungeon()
+        env = ZeldaLogicEnv(grid)
+        solver = BidirectionalAStar(env, timeout=100000, allow_diagonals=True)
+
+        assert solver._heuristic_forward(GameState(position=(1, 1))) == pytest.approx(1.414 * 7, rel=1e-3)
 
 
 class TestComparison:

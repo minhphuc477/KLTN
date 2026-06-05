@@ -32,6 +32,37 @@ def _find_forward_path(
     return None
 
 
+def _find_forward_paths(
+    adjacency: Dict[int, List[int]],
+    start_id: int,
+    goal_id: int,
+    *,
+    max_depth: int,
+    max_paths: int = 128,
+) -> List[List[int]]:
+    """Enumerate bounded simple forward paths for validation-only graph checks."""
+    if start_id == goal_id:
+        return [[start_id]]
+
+    paths: List[List[int]] = []
+    queue = deque([(start_id, [start_id])])
+    while queue and len(paths) < max_paths:
+        current, path = queue.popleft()
+        if len(path) > max_depth:
+            continue
+        for neighbor in adjacency.get(current, []):
+            if neighbor in path:
+                continue
+            new_path = path + [neighbor]
+            if neighbor == goal_id:
+                paths.append(new_path)
+                if len(paths) >= max_paths:
+                    break
+                continue
+            queue.append((neighbor, new_path))
+    return paths
+
+
 def validate_skill_chains(graph: Any) -> bool:
     """
     Ensure tutorial sequences are properly ordered.
@@ -66,9 +97,13 @@ def validate_skill_chains(graph: Any) -> bool:
 
         candidate_paths: List[List[int]] = []
         for climax_id in climax_ids:
-            path = _find_forward_path(forward_adj, tutorial.id, climax_id)
-            if path and len(path) >= 2:
-                candidate_paths.append(path)
+            paths = _find_forward_paths(
+                forward_adj,
+                tutorial.id,
+                climax_id,
+                max_depth=max(2, len(graph.nodes) + 1),
+            )
+            candidate_paths.extend(path for path in paths if len(path) >= 2)
         if not candidate_paths:
             logger.warning(
                 "Tutorial node %s does not lead to any climax target via forward progression",
