@@ -35,6 +35,7 @@ from typing import Dict, List, Tuple, Optional, Any
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 from torch import Tensor
 
 from src.core.definitions import (
@@ -158,6 +159,84 @@ class DifferentiablePathfinder(nn.Module):
         self.temperature = temperature
         self.inf_distance = inf_distance
         self.wall_penalty_scale = min(10.0, max(1.0, float(inf_distance) * 0.5))
+
+    def _should_checkpoint_relaxation(self, *tensors: Tensor) -> bool:
+        return (
+            bool(torch.is_grad_enabled())
+            and int(self.num_iterations) > 32
+            and any(isinstance(t, torch.Tensor) and bool(t.requires_grad) for t in tensors)
+        )
+
+    def _grid_relax_step(
+        self,
+        dist: Tensor,
+        walkability: Tensor,
+        traversal_cost: Tensor,
+        start: Tensor,
+    ) -> Tensor:
+        inf = float(self.inf_distance)
+        dist = torch.nan_to_num(dist, nan=inf, posinf=inf, neginf=-inf).clamp(-inf, inf)
+        up = torch.full_like(dist, inf)
+        down = torch.full_like(dist, inf)
+        left = torch.full_like(dist, inf)
+        right = torch.full_like(dist, inf)
+        up[:, 1:, :] = dist[:, :-1, :]
+        down[:, :-1, :] = dist[:, 1:, :]
+        left[:, :, 1:] = dist[:, :, :-1]
+        right[:, :, :-1] = dist[:, :, 1:]
+        wall_cost = (1.0 - walkability).clamp(0.0, 1.0).pow(2) * float(self.wall_penalty_scale)
+        step_cost = traversal_cost + wall_cost
+        candidates = torch.stack(
+            [
+                dist,
+                up + step_cost,
+                down + step_cost,
+                left + step_cost,
+                right + step_cost,
+            ],
+            dim=0,
+        ).clamp(-inf, inf)
+        has_finite_candidate = (candidates < (inf - 1e-6)).any(dim=0)
+        relaxed = soft_min(candidates, dim=0, temperature=max(self.temperature, 1e-4))
+        relaxed = torch.where(has_finite_candidate, relaxed, torch.full_like(relaxed, inf))
+        dist = relaxed.clamp(-inf, inf)
+        dist = dist * (1.0 - start) + torch.zeros_like(dist) * start
+        return dist.clamp(-inf, inf)
+
+    def _graph_relax_step(
+        self,
+        distances: Tensor,
+        effective_weights: Tensor,
+        source_mask: Tensor,
+    ) -> Tensor:
+        inf = float(self.inf_distance)
+        distances = torch.nan_to_num(
+            distances,
+            nan=inf,
+            posinf=inf,
+            neginf=-inf,
+        ).clamp(-inf, inf)
+        candidates = (distances.unsqueeze(1) + effective_weights).clamp(-inf, inf)
+        has_finite_candidate = (candidates < (inf - 1e-6)).any(dim=0)
+        new_distances = soft_min(candidates, dim=0, temperature=self.temperature)
+        new_distances = torch.where(
+            has_finite_candidate,
+            new_distances,
+            torch.full_like(new_distances, inf),
+        )
+        keep_candidates = torch.stack([distances, new_distances], dim=0)
+        keep_has_finite = (keep_candidates < (inf - 1e-6)).any(dim=0)
+        distances = soft_min(
+            keep_candidates,
+            dim=0,
+            temperature=max(self.temperature, 1e-4),
+        )
+        distances = torch.where(
+            keep_has_finite,
+            distances,
+            torch.full_like(distances, inf),
+        ).clamp(-inf, inf)
+        return torch.where(source_mask.bool(), torch.zeros_like(distances), distances)
     
     def forward(
         self,
@@ -229,38 +308,19 @@ class DifferentiablePathfinder(nn.Module):
             # in the third. The current contract uses the third tensor as the
             # source mask; this still computes a valid distance field from the
             # requested source while avoiding ambiguous argument inversion.
+            use_checkpoint = self._should_checkpoint_relaxation(walkability, traversal_cost, start)
             for _ in range(self.num_iterations):
-                # Non-wrapping neighbor shifts (avoid torch.roll border wrap-around).
-                inf = float(self.inf_distance)
-                dist = torch.nan_to_num(dist, nan=inf, posinf=inf, neginf=-inf).clamp(-inf, inf)
-                up = torch.full_like(dist, inf)
-                down = torch.full_like(dist, inf)
-                left = torch.full_like(dist, inf)
-                right = torch.full_like(dist, inf)
-                up[:, 1:, :] = dist[:, :-1, :]
-                down[:, :-1, :] = dist[:, 1:, :]
-                left[:, :, 1:] = dist[:, :, :-1]
-                right[:, :, :-1] = dist[:, :, 1:]
-                wall_cost = (1.0 - walkability).clamp(0.0, 1.0).pow(2) * float(self.wall_penalty_scale)
-                step_cost = traversal_cost + wall_cost
-                candidates = torch.stack(
-                    [
+                if use_checkpoint:
+                    dist = checkpoint(
+                        self._grid_relax_step,
                         dist,
-                        up + step_cost,
-                        down + step_cost,
-                        left + step_cost,
-                        right + step_cost,
-                    ],
-                    dim=0,
-                )
-                candidates = candidates.clamp(-inf, inf)
-                has_finite_candidate = (candidates < (inf - 1e-6)).any(dim=0)
-                relaxed = soft_min(candidates, dim=0, temperature=max(self.temperature, 1e-4))
-                relaxed = torch.where(has_finite_candidate, relaxed, torch.full_like(relaxed, inf))
-                dist = relaxed.clamp(-inf, inf)
-                # Keep start cells fixed at zero distance.
-                dist = dist * (1.0 - start) + torch.zeros_like(dist) * start
-                dist = dist.clamp(-inf, inf)
+                        walkability,
+                        traversal_cost,
+                        start,
+                        use_reentrant=False,
+                    )
+                else:
+                    dist = self._grid_relax_step(dist, walkability, traversal_cost, start)
 
             return dist
 
@@ -299,49 +359,18 @@ class DifferentiablePathfinder(nn.Module):
         ).clamp(-float(self.inf_distance), float(self.inf_distance))
         
         # Bellman-Ford iterations
+        use_checkpoint = self._should_checkpoint_relaxation(effective_weights, source_mask)
         for _ in range(self.num_iterations):
-            distances = torch.nan_to_num(
-                distances,
-                nan=float(self.inf_distance),
-                posinf=float(self.inf_distance),
-                neginf=-float(self.inf_distance),
-            ).clamp(-float(self.inf_distance), float(self.inf_distance))
-            # For each node, compute distance through each neighbor
-            # candidate[v] = min_{u} (distances[u] + weight[u,v])
-            
-            # distances[u] + weight[u,v] for all u, v
-            candidates = (distances.unsqueeze(1) + effective_weights).clamp(
-                -float(self.inf_distance),
-                float(self.inf_distance),
-            )  # [N, N]
-            has_finite_candidate = (candidates < (float(self.inf_distance) - 1e-6)).any(dim=0)
-            
-            # Soft-min over incoming edges
-            new_distances = soft_min(candidates, dim=0, temperature=self.temperature)
-            new_distances = torch.where(
-                has_finite_candidate,
-                new_distances,
-                torch.full_like(new_distances, float(self.inf_distance)),
-            )
-            
-            # Softly keep the better of current and new estimates to preserve
-            # gradients after early relaxations have already found a short path.
-            keep_candidates = torch.stack([distances, new_distances], dim=0)
-            keep_has_finite = (keep_candidates < (float(self.inf_distance) - 1e-6)).any(dim=0)
-            distances = soft_min(
-                keep_candidates,
-                dim=0,
-                temperature=max(self.temperature, 1e-4),
-            )
-            distances = torch.where(
-                keep_has_finite,
-                distances,
-                torch.full_like(distances, float(self.inf_distance)),
-            ).clamp(
-                -float(self.inf_distance),
-                float(self.inf_distance),
-            )
-            distances = torch.where(source_mask.bool(), torch.zeros_like(distances), distances)
+            if use_checkpoint:
+                distances = checkpoint(
+                    self._graph_relax_step,
+                    distances,
+                    effective_weights,
+                    source_mask,
+                    use_reentrant=False,
+                )
+            else:
+                distances = self._graph_relax_step(distances, effective_weights, source_mask)
         
         return distances
 

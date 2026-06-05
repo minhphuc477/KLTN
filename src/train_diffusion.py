@@ -2997,6 +2997,7 @@ class DiffusionTrainer:
         wfc_pseudo_samples = 0.0
         logic_tile_accuracy = torch.tensor(0.0, device=self.device)
         solvability_proxy = torch.tensor(0.0, device=self.device)
+        logic_info: Dict[str, Any] = {}
         
         logic_enabled = bool(getattr(self.config, "logic_net_enabled", True))
         logic_loss_weight = self._effective_logic_loss_weight(include_logic_loss)
@@ -3014,7 +3015,7 @@ class DiffusionTrainer:
             if self.config.logic_loss_mode == "detached_real":
                 # Legacy baseline: logic regularization on real latent only.
                 z_for_logic = z_0.detach().requires_grad_(True)
-                logic_loss, _logic_info = self.logic_net(z_for_logic, graph_data=logic_graph_data)
+                logic_loss, logic_info = self.logic_net(z_for_logic, graph_data=logic_graph_data)
             else:
                 # New default: logic supervision on predicted latent (trains diffusion).
                 t_logic = torch.randint(0, self.diffusion.num_timesteps, (batch_size,), device=self.device)
@@ -3054,7 +3055,7 @@ class DiffusionTrainer:
                     # logits/walkability rather than arbitrary continuous latents.
                     if pred_x0_logic is not None:
                         pred_tile_logits = self._decode_latent_for_logic(pred_x0_logic)
-                        logic_loss, _logic_info = self.logic_net(pred_tile_logits, graph_data=logic_graph_data)
+                        logic_loss, logic_info = self.logic_net(pred_tile_logits, graph_data=logic_graph_data)
                         wfc_pseudo_loss, wfc_pseudo_samples, wfc_pseudo_mean_loss = self._wfc_pseudo_label_loss(
                             pred_tile_logits,
                             real_maps,
@@ -3200,6 +3201,8 @@ class DiffusionTrainer:
             progress = min(1.0, self.global_step / estimated_total_steps)
             self.logic_net.anneal_temperature(progress)
         
+        graph_skip_reason = str(logic_info.get('global_graph_skipped', '') or '')
+        graph_loss_attempted = bool(logic_enabled and logic_loss_weight > 0.0)
         metrics = {
             'loss': total_loss.item(),
             'diffusion_loss': diffusion_loss.item(),
@@ -3213,6 +3216,9 @@ class DiffusionTrainer:
             'solvability_proxy': solvability_proxy.item(),
             'solvability': solvability_proxy.item(),
             'logic_loss_mode_predicted': 1.0 if self.config.logic_loss_mode == 'predicted_latent' else 0.0,
+            'logic_global_graph_loss_skipped': 1.0 if graph_loss_attempted and graph_skip_reason else 0.0,
+            'logic_global_graph_supervised': 1.0 if graph_loss_attempted and not graph_skip_reason else 0.0,
+            'logic_global_graph_node_coverage': float(logic_info.get('global_graph_node_coverage', 0.0) or 0.0),
         }
         metrics.update(self._vqvae_codebook_stats())
         return metrics

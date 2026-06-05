@@ -49,8 +49,10 @@ CARDINAL_DIRECTIONS = ("N", "S", "E", "W")
 # Try to import torch_geometric for GNN
 try:
     from torch_geometric.nn import GATv2Conv, GCNConv, SAGEConv
+    from torch_geometric.utils import to_dense_batch
     HAS_TORCH_GEOMETRIC = True
 except ImportError:
+    to_dense_batch = None
     HAS_TORCH_GEOMETRIC = False
     logger.warning("torch_geometric not available. Using fallback GNN implementation.")
 
@@ -1188,27 +1190,48 @@ class GPSLayer(nn.Module):
                     f"GPSLayer batch_idx must have shape [N] with N={int(h.shape[0])}, got {tuple(batch_idx.shape)}."
                 )
             assignments = batch_idx.to(device=h.device, dtype=torch.long)
-            global_out = torch.zeros_like(h)
-            for graph_id in torch.unique(assignments, sorted=True):
-                mask = assignments == graph_id
-                if not bool(torch.any(mask)):
-                    continue
-                seq = global_normed[mask].unsqueeze(0)
-                local_valid = valid_nodes[mask] if valid_nodes is not None else None
-                if local_valid is not None and not bool(local_valid.any()):
-                    continue
-                key_padding_mask = (~local_valid).unsqueeze(0) if local_valid is not None else None
-                out, _ = self.global_attn(
-                    seq,
-                    seq,
-                    seq,
-                    key_padding_mask=key_padding_mask,
+            if to_dense_batch is not None:
+                dense, dense_mask = to_dense_batch(global_normed, assignments)
+                node_positions, position_mask = to_dense_batch(
+                    torch.arange(h.shape[0], device=h.device, dtype=torch.long),
+                    assignments,
+                )
+                dense_mask = dense_mask & position_mask
+                if valid_nodes is not None:
+                    valid_dense, _ = to_dense_batch(valid_nodes.to(dtype=torch.bool), assignments)
+                    dense_mask = dense_mask & valid_dense.to(dtype=torch.bool)
+                out_dense, _ = self.global_attn(
+                    dense,
+                    dense,
+                    dense,
+                    key_padding_mask=~dense_mask,
                     need_weights=False,
                 )
-                out = out.squeeze(0)
-                if local_valid is not None:
-                    out = out * local_valid.to(dtype=out.dtype).unsqueeze(-1)
-                global_out[mask] = out
+                out_dense = out_dense * dense_mask.to(dtype=out_dense.dtype).unsqueeze(-1)
+                global_out = torch.zeros_like(h)
+                global_out[node_positions[dense_mask]] = out_dense[dense_mask]
+            else:
+                global_out = torch.zeros_like(h)
+                for graph_id in torch.unique(assignments, sorted=True):
+                    mask = assignments == graph_id
+                    if not bool(torch.any(mask)):
+                        continue
+                    seq = global_normed[mask].unsqueeze(0)
+                    local_valid = valid_nodes[mask] if valid_nodes is not None else None
+                    if local_valid is not None and not bool(local_valid.any()):
+                        continue
+                    key_padding_mask = (~local_valid).unsqueeze(0) if local_valid is not None else None
+                    out, _ = self.global_attn(
+                        seq,
+                        seq,
+                        seq,
+                        key_padding_mask=key_padding_mask,
+                        need_weights=False,
+                    )
+                    out = out.squeeze(0)
+                    if local_valid is not None:
+                        out = out * local_valid.to(dtype=out.dtype).unsqueeze(-1)
+                    global_out[mask] = out
         h = h + self.dropout(global_out)
 
         h = h + self.dropout(self.ffn(self.ffn_norm(h)))
@@ -1568,21 +1591,49 @@ class DualStreamConditionEncoder(nn.Module):
             node_idx=None,
         )
 
-        # Ensure global tokens have proper shape for cross-attention.
-        if global_tokens.dim() == 2:
-            global_tokens = global_tokens.unsqueeze(0).expand(c_local.shape[0], -1, -1)
-
         global_mask = None
-        if node_mask is not None:
-            global_mask = node_mask.to(device=device, dtype=torch.bool)
-            if global_mask.dim() == 1:
-                global_mask = global_mask.unsqueeze(0).expand(batch_size, -1)
-            elif global_mask.dim() == 2 and int(global_mask.shape[0]) == 1 and batch_size > 1:
-                global_mask = global_mask.expand(batch_size, -1)
-            if global_mask.dim() != 2 or int(global_mask.shape[0]) != batch_size:
-                raise ValueError(
-                    f"node_mask must broadcast to [B,N] with B={batch_size}; got {tuple(global_mask.shape)}."
+        # Ensure global tokens have proper shape for cross-attention. For PyG
+        # batched graphs, keep graph scopes isolated instead of expanding the
+        # concatenated [sum(N_i), D] sequence across every batch item.
+        if global_tokens.dim() == 2:
+            if batch_idx is not None and to_dense_batch is not None:
+                global_tokens, global_mask = to_dense_batch(
+                    global_tokens,
+                    batch_idx.to(device=global_tokens.device, dtype=torch.long),
                 )
+                global_mask = global_mask.to(device=device, dtype=torch.bool)
+                if int(global_tokens.shape[0]) == 1 and batch_size > 1:
+                    global_tokens = global_tokens.expand(batch_size, -1, -1)
+                    global_mask = global_mask.expand(batch_size, -1)
+                elif int(global_tokens.shape[0]) != batch_size:
+                    raise ValueError(
+                        f"Batched graph tokens produce B={int(global_tokens.shape[0])}, "
+                        f"but local conditioning has B={batch_size}."
+                    )
+            else:
+                global_tokens = global_tokens.unsqueeze(0).expand(c_local.shape[0], -1, -1)
+
+        if node_mask is not None:
+            explicit_mask = node_mask.to(device=device, dtype=torch.bool)
+            if (
+                explicit_mask.dim() == 1
+                and batch_idx is not None
+                and to_dense_batch is not None
+                and global_mask is not None
+            ):
+                explicit_mask, _ = to_dense_batch(
+                    explicit_mask,
+                    batch_idx.to(device=explicit_mask.device, dtype=torch.long),
+                )
+            elif explicit_mask.dim() == 1:
+                explicit_mask = explicit_mask.unsqueeze(0).expand(batch_size, -1)
+            elif explicit_mask.dim() == 2 and int(explicit_mask.shape[0]) == 1 and batch_size > 1:
+                explicit_mask = explicit_mask.expand(batch_size, -1)
+            if explicit_mask.dim() != 2 or int(explicit_mask.shape[0]) != batch_size:
+                raise ValueError(
+                    f"node_mask must broadcast to [B,N] with B={batch_size}; got {tuple(explicit_mask.shape)}."
+                )
+            global_mask = explicit_mask if global_mask is None else (global_mask & explicit_mask)
 
         if current_node_idx is not None:
             num_tokens = int(global_tokens.shape[1])

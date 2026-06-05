@@ -4,6 +4,8 @@
 import sys
 from pathlib import Path
 
+import networkx as nx
+import numpy as np
 import pytest
 import torch
 
@@ -20,8 +22,62 @@ from src.core.logic_net import (
     ValueIterationGridPathfinder,
     WalkabilityPredictor,
 )
+from src.core.symbolic_refiner import PathAnalyzer, WaveFunctionCollapse
 from src.pipeline.graph_features import extract_node_feature_vector
 from src.pipeline.spatial_utils import parse_label_tokens
+
+
+def test_logicnet_dynamic_spatial_shape_preserves_input_resolution():
+    logic_net = LogicNet(latent_dim=64, num_tile_classes=44, num_iterations=4)
+    logits = torch.randn(2, 44, 32, 24, requires_grad=True)
+    graph_data = {
+        "boundary_constraints": torch.ones(2, 8),
+    }
+
+    loss, info = logic_net(logits, graph_data=graph_data)
+
+    assert tuple(info["tile_logits"].shape[-2:]) == (32, 24)
+    assert tuple(info["walkability"].shape[-2:]) == (32, 24)
+    assert tuple(info["grid_distances"].shape[-2:]) == (32, 24)
+    loss.backward()
+    assert logits.grad is not None
+    assert torch.isfinite(logits.grad).all()
+
+
+def test_wfc_entropy_selection_handles_large_grid_vectorized():
+    floor = int(SEMANTIC_PALETTE["FLOOR"])
+    wall = int(SEMANTIC_PALETTE["WALL"])
+    wfc = WaveFunctionCollapse([floor, wall], max_iterations=16, rng=np.random.default_rng(0))
+    initial = np.full((32, 32), floor, dtype=np.int32)
+    mask = np.zeros((32, 32), dtype=bool)
+    mask[8:24, 8:24] = True
+
+    state = wfc.initialize_state(32, 32, initial_grid=initial, mask=mask)
+    entropy = state.entropy_grid()
+
+    assert entropy.shape == (32, 32)
+    assert float(entropy[10, 10]) > 0.0
+    assert float(entropy[0, 0]) == pytest.approx(0.0, abs=1e-8)
+    result, success = wfc.collapse(state)
+    assert success is True
+    assert result.shape == (32, 32)
+
+
+def test_inventory_path_deduplicates_states_before_enqueue():
+    graph = nx.DiGraph()
+    graph.add_node("start")
+    graph.add_node("key", label="key")
+    graph.add_node("lock")
+    graph.add_node("goal")
+    graph.add_edge("start", "key")
+    graph.add_edge("start", "lock", edge_type="locked")
+    graph.add_edge("key", "lock", edge_type="locked")
+    graph.add_edge("lock", "goal")
+    graph.add_edge("key", "start")
+
+    analyzer = PathAnalyzer()
+
+    assert analyzer._inventory_path_exists(graph, "start", "goal") is True
 
 
 def test_logicnet_gradient_magnitude():

@@ -63,9 +63,18 @@ def _stable_node_seed_offset(node: Any) -> int:
     return stable_seed_offset(node, digest_size=4)
 
 
-def _default_latent_shape_chw(pipeline, sampler_mode: str) -> Tuple[int, int, int]:
+def _default_latent_shape_chw(
+    pipeline,
+    sampler_mode: str,
+    room_generator_mode: Optional[str] = None,
+) -> Tuple[int, int, int]:
     """Default VQ latent shape without requiring diffusion for categorical sampling."""
-    if getattr(pipeline, "room_generator_mode", None) == "discrete_masked":
+    effective_mode = (
+        getattr(pipeline, "room_generator_mode", None)
+        if room_generator_mode is None
+        else str(room_generator_mode).strip().lower()
+    )
+    if effective_mode == "discrete_masked":
         hidden_dim = int(getattr(getattr(pipeline, "masked_room_model", None), "hidden_dim", 64))
         return (hidden_dim, int(ROOM_HEIGHT), int(ROOM_WIDTH))
     diffusion = getattr(pipeline, "diffusion", None)
@@ -90,14 +99,29 @@ def _infer_latent_shape_from_neighbors_or_default(
     neighbor_latents: Dict[str, Optional[Any]],
     *,
     sampler_mode: str,
+    room_generator_mode: Optional[str] = None,
 ) -> Tuple[int, int, int, int]:
     """Infer rank-4 latent shape from neighbors, falling back by sampler mode."""
+    expected_channels: Optional[int] = None
+    if str(room_generator_mode or getattr(pipeline, "room_generator_mode", "")).strip().lower() == "latent_diffusion":
+        diffusion = getattr(pipeline, "diffusion", None)
+        latent_dim = getattr(diffusion, "latent_dim", None)
+        if latent_dim is not None:
+            expected_channels = int(latent_dim)
     for latent in neighbor_latents.values():
         if isinstance(latent, torch.Tensor) and latent.dim() == 4:
+            if expected_channels is not None and int(latent.shape[1]) != expected_channels:
+                continue
             return tuple(int(v) for v in latent.shape)  # type: ignore[return-value]
         if isinstance(latent, np.ndarray) and latent.ndim == 4:
+            if expected_channels is not None and int(latent.shape[1]) != expected_channels:
+                continue
             return tuple(int(v) for v in latent.shape)  # type: ignore[return-value]
-    c, h, w = _default_latent_shape_chw(pipeline, sampler_mode)
+    c, h, w = _default_latent_shape_chw(
+        pipeline,
+        sampler_mode,
+        room_generator_mode=room_generator_mode,
+    )
     return (1, int(c), int(h), int(w))
 
 
@@ -651,6 +675,7 @@ def generate_room(
             pipeline,
             neighbor_latents,
             sampler_mode=sampler_mode,
+            room_generator_mode=effective_room_generator_mode,
         )
         logger.debug("Room %s: Sampling with categorical codebook path", room_id)
         latent_h = int(max(1, latent_shape[2]))
@@ -710,6 +735,7 @@ def generate_room(
             pipeline,
             neighbor_latents,
             sampler_mode=sampler_mode,
+            room_generator_mode=effective_room_generator_mode,
         )
 
         # BLOCK IV: Latent Diffusion Sampling
