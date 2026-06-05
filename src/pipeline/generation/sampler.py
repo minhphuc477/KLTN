@@ -339,30 +339,32 @@ def generate_room_batch(
             num_embeddings = int(getattr(getattr(pipeline.vqvae, "quantizer", object()), "num_embeddings", 512))
         active_codebook_size = int(max(1, min(num_embeddings, int(categorical_codebook_size or num_embeddings))))
 
-        probs = np.ones(active_codebook_size, dtype=np.float64)
+        probs_t = torch.ones(active_codebook_size, device=pipeline.device, dtype=torch.float32)
         try:
             usage = pipeline.vqvae.get_codebook_usage()
             if isinstance(usage, torch.Tensor):
-                usage_np = usage.detach().float().cpu().numpy()
-                if usage_np.size >= active_codebook_size:
-                    usage_np = np.asarray(usage_np[:active_codebook_size], dtype=np.float64)
-                    if float(np.sum(usage_np)) > 0.0:
-                        probs = usage_np
+                usage_t = usage.detach().to(device=pipeline.device, dtype=torch.float32)
+                if int(usage_t.numel()) >= active_codebook_size:
+                    usage_t = usage_t.flatten()[:active_codebook_size].clamp_min(0.0)
+                    if bool((usage_t.sum() > 0).item()):
+                        probs_t = usage_t
         except (AttributeError, RuntimeError, ValueError, TypeError):
             pass
-        probs = probs / max(float(np.sum(probs)), 1e-9)
+        probs_t = probs_t / probs_t.sum().clamp_min(1e-9)
 
         sampled = []
         for inp in per_room_inputs:
-            local_rng = np.random.default_rng(inp['seed']) if inp['seed'] is not None else np.random.default_rng()
-            sampled.append(
-                local_rng.choice(
-                    active_codebook_size,
-                    size=(latent_shape[2], latent_shape[3]),
-                    p=probs,
-                )
-            )
-        indices_t = torch.from_numpy(np.stack(sampled, axis=0)).to(pipeline.device, dtype=torch.long)
+            generator = None
+            if inp['seed'] is not None:
+                generator = torch.Generator(device=pipeline.device)
+                generator.manual_seed(int(inp['seed']))
+            sampled.append(torch.multinomial(
+                probs_t,
+                num_samples=int(latent_shape[2]) * int(latent_shape[3]),
+                replacement=True,
+                generator=generator,
+            ).view(int(latent_shape[2]), int(latent_shape[3])))
+        indices_t = torch.stack(sampled, dim=0).to(pipeline.device, dtype=torch.long)
         _record_stage_time(batch_stage_times, "batch_categorical_sample_time_sec", sampler_started_at)
         decode_started_at = time.perf_counter()
         logits_batch = pipeline.vqvae.decode_indices(indices_t)
@@ -898,10 +900,7 @@ def generate_room(
             int(semantic_decode_stats.get("planned_markers", 0)),
         )
 
-    if effective_room_generator_mode == "discrete_masked" and sampled_tokens is not None:
-        neural_grid = sampled_tokens.detach().cpu().numpy()[0].astype(np.int32, copy=False)
-    else:
-        neural_grid = logits.argmax(dim=1).detach().cpu().numpy()[0]  # (16, 11)
+    neural_grid = logits.argmax(dim=1).detach().cpu().numpy()[0]  # (16, 11)
     raw_neural_grid = np.asarray(neural_grid, dtype=np.int32).copy()
     neural_grid, neural_invalid_count, neural_invalid_ids = pipeline._sanitize_semantic_grid(
         neural_grid,

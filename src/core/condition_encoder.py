@@ -1803,6 +1803,9 @@ class DualStreamConditionEncoder(nn.Module):
 def build_boundary_constraints(
     has_neighbor: Dict[str, bool],
     required_door: Dict[str, bool],
+    *,
+    batch_size: Optional[int] = None,
+    device: Optional[torch.device] = None,
 ) -> Tensor:
     """
     Build boundary constraint tensor from neighbor/door info.
@@ -1812,13 +1815,17 @@ def build_boundary_constraints(
         required_door: Dict of {direction: must_have_door}
         
     Returns:
-        [8] tensor: [has_N, req_N, has_S, req_S, has_E, req_E, has_W, req_W]
+        [8] tensor, or [B, 8] when batch_size is provided:
+        [has_N, req_N, has_S, req_S, has_E, req_E, has_W, req_W]
     """
     constraints = []
     for direction in ['N', 'S', 'E', 'W']:
         constraints.append(float(has_neighbor.get(direction, False)))
         constraints.append(float(required_door.get(direction, False)))
-    return torch.tensor(constraints, dtype=torch.float32)
+    tensor = torch.tensor(constraints, dtype=torch.float32, device=device)
+    if batch_size is not None:
+        tensor = tensor.unsqueeze(0).expand(int(batch_size), -1).contiguous()
+    return tensor
 
 
 def graph_to_edge_index(adj_matrix: Tensor) -> Tensor:

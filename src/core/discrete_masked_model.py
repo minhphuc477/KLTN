@@ -794,9 +794,10 @@ class DiscreteMaskedRoomModel(nn.Module):
             device=device,
         )
         logits = self.forward(masked_tokens, step, context, graph_data=graph_data)
-        loss_map = F.cross_entropy(logits, target, reduction="none")
+        ignore_target = target.masked_fill(~train_mask, -100)
+        loss_map = F.cross_entropy(logits, ignore_target, ignore_index=-100, reduction="none")
         denom = train_mask.float().sum().clamp(min=1.0)
-        base_loss = (loss_map * train_mask.float()).sum() / denom
+        base_loss = F.cross_entropy(logits, ignore_target, ignore_index=-100, reduction="sum") / denom
         topology_focus_loss = torch.zeros((), device=device, dtype=base_loss.dtype)
         topology_focus_fraction = torch.zeros((), device=device, dtype=base_loss.dtype)
         topology_focus_map_t = topology_focus_map

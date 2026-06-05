@@ -651,7 +651,7 @@ class ConsistencyLoRATrainer:
             )
             teacher_x0 = torch.clamp(teacher_x0, -1.0, 1.0)
             t0_mask = (t_previous == 0).view(batch_size, *([1] * (z_0.dim() - 1)))
-            teacher_x0 = torch.where(t0_mask, z_0, teacher_x0)
+            teacher_x0 = torch.where(t0_mask, x_previous, teacher_x0)
 
         student_pred = self.student._predict_noise_cfg(x_t, t, conditioning, graph_data=diffusion_graph_data)
         student_x0, _student_noise = self.student._convert_prediction(student_pred, x_t, t)
@@ -841,6 +841,8 @@ class ConsistencyLoRATrainer:
         )
         teacher_x0, _ = self.teacher._convert_prediction(teacher_pred, x_previous, t_previous)
         teacher_x0 = torch.clamp(teacher_x0, -1.0, 1.0)
+        t0_mask = (t_previous == 0).view(batch_size, *([1] * (z_0.dim() - 1)))
+        teacher_x0 = torch.where(t0_mask, x_previous, teacher_x0)
 
         student_pred = self.student._predict_noise_cfg(x_t, t, conditioning, graph_data=diffusion_graph_data)
         student_x0, _ = self.student._convert_prediction(student_pred, x_t, t)
