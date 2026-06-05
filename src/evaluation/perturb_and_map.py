@@ -117,6 +117,7 @@ def _astar(
     return math.inf, []
 
 
+@torch.no_grad()
 def perturb_and_map_reachability(
     walkability: np.ndarray | torch.Tensor | Sequence[Sequence[float]],
     start: GridCoord,

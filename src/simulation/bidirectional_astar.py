@@ -369,7 +369,6 @@ class BidirectionalAStar:
                 g_score=g_score,
                 f_score=f_score,
                 parent=current_node,
-                path=current_node.path + [next_state.position]
             )
             
             heapq.heappush(self.forward_open, (f_score, counter, next_hash, next_node))
@@ -442,7 +441,6 @@ class BidirectionalAStar:
                 g_score=g_score,
                 f_score=f_score,
                 parent=current_node,
-                path=[prev_state.position] + current_node.path
             )
             
             heapq.heappush(self.backward_open, (f_score, counter, prev_hash, prev_node))
@@ -739,19 +737,20 @@ class BidirectionalAStar:
         Returns:
             Complete path from start to goal
         """
-        # Forward path is already in correct order
-        forward_path = forward_node.path
-        
-        # Backward path is already in forward order (meeting_point -> goal)
-        # because backward expansion prepends: [prev_state.position] + current_node.path
-        # So backward_node.path goes: meeting_point -> ... -> goal
-        # Just skip index 0 (meeting_point already in forward_path) to avoid duplication
-        backward_path = backward_node.path[1:]
-        
-        # Concatenate
-        complete_path = forward_path + backward_path
-        
-        return complete_path
+        forward_path: List[Tuple[int, int]] = []
+        node: Optional[SearchNode] = forward_node
+        while node is not None:
+            forward_path.append(node.state.position)
+            node = node.parent
+        forward_path.reverse()
+
+        backward_path: List[Tuple[int, int]] = []
+        node = backward_node
+        while node is not None:
+            backward_path.append(node.state.position)
+            node = node.parent
+
+        return forward_path + backward_path[1:]
 
 
 # ==========================================

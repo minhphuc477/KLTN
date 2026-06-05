@@ -83,7 +83,7 @@ class MaskedRoomTrainingConfig:
         drop_last: bool = True,
         shuffle_train: bool = True,
         shuffle_val: bool = False,
-        normalize: bool = True,
+        normalize: bool = False,
         train_dungeon_ids: Optional[List[int]] = None,
         test_dungeon_ids: Optional[List[int]] = None,
         variants: Optional[List[int]] = None,
@@ -728,9 +728,10 @@ class MaskedRoomTrainer:
             lr=config.learning_rate,
             weight_decay=0.0,
         )
+        estimated_total_steps = int(max(1, int(config.epochs) * 100))
         self.scheduler = optim.lr_scheduler.CosineAnnealingLR(
             self.optimizer,
-            T_max=max(1, config.epochs),
+            T_max=estimated_total_steps,
             eta_min=config.scheduler_eta_min,
         )
         self.global_step = 0
@@ -1587,6 +1588,12 @@ def train_masked_room(config: MaskedRoomTrainingConfig) -> MaskedRoomTrainer:
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     train_loader, val_loader, eval_split_name, train_size, eval_size = _create_masked_room_dataloaders(config)
+    try:
+        exact_total_steps = int(max(1, int(config.epochs) * max(1, len(train_loader))))
+        if hasattr(trainer.scheduler, "T_max"):
+            trainer.scheduler.T_max = exact_total_steps
+    except (TypeError, ValueError):
+        pass
     log_capacity_guardrails(
         logger,
         stage_name="Masked-room trainer",

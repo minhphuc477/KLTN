@@ -1277,19 +1277,26 @@ class DiffusionTrainer:
                 "Skipping Accelerate in torchrun mode; using DistributedSampler plus explicit gradient averaging."
             )
         
-        # Scheduler
-        self.scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
-            self.optimizer,
-            T_0=config.scheduler_t0,
-            T_mult=config.scheduler_t_mult,
-            eta_min=config.scheduler_eta_min,
-        )
-        
         # Metrics tracking
         self.epoch = 0
         self.global_step = 0
         self._accumulation_micro_steps = 0
         self._estimated_total_steps = self._default_estimated_total_steps()
+        estimated_steps_per_epoch = max(1, int(math.ceil(
+            self._estimated_total_steps / float(max(1, int(getattr(config, "epochs", 1))))
+        )))
+        scheduler_t0 = int(max(1, int(getattr(config, "scheduler_t0", 1))))
+        if scheduler_t0 <= int(max(1, int(getattr(config, "epochs", 1)))):
+            scheduler_t0 *= estimated_steps_per_epoch
+
+        # Scheduler periods are optimizer-step counts; epoch-scale config values
+        # are expanded to preserve backward-compatible stage definitions.
+        self.scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
+            self.optimizer,
+            T_0=max(1, scheduler_t0),
+            T_mult=config.scheduler_t_mult,
+            eta_min=config.scheduler_eta_min,
+        )
         self._apply_lr_warmup(completed_steps=0)
         
         # --- Phase 4A: EMA model weights ---
@@ -4534,4 +4541,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-

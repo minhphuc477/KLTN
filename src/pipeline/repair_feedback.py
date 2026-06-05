@@ -140,6 +140,7 @@ def build_latent_edit_mask(
     return torch.clamp(resized, 0.0, 1.0)
 
 
+@torch.no_grad()
 def logicnet_guided_inpaint_room(
     current_grid: np.ndarray,
     dead_end_mask: np.ndarray,
