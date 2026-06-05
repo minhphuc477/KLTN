@@ -967,6 +967,22 @@ class TestIntegration:
 
         assert cbs._count_backtrack_loops(path) == 1
 
+    def test_linearity_ratio_uses_diagonal_lower_bound_when_diagonals_allowed(self, simple_grid):
+        """Diagonal movement should not produce mathematically impossible ratios below 1."""
+        env = ZeldaLogicEnv(semantic_grid=simple_grid)
+        env.allow_diagonals = True
+        cbs = CognitiveBoundedSearch(env, persona=AgentPersona.BALANCED)
+        path = [(i, i) for i in range(1, 9)]
+
+        assert cbs._compute_linearity_ratio(path) == pytest.approx(1.0)
+
+    def test_confusion_events_ignore_consecutive_idle_repeats(self, simple_grid):
+        """Standing still for repeated ticks is idle time, not loop confusion."""
+        env = ZeldaLogicEnv(semantic_grid=simple_grid)
+        cbs = CognitiveBoundedSearch(env, persona=AgentPersona.BALANCED)
+
+        assert cbs._count_confusion_events([(1, 1)] * 6) == 0
+
 
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

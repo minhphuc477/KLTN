@@ -3853,10 +3853,14 @@ class CognitiveBoundedSearch:
         """Agent path length divided by a robust lower bound on optimal length."""
         if not path or self.env.start_pos is None or self.env.goal_pos is None:
             return 0.0
-        manhattan = abs(int(self.env.start_pos[0]) - int(self.env.goal_pos[0])) + abs(
-            int(self.env.start_pos[1]) - int(self.env.goal_pos[1])
+        dr = abs(int(self.env.start_pos[0]) - int(self.env.goal_pos[0]))
+        dc = abs(int(self.env.start_pos[1]) - int(self.env.goal_pos[1]))
+        allow_diagonals = bool(
+            getattr(self.env, "allow_diagonals", False)
+            or getattr(getattr(self.env, "solver_options", None), "allow_diagonals", False)
         )
-        lower_bound = max(1, int(manhattan) + 1)
+        lower_distance = max(dr, dc) if allow_diagonals else (dr + dc)
+        lower_bound = max(1, int(lower_distance) + 1)
         return float(len(path)) / float(lower_bound)
     
     def _count_replans(self, path: List[Tuple[int, int]]) -> int:
@@ -3876,9 +3880,14 @@ class CognitiveBoundedSearch:
         return replans
     
     def _count_confusion_events(self, path: List[Tuple[int, int]]) -> int:
-        """Count tiles visited more than 2 times (confusion)."""
+        """Count non-idle tile revisits more than twice."""
         visit_counts = defaultdict(int)
+        compressed_path: List[Tuple[int, int]] = []
         for pos in path:
+            if compressed_path and tuple(pos) == compressed_path[-1]:
+                continue
+            compressed_path.append(tuple(pos))
+        for pos in compressed_path:
             visit_counts[pos] += 1
         
         return sum(1 for count in visit_counts.values() if count > 2)

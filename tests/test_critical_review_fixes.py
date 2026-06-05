@@ -293,3 +293,61 @@ def test_structural_dead_ends_exclude_canonical_start_and_goal():
     metrics = analyze_structural_topology(graph)
 
     assert metrics.dead_end_ratio == 0.0
+
+
+def test_structural_branching_factor_averages_all_non_terminal_nodes():
+    from src.evaluation.structural_metrics import compute_branching_factor
+
+    graph = nx.DiGraph()
+    graph.add_node(0, label="start")
+    graph.add_node(6, label="goal")
+    graph.add_edges_from([(0, 1), (1, 2), (2, 3), (3, 4), (4, 5), (5, 6), (5, 7)])
+
+    branching = compute_branching_factor(graph)
+
+    assert 0.0 < branching < 2.0
+
+
+def test_perturb_and_map_astar_uses_min_cost_admissible_heuristic():
+    from src.evaluation.perturb_and_map import _astar
+
+    costs = np.asarray(
+        [
+            [0.0, 100.0, 0.0001],
+            [0.0001, 0.0001, 0.0001],
+        ],
+        dtype=np.float32,
+    )
+    path = _astar(
+        costs,
+        np.ones_like(costs, dtype=bool),
+        start=(0, 0),
+        goal=(0, 2),
+        min_step_cost=0.0001,
+    )
+
+    assert path is not None
+    assert (1, 1) in path
+    assert (0, 1) not in path
+
+
+def test_skill_chain_validator_accepts_valid_longer_path_not_only_shortest():
+    from src.generation.grammar.graph_types import EdgeType, MissionGraph, MissionNode, NodeType
+    from src.generation.grammar_validators import validate_skill_chains
+
+    graph = MissionGraph()
+    for node in [
+        MissionNode(0, NodeType.ITEM),
+        MissionNode(1, NodeType.TUTORIAL_PUZZLE, is_tutorial=True, difficulty=0.1),
+        MissionNode(2, NodeType.GOAL),
+        MissionNode(3, NodeType.COMBAT_PUZZLE, difficulty=0.4),
+        MissionNode(4, NodeType.COMPLEX_PUZZLE, difficulty=0.8),
+    ]:
+        graph.add_node(node)
+    graph.add_edge(0, 1, EdgeType.PATH)
+    graph.add_edge(1, 2, EdgeType.PATH)
+    graph.add_edge(1, 3, EdgeType.PATH)
+    graph.add_edge(3, 4, EdgeType.PATH)
+    graph.add_edge(4, 2, EdgeType.PATH)
+
+    assert validate_skill_chains(graph)

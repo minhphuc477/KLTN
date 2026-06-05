@@ -472,39 +472,47 @@ class BidirectionalAStar:
             
             # Check inventory compatibility
             if is_forward:
-                # Forward node should have <= inventory of backward node
+                # Approximate frontier splicing is only sound when both sides
+                # agree on consumed inventory and persistent world-state sets.
+                # A backward frontier initialized with surplus keys must not
+                # certify that the forward path can cross a locked door.
                 inventory_compatible = (
-                    node.state.keys <= other_node.state.keys and
-                    node.state.bomb_count <= other_node.state.bomb_count and
-                    (other_node.state.has_boss_key or not node.state.has_boss_key) and
-                    (other_node.state.has_item or not node.state.has_item)
+                    node.state.keys == other_node.state.keys and
+                    node.state.bomb_count == other_node.state.bomb_count and
+                    node.state.has_boss_key == other_node.state.has_boss_key and
+                    node.state.has_item == other_node.state.has_item
                 )
                 
                 # CRITICAL: Check state sets compatibility
                 # Forward opened_doors must be a subset of backward opened_doors
                 # Forward collected_items must be a subset of backward collected_items
                 state_sets_compatible = (
-                    node.state.opened_doors.issubset(other_node.state.opened_doors) and
-                    node.state.collected_items.issubset(other_node.state.collected_items)
+                    node.state.opened_doors == other_node.state.opened_doors and
+                    node.state.collected_items == other_node.state.collected_items and
+                    node.state.defeated_enemies == other_node.state.defeated_enemies and
+                    node.state.completed_puzzle_stages == other_node.state.completed_puzzle_stages and
+                    node.state.pushed_blocks == other_node.state.pushed_blocks
                 )
                 
                 if inventory_compatible and state_sets_compatible:
                     return other_node
             else:
-                # Backward node should have >= inventory of forward node
                 inventory_compatible = (
-                    node.state.keys >= other_node.state.keys and
-                    node.state.bomb_count >= other_node.state.bomb_count and
-                    (node.state.has_boss_key or not other_node.state.has_boss_key) and
-                    (node.state.has_item or not other_node.state.has_item)
+                    node.state.keys == other_node.state.keys and
+                    node.state.bomb_count == other_node.state.bomb_count and
+                    node.state.has_boss_key == other_node.state.has_boss_key and
+                    node.state.has_item == other_node.state.has_item
                 )
                 
                 # CRITICAL: Check state sets compatibility (reversed)
                 # Backward opened_doors must be a superset of forward opened_doors
                 # Backward collected_items must be a superset of forward collected_items
                 state_sets_compatible = (
-                    node.state.opened_doors.issuperset(other_node.state.opened_doors) and
-                    node.state.collected_items.issuperset(other_node.state.collected_items)
+                    node.state.opened_doors == other_node.state.opened_doors and
+                    node.state.collected_items == other_node.state.collected_items and
+                    node.state.defeated_enemies == other_node.state.defeated_enemies and
+                    node.state.completed_puzzle_stages == other_node.state.completed_puzzle_stages and
+                    node.state.pushed_blocks == other_node.state.pushed_blocks
                 )
                 
                 if inventory_compatible and state_sets_compatible:
@@ -692,23 +700,28 @@ class BidirectionalAStar:
         
         return True, prev_state
     
+    def _grid_distance(self, a: Tuple[int, int], b: Tuple[int, int]) -> float:
+        dr = abs(int(a[0]) - int(b[0]))
+        dc = abs(int(a[1]) - int(b[1]))
+        if self.allow_diagonals:
+            diagonal = min(dr, dc)
+            straight = max(dr, dc) - diagonal
+            return float((1.414 * diagonal) + straight)
+        return float(dr + dc)
+
     def _heuristic_forward(self, state: GameState) -> float:
-        """Manhattan distance to goal."""
+        """Admissible distance to goal."""
         if self.env.goal_pos is None:
             return float('inf')
         
-        pos = state.position
-        goal = self.env.goal_pos
-        return abs(pos[0] - goal[0]) + abs(pos[1] - goal[1])
+        return self._grid_distance(state.position, self.env.goal_pos)
     
     def _heuristic_backward(self, state: GameState) -> float:
-        """Manhattan distance to start."""
+        """Admissible distance to start."""
         if self.env.start_pos is None:
             return float('inf')
         
-        pos = state.position
-        start = self.env.start_pos
-        return abs(pos[0] - start[0]) + abs(pos[1] - start[1])
+        return self._grid_distance(state.position, self.env.start_pos)
     
     def _reconstruct_path(self, forward_node: SearchNode, 
                          backward_node: SearchNode) -> List[Tuple[int, int]]:

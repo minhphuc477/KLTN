@@ -76,32 +76,28 @@ def validate_skill_chains(graph: Any) -> bool:
             )
             return False
 
-        candidate_paths.sort(key=len)
-        path = candidate_paths[0]
-        path_nodes = [graph.get_node(node_id) for node_id in path[1:]]
-        combat_node = next(
-            (node for node in path_nodes if getattr(getattr(node, "node_type", None), "name", "") == "COMBAT_PUZZLE"),
-            None,
-        )
-        complex_node = next(
-            (node for node in path_nodes if getattr(getattr(node, "node_type", None), "name", "") == "COMPLEX_PUZZLE"),
-            None,
-        )
-        if combat_node is None or complex_node is None:
-            logger.warning(
-                "Tutorial node %s does not lead to COMBAT_PUZZLE -> COMPLEX_PUZZLE in order",
-                tutorial.id,
+        valid_chain_found = False
+        for path in sorted(candidate_paths, key=len):
+            path_nodes = [graph.get_node(node_id) for node_id in path[1:]]
+            combat_node = next(
+                (node for node in path_nodes if getattr(getattr(node, "node_type", None), "name", "") == "COMBAT_PUZZLE"),
+                None,
             )
-            return False
-        if path.index(combat_node.id) >= path.index(complex_node.id):
-            logger.warning(
-                "Skill chain from %s has improper pedagogical ordering",
-                tutorial.id,
+            complex_node = next(
+                (node for node in path_nodes if getattr(getattr(node, "node_type", None), "name", "") == "COMPLEX_PUZZLE"),
+                None,
             )
-            return False
-        if combat_node.difficulty > complex_node.difficulty:
+            if combat_node is None or complex_node is None:
+                continue
+            if path.index(combat_node.id) >= path.index(complex_node.id):
+                continue
+            if combat_node.difficulty > complex_node.difficulty:
+                continue
+            valid_chain_found = True
+            break
+        if not valid_chain_found:
             logger.warning(
-                "Skill chain from %s has improper difficulty progression",
+                "Tutorial node %s does not lead to a valid COMBAT_PUZZLE -> COMPLEX_PUZZLE skill chain",
                 tutorial.id,
             )
             return False

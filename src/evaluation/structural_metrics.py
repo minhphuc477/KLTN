@@ -51,7 +51,7 @@ def compute_cyclomatic_complexity(mission_graph: nx.Graph) -> float:
 
 
 def compute_branching_factor(mission_graph: nx.Graph) -> float:
-    """Compute average branching among non-terminal nodes."""
+    """Compute average outgoing connectivity over non-terminal graph nodes."""
     if mission_graph is None or mission_graph.number_of_nodes() <= 0:
         return 0.0
 
@@ -59,13 +59,13 @@ def compute_branching_factor(mission_graph: nx.Graph) -> float:
         branch_degrees = [
             float(mission_graph.out_degree(n))
             for n in mission_graph.nodes()
-            if int(mission_graph.out_degree(n)) > 1
+            if _node_role(mission_graph, n) != "goal"
         ]
     else:
         branch_degrees = [
             float(mission_graph.degree(n))
             for n in mission_graph.nodes()
-            if int(mission_graph.degree(n)) > 1
+            if _node_role(mission_graph, n) not in {"start", "goal"}
         ]
 
     if not branch_degrees:

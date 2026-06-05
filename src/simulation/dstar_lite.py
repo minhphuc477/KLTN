@@ -117,13 +117,19 @@ class DStarLiteSolver:
         return DStarKey(k1=min_val + h, k2=min_val, state_hash=state_hash, state=state)
     
     def _heuristic(self, state: GameState) -> float:
-        """Manhattan distance heuristic."""
+        """Admissible grid-distance heuristic for the configured move set."""
         if self.env.goal_pos is None:
             return float('inf')
         
         pos = state.position
         goal = self.env.goal_pos
-        return abs(pos[0] - goal[0]) + abs(pos[1] - goal[1])
+        dr = abs(pos[0] - goal[0])
+        dc = abs(pos[1] - goal[1])
+        if self.allow_diagonals:
+            diagonal = min(dr, dc)
+            straight = max(dr, dc) - diagonal
+            return float((1.414 * diagonal) + straight)
+        return float(dr + dc)
     
     def update_vertex(self, state: GameState, state_hash: int):
         """
@@ -148,25 +154,22 @@ class DStarLiteSolver:
                 if not (0 <= pred_r < self.env.height and 0 <= pred_c < self.env.width):
                     continue
                 
-                # Create a hypothetical predecessor state at pred_pos
-                # CRITICAL: We need to check if moving from pred_pos to state.position is valid
-                # Create predecessor with same inventory as current state (assumption)
-                pred_state = state.copy()
-                pred_state.position = (pred_r, pred_c)
-                
-                # Check if this predecessor can actually reach current state
-                # by attempting the forward move
                 target_tile = self.env.grid[state.position[0], state.position[1]]
-                can_reach, _ = self.env._try_move_pure(pred_state, state.position, target_tile)
-                
-                if not can_reach:
-                    continue
-                
-                pred_hash = game_state_key(pred_state)
-                pred_g = self.g_scores.get(pred_hash, float('inf'))
-                if pred_g < float('inf'):
-                    cost = self._get_edge_cost(pred_state, state)
-                    min_rhs = min(min_rhs, pred_g + cost)
+                predecessor_candidates = self._predecessor_state_candidates(
+                    state,
+                    pred_pos=(pred_r, pred_c),
+                    target_tile=int(target_tile),
+                )
+                for pred_state in predecessor_candidates:
+                    can_reach, _ = self.env._try_move_pure(pred_state, state.position, target_tile)
+                    if not can_reach:
+                        continue
+
+                    pred_hash = game_state_key(pred_state)
+                    pred_g = self.g_scores.get(pred_hash, float('inf'))
+                    if pred_g < float('inf'):
+                        cost = self._get_edge_cost(pred_state, state)
+                        min_rhs = min(min_rhs, pred_g + cost)
             
             self.rhs_scores[state_hash] = min_rhs
         
@@ -184,6 +187,33 @@ class DStarLiteSolver:
             heapq.heappush(self.open_set, key)
             self.open_set_hashes.add(state_hash)
             self.states_updated += 1
+
+    def _predecessor_state_candidates(
+        self,
+        state: GameState,
+        *,
+        pred_pos: Tuple[int, int],
+        target_tile: int,
+    ) -> List[GameState]:
+        """Return plausible predecessor inventories for a transition into state."""
+        base = state.copy()
+        base.position = pred_pos
+        candidates = [base]
+
+        target_pos = tuple(state.position)
+        if target_pos in base.opened_doors and target_tile in {
+            int(SEMANTIC_PALETTE['DOOR_LOCKED']),
+            int(SEMANTIC_PALETTE['DOOR_BOMB']),
+        }:
+            restored = base.copy()
+            restored.opened_doors = set(restored.opened_doors) - {target_pos}
+            if target_tile == int(SEMANTIC_PALETTE['DOOR_LOCKED']):
+                restored.keys = int(restored.keys) + 1
+            elif target_tile == int(SEMANTIC_PALETTE['DOOR_BOMB']):
+                restored.bomb_count = int(restored.bomb_count) + 1
+            candidates.append(restored)
+
+        return candidates
     
     def compute_shortest_path(self) -> bool:
         """

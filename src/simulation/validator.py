@@ -2386,6 +2386,11 @@ class StateSpaceAStar:
         if not (G and r2n and rpos and goal and start):
             return False, [], 0
 
+        if self.strict_original_mode:
+            soft_door_id = int(SEMANTIC_PALETTE['DOOR_SOFT'])
+            if bool(np.any(self.env.grid == soft_door_id)):
+                return False, [], 0
+
         # Determine start/goal nodes
         start_node = None
         goal_node = None

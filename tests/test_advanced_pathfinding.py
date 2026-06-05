@@ -14,10 +14,10 @@ import logging
 from typing import Tuple
 
 from src.core.definitions import SEMANTIC_PALETTE
-from src.simulation.validator import ZeldaLogicEnv, SolverOptions
+from src.simulation.validator import GameState, ZeldaLogicEnv, SolverOptions
 from src.simulation.dstar_lite import DStarLiteSolver
 from src.simulation.state_space_dfs import StateSpaceDFS
-from src.simulation.bidirectional_astar import BidirectionalAStar
+from src.simulation.bidirectional_astar import BidirectionalAStar, SearchNode
 from src.simulation.validator import StateSpaceAStar  # Baseline
 
 logging.basicConfig(level=logging.INFO)

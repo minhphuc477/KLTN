@@ -69,13 +69,25 @@ def _neighbors(row: int, col: int, height: int, width: int) -> Iterable[GridCoor
         yield row, col + 1
 
 
-def _astar(costs: np.ndarray, traversable: np.ndarray, start: GridCoord, goal: GridCoord) -> Tuple[float, List[GridCoord]]:
+def _astar(
+    costs: np.ndarray,
+    traversable: np.ndarray,
+    start: GridCoord,
+    goal: GridCoord,
+    *,
+    min_step_cost: Optional[float] = None,
+) -> Tuple[float, List[GridCoord]]:
     height, width = costs.shape
     if not traversable[start] or not traversable[goal]:
         return math.inf, []
 
+    if min_step_cost is None:
+        finite_costs = costs[np.isfinite(costs) & traversable]
+        min_step_cost = float(np.min(finite_costs)) if finite_costs.size > 0 else 0.0
+    min_step_cost = float(max(0.0, min_step_cost))
+
     def heuristic(node: GridCoord) -> float:
-        return float(abs(node[0] - goal[0]) + abs(node[1] - goal[1]))
+        return float(abs(node[0] - goal[0]) + abs(node[1] - goal[1])) * min_step_cost
 
     frontier: List[Tuple[float, float, GridCoord]] = [(heuristic(start), 0.0, start)]
     came_from: dict[GridCoord, Optional[GridCoord]] = {start: None}
@@ -150,7 +162,9 @@ def perturb_and_map_reachability(
             sample_cost = np.maximum(base_cost + perturbation, 1e-4)
         else:
             sample_cost = base_cost
-        cost, path = _astar(sample_cost, traversable, start, goal)
+        traversable_costs = sample_cost[traversable]
+        min_step_cost = float(np.min(traversable_costs)) if traversable_costs.size > 0 else 0.0
+        cost, path = _astar(sample_cost, traversable, start, goal, min_step_cost=min_step_cost)
         if math.isfinite(cost):
             costs.append(float(cost))
             for row, col in path:
@@ -164,4 +178,3 @@ def perturb_and_map_reachability(
         num_samples=sample_count,
         path_frequency=path_counts / float(sample_count),
     )
-

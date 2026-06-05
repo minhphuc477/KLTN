@@ -145,6 +145,12 @@ def load_vqvae(pipeline, checkpoint_path: Optional[str]) -> torch.nn.Module:
                     unexpected_missing,
                     unexpected,
                 )
+        elif isinstance(checkpoint, dict):
+            logger.warning(
+                "VQ-VAE checkpoint %s does not contain a loadable VQ-VAE state; "
+                "leaving the VQ-VAE randomly initialized.",
+                checkpoint_path,
+            )
         else:
             model.load_state_dict(checkpoint)
         logger.info(f"Loaded VQ-VAE from {checkpoint_path}")
