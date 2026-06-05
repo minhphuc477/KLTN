@@ -580,8 +580,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\scripts\\run_ablation_study.py": {
-    "mtime": 1780665780.375985,
-    "ast_hash": "e6915147b6dc92ac6bdff2bfe18af2c2",
+    "mtime": 1780676329.9026723,
+    "ast_hash": "2406499f29187efc605ac4cf16af7bf5",
     "semantic_hash": ""
   },
   "F:\\KLTN\\scripts\\run_baseline_comparison.py": {
@@ -880,8 +880,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\config_system.py": {
-    "mtime": 1780665384.1110826,
-    "ast_hash": "158b4c9e510354b84191888fccd0dbdb",
+    "mtime": 1780676273.1266246,
+    "ast_hash": "c53926fc8f1b5445a08fb18a2266cdbc",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\constants\\__init__.py": {
@@ -930,8 +930,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\core\\latent_diffusion.py": {
-    "mtime": 1780665494.6362383,
-    "ast_hash": "99015b68c017ee9e47cab3db615a2f98",
+    "mtime": 1780676657.0995543,
+    "ast_hash": "71a749bdf6884cef7e20e70c16fad490",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\core\\logic_net.py": {
@@ -2420,8 +2420,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\pipeline\\runtime.py": {
-    "mtime": 1780665442.9662776,
-    "ast_hash": "ca404f5b807a4d9ad8b512978547e5dd",
+    "mtime": 1780676298.203554,
+    "ast_hash": "578f03f08072f32977ec2b920b0191c1",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\pipeline\\spatial_utils.py": {
@@ -2565,8 +2565,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\train_diffusion.py": {
-    "mtime": 1780665451.5106163,
-    "ast_hash": "e90928aed15b3adb801625a42997c24d",
+    "mtime": 1780676668.9273934,
+    "ast_hash": "5374e9283bbb1485d84d47fc9009818d",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\train_gaussian_vae.py": {
@@ -2955,8 +2955,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_block_integration.py": {
-    "mtime": 1780665552.7883747,
-    "ast_hash": "878eb373df1bf4c45d8f0a3e570ad491",
+    "mtime": 1780676387.4278388,
+    "ast_hash": "e2c202275c09f6c9f6d147848d6e442e",
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_cbs_full.py": {
@@ -2990,8 +2990,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_config_system.py": {
-    "mtime": 1780665543.8662515,
-    "ast_hash": "14f627244f7d637510a488bf02f8365b",
+    "mtime": 1780676376.382584,
+    "ast_hash": "8ec6f97116f2a05013df0f9b9c856338",
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_critical_review_fixes.py": {
@@ -3540,8 +3540,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_protocol_reporting.py": {
-    "mtime": 1780665790.2804694,
-    "ast_hash": "5430498311d442b47c99ebf31b76fb70",
+    "mtime": 1780676396.5771365,
+    "ast_hash": "90b779c786e3356062220689a86ca5ec",
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_puzzle_stage_semantics.py": {
@@ -3910,8 +3910,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\configs\\zelda_hmolqd.yaml": {
-    "mtime": 1780665457.8604138,
-    "ast_hash": "24cfd790f9d821352c5b6d943b5a1aef",
+    "mtime": 1780676306.8155384,
+    "ast_hash": "6c62e37a1b0ec58464b829098f2ab003",
     "semantic_hash": ""
   },
   "F:\\KLTN\\configs\\zelda_hmolqd_masked_small.yaml": {
@@ -5225,8 +5225,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_advanced_architecture_ablations.py": {
-    "mtime": 1780665512.2907586,
-    "ast_hash": "72bcba8f71a16d12a4c96e34cac0a60c",
+    "mtime": 1780676354.9990034,
+    "ast_hash": "b13e0bac8f3a3811b72ef74fd1f7a7e4",
     "semantic_hash": ""
   },
   "F:\\KLTN\\configs\\ablation_flow_matching.yaml": {

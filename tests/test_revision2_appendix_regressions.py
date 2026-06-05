@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 import torch
 
 from src.config_system import merge_config
@@ -42,6 +43,34 @@ def test_weighted_wfc_zero_support_is_a_contradiction_not_a_prior_reset():
 
     assert not wfc._propagate_constraints(0, 0, 1)
     assert wfc.get_diagnostics()["zero_prob_resets"] == 0
+
+
+def test_weighted_wfc_log_space_update_avoids_soft_probability_underflow():
+    tiny = 10**12
+    priors = {
+        1: TilePrior(
+            tile_id=1,
+            frequency=0.5,
+            adjacency_counts={(1, "E"): 1, (999, "E"): tiny},
+        ),
+        2: TilePrior(
+            tile_id=2,
+            frequency=0.5,
+            adjacency_counts={},
+        ),
+    }
+    wfc = WeightedBayesianWFC(
+        width=2,
+        height=1,
+        tile_priors=priors,
+        config=WeightedBayesianWFCConfig(adjacency_weight=8.0),
+    )
+    wfc._collapse_cell(0, 0, 1)
+
+    assert wfc._propagate_constraints(0, 0, 1)
+    assert np.isfinite(wfc.superposition[0, 1, :]).all()
+    assert wfc.superposition[0, 1, 0] == pytest.approx(1.0)
+    assert wfc.superposition[0, 1, 1] == pytest.approx(0.0)
 
 
 def test_causal_wfc_backtrack_rebuilds_lock_state_and_bans_failed_tile():

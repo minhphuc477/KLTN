@@ -26,6 +26,59 @@ from src.generation.grammar_validators import (
 
 logger = logging.getLogger(__name__)
 
+
+def _layout_bounds(context: Dict[str, Any]) -> Tuple[int, int, int, int]:
+    """Return inclusive row/col bounds for grammar placement."""
+    raw = context.get("layout_bounds")
+    if isinstance(raw, (list, tuple)) and len(raw) == 4:
+        return tuple(int(v) for v in raw)  # type: ignore[return-value]
+    return (
+        int(context.get("min_layout_row", -32)),
+        int(context.get("max_layout_row", 32)),
+        int(context.get("min_layout_col", -32)),
+        int(context.get("max_layout_col", 32)),
+    )
+
+
+def _bounded_free_position(
+    graph: MissionGraph,
+    anchor_pos: Tuple[int, ...],
+    offsets: List[Tuple[int, int]],
+    rng: Any,
+    context: Dict[str, Any],
+) -> Tuple[int, int, int]:
+    """Choose a relative, in-bounds, unoccupied position near an anchor."""
+    floor = int(anchor_pos[2]) if len(anchor_pos) > 2 else 0
+    min_r, max_r, min_c, max_c = _layout_bounds(context)
+    occupied = {
+        (int(node.position[0]), int(node.position[1]), int(node.position[2]) if len(node.position) > 2 else 0)
+        for node in graph.nodes.values()
+    }
+    shuffled = list(offsets)
+    rng.shuffle(shuffled)
+    for dr, dc in shuffled:
+        row = max(min_r, min(max_r, int(anchor_pos[0]) + int(dr)))
+        col = max(min_c, min(max_c, int(anchor_pos[1]) + int(dc)))
+        candidate = (row, col, floor)
+        if candidate not in occupied:
+            return candidate
+
+    # Deterministic expanding fallback: still relative to the anchor and bounded.
+    for radius in range(1, 8):
+        for dr in range(-radius, radius + 1):
+            for dc in range(-radius, radius + 1):
+                row = max(min_r, min(max_r, int(anchor_pos[0]) + dr))
+                col = max(min_c, min(max_c, int(anchor_pos[1]) + dc))
+                candidate = (row, col, floor)
+                if candidate not in occupied:
+                    return candidate
+    return (
+        max(min_r, min(max_r, int(anchor_pos[0]))),
+        max(min_c, min(max_c, int(anchor_pos[1]))),
+        floor,
+    )
+
+
 class MergeRule(ProductionRule):
     """
     THESIS UPGRADE #1: Create shortcuts by merging two separate branches.
@@ -729,15 +782,20 @@ class AddSecretRule(ProductionRule):
         anchor_node = rng.choice(candidates)
         anchor_pos = anchor_node.position
         floor = anchor_pos[2] if len(anchor_pos) > 2 else 0
+        secret_pos = _bounded_free_position(
+            graph,
+            anchor_pos,
+            [(-1, 2), (0, 2), (1, 2), (-1, 3), (0, 3), (1, 3), (2, 1), (-2, 1)],
+            rng,
+            context,
+        )
         
         # Create secret room
         secret_id = max(graph.nodes.keys()) + 1
         secret_node = MissionNode(
             id=secret_id,
             node_type=NodeType.SECRET,
-            position=(anchor_pos[0] + rng.randint(-1, 1), 
-                     anchor_pos[1] + rng.randint(2, 3),
-                     floor),
+            position=secret_pos,
             difficulty=context.get('difficulty', 0.5) * 0.6,
             is_secret=True,
         )
@@ -755,6 +813,13 @@ class AddSecretRule(ProductionRule):
         
         # Add reward in secret room. Bonus small keys are only allowed when the
         # graph is actually key-starved; otherwise prefer treasure/items.
+        reward_pos = _bounded_free_position(
+            graph,
+            secret_node.position,
+            [(1, 0), (0, 1), (-1, 0), (0, -1), (1, 1), (-1, 1)],
+            rng,
+            context,
+        )
         reward_id = max(graph.nodes.keys()) + 1
         reward_node = MissionNode(
             id=reward_id,
@@ -765,7 +830,7 @@ class AddSecretRule(ProductionRule):
                     include_protection_item=True,
                 )
             ),
-            position=(secret_node.position[0] + 1, secret_node.position[1], floor),
+            position=reward_pos,
             difficulty=context.get('difficulty', 0.5) * 0.4,
         )
         graph.add_node(reward_node)
@@ -1253,6 +1318,24 @@ class AddValveRule(ProductionRule):
             pairs.add((a, b))
             pairs.add((b, a))
         return pairs
+
+    def _has_free_return_path_after_valve(self, graph: MissionGraph, edge: MissionEdge) -> bool:
+        """Ensure the one-way drop has an ungated loop back to its source."""
+        allowed = {
+            EdgeType.PATH,
+            EdgeType.SHORTCUT,
+            EdgeType.WARP,
+            EdgeType.STAIRS,
+            EdgeType.HIDDEN,
+        }
+        adjacency: Dict[int, List[int]] = defaultdict(list)
+        for other in graph.edges:
+            if other is edge or other.edge_type not in allowed:
+                continue
+            adjacency[other.source].append(other.target)
+            if other.edge_type in graph.BIDIRECTIONAL_EDGE_TYPES:
+                adjacency[other.target].append(other.source)
+        return self._bfs_path(adjacency, edge.target, edge.source) is not None
     
     def can_apply(self, graph: MissionGraph, context: Dict[str, Any]) -> bool:
         """Can apply if there are cycles in the graph."""
@@ -1304,6 +1387,8 @@ class AddValveRule(ProductionRule):
                         or (edge.source == tgt and edge.target == src)
                     ):
                         continue
+                    if not self._has_free_return_path_after_valve(graph, edge):
+                        continue
                     seen_edge_ids.add(idx)
                     candidate = (idx, edge)
                     all_candidates.append(candidate)
@@ -1324,7 +1409,6 @@ class AddValveRule(ProductionRule):
                 chosen = rng.choice(noncritical_candidates)
                 break
             if all_candidates and chosen is None:
-                # Fallback only when no safe/non-critical candidate exists.
                 chosen = rng.choice(all_candidates)
 
         if chosen is None:

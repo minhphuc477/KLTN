@@ -668,7 +668,7 @@ def test_wfc_pseudo_label_loss_is_opt_in_and_backpropagates():
     assert pred_tile_logits.grad.abs().sum().item() > 0.0
 
 
-def test_wfc_pseudo_label_loss_scales_subset_by_full_batch(monkeypatch):
+def test_wfc_pseudo_label_loss_scales_subset_by_repaired_samples(monkeypatch):
     trainer = DiffusionTrainer.__new__(DiffusionTrainer)
     trainer.device = torch.device("cpu")
     trainer.global_step = 0
@@ -694,7 +694,7 @@ def test_wfc_pseudo_label_loss_scales_subset_by_full_batch(monkeypatch):
     )
 
     assert sample_count == pytest.approx(1.0)
-    assert scaled_loss.item() == pytest.approx(repaired_mean.item() / 4.0)
+    assert scaled_loss.item() == pytest.approx(repaired_mean.item())
 
 
 def test_diffusion_adamw_groups_exclude_bias_and_norm_from_weight_decay():
@@ -1946,6 +1946,49 @@ def test_load_checkpoint_strips_legacy_embedded_guidance_logicnet_state(tmp_path
     assert trainer.diffusion.guidance.logic_net is trainer.logic_net
     assert trainer.ema_diffusion.guidance.logic_net is trainer.logic_net
     assert "logic_net" not in trainer.diffusion.guidance._modules
+
+
+def test_load_checkpoint_without_ema_state_initializes_ema_from_diffusion(tmp_path):
+    class _TinyDiffusion(torch.nn.Module):
+        def __init__(self, value: float):
+            super().__init__()
+            self.core = torch.nn.Linear(2, 2)
+            self.guidance = torch.nn.Module()
+            with torch.no_grad():
+                self.core.weight.fill_(float(value))
+                self.core.bias.fill_(float(value))
+
+    trainer = DiffusionTrainer.__new__(DiffusionTrainer)
+    trainer.device = torch.device("cpu")
+    trainer.config = SimpleNamespace()
+    trainer.diffusion = _TinyDiffusion(2.0)
+    trainer.ema_diffusion = _TinyDiffusion(-5.0)
+    trainer.condition_encoder = torch.nn.Linear(2, 2)
+    trainer.logic_net = torch.nn.Linear(2, 2)
+    trainer.optimizer = torch.optim.SGD(
+        list(trainer.diffusion.parameters())
+        + list(trainer.condition_encoder.parameters())
+        + list(trainer.logic_net.parameters()),
+        lr=1e-3,
+    )
+    trainer.scheduler = SimpleNamespace(load_state_dict=lambda _state: None)
+
+    path = tmp_path / "missing_ema_checkpoint.pth"
+    torch.save(
+        {
+            "epoch": 3,
+            "global_step": 19,
+            "diffusion_state_dict": trainer.diffusion.state_dict(),
+            "condition_encoder_state_dict": trainer.condition_encoder.state_dict(),
+            "logic_net_state_dict": trainer.logic_net.state_dict(),
+        },
+        path,
+    )
+
+    DiffusionTrainer.load_checkpoint(trainer, str(path))
+
+    for ema_param, diffusion_param in zip(trainer.ema_diffusion.parameters(), trainer.diffusion.parameters()):
+        assert torch.allclose(ema_param, diffusion_param)
 
 
 def test_safetensors_sidecar_round_trips_inference_weights_without_optimizer(tmp_path):

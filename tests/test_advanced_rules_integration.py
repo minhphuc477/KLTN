@@ -15,6 +15,7 @@ Or standalone:
 # pyright: reportPrivateUsage=false
 
 import sys
+import random
 from pathlib import Path
 
 # Add parent directory to path for imports
@@ -24,6 +25,7 @@ from typing import List, Dict
 
 from src.generation.grammar import (
     AddBossGauntlet,
+    AddSecretRule,
     AddValveRule,
     MissionEdge,
     MissionGraph,
@@ -532,8 +534,6 @@ class TestRuleConstraints:
     
     def test_add_valve_rule_preserves_string_node_ids(self):
         """Valve insertion should not require integer-coercible node IDs."""
-        import random
-
         graph = MissionGraph()
         graph.add_node(MissionNode(id="start", node_type=NodeType.START, position=(0, 0, 0)))
         graph.add_node(MissionNode(id="a", node_type=NodeType.EMPTY, position=(1, 0, 0)))
@@ -556,6 +556,56 @@ class TestRuleConstraints:
         valve = one_way_edges[0]
         assert valve.target in updated._adjacency.get(valve.source, [])
         assert valve.source not in updated._adjacency.get(valve.target, [])
+
+    def test_add_valve_rule_rejects_gated_return_loop(self):
+        graph = MissionGraph()
+        graph.add_node(MissionNode(id=0, node_type=NodeType.START, position=(0, 0, 0)))
+        graph.add_node(MissionNode(id=1, node_type=NodeType.EMPTY, position=(1, 0, 0)))
+        graph.add_node(MissionNode(id=2, node_type=NodeType.EMPTY, position=(2, 0, 0)))
+        graph.add_node(MissionNode(id=3, node_type=NodeType.EMPTY, position=(2, 1, 0)))
+        graph.add_node(MissionNode(id=4, node_type=NodeType.GOAL, position=(3, 0, 0)))
+
+        graph.add_edge(0, 1, EdgeType.PATH)
+        graph.add_edge(1, 2, EdgeType.PATH)
+        graph.add_edge(2, 4, EdgeType.PATH)
+        graph.add_edge(2, 3, EdgeType.PATH)
+        graph.edges.append(MissionEdge(source=3, target=1, edge_type=EdgeType.ITEM_GATE, item_required="BOMB"))
+        graph._adjacency[3].append(1)
+
+        updated = AddValveRule().apply(graph, {"rng": random.Random(0)})
+
+        assert not any(edge.edge_type == EdgeType.ONE_WAY for edge in updated.edges)
+
+    def test_add_secret_rule_uses_bounded_non_colliding_relative_positions(self):
+        graph = MissionGraph()
+        graph.add_node(MissionNode(id=0, node_type=NodeType.START, position=(0, 0, 0)))
+        graph.add_node(MissionNode(id=1, node_type=NodeType.EMPTY, position=(5, 5, 0)))
+        graph.add_node(MissionNode(id=2, node_type=NodeType.GOAL, position=(8, 8, 0)))
+        graph.add_edge(0, 1, EdgeType.PATH)
+        graph.add_edge(1, 2, EdgeType.PATH)
+        occupied_offsets = [(-1, 2), (0, 2), (1, 2), (-1, 3), (0, 3), (1, 3), (2, 1), (-2, 1)]
+        next_id = 3
+        for dr, dc in occupied_offsets:
+            graph.add_node(
+                MissionNode(
+                    id=next_id,
+                    node_type=NodeType.SECRET,
+                    position=(5 + dr, 5 + dc, 0),
+                    is_secret=True,
+                )
+            )
+            next_id += 1
+
+        updated = AddSecretRule().apply(
+            graph,
+            {"rng": random.Random(1), "layout_bounds": (0, 8, 0, 8), "difficulty": 0.5},
+        )
+        positions = [node.position for node in updated.nodes.values()]
+
+        assert len(positions) == len(set(positions))
+        for row, col, _floor in positions:
+            assert 0 <= row <= 8
+            assert 0 <= col <= 8
 
     def test_start_and_goal_exist(self):
         """Test that START and GOAL nodes always exist."""

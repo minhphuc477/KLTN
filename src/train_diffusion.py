@@ -2710,7 +2710,7 @@ class DiffusionTrainer:
         logits = pred_tile_logits[: target_batch.shape[0]]
         repaired_mean = F.cross_entropy(logits, target_batch, reduction="mean")
         full_batch_loss = F.cross_entropy(logits, target_batch, reduction="sum") / float(
-            max(1, int(pred_tile_logits.shape[0]) * int(pred_tile_logits.shape[2]) * int(pred_tile_logits.shape[3]))
+            max(1, int(target_batch.shape[0]) * int(pred_tile_logits.shape[2]) * int(pred_tile_logits.shape[3]))
         )
         return full_batch_loss, float(target_batch.shape[0]), repaired_mean
     
@@ -3990,6 +3990,12 @@ class DiffusionTrainer:
         self.diffusion.load_state_dict(checkpoint['diffusion_state_dict'])
         if 'ema_diffusion_state_dict' in checkpoint:
             self.ema_diffusion.load_state_dict(checkpoint['ema_diffusion_state_dict'])
+        else:
+            self.ema_diffusion.load_state_dict(checkpoint['diffusion_state_dict'])
+            logger.warning(
+                "Checkpoint %s has no ema_diffusion_state_dict; initialized EMA weights from diffusion_state_dict.",
+                path,
+            )
         self.condition_encoder.load_state_dict(checkpoint['condition_encoder_state_dict'])
         if 'logic_net_state_dict' in checkpoint:
             self.logic_net.load_state_dict(checkpoint['logic_net_state_dict'])
