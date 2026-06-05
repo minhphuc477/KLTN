@@ -661,7 +661,7 @@ def build_conditioning_vector(mission_graph, edge_index, cond_encoder, torch_mod
 
 
 def sample_tile_grid(diffusion, vqvae, conditioning, num_nodes, torch_module, np_module, logger):
-    """Run DDIM sampling and VQ-VAE decode to obtain a tile grid."""
+    """Run latent sampling and VQ-VAE decode to obtain a tile grid."""
     scale = max(1, int(num_nodes ** 0.5))
     lat_h = 3 * scale
     lat_w = 4 * scale
@@ -674,12 +674,28 @@ def sample_tile_grid(diffusion, vqvae, conditioning, num_nodes, torch_module, np
         num_nodes,
     )
 
+    latent_shape = (1, latent_dim, lat_h, lat_w)
+    training_objective = str(getattr(diffusion, "training_objective", "diffusion")).strip().lower()
+
     with torch_module.no_grad():
-        latent = diffusion.ddim_sample(
-            context=conditioning,
-            shape=(1, latent_dim, lat_h, lat_w),
-            num_steps=50,
-        )
+        if training_objective == "flow_matching":
+            if not hasattr(diffusion, "flow_ode_sample"):
+                raise ValueError("flow_matching diffusion checkpoints require flow_ode_sample() for GUI sampling")
+            logger.info("  Sampler: flow_ode (flow_matching)")
+            latent = diffusion.flow_ode_sample(
+                context=conditioning,
+                shape=latent_shape,
+                num_steps=50,
+            )
+        elif training_objective == "diffusion":
+            logger.info("  Sampler: ddim")
+            latent = diffusion.ddim_sample(
+                context=conditioning,
+                shape=latent_shape,
+                num_steps=50,
+            )
+        else:
+            raise ValueError(f"Unsupported diffusion training_objective={training_objective!r}")
         target_h = lat_h * 4
         target_w = lat_w * 4
         recon = vqvae.decode(latent, target_size=(target_h, target_w))

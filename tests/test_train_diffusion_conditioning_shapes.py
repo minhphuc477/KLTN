@@ -491,7 +491,6 @@ def _make_stub_trainer(context_dim: int = 8) -> DiffusionTrainer:
     trainer._encode_graph_conditioning = lambda graph_dict: torch.randn(
         int(graph_dict["n"]), context_dim, dtype=torch.float32
     )
-    trainer._build_logic_graph_data = lambda graph_dict: None
     trainer.encode_to_latent = lambda real_maps: torch.zeros(
         (real_maps.shape[0], 4, 2, 2), dtype=torch.float32
     )

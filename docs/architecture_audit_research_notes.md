@@ -240,6 +240,14 @@ currently support the claims. It is not an experimental-results substitute.
   `[H*W]` room tokens; the GAN baseline uses straight-through Gumbel-Softmax
   during generator training and reserves `argmax` for `torch.no_grad()`
   sampling; the WFC baseline is local and dependency-free.
+- **Strict evidence audit for baseline reports:** fixed-graph protocol
+  aggregation now reports teacher-fallback rates, and
+  `scripts/compare_protocol_to_baselines.py` emits a strict evidence audit that
+  flags teacher fallback, repair-heavy outputs, and overlay-assisted semantic
+  gains before a result can be described as standalone neural-generator
+  evidence. The audit also blocks standalone-neural publication claims when
+  hard oracle metrics are absent, when hard solvability is reported only
+  post-repair, or when repaired runs lack raw/pre-repair hard oracle rates.
 
 ## Remaining Publication Risks
 
@@ -265,9 +273,6 @@ currently support the claims. It is not an experimental-results substitute.
   `safe_torch_load()` path, but trainer checkpoints are still `.pth` bundles
   containing optimizer/scheduler state. A `safetensors` migration should be
   dual-format because optimizer metadata is not tensor-only model weights.
-- **Dead graph helper:** `DiffusionTrainer._build_logic_graph_data()` remains
-  private dead code. Either wire it into graph-data construction or remove it
-  after confirming no downstream scripts call it.
 - **Global graph supervision coverage:** room-level training can only supervise
   full global graph losses when a complete dungeon-room batch provides one
   passability value per graph node. Skipped graph losses must be reported.
@@ -357,6 +362,9 @@ Latest targeted additions:
   recommendation.
 - `python -m pytest tests/test_config_system.py tests/test_runtime_logic_guidance_strategy.py tests/test_noisy_logicnet_gradients.py -q`
   passed with 39 tests.
+- `python -m pytest tests/test_protocol_reporting.py::test_protocol_baseline_report_flags_fallback_repair_and_overlay_evidence tests/test_protocol_reporting.py::test_fixed_graph_audit_aggregate_tracks_post_overlay_semantic_error -q`
+  passed with 2 tests.
+- `python -m pytest tests/test_ablation_scripts.py -q` passed with 4 tests.
 
 ## Required Reporting Discipline
 

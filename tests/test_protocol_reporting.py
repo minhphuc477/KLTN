@@ -11,6 +11,8 @@ from scripts.run_ablation_study import (
     build_ablation_plan,
     build_experiment_set,
 )
+from scripts.compare_protocol_to_baselines import build_report as build_protocol_baseline_report
+from scripts.compare_protocol_to_baselines import _render_markdown as render_protocol_baseline_markdown
 from scripts.run_fixed_graph_multi_seed_audit import _aggregate_variant
 from scripts.run_fast_sampler_visual_audit import (
     _json_sanitize as _audit_json_sanitize,
@@ -196,8 +198,15 @@ def test_fixed_graph_audit_aggregate_tracks_post_overlay_semantic_error():
                 "avg_neural_semantic_anchor_error": 4.0,
                 "avg_final_pre_overlay_semantic_anchor_error": 2.0,
                 "avg_final_post_overlay_semantic_anchor_error": 0.0,
+                "raw_neural_to_cleaned_tiles_changed": 3,
+                "raw_neural_to_final_tiles_changed": 8,
+            },
+            "runtime_diagnostics": {
+                "fast_sampler_teacher_fallback": 2,
             },
             "validation": {
+                "raw_astar_grid": {"solvable": False},
+                "astar_grid": {"solvable": True},
                 "graph_guided_oracle": {"solvable": True},
                 "mechanical_contract": {"hybrid_oracle_pass": True},
                 "search_algorithms": {
@@ -234,6 +243,12 @@ def test_fixed_graph_audit_aggregate_tracks_post_overlay_semantic_error():
                 "room_symbol_entropy_mean": 1.2,
                 "dungeon_symbol_entropy_non_void": 1.4,
             },
+            "cleanup_totals": {
+                "neural_invalid_door_tiles_removed": 2,
+                "neural_interior_obstacle_tiles_removed": 1,
+                "repair_invalid_door_tiles_removed": 4,
+                "repair_interior_obstacle_tiles_removed": 2,
+            },
             "room_hashes": {"0": "aaa"},
         },
         {
@@ -248,8 +263,15 @@ def test_fixed_graph_audit_aggregate_tracks_post_overlay_semantic_error():
                 "avg_neural_semantic_anchor_error": 2.0,
                 "avg_final_pre_overlay_semantic_anchor_error": 1.0,
                 "avg_final_post_overlay_semantic_anchor_error": 0.5,
+                "raw_neural_to_cleaned_tiles_changed": 1,
+                "raw_neural_to_final_tiles_changed": 4,
+            },
+            "runtime_diagnostics": {
+                "masked_room_teacher_fallback": 1,
             },
             "validation": {
+                "raw_astar_grid": {"solvable": False},
+                "astar_grid": {"solvable": True},
                 "graph_guided_oracle": {"solvable": False},
                 "mechanical_contract": {"hybrid_oracle_pass": False},
                 "search_algorithms": {
@@ -286,6 +308,12 @@ def test_fixed_graph_audit_aggregate_tracks_post_overlay_semantic_error():
                 "room_symbol_entropy_mean": 1.0,
                 "dungeon_symbol_entropy_non_void": 1.1,
             },
+            "cleanup_totals": {
+                "neural_invalid_door_tiles_removed": 1,
+                "neural_interior_obstacle_tiles_removed": 0,
+                "repair_invalid_door_tiles_removed": 0,
+                "repair_interior_obstacle_tiles_removed": 1,
+            },
             "room_hashes": {"0": "bbb"},
         },
     ]
@@ -293,8 +321,24 @@ def test_fixed_graph_audit_aggregate_tracks_post_overlay_semantic_error():
     aggregate = _aggregate_variant(entries)
 
     assert aggregate["avg_repair_rate"] == pytest.approx(0.75)
+    assert aggregate["teacher_fallback_run_rate"] == pytest.approx(1.0)
+    assert aggregate["total_teacher_fallback_count"] == pytest.approx(3.0)
+    assert aggregate["avg_teacher_fallback_count_per_run"] == pytest.approx(1.5)
+    assert aggregate["total_teacher_fallback_source_fast_sampler_count"] == pytest.approx(2.0)
+    assert aggregate["total_teacher_fallback_source_masked_room_count"] == pytest.approx(1.0)
+    assert aggregate["avg_raw_neural_to_cleaned_tiles_changed"] == pytest.approx(2.0)
+    assert aggregate["avg_raw_neural_to_final_tiles_changed"] == pytest.approx(6.0)
+    assert aggregate["avg_neural_cleanup_tiles_removed"] == pytest.approx(2.0)
+    assert aggregate["avg_repair_cleanup_tiles_removed"] == pytest.approx(3.5)
     assert aggregate["avg_final_post_overlay_graph_marker_exact_match_rate"] == pytest.approx(1.0)
     assert aggregate["avg_final_post_overlay_semantic_anchor_error"] == pytest.approx(0.25)
+    assert aggregate["avg_overlay_graph_marker_match_rate_delta"] == pytest.approx(0.375)
+    assert aggregate["avg_overlay_semantic_anchor_error_reduction"] == pytest.approx(1.25)
+    assert aggregate["overlay_semantic_anchor_improvement_rate"] == pytest.approx(1.0)
+    assert aggregate["post_repair_astar_grid_solvable_rate"] == pytest.approx(1.0)
+    assert aggregate["raw_astar_grid_solvable_rate"] == pytest.approx(0.0)
+    assert aggregate["raw_hard_oracle_available_rate"] == pytest.approx(1.0)
+    assert aggregate["raw_to_post_repair_astar_grid_solvability_delta"] == pytest.approx(1.0)
     assert aggregate["avg_room_unique_ratio"] == pytest.approx(0.75)
     assert aggregate["avg_room_pairwise_ncd_mean"] == pytest.approx(0.225)
     assert aggregate["avg_room_nearest_reference_ncd_mean"] == pytest.approx(0.14)
@@ -308,6 +352,9 @@ def test_fixed_graph_audit_aggregate_tracks_post_overlay_semantic_error():
     assert aggregate["search_algorithm_aggregate"]["tile_state_space"]["greedy"]["success_rate"] == pytest.approx(0.5)
     assert aggregate["search_algorithm_aggregate"]["tile_state_space"]["greedy"]["fallback_rate"] == pytest.approx(0.5)
     assert aggregate["search_algorithm_aggregate"]["agreement"]["all_algorithms_solved"] == pytest.approx(0.5)
+    assert aggregate["search_algorithm_aggregate"]["oracle_stack"]["post_repair_astar_grid_solvable_rate"] == pytest.approx(1.0)
+    assert aggregate["search_algorithm_aggregate"]["oracle_stack"]["raw_astar_grid_solvable_rate"] == pytest.approx(0.0)
+    assert aggregate["search_algorithm_aggregate"]["oracle_stack"]["raw_to_post_repair_astar_grid_solvability_delta"] == pytest.approx(1.0)
     assert aggregate["search_algorithm_aggregate"]["oracle_stack"]["graph_guided_oracle_solvable_rate"] == pytest.approx(0.5)
     assert aggregate["search_algorithm_aggregate"]["oracle_stack"]["hybrid_oracle_pass_rate"] == pytest.approx(0.5)
     assert aggregate["search_algorithm_aggregate"]["behavioral_probe"]["cbs_balanced"]["success_rate"] == pytest.approx(0.0)
@@ -379,6 +426,147 @@ def test_stateful_puzzle_summary_json_sanitizes_non_finite_payloads():
     sanitized = _sweep_json_sanitize(payload)
 
     assert sanitized["raw_summaries"]["baseline_default"]["validation"]["cbs_balanced"]["confusion_ratio_vs_astar"] is None
+
+
+def test_protocol_baseline_report_flags_fallback_repair_and_overlay_evidence(tmp_path):
+    fixed_graph = {
+        "aggregate": {
+            "strict_masked_room": {
+                "avg_repair_rate": 0.4,
+                "avg_total_tiles_repaired": 14.0,
+                "avg_teacher_fallback_used": 0.25,
+                "avg_teacher_fallback_source_masked_room": 0.25,
+                "avg_generation_time_sec": 2.0,
+                "avg_final_graph_marker_overwrite_rate": 0.1,
+                "avg_final_pre_overlay_semantic_anchor_error": 3.0,
+                "avg_final_post_overlay_semantic_anchor_error": 1.0,
+                "search_algorithm_aggregate": {
+                    "oracle_stack": {
+                        "astar_grid_solvable_rate": 1.0,
+                        "graph_guided_oracle_solvable_rate": 1.0,
+                        "softlock_safe_rate": 1.0,
+                        "goal_gauntlet_valid_rate": 1.0,
+                        "hybrid_oracle_pass_rate": 1.0,
+                    },
+                    "behavioral_probe": {"cbs_balanced": {"success_rate": 0.5}},
+                },
+            }
+        }
+    }
+    matched_budget = {"summary": [{"method": "wfc", "fitness": 0.1, "overall_completeness": 0.2}]}
+    pcg = {
+        "summary": [
+            {
+                "problem_name": "zelda",
+                "method": "wfc",
+                "external_quality_pass_rate": 0.1,
+                "external_controlability_pass_rate": 0.2,
+                "external_diversity_pass_rate": 0.3,
+                "internal_overall_completeness": 0.4,
+            }
+        ]
+    }
+    fixed_path = tmp_path / "fixed.json"
+    matched_path = tmp_path / "matched.json"
+    pcg_path = tmp_path / "pcg.json"
+    fixed_path.write_text(json.dumps(fixed_graph), encoding="utf-8")
+    matched_path.write_text(json.dumps(matched_budget), encoding="utf-8")
+    pcg_path.write_text(json.dumps(pcg), encoding="utf-8")
+
+    report = build_protocol_baseline_report(
+        fixed_graph_summary=fixed_path,
+        matched_budget_report=matched_path,
+        pcg_benchmark_report=pcg_path,
+    )
+
+    audit = report["strict_evidence_audit"]["by_variant"]["strict_masked_room"]
+    assert audit["publication_ready_standalone_neural_evidence"] is False
+    assert set(audit["issues"]) == {
+        "teacher_fallback_used",
+        "raw_hard_oracle_metrics_missing",
+        "repair_heavy",
+        "overlay_assisted_semantics",
+    }
+    assert report["claim_status"]["can_claim_surpasses_publications"] is False
+    markdown = render_protocol_baseline_markdown(report)
+    assert "Strict Evidence Audit" in markdown
+    assert "BLOCKING: strict_masked_room: teacher fallback rate" in markdown
+
+
+def test_protocol_baseline_report_blocks_missing_hard_oracle_metrics(tmp_path):
+    fixed_graph = {
+        "aggregate": {
+            "neural_no_oracle": {
+                "avg_repair_rate": 0.0,
+                "avg_total_tiles_repaired": 0.0,
+                "avg_teacher_fallback_used": 0.0,
+                "avg_generation_time_sec": 2.0,
+                "avg_final_graph_marker_overwrite_rate": 0.0,
+            }
+        }
+    }
+    matched_budget = {"summary": [{"method": "wfc", "fitness": 0.1, "overall_completeness": 0.2}]}
+    pcg = {"summary": []}
+    fixed_path = tmp_path / "fixed.json"
+    matched_path = tmp_path / "matched.json"
+    pcg_path = tmp_path / "pcg.json"
+    fixed_path.write_text(json.dumps(fixed_graph), encoding="utf-8")
+    matched_path.write_text(json.dumps(matched_budget), encoding="utf-8")
+    pcg_path.write_text(json.dumps(pcg), encoding="utf-8")
+
+    report = build_protocol_baseline_report(
+        fixed_graph_summary=fixed_path,
+        matched_budget_report=matched_path,
+        pcg_benchmark_report=pcg_path,
+    )
+
+    audit = report["strict_evidence_audit"]["by_variant"]["neural_no_oracle"]
+    assert audit["publication_ready_standalone_neural_evidence"] is False
+    assert audit["issues"] == ["hard_oracle_metrics_missing"]
+    assert report["strict_evidence_audit"]["blocking"] == [
+        "neural_no_oracle: no hard oracle metrics present; cannot support standalone neural solvability claims."
+    ]
+    markdown = render_protocol_baseline_markdown(report)
+    assert "hard_oracle_present=False" in markdown
+
+
+def test_protocol_baseline_report_blocks_post_repair_only_hard_solvability(tmp_path):
+    fixed_graph = {
+        "aggregate": {
+            "post_repair_only": {
+                "avg_repair_rate": 0.1,
+                "avg_total_tiles_repaired": 2.0,
+                "avg_teacher_fallback_used": 0.0,
+                "search_algorithm_aggregate": {
+                    "oracle_stack": {
+                        "post_repair_astar_grid_solvable_rate": 1.0,
+                    }
+                },
+            }
+        }
+    }
+    matched_budget = {"summary": []}
+    pcg = {"summary": []}
+    fixed_path = tmp_path / "fixed.json"
+    matched_path = tmp_path / "matched.json"
+    pcg_path = tmp_path / "pcg.json"
+    fixed_path.write_text(json.dumps(fixed_graph), encoding="utf-8")
+    matched_path.write_text(json.dumps(matched_budget), encoding="utf-8")
+    pcg_path.write_text(json.dumps(pcg), encoding="utf-8")
+
+    report = build_protocol_baseline_report(
+        fixed_graph_summary=fixed_path,
+        matched_budget_report=matched_path,
+        pcg_benchmark_report=pcg_path,
+    )
+
+    audit = report["strict_evidence_audit"]["by_variant"]["post_repair_only"]
+    assert audit["publication_ready_standalone_neural_evidence"] is False
+    assert audit["issues"] == ["post_repair_only_hard_solvability"]
+    assert audit["post_repair_hard_solvability_rate"] == pytest.approx(1.0)
+    assert audit["standalone_hard_solvability_rate"] is None
+    markdown = render_protocol_baseline_markdown(report)
+    assert "post_repair_hard=1.0000" in markdown
 
 
 def test_export_summary_json_sanitizes_non_finite_payloads():

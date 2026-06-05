@@ -36,6 +36,7 @@ from typing import Any, Dict, List, Tuple, Optional
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint as activation_checkpoint
 from torch import Tensor
 
 from src.core.attention_kernels import HedgehogFeatureMap, hedgehog_linear_attention
@@ -725,6 +726,7 @@ class DownBlock(nn.Module):
         topology_gate_init: float = -2.0,
     ):
         super().__init__()
+        self.use_checkpoint = False
         
         self.res_blocks = nn.ModuleList()
         self.attn_blocks = nn.ModuleList()
@@ -772,15 +774,37 @@ class DownBlock(nn.Module):
         skips = []
         
         for res_block, attn_block in zip(self.res_blocks, self.attn_blocks):
-            x = res_block(x, t_emb)
-            if not isinstance(attn_block, nn.Identity):
-                x = attn_block(
+            if self.use_checkpoint and self.training and torch.is_grad_enabled():
+                x = activation_checkpoint(
+                    lambda h, temb, block=res_block: block(h, temb),
                     x,
-                    context,
-                    context_edge_index=context_edge_index,
-                    context_node_mask=context_node_mask,
-                    spatial_graph_data=spatial_graph_data,
+                    t_emb,
+                    use_reentrant=False,
                 )
+            else:
+                x = res_block(x, t_emb)
+            if not isinstance(attn_block, nn.Identity):
+                if self.use_checkpoint and self.training and torch.is_grad_enabled():
+                    x = activation_checkpoint(
+                        lambda h, ctx, block=attn_block: block(
+                            h,
+                            ctx,
+                            context_edge_index=context_edge_index,
+                            context_node_mask=context_node_mask,
+                            spatial_graph_data=spatial_graph_data,
+                        ),
+                        x,
+                        context,
+                        use_reentrant=False,
+                    )
+                else:
+                    x = attn_block(
+                        x,
+                        context,
+                        context_edge_index=context_edge_index,
+                        context_node_mask=context_node_mask,
+                        spatial_graph_data=spatial_graph_data,
+                    )
             skips.append(x)
         
         if self.downsample is not None:
@@ -817,6 +841,7 @@ class UpBlock(nn.Module):
         topology_gate_init: float = -2.0,
     ):
         super().__init__()
+        self.use_checkpoint = False
         
         self.upsample = None
         if upsample:
@@ -881,15 +906,37 @@ class UpBlock(nn.Module):
                 x = F.interpolate(x, size=skip.shape[-2:], mode='nearest')
             x = torch.cat([x, skip], dim=1)
             
-            x = res_block(x, t_emb)
-            if not isinstance(attn_block, nn.Identity):
-                x = attn_block(
+            if self.use_checkpoint and self.training and torch.is_grad_enabled():
+                x = activation_checkpoint(
+                    lambda h, temb, block=res_block: block(h, temb),
                     x,
-                    context,
-                    context_edge_index=context_edge_index,
-                    context_node_mask=context_node_mask,
-                    spatial_graph_data=spatial_graph_data,
+                    t_emb,
+                    use_reentrant=False,
                 )
+            else:
+                x = res_block(x, t_emb)
+            if not isinstance(attn_block, nn.Identity):
+                if self.use_checkpoint and self.training and torch.is_grad_enabled():
+                    x = activation_checkpoint(
+                        lambda h, ctx, block=attn_block: block(
+                            h,
+                            ctx,
+                            context_edge_index=context_edge_index,
+                            context_node_mask=context_node_mask,
+                            spatial_graph_data=spatial_graph_data,
+                        ),
+                        x,
+                        context,
+                        use_reentrant=False,
+                    )
+                else:
+                    x = attn_block(
+                        x,
+                        context,
+                        context_edge_index=context_edge_index,
+                        context_node_mask=context_node_mask,
+                        spatial_graph_data=spatial_graph_data,
+                    )
         
         return x
 
@@ -942,6 +989,7 @@ class UNetDenoiser(nn.Module):
         self.in_channels = in_channels
         self.model_channels = model_channels
         self.out_channels = out_channels
+        self.use_checkpoint = False
         
         time_dim = model_channels * 4
         
@@ -1082,15 +1130,41 @@ class UNetDenoiser(nn.Module):
             all_skips.extend(skips)
         
         # Bottleneck
-        h = self.mid_block1(h, t_emb)
-        h = self.mid_attn(
-            h,
-            context,
-            context_edge_index=context_edge_index,
-            context_node_mask=context_node_mask,
-            spatial_graph_data=spatial_graph_data,
-        )
-        h = self.mid_block2(h, t_emb)
+        if self.use_checkpoint and self.training and torch.is_grad_enabled():
+            h = activation_checkpoint(
+                lambda latent, temb: self.mid_block1(latent, temb),
+                h,
+                t_emb,
+                use_reentrant=False,
+            )
+            h = activation_checkpoint(
+                lambda latent, ctx: self.mid_attn(
+                    latent,
+                    ctx,
+                    context_edge_index=context_edge_index,
+                    context_node_mask=context_node_mask,
+                    spatial_graph_data=spatial_graph_data,
+                ),
+                h,
+                context,
+                use_reentrant=False,
+            )
+            h = activation_checkpoint(
+                lambda latent, temb: self.mid_block2(latent, temb),
+                h,
+                t_emb,
+                use_reentrant=False,
+            )
+        else:
+            h = self.mid_block1(h, t_emb)
+            h = self.mid_attn(
+                h,
+                context,
+                context_edge_index=context_edge_index,
+                context_node_mask=context_node_mask,
+                spatial_graph_data=spatial_graph_data,
+            )
+            h = self.mid_block2(h, t_emb)
         
         # Decoder with skip connections
         for up_block in self.up_blocks:
@@ -1231,6 +1305,7 @@ class DiTDenoiser(nn.Module):
         self.context_dim = int(context_dim)
         self.patch_size = int(patch_size)
         self.depth = int(max(1, depth))
+        self.use_checkpoint = False
 
         self.patch_embed = nn.Conv2d(
             self.in_channels,
@@ -1372,12 +1447,26 @@ class DiTDenoiser(nn.Module):
             )
         cond = self.time_embed(t).to(dtype=tokens.dtype) + self.context_proj(pooled_context)
         for block in self.blocks:
-            tokens = block(
-                tokens,
-                cond,
-                context_tokens=context_tokens,
-                context_key_padding_mask=context_key_padding_mask,
-            )
+            if self.use_checkpoint and self.training and torch.is_grad_enabled():
+                tokens = activation_checkpoint(
+                    lambda toks, conditioning, ctx_tokens, block=block: block(
+                        toks,
+                        conditioning,
+                        context_tokens=ctx_tokens,
+                        context_key_padding_mask=context_key_padding_mask,
+                    ),
+                    tokens,
+                    cond,
+                    context_tokens,
+                    use_reentrant=False,
+                )
+            else:
+                tokens = block(
+                    tokens,
+                    cond,
+                    context_tokens=context_tokens,
+                    context_key_padding_mask=context_key_padding_mask,
+                )
 
         shift, scale = self.final_mod(cond).chunk(2, dim=-1)
         tokens = self.final_norm(tokens) * (1.0 + scale.unsqueeze(1)) + shift.unsqueeze(1)

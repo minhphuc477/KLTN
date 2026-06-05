@@ -63,6 +63,60 @@ def _safe_optional_float(value: Any) -> float | None:
     return result if math.isfinite(result) else None
 
 
+def _optional_bool_as_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    return 1.0 if bool(value) else 0.0
+
+
+def _nested_get(payload: Dict[str, Any], path: Sequence[str]) -> Any:
+    current: Any = payload
+    for key in path:
+        if not isinstance(current, dict) or key not in current:
+            return None
+        current = current[key]
+    return current
+
+
+def _first_nested(payload: Dict[str, Any], paths: Sequence[Sequence[str]]) -> Any:
+    for path in paths:
+        value = _nested_get(payload, path)
+        if value is not None:
+            return value
+    return None
+
+
+def _entry_diagnostic_count(entry: Dict[str, Any], key: str) -> float:
+    metrics = dict(entry.get("metrics", {}) or {})
+    candidates = (
+        _nested_get(metrics, ("runtime_diagnostics_delta", key)),
+        _nested_get(entry, ("runtime_diagnostics", key)),
+        _nested_get(metrics, ("runtime_diagnostics", key)),
+    )
+    for candidate in candidates:
+        numeric = _safe_optional_float(candidate)
+        if numeric is not None:
+            return numeric
+    return 0.0
+
+
+def _entry_teacher_fallback_source_count(entry: Dict[str, Any], source: str) -> float:
+    diagnostics_key = f"{source}_teacher_fallback"
+    metric_key = f"teacher_fallback_source_{source}"
+    diagnostics_count = _entry_diagnostic_count(entry, diagnostics_key)
+    metric_value = _safe_optional_float(dict(entry.get("metrics", {}) or {}).get(metric_key))
+    return max(diagnostics_count, metric_value or 0.0)
+
+
+def _entry_numeric(entry: Dict[str, Any], *paths: Sequence[str]) -> float | None:
+    for path in paths:
+        value = _first_nested(entry, (path,))
+        numeric = _safe_optional_float(value)
+        if numeric is not None:
+            return numeric
+    return None
+
+
 def _json_sanitize(value: Any) -> Any:
     if isinstance(value, float):
         return value if math.isfinite(value) else None
@@ -100,6 +154,37 @@ def _aggregate_variant(entries: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
     repair_rates = [float(entry["metrics"]["repair_rate"]) for entry in entries]
     repaired_tiles = [int(entry["metrics"]["total_tiles_repaired"]) for entry in entries]
     generation_times = [float(entry["metrics"]["generation_time_sec"]) for entry in entries]
+    teacher_fallback_fast_counts = [
+        _entry_teacher_fallback_source_count(entry, "fast_sampler")
+        for entry in entries
+    ]
+    teacher_fallback_masked_counts = [
+        _entry_teacher_fallback_source_count(entry, "masked_room")
+        for entry in entries
+    ]
+    teacher_fallback_counts = [
+        max(
+            fast_count + masked_count,
+            _safe_optional_float(entry["metrics"].get("teacher_fallback_used")) or 0.0,
+        )
+        for entry, fast_count, masked_count in zip(
+            entries,
+            teacher_fallback_fast_counts,
+            teacher_fallback_masked_counts,
+        )
+    ]
+    teacher_fallback_used = [
+        1.0 if fallback_count > 0.0 else 0.0
+        for fallback_count in teacher_fallback_counts
+    ]
+    teacher_fallback_fast = [
+        1.0 if fallback_count > 0.0 else 0.0
+        for fallback_count in teacher_fallback_fast_counts
+    ]
+    teacher_fallback_masked = [
+        1.0 if fallback_count > 0.0 else 0.0
+        for fallback_count in teacher_fallback_masked_counts
+    ]
     neural_match_rates = [
         float(entry["metrics"].get("avg_neural_graph_marker_exact_match_rate", 1.0))
         for entry in entries
@@ -128,10 +213,38 @@ def _aggregate_variant(entries: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
         float(entry["metrics"].get("avg_final_post_overlay_semantic_anchor_error", 0.0))
         for entry in entries
     ]
+    overlay_match_rate_deltas = [
+        post_rate - pre_rate
+        for pre_rate, post_rate in zip(final_pre_overlay_match_rates, final_post_overlay_match_rates)
+    ]
+    overlay_anchor_error_reductions = [
+        pre_error - post_error
+        for pre_error, post_error in zip(final_pre_overlay_anchor_errors, final_post_overlay_anchor_errors)
+    ]
+    overlay_improved_semantic_anchor = [
+        1.0 if reduction > 0.0 else 0.0
+        for reduction in overlay_anchor_error_reductions
+    ]
     astar_solvable = [
         1.0 if bool(entry.get("validation", {}).get("astar_grid", {}).get("solvable", False)) else 0.0
         for entry in entries
     ]
+    raw_astar_values: List[float] = []
+    raw_astar_available: List[float] = []
+    raw_to_post_repair_astar_deltas: List[float] = []
+    raw_astar_paths = (
+        ("raw_astar_grid", "solvable"),
+        ("raw_hard_oracle", "astar_grid", "solvable"),
+        ("pre_repair_astar_grid", "solvable"),
+        ("pre_repair_hard_oracle", "astar_grid", "solvable"),
+    )
+    for entry, post_astar in zip(entries, astar_solvable):
+        raw_value = _first_nested(dict(entry.get("validation", {}) or {}), raw_astar_paths)
+        raw_astar = _optional_bool_as_float(raw_value)
+        raw_astar_available.append(1.0 if raw_astar is not None else 0.0)
+        if raw_astar is not None:
+            raw_astar_values.append(raw_astar)
+            raw_to_post_repair_astar_deltas.append(post_astar - raw_astar)
     graph_guided_solvable = [
         1.0 if bool(entry.get("validation", {}).get("graph_guided_oracle", {}).get("solvable", False)) else 0.0
         for entry in entries
@@ -258,6 +371,60 @@ def _aggregate_variant(entries: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
             )
         ) is not None
     ]
+    raw_neural_to_cleaned_tiles_changed = [
+        value
+        for entry in entries
+        if (
+            value := _entry_numeric(
+                entry,
+                ("metrics", "raw_neural_to_cleaned_tiles_changed"),
+                ("metrics", "total_raw_neural_to_cleaned_tiles_changed"),
+            )
+        ) is not None
+    ]
+    raw_neural_to_final_tiles_changed = [
+        value
+        for entry in entries
+        if (
+            value := _entry_numeric(
+                entry,
+                ("metrics", "raw_neural_to_final_tiles_changed"),
+                ("metrics", "total_raw_neural_to_final_tiles_changed"),
+            )
+        ) is not None
+    ]
+    neural_cleanup_tiles_removed = [
+        value
+        for entry in entries
+        if (
+            value := _safe_optional_float(
+                sum(
+                    float(entry.get("cleanup_totals", {}).get(key, 0.0) or 0.0)
+                    for key in (
+                        "neural_invalid_door_tiles_removed",
+                        "neural_interior_obstacle_tiles_removed",
+                    )
+                )
+            )
+        ) is not None
+        and "cleanup_totals" in entry
+    ]
+    repair_cleanup_tiles_removed = [
+        value
+        for entry in entries
+        if (
+            value := _safe_optional_float(
+                sum(
+                    float(entry.get("cleanup_totals", {}).get(key, 0.0) or 0.0)
+                    for key in (
+                        "repair_invalid_door_tiles_removed",
+                        "repair_interior_obstacle_tiles_removed",
+                    )
+                )
+            )
+        ) is not None
+        and "cleanup_totals" in entry
+    ]
     room_hash_signatures = [
         "|".join(f"{room_id}:{digest}" for room_id, digest in sorted(entry["room_hashes"].items()))
         for entry in entries
@@ -347,6 +514,10 @@ def _aggregate_variant(entries: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
     }
     search_algorithm_aggregate["oracle_stack"] = {
         "astar_grid_solvable_rate": _safe_mean(astar_solvable),
+        "post_repair_astar_grid_solvable_rate": _safe_mean(astar_solvable),
+        "raw_astar_grid_solvable_rate": _safe_mean_or_none(raw_astar_values),
+        "raw_hard_oracle_available_rate": _safe_mean(raw_astar_available),
+        "raw_to_post_repair_astar_grid_solvability_delta": _safe_mean_or_none(raw_to_post_repair_astar_deltas),
         "graph_guided_oracle_solvable_rate": _safe_mean(graph_guided_solvable),
         "softlock_safe_rate": _safe_mean(softlock_safe),
         "goal_gauntlet_valid_rate": _safe_mean(goal_gauntlet_valid),
@@ -360,14 +531,29 @@ def _aggregate_variant(entries: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
         "median_repair_rate": _safe_median(repair_rates),
         "avg_total_tiles_repaired": _safe_mean(repaired_tiles),
         "median_total_tiles_repaired": _safe_median(repaired_tiles),
+        "avg_teacher_fallback_used": _safe_mean(teacher_fallback_used),
+        "avg_teacher_fallback_source_fast_sampler": _safe_mean(teacher_fallback_fast),
+        "avg_teacher_fallback_source_masked_room": _safe_mean(teacher_fallback_masked),
+        "teacher_fallback_run_rate": _safe_mean(teacher_fallback_used),
+        "total_teacher_fallback_count": float(sum(teacher_fallback_counts)),
+        "avg_teacher_fallback_count_per_run": _safe_mean(teacher_fallback_counts),
+        "total_teacher_fallback_source_fast_sampler_count": float(sum(teacher_fallback_fast_counts)),
+        "avg_teacher_fallback_source_fast_sampler_count_per_run": _safe_mean(teacher_fallback_fast_counts),
+        "total_teacher_fallback_source_masked_room_count": float(sum(teacher_fallback_masked_counts)),
+        "avg_teacher_fallback_source_masked_room_count_per_run": _safe_mean(teacher_fallback_masked_counts),
         "avg_generation_time_sec": _safe_mean(generation_times),
         "median_generation_time_sec": _safe_median(generation_times),
+        "avg_raw_neural_to_cleaned_tiles_changed": _safe_mean_or_none(raw_neural_to_cleaned_tiles_changed),
+        "avg_raw_neural_to_final_tiles_changed": _safe_mean_or_none(raw_neural_to_final_tiles_changed),
+        "avg_neural_cleanup_tiles_removed": _safe_mean_or_none(neural_cleanup_tiles_removed),
+        "avg_repair_cleanup_tiles_removed": _safe_mean_or_none(repair_cleanup_tiles_removed),
         "avg_neural_graph_marker_exact_match_rate": _safe_mean(neural_match_rates),
         "median_neural_graph_marker_exact_match_rate": _safe_median(neural_match_rates),
         "avg_final_pre_overlay_graph_marker_exact_match_rate": _safe_mean(final_pre_overlay_match_rates),
         "median_final_pre_overlay_graph_marker_exact_match_rate": _safe_median(final_pre_overlay_match_rates),
         "avg_final_post_overlay_graph_marker_exact_match_rate": _safe_mean(final_post_overlay_match_rates),
         "median_final_post_overlay_graph_marker_exact_match_rate": _safe_median(final_post_overlay_match_rates),
+        "avg_overlay_graph_marker_match_rate_delta": _safe_mean(overlay_match_rate_deltas),
         "avg_final_graph_marker_overwrite_rate": _safe_mean(marker_overwrite_rates),
         "median_final_graph_marker_overwrite_rate": _safe_median(marker_overwrite_rates),
         "avg_neural_semantic_anchor_error": _safe_mean(neural_anchor_errors),
@@ -376,7 +562,13 @@ def _aggregate_variant(entries: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
         "median_final_pre_overlay_semantic_anchor_error": _safe_median(final_pre_overlay_anchor_errors),
         "avg_final_post_overlay_semantic_anchor_error": _safe_mean(final_post_overlay_anchor_errors),
         "median_final_post_overlay_semantic_anchor_error": _safe_median(final_post_overlay_anchor_errors),
+        "avg_overlay_semantic_anchor_error_reduction": _safe_mean(overlay_anchor_error_reductions),
+        "overlay_semantic_anchor_improvement_rate": _safe_mean(overlay_improved_semantic_anchor),
         "astar_grid_solvable_rate": _safe_mean(astar_solvable),
+        "post_repair_astar_grid_solvable_rate": _safe_mean(astar_solvable),
+        "raw_astar_grid_solvable_rate": _safe_mean_or_none(raw_astar_values),
+        "raw_hard_oracle_available_rate": _safe_mean(raw_astar_available),
+        "raw_to_post_repair_astar_grid_solvability_delta": _safe_mean_or_none(raw_to_post_repair_astar_deltas),
         "graph_guided_oracle_solvable_rate": _safe_mean(graph_guided_solvable),
         "softlock_safe_rate": _safe_mean(softlock_safe),
         "hybrid_oracle_pass_rate": _safe_mean(hybrid_oracle_pass),

@@ -16,6 +16,40 @@ import math
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping
 
+HARD_ORACLE_STACK_KEYS = (
+    "astar_grid_solvable_rate",
+    "graph_guided_oracle_solvable_rate",
+    "softlock_safe_rate",
+    "goal_gauntlet_valid_rate",
+    "hybrid_oracle_pass_rate",
+)
+RAW_HARD_SOLVABILITY_KEYS = (
+    "raw_hard_solvability_rate",
+    "raw_astar_grid_solvable_rate",
+    "raw_oracle_valid_rate",
+    "raw_solvability_rate_without_fix",
+)
+PRE_REPAIR_HARD_SOLVABILITY_KEYS = (
+    "pre_repair_hard_solvability_rate",
+    "pre_repair_astar_grid_solvable_rate",
+    "pre_repair_solvability_rate",
+    "pre_oracle_valid_rate",
+    "val_hard_solvability",
+)
+POST_REPAIR_HARD_SOLVABILITY_KEYS = (
+    "post_repair_hard_solvability_rate",
+    "post_repair_astar_grid_solvable_rate",
+    "post_solvability_rate",
+    "post_oracle_valid_rate",
+    "val_hard_solvability_after_repair",
+)
+TOP_LEVEL_HARD_ORACLE_KEYS = (
+    *HARD_ORACLE_STACK_KEYS,
+    *RAW_HARD_SOLVABILITY_KEYS,
+    *PRE_REPAIR_HARD_SOLVABILITY_KEYS,
+    *POST_REPAIR_HARD_SOLVABILITY_KEYS,
+)
+
 
 def _load_json(path: Path) -> Dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
@@ -35,6 +69,17 @@ def _safe_optional_float(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return result if math.isfinite(result) else None
+
+
+def _first_present_float(payload: Mapping[str, Any], keys: Iterable[str]) -> float | None:
+    for key in keys:
+        if key in payload:
+            return _safe_optional_float(payload.get(key))
+    return None
+
+
+def _has_any_key(payload: Mapping[str, Any], keys: Iterable[str]) -> bool:
+    return any(key in payload for key in keys)
 
 
 def _json_sanitize(value: Any) -> Any:
@@ -85,8 +130,23 @@ def _summarize_protocol_variants(aggregate: Mapping[str, Any]) -> Dict[str, Dict
         search = dict(payload_dict.get("search_algorithm_aggregate", {}))
         oracle_stack = dict(search.get("oracle_stack", {}))
         behavioral = dict(search.get("behavioral_probe", {})).get("cbs_balanced", {})
+        hard_metric_source = {**oracle_stack, **payload_dict}
+        raw_hard_solvability = _first_present_float(hard_metric_source, RAW_HARD_SOLVABILITY_KEYS)
+        pre_repair_hard_solvability = _first_present_float(hard_metric_source, PRE_REPAIR_HARD_SOLVABILITY_KEYS)
+        post_repair_hard_solvability = _first_present_float(hard_metric_source, POST_REPAIR_HARD_SOLVABILITY_KEYS)
+        standalone_hard_solvability = (
+            raw_hard_solvability if raw_hard_solvability is not None else pre_repair_hard_solvability
+        )
         summary[str(variant_name)] = {
             "avg_repair_rate": _safe_float(payload_dict.get("avg_repair_rate", 0.0)),
+            "avg_total_tiles_repaired": _safe_float(payload_dict.get("avg_total_tiles_repaired", 0.0)),
+            "avg_teacher_fallback_used": _safe_float(payload_dict.get("avg_teacher_fallback_used", 0.0)),
+            "avg_teacher_fallback_source_fast_sampler": _safe_float(
+                payload_dict.get("avg_teacher_fallback_source_fast_sampler", 0.0)
+            ),
+            "avg_teacher_fallback_source_masked_room": _safe_float(
+                payload_dict.get("avg_teacher_fallback_source_masked_room", 0.0)
+            ),
             "avg_generation_time_sec": _safe_float(payload_dict.get("avg_generation_time_sec", 0.0)),
             "avg_final_graph_marker_overwrite_rate": _safe_float(
                 payload_dict.get("avg_final_graph_marker_overwrite_rate", 0.0)
@@ -102,6 +162,12 @@ def _summarize_protocol_variants(aggregate: Mapping[str, Any]) -> Dict[str, Dict
             "avg_final_post_overlay_semantic_anchor_error": _safe_float(
                 payload_dict.get("avg_final_post_overlay_semantic_anchor_error", 0.0)
             ),
+            "hard_oracle_metrics_present": _has_any_key(oracle_stack, TOP_LEVEL_HARD_ORACLE_KEYS)
+            or _has_any_key(payload_dict, TOP_LEVEL_HARD_ORACLE_KEYS),
+            "raw_hard_solvability_rate": raw_hard_solvability,
+            "pre_repair_hard_solvability_rate": pre_repair_hard_solvability,
+            "post_repair_hard_solvability_rate": post_repair_hard_solvability,
+            "standalone_hard_solvability_rate": standalone_hard_solvability,
             "astar_grid_solvable_rate": _safe_float(oracle_stack.get("astar_grid_solvable_rate", 0.0)),
             "graph_guided_oracle_solvable_rate": _safe_float(
                 oracle_stack.get("graph_guided_oracle_solvable_rate", 0.0)
@@ -117,6 +183,97 @@ def _summarize_protocol_variants(aggregate: Mapping[str, Any]) -> Dict[str, Dict
     return summary
 
 
+def _strict_evidence_audit(variant_summary: Mapping[str, Mapping[str, Any]]) -> Dict[str, Any]:
+    """
+    Flag evidence that is likely carried by runtime rescue mechanisms.
+
+    These are not hard failures for engineering runs; they are publication
+    guardrails so a paper table cannot accidentally present teacher/repair/
+    overlay-assisted outputs as standalone neural-generator evidence.
+    """
+    by_variant: Dict[str, Dict[str, Any]] = {}
+    blocking: List[str] = []
+    warnings: List[str] = []
+
+    for variant_name, payload in variant_summary.items():
+        teacher_rate = _safe_float(payload.get("avg_teacher_fallback_used", 0.0))
+        repair_rate = _safe_float(payload.get("avg_repair_rate", 0.0))
+        repaired_tiles = _safe_float(payload.get("avg_total_tiles_repaired", 0.0))
+        overwrite_rate = _safe_float(payload.get("avg_final_graph_marker_overwrite_rate", 0.0))
+        pre_anchor_error = _safe_float(payload.get("avg_final_pre_overlay_semantic_anchor_error", 0.0))
+        post_anchor_error = _safe_float(payload.get("avg_final_post_overlay_semantic_anchor_error", 0.0))
+        overlay_anchor_gain = max(0.0, pre_anchor_error - post_anchor_error)
+        hard_oracle_present = bool(payload.get("hard_oracle_metrics_present", False))
+        raw_hard_solvability = _safe_optional_float(payload.get("raw_hard_solvability_rate"))
+        pre_repair_hard_solvability = _safe_optional_float(payload.get("pre_repair_hard_solvability_rate"))
+        post_repair_hard_solvability = _safe_optional_float(payload.get("post_repair_hard_solvability_rate"))
+        standalone_hard_solvability = (
+            raw_hard_solvability if raw_hard_solvability is not None else pre_repair_hard_solvability
+        )
+
+        issues: List[str] = []
+        if not hard_oracle_present:
+            issues.append("hard_oracle_metrics_missing")
+            blocking.append(
+                f"{variant_name}: no hard oracle metrics present; cannot support standalone neural solvability claims."
+            )
+        if post_repair_hard_solvability is not None and standalone_hard_solvability is None:
+            issues.append("post_repair_only_hard_solvability")
+            blocking.append(
+                f"{variant_name}: hard solvability is reported only after repair; report raw/pre-repair oracle rates before claiming standalone neural evidence."
+            )
+        elif (
+            post_repair_hard_solvability is not None
+            and standalone_hard_solvability is not None
+            and post_repair_hard_solvability > standalone_hard_solvability
+        ):
+            issues.append("post_repair_hard_solvability_gain")
+            blocking.append(
+                f"{variant_name}: post-repair hard solvability {post_repair_hard_solvability:.4f} exceeds standalone/raw {standalone_hard_solvability:.4f}; do not attribute repair gains to the neural generator."
+            )
+        elif hard_oracle_present and repair_rate > 0.0 and standalone_hard_solvability is None:
+            issues.append("raw_hard_oracle_metrics_missing")
+            blocking.append(
+                f"{variant_name}: repair was used but raw/pre-repair hard oracle rates are missing; final oracle rates may be post-repair evidence."
+            )
+        if teacher_rate > 0.0:
+            issues.append("teacher_fallback_used")
+            blocking.append(
+                f"{variant_name}: teacher fallback rate {teacher_rate:.4f}; not standalone generator evidence."
+            )
+        if repair_rate > 0.25 or repaired_tiles >= 12.0:
+            issues.append("repair_heavy")
+            warnings.append(
+                f"{variant_name}: repair_rate={repair_rate:.4f}, avg_total_tiles_repaired={repaired_tiles:.2f}; report pre/post repair separately."
+            )
+        if overwrite_rate > 0.0 or overlay_anchor_gain > 0.0:
+            issues.append("overlay_assisted_semantics")
+            warnings.append(
+                f"{variant_name}: overlay overwrite={overwrite_rate:.4f}, anchor_error_reduction={overlay_anchor_gain:.4f}; report pre/post overlay metrics separately."
+            )
+
+        by_variant[str(variant_name)] = {
+            "publication_ready_standalone_neural_evidence": not issues,
+            "issues": issues,
+            "teacher_fallback_rate": teacher_rate,
+            "repair_rate": repair_rate,
+            "avg_total_tiles_repaired": repaired_tiles,
+            "overlay_marker_overwrite_rate": overwrite_rate,
+            "overlay_anchor_error_reduction": overlay_anchor_gain,
+            "hard_oracle_metrics_present": hard_oracle_present,
+            "raw_hard_solvability_rate": raw_hard_solvability,
+            "pre_repair_hard_solvability_rate": pre_repair_hard_solvability,
+            "post_repair_hard_solvability_rate": post_repair_hard_solvability,
+            "standalone_hard_solvability_rate": standalone_hard_solvability,
+        }
+
+    return {
+        "blocking": blocking,
+        "warnings": warnings,
+        "by_variant": by_variant,
+    }
+
+
 def _render_markdown(report: Mapping[str, Any]) -> str:
     lines: List[str] = []
     lines.append("# Protocol vs Baselines")
@@ -126,6 +283,32 @@ def _render_markdown(report: Mapping[str, Any]) -> str:
     lines.append(f"- can_claim_surpasses_publications: `{report['claim_status']['can_claim_surpasses_publications']}`")
     for item in report["claim_status"]["reasons"]:
         lines.append(f"- {item}")
+    lines.append("")
+    lines.append("## Strict Evidence Audit")
+    lines.append("")
+    evidence_audit = dict(report.get("strict_evidence_audit", {}))
+    blocking = list(evidence_audit.get("blocking", []))
+    warnings = list(evidence_audit.get("warnings", []))
+    if not blocking and not warnings:
+        lines.append("- No fallback/repair/overlay evidence caveats detected in summarized variants.")
+    for item in blocking:
+        lines.append(f"- BLOCKING: {item}")
+    for item in warnings:
+        lines.append(f"- WARNING: {item}")
+    for variant_name, payload in dict(evidence_audit.get("by_variant", {})).items():
+        issues = ", ".join(payload.get("issues", [])) or "none"
+        standalone_hard = payload.get("standalone_hard_solvability_rate")
+        post_repair_hard = payload.get("post_repair_hard_solvability_rate")
+        standalone_hard_str = f"{standalone_hard:.4f}" if isinstance(standalone_hard, (int, float)) else "n/a"
+        post_repair_hard_str = f"{post_repair_hard:.4f}" if isinstance(post_repair_hard, (int, float)) else "n/a"
+        lines.append(
+            f"- `{variant_name}`: standalone={payload.get('publication_ready_standalone_neural_evidence')}, "
+            f"issues={issues}, teacher_fallback={_safe_float(payload.get('teacher_fallback_rate', 0.0)):.4f}, "
+            f"repair={_safe_float(payload.get('repair_rate', 0.0)):.4f}, "
+            f"overlay_anchor_gain={_safe_float(payload.get('overlay_anchor_error_reduction', 0.0)):.4f}, "
+            f"hard_oracle_present={payload.get('hard_oracle_metrics_present')}, "
+            f"standalone_hard={standalone_hard_str}, post_repair_hard={post_repair_hard_str}"
+        )
     lines.append("")
     lines.append("## Fixed-graph protocol")
     lines.append("")
@@ -140,6 +323,7 @@ def _render_markdown(report: Mapping[str, Any]) -> str:
         room_reference_ncd_str = f"{room_reference_ncd:.4f}" if isinstance(room_reference_ncd, (int, float)) else "n/a"
         lines.append(
             f"- `{variant_name}`: repair={payload['avg_repair_rate']:.4f}, "
+                f"teacher_fallback={payload['avg_teacher_fallback_used']:.4f}, "
                 f"overwrite={payload['avg_final_graph_marker_overwrite_rate']:.4f}, "
                 f"room_unique={room_unique_ratio_str}, "
                 f"room_pairwise_ncd={room_pairwise_ncd_str}, "
@@ -198,6 +382,7 @@ def build_report(
     pcg_report = _load_json(pcg_benchmark_report)
 
     fixed_graph_variants = _summarize_protocol_variants(dict(fixed_graph.get("aggregate", {})))
+    strict_evidence_audit = _strict_evidence_audit(fixed_graph_variants)
     matched_budget_summary = [dict(row) for row in matched_budget.get("summary", [])]
     pcg_summary = [dict(row) for row in pcg_report.get("summary", [])]
 
@@ -213,6 +398,7 @@ def build_report(
             "summary_path": str(fixed_graph_summary),
             "variants": fixed_graph_variants,
         },
+        "strict_evidence_audit": strict_evidence_audit,
         "matched_budget": {
             "report_path": str(matched_budget_report),
             "ranked": _rank_matched_budget_rows(matched_budget_summary),
@@ -227,8 +413,8 @@ def build_report(
             "Do not collapse those two evidence layers into one scalar; they measure different stages of the stack.",
         ],
         "claim_status": {
-            "can_claim_surpasses_publications": can_claim,
-            "reasons": reasons,
+            "can_claim_surpasses_publications": can_claim and not strict_evidence_audit["blocking"],
+            "reasons": reasons + list(strict_evidence_audit["blocking"]),
         },
     }
 

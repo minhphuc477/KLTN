@@ -66,6 +66,42 @@ class _Logger:
         return None
 
 
+def test_sample_tile_grid_uses_flow_ode_for_flow_matching_checkpoints():
+    calls = []
+
+    class _Diffusion:
+        latent_dim = 2
+        training_objective = "flow_matching"
+
+        def flow_ode_sample(self, *, context, shape, num_steps):
+            calls.append(("flow", tuple(shape), int(num_steps), context))
+            return torch.ones(shape, dtype=torch.float32)
+
+        def ddim_sample(self, **_kwargs):
+            raise AssertionError("flow_matching checkpoints must not use DDIM sampling")
+
+    class _VQVAE:
+        def decode(self, latent, target_size):
+            assert tuple(latent.shape) == (1, 2, 3, 4)
+            assert tuple(target_size) == (12, 16)
+            return torch.zeros((1, 3, *target_size), dtype=torch.float32)
+
+    conditioning = torch.zeros((1, 1, 4), dtype=torch.float32)
+    grid = generation_pipeline.sample_tile_grid(
+        _Diffusion(),
+        _VQVAE(),
+        conditioning,
+        num_nodes=1,
+        torch_module=torch,
+        np_module=np,
+        logger=_Logger(),
+    )
+
+    assert calls == [("flow", (1, 2, 3, 4), 50, conditioning)]
+    assert grid.shape == (12, 16)
+    assert grid.dtype == np.int32
+
+
 def test_start_ai_generation_sets_thread_and_message():
     gui = _DummyGUI()
     gui.ai_gen_done = False

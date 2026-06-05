@@ -109,6 +109,7 @@ CARDINAL_DIRECTIONS = ("N", "S", "E", "W")
 # Optional heavy-path libraries (graceful fallback when not installed)
 # ---------------------------------------------------------------------------
 try:
+    from safetensors.torch import load_file as _load_safetensors
     from safetensors.torch import save_file as _save_safetensors
     _HAS_SAFETENSORS = True
 except ImportError:
@@ -259,6 +260,11 @@ class DiffusionTrainingConfig:
         scheduler_eta_min: float = 1e-6,
         ema_decay: float = 0.9999,
         grad_clip_norm: float = 1.0,
+        gradient_accumulation_steps: int = 1,
+        gradient_checkpointing: bool = False,
+        use_amp: bool = False,
+        amp_mixed_precision: str = "fp16",
+        use_accelerate: bool = False,
         validation_num_samples: int = 8,
         validation_num_diffusion_samples: int = 64,
         validation_fraction: float = 0.1,
@@ -522,6 +528,16 @@ class DiffusionTrainingConfig:
         self.scheduler_eta_min = float(max(0.0, scheduler_eta_min))
         self.ema_decay = float(min(0.999999, max(0.0, ema_decay)))
         self.grad_clip_norm = float(max(0.0, grad_clip_norm))
+        self.gradient_accumulation_steps = int(max(1, gradient_accumulation_steps))
+        self.gradient_checkpointing = bool(gradient_checkpointing)
+        self.use_amp = bool(use_amp)
+        amp_mode = str(amp_mixed_precision).strip().lower()
+        if amp_mode == "auto":
+            amp_mode = "bf16" if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else "fp16"
+        if amp_mode not in {"fp16", "bf16"}:
+            raise ValueError("amp_mixed_precision must be 'fp16', 'bf16', or 'auto'.")
+        self.amp_mixed_precision = amp_mode
+        self.use_accelerate = bool(use_accelerate)
         self.validation_num_samples = int(max(1, validation_num_samples))
         self.validation_num_diffusion_samples = int(max(1, validation_num_diffusion_samples))
         self.validation_fraction = float(max(0.0, min(0.5, validation_fraction)))
@@ -708,6 +724,11 @@ def diffusion_training_kwargs_from_resolved_config(
         "scheduler_eta_min": stage["scheduler_eta_min"],
         "ema_decay": stage["ema_decay"],
         "grad_clip_norm": stage["grad_clip_norm"],
+        "gradient_accumulation_steps": stage.get("gradient_accumulation_steps", 1),
+        "gradient_checkpointing": stage.get("gradient_checkpointing", False),
+        "use_amp": stage.get("use_amp", False),
+        "amp_mixed_precision": stage.get("amp_mixed_precision", "fp16"),
+        "use_accelerate": stage.get("use_accelerate", False),
         "validation_num_samples": stage["validation_num_samples"],
         "validation_num_diffusion_samples": stage["validation_num_diffusion_samples"],
         "validation_fraction": stage.get("validation_fraction", 0.1),
@@ -1201,14 +1222,33 @@ class DiffusionTrainer:
 
         # --- Accelerate / AMP integration ---
         self._accelerator: Optional[Any] = None
-        if _HAS_ACCELERATE and not bool(getattr(self.distributed_context, "enabled", False)):
+        self._amp_enabled = bool(getattr(config, "use_amp", False))
+        self._amp_mixed_precision = str(getattr(config, "amp_mixed_precision", "fp16")).strip().lower()
+        self._amp_dtype = torch.bfloat16 if self._amp_mixed_precision == "bf16" else torch.float16
+        scaler_enabled = (
+            self._amp_enabled
+            and self._amp_mixed_precision == "fp16"
+            and torch.device(self.device).type == "cuda"
+        )
+        try:
+            self._grad_scaler = torch.amp.GradScaler("cuda", enabled=bool(scaler_enabled))
+        except TypeError:  # Older PyTorch compatibility.
+            self._grad_scaler = torch.cuda.amp.GradScaler(enabled=bool(scaler_enabled))
+        should_use_accelerate = bool(getattr(config, "use_accelerate", False))
+        if should_use_accelerate and _HAS_ACCELERATE and not bool(getattr(self.distributed_context, "enabled", False)):
             try:
-                mixed_precision = 'fp16' if getattr(config, 'use_amp', False) else 'no'
+                mixed_precision = self._amp_mixed_precision if self._amp_enabled else "no"
                 self._accelerator = Accelerator(mixed_precision=mixed_precision)
-                self.model, self.optimizer, self.train_dataloader = (
-                    self._accelerator.prepare(self.model, self.optimizer, [])
+                self.diffusion, self.condition_encoder, self.logic_net, self.optimizer = (
+                    self._accelerator.prepare(
+                        self.diffusion,
+                        self.condition_encoder,
+                        self.logic_net,
+                        self.optimizer,
+                    )
                 )
-                self.diffusion = self.model
+                self.model = self.diffusion
+                self._configure_guidance()
                 logger.info(
                     "Accelerate initialized (mixed_precision=%s).", mixed_precision
                 )
@@ -1217,7 +1257,9 @@ class DiffusionTrainer:
                     "Accelerate init failed (%s); falling back to plain PyTorch.", _acc_err
                 )
                 self._accelerator = None
-        elif _HAS_ACCELERATE and bool(getattr(self.distributed_context, "enabled", False)):
+        elif should_use_accelerate and not _HAS_ACCELERATE:
+            logger.warning("use_accelerate=True but accelerate is not installed; using plain PyTorch.")
+        elif should_use_accelerate and bool(getattr(self.distributed_context, "enabled", False)):
             logger.info(
                 "Skipping Accelerate in torchrun mode; using DistributedSampler plus explicit gradient averaging."
             )
@@ -1663,7 +1705,39 @@ class DiffusionTrainer:
         """Return the active mixed-precision context, or a no-op context."""
         if self._accelerator is not None:
             return self._accelerator.autocast()
+        if bool(getattr(self, "_amp_enabled", False)):
+            device_type = torch.device(self.device).type
+            if device_type in {"cuda", "cpu"}:
+                return torch.amp.autocast(
+                    device_type=device_type,
+                    dtype=getattr(self, "_amp_dtype", torch.float16),
+                    enabled=True,
+                )
         return nullcontext()
+
+    def _backward_loss(self, loss: torch.Tensor) -> None:
+        """Backward pass through either Accelerate, GradScaler, or plain PyTorch."""
+        if self._accelerator is not None:
+            self._accelerator.backward(loss)
+            return
+        scaler = getattr(self, "_grad_scaler", None)
+        if scaler is not None and bool(getattr(scaler, "is_enabled", lambda: False)()):
+            scaler.scale(loss).backward()
+            return
+        loss.backward()
+
+    def _unscale_gradients_if_needed(self) -> None:
+        scaler = getattr(self, "_grad_scaler", None)
+        if scaler is not None and bool(getattr(scaler, "is_enabled", lambda: False)()):
+            scaler.unscale_(self.optimizer)
+
+    def _optimizer_step_with_scaler(self) -> None:
+        scaler = getattr(self, "_grad_scaler", None)
+        if scaler is not None and bool(getattr(scaler, "is_enabled", lambda: False)()):
+            scaler.step(self.optimizer)
+            scaler.update()
+            return
+        self.optimizer.step()
 
     def _decode_latent_for_logic(self, latent: torch.Tensor) -> torch.Tensor:
         """
@@ -2530,103 +2604,6 @@ class DiffusionTrainer:
             batch_graph["boundary_constraints"] = torch.cat(boundary_rows, dim=0)
         return batch_graph
     
-    def _build_logic_graph_data(
-        self,
-        graph_dict: dict,
-    ) -> dict:
-        """
-        Convert a dataset graph_dict to LogicNet's expected format.
-        
-        LogicNet expects:
-            adjacency: [N, N] adjacency matrix
-            edge_weights: [N, N] traversal costs (1.0 for open, 2.0 for locked)
-            start_idx: int
-            target_idx: int (triforce room)
-            key_lock_pairs: List[(key_node, lock_target)]
-            
-        Args:
-            graph_dict: Dict from zelda_loader
-            
-        Returns:
-            Dict for LogicNet.forward() or None if graph is empty
-        """
-        num_nodes = graph_dict['num_nodes']
-        if num_nodes == 0:
-            return None
-        
-        edge_index = graph_dict['edge_index']
-        edge_attr = graph_dict.get('edge_attr')
-        node_features = graph_dict['node_features']
-        
-        # Build adjacency matrix
-        adjacency = torch.zeros(num_nodes, num_nodes, device=self.device)
-        edge_weights = torch.zeros(num_nodes, num_nodes, device=self.device)
-        
-        key_lock_pairs = []
-        
-        if edge_index.numel() > 0:
-            edge_index_dev = edge_index.to(self.device)
-            src_indices = edge_index_dev[0]
-            dst_indices = edge_index_dev[1]
-            
-            # Vectorized adjacency construction
-            adjacency[src_indices, dst_indices] = 1.0
-            
-            # Vectorized edge weights: default=1.0, key_locked=2.0, boss_locked=3.0
-            edge_weights[src_indices, dst_indices] = 1.0
-            if edge_attr is not None:
-                edge_attr_dev = edge_attr.to(self.device) if isinstance(edge_attr, torch.Tensor) else torch.tensor(edge_attr, device=self.device)
-                num_edges = min(len(edge_attr_dev), edge_index_dev.shape[1])
-                key_locked_mask = edge_attr_dev[:num_edges] == 1
-                boss_locked_mask = edge_attr_dev[:num_edges] == 4
-                if key_locked_mask.any():
-                    edge_weights[src_indices[:num_edges][key_locked_mask], dst_indices[:num_edges][key_locked_mask]] = 2.0
-                if boss_locked_mask.any():
-                    edge_weights[src_indices[:num_edges][boss_locked_mask], dst_indices[:num_edges][boss_locked_mask]] = 3.0
-        
-        # Find start and target nodes from node_features
-        start_idx = graph_dict.get('start_node_id', 0)
-        if start_idx < 0:
-            start_idx = 0
-        
-        target_idx = None
-        node_feats = node_features if isinstance(node_features, torch.Tensor) else torch.tensor(node_features)
-        for i in range(num_nodes):
-            # has_triforce is feature[3]
-            if node_feats[i, 3] > 0.5:
-                target_idx = i
-                break
-        
-        # Find key-lock pairs:
-        # Key nodes (feature[1] = has_key) should be reachable before locked doors
-        key_nodes = [i for i in range(num_nodes) if node_feats[i, 1] > 0.5]
-        # Lock targets: rooms behind key-locked edges
-        lock_targets = set()
-        if edge_index.numel() > 0 and edge_attr is not None:
-            edge_attr_dev = edge_attr.to(self.device) if isinstance(edge_attr, torch.Tensor) else torch.tensor(edge_attr, device=self.device)
-            num_edges = min(int(edge_attr_dev.numel()), int(edge_index.shape[1]))
-            if num_edges > 0:
-                locked_edge_indices = torch.nonzero(edge_attr_dev[:num_edges] == 1, as_tuple=False).flatten()
-                if locked_edge_indices.numel() > 0:
-                    lock_targets.update(
-                        int(value)
-                        for value in edge_index_dev[1, locked_edge_indices].detach().cpu().tolist()
-                    )
-        
-        # Pair keys to locks (simple: pair by order)
-        lock_list = sorted(lock_targets)
-        for i, key_node in enumerate(key_nodes):
-            if i < len(lock_list):
-                key_lock_pairs.append((key_node, lock_list[i]))
-        
-        return {
-            'adjacency': adjacency,
-            'edge_weights': edge_weights,
-            'start_idx': start_idx,
-            'target_idx': target_idx,
-            'key_lock_pairs': key_lock_pairs,
-        }
-
     @staticmethod
     def _logic_loss_to_solvability_proxy(logic_loss: torch.Tensor) -> torch.Tensor:
         """
@@ -2909,6 +2886,32 @@ class DiffusionTrainer:
                 if isinstance(usage, torch.Tensor):
                     add_usage("vqvae_codebook", usage)
         return stats
+
+    def _gradient_accumulation_steps(self) -> int:
+        return int(max(1, int(getattr(self.config, "gradient_accumulation_steps", 1))))
+
+    def _accumulated_micro_steps(self) -> int:
+        return int(max(0, int(getattr(self, "_accumulation_micro_steps", 0))))
+
+    def _reset_gradient_accumulation(self) -> None:
+        self.optimizer.zero_grad(set_to_none=True)
+        self._accumulation_micro_steps = 0
+
+    def _scale_accumulated_gradients(self, divisor: int) -> None:
+        scale = float(max(1, int(divisor)))
+        modules = [self.diffusion, self.condition_encoder]
+        if bool(getattr(self.config, "logic_net_trainable", True)):
+            modules.append(self.logic_net)
+        seen: Set[int] = set()
+        for module in modules:
+            for param in module.parameters():
+                if param.grad is None:
+                    continue
+                param_id = id(param)
+                if param_id in seen:
+                    continue
+                seen.add(param_id)
+                param.grad.detach().div_(scale)
     
     def train_step(
         self,
@@ -2932,7 +2935,7 @@ class DiffusionTrainer:
             real_maps: [B, 1, H, W] real dungeon maps
             conditioning: [B, context_dim] conditioning vectors from real graphs
             include_logic_loss: Whether to train LogicNet on real data
-            logic_graph_data: Graph data dict for LogicNet (from _build_logic_graph_data)
+            logic_graph_data: Batched graph data dict for LogicNet.
             
         Returns:
             Dict of loss values
