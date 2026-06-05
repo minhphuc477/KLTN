@@ -187,6 +187,29 @@ def test_graphormer_topology_bias_encodes_shortest_path_distance():
     assert bias[0, 0, 2].item() == pytest.approx(-2.0)
 
 
+def test_graphormer_topology_refinement_reports_cost_metrics_against_gat2():
+    from src.core.latent_diffusion import CrossAttention
+
+    gat2_metrics = CrossAttention.topology_refinement_metrics(num_nodes=6, num_edges=5, mode="gat2")
+    graphormer_metrics = CrossAttention.topology_refinement_metrics(
+        num_nodes=6,
+        num_edges=5,
+        mode="graphormer",
+    )
+    lightweight_metrics = CrossAttention.topology_refinement_metrics(
+        num_nodes=6,
+        num_edges=5,
+        mode="lightweight",
+    )
+
+    assert gat2_metrics["attention_pairs"] == pytest.approx(36.0)
+    assert gat2_metrics["shortest_path_bias_ops"] == pytest.approx(0.0)
+    assert graphormer_metrics["attention_pairs"] == pytest.approx(gat2_metrics["attention_pairs"])
+    assert graphormer_metrics["shortest_path_bias_ops"] == pytest.approx(216.0)
+    assert lightweight_metrics["attention_pairs"] == pytest.approx(0.0)
+    assert lightweight_metrics["message_pairs"] == pytest.approx(11.0)
+
+
 def test_latent_diffusion_graphormer_topology_refinement_mode_runs_as_ablation():
     torch.manual_seed(17)
     model = create_latent_diffusion(

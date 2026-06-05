@@ -372,6 +372,44 @@ class CrossAttention(nn.Module):
         return norm_adj, valid
 
     @staticmethod
+    def topology_refinement_metrics(
+        *,
+        num_nodes: int,
+        mode: str = "gat2",
+        num_edges: Optional[int] = None,
+    ) -> Dict[str, float]:
+        """Approximate per-layer topology-refinement costs for ablations."""
+        n = int(max(0, num_nodes))
+        e = int(max(0, num_edges if num_edges is not None else 0))
+        normalized = str(mode).strip().lower()
+        if normalized == "upgraded":
+            normalized = "gat2"
+        if normalized not in {"none", "lightweight", "gat2", "graphormer"}:
+            raise ValueError(
+                f"Invalid topology refinement mode {mode!r}; "
+                "expected none, lightweight, gat2, or graphormer."
+            )
+        attention_pairs = 0
+        message_pairs = 0
+        shortest_path_ops = 0
+        if normalized == "lightweight":
+            message_pairs = n + e
+        elif normalized == "gat2":
+            attention_pairs = n * n
+        elif normalized == "graphormer":
+            attention_pairs = n * n
+            shortest_path_ops = n * n * n
+        gat2_baseline = max(1, n * n)
+        return {
+            "num_nodes": float(n),
+            "num_edges": float(e),
+            "attention_pairs": float(attention_pairs),
+            "message_pairs": float(message_pairs),
+            "shortest_path_bias_ops": float(shortest_path_ops),
+            "relative_attention_pairs_to_gat2": float(attention_pairs / gat2_baseline),
+        }
+
+    @staticmethod
     def _shortest_path_attention_bias(
         adjacency_mask: Tensor,
         valid: Tensor,
