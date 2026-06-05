@@ -138,6 +138,7 @@ class SinusoidalPositionEncoding2D(nn.Module):
         super().__init__()
         self.dim = dim
         self.max_h, self.max_w = max_size
+        self.temperature = float(temperature)
         
         # Create position encoding buffer
         pe = self._create_encoding(dim, self.max_h, self.max_w, temperature)
@@ -194,12 +195,21 @@ class SinusoidalPositionEncoding2D(nn.Module):
             [B, C, H, W] with positional encoding added
         """
         _B, C, H, W = x.shape
+        if int(H) > int(self.pe.shape[0]) or int(W) > int(self.pe.shape[1]):
+            new_h = max(int(H), int(self.pe.shape[0]))
+            new_w = max(int(W), int(self.pe.shape[1]))
+            self.max_h = new_h
+            self.max_w = new_w
+            self.pe = self._create_encoding(self.dim, new_h, new_w, self.temperature).to(
+                device=self.pe.device,
+                dtype=self.pe.dtype,
+            )
         
         # Get relevant portion of encoding
         pe = self.pe[:H, :W, :C]  # [H, W, C]
         pe = pe.permute(2, 0, 1).unsqueeze(0)  # [1, C, H, W]
         
-        return x + pe.to(x.device)
+        return x + pe.to(device=x.device, dtype=x.dtype)
 
 
 class GraphNodePositionEncoding(nn.Module):
@@ -857,6 +867,12 @@ class GraphToGridCrossAttention(nn.Module):
         
         # Reshape back to grid: [B, C, H, W]
         output = grid_seq.permute(0, 2, 1).reshape(B, C, H, W)
+        if valid_rows is not None and not torch.all(valid_rows):
+            output = torch.where(
+                valid_rows.to(device=output.device).view(B, 1, 1, 1),
+                output,
+                grid_features,
+            )
         
         return output
 

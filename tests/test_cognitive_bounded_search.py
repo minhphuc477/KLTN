@@ -551,6 +551,7 @@ class TestHeuristics:
         memory = WorkingMemory()
         memory.remember(MemoryItemType.GOAL, (100, 0), current_step=0)
         goal_seek = GoalSeekingHeuristic(weight=1.0)
+        curiosity = CuriosityHeuristic(weight=1.0)
 
         score = goal_seek.score(
             current_pos=(0, 0),
@@ -561,8 +562,17 @@ class TestHeuristics:
             goal_pos=(100, 0),
             current_step=1,
         )
+        max_curiosity_score = curiosity.score(
+            current_pos=(0, 0),
+            target_pos=(1, 0),
+            target_tile=SEMANTIC_PALETTE['FLOOR'],
+            belief_map=belief,
+            memory=memory,
+            goal_pos=(100, 0),
+            current_step=1,
+        )
 
-        assert score == pytest.approx(1.0)
+        assert score == pytest.approx(max_curiosity_score)
 
     def test_belief_decay_can_forget_below_uniform_posterior_floor(self):
         belief = BeliefMap(grid_shape=(5, 5), decay_rate=0.01)

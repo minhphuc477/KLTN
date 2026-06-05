@@ -278,8 +278,11 @@ class CrossAttention(nn.Module):
         """Build normalized adjacency with self loops for lightweight GCN refinement."""
         adj = torch.zeros(num_nodes, num_nodes, device=device, dtype=dtype)
         if edge_index.numel() > 0:
-            src = edge_index[0].long().clamp(0, max(0, num_nodes - 1))
-            dst = edge_index[1].long().clamp(0, max(0, num_nodes - 1))
+            src = edge_index[0].long()
+            dst = edge_index[1].long()
+            in_range = (src >= 0) & (src < num_nodes) & (dst >= 0) & (dst < num_nodes)
+            src = src[in_range]
+            dst = dst[in_range]
             adj[src, dst] = 1.0
             adj[dst, src] = 1.0
         adj = adj + torch.eye(num_nodes, device=device, dtype=dtype)
@@ -324,12 +327,18 @@ class CrossAttention(nn.Module):
             if int(ei.shape[0]) != 2:
                 raise ValueError(f"CrossAttention edge_index must have first dimension 2, got {tuple(ei.shape)}.")
             if ei.numel() > 0:
-                src = ei[0].clamp(0, max(0, seq_len - 1))
-                dst = ei[1].clamp(0, max(0, seq_len - 1))
-                edge_valid = valid[:, src] & valid[:, dst]
-                batch_idx = torch.arange(batch_size, device=device).unsqueeze(1).expand(-1, src.numel())
-                adj[batch_idx[edge_valid], src.unsqueeze(0).expand(batch_size, -1)[edge_valid], dst.unsqueeze(0).expand(batch_size, -1)[edge_valid]] = 1.0
-                adj[batch_idx[edge_valid], dst.unsqueeze(0).expand(batch_size, -1)[edge_valid], src.unsqueeze(0).expand(batch_size, -1)[edge_valid]] = 1.0
+                src_all = ei[0]
+                dst_all = ei[1]
+                in_range = (src_all >= 0) & (src_all < seq_len) & (dst_all >= 0) & (dst_all < seq_len)
+                src = src_all[in_range]
+                dst = dst_all[in_range]
+                if src.numel() > 0:
+                    edge_valid = valid[:, src] & valid[:, dst]
+                    batch_idx = torch.arange(batch_size, device=device).unsqueeze(1).expand(-1, src.numel())
+                    src_b = src.unsqueeze(0).expand(batch_size, -1)
+                    dst_b = dst.unsqueeze(0).expand(batch_size, -1)
+                    adj[batch_idx[edge_valid], src_b[edge_valid], dst_b[edge_valid]] = 1.0
+                    adj[batch_idx[edge_valid], dst_b[edge_valid], src_b[edge_valid]] = 1.0
         elif edge_index.dim() == 3:
             ei = edge_index.to(device=device, dtype=torch.long)
             if int(ei.shape[1]) != 2:
@@ -341,9 +350,12 @@ class CrossAttention(nn.Module):
                     f"CrossAttention edge_index batch size {int(ei.shape[0])} does not match context batch {batch_size}."
                 )
             if ei.numel() > 0:
-                src = ei[:, 0].clamp(0, max(0, seq_len - 1))
-                dst = ei[:, 1].clamp(0, max(0, seq_len - 1))
-                edge_valid = valid.gather(1, src) & valid.gather(1, dst)
+                src_raw = ei[:, 0]
+                dst_raw = ei[:, 1]
+                in_range = (src_raw >= 0) & (src_raw < seq_len) & (dst_raw >= 0) & (dst_raw < seq_len)
+                src = src_raw.clamp(0, max(0, seq_len - 1))
+                dst = dst_raw.clamp(0, max(0, seq_len - 1))
+                edge_valid = in_range & valid.gather(1, src) & valid.gather(1, dst)
                 batch_idx = torch.arange(batch_size, device=device).unsqueeze(1).expand_as(src)
                 adj[batch_idx[edge_valid], src[edge_valid], dst[edge_valid]] = 1.0
                 adj[batch_idx[edge_valid], dst[edge_valid], src[edge_valid]] = 1.0

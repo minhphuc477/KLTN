@@ -209,6 +209,18 @@ class TestGraphGridAttention:
         assert output.shape == x.shape
         # Position encoding adds to input, so output should be different
         assert not torch.allclose(output, x)
+
+    def test_position_encoding_2d_grows_for_large_feature_maps(self):
+        from src.core.graph_grid_attention import SinusoidalPositionEncoding2D
+
+        pe = SinusoidalPositionEncoding2D(dim=16, max_size=(4, 4))
+        x = torch.randn(1, 16, 5, 7)
+
+        output = pe(x)
+
+        assert output.shape == x.shape
+        assert pe.pe.shape[0] >= 5
+        assert pe.pe.shape[1] >= 7
     
     def test_graph_to_grid_forward(self):
         """Test GraphToGridCrossAttention forward pass."""
@@ -338,6 +350,30 @@ class TestGraphGridAttention:
         assert torch.isfinite(out).all()
         assert grid_features.grad is not None and torch.isfinite(grid_features.grad).all()
         assert graph_nodes.grad is not None and torch.isfinite(graph_nodes.grad).all()
+
+    def test_graph_to_grid_attention_fully_masked_row_is_identity(self):
+        from src.core.graph_grid_attention import GraphToGridCrossAttention
+
+        module = GraphToGridCrossAttention(
+            grid_dim=16,
+            graph_dim=12,
+            num_heads=4,
+            attention_mode="softmax",
+            dropout=0.0,
+        )
+        module.eval()
+        grid_features = torch.randn(2, 16, 3, 3)
+        graph_nodes = torch.randn(2, 3, 12)
+        node_mask = torch.tensor([[1, 1, 1], [0, 0, 0]], dtype=torch.bool)
+
+        out_a = module(grid_features, graph_nodes, node_mask=node_mask)
+        changed_graph = graph_nodes.clone()
+        changed_graph[1] = changed_graph[1] * 100.0 + 17.0
+        out_b = module(grid_features, changed_graph, node_mask=node_mask)
+
+        assert torch.allclose(out_a[1], grid_features[1])
+        assert torch.allclose(out_b[1], grid_features[1])
+        assert torch.allclose(out_a[1], out_b[1])
 
     def test_spatial_alignment_loss_requires_captured_softmax_maps(self):
         """Alignment should fail loudly when capture/softmax attention is absent."""
@@ -689,6 +725,22 @@ class TestGraphGridAttention:
         assert torch.isfinite(out).all()
         assert out.shape == x.shape
         assert torch.allclose(out[1], torch.zeros_like(out[1]))
+
+    def test_latent_cross_attention_filters_invalid_padded_edges_before_clamping(self):
+        from src.core.latent_diffusion import CrossAttention
+
+        torch.manual_seed(7)
+        module = CrossAttention(query_dim=16, context_dim=8, num_heads=4, dropout=0.0)
+        module.eval()
+        x = torch.randn(1, 5, 16)
+        context = torch.randn(1, 3, 8)
+        invalid_edge = torch.tensor([[-1], [2]], dtype=torch.long)
+        empty_edges = torch.empty(2, 0, dtype=torch.long)
+
+        out_invalid = module(x, context, edge_index=invalid_edge)
+        out_empty = module(x, context, edge_index=empty_edges)
+
+        assert torch.allclose(out_invalid, out_empty, atol=1e-6, rtol=1e-6)
 
     def test_latent_cross_attention_rejects_node_mask_shape_mismatch(self):
         from src.core.latent_diffusion import CrossAttention

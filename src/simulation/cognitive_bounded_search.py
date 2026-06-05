@@ -1596,12 +1596,11 @@ class GoalSeekingHeuristic(DecisionHeuristic):
         target_dist = abs(target_pos[0] - remembered_goal[0]) + \
                       abs(target_pos[1] - remembered_goal[1])
         
-        # Normalize improvement by ~10 tiles so goal-seeking scores are on the
-        # same [0, 1] scale as CuriosityHeuristic / RecencyHeuristic and remain
-        # competitive at long range.
+        # A one-step Manhattan improvement should be comparable to the
+        # strongest CuriosityHeuristic score (1.0), regardless of goal range.
         if current_dist > 0:
-            improvement = min(1.0, max(0.0, current_dist - target_dist) / 10.0)
-            return float(improvement)
+            improvement = current_dist - target_dist
+            return float(min(1.0, max(0.0, improvement)))
         return 0.0
 
 
