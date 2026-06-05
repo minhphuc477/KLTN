@@ -251,7 +251,7 @@ def test_pipeline_fast_sampler_clamps_cfg_and_disables_logic_guidance(monkeypatc
     assert result.room_grid.shape == (16, 11)
 
 
-def test_pipeline_fast_sampler_can_fallback_to_teacher(monkeypatch):
+def test_pipeline_fast_sampler_teacher_fallback_is_default_off_and_opt_in(monkeypatch):
     pipeline = NeuralSymbolicDungeonPipeline(device="cpu", enable_logging=False)
     mission_graph = nx.DiGraph()
     mission_graph.add_node(0, is_start=True, pos=(0, 0))
@@ -292,7 +292,7 @@ def test_pipeline_fast_sampler_can_fallback_to_teacher(monkeypatch):
     monkeypatch.setattr(pipeline.vqvae, "decode", _decode)
     monkeypatch.setattr(pipeline, "_should_retry_room_with_teacher", lambda **kwargs: True)
 
-    result = pipeline.generate_room(
+    default_result = pipeline.generate_room(
         neighbor_latents={"N": None, "S": None, "E": None, "W": None},
         graph_context=graph_context,
         room_id=0,
@@ -303,6 +303,22 @@ def test_pipeline_fast_sampler_can_fallback_to_teacher(monkeypatch):
     )
 
     assert calls["fast"] == 1
+    assert calls["teacher"] == 0
+    assert float(default_result.metrics.get("teacher_fallback_used", 0.0)) == pytest.approx(0.0)
+    assert default_result.metrics["used_fast_sampling"] == pytest.approx(1.0)
+
+    result = pipeline.generate_room(
+        neighbor_latents={"N": None, "S": None, "E": None, "W": None},
+        graph_context=graph_context,
+        room_id=0,
+        apply_repair=False,
+        use_fast_sampling=True,
+        num_diffusion_steps=4,
+        seed=13,
+        allow_teacher_fallback=True,
+    )
+
+    assert calls["fast"] == 2
     assert calls["teacher"] == 1
     assert result.metrics["teacher_fallback_used"] == pytest.approx(1.0)
     assert result.metrics["used_fast_sampling"] == pytest.approx(0.0)

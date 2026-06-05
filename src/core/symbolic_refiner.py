@@ -1163,14 +1163,16 @@ class ConstraintPropagator:
         if path is not None:
             return result
 
-        # Create a path. Prefer neural/symbolic cost-guided carving when a
-        # cost map is provided; otherwise preserve the historical L-shape
-        # fallback for compatibility.
-        r0, c0 = start
-        r1, c1 = goal
-        carve_path = self._cost_guided_carve(result, start, goal, walkable, costs) if costs is not None else []
+        # Create a path using a continuous cost field. When LogicNet or the
+        # caller provides repair costs those dominate; otherwise derive a
+        # soft reachability field from existing walkable structure so the
+        # rescue path follows room context instead of drawing a fixed L shape.
+        if costs is None:
+            costs = self._derive_soft_carve_cost_map(result, start, goal, walkable)
+        carve_path = self._cost_guided_carve(result, start, goal, walkable, costs)
         if not carve_path:
-            carve_path = self._l_shape_path(r0, c0, r1, c1)
+            logger.debug("Cost-guided connectivity carve failed; leaving grid unchanged.")
+            return result
 
         for r, c in carve_path:
             if result[r, c] not in walkable:
@@ -1182,6 +1184,63 @@ class ConstraintPropagator:
             needs_floor = constrained & ~np.isin(result, list(walkable))
             result[needs_floor] = floor_id
         return result
+
+    def _derive_soft_carve_cost_map(
+        self,
+        grid: np.ndarray,
+        start: Tuple[int, int],
+        goal: Tuple[int, int],
+        walkable: Set[int],
+    ) -> np.ndarray:
+        """
+        Build a lightweight continuous carve prior from the current room.
+
+        This approximates the useful behavior of a soft pathfinder without
+        requiring a neural module inside symbolic repair: existing walkable
+        cells are cheap, walls near existing walkable structure are cheaper
+        than isolated walls, and start/goal are explicitly anchored.
+        """
+        h, w = grid.shape[:2]
+        walkable_mask = np.isin(grid, list(walkable))
+        sr, sc = _normalize_grid_coord(start, grid.shape[:2], field_name="start")
+        gr, gc = _normalize_grid_coord(goal, grid.shape[:2], field_name="goal")
+        walkable_mask[sr, sc] = True
+        walkable_mask[gr, gc] = True
+
+        distance = np.full((h, w), np.inf, dtype=np.float32)
+        queue: deque[Tuple[int, int]] = deque()
+        for r, c in np.argwhere(walkable_mask):
+            rr, cc = int(r), int(c)
+            distance[rr, cc] = 0.0
+            queue.append((rr, cc))
+
+        while queue:
+            r, c = queue.popleft()
+            next_dist = float(distance[r, c]) + 1.0
+            for dr, dc in ((0, 1), (1, 0), (0, -1), (-1, 0)):
+                nr, nc = r + dr, c + dc
+                if not (0 <= nr < h and 0 <= nc < w):
+                    continue
+                if next_dist < float(distance[nr, nc]):
+                    distance[nr, nc] = next_dist
+                    queue.append((nr, nc))
+
+        finite = np.isfinite(distance)
+        if np.any(finite):
+            max_dist = max(float(distance[finite].max()), 1.0)
+            distance = np.where(finite, distance / max_dist, 1.0).astype(np.float32)
+        else:
+            distance = np.ones((h, w), dtype=np.float32)
+
+        costs = np.where(walkable_mask, 0.20, 1.00 + 0.75 * distance).astype(np.float32)
+        if h > 2 and w > 2:
+            costs[0, :] += 0.35
+            costs[-1, :] += 0.35
+            costs[:, 0] += 0.35
+            costs[:, -1] += 0.35
+            costs[sr, sc] = 0.05
+            costs[gr, gc] = 0.05
+        return costs
 
     def _l_shape_path(
         self,

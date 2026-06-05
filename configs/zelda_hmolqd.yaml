@@ -253,8 +253,8 @@ generation:
   puzzle_stage_topology_enabled: false  # type=bool, default=false, valid={true,false}; enable only with retrained stage-conditioned checkpoints because it changes runtime topology priors toward ordered multi-step puzzle traces
   puzzle_stage_trace_decay: 0.75  # type=float, default=0.75, valid=0.05..1; decay applied when rasterizing ordered puzzle stages into runtime topology priors
   deterministic_graph_marker_overlay_enabled: true  # type=bool, default=true, valid={true,false}; keep enabled for the production hybrid path, disable only for purely-neural semantic ablations
-  fast_sampler_teacher_fallback_enabled: true  # type=bool, default=true, valid={true,false}; lets runtime guardrails reroute bad fast-sampler rooms to the teacher
-  masked_room_teacher_fallback_enabled: true  # type=bool, default=true, valid={true,false}; protects production exports by rerouting obviously noisy masked-room outputs to the diffusion teacher
+  fast_sampler_teacher_fallback_enabled: false  # type=bool, default=false, valid={true,false}; strict default exposes fast-sampler standalone quality instead of rerouting to the teacher
+  masked_room_teacher_fallback_enabled: false  # type=bool, default=false, valid={true,false}; strict default exposes masked-room standalone quality instead of rerouting noisy outputs to the teacher
   masked_room_sampling_temperature: 1.0  # type=float, default=1.0, valid>0; calibrated categorical temperature for true MaskGIT-style token sampling
   masked_room_sampling_schedule: cosine  # type=str, default=cosine, valid={cosine,linear}; cosine remaining-mask schedule matches the common MaskGIT decoding regime better than linear keep counts
   masked_room_sampling_stochastic: true  # type=bool, default=true, valid={true,false}; use stochastic categorical token draws instead of greedy argmax-only updates

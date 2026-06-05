@@ -349,6 +349,27 @@ class TestConstraintPropagator:
         assert np.all(fixed_grid[4, :] == TileType.FLOOR.value)
         assert np.all(fixed_grid[0, 1:4] == TileType.WALL.value)
 
+    def test_enforce_connectivity_derives_soft_costs_without_l_shape_fallback(self):
+        """Missing cost maps should still follow existing structure, not hardcoded L-shapes."""
+        from src.core.symbolic_refiner import ConstraintPropagator, TileType
+
+        propagator = ConstraintPropagator()
+        grid = np.full((5, 5), TileType.WALL.value)
+        grid[1:5, 0] = TileType.FLOOR.value
+        grid[4, 0:4] = TileType.FLOOR.value
+        walkable = {TileType.FLOOR.value}
+
+        fixed_grid = propagator.enforce_connectivity(
+            grid,
+            start=(0, 0),
+            goal=(4, 4),
+            walkable=walkable,
+        )
+
+        assert np.all(fixed_grid[:, 0] == TileType.FLOOR.value)
+        assert np.all(fixed_grid[4, :] == TileType.FLOOR.value)
+        assert np.all(fixed_grid[0, 1:4] == TileType.WALL.value)
+
 
 class TestSymbolicRefiner:
     """Tests for complete Symbolic Refiner."""

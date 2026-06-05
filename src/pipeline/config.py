@@ -68,8 +68,8 @@ class SamplerConfig:
     diffusion_cfg_schedule_power: float = 1.0
     masked_sampling_steps: int = 8
     fast_sampling_steps: int = 4
-    default_fast_sampler_teacher_fallback_enabled: bool = True
-    default_masked_room_teacher_fallback_enabled: bool = True
+    default_fast_sampler_teacher_fallback_enabled: bool = False
+    default_masked_room_teacher_fallback_enabled: bool = False
     default_masked_room_sampling_temperature: float = 1.0
     default_masked_room_sampling_schedule: str = "cosine"
     default_masked_room_sampling_stochastic: bool = True

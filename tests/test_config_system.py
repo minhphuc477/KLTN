@@ -235,8 +235,8 @@ def test_default_config_uses_small_data_recommended_room_model_profile():
     assert resolved["generation"]["puzzle_room_min_quality_gain"] == pytest.approx(0.5)
     assert resolved["generation"]["validator_plan_max_states"] == 512
     assert resolved["generation"]["deterministic_graph_marker_overlay_enabled"] is True
-    assert resolved["generation"]["fast_sampler_teacher_fallback_enabled"] is True
-    assert resolved["generation"]["masked_room_teacher_fallback_enabled"] is True
+    assert resolved["generation"]["fast_sampler_teacher_fallback_enabled"] is False
+    assert resolved["generation"]["masked_room_teacher_fallback_enabled"] is False
     assert resolved["generation"]["masked_room_sampling_temperature"] == pytest.approx(1.0)
     assert resolved["generation"]["masked_room_sampling_schedule"] == "cosine"
     assert resolved["generation"]["masked_room_sampling_stochastic"] is True
@@ -307,8 +307,8 @@ def test_canonical_yaml_uses_downsized_masked_room_profile():
     assert resolved["generation"]["puzzle_room_min_quality_gain"] == pytest.approx(0.5)
     assert resolved["generation"]["validator_plan_max_states"] == 512
     assert resolved["generation"]["deterministic_graph_marker_overlay_enabled"] is True
-    assert resolved["generation"]["fast_sampler_teacher_fallback_enabled"] is True
-    assert resolved["generation"]["masked_room_teacher_fallback_enabled"] is True
+    assert resolved["generation"]["fast_sampler_teacher_fallback_enabled"] is False
+    assert resolved["generation"]["masked_room_teacher_fallback_enabled"] is False
     assert resolved["generation"]["masked_room_sampling_temperature"] == pytest.approx(1.0)
     assert resolved["generation"]["masked_room_sampling_schedule"] == "cosine"
     assert resolved["generation"]["masked_room_sampling_stochastic"] is True
@@ -457,8 +457,8 @@ def test_stage_helpers_forward_checkpoint_retention_and_resume_defaults():
     assert generation_kwargs["default_puzzle_room_min_quality_gain"] == pytest.approx(0.5)
     assert generation_kwargs["default_validator_plan_max_states"] == 512
     assert generation_kwargs["default_deterministic_graph_marker_overlay_enabled"] is True
-    assert generation_kwargs["default_fast_sampler_teacher_fallback_enabled"] is True
-    assert generation_kwargs["default_masked_room_teacher_fallback_enabled"] is True
+    assert generation_kwargs["default_fast_sampler_teacher_fallback_enabled"] is False
+    assert generation_kwargs["default_masked_room_teacher_fallback_enabled"] is False
     assert generation_kwargs["default_masked_room_sampling_temperature"] == pytest.approx(1.0)
     assert generation_kwargs["default_masked_room_sampling_schedule"] == "cosine"
     assert generation_kwargs["default_masked_room_sampling_stochastic"] is True
@@ -547,8 +547,8 @@ def test_generation_runtime_kwargs_remain_backward_compatible_when_newer_generat
     assert generation_kwargs["default_puzzle_room_min_quality_gain"] == pytest.approx(0.5)
     assert generation_kwargs["default_validator_plan_max_states"] == 512
     assert generation_kwargs["default_deterministic_graph_marker_overlay_enabled"] is True
-    assert generation_kwargs["default_fast_sampler_teacher_fallback_enabled"] is True
-    assert generation_kwargs["default_masked_room_teacher_fallback_enabled"] is True
+    assert generation_kwargs["default_fast_sampler_teacher_fallback_enabled"] is False
+    assert generation_kwargs["default_masked_room_teacher_fallback_enabled"] is False
     assert generation_kwargs["default_masked_room_sampling_temperature"] == pytest.approx(1.0)
     assert generation_kwargs["default_masked_room_sampling_schedule"] == "cosine"
     assert generation_kwargs["default_masked_room_sampling_stochastic"] is True
@@ -581,8 +581,8 @@ def test_generation_runtime_kwargs_remain_backward_compatible_when_newer_generat
     assert pipeline_kwargs["default_puzzle_room_min_quality_gain"] == pytest.approx(0.5)
     assert pipeline_kwargs["default_validator_plan_max_states"] == 512
     assert pipeline_kwargs["default_deterministic_graph_marker_overlay_enabled"] is True
-    assert pipeline_kwargs["default_fast_sampler_teacher_fallback_enabled"] is True
-    assert pipeline_kwargs["default_masked_room_teacher_fallback_enabled"] is True
+    assert pipeline_kwargs["default_fast_sampler_teacher_fallback_enabled"] is False
+    assert pipeline_kwargs["default_masked_room_teacher_fallback_enabled"] is False
     assert pipeline_kwargs["default_masked_room_sampling_temperature"] == pytest.approx(1.0)
     assert pipeline_kwargs["default_masked_room_sampling_schedule"] == "cosine"
     assert pipeline_kwargs["default_masked_room_sampling_stochastic"] is True

@@ -174,11 +174,11 @@ def generation_runtime_kwargs_from_resolved_config(config: Dict[str, Any]) -> Di
         ),
         "default_fast_sampler_teacher_fallback_enabled": stage.get(
             "fast_sampler_teacher_fallback_enabled",
-            True,
+            False,
         ),
         "default_masked_room_teacher_fallback_enabled": stage.get(
             "masked_room_teacher_fallback_enabled",
-            True,
+            False,
         ),
         "default_masked_room_sampling_temperature": stage.get(
             "masked_room_sampling_temperature",
