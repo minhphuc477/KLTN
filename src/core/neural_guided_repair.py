@@ -51,6 +51,7 @@ class NeuralGuidedRepair:
         obstacle_weight: float = 5.0,
         trace_threshold: float = 0.5,
         anchor_threshold: float = 0.3,
+        transpose_logicnet_masks: bool = False,
         repair_inpaint_noise_strength: float = 0.5,
         repair_inpaint_guidance_scale_multiplier: float = 1.0,
     ):
@@ -62,6 +63,7 @@ class NeuralGuidedRepair:
         self.obstacle_weight = float(max(0.0, obstacle_weight))
         self.trace_threshold = float(trace_threshold)
         self.anchor_threshold = float(anchor_threshold)
+        self.transpose_logicnet_masks = bool(transpose_logicnet_masks)
         self.repair_inpaint_noise_strength = float(max(0.0, min(1.0, repair_inpaint_noise_strength)))
         self.repair_inpaint_guidance_scale_multiplier = float(max(0.0, repair_inpaint_guidance_scale_multiplier))
 
@@ -88,7 +90,11 @@ class NeuralGuidedRepair:
             walkability_t = info.get("walkability")
             if not isinstance(walkability_t, torch.Tensor):
                 raise RuntimeError("LogicNet did not return info['walkability']; cannot guide repair.")
-            walkability_t = self._resize_mask(walkability_t, grid_shape).clamp(0.0, 1.0)
+            walkability_t = self._resize_mask(
+                walkability_t,
+                grid_shape,
+                transpose_mask=self.transpose_logicnet_masks,
+            ).clamp(0.0, 1.0)
             walkability = walkability_t[0, 0].detach().cpu().numpy().astype(np.float32, copy=False)
 
             cost_map = None
@@ -229,25 +235,44 @@ class NeuralGuidedRepair:
         masks = []
         trace = targets.get("trace_target") if isinstance(targets, dict) else None
         if isinstance(trace, torch.Tensor):
-            masks.append(self._resize_mask(trace, grid_shape) > self.trace_threshold)
+            masks.append(
+                self._resize_mask(
+                    trace,
+                    grid_shape,
+                    transpose_mask=self.transpose_logicnet_masks,
+                ) > self.trace_threshold
+            )
         anchor = targets.get("anchor_target") if isinstance(targets, dict) else None
         if isinstance(anchor, torch.Tensor):
-            masks.append(self._resize_mask(anchor, grid_shape) > self.anchor_threshold)
+            masks.append(
+                self._resize_mask(
+                    anchor,
+                    grid_shape,
+                    transpose_mask=self.transpose_logicnet_masks,
+                ) > self.anchor_threshold
+            )
         if not masks:
             return None
         stacked = torch.stack([mask[0, 0] for mask in masks], dim=0).any(dim=0)
         return stacked.detach().cpu().numpy().astype(bool, copy=False)
 
     @staticmethod
-    def _resize_mask(mask: torch.Tensor, grid_shape: Tuple[int, int]) -> torch.Tensor:
+    def _resize_mask(
+        mask: torch.Tensor,
+        grid_shape: Tuple[int, int],
+        *,
+        transpose_mask: bool = False,
+    ) -> torch.Tensor:
         if mask.dim() == 3:
             mask = mask.unsqueeze(1)
         if mask.dim() != 4 or int(mask.shape[1]) != 1:
             raise ValueError(f"Expected mask [B,1,H,W], got {tuple(mask.shape)}.")
         target_h, target_w = int(grid_shape[0]), int(grid_shape[1])
+        if transpose_mask:
+            mask = mask.transpose(-1, -2).contiguous()
         if tuple(mask.shape[-2:]) == (target_h, target_w):
             return mask
-        if tuple(mask.shape[-2:]) == (target_w, target_h):
+        if target_h != target_w and tuple(mask.shape[-2:]) == (target_w, target_h):
             return mask.transpose(-1, -2).contiguous()
         return F.interpolate(mask.float(), size=(target_h, target_w), mode="nearest")
 

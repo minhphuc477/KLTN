@@ -185,31 +185,40 @@ def validate_resource_loops(graph: Any) -> bool:
     if not start:
         return True
 
-    farms = [
+    farms_by_resource: Dict[str, List[Any]] = {}
+    for farm in [
         n
         for n in graph.nodes.values()
         if getattr(getattr(n, "node_type", None), "name", "") == "RESOURCE_FARM"
-    ]
-
-    for farm in farms:
+    ]:
         resource = farm.drops_resource
         if not resource:
             continue
+        farms_by_resource.setdefault(str(resource), []).append(farm)
 
-        gates = [e for e in graph.edges if e.item_required == resource]
-        for gate in gates:
-            reachable = graph.get_reachable_nodes(
-                start.id,
-                excluded_edges={(gate.source, gate.target)},
+    gates = [e for e in graph.edges if getattr(e, "item_required", None)]
+    for gate in gates:
+        resource = str(gate.item_required)
+        resource_farms = farms_by_resource.get(resource, [])
+        if not resource_farms:
+            logger.warning(
+                "Gate %s->%s requires resource %s but no matching farm exists",
+                gate.source,
+                gate.target,
+                resource,
             )
-            if farm.id not in reachable:
-                logger.warning(
-                    "Resource farm %s (%s) not reachable before gate %s->%s",
-                    farm.id,
-                    resource,
-                    gate.source,
-                    gate.target,
-                )
-                return False
+            return False
+        reachable = graph.get_reachable_nodes(
+            start.id,
+            excluded_edges={(gate.source, gate.target)},
+        )
+        if not any(farm.id in reachable for farm in resource_farms):
+            logger.warning(
+                "No %s resource farm is reachable before gate %s->%s",
+                resource,
+                gate.source,
+                gate.target,
+            )
+            return False
 
     return True

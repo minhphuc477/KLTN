@@ -214,6 +214,25 @@ class DStarLiteSolver:
             candidates.append(restored)
 
         return candidates
+
+    def _has_consistent_goal_state(self) -> bool:
+        """Return True when any finite inventory state at the goal is locally consistent."""
+        goal = self.env.goal_pos
+        if goal is None:
+            return False
+        candidate_hashes = set(self.g_scores.keys()) | set(self.rhs_scores.keys())
+        for state_hash in candidate_hashes:
+            try:
+                position = state_hash[0]
+            except (TypeError, IndexError):
+                continue
+            if tuple(position) != tuple(goal):
+                continue
+            g = self.g_scores.get(state_hash, float("inf"))
+            rhs = self.rhs_scores.get(state_hash, float("inf"))
+            if g < float("inf") and rhs < float("inf") and g == rhs:
+                return True
+        return False
     
     def compute_shortest_path(self) -> bool:
         """
@@ -227,9 +246,6 @@ class DStarLiteSolver:
         if self.env.goal_pos is None:
             return False
         
-        goal_state = GameState(position=self.env.goal_pos)
-        goal_hash = game_state_key(goal_state)
-        
         iterations = 0
         max_iterations = max(10_000, int(self.timeout) * 20)
         
@@ -241,15 +257,7 @@ class DStarLiteSolver:
             if not self.open_set:
                 break
             
-            # Check termination condition
-            top_key = self.open_set[0]
-            goal_key = self.calculate_key(goal_state, goal_hash)
-            
-            g_goal = self.g_scores.get(goal_hash, float('inf'))
-            rhs_goal = self.rhs_scores.get(goal_hash, float('inf'))
-            
-            if top_key >= goal_key and rhs_goal == g_goal:
-                # Goal is consistent and has lowest key
+            if self._has_consistent_goal_state():
                 return True
             
             # Pop minimum key state

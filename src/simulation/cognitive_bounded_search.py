@@ -1505,12 +1505,17 @@ class SafetyHeuristic(DecisionHeuristic):
         if target_tile in self.threat_tiles:
             return -1.0  # Strongly avoid
         
-        # Check for remembered threats nearby
+        # Check all remembered threats nearby; do not let recall ordering hide a larger threat.
+        strongest_penalty = 0.0
         for item in memory.recall(MemoryItemType.THREAT, current_step):
             dr = abs(item.position[0] - target_pos[0])
             dc = abs(item.position[1] - target_pos[1])
             if dr + dc <= 2:  # Within 2 tiles of remembered threat
-                return -0.5 * item.salience
+                distance_discount = 1.0 / float(max(1, dr + dc))
+                penalty = -0.5 * float(item.salience) * distance_discount
+                strongest_penalty = min(strongest_penalty, penalty)
+        if strongest_penalty < 0.0:
+            return strongest_penalty
         
         return 0.1  # Slight preference for safe tiles
 
@@ -3025,6 +3030,7 @@ class CognitiveBoundedSearch:
         elif tile_type == SEMANTIC_PALETTE['DOOR_BOSS']:
             if target_pos not in new_state.opened_doors:
                 if new_state.has_boss_key:
+                    new_state.has_boss_key = False
                     new_state.opened_doors.add(target_pos)
                 else:
                     return False, game_state
@@ -3039,7 +3045,6 @@ class CognitiveBoundedSearch:
                 new_state.has_boss_key = True
             elif tile_type == SEMANTIC_PALETTE['KEY_ITEM']:
                 new_state.has_item = True
-                new_state.bomb_count += 4  # Consumable bombs
             elif tile_type == SEMANTIC_PALETTE['ITEM_MINOR']:
                 new_state.bomb_count += 4  # Consumable: add 4 bombs
         

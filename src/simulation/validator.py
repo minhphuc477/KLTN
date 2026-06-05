@@ -1149,6 +1149,7 @@ class ZeldaLogicEnv:
                 new_state.position = target_pos
                 return True, new_state, 0.0, {'msg': 'Boss door already open'}
             elif new_state.has_boss_key:
+                new_state.has_boss_key = False
                 new_state.opened_doors.add(target_pos)
                 new_state.position = target_pos
                 self.grid[target_pos] = SEMANTIC_PALETTE['DOOR_OPEN']
@@ -1189,8 +1190,6 @@ class ZeldaLogicEnv:
         
         if tile == SEMANTIC_PALETTE['KEY_ITEM']:
             state.has_item = True
-            # Assume key items often grant bombs (like in Zelda)
-            state.bomb_count += 4
             self.grid[pos] = SEMANTIC_PALETTE['FLOOR']
             return state, 10.0, {'msg': 'Picked up key item', 'item': 'key_item'}
         
@@ -1336,7 +1335,6 @@ class ZeldaLogicEnv:
                     new_state.has_boss_key = True
                 elif target_tile == SEMANTIC_PALETTE['KEY_ITEM']:
                     new_state.has_item = True
-                    new_state.bomb_count = state.bomb_count + 4  # Consumable bombs
                 elif target_tile == SEMANTIC_PALETTE['ITEM_MINOR']:
                     # ITEM_MINOR represents bomb pickups in VGLC Zelda dungeons
                     new_state.bomb_count = state.bomb_count + 4  # Consumable: add 4 bombs
@@ -1364,6 +1362,7 @@ class ZeldaLogicEnv:
         
         if target_tile == SEMANTIC_PALETTE['DOOR_BOSS']:
             if state.has_boss_key:
+                new_state.has_boss_key = False
                 new_state.opened_doors = state.opened_doors | {target_pos}
                 return True, new_state
             return False, state
@@ -2211,7 +2210,7 @@ class StateSpaceAStar:
         elif t == SEMANTIC_PALETTE['KEY_BOSS']:
             init_bk = True; coll_set.add(start_pos)
         elif t == SEMANTIC_PALETTE['KEY_ITEM']:
-            init_item = True; init_bombs += 4; coll_set.add(start_pos)
+            init_item = True; coll_set.add(start_pos)
         elif t == SEMANTIC_PALETTE['ITEM_MINOR']:
             init_bombs += 4; coll_set.add(start_pos)
         init_collected = frozenset(coll_set)
@@ -2284,6 +2283,7 @@ class StateSpaceAStar:
                     elif dt == SEMANTIC_PALETTE['DOOR_BOSS']:
                         if not nbk:
                             continue
+                        nbk = False
                         no.add(dst)
 
                 # Collect items at destination
@@ -2293,7 +2293,7 @@ class StateSpaceAStar:
                     elif dt == SEMANTIC_PALETTE['KEY_BOSS']:
                         nbk = True; nc.add(dst)
                     elif dt == SEMANTIC_PALETTE['KEY_ITEM']:
-                        ni = True; nb += 4; nc.add(dst)
+                        ni = True; nc.add(dst)
                     elif dt == SEMANTIC_PALETTE['ITEM_MINOR']:
                         nb += 4; nc.add(dst)
 
@@ -2323,6 +2323,7 @@ class StateSpaceAStar:
                 elif et == 'boss_locked':
                     if not nbk:
                         continue
+                    nbk = False
                 elif et == 'item_locked':
                     if not ni:
                         continue
@@ -2348,7 +2349,7 @@ class StateSpaceAStar:
                     elif dt == SEMANTIC_PALETTE['KEY_BOSS']:
                         nbk = True; nc.add(dst)
                     elif dt == SEMANTIC_PALETTE['KEY_ITEM']:
-                        ni = True; nb += 4; nc.add(dst)
+                        ni = True; nc.add(dst)
                     elif dt == SEMANTIC_PALETTE['ITEM_MINOR']:
                         nb += 4; nc.add(dst)
 
@@ -2441,7 +2442,6 @@ class StateSpaceAStar:
                 start_boss_key = True
             elif kind == 'key_item':
                 start_has_item = True
-                start_bombs += 4
             elif kind == 'bomb':
                 start_bombs += 4
 
@@ -2570,6 +2570,7 @@ class StateSpaceAStar:
                 elif etype == 'boss_locked':
                     if not new_bk:
                         continue
+                    new_bk = False
                 elif etype == 'item_locked':
                     if not new_item:
                         continue
@@ -2605,7 +2606,10 @@ class StateSpaceAStar:
                                 if tb <= 0: can = False
                                 else: tb -= 1
                             elif vet == 'boss_locked':
-                                if not tbk: can = False
+                                if not tbk:
+                                    can = False
+                                else:
+                                    tbk = False
                             elif vet == 'item_locked':
                                 if not ti: can = False
                             elif vet == 'switch':
@@ -2669,7 +2673,6 @@ class StateSpaceAStar:
                     new_bk = True
                 elif kind == 'key_item':
                     new_item = True
-                    new_bombs += 4
                 elif kind == 'bomb':
                     new_bombs += 4
 
