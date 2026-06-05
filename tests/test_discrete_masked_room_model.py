@@ -112,6 +112,7 @@ def test_pipeline_generate_room_uses_discrete_masked_mode(monkeypatch):
         default_masked_room_corrector_steps=1,
         default_masked_room_corrector_mask_ratio=0.125,
     )
+    pipeline.diffusion = None
     mission_graph = nx.DiGraph()
     mission_graph.add_node(0, is_start=True, pos=(0, 0))
 

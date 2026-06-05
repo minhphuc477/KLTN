@@ -334,7 +334,6 @@ def generate_rooms_for_graph(
     This allows room generation to be tested or reused without immediately
     stitching the final dungeon grid.
     """
-    pipeline._require_room_generation_components("generate_rooms_for_graph")
     guidance_scale = pipeline.default_guidance_scale if guidance_scale is None else float(guidance_scale)
     logic_guidance_scale = (
         pipeline.default_logic_guidance_scale
@@ -348,6 +347,10 @@ def generate_rooms_for_graph(
         pipeline.default_use_fast_sampling if use_fast_sampling is None else bool(use_fast_sampling)
     )
     latent_sampler = pipeline.default_latent_sampler if latent_sampler is None else str(latent_sampler)
+    pipeline._require_room_generation_components(
+        "generate_rooms_for_graph",
+        latent_sampler=latent_sampler,
+    )
     if categorical_codebook_size is None and pipeline.default_categorical_codebook_size is not None:
         categorical_codebook_size = int(pipeline.default_categorical_codebook_size)
     apply_repair = pipeline.default_apply_repair if apply_repair is None else bool(apply_repair)
@@ -733,7 +736,6 @@ def generate_dungeon(
     Returns:
         DungeonGenerationResult with complete dungeon and metrics
     """
-    pipeline._require_room_generation_components("generate_dungeon")
     import time
     start_time = time.time()
     runtime_diagnostics_before = dict(pipeline.runtime_diagnostics)
@@ -750,6 +752,10 @@ def generate_dungeon(
         pipeline.default_use_fast_sampling if use_fast_sampling is None else bool(use_fast_sampling)
     )
     latent_sampler = pipeline.default_latent_sampler if latent_sampler is None else str(latent_sampler)
+    pipeline._require_room_generation_components(
+        "generate_dungeon",
+        latent_sampler=latent_sampler,
+    )
     if categorical_codebook_size is None and pipeline.default_categorical_codebook_size is not None:
         categorical_codebook_size = int(pipeline.default_categorical_codebook_size)
     use_topological_positional_encoding = (

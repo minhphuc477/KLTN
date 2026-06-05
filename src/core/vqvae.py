@@ -383,7 +383,15 @@ class VectorQuantizer(nn.Module):
             if indices is not None and self._protect_active_codes_during_reset:
                 batch_active_mask = torch.bincount(
                     indices.view(-1), minlength=self.num_embeddings
-                ) > 0
+                ).to(device=self.ema_cluster_size.device) > 0
+                try:
+                    import torch.distributed as dist
+                    if dist.is_initialized():
+                        active_int = batch_active_mask.to(dtype=torch.int32)
+                        dist.all_reduce(active_int, op=dist.ReduceOp.MAX)
+                        batch_active_mask = active_int > 0
+                except (ImportError, RuntimeError):
+                    pass  # single-GPU fallback: no-op
                 batch_active = int(batch_active_mask.sum().item())
                 dead_mask = dead_mask & (~batch_active_mask)
             candidate_dead = int(dead_mask.sum().item())
@@ -420,9 +428,11 @@ class VectorQuantizer(nn.Module):
                 
                 self.embedding.weight.data[dead_mask] = new_embeddings
                 
-                # Reset EMA stats for replaced codes
-                self.ema_cluster_size[dead_mask] = max(1.0, self._dead_threshold)
-                self.ema_embedding_sum[dead_mask] = new_embeddings
+                # Keep EMA numerator and denominator consistent with the
+                # injected code vector: embedding = sum / cluster_size.
+                reset_cluster_size = float(max(1.0, self._dead_threshold))
+                self.ema_cluster_size[dead_mask] = reset_cluster_size
+                self.ema_embedding_sum[dead_mask] = new_embeddings * reset_cluster_size
                 
                 logger.debug(
                     f"VQ codebook: reset {num_dead}/{self.num_embeddings} dead codes "

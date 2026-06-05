@@ -577,6 +577,11 @@ def supports_room_generation(pipeline) -> bool:
             pipeline.condition_encoder is not None
             and getattr(pipeline, "masked_room_model", None) is not None
         )
+    if str(getattr(pipeline, "default_latent_sampler", "diffusion") or "diffusion").strip().lower() == "categorical":
+        return (
+            pipeline.vqvae is not None
+            and pipeline.condition_encoder is not None
+        )
     return (
         pipeline.vqvae is not None
         and pipeline.condition_encoder is not None
@@ -601,12 +606,32 @@ def _require_component(pipeline, component_name: str, operation: str) -> Any:
     return component
 
 
-def _require_room_generation_components(pipeline, operation: str) -> None:
+def _require_room_generation_components(
+    pipeline,
+    operation: str,
+    *,
+    latent_sampler: Optional[str] = None,
+    room_generator_mode: Optional[str] = None,
+) -> None:
     """Ensure the core neural stack is available for room generation."""
+    mode = (
+        pipeline.room_generator_mode
+        if room_generator_mode is None
+        else str(room_generator_mode).strip().lower()
+    )
+    sampler_mode = str(
+        pipeline.default_latent_sampler
+        if latent_sampler is None
+        else latent_sampler
+    ).strip().lower()
     required = (
         ('condition_encoder', 'masked_room_model')
-        if pipeline.room_generator_mode == "discrete_masked"
-        else ('vqvae', 'condition_encoder', 'diffusion')
+        if mode == "discrete_masked"
+        else (
+            ('vqvae', 'condition_encoder')
+            if sampler_mode == "categorical"
+            else ('vqvae', 'condition_encoder', 'diffusion')
+        )
     )
     missing = [name for name in required if getattr(pipeline, name, None) is None]
     if missing:

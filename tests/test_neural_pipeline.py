@@ -950,6 +950,7 @@ def test_generate_room_batch_stacks_current_node_distance_per_room(monkeypatch, 
 
 def test_generate_room_batch_categorical_sampler_uses_shared_latent_shape(monkeypatch, pipeline, simple_graph):
     """Categorical batch sampling should not depend on diffusion-only branch locals."""
+    pipeline.diffusion = None
     prepared = pipeline.prepare_dungeon_generation(
         mission_graph=simple_graph,
         generate_topology=False,
@@ -975,6 +976,11 @@ def test_generate_room_batch_categorical_sampler_uses_shared_latent_shape(monkey
         )
 
     monkeypatch.setattr(pipeline, "generate_room", fake_generate_room)
+    monkeypatch.setattr(
+        pipeline,
+        "_decode_latent_with_vqvae",
+        lambda _latent: (_ for _ in ()).throw(AssertionError("categorical batch should use decode_indices")),
+    )
 
     room_set = pipeline.generate_rooms_for_graph(
         prepared,
@@ -991,6 +997,61 @@ def test_generate_room_batch_categorical_sampler_uses_shared_latent_shape(monkey
     assert set(captured_latents) == set(prepared.mission_graph_physical.nodes())
     assert all(shape[0] == 1 for shape in captured_latents.values())
     assert all(shape[-2:] == (4, 3) for shape in captured_latents.values())
+
+
+def test_generate_room_categorical_sampler_does_not_require_diffusion_or_redecode(monkeypatch, pipeline, simple_graph):
+    """Categorical room sampling should use exact code-index decode without diffusion weights."""
+    pipeline.diffusion = None
+    pipeline.default_latent_sampler = "categorical"
+    pipeline.default_fast_sampler_teacher_fallback_enabled = False
+    assert pipeline.supports_room_generation() is True
+
+    prepared = pipeline.prepare_dungeon_generation(
+        mission_graph=simple_graph,
+        generate_topology=False,
+        use_topological_positional_encoding=True,
+    )
+    room_id = 0
+    start_goal = pipeline._extract_room_start_goal(prepared.mission_graph_physical, room_id)
+    graph_context = pipeline._build_room_graph_context(
+        graph_data=prepared.graph_data,
+        mission_graph=prepared.mission_graph_physical,
+        room_id=room_id,
+        start_goal=start_goal,
+    )
+    floor = int(SEMANTIC_PALETTE["FLOOR"])
+
+    def fake_decode_indices(indices):
+        batch = int(indices.shape[0])
+        logits = torch.full((batch, 44, ROOM_HEIGHT, ROOM_WIDTH), -8.0)
+        logits[:, floor, :, :] = 8.0
+        return logits
+
+    monkeypatch.setattr(pipeline.vqvae, "decode_indices", fake_decode_indices)
+    monkeypatch.setattr(
+        pipeline,
+        "_decode_latent_with_vqvae",
+        lambda _latent: (_ for _ in ()).throw(AssertionError("categorical sampler should not re-decode latents")),
+    )
+
+    result = pipeline.generate_room(
+        neighbor_latents={"N": None, "S": None, "E": None, "W": None},
+        graph_context=graph_context,
+        room_id=room_id,
+        boundary_constraints=pipeline._build_room_boundary_constraints(prepared.mission_graph_physical, room_id),
+        position=pipeline._build_room_position_tensor(prepared.mission_graph_physical, room_id, 0),
+        apply_repair=False,
+        logic_guidance_scale=0.0,
+        num_diffusion_steps=1,
+        latent_sampler="categorical",
+        categorical_codebook_size=8,
+        allow_teacher_fallback=False,
+        start_goal_coords=start_goal,
+        seed=123,
+    )
+
+    assert tuple(result.latent.shape) == (1, int(pipeline.vqvae.latent_dim), 4, 3)
+    assert result.neural_probs.shape == (44, ROOM_HEIGHT, ROOM_WIDTH)
 
 
 def test_strict_adjacency_placement_preserves_all_edges(pipeline):

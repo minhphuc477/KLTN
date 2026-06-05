@@ -58,6 +58,44 @@ def _stable_node_seed_offset(node: Any) -> int:
     return stable_seed_offset(node, digest_size=4)
 
 
+def _default_latent_shape_chw(pipeline, sampler_mode: str) -> Tuple[int, int, int]:
+    """Default VQ latent shape without requiring diffusion for categorical sampling."""
+    if getattr(pipeline, "room_generator_mode", None) == "discrete_masked":
+        hidden_dim = int(getattr(getattr(pipeline, "masked_room_model", None), "hidden_dim", 64))
+        return (hidden_dim, int(ROOM_HEIGHT), int(ROOM_WIDTH))
+    diffusion = getattr(pipeline, "diffusion", None)
+    latent_dim = getattr(diffusion, "latent_dim", None)
+    if latent_dim is None and str(sampler_mode or "").strip().lower() == "categorical":
+        vqvae = getattr(pipeline, "vqvae", None)
+        latent_dim = getattr(vqvae, "latent_dim", None)
+        if latent_dim is None:
+            latent_dim = getattr(getattr(vqvae, "quantizer", object()), "embedding_dim", None)
+    if latent_dim is None:
+        diffusion = pipeline._require_component("diffusion", "_default_latent_shape_chw")
+        latent_dim = getattr(diffusion, "latent_dim")
+    return (
+        int(latent_dim),
+        int(DEFAULT_ROOM_LATENT_HW[0]),
+        int(DEFAULT_ROOM_LATENT_HW[1]),
+    )
+
+
+def _infer_latent_shape_from_neighbors_or_default(
+    pipeline,
+    neighbor_latents: Dict[str, Optional[Any]],
+    *,
+    sampler_mode: str,
+) -> Tuple[int, int, int, int]:
+    """Infer rank-4 latent shape from neighbors, falling back by sampler mode."""
+    for latent in neighbor_latents.values():
+        if isinstance(latent, torch.Tensor) and latent.dim() == 4:
+            return tuple(int(v) for v in latent.shape)  # type: ignore[return-value]
+        if isinstance(latent, np.ndarray) and latent.ndim == 4:
+            return tuple(int(v) for v in latent.shape)  # type: ignore[return-value]
+    c, h, w = _default_latent_shape_chw(pipeline, sampler_mode)
+    return (1, int(c), int(h), int(w))
+
+
 @torch.no_grad()
 def generate_room_batch(
     pipeline,
@@ -79,11 +117,14 @@ def generate_room_batch(
     latent_shape_chw: Optional[Tuple[int, int, int]] = None,
 ) -> Dict[Any, RoomGenerationResult]:
     """Generate one dependency-safe room layer with batched diffusion decode."""
-    pipeline._require_room_generation_components("_generate_room_batch")
     if not room_ids:
         return {}
 
     sampler_mode = str(latent_sampler or "diffusion").strip().lower()
+    pipeline._require_room_generation_components(
+        "_generate_room_batch",
+        latent_sampler=sampler_mode,
+    )
     batch_conditions: List[torch.Tensor] = []
     per_room_inputs: List[Dict[str, Any]] = []
 
@@ -211,11 +252,7 @@ def generate_room_batch(
 
     B = len(room_ids)
     if latent_shape_chw is None:
-        latent_shape_chw = (
-            int(pipeline.diffusion.latent_dim),
-            int(DEFAULT_ROOM_LATENT_HW[0]),
-            int(DEFAULT_ROOM_LATENT_HW[1]),
-        )
+        latent_shape_chw = _default_latent_shape_chw(pipeline, sampler_mode)
 
     latent_shape: Tuple[int, int, int, int] = (
         B,
@@ -255,7 +292,8 @@ def generate_room_batch(
             guidance_scale=float(guidance_scale),
             logic_guidance_scale=float(logic_guidance_scale),
         )
-        pipeline.diffusion.cfg_scale = float(guidance_scale)
+        if getattr(pipeline, "diffusion", None) is not None:
+            pipeline.diffusion.cfg_scale = float(guidance_scale)
         logic_guidance_scale = _configure_runtime_logic_guidance(pipeline, logic_guidance_scale)
         if hasattr(pipeline.vqvae, "codebook_size"):
             num_embeddings = int(getattr(pipeline.vqvae, "codebook_size"))
@@ -450,7 +488,6 @@ def generate_room(
     Returns:
         RoomGenerationResult with room grid, latents, and metrics
     """
-    pipeline._require_room_generation_components("generate_room")
     local_np_rng = np.random.default_rng(seed) if seed is not None else np.random.default_rng()
     if seed is not None:
         torch.manual_seed(seed)
@@ -503,6 +540,13 @@ def generate_room(
         )
         apply_repair = False
 
+    sampler_mode = str(latent_sampler or "diffusion").strip().lower()
+    pipeline._require_room_generation_components(
+        "generate_room",
+        latent_sampler=sampler_mode,
+        room_generator_mode=effective_room_generator_mode,
+    )
+
     if precomputed_condition is not None:
         condition = precomputed_condition.to(pipeline.device)
     else:
@@ -514,7 +558,6 @@ def generate_room(
             position=position,
         )
 
-    sampler_mode = str(latent_sampler or "diffusion").strip().lower()
     graph_data = graph_context if isinstance(graph_context, dict) else None
     if graph_data is not None and boundary_constraints is not None and "boundary_constraints" not in graph_data:
         graph_data = {
@@ -554,16 +597,11 @@ def generate_room(
         )
     elif sampler_mode == "categorical":
         # Infer latent shape from neighbors when possible, otherwise use VQ-VAE spatial downsampling (x4).
-        latent_shape: Tuple[int, int, int, int] = (
-            1,
-            int(pipeline.diffusion.latent_dim),
-            int(DEFAULT_ROOM_LATENT_HW[0]),
-            int(DEFAULT_ROOM_LATENT_HW[1]),
+        latent_shape = _infer_latent_shape_from_neighbors_or_default(
+            pipeline,
+            neighbor_latents,
+            sampler_mode=sampler_mode,
         )
-        for latent in neighbor_latents.values():
-            if isinstance(latent, torch.Tensor) and latent.dim() == 4:
-                latent_shape = tuple(int(v) for v in latent.shape)  # type: ignore[assignment]
-                break
         logger.debug("Room %s: Sampling with categorical codebook path", room_id)
         latent_h = int(max(1, latent_shape[2]))
         latent_w = int(max(1, latent_shape[3]))
@@ -612,16 +650,11 @@ def generate_room(
         logic_guidance_scale = _configure_runtime_logic_guidance(pipeline, logic_guidance_scale)
 
         # Infer latent shape from neighbors when possible, otherwise use VQ-VAE spatial downsampling (x4).
-        latent_shape = (
-            1,
-            int(pipeline.diffusion.latent_dim),
-            int(DEFAULT_ROOM_LATENT_HW[0]),
-            int(DEFAULT_ROOM_LATENT_HW[1]),
+        latent_shape = _infer_latent_shape_from_neighbors_or_default(
+            pipeline,
+            neighbor_latents,
+            sampler_mode=sampler_mode,
         )
-        for latent in neighbor_latents.values():
-            if isinstance(latent, torch.Tensor) and latent.dim() == 4:
-                latent_shape = tuple(int(v) for v in latent.shape)  # type: ignore[assignment]
-                break
 
         # BLOCK IV: Latent Diffusion Sampling
         logger.debug(f"Room {room_id}: Sampling with {num_diffusion_steps} steps")
@@ -1393,6 +1426,7 @@ def generate_room(
         bool(allow_teacher_fallback)
         and effective_room_generator_mode == "latent_diffusion"
         and bool(use_fast_sampling)
+        and pipeline.diffusion is not None
         and pipeline.diffusion.supports_fast_sampling()
         and pipeline._should_retry_room_with_teacher(
             final_grid=final_grid,
@@ -1440,7 +1474,7 @@ def generate_room(
             logic_guidance_scale=logic_guidance_scale,
             num_diffusion_steps=max(int(pipeline.default_num_diffusion_steps), int(num_diffusion_steps)),
             use_fast_sampling=False,
-            latent_sampler=latent_sampler,
+            latent_sampler="diffusion",
             categorical_codebook_size=categorical_codebook_size,
             use_ddim=use_ddim,
             apply_repair=apply_repair,

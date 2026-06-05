@@ -4151,9 +4151,18 @@ def _infer_room_latent_shape(
         hidden_dim = int(getattr(pipeline.masked_room_model, "hidden_dim", 64))
         default_shape = (hidden_dim, ROOM_HEIGHT, ROOM_WIDTH)
     else:
-        diffusion = pipeline._require_component("diffusion", "_infer_room_latent_shape")
+        diffusion = getattr(pipeline, "diffusion", None)
+        vqvae = getattr(pipeline, "vqvae", None)
+        latent_dim = getattr(diffusion, "latent_dim", None)
+        if latent_dim is None:
+            latent_dim = getattr(vqvae, "latent_dim", None)
+        if latent_dim is None:
+            latent_dim = getattr(getattr(vqvae, "quantizer", object()), "embedding_dim", None)
+        if latent_dim is None:
+            diffusion = pipeline._require_component("diffusion", "_infer_room_latent_shape")
+            latent_dim = getattr(diffusion, "latent_dim")
         default_shape = (
-            int(diffusion.latent_dim),
+            int(latent_dim),
             int(DEFAULT_ROOM_LATENT_HW[0]),
             int(DEFAULT_ROOM_LATENT_HW[1]),
         )

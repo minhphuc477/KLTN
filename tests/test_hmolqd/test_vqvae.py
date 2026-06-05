@@ -135,6 +135,29 @@ class TestVectorQuantizer:
         changed = (~torch.isclose(quantizer.embedding.weight, before)).any(dim=1).sum().item()
         assert changed == 3
 
+    def test_dead_code_reset_preserves_ema_embedding_after_threshold_scale(self):
+        """Reset EMA sums must match the assigned cluster size."""
+        from src.core.vqvae import VectorQuantizer
+
+        quantizer = VectorQuantizer(
+            num_embeddings=4,
+            embedding_dim=3,
+            use_ema=True,
+            dead_code_threshold=2.0,
+            dead_code_warmup_steps=0,
+            protect_active_codes_during_reset=False,
+            max_dead_code_resets_per_event=0,
+        )
+        quantizer.ema_cluster_size.zero_()
+        quantizer._reset_counter = quantizer._reset_interval
+        z_flat = torch.randn(8, 3)
+
+        quantizer._reset_dead_codes(z_flat, indices=None)
+
+        reset_mask = quantizer.ema_cluster_size > 0
+        expected_sum = quantizer.embedding.weight[reset_mask] * quantizer.ema_cluster_size[reset_mask].unsqueeze(1)
+        assert torch.allclose(quantizer.ema_embedding_sum[reset_mask], expected_sum)
+
     def test_ema_quantizer_clamps_smoothed_cluster_denominator(self):
         """Dead-code EMA normalization should not create NaN/Inf embeddings."""
         from src.core.vqvae import VectorQuantizer
