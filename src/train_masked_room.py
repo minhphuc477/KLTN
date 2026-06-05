@@ -357,7 +357,7 @@ def masked_room_training_kwargs_from_resolved_config(config: Dict[str, Any]) -> 
         "drop_last": dataset["drop_last"],
         "shuffle_train": dataset["shuffle_train"],
         "shuffle_val": dataset["shuffle_val"],
-        "normalize": dataset["normalize"],
+        "normalize": bool(stage.get("normalize", False)),
         "train_dungeon_ids": dataset.get("train_dungeons", list(range(1, 9))),
         "test_dungeon_ids": dataset.get("test_dungeons", [9]),
         "variants": dataset.get("variants", [1, 2]),

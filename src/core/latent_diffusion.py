@@ -1599,8 +1599,6 @@ class UNetDenoiser(nn.Module):
         # Output projection
         self.output_norm = nn.GroupNorm(ResBlock.num_groups(current_ch), current_ch)
         self.output_proj = nn.Conv2d(current_ch, out_channels, 3, padding=1)
-        nn.init.zeros_(self.output_proj.weight)
-        nn.init.zeros_(self.output_proj.bias)
     
     def forward(
         self, 

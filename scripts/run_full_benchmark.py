@@ -867,7 +867,7 @@ def main():
         if len(cbs_dt) > 0:
             mean_cr = cbs_dt['confusion_ratio'].mean()
             std_cr = cbs_dt['confusion_ratio'].std()
-            print(f"  {dt:10s}: {mean_cr:.2f} Â± {std_cr:.2f}")
+            print(f"  {dt:10s}: {mean_cr:.2f} +/- {std_cr:.2f}")
     
     print("\n" + "=" * 60)
     print("Benchmark complete!")
@@ -881,4 +881,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-

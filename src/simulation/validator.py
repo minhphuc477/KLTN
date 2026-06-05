@@ -2235,15 +2235,18 @@ class StateSpaceAStar:
         open_set: list = []
         counter = 0
         h0 = h_macro(init_state)
-        heapq.heappush(open_set, (h0, counter, 0.0, init_state, [start_pos]))
+        heapq.heappush(open_set, (h0, counter, 0.0, init_state, init_state))
         counter += 1
 
         visited: Dict[Tuple, float] = {}  # state -> best g
+        parents: Dict[Any, Optional[Any]] = {init_state: None}
+        positions: Dict[Any, Tuple[int, int]] = {init_state: start_pos}
+        parent_costs: Dict[Any, float] = {init_state: 0.0}
         states_explored = 0
         macro_timeout = min(self.timeout, 500000)
 
         while open_set and states_explored < macro_timeout:
-            _, _, g, state, path = heapq.heappop(open_set)
+            _, _, g, state, state_parent_key = heapq.heappop(open_set)
             pos, keys, bombs, bk, has_item, collected, opened = state
 
             # Simple visited check (exact state)
@@ -2256,6 +2259,7 @@ class StateSpaceAStar:
             # Goal check
             if pos == goal:
                 logger.debug('Macro-action solver succeeded: %d states', states_explored)
+                path = self._reconstruct_parent_path(parents, positions, state_key)
                 return True, path, states_explored
 
             # Expand: intra-room POI transitions
@@ -2300,8 +2304,12 @@ class StateSpaceAStar:
                 new_st = (dst, nk, nb, nbk, ni, frozenset(nc), frozenset(no))
                 ng = g + dist
                 nh = h_macro(new_st)
-                heapq.heappush(open_set, (ng + nh, counter, ng, new_st, path + [dst]))
-                counter += 1
+                if ng < parent_costs.get(new_st, float('inf')):
+                    parent_costs[new_st] = ng
+                    parents[new_st] = state_key
+                    positions[new_st] = dst
+                    heapq.heappush(open_set, (ng + nh, counter, ng, new_st, new_st))
+                    counter += 1
 
             # Expand: cross-room transitions
             for src, dst, cost, et in cross_edges:
@@ -2356,8 +2364,12 @@ class StateSpaceAStar:
                 new_st = (dst, nk, nb, nbk, ni, frozenset(nc), frozenset(no))
                 ng = g + cost
                 nh = h_macro(new_st)
-                heapq.heappush(open_set, (ng + nh, counter, ng, new_st, path + [dst]))
-                counter += 1
+                if ng < parent_costs.get(new_st, float('inf')):
+                    parent_costs[new_st] = ng
+                    parents[new_st] = state_key
+                    positions[new_st] = dst
+                    heapq.heappush(open_set, (ng + nh, counter, ng, new_st, new_st))
+                    counter += 1
 
         logger.debug('Macro-action solver exhausted: %d states', states_explored)
         return False, [], states_explored
@@ -2466,8 +2478,13 @@ class StateSpaceAStar:
             f0 = h0
         else:
             f0 = g0 + h0
-        heapq.heappush(open_set, (f0, counter, g0, init_state, [start]))
+        start_rep = self._room_node_to_pos.get(start_node, start)
+        heapq.heappush(open_set, (f0, counter, g0, init_state, init_state))
         counter += 1
+        parents: Dict[Any, Optional[Any]] = {init_state: None}
+        positions: Dict[Any, Tuple[int, int]] = {init_state: start_rep}
+        parent_costs: Dict[Any, float] = {init_state: 0.0}
+        depths: Dict[Any, int] = {init_state: 0}
 
         # Pareto-frontier domination per node
         # For each node, keep a LIST of non-dominated inventory tuples
@@ -2519,7 +2536,7 @@ class StateSpaceAStar:
         room_timeout = min(self.timeout, 2000000)
 
         while open_set and states_explored < room_timeout:
-            _, _, g, state, path = heapq.heappop(open_set)
+            _, _, g, state, state_key = heapq.heappop(open_set)
             node, keys, bombs, bk, has_item_flag, collected, opened = state
 
             inv = _inv(state, g)
@@ -2531,6 +2548,7 @@ class StateSpaceAStar:
 
             # Goal check
             if node == goal_node:
+                path = self._reconstruct_parent_path(parents, positions, state)
                 return True, path, states_explored
 
             # Expand: iterate over all graph neighbors
@@ -2638,7 +2656,8 @@ class StateSpaceAStar:
                                 # Physical destination found
                                 self._enqueue_room_neighbor(
                                     vn2, tk, tb, tbk, ti, collected, opened,
-                                    g, h_func, open_set, counter, path,
+                                    g, h_func, open_set, counter, state,
+                                    parents, positions, parent_costs, depths,
                                     goal, start, mode)
                                 counter += 1
                     continue
@@ -2646,14 +2665,16 @@ class StateSpaceAStar:
                 # Physical neighbor room
                 self._enqueue_room_neighbor(
                     neighbor, new_keys, new_bombs, new_bk, new_item,
-                    collected, opened, g, h_func, open_set, counter, path,
+                    collected, opened, g, h_func, open_set, counter, state,
+                    parents, positions, parent_costs, depths,
                     goal, start, mode)
                 counter += 1
 
         return False, [], states_explored
 
     def _enqueue_room_neighbor(self, neighbor, keys, bombs, bk, has_item_flag,
-                                collected, opened, g, h_func, open_set, counter, path,
+                                collected, opened, g, h_func, open_set, counter, parent_key,
+                                parents, positions, parent_costs, depths,
                                 goal, start, mode: str = 'astar'):
         """Helper: collect items in the room and push successor onto open_set."""
         new_keys = keys
@@ -2686,8 +2707,9 @@ class StateSpaceAStar:
         new_g = g + avg_cost
         new_h = h_func(new_state)
         mode_l = str(mode or 'astar').lower()
+        current_depth = int(depths.get(parent_key, 0))
         if mode_l == 'bfs':
-            new_f = len(path)
+            new_f = float(current_depth + 1)
         elif mode_l == 'dijkstra':
             new_f = new_g
         elif mode_l == 'greedy':
@@ -2696,9 +2718,15 @@ class StateSpaceAStar:
             new_f = new_g + new_h
 
         rep_pos = self._room_node_to_pos.get(neighbor, goal if goal else start)
-        new_path = path + [rep_pos] if rep_pos else path
+        if new_g >= parent_costs.get(new_state, float('inf')):
+            return
+        parent_costs[new_state] = new_g
+        parents[new_state] = parent_key
+        if rep_pos:
+            positions[new_state] = rep_pos
+        depths[new_state] = current_depth + 1
 
-        heapq.heappush(open_set, (new_f, counter, new_g, new_state, new_path))
+        heapq.heappush(open_set, (new_f, counter, new_g, new_state, new_state))
 
     def _populate_abstract_plan(self, h_path: List[Tuple[int, int]]) -> None:
         """Convert room-level path into abstract plan for heuristic guidance.
@@ -2837,7 +2865,7 @@ class StateSpaceAStar:
         self._best_at_pos = {}
         self._best_g_at_pos = {}  # Track best g-score at each position
         
-        # Priority queue: (f_score, counter, hash_hint, g_score, state, path).
+        # Priority queue: (f_score, counter, hash_hint, g_score, state, state_key).
         # hash_hint is only heap metadata; closed/g-score maps use full keys.
         start_state = self.env.state.copy()
         start_key = self._state_key(start_state)
@@ -2854,11 +2882,14 @@ class StateSpaceAStar:
         else:
             start_f = start_g + start_h  # A*: f = g + h
         
-        open_set = [(start_f, 0, 0, start_g, start_state, [start_state.position])]
+        open_set = [(start_f, 0, 0, start_g, start_state, start_key)]
         heapq.heapify(open_set)
         
         closed_set = set()
         g_scores = {start_key: 0}
+        parents: Dict[Any, Optional[Any]] = {start_key: None}
+        positions: Dict[Any, Tuple[int, int]] = {start_key: start_state.position}
+        depths: Dict[Any, int] = {start_key: 0}
         
         states_explored = 0
         counter = 1  # Tie-breaker for heap
@@ -2871,17 +2902,14 @@ class StateSpaceAStar:
         while open_set and states_explored < self.timeout:
             entry: Any = heapq.heappop(open_set)
             # Support both simple and priority tuple formats
-            # Simple: (f, counter, hash_hint, g, state, path) - 6 elements
-            # Priority: (priority_tuple, hash_hint, g, state, path) - 5 elements, first is tuple
+            # Simple: (f, counter, hash_hint, g, state, state_key) - 6 elements
+            # Priority: (priority_tuple, hash_hint, g, state, state_key) - 5 elements, first is tuple
             if len(entry) == 6:
-                # Simple format: (f, counter, hash_hint, g, state, path)
-                _, _, _hash_hint, current_g, current_state, path = entry
+                _, _, _hash_hint, current_g, current_state, path_key = entry
             elif len(entry) == 5 and isinstance(entry[0], tuple):
-                # Priority tuple format: (priority_tuple, hash_hint, g, state, path)
-                _priority, _hash_hint, current_g, current_state, path = entry
+                _priority, _hash_hint, current_g, current_state, path_key = entry
             elif len(entry) == 5:
-                # Old format without g: (f, counter, hash_hint, state, path)
-                _, _, _hash_hint, current_state, path = entry
+                _, _, _hash_hint, current_state, path_key = entry
                 current_g = g_scores.get(self._state_key(current_state), 0)
             else:
                 # Unknown format - skip
@@ -2978,6 +3006,7 @@ class StateSpaceAStar:
             
             # Check win condition
             if current_state.position == self.env.goal_pos:
+                path = self._reconstruct_parent_path(parents, positions, current_key)
                 return True, path, states_explored
             
             # Explore neighbors using pure state-based logic (NO grid copies)
@@ -3137,10 +3166,11 @@ class StateSpaceAStar:
                 
                 # COMBAT-AWARE COST CALCULATION
                 # Use variable cost based on tile type and current_g from the heap.
+                current_depth = int(depths.get(current_key, 0))
                 if self.search_mode == 'bfs':
                     # True BFS over full game state: each transition has unit depth cost.
                     # (Inventory/doors/items are still modeled in state transitions.)
-                    g_score = float(len(path))
+                    g_score = float(current_depth + 1)
                 else:
                     move_cost = self._get_movement_cost(target_tile, target_pos, current_state)
                     g_score = current_g + move_cost * base_cost
@@ -3152,7 +3182,7 @@ class StateSpaceAStar:
                 h_score = self._heuristic(new_state)
                 # Compute f based on search mode
                 if self.search_mode == 'bfs':
-                    f_score = len(path)  # BFS: f = depth (path length)
+                    f_score = float(current_depth + 1)  # BFS: f = depth
                 elif self.search_mode == 'dijkstra':
                     f_score = g_score  # Dijkstra: f = g only (no heuristic)
                 elif self.search_mode == 'greedy':
@@ -3162,12 +3192,9 @@ class StateSpaceAStar:
                 else:
                     f_score = g_score + h_score  # A*: f = g + h
 
-                # TODO(perf): O(N²) path memory -- each expansion copies the entire path
-                # history. Replace with a came_from dict + backtracking reconstruction to
-                # reduce to O(N) memory. Not done here because `path` is used inline for
-                # BFS depth scoring (len(path)) and multiple heap tuple formats, making
-                # a safe refactor non-trivial without broader changes.
-                new_path = path + [new_state.position]
+                parents[new_key] = current_key
+                positions[new_key] = new_state.position
+                depths[new_key] = current_depth + 1
 
                 # Priority tuple construction when priority options enabled
                 if self.tie_break or self.key_boost or self.enable_ara:
@@ -3197,10 +3224,10 @@ class StateSpaceAStar:
                     # priority tuple: lower is better
                     # FIXED: Include g_score in heap entry
                     priority = (f_score, locked_needed if self.tie_break else 0, -keys_held if self.key_boost else 0, boost, counter)
-                    heapq.heappush(open_set, (priority, counter, g_score, new_state, new_path))
+                    heapq.heappush(open_set, (priority, counter, g_score, new_state, new_key))
                 else:
                     # FIXED: Include g_score in heap entry
-                    heapq.heappush(open_set, (f_score, counter, counter, g_score, new_state, new_path))
+                    heapq.heappush(open_set, (f_score, counter, counter, g_score, new_state, new_key))
                 counter += 1
         
         # PERFORMANCE LOGGING: Report pruning statistics
@@ -3210,6 +3237,22 @@ class StateSpaceAStar:
                         100.0 * dominated_states_pruned / (states_explored + dominated_states_pruned))
         
         return False, [], states_explored
+
+    @staticmethod
+    def _reconstruct_parent_path(
+        parents: Mapping[Any, Optional[Any]],
+        positions: Mapping[Any, Tuple[int, int]],
+        end_key: Any,
+    ) -> List[Tuple[int, int]]:
+        path: List[Tuple[int, int]] = []
+        key: Optional[Any] = end_key
+        while key is not None:
+            if key not in positions:
+                break
+            path.append(positions[key])
+            key = parents.get(key)
+        path.reverse()
+        return path
 
     def solve_with_diagnostics(self) -> Tuple[bool, List[Tuple[int, int]], SolverDiagnostics]:
         """
@@ -3265,11 +3308,14 @@ class StateSpaceAStar:
         else:
             start_f = start_g + start_h
 
-        open_set = [(start_f, 0, 0, start_g, start_state, [start_state.position])]
+        open_set = [(start_f, 0, 0, start_g, start_state, start_key)]
         heapq.heapify(open_set)
         
         closed_set = set()
         g_scores = {start_key: 0.0}
+        parents: Dict[Any, Optional[Any]] = {start_key: None}
+        positions: Dict[Any, Tuple[int, int]] = {start_key: start_state.position}
+        depths: Dict[Any, int] = {start_key: 0}
         
         states_explored = 0
         counter = 1
@@ -3288,11 +3334,11 @@ class StateSpaceAStar:
             
             # Parse entry format
             if len(entry) == 6:
-                _, _, _hash_hint, current_g, current_state, path = entry
+                _, _, _hash_hint, current_g, current_state, path_key = entry
             elif len(entry) == 5 and isinstance(entry[0], tuple):
-                _priority, _hash_hint, current_g, current_state, path = entry
+                _priority, _hash_hint, current_g, current_state, path_key = entry
             elif len(entry) == 5:
-                _, _, _hash_hint, current_state, path = entry
+                _, _, _hash_hint, current_state, path_key = entry
                 current_g = g_scores.get(self._state_key(current_state), 0.0)
             else:
                 continue
@@ -3375,6 +3421,7 @@ class StateSpaceAStar:
             # Check win condition
             if current_state.position == self.env.goal_pos:
                 elapsed_ms = (time.perf_counter() - start_time) * 1000
+                path = self._reconstruct_parent_path(parents, positions, current_key)
                 return True, path, SolverDiagnostics(
                     success=True,
                     states_explored=states_explored,
@@ -3481,8 +3528,10 @@ class StateSpaceAStar:
                     continue
                 
                 if self.search_mode == 'bfs':
-                    g_score = float(len(path))
+                    current_depth = int(depths.get(current_key, 0))
+                    g_score = float(current_depth + 1)
                 else:
+                    current_depth = int(depths.get(current_key, 0))
                     move_cost = self._get_movement_cost(target_tile, target_pos, current_state)
                     g_score = current_g + move_cost * base_cost
                 
@@ -3492,7 +3541,7 @@ class StateSpaceAStar:
                 g_scores[new_key] = g_score
                 h_score = self._heuristic(new_state)
                 if self.search_mode == 'bfs':
-                    f_score = float(len(path))
+                    f_score = float(current_depth + 1)
                 elif self.search_mode == 'dijkstra':
                     f_score = g_score
                 elif self.search_mode == 'greedy':
@@ -3501,9 +3550,11 @@ class StateSpaceAStar:
                     f_score = g_score + self.ara_weight * h_score
                 else:
                     f_score = g_score + h_score
-                new_path = path + [new_state.position]
+                parents[new_key] = current_key
+                positions[new_key] = new_state.position
+                depths[new_key] = current_depth + 1
                 
-                heapq.heappush(open_set, (f_score, counter, counter, g_score, new_state, new_path))
+                heapq.heappush(open_set, (f_score, counter, counter, g_score, new_state, new_key))
                 counter += 1
         
         # Search failed - determine reason
@@ -5212,14 +5263,23 @@ class GraphGuidedValidator:
             inventory_start['keys']  # initial key count
         )
         
-        queue = deque([(initial_state, [start_node])])
+        queue = deque([initial_state])
         visited = {initial_state}
+        parents: Dict[Any, Optional[Any]] = {initial_state: None}
+        nodes_for_state: Dict[Any, Any] = {initial_state: start_node}
         
         while queue:
-            (current_node, collected, opened, keys), path = queue.popleft()
+            state = queue.popleft()
+            current_node, collected, opened, keys = state
             
             # Check win
             if current_node == triforce_node:
+                path = []
+                key: Optional[Any] = state
+                while key is not None:
+                    path.append(nodes_for_state[key])
+                    key = parents[key]
+                path.reverse()
                 return GraphValidationResult(
                     is_solvable=True,
                     graph_path=path,
@@ -5272,7 +5332,9 @@ class GraphGuidedValidator:
                     new_state = (neighbor, new_collected, new_opened, final_keys)
                     if new_state not in visited:
                         visited.add(new_state)
-                        queue.append((new_state, path + [neighbor]))
+                        parents[new_state] = state
+                        nodes_for_state[new_state] = neighbor
+                        queue.append(new_state)
         
         # No path found
         return GraphValidationResult(

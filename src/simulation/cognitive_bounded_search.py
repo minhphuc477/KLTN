@@ -8,7 +8,7 @@ bounded rationality and memory limitations.
 
 SCIENTIFIC FOUNDATION:
 ----------------------
-- Miller's Law (1956): Working memory capacity ~7Â±2 items
+- Miller's Law (1956): Working memory capacity ~7+/-2 items
 - Kahneman (2011): System 1/System 2 decision-making
 - Simon (1955): Bounded rationality and satisficing
 - Newell & Simon (1972): Human Problem Solving -- search space constraints
@@ -859,7 +859,7 @@ class VisionSystem:
     
     Attributes:
         radius: Maximum visibility distance (default 5 tiles)
-        cone_angle: Field of view in degrees (default 120Â°, forward-facing)
+        cone_angle: Field of view in degrees (default 120 degrees, forward-facing)
         enable_occlusion: Whether walls block line of sight
     """
     
@@ -916,7 +916,7 @@ class VisionSystem:
         visible = {position}  # Always see current tile
         height, width = grid.shape
         
-        # Handle 360Â° vision (no cone restriction)
+        # Handle 360-degree vision (no cone restriction)
         if self.cone_angle >= 360:
             angle_check = lambda dr, dc: True
         else:
@@ -1034,9 +1034,9 @@ class VisionSystem:
         grid: np.ndarray
     ) -> Set[Tuple[int, int]]:
         """
-        Get all tiles visible with 360Â° vision (useful for comparison).
+        Get all tiles visible with 360-degree vision (useful for comparison).
         """
-        return self.get_visible_tiles(position, (0, 1), grid)  # Direction ignored with 360Â°
+        return self.get_visible_tiles(position, (0, 1), grid)  # Direction ignored with 360-degree vision
 
 
 # ==============================================================================
@@ -1095,7 +1095,7 @@ class WorkingMemory:
     
     Scientific basis:
     - Miller (1956): "The magical number seven, plus or minus two"
-    - Cowan (2001): Modern estimate is 4Â±1 chunks
+    - Cowan (2001): Modern estimate is 4+/-1 chunks
     - Baddeley (2000): Working memory model with central executive
     
     When at capacity, lowest-salience items are forgotten first.
@@ -2061,8 +2061,8 @@ class CognitiveState:
             active_focus_position=self.active_focus_position,
             active_focus_kind=self.active_focus_kind,
             focus_lock_steps=self.focus_lock_steps,
-            direction_history=list(self.direction_history),
-            visit_counts=dict(self.visit_counts),
+            direction_history=[],
+            visit_counts={},
         )
 
 
@@ -2716,17 +2716,28 @@ class CognitiveBoundedSearch:
         grid = self.env.original_grid
         height, width = grid.shape
         q = deque()
-        q.append((start_state.copy(), [start_state.position]))
-        visited = set()
+        start_copy = start_state.copy()
+        start_key = game_state_key(start_copy)
+        q.append((start_copy, 0))
+        visited = {start_key}
+        parents: Dict[Any, Optional[Any]] = {start_key: None}
+        positions: Dict[Any, Tuple[int, int]] = {start_key: start_copy.position}
 
         depth = 0
         while q and depth <= max_depth:
             for _ in range(len(q)):
-                state, path = q.popleft()
+                state, depth_here = q.popleft()
+                current_key = game_state_key(state)
                 if state.position == goal_pos:
+                    path: List[Tuple[int, int]] = []
+                    key: Optional[Any] = current_key
+                    while key is not None:
+                        path.append(positions[key])
+                        key = parents[key]
+                    path.reverse()
                     return path
 
-                if len(path) > max_depth:
+                if depth_here >= max_depth:
                     continue
 
                 pos = state.position
@@ -2749,7 +2760,9 @@ class CognitiveBoundedSearch:
                     if state_key in visited:
                         continue
                     visited.add(state_key)
-                    q.append((new_state, path + [new_pos]))
+                    parents[state_key] = current_key
+                    positions[state_key] = new_pos
+                    q.append((new_state, depth_here + 1))
             depth += 1
 
         return None
@@ -3136,7 +3149,7 @@ class CognitiveBoundedSearch:
         base = (total_score / total_weight) if total_weight > 0 else 0.0
 
         # Explicit bounded-rational utility:
-        # U = alphaÂ·goal_progress + betaÂ·info_gain - gammaÂ·risk
+        # U = alpha*goal_progress + beta*info_gain - gamma*risk
         goal_progress = self._goal_progress(cog_state.game_state.position, target_pos)
 
         risk = self._estimate_risk(cog_state, target_pos, target_tile)

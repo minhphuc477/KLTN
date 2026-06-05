@@ -2966,7 +2966,7 @@ class EvolutionaryTopologyGenerator:
         total_distance = 0.0
         comparisons = 0
         
-        # Sample pairs to avoid O(nÂ²) for large populations
+        # Sample pairs to avoid O(n^2) for large populations
         sample_size = min(100, len(population))
         sample = self.rng.sample(population, sample_size)
         

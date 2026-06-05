@@ -502,7 +502,18 @@ def _extract_checkpoint_config(pipeline, checkpoint: Any) -> Dict[str, Any]:
     return {}
 
 
-def _extract_checkpoint_state_dict(pipeline, checkpoint: Any, *candidate_keys: str) -> Optional[Dict[str, Any]]:
+def _extract_checkpoint_state_dict(
+    pipeline,
+    checkpoint: Any,
+    *candidate_keys: str,
+    **kwargs: Any,
+) -> Optional[Dict[str, Any]]:
+    keyword_candidate_keys = kwargs.pop("candidate_keys", None)
+    if kwargs:
+        unexpected = ", ".join(sorted(str(k) for k in kwargs))
+        raise TypeError(f"Unexpected checkpoint extraction keyword argument(s): {unexpected}")
+    if keyword_candidate_keys is not None:
+        candidate_keys = tuple(str(key) for key in keyword_candidate_keys)
     if isinstance(checkpoint, dict):
         for key in candidate_keys:
             state = checkpoint.get(key)

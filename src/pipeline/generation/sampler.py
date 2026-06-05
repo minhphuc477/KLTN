@@ -901,7 +901,10 @@ def generate_room(
         )
 
     neural_grid = logits.argmax(dim=1).detach().cpu().numpy()[0]  # (16, 11)
-    raw_neural_grid = np.asarray(neural_grid, dtype=np.int32).copy()
+    if effective_room_generator_mode == "discrete_masked" and sampled_tokens is not None:
+        raw_neural_grid = sampled_tokens.detach().cpu().numpy()[0].astype(np.int32, copy=False).copy()
+    else:
+        raw_neural_grid = np.asarray(neural_grid, dtype=np.int32).copy()
     neural_grid, neural_invalid_count, neural_invalid_ids = pipeline._sanitize_semantic_grid(
         neural_grid,
         strip_void=True,
@@ -920,6 +923,23 @@ def generate_room(
         room_id=room_id,
         start_goal=start_goal_coords,
     )
+    if effective_room_generator_mode == "discrete_masked" and sampled_tokens is not None:
+        diagnostic_raw_grid, _, _ = pipeline._sanitize_semantic_grid(
+            raw_neural_grid,
+            strip_void=True,
+        )
+        _, raw_semantic_strip_count, raw_semantic_strip_ids, raw_semantic_preserved_count, raw_semantic_preserved_ids = pipeline._strip_volatile_room_semantics(
+            diagnostic_raw_grid,
+            graph=mission_graph_for_room,
+            room_id=room_id,
+            start_goal=start_goal_coords,
+        )
+        if int(raw_semantic_strip_count) > int(neural_semantic_strip_count):
+            neural_semantic_strip_count = int(raw_semantic_strip_count)
+            neural_semantic_strip_ids = raw_semantic_strip_ids
+        if int(raw_semantic_preserved_count) > int(neural_semantic_preserved_count):
+            neural_semantic_preserved_count = int(raw_semantic_preserved_count)
+            neural_semantic_preserved_ids = raw_semantic_preserved_ids
     if neural_semantic_strip_count > 0:
         pipeline._bump_diagnostic("neural_room_semantics_stripped")
         logger.debug(
