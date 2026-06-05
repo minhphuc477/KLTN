@@ -7,7 +7,7 @@ from src.core.condition_encoder import CrossAttentionFusion
 from src.core.definitions import GRAPH_EDGE_FEATURE_DIM
 from src.core.vqvae import VectorQuantizer
 from src.generation.grammar import EdgeType, MissionGraph, MissionGrammar, MissionNode, NodeType
-from src.generation.weighted_bayesian_wfc import TilePrior, WeightedBayesianWFC
+from src.generation.weighted_bayesian_wfc import TilePrior, WeightedBayesianWFC, WeightedBayesianWFCConfig
 from src.generation.wfc_refiner import CausalWFC, ZeldaTileSet
 from src.train_masked_room import MaskedRoomTrainer
 
@@ -51,7 +51,7 @@ def test_weighted_wfc_log_space_update_avoids_soft_probability_underflow():
         1: TilePrior(
             tile_id=1,
             frequency=0.5,
-            adjacency_counts={(1, "E"): 1, (999, "E"): tiny},
+            adjacency_counts={(1, "E"): 1, (999, "E"): tiny, (1, "W"): 1},
         ),
         2: TilePrior(
             tile_id=2,

@@ -640,7 +640,7 @@ def test_try_stack_dungeon_scope_graph_batch_collapses_full_room_set():
     )
 
 
-def test_wfc_pseudo_label_loss_is_opt_in_and_backpropagates():
+def test_wfc_pseudo_label_loss_is_opt_in_and_backpropagates(monkeypatch):
     trainer = DiffusionTrainer.__new__(DiffusionTrainer)
     trainer.device = torch.device("cpu")
     trainer.global_step = 0
@@ -653,6 +653,10 @@ def test_wfc_pseudo_label_loss_is_opt_in_and_backpropagates():
     )
     pred_tile_logits = torch.randn(1, 5, ROOM_HEIGHT, ROOM_WIDTH, requires_grad=True)
     real_maps = torch.zeros(1, 1, ROOM_HEIGHT, ROOM_WIDTH)
+    monkeypatch.setattr(
+        "src.train_diffusion.integrate_weighted_wfc_into_pipeline",
+        lambda *_args, **_kwargs: {"grid": np.zeros((ROOM_HEIGHT, ROOM_WIDTH), dtype=np.int64)},
+    )
 
     loss, sample_count, repaired_mean = DiffusionTrainer._wfc_pseudo_label_loss(
         trainer,

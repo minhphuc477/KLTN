@@ -471,14 +471,15 @@ class WeightedBayesianWFC:
                 edge_key = (source_row, source_col, nr, nc)
                 if self.collapsed_mask[source_row, source_col] and edge_key not in processed_soft_edges:
                     supported = compatibility > 0.0
-                    current = self.superposition[nr, nc, supported].astype(np.float64, copy=False)
-                    compat = compatibility[supported].astype(np.float64, copy=False)
-                    log_updated = (
-                        np.log(np.clip(current, 1e-300, None))
-                        + float(self.config.adjacency_weight) * np.log(np.clip(compat, 1e-300, None))
-                    )
-                    log_updated -= float(np.max(log_updated))
-                    self.superposition[nr, nc, supported] = np.exp(log_updated).astype(np.float32)
+                    if np.any(supported):
+                        current = self.superposition[nr, nc, supported].astype(np.float64, copy=False)
+                        compat = compatibility[supported].astype(np.float64, copy=False)
+                        log_updated = (
+                            np.log(np.clip(current, 1e-300, None))
+                            + float(self.config.adjacency_weight) * np.log(np.clip(compat, 1e-300, None))
+                        )
+                        log_updated -= float(np.max(log_updated))
+                        self.superposition[nr, nc, supported] = np.exp(log_updated).astype(np.float32)
                     processed_soft_edges.add(edge_key)
 
                 if not self._normalize_cell(nr, nc, allow_reset=False):
