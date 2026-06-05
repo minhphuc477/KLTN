@@ -17,3 +17,5 @@ masked_room:
   unet_num_heads: 4
   min_mask_ratio: 0.12
   max_mask_ratio: 0.85
+  logic_net_enabled: false
+  alpha_logic: 0.0

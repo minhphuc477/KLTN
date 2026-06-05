@@ -22,6 +22,7 @@ from src.core.discrete_masked_model import (
     DiscreteMaskedRoomModel,
     create_discrete_masked_model,
 )
+from src.core.logic_net import LogicNet
 from src.core.puzzle_stage_semantics import (
     DEFAULT_PUZZLE_STAGE_MAX_SEQUENCE_LENGTH,
     DEFAULT_PUZZLE_STAGE_SEMANTICS_HIDDEN_DIM,
@@ -59,7 +60,7 @@ from src.utils.checkpoint import (
 from src.utils.data_loading import dataloader_runtime_kwargs
 from src.utils.model_capacity import count_parameters, log_capacity_guardrails
 from src.utils.optimization import adamw_decay_param_groups_for_modules
-from src.zelda_data.zelda_loader import create_dataloader, graph_collate_fn
+from src.zelda_data.zelda_loader import DungeonBatchSampler, create_dataloader, graph_collate_fn
 from src.train_vqvae import split_dataset_for_vqvae_validation
 
 logger = logging.getLogger(__name__)
@@ -125,6 +126,15 @@ class MaskedRoomTrainingConfig:
         topology_marker_weight: float = 2.0,
         topology_trace_weight: float = 0.75,
         topology_focus_dilation: int = 1,
+        logic_net_enabled: bool = False,
+        logic_net_trainable: bool = False,
+        alpha_logic: float = 0.0,
+        logic_global_reach_weight: float = 1.0,
+        logic_global_room_weight: float = 0.25,
+        logic_topology_trace_weight: float = 0.25,
+        logic_topology_anchor_weight: float = 0.25,
+        logic_grid_pathfinder: str = "bellman_ford",
+        num_logic_iterations: int = 30,
         validation_fraction: float = 0.1,
         validation_max_batches: int = 16,
         best_checkpoint_metric: str = "val_loss",
@@ -241,6 +251,15 @@ class MaskedRoomTrainingConfig:
         self.topology_marker_weight = float(max(0.0, topology_marker_weight))
         self.topology_trace_weight = float(max(0.0, topology_trace_weight))
         self.topology_focus_dilation = int(max(0, topology_focus_dilation))
+        self.logic_net_enabled = bool(logic_net_enabled)
+        self.logic_net_trainable = bool(logic_net_trainable) if self.logic_net_enabled else False
+        self.alpha_logic = float(max(0.0, alpha_logic)) if self.logic_net_enabled else 0.0
+        self.logic_global_reach_weight = float(max(0.0, logic_global_reach_weight))
+        self.logic_global_room_weight = float(max(0.0, logic_global_room_weight))
+        self.logic_topology_trace_weight = float(max(0.0, logic_topology_trace_weight))
+        self.logic_topology_anchor_weight = float(max(0.0, logic_topology_anchor_weight))
+        self.logic_grid_pathfinder = str(logic_grid_pathfinder).strip().lower()
+        self.num_logic_iterations = int(max(1, num_logic_iterations))
         self.validation_fraction = float(max(0.0, min(0.5, validation_fraction)))
         self.validation_max_batches = int(max(1, validation_max_batches))
         self.best_checkpoint_metric = str(best_checkpoint_metric).strip().lower()
@@ -287,6 +306,10 @@ class MaskedRoomTrainingConfig:
             raise ValueError("attention_mode must be 'softmax' or 'linear_hedgehog'.")
         if self.topology_conditioning_mode not in {"additive", "spade"}:
             raise ValueError("topology_conditioning_mode must be 'additive' or 'spade'.")
+        if self.logic_grid_pathfinder not in {"bellman_ford", "conv", "cnn", "vin", "learnable", "perturb_and_map"}:
+            raise ValueError(
+                "logic_grid_pathfinder must be 'bellman_ford', 'conv'/'cnn', 'vin', 'learnable', or 'perturb_and_map'."
+            )
         if any((self.model_channels * mult) % self.unet_num_heads != 0 for mult in self.unet_channel_mult):
             raise ValueError(
                 "Every masked-room U-Net channel width must be divisible by unet_num_heads; "
@@ -368,6 +391,15 @@ def masked_room_training_kwargs_from_resolved_config(config: Dict[str, Any]) -> 
         "topology_marker_weight": stage.get("topology_marker_weight", 2.0),
         "topology_trace_weight": stage.get("topology_trace_weight", 0.75),
         "topology_focus_dilation": stage.get("topology_focus_dilation", 1),
+        "logic_net_enabled": stage.get("logic_net_enabled", False),
+        "logic_net_trainable": stage.get("logic_net_trainable", False),
+        "alpha_logic": stage.get("alpha_logic", 0.0),
+        "logic_global_reach_weight": stage.get("logic_global_reach_weight", 1.0),
+        "logic_global_room_weight": stage.get("logic_global_room_weight", 0.25),
+        "logic_topology_trace_weight": stage.get("logic_topology_trace_weight", 0.25),
+        "logic_topology_anchor_weight": stage.get("logic_topology_anchor_weight", 0.25),
+        "logic_grid_pathfinder": stage.get("logic_grid_pathfinder", "bellman_ford"),
+        "num_logic_iterations": stage.get("num_logic_iterations", 30),
         "validation_fraction": stage.get("validation_fraction", 0.1),
         "validation_max_batches": stage.get("validation_max_batches", 16),
         "best_checkpoint_metric": stage.get("best_checkpoint_metric", "val_loss"),
@@ -460,6 +492,15 @@ def _legacy_masked_room_overrides_from_args(args: argparse.Namespace) -> Dict[st
     _set("topology_marker_weight", getattr(args, "topology_marker_weight", None))
     _set("topology_trace_weight", getattr(args, "topology_trace_weight", None))
     _set("topology_focus_dilation", getattr(args, "topology_focus_dilation", None))
+    _set("logic_net_enabled", getattr(args, "logic_net_enabled", None))
+    _set("logic_net_trainable", getattr(args, "logic_net_trainable", None))
+    _set("alpha_logic", getattr(args, "alpha_logic", None))
+    _set("logic_global_reach_weight", getattr(args, "logic_global_reach_weight", None))
+    _set("logic_global_room_weight", getattr(args, "logic_global_room_weight", None))
+    _set("logic_topology_trace_weight", getattr(args, "logic_topology_trace_weight", None))
+    _set("logic_topology_anchor_weight", getattr(args, "logic_topology_anchor_weight", None))
+    _set("logic_grid_pathfinder", getattr(args, "logic_grid_pathfinder", None))
+    _set("num_logic_iterations", getattr(args, "num_logic_iterations", None))
     _set("validation_fraction", getattr(args, "validation_fraction", None))
     _set("validation_max_batches", getattr(args, "validation_max_batches", None))
     _set("best_checkpoint_metric", getattr(args, "best_checkpoint_metric", None))
@@ -537,24 +578,54 @@ def _create_masked_room_dataloaders(
         validation_fraction=config.validation_fraction,
         seed=config.seed,
     )
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=config.batch_size,
-        shuffle=config.shuffle_train,
-        drop_last=config.drop_last,
-        collate_fn=graph_collate_fn,
-        **dataloader_runtime_kwargs(num_workers=config.num_workers, pin_memory=config.pin_memory),
-    )
     eval_source = val_dataset if val_dataset is not None else train_dataset
     eval_split_name = "val" if val_dataset is not None else "train"
-    val_loader = DataLoader(
-        eval_source,
-        batch_size=config.batch_size,
-        shuffle=False,
-        drop_last=False,
-        collate_fn=graph_collate_fn,
-        **dataloader_runtime_kwargs(num_workers=config.num_workers, pin_memory=config.pin_memory),
-    )
+    use_dungeon_batches = bool(getattr(config, "logic_net_enabled", False)) and float(
+        getattr(config, "alpha_logic", 0.0)
+    ) > 0.0
+    runtime_kwargs = dataloader_runtime_kwargs(num_workers=config.num_workers, pin_memory=config.pin_memory)
+    if use_dungeon_batches:
+        train_sampler = DungeonBatchSampler.from_dataset(
+            train_dataset,
+            shuffle=config.shuffle_train,
+            drop_last=config.drop_last,
+            seed=config.seed,
+        )
+        val_sampler = DungeonBatchSampler.from_dataset(
+            eval_source,
+            shuffle=False,
+            drop_last=False,
+            seed=config.seed,
+        )
+        train_loader = DataLoader(
+            train_dataset,
+            batch_sampler=train_sampler,
+            collate_fn=graph_collate_fn,
+            **runtime_kwargs,
+        )
+        val_loader = DataLoader(
+            eval_source,
+            batch_sampler=val_sampler,
+            collate_fn=graph_collate_fn,
+            **runtime_kwargs,
+        )
+    else:
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=config.batch_size,
+            shuffle=config.shuffle_train,
+            drop_last=config.drop_last,
+            collate_fn=graph_collate_fn,
+            **runtime_kwargs,
+        )
+        val_loader = DataLoader(
+            eval_source,
+            batch_size=config.batch_size,
+            shuffle=False,
+            drop_last=False,
+            collate_fn=graph_collate_fn,
+            **runtime_kwargs,
+        )
     return train_loader, val_loader, eval_split_name, len(train_dataset), len(eval_source)
 
 
@@ -624,13 +695,22 @@ class MaskedRoomTrainer:
                 )
             ),
         ).to(self.device)
+        self.logic_net = self._create_logic_net() if bool(getattr(config, "logic_net_enabled", False)) else None
+        if self.logic_net is not None:
+            self.logic_net.to(self.device)
+            if not bool(getattr(config, "logic_net_trainable", False)):
+                self.logic_net.requires_grad_(False)
+                self.logic_net.eval()
+        optimizer_modules = [
+            ("model", self.model),
+            ("condition_encoder", self.condition_encoder),
+            ("puzzle_stage_semantics_head", self.puzzle_stage_semantics_head),
+        ]
+        if self.logic_net is not None and bool(getattr(config, "logic_net_trainable", False)):
+            optimizer_modules.append(("logic_net", self.logic_net))
         self.optimizer = optim.AdamW(
             adamw_decay_param_groups_for_modules(
-                (
-                    ("model", self.model),
-                    ("condition_encoder", self.condition_encoder),
-                    ("puzzle_stage_semantics_head", self.puzzle_stage_semantics_head),
-                ),
+                tuple(optimizer_modules),
                 weight_decay=float(config.optimizer_weight_decay),
             ),
             lr=config.learning_rate,
@@ -644,6 +724,23 @@ class MaskedRoomTrainer:
         self.global_step = 0
         # Keep -1 until the outer training loop assigns the first epoch index.
         self.epoch = -1
+
+    def _create_logic_net(self) -> LogicNet:
+        pathfinder = str(getattr(self.config, "logic_grid_pathfinder", "bellman_ford")).strip().lower()
+        if pathfinder == "conv":
+            pathfinder = "cnn"
+        if pathfinder == "learnable":
+            pathfinder = "vin"
+        return LogicNet(
+            latent_dim=int(self.config.latent_dim),
+            num_tile_classes=int(self.config.num_classes),
+            num_iterations=int(getattr(self.config, "num_logic_iterations", 30)),
+            global_reach_weight=float(getattr(self.config, "logic_global_reach_weight", 1.0)),
+            global_room_weight=float(getattr(self.config, "logic_global_room_weight", 0.25)),
+            topology_trace_weight=float(getattr(self.config, "logic_topology_trace_weight", 0.25)),
+            topology_anchor_weight=float(getattr(self.config, "logic_topology_anchor_weight", 0.25)),
+            grid_pathfinder_type=pathfinder,
+        )
 
     @staticmethod
     def _to_token_ids(real_maps: torch.Tensor, num_classes: int) -> torch.Tensor:
@@ -848,11 +945,60 @@ class MaskedRoomTrainer:
             node_features = torch.tensor(node_features, dtype=torch.float32)
         if not isinstance(edge_index, torch.Tensor):
             edge_index = torch.tensor(edge_index, dtype=torch.long)
-        node_features = node_features.to(self.device, dtype=torch.float32)
+            node_features = node_features.to(self.device, dtype=torch.float32)
         edge_index = edge_index.to(self.device, dtype=torch.long)
 
         num_nodes = int(node_features.shape[0])
+        num_edges = int(edge_index.shape[1]) if edge_index.dim() == 2 else 0
         current_node_idx = graph_dict.get("current_node_idx")
+        if isinstance(current_node_idx, torch.Tensor):
+            current_node_idx = int(current_node_idx.detach().flatten()[0].item()) if current_node_idx.numel() else 0
+        elif current_node_idx is not None:
+            current_node_idx = int(current_node_idx)
+        else:
+            current_node_idx = 0
+
+        start_node_id = graph_dict.get("start_node_id", graph_dict.get("start_idx", -1))
+        if isinstance(start_node_id, torch.Tensor):
+            start_node_id = int(start_node_id.detach().flatten()[0].item()) if start_node_id.numel() else -1
+        elif start_node_id is not None:
+            start_node_id = int(start_node_id)
+        else:
+            start_node_id = -1
+
+        target_idx = graph_dict.get("target_idx")
+        if isinstance(target_idx, torch.Tensor):
+            target_idx = int(target_idx.detach().flatten()[0].item()) if target_idx.numel() else -1
+        elif target_idx is not None:
+            target_idx = int(target_idx)
+        elif node_features.shape[1] > 3:
+            target_hits = torch.nonzero(node_features[:, 3] > 0.5, as_tuple=False).flatten()
+            target_idx = int(target_hits[0].item()) if target_hits.numel() else -1
+        else:
+            target_idx = -1
+
+        edge_features = self._encode_edge_features(graph_dict, self.device)
+        edge_feature_dim = int(max(1, getattr(self.config, "edge_feature_dim", GRAPH_EDGE_FEATURE_DIM)))
+        if not isinstance(edge_features, torch.Tensor):
+            edge_features = torch.zeros(num_edges, edge_feature_dim, device=self.device, dtype=torch.float32)
+        elif edge_features.dim() == 1:
+            edge_features = edge_features.unsqueeze(-1)
+        if int(edge_features.shape[0]) != num_edges:
+            aligned = torch.zeros(num_edges, max(edge_feature_dim, int(edge_features.shape[-1])), device=self.device, dtype=torch.float32)
+            rows = min(num_edges, int(edge_features.shape[0]))
+            cols = min(int(aligned.shape[1]), int(edge_features.shape[-1]))
+            if rows > 0 and cols > 0:
+                aligned[:rows, :cols] = edge_features[:rows, :cols].to(self.device, dtype=torch.float32)
+            edge_features = aligned
+
+        edge_attr = graph_dict.get("edge_attr")
+        if not isinstance(edge_attr, torch.Tensor):
+            edge_attr = torch.tensor(edge_attr, dtype=torch.long) if edge_attr is not None else torch.zeros(0, dtype=torch.long)
+        edge_attr = edge_attr.to(self.device, dtype=torch.long).flatten()
+        if edge_attr.numel() < num_edges:
+            edge_attr = F.pad(edge_attr, (0, num_edges - int(edge_attr.numel())), value=0)
+        edge_attr = edge_attr[:num_edges]
+
         tpe = align_nodewise_tensor(
             graph_dict.get("tpe"),
             num_nodes=num_nodes,
@@ -912,29 +1058,45 @@ class MaskedRoomTrainer:
             if room_topology_map.dim() == 4:
                 room_topology_map = room_topology_map.squeeze(0)
 
+        boundary_constraints = graph_dict.get("boundary_constraints")
+        if isinstance(boundary_constraints, torch.Tensor):
+            boundary_constraints = boundary_constraints.to(self.device, dtype=torch.float32)
+            if boundary_constraints.dim() == 2:
+                boundary_constraints = boundary_constraints.squeeze(0)
+
         return {
             "node_features": node_features,
             "edge_index": edge_index,
+            "edge_features": edge_features,
+            "edge_attr": edge_attr,
             "tpe": tpe,
             "current_node_distance": current_node_distance,
             "node_positions": node_positions,
             "node_mask": node_mask,
+            "current_node_idx": int(current_node_idx),
+            "start_node_id": int(start_node_id),
+            "target_idx": int(target_idx),
             "has_room_anchor": bool(graph_dict.get("has_room_anchor", False)) or (
                 isinstance(graph_dict.get("boundary_constraints"), torch.Tensor)
                 and isinstance(graph_dict.get("room_position"), torch.Tensor)
             ),
+            **({"boundary_constraints": boundary_constraints} if isinstance(boundary_constraints, torch.Tensor) else {}),
             **({"room_topology_map": room_topology_map} if isinstance(room_topology_map, torch.Tensor) else {}),
         }
 
     def _stack_graph_batch(self, graph_list: List[dict]) -> Optional[Dict[str, torch.Tensor]]:
         if not graph_list:
             return None
+        dungeon_graph = self._try_stack_dungeon_scope_graph_batch(graph_list)
+        if dungeon_graph is not None:
+            return dungeon_graph
         samples = [self._normalize_graph_sample(graph_dict) for graph_dict in graph_list]
         max_nodes = max(int(sample["node_features"].shape[0]) for sample in samples)
         feat_dim = max(int(sample["node_features"].shape[1]) for sample in samples)
         tpe_dim = max(int(sample["tpe"].shape[1]) for sample in samples)
         distance_dim = max(int(sample["current_node_distance"].shape[1]) for sample in samples)
         max_edges = max(int(sample["edge_index"].shape[1]) if sample["edge_index"].dim() == 2 else 0 for sample in samples)
+        edge_feat_dim = max(int(sample["edge_features"].shape[1]) if sample["edge_features"].dim() == 2 else 0 for sample in samples)
 
         node_features_batch = torch.zeros(len(samples), max_nodes, feat_dim, device=self.device, dtype=torch.float32)
         tpe_batch = torch.zeros(len(samples), max_nodes, tpe_dim, device=self.device, dtype=torch.float32)
@@ -942,7 +1104,13 @@ class MaskedRoomTrainer:
         node_positions_batch = torch.zeros(len(samples), max_nodes, 2, device=self.device, dtype=torch.float32)
         node_mask_batch = torch.zeros(len(samples), max_nodes, device=self.device, dtype=torch.float32)
         edge_index_batch = torch.full((len(samples), 2, max_edges), -1, device=self.device, dtype=torch.long)
+        edge_features_batch = torch.zeros(len(samples), max_edges, max(1, edge_feat_dim), device=self.device, dtype=torch.float32)
+        edge_attr_batch = torch.full((len(samples), max_edges), -1, device=self.device, dtype=torch.long)
+        current_node_idx_batch = torch.zeros(len(samples), device=self.device, dtype=torch.long)
+        start_node_id_batch = torch.full((len(samples),), -1, device=self.device, dtype=torch.long)
+        target_idx_batch = torch.full((len(samples),), -1, device=self.device, dtype=torch.long)
         topo_maps = []
+        boundary_rows = []
         for i, sample in enumerate(samples):
             n = int(sample["node_features"].shape[0])
             if n > 0:
@@ -954,21 +1122,99 @@ class MaskedRoomTrainer:
             e = int(sample["edge_index"].shape[1]) if sample["edge_index"].dim() == 2 else 0
             if e > 0:
                 edge_index_batch[i, :, :e] = sample["edge_index"]
+                edge_features_batch[i, :e, : sample["edge_features"].shape[1]] = sample["edge_features"]
+                edge_attr_batch[i, :e] = sample["edge_attr"]
+            current_node_idx_batch[i] = int(sample.get("current_node_idx", 0))
+            start_node_id_batch[i] = int(sample.get("start_node_id", -1))
+            target_idx_batch[i] = int(sample.get("target_idx", -1))
             topo = sample.get("room_topology_map")
             if isinstance(topo, torch.Tensor):
                 topo_maps.append(topo.unsqueeze(0) if topo.dim() == 3 else topo)
+            boundary = sample.get("boundary_constraints")
+            if isinstance(boundary, torch.Tensor):
+                boundary_rows.append(boundary.reshape(1, -1))
 
         batch_graph = {
             "node_features": node_features_batch,
             "edge_index": edge_index_batch,
+            "edge_features": edge_features_batch,
+            "edge_attr": edge_attr_batch,
             "tpe": tpe_batch,
             "current_node_distance": current_node_distance_batch,
             "node_positions": node_positions_batch,
             "node_mask": node_mask_batch,
+            "current_node_idx": current_node_idx_batch,
+            "start_node_id": start_node_id_batch,
+            "target_idx": target_idx_batch,
+            "graph_scope": "room_batch",
             "has_room_anchor": bool(self.config.graph_conditioning_mode == "node_sequence") or bool(samples[0].get("has_room_anchor", False)),
         }
         if len(topo_maps) == len(samples):
             batch_graph["room_topology_map"] = torch.cat(topo_maps, dim=0)
+        if len(boundary_rows) == len(samples):
+            batch_graph["boundary_constraints"] = torch.cat(boundary_rows, dim=0)
+        return batch_graph
+
+    def _try_stack_dungeon_scope_graph_batch(self, graph_list: List[dict]) -> Optional[Dict[str, torch.Tensor]]:
+        if not graph_list:
+            return None
+        node_counts = [int(g.get("num_nodes", 0)) for g in graph_list]
+        if not node_counts or min(node_counts) <= 0 or len(set(node_counts)) != 1:
+            return None
+        num_nodes = int(node_counts[0])
+        if len(graph_list) != num_nodes:
+            return None
+
+        first_node_map = dict(graph_list[0].get("node_to_idx", {}))
+        current_indices: List[int] = []
+        for graph in graph_list:
+            if dict(graph.get("node_to_idx", {})) != first_node_map:
+                return None
+            current = graph.get("current_node_idx")
+            if isinstance(current, torch.Tensor):
+                current = int(current.detach().flatten()[0].item()) if current.numel() else -1
+            elif current is None:
+                return None
+            else:
+                current = int(current)
+            current_indices.append(current)
+        if sorted(current_indices) != list(range(num_nodes)):
+            return None
+
+        sample = self._normalize_graph_sample(graph_list[0])
+        topo_by_node: Dict[int, torch.Tensor] = {}
+        boundary_by_node: Dict[int, torch.Tensor] = {}
+        for graph, current in zip(graph_list, current_indices):
+            normalized = self._normalize_graph_sample(graph)
+            topo = normalized.get("room_topology_map")
+            if isinstance(topo, torch.Tensor):
+                topo_by_node[int(current)] = topo.unsqueeze(0) if topo.dim() == 3 else topo
+            boundary = normalized.get("boundary_constraints")
+            if isinstance(boundary, torch.Tensor):
+                boundary_by_node[int(current)] = boundary.reshape(1, -1)
+
+        node_mask = sample.get("node_mask")
+        if not isinstance(node_mask, torch.Tensor):
+            node_mask = torch.ones(num_nodes, device=self.device, dtype=torch.float32)
+        batch_graph = {
+            "node_features": sample["node_features"],
+            "edge_index": sample["edge_index"],
+            "edge_features": sample["edge_features"],
+            "edge_attr": sample["edge_attr"],
+            "tpe": sample["tpe"],
+            "current_node_distance": sample["current_node_distance"],
+            "node_positions": sample["node_positions"],
+            "node_mask": node_mask,
+            "current_node_idx": torch.tensor(current_indices, device=self.device, dtype=torch.long),
+            "start_node_id": torch.tensor(int(sample.get("start_node_id", -1)), device=self.device, dtype=torch.long),
+            "target_idx": torch.tensor(int(sample.get("target_idx", -1)), device=self.device, dtype=torch.long),
+            "graph_scope": "dungeon",
+            "has_room_anchor": bool(self.config.graph_conditioning_mode == "node_sequence") or bool(sample.get("has_room_anchor", False)),
+        }
+        if len(topo_by_node) == len(graph_list):
+            batch_graph["room_topology_map"] = torch.cat([topo_by_node[i] for i in current_indices], dim=0)
+        if len(boundary_by_node) == len(graph_list):
+            batch_graph["boundary_constraints"] = torch.cat([boundary_by_node[i] for i in current_indices], dim=0)
         return batch_graph
 
     @staticmethod
@@ -979,6 +1225,24 @@ class MaskedRoomTrainer:
             return bool(torch.isfinite(torch.as_tensor(float(value))).item())
         except (TypeError, ValueError):
             return False
+
+    @staticmethod
+    def _logic_loss_to_solvability_proxy(logic_loss: torch.Tensor) -> torch.Tensor:
+        if not isinstance(logic_loss, torch.Tensor):
+            logic_loss = torch.tensor(float(logic_loss), dtype=torch.float32)
+        return torch.exp(-logic_loss.detach().clamp_min(0.0))
+
+    @staticmethod
+    def _logic_info_scalar(info: Dict[str, Any], key: str, default: float = 0.0) -> float:
+        value = info.get(key, default)
+        if isinstance(value, torch.Tensor):
+            if value.numel() == 0:
+                return float(default)
+            return float(value.detach().float().mean().item())
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return float(default)
 
     @staticmethod
     def _gradients_are_finite(parameters: List[torch.nn.Parameter]) -> bool:
@@ -1023,7 +1287,12 @@ class MaskedRoomTrainer:
         need_puzzle_stage_semantics = bool(
             graph_list and float(getattr(self.config, "puzzle_stage_semantics_loss_weight", 0.0)) > 0.0
         )
-        if need_puzzle_stage_semantics:
+        need_logic_supervision = bool(
+            self.logic_net is not None
+            and graph_batch is not None
+            and float(getattr(self.config, "alpha_logic", 0.0)) > 0.0
+        )
+        if need_puzzle_stage_semantics or need_logic_supervision:
             loss, metrics, aux = self.model.training_loss(
                 token_ids,
                 conditioning,
@@ -1066,20 +1335,64 @@ class MaskedRoomTrainer:
                 aux["logits"],
                 [graph_dict.get("puzzle_stage_condition") if isinstance(graph_dict, dict) else {} for graph_dict in graph_list],
             )
-        total_loss = loss + float(getattr(self.config, "puzzle_stage_semantics_loss_weight", 0.0)) * puzzle_stage_semantic_loss
+
+        logic_loss = torch.zeros((), device=self.device, dtype=loss.dtype)
+        logic_info: Dict[str, Any] = {}
+        solvability_proxy = torch.zeros((), device=self.device, dtype=loss.dtype)
+        if need_logic_supervision and isinstance(aux.get("logits"), torch.Tensor):
+            logic_loss, logic_info = self.logic_net(aux["logits"], graph_data=graph_batch)
+            if isinstance(logic_loss, torch.Tensor) and logic_loss.numel() != 1:
+                logic_loss = logic_loss.mean()
+            if self._tensor_is_finite(logic_loss):
+                solvability_proxy = self._logic_loss_to_solvability_proxy(logic_loss).to(device=self.device, dtype=loss.dtype)
+            else:
+                logic_info = dict(logic_info)
+                logic_info["global_graph_skipped"] = logic_info.get("global_graph_skipped", "nonfinite_logic_loss")
+                logic_loss = torch.zeros((), device=self.device, dtype=loss.dtype)
+                solvability_proxy = torch.zeros((), device=self.device, dtype=loss.dtype)
+
+        total_loss = (
+            loss
+            + float(getattr(self.config, "puzzle_stage_semantics_loss_weight", 0.0)) * puzzle_stage_semantic_loss
+            + float(getattr(self.config, "alpha_logic", 0.0)) * logic_loss
+        )
+        graph_skip_reason = str(logic_info.get("global_graph_skipped", "") or "")
+        graph_loss_attempted = bool(need_logic_supervision)
+        logic_metrics = {
+            "logic_loss": float(logic_loss.detach().item()) if self._tensor_is_finite(logic_loss) else 0.0,
+            "logic_loss_contribution": (
+                float(getattr(self.config, "alpha_logic", 0.0)) * float(logic_loss.detach().item())
+                if self._tensor_is_finite(logic_loss)
+                else 0.0
+            ),
+            "solvability_proxy": float(solvability_proxy.detach().item()) if self._tensor_is_finite(solvability_proxy) else 0.0,
+            "solvability": float(solvability_proxy.detach().item()) if self._tensor_is_finite(solvability_proxy) else 0.0,
+            "logic_global_graph_loss_skipped": 1.0 if graph_loss_attempted and graph_skip_reason else 0.0,
+            "logic_global_graph_supervised": 1.0 if graph_loss_attempted and not graph_skip_reason else 0.0,
+            "logic_global_graph_node_coverage": self._logic_info_scalar(logic_info, "global_graph_node_coverage", 0.0),
+            "logic_global_graph_reachability": self._logic_info_scalar(logic_info, "global_graph_reachability", 0.0),
+            "logic_global_room_passability": self._logic_info_scalar(logic_info, "global_room_passability", 0.0),
+        }
         if train:
             if not self._tensor_is_finite(total_loss):
                 self.optimizer.zero_grad(set_to_none=True)
                 metrics = dict(metrics)
                 metrics["loss"] = 0.0
                 metrics.update(puzzle_stage_semantic_metrics)
+                metrics.update(logic_metrics)
                 metrics["skipped_nonfinite_batch"] = 1.0
                 return metrics
             self.optimizer.zero_grad()
             total_loss.backward()
             trainable_params = [
                 param
-                for module in (self.model, self.condition_encoder, self.puzzle_stage_semantics_head)
+                for module in (
+                    self.model,
+                    self.condition_encoder,
+                    self.puzzle_stage_semantics_head,
+                    self.logic_net if bool(getattr(self.config, "logic_net_trainable", False)) else None,
+                )
+                if module is not None
                 for param in module.parameters()
                 if param.requires_grad
             ]
@@ -1088,6 +1401,7 @@ class MaskedRoomTrainer:
                 metrics = dict(metrics)
                 metrics["loss"] = float(total_loss.detach().item())
                 metrics.update(puzzle_stage_semantic_metrics)
+                metrics.update(logic_metrics)
                 metrics["skipped_nonfinite_batch"] = 1.0
                 return metrics
             if self.config.grad_clip_norm > 0:
@@ -1100,6 +1414,7 @@ class MaskedRoomTrainer:
                     metrics = dict(metrics)
                     metrics["loss"] = float(total_loss.detach().item())
                     metrics.update(puzzle_stage_semantic_metrics)
+                    metrics.update(logic_metrics)
                     metrics["skipped_nonfinite_batch"] = 1.0
                     return metrics
             self.optimizer.step()
@@ -1107,6 +1422,7 @@ class MaskedRoomTrainer:
         metrics = dict(metrics)
         metrics["loss"] = float(total_loss.detach().item())
         metrics.update(puzzle_stage_semantic_metrics)
+        metrics.update(logic_metrics)
         metrics["skipped_nonfinite_batch"] = 0.0
         return metrics
 
@@ -1123,6 +1439,11 @@ class MaskedRoomTrainer:
             "model_state_dict": self.model.state_dict(),
             "condition_encoder_state_dict": self.condition_encoder.state_dict(),
             "puzzle_stage_semantics_head_state_dict": self.puzzle_stage_semantics_head.state_dict(),
+            **(
+                {"logic_net_state_dict": self.logic_net.state_dict()}
+                if self.logic_net is not None
+                else {}
+            ),
             "optimizer_state_dict": self.optimizer.state_dict(),
             "scheduler_state_dict": self.scheduler.state_dict(),
             "config": self.config.to_dict(),
@@ -1145,6 +1466,11 @@ class MaskedRoomTrainer:
             "model_state_dict": self.model.state_dict(),
             "condition_encoder_state_dict": self.condition_encoder.state_dict(),
             "puzzle_stage_semantics_head_state_dict": self.puzzle_stage_semantics_head.state_dict(),
+            **(
+                {"logic_net_state_dict": self.logic_net.state_dict()}
+                if self.logic_net is not None
+                else {}
+            ),
             "config": self.config.to_dict(),
             "metrics": dict(metrics),
             "metadata": {
@@ -1160,11 +1486,11 @@ class MaskedRoomTrainer:
         )
         atomic_torch_save(payload, path)
         checkpoint_kind = "resume" if include_optimizer else "inference"
-        contains = (
-                ["model", "condition_encoder", "puzzle_stage_semantics_head", "optimizer", "scheduler"]
-                if include_optimizer
-                else ["model", "condition_encoder", "puzzle_stage_semantics_head"]
-            )
+        contains = ["model", "condition_encoder", "puzzle_stage_semantics_head"]
+        if self.logic_net is not None:
+            contains.append("logic_net")
+        if include_optimizer:
+            contains.extend(["optimizer", "scheduler"])
         write_checkpoint_metadata(
             path,
             model_type="masked_room_resume" if include_optimizer else "masked_room_model",
@@ -1193,6 +1519,11 @@ class MaskedRoomTrainer:
                 "topology_marker_weight": float(self.config.topology_marker_weight),
                 "topology_trace_weight": float(self.config.topology_trace_weight),
                 "topology_focus_dilation": int(self.config.topology_focus_dilation),
+                "logic_net_enabled": bool(getattr(self.config, "logic_net_enabled", False)),
+                "logic_net_trainable": bool(getattr(self.config, "logic_net_trainable", False)),
+                "alpha_logic": float(getattr(self.config, "alpha_logic", 0.0)),
+                "logic_grid_pathfinder": str(getattr(self.config, "logic_grid_pathfinder", "bellman_ford")),
+                "num_logic_iterations": int(getattr(self.config, "num_logic_iterations", 30)),
             },
             extra={
                 "graph_conditioning_mode": self.config.graph_conditioning_mode,
@@ -1221,6 +1552,8 @@ class MaskedRoomTrainer:
         self.condition_encoder.load_state_dict(checkpoint["condition_encoder_state_dict"])
         if "puzzle_stage_semantics_head_state_dict" in checkpoint:
             self.puzzle_stage_semantics_head.load_state_dict(checkpoint["puzzle_stage_semantics_head_state_dict"])
+        if self.logic_net is not None and "logic_net_state_dict" in checkpoint:
+            self.logic_net.load_state_dict(checkpoint["logic_net_state_dict"], strict=False)
         if "optimizer_state_dict" in checkpoint:
             self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
         if "scheduler_state_dict" in checkpoint:
@@ -1247,6 +1580,11 @@ def train_masked_room(config: MaskedRoomTrainingConfig) -> MaskedRoomTrainer:
             "masked_room_model": count_parameters(trainer.model, trainable_only=True),
             "condition_encoder": count_parameters(trainer.condition_encoder, trainable_only=True),
             "puzzle_stage_semantics_head": count_parameters(trainer.puzzle_stage_semantics_head, trainable_only=True),
+            **(
+                {"logic_net": count_parameters(trainer.logic_net, trainable_only=True)}
+                if trainer.logic_net is not None
+                else {}
+            ),
         },
         recommended_config="configs/zelda_hmolqd_masked_small.yaml",
         capacity_knobs=(
@@ -1305,9 +1643,14 @@ def train_masked_room(config: MaskedRoomTrainingConfig) -> MaskedRoomTrainer:
 
     for epoch in range(int(getattr(trainer, "epoch", -1)) + 1, config.epochs):
         trainer.epoch = int(epoch)
+        batch_sampler = getattr(train_loader, "batch_sampler", None)
+        if hasattr(batch_sampler, "set_epoch"):
+            batch_sampler.set_epoch(int(epoch))
         trainer.model.train()
         trainer.condition_encoder.train()
         trainer.puzzle_stage_semantics_head.train()
+        if trainer.logic_net is not None:
+            trainer.logic_net.train(bool(getattr(config, "logic_net_trainable", False)))
         train_sum = {
             "loss": 0.0,
             "base_loss": 0.0,
@@ -1337,49 +1680,23 @@ def train_masked_room(config: MaskedRoomTrainingConfig) -> MaskedRoomTrainer:
                 )
             metrics = trainer._step(real_maps, graph_list, train=True)
             for key, value in metrics.items():
-                train_sum[key] += float(value)
+                train_sum[key] = float(train_sum.get(key, 0.0)) + float(value)
             train_batches += 1
 
         trainer.model.eval()
         trainer.condition_encoder.eval()
         trainer.puzzle_stage_semantics_head.eval()
-        val_sum = {
-            "val_loss": 0.0,
-            "val_base_loss": 0.0,
-            "val_mask_ratio": 0.0,
-            "val_masked_fraction": 0.0,
-            "val_topology_focus_loss": 0.0,
-            "val_topology_focus_fraction": 0.0,
-            "val_puzzle_stage_semantic_loss": 0.0,
-            "val_puzzle_stage_gate_loss": 0.0,
-            "val_puzzle_stage_sequence_loss": 0.0,
-            "val_puzzle_stage_count_loss": 0.0,
-            "val_puzzle_stage_slot_loss": 0.0,
-            "val_puzzle_stage_gate_acc": 0.0,
-            "val_puzzle_stage_sequence_acc": 0.0,
-            "val_puzzle_stage_count_acc": 0.0,
-            "val_puzzle_stage_slot_acc": 0.0,
-        }
+        if trainer.logic_net is not None:
+            trainer.logic_net.eval()
+        val_sum: Dict[str, float] = {}
         val_batches = 0
         with torch.no_grad():
             for batch_idx, batch in enumerate(val_loader):
                 real_maps, graph_list = batch if isinstance(batch, (list, tuple)) and len(batch) == 2 else (batch, None)
                 metrics = trainer._step(real_maps, graph_list, train=False)
-                val_sum["val_loss"] += float(metrics["loss"])
-                val_sum["val_base_loss"] += float(metrics.get("base_loss", metrics["loss"]))
-                val_sum["val_mask_ratio"] += float(metrics["mask_ratio"])
-                val_sum["val_masked_fraction"] += float(metrics["masked_fraction"])
-                val_sum["val_topology_focus_loss"] += float(metrics.get("topology_focus_loss", 0.0))
-                val_sum["val_topology_focus_fraction"] += float(metrics.get("topology_focus_fraction", 0.0))
-                val_sum["val_puzzle_stage_semantic_loss"] += float(metrics.get("puzzle_stage_semantic_loss", 0.0))
-                val_sum["val_puzzle_stage_gate_loss"] += float(metrics.get("puzzle_stage_gate_loss", 0.0))
-                val_sum["val_puzzle_stage_sequence_loss"] += float(metrics.get("puzzle_stage_sequence_loss", 0.0))
-                val_sum["val_puzzle_stage_count_loss"] += float(metrics.get("puzzle_stage_count_loss", 0.0))
-                val_sum["val_puzzle_stage_slot_loss"] += float(metrics.get("puzzle_stage_slot_loss", 0.0))
-                val_sum["val_puzzle_stage_gate_acc"] += float(metrics.get("puzzle_stage_gate_acc", 0.0))
-                val_sum["val_puzzle_stage_sequence_acc"] += float(metrics.get("puzzle_stage_sequence_acc", 0.0))
-                val_sum["val_puzzle_stage_count_acc"] += float(metrics.get("puzzle_stage_count_acc", 0.0))
-                val_sum["val_puzzle_stage_slot_acc"] += float(metrics.get("puzzle_stage_slot_acc", 0.0))
+                for key, value in metrics.items():
+                    metric_key = f"val_{key}"
+                    val_sum[metric_key] = float(val_sum.get(metric_key, 0.0)) + float(value)
                 val_batches += 1
                 if batch_idx + 1 >= int(getattr(config, "validation_max_batches", 16)):
                     break
@@ -1506,6 +1823,20 @@ def main() -> None:
     parser.add_argument("--topology-marker-weight", type=float, default=None)
     parser.add_argument("--topology-trace-weight", type=float, default=None)
     parser.add_argument("--topology-focus-dilation", type=int, default=None)
+    parser.add_argument("--logic-net-enabled", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--logic-net-trainable", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--alpha-logic", type=float, default=None)
+    parser.add_argument("--logic-global-reach-weight", type=float, default=None)
+    parser.add_argument("--logic-global-room-weight", type=float, default=None)
+    parser.add_argument("--logic-topology-trace-weight", type=float, default=None)
+    parser.add_argument("--logic-topology-anchor-weight", type=float, default=None)
+    parser.add_argument(
+        "--logic-grid-pathfinder",
+        type=str,
+        choices=["bellman_ford", "conv", "vin", "learnable", "perturb_and_map"],
+        default=None,
+    )
+    parser.add_argument("--num-logic-iterations", type=int, default=None)
     parser.add_argument("--validation-fraction", type=float, default=None)
     parser.add_argument("--validation-max-batches", type=int, default=None)
     parser.add_argument(

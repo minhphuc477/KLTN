@@ -394,6 +394,13 @@ def test_stage_helpers_forward_checkpoint_retention_and_resume_defaults():
     assert masked_room_kwargs["topology_marker_weight"] == pytest.approx(2.0)
     assert masked_room_kwargs["topology_trace_weight"] == pytest.approx(0.75)
     assert masked_room_kwargs["topology_focus_dilation"] == 1
+    assert masked_room_kwargs["logic_net_enabled"] is False
+    assert masked_room_kwargs["logic_net_trainable"] is False
+    assert masked_room_kwargs["alpha_logic"] == pytest.approx(0.0)
+    assert masked_room_kwargs["logic_global_reach_weight"] == pytest.approx(1.0)
+    assert masked_room_kwargs["logic_global_room_weight"] == pytest.approx(0.25)
+    assert masked_room_kwargs["logic_grid_pathfinder"] == "bellman_ford"
+    assert masked_room_kwargs["num_logic_iterations"] == 30
     assert masked_room_kwargs["validation_fraction"] == pytest.approx(0.1)
     assert masked_room_kwargs["validation_max_batches"] == 16
     assert masked_room_kwargs["best_checkpoint_metric"] == "val_loss"

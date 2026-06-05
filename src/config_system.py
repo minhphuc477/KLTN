@@ -409,6 +409,15 @@ CONFIG_FIELDS: List[ConfigField] = [
     ConfigField("masked_room.min_mask_ratio", float, 0.12, "Minimum token-mask ratio sampled during masked-room training.", min_value=0.0, max_value=1.0),
     ConfigField("masked_room.max_mask_ratio", float, 0.85, "Maximum token-mask ratio sampled during masked-room training.", min_value=0.0, max_value=1.0),
     ConfigField("masked_room.topology_alignment_weight", float, 0.25, "Extra weight on topology-critical masked-token CE during masked-room training.", min_value=0.0),
+    ConfigField("masked_room.logic_net_enabled", bool, False, "Enable LogicNet supervision for masked-room training as an ablation."),
+    ConfigField("masked_room.logic_net_trainable", bool, False, "Allow LogicNet parameters to update during masked-room logic-supervised ablations."),
+    ConfigField("masked_room.alpha_logic", float, 0.0, "Weight for masked-room LogicNet loss. Kept at 0 unless the ablation is explicitly enabled.", min_value=0.0),
+    ConfigField("masked_room.logic_global_reach_weight", float, 1.0, "Weight for dungeon-level reachability in masked-room LogicNet supervision.", min_value=0.0),
+    ConfigField("masked_room.logic_global_room_weight", float, 0.25, "Weight for room-passability terms in masked-room LogicNet supervision.", min_value=0.0),
+    ConfigField("masked_room.logic_topology_trace_weight", float, 0.25, "Weight for topology-trace walkability anchors in masked-room LogicNet supervision.", min_value=0.0),
+    ConfigField("masked_room.logic_topology_anchor_weight", float, 0.25, "Weight for sparse topology-anchor walkability terms in masked-room LogicNet supervision.", min_value=0.0),
+    ConfigField("masked_room.logic_grid_pathfinder", str, "bellman_ford", "Grid pathfinder used by masked-room LogicNet ablations.", choices=("bellman_ford", "conv", "cnn", "vin", "learnable", "perturb_and_map")),
+    ConfigField("masked_room.num_logic_iterations", int, 30, "Number of LogicNet pathfinding iterations for masked-room ablations.", min_value=1),
     ConfigField("masked_room.puzzle_structure_dropout_prob", float, 0.35, "Train-only augmentation probability for puzzle rooms during masked-room training. Selected puzzle rooms are duplicated as structure-free targets with puzzle_room_structure_enabled=false so the model learns puzzle-on/puzzle-off behavior explicitly.", min_value=0.0, max_value=1.0),
     ConfigField("masked_room.puzzle_stage_conditioning_enabled", bool, False, "Append deterministic ordered puzzle-stage tokens to masked-room conditioning for retrains with explicit multi-step puzzle supervision."),
     ConfigField("masked_room.puzzle_stage_token_scale", float, 0.20, "Scale of deterministic ordered puzzle-stage conditioning tokens during masked-room training.", min_value=0.0, max_value=2.0),
@@ -631,6 +640,9 @@ def validate_config(config: Dict[str, Any]) -> Dict[str, Any]:
         validated["diffusion"]["guidance_scale"] = 0.0
         validated["diffusion"]["alpha_logic"] = 0.0
         validated["diffusion"]["alpha_logic_tile"] = 0.0
+    if not bool(validated["masked_room"]["logic_net_enabled"]):
+        validated["masked_room"]["logic_net_trainable"] = False
+        validated["masked_room"]["alpha_logic"] = 0.0
 
     expected_topology_channels = int(ROOM_TOPOLOGY_CHANNEL_COUNT)
     if int(validated["diffusion"]["room_topology_channels"]) != expected_topology_channels:

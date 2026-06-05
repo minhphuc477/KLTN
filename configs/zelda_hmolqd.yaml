@@ -331,6 +331,15 @@ masked_room:
   min_mask_ratio: 0.12  # type=float, default=0.12, valid=0..1
   max_mask_ratio: 0.85  # type=float, default=0.85, valid=0..1; must be >= min_mask_ratio
   topology_alignment_weight: 0.25  # type=float, default=0.25, valid>=0; extra masked-token CE pressure on topology-critical pixels so masked-room training learns anchors, doors, gates, and puzzle-route structure more explicitly
+  logic_net_enabled: false  # type=bool, default=false, valid={true,false}; opt-in ablation for LogicNet topological supervision on masked-room logits
+  logic_net_trainable: false  # type=bool, default=false, valid={true,false}; frozen LogicNet is the default for fair masked-room ablations
+  alpha_logic: 0.0  # type=float, default=0.0, valid>=0; set >0 only for the masked-room global-graph-supervision ablation
+  logic_global_reach_weight: 1.0  # type=float, default=1.0, valid>=0
+  logic_global_room_weight: 0.25  # type=float, default=0.25, valid>=0
+  logic_topology_trace_weight: 0.25  # type=float, default=0.25, valid>=0
+  logic_topology_anchor_weight: 0.25  # type=float, default=0.25, valid>=0
+  logic_grid_pathfinder: bellman_ford  # type=str, default=bellman_ford, valid={bellman_ford,conv,cnn,vin,learnable,perturb_and_map}
+  num_logic_iterations: 30  # type=int, default=30, valid>=1
   puzzle_structure_dropout_prob: 0.35  # type=float, default=0.35, valid=0..1; train-only paired augmentation rate for puzzle rooms so masked-room learns puzzle-on / puzzle-off room structure explicitly
   puzzle_stage_conditioning_enabled: false  # type=bool, default=false, valid={true,false}; append ordered puzzle-stage tokens to masked-room conditioning for the staged-puzzle retrain only
   puzzle_stage_token_scale: 0.20  # type=float, default=0.20, valid=0..2; deterministic ordered stage token amplitude during masked-room training
