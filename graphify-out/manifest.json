@@ -1140,8 +1140,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\generation\\grammar\\advanced_rules.py": {
-    "mtime": 1780241580.4674594,
-    "ast_hash": "ba7beff4194fcebf199daf5713366a0a",
+    "mtime": 1780678591.9350777,
+    "ast_hash": "31529aa3f9e0d5906af0b9d33148ed95",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\generation\\grammar\\core_rules.py": {
@@ -1195,8 +1195,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\generation\\weighted_bayesian_wfc.py": {
-    "mtime": 1780413869.2628448,
-    "ast_hash": "e79c70e71fe89902d4718c1c5acc6997",
+    "mtime": 1780679006.3871543,
+    "ast_hash": "520e781df97ffe366547266b98fbe125",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\generation\\wfc_refiner.py": {
@@ -2565,8 +2565,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\train_diffusion.py": {
-    "mtime": 1780676668.9273934,
-    "ast_hash": "5374e9283bbb1485d84d47fc9009818d",
+    "mtime": 1780678499.8282206,
+    "ast_hash": "a8afa9f168bc4e65b54c213dbdb5d3fc",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\train_gaussian_vae.py": {
@@ -2940,8 +2940,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_advanced_rules_integration.py": {
-    "mtime": 1779622405.89627,
-    "ast_hash": "175c3237ee91033a55f67b472fd36989",
+    "mtime": 1780678751.6539426,
+    "ast_hash": "78e14fd081e9d8da22409f8a014a0748",
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_architecture_audit_fixes.py": {
@@ -3565,8 +3565,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_revision2_appendix_regressions.py": {
-    "mtime": 1780414030.700231,
-    "ast_hash": "f89182f821f96515fbde071f216fae46",
+    "mtime": 1780678903.0479686,
+    "ast_hash": "7a982d9616c3a1b4e2e83e89b1d3ef73",
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_room_stitching.py": {
@@ -3625,8 +3625,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_train_diffusion_conditioning_shapes.py": {
-    "mtime": 1780661019.9869957,
-    "ast_hash": "6170238f89fc66e78b9f0a05d2d1e53a",
+    "mtime": 1780679017.687885,
+    "ast_hash": "5b993325fa0df34f6c23ecdcc1a0d61f",
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_train_lcm_checkpointing.py": {

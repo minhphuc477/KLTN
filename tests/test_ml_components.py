@@ -1328,6 +1328,72 @@ def test_cross_attention_fusion_all_masked_context_is_finite():
     assert torch.isfinite(global_tokens.grad).all()
 
 
+def test_cross_attention_fusion_sdpa_matches_manual_fallback():
+    import src.core.condition_encoder as condition_encoder
+    from src.core.condition_encoder import CrossAttentionFusion
+
+    if not hasattr(torch.nn.functional, "scaled_dot_product_attention"):
+        pytest.skip("scaled_dot_product_attention is unavailable in this PyTorch build")
+
+    torch.manual_seed(17)
+    module = CrossAttentionFusion(local_dim=4, global_dim=5, output_dim=8, num_heads=2, dropout=0.0)
+    module.eval()
+    local = torch.randn(3, 4)
+    global_tokens = torch.randn(3, 6, 5)
+    mask = torch.tensor(
+        [
+            [True, True, False, True, False, False],
+            [False, True, True, False, True, False],
+            [True, False, False, False, False, True],
+        ],
+        dtype=torch.bool,
+    )
+
+    original_has_sdpa = condition_encoder.HAS_SDPA
+    try:
+        condition_encoder.HAS_SDPA = True
+        sdpa_out = module(local, global_tokens, mask=mask)
+        condition_encoder.HAS_SDPA = False
+        manual_out = module(local, global_tokens, mask=mask)
+    finally:
+        condition_encoder.HAS_SDPA = original_has_sdpa
+
+    assert torch.allclose(sdpa_out, manual_out, atol=1e-5, rtol=1e-5)
+
+
+def test_cross_attention_fusion_uses_sdpa(monkeypatch):
+    import src.core.condition_encoder as condition_encoder
+    from src.core.condition_encoder import CrossAttentionFusion
+
+    if not hasattr(torch.nn.functional, "scaled_dot_product_attention"):
+        pytest.skip("scaled_dot_product_attention is unavailable in this PyTorch build")
+
+    calls = {"count": 0}
+    original_sdpa = torch.nn.functional.scaled_dot_product_attention
+
+    def _spy_sdpa(*args, **kwargs):
+        calls["count"] += 1
+        return original_sdpa(*args, **kwargs)
+
+    module = CrossAttentionFusion(local_dim=4, global_dim=4, output_dim=8, num_heads=2, dropout=0.0)
+    module.eval()
+    original_has_sdpa = condition_encoder.HAS_SDPA
+    monkeypatch.setattr(torch.nn.functional, "scaled_dot_product_attention", _spy_sdpa)
+    try:
+        condition_encoder.HAS_SDPA = True
+        out = module(
+            torch.randn(2, 4),
+            torch.randn(2, 3, 4),
+            mask=torch.tensor([[True, False, True], [False, True, True]]),
+        )
+    finally:
+        condition_encoder.HAS_SDPA = original_has_sdpa
+
+    assert calls["count"] == 1
+    assert tuple(out.shape) == (2, 8)
+    assert torch.isfinite(out).all()
+
+
 def test_global_stream_encoder_gat_handles_isolated_single_node_graph():
     from src.core.condition_encoder import GlobalStreamEncoder
 
@@ -1400,7 +1466,7 @@ def test_dual_stream_encoder_keeps_style_and_reference_features_separate(monkeyp
     monkeypatch.setattr(
         encoder.fusion,
         "forward",
-        lambda _local, _global: torch.zeros(1, output_dim),
+        lambda _local, _global, **_kwargs: torch.zeros(1, output_dim),
     )
     encoder.reference_room_encoder = _ReferenceEncoder(output_dim)
     spy = _SpyProjection(output_dim)

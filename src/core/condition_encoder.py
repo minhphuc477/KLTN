@@ -45,6 +45,7 @@ from src.core.definitions import GRAPH_EDGE_FEATURE_DIM, GRAPH_NODE_FEATURE_DIM,
 
 logger = logging.getLogger(__name__)
 CARDINAL_DIRECTIONS = ("N", "S", "E", "W")
+HAS_SDPA = hasattr(F, "scaled_dot_product_attention")
 
 # Try to import torch_geometric for GNN
 try:
@@ -1386,31 +1387,44 @@ class CrossAttentionFusion(nn.Module):
         K = K.reshape(B, N, self.num_heads, self.head_dim).transpose(1, 2).contiguous()  # [B, H, N, D]
         V = V.reshape(B, N, self.num_heads, self.head_dim).transpose(1, 2).contiguous()  # [B, H, N, D]
         
-        # Scaled dot-product attention
-        scale = math.sqrt(self.head_dim)
-        attn_scores = torch.matmul(Q, K.transpose(-2, -1)) / scale  # [B, H, 1, N]
-        
         valid_mask = None
+        has_valid_context = None
         if mask is not None:
-            valid_mask = mask.to(device=attn_scores.device, dtype=torch.bool)
+            valid_mask = mask.to(device=Q.device, dtype=torch.bool)
             if valid_mask.dim() == 1:
                 valid_mask = valid_mask.unsqueeze(0).expand(B, -1)
             if valid_mask.dim() != 2 or int(valid_mask.shape[0]) != B or int(valid_mask.shape[1]) != N:
                 raise ValueError(
                     f"CrossAttentionFusion mask must have shape [B,N] with B={B}, N={N}; got {tuple(valid_mask.shape)}."
                 )
-            expanded_mask = valid_mask.unsqueeze(1).unsqueeze(2)
-            attn_scores = attn_scores.masked_fill(~expanded_mask, -1.0e4)
-        
-        attn_weights = F.softmax(attn_scores.float(), dim=-1).to(dtype=attn_scores.dtype)
-        if valid_mask is not None:
-            expanded_mask = valid_mask.unsqueeze(1).unsqueeze(2).to(dtype=attn_weights.dtype)
-            attn_weights = attn_weights * expanded_mask
-            attn_weights = attn_weights / attn_weights.sum(dim=-1, keepdim=True).clamp_min(1e-8)
-        attn_weights = self.dropout(attn_weights)
-        
-        # Apply attention to values
-        attn_output = torch.matmul(attn_weights, V)  # [B, H, 1, D]
+            has_valid_context = valid_mask.any(dim=-1)
+
+        if HAS_SDPA:
+            attn_mask = valid_mask[:, None, None, :] if valid_mask is not None else None
+            attn_output = F.scaled_dot_product_attention(
+                Q,
+                K,
+                V,
+                attn_mask=attn_mask,
+                dropout_p=self.dropout.p if self.training else 0.0,
+            )
+            if has_valid_context is not None and not torch.all(has_valid_context):
+                attn_output = attn_output.clone()
+                attn_output[~has_valid_context] = 0.0
+        else:
+            # Compatibility fallback for older PyTorch versions without fused SDPA.
+            scale = math.sqrt(self.head_dim)
+            attn_scores = torch.matmul(Q, K.transpose(-2, -1)) / scale  # [B, H, 1, N]
+            if valid_mask is not None:
+                expanded_mask = valid_mask.unsqueeze(1).unsqueeze(2)
+                attn_scores = attn_scores.masked_fill(~expanded_mask, -1.0e4)
+            attn_weights = F.softmax(attn_scores.float(), dim=-1).to(dtype=attn_scores.dtype)
+            if valid_mask is not None:
+                expanded_mask = valid_mask.unsqueeze(1).unsqueeze(2).to(dtype=attn_weights.dtype)
+                attn_weights = attn_weights * expanded_mask
+                attn_weights = attn_weights / attn_weights.sum(dim=-1, keepdim=True).clamp_min(1e-8)
+            attn_weights = self.dropout(attn_weights)
+            attn_output = torch.matmul(attn_weights, V)  # [B, H, 1, D]
         
         # Reshape and project
         attn_output = attn_output.transpose(1, 2).contiguous().view(B, 1, self.output_dim)
