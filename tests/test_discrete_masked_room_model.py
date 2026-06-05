@@ -102,6 +102,124 @@ def test_discrete_masked_model_respects_fixed_tokens():
     assert int(tokens[0, 8, 5]) == int(SEMANTIC_PALETTE["START"])
 
 
+def test_masked_backbone_default_uses_original_concat_encoder(monkeypatch):
+    model = create_discrete_masked_model(
+        num_classes=44,
+        hidden_dim=16,
+        context_dim=8,
+        num_steps=2,
+        unet_channel_mult=(1,),
+        unet_num_res_blocks=1,
+        unet_num_heads=4,
+        unet_dropout=0.0,
+    )
+    tokens = torch.zeros(1, ROOM_HEIGHT, ROOM_WIDTH, dtype=torch.long)
+    step = torch.zeros(1, dtype=torch.long)
+    context = torch.randn(1, 37, 8)
+    seen = {}
+
+    def fake_encoder(sequence, *args, **kwargs):
+        _ = (args, kwargs)
+        seen["encoder_seq_len"] = int(sequence.shape[1])
+        return sequence
+
+    def forbidden_decoder(*args, **kwargs):
+        _ = (args, kwargs)
+        raise AssertionError("cross-decoder ablation should not run by default")
+
+    monkeypatch.setattr(model.backbone.encoder, "forward", fake_encoder)
+    monkeypatch.setattr(model.backbone.decoder, "forward", forbidden_decoder)
+
+    logits = model(tokens, step, context)
+
+    assert logits.shape == (1, 44, ROOM_HEIGHT, ROOM_WIDTH)
+    assert seen["encoder_seq_len"] == ROOM_HEIGHT * ROOM_WIDTH + 37
+
+
+def test_masked_backbone_cross_decoder_ablation_uses_room_tokens_only_for_self_attention(monkeypatch):
+    model = create_discrete_masked_model(
+        num_classes=44,
+        hidden_dim=16,
+        context_dim=8,
+        num_steps=2,
+        unet_channel_mult=(1,),
+        unet_num_res_blocks=1,
+        unet_num_heads=4,
+        unet_dropout=0.0,
+        context_attention_mode="cross_decoder",
+    )
+    tokens = torch.zeros(1, ROOM_HEIGHT, ROOM_WIDTH, dtype=torch.long)
+    step = torch.zeros(1, dtype=torch.long)
+    context = torch.randn(1, 37, 8)
+    seen = {}
+
+    def fake_encoder(room_tokens, *args, **kwargs):
+        _ = (args, kwargs)
+        seen["room_seq_len"] = int(room_tokens.shape[1])
+        return room_tokens
+
+    def fake_decoder(tgt, memory, *args, **kwargs):
+        seen["decoder_tgt_len"] = int(tgt.shape[1])
+        seen["decoder_memory_len"] = int(memory.shape[1])
+        seen["memory_key_padding_mask"] = kwargs.get("memory_key_padding_mask")
+        return tgt
+
+    monkeypatch.setattr(model.backbone.encoder, "forward", fake_encoder)
+    monkeypatch.setattr(model.backbone.decoder, "forward", fake_decoder)
+
+    logits = model(tokens, step, context)
+
+    assert logits.shape == (1, 44, ROOM_HEIGHT, ROOM_WIDTH)
+    assert seen["room_seq_len"] == ROOM_HEIGHT * ROOM_WIDTH
+    assert seen["decoder_tgt_len"] == ROOM_HEIGHT * ROOM_WIDTH
+    assert seen["decoder_memory_len"] == 37
+
+
+def test_masked_backbone_ignores_masked_context_tokens():
+    torch.manual_seed(23)
+    model = create_discrete_masked_model(
+        num_classes=44,
+        hidden_dim=16,
+        context_dim=8,
+        num_steps=2,
+        unet_channel_mult=(1,),
+        unet_num_res_blocks=1,
+        unet_num_heads=4,
+        unet_dropout=0.0,
+        context_attention_mode="cross_decoder",
+    )
+    model.eval()
+    tokens = torch.zeros(1, ROOM_HEIGHT, ROOM_WIDTH, dtype=torch.long)
+    step = torch.zeros(1, dtype=torch.long)
+    context = torch.randn(1, 4, 8)
+    graph_data = {"node_mask": torch.tensor([[True, True, False, False]])}
+
+    baseline = model(tokens, step, context, graph_data=graph_data)
+    changed_masked = context.clone()
+    changed_masked[:, 2:] = changed_masked[:, 2:] * 100.0 + 17.0
+    masked_same = model(tokens, step, changed_masked, graph_data=graph_data)
+    changed_valid = context.clone()
+    changed_valid[:, :2] = changed_valid[:, :2] + 1.0
+    valid_changed = model(tokens, step, changed_valid, graph_data=graph_data)
+
+    assert torch.allclose(baseline, masked_same, atol=1e-5, rtol=1e-5)
+    assert not torch.allclose(baseline, valid_changed)
+
+
+def test_masked_context_attention_ablation_reports_attention_pair_metrics():
+    baseline = create_discrete_masked_model(context_dim=8, hidden_dim=16, context_attention_mode="concat_encoder")
+    ablation = create_discrete_masked_model(context_dim=8, hidden_dim=16, context_attention_mode="cross_decoder")
+
+    base_metrics = baseline.attention_complexity_metrics(context_tokens=64)
+    ablation_metrics = ablation.attention_complexity_metrics(context_tokens=64)
+
+    assert baseline.context_attention_mode == "concat_encoder"
+    assert ablation.context_attention_mode == "cross_decoder"
+    assert base_metrics["total_attention_pairs"] == base_metrics["baseline_concat_attention_pairs"]
+    assert ablation_metrics["total_attention_pairs"] < base_metrics["total_attention_pairs"]
+    assert 0.0 < ablation_metrics["relative_to_concat"] < 1.0
+
+
 def test_pipeline_generate_room_uses_discrete_masked_mode(monkeypatch):
     pipeline = NeuralSymbolicDungeonPipeline(
         device="cpu",

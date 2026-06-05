@@ -606,6 +606,12 @@ def load_masked_room_model(
         ),
         num_steps=int(checkpoint_config.get("masked_steps", pipeline.masked_sampling_steps)),
         attention_mode=str(checkpoint_config.get("attention_mode", pipeline.diffusion_attention_mode)),
+        context_attention_mode=str(
+            checkpoint_config.get(
+                "context_attention_mode",
+                fallback_config.get("context_attention_mode", "concat_encoder"),
+            )
+        ),
         topology_conditioning_mode=str(
             checkpoint_config.get("topology_conditioning_mode", fallback_config.get("topology_conditioning_mode", "additive"))
         ),

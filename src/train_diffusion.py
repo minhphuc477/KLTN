@@ -192,7 +192,7 @@ class DiffusionTrainingConfig:
         condition_use_rrwp_edge_features: bool = True,
         num_timesteps: int = 1000,
         schedule_type: str = "cosine",
-        topology_refinement_mode: str = "gat2",  # none | lightweight | gat2
+        topology_refinement_mode: str = "gat2",  # none | lightweight | gat2 | graphormer
         attention_mode: str = "softmax",
         topology_conditioning_mode: str = "additive",
         hedgehog_feature_dim: int = 32,
@@ -409,10 +409,10 @@ class DiffusionTrainingConfig:
         trm = str(topology_refinement_mode).strip().lower()
         if trm == "upgraded":
             trm = "gat2"
-        if trm not in {"none", "lightweight", "gat2"}:
+        if trm not in {"none", "lightweight", "gat2", "graphormer"}:
             raise ValueError(
                 f"Invalid topology_refinement_mode={topology_refinement_mode!r}. "
-                "Expected 'none', 'lightweight', or 'gat2'."
+                "Expected 'none', 'lightweight', 'gat2', or 'graphormer'."
             )
         self.topology_refinement_mode = trm
         attn_mode = str(attention_mode).strip().lower()
@@ -4385,7 +4385,7 @@ def main():
         '--topology-refinement-mode',
         type=str,
         default=None,
-        choices=['none', 'lightweight', 'gat2', 'upgraded'],
+        choices=['none', 'lightweight', 'gat2', 'graphormer', 'upgraded'],
         help='Topology preprocessing inside diffusion cross-attention (gat2 is explicit 2-layer GAT).',
     )
     parser.add_argument(

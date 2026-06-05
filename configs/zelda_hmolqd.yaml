@@ -124,7 +124,7 @@ diffusion:
   graph_conditioning_mode: node_sequence  # type=str, default=node_sequence, valid={node_sequence,pooled}
   num_timesteps: 1000  # type=int, default=1000, valid>=10
   schedule_type: cosine  # type=str, default=cosine, valid={linear,cosine}
-  topology_refinement_mode: gat2  # type=str, default=gat2, valid={none,lightweight,gat2,upgraded}
+  topology_refinement_mode: gat2  # type=str, default=gat2, valid={none,lightweight,gat2,graphormer,upgraded}
   attention_mode: softmax  # type=str, default=softmax, valid={softmax,linear_hedgehog}
   topology_conditioning_mode: spade  # type=str, default=additive, valid={additive,spade}; SPADE-style affine modulation is recommended for room topology maps
   hedgehog_feature_dim: 32  # type=int, default=32, valid>=4
@@ -318,6 +318,7 @@ masked_room:
   hidden_dim: 48  # type=int, default=48, valid>=8; slightly smaller token width is sufficient for 16x11 Zelda rooms
   masked_steps: 8  # type=int, default=8, valid>=1
   attention_mode: softmax  # type=str, default=softmax, valid={softmax,linear_hedgehog}
+  context_attention_mode: concat_encoder  # type=str, default=concat_encoder, valid={concat_encoder,cross_decoder}; cross_decoder is an ablation
   topology_conditioning_mode: additive  # type=str, default=additive, valid={additive,spade}
   hedgehog_feature_dim: 32  # type=int, default=32, valid>=4
   graph_auto_linear_attention_nodes: 128  # type=int, default=128, valid>=0; 0 disables auto-switch to linear graph attention

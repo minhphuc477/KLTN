@@ -110,6 +110,7 @@ class MaskedRoomTrainingConfig:
         hidden_dim: int = 48,
         masked_steps: int = 8,
         attention_mode: str = "softmax",
+        context_attention_mode: str = "concat_encoder",
         topology_conditioning_mode: str = "additive",
         hedgehog_feature_dim: int = 32,
         graph_auto_linear_attention_nodes: int = 128,
@@ -201,6 +202,14 @@ class MaskedRoomTrainingConfig:
         self.hidden_dim = int(hidden_dim)
         self.masked_steps = int(max(1, masked_steps))
         self.attention_mode = str(attention_mode).strip().lower()
+        cam = str(context_attention_mode).strip().lower()
+        if cam in {"concat", "encoder", "original"}:
+            cam = "concat_encoder"
+        elif cam in {"cross", "decoder", "cross_attention"}:
+            cam = "cross_decoder"
+        if cam not in {"concat_encoder", "cross_decoder"}:
+            raise ValueError("context_attention_mode must be 'concat_encoder' or 'cross_decoder'.")
+        self.context_attention_mode = cam
         self.topology_conditioning_mode = str(topology_conditioning_mode).strip().lower()
         self.hedgehog_feature_dim = int(max(4, hedgehog_feature_dim))
         self.graph_auto_linear_attention_nodes = int(max(0, graph_auto_linear_attention_nodes))
@@ -375,6 +384,7 @@ def masked_room_training_kwargs_from_resolved_config(config: Dict[str, Any]) -> 
         "hidden_dim": stage["hidden_dim"],
         "masked_steps": stage["masked_steps"],
         "attention_mode": stage["attention_mode"],
+        "context_attention_mode": stage.get("context_attention_mode", "concat_encoder"),
         "topology_conditioning_mode": stage["topology_conditioning_mode"],
         "hedgehog_feature_dim": stage["hedgehog_feature_dim"],
         "graph_auto_linear_attention_nodes": stage["graph_auto_linear_attention_nodes"],
@@ -476,6 +486,7 @@ def _legacy_masked_room_overrides_from_args(args: argparse.Namespace) -> Dict[st
     _set("hidden_dim", getattr(args, "hidden_dim", None))
     _set("masked_steps", getattr(args, "masked_steps", None))
     _set("attention_mode", getattr(args, "attention_mode", None))
+    _set("context_attention_mode", getattr(args, "context_attention_mode", None))
     _set("topology_conditioning_mode", getattr(args, "topology_conditioning_mode", None))
     _set("hedgehog_feature_dim", getattr(args, "hedgehog_feature_dim", None))
     _set("graph_auto_linear_attention_nodes", getattr(args, "graph_auto_linear_attention_nodes", None))
@@ -656,6 +667,7 @@ class MaskedRoomTrainer:
             context_dim=config.context_dim,
             num_steps=config.masked_steps,
             attention_mode=config.attention_mode,
+            context_attention_mode=config.context_attention_mode,
             topology_conditioning_mode=config.topology_conditioning_mode,
             hedgehog_feature_dim=config.hedgehog_feature_dim,
             graph_auto_linear_attention_nodes=config.graph_auto_linear_attention_nodes,
@@ -1502,6 +1514,7 @@ class MaskedRoomTrainer:
                 "context_dim": int(self.model.context_dim),
                 "masked_steps": int(self.config.masked_steps),
                 "attention_mode": str(self.config.attention_mode),
+                "context_attention_mode": str(getattr(self.config, "context_attention_mode", "concat_encoder")),
                 "topology_conditioning_mode": str(self.config.topology_conditioning_mode),
                 "hedgehog_feature_dim": int(self.config.hedgehog_feature_dim),
                 "graph_auto_linear_attention_nodes": int(self.config.graph_auto_linear_attention_nodes),
@@ -1714,6 +1727,9 @@ def train_masked_room(config: MaskedRoomTrainingConfig) -> MaskedRoomTrainer:
             **{k: v / max(1, train_batches) for k, v in train_sum.items()},
             **{k: v / max(1, val_batches) for k, v in val_sum.items()},
         }
+        if val_batches <= 0:
+            for key in train_sum:
+                epoch_metrics.setdefault(f"val_{key}", float("inf"))
         metrics_logger.log(epoch_metrics)
         logger.info(
             "Masked room epoch %d/%d: loss=%.4f val_loss=%.4f val_topo=%.4f",
@@ -1807,6 +1823,7 @@ def main() -> None:
     parser.add_argument("--hidden-dim", type=int, default=None)
     parser.add_argument("--masked-steps", type=int, default=None)
     parser.add_argument("--attention-mode", type=str, default=None, choices=["softmax", "linear_hedgehog"])
+    parser.add_argument("--context-attention-mode", type=str, default=None, choices=["concat_encoder", "cross_decoder"])
     parser.add_argument("--topology-conditioning-mode", type=str, default=None, choices=["additive", "spade"])
     parser.add_argument("--hedgehog-feature-dim", type=int, default=None)
     parser.add_argument("--graph-auto-linear-attention-nodes", type=int, default=None)

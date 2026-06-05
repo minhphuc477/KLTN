@@ -159,6 +159,73 @@ def test_dit_backbone_uses_context_edge_index_for_token_topology():
     assert not torch.allclose(out_chain, out_skip)
 
 
+def test_graphormer_topology_bias_encodes_shortest_path_distance():
+    from src.core.latent_diffusion import CrossAttention
+
+    attention = CrossAttention(
+        query_dim=16,
+        context_dim=16,
+        num_heads=4,
+        topology_refinement_mode="graphormer",
+        dropout=0.0,
+    )
+    edge_index = torch.tensor([[0, 1], [1, 2]], dtype=torch.long)
+    node_mask = torch.ones(1, 3, dtype=torch.bool)
+    norm_adj, valid = attention._batched_normalized_adjacency(
+        batch_size=1,
+        seq_len=3,
+        edge_index=edge_index,
+        node_mask=node_mask,
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+    )
+    bias = attention._shortest_path_attention_bias(norm_adj > 0.0, valid, dtype=torch.float32)
+
+    assert bias.shape == (1, 3, 3)
+    assert bias[0, 0, 0].item() == pytest.approx(0.0)
+    assert bias[0, 0, 1].item() == pytest.approx(-1.0)
+    assert bias[0, 0, 2].item() == pytest.approx(-2.0)
+
+
+def test_latent_diffusion_graphormer_topology_refinement_mode_runs_as_ablation():
+    torch.manual_seed(17)
+    model = create_latent_diffusion(
+        latent_dim=8,
+        model_channels=16,
+        context_dim=16,
+        denoiser_backbone="dit",
+        topology_refinement_mode="graphormer",
+        dit_depth=1,
+        dit_patch_size=1,
+        dit_mlp_ratio=2.0,
+        num_timesteps=8,
+        cfg_dropout_prob=0.0,
+        unet_num_heads=4,
+        unet_dropout=0.0,
+    )
+    assert model.get_topology_refinement_mode() == "graphormer"
+
+    x_t = torch.randn(1, 8, 3, 4)
+    t = torch.tensor([3], dtype=torch.long)
+    context = torch.randn(1, 3, 16)
+    graph_data = {
+        "edge_index": torch.tensor([[0, 1], [1, 2]], dtype=torch.long),
+        "node_mask": torch.ones(1, 3, dtype=torch.bool),
+    }
+
+    with torch.no_grad():
+        out = model.denoiser(
+            x_t,
+            t,
+            context,
+            context_edge_index=graph_data["edge_index"],
+            context_node_mask=graph_data["node_mask"],
+        )
+
+    assert tuple(out.shape) == tuple(x_t.shape)
+    assert torch.isfinite(out).all()
+
+
 def test_dit_backbone_uses_spatial_graph_data():
     torch.manual_seed(11)
     model = create_latent_diffusion(

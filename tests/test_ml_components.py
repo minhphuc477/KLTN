@@ -712,6 +712,46 @@ class TestGraphGridAttention:
         assert seen["node_mask"] is None
         assert seen["spatial_called"] is True
 
+    def test_attention_block_skips_generic_cross_attention_when_context_is_only_graph_tokens(self, monkeypatch):
+        from src.core.latent_diffusion import AttentionBlock
+
+        block = AttentionBlock(dim=64, context_dim=128)
+        x = torch.randn(2, 64, 8, 8)
+        graph_nodes = torch.randn(2, 5, 128)
+        spatial_graph_data = {
+            "graph_nodes": graph_nodes,
+            "edge_index": torch.tensor([[[0, 1, 2], [1, 2, 3]]], dtype=torch.long),
+            "node_positions": torch.randn(2, 5, 2),
+            "node_tpe": torch.randn(2, 5, 8),
+            "node_mask": torch.ones(2, 5),
+            "room_topology_map": torch.randn(2, 18, 16, 11),
+        }
+
+        seen = {}
+
+        def _forbidden_cross_attn(*_args, **_kwargs):
+            raise AssertionError("generic cross-attention should not duplicate graph-token conditioning")
+
+        def _fake_spatial_conditioner(x_in, **kwargs):
+            seen["spatial_called"] = True
+            seen["graph_nodes_shape"] = tuple(kwargs["graph_nodes"].shape)
+            return x_in
+
+        monkeypatch.setattr(block.cross_attn, "forward", _forbidden_cross_attn)
+        monkeypatch.setattr(block.spatial_graph_conditioner, "forward", _fake_spatial_conditioner)
+
+        out = block(
+            x,
+            graph_nodes,
+            context_edge_index=torch.tensor([[[0, 1, 2], [1, 2, 3]]], dtype=torch.long),
+            context_node_mask=torch.ones(2, 5),
+            spatial_graph_data=spatial_graph_data,
+        )
+
+        assert out.shape == x.shape
+        assert seen["spatial_called"] is True
+        assert seen["graph_nodes_shape"] == (2, 5, 128)
+
     def test_latent_cross_attention_all_masked_context_is_finite_and_zero(self):
         from src.core.latent_diffusion import CrossAttention
 
@@ -752,6 +792,37 @@ class TestGraphGridAttention:
 
         with pytest.raises(ValueError, match="node_mask shape"):
             module(x, context, node_mask=node_mask)
+
+    def test_gps_layer_filters_invalid_padded_edges_before_local_message_passing(self):
+        from src.core.condition_encoder import GPSLayer
+
+        torch.manual_seed(11)
+        layer = GPSLayer(hidden_dim=16, num_heads=4, dropout=0.0)
+        layer.eval()
+        h = torch.randn(3, 16)
+        invalid_edge = torch.tensor([[-1], [2]], dtype=torch.long)
+        empty_edges = torch.empty(2, 0, dtype=torch.long)
+
+        out_invalid = layer(h, edge_index=invalid_edge)
+        out_empty = layer(h, edge_index=empty_edges)
+
+        assert torch.allclose(out_invalid, out_empty, atol=1e-6, rtol=1e-6)
+
+    def test_gps_layer_fallback_filters_invalid_edges_instead_of_clamping(self):
+        from src.core.condition_encoder import GPSLayer
+
+        torch.manual_seed(13)
+        layer = GPSLayer(hidden_dim=16, num_heads=4, dropout=0.0)
+        layer.local_gnn = None
+        layer.eval()
+        h = torch.randn(3, 16)
+        invalid_edge = torch.tensor([[-1], [2]], dtype=torch.long)
+        empty_edges = torch.empty(2, 0, dtype=torch.long)
+
+        out_invalid = layer(h, edge_index=invalid_edge)
+        out_empty = layer(h, edge_index=empty_edges)
+
+        assert torch.allclose(out_invalid, out_empty, atol=1e-6, rtol=1e-6)
 
 
 # ============================================================================

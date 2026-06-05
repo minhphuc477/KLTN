@@ -1110,6 +1110,34 @@ class GPSLayer(nn.Module):
             nn.Linear(self.hidden_dim * 4, self.hidden_dim),
         )
 
+    @staticmethod
+    def _filter_valid_edges(
+        edge_index: Tensor,
+        edge_attr: Optional[Tensor],
+        num_nodes: int,
+        device: Optional[torch.device] = None,
+    ) -> Tuple[Tensor, Optional[Tensor]]:
+        """Drop padded/out-of-range edges before message passing."""
+        if edge_index.dim() != 2 or int(edge_index.shape[0]) != 2:
+            raise ValueError(f"GPSLayer edge_index must have shape [2,E], got {tuple(edge_index.shape)}.")
+        target_device = device if device is not None else edge_index.device
+        edge_index = edge_index.to(device=target_device, dtype=torch.long)
+        if edge_attr is not None:
+            edge_attr = edge_attr.to(device=target_device)
+        if edge_index.numel() == 0:
+            return edge_index, edge_attr
+
+        edges = edge_index
+        src = edges[0]
+        dst = edges[1]
+        valid = (src >= 0) & (src < int(num_nodes)) & (dst >= 0) & (dst < int(num_nodes))
+        filtered_edges = edges[:, valid]
+        if edge_attr is None:
+            return filtered_edges, None
+        if int(edge_attr.shape[0]) != int(edges.shape[1]):
+            return filtered_edges, None
+        return filtered_edges, edge_attr[valid]
+
     def _fallback_local_message(
         self,
         h: Tensor,
@@ -1124,8 +1152,12 @@ class GPSLayer(nn.Module):
         if edge_index.numel() <= 0:
             return update
 
-        src = edge_index[0].long().clamp(0, max(0, num_nodes - 1))
-        dst = edge_index[1].long().clamp(0, max(0, num_nodes - 1))
+        edge_index, edge_attr = self._filter_valid_edges(edge_index, edge_attr, num_nodes, device=h.device)
+        if edge_index.numel() <= 0:
+            return update
+
+        src = edge_index[0].long()
+        dst = edge_index[1].long()
         messages = self.local_neighbor(h[src])
         if edge_attr is not None:
             messages = messages + self.local_edge(edge_attr)
@@ -1151,13 +1183,23 @@ class GPSLayer(nn.Module):
         node_mask: Optional[Tensor] = None,
     ) -> Tensor:
         local_in = self.local_norm(h)
+        filtered_edge_index, filtered_edge_attr = self._filter_valid_edges(
+            edge_index,
+            edge_attr,
+            int(h.shape[0]),
+            device=h.device,
+        )
         if self.local_gnn is not None:
-            if edge_attr is not None:
-                local_out = self.local_gnn(local_in, edge_index, edge_attr=edge_attr)
+            if filtered_edge_attr is not None:
+                local_out = self.local_gnn(local_in, filtered_edge_index, edge_attr=filtered_edge_attr)
             else:
-                local_out = self.local_gnn(local_in, edge_index)
+                local_out = self.local_gnn(local_in, filtered_edge_index)
         else:
-            local_out = self._fallback_local_message(local_in, edge_index=edge_index, edge_attr=edge_attr)
+            local_out = self._fallback_local_message(
+                local_in,
+                edge_index=filtered_edge_index,
+                edge_attr=filtered_edge_attr,
+            )
         h = h + self.dropout(F.gelu(local_out))
 
         global_normed = self.global_norm(h)

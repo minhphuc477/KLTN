@@ -308,6 +308,7 @@ def pipeline_kwargs_from_resolved_config(config: Dict[str, Any]) -> Dict[str, An
                 "model_channels": masked_room["model_channels"],
                 "context_dim": masked_room["context_dim"],
                 "attention_mode": masked_room.get("attention_mode", "softmax"),
+                "context_attention_mode": masked_room.get("context_attention_mode", "concat_encoder"),
                 "topology_conditioning_mode": masked_room["topology_conditioning_mode"],
                 "graph_auto_linear_attention_nodes": masked_room["graph_auto_linear_attention_nodes"],
                 "spatial_graph_gate_init": masked_room["spatial_graph_gate_init"],

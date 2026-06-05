@@ -591,7 +591,7 @@ def test_block_iv_topology_aware_cross_attention_mask_broadcast_and_sparse_valid
 
 
 def test_block_iv_topology_refinement_mode_switch_runs_all_modes():
-    """Block IV: topology refinement ablation modes (none/lightweight/upgraded) all run."""
+    """Block IV: topology refinement ablation modes all run."""
     from src.core.latent_diffusion import create_latent_diffusion
 
     model = create_latent_diffusion(
@@ -609,7 +609,7 @@ def test_block_iv_topology_refinement_mode_switch_runs_all_modes():
     }
 
     outputs = []
-    for mode in ["none", "lightweight", "upgraded"]:
+    for mode in ["none", "lightweight", "upgraded", "graphormer"]:
         updated = model.set_topology_refinement_mode(mode)
         assert updated > 0
         assert model.get_topology_refinement_mode() == mode

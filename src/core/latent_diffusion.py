@@ -176,7 +176,7 @@ class SelfAttention(nn.Module):
         x = self.norm(x)
         qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, self.head_dim)
         qkv = qkv.permute(2, 0, 3, 1, 4)  # [3, B, H, N, D]
-        q, k, v = qkv[0], qkv[1], qkv[2]
+        q, k, v = qkv[0].contiguous(), qkv[1].contiguous(), qkv[2].contiguous()
 
         if self.perturbation_mode == "identity":
             out = v.transpose(1, 2).reshape(B, N, C)
@@ -264,13 +264,14 @@ class CrossAttention(nn.Module):
         self.attention_mode = normalized
 
     def set_topology_refinement_mode(self, mode: str) -> None:
-        """Set topology refinement mode: none | lightweight | gat2 (alias: upgraded)."""
+        """Set topology refinement mode: none | lightweight | gat2 | graphormer."""
         m = str(mode).strip().lower()
         if m == "upgraded":
             m = "gat2"
-        if m not in {"none", "lightweight", "gat2"}:
+        if m not in {"none", "lightweight", "gat2", "graphormer"}:
             raise ValueError(
-                f"Invalid topology_refinement_mode={mode!r}. Expected 'none', 'lightweight', or 'gat2'."
+                "Invalid topology_refinement_mode="
+                f"{mode!r}. Expected 'none', 'lightweight', 'gat2', or 'graphormer'."
             )
         self.topology_refinement_mode = m
     
@@ -370,6 +371,43 @@ class CrossAttention(nn.Module):
         norm_adj = inv_sqrt[:, :, None] * adj * inv_sqrt[:, None, :]
         return norm_adj, valid
 
+    @staticmethod
+    def _shortest_path_attention_bias(
+        adjacency_mask: Tensor,
+        valid: Tensor,
+        *,
+        dtype: torch.dtype,
+        max_distance: int = 8,
+    ) -> Tensor:
+        """
+        Build a Graphormer-style additive bias from shortest-path distance.
+
+        The returned [B,L,L] tensor is parameter-free to keep this mode an
+        ablation that does not invalidate existing checkpoint shapes.
+        """
+        if adjacency_mask.dim() != 3:
+            raise ValueError(f"adjacency_mask must have shape [B,L,L], got {tuple(adjacency_mask.shape)}.")
+        batch_size, seq_len, _ = adjacency_mask.shape
+        device = adjacency_mask.device
+        valid_pair = valid[:, :, None] & valid[:, None, :]
+        eye = torch.eye(seq_len, device=device, dtype=torch.bool).unsqueeze(0)
+        reachable = (adjacency_mask.to(dtype=torch.bool) | eye) & valid_pair
+
+        inf = int(max_distance) + int(seq_len) + 1
+        dist = torch.full((batch_size, seq_len, seq_len), inf, device=device, dtype=torch.long)
+        dist = dist.masked_fill(reachable, 1)
+        dist = dist.masked_fill(eye.expand(batch_size, -1, -1) & valid_pair, 0)
+
+        for pivot in range(seq_len):
+            through = dist[:, :, pivot].unsqueeze(2) + dist[:, pivot, :].unsqueeze(1)
+            dist = torch.minimum(dist, through)
+
+        finite = dist < inf
+        clipped = dist.clamp(max=int(max_distance)).to(dtype=dtype)
+        bias = -clipped
+        bias = bias.masked_fill(~finite | ~valid_pair, -1.0e4)
+        return bias
+
     def _refine_context_topology(
         self,
         context: Tensor,
@@ -408,6 +446,14 @@ class CrossAttention(nn.Module):
             h = h + self.dropout(update)
         else:
             attn_mask = norm_adj > 0.0
+            graphormer_bias = None
+            if self.topology_refinement_mode == "graphormer":
+                graphormer_bias = self._shortest_path_attention_bias(
+                    attn_mask,
+                    valid,
+                    dtype=context.dtype,
+                )
+                attn_mask = valid[:, :, None] & valid[:, None, :]
             for q_lin, k_lin, v_lin, o_lin in zip(
                 self.topology_gat_q,
                 self.topology_gat_k,
@@ -418,6 +464,8 @@ class CrossAttention(nn.Module):
                 k = k_lin(h)
                 v = v_lin(h)
                 scores = torch.bmm(q, k.transpose(1, 2)) / (q.shape[-1] ** 0.5)
+                if graphormer_bias is not None:
+                    scores = scores + graphormer_bias.to(dtype=scores.dtype)
                 scores = scores.masked_fill(~attn_mask, -1.0e4)
                 attn = torch.softmax(scores.float(), dim=-1).to(dtype=scores.dtype)
                 attn = torch.nan_to_num(attn, nan=0.0, posinf=0.0, neginf=0.0)
@@ -453,9 +501,9 @@ class CrossAttention(nn.Module):
         context = self._refine_context_topology(context, edge_index=edge_index, node_mask=node_mask)
         context = self.norm_context(context)
         
-        q = self.q(x).reshape(B, N, self.num_heads, self.head_dim).transpose(1, 2)
-        k = self.k(context).reshape(B, -1, self.num_heads, self.head_dim).transpose(1, 2)
-        v = self.v(context).reshape(B, -1, self.num_heads, self.head_dim).transpose(1, 2)
+        q = self.q(x).reshape(B, N, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
+        k = self.k(context).reshape(B, -1, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
+        v = self.v(context).reshape(B, -1, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
 
         valid_rows = None
         if node_mask is not None:
@@ -675,6 +723,7 @@ class AttentionBlock(nn.Module):
         cross_context = context
         cross_edge_index = context_edge_index
         cross_node_mask = context_node_mask
+        use_generic_cross_attention = True
         if spatial_graph_data and context.dim() == 3:
             graph_nodes = spatial_graph_data.get("graph_nodes")
             if isinstance(graph_nodes, torch.Tensor) and graph_nodes.dim() == 3:
@@ -682,17 +731,18 @@ class AttentionBlock(nn.Module):
                 if prefix_len > 0:
                     cross_context = context[:, :prefix_len, :]
                 else:
-                    cross_context = context.mean(dim=1, keepdim=True)
+                    use_generic_cross_attention = False
                 cross_edge_index = None
                 cross_node_mask = None
 
         # Cross-attention with context
-        x_flat = x_flat + self.cross_attn(
-            x_flat,
-            cross_context,
-            edge_index=cross_edge_index,
-            node_mask=cross_node_mask,
-        )
+        if use_generic_cross_attention:
+            x_flat = x_flat + self.cross_attn(
+                x_flat,
+                cross_context,
+                edge_index=cross_edge_index,
+                node_mask=cross_node_mask,
+            )
 
         x = x_flat.permute(0, 2, 1).reshape(B, C, H, W)
         if spatial_graph_data:

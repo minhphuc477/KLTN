@@ -778,9 +778,9 @@ class GraphToGridCrossAttention(nn.Module):
         V = self.v_proj(graph_normed)  # [B, N, C]
         
         # Reshape for multi-head attention
-        Q = Q.reshape(B, H * W, self.num_heads, self.head_dim).transpose(1, 2)  # [B, heads, H*W, head_dim]
-        K = K.reshape(B, N, self.num_heads, self.head_dim).transpose(1, 2)      # [B, heads, N, head_dim]
-        V = V.reshape(B, N, self.num_heads, self.head_dim).transpose(1, 2)      # [B, heads, N, head_dim]
+        Q = Q.reshape(B, H * W, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
+        K = K.reshape(B, N, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
+        V = V.reshape(B, N, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
         
         attention_mode = self.attention_mode
         if (

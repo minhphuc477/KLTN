@@ -94,6 +94,28 @@ def test_validation_rejects_fixed_schema_breakage(tmp_path: Path):
         merge_config(yaml_path=str(cfg_path), cli_overrides=None)
 
 
+def test_config_accepts_graphormer_topology_refinement_ablation(tmp_path: Path):
+    cfg_path = tmp_path / "graphormer.yaml"
+    _write_yaml(cfg_path, {"diffusion": {"topology_refinement_mode": "graphormer"}})
+
+    resolved = merge_config(yaml_path=str(cfg_path), cli_overrides=None)
+    kwargs = diffusion_training_kwargs_from_resolved_config(resolved)
+
+    assert resolved["diffusion"]["topology_refinement_mode"] == "graphormer"
+    assert kwargs["topology_refinement_mode"] == "graphormer"
+
+
+def test_config_accepts_masked_room_context_attention_ablation(tmp_path: Path):
+    cfg_path = tmp_path / "masked_cross_decoder.yaml"
+    _write_yaml(cfg_path, {"masked_room": {"context_attention_mode": "cross_decoder"}})
+
+    resolved = merge_config(yaml_path=str(cfg_path), cli_overrides=None)
+    kwargs = masked_room_training_kwargs_from_resolved_config(resolved)
+
+    assert resolved["masked_room"]["context_attention_mode"] == "cross_decoder"
+    assert kwargs["context_attention_mode"] == "cross_decoder"
+
+
 def test_diffusion_unet_list_fields_merge_from_yaml_and_cli(tmp_path: Path):
     cfg_path = tmp_path / "config.yaml"
     _write_yaml(

@@ -41,9 +41,21 @@ class MaskedTokenTransformerBackbone(nn.Module):
         num_heads: int,
         dropout: float,
         room_topology_channels: int,
+        context_attention_mode: str = "concat_encoder",
     ):
         super().__init__()
         self.hidden_dim = int(hidden_dim)
+        mode = str(context_attention_mode).strip().lower()
+        if mode in {"concat", "encoder", "original"}:
+            mode = "concat_encoder"
+        elif mode in {"cross", "decoder", "cross_attention"}:
+            mode = "cross_decoder"
+        if mode not in {"concat_encoder", "cross_decoder"}:
+            raise ValueError(
+                "context_attention_mode must be 'concat_encoder' or 'cross_decoder', "
+                f"got {context_attention_mode!r}."
+            )
+        self.context_attention_mode = mode
         num_heads = int(max(1, num_heads))
         if self.hidden_dim % num_heads != 0:
             raise ValueError(
@@ -62,7 +74,20 @@ class MaskedTokenTransformerBackbone(nn.Module):
             batch_first=True,
             norm_first=True,
         )
+        decoder_layer = nn.TransformerDecoderLayer(
+            d_model=self.hidden_dim,
+            nhead=num_heads,
+            dim_feedforward=max(self.hidden_dim * 4, self.hidden_dim),
+            dropout=float(max(0.0, min(1.0, dropout))),
+            activation="gelu",
+            batch_first=True,
+            norm_first=True,
+        )
+        # Original MaskGIT path: concatenate context and room tokens before
+        # encoder self-attention. Keep this as the default checkpoint-compatible
+        # baseline; cross_decoder is an explicit ablation.
         self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=int(max(1, num_layers)))
+        self.decoder = nn.TransformerDecoder(decoder_layer, num_layers=int(max(1, num_layers)))
         self.norm = nn.LayerNorm(self.hidden_dim)
 
     def _context_tokens(self, context: Tensor) -> Tensor:
@@ -71,6 +96,80 @@ class MaskedTokenTransformerBackbone(nn.Module):
         if context.dim() != 3:
             raise ValueError(f"context must be [B,C] or [B,N,C], got {tuple(context.shape)}.")
         return self.context_proj(context)
+
+    def _context_key_padding_mask(
+        self,
+        context_tokens: Tensor,
+        graph_data: Optional[Dict[str, Tensor]],
+    ) -> Tuple[Tensor, Optional[Tensor]]:
+        if not isinstance(graph_data, dict):
+            return context_tokens, None
+        node_mask = graph_data.get("node_mask")
+        if not isinstance(node_mask, torch.Tensor):
+            return context_tokens, None
+
+        batch_size, seq_len, _ = context_tokens.shape
+        valid = node_mask.to(device=context_tokens.device, dtype=torch.bool)
+        if valid.dim() == 1:
+            valid = valid.unsqueeze(0)
+        if valid.dim() != 2:
+            raise ValueError(f"node_mask must have shape [B,N] or [N], got {tuple(valid.shape)}.")
+        if int(valid.shape[0]) == 1 and batch_size > 1:
+            valid = valid.expand(batch_size, -1)
+        if int(valid.shape[0]) != batch_size:
+            raise ValueError(
+                f"node_mask batch size {int(valid.shape[0])} does not match context batch size {batch_size}."
+            )
+
+        if bool(graph_data.get("has_room_anchor", False)) and int(valid.shape[1]) + 1 == seq_len:
+            anchor = torch.ones(batch_size, 1, device=valid.device, dtype=torch.bool)
+            valid = torch.cat([anchor, valid], dim=1)
+        elif int(valid.shape[1]) > seq_len:
+            valid = valid[:, :seq_len]
+        elif int(valid.shape[1]) < seq_len:
+            valid = F.pad(valid, (0, seq_len - int(valid.shape[1])), value=False)
+
+        valid_rows = valid.any(dim=1)
+        if not bool(valid_rows.all()):
+            context_tokens = context_tokens.clone()
+            context_tokens[~valid_rows] = 0.0
+            valid = valid.clone()
+            valid[~valid_rows, 0] = True
+        return context_tokens, ~valid
+
+    @staticmethod
+    def attention_complexity_metrics(
+        *,
+        context_tokens: int,
+        room_height: int = ROOM_HEIGHT,
+        room_width: int = ROOM_WIDTH,
+        mode: str = "concat_encoder",
+    ) -> Dict[str, float]:
+        """Return approximate attention-pair counts for ablation comparison."""
+        room_tokens = int(room_height) * int(room_width)
+        ctx_tokens = int(max(0, context_tokens))
+        normalized = str(mode).strip().lower()
+        if normalized in {"concat", "encoder", "original"}:
+            normalized = "concat_encoder"
+        elif normalized in {"cross", "decoder", "cross_attention"}:
+            normalized = "cross_decoder"
+        if normalized == "cross_decoder":
+            self_attention_pairs = room_tokens * room_tokens
+            cross_attention_pairs = room_tokens * ctx_tokens
+        else:
+            self_attention_pairs = (room_tokens + ctx_tokens) * (room_tokens + ctx_tokens)
+            cross_attention_pairs = 0
+        total = self_attention_pairs + cross_attention_pairs
+        baseline_total = (room_tokens + ctx_tokens) * (room_tokens + ctx_tokens)
+        return {
+            "room_tokens": float(room_tokens),
+            "context_tokens": float(ctx_tokens),
+            "self_attention_pairs": float(self_attention_pairs),
+            "cross_attention_pairs": float(cross_attention_pairs),
+            "total_attention_pairs": float(total),
+            "baseline_concat_attention_pairs": float(baseline_total),
+            "relative_to_concat": float(total / max(1, baseline_total)),
+        }
 
     def _topology_bias(self, graph_data: Optional[Dict[str, Tensor]], *, batch_size: int, device: torch.device) -> Optional[Tensor]:
         if not isinstance(graph_data, dict):
@@ -111,9 +210,19 @@ class MaskedTokenTransformerBackbone(nn.Module):
         x = x + self.step_embedding(step)[:, :, None, None].to(dtype=x.dtype)
         room_tokens = x.flatten(2).transpose(1, 2)
         context_tokens = self._context_tokens(context).to(device=x.device, dtype=x.dtype)
-        sequence = torch.cat([context_tokens, room_tokens], dim=1)
-        encoded = self.encoder(sequence)
-        encoded_room = self.norm(encoded[:, context_tokens.shape[1]:])
+        if self.context_attention_mode == "cross_decoder":
+            context_tokens, memory_key_padding_mask = self._context_key_padding_mask(context_tokens, graph_data)
+            encoded_room_tokens = self.encoder(room_tokens)
+            encoded_room = self.decoder(
+                encoded_room_tokens,
+                context_tokens,
+                memory_key_padding_mask=memory_key_padding_mask,
+            )
+        else:
+            sequence = torch.cat([context_tokens, room_tokens], dim=1)
+            encoded = self.encoder(sequence)
+            encoded_room = encoded[:, context_tokens.shape[1]:]
+        encoded_room = self.norm(encoded_room)
         return encoded_room.transpose(1, 2).reshape(batch_size, self.hidden_dim, height, width)
 
 
@@ -150,6 +259,7 @@ class DiscreteMaskedRoomModel(nn.Module):
         unet_num_heads: int = 4,
         unet_dropout: float = 0.1,
         room_topology_channels: int = ROOM_TOPOLOGY_CHANNEL_COUNT,
+        context_attention_mode: str = "concat_encoder",
         mask_token_id: Optional[int] = None,
     ):
         super().__init__()
@@ -157,6 +267,17 @@ class DiscreteMaskedRoomModel(nn.Module):
         self.hidden_dim = int(hidden_dim)
         self.context_dim = int(context_dim)
         self.default_num_steps = int(max(1, num_steps))
+        mode = str(context_attention_mode).strip().lower()
+        if mode in {"concat", "encoder", "original"}:
+            mode = "concat_encoder"
+        elif mode in {"cross", "decoder", "cross_attention"}:
+            mode = "cross_decoder"
+        if mode not in {"concat_encoder", "cross_decoder"}:
+            raise ValueError(
+                "context_attention_mode must be 'concat_encoder' or 'cross_decoder', "
+                f"got {context_attention_mode!r}."
+            )
+        self.context_attention_mode = mode
         self.mask_token_id = int(self.num_classes if mask_token_id is None else mask_token_id)
         self.vocab_size = int(max(self.mask_token_id + 1, self.num_classes + 1))
 
@@ -195,8 +316,17 @@ class DiscreteMaskedRoomModel(nn.Module):
             num_heads=int(unet_num_heads),
             dropout=float(unet_dropout),
             room_topology_channels=room_topology_channels,
+            context_attention_mode=self.context_attention_mode,
         )
         self.classifier = nn.Conv2d(self.hidden_dim, self.num_classes, kernel_size=1)
+
+    def attention_complexity_metrics(self, context_tokens: int) -> Dict[str, float]:
+        return self.backbone.attention_complexity_metrics(
+            context_tokens=int(context_tokens),
+            room_height=ROOM_HEIGHT,
+            room_width=ROOM_WIDTH,
+            mode=self.context_attention_mode,
+        )
 
     @staticmethod
     def _build_generator(*, device: torch.device, seed: Optional[int]) -> Optional[torch.Generator]:
@@ -828,6 +958,7 @@ def create_discrete_masked_model(
     unet_num_heads: int = 4,
     unet_dropout: float = 0.1,
     room_topology_channels: int = ROOM_TOPOLOGY_CHANNEL_COUNT,
+    context_attention_mode: str = "concat_encoder",
 ) -> DiscreteMaskedRoomModel:
     """Factory for the graph-conditioned discrete masked room model."""
     return DiscreteMaskedRoomModel(
@@ -848,6 +979,7 @@ def create_discrete_masked_model(
         unet_num_heads=unet_num_heads,
         unet_dropout=unet_dropout,
         room_topology_channels=room_topology_channels,
+        context_attention_mode=context_attention_mode,
     )
 
 
