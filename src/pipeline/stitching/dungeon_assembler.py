@@ -65,7 +65,7 @@ def _aggregate_room_stage_times(room_metric_dicts: List[Dict[str, Any]]) -> Dict
         str(key)
         for metrics in room_metric_dicts
         for key in metrics
-        if str(key).endswith("_time_sec")
+        if (str(key).endswith("_time_sec") or str(key).endswith("_time_sec_per_room"))
         and (str(key).startswith(timing_prefixes) or str(key) == "repair_time_sec")
     }
     aggregated: Dict[str, float] = {}

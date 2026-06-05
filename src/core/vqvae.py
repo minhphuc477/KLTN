@@ -284,8 +284,8 @@ class VectorQuantizer(nn.Module):
         z_q = z_e + (z_q - z_e).detach()
         
         # Compute perplexity (measure of codebook usage)
-        encodings = F.one_hot(indices, self.num_embeddings).float()
-        avg_probs = torch.mean(encodings, dim=0)
+        counts = torch.bincount(indices, minlength=self.num_embeddings).to(dtype=z_flat.dtype)
+        avg_probs = counts / counts.sum().clamp_min(1.0)
         perplexity = torch.exp(-torch.sum(avg_probs * torch.log(avg_probs + 1e-10)))
         losses['perplexity'] = perplexity
         
@@ -314,19 +314,27 @@ class VectorQuantizer(nn.Module):
     def _ema_update(self, z_flat: Tensor, indices: Tensor):
         """Update codebook using exponential moving average (DDP-safe)."""
         with self._codebook_update_lock, torch.no_grad():
-            encodings = F.one_hot(indices, self.num_embeddings).float()
-            
-            # Update cluster sizes
-            cluster_size = torch.sum(encodings, dim=0)
-            embedding_sum = torch.matmul(encodings.t(), z_flat)
+            cluster_size = torch.bincount(
+                indices,
+                minlength=self.num_embeddings,
+            ).to(device=z_flat.device, dtype=z_flat.dtype)
+            embedding_sum = torch.zeros(
+                self.num_embeddings,
+                self.embedding_dim,
+                device=z_flat.device,
+                dtype=z_flat.dtype,
+            )
+            embedding_sum.index_add_(0, indices, z_flat)
             
             # DDP synchronization: aggregate stats across all GPUs
             # before applying EMA so every replica sees the same update.
             try:
                 import torch.distributed as dist
                 if dist.is_initialized():
-                    dist.all_reduce(cluster_size, op=dist.ReduceOp.SUM)
-                    dist.all_reduce(embedding_sum, op=dist.ReduceOp.SUM)
+                    work_cluster = dist.all_reduce(cluster_size, op=dist.ReduceOp.SUM, async_op=True)
+                    work_embedding = dist.all_reduce(embedding_sum, op=dist.ReduceOp.SUM, async_op=True)
+                    work_cluster.wait()
+                    work_embedding.wait()
             except (ImportError, RuntimeError):
                 pass  # single-GPU fallback: no-op
             

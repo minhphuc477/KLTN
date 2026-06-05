@@ -322,22 +322,28 @@ class DiscreteMaskedRoomModel(nn.Module):
             tokens_candidate = tokens.clone()
             tokens_candidate[unresolved] = prediction[unresolved]
 
-            new_commit = committed.clone()
-            for b in range(batch_size):
-                unresolved_idx = torch.nonzero(unresolved[b], as_tuple=False)
-                if int(unresolved_idx.shape[0]) == 0:
-                    continue
-                if i == int(total_steps) - 1:
-                    chosen = unresolved_idx
-                else:
-                    remaining_ratio = self._remaining_mask_ratio(progress, schedule_mode=schedule_mode)
-                    target_remaining = int(math.floor(int(available_counts[b].item()) * remaining_ratio))
-                    current_unresolved = int(unresolved_idx.shape[0])
-                    keep_b = max(1, min(current_unresolved, current_unresolved - target_remaining))
-                    scores = ranking_scores[b][unresolved[b]]
-                    top_idx = torch.topk(scores, k=keep_b, largest=True).indices
-                    chosen = unresolved_idx[top_idx]
-                new_commit[b, chosen[:, 0], chosen[:, 1]] = True
+            current_unresolved = unresolved.flatten(1).sum(dim=1)
+            if i == int(total_steps) - 1:
+                chosen_mask = unresolved
+            else:
+                remaining_ratio = self._remaining_mask_ratio(progress, schedule_mode=schedule_mode)
+                target_remaining = torch.floor(
+                    available_counts.to(dtype=torch.float32) * float(remaining_ratio)
+                ).to(dtype=torch.long)
+                keep_counts = (current_unresolved - target_remaining).clamp_min(1)
+                keep_counts = torch.minimum(keep_counts, current_unresolved).clamp_min(0)
+                flat_scores = ranking_scores.flatten(1).masked_fill(~unresolved.flatten(1), -torch.inf)
+                order = torch.argsort(flat_scores, dim=1, descending=True)
+                ranks = torch.empty_like(order)
+                rank_values = torch.arange(order.shape[1], device=device).expand_as(order)
+                ranks.scatter_(1, order, rank_values)
+                chosen_mask = (
+                    unresolved.flatten(1)
+                    & (ranks < keep_counts.unsqueeze(1))
+                    & (current_unresolved.unsqueeze(1) > 0)
+                ).view_as(unresolved)
+
+            new_commit = committed | chosen_mask
 
             tokens = torch.where(new_commit, tokens_candidate, tokens)
             committed = new_commit
@@ -764,17 +770,22 @@ class DiscreteMaskedRoomModel(nn.Module):
                 current_probs = F.softmax(logits / max(1e-6, float(temperature)), dim=1)
                 safe_tokens = tokens.clamp(min=0, max=self.num_classes - 1)
                 current_confidence = current_probs.gather(1, safe_tokens.unsqueeze(1)).squeeze(1)
-                remask = torch.zeros_like(committed)
-                for b in range(batch_size):
-                    candidates = torch.nonzero(committed[b] & editable_base[b], as_tuple=False)
-                    if int(candidates.shape[0]) == 0:
-                        continue
-                    remask_count = int(math.ceil(int(candidates.shape[0]) * corrector_mask_ratio))
-                    remask_count = max(1, min(remask_count, int(candidates.shape[0])))
-                    scores = current_confidence[b][committed[b] & editable_base[b]]
-                    worst_idx = torch.topk(scores, k=remask_count, largest=False).indices
-                    chosen = candidates[worst_idx]
-                    remask[b, chosen[:, 0], chosen[:, 1]] = True
+                candidates = committed & editable_base
+                candidate_counts = candidates.flatten(1).sum(dim=1)
+                remask_counts = torch.ceil(candidate_counts.to(dtype=torch.float32) * float(corrector_mask_ratio)).to(
+                    dtype=torch.long
+                )
+                remask_counts = torch.minimum(remask_counts.clamp_min(1), candidate_counts).clamp_min(0)
+                flat_scores = current_confidence.flatten(1).masked_fill(~candidates.flatten(1), torch.inf)
+                order = torch.argsort(flat_scores, dim=1, descending=False)
+                ranks = torch.empty_like(order)
+                rank_values = torch.arange(order.shape[1], device=device).expand_as(order)
+                ranks.scatter_(1, order, rank_values)
+                remask = (
+                    candidates.flatten(1)
+                    & (ranks < remask_counts.unsqueeze(1))
+                    & (candidate_counts.unsqueeze(1) > 0)
+                ).view_as(committed)
                 if not bool(remask.any()):
                     break
                 tokens = tokens.clone()

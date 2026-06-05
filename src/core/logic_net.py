@@ -1183,15 +1183,10 @@ class LogicNet(nn.Module):
 
     @staticmethod
     def _project_tile_logits_to_room(tile_logits: Tensor) -> Tensor:
-        """Project latent-resolution tile logits onto the canonical room grid."""
-        if tuple(tile_logits.shape[-2:]) == (ROOM_HEIGHT, ROOM_WIDTH):
-            return tile_logits
-        return F.interpolate(
-            tile_logits,
-            size=(ROOM_HEIGHT, ROOM_WIDTH),
-            mode="bilinear",
-            align_corners=False,
-        )
+        """Return tile logits at their native spatial resolution."""
+        if tile_logits.dim() != 4:
+            raise ValueError(f"tile_logits must be [B,C,H,W], got {tuple(tile_logits.shape)}.")
+        return tile_logits
 
     @staticmethod
     def _normalize_room_topology_map(
@@ -1200,6 +1195,7 @@ class LogicNet(nn.Module):
         batch_size: int,
         device: torch.device,
         dtype: torch.dtype,
+        spatial_hw: Optional[Tuple[int, int]] = None,
     ) -> Optional[Tensor]:
         if not isinstance(room_topology_map, torch.Tensor):
             return None
@@ -1216,7 +1212,30 @@ class LogicNet(nn.Module):
             raise ValueError(
                 f"LogicNet graph_data['room_topology_map'] batch {int(topo.shape[0])} does not match latent batch {batch_size}."
             )
+        target_hw = (int(spatial_hw[0]), int(spatial_hw[1]))
+        if tuple(topo.shape[-2:]) != target_hw:
+            topo = F.interpolate(topo, size=target_hw, mode="bilinear", align_corners=False)
         return topo
+
+    @staticmethod
+    def _door_slices_for_shape(direction: str, height: int, width: int) -> Tuple[slice, slice]:
+        """Return relative door spans for arbitrary room/map sizes."""
+        h = int(max(1, height))
+        w = int(max(1, width))
+        direction = str(direction).upper()
+        horizontal_span = max(1, min(w, int(round(w * 3.0 / max(1, ROOM_WIDTH)))))
+        vertical_span = max(1, min(h, int(round(h * 3.0 / max(1, ROOM_HEIGHT)))))
+        col_start = max(0, (w - horizontal_span) // 2)
+        row_start = max(0, (h - vertical_span) // 2)
+        if direction == "N":
+            return slice(0, 1), slice(col_start, col_start + horizontal_span)
+        if direction == "S":
+            return slice(h - 1, h), slice(col_start, col_start + horizontal_span)
+        if direction == "E":
+            return slice(row_start, row_start + vertical_span), slice(w - 1, w)
+        if direction == "W":
+            return slice(row_start, row_start + vertical_span), slice(0, 1)
+        raise ValueError(f"Unknown door direction {direction!r}.")
 
     @staticmethod
     def _normalize_boundary_constraints(
@@ -1250,6 +1269,7 @@ class LogicNet(nn.Module):
         batch_size: int,
         device: torch.device,
         dtype: torch.dtype,
+        spatial_hw: Tuple[int, int],
     ) -> Optional[Tensor]:
         if boundary_constraints is None:
             return None
@@ -1260,21 +1280,14 @@ class LogicNet(nn.Module):
         if float(active.sum().item()) <= 0.0:
             return None
 
-        mask = torch.zeros(batch_size, 1, ROOM_HEIGHT, ROOM_WIDTH, device=device, dtype=dtype)
+        height, width = int(spatial_hw[0]), int(spatial_hw[1])
+        mask = torch.zeros(batch_size, 1, height, width, device=device, dtype=dtype)
         for idx, direction in enumerate(("N", "S", "E", "W")):
             values = active[:, idx]
-            if direction in {"N", "S"}:
-                row = int(DOOR_POSITIONS[direction]["row"])
-                col_start = int(DOOR_POSITIONS[direction]["col_start"])
-                col_end = int(DOOR_POSITIONS[direction]["col_end"]) + 1
-                expanded = values.unsqueeze(-1).expand(-1, col_end - col_start)
-                mask[:, 0, row, col_start:col_end] = torch.maximum(mask[:, 0, row, col_start:col_end], expanded)
-            else:
-                row_start = int(DOOR_POSITIONS[direction]["row_start"])
-                row_end = int(DOOR_POSITIONS[direction]["row_end"]) + 1
-                col = int(DOOR_POSITIONS[direction]["col"])
-                expanded = values.unsqueeze(-1).expand(-1, row_end - row_start)
-                mask[:, 0, row_start:row_end, col] = torch.maximum(mask[:, 0, row_start:row_end, col], expanded)
+            row_slice, col_slice = LogicNet._door_slices_for_shape(direction, height, width)
+            target = mask[:, 0, row_slice, col_slice]
+            expanded = values.view(batch_size, 1, 1).expand_as(target)
+            mask[:, 0, row_slice, col_slice] = torch.maximum(target, expanded)
         return mask
 
     def _resolve_room_logic_targets(
@@ -1284,6 +1297,7 @@ class LogicNet(nn.Module):
         batch_size: int,
         device: torch.device,
         dtype: torch.dtype,
+        spatial_hw: Tuple[int, int],
     ) -> Dict[str, Optional[Tensor]]:
         targets: Dict[str, Optional[Tensor]] = {
             "source_mask": None,
@@ -1299,6 +1313,7 @@ class LogicNet(nn.Module):
             batch_size=batch_size,
             device=device,
             dtype=dtype,
+            spatial_hw=spatial_hw if spatial_hw is not None else (ROOM_HEIGHT, ROOM_WIDTH),
         )
         boundary = self._normalize_boundary_constraints(
             graph_data.get("boundary_constraints"),
@@ -1336,6 +1351,7 @@ class LogicNet(nn.Module):
             batch_size=batch_size,
             device=device,
             dtype=dtype,
+            spatial_hw=spatial_hw if spatial_hw is not None else (ROOM_HEIGHT, ROOM_WIDTH),
         )
         if door_target is None:
             door_target = boundary_door_target
@@ -2116,6 +2132,7 @@ class LogicNet(nn.Module):
             batch_size=B,
             device=device,
             dtype=walkability.dtype,
+            spatial_hw=(int(walkability.shape[-2]), int(walkability.shape[-1])),
         )
         source_mask = room_logic_targets.get("source_mask")
         if source_mask is None:

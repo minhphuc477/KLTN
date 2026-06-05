@@ -288,6 +288,14 @@ class WFCState:
             return 0.0
         return -np.sum(probs * np.log2(probs + 1e-10))
 
+    def entropy_grid(self) -> np.ndarray:
+        """Vectorized entropy for every grid cell."""
+        probs = np.asarray(self.grid, dtype=np.float64)
+        positive = probs > 0.0
+        with np.errstate(divide="ignore", invalid="ignore"):
+            entropy = -np.sum(np.where(positive, probs * np.log2(probs + 1e-10), 0.0), axis=-1)
+        return np.nan_to_num(entropy, nan=0.0, posinf=0.0, neginf=0.0)
+
     def entropy(self, x: int, y: int) -> float:
         """Deprecated compatibility wrapper; use entropy_at(row, col)."""
         return self.entropy_at(row=y, col=x)
@@ -474,16 +482,14 @@ class PathAnalyzer:
 
     def _inventory_path_exists(self, graph: 'nx.DiGraph', start_node: Any, goal_node: Any) -> bool:
         start_keys, start_boss = self._collect_node_inventory(graph, start_node, 0, False)
-        queue: deque[Tuple[Any, int, bool]] = deque([(start_node, start_keys, start_boss)])
-        visited: Set[Tuple[Any, int, bool]] = set()
         max_small_keys = max(0, sum(1 for node in graph.nodes if self._node_has_small_key(dict(graph.nodes[node]))))
+        start_state = (start_node, min(start_keys, max_small_keys), bool(start_boss))
+        queue: deque[Tuple[Any, int, bool]] = deque([start_state])
+        visited: Set[Tuple[Any, int, bool]] = {start_state}
 
         while queue:
             node, keys, has_boss_key = queue.popleft()
             state = (node, min(keys, max_small_keys), bool(has_boss_key))
-            if state in visited:
-                continue
-            visited.add(state)
             if node == goal_node:
                 return True
 
@@ -498,24 +504,25 @@ class PathAnalyzer:
                         continue
                     next_keys -= 1
                 next_keys, next_boss = self._collect_node_inventory(graph, next_node, next_keys, has_boss_key)
-                queue.append((next_node, min(next_keys, max_small_keys), next_boss))
+                next_state = (next_node, min(next_keys, max_small_keys), bool(next_boss))
+                if next_state not in visited:
+                    visited.add(next_state)
+                    queue.append(next_state)
 
         return False
 
     def _inventory_failure_points(self, graph: 'nx.DiGraph', start_node: Any) -> List[FailurePoint]:
         failures: List[FailurePoint] = []
         start_keys, start_boss = self._collect_node_inventory(graph, start_node, 0, False)
-        queue: deque[Tuple[Any, int, bool]] = deque([(start_node, start_keys, start_boss)])
-        visited: Set[Tuple[Any, int, bool]] = set()
         seen_failures: Set[Tuple[Any, Any, str]] = set()
         max_small_keys = max(0, sum(1 for node in graph.nodes if self._node_has_small_key(dict(graph.nodes[node]))))
+        start_state = (start_node, min(start_keys, max_small_keys), bool(start_boss))
+        queue: deque[Tuple[Any, int, bool]] = deque([start_state])
+        visited: Set[Tuple[Any, int, bool]] = {start_state}
 
         while queue:
             node, keys, has_boss_key = queue.popleft()
             state = (node, min(keys, max_small_keys), bool(has_boss_key))
-            if state in visited:
-                continue
-            visited.add(state)
 
             for next_node in graph.successors(node):
                 edge_data = dict(graph.edges[node, next_node])
@@ -536,7 +543,10 @@ class PathAnalyzer:
                         continue
                     next_keys -= 1
                 next_keys, next_boss = self._collect_node_inventory(graph, next_node, next_keys, has_boss_key)
-                queue.append((next_node, min(next_keys, max_small_keys), next_boss))
+                next_state = (next_node, min(next_keys, max_small_keys), bool(next_boss))
+                if next_state not in visited:
+                    visited.add(next_state)
+                    queue.append(next_state)
 
         if not failures:
             failures.append(FailurePoint((start_node, None), "no_path", None))
@@ -1003,16 +1013,14 @@ class WaveFunctionCollapse:
         
         for _iteration in range(self.max_iterations):
             # Find cell with lowest entropy (that isn't collapsed)
-            min_entropy = float('inf')
-            min_cell = None
-            
-            for y in range(h):
-                for x in range(w):
-                    if not state.is_collapsed(x, y):
-                        entropy = state.entropy_at(y, x)
-                        if entropy < min_entropy:
-                            min_entropy = entropy
-                            min_cell = (x, y)
+            entropy = state.entropy_grid()
+            entropy = np.where(state.collapsed, np.inf, entropy)
+            if not np.isfinite(entropy).any():
+                min_cell = None
+            else:
+                flat_idx = int(np.argmin(entropy))
+                y, x = np.unravel_index(flat_idx, entropy.shape)
+                min_cell = (int(x), int(y))
             
             if min_cell is None:
                 # All cells collapsed
