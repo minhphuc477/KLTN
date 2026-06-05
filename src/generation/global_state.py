@@ -13,7 +13,7 @@ Solution:
     - Global State Tags: Propagate state through mission graph
     - Conditional Rendering: Re-render rooms when global state changes
     - State Dependencies: Track which rooms depend on which state
-    - Multi-pass Generation: Generate → propagate state → re-generate affected rooms
+    - Multi-pass Generation: Generate -> propagate state -> re-generate affected rooms
 
 Integration Point: In generate_dungeon, add state propagation between rooms
 """
@@ -73,7 +73,7 @@ class GlobalStateManager:
     
     Core Concepts:
     1. State Variables: Global flags/values (water_high, switch_1_on)
-    2. State Transitions: Events that change state (pull_switch → switch_1_on = True)
+    2. State Transitions: Events that change state (pull_switch -> switch_1_on = True)
     3. Room Dependencies: Which rooms care about which state
     4. Conditional Rendering: Re-render rooms when relevant state changes
     
@@ -197,7 +197,7 @@ class GlobalStateManager:
                 if state_name in self.state_variables:
                     old_value = self.state_variables[state_name].current_value
                     self.state_variables[state_name].current_value = new_value
-                    logger.info(f"State change: {state_name} {old_value} → {new_value}")
+                    logger.info(f"State change: {state_name} {old_value} -> {new_value}")
                 else:
                     logger.warning(f"Unknown state variable: {state_name}")
             
@@ -377,8 +377,8 @@ class StateAwareRoomGenerator:
         Modify room grid based on global state.
         
         Examples:
-        - Water high → fill low areas with water
-        - Light low → convert visual palette to dark
+        - Water high -> fill low areas with water
+        - Light low -> convert visual palette to dark
         """
         modified = room_grid.copy()
         

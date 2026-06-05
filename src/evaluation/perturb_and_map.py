@@ -5,7 +5,7 @@ perturb a walkability cost field and solve a hard shortest-path problem, then
 aggregate the resulting path support. They do not claim differentiability.
 
 # NOTE: This module is evaluation-only. Numpy-based Gumbel sampling and
-# detached tensor conversion are intentional — no gradient flow is needed
+# detached tensor conversion are intentional -- no gradient flow is needed
 # here. For training-time differentiable pathfinding with the
 # Straight-Through Estimator (STE), use
 # src/core/perturb_and_map.py (DifferentiablePerturbedAStar / perturb_and_map_distance)
@@ -37,7 +37,7 @@ class PerturbAndMAPReachabilityResult:
 
 
 def _as_numpy_grid(walkability: np.ndarray | torch.Tensor | Sequence[Sequence[float]]) -> np.ndarray:
-    # NOTE: .detach().cpu().float().numpy() is deliberate — this helper is
+    # NOTE: .detach().cpu().float().numpy() is deliberate -- this helper is
     # used only in the evaluation (non-training) path. Gradients are not
     # needed here. For differentiable use, see src/core/perturb_and_map.py.
     if isinstance(walkability, torch.Tensor):

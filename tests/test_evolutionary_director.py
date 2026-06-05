@@ -154,7 +154,7 @@ class TestEvolutionaryDirector:
         # Check connectivity
         assert nx.is_connected(graph)
         
-        # Check path exists START → GOAL
+        # Check path exists START -> GOAL
         start_nodes = [n for n in graph.nodes() if graph.nodes[n]['type'] == 'START']
         goal_nodes = [n for n in graph.nodes() if graph.nodes[n]['type'] == 'GOAL']
         
@@ -263,7 +263,7 @@ class TestEvolutionaryDirector:
         assert stats['final_best_fitness'] >= 0.0
     
     def test_decreasing_curve(self):
-        """Test decreasing difficulty (hard → easy)."""
+        """Test decreasing difficulty (hard -> easy)."""
         target = [1.0, 0.8, 0.5, 0.2]
         
         gen = EvolutionaryTopologyGenerator(
@@ -867,7 +867,7 @@ class TestGraphConversion:
     """Test graph format conversions."""
     
     def test_mission_to_networkx(self):
-        """Test MissionGraph → NetworkX conversion."""
+        """Test MissionGraph -> NetworkX conversion."""
         executor = GraphGrammarExecutor(seed=42)
         genome = [1, 2, 1]
         mission_graph = executor.execute(genome)
@@ -883,7 +883,7 @@ class TestGraphConversion:
             assert 'difficulty' in nx_graph.nodes[node_id]
     
     def test_networkx_to_mission(self):
-        """Test NetworkX → MissionGraph conversion."""
+        """Test NetworkX -> MissionGraph conversion."""
         executor = GraphGrammarExecutor(seed=42)
         genome = [1, 2]
         mission_graph = executor.execute(genome)

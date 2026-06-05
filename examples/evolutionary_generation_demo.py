@@ -97,14 +97,14 @@ def plot_evolution_stats(generator, title="Evolution Progress"):
 def example_linear_progression():
     """Generate dungeon with smooth difficulty increase."""
     print("\n" + "="*70)
-    print("EXAMPLE 1: Linear Rising Difficulty (Tutorial → Boss)")
+    print("EXAMPLE 1: Linear Rising Difficulty (Tutorial -> Boss)")
     print("="*70 + "\n")
     
     # Define target: smooth progression from easy to hard
     target_curve = [0.1, 0.3, 0.5, 0.7, 0.9, 1.0]
     
     print(f"Target Curve: {target_curve}")
-    print("Expected behavior: Tutorial → Gradual Challenge → Boss Fight\n")
+    print("Expected behavior: Tutorial -> Gradual Challenge -> Boss Fight\n")
     
     # Create generator
     generator = EvolutionaryTopologyGenerator(
@@ -156,7 +156,7 @@ def example_wave_pattern():
     target_curve = [0.2, 0.5, 0.3, 0.7, 0.4, 0.9, 0.5, 1.0]
     
     print(f"Target Curve: {target_curve}")
-    print("Expected behavior: Mini-Boss → Recovery → Mini-Boss → Final Boss\n")
+    print("Expected behavior: Mini-Boss -> Recovery -> Mini-Boss -> Final Boss\n")
     
     # Create generator with higher diversity settings
     generator = EvolutionaryTopologyGenerator(

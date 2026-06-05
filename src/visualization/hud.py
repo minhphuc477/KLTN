@@ -513,7 +513,7 @@ class ControlsPanel:
     """
     
     CONTROLS = [
-        ("↑↓←→", "Move"),
+        ("↑↓←->", "Move"),
         ("SPACE", "Auto-solve"),
         ("R", "Reset map"),
         ("N/P", "Next/Prev"),

@@ -86,7 +86,7 @@ class DifficultyCalculator:
         self.resource_weight = resource_weight
         
         # Normalization constants (tuned for Zelda-like dungeons)
-        self.combat_norm = 30.0  # 6 enemies @ 30hp / 10dps = 18s → 0.6
+        self.combat_norm = 30.0  # 6 enemies @ 30hp / 10dps = 18s -> 0.6
         self.nav_base_tortuosity = 2.0  # Tortuosity of 2.0 = 50% penalty
         self.damage_per_enemy = 0.5  # Hearts of damage per enemy
     
@@ -190,7 +190,7 @@ class DifficultyCalculator:
         # Tortuosity: how much longer is the path than straight line?
         tortuosity = actual_path / euclidean_distance
         
-        # Normalize: tortuosity of 2.0 → 0.5, tortuosity of 3.0 → 1.0
+        # Normalize: tortuosity of 2.0 -> 0.5, tortuosity of 3.0 -> 1.0
         nav_complexity = (tortuosity - 1.0) / self.nav_base_tortuosity
         
         return max(min(nav_complexity, 1.0), 0.0)

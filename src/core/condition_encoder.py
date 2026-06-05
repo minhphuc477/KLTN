@@ -1459,9 +1459,9 @@ class DualStreamConditionEncoder(nn.Module):
     mission graph structure to produce conditioning for the diffusion model.
     
     Architecture:
-        Stream A (Local):  neighbor_latents → LocalStreamEncoder → c_local
-        Stream B (Global): graph_data → GlobalStreamEncoder → c_global
-        Fusion:            CrossAttention(c_local, c_global) → c
+        Stream A (Local):  neighbor_latents -> LocalStreamEncoder -> c_local
+        Stream B (Global): graph_data -> GlobalStreamEncoder -> c_global
+        Fusion:            CrossAttention(c_local, c_global) -> c
     
     Args:
         latent_dim: VQ-VAE latent dimension

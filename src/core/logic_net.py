@@ -88,7 +88,7 @@ def soft_min(x: Tensor, dim: Optional[int] = None, temperature: float = 1.0) -> 
     
     soft_min(x) = -τ * log(Σ exp(-x/τ))
     
-    As τ → 0, this approaches the hard min.
+    As τ -> 0, this approaches the hard min.
     
     Args:
         x: Input tensor
@@ -772,7 +772,7 @@ class ReachabilityScorer(nn.Module):
         # and negative "losses" that would otherwise destabilize diffusion training.
         distances = F.softplus(distances)
 
-        # Compute reachability scores — smooth, no saturation or clamp dead zones.
+        # Compute reachability scores -- smooth, no saturation or clamp dead zones.
         # Use exponential decay for the primary score (always has gradient).
         # Temperature controls the sharpness: high temp = smooth gradients early,
         # annealed low temp = sharp scores at convergence.
@@ -2043,7 +2043,7 @@ class LogicNet(nn.Module):
         """
         Anneal soft-min temperature during training.
         
-        Uses exponential decay from initial_temperature → final_temperature.
+        Uses exponential decay from initial_temperature -> final_temperature.
         High temperature (start): smooth gradients, easy optimization.
         Low temperature (end): sharp soft-min ≈ true shortest path.
         
@@ -2116,11 +2116,11 @@ class LogicNet(nn.Module):
             # channels) or latent codes (latent_dim channels). Route through
             # tile_classifier if needed.
             if z.shape[1] == self.num_classes:
-                # z is already tile probs/logits — use directly
+                # z is already tile probs/logits -- use directly
                 tile_logits = self._project_tile_logits_to_room(z)
                 walkability = self.walkability(tile_logits, is_probs=None)
             else:
-                # z is latent codes — classify first, then lift to room size
+                # z is latent codes -- classify first, then lift to room size
                 tile_logits = self.tile_classifier(z)
                 tile_logits = self._project_tile_logits_to_room(tile_logits)
                 walkability = self.walkability(tile_logits, is_probs=False)

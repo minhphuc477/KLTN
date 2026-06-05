@@ -19,8 +19,8 @@ Scientific Basis:
 - Complexity: O(b^(d/2)) time and space vs O(b^d) for unidirectional A*
 
 Critical Challenge: Backward Search in State-Space Graphs
-- Forward: (pos, inventory_before) → (new_pos, inventory_after)  
-- Backward: (goal_pos, inventory_at_goal) → what prior states could reach this?
+- Forward: (pos, inventory_before) -> (new_pos, inventory_after)  
+- Backward: (goal_pos, inventory_at_goal) -> what prior states could reach this?
 - Key consumption must be reversed: "If I need a key here, I must have had key+1 before"
 """
 
@@ -729,8 +729,8 @@ class BidirectionalAStar:
         Reconstruct complete path from start to goal.
         
         Concatenates:
-        - Forward path: start → meeting point
-        - Backward path (reversed): meeting point → goal
+        - Forward path: start -> meeting point
+        - Backward path (reversed): meeting point -> goal
         
         Args:
             forward_node: Node from forward search at meeting point
@@ -742,9 +742,9 @@ class BidirectionalAStar:
         # Forward path is already in correct order
         forward_path = forward_node.path
         
-        # Backward path is already in forward order (meeting_point → goal)
+        # Backward path is already in forward order (meeting_point -> goal)
         # because backward expansion prepends: [prev_state.position] + current_node.path
-        # So backward_node.path goes: meeting_point → ... → goal
+        # So backward_node.path goes: meeting_point -> ... -> goal
         # Just skip index 0 (meeting_point already in forward_path) to avoid duplication
         backward_path = backward_node.path[1:]
         

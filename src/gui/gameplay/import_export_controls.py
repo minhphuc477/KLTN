@@ -132,7 +132,7 @@ def import_txt_level(gui: Any, filepath: str, logger_obj: Any = None) -> bool:
     resolved = Path(filepath).expanduser().resolve()
     if not resolved.exists():
         _set_message(gui, f"File not found: {resolved.name}")
-        log.warning("Import failed — file not found: %s", resolved)
+        log.warning("Import failed -- file not found: %s", resolved)
         return False
 
     try:
@@ -151,12 +151,12 @@ def import_txt_level(gui: Any, filepath: str, logger_obj: Any = None) -> bool:
 
         if data.ndim != 2:
             _set_message(gui, "TXT file must contain a 2D grid")
-            log.warning("Import failed — data is %dD, expected 2D", data.ndim)
+            log.warning("Import failed -- data is %dD, expected 2D", data.ndim)
             return False
 
         if data.shape[0] < 2 or data.shape[1] < 2:
             _set_message(gui, "Grid too small (min 2×2)")
-            log.warning("Import failed — grid shape %s too small", data.shape)
+            log.warning("Import failed -- grid shape %s too small", data.shape)
             return False
 
         _clear_import_runtime_state(gui, log, terminate_processes=True)
@@ -198,7 +198,7 @@ def import_txt_level(gui: Any, filepath: str, logger_obj: Any = None) -> bool:
 
         _set_message(gui, f"Imported level: {map_name} ({data.shape[0]}×{data.shape[1]})")
         log.info(
-            "Imported level from %s — shape %s, unique tiles %d",
+            "Imported level from %s -- shape %s, unique tiles %d",
             resolved,
             data.shape,
             len(np.unique(data)),

@@ -23,9 +23,9 @@ Losses:
 where sg[] is stop-gradient operator.
 
 Architecture:
-- Encoder: Conv2d → ResBlocks → Downsample → Latent
+- Encoder: Conv2d -> ResBlocks -> Downsample -> Latent
 - Vector Quantizer: Learned codebook with K entries
-- Decoder: Upsample → ResBlocks → Conv2d → Output
+- Decoder: Upsample -> ResBlocks -> Conv2d -> Output
 
 """
 
@@ -663,7 +663,7 @@ class ResidualBlock(nn.Module):
     Residual block with GroupNorm and SiLU activation.
     
     Architecture:
-    x → GroupNorm → SiLU → Conv → GroupNorm → SiLU → Conv → + → out
+    x -> GroupNorm -> SiLU -> Conv -> GroupNorm -> SiLU -> Conv -> + -> out
     └─────────────────── (skip connection) ────────────────┘
     """
     
@@ -719,7 +719,7 @@ class Encoder(nn.Module):
     Convolutional encoder for semantic grids.
     
     Architecture:
-    Input [B, C, H, W] → Conv → ResBlocks → Downsample → ... → Latent [B, D, H', W']
+    Input [B, C, H, W] -> Conv -> ResBlocks -> Downsample -> ... -> Latent [B, D, H', W']
     
     For 11×16 rooms with 2 downsamples: output is [B, D, 2, 4] or similar
     """
@@ -816,7 +816,7 @@ class Decoder(nn.Module):
     Transposed convolutional decoder for semantic grids.
     
     Architecture:
-    Latent [B, D, H', W'] → Conv → Upsample → ResBlocks → ... → Output [B, C, H, W]
+    Latent [B, D, H', W'] -> Conv -> Upsample -> ResBlocks -> ... -> Output [B, C, H, W]
     """
     
     def __init__(
@@ -934,7 +934,7 @@ class SemanticVQVAE(nn.Module):
     - Straight-through gradient estimation
     
     Architecture:
-        Input (11×16×C) → Encoder → VQ → Decoder → Output (11×16×C)
+        Input (11×16×C) -> Encoder -> VQ -> Decoder -> Output (11×16×C)
     
     Args:
         num_classes: Number of semantic tile classes (default: 44)

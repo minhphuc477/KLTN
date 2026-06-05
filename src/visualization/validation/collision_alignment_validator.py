@@ -334,9 +334,9 @@ class CollisionAlignmentRepairer:
     Automatically repairs collision mismatches.
     
     Repair Strategy:
-    - Phantom walls → Change visual to wall
-    - Ghost floors → Change visual to floor
-    - Door mismatches → Ensure door connectivity
+    - Phantom walls -> Change visual to wall
+    - Ghost floors -> Change visual to floor
+    - Door mismatches -> Ensure door connectivity
     """
     
     def __init__(self, config: Optional[CollisionConfig] = None):
@@ -365,17 +365,17 @@ class CollisionAlignmentRepairer:
             
             # Apply repair based on mismatch type
             if mismatch.collision_type == CollisionType.PHANTOM_WALL:
-                # Visual walkable but logically blocked → make wall
+                # Visual walkable but logically blocked -> make wall
                 repaired[r, c] = 2  # WALL_ID
                 num_repairs += 1
             
             elif mismatch.collision_type == CollisionType.GHOST_FLOOR:
-                # Visual blocked but logically walkable → make floor
+                # Visual blocked but logically walkable -> make floor
                 repaired[r, c] = 1  # FLOOR_ID
                 num_repairs += 1
             
             elif mismatch.collision_type == CollisionType.DOOR_MISMATCH:
-                # Door should be walkable → ensure open door
+                # Door should be walkable -> ensure open door
                 repaired[r, c] = 10  # DOOR_OPEN
                 num_repairs += 1
         

@@ -58,7 +58,7 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 class TileType(IntEnum):
-    """Tile types for WFC — aligned with canonical TileID from definitions.py."""
+    """Tile types for WFC -- aligned with canonical TileID from definitions.py."""
     VOID = int(SEMANTIC_PALETTE["VOID"])
     FLOOR = int(SEMANTIC_PALETTE["FLOOR"])
     WALL = int(SEMANTIC_PALETTE["WALL"])
@@ -203,7 +203,7 @@ def _build_default_adjacency() -> Dict[int, Set[int]]:
     return _symmetrize_adjacency(adjacency)
 
 
-# Default adjacency rules for Zelda dungeons — uses canonical TileID values.
+# Default adjacency rules for Zelda dungeons -- uses canonical TileID values.
 # Every tile must appear as a key; tiles not listed default to empty adjacency
 # (WFC will reject them during constraint propagation).
 DEFAULT_ADJACENCY: Dict[int, Set[int]] = _build_default_adjacency()

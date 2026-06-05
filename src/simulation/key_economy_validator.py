@@ -7,8 +7,8 @@ MATHEMATICAL RIGOR: Soft-Lock Prevention
 Problem (Thesis Defense Concern #3):
     Current system only validates with A* greedy player.
     Worst-case scenarios not tested:
-    - Adversarial player takes wrong key first → soft-lock
-    - Graph has surplus keys but wrong topology → unsolvable
+    - Adversarial player takes wrong key first -> soft-lock
+    - Graph has surplus keys but wrong topology -> unsolvable
     
 Solution:
     Graph-theoretic worst-case analysis:
@@ -29,7 +29,7 @@ Adversarial Player (Worst-Case):
     - Worst-case solvability (stress test)
 
 Mission Graph Topology:
-    - Linear: Start → K1 → D1 → K2 → D2 → Goal
+    - Linear: Start -> K1 -> D1 -> K2 -> D2 -> Goal
     - Tree: Branching paths with key dependencies
     - Diamond: Multiple paths converging
     - Cycle: Loops with key gates
@@ -69,7 +69,7 @@ class PlayerStrategy(Enum):
 
 class GraphTopology(Enum):
     """Mission graph topology types."""
-    LINEAR = "linear"  # Start → ... → Goal (no branches)
+    LINEAR = "linear"  # Start -> ... -> Goal (no branches)
     TREE = "tree"  # Branching paths, no cycles
     DIAMOND = "diamond"  # Multiple paths, convergence points
     CYCLE = "cycle"  # Loops/cycles in graph
@@ -520,7 +520,7 @@ class MissionGraphAnalyzer:
                 # Count keys available before this lock
                 keys_before = self._count_keys_before_node(v, key_id)
                 
-                lock_surplus[f"{u}→{v}"] = keys_before - 1  # Need 1 key to pass
+                lock_surplus[f"{u}->{v}"] = keys_before - 1  # Need 1 key to pass
         
         return lock_surplus
     

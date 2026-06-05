@@ -1738,7 +1738,7 @@ class StateSpaceAStar:
                                 self._graph_bfs_dist[v] = d + 1
                                 bfs_q.append((v, d + 1))
 
-                # Build node→representative-position and node→items maps
+                # Build node->representative-position and node->items maps
                 grid = self.env.original_grid
                 for rp, (ro, co) in rpos.items():
                     nd = r2n.get(rp)
@@ -1818,8 +1818,8 @@ class StateSpaceAStar:
 
         # ── PLAN-GUIDED HEURISTIC STATE (Upgrade 3) ──
         # Populated lazily in solve() after room-level A* runs.
-        # _abstract_plan: ordered list of graph node IDs from start→goal
-        # _abstract_plan_rooms: dict node→index-in-plan for O(1) lookup
+        # _abstract_plan: ordered list of graph node IDs from start->goal
+        # _abstract_plan_rooms: dict node->index-in-plan for O(1) lookup
         # _abstract_plan_avg_cost: average room cost for remaining-rooms estimate
         self._abstract_plan: Optional[List] = None
         self._abstract_plan_rooms: Optional[Dict] = None
@@ -1841,7 +1841,7 @@ class StateSpaceAStar:
     # ------------------------------------------------------------------
     # UPGRADE 1: DETERMINISTIC SOFT-LOCK DETECTION (Reverse Reachability)
     # ------------------------------------------------------------------
-    # Reference: Holzer & Schwoon (2011) – "Reachability vs. Safety in
+    # Reference: Holzer & Schwoon (2011) - "Reachability vs. Safety in
     #   Graph-Based Planning", ICAPS Workshop on Heuristics & Search.
     # Uses bidirectional BFS to compute F \ B  (forward-reachable minus
     # backward-reachable).  Any tile/node in that difference is a
@@ -1854,10 +1854,10 @@ class StateSpaceAStar:
 
         Algorithm
         ---------
-        1. **Graph level** – forward BFS from start-node, backward BFS
+        1. **Graph level** - forward BFS from start-node, backward BFS
            from goal-node (reversing directed / soft-locked edges).
            Traps = forward − backward.
-        2. **Grid level** – forward flood-fill from START position on
+        2. **Grid level** - forward flood-fill from START position on
            the walkable tile grid, backward flood-fill from GOAL
            (reversing one-way DOOR_SOFT tiles).  Traps = forward − backward.
 
@@ -1868,8 +1868,8 @@ class StateSpaceAStar:
             'grid_traps'   : set of trapped (row, col) positions
             'forward_graph' : set of forward-reachable graph nodes
             'backward_graph': set of backward-reachable graph nodes
-            'forward_grid'  : int – count of forward-reachable tiles
-            'backward_grid' : int – count of backward-reachable tiles
+            'forward_grid'  : int - count of forward-reachable tiles
+            'backward_grid' : int - count of backward-reachable tiles
         """
         trap_report: Dict[str, Any] = {
             'graph_traps': set(),
@@ -1916,7 +1916,7 @@ class StateSpaceAStar:
                             ed = G.get_edge_data(v, u, {}) or {}
                         et = self._edge_type_from_data(ed)
                         if et == 'soft_locked':
-                            # Only traverse if directed edge u→v exists
+                            # Only traverse if directed edge u->v exists
                             if not G.has_edge(u, v):
                                 continue
                             dd = G.get_edge_data(u, v, {}) or {}
@@ -1935,13 +1935,13 @@ class StateSpaceAStar:
                     for v in set(G.successors(u)) | set(G.predecessors(u)):
                         if v in bwd:
                             continue
-                        # Reversed: to reach u from v, original edge must go v→u
+                        # Reversed: to reach u from v, original edge must go v->u
                         ed = G.get_edge_data(v, u, {}) or {}
                         if not ed:
                             ed = G.get_edge_data(u, v, {}) or {}
                         et = self._edge_type_from_data(ed)
                         if et == 'soft_locked':
-                            # In reverse, we need the original directed edge v→u
+                            # In reverse, we need the original directed edge v->u
                             if not G.has_edge(v, u):
                                 continue
                             dd = G.get_edge_data(v, u, {}) or {}
@@ -1994,8 +1994,8 @@ class StateSpaceAStar:
                         t = grid[nr, nc]
                         if t in passable:
                             # For reverse traversal, DOOR_SOFT at (nr,nc)
-                            # means (nr,nc)→(r,c) was allowed forward, so
-                            # reverse (r,c)→(nr,nc) is allowed.
+                            # means (nr,nc)->(r,c) was allowed forward, so
+                            # reverse (r,c)->(nr,nc) is allowed.
                             # DOOR_SOFT at (r,c) means forward was into (r,c),
                             # reverse should allow leaving (r,c).
                             # Simplified: allow both directions for grid-level
@@ -2014,7 +2014,7 @@ class StateSpaceAStar:
     # ------------------------------------------------------------------
     # UPGRADE 2: MACRO-ACTION A* (Jump Optimization)
     # ------------------------------------------------------------------
-    # Reference: Botea et al. (2004) – "Near Optimal Hierarchical
+    # Reference: Botea et al. (2004) - "Near Optimal Hierarchical
     #   Pathfinding", JAIR 30.  Pre-computes intra-room BFS between
     #   Points of Interest (doors, items, stairs) and uses POI-to-POI
     #   transitions as macro-actions, collapsing ~20 tile steps into
@@ -2028,7 +2028,7 @@ class StateSpaceAStar:
 
         Returns
         -------
-        dict  node → list of (poi_type, (row, col))
+        dict  node -> list of (poi_type, (row, col))
         """
         rpos = getattr(self.env, 'room_positions', None)
         r2n = getattr(self.env, 'room_to_node', None)
@@ -2080,7 +2080,7 @@ class StateSpaceAStar:
 
         Returns
         -------
-        dict  (pos_a, pos_b) → shortest tile distance
+        dict  (pos_a, pos_b) -> shortest tile distance
         """
         rpos = self.env.room_positions
         r2n = self.env.room_to_node
@@ -2158,7 +2158,7 @@ class StateSpaceAStar:
         for nd, pois in all_pois.items():
             intra_dist.update(self._intra_room_bfs(nd, pois))
 
-        # Build position → room-node lookup
+        # Build position -> room-node lookup
         pos_to_node: Dict[Tuple[int, int], Any] = {}
         for rp, (_ro, _co) in rpos.items():
             nd = r2n.get(rp)
@@ -2238,7 +2238,7 @@ class StateSpaceAStar:
         heapq.heappush(open_set, (h0, counter, 0.0, init_state, [start_pos]))
         counter += 1
 
-        visited: Dict[Tuple, float] = {}  # state → best g
+        visited: Dict[Tuple, float] = {}  # state -> best g
         states_explored = 0
         macro_timeout = min(self.timeout, 500000)
 
@@ -2414,7 +2414,7 @@ class StateSpaceAStar:
             for kind, pos in items:
                 all_item_positions[pos] = kind
 
-        # Node→room mapping
+        # Node->room mapping
         n2r: Dict[Any, Tuple[int, int]] = {}
         if hasattr(self.env, 'node_to_room') and self.env.node_to_room:
             n2r = self.env.node_to_room
@@ -2488,7 +2488,7 @@ class StateSpaceAStar:
                         (pbk and not bk) or (pi and not item) or
                         len(pc) > len(coll) or len(po) > len(opn) or pg < g):
                         return True
-                    # Equal in all dims → also dominated (duplicate)
+                    # Equal in all dims -> also dominated (duplicate)
                     if (pk == keys and pb == bombs and pbk == bk and pi == item and
                         pc == coll and po == opn and pg == g):
                         return True
@@ -2549,7 +2549,7 @@ class StateSpaceAStar:
                 if etype in ('open', 'stair', 'switch'):
                     pass  # Free
                 elif etype == 'soft_locked':
-                    # One-way: only allowed from node→neighbor (directed)
+                    # One-way: only allowed from node->neighbor (directed)
                     # Check if the directed edge exists
                     if not G.has_edge(node, neighbor):
                         continue
@@ -2704,7 +2704,7 @@ class StateSpaceAStar:
         """Convert room-level path into abstract plan for heuristic guidance.
 
         Populates ``_abstract_plan`` (ordered node list), ``_abstract_plan_rooms``
-        (node → index mapping), and ``_abstract_plan_avg_cost`` (average
+        (node -> index mapping), and ``_abstract_plan_avg_cost`` (average
         intra-room tile cost for remaining-rooms estimation).
 
         Called by ``solve()`` after ``_solve_room_level()``.
@@ -3087,7 +3087,7 @@ class StateSpaceAStar:
             #
             # Requirements:
             # 1. Player must be at room boundary, stair, or door tile
-            # 2. Current room has a virtual node child (e.g., room (3,4) → virtual node 17)
+            # 2. Current room has a virtual node child (e.g., room (3,4) -> virtual node 17)
             # 3. Player has required items (bombs for bombable edges, keys for locked edges)
             # 4. Destination is a valid physical room with walkable entry point
             if can_teleport and not self.strict_original_mode:
@@ -3162,7 +3162,7 @@ class StateSpaceAStar:
                 else:
                     f_score = g_score + h_score  # A*: f = g + h
 
-                # TODO(perf): O(N²) path memory — each expansion copies the entire path
+                # TODO(perf): O(N²) path memory -- each expansion copies the entire path
                 # history. Replace with a came_from dict + backtracking reconstruction to
                 # reduce to O(N) memory. Not done here because `path` is used inline for
                 # BFS depth scoring (len(path)) and multiple heap tuple formats, making
@@ -3666,7 +3666,7 @@ class StateSpaceAStar:
         through those virtual connections.
         
         Example (D7-1):
-        - Path: 11 → 13 → 16 → 22 → 23 → ...
+        - Path: 11 -> 13 -> 16 -> 22 -> 23 -> ...
         - Nodes 16 and 22 have no physical rooms (virtual nodes)
         - Player in room mapped to node 13 can reach room mapped to node 23
         
@@ -3782,7 +3782,7 @@ class StateSpaceAStar:
         physical rooms (e.g., hidden passages, bombable shortcuts, stairwells).
         
         Entry is allowed from ANY physical node with a direct edge to the virtual
-        node — not just the virtual_parent. This is required because virtual nodes
+        node -- not just the virtual_parent. This is required because virtual nodes
         in Zelda dungeons (D7, D9) can be reached from multiple rooms, and the 
         graph encodes all valid entry/exit points.
         
@@ -4692,7 +4692,7 @@ class ZeldaValidator:
         from GOAL with reversed one-way edges) to *prove* the existence
         or absence of trap regions.
 
-        Reference: Holzer & Schwoon (2011) – Reachability vs. Safety.
+        Reference: Holzer & Schwoon (2011) - Reachability vs. Safety.
 
         Args:
             semantic_grid: The map to check.

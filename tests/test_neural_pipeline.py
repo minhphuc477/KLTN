@@ -577,7 +577,7 @@ def test_latent_space_consistency(pipeline):
     recon = pipeline.vqvae.decode(z_q)
     assert recon.shape == (1, 44, ROOM_HEIGHT, ROOM_WIDTH)
     
-    print(f"✓ VQ-VAE latent space consistent: {z_q.shape} → {recon.shape}")
+    print(f"✓ VQ-VAE latent space consistent: {z_q.shape} -> {recon.shape}")
 
 
 # =============================================================================

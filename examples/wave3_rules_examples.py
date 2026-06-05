@@ -65,7 +65,7 @@ def example_2_pacing_breaker():
         print(f"\n⚔️ Found {len(chains)} high-tension chain(s):")
         for i, chain in enumerate(chains):
             types = [graph.nodes[nid].node_type.name for nid in chain]
-            print(f"   Chain {i+1}: {' → '.join(types)}")
+            print(f"   Chain {i+1}: {' -> '.join(types)}")
 
 
 def example_3_resource_farm():
@@ -135,7 +135,7 @@ def example_5_battery_pattern():
     if batteries:
         for battery in batteries:
             print(f"\n🔋 Battery Lock (ID {battery.battery_id}):")
-            print(f"   Locks: {battery.source} → {battery.target}")
+            print(f"   Locks: {battery.source} -> {battery.target}")
             print(f"   Requires {len(battery.switches_required)} switches:")
             
             for switch_id in battery.switches_required:
@@ -161,7 +161,7 @@ def example_6_item_shortcut():
     if shortcuts:
         for shortcut in shortcuts:
             print("\n🪝 Item Shortcut:")
-            print(f"   From: {shortcut.source} → To: {shortcut.target}")
+            print(f"   From: {shortcut.source} -> To: {shortcut.target}")
             print(f"   Requires: {shortcut.item_required}")
             print(f"   Saves: {shortcut.path_savings} hops")
     else:

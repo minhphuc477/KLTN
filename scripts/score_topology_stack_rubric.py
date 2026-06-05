@@ -346,7 +346,7 @@ def main() -> int:
     lines.append("")
     for c in criteria:
         check = "x" if c.passed else " "
-        lines.append(f"- [{check}] **{c.id} {c.name}** — **{c.score}/{c.max_score}**")
+        lines.append(f"- [{check}] **{c.id} {c.name}** -- **{c.score}/{c.max_score}**")
         lines.append(f"  - {c.rationale}")
         if c.evidence:
             lines.append(f"  - Evidence: {', '.join(c.evidence)}")

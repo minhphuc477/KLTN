@@ -131,7 +131,7 @@ def analyze_qd_decomposition(
         },
         "coverage": summary.get("map_elites_coverage", 0),
         "feature_diversity": summary.get("map_elites_feature_diversity", 0),
-        "interpretation": f"{num_elites} elites with avg fitness {mean_fitness:.2f} → QD-score {qd_score:.2f}",
+        "interpretation": f"{num_elites} elites with avg fitness {mean_fitness:.2f} -> QD-score {qd_score:.2f}",
     }
 
 
@@ -334,16 +334,16 @@ def generate_markdown_report(
         ])
     
     report_lines.extend([
-        "## 4. Descriptor Shifts (n64 → n96)",
+        "## 4. Descriptor Shifts (n64 -> n96)",
         "",
         "How dungeons changed with larger budget and archive:",
         "",
     ])
     
     for desc, shift in descriptor_shifts["shifts"].items():
-        symbol = "↑" if shift["pct_change"] > 0 else "↓" if shift["pct_change"] < 0 else "→"
+        symbol = "↑" if shift["pct_change"] > 0 else "↓" if shift["pct_change"] < 0 else "->"
         report_lines.append(
-            f"- **{desc}**: {shift['n64']:.3f} → {shift['n96']:.3f} ({symbol} {shift['pct_change']:+.1f}%)"
+            f"- **{desc}**: {shift['n64']:.3f} -> {shift['n96']:.3f} ({symbol} {shift['pct_change']:+.1f}%)"
         )
     
     report_lines.extend([
@@ -353,7 +353,7 @@ def generate_markdown_report(
         f"- **Difficulty**: {descriptor_shifts['interpretation']['harder_puzzles']}",
         f"- **Puzzle Length**: {descriptor_shifts['interpretation']['similar_path_length']}",
         "",
-        "**Conclusion**: MAP-Elites favors compact, challenging dungeons—consistent with PCG best practices.",
+        "**Conclusion**: MAP-Elites favors compact, challenging dungeons--consistent with PCG best practices.",
         "",
     ])
     
@@ -365,7 +365,7 @@ def generate_markdown_report(
         "1. **Coverage Trajectory**: Early-stage (5%), on-curve with Cully et al. (2015).",
         "2. **Quality Signal**: QD-Score 8× better than random baseline (if tested).",
         "3. **Design Space**: Sparse regions (branch-secret) represent genuine constraints, not failures.",
-        "4. **Content**: Generated dungeons are smaller, harder → designer-aligned quality.",
+        "4. **Content**: Generated dungeons are smaller, harder -> designer-aligned quality.",
         "",
     ])
     

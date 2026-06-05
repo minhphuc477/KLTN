@@ -1463,7 +1463,7 @@ class UNetDenoiser(nn.Module):
     timestep t and context c from the condition encoder.
     
     Architecture:
-        x_t, t, c → Encoder → Bottleneck → Decoder → ε_θ(x_t, t, c)
+        x_t, t, c -> Encoder -> Bottleneck -> Decoder -> ε_θ(x_t, t, c)
     
     Args:
         in_channels: Input latent channels
@@ -3243,7 +3243,7 @@ class LatentDiffusionModel(nn.Module):
         Predict noise with Classifier-Free Guidance (CFG).
         
         At inference: ε̃ = ε_uncond + s * (ε_cond - ε_uncond)
-        where s = cfg_scale. When s=1 → standard conditional, s>1 → stronger conditioning.
+        where s = cfg_scale. When s=1 -> standard conditional, s>1 -> stronger conditioning.
         
         PERF-02: accepts pre-computed topology/spatial context to avoid
         redundant extraction at every sampling step.

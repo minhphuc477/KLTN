@@ -170,7 +170,7 @@ def save_results(result, output_dir: Path):
 # =============================================================================
 
 def create_linear_graph(num_rooms: int = 4) -> nx.Graph:
-    """Create a simple linear mission graph (1 → 2 → 3 → ...)."""
+    """Create a simple linear mission graph (1 -> 2 -> 3 -> ...)."""
     G = nx.DiGraph()
     G.add_nodes_from(range(num_rooms))
     G.add_edges_from([(i, i+1) for i in range(num_rooms - 1)])

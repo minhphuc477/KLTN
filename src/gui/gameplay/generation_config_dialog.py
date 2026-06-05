@@ -37,7 +37,7 @@ def ask_generation_config(gui: Any, logger_obj: Any = None) -> Optional[Dict[str
 
     Returns:
         A dict with keys ``width``, ``height``, ``num_rooms``, ``difficulty``,
-        ``seed``, ``max_keys`` — or ``None`` if the user cancelled.
+        ``seed``, ``max_keys`` -- or ``None`` if the user cancelled.
     """
     log = logger_obj or logger
 

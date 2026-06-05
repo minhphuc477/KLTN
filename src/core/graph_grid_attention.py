@@ -163,7 +163,7 @@ class SinusoidalPositionEncoding2D(nn.Module):
         rows = torch.arange(max_h, dtype=torch.float32)
         cols = torch.arange(max_w, dtype=torch.float32)
         
-        # Compute encodings — [H, half] and [W, half]
+        # Compute encodings -- [H, half] and [W, half]
         row_pe = rows.unsqueeze(1) * omega.unsqueeze(0)
         col_pe = cols.unsqueeze(1) * omega.unsqueeze(0)
         
@@ -172,7 +172,7 @@ class SinusoidalPositionEncoding2D(nn.Module):
         col_sin = torch.sin(col_pe)  # [W, half]
         col_cos = torch.cos(col_pe)  # [W, half]
         
-        # Vectorized broadcast into [H, W, D] — no Python loops
+        # Vectorized broadcast into [H, W, D] -- no Python loops
         pe = torch.zeros(max_h, max_w, dim)
         pe[:, :, :half] = row_sin.unsqueeze(1).expand(max_h, max_w, half)
         pe[:, :, half:half*2] = row_cos.unsqueeze(1).expand(max_h, max_w, half)

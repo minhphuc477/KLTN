@@ -353,3 +353,57 @@ def test_skill_chain_validator_accepts_valid_longer_path_not_only_shortest():
     graph.add_edge(4, 2, EdgeType.PATH)
 
     assert validate_skill_chains(graph)
+
+
+def test_resource_loop_validator_accepts_one_reachable_provider_before_gate():
+    from src.generation.grammar.graph_types import EdgeType, MissionGraph, MissionNode, NodeType
+    from src.generation.grammar_validators import validate_resource_loops
+
+    graph = MissionGraph()
+    for node in [
+        MissionNode(0, NodeType.START),
+        MissionNode(1, NodeType.RESOURCE_FARM, drops_resource="BOMB"),
+        MissionNode(2, NodeType.LOCK),
+        MissionNode(3, NodeType.GOAL),
+        MissionNode(4, NodeType.RESOURCE_FARM, drops_resource="BOMB"),
+    ]:
+        graph.add_node(node)
+    graph.add_edge(0, 1, EdgeType.PATH)
+    graph.add_edge(1, 2, EdgeType.ITEM_GATE, item_required="BOMB")
+    graph.add_edge(2, 3, EdgeType.PATH)
+    graph.add_edge(3, 4, EdgeType.PATH)
+
+    assert validate_resource_loops(graph)
+
+
+def test_boss_door_consumes_boss_key_and_key_item_does_not_grant_bombs():
+    from src.simulation.validator import GameState, ZeldaLogicEnv
+
+    grid = np.full((3, 4), SEMANTIC_PALETTE["FLOOR"], dtype=np.int64)
+    grid[1, 0] = SEMANTIC_PALETTE["START"]
+    grid[1, 1] = SEMANTIC_PALETTE["DOOR_BOSS"]
+    grid[1, 2] = SEMANTIC_PALETTE["KEY_ITEM"]
+    grid[1, 3] = SEMANTIC_PALETTE["TRIFORCE"]
+    env = ZeldaLogicEnv(grid)
+
+    ok, opened = env.try_move_pure(GameState(position=(1, 0), has_boss_key=True), (1, 1), SEMANTIC_PALETTE["DOOR_BOSS"])
+    assert ok
+    assert not opened.has_boss_key
+
+    ok, picked = env.try_move_pure(GameState(position=(1, 1), bomb_count=0), (1, 2), SEMANTIC_PALETTE["KEY_ITEM"])
+    assert ok
+    assert picked.has_item
+    assert picked.bomb_count == 0
+
+
+def test_search_metrics_are_bounded_and_confusion_is_overhead():
+    from src.evaluation.search_benchmark_utils import (
+        confusion_ratio_vs_oracle,
+        path_efficiency_ratio,
+        safe_positive_int,
+    )
+
+    assert path_efficiency_ratio(5, 10) == 1.0
+    assert confusion_ratio_vs_oracle(10, 10, oracle_status="solved", candidate_success=True) == 0.0
+    assert confusion_ratio_vs_oracle(10, 15, oracle_status="solved", candidate_success=True) == 0.5
+    assert safe_positive_int(float("inf")) > 1_000_000

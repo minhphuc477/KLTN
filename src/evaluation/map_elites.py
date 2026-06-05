@@ -11,7 +11,7 @@ of dungeons with varied characteristics (linearity, leniency, etc.).
 Mathematical Formulation:
 -------------------------
 Feature Space: F ∈ ℝ² (e.g., linearity × leniency)
-Archive: A: F → (solution, fitness)
+Archive: A: F -> (solution, fitness)
 
 Update Rule:
     Given new solution x with features f(x) and fitness q(x):
@@ -808,7 +808,7 @@ class CVTEliteArchive:
         # Compute CVT centroids via k-means
         self.centroids = self._compute_cvt_centroids(num_cvt_samples)
         
-        # Archive storage: cell_id → Elite
+        # Archive storage: cell_id -> Elite
         self.archive: Dict[int, Elite] = {}
         
         # Statistics
@@ -940,7 +940,7 @@ class CBSFeatureExtractor(FeatureExtractor):
     CBS-derived feature extractor for MAP-Elites.
     
     Uses Cognitive Bounded Search confusion ratio and room entropy
-    as behavior descriptors. This is the paper's key novelty —
+    as behavior descriptors. This is the paper's key novelty --
     dungeons are characterized by how humans would perceive them,
     not just structural properties.
     

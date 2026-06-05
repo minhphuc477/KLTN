@@ -803,7 +803,7 @@ def test_block_vii_symbolic_refiner():
 
 
 def test_pipeline_vqvae_to_diffusion():
-    """End-to-end: VQ-VAE encode → Diffusion loss → sample → VQ-VAE decode."""
+    """End-to-end: VQ-VAE encode -> Diffusion loss -> sample -> VQ-VAE decode."""
     from src.core.vqvae import create_vqvae
     from src.core.latent_diffusion import create_latent_diffusion
     from src.core.condition_encoder import create_condition_encoder
@@ -836,7 +836,7 @@ def test_pipeline_vqvae_to_diffusion():
         z_gen = diffusion.ddim_sample(conditioning, shape=z_q.shape, num_steps=5)
         recon = vqvae.decode(z_gen, target_size=(ROOM_HEIGHT, ROOM_WIDTH))
     assert recon.shape == (2, 44, ROOM_HEIGHT, ROOM_WIDTH)
-    print("  ✓ Pipeline: VQ-VAE → Diffusion → VQ-VAE decode OK")
+    print("  ✓ Pipeline: VQ-VAE -> Diffusion -> VQ-VAE decode OK")
 
 
 def test_trainer_instantiation():

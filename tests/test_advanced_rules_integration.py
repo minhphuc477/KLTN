@@ -340,7 +340,7 @@ class TestAdvancedRulesIntegration:
                 "Forward path should exist"
             
             if valve.source in graph._adjacency.get(valve.target, []):
-                print(f"   ⚠️  Valve {valve.source}→{valve.target} still bidirectional")
+                print(f"   ⚠️  Valve {valve.source}->{valve.target} still bidirectional")
     
     def test_visual_foreshadowing(self):
         """Test visual links (RULE #4)."""
@@ -364,7 +364,7 @@ class TestAdvancedRulesIntegration:
                     assert path_dist > 4, \
                         f"Visual link nodes too close topologically: {path_dist}"
                 
-                print(f"   Link {link.source}→{link.target}: spatial={manhattan}, path={path_dist}")
+                print(f"   Link {link.source}->{link.target}: spatial={manhattan}, path={path_dist}")
         else:
             print("\n⚠️  Visual link rule not applied (probabilistic)")
     
@@ -383,7 +383,7 @@ class TestAdvancedRulesIntegration:
             
             for lock in multi_locks:
                 assert lock.token_count >= 2, "Multi-lock should require ≥2 tokens"
-                print(f"   Lock at {lock.source}→{lock.target} requires {lock.token_count} tokens")
+                print(f"   Lock at {lock.source}->{lock.target} requires {lock.token_count} tokens")
             
             # Verify sufficient tokens exist
             if tokens:
@@ -476,7 +476,7 @@ class TestAdvancedRulesIntegration:
                 assert hazard.hazard_damage > 0, "Hazard should have damage"
                 assert hazard.protection_item_id is not None, \
                     "Hazard should reference protection item"
-                print(f"   Hazard {hazard.source}→{hazard.target}: " + 
+                print(f"   Hazard {hazard.source}->{hazard.target}: " + 
                       f"damage={hazard.hazard_damage}, " +
                       f"protection={hazard.protection_item_id}")
                 
@@ -592,7 +592,7 @@ class TestRuleConstraints:
         
         for edge in graph.edges:
             assert edge.source != edge.target, \
-                f"Self-loop detected: {edge.source} → {edge.target}"
+                f"Self-loop detected: {edge.source} -> {edge.target}"
     
     def test_add_valve_rule_preserves_string_node_ids(self):
         """Valve insertion should not require integer-coercible node IDs."""

@@ -8,7 +8,7 @@ Tests all 7 advanced production rules implementing Nintendo-grade
 level design pedagogy and quality control patterns.
 
 Rules tested:
-1. AddSkillChainRule - Tutorial sequences (Learn → Practice → Master)
+1. AddSkillChainRule - Tutorial sequences (Learn -> Practice -> Master)
 2. AddPacingBreakerRule - Sanctuary/negative space
 3. AddResourceLoopRule - Resource farming spots
 4. AddGatekeeperRule - Mini-boss guardians
@@ -56,7 +56,7 @@ class TestAddSkillChainRule:
         """Test that skill chains are properly created after items."""
         graph = MissionGraph()
         
-        # Create basic structure: START → PATH → ITEM → 3 successors
+        # Create basic structure: START -> PATH -> ITEM -> 3 successors
         start = MissionNode(id=0, node_type=NodeType.START, position=(0, 0, 0))
         graph.add_node(start)
         
@@ -365,7 +365,7 @@ class TestAddResourceLoopRule:
         """Test resource farm placement near item gate."""
         graph = MissionGraph()
         
-        # Create START → node → ITEM_GATE → target
+        # Create START -> node -> ITEM_GATE -> target
         start = MissionNode(id=0, node_type=NodeType.START, position=(0, 0, 0))
         graph.add_node(start)
         
@@ -411,7 +411,7 @@ class TestAddGatekeeperRule:
         """Test mini-boss placement before item."""
         graph = MissionGraph()
         
-        # Create START → node → ITEM
+        # Create START -> node -> ITEM
         start = MissionNode(id=0, node_type=NodeType.START, position=(0, 0, 0))
         graph.add_node(start)
         
@@ -507,7 +507,7 @@ class TestAddItemShortcutRule:
         """Test shortcut from distant item back to start."""
         graph = MissionGraph()
         
-        # Create long path: START → ... → ITEM (distance > 5)
+        # Create long path: START -> ... -> ITEM (distance > 5)
         start = MissionNode(id=0, node_type=NodeType.START, position=(0, 0, 0))
         graph.add_node(start)
         

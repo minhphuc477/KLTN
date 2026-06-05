@@ -1,4 +1,4 @@
-"""Visual extractor — tile/template matcher for Zelda screenshots.
+"""Visual extractor -- tile/template matcher for Zelda screenshots.
 
 Provides:
 - extract_grid(image_path, templates_dir) -> np.ndarray (semantic-like numeric grid)

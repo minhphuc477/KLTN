@@ -2943,10 +2943,10 @@ class DiffusionTrainer:
         Single training step.
         
         Training strategy:
-        1. Diffusion loss: standard Îµ-prediction on real encoded latents
+        1. Diffusion loss: standard epsilon-prediction on real encoded latents
         2. LogicNet loss: computed on REAL z_0 with graph_data from .dot files,
            enabling both grid-level AND graph-level pathfinding/key-lock checking.
-        3. GradientGuidance (wired in __init__): applies âˆ‡_{x_t}L_logic
+        3. GradientGuidance (wired in __init__): applies grad_{x_t}L_logic
            during sampling/validation to steer generation toward solvable maps.
         
         Args:
