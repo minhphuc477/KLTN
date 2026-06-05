@@ -129,7 +129,7 @@ class ExperimentConfig:
     categorical_codebook_size: Optional[int] = None
     use_tpe: bool = True
     disable_graph_node_cross_attention: bool = False
-    topology_refinement_mode: str = "gat2"  # none | lightweight | sparse_edge | gat2 | graphormer
+    topology_refinement_mode: str = "gat2"  # none | lightweight | sparse*/gat2* | graphormer
     room_generator_mode: str = "latent_diffusion"  # latent_diffusion | discrete_masked
     use_reference_room_maps: Optional[bool] = None
 
@@ -175,6 +175,20 @@ ABLATION_DESIGN_NOTES: Dict[str, Dict[str, str]] = {
         "comparison": "FULL and TOPO_LIGHTWEIGHT",
         "isolates": "edge-sparse graph attention over mission edges plus self loops without dense all-pairs scores",
         "interpretation": "Tests whether sparse topology attention preserves graph fidelity at lower asymptotic cost than GAT2/Graphormer.",
+    },
+    "TOPO_SPARSE_DIRECTED": {
+        "tier": "block_iv",
+        "component": "topology-aware attention refinement",
+        "comparison": "TOPO_SPARSE_EDGE",
+        "isolates": "directed sparse graph attention that does not mirror mission edges",
+        "interpretation": "Tests whether respecting one-way topology helps or hurts compared with the legacy undirected inductive bias.",
+    },
+    "TOPO_SPARSE_SEMANTIC": {
+        "tier": "block_iv",
+        "component": "topology-aware attention refinement",
+        "comparison": "TOPO_SPARSE_EDGE and TOPO_SPARSE_DIRECTED",
+        "isolates": "edge-type-aware sparse attention using deterministic gate-severity bias",
+        "interpretation": "Tests whether door/lock semantics improve topology preservation without adding untrained checkpoint parameters.",
     },
     "NO_EVOLUTION": {
         "tier": "block_i",
@@ -1555,6 +1569,8 @@ def build_experiment_set(include_extended: bool = True) -> List[ExperimentConfig
         ExperimentConfig(name="FULL", topology_refinement_mode="gat2"),
         ExperimentConfig(name="TOPO_LIGHTWEIGHT", topology_refinement_mode="lightweight"),
         ExperimentConfig(name="TOPO_SPARSE_EDGE", topology_refinement_mode="sparse_edge"),
+        ExperimentConfig(name="TOPO_SPARSE_DIRECTED", topology_refinement_mode="sparse_directed"),
+        ExperimentConfig(name="TOPO_SPARSE_SEMANTIC", topology_refinement_mode="sparse_directed_semantic"),
         ExperimentConfig(name="NO_EVOLUTION", use_evolution=False),
         ExperimentConfig(name="RANDOM_TOPOLOGY", use_evolution=False, random_topology=True),
         ExperimentConfig(

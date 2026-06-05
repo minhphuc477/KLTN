@@ -243,6 +243,91 @@ def test_sparse_edge_topology_refinement_mode_runs_as_large_graph_ablation():
     assert not torch.allclose(out_chain, out_skip)
 
 
+def test_sparse_directed_topology_refinement_respects_edge_direction():
+    from src.core.latent_diffusion import CrossAttention
+
+    torch.manual_seed(31)
+    directed = CrossAttention(
+        query_dim=16,
+        context_dim=16,
+        num_heads=4,
+        topology_refinement_mode="sparse_directed",
+        dropout=0.0,
+    )
+    undirected = CrossAttention(
+        query_dim=16,
+        context_dim=16,
+        num_heads=4,
+        topology_refinement_mode="sparse_edge",
+        dropout=0.0,
+    )
+    undirected.load_state_dict(directed.state_dict())
+    context = torch.randn(1, 3, 16)
+    one_way = torch.tensor([[0], [1]], dtype=torch.long)
+    node_mask = torch.ones(1, 3, dtype=torch.bool)
+
+    with torch.no_grad():
+        out_directed = directed._refine_context_topology(context, edge_index=one_way, node_mask=node_mask)
+        out_undirected = undirected._refine_context_topology(context, edge_index=one_way, node_mask=node_mask)
+
+    assert not torch.allclose(out_directed, out_undirected)
+
+
+def test_sparse_semantic_topology_refinement_uses_edge_attr_as_ablation():
+    from src.core.latent_diffusion import CrossAttention
+
+    torch.manual_seed(37)
+    semantic = CrossAttention(
+        query_dim=16,
+        context_dim=16,
+        num_heads=4,
+        topology_refinement_mode="sparse_directed_semantic",
+        dropout=0.0,
+    )
+    blind = CrossAttention(
+        query_dim=16,
+        context_dim=16,
+        num_heads=4,
+        topology_refinement_mode="sparse_directed",
+        dropout=0.0,
+    )
+    blind.load_state_dict(semantic.state_dict())
+    context = torch.randn(1, 3, 16)
+    edge_index = torch.tensor([[0, 1], [1, 2]], dtype=torch.long)
+    open_edges = torch.tensor([0, 0], dtype=torch.long)
+    locked_edges = torch.tensor([4, 4], dtype=torch.long)
+    node_mask = torch.ones(1, 3, dtype=torch.bool)
+
+    with torch.no_grad():
+        out_open = semantic._refine_context_topology(
+            context,
+            edge_index=edge_index,
+            edge_attr=open_edges,
+            node_mask=node_mask,
+        )
+        out_locked = semantic._refine_context_topology(
+            context,
+            edge_index=edge_index,
+            edge_attr=locked_edges,
+            node_mask=node_mask,
+        )
+        out_blind_open = blind._refine_context_topology(
+            context,
+            edge_index=edge_index,
+            edge_attr=open_edges,
+            node_mask=node_mask,
+        )
+        out_blind_locked = blind._refine_context_topology(
+            context,
+            edge_index=edge_index,
+            edge_attr=locked_edges,
+            node_mask=node_mask,
+        )
+
+    assert not torch.allclose(out_open, out_locked)
+    assert torch.allclose(out_blind_open, out_blind_locked)
+
+
 def test_latent_diffusion_graphormer_topology_refinement_mode_runs_as_ablation():
     torch.manual_seed(17)
     model = create_latent_diffusion(

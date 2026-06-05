@@ -124,7 +124,7 @@ diffusion:
   graph_conditioning_mode: node_sequence  # type=str, default=node_sequence, valid={node_sequence,pooled}
   num_timesteps: 1000  # type=int, default=1000, valid>=10
   schedule_type: cosine  # type=str, default=cosine, valid={linear,cosine}
-  topology_refinement_mode: gat2  # type=str, default=gat2, valid={none,lightweight,sparse_edge,gat2,graphormer,upgraded}
+  topology_refinement_mode: gat2  # type=str, default=gat2, valid={none,lightweight,sparse_edge,sparse_directed,sparse_semantic,sparse_directed_semantic,gat2,gat2_directed,gat2_semantic,gat2_directed_semantic,graphormer,upgraded}
   attention_mode: softmax  # type=str, default=softmax, valid={softmax,linear_hedgehog}
   topology_conditioning_mode: spade  # type=str, default=additive, valid={additive,spade}; SPADE-style affine modulation is recommended for room topology maps
   hedgehog_feature_dim: 32  # type=int, default=32, valid>=4

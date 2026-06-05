@@ -385,10 +385,23 @@ def _initialize_pipeline_from_flat_kwargs(
         )
     if pipeline.topology_refinement_mode == "upgraded":
         pipeline.topology_refinement_mode = "gat2"
-    if pipeline.topology_refinement_mode not in {"none", "lightweight", "sparse_edge", "gat2", "graphormer"}:
+    allowed_topology_modes = {
+        "none",
+        "lightweight",
+        "sparse_edge",
+        "sparse_directed",
+        "sparse_semantic",
+        "sparse_directed_semantic",
+        "gat2",
+        "gat2_directed",
+        "gat2_semantic",
+        "gat2_directed_semantic",
+        "graphormer",
+    }
+    if pipeline.topology_refinement_mode not in allowed_topology_modes:
         raise ValueError(
             f"Invalid topology_refinement_mode={topology_refinement_mode!r}. "
-            "Expected 'none', 'lightweight', 'sparse_edge', 'gat2', or 'graphormer'."
+            "Expected a supported topology refinement ablation."
         )
     gnn_type = str(condition_gnn_type).strip().lower()
     if gnn_type not in {"gcn", "gat", "sage", "gps"}:

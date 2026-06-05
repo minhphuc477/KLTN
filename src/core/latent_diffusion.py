@@ -41,7 +41,7 @@ from torch import Tensor
 from torch_geometric.utils import softmax as pyg_softmax
 
 from src.core.attention_kernels import HedgehogFeatureMap, hedgehog_linear_attention
-from src.core.definitions import ROOM_TOPOLOGY_CHANNEL_COUNT
+from src.core.definitions import EDGE_TYPE_PRIORITY, GRAPH_EDGE_FEATURE_DIM, ROOM_TOPOLOGY_CHANNEL_COUNT
 from src.core.graph_grid_attention import SpatialGraphConditioner
 
 logger = logging.getLogger(__name__)
@@ -265,33 +265,32 @@ class CrossAttention(nn.Module):
         self.attention_mode = normalized
 
     def set_topology_refinement_mode(self, mode: str) -> None:
-        """Set topology refinement mode: none | lightweight | sparse_edge | gat2 | graphormer."""
+        """Set topology refinement mode for graph-token refinement."""
         m = str(mode).strip().lower()
         if m == "upgraded":
             m = "gat2"
-        if m not in {"none", "lightweight", "sparse_edge", "gat2", "graphormer"}:
+        allowed = {
+            "none",
+            "lightweight",
+            "sparse_edge",
+            "sparse_directed",
+            "sparse_semantic",
+            "sparse_directed_semantic",
+            "gat2",
+            "gat2_directed",
+            "gat2_semantic",
+            "gat2_directed_semantic",
+            "graphormer",
+        }
+        if m not in allowed:
             raise ValueError(
                 "Invalid topology_refinement_mode="
-                f"{mode!r}. Expected 'none', 'lightweight', 'sparse_edge', 'gat2', or 'graphormer'."
+                f"{mode!r}. Expected 'none', 'lightweight', 'sparse_edge', 'sparse_directed', "
+                "'sparse_semantic', 'sparse_directed_semantic', 'gat2', 'gat2_directed', "
+                "'gat2_semantic', 'gat2_directed_semantic', or 'graphormer'."
             )
         self.topology_refinement_mode = m
     
-    def _normalize_adjacency(self, num_nodes: int, edge_index: Tensor, device: torch.device, dtype: torch.dtype) -> Tensor:
-        """Build normalized adjacency with self loops for lightweight GCN refinement."""
-        adj = torch.zeros(num_nodes, num_nodes, device=device, dtype=dtype)
-        if edge_index.numel() > 0:
-            src = edge_index[0].long()
-            dst = edge_index[1].long()
-            in_range = (src >= 0) & (src < num_nodes) & (dst >= 0) & (dst < num_nodes)
-            src = src[in_range]
-            dst = dst[in_range]
-            adj[src, dst] = 1.0
-            adj[dst, src] = 1.0
-        adj = adj + torch.eye(num_nodes, device=device, dtype=dtype)
-        deg = adj.sum(dim=1).clamp(min=1.0)
-        inv_sqrt = deg.pow(-0.5)
-        return inv_sqrt[:, None] * adj * inv_sqrt[None, :]
-
     @staticmethod
     def _batched_valid_node_mask(
         *,
@@ -327,6 +326,7 @@ class CrossAttention(nn.Module):
         node_mask: Optional[Tensor],
         device: torch.device,
         dtype: torch.dtype,
+        force_undirected: bool = True,
     ) -> Tuple[Tensor, Tensor]:
         """Build dense [B,L,L] normalized adjacency and valid-node mask without per-sample loops."""
         valid = self._batched_valid_node_mask(
@@ -356,7 +356,8 @@ class CrossAttention(nn.Module):
                     src_b = src.unsqueeze(0).expand(batch_size, -1)
                     dst_b = dst.unsqueeze(0).expand(batch_size, -1)
                     adj[batch_idx[edge_valid], src_b[edge_valid], dst_b[edge_valid]] = 1.0
-                    adj[batch_idx[edge_valid], dst_b[edge_valid], src_b[edge_valid]] = 1.0
+                    if force_undirected:
+                        adj[batch_idx[edge_valid], dst_b[edge_valid], src_b[edge_valid]] = 1.0
         elif edge_index.dim() == 3:
             ei = edge_index.to(device=device, dtype=torch.long)
             if int(ei.shape[1]) != 2:
@@ -376,7 +377,8 @@ class CrossAttention(nn.Module):
                 edge_valid = in_range & valid.gather(1, src) & valid.gather(1, dst)
                 batch_idx = torch.arange(batch_size, device=device).unsqueeze(1).expand_as(src)
                 adj[batch_idx[edge_valid], src[edge_valid], dst[edge_valid]] = 1.0
-                adj[batch_idx[edge_valid], dst[edge_valid], src[edge_valid]] = 1.0
+                if force_undirected:
+                    adj[batch_idx[edge_valid], dst[edge_valid], src[edge_valid]] = 1.0
         else:
             raise ValueError(
                 f"CrossAttention edge_index must have shape [2,E] or [B,2,E], got {tuple(edge_index.shape)}."
@@ -401,20 +403,39 @@ class CrossAttention(nn.Module):
         normalized = str(mode).strip().lower()
         if normalized == "upgraded":
             normalized = "gat2"
-        if normalized not in {"none", "lightweight", "sparse_edge", "gat2", "graphormer"}:
+        allowed = {
+            "none",
+            "lightweight",
+            "sparse_edge",
+            "sparse_directed",
+            "sparse_semantic",
+            "sparse_directed_semantic",
+            "gat2",
+            "gat2_directed",
+            "gat2_semantic",
+            "gat2_directed_semantic",
+            "graphormer",
+        }
+        if normalized not in allowed:
             raise ValueError(
                 f"Invalid topology refinement mode {mode!r}; "
-                "expected none, lightweight, sparse_edge, gat2, or graphormer."
+                "expected a supported topology refinement ablation."
             )
         attention_pairs = 0
         message_pairs = 0
         shortest_path_ops = 0
         if normalized == "lightweight":
             message_pairs = n + e
-        elif normalized == "sparse_edge":
+        elif normalized in {"sparse_edge", "sparse_semantic"}:
             attention_pairs = n + (2 * e)
-        elif normalized == "gat2":
+        elif normalized in {"sparse_directed", "sparse_directed_semantic"}:
+            attention_pairs = n + e
+        elif normalized in {"gat2", "gat2_semantic"}:
             attention_pairs = n * n
+            message_pairs = n + (2 * e)
+        elif normalized in {"gat2_directed", "gat2_directed_semantic"}:
+            attention_pairs = n * n
+            message_pairs = n + e
         elif normalized == "graphormer":
             attention_pairs = n * n
             shortest_path_ops = n * n * n
@@ -429,28 +450,114 @@ class CrossAttention(nn.Module):
         }
 
     @staticmethod
+    def _mode_flags(mode: str) -> Tuple[bool, bool]:
+        normalized = str(mode).strip().lower()
+        force_undirected = "directed" not in normalized
+        use_edge_semantics = "semantic" in normalized
+        return force_undirected, use_edge_semantics
+
+    @staticmethod
+    def _edge_attr_type_ids(
+        edge_attr: Optional[Tensor],
+        *,
+        batch_size: int,
+        num_edges: int,
+        device: torch.device,
+    ) -> Optional[Tensor]:
+        if not isinstance(edge_attr, torch.Tensor) or int(num_edges) <= 0:
+            return None
+        attr = edge_attr.to(device=device)
+        if attr.numel() == 0:
+            return None
+        if attr.dim() == 1:
+            ids = attr.to(dtype=torch.long).view(1, -1)
+        elif attr.dim() == 2:
+            if int(attr.shape[0]) in {1, batch_size} and int(attr.shape[1]) == int(num_edges):
+                ids = attr.to(dtype=torch.long)
+            elif int(attr.shape[0]) == int(num_edges):
+                ids = attr.argmax(dim=-1).to(dtype=torch.long).view(1, -1)
+            else:
+                ids = attr.reshape(1, -1).to(dtype=torch.long)
+        elif attr.dim() == 3:
+            if int(attr.shape[0]) == 1 and batch_size > 1:
+                attr = attr.expand(batch_size, -1, -1)
+            if int(attr.shape[0]) != batch_size:
+                raise ValueError(
+                    f"CrossAttention edge_attr batch size {int(attr.shape[0])} does not match context batch {batch_size}."
+                )
+            ids = attr.argmax(dim=-1).to(dtype=torch.long)
+        else:
+            raise ValueError(f"CrossAttention edge_attr must have shape [E], [B,E], [E,D], or [B,E,D], got {tuple(attr.shape)}.")
+
+        if int(ids.shape[0]) == 1 and batch_size > 1:
+            ids = ids.expand(batch_size, -1)
+        if int(ids.shape[0]) != batch_size:
+            raise ValueError(
+                f"CrossAttention edge_attr batch size {int(ids.shape[0])} does not match context batch {batch_size}."
+            )
+        if int(ids.shape[1]) < int(num_edges):
+            ids = F.pad(ids, (0, int(num_edges) - int(ids.shape[1])), value=0)
+        elif int(ids.shape[1]) > int(num_edges):
+            ids = ids[:, :num_edges]
+        return ids
+
+    @staticmethod
+    def _edge_type_bias_from_ids(edge_type_ids: Tensor, *, dtype: torch.dtype) -> Tensor:
+        # Loader schema: open=0, key=1, bomb=2, soft/one-way=3, boss=4,
+        # item=5, stair/warp=6, switch=7. Unknown IDs get a mild penalty.
+        max_known = max(int(GRAPH_EDGE_FEATURE_DIM), 16)
+        severity = torch.full((max_known,), 15.0, device=edge_type_ids.device, dtype=torch.float32)
+        values = {
+            0: float(EDGE_TYPE_PRIORITY.get("open", 0)),
+            1: float(EDGE_TYPE_PRIORITY.get("key_locked", 50)),
+            2: float(EDGE_TYPE_PRIORITY.get("bombable", 40)),
+            3: float(EDGE_TYPE_PRIORITY.get("soft_locked", 20)),
+            4: float(EDGE_TYPE_PRIORITY.get("boss_locked", 60)),
+            5: float(EDGE_TYPE_PRIORITY.get("item_locked", 45)),
+            6: float(EDGE_TYPE_PRIORITY.get("stair", 10)),
+            7: float(EDGE_TYPE_PRIORITY.get("switch", 30)),
+        }
+        for index, value in values.items():
+            if index < max_known:
+                severity[index] = value
+        ids = edge_type_ids.clamp(0, max_known - 1)
+        return (-0.25 * severity[ids] / 60.0).to(dtype=dtype)
+
+    @staticmethod
     def _batched_sparse_edges(
         *,
         batch_size: int,
         seq_len: int,
         edge_index: Tensor,
+        edge_attr: Optional[Tensor],
         valid: Tensor,
         device: torch.device,
-    ) -> Tuple[Tensor, Tensor]:
-        """Return flattened source/destination edges with reverse edges and self loops."""
+        dtype: torch.dtype,
+        force_undirected: bool = True,
+        use_edge_semantics: bool = False,
+    ) -> Tuple[Tensor, Tensor, Optional[Tensor]]:
+        """Return flattened source/destination edges with optional reverse edges and self loops."""
         edge_src_parts = []
         edge_dst_parts = []
+        edge_bias_parts = []
 
         if edge_index.dim() == 2:
             ei = edge_index.to(device=device, dtype=torch.long)
             if int(ei.shape[0]) != 2:
                 raise ValueError(f"CrossAttention edge_index must have first dimension 2, got {tuple(ei.shape)}.")
+            edge_type_ids = CrossAttention._edge_attr_type_ids(
+                edge_attr,
+                batch_size=batch_size,
+                num_edges=int(ei.shape[1]),
+                device=device,
+            ) if use_edge_semantics else None
             if ei.numel() > 0:
                 src_raw = ei[0]
                 dst_raw = ei[1]
                 in_range = (src_raw >= 0) & (src_raw < seq_len) & (dst_raw >= 0) & (dst_raw < seq_len)
                 src = src_raw[in_range]
                 dst = dst_raw[in_range]
+                edge_ids = edge_type_ids[:, in_range] if edge_type_ids is not None else None
                 if src.numel() > 0:
                     edge_valid = valid[:, src] & valid[:, dst]
                     batch_idx = torch.arange(batch_size, device=device).unsqueeze(1).expand(-1, src.numel())
@@ -459,8 +566,16 @@ class CrossAttention(nn.Module):
                     base = batch_idx * seq_len
                     flat_src = (base + src_b)[edge_valid]
                     flat_dst = (base + dst_b)[edge_valid]
-                    edge_src_parts.extend([flat_src, flat_dst])
-                    edge_dst_parts.extend([flat_dst, flat_src])
+                    edge_src_parts.append(flat_src)
+                    edge_dst_parts.append(flat_dst)
+                    if edge_ids is not None:
+                        bias = CrossAttention._edge_type_bias_from_ids(edge_ids, dtype=dtype)[edge_valid]
+                        edge_bias_parts.append(bias)
+                    if force_undirected:
+                        edge_src_parts.append(flat_dst)
+                        edge_dst_parts.append(flat_src)
+                        if edge_ids is not None:
+                            edge_bias_parts.append(bias)
         elif edge_index.dim() == 3:
             ei = edge_index.to(device=device, dtype=torch.long)
             if int(ei.shape[1]) != 2:
@@ -471,6 +586,12 @@ class CrossAttention(nn.Module):
                 raise ValueError(
                     f"CrossAttention edge_index batch size {int(ei.shape[0])} does not match context batch {batch_size}."
                 )
+            edge_type_ids = CrossAttention._edge_attr_type_ids(
+                edge_attr,
+                batch_size=batch_size,
+                num_edges=int(ei.shape[2]),
+                device=device,
+            ) if use_edge_semantics else None
             if ei.numel() > 0:
                 src_raw = ei[:, 0]
                 dst_raw = ei[:, 1]
@@ -482,8 +603,16 @@ class CrossAttention(nn.Module):
                 base = batch_idx * seq_len
                 flat_src = (base + src)[edge_valid]
                 flat_dst = (base + dst)[edge_valid]
-                edge_src_parts.extend([flat_src, flat_dst])
-                edge_dst_parts.extend([flat_dst, flat_src])
+                edge_src_parts.append(flat_src)
+                edge_dst_parts.append(flat_dst)
+                if edge_type_ids is not None:
+                    bias = CrossAttention._edge_type_bias_from_ids(edge_type_ids, dtype=dtype)[edge_valid]
+                    edge_bias_parts.append(bias)
+                if force_undirected:
+                    edge_src_parts.append(flat_dst)
+                    edge_dst_parts.append(flat_src)
+                    if edge_type_ids is not None:
+                        edge_bias_parts.append(bias)
         else:
             raise ValueError(
                 f"CrossAttention edge_index must have shape [2,E] or [B,2,E], got {tuple(edge_index.shape)}."
@@ -493,29 +622,118 @@ class CrossAttention(nn.Module):
         self_nodes = torch.nonzero(valid_flat, as_tuple=False).flatten()
         edge_src_parts.append(self_nodes)
         edge_dst_parts.append(self_nodes)
+        if use_edge_semantics:
+            edge_bias_parts.append(torch.zeros_like(self_nodes, dtype=dtype))
 
-        return torch.cat(edge_src_parts, dim=0), torch.cat(edge_dst_parts, dim=0)
+        edge_bias = torch.cat(edge_bias_parts, dim=0) if edge_bias_parts else None
+        return torch.cat(edge_src_parts, dim=0), torch.cat(edge_dst_parts, dim=0), edge_bias
+
+    @staticmethod
+    def _batched_edge_bias_matrix(
+        *,
+        batch_size: int,
+        seq_len: int,
+        edge_index: Tensor,
+        edge_attr: Optional[Tensor],
+        valid: Tensor,
+        device: torch.device,
+        dtype: torch.dtype,
+        force_undirected: bool = True,
+    ) -> Optional[Tensor]:
+        edge_bias = torch.zeros(batch_size, seq_len, seq_len, device=device, dtype=dtype)
+
+        if edge_index.dim() == 2:
+            ei = edge_index.to(device=device, dtype=torch.long)
+            if int(ei.shape[0]) != 2:
+                raise ValueError(f"CrossAttention edge_index must have first dimension 2, got {tuple(ei.shape)}.")
+            edge_type_ids = CrossAttention._edge_attr_type_ids(
+                edge_attr,
+                batch_size=batch_size,
+                num_edges=int(ei.shape[1]),
+                device=device,
+            )
+            if edge_type_ids is None:
+                return None
+            src_raw = ei[0]
+            dst_raw = ei[1]
+            in_range = (src_raw >= 0) & (src_raw < seq_len) & (dst_raw >= 0) & (dst_raw < seq_len)
+            src = src_raw[in_range]
+            dst = dst_raw[in_range]
+            ids = edge_type_ids[:, in_range]
+            if src.numel() > 0:
+                edge_valid = valid[:, src] & valid[:, dst]
+                batch_idx = torch.arange(batch_size, device=device).unsqueeze(1).expand(-1, src.numel())
+                src_b = src.unsqueeze(0).expand(batch_size, -1)
+                dst_b = dst.unsqueeze(0).expand(batch_size, -1)
+                bias = CrossAttention._edge_type_bias_from_ids(ids, dtype=dtype)
+                edge_bias[batch_idx[edge_valid], src_b[edge_valid], dst_b[edge_valid]] = bias[edge_valid]
+                if force_undirected:
+                    edge_bias[batch_idx[edge_valid], dst_b[edge_valid], src_b[edge_valid]] = bias[edge_valid]
+        elif edge_index.dim() == 3:
+            ei = edge_index.to(device=device, dtype=torch.long)
+            if int(ei.shape[1]) != 2:
+                raise ValueError(f"CrossAttention edge_index must have shape [B,2,E], got {tuple(ei.shape)}.")
+            if int(ei.shape[0]) == 1 and batch_size > 1:
+                ei = ei.expand(batch_size, -1, -1)
+            if int(ei.shape[0]) != batch_size:
+                raise ValueError(
+                    f"CrossAttention edge_index batch size {int(ei.shape[0])} does not match context batch {batch_size}."
+                )
+            edge_type_ids = CrossAttention._edge_attr_type_ids(
+                edge_attr,
+                batch_size=batch_size,
+                num_edges=int(ei.shape[2]),
+                device=device,
+            )
+            if edge_type_ids is None:
+                return None
+            src_raw = ei[:, 0]
+            dst_raw = ei[:, 1]
+            in_range = (src_raw >= 0) & (src_raw < seq_len) & (dst_raw >= 0) & (dst_raw < seq_len)
+            src = src_raw.clamp(0, max(0, seq_len - 1))
+            dst = dst_raw.clamp(0, max(0, seq_len - 1))
+            edge_valid = in_range & valid.gather(1, src) & valid.gather(1, dst)
+            batch_idx = torch.arange(batch_size, device=device).unsqueeze(1).expand_as(src)
+            bias = CrossAttention._edge_type_bias_from_ids(edge_type_ids, dtype=dtype)
+            edge_bias[batch_idx[edge_valid], src[edge_valid], dst[edge_valid]] = bias[edge_valid]
+            if force_undirected:
+                edge_bias[batch_idx[edge_valid], dst[edge_valid], src[edge_valid]] = bias[edge_valid]
+        else:
+            raise ValueError(
+                f"CrossAttention edge_index must have shape [2,E] or [B,2,E], got {tuple(edge_index.shape)}."
+            )
+
+        return edge_bias
 
     def _sparse_edge_attention_refine(
         self,
         h: Tensor,
         *,
         edge_index: Tensor,
+        edge_attr: Optional[Tensor],
         valid: Tensor,
+        force_undirected: bool = True,
+        use_edge_semantics: bool = False,
     ) -> Tensor:
         """Sparse topology attention over real edges plus self loops."""
         bsz, seq_len, hidden_dim = h.shape
-        src, dst = self._batched_sparse_edges(
+        src, dst, edge_bias = self._batched_sparse_edges(
             batch_size=bsz,
             seq_len=seq_len,
             edge_index=edge_index,
+            edge_attr=edge_attr,
             valid=valid,
             device=h.device,
+            dtype=h.dtype,
+            force_undirected=force_undirected,
+            use_edge_semantics=use_edge_semantics,
         )
         flat_count = bsz * seq_len
         if src.numel() == 0:
             return h
 
+        topo_heads = self.num_heads if hidden_dim % self.num_heads == 0 else 1
+        topo_head_dim = hidden_dim // topo_heads
         h_flat = h.reshape(flat_count, hidden_dim)
         for q_lin, k_lin, v_lin, o_lin in zip(
             self.topology_gat_q,
@@ -523,14 +741,17 @@ class CrossAttention(nn.Module):
             self.topology_gat_v,
             self.topology_gat_o,
         ):
-            q = q_lin(h_flat)
-            k = k_lin(h_flat)
-            v = v_lin(h_flat)
-            scores = (q[dst] * k[src]).sum(dim=-1) / (q.shape[-1] ** 0.5)
+            q = q_lin(h_flat).reshape(flat_count, topo_heads, topo_head_dim)
+            k = k_lin(h_flat).reshape(flat_count, topo_heads, topo_head_dim)
+            v = v_lin(h_flat).reshape(flat_count, topo_heads, topo_head_dim)
+            scores = (q[dst] * k[src]).sum(dim=-1) / (topo_head_dim ** 0.5)
+            if edge_bias is not None:
+                scores = scores + edge_bias[:, None].to(dtype=scores.dtype)
             attn = pyg_softmax(scores.float(), dst, num_nodes=flat_count).to(dtype=scores.dtype)
             messages = v[src] * attn.unsqueeze(-1)
-            update_flat = torch.zeros_like(h_flat)
-            update_flat.index_add_(0, dst, messages)
+            update_heads = torch.zeros_like(v)
+            update_heads.index_add_(0, dst, messages)
+            update_flat = update_heads.reshape(flat_count, hidden_dim)
             update_flat = o_lin(update_flat)
             h_flat = h_flat + self.dropout(F.gelu(update_flat))
 
@@ -577,6 +798,7 @@ class CrossAttention(nn.Module):
         self,
         context: Tensor,
         edge_index: Optional[Tensor] = None,
+        edge_attr: Optional[Tensor] = None,
         node_mask: Optional[Tensor] = None,
     ) -> Tensor:
         """
@@ -585,6 +807,7 @@ class CrossAttention(nn.Module):
         Args:
             context: [B, L, C]
             edge_index: [2, E] or [B, 2, E]
+            edge_attr: optional edge labels/features [E], [B,E], [E,D], or [B,E,D]
             node_mask: [B, L] optional valid-token mask
         """
         if edge_index is None or context.dim() != 3 or self.topology_refinement_mode == "none":
@@ -597,6 +820,7 @@ class CrossAttention(nn.Module):
             node_mask = node_mask.expand(bsz, -1)
 
         h = refined
+        force_undirected, use_edge_semantics = self._mode_flags(self.topology_refinement_mode)
         if self.topology_refinement_mode == "lightweight":
             norm_adj, valid = self._batched_normalized_adjacency(
                 batch_size=bsz,
@@ -605,18 +829,26 @@ class CrossAttention(nn.Module):
                 node_mask=node_mask,
                 device=context.device,
                 dtype=context.dtype,
+                force_undirected=True,
             )
             neigh = torch.bmm(norm_adj, h)
             update = F.gelu(self.topology_light_self(h) + self.topology_light_neigh(neigh))
             h = h + self.dropout(update)
-        elif self.topology_refinement_mode == "sparse_edge":
+        elif self.topology_refinement_mode.startswith("sparse"):
             valid = self._batched_valid_node_mask(
                 batch_size=bsz,
                 seq_len=seq_len,
                 node_mask=node_mask,
                 device=context.device,
             )
-            h = self._sparse_edge_attention_refine(h, edge_index=edge_index, valid=valid)
+            h = self._sparse_edge_attention_refine(
+                h,
+                edge_index=edge_index,
+                edge_attr=edge_attr,
+                valid=valid,
+                force_undirected=force_undirected,
+                use_edge_semantics=use_edge_semantics,
+            )
         else:
             norm_adj, valid = self._batched_normalized_adjacency(
                 batch_size=bsz,
@@ -625,6 +857,7 @@ class CrossAttention(nn.Module):
                 node_mask=node_mask,
                 device=context.device,
                 dtype=context.dtype,
+                force_undirected=force_undirected,
             )
             attn_mask = norm_adj > 0.0
             graphormer_bias = None
@@ -635,23 +868,40 @@ class CrossAttention(nn.Module):
                     dtype=context.dtype,
                 )
                 attn_mask = valid[:, :, None] & valid[:, None, :]
+            semantic_bias = None
+            if use_edge_semantics:
+                semantic_bias = self._batched_edge_bias_matrix(
+                    batch_size=bsz,
+                    seq_len=seq_len,
+                    edge_index=edge_index,
+                    edge_attr=edge_attr,
+                    valid=valid,
+                    device=context.device,
+                    dtype=context.dtype,
+                    force_undirected=force_undirected,
+                )
+            topo_heads = self.num_heads if _ctx_dim % self.num_heads == 0 else 1
+            topo_head_dim = _ctx_dim // topo_heads
             for q_lin, k_lin, v_lin, o_lin in zip(
                 self.topology_gat_q,
                 self.topology_gat_k,
                 self.topology_gat_v,
                 self.topology_gat_o,
             ):
-                q = q_lin(h)
-                k = k_lin(h)
-                v = v_lin(h)
-                scores = torch.bmm(q, k.transpose(1, 2)) / (q.shape[-1] ** 0.5)
+                q = q_lin(h).reshape(bsz, seq_len, topo_heads, topo_head_dim).transpose(1, 2).contiguous()
+                k = k_lin(h).reshape(bsz, seq_len, topo_heads, topo_head_dim).transpose(1, 2).contiguous()
+                v = v_lin(h).reshape(bsz, seq_len, topo_heads, topo_head_dim).transpose(1, 2).contiguous()
+                scores = torch.matmul(q, k.transpose(-2, -1)) / (topo_head_dim ** 0.5)
                 if graphormer_bias is not None:
-                    scores = scores + graphormer_bias.to(dtype=scores.dtype)
-                scores = scores.masked_fill(~attn_mask, -1.0e4)
+                    scores = scores + graphormer_bias[:, None].to(dtype=scores.dtype)
+                if semantic_bias is not None:
+                    scores = scores + semantic_bias[:, None].to(dtype=scores.dtype)
+                scores = scores.masked_fill(~attn_mask[:, None], -1.0e4)
                 attn = torch.softmax(scores.float(), dim=-1).to(dtype=scores.dtype)
                 attn = torch.nan_to_num(attn, nan=0.0, posinf=0.0, neginf=0.0)
                 attn = self.dropout(attn)
-                update = o_lin(torch.bmm(attn, v))
+                update = torch.matmul(attn, v).transpose(1, 2).reshape(bsz, seq_len, _ctx_dim)
+                update = o_lin(update)
                 h = h + self.dropout(F.gelu(update))
 
         return torch.where(valid[:, :, None], h, refined)
@@ -661,6 +911,7 @@ class CrossAttention(nn.Module):
         x: Tensor,
         context: Tensor,
         edge_index: Optional[Tensor] = None,
+        edge_attr: Optional[Tensor] = None,
         node_mask: Optional[Tensor] = None,
     ) -> Tensor:
         """
@@ -668,6 +919,7 @@ class CrossAttention(nn.Module):
             x: Query [B, H*W, C]
             context: Context [B, context_dim] or [B, L, context_dim]
             edge_index: Optional graph topology for context tokens [2, E] or [B, 2, E]
+            edge_attr: Optional edge labels/features aligned to edge_index
             node_mask: Optional valid-token mask [B, L]
         Returns:
             [B, H*W, C]
@@ -679,7 +931,7 @@ class CrossAttention(nn.Module):
         # Handle 2D context
         if context.dim() == 2:
             context = context.unsqueeze(1)
-        context = self._refine_context_topology(context, edge_index=edge_index, node_mask=node_mask)
+        context = self._refine_context_topology(context, edge_index=edge_index, edge_attr=edge_attr, node_mask=node_mask)
         context = self.norm_context(context)
         
         q = self.q(x).reshape(B, N, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
@@ -883,6 +1135,7 @@ class AttentionBlock(nn.Module):
         x: Tensor,
         context: Tensor,
         context_edge_index: Optional[Tensor] = None,
+        context_edge_attr: Optional[Tensor] = None,
         context_node_mask: Optional[Tensor] = None,
         spatial_graph_data: Optional[Dict[str, Tensor]] = None,
     ) -> Tensor:
@@ -903,6 +1156,7 @@ class AttentionBlock(nn.Module):
         
         cross_context = context
         cross_edge_index = context_edge_index
+        cross_edge_attr = context_edge_attr
         cross_node_mask = context_node_mask
         use_generic_cross_attention = True
         if spatial_graph_data and context.dim() == 3:
@@ -914,16 +1168,18 @@ class AttentionBlock(nn.Module):
                 else:
                     use_generic_cross_attention = False
                 cross_edge_index = None
+                cross_edge_attr = None
                 cross_node_mask = None
 
         # Cross-attention with context
         if use_generic_cross_attention:
-            x_flat = x_flat + self.cross_attn(
-                x_flat,
-                cross_context,
-                edge_index=cross_edge_index,
-                node_mask=cross_node_mask,
-            )
+            cross_kwargs: Dict[str, Optional[Tensor]] = {
+                "edge_index": cross_edge_index,
+                "node_mask": cross_node_mask,
+            }
+            if cross_edge_attr is not None:
+                cross_kwargs["edge_attr"] = cross_edge_attr
+            x_flat = x_flat + self.cross_attn(x_flat, cross_context, **cross_kwargs)
 
         x = x_flat.permute(0, 2, 1).reshape(B, C, H, W)
         if spatial_graph_data:
@@ -1007,6 +1263,7 @@ class DownBlock(nn.Module):
         t_emb: Tensor, 
         context: Tensor,
         context_edge_index: Optional[Tensor] = None,
+        context_edge_attr: Optional[Tensor] = None,
         context_node_mask: Optional[Tensor] = None,
         spatial_graph_data: Optional[Dict[str, Tensor]] = None,
     ) -> Tuple[Tensor, List[Tensor]]:
@@ -1033,6 +1290,7 @@ class DownBlock(nn.Module):
                             h,
                             ctx,
                             context_edge_index=context_edge_index,
+                            context_edge_attr=context_edge_attr,
                             context_node_mask=context_node_mask,
                             spatial_graph_data=spatial_graph_data,
                         ),
@@ -1045,6 +1303,7 @@ class DownBlock(nn.Module):
                         x,
                         context,
                         context_edge_index=context_edge_index,
+                        context_edge_attr=context_edge_attr,
                         context_node_mask=context_node_mask,
                         spatial_graph_data=spatial_graph_data,
                     )
@@ -1135,6 +1394,7 @@ class UpBlock(nn.Module):
         t_emb: Tensor, 
         context: Tensor,
         context_edge_index: Optional[Tensor] = None,
+        context_edge_attr: Optional[Tensor] = None,
         context_node_mask: Optional[Tensor] = None,
         spatial_graph_data: Optional[Dict[str, Tensor]] = None,
     ) -> Tensor:
@@ -1165,6 +1425,7 @@ class UpBlock(nn.Module):
                             h,
                             ctx,
                             context_edge_index=context_edge_index,
+                            context_edge_attr=context_edge_attr,
                             context_node_mask=context_node_mask,
                             spatial_graph_data=spatial_graph_data,
                         ),
@@ -1177,6 +1438,7 @@ class UpBlock(nn.Module):
                         x,
                         context,
                         context_edge_index=context_edge_index,
+                        context_edge_attr=context_edge_attr,
                         context_node_mask=context_node_mask,
                         spatial_graph_data=spatial_graph_data,
                     )
@@ -1339,6 +1601,7 @@ class UNetDenoiser(nn.Module):
         t: Tensor, 
         context: Tensor,
         context_edge_index: Optional[Tensor] = None,
+        context_edge_attr: Optional[Tensor] = None,
         context_node_mask: Optional[Tensor] = None,
         spatial_graph_data: Optional[Dict[str, Tensor]] = None,
     ) -> Tensor:
@@ -1367,6 +1630,7 @@ class UNetDenoiser(nn.Module):
                 t_emb,
                 context,
                 context_edge_index=context_edge_index,
+                context_edge_attr=context_edge_attr,
                 context_node_mask=context_node_mask,
                 spatial_graph_data=spatial_graph_data,
             )
@@ -1385,6 +1649,7 @@ class UNetDenoiser(nn.Module):
                     latent,
                     ctx,
                     context_edge_index=context_edge_index,
+                    context_edge_attr=context_edge_attr,
                     context_node_mask=context_node_mask,
                     spatial_graph_data=spatial_graph_data,
                 ),
@@ -1404,6 +1669,7 @@ class UNetDenoiser(nn.Module):
                 h,
                 context,
                 context_edge_index=context_edge_index,
+                context_edge_attr=context_edge_attr,
                 context_node_mask=context_node_mask,
                 spatial_graph_data=spatial_graph_data,
             )
@@ -1417,6 +1683,7 @@ class UNetDenoiser(nn.Module):
                 t_emb,
                 context,
                 context_edge_index=context_edge_index,
+                context_edge_attr=context_edge_attr,
                 context_node_mask=context_node_mask,
                 spatial_graph_data=spatial_graph_data,
             )
@@ -1655,6 +1922,7 @@ class DiTDenoiser(nn.Module):
         t: Tensor,
         context: Tensor,
         context_edge_index: Optional[Tensor] = None,
+        context_edge_attr: Optional[Tensor] = None,
         context_node_mask: Optional[Tensor] = None,
         spatial_graph_data: Optional[Dict[str, Tensor]] = None,
     ) -> Tensor:
@@ -1686,6 +1954,7 @@ class DiTDenoiser(nn.Module):
             context_tokens = self.context_topology_refiner._refine_context_topology(
                 context_tokens,
                 edge_index=context_edge_index,
+                edge_attr=context_edge_attr,
                 node_mask=context_node_mask,
             )
         cond = self.time_embed(t).to(dtype=tokens.dtype) + self.context_proj(pooled_context)
@@ -2726,17 +2995,24 @@ class LatentDiffusionModel(nn.Module):
         self,
         context: Tensor,
         graph_data: Optional[Dict[str, Tensor]] = None,
-    ) -> Tuple[Optional[Tensor], Optional[Tensor]]:
+    ) -> Tuple[Optional[Tensor], Optional[Tensor], Optional[Tensor]]:
         """Prepare topology tensors for context-token cross-attention refinement."""
         if graph_data is None or context.dim() != 3:
-            return None, None
+            return None, None, None
 
         edge_index = graph_data.get("edge_index") if isinstance(graph_data, dict) else None
         if not isinstance(edge_index, torch.Tensor):
-            return None, None
+            return None, None, None
 
         seq_len = int(context.shape[1])
         adjusted = edge_index.to(context.device)
+        edge_attr = graph_data.get("edge_attr") if isinstance(graph_data, dict) else None
+        if not isinstance(edge_attr, torch.Tensor):
+            edge_attr = graph_data.get("edge_features") if isinstance(graph_data, dict) else None
+        if isinstance(edge_attr, torch.Tensor):
+            edge_attr = edge_attr.to(context.device)
+        else:
+            edge_attr = None
 
         def _batched_tensor(name: str, value: Optional[Tensor], *, min_dim: int = 3) -> Optional[Tensor]:
             if not isinstance(value, torch.Tensor):
@@ -2795,7 +3071,7 @@ class LatentDiffusionModel(nn.Module):
                     )
                 node_mask = F.pad(node_mask, (0, seq_len - int(node_mask.shape[1])), value=0)
 
-        return adjusted, node_mask
+        return adjusted, edge_attr, node_mask
 
     def _extract_spatial_graph_context(
         self,
@@ -2964,9 +3240,9 @@ class LatentDiffusionModel(nn.Module):
         redundant extraction at every sampling step.
         """
         if cached_topology is not None:
-            context_edge_index, context_node_mask = cached_topology
+            context_edge_index, context_edge_attr, context_node_mask = cached_topology
         else:
-            context_edge_index, context_node_mask = self._extract_context_topology(context, graph_data)
+            context_edge_index, context_edge_attr, context_node_mask = self._extract_context_topology(context, graph_data)
         
         if cached_spatial is not None:
             spatial_graph_data = cached_spatial
@@ -2976,6 +3252,9 @@ class LatentDiffusionModel(nn.Module):
         context = self._cast_tensor_for_sampling(context, device=x_t.device, dtype=x_t.dtype)
         context_edge_index = self._cast_tensor_for_sampling(
             context_edge_index, device=x_t.device, dtype=x_t.dtype
+        )
+        context_edge_attr = self._cast_tensor_for_sampling(
+            context_edge_attr, device=x_t.device, dtype=x_t.dtype
         )
         context_node_mask = self._cast_tensor_for_sampling(
             context_node_mask, device=x_t.device, dtype=x_t.dtype
@@ -2990,6 +3269,7 @@ class LatentDiffusionModel(nn.Module):
             t,
             context,
             context_edge_index=context_edge_index,
+            context_edge_attr=context_edge_attr,
             context_node_mask=context_node_mask,
             spatial_graph_data=spatial_graph_data,
         )
@@ -3012,6 +3292,7 @@ class LatentDiffusionModel(nn.Module):
                         t,
                         context,
                         context_edge_index=context_edge_index,
+                        context_edge_attr=context_edge_attr,
                         context_node_mask=context_node_mask,
                         spatial_graph_data=spatial_graph_data,
                     )
@@ -3748,7 +4029,7 @@ class LatentDiffusionModel(nn.Module):
                 raise RuntimeError("Spatial alignment was requested, but the denoiser has no SpatialGraphConditioner modules.")
 
         # Predict
-        context_edge_index, context_node_mask = self._extract_context_topology(context, graph_data)
+        context_edge_index, context_edge_attr, context_node_mask = self._extract_context_topology(context, graph_data)
         spatial_graph_data = self._extract_spatial_graph_context(context, graph_data)
         try:
             prediction = self.denoiser(
@@ -3756,6 +4037,7 @@ class LatentDiffusionModel(nn.Module):
                 t,
                 context,
                 context_edge_index=context_edge_index,
+                context_edge_attr=context_edge_attr,
                 context_node_mask=context_node_mask,
                 spatial_graph_data=spatial_graph_data,
             )
@@ -3869,16 +4151,17 @@ class LatentDiffusionModel(nn.Module):
             if updated <= 0:
                 raise RuntimeError("Spatial alignment was requested, but the denoiser has no SpatialGraphConditioner modules.")
 
-        context_edge_index, context_node_mask = self._extract_context_topology(context, graph_data)
+        context_edge_index, context_edge_attr, context_node_mask = self._extract_context_topology(context, graph_data)
         spatial_graph_data = self._extract_spatial_graph_context(context, graph_data)
         try:
             prediction = self.denoiser(
                 x_t,
                 t,
-                context,
-                context_edge_index=context_edge_index,
-                context_node_mask=context_node_mask,
-                spatial_graph_data=spatial_graph_data,
+            context,
+            context_edge_index=context_edge_index,
+            context_edge_attr=context_edge_attr,
+            context_node_mask=context_node_mask,
+            spatial_graph_data=spatial_graph_data,
             )
         except Exception:
             if use_spatial_alignment:
@@ -3995,13 +4278,14 @@ class LatentDiffusionModel(nn.Module):
         else:
             raise ValueError(f"objective must be 'diffusion' or 'flow_matching', got {objective!r}.")
 
-        context_edge_index, context_node_mask = self._extract_context_topology(context, graph_data)
+        context_edge_index, context_edge_attr, context_node_mask = self._extract_context_topology(context, graph_data)
         spatial_graph_data = self._extract_spatial_graph_context(context, graph_data)
         prediction = self.denoiser(
             x_t,
             timesteps,
             context,
             context_edge_index=context_edge_index,
+            context_edge_attr=context_edge_attr,
             context_node_mask=context_node_mask,
             spatial_graph_data=spatial_graph_data,
         )

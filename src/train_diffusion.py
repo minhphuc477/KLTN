@@ -192,7 +192,7 @@ class DiffusionTrainingConfig:
         condition_use_rrwp_edge_features: bool = True,
         num_timesteps: int = 1000,
         schedule_type: str = "cosine",
-        topology_refinement_mode: str = "gat2",  # none | lightweight | sparse_edge | gat2 | graphormer
+        topology_refinement_mode: str = "gat2",  # none | lightweight | sparse*/gat2* | graphormer
         attention_mode: str = "softmax",
         topology_conditioning_mode: str = "additive",
         hedgehog_feature_dim: int = 32,
@@ -409,10 +409,23 @@ class DiffusionTrainingConfig:
         trm = str(topology_refinement_mode).strip().lower()
         if trm == "upgraded":
             trm = "gat2"
-        if trm not in {"none", "lightweight", "sparse_edge", "gat2", "graphormer"}:
+        allowed_topology_modes = {
+            "none",
+            "lightweight",
+            "sparse_edge",
+            "sparse_directed",
+            "sparse_semantic",
+            "sparse_directed_semantic",
+            "gat2",
+            "gat2_directed",
+            "gat2_semantic",
+            "gat2_directed_semantic",
+            "graphormer",
+        }
+        if trm not in allowed_topology_modes:
             raise ValueError(
                 f"Invalid topology_refinement_mode={topology_refinement_mode!r}. "
-                "Expected 'none', 'lightweight', 'sparse_edge', 'gat2', or 'graphormer'."
+                "Expected a supported topology refinement ablation."
             )
         self.topology_refinement_mode = trm
         attn_mode = str(attention_mode).strip().lower()
@@ -3031,10 +3044,15 @@ class DiffusionTrainer:
                 x_t_logic = self.diffusion.q_sample(z_0, t_logic, noise_logic)
 
                 # Predict noise/velocity and convert to predicted clean latent x0.
-                context_edge_index, context_node_mask = self.diffusion._extract_context_topology(
+                topology_tensors = self.diffusion._extract_context_topology(
                     conditioning,
                     diffusion_graph_data,
                 )
+                if len(topology_tensors) == 2:
+                    context_edge_index, context_node_mask = topology_tensors
+                    context_edge_attr = None
+                else:
+                    context_edge_index, context_edge_attr, context_node_mask = topology_tensors
                 spatial_graph_data = self.diffusion._extract_spatial_graph_context(
                     conditioning,
                     diffusion_graph_data,
@@ -3045,6 +3063,7 @@ class DiffusionTrainer:
                         t_logic,
                         conditioning,
                         context_edge_index=context_edge_index,
+                        context_edge_attr=context_edge_attr,
                         context_node_mask=context_node_mask,
                         spatial_graph_data=spatial_graph_data,
                     )
@@ -4385,7 +4404,12 @@ def main():
         '--topology-refinement-mode',
         type=str,
         default=None,
-        choices=['none', 'lightweight', 'sparse_edge', 'gat2', 'graphormer', 'upgraded'],
+        choices=[
+            'none', 'lightweight',
+            'sparse_edge', 'sparse_directed', 'sparse_semantic', 'sparse_directed_semantic',
+            'gat2', 'gat2_directed', 'gat2_semantic', 'gat2_directed_semantic',
+            'graphormer', 'upgraded',
+        ],
         help='Topology preprocessing inside diffusion cross-attention (gat2 is explicit 2-layer GAT).',
     )
     parser.add_argument(

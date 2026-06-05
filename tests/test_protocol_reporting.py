@@ -92,6 +92,8 @@ def test_core_ablation_set_includes_sparse_edge_topology_variant():
 
     assert by_name["FULL"].topology_refinement_mode == "gat2"
     assert by_name["TOPO_SPARSE_EDGE"].topology_refinement_mode == "sparse_edge"
+    assert by_name["TOPO_SPARSE_DIRECTED"].topology_refinement_mode == "sparse_directed"
+    assert by_name["TOPO_SPARSE_SEMANTIC"].topology_refinement_mode == "sparse_directed_semantic"
 
 
 def test_ablation_summary_separates_failure_rate_from_conditional_solvability():

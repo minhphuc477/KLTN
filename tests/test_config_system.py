@@ -105,15 +105,15 @@ def test_config_accepts_graphormer_topology_refinement_ablation(tmp_path: Path):
     assert kwargs["topology_refinement_mode"] == "graphormer"
 
 
-def test_config_accepts_sparse_edge_topology_refinement_ablation(tmp_path: Path):
-    cfg_path = tmp_path / "sparse_edge.yaml"
-    _write_yaml(cfg_path, {"diffusion": {"topology_refinement_mode": "sparse_edge"}})
+def test_config_accepts_sparse_semantic_topology_refinement_ablation(tmp_path: Path):
+    cfg_path = tmp_path / "sparse_semantic.yaml"
+    _write_yaml(cfg_path, {"diffusion": {"topology_refinement_mode": "sparse_directed_semantic"}})
 
     resolved = merge_config(yaml_path=str(cfg_path), cli_overrides=None)
     kwargs = diffusion_training_kwargs_from_resolved_config(resolved)
 
-    assert resolved["diffusion"]["topology_refinement_mode"] == "sparse_edge"
-    assert kwargs["topology_refinement_mode"] == "sparse_edge"
+    assert resolved["diffusion"]["topology_refinement_mode"] == "sparse_directed_semantic"
+    assert kwargs["topology_refinement_mode"] == "sparse_directed_semantic"
 
 
 def test_config_accepts_masked_room_context_attention_ablation(tmp_path: Path):
