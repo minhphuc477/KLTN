@@ -21,7 +21,7 @@ import math
 from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Dict, Any, Tuple, List, Set
+from typing import Optional, Dict, Any, Tuple, List, Set, Mapping
 
 import numpy as np
 import torch
@@ -1275,6 +1275,7 @@ class DiffusionTrainer:
         # Metrics tracking
         self.epoch = 0
         self.global_step = 0
+        self._accumulation_micro_steps = 0
         self._estimated_total_steps = self._default_estimated_total_steps()
         self._apply_lr_warmup(completed_steps=0)
         
@@ -2792,6 +2793,9 @@ class DiffusionTrainer:
         """Fallback schedule length used before a dataloader length is known."""
         total_epochs = int(max(1, int(getattr(self.config, "epochs", 1))))
         fallback_steps_per_epoch = int(max(1, int(getattr(self.config, "estimated_steps_per_epoch", 100))))
+        fallback_steps_per_epoch = int(
+            max(1, math.ceil(fallback_steps_per_epoch / float(self._gradient_accumulation_steps())))
+        )
         return int(max(1, total_epochs * fallback_steps_per_epoch))
 
     def _warmup_scale(self, warmup_epochs: int, completed_steps: int) -> float:
@@ -2920,6 +2924,7 @@ class DiffusionTrainer:
         include_logic_loss: bool = True,
         logic_graph_data: Optional[dict] = None,
         diffusion_graph_data: Optional[dict] = None,
+        force_optimizer_step: bool = False,
     ) -> Dict[str, float]:
         """
         Single training step.
@@ -2966,7 +2971,7 @@ class DiffusionTrainer:
         with self._autocast_context():
             diffusion_loss = self._diffusion_objective_loss(z_0, conditioning, diffusion_graph_data)
         if not self._tensor_is_finite(diffusion_loss):
-            self.optimizer.zero_grad(set_to_none=True)
+            self._reset_gradient_accumulation()
             self._warn_nonfinite(
                 "diffusion_loss",
                 "Diffusion training: non-finite diffusion loss detected; skipping optimizer step for this batch.",
@@ -3084,7 +3089,7 @@ class DiffusionTrainer:
             + float(getattr(self.config, "alpha_wfc_pseudo", 0.0)) * wfc_pseudo_loss
         )
         if not self._tensor_is_finite(total_loss):
-            self.optimizer.zero_grad(set_to_none=True)
+            self._reset_gradient_accumulation()
             self._warn_nonfinite(
                 "total_loss",
                 "Diffusion training: non-finite total loss detected; skipping optimizer step for this batch.",
@@ -3107,12 +3112,43 @@ class DiffusionTrainer:
             metrics.update(self._vqvae_codebook_stats())
             return metrics
         
-        # Backward
-        self.optimizer.zero_grad(set_to_none=True)
-        if self._accelerator is not None:
-            self._accelerator.backward(total_loss)
-        else:
-            total_loss.backward()
+        # Backward / accumulation. global_step counts optimizer updates, not
+        # dataloader micro-batches.
+        accum_steps = self._gradient_accumulation_steps()
+        if self._accumulated_micro_steps() == 0:
+            self.optimizer.zero_grad(set_to_none=True)
+        self._backward_loss(total_loss)
+        self._accumulation_micro_steps = self._accumulated_micro_steps() + 1
+        micro_steps = self._accumulated_micro_steps()
+        should_step_optimizer = bool(force_optimizer_step or micro_steps >= accum_steps)
+
+        graph_skip_reason = str(logic_info.get('global_graph_skipped', '') or '')
+        graph_loss_attempted = bool(logic_enabled and logic_loss_weight > 0.0)
+        metrics = {
+            'loss': total_loss.item(),
+            'diffusion_loss': diffusion_loss.item(),
+            'logic_loss': logic_loss.item(),
+            'logic_tile_loss': logic_tile_loss.item(),
+            'wfc_pseudo_loss': wfc_pseudo_mean_loss.item(),
+            'wfc_pseudo_loss_sum': float(wfc_pseudo_mean_loss.detach().item()) * float(wfc_pseudo_samples),
+            'wfc_pseudo_loss_contribution': wfc_pseudo_loss.item(),
+            'wfc_pseudo_samples': float(wfc_pseudo_samples),
+            'logic_tile_accuracy': logic_tile_accuracy.item(),
+            'solvability_proxy': solvability_proxy.item(),
+            'solvability': solvability_proxy.item(),
+            'logic_loss_mode_predicted': 1.0 if self.config.logic_loss_mode == 'predicted_latent' else 0.0,
+            'logic_global_graph_loss_skipped': 1.0 if graph_loss_attempted and graph_skip_reason else 0.0,
+            'logic_global_graph_supervised': 1.0 if graph_loss_attempted and not graph_skip_reason else 0.0,
+            'logic_global_graph_node_coverage': float(logic_info.get('global_graph_node_coverage', 0.0) or 0.0),
+            'gradient_accumulation_steps': float(accum_steps),
+            'gradient_accumulation_micro_steps': float(micro_steps),
+            'optimizer_step': 0.0,
+        }
+        if not should_step_optimizer:
+            metrics.update(self._vqvae_codebook_stats())
+            return metrics
+
+        self._unscale_gradients_if_needed()
         modules_for_average = [self.diffusion, self.condition_encoder]
         if bool(getattr(self.config, "logic_net_trainable", True)):
             modules_for_average.append(self.logic_net)
@@ -3120,30 +3156,15 @@ class DiffusionTrainer:
             tuple(modules_for_average),
             context=getattr(self, "distributed_context", None),
         )
+        self._scale_accumulated_gradients(micro_steps)
         if not self._gradients_are_finite():
-            self.optimizer.zero_grad(set_to_none=True)
+            self._reset_gradient_accumulation()
             self._warn_nonfinite(
                 "gradient",
                 "Diffusion training: non-finite gradients detected; skipping optimizer step for this batch.",
             )
-            metrics = {
-                'loss': float(total_loss.detach().item()),
-                'diffusion_loss': float(diffusion_loss.detach().item()),
-                'logic_loss': float(logic_loss.detach().item()) if self._tensor_is_finite(logic_loss) else 0.0,
-                'logic_tile_loss': float(logic_tile_loss.detach().item()) if self._tensor_is_finite(logic_tile_loss) else 0.0,
-                'wfc_pseudo_loss': float(wfc_pseudo_mean_loss.detach().item()) if self._tensor_is_finite(wfc_pseudo_mean_loss) else 0.0,
-                'wfc_pseudo_loss_sum': (
-                    float(wfc_pseudo_mean_loss.detach().item()) * float(wfc_pseudo_samples)
-                    if self._tensor_is_finite(wfc_pseudo_mean_loss) else 0.0
-                ),
-                'wfc_pseudo_loss_contribution': float(wfc_pseudo_loss.detach().item()) if self._tensor_is_finite(wfc_pseudo_loss) else 0.0,
-                'wfc_pseudo_samples': float(wfc_pseudo_samples),
-                'logic_tile_accuracy': float(logic_tile_accuracy.detach().item()) if self._tensor_is_finite(logic_tile_accuracy) else 0.0,
-                'solvability_proxy': float(solvability_proxy.detach().item()) if self._tensor_is_finite(solvability_proxy) else 0.0,
-                'solvability': float(solvability_proxy.detach().item()) if self._tensor_is_finite(solvability_proxy) else 0.0,
-                'logic_loss_mode_predicted': 1.0 if self.config.logic_loss_mode == 'predicted_latent' else 0.0,
-                'skipped_nonfinite_batch': 1.0,
-            }
+            metrics['skipped_nonfinite_batch'] = 1.0
+            metrics['gradient_accumulation_micro_steps'] = 0.0
             metrics.update(self._vqvae_codebook_stats())
             return metrics
         grad_clip_norm = float(max(0.0, float(getattr(self.config, "grad_clip_norm", 1.0))))
@@ -3163,35 +3184,20 @@ class DiffusionTrainer:
                 if bool(getattr(self.config, "logic_net_trainable", True)):
                     grad_norms.append(torch.nn.utils.clip_grad_norm_(self.logic_net.parameters(), max_norm=grad_clip_norm))
             if not all(self._tensor_is_finite(norm) for norm in grad_norms):
-                self.optimizer.zero_grad(set_to_none=True)
+                self._reset_gradient_accumulation()
                 self._warn_nonfinite(
                     "gradient_norm",
                     "Diffusion training: non-finite gradient norm detected after clipping; skipping optimizer step for this batch.",
                 )
-                metrics = {
-                    'loss': float(total_loss.detach().item()),
-                    'diffusion_loss': float(diffusion_loss.detach().item()),
-                    'logic_loss': float(logic_loss.detach().item()) if self._tensor_is_finite(logic_loss) else 0.0,
-                    'logic_tile_loss': float(logic_tile_loss.detach().item()) if self._tensor_is_finite(logic_tile_loss) else 0.0,
-                    'wfc_pseudo_loss': float(wfc_pseudo_mean_loss.detach().item()) if self._tensor_is_finite(wfc_pseudo_mean_loss) else 0.0,
-                    'wfc_pseudo_loss_sum': (
-                        float(wfc_pseudo_mean_loss.detach().item()) * float(wfc_pseudo_samples)
-                        if self._tensor_is_finite(wfc_pseudo_mean_loss) else 0.0
-                    ),
-                    'wfc_pseudo_loss_contribution': float(wfc_pseudo_loss.detach().item()) if self._tensor_is_finite(wfc_pseudo_loss) else 0.0,
-                    'wfc_pseudo_samples': float(wfc_pseudo_samples),
-                    'logic_tile_accuracy': float(logic_tile_accuracy.detach().item()) if self._tensor_is_finite(logic_tile_accuracy) else 0.0,
-                    'solvability_proxy': float(solvability_proxy.detach().item()) if self._tensor_is_finite(solvability_proxy) else 0.0,
-                    'solvability': float(solvability_proxy.detach().item()) if self._tensor_is_finite(solvability_proxy) else 0.0,
-                    'logic_loss_mode_predicted': 1.0 if self.config.logic_loss_mode == 'predicted_latent' else 0.0,
-                    'skipped_nonfinite_batch': 1.0,
-                }
+                metrics['skipped_nonfinite_batch'] = 1.0
+                metrics['gradient_accumulation_micro_steps'] = 0.0
                 metrics.update(self._vqvae_codebook_stats())
                 return metrics
-        self.optimizer.step()
+        self._optimizer_step_with_scaler()
         
         # --- Phase 4A: Update EMA model weights ---
         self._update_ema()
+        self._reset_gradient_accumulation()
 
         self.global_step += 1
         self._apply_lr_warmup(completed_steps=self.global_step)
@@ -3203,26 +3209,9 @@ class DiffusionTrainer:
             estimated_total_steps = max(1, getattr(self, '_estimated_total_steps', default_total_steps))
             progress = min(1.0, self.global_step / estimated_total_steps)
             self.logic_net.anneal_temperature(progress)
-        
-        graph_skip_reason = str(logic_info.get('global_graph_skipped', '') or '')
-        graph_loss_attempted = bool(logic_enabled and logic_loss_weight > 0.0)
-        metrics = {
-            'loss': total_loss.item(),
-            'diffusion_loss': diffusion_loss.item(),
-            'logic_loss': logic_loss.item(),
-            'logic_tile_loss': logic_tile_loss.item(),
-            'wfc_pseudo_loss': wfc_pseudo_mean_loss.item(),
-            'wfc_pseudo_loss_sum': float(wfc_pseudo_mean_loss.detach().item()) * float(wfc_pseudo_samples),
-            'wfc_pseudo_loss_contribution': wfc_pseudo_loss.item(),
-            'wfc_pseudo_samples': float(wfc_pseudo_samples),
-            'logic_tile_accuracy': logic_tile_accuracy.item(),
-            'solvability_proxy': solvability_proxy.item(),
-            'solvability': solvability_proxy.item(),
-            'logic_loss_mode_predicted': 1.0 if self.config.logic_loss_mode == 'predicted_latent' else 0.0,
-            'logic_global_graph_loss_skipped': 1.0 if graph_loss_attempted and graph_skip_reason else 0.0,
-            'logic_global_graph_supervised': 1.0 if graph_loss_attempted and not graph_skip_reason else 0.0,
-            'logic_global_graph_node_coverage': float(logic_info.get('global_graph_node_coverage', 0.0) or 0.0),
-        }
+
+        metrics['optimizer_step'] = 1.0
+        metrics['gradient_accumulation_micro_steps'] = 0.0
         metrics.update(self._vqvae_codebook_stats())
         return metrics
 
@@ -3386,9 +3375,10 @@ class DiffusionTrainer:
         }
         num_batches = 0
         
-        # DESIGN-08: Compute actual total training steps for temperature annealing
+        # DESIGN-08: Compute actual optimizer steps for temperature annealing
         total_epochs = int(getattr(self.config, "epochs", self.epoch + 1))
-        self._estimated_total_steps = max(1, total_epochs * len(dataloader))
+        steps_per_epoch = int(math.ceil(len(dataloader) / float(self._gradient_accumulation_steps())))
+        self._estimated_total_steps = max(1, total_epochs * max(1, steps_per_epoch))
         
         include_logic = bool(getattr(self.config, "logic_net_enabled", True)) and self.epoch >= self.config.warmup_epochs
         if sampler is not None and hasattr(sampler, "set_epoch"):
@@ -3443,12 +3433,14 @@ class DiffusionTrainer:
                 if include_logic:
                     logic_graph_data = diffusion_graph_data
             
+            is_last_batch = int(batch_idx) + 1 >= len(dataloader)
             metrics = self.train_step(
                 real_maps,
                 conditioning=conditioning,
                 include_logic_loss=include_logic,
                 logic_graph_data=logic_graph_data,
                 diffusion_graph_data=diffusion_graph_data,
+                force_optimizer_step=is_last_batch,
             )
             
             for k, v in metrics.items():
@@ -3778,6 +3770,23 @@ class DiffusionTrainer:
             payload['logic_net_state_dict'] = self.logic_net.state_dict()
         return payload
 
+    @staticmethod
+    def _prefixed_safetensors_state(prefix: str, state_dict: Mapping[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        return {
+            f"{prefix}.{key}": value.detach().cpu()
+            for key, value in state_dict.items()
+            if isinstance(value, torch.Tensor)
+        }
+
+    @staticmethod
+    def _extract_prefixed_safetensors_state(payload: Mapping[str, torch.Tensor], prefix: str) -> Dict[str, torch.Tensor]:
+        stem = f"{prefix}."
+        return {
+            key[len(stem):]: value
+            for key, value in payload.items()
+            if isinstance(key, str) and key.startswith(stem)
+        }
+
     def save_checkpoint(self, path: str, metrics: Optional[Dict] = None, *, include_optimizer: bool = True):
         """Save training or inference checkpoint."""
         checkpoint = (
@@ -3786,18 +3795,26 @@ class DiffusionTrainer:
             else self._build_inference_checkpoint_payload(metrics)
         )
         atomic_torch_save(checkpoint, path)
-        # Also write a safetensors sidecar with the core model weights when available
+        safetensors_path: Optional[Path] = None
+        # Also write a tensor-only safetensors sidecar with deployable weights.
         if _HAS_SAFETENSORS:
             try:
-                st_path = Path(path).with_suffix('.safetensors')
-                diffusion_state_dict = self.diffusion.state_dict()
-                _save_safetensors(
-                    {f"diffusion.{k}": v for k, v in diffusion_state_dict.items()},
-                    str(st_path),
+                safetensors_path = Path(path).with_suffix('.safetensors')
+                safetensors_payload: Dict[str, torch.Tensor] = {}
+                safetensors_payload.update(self._prefixed_safetensors_state("diffusion", self.diffusion.state_dict()))
+                safetensors_payload.update(
+                    self._prefixed_safetensors_state("ema_diffusion", self.ema_diffusion.state_dict())
                 )
-                logger.debug("Saved safetensors sidecar: %s", st_path)
+                safetensors_payload.update(
+                    self._prefixed_safetensors_state("condition_encoder", self.condition_encoder.state_dict())
+                )
+                if bool(getattr(self.config, "logic_net_enabled", True)):
+                    safetensors_payload.update(self._prefixed_safetensors_state("logic_net", self.logic_net.state_dict()))
+                _save_safetensors(safetensors_payload, str(safetensors_path))
+                logger.debug("Saved safetensors sidecar: %s", safetensors_path)
             except Exception as _st_err:  # noqa: BLE001
                 logger.warning("safetensors save failed (%s); .pth checkpoint is intact.", _st_err)
+                safetensors_path = None
         write_checkpoint_metadata(
             path,
             model_type="diffusion_resume" if include_optimizer else "diffusion",
@@ -3824,6 +3841,9 @@ class DiffusionTrainer:
                 "epoch": int(self.epoch),
                 "global_step": int(self.global_step),
                 "checkpoint_kind": "resume" if include_optimizer else "inference",
+                "primary_format": "torch_pth",
+                "safetensors_sidecar": str(safetensors_path.name) if safetensors_path is not None else None,
+                "safetensors_contains_optimizer": False,
                 "contains": (
                     (
                         ["diffusion", "ema_diffusion", "condition_encoder"]
@@ -3844,6 +3864,32 @@ class DiffusionTrainer:
                 ),
             },
         )
+        if safetensors_path is not None:
+            write_checkpoint_metadata(
+                str(safetensors_path),
+                model_type="diffusion_safetensors_inference",
+                architecture={
+                    "latent_dim": int(self.config.latent_dim),
+                    "context_dim": int(self.config.context_dim),
+                    "num_timesteps": int(self.config.num_timesteps),
+                    "schedule_type": str(self.config.schedule_type),
+                    "diffusion_training_objective": str(getattr(self.config, "diffusion_training_objective", "diffusion")),
+                    "denoiser_backbone": str(getattr(self.config, "denoiser_backbone", "unet")),
+                    "num_classes": int(self.config.num_classes),
+                },
+                extra={
+                    "epoch": int(self.epoch),
+                    "global_step": int(self.global_step),
+                    "checkpoint_kind": "inference",
+                    "primary_format": "safetensors",
+                    "contains_optimizer": False,
+                    "contains": (
+                        ["diffusion", "ema_diffusion", "condition_encoder"]
+                        + (["logic_net"] if bool(getattr(self.config, "logic_net_enabled", True)) else [])
+                    ),
+                    "torch_resume_checkpoint": Path(path).name if include_optimizer else None,
+                },
+            )
         log_checkpoint_artifact(
             logger,
             path,
@@ -3853,6 +3899,48 @@ class DiffusionTrainer:
     
     def load_checkpoint(self, path: str):
         """Load training checkpoint."""
+        if str(path).lower().endswith(".safetensors"):
+            if not _HAS_SAFETENSORS:
+                raise ImportError("Loading .safetensors checkpoints requires the safetensors package.")
+            payload = _load_safetensors(path, device=str(self.device))
+            diffusion_state = self._extract_prefixed_safetensors_state(payload, "diffusion")
+            ema_state = self._extract_prefixed_safetensors_state(payload, "ema_diffusion")
+            condition_state = self._extract_prefixed_safetensors_state(payload, "condition_encoder")
+            logic_state = self._extract_prefixed_safetensors_state(payload, "logic_net")
+            for name, state in (
+                ("diffusion", diffusion_state),
+                ("ema_diffusion", ema_state),
+                ("condition_encoder", condition_state),
+                ("logic_net", logic_state),
+            ):
+                if state and not self._state_dict_is_finite(state):
+                    raise ValueError(
+                        f"Checkpoint {path} contains non-finite values in `{name}` and cannot be loaded safely."
+                    )
+            if not diffusion_state or not condition_state:
+                raise ValueError(
+                    f"Safetensors checkpoint {path} must contain at least diffusion.* and condition_encoder.* weights."
+                )
+            self.diffusion.load_state_dict(diffusion_state)
+            self.ema_diffusion.load_state_dict(ema_state or diffusion_state)
+            self.condition_encoder.load_state_dict(condition_state)
+            if logic_state:
+                self.logic_net.load_state_dict(logic_state)
+            metadata = _load_checkpoint_metadata_sidecar(path)
+            extra = dict(metadata.get("extra", {}) or {})
+            self.epoch = int(extra.get("epoch", getattr(self, "epoch", 0)))
+            self.global_step = int(extra.get("global_step", getattr(self, "global_step", 0)))
+            self._reset_gradient_accumulation()
+            self._configure_guidance()
+            self._configure_guidance(self.ema_diffusion)
+            logger.info(
+                "Loaded tensor-only safetensors checkpoint from %s (epoch %d, global_step %d); optimizer/scheduler state was not restored.",
+                path,
+                int(self.epoch),
+                int(self.global_step),
+            )
+            return
+
         checkpoint = safe_torch_load(path, map_location=self.device)
         for key in ('diffusion_state_dict', 'ema_diffusion_state_dict'):
             if key in checkpoint:
@@ -3879,6 +3967,7 @@ class DiffusionTrainer:
         
         self.epoch = checkpoint['epoch']
         self.global_step = checkpoint['global_step']
+        self._reset_gradient_accumulation()
         self.diffusion.load_state_dict(checkpoint['diffusion_state_dict'])
         if 'ema_diffusion_state_dict' in checkpoint:
             self.ema_diffusion.load_state_dict(checkpoint['ema_diffusion_state_dict'])

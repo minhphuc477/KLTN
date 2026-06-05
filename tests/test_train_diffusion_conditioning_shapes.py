@@ -510,8 +510,9 @@ def _make_stub_trainer(context_dim: int = 8) -> DiffusionTrainer:
         include_logic_loss=True,
         logic_graph_data=None,
         diffusion_graph_data=None,
+        force_optimizer_step=False,
     ):
-        _ = (real_maps, include_logic_loss)
+        _ = (real_maps, include_logic_loss, force_optimizer_step)
         trainer.last_train_conditioning_shape = tuple(conditioning.shape)
         trainer.last_train_logic_graph_data = logic_graph_data
         trainer.last_train_diffusion_graph_data = diffusion_graph_data

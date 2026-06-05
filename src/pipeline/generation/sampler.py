@@ -786,7 +786,7 @@ def generate_room(
                 name='block_iv_diffusion_latent',
                 dims=4,
                 batch_dim=1,
-                channel_dim=int(pipeline.diffusion.latent_dim),
+                channel_dim=int(z_latent.shape[1]),
             ),
         )
 

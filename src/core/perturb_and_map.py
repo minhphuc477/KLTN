@@ -120,9 +120,13 @@ class DifferentiablePerturbedAStar(torch.autograd.Function):
         (support,) = ctx.saved_tensors
         if grad_output is None:
             return None, None, None, None, None, None
-        # Lower distances should be achieved by increasing walkability on cells
-        # that the hard solver actually used across perturbed solves.
-        grad_walkability = -grad_output * support
+        # Lower queried distances should be achieved by increasing walkability
+        # on cells that the hard solver actually used across perturbed solves.
+        # grad_output is usually non-zero only at target/goal cells, so using it
+        # elementwise would zero out every intermediate path cell. Route the
+        # per-sample scalar distance signal onto the support tree instead.
+        routed_signal = grad_output.sum(dim=(1, 2, 3), keepdim=True)
+        grad_walkability = -routed_signal * support.unsqueeze(1)
         return grad_walkability, None, None, None, None, None
 
 
