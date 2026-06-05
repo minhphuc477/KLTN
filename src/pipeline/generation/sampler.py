@@ -154,6 +154,7 @@ def generate_room_batch(
         'node_features': graph_data.get('node_features'),
         'edge_index': graph_data.get('edge_index'),
         'edge_features': graph_data.get('edge_features'),
+        'edge_rrwp': graph_data.get('edge_rrwp'),
         'tpe': graph_data.get('tpe'),
         'node_positions': graph_data.get('node_positions'),
         'node_mask': graph_data.get('node_mask'),
@@ -207,6 +208,21 @@ def generate_room_batch(
                 current_node_distance_batch,
                 dim=0,
             )
+
+    B = len(room_ids)
+    if latent_shape_chw is None:
+        latent_shape_chw = (
+            int(pipeline.diffusion.latent_dim),
+            int(DEFAULT_ROOM_LATENT_HW[0]),
+            int(DEFAULT_ROOM_LATENT_HW[1]),
+        )
+
+    latent_shape: Tuple[int, int, int, int] = (
+        B,
+        int(latent_shape_chw[0]),
+        int(latent_shape_chw[1]),
+        int(latent_shape_chw[2]),
+    )
 
     tokens_batch: Optional[torch.Tensor] = None
     if pipeline.room_generator_mode == "discrete_masked":
@@ -281,21 +297,6 @@ def generate_room_batch(
         )
         pipeline.diffusion.cfg_scale = float(guidance_scale)
         logic_guidance_scale = _configure_runtime_logic_guidance(pipeline, logic_guidance_scale)
-
-        B = len(room_ids)
-        if latent_shape_chw is None:
-            latent_shape_chw = (
-                int(pipeline.diffusion.latent_dim),
-                int(DEFAULT_ROOM_LATENT_HW[0]),
-                int(DEFAULT_ROOM_LATENT_HW[1]),
-            )
-
-        latent_shape: Tuple[int, int, int, int] = (
-            B,
-            int(latent_shape_chw[0]),
-            int(latent_shape_chw[1]),
-            int(latent_shape_chw[2]),
-        )
 
         # Verify bucket uniformity for neighbor latent references.
         for inp in per_room_inputs:

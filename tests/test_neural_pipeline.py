@@ -904,6 +904,7 @@ def test_generate_room_batch_stacks_current_node_distance_per_room(monkeypatch, 
             int(prepared.graph_data["node_features"].shape[0]),
             4,
         )
+        assert graph_data.get("edge_rrwp") is prepared.graph_data["edge_rrwp"]
         captured["shape"] = tuple(current_node_distance.shape)
         return torch.zeros(shape, device=pipeline.device)
 
@@ -945,6 +946,51 @@ def test_generate_room_batch_stacks_current_node_distance_per_room(monkeypatch, 
     assert len(room_set.rooms) == len(prepared.mission_graph_physical.nodes())
     assert captured["shape"][1] == len(prepared.graph_data["node_features"])
     assert captured["shape"][2] == 4
+
+
+def test_generate_room_batch_categorical_sampler_uses_shared_latent_shape(monkeypatch, pipeline, simple_graph):
+    """Categorical batch sampling should not depend on diffusion-only branch locals."""
+    prepared = pipeline.prepare_dungeon_generation(
+        mission_graph=simple_graph,
+        generate_topology=False,
+        use_topological_positional_encoding=True,
+    )
+    captured_latents = {}
+
+    def fake_generate_room(**kwargs):
+        room_id = int(kwargs["room_id"])
+        latent = kwargs.get("precomputed_latent")
+        assert isinstance(latent, torch.Tensor)
+        captured_latents[room_id] = tuple(latent.shape)
+        room_grid = np.zeros((ROOM_HEIGHT, ROOM_WIDTH), dtype=np.int32)
+        return RoomGenerationResult(
+            room_id=room_id,
+            room_grid=room_grid,
+            latent=latent.detach().cpu(),
+            neural_grid=room_grid.copy(),
+            was_repaired=False,
+            repair_mask=None,
+            neural_probs=None,
+            metrics={},
+        )
+
+    monkeypatch.setattr(pipeline, "generate_room", fake_generate_room)
+
+    room_set = pipeline.generate_rooms_for_graph(
+        prepared,
+        num_diffusion_steps=1,
+        apply_repair=False,
+        batch_independent_rooms=True,
+        max_batch_size=8,
+        latent_sampler="categorical",
+        categorical_codebook_size=8,
+        seed=123,
+    )
+
+    assert len(room_set.rooms) == len(prepared.mission_graph_physical.nodes())
+    assert set(captured_latents) == set(prepared.mission_graph_physical.nodes())
+    assert all(shape[0] == 1 for shape in captured_latents.values())
+    assert all(shape[-2:] == (4, 3) for shape in captured_latents.values())
 
 
 def test_strict_adjacency_placement_preserves_all_edges(pipeline):
