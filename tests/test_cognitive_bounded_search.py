@@ -21,6 +21,7 @@ from src.simulation.cognitive_bounded_search import (
     BeliefMap,
     VisionSystem,
     WorkingMemory,
+    MemoryItem,
     MemoryItemType,
     TileKnowledge,
     AgentPersona,
@@ -28,6 +29,7 @@ from src.simulation.cognitive_bounded_search import (
     CuriosityHeuristic,
     SafetyHeuristic,
     GoalSeekingHeuristic,
+    SafetyHeuristic,
     solve_with_cbs,
     compare_personas,
 )
@@ -982,6 +984,25 @@ class TestIntegration:
         cbs = CognitiveBoundedSearch(env, persona=AgentPersona.BALANCED)
 
         assert cbs._count_confusion_events([(1, 1)] * 6) == 0
+
+    def test_safety_heuristic_uses_strongest_nearby_threat(self, simple_grid):
+        """Recall order must not hide a more salient nearby threat."""
+        memory = WorkingMemory(capacity=4, decay_rate=1.0)
+        memory.items = [
+            MemoryItem(MemoryItemType.THREAT, position=(1, 3), salience=0.2),
+            MemoryItem(MemoryItemType.THREAT, position=(1, 2), salience=1.0),
+        ]
+        score = SafetyHeuristic().score(
+            current_pos=(1, 1),
+            target_pos=(1, 1),
+            target_tile=int(SEMANTIC_PALETTE["FLOOR"]),
+            belief_map=BeliefMap(simple_grid.shape),
+            memory=memory,
+            goal_pos=(8, 8),
+            current_step=0,
+        )
+
+        assert score < -0.4
 
 
 if __name__ == '__main__':

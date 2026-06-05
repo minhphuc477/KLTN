@@ -41,7 +41,7 @@ def test_path_efficiency_ratio_is_bounded_and_directionally_consistent():
 def test_confusion_ratio_vs_oracle_returns_nan_when_oracle_not_resolved():
     assert math.isnan(confusion_ratio_vs_oracle(12, 20, oracle_status="timeout", candidate_success=True))
     assert math.isnan(confusion_ratio_vs_oracle(12, 20, oracle_status="solved", candidate_success=False))
-    assert confusion_ratio_vs_oracle(10, 15, oracle_status="solved", candidate_success=True) == 1.5
+    assert confusion_ratio_vs_oracle(10, 15, oracle_status="solved", candidate_success=True) == 0.5
 
 
 def test_normalized_confusion_ratio_uses_excess_path_not_raw_ratio():

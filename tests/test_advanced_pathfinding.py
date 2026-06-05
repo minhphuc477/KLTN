@@ -16,7 +16,7 @@ from typing import Tuple
 import pytest
 
 from src.core.definitions import SEMANTIC_PALETTE
-from src.simulation.validator import GameState, ZeldaLogicEnv, SolverOptions
+from src.simulation.validator import GameState, ZeldaLogicEnv, SolverOptions, game_state_key
 from src.simulation.dstar_lite import DStarLiteSolver
 from src.simulation.state_space_dfs import StateSpaceDFS
 from src.simulation.bidirectional_astar import BidirectionalAStar, SearchNode
@@ -211,6 +211,17 @@ class TestDStarLite:
         )
 
         assert any(candidate.keys == 1 and door_pos not in candidate.opened_doors for candidate in candidates)
+
+    def test_goal_termination_accepts_inventory_goal_state(self):
+        grid = create_simple_dungeon()
+        env = ZeldaLogicEnv(grid)
+        solver = DStarLiteSolver(env)
+        goal_state_with_inventory = GameState(position=env.goal_pos, keys=1)
+        goal_hash = game_state_key(goal_state_with_inventory)
+        solver.g_scores[goal_hash] = 12.0
+        solver.rhs_scores[goal_hash] = 12.0
+
+        assert solver._has_consistent_goal_state()
 
 
 class TestStateSpaceDFS:

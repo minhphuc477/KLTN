@@ -355,6 +355,22 @@ class DStarLiteSolver:
         
         # Extract path
         path = self._extract_path(start_state)
+        if not path or path[-1] != self.env.goal_pos:
+            logger.warning("D* Lite primary search produced an invalid extracted path; falling back to StateSpaceAStar")
+            try:
+                from .validator import StateSpaceAStar
+                self.used_fallback = True
+                fallback = StateSpaceAStar(
+                    self.env,
+                    timeout=max(int(self.timeout), 50_000),
+                    heuristic_mode=self.heuristic_mode,
+                    priority_options={"allow_diagonals": bool(self.allow_diagonals)},
+                    search_mode="astar",
+                )
+                return fallback.solve()
+            except Exception:
+                logger.exception("D* Lite fallback failed after invalid path extraction")
+                return False, [], len(self.g_scores)
         self.current_path = path
         self.path_index = 0
         
