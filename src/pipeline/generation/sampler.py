@@ -24,6 +24,11 @@ logger = logging.getLogger(__name__)
 DEFAULT_ROOM_LATENT_HW: Tuple[int, int] = canonical_latent_shape((ROOM_HEIGHT, ROOM_WIDTH))
 
 
+def _record_stage_time(stage_times: Dict[str, float], key: str, started_at: float) -> None:
+    """Accumulate low-overhead stage timings for generation ablations."""
+    stage_times[key] = float(stage_times.get(key, 0.0)) + float(time.perf_counter() - started_at)
+
+
 def _configure_runtime_logic_guidance(pipeline, logic_guidance_scale: float) -> float:
     """Apply explicit runtime LogicNet guidance strategy to the diffusion model."""
     strategy = str(getattr(pipeline, "default_logic_guidance_strategy", "late") or "late").strip().lower()
@@ -120,6 +125,8 @@ def generate_room_batch(
     if not room_ids:
         return {}
 
+    batch_started_at = time.perf_counter()
+    batch_stage_times: Dict[str, float] = {}
     sampler_mode = str(latent_sampler or "diffusion").strip().lower()
     pipeline._require_room_generation_components(
         "_generate_room_batch",
@@ -128,6 +135,7 @@ def generate_room_batch(
     batch_conditions: List[torch.Tensor] = []
     per_room_inputs: List[Dict[str, Any]] = []
 
+    condition_started_at = time.perf_counter()
     for j, room_id in enumerate(room_ids):
         neighbor_latents = pipeline._normalize_neighbor_latents(
             pipeline._get_neighbor_latents(room_id, mission_graph_physical, room_latents)
@@ -181,8 +189,10 @@ def generate_room_batch(
 
     if not batch_conditions or not per_room_inputs:
         return {}
+    _record_stage_time(batch_stage_times, "batch_condition_time_sec", condition_started_at)
 
     # Stack per-room conditions into one batch.
+    stack_started_at = time.perf_counter()
     expected_dim = int(batch_conditions[0].dim())
     if any(int(cond.dim()) != expected_dim for cond in batch_conditions):
         dims = [int(cond.dim()) for cond in batch_conditions]
@@ -249,6 +259,7 @@ def generate_room_batch(
                 current_node_distance_batch,
                 dim=0,
             )
+    _record_stage_time(batch_stage_times, "batch_condition_stack_time_sec", stack_started_at)
 
     B = len(room_ids)
     if latent_shape_chw is None:
@@ -263,6 +274,7 @@ def generate_room_batch(
 
     tokens_batch: Optional[torch.Tensor] = None
     if pipeline.room_generator_mode == "discrete_masked":
+        sampler_started_at = time.perf_counter()
         fixed_layouts = [
             pipeline._build_masked_room_fixed_tokens(
                 mission_graph_physical,
@@ -286,7 +298,9 @@ def generate_room_batch(
             corrector_mask_ratio=float(pipeline.default_masked_room_corrector_mask_ratio),
             seed=seed,
         )
+        _record_stage_time(batch_stage_times, "batch_masked_sample_time_sec", sampler_started_at)
     elif sampler_mode == "categorical":
+        sampler_started_at = time.perf_counter()
         guidance_scale, logic_guidance_scale = pipeline._resolve_effective_sampling_guidance(
             use_fast_sampling=False,
             guidance_scale=float(guidance_scale),
@@ -325,9 +339,15 @@ def generate_room_batch(
                 )
             )
         indices_t = torch.from_numpy(np.stack(sampled, axis=0)).to(pipeline.device, dtype=torch.long)
+        _record_stage_time(batch_stage_times, "batch_categorical_sample_time_sec", sampler_started_at)
+        decode_started_at = time.perf_counter()
         logits_batch = pipeline.vqvae.decode_indices(indices_t)
+        _record_stage_time(batch_stage_times, "batch_vqvae_exact_decode_time_sec", decode_started_at)
+        quantize_started_at = time.perf_counter()
         z_batch = pipeline.vqvae.quantizer.encode_indices(indices_t).permute(0, 3, 1, 2).contiguous()
+        _record_stage_time(batch_stage_times, "batch_categorical_quantize_time_sec", quantize_started_at)
     else:
+        sampler_started_at = time.perf_counter()
         guidance_scale, logic_guidance_scale = pipeline._resolve_effective_sampling_guidance(
             use_fast_sampling=use_fast_sampling,
             guidance_scale=float(guidance_scale),
@@ -378,8 +398,10 @@ def generate_room_batch(
                 num_steps=max(1, int(num_diffusion_steps)),
                 graph_data=graph_ctx_for_guidance,
             )
+        _record_stage_time(batch_stage_times, "batch_diffusion_sample_time_sec", sampler_started_at)
 
         if pipeline.use_latent_boundary_masking:
+            inpaint_started_at = time.perf_counter()
             for i, inp in enumerate(per_room_inputs):
                 try:
                     z_ref, boundary_edit_mask, has_boundary_constraints = build_neighbor_boundary_inpaint_inputs(
@@ -398,9 +420,13 @@ def generate_room_batch(
                         )
                 except (AttributeError, RuntimeError, ValueError, TypeError):
                     continue
+            _record_stage_time(batch_stage_times, "batch_boundary_inpaint_time_sec", inpaint_started_at)
+        decode_started_at = time.perf_counter()
         logits_batch = pipeline._decode_latent_with_vqvae(z_batch)
+        _record_stage_time(batch_stage_times, "batch_vqvae_decode_time_sec", decode_started_at)
 
     out: Dict[Any, RoomGenerationResult] = {}
+    finalize_started_at = time.perf_counter()
     for i, inp in enumerate(per_room_inputs):
         if int(inp['batch_index']) != int(i):
             raise RuntimeError(
@@ -431,8 +457,22 @@ def generate_room_batch(
                 else None
             ),
         )
+        if isinstance(getattr(result_i, "metrics", None), dict):
+            denom = float(max(1, B))
+            for key, value in batch_stage_times.items():
+                result_i.metrics[f"{key}_per_room"] = float(value) / denom
+            result_i.metrics["batch_room_count"] = float(B)
         out[inp['room_id']] = result_i
 
+    _record_stage_time(batch_stage_times, "batch_finalize_results_time_sec", finalize_started_at)
+    total_time = float(time.perf_counter() - batch_started_at)
+    for result_i in out.values():
+        if isinstance(getattr(result_i, "metrics", None), dict):
+            denom = float(max(1, B))
+            result_i.metrics["batch_finalize_results_time_sec_per_room"] = (
+                float(batch_stage_times.get("batch_finalize_results_time_sec", 0.0)) / denom
+            )
+            result_i.metrics["batch_total_time_sec_per_room"] = total_time / denom
     return out
 
 @torch.no_grad()
@@ -488,6 +528,8 @@ def generate_room(
     Returns:
         RoomGenerationResult with room grid, latents, and metrics
     """
+    room_started_at = time.perf_counter()
+    stage_times: Dict[str, float] = {}
     local_np_rng = np.random.default_rng(seed) if seed is not None else np.random.default_rng()
     if seed is not None:
         torch.manual_seed(seed)
@@ -547,8 +589,10 @@ def generate_room(
         room_generator_mode=effective_room_generator_mode,
     )
 
+    condition_started_at = time.perf_counter()
     if precomputed_condition is not None:
         condition = precomputed_condition.to(pipeline.device)
+        _record_stage_time(stage_times, "precomputed_condition_time_sec", condition_started_at)
     else:
         condition = pipeline._compute_room_condition(
             neighbor_latents=neighbor_latents,
@@ -557,6 +601,7 @@ def generate_room(
             boundary_constraints=boundary_constraints,
             position=position,
         )
+        _record_stage_time(stage_times, "condition_time_sec", condition_started_at)
 
     graph_data = graph_context if isinstance(graph_context, dict) else None
     if graph_data is not None and boundary_constraints is not None and "boundary_constraints" not in graph_data:
@@ -569,11 +614,14 @@ def generate_room(
     sampled_tokens: Optional[torch.Tensor] = None
 
     if precomputed_latent is not None and precomputed_logits is not None:
+        precomputed_started_at = time.perf_counter()
         z_latent = precomputed_latent.to(pipeline.device)
         logits = precomputed_logits.to(pipeline.device)
         if precomputed_tokens is not None:
             sampled_tokens = precomputed_tokens.to(pipeline.device, dtype=torch.long)
+        _record_stage_time(stage_times, "precomputed_sampler_time_sec", precomputed_started_at)
     elif effective_room_generator_mode == "discrete_masked":
+        sampler_started_at = time.perf_counter()
         fixed_tokens = None
         fixed_mask = None
         if mission_graph_for_room is not None:
@@ -595,7 +643,9 @@ def generate_room(
             corrector_mask_ratio=float(pipeline.default_masked_room_corrector_mask_ratio),
             seed=seed,
         )
+        _record_stage_time(stage_times, "masked_sample_time_sec", sampler_started_at)
     elif sampler_mode == "categorical":
+        sampler_started_at = time.perf_counter()
         # Infer latent shape from neighbors when possible, otherwise use VQ-VAE spatial downsampling (x4).
         latent_shape = _infer_latent_shape_from_neighbors_or_default(
             pipeline,
@@ -632,14 +682,20 @@ def generate_room(
             p=probs,
         )
         indices_t = torch.from_numpy(sampled_indices).to(pipeline.device, dtype=torch.long)
+        _record_stage_time(stage_times, "categorical_sample_time_sec", sampler_started_at)
+        decode_started_at = time.perf_counter()
         logits = pipeline.vqvae.decode_indices(indices_t)  # (1, 44, 16, 11)
+        _record_stage_time(stage_times, "vqvae_exact_decode_time_sec", decode_started_at)
+        quantize_started_at = time.perf_counter()
         with torch.no_grad():
             z_latent = pipeline.vqvae.quantizer.encode_indices(indices_t).permute(0, 3, 1, 2).contiguous()
+        _record_stage_time(stage_times, "categorical_quantize_time_sec", quantize_started_at)
         validate_tensor_contract(
             z_latent,
             BlockShapeContract(name='block_iv_categorical_latent', dims=4, batch_dim=1),
         )
     else:
+        sampler_started_at = time.perf_counter()
         # BLOCK V: Logic guidance configuration for diffusion sampler
         guidance_scale, logic_guidance_scale = pipeline._resolve_effective_sampling_guidance(
             use_fast_sampling=use_fast_sampling,
@@ -696,6 +752,7 @@ def generate_room(
                 shape=latent_shape,
                 graph_data=graph_data,
             )
+        _record_stage_time(stage_times, "diffusion_sample_time_sec", sampler_started_at)
 
         validate_tensor_contract(
             z_latent,
@@ -709,6 +766,7 @@ def generate_room(
 
         # Autoregressive spatial generation: preserve known boundary latents from generated neighbors.
         if pipeline.use_latent_boundary_masking:
+            inpaint_started_at = time.perf_counter()
             try:
                 z_ref, boundary_edit_mask, has_boundary_constraints = build_neighbor_boundary_inpaint_inputs(
                     base_latent=z_latent,
@@ -728,9 +786,12 @@ def generate_room(
             except (AttributeError, RuntimeError, ValueError, TypeError) as e:
                 pipeline._bump_diagnostic("boundary_latent_masking_fallback")
                 logger.debug("Boundary latent masking skipped due to error: %s", e)
+            _record_stage_time(stage_times, "boundary_inpaint_time_sec", inpaint_started_at)
 
         # BLOCK II: VQ-VAE Decoding
+        decode_started_at = time.perf_counter()
         logits = pipeline._decode_latent_with_vqvae(z_latent)  # (1, 44, 16, 11)
+        _record_stage_time(stage_times, "vqvae_decode_time_sec", decode_started_at)
     validate_tensor_contract(
         logits,
         BlockShapeContract(
@@ -741,6 +802,8 @@ def generate_room(
             spatial_hw=(ROOM_HEIGHT, ROOM_WIDTH),
         ),
     )
+
+    post_decode_started_at = time.perf_counter()
 
     # BLOCK II.a: Topology-Enforced Constrained Decoding
     # Clamp doorway logits to the exact door type implied by graph semantics
@@ -1303,6 +1366,8 @@ def generate_room(
     else:
         logger.debug(f"Room {room_id}: VGLC dimension validation PASSED")
 
+    _record_stage_time(stage_times, "post_decode_finalize_time_sec", post_decode_started_at)
+
     # Compute metrics
     entropy_val = float(
         np.mean(
@@ -1417,6 +1482,9 @@ def generate_room(
         'masked_room_corrector_steps': float(pipeline.default_masked_room_corrector_steps),
         'masked_room_corrector_mask_ratio': float(pipeline.default_masked_room_corrector_mask_ratio),
     }
+    stage_times["repair_time_sec"] = float(repair_time_sec)
+    stage_times["room_generation_time_sec"] = float(time.perf_counter() - room_started_at)
+    metrics.update({key: float(value) for key, value in stage_times.items()})
     metrics.update(neural_marker_alignment)
     metrics.update(final_pre_overlay_alignment)
     metrics.update(final_post_overlay_alignment)
@@ -1463,6 +1531,7 @@ def generate_room(
             # work queues. Flush queued masked-room work before the recursive teacher rerun
             # so VQ-VAE decode always sees tensors on a consistent stream.
             pipeline._synchronize_cuda_device()
+        teacher_started_at = time.perf_counter()
         teacher_result = pipeline.generate_room(
             neighbor_latents=neighbor_latents,
             graph_context=graph_context,
@@ -1484,8 +1553,13 @@ def generate_room(
             allow_teacher_fallback=False,
             room_generator_override="latent_diffusion",
         )
+        teacher_time_sec = float(time.perf_counter() - teacher_started_at)
         teacher_result.metrics["teacher_fallback_used"] = 1.0
         teacher_result.metrics[f"teacher_fallback_source_{teacher_fallback_source}"] = 1.0
+        teacher_result.metrics["teacher_fallback_time_sec"] = teacher_time_sec
+        teacher_result.metrics["original_fallback_candidate_time_sec"] = float(
+            metrics.get("room_generation_time_sec", 0.0)
+        )
         teacher_result.metrics["original_fallback_candidate_neural_grid_entropy"] = float(metrics["neural_grid_entropy"])
         teacher_result.metrics["original_fallback_candidate_tiles_changed"] = float(metrics["tiles_changed"])
         return teacher_result
