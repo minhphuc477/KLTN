@@ -954,6 +954,19 @@ class TestIntegration:
         # CBS path may be longer (suboptimal) but should still reach goal
         assert cbs_path[-1] == astar_path[-1]  # Same goal
 
+    def test_backtrack_loops_count_long_room_level_revisits(self, simple_grid):
+        """Room-level loop counting should not miss returns after a long side branch."""
+        env = ZeldaLogicEnv(semantic_grid=simple_grid)
+        cbs = CognitiveBoundedSearch(env, persona=AgentPersona.BALANCED)
+        room_width = 11
+        path = (
+            [(1, 1), (1, room_width + 1)]
+            + [(1, (2 * room_width) + offset) for offset in range(11)]
+            + [(2, room_width + 1)]
+        )
+
+        assert cbs._count_backtrack_loops(path) == 1
+
 
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

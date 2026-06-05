@@ -256,3 +256,39 @@ def test_sanity_checker_rejects_sparse_walkable_maps_that_old_threshold_allowed(
 
     assert not is_valid
     assert any("mostly blocked" in error for error in errors)
+
+
+def test_state_domination_requires_pushed_block_superset():
+    from src.simulation.validator import GameState, dominates
+
+    unpushed = GameState(position=(2, 2))
+    pushed = GameState(position=(2, 2), pushed_blocks={((2, 3), (2, 4))})
+
+    assert not dominates(unpushed, pushed)
+    assert dominates(pushed, unpushed)
+
+
+def test_map_elites_leniency_counts_bosses_as_hazards():
+    from src.simulation.map_elites import MAPElitesEvaluator
+
+    grid = np.full((3, 3), SEMANTIC_PALETTE["FLOOR"], dtype=np.int64)
+    grid[1, 1] = SEMANTIC_PALETTE["BOSS"]
+
+    leniency = MAPElitesEvaluator().calculate_leniency(grid)
+
+    assert leniency < 1.0
+    assert leniency == np.clip(1.0 - (1.0 / 8.0), 0.0, 1.0)
+
+
+def test_structural_dead_ends_exclude_canonical_start_and_goal():
+    from src.evaluation.structural_metrics import analyze_structural_topology
+
+    graph = nx.DiGraph()
+    graph.add_node(0, label="start")
+    graph.add_node(1, label="middle")
+    graph.add_node(2, label="goal")
+    graph.add_edges_from([(0, 1), (1, 2)])
+
+    metrics = analyze_structural_topology(graph)
+
+    assert metrics.dead_end_ratio == 0.0

@@ -27,6 +27,9 @@ from src.generation.grammar import (
     AddBossGauntlet,
     AddSecretRule,
     AddValveRule,
+    CreateHubRule,
+    InsertChallengeRule,
+    InsertSwitchRule,
     MissionEdge,
     MissionGraph,
     MissionNode,
@@ -35,6 +38,14 @@ from src.generation.grammar import (
     NodeType, 
     EdgeType,
 )
+
+
+def _positions_are_unique(graph: MissionGraph) -> bool:
+    positions = [
+        (int(node.position[0]), int(node.position[1]), int(node.position[2]) if len(node.position) > 2 else 0)
+        for node in graph.nodes.values()
+    ]
+    return len(positions) == len(set(positions))
 
 
 class TestAdvancedRulesIntegration:
@@ -99,6 +110,57 @@ class TestAdvancedRulesIntegration:
 
         grammar = MissionGrammar(seed=42)
         assert grammar.validate_goal_gauntlet(updated)
+        assert _positions_are_unique(updated)
+
+    def test_insert_challenge_adjacent_edge_does_not_collide_with_source_room(self):
+        graph = MissionGraph()
+        graph.add_node(MissionNode(id=0, node_type=NodeType.START, position=(0, 0, 0), difficulty=0.0))
+        graph.add_node(MissionNode(id=1, node_type=NodeType.GOAL, position=(0, 1, 0), difficulty=1.0))
+        graph.add_edge(0, 1, EdgeType.PATH)
+
+        updated = InsertChallengeRule(NodeType.ENEMY).apply(
+            graph,
+            {"rng": random.Random(3), "layout_bounds": (-4, 4, -4, 4)},
+        )
+
+        assert len(updated.nodes) == 3
+        assert _positions_are_unique(updated)
+        inserted = next(node for node in updated.nodes.values() if node.node_type == NodeType.ENEMY)
+        assert inserted.position != (0, 0, 0)
+        assert inserted.position != (0, 1, 0)
+
+    def test_insert_switch_uses_free_position_instead_of_absolute_override(self):
+        graph = MissionGraph()
+        graph.add_node(MissionNode(id=0, node_type=NodeType.START, position=(0, 0, 0), difficulty=0.0))
+        graph.add_node(MissionNode(id=1, node_type=NodeType.ENEMY, position=(0, 1, 0), difficulty=0.3))
+        graph.add_node(MissionNode(id=2, node_type=NodeType.PUZZLE, position=(1, 0, 0), difficulty=0.4))
+        graph.add_node(MissionNode(id=3, node_type=NodeType.GOAL, position=(1, 1, 0), difficulty=1.0))
+        graph.add_edge(0, 1, EdgeType.PATH)
+        graph.add_edge(1, 3, EdgeType.PATH)
+        graph.add_edge(0, 2, EdgeType.PATH)
+
+        updated = InsertSwitchRule().apply(
+            graph,
+            {"rng": random.Random(7), "layout_bounds": (-4, 4, -4, 4)},
+        )
+
+        assert any(node.node_type == NodeType.SWITCH for node in updated.nodes.values())
+        assert _positions_are_unique(updated)
+
+    def test_create_hub_spokes_use_free_positions(self):
+        graph = MissionGraph()
+        graph.add_node(MissionNode(id=0, node_type=NodeType.START, position=(0, 0, 0), difficulty=0.0))
+        graph.add_node(MissionNode(id=1, node_type=NodeType.EMPTY, position=(0, 1, 0), difficulty=0.2))
+        graph.add_node(MissionNode(id=2, node_type=NodeType.GOAL, position=(0, 2, 0), difficulty=1.0))
+        graph.add_edge(0, 1, EdgeType.PATH)
+        graph.add_edge(1, 2, EdgeType.PATH)
+
+        updated = CreateHubRule().apply(
+            graph,
+            {"rng": random.Random(11), "layout_bounds": (-8, 8, -8, 8)},
+        )
+
+        assert _positions_are_unique(updated)
 
     def test_validate_goal_gauntlet_rejects_boss_door_cycle(self):
         """Validation should reject BOSS -> BOSS_DOOR -> BOSS cycles masquerading as a gauntlet."""

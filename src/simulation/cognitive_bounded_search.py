@@ -3835,9 +3835,16 @@ class CognitiveBoundedSearch:
                     hazard_positions.append((rr, cc))
         if not traversable_positions:
             return 0.0
+        hazards_by_room: Dict[Any, List[Tuple[int, int]]] = defaultdict(list)
+        for hazard in hazard_positions:
+            hazards_by_room[self._room_key_for_position(hazard)].append(hazard)
         safe_count = 0
         for rr, cc in traversable_positions:
-            near_hazard = any(abs(rr - hr) + abs(cc - hc) <= 2 for hr, hc in hazard_positions)
+            room_key = self._room_key_for_position((rr, cc))
+            near_hazard = any(
+                abs(rr - hr) + abs(cc - hc) <= 2
+                for hr, hc in hazards_by_room.get(room_key, [])
+            )
             if not near_hazard:
                 safe_count += 1
         return float(safe_count) / float(len(traversable_positions))
@@ -3877,19 +3884,25 @@ class CognitiveBoundedSearch:
         return sum(1 for count in visit_counts.values() if count > 2)
     
     def _count_backtrack_loops(self, path: List[Tuple[int, int]]) -> int:
-        """Count backtracking loops in the path."""
+        """Count room-level returns after the agent leaves and later re-enters."""
         if len(path) < 4:
             return 0
-        
+
+        room_path: List[Any] = []
+        for pos in path:
+            room = self._room_key_for_position(pos)
+            if not room_path or room_path[-1] != room:
+                room_path.append(room)
+
         loops = 0
-        for i in range(len(path) - 3):
-            # Check if position repeats within next 10 steps
-            for j in range(i + 2, min(i + 10, len(path))):
-                if path[i] == path[j]:
-                    loops += 1
-                    break
-        
-        return loops
+        seen: set[Any] = set()
+        for room in room_path:
+            if room in seen:
+                loops += 1
+            else:
+                seen.add(room)
+
+        return int(loops)
     
     def _compute_entropy(self, distribution: Dict[str, int]) -> float:
         """Compute Shannon entropy of a distribution."""
