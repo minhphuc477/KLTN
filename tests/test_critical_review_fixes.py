@@ -9,6 +9,7 @@ from src.core.definitions import (
     CHAR_TO_SEMANTIC,
     ID_TO_NAME,
     ROOM_TOPOLOGY_CHANNELS,
+    SEMANTIC_PALETTE,
     SEMANTIC_TO_CHAR,
     TileID,
     semantic_grid_to_vglc_lines,

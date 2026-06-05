@@ -287,6 +287,7 @@ class AddBossGauntlet(ProductionRule):
     
     def apply(self, graph: MissionGraph, context: Dict[str, Any]) -> MissionGraph:
         """Insert Boss Door -> Boss -> Goal, spawn Big Key on the pre-lock side."""
+        rng = context.get('rng') or random
         graph.sanitize()
         
         # Find goal node
