@@ -191,6 +191,11 @@ def test_graphormer_topology_refinement_reports_cost_metrics_against_gat2():
     from src.core.latent_diffusion import CrossAttention
 
     gat2_metrics = CrossAttention.topology_refinement_metrics(num_nodes=6, num_edges=5, mode="gat2")
+    sparse_metrics = CrossAttention.topology_refinement_metrics(
+        num_nodes=6,
+        num_edges=5,
+        mode="sparse_edge",
+    )
     graphormer_metrics = CrossAttention.topology_refinement_metrics(
         num_nodes=6,
         num_edges=5,
@@ -204,10 +209,38 @@ def test_graphormer_topology_refinement_reports_cost_metrics_against_gat2():
 
     assert gat2_metrics["attention_pairs"] == pytest.approx(36.0)
     assert gat2_metrics["shortest_path_bias_ops"] == pytest.approx(0.0)
+    assert sparse_metrics["attention_pairs"] == pytest.approx(16.0)
+    assert sparse_metrics["relative_attention_pairs_to_gat2"] < gat2_metrics["relative_attention_pairs_to_gat2"]
+    assert sparse_metrics["shortest_path_bias_ops"] == pytest.approx(0.0)
     assert graphormer_metrics["attention_pairs"] == pytest.approx(gat2_metrics["attention_pairs"])
     assert graphormer_metrics["shortest_path_bias_ops"] == pytest.approx(216.0)
     assert lightweight_metrics["attention_pairs"] == pytest.approx(0.0)
     assert lightweight_metrics["message_pairs"] == pytest.approx(11.0)
+
+
+def test_sparse_edge_topology_refinement_mode_runs_as_large_graph_ablation():
+    from src.core.latent_diffusion import CrossAttention
+
+    torch.manual_seed(23)
+    attention = CrossAttention(
+        query_dim=16,
+        context_dim=16,
+        num_heads=4,
+        topology_refinement_mode="sparse_edge",
+        dropout=0.0,
+    )
+    context = torch.randn(1, 4, 16)
+    chain_edges = torch.tensor([[0, 1, 2], [1, 2, 3]], dtype=torch.long)
+    skip_edges = torch.tensor([[0, 3], [3, 1]], dtype=torch.long)
+    node_mask = torch.ones(1, 4, dtype=torch.bool)
+
+    with torch.no_grad():
+        out_chain = attention._refine_context_topology(context, edge_index=chain_edges, node_mask=node_mask)
+        out_skip = attention._refine_context_topology(context, edge_index=skip_edges, node_mask=node_mask)
+
+    assert tuple(out_chain.shape) == tuple(context.shape)
+    assert torch.isfinite(out_chain).all()
+    assert not torch.allclose(out_chain, out_skip)
 
 
 def test_latent_diffusion_graphormer_topology_refinement_mode_runs_as_ablation():

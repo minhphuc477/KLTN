@@ -58,6 +58,7 @@ from src.generation.weighted_bayesian_wfc import (
 from src.core.definitions import ROOM_HEIGHT, ROOM_WIDTH
 from src.core.definitions import TileID
 from src.core.definitions import parse_edge_type_tokens
+from src.core.latent_diffusion import CrossAttention
 from src.simulation.cognitive_bounded_search import solve_with_cbs
 from src.simulation.validator import StateSpaceAStar, ZeldaLogicEnv
 from src.pipeline.spatial_utils import first_free_position, get_node_grid_position
@@ -128,7 +129,7 @@ class ExperimentConfig:
     categorical_codebook_size: Optional[int] = None
     use_tpe: bool = True
     disable_graph_node_cross_attention: bool = False
-    topology_refinement_mode: str = "gat2"  # none | lightweight | gat2
+    topology_refinement_mode: str = "gat2"  # none | lightweight | sparse_edge | gat2 | graphormer
     room_generator_mode: str = "latent_diffusion"  # latent_diffusion | discrete_masked
     use_reference_room_maps: Optional[bool] = None
 
@@ -147,6 +148,9 @@ PRIMARY_ABLATION_METRICS: Tuple[str, ...] = (
     "room_repair_rate",
     "topology_preservation_score",
     "directed_edge_preservation_score",
+    "topology_attention_pairs",
+    "topology_shortest_path_bias_ops",
+    "topology_relative_attention_pairs_to_gat2",
 )
 
 
@@ -164,6 +168,13 @@ ABLATION_DESIGN_NOTES: Dict[str, Dict[str, str]] = {
         "comparison": "FULL",
         "isolates": "weaker topology refinement while keeping topology, neural generation, LogicNet, and WFC on",
         "interpretation": "Tests whether the heavier graph refinement path is justified over a cheaper topology signal.",
+    },
+    "TOPO_SPARSE_EDGE": {
+        "tier": "block_iv",
+        "component": "topology-aware attention refinement",
+        "comparison": "FULL and TOPO_LIGHTWEIGHT",
+        "isolates": "edge-sparse graph attention over mission edges plus self loops without dense all-pairs scores",
+        "interpretation": "Tests whether sparse topology attention preserves graph fidelity at lower asymptotic cost than GAT2/Graphormer.",
     },
     "NO_EVOLUTION": {
         "tier": "block_i",
@@ -1091,12 +1102,31 @@ class AblationStudy:
             "raw_topology_failed": False,
             "raw_topology_error_count": 0,
             "raw_topology_error": "",
+            "topology_attention_pairs": np.nan,
+            "topology_message_pairs": np.nan,
+            "topology_shortest_path_bias_ops": np.nan,
+            "topology_relative_attention_pairs_to_gat2": np.nan,
             "error": "",
         }
 
         try:
             pipeline = self._get_pipeline(cfg)
             mission_graph = self._build_mission_graph(cfg, seed=seed)
+            topology_cost = CrossAttention.topology_refinement_metrics(
+                num_nodes=int(mission_graph.number_of_nodes()),
+                num_edges=int(mission_graph.number_of_edges()),
+                mode=str(cfg.topology_refinement_mode),
+            )
+            row.update(
+                {
+                    "topology_attention_pairs": float(topology_cost["attention_pairs"]),
+                    "topology_message_pairs": float(topology_cost["message_pairs"]),
+                    "topology_shortest_path_bias_ops": float(topology_cost["shortest_path_bias_ops"]),
+                    "topology_relative_attention_pairs_to_gat2": float(
+                        topology_cost["relative_attention_pairs_to_gat2"]
+                    ),
+                }
+            )
 
             original_graph_token_flag = bool(getattr(pipeline, "use_graph_node_cross_attention", True))
             original_topology_mode = str(getattr(pipeline.diffusion, "get_topology_refinement_mode", lambda: "gat2")())
@@ -1303,6 +1333,11 @@ class AblationStudy:
         for cfg in configs:
             sub = df[df["config"] == cfg.name]
             successful = sub[sub["success"].astype(bool)] if len(sub) > 0 else sub
+            def _mean_col(name: str, default: float = float("nan")) -> float:
+                if len(sub) == 0 or name not in sub:
+                    return float(default)
+                return float(sub[name].mean(skipna=True))
+
             summary_rows.append(
                 {
                     "config": cfg.name,
@@ -1332,6 +1367,10 @@ class AblationStudy:
                     "directed_edge_realization_rate": float(sub["directed_edge_realization_rate"].mean(skipna=True)) if len(sub) > 0 else float("nan"),
                     "directed_directionality_leak_rate": float(sub["directed_directionality_leak_rate"].mean(skipna=True)) if len(sub) > 0 else float("nan"),
                     "directed_edge_preservation_score": float(sub["directed_edge_preservation_score"].mean(skipna=True)) if len(sub) > 0 else float("nan"),
+                    "topology_attention_pairs": _mean_col("topology_attention_pairs"),
+                    "topology_message_pairs": _mean_col("topology_message_pairs"),
+                    "topology_shortest_path_bias_ops": _mean_col("topology_shortest_path_bias_ops"),
+                    "topology_relative_attention_pairs_to_gat2": _mean_col("topology_relative_attention_pairs_to_gat2"),
                     "diversity": float(_pairwise_diversity(descriptor_store.get(cfg.name, []))),
                 }
             )
@@ -1515,6 +1554,7 @@ def build_experiment_set(include_extended: bool = True) -> List[ExperimentConfig
     core = [
         ExperimentConfig(name="FULL", topology_refinement_mode="gat2"),
         ExperimentConfig(name="TOPO_LIGHTWEIGHT", topology_refinement_mode="lightweight"),
+        ExperimentConfig(name="TOPO_SPARSE_EDGE", topology_refinement_mode="sparse_edge"),
         ExperimentConfig(name="NO_EVOLUTION", use_evolution=False),
         ExperimentConfig(name="RANDOM_TOPOLOGY", use_evolution=False, random_topology=True),
         ExperimentConfig(

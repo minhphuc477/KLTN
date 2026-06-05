@@ -84,6 +84,16 @@ def test_ablation_json_sanitize_outputs_strict_json_values():
     assert json.dumps(sanitized, allow_nan=False)
 
 
+def test_core_ablation_set_includes_sparse_edge_topology_variant():
+    from scripts.run_ablation_study import build_experiment_set
+
+    configs = build_experiment_set(include_extended=False)
+    by_name = {cfg.name: cfg for cfg in configs}
+
+    assert by_name["FULL"].topology_refinement_mode == "gat2"
+    assert by_name["TOPO_SPARSE_EDGE"].topology_refinement_mode == "sparse_edge"
+
+
 def test_ablation_summary_separates_failure_rate_from_conditional_solvability():
     study = AblationStudy.__new__(AblationStudy)
     study.max_runtime_sec = None

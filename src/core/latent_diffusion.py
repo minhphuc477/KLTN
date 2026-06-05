@@ -38,6 +38,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint as activation_checkpoint
 from torch import Tensor
+from torch_geometric.utils import softmax as pyg_softmax
 
 from src.core.attention_kernels import HedgehogFeatureMap, hedgehog_linear_attention
 from src.core.definitions import ROOM_TOPOLOGY_CHANNEL_COUNT
@@ -264,14 +265,14 @@ class CrossAttention(nn.Module):
         self.attention_mode = normalized
 
     def set_topology_refinement_mode(self, mode: str) -> None:
-        """Set topology refinement mode: none | lightweight | gat2 | graphormer."""
+        """Set topology refinement mode: none | lightweight | sparse_edge | gat2 | graphormer."""
         m = str(mode).strip().lower()
         if m == "upgraded":
             m = "gat2"
-        if m not in {"none", "lightweight", "gat2", "graphormer"}:
+        if m not in {"none", "lightweight", "sparse_edge", "gat2", "graphormer"}:
             raise ValueError(
                 "Invalid topology_refinement_mode="
-                f"{mode!r}. Expected 'none', 'lightweight', 'gat2', or 'graphormer'."
+                f"{mode!r}. Expected 'none', 'lightweight', 'sparse_edge', 'gat2', or 'graphormer'."
             )
         self.topology_refinement_mode = m
     
@@ -291,6 +292,32 @@ class CrossAttention(nn.Module):
         inv_sqrt = deg.pow(-0.5)
         return inv_sqrt[:, None] * adj * inv_sqrt[None, :]
 
+    @staticmethod
+    def _batched_valid_node_mask(
+        *,
+        batch_size: int,
+        seq_len: int,
+        node_mask: Optional[Tensor],
+        device: torch.device,
+    ) -> Tensor:
+        if node_mask is None:
+            return torch.ones(batch_size, seq_len, device=device, dtype=torch.bool)
+
+        valid = node_mask.to(device=device, dtype=torch.bool)
+        if valid.dim() == 1:
+            valid = valid.unsqueeze(0)
+        if int(valid.shape[0]) == 1 and batch_size > 1:
+            valid = valid.expand(batch_size, -1)
+        if int(valid.shape[0]) != batch_size:
+            raise ValueError(
+                f"CrossAttention node_mask batch size {int(valid.shape[0])} does not match context batch {batch_size}."
+            )
+        if int(valid.shape[1]) > seq_len:
+            valid = valid[:, :seq_len]
+        elif int(valid.shape[1]) < seq_len:
+            valid = F.pad(valid, (0, seq_len - int(valid.shape[1])), value=False)
+        return valid
+
     def _batched_normalized_adjacency(
         self,
         *,
@@ -302,22 +329,12 @@ class CrossAttention(nn.Module):
         dtype: torch.dtype,
     ) -> Tuple[Tensor, Tensor]:
         """Build dense [B,L,L] normalized adjacency and valid-node mask without per-sample loops."""
-        if node_mask is None:
-            valid = torch.ones(batch_size, seq_len, device=device, dtype=torch.bool)
-        else:
-            valid = node_mask.to(device=device, dtype=torch.bool)
-            if valid.dim() == 1:
-                valid = valid.unsqueeze(0)
-            if int(valid.shape[0]) == 1 and batch_size > 1:
-                valid = valid.expand(batch_size, -1)
-            if int(valid.shape[0]) != batch_size:
-                raise ValueError(
-                    f"CrossAttention node_mask batch size {int(valid.shape[0])} does not match context batch {batch_size}."
-                )
-            if int(valid.shape[1]) > seq_len:
-                valid = valid[:, :seq_len]
-            elif int(valid.shape[1]) < seq_len:
-                valid = F.pad(valid, (0, seq_len - int(valid.shape[1])), value=False)
+        valid = self._batched_valid_node_mask(
+            batch_size=batch_size,
+            seq_len=seq_len,
+            node_mask=node_mask,
+            device=device,
+        )
 
         adj = torch.zeros(batch_size, seq_len, seq_len, device=device, dtype=dtype)
         eye = torch.eye(seq_len, device=device, dtype=dtype).unsqueeze(0)
@@ -384,16 +401,18 @@ class CrossAttention(nn.Module):
         normalized = str(mode).strip().lower()
         if normalized == "upgraded":
             normalized = "gat2"
-        if normalized not in {"none", "lightweight", "gat2", "graphormer"}:
+        if normalized not in {"none", "lightweight", "sparse_edge", "gat2", "graphormer"}:
             raise ValueError(
                 f"Invalid topology refinement mode {mode!r}; "
-                "expected none, lightweight, gat2, or graphormer."
+                "expected none, lightweight, sparse_edge, gat2, or graphormer."
             )
         attention_pairs = 0
         message_pairs = 0
         shortest_path_ops = 0
         if normalized == "lightweight":
             message_pairs = n + e
+        elif normalized == "sparse_edge":
+            attention_pairs = n + (2 * e)
         elif normalized == "gat2":
             attention_pairs = n * n
         elif normalized == "graphormer":
@@ -408,6 +427,114 @@ class CrossAttention(nn.Module):
             "shortest_path_bias_ops": float(shortest_path_ops),
             "relative_attention_pairs_to_gat2": float(attention_pairs / gat2_baseline),
         }
+
+    @staticmethod
+    def _batched_sparse_edges(
+        *,
+        batch_size: int,
+        seq_len: int,
+        edge_index: Tensor,
+        valid: Tensor,
+        device: torch.device,
+    ) -> Tuple[Tensor, Tensor]:
+        """Return flattened source/destination edges with reverse edges and self loops."""
+        edge_src_parts = []
+        edge_dst_parts = []
+
+        if edge_index.dim() == 2:
+            ei = edge_index.to(device=device, dtype=torch.long)
+            if int(ei.shape[0]) != 2:
+                raise ValueError(f"CrossAttention edge_index must have first dimension 2, got {tuple(ei.shape)}.")
+            if ei.numel() > 0:
+                src_raw = ei[0]
+                dst_raw = ei[1]
+                in_range = (src_raw >= 0) & (src_raw < seq_len) & (dst_raw >= 0) & (dst_raw < seq_len)
+                src = src_raw[in_range]
+                dst = dst_raw[in_range]
+                if src.numel() > 0:
+                    edge_valid = valid[:, src] & valid[:, dst]
+                    batch_idx = torch.arange(batch_size, device=device).unsqueeze(1).expand(-1, src.numel())
+                    src_b = src.unsqueeze(0).expand(batch_size, -1)
+                    dst_b = dst.unsqueeze(0).expand(batch_size, -1)
+                    base = batch_idx * seq_len
+                    flat_src = (base + src_b)[edge_valid]
+                    flat_dst = (base + dst_b)[edge_valid]
+                    edge_src_parts.extend([flat_src, flat_dst])
+                    edge_dst_parts.extend([flat_dst, flat_src])
+        elif edge_index.dim() == 3:
+            ei = edge_index.to(device=device, dtype=torch.long)
+            if int(ei.shape[1]) != 2:
+                raise ValueError(f"CrossAttention edge_index must have shape [B,2,E], got {tuple(ei.shape)}.")
+            if int(ei.shape[0]) == 1 and batch_size > 1:
+                ei = ei.expand(batch_size, -1, -1)
+            if int(ei.shape[0]) != batch_size:
+                raise ValueError(
+                    f"CrossAttention edge_index batch size {int(ei.shape[0])} does not match context batch {batch_size}."
+                )
+            if ei.numel() > 0:
+                src_raw = ei[:, 0]
+                dst_raw = ei[:, 1]
+                in_range = (src_raw >= 0) & (src_raw < seq_len) & (dst_raw >= 0) & (dst_raw < seq_len)
+                src = src_raw.clamp(0, max(0, seq_len - 1))
+                dst = dst_raw.clamp(0, max(0, seq_len - 1))
+                edge_valid = in_range & valid.gather(1, src) & valid.gather(1, dst)
+                batch_idx = torch.arange(batch_size, device=device).unsqueeze(1).expand_as(src)
+                base = batch_idx * seq_len
+                flat_src = (base + src)[edge_valid]
+                flat_dst = (base + dst)[edge_valid]
+                edge_src_parts.extend([flat_src, flat_dst])
+                edge_dst_parts.extend([flat_dst, flat_src])
+        else:
+            raise ValueError(
+                f"CrossAttention edge_index must have shape [2,E] or [B,2,E], got {tuple(edge_index.shape)}."
+            )
+
+        valid_flat = valid.reshape(-1)
+        self_nodes = torch.nonzero(valid_flat, as_tuple=False).flatten()
+        edge_src_parts.append(self_nodes)
+        edge_dst_parts.append(self_nodes)
+
+        return torch.cat(edge_src_parts, dim=0), torch.cat(edge_dst_parts, dim=0)
+
+    def _sparse_edge_attention_refine(
+        self,
+        h: Tensor,
+        *,
+        edge_index: Tensor,
+        valid: Tensor,
+    ) -> Tensor:
+        """Sparse topology attention over real edges plus self loops."""
+        bsz, seq_len, hidden_dim = h.shape
+        src, dst = self._batched_sparse_edges(
+            batch_size=bsz,
+            seq_len=seq_len,
+            edge_index=edge_index,
+            valid=valid,
+            device=h.device,
+        )
+        flat_count = bsz * seq_len
+        if src.numel() == 0:
+            return h
+
+        h_flat = h.reshape(flat_count, hidden_dim)
+        for q_lin, k_lin, v_lin, o_lin in zip(
+            self.topology_gat_q,
+            self.topology_gat_k,
+            self.topology_gat_v,
+            self.topology_gat_o,
+        ):
+            q = q_lin(h_flat)
+            k = k_lin(h_flat)
+            v = v_lin(h_flat)
+            scores = (q[dst] * k[src]).sum(dim=-1) / (q.shape[-1] ** 0.5)
+            attn = pyg_softmax(scores.float(), dst, num_nodes=flat_count).to(dtype=scores.dtype)
+            messages = v[src] * attn.unsqueeze(-1)
+            update_flat = torch.zeros_like(h_flat)
+            update_flat.index_add_(0, dst, messages)
+            update_flat = o_lin(update_flat)
+            h_flat = h_flat + self.dropout(F.gelu(update_flat))
+
+        return h_flat.reshape(bsz, seq_len, hidden_dim)
 
     @staticmethod
     def _shortest_path_attention_bias(
@@ -469,20 +596,36 @@ class CrossAttention(nn.Module):
         if node_mask is not None and node_mask.dim() == 2 and node_mask.shape[0] == 1 and bsz > 1:
             node_mask = node_mask.expand(bsz, -1)
 
-        norm_adj, valid = self._batched_normalized_adjacency(
-            batch_size=bsz,
-            seq_len=seq_len,
-            edge_index=edge_index,
-            node_mask=node_mask,
-            device=context.device,
-            dtype=context.dtype,
-        )
         h = refined
         if self.topology_refinement_mode == "lightweight":
+            norm_adj, valid = self._batched_normalized_adjacency(
+                batch_size=bsz,
+                seq_len=seq_len,
+                edge_index=edge_index,
+                node_mask=node_mask,
+                device=context.device,
+                dtype=context.dtype,
+            )
             neigh = torch.bmm(norm_adj, h)
             update = F.gelu(self.topology_light_self(h) + self.topology_light_neigh(neigh))
             h = h + self.dropout(update)
+        elif self.topology_refinement_mode == "sparse_edge":
+            valid = self._batched_valid_node_mask(
+                batch_size=bsz,
+                seq_len=seq_len,
+                node_mask=node_mask,
+                device=context.device,
+            )
+            h = self._sparse_edge_attention_refine(h, edge_index=edge_index, valid=valid)
         else:
+            norm_adj, valid = self._batched_normalized_adjacency(
+                batch_size=bsz,
+                seq_len=seq_len,
+                edge_index=edge_index,
+                node_mask=node_mask,
+                device=context.device,
+                dtype=context.dtype,
+            )
             attn_mask = norm_adj > 0.0
             graphormer_bias = None
             if self.topology_refinement_mode == "graphormer":
