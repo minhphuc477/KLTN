@@ -6,7 +6,7 @@ import logging
 import random
 from collections import deque
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from .graph_types import EdgeType, MissionEdge, MissionGraph, MissionNode, NodeType
 
@@ -76,6 +76,80 @@ class ProductionRule:
         if self._allow_bonus_small_key(graph):
             choices.append(NodeType.KEY)
         return choices
+
+    @staticmethod
+    def _layout_bounds(context: Optional[Dict[str, Any]] = None) -> Tuple[int, int, int, int]:
+        """Return inclusive row/col bounds for collision-aware grammar placement."""
+        ctx = context or {}
+        raw = ctx.get("layout_bounds")
+        if isinstance(raw, (list, tuple)) and len(raw) == 4:
+            return tuple(int(v) for v in raw)  # type: ignore[return-value]
+        return (
+            int(ctx.get("min_layout_row", -32)),
+            int(ctx.get("max_layout_row", 32)),
+            int(ctx.get("min_layout_col", -32)),
+            int(ctx.get("max_layout_col", 32)),
+        )
+
+    @staticmethod
+    def _occupied_positions(graph: MissionGraph) -> set[Tuple[int, int, int]]:
+        occupied: set[Tuple[int, int, int]] = set()
+        for node in graph.nodes.values():
+            pos = node.position
+            occupied.add((int(pos[0]), int(pos[1]), int(pos[2]) if len(pos) > 2 else 0))
+        return occupied
+
+    def _nearest_free_position(
+        self,
+        graph: MissionGraph,
+        ideal_pos: Tuple[float, float, float],
+        context: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[int, int, int]:
+        """Snap an ideal coordinate to the nearest bounded unoccupied grid cell."""
+        min_r, max_r, min_c, max_c = self._layout_bounds(context)
+        base_r = max(min_r, min(max_r, int(round(float(ideal_pos[0])))))
+        base_c = max(min_c, min(max_c, int(round(float(ideal_pos[1])))))
+        floor = int(round(float(ideal_pos[2])))
+        occupied = self._occupied_positions(graph)
+        base = (base_r, base_c, floor)
+        if base not in occupied:
+            return base
+
+        max_radius = max(max_r - min_r, max_c - min_c, 1)
+        for radius in range(1, max_radius + 1):
+            candidates: List[Tuple[int, int, int]] = []
+            for dr in range(-radius, radius + 1):
+                for dc in range(-radius, radius + 1):
+                    if max(abs(dr), abs(dc)) != radius:
+                        continue
+                    row = base_r + dr
+                    col = base_c + dc
+                    if min_r <= row <= max_r and min_c <= col <= max_c:
+                        candidates.append((row, col, floor))
+            candidates.sort(key=lambda p: (abs(p[0] - base_r) + abs(p[1] - base_c), p[0], p[1]))
+            for candidate in candidates:
+                if candidate not in occupied:
+                    return candidate
+        return base
+
+    def _interpolate_free_position(
+        self,
+        graph: MissionGraph,
+        src: int,
+        tgt: int,
+        t: float,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[int, int, int]:
+        """Interpolate between two nodes, then resolve collisions near the ideal point."""
+        src_pos = graph.nodes[src].position
+        tgt_pos = graph.nodes[tgt].position
+        z = src_pos[2] if len(src_pos) > 2 else 0
+        ideal = (
+            float(src_pos[0]) * (1.0 - float(t)) + float(tgt_pos[0]) * float(t),
+            float(src_pos[1]) * (1.0 - float(t)) + float(tgt_pos[1]) * float(t),
+            float(z),
+        )
+        return self._nearest_free_position(graph, ideal, context)
 
 
 class StartRule(ProductionRule):
@@ -149,14 +223,7 @@ class InsertChallengeRule(ProductionRule):
         # Create new challenge node
         new_id = max(graph.nodes.keys()) + 1
         
-        # Interpolate position
-        src_pos = graph.nodes[edge.source].position
-        tgt_pos = graph.nodes[edge.target].position
-        new_pos = (
-            (src_pos[0] + tgt_pos[0]) // 2,
-            (src_pos[1] + tgt_pos[1]) // 2,
-            src_pos[2] if len(src_pos) > 2 else 0,  # Same floor
-        )
+        new_pos = self._interpolate_free_position(graph, edge.source, edge.target, 0.5, context)
         
         challenge = MissionNode(
             id=new_id,
@@ -237,7 +304,7 @@ class InsertLockKeyRule(ProductionRule):
         key_node = MissionNode(
             id=key_id,
             node_type=NodeType.KEY,
-            position=self._interpolate_pos(graph, key_edge.source, key_edge.target, 0.3),
+            position=self._interpolate_pos(graph, key_edge.source, key_edge.target, 0.3, context),
             difficulty=context.get('difficulty', 0.5) * 0.5,
             key_id=key_id,  # Self-referencing key ID
         )
@@ -294,7 +361,7 @@ class InsertLockKeyRule(ProductionRule):
             lock_node = MissionNode(
                 id=lock_id,
                 node_type=NodeType.LOCK,
-                position=self._interpolate_pos(graph, lock_edge.source, lock_edge.target, 0.7),
+                position=self._interpolate_pos(graph, lock_edge.source, lock_edge.target, 0.7, context),
                 difficulty=context.get('difficulty', 0.5),
                 key_id=key_id,  # Reference to required key
             )
@@ -358,16 +425,10 @@ class InsertLockKeyRule(ProductionRule):
         src: int,
         tgt: int,
         t: float,
+        context: Optional[Dict[str, Any]] = None,
     ) -> Tuple[int, int, int]:
-        """Interpolate position between two nodes."""
-        src_pos = graph.nodes[src].position
-        tgt_pos = graph.nodes[tgt].position
-        z = src_pos[2] if len(src_pos) > 2 else 0
-        return (
-            int(src_pos[0] * (1 - t) + tgt_pos[0] * t),
-            int(src_pos[1] * (1 - t) + tgt_pos[1] * t),
-            z,
-        )
+        """Interpolate position between two nodes without colliding with endpoints."""
+        return self._interpolate_free_position(graph, src, tgt, t, context)
 
 
 class BranchRule(ProductionRule):
@@ -418,10 +479,14 @@ class BranchRule(ProductionRule):
         new_node = MissionNode(
             id=new_id,
             node_type=rng.choice([NodeType.ITEM, NodeType.PUZZLE, NodeType.EMPTY]),
-            position=(
-                branch_node.position[0] + offset_r,
-                branch_node.position[1] + offset_c,
-                floor,
+            position=self._nearest_free_position(
+                graph,
+                (
+                    float(branch_node.position[0] + offset_r),
+                    float(branch_node.position[1] + offset_c),
+                    float(floor),
+                ),
+                context,
             ),
             difficulty=context.get('difficulty', 0.5) * rng.uniform(0.5, 1.0),
         )

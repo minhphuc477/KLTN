@@ -219,6 +219,20 @@ class InsertSwitchRule(ProductionRule):
         
         edge_idx, edge = rng.choice(normal_edges)
         
+        # Pick an existing reachable anchor before adding the switch so the
+        # switch placement can be resolved relative to occupied geometry.
+        other_nodes = [
+            n for n in graph.nodes.keys()
+            if n not in [edge.source, edge.target]
+        ]
+        anchor = rng.choice(other_nodes) if other_nodes else edge.source
+        anchor_pos = graph.nodes[anchor].position
+        switch_offsets = [
+            (0, 1), (1, 0), (0, -1), (-1, 0),
+            (1, 1), (1, -1), (-1, 1), (-1, -1),
+            (0, 2), (2, 0), (0, -2), (-2, 0),
+        ]
+
         # Change edge to ON_OFF_GATE
         graph.edges[edge_idx].edge_type = EdgeType.ON_OFF_GATE
         
@@ -227,18 +241,14 @@ class InsertSwitchRule(ProductionRule):
         switch_node = MissionNode(
             id=switch_id,
             node_type=NodeType.SWITCH,
-            position=(rng.randint(0, 5), rng.randint(0, 5), 0),
+            position=_bounded_free_position(graph, anchor_pos, switch_offsets, rng, context),
             difficulty=context.get('difficulty', 0.5) * 0.6,
             switch_id=switch_id,  # Self-referencing switch ID
         )
         graph.add_node(switch_node)
         
-        # Connect switch to graph (not near the gated edge)
-        other_nodes = [n for n in graph.nodes.keys() 
-                      if n not in [edge.source, edge.target, switch_id]]
-        if other_nodes:
-            anchor = rng.choice(other_nodes)
-            graph.add_edge(anchor, switch_id, EdgeType.PATH)
+        # Connect switch to graph (not near the gated edge when possible)
+        graph.add_edge(anchor, switch_id, EdgeType.PATH)
         
         logger.info(f"InsertSwitchRule: Switch {switch_id} controls edge {edge.source}->{edge.target}")
         return graph
@@ -302,7 +312,13 @@ class AddBossGauntlet(ProductionRule):
         boss_door = MissionNode(
             id=boss_door_id,
             node_type=NodeType.BOSS_DOOR,
-            position=(goal_pos[0] - 2, goal_pos[1], goal_z),
+            position=_bounded_free_position(
+                graph,
+                goal_pos,
+                [(-2, 0), (-1, 0), (0, -1), (0, 1), (-2, -1), (-2, 1), (1, 0)],
+                rng,
+                context,
+            ),
             difficulty=0.9,
             key_id=boss_door_id,  # Requires big key
         )
@@ -312,7 +328,13 @@ class AddBossGauntlet(ProductionRule):
         boss = MissionNode(
             id=boss_id,
             node_type=NodeType.BOSS,
-            position=(goal_pos[0] - 1, goal_pos[1], goal_z),
+            position=_bounded_free_position(
+                graph,
+                goal_pos,
+                [(-1, 0), (0, -1), (0, 1), (-1, -1), (-1, 1), (1, 0)],
+                rng,
+                context,
+            ),
             difficulty=0.95,
         )
         graph.add_node(boss)
@@ -400,10 +422,16 @@ class AddBossGauntlet(ProductionRule):
         big_key = MissionNode(
             id=big_key_id,
             node_type=NodeType.BIG_KEY,
-            position=(
-                anchor_pos[0],
-                anchor_pos[1] + 1,
-                anchor_pos[2] if len(anchor_pos) > 2 else 0,
+            position=_bounded_free_position(
+                graph,
+                anchor_pos,
+                [
+                    (0, 1), (1, 0), (0, -1), (-1, 0),
+                    (1, 1), (1, -1), (-1, 1), (-1, -1),
+                    (0, 2), (2, 0), (0, -2), (-2, 0),
+                ],
+                rng,
+                context,
             ),
             difficulty=0.7,
             key_id=boss_door_id,  # Opens boss door
@@ -468,7 +496,7 @@ class AddItemGateRule(ProductionRule):
         item_node = MissionNode(
             id=item_id,
             node_type=NodeType.ITEM,
-            position=self._interpolate_pos(graph, item_edge.source, item_edge.target, 0.4),
+            position=self._interpolate_pos(graph, item_edge.source, item_edge.target, 0.4, context),
             difficulty=context.get('difficulty', 0.5) * 0.6,
             item_type=item_name,  # Store what item this provides
         )
@@ -511,7 +539,7 @@ class AddItemGateRule(ProductionRule):
             gate_node = MissionNode(
                 id=gate_id,
                 node_type=NodeType.EMPTY,  # Just a connector with special edge
-                position=self._interpolate_pos(graph, gate_edge.source, gate_edge.target, 0.6),
+                position=self._interpolate_pos(graph, gate_edge.source, gate_edge.target, 0.6, context),
                 difficulty=context.get('difficulty', 0.5) * 0.7,
                 required_item=item_name,  # References the required item
             )
@@ -556,16 +584,10 @@ class AddItemGateRule(ProductionRule):
         src: int,
         tgt: int,
         t: float,
+        context: Optional[Dict[str, Any]] = None,
     ) -> Tuple[int, int, int]:
-        """Interpolate position between two nodes."""
-        src_pos = graph.nodes[src].position
-        tgt_pos = graph.nodes[tgt].position
-        z = src_pos[2] if len(src_pos) > 2 else 0
-        return (
-            int(src_pos[0] * (1 - t) + tgt_pos[0] * t),
-            int(src_pos[1] * (1 - t) + tgt_pos[1] * t),
-            z,
-        )
+        """Interpolate position between two nodes, then resolve collisions."""
+        return self._interpolate_free_position(graph, src, tgt, t, context)
 
 
 class CreateHubRule(ProductionRule):
@@ -629,7 +651,13 @@ class CreateHubRule(ProductionRule):
             branch_start = MissionNode(
                 id=branch_start_id,
                 node_type=rng.choice([NodeType.ENEMY, NodeType.PUZZLE, NodeType.EMPTY]),
-                position=(hub_pos[0] + offset_r, hub_pos[1] + offset_c, floor),
+                position=_bounded_free_position(
+                    graph,
+                    hub_pos,
+                    [(offset_r, offset_c), (offset_r + 1, offset_c), (offset_r, offset_c + 1)],
+                    rng,
+                    context,
+                ),
                 difficulty=context.get('difficulty', 0.5) * rng.uniform(0.6, 0.9),
             )
             graph.add_node(branch_start)
@@ -646,10 +674,16 @@ class CreateHubRule(ProductionRule):
                         include_treasure=True,
                     )
                 ),
-                position=(
-                    hub_pos[0] + offset_r * LAYOUT_HUB_BRANCH_SPACING,
-                    hub_pos[1] + offset_c * LAYOUT_HUB_BRANCH_SPACING,
-                    floor
+                position=_bounded_free_position(
+                    graph,
+                    hub_pos,
+                    [
+                        (offset_r * LAYOUT_HUB_BRANCH_SPACING, offset_c * LAYOUT_HUB_BRANCH_SPACING),
+                        (offset_r * LAYOUT_HUB_BRANCH_SPACING + 1, offset_c * LAYOUT_HUB_BRANCH_SPACING),
+                        (offset_r * LAYOUT_HUB_BRANCH_SPACING, offset_c * LAYOUT_HUB_BRANCH_SPACING + 1),
+                    ],
+                    rng,
+                    context,
                 ),
                 difficulty=context.get('difficulty', 0.5) * rng.uniform(0.7, 1.0),
             )
@@ -738,7 +772,13 @@ class AddStairsRule(ProductionRule):
         room = MissionNode(
             id=room_id,
             node_type=rng.choice([NodeType.ITEM, NodeType.ENEMY, NodeType.PUZZLE]),
-            position=(anchor_pos[0] + rng.randint(1, 2), anchor_pos[1], 1),
+            position=_bounded_free_position(
+                graph,
+                (anchor_pos[0], anchor_pos[1], 1),
+                [(1, 0), (2, 0), (1, 1), (2, 1), (0, 1), (-1, 1)],
+                rng,
+                context,
+            ),
             difficulty=context.get('difficulty', 0.5) * 0.8,
         )
         graph.add_node(room)
@@ -1055,7 +1095,7 @@ class AddFungibleLockRule(ProductionRule):
         key_node = MissionNode(
             id=key_id,
             node_type=NodeType.KEY,
-            position=self._interpolate_pos(graph, key_edge.source, key_edge.target, 0.3),
+            position=self._interpolate_pos(graph, key_edge.source, key_edge.target, 0.3, context),
             difficulty=context.get('difficulty', 0.5) * 0.5,
             # NO key_id - fungible keys don't have unique IDs
         )
@@ -1134,16 +1174,10 @@ class AddFungibleLockRule(ProductionRule):
         src: int,
         tgt: int,
         t: float,
+        context: Optional[Dict[str, Any]] = None,
     ) -> Tuple[int, int, int]:
-        """Interpolate position between two nodes."""
-        src_pos = graph.nodes[src].position
-        tgt_pos = graph.nodes[tgt].position
-        z = src_pos[2] if len(src_pos) > 2 else 0
-        return (
-            int(src_pos[0] * (1 - t) + tgt_pos[0] * t),
-            int(src_pos[1] * (1 - t) + tgt_pos[1] * t),
-            z,
-        )
+        """Interpolate position between two nodes, then resolve collisions."""
+        return self._interpolate_free_position(graph, src, tgt, t, context)
 
 
 class FormBigRoomRule(ProductionRule):
@@ -2499,7 +2533,13 @@ class AddResourceLoopRule(ProductionRule):
             farm_node = MissionNode(
                 id=farm_id,
                 node_type=NodeType.RESOURCE_FARM,
-                position=(farm_pos[0] + rng.randint(-1, 1), farm_pos[1] + rng.randint(1, 2), floor),
+                position=_bounded_free_position(
+                    graph,
+                    farm_pos,
+                    [(-1, 1), (0, 1), (1, 1), (-1, 2), (0, 2), (1, 2)],
+                    rng,
+                    context,
+                ),
                 difficulty=0.3,
                 difficulty_rating="SAFE",
                 drops_resource=required_item,  # e.g., "BOMBS"

@@ -106,8 +106,9 @@ class MAPElitesEvaluator:
                 logger.info("MAP-Elites archive path does not exist yet: %s", self.archive_path)
 
     def calculate_linearity(self, path_len: int, playable_area: int) -> float:
-        # Proxy linearity from fraction of traversed space.
-        raw = float(path_len) / max(1.0, float(playable_area))
+        # Fallback directness proxy when no solver path geometry is available:
+        # lower coverage implies a more direct route through the playable area.
+        raw = 1.0 - (float(path_len) / max(1.0, float(playable_area)))
         return float(np.clip(raw, 0.0, 1.0))
 
     def calculate_leniency(self, grid: np.ndarray) -> float:
@@ -117,6 +118,8 @@ class MAPElitesEvaluator:
             floors = int((grid == 1).sum())
         else:
             enemies = int((grid == SEMANTIC_PALETTE['ENEMY']).sum())
+            if 'BOSS' in SEMANTIC_PALETTE:
+                enemies += int((grid == SEMANTIC_PALETTE['BOSS']).sum())
             floors = int((grid == SEMANTIC_PALETTE['FLOOR']).sum())
         return float(np.clip(1.0 - (enemies / max(1, floors)), 0.0, 1.0))
 

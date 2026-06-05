@@ -60,6 +60,21 @@ def test_ablation_gat_attention_dry_run(tmp_path: Path) -> None:
     )
     assert {row["attention_mode"] for row in payload["results"]} == {"softmax", "linear_hedgehog"}
     assert all(row["finite_output"] for row in payload["results"])
+    topology_rows = payload["topology_costs"]
+    assert {row["topology_refinement_mode"] for row in topology_rows} == {
+        "gat2",
+        "sparse_edge",
+        "sparse_directed",
+        "sparse_directed_semantic",
+        "graphormer",
+    }
+    by_mode = {
+        (row["nodes"], row["topology_refinement_mode"]): row
+        for row in topology_rows
+    }
+    for nodes in {row["nodes"] for row in topology_rows}:
+        assert by_mode[(nodes, "graphormer")]["shortest_path_bias_ops"] > 0
+        assert by_mode[(nodes, "sparse_edge")]["attention_pairs"] < by_mode[(nodes, "gat2")]["attention_pairs"]
 
 
 def test_ablation_pcbs_vs_astar_dry_run(tmp_path: Path) -> None:

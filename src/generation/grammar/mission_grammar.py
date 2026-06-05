@@ -34,6 +34,7 @@ from .advanced_rules import (
     PruneDeadEndRule,
     PruneGraphRule,
     SplitRoomRule,
+    _bounded_free_position,
 )
 from .core_rules import BranchRule, Difficulty, InsertChallengeRule, InsertLockKeyRule, StartRule
 from .graph_types import (
@@ -653,7 +654,13 @@ class MissionGrammar:
             boss_node = MissionNode(
                 id=boss_id,
                 node_type=NodeType.BOSS,
-                position=(goal_pos[0] - 1, goal_pos[1], goal_z),
+                position=_bounded_free_position(
+                    graph,
+                    goal_pos,
+                    [(-1, 0), (0, -1), (0, 1), (-1, -1), (-1, 1), (1, 0)],
+                    self.rng,
+                    {},
+                ),
                 difficulty=max(0.9, float(goal.difficulty)),
             )
             graph.add_node(boss_node)
@@ -695,7 +702,13 @@ class MissionGrammar:
             boss_door = MissionNode(
                 id=boss_door_id,
                 node_type=NodeType.BOSS_DOOR,
-                position=(goal_pos[0] - 2, goal_pos[1], goal_z),
+                position=_bounded_free_position(
+                    graph,
+                    goal_pos,
+                    [(-2, 0), (-1, 0), (0, -1), (0, 1), (-2, -1), (-2, 1), (1, 0)],
+                    self.rng,
+                    {},
+                ),
                 difficulty=0.9,
                 key_id=boss_door_id,
             )
@@ -803,10 +816,16 @@ class MissionGrammar:
                 big_key = MissionNode(
                     id=big_key_id,
                     node_type=NodeType.BIG_KEY,
-                    position=(
-                        anchor_pos[0],
-                        anchor_pos[1] + 1,
-                        anchor_pos[2] if len(anchor_pos) > 2 else 0,
+                    position=_bounded_free_position(
+                        graph,
+                        anchor_pos,
+                        [
+                            (0, 1), (1, 0), (0, -1), (-1, 0),
+                            (1, 1), (1, -1), (-1, 1), (-1, -1),
+                            (0, 2), (2, 0), (0, -2), (-2, 0),
+                        ],
+                        self.rng,
+                        {},
                     ),
                     difficulty=min(0.8, max(0.4, float(anchor.difficulty) + 0.1)),
                     key_id=boss_door.key_id,
@@ -817,6 +836,20 @@ class MissionGrammar:
 
         graph._key_to_lock[boss_door.key_id] = boss_door.id
         graph.sanitize()
+        if start is not None and start.id in graph.nodes:
+            reachable = graph.get_reachable_nodes(start.id)
+            orphan_ids = sorted(node_id for node_id in graph.nodes if node_id not in reachable)
+            if orphan_ids:
+                for node_id in orphan_ids:
+                    del graph.nodes[node_id]
+                graph.edges = [
+                    edge
+                    for edge in graph.edges
+                    if edge.source not in orphan_ids and edge.target not in orphan_ids
+                ]
+                repairs += len(orphan_ids)
+                graph.record_repair("goal_gauntlet_orphan_nodes_pruned", amount=len(orphan_ids))
+                graph.sanitize()
         if repairs > 0:
             graph.record_repair("goal_gauntlet_repairs", amount=int(repairs))
             logger.info(

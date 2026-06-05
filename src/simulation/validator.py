@@ -522,6 +522,11 @@ def dominates(state_a: GameState, state_b: GameState) -> bool:
     # Puzzle progression: A must have completed at least the stages B has.
     if not state_a.completed_puzzle_stages.issuperset(state_b.completed_puzzle_stages):
         return False
+
+    # Block-pushing changes world geometry. A state that has not pushed the
+    # blocks pushed by B cannot safely dominate B even with identical inventory.
+    if not state_a.pushed_blocks.issuperset(state_b.pushed_blocks):
+        return False
     
     # All checks passed: A dominates B
     return True

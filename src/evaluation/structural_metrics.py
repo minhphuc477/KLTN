@@ -14,6 +14,29 @@ class StructuralTopologyMetrics:
     dead_end_ratio: float
 
 
+def _node_role(mission_graph: nx.Graph, node: object) -> str:
+    """Best-effort normalized role string for NetworkX or MissionGraph-derived nodes."""
+    data = mission_graph.nodes[node] if node in mission_graph.nodes else {}
+    raw_values = [
+        data.get("node_type") if isinstance(data, dict) else None,
+        data.get("type") if isinstance(data, dict) else None,
+        data.get("label") if isinstance(data, dict) else None,
+        node,
+    ]
+    tokens = []
+    for value in raw_values:
+        if value is None:
+            continue
+        name = getattr(value, "name", None)
+        tokens.append(str(name if name is not None else value).strip().lower())
+    joined = " ".join(tokens)
+    if "start" in joined or "entry" in joined:
+        return "start"
+    if "goal" in joined or "triforce" in joined:
+        return "goal"
+    return ""
+
+
 def compute_cyclomatic_complexity(mission_graph: nx.Graph) -> float:
     """Compute cyclomatic complexity M = E - N + P."""
     if mission_graph is None:
@@ -64,10 +87,17 @@ def analyze_structural_topology(mission_graph: nx.Graph) -> StructuralTopologyMe
         dead_ends = sum(
             1
             for n in mission_graph.nodes()
-            if int(mission_graph.out_degree(n)) == 0 or int(mission_graph.in_degree(n)) == 0
+            if (
+                (int(mission_graph.in_degree(n)) == 0 and _node_role(mission_graph, n) != "start")
+                or (int(mission_graph.out_degree(n)) == 0 and _node_role(mission_graph, n) != "goal")
+            )
         )
     else:
-        dead_ends = sum(1 for n in mission_graph.nodes() if int(mission_graph.degree(n)) <= 1)
+        dead_ends = sum(
+            1
+            for n in mission_graph.nodes()
+            if int(mission_graph.degree(n)) <= 1 and _node_role(mission_graph, n) not in {"start", "goal"}
+        )
 
     return StructuralTopologyMetrics(
         cyclomatic_complexity=compute_cyclomatic_complexity(mission_graph),
