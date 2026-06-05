@@ -1833,7 +1833,7 @@ def main() -> None:
     parser.add_argument(
         "--logic-grid-pathfinder",
         type=str,
-        choices=["bellman_ford", "conv", "vin", "learnable", "perturb_and_map"],
+        choices=["bellman_ford", "conv", "cnn", "vin", "learnable", "perturb_and_map"],
         default=None,
     )
     parser.add_argument("--num-logic-iterations", type=int, default=None)

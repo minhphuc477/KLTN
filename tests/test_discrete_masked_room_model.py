@@ -15,6 +15,7 @@ from src.train_masked_room import (
     _create_masked_room_dataloaders,
     train_masked_room,
 )
+from src.zelda_data.zelda_loader import DungeonBatchSampler
 
 
 class _DummyMaskedConditionEncoder:
@@ -614,6 +615,92 @@ def test_masked_room_trainer_passes_configurable_mask_schedule(monkeypatch):
     assert captured["topology_focus_map"] is None
 
 
+def _masked_room_logic_graph(current_node_idx: int) -> dict:
+    node_features = torch.zeros(2, 6, dtype=torch.float32)
+    node_features[0, 0] = 1.0
+    node_features[1, 3] = 1.0
+    return {
+        "node_features": node_features,
+        "edge_index": torch.tensor([[0, 1], [1, 0]], dtype=torch.long),
+        "edge_attr": torch.zeros(2, dtype=torch.long),
+        "num_nodes": 2,
+        "node_to_idx": {"A": 0, "B": 1},
+        "current_node_idx": int(current_node_idx),
+        "start_node_id": 0,
+        "target_idx": 1,
+        "room_topology_map": torch.zeros(54, ROOM_HEIGHT, ROOM_WIDTH, dtype=torch.float32),
+        "boundary_constraints": torch.zeros(8, dtype=torch.float32),
+    }
+
+
+def test_masked_room_trainer_logic_ablation_uses_raw_logits(monkeypatch):
+    config = MaskedRoomTrainingConfig(
+        device="cpu",
+        quick=True,
+        logic_net_enabled=True,
+        alpha_logic=0.5,
+        logic_net_trainable=False,
+        num_logic_iterations=2,
+        model_channels=32,
+        hidden_dim=32,
+        context_dim=8,
+        condition_hidden_dim=64,
+        condition_num_attention_heads=4,
+        unet_num_heads=4,
+    )
+    trainer = MaskedRoomTrainer(config)
+
+    def _fake_encode(_graph_dict):
+        return torch.zeros(2, config.context_dim, dtype=torch.float32)
+
+    monkeypatch.setattr(trainer, "_encode_graph_conditioning", _fake_encode)
+
+    captured = {}
+
+    def _fake_training_loss(*args, **kwargs):
+        _ = args
+        assert kwargs.get("return_aux") is True
+        logits = torch.full((2, config.num_classes, ROOM_HEIGHT, ROOM_WIDTH), 0.25, dtype=torch.float32)
+        captured["graph_scope_for_model"] = kwargs["graph_data"]["graph_scope"]
+        return torch.tensor(1.0), {
+            "loss": 1.0,
+            "base_loss": 1.0,
+            "mask_ratio": 0.5,
+            "masked_fraction": 0.5,
+            "topology_focus_loss": 0.0,
+            "topology_focus_fraction": 0.0,
+        }, {"logits": logits}
+
+    monkeypatch.setattr(trainer.model, "training_loss", _fake_training_loss)
+
+    class _FakeLogicNet(torch.nn.Module):
+        def forward(self, tile_logits, graph_data=None):
+            captured["logic_input_shape"] = tuple(tile_logits.shape)
+            captured["graph_scope_for_logic"] = graph_data["graph_scope"]
+            return tile_logits.mean() * 0.0 + torch.tensor(0.25), {
+                "global_graph_reachability": torch.tensor(0.75),
+                "global_graph_node_coverage": 1.0,
+                "global_room_passability": torch.tensor(0.5),
+            }
+
+    trainer.logic_net = _FakeLogicNet()
+    real_maps = torch.zeros(2, 1, ROOM_HEIGHT, ROOM_WIDTH, dtype=torch.float32)
+    graph_list = [_masked_room_logic_graph(0), _masked_room_logic_graph(1)]
+
+    metrics = trainer._step(real_maps, graph_list, train=False)
+
+    assert captured["graph_scope_for_model"] == "dungeon"
+    assert captured["graph_scope_for_logic"] == "dungeon"
+    assert captured["logic_input_shape"] == (2, config.num_classes, ROOM_HEIGHT, ROOM_WIDTH)
+    assert metrics["loss"] == pytest.approx(1.125)
+    assert metrics["logic_loss"] == pytest.approx(0.25)
+    assert metrics["logic_loss_contribution"] == pytest.approx(0.125)
+    assert metrics["logic_global_graph_supervised"] == pytest.approx(1.0)
+    assert metrics["logic_global_graph_loss_skipped"] == pytest.approx(0.0)
+    assert metrics["logic_global_graph_node_coverage"] == pytest.approx(1.0)
+    assert metrics["logic_global_graph_reachability"] == pytest.approx(0.75)
+
+
 def test_discrete_masked_model_training_loss_reports_topology_focus_term():
     model = create_discrete_masked_model(
         num_classes=44,
@@ -830,6 +917,56 @@ def test_masked_room_dataloaders_use_real_validation_split(monkeypatch):
     assert eval_size == 2
     assert len(train_loader.dataset) == 8
     assert len(val_loader.dataset) == 2
+
+
+def test_masked_room_logic_dataloaders_use_dungeon_batch_sampler(monkeypatch):
+    class _FakeRoomDataset:
+        def __init__(self):
+            self.sample_metadata = [
+                {"dungeon_id": "d0", "current_node_idx": 0},
+                {"dungeon_id": "d0", "current_node_idx": 1},
+                {"dungeon_id": "d1", "current_node_idx": 0},
+                {"dungeon_id": "d1", "current_node_idx": 1},
+            ]
+
+        def __len__(self):
+            return len(self.sample_metadata)
+
+        def __getitem__(self, idx):
+            graph = {
+                "node_features": torch.zeros(2, 6, dtype=torch.float32),
+                "edge_index": torch.tensor([[0], [1]], dtype=torch.long),
+                "num_nodes": 2,
+                "node_to_idx": {"A": 0, "B": 1},
+                "current_node_idx": int(self.sample_metadata[idx]["current_node_idx"]),
+            }
+            return torch.zeros(1, ROOM_HEIGHT, ROOM_WIDTH, dtype=torch.float32), graph
+
+    monkeypatch.setattr(
+        "src.train_masked_room.create_dataloader",
+        lambda *args, **kwargs: SimpleNamespace(dataset=_FakeRoomDataset()),
+    )
+    config = MaskedRoomTrainingConfig(
+        device="cpu",
+        quick=True,
+        batch_size=2,
+        validation_fraction=0.0,
+        logic_net_enabled=True,
+        alpha_logic=0.5,
+        model_channels=32,
+        hidden_dim=32,
+        condition_hidden_dim=64,
+        condition_num_attention_heads=4,
+        unet_num_heads=4,
+    )
+
+    train_loader, val_loader, eval_split_name, train_size, eval_size = _create_masked_room_dataloaders(config)
+
+    assert isinstance(train_loader.batch_sampler, DungeonBatchSampler)
+    assert isinstance(val_loader.batch_sampler, DungeonBatchSampler)
+    assert eval_split_name == "train"
+    assert train_size == 4
+    assert eval_size == 4
 
 
 def test_masked_room_auto_resume_skips_incompatible_latest_checkpoint(
