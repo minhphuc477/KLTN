@@ -3197,7 +3197,7 @@ class DiffusionTrainer:
         
         # --- Phase 4A: Update EMA model weights ---
         self._update_ema()
-        self._reset_gradient_accumulation()
+        self._accumulation_micro_steps = 0
 
         self.global_step += 1
         self._apply_lr_warmup(completed_steps=self.global_step)
@@ -4133,6 +4133,12 @@ def train_diffusion(config: DiffusionTrainingConfig) -> DiffusionTrainer:
         )
 
         trainer = DiffusionTrainer(config, distributed_context=distributed_context)
+        if getattr(trainer, "_accelerator", None) is not None:
+            if val_loader is not None:
+                train_loader, val_loader = trainer._accelerator.prepare(train_loader, val_loader)
+            else:
+                train_loader = trainer._accelerator.prepare(train_loader)
+            logger.info("Accelerate prepared diffusion train/validation dataloaders.")
         if distributed_context.is_main_process:
             diffusion_trainable = count_parameters(trainer.diffusion, trainable_only=True)
             condition_trainable = count_parameters(trainer.condition_encoder, trainable_only=True)

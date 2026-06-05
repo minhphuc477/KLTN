@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 import torch
 
+import src.train_diffusion as train_diffusion_module
 from src.core.definitions import GRAPH_EDGE_FEATURE_DIM, GRAPH_TPE_DIM, ROOM_HEIGHT, ROOM_TOPOLOGY_CHANNEL_COUNT, ROOM_WIDTH, SEMANTIC_PALETTE
 from src.core.latent_diffusion import create_latent_diffusion
 from src.core.logic_net import LogicNet
@@ -258,6 +259,13 @@ class _TinyModule(torch.nn.Module):
     def __init__(self):
         super().__init__()
         self.weight = torch.nn.Parameter(torch.tensor(1.0))
+
+
+class _TinyCheckpointModule(_TinyModule):
+    def __init__(self, value: float = 1.0):
+        super().__init__()
+        self.weight.data.fill_(float(value))
+        self.guidance = SimpleNamespace()
 
 
 class _DummyTrainingLossModule(_TinyModule):
@@ -1189,6 +1197,87 @@ def test_train_step_skips_nonfinite_diffusion_loss():
     assert trainer.global_step == 0
 
 
+def test_train_step_accumulates_gradients_before_optimizer_step():
+    trainer = DiffusionTrainer.__new__(DiffusionTrainer)
+    trainer.device = torch.device("cpu")
+    trainer.config = SimpleNamespace(
+        alpha_visual=1.0,
+        alpha_logic=0.0,
+        alpha_logic_tile=0.0,
+        alpha_wfc_pseudo=0.0,
+        logic_loss_mode="predicted_latent",
+        logic_net_enabled=False,
+        logic_net_trainable=False,
+        grad_clip_norm=0.0,
+        gradient_accumulation_steps=2,
+        epochs=1,
+        learning_rate=1e-3,
+        global_lr_warmup_epochs=0,
+        logic_lr_warmup_epochs=0,
+    )
+    trainer.diffusion = _FiniteDifferentiableTrainingLossModule()
+    trainer.condition_encoder = _TinyModule()
+    trainer.logic_net = _DummyLogicNet()
+    trainer.ema_diffusion = _DummyEvalModel()
+    trainer.optimizer = torch.optim.SGD(
+        list(trainer.diffusion.parameters()) + list(trainer.condition_encoder.parameters()),
+        lr=1e-3,
+    )
+    trainer._accelerator = None
+    trainer.global_step = 0
+    trainer._accumulation_micro_steps = 0
+    trainer._nonfinite_warning_counts = {}
+    trainer.encode_to_latent = lambda real_maps: torch.zeros((real_maps.shape[0], 4, 2, 2), dtype=torch.float32)
+    trainer.get_dummy_conditioning = lambda batch_size: torch.zeros((batch_size, 1, 8), dtype=torch.float32)
+    trainer._gradients_are_finite = lambda: True
+
+    step_calls = 0
+    ema_calls = 0
+    warmup_calls = 0
+
+    def _step():
+        nonlocal step_calls
+        step_calls += 1
+
+    def _update_ema():
+        nonlocal ema_calls
+        ema_calls += 1
+
+    def _warmup(*, completed_steps=None):
+        _ = completed_steps
+        nonlocal warmup_calls
+        warmup_calls += 1
+
+    trainer.optimizer.step = _step
+    trainer._update_ema = _update_ema
+    trainer._apply_lr_warmup = _warmup
+
+    first = DiffusionTrainer.train_step(
+        trainer,
+        torch.zeros((2, 1, ROOM_HEIGHT, ROOM_WIDTH), dtype=torch.float32),
+        include_logic_loss=False,
+    )
+    assert first["optimizer_step"] == pytest.approx(0.0)
+    assert trainer.global_step == 0
+    assert step_calls == 0
+    assert ema_calls == 0
+    assert trainer._accumulation_micro_steps == 1
+    assert trainer.diffusion.weight.grad is not None
+
+    second = DiffusionTrainer.train_step(
+        trainer,
+        torch.zeros((2, 1, ROOM_HEIGHT, ROOM_WIDTH), dtype=torch.float32),
+        include_logic_loss=False,
+    )
+    assert second["optimizer_step"] == pytest.approx(1.0)
+    assert trainer.global_step == 1
+    assert step_calls == 1
+    assert ema_calls == 1
+    assert warmup_calls == 1
+    assert trainer._accumulation_micro_steps == 0
+    assert trainer.diffusion.weight.grad is not None
+
+
 def test_train_step_nonfinite_gradients_do_not_create_ghost_step():
     trainer = DiffusionTrainer.__new__(DiffusionTrainer)
     trainer.device = torch.device("cpu")
@@ -1857,3 +1946,97 @@ def test_load_checkpoint_strips_legacy_embedded_guidance_logicnet_state(tmp_path
     assert trainer.diffusion.guidance.logic_net is trainer.logic_net
     assert trainer.ema_diffusion.guidance.logic_net is trainer.logic_net
     assert "logic_net" not in trainer.diffusion.guidance._modules
+
+
+def test_safetensors_sidecar_round_trips_inference_weights_without_optimizer(tmp_path):
+    if not train_diffusion_module._HAS_SAFETENSORS:
+        pytest.skip("safetensors is not installed")
+
+    def _make_config():
+        config = SimpleNamespace(
+            latent_dim=4,
+            context_dim=8,
+            num_timesteps=8,
+            schedule_type="cosine",
+            diffusion_training_objective="diffusion",
+            denoiser_backbone="unet",
+            pag_scale=0.0,
+            dit_depth=1,
+            dit_patch_size=1,
+            dit_mlp_ratio=4.0,
+            num_classes=44,
+            vqvae_hidden_dim=8,
+            vqvae_codebook_size=16,
+            vqvae_architecture="vqvae",
+            vqvae_top_codebook_size=None,
+            vqvae_top_latent_dim=None,
+            vqvae_use_coordconv=True,
+            vqvae_checkpoint=None,
+            semantic_role_prior_strength=0.1,
+            semantic_puzzle_offset=0,
+            topology_supervision_mode="runtime_aligned",
+            logic_net_enabled=True,
+            guidance_scale=0.0,
+            guidance_clamp_magnitude=1.0,
+            guidance_relative_norm_cap=0.25,
+            guidance_schedule_enabled=True,
+            guidance_active_fraction=1.0,
+            guidance_decay_power=1.0,
+            guidance_max_graph_nodes=16,
+            guidance_max_key_lock_pairs=16,
+            guidance_max_guidance_elements=1024,
+        )
+        config.to_dict = lambda: {
+            key: value
+            for key, value in config.__dict__.items()
+            if not callable(value)
+        }
+        return config
+
+    trainer = DiffusionTrainer.__new__(DiffusionTrainer)
+    trainer.config = _make_config()
+    trainer.diffusion = _TinyCheckpointModule(2.0)
+    trainer.ema_diffusion = _TinyCheckpointModule(3.0)
+    trainer.condition_encoder = _TinyCheckpointModule(4.0)
+    trainer.logic_net = _TinyCheckpointModule(5.0)
+    trainer.optimizer = torch.optim.SGD(
+        list(trainer.diffusion.parameters())
+        + list(trainer.condition_encoder.parameters())
+        + list(trainer.logic_net.parameters()),
+        lr=1e-3,
+    )
+    trainer.scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(trainer.optimizer, T_0=1)
+    trainer.epoch = 7
+    trainer.global_step = 11
+
+    path = tmp_path / "resume.pth"
+    DiffusionTrainer.save_checkpoint(trainer, str(path), include_optimizer=True)
+    safetensors_path = path.with_suffix(".safetensors")
+    assert safetensors_path.exists()
+    assert safetensors_path.with_suffix(".safetensors.meta.json").exists()
+
+    loaded = DiffusionTrainer.__new__(DiffusionTrainer)
+    loaded.config = _make_config()
+    loaded.device = torch.device("cpu")
+    loaded.diffusion = _TinyCheckpointModule(0.0)
+    loaded.ema_diffusion = _TinyCheckpointModule(0.0)
+    loaded.condition_encoder = _TinyCheckpointModule(0.0)
+    loaded.logic_net = _TinyCheckpointModule(0.0)
+    loaded.optimizer = torch.optim.SGD(
+        list(loaded.diffusion.parameters())
+        + list(loaded.condition_encoder.parameters())
+        + list(loaded.logic_net.parameters()),
+        lr=1e-3,
+    )
+    loaded.scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(loaded.optimizer, T_0=1)
+
+    DiffusionTrainer.load_checkpoint(loaded, str(safetensors_path))
+
+    assert float(loaded.diffusion.weight.item()) == pytest.approx(2.0)
+    assert float(loaded.ema_diffusion.weight.item()) == pytest.approx(3.0)
+    assert float(loaded.condition_encoder.weight.item()) == pytest.approx(4.0)
+    assert float(loaded.logic_net.weight.item()) == pytest.approx(5.0)
+    assert loaded.epoch == 7
+    assert loaded.global_step == 11
+    assert loaded._accumulation_micro_steps == 0
+    assert loaded.diffusion.guidance.logic_net is loaded.logic_net

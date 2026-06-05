@@ -373,6 +373,11 @@ def test_stage_helpers_forward_checkpoint_retention_and_resume_defaults():
     assert diffusion_kwargs["checkpoint_storage_budget_gb"] is None
     assert diffusion_kwargs["latent_cache_enabled"] is True
     assert diffusion_kwargs["latent_cache_max_items"] == 4096
+    assert diffusion_kwargs["gradient_accumulation_steps"] == 1
+    assert diffusion_kwargs["gradient_checkpointing"] is False
+    assert diffusion_kwargs["use_amp"] is False
+    assert diffusion_kwargs["amp_mixed_precision"] == "fp16"
+    assert diffusion_kwargs["use_accelerate"] is False
     assert fast_sampler_kwargs["keep_last"] == 2
     assert fast_sampler_kwargs["ema_decay"] == pytest.approx(0.95)
     assert fast_sampler_kwargs["auto_resume"] is True

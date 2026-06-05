@@ -22,6 +22,7 @@ from src.core.logic_net import (
     ValueIterationGridPathfinder,
     WalkabilityPredictor,
 )
+from src.core.perturb_and_map import perturb_and_map_distance
 from src.core.symbolic_refiner import PathAnalyzer, WaveFunctionCollapse
 from src.pipeline.graph_features import extract_node_feature_vector
 from src.pipeline.spatial_utils import parse_label_tokens
@@ -384,6 +385,27 @@ def test_perturb_and_map_pathfinder_is_selectable_and_backpropagates():
     distances.mean().backward()
     assert walkability.grad is not None
     assert walkability.grad.abs().sum().item() > 0.0
+
+
+def test_perturb_and_map_goal_distance_routes_gradient_to_path_support():
+    walkability = torch.full((1, 1, 4, 4), 0.8, requires_grad=True)
+    source = torch.zeros_like(walkability)
+    source[:, :, 0, 0] = 1.0
+
+    distances = perturb_and_map_distance(
+        walkability,
+        source,
+        num_samples=1,
+        noise_scale=0.0,
+        obstacle_penalty=4.0,
+        blocked_threshold=0.05,
+    )
+    distances[:, :, 3, 3].sum().backward()
+
+    assert walkability.grad is not None
+    assert float(walkability.grad.abs().sum().item()) > 0.0
+    assert float(walkability.grad[:, :, 0, 0].abs().item()) > 0.0
+    assert float(walkability.grad[:, :, 1, 0].abs().item()) > 0.0
 
 
 def test_logicnet_perturb_and_map_propagates_to_latents_and_classifier():

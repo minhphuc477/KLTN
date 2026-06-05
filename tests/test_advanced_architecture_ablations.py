@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 import torch
 
+import src.core.latent_diffusion as latent_diffusion_module
 from src.config_system import merge_config
 from src.core.latent_diffusion import create_latent_diffusion
 from src.evaluation.perturb_and_map import perturb_and_map_reachability
@@ -421,6 +422,42 @@ def test_diffusion_training_config_exposes_flow_matching_ablation():
         DiffusionTrainingConfig(diffusion_training_objective="flow_matching", denoiser_backbone="unet")
     with pytest.raises(ValueError, match="denoiser_backbone"):
         DiffusionTrainingConfig(denoiser_backbone="mlp")
+
+
+def test_unet_gradient_checkpointing_invokes_activation_checkpoint(monkeypatch):
+    model = create_latent_diffusion(
+        latent_dim=4,
+        model_channels=8,
+        context_dim=8,
+        num_timesteps=8,
+        cfg_dropout_prob=0.0,
+        unet_channel_mult=(1,),
+        unet_num_res_blocks=1,
+        unet_attention_resolutions=(),
+        unet_num_heads=1,
+    )
+    for module in model.denoiser.modules():
+        if hasattr(module, "use_checkpoint"):
+            module.use_checkpoint = True
+    model.train()
+
+    calls = 0
+
+    def _counting_checkpoint(function, *args, **kwargs):
+        _ = kwargs
+        nonlocal calls
+        calls += 1
+        return function(*args)
+
+    monkeypatch.setattr(latent_diffusion_module, "activation_checkpoint", _counting_checkpoint)
+    out = model.denoiser(
+        torch.randn(1, 4, 2, 2, requires_grad=True),
+        torch.tensor([1], dtype=torch.long),
+        torch.randn(1, 1, 8),
+    )
+    out.mean().backward()
+
+    assert calls > 0
 
 
 def test_latent_diffusion_compute_loss_dispatches_configured_objective(monkeypatch):
