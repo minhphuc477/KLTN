@@ -231,19 +231,16 @@ class CBSMetrics:
     def summary(self) -> str:
         """Human-readable summary."""
         return f"""
-â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—
-â•‘                     CBS COGNITIVE METRICS                            â•‘
-â• â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•£
-â•‘ Confusion Index:     {self.confusion_index:>8.3f}  (revisits/unique, low=good)     â•‘
-â•‘ Navigation Entropy:  {self.navigation_entropy:>8.3f}  (bits, 0=linear, 2=random)   â•‘
-â•‘ Cognitive Load:      {self.cognitive_load:>8.3f}  (memoryxuncertainty)            â•‘
-â•‘ Goal-Sighting Lat.:  {self.aha_latency:>8d}  steps (see->reach goal)             â•‘
-â• â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•£
-â•‘ Unique Tiles:        {self.unique_tiles_visited:>8d}  | Total Steps: {self.total_steps:>8d}          â•‘
-â•‘ Exploration Eff:     {self.exploration_efficiency:>8.3f}  | Peak Memory: {self.peak_memory_usage:>8d}          â•‘
-â•‘ Decisions Made:      {self.decisions_made:>8d}  | Suboptimal:  {self.suboptimal_decisions:>8d}          â•‘
-â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+CBS COGNITIVE METRICS
+Confusion Index:     {self.confusion_index:>8.3f}  (revisits/unique, low=good)
+Navigation Entropy:  {self.navigation_entropy:>8.3f}  (bits, 0=linear, 2=random)
+Cognitive Load:      {self.cognitive_load:>8.3f}  (memory x uncertainty)
+Goal-Sighting Lat.:  {self.aha_latency:>8d}  steps (see->reach goal)
+Unique Tiles:        {self.unique_tiles_visited:>8d}  | Total Steps: {self.total_steps:>8d}
+Exploration Eff:     {self.exploration_efficiency:>8.3f}  | Peak Memory: {self.peak_memory_usage:>8d}
+Decisions Made:      {self.decisions_made:>8d}  | Suboptimal: {self.suboptimal_decisions:>8d}
 """
+
 
 
 # ==============================================================================
