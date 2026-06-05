@@ -1,16 +1,16 @@
 # Graph Report - KLTN  (2026-06-05)
 
 ## Corpus Check
-- 849 files · ~1,688,097 words
+- 859 files · ~1,691,546 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 18837 nodes · 40326 edges · 766 communities (630 shown, 136 thin omitted)
-- Extraction: 87% EXTRACTED · 13% INFERRED · 0% AMBIGUOUS · INFERRED: 5209 edges (avg confidence: 0.53)
+- 18992 nodes · 40657 edges · 782 communities (641 shown, 141 thin omitted)
+- Extraction: 87% EXTRACTED · 13% INFERRED · 0% AMBIGUOUS · INFERRED: 5253 edges (avg confidence: 0.53)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `3896a3fb`
+- Built from commit: `65a7d1f4`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -760,19 +760,35 @@
 - [[_COMMUNITY_Community 757|Community 757]]
 - [[_COMMUNITY_Community 758|Community 758]]
 - [[_COMMUNITY_Community 759|Community 759]]
+- [[_COMMUNITY_Community 760|Community 760]]
+- [[_COMMUNITY_Community 761|Community 761]]
+- [[_COMMUNITY_Community 762|Community 762]]
+- [[_COMMUNITY_Community 763|Community 763]]
 - [[_COMMUNITY_Community 764|Community 764]]
 - [[_COMMUNITY_Community 765|Community 765]]
 - [[_COMMUNITY_Community 766|Community 766]]
+- [[_COMMUNITY_Community 767|Community 767]]
+- [[_COMMUNITY_Community 768|Community 768]]
 - [[_COMMUNITY_Community 769|Community 769]]
+- [[_COMMUNITY_Community 770|Community 770]]
+- [[_COMMUNITY_Community 771|Community 771]]
+- [[_COMMUNITY_Community 772|Community 772]]
+- [[_COMMUNITY_Community 773|Community 773]]
 - [[_COMMUNITY_Community 774|Community 774]]
+- [[_COMMUNITY_Community 775|Community 775]]
+- [[_COMMUNITY_Community 776|Community 776]]
+- [[_COMMUNITY_Community 777|Community 777]]
 - [[_COMMUNITY_Community 778|Community 778]]
+- [[_COMMUNITY_Community 779|Community 779]]
+- [[_COMMUNITY_Community 780|Community 780]]
+- [[_COMMUNITY_Community 781|Community 781]]
 
 ## God Nodes (most connected - your core abstractions)
 1. `FORCE_INLINE` - 338 edges
-2. `NeuralSymbolicDungeonPipeline` - 327 edges
-3. `LogicNet` - 188 edges
-4. `ZeldaGUI` - 187 edges
-5. `TileID` - 185 edges
+2. `NeuralSymbolicDungeonPipeline` - 330 edges
+3. `LogicNet` - 190 edges
+4. `TileID` - 189 edges
+5. `ZeldaGUI` - 187 edges
 6. `CognitiveBoundedSearch` - 185 edges
 7. `ZeldaDungeonAdapter` - 177 edges
 8. `ZeldaLogicEnv` - 163 edges
@@ -780,6 +796,8 @@
 10. `__m128i` - 138 edges
 
 ## Surprising Connections (you probably didn't know these)
+- `Any` --uses--> `TileID`  [INFERRED]
+  experiments/ablation_pcbs_vs_astar.py → src/core/definitions.py
 - `Namespace` --uses--> `NeuralSymbolicDungeonPipeline`  [INFERRED]
   scripts/export_discrepancy_heatmap_study.py → src/pipeline/dungeon_pipeline.py
 - `NeuralSymbolicDungeonPipeline` --uses--> `NeuralSymbolicDungeonPipeline`  [INFERRED]
@@ -788,21 +806,19 @@
   scripts/export_semantic_anchor_end_to_end.py → src/pipeline/dungeon_pipeline.py
 - `int` --uses--> `NeuralSymbolicDungeonPipeline`  [INFERRED]
   scripts/export_semantic_anchor_end_to_end.py → src/pipeline/dungeon_pipeline.py
-- `Namespace` --uses--> `NeuralSymbolicDungeonPipeline`  [INFERRED]
-  scripts/export_semantic_anchor_end_to_end.py → src/pipeline/dungeon_pipeline.py
 
 ## Import Cycles
 - 1-file cycle: `simulation/__init__.py -> simulation/__init__.py`
 
-## Communities (766 total, 136 thin omitted)
+## Communities (782 total, 141 thin omitted)
 
 ### Community 0 - "Community 0"
-Cohesion: 0.03
-Nodes (91): MLFeatureExtractor, Extract ML-ready features from dungeon topology graphs., HybridLayoutEngineImpl, Adapter and conversion exports from the monolithic zelda_core module., Feature extraction exports from canonical zelda_data modules., Graph matching/layout exports from the monolithic zelda_core module., Parser-focused exports from the monolithic zelda_core module., Solver exports from the monolithic zelda_core module. (+83 more)
+Cohesion: 0.18
+Nodes (40): _arrow(), _box(), _draw_grid(), _grid_rgb(), _grid_rgb_with_latent_highlight(), _load_json(), _load_room_tensors_and_grids(), _load_vqvae() (+32 more)
 
 ### Community 1 - "Community 1"
 Cohesion: 0.03
-Nodes (63): GraphToGridCrossAttention, Per-position cross-attention from grid to graph nodes.          Each position, Per-position cross-attention from grid to graph nodes.          Each position, Enable or disable storage of the latest softmax attention map., Enable or disable storage of the latest softmax attention map., Tests for graph-to-grid cross-attention., Test module imports correctly., Test 2D sinusoidal position encoding. (+55 more)
+Nodes (72): GraphToGridCrossAttention, Per-position cross-attention from grid to graph nodes.          Each position, Per-position cross-attention from grid to graph nodes.          Each position, Enable or disable storage of the latest softmax attention map., Enable or disable storage of the latest softmax attention map., bench_mode(), main(), _peak_memory_mb() (+64 more)
 
 ### Community 2 - "Community 2"
 Cohesion: 0.20
@@ -810,23 +826,23 @@ Nodes (9): _extract_graph_spatial_from_dungeon(), Fallback graph extraction from
 
 ### Community 3 - "Community 3"
 Cohesion: 0.01
-Nodes (94): Stop auto-solve and clear visual state., Open a file dialog to import a .txt level., Open a file dialog to export the current .txt level., Generate a new random dungeon using the procedural generator., Non-blocking wrapper to spawn background worker and return immediately., Select the checkpoint used by model-backed level generation., Background worker entry point for AI generation pipeline., Open OS temp folder where solver/preview artifacts are stored. (+86 more)
+Nodes (86): int, Stop auto-solve and clear visual state., Open a file dialog to import a .txt level., Open a file dialog to export the current .txt level., Generate a new random dungeon using the procedural generator., Non-blocking wrapper to spawn background worker and return immediately., Select the checkpoint used by model-backed level generation., Background worker entry point for AI generation pipeline. (+78 more)
 
 ### Community 4 - "Community 4"
 Cohesion: 0.05
 Nodes (56): handle_control_panel_click(), Control-panel click dispatch orchestration for ZeldaGUI wrappers., Dispatch click events for control-panel widgets and scrolling behavior., apply_algorithm_dropdown_update(), apply_checkbox_widget_update(), apply_control_panel_widget_updates(), apply_dropdown_widget_update(), control_panel_hit_rect() (+48 more)
 
 ### Community 5 - "Community 5"
-Cohesion: 0.04
-Nodes (51): Wire current LogicNet and config values into gradient guidance., Wire current LogicNet and config values into gradient guidance., Wire current LogicNet and config values into gradient guidance., Wire current LogicNet and config values into gradient guidance., Wire current LogicNet and config values into gradient guidance., Wire current LogicNet and config values into gradient guidance., Create condition encoder., Create condition encoder. (+43 more)
+Cohesion: 0.06
+Nodes (32): Wire current LogicNet and config values into gradient guidance., Wire current LogicNet and config values into gradient guidance., Wire current LogicNet and config values into gradient guidance., Wire current LogicNet and config values into gradient guidance., Wire current LogicNet and config values into gradient guidance., Wire current LogicNet and config values into gradient guidance., Create condition encoder., Create condition encoder. (+24 more)
 
 ### Community 6 - "Community 6"
 Cohesion: 0.03
-Nodes (73): Interpolate position between two nodes., Can apply if we have two adjacent connected nodes., Merge two nodes into a big room., BFS to find shortest path distance., Shortest path over current directed adjacency., Directed/undirected edge pairs on current START->GOAL path.          Valves sh, Can apply if there are cycles in the graph., Convert one edge in a cycle to ONE_WAY. (+65 more)
+Nodes (72): Interpolate position between two nodes., Can apply if we have two adjacent connected nodes., Merge two nodes into a big room., BFS to find shortest path distance., Shortest path over current directed adjacency., Directed/undirected edge pairs on current START->GOAL path.          Valves sh, Can apply if there are cycles in the graph., Convert one edge in a cycle to ONE_WAY. (+64 more)
 
 ### Community 7 - "Community 7"
 Cohesion: 0.04
-Nodes (37): bool, float, int, str, Surface, EffectManager, Particle, ParticleEffect (+29 more)
+Nodes (48): bool, float, int, str, Surface, BaseEffect, EffectManager, FlashEffect (+40 more)
 
 ### Community 8 - "Community 8"
 Cohesion: 0.03
@@ -834,7 +850,7 @@ Nodes (133): _mm_abs_epi16(), _mm_abs_epi32(), _mm_abs_epi8(), _mm_add_epi16(), 
 
 ### Community 9 - "Community 9"
 Cohesion: 0.02
-Nodes (105): Convert diffusion model prediction to predicted clean latent x0., Convert diffusion model prediction to predicted clean latent x0., Convert diffusion model prediction to predicted clean latent x0., Convert diffusion model prediction to predicted clean latent x0., Convert diffusion model prediction to predicted clean latent x0., Convert diffusion model prediction to predicted clean latent x0., Convert diffusion model prediction to predicted clean latent x0., Convert diffusion model prediction to predicted clean latent x0. (+97 more)
+Nodes (97): Convert diffusion model prediction to predicted clean latent x0., Convert diffusion model prediction to predicted clean latent x0., Convert diffusion model prediction to predicted clean latent x0., Convert diffusion model prediction to predicted clean latent x0., Convert diffusion model prediction to predicted clean latent x0., Convert diffusion model prediction to predicted clean latent x0., Convert diffusion model prediction to predicted clean latent x0., Convert diffusion model prediction to predicted clean latent x0. (+89 more)
 
 ### Community 10 - "Community 10"
 Cohesion: 0.04
@@ -846,71 +862,71 @@ Nodes (20): Can apply if there are traversable PATH edges to split., Insert chal
 
 ### Community 12 - "Community 12"
 Cohesion: 0.03
-Nodes (90): __getattr__(), H-MOLQD Evaluation Module =========================  Block VII: External Vali, Lazily expose benchmark_suite symbols to avoid import cycles., Lazily expose benchmark_suite symbols to avoid import cycles., Lazily expose benchmark_suite symbols to avoid import cycles., ArchiveStats, _canonical_cache_value(), CBSFeatureExtractor (+82 more)
+Nodes (86): __getattr__(), H-MOLQD Evaluation Module =========================  Block VII: External Vali, Lazily expose benchmark_suite symbols to avoid import cycles., Lazily expose benchmark_suite symbols to avoid import cycles., Lazily expose benchmark_suite symbols to avoid import cycles., ArchiveStats, _canonical_cache_value(), CBSFeatureExtractor (+78 more)
 
 ### Community 13 - "Community 13"
 Cohesion: 0.02
-Nodes (98): Debug TRIFORCE with pushed blocks in state, Debug _try_move_pure for block pushing, dominates(), dominates_bitset(), GameState, GameStateBitset, has_pushed_block_at(), is_push_destination_available() (+90 more)
+Nodes (140): DiversityEvaluator, Standalone validation helper classes extracted from validator monolith., Evaluate diversity across a batch of generated maps., Pre-validation checks for map structural validity., SanityChecker, GameState, _graph_node_role_tokens(), GraphGuidedValidator (+132 more)
 
 ### Community 14 - "Community 14"
-Cohesion: 0.04
-Nodes (74): EvolutionaryTopologyGenerator, Final export calibration for gate density and key surplus.          The progre, Connect disconnected physical components with PATH edges.          Block I sea, Create random rule sequences as starting genomes.                  Uses weight, How many initial genomes should be biased toward tutorial progression., Pick one rule from the first non-empty candidate group., Construct an initial genome that already contains a tutorial-to-climax skeleton., Evaluate fitness for all individuals in population.                  Args: (+66 more)
+Cohesion: 0.05
+Nodes (49): EvolutionaryTopologyGenerator, Create random rule sequences as starting genomes.                  Uses weight, How many initial genomes should be biased toward tutorial progression., Pick one rule from the first non-empty candidate group., Construct an initial genome that already contains a tutorial-to-climax skeleton., Evaluate fitness for all individuals in population.                  Args:, Evaluate one individual in-place., Estimate marginal fitness credit per rule position via leave-one-out ablation. (+41 more)
 
 ### Community 15 - "Community 15"
-Cohesion: 0.02
-Nodes (138): ItemSeekingHeuristic, MemoryItem, A single item in working memory.          Scientific basis: Cowan (2001) - "Th, Capacity-limited working memory based on Miller's Law.          Scientific bas, Capacity-limited working memory based on Miller's Law.          Scientific bas, Initialize working memory.                  Args:             capacity: Max i, Initialize working memory.                  Args:             capacity: Max i, Initialize working memory.                  Args:             capacity: Max i (+130 more)
+Cohesion: 0.04
+Nodes (54): MemoryItem, A single item in working memory.          Scientific basis: Cowan (2001) - "Th, Initialize working memory.                  Args:             capacity: Max i, Initialize working memory.                  Args:             capacity: Max i, Initialize working memory.                  Args:             capacity: Max i, Initialize working memory.                  Args:             capacity: Max i, Add or update an item in memory.                  Args:             item_type, Clear all active memory contents and run-local statistics. (+46 more)
 
 ### Community 16 - "Community 16"
 Cohesion: 0.12
-Nodes (104): Difficulty, Initialize executor with available grammar rules.                  Args:, Evolutionary topology generator., Final Block I pass that tightens overly lenient graphs with existing gate rules., Shared imports/constants for the evolutionary topology package., AddArenaRule, AddBossGauntlet, AddCollectionChallengeRule (+96 more)
+Nodes (97): Difficulty, Initialize executor with available grammar rules.                  Args:, Evolutionary topology generator., Shared imports/constants for the evolutionary topology package., AddArenaRule, AddBossGauntlet, AddCollectionChallengeRule, AddEntangledBranchesRule (+89 more)
 
 ### Community 17 - "Community 17"
 Cohesion: 0.05
-Nodes (87): ExplorabilityAnalyzer, FlowAnalyzer, FrustrationAnalyzer, PacingAnalyzer, Analyzer implementations for frustration/exploration/flow/pacing metrics., Quantifies exploration potential and discovery richness., Measures flow-state quality from challenge progression and variety., Quantifies sources of player frustration. (+79 more)
+Nodes (80): ExplorabilityAnalyzer, FlowAnalyzer, FrustrationAnalyzer, PacingAnalyzer, Analyzer implementations for frustration/exploration/flow/pacing metrics., Quantifies exploration potential and discovery richness., Measures flow-state quality from challenge progression and variety., Quantifies sources of player frustration. (+72 more)
 
 ### Community 18 - "Community 18"
-Cohesion: 0.03
-Nodes (142): AdvancedPipelineConfig, Enum, Predefined room size templates., Create dimensions from size class., RoomSize, EntitySpawner, EntityType, Entity Spawner Converts abstract mission graph attributes to concrete spatial g (+134 more)
+Cohesion: 0.06
+Nodes (84): FunMetricsEvaluator, Master evaluator combining all fun metrics.          Usage:         evaluator, EntitySpawner, Spawns gameplay entities in generated rooms based on semantic attributes., GlobalStateManager, GlobalStateType, Types of global state that affect multiple rooms., Manages global state propagation across multi-room dungeon.          Core Conc (+76 more)
 
 ### Community 19 - "Community 19"
-Cohesion: 0.03
-Nodes (88): expand_attention_mask(), hedgehog_linear_attention(), HedgehogFeatureMap, Shared attention kernels for token and graph-grid conditioning., Trainable Hedgehog feature map for linear attention.      Uses symmetric positiv, Map [B, heads, seq, head_dim] -> [B, heads, seq, 2 * feature_dim]., Normalize a token-validity mask to [B, 1, L, 1] for feature-map attention., Compute linear attention with Hedgehog feature maps.      Args:         q: [B, h (+80 more)
+Cohesion: 0.04
+Nodes (66): expand_attention_mask(), hedgehog_linear_attention(), HedgehogFeatureMap, Shared attention kernels for token and graph-grid conditioning., Trainable Hedgehog feature map for linear attention.      Uses symmetric positiv, Map [B, heads, seq, head_dim] -> [B, heads, seq, 2 * feature_dim]., Normalize a token-validity mask to [B, 1, L, 1] for feature-map attention., Compute linear attention with Hedgehog feature maps.      Args:         q: [B, h (+58 more)
 
 ### Community 20 - "Community 20"
 Cohesion: 0.03
 Nodes (103): _mm_add_ps(), _mm_add_ss(), _mm_addsub_ps(), _mm_and_ps(), _mm_andnot_ps(), _mm_blendv_ps(), _mm_castps_pd(), _mm_castps_si128() (+95 more)
 
 ### Community 21 - "Community 21"
-Cohesion: 0.08
-Nodes (31): EntropyReset, FailurePoint, H-MOLQD Block VI: Symbolic Refiner with Wave Function Collapse ================, Location where pathfinding failed., Plan for repairing dungeon., State of Wave Function Collapse., Tile types for WFC — aligned with canonical TileID from definitions.py., Reset regions to high entropy for WFC regeneration.          Identifies invali (+23 more)
+Cohesion: 0.04
+Nodes (99): DungeonSolver, Helpers for non-blocking preview startup after map load., Run lightweight post-load preview workflow without blocking UI., start_preview_for_current_map(), _add_config_flags(), _build_root_parser(), _build_topology_compare_manual_parser(), _build_topology_fixed_graph_audit_parser() (+91 more)
 
 ### Community 22 - "Community 22"
-Cohesion: 0.02
-Nodes (175): DualStreamConditionEncoder, H-MOLQD Block III: Dual-Stream Condition Encoder ==============================, Dual-Stream Condition Encoder for H-MOLQD Block III.          Combines local s, Dual-Stream Condition Encoder for H-MOLQD Block III.          Combines local s, Dual-Stream Condition Encoder for H-MOLQD Block III.          Combines local s, Dual-Stream Condition Encoder for H-MOLQD Block III.          Combines local s, Dual-Stream Condition Encoder for H-MOLQD Block III.          Combines local s, Dual-Stream Condition Encoder for H-MOLQD Block III.          Combines local s (+167 more)
+Cohesion: 0.03
+Nodes (71): _coerce_optional_int(), _legacy_diffusion_overrides_from_args(), _load_checkpoint_metadata_sidecar(), Any, str, Build AdamW groups that exclude biases and 1D scale parameters from decay., Build AdamW groups that exclude biases and 1D scale parameters from decay., Build AdamW groups that exclude biases and 1D scale parameters from decay. (+63 more)
 
 ### Community 23 - "Community 23"
 Cohesion: 0.08
-Nodes (56): build_ieee_markdown_table(), _calibration_weight_payload(), classify_pcbs_outcome(), _coerce_grid(), compute_pcbs_readability_metrics(), count_pcbs_puzzle_stall_steps(), _count_puzzle_stall_steps(), evaluate_astar_vs_pcbs() (+48 more)
+Nodes (54): build_ieee_markdown_table(), _calibration_weight_payload(), classify_pcbs_outcome(), _coerce_grid(), compute_pcbs_readability_metrics(), count_pcbs_puzzle_stall_steps(), _count_puzzle_stall_steps(), evaluate_astar_vs_pcbs() (+46 more)
 
 ### Community 24 - "Community 24"
-Cohesion: 0.15
-Nodes (27): DistributedSampler, bool, device, float, int, Module, str, test_average_module_parameters_noops_without_distributed_context() (+19 more)
+Cohesion: 0.05
+Nodes (72): DistributedSampler, build_diffusion_training_config_from_args(), compute_teacher_validation_total_loss(), main(), Training Pipeline for Latent Diffusion Model ==================================, Resolve the standalone diffusion CLI into a validated DiffusionTrainingConfig., Resolve the standalone diffusion CLI into a validated DiffusionTrainingConfig., Resolve the standalone diffusion CLI into a validated DiffusionTrainingConfig. (+64 more)
 
 ### Community 25 - "Community 25"
-Cohesion: 0.08
-Nodes (40): Semantic tile IDs for dungeon grid representation., TileID, batch_load_dungeons(), DungeonTensor, GraphvizParser, IntelligentDataAdapter, load_zelda_dungeon(), MLFeatureExtractor (+32 more)
+Cohesion: 0.06
+Nodes (47): Semantic tile IDs for dungeon grid representation., TileID, batch_load_dungeons(), DungeonTensor, GraphvizParser, IntelligentDataAdapter, load_zelda_dungeon(), MLFeatureExtractor (+39 more)
 
 ### Community 26 - "Community 26"
-Cohesion: 0.12
-Nodes (77): BaseModel, MAPElitesEvaluator, GraphConfig, ModelConfig, PipelineConfig, Configuration objects for the neural-symbolic dungeon pipeline facade., Top-level pipeline facade configuration., Top-level pipeline facade configuration. (+69 more)
+Cohesion: 0.08
+Nodes (95): BaseModel, MAPElitesEvaluator, GraphConfig, ModelConfig, PipelineConfig, Configuration objects for the neural-symbolic dungeon pipeline facade., Top-level pipeline facade configuration., Top-level pipeline facade configuration. (+87 more)
 
 ### Community 27 - "Community 27"
-Cohesion: 0.05
-Nodes (43): example_1_skill_chain(), example_2_pacing_breaker(), example_3_resource_farm(), example_4_gatekeeper(), example_5_battery_pattern(), example_6_item_shortcut(), example_7_pruning(), full_generation_example() (+35 more)
+Cohesion: 0.04
+Nodes (71): example_1_skill_chain(), example_2_pacing_breaker(), example_3_resource_farm(), example_4_gatekeeper(), example_5_battery_pattern(), example_6_item_shortcut(), example_7_pruning(), full_generation_example() (+63 more)
 
 ### Community 28 - "Community 28"
-Cohesion: 0.09
-Nodes (32): create_latent_diffusion(), Create a LatentDiffusionModel.          Args:         latent_dim: VQ-VAE late, Create a LatentDiffusionModel.          Args:         latent_dim: VQ-VAE late, Create a LatentDiffusionModel.          Args:         latent_dim: VQ-VAE late, Create a LatentDiffusionModel.          Args:         latent_dim: VQ-VAE late, Create a LatentDiffusionModel.          Args:         latent_dim: VQ-VAE late, Create a LatentDiffusionModel.          Args:         latent_dim: VQ-VAE late, Create a LatentDiffusionModel.          Args:         latent_dim: VQ-VAE late (+24 more)
+Cohesion: 0.04
+Nodes (71): create_latent_diffusion(), Create a LatentDiffusionModel.          Args:         latent_dim: VQ-VAE late, Create a LatentDiffusionModel.          Args:         latent_dim: VQ-VAE late, Create a LatentDiffusionModel.          Args:         latent_dim: VQ-VAE late, Create a LatentDiffusionModel.          Args:         latent_dim: VQ-VAE late, Create a LatentDiffusionModel.          Args:         latent_dim: VQ-VAE late, Create a LatentDiffusionModel.          Args:         latent_dim: VQ-VAE late, Create a LatentDiffusionModel.          Args:         latent_dim: VQ-VAE late (+63 more)
 
 ### Community 29 - "Community 29"
 Cohesion: 0.02
@@ -918,43 +934,43 @@ Nodes (95): create_pipeline(), Create the facade pipeline using checkpoint-dir c
 
 ### Community 30 - "Community 30"
 Cohesion: 0.04
-Nodes (103): Optimizer, seed_everything(), Main training function., Main training function., Main training function., Main training function., Main training function., Main training function. (+95 more)
+Nodes (82): Optimizer, seed_everything(), main(), H-MOLQD Block II: Gaussian VAE pre-training.  Standalone training entrypoint f, Full Gaussian-VAE pre-training loop., Full Gaussian-VAE pre-training loop., Full Gaussian-VAE pre-training loop., train_gaussian_vae() (+74 more)
 
 ### Community 31 - "Community 31"
 Cohesion: 0.05
-Nodes (76): oracle_status_from_outcome(), Normalize solver outcomes into a stable status vocabulary., AStarGameStateSolver, A* game-state search wrapper., Run A* over full game state with configurable representation mode., BFSGameStateSolver, BFS game-state search wrapper., Run breadth-first search over full game state. (+68 more)
+Nodes (77): oracle_status_from_outcome(), Utilities for search-benchmark accounting.  These helpers keep benchmark semanti, Normalize solver outcomes into a stable status vocabulary., AStarGameStateSolver, A* game-state search wrapper., Run A* over full game state with configurable representation mode., BFSGameStateSolver, BFS game-state search wrapper. (+69 more)
 
 ### Community 32 - "Community 32"
-Cohesion: 0.07
-Nodes (82): audit_block0_dataset(), BenchmarkSummary, _bootstrap_mean_ci(), _build_arg_parser(), calibrate_rule_weights_to_vglc(), _clip01(), _count_hint(), _coverage_2d() (+74 more)
+Cohesion: 0.06
+Nodes (93): audit_block0_dataset(), BenchmarkSummary, _bootstrap_mean_ci(), _build_arg_parser(), calibrate_rule_weights_to_vglc(), _clip01(), _count_hint(), _coverage_2d() (+85 more)
 
 ### Community 33 - "Community 33"
 Cohesion: 0.04
-Nodes (43): MissionGraph, Complete mission graph for a dungeon., Return optional torch adapters or raise a targeted dependency error., Public wrapper to initialize generation-stats keys., Record a repair event for downstream benchmarking/analysis., Fill count hints from node semantics when explicit hints are missing., Add a node to the graph., Add an edge to the graph. (+35 more)
+Nodes (46): MissionGraph, Complete mission graph for a dungeon., Return optional torch adapters or raise a targeted dependency error., Public wrapper to initialize generation-stats keys., Record a repair event for downstream benchmarking/analysis., Fill count hints from node semantics when explicit hints are missing., Add a node to the graph., Add an edge to the graph. (+38 more)
 
 ### Community 34 - "Community 34"
-Cohesion: 0.05
-Nodes (47): Robust correlation of curve trend shape in [-1, 1]., Map a mission node type to a coarse narrative beat stage., Score critical-path narrative pacing against a simple Zelda beat template., Backward-compatible fitness accessor used by legacy callers., Calculate backtracking complexity metric (Thesis Upgrade #4)., Check if graph is solvable (path exists START â†’ GOAL).                  A gr, Breadth-first shortest path on an adjacency mapping., Undirected shortest path over traversable mission adjacency.          This int (+39 more)
+Cohesion: 0.08
+Nodes (34): Robust correlation of curve trend shape in [-1, 1]., Map a mission node type to a coarse narrative beat stage., Score critical-path narrative pacing against a simple Zelda beat template., Backward-compatible fitness accessor used by legacy callers., Calculate backtracking complexity metric (Thesis Upgrade #4)., Check if graph is solvable (path exists START â†’ GOAL).                  A gr, Breadth-first shortest path on an adjacency mapping., Undirected shortest path over traversable mission adjacency.          This int (+26 more)
 
 ### Community 35 - "Community 35"
 Cohesion: 0.04
-Nodes (72): Action, AI generation domain modules., BaseWidget, ButtonWidget, CheckboxWidget, DropdownWidget, KLTN GUI - Interactive Widgets ================================  GUI control, Initialize checkbox widget.                  Args:             pos: Position (+64 more)
+Nodes (61): Action, AI generation domain modules., BaseWidget, ButtonWidget, CheckboxWidget, DropdownWidget, KLTN GUI - Interactive Widgets ================================  GUI control, Initialize checkbox widget.                  Args:             pos: Position (+53 more)
 
 ### Community 36 - "Community 36"
 Cohesion: 0.04
-Nodes (63): check_training_setup(), Load the training config and verify LogicNet parameters are optimized., DiffusionTrainer, Unified trainer for latent diffusion dungeon generation.          Components:, Unified trainer for latent diffusion dungeon generation.          Components:, Unified trainer for latent diffusion dungeon generation.          Components:, Unified trainer for latent diffusion dungeon generation.          Components:, Unified trainer for latent diffusion dungeon generation.          Components: (+55 more)
+Nodes (68): check_training_setup(), Load the training config and verify LogicNet parameters are optimized., DiffusionTrainer, Unified trainer for latent diffusion dungeon generation.          Components:, Unified trainer for latent diffusion dungeon generation.          Components:, Unified trainer for latent diffusion dungeon generation.          Components:, Unified trainer for latent diffusion dungeon generation.          Components:, Unified trainer for latent diffusion dungeon generation.          Components: (+60 more)
 
 ### Community 37 - "Community 37"
 Cohesion: 0.02
-Nodes (100): Test goal-seeking prefers moves toward goal., Test goal-seeking prefers moves toward goal., Test goal-seeking prefers moves toward goal., Test all personas have valid configurations., Test all personas have valid configurations., Test speedrunner has optimal-seeking configuration., Test forgetful has poor memory configuration., Test speedrunner has optimal-seeking configuration. (+92 more)
+Nodes (100): Tests for agent personas., Test all personas have valid configurations., Tests for agent personas., Test all personas have valid configurations., Test speedrunner has optimal-seeking configuration., Test forgetful has poor memory configuration., Test speedrunner has optimal-seeking configuration., Test goal-seeking prefers moves toward goal. (+92 more)
 
 ### Community 38 - "Community 38"
 Cohesion: 0.04
 Nodes (80): FORCE_INLINE, _mm_abs_pi16(), _mm_abs_pi32(), _mm_abs_pi8(), _mm_add_si64(), _mm_avg_pu16(), _mm_avg_pu8(), _mm_clflush() (+72 more)
 
 ### Community 39 - "Community 39"
-Cohesion: 0.10
-Nodes (71): _anchor_direction(), apply_puzzle_stage_control_to_conditioning(), apply_puzzle_structure_control_to_conditioning(), apply_puzzle_structure_dropout_batch(), build_anchor_pairs_from_room_semantics(), build_puzzle_stage_condition_metadata(), _build_puzzle_stage_tokens(), build_room_semantic_anchor_points() (+63 more)
+Cohesion: 0.09
+Nodes (72): _anchor_direction(), apply_puzzle_stage_control_to_conditioning(), apply_puzzle_structure_control_to_conditioning(), apply_puzzle_structure_dropout_batch(), build_anchor_pairs_from_room_semantics(), build_puzzle_stage_condition_metadata(), _build_puzzle_stage_tokens(), build_room_semantic_anchor_points() (+64 more)
 
 ### Community 40 - "Community 40"
 Cohesion: 0.04
@@ -973,112 +989,112 @@ Cohesion: 0.05
 Nodes (44): AgentSimulator, _is_goal_node(), _is_start_node(), PathVerifier, H-MOLQD Block VII: External Validator ======================================, Result of dungeon validation., Backward-compatible alias for solution_path., Backward-compatible tuple unpacking:             is_solvable, path = result (+36 more)
 
 ### Community 44 - "Community 44"
-Cohesion: 0.04
-Nodes (65): ExplainabilityManager, Graph, int, str, Surface, Any, bool, float (+57 more)
+Cohesion: 0.05
+Nodes (54): ExplainabilityManager, str, Any, bool, float, Graph, int, ndarray (+46 more)
 
 ### Community 45 - "Community 45"
-Cohesion: 0.06
-Nodes (103): Convert semantic tile id to canonical VGLC character., semantic_to_vglc_char(), ImageDraw, build_masked_room_pipeline(), _emit_progress(), export_masked_variant(), main(), parse_args() (+95 more)
+Cohesion: 0.10
+Nodes (73): ImageDraw, build_masked_room_pipeline(), _emit_progress(), export_masked_variant(), main(), parse_args(), Any, Graph (+65 more)
 
 ### Community 46 - "Community 46"
-Cohesion: 0.06
-Nodes (32): _normalize_grid_coord(), Ensure start-goal connectivity.                  Creates a path if none exists, Ensure start-goal connectivity.                  Creates a path if none exists, BFS pathfinding using (row, col) coordinates., Dijkstra over all cells using repair costs.          Unlike _find_path, this may, BFS pathfinding using (row, col) coordinates., Repair a room and optionally call a neural feedback callback on WFC dead-ends., Repair a room and optionally call a neural feedback callback on WFC dead-ends. (+24 more)
+Cohesion: 0.07
+Nodes (32): InventoryState, _inventory_key(), print_solution(), bool, Dungeon, float, int, str (+24 more)
 
 ### Community 47 - "Community 47"
 Cohesion: 0.09
 Nodes (48): HMOLQDConfigSchema, Full experiment config schema with strict section-level extra checks., apply_runtime_environment(), build_default_config(), cli_name_for_path(), cli_overrides_from_namespace(), _coerce_value(), ConfigField (+40 more)
 
 ### Community 48 - "Community 48"
-Cohesion: 0.07
-Nodes (38): handle_minimap_click(), Helpers for minimap rendering and click interactions., Handle click on minimap and recenter view to selected tile., Render small dungeon overview map in bottom-right corner., render_minimap(), center_on_player(), clamp_view_offset(), next_map() (+30 more)
+Cohesion: 0.05
+Nodes (44): Automatically set zoom level to fit the entire map in view., Change zoom level by delta steps.          If `center` is provided (screen coo, Move to the next map and stop auto-solve if running., Move to the previous map and stop auto-solve if running., Center the view on the player position., Handle mouse click on minimap to jump to that location., handle_minimap_click(), Helpers for minimap rendering and click interactions. (+36 more)
 
 ### Community 49 - "Community 49"
 Cohesion: 0.10
-Nodes (41): BaselineEvalConfig, Evaluation options shared by all external baselines., Seed Python, NumPy, and torch if available., set_reproducible_seed(), grids_to_onehot(), main(), Lightweight DCGAN baseline with Gumbel-Softmax generator outputs., RoomDiscriminator (+33 more)
+Nodes (44): BaselineEvalConfig, flatten_grids_to_tokens(), Convert `[N,H,W]` integer grids into clipped `[N,H*W]` token IDs., Evaluation options shared by all external baselines., build_overlapping_pattern_model(), collapse_patterns(), generate_wfc_samples(), main() (+36 more)
 
 ### Community 50 - "Community 50"
-Cohesion: 0.06
-Nodes (62): apply_label_hints(), assign_pairs_from_scores(), build_component_context(), build_score_matrix(), compute_normalized_room_centers(), propagate_from_anchors(), Inference helpers for missing room-node mappings., Build graph/room component IDs and anchored component candidate mapping. (+54 more)
+Cohesion: 0.05
+Nodes (79): GlobalPos, apply_label_hints(), assign_pairs_from_scores(), build_component_context(), build_score_matrix(), compute_normalized_room_centers(), propagate_from_anchors(), Inference helpers for missing room-node mappings. (+71 more)
 
 ### Community 51 - "Community 51"
-Cohesion: 0.05
-Nodes (55): extract_tile_priors_from_vqvae(), integrate_weighted_wfc_into_pipeline(), Weighted Bayesian Wave Function Collapse ======================================, Generate grid using Weighted Bayesian WFC.                  Args:, Main collapse loop with contradiction handling., Build a normalized prior distribution used for initialization/fallbacks., Reset mutable generation state for a fresh run., Set a cell to a fixed tile and one-hot its distribution. (+47 more)
+Cohesion: 0.07
+Nodes (39): integrate_weighted_wfc_into_pipeline(), Weighted Bayesian Wave Function Collapse ======================================, Generate grid using Weighted Bayesian WFC.                  Args:, Main collapse loop with contradiction handling., Build a normalized prior distribution used for initialization/fallbacks., Reset mutable generation state for a fresh run., Set a cell to a fixed tile and one-hot its distribution., Pin known tiles from an initial grid, then propagate constraints.          Unk (+31 more)
 
 ### Community 52 - "Community 52"
 Cohesion: 0.05
-Nodes (56): create_condition_encoder(), Create a DualStreamConditionEncoder.          Args:         latent_dim: VQ-VA, Create a DualStreamConditionEncoder.          Args:         latent_dim: VQ-VA, Create a DualStreamConditionEncoder.          Args:         latent_dim: VQ-VA, Create a DualStreamConditionEncoder.          Args:         latent_dim: VQ-VA, Create a DualStreamConditionEncoder.          Args:         latent_dim: VQ-VA, Create a DualStreamConditionEncoder.          Args:         latent_dim: VQ-VA, Create a DualStreamConditionEncoder.          Args:         latent_dim: VQ-VA (+48 more)
+Nodes (61): create_condition_encoder(), Create a DualStreamConditionEncoder.          Args:         latent_dim: VQ-VA, Create a DualStreamConditionEncoder.          Args:         latent_dim: VQ-VA, Create a DualStreamConditionEncoder.          Args:         latent_dim: VQ-VA, Create a DualStreamConditionEncoder.          Args:         latent_dim: VQ-VA, Create a DualStreamConditionEncoder.          Args:         latent_dim: VQ-VA, Create a DualStreamConditionEncoder.          Args:         latent_dim: VQ-VA, Create a DualStreamConditionEncoder.          Args:         latent_dim: VQ-VA (+53 more)
 
 ### Community 53 - "Community 53"
-Cohesion: 0.04
-Nodes (39): Tests for BeliefMap epistemic state., Tests for BeliefMap epistemic state., Test belief map initializes correctly., Test belief map initializes correctly., Test observing a tile updates beliefs., Test observing a tile updates beliefs., Test querying unknown tile returns default assumption., Test querying unknown tile returns default assumption. (+31 more)
+Cohesion: 0.05
+Nodes (35): Tests for BeliefMap epistemic state., Tests for BeliefMap epistemic state., Test belief map initializes correctly., Test belief map initializes correctly., Test observing a tile updates beliefs., Test observing a tile updates beliefs., Test querying unknown tile returns default assumption., Test querying unknown tile returns default assumption. (+27 more)
 
 ### Community 54 - "Community 54"
-Cohesion: 0.07
-Nodes (32): InventoryState, _inventory_key(), print_solution(), bool, Dungeon, float, int, str (+24 more)
+Cohesion: 0.02
+Nodes (104): CuriosityHeuristic, DecisionHeuristic, GoalSeekingHeuristic, ItemSeekingHeuristic, Check if a position is currently in memory., Return current usage as fraction of capacity., Check if a position is currently in memory., Return current usage as fraction of capacity. (+96 more)
 
 ### Community 55 - "Community 55"
 Cohesion: 0.06
-Nodes (43): AdversarialPlayer, _edge_is_reversible(), GraphTopology, GreedyPlayer, integrate_into_evolutionary_algorithm(), _iter_accessible_neighbor_edges(), KeyEconomyResult, KeyEconomyValidator (+35 more)
+Nodes (41): AdversarialPlayer, _edge_is_reversible(), GraphTopology, GreedyPlayer, integrate_into_evolutionary_algorithm(), _iter_accessible_neighbor_edges(), KeyEconomyResult, MissionGraphAnalyzer (+33 more)
 
 ### Community 56 - "Community 56"
 Cohesion: 0.04
-Nodes (46): Check if a move is valid., Compact signature for progression-relevant inventory state., Check whether a remembered progression affordance is currently actionable., Boost remembered unresolved affordances when inventory changes.          This mo, Check if a move is valid., Check if a move is valid., Compact signature for progression-relevant inventory state., Compact signature for progression-relevant inventory state. (+38 more)
+Nodes (47): Check if a move is valid., Compact signature for progression-relevant inventory state., Check whether a remembered progression affordance is currently actionable., Boost remembered unresolved affordances when inventory changes.          This mo, Check if a move is valid., Check if a move is valid., Compact signature for progression-relevant inventory state., Compact signature for progression-relevant inventory state. (+39 more)
 
 ### Community 57 - "Community 57"
-Cohesion: 0.11
-Nodes (15): Encode input to latent representation.                  Args:             x:, Decode latent to output.                  Args:             z: Latent tensor, Encode input to latent representation.                  Args:             x:, Encode input to latent representation.                  Args:             x:, Encode input to latent representation.                  Args:             x:, Encode input to latent representation.                  Args:             x:, Encode input to latent representation.                  Args:             x:, Encode input to latent representation.                  Args:             x: (+7 more)
+Cohesion: 0.25
+Nodes (7): Encode input to latent representation.                  Args:             x:, Encode input to latent representation.                  Args:             x:, Encode input to latent representation.                  Args:             x:, Encode input to latent representation.                  Args:             x:, Encode input to latent representation.                  Args:             x:, Encode input to latent representation.                  Args:             x:, Encode input to latent representation.                  Args:             x:
 
 ### Community 58 - "Community 58"
-Cohesion: 0.05
-Nodes (66): LogicNet, LogicNet: Differentiable Solvability Approximation for H-MOLQD Block V., LogicNet: Differentiable Solvability Approximation for H-MOLQD Block V., LogicNet: Differentiable Solvability Approximation for H-MOLQD Block V., LogicNet: Differentiable Solvability Approximation for H-MOLQD Block V., LogicNet: Differentiable Solvability Approximation for H-MOLQD Block V., LogicNet: Differentiable Solvability Approximation for H-MOLQD Block V., LogicNet: Differentiable Solvability Approximation for H-MOLQD Block V. (+58 more)
+Cohesion: 0.04
+Nodes (72): LogicNet, LogicNet: Differentiable Solvability Approximation for H-MOLQD Block V., LogicNet: Differentiable Solvability Approximation for H-MOLQD Block V., LogicNet: Differentiable Solvability Approximation for H-MOLQD Block V., LogicNet: Differentiable Solvability Approximation for H-MOLQD Block V., LogicNet: Differentiable Solvability Approximation for H-MOLQD Block V., LogicNet: Differentiable Solvability Approximation for H-MOLQD Block V., LogicNet: Differentiable Solvability Approximation for H-MOLQD Block V. (+64 more)
 
 ### Community 59 - "Community 59"
-Cohesion: 0.04
-Nodes (50): Inventory and item usage tracking helpers for Zelda GUI., Remove a collected item from path item preview structures., Detect collected items from state transitions and update UI state/effects., Detect used items from state transitions and update counters/effects., Reconcile collected and used counters from state and tracking buffers., Reconcile counters and update modern HUD, deferring to main thread when needed., remove_from_path_items(), sync_inventory_counters() (+42 more)
+Cohesion: 0.05
+Nodes (48): Inventory and item usage tracking helpers for Zelda GUI., Remove a collected item from path item preview structures., Detect collected items from state transitions and update UI state/effects., Detect used items from state transitions and update counters/effects., Reconcile collected and used counters from state and tracking buffers., Reconcile counters and update modern HUD, deferring to main thread when needed., remove_from_path_items(), sync_inventory_counters() (+40 more)
 
 ### Community 60 - "Community 60"
-Cohesion: 0.10
-Nodes (23): find_nodes_by_type(), get_edge_type(), has_node_type(), bool, Graph, int, str, VGLC Compliance Tests =====================  Tests to verify VGLC (Video Game (+15 more)
+Cohesion: 0.07
+Nodes (32): find_nodes_by_type(), get_edge_type(), has_node_type(), bool, Graph, int, str, VGLC Compliance Tests =====================  Tests to verify VGLC (Video Game (+24 more)
 
 ### Community 61 - "Community 61"
 Cohesion: 0.13
 Nodes (41): _benchmark_aligned_graph_control(), _build_control_strict_zelda_layout(), _carve_corridor(), _carve_path(), _control_error(), _count_enemy_signal(), _embed_positions(), evaluate_graphs_with_pcg_benchmark_zelda() (+33 more)
 
 ### Community 62 - "Community 62"
-Cohesion: 0.06
-Nodes (83): ExperimentConfig, AblationStudy, _benjamini_hochberg(), _boundary_connection_exists(), _boundary_has_directional_marker(), build_ablation_plan(), build_experiment_set(), _build_room_placement() (+75 more)
+Cohesion: 0.07
+Nodes (66): ExperimentConfig, AblationStudy, _benjamini_hochberg(), _boundary_connection_exists(), _boundary_has_directional_marker(), build_ablation_plan(), build_experiment_set(), _build_room_placement() (+58 more)
 
 ### Community 63 - "Community 63"
-Cohesion: 0.04
-Nodes (59): Backward-compatible forward returning (recon, vq_loss, losses)., Return detailed loss dictionary for training/evaluation code., Get the learned codebook embeddings., Get codebook usage statistics., Two-level hierarchical VQ-VAE for room grids.      This follows the VQ-VAE-2 abl, Forward pass: encode, quantize, decode.                  Args:             x:, Forward pass: encode, quantize, decode.                  Args:             x:, Forward pass: encode, quantize, decode.                  Args:             x: (+51 more)
+Cohesion: 0.05
+Nodes (49): Backward-compatible forward returning (recon, vq_loss, losses)., Return detailed loss dictionary for training/evaluation code., Get codebook usage statistics., Two-level hierarchical VQ-VAE for room grids.      This follows the VQ-VAE-2 abl, Forward pass: encode, quantize, decode.                  Args:             x:, Forward pass: encode, quantize, decode.                  Args:             x:, Forward pass: encode, quantize, decode.                  Args:             x:, Backward-compatible forward returning (recon, vq_loss, losses). (+41 more)
 
 ### Community 64 - "Community 64"
-Cohesion: 0.06
-Nodes (48): Compatibility facade for decomposed event handlers.  This module intentionally, Handle hold-to-move input including diagonal movement combinations., run_continuous_movement_tick(), clear_stale_preview_overlay(), poll_pygame_events(), Shared event-loop utilities for polling and generic maintenance., Clear stale non-modal preview overlay state that can block interaction., Fetch pending pygame events with slow-call diagnostics. (+40 more)
+Cohesion: 0.08
+Nodes (33): Compatibility facade for decomposed event handlers.  This module intentionally, clear_stale_preview_overlay(), poll_pygame_events(), Shared event-loop utilities for polling and generic maintenance., Clear stale non-modal preview overlay state that can block interaction., Fetch pending pygame events with slow-call diagnostics., handle_window_focus_event(), Window focus and focus-recovery event handlers. (+25 more)
 
 ### Community 65 - "Community 65"
 Cohesion: 0.07
 Nodes (17): _CompletionGUI, _DummyGUI, _Logger, test_apply_mission_graph_constraints_preserves_string_node_ids(), test_compute_editor_layout_preserves_string_node_ids(), test_compute_editor_layout_supports_mixed_hashable_node_ids(), test_generate_dungeon_with_pipeline_uses_canonical_roomwise_generation(), test_generate_level_falls_back_to_procedural_without_checkpoint() (+9 more)
 
 ### Community 66 - "Community 66"
-Cohesion: 0.06
-Nodes (43): normalize_room_shape(), Normalize a `(rows, cols)` room shape to the internal canonical layout.      His, create_gaussian_vae(), H-MOLQD Block II: Semantic Gaussian VAE =======================================, Return posterior parameters (mu, logvar)., Return posterior parameters (mu, logvar)., Sample a latent tensor using the reparameterization trick., Sample a latent tensor using the reparameterization trick. (+35 more)
+Cohesion: 0.07
+Nodes (36): normalize_room_shape(), Normalize a `(rows, cols)` room shape to the internal canonical layout.      His, create_gaussian_vae(), H-MOLQD Block II: Semantic Gaussian VAE =======================================, Return posterior parameters (mu, logvar)., Return posterior parameters (mu, logvar)., Sample a latent tensor using the reparameterization trick., Sample a latent tensor using the reparameterization trick. (+28 more)
 
 ### Community 67 - "Community 67"
 Cohesion: 0.03
-Nodes (63): Hashable, Return current usage as fraction of capacity., Return current usage as fraction of capacity., Return current usage as fraction of capacity., Return current usage as fraction of capacity., Return current usage as fraction of capacity., Check if a position is currently in memory., Return current usage as fraction of capacity. (+55 more)
+Nodes (67): Hashable, Compute final cognitive metrics from the path., Count direction changes (replans) in the path., Reward moves that continue progress toward the currently committed objective., Count backtracking loops in the path., Compute Shannon entropy of a distribution., Compute navigational entropy from the room-visit distribution.          This sta, Compute final cognitive metrics from the path. (+59 more)
 
 ### Community 68 - "Community 68"
-Cohesion: 0.04
-Nodes (83): Combine explicit room topology maps with graph-to-grid cross-attention.      T, Combine explicit room topology maps with graph-to-grid cross-attention.      T, Combine explicit room topology maps with graph-to-grid cross-attention.      T, SpatialGraphConditioner, AttentionBlock, cosine_beta_schedule(), DiTBlock, DownBlock (+75 more)
+Cohesion: 0.05
+Nodes (64): Combine explicit room topology maps with graph-to-grid cross-attention.      T, Combine explicit room topology maps with graph-to-grid cross-attention.      T, Combine explicit room topology maps with graph-to-grid cross-attention.      T, SpatialGraphConditioner, AttentionBlock, cosine_beta_schedule(), DiTBlock, DownBlock (+56 more)
 
 ### Community 69 - "Community 69"
 Cohesion: 0.06
-Nodes (60): confusion_ratio_vs_oracle(), finite_mean(), normalized_confusion_ratio(), path_efficiency_ratio(), Utilities for search-benchmark accounting.  These helpers keep benchmark semanti, Run canonical A* with diagnostics and return a normalized payload., Return a bounded path-efficiency ratio in [0, 1].      Higher is better: straigh, Return a bounded path-efficiency ratio in [0, 1].      Higher is better: straigh (+52 more)
+Nodes (59): confusion_ratio_vs_oracle(), finite_mean(), normalized_confusion_ratio(), path_efficiency_ratio(), Run canonical A* with diagnostics and return a normalized payload., Return a bounded path-efficiency ratio in [0, 1].      Higher is better: straigh, Return a bounded path-efficiency ratio in [0, 1].      Higher is better: straigh, Compute candidate/oracle path ratio when the oracle actually solved.      Return (+51 more)
 
 ### Community 70 - "Community 70"
-Cohesion: 0.07
-Nodes (51): align_nodewise_tensor(), build_default_node_positions(), compute_current_node_distance_features(), compute_rrwp_edge_features(), compute_rwse_features(), compute_tpe_features(), condition_feature_dims(), encode_edge_feature_vector() (+43 more)
+Cohesion: 0.04
+Nodes (45): Prepare one graph sample for diffusion spatial/topological conditioning., Prepare one graph sample for diffusion spatial/topological conditioning., Prepare one graph sample for diffusion spatial/topological conditioning., Prepare one graph sample for diffusion spatial/topological conditioning., Prepare one graph sample for diffusion spatial/topological conditioning., Prepare one graph sample for diffusion spatial/topological conditioning., Prepare one graph sample for diffusion spatial/topological conditioning., Pad a batch of variable-size graph tensors for diffusion conditioning. (+37 more)
 
 ### Community 71 - "Community 71"
 Cohesion: 0.04
@@ -1086,55 +1102,55 @@ Nodes (52): DiTDenoiser, Predict noise in x_t.                  Args:           
 
 ### Community 72 - "Community 72"
 Cohesion: 0.03
-Nodes (69): GradientGuidance, Gradient guidance module for diffusion sampling.          At each denoising st, Rate-limit repeated guidance warnings to keep logs readable., Gradient guidance module for diffusion sampling.          At each denoising st, Gradient guidance module for diffusion sampling.          At each denoising st, Gradient guidance module for diffusion sampling.          At each denoising st, Rate-limit repeated guidance warnings to keep logs readable., Gradient guidance module for diffusion sampling.          At each denoising st (+61 more)
+Nodes (62): GradientGuidance, Gradient guidance module for diffusion sampling.          At each denoising st, Rate-limit repeated guidance warnings to keep logs readable., Gradient guidance module for diffusion sampling.          At each denoising st, Gradient guidance module for diffusion sampling.          At each denoising st, Gradient guidance module for diffusion sampling.          At each denoising st, Rate-limit repeated guidance warnings to keep logs readable., Gradient guidance module for diffusion sampling.          At each denoising st (+54 more)
 
 ### Community 73 - "Community 73"
-Cohesion: 0.09
-Nodes (26): Bidirectional A* Implementation for Zelda State-Space Search ==================, Find solution using bidirectional A*.                  Returns:             s, Fallback to canonical A* when bidirectional search cannot complete reliably., Create a reasonable goal state for backward search.                  Challenge, Expand one node from forward frontier.                  Returns:, Expand one node from backward frontier.                  CRITICAL: Backward ex, Node in bidirectional search frontier., Check if this node approximately collides with opposite frontier. (+18 more)
+Cohesion: 0.05
+Nodes (47): BidirectionalAStar, Bidirectional A* Implementation for Zelda State-Space Search ==================, Find solution using bidirectional A*.                  Returns:             s, Fallback to canonical A* when bidirectional search cannot complete reliably., Create a reasonable goal state for backward search.                  Challenge, Expand one node from forward frontier.                  Returns:, Expand one node from backward frontier.                  CRITICAL: Backward ex, Node in bidirectional search frontier. (+39 more)
 
 ### Community 74 - "Community 74"
-Cohesion: 0.08
-Nodes (31): create_room_semantics_from_graph(), Entity, export_entities_to_json(), Generate entity list for a single room.                  Args:             ro, Identify valid spawn positions (floor tiles away from doors)., Spawn entities for start room (safe, maybe health potion)., Spawn enemies for combat room., Spawn boss enemy in room center. (+23 more)
+Cohesion: 0.05
+Nodes (53): Enum, create_room_semantics_from_graph(), Entity, EntityType, export_entities_to_json(), Entity Spawner Converts abstract mission graph attributes to concrete spatial g, Generate entity list for a single room.                  Args:             ro, Identify valid spawn positions (floor tiles away from doors). (+45 more)
 
 ### Community 75 - "Community 75"
-Cohesion: 0.10
-Nodes (47): ConnectorTileResolver, DiagnosticCallback, NodePositionGetter, NodeSortKey, _bbox_center_row_col(), build_room_canvas_from_slots(), build_stitched_room_layout(), carve_room_connection_between_bboxes() (+39 more)
+Cohesion: 0.11
+Nodes (46): ConnectorTileResolver, DiagnosticCallback, NodePositionGetter, NodeSortKey, _bbox_center_row_col(), build_room_canvas_from_slots(), build_stitched_room_layout(), carve_room_connection_between_bboxes() (+38 more)
 
 ### Community 76 - "Community 76"
 Cohesion: 0.02
-Nodes (154): ABC, BeliefMap, CBSMetrics, detect_loops(), figure1_minds_eye(), figure2_frustration_heatmap(), figure3_complexity_spectrum(), generate_all_figures() (+146 more)
+Nodes (98): MemoryItemType, Types of items that can be stored in working memory., Types of items that can be stored in working memory., Types of items that can be stored in working memory., Types of items that can be stored in working memory., Knowledge state for a tile in the belief map., Knowledge state for a tile in the belief map., Knowledge state for a tile in the belief map. (+90 more)
 
 ### Community 77 - "Community 77"
-Cohesion: 0.19
-Nodes (11): build_masked_room_training_config_from_args(), _create_masked_room_dataloaders(), _legacy_masked_room_overrides_from_args(), MaskedRoomTrainer, Any, bool, int, Namespace (+3 more)
+Cohesion: 0.12
+Nodes (15): Reward moving onto the current frontier of partially known space., Reward moving onto the current frontier of partially known space., Reward moving onto the current frontier of partially known space., Reward moving onto the current frontier of partially known space., Reward moving onto the current frontier of partially known space., Reward moving onto the current frontier of partially known space., Reward moving onto the current frontier of partially known space., Reward moving onto the current frontier of partially known space. (+7 more)
 
 ### Community 78 - "Community 78"
-Cohesion: 0.04
-Nodes (52): ConvolutionalPathfinder, LearnableGridPathfinder, PerturbAndMAPGridPathfinder, H-MOLQD Block V: LogicNet - Differentiable Solvability Teacher ================, Differentiable thresholding.          Approximates: 1 if x < threshold else 0, Differentiable thresholding.          Approximates: 1 if x < threshold else 0, Compute differentiable shortest distances from sources.          Supports two, Compute differentiable shortest distances from sources.          Supports two (+44 more)
+Cohesion: 0.05
+Nodes (45): ConvolutionalPathfinder, LearnableGridPathfinder, PerturbAndMAPGridPathfinder, H-MOLQD Block V: LogicNet - Differentiable Solvability Teacher ================, Differentiable thresholding.          Approximates: 1 if x < threshold else 0, Differentiable thresholding.          Approximates: 1 if x < threshold else 0, CNN-based differentiable pathfinder for grid-based rooms.          Uses convol, CNN-based differentiable pathfinder for grid-based rooms.          Uses convol (+37 more)
 
 ### Community 79 - "Community 79"
-Cohesion: 0.07
-Nodes (47): map_elites_worker(), MAP-Elites orchestration helpers extracted from gui_runner., Start MAP-Elites in background if not already running., Run MAP-Elites evaluation and persist optional heatmap artifact., start_map_elites(), BinEntry, calculate_diversity_score(), calculate_feature_coverage() (+39 more)
+Cohesion: 0.10
+Nodes (27): BinEntry, calculate_diversity_score(), calculate_feature_coverage(), _classify_coverage(), _classify_diversity(), generate_diversity_report(), MAPElitesEvaluator, Extract progression-aware topology descriptors from mission graph. (+19 more)
 
 ### Community 80 - "Community 80"
-Cohesion: 0.04
-Nodes (57): mission_graph_to_networkx(), networkx_to_mission_graph(), MissionGraph/NetworkX conversion helpers., Convert MissionGraph to NetworkX graph for compatibility.          VGLC Compli, Convert NetworkX graph back to MissionGraph.          Args:         G: Networ, Topology tension and quality evaluators., Deterministic heterogeneous node-ID identity used in topology round-trips., Canonical key for mirrored bidirectional edges without salted hashing. (+49 more)
+Cohesion: 0.05
+Nodes (38): mission_graph_to_networkx(), networkx_to_mission_graph(), MissionGraph/NetworkX conversion helpers., Convert MissionGraph to NetworkX graph for compatibility.          VGLC Compli, Convert NetworkX graph back to MissionGraph.          Args:         G: Networ, Topology tension and quality evaluators., Genome-to-mission-graph executor., Evolutionary individual data model. (+30 more)
 
 ### Community 81 - "Community 81"
-Cohesion: 0.11
-Nodes (29): demo_basic_compliance(), demo_composite_labels(), demo_goal_validation(), demo_real_vglc_data(), demo_realistic_dungeon(), main(), VGLC Compliance Demonstration ==============================  Shows how to:, Demonstrate composite label parsing. (+21 more)
+Cohesion: 0.10
+Nodes (31): demo_basic_compliance(), demo_composite_labels(), demo_goal_validation(), demo_real_vglc_data(), demo_realistic_dungeon(), main(), VGLC Compliance Demonstration ==============================  Shows how to:, Demonstrate composite label parsing. (+23 more)
 
 ### Community 82 - "Community 82"
-Cohesion: 0.13
-Nodes (47): build_experiment_matrix(), build_logic_delta_rows(), execute_protocol(), _existing_or_none(), _flatten_eval(), get_or_create_pipeline(), _json_ready(), main() (+39 more)
+Cohesion: 0.14
+Nodes (49): build_experiment_matrix(), build_logic_delta_rows(), execute_protocol(), _existing_or_none(), _flatten_eval(), get_or_create_pipeline(), _json_ready(), main() (+41 more)
 
 ### Community 83 - "Community 83"
 Cohesion: 0.06
 Nodes (32): Return per-sample CFG scale for the current reverse-diffusion timestep., Return per-sample CFG scale for the current reverse-diffusion timestep., Get current attention kernel from first CrossAttention layer., Latent Diffusion Model for Zelda Dungeon Generation.          Operates on VQ-V, Whether a validated fast-sampling adapter is currently configured., Latent Diffusion Model for Zelda Dungeon Generation.          Operates on VQ-V, Run the configured fast-sampling backend, if available.          Note: adapter, Run the configured fast-sampling backend, if available.          Note: adapter (+24 more)
 
 ### Community 84 - "Community 84"
-Cohesion: 0.08
-Nodes (29): Differentiable soft-max operation (max, not softmax).          soft_max(x) = τ, Differentiable soft-max operation (max, not softmax).          soft_max(x) = τ, Return a dense [N,N] mask of resource-gated lock edges., Return a dense [N,N] mask of resource-gated lock edges., Return a dense [N,N] mask of resource-gated lock edges., Return a dense [N,N] mask of resource-gated lock edges., Compute solvability loss for latent codes.                  Args:, Compute solvability loss for latent codes.                  Args: (+21 more)
+Cohesion: 0.03
+Nodes (65): Capacity-limited working memory based on Miller's Law.          Scientific bas, Capacity-limited working memory based on Miller's Law.          Scientific bas, Capacity-limited working memory based on Miller's Law.          Scientific bas, Capacity-limited working memory based on Miller's Law.          Scientific bas, Capacity-limited working memory based on Miller's Law.          Scientific bas, Capacity-limited working memory based on Miller's Law.          Scientific bas, Capacity-limited working memory based on Miller's Law.          Scientific bas, Capacity-limited working memory based on Miller's Law.          Scientific bas (+57 more)
 
 ### Community 85 - "Community 85"
 Cohesion: 0.05
@@ -1145,48 +1161,48 @@ Cohesion: 0.07
 Nodes (44): Helpers for status/error messaging and status banner rendering., Display informational message state with expiration metadata., Display warning message to user and logs., Render timed fade-out error banner at top of screen., Render animated solver-running banner with active algorithm name., Display error message state with timestamp and status label., Render bottom status bar with algorithm, progress, and FPS., render_error_banner() (+36 more)
 
 ### Community 87 - "Community 87"
-Cohesion: 0.16
-Nodes (11): Any, int, ndarray, str, Convenience function to replay a solution.          Args:         dungeon_gri, Initialize the replay engine.                  Args:             dungeon_grid, Find the first occurrence of a tile ID., Drop malformed/out-of-bounds path steps so rendering never crashes. (+3 more)
+Cohesion: 0.04
+Nodes (69): BeliefMap, CBSMetrics, detect_loops(), figure1_minds_eye(), figure2_frustration_heatmap(), figure3_complexity_spectrum(), generate_all_figures(), get_tile_color() (+61 more)
 
 ### Community 88 - "Community 88"
-Cohesion: 0.12
-Nodes (47): aggregate_sessions(), _anchor_from_config(), _base_config(), calibrate_persona_overrides(), _calibrate_single(), _clamp(), _default_persona_names(), _dict() (+39 more)
+Cohesion: 0.13
+Nodes (45): aggregate_sessions(), _anchor_from_config(), _base_config(), calibrate_persona_overrides(), _calibrate_single(), _clamp(), _default_persona_names(), _dict() (+37 more)
 
 ### Community 89 - "Community 89"
-Cohesion: 0.05
-Nodes (129): CrossAttention, Self-attention block for U-Net., Args:             x: [B, H*W, C]         Returns:             [B, H*W, C], Args:             x: [B, H*W, C]         Returns:             [B, H*W, C], Cross-attention for conditioning injection., Cross-attention for conditioning injection., SelfAttention, Counter (+121 more)
+Cohesion: 0.14
+Nodes (45): CrossAttention, Self-attention block for U-Net., Cross-attention for conditioning injection., Cross-attention for conditioning injection., SelfAttention, Counter, _apply_graph_scaffold(), _build_dungeon9_specs() (+37 more)
 
 ### Community 90 - "Community 90"
-Cohesion: 0.07
-Nodes (28): Model management helpers for the pipeline facade., load_logic_net(), load_masked_room_model(), load_vqvae(), ModelManager, Load or create VQ-VAE model., Load or create LogicNet., Load or create LogicNet. (+20 more)
+Cohesion: 0.05
+Nodes (39): Model management helpers for the pipeline facade., create_refiner(), load_logic_net(), load_masked_room_model(), load_vqvae(), ModelManager, Load or create VQ-VAE model., Load or create LogicNet. (+31 more)
 
 ### Community 91 - "Community 91"
 Cohesion: 0.09
 Nodes (33): CanonicalDungeonGenerator, DungeonValidator, generate_and_evaluate(), load_generation_pipeline(), main(), Any, bool, device (+25 more)
 
 ### Community 92 - "Community 92"
-Cohesion: 0.07
-Nodes (28): Focused tests for Block II training/evaluation helpers., Validation split helper should create a stable held-out slice., Validation split helper should create a stable held-out slice., Hierarchical VQ-VAE-2 should keep the downstream VQ-VAE interface., Codebook-health helper should expose activity/utilization fields., Validation split helper should create a stable held-out slice., Codebook-health helper should expose activity/utilization fields., Focused tests for Block II training/evaluation helpers. (+20 more)
+Cohesion: 0.08
+Nodes (21): Validation split helper should create a stable held-out slice., Validation split helper should create a stable held-out slice., Hierarchical VQ-VAE-2 should keep the downstream VQ-VAE interface., Codebook-health helper should expose activity/utilization fields., Validation split helper should create a stable held-out slice., Codebook-health helper should expose activity/utilization fields., Validation split helper should create a stable held-out slice., Hierarchical VQ-VAE-2 should keep the downstream VQ-VAE interface. (+13 more)
 
 ### Community 93 - "Community 93"
-Cohesion: 0.06
-Nodes (28): Tests for mission grammar graph generation., Test module imports correctly., Test that generated graph has START and GOAL nodes., Tests for mission grammar graph generation., Test module imports correctly., Test lock-key ordering validation., Test converting graph to PyTorch tensors., Tests for mission grammar graph generation. (+20 more)
+Cohesion: 0.08
+Nodes (36): compute_tpe_features(), condition_feature_dims(), encode_edge_feature_vector(), extract_node_feature_vector(), fit_feature_vector(), Graph feature encoding helpers for condition encoder inputs., Breadth-first shortest-path distances over a Python adjacency list., Breadth-first shortest-path distances over a Python adjacency list. (+28 more)
 
 ### Community 94 - "Community 94"
-Cohesion: 0.18
-Nodes (13): Repair a room using LogicNet-derived cost and topology constraints., Repair a room using LogicNet-derived cost and topology constraints., Repair a room using LogicNet-derived cost and topology constraints., Run LogicNet and convert outputs to row/col numpy repair tensors., Run LogicNet and convert outputs to row/col numpy repair tensors., Any, bool, float (+5 more)
+Cohesion: 0.04
+Nodes (89): DualStreamConditionEncoder, H-MOLQD Block III: Dual-Stream Condition Encoder ==============================, Dual-Stream Condition Encoder for H-MOLQD Block III.          Combines local s, Dual-Stream Condition Encoder for H-MOLQD Block III.          Combines local s, Dual-Stream Condition Encoder for H-MOLQD Block III.          Combines local s, Dual-Stream Condition Encoder for H-MOLQD Block III.          Combines local s, Dual-Stream Condition Encoder for H-MOLQD Block III.          Combines local s, Dual-Stream Condition Encoder for H-MOLQD Block III.          Combines local s (+81 more)
 
 ### Community 95 - "Community 95"
 Cohesion: 0.02
-Nodes (89): FloorSelector, get_tile_from_mouse(), ItemTooltip, MinimapZoom, TIER 2 & 3 GUI ENHANCEMENTS ===========================  Comprehensive GUI ad, Handle mouse click.                  Returns:             True if floor chang, State for minimap zoom., Interactive minimap zoom with mouse controls.          Controls:     - Click+ (+81 more)
+Nodes (87): FloorSelector, get_tile_from_mouse(), ItemTooltip, MinimapZoom, TIER 2 & 3 GUI ENHANCEMENTS ===========================  Comprehensive GUI ad, Handle mouse click.                  Returns:             True if floor chang, State for minimap zoom., Interactive minimap zoom with mouse controls.          Controls:     - Click+ (+79 more)
 
 ### Community 96 - "Community 96"
 Cohesion: 0.06
 Nodes (31): adapter(), _check_graph_room_consistency(), _check_item_placement(), _check_room_dimensions(), _check_start_goal_positions(), _check_tile_validity(), DataIntegrityStats, print_summary() (+23 more)
 
 ### Community 97 - "Community 97"
-Cohesion: 0.10
-Nodes (27): BigRoomConfig, BigRoomGenerator, Feature 7: Big Room Support (Scalability) =====================================, Decomposes large rooms into overlapping patches for autoregressive generation., Decompose room into patches for autoregressive generation.                  Ar, Check if room can be generated in single pass., Create single patch covering entire room., Create grid of overlapping patches.                  Patches are ordered for d (+19 more)
+Cohesion: 0.08
+Nodes (30): BigRoomConfig, BigRoomGenerator, Feature 7: Big Room Support (Scalability) =====================================, Decomposes large rooms into overlapping patches for autoregressive generation., Decompose room into patches for autoregressive generation.                  Ar, Check if room can be generated in single pass., Create single patch covering entire room., Create grid of overlapping patches.                  Patches are ordered for d (+22 more)
 
 ### Community 98 - "Community 98"
 Cohesion: 0.08
@@ -1201,12 +1217,12 @@ Cohesion: 0.05
 Nodes (41): Approximate forward FLOPs, Architecture-level assumptions, Architecture Research Audit, Big-O summary, Changes applied in this pass, Complexity-sensitive parameters that must remain configurable, Consolidated config recommendations, Dangerous combinations (+33 more)
 
 ### Community 101 - "Community 101"
-Cohesion: 0.08
-Nodes (22): GraphFingerprinter, Find the triforce room., BFS to match nodes to spatially adjacent rooms., Get adjacent room position., Find best matching room for a node., Compute content similarity score., Extract multi-hot feature vectors for each node.                  Feature vect, Build dependency (prerequisite) matrix.                  P-Matrix shape: [N, N (+14 more)
+Cohesion: 0.06
+Nodes (42): DStarKey, DStarLiteSolver, Calculate priority queue key for state.                  Key = [min(g(s), rhs(, Manhattan distance heuristic., Update vertex consistency (Algorithm 2 from paper).                  If state, Main D* Lite algorithm (Algorithm 1 from paper).                  Expands stat, Initial planning phase.                  Args:             start_state: Initi, Priority queue key for D* Lite. (+34 more)
 
 ### Community 102 - "Community 102"
-Cohesion: 0.14
-Nodes (18): GraphGrammarExecutor, Genome-to-mission-graph executor., Heuristic classifier for rules that can increase node connectivity., Conservative node growth estimate for masking against max_nodes., Dynamic admissible action mask for current graph state., Deterministically prune excess incident edges to keep degree <= max_degree., Execute genome to produce a graph phenotype.                  Process:, Convert genome to human-readable rule names. (+10 more)
+Cohesion: 0.18
+Nodes (16): GraphGrammarExecutor, Heuristic classifier for rules that can increase node connectivity., Conservative node growth estimate for masking against max_nodes., Dynamic admissible action mask for current graph state., Deterministically prune excess incident edges to keep degree <= max_degree., Execute genome to produce a graph phenotype.                  Process:, Convert genome to human-readable rule names., Rebuild a mission graph deterministically from serialized replay payload. (+8 more)
 
 ### Community 103 - "Community 103"
 Cohesion: 0.07
@@ -1217,24 +1233,24 @@ Cohesion: 0.08
 Nodes (26): ControllabilityTest, main(), bool, DataFrame, float, int, ndarray, str (+18 more)
 
 ### Community 105 - "Community 105"
-Cohesion: 0.08
-Nodes (25): DStarKey, Calculate priority queue key for state.                  Key = [min(g(s), rhs(, Manhattan distance heuristic., Update vertex consistency (Algorithm 2 from paper).                  If state, Main D* Lite algorithm (Algorithm 1 from paper).                  Expands stat, Initial planning phase.                  Args:             start_state: Initi, Priority queue key for D* Lite., Replan after environment change.                  Args:             current_s (+17 more)
+Cohesion: 0.07
+Nodes (24): Collapse a single cell to a tile type., Collapse a single cell to a tile type., Propagate constraints from collapsed cell., Propagate constraints from collapsed cell., Extract final tile grid from state., Extract final tile grid from state., Check if cell is collapsed. NOTE: x=column, y=row., Get possible tile types at cell. NOTE: x=column, y=row. (+16 more)
 
 ### Community 106 - "Community 106"
-Cohesion: 0.08
-Nodes (31): _dedupe_preserve_order(), _expand_edge_fragment(), _expand_node_fragment(), normalize_node_label(), parse_edge_type_tokens(), parse_node_label_tokens(), KLTN ZELDA DEFINITIONS ====================== Central constants and type defin, Deduplicate while preserving first-seen order. (+23 more)
+Cohesion: 0.06
+Nodes (45): VGLC Constants Package ======================  VGLC (Video Game Level Corpus), parse_composite_node_label(), parse_edge_label(), VGLC Constants - Compliance Module ====================================  This, Parse a composite node label into a set of node types.          Handles both V, Parse an edge label into a connection type.          Args:         label: Raw, _dedupe_preserve_order(), _expand_edge_fragment() (+37 more)
 
 ### Community 107 - "Community 107"
 Cohesion: 0.05
 Nodes (40): 3.1 System-Specific Problem Setting, 3.2.1 VQ-VAE / Tokenizer, 3.2.2 Diffusion Teacher, 3.2.3 Auxiliary Branches and Runtime-Coupled Parameters, 3.2 Hyperparameter Inventory and Roles, 3.3.1 Prior Literature Constraint, 3.3.2 Theoretical and Implementation Constraint, 3.3.3 Local Empirical Constraint (+32 more)
 
 ### Community 108 - "Community 108"
-Cohesion: 0.07
-Nodes (59): _build_masked_room_fixed_tokens(), _build_room_boundary_constraints(), _build_room_graph_context(), _build_room_plan_trace(), _build_room_position_tensor(), _build_room_topology_condition_tensor(), _edge_tokens_to_door_tile(), _extract_explicit_style_id() (+51 more)
+Cohesion: 0.05
+Nodes (75): _build_masked_room_fixed_tokens(), _build_room_boundary_constraints(), _build_room_graph_context(), _build_room_plan_trace(), _build_room_position_tensor(), _build_room_topology_condition_tensor(), _edge_tokens_to_door_tile(), _extract_explicit_style_id() (+67 more)
 
 ### Community 109 - "Community 109"
-Cohesion: 0.10
-Nodes (20): PathAnalyzer, Repair a full dungeon.                  Args:             dungeon: Dungeon ob, Repair a full dungeon.                  Args:             dungeon: Dungeon ob, Repair a full dungeon.                  Args:             dungeon: Dungeon ob, Analyze pathfinding failures in dungeons.          Identifies:     - Where th, Analyze pathfinding failures in dungeon graph.                  Args:, Analyze pathfinding failures in dungeon graph.                  Args:, Any (+12 more)
+Cohesion: 0.08
+Nodes (23): _build_default_adjacency(), Args:             tile_types: Available tile types for WFC             adjacen, Reset WFC sampling RNG for reproducible repair runs., Make compatibility bidirectional for this orientation-free tile vocabulary., Resolve the active adjacency/weight configuration for WFC repair., Rebuild WFC components from the current rule source.          This allows a re, Args:             tile_types: Available tile types for WFC             adjacen, Reset WFC sampling RNG for reproducible repair runs. (+15 more)
 
 ### Community 110 - "Community 110"
 Cohesion: 0.07
@@ -1242,7 +1258,7 @@ Nodes (21): Floating toast notification model and renderer for GUI overlays., Ch
 
 ### Community 111 - "Community 111"
 Cohesion: 0.03
-Nodes (60): Prepare topology tensors for context-token cross-attention refinement., Prepare topology tensors for context-token cross-attention refinement., Prepare graph-node tokens and room topology maps for spatial conditioning., Prepare graph-node tokens and room topology maps for spatial conditioning., Return the floating-point dtype currently used by the denoiser., Set attention kernel across all active token and graph-grid attention layers., Predict noise with Classifier-Free Guidance (CFG).                  At inferen, Predict noise with Classifier-Free Guidance (CFG).                  At inferen (+52 more)
+Nodes (59): Prepare topology tensors for context-token cross-attention refinement., Prepare topology tensors for context-token cross-attention refinement., Prepare graph-node tokens and room topology maps for spatial conditioning., Prepare graph-node tokens and room topology maps for spatial conditioning., Return the floating-point dtype currently used by the denoiser., Predict noise with Classifier-Free Guidance (CFG).                  At inferen, Predict noise with Classifier-Free Guidance (CFG).                  At inferen, Prepare topology tensors for context-token cross-attention refinement. (+51 more)
 
 ### Community 112 - "Community 112"
 Cohesion: 0.05
@@ -1254,11 +1270,11 @@ Nodes (31): apply_difficulty_constraint_to_genome(), compute_dungeon_difficulty_
 
 ### Community 114 - "Community 114"
 Cohesion: 0.10
-Nodes (23): Compatibility wrapper for the collision alignment validator., Validation helpers and compatibility imports., int, ndarray, Feature 2: Collision Alignment Validator ======================================, Visualization validation utilities., CollisionAlignmentRepairer, CollisionConfig (+15 more)
+Nodes (26): Test collision alignment validation., Compatibility wrapper for the collision alignment validator., Validation helpers and compatibility imports., int, ndarray, Feature 2: Collision Alignment Validator ======================================, Visualization validation utilities., CollisionAlignmentRepairer (+18 more)
 
 ### Community 115 - "Community 115"
-Cohesion: 0.12
-Nodes (27): _candidate_checkpoint_files(), discover_best_output_checkpoint(), _env_bool(), _env_int(), load_canonical_generation_pipeline(), _load_checkpoint_metadata(), load_models_and_weights(), Load optional checkpoint metadata sidecar JSON. (+19 more)
+Cohesion: 0.08
+Nodes (44): build_conditioning_vector(), _candidate_checkpoint_files(), discover_best_output_checkpoint(), _env_bool(), _env_int(), load_canonical_generation_pipeline(), _load_checkpoint_metadata(), load_models_and_weights() (+36 more)
 
 ### Community 116 - "Community 116"
 Cohesion: 0.16
@@ -1269,8 +1285,8 @@ Cohesion: 0.11
 Nodes (36): compare_distributions(), compute_tile_distribution(), distribution_entropy(), jensen_shannon_divergence(), _kl_divergence(), load_maps_from_dir(), main(), r""" Fairness / bias assessment utilities for generated Zelda dungeons.  This (+28 more)
 
 ### Community 118 - "Community 118"
-Cohesion: 0.12
-Nodes (37): VGLC Constants Package ======================  VGLC (Video Game Level Corpus), parse_composite_node_label(), parse_edge_label(), VGLC Constants - Compliance Module ====================================  This, Parse a composite node label into a set of node types.          Handles both V, Parse an edge label into a connection type.          Args:         label: Raw, str, Any (+29 more)
+Cohesion: 0.17
+Nodes (30): Any, bool, Graph, int, str, _canonicalize_node_semantics(), filter_virtual_nodes(), find_nodes_by_type() (+22 more)
 
 ### Community 119 - "Community 119"
 Cohesion: 0.09
@@ -1278,11 +1294,11 @@ Nodes (35): Bottom panel rendering helpers extracted from gui_runner., Render me
 
 ### Community 120 - "Community 120"
 Cohesion: 0.13
-Nodes (18): Run Breadth-First Search., Run Dijkstra's algorithm (uniform cost search)., Run Greedy Best-First Search (heuristic only)., Manhattan distance heuristic., Simplified movement check., Performance metrics for a solver., Run multiple search algorithms in parallel and compare results.          Featu, Initialize with environment. (+10 more)
+Nodes (18): _normalize_grid_coord(), Repair a room and optionally call a neural feedback callback on WFC dead-ends., Repair a room and optionally call a neural feedback callback on WFC dead-ends., Repair a room grid to ensure solvability.                  Args:, Repair a full dungeon.                  Args:             dungeon: Dungeon ob, Analyze failure points in a dungeon.                  Args:             dunge, Repair a room grid to ensure solvability.                  Args:, Repair a room grid to ensure solvability.                  Args: (+10 more)
 
 ### Community 121 - "Community 121"
 Cohesion: 0.06
-Nodes (69): MonkeyPatch, generation_runtime_kwargs_from_resolved_config(), pipeline_kwargs_from_resolved_config(), Validated configuration-to-pipeline keyword adapters.  Keeping this bridge outsi, Build canonical pipeline constructor kwargs from the validated global config pay, Build canonical pipeline constructor kwargs from the validated global config pay, Build canonical pipeline constructor kwargs from the validated global config pay, Build canonical pipeline constructor kwargs from the validated global config pay (+61 more)
+Nodes (70): MonkeyPatch, generation_runtime_kwargs_from_resolved_config(), pipeline_kwargs_from_resolved_config(), Validated configuration-to-pipeline keyword adapters.  Keeping this bridge outsi, Build canonical pipeline constructor kwargs from the validated global config pay, Build canonical pipeline constructor kwargs from the validated global config pay, Build canonical pipeline constructor kwargs from the validated global config pay, Build canonical pipeline constructor kwargs from the validated global config pay (+62 more)
 
 ### Community 122 - "Community 122"
 Cohesion: 0.10
@@ -1293,8 +1309,8 @@ Cohesion: 0.09
 Nodes (30): collect_temp_file_candidates(), delete_temp_files(), open_temp_folder(), Helpers for GUI temp-folder operations and cleanup orchestration., Open OS temp folder and set user-facing message., Collect tracked and stale temp files used by solver/preview/watchdog flows., Delete stale temp files while preserving active solver/preview artifacts., delete_files() (+22 more)
 
 ### Community 124 - "Community 124"
-Cohesion: 0.05
-Nodes (37): ndarray, Tensor, extract_start_goal(), _first_matching_tile(), Convert tensor back to ASCII representation for visualization.          Args:, Convert tensor back to ASCII representation for visualization.          Args:, Extract start and goal positions from a dungeon grid.          Args:, Extract start and goal positions from a dungeon grid.          Args: (+29 more)
+Cohesion: 0.07
+Nodes (27): Return a per-sample denoising score for preference optimization.          Scores, Return a per-sample denoising score for preference optimization.          Scores, Pairwise Diffusion-DPO loss for solver/human preference pairs.          The pref, Pairwise Diffusion-DPO loss for solver/human preference pairs.          The pref, Return a per-sample denoising score for preference optimization.          Scores, Compatibility wrapper using explicit preferred/rejected naming., Compatibility wrapper using explicit preferred/rejected naming., Return a per-sample denoising score for preference optimization.          Scores (+19 more)
 
 ### Community 125 - "Community 125"
 Cohesion: 0.08
@@ -1305,8 +1321,8 @@ Cohesion: 0.05
 Nodes (20): Validation should reject BOSS -> BOSS_DOOR -> BOSS cycles masquerading as a gaun, Repair should create a strict approach -> BOSS_DOOR -> BOSS -> GOAL chain withou, Repair should not create a BOSS -> BOSS_DOOR -> BOSS cycle when only BOSS -> GOA, Test generating large dungeon with all rules active., Test fungible key system (RULE #1)., Boss keys should not satisfy requires_key_count small-key locks., Test big room formation (RULE #2)., Test one-way valves in cycles (RULE #3). (+12 more)
 
 ### Community 127 - "Community 127"
-Cohesion: 0.09
-Nodes (22): bool, float, int, Camera, Camera X offset (left edge of viewport in world coordinates)., Camera Y offset (top edge of viewport in world coordinates)., Get camera offset as integer tuple for rendering., Set the target position for the camera to follow.                  The camera (+14 more)
+Cohesion: 0.07
+Nodes (27): bool, float, int, Camera, create_camera_for_map(), Camera System - Viewport Management for Large Maps ============================, Camera X offset (left edge of viewport in world coordinates)., Camera Y offset (top edge of viewport in world coordinates). (+19 more)
 
 ### Community 128 - "Community 128"
 Cohesion: 0.09
@@ -1317,32 +1333,32 @@ Cohesion: 0.06
 Nodes (30): Convert model prediction to (pred_x0, pred_noise) based on prediction_type., Compute p(x_{t-1} | x_t) mean and variance.         Now supports CFG, v-predict, Compute q(x_{t-1} | x_t, pred_x0) posterior parameters., Compute p(x_{t-1} | x_t) mean and variance.         Now supports CFG, v-predict, Sample x_{t-1} from x_t (single step)., Sample x_{t-1} from x_t (single step)., Convert model prediction to (pred_x0, pred_noise) based on prediction_type., Convert model prediction to (pred_x0, pred_noise) based on prediction_type. (+22 more)
 
 ### Community 130 - "Community 130"
-Cohesion: 0.12
-Nodes (20): main(), parse_args(), Namespace, Save graph-to-grid attention heatmaps from a captured attention NPY file., Any, bool, int, Module (+12 more)
+Cohesion: 0.06
+Nodes (35): Validate a config payload with Pydantic and existing cross-field checks., validate_config_payload(), main(), parse_args(), Namespace, Save graph-to-grid attention heatmaps from a captured attention NPY file., Any, bool (+27 more)
 
 ### Community 131 - "Community 131"
-Cohesion: 0.14
-Nodes (7): DummyEffects, DummyGui, DummyLogger, DummyProcess, test_export_current_map_writes_txt_and_png(), test_import_txt_level_can_import_multiple_levels_and_clears_stale_route_state(), test_import_txt_level_rolls_back_if_loaded_map_cannot_initialize()
+Cohesion: 0.10
+Nodes (17): Font, EffectState, Effect lifecycle states., ControlsPanel, HUDTheme, IconDisplay, InventoryPanel, PathAnalysisPanel (+9 more)
 
 ### Community 132 - "Community 132"
-Cohesion: 0.02
-Nodes (134): Check if a position is currently in memory., Check if a position is currently in memory., Check if a position is currently in memory., Check if a position is currently in memory., Weight of this heuristic in the decision mix., Weight of this heuristic in the decision mix., Weight of this heuristic in the decision mix., Weight of this heuristic in the decision mix. (+126 more)
+Cohesion: 0.03
+Nodes (78): BeliefMap, An observation of a single tile with confidence and temporal data.          At, An observation of a single tile with confidence and temporal data.          At, An observation of a single tile with confidence and temporal data.          At, What the agent THINKS the map looks like (epistemic state).          This is f, What the agent THINKS the map looks like (epistemic state).          This is f, Initialize an empty belief map.                  Args:             grid_shape, What the agent THINKS the map looks like (epistemic state).          This is f (+70 more)
 
 ### Community 133 - "Community 133"
 Cohesion: 0.09
-Nodes (23): GlobalStateVariable, Register a global state variable., Define a state transition., Define how a room depends on global state., Apply a state transition and return affected rooms.                  Args:, Get current global state snapshot., Get state relevant to a specific room., Extends room generation to respect global state.          Key Innovation: (+15 more)
+Nodes (24): GlobalStateVariable, Feature 6: Global State System =============================== Multi-room gimm, Register a global state variable., Define a state transition., Define how a room depends on global state., Apply a state transition and return affected rooms.                  Args:, Get current global state snapshot., Get state relevant to a specific room. (+16 more)
 
 ### Community 134 - "Community 134"
-Cohesion: 0.06
-Nodes (52): Room generation and sampling helpers for the pipeline facade., _compute_room_condition(), _globalize_room_puzzle_metadata(), Lift room-local puzzle plans into stitched global coordinates., Backward-compatible alias for _logicnet_guided_inpaint_room., Build Block-III conditioning tensor for a room., DiffusionSampler, generate_room() (+44 more)
+Cohesion: 0.07
+Nodes (39): Room generation and sampling helpers for the pipeline facade., _globalize_room_puzzle_metadata(), Lift room-local puzzle plans into stitched global coordinates., DiffusionSampler, generate_room(), generate_room_batch(), Sampling helpers for room-level neural generation., Room-level diffusion/categorical sampling boundary. (+31 more)
 
 ### Community 135 - "Community 135"
-Cohesion: 0.15
-Nodes (23): Any, RoomPos, Any, DiGraph, int, Logger, ndarray, Offset (+15 more)
+Cohesion: 0.09
+Nodes (20): ConstraintPropagator, Arc consistency constraint propagation.          Ensures local consistency aft, Ensure start-goal connectivity.                  Creates a path if none exists, Arc consistency constraint propagation.          Ensures local consistency aft, Ensure start-goal connectivity.                  Creates a path if none exists, BFS pathfinding using (row, col) coordinates., Historical columns-then-rows carving fallback., Dijkstra over all cells using repair costs.          Unlike _find_path, this may (+12 more)
 
 ### Community 136 - "Community 136"
-Cohesion: 0.16
-Nodes (18): apply_generated_dungeon(), apply_mission_graph_constraints(), build_generated_dungeon_payload(), Apply staged boss-node and locked-edge constraints directly to mission graph., Build metadata for a generated dungeon without mutating GUI state., Apply a generated grid to GUI state exactly like legacy in-method flow., _bounded_optional_int(), _effective_generation_config() (+10 more)
+Cohesion: 0.04
+Nodes (39): Get the knowledge state of a tile., Get the knowledge state of a tile., Get the knowledge state of a tile., Get adjacent positions that haven't been visited., Approximate expected information gain from moving to a position.          We m, Get adjacent positions that haven't been visited., Compute variance in confidence across known tiles., Compute confusion index: revisits / unique_visits.                  Higher val (+31 more)
 
 ### Community 137 - "Community 137"
 Cohesion: 0.06
@@ -1354,11 +1370,11 @@ Nodes (32): generate_map(), main(), int, str, Benchmark harness for grid solvers
 
 ### Community 139 - "Community 139"
 Cohesion: 0.12
-Nodes (29): Any, bool, float, Graph, int, ndarray, str, Dungeon assembly helpers for the pipeline facade. (+21 more)
+Nodes (38): GeneratedRoomSet, PreparedDungeonGeneration, Prepared graph/context bundle for multi-room generation., Partial generation result for room-only runs before stitching/evaluation., Any, bool, DungeonGenerationResult, float (+30 more)
 
 ### Community 140 - "Community 140"
-Cohesion: 0.15
-Nodes (28): canonicalize_generated_grid(), evaluate_generated_grids(), finite_float(), flatten_grids_to_tokens(), json_ready(), load_room_grids(), _nearest_walkable(), Shared utilities for external PCG baseline experiments.  The baselines in this p (+20 more)
+Cohesion: 0.10
+Nodes (38): canonicalize_generated_grid(), evaluate_generated_grids(), finite_float(), json_ready(), load_room_grids(), _nearest_walkable(), Shared utilities for external PCG baseline experiments.  The baselines in this p, Make a generated room valid for the shared hard-oracle/P-CBS validator.      Gen (+30 more)
 
 ### Community 141 - "Community 141"
 Cohesion: 0.23
@@ -1366,11 +1382,11 @@ Nodes (17): _build_external_summary(), _descriptor_targets(), main(), _method_li
 
 ### Community 142 - "Community 142"
 Cohesion: 0.03
-Nodes (65): KeyLockChecker, Predict walkability from tile logits.                  Args:             tile, Verifies key-lock dependencies are satisfiable.          For each locked door,, Classifies latent features to semantic tile predictions.          Used to conv, Computes differentiable reachability scores for dungeon rooms.          A room, Classifies latent features to semantic tile predictions.          Used to conv, Predicts walkability mask from tile logits.          Walkable tiles: FLOOR, DO, Predict walkability from tile logits.                  Args:             tile (+57 more)
+Nodes (71): KeyLockChecker, Predict walkability from tile logits.                  Args:             tile, Verifies key-lock dependencies are satisfiable.          For each locked door,, Classifies latent features to semantic tile predictions.          Used to conv, Computes differentiable reachability scores for dungeon rooms.          A room, Classifies latent features to semantic tile predictions.          Used to conv, Predicts walkability mask from tile logits.          Walkable tiles: FLOOR, DO, Classify latent to tile logits.                  Args:             z: Latent (+63 more)
 
 ### Community 143 - "Community 143"
-Cohesion: 0.05
-Nodes (64): infer_puzzle_room_structure_enabled(), Infer whether a room currently contains explicit puzzle-block structure.      Th, Any, bool, float, int, str, test_apply_puzzle_structure_control_to_conditioning_is_explicit() (+56 more)
+Cohesion: 0.04
+Nodes (86): compute_rrwp_edge_features(), Compute relative random-walk probabilities for each directed edge [E, steps]., infer_puzzle_room_structure_enabled(), Infer whether a room currently contains explicit puzzle-block structure.      Th, int, str, Any, bool (+78 more)
 
 ### Community 144 - "Community 144"
 Cohesion: 0.12
@@ -1381,8 +1397,8 @@ Cohesion: 0.06
 Nodes (33): 10. Done vs Open, 1. Comparison Boundaries, 2. Why the Architecture Is This Large, 3. Why Topology First and Room by Room, 4. How Such a Small Dataset Can Feed the Model, 5. Attention Layer Inventory, 6. What the Attention "Twists" Actually Are, 7. Remaining Hard-Coded Hyperparameters (+25 more)
 
 ### Community 146 - "Community 146"
-Cohesion: 0.22
-Nodes (17): Any, bool, int, ndarray, RoomPos, str, _boundary_carve_tiles(), connect_doors() (+9 more)
+Cohesion: 0.06
+Nodes (60): Any, RoomPos, Any, bool, int, ndarray, RoomPos, str (+52 more)
 
 ### Community 147 - "Community 147"
 Cohesion: 0.07
@@ -1390,27 +1406,27 @@ Nodes (29): launch_solver_process(), launch_solver_worker(), Solver launch/sessi
 
 ### Community 148 - "Community 148"
 Cohesion: 0.02
-Nodes (122): CognitiveState, Complete cognitive state of the CBS agent.      Combines game state (position, i, Complete cognitive state of the CBS agent.      Combines game state (position, i, Complete cognitive state of the CBS agent.      Combines game state (position, i, Create a deep copy for branching., Hash for state-space search (only game state + step)., Create a deep copy for branching., Complete cognitive state of the CBS agent.      Combines game state (position, i (+114 more)
+Nodes (86): Create a deep copy for branching., Create a deep copy for branching., Create a deep copy for branching., Create a deep copy for branching., Create a deep copy for branching., Find a path using cognitive bounded search.                  Returns:, Create a deep copy for branching., Create a deep copy for branching. (+78 more)
 
 ### Community 149 - "Community 149"
 Cohesion: 0.12
 Nodes (33): stop_auto(), auto_step(), _conditional_door_ids(), _find_contiguous_replay_segment(), _grid_shape(), _grid_tile(), _is_cardinal_neighbor(), _maybe_replan_dstar() (+25 more)
 
 ### Community 150 - "Community 150"
-Cohesion: 0.23
-Nodes (21): _build_comparison_sheet(), _build_search_algorithm_comparison_payload(), _ensure_directed_progression_graph(), _load_mission_graph(), _load_variant_summary(), main(), _pairwise_compare(), parse_args() (+13 more)
+Cohesion: 0.21
+Nodes (23): _build_comparison_sheet(), build_manual_rich_topology_graph(), _build_search_algorithm_comparison_payload(), _ensure_directed_progression_graph(), _load_mission_graph(), _load_variant_summary(), main(), _pairwise_compare() (+15 more)
 
 ### Community 151 - "Community 151"
-Cohesion: 0.10
-Nodes (22): _build_latent_edit_mask(), _cast_latent_for_vqvae_decode(), _decode_latent_with_vqvae(), _normalize_neighbor_latents(), Compatibility wrapper around extracted feedback helper., Normalize neighbor latents to detached float32 tensors on pipeline device., Normalize neighbor latents to detached float32 tensors on pipeline device., Normalize neighbor latents to detached float32 tensors on pipeline device. (+14 more)
+Cohesion: 0.07
+Nodes (33): _build_latent_edit_mask(), _cast_latent_for_vqvae_decode(), _compute_room_condition(), _decode_latent_with_vqvae(), _logicnet_guided_inpaint_room(), _normalize_neighbor_latents(), Compatibility wrapper around extracted feedback helper., Compatibility wrapper around extracted feedback helper. (+25 more)
 
 ### Community 152 - "Community 152"
-Cohesion: 0.11
-Nodes (15): Load all theme configurations from disk., Create default Zelda-style theme., Parse theme configuration from JSON., Get current active theme., Apply visual theme to semantic grid.                  Args:             seman, Neural style transfer with edge preservation.                  Args:, Extract edge map from semantic grid using Sobel filter.                  Retur, Visual style for a semantic tile in a theme. (+7 more)
+Cohesion: 0.07
+Nodes (29): Feature 3: Style Transfer Support ================================== Enable mu, Load all theme configurations from disk., Create default Zelda-style theme., Parse theme configuration from JSON., Switch to a different theme., Get current active theme., Export theme configuration to JSON., Neural style transfer with semantic preservation.          Algorithm:     1. (+21 more)
 
 ### Community 153 - "Community 153"
-Cohesion: 0.13
-Nodes (20): Export the current route to JSON file., Load a saved route from JSON file., _apply_route_file(), export_route(), load_route(), load_route_file(), Route import/export operations for GUI runner., Export current route to a timestamped JSON file. (+12 more)
+Cohesion: 0.07
+Nodes (35): Entrypoint orchestration bridges for gui_runner module-level functions., run_main_entry(), _apply_startup_level_and_route_overrides(), GUI startup orchestration helpers., Apply command-line/env startup imports after the GUI object exists., Boot maps, create GUI instance, and run the interactive loop., run_gui_main(), Export the current route to JSON file. (+27 more)
 
 ### Community 154 - "Community 154"
 Cohesion: 0.20
@@ -1438,7 +1454,7 @@ Nodes (14): default_topology_semantics(), Default topology semantics mapping for
 
 ### Community 160 - "Community 160"
 Cohesion: 0.05
-Nodes (35): Infer movement direction from edge data., Extract lightweight summary features from either grid or graph input., Compute basic structural features from a semantic room grid., Return largest 4-connected component size / total mask size., Compute simple topology descriptors for model features., Compute Topological Positional Encoding using graph Laplacian., Load and process a complete dungeon.                  Args:             dunge, Find VGLC text file for dungeon. (+27 more)
+Nodes (50): GraphFingerprinter, Find the triforce room., BFS to match nodes to spatially adjacent rooms., Infer movement direction from edge data., Get adjacent room position., Find best matching room for a node., Compute content similarity score., Extract lightweight summary features from either grid or graph input. (+42 more)
 
 ### Community 161 - "Community 161"
 Cohesion: 0.06
@@ -1454,51 +1470,51 @@ Nodes (15): Compile the denoiser with `torch.compile` when the local PyTorch bui
 
 ### Community 164 - "Community 164"
 Cohesion: 0.03
-Nodes (58): compare_personas(), Get all tiles visible with 360Â° vision (useful for comparison)., Get all tiles visible with 360Â° vision (useful for comparison)., Get all tiles visible with 360Â° vision (useful for comparison)., Get all tiles visible with 360Â° vision (useful for comparison)., Convenience wrapper exposing the thesis-facing P-CBS name., Run multiple personas on the same grid and compare results.          Args:, Convenience function to solve a grid with CBS.          Args:         grid: S (+50 more)
+Nodes (58): Return integer grid cells on the line from start to end., Return integer grid cells on the line from start to end., Return integer grid cells on the line from start to end., Add tiles behind an occluding wall to the shadow set., Add tiles behind an occluding wall to the shadow set., Add tiles behind an occluding wall to the shadow set., Add tiles behind an occluding wall to the shadow set., Get all tiles visible with 360Â° vision (useful for comparison). (+50 more)
 
 ### Community 165 - "Community 165"
-Cohesion: 0.04
-Nodes (66): clear_solver_state(), Core helpers for solver state cleanup and dropdown synchronization., Refresh algorithm/representation/ARA values from dropdown widgets., Centralize solver state cleanup and ensure consistency., sync_solver_dropdown_settings(), cleanup_preview_before_solver_start(), Helpers to cleanup preview artifacts and reset visual solver state., Clear solver/visual state from previous runs before scheduling a new solve. (+58 more)
+Cohesion: 0.05
+Nodes (46): clear_solver_state(), Core helpers for solver state cleanup and dropdown synchronization., Refresh algorithm/representation/ARA values from dropdown widgets., Centralize solver state cleanup and ensure consistency., sync_solver_dropdown_settings(), cleanup_preview_before_solver_start(), Helpers to cleanup preview artifacts and reset visual solver state., Clear solver/visual state from previous runs before scheduling a new solve. (+38 more)
 
 ### Community 166 - "Community 166"
 Cohesion: 0.08
 Nodes (34): create_discrete_masked_model(), DiscreteMaskedRoomModel, MaskedTokenTransformerBackbone, Graph-conditioned discrete masked room model.  This module provides a MaskGIT-st, MaskGIT-style room generator with graph-conditioned cross-attention.      Traini, Bidirectional MaskGIT-style backbone for masked token prediction., Extract hard-known tokens from a topology map.          For training we keep doo, Factory for the graph-conditioned discrete masked room model. (+26 more)
 
 ### Community 167 - "Community 167"
-Cohesion: 0.04
-Nodes (99): DungeonSolver, Helpers for non-blocking preview startup after map load., Run lightweight post-load preview workflow without blocking UI., start_preview_for_current_map(), _add_config_flags(), _build_root_parser(), _build_topology_compare_manual_parser(), _build_topology_fixed_graph_audit_parser() (+91 more)
+Cohesion: 0.03
+Nodes (84): MLFeatureExtractor, Extract ML-ready features from dungeon topology graphs., HybridLayoutEngineImpl, Adapter and conversion exports from the monolithic zelda_core module., Feature extraction exports from canonical zelda_data modules., Graph matching/layout exports from the monolithic zelda_core module., Parser-focused exports from the monolithic zelda_core module., State-space solver exports from canonical zelda_data modules. (+76 more)
 
 ### Community 168 - "Community 168"
 Cohesion: 0.10
 Nodes (16): Sidebar rendering section helpers extracted from gui_runner._render., Render status/message/metrics/controls sections; return updated y., Render sidebar title/map/inventory and optional solver analysis; return updated, render_sidebar_header_inventory_solver(), render_sidebar_status_message_metrics_controls(), Any, int, _Draw (+8 more)
 
 ### Community 169 - "Community 169"
-Cohesion: 0.27
-Nodes (17): generate_dungeon_with_pipeline(), Generate a stitched dungeon with the canonical per-room pipeline., _build_mission_data(), _entity_counts(), _json_ready_graph(), main(), _parse_algorithms(), Any (+9 more)
+Cohesion: 0.20
+Nodes (28): RoomSpec, _boundary_artifacts(), _logic_violations(), _missing_required_doors(), _room_playable(), RoomSpec, _dungeon_solvable(), EvalConfig (+20 more)
 
 ### Community 170 - "Community 170"
 Cohesion: 0.09
 Nodes (10): AliveThread, DummyFlip, DummyGui, DummyLogger, DummyPygame, DummyThread, DummyThreading, DummyTime (+2 more)
 
 ### Community 171 - "Community 171"
-Cohesion: 0.11
-Nodes (17): CrossAttentionFusion, Cross-attention layer to fuse local and global contexts.          Uses local c, Cross-attention layer to fuse local and global contexts.          Uses local c, Fuse local and global conditioning via cross-attention.                  Args:, Cross-attention layer to fuse local and global contexts.          Uses local c, Cross-attention layer to fuse local and global contexts.          Uses local c, Cross-attention layer to fuse local and global contexts.          Uses local c, Cross-attention layer to fuse local and global contexts.          Uses local c (+9 more)
+Cohesion: 0.05
+Nodes (49): CrossAttentionFusion, GlobalStreamEncoder, GPSLayer, Cross-attention layer to fuse local and global contexts.          Uses local c, Cross-attention layer to fuse local and global contexts.          Uses local c, GraphGPS-style block: local message passing, global attention, then FFN., Cross-attention layer to fuse local and global contexts.          Uses local c, Cross-attention layer to fuse local and global contexts.          Uses local c (+41 more)
 
 ### Community 172 - "Community 172"
 Cohesion: 0.12
 Nodes (27): create_branching_graph(), create_linear_graph(), demo_dungeon_generation(), demo_guidance_comparison(), demo_single_room_generation(), main(), parse_args(), print_room_ascii() (+19 more)
 
 ### Community 173 - "Community 173"
-Cohesion: 0.10
-Nodes (21): float, int, str, Surface, AssetManager, create_asset_manager(), Asset Manager - Robust Asset Loading System ===================================, Initialize asset manager.                  Args:             tile_size: Size (+13 more)
+Cohesion: 0.07
+Nodes (24): Tests for mission grammar graph generation., Test module imports correctly., Test that generated graph has START and GOAL nodes., Tests for mission grammar graph generation., Test module imports correctly., Test converting graph to PyTorch tensors., Tests for mission grammar graph generation., Test that generated graph has START and GOAL nodes. (+16 more)
 
 ### Community 174 - "Community 174"
 Cohesion: 0.04
-Nodes (41): Apply LogicNet guidance to a DDIM-style clean-latent prediction.          LogicN, Prepare graph-node tokens and room topology maps for spatial conditioning., Anneal LogicNet sharpness from soft at high noise to sharp near x0., DPS-style scale: guidance is weak at high noise and strong near clean x0., Build a descending timestep schedule that always includes both endpoints., Build a descending timestep schedule that always includes both endpoints., Apply LogicNet guidance to a DDIM-style clean-latent prediction.          LogicN, Apply LogicNet guidance to a DDIM-style clean-latent prediction.          LogicN (+33 more)
+Nodes (48): Forward diffusion: sample x_t from x_0.                  q(x_t | x_0) = N(x_t;, Forward diffusion: sample x_t from x_0.                  q(x_t | x_0) = N(x_t;, Forward diffusion: sample x_t from x_0.                  q(x_t | x_0) = N(x_t;, Forward diffusion: sample x_t from x_0.                  q(x_t | x_0) = N(x_t;, Forward diffusion: sample x_t from x_0.                  q(x_t | x_0) = N(x_t;, Apply LogicNet guidance to a DDIM-style clean-latent prediction.          LogicN, Forward diffusion: sample x_t from x_0.                  q(x_t | x_0) = N(x_t;, Prepare graph-node tokens and room topology maps for spatial conditioning. (+40 more)
 
 ### Community 175 - "Community 175"
-Cohesion: 0.07
-Nodes (24): create_vqvae(), FSQuantizer, Create a Semantic VQ-VAE model.          Args:         num_classes: Number of, Create a Semantic VQ-VAE model.          Args:         num_classes: Number of, Create a Semantic VQ-VAE model.          Args:         num_classes: Number of, Create a Semantic VQ-VAE model.          Args:         num_classes: Number of, Create a Semantic VQ-VAE model.          Args:         num_classes: Number of, Create a Semantic VQ-VAE model.          Args:         num_classes: Number of (+16 more)
+Cohesion: 0.05
+Nodes (33): FSQuantizer, Finite Scalar Quantization ablation for VQ-VAE-style tokenizers.      FSQ replac, Finite Scalar Quantization ablation for VQ-VAE-style tokenizers.      FSQ replac, Finite Scalar Quantization ablation for VQ-VAE-style tokenizers.      FSQ replac, Finite Scalar Quantization ablation for VQ-VAE-style tokenizers.      FSQ replac, Finite Scalar Quantization ablation for VQ-VAE-style tokenizers.      FSQ replac, Clamp FSQ inputs to the finite code range with an identity STE gradient., Clamp FSQ inputs to the finite code range with an identity STE gradient. (+25 more)
 
 ### Community 176 - "Community 176"
 Cohesion: 0.11
@@ -1513,8 +1529,8 @@ Cohesion: 0.12
 Nodes (8): bitmask_t, bitmask_clearbit(), bitmask_getbit(), bitmask_setbit(), pg_tuple_couple_from_values_int(), pg_tuple_triple_from_values_int(), INLINE, PG_INLINE
 
 ### Community 179 - "Community 179"
-Cohesion: 0.06
-Nodes (31): Track both replay-level tile visits and cognition-level room visits., Update belief map and memory from current vision., Track both replay-level tile visits and cognition-level room visits., Update belief map and memory from current vision., Track both replay-level tile visits and cognition-level room visits., Update belief map and memory from current vision., Track both replay-level tile visits and cognition-level room visits., Update belief map and memory from current vision. (+23 more)
+Cohesion: 0.05
+Nodes (39): Map a conditional or puzzle tile to its remembered requirement family., Detect local cycling strongly enough to override scalar utility., Detect local cycling strongly enough to override scalar utility., Detect local cycling strongly enough to override scalar utility., Map a conditional or puzzle tile to its remembered requirement family., Map a conditional or puzzle tile to its remembered requirement family., Detect local cycling strongly enough to override scalar utility., Detect local cycling strongly enough to override scalar utility. (+31 more)
 
 ### Community 180 - "Community 180"
 Cohesion: 0.07
@@ -1525,8 +1541,8 @@ Cohesion: 0.07
 Nodes (27): difficulty, position, type, difficulty, position, type, difficulty, position (+19 more)
 
 ### Community 182 - "Community 182"
-Cohesion: 0.07
-Nodes (35): check_and_start_block_push(), get_animating_block_positions(), graph_guided_path(), hybrid_graph_grid_path(), Gameplay action and block-push orchestration bridges for ZeldaGUI., render_block_push_animations(), smart_grid_path(), start_block_push_animation() (+27 more)
+Cohesion: 0.06
+Nodes (37): auto_step(), check_and_start_block_push(), get_animating_block_positions(), graph_guided_path(), hybrid_graph_grid_path(), Gameplay action and block-push orchestration bridges for ZeldaGUI., render_block_push_animations(), smart_grid_path() (+29 more)
 
 ### Community 184 - "Community 184"
 Cohesion: 0.18
@@ -1554,51 +1570,51 @@ Nodes (25): _build_parser(), _classify_edge(), _classify_node(), _draw_one_graph
 
 ### Community 190 - "Community 190"
 Cohesion: 0.17
-Nodes (11): Create one source per sample from the currently most-walkable cell., Create one source per sample from the currently most-walkable cell., Create one source per sample from the currently most-walkable cell., Create one source per sample from the currently most-walkable cell., Create one source per sample from the currently most-walkable cell., Create one source per sample from the currently most-walkable cell., Create one source per sample from the currently most-walkable cell., Create one source per sample from the currently most-walkable cell. (+3 more)
+Nodes (12): create_logic_net(), Compute solvability loss for latent codes.                  Args:, Create a LogicNet module.          Args:         latent_dim: VQ-VAE latent di, Create a LogicNet module.          Args:         latent_dim: VQ-VAE latent di, Create a LogicNet module.          Args:         latent_dim: VQ-VAE latent di, Create a LogicNet module.          Args:         latent_dim: VQ-VAE latent di, Create a LogicNet module.          Args:         latent_dim: VQ-VAE latent di, Create a LogicNet module.          Args:         latent_dim: VQ-VAE latent di (+4 more)
 
 ### Community 191 - "Community 191"
-Cohesion: 0.16
-Nodes (23): _auto_slice_tileset(), _estimate_hud_crop(), extract_grid(), _load_image(), _match_templates(), Visual extractor — tile/template matcher for Zelda screenshots.  Provides: -, Public API: returns a (ROOM_H, ROOM_W) semantic-like numeric grid.      - If t, Create an RGB overlay visualization and save it to out_path.      out_arr is t (+15 more)
+Cohesion: 0.25
+Nodes (16): _auto_slice_tileset(), _estimate_hud_crop(), extract_grid(), _load_image(), _match_templates(), Visual extractor — tile/template matcher for Zelda screenshots.  Provides: -, Public API: returns a (ROOM_H, ROOM_W) semantic-like numeric grid.      - If t, Create an RGB overlay visualization and save it to out_path.      out_arr is t (+8 more)
 
 ### Community 192 - "Community 192"
-Cohesion: 0.11
-Nodes (26): infer_inventory_from_room(), make_stitched_for_single_room(), Small integration layer between `visual_extractor` and the solver stack.  Purp, Run `extract_grid` on a screenshot and return (semantic_ids, conf).      - sem, Return a small set of inventory tokens detected in the room.      Currently re, Create a minimal StitchedDungeon containing a single room.      This lets exis, visual_extract_to_room(), load_visual_assets() (+18 more)
+Cohesion: 0.20
+Nodes (14): load_visual_assets(), load_visual_map(), place_items_from_graph(), Map asset and visual-load orchestration bridges for ZeldaGUI., load_visual_assets(), load_visual_map(), place_items_from_graph(), Map and visual-loading helpers extracted from gui_runner. (+6 more)
 
 ### Community 193 - "Community 193"
 Cohesion: 0.25
 Nodes (24): _aggregate(), _descriptor_targets(), _generate_graph(), main(), _markdown_report(), _mean(), _paired_logicnet(), parse_args() (+16 more)
 
 ### Community 194 - "Community 194"
-Cohesion: 0.03
-Nodes (69): Enable differentiable graph-grid attention capture in every spatial conditioner., Enable differentiable graph-grid attention capture in every spatial conditioner., Aggregate spatial graph-node alignment losses from captured conditioner maps., Aggregate spatial graph-node alignment losses from captured conditioner maps., Forward diffusion: sample x_t from x_0.                  q(x_t | x_0) = N(x_t;, Forward diffusion: sample x_t from x_0.                  q(x_t | x_0) = N(x_t;, Enable differentiable graph-grid attention capture in every spatial conditioner., Enable differentiable graph-grid attention capture in every spatial conditioner. (+61 more)
+Cohesion: 0.04
+Nodes (50): Support both LogicNet return signatures: Tensor or (loss, info)., Support both LogicNet return signatures: Tensor or (loss, info)., Support both LogicNet return signatures: Tensor or (loss, info)., Support both LogicNet return signatures: Tensor or (loss, info)., Support both LogicNet return signatures: Tensor or (loss, info)., Support both LogicNet return signatures: Tensor or (loss, info)., Set attention kernel across all active token and graph-grid attention layers., Set attention kernel across all active token and graph-grid attention layers. (+42 more)
 
 ### Community 195 - "Community 195"
 Cohesion: 0.25
 Nodes (20): _compressed_size(), compute_end_to_end_structural_metrics(), _grid_to_vglc_text(), load_reference_room_texts(), nearest_reference_ncd_stats(), normalized_compression_distance(), pairwise_ncd_stats(), End-to-end structural evaluation helpers for generated dungeon exports.  This mo (+12 more)
 
 ### Community 196 - "Community 196"
-Cohesion: 0.07
-Nodes (24): Project latent-resolution tile logits onto the canonical room grid., Project latent-resolution tile logits onto the canonical room grid., Project latent-resolution tile logits onto the canonical room grid., Project latent-resolution tile logits onto the canonical room grid., Project latent-resolution tile logits onto the canonical room grid., Project latent-resolution tile logits onto the canonical room grid., Project latent-resolution tile logits onto the canonical room grid., Compute reachability scores.                  Args:             distances: [N (+16 more)
+Cohesion: 0.22
+Nodes (8): Compute reachability scores.                  Args:             distances: [N, Compute reachability scores.                  Args:             distances: [N, Compute reachability scores.                  Args:             distances: [N, Compute reachability scores.                  Args:             distances: [N, Compute reachability scores.                  Args:             distances: [N, Compute reachability scores.                  Args:             distances: [N, Compute reachability scores.                  Args:             distances: [N, Compute reachability scores.                  Args:             distances: [N
 
 ### Community 197 - "Community 197"
 Cohesion: 0.08
 Nodes (24): generation_metrics, avg_final_graph_marker_overwrite_rate, avg_final_post_overlay_graph_marker_exact_match_rate, avg_final_post_overlay_semantic_anchor_error, avg_final_pre_overlay_graph_marker_exact_match_rate, avg_final_pre_overlay_semantic_anchor_error, avg_neural_graph_marker_exact_match_rate, avg_neural_semantic_anchor_error (+16 more)
 
 ### Community 198 - "Community 198"
-Cohesion: 0.05
-Nodes (56): _bind_components(), _bump_diagnostic(), component_status(), _condition_feature_dims(), _extract_checkpoint_config(), _extract_checkpoint_state_dict(), _fit_feature_vector(), initialize_pipeline() (+48 more)
+Cohesion: 0.04
+Nodes (62): _bind_components(), _bump_diagnostic(), component_status(), _condition_feature_dims(), _extract_checkpoint_config(), _extract_checkpoint_state_dict(), _fit_feature_vector(), initialize_pipeline() (+54 more)
 
 ### Community 199 - "Community 199"
 Cohesion: 0.08
 Nodes (23): Architecture, Basic Dungeon Validation, Block I: Evolutionary Topology Director (Fully Integrated), Block II-VII: Neural-Symbolic Pipeline (H-MOLQD), Citation, Contact, Defense Evidence Workflow, Documentation (+15 more)
 
 ### Community 200 - "Community 200"
-Cohesion: 0.12
-Nodes (22): _as_grid(), _grid_tile(), _infer_topology_from_grid(), Reusable GUI overlay render helpers extracted from gui_runner monolith., Draw topology nodes/edges for the current stitched dungeon map., Render solver comparison table in the sidebar., Infer room nodes/edges for imported stitched grids without graph metadata., render_solver_comparison_overlay() (+14 more)
+Cohesion: 0.13
+Nodes (18): Run Breadth-First Search., Run Dijkstra's algorithm (uniform cost search)., Run Greedy Best-First Search (heuristic only)., Manhattan distance heuristic., Simplified movement check., Performance metrics for a solver., Run multiple search algorithms in parallel and compare results.          Featu, Initialize with environment. (+10 more)
 
 ### Community 201 - "Community 201"
-Cohesion: 0.11
-Nodes (33): _persona_config_from_payload(), Materialize a PersonaConfig from a calibration payload when available., _ablation_config(), _build_markdown(), _json_safe(), main(), Any, bool (+25 more)
+Cohesion: 0.09
+Nodes (38): _persona_config_from_payload(), PreparedValidationDungeon, Materialize a PersonaConfig from a calibration payload when available., Canonical stitched dungeon ready for hard-oracle and P-CBS validation., Canonical stitched dungeon ready for hard-oracle and P-CBS validation., _ablation_config(), _build_markdown(), _json_safe() (+30 more)
 
 ### Community 202 - "Community 202"
 Cohesion: 0.23
@@ -1614,27 +1630,27 @@ Nodes (10): _ButtonWidget, draw, _Font, _make_gui_with_widget(), _Pygame, _Rect,
 
 ### Community 205 - "Community 205"
 Cohesion: 0.07
-Nodes (25): Apply symbolic refinement and guarantee START/TRIFORCE presence., refine_and_fix_terminals(), create_symbolic_refiner(), LearnedTileStatistics, quick_repair(), Create a SymbolicRefiner instance.          Args:         tile_types: Availab, Quick repair function for a single room.          Args:         grid: H x W t, Create a SymbolicRefiner instance.          Args:         tile_types: Availab (+17 more)
+Nodes (23): create_symbolic_refiner(), LearnedTileStatistics, quick_repair(), Create a SymbolicRefiner instance.          Args:         tile_types: Availab, Quick repair function for a single room.          Args:         grid: H x W t, Create a SymbolicRefiner instance.          Args:         tile_types: Availab, Create a SymbolicRefiner instance.          Args:         tile_types: Availab, Quick repair function for a single room.          Args:         grid: H x W t (+15 more)
 
 ### Community 206 - "Community 206"
 Cohesion: 0.09
-Nodes (39): PuzzleStageSemanticsHead, Lightweight CNN head that predicts ordered puzzle semantics from room logits., extract_lora_state_dict(), build_fast_sampler_training_config_from_args(), ConsistencyLoRATrainer, _create_fast_sampler_dataloaders(), fast_sampler_training_kwargs_from_resolved_config(), _filter_constructor_kwargs() (+31 more)
+Nodes (38): PuzzleStageSemanticsHead, Lightweight CNN head that predicts ordered puzzle semantics from room logits., extract_lora_state_dict(), build_fast_sampler_training_config_from_args(), ConsistencyLoRATrainer, _create_fast_sampler_dataloaders(), fast_sampler_training_kwargs_from_resolved_config(), _filter_constructor_kwargs() (+30 more)
 
 ### Community 207 - "Community 207"
 Cohesion: 0.20
 Nodes (22): _ensure_out_dir(), _load_json(), _load_vqvae_rows(), main(), _pcbs_paths(), _persona_name_from_path(), plot_matched_budget_ablation_comparison(), plot_mission_graph_matched_budget() (+14 more)
 
 ### Community 208 - "Community 208"
-Cohesion: 0.13
-Nodes (18): Cell, CausalWFC, Initialize the grid with all possibilities.                  Args:, Generate a dungeon grid using causal WFC.                  Args:, Select uncollapsed cell with lowest entropy., Filter cell possibilities based on game state.                  Removes tiles, Verify that a path exists from start to goal using BFS.                  Path-, Choose a tile weighted by tile weights. (+10 more)
+Cohesion: 0.06
+Nodes (27): Feature 1: Seam Smoothing ========================== Ensures visual continuity, Extract all seam regions from graph adjacencies., Compute the shared boundary between two rooms., Apply smoothing to a single seam region.                  Algorithm:, Apply edge-preserving bilateral filter.                  Bilateral filter smoo, Ensure walls are preserved over floors in smoothed result., Ensure both sides of seam see same boundary., A boundary region between two adjacent rooms. (+19 more)
 
 ### Community 209 - "Community 209"
-Cohesion: 0.19
-Nodes (14): Any, bool, int, Path, str, PlaytestEvent, PlaytestSession, PlaytestTelemetryCollector (+6 more)
+Cohesion: 0.08
+Nodes (30): Sampler, _create_masked_room_dataloaders(), DataLoader, Any, bool, int, str, DataLoader (+22 more)
 
 ### Community 210 - "Community 210"
-Cohesion: 0.12
-Nodes (13): _build(), DummyButton, DummyCheckbox, DummyDropdown, DummyFont, DummyLogger, DummyPygame, DummyRect (+5 more)
+Cohesion: 0.10
+Nodes (25): render_control_panel(), dump_control_panel_widget_state(), Control-panel layout and widget state orchestration bridges., reposition_widgets(), update_control_panel_positions(), _checkbox_labels(), dump_control_panel_widget_state(), _level_options() (+17 more)
 
 ### Community 211 - "Community 211"
 Cohesion: 0.07
@@ -1649,40 +1665,40 @@ Cohesion: 0.09
 Nodes (21): 1. Solver Architecture, 2. Full Game-State Model, 3.1 Algorithm Index Mapping, 3.2 Core Search Formulas, 3.3 Heuristic Logic (StateSpaceAStar), 3.4 Representation Modes, 3.5 D* Lite, 3.6 DFS/IDDFS (+13 more)
 
 ### Community 214 - "Community 214"
-Cohesion: 0.07
-Nodes (61): _aggregate_room_alignment_metrics(), _apply_puzzle_room_scaffold(), _build_puzzle_room_route_template(), _build_puzzle_room_segments(), _build_puzzle_room_variant_specs(), _build_room_puzzle_metadata(), _build_room_walkable_mask(), _classify_puzzle_gate_family() (+53 more)
+Cohesion: 0.09
+Nodes (47): _aggregate_room_alignment_metrics(), _apply_puzzle_room_scaffold(), _build_puzzle_room_route_template(), _build_puzzle_room_segments(), _build_puzzle_room_variant_specs(), _build_room_graph_marker_preferences(), _build_room_puzzle_metadata(), _classify_puzzle_gate_family() (+39 more)
 
 ### Community 215 - "Community 215"
-Cohesion: 0.06
-Nodes (87): evaluate_map_elites(), evaluate_solvability(), main(), make_simple_graph(), Evaluation utilities for the H-MOLQD pipeline.  This module provides a lightwe, Run a small MAP-Elites analysis on a set of graphs., Create a simple linear graph for testing.      If ``soluble`` is False it adds, Run solvability evaluation on a set of graphs. (+79 more)
+Cohesion: 0.08
+Nodes (79): evaluate_map_elites(), evaluate_solvability(), main(), make_simple_graph(), Evaluation utilities for the H-MOLQD pipeline.  This module provides a lightwe, Run a small MAP-Elites analysis on a set of graphs., Create a simple linear graph for testing.      If ``soluble`` is False it adds, Run solvability evaluation on a set of graphs. (+71 more)
 
 ### Community 216 - "Community 216"
-Cohesion: 0.06
-Nodes (32): Pad a batch of variable-size graph tensors for diffusion conditioning., Pad a batch of variable-size graph tensors for diffusion conditioning., Pad a batch of variable-size graph tensors for diffusion conditioning., Pad a batch of variable-size graph tensors for diffusion conditioning., Pad a batch of variable-size graph tensors for diffusion conditioning., Pad a batch of variable-size graph tensors for diffusion conditioning., Pad a batch of variable-size graph tensors for diffusion conditioning., Collapse a room batch from one dungeon into one mission graph.          Returns (+24 more)
+Cohesion: 0.12
+Nodes (24): ABC, Domain schema interfaces for neuro-symbolic graph semantics., NeuroSymbolicSchema, Generic domain-schema contract for symbolic graph semantics.  The neural pipelin, Interface for converting domain graph metadata into pipeline semantics., Return canonical room-role booleans for one graph node., Return all canonical keys with boolean values and no silent extras., Resolve constructor input into a concrete schema instance. (+16 more)
 
 ### Community 217 - "Community 217"
-Cohesion: 0.12
-Nodes (21): ask_ai_generation_config(), _initial_config(), Native dialog for configuring GUI AI level generation., Collect canonical AI generation settings from native input dialogs., _configure_ai_generation_if_needed(), generate_level(), Control helpers for AI dungeon generation flow., Persist dialog/config values onto the GUI object for the worker. (+13 more)
+Cohesion: 0.06
+Nodes (39): ask_ai_generation_config(), _initial_config(), Native dialog for configuring GUI AI level generation., Collect canonical AI generation settings from native input dialogs., _configure_ai_generation_if_needed(), generate_level(), Control helpers for AI dungeon generation flow., Persist dialog/config values onto the GUI object for the worker. (+31 more)
 
 ### Community 218 - "Community 218"
-Cohesion: 0.08
-Nodes (22): Convert to dictionary for JSON serialization., Convert to dictionary for JSON serialization., Convert to dictionary for JSON serialization., Map a global tile coordinate to the room abstraction used by P-CBS metrics., Map a global tile coordinate to the room abstraction used by P-CBS metrics., Map a global tile coordinate to the room abstraction used by P-CBS metrics., Map a global tile coordinate to the room abstraction used by P-CBS metrics., Return True when a position is close enough to a room edge to transition. (+14 more)
+Cohesion: 0.19
+Nodes (12): Graph, int, Surface, ExplainabilityDebugOverlay, Render tooltip showing why this node exists.                  Tooltip content:, Render heatmap showing fitness contribution of each node.                  Col, Render genealogy tree in side panel.                  Shows evolutionary linea, Render confidence overlay on tiles.                  Tiles with low confidence (+4 more)
 
 ### Community 219 - "Community 219"
-Cohesion: 0.22
-Nodes (20): _add_room(), build_chain_control_graph(), build_metroidvania_ood_graph(), _condition_graph(), _descriptor_payload(), main(), parse_args(), Any (+12 more)
+Cohesion: 0.11
+Nodes (25): apply_generated_dungeon(), apply_mission_graph_constraints(), apply_mixed_initiative_constraints(), build_generated_dungeon_payload(), mission_graph_to_gnn_input(), Apply staged boss-node and locked-edge constraints directly to mission graph., Convert mission graph to GNN inputs and return metadata., Build metadata for a generated dungeon without mutating GUI state. (+17 more)
 
 ### Community 220 - "Community 220"
 Cohesion: 0.24
 Nodes (20): _json_sanitize(), _load_json(), main(), _markdown_table(), parse_args(), Any, bool, float (+12 more)
 
 ### Community 221 - "Community 221"
-Cohesion: 0.07
-Nodes (30): int, str, Path, normalize_dungeon_ids(), normalize_variants(), Canonical dataset splits for the local Zelda corpus.  The split unit is the dung, Return sorted unique dungeon ids, or ``None`` to mean all dungeons., Return sorted unique Quest variants. (+22 more)
+Cohesion: 0.05
+Nodes (40): Path, Tensor, PyTorch Dataset for Zelda dungeon grids.          Supports loading from:, PyTorch Dataset for Zelda dungeon grids.          Supports loading from:, PyTorch Dataset for Zelda dungeon grids.          Supports loading from:, PyTorch Dataset for Zelda dungeon grids.          Supports loading from:, Initialize dataset from text files., Initialize dataset from text files. (+32 more)
 
 ### Community 222 - "Community 222"
-Cohesion: 0.08
-Nodes (20): Tests for causal Wave Function Collapse., Test that WFC maintains causal ordering., Test that game state is properly tracked., Tests for causal Wave Function Collapse., Test that same seed produces same grid., Test that WFC maintains causal ordering., Test generation with fixed tiles., Test that game state is properly tracked. (+12 more)
+Cohesion: 0.40
+Nodes (4): Test that WFC maintains causal ordering., Test that WFC maintains causal ordering., Test that WFC maintains causal ordering., Test that WFC maintains causal ordering.
 
 ### Community 223 - "Community 223"
 Cohesion: 0.14
@@ -1697,8 +1713,8 @@ Cohesion: 0.10
 Nodes (19): 1. Distill only the graph-aware Block IV path, 2. Use a dedicated fast-sampler scheduler/runtime, 3. Distill CFG behavior explicitly, 4. Keep LogicNet guidance out of the first fast path, 5. Keep boundary-aware inpainting as a fallback path, 6. Route by use case, Assessment: Do We Need It?, Current Repo Reality (+11 more)
 
 ### Community 226 - "Community 226"
-Cohesion: 0.04
-Nodes (51): Font, Any, bool, int, str, Surface, EffectState, Effect lifecycle states. (+43 more)
+Cohesion: 0.06
+Nodes (34): Any, bool, int, str, Surface, HUDPanel, ModernHUD, Rebuild the panel surface. (+26 more)
 
 ### Community 227 - "Community 227"
 Cohesion: 0.15
@@ -1713,44 +1729,44 @@ Cohesion: 0.14
 Nodes (15): Attempt to infer and stage mapping proposals for unmatched nodes.          Use, Undo last applied match snapshot, if any., Apply staged tentative matches above the configured threshold., Any, apply_tentative_matches(), match_missing_nodes(), Helpers for topology room-node matching controls in the GUI., Infer missing room-node mappings and apply confident matches. (+7 more)
 
 ### Community 230 - "Community 230"
-Cohesion: 0.15
-Nodes (24): _clear_import_runtime_state(), export_current_map(), import_txt_level(), open_export_dialog(), open_import_dialog(), Import and export controls for ZeldaGUI.  Provides: - import_txt_level: Load, Import a full stitched level from a text file of integer tile IDs.      Suppor, Export the current semantic grid to a text file.      Args:         gui: The (+16 more)
+Cohesion: 0.05
+Nodes (49): _apply_ai_completion_metadata(), _apply_ai_grid_directly(), handle_ai_generation_completion(), handle_parallel_search_completion(), handle_preview_process_completion(), handle_solver_process_completion(), Post-event-loop completion handlers for gui_runner run loop., Apply finished solver-process (or thread fallback) result on the main thread. (+41 more)
 
 ### Community 231 - "Community 231"
 Cohesion: 0.21
 Nodes (19): analyze_coverage_convergence(), analyze_descriptor_shifts(), analyze_design_space_projections(), analyze_qd_decomposition(), _analyze_sparsity_reason(), generate_markdown_report(), load_benchmark_reports(), main() (+11 more)
 
 ### Community 232 - "Community 232"
-Cohesion: 0.26
-Nodes (19): analyze_records(), _as_mapping(), extract_archive_records(), load_archive_payload(), main(), parse_args(), Any, bool (+11 more)
+Cohesion: 0.13
+Nodes (19): _compute_editor_layout(), ensure_mission_graph_editor_draft(), Compute stable normalized 2D positions for mission-graph editor rendering., Create a draft mission graph for editor interactions when absent., Handle hold-to-move input including diagonal movement combinations., run_continuous_movement_tick(), handle_global_keydown_shortcuts(), handle_keydown_event() (+11 more)
 
 ### Community 233 - "Community 233"
 Cohesion: 0.07
 Nodes (22): Tests for complete LogicNet module., Test LogicNet forward pass., Test that gradients flow through LogicNet., Tests for complete LogicNet module., Test LogicNet forward pass., Latent inputs should be lifted to room resolution before door/path checks., Test that gradients flow through LogicNet., Room-topology traces and anchors should contribute directly to the optimized los (+14 more)
 
 ### Community 234 - "Community 234"
-Cohesion: 0.07
-Nodes (41): GaussianVAETrainer, Training utilities for the continuous semantic baseline., Training utilities for the continuous semantic baseline., CosineAnnealingLR, GaussianVAETrainer, build_gaussian_vae_scheduler(), build_gaussian_vae_training_args_from_args(), _default_gaussian_vae_training_kwargs() (+33 more)
+Cohesion: 0.11
+Nodes (26): GaussianVAETrainer, Training utilities for the continuous semantic baseline., Training utilities for the continuous semantic baseline., CosineAnnealingLR, GaussianVAETrainer, build_gaussian_vae_scheduler(), evaluate_gaussian_vae_loader(), grids_to_onehot() (+18 more)
 
 ### Community 235 - "Community 235"
 Cohesion: 0.11
 Nodes (18): 1. One-way directionality is modeled symbolically but not encoded explicitly, 2. Battery and multi-switch dependencies are present in the grammar but mostly invisible to the neural topology encoder, 3. Advanced node semantics exist in the grammar but are mostly dropped before graph conditioning, 4. Room topology maps used to collapse too many gate types into a generic gated-door channel, 5. TPE is useful, but still narrow for this topology regime, 6. The topology contract is inconsistent across config, training, and runtime, Additional Literature Worth Bringing In, Bottom Line (+10 more)
 
 ### Community 236 - "Community 236"
-Cohesion: 0.07
-Nodes (18): Large dead-code sets should be reset gradually, not all at once., Dead-code EMA normalization should not create NaN/Inf embeddings., The thread lock must not make the quantizer uncopyable., Dead-code EMA normalization should not create NaN/Inf embeddings., Tests for Vector Quantizer module., VQ loss scale should not be diluted by embedding dimension., Test quantizer forward pass., The thread lock must not make the quantizer uncopyable. (+10 more)
+Cohesion: 0.06
+Nodes (24): Large dead-code sets should be reset gradually, not all at once., Dead-code EMA normalization should not create NaN/Inf embeddings., The thread lock must not make the quantizer uncopyable., Dead-code EMA normalization should not create NaN/Inf embeddings., Tests for Vector Quantizer module., Test encoder forward pass., VQ loss scale should not be diluted by embedding dimension., Test quantizer forward pass. (+16 more)
 
 ### Community 237 - "Community 237"
 Cohesion: 0.11
 Nodes (18): 1. Holmgard et al. procedural personas, 2. Liapis / Holmgard persona critics and spatial metrics, 3. PCGRL and dense reward shaping, 4. Multi-objective A* / scalarized search, Bottom-Line Verdict, Closest Prior Art, Code-Side Gap That Had To Be Fixed, Current Repo Status (+10 more)
 
 ### Community 238 - "Community 238"
-Cohesion: 0.09
-Nodes (27): Sampler, Any, bool, int, str, DataLoader, test_create_dataloader_forwards_augmentation_to_dataset(), test_create_dataloader_rejects_graph_augmentation_without_metadata_transform() (+19 more)
+Cohesion: 0.13
+Nodes (10): float, 2D vector with interpolation and math support.          Used for smooth positi, Linear interpolation toward target.                  Args:             target, Calculate Euclidean distance to another vector., Calculate Manhattan distance to another vector., Create from grid coordinates (row, col)., Set the agent's target position.                  Args:             row: Grid, Update all animations.                  Args:             dt: Delta time in s (+2 more)
 
 ### Community 239 - "Community 239"
-Cohesion: 0.09
-Nodes (19): ConstraintPropagator, Arc consistency constraint propagation.          Ensures local consistency aft, Arc consistency constraint propagation.          Ensures local consistency aft, Historical columns-then-rows carving fallback., Args:             tile_types: Available tile types for WFC             adjacen, Rebuild WFC components from the current rule source.          This allows a re, Args:             tile_types: Available tile types for WFC             adjacen, Rebuild WFC components from the current rule source.          This allows a re (+11 more)
+Cohesion: 0.14
+Nodes (20): algorithm_label(), apply_preset_feature_flags(), difficulty_label(), Pure control-panel rules used by ZeldaGUI event handling., Map zoom dropdown selection to ZeldaGUI.ZOOM_LEVELS index., Return user-facing zoom label for dropdown selection., Return user-facing difficulty name., Return user-facing solver name. (+12 more)
 
 ### Community 240 - "Community 240"
 Cohesion: 0.11
@@ -1765,12 +1781,12 @@ Cohesion: 0.27
 Nodes (17): build_report(), _json_sanitize(), _load_json(), main(), Any, float, int, Path (+9 more)
 
 ### Community 243 - "Community 243"
-Cohesion: 0.04
-Nodes (49): Tests for agent personas., P-CBS room metrics should not treat every text-grid character as a room., P-CBS room metrics should not treat every text-grid character as a room., P-CBS room metrics should not treat every text-grid character as a room., P-CBS room metrics should not treat every text-grid character as a room., P-CBS room metrics should not treat every text-grid character as a room., P-CBS metrics should expose the metacognitive control statistics., P-CBS room metrics should not treat every text-grid character as a room. (+41 more)
+Cohesion: 0.03
+Nodes (62): Test CBS can solve a simple grid., Test CBS can solve a simple grid., Test CBS can solve a simple grid., Test CBS can solve a simple grid., Test CBS can solve a simple grid., Test CBS can solve a simple grid., Test CBS produces same results with same seed., Test CBS can solve a simple grid. (+54 more)
 
 ### Community 244 - "Community 244"
-Cohesion: 0.12
-Nodes (23): render_control_panel(), dump_control_panel_widget_state(), Control-panel layout and widget state orchestration bridges., reposition_widgets(), update_control_panel_positions(), _checkbox_labels(), dump_control_panel_widget_state(), _level_options() (+15 more)
+Cohesion: 0.08
+Nodes (13): Test tension curve extraction and fitness calculation., Test evaluator setup., Test fitness of solvable graph., Test tension curve extraction., Evaluator should reward explicit item -> tutorial -> combat -> complex progressi, Longer tutorial->combat->complex->boss span should score higher than a compresse, Target-aware priors should actively favor AddSkillChain in full-rule mode., High pedagogical targets should seed the initial population with tutorial-aware (+5 more)
 
 ### Community 245 - "Community 245"
 Cohesion: 0.15
@@ -1781,8 +1797,8 @@ Cohesion: 0.16
 Nodes (8): _Draw, _Logger, _Math, _Pygame, _Surface, test_render_path_guaranteed_draws_lines_and_markers(), test_render_path_guaranteed_ignores_invalid_path_point(), _Time
 
 ### Community 247 - "Community 247"
-Cohesion: 0.29
-Nodes (6): match_rooms_to_graph(), Room-to-graph matching orchestration extracted from zelda_core., Orchestrate room-to-graph matching while preserving legacy behavior., Any, DiGraph, int
+Cohesion: 0.14
+Nodes (12): match_rooms_to_graph(), Room-to-graph matching orchestration extracted from zelda_core., Orchestrate room-to-graph matching while preserving legacy behavior., Any, Any, DiGraph, int, convert_dungeon_to_dungeondata() (+4 more)
 
 ### Community 248 - "Community 248"
 Cohesion: 0.11
@@ -1797,8 +1813,8 @@ Cohesion: 0.14
 Nodes (15): Control-panel animation orchestration bridges for ZeldaGUI., start_toggle_panel_animation(), update_control_panel_animation(), update_control_panel_scroll(), Control panel animation and scrolling helpers., Advance control panel animation state one frame., Begin animated transition to collapsed or expanded state., start_toggle_panel_animation() (+7 more)
 
 ### Community 251 - "Community 251"
-Cohesion: 0.07
-Nodes (45): Linear, FastSamplerCheckpointInfo, freeze_non_lora_parameters(), inject_lora_into_model(), _iter_target_linear_modules(), load_fast_sampler_checkpoint(), load_lora_state_dict(), LoRALinear (+37 more)
+Cohesion: 0.06
+Nodes (47): Linear, FastSamplerCheckpointInfo, freeze_non_lora_parameters(), inject_lora_into_model(), _iter_target_linear_modules(), load_fast_sampler_checkpoint(), load_lora_state_dict(), LoRALayer (+39 more)
 
 ### Community 252 - "Community 252"
 Cohesion: 0.14
@@ -1830,15 +1846,15 @@ Nodes (29): import_pcg_benchmark(), _pcg_benchmark_repo_candidates(), Return exi
 
 ### Community 259 - "Community 259"
 Cohesion: 0.03
-Nodes (87): load_maps_from_adapter(), advance_frame_and_check_limit(), handle_pending_solver_trigger(), handle_watchdog_screenshot_request(), Frame-tail handlers for the gui_runner main loop., Start solver when deferred trigger flag is set., Render then present frame, attempting fallback display recovery on failure., Process watchdog screenshot request safely on the main thread. (+79 more)
+Nodes (83): load_maps_from_adapter(), advance_frame_and_check_limit(), handle_pending_solver_trigger(), handle_watchdog_screenshot_request(), Frame-tail handlers for the gui_runner main loop., Start solver when deferred trigger flag is set., Render then present frame, attempting fallback display recovery on failure., Process watchdog screenshot request safely on the main thread. (+75 more)
 
 ### Community 260 - "Community 260"
 Cohesion: 0.05
-Nodes (53): Export current map topology to a DOT file (if available)., Map a global tile coordinate to a room-grid coordinate., Whether a node should be preserved during dead-end pruning., Build undirected room adjacency from graph edges via node-room mapping., Any, Any, bool, float (+45 more)
+Nodes (50): Export current map topology to a DOT file (if available)., Any, Any, bool, float, int, str, _FakeGraph (+42 more)
 
 ### Community 261 - "Community 261"
-Cohesion: 0.09
-Nodes (14): BFS reachability check excluding specific directed edges., Repair invalid lock/key setups by downgrading unsatisfied gates.          Note, Public wrapper for lock-key consistency repair., Best-effort repair for progression constraints after generation.          Stra, Public wrapper for progression-constraint repair., Best-effort normalization for Wave 3 quality constraints.          This pass o, Apply a simple layout algorithm to position nodes., Generate a mission graph.                  Args:             difficulty: Dung (+6 more)
+Cohesion: 0.11
+Nodes (25): align_nodewise_tensor(), build_default_node_positions(), compute_current_node_distance_features(), compute_rwse_features(), Compute current-room-aware distance features [N, 4].      Feature layout:     -, Compute current-room-aware distance features [N, 4].      Feature layout:     -, Pad/truncate node-aligned tensors to [N, D].      This keeps graph conditioning, Pad/truncate node-aligned tensors to [N, D].      This keeps graph conditioning (+17 more)
 
 ### Community 262 - "Community 262"
 Cohesion: 0.15
@@ -1865,28 +1881,28 @@ Cohesion: 0.11
 Nodes (18): _pop_dataclass_kwargs(), Build grouped config from flat pipeline constructor kwargs., Build grouped config from flat pipeline constructor kwargs., Compatibility alias for callers using the former flat constructor name., Compatibility alias for callers using the former flat constructor name., Build config using the historical checkpoint directory convention., Build config using the historical checkpoint directory convention., Return a copy with flat constructor overrides applied. (+10 more)
 
 ### Community 268 - "Community 268"
-Cohesion: 0.33
-Nodes (5): initialize_ui_control_state(), UI/control state initialization helpers for ZeldaGUI., Initialize item tracking, control panel, feature flags, and selection state., Any, bool
+Cohesion: 0.06
+Nodes (27): Quantize continuous latents to discrete codebook entries.                  Arg, Quantize continuous latents to discrete codebook entries.                  Args:, Average per-token squared error after summing embedding channels., Average per-token squared error after summing embedding channels., Average per-token squared error after summing embedding channels., Quantize continuous latents to discrete codebook entries.                  Args:, Quantize continuous latents to discrete codebook entries.                  Args:, Quantize continuous latents to discrete codebook entries.                  Args: (+19 more)
 
 ### Community 269 - "Community 269"
 Cohesion: 0.12
 Nodes (17): entity_counts, BLOCK, DOOR_BOSS, DOOR_LOCKED, DOOR_OPEN, DOOR_PUZZLE, DOOR_SOFT, ENEMY (+9 more)
 
 ### Community 270 - "Community 270"
-Cohesion: 0.17
-Nodes (12): create_logic_net(), Compute solvability loss for latent codes.                  Args:, Create a LogicNet module.          Args:         latent_dim: VQ-VAE latent di, Create a LogicNet module.          Args:         latent_dim: VQ-VAE latent di, Create a LogicNet module.          Args:         latent_dim: VQ-VAE latent di, Create a LogicNet module.          Args:         latent_dim: VQ-VAE latent di, Create a LogicNet module.          Args:         latent_dim: VQ-VAE latent di, Create a LogicNet module.          Args:         latent_dim: VQ-VAE latent di (+4 more)
+Cohesion: 0.13
+Nodes (20): map_elites_worker(), MAP-Elites orchestration helpers extracted from gui_runner., Start MAP-Elites in background if not already running., Run MAP-Elites evaluation and persist optional heatmap artifact., start_map_elites(), _clip01(), _get_grid_from_dungeon(), _get_mission_graph_from_dungeon() (+12 more)
 
 ### Community 271 - "Community 271"
-Cohesion: 0.02
-Nodes (102): DiversityEvaluator, MetricsEngine, Standalone validation helper classes extracted from validator monolith., Evaluate diversity across a batch of generated maps., Pre-validation checks for map structural validity., Run all sanity checks., Count occurrences of each semantic element., Calculate validation metrics for a solved map. (+94 more)
+Cohesion: 0.05
+Nodes (41): can_traverse_edge_type(), combine_edge_types(), edge_constraints_from_data(), edge_type_from_data(), Edge-type and traversal helpers extracted from validator monolith., Return canonical edge constraints from edge attributes., Return primary canonical edge type from edge attributes., Combine two edge types and keep the more restrictive one. (+33 more)
 
 ### Community 272 - "Community 272"
 Cohesion: 0.25
 Nodes (16): _artifact_summary_lines(), _build_steps(), main(), parse_args(), Any, float, int, Namespace (+8 more)
 
 ### Community 273 - "Community 273"
-Cohesion: 0.12
-Nodes (18): Select an AI checkpoint path for future generation runs., select_ai_model_checkpoint(), clear_path(), Gameplay control action orchestration bridges for ZeldaGUI., reset_map(), select_ai_model_checkpoint(), show_path_preview(), clear_path() (+10 more)
+Cohesion: 0.18
+Nodes (15): get_waypoint_colors(), MultiGoalPathfinder, MultiGoalResult, Plan direct path through waypoints., Try all permutations to find optimal order.                  Complexity: O(N!, Greedy TSP heuristic: always visit nearest unvisited waypoint., Generate distinct colors for waypoints.          Uses HSV color space with equ, Render numbered waypoint markers on surface.          Args:         surface: (+7 more)
 
 ### Community 274 - "Community 274"
 Cohesion: 0.21
@@ -1909,16 +1925,16 @@ Cohesion: 0.15
 Nodes (7): DummyGui, DummyLogger, DummyOs, DummyProc, path, test_cleanup_preview_before_solver_start_terminates_and_clears(), test_reset_solver_visual_state_before_start_clears_visual_fields()
 
 ### Community 279 - "Community 279"
-Cohesion: 0.15
-Nodes (10): parse_edge_label(), Test edge type parsing., Test parsing open door (empty label)., Test parsing key-locked door., Test parsing bombable wall., Test parsing soft-locked door., Test parsing stairs/warp., Test getting edge type from graph. (+2 more)
+Cohesion: 0.17
+Nodes (9): parse_edge_label(), Test edge type parsing., Test parsing open door (empty label)., Test parsing key-locked door., Test parsing bombable wall., Test parsing soft-locked door., Test parsing stairs/warp., Compatibility wrapper. (+1 more)
 
 ### Community 280 - "Community 280"
 Cohesion: 0.12
 Nodes (15): Architecture Drift Status, Architecture Research Judgment (2026-02-24), Bottom Line, Executive Judgment, External Research Alignment (Used for Judgment), Highest-Impact Next Actions (Ordered), Implementation Update (2026-02-24), Implementation Update (2026-02-24, Round 2) (+7 more)
 
 ### Community 281 - "Community 281"
-Cohesion: 0.16
-Nodes (20): Any, int, ndarray, Offset, RoomPos, StitchedRoomLayout, str, build_global_grid_from_rooms() (+12 more)
+Cohesion: 0.12
+Nodes (13): _build(), DummyButton, DummyCheckbox, DummyDropdown, DummyFont, DummyLogger, DummyPygame, DummyRect (+5 more)
 
 ### Community 282 - "Community 282"
 Cohesion: 0.20
@@ -1933,12 +1949,12 @@ Cohesion: 0.12
 Nodes (15): 1. Code Truth, 2.1 Why `JPS` is not the hard oracle here, 2.2 Why `Theta*` is not the hard oracle here, 2.3 Why `D* Lite` is still valuable, 2. Why D* Lite Is Not The Best Primary Oracle Here, 3. Literature Basis, 4.1 Hard correctness oracle, 4.2 Comparison / ablation solvers (+7 more)
 
 ### Community 285 - "Community 285"
-Cohesion: 0.14
-Nodes (20): algorithm_label(), apply_preset_feature_flags(), difficulty_label(), Pure control-panel rules used by ZeldaGUI event handling., Map zoom dropdown selection to ZeldaGUI.ZOOM_LEVELS index., Return user-facing zoom label for dropdown selection., Return user-facing difficulty name., Return user-facing solver name. (+12 more)
+Cohesion: 0.08
+Nodes (43): Position, COGNITIVE BOUNDED SEARCH (CBS) â€” Human-Like Dungeon Navigation ==============, Action, compress_pcbs_route_for_replay(), _loop_erase_by_state(), _normalize_path(), Replay-safe route shaping for P-CBS traces used by the GUI., Convert a raw P-CBS cognitive trace into a shorter GUI replay path.      The com (+35 more)
 
 ### Community 286 - "Community 286"
 Cohesion: 0.04
-Nodes (41): Convert a dataset graph_dict to LogicNet's expected format.                  L, Convert a dataset graph_dict to LogicNet's expected format.                  L, Drop legacy LogicNet weights that were nested inside diffusion guidance., Convert a dataset graph_dict to LogicNet's expected format.                  L, Drop legacy LogicNet weights that were nested inside diffusion guidance., Fallback schedule length used before a dataloader length is known., Fallback schedule length used before a dataloader length is known., Convert a dataset graph_dict to LogicNet's expected format.                  L (+33 more)
+Nodes (47): Drop legacy LogicNet weights that were nested inside diffusion guidance., Drop legacy LogicNet weights that were nested inside diffusion guidance., Fallback schedule length used before a dataloader length is known., Fallback schedule length used before a dataloader length is known., Drop legacy LogicNet weights that were nested inside diffusion guidance., Fallback schedule length used before a dataloader length is known., Drop legacy LogicNet weights that were nested inside diffusion guidance., Drop legacy LogicNet weights that were nested inside diffusion guidance. (+39 more)
 
 ### Community 287 - "Community 287"
 Cohesion: 0.12
@@ -1950,31 +1966,31 @@ Nodes (12): Image, main(), bool, int, str, ASSET CUTTER UTILITY ================
 
 ### Community 289 - "Community 289"
 Cohesion: 0.13
-Nodes (24): _apply_profile(), _apply_stage_branch(), _apply_tokenizer(), main(), parse_args(), _set(), Any, int (+16 more)
+Nodes (26): _apply_profile(), _apply_stage_branch(), _apply_tokenizer(), main(), parse_args(), _set(), Any, int (+18 more)
 
 ### Community 290 - "Community 290"
-Cohesion: 0.06
-Nodes (32): Tests for VQ-VAE Encoder., Test encoder forward pass., Test that encoder reduces spatial dimensions., Tests for VQ-VAE Encoder., Test encoder forward pass., Tests for VQ-VAE Encoder., Test that encoder reduces spatial dimensions., Tests for VQ-VAE Encoder. (+24 more)
+Cohesion: 0.07
+Nodes (27): Tests for VQ-VAE Encoder., Test that encoder reduces spatial dimensions., Tests for VQ-VAE Encoder., Tests for VQ-VAE Encoder., Test that encoder reduces spatial dimensions., Tests for VQ-VAE Encoder., Test VQ-VAE forward pass., Test that encoder reduces spatial dimensions. (+19 more)
 
 ### Community 291 - "Community 291"
-Cohesion: 0.12
-Nodes (19): build_conditioning_vector(), _compute_editor_layout(), ensure_mission_graph_editor_draft(), generate_comprehensive_demo_graph(), generate_mission_graph(), _mission_graph_constraints_from_gui(), mission_graph_to_gnn_input(), _normalize_node_ref() (+11 more)
+Cohesion: 0.16
+Nodes (20): _build_report(), _combined_overrides(), _json_sanitize(), _load_summary(), main(), parse_args(), _parse_profiles(), _profile_score() (+12 more)
 
 ### Community 292 - "Community 292"
 Cohesion: 0.32
 Nodes (15): build_diffusion_summary(), build_markdown(), build_vqvae_summary(), DiffusionRunSpec, _fmt(), _load_diffusion_run_metadata(), _load_json(), main() (+7 more)
 
 ### Community 293 - "Community 293"
-Cohesion: 0.12
-Nodes (30): generate_block_i_graphs(), load_vglc_reference_graphs(), Generate mission graphs with Block I evolutionary search., Load reference topology graphs from VGLC-style DOT files., _descriptor_targets(), main(), parse_args(), Any (+22 more)
+Cohesion: 0.28
+Nodes (15): _aggregate(), ArmConfig, _descriptor_target_means(), main(), _paired_delta(), parse_args(), Any, DataFrame (+7 more)
 
 ### Community 294 - "Community 294"
 Cohesion: 0.28
 Nodes (15): float, ndarray, object, Path, str, _coerce_grid_to_python_2d(), _cube_vertices(), export_engine_json() (+7 more)
 
 ### Community 295 - "Community 295"
-Cohesion: 0.27
-Nodes (21): _build_end_to_end_case_figure(), _build_solver_figure(), _draw_overlay_panel(), _env_kwargs(), _load_case_context(), _load_json(), main(), parse_args() (+13 more)
+Cohesion: 0.05
+Nodes (67): _build_end_to_end_case_figure(), _build_solver_figure(), _draw_overlay_panel(), _env_kwargs(), _load_case_context(), _load_json(), main(), parse_args() (+59 more)
 
 ### Community 296 - "Community 296"
 Cohesion: 0.12
@@ -1993,24 +2009,24 @@ Cohesion: 0.17
 Nodes (6): DummyEffects, DummyEnv, DummyGui, DummyLogger, test_clamp_and_center_on_player_keep_offsets_in_bounds(), test_next_prev_map_flow_updates_index_and_resets_state()
 
 ### Community 300 - "Community 300"
-Cohesion: 0.12
-Nodes (16): DFSMetrics, State-Space DFS/IDDFS Implementation for Zelda Dungeon Solving ================, Iterative Deepening DFS.                  Progressively increases depth limit,, Recursive DFS implementation with depth limiting.                  Args:, Iterative (stack-based) DFS implementation.                  Uses explicit sta, Generate all valid successor states from current state.                  Handl, Attempt to move to target position (pure state-based).          Delegates to t, Solve with detailed diagnostics.                  Returns:             (succe (+8 more)
+Cohesion: 0.19
+Nodes (14): Any, bool, int, Path, str, PlaytestEvent, PlaytestSession, PlaytestTelemetryCollector (+6 more)
 
 ### Community 301 - "Community 301"
-Cohesion: 0.03
-Nodes (61): Any, bool, float, int, str, Surface, AnimationController, create_renderer() (+53 more)
+Cohesion: 0.06
+Nodes (32): bool, int, Surface, create_renderer(), ProceduralTileRenderer, Get a color by name, optionally with custom alpha., Convert to integer tuple (for pixel coordinates)., Generates beautiful procedural tiles without requiring sprite assets. (+24 more)
 
 ### Community 302 - "Community 302"
-Cohesion: 0.24
-Nodes (17): build_overlapping_pattern_model(), collapse_patterns(), generate_wfc_samples(), main(), _overlap_compatible(), OverlappingPatternModel, _propagate(), Overlapping-pattern Wave Function Collapse baseline for Zelda rooms. (+9 more)
+Cohesion: 0.09
+Nodes (20): Tests for the diffusion training pipeline., Test that training module imports correctly., Test training configuration., Tests for the diffusion training pipeline., Test that training module imports correctly., Integration tests combining multiple components., Test training configuration., Tests for the diffusion training pipeline. (+12 more)
 
 ### Community 303 - "Community 303"
 Cohesion: 0.27
 Nodes (18): _format_float(), _headers(), _ints(), _json_safe(), main(), _markdown(), _mean(), parse_args() (+10 more)
 
 ### Community 304 - "Community 304"
-Cohesion: 0.21
-Nodes (16): GlobalPos, Any, int, RoomPos, str, _find_special_rooms(), Dungeon solver helper functions extracted from zelda_core., Legacy graph reachability check ignoring edge constraints. (+8 more)
+Cohesion: 0.20
+Nodes (21): generate_comprehensive_demo_graph(), generate_dungeon_with_pipeline(), generate_mission_graph(), Generate a medium-difficulty mission graph and return metadata., Generate a hardcoded 3x3 comprehensive demo graph that guarantees all mechanics., Generate a stitched dungeon with the canonical per-room pipeline., _build_mission_data(), _entity_counts() (+13 more)
 
 ### Community 305 - "Community 305"
 Cohesion: 0.13
@@ -2037,8 +2053,8 @@ Cohesion: 0.25
 Nodes (14): _build_adjacency_without_gates(), detect_sequence_breaks(), _find_path(), main(), parse_args(), Any, bool, int (+6 more)
 
 ### Community 311 - "Community 311"
-Cohesion: 0.14
-Nodes (16): can_traverse_edge_type(), combine_edge_types(), edge_constraints_from_data(), edge_type_from_data(), Edge-type and traversal helpers extracted from validator monolith., Return canonical edge constraints from edge attributes., Return primary canonical edge type from edge attributes., Combine two edge types and keep the more restrictive one. (+8 more)
+Cohesion: 0.10
+Nodes (16): EntropyReset, Reset regions to high entropy for WFC regeneration.          Identifies invali, Args:             margin: Extra cells around failure points to reset, Create mask of regions to regenerate.                  Args:             grid, Reset regions to high entropy for WFC regeneration.          Identifies invali, Args:             margin: Extra cells around failure points to reset, Create mask of regions to regenerate.                  Args:             grid, Mark region around a grid center point using (row, col) coordinates. (+8 more)
 
 ### Community 312 - "Community 312"
 Cohesion: 0.30
@@ -2065,8 +2081,8 @@ Cohesion: 0.14
 Nodes (13): 1) Architecture Traceability Matrix, 2) Claims That Need Tightening (Docs/Defense Risk), A. "Tier 1 is MAP-Elites grammar optimization", Ablation Matrix Feasibility Against Current Code, Architecture Traceability and Claim Validation (2026-03-20), B. "Tier 2 includes LCM-LoRA in the main path", C. "Tier 3 default bridge is Weighted Bayesian WFC", Corrections required (+5 more)
 
 ### Community 318 - "Community 318"
-Cohesion: 0.11
-Nodes (21): main(), main(), Any, bool, str, ZELDA VALIDATION PIPELINE ========================= Main orchestration script, Run the complete validation pipeline.                  Steps:         1. Proc, Run calibration test to verify solver correctness.                  Uses a kno (+13 more)
+Cohesion: 0.08
+Nodes (27): main(), main(), Any, bool, str, ZELDA VALIDATION PIPELINE ========================= Main orchestration script, Run the complete validation pipeline.                  Steps:         1. Proc, Run calibration test to verify solver correctness.                  Uses a kno (+19 more)
 
 ### Community 319 - "Community 319"
 Cohesion: 0.14
@@ -2077,16 +2093,16 @@ Cohesion: 0.14
 Nodes (13): 1) Architecture Traceability Matrix, 2) Claims That Need Tightening (Docs/Defense Risk), A. "Tier 1 is MAP-Elites grammar optimization", Ablation Matrix Feasibility Against Current Code, B. "Tier 2 includes LCM-LoRA in the main path", C. "Tier 3 default bridge is Weighted Bayesian WFC", Corrections required, D. "NO_EVOLUTION equals pure random graph baseline" (+5 more)
 
 ### Community 321 - "Community 321"
-Cohesion: 0.18
-Nodes (11): Extract all seam regions from graph adjacencies., Compute the shared boundary between two rooms., Apply smoothing to a single seam region.                  Algorithm:, Apply edge-preserving bilateral filter.                  Bilateral filter smoo, Ensure walls are preserved over floors in smoothed result., Ensure both sides of seam see same boundary., A boundary region between two adjacent rooms., Apply seam smoothing to complete dungeon.                  Args: (+3 more)
+Cohesion: 0.13
+Nodes (19): default_solver_timeout_for_algorithm(), evaluate_solver_recovery_state(), Pure helpers for solver-start synchronization and recovery decisions., Read dropdown-like widget values and return normalized solver settings., Return a baseline timeout in seconds for a selected algorithm., Scale timeout by grid size, clamped to avoid extreme values., Decide whether solver state is stale and should be force-recovered., scale_timeout_by_grid_size() (+11 more)
 
 ### Community 322 - "Community 322"
 Cohesion: 0.32
 Nodes (13): CommandResult, CriterionScore, _extract_pytest_pass_count(), _has_all(), _load_text(), main(), bool, int (+5 more)
 
 ### Community 323 - "Community 323"
-Cohesion: 0.11
-Nodes (19): cbs_loss_term(), compute_cbs_fitness(), _compute_graph_cognitive_proxy(), CBS-based fitness function for MAP-Elites / H-MOLQD., Compute CBS-based fitness for a generated dungeon.          Returns dict with:, Compute CBS-based fitness for a generated dungeon.          Returns dict with:, Compute CBS-based fitness for a generated dungeon.          Returns dict with:, Approximate cognitive navigation metrics directly from topology.      This pro (+11 more)
+Cohesion: 0.22
+Nodes (20): _add_room(), build_chain_control_graph(), build_metroidvania_ood_graph(), _condition_graph(), _descriptor_payload(), main(), parse_args(), Any (+12 more)
 
 ### Community 324 - "Community 324"
 Cohesion: 0.21
@@ -2113,8 +2129,8 @@ Cohesion: 0.16
 Nodes (5): DummyGui, DummyLogger, DummyTempfile, DummyTime, test_watchdog_loop_exits_when_disabled()
 
 ### Community 330 - "Community 330"
-Cohesion: 0.24
-Nodes (15): _as_2d_grid(), compare_tile_pattern_distributions(), iter_tile_patterns(), _kl(), _probabilities(), Tile-pattern distribution metrics for discrete dungeon rooms.  These metrics com, Compare generated and reference grids with local tile-pattern distances., Yield flattened k x k tile patterns from a single room/grid. (+7 more)
+Cohesion: 0.22
+Nodes (17): _as_2d_grid(), compare_tile_pattern_distributions(), iter_tile_patterns(), _kl(), _probabilities(), Tile-pattern distribution metrics for discrete dungeon rooms.  These metrics com, Compare generated and reference grids with local tile-pattern distances., Summary of generated/reference local-pattern similarity. (+9 more)
 
 ### Community 331 - "Community 331"
 Cohesion: 0.15
@@ -2137,24 +2153,24 @@ Cohesion: 0.31
 Nodes (12): build_report(), main(), parse_args(), _record(), _split_words(), write_tsv(), Any, bool (+4 more)
 
 ### Community 336 - "Community 336"
-Cohesion: 0.14
-Nodes (15): Validate a config payload with Pydantic and existing cross-field checks., validate_config_payload(), test_config_system_disabling_logic_net_forces_non_trainable(), test_context_topology_refinement_uses_batched_padded_adjacency(), test_disable_logic_net_config_zeroes_guidance_and_logic_loss(), test_gat2_topology_refinement_fully_masked_rows_have_finite_backward(), test_graph_to_grid_attention_can_capture_softmax_maps(), test_latent_diffusion_compile_for_inference_is_opt_in() (+7 more)
+Cohesion: 0.12
+Nodes (22): _as_grid(), _grid_tile(), _infer_topology_from_grid(), Reusable GUI overlay render helpers extracted from gui_runner monolith., Draw topology nodes/edges for the current stitched dungeon map., Render solver comparison table in the sidebar., Infer room nodes/edges for imported stitched grids without graph metadata., render_solver_comparison_overlay() (+14 more)
 
 ### Community 337 - "Community 337"
-Cohesion: 0.15
-Nodes (12): Surface, DungeonReplayEngine, Scientific Replay Engine for visualizing solved dungeon paths.          This i, Run the replay engine (blocking).                  Opens a Pygame window and e, Handle window resize., Render the current frame., Render the solution path overlay., Render the agent (Link). (+4 more)
+Cohesion: 0.04
+Nodes (55): float, int, str, Surface, Any, bool, float, int (+47 more)
 
 ### Community 338 - "Community 338"
-Cohesion: 0.09
-Nodes (20): Create source mask at door positions for grid pathfinding., Create source mask at door positions for grid pathfinding., Compute gradient of solvability loss w.r.t. latents.                  Args:, Create source mask at door positions for grid pathfinding., Compute gradient of solvability loss w.r.t. latents.                  Args:, Create source mask at door positions for grid pathfinding., Create source mask at door positions for grid pathfinding., Compute gradient of solvability loss w.r.t. latents.                  Args: (+12 more)
+Cohesion: 0.05
+Nodes (40): Anneal soft-min temperature during training.                  Uses exponential, Alias used by training scripts and experiment protocols., Anneal soft-min temperature during training.                  Uses exponential, Alias used by training scripts and experiment protocols., Anneal soft-min temperature during training.                  Uses exponential, Alias used by training scripts and experiment protocols., Create source mask at door positions for grid pathfinding., Anneal soft-min temperature during training.                  Uses exponential (+32 more)
 
 ### Community 339 - "Community 339"
-Cohesion: 0.02
-Nodes (107): Human-readable summary., Human-readable summary., Human-readable summary., Persona-specific aversion to entering direct combat tiles., Normalized Manhattan progress from current_pos -> target_pos toward focus_pos., Boost remembered unresolved affordances when inventory changes.          This mo, Rank candidate short-term objectives by persona bias, salience, and distance., Choose the best current short-term objective under bounded cognition. (+99 more)
+Cohesion: 0.01
+Nodes (158): CognitiveState, Retrieve memories, optionally filtered by type.                  Accessing mem, Recall the nearest remembered item of a given type., Recall the nearest remembered item of a given type., Recall the nearest remembered item of a given type., Retrieve memories, optionally filtered by type.                  Accessing mem, Retrieve memories, optionally filtered by type.                  Accessing mem, Retrieve memories, optionally filtered by type.                  Accessing mem (+150 more)
 
 ### Community 340 - "Community 340"
-Cohesion: 0.08
-Nodes (30): FallbackGNN, Simple fallback GNN when torch_geometric is not available.     Uses sparse edge-, Forward pass.                  Args:             node_features: [N, node_dim], Convert a 2D semantic-id grid into VGLC text lines., semantic_grid_to_vglc_lines(), _load_checkpoint_and_metadata(), Load checkpoint and optional sidecar metadata for strict validation., Load checkpoint and optional sidecar metadata for strict validation. (+22 more)
+Cohesion: 0.11
+Nodes (23): _load_checkpoint_and_metadata(), Load checkpoint and optional sidecar metadata for strict validation., Load checkpoint and optional sidecar metadata for strict validation., Load checkpoint and optional sidecar metadata for strict validation., Load checkpoint and optional sidecar metadata for strict validation., Load checkpoint and optional sidecar metadata for strict validation., build_manifest(), iter_dataset_files() (+15 more)
 
 ### Community 341 - "Community 341"
 Cohesion: 0.13
@@ -2165,16 +2181,16 @@ Cohesion: 0.21
 Nodes (6): _Display, _Image, _Proc, _Pygame, test_handle_watchdog_screenshot_saves_and_clears_request(), test_report_ui_state_returns_expected_fields()
 
 ### Community 343 - "Community 343"
-Cohesion: 0.07
-Nodes (24): Collapse a single cell to a tile type., Collapse a single cell to a tile type., Propagate constraints from collapsed cell., Propagate constraints from collapsed cell., Extract final tile grid from state., Extract final tile grid from state., Check if cell is collapsed. NOTE: x=column, y=row., Get possible tile types at cell. NOTE: x=column, y=row. (+16 more)
+Cohesion: 0.11
+Nodes (18): cbs_loss_term(), compute_cbs_fitness(), _compute_graph_cognitive_proxy(), Compute CBS-based fitness for a generated dungeon.          Returns dict with:, Compute CBS-based fitness for a generated dungeon.          Returns dict with:, Compute CBS-based fitness for a generated dungeon.          Returns dict with:, Approximate cognitive navigation metrics directly from topology.      This pro, Approximate cognitive navigation metrics directly from topology.      This pro (+10 more)
 
 ### Community 344 - "Community 344"
 Cohesion: 0.16
 Nodes (22): _iter_files(), _load_sessions(), main(), parse_args(), Any, int, Namespace, Path (+14 more)
 
 ### Community 345 - "Community 345"
-Cohesion: 0.05
-Nodes (35): Convert unbounded non-negative LogicNet loss into a bounded proxy score., Convert unbounded non-negative LogicNet loss into a bounded proxy score., Convert unbounded non-negative LogicNet loss into a bounded proxy score., Convert normalized room maps or logits/probs to integer tile IDs., Build lightweight tile-frequency priors from the current real batch., Distill WFC-repaired pseudo targets into predicted tile logits.          WFC is, Convert unbounded non-negative LogicNet loss into a bounded proxy score., Convert unbounded non-negative LogicNet loss into a bounded proxy score. (+27 more)
+Cohesion: 0.03
+Nodes (54): Convert a dataset graph_dict to LogicNet's expected format.                  L, Convert a dataset graph_dict to LogicNet's expected format.                  L, Convert unbounded non-negative LogicNet loss into a bounded proxy score., Convert unbounded non-negative LogicNet loss into a bounded proxy score., Convert a dataset graph_dict to LogicNet's expected format.                  L, Set optimizer-group learning rates for the next optimizer step., Convert a dataset graph_dict to LogicNet's expected format.                  L, Set optimizer-group learning rates for the next optimizer step. (+46 more)
 
 ### Community 346 - "Community 346"
 Cohesion: 0.17
@@ -2185,8 +2201,8 @@ Cohesion: 0.17
 Nodes (11): Architecture Research Audit: Topology Signal and Generation Quality, Bottom line, Phase 1 - Research, Phase 2 - Deep Analysis, Phase 3 - Synthesis, Phase 4 - Implementation, Scope, Sources (+3 more)
 
 ### Community 348 - "Community 348"
-Cohesion: 0.02
-Nodes (111): build_boundary_constraints(), GlobalStreamEncoder, graph_to_edge_index(), LocalStreamEncoder, Forward through a GraphGPS-style encoder.          GraphGPS couples local messag, Compute conditioning vector from local, global, and style context., Compute conditioning vector from local, global, and style context., Compute conditioning vector from local, global, and style context. (+103 more)
+Cohesion: 0.04
+Nodes (68): FallbackGNN, LocalStreamEncoder, Forward through a GraphGPS-style encoder.          GraphGPS couples local messag, Compute conditioning vector from local, global, and style context., Compute conditioning vector from local, global, and style context., Compute conditioning vector from local, global, and style context., Compute conditioning vector from local, global, and style context., Compute conditioning vector from local, global, and style context. (+60 more)
 
 ### Community 349 - "Community 349"
 Cohesion: 0.17
@@ -2194,7 +2210,7 @@ Nodes (15): build_puzzle_stage_semantic_targets(), _normalize_gate_family(), _no
 
 ### Community 350 - "Community 350"
 Cohesion: 0.03
-Nodes (76): BidirectionalAStar, Bidirectional A* solver for Zelda state-space graphs.          Features:, DStarLiteSolver, D* Lite incremental search for real-time replanning.          Features:     -, Depth-First Search solver for Zelda state-space graphs.          Features:, StateSpaceDFS, create_complex_dungeon(), create_long_corridor() (+68 more)
+Nodes (88): Debug TRIFORCE with pushed blocks in state, Debug _try_move_pure for block pushing, DFSMetrics, State-Space DFS/IDDFS Implementation for Zelda Dungeon Solving ================, Iterative Deepening DFS.                  Progressively increases depth limit,, Recursive DFS implementation with depth limiting.                  Args:, Iterative (stack-based) DFS implementation.                  Uses explicit sta, Generate all valid successor states from current state.                  Handl (+80 more)
 
 ### Community 351 - "Community 351"
 Cohesion: 0.17
@@ -2218,11 +2234,11 @@ Nodes (9): load_current_map(), Load and initialize current map state in GUI., Du
 
 ### Community 356 - "Community 356"
 Cohesion: 0.06
-Nodes (63): load_maps_from_adapter(), Adapter-backed map loading orchestration for GUI startup., Load all Zelda dungeon variants and optionally schedule async precalc., build_paired_dataset(), extract_room_graph(), main(), Any, bool (+55 more)
+Nodes (42): load_maps_from_adapter(), Adapter-backed map loading orchestration for GUI startup., Load all Zelda dungeon variants and optionally schedule async precalc., log_virtual_node_report(), Helpers for reporting graph node-to-room mapping status., Emit a per-dungeon mapping report for physical and virtual graph nodes., build_paired_dataset(), extract_room_graph() (+34 more)
 
 ### Community 357 - "Community 357"
-Cohesion: 0.22
-Nodes (15): collect_item_render_state(), compute_visible_bounds(), create_map_surface(), Map-layer render pipeline helpers extracted from gui_runner._render., Render visible tiles using sprite renderer when available, fallback otherwise., Compute inclusive-exclusive row/col ranges for visible map cells., Render search heatmap overlay when enabled., Build collected-item and collectible-id state used by tile rendering. (+7 more)
+Cohesion: 0.19
+Nodes (22): add_generation_override_args(), parse_args(), ArgumentParser, Namespace, _aggregate_variant(), _json_sanitize(), _load_existing_variant_summary(), _load_mission_graph() (+14 more)
 
 ### Community 358 - "Community 358"
 Cohesion: 0.06
@@ -2257,12 +2273,12 @@ Cohesion: 0.22
 Nodes (4): NoOpRenderer, _NoOpSpriteManager, bool, int
 
 ### Community 366 - "Community 366"
-Cohesion: 0.12
-Nodes (14): Return integer grid cells on the line from start to end., Return integer grid cells on the line from start to end., Return integer grid cells on the line from start to end., Add tiles behind an occluding wall to the shadow set., Add tiles behind an occluding wall to the shadow set., Add tiles behind an occluding wall to the shadow set., Add tiles behind an occluding wall to the shadow set., Return integer grid cells on the line from start to end. (+6 more)
+Cohesion: 0.10
+Nodes (11): apply_pickup_at(), bool, Save the requested watchdog screenshot on the main thread and clear the request., Try to force the window to the foreground on Windows.          Uses a conserva, Begin animated transition to collapsed or expanded state., Return True when a new solver run may proceed, False to block startup., Best-effort small-key detection from graph node attributes/labels., Whether a node should be preserved during dead-end pruning. (+3 more)
 
 ### Community 367 - "Community 367"
-Cohesion: 0.17
-Nodes (10): Test comprehensive graph topology validation., Test fully valid graph passes all checks., Test empty graph fails., Test graph with virtual node fails (should be filtered first)., Test disconnected graph produces warnings., Test graph with too short start-to-goal path., A real start room with node id 0 should not be treated as missing., Compatibility wrapper that returns (bool, list) instead of TopologyReport. (+2 more)
+Cohesion: 0.26
+Nodes (19): analyze_records(), _as_mapping(), extract_archive_records(), load_archive_payload(), main(), parse_args(), Any, bool (+11 more)
 
 ### Community 368 - "Community 368"
 Cohesion: 0.26
@@ -2273,16 +2289,16 @@ Cohesion: 0.31
 Nodes (9): run_kaggle_training_suite.sh script, diagnose_missing_checkpoint(), make_config(), PYTHONUNBUFFERED, PYTORCH_CUDA_ALLOC_CONF, record_tokenizer_checkpoint(), run_preflight(), train_diffusion() (+1 more)
 
 ### Community 370 - "Community 370"
-Cohesion: 0.13
-Nodes (11): Test exponential memory decay λ ≈ 0.01 per step., Test exponential memory decay λ ≈ 0.01 per step., Test decay formula: confidence(t) = confidence(0) * exp(-λt)         where λ ≈, Test decay formula: confidence(t) = confidence(0) * exp(-λt)         where λ ≈, Test Miller's Law: 7±2 items capacity., Test Miller's Law: 7±2 items capacity., Memories should decay over time steps., Memories should decay over time steps. (+3 more)
+Cohesion: 0.14
+Nodes (10): Shared types and tile/state models for causal WFC generation.  This module exi, Constraints on when a tile can be placed., Tile with adjacency rules and game constraints., Collection of tiles with adjacency rules., Build tile definitions. Override in subclass., Tile, TileConstraint, TileSet (+2 more)
 
 ### Community 371 - "Community 371"
 Cohesion: 0.35
 Nodes (10): _iter_graph_files(), _load_graph(), main(), Any, Graph, Path, str, Summarize pre/post topology-repair fitness shifts from exported graph artifacts. (+2 more)
 
 ### Community 372 - "Community 372"
-Cohesion: 0.19
-Nodes (12): execute_auto_solve(), execute_auto_solve_from_preview(), execute_auto_solve(), execute_auto_solve_from_preview(), Helpers for auto-solve execution state transitions and messaging., Start auto-solve after preview confirmation., Execute auto-solve immediately without preview dialog., Reset animation and item/inventory state for a new visual run. (+4 more)
+Cohesion: 0.07
+Nodes (25): build_boundary_constraints(), graph_to_edge_index(), Encode only local context (for inference without graph)., Build boundary constraint tensor from neighbor/door info.          Args:, Convert adjacency matrix to edge_index format.          Args:         adj_mat, Encode only local context (for inference without graph)., Encode only local context (for inference without graph)., Build boundary constraint tensor from neighbor/door info.          Args: (+17 more)
 
 ### Community 373 - "Community 373"
 Cohesion: 0.32
@@ -2293,8 +2309,8 @@ Cohesion: 0.42
 Nodes (9): build_suite_env(), ensure_repo(), _find_repo_root_from_file(), main(), parse_args(), int, Namespace, Path (+1 more)
 
 ### Community 375 - "Community 375"
-Cohesion: 0.14
-Nodes (14): _basic_generation(), print_detailed_graph(), Test script to validate all mission grammar production rules.  Tests each rule, Test that various edge types are present., Test helper methods on MissionGraph., Test that 3D positions work correctly., Print detailed graph structure., Test basic graph generation. (+6 more)
+Cohesion: 0.21
+Nodes (14): grids_to_onehot(), main(), Lightweight DCGAN baseline with Gumbel-Softmax generator outputs., RoomDiscriminator, RoomGenerator, sample_generator(), train_gan(), bool (+6 more)
 
 ### Community 376 - "Community 376"
 Cohesion: 0.18
@@ -2305,16 +2321,16 @@ Cohesion: 0.20
 Nodes (4): _Logger, test_map_elites_worker_stores_result_and_heatmap_path(), _Thread, _Threading
 
 ### Community 378 - "Community 378"
-Cohesion: 0.21
-Nodes (12): Any, bool, float, int, str, prune_dead_end_topology(), Helpers for topology precheck, dead-end pruning, and prune undo flow., Prune dead-end rooms when only topology mappings are available. (+4 more)
+Cohesion: 0.18
+Nodes (17): generate_with_grammar(), Causal Wave Function Collapse for Dungeon Refinement ==========================, Validate that the generated grid has valid causal ordering.                  F, Get generation statistics., Generate dungeon grid from mission graph using causal WFC.          Args:, Cell, Single cell in the WFC grid., Tile types with game state implications. (+9 more)
 
 ### Community 379 - "Community 379"
 Cohesion: 0.22
 Nodes (5): DummyGui, DummyTime, DummyToast, test_set_message_updates_fields_with_time(), test_show_update_render_toasts_flow()
 
 ### Community 380 - "Community 380"
-Cohesion: 0.06
-Nodes (31): build_graph_data(), Anneal soft-min temperature during training.                  Uses exponential, Alias used by training scripts and experiment protocols., Anneal soft-min temperature during training.                  Uses exponential, Alias used by training scripts and experiment protocols., Anneal soft-min temperature during training.                  Uses exponential, Alias used by training scripts and experiment protocols., Anneal soft-min temperature during training.                  Uses exponential (+23 more)
+Cohesion: 0.17
+Nodes (14): example_linear_progression(), example_metroidvania(), example_quick_prototype(), example_wave_pattern(), main(), plot_curve_comparison(), plot_evolution_stats(), Example: Using the Evolutionary Topology Director ============================= (+6 more)
 
 ### Community 381 - "Community 381"
 Cohesion: 0.20
@@ -2337,24 +2353,24 @@ Cohesion: 0.20
 Nodes (10): validation_preparation, duplicate_goal_tiles_removed, duplicate_start_tiles_removed, enclosed_void_tiles_filled, exterior_void_tiles_retained, goal, grid_shape, invalid_tile_count (+2 more)
 
 ### Community 386 - "Community 386"
-Cohesion: 0.15
-Nodes (10): Test generating a simple mission graph., Test generating a simple mission graph., Test generating a simple mission graph., Test generating a simple mission graph., Test basic WFC generation., Test module imports correctly., Test module imports correctly., Test basic WFC generation. (+2 more)
+Cohesion: 0.30
+Nodes (14): _categorize_change(), _char_color(), compare_variant_dirs(), _joined_room_signature(), main(), parse_args(), int, Namespace (+6 more)
 
 ### Community 387 - "Community 387"
 Cohesion: 0.36
 Nodes (8): Add-AllPuzzleConfigArgs(), Add-CommonArgs(), Add-StagePuzzleArgs(), Assert-OutputAvailable(), Invoke-EvaluationBranch(), Invoke-Step(), Invoke-TrainingBranch(), Wait-GpuMemory()
 
 ### Community 388 - "Community 388"
-Cohesion: 0.23
-Nodes (6): Render checkbox and label., Render dropdown menu., Render only the dropdown menu portion onto the given surface (global coords)., Render all widgets with proper Z-ordering for dropdowns., Render the widget. Override in subclasses., Surface
+Cohesion: 0.15
+Nodes (11): Analyze pathfinding failures in a room grid.                  Args:, Analyze pathfinding failures in a room grid.                  Args:, A* pathfinding using (row, col) coordinates with parent-pointer reconstruction., A* pathfinding using (row, col) coordinates with parent-pointer reconstruction., Flood fill to find reachable region using (row, col) coordinates., Validate and sanitize an optional row/col cost map., Flood fill to find reachable region using (row, col) coordinates., Find boundary tiles between two regions using (row, col) coordinates. (+3 more)
 
 ### Community 389 - "Community 389"
-Cohesion: 0.23
-Nodes (11): create_refiner(), Create symbolic refiner with optional learned rules., Create symbolic refiner with optional learned rules., Create symbolic refiner with optional learned rules., Create symbolic refiner with optional learned rules., Create symbolic refiner with optional learned rules., bool, float (+3 more)
+Cohesion: 0.19
+Nodes (10): Final export calibration for gate density and key surplus.          The progre, Connect disconnected physical components with PATH edges.          Block I sea, Convert phenotype graph to validated output graph., Final safety pass for repairs that add nodes after evolutionary capping., Final Block I repair that backstops missing tutorial/combat/complex chains., Final Block I pass that tightens overly lenient graphs with existing gate rules., Demote gratuitous side-branch KEY/BIG_KEY rewards before export.          This, Graph (+2 more)
 
 ### Community 390 - "Community 390"
-Cohesion: 0.23
-Nodes (11): draw_sidebar_shell(), Post-map UI composition helpers for gui_runner._render., Render extracted sidebar sections., Render optional non-map layers and dialogs after base map and sidebar., Render top-level overlays and HUD elements in existing z-order., Draw sidebar panel background and divider, return sidebar x offset., render_post_map_layers(), render_sidebar_content() (+3 more)
+Cohesion: 0.30
+Nodes (13): GraphGrammarExecutor, _draw_graph(), _graph_signature(), main(), parse_args(), _parse_genome(), int, MissionGraph (+5 more)
 
 ### Community 391 - "Community 391"
 Cohesion: 0.31
@@ -2373,16 +2389,16 @@ Cohesion: 0.22
 Nodes (8): Current profile intent, Decision rule, Default weights in script, Purpose, Realism Profile Weighting and Tuning Guide, Realism tuning knobs, Repro commands, Weighted objective used for recommendation
 
 ### Community 395 - "Community 395"
-Cohesion: 0.18
-Nodes (10): Single training step.                  Args:             batch: Input batch [, Single training step.                  Args:             batch: Input batch [, Single training step.                  Args:             batch: Input batch [, Single training step.                  Args:             batch: Input batch [, Single training step.                  Args:             batch: Input batch [, Single training step.                  Args:             batch: Input batch [, Single training step.                  Args:             batch: Input batch [, Single training step.                  Args:             batch: Input batch [ (+2 more)
+Cohesion: 0.22
+Nodes (15): collect_item_render_state(), compute_visible_bounds(), create_map_surface(), Map-layer render pipeline helpers extracted from gui_runner._render., Render visible tiles using sprite renderer when available, fallback otherwise., Compute inclusive-exclusive row/col ranges for visible map cells., Render search heatmap overlay when enabled., Build collected-item and collectible-id state used by tile rendering. (+7 more)
 
 ### Community 396 - "Community 396"
 Cohesion: 0.25
 Nodes (5): _noop_effect(), NoOpHUDInventory, NoOpModernHUD, No-op GUI fallbacks used when optional dependencies are unavailable., Return None for optional visual effects in no-op mode.
 
 ### Community 397 - "Community 397"
-Cohesion: 0.25
-Nodes (9): Any, int, test_stable_seed_offset_is_deterministic_for_strings_and_tuples(), test_spawn_all_entities_uses_stable_room_seeds_for_string_node_ids(), Stable helpers for reproducible seed derivation.  Python's built-in ``hash(...)`, Return a deterministic unsigned integer hash for arbitrary JSON-ish values., Return a deterministic seed offset, optionally reduced to a bounded range., stable_int_hash() (+1 more)
+Cohesion: 0.22
+Nodes (15): KeyEconomyValidator, Master validator combining greedy + adversarial + topology analysis., _difficulty_metrics_separation(), _key_economy_all_topologies(), bool, Master Integration Test for Mathematical Rigor Improvements ===================, Test that difficulty metrics properly separate cognitive vs tedious., Test key economy validator on all topology types.          Validation:     - (+7 more)
 
 ### Community 398 - "Community 398"
 Cohesion: 0.22
@@ -2441,8 +2457,8 @@ Cohesion: 0.44
 Nodes (8): build_manifest(), _deep_merge(), _load_base_config(), main(), Any, Namespace, Path, str
 
 ### Community 412 - "Community 412"
-Cohesion: 0.04
-Nodes (53): Compute aggregate score for a potential move.                  Combines all he, Reward immediate collectible progress for loot-seeking personas., Reward moving onto the current frontier of partially known space., Compute aggregate score for a potential move.                  Combines all he, Estimate movement risk from tile hazards and remembered nearby threats., Estimate movement risk from tile hazards and remembered nearby threats., Penalty for revisiting already explored tiles., Compute aggregate score for a potential move.                  Combines all he (+45 more)
+Cohesion: 0.19
+Nodes (7): _FakeLogicNet, _RecordingRefiner, test_logicnet_eval_failure_restores_training_state(), test_neural_feedback_callback_is_controlled_by_m3_flag(), test_neural_guided_repair_merges_external_mask_and_feedback_callback(), test_neural_guided_repair_omits_logic_floor_mask_without_graph_data(), test_neural_guided_repair_passes_logicnet_cost_and_floor_mask()
 
 ### Community 413 - "Community 413"
 Cohesion: 0.22
@@ -2521,8 +2537,8 @@ Cohesion: 0.33
 Nodes (8): apply_pareto_metrics(), compute_pareto_objectives(), ParetoObjectiveResult, Pareto-style topology objective utilities for evolutionary search., Compute loop/branching Pareto constraints and aggregate objective score., Write standardized Pareto diagnostics into descriptor metrics., float, str
 
 ### Community 433 - "Community 433"
-Cohesion: 0.20
-Nodes (10): Mission graphs that use type/room_type START/GOAL should still feed LogicNet rol, Mission graphs that use type/room_type START/GOAL should still feed LogicNet rol, Mission graphs that use type/room_type START/GOAL should still feed LogicNet rol, Mission graphs that use type/room_type START/GOAL should still feed LogicNet rol, Mission graphs that use type/room_type START/GOAL should still feed LogicNet rol, Mission graphs that use type/room_type START/GOAL should still feed LogicNet rol, Mission graphs that use type/room_type START/GOAL should still feed LogicNet rol, Mission graphs that use type/room_type START/GOAL should still feed LogicNet rol (+2 more)
+Cohesion: 0.12
+Nodes (9): Test GraphGrammarExecutor respects max_nodes parameter., Test that executor stops at max_nodes., Test executor keeps applying valid rules until node limit., Replay payloads should reject unbounded genomes before reconstruction., Replay payloads should reject unexpected top-level fields., Replay payloads should bound nested override metadata sizes., Replay payload size validation should reject unsupported nested types cleanly., Replay payload rule_names should be constrained to a safe identifier subset. (+1 more)
 
 ### Community 434 - "Community 434"
 Cohesion: 0.39
@@ -2533,8 +2549,8 @@ Cohesion: 0.36
 Nodes (4): DummyGui, DummyLogger, test_clear_solver_state_resets_all_fields(), test_sync_solver_dropdown_settings_updates_gui_values()
 
 ### Community 436 - "Community 436"
-Cohesion: 0.06
-Nodes (49): evaluate_dungeon_solvability(), evaluate_generated_dungeon(), Evaluation, repair, and symbolic-only assembly helpers for the pipeline., Evaluate dungeon-level solvability using LogicNet at the correct scope.      T, Return optional reference grids configured on the pipeline for realism metrics., Public symbolic-only dungeon assembly entry point.      This path accepts pre-, Validate dungeon solvability and compute MAP-Elites descriptors.      Uses the, Public symbolic-only room repair entry point.      This is intentionally usabl (+41 more)
+Cohesion: 0.13
+Nodes (23): carve_room_connection(), clamp_room_coord(), get_node_grid_position(), infer_direction(), normalize_node_id(), parse_label_tokens(), parse_room_coord(), Shared graph/spatial parsing helpers for dungeon pipeline orchestration. (+15 more)
 
 ### Community 437 - "Community 437"
 Cohesion: 0.25
@@ -2553,8 +2569,8 @@ Cohesion: 0.33
 Nodes (5): get_widget_fallbacks(), Return symbol bindings expected by gui_runner when widget imports fail., Any, str, test_widget_fallbacks_manager_basic_flow()
 
 ### Community 442 - "Community 442"
-Cohesion: 0.10
-Nodes (40): Position, compress_pcbs_route_for_replay(), _loop_erase_by_state(), _normalize_path(), Replay-safe route shaping for P-CBS traces used by the GUI., Convert a raw P-CBS cognitive trace into a shorter GUI replay path.      The com, Return the progression state that must match before a loop is removable., Replay a path from scratch and capture the game-state signature per point. (+32 more)
+Cohesion: 0.19
+Nodes (12): execute_auto_solve(), execute_auto_solve_from_preview(), execute_auto_solve(), execute_auto_solve_from_preview(), Helpers for auto-solve execution state transitions and messaging., Start auto-solve after preview confirmation., Execute auto-solve immediately without preview dialog., Reset animation and item/inventory state for a new visual run. (+4 more)
 
 ### Community 443 - "Community 443"
 Cohesion: 0.29
@@ -2601,12 +2617,12 @@ Cohesion: 0.33
 Nodes (7): _mm_aesenc_si128(), _mm_aesenclast_si128(), _mm_aeskeygenassist_si128(), _mm_cvtsi128_si32(), _mm_set_epi32(), _mm_xor_si128(), vld1q_u8_x4()
 
 ### Community 454 - "Community 454"
-Cohesion: 0.23
-Nodes (15): DiffusionTrainingConfig, _load_model_from_checkpoint(), _load_preference_payload(), main(), parse_args(), Any, device, float (+7 more)
+Cohesion: 0.27
+Nodes (12): evaluate_model(), _load_checkpoint(), main(), _one_hot(), Any, device, int, Module (+4 more)
 
 ### Community 455 - "Community 455"
-Cohesion: 0.20
-Nodes (8): create_camera_for_map(), Camera System - Viewport Management for Large Maps ============================, Represents the visible area of the world.          Attributes:         x: Lef, Factory function to create a camera for a given map size.          Args:, Viewport, Dungeon Replay Engine - Scientific Visualization System =======================, Current state of the replay., ReplayState
+Cohesion: 0.12
+Nodes (28): DiffusionTrainingConfig, _dpo_metrics_payload(), _gradients_are_finite(), _load_model_from_checkpoint(), _load_preference_payload(), main(), parse_args(), Any (+20 more)
 
 ### Community 456 - "Community 456"
 Cohesion: 0.48
@@ -2617,12 +2633,12 @@ Cohesion: 0.38
 Nodes (6): manhattan(), bool, int, Worker utilities for process-based parallel search. Can be used by main GUI pro, Run a grid algorithm on the provided grid. Supports stair teleports and optional, run_grid_algorithm()
 
 ### Community 458 - "Community 458"
-Cohesion: 0.28
-Nodes (4): GameState, Tracks game state during WFC collapse., bool, int
+Cohesion: 0.23
+Nodes (9): _Logger, _Matcher, _Room, test_apply_tentative_matches_applies_above_threshold_and_prunes_staged(), test_match_missing_nodes_applies_confident_and_stages_tentative(), test_undo_last_match_restores_snapshot_and_clears_proposals(), test_graph_guided_validator_accepts_goal_typed_nodes(), test_build_global_grid_from_rooms_uses_shared_canvas_builder() (+1 more)
 
 ### Community 459 - "Community 459"
-Cohesion: 0.31
-Nodes (8): apply_loaded_route_data(), build_route_export_payload(), Helpers for route payload shaping and application., Build serializable route export payload from GUI state., Apply loaded route data to GUI state; returns path length., Any, int, str
+Cohesion: 0.15
+Nodes (10): Test generating a simple mission graph., Test generating a simple mission graph., Test generating a simple mission graph., Test generating a simple mission graph., Test basic WFC generation., Test module imports correctly., Test module imports correctly., Test basic WFC generation. (+2 more)
 
 ### Community 460 - "Community 460"
 Cohesion: 0.38
@@ -2633,8 +2649,8 @@ Cohesion: 0.33
 Nodes (5): 2026 Q2 Archived Documentation, Current Replacements, Superseded Architecture And Research Notes, Superseded CBS, Playability, And Paper Notes, Superseded Training And Result Snapshots
 
 ### Community 462 - "Community 462"
-Cohesion: 0.02
-Nodes (82): Axes, bool, float, Namespace, CognitiveBoundedSearch, Main P-CBS solver implementing bounded-rational dungeon navigation.      Unlike, Main P-CBS solver implementing bounded-rational dungeon navigation.      Unlike, Main P-CBS solver implementing bounded-rational dungeon navigation.      Unlike (+74 more)
+Cohesion: 0.15
+Nodes (28): analyze_greedy_vs_balanced(), compute_summary_statistics(), generate_bsp_dungeon(), generate_figure3(), generate_perfect_maze(), generate_random_noise(), load_nintendo_levels(), load_text_level() (+20 more)
 
 ### Community 463 - "Community 463"
 Cohesion: 0.33
@@ -2749,12 +2765,12 @@ Cohesion: 0.40
 Nodes (5): _build_arg_parser(), main(), ArgumentParser, int, Block-0 dataset/process audit for local VGLC Zelda data.  Usage:     python s
 
 ### Community 492 - "Community 492"
-Cohesion: 0.22
-Nodes (7): Test topological positional encoding., Test topological positional encoding., Test topological positional encoding., Test Zelda tile set creation., Test topological positional encoding., Test Zelda tile set creation., Test Zelda tile set creation.
+Cohesion: 0.15
+Nodes (7): Test skill chain validation., Once a full item-to-climax skill chain exists, the rule should stop reapplying., Rule should still create a pedagogical chain when only a direct successor exists, Fallback should reconnect an item branch to the boss route instead of relabeling, Test tutorial sequence generation., Test that skill chains are properly created after items., TestAddSkillChainRule
 
 ### Community 493 - "Community 493"
-Cohesion: 0.29
-Nodes (7): Overlay UI render helpers extracted from gui_runner._render., Render translucent overlays that communicate active click-capturing states., Render path preview dialog and non-modal sidebar preview panel., render_preview_layer(), render_translucent_event_overlays(), Any, int
+Cohesion: 0.23
+Nodes (11): draw_sidebar_shell(), Post-map UI composition helpers for gui_runner._render., Render extracted sidebar sections., Render optional non-map layers and dialogs after base map and sidebar., Render top-level overlays and HUD elements in existing z-order., Draw sidebar panel background and divider, return sidebar x offset., render_post_map_layers(), render_sidebar_content() (+3 more)
 
 ### Community 494 - "Community 494"
 Cohesion: 0.33
@@ -2773,8 +2789,8 @@ Cohesion: 0.53
 Nodes (5): _load_script_module(), str, test_kaggle_artifact_manifest_packages_summaries_and_final_checkpoints(), test_kaggle_config_presets_wire_vqvae2_and_stage_branches(), test_kaggle_kernel_env_mapping_and_metadata_template()
 
 ### Community 498 - "Community 498"
-Cohesion: 0.28
-Nodes (7): Entrypoint orchestration bridges for gui_runner module-level functions., run_main_entry(), _apply_startup_level_and_route_overrides(), GUI startup orchestration helpers., Apply command-line/env startup imports after the GUI object exists., Boot maps, create GUI instance, and run the interactive loop., run_gui_main()
+Cohesion: 0.17
+Nodes (14): AdvancedPipelineConfig, _make_test_config(), Reported LCM speedup must remain neutral when no real fast backend is active., Pacing should follow the mission path even when nodes were inserted out of order, Analyzer inputs should retain boss, goal, puzzle, lock, health, and treasure sig, Requested LCM-LoRA should not activate when only the experimental path exists., Advanced pipeline should keep standard DDIM steps when no real LCM backend is ac, A validated repo fast-sampler adapter should flow into the core generation pipel (+6 more)
 
 ### Community 499 - "Community 499"
 Cohesion: 0.33
@@ -2857,8 +2873,8 @@ Cohesion: 0.40
 Nodes (4): downloaded_or_exists, results, still_missing, total_missing_input
 
 ### Community 522 - "Community 522"
-Cohesion: 0.10
-Nodes (26): generate_with_grammar(), Causal Wave Function Collapse for Dungeon Refinement ==========================, Validate that the generated grid has valid causal ordering.                  F, Get generation statistics., Generate dungeon grid from mission graph using causal WFC.          Args:, Cell, Shared types and tile/state models for causal WFC generation.  This module exi, Single cell in the WFC grid. (+18 more)
+Cohesion: 0.13
+Nodes (18): Cell, CausalWFC, Initialize the grid with all possibilities.                  Args:, Generate a dungeon grid using causal WFC.                  Args:, Select uncollapsed cell with lowest entropy., Filter cell possibilities based on game state.                  Removes tiles, Verify that a path exists from start to goal using BFS.                  Path-, Choose a tile weighted by tile weights. (+10 more)
 
 ### Community 523 - "Community 523"
 Cohesion: 0.50
@@ -3013,8 +3029,8 @@ Cohesion: 0.50
 Nodes (3): Test full grammar with Wave 3 rules., Test complete dungeon generation with all Wave 3 rules., TestIntegratedGeneration
 
 ### Community 562 - "Community 562"
-Cohesion: 0.29
-Nodes (6): _self_compatible_priors(), test_causal_wfc_backtrack_rebuilds_lock_state_and_bans_failed_tile(), test_grammar_reachability_does_not_walk_backwards_through_path_edges(), test_masked_room_config_accepts_puzzle_semantic_checkpoint_metric(), test_vqvae_eval_reports_commitment_loss_without_mutating_ema(), test_weighted_wfc_recursively_propagates_support_reductions()
+Cohesion: 0.13
+Nodes (12): Infer start/goal coordinates for validation-time symbolic repair., Return or lazily construct a validation-time NeuralGuidedRepair wrapper., Infer start/goal coordinates for validation-time symbolic repair., Apply the neural-symbolic repair path to decoded validation samples., Infer start/goal coordinates for validation-time symbolic repair., Return or lazily construct a validation-time NeuralGuidedRepair wrapper., Infer start/goal coordinates for validation-time symbolic repair., Apply the neural-symbolic repair path to decoded validation samples. (+4 more)
 
 ### Community 563 - "Community 563"
 Cohesion: 0.83
@@ -3025,16 +3041,16 @@ Cohesion: 0.83
 Nodes (3): _make_gui(), test_update_control_panel_scroll_applies_motion_and_damping(), test_update_control_panel_scroll_stops_near_zero_velocity()
 
 ### Community 566 - "Community 566"
-Cohesion: 0.48
-Nodes (5): apply_mixed_initiative_constraints(), Apply user-staged mixed-initiative constraints to a generated tile grid., _Logger, test_apply_mixed_initiative_constraints_applies_key_anchor(), test_apply_mixed_initiative_constraints_reports_all_flags()
+Cohesion: 0.21
+Nodes (12): infer_inventory_from_room(), make_stitched_for_single_room(), Small integration layer between `visual_extractor` and the solver stack.  Purp, Run `extract_grid` on a screenshot and return (semantic_ids, conf).      - sem, Return a small set of inventory tokens detected in the room.      Currently re, Create a minimal StitchedDungeon containing a single room.      This lets exis, visual_extract_to_room(), int (+4 more)
 
 ### Community 567 - "Community 567"
-Cohesion: 0.04
-Nodes (62): Training utilities for Semantic VQ-VAE.          Usage:         model = Seman, Training utilities for Semantic VQ-VAE.          Usage:         model = Seman, Training utilities for Semantic VQ-VAE.          Usage:         model = Seman, Training utilities for Semantic VQ-VAE.          Usage:         model = Seman, Training utilities for Semantic VQ-VAE.          Usage:         model = Seman, Training utilities for Semantic VQ-VAE.          Usage:         model = Seman, Training utilities for Semantic VQ-VAE.          Usage:         model = Seman, Training utilities for Semantic VQ-VAE.          Usage:         model = Seman (+54 more)
+Cohesion: 0.05
+Nodes (59): Training utilities for Semantic VQ-VAE.          Usage:         model = Seman, Training utilities for Semantic VQ-VAE.          Usage:         model = Seman, Training utilities for Semantic VQ-VAE.          Usage:         model = Seman, Training utilities for Semantic VQ-VAE.          Usage:         model = Seman, Training utilities for Semantic VQ-VAE.          Usage:         model = Seman, Training utilities for Semantic VQ-VAE.          Usage:         model = Seman, Training utilities for Semantic VQ-VAE.          Usage:         model = Seman, Training utilities for Semantic VQ-VAE.          Usage:         model = Seman (+51 more)
 
 ### Community 568 - "Community 568"
-Cohesion: 0.11
-Nodes (17): Create latent diffusion model., Create latent diffusion model., Create latent diffusion model., Create latent diffusion model., Create LogicNet for solvability., Create latent diffusion model., Create latent diffusion model., Create LogicNet for solvability. (+9 more)
+Cohesion: 0.21
+Nodes (12): Any, bool, float, int, str, prune_dead_end_topology(), Helpers for topology precheck, dead-end pruning, and prune undo flow., Prune dead-end rooms when only topology mappings are available. (+4 more)
 
 ### Community 569 - "Community 569"
 Cohesion: 0.50
@@ -3069,20 +3085,20 @@ Cohesion: 0.67
 Nodes (3): Step 11 - Comparison Against SOTA Baselines, Verdict, Why
 
 ### Community 579 - "Community 579"
-Cohesion: 0.16
-Nodes (8): bool, float, Apply inventory-side effects from entering a tile., Recompute inventory/visited state from path prefix [0..current_step]., Snap replay and derived state to a specific step index., Handle key press.                  Returns:             False if should quit,, Reset replay to beginning., Advance to the next step in the path.
+Cohesion: 0.09
+Nodes (20): Project latent-resolution tile logits onto the canonical room grid., Project latent-resolution tile logits onto the canonical room grid., Project latent-resolution tile logits onto the canonical room grid., Project latent-resolution tile logits onto the canonical room grid., Project latent-resolution tile logits onto the canonical room grid., Project latent-resolution tile logits onto the canonical room grid., Project latent-resolution tile logits onto the canonical room grid., Create one source per sample from the currently most-walkable cell. (+12 more)
 
 ### Community 580 - "Community 580"
-Cohesion: 0.29
-Nodes (5): manual_step(), manual_step(), Helpers for manual step execution flow in GUI runner., Execute one manual input step and update UI/effects/state., Any
+Cohesion: 0.18
+Nodes (10): Get the learned codebook embeddings., Get the learned codebook embeddings., Get the learned codebook embeddings., Get the learned codebook embeddings., Get the learned codebook embeddings., Get the learned codebook embeddings., Get the learned codebook embeddings., Get the learned codebook embeddings. (+2 more)
 
 ### Community 581 - "Community 581"
-Cohesion: 0.11
-Nodes (18): CoordConv2d, Conv2d with explicit normalized coordinate channels.      Appends x/y channels, Conv2d with explicit normalized coordinate channels.      Appends x/y channels, Conv2d with explicit normalized coordinate channels.      Appends x/y channels, Residual block with GroupNorm and SiLU activation.          Architecture:, Conv2d with explicit normalized coordinate channels.      Appends x/y channels, Conv2d with explicit normalized coordinate channels.      Appends x/y channels, Residual block with GroupNorm and SiLU activation.          Architecture: (+10 more)
+Cohesion: 0.08
+Nodes (25): CoordConv2d, Conv2d with explicit normalized coordinate channels.      Appends x/y channels, Conv2d with explicit normalized coordinate channels.      Appends x/y channels, Conv2d with explicit normalized coordinate channels.      Appends x/y channels, Residual block with GroupNorm and SiLU activation.          Architecture:, Conv2d with explicit normalized coordinate channels.      Appends x/y channels, Conv2d with explicit normalized coordinate channels.      Appends x/y channels, Conv2d with explicit normalized coordinate channels.      Appends x/y channels (+17 more)
 
 ### Community 582 - "Community 582"
-Cohesion: 0.25
-Nodes (7): Small semantic-grid PNG exporter used by GUI TXT exports., Render a semantic integer grid as a readable PNG and return the path., save_level_grid_png(), Any, int, Path, str
+Cohesion: 0.18
+Nodes (10): Single training step.                  Args:             batch: Input batch [, Single training step.                  Args:             batch: Input batch [, Single training step.                  Args:             batch: Input batch [, Single training step.                  Args:             batch: Input batch [, Single training step.                  Args:             batch: Input batch [, Single training step.                  Args:             batch: Input batch [, Single training step.                  Args:             batch: Input batch [, Single training step.                  Args:             batch: Input batch [ (+2 more)
 
 ### Community 583 - "Community 583"
 Cohesion: 0.67
@@ -3113,44 +3129,44 @@ Cohesion: 0.67
 Nodes (3): _mm_dp_ps(), _mm_set1_ps(), sse2neon_kadd_f32()
 
 ### Community 597 - "Community 597"
-Cohesion: 0.33
-Nodes (6): Per-frame state update and map-layer actor rendering helpers., Render player sprite and runtime effects onto map surface., Update renderer/effects state and synchronize HUD/inventory counters., render_player_and_effects(), update_frame_render_state(), Any
+Cohesion: 0.09
+Nodes (17): Any, str, AnimationController, KLTN Visualization - Core Renderer ===================================  High-, Clear the tile cache (call when changing tile size)., Load and manage sprite assets with auto-scaling and fallback.          Automat, Configurable visual theme for the renderer.          All colors use RGB or RGB, Load sprite sheets from assets directory. (+9 more)
 
 ### Community 598 - "Community 598"
-Cohesion: 0.38
-Nodes (4): Any, device, Tensor, Build a stable CPU-content key for one tensor.
+Cohesion: 0.25
+Nodes (7): Fuse local and global conditioning via cross-attention.                  Args:, Fuse local and global conditioning via cross-attention.                  Args:, Fuse local and global conditioning via cross-attention.                  Args:, Fuse local and global conditioning via cross-attention.                  Args:, Fuse local and global conditioning via cross-attention.                  Args:, Fuse local and global conditioning via cross-attention.                  Args:, Fuse local and global conditioning via cross-attention.                  Args:
 
 ### Community 599 - "Community 599"
-Cohesion: 0.33
-Nodes (5): handle_empty_frame_recovery(), Render diagnostics and recovery helpers extracted from gui_runner._render., Render diagnostics and attempt recovery when no map tiles are visible., Any, int
+Cohesion: 0.18
+Nodes (10): grid_with_enemies(), grid_with_key(), Tests for Cognitive Bounded Search (CBS) module.  Run with: pytest tests/test_, Create a simple 10x10 test grid with start, goal, and some walls., Create a simple 10x10 test grid with start, goal, and some walls., Grid requiring a key to reach the goal., Grid requiring a key to reach the goal., Grid with enemies to test safety heuristic. (+2 more)
 
 ### Community 600 - "Community 600"
-Cohesion: 0.33
-Nodes (5): Clear all accumulated beliefs and run-local statistics., Clear all accumulated beliefs and run-local statistics., Clear all accumulated beliefs and run-local statistics., Clear all accumulated beliefs and run-local statistics., Clear all accumulated beliefs and run-local statistics.
+Cohesion: 0.27
+Nodes (7): Compute topology-aware positional encodings from Laplacian eigenvectors., Build 6D multi-hot node features compatible with training loaders., Build dependency matrix channels for key/bomb/boss key constraints., DiGraph, Graph, int, ndarray
 
 ### Community 601 - "Community 601"
-Cohesion: 0.29
-Nodes (6): log_virtual_node_report(), Helpers for reporting graph node-to-room mapping status., Emit a per-dungeon mapping report for physical and virtual graph nodes., Any, Logger, str
+Cohesion: 0.24
+Nodes (4): GameState, Tracks game state during WFC collapse., bool, int
 
 ### Community 602 - "Community 602"
-Cohesion: 0.22
-Nodes (11): Parameter, float, Module, str, test_adamw_decay_param_groups_excludes_bias_and_norm_scales(), test_adamw_decay_param_groups_for_modules_deduplicates_tied_parameters(), adamw_decay_param_groups(), adamw_decay_param_groups_for_modules() (+3 more)
+Cohesion: 0.20
+Nodes (12): Parameter, float, Module, Parameter, str, test_adamw_decay_param_groups_excludes_bias_and_norm_scales(), test_adamw_decay_param_groups_for_modules_deduplicates_tied_parameters(), adamw_decay_param_groups() (+4 more)
 
 ### Community 603 - "Community 603"
-Cohesion: 0.03
-Nodes (94): Debug A* pathfinding with block, Debug block pushing issue, get_waypoint_colors(), MultiGoalPathfinder, MultiGoalResult, Plan direct path through waypoints., Try all permutations to find optimal order.                  Complexity: O(N!, Greedy TSP heuristic: always visit nearest unvisited waypoint. (+86 more)
+Cohesion: 0.05
+Nodes (53): Debug A* pathfinding with block, Debug block pushing issue, CBS-based fitness function for MAP-Elites / H-MOLQD., Initialize multi-goal pathfinder.                  Args:             env: Zel, benchmark_parallel_vs_sequential(), _heuristic_local(), _parallel_astar_worker(), ParallelAStarSolver (+45 more)
 
 ### Community 640 - "Community 640"
-Cohesion: 0.33
-Nodes (4): Integration test for entire topology generation pipeline., Test that pipeline correctly controls room count via genome_length and max_nodes, Test that generated topologies are valid., TestIntegrationPipeline
+Cohesion: 0.54
+Nodes (7): Path, str, _run_script(), test_ablation_gat_attention_dry_run(), test_ablation_logicnet_scaling_dry_run(), test_ablation_pcbs_vs_astar_dry_run(), test_ablation_vqvae_fsq_dry_run()
 
 ### Community 647 - "Community 647"
-Cohesion: 0.40
-Nodes (4): canonical_latent_shape(), Compute the default VQ-VAE latent `(rows, cols)` for a room grid.      The enc, Compute the default VQ-VAE latent `(rows, cols)` for a room grid.      The enc, Tests for H-MOLQD Block II: Semantic VQ-VAE ===================================
-
-### Community 716 - "Community 716"
 Cohesion: 0.20
 Nodes (9): Select one item from an optionally batched graph tensor/list., Select one item from an optionally batched graph tensor/list., Select one item from an optionally batched graph tensor/list., Select one item from an optionally batched graph tensor/list., Select one item from an optionally batched graph tensor/list., Select one item from an optionally batched graph tensor/list., Select one item from an optionally batched graph tensor/list., Select one item from an optionally batched graph tensor/list. (+1 more)
+
+### Community 716 - "Community 716"
+Cohesion: 0.06
+Nodes (49): build_graph_data(), Differentiable soft-max operation (max, not softmax).          soft_max(x) = τ, Differentiable soft-max operation (max, not softmax).          soft_max(x) = τ, Return a dense [N,N] mask of resource-gated lock edges., Return a dense [N,N] mask of resource-gated lock edges., Return a dense [N,N] mask of resource-gated lock edges., Return a dense [N,N] mask of resource-gated lock edges., Compute solvability loss for latent codes.                  Args: (+41 more)
 
 ### Community 717 - "Community 717"
 Cohesion: 0.21
@@ -3161,24 +3177,24 @@ Cohesion: 0.18
 Nodes (9): data_root, dataset, file_count, files, generated_at_utc, schema_version, split, test_dungeon_ids (+1 more)
 
 ### Community 719 - "Community 719"
-Cohesion: 0.16
-Nodes (21): _as_numpy_grid(), _astar(), _neighbors(), perturb_and_map_reachability(), PerturbAndMAPReachabilityResult, Perturb-and-MAP reachability evaluation utilities.  The functions in this module, Estimate hard reachability by solving A* over perturbed MAP cost fields.      Ar, Estimate hard reachability by solving A* over perturbed MAP cost fields.      Ar (+13 more)
+Cohesion: 0.20
+Nodes (9): Create latent diffusion model., Create LogicNet for solvability., Create LogicNet for solvability., Create LogicNet for solvability., Create LogicNet for solvability., Create LogicNet for solvability., Create LogicNet for solvability., Create LogicNet for solvability. (+1 more)
 
 ### Community 720 - "Community 720"
-Cohesion: 0.26
-Nodes (8): _Logger, _Matcher, _Room, test_apply_tentative_matches_applies_above_threshold_and_prunes_staged(), test_match_missing_nodes_applies_confident_and_stages_tentative(), test_undo_last_match_restores_snapshot_and_clears_proposals(), test_graph_guided_validator_accepts_goal_typed_nodes(), test_connect_doors_uses_shared_connector_for_one_way_and_reciprocal_boundaries()
+Cohesion: 0.22
+Nodes (8): Encode only global context (all nodes)., Encode only global context (all nodes)., Encode only global context (all nodes)., Encode only global context (all nodes)., Encode only global context (all nodes)., Encode only global context (all nodes)., Encode only global context (all nodes)., Encode only global context (all nodes).
 
 ### Community 721 - "Community 721"
-Cohesion: 0.40
-Nodes (4): Path overlay helpers extracted from gui_runner._render., Render the explicit planned/visited path overlay used during auto-solve., render_planned_path_overlay(), Any
+Cohesion: 0.22
+Nodes (8): Configure inference-time classifier-free guidance scheduling., Configure inference-time classifier-free guidance scheduling., Configure inference-time classifier-free guidance scheduling., Configure inference-time classifier-free guidance scheduling., Configure inference-time classifier-free guidance scheduling., Configure inference-time classifier-free guidance scheduling., Configure inference-time classifier-free guidance scheduling., Configure inference-time classifier-free guidance scheduling.
 
 ### Community 722 - "Community 722"
-Cohesion: 0.22
-Nodes (7): Test that training module imports correctly., Test that training module imports correctly., Test that training module imports correctly., Test pipeline from grammar to GNN to cross-attention., Test that training module imports correctly., Test pipeline from grammar to GNN to cross-attention., Test pipeline from grammar to GNN to cross-attention.
+Cohesion: 0.10
+Nodes (16): MetricsEngine, Run all sanity checks., Count occurrences of each semantic element., Calculate validation metrics for a solved map., Initialize the solver.                  Args:             env: ZeldaLogicEnv, Initialize the solver.                  Args:             env: ZeldaLogicEnv, Pre-compute pickup locations to support persona heuristics., Pre-compute pickup locations to support persona heuristics. (+8 more)
 
 ### Community 723 - "Community 723"
-Cohesion: 0.40
-Nodes (4): Public wrapper for stair-transition destination lookup., Public wrapper for stair-transition destination lookup., Find stair destinations using graph connectivity (CACHED).                  Wh, Find stair destinations using graph connectivity (CACHED).                  Wh
+Cohesion: 0.33
+Nodes (8): _make_simple_graph(), DiGraph, test_extract_graph_descriptor_basic(), test_extract_graph_descriptor_flags_broken_key_gate_and_pointless_branch(), test_extract_graph_descriptor_reads_generation_stats(), test_extract_graph_descriptor_tracks_switch_and_secret_semantics(), test_run_block_i_benchmark_aggregates_wfc_probe_metrics(), test_run_block_i_benchmark_shapes()
 
 ### Community 735 - "Community 735"
 Cohesion: 0.32
@@ -3188,9 +3204,13 @@ Nodes (6): GuiRuntimeFlags, load_runtime_flags(), Environment-driven runtime fla
 Cohesion: 0.60
 Nodes (4): make_atlas(), int, Path, slice_spritesheet()
 
+### Community 737 - "Community 737"
+Cohesion: 0.29
+Nodes (7): Overlay UI render helpers extracted from gui_runner._render., Render translucent overlays that communicate active click-capturing states., Render path preview dialog and non-modal sidebar preview panel., render_preview_layer(), render_translucent_event_overlays(), Any, int
+
 ### Community 738 - "Community 738"
-Cohesion: 0.83
-Nodes (3): _require_cuda(), test_cuda_autocast_latent_diffusion_denoiser_is_finite(), test_cuda_soft_min_fp16_is_finite()
+Cohesion: 0.36
+Nodes (7): main(), int, ndarray, str, CLI: extract visual levels (tiles -> per-room grids + overlays)  Example:   py, _to_vglc_char(), _write_txt()
 
 ### Community 739 - "Community 739"
 Cohesion: 0.50
@@ -3200,37 +3220,77 @@ Nodes (4): Return dependency-safe topological layers for directed graphs., Retur
 Cohesion: 0.54
 Nodes (7): _configure_runtime_logic_guidance(), Apply explicit runtime LogicNet guidance strategy to the diffusion model., _Pipeline, test_full_runtime_logic_guidance_sets_full_active_window(), test_late_runtime_logic_guidance_sets_late_active_window(), test_none_runtime_logic_guidance_disables_logicnet_even_with_positive_scale(), test_runtime_logic_guidance_disables_when_logicnet_missing()
 
+### Community 741 - "Community 741"
+Cohesion: 0.25
+Nodes (5): Test physical start node identification., Test finding physical start through virtual pointer., Test finding start when no virtual pointer exists., Test fallback to highest centrality node., TestPhysicalStartNode
+
 ### Community 742 - "Community 742"
 Cohesion: 0.40
 Nodes (4): Test full pipeline from grammar to WFC., Test full pipeline from grammar to WFC., Test full pipeline from grammar to WFC., Test full pipeline from grammar to WFC.
+
+### Community 743 - "Community 743"
+Cohesion: 0.38
+Nodes (4): Any, device, Tensor, Build a stable CPU-content key for one tensor.
 
 ### Community 744 - "Community 744"
 Cohesion: 0.22
 Nodes (8): Factory method for predefined personas., Factory method for predefined personas., Factory method for predefined personas., Factory method for predefined personas., Factory method for predefined personas., Factory method for predefined personas., Factory method for predefined personas., Factory method for predefined personas.
 
 ### Community 745 - "Community 745"
-Cohesion: 0.03
-Nodes (58): Tests for VQ-VAE Decoder., Test decoder forward pass., Tests for complete Semantic VQ-VAE., Shared latent-shape helper should match the default VQ-VAE encoder., Tests for VQ-VAE Decoder., Test decoder forward pass., Tests for VQ-VAE Decoder., Test that encoder reduces spatial dimensions. (+50 more)
+Cohesion: 0.05
+Nodes (42): Tests for VQ-VAE Decoder., Test decoder forward pass., Tests for complete Semantic VQ-VAE., Shared latent-shape helper should match the default VQ-VAE encoder., Tests for VQ-VAE Decoder., Test decoder forward pass., Tests for VQ-VAE Decoder., Tests for complete Semantic VQ-VAE. (+34 more)
 
 ### Community 746 - "Community 746"
-Cohesion: 0.09
-Nodes (21): _build_default_adjacency(), Reset WFC sampling RNG for reproducible repair runs., Make compatibility bidirectional for this orientation-free tile vocabulary., Resolve the active adjacency/weight configuration for WFC repair., Reset WFC sampling RNG for reproducible repair runs., Resolve the active adjacency/weight configuration for WFC repair., Build a permissive fallback prior for WFC repair.      The repair stage is a b, Compute entropy at a row-major grid cell. (+13 more)
+Cohesion: 0.05
+Nodes (33): FailurePoint, H-MOLQD Block VI: Symbolic Refiner with Wave Function Collapse ================, Location where pathfinding failed., Plan for repairing dungeon., State of Wave Function Collapse., Tile types for WFC — aligned with canonical TileID from definitions.py., RepairPlan, TileType (+25 more)
+
+### Community 747 - "Community 747"
+Cohesion: 0.22
+Nodes (7): Test topological positional encoding., Test topological positional encoding., Test topological positional encoding., Test Zelda tile set creation., Test topological positional encoding., Test Zelda tile set creation., Test Zelda tile set creation.
+
+### Community 748 - "Community 748"
+Cohesion: 0.29
+Nodes (5): manual_step(), manual_step(), Helpers for manual step execution flow in GUI runner., Execute one manual input step and update UI/effects/state., Any
 
 ### Community 749 - "Community 749"
-Cohesion: 0.40
-Nodes (4): main(), str, Compatibility wrapper for the canonical training entrypoint.  This module preser, Forward legacy training invocations to `main.py train`.      Users should prefer
+Cohesion: 0.33
+Nodes (5): handle_empty_frame_recovery(), Render diagnostics and recovery helpers extracted from gui_runner._render., Render diagnostics and attempt recovery when no map tiles are visible., Any, int
 
 ### Community 750 - "Community 750"
 Cohesion: 0.12
 Nodes (15): Disable the optional fast-sampling adapter., Disable the optional fast-sampling adapter., Enable metadata-gated fast sampling from a distilled adapter checkpoint., Enable metadata-gated fast sampling from a distilled adapter checkpoint., Disable the optional fast-sampling adapter., Enable metadata-gated fast sampling from a distilled adapter checkpoint., Disable the optional fast-sampling adapter., Enable metadata-gated fast sampling from a distilled adapter checkpoint. (+7 more)
 
+### Community 751 - "Community 751"
+Cohesion: 0.40
+Nodes (4): Path overlay helpers extracted from gui_runner._render., Render the explicit planned/visited path overlay used during auto-solve., render_planned_path_overlay(), Any
+
 ### Community 752 - "Community 752"
 Cohesion: 0.09
 Nodes (26): demo_dimension_validation(), Demonstrate dimension validation., bool, DiGraph, ndarray, Path, str, analyze_vglc_graph() (+18 more)
 
+### Community 753 - "Community 753"
+Cohesion: 0.40
+Nodes (4): main(), str, Compatibility wrapper for the canonical training entrypoint.  This module preser, Forward legacy training invocations to `main.py train`.      Users should prefer
+
 ### Community 754 - "Community 754"
-Cohesion: 0.15
-Nodes (10): parse_composite_node_label(), Test parsing of composite node labels (e.g., 'e,k,p')., Test parsing single type label., Test parsing composite label., Test parsing empty label., Test parsing label with whitespace., Test checking if node has specific type., Test finding all nodes with specific type. (+2 more)
+Cohesion: 0.20
+Nodes (6): parse_composite_node_label(), Test parsing single type label., Test parsing composite label., Test parsing empty label., Test parsing label with whitespace., Compatibility wrapper.
+
+### Community 757 - "Community 757"
+Cohesion: 0.11
+Nodes (16): Test lock-key ordering validation., Test lock-key ordering validation., Test lock-key ordering validation., Tests for causal Wave Function Collapse., Test lock-key ordering validation., Test that game state is properly tracked., Tests for causal Wave Function Collapse., Test that same seed produces same grid. (+8 more)
+
+### Community 758 - "Community 758"
+Cohesion: 0.33
+Nodes (5): initialize_ui_control_state(), UI/control state initialization helpers for ZeldaGUI., Initialize item tracking, control panel, feature flags, and selection state., Any, bool
+
+### Community 759 - "Community 759"
+Cohesion: 0.40
+Nodes (3): Set cross-attention kernel: softmax or linear_hedgehog., Set cross-attention kernel: softmax or linear_hedgehog., Set topology refinement mode: none | lightweight | gat2 (alias: upgraded).
+
+### Community 760 - "Community 760"
+Cohesion: 0.40
+Nodes (4): Test generation with fixed tiles., Test generation with fixed tiles., Test generation with fixed tiles., Test generation with fixed tiles.
 
 ### Community 764 - "Community 764"
 Cohesion: 0.08
@@ -3238,7 +3298,7 @@ Nodes (22): Compute weighted reconstruction loss.                  Applies highe
 
 ### Community 765 - "Community 765"
 Cohesion: 0.02
-Nodes (109): Stack per-sample conditioning vectors into batch tensor for diffusion., Stack per-sample conditioning vectors into batch tensor for diffusion., Stack per-sample conditioning vectors into batch tensor for diffusion., Encode images to VQ-VAE latent space.                  Handles data format con, Encode images to VQ-VAE latent space.                  Handles data format con, Build a stable key for one frozen-tokenizer input map., Build a stable key for one frozen-tokenizer input map., Stack per-sample conditioning vectors into batch tensor for diffusion. (+101 more)
+Nodes (107): Tensor, Stack per-sample conditioning vectors into batch tensor for diffusion., Stack per-sample conditioning vectors into batch tensor for diffusion., Stack per-sample conditioning vectors into batch tensor for diffusion., Encode images to VQ-VAE latent space.                  Handles data format con, Encode images to VQ-VAE latent space.                  Handles data format con, Build a stable key for one frozen-tokenizer input map., Build a stable key for one frozen-tokenizer input map. (+99 more)
 
 ### Community 766 - "Community 766"
 Cohesion: 0.60
@@ -3253,28 +3313,28 @@ Cohesion: 0.25
 Nodes (8): _bucket_room_ids_by_latent_shape(), _infer_room_latent_shape(), Infer per-room latent (C,H,W) shape from neighbors or defaults., Infer per-room latent (C,H,W) shape from neighbors or defaults., Infer per-room latent (C,H,W) shape from neighbors or defaults., Bucket independent rooms by latent shape and target room size., Bucket independent rooms by latent shape and target room size., Bucket independent rooms by latent shape and target room size.
 
 ### Community 778 - "Community 778"
-Cohesion: 0.10
-Nodes (39): _all_room_door_slots_mask(), _apply_semantic_constrained_decoding(), _build_room_graph_marker_preferences(), _count_small_interior_structure_components(), _dilate_room_mask(), _enforce_room_boundary_shell(), _find_room_graph_marker_slot(), _overlay_room_graph_markers() (+31 more)
+Cohesion: 0.08
+Nodes (49): _all_room_door_slots_mask(), _apply_semantic_constrained_decoding(), _build_room_walkable_mask(), _count_room_path_turns(), _count_small_interior_structure_components(), _dilate_room_mask(), _enforce_room_boundary_shell(), _evaluate_puzzle_candidate_contract() (+41 more)
 
 ## Knowledge Gaps
-- **1650 isolated node(s):** `PreToolUse`, `uint64x1_t`, `uint64x2_t`, `data_root`, `file_count` (+1645 more)
+- **1656 isolated node(s):** `PreToolUse`, `uint64x1_t`, `uint64x2_t`, `data_root`, `file_count` (+1651 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **136 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **141 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `ZeldaLogicEnv` connect `Community 603` to `Community 259`, `Community 140`, `Community 13`, `Community 271`, `Community 143`, `Community 23`, `Community 31`, `Community 164`, `Community 167`, `Community 39`, `Community 41`, `Community 295`, `Community 300`, `Community 45`, `Community 303`, `Community 311`, `Community 442`, `Community 187`, `Community 62`, `Community 323`, `Community 69`, `Community 201`, `Community 73`, `Community 76`, `Community 462`, `Community 89`, `Community 91`, `Community 350`, `Community 95`, `Community 356`, `Community 102`, `Community 120`?**
-  _High betweenness centrality (0.085) - this node is a cross-community bridge._
-- **Why does `ZeldaDungeonAdapter` connect `Community 356` to `Community 0`, `Community 256`, `Community 259`, `Community 3`, `Community 143`, `Community 22`, `Community 35`, `Community 167`, `Community 303`, `Community 54`, `Community 318`, `Community 69`, `Community 201`, `Community 76`, `Community 89`, `Community 221`, `Community 96`, `Community 238`, `Community 124`?**
-  _High betweenness centrality (0.075) - this node is a cross-community bridge._
-- **Why does `CognitiveBoundedSearch` connect `Community 462` to `Community 15`, `Community 148`, `Community 412`, `Community 31`, `Community 164`, `Community 37`, `Community 295`, `Community 45`, `Community 303`, `Community 306`, `Community 179`, `Community 53`, `Community 56`, `Community 323`, `Community 67`, `Community 69`, `Community 201`, `Community 76`, `Community 339`, `Community 218`, `Community 603`, `Community 356`, `Community 370`, `Community 243`?**
-  _High betweenness centrality (0.067) - this node is a cross-community bridge._
-- **Are the 127 inferred relationships involving `NeuralSymbolicDungeonPipeline` (e.g. with `ImageDraw` and `AdvancedNeuralSymbolicPipeline`) actually correct?**
-  _`NeuralSymbolicDungeonPipeline` has 127 INFERRED edges - model-reasoned connections that need verification._
-- **Are the 265 inferred relationships involving `ValueError` (e.g. with `canonicalize_generated_grid()` and `flatten_grids_to_tokens()`) actually correct?**
-  _`ValueError` has 265 INFERRED edges - model-reasoned connections that need verification._
-- **Are the 96 inferred relationships involving `LogicNet` (e.g. with `DistributedContext` and `Any`) actually correct?**
-  _`LogicNet` has 96 INFERRED edges - model-reasoned connections that need verification._
-- **Are the 27 inferred relationships involving `ZeldaGUI` (e.g. with `ButtonWidget` and `CheckboxWidget`) actually correct?**
-  _`ZeldaGUI` has 27 INFERRED edges - model-reasoned connections that need verification._
+- **Why does `ZeldaLogicEnv` connect `Community 350` to `Community 259`, `Community 140`, `Community 13`, `Community 271`, `Community 143`, `Community 273`, `Community 21`, `Community 23`, `Community 285`, `Community 31`, `Community 39`, `Community 295`, `Community 41`, `Community 169`, `Community 45`, `Community 303`, `Community 187`, `Community 62`, `Community 69`, `Community 200`, `Community 201`, `Community 73`, `Community 76`, `Community 462`, `Community 722`, `Community 87`, `Community 343`, `Community 599`, `Community 603`, `Community 91`, `Community 95`?**
+  _High betweenness centrality (0.103) - this node is a cross-community bridge._
+- **Why does `ZeldaDungeonAdapter` connect `Community 356` to `Community 256`, `Community 0`, `Community 259`, `Community 3`, `Community 143`, `Community 21`, `Community 35`, `Community 167`, `Community 169`, `Community 46`, `Community 303`, `Community 50`, `Community 318`, `Community 69`, `Community 201`, `Community 462`, `Community 209`, `Community 87`, `Community 89`, `Community 221`, `Community 94`, `Community 96`, `Community 366`?**
+  _High betweenness centrality (0.098) - this node is a cross-community bridge._
+- **Why does `CognitiveBoundedSearch` connect `Community 295` to `Community 148`, `Community 285`, `Community 31`, `Community 164`, `Community 37`, `Community 45`, `Community 303`, `Community 306`, `Community 179`, `Community 53`, `Community 54`, `Community 56`, `Community 67`, `Community 69`, `Community 201`, `Community 76`, `Community 77`, `Community 462`, `Community 339`, `Community 84`, `Community 87`, `Community 343`, `Community 599`, `Community 603`, `Community 357`, `Community 243`?**
+  _High betweenness centrality (0.073) - this node is a cross-community bridge._
+- **Are the 128 inferred relationships involving `NeuralSymbolicDungeonPipeline` (e.g. with `ImageDraw` and `AdvancedNeuralSymbolicPipeline`) actually correct?**
+  _`NeuralSymbolicDungeonPipeline` has 128 INFERRED edges - model-reasoned connections that need verification._
+- **Are the 268 inferred relationships involving `ValueError` (e.g. with `canonicalize_generated_grid()` and `flatten_grids_to_tokens()`) actually correct?**
+  _`ValueError` has 268 INFERRED edges - model-reasoned connections that need verification._
+- **Are the 98 inferred relationships involving `LogicNet` (e.g. with `DistributedContext` and `Any`) actually correct?**
+  _`LogicNet` has 98 INFERRED edges - model-reasoned connections that need verification._
+- **Are the 166 inferred relationships involving `TileID` (e.g. with `BaselineEvalConfig` and `OverlappingPatternModel`) actually correct?**
+  _`TileID` has 166 INFERRED edges - model-reasoned connections that need verification._

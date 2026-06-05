@@ -971,6 +971,22 @@ class MaskedRoomTrainer:
             batch_graph["room_topology_map"] = torch.cat(topo_maps, dim=0)
         return batch_graph
 
+    @staticmethod
+    def _tensor_is_finite(value: Any) -> bool:
+        if isinstance(value, torch.Tensor):
+            return bool(torch.isfinite(value).all().item())
+        try:
+            return bool(torch.isfinite(torch.as_tensor(float(value))).item())
+        except (TypeError, ValueError):
+            return False
+
+    @staticmethod
+    def _gradients_are_finite(parameters: List[torch.nn.Parameter]) -> bool:
+        for param in parameters:
+            if param.grad is not None and not bool(torch.isfinite(param.grad).all().item()):
+                return False
+        return True
+
     def _step(
         self,
         real_maps: torch.Tensor,
@@ -1052,20 +1068,46 @@ class MaskedRoomTrainer:
             )
         total_loss = loss + float(getattr(self.config, "puzzle_stage_semantics_loss_weight", 0.0)) * puzzle_stage_semantic_loss
         if train:
+            if not self._tensor_is_finite(total_loss):
+                self.optimizer.zero_grad(set_to_none=True)
+                metrics = dict(metrics)
+                metrics["loss"] = 0.0
+                metrics.update(puzzle_stage_semantic_metrics)
+                metrics["skipped_nonfinite_batch"] = 1.0
+                return metrics
             self.optimizer.zero_grad()
             total_loss.backward()
+            trainable_params = [
+                param
+                for module in (self.model, self.condition_encoder, self.puzzle_stage_semantics_head)
+                for param in module.parameters()
+                if param.requires_grad
+            ]
+            if not self._gradients_are_finite(trainable_params):
+                self.optimizer.zero_grad(set_to_none=True)
+                metrics = dict(metrics)
+                metrics["loss"] = float(total_loss.detach().item())
+                metrics.update(puzzle_stage_semantic_metrics)
+                metrics["skipped_nonfinite_batch"] = 1.0
+                return metrics
             if self.config.grad_clip_norm > 0:
-                torch.nn.utils.clip_grad_norm_(
-                    list(self.model.parameters())
-                    + list(self.condition_encoder.parameters())
-                    + list(self.puzzle_stage_semantics_head.parameters()),
+                grad_norm = torch.nn.utils.clip_grad_norm_(
+                    trainable_params,
                     max_norm=self.config.grad_clip_norm,
                 )
+                if not self._tensor_is_finite(grad_norm):
+                    self.optimizer.zero_grad(set_to_none=True)
+                    metrics = dict(metrics)
+                    metrics["loss"] = float(total_loss.detach().item())
+                    metrics.update(puzzle_stage_semantic_metrics)
+                    metrics["skipped_nonfinite_batch"] = 1.0
+                    return metrics
             self.optimizer.step()
             self.global_step += 1
         metrics = dict(metrics)
         metrics["loss"] = float(total_loss.detach().item())
         metrics.update(puzzle_stage_semantic_metrics)
+        metrics["skipped_nonfinite_batch"] = 0.0
         return metrics
 
     def _build_resume_checkpoint_payload(self, metrics: Dict[str, Any]) -> Dict[str, Any]:

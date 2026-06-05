@@ -230,6 +230,7 @@ def test_predicted_latent_logic_branch_backpropagates_from_vqvae_decode_to_unet(
     trainer.global_step = 0
     trainer._estimated_total_steps = 1
     trainer._latent_cache = FrozenLatentCache(enabled=False, max_items=0)
+    trainer._accelerator = None
     trainer.distributed_context = None
     trainer._nonfinite_warning_counts = {}
 
@@ -271,6 +272,36 @@ class _DummyTrainingLossModule(_TinyModule):
     def training_loss(self, z_0, conditioning, graph_data=None):
         _ = (z_0, conditioning, graph_data)
         return torch.tensor(self.loss_value, dtype=torch.float32)
+
+
+class _FiniteDifferentiableTrainingLossModule(_DummyTrainingLossModule):
+    def __init__(self):
+        super().__init__(0.25)
+
+    def training_loss(self, z_0, conditioning, graph_data=None):
+        _ = (z_0, conditioning, graph_data)
+        return self.weight * 0.25
+
+
+class _DPOTrainingModule(_TinyModule):
+    def train(self):
+        return self
+
+    def diffusion_dpo_loss(
+        self,
+        chosen_z,
+        rejected_z,
+        conditioning,
+        **kwargs,
+    ):
+        _ = (chosen_z, rejected_z, conditioning, kwargs)
+        loss = self.weight * 0.5
+        return loss, {
+            "dpo_margin": self.weight.detach() * 0.25,
+            "dpo_accuracy": torch.ones((), dtype=torch.float32),
+            "chosen_score": torch.ones((), dtype=torch.float32),
+            "rejected_score": torch.zeros((), dtype=torch.float32),
+        }
 
 
 class _ComputeLossModule(_TinyModule):
@@ -1145,6 +1176,7 @@ def test_train_step_skips_nonfinite_diffusion_loss():
         list(trainer.diffusion.parameters()) + list(trainer.condition_encoder.parameters()),
         lr=1e-3,
     )
+    trainer._accelerator = None
     trainer.global_step = 0
     trainer._nonfinite_warning_counts = {}
     trainer.encode_to_latent = lambda real_maps: torch.zeros((real_maps.shape[0], 4, 2, 2), dtype=torch.float32)
@@ -1154,7 +1186,259 @@ def test_train_step_skips_nonfinite_diffusion_loss():
 
     assert metrics["skipped_nonfinite_batch"] == pytest.approx(1.0)
     assert metrics["loss"] == pytest.approx(0.0)
-    assert trainer.global_step == 1
+    assert trainer.global_step == 0
+
+
+def test_train_step_nonfinite_gradients_do_not_create_ghost_step():
+    trainer = DiffusionTrainer.__new__(DiffusionTrainer)
+    trainer.device = torch.device("cpu")
+    trainer.config = SimpleNamespace(
+        alpha_visual=1.0,
+        alpha_logic=0.0,
+        alpha_logic_tile=0.0,
+        alpha_wfc_pseudo=0.0,
+        logic_loss_mode="predicted_latent",
+        logic_net_enabled=False,
+        logic_net_trainable=False,
+        grad_clip_norm=1.0,
+        epochs=1,
+    )
+    trainer.diffusion = _FiniteDifferentiableTrainingLossModule()
+    trainer.condition_encoder = _TinyModule()
+    trainer.logic_net = _DummyLogicNet()
+    trainer.ema_diffusion = _DummyEvalModel()
+    trainer.optimizer = torch.optim.SGD(
+        list(trainer.diffusion.parameters()) + list(trainer.condition_encoder.parameters()),
+        lr=1e-3,
+    )
+    trainer._accelerator = None
+    trainer.global_step = 7
+    trainer._nonfinite_warning_counts = {}
+    trainer.encode_to_latent = lambda real_maps: torch.zeros((real_maps.shape[0], 4, 2, 2), dtype=torch.float32)
+    trainer.get_dummy_conditioning = lambda batch_size: torch.zeros((batch_size, 1, 8), dtype=torch.float32)
+    trainer._gradients_are_finite = lambda: False
+
+    step_calls = 0
+    ema_calls = 0
+    warmup_calls = 0
+
+    def _step():
+        nonlocal step_calls
+        step_calls += 1
+
+    def _update_ema():
+        nonlocal ema_calls
+        ema_calls += 1
+
+    def _warmup(*, completed_steps=None):
+        _ = completed_steps
+        nonlocal warmup_calls
+        warmup_calls += 1
+
+    trainer.optimizer.step = _step
+    trainer._update_ema = _update_ema
+    trainer._apply_lr_warmup = _warmup
+
+    metrics = DiffusionTrainer.train_step(
+        trainer,
+        torch.zeros((2, 1, ROOM_HEIGHT, ROOM_WIDTH), dtype=torch.float32),
+        include_logic_loss=False,
+    )
+
+    assert metrics["skipped_nonfinite_batch"] == pytest.approx(1.0)
+    assert trainer.global_step == 7
+    assert step_calls == 0
+    assert ema_calls == 0
+    assert warmup_calls == 0
+
+
+def test_train_step_nonfinite_clipped_grad_norm_does_not_create_ghost_step(monkeypatch):
+    trainer = DiffusionTrainer.__new__(DiffusionTrainer)
+    trainer.device = torch.device("cpu")
+    trainer.config = SimpleNamespace(
+        alpha_visual=1.0,
+        alpha_logic=0.0,
+        alpha_logic_tile=0.0,
+        alpha_wfc_pseudo=0.0,
+        logic_loss_mode="predicted_latent",
+        logic_net_enabled=False,
+        logic_net_trainable=False,
+        grad_clip_norm=1.0,
+        epochs=1,
+    )
+    trainer.diffusion = _FiniteDifferentiableTrainingLossModule()
+    trainer.condition_encoder = _TinyModule()
+    trainer.logic_net = _DummyLogicNet()
+    trainer.ema_diffusion = _DummyEvalModel()
+    trainer.optimizer = torch.optim.SGD(
+        list(trainer.diffusion.parameters()) + list(trainer.condition_encoder.parameters()),
+        lr=1e-3,
+    )
+    trainer._accelerator = None
+    trainer.global_step = 11
+    trainer._nonfinite_warning_counts = {}
+    trainer.encode_to_latent = lambda real_maps: torch.zeros((real_maps.shape[0], 4, 2, 2), dtype=torch.float32)
+    trainer.get_dummy_conditioning = lambda batch_size: torch.zeros((batch_size, 1, 8), dtype=torch.float32)
+    trainer._gradients_are_finite = lambda: True
+
+    step_calls = 0
+    ema_calls = 0
+    warmup_calls = 0
+
+    def _step():
+        nonlocal step_calls
+        step_calls += 1
+
+    def _update_ema():
+        nonlocal ema_calls
+        ema_calls += 1
+
+    def _warmup(*, completed_steps=None):
+        _ = completed_steps
+        nonlocal warmup_calls
+        warmup_calls += 1
+
+    trainer.optimizer.step = _step
+    trainer._update_ema = _update_ema
+    trainer._apply_lr_warmup = _warmup
+    monkeypatch.setattr(
+        torch.nn.utils,
+        "clip_grad_norm_",
+        lambda *args, **kwargs: torch.tensor(float("inf")),
+    )
+
+    metrics = DiffusionTrainer.train_step(
+        trainer,
+        torch.zeros((2, 1, ROOM_HEIGHT, ROOM_WIDTH), dtype=torch.float32),
+        include_logic_loss=False,
+    )
+
+    assert metrics["skipped_nonfinite_batch"] == pytest.approx(1.0)
+    assert trainer.global_step == 11
+    assert step_calls == 0
+    assert ema_calls == 0
+    assert warmup_calls == 0
+
+
+def test_dpo_step_nonfinite_gradients_do_not_create_ghost_step():
+    trainer = DiffusionTrainer.__new__(DiffusionTrainer)
+    trainer.device = torch.device("cpu")
+    trainer.config = SimpleNamespace(
+        diffusion_training_objective="diffusion",
+        grad_clip_norm=1.0,
+        logic_net_trainable=False,
+    )
+    trainer.diffusion = _DPOTrainingModule()
+    trainer.condition_encoder = _TinyModule()
+    trainer.logic_net = _DummyLogicNet()
+    trainer.ema_diffusion = _DummyEvalModel()
+    trainer.optimizer = torch.optim.SGD(
+        list(trainer.diffusion.parameters()) + list(trainer.condition_encoder.parameters()),
+        lr=1e-3,
+    )
+    trainer._accelerator = None
+    trainer.distributed_context = None
+    trainer.global_step = 13
+    trainer._nonfinite_warning_counts = {}
+    trainer.encode_to_latent = lambda maps: torch.zeros((maps.shape[0], 4, 2, 2), dtype=torch.float32)
+    trainer.get_dummy_conditioning = lambda batch_size: torch.zeros((batch_size, 1, 8), dtype=torch.float32)
+    trainer._gradients_are_finite = lambda: False
+
+    step_calls = 0
+    ema_calls = 0
+    warmup_calls = 0
+
+    def _step():
+        nonlocal step_calls
+        step_calls += 1
+
+    def _update_ema():
+        nonlocal ema_calls
+        ema_calls += 1
+
+    def _warmup(*, completed_steps=None):
+        _ = completed_steps
+        nonlocal warmup_calls
+        warmup_calls += 1
+
+    trainer.optimizer.step = _step
+    trainer._update_ema = _update_ema
+    trainer._apply_lr_warmup = _warmup
+
+    metrics = DiffusionTrainer.dpo_step(
+        trainer,
+        torch.zeros((2, 1, ROOM_HEIGHT, ROOM_WIDTH), dtype=torch.float32),
+        torch.ones((2, 1, ROOM_HEIGHT, ROOM_WIDTH), dtype=torch.float32),
+    )
+
+    assert metrics["skipped_nonfinite_batch"] == pytest.approx(1.0)
+    assert trainer.global_step == 13
+    assert step_calls == 0
+    assert ema_calls == 0
+    assert warmup_calls == 0
+
+
+def test_dpo_step_nonfinite_clipped_grad_norm_does_not_create_ghost_step(monkeypatch):
+    trainer = DiffusionTrainer.__new__(DiffusionTrainer)
+    trainer.device = torch.device("cpu")
+    trainer.config = SimpleNamespace(
+        diffusion_training_objective="diffusion",
+        grad_clip_norm=1.0,
+        logic_net_trainable=False,
+    )
+    trainer.diffusion = _DPOTrainingModule()
+    trainer.condition_encoder = _TinyModule()
+    trainer.logic_net = _DummyLogicNet()
+    trainer.ema_diffusion = _DummyEvalModel()
+    trainer.optimizer = torch.optim.SGD(
+        list(trainer.diffusion.parameters()) + list(trainer.condition_encoder.parameters()),
+        lr=1e-3,
+    )
+    trainer._accelerator = None
+    trainer.distributed_context = None
+    trainer.global_step = 17
+    trainer._nonfinite_warning_counts = {}
+    trainer.encode_to_latent = lambda maps: torch.zeros((maps.shape[0], 4, 2, 2), dtype=torch.float32)
+    trainer.get_dummy_conditioning = lambda batch_size: torch.zeros((batch_size, 1, 8), dtype=torch.float32)
+    trainer._gradients_are_finite = lambda: True
+
+    step_calls = 0
+    ema_calls = 0
+    warmup_calls = 0
+
+    def _step():
+        nonlocal step_calls
+        step_calls += 1
+
+    def _update_ema():
+        nonlocal ema_calls
+        ema_calls += 1
+
+    def _warmup(*, completed_steps=None):
+        _ = completed_steps
+        nonlocal warmup_calls
+        warmup_calls += 1
+
+    trainer.optimizer.step = _step
+    trainer._update_ema = _update_ema
+    trainer._apply_lr_warmup = _warmup
+    monkeypatch.setattr(
+        torch.nn.utils,
+        "clip_grad_norm_",
+        lambda *args, **kwargs: torch.tensor(float("inf")),
+    )
+
+    metrics = DiffusionTrainer.dpo_step(
+        trainer,
+        torch.zeros((2, 1, ROOM_HEIGHT, ROOM_WIDTH), dtype=torch.float32),
+        torch.ones((2, 1, ROOM_HEIGHT, ROOM_WIDTH), dtype=torch.float32),
+    )
+
+    assert metrics["skipped_nonfinite_batch"] == pytest.approx(1.0)
+    assert trainer.global_step == 17
+    assert step_calls == 0
+    assert ema_calls == 0
+    assert warmup_calls == 0
 
 
 def test_train_step_predicted_latent_decodes_to_tile_logits_for_logic_loss():
@@ -1195,6 +1479,7 @@ def test_train_step_predicted_latent_decodes_to_tile_logits_for_logic_loss():
         + list(trainer.logic_net.parameters()),
         lr=1e-3,
     )
+    trainer._accelerator = None
     trainer.global_step = 0
     trainer._nonfinite_warning_counts = {}
     trainer.encode_to_latent = lambda real_maps: torch.zeros(
@@ -1279,6 +1564,7 @@ def test_train_step_trains_logicnet_tile_classifier_when_enabled():
         + list(trainer.logic_net.parameters()),
         lr=1e-3,
     )
+    trainer._accelerator = None
     trainer.global_step = 0
     trainer._nonfinite_warning_counts = {}
     trainer.encode_to_latent = lambda real_maps: torch.zeros(

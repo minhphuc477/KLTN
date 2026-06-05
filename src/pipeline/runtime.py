@@ -12,6 +12,7 @@ import torch
 
 from src.core import SEMANTIC_PALETTE
 from src.core.definitions import TileID
+from src.core.domain import resolve_domain_schema
 from src.pipeline.block_contracts import validate_checkpoint_metadata
 from src.pipeline.graph_features import condition_feature_dims, fit_feature_vector
 from src.pipeline.room_topology_conditioning import (
@@ -165,6 +166,7 @@ def _initialize_pipeline_from_flat_kwargs(
     symbolic_max_repair_attempts: int = 5,
     symbolic_repair_margin: int = 2,
     symbolic_adjacency_threshold: float = 0.01,
+    domain_schema: Optional[Any] = None,
     components: Optional[PipelineComponents] = None,
     component_factory: Optional[PipelineComponentFactory] = None,
 ):
@@ -178,6 +180,8 @@ def _initialize_pipeline_from_flat_kwargs(
         logger.info(f"Initializing NeuralSymbolicDungeonPipeline on {pipeline.device}")
 
     pipeline.strict_checkpoint_mode = bool(strict_checkpoint_mode)
+    pipeline.domain_schema = resolve_domain_schema(domain_schema)
+    pipeline.domain_schema_name = str(getattr(pipeline.domain_schema, "name", type(pipeline.domain_schema).__name__))
     pipeline.use_graph_node_cross_attention = bool(use_graph_node_cross_attention)
     pipeline.use_latent_boundary_masking = bool(use_latent_boundary_masking)
     pipeline.topology_refinement_mode = str(topology_refinement_mode).strip().lower()

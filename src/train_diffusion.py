@@ -2968,7 +2968,6 @@ class DiffusionTrainer:
                 "diffusion_loss",
                 "Diffusion training: non-finite diffusion loss detected; skipping optimizer step for this batch.",
             )
-            self.global_step += 1
             metrics = {
                 'loss': 0.0,
                 'diffusion_loss': 0.0,
@@ -3086,7 +3085,6 @@ class DiffusionTrainer:
                 "total_loss",
                 "Diffusion training: non-finite total loss detected; skipping optimizer step for this batch.",
             )
-            self.global_step += 1
             metrics = {
                 'loss': 0.0,
                 'diffusion_loss': float(diffusion_loss.detach().item()) if self._tensor_is_finite(diffusion_loss) else 0.0,
@@ -3124,7 +3122,6 @@ class DiffusionTrainer:
                 "gradient",
                 "Diffusion training: non-finite gradients detected; skipping optimizer step for this batch.",
             )
-            self.global_step += 1
             metrics = {
                 'loss': float(total_loss.detach().item()),
                 'diffusion_loss': float(diffusion_loss.detach().item()),
@@ -3167,7 +3164,6 @@ class DiffusionTrainer:
                     "gradient_norm",
                     "Diffusion training: non-finite gradient norm detected after clipping; skipping optimizer step for this batch.",
                 )
-                self.global_step += 1
                 metrics = {
                     'loss': float(total_loss.detach().item()),
                     'diffusion_loss': float(diffusion_loss.detach().item()),
@@ -3272,7 +3268,6 @@ class DiffusionTrainer:
                 "dpo_loss",
                 "Diffusion-DPO: non-finite DPO loss detected; skipping optimizer step for this batch.",
             )
-            self.global_step += 1
             return {
                 "loss": 0.0,
                 "dpo_loss": 0.0,
@@ -3286,18 +3281,55 @@ class DiffusionTrainer:
             self._accelerator.backward(loss)
         else:
             loss.backward()
+        modules_for_average = [self.diffusion, self.condition_encoder]
+        if bool(getattr(self.config, "logic_net_trainable", True)):
+            modules_for_average.append(self.logic_net)
+        average_gradients(
+            tuple(modules_for_average),
+            context=getattr(self, "distributed_context", None),
+        )
+        if not self._gradients_are_finite():
+            self.optimizer.zero_grad(set_to_none=True)
+            self._warn_nonfinite(
+                "dpo_gradient",
+                "Diffusion-DPO: non-finite gradients detected; skipping optimizer step for this batch.",
+            )
+            return {
+                "loss": float(loss.detach().item()) if self._tensor_is_finite(loss) else 0.0,
+                "dpo_loss": float(loss.detach().item()) if self._tensor_is_finite(loss) else 0.0,
+                "dpo_margin": float(dpo_metrics["dpo_margin"].detach().item()) if self._tensor_is_finite(dpo_metrics.get("dpo_margin")) else 0.0,
+                "dpo_accuracy": float(dpo_metrics["dpo_accuracy"].detach().item()) if self._tensor_is_finite(dpo_metrics.get("dpo_accuracy")) else 0.0,
+                "skipped_nonfinite_batch": 1.0,
+            }
         grad_clip = float(getattr(self.config, "grad_clip_norm", 0.0))
         if grad_clip > 0:
             if self._accelerator is not None:
-                self._accelerator.clip_grad_norm_(self.diffusion.parameters(), grad_clip)
-                self._accelerator.clip_grad_norm_(self.condition_encoder.parameters(), grad_clip)
+                grad_norms = [
+                    self._accelerator.clip_grad_norm_(self.diffusion.parameters(), grad_clip),
+                    self._accelerator.clip_grad_norm_(self.condition_encoder.parameters(), grad_clip),
+                ]
                 if bool(getattr(self.config, "logic_net_trainable", True)):
-                    self._accelerator.clip_grad_norm_(self.logic_net.parameters(), grad_clip)
+                    grad_norms.append(self._accelerator.clip_grad_norm_(self.logic_net.parameters(), grad_clip))
             else:
-                torch.nn.utils.clip_grad_norm_(self.diffusion.parameters(), grad_clip)
-                torch.nn.utils.clip_grad_norm_(self.condition_encoder.parameters(), grad_clip)
+                grad_norms = [
+                    torch.nn.utils.clip_grad_norm_(self.diffusion.parameters(), grad_clip),
+                    torch.nn.utils.clip_grad_norm_(self.condition_encoder.parameters(), grad_clip),
+                ]
                 if bool(getattr(self.config, "logic_net_trainable", True)):
-                    torch.nn.utils.clip_grad_norm_(self.logic_net.parameters(), grad_clip)
+                    grad_norms.append(torch.nn.utils.clip_grad_norm_(self.logic_net.parameters(), grad_clip))
+            if not all(self._tensor_is_finite(norm) for norm in grad_norms):
+                self.optimizer.zero_grad(set_to_none=True)
+                self._warn_nonfinite(
+                    "dpo_gradient_norm",
+                    "Diffusion-DPO: non-finite gradient norm detected after clipping; skipping optimizer step for this batch.",
+                )
+                return {
+                    "loss": float(loss.detach().item()) if self._tensor_is_finite(loss) else 0.0,
+                    "dpo_loss": float(loss.detach().item()) if self._tensor_is_finite(loss) else 0.0,
+                    "dpo_margin": float(dpo_metrics["dpo_margin"].detach().item()) if self._tensor_is_finite(dpo_metrics.get("dpo_margin")) else 0.0,
+                    "dpo_accuracy": float(dpo_metrics["dpo_accuracy"].detach().item()) if self._tensor_is_finite(dpo_metrics.get("dpo_accuracy")) else 0.0,
+                    "skipped_nonfinite_batch": 1.0,
+                }
         self.optimizer.step()
         self._update_ema()
         self.global_step += 1

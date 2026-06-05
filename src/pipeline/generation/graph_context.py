@@ -12,6 +12,7 @@ import torch
 from src.core import ROOM_HEIGHT, ROOM_WIDTH, SEMANTIC_PALETTE
 from src.core.definitions import DOOR_POSITIONS, GRAPH_TPE_DIM, TileID, parse_edge_type_tokens
 from src.core.condition_encoder import build_boundary_constraints
+from src.core.domain import ROOM_ROLE_KEYS, ZeldaSchema
 from src.pipeline.graph_features import (
     compute_current_node_distance_features,
     compute_rrwp_edge_features,
@@ -369,27 +370,11 @@ def _build_room_boundary_constraints(
 
 def _room_role_flags(pipeline, attrs: Dict[str, Any]) -> Dict[str, bool]:
     """Extract high-level room-role booleans from graph node metadata."""
-    tokens = pipeline._parse_label_tokens(attrs.get("label"))
-    raw_type = str(attrs.get("type", attrs.get("node_type", attrs.get("room_type", ""))) or "").strip().lower()
-    role_tokens = set(tokens) | set(pipeline._parse_label_tokens(raw_type))
-    difficulty_rating = str(attrs.get("difficulty_rating", "") or "").strip().upper()
-
-    def _hint(name: str, *aliases: str) -> bool:
-        return pipeline._coerce_bool(attrs.get(name)) or any(pipeline._coerce_bool(attrs.get(alias)) for alias in aliases)
-
-    return {
-        "is_start": _hint("is_start", "is_entry") or raw_type in {"start", "entry"} or "start" in role_tokens or "entry" in role_tokens,
-        "has_enemy": _hint("has_enemy") or "e" in role_tokens or "enemy" in role_tokens,
-        "has_key": _hint("has_key") or "k" in role_tokens or "key" in role_tokens,
-        "has_item": _hint("has_item", "has_macro_item", "has_minor_item") or "i" in role_tokens or "item" in role_tokens or "treasure" in role_tokens,
-        "has_goal": _hint("has_triforce", "is_triforce", "is_goal") or raw_type in {"goal", "triforce"} or "t" in role_tokens or "goal" in role_tokens or "triforce" in role_tokens,
-        "has_boss": _hint("has_boss", "is_boss") or "b" in role_tokens or "boss" in role_tokens,
-        "has_puzzle": _hint("has_puzzle") or "p" in role_tokens or "puzzle" in role_tokens or raw_type in {"switch", "puzzle", "tutorial_puzzle", "combat_puzzle", "complex_puzzle"} or "puzzle" in raw_type,
-        "is_tutorial_puzzle": bool(_hint("is_tutorial") or raw_type == "tutorial_puzzle" or difficulty_rating == "SAFE"),
-        "is_combat_puzzle": bool(raw_type == "combat_puzzle"),
-        "is_complex_puzzle": bool(raw_type == "complex_puzzle" or difficulty_rating in {"HARD", "EXTREME"}),
-        "is_switch_puzzle": bool(raw_type == "switch"),
-    }
+    schema = getattr(pipeline, "domain_schema", None) or ZeldaSchema()
+    if hasattr(schema, "normalize_room_role_flags"):
+        return schema.normalize_room_role_flags(attrs)
+    raw = dict(schema.room_role_flags(attrs))
+    return {key: bool(raw.get(key, False)) for key in ROOM_ROLE_KEYS}
 
 
 def _resolve_puzzle_room_scaffold_profile(

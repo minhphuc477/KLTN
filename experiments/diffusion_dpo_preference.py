@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 import sys
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Iterable, Optional
 
 import torch
 
@@ -22,6 +22,37 @@ try:
     from accelerate import Accelerator
 except ImportError:  # pragma: no cover - exercised only in minimal envs
     Accelerator = None  # type: ignore[assignment]
+
+
+def _tensor_is_finite(value: object) -> bool:
+    if isinstance(value, torch.Tensor):
+        return bool(torch.isfinite(value).all().item())
+    try:
+        return bool(torch.isfinite(torch.as_tensor(float(value))).item())
+    except (TypeError, ValueError):
+        return False
+
+
+def _gradients_are_finite(parameters: Iterable[torch.nn.Parameter]) -> bool:
+    for param in parameters:
+        if param.grad is not None and not bool(torch.isfinite(param.grad).all().item()):
+            return False
+    return True
+
+
+def _dpo_metrics_payload(
+    loss: torch.Tensor,
+    aux: Dict[str, torch.Tensor],
+    *,
+    skipped_nonfinite_batch: bool,
+) -> Dict[str, float]:
+    payload: Dict[str, float] = {
+        "loss": float(loss.detach().item()) if _tensor_is_finite(loss) else 0.0,
+        "skipped_nonfinite_batch": 1.0 if bool(skipped_nonfinite_batch) else 0.0,
+    }
+    for key, value in aux.items():
+        payload[str(key)] = float(value.detach().item()) if _tensor_is_finite(value) else 0.0
+    return payload
 
 
 def _load_model_from_checkpoint(path: Path, config: DiffusionTrainingConfig) -> LatentDiffusionModel:
@@ -136,16 +167,46 @@ def run_dpo(args: argparse.Namespace) -> Dict[str, float]:
                 graph_data=payload.get("graph_data") if isinstance(payload.get("graph_data"), dict) else None,
                 forward_mode="dpo_preference_loss",
             )
+            if not _tensor_is_finite(loss):
+                optimizer.zero_grad(set_to_none=True)
+                metrics = _dpo_metrics_payload(loss, aux, skipped_nonfinite_batch=True)
+                if accelerator is None or accelerator.is_main_process:
+                    print({"step": step, "skipped": "nonfinite_loss", **metrics})
+                continue
             if accelerator is not None:
                 accelerator.backward(loss)
+                params = list(model.parameters())
+                if accelerator.sync_gradients and not _gradients_are_finite(params):
+                    optimizer.zero_grad(set_to_none=True)
+                    metrics = _dpo_metrics_payload(loss, aux, skipped_nonfinite_batch=True)
+                    if accelerator.is_main_process:
+                        print({"step": step, "skipped": "nonfinite_gradient", **metrics})
+                    continue
                 if float(args.grad_clip_norm) > 0 and accelerator.sync_gradients:
-                    accelerator.clip_grad_norm_(model.parameters(), float(args.grad_clip_norm))
+                    grad_norm = accelerator.clip_grad_norm_(params, float(args.grad_clip_norm))
+                    if not _tensor_is_finite(grad_norm):
+                        optimizer.zero_grad(set_to_none=True)
+                        metrics = _dpo_metrics_payload(loss, aux, skipped_nonfinite_batch=True)
+                        if accelerator.is_main_process:
+                            print({"step": step, "skipped": "nonfinite_clipped_grad_norm", **metrics})
+                        continue
             else:
                 loss.backward()
+                params = list(model.parameters())
+                if not _gradients_are_finite(params):
+                    optimizer.zero_grad(set_to_none=True)
+                    metrics = _dpo_metrics_payload(loss, aux, skipped_nonfinite_batch=True)
+                    print({"step": step, "skipped": "nonfinite_gradient", **metrics})
+                    continue
                 if float(args.grad_clip_norm) > 0:
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), float(args.grad_clip_norm))
+                    grad_norm = torch.nn.utils.clip_grad_norm_(params, float(args.grad_clip_norm))
+                    if not _tensor_is_finite(grad_norm):
+                        optimizer.zero_grad(set_to_none=True)
+                        metrics = _dpo_metrics_payload(loss, aux, skipped_nonfinite_batch=True)
+                        print({"step": step, "skipped": "nonfinite_clipped_grad_norm", **metrics})
+                        continue
             optimizer.step()
-        metrics = {"loss": float(loss.detach().item()), **{k: float(v.detach().item()) for k, v in aux.items()}}
+        metrics = _dpo_metrics_payload(loss, aux, skipped_nonfinite_batch=False)
         is_main = bool(accelerator is None or accelerator.is_main_process)
         if is_main and step % max(1, int(args.log_every)) == 0:
             print({"step": step, **metrics})

@@ -518,6 +518,22 @@ class ConsistencyLoRATrainer:
             else:
                 teacher_param.copy_(student_param)
 
+    @staticmethod
+    def _tensor_is_finite(value: Any) -> bool:
+        if isinstance(value, torch.Tensor):
+            return bool(torch.isfinite(value).all().item())
+        try:
+            return bool(torch.isfinite(torch.as_tensor(float(value))).item())
+        except (TypeError, ValueError):
+            return False
+
+    @staticmethod
+    def _gradients_are_finite(parameters: List[torch.nn.Parameter]) -> bool:
+        for param in parameters:
+            if param.grad is not None and not bool(torch.isfinite(param.grad).all().item()):
+                return False
+        return True
+
     def _build_conditioning(
         self,
         graph_list: Optional[List[dict]],
@@ -686,14 +702,48 @@ class ConsistencyLoRATrainer:
             + (self.config.topology_alignment_weight * topology_decode_ce_loss)
             + (float(getattr(self.config, "puzzle_stage_semantics_loss_weight", 0.0)) * puzzle_stage_semantic_loss)
         )
+        if not self._tensor_is_finite(loss):
+            self.optimizer.zero_grad(set_to_none=True)
+            return {
+                "loss": 0.0,
+                "x0_loss": float(x0_loss.detach().item()) if self._tensor_is_finite(x0_loss) else 0.0,
+                "prediction_loss": float(pred_loss.detach().item()) if self._tensor_is_finite(pred_loss) else 0.0,
+                "decode_ce_loss": 0.0,
+                "topology_decode_ce_loss": 0.0,
+                **puzzle_stage_semantic_metrics,
+                "skipped_nonfinite_batch": 1.0,
+            }
 
         self.optimizer.zero_grad(set_to_none=True)
         loss.backward()
+        trainable_student_params = [p for p in self.student.parameters() if p.requires_grad]
+        if not self._gradients_are_finite(trainable_student_params):
+            self.optimizer.zero_grad(set_to_none=True)
+            return {
+                "loss": float(loss.detach().item()),
+                "x0_loss": float(x0_loss.detach().item()),
+                "prediction_loss": float(pred_loss.detach().item()),
+                "decode_ce_loss": float(decode_ce_loss.detach().item()) if self._tensor_is_finite(decode_ce_loss) else 0.0,
+                "topology_decode_ce_loss": float(topology_decode_ce_loss.detach().item()) if self._tensor_is_finite(topology_decode_ce_loss) else 0.0,
+                **puzzle_stage_semantic_metrics,
+                "skipped_nonfinite_batch": 1.0,
+            }
         if self.config.grad_clip_norm > 0:
-            torch.nn.utils.clip_grad_norm_(
-                [p for p in self.student.parameters() if p.requires_grad],
+            grad_norm = torch.nn.utils.clip_grad_norm_(
+                trainable_student_params,
                 max_norm=self.config.grad_clip_norm,
             )
+            if not self._tensor_is_finite(grad_norm):
+                self.optimizer.zero_grad(set_to_none=True)
+                return {
+                    "loss": float(loss.detach().item()),
+                    "x0_loss": float(x0_loss.detach().item()),
+                    "prediction_loss": float(pred_loss.detach().item()),
+                    "decode_ce_loss": float(decode_ce_loss.detach().item()) if self._tensor_is_finite(decode_ce_loss) else 0.0,
+                    "topology_decode_ce_loss": float(topology_decode_ce_loss.detach().item()) if self._tensor_is_finite(topology_decode_ce_loss) else 0.0,
+                    **puzzle_stage_semantic_metrics,
+                    "skipped_nonfinite_batch": 1.0,
+                }
         self.optimizer.step()
         self._update_teacher_ema()
         self.global_step += 1
@@ -705,6 +755,7 @@ class ConsistencyLoRATrainer:
             "decode_ce_loss": float(decode_ce_loss.item()),
             "topology_decode_ce_loss": float(topology_decode_ce_loss.item()),
             **puzzle_stage_semantic_metrics,
+            "skipped_nonfinite_batch": 0.0,
         }
 
     @torch.no_grad()
