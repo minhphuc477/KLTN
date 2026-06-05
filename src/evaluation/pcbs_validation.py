@@ -24,6 +24,7 @@ from src.evaluation.search_benchmark_utils import (
     confusion_ratio_vs_oracle,
     path_efficiency_ratio,
     run_astar_oracle,
+    safe_positive_int,
 )
 from src.simulation.cognitive_bounded_search import (
     AgentPersona,
@@ -363,13 +364,13 @@ def compute_pcbs_readability_metrics(
     if oracle_success and bool(pcbs_success) and oracle_path_length > 0:
         path_delta = int(pcbs_solution_length) - int(oracle_path_length)
 
-    total_steps = max(1, int(getattr(pcbs_metrics, "total_steps", pcbs_trajectory_length) or pcbs_trajectory_length))
-    unique_tiles = max(1, int(getattr(pcbs_metrics, "unique_tiles_visited", 1) or 1))
+    total_steps = safe_positive_int(getattr(pcbs_metrics, "total_steps", pcbs_trajectory_length) or pcbs_trajectory_length)
+    unique_tiles = safe_positive_int(getattr(pcbs_metrics, "unique_tiles_visited", 1) or 1)
     revisit_rate = max(0.0, float(total_steps - unique_tiles) / float(max(1, total_steps)))
     normalized_confusion = float(np.clip(float(getattr(pcbs_metrics, "confusion_index", 0.0) or 0.0) / 3.0, 0.0, 1.0))
     normalized_entropy = float(np.clip(float(getattr(pcbs_metrics, "navigation_entropy", 0.0) or 0.0) / 2.0, 0.0, 1.0))
     normalized_load = float(np.clip(float(getattr(pcbs_metrics, "cognitive_load", 0.0) or 0.0) / 2.5, 0.0, 1.0))
-    budget_fraction = float(np.clip(float(pcbs_states) / float(max(1, int(timeout_pcbs))), 0.0, 1.0))
+    budget_fraction = float(np.clip(float(pcbs_states) / float(safe_positive_int(timeout_pcbs)), 0.0, 1.0))
     stall_fraction = float(np.clip(float(puzzle_stall_steps) / float(max(1, pcbs_trajectory_length)), 0.0, 1.0))
     bounded_weights = _normalize_weight_map(
         bounded_rationality_weights,
@@ -595,12 +596,17 @@ def evaluate_astar_vs_pcbs(
     )
     pcbs_success, pcbs_path, pcbs_states, pcbs_metrics = pcbs.solve()
     pcbs_status = "success"
+    timeout_pcbs_i = safe_positive_int(timeout_pcbs)
     if not pcbs_success:
-        pcbs_status = "budget_exhausted" if int(pcbs_states) >= int(timeout_pcbs) else "failed"
+        pcbs_status = "budget_exhausted" if int(pcbs_states) >= timeout_pcbs_i else "failed"
 
     pcbs_trajectory_length = int(len(pcbs_path))
     pcbs_solution_length = pcbs_trajectory_length if bool(pcbs_success) else 0
-    total_revisits = max(0, int(pcbs_metrics.total_steps) - int(pcbs_metrics.unique_tiles_visited))
+    total_revisits = max(
+        0,
+        safe_positive_int(getattr(pcbs_metrics, "total_steps", 0), default=0)
+        - safe_positive_int(getattr(pcbs_metrics, "unique_tiles_visited", 0), default=0),
+    )
     puzzle_stall_steps = _count_puzzle_stall_steps(grid, pcbs_path, goal)
     confusion_ratio = confusion_ratio_vs_oracle(
         int(oracle["path_length"]),
@@ -614,7 +620,7 @@ def evaluate_astar_vs_pcbs(
         pcbs_solution_length=pcbs_solution_length,
         pcbs_trajectory_length=pcbs_trajectory_length,
         pcbs_states=int(pcbs_states),
-        timeout_pcbs=int(timeout_pcbs),
+        timeout_pcbs=timeout_pcbs_i,
         pcbs_metrics=pcbs_metrics,
         puzzle_stall_steps=puzzle_stall_steps,
         bounded_rationality_weights=bounded_weights,
@@ -627,7 +633,7 @@ def evaluate_astar_vs_pcbs(
         pcbs_solution_length=pcbs_solution_length,
         pcbs_trajectory_length=pcbs_trajectory_length,
         pcbs_states=int(pcbs_states),
-        timeout_pcbs=int(timeout_pcbs),
+        timeout_pcbs=timeout_pcbs_i,
         pcbs_metrics=pcbs_metrics,
         readability_metrics=readability_metrics,
         puzzle_stall_steps=puzzle_stall_steps,
@@ -645,7 +651,7 @@ def evaluate_astar_vs_pcbs(
             "persona_source": persona_source,
             "calibration_path": str(calibration_path) if calibration_path is not None else None,
             "seed": int(seed),
-            "timeout": int(timeout_pcbs),
+            "timeout": timeout_pcbs_i,
             "success": bool(pcbs_success),
             "path_length": int(pcbs_solution_length),
             "trajectory_length": int(pcbs_trajectory_length),

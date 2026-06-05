@@ -1430,6 +1430,8 @@ class MaskedRoomTrainer:
                     metrics["skipped_nonfinite_batch"] = 1.0
                     return metrics
             self.optimizer.step()
+            if self.scheduler is not None:
+                self.scheduler.step()
             self.global_step += 1
         metrics = dict(metrics)
         metrics["loss"] = float(total_loss.detach().item())
@@ -1714,9 +1716,7 @@ def train_masked_room(config: MaskedRoomTrainingConfig) -> MaskedRoomTrainer:
                 if batch_idx + 1 >= int(getattr(config, "validation_max_batches", 16)):
                     break
 
-        if train_batches > 0:
-            trainer.scheduler.step()
-        else:
+        if train_batches <= 0:
             logger.warning(
                 "Skipping masked-room scheduler step for epoch %d because no train batches were processed.",
                 epoch,

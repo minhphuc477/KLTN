@@ -19,7 +19,7 @@ from src.simulation import GameState, ZeldaLogicEnv, SEMANTIC_PALETTE
 
 def print_status(name: str, success: bool):
     """Print colorful status message."""
-    status = "âœ… PASS" if success else "âŒ FAIL"
+    status = "[OK] PASS" if success else "[FAIL] FAIL"
     print(f"{status} - {name}")
 
 
@@ -227,11 +227,11 @@ def main():
     print()
     
     if failed == 0:
-        print("ðŸŽ‰ ALL TESTS PASSED! ðŸŽ‰")
+        print("[OK] ALL TESTS PASSED! [OK]")
         print("All TIER 2 & 3 features are working correctly.")
         return 0
     else:
-        print("âš ï¸  SOME TESTS FAILED")
+        print("[WARN]  SOME TESTS FAILED")
         print("Check error messages above for details.")
         return 1
 

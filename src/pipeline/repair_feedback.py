@@ -198,14 +198,15 @@ def logicnet_guided_inpaint_room(
     if old_guidance_scale is not None:
         guidance_module.guidance_scale = float(old_guidance_scale) * float(max(0.0, guidance_scale_multiplier))
     try:
-        z_inpaint = diffusion.inpaint(
-            x_0=z_0,
-            mask=latent_mask,
-            context=condition,
-            graph_data=graph_data,
-            num_steps=max(8, int(num_diffusion_steps)),
-            noise_strength=float(max(0.0, min(1.0, noise_strength))),
-        )
+        with torch.no_grad():
+            z_inpaint = diffusion.inpaint(
+                x_0=z_0,
+                mask=latent_mask,
+                context=condition,
+                graph_data=graph_data,
+                num_steps=max(8, int(num_diffusion_steps)),
+                noise_strength=float(max(0.0, min(1.0, noise_strength))),
+            )
     finally:
         if old_guidance_scale is not None:
             guidance_module.guidance_scale = old_guidance_scale

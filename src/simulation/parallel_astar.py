@@ -11,8 +11,8 @@ Strategy:
 4. Return the best successful worker result
 
 Performance:
-- Theoretical: NÃ— speedup with N cores
-- Practical: 2-3Ã— speedup due to synchronization overhead
+- Theoretical: Nx speedup with N cores
+- Practical: 2-3x speedup due to synchronization overhead
 - Best for large state spaces (>10000 states)
 
 Python Implementation Notes:
@@ -316,9 +316,9 @@ class ParallelAStarSolver:
     - First-to-goal termination
     
     Performance:
-    - Small dungeons (<1000 states): ~1.2Ã— speedup (overhead dominates)
-    - Medium dungeons (1000-5000 states): ~2Ã— speedup
-    - Large dungeons (>5000 states): ~2.5-3Ã— speedup
+    - Small dungeons (<1000 states): ~1.2x speedup (overhead dominates)
+    - Medium dungeons (1000-5000 states): ~2x speedup
+    - Large dungeons (>5000 states): ~2.5-3x speedup
     """
     
     def __init__(self, env: ZeldaLogicEnv, n_workers: Optional[int] = None):

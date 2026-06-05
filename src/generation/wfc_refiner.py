@@ -13,7 +13,7 @@ Solution:
     1. Maintain "current inventory" during collapse
     2. Only allow LOCK tiles if corresponding KEY is already placed
     3. Propagate state changes through the grid
-    4. Ensure causal ordering: KEY â†’ LOCK
+    4. Ensure causal ordering: KEY -> LOCK
 
 Algorithm:
     1. Initialize entropy grid
@@ -227,7 +227,7 @@ class CausalWFC:
             # Update game state
             self._update_game_state(cell.row, cell.col, tile_id)
             
-            # Path-guided constraint: verify startâ†’goal connectivity is not blocked
+            # Path-guided constraint: verify start->goal connectivity is not blocked
             # Check periodically (every 50 iterations) to avoid performance hit
             if iteration > 0 and iteration % 50 == 0:
                 if not self._verify_path_connectivity(start_pos, goal_pos):

@@ -89,7 +89,7 @@ class ThemeManager:
     Design:
     - Semantic layer: Abstract tile IDs (FLOOR=1, WALL=2, etc.)
     - Visual layer: Theme-specific sprites and colors
-    - Mapping layer: ThemeConfig defines semantic â†’ visual
+    - Mapping layer: ThemeConfig defines semantic -> visual
     
     This allows:
     - Swapping themes without changing gameplay

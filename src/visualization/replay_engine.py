@@ -11,7 +11,7 @@ This engine takes PRE-COMPUTED solutions (from the validator/solver) and
 visualizes them. It does NOT run A* during rendering (which would cause
 frame drops). The workflow is:
 
-    1. Solver computes path â†’ List[Tuple[int, int]]
+    1. Solver computes path -> List[Tuple[int, int]]
     2. ReplayEngine receives path
     3. ReplayEngine animates agent following path at configurable speed
 

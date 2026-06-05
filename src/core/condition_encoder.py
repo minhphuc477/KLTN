@@ -1400,7 +1400,12 @@ class CrossAttentionFusion(nn.Module):
             has_valid_context = valid_mask.any(dim=-1)
 
         if HAS_SDPA:
-            attn_mask = valid_mask[:, None, None, :] if valid_mask is not None else None
+            attn_mask = None
+            if valid_mask is not None:
+                safe_valid_mask = valid_mask.clone()
+                if has_valid_context is not None and not torch.all(has_valid_context):
+                    safe_valid_mask[~has_valid_context, 0] = True
+                attn_mask = safe_valid_mask[:, None, None, :]
             attn_output = F.scaled_dot_product_attention(
                 Q,
                 K,
@@ -1622,6 +1627,10 @@ class DualStreamConditionEncoder(nn.Module):
             Conditioning vector [B, output_dim], optionally paired with global
             graph tokens [B, N, output_dim].
         """
+        if boundary_constraints.dim() == 1:
+            boundary_constraints = boundary_constraints.unsqueeze(0)
+        if position.dim() == 1:
+            position = position.unsqueeze(0)
         batch_size = boundary_constraints.shape[0]
         device = boundary_constraints.device
         

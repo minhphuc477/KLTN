@@ -16,6 +16,17 @@ from src.simulation.search_status import oracle_status_from_outcome
 from src.simulation.validator import SolverDiagnostics, StateSpaceAStar
 
 
+def safe_positive_int(value: Any, default: int = 1, maximum: int = 2_147_483_647) -> int:
+    """Convert telemetry/config values to a bounded positive int without crashing."""
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return int(default)
+    if not math.isfinite(numeric):
+        return int(maximum)
+    return int(max(1, min(float(maximum), numeric)))
+
+
 def path_efficiency_ratio(path_length: int, manhattan_distance: int) -> float:
     """
     Return a bounded path-efficiency ratio in [0, 1].
@@ -30,7 +41,7 @@ def path_efficiency_ratio(path_length: int, manhattan_distance: int) -> float:
     manhattan_i = int(manhattan_distance)
     if path_length_i <= 0 or manhattan_i <= 0:
         return 0.0
-    return float(manhattan_i) / float(max(1, path_length_i))
+    return float(max(0.0, min(1.0, float(manhattan_i) / float(max(1, path_length_i)))))
 
 
 def confusion_ratio_vs_oracle(
@@ -56,7 +67,7 @@ def confusion_ratio_vs_oracle(
     candidate_len = int(candidate_path_length)
     if oracle_len <= 0 or candidate_len <= 0:
         return float("nan")
-    return float(candidate_len) / float(oracle_len)
+    return float(max(0, candidate_len - oracle_len)) / float(oracle_len)
 
 
 def normalized_confusion_ratio(
@@ -117,7 +128,7 @@ def run_astar_oracle(env: Any, timeout: int, heuristic_mode: str = "balanced") -
     }
     solver = StateSpaceAStar(
         env,
-        timeout=int(timeout),
+        timeout=safe_positive_int(timeout),
         heuristic_mode=str(heuristic_mode or "balanced"),
         priority_options=priority_options,
         search_mode="astar",
@@ -132,7 +143,7 @@ def run_astar_oracle(env: Any, timeout: int, heuristic_mode: str = "balanced") -
         env.reset()
         fallback = StateSpaceAStar(
             env,
-            timeout=int(timeout),
+            timeout=safe_positive_int(timeout),
             heuristic_mode=str(heuristic_mode or "balanced"),
             priority_options=priority_options,
             search_mode="dijkstra",

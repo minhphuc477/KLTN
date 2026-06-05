@@ -686,27 +686,31 @@ def generate_room(
             num_embeddings = int(getattr(getattr(pipeline.vqvae, "quantizer", object()), "num_embeddings", 512))
         active_codebook_size = int(max(1, min(num_embeddings, int(categorical_codebook_size or num_embeddings))))
 
-        probs = np.ones(active_codebook_size, dtype=np.float64)
+        probs_t = torch.ones(active_codebook_size, device=pipeline.device, dtype=torch.float32)
         try:
             usage = pipeline.vqvae.get_codebook_usage()
             if isinstance(usage, torch.Tensor):
-                usage_np = usage.detach().float().cpu().numpy()
-                if usage_np.size >= active_codebook_size:
-                    usage_np = np.asarray(usage_np[:active_codebook_size], dtype=np.float64)
-                    if float(np.sum(usage_np)) > 0.0:
-                        probs = usage_np
+                usage_t = usage.detach().to(device=pipeline.device, dtype=torch.float32).flatten()
+                if int(usage_t.numel()) >= active_codebook_size:
+                    usage_t = usage_t[:active_codebook_size].clamp_min(0.0)
+                    if bool(torch.isfinite(usage_t).all()) and float(usage_t.sum().item()) > 0.0:
+                        probs_t = usage_t
         except (AttributeError, RuntimeError, ValueError, TypeError) as e:
             pipeline._bump_diagnostic("categorical_prior_fallback")
             logger.debug("Falling back to uniform categorical priors (codebook usage unavailable): %s", e)
-        probs = np.asarray(probs, dtype=np.float64)
-        probs = probs / max(float(np.sum(probs)), 1e-9)
+        probs_t = probs_t / probs_t.sum().clamp_min(1e-9)
 
-        sampled_indices = local_np_rng.choice(
-            active_codebook_size,
-            size=(1, latent_h, latent_w),
-            p=probs,
+        torch_generator = None
+        if seed is not None:
+            torch_generator = torch.Generator(device=pipeline.device)
+            torch_generator.manual_seed(int(seed))
+        sampled_flat = torch.multinomial(
+            probs_t,
+            num_samples=int(latent_h * latent_w),
+            replacement=True,
+            generator=torch_generator,
         )
-        indices_t = torch.from_numpy(sampled_indices).to(pipeline.device, dtype=torch.long)
+        indices_t = sampled_flat.view(1, latent_h, latent_w).to(dtype=torch.long)
         _record_stage_time(stage_times, "categorical_sample_time_sec", sampler_started_at)
         decode_started_at = time.perf_counter()
         logits = pipeline.vqvae.decode_indices(indices_t)  # (1, 44, 16, 11)

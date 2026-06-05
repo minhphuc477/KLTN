@@ -410,7 +410,7 @@ class DiscreteMaskedRoomModel(nn.Module):
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
         batch_size = int(tokens.shape[0])
         device = tokens.device
-        available_counts = (~fixed_mask).sum(dim=(1, 2))
+        available_counts = ((~fixed_mask) & (~committed)).sum(dim=(1, 2)).clamp_min(1)
 
         logits = torch.zeros(batch_size, self.num_classes, ROOM_HEIGHT, ROOM_WIDTH, device=device)
         hidden = self._embed_tokens(tokens)
@@ -427,7 +427,7 @@ class DiscreteMaskedRoomModel(nn.Module):
             progress = float(i + 1) / float(max(1, total_steps))
             anneal = max(0.25, 1.0 - progress)
             current_temperature = max(1e-6, float(temperature) * anneal) if stochastic else max(1e-6, float(temperature))
-            probs = F.softmax(logits / current_temperature, dim=1)
+            probs = F.softmax((logits / current_temperature).float(), dim=1).to(dtype=logits.dtype)
             prediction, confidence = self._sample_predictions(
                 probs,
                 stochastic=stochastic,
@@ -787,7 +787,12 @@ class DiscreteMaskedRoomModel(nn.Module):
         if fixed_mask is not None and fixed_tokens is not None:
             masked_tokens[fixed_mask] = fixed_tokens[fixed_mask]
 
-        step = torch.round(mask_ratio * float(self.default_num_steps - 1)).long().clamp(min=0)
+        step = torch.randint(
+            low=0,
+            high=max(1, int(self.default_num_steps)),
+            size=(batch_size,),
+            device=device,
+        )
         logits = self.forward(masked_tokens, step, context, graph_data=graph_data)
         loss_map = F.cross_entropy(logits, target, reduction="none")
         denom = train_mask.float().sum().clamp(min=1.0)
@@ -897,7 +902,10 @@ class DiscreteMaskedRoomModel(nn.Module):
                     graph_data=graph_data,
                 )
                 logits = self._apply_fixed_token_logits(logits, fixed_tokens=fixed_tokens, fixed_mask=fixed_mask)
-                current_probs = F.softmax(logits / max(1e-6, float(temperature)), dim=1)
+                current_probs = F.softmax(
+                    (logits / max(1e-6, float(temperature))).float(),
+                    dim=1,
+                ).to(dtype=logits.dtype)
                 safe_tokens = tokens.clamp(min=0, max=self.num_classes - 1)
                 current_confidence = current_probs.gather(1, safe_tokens.unsqueeze(1)).squeeze(1)
                 candidates = committed & editable_base

@@ -112,7 +112,7 @@ class SemanticGaussianVAE(nn.Module):
         return matrix
 
     def _illegal_adjacency_penalty(self, recon_logits: Tensor) -> Tensor:
-        probs = F.softmax(recon_logits, dim=1)
+        probs = F.softmax(recon_logits.float(), dim=1).to(dtype=recon_logits.dtype)
         illegal = self.illegal_adjacency_matrix.to(dtype=probs.dtype, device=probs.device)
 
         shifts = [
@@ -146,7 +146,9 @@ class SemanticGaussianVAE(nn.Module):
         return (loss * weights).mean()
 
     def _kl_divergence(self, mu: Tensor, logvar: Tensor) -> Tensor:
-        kl = -0.5 * (1.0 + logvar - mu.pow(2) - logvar.exp())
+        mu_f = mu.float()
+        logvar_f = logvar.float().clamp(min=-30.0, max=20.0)
+        kl = -0.5 * (1.0 + logvar_f - mu_f.pow(2) - logvar_f.exp())
         latent_volume = max(1, int(mu.shape[1] * mu.shape[2] * mu.shape[3]))
         return kl.sum(dim=(1, 2, 3)).mean() / float(latent_volume)
 

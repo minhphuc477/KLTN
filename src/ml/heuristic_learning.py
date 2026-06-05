@@ -13,11 +13,11 @@ Strategy:
 
 Neural Network Architecture:
 - Input: State features (position, inventory, ~10 features)
-- Hidden: 128 â†’ 64 â†’ 32 neurons (ReLU)
+- Hidden: 128 -> 64 -> 32 neurons (ReLU)
 - Output: Predicted cost to goal (linear)
 
 Admissibility:
-- NN heuristic must satisfy: h(s) â‰¤ h*(s) (never overestimate)
+- NN heuristic must satisfy: h(s) <= h*(s) (never overestimate)
 - Enforce via post-training scaling (multiply by 0.9)
 """
 
@@ -295,7 +295,7 @@ class HeuristicTrainer:
         """
         Scale network outputs to ensure admissibility.
         
-        Admissible heuristic: h(s) â‰¤ h*(s) (never overestimate)
+        Admissible heuristic: h(s) <= h*(s) (never overestimate)
         
         Simple approach: Multiply all predictions by 0.9
         """

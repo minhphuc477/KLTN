@@ -1,5 +1,5 @@
 """
-COGNITIVE BOUNDED SEARCH (CBS) â€” Human-Like Dungeon Navigation
+COGNITIVE BOUNDED SEARCH (CBS) -- Human-Like Dungeon Navigation
 ================================================================
 
 This module implements cognitively-realistic agents for validating dungeon
@@ -11,7 +11,7 @@ SCIENTIFIC FOUNDATION:
 - Miller's Law (1956): Working memory capacity ~7Â±2 items
 - Kahneman (2011): System 1/System 2 decision-making
 - Simon (1955): Bounded rationality and satisficing
-- Newell & Simon (1972): Human Problem Solving â€” search space constraints
+- Newell & Simon (1972): Human Problem Solving -- search space constraints
 
 
 INTEGRATION:
@@ -87,18 +87,18 @@ class CBSMetrics:
         confusion_index: Entropy-normalized revisit pressure.
                         High values indicate the agent got lost or backtracked.
                         Formula: revisits / (unique_visits * log(unique_visits))
-                        Range: [0, âˆž), optimal â‰ˆ 0, random-walk-like â‰ˆ 1
+                        Range: [0, inf), optimal ~ 0, random-walk-like ~ 1
                         
         navigation_entropy: Shannon entropy of direction choices.
                            High = random wandering, Low = directed movement.
-                           Formula: -Î£ p(dir) logâ‚‚ p(dir)
+                           Formula: -sum p(dir) log2 p(dir)
                            Range: [0, 2] for 4 directions, [0, 3] for 8
                            
         cognitive_load: Estimated mental effort based on memory usage and
                        belief uncertainty. Combines Miller's capacity with
                        confidence variance.
-                       Formula: (memory_items / capacity) Ã— (1 + ÏƒÂ²_confidence)
-                       Range: [0, âˆž), typical [0.1, 2.0]
+                       Formula: (memory_items / capacity) x (1 + sigma^2_confidence)
+                       Range: [0, inf), typical [0.1, 2.0]
                        
         aha_latency: Legacy internal name for goal exploitation latency:
                     steps between first seeing the goal and reaching it.
@@ -147,7 +147,7 @@ class CBSMetrics:
     belief_entropy_final: float = 0.0  # Final belief map entropy
     
     # Paper metrics (CBS+ Paper Section 4)
-    room_entropy: float = 0.0  # Navigational entropy H = -Î£ p(room) Ã— logâ‚‚(p(room))
+    room_entropy: float = 0.0  # Navigational entropy H = -sum p(room) x log2(p(room))
     unique_rooms_visited: int = 0
     total_room_visits: int = 0
     deliberation_events: int = 0
@@ -236,12 +236,12 @@ class CBSMetrics:
 â• â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•£
 â•‘ Confusion Index:     {self.confusion_index:>8.3f}  (revisits/unique, low=good)     â•‘
 â•‘ Navigation Entropy:  {self.navigation_entropy:>8.3f}  (bits, 0=linear, 2=random)   â•‘
-â•‘ Cognitive Load:      {self.cognitive_load:>8.3f}  (memoryÃ—uncertainty)            â•‘
-â•‘ Goal-Sighting Lat.:  {self.aha_latency:>8d}  steps (seeâ†’reach goal)             â•‘
+â•‘ Cognitive Load:      {self.cognitive_load:>8.3f}  (memoryxuncertainty)            â•‘
+â•‘ Goal-Sighting Lat.:  {self.aha_latency:>8d}  steps (see->reach goal)             â•‘
 â• â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•£
-â•‘ Unique Tiles:        {self.unique_tiles_visited:>8d}  â”‚ Total Steps: {self.total_steps:>8d}          â•‘
-â•‘ Exploration Eff:     {self.exploration_efficiency:>8.3f}  â”‚ Peak Memory: {self.peak_memory_usage:>8d}          â•‘
-â•‘ Decisions Made:      {self.decisions_made:>8d}  â”‚ Suboptimal:  {self.suboptimal_decisions:>8d}          â•‘
+â•‘ Unique Tiles:        {self.unique_tiles_visited:>8d}  | Total Steps: {self.total_steps:>8d}          â•‘
+â•‘ Exploration Eff:     {self.exploration_efficiency:>8.3f}  | Peak Memory: {self.peak_memory_usage:>8d}          â•‘
+â•‘ Decisions Made:      {self.decisions_made:>8d}  | Suboptimal:  {self.suboptimal_decisions:>8d}          â•‘
 â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 """
 
@@ -1627,7 +1627,7 @@ class AgentPersona(Enum):
     BALANCED = "balanced"         # Mix of all heuristics
     COMPLETIONIST = "completionist"  # Collects all items before goal
     NOVICE = "novice"             # Risk-averse, complexity-averse, weak memory
-    GREEDY = "greedy"             # Static persona: NO memory decay (Î»=1.0), proves decay is active ingredient
+    GREEDY = "greedy"             # Static persona: NO memory decay (lambda=1.0), proves decay is active ingredient
 
 
 @dataclass
@@ -1667,10 +1667,10 @@ class PersonaConfig:
     satisficing_threshold: float = 0.8  # Accept "good enough" solutions
     random_tiebreaker: float = 0.1      # Randomness in equal-score decisions
     
-    # Utility function weights (Î±, Î², Î³)
-    goal_weight: float = 0.6        # Î±: goal progress weight
-    curiosity_weight: float = 0.3   # Î²: information gain weight  
-    risk_weight: float = 0.1        # Î³: risk avoidance weight
+    # Utility function weights (alpha, beta, gamma)
+    goal_weight: float = 0.6        # alpha: goal progress weight
+    curiosity_weight: float = 0.3   # beta: information gain weight  
+    risk_weight: float = 0.1        # gamma: risk avoidance weight
     revisit_penalty_weight: float = 0.15
     loot_weight: float = 0.15
     combat_penalty_weight: float = 0.1
@@ -1749,9 +1749,9 @@ class PersonaConfig:
                 },
                 satisficing_threshold=0.7,
                 random_tiebreaker=0.2,    # Some randomness
-                goal_weight=0.3,      # Î± = 0.3
-                curiosity_weight=0.6, # Î² = 0.6
-                risk_weight=0.1,      # Î³ = 0.1
+                goal_weight=0.3,      # alpha = 0.3
+                curiosity_weight=0.6, # beta = 0.6
+                risk_weight=0.1,      # gamma = 0.1
                 revisit_penalty_weight=0.0,
                 loot_weight=0.40,
                 combat_penalty_weight=0.05,
@@ -1788,9 +1788,9 @@ class PersonaConfig:
                 },
                 satisficing_threshold=0.9,
                 random_tiebreaker=0.05,
-                goal_weight=0.5,      # Î± = 0.5
-                curiosity_weight=0.2, # Î² = 0.2
-                risk_weight=0.3,      # Î³ = 0.3
+                goal_weight=0.5,      # alpha = 0.5
+                curiosity_weight=0.2, # beta = 0.2
+                risk_weight=0.3,      # gamma = 0.3
                 revisit_penalty_weight=0.20,
                 loot_weight=0.15,
                 combat_penalty_weight=0.55,
@@ -1827,9 +1827,9 @@ class PersonaConfig:
                 },
                 satisficing_threshold=0.6,
                 random_tiebreaker=0.3,    # More random (confused)
-                goal_weight=0.4,      # Î± = 0.4
-                curiosity_weight=0.3, # Î² = 0.3
-                risk_weight=0.3,      # Î³ = 0.3
+                goal_weight=0.4,      # alpha = 0.4
+                curiosity_weight=0.3, # beta = 0.3
+                risk_weight=0.3,      # gamma = 0.3
                 revisit_penalty_weight=0.12,
                 loot_weight=0.10,
                 combat_penalty_weight=0.25,
@@ -1928,13 +1928,13 @@ class PersonaConfig:
             )
         
         elif persona == AgentPersona.GREEDY:
-            # GREEDY/STATIC BASELINE: No memory decay (Î»=1.0)
+            # GREEDY/STATIC BASELINE: No memory decay (lambda=1.0)
             # This persona proves memory decay is the "active ingredient"
             # by comparing performance with decay disabled
             return cls(
                 name="Greedy (Static)",
                 memory_capacity=7,
-                memory_decay_rate=1.0,   # NO DECAY - Î»=1.0 (Ebbinghaus control)
+                memory_decay_rate=1.0,   # NO DECAY - lambda=1.0 (Ebbinghaus control)
                 vision_radius=5,
                 vision_accuracy=0.9,
                 vision_cone=360.0,
@@ -1947,9 +1947,9 @@ class PersonaConfig:
                 },
                 satisficing_threshold=0.9,
                 random_tiebreaker=0.05,
-                goal_weight=0.7,      # Î± = 0.7 (goal-focused)
-                curiosity_weight=0.2, # Î² = 0.2
-                risk_weight=0.1,      # Î³ = 0.1
+                goal_weight=0.7,      # alpha = 0.7 (goal-focused)
+                curiosity_weight=0.2, # beta = 0.2
+                risk_weight=0.1,      # gamma = 0.1
                 revisit_penalty_weight=0.35,
                 loot_weight=0.10,
                 combat_penalty_weight=0.10,
@@ -1986,9 +1986,9 @@ class PersonaConfig:
                 },
                 satisficing_threshold=0.8,
                 random_tiebreaker=0.15,
-                goal_weight=0.58,      # Î± = 0.58
-                curiosity_weight=0.28, # Î² = 0.28
-                risk_weight=0.14,      # Î³ = 0.14
+                goal_weight=0.58,      # alpha = 0.58
+                curiosity_weight=0.28, # beta = 0.28
+                risk_weight=0.14,      # gamma = 0.14
                 revisit_penalty_weight=0.06,
                 loot_weight=0.18,
                 combat_penalty_weight=0.12,
@@ -3139,7 +3139,7 @@ class CognitiveBoundedSearch:
         base = (total_score / total_weight) if total_weight > 0 else 0.0
 
         # Explicit bounded-rational utility:
-        # U = Î±Â·goal_progress + Î²Â·info_gain - Î³Â·risk
+        # U = alphaÂ·goal_progress + betaÂ·info_gain - gammaÂ·risk
         goal_progress = self._goal_progress(cog_state.game_state.position, target_pos)
 
         risk = self._estimate_risk(cog_state, target_pos, target_tile)
@@ -3721,7 +3721,7 @@ class CognitiveBoundedSearch:
         nav_entropy = self._compute_entropy(dict(self._direction_counts))
         
         # Room-level navigational entropy (CBS Paper Formula D)
-        # H = -Î£ p(room) Ã— logâ‚‚(p(room)) where p(room) = visits(room) / total_visits
+        # H = -sum p(room) x log2(p(room)) where p(room) = visits(room) / total_visits
         room_visit_counts = dict(self._room_visit_counts)
         room_entropy = self._compute_room_entropy(room_visit_counts)
         unique_rooms = len(room_visit_counts)

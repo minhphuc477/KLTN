@@ -94,6 +94,11 @@ class TimestepEmbedding(nn.Module):
         super().__init__()
         self.dim = dim
         self.max_period = max_period
+        half_dim = max(1, int(dim) // 2)
+        frequencies = torch.exp(
+            -math.log(float(max_period)) * torch.arange(half_dim, dtype=torch.float32) / float(half_dim)
+        )
+        self.register_buffer("frequencies", frequencies, persistent=False)
         
         # MLP to project embeddings
         self.mlp = nn.Sequential(
@@ -115,10 +120,7 @@ class TimestepEmbedding(nn.Module):
         if t.dim() == 2:
             t = t.squeeze(-1)
         
-        half_dim = self.dim // 2
-        freqs = torch.exp(
-            -math.log(self.max_period) * torch.arange(half_dim, device=t.device) / half_dim
-        )
+        freqs = self.frequencies.to(device=t.device, dtype=torch.float32)
         args = t[:, None].float() * freqs[None]
         embedding = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
 
@@ -1044,6 +1046,8 @@ class ResBlock(nn.Module):
         
         self.norm2 = nn.GroupNorm(self._num_groups(out_channels), out_channels)
         self.conv2 = nn.Conv2d(out_channels, out_channels, 3, padding=1)
+        nn.init.zeros_(self.conv2.weight)
+        nn.init.zeros_(self.conv2.bias)
         
         self.time_mlp = nn.Sequential(
             nn.SiLU(),
@@ -1067,12 +1071,13 @@ class ResBlock(nn.Module):
         h = F.silu(h)
         h = self.conv1(h)
         
-        # Time conditioning (scale and shift)
+        h = self.norm2(h)
+
+        # Time conditioning (scale and shift) after normalization so it is not erased.
         t_out = self.time_mlp(t_emb)[:, :, None, None]
         scale, shift = t_out.chunk(2, dim=1)
         h = h * (1 + scale) + shift
-        
-        h = self.norm2(h)
+
         h = F.silu(h)
         h = self.dropout(h)
         h = self.conv2(h)
@@ -1594,6 +1599,8 @@ class UNetDenoiser(nn.Module):
         # Output projection
         self.output_norm = nn.GroupNorm(ResBlock.num_groups(current_ch), current_ch)
         self.output_proj = nn.Conv2d(current_ch, out_channels, 3, padding=1)
+        nn.init.zeros_(self.output_proj.weight)
+        nn.init.zeros_(self.output_proj.bias)
     
     def forward(
         self, 
@@ -1723,6 +1730,8 @@ class DiTBlock(nn.Module):
             nn.Linear(mlp_hidden, hidden_dim),
         )
         self.adaLN = nn.Sequential(nn.SiLU(), nn.Linear(cond_dim, 9 * hidden_dim))
+        nn.init.zeros_(self.adaLN[-1].weight)
+        nn.init.zeros_(self.adaLN[-1].bias)
         self.perturbation_mode = "none"
 
     def set_perturbation_mode(self, mode: str = "none") -> None:
@@ -4065,8 +4074,9 @@ class LatentDiffusionModel(nn.Module):
         # --- Phase 4B: Min-SNR-γ weighting ---
         if self.min_snr_gamma > 0:
             snr = self.alphas_cumprod[t] / (1.0 - self.alphas_cumprod[t] + 1e-8)
-            # Clamp SNR and compute weight
-            min_snr_weight = torch.clamp(snr, max=self.min_snr_gamma) / (snr + 1e-8)
+            # Epsilon targets scale with SNR; velocity targets scale with SNR + 1.
+            denominator = snr + 1.0 if self.prediction_type == 'v' else snr
+            min_snr_weight = torch.clamp(snr, max=self.min_snr_gamma) / (denominator + 1e-8)
             per_sample_loss = per_sample_loss * min_snr_weight
         
         loss = per_sample_loss.mean()

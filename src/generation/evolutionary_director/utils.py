@@ -61,7 +61,7 @@ def print_graph_summary(G: nx.Graph) -> None:
         
         if start_nodes and goal_nodes:
             path_length = nx.shortest_path_length(G, start_nodes[0], goal_nodes[0])
-            print("  Shortest path (START â†’ GOAL): {} nodes".format(path_length))
+            print("  Shortest path (START -> GOAL): {} nodes".format(path_length))
     else:
         print("\nConnectivity: DISCONNECTED")
     

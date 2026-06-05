@@ -9,7 +9,7 @@ class TensionCurveEvaluator:
     """
     Evaluates how well a graph's tension curve matches a target curve.
     
-    Tension is extracted from the critical path (START â†’ GOAL) by
+    Tension is extracted from the critical path (START -> GOAL) by
     assigning difficulty values to each node type and interpolating.
     """
     
@@ -1497,7 +1497,7 @@ class TensionCurveEvaluator:
     
     def _is_solvable(self, graph: MissionGraph) -> bool:
         """
-        Check if graph is solvable (path exists START â†’ GOAL).
+        Check if graph is solvable (path exists START -> GOAL).
         
         A graph is solvable if:
         1. It has both START and GOAL nodes

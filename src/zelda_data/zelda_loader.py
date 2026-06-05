@@ -82,7 +82,7 @@ from src.pipeline.room_topology_conditioning import (
 )
 from src.pipeline.spatial_utils import clamp_room_coord, parse_room_coord
 from src.utils.style_tokens import iter_style_metadata_candidates, resolve_style_token_id
-from src.zelda_data.splits import normalize_dungeon_ids, normalize_variants
+from src.zelda_data.splits import DEFAULT_TRAIN_DUNGEONS, normalize_dungeon_ids, normalize_variants
 VGLC_AVAILABLE = True
 logger.info("VGLC adapter available via zelda_core")
 
@@ -756,7 +756,7 @@ class ZeldaDungeonDataset(Dataset):
         # Load all dungeons via adapter
         adapter = ZeldaDungeonAdapter(str(self.data_dir))
         
-        dungeon_iter = self.dungeon_ids if self.dungeon_ids is not None else range(1, 10)
+        dungeon_iter = self.dungeon_ids if self.dungeon_ids is not None else DEFAULT_TRAIN_DUNGEONS
         for dungeon_num in dungeon_iter:  # Dungeons 1-9
             for variant in self.variants:  # Two quest variants
                 try:
@@ -983,7 +983,7 @@ class ZeldaRoomDataset(Dataset):
         
         adapter = ZeldaDungeonAdapter(str(data_dir))
         
-        dungeon_iter = self.dungeon_ids if self.dungeon_ids is not None else range(1, 10)
+        dungeon_iter = self.dungeon_ids if self.dungeon_ids is not None else DEFAULT_TRAIN_DUNGEONS
         for dungeon_num in dungeon_iter:
             for variant in self.variants:
                 try:

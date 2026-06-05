@@ -1480,7 +1480,7 @@ class DiffusionTrainer:
         - Data loader returns [B, 1, H, W] normalized tile IDs in [0, 1]
         - VQ-VAE expects [B, C=44, H, W] one-hot encoded tiles
         
-        Conversion: denormalize â†’ integer tile IDs â†’ one-hot â†’ VQ-VAE encode
+        Conversion: denormalize -> integer tile IDs -> one-hot -> VQ-VAE encode
         """
         import torch.nn.functional as F
         
@@ -1493,7 +1493,7 @@ class DiffusionTrainer:
                 tile_ids = (x.squeeze(1) * (num_classes - 1)).round().long()
                 tile_ids = tile_ids.clamp(0, num_classes - 1)
                 
-                # Step 2: One-hot encode â†’ [B, H, W, C] â†’ permute to [B, C, H, W]
+                # Step 2: One-hot encode -> [B, H, W, C] -> permute to [B, C, H, W]
                 x_onehot = F.one_hot(tile_ids, num_classes=num_classes)
                 x_onehot = x_onehot.permute(0, 3, 1, 2).float()
             elif x.shape[1] == num_classes:
@@ -1505,7 +1505,7 @@ class DiffusionTrainer:
                     f"Expected 1 (normalized tile IDs) or {num_classes} (one-hot)."
                 )
             
-            # encode() returns (z_q, indices) â€” 2 values, not 3
+            # encode() returns (z_q, indices) -- 2 values, not 3
             z_q, _indices = self.vqvae.encode(x_onehot)
         return z_q
 
@@ -3220,6 +3220,8 @@ class DiffusionTrainer:
 
         self.global_step += 1
         self._apply_lr_warmup(completed_steps=self.global_step)
+        if self.scheduler is not None:
+            self.scheduler.step()
 
         # --- Phase 1D: Anneal LogicNet temperature ---
         # Use estimated total steps from config instead of hardcoded epochs*100
@@ -3351,6 +3353,8 @@ class DiffusionTrainer:
         self._update_ema()
         self.global_step += 1
         self._apply_lr_warmup(completed_steps=self.global_step)
+        if self.scheduler is not None:
+            self.scheduler.step()
 
         return {
             "loss": float(loss.detach().item()),
@@ -3475,7 +3479,6 @@ class DiffusionTrainer:
                 )
         
         self.epoch += 1
-        self.scheduler.step()
 
         metrics_sum["num_batches"] = float(num_batches)
         reduced = reduce_scalar_metrics(

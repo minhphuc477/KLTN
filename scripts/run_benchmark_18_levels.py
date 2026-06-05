@@ -194,7 +194,7 @@ def run_full_18(
 
             except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                 if verbose:
-                    print(f'  {map_id}: ERROR â€” {exc}')
+                    print(f'  {map_id}: ERROR -- {exc}')
                 import traceback; traceback.print_exc()
 
     return rows
@@ -217,7 +217,7 @@ def generate_figures(csv_path: str, fig_dir: str = 'results/figures'):
     Path(fig_dir).mkdir(parents=True, exist_ok=True)
     df = pd.read_csv(csv_path)
 
-    # ---- Fig 1: Confusion Ratio â€” all levels, balanced persona -----------
+    # ---- Fig 1: Confusion Ratio -- all levels, balanced persona -----------
     _fig_cr_all_levels(df, fig_dir)
     # ---- Fig 2: Greedy vs Balanced ---------------------------------------
     _fig_greedy_vs_balanced(df, fig_dir)
@@ -239,7 +239,7 @@ def _fig_cr_all_levels(df, fig_dir):
         & (df['oracle_status'] == 'solved')
     ]
     if balanced.empty:
-        print('  No balanced CBS+ results â€” skipping fig_confusion_ratio_all_levels')
+        print('  No balanced CBS+ results -- skipping fig_confusion_ratio_all_levels')
         return
 
     # Group by dungeon for error bars across variants
@@ -273,7 +273,7 @@ def _fig_greedy_vs_balanced(df, fig_dir):
     balanced = cbs[cbs['persona'] == 'balanced'].set_index('map_id')['confusion_ratio']
     common = sorted(set(greedy.index) & set(balanced.index))
     if not common:
-        print('  No common greedy+balanced results â€” skipping fig_greedy_vs_balanced_full')
+        print('  No common greedy+balanced results -- skipping fig_greedy_vs_balanced_full')
         return
 
     fig, ax = plt.subplots(figsize=(12, 5))
@@ -285,7 +285,7 @@ def _fig_greedy_vs_balanced(df, fig_dir):
     ax.set_xticklabels(common, rotation=45, ha='right', fontsize=8)
     ax.set_xlabel('Level')
     ax.set_ylabel('Confusion Ratio')
-    ax.set_title('Greedy vs Balanced Persona â€” Confusion Ratio per Level')
+    ax.set_title('Greedy vs Balanced Persona -- Confusion Ratio per Level')
     ax.legend()
     fig.tight_layout()
     fig.savefig(f'{fig_dir}/fig_greedy_vs_balanced_full.png', dpi=150)
@@ -300,7 +300,7 @@ def _fig_persona_comparison(df, fig_dir):
 
     cbs = df[(df['solver'] == 'CBS+') & (df['success'] == 1) & (df['oracle_status'] == 'solved')]
     if cbs.empty:
-        print('  No CBS+ results â€” skipping fig_persona_comparison')
+        print('  No CBS+ results -- skipping fig_persona_comparison')
         return
 
     personas_present = sorted(cbs['persona'].unique())
@@ -326,7 +326,7 @@ def _fig_persona_comparison(df, fig_dir):
     ax.set_xticklabels([f'D{d}' for d in dungeons])
     ax.set_xlabel('Dungeon')
     ax.set_ylabel('Confusion Ratio')
-    ax.set_title('All Personas Compared â€” Confusion Ratio Across Dungeons')
+    ax.set_title('All Personas Compared -- Confusion Ratio Across Dungeons')
     ax.axhline(1.0, color='red', ls='--', lw=0.8)
     ax.legend(loc='upper left', fontsize=8)
     fig.tight_layout()
@@ -354,7 +354,7 @@ def main():
                         format='%(asctime)s | %(levelname)s | %(message)s')
 
     print('='*70)
-    print('CBS+ Benchmark â€” 18 Nintendo Zelda Dungeons')
+    print('CBS+ Benchmark -- 18 Nintendo Zelda Dungeons')
     print('='*70)
 
     rows = run_full_18(

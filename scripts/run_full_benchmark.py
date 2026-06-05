@@ -550,7 +550,7 @@ def analyze_greedy_vs_balanced(df: pd.DataFrame) -> Dict[str, Any]:
     """
     Statistical comparison of GREEDY vs BALANCED personas.
     
-    Proves that memory decay (Î» < 1.0) is the active ingredient.
+    Proves that memory decay (lambda < 1.0) is the active ingredient.
     """
     greedy = df[(df['solver'] == 'cbs') & (df['persona'] == 'greedy')]
     balanced = df[(df['solver'] == 'cbs') & (df['persona'] == 'balanced')]
@@ -639,9 +639,9 @@ def generate_figure3(df: pd.DataFrame, output_path: str):
     greedy_stds = [0 if np.isnan(v) else v for v in greedy_stds]
     
     bars1 = ax.bar(x - width/2, balanced_means, width, yerr=balanced_stds, 
-                   label='BALANCED (Î»=0.95)', color='steelblue', capsize=3)
+                   label='BALANCED (lambda=0.95)', color='steelblue', capsize=3)
     bars2 = ax.bar(x + width/2, greedy_means, width, yerr=greedy_stds,
-                   label='GREEDY (Î»=1.0, no decay)', color='coral', capsize=3)
+                   label='GREEDY (lambda=1.0, no decay)', color='coral', capsize=3)
     
     ax.set_xlabel('Dataset Type', fontsize=12)
     ax.set_ylabel('Confusion Ratio (steps/unique_tiles)', fontsize=12)
@@ -817,8 +817,8 @@ def main():
     print("\n" + "=" * 60)
     print("GREEDY vs BALANCED Comparison (Memory Decay Proof)")
     print("=" * 60)
-    print(f"GREEDY (Î»=1.0, no decay) samples: {analysis['greedy_n']}")
-    print(f"BALANCED (Î»=0.95) samples: {analysis['balanced_n']}")
+    print(f"GREEDY (lambda=1.0, no decay) samples: {analysis['greedy_n']}")
+    print(f"BALANCED (lambda=0.95) samples: {analysis['balanced_n']}")
     print()
     print("Success Rate:")
     print(f"  BALANCED: {analysis['balanced_success_rate']:.2%}")
@@ -841,7 +841,7 @@ def main():
         print(f"  t-statistic: {analysis['confusion_ttest_statistic']:.3f}")
         print(f"  p-value:     {analysis['confusion_ttest_pvalue']:.4f}")
         if analysis['confusion_ttest_pvalue'] < 0.05:
-            print("  â†’ Statistically significant difference (p < 0.05)")
+            print("  -> Statistically significant difference (p < 0.05)")
     
     # ==========================================================================
     # Generate Figure 3

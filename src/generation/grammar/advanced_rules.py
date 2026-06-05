@@ -1489,7 +1489,7 @@ class AddForeshadowingRule(ProductionRule):
         if len(graph.nodes) < 5:
             return False
         
-        # Look for nodes with Manhattan distance â‰¤ 2 and path distance > 4
+        # Look for nodes with Manhattan distance <= 2 and path distance > 4
         nodes = list(graph.nodes.keys())
         for i, node1 in enumerate(nodes):
             for node2 in nodes[i+1:]:

@@ -46,7 +46,7 @@ class EvolutionaryTopologyGenerator:
     The genome is a list of grammar rule IDs. The phenotype is the MissionGraph
     produced by executing those rules sequentially.
     
-    This implements a (Î¼+Î») evolutionary strategy with:
+    This implements a (Î¼+lambda) evolutionary strategy with:
     - Tournament selection
     - One-point crossover
     - Weighted mutation using Zelda transition probabilities
@@ -551,7 +551,7 @@ class EvolutionaryTopologyGenerator:
             # the search degenerates into selecting only previous parents.
             offspring = self._evaluate_population(offspring, gen)
             
-            # Combine and select survivors (Î¼+Î»)
+            # Combine and select survivors (Î¼+lambda)
             population = self._select_survivors(population + offspring)
         
         # Get best individual
@@ -2916,7 +2916,7 @@ class EvolutionaryTopologyGenerator:
         combined: List[Individual]
     ) -> List[Individual]:
         """
-        Select survivors for next generation using (Î¼+Î») strategy.
+        Select survivors for next generation using (Î¼+lambda) strategy.
         
         Keeps the best population_size individuals from combined
         parent and offspring population.

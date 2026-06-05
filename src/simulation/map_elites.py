@@ -861,19 +861,19 @@ def generate_diversity_report(
 def _classify_diversity(score: float) -> str:
     """Classify diversity level."""
     if score >= 0.35:
-        return "HEALTHY DIVERSITY âœ“"
+        return "HEALTHY DIVERSITY [OK]"
     elif score >= 0.20:
         return "MODERATE DIVERSITY"
     else:
-        return "LOW DIVERSITY (Mode Collapse Risk) âœ—"
+        return "LOW DIVERSITY (Mode Collapse Risk) [FAIL]"
 
 
 def _classify_coverage(coverage: float) -> str:
     """Classify feature space coverage."""
     if coverage >= 0.15:
-        return "GOOD COVERAGE âœ“"
+        return "GOOD COVERAGE [OK]"
     elif coverage >= 0.05:
         return "MODERATE COVERAGE"
     else:
-        return "LOW COVERAGE âœ—"
+        return "LOW COVERAGE [FAIL]"
 

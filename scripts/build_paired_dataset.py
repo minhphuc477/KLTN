@@ -278,7 +278,7 @@ def main():
         verbose=not args.quiet,
     )
     
-    print("\nâœ“ Dataset built successfully!")
+    print("\n[OK] Dataset built successfully!")
     print(f"  Dungeons: {stats['dungeons_processed']}")
     print(f"  Rooms: {stats['rooms_saved']}")
     print(f"  Graph nodes: {stats['total_nodes']}")

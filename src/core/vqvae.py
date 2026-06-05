@@ -1113,7 +1113,7 @@ class SemanticVQVAE(nn.Module):
         """
         Differentiable soft penalty over 3x3 neighborhood illegal adjacencies.
         """
-        probs = F.softmax(recon_logits, dim=1)
+        probs = F.softmax(recon_logits.float(), dim=1).to(dtype=recon_logits.dtype)
         illegal = self.illegal_adjacency_matrix.to(dtype=probs.dtype, device=probs.device)
 
         # 8-neighborhood shifts (3x3 window excluding center).
@@ -1473,7 +1473,7 @@ class SemanticVQVAE2(nn.Module):
         return torch.zeros((batch_size, height, width), dtype=torch.long, device=device)
 
     def _illegal_adjacency_penalty(self, recon_logits: Tensor) -> Tensor:
-        probs = F.softmax(recon_logits, dim=1)
+        probs = F.softmax(recon_logits.float(), dim=1).to(dtype=recon_logits.dtype)
         illegal = self.illegal_adjacency_matrix.to(dtype=probs.dtype, device=probs.device)
         shifts = [
             (-1, -1), (-1, 0), (-1, 1),

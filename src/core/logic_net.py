@@ -101,7 +101,7 @@ def soft_min(x: Tensor, dim: Optional[int] = None, temperature: float = 1.0) -> 
     reduce_dim = int(dim) if dim is not None else -1
     tau = max(float(temperature), 1e-6)
     x = torch.nan_to_num(x, nan=0.0, posinf=1e6, neginf=-1e6)
-    return -tau * torch.logsumexp(-x / tau, dim=reduce_dim)
+    return (-tau * torch.logsumexp((-x / tau).float(), dim=reduce_dim)).to(dtype=x.dtype)
 
 
 def soft_max(x: Tensor, dim: Optional[int] = None, temperature: float = 1.0) -> Tensor:
@@ -111,7 +111,8 @@ def soft_max(x: Tensor, dim: Optional[int] = None, temperature: float = 1.0) -> 
     soft_max(x) = τ * log(Σ exp(x/τ))
     """
     reduce_dim = int(dim) if dim is not None else -1
-    return temperature * torch.logsumexp(x / temperature, dim=reduce_dim)
+    tau = max(float(temperature), 1e-6)
+    return (tau * torch.logsumexp((x / tau).float(), dim=reduce_dim)).to(dtype=x.dtype)
 
 
 def soft_threshold(x: Tensor, threshold: float, temperature: float = 1.0) -> Tensor:
@@ -1153,6 +1154,7 @@ class LogicNet(nn.Module):
         self.initial_temperature = initial_temperature
         self.final_temperature = final_temperature
         self.register_buffer('current_temperature', torch.tensor(initial_temperature))
+        self.register_buffer("locked_edge_role_ids", torch.tensor([1, 4, 5], dtype=torch.long))
         
         # Tile classification
         self.tile_classifier = TileClassifier(
@@ -1557,7 +1559,10 @@ class LogicNet(nn.Module):
             if isinstance(edge_attr, torch.Tensor) and edge_attr.numel() > 0:
                 ea = edge_attr.to(device=device)
                 if ea.dim() == 2 and int(ea.shape[0]) >= n and int(ea.shape[1]) >= n:
-                    locked |= torch.isin(ea[:n, :n].to(dtype=torch.long), torch.tensor([1, 4, 5], device=device))
+                    locked |= torch.isin(
+                        ea[:n, :n].to(dtype=torch.long),
+                        self.locked_edge_role_ids.to(device=device),
+                    )
             return locked
 
         if not isinstance(edge_index, torch.Tensor) or edge_index.dim() != 2 or int(edge_index.shape[0]) != 2:
@@ -1585,7 +1590,7 @@ class LogicNet(nn.Module):
             if ea.dim() >= 1 and int(ea.shape[0]) >= int(src.numel()):
                 edge_locked |= torch.isin(
                     ea[: int(src.numel())].flatten().to(dtype=torch.long),
-                    torch.tensor([1, 4, 5], device=device),
+                    self.locked_edge_role_ids.to(device=device),
                 )
         if torch.any(edge_locked):
             locked[src[edge_locked], dst[edge_locked]] = True

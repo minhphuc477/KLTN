@@ -80,15 +80,11 @@ class RoomTensor:
         Returns:
             One-hot encoded tensor
         """
-        one_hot = np.zeros(
-            (self.semantic_grid.shape[0], self.semantic_grid.shape[1], num_classes),
-            dtype=np.float32
-        )
-        for i in range(self.semantic_grid.shape[0]):
-            for j in range(self.semantic_grid.shape[1]):
-                tile_id = int(self.semantic_grid[i, j])
-                if 0 <= tile_id < num_classes:
-                    one_hot[i, j, tile_id] = 1.0
+        tile_ids = np.asarray(self.semantic_grid, dtype=np.int64)
+        valid = (tile_ids >= 0) & (tile_ids < int(num_classes))
+        clipped = np.where(valid, tile_ids, 0)
+        one_hot = np.eye(int(num_classes), dtype=np.float32)[clipped]
+        one_hot[~valid] = 0.0
         return one_hot
 
 

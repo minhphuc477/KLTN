@@ -41,12 +41,12 @@ class SolverMetrics:
     optimality: float  # 1.0 = optimal, >1.0 = suboptimal
     
     def __str__(self):
-        status = "âœ“" if self.success else "âœ—"
+        status = "[OK]" if self.success else "[FAIL]"
         return (f"{status} {self.name}: "
                 f"Length={self.path_length}, "
                 f"Explored={self.states_explored}, "
                 f"Time={self.time_taken:.3f}s, "
-                f"Optimality={self.optimality:.2f}Ã—")
+                f"Optimality={self.optimality:.2f}x")
 
 
 class SolverComparison:
@@ -100,10 +100,10 @@ class SolverComparison:
         for _name, metrics in results.items():
             logger.info(str(metrics))
         
-        # Determine winner (best optimality Ã— speed trade-off)
+        # Determine winner (best optimality x speed trade-off)
         if successful:
             winner = min(successful, key=lambda m: m.optimality * m.time_taken)
-            logger.info(f"ðŸ† Winner: {winner.name}")
+            logger.info(f"[WIN] Winner: {winner.name}")
         
         return results
     
