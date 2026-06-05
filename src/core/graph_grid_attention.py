@@ -825,7 +825,7 @@ class GraphToGridCrossAttention(nn.Module):
                 # Attention scores: [B, heads, H*W, N]
                 attn_scores = torch.matmul(Q, K.transpose(-2, -1)) * self.scale
                 attn_scores = attn_scores + attn_bias
-                attn_weights = F.softmax(attn_scores, dim=-1)
+                attn_weights = F.softmax(attn_scores.float(), dim=-1).to(dtype=attn_scores.dtype)
                 if self.capture_attention_maps:
                     loss_weights = torch.nan_to_num(attn_weights, nan=0.0, posinf=0.0, neginf=0.0)
                     captured = loss_weights.detach()
@@ -1134,7 +1134,7 @@ class EnhancedAttentionBlock(nn.Module):
         B, C, H, W = x.shape
         
         # Flatten to sequence for self-attention
-        x_seq = x.view(B, C, -1).permute(0, 2, 1)  # [B, H*W, C]
+        x_seq = x.reshape(B, C, -1).permute(0, 2, 1)  # [B, H*W, C]
         
         # Self-attention
         x_normed = self.self_attn_norm(x_seq)
@@ -1142,7 +1142,7 @@ class EnhancedAttentionBlock(nn.Module):
         x_seq = x_seq + attn_out
         
         # Reshape back to grid
-        x = x_seq.permute(0, 2, 1).view(B, C, H, W)
+        x = x_seq.permute(0, 2, 1).reshape(B, C, H, W)
         
         # Graph cross-attention (new per-position attention)
         if graph_nodes is not None:
@@ -1158,7 +1158,7 @@ class EnhancedAttentionBlock(nn.Module):
         
         # Context cross-attention (backward compat)
         elif context is not None:
-            x_seq = x.view(B, C, -1).permute(0, 2, 1)
+            x_seq = x.reshape(B, C, -1).permute(0, 2, 1)
             
             # Project context to grid dim and expand
             ctx = self.context_proj(context)  # [B, C]
@@ -1168,12 +1168,12 @@ class EnhancedAttentionBlock(nn.Module):
             attn_out, _ = self.context_cross_attn(x_normed, ctx, ctx)
             x_seq = x_seq + attn_out
             
-            x = x_seq.permute(0, 2, 1).view(B, C, H, W)
+            x = x_seq.permute(0, 2, 1).reshape(B, C, H, W)
         
         # FFN
-        x_seq = x.view(B, C, -1).permute(0, 2, 1)
+        x_seq = x.reshape(B, C, -1).permute(0, 2, 1)
         x_seq = x_seq + self.ffn(x_seq)
-        x = x_seq.permute(0, 2, 1).view(B, C, H, W)
+        x = x_seq.permute(0, 2, 1).reshape(B, C, H, W)
         
         return x
 

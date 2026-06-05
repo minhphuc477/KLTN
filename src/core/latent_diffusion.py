@@ -188,7 +188,7 @@ class SelfAttention(nn.Module):
             ).transpose(1, 2).reshape(B, N, C)
         else:
             attn = (q @ k.transpose(-2, -1)) * self.scale
-            attn = attn.softmax(dim=-1)
+            attn = attn.float().softmax(dim=-1).to(dtype=q.dtype)
             attn = self.dropout(attn)
             out = (attn @ v).transpose(1, 2).reshape(B, N, C)
         return residual + self.proj(out)
@@ -406,7 +406,7 @@ class CrossAttention(nn.Module):
                 v = v_lin(h)
                 scores = torch.bmm(q, k.transpose(1, 2)) / (q.shape[-1] ** 0.5)
                 scores = scores.masked_fill(~attn_mask, -1.0e4)
-                attn = torch.softmax(scores, dim=-1)
+                attn = torch.softmax(scores.float(), dim=-1).to(dtype=scores.dtype)
                 attn = torch.nan_to_num(attn, nan=0.0, posinf=0.0, neginf=0.0)
                 attn = self.dropout(attn)
                 update = o_lin(torch.bmm(attn, v))
@@ -502,7 +502,7 @@ class CrossAttention(nn.Module):
                 attn = (q @ k.transpose(-2, -1)) * self.scale
                 if attn_mask is not None:
                     attn = attn + attn_mask
-                attn = attn.softmax(dim=-1)
+                attn = attn.float().softmax(dim=-1).to(dtype=attn.dtype)
                 attn = torch.nan_to_num(attn, nan=0.0, posinf=0.0, neginf=0.0)
                 attn = self.dropout(attn)
                 out = (attn @ v).transpose(1, 2).reshape(B, N, C)
@@ -654,7 +654,7 @@ class AttentionBlock(nn.Module):
         B, C, H, W = x.shape
         
         # Flatten spatial dims
-        x_flat = x.view(B, C, -1).permute(0, 2, 1)  # [B, H*W, C]
+        x_flat = x.reshape(B, C, -1).permute(0, 2, 1)  # [B, H*W, C]
         
         # Self-attention (SelfAttention owns its Pre-LN residual).
         x_flat = self.self_attn(x_flat)
@@ -681,7 +681,7 @@ class AttentionBlock(nn.Module):
             node_mask=cross_node_mask,
         )
 
-        x = x_flat.permute(0, 2, 1).view(B, C, H, W)
+        x = x_flat.permute(0, 2, 1).reshape(B, C, H, W)
         if spatial_graph_data:
             x = self.spatial_graph_conditioner(
                 x,
@@ -693,13 +693,13 @@ class AttentionBlock(nn.Module):
                 node_mask=spatial_graph_data.get("node_mask"),
                 room_topology_map=spatial_graph_data.get("room_topology_map"),
             )
-            x_flat = x.view(B, C, -1).permute(0, 2, 1)
+            x_flat = x.reshape(B, C, -1).permute(0, 2, 1)
         
         # FFN
         x_flat = x_flat + self.ffn(x_flat)
         
         # Reshape back
-        return x_flat.permute(0, 2, 1).view(B, C, H, W)
+        return x_flat.permute(0, 2, 1).reshape(B, C, H, W)
 
 
 class DownBlock(nn.Module):
@@ -1382,9 +1382,9 @@ class DiTDenoiser(nn.Module):
         shift, scale = self.final_mod(cond).chunk(2, dim=-1)
         tokens = self.final_norm(tokens) * (1.0 + scale.unsqueeze(1)) + shift.unsqueeze(1)
         patches = self.out_proj(tokens)
-        patches = patches.view(B, ph, pw, self.patch_size, self.patch_size, self.out_channels)
+        patches = patches.reshape(B, ph, pw, self.patch_size, self.patch_size, self.out_channels)
         patches = patches.permute(0, 5, 1, 3, 2, 4).contiguous()
-        return patches.view(B, self.out_channels, H, W)
+        return patches.reshape(B, self.out_channels, H, W)
 
 
 # ============================================================================

@@ -1317,9 +1317,9 @@ class CrossAttentionFusion(nn.Module):
         V = self.value_proj(c_global)  # [B, N, output_dim]
         
         # Reshape for multi-head attention
-        Q = Q.view(B, 1, self.num_heads, self.head_dim).transpose(1, 2)  # [B, H, 1, D]
-        K = K.view(B, N, self.num_heads, self.head_dim).transpose(1, 2)  # [B, H, N, D]
-        V = V.view(B, N, self.num_heads, self.head_dim).transpose(1, 2)  # [B, H, N, D]
+        Q = Q.reshape(B, 1, self.num_heads, self.head_dim).transpose(1, 2).contiguous()  # [B, H, 1, D]
+        K = K.reshape(B, N, self.num_heads, self.head_dim).transpose(1, 2).contiguous()  # [B, H, N, D]
+        V = V.reshape(B, N, self.num_heads, self.head_dim).transpose(1, 2).contiguous()  # [B, H, N, D]
         
         # Scaled dot-product attention
         scale = math.sqrt(self.head_dim)
@@ -1337,7 +1337,7 @@ class CrossAttentionFusion(nn.Module):
             expanded_mask = valid_mask.unsqueeze(1).unsqueeze(2)
             attn_scores = attn_scores.masked_fill(~expanded_mask, -1.0e4)
         
-        attn_weights = F.softmax(attn_scores, dim=-1)
+        attn_weights = F.softmax(attn_scores.float(), dim=-1).to(dtype=attn_scores.dtype)
         if valid_mask is not None:
             expanded_mask = valid_mask.unsqueeze(1).unsqueeze(2).to(dtype=attn_weights.dtype)
             attn_weights = attn_weights * expanded_mask

@@ -472,7 +472,7 @@ class SoftBellmanFordGridPathfinder(nn.Module):
                 f"SoftBellmanFordGridPathfinder expected {self.num_classes} tile channels, "
                 f"got {int(room_grid.shape[1])}."
             )
-        probs = F.softmax(room_grid, dim=1)
+        probs = F.softmax(room_grid.float(), dim=1).to(dtype=room_grid.dtype)
         walkability = torch.einsum("bchw,c->bhw", probs, self.walkability_weights)
         return walkability.unsqueeze(1)
 
@@ -568,7 +568,7 @@ class LearnableGridPathfinder(nn.Module):
             raise ValueError(
                 f"LearnableGridPathfinder expected {self.num_classes} tile channels, got {int(room_grid.shape[1])}."
             )
-        probs = F.softmax(room_grid, dim=1)
+        probs = F.softmax(room_grid.float(), dim=1).to(dtype=room_grid.dtype)
         walkability = torch.einsum("bchw,c->bhw", probs, self.walkability_weights)
         return walkability.unsqueeze(1)
 
@@ -586,7 +586,7 @@ class LearnableGridPathfinder(nn.Module):
             raise ValueError(f"walkability must be [B,1,H,W], got {tuple(walkability.shape)}.")
 
         tile_probs = (
-            F.softmax(room_grid, dim=1)
+            F.softmax(room_grid.float(), dim=1).to(dtype=room_grid.dtype)
             if int(room_grid.shape[1]) == self.num_classes
             else room_grid.expand(-1, self.num_classes, -1, -1)
         )
@@ -656,7 +656,7 @@ class PerturbAndMAPGridPathfinder(nn.Module):
             raise ValueError(
                 f"PerturbAndMAPGridPathfinder expected {self.num_classes} tile channels, got {int(room_grid.shape[1])}."
             )
-        probs = F.softmax(room_grid, dim=1)
+        probs = F.softmax(room_grid.float(), dim=1).to(dtype=room_grid.dtype)
         walkability = torch.einsum("bchw,c->bhw", probs, self.walkability_weights)
         return walkability.unsqueeze(1)
 
@@ -969,7 +969,7 @@ class TileClassifier(nn.Module):
         logits = self.classifier(z)
         if self.output_mode == "logits":
             return logits
-        return F.softmax(logits, dim=1)
+        return F.softmax(logits.float(), dim=1).to(dtype=logits.dtype)
 
 
 class WalkabilityPredictor(nn.Module):
@@ -1012,7 +1012,7 @@ class WalkabilityPredictor(nn.Module):
         if is_probs is True:
             probs = tile_logits
         elif is_probs is False:
-            probs = F.softmax(tile_logits, dim=1)
+            probs = F.softmax(tile_logits.float(), dim=1).to(dtype=tile_logits.dtype)
         else:
             if (
                 torch.all(tile_logits >= 0)
@@ -1025,7 +1025,7 @@ class WalkabilityPredictor(nn.Module):
             ):
                 probs = tile_logits
             else:
-                probs = F.softmax(tile_logits, dim=1)
+                probs = F.softmax(tile_logits.float(), dim=1).to(dtype=tile_logits.dtype)
         
         # Weighted sum with walkability
         walkability = torch.einsum(
@@ -1658,7 +1658,7 @@ class LogicNet(nn.Module):
             node_pass = node_passability.to(device=device, dtype=dtype).flatten()[:n].clamp(0.0, 1.0)
             if node_pass.numel() < n:
                 node_pass = F.pad(node_pass, (0, n - int(node_pass.numel())), value=1.0)
-            entry_penalty = (1.0 - node_pass).view(1, n) * float(self.graph_pathfinder.inf_distance)
+            entry_penalty = (1.0 - node_pass).reshape(1, n) * float(self.graph_pathfinder.inf_distance)
             weights = torch.where(adj > 0, weights + entry_penalty, weights)
 
         return adj, weights
@@ -1671,7 +1671,7 @@ class LogicNet(nn.Module):
         trace_target: Optional[Tensor],
         anchor_target: Optional[Tensor],
     ) -> Tensor:
-        terms = [grid_reach_scores.view(walkability.shape[0]).clamp(0.0, 1.0)]
+        terms = [grid_reach_scores.reshape(walkability.shape[0]).clamp(0.0, 1.0)]
         if trace_target is not None:
             mass = trace_target.sum(dim=(1, 2, 3)).clamp_min(1e-6)
             terms.append(((walkability * trace_target).sum(dim=(1, 2, 3)) / mass).clamp(0.0, 1.0))
@@ -2160,8 +2160,8 @@ class LogicNet(nn.Module):
         if grid_target_mask is None:
             grid_target_mask = soft_walkable_mask
         grid_reach_scores, grid_reach_loss = self.reachability(
-            grid_distances.view(B, -1),
-            grid_target_mask.view(B, -1),
+            grid_distances.reshape(B, -1),
+            grid_target_mask.reshape(B, -1),
             return_loss=True,
         )
         info['grid_reachability'] = grid_reach_scores.mean()
@@ -2223,23 +2223,17 @@ class LogicNet(nn.Module):
         self,
         batch_size: int,
         device: torch.device,
+        spatial_hw: Optional[Tuple[int, int]] = None,
     ) -> Tensor:
         """Create source mask at door positions for grid pathfinding."""
-        mask = torch.zeros(batch_size, 1, ROOM_HEIGHT, ROOM_WIDTH, device=device)
+        height, width = spatial_hw if spatial_hw is not None else (ROOM_HEIGHT, ROOM_WIDTH)
+        height = int(max(1, height))
+        width = int(max(1, width))
+        mask = torch.zeros(batch_size, 1, height, width, device=device)
 
         for direction, spec in DOOR_POSITIONS.items():
-            if direction in {"N", "S"}:
-                row = int(max(0, min(ROOM_HEIGHT - 1, spec["row"])))
-                col_start = int(max(0, min(ROOM_WIDTH - 1, spec["col_start"])))
-                col_end = int(max(0, min(ROOM_WIDTH - 1, spec["col_end"])))
-                if col_end >= col_start:
-                    mask[:, :, row, col_start:col_end + 1] = 1.0
-            else:
-                col = int(max(0, min(ROOM_WIDTH - 1, spec["col"])))
-                row_start = int(max(0, min(ROOM_HEIGHT - 1, spec["row_start"])))
-                row_end = int(max(0, min(ROOM_HEIGHT - 1, spec["row_end"])))
-                if row_end >= row_start:
-                    mask[:, :, row_start:row_end + 1, col] = 1.0
+            row_slice, col_slice = self._door_slices_for_shape(direction, height, width)
+            mask[:, :, row_slice, col_slice] = 1.0
 
         return mask
 
@@ -2253,11 +2247,11 @@ class LogicNet(nn.Module):
         if walkability.dim() != 4 or int(walkability.shape[1]) != 1:
             raise ValueError(f"walkability must be [B,1,H,W], got {tuple(walkability.shape)}.")
         B, _C, H, W = walkability.shape
-        flat_walkability = walkability.view(B, -1)
+        flat_walkability = walkability.reshape(B, -1)
         if differentiable:
             # Keep the fallback differentiable for Bellman-Ford/VIN so the
             # reachability proxy can still shape the walkability field.
-            return F.softmax(flat_walkability / 0.1, dim=1).view(B, 1, H, W)
+            return F.softmax((flat_walkability / 0.1).float(), dim=1).to(dtype=flat_walkability.dtype).reshape(B, 1, H, W)
 
         # Perturb-and-MAP samples discrete shortest-path structures and expects
         # a single anchored source. Use the old hard anchor only for that mode.
