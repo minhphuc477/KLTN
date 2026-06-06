@@ -249,6 +249,7 @@ def compute_persona_divergence_from_paths(paths_by_persona: Mapping[str, Iterabl
     """Average symmetric KL divergence between persona visit distributions."""
     distributions: Dict[str, Dict[GridPos, float]] = {}
     all_positions: set[GridPos] = set()
+    eps = float(max(float(smoothing), 1e-12))
     for persona, path_iter in paths_by_persona.items():
         counts: DefaultDict[GridPos, float] = defaultdict(float)
         for raw_pos in path_iter:
@@ -271,8 +272,8 @@ def compute_persona_divergence_from_paths(paths_by_persona: Mapping[str, Iterabl
             kl_pq = 0.0
             kl_qp = 0.0
             for pos in all_positions:
-                pv = float(p.get(pos, smoothing))
-                qv = float(q.get(pos, smoothing))
+                pv = max(float(p.get(pos, eps)), eps)
+                qv = max(float(q.get(pos, eps)), eps)
                 kl_pq += pv * math.log(pv / qv)
                 kl_qp += qv * math.log(qv / pv)
             divergences.append(0.5 * (kl_pq + kl_qp))

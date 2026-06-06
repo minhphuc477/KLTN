@@ -565,6 +565,7 @@ def _create_masked_room_dataloaders(
         drop_last=config.drop_last,
         use_vglc=True,
         normalize=config.normalize,
+        categorical_tokens=True,
         room_level=True,
         load_graphs=True,
         node_feature_dim=config.node_feature_dim,

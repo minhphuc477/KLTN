@@ -2818,6 +2818,25 @@ class DiffusionTrainer:
         )
         return int(max(1, total_epochs * fallback_steps_per_epoch))
 
+    def _configure_scheduler_period_from_steps_per_epoch(self, steps_per_epoch: int) -> None:
+        """Make cosine restart periods use real optimizer-step counts."""
+        if self.scheduler is None:
+            return
+        if int(getattr(self, "global_step", 0)) > 0:
+            return
+        total_epochs = int(max(1, int(getattr(self.config, "epochs", 1))))
+        step_count = int(max(1, steps_per_epoch))
+        scheduler_t0 = int(max(1, int(getattr(self.config, "scheduler_t0", 1))))
+        if scheduler_t0 <= total_epochs:
+            scheduler_t0 *= step_count
+        scheduler_t0 = int(max(1, scheduler_t0))
+        if hasattr(self.scheduler, "T_0"):
+            self.scheduler.T_0 = scheduler_t0
+        if hasattr(self.scheduler, "T_i"):
+            self.scheduler.T_i = scheduler_t0
+        if hasattr(self.scheduler, "T_cur"):
+            self.scheduler.T_cur = 0
+
     def _warmup_scale(self, warmup_epochs: int, completed_steps: int) -> float:
         if warmup_epochs <= 0:
             return 1.0
@@ -3409,6 +3428,7 @@ class DiffusionTrainer:
         total_epochs = int(getattr(self.config, "epochs", self.epoch + 1))
         steps_per_epoch = int(math.ceil(len(dataloader) / float(self._gradient_accumulation_steps())))
         self._estimated_total_steps = max(1, total_epochs * max(1, steps_per_epoch))
+        self._configure_scheduler_period_from_steps_per_epoch(steps_per_epoch)
         
         include_logic = bool(getattr(self.config, "logic_net_enabled", True)) and self.epoch >= self.config.warmup_epochs
         if sampler is not None and hasattr(sampler, "set_epoch"):

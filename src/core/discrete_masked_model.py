@@ -28,6 +28,13 @@ from src.core.definitions import (
 logger = logging.getLogger(__name__)
 
 
+class _DisabledTransformerDecoder(nn.Module):
+    """No-parameter placeholder for concat mode where cross-decoder is disabled."""
+
+    def forward(self, *args: Any, **kwargs: Any) -> Tensor:
+        raise RuntimeError("TransformerDecoder is only available when context_attention_mode='cross_decoder'.")
+
+
 class MaskedTokenTransformerBackbone(nn.Module):
     """Bidirectional MaskGIT-style backbone for masked token prediction."""
 
@@ -74,20 +81,23 @@ class MaskedTokenTransformerBackbone(nn.Module):
             batch_first=True,
             norm_first=True,
         )
-        decoder_layer = nn.TransformerDecoderLayer(
-            d_model=self.hidden_dim,
-            nhead=num_heads,
-            dim_feedforward=max(self.hidden_dim * 4, self.hidden_dim),
-            dropout=float(max(0.0, min(1.0, dropout))),
-            activation="gelu",
-            batch_first=True,
-            norm_first=True,
-        )
         # Original MaskGIT path: concatenate context and room tokens before
         # encoder self-attention. Keep this as the default checkpoint-compatible
         # baseline; cross_decoder is an explicit ablation.
         self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=int(max(1, num_layers)))
-        self.decoder = nn.TransformerDecoder(decoder_layer, num_layers=int(max(1, num_layers)))
+        if self.context_attention_mode == "cross_decoder":
+            decoder_layer = nn.TransformerDecoderLayer(
+                d_model=self.hidden_dim,
+                nhead=num_heads,
+                dim_feedforward=max(self.hidden_dim * 4, self.hidden_dim),
+                dropout=float(max(0.0, min(1.0, dropout))),
+                activation="gelu",
+                batch_first=True,
+                norm_first=True,
+            )
+            self.decoder = nn.TransformerDecoder(decoder_layer, num_layers=int(max(1, num_layers)))
+        else:
+            self.decoder = _DisabledTransformerDecoder()
         self.norm = nn.LayerNorm(self.hidden_dim)
 
     def _context_tokens(self, context: Tensor) -> Tensor:
@@ -211,6 +221,8 @@ class MaskedTokenTransformerBackbone(nn.Module):
         room_tokens = x.flatten(2).transpose(1, 2)
         context_tokens = self._context_tokens(context).to(device=x.device, dtype=x.dtype)
         if self.context_attention_mode == "cross_decoder":
+            if self.decoder is None:
+                raise RuntimeError("cross_decoder mode requires a TransformerDecoder instance.")
             context_tokens, memory_key_padding_mask = self._context_key_padding_mask(context_tokens, graph_data)
             encoded_room_tokens = self.encoder(room_tokens)
             encoded_room = self.decoder(
@@ -722,8 +734,6 @@ class DiscreteMaskedRoomModel(nn.Module):
         if tokens.dim() != 3:
             raise ValueError(f"tokens must be [B,H,W], got {tuple(tokens.shape)}")
         x = self._embed_tokens(tokens)
-        _context_edge_index, _context_node_mask = self._extract_context_topology(context, graph_data)
-        _spatial_graph_data = self._extract_spatial_graph_context(context, graph_data)
         hidden = self.backbone(
             x,
             step,

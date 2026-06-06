@@ -704,10 +704,13 @@ class ZeldaDungeonDataset(Dataset):
         dungeon_ids: Optional[Iterable[int]] = None,
         variants: Optional[Iterable[int]] = None,
         augment: bool = False,  # Apply D4 dihedral symmetry augmentation
+        lazy_vglc: bool = True,
+        categorical_tokens: bool = False,
     ):
         self.data_dir = Path(data_dir)
         self.transform = transform
-        self.normalize = normalize
+        self.categorical_tokens = bool(categorical_tokens)
+        self.normalize = bool(normalize) and not self.categorical_tokens
         self.target_size = target_size
         self.use_vglc = use_vglc and VGLC_AVAILABLE
         self.pad_to_max = pad_to_max
@@ -719,6 +722,8 @@ class ZeldaDungeonDataset(Dataset):
         self.dungeon_ids = normalize_dungeon_ids(dungeon_ids)
         self.variants = normalize_variants(variants)
         self.sample_metadata: List[Dict[str, Any]] = []
+        self.lazy_vglc = bool(lazy_vglc)
+        self._vglc_index: List[Tuple[int, int]] = []
         
         # Track max dimensions for padding
         self.max_h = 0
@@ -751,7 +756,7 @@ class ZeldaDungeonDataset(Dataset):
     def _init_vglc(self) -> None:
         """Initialize dataset from VGLC format."""
         self.files = []
-        self.samples = []
+        self.samples = None if self.lazy_vglc else []
         
         # Load all dungeons via adapter
         adapter = ZeldaDungeonAdapter(str(self.data_dir))
@@ -763,7 +768,9 @@ class ZeldaDungeonDataset(Dataset):
                     dungeon = adapter.load_dungeon(dungeon_num, variant)
                     stitched = adapter.stitch_dungeon(dungeon)
                     grid = stitched.global_grid
-                    self.samples.append(grid.astype(np.float32))
+                    self._vglc_index.append((int(dungeon_num), int(variant)))
+                    if self.samples is not None:
+                        self.samples.append(grid.astype(np.float32))
                     self.sample_metadata.append(
                         {
                             "dungeon_num": int(dungeon_num),
@@ -773,7 +780,7 @@ class ZeldaDungeonDataset(Dataset):
                     )
                     
                     # Extract graph if load_graphs is enabled
-                    if self.load_graphs:
+                    if self.load_graphs and self.graphs is not None and not self.lazy_vglc:
                         graph = self._extract_graph(dungeon)
                         self.graphs.append(graph)
                     
@@ -786,7 +793,16 @@ class ZeldaDungeonDataset(Dataset):
                 except (AttributeError, RuntimeError, ValueError, TypeError) as e:
                     logger.warning(f"Failed to load dungeon {dungeon_num}v{variant}: {e}")
                     
-        logger.info(f"Loaded {len(self.samples)} VGLC dungeons (max size: {self.max_h}x{self.max_w})")
+        logger.info(f"Indexed {len(self._vglc_index)} VGLC dungeons (max size: {self.max_h}x{self.max_w}, lazy={self.lazy_vglc})")
+
+    def _load_vglc_sample(self, idx: int) -> Tuple[np.ndarray, Optional[dict]]:
+        dungeon_num, variant = self._vglc_index[int(idx)]
+        adapter = ZeldaDungeonAdapter(str(self.data_dir))
+        dungeon = adapter.load_dungeon(dungeon_num, variant)
+        stitched = adapter.stitch_dungeon(dungeon)
+        grid = stitched.global_grid.astype(np.float32)
+        graph = self._extract_graph(dungeon) if self.load_graphs else None
+        return grid, graph
     
     def _extract_graph(self, dungeon) -> dict:
         """Extract graph structure from dungeon for GNN training.
@@ -813,6 +829,8 @@ class ZeldaDungeonDataset(Dataset):
     def __len__(self) -> int:
         if self.samples is not None:
             return len(self.samples)
+        if self.use_vglc:
+            return len(self._vglc_index)
         return len(self.files)
     
     def __getitem__(self, idx: int) -> Union[torch.Tensor, Tuple[torch.Tensor, dict]]:
@@ -823,8 +841,11 @@ class ZeldaDungeonDataset(Dataset):
             If load_graphs=False: torch.Tensor of shape (1, H, W)
             If load_graphs=True: (image_tensor, graph_dict) tuple
         """
+        graph_override = None
         if self.samples is not None:
             grid = self.samples[idx]
+        elif self.use_vglc:
+            grid, graph_override = self._load_vglc_sample(idx)
         else:
             grid = self._load_text_file(self.files[idx])
         
@@ -847,7 +868,7 @@ class ZeldaDungeonDataset(Dataset):
             tensor_map = self._resize(tensor_map, self.target_size)
         
         # Apply D4 dihedral symmetry augmentation during training
-        if self.augment:
+        if bool(getattr(self, "augment", False)):
             tensor_map = self._d4_augment(tensor_map)
 
         # Apply custom transform
@@ -855,8 +876,13 @@ class ZeldaDungeonDataset(Dataset):
             tensor_map = self.transform(tensor_map)
         
         # Return with graph if requested
-        if self.load_graphs and self.graphs is not None:
-            graph = self.graphs[idx]
+        if self.load_graphs:
+            if graph_override is not None:
+                graph = graph_override
+            elif self.graphs is not None:
+                graph = self.graphs[idx]
+            else:
+                raise RuntimeError("Graph loading requested but no graph data is available.")
             edge_feature_dim = int(getattr(self, "edge_feature_dim", GRAPH_EDGE_FEATURE_DIM))
             return tensor_map, {
                 'node_features': torch.tensor(graph['node_features'], dtype=torch.float32),
@@ -944,6 +970,7 @@ class ZeldaRoomDataset(Dataset):
         data_dir: str,
         transform: Optional[Callable] = None,
         normalize: bool = True,
+        categorical_tokens: bool = False,
         load_graphs: bool = False,
         node_feature_dim: int = GRAPH_NODE_FEATURE_DIM,
         edge_feature_dim: int = GRAPH_EDGE_FEATURE_DIM,
@@ -957,7 +984,8 @@ class ZeldaRoomDataset(Dataset):
         augment: bool = False,  # Apply D4 dihedral symmetry augmentation
     ):
         self.transform = transform
-        self.normalize = normalize
+        self.categorical_tokens = bool(categorical_tokens)
+        self.normalize = bool(normalize) and not self.categorical_tokens
         self.load_graphs = load_graphs
         self.augment = bool(augment)
         self._d4_augment = RandomD4Symmetry()
@@ -1239,6 +1267,8 @@ def create_dataloader(
     dungeon_ids: Optional[Iterable[int]] = None,
     variants: Optional[Iterable[int]] = None,
     augment: bool = False,
+    lazy_vglc: bool = True,
+    categorical_tokens: bool = False,
 ) -> DataLoader:
     """
     Create a DataLoader for Zelda dungeon training.
@@ -1280,6 +1310,7 @@ def create_dataloader(
             data_dir=data_dir,
             transform=transform,
             normalize=normalize,
+            categorical_tokens=categorical_tokens,
             load_graphs=load_graphs,
             node_feature_dim=node_feature_dim,
             edge_feature_dim=edge_feature_dim,
@@ -1298,6 +1329,7 @@ def create_dataloader(
             transform=transform,
             use_vglc=use_vglc,
             normalize=normalize,
+            categorical_tokens=categorical_tokens,
             target_size=target_size,
             load_graphs=load_graphs,
             node_feature_dim=node_feature_dim,
@@ -1305,6 +1337,7 @@ def create_dataloader(
             dungeon_ids=dungeon_ids,
             variants=variants,
             augment=augment,
+            lazy_vglc=lazy_vglc,
         )
     
     batch_sampler = None
