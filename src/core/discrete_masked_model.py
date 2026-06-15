@@ -231,8 +231,18 @@ class MaskedTokenTransformerBackbone(nn.Module):
                 memory_key_padding_mask=memory_key_padding_mask,
             )
         else:
+            context_tokens, context_key_padding_mask = self._context_key_padding_mask(context_tokens, graph_data)
             sequence = torch.cat([context_tokens, room_tokens], dim=1)
-            encoded = self.encoder(sequence)
+            sequence_key_padding_mask = None
+            if context_key_padding_mask is not None:
+                room_key_padding_mask = torch.zeros(
+                    batch_size,
+                    room_tokens.shape[1],
+                    device=context_key_padding_mask.device,
+                    dtype=torch.bool,
+                )
+                sequence_key_padding_mask = torch.cat([context_key_padding_mask, room_key_padding_mask], dim=1)
+            encoded = self.encoder(sequence, src_key_padding_mask=sequence_key_padding_mask)
             encoded_room = encoded[:, context_tokens.shape[1]:]
         encoded_room = self.norm(encoded_room)
         return encoded_room.transpose(1, 2).reshape(batch_size, self.hidden_dim, height, width)

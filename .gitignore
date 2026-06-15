@@ -39,6 +39,14 @@ artifacts/
 validation_report.json
 checkpoints/
 
+# Graphify generated cache/state. Keep the checked-in graph/wiki/report
+# artifacts available for code navigation, but do not track per-file caches.
+graphify-out/cache/
+graphify-out/cache/**
+graphify-out/tmp/
+graphify-out/tmp/**
+graphify-out/*.lock
+
 # Artifacts - generated outputs, logs, and experiment checkpoints
 artifacts/
 

@@ -1507,6 +1507,24 @@ def test_global_stream_encoder_rejects_rrwp_for_backbones_that_ignore_edge_attri
         )
 
 
+def test_dual_stream_encoder_wires_global_gps_attention_heads():
+    from src.core.condition_encoder import DualStreamConditionEncoder
+
+    encoder = DualStreamConditionEncoder(
+        latent_dim=4,
+        node_feature_dim=4,
+        edge_feature_dim=3,
+        hidden_dim=16,
+        output_dim=8,
+        num_gnn_layers=1,
+        gnn_type="gps",
+        num_attention_heads=8,
+        use_reference_room_maps=False,
+    )
+
+    assert encoder.global_encoder.gps_layers[0].global_attn.num_heads == 8
+
+
 def test_global_stream_encoder_skips_mismatched_rrwp_rows():
     from src.core.condition_encoder import GlobalStreamEncoder
     from src.core.definitions import GRAPH_TPE_DIM

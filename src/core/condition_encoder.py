@@ -1243,6 +1243,13 @@ class GPSLayer(nn.Module):
                 if valid_nodes is not None:
                     valid_dense, _ = to_dense_batch(valid_nodes.to(dtype=torch.bool), assignments)
                     dense_mask = dense_mask & valid_dense.to(dtype=torch.bool)
+                original_dense_mask = dense_mask
+                valid_graphs = dense_mask.any(dim=1)
+                if not bool(valid_graphs.all()):
+                    dense = dense.clone()
+                    dense_mask = dense_mask.clone()
+                    dense[~valid_graphs, 0] = 0.0
+                    dense_mask[~valid_graphs, 0] = True
                 out_dense, _ = self.global_attn(
                     dense,
                     dense,
@@ -1250,9 +1257,9 @@ class GPSLayer(nn.Module):
                     key_padding_mask=~dense_mask,
                     need_weights=False,
                 )
-                out_dense = out_dense * dense_mask.to(dtype=out_dense.dtype).unsqueeze(-1)
+                out_dense = out_dense * original_dense_mask.to(dtype=out_dense.dtype).unsqueeze(-1)
                 global_out = torch.zeros_like(h)
-                global_out[node_positions[dense_mask]] = out_dense[dense_mask]
+                global_out[node_positions[original_dense_mask]] = out_dense[original_dense_mask]
             else:
                 global_out = torch.zeros_like(h)
                 for graph_id in torch.unique(assignments, sorted=True):
@@ -1535,6 +1542,7 @@ class DualStreamConditionEncoder(nn.Module):
             output_dim=output_dim,
             num_layers=num_gnn_layers,
             gnn_type=gnn_type,
+            num_heads=num_attention_heads,
             dropout=dropout,
             use_current_node_distance_features=use_current_node_distance_features,
             use_rrwp_edge_features=use_rrwp_edge_features,
