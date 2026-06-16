@@ -58,6 +58,40 @@ except ImportError:
     logger.warning("torch_geometric not available. Using fallback GNN implementation.")
 
 
+def _to_dense_batch_local(x: Tensor, batch_idx: Tensor) -> Tuple[Tensor, Tensor]:
+    """Small to_dense_batch fallback used when PyG is unavailable."""
+    if x.dim() < 1:
+        raise ValueError(f"x must have at least one dimension, got {tuple(x.shape)}")
+    if batch_idx.dim() != 1 or int(batch_idx.shape[0]) != int(x.shape[0]):
+        raise ValueError(
+            f"batch_idx must have shape [N] with N={int(x.shape[0])}; got {tuple(batch_idx.shape)}"
+        )
+    assignments = batch_idx.to(device=x.device, dtype=torch.long)
+    if assignments.numel() == 0:
+        return x.new_zeros((0, 0, *x.shape[1:])), torch.zeros((0, 0), dtype=torch.bool, device=x.device)
+    if torch.any(assignments < 0):
+        raise ValueError("batch_idx must be non-negative")
+    batch_count = int(assignments.max().item()) + 1
+    counts = torch.bincount(assignments, minlength=batch_count)
+    max_nodes = int(counts.max().item()) if counts.numel() else 0
+    dense = x.new_zeros((batch_count, max_nodes, *x.shape[1:]))
+    mask = torch.zeros((batch_count, max_nodes), dtype=torch.bool, device=x.device)
+    offsets = torch.zeros(batch_count, dtype=torch.long, device=x.device)
+    for idx in range(int(x.shape[0])):
+        batch = int(assignments[idx].item())
+        pos = int(offsets[batch].item())
+        dense[batch, pos] = x[idx]
+        mask[batch, pos] = True
+        offsets[batch] += 1
+    return dense, mask
+
+
+def _dense_batch(x: Tensor, batch_idx: Tensor) -> Tuple[Tensor, Tensor]:
+    if to_dense_batch is not None:
+        return to_dense_batch(x, batch_idx.to(device=x.device, dtype=torch.long))
+    return _to_dense_batch_local(x, batch_idx)
+
+
 # ============================================================================
 # LOCAL STREAM ENCODER (Stream A)
 # ============================================================================
@@ -1669,8 +1703,8 @@ class DualStreamConditionEncoder(nn.Module):
         # batched graphs, keep graph scopes isolated instead of expanding the
         # concatenated [sum(N_i), D] sequence across every batch item.
         if global_tokens.dim() == 2:
-            if batch_idx is not None and to_dense_batch is not None:
-                global_tokens, global_mask = to_dense_batch(
+            if batch_idx is not None:
+                global_tokens, global_mask = _dense_batch(
                     global_tokens,
                     batch_idx.to(device=global_tokens.device, dtype=torch.long),
                 )
@@ -1691,10 +1725,9 @@ class DualStreamConditionEncoder(nn.Module):
             if (
                 explicit_mask.dim() == 1
                 and batch_idx is not None
-                and to_dense_batch is not None
                 and global_mask is not None
             ):
-                explicit_mask, _ = to_dense_batch(
+                explicit_mask, _ = _dense_batch(
                     explicit_mask,
                     batch_idx.to(device=explicit_mask.device, dtype=torch.long),
                 )

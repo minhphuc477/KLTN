@@ -37,6 +37,7 @@ from pathlib import Path
 import logging
 import time
 import json
+import copy
 from collections import deque
 from datetime import datetime
 
@@ -856,6 +857,13 @@ class AdvancedNeuralSymbolicPipeline:
             layout_map=room_layout,
             tile_config=tile_config
         )
+        if theme_config:
+            visual_grid = self.style_engine.apply_theme(
+                semantic_grid=dungeon_grid,
+                theme_config=theme_config,
+            )
+        else:
+            visual_grid = dungeon_grid.copy()
         
         if self.demo_recorder:
             self.demo_recorder.capture_frame(
@@ -1253,7 +1261,7 @@ class AdvancedNeuralSymbolicPipeline:
             generation_order = sorted(mission_graph.nodes(), key=self._node_sort_key)
         
         for node_id in generation_order:
-            room_graph_context = dict(graph_context)
+            room_graph_context = self._clone_graph_context_for_room(graph_context)
             room_graph_context['current_node_idx'] = int(node_to_idx.get(node_id, 0))
             if base_global_state:
                 room_state = self.global_state_mgr.get_room_state(int(node_id)) if self.global_state_mgr else {}
@@ -1317,6 +1325,27 @@ class AdvancedNeuralSymbolicPipeline:
                     logger.warning(f"Failed to cache latent for room {node_id}: {e}")
         
         return rooms
+
+    @staticmethod
+    def _clone_graph_context_for_room(graph_context: Dict[str, Any]) -> Dict[str, Any]:
+        """Clone mutable context leaves so per-room edits cannot corrupt siblings."""
+        def clone_value(value: Any) -> Any:
+            if isinstance(value, torch.Tensor):
+                return value.clone()
+            if isinstance(value, np.ndarray):
+                return value.copy()
+            if isinstance(value, dict):
+                return {key: clone_value(val) for key, val in value.items()}
+            if isinstance(value, list):
+                return [clone_value(item) for item in value]
+            if isinstance(value, tuple):
+                return tuple(clone_value(item) for item in value)
+            try:
+                return copy.copy(value)
+            except Exception:
+                return value
+
+        return {key: clone_value(value) for key, value in dict(graph_context).items()}
     
     def _generate_single_room_with_ml(
         self,

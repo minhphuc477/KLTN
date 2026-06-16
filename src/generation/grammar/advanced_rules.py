@@ -1606,7 +1606,13 @@ class AddCollectionChallengeRule(ProductionRule):
             token_node = MissionNode(
                 id=token_id,
                 node_type=NodeType.TOKEN,
-                position=graph.nodes[target_node_id].position,
+                position=_bounded_free_position(
+                    graph,
+                    graph.nodes[target_node_id].position,
+                    [(0, 1), (1, 0), (0, -1), (-1, 0), (1, 1), (-1, 1), (1, -1), (-1, -1)],
+                    rng,
+                    context,
+                ),
                 difficulty=context.get('difficulty', 0.5) * 0.6,
                 token_id=f"TOKEN_{i}",
             )
@@ -1854,7 +1860,13 @@ class AddEntangledBranchesRule(ProductionRule):
         switch_node = MissionNode(
             id=switch_id,
             node_type=NodeType.SWITCH,
-            position=graph.nodes[switch_anchor].position,
+            position=_bounded_free_position(
+                graph,
+                graph.nodes[switch_anchor].position,
+                [(0, 1), (1, 0), (0, -1), (-1, 0), (1, 1), (-1, 1), (1, -1), (-1, -1)],
+                rng,
+                context,
+            ),
             difficulty=context.get('difficulty', 0.5) * 0.7,
             switch_id=switch_id,
         )
@@ -1874,7 +1886,13 @@ class AddEntangledBranchesRule(ProductionRule):
         reward_node = MissionNode(
             id=reward_id,
             node_type=rng.choice(reward_choices),
-            position=graph.nodes[block_anchor].position,
+            position=_bounded_free_position(
+                graph,
+                graph.nodes[block_anchor].position,
+                [(0, 1), (1, 0), (0, -1), (-1, 0), (2, 0), (0, 2), (-2, 0), (0, -2)],
+                rng,
+                context,
+            ),
             difficulty=context.get('difficulty', 0.5) * 0.8,
         )
         graph.add_node(reward_node)
@@ -2186,35 +2204,53 @@ class AddSkillChainRule(ProductionRule):
         base_x = base_pos[0]
         base_y = base_pos[1]
 
-        created_nodes = [
-            MissionNode(
-                id=next_id,
-                node_type=NodeType.TUTORIAL_PUZZLE,
-                position=(base_x + 1, base_y, base_floor),
-                difficulty=0.2,
-                difficulty_rating="SAFE",
-                is_tutorial=True,
-                tension_value=0.1,
-            ),
-            MissionNode(
-                id=next_id + 1,
-                node_type=NodeType.COMBAT_PUZZLE,
-                position=(base_x + 2, base_y, base_floor),
-                difficulty=0.5,
-                difficulty_rating="MODERATE",
-                tension_value=0.5,
-            ),
-            MissionNode(
-                id=next_id + 2,
-                node_type=NodeType.COMPLEX_PUZZLE,
-                position=(base_x + 3, base_y, base_floor),
-                difficulty=0.8,
-                difficulty_rating="HARD",
-                tension_value=0.7,
-            ),
-        ]
-        for node in created_nodes:
+        created_nodes: List[MissionNode] = []
+        for offset_idx, (node_type, offsets, node_kwargs) in enumerate(
+            [
+                (
+                    NodeType.TUTORIAL_PUZZLE,
+                    [(1, 0), (0, 1), (0, -1), (-1, 0)],
+                    {
+                        "difficulty": 0.2,
+                        "difficulty_rating": "SAFE",
+                        "is_tutorial": True,
+                        "tension_value": 0.1,
+                    },
+                ),
+                (
+                    NodeType.COMBAT_PUZZLE,
+                    [(2, 0), (1, 1), (1, -1), (0, 2), (0, -2)],
+                    {
+                        "difficulty": 0.5,
+                        "difficulty_rating": "MODERATE",
+                        "tension_value": 0.5,
+                    },
+                ),
+                (
+                    NodeType.COMPLEX_PUZZLE,
+                    [(3, 0), (2, 1), (2, -1), (1, 2), (1, -2)],
+                    {
+                        "difficulty": 0.8,
+                        "difficulty_rating": "HARD",
+                        "tension_value": 0.7,
+                    },
+                ),
+            ]
+        ):
+            node = MissionNode(
+                id=next_id + offset_idx,
+                node_type=node_type,
+                position=_bounded_free_position(
+                    graph,
+                    (base_x, base_y, base_floor),
+                    offsets,
+                    rng,
+                    context,
+                ),
+                **node_kwargs,
+            )
             graph.add_node(node)
+            created_nodes.append(node)
 
         if edge_idx is not None:
             graph.edges = [existing for i, existing in enumerate(graph.edges) if i != edge_idx]

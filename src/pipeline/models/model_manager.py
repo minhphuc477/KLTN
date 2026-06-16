@@ -36,7 +36,7 @@ def load_vqvae(pipeline, checkpoint_path: Optional[str]) -> torch.nn.Module:
     num_classes = int(np.max(pipeline._valid_semantic_tile_ids_np)) + 1
     architecture_name = "vqvae"
     latent_dim = 64
-    codebook_size = 512
+    codebook_size = 256
     top_codebook_size: Optional[int] = None
     top_latent_dim: Optional[int] = None
     hidden_dim = 128
@@ -769,11 +769,45 @@ class ModelManager:
             if isinstance(model, torch.nn.Module):
                 yield model
 
+    def iter_named_models(self) -> Iterable[Tuple[str, torch.nn.Module]]:
+        for name in self._MODEL_ATTRS:
+            model = getattr(self.engine, name, None)
+            if isinstance(model, torch.nn.Module):
+                yield name, model
+
     def to(self, device: str | torch.device) -> "ModelManager":
         target = torch.device(device)
         self.engine.device = target
         for model in self.iter_models():
             model.to(target)
+        return self
+
+    def active_model_names(self) -> Set[str]:
+        """Return model names that should stay on the runtime device."""
+        active = {"vqvae", "condition_encoder", "logic_net"}
+        mode = str(getattr(self.engine, "room_generator_mode", "latent_diffusion")).strip().lower()
+        if mode == "discrete_masked":
+            active.add("masked_room_model")
+            if bool(getattr(self.engine, "default_masked_room_teacher_fallback_enabled", False)):
+                active.add("diffusion")
+        else:
+            active.add("diffusion")
+        return active
+
+    def offload_inactive(
+        self,
+        active_names: Optional[Iterable[str]] = None,
+        *,
+        target_device: Optional[str | torch.device] = None,
+        offload_device: str | torch.device = "cpu",
+    ) -> "ModelManager":
+        """Move inactive model backends off GPU while keeping active components resident."""
+        target = torch.device(target_device) if target_device is not None else torch.device(getattr(self.engine, "device"))
+        offload = torch.device(offload_device)
+        active = set(active_names) if active_names is not None else self.active_model_names()
+        for name, model in self.iter_named_models():
+            model.to(target if name in active else offload)
+        self.engine.device = target
         return self
 
     def eval(self) -> "ModelManager":

@@ -35,7 +35,7 @@ from src.core.definitions import (
 
 try:
     import torch
-except (ImportError, AttributeError, RuntimeError, TypeError, ValueError):
+except ImportError:
     torch = None
 
 

@@ -277,9 +277,7 @@ class BidirectionalAStar:
         
         # Check for key item (ladder)
         has_item = len(self.env.find_all_positions(SEMANTIC_PALETTE['KEY_ITEM'])) > 0
-        if has_item:
-            all_bombs += 4  # KEY_ITEM also gives bombs
-        
+
         # Find all doors (for opened_doors set)
         all_door_positions = set()
         for door_type in [SEMANTIC_PALETTE['DOOR_LOCKED'], 
@@ -669,7 +667,8 @@ class BidirectionalAStar:
                 prev_state.keys = state.keys + 1  # Add key back
             elif curr_tile == SEMANTIC_PALETTE['DOOR_BOMB']:
                 prev_state.bomb_count = state.bomb_count + 1  # Add bomb back
-            # Boss key is permanent, no change needed
+            elif curr_tile == SEMANTIC_PALETTE['DOOR_BOSS']:
+                prev_state.has_boss_key = True
         
         # Check if we need to UNDO item collection
         if (curr_tile in PICKUP_IDS and 
@@ -685,7 +684,6 @@ class BidirectionalAStar:
                 prev_state.has_boss_key = False
             elif curr_tile == SEMANTIC_PALETTE['KEY_ITEM']:
                 prev_state.has_item = False
-                prev_state.bomb_count = max(0, state.bomb_count - 4)
             elif curr_tile == SEMANTIC_PALETTE['ITEM_MINOR']:
                 prev_state.bomb_count = max(0, state.bomb_count - 4)
         

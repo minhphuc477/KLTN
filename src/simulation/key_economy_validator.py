@@ -79,14 +79,14 @@ class GraphTopology(Enum):
 class PlayerState:
     """Game state during dungeon traversal."""
     current_node: int
-    inventory: Set[str] = field(default_factory=set)  # {'key_1', 'key_2', 'item_bomb'}
+    inventory: Dict[str, int] = field(default_factory=dict)  # {key_id: count}; keys consumed on use
     visited_nodes: Set[int] = field(default_factory=set)
     path_taken: List[int] = field(default_factory=list)
     
     def copy(self) -> 'PlayerState':
         return PlayerState(
             current_node=self.current_node,
-            inventory=self.inventory.copy(),
+            inventory=dict(self.inventory),  # shallow copy sufficient — values are ints
             visited_nodes=self.visited_nodes.copy(),
             path_taken=self.path_taken.copy()
         )
@@ -196,11 +196,16 @@ class GreedyPlayer:
         # Greedy BFS to goal
         while state.current_node != goal_node:
             # Find shortest accessible path to goal
-            next_node = self._find_next_greedy_move(state, goal_node)
+            result = self._find_next_greedy_move(state, goal_node)
             
-            if next_node is None:
+            if result is None:
                 # Cannot proceed - soft-lock
                 return (False, state)
+            
+            next_node, edge_data = result
+            
+            # Consume key for the edge being traversed on the live state.
+            self._consume_key_for_edge(state, edge_data)
             
             # Move to next node
             state.current_node = next_node
@@ -216,18 +221,19 @@ class GreedyPlayer:
         self,
         state: PlayerState,
         goal_node: int
-    ) -> Optional[int]:
+    ) -> Optional[Tuple[int, Dict]]:
         """
         Find next node on shortest accessible path to goal.
         
         Returns:
-            Next node ID, or None if no valid move
+            (next_node, edge_data) for the first step, or None if no valid move
         """
         # BFS over (node, inventory) state to correctly model key acquisition.
         start_state = state.copy()
-        queue = deque([(start_state, [state.current_node])])
-        visited: Set[Tuple[int, FrozenSet[str]]] = {
-            (state.current_node, frozenset(state.inventory))
+        # path stores (node, edge_data_to_reach_it) pairs; first entry has empty edge.
+        queue = deque([(start_state, [(state.current_node, {})])])
+        visited: Set[Tuple[int, FrozenSet]] = {
+            (state.current_node, frozenset(state.inventory.items()))
         }
         
         while queue:
@@ -236,54 +242,73 @@ class GreedyPlayer:
             
             if node == goal_node:
                 if len(path) > 1:
-                    return path[1]
-                return goal_node
+                    return path[1]  # (next_node, edge_data)
+                return (goal_node, {})
             
             for neighbor, edge_data in _iter_accessible_neighbor_edges(self.graph, node):
                 if not self._can_traverse_edge(curr_state, edge_data):
                     continue
                 
                 next_state = curr_state.copy()
+                # Consume the key on the *copy* — this is the committed move.
+                self._consume_key_for_edge(next_state, edge_data)
                 next_state.current_node = neighbor
                 self._collect_items_at_node(next_state, neighbor)
                 
-                sig = (neighbor, frozenset(next_state.inventory))
+                sig = (neighbor, frozenset(next_state.inventory.items()))
                 if sig in visited:
                     continue
                 
                 visited.add(sig)
-                queue.append((next_state, path + [neighbor]))
+                queue.append((next_state, path + [(neighbor, edge_data)]))
         
         return None  # No path to goal
     
     def _can_traverse_edge(self, state: PlayerState, edge_data: Dict) -> bool:
-        """Check if player can traverse edge given current inventory."""
+        """Pure check: can the player traverse this edge?  Does NOT mutate state."""
         lock_type = edge_data.get('lock_type', 'open')
-        
         if lock_type == 'open':
             return True
-        elif lock_type == 'locked' or lock_type == 'key_locked':
+        elif lock_type in ('locked', 'key_locked'):
             key_id = edge_data.get('key_id', 'key_generic')
-            return key_id in state.inventory
+            return state.inventory.get(key_id, 0) > 0
         elif lock_type == 'bomb':
-            return 'item_bomb' in state.inventory
+            return state.inventory.get('item_bomb', 0) > 0
         elif lock_type == 'boss':
-            return 'key_boss' in state.inventory
+            return state.inventory.get('key_boss', 0) > 0
         else:
             return True  # Unknown lock type - assume passable
+
+    @staticmethod
+    def _consume_key_for_edge(state: PlayerState, edge_data: Dict):
+        """Mutate state: consume the required key/item for this edge."""
+        lock_type = edge_data.get('lock_type', 'open')
+        if lock_type in ('locked', 'key_locked'):
+            key_id = edge_data.get('key_id', 'key_generic')
+        elif lock_type == 'bomb':
+            key_id = 'item_bomb'
+        elif lock_type == 'boss':
+            key_id = 'key_boss'
+        else:
+            return  # Nothing to consume
+        if state.inventory.get(key_id, 0) > 0:
+            state.inventory[key_id] -= 1
+            if state.inventory[key_id] == 0:
+                del state.inventory[key_id]
     
     def _collect_items_at_node(self, state: PlayerState, node_id: int):
-        """Collect all items present at node."""
+        """Collect all items present at node (increments counter)."""
         node_data = self.graph.nodes[node_id]
         
         # Collect keys
         if 'key_id' in node_data:
-            state.inventory.add(node_data['key_id'])
+            key_id = node_data['key_id']
+            state.inventory[key_id] = state.inventory.get(key_id, 0) + 1
         
         # Collect items
         if 'items' in node_data:
             for item in node_data['items']:
-                state.inventory.add(item)
+                state.inventory[item] = state.inventory.get(item, 0) + 1
 
 
 class AdversarialPlayer:
@@ -321,14 +346,17 @@ class AdversarialPlayer:
         
         steps = 0
         while state.current_node != goal_node and steps < max_steps:
-            signature = (state.current_node, frozenset(state.inventory))
+            signature = (state.current_node, frozenset(state.inventory.items()))
             seen_state_counts[signature] += 1
             if seen_state_counts[signature] > self.graph.number_of_nodes() * 2:
                 return (False, state)  # Degenerate loop under worst-case behavior
             
-            next_node = self._find_next_adversarial_move(state, goal_node)
+            next_node, chosen_edge = self._find_next_adversarial_move(state, goal_node)
             if next_node is None:
                 return (False, state)
+            
+            # Consume key for the *chosen* edge before moving.
+            self._consume_key_for_edge(state, chosen_edge)
             
             # Move to next node (revisits allowed).
             state.current_node = next_node
@@ -346,9 +374,12 @@ class AdversarialPlayer:
         self,
         state: PlayerState,
         goal_node: int
-    ) -> Optional[int]:
+    ) -> Optional[Tuple[int, Dict]]:
         """
         Find next move that maximizes suboptimality.
+        
+        Returns:
+            (next_node, edge_data) or None if stuck.
         
         Priority:
         1. Unvisited optional nodes (not on critical path)
@@ -384,15 +415,16 @@ class AdversarialPlayer:
             
             branching = self.graph.out_degree(neighbor)
             score = (priority, -dist_to_goal, -branching, type(neighbor).__name__, str(neighbor), neighbor)
-            accessible_neighbors.append(score)
+            accessible_neighbors.append((score, edge_data))
         
         if not accessible_neighbors:
             return None
 
-        unvisited_moves = [entry for entry in accessible_neighbors if entry[0] in {0, 1}]
+        unvisited_moves = [entry for entry in accessible_neighbors if entry[0][0] in {0, 1}]
         if unvisited_moves:
-            unvisited_moves.sort()
-            return unvisited_moves[0][-1]
+            unvisited_moves.sort(key=lambda e: e[0])
+            chosen_score, chosen_edge = unvisited_moves[0]
+            return (chosen_score[-1], chosen_edge)
 
         return self._find_next_goal_directed_move(state, goal_node)
 
@@ -400,47 +432,80 @@ class AdversarialPlayer:
         self,
         state: PlayerState,
         goal_node: int,
-    ) -> Optional[int]:
-        """Backtrack toward the goal once optional reachable space is exhausted."""
-        queue = deque([(state.current_node, [state.current_node])])
-        visited = {state.current_node}
+    ) -> Optional[Tuple[int, Dict]]:
+        """Backtrack toward the goal once optional reachable space is exhausted.
+        
+        Returns (next_node, edge_data) or None.
+        """
+        # Use a BFS that simulates key consumption on copies to find a
+        # reachable path to goal without mutating the live state.
+        start_copy = state.copy()
+        queue = deque([(start_copy, [state.current_node], [{}])])  # (state, path, edges)
+        visited: Set[Tuple[int, FrozenSet]] = {(state.current_node, frozenset(state.inventory.items()))}
         while queue:
-            node, path = queue.popleft()
+            curr, path, edges = queue.popleft()
+            node = curr.current_node
             if node == goal_node:
-                return path[1] if len(path) > 1 else goal_node
+                if len(path) > 1:
+                    return (path[1], edges[1])
+                return (goal_node, {})
             for neighbor, edge_data in _iter_accessible_neighbor_edges(self.graph, node):
-                if neighbor in visited or not self._can_traverse_edge(state, edge_data):
+                if not self._can_traverse_edge(curr, edge_data):
                     continue
-                visited.add(neighbor)
-                queue.append((neighbor, path + [neighbor]))
+                nxt = curr.copy()
+                self._consume_key_for_edge(nxt, edge_data)
+                nxt.current_node = neighbor
+                self._collect_items_at_node(nxt, neighbor)
+                sig = (neighbor, frozenset(nxt.inventory.items()))
+                if sig in visited:
+                    continue
+                visited.add(sig)
+                queue.append((nxt, path + [neighbor], edges + [edge_data]))
         return None
     
     def _can_traverse_edge(self, state: PlayerState, edge_data: Dict) -> bool:
-        """Check if player can traverse edge."""
+        """Pure check: can the player traverse this edge?  Does NOT mutate state."""
         lock_type = edge_data.get('lock_type', 'open')
-        
         if lock_type == 'open':
             return True
-        elif lock_type == 'locked' or lock_type == 'key_locked':
+        elif lock_type in ('locked', 'key_locked'):
             key_id = edge_data.get('key_id', 'key_generic')
-            return key_id in state.inventory
+            return state.inventory.get(key_id, 0) > 0
         elif lock_type == 'bomb':
-            return 'item_bomb' in state.inventory
+            return state.inventory.get('item_bomb', 0) > 0
         elif lock_type == 'boss':
-            return 'key_boss' in state.inventory
+            return state.inventory.get('key_boss', 0) > 0
         else:
             return True
+
+    @staticmethod
+    def _consume_key_for_edge(state: PlayerState, edge_data: Dict):
+        """Mutate state: consume the required key/item for this edge."""
+        lock_type = edge_data.get('lock_type', 'open')
+        if lock_type in ('locked', 'key_locked'):
+            key_id = edge_data.get('key_id', 'key_generic')
+        elif lock_type == 'bomb':
+            key_id = 'item_bomb'
+        elif lock_type == 'boss':
+            key_id = 'key_boss'
+        else:
+            return
+        if state.inventory.get(key_id, 0) > 0:
+            state.inventory[key_id] -= 1
+            if state.inventory[key_id] == 0:
+                del state.inventory[key_id]
     
     def _collect_items_at_node(self, state: PlayerState, node_id: int):
-        """Collect all items at node."""
+        """Collect all items at node (increments counter)."""
         node_data = self.graph.nodes[node_id]
         
         if 'key_id' in node_data:
-            state.inventory.add(node_data['key_id'])
+            key_id = node_data['key_id']
+            state.inventory[key_id] = state.inventory.get(key_id, 0) + 1
         
         if 'items' in node_data:
             for item in node_data['items']:
-                state.inventory.add(item)
+                state.inventory[item] = state.inventory.get(item, 0) + 1
 
 
 class MissionGraphAnalyzer:

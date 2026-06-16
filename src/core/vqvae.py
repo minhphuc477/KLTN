@@ -299,6 +299,10 @@ class VectorQuantizer(nn.Module):
             # EMA decay prevents stale early-training bias from blocking
             # diagnostics in long training or large inference runs.
             self.codebook_usage.mul_(0.99).add_(batch_usage, alpha=0.01)
+            if self.training and not self.use_ema:
+                self._reset_counter += 1
+                if self._reset_counter % self._reset_interval == 0:
+                    self._reset_dead_codes_standard(z_flat, indices)
         
         # Reshape indices
         indices = indices.view(B, H, W)
@@ -380,6 +384,9 @@ class VectorQuantizer(nn.Module):
         DDP-safe: replacement vectors are determined on rank-0 and
         broadcast to all replicas.
         """
+        if not self.use_ema:
+            self._reset_dead_codes_standard(z_flat, indices)
+            return
         with self._codebook_update_lock, torch.no_grad():
             if self._reset_counter < self._dead_code_warmup_steps:
                 return
@@ -451,6 +458,68 @@ class VectorQuantizer(nn.Module):
                     f"warmup={self._dead_code_warmup_steps}, "
                     f"max_per_event={self._max_dead_code_resets_per_event})"
                 )
+
+    def _reset_dead_codes_standard(self, z_flat: Tensor, indices: Optional[Tensor] = None):
+        """Reset dead learned-codebook entries when EMA statistics are disabled."""
+        if (
+            self._dead_threshold <= 0.0
+            or self._max_dead_code_resets_per_event <= 0
+            or z_flat.shape[0] <= 0
+            or self._reset_counter < self._dead_code_warmup_steps
+        ):
+            return
+        with self._codebook_update_lock, torch.no_grad():
+            usage_total = self.codebook_usage.sum().clamp_min(1.0)
+            usage_prob = self.codebook_usage / usage_total
+            usage_threshold = float(self._dead_threshold) / float(max(1, self.num_embeddings))
+            dead_mask = usage_prob < usage_threshold
+            candidate_dead = int(dead_mask.sum().item())
+            if candidate_dead <= 0:
+                return
+            if indices is not None and self._protect_active_codes_during_reset:
+                batch_active_mask = torch.bincount(
+                    indices.view(-1).to(device=self.codebook_usage.device),
+                    minlength=self.num_embeddings,
+                ).to(device=self.codebook_usage.device) > 0
+                dead_mask = dead_mask & (~batch_active_mask)
+            candidate_dead = int(dead_mask.sum().item())
+            if candidate_dead <= 0:
+                return
+            candidate_indices = torch.nonzero(dead_mask, as_tuple=False).view(-1)
+            if candidate_indices.numel() > self._max_dead_code_resets_per_event:
+                candidate_scores = usage_prob[candidate_indices]
+                keep_idx = torch.topk(
+                    candidate_scores,
+                    k=self._max_dead_code_resets_per_event,
+                    largest=False,
+                ).indices
+                selected = candidate_indices[keep_idx]
+                dead_mask = torch.zeros_like(dead_mask, dtype=torch.bool)
+                dead_mask[selected] = True
+            num_dead = int(dead_mask.sum().item())
+            if num_dead <= 0:
+                return
+            random_indices = torch.randint(
+                0,
+                z_flat.shape[0],
+                (num_dead,),
+                device=z_flat.device,
+            )
+            new_embeddings = z_flat[random_indices].detach()
+            new_embeddings = new_embeddings + torch.randn_like(new_embeddings) * 0.01
+            weight_mask = dead_mask.to(device=self.embedding.weight.device)
+            self.embedding.weight.data[weight_mask] = new_embeddings.to(
+                device=self.embedding.weight.device,
+                dtype=self.embedding.weight.dtype,
+            )
+            self.codebook_usage[dead_mask] = usage_total / float(max(1, self.num_embeddings))
+            logger.debug(
+                "VQ codebook: reset %d/%d non-EMA dead codes (candidates=%d, threshold=%.6f)",
+                num_dead,
+                self.num_embeddings,
+                candidate_dead,
+                usage_threshold,
+            )
     
     def get_codebook_usage(self) -> Tensor:
         """Get normalized codebook usage statistics."""

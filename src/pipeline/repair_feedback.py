@@ -191,15 +191,17 @@ def logicnet_guided_inpaint_room(
         device=device,
     )
 
-    if seed is not None:
-        torch.manual_seed(int(seed))
-
     guidance_module = getattr(diffusion, "guidance", None)
     old_guidance_scale = getattr(guidance_module, "guidance_scale", None)
     if old_guidance_scale is not None:
         guidance_module.guidance_scale = float(old_guidance_scale) * float(max(0.0, guidance_scale_multiplier))
     try:
-        with torch.no_grad():
+        rng_devices = []
+        if device.type == "cuda":
+            rng_devices = [device.index if device.index is not None else torch.cuda.current_device()]
+        with torch.random.fork_rng(devices=rng_devices), torch.no_grad():
+            if seed is not None:
+                torch.manual_seed(int(seed))
             z_inpaint = diffusion.inpaint(
                 x_0=z_0,
                 mask=latent_mask,

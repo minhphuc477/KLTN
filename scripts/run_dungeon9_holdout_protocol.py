@@ -389,13 +389,15 @@ def _train_tiny_gan(
         axis=0,
     )
 
-    torch.manual_seed(seed)
     device = torch.device("cpu")
     latent_dim = 64
-    generator = TinyRoomGenerator(latent_dim=latent_dim, num_tiles=len(tile_vocab)).to(device)
-    discriminator = TinyRoomDiscriminator(num_tiles=len(tile_vocab)).to(device)
+    with torch.random.fork_rng(devices=[]):
+        torch.manual_seed(seed)
+        generator = TinyRoomGenerator(latent_dim=latent_dim, num_tiles=len(tile_vocab)).to(device)
+        discriminator = TinyRoomDiscriminator(num_tiles=len(tile_vocab)).to(device)
     opt_g = torch.optim.Adam(generator.parameters(), lr=2e-4, betas=(0.5, 0.999))
     opt_d = torch.optim.Adam(discriminator.parameters(), lr=2e-4, betas=(0.5, 0.999))
+    torch_gen = torch.Generator(device=device).manual_seed(int(seed))
 
     real_targets = torch.ones((batch_size, 1), device=device)
     fake_targets = torch.zeros((batch_size, 1), device=device)
@@ -406,7 +408,7 @@ def _train_tiny_gan(
         real_idx = encoded_t.index_select(0, idx).to(device)
         real = F.one_hot(real_idx, num_classes=len(tile_vocab)).permute(0, 3, 1, 2).float()
 
-        z = torch.randn(batch_size, latent_dim, device=device)
+        z = torch.randn(batch_size, latent_dim, device=device, generator=torch_gen)
         fake_logits = generator(z)
         fake_soft = torch.softmax(fake_logits, dim=1)
 
@@ -416,7 +418,7 @@ def _train_tiny_gan(
         d_loss.backward()
         opt_d.step()
 
-        z = torch.randn(batch_size, latent_dim, device=device)
+        z = torch.randn(batch_size, latent_dim, device=device, generator=torch_gen)
         fake_soft = torch.softmax(generator(z), dim=1)
         opt_g.zero_grad(set_to_none=True)
         g_loss = F.binary_cross_entropy_with_logits(discriminator(fake_soft), real_targets)
@@ -435,12 +437,13 @@ def _generate_gan_rooms(
     seed: int,
     temperature: float = 0.85,
 ) -> List[np.ndarray]:
-    torch.manual_seed(seed)
     latent_dim = int(generator.net[0].in_features)
+    device = next(generator.parameters()).device
+    torch_gen = torch.Generator(device=device).manual_seed(int(seed))
     with torch.no_grad():
-        logits = generator(torch.randn(count, latent_dim)) / max(0.05, float(temperature))
+        logits = generator(torch.randn(count, latent_dim, device=device, generator=torch_gen)) / max(0.05, float(temperature))
         probs = torch.softmax(logits, dim=1).permute(0, 2, 3, 1).reshape(-1, len(tile_vocab))
-        sampled = torch.multinomial(probs, num_samples=1).view(count, ROOM_HEIGHT, ROOM_WIDTH).cpu().numpy()
+        sampled = torch.multinomial(probs, num_samples=1, generator=torch_gen).view(count, ROOM_HEIGHT, ROOM_WIDTH).cpu().numpy()
     return [tile_vocab[grid].astype(np.int32) for grid in sampled]
 
 
@@ -673,33 +676,35 @@ def _summarize_method(
 def _profile_unet_cost(config_path: Path, *, room_budget: int) -> Dict[str, Any]:
     cfg = merge_config(yaml_path=str(config_path))
     diffusion = dict(cfg["diffusion"])
-    model = create_latent_diffusion(
-        latent_dim=int(diffusion["latent_dim"]),
-        model_channels=int(diffusion["model_channels"]),
-        context_dim=int(diffusion["context_dim"]),
-        num_timesteps=int(diffusion["num_timesteps"]),
-        schedule_type=str(diffusion["schedule_type"]),
-        prediction_type=str(diffusion["prediction_type"]),
-        cfg_dropout_prob=float(diffusion["cfg_dropout_prob"]),
-        cfg_scale=float(diffusion["cfg_scale"]),
-        cfg_schedule_mode=str(diffusion["cfg_schedule_mode"]),
-        cfg_schedule_min_scale=float(diffusion["cfg_schedule_min_scale"]),
-        cfg_schedule_power=float(diffusion["cfg_schedule_power"]),
-        min_snr_gamma=float(diffusion["min_snr_gamma"]),
-        topology_refinement_mode=str(diffusion["topology_refinement_mode"]),
-        attention_mode=str(diffusion["attention_mode"]),
-        topology_conditioning_mode=str(diffusion["topology_conditioning_mode"]),
-        hedgehog_feature_dim=int(diffusion["hedgehog_feature_dim"]),
-        graph_auto_linear_attention_nodes=int(diffusion["graph_auto_linear_attention_nodes"]),
-        spatial_graph_gate_init=float(diffusion["spatial_graph_gate_init"]),
-        spatial_topology_gate_init=float(diffusion["spatial_topology_gate_init"]),
-        room_topology_channels=int(diffusion["room_topology_channels"]),
-        unet_channel_mult=tuple(int(v) for v in diffusion["unet_channel_mult"]),
-        unet_num_res_blocks=int(diffusion["unet_num_res_blocks"]),
-        unet_attention_resolutions=tuple(int(v) for v in diffusion["unet_attention_resolutions"]),
-        unet_num_heads=int(diffusion["unet_num_heads"]),
-        unet_dropout=float(diffusion["unet_dropout"]),
-    )
+    with torch.random.fork_rng(devices=[]):
+        torch.manual_seed(0)
+        model = create_latent_diffusion(
+            latent_dim=int(diffusion["latent_dim"]),
+            model_channels=int(diffusion["model_channels"]),
+            context_dim=int(diffusion["context_dim"]),
+            num_timesteps=int(diffusion["num_timesteps"]),
+            schedule_type=str(diffusion["schedule_type"]),
+            prediction_type=str(diffusion["prediction_type"]),
+            cfg_dropout_prob=float(diffusion["cfg_dropout_prob"]),
+            cfg_scale=float(diffusion["cfg_scale"]),
+            cfg_schedule_mode=str(diffusion["cfg_schedule_mode"]),
+            cfg_schedule_min_scale=float(diffusion["cfg_schedule_min_scale"]),
+            cfg_schedule_power=float(diffusion["cfg_schedule_power"]),
+            min_snr_gamma=float(diffusion["min_snr_gamma"]),
+            topology_refinement_mode=str(diffusion["topology_refinement_mode"]),
+            attention_mode=str(diffusion["attention_mode"]),
+            topology_conditioning_mode=str(diffusion["topology_conditioning_mode"]),
+            hedgehog_feature_dim=int(diffusion["hedgehog_feature_dim"]),
+            graph_auto_linear_attention_nodes=int(diffusion["graph_auto_linear_attention_nodes"]),
+            spatial_graph_gate_init=float(diffusion["spatial_graph_gate_init"]),
+            spatial_topology_gate_init=float(diffusion["spatial_topology_gate_init"]),
+            room_topology_channels=int(diffusion["room_topology_channels"]),
+            unet_channel_mult=tuple(int(v) for v in diffusion["unet_channel_mult"]),
+            unet_num_res_blocks=int(diffusion["unet_num_res_blocks"]),
+            unet_attention_resolutions=tuple(int(v) for v in diffusion["unet_attention_resolutions"]),
+            unet_num_heads=int(diffusion["unet_num_heads"]),
+            unet_dropout=float(diffusion["unet_dropout"]),
+        )
     denoiser = model.denoiser.eval()
     params = int(sum(p.numel() for p in denoiser.parameters()))
     trainable_params = int(sum(p.numel() for p in denoiser.parameters() if p.requires_grad))
@@ -758,9 +763,10 @@ def _profile_unet_cost(config_path: Path, *, room_budget: int) -> Dict[str, Any]
     profile_error: Optional[str] = None
     try:
         with torch.no_grad():
-            x = torch.randn(1, int(diffusion["latent_dim"]), ROOM_HEIGHT, ROOM_WIDTH)
+            torch_gen = torch.Generator(device="cpu").manual_seed(0)
+            x = torch.randn(1, int(diffusion["latent_dim"]), ROOM_HEIGHT, ROOM_WIDTH, generator=torch_gen)
             t = torch.tensor([int(diffusion["num_timesteps"]) // 2], dtype=torch.long)
-            context = torch.randn(1, int(room_budget), int(diffusion["context_dim"]))
+            context = torch.randn(1, int(room_budget), int(diffusion["context_dim"]), generator=torch_gen)
             node_mask = torch.ones(1, int(room_budget), dtype=torch.bool)
             edge_index = torch.empty((2, 0), dtype=torch.long)
             _ = denoiser(

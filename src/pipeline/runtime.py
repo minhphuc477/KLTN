@@ -462,6 +462,8 @@ def _initialize_pipeline_from_flat_kwargs(
 
     pipeline._bind_components(components)
     pipeline.masked_room_model = pipeline._load_masked_room_model(pipeline.masked_room_checkpoint)
+    if getattr(pipeline, "device", torch.device("cpu")).type == "cuda":
+        pipeline.model_manager.offload_inactive()
 
     if enable_logging:
         logger.info(

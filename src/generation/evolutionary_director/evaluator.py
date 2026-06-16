@@ -943,17 +943,80 @@ class TensionCurveEvaluator:
         cognitive_metrics: Dict[str, Any] = {}
         if not self.legacy_baseline_mode:
             try:
-                from src.evaluation.cbs_fitness import compute_cbs_fitness
+                # Compute cognitive metrics inline from the candidate's own
+                # topology descriptors.  The previous implementation delegated
+                # to ``compute_cbs_fitness`` which, when given a networkx
+                # graph, used a static proxy that returned the same score for
+                # identical topologies — making it impossible for the GA to
+                # differentiate candidates on cognitive quality.
+                #
+                # The inline version below uses per-individual structural
+                # features that genuinely vary between candidate topologies:
+                #   - branching_factor: proportion of nodes with out-degree ≥ 2
+                #   - dead_end_ratio: fraction of non-goal terminal nodes
+                #   - cycle_density: cyclomatic complexity normalised by nodes
+                #   - path_depth_ratio: critical path length / node count
+                #
+                # These are combined into a confusion_index that models how
+                # cognitively taxing navigation would be, and then scored
+                # against the target confusion ratio.
 
-                cbs_input_graph = mission_graph_to_networkx(graph, directed=True)
-                cognitive_metrics = compute_cbs_fitness(
-                    cbs_input_graph,
-                    persona=self.cognitive_persona,
-                    target_confusion_ratio=self.target_cognitive_confusion_ratio,
-                )
-                cognitive_score = float(np.clip(cognitive_metrics.get("fitness", 0.5), 0.0, 1.0))
+                n = max(1, int(len(graph.nodes)))
+                e = max(0, int(len(graph.edges)))
+
+                # Branching factor: high branching increases decision points.
+                branch_nodes = 0
+                dead_end_nodes = 0
+                for node_id in graph.nodes.keys():
+                    out_deg = int(graph.get_out_degree(node_id))
+                    if out_deg >= 2:
+                        branch_nodes += 1
+                    if out_deg == 0:
+                        node = graph.nodes[node_id]
+                        if node.node_type != NodeType.GOAL:
+                            dead_end_nodes += 1
+                branch_pressure = float(np.clip(float(branch_nodes) / float(n), 0.0, 1.0))
+                dead_end_ratio = float(np.clip(float(dead_end_nodes) / float(n), 0.0, 1.0))
+
+                # Reuse already-computed descriptor values where available.
+                cd = float(descriptor_metrics.get("cycle_density", 0.0))
+                pdr = float(descriptor_metrics.get("path_depth_ratio", 0.0))
+
+                # Confusion index: models cognitive load from topology.
+                confusion_index = float(np.clip(
+                    (0.35 * branch_pressure)
+                    + (0.25 * dead_end_ratio)
+                    + (0.20 * cd)
+                    + (0.20 * (1.0 - pdr)),  # low path-depth → more wandering
+                    0.0,
+                    3.0,
+                ))
+                confusion_ratio = 1.0 + confusion_index
+
+                # Score: how close is the topology's confusion to the target?
+                target = max(1.0, float(self.target_cognitive_confusion_ratio))
+                target_normalised = max(0.0, target - 1.0)
+                cr_penalty = (confusion_index - target_normalised) ** 2
+                cognitive_score = float(np.clip(1.0 / (1.0 + cr_penalty), 0.0, 1.0))
+
+                path_efficiency = float(pdr)
+                room_entropy = float(np.clip(
+                    float(np.std([int(graph.get_out_degree(nid)) for nid in graph.nodes.keys()]))
+                    / max(1.0, float(np.mean([int(graph.get_out_degree(nid)) for nid in graph.nodes.keys()])) + 1e-8),
+                    0.0,
+                    1.0,
+                )) if n > 1 else 0.0
+
+                cognitive_metrics = {
+                    "fitness": float(cognitive_score),
+                    "confusion_ratio": float(confusion_ratio),
+                    "confusion_index": float(confusion_index),
+                    "path_efficiency": float(path_efficiency),
+                    "room_entropy": float(room_entropy),
+                    "is_proxy": 0.0,
+                }
             except (ImportError, RuntimeError, ValueError, TypeError, KeyError) as error:
-                logger.debug("CBS cognitive scoring failed, using neutral score: %s", error)
+                logger.debug("Inline cognitive scoring failed, using neutral score: %s", error)
                 cognitive_metrics = {}
                 cognitive_score = 0.5
         descriptor_metrics["cognitive_score"] = float(cognitive_score)

@@ -194,10 +194,17 @@ def _extract_graph_from_dungeon(
     *,
     node_feature_dim: int = GRAPH_NODE_FEATURE_DIM,
     edge_feature_dim: int = GRAPH_EDGE_FEATURE_DIM,
+    allow_spatial_fallback: bool = False,
 ) -> dict:
     """Extract authoritative graph tensors from a stitched VGLC dungeon."""
     graph = getattr(dungeon, 'graph', None)
     if graph is None or len(graph.nodes()) == 0:
+        if not bool(allow_spatial_fallback):
+            raise ValueError(
+                "Authoritative VGLC graph topology is missing; refusing to derive "
+                "conditioning edges from the target stitched spatial layout. Pass "
+                "allow_spatial_fallback=True only for explicit non-publication baselines."
+            )
         return _extract_graph_spatial_from_dungeon(
             dungeon,
             node_feature_dim=node_feature_dim,
@@ -706,6 +713,7 @@ class ZeldaDungeonDataset(Dataset):
         augment: bool = False,  # Apply D4 dihedral symmetry augmentation
         lazy_vglc: bool = True,
         categorical_tokens: bool = False,
+        allow_spatial_graph_fallback: bool = False,
     ):
         self.data_dir = Path(data_dir)
         self.transform = transform
@@ -715,8 +723,15 @@ class ZeldaDungeonDataset(Dataset):
         self.use_vglc = use_vglc and VGLC_AVAILABLE
         self.pad_to_max = pad_to_max
         self.augment = bool(augment)
+        if self.augment and bool(load_graphs):
+            raise ValueError(
+                "augment=True cannot be combined with load_graphs=True until graph "
+                "metadata and directional room-conditioning tensors are transformed "
+                "with the same symmetry as the target grid."
+            )
         self._d4_augment = RandomD4Symmetry()
         self.load_graphs = load_graphs
+        self.allow_spatial_graph_fallback = bool(allow_spatial_graph_fallback)
         self.node_feature_dim = int(max(1, node_feature_dim))
         self.edge_feature_dim = int(max(1, edge_feature_dim))
         self.dungeon_ids = normalize_dungeon_ids(dungeon_ids)
@@ -816,6 +831,7 @@ class ZeldaDungeonDataset(Dataset):
             dungeon,
             node_feature_dim=self.node_feature_dim,
             edge_feature_dim=self.edge_feature_dim,
+            allow_spatial_fallback=self.allow_spatial_graph_fallback,
         )
     
     def _extract_graph_spatial(self, dungeon) -> dict:
@@ -982,12 +998,19 @@ class ZeldaRoomDataset(Dataset):
         dungeon_ids: Optional[Iterable[int]] = None,
         variants: Optional[Iterable[int]] = None,
         augment: bool = False,  # Apply D4 dihedral symmetry augmentation
+        allow_spatial_graph_fallback: bool = False,
     ):
         self.transform = transform
         self.categorical_tokens = bool(categorical_tokens)
         self.normalize = bool(normalize) and not self.categorical_tokens
         self.load_graphs = load_graphs
         self.augment = bool(augment)
+        if self.augment and bool(load_graphs):
+            raise ValueError(
+                "augment=True cannot be combined with load_graphs=True until graph "
+                "metadata and directional room-conditioning tensors are transformed "
+                "with the same symmetry as the target grid."
+            )
         self._d4_augment = RandomD4Symmetry()
         self.node_feature_dim = int(max(1, node_feature_dim))
         self.edge_feature_dim = int(max(1, edge_feature_dim))
@@ -998,6 +1021,7 @@ class ZeldaRoomDataset(Dataset):
         self.puzzle_stage_trace_decay = float(max(0.05, min(1.0, puzzle_stage_trace_decay)))
         self.dungeon_ids = normalize_dungeon_ids(dungeon_ids)
         self.variants = normalize_variants(variants)
+        self.allow_spatial_graph_fallback = bool(allow_spatial_graph_fallback)
         self.rooms = []
         self.graphs = [] if load_graphs else None
         self.sample_metadata: List[Dict[str, Any]] = []
@@ -1020,6 +1044,7 @@ class ZeldaRoomDataset(Dataset):
                         dungeon,
                         node_feature_dim=self.node_feature_dim,
                         edge_feature_dim=self.edge_feature_dim,
+                        allow_spatial_fallback=self.allow_spatial_graph_fallback,
                     ) if load_graphs else None
                     for coord, room in dungeon.rooms.items():
                         grid = getattr(room, 'semantic_grid', None)
@@ -1269,6 +1294,7 @@ def create_dataloader(
     augment: bool = False,
     lazy_vglc: bool = True,
     categorical_tokens: bool = False,
+    allow_spatial_graph_fallback: bool = False,
 ) -> DataLoader:
     """
     Create a DataLoader for Zelda dungeon training.
@@ -1322,6 +1348,7 @@ def create_dataloader(
             dungeon_ids=dungeon_ids,
             variants=variants,
             augment=augment,
+            allow_spatial_graph_fallback=allow_spatial_graph_fallback,
         )
     else:
         dataset = ZeldaDungeonDataset(
@@ -1338,6 +1365,7 @@ def create_dataloader(
             variants=variants,
             augment=augment,
             lazy_vglc=lazy_vglc,
+            allow_spatial_graph_fallback=allow_spatial_graph_fallback,
         )
     
     batch_sampler = None

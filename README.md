@@ -19,7 +19,7 @@ KLTN implements a complete research pipeline for generating Legend of Zelda-like
 ### Block I: Evolutionary Topology Director (Fully Integrated)
 - Implements evolutionary search over graph grammars
 - Generates dungeon topologies matching target difficulty curves
-- Uses (μ+λ)-ES with tournament selection and biased mutation
+- Uses (mu+lambda)-ES with tournament selection and biased mutation
 - Produces NetworkX graphs with VGLC-compliant node and edge attributes
 - **Now integrated into main pipeline**: Call `generate_dungeon(generate_topology=True)` to automatically evolve topology
 

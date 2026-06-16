@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import signal
 import subprocess
 import sys
 import time
@@ -108,20 +110,24 @@ def _artifact_summary_lines(step_name: str, payload: Dict[str, Any]) -> List[str
 
 def _run(command: List[str], cwd: Path, timeout_sec: Optional[int]) -> StepResult:
     started = time.time()
+    timeout = int(timeout_sec) if timeout_sec and timeout_sec > 0 else None
+    creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) if os.name == "nt" else 0
+    start_new_session = os.name != "nt"
+    proc: Optional[subprocess.Popen[str]] = None
     try:
-        proc = subprocess.run(
+        proc = subprocess.Popen(
             command,
             cwd=str(cwd),
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
             errors="replace",
-            check=False,
-            timeout=(int(timeout_sec) if timeout_sec and timeout_sec > 0 else None),
+            creationflags=creationflags,
+            start_new_session=start_new_session,
         )
+        out, err = proc.communicate(timeout=timeout)
         duration = float(time.time() - started)
-        out = str(proc.stdout or "")
-        err = str(proc.stderr or "")
         return StepResult(
             name="",
             command=command,
@@ -130,18 +136,48 @@ def _run(command: List[str], cwd: Path, timeout_sec: Optional[int]) -> StepResul
             stdout_tail=out[-2000:],
             stderr_tail=err[-2000:],
         )
-    except subprocess.TimeoutExpired as exc:
+    except subprocess.TimeoutExpired:
+        if proc is not None:
+            _terminate_process_tree(proc)
+            try:
+                out, err = proc.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                out, err = "", ""
+        else:
+            out, err = "", ""
         duration = float(time.time() - started)
-        out = str(exc.stdout or "")
-        err = str(exc.stderr or "")
         return StepResult(
             name="",
             command=command,
             exit_code=124,
             duration_sec=duration,
-            stdout_tail=out[-2000:],
-            stderr_tail=(err + "\n[timeout] step exceeded timeout_sec")[ -2000:],
+            stdout_tail=str(out or "")[-2000:],
+            stderr_tail=(str(err or "") + "\n[timeout] step exceeded timeout_sec")[-2000:],
         )
+
+
+def _terminate_process_tree(proc: subprocess.Popen[str]) -> None:
+    if proc.poll() is not None:
+        return
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        return
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
 
 
 def _safe_read_json(path: Path) -> Optional[Dict[str, Any]]:

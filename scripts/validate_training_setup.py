@@ -15,6 +15,27 @@ if str(PROJECT_ROOT) not in sys.path:
 from src.train_diffusion import DiffusionTrainer, DiffusionTrainingConfig
 
 
+def _flatten_yaml_dict(d: dict, parent_key: str = "", sep: str = ".") -> dict:
+    """Recursively flatten nested YAML sections into a single-level dict.
+
+    For each nested dict, both the dotted key (``section.key``) *and* the
+    bare leaf key are emitted.  Bare leaf keys are only kept when they do
+    not collide with an existing top-level key so that explicit top-level
+    overrides always win.
+    """
+    items: dict = {}
+    for k, v in d.items():
+        full_key = f"{parent_key}{sep}{k}" if parent_key else k
+        if isinstance(v, dict):
+            items.update(_flatten_yaml_dict(v, full_key, sep=sep))
+        else:
+            items[full_key] = v
+            # Also store the bare leaf key if it doesn't collide.
+            if k not in items:
+                items[k] = v
+    return items
+
+
 def check_training_setup():
     """Load the training config and verify LogicNet parameters are optimized."""
     print("[*] Loading Diffusion Training Config")
@@ -23,10 +44,12 @@ def check_training_setup():
     with config_path.open(encoding="utf-8") as handle:
         config_dict = yaml.safe_load(handle)
 
+    flat_dict = _flatten_yaml_dict(config_dict)
+
     config_args = {
-        field.name: config_dict[field.name]
+        field.name: flat_dict[field.name]
         for field in fields(DiffusionTrainingConfig)
-        if field.name in config_dict
+        if field.name in flat_dict
     }
 
     config = DiffusionTrainingConfig(**config_args)

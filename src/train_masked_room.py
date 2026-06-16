@@ -729,15 +729,19 @@ class MaskedRoomTrainer:
             lr=config.learning_rate,
             weight_decay=0.0,
         )
-        estimated_total_steps = int(max(1, int(config.epochs) * 100))
         self.scheduler = optim.lr_scheduler.CosineAnnealingLR(
             self.optimizer,
-            T_max=estimated_total_steps,
+            T_max=int(max(1, int(config.epochs))),
             eta_min=config.scheduler_eta_min,
         )
         self.global_step = 0
         # Keep -1 until the outer training loop assigns the first epoch index.
         self.epoch = -1
+
+    def configure_scheduler_total_steps(self, total_steps: int) -> None:
+        """Set cosine period from the actual dataloader length when known."""
+        if hasattr(self.scheduler, "T_max"):
+            self.scheduler.T_max = int(max(1, total_steps))
 
     def _create_logic_net(self) -> LogicNet:
         pathfinder = str(getattr(self.config, "logic_grid_pathfinder", "bellman_ford")).strip().lower()
@@ -760,7 +764,12 @@ class MaskedRoomTrainer:
     def _to_token_ids(real_maps: torch.Tensor, num_classes: int) -> torch.Tensor:
         if real_maps.dim() != 4 or int(real_maps.shape[1]) != 1:
             raise ValueError(f"Expected room tensors [B,1,H,W], got {tuple(real_maps.shape)}")
-        tile_ids = (real_maps.squeeze(1) * float(num_classes - 1)).round().long()
+        maps = real_maps.squeeze(1)
+        sample_max = maps.amax(dim=(-2, -1), keepdim=True)
+        raw_categorical = sample_max > 1.0
+        normalized_ids = (maps * float(num_classes - 1)).round()
+        raw_ids = maps.round()
+        tile_ids = torch.where(raw_categorical, raw_ids, normalized_ids).long()
         return tile_ids.clamp_(0, num_classes - 1)
 
     @staticmethod
@@ -1589,10 +1598,10 @@ def train_masked_room(config: MaskedRoomTrainingConfig) -> MaskedRoomTrainer:
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     train_loader, val_loader, eval_split_name, train_size, eval_size = _create_masked_room_dataloaders(config)
+    exact_total_steps = int(max(1, int(config.epochs)))
     try:
         exact_total_steps = int(max(1, int(config.epochs) * max(1, len(train_loader))))
-        if hasattr(trainer.scheduler, "T_max"):
-            trainer.scheduler.T_max = exact_total_steps
+        trainer.configure_scheduler_total_steps(exact_total_steps)
     except (TypeError, ValueError):
         pass
     log_capacity_guardrails(
@@ -1647,6 +1656,7 @@ def train_masked_room(config: MaskedRoomTrainingConfig) -> MaskedRoomTrainer:
     if resume_path is not None:
         try:
             resume_payload = trainer.load_checkpoint(str(resume_path))
+            trainer.configure_scheduler_total_steps(exact_total_steps)
         except (RuntimeError, ValueError) as exc:
             if getattr(config, "resume_checkpoint", None):
                 raise

@@ -23,6 +23,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from typing import List, Dict
 
+import pytest
+
 from src.generation.grammar import (
     AddBossGauntlet,
     AddSecretRule,
@@ -56,7 +58,7 @@ class TestAdvancedRulesIntegration:
         grammar = MissionGrammar(seed=42)
         
         # Check we have expected number of rules
-        assert len(grammar.rules) >= 24, f"Expected ≥24 rules, got {len(grammar.rules)}"
+        assert len(grammar.rules) >= 24, f"Expected >=24 rules, got {len(grammar.rules)}"
         
         # Check advanced rules are present
         rule_names = [rule.name for rule in grammar.rules]
@@ -246,10 +248,10 @@ class TestAdvancedRulesIntegration:
         node_types = set(n.node_type for n in graph.nodes.values())
         edge_types = set(e.edge_type for e in graph.edges)
         
-        assert len(node_types) >= 5, f"Should have ≥5 node types, got {len(node_types)}"
-        assert len(edge_types) >= 3, f"Should have ≥3 edge types, got {len(edge_types)}"
+        assert len(node_types) >= 5, f"Should have >=5 node types, got {len(node_types)}"
+        assert len(edge_types) >= 3, f"Should have >=3 edge types, got {len(edge_types)}"
         
-        print(f"\n✅ Generated graph: {len(graph.nodes)} nodes, {len(graph.edges)} edges")
+        print(f"\nGenerated graph: {len(graph.nodes)} nodes, {len(graph.edges)} edges")
         print(f"   Node types: {[t.name for t in node_types]}")
         print(f"   Edge types: {[t.name for t in edge_types]}")
     
@@ -265,7 +267,7 @@ class TestAdvancedRulesIntegration:
         
         # If rule applied, validate it
         if fungible_locks:
-            print(f"\n✅ Fungible locks found: {len(fungible_locks)}")
+            print(f"\nFungible locks found: {len(fungible_locks)}")
             assert len(fungible_keys) >= 1, "Should have fungible keys"
             
             for lock_edge in fungible_locks:
@@ -273,7 +275,7 @@ class TestAdvancedRulesIntegration:
                 assert keys_before >= lock_edge.requires_key_count, \
                     f"Not enough keys before lock (have {keys_before}, need {lock_edge.requires_key_count})"
         else:
-            print("\n⚠️  Fungible lock rule not applied (probabilistic)")
+            pytest.skip("Fungible lock rule not applied for this deterministic seed")
     
     def test_fungible_lock_does_not_count_big_key_as_small_key(self):
         """Boss keys should not satisfy requires_key_count small-key locks."""
@@ -310,7 +312,7 @@ class TestAdvancedRulesIntegration:
         big_rooms = [n for n in graph.nodes.values() if n.is_big_room]
         
         if big_rooms:
-            print(f"\n✅ Big rooms found: {len(big_rooms)}")
+            print(f"\nBig rooms found: {len(big_rooms)}")
             
             for room in big_rooms:
                 assert room.room_size != (1, 1), "Big room should have non-default size"
@@ -318,7 +320,7 @@ class TestAdvancedRulesIntegration:
                     f"Invalid big room size: {room.room_size}"
                 print(f"   Room {room.id}: size {room.room_size}")
         else:
-            print("\n⚠️  Big room rule not applied (probabilistic)")
+            pytest.skip("Big room rule not applied for this deterministic seed")
     
     def test_cycle_valves(self):
         """Test one-way valves in cycles (RULE #3)."""
@@ -332,7 +334,7 @@ class TestAdvancedRulesIntegration:
         print(f"   One-way edges: {len(one_way_edges)}")
         
         if cycles and one_way_edges:
-            print("✅ Valve rule applied successfully")
+            print("Valve rule applied successfully")
             
             # Verify asymmetry
             valve = one_way_edges[0]
@@ -340,7 +342,9 @@ class TestAdvancedRulesIntegration:
                 "Forward path should exist"
             
             if valve.source in graph._adjacency.get(valve.target, []):
-                print(f"   ⚠️  Valve {valve.source}->{valve.target} still bidirectional")
+                raise AssertionError(f"Valve {valve.source}->{valve.target} still bidirectional")
+        else:
+            pytest.skip("Valve rule not applied for this deterministic seed")
     
     def test_visual_foreshadowing(self):
         """Test visual links (RULE #4)."""
@@ -350,7 +354,7 @@ class TestAdvancedRulesIntegration:
         visual_links = [e for e in graph.edges if e.edge_type == EdgeType.VISUAL_LINK]
         
         if visual_links:
-            print(f"\n✅ Visual links found: {len(visual_links)}")
+            print(f"\nVisual links found: {len(visual_links)}")
             
             for link in visual_links:
                 # Verify spatial proximity
@@ -366,7 +370,7 @@ class TestAdvancedRulesIntegration:
                 
                 print(f"   Link {link.source}->{link.target}: spatial={manhattan}, path={path_dist}")
         else:
-            print("\n⚠️  Visual link rule not applied (probabilistic)")
+            pytest.skip("Visual link rule not applied for this deterministic seed")
     
     def test_collection_challenge(self):
         """Test token collection system (RULE #5)."""
@@ -377,12 +381,12 @@ class TestAdvancedRulesIntegration:
         multi_locks = [e for e in graph.edges if e.edge_type == EdgeType.MULTI_LOCK]
         
         if multi_locks:
-            print("\n✅ Collection challenge found")
+            print("\nCollection challenge found")
             print(f"   Tokens: {len(tokens)}")
             print(f"   Multi-locks: {len(multi_locks)}")
             
             for lock in multi_locks:
-                assert lock.token_count >= 2, "Multi-lock should require ≥2 tokens"
+                assert lock.token_count >= 2, "Multi-lock should require >=2 tokens"
                 print(f"   Lock at {lock.source}->{lock.target} requires {lock.token_count} tokens")
             
             # Verify sufficient tokens exist
@@ -390,7 +394,7 @@ class TestAdvancedRulesIntegration:
                 assert len(tokens) >= multi_locks[0].token_count, \
                     "Not enough tokens for multi-lock"
         else:
-            print("\n⚠️  Collection challenge rule not applied (probabilistic)")
+            pytest.skip("Collection challenge rule not applied for this deterministic seed")
     
     def test_combat_arenas(self):
         """Test arena rooms with shutters (RULE #6)."""
@@ -401,14 +405,14 @@ class TestAdvancedRulesIntegration:
         shutters = [e for e in graph.edges if e.edge_type == EdgeType.SHUTTER]
         
         if arenas:
-            print(f"\n✅ Arenas found: {len(arenas)}")
+            print(f"\nArenas found: {len(arenas)}")
             print(f"   Shutter edges: {len(shutters)}")
             
             for arena in arenas:
                 incoming_shutters = [e for e in shutters if e.target == arena.id]
                 print(f"   Arena {arena.id}: {len(incoming_shutters)} shutters")
         else:
-            print("\n⚠️  Arena rule not applied (probabilistic)")
+            pytest.skip("Arena rule not applied for this deterministic seed")
     
     def test_thematic_sectors(self):
         """Test sector grouping (RULE #7)."""
@@ -424,7 +428,7 @@ class TestAdvancedRulesIntegration:
                 sectors[node.sector_id].append(node)
         
         if sectors:
-            print(f"\n✅ Sectors found: {len(sectors)}")
+            print(f"\nSectors found: {len(sectors)}")
             
             for sector_id, nodes in sectors.items():
                 themes = [n.sector_theme for n in nodes if n.sector_theme]
@@ -436,7 +440,7 @@ class TestAdvancedRulesIntegration:
                     assert len(set(themes)) == 1, \
                         f"Sector {sector_id} has inconsistent themes: {set(themes)}"
         else:
-            print("\n⚠️  Sector rule not applied (probabilistic)")
+            pytest.skip("Sector rule not applied for this deterministic seed")
     
     def test_entangled_branches(self):
         """Test cross-branch dependencies (RULE #8)."""
@@ -447,7 +451,7 @@ class TestAdvancedRulesIntegration:
         state_blocks = [e for e in graph.edges if e.edge_type == EdgeType.STATE_BLOCK]
         
         if switches and state_blocks:
-            print("\n✅ Entangled branches detected")
+            print("\nEntangled branches detected")
             print(f"   Switches: {len(switches)}")
             print(f"   State blocks: {len(state_blocks)}")
             
@@ -458,7 +462,7 @@ class TestAdvancedRulesIntegration:
                     assert len(matching_switches) > 0, \
                         f"State block references non-existent switch {block.switch_id}"
         else:
-            print("\n⚠️  Entangled branches rule not applied (probabilistic)")
+            pytest.skip("Entangled branches rule not applied for this deterministic seed")
     
     def test_hazard_gates(self):
         """Test hazard paths with protection (RULE #9)."""
@@ -469,7 +473,7 @@ class TestAdvancedRulesIntegration:
         protections = [n for n in graph.nodes.values() if n.node_type == NodeType.PROTECTION_ITEM]
         
         if hazards:
-            print(f"\n✅ Hazards found: {len(hazards)}")
+            print(f"\nHazards found: {len(hazards)}")
             print(f"   Protection items: {len(protections)}")
             
             for hazard in hazards:
@@ -483,10 +487,9 @@ class TestAdvancedRulesIntegration:
                 # Check if matching protection exists
                 matching = [p for p in protections 
                            if p.item_type == hazard.protection_item_id]
-                if not matching:
-                    print("      ⚠️  No matching protection item found")
+                assert matching, "No matching protection item found"
         else:
-            print("\n⚠️  Hazard gate rule not applied (probabilistic)")
+            pytest.skip("Hazard gate rule not applied for this deterministic seed")
     
     def test_virtual_room_layers(self):
         """Test virtual room layering (RULE #10)."""
@@ -496,7 +499,7 @@ class TestAdvancedRulesIntegration:
         layered_nodes = [n for n in graph.nodes.values() if n.virtual_layer > 0]
         
         if layered_nodes:
-            print(f"\n✅ Virtual layers found: {len(layered_nodes)}")
+            print(f"\nVirtual layers found: {len(layered_nodes)}")
             
             for layered in layered_nodes:
                 # Find nodes at same position
@@ -521,7 +524,7 @@ class TestAdvancedRulesIntegration:
                 if layer_edges:
                     print(f"      Connected via {layer_edges[0].edge_type.name}")
         else:
-            print("\n⚠️  Virtual layer rule not applied (probabilistic)")
+            pytest.skip("Virtual layer rule not applied for this deterministic seed")
     
     def test_advanced_features_diversity(self):
         """Test that multiple advanced features appear together."""
@@ -557,9 +560,9 @@ class TestAdvancedRulesIntegration:
         # Should have multiple types of advanced features
         feature_types = len([v for v in features.values() if v > 0])
         assert feature_types >= 2, \
-            f"Should have ≥2 types of advanced features (got {feature_types})"
+            f"Should have >=2 types of advanced features (got {feature_types})"
         
-        print(f"\n✅ Total advanced features: {total} ({feature_types} types)")
+        print(f"\nTotal advanced features: {total} ({feature_types} types)")
 
 
 class TestRuleConstraints:
@@ -680,7 +683,7 @@ class TestRuleConstraints:
         assert start is not None, "START node missing"
         assert goal is not None, "GOAL node missing"
         
-        print(f"\n✅ Start: {start.id}, Goal: {goal.id}")
+        print(f"\nStart: {start.id}, Goal: {goal.id}")
 
 
 def test_quick_smoke_test():
@@ -691,7 +694,7 @@ def test_quick_smoke_test():
     assert len(graph.nodes) >= 2  # At least START and GOAL
     assert len(graph.edges) >= 1
     
-    print("\n✅ Quick smoke test passed")
+    print("\nQuick smoke test passed")
 
 
 if __name__ == '__main__':
@@ -772,5 +775,5 @@ if __name__ == '__main__':
     constraint_tests.test_start_and_goal_exist()
     
     print("\n" + "="*70)
-    print("✅ ALL TESTS COMPLETED SUCCESSFULLY")
+    print("ALL TESTS COMPLETED SUCCESSFULLY")
     print("="*70)

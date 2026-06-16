@@ -253,9 +253,11 @@ class LinearityLeniencyExtractor(FeatureExtractor):
         if num_locks == 0:
             return 1.0  # No locks = maximum leniency
         
-        # Extra keys ratio
+        # Extra keys ratio: capped at 2.0 so the archive can distinguish tight
+        # economies (leniency ≈ 1.0) from abundant ones (leniency > 1.0).
+        # Values above 2.0 offer diminishing behavioral relevance.
         leniency = num_keys / num_locks
-        return min(1.0, leniency)
+        return min(2.0, leniency)
 
 
 class DensityDifficultyExtractor(FeatureExtractor):
@@ -375,8 +377,11 @@ class EliteArchive:
                 normalized = (float(f) - float(f_min)) / span
             normalized = float(np.clip(normalized, 0.0, 1.0))
 
-            # Map [0,1] into integer bins [0, cells_per_dim-1] deterministically.
-            cell_idx = min(int(normalized * self.cells_per_dim), self.cells_per_dim - 1)
+            # Map [0,1] into integer bins [0, cells_per_dim-1].
+            # Add a tiny epsilon so exact decimal boundaries like 0.29 with
+            # 100 cells do not underflow to 28 due to binary float rounding.
+            scaled = normalized * self.cells_per_dim
+            cell_idx = min(int(np.floor(scaled + 1e-12)), self.cells_per_dim - 1)
             cell.append(cell_idx)
         return tuple(cell)
     
@@ -1034,21 +1039,28 @@ def create_map_elites(
     """
     # Select feature extractor
     feature_dims = 2
+    feature_ranges = None  # Use archive default [(0,1)] per dim unless overridden
     if feature_type == 'linearity_leniency':
         extractor = LinearityLeniencyExtractor()
         feature_dims = 2
+        # Leniency is now capped at 2.0, so extend its archive range.
+        feature_ranges = [(0.0, 1.0), (0.0, 2.0)]
     elif feature_type == 'density_difficulty':
         extractor = DensityDifficultyExtractor()
         feature_dims = 2
     elif feature_type == 'combined':
         extractor = CombinedFeatureExtractor()
         feature_dims = 4
+        # Dims: (linearity, leniency, density, difficulty)
+        feature_ranges = [(0.0, 1.0), (0.0, 2.0), (0.0, 1.0), (0.0, 1.0)]
     elif feature_type == 'cbs':
         extractor = CBSFeatureExtractor()
         feature_dims = 2
     elif feature_type == 'full':
         extractor = FullFeatureExtractor()
         feature_dims = 6
+        # Dims: (linearity, leniency, density, difficulty, confusion, entropy)
+        feature_ranges = [(0.0, 1.0), (0.0, 2.0), (0.0, 1.0), (0.0, 1.0), (0.0, 1.0), (0.0, 1.0)]
     else:
         raise ValueError(f"Unknown feature type: {feature_type}")
     
@@ -1064,6 +1076,7 @@ def create_map_elites(
         fitness_fn=fitness_fn,
         cells_per_dim=cells_per_dim,
         feature_dims=feature_dims,
+        feature_ranges=feature_ranges,
     )
     
     # Replace archive with CVT if requested

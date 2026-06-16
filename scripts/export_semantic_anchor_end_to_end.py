@@ -78,6 +78,21 @@ def _release_torch_memory() -> None:
         torch.cuda.empty_cache()
 
 
+def _synchronize_cuda() -> None:
+    if torch is not None and torch.cuda.is_available():
+        torch.cuda.synchronize()
+
+
+def _start_timed_cuda_block() -> float:
+    _synchronize_cuda()
+    return time.perf_counter()
+
+
+def _elapsed_timed_cuda_block(started_at: float) -> float:
+    _synchronize_cuda()
+    return float(time.perf_counter() - started_at)
+
+
 def _resolve_masked_room_checkpoint(run_dir: Path) -> Path:
     for candidate in (
         run_dir / "checkpoints" / "masked_room" / "masked_room_best.pth",
@@ -274,7 +289,7 @@ def main() -> None:
         f"(seed={int(args.seed)}, rooms={int(args.num_rooms)}, population={int(args.topology_population)}, "
         f"generations={int(args.topology_generations)})"
     )
-    topology_started = time.perf_counter()
+    topology_started = _start_timed_cuda_block()
     prepared = diffusion_pipeline.prepare_dungeon_generation(
         mission_graph=None,
         generate_topology=True,
@@ -283,7 +298,7 @@ def main() -> None:
         generations=int(args.topology_generations),
         seed=int(args.seed),
     )
-    _emit_progress(f"shared topology ready in {time.perf_counter() - topology_started:.1f}s")
+    _emit_progress(f"shared topology ready in {_elapsed_timed_cuda_block(topology_started):.1f}s")
     mission_graph = copy.deepcopy(prepared.mission_graph)
     del prepared
     del diffusion_pipeline
@@ -299,7 +314,7 @@ def main() -> None:
     summaries: Dict[str, Any] = {}
 
     _emit_progress("starting diffusion export (50-step teacher)")
-    started = time.perf_counter()
+    started = _start_timed_cuda_block()
     summaries["diffusion_cfg3_logic0_steps50"] = export_variant(
             run_dir=args.run_dir,
             mission_graph=mission_graph,
@@ -312,11 +327,11 @@ def main() -> None:
             seed=int(args.seed),
             generation_overrides=generation_overrides,
         )
-    _emit_progress(f"finished diffusion export in {time.perf_counter() - started:.1f}s")
+    _emit_progress(f"finished diffusion export in {_elapsed_timed_cuda_block(started):.1f}s")
     _release_torch_memory()
 
     _emit_progress("starting fast-sampler export (4-step)")
-    started = time.perf_counter()
+    started = _start_timed_cuda_block()
     summaries["fast_cfg3_logic0_steps4"] = export_variant(
             run_dir=args.run_dir,
             mission_graph=mission_graph,
@@ -329,11 +344,11 @@ def main() -> None:
             seed=int(args.seed),
             generation_overrides=generation_overrides,
         )
-    _emit_progress(f"finished fast-sampler export in {time.perf_counter() - started:.1f}s")
+    _emit_progress(f"finished fast-sampler export in {_elapsed_timed_cuda_block(started):.1f}s")
     _release_torch_memory()
 
     _emit_progress("starting masked-room export")
-    started = time.perf_counter()
+    started = _start_timed_cuda_block()
     summaries["masked_room_full"] = export_masked_variant(
             run_dir=args.run_dir,
             mission_graph=mission_graph,
@@ -342,7 +357,7 @@ def main() -> None:
             seed=int(args.seed),
             generation_overrides=generation_overrides,
         )
-    _emit_progress(f"finished masked-room export in {time.perf_counter() - started:.1f}s")
+    _emit_progress(f"finished masked-room export in {_elapsed_timed_cuda_block(started):.1f}s")
     _release_torch_memory()
     (args.output_dir / "summary.json").write_text(
         json.dumps(

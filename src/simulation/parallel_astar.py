@@ -26,6 +26,8 @@ import heapq
 import logging
 from typing import Any, Dict, List, Tuple, Optional
 from dataclasses import dataclass
+import numpy as np
+import torch
 from .validator import (
     GameState,
     SEMANTIC_PALETTE,
@@ -41,6 +43,13 @@ from .validator import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _coerce_worker_grid(grid: Any) -> np.ndarray:
+    """Detach tensors before sending grids into multiprocessing workers."""
+    if isinstance(grid, torch.Tensor):
+        return grid.detach().cpu().numpy()
+    return np.asarray(grid)
 
 
 @dataclass
@@ -126,7 +135,6 @@ def _try_move_local(
                 new_state.has_boss_key = True
             elif target_tile == SEMANTIC_PALETTE['KEY_ITEM']:
                 new_state.has_item = True
-                new_state.bomb_count = state.bomb_count + 4
             elif target_tile == SEMANTIC_PALETTE['ITEM_MINOR']:
                 new_state.bomb_count = state.bomb_count + 4
         return True, new_state
@@ -147,6 +155,7 @@ def _try_move_local(
 
     if target_tile == SEMANTIC_PALETTE['DOOR_BOSS']:
         if state.has_boss_key:
+            new_state.has_boss_key = False
             new_state.opened_doors = state.opened_doors | {target_pos}
             return True, new_state
         return False, state
@@ -201,19 +210,35 @@ def _parallel_astar_worker(
     start_time = time.time()
     states_explored = 0
     try:
+        def reconstruct_path(end_key: Any, positions: Dict[Any, Tuple[int, int]], parents: Dict[Any, Optional[Any]]) -> List[Tuple[int, int]]:
+            rev: List[Tuple[int, int]] = []
+            key: Optional[Any] = end_key
+            while key is not None:
+                pos = positions.get(key)
+                if pos is None:
+                    break
+                rev.append(pos)
+                key = parents.get(key)
+            rev.reverse()
+            return rev
+
         open_set = []
         counter = 0
         g_scores = {}
+        parents: Dict[Any, Optional[Any]] = {}
+        positions: Dict[Any, Tuple[int, int]] = {}
 
         # Start from the same initial frontier in each worker.
         start_key = game_state_key(start_state)
         g_scores[start_key] = 0
+        parents[start_key] = None
+        positions[start_key] = start_state.position
         f_score = _heuristic_local(start_state, goal_pos)
-        heapq.heappush(open_set, (f_score, counter, start_key, start_state, [start_state.position]))
+        heapq.heappush(open_set, (f_score, counter, start_key, start_state))
         counter += 1
 
         while open_set and not termination_flag.is_set():
-            _, _, state_key, current_state, path = heapq.heappop(open_set)
+            _, _, state_key, current_state = heapq.heappop(open_set)
 
             # Skip if already globally explored.
             if state_key in shared_closed:
@@ -230,7 +255,7 @@ def _parallel_astar_worker(
                     WorkerResult(
                         worker_id=worker_id,
                         success=True,
-                        path=path,
+                        path=reconstruct_path(state_key, positions, parents),
                         states_explored=states_explored,
                         time_taken=elapsed,
                     )
@@ -267,8 +292,10 @@ def _parallel_astar_worker(
                     continue
 
                 g_scores[new_key] = g_score
+                parents[new_key] = state_key
+                positions[new_key] = new_state.position
                 f_score = g_score + _heuristic_local(new_state, goal_pos)
-                heapq.heappush(open_set, (f_score, counter, new_key, new_state, path + [new_state.position]))
+                heapq.heappush(open_set, (f_score, counter, new_key, new_state))
                 counter += 1
     except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
         # Worker crashed before producing a result; include reason for diagnosis.
@@ -361,7 +388,7 @@ class ParallelAStarSolver:
         # Create worker processes
         processes = []
         # Capture immutable worker inputs once.
-        grid = self.env.original_grid
+        grid = _coerce_worker_grid(self.env.original_grid)
         goal_pos = self.env.goal_pos
         height = self.env.height
         width = self.env.width

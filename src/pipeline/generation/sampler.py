@@ -23,10 +23,70 @@ from src.zelda_data.vglc_utils import validate_room_dimensions
 logger = logging.getLogger(__name__)
 DEFAULT_ROOM_LATENT_HW: Tuple[int, int] = canonical_latent_shape((ROOM_HEIGHT, ROOM_WIDTH))
 
+_CURRENT_BOUNDARY_SLICES = {
+    "N": (0, slice(None)),
+    "S": (-1, slice(None)),
+    "W": (slice(None), 0),
+    "E": (slice(None), -1),
+}
+_NEIGHBOR_OPPOSITE_SLICES = {
+    "N": (-1, slice(None)),
+    "S": (0, slice(None)),
+    "W": (slice(None), -1),
+    "E": (slice(None), 0),
+}
+
 
 def _record_stage_time(stage_times: Dict[str, float], key: str, started_at: float) -> None:
     """Accumulate low-overhead stage timings for generation ablations."""
     stage_times[key] = float(stage_times.get(key, 0.0)) + float(time.perf_counter() - started_at)
+
+
+def _apply_maskgit_neighbor_boundary_tokens(
+    pipeline,
+    fixed_tokens: Optional[torch.Tensor],
+    fixed_mask: Optional[torch.Tensor],
+    neighbor_latents: Dict[str, Optional[Any]],
+) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], int]:
+    """Anchor MaskGIT boundary tokens from decoded neighbor latents."""
+    if not neighbor_latents:
+        return fixed_tokens, fixed_mask, 0
+    if fixed_tokens is None or fixed_mask is None:
+        fixed_tokens = torch.zeros((1, ROOM_HEIGHT, ROOM_WIDTH), device=pipeline.device, dtype=torch.long)
+        fixed_mask = torch.zeros((1, ROOM_HEIGHT, ROOM_WIDTH), device=pipeline.device, dtype=torch.bool)
+    fixed_tokens = fixed_tokens.to(device=pipeline.device, dtype=torch.long).clone()
+    fixed_mask = fixed_mask.to(device=pipeline.device, dtype=torch.bool).clone()
+    applied = 0
+    for raw_direction, latent in neighbor_latents.items():
+        direction = str(raw_direction).upper()
+        if direction not in _CURRENT_BOUNDARY_SLICES or latent is None:
+            continue
+        try:
+            latent_t = torch.as_tensor(latent, device=pipeline.device)
+            if latent_t.dim() == 3:
+                latent_t = latent_t.unsqueeze(0)
+            if latent_t.dim() != 4:
+                continue
+            with torch.no_grad():
+                neighbor_logits = pipeline._decode_latent_with_vqvae(latent_t)
+                neighbor_grid = neighbor_logits.argmax(dim=1)[0].to(device=pipeline.device, dtype=torch.long)
+            if tuple(neighbor_grid.shape[-2:]) != (ROOM_HEIGHT, ROOM_WIDTH):
+                continue
+            dst = _CURRENT_BOUNDARY_SLICES[direction]
+            src = _NEIGHBOR_OPPOSITE_SLICES[direction]
+            source_values = neighbor_grid[src]
+            protected = fixed_mask[0][dst]
+            write_mask = ~protected
+            current_view = fixed_tokens[0][dst]
+            current_view[write_mask] = source_values[write_mask]
+            fixed_tokens[0][dst] = current_view
+            fixed_mask_view = fixed_mask[0][dst]
+            fixed_mask_view[write_mask] = True
+            fixed_mask[0][dst] = fixed_mask_view
+            applied += int(write_mask.sum().item())
+        except (AttributeError, RuntimeError, ValueError, TypeError):
+            logger.debug("Skipping MaskGIT neighbor boundary anchors for direction %s", direction, exc_info=True)
+    return fixed_tokens, fixed_mask, applied
 
 
 def _configure_runtime_logic_guidance(pipeline, logic_guidance_scale: float) -> float:
@@ -307,8 +367,21 @@ def generate_room_batch(
             )
             for inp in per_room_inputs
         ]
-        fixed_tokens = torch.cat([layout[0] for layout in fixed_layouts], dim=0)
-        fixed_mask = torch.cat([layout[1] for layout in fixed_layouts], dim=0)
+        anchored_layouts = []
+        boundary_anchor_count = 0
+        for layout, inp in zip(fixed_layouts, per_room_inputs):
+            anchored_tokens, anchored_mask, applied = _apply_maskgit_neighbor_boundary_tokens(
+                pipeline,
+                layout[0],
+                layout[1],
+                inp.get('neighbor_latents', {}),
+            )
+            anchored_layouts.append((anchored_tokens, anchored_mask))
+            boundary_anchor_count += int(applied)
+        fixed_tokens = torch.cat([layout[0] for layout in anchored_layouts], dim=0)
+        fixed_mask = torch.cat([layout[1] for layout in anchored_layouts], dim=0)
+        if boundary_anchor_count > 0:
+            pipeline._bump_diagnostic("masked_room_neighbor_boundary_tokens_applied")
         tokens_batch, logits_batch, z_batch = pipeline.masked_room_model.sample(
             context=condition_batch,
             graph_data=graph_ctx_for_guidance,
@@ -557,6 +630,19 @@ def generate_room(
     room_started_at = time.perf_counter()
     stage_times: Dict[str, float] = {}
     local_np_rng = np.random.default_rng(seed) if seed is not None else np.random.default_rng()
+    torch_rng_state = torch.random.get_rng_state() if seed is not None else None
+    cuda_rng_states = (
+        torch.cuda.get_rng_state_all()
+        if seed is not None and torch.cuda.is_available()
+        else None
+    )
+
+    def _restore_torch_rng_state() -> None:
+        if torch_rng_state is not None:
+            torch.random.set_rng_state(torch_rng_state)
+        if cuda_rng_states is not None and torch.cuda.is_available():
+            torch.cuda.set_rng_state_all(cuda_rng_states)
+
     if seed is not None:
         torch.manual_seed(seed)
     neighbor_latents = pipeline._normalize_neighbor_latents(neighbor_latents)
@@ -656,6 +742,14 @@ def generate_room(
                 room_id,
                 start_goal=start_goal_coords,
             )
+        fixed_tokens, fixed_mask, boundary_anchor_count = _apply_maskgit_neighbor_boundary_tokens(
+            pipeline,
+            fixed_tokens,
+            fixed_mask,
+            neighbor_latents,
+        )
+        if boundary_anchor_count > 0:
+            pipeline._bump_diagnostic("masked_room_neighbor_boundary_tokens_applied")
         sampled_tokens, logits, z_latent = pipeline.masked_room_model.sample(
             context=condition,
             graph_data=graph_data,
@@ -1611,9 +1705,10 @@ def generate_room(
         )
         teacher_result.metrics["original_fallback_candidate_neural_grid_entropy"] = float(metrics["neural_grid_entropy"])
         teacher_result.metrics["original_fallback_candidate_tiles_changed"] = float(metrics["tiles_changed"])
+        _restore_torch_rng_state()
         return teacher_result
 
-    return RoomGenerationResult(
+    result = RoomGenerationResult(
         room_id=room_id,
         room_grid=final_grid,
         latent=latent_cpu,
@@ -1626,6 +1721,8 @@ def generate_room(
         puzzle_metadata=room_puzzle_metadata,
         metrics=metrics,
     )
+    _restore_torch_rng_state()
+    return result
 
 
 class DiffusionSampler:

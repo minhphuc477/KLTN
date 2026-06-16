@@ -376,3 +376,50 @@ Latest targeted additions:
   count. Silent fallback is a publication bug.
 - Claims about Bayesian agents must reference the categorical posterior
   implementation, not scalar confidence alone.
+
+## 2026-06-17 Verification Addendum
+
+This pass rechecked the final vulnerability ledger against the current
+workspace instead of treating old audit text as ground truth.
+
+Fixed and verified:
+
+- VQ-VAE no-checkpoint fallback now uses the project codebook contract
+  (`256`) instead of the stale `512` value.
+- Torch import guards now suppress only `ImportError`; broken Torch runtime
+  errors are no longer hidden as optional dependency absence.
+- End-to-end export timing now synchronizes CUDA before and after timed
+  generation blocks.
+- Priority research subprocess timeouts now terminate process trees.
+- Dungeon 9 holdout GAN/profiling helpers and MaskGIT tests no longer mutate
+  global Torch RNG state.
+- D* Lite and parallel A* localized fallback paths now use parent pointers
+  instead of copying full path lists per expansion.
+- Parallel A*, D* Lite predecessor inversion, and Bidirectional A* inverse
+  transitions now match canonical item/bomb/boss-key mechanics.
+- PyG-less batched graph conditioning now has a local dense-batch fallback, so
+  graph tokens are isolated per sample instead of copied across the batch.
+- Collision-prone advanced rules now route token/switch/reward/skill-chain
+  node placement through bounded free-position selection.
+- Stochastic advanced-rule integration checks now skip unexercised features
+  explicitly rather than passing silently.
+
+Scientific boundary:
+
+- The current `graphormer` attention mode should be reported as a static
+  shortest-path-bias ablation, not as a faithful Graphormer baseline with
+  learned centrality/spatial/edge encodings.
+- MAP-Elites descriptor axes remain structural proxies unless a report uses
+  validator-feasible critical-path and key-economy descriptors. Archive
+  coverage/QD-score claims must name the descriptor definition used.
+- MaskGIT claims should be tied to iterative masked-token refinement metrics
+  and no-teacher-fallback diagnostics, not to generic "autoregressive" wording.
+
+Focused verification commands from this pass:
+
+- `python -m pytest tests/test_verified_vulnerability_fixes.py -q` passed with
+  18 tests.
+- `python -m pytest tests/test_discrete_masked_room_model.py::test_masked_concat_encoder_respects_context_node_mask tests/test_discrete_masked_room_model.py::test_masked_backbone_ignores_masked_context_tokens -q`
+  passed with 2 tests.
+- `python -m pytest tests/test_advanced_rules_integration.py::TestAdvancedRulesIntegration::test_fungible_key_economy tests/test_advanced_rules_integration.py::TestAdvancedRulesIntegration::test_big_room_merging tests/test_advanced_rules_integration.py::TestAdvancedRulesIntegration::test_cycle_valves tests/test_advanced_rules_integration.py::TestAdvancedRulesIntegration::test_visual_foreshadowing tests/test_advanced_rules_integration.py::TestAdvancedRulesIntegration::test_collection_challenge tests/test_advanced_rules_integration.py::TestAdvancedRulesIntegration::test_combat_arenas tests/test_advanced_rules_integration.py::TestAdvancedRulesIntegration::test_thematic_sectors tests/test_advanced_rules_integration.py::TestAdvancedRulesIntegration::test_entangled_branches tests/test_advanced_rules_integration.py::TestAdvancedRulesIntegration::test_hazard_gates tests/test_advanced_rules_integration.py::TestAdvancedRulesIntegration::test_virtual_room_layers -q`
+  passed as 1 exercised test and 9 explicit skips.

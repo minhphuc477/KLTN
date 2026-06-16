@@ -462,7 +462,7 @@ class GraphvizParser:
             r'(\d+)\s*\[([^\]]*)\]'
         )
         self.edge_pattern = re.compile(
-            r'(\d+)\s*->\s*(\d+)\s*(?:\[([^\]]*)\])?'
+            r'(\d+)\s*(->|--)\s*(\d+)\s*(?:\[([^\]]*)\])?'
         )
         self.label_pattern = re.compile(r'label\s*=\s*"([^"]*)"')
     
@@ -499,11 +499,14 @@ class GraphvizParser:
         # Parse edges
         for match in self.edge_pattern.finditer(dot_content):
             from_node = int(match.group(1))
-            to_node = int(match.group(2))
-            attrs_str = match.group(3) or ''
+            operator = str(match.group(2))
+            to_node = int(match.group(3))
+            attrs_str = match.group(4) or ''
 
             attrs = self._parse_edge_attrs(attrs_str)
             G.add_edge(from_node, to_node, **attrs)
+            if operator == '--':
+                G.add_edge(to_node, from_node, **dict(attrs))
 
         # Ensure all edge endpoints exist as nodes
         for u, v in list(G.edges()):

@@ -30,6 +30,7 @@ output/
 outputs/
 results/
 exports/
+hparam_sweep_out/
 tmp/
 tmp*/
 tmp_*/

@@ -51,6 +51,19 @@ def _macro_f1(pred: torch.Tensor, target: torch.Tensor, *, num_classes: int) -> 
     return float(f1[present].mean().item()) if bool(present.any()) else 0.0
 
 
+def _batch_class_weights(target: torch.Tensor, *, num_classes: int, max_weight: float) -> torch.Tensor:
+    """Inverse-frequency weights for rare semantic tiles in the current batch."""
+    counts = torch.bincount(target.reshape(-1), minlength=int(num_classes)).to(dtype=torch.float32, device=target.device)
+    present = counts > 0
+    weights = torch.ones(int(num_classes), device=target.device, dtype=torch.float32)
+    if bool(present.any()):
+        present_counts = counts[present]
+        inv = present_counts.sum() / (present_counts * float(max(1, int(present.sum().item()))))
+        inv = inv / inv.mean().clamp_min(1e-8)
+        weights[present] = inv.clamp(max=float(max_weight))
+    return weights
+
+
 @torch.no_grad()
 def evaluate(vqvae: torch.nn.Module, logic_net: LogicNet, loader, *, device: torch.device, num_classes: int) -> Dict[str, float]:
     vqvae.eval()
@@ -155,7 +168,12 @@ def train(args: argparse.Namespace) -> Dict[str, Any]:
                 z_0, _ = vqvae.encode(real_maps)
             logits = logic_net.tile_classifier(z_0)
             logits = logic_net._project_tile_logits_to_room(logits)
-            loss = F.cross_entropy(logits, target)
+            class_weights = (
+                _batch_class_weights(target, num_classes=args.num_classes, max_weight=args.class_weight_max)
+                if args.class_balanced_loss
+                else None
+            )
+            loss = F.cross_entropy(logits, target, weight=class_weights)
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
             torch.nn.utils.clip_grad_norm_([p for p in logic_net.parameters() if p.requires_grad], args.grad_clip_norm)
@@ -181,6 +199,10 @@ def train(args: argparse.Namespace) -> Dict[str, Any]:
         raise SystemExit(
             f"Tile classifier accuracy {metrics['accuracy']:.4f} is below threshold {float(args.min_accuracy):.4f}."
         )
+    if not args.no_enforce_threshold and metrics["macro_f1"] < float(args.min_macro_f1):
+        raise SystemExit(
+            f"Tile classifier macro_f1 {metrics['macro_f1']:.4f} is below threshold {float(args.min_macro_f1):.4f}."
+        )
     return payload
 
 
@@ -198,7 +220,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--grad-clip-norm", type=float, default=1.0)
     parser.add_argument("--min-accuracy", type=float, default=0.70)
+    parser.add_argument("--min-macro-f1", type=float, default=0.20)
     parser.add_argument("--no-enforce-threshold", action="store_true")
+    parser.add_argument("--class-balanced-loss", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--class-weight-max", type=float, default=10.0)
     parser.add_argument("--num-classes", type=int, default=44)
     parser.add_argument("--latent-dim", type=int, default=64)
     parser.add_argument("--logic-hidden-dim", type=int, default=128)

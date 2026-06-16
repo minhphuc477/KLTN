@@ -1038,8 +1038,10 @@ class WaveFunctionCollapse:
             if not success:
                 return self._extract_grid(state), False
             
-            # Propagate constraints
-            self._propagate(state, x, y)
+            # Propagate constraints — returns False on contradiction.
+            if not self._propagate(state, x, y):
+                logger.warning(f"WFC contradiction detected during propagation after collapsing {min_cell}")
+                return self._extract_grid(state), False
         
         return self._extract_grid(state), True
     
@@ -1071,35 +1073,96 @@ class WaveFunctionCollapse:
         
         return True
     
-    def _propagate(self, state: WFCState, x: int, y: int):
-        """Propagate constraints from collapsed cell."""
+    def _propagate(self, state: WFCState, x: int, y: int) -> bool:
+        """Propagate constraints from a collapsed/changed cell using a worklist (AC-3 style).
+
+        Starts with the 4 neighbours of (x, y) and continues until no further
+        domain reductions are possible.  Returns ``True`` if the grid remains
+        consistent, ``False`` if any cell's domain was reduced to zero (contradiction).
+
+        Parameters
+        ----------
+        state:
+            Current WFC state (modified in-place).
+        x, y:
+            Grid coordinates of the cell that was just collapsed or changed.
+        """
         h, w = state.collapsed.shape
-        
-        # Get collapsed tile
-        tile_idx = np.argmax(state.grid[y, x])
-        tile = state.tile_types[tile_idx]
-        
-        # Get compatible neighbors
-        compatible = self.adjacency.get(tile, set())
-        
-        # Update neighbors
+
+        # Worklist holds (cx, cy) cells whose domain was just reduced and whose
+        # neighbours may need to be re-evaluated.
+        worklist = deque()
+
+        # Seed the worklist with the 4 neighbours of the starting cell.
         for dx, dy in [(0, 1), (1, 0), (0, -1), (-1, 0)]:
             nx_, ny_ = x + dx, y + dy
-            
-            if not (0 <= nx_ < w and 0 <= ny_ < h):
+            if 0 <= nx_ < w and 0 <= ny_ < h and not state.is_collapsed(nx_, ny_):
+                worklist.append((nx_, ny_))
+
+        # Track which cells are already queued to avoid redundant processing.
+        queued: Set[Tuple[int, int]] = set(worklist)
+
+        while worklist:
+            cx, cy = worklist.popleft()
+            queued.discard((cx, cy))
+
+            if state.is_collapsed(cx, cy):
                 continue
-            if state.is_collapsed(nx_, ny_):
+
+            # Build the union of all tiles that at least ONE neighbour permits here.
+            allowed: Optional[Set[int]] = None
+
+            for dx, dy in [(0, 1), (1, 0), (0, -1), (-1, 0)]:
+                nx_, ny_ = cx + dx, cy + dy
+                if not (0 <= nx_ < w and 0 <= ny_ < h):
+                    continue
+
+                # Determine the set of tiles that the neighbour at (nx_, ny_) is
+                # compatible with.  For each tile currently possible at that
+                # neighbour, gather the tiles it allows adjacent.
+                neighbour_allows: Set[int] = set()
+                for i, t in enumerate(state.tile_types):
+                    if state.grid[ny_, nx_, i] > 0:
+                        neighbour_allows |= self.adjacency.get(t, set())
+
+                if allowed is None:
+                    allowed = neighbour_allows
+                else:
+                    allowed &= neighbour_allows
+
+            if allowed is None:
+                # No neighbours at all (edge cell with all collapsed neighbours) —
+                # keep all current options.
                 continue
-            
-            # Restrict to compatible tiles
+
+            # Restrict this cell's domain to the intersection of neighbour permissions.
+            changed = False
             for i, t in enumerate(state.tile_types):
-                if t not in compatible:
-                    state.grid[ny_, nx_, i] = 0.0
-            
-            # Renormalize
-            total = state.grid[ny_, nx_].sum()
-            if total > 0:
-                state.grid[ny_, nx_] /= total
+                if state.grid[cy, cx, i] > 0 and t not in allowed:
+                    state.grid[cy, cx, i] = 0.0
+                    changed = True
+
+            if not changed:
+                continue
+
+            # Renormalise.
+            total = state.grid[cy, cx].sum()
+            if total <= 0:
+                # Contradiction — this cell has no remaining valid tile.
+                return False
+            state.grid[cy, cx] /= total
+
+            # Cascade: add this cell's uncollapsed neighbours to the worklist.
+            for dx, dy in [(0, 1), (1, 0), (0, -1), (-1, 0)]:
+                nx_, ny_ = cx + dx, cy + dy
+                key = (nx_, ny_)
+                if (0 <= nx_ < w and 0 <= ny_ < h
+                        and not state.is_collapsed(nx_, ny_)
+                        and key not in queued):
+                    worklist.append(key)
+                    queued.add(key)
+
+        return True  # No contradiction found
     
     def _extract_grid(self, state: WFCState) -> np.ndarray:
         """Extract final tile grid from state."""

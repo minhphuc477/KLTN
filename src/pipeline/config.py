@@ -40,7 +40,7 @@ class ModelConfig:
     diffusion_fallback_config: Optional[Dict[str, Any]] = None
     logic_net_fallback_config: Optional[Dict[str, Any]] = None
     masked_room_fallback_config: Optional[Dict[str, Any]] = None
-    condition_gnn_type: str = "gcn"
+    condition_gnn_type: str = "gps"
     condition_use_reference_room_maps: bool = False
     condition_reference_tile_vocab_size: int = 44
     condition_reference_embedding_dim: int = 32

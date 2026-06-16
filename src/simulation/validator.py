@@ -1169,7 +1169,68 @@ class ZeldaLogicEnv:
             )
             return True, new_state, 0.0, {'msg': 'Passed puzzle door'}
         
-        # Default: allow movement
+        # ELEMENT (water/lava) — needs KEY_ITEM (Ladder) to cross.
+        # Without the Ladder the tile is impassable.
+        if target_tile == SEMANTIC_PALETTE['ELEMENT']:
+            if new_state.has_item:
+                new_state.position = target_pos
+                new_state = self._update_puzzle_stage_progress(
+                    new_state,
+                    target_pos=target_pos,
+                    target_tile=int(target_tile),
+                )
+                return True, new_state, 0.0, {'msg': 'Crossed water/lava with Ladder'}
+            return False, self.state, 0.0, {'msg': 'Need Ladder to cross water/lava'}
+
+        # BLOCK — pushable tile.  Attempt to push in the direction of movement.
+        if target_tile == SEMANTIC_PALETTE['BLOCK']:
+            dr = target_pos[0] - new_state.position[0]
+            dc = target_pos[1] - new_state.position[1]
+            push_dest_r = target_pos[0] + dr
+            push_dest_c = target_pos[1] + dc
+
+            # Bounds check
+            if not (0 <= push_dest_r < self.height and 0 <= push_dest_c < self.width):
+                return False, self.state, 0.0, {'msg': 'Cannot push block off map'}
+
+            push_dest = (push_dest_r, push_dest_c)
+            push_dest_tile = int(self.grid[push_dest_r, push_dest_c])
+
+            if not is_push_destination_available(new_state, push_dest, push_dest_tile):
+                return False, self.state, 0.0, {'msg': 'Cannot push block — destination blocked'}
+
+            # Move block in the grid (mutable environment)
+            self.grid[push_dest_r, push_dest_c] = SEMANTIC_PALETTE['BLOCK']
+            self.grid[target_pos[0], target_pos[1]] = SEMANTIC_PALETTE['FLOOR']
+
+            # Track push in state
+            new_state.pushed_blocks = new_state.pushed_blocks | {(target_pos, push_dest)}
+            new_state.position = target_pos
+
+            # Bug #3 fix: if a pickup item was at the player's new position *before*
+            # the push moved a block off it, we may have just exposed a collectible
+            # that was underneath.  More importantly, check whether the tile the block
+            # was pushed *from* (target_pos) was previously a pickup — this cannot
+            # happen because the grid showed BLOCK there.  However, if the player
+            # stepped onto target_pos after the grid was updated to FLOOR, check for
+            # items there (e.g. a key that was already on the floor before the block).
+            refreshed_tile = int(self.grid[target_pos[0], target_pos[1]])
+            if refreshed_tile in PICKUP_IDS and target_pos not in new_state.collected_items:
+                new_state, pickup_reward, pickup_info = self._pickup_item(
+                    new_state, target_pos, refreshed_tile
+                )
+                reward += pickup_reward
+                info.update(pickup_info)
+
+            new_state = self._update_puzzle_stage_progress(
+                new_state,
+                target_pos=target_pos,
+                target_tile=int(target_tile),
+                pushed_block_to=(int(push_dest_r), int(push_dest_c)),
+            )
+            return True, new_state, reward, info
+
+        # Default: allow movement (handles FLOOR, STAIR, etc. not caught above)
         new_state.position = target_pos
         return True, new_state, 0.0, info
     
@@ -3095,6 +3156,13 @@ class StateSpaceAStar:
                     # Also block diagonal through locked/conditional doors
                     if adj_r_tile in CONDITIONAL_IDS or adj_c_tile in CONDITIONAL_IDS:
                         continue  # Can't cut corners through doors
+                    # Also block diagonal through pushable blocks or water/lava tiles.
+                    # These are not in BLOCKING_IDS but should still prevent corner-cutting
+                    # because the player cannot pass through them in the cardinal direction.
+                    if adj_r_tile in PUSHABLE_IDS or adj_c_tile in PUSHABLE_IDS:
+                        continue  # Can't cut corners through pushable blocks
+                    if adj_r_tile in WATER_IDS or adj_c_tile in WATER_IDS:
+                        continue  # Can't cut corners through water/lava
                     
                     target_pos = (new_r, new_c)
                     target_tile = grid[new_r, new_c]
@@ -3489,6 +3557,11 @@ class StateSpaceAStar:
                     if adj_r_tile in BLOCKING_IDS or adj_c_tile in BLOCKING_IDS:
                         continue
                     if adj_r_tile in CONDITIONAL_IDS or adj_c_tile in CONDITIONAL_IDS:
+                        continue
+                    # Also block diagonal through pushable blocks or water/lava tiles.
+                    if adj_r_tile in PUSHABLE_IDS or adj_c_tile in PUSHABLE_IDS:
+                        continue
+                    if adj_r_tile in WATER_IDS or adj_c_tile in WATER_IDS:
                         continue
                     neighbors.append(((new_r, new_c), grid[new_r, new_c], DIAGONAL_COST))
             

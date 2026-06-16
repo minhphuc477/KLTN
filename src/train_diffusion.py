@@ -184,7 +184,7 @@ class DiffusionTrainingConfig:
         condition_num_gnn_layers: int = 3,
         condition_num_attention_heads: int = 8,
         condition_dropout: float = 0.1,
-        condition_gnn_type: str = "gcn",  # gcn | gat | sage | gps
+        condition_gnn_type: str = "gps",  # gcn | gat | sage | gps
         condition_use_reference_room_maps: bool = False,
         condition_reference_tile_vocab_size: int = 44,
         condition_reference_embedding_dim: int = 32,

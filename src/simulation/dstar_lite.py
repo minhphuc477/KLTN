@@ -8,7 +8,7 @@ D* Lite is an incremental heuristic search algorithm that:
 1. Efficiently replans when the environment changes
 2. Maintains g(s) and rhs(s) values for all states
 3. Uses priority queue with two-component keys
-4. Achieves O(log N) update time vs O(N²) for full A* restart
+4. Achieves O(log N) update time vs O(N^2) for full A* restart
 
 Key Concepts:
 - g(s): Current best cost from start to s
@@ -204,6 +204,7 @@ class DStarLiteSolver:
         if target_pos in base.opened_doors and target_tile in {
             int(SEMANTIC_PALETTE['DOOR_LOCKED']),
             int(SEMANTIC_PALETTE['DOOR_BOMB']),
+            int(SEMANTIC_PALETTE['DOOR_BOSS']),
         }:
             restored = base.copy()
             restored.opened_doors = set(restored.opened_doors) - {target_pos}
@@ -211,6 +212,8 @@ class DStarLiteSolver:
                 restored.keys = int(restored.keys) + 1
             elif target_tile == int(SEMANTIC_PALETTE['DOOR_BOMB']):
                 restored.bomb_count = int(restored.bomb_count) + 1
+            elif target_tile == int(SEMANTIC_PALETTE['DOOR_BOSS']):
+                restored.has_boss_key = True
             candidates.append(restored)
 
         return candidates
@@ -543,24 +546,38 @@ class DStarLiteSolver:
         def h(pos: Tuple[int, int]) -> int:
             return abs(pos[0] - target_pos[0]) + abs(pos[1] - target_pos[1])
 
-        open_heap: List[Tuple[float, float, int, GameState, List[Tuple[int, int]]]] = []
+        def reconstruct_path(end_hash: Any) -> List[Tuple[int, int]]:
+            rev: List[Tuple[int, int]] = []
+            key: Any = end_hash
+            while key is not None:
+                pos = positions.get(key)
+                if pos is None:
+                    break
+                rev.append(pos)
+                key = parents.get(key)
+            rev.reverse()
+            return rev
+
+        open_heap: List[Tuple[float, float, int, GameState]] = []
         counter = 0
         start_hash = game_state_key(start_state)
         best_g: Dict[Any, float] = {start_hash: 0.0}
+        parents: Dict[Any, Optional[Any]] = {start_hash: None}
+        positions: Dict[Any, Tuple[int, int]] = {start_hash: start_state.position}
         heapq.heappush(
             open_heap,
-            (float(h(start_state.position)), 0.0, counter, start_state, [start_state.position]),
+            (float(h(start_state.position)), 0.0, counter, start_state),
         )
 
         expansions = 0
         while open_heap and expansions < max_expansions:
-            _f, g, _cnt, current, path = heapq.heappop(open_heap)
+            _f, g, _cnt, current = heapq.heappop(open_heap)
             current_hash = game_state_key(current)
             if g > best_g.get(current_hash, float('inf')):
                 continue
 
             if current.position == target_pos:
-                return path, current, expansions
+                return reconstruct_path(current_hash), current, expansions
 
             expansions += 1
             # Cardinal actions only for stable fallback behavior.
@@ -581,9 +598,11 @@ class DStarLiteSolver:
                     continue
 
                 best_g[nxt_hash] = g2
+                parents[nxt_hash] = current_hash
+                positions[nxt_hash] = nxt.position
                 counter += 1
                 f2 = g2 + float(h(nxt.position))
-                heapq.heappush(open_heap, (f2, g2, counter, nxt, path + [nxt.position]))
+                heapq.heappush(open_heap, (f2, g2, counter, nxt))
 
         return None
     

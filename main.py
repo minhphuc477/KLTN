@@ -27,7 +27,7 @@ import numpy as np
 
 try:
     import torch
-except (ImportError, AttributeError, RuntimeError, TypeError, ValueError):
+except ImportError:
     torch = None
 
 from src.config_system import (

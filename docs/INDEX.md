@@ -22,6 +22,10 @@ Superseded notes belong under `docs/archive/`.
   [`VQVAE2_LOGICNET_REPAIR_ABLATION_PROTOCOL_2026_05_23.md`](VQVAE2_LOGICNET_REPAIR_ABLATION_PROTOCOL_2026_05_23.md)
 - Kaggle full training suite for VQ-VAE/VQ-VAE-2 and downstream stages:
   [`KAGGLE_T4_X2_TRAINING.md`](KAGGLE_T4_X2_TRAINING.md)
+- Kaggle research evidence runbook:
+  [`KAGGLE_RESEARCH_EVIDENCE_RUNBOOK.md`](KAGGLE_RESEARCH_EVIDENCE_RUNBOOK.md)
+- Local research evidence runbook:
+  [`LOCAL_RESEARCH_EVIDENCE_RUNBOOK.md`](LOCAL_RESEARCH_EVIDENCE_RUNBOOK.md)
 - Training hyperparameter/batch preflight command:
   [`FULL_TRAINING_ABLATION_AND_EVAL_COMMAND_BOOK_2026_04_18.md`](FULL_TRAINING_ABLATION_AND_EVAL_COMMAND_BOOK_2026_04_18.md)
 - Thesis hyperparameter evidence and protocol justification:
