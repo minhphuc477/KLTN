@@ -14,6 +14,28 @@ from src.train_diffusion import (
 )
 
 
+def _enable_fresh_denoiser_signal(denoiser, *, self_gate: bool = False, cross_gate: bool = False) -> None:
+    """Open zero-initialized ablation heads only when a test needs observable routing."""
+    with torch.no_grad():
+        output_proj = getattr(denoiser, "output_proj", None)
+        if output_proj is not None:
+            torch.nn.init.normal_(output_proj.weight, std=0.02)
+            if output_proj.bias is not None:
+                output_proj.bias.zero_()
+        out_proj = getattr(denoiser, "out_proj", None)
+        if out_proj is not None:
+            torch.nn.init.normal_(out_proj.weight, std=0.02)
+            if out_proj.bias is not None:
+                out_proj.bias.zero_()
+        for block in getattr(denoiser, "blocks", []):
+            bias = block.adaLN[-1].bias
+            hidden = int(block.norm1.normalized_shape[0])
+            if self_gate:
+                bias[2 * hidden:3 * hidden].fill_(1.0)
+            if cross_gate:
+                bias[5 * hidden:6 * hidden].fill_(1.0)
+
+
 def test_flow_matching_loss_is_finite_and_backpropagates():
     model = create_latent_diffusion(
         latent_dim=8,
@@ -115,6 +137,53 @@ def test_dit_backbone_flow_matching_loss_is_finite_and_backpropagates():
     assert torch.isfinite(z_0.grad).all()
 
 
+def test_dit_adaln_zero_block_starts_as_identity():
+    from src.core.latent_diffusion import DiTBlock
+
+    torch.manual_seed(101)
+    block = DiTBlock(hidden_dim=16, cond_dim=16, num_heads=4, dropout=0.0)
+    x = torch.randn(2, 5, 16)
+    cond = torch.randn(2, 16)
+    context = torch.randn(2, 3, 16)
+
+    out = block(x, cond, context_tokens=context)
+
+    assert torch.allclose(out, x, atol=1e-6)
+
+
+def test_fresh_diffusion_denoiser_heads_start_as_zero_predictors():
+    from src.core.latent_diffusion import DiTDenoiser, UNetDenoiser
+
+    torch.manual_seed(102)
+    x = torch.randn(2, 4, 4, 4)
+    t = torch.tensor([0, 3], dtype=torch.long)
+    context = torch.randn(2, 8)
+    unet = UNetDenoiser(
+        in_channels=4,
+        model_channels=8,
+        out_channels=4,
+        context_dim=8,
+        channel_mult=(1,),
+        num_res_blocks=1,
+        attention_resolutions=(),
+        num_heads=2,
+        dropout=0.0,
+    )
+    dit = DiTDenoiser(
+        in_channels=4,
+        model_channels=8,
+        out_channels=4,
+        context_dim=8,
+        depth=1,
+        patch_size=1,
+        num_heads=2,
+        dropout=0.0,
+    )
+
+    assert torch.allclose(unet(x, t, context), torch.zeros_like(x), atol=1e-6)
+    assert torch.allclose(dit(x, t, context), torch.zeros_like(x), atol=1e-6)
+
+
 def test_dit_backbone_uses_context_edge_index_for_token_topology():
     torch.manual_seed(7)
     model = create_latent_diffusion(
@@ -132,6 +201,7 @@ def test_dit_backbone_uses_context_edge_index_for_token_topology():
         unet_dropout=0.0,
     )
     model.eval()
+    _enable_fresh_denoiser_signal(model.denoiser, cross_gate=True)
     x_t = torch.randn(1, 8, 3, 4)
     t = torch.tensor([3], dtype=torch.long)
     context = torch.randn(1, 3, 16)
@@ -258,6 +328,36 @@ def test_learned_graphormer_uses_centrality_spatial_and_edge_encodings():
     assert attention.graphormer_out_degree is not None
     assert attention.graphormer_spatial_bias.weight.grad is not None
     assert attention.graphormer_edge_bias.weight.grad is not None
+
+
+def test_learned_graphormer_centrality_excludes_synthetic_self_loops():
+    from src.core.latent_diffusion import CrossAttention
+
+    torch.manual_seed(30)
+    attention = CrossAttention(
+        query_dim=16,
+        context_dim=16,
+        num_heads=4,
+        topology_refinement_mode="graphormer_learned",
+        dropout=0.0,
+    )
+    context = torch.randn(1, 2, 16)
+    edge_index = torch.empty(2, 0, dtype=torch.long)
+    node_mask = torch.ones(1, 2, dtype=torch.bool)
+
+    out = attention._refine_context_topology(
+        context,
+        edge_index=edge_index,
+        node_mask=node_mask,
+    )
+    out.sum().backward()
+
+    assert attention.graphormer_in_degree is not None
+    assert attention.graphormer_out_degree is not None
+    assert attention.graphormer_in_degree.weight.grad[0].abs().sum() > 0
+    assert attention.graphormer_out_degree.weight.grad[0].abs().sum() > 0
+    assert attention.graphormer_in_degree.weight.grad[1].abs().sum() == pytest.approx(0.0)
+    assert attention.graphormer_out_degree.weight.grad[1].abs().sum() == pytest.approx(0.0)
 
 
 def test_sparse_edge_topology_refinement_mode_runs_as_large_graph_ablation():
@@ -426,6 +526,7 @@ def test_dit_backbone_uses_spatial_graph_data():
         room_topology_channels=18,
     )
     model.eval()
+    _enable_fresh_denoiser_signal(model.denoiser)
     x_t = torch.randn(1, 8, 3, 4)
     t = torch.tensor([2], dtype=torch.long)
     context = torch.randn(1, 3, 16)
@@ -531,6 +632,7 @@ def test_dit_cross_attention_uses_graph_tokens_and_masks():
         unet_dropout=0.0,
     )
     model.eval()
+    _enable_fresh_denoiser_signal(model.denoiser, cross_gate=True)
     x_t = torch.randn(1, 8, 3, 4)
     t = torch.tensor([2], dtype=torch.long)
     context = torch.randn(1, 4, 16)
@@ -563,6 +665,7 @@ def test_pag_reaches_dit_attention_blocks_and_resets_mode():
         pag_scale=0.5,
         unet_num_heads=4,
     )
+    _enable_fresh_denoiser_signal(model.denoiser, self_gate=True)
     x_t = torch.randn(1, 8, 3, 4)
     t = torch.tensor([3], dtype=torch.long)
     context = torch.randn(1, 3, 16)
@@ -593,6 +696,7 @@ def test_pag_uses_self_attention_perturbation_and_resets_mode():
         unet_attention_resolutions=(0,),
         unet_num_heads=4,
     )
+    _enable_fresh_denoiser_signal(model.denoiser)
     x_t = torch.randn(1, 8, 3, 4)
     t = torch.tensor([3], dtype=torch.long)
     context = torch.randn(1, 16)

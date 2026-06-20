@@ -2390,7 +2390,6 @@ class StateSpaceAStar:
                 elif et == 'boss_locked':
                     if not nbk:
                         continue
-                    nbk = False
                 elif et == 'item_locked':
                     if not ni:
                         continue
@@ -2647,7 +2646,6 @@ class StateSpaceAStar:
                 elif etype == 'boss_locked':
                     if not new_bk:
                         continue
-                    new_bk = False
                 elif etype == 'item_locked':
                     if not new_item:
                         continue
@@ -2685,8 +2683,6 @@ class StateSpaceAStar:
                             elif vet == 'boss_locked':
                                 if not tbk:
                                     can = False
-                                else:
-                                    tbk = False
                             elif vet == 'item_locked':
                                 if not ti: can = False
                             elif vet == 'switch':

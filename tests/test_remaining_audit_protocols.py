@@ -72,6 +72,44 @@ def test_runtime_map_elites_rejects_infeasible_macro_descriptor_path():
     assert "graph_descriptor_feasible" not in metrics
 
 
+def test_runtime_map_elites_does_not_collect_required_item_as_provider():
+    graph = nx.DiGraph()
+    graph.add_node(0, label="START")
+    graph.add_node(1, label="PUZZLE", required_item="BOMB")
+    graph.add_node(2, label="GOAL")
+    graph.add_edge(0, 1, edge_type="PATH")
+    graph.add_edge(1, 2, edge_type="ITEM_GATE", item_required="BOMB")
+    evaluator = MAPElitesEvaluator(enable_advanced_archive=False, descriptor_mode="hybrid")
+
+    _, metrics = evaluator._build_behavior_descriptor(
+        _grid(),
+        {"solvable": True, "path_length": 2},
+        graph,
+    )
+
+    assert metrics["graph_descriptor_used"] == 0.0
+    assert "graph_descriptor_feasible" not in metrics
+
+
+def test_runtime_map_elites_collects_real_item_provider_for_item_gate():
+    graph = nx.DiGraph()
+    graph.add_node(0, label="START")
+    graph.add_node(1, label="ITEM", item_type="BOMB")
+    graph.add_node(2, label="GOAL")
+    graph.add_edge(0, 1, edge_type="PATH")
+    graph.add_edge(1, 2, edge_type="ITEM_GATE", item_required="BOMB")
+    evaluator = MAPElitesEvaluator(enable_advanced_archive=False, descriptor_mode="hybrid")
+
+    _, metrics = evaluator._build_behavior_descriptor(
+        _grid(),
+        {"solvable": True, "path_length": 2},
+        graph,
+    )
+
+    assert metrics["graph_descriptor_used"] == 1.0
+    assert metrics["graph_descriptor_feasible"] == 1.0
+
+
 def test_runtime_map_elites_legacy_mode_preserves_grid_ablation():
     evaluator = MAPElitesEvaluator(enable_advanced_archive=False, descriptor_mode="legacy")
     features, metrics = evaluator._build_behavior_descriptor(

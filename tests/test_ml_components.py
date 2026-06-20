@@ -375,6 +375,39 @@ class TestGraphGridAttention:
         assert torch.allclose(out_b[1], grid_features[1])
         assert torch.allclose(out_a[1], out_b[1])
 
+    def test_graph_to_grid_gcn_filters_edges_touching_padded_nodes(self):
+        from src.core.graph_grid_attention import GraphToGridCrossAttention
+
+        torch.manual_seed(33)
+        module = GraphToGridCrossAttention(
+            grid_dim=16,
+            graph_dim=12,
+            num_heads=4,
+            attention_mode="softmax",
+            dropout=0.0,
+        )
+        module.eval()
+        grid_features = torch.randn(1, 16, 3, 3)
+        graph_nodes = torch.randn(1, 3, 12)
+        node_mask = torch.tensor([[True, True, False]])
+        padded_edge = torch.tensor([[0], [2]], dtype=torch.long)
+        no_edges = torch.empty(2, 0, dtype=torch.long)
+
+        out_with_padded_edge = module(
+            grid_features,
+            graph_nodes,
+            edge_index=padded_edge,
+            node_mask=node_mask,
+        )
+        out_without_edge = module(
+            grid_features,
+            graph_nodes,
+            edge_index=no_edges,
+            node_mask=node_mask,
+        )
+
+        assert torch.allclose(out_with_padded_edge, out_without_edge, atol=1e-6)
+
     def test_spatial_alignment_loss_requires_captured_softmax_maps(self):
         """Alignment should fail loudly when capture/softmax attention is absent."""
         from src.core.graph_grid_attention import GraphToGridCrossAttention

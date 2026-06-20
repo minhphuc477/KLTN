@@ -365,6 +365,13 @@ class DiscreteMaskedRoomModel(nn.Module):
             return max(0.0, 1.0 - clipped)
         return max(0.0, math.cos(0.5 * math.pi * clipped))
 
+    def _step_from_mask_ratio(self, mask_ratio: Tensor) -> Tensor:
+        """Map corruption level to the same reverse-refinement step semantics used at inference."""
+        max_step = max(0, int(self.default_num_steps) - 1)
+        if max_step == 0:
+            return torch.zeros_like(mask_ratio, dtype=torch.long)
+        return torch.round(mask_ratio.clamp(0.0, 1.0) * float(max_step)).to(dtype=torch.long).clamp(0, max_step)
+
     @staticmethod
     def _sample_gumbel(
         shape: Sequence[int],
@@ -824,12 +831,7 @@ class DiscreteMaskedRoomModel(nn.Module):
         if fixed_mask is not None and fixed_tokens is not None:
             masked_tokens[fixed_mask] = fixed_tokens[fixed_mask]
 
-        step = torch.randint(
-            low=0,
-            high=max(1, int(self.default_num_steps)),
-            size=(batch_size,),
-            device=device,
-        )
+        step = self._step_from_mask_ratio(mask_ratio)
         logits = self.forward(masked_tokens, step, context, graph_data=graph_data)
         ignore_target = target.masked_fill(~train_mask, -100)
         loss_map = F.cross_entropy(logits, ignore_target, ignore_index=-100, reduction="none")
@@ -857,6 +859,7 @@ class DiscreteMaskedRoomModel(nn.Module):
             "loss": float(loss.item()),
             "base_loss": float(base_loss.item()),
             "mask_ratio": float(mask_ratio.mean().item()),
+            "step_mean": float(step.float().mean().item()),
             "masked_fraction": float(train_mask.float().mean().item()),
             "topology_focus_loss": float(topology_focus_loss.item()),
             "topology_focus_fraction": float(topology_focus_fraction.item()),

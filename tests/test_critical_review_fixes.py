@@ -460,6 +460,25 @@ def test_boss_door_preserves_boss_key_and_key_item_does_not_grant_bombs():
     assert picked.bomb_count == 0
 
 
+def test_key_economy_treats_boss_keys_as_persistent_for_multiple_boss_doors():
+    from src.simulation.key_economy_validator import KeyEconomyValidator
+
+    graph = nx.DiGraph()
+    graph.add_node(0, label="START", items=["key_boss"])
+    graph.add_node(1, label="BOSS_DOOR")
+    graph.add_node(2, label="BOSS_DOOR")
+    graph.add_node(3, label="GOAL")
+    graph.add_edge(0, 1, lock_type="boss")
+    graph.add_edge(1, 2, lock_type="boss")
+    graph.add_edge(2, 3, lock_type="open")
+
+    result = KeyEconomyValidator(graph).validate()
+
+    assert result.greedy_solvable
+    assert result.adversarial_solvable
+    assert result.is_valid
+
+
 def test_solver_comparison_uses_canonical_bomb_and_item_transitions():
     from src.simulation.solver_comparison import SolverComparison
     from src.simulation.validator import GameState, ZeldaLogicEnv

@@ -258,7 +258,7 @@ class MAPElitesEvaluator:
                 gained_keys += key_count
             if role in {'big_key', 'boss_key'}:
                 updated['key_boss'] = 1
-            for field in ('item_type', 'required_item', 'drops_resource'):
+            for field in ('item_type', 'drops_resource'):
                 item = normalize(data.get(field))
                 if item:
                     updated[item] = updated.get(item, 0) + 1

@@ -532,3 +532,45 @@ Important limitation:
 Focused verification added in this continuation includes training split guards,
 grouped validation, solver semantic parity, parent-link path reconstruction,
 mixed-precision Hedgehog attention, and big-room patch assembly.
+
+## 2026-06-20 Model Architecture Audit
+
+Confirmed implementation fixes:
+
+- DiT blocks now implement AdaLN-Zero gating literally: zero-initialized gates
+  produce an identity residual block instead of a half-strength residual update.
+  This keeps the DiT ablation stable at initialization.
+- Fresh U-Net and DiT denoiser heads now start as zero predictors. Tests that
+  inspect routing explicitly open the relevant test gates/heads, so ablation
+  sensitivity is not confused with unstable random initialization.
+- Learned Graphormer centrality encodings now exclude synthetic self-loops.
+  Self-loops remain available for stable attention, but centrality buckets
+  describe real graph degree only.
+- Graph-to-grid conditioning now applies the node mask before the lightweight
+  GCN prepass and before degree-feature extraction. Padded nodes and invalid
+  padded edges can no longer send topology messages into real graph nodes.
+- MaskGIT training step embeddings now track corruption level. High mask ratio
+  maps to late reverse-refinement steps, and near-clean corruption maps to step
+  zero, matching inference semantics.
+- Graph-level macro validation no longer consumes boss keys in the graph and
+  virtual-node branches. Boss keys are persistent authorization items; small
+  keys and bombs remain consumable.
+
+Open ablation gaps, not solved claims:
+
+- Spatial graph-to-grid attention is still mostly edge-semantic blind. Context
+  token refinement can consume edge attributes, but per-grid spatial graph
+  conditioning does not yet have a dedicated locked/open/boss-edge ablation.
+- `graphormer_learned` remains the learned undirected Graphormer-style mode.
+  Directed learned Graphormer and semantic learned Graphormer should be added
+  only as explicit ablation modes with separate metrics.
+- MaskGIT topology helpers still do not make edge attributes affect logits in
+  the default model. This is acceptable only if described as a room-topology
+  map conditioning baseline; edge-aware MaskGIT should be a named ablation.
+
+Focused verification:
+
+- `python -m pytest --basetemp .tmp/pytest-arch2 tests/test_advanced_architecture_ablations.py tests/test_ml_components.py tests/test_discrete_masked_room_model.py tests/test_critical_review_fixes.py -q`
+  passed with 159 tests.
+- `python -m compileall -q src/core/latent_diffusion.py src/core/graph_grid_attention.py src/core/discrete_masked_model.py src/simulation/validator.py`
+  passed.

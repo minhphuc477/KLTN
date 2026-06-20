@@ -50,6 +50,7 @@ graphify-out/*.lock
 
 # Artifacts - generated outputs, logs, and experiment checkpoints
 artifacts/
+.tmp/
 
 # Editor / OS
 .vscode/

@@ -288,7 +288,7 @@ class GreedyPlayer:
         elif lock_type == 'bomb':
             key_id = 'item_bomb'
         elif lock_type == 'boss':
-            key_id = 'key_boss'
+            return  # Boss keys are persistent dungeon affordances, not consumables.
         else:
             return  # Nothing to consume
         if state.inventory.get(key_id, 0) > 0:
@@ -487,7 +487,7 @@ class AdversarialPlayer:
         elif lock_type == 'bomb':
             key_id = 'item_bomb'
         elif lock_type == 'boss':
-            key_id = 'key_boss'
+            return  # Boss keys are persistent dungeon affordances, not consumables.
         else:
             return
         if state.inventory.get(key_id, 0) > 0:

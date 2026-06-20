@@ -58,20 +58,35 @@ class LightweightGCNLayer(nn.Module):
         super().__init__()
         self.linear = nn.Linear(in_dim, out_dim)
 
-    def forward(self, x: Tensor, edge_index: Tensor) -> Tensor:
+    def forward(self, x: Tensor, edge_index: Tensor, node_mask: Optional[Tensor] = None) -> Tensor:
         """
         Args:
             x: [B, N, D]
             edge_index: [2, E] or [B, 2, E]
+            node_mask: Optional [B, N] mask where True marks real graph nodes.
         """
         b, n, _d = x.shape
         if edge_index.dim() not in {2, 3}:
             raise ValueError(
                 f"LightweightGCNLayer edge_index must have shape [2, E] or [B, 2, E], got {tuple(edge_index.shape)}."
             )
+        if node_mask is None:
+            valid_nodes_all = torch.ones(b, n, device=x.device, dtype=torch.bool)
+        else:
+            valid_nodes_all = node_mask.to(device=x.device, dtype=torch.bool)
+            if valid_nodes_all.dim() == 1:
+                valid_nodes_all = valid_nodes_all.unsqueeze(0)
+            if int(valid_nodes_all.shape[0]) == 1 and b > 1:
+                valid_nodes_all = valid_nodes_all.expand(b, -1)
+            if tuple(valid_nodes_all.shape) != (b, n):
+                raise ValueError(
+                    f"LightweightGCNLayer node_mask must have shape [B, N] = ({b}, {n}), "
+                    f"got {tuple(valid_nodes_all.shape)}."
+                )
         out = []
         for bi in range(b):
             xb = x[bi]  # [N, D]
+            valid_nodes = valid_nodes_all[bi]
 
             if edge_index.dim() == 3:
                 if int(edge_index.shape[0]) == b:
@@ -91,12 +106,15 @@ class LightweightGCNLayer(nn.Module):
                     f"LightweightGCNLayer edge_index first dimension must be 2, got {tuple(ei.shape)}."
                 )
 
-            z = self.linear(xb)
-            self_idx = torch.arange(n, device=xb.device, dtype=torch.long)
+            z = self.linear(xb) * valid_nodes[:, None].to(dtype=xb.dtype)
+            self_idx = torch.nonzero(valid_nodes, as_tuple=False).flatten()
             if ei.numel() > 0:
                 src = ei[0].long()
                 dst = ei[1].long()
                 valid = (src >= 0) & (src < n) & (dst >= 0) & (dst < n)
+                safe_src = src.clamp(0, max(0, n - 1))
+                safe_dst = dst.clamp(0, max(0, n - 1))
+                valid = valid & valid_nodes[safe_src] & valid_nodes[safe_dst]
                 src = src[valid]
                 dst = dst[valid]
                 src_all = torch.cat([src, dst, self_idx], dim=0)
@@ -104,6 +122,10 @@ class LightweightGCNLayer(nn.Module):
             else:
                 src_all = self_idx
                 dst_all = self_idx
+
+            if src_all.numel() == 0:
+                out.append(torch.zeros_like(z))
+                continue
 
             deg = torch.zeros(n, device=xb.device, dtype=xb.dtype)
             deg.index_add_(0, src_all, torch.ones(src_all.shape[0], device=xb.device, dtype=xb.dtype))
@@ -563,6 +585,18 @@ class GraphToGridCrossAttention(nn.Module):
             raise ValueError(
                 f"GraphToGridCrossAttention edge_index must have shape [2, E] or [B, 2, E], got {tuple(edge_index.shape)}."
             )
+        valid_nodes_all = None
+        if node_mask is not None:
+            valid_nodes_all = node_mask.to(device=device, dtype=torch.bool)
+            if valid_nodes_all.dim() == 1:
+                valid_nodes_all = valid_nodes_all.unsqueeze(0)
+            if int(valid_nodes_all.shape[0]) == 1 and batch_size > 1:
+                valid_nodes_all = valid_nodes_all.expand(batch_size, -1)
+            if tuple(valid_nodes_all.shape) != (batch_size, num_nodes):
+                raise ValueError(
+                    f"GraphToGridCrossAttention node_mask must have shape [B, N] = ({batch_size}, {num_nodes}), "
+                    f"got {tuple(valid_nodes_all.shape)}."
+                )
 
         ones_dtype = degree.dtype
         degree_norm = float(max(1, num_nodes - 1))
@@ -589,6 +623,10 @@ class GraphToGridCrossAttention(nn.Module):
             src = ei[0].long()
             dst = ei[1].long()
             valid = (src >= 0) & (src < num_nodes) & (dst >= 0) & (dst < num_nodes)
+            if valid_nodes_all is not None:
+                safe_src = src.clamp(0, max(0, num_nodes - 1))
+                safe_dst = dst.clamp(0, max(0, num_nodes - 1))
+                valid = valid & valid_nodes_all[bi, safe_src] & valid_nodes_all[bi, safe_dst]
             src = src[valid]
             dst = dst[valid]
             if src.numel() == 0:
@@ -757,7 +795,7 @@ class GraphToGridCrossAttention(nn.Module):
         
         # Optional GCN preprocessing preserves node-topology dependencies.
         if edge_index is not None:
-            graph_nodes = self.graph_gcn(graph_nodes, edge_index)
+            graph_nodes = self.graph_gcn(graph_nodes, edge_index, node_mask=node_mask)
 
         # Add position encoding to graph nodes
         graph_with_pe = self.graph_pe(

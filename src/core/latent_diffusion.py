@@ -989,6 +989,8 @@ class CrossAttention(nn.Module):
                 attn_mask = valid[:, :, None] & valid[:, None, :]
             elif self.topology_refinement_mode == "graphormer_learned":
                 direct_adjacency = attn_mask
+                identity_mask = torch.eye(seq_len, device=direct_adjacency.device, dtype=torch.bool).unsqueeze(0)
+                real_adjacency = direct_adjacency & ~identity_mask
                 graphormer_bias = self._learned_graphormer_spatial_bias(direct_adjacency, valid)
                 learned_edge_bias = self._learned_graphormer_edge_bias(
                     batch_size=bsz,
@@ -1002,8 +1004,8 @@ class CrossAttention(nn.Module):
                     graphormer_bias = graphormer_bias + learned_edge_bias
                 assert self.graphormer_in_degree is not None
                 assert self.graphormer_out_degree is not None
-                in_degree = direct_adjacency.sum(dim=1).clamp(max=self.graphormer_max_degree).long()
-                out_degree = direct_adjacency.sum(dim=2).clamp(max=self.graphormer_max_degree).long()
+                in_degree = real_adjacency.sum(dim=1).clamp(max=self.graphormer_max_degree).long()
+                out_degree = real_adjacency.sum(dim=2).clamp(max=self.graphormer_max_degree).long()
                 h = h + self.graphormer_in_degree(in_degree) + self.graphormer_out_degree(out_degree)
                 attn_mask = valid[:, :, None] & valid[:, None, :]
             semantic_bias = None
@@ -1741,6 +1743,8 @@ class UNetDenoiser(nn.Module):
         # Output projection
         self.output_norm = nn.GroupNorm(ResBlock.num_groups(current_ch), current_ch)
         self.output_proj = nn.Conv2d(current_ch, out_channels, 3, padding=1)
+        nn.init.zeros_(self.output_proj.weight)
+        nn.init.zeros_(self.output_proj.bias)
     
     def forward(
         self, 
@@ -1907,7 +1911,7 @@ class DiTBlock(nn.Module):
             attn_out = torch.zeros_like(attn_in)
         else:
             attn_out, _ = self.attn(attn_in, attn_in, attn_in, need_weights=False)
-        x = x + torch.sigmoid(gate_msa).unsqueeze(1) * attn_out
+        x = x + gate_msa.unsqueeze(1) * attn_out
         if context_tokens is not None:
             cross_in = self._modulate(self.norm_cross(x), shift_cross, scale_cross)
             cross_out, _ = self.cross_attn(
@@ -1917,9 +1921,9 @@ class DiTBlock(nn.Module):
                 key_padding_mask=context_key_padding_mask,
                 need_weights=False,
             )
-            x = x + torch.sigmoid(gate_cross).unsqueeze(1) * cross_out
+            x = x + gate_cross.unsqueeze(1) * cross_out
         mlp_in = self._modulate(self.norm2(x), shift_mlp, scale_mlp)
-        x = x + torch.sigmoid(gate_mlp).unsqueeze(1) * self.mlp(mlp_in)
+        x = x + gate_mlp.unsqueeze(1) * self.mlp(mlp_in)
         return x
 
 
@@ -2011,6 +2015,10 @@ class DiTDenoiser(nn.Module):
         self.final_norm = nn.LayerNorm(self.model_channels, elementwise_affine=False)
         self.final_mod = nn.Sequential(nn.SiLU(), nn.Linear(self.model_channels, 2 * self.model_channels))
         self.out_proj = nn.Linear(self.model_channels, self.patch_size * self.patch_size * self.out_channels)
+        nn.init.zeros_(self.final_mod[-1].weight)
+        nn.init.zeros_(self.final_mod[-1].bias)
+        nn.init.zeros_(self.out_proj.weight)
+        nn.init.zeros_(self.out_proj.bias)
 
     def _pool_context(self, context: Tensor, node_mask: Optional[Tensor] = None) -> Tensor:
         if context.dim() == 2:

@@ -134,6 +134,38 @@ def test_discrete_masked_model_reports_iterative_refinement_metrics():
     assert metrics["masked_final_unresolved_tokens"] == pytest.approx(0.0)
 
 
+def test_discrete_masked_training_step_embedding_tracks_mask_ratio():
+    model = create_discrete_masked_model(
+        num_classes=44,
+        hidden_dim=32,
+        model_channels=16,
+        context_dim=32,
+        num_steps=5,
+    )
+    target = torch.randint(0, 44, (1, ROOM_HEIGHT, ROOM_WIDTH))
+    context = torch.zeros(1, 1, 32)
+
+    _loss_high, metrics_high, aux_high = model.training_loss(
+        target,
+        context,
+        min_mask_ratio=1.0,
+        max_mask_ratio=1.0,
+        return_aux=True,
+    )
+    _loss_low, metrics_low, aux_low = model.training_loss(
+        target,
+        context,
+        min_mask_ratio=0.0,
+        max_mask_ratio=0.0,
+        return_aux=True,
+    )
+
+    assert int(aux_high["step"].item()) == 4
+    assert metrics_high["step_mean"] == pytest.approx(4.0)
+    assert int(aux_low["step"].item()) == 0
+    assert metrics_low["step_mean"] == pytest.approx(0.0)
+
+
 def test_masked_backbone_default_uses_original_concat_encoder(monkeypatch):
     model = create_discrete_masked_model(
         num_classes=44,
