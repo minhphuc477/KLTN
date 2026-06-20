@@ -404,16 +404,35 @@ Fixed and verified:
 - Stochastic advanced-rule integration checks now skip unexercised features
   explicitly rather than passing silently.
 
-Scientific boundary:
+Scientific boundary resolution:
 
-- The current `graphormer` attention mode should be reported as a static
-  shortest-path-bias ablation, not as a faithful Graphormer baseline with
-  learned centrality/spatial/edge encodings.
-- MAP-Elites descriptor axes remain structural proxies unless a report uses
-  validator-feasible critical-path and key-economy descriptors. Archive
-  coverage/QD-score claims must name the descriptor definition used.
-- MaskGIT claims should be tied to iterative masked-token refinement metrics
-  and no-teacher-fallback diagnostics, not to generic "autoregressive" wording.
+- `graphormer` remains the checkpoint-compatible static shortest-path-bias
+  ablation. `graphormer_learned` is a separate, opt-in ablation with learned
+  in/out-degree centrality encodings, per-head shortest-path distance bias,
+  and learned edge-type bias. Reports must keep the two names separate. The
+  learned mode is Graphormer-style rather than a claim of reproducing every
+  training and dataset detail from Ying et al.
+- MAP-Elites graph descriptors now use a progression-feasible state search.
+  Critical-path length, consumed keys, collected keys, and key surplus are
+  measured on a route that satisfies consumable locks and persistent item
+  gates. If no feasible macro route exists, the evaluator does not claim that
+  graph descriptors were used and falls back to the explicitly named legacy
+  grid proxy. Exported metrics include `graph_descriptor_feasible` and the
+  path key-economy fields, so archive coverage and QD-score tables can state
+  the descriptor definition they used.
+- The discrete masked generator now exports requested and executed refinement
+  steps, corrector rounds, committed-token counts, unresolved-token counts,
+  schedule identity, and stochastic-mode diagnostics. Masked-room results
+  must report these fields together with `teacher_fallback_used`; the branch
+  is described as iterative masked-token generation, never autoregressive.
+
+Remaining empirical boundary:
+
+- These changes make the hypotheses testable; they do not establish that the
+  learned Graphormer-style mode, feasible QD descriptors, or MaskGIT branch is
+  superior. Publication claims still require fixed-seed paired ablations,
+  confidence intervals, runtime and memory measurements, and no-teacher
+  fallback generation runs. An unexecuted experiment is not evidence.
 
 Focused verification commands from this pass:
 
@@ -423,3 +442,93 @@ Focused verification commands from this pass:
   passed with 2 tests.
 - `python -m pytest tests/test_advanced_rules_integration.py::TestAdvancedRulesIntegration::test_fungible_key_economy tests/test_advanced_rules_integration.py::TestAdvancedRulesIntegration::test_big_room_merging tests/test_advanced_rules_integration.py::TestAdvancedRulesIntegration::test_cycle_valves tests/test_advanced_rules_integration.py::TestAdvancedRulesIntegration::test_visual_foreshadowing tests/test_advanced_rules_integration.py::TestAdvancedRulesIntegration::test_collection_challenge tests/test_advanced_rules_integration.py::TestAdvancedRulesIntegration::test_combat_arenas tests/test_advanced_rules_integration.py::TestAdvancedRulesIntegration::test_thematic_sectors tests/test_advanced_rules_integration.py::TestAdvancedRulesIntegration::test_entangled_branches tests/test_advanced_rules_integration.py::TestAdvancedRulesIntegration::test_hazard_gates tests/test_advanced_rules_integration.py::TestAdvancedRulesIntegration::test_virtual_room_layers -q`
   passed as 1 exercised test and 9 explicit skips.
+
+## 2026-06-20 Round 2 Topology Audit
+
+Confirmed implementation fixes:
+
+- Cognitive topology descriptors now project directed mission exports onto a
+  simple physical traversal graph before computing dead ends, degree spread,
+  shortest paths, and cycle rank. Reciprocal directed corridor edges no longer
+  create artificial loops.
+- Evolutionary cognitive objectives use physical room degree. Corridors have
+  degree 2, junctions have degree at least 3, and non-goal rooms with physical
+  degree at most 1 are treated as dead ends.
+- `LOCKED`, `ITEM_GATE`, and `BOSS_LOCKED` edges are physically bidirectional.
+  Their requirements still gate traversal, but passing a gate does not turn a
+  normal doorway into a one-way drop.
+- `InsertLockKeyRule` attaches the key to a reachable side branch and places
+  the lock later on the trunk path. This restores an actual retrieve-and-return
+  pattern instead of making every key an unavoidable corridor pickup.
+- Boss keys are reusable authorization items across boss doors. Small keys and
+  bombs remain consumable. Forward, parallel, bounded-cognitive, D* Lite, and
+  bidirectional transition logic now agree on this rule.
+
+Focused verification:
+
+- `python -m pytest tests/test_critical_review_fixes.py tests/test_verified_vulnerability_fixes.py -q -p no:cacheprovider --basetemp=tmp/pytest-round2`
+  passed with 44 tests.
+- `python -m pytest tests/test_pathfinding_unified_game_logic.py tests/test_quick_unified_logic.py -q`
+  passed with 15 tests.
+- `python -m pytest tests/test_evolutionary_director.py::TestEvolutionaryDirector::test_large_population -q`
+  passed without relaxing its fitness threshold.
+- `python scripts/run_pcbs_component_ablation.py --quick --quiet --output-dir results/pcbs_component_ablation_round2_smoke`
+  completed, but the oracle solved 0 of 1 maps. The artifact is therefore
+  marked invalid for component comparison and is diagnostic only.
+- `python scripts/run_conditioning_logicnet_repair_ablation.py --quick --output results/conditioning_logicnet_repair_round2_plan`
+  generated a one-seed, four-variant plan. It did not execute model inference.
+- Full P-CBS ablation runs now exit nonzero after writing diagnostics when no
+  evaluated map is oracle-solvable. This prevents an all-unsolved benchmark
+  from being mistaken for evidence about bounded-agent components.
+
+## Outstanding Empirical Evidence
+
+The following are publication gaps, not completed results. Do not claim that
+they have been validated until fresh result artifacts and manifests are
+committed or archived:
+
+- Human calibration and blinded preference data:
+  `python scripts/run_ood_scaling_and_blinded_eval.py --num-samples 8 --blinded-per-condition 6`.
+- Neural contribution versus deterministic repair:
+  `python scripts/run_conditioning_logicnet_repair_ablation.py --execute --seeds 42,43,44`.
+- Fixed-graph diversity, NCD, entropy, fallback, and overlay evidence:
+  `python scripts/run_fixed_graph_multi_seed_audit.py --run-dir <run> --output-dir <output> --include-no-fallback-ablations`.
+- P-CBS component and failure-mode breakdown:
+  `python scripts/run_pcbs_component_ablation.py --levels 1,2,3 --variants 1,2 --persona novice`.
+- Designer controllability, sample efficiency, and compute overhead still need
+  centralized 100-room and 500-room stress tables with fixed hardware,
+  checkpoint hashes, seeds, confidence intervals, failure counts, and repair
+  rates. Existing code paths alone are not empirical evidence.
+
+## 2026-06-20 Non-GUI Continuation
+
+Confirmed fixes from the continued repository audit:
+
+- All training entry points now reject overlapping train/test dungeon IDs.
+  VQ-VAE, diffusion, masked-room, and fast-sampler runs cannot silently train
+  on the configured holdout.
+- Internal room-level validation now groups samples by dungeon when metadata
+  exists. Rooms and quest variants from one dungeon remain in one split.
+- VQ-VAE evaluation restores the caller's train/eval mode even when evaluation
+  exits through an exception.
+- DFS/IDDFS and the BFS/Dijkstra/Greedy comparison helpers reconstruct paths
+  from parent links instead of copying full path lists per expansion.
+- BFS, Dijkstra, and Greedy comparison runs now use the same canonical Zelda
+  transition function as the hard oracle. Search algorithms no longer differ
+  because one baseline ignored bomb doors, traversal items, blocks, or shutters.
+- Hedgehog linear attention remains an opt-in ablation. Its feature softmax and
+  sequence reductions now accumulate in FP32 under mixed precision.
+- Advanced big-room generation is now initialized when enabled and tiles
+  canonical room samples into patches without mutating trained model shapes.
+  Patch overlaps use categorical selection instead of arithmetic tile-ID
+  interpolation.
+
+Important limitation:
+
+- `ParallelAStarSolver` is currently a first-goal multiprocessing feasibility
+  race with a shared closed set. It is not a strict optimal A* implementation
+  and must not be used for shortest-path or optimality claims.
+
+Focused verification added in this continuation includes training split guards,
+grouped validation, solver semantic parity, parent-link path reconstruction,
+mixed-precision Hedgehog attention, and big-room patch assembly.

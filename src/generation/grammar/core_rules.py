@@ -289,7 +289,7 @@ class InsertLockKeyRule(ProductionRule):
                         path_edges.append((edge_idx, graph.edges[edge_idx]))
 
         if path_edges:
-            key_edge_idx, key_edge = rng.choice(path_edges)
+            _key_edge_idx, key_edge = rng.choice(path_edges)
         else:
             fallback_path_edges = [
                 (i, e) for i, e in enumerate(graph.edges)
@@ -297,37 +297,47 @@ class InsertLockKeyRule(ProductionRule):
             ]
             if not fallback_path_edges:
                 return graph
-            key_edge_idx, key_edge = rng.choice(fallback_path_edges)
+            _key_edge_idx, key_edge = rng.choice(fallback_path_edges)
         
-        # Create KEY node
+        # Create a side-branch KEY node. Putting keys directly on the critical
+        # path makes them unmissable corridor pickups and removes the intended
+        # backtracking/exploration pressure.
         key_id = max(graph.nodes.keys()) + 1
+        src_pos = graph.nodes[key_edge.source].position
+        tgt_pos = graph.nodes[key_edge.target].position
+        src_row, src_col = int(src_pos[0]), int(src_pos[1])
+        tgt_row, tgt_col = int(tgt_pos[0]), int(tgt_pos[1])
+        floor = int(src_pos[2]) if len(src_pos) > 2 else 0
+        if abs(tgt_col - src_col) >= abs(tgt_row - src_row):
+            side_ideal = (float(src_row + 1), float(src_col), float(floor))
+        else:
+            side_ideal = (float(src_row), float(src_col + 1), float(floor))
         key_node = MissionNode(
             id=key_id,
             node_type=NodeType.KEY,
-            position=self._interpolate_pos(graph, key_edge.source, key_edge.target, 0.3, context),
+            position=self._nearest_free_position(graph, side_ideal, context),
             difficulty=context.get('difficulty', 0.5) * 0.5,
             key_id=key_id,  # Self-referencing key ID
         )
         graph.add_node(key_node)
         
-        # Insert KEY on the edge
-        graph.edges.pop(key_edge_idx)
+        # Attach the key as a spur. PATH is physically bidirectional through
+        # MissionGraph adjacency, so one stored edge is sufficient.
         graph.add_edge(key_edge.source, key_id, EdgeType.PATH)
-        graph.add_edge(key_id, key_edge.target, EdgeType.PATH)
         graph.sanitize()
         
         # Now find an edge AFTER the key position for the LOCK
         lock_candidates: List[Tuple[int, MissionEdge]] = []
         if start is not None and goal is not None:
-            updated_path = self._find_shortest_path_nodes(graph, start.id, goal.id)
-            if len(updated_path) >= 2 and key_id in updated_path:
-                key_idx_on_path = updated_path.index(key_id)
-                for i in range(key_idx_on_path + 1, len(updated_path) - 1):
-                    edge_idx = self._find_path_edge_index(graph, updated_path[i], updated_path[i + 1])
+            trunk_path = self._find_shortest_path_nodes(graph, start.id, goal.id)
+            if len(trunk_path) >= 2 and key_edge.source in trunk_path:
+                key_anchor_idx = trunk_path.index(key_edge.source)
+                for i in range(key_anchor_idx, len(trunk_path) - 1):
+                    edge_idx = self._find_path_edge_index(graph, trunk_path[i], trunk_path[i + 1])
                     if edge_idx is not None:
                         edge = graph.edges[edge_idx]
-                        # Keep lock insertion on normal traversable edges.
-                        if edge.edge_type == EdgeType.PATH:
+                        # Keep lock insertion on normal traversable trunk edges.
+                        if edge.edge_type == EdgeType.PATH and key_id not in {edge.source, edge.target}:
                             lock_candidates.append((edge_idx, edge))
 
         # Fallback to forward descendants of the key only. Using an arbitrary

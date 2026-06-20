@@ -376,7 +376,71 @@ def test_resource_loop_validator_accepts_one_reachable_provider_before_gate():
     assert validate_resource_loops(graph)
 
 
-def test_boss_door_consumes_boss_key_and_key_item_does_not_grant_bombs():
+def test_locked_mission_edges_are_bidirectional_for_physical_traversal():
+    from src.generation.grammar.graph_types import EdgeType, MissionGraph, MissionNode, NodeType
+
+    graph = MissionGraph()
+    graph.add_node(MissionNode(0, NodeType.START))
+    graph.add_node(MissionNode(1, NodeType.LOCK))
+    graph.add_node(MissionNode(2, NodeType.GOAL))
+    graph.add_edge(0, 1, EdgeType.LOCKED, key_required=99)
+    graph.add_edge(1, 2, EdgeType.ITEM_GATE, item_required="BOMB")
+    graph.sanitize()
+
+    assert 0 in graph.get_neighbors(1)
+    assert 1 in graph.get_neighbors(2)
+
+
+def test_graph_cognitive_proxy_uses_physical_edges_not_directed_edge_count():
+    from src.evaluation.cbs_fitness import _compute_graph_cognitive_proxy
+
+    graph = nx.DiGraph()
+    graph.add_node(0, type="start")
+    graph.add_node(1, type="room")
+    graph.add_node(2, type="goal")
+    graph.add_edges_from([(0, 1), (1, 0), (1, 2), (2, 1)])
+
+    metrics = _compute_graph_cognitive_proxy(graph, target_confusion_ratio=2.0)
+
+    assert metrics["astar_path_length"] == 2
+    assert metrics["astar_states"] == 5
+    assert metrics["confusion_ratio"] < 1.2
+
+
+def test_pcbs_component_report_rejects_zero_oracle_evidence():
+    from scripts.run_pcbs_component_ablation import _build_markdown, summarize
+
+    summary = summarize([])
+    report = _build_markdown(summary, persona="novice")
+
+    assert summary["experiment_valid"] is False
+    assert summary["invalid_reason"] == "no_oracle_solved_maps"
+    assert "Invalid component comparison" in report
+
+
+def test_insert_lock_key_places_key_on_side_branch_not_trunk():
+    from src.generation.grammar.core_rules import InsertLockKeyRule, StartRule
+    from src.generation.grammar.graph_types import EdgeType, MissionGraph, NodeType
+
+    rng = np.random.default_rng(123)
+    graph = MissionGraph()
+    graph = StartRule().apply(graph, {"goal_row": 0, "goal_col": 4, "rng": rng})
+    graph = InsertLockKeyRule().apply(graph, {"rng": rng})
+
+    key_nodes = [node for node in graph.nodes.values() if node.node_type == NodeType.KEY]
+    assert len(key_nodes) == 1
+    key_id = key_nodes[0].id
+    assert any(edge.edge_type == EdgeType.LOCKED and edge.key_required == key_id for edge in graph.edges)
+
+    start = graph.get_start_node()
+    goal = graph.get_goal_node()
+    assert start is not None and goal is not None
+    trunk = InsertLockKeyRule()._find_shortest_path_nodes(graph, start.id, goal.id)
+    assert key_id not in trunk
+    assert graph.get_neighbors(key_id)
+
+
+def test_boss_door_preserves_boss_key_and_key_item_does_not_grant_bombs():
     from src.simulation.validator import GameState, ZeldaLogicEnv
 
     grid = np.full((3, 4), SEMANTIC_PALETTE["FLOOR"], dtype=np.int64)
@@ -388,12 +452,45 @@ def test_boss_door_consumes_boss_key_and_key_item_does_not_grant_bombs():
 
     ok, opened = env.try_move_pure(GameState(position=(1, 0), has_boss_key=True), (1, 1), SEMANTIC_PALETTE["DOOR_BOSS"])
     assert ok
-    assert not opened.has_boss_key
+    assert opened.has_boss_key
 
     ok, picked = env.try_move_pure(GameState(position=(1, 1), bomb_count=0), (1, 2), SEMANTIC_PALETTE["KEY_ITEM"])
     assert ok
     assert picked.has_item
     assert picked.bomb_count == 0
+
+
+def test_solver_comparison_uses_canonical_bomb_and_item_transitions():
+    from src.simulation.solver_comparison import SolverComparison
+    from src.simulation.validator import GameState, ZeldaLogicEnv
+
+    grid = np.full((3, 3), SEMANTIC_PALETTE["FLOOR"], dtype=np.int64)
+    grid[1, 0] = SEMANTIC_PALETTE["START"]
+    grid[1, 1] = SEMANTIC_PALETTE["DOOR_BOMB"]
+    grid[1, 2] = SEMANTIC_PALETTE["TRIFORCE"]
+    grid[0, 1] = SEMANTIC_PALETTE["ELEMENT"]
+    comparison = SolverComparison(ZeldaLogicEnv(grid))
+
+    blocked, _state = comparison._simple_move(
+        GameState(position=(1, 0), bomb_count=0),
+        (1, 1),
+        SEMANTIC_PALETTE["DOOR_BOMB"],
+    )
+    opened, bomb_state = comparison._simple_move(
+        GameState(position=(1, 0), bomb_count=1),
+        (1, 1),
+        SEMANTIC_PALETTE["DOOR_BOMB"],
+    )
+    water_blocked, _state = comparison._simple_move(
+        GameState(position=(0, 0), has_item=False),
+        (0, 1),
+        SEMANTIC_PALETTE["ELEMENT"],
+    )
+
+    assert blocked is False
+    assert opened is True
+    assert bomb_state.bomb_count == 0
+    assert water_blocked is False
 
 
 def test_search_metrics_are_bounded_and_confusion_is_overhead():

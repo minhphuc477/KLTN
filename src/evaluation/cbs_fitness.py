@@ -57,10 +57,20 @@ def _compute_graph_cognitive_proxy(
             semantics.add('triforce')
         return any(token in semantics for token in tokens)
 
-    # Preserve directed mission semantics when present. For undirected legacy
-    # graphs, do not manufacture a bidirectional DiGraph and then use
-    # out_degree(): that erases terminal/dead-end structure in the proxy.
+    # Cognitive navigation is a physical traversal descriptor, not a mission
+    # dependency descriptor. Directed exports often encode one bidirectional
+    # corridor as two directed edges; using the DiGraph directly makes trees
+    # look cyclic and hides physical dead ends.
+    physical = nx.Graph()
+    physical.add_nodes_from(graph.nodes(data=True))
+    for src, dst, data in graph.edges(data=True):
+        if src == dst:
+            continue
+        physical.add_edge(src, dst, **dict(data))
+
     dg = graph
+    n_physical = int(physical.number_of_nodes())
+    e_physical = int(physical.number_of_edges())
 
     explicit_starts = [
         node for node, data in dg.nodes(data=True)
@@ -75,40 +85,35 @@ def _compute_graph_cognitive_proxy(
     start = (
         min(explicit_starts, key=str)
         if explicit_starts
-        else min(dg.nodes(), key=lambda node: (dg.in_degree(node), str(node)))
+        else min(physical.nodes(), key=lambda node: (physical.degree(node), str(node)))
     )
     goal = (
         min(explicit_goals, key=str)
         if explicit_goals
-        else max(dg.nodes(), key=lambda node: (dg.out_degree(node), str(node)))
+        else max(physical.nodes(), key=lambda node: (physical.degree(node), str(node)))
     )
 
     try:
-        shortest = nx.shortest_path_length(dg, source=start, target=goal)
+        shortest = nx.shortest_path_length(physical, source=start, target=goal)
         solvable = True
     except (nx.NetworkXNoPath, nx.NodeNotFound):
         shortest = 0
         solvable = False
 
-    degrees = [deg for _node, deg in dg.degree()]
+    degrees = [deg for _node, deg in physical.degree()]
     mean_deg = float(np.mean(degrees)) if degrees else 0.0
     deg_std = float(np.std(degrees)) if degrees else 0.0
 
     # Dead-end pressure and loop pressure proxy human confusion tendencies.
-    if dg.is_directed():
-        dead_count = sum(
-            1
-            for n_id in dg.nodes()
-            if int(dg.out_degree(n_id)) == 0 and not _has_semantic(dict(dg.nodes[n_id]), 'goal', 'triforce', 't')
-        )
-    else:
-        dead_count = sum(
-            1
-            for n_id in dg.nodes()
-            if int(dg.degree(n_id)) <= 1 and not _has_semantic(dict(dg.nodes[n_id]), 'goal', 'triforce', 't')
-        )
-    dead_ends = float(dead_count) / float(max(1, n))
-    loop_pressure = max(0.0, float(e - n + 1)) / float(max(1, n))
+    dead_count = sum(
+        1
+        for n_id in physical.nodes()
+        if int(physical.degree(n_id)) <= 1 and not _has_semantic(dict(physical.nodes[n_id]), 'goal', 'triforce', 't')
+    )
+    dead_ends = float(dead_count) / float(max(1, n_physical))
+    components = nx.number_connected_components(physical) if n_physical > 0 else 0
+    cycle_rank = max(0, e_physical - n_physical + components)
+    loop_pressure = float(cycle_rank) / float(max(1, n_physical))
     branch_pressure = float(np.clip((mean_deg - 1.0) / 3.0, 0.0, 1.0))
 
     confusion_index = float(np.clip((0.45 * branch_pressure) + (0.35 * dead_ends) + (0.20 * loop_pressure), 0.0, 3.0))
@@ -148,7 +153,7 @@ def _compute_graph_cognitive_proxy(
         'confusion_index': float(confusion_index),
         'astar_path_length': int(shortest),
         'cbs_path_length': int(cbs_path_len),
-        'astar_states': int(max(0, n + e)),
+        'astar_states': int(max(0, n_physical + e_physical)),
         'is_proxy': 1.0,
     }
 

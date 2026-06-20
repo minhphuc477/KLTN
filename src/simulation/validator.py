@@ -1149,7 +1149,6 @@ class ZeldaLogicEnv:
                 new_state.position = target_pos
                 return True, new_state, 0.0, {'msg': 'Boss door already open'}
             elif new_state.has_boss_key:
-                new_state.has_boss_key = False
                 new_state.opened_doors.add(target_pos)
                 new_state.position = target_pos
                 self.grid[target_pos] = SEMANTIC_PALETTE['DOOR_OPEN']
@@ -1423,7 +1422,6 @@ class ZeldaLogicEnv:
         
         if target_tile == SEMANTIC_PALETTE['DOOR_BOSS']:
             if state.has_boss_key:
-                new_state.has_boss_key = False
                 new_state.opened_doors = state.opened_doors | {target_pos}
                 return True, new_state
             return False, state

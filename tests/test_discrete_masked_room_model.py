@@ -102,6 +102,38 @@ def test_discrete_masked_model_respects_fixed_tokens():
     assert int(tokens[0, 8, 5]) == int(SEMANTIC_PALETTE["START"])
 
 
+def test_discrete_masked_model_reports_iterative_refinement_metrics():
+    model = create_discrete_masked_model(
+        num_classes=44,
+        hidden_dim=32,
+        model_channels=16,
+        context_dim=32,
+        num_steps=3,
+        unet_channel_mult=(1,),
+        unet_num_res_blocks=1,
+        unet_num_heads=4,
+    )
+    context = torch.zeros(1, 1, 32)
+    tokens, logits, hidden, metrics = model.sample(
+        context=context,
+        num_steps=3,
+        stochastic=False,
+        corrector_steps=1,
+        corrector_mask_ratio=0.1,
+        seed=7,
+        return_sampling_metrics=True,
+    )
+
+    assert tuple(tokens.shape) == (1, ROOM_HEIGHT, ROOM_WIDTH)
+    assert tuple(logits.shape[-2:]) == (ROOM_HEIGHT, ROOM_WIDTH)
+    assert hidden.shape[0] == 1
+    assert metrics["masked_refinement_steps_requested"] == pytest.approx(3.0)
+    assert metrics["masked_refinement_steps_executed"] == pytest.approx(3.0)
+    assert metrics["masked_corrector_rounds_executed"] == pytest.approx(1.0)
+    assert metrics["masked_initial_editable_tokens"] == pytest.approx(float(ROOM_HEIGHT * ROOM_WIDTH))
+    assert metrics["masked_final_unresolved_tokens"] == pytest.approx(0.0)
+
+
 def test_masked_backbone_default_uses_original_concat_encoder(monkeypatch):
     model = create_discrete_masked_model(
         num_classes=44,

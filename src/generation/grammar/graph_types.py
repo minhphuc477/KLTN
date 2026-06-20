@@ -199,6 +199,9 @@ class MissionGraph:
     """Complete mission graph for a dungeon."""
     BIDIRECTIONAL_EDGE_TYPES: ClassVar[Set[EdgeType]] = {
         EdgeType.PATH,
+        EdgeType.LOCKED,
+        EdgeType.ITEM_GATE,
+        EdgeType.BOSS_LOCKED,
         EdgeType.SHORTCUT,
         EdgeType.WARP,
         EdgeType.STAIRS,

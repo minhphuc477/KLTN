@@ -21,7 +21,7 @@ Scientific Basis:
 """
 
 import logging
-from typing import Dict, List, Tuple, Set
+from typing import Dict, List, Optional, Tuple, Set
 from dataclasses import dataclass
 
 from .validator import (
@@ -198,7 +198,7 @@ class StateSpaceDFS:
         
         # Goal check
         if state.position == self.env.goal_pos:
-            return True, path
+            return True, list(path)
         
         # Generate successors
         successors = self._get_successors(state)
@@ -209,10 +209,11 @@ class StateSpaceDFS:
             if next_key in visited:
                 continue
             
-            new_path = path + [next_state.position]
+            path.append(next_state.position)
             success, result_path = self._dfs_recursive(
-                next_state, visited, new_path, depth + 1, depth_limit
+                next_state, visited, path, depth + 1, depth_limit
             )
+            path.pop()
             
             if success:
                 return True, result_path
@@ -238,12 +239,24 @@ class StateSpaceDFS:
         
         start_state = self.env.state.copy()
         
-        # Stack: (state, path, depth)
-        stack = [(start_state, [start_state.position], 0)]
+        # Stack stores states only; paths are reconstructed from parent links.
+        stack = [(start_state, 0, 0)]
         visited = set()
+        parents: Dict[int, Optional[int]] = {0: None}
+        positions: Dict[int, Tuple[int, int]] = {0: start_state.position}
+        next_entry_id = 1
+
+        def reconstruct_path(end_entry_id: int) -> List[Tuple[int, int]]:
+            path: List[Tuple[int, int]] = []
+            current_entry_id: Optional[int] = end_entry_id
+            while current_entry_id is not None:
+                path.append(positions[current_entry_id])
+                current_entry_id = parents[current_entry_id]
+            path.reverse()
+            return path
         
         while stack and self.states_explored < self.timeout:
-            state, path, depth = stack.pop()
+            state, depth, entry_id = stack.pop()
             
             # Depth limit check
             if depth >= self.max_depth:
@@ -267,15 +280,18 @@ class StateSpaceDFS:
             # Goal check
             if state.position == self.env.goal_pos:
                 logger.debug(f'Iterative DFS succeeded: depth={depth}, states={self.states_explored}')
-                return True, path, self.states_explored
+                return True, reconstruct_path(entry_id), self.states_explored
             
             # Generate and push successors (reverse order for left-to-right exploration)
             successors = self._get_successors(state)
             for next_state in reversed(successors):
                 next_key = game_state_key(next_state)
                 if next_key not in visited:
-                    new_path = path + [next_state.position]
-                    stack.append((next_state, new_path, depth + 1))
+                    successor_entry_id = next_entry_id
+                    next_entry_id += 1
+                    parents[successor_entry_id] = entry_id
+                    positions[successor_entry_id] = next_state.position
+                    stack.append((next_state, depth + 1, successor_entry_id))
         
         logger.debug(f'Iterative DFS exhausted: states={self.states_explored}')
         return False, [], self.states_explored

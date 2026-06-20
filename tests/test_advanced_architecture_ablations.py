@@ -218,6 +218,48 @@ def test_graphormer_topology_refinement_reports_cost_metrics_against_gat2():
     assert lightweight_metrics["message_pairs"] == pytest.approx(11.0)
 
 
+def test_learned_graphormer_uses_centrality_spatial_and_edge_encodings():
+    from src.core.latent_diffusion import CrossAttention
+
+    torch.manual_seed(29)
+    attention = CrossAttention(
+        query_dim=16,
+        context_dim=16,
+        num_heads=4,
+        topology_refinement_mode="graphormer_learned",
+        dropout=0.0,
+    )
+    context = torch.randn(1, 3, 16)
+    edge_index = torch.tensor([[0, 1], [1, 2]], dtype=torch.long)
+    node_mask = torch.ones(1, 3, dtype=torch.bool)
+
+    open_edges = torch.tensor([0, 0], dtype=torch.long)
+    boss_edges = torch.tensor([4, 4], dtype=torch.long)
+    out_open = attention._refine_context_topology(
+        context,
+        edge_index=edge_index,
+        edge_attr=open_edges,
+        node_mask=node_mask,
+    )
+    out_boss = attention._refine_context_topology(
+        context,
+        edge_index=edge_index,
+        edge_attr=boss_edges,
+        node_mask=node_mask,
+    )
+    out_open.sum().backward()
+
+    assert tuple(out_open.shape) == tuple(context.shape)
+    assert torch.isfinite(out_open).all()
+    assert not torch.allclose(out_open, out_boss)
+    assert attention.graphormer_spatial_bias is not None
+    assert attention.graphormer_edge_bias is not None
+    assert attention.graphormer_in_degree is not None
+    assert attention.graphormer_out_degree is not None
+    assert attention.graphormer_spatial_bias.weight.grad is not None
+    assert attention.graphormer_edge_bias.weight.grad is not None
+
+
 def test_sparse_edge_topology_refinement_mode_runs_as_large_graph_ablation():
     from src.core.latent_diffusion import CrossAttention
 

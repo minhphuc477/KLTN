@@ -254,6 +254,13 @@ class CrossAttention(nn.Module):
         self.topology_gat_k = nn.ModuleList([nn.Linear(context_dim, context_dim), nn.Linear(context_dim, context_dim)])
         self.topology_gat_v = nn.ModuleList([nn.Linear(context_dim, context_dim), nn.Linear(context_dim, context_dim)])
         self.topology_gat_o = nn.ModuleList([nn.Linear(context_dim, context_dim), nn.Linear(context_dim, context_dim)])
+        self._topology_context_dim = int(context_dim)
+        self.graphormer_max_distance = 16
+        self.graphormer_max_degree = 64
+        self.graphormer_spatial_bias: Optional[nn.Embedding] = None
+        self.graphormer_edge_bias: Optional[nn.Embedding] = None
+        self.graphormer_in_degree: Optional[nn.Embedding] = None
+        self.graphormer_out_degree: Optional[nn.Embedding] = None
         self.topology_refinement_mode = "gat2"
         self.set_topology_refinement_mode(topology_refinement_mode)
 
@@ -283,15 +290,35 @@ class CrossAttention(nn.Module):
             "gat2_semantic",
             "gat2_directed_semantic",
             "graphormer",
+            "graphormer_learned",
         }
         if m not in allowed:
             raise ValueError(
                 "Invalid topology_refinement_mode="
                 f"{mode!r}. Expected 'none', 'lightweight', 'sparse_edge', 'sparse_directed', "
                 "'sparse_semantic', 'sparse_directed_semantic', 'gat2', 'gat2_directed', "
-                "'gat2_semantic', 'gat2_directed_semantic', or 'graphormer'."
+                "'gat2_semantic', 'gat2_directed_semantic', 'graphormer', or 'graphormer_learned'."
             )
+        if m == "graphormer_learned":
+            self._ensure_learned_graphormer_modules()
         self.topology_refinement_mode = m
+
+    def _ensure_learned_graphormer_modules(self) -> None:
+        """Create learned structural encodings only for the opt-in ablation."""
+        if self.graphormer_spatial_bias is not None:
+            return
+        edge_types = max(int(GRAPH_EDGE_FEATURE_DIM), 16)
+        self.graphormer_spatial_bias = nn.Embedding(self.graphormer_max_distance + 2, self.num_heads)
+        self.graphormer_edge_bias = nn.Embedding(edge_types, self.num_heads)
+        self.graphormer_in_degree = nn.Embedding(self.graphormer_max_degree + 1, self._topology_context_dim)
+        self.graphormer_out_degree = nn.Embedding(self.graphormer_max_degree + 1, self._topology_context_dim)
+        for module in (
+            self.graphormer_spatial_bias,
+            self.graphormer_edge_bias,
+            self.graphormer_in_degree,
+            self.graphormer_out_degree,
+        ):
+            nn.init.normal_(module.weight, mean=0.0, std=0.02)
     
     @staticmethod
     def _batched_valid_node_mask(
@@ -417,6 +444,7 @@ class CrossAttention(nn.Module):
             "gat2_semantic",
             "gat2_directed_semantic",
             "graphormer",
+            "graphormer_learned",
         }
         if normalized not in allowed:
             raise ValueError(
@@ -438,7 +466,7 @@ class CrossAttention(nn.Module):
         elif normalized in {"gat2_directed", "gat2_directed_semantic"}:
             attention_pairs = n * n
             message_pairs = n + e
-        elif normalized == "graphormer":
+        elif normalized in {"graphormer", "graphormer_learned"}:
             attention_pairs = n * n
             shortest_path_ops = n * n * n
         gat2_baseline = max(1, n * n)
@@ -760,19 +788,13 @@ class CrossAttention(nn.Module):
         return h_flat.reshape(bsz, seq_len, hidden_dim)
 
     @staticmethod
-    def _shortest_path_attention_bias(
+    def _shortest_path_distances(
         adjacency_mask: Tensor,
         valid: Tensor,
         *,
-        dtype: torch.dtype,
         max_distance: int = 8,
-    ) -> Tensor:
-        """
-        Build a Graphormer-style additive bias from shortest-path distance.
-
-        The returned [B,L,L] tensor is parameter-free to keep this mode an
-        ablation that does not invalidate existing checkpoint shapes.
-        """
+    ) -> Tuple[Tensor, Tensor]:
+        """Return clipped all-pairs distances and a finite-pair mask."""
         if adjacency_mask.dim() != 3:
             raise ValueError(f"adjacency_mask must have shape [B,L,L], got {tuple(adjacency_mask.shape)}.")
         batch_size, seq_len, _ = adjacency_mask.shape
@@ -791,9 +813,104 @@ class CrossAttention(nn.Module):
             dist = torch.minimum(dist, through)
 
         finite = dist < inf
+        return dist.clamp(max=int(max_distance)), finite
+
+    @staticmethod
+    def _shortest_path_attention_bias(
+        adjacency_mask: Tensor,
+        valid: Tensor,
+        *,
+        dtype: torch.dtype,
+        max_distance: int = 8,
+    ) -> Tensor:
+        """Build the legacy parameter-free shortest-path-bias ablation."""
+        dist, finite = CrossAttention._shortest_path_distances(
+            adjacency_mask,
+            valid,
+            max_distance=max_distance,
+        )
+        valid_pair = valid[:, :, None] & valid[:, None, :]
         clipped = dist.clamp(max=int(max_distance)).to(dtype=dtype)
         bias = -clipped
         bias = bias.masked_fill(~finite | ~valid_pair, -1.0e4)
+        return bias
+
+    def _learned_graphormer_spatial_bias(self, adjacency_mask: Tensor, valid: Tensor) -> Tensor:
+        """Return learned per-head shortest-path biases in [B,H,L,L] form."""
+        self._ensure_learned_graphormer_modules()
+        assert self.graphormer_spatial_bias is not None
+        dist, finite = self._shortest_path_distances(
+            adjacency_mask,
+            valid,
+            max_distance=self.graphormer_max_distance,
+        )
+        disconnected_id = self.graphormer_max_distance + 1
+        distance_ids = torch.where(finite, dist, torch.full_like(dist, disconnected_id))
+        bias = self.graphormer_spatial_bias(distance_ids).permute(0, 3, 1, 2).contiguous()
+        valid_pair = valid[:, :, None] & valid[:, None, :]
+        return bias.masked_fill(~valid_pair[:, None], -1.0e4)
+
+    def _learned_graphormer_edge_bias(
+        self,
+        *,
+        batch_size: int,
+        seq_len: int,
+        edge_index: Tensor,
+        edge_attr: Optional[Tensor],
+        valid: Tensor,
+        force_undirected: bool,
+    ) -> Optional[Tensor]:
+        """Map direct edge semantics to learned per-head attention biases."""
+        self._ensure_learned_graphormer_modules()
+        assert self.graphormer_edge_bias is not None
+        if not isinstance(edge_attr, Tensor):
+            return None
+
+        if edge_index.dim() == 2:
+            ei = edge_index.to(device=valid.device, dtype=torch.long)
+            if int(ei.shape[0]) != 2:
+                raise ValueError(f"CrossAttention edge_index must have first dimension 2, got {tuple(ei.shape)}.")
+            ei = ei.unsqueeze(0).expand(batch_size, -1, -1)
+        elif edge_index.dim() == 3:
+            ei = edge_index.to(device=valid.device, dtype=torch.long)
+            if int(ei.shape[0]) == 1 and batch_size > 1:
+                ei = ei.expand(batch_size, -1, -1)
+            if int(ei.shape[0]) != batch_size or int(ei.shape[1]) != 2:
+                raise ValueError(f"CrossAttention edge_index must have shape [B,2,E], got {tuple(ei.shape)}.")
+        else:
+            raise ValueError(f"CrossAttention edge_index must have shape [2,E] or [B,2,E], got {tuple(edge_index.shape)}.")
+
+        edge_ids = self._edge_attr_type_ids(
+            edge_attr,
+            batch_size=batch_size,
+            num_edges=int(ei.shape[2]),
+            device=valid.device,
+        )
+        if edge_ids is None:
+            return None
+        edge_ids = edge_ids.clamp(0, self.graphormer_edge_bias.num_embeddings - 1)
+        learned = self.graphormer_edge_bias(edge_ids)
+        bias = torch.zeros(
+            batch_size,
+            self.num_heads,
+            seq_len,
+            seq_len,
+            device=valid.device,
+            dtype=learned.dtype,
+        )
+        src_raw, dst_raw = ei[:, 0], ei[:, 1]
+        in_range = (src_raw >= 0) & (src_raw < seq_len) & (dst_raw >= 0) & (dst_raw < seq_len)
+        src = src_raw.clamp(0, max(0, seq_len - 1))
+        dst = dst_raw.clamp(0, max(0, seq_len - 1))
+        edge_valid = in_range & valid.gather(1, src) & valid.gather(1, dst)
+        batch_idx = torch.arange(batch_size, device=valid.device).unsqueeze(1).expand_as(src)
+        b = batch_idx[edge_valid]
+        s = src[edge_valid]
+        d = dst[edge_valid]
+        values = learned[edge_valid]
+        bias[b, :, s, d] = values
+        if force_undirected:
+            bias[b, :, d, s] = values
         return bias
 
     def _refine_context_topology(
@@ -870,6 +987,25 @@ class CrossAttention(nn.Module):
                     dtype=context.dtype,
                 )
                 attn_mask = valid[:, :, None] & valid[:, None, :]
+            elif self.topology_refinement_mode == "graphormer_learned":
+                direct_adjacency = attn_mask
+                graphormer_bias = self._learned_graphormer_spatial_bias(direct_adjacency, valid)
+                learned_edge_bias = self._learned_graphormer_edge_bias(
+                    batch_size=bsz,
+                    seq_len=seq_len,
+                    edge_index=edge_index,
+                    edge_attr=edge_attr,
+                    valid=valid,
+                    force_undirected=force_undirected,
+                )
+                if learned_edge_bias is not None:
+                    graphormer_bias = graphormer_bias + learned_edge_bias
+                assert self.graphormer_in_degree is not None
+                assert self.graphormer_out_degree is not None
+                in_degree = direct_adjacency.sum(dim=1).clamp(max=self.graphormer_max_degree).long()
+                out_degree = direct_adjacency.sum(dim=2).clamp(max=self.graphormer_max_degree).long()
+                h = h + self.graphormer_in_degree(in_degree) + self.graphormer_out_degree(out_degree)
+                attn_mask = valid[:, :, None] & valid[:, None, :]
             semantic_bias = None
             if use_edge_semantics:
                 semantic_bias = self._batched_edge_bias_matrix(
@@ -895,7 +1031,13 @@ class CrossAttention(nn.Module):
                 v = v_lin(h).reshape(bsz, seq_len, topo_heads, topo_head_dim).transpose(1, 2).contiguous()
                 scores = torch.matmul(q, k.transpose(-2, -1)) / (topo_head_dim ** 0.5)
                 if graphormer_bias is not None:
-                    scores = scores + graphormer_bias[:, None].to(dtype=scores.dtype)
+                    if graphormer_bias.dim() == 3:
+                        scores = scores + graphormer_bias[:, None].to(dtype=scores.dtype)
+                    else:
+                        per_head_bias = graphormer_bias
+                        if int(per_head_bias.shape[1]) != topo_heads:
+                            per_head_bias = per_head_bias.mean(dim=1, keepdim=True).expand(-1, topo_heads, -1, -1)
+                        scores = scores + per_head_bias.to(dtype=scores.dtype)
                 if semantic_bias is not None:
                     scores = scores + semantic_bias[:, None].to(dtype=scores.dtype)
                 scores = scores.masked_fill(~attn_mask[:, None], -1.0e4)

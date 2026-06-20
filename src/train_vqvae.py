@@ -37,6 +37,7 @@ from src.config_system import merge_config, seed_everything
 from src.utils.data_loading import dataloader_runtime_kwargs
 from src.utils.model_capacity import count_parameters, log_capacity_guardrails
 from src.zelda_data.zelda_loader import create_dataloader
+from src.zelda_data.splits import validate_disjoint_dungeon_splits
 from src.utils.checkpoint import (
     LATEST_RESUME_FILENAME,
     atomic_torch_save,
@@ -274,11 +275,51 @@ def split_dataset_for_vqvae_validation(
     validation_fraction: float,
     seed: int | None,
 ):
-    """Deterministically split the dataset into train/validation subsets."""
+    """Deterministically split data, grouping room samples by dungeon."""
     dataset_size = len(dataset)
     fraction = float(max(0.0, validation_fraction))
     if dataset_size < 2 or fraction <= 0.0:
         return dataset, None
+
+    sample_metadata = getattr(dataset, "sample_metadata", None)
+    if isinstance(sample_metadata, list) and len(sample_metadata) == dataset_size:
+        grouped_indices: Dict[str, list[int]] = {}
+        for index, metadata in enumerate(sample_metadata):
+            if not isinstance(metadata, dict):
+                grouped_indices = {}
+                break
+            dungeon_num = metadata.get("dungeon_num")
+            if dungeon_num is not None:
+                group_key = f"dungeon:{int(dungeon_num)}"
+            else:
+                dungeon_id = str(metadata.get("dungeon_id", "")).strip()
+                if not dungeon_id:
+                    grouped_indices = {}
+                    break
+                # Dataset ids use forms such as tloz9_1. Group both quest
+                # variants under the same dungeon to avoid structural leakage.
+                group_key = dungeon_id.rsplit("_", 1)[0]
+            grouped_indices.setdefault(group_key, []).append(index)
+
+        if len(grouped_indices) >= 2:
+            group_keys = sorted(grouped_indices)
+            generator = torch.Generator()
+            if seed is not None:
+                generator.manual_seed(int(seed))
+            permutation = torch.randperm(len(group_keys), generator=generator).tolist()
+            val_group_count = int(round(len(group_keys) * fraction))
+            val_group_count = max(1, min(len(group_keys) - 1, val_group_count))
+            val_groups = {group_keys[i] for i in permutation[:val_group_count]}
+            val_indices = sorted(
+                index
+                for group_key in val_groups
+                for index in grouped_indices[group_key]
+            )
+            train_indices = sorted(set(range(dataset_size)).difference(val_indices))
+            return (
+                torch.utils.data.Subset(dataset, train_indices),
+                torch.utils.data.Subset(dataset, val_indices),
+            )
 
     val_size = int(round(dataset_size * fraction))
     val_size = max(1, min(dataset_size - 1, val_size))
@@ -394,19 +435,23 @@ def evaluate_vqvae_loader(
         "perplexity": 0.0,
     }
     batches = 0
-    model.eval()
-    with torch.no_grad():
-        for batch in loader:
-            if isinstance(batch, (list, tuple)):
-                batch = batch[0]
-            batch = batch.to(device)
-            x_onehot = grids_to_onehot(batch, num_classes=num_classes)
-            info = trainer.eval_step(x_onehot)
-            for key in totals:
-                totals[key] += float(info.get(key, 0.0))
-            batches += 1
-            if max_batches is not None and batches >= int(max_batches):
-                break
+    was_training = bool(model.training)
+    try:
+        model.eval()
+        with torch.no_grad():
+            for batch in loader:
+                if isinstance(batch, (list, tuple)):
+                    batch = batch[0]
+                batch = batch.to(device)
+                x_onehot = grids_to_onehot(batch, num_classes=num_classes)
+                info = trainer.eval_step(x_onehot)
+                for key in totals:
+                    totals[key] += float(info.get(key, 0.0))
+                batches += 1
+                if max_batches is not None and batches >= int(max_batches):
+                    break
+    finally:
+        model.train(was_training)
 
     for key in totals:
         totals[key] /= max(1, batches)
@@ -440,6 +485,12 @@ def train_vqvae(args):
     # ------------------------------------------------------------------
     # Dataset - use VGLC mode, same as diffusion training
     # ------------------------------------------------------------------
+    train_ids, test_ids = validate_disjoint_dungeon_splits(
+        getattr(args, "train_dungeon_ids", list(range(1, 9))),
+        getattr(args, "test_dungeon_ids", [9]),
+    )
+    args.train_dungeon_ids = list(train_ids)
+    args.test_dungeon_ids = list(test_ids)
     room_level = bool(getattr(args, "room_level", True))
     base_loader = create_dataloader(
         data_dir=args.data_dir,

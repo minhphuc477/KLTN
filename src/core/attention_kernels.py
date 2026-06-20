@@ -30,13 +30,15 @@ class HedgehogFeatureMap(nn.Module):
     def forward(self, x: Tensor) -> Tensor:
         """Map [B, heads, seq, head_dim] -> [B, heads, seq, 2 * feature_dim]."""
         projected = torch.einsum("hdf,bhld->bhlf", self.weights, x)
-        return torch.cat(
+        projected_fp32 = projected.float()
+        mapped = torch.cat(
             [
-                torch.softmax(projected, dim=-1),
-                torch.softmax(-projected, dim=-1),
+                torch.softmax(projected_fp32, dim=-1),
+                torch.softmax(-projected_fp32, dim=-1),
             ],
             dim=-1,
         )
+        return mapped.to(dtype=projected.dtype)
 
 
 def expand_attention_mask(
@@ -80,22 +82,24 @@ def hedgehog_linear_attention(
         v: [B, heads, Nk, D]
         token_mask: Optional [B, Nk] valid-token mask
     """
-    f_q = q_map(q)
-    f_k = k_map(k)
+    output_dtype = v.dtype
+    f_q = q_map(q).float()
+    f_k = k_map(k).float()
+    v_accum = v.float()
     if token_mask is not None:
         expanded = expand_attention_mask(
             token_mask,
             batch_size=int(v.shape[0]),
             seq_len=int(v.shape[2]),
             device=v.device,
-            dtype=v.dtype,
+            dtype=torch.float32,
         )
         if expanded is not None:
             f_k = f_k * expanded
-            v = v * expanded
+            v_accum = v_accum * expanded
 
-    kv = torch.einsum("bhlf,bhld->bhfd", f_k, v)
+    kv = torch.einsum("bhlf,bhld->bhfd", f_k, v_accum)
     numer = torch.einsum("bhnf,bhfd->bhnd", f_q, kv)
     k_sum = f_k.sum(dim=2)
     denom = torch.einsum("bhnf,bhf->bhn", f_q, k_sum).unsqueeze(-1).clamp_min(eps)
-    return numer / denom
+    return (numer / denom).to(dtype=output_dtype)

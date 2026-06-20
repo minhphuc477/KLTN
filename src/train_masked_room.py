@@ -61,6 +61,7 @@ from src.utils.data_loading import dataloader_runtime_kwargs
 from src.utils.model_capacity import count_parameters, log_capacity_guardrails
 from src.utils.optimization import adamw_decay_param_groups_for_modules
 from src.zelda_data.zelda_loader import DungeonBatchSampler, create_dataloader, graph_collate_fn
+from src.zelda_data.splits import validate_disjoint_dungeon_splits
 from src.train_vqvae import split_dataset_for_vqvae_validation
 
 logger = logging.getLogger(__name__)
@@ -176,8 +177,12 @@ class MaskedRoomTrainingConfig:
         self.shuffle_train = bool(shuffle_train)
         self.shuffle_val = bool(shuffle_val)
         self.normalize = bool(normalize)
-        self.train_dungeon_ids = [int(v) for v in (train_dungeon_ids if train_dungeon_ids is not None else list(range(1, 9)))]
-        self.test_dungeon_ids = [int(v) for v in (test_dungeon_ids if test_dungeon_ids is not None else [9])]
+        train_ids, test_ids = validate_disjoint_dungeon_splits(
+            train_dungeon_ids if train_dungeon_ids is not None else range(1, 9),
+            test_dungeon_ids if test_dungeon_ids is not None else (9,),
+        )
+        self.train_dungeon_ids = list(train_ids)
+        self.test_dungeon_ids = list(test_ids)
         self.variants = [int(v) for v in (variants if variants is not None else [1, 2])]
         self.num_classes = int(max(1, num_classes))
         self.latent_dim = int(max(1, latent_dim))

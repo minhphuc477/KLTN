@@ -80,6 +80,29 @@ def _aggregate_room_stage_times(room_metric_dicts: List[Dict[str, Any]]) -> Dict
     return aggregated
 
 
+def _aggregate_masked_sampling_metrics(room_metric_dicts: List[Dict[str, Any]]) -> Dict[str, float]:
+    """Average MaskGIT refinement diagnostics over rooms that used that branch."""
+    keys = sorted({
+        str(key)
+        for metrics in room_metric_dicts
+        for key in metrics
+        if str(key).startswith("masked_") and not str(key).endswith("_time_sec")
+    })
+    aggregated: Dict[str, float] = {}
+    for key in keys:
+        values = []
+        for metrics in room_metric_dicts:
+            if key not in metrics:
+                continue
+            try:
+                values.append(float(metrics[key]))
+            except (TypeError, ValueError):
+                continue
+        if values:
+            aggregated[f"avg_{key}"] = float(np.mean(values))
+    return aggregated
+
+
 def _get_topology_generator_class() -> Any:
     return _public_pipeline_hook("EvolutionaryTopologyGenerator", EvolutionaryTopologyGenerator)
 
@@ -905,6 +928,7 @@ def generate_dungeon(
     room_metric_dicts = [dict(r.metrics) for r in room_set.rooms.values()]
     alignment_metrics = pipeline._aggregate_room_alignment_metrics(room_metric_dicts)
     room_stage_times = _aggregate_room_stage_times(room_metric_dicts)
+    masked_sampling_metrics = _aggregate_masked_sampling_metrics(room_metric_dicts)
     stage_times["generation_total_time_sec"] = float(generation_time)
     metrics = {
         'num_rooms': num_rooms_generated,
@@ -941,6 +965,7 @@ def generate_dungeon(
         'logicnet_global_logic_loss': float(logic_solvability.get('global_logic_loss', 0.0)),
         'logicnet_num_failing_rooms': float(logic_solvability.get('num_failing', 0.0)),
         **alignment_metrics,
+        **masked_sampling_metrics,
     }
 
     logger.info(f"Dungeon generated in {generation_time:.2f}s "

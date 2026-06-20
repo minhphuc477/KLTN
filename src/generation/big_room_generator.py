@@ -91,7 +91,7 @@ class RoomPatch:
 @dataclass
 class BigRoomConfig:
     """Configuration for large room generation."""
-    max_single_pass_size: Tuple[int, int] = (16, 11)  # Generate in one pass if ≤ this
+    max_single_pass_size: Tuple[int, int] = (16, 11)  # Generate in one pass at or below this size
     patch_size: Tuple[int, int] = (16, 11)  # Size of each patch
     overlap: int = 3  # Overlapping tiles between patches
     use_inpainting: bool = True  # Generate edges first, fill interior
@@ -274,27 +274,19 @@ class BigRoomGenerator:
         **kwargs
     ) -> np.ndarray:
         """Generate room in single pass (fits in standard generation)."""
-        # Temporarily override room dimensions in pipeline
-        original_height = self.pipeline.vqvae.room_height
-        original_width = self.pipeline.vqvae.room_width
-        
-        try:
-            self.pipeline.vqvae.room_height = dimensions.height
-            self.pipeline.vqvae.room_width = dimensions.width
-            
-            result = self.pipeline.generate_room(
-                neighbor_latents=neighbor_latents,
-                graph_context=graph_context,
-                room_id=room_id,
-                **kwargs
+        result = self.pipeline.generate_room(
+            neighbor_latents=neighbor_latents,
+            graph_context=graph_context,
+            room_id=room_id,
+            **kwargs
+        )
+        room_grid = np.asarray(result.room_grid, dtype=np.int32)
+        if room_grid.shape[0] < dimensions.height or room_grid.shape[1] < dimensions.width:
+            raise ValueError(
+                f"Generated room shape {room_grid.shape} cannot cover requested "
+                f"shape {(dimensions.height, dimensions.width)}."
             )
-            
-            return result.room_grid
-        
-        finally:
-            # Restore original dimensions
-            self.pipeline.vqvae.room_height = original_height
-            self.pipeline.vqvae.room_width = original_width
+        return room_grid[:dimensions.height, :dimensions.width].copy()
     
     def _generate_multipatch(
         self,
@@ -385,29 +377,25 @@ class BigRoomGenerator:
         
         Uses standard generation pipeline but with patch-specific conditioning.
         """
-        # Create temporary VQ-VAE latents from neighbor patches
-        # (This is a simplified version - full implementation would encode patch_neighbors)
-        
-        # Generate using standard pipeline (at patch dimensions)
-        original_height = self.pipeline.vqvae.room_height
-        original_width = self.pipeline.vqvae.room_width
-        
-        try:
-            self.pipeline.vqvae.room_height = patch.height
-            self.pipeline.vqvae.room_width = patch.width
-            
-            result = self.pipeline.generate_room(
-                neighbor_latents=neighbor_latents,
-                graph_context=graph_context,
-                room_id=f"{room_id}_patch{patch.patch_id}",
-                **kwargs
+        # The trained sampler keeps its canonical spatial contract. Generate a
+        # canonical room per patch and crop only edge patches; never mutate
+        # model dimensions at inference time.
+        patch_kwargs = dict(kwargs)
+        if patch_kwargs.get("seed") is not None:
+            patch_kwargs["seed"] = int(patch_kwargs["seed"]) + int(patch.patch_id)
+        result = self.pipeline.generate_room(
+            neighbor_latents=neighbor_latents,
+            graph_context=graph_context,
+            room_id=room_id,
+            **patch_kwargs
+        )
+        room_grid = np.asarray(result.room_grid, dtype=np.int32)
+        if room_grid.shape[0] < patch.height or room_grid.shape[1] < patch.width:
+            raise ValueError(
+                f"Generated patch shape {room_grid.shape} cannot cover requested "
+                f"patch {(patch.height, patch.width)}."
             )
-            
-            return result.room_grid
-        
-        finally:
-            self.pipeline.vqvae.room_height = original_height
-            self.pipeline.vqvae.room_width = original_width
+        return room_grid[:patch.height, :patch.width].copy()
     
     def _blend_patch_into_room(
         self,
@@ -433,24 +421,19 @@ class BigRoomGenerator:
         full_room[non_overlap_r_start:r_end, non_overlap_c_start:c_end] = \
             patch_grid[patch.overlap_top:, patch.overlap_left:]
         
-        # Overlap regions: blend with existing content
+        # Overlap regions use a hard categorical crossfade. Tile IDs are
+        # labels, so arithmetic interpolation would invent unrelated classes.
         if patch.overlap_top > 0:
-            # Blend top edge
             for i in range(patch.overlap_top):
-                weight = (i + 1) / (patch.overlap_top + 1)  # 0 to 1 gradient
-                full_room[r_start + i, c_start:c_end] = (
-                    (1 - weight) * full_room[r_start + i, c_start:c_end] +
-                    weight * patch_grid[i, :]
-                ).astype(np.int32)
+                use_new_patch = (i + 1) * 2 >= (patch.overlap_top + 1)
+                if use_new_patch:
+                    full_room[r_start + i, c_start:c_end] = patch_grid[i, :]
         
         if patch.overlap_left > 0:
-            # Blend left edge
             for j in range(patch.overlap_left):
-                weight = (j + 1) / (patch.overlap_left + 1)
-                full_room[r_start:r_end, c_start + j] = (
-                    (1 - weight) * full_room[r_start:r_end, c_start + j] +
-                    weight * patch_grid[:, j]
-                ).astype(np.int32)
+                use_new_patch = (j + 1) * 2 >= (patch.overlap_left + 1)
+                if use_new_patch:
+                    full_room[r_start:r_end, c_start + j] = patch_grid[:, j]
 
 
 # ============================================================================

@@ -51,6 +51,25 @@ def test_runtime_map_elites_prefers_macro_graph_descriptors():
     assert chain_features != branch_features
     assert branch_metrics["branching_factor"] > chain_metrics["branching_factor"]
     assert chain_metrics["critical_path_length"] == 3.0
+    assert chain_metrics["graph_descriptor_feasible"] == 1.0
+    assert chain_metrics["graph_path_keys_consumed"] == 1.0
+
+
+def test_runtime_map_elites_rejects_infeasible_macro_descriptor_path():
+    graph = nx.DiGraph()
+    graph.add_node(0, label="START")
+    graph.add_node(1, label="GOAL")
+    graph.add_edge(0, 1, edge_type="LOCKED", key_required="key_generic")
+    evaluator = MAPElitesEvaluator(enable_advanced_archive=False, descriptor_mode="hybrid")
+
+    _, metrics = evaluator._build_behavior_descriptor(
+        _grid(),
+        {"solvable": True, "path_length": 1},
+        graph,
+    )
+
+    assert metrics["graph_descriptor_used"] == 0.0
+    assert "graph_descriptor_feasible" not in metrics
 
 
 def test_runtime_map_elites_legacy_mode_preserves_grid_ablation():

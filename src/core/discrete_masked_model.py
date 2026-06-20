@@ -429,14 +429,17 @@ class DiscreteMaskedRoomModel(nn.Module):
         schedule_mode: str,
         stochastic: bool,
         generator: Optional[torch.Generator],
-    ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+    ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Dict[str, float]]:
         batch_size = int(tokens.shape[0])
         device = tokens.device
         available_counts = ((~fixed_mask) & (~committed)).sum(dim=(1, 2)).clamp_min(1)
 
         logits = torch.zeros(batch_size, self.num_classes, ROOM_HEIGHT, ROOM_WIDTH, device=device)
         hidden = self._embed_tokens(tokens)
+        steps_executed = 0
+        committed_per_step: list[Tensor] = []
         for i in range(int(max(1, total_steps))):
+            steps_executed += 1
             step = torch.full(
                 (batch_size,),
                 fill_value=max(0, int(total_steps) - 1 - i),
@@ -496,12 +499,26 @@ class DiscreteMaskedRoomModel(nn.Module):
                 ).view_as(unresolved)
 
             new_commit = committed | chosen_mask
+            committed_per_step.append(chosen_mask.flatten(1).sum(dim=1).to(dtype=torch.float32))
 
             tokens = torch.where(new_commit, tokens_candidate, tokens)
             committed = new_commit
             tokens[fixed_mask] = fixed_tokens[fixed_mask]
 
-        return tokens, logits, hidden, committed
+        committed_counts = (
+            torch.stack(committed_per_step, dim=0).sum(dim=0)
+            if committed_per_step
+            else torch.zeros(batch_size, device=device, dtype=torch.float32)
+        )
+        fill_metrics = {
+            "steps_executed": float(steps_executed),
+            "mean_tokens_committed": float(committed_counts.mean().item()),
+            "mean_tokens_committed_per_step": float(
+                committed_counts.mean().item() / max(1, steps_executed)
+            ),
+            "mean_unresolved_tokens": float((~committed).flatten(1).sum(dim=1).float().mean().item()),
+        }
+        return tokens, logits, hidden, committed, fill_metrics
 
     @staticmethod
     def _normalize_fixed_layout(
@@ -868,7 +885,8 @@ class DiscreteMaskedRoomModel(nn.Module):
         corrector_steps: int = 0,
         corrector_mask_ratio: float = 0.0,
         seed: Optional[int] = None,
-    ) -> Tuple[Tensor, Tensor, Tensor]:
+        return_sampling_metrics: bool = False,
+    ) -> Any:
         batch_size = int(context.shape[0])
         device = context.device
         generator = self._build_generator(device=device, seed=seed)
@@ -898,7 +916,8 @@ class DiscreteMaskedRoomModel(nn.Module):
         tokens[fixed_mask] = fixed_tokens[fixed_mask]
         committed = fixed_mask.clone()
 
-        tokens, logits, hidden, committed = self._iterative_fill(
+        initial_editable = (~fixed_mask).flatten(1).sum(dim=1).to(dtype=torch.float32)
+        tokens, logits, hidden, committed, initial_fill_metrics = self._iterative_fill(
             tokens=tokens,
             committed=committed,
             context=context,
@@ -912,6 +931,9 @@ class DiscreteMaskedRoomModel(nn.Module):
             generator=generator,
         )
 
+        corrector_rounds_executed = 0
+        corrector_fill_steps = 0.0
+        corrector_tokens_committed = 0.0
         if corrector_steps > 0 and corrector_mask_ratio > 0.0:
             editable_base = ~fixed_mask
             refinement_steps = max(1, min(3, steps // 2 if steps > 1 else 1))
@@ -947,11 +969,12 @@ class DiscreteMaskedRoomModel(nn.Module):
                 ).view_as(committed)
                 if not bool(remask.any()):
                     break
+                corrector_rounds_executed += 1
                 tokens = tokens.clone()
                 tokens[remask] = int(self.mask_token_id)
                 committed = committed.clone()
                 committed[remask] = False
-                tokens, logits, hidden, committed = self._iterative_fill(
+                tokens, logits, hidden, committed, correction_metrics = self._iterative_fill(
                     tokens=tokens,
                     committed=committed,
                     context=context,
@@ -964,7 +987,27 @@ class DiscreteMaskedRoomModel(nn.Module):
                     stochastic=bool(stochastic),
                     generator=generator,
                 )
+                corrector_fill_steps += float(correction_metrics["steps_executed"])
+                corrector_tokens_committed += float(correction_metrics["mean_tokens_committed"])
 
+        sampling_metrics = {
+            "masked_refinement_steps_requested": float(steps),
+            "masked_refinement_steps_executed": float(initial_fill_metrics["steps_executed"]),
+            "masked_corrector_rounds_requested": float(corrector_steps),
+            "masked_corrector_rounds_executed": float(corrector_rounds_executed),
+            "masked_corrector_refinement_steps_executed": float(corrector_fill_steps),
+            "masked_initial_editable_tokens": float(initial_editable.mean().item()),
+            "masked_initial_tokens_committed": float(initial_fill_metrics["mean_tokens_committed"]),
+            "masked_corrector_tokens_committed": float(corrector_tokens_committed),
+            "masked_mean_tokens_committed_per_step": float(
+                initial_fill_metrics["mean_tokens_committed_per_step"]
+            ),
+            "masked_final_unresolved_tokens": float((~committed).flatten(1).sum(dim=1).float().mean().item()),
+            "masked_schedule_is_cosine": float(schedule_mode == "cosine"),
+            "masked_sampling_is_stochastic": float(bool(stochastic)),
+        }
+        if return_sampling_metrics:
+            return tokens, logits, hidden, sampling_metrics
         return tokens, logits, hidden
 
 

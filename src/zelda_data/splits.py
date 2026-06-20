@@ -42,6 +42,24 @@ def normalize_variants(values: Optional[Iterable[int]]) -> Tuple[int, ...]:
     return normalized
 
 
+def validate_disjoint_dungeon_splits(
+    train_dungeons: Iterable[int],
+    test_dungeons: Iterable[int],
+) -> Tuple[Tuple[int, ...], Tuple[int, ...]]:
+    """Normalize train/test dungeon ids and reject holdout leakage."""
+    normalized_train = normalize_dungeon_ids(train_dungeons)
+    normalized_test = normalize_dungeon_ids(test_dungeons)
+    if normalized_train is None or normalized_test is None:
+        raise ValueError("Training and test dungeon splits must both be non-empty.")
+    overlap = sorted(set(normalized_train).intersection(normalized_test))
+    if overlap:
+        raise ValueError(
+            "Training/test dungeon split overlap would leak holdout data: "
+            f"{overlap}. Use disjoint dungeon ids."
+        )
+    return normalized_train, normalized_test
+
+
 def split_summary(
     *,
     train_dungeons: Sequence[int] = DEFAULT_TRAIN_DUNGEONS,

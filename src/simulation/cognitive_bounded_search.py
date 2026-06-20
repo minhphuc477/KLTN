@@ -3040,7 +3040,6 @@ class CognitiveBoundedSearch:
         elif tile_type == SEMANTIC_PALETTE['DOOR_BOSS']:
             if target_pos not in new_state.opened_doors:
                 if new_state.has_boss_key:
-                    new_state.has_boss_key = False
                     new_state.opened_doors.add(target_pos)
                 else:
                     return False, game_state

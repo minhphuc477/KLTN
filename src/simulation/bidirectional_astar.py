@@ -667,8 +667,6 @@ class BidirectionalAStar:
                 prev_state.keys = state.keys + 1  # Add key back
             elif curr_tile == SEMANTIC_PALETTE['DOOR_BOMB']:
                 prev_state.bomb_count = state.bomb_count + 1  # Add bomb back
-            elif curr_tile == SEMANTIC_PALETTE['DOOR_BOSS']:
-                prev_state.has_boss_key = True
         
         # Check if we need to UNDO item collection
         if (curr_tile in PICKUP_IDS and 

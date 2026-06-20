@@ -101,9 +101,20 @@ def _build_markdown(summary: Dict[str, Any], *, persona: str) -> str:
     lines = [
         f"# P-CBS Component Ablation ({persona})",
         "",
+    ]
+    if not bool(summary.get("experiment_valid", False)):
+        lines.extend([
+            "> **Invalid component comparison:** no evaluated map was solved by the oracle. ",
+            "> These rows are diagnostic telemetry only and cannot support P-CBS component claims.",
+            "",
+        ])
+    lines.extend([
+        f"- attempted maps: `{summary.get('attempted_map_count', 0)}`",
+        f"- oracle-solvable maps: `{summary.get('oracle_solved_map_count', 0)}`",
+        "",
         "| Variant | Success % | Oracle-Cond. Success % | Oracle Solved | CGR | Readability | Effort | Dominant Outcome | Confusion | Nav Entropy | Cog Load | Aha | Delib | Budget Exhaust | Peak Frustration | Focus Switches | Affordance Reactivations |",
         "|---|---:|---:|---:|---:|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
-    ]
+    ])
     for variant, stats in summary["variants"].items():
         success_oracle = stats["success_rate_given_oracle_solved"]
         cgr = stats["cognitive_gap_rate_given_oracle_solved"]
@@ -283,7 +294,23 @@ def run_ablation(
 
 
 def summarize(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
-    summary: Dict[str, Any] = {"total_runs": len(rows), "variants": {}}
+    attempted_map_ids = sorted({str(row["map_id"]) for row in rows})
+    oracle_solved_map_ids = sorted({
+        str(row["map_id"])
+        for row in rows
+        if int(row.get("oracle_success", 0)) == 1
+    })
+    experiment_valid = bool(oracle_solved_map_ids)
+    summary: Dict[str, Any] = {
+        "total_runs": len(rows),
+        "attempted_map_count": len(attempted_map_ids),
+        "attempted_map_ids": attempted_map_ids,
+        "oracle_solved_map_count": len(oracle_solved_map_ids),
+        "oracle_solved_map_ids": oracle_solved_map_ids,
+        "experiment_valid": experiment_valid,
+        "invalid_reason": None if experiment_valid else "no_oracle_solved_maps",
+        "variants": {},
+    }
     by_variant = sorted({str(row["ablation"]) for row in rows})
     for variant in by_variant:
         variant_rows = [row for row in rows if str(row["ablation"]) == variant]
@@ -372,6 +399,12 @@ def main() -> int:
         print(f"Wrote {output_dir / 'pcbs_component_ablation.csv'}")
         print(f"Wrote {output_dir / 'summary.json'}")
         print(f"Wrote {output_dir / 'report.md'}")
+    if not bool(summary.get("experiment_valid", False)) and not args.quick:
+        print(
+            "P-CBS ablation is not valid for component comparison: "
+            "no evaluated map was solved by the oracle."
+        )
+        return 2
     return 0
 
 

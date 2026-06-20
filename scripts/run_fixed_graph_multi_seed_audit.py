@@ -154,6 +154,26 @@ def _aggregate_variant(entries: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
     repair_rates = [float(entry["metrics"]["repair_rate"]) for entry in entries]
     repaired_tiles = [int(entry["metrics"]["total_tiles_repaired"]) for entry in entries]
     generation_times = [float(entry["metrics"]["generation_time_sec"]) for entry in entries]
+    masked_metric_names = (
+        "avg_masked_refinement_steps_requested",
+        "avg_masked_refinement_steps_executed",
+        "avg_masked_corrector_rounds_requested",
+        "avg_masked_corrector_rounds_executed",
+        "avg_masked_corrector_refinement_steps_executed",
+        "avg_masked_initial_editable_tokens",
+        "avg_masked_initial_tokens_committed",
+        "avg_masked_corrector_tokens_committed",
+        "avg_masked_mean_tokens_committed_per_step",
+        "avg_masked_final_unresolved_tokens",
+    )
+    masked_refinement_summary = {
+        name: _safe_mean_or_none([
+            value
+            for entry in entries
+            if (value := _safe_optional_float(entry["metrics"].get(name))) is not None
+        ])
+        for name in masked_metric_names
+    }
     teacher_fallback_fast_counts = [
         _entry_teacher_fallback_source_count(entry, "fast_sampler")
         for entry in entries
@@ -543,6 +563,7 @@ def _aggregate_variant(entries: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
         "avg_teacher_fallback_source_masked_room_count_per_run": _safe_mean(teacher_fallback_masked_counts),
         "avg_generation_time_sec": _safe_mean(generation_times),
         "median_generation_time_sec": _safe_median(generation_times),
+        **masked_refinement_summary,
         "avg_raw_neural_to_cleaned_tiles_changed": _safe_mean_or_none(raw_neural_to_cleaned_tiles_changed),
         "avg_raw_neural_to_final_tiles_changed": _safe_mean_or_none(raw_neural_to_final_tiles_changed),
         "avg_neural_cleanup_tiles_removed": _safe_mean_or_none(neural_cleanup_tiles_removed),

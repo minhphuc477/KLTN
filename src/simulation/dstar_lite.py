@@ -212,8 +212,6 @@ class DStarLiteSolver:
                 restored.keys = int(restored.keys) + 1
             elif target_tile == int(SEMANTIC_PALETTE['DOOR_BOMB']):
                 restored.bomb_count = int(restored.bomb_count) + 1
-            elif target_tile == int(SEMANTIC_PALETTE['DOOR_BOSS']):
-                restored.has_boss_key = True
             candidates.append(restored)
 
         return candidates

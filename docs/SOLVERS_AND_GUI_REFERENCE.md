@@ -167,7 +167,7 @@ These exist in codebase but are not all fully wired into main auto-solve path:
 | Module | Purpose | GUI Integration Status |
 |---|---|---|
 | `multi_goal.py` | Multi-waypoint item collection ordering | Not wired to main solve pipeline |
-| `parallel_astar.py` | Multiprocess hash-partitioned A* | Not wired end-to-end from GUI checkbox |
+| `parallel_astar.py` | Multiprocess first-goal feasibility race; not a strict optimal A* baseline | Not wired end-to-end from GUI checkbox |
 | `solver_comparison.py` | Algorithm metric comparison helper | Button path uses custom in-GUI comparison worker instead |
 | `map_elites.py` | MAP-Elites archive and diversity metrics | Wired via `Run MAP-Elites` button + overlay toggle |
 
@@ -186,6 +186,10 @@ More precise search roles in current code:
 - `D* Lite`: `incremental_replanning`
 - `DFS/IDDFS`: `exhaustive_probe`
 - `Bidirectional A*`: `comparison`
+
+`ParallelAStarSolver` currently shares a race-ordered closed set and stops after
+the first reported goal. It may be useful as a feasibility utility, but its
+result must not be labeled shortest-path optimal or used as the exact baseline.
 
 ## 5. GUI Features
 

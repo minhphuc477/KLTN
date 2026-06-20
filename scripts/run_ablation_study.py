@@ -1587,6 +1587,8 @@ def build_experiment_set(include_extended: bool = True) -> List[ExperimentConfig
         return core
 
     extended = [
+        ExperimentConfig(name="TOPO_GRAPHORMER_STATIC", topology_refinement_mode="graphormer"),
+        ExperimentConfig(name="TOPO_GRAPHORMER_LEARNED", topology_refinement_mode="graphormer_learned"),
         ExperimentConfig(name="VQ_CODEBOOK_128", latent_sampler="categorical", categorical_codebook_size=128),
         ExperimentConfig(name="VQ_CODEBOOK_512", latent_sampler="categorical", categorical_codebook_size=512),
         ExperimentConfig(name="VQ_CODEBOOK_2048", latent_sampler="categorical", categorical_codebook_size=2048),

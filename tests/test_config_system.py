@@ -94,15 +94,16 @@ def test_validation_rejects_fixed_schema_breakage(tmp_path: Path):
         merge_config(yaml_path=str(cfg_path), cli_overrides=None)
 
 
-def test_config_accepts_graphormer_topology_refinement_ablation(tmp_path: Path):
+@pytest.mark.parametrize("mode", ["graphormer", "graphormer_learned"])
+def test_config_accepts_graphormer_topology_refinement_ablation(tmp_path: Path, mode: str):
     cfg_path = tmp_path / "graphormer.yaml"
-    _write_yaml(cfg_path, {"diffusion": {"topology_refinement_mode": "graphormer"}})
+    _write_yaml(cfg_path, {"diffusion": {"topology_refinement_mode": mode}})
 
     resolved = merge_config(yaml_path=str(cfg_path), cli_overrides=None)
     kwargs = diffusion_training_kwargs_from_resolved_config(resolved)
 
-    assert resolved["diffusion"]["topology_refinement_mode"] == "graphormer"
-    assert kwargs["topology_refinement_mode"] == "graphormer"
+    assert resolved["diffusion"]["topology_refinement_mode"] == mode
+    assert kwargs["topology_refinement_mode"] == mode
 
 
 def test_config_accepts_sparse_semantic_topology_refinement_ablation(tmp_path: Path):

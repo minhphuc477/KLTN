@@ -617,37 +617,35 @@ class TensionCurveEvaluator:
             else:
                 small_key_demand += 1
         boss_key_supply = sum(1 for node in graph.nodes.values() if node.node_type == NodeType.BIG_KEY)
-        boss_key_demand = sum(
-            1
-            for edge in graph.edges
-            if edge.edge_type == EdgeType.BOSS_LOCKED
-        )
-        if boss_key_demand <= 0:
-            boss_key_demand = sum(
-                1 for node in graph.nodes.values() if node.node_type == NodeType.BOSS_DOOR
-            )
+        has_boss_gate = any(edge.edge_type == EdgeType.BOSS_LOCKED for edge in graph.edges)
+        if not has_boss_gate:
+            has_boss_gate = any(node.node_type == NodeType.BOSS_DOOR for node in graph.nodes.values())
+        boss_key_demand = int(has_boss_gate)
         small_key_surplus = max(0.0, float(small_key_supply - small_key_demand))
         boss_key_surplus = max(0.0, float(boss_key_supply - boss_key_demand))
         leniency = self._clip01(float(key_count) / float(max(1, lock_count))) if lock_count > 0 else 1.0
 
-        directed_branch_nodes = 0
-        for node_id in graph.nodes.keys():
-            out_degree = int(graph.get_out_degree(node_id))
-            if out_degree >= 2:
-                directed_branch_nodes += 1
-        branching_factor = self._clip01(float(directed_branch_nodes) / float(max(1, node_count)))
-
-        # Undirected edge set for cycle rank estimate.
-        undirected_edges: Set[Tuple[Any, Any]] = set()
-        for e in graph.edges:
-            a = e.source
-            b = e.target
-            if a == b:
+        physical_adj: Dict[Any, Set[Any]] = {node_id: set() for node_id in graph.nodes.keys()}
+        for edge in graph.edges:
+            if edge.edge_type in graph.NON_TRAVERSABLE_EDGE_TYPES:
                 continue
-            if str(a) <= str(b):
-                undirected_edges.add((a, b))
-            else:
-                undirected_edges.add((b, a))
+            if edge.source in physical_adj and edge.target in physical_adj:
+                physical_adj[edge.source].add(edge.target)
+                physical_adj[edge.target].add(edge.source)
+
+        physical_branch_nodes = sum(1 for neighbors in physical_adj.values() if len(neighbors) >= 3)
+        branching_factor = self._clip01(float(physical_branch_nodes) / float(max(1, node_count)))
+
+        # Undirected physical edge set for cycle rank estimate.
+        undirected_edges: Set[Tuple[Any, Any]] = set()
+        for a, neighbors in physical_adj.items():
+            for b in neighbors:
+                if a == b:
+                    continue
+                if str(a) <= str(b):
+                    undirected_edges.add((a, b))
+                else:
+                    undirected_edges.add((b, a))
         u_edge_count = int(len(undirected_edges))
         components = 1
         if node_count > 0:
@@ -947,12 +945,12 @@ class TensionCurveEvaluator:
                 # topology descriptors.  The previous implementation delegated
                 # to ``compute_cbs_fitness`` which, when given a networkx
                 # graph, used a static proxy that returned the same score for
-                # identical topologies — making it impossible for the GA to
+                # identical topologies, making it impossible for the GA to
                 # differentiate candidates on cognitive quality.
                 #
                 # The inline version below uses per-individual structural
                 # features that genuinely vary between candidate topologies:
-                #   - branching_factor: proportion of nodes with out-degree ≥ 2
+                #   - branching_factor: proportion of physical junction rooms
                 #   - dead_end_ratio: fraction of non-goal terminal nodes
                 #   - cycle_density: cyclomatic complexity normalised by nodes
                 #   - path_depth_ratio: critical path length / node count
@@ -962,16 +960,12 @@ class TensionCurveEvaluator:
                 # against the target confusion ratio.
 
                 n = max(1, int(len(graph.nodes)))
-                e = max(0, int(len(graph.edges)))
 
-                # Branching factor: high branching increases decision points.
-                branch_nodes = 0
+                # Physical branching: high junction density increases decision points.
+                branch_nodes = sum(1 for neighbors in physical_adj.values() if len(neighbors) >= 3)
                 dead_end_nodes = 0
-                for node_id in graph.nodes.keys():
-                    out_deg = int(graph.get_out_degree(node_id))
-                    if out_deg >= 2:
-                        branch_nodes += 1
-                    if out_deg == 0:
+                for node_id, neighbors in physical_adj.items():
+                    if len(neighbors) <= 1:
                         node = graph.nodes[node_id]
                         if node.node_type != NodeType.GOAL:
                             dead_end_nodes += 1
@@ -987,7 +981,7 @@ class TensionCurveEvaluator:
                     (0.35 * branch_pressure)
                     + (0.25 * dead_end_ratio)
                     + (0.20 * cd)
-                    + (0.20 * (1.0 - pdr)),  # low path-depth → more wandering
+                    + (0.20 * (1.0 - pdr)),  # low path-depth means more wandering
                     0.0,
                     3.0,
                 ))
@@ -1000,12 +994,13 @@ class TensionCurveEvaluator:
                 cognitive_score = float(np.clip(1.0 / (1.0 + cr_penalty), 0.0, 1.0))
 
                 path_efficiency = float(pdr)
+                physical_degrees = [len(neighbors) for neighbors in physical_adj.values()]
                 room_entropy = float(np.clip(
-                    float(np.std([int(graph.get_out_degree(nid)) for nid in graph.nodes.keys()]))
-                    / max(1.0, float(np.mean([int(graph.get_out_degree(nid)) for nid in graph.nodes.keys()])) + 1e-8),
+                    float(np.std(physical_degrees))
+                    / max(1.0, float(np.mean(physical_degrees)) + 1e-8),
                     0.0,
                     1.0,
-                )) if n > 1 else 0.0
+                )) if len(physical_degrees) > 1 else 0.0
 
                 cognitive_metrics = {
                     "fitness": float(cognitive_score),

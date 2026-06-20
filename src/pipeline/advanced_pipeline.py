@@ -49,6 +49,7 @@ from src.generation.entity_spawner import EntitySpawner, spawn_all_entities
 from src.generation.seam_smoother import SeamSmoother
 from src.generation.style_transfer import ThemeType
 from src.generation.global_state import GlobalStateManager, GlobalStateType
+from src.generation.big_room_generator import BigRoomConfig, BigRoomGenerator, RoomDimensions
 from src.generation.weighted_bayesian_wfc import WeightedBayesianWFC, extract_tile_priors_from_vqvae, WeightedBayesianWFCConfig
 from src.pipeline.dungeon_pipeline import NeuralSymbolicDungeonPipeline
 from src.pipeline.room_stitching import StitchedRoomLayout, compute_graph_aware_room_slots
@@ -168,7 +169,6 @@ class AdvancedNeuralSymbolicPipeline:
         logger.info("Initializing advanced pipeline with all 15 features...")
         
         # Core
-        self.robust_pipeline = None  # Will be initialized with specific blocks
         self.fast_sampling_active = False
         self.fast_sampling_reason = "LCM-LoRA disabled by config."
         pipeline_model_kwargs = self._resolve_neural_pipeline_model_kwargs()
@@ -199,7 +199,10 @@ class AdvancedNeuralSymbolicPipeline:
         from src.generation.style_transfer import StyleTransferEngine
         self.style_engine = StyleTransferEngine()
         self.global_state_mgr = GlobalStateManager() if config.enable_global_state else None
-        self.big_room_gen = None  # Will be initialized with base pipeline if needed
+        self.big_room_gen = (
+            BigRoomGenerator(base_pipeline=self.neural_pipeline, config=BigRoomConfig())
+            if config.enable_big_rooms else None
+        )
         
         # Validation
         self.collision_validator = CollisionAlignmentValidator() if config.enable_collision_validation else None
@@ -1281,9 +1284,32 @@ class AdvancedNeuralSymbolicPipeline:
                 logger.info(f"Generating big room {node_id}: {room_size[0]}x{room_size[1]}")
                 
                 if self.big_room_gen:
+                    neighbors = {'N': None, 'S': None, 'E': None, 'W': None}
+                    for predecessor in mission_graph.predecessors(node_id):
+                        if predecessor in neighbor_latents:
+                            neighbors['N'] = neighbor_latents[predecessor]
+                            break
+                    room_seed = (
+                        None
+                        if seed is None
+                        else int(seed) + stable_seed_offset(node_id, modulo=100000)
+                    )
                     room = self.big_room_gen.generate_big_room(
-                        target_size=room_size,
-                        mission_node=mission_graph.nodes[node_id]
+                        room_id=node_id,
+                        dimensions=RoomDimensions.custom(
+                            height=int(room_size[0]),
+                            width=int(room_size[1]),
+                        ),
+                        neighbor_latents=neighbors,
+                        graph_context=room_graph_context,
+                        guidance_scale=self.neural_pipeline.default_guidance_scale,
+                        logic_guidance_scale=self.neural_pipeline.default_logic_guidance_scale,
+                        num_diffusion_steps=self._effective_diffusion_steps(),
+                        use_fast_sampling=self.fast_sampling_active,
+                        use_ddim=True,
+                        apply_repair=self.neural_pipeline.default_apply_repair,
+                        start_goal_coords=self.neural_pipeline.default_start_goal_coords,
+                        seed=room_seed,
                     )
                 else:
                     # Fallback: generate standard room then upscale

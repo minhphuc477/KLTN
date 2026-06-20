@@ -42,6 +42,17 @@ def _record_stage_time(stage_times: Dict[str, float], key: str, started_at: floa
     stage_times[key] = float(stage_times.get(key, 0.0)) + float(time.perf_counter() - started_at)
 
 
+def _unpack_masked_sample(sample_output: Any) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict[str, float]]:
+    """Accept instrumented four-tuples and legacy three-tuple model adapters."""
+    if not isinstance(sample_output, (tuple, list)) or len(sample_output) not in {3, 4}:
+        raise ValueError("Masked room sample must return (tokens, logits, hidden[, metrics]).")
+    tokens, logits, hidden = sample_output[:3]
+    metrics = sample_output[3] if len(sample_output) == 4 else {}
+    if not isinstance(metrics, dict):
+        raise TypeError("Masked room sampling metrics must be a dictionary.")
+    return tokens, logits, hidden, {str(key): float(value) for key, value in metrics.items()}
+
+
 def _apply_maskgit_neighbor_boundary_tokens(
     pipeline,
     fixed_tokens: Optional[torch.Tensor],
@@ -357,6 +368,7 @@ def generate_room_batch(
     )
 
     tokens_batch: Optional[torch.Tensor] = None
+    masked_sampling_metrics: Dict[str, float] = {}
     if pipeline.room_generator_mode == "discrete_masked":
         sampler_started_at = time.perf_counter()
         fixed_layouts = [
@@ -382,7 +394,7 @@ def generate_room_batch(
         fixed_mask = torch.cat([layout[1] for layout in anchored_layouts], dim=0)
         if boundary_anchor_count > 0:
             pipeline._bump_diagnostic("masked_room_neighbor_boundary_tokens_applied")
-        tokens_batch, logits_batch, z_batch = pipeline.masked_room_model.sample(
+        masked_sample_output = pipeline.masked_room_model.sample(
             context=condition_batch,
             graph_data=graph_ctx_for_guidance,
             fixed_tokens=fixed_tokens,
@@ -394,7 +406,9 @@ def generate_room_batch(
             corrector_steps=int(pipeline.default_masked_room_corrector_steps),
             corrector_mask_ratio=float(pipeline.default_masked_room_corrector_mask_ratio),
             seed=seed,
+            return_sampling_metrics=True,
         )
+        tokens_batch, logits_batch, z_batch, masked_sampling_metrics = _unpack_masked_sample(masked_sample_output)
         _record_stage_time(batch_stage_times, "batch_masked_sample_time_sec", sampler_started_at)
     elif sampler_mode == "categorical":
         sampler_started_at = time.perf_counter()
@@ -561,6 +575,7 @@ def generate_room_batch(
             for key, value in batch_stage_times.items():
                 result_i.metrics[f"{key}_per_room"] = float(value) / denom
             result_i.metrics["batch_room_count"] = float(B)
+            result_i.metrics.update({key: float(value) for key, value in masked_sampling_metrics.items()})
         out[inp['room_id']] = result_i
 
     _record_stage_time(batch_stage_times, "batch_finalize_results_time_sec", finalize_started_at)
@@ -724,6 +739,7 @@ def generate_room(
     mission_graph_for_room = graph_data.get("mission_graph") if isinstance(graph_data, dict) else None
 
     sampled_tokens: Optional[torch.Tensor] = None
+    masked_sampling_metrics: Dict[str, float] = {}
 
     if precomputed_latent is not None and precomputed_logits is not None:
         precomputed_started_at = time.perf_counter()
@@ -750,7 +766,7 @@ def generate_room(
         )
         if boundary_anchor_count > 0:
             pipeline._bump_diagnostic("masked_room_neighbor_boundary_tokens_applied")
-        sampled_tokens, logits, z_latent = pipeline.masked_room_model.sample(
+        masked_sample_output = pipeline.masked_room_model.sample(
             context=condition,
             graph_data=graph_data,
             fixed_tokens=fixed_tokens,
@@ -762,7 +778,9 @@ def generate_room(
             corrector_steps=int(pipeline.default_masked_room_corrector_steps),
             corrector_mask_ratio=float(pipeline.default_masked_room_corrector_mask_ratio),
             seed=seed,
+            return_sampling_metrics=True,
         )
+        sampled_tokens, logits, z_latent, masked_sampling_metrics = _unpack_masked_sample(masked_sample_output)
         _record_stage_time(stage_times, "masked_sample_time_sec", sampler_started_at)
     elif sampler_mode == "categorical":
         sampler_started_at = time.perf_counter()
@@ -1618,6 +1636,7 @@ def generate_room(
         'wfc_failures': float(repair_diag.get('wfc_failures', 0)),
         'planned_traversability_pixels': float(np.sum(room_plan_mask)) if isinstance(room_plan_mask, np.ndarray) else 0.0,
         'used_fast_sampling': float(bool(use_fast_sampling)),
+        'teacher_fallback_used': 0.0,
         'masked_room_sampling_temperature': float(pipeline.default_masked_room_sampling_temperature),
         'masked_room_sampling_stochastic': float(
             bool(pipeline.default_masked_room_sampling_stochastic)
@@ -1625,6 +1644,7 @@ def generate_room(
         'masked_room_corrector_steps': float(pipeline.default_masked_room_corrector_steps),
         'masked_room_corrector_mask_ratio': float(pipeline.default_masked_room_corrector_mask_ratio),
     }
+    metrics.update({key: float(value) for key, value in masked_sampling_metrics.items()})
     stage_times["repair_time_sec"] = float(repair_time_sec)
     stage_times["room_generation_time_sec"] = float(time.perf_counter() - room_started_at)
     metrics.update({key: float(value) for key, value in stage_times.items()})

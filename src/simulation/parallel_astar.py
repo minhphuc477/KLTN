@@ -155,7 +155,6 @@ def _try_move_local(
 
     if target_tile == SEMANTIC_PALETTE['DOOR_BOSS']:
         if state.has_boss_key:
-            new_state.has_boss_key = False
             new_state.opened_doors = state.opened_doors | {target_pos}
             return True, new_state
         return False, state

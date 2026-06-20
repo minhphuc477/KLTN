@@ -36,6 +36,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.zelda_data.zelda_loader import DungeonBatchSampler, create_dataloader, extract_start_goal, graph_collate_fn
+from src.zelda_data.splits import validate_disjoint_dungeon_splits
 from src.core.latent_diffusion import LatentDiffusionModel, create_latent_diffusion
 from src.core.vqvae import SemanticVQVAE as VQVAE, create_vqvae
 from src.core.condition_encoder import DualStreamConditionEncoder, create_condition_encoder
@@ -303,8 +304,12 @@ class DiffusionTrainingConfig:
         self.use_vglc = use_vglc
         self.room_level = bool(room_level)
         self.dungeon_batch_mode = bool(dungeon_batch_mode)
-        self.train_dungeon_ids = [int(v) for v in (train_dungeon_ids if train_dungeon_ids is not None else list(range(1, 9)))]
-        self.test_dungeon_ids = [int(v) for v in (test_dungeon_ids if test_dungeon_ids is not None else [9])]
+        train_ids, test_ids = validate_disjoint_dungeon_splits(
+            train_dungeon_ids if train_dungeon_ids is not None else range(1, 9),
+            test_dungeon_ids if test_dungeon_ids is not None else (9,),
+        )
+        self.train_dungeon_ids = list(train_ids)
+        self.test_dungeon_ids = list(test_ids)
         self.variants = [int(v) for v in (variants if variants is not None else [1, 2])]
         self.num_classes = int(num_classes)
         self.node_feature_dim = int(max(1, node_feature_dim))

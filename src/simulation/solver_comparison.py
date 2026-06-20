@@ -21,12 +21,26 @@ Educational Value:
 import heapq
 import time
 import logging
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from dataclasses import dataclass
 from collections import deque
-from .validator import GameState, ZeldaLogicEnv, ACTION_DELTAS, SEMANTIC_PALETTE, game_state_key
+from .validator import GameState, ZeldaLogicEnv, ACTION_DELTAS, game_state_key
 
 logger = logging.getLogger(__name__)
+
+
+def _reconstruct_state_path(
+    end_key: Any,
+    parents: Dict[Any, Optional[Any]],
+    positions: Dict[Any, Tuple[int, int]],
+) -> List[Tuple[int, int]]:
+    path: List[Tuple[int, int]] = []
+    current_key: Optional[Any] = end_key
+    while current_key is not None:
+        path.append(positions[current_key])
+        current_key = parents[current_key]
+    path.reverse()
+    return path
 
 
 @dataclass
@@ -136,17 +150,22 @@ class SolverComparison:
         start_time = time.time()
         
         # BFS implementation
-        queue = deque([(start_state, [start_state.position])])
-        visited = {game_state_key(start_state)}
+        start_key = game_state_key(start_state)
+        queue = deque([start_state])
+        visited = {start_key}
+        parents: Dict[Any, Optional[Any]] = {start_key: None}
+        positions = {start_key: start_state.position}
         states_explored = 0
         
         while queue and (time.time() - start_time) < max_time:
-            current_state, path = queue.popleft()
+            current_state = queue.popleft()
+            current_key = game_state_key(current_state)
             states_explored += 1
             
             # Check goal
             if current_state.position == self.env.goal_pos:
                 elapsed = time.time() - start_time
+                path = _reconstruct_state_path(current_key, parents, positions)
                 return SolverMetrics(
                     name="BFS",
                     success=True,
@@ -176,7 +195,9 @@ class SolverComparison:
                 new_key = game_state_key(new_state)
                 if new_key not in visited:
                     visited.add(new_key)
-                    queue.append((new_state, path + [target_pos]))
+                    parents[new_key] = current_key
+                    positions[new_key] = new_state.position
+                    queue.append(new_state)
         
         elapsed = time.time() - start_time
         return SolverMetrics("BFS", False, [], 0, states_explored, elapsed, float('inf'))
@@ -185,15 +206,18 @@ class SolverComparison:
         """Run Dijkstra's algorithm (uniform cost search)."""
         start_time = time.time()
         
-        # Priority queue: (cost, counter, state, path)
-        open_set = [(0, 0, start_state, [start_state.position])]
-        g_scores = {game_state_key(start_state): 0}
+        # Priority queue: (cost, counter, state)
+        start_key = game_state_key(start_state)
+        open_set = [(0, 0, start_state)]
+        g_scores = {start_key: 0}
+        parents: Dict[Any, Optional[Any]] = {start_key: None}
+        positions = {start_key: start_state.position}
         visited = set()
         counter = 1
         states_explored = 0
         
         while open_set and (time.time() - start_time) < max_time:
-            cost, _, current_state, path = heapq.heappop(open_set)
+            cost, _, current_state = heapq.heappop(open_set)
             
             state_key = game_state_key(current_state)
             if state_key in visited:
@@ -205,6 +229,7 @@ class SolverComparison:
             # Check goal
             if current_state.position == self.env.goal_pos:
                 elapsed = time.time() - start_time
+                path = _reconstruct_state_path(state_key, parents, positions)
                 return SolverMetrics(
                     name="Dijkstra",
                     success=True,
@@ -241,7 +266,9 @@ class SolverComparison:
                     continue
                 
                 g_scores[new_key] = new_cost
-                heapq.heappush(open_set, (new_cost, counter, new_state, path + [target_pos]))
+                parents[new_key] = state_key
+                positions[new_key] = new_state.position
+                heapq.heappush(open_set, (new_cost, counter, new_state))
                 counter += 1
         
         elapsed = time.time() - start_time
@@ -251,15 +278,18 @@ class SolverComparison:
         """Run Greedy Best-First Search (heuristic only)."""
         start_time = time.time()
         
-        # Priority queue: (heuristic, counter, state, path)
+        # Priority queue: (heuristic, counter, state)
         h_start = self._heuristic(start_state)
-        open_set = [(h_start, 0, start_state, [start_state.position])]
+        start_key = game_state_key(start_state)
+        open_set = [(h_start, 0, start_state)]
+        parents: Dict[Any, Optional[Any]] = {start_key: None}
+        positions = {start_key: start_state.position}
         visited = set()
         counter = 1
         states_explored = 0
         
         while open_set and (time.time() - start_time) < max_time:
-            _, _, current_state, path = heapq.heappop(open_set)
+            _, _, current_state = heapq.heappop(open_set)
             
             state_key = game_state_key(current_state)
             if state_key in visited:
@@ -271,6 +301,7 @@ class SolverComparison:
             # Check goal
             if current_state.position == self.env.goal_pos:
                 elapsed = time.time() - start_time
+                path = _reconstruct_state_path(state_key, parents, positions)
                 return SolverMetrics(
                     name="Greedy",
                     success=True,
@@ -302,7 +333,10 @@ class SolverComparison:
                     continue
                 
                 h = self._heuristic(new_state)
-                heapq.heappush(open_set, (h, counter, new_state, path + [target_pos]))
+                if new_key not in parents:
+                    parents[new_key] = state_key
+                    positions[new_key] = new_state.position
+                heapq.heappush(open_set, (h, counter, new_state))
                 counter += 1
         
         elapsed = time.time() - start_time
@@ -319,33 +353,5 @@ class SolverComparison:
     
     def _simple_move(self, state: GameState, target_pos: Tuple[int, int],
                      target_tile: int) -> Tuple[bool, GameState]:
-        """Simplified movement check."""
-        if target_tile in [SEMANTIC_PALETTE['WALL'], SEMANTIC_PALETTE['VOID']]:
-            return False, state
-        
-        new_state = state.copy()
-        new_state.position = target_pos
-        
-        # Handle pickups
-        if target_tile == SEMANTIC_PALETTE['KEY_SMALL'] and target_pos not in state.collected_items:
-            new_state.collected_items = state.collected_items | {target_pos}
-            new_state.keys = state.keys + 1
-        elif target_tile == SEMANTIC_PALETTE['KEY_BOSS'] and target_pos not in state.collected_items:
-            new_state.collected_items = state.collected_items | {target_pos}
-            new_state.has_boss_key = True
-        
-        # Handle doors
-        if target_tile == SEMANTIC_PALETTE['DOOR_LOCKED']:
-            if target_pos in state.opened_doors or state.keys > 0:
-                new_state.keys = max(0, state.keys - 1)
-                new_state.opened_doors = state.opened_doors | {target_pos}
-                return True, new_state
-            return False, state
-        
-        if target_tile == SEMANTIC_PALETTE['DOOR_BOSS']:
-            if target_pos in state.opened_doors or state.has_boss_key:
-                new_state.opened_doors = state.opened_doors | {target_pos}
-                return True, new_state
-            return False, state
-        
-        return True, new_state
+        """Apply the same full game-state transition used by the hard oracle."""
+        return self.env.try_move_pure(state, target_pos, int(target_tile))
