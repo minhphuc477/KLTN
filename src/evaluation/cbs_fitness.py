@@ -105,10 +105,14 @@ def _compute_graph_cognitive_proxy(
     deg_std = float(np.std(degrees)) if degrees else 0.0
 
     # Dead-end pressure and loop pressure proxy human confusion tendencies.
+    # Exclude both goal AND start nodes: start typically has degree 1 but
+    # is not a navigational dead-end.
     dead_count = sum(
         1
         for n_id in physical.nodes()
-        if int(physical.degree(n_id)) <= 1 and not _has_semantic(dict(physical.nodes[n_id]), 'goal', 'triforce', 't')
+        if int(physical.degree(n_id)) <= 1
+        and not _has_semantic(dict(physical.nodes[n_id]), 'goal', 'triforce', 't')
+        and not _has_semantic(dict(physical.nodes[n_id]), 'start', 's')
     )
     dead_ends = float(dead_count) / float(max(1, n_physical))
     components = nx.number_connected_components(physical) if n_physical > 0 else 0

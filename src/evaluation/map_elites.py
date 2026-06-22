@@ -1084,6 +1084,7 @@ def create_map_elites(
         map_elites.archive = CVTEliteArchive(
             num_cells=num_cells,
             feature_dims=feature_dims,
+            feature_ranges=feature_ranges,
         )
         map_elites.diversity_metrics = DiversityMetrics(map_elites.archive)
     

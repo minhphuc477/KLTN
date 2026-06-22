@@ -408,6 +408,42 @@ class TestGraphGridAttention:
 
         assert torch.allclose(out_with_padded_edge, out_without_edge, atol=1e-6)
 
+    def test_graph_to_grid_edge_semantics_are_explicit_ablation():
+        from src.core.graph_grid_attention import GraphToGridCrossAttention
+
+        torch.manual_seed(34)
+        grid_features = torch.randn(1, 16, 3, 3)
+        graph_nodes = torch.randn(1, 3, 12)
+        edge_index = torch.tensor([[0, 1], [1, 2]], dtype=torch.long)
+        open_edges = torch.tensor([0, 0], dtype=torch.long)
+        locked_edges = torch.tensor([4, 4], dtype=torch.long)
+
+        baseline = GraphToGridCrossAttention(
+            grid_dim=16,
+            graph_dim=12,
+            num_heads=4,
+            attention_mode="softmax",
+            dropout=0.0,
+            use_edge_semantics=False,
+        ).eval()
+        semantic = GraphToGridCrossAttention(
+            grid_dim=16,
+            graph_dim=12,
+            num_heads=4,
+            attention_mode="softmax",
+            dropout=0.0,
+            use_edge_semantics=True,
+        ).eval()
+
+        with torch.no_grad():
+            base_open = baseline(grid_features, graph_nodes, edge_index=edge_index, edge_attr=open_edges)
+            base_locked = baseline(grid_features, graph_nodes, edge_index=edge_index, edge_attr=locked_edges)
+            sem_open = semantic(grid_features, graph_nodes, edge_index=edge_index, edge_attr=open_edges)
+            sem_locked = semantic(grid_features, graph_nodes, edge_index=edge_index, edge_attr=locked_edges)
+
+        assert torch.allclose(base_open, base_locked, atol=1e-6)
+        assert not torch.allclose(sem_open, sem_locked)
+
     def test_spatial_alignment_loss_requires_captured_softmax_maps(self):
         """Alignment should fail loudly when capture/softmax attention is absent."""
         from src.core.graph_grid_attention import GraphToGridCrossAttention

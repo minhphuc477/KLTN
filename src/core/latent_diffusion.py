@@ -49,6 +49,60 @@ HAS_SDPA = hasattr(F, "scaled_dot_product_attention")
 
 
 # ============================================================================
+# ABLATION MODULES: RMSNorm & SwiGLU
+# ============================================================================
+
+class RMSNorm(nn.Module):
+    """Root Mean Square Layer Normalization (Zhang & Sennrich, 2019).
+
+    Removes the mean-centering step from standard LayerNorm for faster
+    computation with identical or better training stability.  Used in
+    Llama-3, DiT-v2, and other modern transformer architectures.
+    """
+
+    def __init__(self, dim: int, eps: float = 1e-6):
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(dim))
+
+    def forward(self, x: Tensor) -> Tensor:
+        rms = torch.sqrt(torch.mean(x.float() ** 2, dim=-1, keepdim=True) + self.eps)
+        x_normed = x.float() / rms
+        return (self.weight * x_normed).to(dtype=x.dtype)
+
+
+class SwiGLU(nn.Module):
+    """Swish-Gated Linear Unit (Shazeer, 2020).
+
+    Uses a gating mechanism that improves parameter efficiency and
+    convergence compared to standard GELU MLPs.  Standard in Llama-3,
+    PaLM, and modern vision transformers.
+
+    The expansion ratio is adjusted to 8/3 (≈2.67) instead of 4.0 so
+    that the total parameter count remains roughly equal to a standard
+    GELU MLP with ratio 4.0.
+    """
+
+    def __init__(self, in_features: int, hidden_features: Optional[int] = None, dropout: float = 0.0):
+        super().__init__()
+        hidden_features = hidden_features or int(max(in_features, round(in_features * 8 / 3)))
+        self.w1 = nn.Linear(in_features, hidden_features)
+        self.w2 = nn.Linear(in_features, hidden_features)
+        self.w3 = nn.Linear(hidden_features, in_features)
+        self.drop = nn.Dropout(dropout)
+
+    def forward(self, x: Tensor) -> Tensor:
+        return self.drop(self.w3(F.silu(self.w1(x)) * self.w2(x)))
+
+
+def _make_norm(dim: int, norm_type: str = "layer") -> nn.Module:
+    """Factory for norm layers — used by DiTBlock ablations."""
+    if norm_type == "rms":
+        return RMSNorm(dim)
+    return nn.LayerNorm(dim, elementwise_affine=False)
+
+
+# ============================================================================
 # NOISE SCHEDULES
 # ============================================================================
 
@@ -291,15 +345,20 @@ class CrossAttention(nn.Module):
             "gat2_directed_semantic",
             "graphormer",
             "graphormer_learned",
+            "graphormer_learned_directed",
+            "graphormer_learned_semantic",
+            "graphormer_learned_directed_semantic",
         }
         if m not in allowed:
             raise ValueError(
                 "Invalid topology_refinement_mode="
                 f"{mode!r}. Expected 'none', 'lightweight', 'sparse_edge', 'sparse_directed', "
                 "'sparse_semantic', 'sparse_directed_semantic', 'gat2', 'gat2_directed', "
-                "'gat2_semantic', 'gat2_directed_semantic', 'graphormer', or 'graphormer_learned'."
+                "'gat2_semantic', 'gat2_directed_semantic', 'graphormer', 'graphormer_learned', "
+                "'graphormer_learned_directed', 'graphormer_learned_semantic', or "
+                "'graphormer_learned_directed_semantic'."
             )
-        if m == "graphormer_learned":
+        if m.startswith("graphormer_learned"):
             self._ensure_learned_graphormer_modules()
         self.topology_refinement_mode = m
 
@@ -445,6 +504,9 @@ class CrossAttention(nn.Module):
             "gat2_directed_semantic",
             "graphormer",
             "graphormer_learned",
+            "graphormer_learned_directed",
+            "graphormer_learned_semantic",
+            "graphormer_learned_directed_semantic",
         }
         if normalized not in allowed:
             raise ValueError(
@@ -466,7 +528,7 @@ class CrossAttention(nn.Module):
         elif normalized in {"gat2_directed", "gat2_directed_semantic"}:
             attention_pairs = n * n
             message_pairs = n + e
-        elif normalized in {"graphormer", "graphormer_learned"}:
+        elif normalized.startswith("graphormer"):
             attention_pairs = n * n
             shortest_path_ops = n * n * n
         gat2_baseline = max(1, n * n)
@@ -987,7 +1049,7 @@ class CrossAttention(nn.Module):
                     dtype=context.dtype,
                 )
                 attn_mask = valid[:, :, None] & valid[:, None, :]
-            elif self.topology_refinement_mode == "graphormer_learned":
+            elif self.topology_refinement_mode.startswith("graphormer_learned"):
                 direct_adjacency = attn_mask
                 identity_mask = torch.eye(seq_len, device=direct_adjacency.device, dtype=torch.bool).unsqueeze(0)
                 real_adjacency = direct_adjacency & ~identity_mask
@@ -1243,6 +1305,7 @@ class AttentionBlock(nn.Module):
         topology_map_channels: int = 18,
         topology_conditioning_mode: str = "additive",
         auto_linear_attention_nodes: int = 128,
+        graph_to_grid_edge_semantics: bool = False,
         graph_gate_init: float = -2.0,
         topology_gate_init: float = -2.0,
     ):
@@ -1267,6 +1330,7 @@ class AttentionBlock(nn.Module):
             attention_mode=attention_mode,
             hedgehog_feature_dim=hedgehog_feature_dim,
             auto_linear_attention_nodes=auto_linear_attention_nodes,
+            graph_to_grid_edge_semantics=graph_to_grid_edge_semantics,
             graph_gate_init=graph_gate_init,
             topology_gate_init=topology_gate_init,
         )
@@ -1336,6 +1400,7 @@ class AttentionBlock(nn.Module):
                 x,
                 graph_nodes=spatial_graph_data.get("graph_nodes"),
                 edge_index=spatial_graph_data.get("edge_index"),
+                edge_attr=spatial_graph_data.get("edge_attr"),
                 node_positions=spatial_graph_data.get("node_positions"),
                 node_tpe=spatial_graph_data.get("node_tpe"),
                 current_node_distance=spatial_graph_data.get("current_node_distance"),
@@ -1370,6 +1435,7 @@ class DownBlock(nn.Module):
         topology_map_channels: int = 18,
         topology_conditioning_mode: str = "additive",
         auto_linear_attention_nodes: int = 128,
+        graph_to_grid_edge_semantics: bool = False,
         graph_gate_init: float = -2.0,
         topology_gate_init: float = -2.0,
     ):
@@ -1395,6 +1461,7 @@ class DownBlock(nn.Module):
                         topology_map_channels=topology_map_channels,
                         topology_conditioning_mode=topology_conditioning_mode,
                         auto_linear_attention_nodes=auto_linear_attention_nodes,
+                        graph_to_grid_edge_semantics=graph_to_grid_edge_semantics,
                         graph_gate_init=graph_gate_init,
                         topology_gate_init=topology_gate_init,
                     )
@@ -1488,6 +1555,7 @@ class UpBlock(nn.Module):
         topology_map_channels: int = 18,
         topology_conditioning_mode: str = "additive",
         auto_linear_attention_nodes: int = 128,
+        graph_to_grid_edge_semantics: bool = False,
         graph_gate_init: float = -2.0,
         topology_gate_init: float = -2.0,
     ):
@@ -1529,6 +1597,7 @@ class UpBlock(nn.Module):
                         topology_map_channels=topology_map_channels,
                         topology_conditioning_mode=topology_conditioning_mode,
                         auto_linear_attention_nodes=auto_linear_attention_nodes,
+                        graph_to_grid_edge_semantics=graph_to_grid_edge_semantics,
                         graph_gate_init=graph_gate_init,
                         topology_gate_init=topology_gate_init,
                     )
@@ -1635,6 +1704,7 @@ class UNetDenoiser(nn.Module):
         topology_map_channels: int = 18,
         topology_conditioning_mode: str = "additive",
         auto_linear_attention_nodes: int = 128,
+        graph_to_grid_edge_semantics: bool = False,
         graph_gate_init: float = -2.0,
         topology_gate_init: float = -2.0,
     ):
@@ -1678,6 +1748,7 @@ class UNetDenoiser(nn.Module):
                 topology_map_channels=topology_map_channels,
                 topology_conditioning_mode=topology_conditioning_mode,
                 auto_linear_attention_nodes=auto_linear_attention_nodes,
+                graph_to_grid_edge_semantics=graph_to_grid_edge_semantics,
                 graph_gate_init=graph_gate_init,
                 topology_gate_init=topology_gate_init,
             ))
@@ -1697,6 +1768,7 @@ class UNetDenoiser(nn.Module):
             topology_map_channels=topology_map_channels,
             topology_conditioning_mode=topology_conditioning_mode,
             auto_linear_attention_nodes=auto_linear_attention_nodes,
+            graph_to_grid_edge_semantics=graph_to_grid_edge_semantics,
             graph_gate_init=graph_gate_init,
             topology_gate_init=topology_gate_init,
         )
@@ -1735,6 +1807,7 @@ class UNetDenoiser(nn.Module):
                 topology_map_channels=topology_map_channels,
                 topology_conditioning_mode=topology_conditioning_mode,
                 auto_linear_attention_nodes=auto_linear_attention_nodes,
+                graph_to_grid_edge_semantics=graph_to_grid_edge_semantics,
                 graph_gate_init=graph_gate_init,
                 topology_gate_init=topology_gate_init,
             ))
@@ -1857,22 +1930,29 @@ class DiTBlock(nn.Module):
         num_heads: int,
         mlp_ratio: float = 4.0,
         dropout: float = 0.0,
+        activation_type: str = "gelu",
+        norm_type: str = "layer",
     ) -> None:
         super().__init__()
         if hidden_dim % num_heads != 0:
             raise ValueError(f"DiTBlock hidden_dim={hidden_dim} must be divisible by num_heads={num_heads}.")
-        self.norm1 = nn.LayerNorm(hidden_dim, elementwise_affine=False)
+        self.norm1 = _make_norm(hidden_dim, norm_type)
         self.attn = nn.MultiheadAttention(hidden_dim, num_heads, dropout=dropout, batch_first=True)
-        self.norm_cross = nn.LayerNorm(hidden_dim, elementwise_affine=False)
+        self.norm_cross = _make_norm(hidden_dim, norm_type)
         self.cross_attn = nn.MultiheadAttention(hidden_dim, num_heads, dropout=dropout, batch_first=True)
-        self.norm2 = nn.LayerNorm(hidden_dim, elementwise_affine=False)
-        mlp_hidden = int(max(hidden_dim, round(hidden_dim * float(mlp_ratio))))
-        self.mlp = nn.Sequential(
-            nn.Linear(hidden_dim, mlp_hidden),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(mlp_hidden, hidden_dim),
-        )
+        self.norm2 = _make_norm(hidden_dim, norm_type)
+        act_type = str(activation_type).strip().lower()
+        if act_type == "swiglu":
+            mlp_hidden = int(max(hidden_dim, round(hidden_dim * 8 / 3)))
+            self.mlp = SwiGLU(hidden_dim, mlp_hidden, dropout=dropout)
+        else:
+            mlp_hidden = int(max(hidden_dim, round(hidden_dim * float(mlp_ratio))))
+            self.mlp = nn.Sequential(
+                nn.Linear(hidden_dim, mlp_hidden),
+                nn.GELU(),
+                nn.Dropout(dropout),
+                nn.Linear(mlp_hidden, hidden_dim),
+            )
         self.adaLN = nn.Sequential(nn.SiLU(), nn.Linear(cond_dim, 9 * hidden_dim))
         nn.init.zeros_(self.adaLN[-1].weight)
         nn.init.zeros_(self.adaLN[-1].bias)
@@ -1952,8 +2032,11 @@ class DiTDenoiser(nn.Module):
         topology_map_channels: int = ROOM_TOPOLOGY_CHANNEL_COUNT,
         topology_conditioning_mode: str = "additive",
         auto_linear_attention_nodes: int = 128,
+        graph_to_grid_edge_semantics: bool = False,
         graph_gate_init: float = -2.0,
         topology_gate_init: float = -2.0,
+        activation_type: str = "gelu",
+        norm_type: str = "layer",
     ) -> None:
         super().__init__()
         if int(patch_size) <= 0:
@@ -1997,6 +2080,7 @@ class DiTDenoiser(nn.Module):
             attention_mode=attention_mode,
             hedgehog_feature_dim=hedgehog_feature_dim,
             auto_linear_attention_nodes=int(auto_linear_attention_nodes),
+            graph_to_grid_edge_semantics=bool(graph_to_grid_edge_semantics),
             graph_gate_init=float(graph_gate_init),
             topology_gate_init=float(topology_gate_init),
         )
@@ -2008,11 +2092,13 @@ class DiTDenoiser(nn.Module):
                     num_heads=int(num_heads),
                     mlp_ratio=float(mlp_ratio),
                     dropout=float(dropout),
+                    activation_type=str(activation_type),
+                    norm_type=str(norm_type),
                 )
                 for _ in range(self.depth)
             ]
         )
-        self.final_norm = nn.LayerNorm(self.model_channels, elementwise_affine=False)
+        self.final_norm = _make_norm(self.model_channels, str(norm_type))
         self.final_mod = nn.Sequential(nn.SiLU(), nn.Linear(self.model_channels, 2 * self.model_channels))
         self.out_proj = nn.Linear(self.model_channels, self.patch_size * self.patch_size * self.out_channels)
         nn.init.zeros_(self.final_mod[-1].weight)
@@ -2095,6 +2181,7 @@ class DiTDenoiser(nn.Module):
                 h,
                 graph_nodes=spatial_graph_data.get("graph_nodes"),
                 edge_index=spatial_graph_data.get("edge_index"),
+                edge_attr=spatial_graph_data.get("edge_attr"),
                 node_positions=spatial_graph_data.get("node_positions"),
                 node_tpe=spatial_graph_data.get("node_tpe"),
                 current_node_distance=spatial_graph_data.get("current_node_distance"),
@@ -2807,9 +2894,12 @@ class LatentDiffusionModel(nn.Module):
         dit_patch_size: int = 1,
         dit_mlp_ratio: float = 4.0,
         graph_auto_linear_attention_nodes: int = 128,
+        graph_to_grid_edge_semantics: bool = False,
         spatial_graph_gate_init: float = -2.0,
         spatial_topology_gate_init: float = -2.0,
         training_objective: str = "diffusion",
+        dit_activation_type: str = "gelu",
+        dit_norm_type: str = "layer",
     ):
         super().__init__()
         
@@ -2824,6 +2914,7 @@ class LatentDiffusionModel(nn.Module):
         self.attention_mode = str(attention_mode).strip().lower()
         self.hedgehog_feature_dim = int(max(4, int(hedgehog_feature_dim)))
         self.room_topology_channels = int(max(1, int(room_topology_channels)))
+        self.graph_to_grid_edge_semantics = bool(graph_to_grid_edge_semantics)
         self.topology_conditioning_mode = str(topology_conditioning_mode).strip().lower()
         self.denoiser_backbone = str(denoiser_backbone).strip().lower()
         self.training_objective = str(training_objective).strip().lower()
@@ -2857,8 +2948,11 @@ class LatentDiffusionModel(nn.Module):
                 topology_map_channels=self.room_topology_channels,
                 topology_conditioning_mode=self.topology_conditioning_mode,
                 auto_linear_attention_nodes=int(graph_auto_linear_attention_nodes),
+                graph_to_grid_edge_semantics=self.graph_to_grid_edge_semantics,
                 graph_gate_init=float(spatial_graph_gate_init),
                 topology_gate_init=float(spatial_topology_gate_init),
+                activation_type=str(dit_activation_type),
+                norm_type=str(dit_norm_type),
             )
         else:
             self.denoiser = UNetDenoiser(
@@ -2876,6 +2970,7 @@ class LatentDiffusionModel(nn.Module):
                 topology_map_channels=self.room_topology_channels,
                 topology_conditioning_mode=self.topology_conditioning_mode,
                 auto_linear_attention_nodes=int(graph_auto_linear_attention_nodes),
+                graph_to_grid_edge_semantics=self.graph_to_grid_edge_semantics,
                 graph_gate_init=float(spatial_graph_gate_init),
                 topology_gate_init=float(spatial_topology_gate_init),
             )
@@ -3328,6 +3423,21 @@ class LatentDiffusionModel(nn.Module):
                 )
             target_key = "node_tpe" if key == "tpe" else key
             spatial[target_key] = value
+
+        edge_attr = graph_data.get("edge_attr")
+        if not isinstance(edge_attr, torch.Tensor):
+            edge_attr = graph_data.get("edge_features")
+        if isinstance(edge_attr, torch.Tensor):
+            edge_attr = edge_attr.to(context.device)
+            if edge_attr.dim() in {2, 3} and int(edge_attr.shape[0]) not in {1, batch_size}:
+                # [E,D] edge features are valid and batch-free; [B,E] labels need B alignment.
+                edge_index = spatial.get("edge_index")
+                edge_count = int(edge_index.shape[-1]) if isinstance(edge_index, torch.Tensor) else -1
+                if int(edge_attr.shape[0]) != edge_count:
+                    raise ValueError(
+                        f"edge_attr batch/edge dimension {int(edge_attr.shape[0])} does not match batch={batch_size} or E={edge_count}."
+                    )
+            spatial["edge_attr"] = edge_attr
 
         return spatial or None
 
@@ -4599,6 +4709,7 @@ def create_latent_diffusion(
     dit_patch_size: int = 1,
     dit_mlp_ratio: float = 4.0,
     graph_auto_linear_attention_nodes: int = 128,
+    graph_to_grid_edge_semantics: bool = False,
     spatial_graph_gate_init: float = -2.0,
     spatial_topology_gate_init: float = -2.0,
     training_objective: str = "diffusion",
@@ -4646,6 +4757,7 @@ def create_latent_diffusion(
         dit_patch_size=dit_patch_size,
         dit_mlp_ratio=dit_mlp_ratio,
         graph_auto_linear_attention_nodes=graph_auto_linear_attention_nodes,
+        graph_to_grid_edge_semantics=graph_to_grid_edge_semantics,
         spatial_graph_gate_init=spatial_graph_gate_init,
         spatial_topology_gate_init=spatial_topology_gate_init,
         training_objective=training_objective,

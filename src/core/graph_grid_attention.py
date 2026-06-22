@@ -360,6 +360,8 @@ class GraphToGridCrossAttention(nn.Module):
         attention_mode: str = "softmax",
         hedgehog_feature_dim: int = 32,
         auto_linear_attention_nodes: int = 128,
+        use_edge_semantics: bool = False,
+        edge_type_vocab_size: int = 16,
         allow_legacy_argument_swap: bool = False,
     ):
         super().__init__()
@@ -382,6 +384,8 @@ class GraphToGridCrossAttention(nn.Module):
         self.scale = self.head_dim ** -0.5
         self.attention_mode = "softmax"
         self.auto_linear_attention_nodes = int(max(0, int(auto_linear_attention_nodes)))
+        self.use_edge_semantics = bool(use_edge_semantics)
+        self.edge_type_vocab_size = int(max(1, int(edge_type_vocab_size)))
         self.allow_legacy_argument_swap = bool(allow_legacy_argument_swap)
         self._large_graph_fallback_warning_emitted = False
         self.capture_attention_maps = False
@@ -407,6 +411,11 @@ class GraphToGridCrossAttention(nn.Module):
             nn.Linear(4, max(8, num_heads)),
             nn.SiLU(),
             nn.Linear(max(8, num_heads), num_heads),
+        )
+        self.edge_type_node_bias = (
+            nn.Embedding(self.edge_type_vocab_size, num_heads)
+            if self.use_edge_semantics
+            else None
         )
         
         # Normalization layers
@@ -444,6 +453,123 @@ class GraphToGridCrossAttention(nn.Module):
             nn.Linear(grid_dim * 4, grid_dim),
         )
         self.set_attention_mode(attention_mode)
+
+    @staticmethod
+    def _edge_attr_type_ids(
+        edge_attr: Optional[Tensor],
+        *,
+        batch_size: int,
+        num_edges: int,
+        device: torch.device,
+    ) -> Optional[Tensor]:
+        if not isinstance(edge_attr, torch.Tensor) or int(num_edges) <= 0:
+            return None
+        attr = edge_attr.to(device=device)
+        if attr.dim() == 1:
+            ids = attr.long().view(1, -1).expand(batch_size, -1)
+        elif attr.dim() == 2:
+            if int(attr.shape[0]) == batch_size and int(attr.shape[1]) == num_edges:
+                ids = attr.long()
+            elif int(attr.shape[0]) == 1 and int(attr.shape[1]) == num_edges:
+                ids = attr.long().expand(batch_size, -1)
+            elif int(attr.shape[0]) == num_edges:
+                ids = attr.argmax(dim=-1).long().view(1, -1).expand(batch_size, -1)
+            else:
+                raise ValueError(
+                    f"GraphToGridCrossAttention edge_attr must align to E={num_edges}; got {tuple(attr.shape)}."
+                )
+        elif attr.dim() == 3:
+            if int(attr.shape[0]) == 1 and batch_size > 1:
+                attr = attr.expand(batch_size, -1, -1)
+            if int(attr.shape[0]) != batch_size or int(attr.shape[1]) != num_edges:
+                raise ValueError(
+                    f"GraphToGridCrossAttention edge_attr must have shape [B,E,D] with B={batch_size}, E={num_edges}; "
+                    f"got {tuple(attr.shape)}."
+                )
+            ids = attr.argmax(dim=-1).long()
+        else:
+            raise ValueError(
+                f"GraphToGridCrossAttention edge_attr must have shape [E], [B,E], [E,D], or [B,E,D], got {tuple(attr.shape)}."
+            )
+        return ids[:, :num_edges]
+
+    def _edge_semantic_node_bias(
+        self,
+        edge_index: Optional[Tensor],
+        edge_attr: Optional[Tensor],
+        *,
+        batch_size: int,
+        num_nodes: int,
+        node_mask: Optional[Tensor],
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> Optional[Tensor]:
+        if not self.use_edge_semantics or self.edge_type_node_bias is None or edge_index is None or num_nodes <= 0:
+            return None
+        if edge_index.dim() not in {2, 3}:
+            raise ValueError(
+                f"GraphToGridCrossAttention edge_index must have shape [2, E] or [B, 2, E], got {tuple(edge_index.shape)}."
+            )
+        valid_nodes_all = (
+            torch.ones(batch_size, num_nodes, device=device, dtype=torch.bool)
+            if node_mask is None
+            else node_mask.to(device=device, dtype=torch.bool)
+        )
+        if valid_nodes_all.dim() == 1:
+            valid_nodes_all = valid_nodes_all.unsqueeze(0)
+        if int(valid_nodes_all.shape[0]) == 1 and batch_size > 1:
+            valid_nodes_all = valid_nodes_all.expand(batch_size, -1)
+        if tuple(valid_nodes_all.shape) != (batch_size, num_nodes):
+            raise ValueError(
+                f"GraphToGridCrossAttention node_mask must have shape [B, N] = ({batch_size}, {num_nodes}), "
+                f"got {tuple(valid_nodes_all.shape)}."
+            )
+
+        if edge_index.dim() == 2:
+            ei = edge_index.to(device=device, dtype=torch.long)
+            if int(ei.shape[0]) != 2:
+                raise ValueError(f"GraphToGridCrossAttention edge_index first dimension must be 2, got {tuple(ei.shape)}.")
+            edge_count = int(ei.shape[1])
+            edge_ids = self._edge_attr_type_ids(edge_attr, batch_size=batch_size, num_edges=edge_count, device=device)
+            if edge_ids is None:
+                return None
+            src = ei[0].view(1, -1).expand(batch_size, -1)
+            dst = ei[1].view(1, -1).expand(batch_size, -1)
+        else:
+            ei = edge_index.to(device=device, dtype=torch.long)
+            if int(ei.shape[1]) != 2:
+                raise ValueError(f"GraphToGridCrossAttention edge_index must have shape [B,2,E], got {tuple(ei.shape)}.")
+            if int(ei.shape[0]) == 1 and batch_size > 1:
+                ei = ei.expand(batch_size, -1, -1)
+            if int(ei.shape[0]) != batch_size:
+                raise ValueError(
+                    f"GraphToGridCrossAttention edge_index batch size {int(ei.shape[0])} does not match graph batch size {batch_size}."
+                )
+            edge_count = int(ei.shape[2])
+            edge_ids = self._edge_attr_type_ids(edge_attr, batch_size=batch_size, num_edges=edge_count, device=device)
+            if edge_ids is None:
+                return None
+            src = ei[:, 0]
+            dst = ei[:, 1]
+
+        valid = (src >= 0) & (src < num_nodes) & (dst >= 0) & (dst < num_nodes)
+        safe_src = src.clamp(0, max(0, num_nodes - 1))
+        safe_dst = dst.clamp(0, max(0, num_nodes - 1))
+        valid = valid & valid_nodes_all.gather(1, safe_src) & valid_nodes_all.gather(1, safe_dst)
+        edge_ids = edge_ids.clamp(0, self.edge_type_vocab_size - 1)
+        edge_bias = self.edge_type_node_bias(edge_ids).to(dtype=dtype)
+        node_bias = torch.zeros(batch_size, num_nodes, self.num_heads, device=device, dtype=dtype)
+        counts = torch.zeros(batch_size, num_nodes, 1, device=device, dtype=dtype)
+        for b_idx in range(batch_size):
+            mask = valid[b_idx]
+            if bool(mask.any()):
+                dst_b = safe_dst[b_idx, mask]
+                values = edge_bias[b_idx, mask]
+                node_bias[b_idx].index_add_(0, dst_b, values)
+                counts[b_idx].index_add_(0, dst_b, torch.ones(values.shape[0], 1, device=device, dtype=dtype))
+        node_bias = node_bias / counts.clamp_min(1.0)
+        node_bias = node_bias * valid_nodes_all[:, :, None].to(dtype=dtype)
+        return node_bias.permute(0, 2, 1).unsqueeze(2)
 
     def __getstate__(self) -> Dict[str, Any]:
         state = self.__dict__.copy()
@@ -645,6 +771,7 @@ class GraphToGridCrossAttention(nn.Module):
         grid_features: Tensor,
         graph_nodes: Tensor,
         edge_index: Optional[Tensor] = None,
+        edge_attr: Optional[Tensor] = None,
         node_positions: Optional[Tensor] = None,
         node_tpe: Optional[Tensor] = None,
         current_node_distance: Optional[Tensor] = None,
@@ -657,6 +784,7 @@ class GraphToGridCrossAttention(nn.Module):
             grid_features: [B, C, H, W] grid features from U-Net
             graph_nodes: [B, N, graph_dim] graph node features
             edge_index: [2, E] or [B, 2, E] graph connectivity for GCN prepass
+            edge_attr: optional edge labels/features aligned with edge_index
             node_positions: [B, N, 2] optional node positions
             node_tpe: [B, N, 8] topological positional encoding
             node_mask: [B, N] optional mask (1 = valid, 0 = padding)
@@ -857,6 +985,17 @@ class GraphToGridCrossAttention(nn.Module):
             if current_node_distance is not None:
                 distance_bias = self.node_distance_bias(current_node_distance).permute(0, 2, 1).unsqueeze(2)
                 attn_bias = attn_bias + distance_bias.to(dtype=Q.dtype)
+            edge_bias = self._edge_semantic_node_bias(
+                edge_index,
+                edge_attr,
+                batch_size=B,
+                num_nodes=N,
+                node_mask=node_mask,
+                device=grid_features.device,
+                dtype=Q.dtype,
+            )
+            if edge_bias is not None:
+                attn_bias = attn_bias + edge_bias
 
             if node_mask is not None:
                 attn_bias = attn_bias.masked_fill(node_mask[:, None, None, :] == 0, -1.0e4)
@@ -1002,6 +1141,8 @@ class SpatialGraphConditioner(nn.Module):
         attention_mode: str = "softmax",
         hedgehog_feature_dim: int = 32,
         auto_linear_attention_nodes: int = 128,
+        graph_to_grid_edge_semantics: bool = False,
+        edge_type_vocab_size: int = 16,
         graph_gate_init: float = -2.0,
         topology_gate_init: float = -2.0,
     ):
@@ -1019,6 +1160,8 @@ class SpatialGraphConditioner(nn.Module):
             attention_mode=attention_mode,
             hedgehog_feature_dim=hedgehog_feature_dim,
             auto_linear_attention_nodes=auto_linear_attention_nodes,
+            use_edge_semantics=graph_to_grid_edge_semantics,
+            edge_type_vocab_size=edge_type_vocab_size,
         )
         # GLIGEN-style gates are zero-initialized to protect frozen pretrained
         # backbones. H-MOLQD trains this path end-to-end, so we keep the initial
@@ -1056,6 +1199,7 @@ class SpatialGraphConditioner(nn.Module):
         *,
         graph_nodes: Optional[Tensor] = None,
         edge_index: Optional[Tensor] = None,
+        edge_attr: Optional[Tensor] = None,
         node_positions: Optional[Tensor] = None,
         node_tpe: Optional[Tensor] = None,
         current_node_distance: Optional[Tensor] = None,
@@ -1083,6 +1227,7 @@ class SpatialGraphConditioner(nn.Module):
                 x,
                 graph_nodes,
                 edge_index=edge_index,
+                edge_attr=edge_attr,
                 node_positions=node_positions,
                 node_tpe=node_tpe,
                 current_node_distance=current_node_distance,

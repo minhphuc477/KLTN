@@ -181,6 +181,8 @@ class DiffusionTrainingConfig:
         dit_depth: int = 4,
         dit_patch_size: int = 1,
         dit_mlp_ratio: float = 4.0,
+        dit_activation_type: str = "gelu",  # 'gelu' (default) | 'swiglu' (ablation)
+        dit_norm_type: str = "layer",  # 'layer' (default) | 'rms' (ablation)
         condition_hidden_dim: int = 256,
         condition_num_gnn_layers: int = 3,
         condition_num_attention_heads: int = 8,
@@ -198,6 +200,7 @@ class DiffusionTrainingConfig:
         topology_conditioning_mode: str = "additive",
         hedgehog_feature_dim: int = 32,
         graph_auto_linear_attention_nodes: int = 128,
+        graph_to_grid_edge_semantics: bool = False,
         spatial_graph_gate_init: float = -2.0,
         spatial_topology_gate_init: float = -2.0,
         use_teacher_forced_neighbor_latents: bool = True,
@@ -376,6 +379,8 @@ class DiffusionTrainingConfig:
         self.dit_depth = int(max(1, dit_depth))
         self.dit_patch_size = int(max(1, dit_patch_size))
         self.dit_mlp_ratio = float(max(1.0, dit_mlp_ratio))
+        self.dit_activation_type = str(dit_activation_type).strip().lower()
+        self.dit_norm_type = str(dit_norm_type).strip().lower()
         if any((self.model_channels * mult) % self.unet_num_heads != 0 for mult in self.unet_channel_mult):
             raise ValueError(
                 "Every attention-enabled U-Net channel width must be divisible by unet_num_heads; "
@@ -426,6 +431,10 @@ class DiffusionTrainingConfig:
             "gat2_semantic",
             "gat2_directed_semantic",
             "graphormer",
+            "graphormer_learned",
+            "graphormer_learned_directed",
+            "graphormer_learned_semantic",
+            "graphormer_learned_directed_semantic",
         }
         if trm not in allowed_topology_modes:
             raise ValueError(
@@ -449,6 +458,7 @@ class DiffusionTrainingConfig:
         self.topology_conditioning_mode = topo_mode
         self.hedgehog_feature_dim = int(max(4, hedgehog_feature_dim))
         self.graph_auto_linear_attention_nodes = int(max(0, graph_auto_linear_attention_nodes))
+        self.graph_to_grid_edge_semantics = bool(graph_to_grid_edge_semantics)
         self.spatial_graph_gate_init = float(spatial_graph_gate_init)
         self.spatial_topology_gate_init = float(spatial_topology_gate_init)
         self.use_teacher_forced_neighbor_latents = bool(use_teacher_forced_neighbor_latents)
@@ -666,6 +676,8 @@ def diffusion_training_kwargs_from_resolved_config(
         "dit_depth": stage.get("dit_depth", 4),
         "dit_patch_size": stage.get("dit_patch_size", 1),
         "dit_mlp_ratio": stage.get("dit_mlp_ratio", 4.0),
+        "dit_activation_type": stage.get("dit_activation_type", "gelu"),
+        "dit_norm_type": stage.get("dit_norm_type", "layer"),
         "condition_hidden_dim": stage["condition_hidden_dim"],
         "condition_num_gnn_layers": stage["condition_num_gnn_layers"],
         "condition_num_attention_heads": stage["condition_num_attention_heads"],
@@ -683,6 +695,7 @@ def diffusion_training_kwargs_from_resolved_config(
         "topology_conditioning_mode": stage["topology_conditioning_mode"],
         "hedgehog_feature_dim": stage["hedgehog_feature_dim"],
         "graph_auto_linear_attention_nodes": stage["graph_auto_linear_attention_nodes"],
+        "graph_to_grid_edge_semantics": stage.get("graph_to_grid_edge_semantics", False),
         "spatial_graph_gate_init": stage["spatial_graph_gate_init"],
         "spatial_topology_gate_init": stage["spatial_topology_gate_init"],
         "use_teacher_forced_neighbor_latents": stage["use_teacher_forced_neighbor_latents"],
@@ -967,6 +980,8 @@ def _legacy_diffusion_overrides_from_args(args: argparse.Namespace) -> Dict[str,
     _set("dit_depth", getattr(args, "dit_depth", None))
     _set("dit_patch_size", getattr(args, "dit_patch_size", None))
     _set("dit_mlp_ratio", getattr(args, "dit_mlp_ratio", None))
+    _set("dit_activation_type", getattr(args, "dit_activation_type", None))
+    _set("dit_norm_type", getattr(args, "dit_norm_type", None))
     _set("pag_scale", getattr(args, "pag_scale", None))
     _set("alpha_logic", getattr(args, "alpha_logic", None))
     _set("alpha_logic_tile", getattr(args, "alpha_logic_tile", None))
@@ -1010,6 +1025,7 @@ def _legacy_diffusion_overrides_from_args(args: argparse.Namespace) -> Dict[str,
         "graph_auto_linear_attention_nodes",
         getattr(args, "graph_auto_linear_attention_nodes", None),
     )
+    _set("graph_to_grid_edge_semantics", getattr(args, "graph_to_grid_edge_semantics", None))
     _set("spatial_graph_gate_init", getattr(args, "spatial_graph_gate_init", None))
     _set("spatial_topology_gate_init", getattr(args, "spatial_topology_gate_init", None))
     _set(
@@ -1407,6 +1423,8 @@ class DiffusionTrainer:
             dit_depth=self.config.dit_depth,
             dit_patch_size=self.config.dit_patch_size,
             dit_mlp_ratio=self.config.dit_mlp_ratio,
+            dit_activation_type=self.config.dit_activation_type,
+            dit_norm_type=self.config.dit_norm_type,
             num_timesteps=self.config.num_timesteps,
             schedule_type=self.config.schedule_type,
             prediction_type=self.config.prediction_type,
@@ -1423,6 +1441,7 @@ class DiffusionTrainer:
             topology_conditioning_mode=self.config.topology_conditioning_mode,
             hedgehog_feature_dim=self.config.hedgehog_feature_dim,
             graph_auto_linear_attention_nodes=self.config.graph_auto_linear_attention_nodes,
+            graph_to_grid_edge_semantics=self.config.graph_to_grid_edge_semantics,
             spatial_graph_gate_init=self.config.spatial_graph_gate_init,
             spatial_topology_gate_init=self.config.spatial_topology_gate_init,
             room_topology_channels=self.config.room_topology_channels,
@@ -3883,6 +3902,8 @@ class DiffusionTrainer:
                 "dit_depth": int(getattr(self.config, "dit_depth", 4)),
                 "dit_patch_size": int(getattr(self.config, "dit_patch_size", 1)),
                 "dit_mlp_ratio": float(getattr(self.config, "dit_mlp_ratio", 4.0)),
+                "dit_activation_type": str(getattr(self.config, "dit_activation_type", "gelu")),
+                "dit_norm_type": str(getattr(self.config, "dit_norm_type", "layer")),
                 "num_classes": int(self.config.num_classes),
                 "vqvae_hidden_dim": int(self.config.vqvae_hidden_dim),
                 "vqvae_codebook_size": int(self.config.vqvae_codebook_size),
@@ -4449,7 +4470,9 @@ def main():
             'none', 'lightweight',
             'sparse_edge', 'sparse_directed', 'sparse_semantic', 'sparse_directed_semantic',
             'gat2', 'gat2_directed', 'gat2_semantic', 'gat2_directed_semantic',
-            'graphormer', 'upgraded',
+            'graphormer', 'graphormer_learned', 'graphormer_learned_directed',
+            'graphormer_learned_semantic', 'graphormer_learned_directed_semantic',
+            'upgraded',
         ],
         help='Topology preprocessing inside diffusion cross-attention (gat2 is explicit 2-layer GAT).',
     )
@@ -4469,6 +4492,7 @@ def main():
     )
     parser.add_argument('--hedgehog-feature-dim', type=int, default=None)
     parser.add_argument('--graph-auto-linear-attention-nodes', type=int, default=None)
+    parser.add_argument('--graph-to-grid-edge-semantics', action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument('--spatial-graph-gate-init', type=float, default=None)
     parser.add_argument('--spatial-topology-gate-init', type=float, default=None)
     parser.add_argument('--use-teacher-forced-neighbor-latents', action=argparse.BooleanOptionalAction, default=None)

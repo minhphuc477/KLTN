@@ -961,13 +961,27 @@ class TensionCurveEvaluator:
 
                 n = max(1, int(len(graph.nodes)))
 
+                # Build physical adjacency (undirected) inline.
+                # This was previously only computed in _extract_descriptor_metrics,
+                # causing a NameError here.
+                physical_adj: Dict[Any, Set[Any]] = {nid: set() for nid in graph.nodes.keys()}
+                for edge in graph.edges:
+                    if edge.edge_type in graph.NON_TRAVERSABLE_EDGE_TYPES:
+                        continue
+                    if edge.source in physical_adj and edge.target in physical_adj:
+                        physical_adj[edge.source].add(edge.target)
+                        physical_adj[edge.target].add(edge.source)
+
                 # Physical branching: high junction density increases decision points.
                 branch_nodes = sum(1 for neighbors in physical_adj.values() if len(neighbors) >= 3)
                 dead_end_nodes = 0
                 for node_id, neighbors in physical_adj.items():
                     if len(neighbors) <= 1:
                         node = graph.nodes[node_id]
-                        if node.node_type != NodeType.GOAL:
+                        # Exclude both GOAL and START from dead-end counting:
+                        # the start node typically has degree 1 but is not a
+                        # navigational dead-end.
+                        if node.node_type not in (NodeType.GOAL, NodeType.START):
                             dead_end_nodes += 1
                 branch_pressure = float(np.clip(float(branch_nodes) / float(n), 0.0, 1.0))
                 dead_end_ratio = float(np.clip(float(dead_end_nodes) / float(n), 0.0, 1.0))
@@ -1010,7 +1024,7 @@ class TensionCurveEvaluator:
                     "room_entropy": float(room_entropy),
                     "is_proxy": 0.0,
                 }
-            except (ImportError, RuntimeError, ValueError, TypeError, KeyError) as error:
+            except (ImportError, RuntimeError, ValueError, TypeError, KeyError, NameError) as error:
                 logger.debug("Inline cognitive scoring failed, using neutral score: %s", error)
                 cognitive_metrics = {}
                 cognitive_score = 0.5

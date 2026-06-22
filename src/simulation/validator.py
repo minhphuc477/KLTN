@@ -1373,6 +1373,13 @@ class ZeldaLogicEnv:
                             new_pushed.add((fp, tp))
                     # Use set (not frozenset) to maintain consistency with GameState.copy()
                     new_state.pushed_blocks = new_pushed
+                    # Trigger puzzle progression for re-pushed blocks (was missing).
+                    new_state = self._update_puzzle_stage_progress(
+                        new_state,
+                        target_pos=target_pos,
+                        target_tile=int(self.grid[target_pos[0], target_pos[1]]),
+                        pushed_block_to=(int(push_dest_r), int(push_dest_c)),
+                    )
                     return True, new_state
                 else:
                     return False, state  # Can't push
@@ -1445,9 +1452,17 @@ class ZeldaLogicEnv:
             # One-way door - can pass
             return True, new_state
         
-        # ELEMENT (water/lava) - needs KEY_ITEM (Ladder) to cross
+        # ELEMENT (water/lava) - needs KEY_ITEM (Ladder) to cross.
+        # The Stepladder acts as a 1-tile bridge: the agent can step onto
+        # ONE ELEMENT tile but cannot continue onto a second consecutive
+        # ELEMENT tile (no unlimited swimming).
         if target_tile == SEMANTIC_PALETTE['ELEMENT']:
             if state.has_item:
+                # Enforce 1-tile bridge: disallow ELEMENT -> ELEMENT movement.
+                cur_r, cur_c = state.position
+                if (0 <= cur_r < self.height and 0 <= cur_c < self.width
+                        and int(self.grid[cur_r, cur_c]) == SEMANTIC_PALETTE['ELEMENT']):
+                    return False, state
                 return True, new_state
             return False, state
         
@@ -2396,7 +2411,13 @@ class StateSpaceAStar:
                 elif et == 'switch':
                     if self.strict_original_mode:
                         current_room = self.env.get_room_for_position(src)
-                        if not self.env.is_room_cleared(current_room, current_state):
+                        # Reconstruct a temporary GameState from the tuple
+                        # state for is_room_cleared (current_state was undefined).
+                        _tmp_state = _GameState(position=pos, keys=keys, bombs=bombs,
+                                                has_boss_key=bk, has_item=has_item,
+                                                collected_items=frozenset(collected),
+                                                opened_doors=frozenset(opened))
+                        if not self.env.is_room_cleared(current_room, _tmp_state):
                             continue
                 elif et == 'soft_locked':
                     # Must check directed edge
@@ -2687,8 +2708,16 @@ class StateSpaceAStar:
                                 if not ti: can = False
                             elif vet == 'switch':
                                 if self.strict_original_mode:
-                                    current_room = self.env.get_room_for_position(state.position)
-                                    if not self.env.is_room_cleared(current_room, state):
+                                    # `state` is a tuple here, not a GameState.
+                                    # Use the room-node from the outer loop and
+                                    # reconstruct a minimal GameState.
+                                    current_room = n2r.get(vn)
+                                    _tmp_vs = _GameState(
+                                        position=self._room_node_to_pos.get(node, (0, 0)),
+                                        keys=vk, bombs=vb, has_boss_key=vbk, has_item=vi,
+                                        collected_items=frozenset(collected),
+                                        opened_doors=frozenset(opened))
+                                    if current_room is None or not self.env.is_room_cleared(current_room, _tmp_vs):
                                         can = False
                             elif vet == 'soft_locked':
                                 if not G.has_edge(vn, vn2):
