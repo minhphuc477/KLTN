@@ -254,21 +254,22 @@ currently support the claims. It is not an experimental-results substitute.
 - **Flow/DiT objective and sampler parity:** flow-trained checkpoints must be
   evaluated with the matching flow ODE sampler. Do not report DDPM/DDIM metrics
   for a flow objective as if the objective and sampler are aligned.
-- **Gradient accumulation:** the main diffusion trainer still lacks a
-  first-class gradient-accumulation loop. Low-VRAM ablations need smaller
-  batches or a follow-up trainer patch.
-- **AMP / Accelerate:** training still does not have a unified AMP or
-  HuggingFace Accelerate path. Adding this safely requires moving optimizer
-  stepping out of per-batch trainer methods and validating EMA, gradient
-  clipping, distributed reduction, and nonfinite-batch handling together.
+- **Gradient accumulation:** diffusion and DPO training now expose first-class
+  gradient accumulation through config and CLI. Publication tables must report
+  micro-batch size, accumulation steps, and optimizer-step counts so runs are
+  comparable.
+- **AMP / Accelerate:** AMP and optional HuggingFace Accelerate wiring are now
+  available behind explicit config/CLI flags. Throughput and memory claims still
+  require GPU/DDP validation with EMA, gradient clipping, distributed reduction,
+  and nonfinite-batch handling enabled.
 - **Metadata-safe D4 augmentation:** Zelda room tensors have an existing
   transform hook, but graph metadata includes boundary constraints, neighbor
   maps, topology maps, and room-position features. Random flips/rotations must
   rotate all of that metadata consistently before they are enabled for
   graph-conditioned training.
-- **Gradient checkpointing:** DiT/U-Net activation checkpointing is still a
-  memory-scaling TODO. It should be enabled behind a config flag and tested
-  against dropout/RNG behavior and PAG/attention capture paths.
+- **Gradient checkpointing:** DiT/U-Net activation checkpointing is config/CLI
+  gated. Treat it as an ablation until activation-memory savings and
+  dropout/RNG behavior are verified with PAG/attention capture paths.
 - **Safe checkpoint format:** checkpoint loading uses the local
   `safe_torch_load()` path, but trainer checkpoints are still `.pth` bundles
   containing optimizer/scheduler state. A `safetensors` migration should be

@@ -95,7 +95,11 @@ diffusion:
   optimizer_weight_decay: 0.00001  # type=float, default=1e-5, valid>=0
   global_lr_warmup_epochs: 0  # type=int, default=0, valid>=0; optional warmup for all diffusion optimizer groups
   grad_clip_norm: 1.0  # type=float, default=1.0, valid>=0
+  gradient_accumulation_steps: 1  # type=int, default=1, valid>=1; accumulate N micro-batches before each optimizer/EMA/scheduler step
   gradient_checkpointing: false  # type=bool, default=false, valid={true,false}; enable activation recomputation to reduce VRAM (slower training)
+  use_amp: false  # type=bool, default=false, valid={true,false}; enable autocast during diffusion training
+  amp_mixed_precision: fp16  # type=str, default=fp16, valid={fp16,bf16,auto}; autocast dtype when use_amp=true
+  use_accelerate: false  # type=bool, default=false, valid={true,false}; prepare modules with HuggingFace Accelerate when not using torchrun/DDP
   save_every: 10  # type=int, default=10, valid>=1
   keep_last: 2  # type=int, default=2, valid>=0; number of retained full-resume checkpoints besides latest_resume/best/final
   validation_fraction: 0.1  # type=float, default=0.1, valid=0..0.5; internal validation split drawn only from train_dungeons, never from Dungeon 9

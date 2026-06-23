@@ -556,6 +556,25 @@ def test_stage_helpers_forward_checkpoint_retention_and_resume_defaults():
     assert pipeline_kwargs["masked_room_fallback_config"]["model_channels"] == resolved["masked_room"]["model_channels"]
 
 
+def test_diffusion_cli_forwards_memory_precision_controls():
+    args = SimpleNamespace(
+        config=None,
+        gradient_accumulation_steps=4,
+        gradient_checkpointing=True,
+        use_amp=True,
+        amp_mixed_precision="bf16",
+        use_accelerate=True,
+    )
+
+    config = build_diffusion_training_config_from_args(args)
+
+    assert config.gradient_accumulation_steps == 4
+    assert config.gradient_checkpointing is True
+    assert config.use_amp is True
+    assert config.amp_mixed_precision == "bf16"
+    assert config.use_accelerate is True
+
+
 def test_generation_runtime_kwargs_remain_backward_compatible_when_newer_generation_fields_are_missing():
     resolved = merge_config(yaml_path=None, cli_overrides=None)
     generation = resolved["generation"]

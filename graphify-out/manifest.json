@@ -2565,8 +2565,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\train_diffusion.py": {
-    "mtime": 1782209996.8771334,
-    "ast_hash": "be40a9ad5322239a9e6e487fc6cd1171",
+    "mtime": 1782233337.7430446,
+    "ast_hash": "c6281102c2544dfe51c9d33d2b34f6cf",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\train_gaussian_vae.py": {
@@ -2990,8 +2990,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_config_system.py": {
-    "mtime": 1782152152.9977424,
-    "ast_hash": "6c2d8aebcc9a6c6261a3650dfc362bde",
+    "mtime": 1782233374.1169605,
+    "ast_hash": "d2602a1e7522000f225ed325548c632b",
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_critical_review_fixes.py": {
@@ -3910,8 +3910,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\configs\\zelda_hmolqd.yaml": {
-    "mtime": 1782152116.5753326,
-    "ast_hash": "640134740671e853ccd39ff36b407db8",
+    "mtime": 1782233346.629658,
+    "ast_hash": "90bde5c44eab7bc6467cd6e33190fc59",
     "semantic_hash": ""
   },
   "F:\\KLTN\\configs\\zelda_hmolqd_masked_small.yaml": {
@@ -4075,8 +4075,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\docs\\architecture_audit_research_notes.md": {
-    "mtime": 1782210508.3790915,
-    "ast_hash": "4c8f5013d35d7fda91af306b6fd355db",
+    "mtime": 1782233382.708231,
+    "ast_hash": "22f5235974c639d6f90c785aacda055e",
     "semantic_hash": ""
   },
   "F:\\KLTN\\docs\\archive\\2026-q1\\ARCHITECTURE_RESEARCH_JUDGMENT_2026_02_24.md": {

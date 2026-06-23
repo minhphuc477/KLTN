@@ -969,6 +969,11 @@ def _legacy_diffusion_overrides_from_args(args: argparse.Namespace) -> Dict[str,
     _set("variants", getattr(args, "variants", None))
     _set("epochs", getattr(args, "epochs", None))
     _set("learning_rate", getattr(args, "lr", None))
+    _set("gradient_accumulation_steps", getattr(args, "gradient_accumulation_steps", None))
+    _set("gradient_checkpointing", getattr(args, "gradient_checkpointing", None))
+    _set("use_amp", getattr(args, "use_amp", None))
+    _set("amp_mixed_precision", getattr(args, "amp_mixed_precision", None))
+    _set("use_accelerate", getattr(args, "use_accelerate", None))
     _set("model_channels", getattr(args, "model_channels", None))
     _set("context_dim", getattr(args, "context_dim", None))
     _set("denoiser_backbone", getattr(args, "denoiser_backbone", None))
@@ -4443,6 +4448,37 @@ def main():
                         help='For room-level training, batch all rooms from one dungeon variant so global graph loss receives full node passability.')
     parser.add_argument('--epochs', type=int, default=None)
     parser.add_argument('--lr', type=float, default=None)
+    parser.add_argument(
+        '--gradient-accumulation-steps',
+        type=int,
+        default=None,
+        help='Accumulate this many micro-batches before each optimizer/EMA/scheduler step.',
+    )
+    parser.add_argument(
+        '--gradient-checkpointing',
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help='Enable activation checkpointing for supported diffusion backbones.',
+    )
+    parser.add_argument(
+        '--use-amp',
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help='Enable autocast mixed precision during diffusion training.',
+    )
+    parser.add_argument(
+        '--amp-mixed-precision',
+        type=str,
+        default=None,
+        choices=['fp16', 'bf16', 'auto'],
+        help='Autocast dtype used when --use-amp is enabled.',
+    )
+    parser.add_argument(
+        '--use-accelerate',
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help='Prepare trainer modules with HuggingFace Accelerate when not using torchrun/DDP.',
+    )
     parser.add_argument('--model-channels', type=int, default=None)
     parser.add_argument('--context-dim', type=int, default=None)
     parser.add_argument('--denoiser-backbone', type=str, default=None, choices=['unet', 'dit'])
